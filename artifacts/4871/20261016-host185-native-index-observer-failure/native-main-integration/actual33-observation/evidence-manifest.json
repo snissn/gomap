@@ -1,0 +1,19 @@
+{
+  "HANDOFF.md": "53c29b733544a50b5c14d731c483765034d2bab7fa0447dcc56d5eccd2b9782d",
+  "actual33-promoted-integrated-previsibility-observation/command.json": "6fc0e952c10339d21960ec0b86f08c8bb3dcf33cc27eaccc4dd5bc98dfbb7bc5",
+  "actual33-promoted-integrated-previsibility-observation/process.json": "5212f590f4b551a0e48ad283eb6ca1b8fe1c845d4a61624005c62135abac1b14",
+  "actual33-promoted-integrated-previsibility-observation/result.json": "f58ed6f4027725d48bbf5b65bc4987ea8b2c3aa629e00f38c5a83ccd31bf810f",
+  "actual33-promoted-integrated-previsibility-observation/run.log": "b8e3a82ea642c953abf82b221960ca6cc41ebfce1f9b6fdd192217612f4879cb",
+  "actual33-promoted-integrated-previsibility-observation/source-after.json": "041b0ddfca3581c2b773ceb857a27b2dd4c718775b45a9cb71d0c7cc3107744d",
+  "actual33-promoted-integrated-previsibility-observation/source-before.json": "041b0ddfca3581c2b773ceb857a27b2dd4c718775b45a9cb71d0c7cc3107744d",
+  "grant-original.json": "8ed1d4596b0d2f83d80a281105c5386664276fcba47833decb9ef2faa3281859",
+  "grant.json": "8ed1d4596b0d2f83d80a281105c5386664276fcba47833decb9ef2faa3281859",
+  "handoff.json": "534b324af61136a22e8e35dbdd2ce9ffc1572cc35ff12ced1795718a54840eb3",
+  "identity.json": "d738b7f734e058397a2e0910e2ba4d4d571be8d75b0cc58595bde50537ab1c72",
+  "index-after.json": "de27cbf0a8cd751b45a278a8578d9a7efa82d2cf380d835db10ccce3e95f5e56",
+  "index-binding.json": "a51340a27391bf6702c45381d3ce114cf3bde46f56fc5453b0068aee3b5f7791",
+  "required-child-tests.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+  "run-observation.py": "0abb6fb292926f4d8ccf2985a435c37fec2926ccdacfbb14f6091a5ed4ab0365",
+  "selection.json": "0f63beb570bdd83f48590cfc53dd7405c404bc07f6a37840f0ef95a0468b9655",
+  "summary.json": "6f6e0e63370533760b9faa37d501569f3aa0e0d622418532746eec0530e8e1ae"
+}

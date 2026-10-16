@@ -1,0 +1,70 @@
+{
+  "Git_actions": false,
+  "Go_or_runtime_executed": false,
+  "actual_constructor": "unix.Dup + os.NewFile; token.pinned==token.physicalBacking.file",
+  "affected_indexes": [
+    0,
+    1
+  ],
+  "command_template_executed_false_disposition": "Inherited root command-template field, not execution status; actual process/raw/result/summary establish single launch. Original bytes preserved.",
+  "custody_complete_asserted_by_failed_test": false,
+  "custody_complete_false_expected": true,
+  "exact_false_predicate": "token.pinned == operations.pager.file",
+  "finished_utc": "2026-10-16T03:45:43.782209+00:00",
+  "generation_rule": "expected = capture.identity; expected.Generation = capture.snapshot.idx.id; compare all fields",
+  "inspected_source_hashes": {
+    "TreeDB/db/durable_root_runtime.go": "e472aeae3ff832a79b6621d97150fe5b90b9165a0d5fb328991b9d114095aa30",
+    "TreeDB/db/native_mvcc_seal_preparation_v6.go": "55e104f6992d6450385cc7c01974a4649f4b8a4abd0b4aaab2a779d4c48d0926",
+    "TreeDB/db/native_pager_operations_construction_v6_test.go": "336184e6ba124a8ab4c711a966e05dbef19d5c85176861bdd6b07a8dda6a437a",
+    "TreeDB/db/native_stable_pager_capture_v6.go": "a5b9f6023ccb7460005b49ba086a901f436a4b1ce43d51f7c800afc05c9184a6",
+    "TreeDB/db/native_stable_pager_capture_v6_test.go": "278f996347dea753455a12c40cc51717f7adbc542e32cb27864b2e88f835a63d",
+    "TreeDB/db/stable_pager_owned_operations.go": "033f88c049979a5c218ec7c24634fae4c72d6b510247da3941937fd87bef3b3b",
+    "TreeDB/internal/rootpublication/index_token_construction_work_v6.go": "da748bf95e4cdad4f6780515ade4298a0142d3078ca185dad8d33b1869f9d18a",
+    "TreeDB/internal/rootpublication/primary_empty_candidate_work_v6.go": "5e3ad4df80ae76fb70fe678f84097fd75c45ecfa5bb66c284a48a8d0216f3620",
+    "TreeDB/internal/rootpublication/resource_identity_unix.go": "955a855992f05cf2b54b056fb02039f22eb99296acb6a544e3993ab7eaccf60a",
+    "TreeDB/internal/rootpublication/resource_index_sync_work_v6.go": "925563404dd295d3ec80d4cbe34c38a735a571132826140c31ddba65262822ad",
+    "TreeDB/internal/rootpublication/resource_original_cleanup.go": "be01b344603485b43b21d89bd37a9acab5edd23a3f392a0dbc513c6722a490fb",
+    "TreeDB/internal/rootpublication/resource_original_custody_work_v6_test.go": "5cb42184696bac099a3d7324c9156ad2c2fea68ed1343be14376280eb79f3346",
+    "TreeDB/internal/rootpublication/resource_token.go": "463fcd6b40680b2d81c9f142efd99b787c98cc4d2ca5fa56b0a3ab50413c02e0",
+    "TreeDB/internal/rootpublication/resource_token_allocation.go": "093351a97507768afde45afa288b6a6b46234fcecb866f9d612f8aa7603a1ed5",
+    "TreeDB/internal/rootpublication/resource_token_release_work_v6.go": "a9e659cfcea57b775c81920ea8fd8bff36f6554dab88ce8405555593601a1c70",
+    "TreeDB/mvcc/native_prune_backend_route_v6_test.go": "d234442527141be4e52b5bba5e607d28e6aea916f6e8670b4bca7962beabbc29",
+    "TreeDB/pager/native_file_fence_linux_v6.go": "5fd7ca9620c24e81694905f223ad8279c884a9e8a5391585fdf584091496e4ae",
+    "TreeDB/pager/native_file_fence_linux_v6_test.go": "4005bbec5143eb3efcf9c39115ea5671d65b4acc15f7f3b2881b90e3cf803a38",
+    "TreeDB/pager/native_file_fence_v6.go": "1fd9ba6dc061e533ddacfc0fdc050938f59a65ea59d2010604c388d52c5a4f25",
+    "TreeDB/pager/pager.go": "2ce5317be3fcf54157e98315ac1a9e107ab03c71a7487a503cf04ff3db8e07a6",
+    "TreeDB/pager/write_work.go": "b0ac447b9c5b69fe0cb92268c98c1c5550c8c3df2dabcec6bef20540ea8b5bdf"
+  },
+  "lease_released": true,
+  "md_sha256": "378e53e227244ab9bca70319f1f2243b90e5078744c429570ab9c89d37589bc7",
+  "new_owner_or_representation": false,
+  "prior_partial_diagnostic_F": {
+    "allowance": false,
+    "bytes": 871273,
+    "expression": "F293+D+2K+23P+8M+3S+N+Z+V+A",
+    "records": 367,
+    "retention_total": false
+  },
+  "production_F_change_proposed": false,
+  "production_custody_failure_demonstrated": false,
+  "proposed_scope": [
+    "TreeDB/db/native_mvcc_seal_preparation_v6.go observer only",
+    "TreeDB/internal/rootpublication/primary_empty_candidate_work_v6.go observer only",
+    "TreeDB/pager/write_work.go obsolete observer helper only",
+    "TreeDB/mvcc/native_prune_backend_route_v6_test.go observer assertion only",
+    "matching focused prepublication capture/identity/custody tests"
+  ],
+  "public_status": "Q32 RED/ACK0",
+  "raw": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-observation/actual33-promoted-integrated-previsibility-observation/run.log",
+  "raw_sha256": "b8e3a82ea642c953abf82b221960ca6cc41ebfce1f9b6fdd192217612f4879cb",
+  "retry": false,
+  "runtime_observed_indexes": [
+    0
+  ],
+  "source_archive_sha256": "963f9deb573465a5e56a9e2d94841058851bbc2ae28e01cc7533e7cee7106182",
+  "source_edited": false,
+  "source_manifest": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/fixture-inventory-final/source-final.json",
+  "source_manifest_sha256": "041b0ddfca3581c2b773ceb857a27b2dd4c718775b45a9cb71d0c7cc3107744d",
+  "source_tree": "2fc987a8d295af50286fa81d103537e569466eda",
+  "status": "source-proven observer defect"
+}

@@ -1,0 +1,8 @@
+{
+  "evidence_archive_sha256": "1cb3c15e7d5844ba2ccecf62ae345fcc97d59e8413db8820d18d53ff2842bc1e",
+  "evidence_manifest_sha256": "7b436f31954838bd68864988309f4f977994932941b9626221de71db6d1832dd",
+  "excluded": "tmp only; full source archive retained at original grant path",
+  "files": 17,
+  "handoff_json_sha256": "534b324af61136a22e8e35dbdd2ce9ffc1572cc35ff12ced1795718a54840eb3",
+  "handoff_sha256": "53c29b733544a50b5c14d731c483765034d2bab7fa0447dcc56d5eccd2b9782d"
+}

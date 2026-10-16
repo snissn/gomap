@@ -1,0 +1,17 @@
+{
+  "verified_utc": "2026-10-16T03:46:05.398268+00:00",
+  "verifier_sha256": "1f0f6625b1efeb7736c982475f8ebe114a007572b69539b024aaf52fbb55800b",
+  "source_files": 10375,
+  "source_manifest_sha256": "041b0ddfca3581c2b773ceb857a27b2dd4c718775b45a9cb71d0c7cc3107744d",
+  "source_archive_sha256": "963f9deb573465a5e56a9e2d94841058851bbc2ae28e01cc7533e7cee7106182",
+  "evidence_archive_sha256": "1cb3c15e7d5844ba2ccecf62ae345fcc97d59e8413db8820d18d53ff2842bc1e",
+  "evidence_archive_members": 18,
+  "evidence_manifest_sha256": "7b436f31954838bd68864988309f4f977994932941b9626221de71db6d1832dd",
+  "execution_result": "FAIL at group4 index0; group4 remainder/group5/later writer-cancel-reopen assertions not reached",
+  "diagnosis": "not inferred by verifier",
+  "command_metadata_note": "executed:false is copied from the proposal template. Result, process and raw log prove the single actual execution; template is not an execution-state assertion. Raw files preserved.",
+  "runtime_repeated": false,
+  "source_and_index_unchanged": true,
+  "processes_joined_and_absent": true,
+  "public_status": "Q32 RED/ACK0; no native publication or allowance"
+}
