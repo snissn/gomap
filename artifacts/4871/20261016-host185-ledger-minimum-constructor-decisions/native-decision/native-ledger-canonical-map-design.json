@@ -1,0 +1,43 @@
+{
+  "mode": "INTERNAL_SUBAGENT_REVIEW",
+  "model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "candidate_edits_by_reviewer": false,
+  "source_manifest_sha256": "b9d1baa055e9b821106d09cae9f562537610c40e75e2596efd9a18eda4759c91",
+  "cost01_manifest_sha256": "cf4fadca5225e553fe228a1ba5e14de02e5375105afce6885e579d389376b4f0",
+  "inspected_files": {
+    "TreeDB/freelist/generation_v1_reservation.go": "7b9bc7bab43275d159998b7b9c5b77d61d3069e7d14419ab69d4e5a09b214201",
+    "TreeDB/freelist/private_control_capacity_v6.go": "420650d5ffc161497e796b6549bec4ce257677c12cd8b124836d73555fe66844",
+    "TreeDB/freelist/generation_v1_tree.go": "485430d1ec3011db73d92279125d6c9788a1deffcde725ce273fb5251aa5233e",
+    "TreeDB/freelist/generation_v1_metadata_claim_work.go": "4c1f8f1836c6f67126fae98215da928a05ec339734b1dedbcef530ad7f9994ae",
+    "TreeDB/freelist/reservation_rollback_work_v6.go": "9f9c32bc727d9b0667a0c6a900401f8513317396ec5ce2332046c4dbbe913761",
+    "TreeDB/freelist/generation_v1_publication_work_v6.go": "fe3111fc989793ac2bc151426bf3c36aa6d8ed026bd61e5dc1a935f18e99f007",
+    "TreeDB/freelist/generation_v1_metadata_reuse.go": "cdf12a419667a15410d1cbdb18ed20f59b464130b68a4da2c2074f86ed0a10f4",
+    "TreeDB/freelist/allocator_preparation_work_v6.go": "a1cfbb466c90cd410c9380b76e638de019716e73483456f1e66923a8932ade85"
+  },
+  "preparation_sha256": "9ea9453873bdb1e35593a409223f76e9751dfd238124659d4d442b1dd637ec9c",
+  "recommendation": "two typed canonical binary Patricia indexes, stable leaves, separately admitted branches, existing ledger mutex and metadata owner",
+  "point_lookup_max_nodes": {
+    "page64": 65,
+    "candidate128": 129
+  },
+  "insert_max_examined_existing_nodes": {
+    "page64": 130,
+    "candidate128": 258
+  },
+  "deletion_known_handle": "fixed parent/sibling splice, actual field traffic still charged",
+  "range_history_closure": false,
+  "q32_fit": false,
+  "implementation_grant": false,
+  "runtime_executed": false,
+  "report_sha256": "bcdbde9c90d59f2ba10c6b230da558c676eb3f18591f450337e44137076177c5",
+  "spatial_prerequisite": {
+    "same_candidate_point_tail_overlap_permitted": true,
+    "strict_disjointness_not_a_contract": true,
+    "spatial_index_selected": false,
+    "remaining": "original interval membership, placement, coverage and range traversals require their own source-visible work/progress; two point indexes do not close these loops"
+  },
+  "disposition": "RECOMMENDATION_ONLY_NOT_SOURCE_ACCEPTANCE",
+  "hosted_model_routing": "Manual hosted review cannot pin required exact gpt-6.1-sol; not requested for this advice.",
+  "source_archive_sha256": "629bfb61b2e95e1df49a44a0167fb0a3617d3b23fce9adec95e84c8b2f86bd9c"
+}

@@ -1,0 +1,17 @@
+{
+  "base_manifest_sha256": "b9d1baa055e9b821106d09cae9f562537610c40e75e2596efd9a18eda4759c91",
+  "source_root": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-firstack-cost-baseline-source",
+  "source_files": {
+    "TreeDB/db/durable_primary_rebuild_v5.go": "36576fe8ec65180efa1c8902c6921b0b07ec85f4a8693925acd4ebf1efa61acc",
+    "TreeDB/db/durable_primary_runtime_v5.go": "b75b40f88596cd75e8b60edc68c5ca8526de41187e68f2b61ba5d81261ea788b",
+    "TreeDB/db/original_primary_runtime_cleanup.go": "d0df9b5f4c79cda28ec9b20ec687ba9c1263c7baf8e3fdd8489e37772b3f870a",
+    "TreeDB/db/primary_runtime_disposal_work_v6.go": "03e08673a6398c839cae271a0a10521326417f5edef0c63b95ec4ff9d299ffbe",
+    "TreeDB/db/index_gen.go": "3042fbcfac5dfbd74687d03e767dde7bb2a6e42ddde21fb20957a28b118eeb03",
+    "TreeDB/db/primary_arena_owner_v5.go": "9caf72a6befd8003de73e06db67d7705be6a992a75dbea3d8dec8483f3b6d8c1",
+    "TreeDB/db/vacuum_online.go": "bf73141090cbaeb5f04af3ccd6c9930935033414edc8df443bd442e334e29446",
+    "TreeDB/db/primary_offline_pair_v6.go": "cb4a6df384ad84755a798796521aabbf7e7b094714bf56dcb6fae8480617bd4d"
+  },
+  "decision_sha256": "9c1c3d621c2415ec8c934d6e8785455f4741879cd4dcc8213605ff4cbfa544a5",
+  "source_edits": false,
+  "runtime_executed": false
+}

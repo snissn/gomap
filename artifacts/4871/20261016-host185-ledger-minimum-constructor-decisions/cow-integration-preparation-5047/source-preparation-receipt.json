@@ -1,0 +1,36 @@
+{
+  "at_utc": "2026-10-16T11:15:07.773183+00:00",
+  "owner": "/root",
+  "mode": "read-only source preparation",
+  "provisional_source_commit": "72d7dcda2ad4922157e61ba8229f283c106579e9",
+  "files": [
+    {
+      "path": "TreeDB/mvcc/cow_floor_recovery_external_test.go",
+      "size": 8031,
+      "sha256": "6423cdfa188ceaa78e5f351650edb043bcaceabc27ba1a6c215851145a5336e6"
+    },
+    {
+      "path": "TreeDB/mvcc/cow_floor_wal_recovery_external_test.go",
+      "size": 11656,
+      "sha256": "72e963925d4694fbb546ba0f8abfb96876733e31eb2949504f0155388292ad67"
+    }
+  ],
+  "immutable_parent_manifest_sha256": "b9d1baa055e9b821106d09cae9f562537610c40e75e2596efd9a18eda4759c91",
+  "inspected_source_bindings": {
+    "TreeDB/mvcc/versions.go": "aa88729578b2eafb1c44b23f94a52c924132cf2bb03362d1bd98e031bdeb8f53",
+    "TreeDB/caching/native_mvcc_prune_v6.go": "fa28a868ae4e606a4528a16c036a8ae68f0104e4a61c5cb0332b3ae024b382a5",
+    "TreeDB/db/native_mvcc_current_delete_v6.go": "5dbc2fb4c8993ed43075650989d63616ae9afd4310b18aaee94c1f9443a9f600",
+    "TreeDB/caching/cow_cut.go": "ae6782d80dccb0ce82b3a8e7cab3aae8226e9eb71a83b1837ae67636a46a0286",
+    "TreeDB/caching/cow_read.go": "27d036f301c68b666d12801cc60bffdad72598d8ae0abd182cedee492ff43446",
+    "TreeDB/caching/cow_flush.go": "e1b0b8ee7f167b488d218c586d216728c6a94622aca85e08feaa4c6dab87290f",
+    "TreeDB/caching/cow_rollover.go": "7219b4f9d813508590749ecab1ef948ad19eae8e8cbc2f3a74c0147e327c10f9",
+    "TreeDB/internal/memtable/cow_traversal.go": "316ebf8073c8c087bc480d8adbc43b4fd10bd9401e273a1f3a2aaf7e32e9309a",
+    "TreeDB/internal/memtable/cow_tree.go": "bee65a57a8275daf1bb0abb8667e44e3fce5b82532e9c239d858fb911edab7d3",
+    "TreeDB/internal/memtable/cow_view.go": "fb7d86e6e7f59748f7465e25cf01b53b9488fc3b02bbc27ab6c88005efb010d6"
+  },
+  "native_source_mutated": false,
+  "compiler_or_runtime_executed": false,
+  "pr_created": false,
+  "accepted_positive_native_contract": false,
+  "retention": "Keep exact provisional tests and preparation until reconciled into qualified 5047 source or explicitly retired; not disposable yet."
+}

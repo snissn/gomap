@@ -1,0 +1,18 @@
+{
+  "updated_utc": "2026-10-16T11:25:12.800655+00:00",
+  "decision": "ACCEPT_CONDITIONAL_SOURCE_PROOF_NOT_IMPLEMENTATION_OR_QUALIFICATION",
+  "report_sha256": "1b171b1afbdd102e438884ecd93ccc550e90b7498b0cca417f04e99fa4e79627",
+  "bindings_sha256": "5dd48443c2a82c7fc9b7261b4d0e021ff8aa99a80c21e31f45c346217f72e050",
+  "all_34_inspected_source_bindings_match_minimum01": true,
+  "accepted": [
+    "Native DATA allocator can use only its exact pinned generation registry with actual snapshot/runtime/pager/allocator identity and stable capture through use.",
+    "Role-complete before-exposure source guards and overlapping handoffs make future same-generation registrations non-lowering. Coherent minimum observation remains required.",
+    "Snapshot acquisition epoch does not cover late RecoverableRootSet or DATA-directory registrations; minimum01 controlled runtime is not an arbitrary-producer safety proof."
+  ],
+  "not_selected": [
+    "No guard producer source edits during current canonical-ledger lease.",
+    "No removal of acquisition scans before complete producer invariant and bounded maintained registry are implemented and reviewed.",
+    "No public DB-wide minimum API change, replacement quantum, accepted cost baseline, Q32 or native qualification."
+  ],
+  "next": "Bounded read-only same-registry representation inquiry while sole writer completes canonical-ledger packet; root selects coherent follow-on only after current freeze/controls."
+}
