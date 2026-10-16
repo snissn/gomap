@@ -1,0 +1,20 @@
+[
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-source/connected-driver-compile-01/source-before.tar.gz",
+    "bytes": 155954637,
+    "sha256": "dac8c5028b3cec28620fa355af8c11e4a269a2dd5e6a761db96068c9b86c5216",
+    "reason": "Full reconstructable source archive or binary retained locally; hash binding retained here."
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-source/connected-driver-compile-02/source-before.tar.gz",
+    "bytes": 155955480,
+    "sha256": "dc6fcca63f15555469f769176f55ffe99d18cfcf2c6db74f216350ab270d8bca",
+    "reason": "Full reconstructable source archive or binary retained locally; hash binding retained here."
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-source/connected-pricing-normal-01/source-before.tar.gz",
+    "bytes": 155960087,
+    "sha256": "761722ad4d5a3b41a19934d00b45f810c229727eb0d9c682170da9a2f5eab929",
+    "reason": "Full reconstructable source archive or binary retained locally; hash binding retained here."
+  }
+]

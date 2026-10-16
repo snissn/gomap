@@ -1,0 +1,16 @@
+{
+  "at_utc": "2026-10-16T00:12:38.749504+00:00",
+  "head": "3dd8d2d11d129ea93fc6277215d06d7a4ba65650",
+  "all_source_files_verified": 10338,
+  "manifest_sha256": "ccaa15b2381b87336937688cdc1e672c875564261da53fd6ba5c1f5e814107e6",
+  "exact_changed_files_copied": 42,
+  "review_sha256": "0b320dd0722846f6377679ad5c1276e80466d490b5f3da46c99435c02af43ab3",
+  "root_decision_sha256": "cd43a01ad975e8fa64d9c810e733cb650eb003cdececb20de97b26ed021e12de",
+  "root_accepts_findings": [
+    "N1",
+    "N2",
+    "N3"
+  ],
+  "runtime_granted": false,
+  "next": "One native source repair batch; no observer/performance/publication runtime."
+}

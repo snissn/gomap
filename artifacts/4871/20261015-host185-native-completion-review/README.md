@@ -1,0 +1,13 @@
+# Native completion source review: rejected, repair selected
+
+The complete frozen native connected-driver image is **REJECTED** for three concrete source defects: private publication headers without retained admission, DB teardown after an unsettled native join, and ordinary constructor/refund fan-out behind a fixed work reservation. No actual native publication, numeric allowance, complete retained total or final qualification is claimed. Original actual33/80/4096 Q32/1MiB remains RED/ACK0.
+
+The exact 10,338-file image is manifest `ccaa15b2381b87336937688cdc1e672c875564261da53fd6ba5c1f5e814107e6` over HEAD `3dd8d2d11d129ea93fc6277215d06d7a4ba65650`. All 42 changed files, including eight new files, are retained here in full under `native-build/atomic-completion-rejected-source/files`; the tracked patch is supplemental. The complete source archive remains locally retained with its SHA256 binding. Root and independent reviewer rehashed all 10,338 current files; the reviewer also verified the full archive. This is a working-tree image, not acceptance of HEAD alone.
+
+The independent exact gpt-6.1-sol review, original source packet, advice-only observer plan and root's coherent N1/N2/N3 repair decision are retained. The repair removes private preborn headers and restores the original published GC-output placement while counting actual allocation/init traffic; preserves native custody at DB Close; and threads actual work through staged original construction/cleanup. No observer or new runtime is granted by this artifact. A future repaired source image requires fresh binding and review.
+
+The retained component compile/control logs include the initial compile failure and correction, then twelve passing source-bound normal controls. They are not actual publication evidence, final-image race evidence or an invented standalone test-ELF identity.
+
+The maintenance harness PR #5137 remains separately blocked by one existing nativewire HTTPS EOF after deliberate server restart. Its failure log and classification preserve all 3,456 unchanged Go files and all unchanged existing workflow inputs versus the previously green base. Exact transport cause is unproven. The root classification permits one documented same-head CI retry after the original run completes, without changing tests or running performance. This artifact does not claim that retry has happened or passed.
+
+`manifest.json` binds every original and stored artifact, including decompression. `archive-bindings.json` identifies large locally retained archives. Evidence publication does not modify product branches or resolve their acceptance gates.

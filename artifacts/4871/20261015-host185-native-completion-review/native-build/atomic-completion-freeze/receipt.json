@@ -1,0 +1,18 @@
+{
+  "at_utc": "2026-10-15T23:52:02.103704+00:00",
+  "source_files": 10338,
+  "matches_tested_pricing_image": true,
+  "changed_paths": 42,
+  "archive": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-source/connected-pricing-normal-01/source-before.tar.gz",
+  "archive_receipt": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-source/connected-pricing-normal-01/source-archive.json",
+  "archive_sha256": "761722ad4d5a3b41a19934d00b45f810c229727eb0d9c682170da9a2f5eab929",
+  "source_manifest_sha256": "ccaa15b2381b87336937688cdc1e672c875564261da53fd6ba5c1f5e814107e6",
+  "runtime_active": false,
+  "actual_native_publication_executed": false,
+  "numeric_allowance_selected": false,
+  "public_status": "Q32 RED / ACK0",
+  "git_writes": false,
+  "decision_packet": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/atomic-completion-frozen-packet.md",
+  "decision_packet_sha256": "4d004a97faf71b4e0eb2194fb4b73dd80be34652ce6c80d4b5d82a7e948dad0c",
+  "decision_packet_bytes": 36886
+}

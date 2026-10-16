@@ -1,0 +1,67 @@
+{
+  "at_utc": "2026-10-16T00:07:30.890071+00:00",
+  "head": "a1db58c790e056a02340c98e7dbae11f40c8ed48",
+  "base": "eae34350200668e1aae35d56f7f4c8ddfc2acb47",
+  "changed_paths": [
+    ".github/ci/ci_impact.json",
+    ".github/scripts/mvcc_maintenance_README.md",
+    ".github/scripts/mvcc_maintenance_bootstrap.py",
+    ".github/scripts/mvcc_maintenance_collect.py",
+    ".github/scripts/mvcc_maintenance_prepare.py",
+    ".github/scripts/mvcc_maintenance_test.py",
+    ".github/scripts/test_ci_impact.py",
+    ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml",
+    "docs/CI_IMPACT_SELECTION.md"
+  ],
+  "unchanged_go_files": 3456,
+  "unchanged_existing_workflows": [
+    ".github/workflows/cow-c3-hosted-qualification.yml",
+    ".github/workflows/format.yml",
+    ".github/workflows/hashdb-tests.yml",
+    ".github/workflows/memtier-bench.yml",
+    ".github/workflows/owner-local-metadata-qualification.yml",
+    ".github/workflows/peer-security-qualification.yml",
+    ".github/workflows/race.yml",
+    ".github/workflows/read-snapshot-guardrails.yml",
+    ".github/workflows/redis-bench.yml",
+    ".github/workflows/root-tests.yml",
+    ".github/workflows/sparse-catalog-qualification.yml",
+    ".github/workflows/treedb-tests.yml",
+    ".github/workflows/treedb-vacuum-m0-observation.yml",
+    ".github/workflows/treedb-vacuum-m0.yml",
+    ".github/workflows/unified-bench-suites.yml",
+    ".github/workflows/unified-bench-tests.yml"
+  ],
+  "unchanged_go_mod_sum": true,
+  "prior_identical_base_tree": "939b10c22e54caf56dc84553b65e2435862052fb",
+  "prior_check_count_success": 50,
+  "failed_test_events": [
+    {
+      "Time": "2026-10-15T23:57:06.581941541Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB/nativewire",
+      "Test": "TestImmutableOwnerReplacementPrivateANNQualificationV1",
+      "Elapsed": 2.26
+    }
+  ],
+  "failed_package_events": [
+    {
+      "Time": "2026-10-16T00:02:16.69317878Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB/nativewire",
+      "Elapsed": 444.58
+    }
+  ],
+  "log_sha256": "af6a4deefe762e77cec3fb78ecb2576045da1d69d980cd045c3bf51b02cb1364",
+  "classification": "Unrelated existing nativewire restart transport failure; exact EOF mechanism unproven. No evidence of harness-caused product regression.",
+  "source_evidence": [
+    "All cold/cached warm and four ANN samples completed before failure.",
+    "Qualification fixture closes original quorum runtime, reopens it, then closes/reopens target; the later replacement-prepare at source_v1_test.go:438 uses the existing client.",
+    "The failure URL is replacement-prepare, after the logged samples. Initial preparation precedes all samples and succeeded.",
+    "Client call sends one HTTPS POST through its retained http client; EOF is returned directly. Server Close shuts down listeners and HTTP server. The log does not establish why this specific connection ended.",
+    "The new diagnostic workflow is manual main-only and cannot execute in this PR CI event.",
+    "Only CI inventory/test cardinality/docs plus six new manual harness paths differ; all Go inputs and existing workflow bytes equal the earlier 50-pass tree."
+  ],
+  "decision": "After current run completes and all failures are inventoried, allow one retry of the failed job plus dependent required aggregate on the same head. Preserve attempt1. Do not skip the gate, weaken tests, change product, rerun performance or infer success before exact-head checks pass.",
+  "retry_executed": false
+}
