@@ -1,0 +1,91 @@
+{
+  "ACK": 0,
+  "Q32": "RED",
+  "actual_model": "gpt-6.1-sol",
+  "all_byte_limits": 1048576,
+  "bindings": {
+    "boundary-and-charge-ledger.json": "01b3341c60887bcdbb9b945a0b79123dafe4530fc177a4778ef8a9352701c717",
+    "evidence-manifest.json": "71e9e44acfc9bdacb175d49cc9bd9d6cc0c8602c65e4ffcaceb6bbaf8b715f33",
+    "fixture.delta.patch": "6f71c965ef96b0045618eb2200a685e3a3e5256750c94f3f5047fe5a7e468a9b",
+    "invariance.json": "78186bf101578453b0125b4fd195be0d09c89da756f592d82aaea87addc1656e",
+    "preserved_control_reject_json": "c068633bd43385634f349beb2e576f33ac478b2d808a83f47e591b86ef3dfd0e",
+    "preserved_control_reject_md": "7557d20fad81e687f51bd466a251ac0e66b7fcf5c4966cedd0cb57c183537f7b",
+    "preserved_source_review_json": "7f68dc548dceb43d05e5cb5b81b00da3fefbbb45a64a78a7c5131b94018093a3",
+    "preserved_source_review_md": "919013501fdbdd0e75ff74c7cbbeb395da5f8e81558463273755f7acf5726d3f",
+    "selection": "a83b20729fcf89f8dee847906fbd11476b0588c2d9c44f335acbc4a7e076b7a3",
+    "source-frozen.json": "a7ff76f853958270984056845d89b173b0690b208909eb9623dbfd980407d2d1",
+    "source-frozen.tar.gz": "165f62846bcc196aece1ba38e9df1b6dc262adc3546663ff10e79f0e5e12b1e6",
+    "test-after.go": "610f8f493d9bce2e9719c75943da2b039260d3610213d1a60701e267d8376976",
+    "test-before.go": "e89c544b2c6373116bdb8bf3262fb3df645a64918cc9a4e11d6d389f0c1f6dff"
+  },
+  "blocking_findings": [],
+  "candidate_edits_by_reviewer": false,
+  "changed_functions": [
+    "TestPrimaryFinishResourceRefusalAndFailureCustodyV6"
+  ],
+  "containing_charge_lifecycle": "Original constructor pending charge survives physical bank/node refund and callback return; SAME terminal refunds after Finish returns; second helper idempotent.",
+  "disposition": "ACCEPT",
+  "fresh_controls": "PENDING root authorization and exact-source normal/race results",
+  "historical_control_disposition": "REJECT preserved",
+  "hosted_model_routing_unavailability_reason": "Hosted manual review cannot pin the user-required exact model; not requested.",
+  "immutable_inputs_only": true,
+  "lease": "RELEASED",
+  "metadata_successor": {
+    "archive_sha256": "963f9deb573465a5e56a9e2d94841058851bbc2ae28e01cc7533e7cee7106182",
+    "disposition": "ACCEPT",
+    "fresh_controls": "PENDING",
+    "fresh_source_contract": "PASS retained raw receipt",
+    "historical_unchanged_python_tests_reused": 58,
+    "manifest_sha256": "041b0ddfca3581c2b773ceb857a27b2dd4c718775b45a9cb71d0c7cc3107744d",
+    "only_changed_field": "discovery_source_sha256",
+    "only_changed_path": ".github/ci/ci_impact.json",
+    "python_tests_rerun": false,
+    "reuse_receipt_sha256": "19b8ade63b4974a8c10920c4564626bcb54f6be8834ae34c9e5f28bfea1d45bf",
+    "staged_paths": 202,
+    "staged_tree": "2fc987a8d295af50286fa81d103537e569466eda",
+    "whole_archive_and_index_verified": 10375
+  },
+  "numeric_allowance_granted": false,
+  "prior_product_source_acceptance": "Preserved",
+  "production_delta": false,
+  "publication_runtime_authorized": false,
+  "qualification_accepted": false,
+  "reasoning_effort": "high",
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW",
+  "reviewer": "/root/ordinary_review",
+  "reviewer_runtime_executed": false,
+  "same_file_prefix_suffix_equal": true,
+  "scope": "Immutable one-function fixture source only; fresh control verification pending",
+  "source_delta": [
+    "TreeDB/internal/rootpublication/durable_root_transaction_work_callbacks_v6_test.go"
+  ],
+  "source_files": 10375,
+  "stage_records": {
+    "callback": {
+      "limit": 5,
+      "used": 5
+    },
+    "completion": {
+      "limit": 32,
+      "used": 12
+    },
+    "lookup": {
+      "limit": 3,
+      "used": 3
+    },
+    "physical_failure": {
+      "limit": 32,
+      "used": 2
+    },
+    "progress": {
+      "limit": 32,
+      "used": 31
+    },
+    "queue": {
+      "limit": 11,
+      "used": 2
+    }
+  },
+  "whole_archive_verified": true,
+  "written_utc": "2026-10-16T03:29:45.925877+00:00"
+}

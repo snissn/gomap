@@ -1,0 +1,54 @@
+{
+  "HANDOFF.md": {
+    "bytes": 2109,
+    "sha256": "8d2ff65540ad665491177caba822754c0a7b6038a9912686a6c41da64db7f719"
+  },
+  "boundary-and-charge-ledger.json": {
+    "bytes": 4963,
+    "sha256": "01b3341c60887bcdbb9b945a0b79123dafe4530fc177a4778ef8a9352701c717"
+  },
+  "boundary-and-charge-ledger.md": {
+    "bytes": 2426,
+    "sha256": "5f86707838076c8b9e4e4a1beb2e9da8c8057598956fbf0b5fa3307fea02ad07"
+  },
+  "delta-files/TreeDB/internal/rootpublication/durable_root_transaction_work_callbacks_v6_test.go": {
+    "bytes": 25089,
+    "sha256": "610f8f493d9bce2e9719c75943da2b039260d3610213d1a60701e267d8376976"
+  },
+  "fixture.delta.patch": {
+    "bytes": 9881,
+    "sha256": "6f71c965ef96b0045618eb2200a685e3a3e5256750c94f3f5047fe5a7e468a9b"
+  },
+  "freeze-receipt.json": {
+    "bytes": 736,
+    "sha256": "71c4be10d3b17c90f96fca1914e9a38e4dba96348a3a29641d6e02c9b4d9af1f"
+  },
+  "handoff.json": {
+    "bytes": 2131,
+    "sha256": "3eb870676d8682e22978c4f9418dcc7fe9cc61d5ad333c10e6de95684ebf63db"
+  },
+  "invariance.json": {
+    "bytes": 838,
+    "sha256": "78186bf101578453b0125b4fd195be0d09c89da756f592d82aaea87addc1656e"
+  },
+  "selection.md": {
+    "bytes": 3216,
+    "sha256": "a83b20729fcf89f8dee847906fbd11476b0588c2d9c44f335acbc4a7e076b7a3"
+  },
+  "source-frozen.json": {
+    "bytes": 1588862,
+    "sha256": "a7ff76f853958270984056845d89b173b0690b208909eb9623dbfd980407d2d1"
+  },
+  "source-frozen.tar.gz": {
+    "bytes": 156065164,
+    "sha256": "165f62846bcc196aece1ba38e9df1b6dc262adc3546663ff10e79f0e5e12b1e6"
+  },
+  "test-after.go": {
+    "bytes": 25089,
+    "sha256": "610f8f493d9bce2e9719c75943da2b039260d3610213d1a60701e267d8376976"
+  },
+  "test-before.go": {
+    "bytes": 20421,
+    "sha256": "e89c544b2c6373116bdb8bf3262fb3df645a64918cc9a4e11d6d389f0c1f6dff"
+  }
+}

@@ -1,0 +1,105 @@
+{
+  "actual33_executed": false,
+  "all_authorized_pass": true,
+  "all_groups_empty": true,
+  "commands_executed": 18,
+  "commands_not_executed": [],
+  "completed_utc": "2026-10-16T03:36:40.427214+00:00",
+  "native_publication_executed": false,
+  "public_status": "Q32 RED/ACK0; no allowance",
+  "results": [
+    {
+      "id": "normal-repaired-resource-finish",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/fixture-controls/normal-repaired-resource-finish/result.json",
+      "status": "PASS"
+    },
+    {
+      "id": "normal-TreeDB-pager",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/fixture-controls/normal-TreeDB-pager/result.json",
+      "status": "PASS"
+    },
+    {
+      "id": "normal-TreeDB-internal-primaryarena",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/fixture-controls/normal-TreeDB-internal-primaryarena/result.json",
+      "status": "PASS"
+    },
+    {
+      "id": "normal-TreeDB-internal-retainedalloc",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/fixture-controls/normal-TreeDB-internal-retainedalloc/result.json",
+      "status": "PASS"
+    },
+    {
+      "id": "normal-TreeDB-zipper",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/fixture-controls/normal-TreeDB-zipper/result.json",
+      "status": "PASS"
+    },
+    {
+      "id": "normal-TreeDB-internal-valuelog",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/fixture-controls/normal-TreeDB-internal-valuelog/result.json",
+      "status": "PASS"
+    },
+    {
+      "id": "normal-TreeDB-caching",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/fixture-controls/normal-TreeDB-caching/result.json",
+      "status": "PASS"
+    },
+    {
+      "id": "normal-TreeDB",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/fixture-controls/normal-TreeDB/result.json",
+      "status": "PASS"
+    },
+    {
+      "id": "normal-one-M4-pointer-cell",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/fixture-controls/normal-one-M4-pointer-cell/result.json",
+      "status": "PASS"
+    },
+    {
+      "id": "race-TreeDB-db",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/fixture-controls/race-TreeDB-db/result.json",
+      "status": "PASS"
+    },
+    {
+      "id": "race-TreeDB-internal-rootpublication",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/fixture-controls/race-TreeDB-internal-rootpublication/result.json",
+      "status": "PASS"
+    },
+    {
+      "id": "race-TreeDB-pager",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/fixture-controls/race-TreeDB-pager/result.json",
+      "status": "PASS"
+    },
+    {
+      "id": "race-TreeDB-internal-primaryarena",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/fixture-controls/race-TreeDB-internal-primaryarena/result.json",
+      "status": "PASS"
+    },
+    {
+      "id": "race-TreeDB-internal-retainedalloc",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/fixture-controls/race-TreeDB-internal-retainedalloc/result.json",
+      "status": "PASS"
+    },
+    {
+      "id": "race-TreeDB-zipper",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/fixture-controls/race-TreeDB-zipper/result.json",
+      "status": "PASS"
+    },
+    {
+      "id": "race-TreeDB-internal-valuelog",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/fixture-controls/race-TreeDB-internal-valuelog/result.json",
+      "status": "PASS"
+    },
+    {
+      "id": "race-TreeDB-caching",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/fixture-controls/race-TreeDB-caching/result.json",
+      "status": "PASS"
+    },
+    {
+      "id": "race-TreeDB",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/fixture-controls/race-TreeDB/result.json",
+      "status": "PASS"
+    }
+  ],
+  "source_files": 10375,
+  "source_manifest_sha256": "041b0ddfca3581c2b773ceb857a27b2dd4c718775b45a9cb71d0c7cc3107744d",
+  "source_still_frozen": true
+}

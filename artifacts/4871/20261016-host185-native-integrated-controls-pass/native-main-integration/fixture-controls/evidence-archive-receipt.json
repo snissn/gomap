@@ -1,0 +1,8 @@
+{
+  "evidence_archive_sha256": "e9610109ba72502ff54aa3007dcce402b5f1779dadb79292b94ce107df541214",
+  "evidence_manifest_sha256": "e03bcc27c33580ed6cc7e0327bb07f2d68d827bf8f8aff13d2f748f5a09dbb36",
+  "excluded": "per-call tmp directories only; frozen source archive remains at grant path",
+  "files": 118,
+  "handoff_json_sha256": "8a389b1c92cb29250accca8938432394ebcc5ac4cd233cc227949f265cc25bb9",
+  "handoff_sha256": "39ccb9b3729c8d9ac56269a4926b0243c85948e116f072c7d66e2b6ab4cd6f60"
+}

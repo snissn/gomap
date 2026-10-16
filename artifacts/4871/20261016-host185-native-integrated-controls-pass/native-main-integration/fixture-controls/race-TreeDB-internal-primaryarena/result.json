@@ -1,0 +1,95 @@
+{
+  "M4_selected_leaf_names": [],
+  "adopted_children_reaped": [],
+  "elapsed_seconds": 2.76539106387645,
+  "ended_utc": "2026-10-16T03:34:57.780625+00:00",
+  "exit_code": 0,
+  "expected_top_level_names": [
+    "TestOrdinaryPrimaryCountedClaimAndReleaseLeaseV6",
+    "TestNativePrimaryAccountingOnlyQueueCannotBeAssistedV6",
+    "TestPrimaryArenaOwnedReleaseQueueCannotReceiveOrdinaryAssistance"
+  ],
+  "group_and_children_empty": true,
+  "id": "race-TreeDB-internal-primaryarena",
+  "leader_joined": true,
+  "missing_child_names": [],
+  "missing_top_names": [],
+  "observed_group_processes": [
+    {
+      "comm": "go",
+      "pgid": 992301,
+      "pid": 992301,
+      "ppid": 989361,
+      "session": 992301,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 992301,
+      "pid": 992319,
+      "ppid": 992301,
+      "session": 992301,
+      "state": "S"
+    },
+    {
+      "comm": "link",
+      "pgid": 992301,
+      "pid": 992339,
+      "ppid": 992301,
+      "session": 992301,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 992301,
+      "pid": 992349,
+      "ppid": 992301,
+      "session": 992301,
+      "state": "R"
+    },
+    {
+      "comm": "primaryarena.te",
+      "pgid": 992301,
+      "pid": 992356,
+      "ppid": 992301,
+      "session": 992301,
+      "state": "S"
+    }
+  ],
+  "pgid": 992301,
+  "pid": 992301,
+  "raw_log_sha256": "079379f21f78ab6203b87cf4ea09ca49c321ed7bcc01eff02e9bcb7e1c1b421b",
+  "remaining_direct_or_adopted_children": [],
+  "remaining_group_members": [],
+  "required_child_names": [],
+  "residual_before_cleanup": {
+    "children": [],
+    "group": []
+  },
+  "signals": [],
+  "source_before_after_frozen": true,
+  "started_utc": "2026-10-16T03:34:55.015251+00:00",
+  "status": "PASS",
+  "stop_reasons": [],
+  "subreaper_verified": true,
+  "test_FAIL_names": [],
+  "test_PASS_names": [
+    "TestOrdinaryPrimaryCountedClaimAndReleaseLeaseV6",
+    "TestNativePrimaryAccountingOnlyQueueCannotBeAssistedV6",
+    "TestPrimaryArenaOwnedReleaseQueueCannotReceiveOrdinaryAssistance"
+  ],
+  "test_RUN_names": [
+    "TestOrdinaryPrimaryCountedClaimAndReleaseLeaseV6",
+    "TestNativePrimaryAccountingOnlyQueueCannotBeAssistedV6",
+    "TestPrimaryArenaOwnedReleaseQueueCannotReceiveOrdinaryAssistance"
+  ],
+  "test_SKIP_names": [],
+  "timeout": false,
+  "top_level_RUN_names": [
+    "TestOrdinaryPrimaryCountedClaimAndReleaseLeaseV6",
+    "TestNativePrimaryAccountingOnlyQueueCannotBeAssistedV6",
+    "TestPrimaryArenaOwnedReleaseQueueCannotReceiveOrdinaryAssistance"
+  ],
+  "top_level_pass_count": 3,
+  "unexpected_top_names": []
+}

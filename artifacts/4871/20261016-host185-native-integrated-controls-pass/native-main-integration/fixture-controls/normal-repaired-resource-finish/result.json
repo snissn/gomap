@@ -1,0 +1,126 @@
+{
+  "M4_selected_leaf_names": [],
+  "adopted_children_reaped": [],
+  "elapsed_seconds": 7.398996067233384,
+  "ended_utc": "2026-10-16T03:32:52.161382+00:00",
+  "exit_code": 0,
+  "expected_top_level_names": [
+    "TestPrimaryFinishResourceRefusalAndFailureCustodyV6"
+  ],
+  "group_and_children_empty": true,
+  "id": "normal-repaired-resource-finish",
+  "leader_joined": true,
+  "missing_child_names": [],
+  "missing_top_names": [],
+  "observed_group_processes": [
+    {
+      "comm": "go",
+      "pgid": 989365,
+      "pid": 989365,
+      "ppid": 989361,
+      "session": 989365,
+      "state": "Z"
+    },
+    {
+      "comm": "compile",
+      "pgid": 989365,
+      "pid": 989379,
+      "ppid": 989365,
+      "session": 989365,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 989365,
+      "pid": 989545,
+      "ppid": 989365,
+      "session": 989365,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 989365,
+      "pid": 989550,
+      "ppid": 989365,
+      "session": 989365,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 989365,
+      "pid": 989617,
+      "ppid": 989365,
+      "session": 989365,
+      "state": "R"
+    },
+    {
+      "comm": "link",
+      "pgid": 989365,
+      "pid": 989630,
+      "ppid": 989365,
+      "session": 989365,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 989365,
+      "pid": 989638,
+      "ppid": 989365,
+      "session": 989365,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 989365,
+      "pid": 989642,
+      "ppid": 989365,
+      "session": 989365,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 989365,
+      "pid": 989646,
+      "ppid": 989365,
+      "session": 989365,
+      "state": "R"
+    }
+  ],
+  "pgid": 989365,
+  "pid": 989365,
+  "raw_log_sha256": "23c0ed838ade51ef1e3ad21701939566d576e71aa397889e1128b71ee7870a9a",
+  "remaining_direct_or_adopted_children": [],
+  "remaining_group_members": [],
+  "required_child_names": [
+    "TestPrimaryFinishResourceRefusalAndFailureCustodyV6/retry",
+    "TestPrimaryFinishResourceRefusalAndFailureCustodyV6/failure"
+  ],
+  "residual_before_cleanup": {
+    "children": [],
+    "group": []
+  },
+  "signals": [],
+  "source_before_after_frozen": true,
+  "started_utc": "2026-10-16T03:32:44.762403+00:00",
+  "status": "PASS",
+  "stop_reasons": [],
+  "subreaper_verified": true,
+  "test_FAIL_names": [],
+  "test_PASS_names": [
+    "TestPrimaryFinishResourceRefusalAndFailureCustodyV6",
+    "TestPrimaryFinishResourceRefusalAndFailureCustodyV6/retry",
+    "TestPrimaryFinishResourceRefusalAndFailureCustodyV6/failure"
+  ],
+  "test_RUN_names": [
+    "TestPrimaryFinishResourceRefusalAndFailureCustodyV6",
+    "TestPrimaryFinishResourceRefusalAndFailureCustodyV6/retry",
+    "TestPrimaryFinishResourceRefusalAndFailureCustodyV6/failure"
+  ],
+  "test_SKIP_names": [],
+  "timeout": false,
+  "top_level_RUN_names": [
+    "TestPrimaryFinishResourceRefusalAndFailureCustodyV6"
+  ],
+  "top_level_pass_count": 1,
+  "unexpected_top_names": []
+}

@@ -1,0 +1,167 @@
+{
+  "M4_selected_leaf_names": [],
+  "adopted_children_reaped": [],
+  "elapsed_seconds": 41.78191949892789,
+  "ended_utc": "2026-10-16T03:36:39.553457+00:00",
+  "exit_code": 0,
+  "expected_top_level_names": [
+    "TestPrimaryJointVacuumV6DefaultOuterLeafMaterializationReaderAndCut"
+  ],
+  "group_and_children_empty": true,
+  "id": "race-TreeDB",
+  "leader_joined": true,
+  "missing_child_names": [],
+  "missing_top_names": [],
+  "observed_group_processes": [
+    {
+      "comm": "go",
+      "pgid": 993370,
+      "pid": 993370,
+      "ppid": 989361,
+      "session": 993370,
+      "state": "Z"
+    },
+    {
+      "comm": "compile",
+      "pgid": 993370,
+      "pid": 993389,
+      "ppid": 993370,
+      "session": 993370,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 993370,
+      "pid": 993466,
+      "ppid": 993370,
+      "session": 993370,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 993370,
+      "pid": 993471,
+      "ppid": 993370,
+      "session": 993370,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 993370,
+      "pid": 993674,
+      "ppid": 993370,
+      "session": 993370,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 993370,
+      "pid": 993689,
+      "ppid": 993370,
+      "session": 993370,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 993370,
+      "pid": 993803,
+      "ppid": 993370,
+      "session": 993370,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 993370,
+      "pid": 993807,
+      "ppid": 993370,
+      "session": 993370,
+      "state": "R"
+    },
+    {
+      "comm": "link",
+      "pgid": 993370,
+      "pid": 993819,
+      "ppid": 993370,
+      "session": 993370,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 993370,
+      "pid": 993829,
+      "ppid": 993370,
+      "session": 993370,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 993370,
+      "pid": 993837,
+      "ppid": 993370,
+      "session": 993370,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 993370,
+      "pid": 993850,
+      "ppid": 993370,
+      "session": 993370,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 993370,
+      "pid": 993854,
+      "ppid": 993370,
+      "session": 993370,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 993370,
+      "pid": 993858,
+      "ppid": 993370,
+      "session": 993370,
+      "state": "R"
+    },
+    {
+      "comm": "TreeDB.test",
+      "pgid": 993370,
+      "pid": 993864,
+      "ppid": 993370,
+      "session": 993370,
+      "state": "S"
+    }
+  ],
+  "pgid": 993370,
+  "pid": 993370,
+  "raw_log_sha256": "7a0a0f8dfc8e0ad1a1cfc4f3db6d973f8e7de53efbf28912af8c45bf6c5ff3f4",
+  "remaining_direct_or_adopted_children": [],
+  "remaining_group_members": [],
+  "required_child_names": [],
+  "residual_before_cleanup": {
+    "children": [],
+    "group": []
+  },
+  "signals": [],
+  "source_before_after_frozen": true,
+  "started_utc": "2026-10-16T03:35:57.771553+00:00",
+  "status": "PASS",
+  "stop_reasons": [],
+  "subreaper_verified": true,
+  "test_FAIL_names": [],
+  "test_PASS_names": [
+    "TestPrimaryJointVacuumV6DefaultOuterLeafMaterializationReaderAndCut"
+  ],
+  "test_RUN_names": [
+    "TestPrimaryJointVacuumV6DefaultOuterLeafMaterializationReaderAndCut"
+  ],
+  "test_SKIP_names": [],
+  "timeout": false,
+  "top_level_RUN_names": [
+    "TestPrimaryJointVacuumV6DefaultOuterLeafMaterializationReaderAndCut"
+  ],
+  "top_level_pass_count": 1,
+  "unexpected_top_names": []
+}

@@ -1,0 +1,163 @@
+{
+  "verifier_schema_correction": "Original verifier expected per-entry size objects; actual manifest maps paths directly to digests. Original TypeError before mutation/runtime preserved; corrected reader accepts actual schema and verifies archive/raw bytes.",
+  "verified_utc": "2026-10-16T03:38:34.555525+00:00",
+  "evidence_manifest_sha256": "e03bcc27c33580ed6cc7e0327bb07f2d68d827bf8f8aff13d2f748f5a09dbb36",
+  "archive_sha256": "e9610109ba72502ff54aa3007dcce402b5f1779dadb79292b94ce107df541214",
+  "archive_payloads": 119,
+  "results": [
+    {
+      "id": "normal-repaired-resource-finish",
+      "status": "PASS",
+      "elapsed_seconds": 7.398996067233384,
+      "pid": 989365,
+      "pgid": 989365,
+      "top_level_pass_count": 1
+    },
+    {
+      "id": "normal-TreeDB-pager",
+      "status": "PASS",
+      "elapsed_seconds": 1.101586986798793,
+      "pid": 989680,
+      "pgid": 989680,
+      "top_level_pass_count": 4
+    },
+    {
+      "id": "normal-TreeDB-internal-primaryarena",
+      "status": "PASS",
+      "elapsed_seconds": 1.089894131757319,
+      "pid": 989714,
+      "pgid": 989714,
+      "top_level_pass_count": 3
+    },
+    {
+      "id": "normal-TreeDB-internal-retainedalloc",
+      "status": "PASS",
+      "elapsed_seconds": 1.0880047241225839,
+      "pid": 989747,
+      "pgid": 989747,
+      "top_level_pass_count": 4
+    },
+    {
+      "id": "normal-TreeDB-zipper",
+      "status": "PASS",
+      "elapsed_seconds": 1.2171381977386773,
+      "pid": 989798,
+      "pgid": 989798,
+      "top_level_pass_count": 1
+    },
+    {
+      "id": "normal-TreeDB-internal-valuelog",
+      "status": "PASS",
+      "elapsed_seconds": 1.2023767912760377,
+      "pid": 989881,
+      "pgid": 989881,
+      "top_level_pass_count": 2
+    },
+    {
+      "id": "normal-TreeDB-caching",
+      "status": "PASS",
+      "elapsed_seconds": 1.8691235152073205,
+      "pid": 989916,
+      "pgid": 989916,
+      "top_level_pass_count": 2
+    },
+    {
+      "id": "normal-TreeDB",
+      "status": "PASS",
+      "elapsed_seconds": 2.1017562351189554,
+      "pid": 989956,
+      "pgid": 989956,
+      "top_level_pass_count": 1
+    },
+    {
+      "id": "normal-one-M4-pointer-cell",
+      "status": "PASS",
+      "elapsed_seconds": 1.9837697963230312,
+      "pid": 990057,
+      "pgid": 990057,
+      "top_level_pass_count": 1
+    },
+    {
+      "id": "race-TreeDB-db",
+      "status": "PASS",
+      "elapsed_seconds": 85.12653110409155,
+      "pid": 990137,
+      "pgid": 990137,
+      "top_level_pass_count": 30
+    },
+    {
+      "id": "race-TreeDB-internal-rootpublication",
+      "status": "PASS",
+      "elapsed_seconds": 11.443467907141894,
+      "pid": 991747,
+      "pgid": 991747,
+      "top_level_pass_count": 16
+    },
+    {
+      "id": "race-TreeDB-pager",
+      "status": "PASS",
+      "elapsed_seconds": 2.7578697479330003,
+      "pid": 992225,
+      "pgid": 992225,
+      "top_level_pass_count": 4
+    },
+    {
+      "id": "race-TreeDB-internal-primaryarena",
+      "status": "PASS",
+      "elapsed_seconds": 2.76539106387645,
+      "pid": 992301,
+      "pgid": 992301,
+      "top_level_pass_count": 3
+    },
+    {
+      "id": "race-TreeDB-internal-retainedalloc",
+      "status": "PASS",
+      "elapsed_seconds": 3.321538373362273,
+      "pid": 992371,
+      "pgid": 992371,
+      "top_level_pass_count": 4
+    },
+    {
+      "id": "race-TreeDB-zipper",
+      "status": "PASS",
+      "elapsed_seconds": 12.29876114660874,
+      "pid": 992514,
+      "pgid": 992514,
+      "top_level_pass_count": 1
+    },
+    {
+      "id": "race-TreeDB-internal-valuelog",
+      "status": "PASS",
+      "elapsed_seconds": 6.328303026035428,
+      "pid": 992703,
+      "pgid": 992703,
+      "top_level_pass_count": 2
+    },
+    {
+      "id": "race-TreeDB-caching",
+      "status": "PASS",
+      "elapsed_seconds": 33.116869466844946,
+      "pid": 992828,
+      "pgid": 992828,
+      "top_level_pass_count": 2
+    },
+    {
+      "id": "race-TreeDB",
+      "status": "PASS",
+      "elapsed_seconds": 41.78191949892789,
+      "pid": 993370,
+      "pgid": 993370,
+      "top_level_pass_count": 1
+    }
+  ],
+  "normal_top": 19,
+  "normal_all": 27,
+  "race_top": 63,
+  "race_all": 127,
+  "prior_normal_passes_reused": 47,
+  "prior_source_manifest": "e434542a59d55cf67c90d6a16c5787abeb908efda4c1c705033658b9ba8e0577",
+  "all_source_and_process_receipts_verified": true,
+  "runtime_repeated": false,
+  "actual33_executed": false,
+  "native_publication_executed": false
+}

@@ -1,0 +1,15 @@
+{
+  "Go_commands_executed": 0,
+  "changed_paths": [
+    "TreeDB/internal/rootpublication/durable_root_transaction_work_callbacks_v6_test.go"
+  ],
+  "delta_sha256": "6f71c965ef96b0045618eb2200a685e3a3e5256750c94f3f5047fe5a7e468a9b",
+  "invariance_sha256": "78186bf101578453b0125b4fd195be0d09c89da756f592d82aaea87addc1656e",
+  "public_status": "Q32 RED/ACK0/noAllowance",
+  "selection_sha256": "a83b20729fcf89f8dee847906fbd11476b0588c2d9c44f335acbc4a7e076b7a3",
+  "source_archive_sha256": "165f62846bcc196aece1ba38e9df1b6dc262adc3546663ff10e79f0e5e12b1e6",
+  "source_files": 10375,
+  "source_lease": "RELEASED",
+  "source_manifest_sha256": "a7ff76f853958270984056845d89b173b0690b208909eb9623dbfd980407d2d1",
+  "test_bodies_executed": 0
+}

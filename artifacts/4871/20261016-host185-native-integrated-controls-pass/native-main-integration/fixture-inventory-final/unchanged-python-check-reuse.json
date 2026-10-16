@@ -1,0 +1,22 @@
+{
+  "test_ci_impact": {
+    "receipt": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/origin-inventory-final/test_ci_impact.json",
+    "receipt_sha256": "1c2343806c389b0cf0d97e0327e868bc54adc7fbf61f89f2e116202db02efdf2",
+    "unchanged_script_and_tests": true
+  },
+  "test_refresh_ci_impact_inventory": {
+    "receipt": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/origin-inventory-final/test_refresh_ci_impact_inventory.json",
+    "receipt_sha256": "1d486a6df89a772978b74ed1ee922f7fe417974109491bc9120b537de75df05f",
+    "unchanged_script_and_tests": true
+  },
+  "test_treedb_ci_contract": {
+    "receipt": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/origin-inventory-final/test_treedb_ci_contract.json",
+    "receipt_sha256": "3517e8e8a492d18b800552ac018d86ae492086f9dd049bf6d26cf5d6f744082c",
+    "unchanged_script_and_tests": true
+  },
+  "test_treedb_windows_core_headroom": {
+    "receipt": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/origin-inventory-final/test_treedb_windows_core_headroom.json",
+    "receipt_sha256": "75bd4cffad7a415aa379d6d4acfd4d205e4f2dff963027d3a6bd2188a8e6a71e",
+    "unchanged_script_and_tests": true
+  }
+}

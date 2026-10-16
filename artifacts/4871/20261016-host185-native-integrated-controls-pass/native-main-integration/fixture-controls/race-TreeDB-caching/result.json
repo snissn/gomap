@@ -1,0 +1,151 @@
+{
+  "M4_selected_leaf_names": [],
+  "adopted_children_reaped": [],
+  "elapsed_seconds": 33.116869466844946,
+  "ended_utc": "2026-10-16T03:35:56.782089+00:00",
+  "exit_code": 0,
+  "expected_top_level_names": [
+    "TestCOWMaintenancePostRefreshSettlementKeepsFenceAndOldCut",
+    "TestCOWDBCloseWaitsForAdmittedPointerReadAndDelayedOwnersClose"
+  ],
+  "group_and_children_empty": true,
+  "id": "race-TreeDB-caching",
+  "leader_joined": true,
+  "missing_child_names": [],
+  "missing_top_names": [],
+  "observed_group_processes": [
+    {
+      "comm": "go",
+      "pgid": 992828,
+      "pid": 992828,
+      "ppid": 989361,
+      "session": 992828,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 992828,
+      "pid": 992847,
+      "ppid": 992828,
+      "session": 992828,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 992828,
+      "pid": 992936,
+      "ppid": 992828,
+      "session": 992828,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 992828,
+      "pid": 992940,
+      "ppid": 992828,
+      "session": 992828,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 992828,
+      "pid": 993287,
+      "ppid": 992828,
+      "session": 992828,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 992828,
+      "pid": 993292,
+      "ppid": 992828,
+      "session": 992828,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 992828,
+      "pid": 993296,
+      "ppid": 992828,
+      "session": 992828,
+      "state": "R"
+    },
+    {
+      "comm": "link",
+      "pgid": 992828,
+      "pid": 993308,
+      "ppid": 992828,
+      "session": 992828,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 992828,
+      "pid": 993320,
+      "ppid": 992828,
+      "session": 992828,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 992828,
+      "pid": 993327,
+      "ppid": 992828,
+      "session": 992828,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 992828,
+      "pid": 993331,
+      "ppid": 992828,
+      "session": 992828,
+      "state": "R"
+    },
+    {
+      "comm": "caching.test",
+      "pgid": 992828,
+      "pid": 993348,
+      "ppid": 992828,
+      "session": 992828,
+      "state": "S"
+    }
+  ],
+  "pgid": 992828,
+  "pid": 992828,
+  "raw_log_sha256": "e16dbe28b37d86a411cf67a590d7d0d57d8c5654e9668f96efdad9e9d2b1ed4a",
+  "remaining_direct_or_adopted_children": [],
+  "remaining_group_members": [],
+  "required_child_names": [],
+  "residual_before_cleanup": {
+    "children": [],
+    "group": []
+  },
+  "signals": [],
+  "source_before_after_frozen": true,
+  "started_utc": "2026-10-16T03:35:23.665236+00:00",
+  "status": "PASS",
+  "stop_reasons": [],
+  "subreaper_verified": true,
+  "test_FAIL_names": [],
+  "test_PASS_names": [
+    "TestCOWMaintenancePostRefreshSettlementKeepsFenceAndOldCut",
+    "TestCOWMaintenancePostRefreshSettlementKeepsFenceAndOldCut/settle-error-false",
+    "TestCOWMaintenancePostRefreshSettlementKeepsFenceAndOldCut/settle-error-true",
+    "TestCOWDBCloseWaitsForAdmittedPointerReadAndDelayedOwnersClose"
+  ],
+  "test_RUN_names": [
+    "TestCOWMaintenancePostRefreshSettlementKeepsFenceAndOldCut",
+    "TestCOWMaintenancePostRefreshSettlementKeepsFenceAndOldCut/settle-error-false",
+    "TestCOWMaintenancePostRefreshSettlementKeepsFenceAndOldCut/settle-error-true",
+    "TestCOWDBCloseWaitsForAdmittedPointerReadAndDelayedOwnersClose"
+  ],
+  "test_SKIP_names": [],
+  "timeout": false,
+  "top_level_RUN_names": [
+    "TestCOWMaintenancePostRefreshSettlementKeepsFenceAndOldCut",
+    "TestCOWDBCloseWaitsForAdmittedPointerReadAndDelayedOwnersClose"
+  ],
+  "top_level_pass_count": 2,
+  "unexpected_top_names": []
+}

@@ -1,0 +1,107 @@
+{
+  "M4_selected_leaf_names": [],
+  "adopted_children_reaped": [],
+  "elapsed_seconds": 3.321538373362273,
+  "ended_utc": "2026-10-16T03:35:02.088289+00:00",
+  "exit_code": 0,
+  "expected_top_level_names": [
+    "TestNativeAtomicOwnerGrowthAdmitsBeforeEffects",
+    "TestNativeAtomicOwnerGrowthPricesOriginalRollback",
+    "TestNativeOwnerGrowthAdapterPreservesYield",
+    "TestNativeOwnerGrowthAdapterPreservesUnsupported"
+  ],
+  "group_and_children_empty": true,
+  "id": "race-TreeDB-internal-retainedalloc",
+  "leader_joined": true,
+  "missing_child_names": [],
+  "missing_top_names": [],
+  "observed_group_processes": [
+    {
+      "comm": "go",
+      "pgid": 992371,
+      "pid": 992371,
+      "ppid": 989361,
+      "session": 992371,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 992371,
+      "pid": 992390,
+      "ppid": 992371,
+      "session": 992371,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 992371,
+      "pid": 992395,
+      "ppid": 992371,
+      "session": 992371,
+      "state": "S"
+    },
+    {
+      "comm": "link",
+      "pgid": 992371,
+      "pid": 992475,
+      "ppid": 992371,
+      "session": 992371,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 992371,
+      "pid": 992485,
+      "ppid": 992371,
+      "session": 992371,
+      "state": "R"
+    },
+    {
+      "comm": "retainedalloc.t",
+      "pgid": 992371,
+      "pid": 992500,
+      "ppid": 992371,
+      "session": 992371,
+      "state": "S"
+    }
+  ],
+  "pgid": 992371,
+  "pid": 992371,
+  "raw_log_sha256": "e4c3e9e88488e6b6fadc6a7f390eb82d7b931510082244db1dff778d778c1784",
+  "remaining_direct_or_adopted_children": [],
+  "remaining_group_members": [],
+  "required_child_names": [],
+  "residual_before_cleanup": {
+    "children": [],
+    "group": []
+  },
+  "signals": [],
+  "source_before_after_frozen": true,
+  "started_utc": "2026-10-16T03:34:58.766767+00:00",
+  "status": "PASS",
+  "stop_reasons": [],
+  "subreaper_verified": true,
+  "test_FAIL_names": [],
+  "test_PASS_names": [
+    "TestNativeAtomicOwnerGrowthAdmitsBeforeEffects",
+    "TestNativeAtomicOwnerGrowthPricesOriginalRollback",
+    "TestNativeOwnerGrowthAdapterPreservesYield",
+    "TestNativeOwnerGrowthAdapterPreservesUnsupported"
+  ],
+  "test_RUN_names": [
+    "TestNativeAtomicOwnerGrowthAdmitsBeforeEffects",
+    "TestNativeAtomicOwnerGrowthPricesOriginalRollback",
+    "TestNativeOwnerGrowthAdapterPreservesYield",
+    "TestNativeOwnerGrowthAdapterPreservesUnsupported"
+  ],
+  "test_SKIP_names": [],
+  "timeout": false,
+  "top_level_RUN_names": [
+    "TestNativeAtomicOwnerGrowthAdmitsBeforeEffects",
+    "TestNativeAtomicOwnerGrowthPricesOriginalRollback",
+    "TestNativeOwnerGrowthAdapterPreservesYield",
+    "TestNativeOwnerGrowthAdapterPreservesUnsupported"
+  ],
+  "top_level_pass_count": 4,
+  "unexpected_top_names": []
+}

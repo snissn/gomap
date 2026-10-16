@@ -1,0 +1,19 @@
+{
+  "added": [],
+  "after_source_manifest_sha256": "a7ff76f853958270984056845d89b173b0690b208909eb9623dbfd980407d2d1",
+  "all_other_files_equal": true,
+  "before_source_manifest_sha256": "e434542a59d55cf67c90d6a16c5787abeb908efda4c1c705033658b9ba8e0577",
+  "changed_paths": [
+    "TreeDB/internal/rootpublication/durable_root_transaction_work_callbacks_v6_test.go"
+  ],
+  "deleted": [],
+  "no_Go_or_test_runtime": true,
+  "original_failure_packet_modified": false,
+  "original_public_caps_unchanged": true,
+  "production_files_unchanged": true,
+  "selected_function_prefix_equal": true,
+  "selected_function_suffix_equal": true,
+  "source_files": 10375,
+  "test_after_sha256": "610f8f493d9bce2e9719c75943da2b039260d3610213d1a60701e267d8376976",
+  "test_before_sha256": "e89c544b2c6373116bdb8bf3262fb3df645a64918cc9a4e11d6d389f0c1f6dff"
+}

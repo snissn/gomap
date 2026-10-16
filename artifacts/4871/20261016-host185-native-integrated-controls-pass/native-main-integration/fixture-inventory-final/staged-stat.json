@@ -1,0 +1,10 @@
+{
+  "argv": [
+    "git",
+    "diff",
+    "--cached",
+    "--stat"
+  ],
+  "exit_code": 0,
+  "log_sha256": "11e4e64b5933f6637fe767802ca004fd18768fd6911a10f15cd8e63c14225b6f"
+}

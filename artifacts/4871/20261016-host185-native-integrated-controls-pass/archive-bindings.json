@@ -1,0 +1,20 @@
+[
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/fixture-controls/evidence.tar.gz",
+    "bytes": 16743943,
+    "sha256": "e9610109ba72502ff54aa3007dcce402b5f1779dadb79292b94ce107df541214",
+    "reason": "Full source or evidence archive retained locally and hash-bound; individual manifests, source delta payloads, logs and receipts copied remotely."
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/fixture-inventory-final/source-final.tar.gz",
+    "bytes": 181390845,
+    "sha256": "963f9deb573465a5e56a9e2d94841058851bbc2ae28e01cc7533e7cee7106182",
+    "reason": "Full source or evidence archive retained locally and hash-bound; individual manifests, source delta payloads, logs and receipts copied remotely."
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/resource-finish-fixture/source-frozen.tar.gz",
+    "bytes": 156065164,
+    "sha256": "165f62846bcc196aece1ba38e9df1b6dc262adc3546663ff10e79f0e5e12b1e6",
+    "reason": "Full source or evidence archive retained locally and hash-bound; individual manifests, source delta payloads, logs and receipts copied remotely."
+  }
+]

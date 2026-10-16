@@ -1,0 +1,121 @@
+{
+  "M4_selected_leaf_names": [],
+  "adopted_children_reaped": [],
+  "elapsed_seconds": 12.29876114660874,
+  "ended_utc": "2026-10-16T03:35:15.369734+00:00",
+  "exit_code": 0,
+  "expected_top_level_names": [
+    "TestPrimaryConstructionV6SiblingFailureDisposal"
+  ],
+  "group_and_children_empty": true,
+  "id": "race-TreeDB-zipper",
+  "leader_joined": true,
+  "missing_child_names": [],
+  "missing_top_names": [],
+  "observed_group_processes": [
+    {
+      "comm": "go",
+      "pgid": 992514,
+      "pid": 992514,
+      "ppid": 989361,
+      "session": 992514,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 992514,
+      "pid": 992532,
+      "ppid": 992514,
+      "session": 992514,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 992514,
+      "pid": 992536,
+      "ppid": 992514,
+      "session": 992514,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 992514,
+      "pid": 992658,
+      "ppid": 992514,
+      "session": 992514,
+      "state": "S"
+    },
+    {
+      "comm": "link",
+      "pgid": 992514,
+      "pid": 992670,
+      "ppid": 992514,
+      "session": 992514,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 992514,
+      "pid": 992680,
+      "ppid": 992514,
+      "session": 992514,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 992514,
+      "pid": 992684,
+      "ppid": 992514,
+      "session": 992514,
+      "state": "R"
+    },
+    {
+      "comm": "zipper.test",
+      "pgid": 992514,
+      "pid": 992695,
+      "ppid": 992514,
+      "session": 992514,
+      "state": "S"
+    }
+  ],
+  "pgid": 992514,
+  "pid": 992514,
+  "raw_log_sha256": "89efc12a82357396ef7e3744e3742e7f79112141ae16bb4e9c9a5e756286ea36",
+  "remaining_direct_or_adopted_children": [],
+  "remaining_group_members": [],
+  "required_child_names": [
+    "TestPrimaryConstructionV6SiblingFailureDisposal/apply",
+    "TestPrimaryConstructionV6SiblingFailureDisposal/copy",
+    "TestPrimaryConstructionV6SiblingFailureDisposal/build"
+  ],
+  "residual_before_cleanup": {
+    "children": [],
+    "group": []
+  },
+  "signals": [],
+  "source_before_after_frozen": true,
+  "started_utc": "2026-10-16T03:35:03.070990+00:00",
+  "status": "PASS",
+  "stop_reasons": [],
+  "subreaper_verified": true,
+  "test_FAIL_names": [],
+  "test_PASS_names": [
+    "TestPrimaryConstructionV6SiblingFailureDisposal",
+    "TestPrimaryConstructionV6SiblingFailureDisposal/apply",
+    "TestPrimaryConstructionV6SiblingFailureDisposal/copy",
+    "TestPrimaryConstructionV6SiblingFailureDisposal/build"
+  ],
+  "test_RUN_names": [
+    "TestPrimaryConstructionV6SiblingFailureDisposal",
+    "TestPrimaryConstructionV6SiblingFailureDisposal/apply",
+    "TestPrimaryConstructionV6SiblingFailureDisposal/copy",
+    "TestPrimaryConstructionV6SiblingFailureDisposal/build"
+  ],
+  "test_SKIP_names": [],
+  "timeout": false,
+  "top_level_RUN_names": [
+    "TestPrimaryConstructionV6SiblingFailureDisposal"
+  ],
+  "top_level_pass_count": 1,
+  "unexpected_top_names": []
+}

@@ -1,0 +1,130 @@
+{
+  "all_byte_limits": 1048576,
+  "construction_charge_lifecycle": "Captured exact c.metadataCharge at original constructor. No enrollment or later promotion. Native queue refunds only bank+pager node. Returned original terminal alone refunds containing pending charge with existing ordinary test helper after callback/transaction return, then second helper is idempotent; no claim this helper is production native finite retirement.",
+  "new_native_allowance": null,
+  "probe_sequence": [
+    {
+      "BanksFreed_delta": 0,
+      "RootDrops_delta": 0,
+      "Set_effects": 0,
+      "asserted_state": "SAME root, constructor, Set, charge; no error/terminal/busy",
+      "callbacks": 0,
+      "owner_bytes": "metadata after constructor; unchanged",
+      "records_limit": 3,
+      "records_used": 3
+    },
+    {
+      "BanksFreed_delta": 0,
+      "RootDrops_delta": 1,
+      "Set_effects": 0,
+      "asserted_state": "SAME constructor/Set; root logically transferred into SAME original queue",
+      "callbacks": 1,
+      "owner_bytes": "metadata after constructor; unchanged",
+      "records_limit": 5,
+      "records_used": 5
+    },
+    {
+      "BanksFreed_delta": 0,
+      "RootDrops_delta": 1,
+      "Set_effects": 0,
+      "arm": "retry only",
+      "asserted_state": "queue10 admission refuses before physical effects",
+      "callbacks": 2,
+      "owner_bytes": "metadata after constructor; unchanged",
+      "records_limit": 11,
+      "records_used": 2
+    },
+    {
+      "BanksFreed_delta": 1,
+      "RootDrops_delta": 1,
+      "Set_effects": 0,
+      "arm": "retry only first fresh turn",
+      "asserted_state": "bank/node aliases scrubbed and original accounting done; SAME construction/Set and pending containing charge survive empty-queue refusal",
+      "callbacks": 3,
+      "owner_bytes": "baseline + original construction metadataCharge",
+      "records_limit": 32,
+      "records_used": 31
+    },
+    {
+      "BanksFreed_delta": 1,
+      "RootDrops_delta": 1,
+      "Set_effects": 1,
+      "arm": "retry only second fresh turn",
+      "asserted_state": "SAME terminal identity/owner/charge; transaction releases and Set releaseResult completes",
+      "callbacks": 4,
+      "owner_bytes": "baseline + original construction metadataCharge until returned original terminal completes",
+      "records_limit": 32,
+      "records_used": 12
+    },
+    {
+      "BanksFreed_delta": 0,
+      "RootDrops_delta": 1,
+      "Set_effects": 1,
+      "arm": "physical failure",
+      "asserted_state": "first physical cause and SAME constructor/Set/charge retained through zero-work retry/Abort",
+      "callbacks": 2,
+      "owner_bytes": "metadata after constructor; unchanged",
+      "records_limit": 32,
+      "records_used": 2
+    }
+  ],
+  "production_retained_or_F_R_delta": 0,
+  "runtime_executed": false,
+  "scope": "Same one-root, no-binding fixture only; no public/native allowance selection",
+  "stage_prices": [
+    {
+      "bytes": "2*sizeof(DurableRootTransaction)+2*sizeof(primaryTransactionConstructionV6)",
+      "operation": "Finish descriptor/control scrub preadmission",
+      "records": 1,
+      "source": "primary_transaction_construction_v6.go:461"
+    },
+    {
+      "bytes": "2*sizeof(bank)+2*sizeof(ReleaseQueue)",
+      "operation": "Root drop outer preadmission",
+      "records": 2,
+      "source": "primaryarena/arena.go:767-769"
+    },
+    {
+      "bytes": "sizeof(primaryReadRootTableV6)",
+      "operation": "SAME protected read-root table header",
+      "records": 1,
+      "source": "pager/primary_read_root_v6.go:206"
+    },
+    {
+      "bytes": "sizeof(pointer)+sizeof(primaryReadRootEntryV6)",
+      "operation": "SAME first matching bucket link",
+      "records": 1,
+      "source": "pager/primary_read_root_v6.go:217"
+    },
+    {
+      "bytes": "8",
+      "operation": "Fixture release dispatch",
+      "records": 1,
+      "source": "durable_root_transaction_work_callbacks_v6_test.go:288-293"
+    },
+    {
+      "bytes": "18*sizeof(bank)+2*sizeof(Group)+2*sizeof(ReleaseQueue)",
+      "operation": "Each native queue invocation, including final empty observation",
+      "records": 10,
+      "source": "primaryarena/arena.go:834-837"
+    },
+    {
+      "bytes": "sizeof(primaryReadRootTableV6)+sizeof(pointer)+sizeof(primaryReadRootEntryV6)",
+      "operation": "Bank lookup header+matching link",
+      "records": 2,
+      "source": "primaryarena/arena.go:917;pager/primary_read_root_v6.go:205-228"
+    },
+    {
+      "bytes": "128+sizeof(pointer)+2*sizeof(primaryReadRootEntryV6)",
+      "operation": "Pager node remove header+matching link",
+      "records": 2,
+      "source": "pager/primary_read_root_v6.go:292,306"
+    },
+    {
+      "bytes": "6*sizeof(RemovalWork)+6*sizeof(Owner)+2*sizeof(EnrollmentWork)+384",
+      "operation": "No-enrollment exact queue accounting: bind/remove/active-header/cursor-init/reset",
+      "records": 5,
+      "source": "owner_work.go:333,266,77,105,379;arena.go:848"
+    }
+  ]
+}
