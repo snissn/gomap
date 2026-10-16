@@ -1,0 +1,252 @@
+[
+  {
+    "link": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116745460863",
+    "name": "TreeDB required gate",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116741387921",
+    "name": "ubuntu-latest-1",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116741439346",
+    "name": "macos-latest-2",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116741386972",
+    "name": "macos-latest-3",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116741386845",
+    "name": "macos-latest-1",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116741432841",
+    "name": "vet (macos)",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116741388072",
+    "name": "windows-core-7",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116741387059",
+    "name": "race-check (linux)-3",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116741425218",
+    "name": "race-check (linux)-4",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116741386738",
+    "name": "race-check (linux)-2",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116741386779",
+    "name": "windows-mongo-gateway",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/snissn/gomap/actions/runs/38825089934/job/116730572643",
+    "name": "macos-latest-2",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116741389848",
+    "name": "windows-caching-rest-1",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116741418921",
+    "name": "ubuntu-latest-2",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116741429353",
+    "name": "vet (windows)",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116741389058",
+    "name": "windows-caching-rest-3",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116741387938",
+    "name": "windows-core-5",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116741389123",
+    "name": "windows-caching-heavy-2",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116741387822",
+    "name": "windows-core-4",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116741388444",
+    "name": "windows-core-6",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116741387739",
+    "name": "windows-core-3",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116741386652",
+    "name": "ubuntu-latest-3",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/snissn/gomap/actions/runs/38825089934/job/116730572742",
+    "name": "macos-latest-1",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116741442159",
+    "name": "CI impact (advisory only)",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116741434581",
+    "name": "race-check (linux)-1",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/snissn/gomap/actions/runs/38825099217/job/116730603215",
+    "name": "append-only snapshot guardrail (linux)",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116741432120",
+    "name": "mvcc raw-path gate (linux)",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116741387053",
+    "name": "windows-powerloss-oracle",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116741388281",
+    "name": "windows-core-2",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116741389400",
+    "name": "windows-caching-heavy-1",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116741434872",
+    "name": "vet (ubuntu)",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116741389054",
+    "name": "windows-caching-rest-2",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116741386003",
+    "name": "snapshot-iterator-perf (linux)",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116741386989",
+    "name": "windows-nativewire",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116741387135",
+    "name": "windows-core-1",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116741386458",
+    "name": "perf-smoke (linux)",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116741389153",
+    "name": "windows-core-8",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/snissn/gomap/actions/runs/38825089928/job/116730572621",
+    "name": "macos-latest",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/snissn/gomap/actions/runs/38825089963/job/116730573421",
+    "name": "suites (linux)",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/snissn/gomap/actions/runs/38825089963/job/116730573744",
+    "name": "profiles (linux) (balanced)",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/snissn/gomap/actions/runs/38825089934/job/116730572892",
+    "name": "ubuntu-latest-2",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/snissn/gomap/actions/runs/38825089963/job/116730573406",
+    "name": "bigkeys_guard (linux)",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/snissn/gomap/actions/runs/38825089963/job/116730573549",
+    "name": "profiles (linux) (fast)",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/snissn/gomap/actions/runs/38825089934/job/116730572694",
+    "name": "ubuntu-latest-1",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/snissn/gomap/actions/runs/38825089892/job/116730572406",
+    "name": "windows-latest",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/snissn/gomap/actions/runs/38825089875/job/116730572290",
+    "name": "gofmt",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/snissn/gomap/actions/runs/38825089928/job/116730572979",
+    "name": "ubuntu-latest",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/snissn/gomap/actions/runs/38825089921/job/116730572467",
+    "name": "bench (linux)",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/snissn/gomap/actions/runs/38825089963/job/116730573485",
+    "name": "profiles (linux) (durable)",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "",
+    "name": "CodeRabbit",
+    "state": "SUCCESS"
+  }
+]

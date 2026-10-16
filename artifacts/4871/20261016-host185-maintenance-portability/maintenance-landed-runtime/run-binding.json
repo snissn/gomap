@@ -1,0 +1,13 @@
+{
+  "head_sha": "9165c53e4d82d12231af8404b0b7c5aea13530a6",
+  "head_branch": "main",
+  "event": "workflow_dispatch",
+  "run_attempt": 1,
+  "status": "queued",
+  "conclusion": null,
+  "created_at": "2026-10-16T00:32:17Z",
+  "html_url": "https://github.com/snissn/gomap/actions/runs/38830037922",
+  "run_id": 38830037922,
+  "grant_harness_sha": "9165c53e4d82d12231af8404b0b7c5aea13530a6",
+  "request_count": 1
+}

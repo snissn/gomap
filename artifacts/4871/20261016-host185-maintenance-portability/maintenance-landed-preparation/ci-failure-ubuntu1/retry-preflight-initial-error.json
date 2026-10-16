@@ -1,0 +1,1 @@
+{"error": "Expected gh pr checks --json exit1 for failed checks, but this CLI exits0; exact inventory has48SUCCESS/2FAILURE. Fixed return-code acceptance while keeping all exact state assertions.", "github_mutation": false, "retry_request_written": false}

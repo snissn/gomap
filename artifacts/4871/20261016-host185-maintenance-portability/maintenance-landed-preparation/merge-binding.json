@@ -1,0 +1,12 @@
+{
+  "head": "a1db58c790e056a02340c98e7dbae11f40c8ed48",
+  "base": "eae34350200668e1aae35d56f7f4c8ddfc2acb47",
+  "merged": "9165c53e4d82d12231af8404b0b7c5aea13530a6",
+  "tree": "c1421828bc0ef2229fd60bf2cd000a1e31114ef7",
+  "merged_at": "2026-10-16T00:31:39Z",
+  "checks_success": 50,
+  "review": "INTERNAL_SUBAGENT_REVIEW gpt-6.1-sol ACCEPT",
+  "unresolved_threads": 0,
+  "runtime_calls": 0,
+  "worktree_retained": "Required frozen source/provenance for the pending fixed diagnostic."
+}

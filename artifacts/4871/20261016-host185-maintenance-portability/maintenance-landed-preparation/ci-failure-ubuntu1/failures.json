@@ -1,0 +1,15 @@
+[
+  {
+    "Time": "2026-10-15T23:57:06.581941541Z",
+    "Action": "fail",
+    "Package": "github.com/snissn/gomap/TreeDB/nativewire",
+    "Test": "TestImmutableOwnerReplacementPrivateANNQualificationV1",
+    "Elapsed": 2.26
+  },
+  {
+    "Time": "2026-10-16T00:02:16.69317878Z",
+    "Action": "fail",
+    "Package": "github.com/snissn/gomap/TreeDB/nativewire",
+    "Elapsed": 444.58
+  }
+]

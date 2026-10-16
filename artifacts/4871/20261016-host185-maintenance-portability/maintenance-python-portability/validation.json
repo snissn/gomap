@@ -1,0 +1,26 @@
+[
+  {
+    "argv": [
+      "python3",
+      "-B",
+      ".github/scripts/mvcc_maintenance_test.py"
+    ],
+    "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/maintenance-landed-harness",
+    "exit": 0,
+    "elapsed_seconds": 0.16668467922136188,
+    "stdout_sha256": "c0596445bc58d2543d833c0447b64143e71c62a3952e3337a5e446268629c8ce",
+    "stderr_sha256": "c4739a0fee2940b3298a9d7b18e684891c235b11e0f4e87921d82b7315f3333b"
+  },
+  {
+    "argv": [
+      "git",
+      "diff",
+      "--check"
+    ],
+    "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/maintenance-landed-harness",
+    "exit": 0,
+    "elapsed_seconds": 0.00709929782897234,
+    "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+]

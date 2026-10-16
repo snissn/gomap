@@ -1,0 +1,25 @@
+{
+  "artifacts": [
+    {
+      "archive_download_url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12016777498/zip",
+      "created_at": "2026-10-16T00:33:37Z",
+      "digest": "sha256:cf87d6565165ef26d31a67a1c8f59b16ed962422e1dbac20e606d96af8139018",
+      "expired": false,
+      "expires_at": "2026-10-30T00:33:37Z",
+      "id": 12016777498,
+      "name": "bounded-maintenance-38830037922-1",
+      "node_id": "MDg6QXJ0aWZhY3QxMjAxNjc3NzQ5OA==",
+      "size_in_bytes": 1150,
+      "updated_at": "2026-10-16T00:33:37Z",
+      "url": "https://api.github.com/repos/snissn/gomap/actions/artifacts/12016777498",
+      "workflow_run": {
+        "head_branch": "main",
+        "head_repository_id": 567933707,
+        "head_sha": "9165c53e4d82d12231af8404b0b7c5aea13530a6",
+        "id": 38830037922,
+        "repository_id": 567933707
+      }
+    }
+  ],
+  "total_count": 1
+}

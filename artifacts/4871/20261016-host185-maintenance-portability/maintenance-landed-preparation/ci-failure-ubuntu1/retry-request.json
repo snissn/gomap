@@ -1,0 +1,18 @@
+{
+  "at_utc": "2026-10-16T00:15:37.227952+00:00",
+  "head": "a1db58c790e056a02340c98e7dbae11f40c8ed48",
+  "command": [
+    "gh",
+    "run",
+    "rerun",
+    "38825099216",
+    "--repo",
+    "snissn/gomap",
+    "--job",
+    "116730604187"
+  ],
+  "maximum_retries": 1,
+  "scope": "one failed CI shard and dependent required gate on unchanged reviewed harness head",
+  "performance_rerun": false,
+  "classification": "classification.json"
+}

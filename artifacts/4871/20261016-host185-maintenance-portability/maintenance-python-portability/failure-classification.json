@@ -1,0 +1,36 @@
+{
+  "at_utc": "2026-10-16T00:36:47.741843+00:00",
+  "failed_run": 38830037922,
+  "attempt": 1,
+  "go_builds": 0,
+  "benchmark_calls": 0,
+  "reason": "ast.dump serialization includes Python 3.12 FunctionDef.type_params; exact unchanged function source reproduces hosted mismatch by adding that empty field",
+  "python_doc": "https://docs.python.org/3.12/library/ast.html#ast.FunctionDef",
+  "local_python": "3.10.12 (main, Aug 31 2026, 10:18:17) [GCC 11.4.0]",
+  "python312": null,
+  "original_collector_head": "22e605b5c738ce759c5a7b8a3195f8d3ed53132c",
+  "functions": [
+    {
+      "name": "schedule",
+      "same_original_function_source": true,
+      "source_sha256": "dcbbd4878b7c38c0d9746f5a53d51a3f43a7a5a408ed09cfcad2265a5c6c2363",
+      "python310_ast_sha256": "5323e2ff46d310326b032152c8b44fa0086feea02ce07403cfc68882da3fd15e",
+      "python312_shape_ast_sha256": "777356055c63640b608fa5726785d1e9b824e1d882a5965e38acb72f62b084c8"
+    },
+    {
+      "name": "parse",
+      "same_original_function_source": true,
+      "source_sha256": "6f0a745f58541c821b57a1f054944faa3328f55b995b8462c78b3add6630762c",
+      "python310_ast_sha256": "08c21b50bace4954db65d4a06ef9860c0723247bbc0bd5dbe48a52c31e21999f",
+      "python312_shape_ast_sha256": "bd96d871d723701b161a2faa09ac173acc5c3b3ff680a4df6af85acf8b0f17e2"
+    },
+    {
+      "name": "selftest",
+      "same_original_function_source": true,
+      "source_sha256": "7f16ca94a5c45ac8de6631edfde312bbb72929d0e2f4af41da6350f9fd7ce9dd",
+      "python310_ast_sha256": "937dd197f07eee5770ebb5ec655d5236e7cc98c56f84e3d242cb3cf13447030c",
+      "python312_shape_ast_sha256": "7471aab6915408f0ffb0e0af7f9888ce54c9d4f605dc2fcdf991c42570b2b2ae"
+    }
+  ],
+  "disposition": "engineering validation defect; no performance sample or product result; no unchanged-run retry"
+}

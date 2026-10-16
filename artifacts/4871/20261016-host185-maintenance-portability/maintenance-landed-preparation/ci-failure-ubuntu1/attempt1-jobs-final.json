@@ -1,0 +1,3381 @@
+{
+  "total_count": 34,
+  "jobs": [
+    {
+      "id": 116730603829,
+      "run_id": 38825099216,
+      "workflow_name": "TreeDB: vet+test",
+      "head_branch": "codex/4871-maintenance-landed-185-20261015",
+      "run_url": "https://api.github.com/repos/snissn/gomap/actions/runs/38825099216",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOIdn7C88AAAAbLa-pNQ",
+      "head_sha": "a1db58c790e056a02340c98e7dbae11f40c8ed48",
+      "url": "https://api.github.com/repos/snissn/gomap/actions/jobs/116730603829",
+      "html_url": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116730603829",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-15T23:41:42Z",
+      "started_at": "2026-10-15T23:41:59Z",
+      "completed_at": "2026-10-15T23:45:21Z",
+      "name": "perf-smoke (linux)",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-15T23:42:00Z",
+          "completed_at": "2026-10-15T23:42:01Z"
+        },
+        {
+          "name": "Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-15T23:42:01Z",
+          "completed_at": "2026-10-15T23:42:23Z"
+        },
+        {
+          "name": "Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-15T23:42:23Z",
+          "completed_at": "2026-10-15T23:42:29Z"
+        },
+        {
+          "name": "Aggregate perf gate self-tests",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-15T23:42:29Z",
+          "completed_at": "2026-10-15T23:42:33Z"
+        },
+        {
+          "name": "ValueLog dict compressibility bench",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-15T23:42:33Z",
+          "completed_at": "2026-10-15T23:44:03Z"
+        },
+        {
+          "name": "Perf baseline checker (gate)",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-15T23:44:03Z",
+          "completed_at": "2026-10-15T23:44:03Z"
+        },
+        {
+          "name": "Incompressible auto-vs-off gate",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 7,
+          "started_at": "2026-10-15T23:44:03Z",
+          "completed_at": "2026-10-15T23:45:17Z"
+        },
+        {
+          "name": "Upload value-log performance evidence",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 8,
+          "started_at": "2026-10-15T23:45:17Z",
+          "completed_at": "2026-10-15T23:45:18Z"
+        },
+        {
+          "name": "Post Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 15,
+          "started_at": "2026-10-15T23:45:18Z",
+          "completed_at": "2026-10-15T23:45:18Z"
+        },
+        {
+          "name": "Post Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 16,
+          "started_at": "2026-10-15T23:45:18Z",
+          "completed_at": "2026-10-15T23:45:19Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 17,
+          "started_at": "2026-10-15T23:45:19Z",
+          "completed_at": "2026-10-15T23:45:19Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/snissn/gomap/check-runs/116730603829",
+      "labels": [
+        "ubuntu-latest"
+      ],
+      "runner_id": 1000547608,
+      "runner_name": "GitHub Actions 1000547608",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 116730603968,
+      "run_id": 38825099216,
+      "workflow_name": "TreeDB: vet+test",
+      "head_branch": "codex/4871-maintenance-landed-185-20261015",
+      "run_url": "https://api.github.com/repos/snissn/gomap/actions/runs/38825099216",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOIdn7C88AAAAbLa-pwA",
+      "head_sha": "a1db58c790e056a02340c98e7dbae11f40c8ed48",
+      "url": "https://api.github.com/repos/snissn/gomap/actions/jobs/116730603968",
+      "html_url": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116730603968",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-15T23:41:42Z",
+      "started_at": "2026-10-15T23:44:17Z",
+      "completed_at": "2026-10-15T23:44:50Z",
+      "name": "mvcc raw-path gate (linux)",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-15T23:44:18Z",
+          "completed_at": "2026-10-15T23:44:19Z"
+        },
+        {
+          "name": "Resolve pull request and relevant paths",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-15T23:44:19Z",
+          "completed_at": "2026-10-15T23:44:20Z"
+        },
+        {
+          "name": "Checkout exact PR head",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-15T23:44:20Z",
+          "completed_at": "2026-10-15T23:44:47Z"
+        },
+        {
+          "name": "Resolve relevant paths from the event pair",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-15T23:44:47Z",
+          "completed_at": "2026-10-15T23:44:47Z"
+        },
+        {
+          "name": "Setup Go",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 5,
+          "started_at": "2026-10-15T23:44:47Z",
+          "completed_at": "2026-10-15T23:44:47Z"
+        },
+        {
+          "name": "Gate self-checks",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 6,
+          "started_at": "2026-10-15T23:44:47Z",
+          "completed_at": "2026-10-15T23:44:47Z"
+        },
+        {
+          "name": "Compare exact base and head",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 7,
+          "started_at": "2026-10-15T23:44:47Z",
+          "completed_at": "2026-10-15T23:44:47Z"
+        },
+        {
+          "name": "Add benchmark summary",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 8,
+          "started_at": "2026-10-15T23:44:47Z",
+          "completed_at": "2026-10-15T23:44:47Z"
+        },
+        {
+          "name": "Upload benchmark evidence",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 9,
+          "started_at": "2026-10-15T23:44:47Z",
+          "completed_at": "2026-10-15T23:44:47Z"
+        },
+        {
+          "name": "Post Checkout exact PR head",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 18,
+          "started_at": "2026-10-15T23:44:47Z",
+          "completed_at": "2026-10-15T23:44:47Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 19,
+          "started_at": "2026-10-15T23:44:47Z",
+          "completed_at": "2026-10-15T23:44:47Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/snissn/gomap/check-runs/116730603968",
+      "labels": [
+        "ubuntu-24.04"
+      ],
+      "runner_id": 1000547621,
+      "runner_name": "GitHub Actions 1000547621",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 116730603995,
+      "run_id": 38825099216,
+      "workflow_name": "TreeDB: vet+test",
+      "head_branch": "codex/4871-maintenance-landed-185-20261015",
+      "run_url": "https://api.github.com/repos/snissn/gomap/actions/runs/38825099216",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOIdn7C88AAAAbLa-p2w",
+      "head_sha": "a1db58c790e056a02340c98e7dbae11f40c8ed48",
+      "url": "https://api.github.com/repos/snissn/gomap/actions/jobs/116730603995",
+      "html_url": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116730603995",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-15T23:41:42Z",
+      "started_at": "2026-10-15T23:42:38Z",
+      "completed_at": "2026-10-15T23:53:07Z",
+      "name": "windows-nativewire",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-15T23:42:40Z",
+          "completed_at": "2026-10-15T23:42:42Z"
+        },
+        {
+          "name": "Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-15T23:42:42Z",
+          "completed_at": "2026-10-15T23:43:16Z"
+        },
+        {
+          "name": "Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-15T23:43:16Z",
+          "completed_at": "2026-10-15T23:43:20Z"
+        },
+        {
+          "name": "Test",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-15T23:43:20Z",
+          "completed_at": "2026-10-15T23:52:59Z"
+        },
+        {
+          "name": "Summarize test timings",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-15T23:52:59Z",
+          "completed_at": "2026-10-15T23:53:02Z"
+        },
+        {
+          "name": "Upload test timing log",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-15T23:53:02Z",
+          "completed_at": "2026-10-15T23:53:03Z"
+        },
+        {
+          "name": "Post Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-15T23:53:03Z",
+          "completed_at": "2026-10-15T23:53:03Z"
+        },
+        {
+          "name": "Post Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-10-15T23:53:03Z",
+          "completed_at": "2026-10-15T23:53:05Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13,
+          "started_at": "2026-10-15T23:53:05Z",
+          "completed_at": "2026-10-15T23:53:05Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/snissn/gomap/check-runs/116730603995",
+      "labels": [
+        "windows-latest"
+      ],
+      "runner_id": 1000547610,
+      "runner_name": "GitHub Actions 1000547610",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 116730604020,
+      "run_id": 38825099216,
+      "workflow_name": "TreeDB: vet+test",
+      "head_branch": "codex/4871-maintenance-landed-185-20261015",
+      "run_url": "https://api.github.com/repos/snissn/gomap/actions/runs/38825099216",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOIdn7C88AAAAbLa-p9A",
+      "head_sha": "a1db58c790e056a02340c98e7dbae11f40c8ed48",
+      "url": "https://api.github.com/repos/snissn/gomap/actions/jobs/116730604020",
+      "html_url": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116730604020",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-15T23:41:42Z",
+      "started_at": "2026-10-15T23:41:55Z",
+      "completed_at": "2026-10-15T23:51:21Z",
+      "name": "windows-core-8",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-15T23:41:55Z",
+          "completed_at": "2026-10-15T23:41:56Z"
+        },
+        {
+          "name": "Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-15T23:41:56Z",
+          "completed_at": "2026-10-15T23:42:22Z"
+        },
+        {
+          "name": "Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-15T23:42:22Z",
+          "completed_at": "2026-10-15T23:42:27Z"
+        },
+        {
+          "name": "Test",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-15T23:42:27Z",
+          "completed_at": "2026-10-15T23:51:06Z"
+        },
+        {
+          "name": "Summarize test timings",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-15T23:51:06Z",
+          "completed_at": "2026-10-15T23:51:16Z"
+        },
+        {
+          "name": "Upload test timing log",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-15T23:51:16Z",
+          "completed_at": "2026-10-15T23:51:17Z"
+        },
+        {
+          "name": "Post Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-15T23:51:17Z",
+          "completed_at": "2026-10-15T23:51:17Z"
+        },
+        {
+          "name": "Post Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-10-15T23:51:17Z",
+          "completed_at": "2026-10-15T23:51:19Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13,
+          "started_at": "2026-10-15T23:51:19Z",
+          "completed_at": "2026-10-15T23:51:19Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/snissn/gomap/check-runs/116730604020",
+      "labels": [
+        "windows-latest"
+      ],
+      "runner_id": 1000547607,
+      "runner_name": "GitHub Actions 1000547607",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 116730604048,
+      "run_id": 38825099216,
+      "workflow_name": "TreeDB: vet+test",
+      "head_branch": "codex/4871-maintenance-landed-185-20261015",
+      "run_url": "https://api.github.com/repos/snissn/gomap/actions/runs/38825099216",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOIdn7C88AAAAbLa-qEA",
+      "head_sha": "a1db58c790e056a02340c98e7dbae11f40c8ed48",
+      "url": "https://api.github.com/repos/snissn/gomap/actions/jobs/116730604048",
+      "html_url": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116730604048",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-15T23:41:42Z",
+      "started_at": "2026-10-15T23:43:44Z",
+      "completed_at": "2026-10-15T23:58:59Z",
+      "name": "windows-core-2",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-15T23:43:46Z",
+          "completed_at": "2026-10-15T23:43:47Z"
+        },
+        {
+          "name": "Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-15T23:43:47Z",
+          "completed_at": "2026-10-15T23:44:20Z"
+        },
+        {
+          "name": "Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-15T23:44:20Z",
+          "completed_at": "2026-10-15T23:44:33Z"
+        },
+        {
+          "name": "Test",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-15T23:44:33Z",
+          "completed_at": "2026-10-15T23:58:51Z"
+        },
+        {
+          "name": "Summarize test timings",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-15T23:58:51Z",
+          "completed_at": "2026-10-15T23:58:54Z"
+        },
+        {
+          "name": "Upload test timing log",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-15T23:58:54Z",
+          "completed_at": "2026-10-15T23:58:55Z"
+        },
+        {
+          "name": "Post Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-15T23:58:55Z",
+          "completed_at": "2026-10-15T23:58:55Z"
+        },
+        {
+          "name": "Post Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-10-15T23:58:55Z",
+          "completed_at": "2026-10-15T23:58:58Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13,
+          "started_at": "2026-10-15T23:58:58Z",
+          "completed_at": "2026-10-15T23:58:58Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/snissn/gomap/check-runs/116730604048",
+      "labels": [
+        "windows-latest"
+      ],
+      "runner_id": 1000547618,
+      "runner_name": "GitHub Actions 1000547618",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 116730604050,
+      "run_id": 38825099216,
+      "workflow_name": "TreeDB: vet+test",
+      "head_branch": "codex/4871-maintenance-landed-185-20261015",
+      "run_url": "https://api.github.com/repos/snissn/gomap/actions/runs/38825099216",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOIdn7C88AAAAbLa-qEg",
+      "head_sha": "a1db58c790e056a02340c98e7dbae11f40c8ed48",
+      "url": "https://api.github.com/repos/snissn/gomap/actions/jobs/116730604050",
+      "html_url": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116730604050",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-15T23:41:42Z",
+      "started_at": "2026-10-15T23:42:18Z",
+      "completed_at": "2026-10-15T23:58:48Z",
+      "name": "windows-core-1",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-15T23:42:19Z",
+          "completed_at": "2026-10-15T23:42:20Z"
+        },
+        {
+          "name": "Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-15T23:42:20Z",
+          "completed_at": "2026-10-15T23:42:51Z"
+        },
+        {
+          "name": "Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-15T23:42:51Z",
+          "completed_at": "2026-10-15T23:42:56Z"
+        },
+        {
+          "name": "Test",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-15T23:42:56Z",
+          "completed_at": "2026-10-15T23:58:43Z"
+        },
+        {
+          "name": "Summarize test timings",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-15T23:58:43Z",
+          "completed_at": "2026-10-15T23:58:44Z"
+        },
+        {
+          "name": "Upload test timing log",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-15T23:58:44Z",
+          "completed_at": "2026-10-15T23:58:45Z"
+        },
+        {
+          "name": "Post Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-15T23:58:45Z",
+          "completed_at": "2026-10-15T23:58:45Z"
+        },
+        {
+          "name": "Post Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-10-15T23:58:45Z",
+          "completed_at": "2026-10-15T23:58:47Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13,
+          "started_at": "2026-10-15T23:58:47Z",
+          "completed_at": "2026-10-15T23:58:47Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/snissn/gomap/check-runs/116730604050",
+      "labels": [
+        "windows-latest"
+      ],
+      "runner_id": 1000547609,
+      "runner_name": "GitHub Actions 1000547609",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 116730604065,
+      "run_id": 38825099216,
+      "workflow_name": "TreeDB: vet+test",
+      "head_branch": "codex/4871-maintenance-landed-185-20261015",
+      "run_url": "https://api.github.com/repos/snissn/gomap/actions/runs/38825099216",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOIdn7C88AAAAbLa-qIQ",
+      "head_sha": "a1db58c790e056a02340c98e7dbae11f40c8ed48",
+      "url": "https://api.github.com/repos/snissn/gomap/actions/jobs/116730604065",
+      "html_url": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116730604065",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-15T23:41:42Z",
+      "started_at": "2026-10-15T23:43:12Z",
+      "completed_at": "2026-10-15T23:45:45Z",
+      "name": "windows-caching-heavy-1",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-15T23:43:13Z",
+          "completed_at": "2026-10-15T23:43:14Z"
+        },
+        {
+          "name": "Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-15T23:43:14Z",
+          "completed_at": "2026-10-15T23:43:26Z"
+        },
+        {
+          "name": "Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-15T23:43:26Z",
+          "completed_at": "2026-10-15T23:43:37Z"
+        },
+        {
+          "name": "Test",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-15T23:43:37Z",
+          "completed_at": "2026-10-15T23:45:41Z"
+        },
+        {
+          "name": "Summarize test timings",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-15T23:45:41Z",
+          "completed_at": "2026-10-15T23:45:42Z"
+        },
+        {
+          "name": "Upload test timing log",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-15T23:45:42Z",
+          "completed_at": "2026-10-15T23:45:42Z"
+        },
+        {
+          "name": "Post Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-15T23:45:42Z",
+          "completed_at": "2026-10-15T23:45:42Z"
+        },
+        {
+          "name": "Post Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-10-15T23:45:42Z",
+          "completed_at": "2026-10-15T23:45:44Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13,
+          "started_at": "2026-10-15T23:45:44Z",
+          "completed_at": "2026-10-15T23:45:44Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/snissn/gomap/check-runs/116730604065",
+      "labels": [
+        "windows-latest"
+      ],
+      "runner_id": 1000547614,
+      "runner_name": "GitHub Actions 1000547614",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 116730604069,
+      "run_id": 38825099216,
+      "workflow_name": "TreeDB: vet+test",
+      "head_branch": "codex/4871-maintenance-landed-185-20261015",
+      "run_url": "https://api.github.com/repos/snissn/gomap/actions/runs/38825099216",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOIdn7C88AAAAbLa-qJQ",
+      "head_sha": "a1db58c790e056a02340c98e7dbae11f40c8ed48",
+      "url": "https://api.github.com/repos/snissn/gomap/actions/jobs/116730604069",
+      "html_url": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116730604069",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-15T23:41:42Z",
+      "started_at": "2026-10-15T23:44:09Z",
+      "completed_at": "2026-10-15T23:54:46Z",
+      "name": "windows-powerloss-oracle",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-15T23:44:10Z",
+          "completed_at": "2026-10-15T23:44:11Z"
+        },
+        {
+          "name": "Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-15T23:44:11Z",
+          "completed_at": "2026-10-15T23:44:40Z"
+        },
+        {
+          "name": "Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-15T23:44:40Z",
+          "completed_at": "2026-10-15T23:44:44Z"
+        },
+        {
+          "name": "Test",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-15T23:44:44Z",
+          "completed_at": "2026-10-15T23:54:41Z"
+        },
+        {
+          "name": "Summarize test timings",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-15T23:54:41Z",
+          "completed_at": "2026-10-15T23:54:42Z"
+        },
+        {
+          "name": "Upload test timing log",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-15T23:54:42Z",
+          "completed_at": "2026-10-15T23:54:43Z"
+        },
+        {
+          "name": "Post Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-15T23:54:43Z",
+          "completed_at": "2026-10-15T23:54:43Z"
+        },
+        {
+          "name": "Post Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-10-15T23:54:43Z",
+          "completed_at": "2026-10-15T23:54:45Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13,
+          "started_at": "2026-10-15T23:54:45Z",
+          "completed_at": "2026-10-15T23:54:45Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/snissn/gomap/check-runs/116730604069",
+      "labels": [
+        "windows-latest"
+      ],
+      "runner_id": 1000547620,
+      "runner_name": "GitHub Actions 1000547620",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 116730604070,
+      "run_id": 38825099216,
+      "workflow_name": "TreeDB: vet+test",
+      "head_branch": "codex/4871-maintenance-landed-185-20261015",
+      "run_url": "https://api.github.com/repos/snissn/gomap/actions/runs/38825099216",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOIdn7C88AAAAbLa-qJg",
+      "head_sha": "a1db58c790e056a02340c98e7dbae11f40c8ed48",
+      "url": "https://api.github.com/repos/snissn/gomap/actions/jobs/116730604070",
+      "html_url": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116730604070",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-15T23:41:42Z",
+      "started_at": "2026-10-15T23:42:47Z",
+      "completed_at": "2026-10-15T23:45:21Z",
+      "name": "windows-caching-rest-2",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-15T23:42:48Z",
+          "completed_at": "2026-10-15T23:42:49Z"
+        },
+        {
+          "name": "Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-15T23:42:49Z",
+          "completed_at": "2026-10-15T23:43:21Z"
+        },
+        {
+          "name": "Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-15T23:43:21Z",
+          "completed_at": "2026-10-15T23:43:26Z"
+        },
+        {
+          "name": "Test",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-15T23:43:26Z",
+          "completed_at": "2026-10-15T23:45:16Z"
+        },
+        {
+          "name": "Summarize test timings",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-15T23:45:16Z",
+          "completed_at": "2026-10-15T23:45:17Z"
+        },
+        {
+          "name": "Upload test timing log",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-15T23:45:17Z",
+          "completed_at": "2026-10-15T23:45:17Z"
+        },
+        {
+          "name": "Post Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-15T23:45:17Z",
+          "completed_at": "2026-10-15T23:45:18Z"
+        },
+        {
+          "name": "Post Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-10-15T23:45:18Z",
+          "completed_at": "2026-10-15T23:45:20Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13,
+          "started_at": "2026-10-15T23:45:20Z",
+          "completed_at": "2026-10-15T23:45:20Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/snissn/gomap/check-runs/116730604070",
+      "labels": [
+        "windows-latest"
+      ],
+      "runner_id": 1000547612,
+      "runner_name": "GitHub Actions 1000547612",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 116730604071,
+      "run_id": 38825099216,
+      "workflow_name": "TreeDB: vet+test",
+      "head_branch": "codex/4871-maintenance-landed-185-20261015",
+      "run_url": "https://api.github.com/repos/snissn/gomap/actions/runs/38825099216",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOIdn7C88AAAAbLa-qJw",
+      "head_sha": "a1db58c790e056a02340c98e7dbae11f40c8ed48",
+      "url": "https://api.github.com/repos/snissn/gomap/actions/jobs/116730604071",
+      "html_url": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116730604071",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-15T23:41:42Z",
+      "started_at": "2026-10-15T23:53:13Z",
+      "completed_at": "2026-10-16T00:02:23Z",
+      "name": "macos-latest-1",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-15T23:53:14Z",
+          "completed_at": "2026-10-15T23:53:15Z"
+        },
+        {
+          "name": "Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-15T23:53:15Z",
+          "completed_at": "2026-10-15T23:53:43Z"
+        },
+        {
+          "name": "Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-15T23:53:43Z",
+          "completed_at": "2026-10-15T23:53:45Z"
+        },
+        {
+          "name": "Test",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-15T23:53:45Z",
+          "completed_at": "2026-10-16T00:02:15Z"
+        },
+        {
+          "name": "Summarize test timings",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-16T00:02:15Z",
+          "completed_at": "2026-10-16T00:02:15Z"
+        },
+        {
+          "name": "Upload test timing log",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-16T00:02:15Z",
+          "completed_at": "2026-10-16T00:02:20Z"
+        },
+        {
+          "name": "Post Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-16T00:02:20Z",
+          "completed_at": "2026-10-16T00:02:20Z"
+        },
+        {
+          "name": "Post Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-10-16T00:02:20Z",
+          "completed_at": "2026-10-16T00:02:21Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13,
+          "started_at": "2026-10-16T00:02:21Z",
+          "completed_at": "2026-10-16T00:02:22Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/snissn/gomap/check-runs/116730604071",
+      "labels": [
+        "macos-latest"
+      ],
+      "runner_id": 1000547656,
+      "runner_name": "GitHub Actions 1000547656",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 116730604074,
+      "run_id": 38825099216,
+      "workflow_name": "TreeDB: vet+test",
+      "head_branch": "codex/4871-maintenance-landed-185-20261015",
+      "run_url": "https://api.github.com/repos/snissn/gomap/actions/runs/38825099216",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOIdn7C88AAAAbLa-qKg",
+      "head_sha": "a1db58c790e056a02340c98e7dbae11f40c8ed48",
+      "url": "https://api.github.com/repos/snissn/gomap/actions/jobs/116730604074",
+      "html_url": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116730604074",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-15T23:41:42Z",
+      "started_at": "2026-10-15T23:51:44Z",
+      "completed_at": "2026-10-16T00:00:46Z",
+      "name": "vet (macos)",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-15T23:51:45Z",
+          "completed_at": "2026-10-15T23:51:47Z"
+        },
+        {
+          "name": "Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-15T23:51:47Z",
+          "completed_at": "2026-10-15T23:52:11Z"
+        },
+        {
+          "name": "Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-15T23:52:11Z",
+          "completed_at": "2026-10-15T23:52:14Z"
+        },
+        {
+          "name": "CI shard contracts",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 4,
+          "started_at": "2026-10-15T23:52:14Z",
+          "completed_at": "2026-10-15T23:52:14Z"
+        },
+        {
+          "name": "Vet",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-15T23:52:14Z",
+          "completed_at": "2026-10-16T00:00:36Z"
+        },
+        {
+          "name": "Post Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 9,
+          "started_at": "2026-10-16T00:00:36Z",
+          "completed_at": "2026-10-16T00:00:37Z"
+        },
+        {
+          "name": "Post Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 10,
+          "started_at": "2026-10-16T00:00:37Z",
+          "completed_at": "2026-10-16T00:00:39Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-16T00:00:39Z",
+          "completed_at": "2026-10-16T00:00:43Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/snissn/gomap/check-runs/116730604074",
+      "labels": [
+        "macos-latest"
+      ],
+      "runner_id": 1000547654,
+      "runner_name": "GitHub Actions 1000547654",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 116730604075,
+      "run_id": 38825099216,
+      "workflow_name": "TreeDB: vet+test",
+      "head_branch": "codex/4871-maintenance-landed-185-20261015",
+      "run_url": "https://api.github.com/repos/snissn/gomap/actions/runs/38825099216",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOIdn7C88AAAAbLa-qKw",
+      "head_sha": "a1db58c790e056a02340c98e7dbae11f40c8ed48",
+      "url": "https://api.github.com/repos/snissn/gomap/actions/jobs/116730604075",
+      "html_url": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116730604075",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-15T23:41:42Z",
+      "started_at": "2026-10-15T23:53:43Z",
+      "completed_at": "2026-10-15T23:59:05Z",
+      "name": "macos-latest-3",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-15T23:53:43Z",
+          "completed_at": "2026-10-15T23:53:45Z"
+        },
+        {
+          "name": "Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-15T23:53:45Z",
+          "completed_at": "2026-10-15T23:54:10Z"
+        },
+        {
+          "name": "Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-15T23:54:10Z",
+          "completed_at": "2026-10-15T23:54:12Z"
+        },
+        {
+          "name": "Test",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-15T23:54:12Z",
+          "completed_at": "2026-10-15T23:58:59Z"
+        },
+        {
+          "name": "Summarize test timings",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-15T23:58:59Z",
+          "completed_at": "2026-10-15T23:58:59Z"
+        },
+        {
+          "name": "Upload test timing log",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-15T23:58:59Z",
+          "completed_at": "2026-10-15T23:59:01Z"
+        },
+        {
+          "name": "Post Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-15T23:59:01Z",
+          "completed_at": "2026-10-15T23:59:01Z"
+        },
+        {
+          "name": "Post Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-10-15T23:59:01Z",
+          "completed_at": "2026-10-15T23:59:01Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13,
+          "started_at": "2026-10-15T23:59:01Z",
+          "completed_at": "2026-10-15T23:59:02Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/snissn/gomap/check-runs/116730604075",
+      "labels": [
+        "macos-latest"
+      ],
+      "runner_id": 1000547657,
+      "runner_name": "GitHub Actions 1000547657",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 116730604078,
+      "run_id": 38825099216,
+      "workflow_name": "TreeDB: vet+test",
+      "head_branch": "codex/4871-maintenance-landed-185-20261015",
+      "run_url": "https://api.github.com/repos/snissn/gomap/actions/runs/38825099216",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOIdn7C88AAAAbLa-qLg",
+      "head_sha": "a1db58c790e056a02340c98e7dbae11f40c8ed48",
+      "url": "https://api.github.com/repos/snissn/gomap/actions/jobs/116730604078",
+      "html_url": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116730604078",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-15T23:41:42Z",
+      "started_at": "2026-10-15T23:42:45Z",
+      "completed_at": "2026-10-15T23:44:51Z",
+      "name": "snapshot-iterator-perf (linux)",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-15T23:42:46Z",
+          "completed_at": "2026-10-15T23:42:48Z"
+        },
+        {
+          "name": "Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-15T23:42:48Z",
+          "completed_at": "2026-10-15T23:43:09Z"
+        },
+        {
+          "name": "Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-15T23:43:09Z",
+          "completed_at": "2026-10-15T23:43:15Z"
+        },
+        {
+          "name": "Test snapshot iterator benchmark parser",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-15T23:43:15Z",
+          "completed_at": "2026-10-15T23:43:18Z"
+        },
+        {
+          "name": "Capture exact-head runner metadata",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-15T23:43:18Z",
+          "completed_at": "2026-10-15T23:43:18Z"
+        },
+        {
+          "name": "Build one exact-head snapshot iterator benchmark binary",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-15T23:43:18Z",
+          "completed_at": "2026-10-15T23:43:51Z"
+        },
+        {
+          "name": "Collect CPU-pinned balanced same-binary snapshot iterator pairs",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 7,
+          "started_at": "2026-10-15T23:43:51Z",
+          "completed_at": "2026-10-15T23:44:45Z"
+        },
+        {
+          "name": "Check snapshot iterator performance gate",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 8,
+          "started_at": "2026-10-15T23:44:45Z",
+          "completed_at": "2026-10-15T23:44:45Z"
+        },
+        {
+          "name": "Publish snapshot iterator summary",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 9,
+          "started_at": "2026-10-15T23:44:45Z",
+          "completed_at": "2026-10-15T23:44:45Z"
+        },
+        {
+          "name": "Upload snapshot iterator performance evidence",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 10,
+          "started_at": "2026-10-15T23:44:45Z",
+          "completed_at": "2026-10-15T23:44:48Z"
+        },
+        {
+          "name": "Post Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 19,
+          "started_at": "2026-10-15T23:44:49Z",
+          "completed_at": "2026-10-15T23:44:49Z"
+        },
+        {
+          "name": "Post Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 20,
+          "started_at": "2026-10-15T23:44:49Z",
+          "completed_at": "2026-10-15T23:44:49Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 21,
+          "started_at": "2026-10-15T23:44:49Z",
+          "completed_at": "2026-10-15T23:44:49Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/snissn/gomap/check-runs/116730604078",
+      "labels": [
+        "ubuntu-latest"
+      ],
+      "runner_id": 1000547611,
+      "runner_name": "GitHub Actions 1000547611",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 116730604080,
+      "run_id": 38825099216,
+      "workflow_name": "TreeDB: vet+test",
+      "head_branch": "codex/4871-maintenance-landed-185-20261015",
+      "run_url": "https://api.github.com/repos/snissn/gomap/actions/runs/38825099216",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOIdn7C88AAAAbLa-qMA",
+      "head_sha": "a1db58c790e056a02340c98e7dbae11f40c8ed48",
+      "url": "https://api.github.com/repos/snissn/gomap/actions/jobs/116730604080",
+      "html_url": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116730604080",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-15T23:41:42Z",
+      "started_at": "2026-10-15T23:46:26Z",
+      "completed_at": "2026-10-16T00:06:41Z",
+      "name": "windows-core-6",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-15T23:46:27Z",
+          "completed_at": "2026-10-15T23:46:28Z"
+        },
+        {
+          "name": "Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-15T23:46:28Z",
+          "completed_at": "2026-10-15T23:46:58Z"
+        },
+        {
+          "name": "Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-15T23:46:58Z",
+          "completed_at": "2026-10-15T23:47:04Z"
+        },
+        {
+          "name": "Test",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-15T23:47:04Z",
+          "completed_at": "2026-10-16T00:06:36Z"
+        },
+        {
+          "name": "Summarize test timings",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-16T00:06:36Z",
+          "completed_at": "2026-10-16T00:06:36Z"
+        },
+        {
+          "name": "Upload test timing log",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-16T00:06:36Z",
+          "completed_at": "2026-10-16T00:06:37Z"
+        },
+        {
+          "name": "Post Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-16T00:06:37Z",
+          "completed_at": "2026-10-16T00:06:37Z"
+        },
+        {
+          "name": "Post Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-10-16T00:06:37Z",
+          "completed_at": "2026-10-16T00:06:40Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13,
+          "started_at": "2026-10-16T00:06:40Z",
+          "completed_at": "2026-10-16T00:06:40Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/snissn/gomap/check-runs/116730604080",
+      "labels": [
+        "windows-latest"
+      ],
+      "runner_id": 1000547638,
+      "runner_name": "GitHub Actions 1000547638",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 116730604081,
+      "run_id": 38825099216,
+      "workflow_name": "TreeDB: vet+test",
+      "head_branch": "codex/4871-maintenance-landed-185-20261015",
+      "run_url": "https://api.github.com/repos/snissn/gomap/actions/runs/38825099216",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOIdn7C88AAAAbLa-qMQ",
+      "head_sha": "a1db58c790e056a02340c98e7dbae11f40c8ed48",
+      "url": "https://api.github.com/repos/snissn/gomap/actions/jobs/116730604081",
+      "html_url": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116730604081",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-15T23:41:42Z",
+      "started_at": "2026-10-15T23:47:16Z",
+      "completed_at": "2026-10-15T23:58:18Z",
+      "name": "ubuntu-latest-2",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-15T23:47:17Z",
+          "completed_at": "2026-10-15T23:47:18Z"
+        },
+        {
+          "name": "Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-15T23:47:18Z",
+          "completed_at": "2026-10-15T23:47:32Z"
+        },
+        {
+          "name": "Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-15T23:47:32Z",
+          "completed_at": "2026-10-15T23:47:34Z"
+        },
+        {
+          "name": "Test",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-15T23:47:34Z",
+          "completed_at": "2026-10-15T23:58:14Z"
+        },
+        {
+          "name": "Summarize test timings",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-15T23:58:14Z",
+          "completed_at": "2026-10-15T23:58:14Z"
+        },
+        {
+          "name": "Upload test timing log",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-15T23:58:14Z",
+          "completed_at": "2026-10-15T23:58:15Z"
+        },
+        {
+          "name": "Post Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-15T23:58:15Z",
+          "completed_at": "2026-10-15T23:58:15Z"
+        },
+        {
+          "name": "Post Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-10-15T23:58:15Z",
+          "completed_at": "2026-10-15T23:58:16Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13,
+          "started_at": "2026-10-15T23:58:16Z",
+          "completed_at": "2026-10-15T23:58:16Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/snissn/gomap/check-runs/116730604081",
+      "labels": [
+        "ubuntu-latest"
+      ],
+      "runner_id": 1000547644,
+      "runner_name": "GitHub Actions 1000547644",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 116730604082,
+      "run_id": 38825099216,
+      "workflow_name": "TreeDB: vet+test",
+      "head_branch": "codex/4871-maintenance-landed-185-20261015",
+      "run_url": "https://api.github.com/repos/snissn/gomap/actions/runs/38825099216",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOIdn7C88AAAAbLa-qMg",
+      "head_sha": "a1db58c790e056a02340c98e7dbae11f40c8ed48",
+      "url": "https://api.github.com/repos/snissn/gomap/actions/jobs/116730604082",
+      "html_url": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116730604082",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-15T23:41:42Z",
+      "started_at": "2026-10-15T23:47:47Z",
+      "completed_at": "2026-10-15T23:57:00Z",
+      "name": "windows-mongo-gateway",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-15T23:47:48Z",
+          "completed_at": "2026-10-15T23:47:49Z"
+        },
+        {
+          "name": "Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-15T23:47:49Z",
+          "completed_at": "2026-10-15T23:48:04Z"
+        },
+        {
+          "name": "Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-15T23:48:04Z",
+          "completed_at": "2026-10-15T23:48:09Z"
+        },
+        {
+          "name": "Test",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-15T23:48:09Z",
+          "completed_at": "2026-10-15T23:56:54Z"
+        },
+        {
+          "name": "Summarize test timings",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-15T23:56:54Z",
+          "completed_at": "2026-10-15T23:56:55Z"
+        },
+        {
+          "name": "Upload test timing log",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-15T23:56:55Z",
+          "completed_at": "2026-10-15T23:56:56Z"
+        },
+        {
+          "name": "Post Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-15T23:56:56Z",
+          "completed_at": "2026-10-15T23:56:56Z"
+        },
+        {
+          "name": "Post Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-10-15T23:56:56Z",
+          "completed_at": "2026-10-15T23:56:59Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13,
+          "started_at": "2026-10-15T23:56:59Z",
+          "completed_at": "2026-10-15T23:56:59Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/snissn/gomap/check-runs/116730604082",
+      "labels": [
+        "windows-latest"
+      ],
+      "runner_id": 1000547647,
+      "runner_name": "GitHub Actions 1000547647",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 116730604084,
+      "run_id": 38825099216,
+      "workflow_name": "TreeDB: vet+test",
+      "head_branch": "codex/4871-maintenance-landed-185-20261015",
+      "run_url": "https://api.github.com/repos/snissn/gomap/actions/runs/38825099216",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOIdn7C88AAAAbLa-qNA",
+      "head_sha": "a1db58c790e056a02340c98e7dbae11f40c8ed48",
+      "url": "https://api.github.com/repos/snissn/gomap/actions/jobs/116730604084",
+      "html_url": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116730604084",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-15T23:41:42Z",
+      "started_at": "2026-10-15T23:45:24Z",
+      "completed_at": "2026-10-15T23:45:52Z",
+      "name": "CI impact (advisory only)",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-15T23:45:25Z",
+          "completed_at": "2026-10-15T23:45:25Z"
+        },
+        {
+          "name": "Checkout event candidate",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-15T23:45:25Z",
+          "completed_at": "2026-10-15T23:45:47Z"
+        },
+        {
+          "name": "Fetch exact event objects for advisory discovery",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-15T23:45:47Z",
+          "completed_at": "2026-10-15T23:45:48Z"
+        },
+        {
+          "name": "Emit advisory impact receipt",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-15T23:45:48Z",
+          "completed_at": "2026-10-15T23:45:48Z"
+        },
+        {
+          "name": "Upload advisory receipt",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-15T23:45:48Z",
+          "completed_at": "2026-10-15T23:45:49Z"
+        },
+        {
+          "name": "Post Checkout event candidate",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 10,
+          "started_at": "2026-10-15T23:45:49Z",
+          "completed_at": "2026-10-15T23:45:50Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-15T23:45:50Z",
+          "completed_at": "2026-10-15T23:45:50Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/snissn/gomap/check-runs/116730604084",
+      "labels": [
+        "ubuntu-latest"
+      ],
+      "runner_id": 1000547626,
+      "runner_name": "GitHub Actions 1000547626",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 116730604097,
+      "run_id": 38825099216,
+      "workflow_name": "TreeDB: vet+test",
+      "head_branch": "codex/4871-maintenance-landed-185-20261015",
+      "run_url": "https://api.github.com/repos/snissn/gomap/actions/runs/38825099216",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOIdn7C88AAAAbLa-qQQ",
+      "head_sha": "a1db58c790e056a02340c98e7dbae11f40c8ed48",
+      "url": "https://api.github.com/repos/snissn/gomap/actions/jobs/116730604097",
+      "html_url": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116730604097",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-15T23:41:42Z",
+      "started_at": "2026-10-15T23:47:07Z",
+      "completed_at": "2026-10-15T23:51:17Z",
+      "name": "vet (windows)",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-15T23:47:08Z",
+          "completed_at": "2026-10-15T23:47:09Z"
+        },
+        {
+          "name": "Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-15T23:47:09Z",
+          "completed_at": "2026-10-15T23:47:38Z"
+        },
+        {
+          "name": "Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-15T23:47:38Z",
+          "completed_at": "2026-10-15T23:47:43Z"
+        },
+        {
+          "name": "CI shard contracts",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 4,
+          "started_at": "2026-10-15T23:47:43Z",
+          "completed_at": "2026-10-15T23:47:43Z"
+        },
+        {
+          "name": "Vet",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-15T23:47:43Z",
+          "completed_at": "2026-10-15T23:51:13Z"
+        },
+        {
+          "name": "Post Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 9,
+          "started_at": "2026-10-15T23:51:13Z",
+          "completed_at": "2026-10-15T23:51:13Z"
+        },
+        {
+          "name": "Post Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 10,
+          "started_at": "2026-10-15T23:51:13Z",
+          "completed_at": "2026-10-15T23:51:15Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-15T23:51:15Z",
+          "completed_at": "2026-10-15T23:51:15Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/snissn/gomap/check-runs/116730604097",
+      "labels": [
+        "windows-latest"
+      ],
+      "runner_id": 1000547643,
+      "runner_name": "GitHub Actions 1000547643",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 116730604098,
+      "run_id": 38825099216,
+      "workflow_name": "TreeDB: vet+test",
+      "head_branch": "codex/4871-maintenance-landed-185-20261015",
+      "run_url": "https://api.github.com/repos/snissn/gomap/actions/runs/38825099216",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOIdn7C88AAAAbLa-qQg",
+      "head_sha": "a1db58c790e056a02340c98e7dbae11f40c8ed48",
+      "url": "https://api.github.com/repos/snissn/gomap/actions/jobs/116730604098",
+      "html_url": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116730604098",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-15T23:41:42Z",
+      "started_at": "2026-10-15T23:42:48Z",
+      "completed_at": "2026-10-15T23:45:02Z",
+      "name": "vet (ubuntu)",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-15T23:42:49Z",
+          "completed_at": "2026-10-15T23:42:50Z"
+        },
+        {
+          "name": "Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-15T23:42:50Z",
+          "completed_at": "2026-10-15T23:43:11Z"
+        },
+        {
+          "name": "Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-15T23:43:11Z",
+          "completed_at": "2026-10-15T23:43:11Z"
+        },
+        {
+          "name": "CI shard contracts",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-15T23:43:11Z",
+          "completed_at": "2026-10-15T23:43:17Z"
+        },
+        {
+          "name": "Vet",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-15T23:43:17Z",
+          "completed_at": "2026-10-15T23:45:00Z"
+        },
+        {
+          "name": "Post Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 9,
+          "started_at": "2026-10-15T23:45:00Z",
+          "completed_at": "2026-10-15T23:45:00Z"
+        },
+        {
+          "name": "Post Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 10,
+          "started_at": "2026-10-15T23:45:00Z",
+          "completed_at": "2026-10-15T23:45:00Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-15T23:45:00Z",
+          "completed_at": "2026-10-15T23:45:00Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/snissn/gomap/check-runs/116730604098",
+      "labels": [
+        "ubuntu-latest"
+      ],
+      "runner_id": 1000547613,
+      "runner_name": "GitHub Actions 1000547613",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 116730604114,
+      "run_id": 38825099216,
+      "workflow_name": "TreeDB: vet+test",
+      "head_branch": "codex/4871-maintenance-landed-185-20261015",
+      "run_url": "https://api.github.com/repos/snissn/gomap/actions/runs/38825099216",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOIdn7C88AAAAbLa-qUg",
+      "head_sha": "a1db58c790e056a02340c98e7dbae11f40c8ed48",
+      "url": "https://api.github.com/repos/snissn/gomap/actions/jobs/116730604114",
+      "html_url": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116730604114",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-15T23:41:42Z",
+      "started_at": "2026-10-15T23:46:14Z",
+      "completed_at": "2026-10-15T23:51:23Z",
+      "name": "ubuntu-latest-3",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-15T23:46:15Z",
+          "completed_at": "2026-10-15T23:46:17Z"
+        },
+        {
+          "name": "Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-15T23:46:17Z",
+          "completed_at": "2026-10-15T23:46:37Z"
+        },
+        {
+          "name": "Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-15T23:46:37Z",
+          "completed_at": "2026-10-15T23:46:38Z"
+        },
+        {
+          "name": "Test",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-15T23:46:38Z",
+          "completed_at": "2026-10-15T23:51:18Z"
+        },
+        {
+          "name": "Summarize test timings",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-15T23:51:18Z",
+          "completed_at": "2026-10-15T23:51:18Z"
+        },
+        {
+          "name": "Upload test timing log",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-15T23:51:18Z",
+          "completed_at": "2026-10-15T23:51:20Z"
+        },
+        {
+          "name": "Post Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-15T23:51:20Z",
+          "completed_at": "2026-10-15T23:51:20Z"
+        },
+        {
+          "name": "Post Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-10-15T23:51:20Z",
+          "completed_at": "2026-10-15T23:51:20Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13,
+          "started_at": "2026-10-15T23:51:20Z",
+          "completed_at": "2026-10-15T23:51:20Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/snissn/gomap/check-runs/116730604114",
+      "labels": [
+        "ubuntu-latest"
+      ],
+      "runner_id": 1000547636,
+      "runner_name": "GitHub Actions 1000547636",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 116730604122,
+      "run_id": 38825099216,
+      "workflow_name": "TreeDB: vet+test",
+      "head_branch": "codex/4871-maintenance-landed-185-20261015",
+      "run_url": "https://api.github.com/repos/snissn/gomap/actions/runs/38825099216",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOIdn7C88AAAAbLa-qWg",
+      "head_sha": "a1db58c790e056a02340c98e7dbae11f40c8ed48",
+      "url": "https://api.github.com/repos/snissn/gomap/actions/jobs/116730604122",
+      "html_url": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116730604122",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-15T23:41:42Z",
+      "started_at": "2026-10-15T23:54:37Z",
+      "completed_at": "2026-10-16T00:07:50Z",
+      "name": "macos-latest-2",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-15T23:54:38Z",
+          "completed_at": "2026-10-15T23:54:39Z"
+        },
+        {
+          "name": "Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-15T23:54:39Z",
+          "completed_at": "2026-10-15T23:55:03Z"
+        },
+        {
+          "name": "Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-15T23:55:03Z",
+          "completed_at": "2026-10-15T23:55:06Z"
+        },
+        {
+          "name": "Test",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-15T23:55:06Z",
+          "completed_at": "2026-10-16T00:07:43Z"
+        },
+        {
+          "name": "Summarize test timings",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-16T00:07:43Z",
+          "completed_at": "2026-10-16T00:07:44Z"
+        },
+        {
+          "name": "Upload test timing log",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-16T00:07:44Z",
+          "completed_at": "2026-10-16T00:07:46Z"
+        },
+        {
+          "name": "Post Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-16T00:07:46Z",
+          "completed_at": "2026-10-16T00:07:46Z"
+        },
+        {
+          "name": "Post Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-10-16T00:07:46Z",
+          "completed_at": "2026-10-16T00:07:47Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13,
+          "started_at": "2026-10-16T00:07:47Z",
+          "completed_at": "2026-10-16T00:07:48Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/snissn/gomap/check-runs/116730604122",
+      "labels": [
+        "macos-latest"
+      ],
+      "runner_id": 1000547658,
+      "runner_name": "GitHub Actions 1000547658",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 116730604125,
+      "run_id": 38825099216,
+      "workflow_name": "TreeDB: vet+test",
+      "head_branch": "codex/4871-maintenance-landed-185-20261015",
+      "run_url": "https://api.github.com/repos/snissn/gomap/actions/runs/38825099216",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOIdn7C88AAAAbLa-qXQ",
+      "head_sha": "a1db58c790e056a02340c98e7dbae11f40c8ed48",
+      "url": "https://api.github.com/repos/snissn/gomap/actions/jobs/116730604125",
+      "html_url": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116730604125",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-15T23:41:42Z",
+      "started_at": "2026-10-15T23:47:02Z",
+      "completed_at": "2026-10-15T23:49:40Z",
+      "name": "windows-caching-rest-3",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-15T23:47:03Z",
+          "completed_at": "2026-10-15T23:47:04Z"
+        },
+        {
+          "name": "Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-15T23:47:04Z",
+          "completed_at": "2026-10-15T23:47:37Z"
+        },
+        {
+          "name": "Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-15T23:47:37Z",
+          "completed_at": "2026-10-15T23:47:42Z"
+        },
+        {
+          "name": "Test",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-15T23:47:42Z",
+          "completed_at": "2026-10-15T23:49:35Z"
+        },
+        {
+          "name": "Summarize test timings",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-15T23:49:35Z",
+          "completed_at": "2026-10-15T23:49:36Z"
+        },
+        {
+          "name": "Upload test timing log",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-15T23:49:36Z",
+          "completed_at": "2026-10-15T23:49:37Z"
+        },
+        {
+          "name": "Post Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-15T23:49:37Z",
+          "completed_at": "2026-10-15T23:49:37Z"
+        },
+        {
+          "name": "Post Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-10-15T23:49:37Z",
+          "completed_at": "2026-10-15T23:49:39Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13,
+          "started_at": "2026-10-15T23:49:39Z",
+          "completed_at": "2026-10-15T23:49:39Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/snissn/gomap/check-runs/116730604125",
+      "labels": [
+        "windows-latest"
+      ],
+      "runner_id": 1000547642,
+      "runner_name": "GitHub Actions 1000547642",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 116730604134,
+      "run_id": 38825099216,
+      "workflow_name": "TreeDB: vet+test",
+      "head_branch": "codex/4871-maintenance-landed-185-20261015",
+      "run_url": "https://api.github.com/repos/snissn/gomap/actions/runs/38825099216",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOIdn7C88AAAAbLa-qZg",
+      "head_sha": "a1db58c790e056a02340c98e7dbae11f40c8ed48",
+      "url": "https://api.github.com/repos/snissn/gomap/actions/jobs/116730604134",
+      "html_url": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116730604134",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-15T23:41:42Z",
+      "started_at": "2026-10-15T23:46:41Z",
+      "completed_at": "2026-10-16T00:00:28Z",
+      "name": "windows-core-4",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-15T23:46:42Z",
+          "completed_at": "2026-10-15T23:46:44Z"
+        },
+        {
+          "name": "Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-15T23:46:44Z",
+          "completed_at": "2026-10-15T23:47:16Z"
+        },
+        {
+          "name": "Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-15T23:47:16Z",
+          "completed_at": "2026-10-15T23:47:21Z"
+        },
+        {
+          "name": "Test",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-15T23:47:21Z",
+          "completed_at": "2026-10-16T00:00:20Z"
+        },
+        {
+          "name": "Summarize test timings",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-16T00:00:20Z",
+          "completed_at": "2026-10-16T00:00:21Z"
+        },
+        {
+          "name": "Upload test timing log",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-16T00:00:21Z",
+          "completed_at": "2026-10-16T00:00:23Z"
+        },
+        {
+          "name": "Post Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-16T00:00:23Z",
+          "completed_at": "2026-10-16T00:00:23Z"
+        },
+        {
+          "name": "Post Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-10-16T00:00:23Z",
+          "completed_at": "2026-10-16T00:00:26Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13,
+          "started_at": "2026-10-16T00:00:26Z",
+          "completed_at": "2026-10-16T00:00:26Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/snissn/gomap/check-runs/116730604134",
+      "labels": [
+        "windows-latest"
+      ],
+      "runner_id": 1000547639,
+      "runner_name": "GitHub Actions 1000547639",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 116730604136,
+      "run_id": 38825099216,
+      "workflow_name": "TreeDB: vet+test",
+      "head_branch": "codex/4871-maintenance-landed-185-20261015",
+      "run_url": "https://api.github.com/repos/snissn/gomap/actions/runs/38825099216",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOIdn7C88AAAAbLa-qaA",
+      "head_sha": "a1db58c790e056a02340c98e7dbae11f40c8ed48",
+      "url": "https://api.github.com/repos/snissn/gomap/actions/jobs/116730604136",
+      "html_url": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116730604136",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-15T23:41:42Z",
+      "started_at": "2026-10-15T23:46:18Z",
+      "completed_at": "2026-10-16T00:02:11Z",
+      "name": "windows-core-3",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-15T23:46:19Z",
+          "completed_at": "2026-10-15T23:46:20Z"
+        },
+        {
+          "name": "Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-15T23:46:20Z",
+          "completed_at": "2026-10-15T23:46:51Z"
+        },
+        {
+          "name": "Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-15T23:46:51Z",
+          "completed_at": "2026-10-15T23:46:56Z"
+        },
+        {
+          "name": "Test",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-15T23:46:56Z",
+          "completed_at": "2026-10-16T00:02:04Z"
+        },
+        {
+          "name": "Summarize test timings",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-16T00:02:04Z",
+          "completed_at": "2026-10-16T00:02:06Z"
+        },
+        {
+          "name": "Upload test timing log",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-16T00:02:06Z",
+          "completed_at": "2026-10-16T00:02:07Z"
+        },
+        {
+          "name": "Post Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-16T00:02:07Z",
+          "completed_at": "2026-10-16T00:02:07Z"
+        },
+        {
+          "name": "Post Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-10-16T00:02:07Z",
+          "completed_at": "2026-10-16T00:02:10Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13,
+          "started_at": "2026-10-16T00:02:10Z",
+          "completed_at": "2026-10-16T00:02:10Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/snissn/gomap/check-runs/116730604136",
+      "labels": [
+        "windows-latest"
+      ],
+      "runner_id": 1000547637,
+      "runner_name": "GitHub Actions 1000547637",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 116730604138,
+      "run_id": 38825099216,
+      "workflow_name": "TreeDB: vet+test",
+      "head_branch": "codex/4871-maintenance-landed-185-20261015",
+      "run_url": "https://api.github.com/repos/snissn/gomap/actions/runs/38825099216",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOIdn7C88AAAAbLa-qag",
+      "head_sha": "a1db58c790e056a02340c98e7dbae11f40c8ed48",
+      "url": "https://api.github.com/repos/snissn/gomap/actions/jobs/116730604138",
+      "html_url": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116730604138",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-15T23:41:42Z",
+      "started_at": "2026-10-15T23:48:04Z",
+      "completed_at": "2026-10-16T00:04:21Z",
+      "name": "race-check (linux)-2",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-15T23:48:05Z",
+          "completed_at": "2026-10-15T23:48:06Z"
+        },
+        {
+          "name": "Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-15T23:48:06Z",
+          "completed_at": "2026-10-15T23:48:13Z"
+        },
+        {
+          "name": "Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-15T23:48:13Z",
+          "completed_at": "2026-10-15T23:48:19Z"
+        },
+        {
+          "name": "Test Race",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-15T23:48:19Z",
+          "completed_at": "2026-10-16T00:04:17Z"
+        },
+        {
+          "name": "Summarize race timing",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-16T00:04:17Z",
+          "completed_at": "2026-10-16T00:04:17Z"
+        },
+        {
+          "name": "Upload race timing log",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-16T00:04:17Z",
+          "completed_at": "2026-10-16T00:04:18Z"
+        },
+        {
+          "name": "Post Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-16T00:04:18Z",
+          "completed_at": "2026-10-16T00:04:18Z"
+        },
+        {
+          "name": "Post Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-10-16T00:04:18Z",
+          "completed_at": "2026-10-16T00:04:18Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13,
+          "started_at": "2026-10-16T00:04:18Z",
+          "completed_at": "2026-10-16T00:04:18Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/snissn/gomap/check-runs/116730604138",
+      "labels": [
+        "ubuntu-latest"
+      ],
+      "runner_id": 1000547648,
+      "runner_name": "GitHub Actions 1000547648",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 116730604143,
+      "run_id": 38825099216,
+      "workflow_name": "TreeDB: vet+test",
+      "head_branch": "codex/4871-maintenance-landed-185-20261015",
+      "run_url": "https://api.github.com/repos/snissn/gomap/actions/runs/38825099216",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOIdn7C88AAAAbLa-qbw",
+      "head_sha": "a1db58c790e056a02340c98e7dbae11f40c8ed48",
+      "url": "https://api.github.com/repos/snissn/gomap/actions/jobs/116730604143",
+      "html_url": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116730604143",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-15T23:41:42Z",
+      "started_at": "2026-10-15T23:45:23Z",
+      "completed_at": "2026-10-16T00:13:37Z",
+      "name": "race-check (linux)-1",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-15T23:45:24Z",
+          "completed_at": "2026-10-15T23:45:26Z"
+        },
+        {
+          "name": "Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-15T23:45:26Z",
+          "completed_at": "2026-10-15T23:45:50Z"
+        },
+        {
+          "name": "Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-15T23:45:50Z",
+          "completed_at": "2026-10-15T23:45:57Z"
+        },
+        {
+          "name": "Test Race",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-15T23:45:57Z",
+          "completed_at": "2026-10-16T00:13:32Z"
+        },
+        {
+          "name": "Summarize race timing",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-16T00:13:32Z",
+          "completed_at": "2026-10-16T00:13:32Z"
+        },
+        {
+          "name": "Upload race timing log",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-16T00:13:32Z",
+          "completed_at": "2026-10-16T00:13:33Z"
+        },
+        {
+          "name": "Post Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-16T00:13:33Z",
+          "completed_at": "2026-10-16T00:13:34Z"
+        },
+        {
+          "name": "Post Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-10-16T00:13:34Z",
+          "completed_at": "2026-10-16T00:13:34Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13,
+          "started_at": "2026-10-16T00:13:34Z",
+          "completed_at": "2026-10-16T00:13:34Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/snissn/gomap/check-runs/116730604143",
+      "labels": [
+        "ubuntu-latest"
+      ],
+      "runner_id": 1000547625,
+      "runner_name": "GitHub Actions 1000547625",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 116730604154,
+      "run_id": 38825099216,
+      "workflow_name": "TreeDB: vet+test",
+      "head_branch": "codex/4871-maintenance-landed-185-20261015",
+      "run_url": "https://api.github.com/repos/snissn/gomap/actions/runs/38825099216",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOIdn7C88AAAAbLa-qeg",
+      "head_sha": "a1db58c790e056a02340c98e7dbae11f40c8ed48",
+      "url": "https://api.github.com/repos/snissn/gomap/actions/jobs/116730604154",
+      "html_url": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116730604154",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-15T23:41:42Z",
+      "started_at": "2026-10-15T23:46:56Z",
+      "completed_at": "2026-10-16T00:07:16Z",
+      "name": "windows-core-5",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-15T23:46:56Z",
+          "completed_at": "2026-10-15T23:46:57Z"
+        },
+        {
+          "name": "Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-15T23:46:57Z",
+          "completed_at": "2026-10-15T23:47:30Z"
+        },
+        {
+          "name": "Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-15T23:47:30Z",
+          "completed_at": "2026-10-15T23:47:34Z"
+        },
+        {
+          "name": "Test",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-15T23:47:34Z",
+          "completed_at": "2026-10-16T00:07:11Z"
+        },
+        {
+          "name": "Summarize test timings",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-16T00:07:11Z",
+          "completed_at": "2026-10-16T00:07:12Z"
+        },
+        {
+          "name": "Upload test timing log",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-16T00:07:12Z",
+          "completed_at": "2026-10-16T00:07:12Z"
+        },
+        {
+          "name": "Post Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-16T00:07:12Z",
+          "completed_at": "2026-10-16T00:07:13Z"
+        },
+        {
+          "name": "Post Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-10-16T00:07:13Z",
+          "completed_at": "2026-10-16T00:07:15Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13,
+          "started_at": "2026-10-16T00:07:15Z",
+          "completed_at": "2026-10-16T00:07:15Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/snissn/gomap/check-runs/116730604154",
+      "labels": [
+        "windows-latest"
+      ],
+      "runner_id": 1000547641,
+      "runner_name": "GitHub Actions 1000547641",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 116730604158,
+      "run_id": 38825099216,
+      "workflow_name": "TreeDB: vet+test",
+      "head_branch": "codex/4871-maintenance-landed-185-20261015",
+      "run_url": "https://api.github.com/repos/snissn/gomap/actions/runs/38825099216",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOIdn7C88AAAAbLa-qfg",
+      "head_sha": "a1db58c790e056a02340c98e7dbae11f40c8ed48",
+      "url": "https://api.github.com/repos/snissn/gomap/actions/jobs/116730604158",
+      "html_url": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116730604158",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-15T23:41:42Z",
+      "started_at": "2026-10-15T23:47:19Z",
+      "completed_at": "2026-10-15T23:50:21Z",
+      "name": "windows-caching-rest-1",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-15T23:47:20Z",
+          "completed_at": "2026-10-15T23:47:21Z"
+        },
+        {
+          "name": "Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-15T23:47:21Z",
+          "completed_at": "2026-10-15T23:47:32Z"
+        },
+        {
+          "name": "Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-15T23:47:32Z",
+          "completed_at": "2026-10-15T23:47:44Z"
+        },
+        {
+          "name": "Test",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-15T23:47:44Z",
+          "completed_at": "2026-10-15T23:50:15Z"
+        },
+        {
+          "name": "Summarize test timings",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-15T23:50:15Z",
+          "completed_at": "2026-10-15T23:50:16Z"
+        },
+        {
+          "name": "Upload test timing log",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-15T23:50:16Z",
+          "completed_at": "2026-10-15T23:50:17Z"
+        },
+        {
+          "name": "Post Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-15T23:50:17Z",
+          "completed_at": "2026-10-15T23:50:17Z"
+        },
+        {
+          "name": "Post Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-10-15T23:50:17Z",
+          "completed_at": "2026-10-15T23:50:18Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13,
+          "started_at": "2026-10-15T23:50:18Z",
+          "completed_at": "2026-10-15T23:50:18Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/snissn/gomap/check-runs/116730604158",
+      "labels": [
+        "windows-latest"
+      ],
+      "runner_id": 1000547646,
+      "runner_name": "GitHub Actions 1000547646",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 116730604187,
+      "run_id": 38825099216,
+      "workflow_name": "TreeDB: vet+test",
+      "head_branch": "codex/4871-maintenance-landed-185-20261015",
+      "run_url": "https://api.github.com/repos/snissn/gomap/actions/runs/38825099216",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOIdn7C88AAAAbLa-qmw",
+      "head_sha": "a1db58c790e056a02340c98e7dbae11f40c8ed48",
+      "url": "https://api.github.com/repos/snissn/gomap/actions/jobs/116730604187",
+      "html_url": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116730604187",
+      "status": "completed",
+      "conclusion": "failure",
+      "created_at": "2026-10-15T23:41:42Z",
+      "started_at": "2026-10-15T23:49:10Z",
+      "completed_at": "2026-10-16T00:02:28Z",
+      "name": "ubuntu-latest-1",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-15T23:49:10Z",
+          "completed_at": "2026-10-15T23:49:12Z"
+        },
+        {
+          "name": "Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-15T23:49:12Z",
+          "completed_at": "2026-10-15T23:49:34Z"
+        },
+        {
+          "name": "Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-15T23:49:34Z",
+          "completed_at": "2026-10-15T23:49:37Z"
+        },
+        {
+          "name": "Test",
+          "status": "completed",
+          "conclusion": "failure",
+          "number": 4,
+          "started_at": "2026-10-15T23:49:37Z",
+          "completed_at": "2026-10-16T00:02:25Z"
+        },
+        {
+          "name": "Summarize test timings",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-16T00:02:25Z",
+          "completed_at": "2026-10-16T00:02:25Z"
+        },
+        {
+          "name": "Upload test timing log",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-16T00:02:25Z",
+          "completed_at": "2026-10-16T00:02:26Z"
+        },
+        {
+          "name": "Post Setup Go",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 11,
+          "started_at": "2026-10-16T00:02:26Z",
+          "completed_at": "2026-10-16T00:02:26Z"
+        },
+        {
+          "name": "Post Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-10-16T00:02:26Z",
+          "completed_at": "2026-10-16T00:02:26Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13,
+          "started_at": "2026-10-16T00:02:26Z",
+          "completed_at": "2026-10-16T00:02:26Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/snissn/gomap/check-runs/116730604187",
+      "labels": [
+        "ubuntu-latest"
+      ],
+      "runner_id": 1000547653,
+      "runner_name": "GitHub Actions 1000547653",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 116730604207,
+      "run_id": 38825099216,
+      "workflow_name": "TreeDB: vet+test",
+      "head_branch": "codex/4871-maintenance-landed-185-20261015",
+      "run_url": "https://api.github.com/repos/snissn/gomap/actions/runs/38825099216",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOIdn7C88AAAAbLa-qrw",
+      "head_sha": "a1db58c790e056a02340c98e7dbae11f40c8ed48",
+      "url": "https://api.github.com/repos/snissn/gomap/actions/jobs/116730604207",
+      "html_url": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116730604207",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-15T23:41:42Z",
+      "started_at": "2026-10-15T23:48:18Z",
+      "completed_at": "2026-10-16T00:01:40Z",
+      "name": "race-check (linux)-4",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-15T23:48:19Z",
+          "completed_at": "2026-10-15T23:48:21Z"
+        },
+        {
+          "name": "Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-15T23:48:21Z",
+          "completed_at": "2026-10-15T23:48:41Z"
+        },
+        {
+          "name": "Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-15T23:48:41Z",
+          "completed_at": "2026-10-15T23:48:48Z"
+        },
+        {
+          "name": "Test Race",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-15T23:48:48Z",
+          "completed_at": "2026-10-16T00:01:35Z"
+        },
+        {
+          "name": "Summarize race timing",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-16T00:01:35Z",
+          "completed_at": "2026-10-16T00:01:35Z"
+        },
+        {
+          "name": "Upload race timing log",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-16T00:01:35Z",
+          "completed_at": "2026-10-16T00:01:36Z"
+        },
+        {
+          "name": "Post Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-16T00:01:36Z",
+          "completed_at": "2026-10-16T00:01:37Z"
+        },
+        {
+          "name": "Post Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-10-16T00:01:37Z",
+          "completed_at": "2026-10-16T00:01:37Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13,
+          "started_at": "2026-10-16T00:01:37Z",
+          "completed_at": "2026-10-16T00:01:37Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/snissn/gomap/check-runs/116730604207",
+      "labels": [
+        "ubuntu-latest"
+      ],
+      "runner_id": 1000547649,
+      "runner_name": "GitHub Actions 1000547649",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 116730604245,
+      "run_id": 38825099216,
+      "workflow_name": "TreeDB: vet+test",
+      "head_branch": "codex/4871-maintenance-landed-185-20261015",
+      "run_url": "https://api.github.com/repos/snissn/gomap/actions/runs/38825099216",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOIdn7C88AAAAbLa-q1Q",
+      "head_sha": "a1db58c790e056a02340c98e7dbae11f40c8ed48",
+      "url": "https://api.github.com/repos/snissn/gomap/actions/jobs/116730604245",
+      "html_url": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116730604245",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-15T23:41:42Z",
+      "started_at": "2026-10-15T23:49:06Z",
+      "completed_at": "2026-10-16T00:11:28Z",
+      "name": "race-check (linux)-3",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-15T23:49:07Z",
+          "completed_at": "2026-10-15T23:49:08Z"
+        },
+        {
+          "name": "Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-15T23:49:08Z",
+          "completed_at": "2026-10-15T23:49:29Z"
+        },
+        {
+          "name": "Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-15T23:49:29Z",
+          "completed_at": "2026-10-15T23:49:37Z"
+        },
+        {
+          "name": "Test Race",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-15T23:49:37Z",
+          "completed_at": "2026-10-16T00:11:23Z"
+        },
+        {
+          "name": "Summarize race timing",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-16T00:11:23Z",
+          "completed_at": "2026-10-16T00:11:23Z"
+        },
+        {
+          "name": "Upload race timing log",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-16T00:11:23Z",
+          "completed_at": "2026-10-16T00:11:24Z"
+        },
+        {
+          "name": "Post Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-16T00:11:24Z",
+          "completed_at": "2026-10-16T00:11:24Z"
+        },
+        {
+          "name": "Post Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-10-16T00:11:24Z",
+          "completed_at": "2026-10-16T00:11:25Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13,
+          "started_at": "2026-10-16T00:11:25Z",
+          "completed_at": "2026-10-16T00:11:25Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/snissn/gomap/check-runs/116730604245",
+      "labels": [
+        "ubuntu-latest"
+      ],
+      "runner_id": 1000547651,
+      "runner_name": "GitHub Actions 1000547651",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 116730604292,
+      "run_id": 38825099216,
+      "workflow_name": "TreeDB: vet+test",
+      "head_branch": "codex/4871-maintenance-landed-185-20261015",
+      "run_url": "https://api.github.com/repos/snissn/gomap/actions/runs/38825099216",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOIdn7C88AAAAbLa-rBA",
+      "head_sha": "a1db58c790e056a02340c98e7dbae11f40c8ed48",
+      "url": "https://api.github.com/repos/snissn/gomap/actions/jobs/116730604292",
+      "html_url": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116730604292",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-15T23:41:42Z",
+      "started_at": "2026-10-15T23:46:42Z",
+      "completed_at": "2026-10-15T23:49:07Z",
+      "name": "windows-caching-heavy-2",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-15T23:46:43Z",
+          "completed_at": "2026-10-15T23:46:44Z"
+        },
+        {
+          "name": "Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-15T23:46:44Z",
+          "completed_at": "2026-10-15T23:47:10Z"
+        },
+        {
+          "name": "Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-15T23:47:10Z",
+          "completed_at": "2026-10-15T23:47:18Z"
+        },
+        {
+          "name": "Test",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-15T23:47:18Z",
+          "completed_at": "2026-10-15T23:49:01Z"
+        },
+        {
+          "name": "Summarize test timings",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-15T23:49:01Z",
+          "completed_at": "2026-10-15T23:49:04Z"
+        },
+        {
+          "name": "Upload test timing log",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-15T23:49:04Z",
+          "completed_at": "2026-10-15T23:49:05Z"
+        },
+        {
+          "name": "Post Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-15T23:49:05Z",
+          "completed_at": "2026-10-15T23:49:05Z"
+        },
+        {
+          "name": "Post Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-10-15T23:49:05Z",
+          "completed_at": "2026-10-15T23:49:06Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13,
+          "started_at": "2026-10-15T23:49:06Z",
+          "completed_at": "2026-10-15T23:49:06Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/snissn/gomap/check-runs/116730604292",
+      "labels": [
+        "windows-latest"
+      ],
+      "runner_id": 1000547640,
+      "runner_name": "GitHub Actions 1000547640",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 116730604297,
+      "run_id": 38825099216,
+      "workflow_name": "TreeDB: vet+test",
+      "head_branch": "codex/4871-maintenance-landed-185-20261015",
+      "run_url": "https://api.github.com/repos/snissn/gomap/actions/runs/38825099216",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOIdn7C88AAAAbLa-rCQ",
+      "head_sha": "a1db58c790e056a02340c98e7dbae11f40c8ed48",
+      "url": "https://api.github.com/repos/snissn/gomap/actions/jobs/116730604297",
+      "html_url": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116730604297",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-15T23:41:42Z",
+      "started_at": "2026-10-15T23:49:10Z",
+      "completed_at": "2026-10-16T00:03:26Z",
+      "name": "windows-core-7",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-15T23:49:11Z",
+          "completed_at": "2026-10-15T23:49:12Z"
+        },
+        {
+          "name": "Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-15T23:49:12Z",
+          "completed_at": "2026-10-15T23:49:38Z"
+        },
+        {
+          "name": "Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-15T23:49:38Z",
+          "completed_at": "2026-10-15T23:49:43Z"
+        },
+        {
+          "name": "Test",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-15T23:49:43Z",
+          "completed_at": "2026-10-16T00:03:19Z"
+        },
+        {
+          "name": "Summarize test timings",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-16T00:03:19Z",
+          "completed_at": "2026-10-16T00:03:20Z"
+        },
+        {
+          "name": "Upload test timing log",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-16T00:03:20Z",
+          "completed_at": "2026-10-16T00:03:21Z"
+        },
+        {
+          "name": "Post Setup Go",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-16T00:03:21Z",
+          "completed_at": "2026-10-16T00:03:21Z"
+        },
+        {
+          "name": "Post Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-10-16T00:03:21Z",
+          "completed_at": "2026-10-16T00:03:24Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13,
+          "started_at": "2026-10-16T00:03:24Z",
+          "completed_at": "2026-10-16T00:03:24Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/snissn/gomap/check-runs/116730604297",
+      "labels": [
+        "windows-latest"
+      ],
+      "runner_id": 1000547652,
+      "runner_name": "GitHub Actions 1000547652",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 116740736516,
+      "run_id": 38825099216,
+      "workflow_name": "TreeDB: vet+test",
+      "head_branch": "codex/4871-maintenance-landed-185-20261015",
+      "run_url": "https://api.github.com/repos/snissn/gomap/actions/runs/38825099216",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOIdn7C88AAAAbLkpGBA",
+      "head_sha": "a1db58c790e056a02340c98e7dbae11f40c8ed48",
+      "url": "https://api.github.com/repos/snissn/gomap/actions/jobs/116740736516",
+      "html_url": "https://github.com/snissn/gomap/actions/runs/38825099216/job/116740736516",
+      "status": "completed",
+      "conclusion": "failure",
+      "created_at": "2026-10-16T00:13:37Z",
+      "started_at": "2026-10-16T00:13:39Z",
+      "completed_at": "2026-10-16T00:13:43Z",
+      "name": "TreeDB required gate",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-16T00:13:40Z",
+          "completed_at": "2026-10-16T00:13:40Z"
+        },
+        {
+          "name": "Verify required TreeDB jobs",
+          "status": "completed",
+          "conclusion": "failure",
+          "number": 2,
+          "started_at": "2026-10-16T00:13:40Z",
+          "completed_at": "2026-10-16T00:13:40Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-16T00:13:40Z",
+          "completed_at": "2026-10-16T00:13:40Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/snissn/gomap/check-runs/116740736516",
+      "labels": [
+        "ubuntu-latest"
+      ],
+      "runner_id": 1000547677,
+      "runner_name": "GitHub Actions 1000547677",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    }
+  ]
+}

@@ -1,0 +1,40 @@
+{
+  "author": {
+    "date": "2026-10-16T00:31:39Z",
+    "email": "snissn@gmail.com",
+    "name": "Mikers"
+  },
+  "committer": {
+    "date": "2026-10-16T00:31:39Z",
+    "email": "noreply@github.com",
+    "name": "GitHub"
+  },
+  "html_url": "https://github.com/snissn/gomap/commit/9165c53e4d82d12231af8404b0b7c5aea13530a6",
+  "message": "ci: retain fixed maintenance cost diagnostics (#5137)\n\nci: retain fixed maintenance cost diagnostics",
+  "node_id": "C_kwDOIdn7C9oAKDkxNjVjNTNlNGQ4MmQxMjIzMWFmODQwNGIwYjdjNWFlYTEzNTMwYTY",
+  "parents": [
+    {
+      "html_url": "https://github.com/snissn/gomap/commit/eae34350200668e1aae35d56f7f4c8ddfc2acb47",
+      "sha": "eae34350200668e1aae35d56f7f4c8ddfc2acb47",
+      "url": "https://api.github.com/repos/snissn/gomap/git/commits/eae34350200668e1aae35d56f7f4c8ddfc2acb47"
+    },
+    {
+      "html_url": "https://github.com/snissn/gomap/commit/a1db58c790e056a02340c98e7dbae11f40c8ed48",
+      "sha": "a1db58c790e056a02340c98e7dbae11f40c8ed48",
+      "url": "https://api.github.com/repos/snissn/gomap/git/commits/a1db58c790e056a02340c98e7dbae11f40c8ed48"
+    }
+  ],
+  "sha": "9165c53e4d82d12231af8404b0b7c5aea13530a6",
+  "tree": {
+    "sha": "c1421828bc0ef2229fd60bf2cd000a1e31114ef7",
+    "url": "https://api.github.com/repos/snissn/gomap/git/trees/c1421828bc0ef2229fd60bf2cd000a1e31114ef7"
+  },
+  "url": "https://api.github.com/repos/snissn/gomap/git/commits/9165c53e4d82d12231af8404b0b7c5aea13530a6",
+  "verification": {
+    "payload": "tree c1421828bc0ef2229fd60bf2cd000a1e31114ef7\nparent eae34350200668e1aae35d56f7f4c8ddfc2acb47\nparent a1db58c790e056a02340c98e7dbae11f40c8ed48\nauthor Mikers <snissn@gmail.com> 1792110699 -1000\ncommitter GitHub <noreply@github.com> 1792110699 -1000\n\nci: retain fixed maintenance cost diagnostics (#5137)\n\nci: retain fixed maintenance cost diagnostics",
+    "reason": "valid",
+    "signature": "-----BEGIN PGP SIGNATURE-----\n\nwsFcBAABCAAQBQJq0XBrCRC1aQ7uu5UhlAAA9CgQAATUp0fKjDQ48/AAH95U41CU\nSnBmBOYbbcAxda0JLfF/F/M+wDFSTgUOwIOyXm18Fi0FPa/1Z6PByL5nQ4hcHAYW\njFCL4nmhCH0bGmVf8dBFKTEx0rHB854vaGOouxFjQ8eSxSHh8eH0IuYf+HoE3jaa\nqjwOYUjzJ6fQdjlJBfM1ux/aMKEhNtV9W/m1RsPPRaMq5pFOZ2itG2g4I4FGapQB\n+eRr3NlYfvCG/UepDEHw1Lsxo3+mCL1fxzfzjiy/7HL//dovm8ilJFwVFjPdbYYa\nHg/ULr16/QPxuygHlEvwY0+LRksACi9fcvlCcRNpQ3MpPqsIQz49dZbRhI5wFAHl\n/6n5j/HQ0aAWISjz0sWwkIWO3DyD9/+7PlAlOWwnWKk4zuzQSp5bBr5eRe+vLPqf\njkvrjtwg+Lsfu6YlS/KnFTJwVU1sU3Yx3gMGOoP0njeoXbXl+tYlEP+2qa27q02G\na8pn9aMYDlOSVm9mUUyTE75yOKz+EOumwOfdj2hSaY1pBqbp/QaO8VE9fZN8d2nO\n4/w+UwkgvE+3c26RLDF8PreIc+J/BCN9MP5KFFcYYdobx9S7VNI0QXNlGhDJqvPZ\ntYX0yAa/qeFPIpO/WlizOxaKPGM5V+jnh0z3PTxQcmfmv65nOEYoxeVwRRAZMOpt\nXTJYWcH/UcE0Rqvzuh2i\n=rQI/\n-----END PGP SIGNATURE-----\n",
+    "verified": true,
+    "verified_at": "2026-10-16T00:31:40Z"
+  }
+}

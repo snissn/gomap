@@ -1,0 +1,12 @@
+{
+  "badge_url": "https://github.com/snissn/gomap/workflows/TreeDB:%20bounded%20maintenance%20diagnostic%20(manual%20only)/badge.svg",
+  "created_at": "2026-10-15T14:31:41.000-10:00",
+  "html_url": "https://github.com/snissn/gomap/blob/main/.github/workflows/treedb-mvcc-maintenance-diagnostic.yml",
+  "id": 386135162,
+  "name": "TreeDB: bounded maintenance diagnostic (manual only)",
+  "node_id": "W_kwDOIdn7C84XA_R6",
+  "path": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml",
+  "state": "active",
+  "updated_at": "2026-10-15T14:31:41.000-10:00",
+  "url": "https://api.github.com/repos/snissn/gomap/actions/workflows/386135162"
+}

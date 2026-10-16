@@ -1,0 +1,18 @@
+{
+  "at_utc": "2026-10-16T00:36:47.716204+00:00",
+  "worktree": "/mnt/fast4tb/gomap-mvcc-4871-20261015/maintenance-landed-harness",
+  "prior_head": "a1db58c790e056a02340c98e7dbae11f40c8ed48",
+  "new_base": "9165c53e4d82d12231af8404b0b7c5aea13530a6",
+  "branch": "codex/4871-maintenance-python-portability-185-20261016",
+  "prior_clean": true,
+  "same_tree": true,
+  "command": [
+    "git",
+    "switch",
+    "-c",
+    "codex/4871-maintenance-python-portability-185-20261016",
+    "9165c53e4d82d12231af8404b0b7c5aea13530a6"
+  ],
+  "stdout": "",
+  "stderr": "Switched to a new branch 'codex/4871-maintenance-python-portability-185-20261016'\n"
+}

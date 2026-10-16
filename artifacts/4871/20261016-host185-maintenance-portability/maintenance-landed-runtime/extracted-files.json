@@ -1,0 +1,10 @@
+{
+  "mvcc-maintenance-setup/pure-tests.log": {
+    "bytes": 1797,
+    "sha256": "df39b88dcd1d850a3e01c031131d3aeacdc8ccb6d23a7740ee01d74735642e26"
+  },
+  "mvcc-maintenance-setup/scope.txt": {
+    "bytes": 134,
+    "sha256": "e31d8c7e68c7df176e88d6439e8eb96e23c5f0102779f4dd2a85e7269c5ff1fa"
+  }
+}

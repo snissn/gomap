@@ -1,0 +1,55 @@
+{
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW",
+  "reviewer": "ordinary_review",
+  "actual_model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "created_utc": "2026-10-16T00:42:30.629646+00:00",
+  "disposition": "ACCEPT",
+  "base_sha": "9165c53e4d82d12231af8404b0b7c5aea13530a6",
+  "head_sha": "8db93fec7176d23bad95168954884da807ee1da4",
+  "tree_sha": "5be6bbba648dd8f794368040138ffff1d5ffc84b",
+  "candidate_edits_by_reviewer": false,
+  "children_spawned": 0,
+  "findings": [],
+  "changed_paths": [
+    {
+      "path": ".github/scripts/mvcc_maintenance_test.py",
+      "sha256": "c72b01837d7825238615693b65cd9372f9e9a0e347e67afe0834985a1a967682",
+      "insertions": 8,
+      "deletions": 5
+    }
+  ],
+  "source_diff_sha256": "9fe9bc972f3e3eda8ceadff8810e119e2a7e03c5c1de01ff91db667d5a1b1bd9",
+  "original_collector_head": "22e605b5c738ce759c5a7b8a3195f8d3ed53132c",
+  "original_function_source_bindings": [
+    {
+      "name": "schedule",
+      "sha256": "dcbbd4878b7c38c0d9746f5a53d51a3f43a7a5a408ed09cfcad2265a5c6c2363"
+    },
+    {
+      "name": "parse",
+      "sha256": "6f0a745f58541c821b57a1f054944faa3328f55b995b8462c78b3add6630762c"
+    },
+    {
+      "name": "selftest",
+      "sha256": "7f16ca94a5c45ac8de6631edfde312bbb72929d0e2f4af41da6350f9fd7ce9dd"
+    }
+  ],
+  "collector_sha256": "fcc1291961907e6b3bde63ac1bc992a90eb379479bd04da243ecd8207b65f557",
+  "checks_performed": [
+    "Read-only git exact head/tree, clean status, one-path diff, test source equals committed blob; final identity recheck.",
+    "Complete changed file and exact delta read; root/TreeDB/contribution policy and task-local internal-review policy read.",
+    "All three function source segments independently compared with actual original collector commit; SHA256 values match.",
+    "Independent AST shape reproduction adds empty type_params to functions/classes and exactly reproduces hosted first mismatch 777356...; this was not execution under Python3.12.",
+    "Locally executed permitted pure Python suite with TMPDIR on fastdisk and bytecode disabled: ten tests PASS; parser positive/six negatives and toy child-group kill/join/survivor refusal pass.",
+    "Inspected hosted failed pure-tests log and root publication/failure/validation/Python3.9 evidence."
+  ],
+  "validation_limits": [
+    "Reviewer executed pure suite with local Python3.10; Python3.9 PASS is retained root evidence. No actual Python3.12 successor run was performed by reviewer.",
+    "Hosted original failed before any Go build or benchmark call, per retained packet.",
+    "This acceptance covers only the exact Python portability repair; existing harness/provenance/security/schedule/parser are byte unchanged.",
+    "No Go build/test/benchmark/publication, dispatch, CI or performance qualification, merge authorization or native acceptance."
+  ],
+  "unavailability_reason": "Manual hosted AI review cannot pin required gpt-6.1-sol; not requested. This is the explicitly routed independent internal fallback, not a hosted review outcome.",
+  "lease_released": true
+}

@@ -1,0 +1,27 @@
+The ordinary MVCC maintenance cost comparison needs a reviewed harness on main before new retained evidence can be collected. This PR adds a manual diagnostic pinned to baseline `5bca87ffe6e1bfba2d693264d2dc82936adc234f` and allocation-packing candidate `a17febafb5353897c59a4e17f992e34c47a2585b`, with complete source, toolchain, binary and raw-result retention.
+
+## Scope
+
+- Preserve the existing fourteen-call schedule: three AB/BA pairs each of durable pointer Checkpoint16x and production foreground-churn Vacuum1x, followed by candidate cohort8/16 at128x. Selectors, parsers, timing boundaries, CPU0,1/GOMAXPROCS2, strict 2% quietness threshold, 10-second preflight and 120/150-second benchmark caps are unchanged.
+- Refuse before benchmarking when preflight is busy; report measurement contamination without retries or selective discard.
+- Use one Linux subreaper for bootstrap, builds and collection, recording leader/adopted-child joins and process-group emptiness. The two-second allowance is cleanup only.
+- Retain SDK/source archives and manifests, compiler and environment records, build logs, four emitted binaries, all attempted samples, and failure/refusal receipts. The runner is ephemeral, caches are fresh, and hosted artifacts expire after 14 days. Hard runner loss can prevent cleanup or upload.
+- Add the manual member to the conservative CI impact inventory: 17 workflows / 59 members. Existing jobs and acceptance gates are unchanged. Products remain separate clean checkouts; there is no arbitrary-ref input or product overlay.
+
+## Validation
+
+Exact harness head: `a1db58c790e056a02340c98e7dbae11f40c8ed48`, based on `eae34350200668e1aae35d56f7f4c8ddfc2acb47`. All 9,948 committed source files match the reviewed manifest; nine paths changed.
+
+Local validation passed: `refresh_ci_impact_inventory.py --check`, `test_refresh_ci_impact_inventory.py` (15), `test_ci_impact.py` (21), `test_treedb_ci_contract.py` (6), `test_treedb_windows_core_headroom.py` (16), `test_mvcc_m0_observation.py` (10), and `mvcc_maintenance_test.py` (10), all under `.github/scripts/` with bytecode disabled. This is 78 pure tests plus the inventory check, including parser refusals and actual toy-child reaping.
+
+All **50 current-head checks pass**. TreeDB run `38825099216` passed on attempt 2 after one affected-shard retry. Attempt 1 had an HTTPS EOF in `TestImmutableOwnerReplacementPrivateANNQualificationV1` after a deliberate target restart, plus the dependent required-gate failure. All 3,456 Go files and every existing workflow input match the prior 50-pass base tree. The exact EOF cause remains unproven; the original failure, source equivalence and one-retry disposition are retained. No test or product code changed for the retry.
+
+Independent `gpt-6.1-sol` `INTERNAL_SUBAGENT_REVIEW`: **ACCEPT**, no findings, bound to this exact head and all committed blobs. Hosted review cannot pin the user-required model, so the task-local mergeable skill's internal fallback applies. The final hosted classifier is `NOT_REQUESTED`; there are zero unresolved review threads or outstanding requested reviews. Current branch rules require no human approval, and the user authorized coordinator execution and merge for this graph.
+
+## Evidence and limits
+
+Tracked under #4871 and ordinary PR #5127. This is an instrumentation-only prerequisite; no performance improvement is claimed. The harness must land before a separately frozen, single manual dispatch. No diagnostic collection has run for this harness at merge time.
+
+Three matched pairs and one cohort sample per size remain bounded diagnostics. Cohort cleanup is one event; the vacuum cost fixture supplies no full digest or physical-shrink proof. `COMPLETE_BOUNDED_DIAGNOSTIC` does not establish cost, M0, native, sustained-workload or graph acceptance. The ordinary cost regression and original M0 failure remain unresolved.
+
+[Source, review and local controls](https://github.com/snissn/gomap/tree/81a9294c41a233977eb65a68961891d3bf99f6c7/artifacts/4871/20261015-host185-maintenance-preparation). [Original CI failure and unchanged-source classification](https://github.com/snissn/gomap/tree/7a3de8ea330dcc5ebc08b33a80095797cac945aa/artifacts/4871/20261015-host185-native-completion-review).

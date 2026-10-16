@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "python3.9",
+    "-B",
+    ".github/scripts/mvcc_maintenance_test.py"
+  ],
+  "exit": 0,
+  "seconds": 0.19308018870651722,
+  "python": "Python 3.9.23",
+  "stdout_sha256": "014bfe726c9b352aca2b6164fa9426a32eabdd305ed825fb9f7fbea6da7de6af",
+  "stderr_sha256": "76788c217cbf5cff541b483fd35c87f2b16cc8add41ea755c630c4f990b0b1d3"
+}

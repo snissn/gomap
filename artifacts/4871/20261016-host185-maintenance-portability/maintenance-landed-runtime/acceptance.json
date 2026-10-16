@@ -1,0 +1,17 @@
+{
+  "at_utc": "2026-10-16T00:30:01.839901+00:00",
+  "authorization": "User explicitly authorized sole-coordinator execute-and-merge for graph 4871; no local human approval restriction.",
+  "base": "eae34350200668e1aae35d56f7f4c8ddfc2acb47",
+  "checks_success": 50,
+  "head": "a1db58c790e056a02340c98e7dbae11f40c8ed48",
+  "hosted_unavailability": "Hosted manual review cannot pin the explicitly required model; not requested. Independent subagent uses the required explicit routing.",
+  "review_disposition": "ACCEPT",
+  "review_json_sha256": "c5650db382b19e38e9a9c3a5265999f0e986b8d8645c0ffa45b7f324d9f77bd7",
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW",
+  "review_model": "gpt-6.1-sol",
+  "runtime_calls": 0,
+  "source_files": 9948,
+  "source_manifest_sha256": "b2e21b3e08792259b0281311471368416931e585006e8ef6d9d555df3f480cc6",
+  "tree": "c1421828bc0ef2229fd60bf2cd000a1e31114ef7",
+  "unresolved_threads": 0
+}

@@ -1,0 +1,4 @@
+parser positive and six negative receipt controls passed
+toy-killed-group-join {"adopted_children": [{"pid": 795914, "wait_status": 9}], "cleanup_elapsed_s": 0.001148805022239685, "cleanup_limit_s": 2, "kill_requested": true, "leader_joined": true, "pgid": 795913, "pid": 795913, "process_group_empty": true, "unexpected_survivors": false}
+toy-normal-group-join {"adopted_children": [], "cleanup_elapsed_s": 0.03136913292109966, "cleanup_limit_s": 2, "kill_requested": false, "leader_joined": true, "pgid": 795915, "pid": 795915, "process_group_empty": true, "unexpected_survivors": false}
+toy-unexpected-survivor-refusal {"adopted_children": [{"pid": 795917, "wait_status": 9}], "cleanup_elapsed_s": 0.01015110919252038, "cleanup_limit_s": 2, "kill_requested": true, "leader_joined": true, "pgid": 795916, "pid": 795916, "process_group_empty": true, "unexpected_survivors": true}
