@@ -1,0 +1,857 @@
+[
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/CONTINUATION-20261016.md",
+    "path": "CONTINUATION-20261016.md",
+    "source_bytes": 30597,
+    "source_sha256": "cfa7e1a7000686b8d391a9b551fec563be719f5e114d2d3ec30882ef028e85f0",
+    "stored_bytes": 30597,
+    "stored_sha256": "cfa7e1a7000686b8d391a9b551fec563be719f5e114d2d3ec30882ef028e85f0",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/index-observer-plan-independent-review.json",
+    "path": "native-decision/index-observer-plan-independent-review.json",
+    "source_bytes": 9042,
+    "source_sha256": "b3a8428166f76b550962bb931c4ece21c431c0a328464680d2e372787e6f33f8",
+    "stored_bytes": 9042,
+    "stored_sha256": "b3a8428166f76b550962bb931c4ece21c431c0a328464680d2e372787e6f33f8",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/index-observer-plan-independent-review.md",
+    "path": "native-decision/index-observer-plan-independent-review.md",
+    "source_bytes": 9158,
+    "source_sha256": "24176beb4797317d5a4087ae68acb9ea061599b00062c556a9e9a566715e882f",
+    "stored_bytes": 9158,
+    "stored_sha256": "24176beb4797317d5a4087ae68acb9ea061599b00062c556a9e9a566715e882f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/index-observer-positive-capture-diagnosis.json",
+    "path": "native-decision/index-observer-positive-capture-diagnosis.json",
+    "source_bytes": 3104,
+    "source_sha256": "d5f24079775d340b7ae23d552fb160166db657db13d588c78564315b63c68518",
+    "stored_bytes": 3104,
+    "stored_sha256": "d5f24079775d340b7ae23d552fb160166db657db13d588c78564315b63c68518",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/index-observer-positive-capture-diagnosis.md",
+    "path": "native-decision/index-observer-positive-capture-diagnosis.md",
+    "source_bytes": 8148,
+    "source_sha256": "e3d7f419c18c5202f9d2411a56cadfa17b7f8205bcc3bc94bd8a434d2f5c01b6",
+    "stored_bytes": 8148,
+    "stored_sha256": "e3d7f419c18c5202f9d2411a56cadfa17b7f8205bcc3bc94bd8a434d2f5c01b6",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/index-observer-positive-capture-review.json",
+    "path": "native-decision/index-observer-positive-capture-review.json",
+    "source_bytes": 6375,
+    "source_sha256": "3eafebb94e18a18acb6762d083a3db950e33450987940444d10923af255ef988",
+    "stored_bytes": 6375,
+    "stored_sha256": "3eafebb94e18a18acb6762d083a3db950e33450987940444d10923af255ef988",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/index-observer-positive-capture-review.md",
+    "path": "native-decision/index-observer-positive-capture-review.md",
+    "source_bytes": 3945,
+    "source_sha256": "7046ebd7192049dc5dabe4daa06e2c0ede44b6beaaa10bb5210645ed1636e43c",
+    "stored_bytes": 3945,
+    "stored_sha256": "7046ebd7192049dc5dabe4daa06e2c0ede44b6beaaa10bb5210645ed1636e43c",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/index-observer-repair-independent-review.json",
+    "path": "native-decision/index-observer-repair-independent-review.json",
+    "source_bytes": 24789,
+    "source_sha256": "31b2577e85469450de08d00ac15c4529c811c7468efc4ebf88ee3d28724108e8",
+    "stored_bytes": 24789,
+    "stored_sha256": "31b2577e85469450de08d00ac15c4529c811c7468efc4ebf88ee3d28724108e8",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/index-observer-repair-independent-review.md",
+    "path": "native-decision/index-observer-repair-independent-review.md",
+    "source_bytes": 11024,
+    "source_sha256": "5aa1e8362489c689a8f3e4016a8522c4ba482e4865a480a1f6babb6653a61ac4",
+    "stored_bytes": 11024,
+    "stored_sha256": "5aa1e8362489c689a8f3e4016a8522c4ba482e4865a480a1f6babb6653a61ac4",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-index-observer-controls-selection.json",
+    "path": "native-decision/root-index-observer-controls-selection.json",
+    "source_bytes": 10574,
+    "source_sha256": "ce5bfb8a8c17a1186711478227836e6ac484b8fa8f18120f88befa3a158339b2",
+    "stored_bytes": 10574,
+    "stored_sha256": "ce5bfb8a8c17a1186711478227836e6ac484b8fa8f18120f88befa3a158339b2",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-index-observer-controls-selection.md",
+    "path": "native-decision/root-index-observer-controls-selection.md",
+    "source_bytes": 2555,
+    "source_sha256": "992ca2fad87812dac42c1d23ca0c2289099a6c6fccfbc3da8e8451a057d4ab25",
+    "stored_bytes": 2555,
+    "stored_sha256": "992ca2fad87812dac42c1d23ca0c2289099a6c6fccfbc3da8e8451a057d4ab25",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-index-observer-repair-selection.md",
+    "path": "native-decision/root-index-observer-repair-selection.md",
+    "source_bytes": 4411,
+    "source_sha256": "7c9941e990ba64cfd413ec66ffd2bf649d6fe829c599f20052d33d940f07fdfe",
+    "stored_bytes": 4411,
+    "stored_sha256": "7c9941e990ba64cfd413ec66ffd2bf649d6fe829c599f20052d33d940f07fdfe",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-index-pin-identity-repair-selection.md",
+    "path": "native-decision/root-index-pin-identity-repair-selection.md",
+    "source_bytes": 3085,
+    "source_sha256": "3bedfce103563a51ce20f1b16d537b35d4d6796d6537a941a06a7c68111ee1ab",
+    "stored_bytes": 3085,
+    "stored_sha256": "3bedfce103563a51ce20f1b16d537b35d4d6796d6537a941a06a7c68111ee1ab",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finalize-index-observer-inventory.py",
+    "path": "native-main-integration/finalize-index-observer-inventory.py",
+    "source_bytes": 4618,
+    "source_sha256": "c7220a3892dbbab13bc2651e52696aba8adf14423b32b07a4818d4d2ab8fb621",
+    "stored_bytes": 4618,
+    "stored_sha256": "c7220a3892dbbab13bc2651e52696aba8adf14423b32b07a4818d4d2ab8fb621",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-controls/HANDOFF.md",
+    "path": "native-main-integration/index-observer-controls/HANDOFF.md",
+    "source_bytes": 2493,
+    "source_sha256": "b5e9cfd5c6b42034d5f53471920c05c7c693a05d354af0830a3e74b0d6757eed",
+    "stored_bytes": 2493,
+    "stored_sha256": "b5e9cfd5c6b42034d5f53471920c05c7c693a05d354af0830a3e74b0d6757eed",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-controls/db-original-captures-normal/command.json",
+    "path": "native-main-integration/index-observer-controls/db-original-captures-normal/command.json",
+    "source_bytes": 2195,
+    "source_sha256": "60f9d0b931b1d73acc97c42b0361b288eaeaceb0ce132e61ede1776a6494c0fd",
+    "stored_bytes": 2195,
+    "stored_sha256": "60f9d0b931b1d73acc97c42b0361b288eaeaceb0ce132e61ede1776a6494c0fd",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-controls/db-original-captures-normal/process.json",
+    "path": "native-main-integration/index-observer-controls/db-original-captures-normal/process.json",
+    "source_bytes": 148,
+    "source_sha256": "52c356640453886967883accd29f147cb41d34707fbc13473f4d2c6083e6ef90",
+    "stored_bytes": 148,
+    "stored_sha256": "52c356640453886967883accd29f147cb41d34707fbc13473f4d2c6083e6ef90",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-controls/db-original-captures-normal/result.json",
+    "path": "native-main-integration/index-observer-controls/db-original-captures-normal/result.json",
+    "source_bytes": 5891,
+    "source_sha256": "32b60a69209aca5ceb97dc64942f302bd0f59100c9b8200be6f975f6429b8cf3",
+    "stored_bytes": 5891,
+    "stored_sha256": "32b60a69209aca5ceb97dc64942f302bd0f59100c9b8200be6f975f6429b8cf3",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-controls/db-original-captures-normal/run.log",
+    "path": "native-main-integration/index-observer-controls/db-original-captures-normal/run.log.gz",
+    "source_bytes": 5383,
+    "source_sha256": "54f7949c8bd3ea250d2c85944c7402903fae24b00c49f4a26331d544d4768117",
+    "stored_bytes": 1047,
+    "stored_sha256": "9f1dcbcbb735e6b7d1281ced2e6a33690ddd0f43693c12fd9342c405166bb727",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-controls/db-original-captures-normal/source-after.json",
+    "path": "native-main-integration/index-observer-controls/db-original-captures-normal/source-after.json.gz",
+    "source_bytes": 1589116,
+    "source_sha256": "21bc95e755d65748083193171e2ba2ed4f0d72454189ac2e61b087e998d5acd3",
+    "stored_bytes": 463640,
+    "stored_sha256": "6762adc467ea678c9f1df3c8befe7c17f0d831a8f03bf30d3faf18df2e590651",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-controls/db-original-captures-normal/source-before.json",
+    "path": "native-main-integration/index-observer-controls/db-original-captures-normal/source-before.json.gz",
+    "source_bytes": 1589116,
+    "source_sha256": "21bc95e755d65748083193171e2ba2ed4f0d72454189ac2e61b087e998d5acd3",
+    "stored_bytes": 463641,
+    "stored_sha256": "3440fa985cbdbdbc768281146d2b11f836b36290d1e63b5b1cab75aac58b2867",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-controls/evidence-archive-receipt.json",
+    "path": "native-main-integration/index-observer-controls/evidence-archive-receipt.json",
+    "source_bytes": 491,
+    "source_sha256": "387bfcff5ca155802d97c5f6bd117b5c8bd0d7210e3d0a426a6ecf4ad5526fda",
+    "stored_bytes": 491,
+    "stored_sha256": "387bfcff5ca155802d97c5f6bd117b5c8bd0d7210e3d0a426a6ecf4ad5526fda",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-controls/evidence-manifest.json",
+    "path": "native-main-integration/index-observer-controls/evidence-manifest.json",
+    "source_bytes": 1672,
+    "source_sha256": "256c065f30e28a60f3a74536049238897f8e895f3dcd3ac6fdeb2c398fd62e5e",
+    "stored_bytes": 1672,
+    "stored_sha256": "256c065f30e28a60f3a74536049238897f8e895f3dcd3ac6fdeb2c398fd62e5e",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-controls/handoff.json",
+    "path": "native-main-integration/index-observer-controls/handoff.json",
+    "source_bytes": 896,
+    "source_sha256": "a4aa11c9e0fbddcbb7388066b1713c7f5027e4014a217f109123220fb1eed5ef",
+    "stored_bytes": 896,
+    "stored_sha256": "a4aa11c9e0fbddcbb7388066b1713c7f5027e4014a217f109123220fb1eed5ef",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-controls/identity.json",
+    "path": "native-main-integration/index-observer-controls/identity.json",
+    "source_bytes": 1642,
+    "source_sha256": "50a6b5a8fbde4663bf16f1fd53de0316a48f16120c4b98e495fe714ab1e0a912",
+    "stored_bytes": 1642,
+    "stored_sha256": "50a6b5a8fbde4663bf16f1fd53de0316a48f16120c4b98e495fe714ab1e0a912",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-controls/index-after.json",
+    "path": "native-main-integration/index-observer-controls/index-after.json",
+    "source_bytes": 184,
+    "source_sha256": "5d26d0a402409fa51124a8a2f4ef87d8ea5535c8ebf53f79e33f61f9fa1b8833",
+    "stored_bytes": 184,
+    "stored_sha256": "5d26d0a402409fa51124a8a2f4ef87d8ea5535c8ebf53f79e33f61f9fa1b8833",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-controls/index-binding.json",
+    "path": "native-main-integration/index-observer-controls/index-binding.json",
+    "source_bytes": 2851,
+    "source_sha256": "d3665ddf8add9e9123f5f326f045784b14f47b81f9e615fd634c574d436fb1e8",
+    "stored_bytes": 2851,
+    "stored_sha256": "d3665ddf8add9e9123f5f326f045784b14f47b81f9e615fd634c574d436fb1e8",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-controls/package-evidence.py",
+    "path": "native-main-integration/index-observer-controls/package-evidence.py",
+    "source_bytes": 2424,
+    "source_sha256": "90c8219b9fcb4f60a9e2b1eb15bff40749faf84745322f7d23efa2cc36061000",
+    "stored_bytes": 2424,
+    "stored_sha256": "90c8219b9fcb4f60a9e2b1eb15bff40749faf84745322f7d23efa2cc36061000",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-controls/required-child-tests.json",
+    "path": "native-main-integration/index-observer-controls/required-child-tests.json",
+    "source_bytes": 786,
+    "source_sha256": "fb31f9cab399f94327582572e48eb6a1679471fac33f25efe761b66571917ec8",
+    "stored_bytes": 786,
+    "stored_sha256": "fb31f9cab399f94327582572e48eb6a1679471fac33f25efe761b66571917ec8",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-controls/run-controls.py",
+    "path": "native-main-integration/index-observer-controls/run-controls.py",
+    "source_bytes": 12764,
+    "source_sha256": "d895c9a30a9e33ce1c530fd1486b45a36ec17d0c343f9b3d7cb4ef796ee77c7d",
+    "stored_bytes": 12764,
+    "stored_sha256": "d895c9a30a9e33ce1c530fd1486b45a36ec17d0c343f9b3d7cb4ef796ee77c7d",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-controls/selection.json",
+    "path": "native-main-integration/index-observer-controls/selection.json",
+    "source_bytes": 10574,
+    "source_sha256": "ce5bfb8a8c17a1186711478227836e6ac484b8fa8f18120f88befa3a158339b2",
+    "stored_bytes": 10574,
+    "stored_sha256": "ce5bfb8a8c17a1186711478227836e6ac484b8fa8f18120f88befa3a158339b2",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-controls/selection.md",
+    "path": "native-main-integration/index-observer-controls/selection.md",
+    "source_bytes": 2555,
+    "source_sha256": "992ca2fad87812dac42c1d23ca0c2289099a6c6fccfbc3da8e8451a057d4ab25",
+    "stored_bytes": 2555,
+    "stored_sha256": "992ca2fad87812dac42c1d23ca0c2289099a6c6fccfbc3da8e8451a057d4ab25",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-controls/summary.json",
+    "path": "native-main-integration/index-observer-controls/summary.json",
+    "source_bytes": 816,
+    "source_sha256": "90b8f7fff3c1b36ecb24ed93ae1edaea03c68b1bf7a3b1473193a95c4124bead",
+    "stored_bytes": 816,
+    "stored_sha256": "90b8f7fff3c1b36ecb24ed93ae1edaea03c68b1bf7a3b1473193a95c4124bead",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-controls-root-verification.json",
+    "path": "native-main-integration/index-observer-controls-root-verification.json",
+    "source_bytes": 912,
+    "source_sha256": "a595c93a6f0470d42ac67a7d8ee8cee4348b9490133990240d40709a83149fdc",
+    "stored_bytes": 912,
+    "stored_sha256": "a595c93a6f0470d42ac67a7d8ee8cee4348b9490133990240d40709a83149fdc",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-inventory-final/complete-staged-check.json",
+    "path": "native-main-integration/index-observer-inventory-final/complete-staged-check.json",
+    "source_bytes": 175,
+    "source_sha256": "4060ffb60e6412d551c795b2c8b1ee96d691f615b9a6918e82825c7fa8f8c058",
+    "stored_bytes": 175,
+    "stored_sha256": "4060ffb60e6412d551c795b2c8b1ee96d691f615b9a6918e82825c7fa8f8c058",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-inventory-final/complete-staged-check.log",
+    "path": "native-main-integration/index-observer-inventory-final/complete-staged-check.log.gz",
+    "source_bytes": 0,
+    "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stored_bytes": 46,
+    "stored_sha256": "2ded953d307b1fd69ca41abed3c2de50dc8b5812d9ac47e95ef301148f681e18",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-inventory-final/policy-after.json",
+    "path": "native-main-integration/index-observer-inventory-final/policy-after.json",
+    "source_bytes": 117317,
+    "source_sha256": "b76a3cb3db1f61d162316dbf7cbac55f04ce4098c09f44d188cf12a9bd6a58e6",
+    "stored_bytes": 117317,
+    "stored_sha256": "b76a3cb3db1f61d162316dbf7cbac55f04ce4098c09f44d188cf12a9bd6a58e6",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-inventory-final/policy-before.json",
+    "path": "native-main-integration/index-observer-inventory-final/policy-before.json",
+    "source_bytes": 117317,
+    "source_sha256": "a97719818a20aea7526683ff5e7d4b2a97d00dcd0430e88d1a056ba85e764599",
+    "stored_bytes": 117317,
+    "stored_sha256": "a97719818a20aea7526683ff5e7d4b2a97d00dcd0430e88d1a056ba85e764599",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-inventory-final/receipt.json",
+    "path": "native-main-integration/index-observer-inventory-final/receipt.json",
+    "source_bytes": 891,
+    "source_sha256": "8ebc5a0773bd5819811235322efe063ce0e6612101b54976f21814de347da11d",
+    "stored_bytes": 891,
+    "stored_sha256": "8ebc5a0773bd5819811235322efe063ce0e6612101b54976f21814de347da11d",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-inventory-final/refresh.json",
+    "path": "native-main-integration/index-observer-inventory-final/refresh.json",
+    "source_bytes": 190,
+    "source_sha256": "c0123ac3a0ac66e2c6bb357438ee6ee3fb20e55aa9ef35b71fa633aa104b4da1",
+    "stored_bytes": 190,
+    "stored_sha256": "c0123ac3a0ac66e2c6bb357438ee6ee3fb20e55aa9ef35b71fa633aa104b4da1",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-inventory-final/refresh.log",
+    "path": "native-main-integration/index-observer-inventory-final/refresh.log.gz",
+    "source_bytes": 79,
+    "source_sha256": "5fb1c804537ff4fb401e38ac18cdffe5d909f1fd9c06b3c0d3a1211b06d377a9",
+    "stored_bytes": 106,
+    "stored_sha256": "bda4c8e9b1340fdaefd08d11c1b535b18b2972d791744152259c06056665cef2",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-inventory-final/source-contract.json",
+    "path": "native-main-integration/index-observer-inventory-final/source-contract.json",
+    "source_bytes": 205,
+    "source_sha256": "742c8be37c9ee5a8aceed1f89fe4d7d559dc517692fde0cebd251a3bab4c27db",
+    "stored_bytes": 205,
+    "stored_sha256": "742c8be37c9ee5a8aceed1f89fe4d7d559dc517692fde0cebd251a3bab4c27db",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-inventory-final/source-contract.log",
+    "path": "native-main-integration/index-observer-inventory-final/source-contract.log.gz",
+    "source_bytes": 83,
+    "source_sha256": "4a90d77e83312d4e40674133586a5899aabb38a922cf1c63a5c628d4954a0baa",
+    "stored_bytes": 112,
+    "stored_sha256": "ae5ec5dba59d17341c80378f10d66b5500abe0243d9e04420a14a69ae049e694",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-inventory-final/source-final.json",
+    "path": "native-main-integration/index-observer-inventory-final/source-final.json.gz",
+    "source_bytes": 1589116,
+    "source_sha256": "21bc95e755d65748083193171e2ba2ed4f0d72454189ac2e61b087e998d5acd3",
+    "stored_bytes": 463640,
+    "stored_sha256": "1bcd883016e64b2a843077081ca53a47af965ad0a4fc080bb80c2620412a05af",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-inventory-final/stage-frozen.json",
+    "path": "native-main-integration/index-observer-inventory-final/stage-frozen.json",
+    "source_bytes": 492,
+    "source_sha256": "05a8a280529ab05efc4d09370dea5f02f3c82fe47cb7434c15d950bfb02214ee",
+    "stored_bytes": 492,
+    "stored_sha256": "05a8a280529ab05efc4d09370dea5f02f3c82fe47cb7434c15d950bfb02214ee",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-inventory-final/stage-frozen.log",
+    "path": "native-main-integration/index-observer-inventory-final/stage-frozen.log.gz",
+    "source_bytes": 0,
+    "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stored_bytes": 37,
+    "stored_sha256": "46e42763b954b8de361dc8dd2e2368798805b67c4dfa79b70adb5fa2880dcc09",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-inventory-final/stage-policy.json",
+    "path": "native-main-integration/index-observer-inventory-final/stage-policy.json",
+    "source_bytes": 186,
+    "source_sha256": "5abcd70241f0048e1fdc951ba3297b394cb51514750c7470daa886fd8c13d166",
+    "stored_bytes": 186,
+    "stored_sha256": "5abcd70241f0048e1fdc951ba3297b394cb51514750c7470daa886fd8c13d166",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-inventory-final/stage-policy.log",
+    "path": "native-main-integration/index-observer-inventory-final/stage-policy.log.gz",
+    "source_bytes": 0,
+    "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stored_bytes": 37,
+    "stored_sha256": "0907dac19967fccb24f5d28949755774a71e42316c6334861bd5f752c4129cf4",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-inventory-final/staged-check.json",
+    "path": "native-main-integration/index-observer-inventory-final/staged-check.json",
+    "source_bytes": 175,
+    "source_sha256": "4060ffb60e6412d551c795b2c8b1ee96d691f615b9a6918e82825c7fa8f8c058",
+    "stored_bytes": 175,
+    "stored_sha256": "4060ffb60e6412d551c795b2c8b1ee96d691f615b9a6918e82825c7fa8f8c058",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-inventory-final/staged-check.log",
+    "path": "native-main-integration/index-observer-inventory-final/staged-check.log.gz",
+    "source_bytes": 0,
+    "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stored_bytes": 37,
+    "stored_sha256": "59356016b2b59be0449f323723b4a31bd75b62924e981c8c4d5d6c6d8ca8d7d1",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-inventory-final/staged-paths.json",
+    "path": "native-main-integration/index-observer-inventory-final/staged-paths.json",
+    "source_bytes": 189,
+    "source_sha256": "2928a4c671b1ec554499c4bd38a91f0648cc49f791e30c1cde72fa435b6fceb4",
+    "stored_bytes": 189,
+    "stored_sha256": "2928a4c671b1ec554499c4bd38a91f0648cc49f791e30c1cde72fa435b6fceb4",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-inventory-final/staged-paths.log",
+    "path": "native-main-integration/index-observer-inventory-final/staged-paths.log.gz",
+    "source_bytes": 9833,
+    "source_sha256": "1012c32bd76efa7c5c030eb187cdbc93da6c544f477ef7e163b4f4b4cee7b053",
+    "stored_bytes": 1665,
+    "stored_sha256": "c3934b01a63068ea801c51f88789d629ff59533f62fe03f55e77fe8d2bc62bab",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-inventory-final/staged-stat.json",
+    "path": "native-main-integration/index-observer-inventory-final/staged-stat.json",
+    "source_bytes": 174,
+    "source_sha256": "19a21ee9f751d16f5b09a2a787a1ea1afd518cbdc6a8438e6a2f75f2e2d83260",
+    "stored_bytes": 174,
+    "stored_sha256": "19a21ee9f751d16f5b09a2a787a1ea1afd518cbdc6a8438e6a2f75f2e2d83260",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-inventory-final/staged-stat.log",
+    "path": "native-main-integration/index-observer-inventory-final/staged-stat.log.gz",
+    "source_bytes": 12866,
+    "source_sha256": "def665f82c1810c80908b1d2cad0757439072c200d45100a586937ef69a1020a",
+    "stored_bytes": 2801,
+    "stored_sha256": "cfc624b93e2d1563dcbb18526791b66d6130d78e8999daa8802ca5de24729240",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-inventory-final/tree-after.json",
+    "path": "native-main-integration/index-observer-inventory-final/tree-after.json",
+    "source_bytes": 150,
+    "source_sha256": "8b7fe0770810ed99aebc7634468c74f2d80a006a1cb4eb6dadf1236b8460dce0",
+    "stored_bytes": 150,
+    "stored_sha256": "8b7fe0770810ed99aebc7634468c74f2d80a006a1cb4eb6dadf1236b8460dce0",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-inventory-final/tree-after.log",
+    "path": "native-main-integration/index-observer-inventory-final/tree-after.log.gz",
+    "source_bytes": 41,
+    "source_sha256": "1a43427062c6dc635ea88c1d70d3435e372b479d1b93fea2fb32c0f2c2efd346",
+    "stored_bytes": 75,
+    "stored_sha256": "b812f6cefdec2f99495ff30e087d6684327c70e7b5a00276d6250a737adac499",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-inventory-final/tree-before.json",
+    "path": "native-main-integration/index-observer-inventory-final/tree-before.json",
+    "source_bytes": 150,
+    "source_sha256": "bef46415829ee93171b744be82fd3122d7bedd697cd24fc395db02a4297505db",
+    "stored_bytes": 150,
+    "stored_sha256": "bef46415829ee93171b744be82fd3122d7bedd697cd24fc395db02a4297505db",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-inventory-final/tree-before.log",
+    "path": "native-main-integration/index-observer-inventory-final/tree-before.log.gz",
+    "source_bytes": 41,
+    "source_sha256": "c90c30b6a97945ffaa1b123bd113ba492196d0dbbc90860b3a6156e52f516d87",
+    "stored_bytes": 75,
+    "stored_sha256": "f3652d86605e22759306237c68634b36f9643983f6ec2dfc0e7e5e935e727a70",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-inventory-final/unchanged-python-check-reuse.json",
+    "path": "native-main-integration/index-observer-inventory-final/unchanged-python-check-reuse.json",
+    "source_bytes": 1211,
+    "source_sha256": "19b8ade63b4974a8c10920c4564626bcb54f6be8834ae34c9e5f28bfea1d45bf",
+    "stored_bytes": 1211,
+    "stored_sha256": "19b8ade63b4974a8c10920c4564626bcb54f6be8834ae34c9e5f28bfea1d45bf",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-repair/HANDOFF.md",
+    "path": "native-main-integration/index-observer-repair/HANDOFF.md",
+    "source_bytes": 4153,
+    "source_sha256": "e802cdcf0d9b6588a8eb1006bc37c8d69e7fe20e45b7259cd4282eb1bd79603e",
+    "stored_bytes": 4153,
+    "stored_sha256": "e802cdcf0d9b6588a8eb1006bc37c8d69e7fe20e45b7259cd4282eb1bd79603e",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-repair/changed-files.json",
+    "path": "native-main-integration/index-observer-repair/changed-files.json",
+    "source_bytes": 1644,
+    "source_sha256": "13c2aa4afcff892039940b54a3a5bca880fd70863f20f46c3289751e64255e4b",
+    "stored_bytes": 1644,
+    "stored_sha256": "13c2aa4afcff892039940b54a3a5bca880fd70863f20f46c3289751e64255e4b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-repair/control-child-source-literals.json",
+    "path": "native-main-integration/index-observer-repair/control-child-source-literals.json",
+    "source_bytes": 870,
+    "source_sha256": "18bc2cf5faddd2a17046534cc243e14172a0ebbfa3aa12ac1d7479f5991d8878",
+    "stored_bytes": 870,
+    "stored_sha256": "18bc2cf5faddd2a17046534cc243e14172a0ebbfa3aa12ac1d7479f5991d8878",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-repair/delta-files/TreeDB/db/native_index_observer_v6_test.go",
+    "path": "native-main-integration/index-observer-repair/delta-files/TreeDB/db/native_index_observer_v6_test.go",
+    "source_bytes": 5846,
+    "source_sha256": "55f74857528e51cc08ac7f46c0a64bfdd586ab77cfa2b69cf315597b8dd9e48d",
+    "stored_bytes": 5846,
+    "stored_sha256": "55f74857528e51cc08ac7f46c0a64bfdd586ab77cfa2b69cf315597b8dd9e48d",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-repair/delta-files/TreeDB/db/native_mvcc_seal_preparation_v6.go",
+    "path": "native-main-integration/index-observer-repair/delta-files/TreeDB/db/native_mvcc_seal_preparation_v6.go",
+    "source_bytes": 29610,
+    "source_sha256": "e30088d2ab5ad5810fbe62c28c00495798adff8b133a50d7da7f0255fd930bae",
+    "stored_bytes": 29610,
+    "stored_sha256": "e30088d2ab5ad5810fbe62c28c00495798adff8b133a50d7da7f0255fd930bae",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-repair/delta-files/TreeDB/internal/rootpublication/native_index_observer_v6_test.go",
+    "path": "native-main-integration/index-observer-repair/delta-files/TreeDB/internal/rootpublication/native_index_observer_v6_test.go",
+    "source_bytes": 5153,
+    "source_sha256": "0bff991e390181c1ae790186f7d733af3473449024ee285dedeaee04e49d11e3",
+    "stored_bytes": 5153,
+    "stored_sha256": "0bff991e390181c1ae790186f7d733af3473449024ee285dedeaee04e49d11e3",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-repair/delta-files/TreeDB/internal/rootpublication/primary_empty_candidate_work_v6.go",
+    "path": "native-main-integration/index-observer-repair/delta-files/TreeDB/internal/rootpublication/primary_empty_candidate_work_v6.go",
+    "source_bytes": 20657,
+    "source_sha256": "a9aa99182df49472a18c30858f456a241c3f5b0d7d54d1930cad5fbb18134968",
+    "stored_bytes": 20657,
+    "stored_sha256": "a9aa99182df49472a18c30858f456a241c3f5b0d7d54d1930cad5fbb18134968",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-repair/delta-files/TreeDB/mvcc/native_prune_backend_route_v6_test.go",
+    "path": "native-main-integration/index-observer-repair/delta-files/TreeDB/mvcc/native_prune_backend_route_v6_test.go",
+    "source_bytes": 23060,
+    "source_sha256": "80d8d4c7a933f05d7a3b7bbdead961e2cdd8757fc15288e086c98b968d7835c8",
+    "stored_bytes": 23060,
+    "stored_sha256": "80d8d4c7a933f05d7a3b7bbdead961e2cdd8757fc15288e086c98b968d7835c8",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-repair/delta-files/TreeDB/pager/write_work.go",
+    "path": "native-main-integration/index-observer-repair/delta-files/TreeDB/pager/write_work.go",
+    "source_bytes": 20078,
+    "source_sha256": "e6f44bc3930565d62b996d9136bbae8fabf86b7f46ef62077a52b162762120da",
+    "stored_bytes": 20078,
+    "stored_sha256": "e6f44bc3930565d62b996d9136bbae8fabf86b7f46ef62077a52b162762120da",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-repair/final-receipt.json",
+    "path": "native-main-integration/index-observer-repair/final-receipt.json",
+    "source_bytes": 708,
+    "source_sha256": "8f2759ff7c931f07826bc6fa11dcd05caffb5b20083c50da0fbd6c7c6e9c8d86",
+    "stored_bytes": 708,
+    "stored_sha256": "8f2759ff7c931f07826bc6fa11dcd05caffb5b20083c50da0fbd6c7c6e9c8d86",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-repair/finalize.py",
+    "path": "native-main-integration/index-observer-repair/finalize.py",
+    "source_bytes": 5456,
+    "source_sha256": "1a34b7a79ab83e243f35ad6c641cf4651077d2e16b28078edc5faa5fcfbdb289",
+    "stored_bytes": 5456,
+    "stored_sha256": "1a34b7a79ab83e243f35ad6c641cf4651077d2e16b28078edc5faa5fcfbdb289",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-repair/freeze-receipt.json",
+    "path": "native-main-integration/index-observer-repair/freeze-receipt.json",
+    "source_bytes": 902,
+    "source_sha256": "43b7d774514c9bd670e0eadb6003bff7636d67e95592ce62c58cf80b551e8011",
+    "stored_bytes": 902,
+    "stored_sha256": "43b7d774514c9bd670e0eadb6003bff7636d67e95592ce62c58cf80b551e8011",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-repair/freeze-tool-first-error.txt",
+    "path": "native-main-integration/index-observer-repair/freeze-tool-first-error.txt.gz",
+    "source_bytes": 254,
+    "source_sha256": "c65e73570c10384d2c73e87fa985f1f83fd4f06bcfe99fa37d7e6e2db81c5ad5",
+    "stored_bytes": 218,
+    "stored_sha256": "5c2a2e75f1e412b0d46f7cef324339b895b4fb40e15dc351efa973342e64c2fb",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-repair/freeze.py",
+    "path": "native-main-integration/index-observer-repair/freeze.py",
+    "source_bytes": 4612,
+    "source_sha256": "2376a72da52818a4fad8baf23385b0994f482657fd267f033a89ff9d92a14a56",
+    "stored_bytes": 4612,
+    "stored_sha256": "2376a72da52818a4fad8baf23385b0994f482657fd267f033a89ff9d92a14a56",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-repair/index-observer-repair.delta.patch",
+    "path": "native-main-integration/index-observer-repair/index-observer-repair.delta.patch.gz",
+    "source_bytes": 22078,
+    "source_sha256": "41c66dceefdf2f48eda29031f3be7a51bcbe5818c17f993d407e70ec194e24aa",
+    "stored_bytes": 5910,
+    "stored_sha256": "4d1eee557a275799afc7cb2cfb6413824d1416369aea293e5e8833c09ed5a5f6",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-repair/invariance.json",
+    "path": "native-main-integration/index-observer-repair/invariance.json",
+    "source_bytes": 684,
+    "source_sha256": "71060a010cbf271d1af7ac2121052a907baacb7e9349a644a70bf2b5403fd097",
+    "stored_bytes": 684,
+    "stored_sha256": "71060a010cbf271d1af7ac2121052a907baacb7e9349a644a70bf2b5403fd097",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-repair/metadata-disposition.json",
+    "path": "native-main-integration/index-observer-repair/metadata-disposition.json",
+    "source_bytes": 793,
+    "source_sha256": "2b7509386416eda272c2ea12322c37db89ae5ee80f30c911d2918bfd7f52ac60",
+    "stored_bytes": 793,
+    "stored_sha256": "2b7509386416eda272c2ea12322c37db89ae5ee80f30c911d2918bfd7f52ac60",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-repair/observer-pricing-and-invariance.md",
+    "path": "native-main-integration/index-observer-repair/observer-pricing-and-invariance.md",
+    "source_bytes": 3926,
+    "source_sha256": "4edc5ad4d4a6f428814c43803d07f9c5470af078744054a79dd43becc36987f4",
+    "stored_bytes": 3926,
+    "stored_sha256": "4edc5ad4d4a6f428814c43803d07f9c5470af078744054a79dd43becc36987f4",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-repair/packet-manifest.json",
+    "path": "native-main-integration/index-observer-repair/packet-manifest.json",
+    "source_bytes": 3326,
+    "source_sha256": "0fab96a15c4ad1b9456be0472ac7f217ad49c515dc841f98ed49dcf6ce759b26",
+    "stored_bytes": 3326,
+    "stored_sha256": "0fab96a15c4ad1b9456be0472ac7f217ad49c515dc841f98ed49dcf6ce759b26",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-repair/pager-prior-control-applicability.json",
+    "path": "native-main-integration/index-observer-repair/pager-prior-control-applicability.json",
+    "source_bytes": 7239,
+    "source_sha256": "f3ed1ee528cb236eaa2031ac9c9754dec48c5ac55570991339a656c88e8cd02f",
+    "stored_bytes": 7239,
+    "stored_sha256": "f3ed1ee528cb236eaa2031ac9c9754dec48c5ac55570991339a656c88e8cd02f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-repair/proposed-commands.json",
+    "path": "native-main-integration/index-observer-repair/proposed-commands.json",
+    "source_bytes": 1415,
+    "source_sha256": "44453dfaf222dd7c1c092a7cb3d50932e818556187bdfab858b4e7d1e67ad41b",
+    "stored_bytes": 1415,
+    "stored_sha256": "44453dfaf222dd7c1c092a7cb3d50932e818556187bdfab858b4e7d1e67ad41b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-repair/proposed-focused-controls.json",
+    "path": "native-main-integration/index-observer-repair/proposed-focused-controls.json",
+    "source_bytes": 10791,
+    "source_sha256": "1756fcb6a5186b2398e01c7ada35a0f58a12bcfa547ede72921735fc87d8763e",
+    "stored_bytes": 10791,
+    "stored_sha256": "1756fcb6a5186b2398e01c7ada35a0f58a12bcfa547ede72921735fc87d8763e",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-repair/run-verification.py",
+    "path": "native-main-integration/index-observer-repair/run-verification.py",
+    "source_bytes": 8071,
+    "source_sha256": "4ae06d9cc1959a4297a830b9788f62e5b74cf15c0f59fe68c5280f6dd3847416",
+    "stored_bytes": 8071,
+    "stored_sha256": "4ae06d9cc1959a4297a830b9788f62e5b74cf15c0f59fe68c5280f6dd3847416",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-repair/source-frozen.json",
+    "path": "native-main-integration/index-observer-repair/source-frozen.json.gz",
+    "source_bytes": 1589116,
+    "source_sha256": "9d6c8de347d5c64c75cbb4d3ae9d0a067d5a9283c7967d466c88633cff06fef9",
+    "stored_bytes": 463638,
+    "stored_sha256": "7acc6ca3ebc4405fde1ac0758fbd31e72b93d491053a3bb6f772c34b56c7194f",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-repair/verification/compile-only/command.json",
+    "path": "native-main-integration/index-observer-repair/verification/compile-only/command.json",
+    "source_bytes": 1671,
+    "source_sha256": "6108ec8c6167e38e3893a746648901698779225ae8055453d40929393acf7eb6",
+    "stored_bytes": 1671,
+    "stored_sha256": "6108ec8c6167e38e3893a746648901698779225ae8055453d40929393acf7eb6",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-repair/verification/compile-only/process.json",
+    "path": "native-main-integration/index-observer-repair/verification/compile-only/process.json",
+    "source_bytes": 144,
+    "source_sha256": "835780c4881eb3e1684a4c0c816a5232c3210233ebd69a576b57626726d8137d",
+    "stored_bytes": 144,
+    "stored_sha256": "835780c4881eb3e1684a4c0c816a5232c3210233ebd69a576b57626726d8137d",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-repair/verification/compile-only/result.json",
+    "path": "native-main-integration/index-observer-repair/verification/compile-only/result.json",
+    "source_bytes": 8963,
+    "source_sha256": "a59d2147d4efc2254e69d4d1681ee5617eb9b8fea4caa8968d4b8a0f71a14651",
+    "stored_bytes": 8963,
+    "stored_sha256": "a59d2147d4efc2254e69d4d1681ee5617eb9b8fea4caa8968d4b8a0f71a14651",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-repair/verification/compile-only/run.log",
+    "path": "native-main-integration/index-observer-repair/verification/compile-only/run.log.gz",
+    "source_bytes": 283,
+    "source_sha256": "2b1a0faae47234b585983397426c81ee8e469cc8e8fe74feaef6d7372acf80f1",
+    "stored_bytes": 137,
+    "stored_sha256": "697fb4eedb254640254b0ae7cc28fc1111e02b6c1b552894b35e1f8f0f201b86",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-repair/verification/compile-only/source-after.json",
+    "path": "native-main-integration/index-observer-repair/verification/compile-only/source-after.json.gz",
+    "source_bytes": 1589116,
+    "source_sha256": "9d6c8de347d5c64c75cbb4d3ae9d0a067d5a9283c7967d466c88633cff06fef9",
+    "stored_bytes": 463637,
+    "stored_sha256": "688d745563e7f25a0f4f7d07bfb512ad748418cebbeedb84befe0b321fe13260",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-repair/verification/compile-only/source-before.json",
+    "path": "native-main-integration/index-observer-repair/verification/compile-only/source-before.json.gz",
+    "source_bytes": 1589116,
+    "source_sha256": "9d6c8de347d5c64c75cbb4d3ae9d0a067d5a9283c7967d466c88633cff06fef9",
+    "stored_bytes": 463638,
+    "stored_sha256": "0048ebba5240d7422d3a4845d4ee4cd4d96e46d37869f83bf2deead987683f23",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-repair/verification/identity.json",
+    "path": "native-main-integration/index-observer-repair/verification/identity.json",
+    "source_bytes": 743,
+    "source_sha256": "3bb9d85ea4c107eb3fa424a854490c4deb2a2e7a72d98677ecd763fba1d9e8b5",
+    "stored_bytes": 743,
+    "stored_sha256": "3bb9d85ea4c107eb3fa424a854490c4deb2a2e7a72d98677ecd763fba1d9e8b5",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-repair/verification/summary.json",
+    "path": "native-main-integration/index-observer-repair/verification/summary.json",
+    "source_bytes": 740,
+    "source_sha256": "3ae2009321e24f6a40fdf50d61a74d8b2301b3d3e8cd989d37166b41451714b6",
+    "stored_bytes": 740,
+    "stored_sha256": "3ae2009321e24f6a40fdf50d61a74d8b2301b3d3e8cd989d37166b41451714b6",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-root-verification.json",
+    "path": "native-main-integration/index-observer-root-verification.json",
+    "source_bytes": 1296,
+    "source_sha256": "cd91b75b7be7bade76631bb1679b2e0228a80d831dcfcffd2eae3505eefa930a",
+    "stored_bytes": 1296,
+    "stored_sha256": "cd91b75b7be7bade76631bb1679b2e0228a80d831dcfcffd2eae3505eefa930a",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/select-index-observer-controls.py",
+    "path": "native-main-integration/select-index-observer-controls.py",
+    "source_bytes": 5234,
+    "source_sha256": "082d26dc7de730a85860263ce9cc19215dc7cf82e2b117ed0b243b203e9a46bb",
+    "stored_bytes": 5234,
+    "stored_sha256": "082d26dc7de730a85860263ce9cc19215dc7cf82e2b117ed0b243b203e9a46bb",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/verify-index-observer-controls.py",
+    "path": "native-main-integration/verify-index-observer-controls.py",
+    "source_bytes": 4141,
+    "source_sha256": "30fb95501ef053a531b43250e3e1111a91c1112b7e3c9359bf3c3217c62227be",
+    "stored_bytes": 4141,
+    "stored_sha256": "30fb95501ef053a531b43250e3e1111a91c1112b7e3c9359bf3c3217c62227be",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/verify-index-observer-repair.py",
+    "path": "native-main-integration/verify-index-observer-repair.py",
+    "source_bytes": 3932,
+    "source_sha256": "1cb6eedc1fe1e0aeaf7ca5e0dd89e2e1bd77c8d34ce8c2512e06a4192a004bff",
+    "stored_bytes": 3932,
+    "stored_sha256": "1cb6eedc1fe1e0aeaf7ca5e0dd89e2e1bd77c8d34ce8c2512e06a4192a004bff",
+    "encoding": "identity"
+  }
+]

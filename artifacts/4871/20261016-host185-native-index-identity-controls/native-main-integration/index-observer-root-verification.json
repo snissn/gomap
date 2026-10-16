@@ -1,0 +1,28 @@
+{
+  "verified_utc": "2026-10-16T03:58:10.377479+00:00",
+  "verifier_sha256": "1cb6eedc1fe1e0aeaf7ca5e0dd89e2e1bd77c8d34ce8c2512e06a4192a004bff",
+  "source_manifest_sha256": "9d6c8de347d5c64c75cbb4d3ae9d0a067d5a9283c7967d466c88633cff06fef9",
+  "source_archive_sha256": "72eb1c83025494d45be6450db3c274f8224a97277bdad90aaf6fe9fe9750a6bc",
+  "source_files": 10377,
+  "exact_delta_paths": [
+    "TreeDB/db/native_index_observer_v6_test.go",
+    "TreeDB/db/native_mvcc_seal_preparation_v6.go",
+    "TreeDB/internal/rootpublication/native_index_observer_v6_test.go",
+    "TreeDB/internal/rootpublication/primary_empty_candidate_work_v6.go",
+    "TreeDB/mvcc/native_prune_backend_route_v6_test.go",
+    "TreeDB/pager/write_work.go"
+  ],
+  "compile_packages": [
+    "TreeDB/db",
+    "TreeDB/internal/rootpublication",
+    "TreeDB/pager",
+    "TreeDB/mvcc"
+  ],
+  "compile_elapsed_seconds": 68.08065708819777,
+  "test_bodies": 0,
+  "source_before_after_unchanged": true,
+  "compiler_and_process_join_verified": true,
+  "stale_metadata_note": "command.source_only_selection_sha256 copied from old54c32af1 origin proposal. Actual grant_sha256 and runner assert7c9941; exact authorized argv/source are verified. Original record retained.",
+  "further_runtime_executed": false,
+  "native_publication": false
+}

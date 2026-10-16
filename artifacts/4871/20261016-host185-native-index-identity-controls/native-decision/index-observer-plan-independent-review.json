@@ -1,0 +1,120 @@
+{
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW; immutable source and retained evidence; diagnosis/plan only",
+  "reviewer": "/root/ordinary_review",
+  "model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "routing": "explicit existing root-assigned route",
+  "hosted_review_unavailability_reason": "Hosted manual review cannot pin the explicitly required exact model; no hosted review requested or performed.",
+  "verdict": "ACCEPT",
+  "verdict_scope": "Source-supported diagnosis and selected minimal observer repair plan only. Frozen predecessor observer remains defective; implementation review and runtime grants are separate.",
+  "candidate_edits_by_reviewer": false,
+  "children_spawned": false,
+  "source_manifest_sha256": "041b0ddfca3581c2b773ceb857a27b2dd4c718775b45a9cb71d0c7cc3107744d",
+  "source_archive_sha256": "963f9deb573465a5e56a9e2d94841058851bbc2ae28e01cc7533e7cee7106182",
+  "source_files": 10375,
+  "source_tree": "2fc987a8d295af50286fa81d103537e569466eda",
+  "verification": {
+    "archive_members_equal_entire_manifest": true,
+    "archive_member_count": 10375,
+    "evidence_payload_hashes_match": 17,
+    "evidence_archive_members_match_payloads_plus_manifest": 18,
+    "live_mutable_native_integrated_read": false,
+    "tests_or_builds_or_runtime_launched_by_reviewer": false
+  },
+  "input_sha256": {
+    "native-main-integration/fixture-inventory-final/source-final.json": "041b0ddfca3581c2b773ceb857a27b2dd4c718775b45a9cb71d0c7cc3107744d",
+    "native-main-integration/fixture-inventory-final/source-final.tar.gz": "963f9deb573465a5e56a9e2d94841058851bbc2ae28e01cc7533e7cee7106182",
+    "native-decision/integrated-index-observer-failure-diagnosis.md": "378e53e227244ab9bca70319f1f2243b90e5078744c429570ab9c89d37589bc7",
+    "native-decision/root-index-observer-repair-selection.md": "7c9941e990ba64cfd413ec66ffd2bf649d6fe829c599f20052d33d940f07fdfe",
+    "native-main-integration/actual33-root-verification.json": "bcebbe1d48fc9287730decc1ba8601bea5b9108748db3fe0e6990b7055ba2651",
+    "native-main-integration/actual33-observation/evidence-manifest.json": "7b436f31954838bd68864988309f4f977994932941b9626221de71db6d1832dd",
+    "native-main-integration/actual33-observation/evidence.tar.gz": "1cb3c15e7d5844ba2ccecf62ae345fcc97d59e8413db8820d18d53ff2842bc1e",
+    "native-main-integration/actual33-observation/actual33-promoted-integrated-previsibility-observation/run.log": "b8e3a82ea642c953abf82b221960ca6cc41ebfce1f9b6fdd192217612f4879cb",
+    "native-main-integration/actual33-observation/actual33-promoted-integrated-previsibility-observation/process.json": "5212f590f4b551a0e48ad283eb6ca1b8fe1c845d4a61624005c62135abac1b14",
+    "native-main-integration/actual33-observation/actual33-promoted-integrated-previsibility-observation/result.json": "f58ed6f4027725d48bbf5b65bc4987ea8b2c3aa629e00f38c5a83ccd31bf810f",
+    "native-main-integration/actual33-observation/summary.json": "6f6e0e63370533760b9faa37d501569f3aa0e0d622418532746eec0530e8e1ae"
+  },
+  "inspected_source_sha256": {
+    "TreeDB/db/native_stable_pager_capture_v6.go": "a5b9f6023ccb7460005b49ba086a901f436a4b1ce43d51f7c800afc05c9184a6",
+    "TreeDB/db/native_stable_pager_capture_v6_test.go": "278f996347dea753455a12c40cc51717f7adbc542e32cb27864b2e88f835a63d",
+    "TreeDB/db/stable_pager_owned_operations.go": "033f88c049979a5c218ec7c24634fae4c72d6b510247da3941937fd87bef3b3b",
+    "TreeDB/db/native_mvcc_seal_preparation_v6.go": "55e104f6992d6450385cc7c01974a4649f4b8a4abd0b4aaab2a779d4c48d0926",
+    "TreeDB/internal/rootpublication/index_token_construction_work_v6.go": "da748bf95e4cdad4f6780515ade4298a0142d3078ca185dad8d33b1869f9d18a",
+    "TreeDB/internal/rootpublication/resource_identity_unix.go": "955a855992f05cf2b54b056fb02039f22eb99296acb6a544e3993ab7eaccf60a",
+    "TreeDB/internal/rootpublication/resource_token_allocation.go": "093351a97507768afde45afa288b6a6b46234fcecb866f9d612f8aa7603a1ed5",
+    "TreeDB/internal/rootpublication/resource_token.go": "463fcd6b40680b2d81c9f142efd99b787c98cc4d2ca5fa56b0a3ab50413c02e0",
+    "TreeDB/internal/rootpublication/resource_original_cleanup.go": "be01b344603485b43b21d89bd37a9acab5edd23a3f392a0dbc513c6722a490fb",
+    "TreeDB/internal/rootpublication/resource_index_sync_work_v6.go": "925563404dd295d3ec80d4cbe34c38a735a571132826140c31ddba65262822ad",
+    "TreeDB/internal/rootpublication/primary_empty_candidate_work_v6.go": "5e3ad4df80ae76fb70fe678f84097fd75c45ecfa5bb66c284a48a8d0216f3620",
+    "TreeDB/pager/pager.go": "2ce5317be3fcf54157e98315ac1a9e107ab03c71a7487a503cf04ff3db8e07a6",
+    "TreeDB/pager/write_work.go": "b0ac447b9c5b69fe0cb92268c98c1c5550c8c3df2dabcec6bef20540ea8b5bdf",
+    "TreeDB/pager/native_file_fence_v6.go": "1fd9ba6dc061e533ddacfc0fdc050938f59a65ea59d2010604c388d52c5a4f25",
+    "TreeDB/pager/native_file_fence_linux_v6.go": "5fd7ca9620c24e81694905f223ad8279c884a9e8a5391585fdf584091496e4ae",
+    "TreeDB/mvcc/native_prune_backend_route_v6_test.go": "d234442527141be4e52b5bba5e607d28e6aea916f6e8670b4bca7962beabbc29"
+  },
+  "confirmed_predecessor_findings": [
+    {
+      "id": "O1",
+      "severity": "blocking original observer",
+      "path": "TreeDB/pager/write_work.go",
+      "line": 449,
+      "trigger": "First actual33 group4 original index observer; deterministically affects both DATA and PRIMARY.",
+      "cause": "Retained token file is intentionally produced by Dup/NewFile; requiring its Go File pointer to equal original pager.file rejects the correct independently retained object.",
+      "caller": "TreeDB/internal/rootpublication/primary_empty_candidate_work_v6.go:329; TreeDB/db/native_mvcc_seal_preparation_v6.go:140; TreeDB/mvcc/native_prune_backend_route_v6_test.go:349",
+      "selected_correction": "Same original operations and selected snapshot pager; normalized full captured identity; exact original pinned backing/ref/metadata/registry closure. Remove invalid sole-caller pager equality helper."
+    }
+  ],
+  "new_plan_blockers": [],
+  "interpretation": {
+    "generation": "Compare full token identity against immutable capture.identity with only Generation set to retained snapshot.idx.id, as original constructor does. Namespace physical equality deliberately excludes generation.",
+    "custody": "False custodyCompleted is expected pending consumption, not incomplete construction. Strengthen presence/nonzero charge/pending/owner/registry checks without Complete or new custody.",
+    "lifetime": "Capture token aliases move into the two original seal slots; snapshot completion and embedded capture remain. Same original last consumer closes Snapshot, releases physical owner, consumes custody, clears aliases, then refunds. Observation must not mutate that graph.",
+    "observations_atomic": false
+  },
+  "minimal_scope": [
+    "Observer only in db/native_mvcc_seal_preparation_v6.go",
+    "Token/custody observation helpers in rootpublication/primary_empty_candidate_work_v6.go",
+    "Remove unused invalid equality observer in pager/write_work.go",
+    "Matching mvcc/native_prune_backend_route_v6_test.go assertions",
+    "At most selected narrow db/rootpublication controls; no constructor/publisher/release/owner/layout/F293/R145/cap change"
+  ],
+  "control_requirements": [
+    "Both real original DATA and PRIMARY captures, actual step/close, same cleanup baselines, unchanged per-turn Q32/1MiB",
+    "Reject wrong selected pager, operations, physical identity, logical generation, missing or mismatched physical backing; no fabricated seal/member/receipt",
+    "Zero/short observer budget has no owner/ref/custody effects; scalar reads and comparisons reserved before use",
+    "Source freeze and separate implementation review before any separately authorized fixture execution; no actual33 repeat from this review"
+  ],
+  "actual33": {
+    "commands": 1,
+    "exit_code": 1,
+    "status": "FAIL retained",
+    "phase": 26,
+    "candidate_phase": 8,
+    "seal_phase": 13,
+    "first_refusal_calls": 157,
+    "original_index0_observer_ready": true,
+    "same_retained_fd": false,
+    "custody_completed": false,
+    "native_publication_executed": false,
+    "process_group_join_evidence": "leader joined; subreaper verified; no remaining group/direct/adopted children; no signals or timeout",
+    "unreached": [
+      "Detailed index1 observer",
+      "Remaining group4 retention rows",
+      "Group5",
+      "Later new-writer/stale/cancel/old-reader/reopen assertions"
+    ],
+    "partial_expression": {
+      "records": 367,
+      "bytes": 871273,
+      "complete_retention_or_finish_bound": false
+    }
+  },
+  "limits": [
+    "Not an implementation/source-successor acceptance",
+    "No native publication, actual33 rerun, numeric allowance, aggregate retained-total, full Finish or C1/C3 qualification",
+    "Original Q32/1MiB/33/80/4096 remain RED/ACK0",
+    "No mutable source or Git/GitHub inspection/mutation; predecessor archive is the reviewed source",
+    "Prior focused controls remain separately attributed, not proof of the failed observer or unexecuted stages"
+  ],
+  "lease_released": true
+}

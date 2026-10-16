@@ -1,0 +1,19 @@
+{
+  "all_other_original_files_byte_exact": 10371,
+  "deletions": 0,
+  "new_tests": 2,
+  "production_body_proofs": {
+    "TreeDB/db/native_mvcc_seal_preparation_v6.go": {
+      "production_suffix_sha256": "763efb528775e3e61d3db515d60b24d89ee795ef287104580d95d85e7ac719f3",
+      "unchanged": true
+    },
+    "TreeDB/internal/rootpublication/primary_empty_candidate_work_v6.go": {
+      "prefix_except_removed_unused_import_unchanged": true
+    },
+    "TreeDB/pager/write_work.go": {
+      "production_suffix_sha256": "56cec397bcf2f45054f538320b58a10a45fe380e72536229a5f358e1751af711",
+      "unchanged": true
+    }
+  },
+  "production_layouts_F293_R145_caps_lifetime_unchanged": true
+}

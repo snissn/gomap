@@ -1,0 +1,30 @@
+{
+  "FAIL_names": [
+    "TestNativeIndexObserverOriginalCapturesV6",
+    "TestNativeIndexObserverOriginalCapturesV6/DATA",
+    "TestNativeIndexObserverOriginalCapturesV6/PRIMARY"
+  ],
+  "actual33_executed": false,
+  "child_PASS": 13,
+  "child_RUN": 15,
+  "commands_executed": 1,
+  "commands_not_executed": [
+    "rootpublication-original-backing-normal",
+    "db-original-captures-race",
+    "rootpublication-original-backing-race"
+  ],
+  "group_empty": true,
+  "index_unchanged": true,
+  "native_publication_executed": false,
+  "pgid": 1017854,
+  "pid": 1017854,
+  "public_status": "Q32 RED/ACK0/noAllowanceChosen",
+  "runtime_lease": "RELEASED",
+  "source_files": 10377,
+  "source_frozen": true,
+  "source_manifest_sha256": "21bc95e755d65748083193171e2ba2ed4f0d72454189ac2e61b087e998d5acd3",
+  "source_mutated": false,
+  "status": "FIRST_CALL_FAIL; no retry",
+  "top_PASS": 2,
+  "top_RUN": 3
+}

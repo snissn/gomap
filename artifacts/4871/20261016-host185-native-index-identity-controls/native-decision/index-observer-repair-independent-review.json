@@ -1,0 +1,468 @@
+{
+  "reviewer": "/root/ordinary_review",
+  "actual_model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW; immutable source plus retained compile-only evidence",
+  "hosted_review_unavailability_reason": "Hosted manual review cannot pin the required exact model; none requested/performed.",
+  "verdict": "ACCEPT",
+  "scope": "Six-path observer implementation and fixture source on exact 9d6c8de manifest, extended to exact 21bc95e metadata-only successor. Focused fixture runtime remains pending. No whole native publication or qualification acceptance.",
+  "candidate_edits_by_reviewer": false,
+  "reviewer_runtime_executed": false,
+  "children_spawned": false,
+  "mutable_native_integrated_read": false,
+  "source_manifest_sha256": "9d6c8de347d5c64c75cbb4d3ae9d0a067d5a9283c7967d466c88633cff06fef9",
+  "source_archive_sha256": "72eb1c83025494d45be6450db3c274f8224a97277bdad90aaf6fe9fe9750a6bc",
+  "source_files": 10377,
+  "base_manifest_sha256": "041b0ddfca3581c2b773ceb857a27b2dd4c718775b45a9cb71d0c7cc3107744d",
+  "source_archive_full_member_path_hash_equality": true,
+  "delta_sha256": "41c66dceefdf2f48eda29031f3be7a51bcbe5818c17f993d407e70ec194e24aa",
+  "delta_reconstructed_exactly_from_archives": true,
+  "delta_unified_context": 4,
+  "changes": [
+    {
+      "after_sha256": "55f74857528e51cc08ac7f46c0a64bfdd586ab77cfa2b69cf315597b8dd9e48d",
+      "before_sha256": null,
+      "bytes": 5846,
+      "path": "TreeDB/db/native_index_observer_v6_test.go",
+      "status": "added"
+    },
+    {
+      "after_sha256": "e30088d2ab5ad5810fbe62c28c00495798adff8b133a50d7da7f0255fd930bae",
+      "before_sha256": "55e104f6992d6450385cc7c01974a4649f4b8a4abd0b4aaab2a779d4c48d0926",
+      "bytes": 29610,
+      "path": "TreeDB/db/native_mvcc_seal_preparation_v6.go",
+      "status": "modified"
+    },
+    {
+      "after_sha256": "0bff991e390181c1ae790186f7d733af3473449024ee285dedeaee04e49d11e3",
+      "before_sha256": null,
+      "bytes": 5153,
+      "path": "TreeDB/internal/rootpublication/native_index_observer_v6_test.go",
+      "status": "added"
+    },
+    {
+      "after_sha256": "a9aa99182df49472a18c30858f456a241c3f5b0d7d54d1930cad5fbb18134968",
+      "before_sha256": "5e3ad4df80ae76fb70fe678f84097fd75c45ecfa5bb66c284a48a8d0216f3620",
+      "bytes": 20657,
+      "path": "TreeDB/internal/rootpublication/primary_empty_candidate_work_v6.go",
+      "status": "modified"
+    },
+    {
+      "after_sha256": "80d8d4c7a933f05d7a3b7bbdead961e2cdd8757fc15288e086c98b968d7835c8",
+      "before_sha256": "d234442527141be4e52b5bba5e607d28e6aea916f6e8670b4bca7962beabbc29",
+      "bytes": 23060,
+      "path": "TreeDB/mvcc/native_prune_backend_route_v6_test.go",
+      "status": "modified"
+    },
+    {
+      "after_sha256": "e6f44bc3930565d62b996d9136bbae8fabf86b7f46ef62077a52b162762120da",
+      "before_sha256": "b0ac447b9c5b69fe0cb92268c98c1c5550c8c3df2dabcec6bef20540ea8b5bdf",
+      "bytes": 20078,
+      "path": "TreeDB/pager/write_work.go",
+      "status": "modified"
+    }
+  ],
+  "unchanged_original_files": 10371,
+  "deletions": 0,
+  "production_invariance": {
+    "db_production_suffix_after_observer_byte_exact": true,
+    "rootpublication_production_prefix_except_unused_pager_import_byte_exact": true,
+    "pager_production_prefix_before_removed_observer_byte_exact": true,
+    "constructors_publishers_release_owners_retained_layouts_F293_R145_caps_unchanged": true
+  },
+  "input_sha256": {
+    "native-main-integration/index-observer-repair/source-frozen.json": "9d6c8de347d5c64c75cbb4d3ae9d0a067d5a9283c7967d466c88633cff06fef9",
+    "native-main-integration/index-observer-repair/source-frozen.tar.gz": "72eb1c83025494d45be6450db3c274f8224a97277bdad90aaf6fe9fe9750a6bc",
+    "native-main-integration/index-observer-repair/index-observer-repair.delta.patch": "41c66dceefdf2f48eda29031f3be7a51bcbe5818c17f993d407e70ec194e24aa",
+    "native-main-integration/index-observer-repair/changed-files.json": "13c2aa4afcff892039940b54a3a5bca880fd70863f20f46c3289751e64255e4b",
+    "native-main-integration/index-observer-repair/invariance.json": "71060a010cbf271d1af7ac2121052a907baacb7e9349a644a70bf2b5403fd097",
+    "native-main-integration/index-observer-repair/observer-pricing-and-invariance.md": "4edc5ad4d4a6f428814c43803d07f9c5470af078744054a79dd43becc36987f4",
+    "native-main-integration/index-observer-repair/proposed-focused-controls.json": "1756fcb6a5186b2398e01c7ada35a0f58a12bcfa547ede72921735fc87d8763e",
+    "native-decision/root-index-observer-repair-selection.md": "7c9941e990ba64cfd413ec66ffd2bf649d6fe829c599f20052d33d940f07fdfe",
+    "native-decision/index-observer-plan-independent-review.md": "24176beb4797317d5a4087ae68acb9ea061599b00062c556a9e9a566715e882f",
+    "native-main-integration/index-observer-repair/verification/identity.json": "3bb9d85ea4c107eb3fa424a854490c4deb2a2e7a72d98677ecd763fba1d9e8b5",
+    "native-main-integration/index-observer-repair/verification/compile-only/command.json": "6108ec8c6167e38e3893a746648901698779225ae8055453d40929393acf7eb6",
+    "native-main-integration/index-observer-repair/verification/compile-only/process.json": "835780c4881eb3e1684a4c0c816a5232c3210233ebd69a576b57626726d8137d",
+    "native-main-integration/index-observer-repair/verification/compile-only/result.json": "a59d2147d4efc2254e69d4d1681ee5617eb9b8fea4caa8968d4b8a0f71a14651",
+    "native-main-integration/index-observer-repair/verification/compile-only/run.log": "2b1a0faae47234b585983397426c81ee8e469cc8e8fe74feaef6d7372acf80f1",
+    "native-main-integration/index-observer-repair/verification/summary.json": "3ae2009321e24f6a40fdf50d61a74d8b2301b3d3e8cd989d37166b41451714b6"
+  },
+  "findings": [],
+  "resolved_predecessor_defect": "Intentional duplicated File is validated by immutable full captured identity, original pin/backing/ref-counter/metadata/registry and original operations; it is no longer compared to pager.file. Both index-selected pagers independently checked.",
+  "closing_disposition": {
+    "retained_identity_requires_original_pager_open": false,
+    "Closing_still_reported": true,
+    "NativeFenceSupported_still_requires_not_Closing": true,
+    "actual_pre_enqueue_capability_check": "db/native_mvcc_final_basis_v6.go:76 -> pager.ValidateNativeFileFenceWithWorkV6, still rejects closing under pager RLock",
+    "interpretation": "An original pager retirement does not invalidate an independently retained file identity. Observation cannot authorize activation; actual production capability gates unchanged."
+  },
+  "platform_comparison_disposition": "Native capture, duplicate identity and identity-pin derive Platform from runtime.GOOS; no arbitrary external Platform text enters the selected production observer. Header/full-value comparisons are covered by expanded Sizeof expressions with constant platform provenance. Negative platform control changes length; not a new variable-content production operation. No generic arbitrary-string traffic guarantee claimed.",
+  "observer_pricing": {
+    "public_selection_records": 1,
+    "capture_core_records": 2,
+    "token_geometry_records": 2,
+    "identity_binding_records": 2,
+    "custody_records": 1,
+    "pager_geometry_records": 3,
+    "total_records": 11,
+    "direct_core_records": 10,
+    "byte_expressions_match_source": true,
+    "reservation_before_corresponding_operand_reads": true,
+    "invocation_record_limit": 32,
+    "invocation_byte_limit": 1048576,
+    "retained_storage_or_product_F_change": false
+  },
+  "compile_only": {
+    "commands": 1,
+    "packages": 4,
+    "exit_code": 0,
+    "elapsed_seconds": 68.08065708819777,
+    "zero_test_RUN": true,
+    "no_test_bodies": true,
+    "before_after_exact_frozen_manifest": true,
+    "go_and_compile_binary_hashes_independently_verified": true,
+    "leader_joined": true,
+    "groups_and_children_empty": true,
+    "remaining_group_members": [],
+    "remaining_direct_or_adopted_children": [],
+    "timeout": false,
+    "signals": []
+  },
+  "focused_selector_advice": {
+    "proposal_sha256": "1756fcb6a5186b2398e01c7ada35a0f58a12bcfa547ede72921735fc87d8763e",
+    "commands": [
+      {
+        "argv": [
+          "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+          "test",
+          "-p=1",
+          "-parallel=1",
+          "-count=1",
+          "-v",
+          "-timeout=3m",
+          "-run",
+          "^(TestNativeIndexObserverOriginalCapturesV6|TestNativeStablePagerPartialTokenCancellationV6|TestNativePagerOperationsPartialConstructionAndCancellationV6)$",
+          "./TreeDB/db"
+        ],
+        "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+        "env": {
+          "CGO_ENABLED": "1",
+          "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+          "GODEBUG": "",
+          "GOENV": "off",
+          "GOFLAGS": "",
+          "GOGC": "100",
+          "GOMAXPROCS": "2",
+          "GOMEMLIMIT": "8GiB",
+          "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+          "GOPROXY": "off",
+          "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+          "GOSUMDB": "off",
+          "GOTOOLCHAIN": "local",
+          "GOWORK": "off",
+          "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-repair/future-controls/db-original-captures-normal/tmp"
+        },
+        "executed": false,
+        "name": "db-original-captures-normal",
+        "outer_timeout_seconds": 300,
+        "required_child_tests": [
+          "TestNativeIndexObserverOriginalCapturesV6/DATA",
+          "TestNativeIndexObserverOriginalCapturesV6/PRIMARY",
+          "TestNativeStablePagerPartialTokenCancellationV6/before-token",
+          "TestNativeStablePagerPartialTokenCancellationV6/growth-refusal",
+          "TestNativeStablePagerPartialTokenCancellationV6/token-only",
+          "TestNativeStablePagerPartialTokenCancellationV6/before-pinned-backing",
+          "TestNativeStablePagerPartialTokenCancellationV6/before-retain",
+          "TestNativeStablePagerPartialTokenCancellationV6/after-retain",
+          "TestNativePagerOperationsPartialConstructionAndCancellationV6/before-output",
+          "TestNativePagerOperationsPartialConstructionAndCancellationV6/output-only",
+          "TestNativePagerOperationsPartialConstructionAndCancellationV6/custody-before-owner",
+          "TestNativePagerOperationsPartialConstructionAndCancellationV6/complete",
+          "TestNativePagerOperationsPartialConstructionAndCancellationV6/resume-output",
+          "TestNativePagerOperationsPartialConstructionAndCancellationV6/resume-custody",
+          "TestNativePagerOperationsPartialConstructionAndCancellationV6/owner-overflow"
+        ],
+        "required_top_level_tests": [
+          "TestNativeIndexObserverOriginalCapturesV6",
+          "TestNativeStablePagerPartialTokenCancellationV6",
+          "TestNativePagerOperationsPartialConstructionAndCancellationV6"
+        ]
+      },
+      {
+        "argv": [
+          "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+          "test",
+          "-p=1",
+          "-parallel=1",
+          "-count=1",
+          "-v",
+          "-timeout=3m",
+          "-run",
+          "^(TestNativeIndexObserverOriginalBackingV6|TestOriginalCleanupCustodyTypedGrowthAndRefundV6|TestOriginalCleanupCustodyTypedUnsupportedAndOrdinaryV6|TestOriginalCleanupCustodyTypedClosingAndOverflowV6)$",
+          "./TreeDB/internal/rootpublication"
+        ],
+        "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+        "env": {
+          "CGO_ENABLED": "1",
+          "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+          "GODEBUG": "",
+          "GOENV": "off",
+          "GOFLAGS": "",
+          "GOGC": "100",
+          "GOMAXPROCS": "2",
+          "GOMEMLIMIT": "8GiB",
+          "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+          "GOPROXY": "off",
+          "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+          "GOSUMDB": "off",
+          "GOTOOLCHAIN": "local",
+          "GOWORK": "off",
+          "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-repair/future-controls/rootpublication-original-backing-normal/tmp"
+        },
+        "executed": false,
+        "name": "rootpublication-original-backing-normal",
+        "outer_timeout_seconds": 300,
+        "required_child_tests": [
+          "TestNativeIndexObserverOriginalBackingV6/platform",
+          "TestNativeIndexObserverOriginalBackingV6/volume",
+          "TestNativeIndexObserverOriginalBackingV6/object",
+          "TestNativeIndexObserverOriginalBackingV6/generation",
+          "TestNativeIndexObserverOriginalBackingV6/missing-backing",
+          "TestNativeIndexObserverOriginalBackingV6/wrong-file",
+          "TestNativeIndexObserverOriginalBackingV6/wrong-refs",
+          "TestNativeIndexObserverOriginalBackingV6/zero-refs",
+          "TestNativeIndexObserverOriginalBackingV6/wrong-owner",
+          "TestNativeIndexObserverOriginalBackingV6/wrong-registry",
+          "TestNativeIndexObserverOriginalBackingV6/missing-pin",
+          "TestNativeIndexObserverOriginalBackingV6/wrong-pin-identity",
+          "TestNativeIndexObserverOriginalBackingV6/released"
+        ],
+        "required_top_level_tests": [
+          "TestNativeIndexObserverOriginalBackingV6",
+          "TestOriginalCleanupCustodyTypedGrowthAndRefundV6",
+          "TestOriginalCleanupCustodyTypedUnsupportedAndOrdinaryV6",
+          "TestOriginalCleanupCustodyTypedClosingAndOverflowV6"
+        ]
+      },
+      {
+        "argv": [
+          "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+          "test",
+          "-p=1",
+          "-parallel=1",
+          "-count=1",
+          "-v",
+          "-timeout=3m",
+          "-race",
+          "-run",
+          "^(TestNativeIndexObserverOriginalCapturesV6|TestNativeStablePagerPartialTokenCancellationV6|TestNativePagerOperationsPartialConstructionAndCancellationV6)$",
+          "./TreeDB/db"
+        ],
+        "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+        "env": {
+          "CGO_ENABLED": "1",
+          "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+          "GODEBUG": "",
+          "GOENV": "off",
+          "GOFLAGS": "",
+          "GOGC": "100",
+          "GOMAXPROCS": "2",
+          "GOMEMLIMIT": "8GiB",
+          "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+          "GOPROXY": "off",
+          "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+          "GOSUMDB": "off",
+          "GOTOOLCHAIN": "local",
+          "GOWORK": "off",
+          "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-repair/future-controls/db-original-captures-race/tmp"
+        },
+        "executed": false,
+        "name": "db-original-captures-race",
+        "outer_timeout_seconds": 360,
+        "required_child_tests": [
+          "TestNativeIndexObserverOriginalCapturesV6/DATA",
+          "TestNativeIndexObserverOriginalCapturesV6/PRIMARY",
+          "TestNativeStablePagerPartialTokenCancellationV6/before-token",
+          "TestNativeStablePagerPartialTokenCancellationV6/growth-refusal",
+          "TestNativeStablePagerPartialTokenCancellationV6/token-only",
+          "TestNativeStablePagerPartialTokenCancellationV6/before-pinned-backing",
+          "TestNativeStablePagerPartialTokenCancellationV6/before-retain",
+          "TestNativeStablePagerPartialTokenCancellationV6/after-retain",
+          "TestNativePagerOperationsPartialConstructionAndCancellationV6/before-output",
+          "TestNativePagerOperationsPartialConstructionAndCancellationV6/output-only",
+          "TestNativePagerOperationsPartialConstructionAndCancellationV6/custody-before-owner",
+          "TestNativePagerOperationsPartialConstructionAndCancellationV6/complete",
+          "TestNativePagerOperationsPartialConstructionAndCancellationV6/resume-output",
+          "TestNativePagerOperationsPartialConstructionAndCancellationV6/resume-custody",
+          "TestNativePagerOperationsPartialConstructionAndCancellationV6/owner-overflow"
+        ],
+        "required_top_level_tests": [
+          "TestNativeIndexObserverOriginalCapturesV6",
+          "TestNativeStablePagerPartialTokenCancellationV6",
+          "TestNativePagerOperationsPartialConstructionAndCancellationV6"
+        ]
+      },
+      {
+        "argv": [
+          "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+          "test",
+          "-p=1",
+          "-parallel=1",
+          "-count=1",
+          "-v",
+          "-timeout=3m",
+          "-race",
+          "-run",
+          "^(TestNativeIndexObserverOriginalBackingV6|TestOriginalCleanupCustodyTypedGrowthAndRefundV6|TestOriginalCleanupCustodyTypedUnsupportedAndOrdinaryV6|TestOriginalCleanupCustodyTypedClosingAndOverflowV6)$",
+          "./TreeDB/internal/rootpublication"
+        ],
+        "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+        "env": {
+          "CGO_ENABLED": "1",
+          "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+          "GODEBUG": "",
+          "GOENV": "off",
+          "GOFLAGS": "",
+          "GOGC": "100",
+          "GOMAXPROCS": "2",
+          "GOMEMLIMIT": "8GiB",
+          "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+          "GOPROXY": "off",
+          "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+          "GOSUMDB": "off",
+          "GOTOOLCHAIN": "local",
+          "GOWORK": "off",
+          "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-repair/future-controls/rootpublication-original-backing-race/tmp"
+        },
+        "executed": false,
+        "name": "rootpublication-original-backing-race",
+        "outer_timeout_seconds": 360,
+        "required_child_tests": [
+          "TestNativeIndexObserverOriginalBackingV6/platform",
+          "TestNativeIndexObserverOriginalBackingV6/volume",
+          "TestNativeIndexObserverOriginalBackingV6/object",
+          "TestNativeIndexObserverOriginalBackingV6/generation",
+          "TestNativeIndexObserverOriginalBackingV6/missing-backing",
+          "TestNativeIndexObserverOriginalBackingV6/wrong-file",
+          "TestNativeIndexObserverOriginalBackingV6/wrong-refs",
+          "TestNativeIndexObserverOriginalBackingV6/zero-refs",
+          "TestNativeIndexObserverOriginalBackingV6/wrong-owner",
+          "TestNativeIndexObserverOriginalBackingV6/wrong-registry",
+          "TestNativeIndexObserverOriginalBackingV6/missing-pin",
+          "TestNativeIndexObserverOriginalBackingV6/wrong-pin-identity",
+          "TestNativeIndexObserverOriginalBackingV6/released"
+        ],
+        "required_top_level_tests": [
+          "TestNativeIndexObserverOriginalBackingV6",
+          "TestOriginalCleanupCustodyTypedGrowthAndRefundV6",
+          "TestOriginalCleanupCustodyTypedUnsupportedAndOrdinaryV6",
+          "TestOriginalCleanupCustodyTypedClosingAndOverflowV6"
+        ]
+      }
+    ],
+    "scope_accepted_as_future_proposal": true,
+    "runtime_authorization_given_by_reviewer": false,
+    "normal_top_names": 7,
+    "race_top_names": 7,
+    "expected_named_children_per_mode": 28,
+    "required_named_children": {
+      "TestNativeIndexObserverOriginalCapturesV6": [
+        "DATA",
+        "PRIMARY"
+      ],
+      "TestNativeStablePagerPartialTokenCancellationV6": [
+        "before-token",
+        "growth-refusal",
+        "token-only",
+        "before-pinned-backing",
+        "before-retain",
+        "after-retain"
+      ],
+      "TestNativePagerOperationsPartialConstructionAndCancellationV6": [
+        "before-output",
+        "output-only",
+        "custody-before-owner",
+        "complete",
+        "resume-output",
+        "resume-custody",
+        "owner-overflow"
+      ],
+      "TestNativeIndexObserverOriginalBackingV6": [
+        "platform",
+        "volume",
+        "object",
+        "generation",
+        "missing-backing",
+        "wrong-file",
+        "wrong-refs",
+        "zero-refs",
+        "wrong-owner",
+        "wrong-registry",
+        "missing-pin",
+        "wrong-pin-identity",
+        "released"
+      ]
+    },
+    "require_each_selected_RUN_PASS_and_no_SKIP_or_FAIL": true,
+    "note": "control-child-source-literals.json is a source-literal aid, not a complete required-child inventory; DATA/PRIMARY and table tc.name children must be expanded as above.",
+    "unchanged_retained_fence_control_reuse": {
+      "test": "TestNativeRetainedFileFencePreservesDirtyAndRetiredIdentityV6",
+      "normal_raw": "native-main-integration/fixture-controls/normal-TreeDB-pager/run.log",
+      "race_raw": "native-main-integration/fixture-controls/race-TreeDB-pager/run.log",
+      "both_original_041b_PASS": true,
+      "source_test_and_production_primitive_byte_exact": true,
+      "credit": "Prior attributed primitive-only normal/race evidence; no successor rerun or new integrated publication proof."
+    }
+  },
+  "limits": [
+    "Source acceptance only; no new fixture normal/race results yet",
+    "No actual33 repeat or native final driver/enqueue/adoption/activation/fence/Consume/Finish grant",
+    "Original failed actual33 preserved; historical367/871273 partial diagnostic arithmetic unchanged",
+    "Full retention/private map/provenance/transfer dedup/nonempty and actual Finish remain open",
+    "Q32/1MiB/33/80/4096 RED/ACK0; no allowance; native_publication_accepted=false",
+    "21bc95e successor binding covers only generated CI digest; no fresh Go fixture, actual33 or publication result."
+  ],
+  "lease_released": true,
+  "final_packet_addendum": {
+    "preserved_source_review": {
+      "markdown_sha256": "c27e06fb7a5fa9d54f0f6e25ccb17529e8b6f196cff375e4d36c242a789ee13a",
+      "json_sha256": "ca685c2bdafd45ed9e920b2b27faf3554675d4acc37bec1dd400979ea46566e3"
+    },
+    "handoff_sha256": "e802cdcf0d9b6588a8eb1006bc37c8d69e7fe20e45b7259cd4282eb1bd79603e",
+    "packet_manifest_sha256": "0fab96a15c4ad1b9456be0472ac7f217ad49c515dc841f98ed49dcf6ce759b26",
+    "all_31_payload_hashes_verified": true,
+    "metadata_disposition_sha256": "2b7509386416eda272c2ea12322c37db89ae5ee80f30c911d2918bfd7f52ac60",
+    "compile_command_stale_source_only_selection_field": "Original source_only_selection_sha256 inherited origin-repair selection; actual grant_sha256 and runner binding are exact 7c9941 selection. Original receipt retained; no rerun or authority change.",
+    "final_proposal_sha256": "1756fcb6a5186b2398e01c7ada35a0f58a12bcfa547ede72921735fc87d8763e",
+    "proposal_argv_env_order_bounds_unchanged": true,
+    "proposal_required_children_match_review": true,
+    "pager_prior_control_applicability_sha256": "f3ed1ee528cb236eaa2031ac9c9754dec48c5ac55570991339a656c88e8cd02f",
+    "root_verifier_sha256": "cd91b75b7be7bade76631bb1679b2e0228a80d831dcfcffd2eae3505eefa930a"
+  },
+  "metadata_successor": {
+    "verdict": "ACCEPT",
+    "source_manifest_sha256": "21bc95e755d65748083193171e2ba2ed4f0d72454189ac2e61b087e998d5acd3",
+    "source_archive_sha256": "00e91ecda5dfea9925f4386084bf33168b67b0d28441c31b420b8563cff832c7",
+    "source_files": 10377,
+    "all_archive_member_paths_and_hashes_equal_manifest": true,
+    "delta_against_reviewed_9d6_source": [
+      ".github/ci/ci_impact.json"
+    ],
+    "only_policy_field_changed": "discovery_source_sha256",
+    "discovery_source_sha256_before": "3eec4e987dcb5be2bb890974090951cfb4d8787141c5fb0ed2cd1f93d05190c0",
+    "discovery_source_sha256_after": "0cf1a3c0d497c9577ce8466a5b4c3bb48fdbd5d4f54d17706310df5e021b8c42",
+    "root_recorded_staged_tree": "aafeb5f94f4c3e3ff249bd31728720d9c942649c",
+    "root_recorded_staged_paths": 204,
+    "git_objects_independently_rehashed": false,
+    "receipt_sha256": "8ebc5a0773bd5819811235322efe063ce0e6612101b54976f21814de347da11d",
+    "source_contract_sha256": "742c8be37c9ee5a8aceed1f89fe4d7d559dc517692fde0cebd251a3bab4c27db",
+    "refresh_sha256": "c0123ac3a0ac66e2c6bb357438ee6ee3fb20e55aa9ef35b71fa633aa104b4da1",
+    "source_contract_refresh_and_staged_checks_exit_zero_and_raw_hashes_verified": true,
+    "python_reuse_receipt_sha256": "19b8ade63b4974a8c10920c4564626bcb54f6be8834ae34c9e5f28bfea1d45bf",
+    "four_prior_python_receipt_and_raw_log_hashes_verified": true,
+    "historical_python_tests_passed": 58,
+    "historical_python_tests_rerun_by_reviewer": false,
+    "compile_attribution": "Original 4-package compile-only remains bound to 9d6 source; successor differs only in generated CI digest. No successor compile or fixture-body result claimed.",
+    "new_runtime_authorized": false
+  }
+}

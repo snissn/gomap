@@ -1,0 +1,23 @@
+{
+  "VERSION": "go1.26.3\ntime 2026-05-04T20:36:18Z\n",
+  "archive_verified_files": 10377,
+  "compiler_sha256": "3bb421d581f60b9ab48c2c73adf5c018557e89af32ad018d9c4417afa4bf90c1",
+  "go_binary": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+  "go_sha256": "d68b7abbc40d0844f673f6cf06ae3cded225c50437c6454fa37ef178d079fe65",
+  "runner_pgid": 1017815,
+  "runner_pid": 1017815,
+  "runner_sha256": "d895c9a30a9e33ce1c530fd1486b45a36ec17d0c343f9b3d7cb4ef796ee77c7d",
+  "selected_test_files": {
+    "TreeDB/db/native_index_observer_v6_test.go": "55f74857528e51cc08ac7f46c0a64bfdd586ab77cfa2b69cf315597b8dd9e48d",
+    "TreeDB/db/native_pager_operations_construction_v6_test.go": "336184e6ba124a8ab4c711a966e05dbef19d5c85176861bdd6b07a8dda6a437a",
+    "TreeDB/db/native_stable_pager_capture_v6_test.go": "278f996347dea753455a12c40cc51717f7adbc542e32cb27864b2e88f835a63d",
+    "TreeDB/internal/rootpublication/native_index_observer_v6_test.go": "0bff991e390181c1ae790186f7d733af3473449024ee285dedeaee04e49d11e3",
+    "TreeDB/internal/rootpublication/resource_original_custody_work_v6_test.go": "5cb42184696bac099a3d7324c9156ad2c2fea68ed1343be14376280eb79f3346"
+  },
+  "selection_json_sha256": "ce5bfb8a8c17a1186711478227836e6ac484b8fa8f18120f88befa3a158339b2",
+  "selection_md_sha256": "992ca2fad87812dac42c1d23ca0c2289099a6c6fccfbc3da8e8451a057d4ab25",
+  "source_archive_sha256": "00e91ecda5dfea9925f4386084bf33168b67b0d28441c31b420b8563cff832c7",
+  "source_manifest_sha256": "21bc95e755d65748083193171e2ba2ed4f0d72454189ac2e61b087e998d5acd3",
+  "started_utc": "2026-10-16T04:04:46.121120+00:00",
+  "subreaper_verified": true
+}

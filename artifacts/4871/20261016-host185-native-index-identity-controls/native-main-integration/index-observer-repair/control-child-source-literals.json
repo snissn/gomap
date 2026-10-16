@@ -1,0 +1,23 @@
+{
+  "TreeDB/db/native_index_observer_v6_test.go": {
+    "direct_runs": [],
+    "names_from_source_literals": []
+  },
+  "TreeDB/db/native_pager_operations_construction_v6_test.go": {
+    "direct_runs": [],
+    "names_from_source_literals": []
+  },
+  "TreeDB/db/native_stable_pager_capture_v6_test.go": {
+    "direct_runs": [],
+    "names_from_source_literals": [
+      "\"before-token\", \"growth-refusal\", \"token-only\", \"before-pinned-backing\", \"before-retain\", \"after-retain\""
+    ]
+  },
+  "TreeDB/internal/rootpublication/native_index_observer_v6_test.go": {
+    "direct_runs": [],
+    "names_from_source_literals": [
+      "\"platform\", \"volume\", \"object\", \"generation\"",
+      "\"missing-backing\", \"wrong-file\", \"wrong-refs\", \"zero-refs\", \"wrong-owner\", \"wrong-registry\", \"missing-pin\", \"wrong-pin-identity\", \"released\""
+    ]
+  }
+}

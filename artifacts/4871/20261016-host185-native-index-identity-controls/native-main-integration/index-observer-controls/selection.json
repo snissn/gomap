@@ -1,0 +1,247 @@
+{
+  "actual33_authorized": false,
+  "commands": [
+    {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "-parallel=1",
+        "-count=1",
+        "-v",
+        "-timeout=3m",
+        "-run",
+        "^(TestNativeIndexObserverOriginalCapturesV6|TestNativeStablePagerPartialTokenCancellationV6|TestNativePagerOperationsPartialConstructionAndCancellationV6)$",
+        "./TreeDB/db"
+      ],
+      "candidate_manifest_sha256": "21bc95e755d65748083193171e2ba2ed4f0d72454189ac2e61b087e998d5acd3",
+      "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+      "env": {
+        "CGO_ENABLED": "1",
+        "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+        "GODEBUG": "",
+        "GOENV": "off",
+        "GOFLAGS": "",
+        "GOGC": "100",
+        "GOMAXPROCS": "2",
+        "GOMEMLIMIT": "8GiB",
+        "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+        "GOPROXY": "off",
+        "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+        "GOSUMDB": "off",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off",
+        "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-controls/db-original-captures-normal/tmp"
+      },
+      "executed": false,
+      "id": "db-original-captures-normal",
+      "outer_timeout_seconds": 300,
+      "package": "./TreeDB/db",
+      "race": false,
+      "selector": "^(TestNativeIndexObserverOriginalCapturesV6|TestNativeStablePagerPartialTokenCancellationV6|TestNativePagerOperationsPartialConstructionAndCancellationV6)$",
+      "status": "AUTHORIZED_ONCE_BY_ROOT",
+      "top_level_tests": [
+        "TestNativeIndexObserverOriginalCapturesV6",
+        "TestNativeStablePagerPartialTokenCancellationV6",
+        "TestNativePagerOperationsPartialConstructionAndCancellationV6"
+      ]
+    },
+    {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "-parallel=1",
+        "-count=1",
+        "-v",
+        "-timeout=3m",
+        "-run",
+        "^(TestNativeIndexObserverOriginalBackingV6|TestOriginalCleanupCustodyTypedGrowthAndRefundV6|TestOriginalCleanupCustodyTypedUnsupportedAndOrdinaryV6|TestOriginalCleanupCustodyTypedClosingAndOverflowV6)$",
+        "./TreeDB/internal/rootpublication"
+      ],
+      "candidate_manifest_sha256": "21bc95e755d65748083193171e2ba2ed4f0d72454189ac2e61b087e998d5acd3",
+      "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+      "env": {
+        "CGO_ENABLED": "1",
+        "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+        "GODEBUG": "",
+        "GOENV": "off",
+        "GOFLAGS": "",
+        "GOGC": "100",
+        "GOMAXPROCS": "2",
+        "GOMEMLIMIT": "8GiB",
+        "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+        "GOPROXY": "off",
+        "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+        "GOSUMDB": "off",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off",
+        "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-controls/rootpublication-original-backing-normal/tmp"
+      },
+      "executed": false,
+      "id": "rootpublication-original-backing-normal",
+      "outer_timeout_seconds": 300,
+      "package": "./TreeDB/internal/rootpublication",
+      "race": false,
+      "selector": "^(TestNativeIndexObserverOriginalBackingV6|TestOriginalCleanupCustodyTypedGrowthAndRefundV6|TestOriginalCleanupCustodyTypedUnsupportedAndOrdinaryV6|TestOriginalCleanupCustodyTypedClosingAndOverflowV6)$",
+      "status": "AUTHORIZED_ONCE_BY_ROOT",
+      "top_level_tests": [
+        "TestNativeIndexObserverOriginalBackingV6",
+        "TestOriginalCleanupCustodyTypedGrowthAndRefundV6",
+        "TestOriginalCleanupCustodyTypedUnsupportedAndOrdinaryV6",
+        "TestOriginalCleanupCustodyTypedClosingAndOverflowV6"
+      ]
+    },
+    {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "-parallel=1",
+        "-count=1",
+        "-v",
+        "-timeout=3m",
+        "-race",
+        "-run",
+        "^(TestNativeIndexObserverOriginalCapturesV6|TestNativeStablePagerPartialTokenCancellationV6|TestNativePagerOperationsPartialConstructionAndCancellationV6)$",
+        "./TreeDB/db"
+      ],
+      "candidate_manifest_sha256": "21bc95e755d65748083193171e2ba2ed4f0d72454189ac2e61b087e998d5acd3",
+      "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+      "env": {
+        "CGO_ENABLED": "1",
+        "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+        "GODEBUG": "",
+        "GOENV": "off",
+        "GOFLAGS": "",
+        "GOGC": "100",
+        "GOMAXPROCS": "2",
+        "GOMEMLIMIT": "8GiB",
+        "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+        "GOPROXY": "off",
+        "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+        "GOSUMDB": "off",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off",
+        "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-controls/db-original-captures-race/tmp"
+      },
+      "executed": false,
+      "id": "db-original-captures-race",
+      "outer_timeout_seconds": 360,
+      "package": "./TreeDB/db",
+      "race": true,
+      "selector": "^(TestNativeIndexObserverOriginalCapturesV6|TestNativeStablePagerPartialTokenCancellationV6|TestNativePagerOperationsPartialConstructionAndCancellationV6)$",
+      "status": "AUTHORIZED_ONCE_BY_ROOT",
+      "top_level_tests": [
+        "TestNativeIndexObserverOriginalCapturesV6",
+        "TestNativeStablePagerPartialTokenCancellationV6",
+        "TestNativePagerOperationsPartialConstructionAndCancellationV6"
+      ]
+    },
+    {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "-parallel=1",
+        "-count=1",
+        "-v",
+        "-timeout=3m",
+        "-race",
+        "-run",
+        "^(TestNativeIndexObserverOriginalBackingV6|TestOriginalCleanupCustodyTypedGrowthAndRefundV6|TestOriginalCleanupCustodyTypedUnsupportedAndOrdinaryV6|TestOriginalCleanupCustodyTypedClosingAndOverflowV6)$",
+        "./TreeDB/internal/rootpublication"
+      ],
+      "candidate_manifest_sha256": "21bc95e755d65748083193171e2ba2ed4f0d72454189ac2e61b087e998d5acd3",
+      "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+      "env": {
+        "CGO_ENABLED": "1",
+        "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+        "GODEBUG": "",
+        "GOENV": "off",
+        "GOFLAGS": "",
+        "GOGC": "100",
+        "GOMAXPROCS": "2",
+        "GOMEMLIMIT": "8GiB",
+        "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+        "GOPROXY": "off",
+        "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+        "GOSUMDB": "off",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off",
+        "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-controls/rootpublication-original-backing-race/tmp"
+      },
+      "executed": false,
+      "id": "rootpublication-original-backing-race",
+      "outer_timeout_seconds": 360,
+      "package": "./TreeDB/internal/rootpublication",
+      "race": true,
+      "selector": "^(TestNativeIndexObserverOriginalBackingV6|TestOriginalCleanupCustodyTypedGrowthAndRefundV6|TestOriginalCleanupCustodyTypedUnsupportedAndOrdinaryV6|TestOriginalCleanupCustodyTypedClosingAndOverflowV6)$",
+      "status": "AUTHORIZED_ONCE_BY_ROOT",
+      "top_level_tests": [
+        "TestNativeIndexObserverOriginalBackingV6",
+        "TestOriginalCleanupCustodyTypedGrowthAndRefundV6",
+        "TestOriginalCleanupCustodyTypedUnsupportedAndOrdinaryV6",
+        "TestOriginalCleanupCustodyTypedClosingAndOverflowV6"
+      ]
+    }
+  ],
+  "native_publication_authorized": false,
+  "normal_top_level_tests": 7,
+  "proposal_sha256": "1756fcb6a5186b2398e01c7ada35a0f58a12bcfa547ede72921735fc87d8763e",
+  "race_top_level_tests": 7,
+  "required_child_tests": {
+    "TestNativeIndexObserverOriginalBackingV6": [
+      "platform",
+      "volume",
+      "object",
+      "generation",
+      "missing-backing",
+      "wrong-file",
+      "wrong-refs",
+      "zero-refs",
+      "wrong-owner",
+      "wrong-registry",
+      "missing-pin",
+      "wrong-pin-identity",
+      "released"
+    ],
+    "TestNativeIndexObserverOriginalCapturesV6": [
+      "DATA",
+      "PRIMARY"
+    ],
+    "TestNativePagerOperationsPartialConstructionAndCancellationV6": [
+      "before-output",
+      "output-only",
+      "custody-before-owner",
+      "complete",
+      "resume-output",
+      "resume-custody",
+      "owner-overflow"
+    ],
+    "TestNativeStablePagerPartialTokenCancellationV6": [
+      "before-token",
+      "growth-refusal",
+      "token-only",
+      "before-pinned-backing",
+      "before-retain",
+      "after-retain"
+    ]
+  },
+  "selected_test_files": {
+    "TreeDB/db/native_index_observer_v6_test.go": "55f74857528e51cc08ac7f46c0a64bfdd586ab77cfa2b69cf315597b8dd9e48d",
+    "TreeDB/db/native_pager_operations_construction_v6_test.go": "336184e6ba124a8ab4c711a966e05dbef19d5c85176861bdd6b07a8dda6a437a",
+    "TreeDB/db/native_stable_pager_capture_v6_test.go": "278f996347dea753455a12c40cc51717f7adbc542e32cb27864b2e88f835a63d",
+    "TreeDB/internal/rootpublication/native_index_observer_v6_test.go": "0bff991e390181c1ae790186f7d733af3473449024ee285dedeaee04e49d11e3",
+    "TreeDB/internal/rootpublication/resource_original_custody_work_v6_test.go": "5cb42184696bac099a3d7324c9156ad2c2fea68ed1343be14376280eb79f3346"
+  },
+  "selection_sha256": "992ca2fad87812dac42c1d23ca0c2289099a6c6fccfbc3da8e8451a057d4ab25",
+  "source_archive": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-inventory-final/source-final.tar.gz",
+  "source_archive_sha256": "00e91ecda5dfea9925f4386084bf33168b67b0d28441c31b420b8563cff832c7",
+  "source_files": 10377,
+  "source_manifest": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-inventory-final/source-final.json",
+  "source_manifest_sha256": "21bc95e755d65748083193171e2ba2ed4f0d72454189ac2e61b087e998d5acd3",
+  "source_mutations_allowed": false,
+  "source_tree": "aafeb5f94f4c3e3ff249bd31728720d9c942649c",
+  "stop_at_first_failure": true
+}

@@ -1,0 +1,24 @@
+{
+  "actual33_executed": false,
+  "all_authorized_pass": false,
+  "all_groups_empty": true,
+  "commands_executed": 1,
+  "commands_not_executed": [
+    "rootpublication-original-backing-normal",
+    "db-original-captures-race",
+    "rootpublication-original-backing-race"
+  ],
+  "completed_utc": "2026-10-16T04:04:50.809432+00:00",
+  "native_publication_executed": false,
+  "public_status": "Q32 RED/ACK0; no allowance",
+  "results": [
+    {
+      "id": "db-original-captures-normal",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-controls/db-original-captures-normal/result.json",
+      "status": "STOP"
+    }
+  ],
+  "source_files": 10377,
+  "source_manifest_sha256": "21bc95e755d65748083193171e2ba2ed4f0d72454189ac2e61b087e998d5acd3",
+  "source_still_frozen": true
+}

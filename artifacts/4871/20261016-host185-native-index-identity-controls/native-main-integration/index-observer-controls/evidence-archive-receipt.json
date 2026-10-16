@@ -1,0 +1,8 @@
+{
+  "archive_files": 18,
+  "archive_sha256": "53a8dcfa805b7d8ef1f6b6c5cd7b358840ba62e39f25fe09fd28faf487a3f5d1",
+  "manifest_sha256": "256c065f30e28a60f3a74536049238897f8e895f3dcd3ac6fdeb2c398fd62e5e",
+  "source_archive_is_separate_verified_immutable_input": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-inventory-final/source-final.tar.gz",
+  "source_archive_sha256": "00e91ecda5dfea9925f4386084bf33168b67b0d28441c31b420b8563cff832c7",
+  "verified": true
+}

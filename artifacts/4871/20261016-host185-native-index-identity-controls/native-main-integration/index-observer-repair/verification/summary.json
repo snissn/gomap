@@ -1,0 +1,22 @@
+{
+  "all_groups_empty": true,
+  "all_requested_packages_reported": true,
+  "commands_executed": 1,
+  "commands_not_executed": [],
+  "completed_utc": "2026-10-16T03:56:55.817376+00:00",
+  "native_publication_runtime": false,
+  "public_status": "Q32 RED/ACK0",
+  "results": [
+    {
+      "exit_code": 0,
+      "name": "compile-only",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-repair/verification/compile-only/result.json"
+    }
+  ],
+  "source_files": 10377,
+  "source_manifest_sha256": "9d6c8de347d5c64c75cbb4d3ae9d0a067d5a9283c7967d466c88633cff06fef9",
+  "source_still_frozen": true,
+  "stopped_at_first_failure": false,
+  "test_bodies_executed": false,
+  "zero_test_RUN_verified": true
+}

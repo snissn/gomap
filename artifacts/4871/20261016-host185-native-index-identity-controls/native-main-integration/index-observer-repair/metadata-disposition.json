@@ -1,0 +1,11 @@
+{
+  "actual_governing_field": "grant_sha256",
+  "actual_selection_sha256": "7c9941e990ba64cfd413ec66ffd2bf649d6fe829c599f20052d33d940f07fdfe",
+  "cause": "copied compile proposal template retained an origin-repair source-only metadata field",
+  "command_sha256": "6108ec8c6167e38e3893a746648901698779225ae8055453d40929393acf7eb6",
+  "disposition": "metadata defect only; no rerun or source change; stale field does not authorize or rebind execution",
+  "raw_command_preserved": true,
+  "stale_field": "source_only_selection_sha256",
+  "stale_value": "54c32af15d0e0db95fabdd7a28f4d1e41280b32fe3eb6faca327e74d426c760c",
+  "verification": "runner asserts actual selection hash before any launch, identity records same grant; exact argv/source/archive/actual process receipts bind this compile"
+}

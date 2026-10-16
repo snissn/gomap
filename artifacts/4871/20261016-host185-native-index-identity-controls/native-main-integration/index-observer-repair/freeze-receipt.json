@@ -1,0 +1,18 @@
+{
+  "added": 2,
+  "base_source_manifest_sha256": "041b0ddfca3581c2b773ceb857a27b2dd4c718775b45a9cb71d0c7cc3107744d",
+  "changed_files": 6,
+  "changed_inventory_sha256": "13c2aa4afcff892039940b54a3a5bca880fd70863f20f46c3289751e64255e4b",
+  "compile_executed": false,
+  "deleted": 0,
+  "delta_sha256": "41c66dceefdf2f48eda29031f3be7a51bcbe5818c17f993d407e70ec194e24aa",
+  "invariance_sha256": "71060a010cbf271d1af7ac2121052a907baacb7e9349a644a70bf2b5403fd097",
+  "modified": 4,
+  "native_publication_executed": false,
+  "selection_sha256": "7c9941e990ba64cfd413ec66ffd2bf649d6fe829c599f20052d33d940f07fdfe",
+  "source_archive_sha256": "72eb1c83025494d45be6450db3c274f8224a97277bdad90aaf6fe9fe9750a6bc",
+  "source_files": 10377,
+  "source_manifest_sha256": "9d6c8de347d5c64c75cbb4d3ae9d0a067d5a9283c7967d466c88633cff06fef9",
+  "status": "Q32 RED/ACK0/noAllowanceChosen",
+  "test_bodies_executed": false
+}

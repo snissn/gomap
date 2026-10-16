@@ -1,0 +1,15 @@
+{
+  "verified_utc": "2026-10-16T04:07:01.720554+00:00",
+  "verifier_sha256": "30fb95501ef053a531b43250e3e1111a91c1112b7e3c9359bf3c3217c62227be",
+  "source_files": 10377,
+  "source_manifest_sha256": "21bc95e755d65748083193171e2ba2ed4f0d72454189ac2e61b087e998d5acd3",
+  "source_archive_sha256": "00e91ecda5dfea9925f4386084bf33168b67b0d28441c31b420b8563cff832c7",
+  "evidence_members": 18,
+  "evidence_manifest_sha256": "256c065f30e28a60f3a74536049238897f8e895f3dcd3ac6fdeb2c398fd62e5e",
+  "evidence_archive_sha256": "53a8dcfa805b7d8ef1f6b6c5cd7b358840ba62e39f25fe09fd28faf487a3f5d1",
+  "source_and_index_unchanged": true,
+  "processes_joined_and_absent": true,
+  "execution_result": "FAIL genuine DATA and PRIMARY positive capture observer; other2tops13children PASS; remaining3commands not run",
+  "runtime_repeated": false,
+  "public_status": "Q32 RED/ACK0; no actual33 successor/native publication/allowance"
+}

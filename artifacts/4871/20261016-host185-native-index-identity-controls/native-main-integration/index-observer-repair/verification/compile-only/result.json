@@ -1,0 +1,463 @@
+{
+  "adopted_children_reaped": [],
+  "elapsed_seconds": 68.08065708819777,
+  "ended_utc": "2026-10-16T03:56:54.910335+00:00",
+  "exit_code": 0,
+  "group_and_children_empty": true,
+  "leader_joined": true,
+  "name": "compile-only",
+  "observed_group_processes": [
+    {
+      "comm": "go",
+      "pgid": 1010493,
+      "pid": 1010493,
+      "ppid": 1010403,
+      "session": 1010493,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1010493,
+      "pid": 1010508,
+      "ppid": 1010493,
+      "session": 1010493,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1010493,
+      "pid": 1010512,
+      "ppid": 1010493,
+      "session": 1010493,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1010493,
+      "pid": 1010516,
+      "ppid": 1010493,
+      "session": 1010493,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1010493,
+      "pid": 1010520,
+      "ppid": 1010493,
+      "session": 1010493,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1010493,
+      "pid": 1010524,
+      "ppid": 1010493,
+      "session": 1010493,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1010493,
+      "pid": 1010601,
+      "ppid": 1010493,
+      "session": 1010493,
+      "state": "Z"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1010493,
+      "pid": 1010712,
+      "ppid": 1010493,
+      "session": 1010493,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1010493,
+      "pid": 1010770,
+      "ppid": 1010493,
+      "session": 1010493,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1010493,
+      "pid": 1010775,
+      "ppid": 1010493,
+      "session": 1010493,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1010493,
+      "pid": 1010832,
+      "ppid": 1010493,
+      "session": 1010493,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1010493,
+      "pid": 1010854,
+      "ppid": 1010493,
+      "session": 1010493,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1010493,
+      "pid": 1010858,
+      "ppid": 1010493,
+      "session": 1010493,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1010493,
+      "pid": 1010888,
+      "ppid": 1010493,
+      "session": 1010493,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1010493,
+      "pid": 1011086,
+      "ppid": 1010493,
+      "session": 1010493,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1010493,
+      "pid": 1011090,
+      "ppid": 1010493,
+      "session": 1010493,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1010493,
+      "pid": 1011099,
+      "ppid": 1010493,
+      "session": 1010493,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1010493,
+      "pid": 1011104,
+      "ppid": 1010493,
+      "session": 1010493,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1010493,
+      "pid": 1011108,
+      "ppid": 1010493,
+      "session": 1010493,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1010493,
+      "pid": 1011299,
+      "ppid": 1010493,
+      "session": 1010493,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1010493,
+      "pid": 1011303,
+      "ppid": 1010493,
+      "session": 1010493,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1010493,
+      "pid": 1011307,
+      "ppid": 1010493,
+      "session": 1010493,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1010493,
+      "pid": 1011311,
+      "ppid": 1010493,
+      "session": 1010493,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1010493,
+      "pid": 1011336,
+      "ppid": 1010493,
+      "session": 1010493,
+      "state": "S"
+    },
+    {
+      "comm": "link",
+      "pgid": 1010493,
+      "pid": 1011349,
+      "ppid": 1010493,
+      "session": 1010493,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1010493,
+      "pid": 1011357,
+      "ppid": 1010493,
+      "session": 1010493,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1010493,
+      "pid": 1011369,
+      "ppid": 1010493,
+      "session": 1010493,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1010493,
+      "pid": 1011373,
+      "ppid": 1010493,
+      "session": 1010493,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1010493,
+      "pid": 1011385,
+      "ppid": 1010493,
+      "session": 1010493,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1010493,
+      "pid": 1011389,
+      "ppid": 1010493,
+      "session": 1010493,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1010493,
+      "pid": 1011409,
+      "ppid": 1010493,
+      "session": 1010493,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1010493,
+      "pid": 1011431,
+      "ppid": 1010493,
+      "session": 1010493,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1010493,
+      "pid": 1011436,
+      "ppid": 1010493,
+      "session": 1010493,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1010493,
+      "pid": 1011444,
+      "ppid": 1010493,
+      "session": 1010493,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1010493,
+      "pid": 1011454,
+      "ppid": 1010493,
+      "session": 1010493,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1010493,
+      "pid": 1011476,
+      "ppid": 1010493,
+      "session": 1010493,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1010493,
+      "pid": 1011566,
+      "ppid": 1010493,
+      "session": 1010493,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1010493,
+      "pid": 1011571,
+      "ppid": 1010493,
+      "session": 1010493,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1010493,
+      "pid": 1011575,
+      "ppid": 1010493,
+      "session": 1010493,
+      "state": "R"
+    },
+    {
+      "comm": "link",
+      "pgid": 1010493,
+      "pid": 1011584,
+      "ppid": 1010493,
+      "session": 1010493,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1010493,
+      "pid": 1011588,
+      "ppid": 1010493,
+      "session": 1010493,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1010493,
+      "pid": 1011592,
+      "ppid": 1010493,
+      "session": 1010493,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1010493,
+      "pid": 1011596,
+      "ppid": 1010493,
+      "session": 1010493,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1010493,
+      "pid": 1011609,
+      "ppid": 1010493,
+      "session": 1010493,
+      "state": "R"
+    },
+    {
+      "comm": "link",
+      "pgid": 1010493,
+      "pid": 1011617,
+      "ppid": 1010493,
+      "session": 1010493,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1010493,
+      "pid": 1011629,
+      "ppid": 1010493,
+      "session": 1010493,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1010493,
+      "pid": 1011633,
+      "ppid": 1010493,
+      "session": 1010493,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1010493,
+      "pid": 1011638,
+      "ppid": 1010493,
+      "session": 1010493,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1010493,
+      "pid": 1011706,
+      "ppid": 1010493,
+      "session": 1010493,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1010493,
+      "pid": 1011885,
+      "ppid": 1010493,
+      "session": 1010493,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1010493,
+      "pid": 1011889,
+      "ppid": 1010493,
+      "session": 1010493,
+      "state": "R"
+    },
+    {
+      "comm": "link",
+      "pgid": 1010493,
+      "pid": 1011897,
+      "ppid": 1010493,
+      "session": 1010493,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1010493,
+      "pid": 1011901,
+      "ppid": 1010493,
+      "session": 1010493,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1010493,
+      "pid": 1011909,
+      "ppid": 1010493,
+      "session": 1010493,
+      "state": "S"
+    }
+  ],
+  "pgid": 1010493,
+  "pid": 1010493,
+  "remaining_direct_or_adopted_children": [],
+  "remaining_group_members": [],
+  "residual_observed_before_cleanup": false,
+  "signals": [],
+  "source_after_equals_frozen": true,
+  "source_before_after_equal": true,
+  "source_before_equals_frozen": true,
+  "started_utc": "2026-10-16T03:55:46.829666+00:00",
+  "subreaper_enabled": true,
+  "test_RUN_count": 0,
+  "test_RUN_names": [],
+  "timeout": false,
+  "top_level_fail_count": 0,
+  "top_level_fail_names": [],
+  "top_level_pass_count": 0,
+  "top_level_pass_names": [],
+  "top_level_skip_count": 0,
+  "top_level_skip_names": []
+}

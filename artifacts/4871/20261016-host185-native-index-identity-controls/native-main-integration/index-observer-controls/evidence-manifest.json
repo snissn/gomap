@@ -1,0 +1,19 @@
+{
+  "HANDOFF.md": "b5e9cfd5c6b42034d5f53471920c05c7c693a05d354af0830a3e74b0d6757eed",
+  "db-original-captures-normal/command.json": "60f9d0b931b1d73acc97c42b0361b288eaeaceb0ce132e61ede1776a6494c0fd",
+  "db-original-captures-normal/process.json": "52c356640453886967883accd29f147cb41d34707fbc13473f4d2c6083e6ef90",
+  "db-original-captures-normal/result.json": "32b60a69209aca5ceb97dc64942f302bd0f59100c9b8200be6f975f6429b8cf3",
+  "db-original-captures-normal/run.log": "54f7949c8bd3ea250d2c85944c7402903fae24b00c49f4a26331d544d4768117",
+  "db-original-captures-normal/source-after.json": "21bc95e755d65748083193171e2ba2ed4f0d72454189ac2e61b087e998d5acd3",
+  "db-original-captures-normal/source-before.json": "21bc95e755d65748083193171e2ba2ed4f0d72454189ac2e61b087e998d5acd3",
+  "handoff.json": "a4aa11c9e0fbddcbb7388066b1713c7f5027e4014a217f109123220fb1eed5ef",
+  "identity.json": "50a6b5a8fbde4663bf16f1fd53de0316a48f16120c4b98e495fe714ab1e0a912",
+  "index-after.json": "5d26d0a402409fa51124a8a2f4ef87d8ea5535c8ebf53f79e33f61f9fa1b8833",
+  "index-binding.json": "d3665ddf8add9e9123f5f326f045784b14f47b81f9e615fd634c574d436fb1e8",
+  "package-evidence.py": "90c8219b9fcb4f60a9e2b1eb15bff40749faf84745322f7d23efa2cc36061000",
+  "required-child-tests.json": "fb31f9cab399f94327582572e48eb6a1679471fac33f25efe761b66571917ec8",
+  "run-controls.py": "d895c9a30a9e33ce1c530fd1486b45a36ec17d0c343f9b3d7cb4ef796ee77c7d",
+  "selection.json": "ce5bfb8a8c17a1186711478227836e6ac484b8fa8f18120f88befa3a158339b2",
+  "selection.md": "992ca2fad87812dac42c1d23ca0c2289099a6c6fccfbc3da8e8451a057d4ab25",
+  "summary.json": "90b8f7fff3c1b36ecb24ed93ae1edaea03c68b1bf7a3b1473193a95c4124bead"
+}

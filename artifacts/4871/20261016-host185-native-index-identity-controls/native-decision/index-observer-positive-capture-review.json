@@ -1,0 +1,91 @@
+{
+  "reviewer": "/root/ordinary_review",
+  "actual_model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW; immutable source and retained failure evidence only",
+  "hosted_review_unavailability_reason": "Hosted manual review cannot pin the required exact model; none requested/performed.",
+  "verdict": "REJECT",
+  "scope": "Current observer positive-capture correctness on exact21bc95e; minimal correction advice, not successor source acceptance.",
+  "candidate_edits_by_reviewer": false,
+  "reviewer_runtime_executed": false,
+  "children_spawned": false,
+  "mutable_native_integrated_read": false,
+  "source_manifest_sha256": "21bc95e755d65748083193171e2ba2ed4f0d72454189ac2e61b087e998d5acd3",
+  "source_archive_sha256": "00e91ecda5dfea9925f4386084bf33168b67b0d28441c31b420b8563cff832c7",
+  "source_files": 10377,
+  "all_archive_members_independently_hashed_against_manifest": true,
+  "failure_archive_sha256": "53a8dcfa805b7d8ef1f6b6c5cd7b358840ba62e39f25fe09fd28faf487a3f5d1",
+  "failure_manifest_sha256": "256c065f30e28a60f3a74536049238897f8e895f3dcd3ac6fdeb2c398fd62e5e",
+  "failure_payloads_verified": 17,
+  "archive_files_including_manifest": 18,
+  "inspected_source_sha256": {
+    "TreeDB/internal/rootpublication/pin_registry.go": "770993e8d91fb63b2f47e9a8b757fe28140cc66520e96be5e5df0ccd06b35653",
+    "TreeDB/internal/rootpublication/pin_registry_capture_work_v6.go": "3200ad2c59d83cfbfe037189bd5967028b6167e343f794d39822c7bf995ab09d",
+    "TreeDB/internal/rootpublication/index_token_construction_work_v6.go": "da748bf95e4cdad4f6780515ade4298a0142d3078ca185dad8d33b1869f9d18a",
+    "TreeDB/internal/rootpublication/resource_token.go": "463fcd6b40680b2d81c9f142efd99b787c98cc4d2ca5fa56b0a3ab50413c02e0",
+    "TreeDB/internal/rootpublication/primary_empty_candidate_work_v6.go": "a9aa99182df49472a18c30858f456a241c3f5b0d7d54d1930cad5fbb18134968",
+    "TreeDB/db/native_mvcc_seal_preparation_v6.go": "e30088d2ab5ad5810fbe62c28c00495798adff8b133a50d7da7f0255fd930bae",
+    "TreeDB/internal/rootpublication/native_index_observer_v6_test.go": "0bff991e390181c1ae790186f7d733af3473449024ee285dedeaee04e49d11e3",
+    "TreeDB/db/native_index_observer_v6_test.go": "55f74857528e51cc08ac7f46c0a64bfdd586ab77cfa2b69cf315597b8dd9e48d"
+  },
+  "findings": [
+    {
+      "id": "PC1",
+      "severity": "blocking observer source correctness",
+      "path": "TreeDB/internal/rootpublication/primary_empty_candidate_work_v6.go",
+      "line": 333,
+      "trigger": "Original captured index token has a nonzero logical generation; both DATA and PRIMARY genuine captures.",
+      "cause": "pin.identity==identity compares a physical registry identity (Generation0) with expected full token identity (Generation=indexGen.id). Pin and PinWithWorkV6 normalize via validateRegistryIdentity/physicalStableIdentity before storing IdentityPin.identity; token construction separately preserves full logical generation.",
+      "effect": "SameRetainedCapture deterministically false for valid original capture; focused positive controls fail before negative controls. This is an observer defect, not evidence that original capture/ownership/cleanup is invalid.",
+      "correction": "Compare exact pin.identity == physicalStableIdentity(identity), keeping token.identity == identity and every other predicate unchanged. Never project the actual pin before comparison; a nonzero corrupted pin Generation must still reject.",
+      "source_anchors": [
+        "pin_registry.go:161-164",
+        "pin_registry.go:184-215",
+        "pin_registry.go:218-221",
+        "pin_registry_capture_work_v6.go:39-62",
+        "index_token_construction_work_v6.go:204-216",
+        "resource_token.go:624-630",
+        "db/native_mvcc_seal_preparation_v6.go:162-167"
+      ],
+      "controls": "Retain actual DATA/PRIMARY positives, expected logical-generation negative, existing wrong-pin-identity Generation++ negative; add isolated pin Platform/VolumeID/ObjectID mismatches restored before cleanup. Keep no-effect work refusal, original custody/cleanup/baselines and all remaining predicates."
+    }
+  ],
+  "runtime_evidence": {
+    "commands_executed": 1,
+    "commands_unexecuted": 3,
+    "top_RUN": 3,
+    "child_RUN": 15,
+    "top_PASS": 2,
+    "child_PASS": 13,
+    "top_FAIL": 1,
+    "child_FAIL": 2,
+    "SKIP": 0,
+    "exit_code": 1,
+    "elapsed_seconds": 2.6991569539532065,
+    "source_before_after_exact": true,
+    "leader_joined": true,
+    "groups_direct_and_adopted_children_empty": true,
+    "timeout": false,
+    "signals": [],
+    "interpretation": "Both genuine DATA/PRIMARY observations ready=true with SameRetainedCapture=false; every other asserted flag true. Two existing partial-construction/cancellation top tests and13children PASS. No rootpublication or race call executed."
+  },
+  "minimal_plan": {
+    "product_constructors_or_registry_semantics_change_needed": false,
+    "fixture_validity": "Positive fixture is valid and reveals the observer contract error; do not alter original token or pin construction.",
+    "source_traffic": "Account explicitly for the fixed physical-identity projection/copy in the observer reservation expression/ledger; preserve Q32/1MiB and no side effects/aliases/new owner. No aggregate F or retained-storage claim follows.",
+    "next_controls": "After separately frozen/reviewed exact repair, root may select the same four normal/race observer and cleanup commands with updated required pin-negative children. No execution or grant by this reviewer."
+  },
+  "historical_source_acceptance": {
+    "report": "native-decision/index-observer-repair-independent-review.md",
+    "sha256": "5aa1e8362489c689a8f3e4016a8522c4ba482e4865a480a1f6babb6653a61ac4",
+    "preserved_unchanged": true,
+    "disposition": "Historical source ACCEPT is preserved, but its positive-capture correctness conclusion was incomplete. PC1 supersedes that narrow conclusion; focused source/runtime acceptance is REJECT pending repair. No test PASS is inferred from earlier compile-only."
+  },
+  "limits": [
+    "No successor implementation reviewed or accepted",
+    "No source/runtime/Git/GH mutations",
+    "Actual33 not executed; no native final-driver/adoption/activation/fence/Consume/Finish/publication or qualification credit",
+    "Q32/1MiB/33/80/4096 remains RED/ACK0; noAllowanceChosen"
+  ],
+  "lease_released": true
+}

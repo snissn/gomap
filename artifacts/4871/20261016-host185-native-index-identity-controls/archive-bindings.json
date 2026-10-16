@@ -1,0 +1,20 @@
+[
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-controls/evidence.tar.gz",
+    "bytes": 943218,
+    "sha256": "53a8dcfa805b7d8ef1f6b6c5cd7b358840ba62e39f25fe09fd28faf487a3f5d1",
+    "reason": "Full archive retained locally and hash-bound; individual source manifests, raw logs and receipts copied remotely."
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-inventory-final/source-final.tar.gz",
+    "bytes": 181397611,
+    "sha256": "00e91ecda5dfea9925f4386084bf33168b67b0d28441c31b420b8563cff832c7",
+    "reason": "Full archive retained locally and hash-bound; individual source manifests, raw logs and receipts copied remotely."
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-observer-repair/source-frozen.tar.gz",
+    "bytes": 156062698,
+    "sha256": "72eb1c83025494d45be6450db3c274f8224a97277bdad90aaf6fe9fe9750a6bc",
+    "reason": "Full archive retained locally and hash-bound; individual source manifests, raw logs and receipts copied remotely."
+  }
+]

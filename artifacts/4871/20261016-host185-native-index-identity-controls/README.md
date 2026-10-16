@@ -1,0 +1,9 @@
+# Original capture observer controls and physical identity correction
+
+This packet preserves the six-path observer correction source9d6c8de3/archive72eb1c83, its four-package compile-only PASS with zero test bodies, root metadata-only successor21bc95e/archive00e91ec/treeaafeb5, and historical independent source acceptance. Full delta payloads reconstruct the change from artifact33; all other source bytes are invariant. Source-contract PASS; 58 historical Python checks and prior pager primitive controls are explicitly reused under source-invariance receipts.
+
+The first focused normal DB call FAILED for both genuine DATA and PRIMARY positive captures. SameRetainedCapture=false; all other exposed expected identity/custody flags true. Two original partial-construction/cancellation tops and13children passed. Exactly18 names RUN,15PASS,3FAIL,0SKIP; remaining three calls were not executed. Source/index/compiler/raw/argv/env and actual joined process group verified. No retry or actual33 successor.
+
+The new observer incorrectly compares physical pin identity with full logical token identity. Original Pin/PinWithWork canonicalize pin Generation to0; original token retains its nonzero logical generation. Independent review REJECT PC1 supersedes scoped source acceptance for this predicate. Root selects expected-only physical projection for exact pin equality while retaining full token equality, plus original pin0/token7 and independent physical-pin negative controls. Constructor/registry/ownership/lifetime/caps/F293/R145 remain unchanged. Source repair is pending; no result claimed.
+
+Original actual33 failure remains artifact34. Original Q32/1MiB/33/80/4096 RED/ACK0, no allowance, private/full retention, nonempty/dedup/Z256, actual native Finish/C1C3/final qualification remain open. Full archives are local and hash-bound; all individual lossless payloads are bound by manifest.json.

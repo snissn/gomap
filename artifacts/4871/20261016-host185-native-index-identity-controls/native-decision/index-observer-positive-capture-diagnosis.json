@@ -1,0 +1,48 @@
+{
+  "F293_R145_unchanged": true,
+  "canonical_pin_generation": 0,
+  "disposition": "SOURCE-PROVEN OBSERVER DEFECT; no production capture failure established",
+  "finite_pin_chain": [
+    "PinWithWorkV6",
+    "validateRegistryIdentity",
+    "physicalStableIdentity",
+    "pinStateLockedV6"
+  ],
+  "guaranteed_false_predicate": "pin.identity == full expectedIdentity when original idx.id !=0",
+  "inspected_source_sha256": {
+    "TreeDB/db/native_index_observer_v6_test.go": "55f74857528e51cc08ac7f46c0a64bfdd586ab77cfa2b69cf315597b8dd9e48d",
+    "TreeDB/db/native_mvcc_seal_preparation_v6.go": "e30088d2ab5ad5810fbe62c28c00495798adff8b133a50d7da7f0255fd930bae",
+    "TreeDB/db/native_stable_pager_capture_v6.go": "a5b9f6023ccb7460005b49ba086a901f436a4b1ce43d51f7c800afc05c9184a6",
+    "TreeDB/internal/rootpublication/index_token_construction_work_v6.go": "da748bf95e4cdad4f6780515ade4298a0142d3078ca185dad8d33b1869f9d18a",
+    "TreeDB/internal/rootpublication/native_index_observer_v6_test.go": "0bff991e390181c1ae790186f7d733af3473449024ee285dedeaee04e49d11e3",
+    "TreeDB/internal/rootpublication/pin_registry.go": "770993e8d91fb63b2f47e9a8b757fe28140cc66520e96be5e5df0ccd06b35653",
+    "TreeDB/internal/rootpublication/pin_registry_capture_work_v6.go": "3200ad2c59d83cfbfe037189bd5967028b6167e343f794d39822c7bf995ab09d",
+    "TreeDB/internal/rootpublication/pin_registry_test.go": "dd499bfd9b3c0775098f90be042b0ed62a4f3dd06b8bab9565f0412e69e18f36",
+    "TreeDB/internal/rootpublication/primary_empty_candidate_work_v6.go": "a9aa99182df49472a18c30858f456a241c3f5b0d7d54d1930cad5fbb18134968",
+    "TreeDB/internal/rootpublication/resource_identity_unix.go": "955a855992f05cf2b54b056fb02039f22eb99296acb6a544e3993ab7eaccf60a",
+    "TreeDB/internal/rootpublication/resource_token.go": "463fcd6b40680b2d81c9f142efd99b787c98cc4d2ca5fa56b0a3ab50413c02e0",
+    "TreeDB/internal/rootpublication/resource_token_allocation.go": "093351a97507768afde45afa288b6a6b46234fcecb866f9d612f8aa7603a1ed5"
+  },
+  "leases": "RELEASED",
+  "minimal_repair": "exact canonical physical pin equality plus unchanged exact full token equality; preserve all owner/backing/pager/custody checks",
+  "new_negative_coverage": [
+    "physical pin Platform",
+    "physical pin VolumeID",
+    "physical pin ObjectID",
+    "retain noncanonical pin Generation rejection",
+    "retain full token Generation rejection"
+  ],
+  "observer_pricing_update_required": true,
+  "ordinary_backing_positive_test": "source-proven affected but NOT EXECUTED",
+  "ordinary_pin_same_normalization": true,
+  "production_changes_indicated": false,
+  "report_sha256": "e3d7f419c18c5202f9d2411a56cadfa17b7f8205bcc3bc94bd8a434d2f5c01b6",
+  "retry_executed": false,
+  "runtime_executed_for_diagnosis": false,
+  "source_archive_sha256": "00e91ecda5dfea9925f4386084bf33168b67b0d28441c31b420b8563cff832c7",
+  "source_files": 10377,
+  "source_manifest_sha256": "21bc95e755d65748083193171e2ba2ed4f0d72454189ac2e61b087e998d5acd3",
+  "source_mutated": false,
+  "status": "Q32 RED/ACK0/noAllowanceChosen",
+  "token_generation": "original spec.Generation == idx.id !=0"
+}

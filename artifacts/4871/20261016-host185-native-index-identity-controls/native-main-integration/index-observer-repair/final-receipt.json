@@ -1,0 +1,13 @@
+{
+  "actual33_executed": false,
+  "compile": "PASS4packages/0testbodies",
+  "compile_summary_sha256": "3ae2009321e24f6a40fdf50d61a74d8b2301b3d3e8cd989d37166b41451714b6",
+  "handoff_sha256": "e802cdcf0d9b6588a8eb1006bc37c8d69e7fe20e45b7259cd4282eb1bd79603e",
+  "native_publication_executed": false,
+  "packet_manifest_sha256": "0fab96a15c4ad1b9456be0472ac7f217ad49c515dc841f98ed49dcf6ce759b26",
+  "source_and_runtime_leases": "RELEASED",
+  "source_archive_sha256": "72eb1c83025494d45be6450db3c274f8224a97277bdad90aaf6fe9fe9750a6bc",
+  "source_manifest_sha256": "9d6c8de347d5c64c75cbb4d3ae9d0a067d5a9283c7967d466c88633cff06fef9",
+  "status": "Q32 RED/ACK0/noAllowanceChosen",
+  "test_bodies_executed": false
+}
