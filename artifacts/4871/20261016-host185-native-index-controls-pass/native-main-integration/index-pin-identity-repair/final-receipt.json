@@ -1,0 +1,23 @@
+{
+  "Go_executed": false,
+  "added": 0,
+  "base_manifest_sha256": "21bc95e755d65748083193171e2ba2ed4f0d72454189ac2e61b087e998d5acd3",
+  "changed_files": 2,
+  "changed_inventory_sha256": "3489cb35259918462eed01cf7fc848ac7fe8c24e302f96cfd44b6358a217e954",
+  "compile_executed": false,
+  "deleted": 0,
+  "delta_sha256": "7c95ee8051c816c3b896ede387eda659e093778241a127e2b17d55b5f32d6e33",
+  "handoff_sha256": "1812fb9f94d39b823f3995ab43a5d99166dbc69334c22e6edcc18879e00dec89",
+  "invariance_sha256": "6859c8df56a30cde897e54b7df71229db553ce9c47f03ab4ec4a1be3d37d84bd",
+  "packet_manifest_sha256": "e772c1e20dbf5d8ab44222a8333febb1a56851e7e18a90695e550d84552d7d1d",
+  "pricing_sha256": "45676cb15829ece1367c80b83554dd27aaeb69696e268da3c01ea1b733de1a59",
+  "proposal_sha256": "2598c53900b7092b582addcc90d453dc3fb6bf84ef5df1d3f50bba365273ef4d",
+  "runtime_lease": "NOT_GRANTED; no Go/runtime executed",
+  "selection_sha256": "3bedfce103563a51ce20f1b16d537b35d4d6796d6537a941a06a7c68111ee1ab",
+  "source_archive_sha256": "159f092efb60e2f01a916768d2fc777ed5e25339efc7d011e0ddbcab3e33f1f2",
+  "source_files": 10377,
+  "source_lease": "RELEASED",
+  "source_manifest_sha256": "61cdf3b0deacee88a2018e0e7452191860ff78a6d0e34600f8de7d19c17b1019",
+  "status": "Q32 RED/ACK0/noAllowanceChosen",
+  "test_bodies_executed": false
+}

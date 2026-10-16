@@ -1,0 +1,52 @@
+{
+  "actual_pgid": 1025725,
+  "actual_pid": 1025725,
+  "argv": [
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+    "test",
+    "-p=1",
+    "-parallel=1",
+    "-count=1",
+    "-v",
+    "-timeout=3m",
+    "-run",
+    "^(TestNativeIndexObserverOriginalCapturesV6|TestNativeStablePagerPartialTokenCancellationV6|TestNativePagerOperationsPartialConstructionAndCancellationV6)$",
+    "./TreeDB/db"
+  ],
+  "candidate_manifest_sha256": "23e37a210f156838de8adecbf8532c0cd16cd12f6d6c37fb05529b7974d0869f",
+  "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+  "env": {
+    "CGO_ENABLED": "1",
+    "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+    "GODEBUG": "",
+    "GOENV": "off",
+    "GOFLAGS": "",
+    "GOGC": "100",
+    "GOMAXPROCS": "2",
+    "GOMEMLIMIT": "8GiB",
+    "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+    "GOPROXY": "off",
+    "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+    "GOSUMDB": "off",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off",
+    "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-pin-controls/db-original-captures-normal/tmp"
+  },
+  "executed": true,
+  "id": "db-original-captures-normal",
+  "launch_utc": "2026-10-16T04:13:34.026192+00:00",
+  "outer_timeout_seconds": 300,
+  "package": "./TreeDB/db",
+  "race": false,
+  "selection_json_sha256": "7cfa832751e74b960c1f619334938d81480d097a61229b7afafb9f66121fd3e2",
+  "selection_md_sha256": "19a1ad5dd6d0f12f4e0f373ce44debccd7d0613130b9256b0d513a753518b152",
+  "selector": "^(TestNativeIndexObserverOriginalCapturesV6|TestNativeStablePagerPartialTokenCancellationV6|TestNativePagerOperationsPartialConstructionAndCancellationV6)$",
+  "source_archive_sha256": "ea996ddc0c637f7674efded9f0611b3d2108554b460ea35d9859e6b47cf25293",
+  "source_manifest_sha256": "23e37a210f156838de8adecbf8532c0cd16cd12f6d6c37fb05529b7974d0869f",
+  "status": "AUTHORIZED_ONCE_BY_ROOT",
+  "top_level_tests": [
+    "TestNativeIndexObserverOriginalCapturesV6",
+    "TestNativeStablePagerPartialTokenCancellationV6",
+    "TestNativePagerOperationsPartialConstructionAndCancellationV6"
+  ]
+}

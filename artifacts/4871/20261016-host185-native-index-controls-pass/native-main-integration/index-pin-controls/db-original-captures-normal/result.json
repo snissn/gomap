@@ -1,0 +1,349 @@
+{
+  "M4_selected_leaf_names": [],
+  "adopted_children_reaped": [],
+  "elapsed_seconds": 46.28334833588451,
+  "ended_utc": "2026-10-16T04:14:20.309516+00:00",
+  "exit_code": 0,
+  "expected_top_level_names": [
+    "TestNativeIndexObserverOriginalCapturesV6",
+    "TestNativeStablePagerPartialTokenCancellationV6",
+    "TestNativePagerOperationsPartialConstructionAndCancellationV6"
+  ],
+  "group_and_children_empty": true,
+  "id": "db-original-captures-normal",
+  "leader_joined": true,
+  "missing_child_names": [],
+  "missing_top_names": [],
+  "observed_group_processes": [
+    {
+      "comm": "go",
+      "pgid": 1025725,
+      "pid": 1025725,
+      "ppid": 1025689,
+      "session": 1025725,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1025725,
+      "pid": 1025738,
+      "ppid": 1025725,
+      "session": 1025725,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1025725,
+      "pid": 1025743,
+      "ppid": 1025725,
+      "session": 1025725,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1025725,
+      "pid": 1025748,
+      "ppid": 1025725,
+      "session": 1025725,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1025725,
+      "pid": 1025753,
+      "ppid": 1025725,
+      "session": 1025725,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1025725,
+      "pid": 1025757,
+      "ppid": 1025725,
+      "session": 1025725,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1025725,
+      "pid": 1025761,
+      "ppid": 1025725,
+      "session": 1025725,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1025725,
+      "pid": 1025776,
+      "ppid": 1025725,
+      "session": 1025725,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1025725,
+      "pid": 1025954,
+      "ppid": 1025725,
+      "session": 1025725,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1025725,
+      "pid": 1025958,
+      "ppid": 1025725,
+      "session": 1025725,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1025725,
+      "pid": 1026140,
+      "ppid": 1025725,
+      "session": 1025725,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1025725,
+      "pid": 1026147,
+      "ppid": 1025725,
+      "session": 1025725,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1025725,
+      "pid": 1026151,
+      "ppid": 1025725,
+      "session": 1025725,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1025725,
+      "pid": 1026330,
+      "ppid": 1025725,
+      "session": 1025725,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1025725,
+      "pid": 1026335,
+      "ppid": 1025725,
+      "session": 1025725,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1025725,
+      "pid": 1026339,
+      "ppid": 1025725,
+      "session": 1025725,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1025725,
+      "pid": 1026343,
+      "ppid": 1025725,
+      "session": 1025725,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1025725,
+      "pid": 1026347,
+      "ppid": 1025725,
+      "session": 1025725,
+      "state": "R"
+    },
+    {
+      "comm": "link",
+      "pgid": 1025725,
+      "pid": 1026364,
+      "ppid": 1025725,
+      "session": 1025725,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1025725,
+      "pid": 1026387,
+      "ppid": 1025725,
+      "session": 1025725,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1025725,
+      "pid": 1026391,
+      "ppid": 1025725,
+      "session": 1025725,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1025725,
+      "pid": 1026403,
+      "ppid": 1025725,
+      "session": 1025725,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1025725,
+      "pid": 1026407,
+      "ppid": 1025725,
+      "session": 1025725,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1025725,
+      "pid": 1026415,
+      "ppid": 1025725,
+      "session": 1025725,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1025725,
+      "pid": 1026444,
+      "ppid": 1025725,
+      "session": 1025725,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1025725,
+      "pid": 1026448,
+      "ppid": 1025725,
+      "session": 1025725,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1025725,
+      "pid": 1026456,
+      "ppid": 1025725,
+      "session": 1025725,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1025725,
+      "pid": 1026461,
+      "ppid": 1025725,
+      "session": 1025725,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1025725,
+      "pid": 1026473,
+      "ppid": 1025725,
+      "session": 1025725,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1025725,
+      "pid": 1026477,
+      "ppid": 1025725,
+      "session": 1025725,
+      "state": "S"
+    },
+    {
+      "comm": "db.test",
+      "pgid": 1025725,
+      "pid": 1026483,
+      "ppid": 1025725,
+      "session": 1025725,
+      "state": "S"
+    }
+  ],
+  "pgid": 1025725,
+  "pid": 1025725,
+  "raw_log_sha256": "7b9730cc2c7ae47edf07b376bf743547ace921f0aa7c5df334240ca2d5f0ea2e",
+  "remaining_direct_or_adopted_children": [],
+  "remaining_group_members": [],
+  "required_child_names": [
+    "TestNativeIndexObserverOriginalCapturesV6/DATA",
+    "TestNativeIndexObserverOriginalCapturesV6/PRIMARY",
+    "TestNativePagerOperationsPartialConstructionAndCancellationV6/before-output",
+    "TestNativePagerOperationsPartialConstructionAndCancellationV6/output-only",
+    "TestNativePagerOperationsPartialConstructionAndCancellationV6/custody-before-owner",
+    "TestNativePagerOperationsPartialConstructionAndCancellationV6/complete",
+    "TestNativePagerOperationsPartialConstructionAndCancellationV6/resume-output",
+    "TestNativePagerOperationsPartialConstructionAndCancellationV6/resume-custody",
+    "TestNativePagerOperationsPartialConstructionAndCancellationV6/owner-overflow",
+    "TestNativeStablePagerPartialTokenCancellationV6/before-token",
+    "TestNativeStablePagerPartialTokenCancellationV6/growth-refusal",
+    "TestNativeStablePagerPartialTokenCancellationV6/token-only",
+    "TestNativeStablePagerPartialTokenCancellationV6/before-pinned-backing",
+    "TestNativeStablePagerPartialTokenCancellationV6/before-retain",
+    "TestNativeStablePagerPartialTokenCancellationV6/after-retain"
+  ],
+  "residual_before_cleanup": {
+    "children": [],
+    "group": []
+  },
+  "signals": [],
+  "source_before_after_frozen": true,
+  "started_utc": "2026-10-16T04:13:34.026192+00:00",
+  "status": "PASS",
+  "stop_reasons": [],
+  "subreaper_verified": true,
+  "test_FAIL_names": [],
+  "test_PASS_names": [
+    "TestNativeIndexObserverOriginalCapturesV6",
+    "TestNativeIndexObserverOriginalCapturesV6/DATA",
+    "TestNativeIndexObserverOriginalCapturesV6/PRIMARY",
+    "TestNativePagerOperationsPartialConstructionAndCancellationV6",
+    "TestNativePagerOperationsPartialConstructionAndCancellationV6/before-output",
+    "TestNativePagerOperationsPartialConstructionAndCancellationV6/output-only",
+    "TestNativePagerOperationsPartialConstructionAndCancellationV6/custody-before-owner",
+    "TestNativePagerOperationsPartialConstructionAndCancellationV6/complete",
+    "TestNativePagerOperationsPartialConstructionAndCancellationV6/resume-output",
+    "TestNativePagerOperationsPartialConstructionAndCancellationV6/resume-custody",
+    "TestNativePagerOperationsPartialConstructionAndCancellationV6/owner-overflow",
+    "TestNativeStablePagerPartialTokenCancellationV6",
+    "TestNativeStablePagerPartialTokenCancellationV6/before-token",
+    "TestNativeStablePagerPartialTokenCancellationV6/growth-refusal",
+    "TestNativeStablePagerPartialTokenCancellationV6/token-only",
+    "TestNativeStablePagerPartialTokenCancellationV6/before-pinned-backing",
+    "TestNativeStablePagerPartialTokenCancellationV6/before-retain",
+    "TestNativeStablePagerPartialTokenCancellationV6/after-retain"
+  ],
+  "test_RUN_names": [
+    "TestNativeIndexObserverOriginalCapturesV6",
+    "TestNativeIndexObserverOriginalCapturesV6/DATA",
+    "TestNativeIndexObserverOriginalCapturesV6/PRIMARY",
+    "TestNativePagerOperationsPartialConstructionAndCancellationV6",
+    "TestNativePagerOperationsPartialConstructionAndCancellationV6/before-output",
+    "TestNativePagerOperationsPartialConstructionAndCancellationV6/output-only",
+    "TestNativePagerOperationsPartialConstructionAndCancellationV6/custody-before-owner",
+    "TestNativePagerOperationsPartialConstructionAndCancellationV6/complete",
+    "TestNativePagerOperationsPartialConstructionAndCancellationV6/resume-output",
+    "TestNativePagerOperationsPartialConstructionAndCancellationV6/resume-custody",
+    "TestNativePagerOperationsPartialConstructionAndCancellationV6/owner-overflow",
+    "TestNativeStablePagerPartialTokenCancellationV6",
+    "TestNativeStablePagerPartialTokenCancellationV6/before-token",
+    "TestNativeStablePagerPartialTokenCancellationV6/growth-refusal",
+    "TestNativeStablePagerPartialTokenCancellationV6/token-only",
+    "TestNativeStablePagerPartialTokenCancellationV6/before-pinned-backing",
+    "TestNativeStablePagerPartialTokenCancellationV6/before-retain",
+    "TestNativeStablePagerPartialTokenCancellationV6/after-retain"
+  ],
+  "test_SKIP_names": [],
+  "timeout": false,
+  "top_level_RUN_names": [
+    "TestNativeIndexObserverOriginalCapturesV6",
+    "TestNativePagerOperationsPartialConstructionAndCancellationV6",
+    "TestNativeStablePagerPartialTokenCancellationV6"
+  ],
+  "top_level_pass_count": 3,
+  "unexpected_top_names": []
+}

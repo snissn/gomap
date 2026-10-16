@@ -1,0 +1,20 @@
+[
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-pin-controls/evidence.tar.gz",
+    "bytes": 3733032,
+    "sha256": "24cbb133f49962de535a4754781a201c848a9bd1310fe247e5fd15fe744db127",
+    "reason": "Full archive retained locally and hash-bound; individual source manifests, raw logs and receipts copied remotely."
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-pin-identity-repair/source-frozen.tar.gz",
+    "bytes": 156062747,
+    "sha256": "159f092efb60e2f01a916768d2fc777ed5e25339efc7d011e0ddbcab3e33f1f2",
+    "reason": "Full archive retained locally and hash-bound; individual source manifests, raw logs and receipts copied remotely."
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-pin-inventory-final/source-final.tar.gz",
+    "bytes": 181397889,
+    "sha256": "ea996ddc0c637f7674efded9f0611b3d2108554b460ea35d9859e6b47cf25293",
+    "reason": "Full archive retained locally and hash-bound; individual source manifests, raw logs and receipts copied remotely."
+  }
+]

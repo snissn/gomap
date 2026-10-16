@@ -1,0 +1,150 @@
+{
+  "reviewer": "/root/ordinary_review",
+  "actual_model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW; immutable source/delta/proposal only",
+  "hosted_review_unavailability_reason": "Hosted manual review cannot pin the required exact model; none requested/performed.",
+  "verdict": "ACCEPT",
+  "scope": "Exact two-path pin observer correction61cdf3b0 extended to metadata-only successor23e37a21; source acceptance only, no runtime/publication acceptance.",
+  "candidate_edits_by_reviewer": false,
+  "reviewer_runtime_executed": false,
+  "children_spawned": false,
+  "mutable_native_integrated_read": false,
+  "source_manifest_sha256": "61cdf3b0deacee88a2018e0e7452191860ff78a6d0e34600f8de7d19c17b1019",
+  "source_archive_sha256": "159f092efb60e2f01a916768d2fc777ed5e25339efc7d011e0ddbcab3e33f1f2",
+  "source_files": 10377,
+  "full_archive_member_hashes_equal_manifest": true,
+  "base_manifest_sha256": "21bc95e755d65748083193171e2ba2ed4f0d72454189ac2e61b087e998d5acd3",
+  "delta_sha256": "7c95ee8051c816c3b896ede387eda659e093778241a127e2b17d55b5f32d6e33",
+  "delta_independently_reconstructed_exactly": true,
+  "unchanged_files": 10375,
+  "added": 0,
+  "deleted": 0,
+  "changed_files": {
+    "TreeDB/internal/rootpublication/native_index_observer_v6_test.go": "3302dadf28f7a8b8c5da065613dffeac163ca01d3a62101fa8deb8d0762ec0d9",
+    "TreeDB/internal/rootpublication/primary_empty_candidate_work_v6.go": "56c85430928b3a399404bd5f23c49af5c11c5e3bac5f1b40157467eaf42193bb"
+  },
+  "same_file_outside_observer_byte_exact": true,
+  "DB_actual_capture_tests_byte_exact": true,
+  "production_lifetime_layout_constructor_release_authority_F293_R145_caps_unchanged": true,
+  "findings": [],
+  "PC1_disposition": "Resolved in source: normalize only expected pin identity; exact observed Generation0/physical equality; full token identity still exact with nonzero expected logical generation. No pin/registry/token mutation or semantic change.",
+  "fixture_review": {
+    "actual_constructor_physical_pin_0_logical_token_7_asserted": true,
+    "existing_expected_identity_platform_volume_object_generation_negatives_retained": true,
+    "existing_corrupt_pin_generation_negative_retained": true,
+    "new_separate_pin_negatives": [
+      "wrong-pin-platform",
+      "wrong-pin-volume",
+      "wrong-pin-object"
+    ],
+    "all_temporary_fields_restored_before_cleanup": true,
+    "original_short_work_refcount_charge_cleanup_controls_retained": true,
+    "no_positive_result_claimed": true
+  },
+  "pricing": {
+    "binding_records": 2,
+    "complete_public_observer_records": 11,
+    "identity_byte_term_before": "2*unsafe.Sizeof(identity)",
+    "identity_byte_term_after": "6*unsafe.Sizeof(identity)",
+    "additional_bytes": "4*unsafe.Sizeof(identity)",
+    "fixed_projection_after_reservation": true,
+    "original_record_limit": 32,
+    "original_byte_limit": 1048576,
+    "no_retained_charge_or_numeric_allowance_change": true,
+    "compiler_transitive_traffic_or_escape_claim": false
+  },
+  "proposed_controls": {
+    "sha256": "2598c53900b7092b582addcc90d453dc3fb6bf84ef5df1d3f50bba365273ef4d",
+    "commands": 4,
+    "normal_top_names": 7,
+    "race_top_names": 7,
+    "normal_child_names": 31,
+    "race_child_names": 31,
+    "original_argv_order_env_bounds_unchanged_except_task_TMPDIR": true,
+    "all_five_selected_file_hashes_verified": true,
+    "required_child_names": {
+      "TestNativeIndexObserverOriginalBackingV6": [
+        "platform",
+        "volume",
+        "object",
+        "generation",
+        "missing-backing",
+        "wrong-file",
+        "wrong-refs",
+        "zero-refs",
+        "wrong-owner",
+        "wrong-registry",
+        "missing-pin",
+        "wrong-pin-identity",
+        "wrong-pin-platform",
+        "wrong-pin-volume",
+        "wrong-pin-object",
+        "released"
+      ],
+      "TestNativeIndexObserverOriginalCapturesV6": [
+        "DATA",
+        "PRIMARY"
+      ],
+      "TestNativePagerOperationsPartialConstructionAndCancellationV6": [
+        "before-output",
+        "output-only",
+        "custody-before-owner",
+        "complete",
+        "resume-output",
+        "resume-custody",
+        "owner-overflow"
+      ],
+      "TestNativeStablePagerPartialTokenCancellationV6": [
+        "before-token",
+        "growth-refusal",
+        "token-only",
+        "before-pinned-backing",
+        "before-retain",
+        "after-retain"
+      ]
+    },
+    "runtime_authorized_by_reviewer": false,
+    "executed": false,
+    "root_metadata_refresh_and_new_selection_required": true
+  },
+  "input_sha256": {
+    "native-decision/root-index-pin-identity-repair-selection.md": "3bedfce103563a51ce20f1b16d537b35d4d6796d6537a941a06a7c68111ee1ab",
+    "native-main-integration/index-pin-identity-repair/freeze-receipt.json": "17ec713d2c596dd7e8fe53ac9f77c5e9b47b43e07d63dea940b02289ef1924d6",
+    "native-main-integration/index-pin-identity-repair/invariance.json": "6859c8df56a30cde897e54b7df71229db553ce9c47f03ab4ec4a1be3d37d84bd",
+    "native-main-integration/index-pin-identity-repair/pricing-and-invariance.md": "45676cb15829ece1367c80b83554dd27aaeb69696e268da3c01ea1b733de1a59",
+    "native-main-integration/index-pin-identity-repair/proposed-focused-controls.json": "2598c53900b7092b582addcc90d453dc3fb6bf84ef5df1d3f50bba365273ef4d",
+    "native-decision/index-observer-positive-capture-review.md": "7046ebd7192049dc5dabe4daa06e2c0ede44b6beaaa10bb5210645ed1636e43c"
+  },
+  "limits": [
+    "No new standalone compile or fixture bodies; next compile is within root-selected focused calls",
+    "Prior21bc first-call failure and earlier source ACCEPT remain historical, unchanged; no retroactive PASS",
+    "No actual33, genuine native final driver/adoption/activation/fence/Consume/Finish/publication or qualification credit",
+    "Complete retention/Finish numeric acceptance remains open; Q32/1MiB/33/80/4096 RED/ACK0/noAllowanceChosen",
+    "23e37a21 metadata-only binding adds no Go execution or positive-control result"
+  ],
+  "lease_released": true,
+  "metadata_successor": {
+    "verdict": "ACCEPT",
+    "preserved_source_review_md_sha256": "a341beb4cb27cc8f820fd98df26598e763583e434bc27d5b79d1dd47cb0fe014",
+    "preserved_source_review_json_sha256": "581518293573fd2700725ca110f5a5378a8c6c6cfc13ad984d6ffb588f8475cc",
+    "source_manifest_sha256": "23e37a210f156838de8adecbf8532c0cd16cd12f6d6c37fb05529b7974d0869f",
+    "source_archive_sha256": "ea996ddc0c637f7674efded9f0611b3d2108554b460ea35d9859e6b47cf25293",
+    "all_10377_archive_member_hashes_verified": true,
+    "only_changed_path": ".github/ci/ci_impact.json",
+    "only_changed_field": "discovery_source_sha256",
+    "discovery_source_sha256_before": "0cf1a3c0d497c9577ce8466a5b4c3bb48fdbd5d4f54d17706310df5e021b8c42",
+    "discovery_source_sha256_after": "84f63d1a6f71d6c52bf7dc6ca44a6a18c2b78b28cd34fd753d47c8d5c5258828",
+    "root_recorded_staged_tree": "52ca5ef561f6d27928356ca2f836e722be7c4b31",
+    "root_recorded_staged_paths": 204,
+    "independent_git_object_rehash": false,
+    "receipt_sha256": "970223d6af91711c52886256edf1d249e3fc1b0a0b514cede2c6553e772f429d",
+    "source_contract_refresh_staged_checks_exit_zero_raw_hashes_verified": true,
+    "historical_python_reuse_receipt_sha256": "19b8ade63b4974a8c10920c4564626bcb54f6be8834ae34c9e5f28bfea1d45bf",
+    "four_historical_python_receipt_and_log_hashes_verified": true,
+    "historical_python_tests": 58,
+    "historical_python_tests_rerun": false,
+    "runtime_or_compile_result_added": false,
+    "runtime_authorized": false
+  }
+}

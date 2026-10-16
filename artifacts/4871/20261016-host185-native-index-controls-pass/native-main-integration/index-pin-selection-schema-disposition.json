@@ -1,0 +1,6 @@
+{
+  "exception": "KeyError name in original selector script: new proposal already uses root command schema id/top_level_tests and global required_child_tests",
+  "source_or_runtime_effect": false,
+  "grant_written_by_failed_attempt": false,
+  "correction": "Read exact proposal schema; preserve original script; revalidate selector-derived test names and current source hashes"
+}

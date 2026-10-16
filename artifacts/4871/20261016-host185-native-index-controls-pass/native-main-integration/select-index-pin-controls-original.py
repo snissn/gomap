@@ -1,0 +1,27 @@
+from pathlib import Path
+import copy, hashlib, json, re
+D=Path('/mnt/fast4tb/gomap-mvcc-4871-20261015');W=D/'native-integrated';A=D/'native-main-integration/index-pin-inventory-final'
+P=D/'native-main-integration/index-pin-identity-repair/proposed-focused-controls.json';M=D/'native-decision/root-index-pin-controls-selection.md'
+def sha(p):return hashlib.sha256(p.read_bytes()).hexdigest()
+assert sha(A/'source-final.json')=='23e37a210f156838de8adecbf8532c0cd16cd12f6d6c37fb05529b7974d0869f'
+source=json.loads((A/'source-final.json').read_text());proposal=json.loads(P.read_text());commands=[];bindings={};children={}
+for p in proposal['commands']:
+ c=copy.deepcopy(p);c['id']=c.pop('name');c['top_level_tests']=c.pop('required_top_level_tests');c['race']='-race' in c['argv'];c['package']=c['argv'][-1];c['selector']=c['argv'][c['argv'].index('-run')+1]
+ c['candidate_manifest_sha256']=sha(A/'source-final.json');c['status']='AUTHORIZED_ONCE_BY_ROOT';c['env']['TMPDIR']=str(D/'native-main-integration/index-pin-controls'/c['id']/'tmp')
+ actual=[]
+ for q in (W/c['package'][2:]).glob('*_test.go'):
+  for name in re.findall(r'^func (Test\w+)\(t \*testing\.T\)',q.read_text(),re.M):
+   if re.search(c['selector'],name):
+    actual.append(name);rel=str(q.relative_to(W));assert sha(q)==source[rel];bindings[rel]=source[rel]
+ assert sorted(actual)==sorted(c['top_level_tests'])
+ for child in c.pop('required_child_tests'):
+  parent,sub=child.split('/',1);assert parent in actual
+  if sub not in children.setdefault(parent,[]):children[parent].append(sub)
+ commands.append(c)
+assert [c['race'] for c in commands]==[False,False,True,True]
+assert sum(len(c['top_level_tests']) for c in commands if not c['race'])==7
+assert sum(len(v) for v in children.values())==31
+M.write_text('# Root selection: canonical physical pin and complete logical token controls\n\nRoot accepts the two-file observer correction source61cdf3b0/archive159f092e after full delta/pricing review and independent ACCEPTa341beb4/58151829. It resolves PC1 by projecting only the expected pin identity; exact observed pinGeneration0 and full token identity remain required. Original constructor pin0/token7 invariant and three independent physical-pin negatives strengthen the existing backing test. All genuine DB DATA/PRIMARY tests and production constructor/registry/lifetime/F293/R145/caps remain byte-exact.\n\nRoot staged exactly the two selected files and refreshed only CI discovery metadata. Finalsource23e37a210f156838de8adecbf8532c0cd16cd12f6d6c37fb05529b7974d0869f/archiveea996ddc0c637f7674efded9f0611b3d2108554b460ea35d9859e6b47cf25293/tree52ca5ef561f6d27928356ca2f836e722be7c4b31 has10377files204stagedpaths. Source-contract PASS;58Pythonchecks retain explicit historical unchanged-script attribution. No separate compile-only repeat; compilation occurs with focused controls.\n\nAuthorize exactly four JSON commands once, sequentially normalDB, normalrootpublication, raceDB, racerootpublication. Eachmode must RUN/PASS all7tops31children. Native_prerequisite is soleoperator exactgpt-6.1-sol/nochildren, frozen native-integrated; root owns all Git/index/GH. Evidence native-main-integration/index-pin-controls. Exact pinnedofflineGo1.26.3/p1/parallel1/count1, Go3mouter300normal360race,GOMAXPROCS2/GOMEMLIMIT8GiB. Allsource/archive/index/tool/compiler/argv/env bindings and actual PIDPGID/subreaper/join required. No source/index mutation. Stop firstfailure/skip/missing-or-unexpectedtest/drift/timeout/intervention/residue before remaining calls/fix/retry; return fullpartial evidence and release runtime lease. Actual command.executed is set only on real launch; original proposal staysfalse.\n\nThe predecessor firstcall failure remains immutable; its other2tops13children PASS is separately attributed, not erased. This sequence tests changed observer correctness and original capture/cleanup under race. No actual33/native finaldriver/publication/Finish/benchmark or numeric allowance is authorized. Actual33 needs separate selection after scoped acceptance. Q32/1MiB/33/80/4096 remain RED/ACK0; private/fullretention, nonempty/dedup/Z256, real Finish/C1C3/final graph qualification remain open.\n')
+x=dict(selection_sha256=sha(M),proposal_sha256=sha(P),source_manifest=str(A/'source-final.json'),source_manifest_sha256=sha(A/'source-final.json'),source_archive=str(A/'source-final.tar.gz'),source_archive_sha256='ea996ddc0c637f7674efded9f0611b3d2108554b460ea35d9859e6b47cf25293',source_files=len(source),source_tree='52ca5ef561f6d27928356ca2f836e722be7c4b31',source_mutations_allowed=False,actual33_authorized=False,native_publication_authorized=False,normal_top_level_tests=7,race_top_level_tests=7,selected_test_files=bindings,required_child_tests=children,commands=commands,stop_at_first_failure=True)
+M.with_suffix('.json').write_text(json.dumps(x,indent=2,sort_keys=True)+'\n')
+print(json.dumps(dict(selection_md_sha256=sha(M),selection_json_sha256=sha(M.with_suffix('.json')),calls=len(commands),source_files=len(source),test_files=len(bindings),children_each_mode=31),indent=2))

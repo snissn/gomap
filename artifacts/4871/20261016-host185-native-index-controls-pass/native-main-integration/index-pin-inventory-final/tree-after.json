@@ -1,0 +1,8 @@
+{
+  "argv": [
+    "git",
+    "write-tree"
+  ],
+  "exit_code": 0,
+  "log_sha256": "f6e19212573be1c2d5e93e913fe5e144c564131fb8011dc33c6a5dd917a96aef"
+}

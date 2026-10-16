@@ -1,0 +1,14 @@
+[
+  {
+    "after_sha256": "3302dadf28f7a8b8c5da065613dffeac163ca01d3a62101fa8deb8d0762ec0d9",
+    "before_sha256": "0bff991e390181c1ae790186f7d733af3473449024ee285dedeaee04e49d11e3",
+    "bytes": 5720,
+    "path": "TreeDB/internal/rootpublication/native_index_observer_v6_test.go"
+  },
+  {
+    "after_sha256": "56c85430928b3a399404bd5f23c49af5c11c5e3bac5f1b40157467eaf42193bb",
+    "before_sha256": "a9aa99182df49472a18c30858f456a241c3f5b0d7d54d1930cad5fbb18134968",
+    "bytes": 20961,
+    "path": "TreeDB/internal/rootpublication/primary_empty_candidate_work_v6.go"
+  }
+]

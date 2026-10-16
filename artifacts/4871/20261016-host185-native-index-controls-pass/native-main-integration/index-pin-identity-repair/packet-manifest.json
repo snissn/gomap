@@ -1,0 +1,14 @@
+{
+  "HANDOFF.md": "1812fb9f94d39b823f3995ab43a5d99166dbc69334c22e6edcc18879e00dec89",
+  "changed-files.json": "3489cb35259918462eed01cf7fc848ac7fe8c24e302f96cfd44b6358a217e954",
+  "delta-files/TreeDB/internal/rootpublication/native_index_observer_v6_test.go": "3302dadf28f7a8b8c5da065613dffeac163ca01d3a62101fa8deb8d0762ec0d9",
+  "delta-files/TreeDB/internal/rootpublication/primary_empty_candidate_work_v6.go": "56c85430928b3a399404bd5f23c49af5c11c5e3bac5f1b40157467eaf42193bb",
+  "freeze-receipt.json": "17ec713d2c596dd7e8fe53ac9f77c5e9b47b43e07d63dea940b02289ef1924d6",
+  "freeze.py": "089a75ea2c240e616fbd93e5cd973addc85e1337d658f55f311b82eb07ebd6a8",
+  "index-pin-identity-repair.delta.patch": "7c95ee8051c816c3b896ede387eda659e093778241a127e2b17d55b5f32d6e33",
+  "invariance.json": "6859c8df56a30cde897e54b7df71229db553ce9c47f03ab4ec4a1be3d37d84bd",
+  "pricing-and-invariance.md": "45676cb15829ece1367c80b83554dd27aaeb69696e268da3c01ea1b733de1a59",
+  "proposed-focused-controls.json": "2598c53900b7092b582addcc90d453dc3fb6bf84ef5df1d3f50bba365273ef4d",
+  "source-frozen.json": "61cdf3b0deacee88a2018e0e7452191860ff78a6d0e34600f8de7d19c17b1019",
+  "source-frozen.tar.gz": "159f092efb60e2f01a916768d2fc777ed5e25339efc7d011e0ddbcab3e33f1f2"
+}

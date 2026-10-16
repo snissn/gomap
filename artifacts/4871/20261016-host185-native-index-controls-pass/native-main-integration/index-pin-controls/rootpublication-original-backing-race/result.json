@@ -1,0 +1,196 @@
+{
+  "M4_selected_leaf_names": [],
+  "adopted_children_reaped": [],
+  "elapsed_seconds": 11.338011641986668,
+  "ended_utc": "2026-10-16T04:15:49.613286+00:00",
+  "exit_code": 0,
+  "expected_top_level_names": [
+    "TestNativeIndexObserverOriginalBackingV6",
+    "TestOriginalCleanupCustodyTypedGrowthAndRefundV6",
+    "TestOriginalCleanupCustodyTypedUnsupportedAndOrdinaryV6",
+    "TestOriginalCleanupCustodyTypedClosingAndOverflowV6"
+  ],
+  "group_and_children_empty": true,
+  "id": "rootpublication-original-backing-race",
+  "leader_joined": true,
+  "missing_child_names": [],
+  "missing_top_names": [],
+  "observed_group_processes": [
+    {
+      "comm": "go",
+      "pgid": 1027727,
+      "pid": 1027727,
+      "ppid": 1025689,
+      "session": 1027727,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1027727,
+      "pid": 1027746,
+      "ppid": 1027727,
+      "session": 1027727,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1027727,
+      "pid": 1028480,
+      "ppid": 1027727,
+      "session": 1027727,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1027727,
+      "pid": 1028484,
+      "ppid": 1027727,
+      "session": 1027727,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1027727,
+      "pid": 1028495,
+      "ppid": 1027727,
+      "session": 1027727,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1027727,
+      "pid": 1028499,
+      "ppid": 1027727,
+      "session": 1027727,
+      "state": "S"
+    },
+    {
+      "comm": "link",
+      "pgid": 1027727,
+      "pid": 1028507,
+      "ppid": 1027727,
+      "session": 1027727,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1027727,
+      "pid": 1028517,
+      "ppid": 1027727,
+      "session": 1027727,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1027727,
+      "pid": 1028521,
+      "ppid": 1027727,
+      "session": 1027727,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1027727,
+      "pid": 1028525,
+      "ppid": 1027727,
+      "session": 1027727,
+      "state": "R"
+    },
+    {
+      "comm": "rootpublication",
+      "pgid": 1027727,
+      "pid": 1028536,
+      "ppid": 1027727,
+      "session": 1027727,
+      "state": "S"
+    }
+  ],
+  "pgid": 1027727,
+  "pid": 1027727,
+  "raw_log_sha256": "df2a9ca8e73d35ada86230d407b12a3055da35e045a2cae2af8f88481c02a25f",
+  "remaining_direct_or_adopted_children": [],
+  "remaining_group_members": [],
+  "required_child_names": [
+    "TestNativeIndexObserverOriginalBackingV6/platform",
+    "TestNativeIndexObserverOriginalBackingV6/volume",
+    "TestNativeIndexObserverOriginalBackingV6/object",
+    "TestNativeIndexObserverOriginalBackingV6/generation",
+    "TestNativeIndexObserverOriginalBackingV6/missing-backing",
+    "TestNativeIndexObserverOriginalBackingV6/wrong-file",
+    "TestNativeIndexObserverOriginalBackingV6/wrong-refs",
+    "TestNativeIndexObserverOriginalBackingV6/zero-refs",
+    "TestNativeIndexObserverOriginalBackingV6/wrong-owner",
+    "TestNativeIndexObserverOriginalBackingV6/wrong-registry",
+    "TestNativeIndexObserverOriginalBackingV6/missing-pin",
+    "TestNativeIndexObserverOriginalBackingV6/wrong-pin-identity",
+    "TestNativeIndexObserverOriginalBackingV6/wrong-pin-platform",
+    "TestNativeIndexObserverOriginalBackingV6/wrong-pin-volume",
+    "TestNativeIndexObserverOriginalBackingV6/wrong-pin-object",
+    "TestNativeIndexObserverOriginalBackingV6/released"
+  ],
+  "residual_before_cleanup": {
+    "children": [],
+    "group": []
+  },
+  "signals": [],
+  "source_before_after_frozen": true,
+  "started_utc": "2026-10-16T04:15:38.275292+00:00",
+  "status": "PASS",
+  "stop_reasons": [],
+  "subreaper_verified": true,
+  "test_FAIL_names": [],
+  "test_PASS_names": [
+    "TestNativeIndexObserverOriginalBackingV6",
+    "TestNativeIndexObserverOriginalBackingV6/platform",
+    "TestNativeIndexObserverOriginalBackingV6/volume",
+    "TestNativeIndexObserverOriginalBackingV6/object",
+    "TestNativeIndexObserverOriginalBackingV6/generation",
+    "TestNativeIndexObserverOriginalBackingV6/missing-backing",
+    "TestNativeIndexObserverOriginalBackingV6/wrong-file",
+    "TestNativeIndexObserverOriginalBackingV6/wrong-refs",
+    "TestNativeIndexObserverOriginalBackingV6/zero-refs",
+    "TestNativeIndexObserverOriginalBackingV6/wrong-owner",
+    "TestNativeIndexObserverOriginalBackingV6/wrong-registry",
+    "TestNativeIndexObserverOriginalBackingV6/missing-pin",
+    "TestNativeIndexObserverOriginalBackingV6/wrong-pin-identity",
+    "TestNativeIndexObserverOriginalBackingV6/wrong-pin-platform",
+    "TestNativeIndexObserverOriginalBackingV6/wrong-pin-volume",
+    "TestNativeIndexObserverOriginalBackingV6/wrong-pin-object",
+    "TestNativeIndexObserverOriginalBackingV6/released",
+    "TestOriginalCleanupCustodyTypedGrowthAndRefundV6",
+    "TestOriginalCleanupCustodyTypedUnsupportedAndOrdinaryV6",
+    "TestOriginalCleanupCustodyTypedClosingAndOverflowV6"
+  ],
+  "test_RUN_names": [
+    "TestNativeIndexObserverOriginalBackingV6",
+    "TestNativeIndexObserverOriginalBackingV6/platform",
+    "TestNativeIndexObserverOriginalBackingV6/volume",
+    "TestNativeIndexObserverOriginalBackingV6/object",
+    "TestNativeIndexObserverOriginalBackingV6/generation",
+    "TestNativeIndexObserverOriginalBackingV6/missing-backing",
+    "TestNativeIndexObserverOriginalBackingV6/wrong-file",
+    "TestNativeIndexObserverOriginalBackingV6/wrong-refs",
+    "TestNativeIndexObserverOriginalBackingV6/zero-refs",
+    "TestNativeIndexObserverOriginalBackingV6/wrong-owner",
+    "TestNativeIndexObserverOriginalBackingV6/wrong-registry",
+    "TestNativeIndexObserverOriginalBackingV6/missing-pin",
+    "TestNativeIndexObserverOriginalBackingV6/wrong-pin-identity",
+    "TestNativeIndexObserverOriginalBackingV6/wrong-pin-platform",
+    "TestNativeIndexObserverOriginalBackingV6/wrong-pin-volume",
+    "TestNativeIndexObserverOriginalBackingV6/wrong-pin-object",
+    "TestNativeIndexObserverOriginalBackingV6/released",
+    "TestOriginalCleanupCustodyTypedGrowthAndRefundV6",
+    "TestOriginalCleanupCustodyTypedUnsupportedAndOrdinaryV6",
+    "TestOriginalCleanupCustodyTypedClosingAndOverflowV6"
+  ],
+  "test_SKIP_names": [],
+  "timeout": false,
+  "top_level_RUN_names": [
+    "TestNativeIndexObserverOriginalBackingV6",
+    "TestOriginalCleanupCustodyTypedGrowthAndRefundV6",
+    "TestOriginalCleanupCustodyTypedUnsupportedAndOrdinaryV6",
+    "TestOriginalCleanupCustodyTypedClosingAndOverflowV6"
+  ],
+  "top_level_pass_count": 4,
+  "unexpected_top_names": []
+}

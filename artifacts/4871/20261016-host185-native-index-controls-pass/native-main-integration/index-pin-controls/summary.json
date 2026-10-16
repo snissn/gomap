@@ -1,0 +1,35 @@
+{
+  "actual33_executed": false,
+  "all_authorized_pass": true,
+  "all_groups_empty": true,
+  "commands_executed": 4,
+  "commands_not_executed": [],
+  "completed_utc": "2026-10-16T04:15:50.498948+00:00",
+  "native_publication_executed": false,
+  "public_status": "Q32 RED/ACK0; no allowance",
+  "results": [
+    {
+      "id": "db-original-captures-normal",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-pin-controls/db-original-captures-normal/result.json",
+      "status": "PASS"
+    },
+    {
+      "id": "rootpublication-original-backing-normal",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-pin-controls/rootpublication-original-backing-normal/result.json",
+      "status": "PASS"
+    },
+    {
+      "id": "db-original-captures-race",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-pin-controls/db-original-captures-race/result.json",
+      "status": "PASS"
+    },
+    {
+      "id": "rootpublication-original-backing-race",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-pin-controls/rootpublication-original-backing-race/result.json",
+      "status": "PASS"
+    }
+  ],
+  "source_files": 10377,
+  "source_manifest_sha256": "23e37a210f156838de8adecbf8532c0cd16cd12f6d6c37fb05529b7974d0869f",
+  "source_still_frozen": true
+}

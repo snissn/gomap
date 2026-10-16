@@ -1,0 +1,49 @@
+{
+  "verified_utc": "2026-10-16T04:16:56.385655+00:00",
+  "verifier_sha256": "ed357fff4dbb9b8a6e13ab7fb347845255bad5745a30aacd17b34419bf527d5e",
+  "source_files": 10377,
+  "source_manifest_sha256": "23e37a210f156838de8adecbf8532c0cd16cd12f6d6c37fb05529b7974d0869f",
+  "source_archive_sha256": "ea996ddc0c637f7674efded9f0611b3d2108554b460ea35d9859e6b47cf25293",
+  "evidence_members": 36,
+  "evidence_manifest_sha256": "37a628ec174e1d42208711a3226ae2902ff78b7cf8a7e4be0079d129d4606e39",
+  "evidence_archive_sha256": "24cbb133f49962de535a4754781a201c848a9bd1310fe247e5fd15fe744db127",
+  "source_and_index_unchanged": true,
+  "processes_joined_and_absent": true,
+  "execution_result": "PASS fourcalls; eachmode7tops31children",
+  "results": [
+    {
+      "id": "db-original-captures-normal",
+      "status": "PASS",
+      "elapsed_seconds": 46.28334833588451,
+      "pid": 1025725,
+      "pgid": 1025725,
+      "top_level_pass_count": 3
+    },
+    {
+      "id": "rootpublication-original-backing-normal",
+      "status": "PASS",
+      "elapsed_seconds": 7.379686790984124,
+      "pid": 1026570,
+      "pgid": 1026570,
+      "top_level_pass_count": 4
+    },
+    {
+      "id": "db-original-captures-race",
+      "status": "PASS",
+      "elapsed_seconds": 67.60076832911,
+      "pid": 1026692,
+      "pgid": 1026692,
+      "top_level_pass_count": 3
+    },
+    {
+      "id": "rootpublication-original-backing-race",
+      "status": "PASS",
+      "elapsed_seconds": 11.338011641986668,
+      "pid": 1027727,
+      "pgid": 1027727,
+      "top_level_pass_count": 4
+    }
+  ],
+  "runtime_repeated": false,
+  "public_status": "Q32 RED/ACK0; no actual33 successor/native publication/allowance"
+}
