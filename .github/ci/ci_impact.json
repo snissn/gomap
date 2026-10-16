@@ -9,9 +9,10 @@
     "No package reverse closure or test-level elimination is qualified; production/test/script/unknown/new input changes choose full.",
     "MVCC and sparse/owner paired benchmarks execute explicit head/base contexts; ordinary PR correctness uses merge candidate.",
     "C3 hosted qualification is manual, capacity-only by default and requires a separate actual same-VM construction acceptance; forecasts grant no execution or performance qualification.",
-    "M0 observation is manual diagnostic-only on a separately fixed product; no forecast starts it or replaces failed M0 acceptance."
+    "M0 observation is manual diagnostic-only on a separately fixed product; no forecast starts it or replaces failed M0 acceptance.",
+    "Bounded maintenance comparison is a manually granted diagnostic on fixed baseline/candidate products; no forecast starts it or establishes cost, M0 or native acceptance."
   ],
-  "discovery_source_sha256": "a18b1a26968faf8d9511dcbcaf003ebb8b1e203616445de5fcd493665855ec2c",
+  "discovery_source_sha256": "3d0d5d1b9a56d5248a3fb8b2794f86cae9576ef29ff668ad06eebcd34ac25426",
   "dynamic_consumers": [
     {
       "behavior": "AST/WalkDir discovery and go test subprocess producer witnesses; all TreeDB test/race members retained",
@@ -96,6 +97,13 @@
         "**"
       ],
       "source": ".github/scripts/mvcc_m0_observation.py"
+    },
+    {
+      "behavior": "Manual fixed-product maintenance diagnostic archives and hashes all tracked product and harness inputs, compiles existing selected packages, and imports the fixed candidate process observer; no omission or qualification authority.",
+      "inputs": [
+        "**"
+      ],
+      "source": ".github/scripts/mvcc_maintenance_bootstrap.py"
     }
   ],
   "global_inputs": [
@@ -137,7 +145,7 @@
       "mode": "100644"
     },
     ".github/scripts/test_ci_impact.py": {
-      "git_blob": "3ad2955494f9d27c6bb05b24bcbbeed816507a74",
+      "git_blob": "d2d9c76a5aa06549582df275d42705cab4b10565",
       "mode": "100644"
     },
     ".github/scripts/test_treedb_ci_contract.py": {
@@ -437,6 +445,19 @@
         "tags": "entry command defaults/flags retained"
       },
       "workflow": "sparse-catalog-qualification.yml"
+    },
+    {
+      "id": "treedb-mvcc-maintenance-diagnostic/diagnostic/single",
+      "job": "diagnostic",
+      "owner": "CI maintainer with affected MVCC maintenance harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {},
+        "race": false,
+        "runs_on": "ubuntu-24.04",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "treedb-mvcc-maintenance-diagnostic.yml"
     },
     {
       "id": "treedb-tests/mvcc-raw-path-gate/single",
@@ -1187,6 +1208,7 @@
         "redis-bench.yml",
         "root-tests.yml",
         "sparse-catalog-qualification.yml",
+        "treedb-mvcc-maintenance-diagnostic.yml",
         "treedb-tests.yml",
         "treedb-vacuum-m0-observation.yml",
         "treedb-vacuum-m0.yml",
@@ -1210,6 +1232,7 @@
         "redis-bench.yml",
         "root-tests.yml",
         "sparse-catalog-qualification.yml",
+        "treedb-mvcc-maintenance-diagnostic.yml",
         "treedb-tests.yml",
         "treedb-vacuum-m0-observation.yml",
         "treedb-vacuum-m0.yml",
@@ -1233,6 +1256,7 @@
         "redis-bench.yml",
         "root-tests.yml",
         "sparse-catalog-qualification.yml",
+        "treedb-mvcc-maintenance-diagnostic.yml",
         "treedb-tests.yml",
         "treedb-vacuum-m0-observation.yml",
         "treedb-vacuum-m0.yml",
@@ -1246,6 +1270,7 @@
     {
       "consumers": [
         "root-tests.yml/test",
+        "treedb-mvcc-maintenance-diagnostic.yml",
         "treedb-tests.yml/race",
         "treedb-tests.yml/test",
         "treedb-vacuum-m0-observation.yml"
@@ -1266,6 +1291,7 @@
         "redis-bench.yml",
         "root-tests.yml",
         "sparse-catalog-qualification.yml",
+        "treedb-mvcc-maintenance-diagnostic.yml",
         "treedb-tests.yml",
         "treedb-vacuum-m0-observation.yml",
         "treedb-vacuum-m0.yml",
@@ -1289,6 +1315,7 @@
         "redis-bench.yml",
         "root-tests.yml",
         "sparse-catalog-qualification.yml",
+        "treedb-mvcc-maintenance-diagnostic.yml",
         "treedb-tests.yml",
         "treedb-vacuum-m0-observation.yml",
         "treedb-vacuum-m0.yml",
@@ -1312,6 +1339,7 @@
         "redis-bench.yml",
         "root-tests.yml",
         "sparse-catalog-qualification.yml",
+        "treedb-mvcc-maintenance-diagnostic.yml",
         "treedb-tests.yml",
         "treedb-vacuum-m0-observation.yml",
         "treedb-vacuum-m0.yml",
@@ -1335,6 +1363,7 @@
         "redis-bench.yml",
         "root-tests.yml",
         "sparse-catalog-qualification.yml",
+        "treedb-mvcc-maintenance-diagnostic.yml",
         "treedb-tests.yml",
         "treedb-vacuum-m0-observation.yml",
         "treedb-vacuum-m0.yml",
@@ -1358,6 +1387,7 @@
         "redis-bench.yml",
         "root-tests.yml",
         "sparse-catalog-qualification.yml",
+        "treedb-mvcc-maintenance-diagnostic.yml",
         "treedb-tests.yml",
         "treedb-vacuum-m0-observation.yml",
         "treedb-vacuum-m0.yml",
@@ -1381,6 +1411,7 @@
         "redis-bench.yml",
         "root-tests.yml",
         "sparse-catalog-qualification.yml",
+        "treedb-mvcc-maintenance-diagnostic.yml",
         "treedb-tests.yml",
         "treedb-vacuum-m0-observation.yml",
         "treedb-vacuum-m0.yml",
@@ -1404,6 +1435,7 @@
         "redis-bench.yml",
         "root-tests.yml",
         "sparse-catalog-qualification.yml",
+        "treedb-mvcc-maintenance-diagnostic.yml",
         "treedb-tests.yml",
         "treedb-vacuum-m0-observation.yml",
         "treedb-vacuum-m0.yml",
@@ -2200,6 +2232,52 @@
         }
       },
       "sha256": "8e4cff3764f31a85972ff9383a5e9cf7b1280d119bb7d0d0138bfcd4b7c9effe"
+    },
+    "treedb-mvcc-maintenance-diagnostic.yml": {
+      "coverage": "existing execution only; triggers/path filters are unchanged",
+      "events": {
+        "workflow_dispatch": null
+      },
+      "git_blob": "5db1627d00d523c4611092c2ba8aac5465b64506",
+      "jobs": {
+        "diagnostic": {
+          "checkout": [
+            {
+              "fetch-depth": 0,
+              "persist-credentials": false,
+              "ref": "${{ github.sha }}"
+            }
+          ],
+          "commands": [
+            {
+              "command_sha256": "dc2d7506fa6e28a95565b0bd60299cfa8a1f345e73aa6997a4c6d954f73fab67",
+              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:19",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Initialize retained attempt packet"
+            },
+            {
+              "command_sha256": "3bbcd578a6db06320b9181f1fcbdfcdce89d8c99b0b433ef9e2aeab17bd27a64",
+              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:38",
+              "invocation": "python3 -B .github/scripts/mvcc_maintenance_test.py > \"$RUNNER_TEMP/mvcc-maintenance-setup/pure-tests.log\" 2>&1",
+              "name": "Check syntax, receipts and fixed workflow contract (no Go execution)"
+            },
+            {
+              "command_sha256": "38d56548962e86f55dc4e1a22895ea3a0f33ff34d2b49ed50514f1359bcc6615",
+              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:41",
+              "invocation": "python3 -B .github/scripts/mvcc_maintenance_bootstrap.py > \"$RUNNER_TEMP/mvcc-maintenance-setup/bootstrap.log\" 2>&1",
+              "name": "Prepare exact inputs and collect once"
+            }
+          ],
+          "environment": {
+            "PYTHONDONTWRITEBYTECODE": "1"
+          },
+          "matrix": null,
+          "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": false,
+          "runs_on": "ubuntu-24.04"
+        }
+      },
+      "sha256": "2d682ddfe8416722c6408e033606700217b614858c78e7479d25caa294c126c8"
     },
     "treedb-tests.yml": {
       "coverage": "existing execution only; triggers/path filters are unchanged",
