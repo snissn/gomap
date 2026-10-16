@@ -1,0 +1,58 @@
+{
+  "commands": [
+    {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "./TreeDB",
+        "./TreeDB/tree",
+        "./TreeDB/caching",
+        "./TreeDB/db",
+        "./TreeDB/freelist",
+        "./TreeDB/internal/memtable",
+        "./TreeDB/internal/mvccadmission",
+        "./TreeDB/internal/primaryarena",
+        "./TreeDB/internal/retainedalloc",
+        "./TreeDB/internal/rootpublication",
+        "./TreeDB/internal/valuelog",
+        "./TreeDB/lifecycle",
+        "./TreeDB/mvcc",
+        "./TreeDB/node",
+        "./TreeDB/pager",
+        "./TreeDB/zipper",
+        "-run",
+        "^$",
+        "-count=1",
+        "-v",
+        "-timeout=3m"
+      ],
+      "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+      "env": {
+        "CGO_ENABLED": "1",
+        "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+        "GODEBUG": "",
+        "GOENV": "off",
+        "GOFLAGS": "",
+        "GOGC": "100",
+        "GOMAXPROCS": "2",
+        "GOMEMLIMIT": "8GiB",
+        "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+        "GOPROXY": "off",
+        "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+        "GOSUMDB": "off",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off",
+        "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/origin-repair/verification/compile-only/tmp"
+      },
+      "executed": false,
+      "name": "compile-only",
+      "outer_timeout_seconds": 600,
+      "requires_root_verification_grant": false,
+      "requires_separate_actual33_scope": false,
+      "source_only_selection_sha256": "54c32af15d0e0db95fabdd7a28f4d1e41280b32fe3eb6faca327e74d426c760c"
+    }
+  ],
+  "no_test_bodies": true,
+  "source_manifest_sha256": "787445cb4cbdda78d329b9c927c6e77fbe2ce48cd669214509790c3e9305b118"
+}

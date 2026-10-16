@@ -1,0 +1,8 @@
+{
+  "argv": [
+    "python3",
+    ".github/scripts/test_treedb_windows_core_headroom.py"
+  ],
+  "exit_code": 0,
+  "log_sha256": "2d553300022677f4de1b9068be409f98ec26e14e4897bb9cd0ac1e9277e8054e"
+}

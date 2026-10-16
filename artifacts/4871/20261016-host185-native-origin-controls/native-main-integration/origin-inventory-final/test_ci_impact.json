@@ -1,0 +1,8 @@
+{
+  "argv": [
+    "python3",
+    ".github/scripts/test_ci_impact.py"
+  ],
+  "exit_code": 0,
+  "log_sha256": "036a26146ac00faff1fdb844e9417bff9605ab7ab3133c75bd6d513dc638fd6f"
+}

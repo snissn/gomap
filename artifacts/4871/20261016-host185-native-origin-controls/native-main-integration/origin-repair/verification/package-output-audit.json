@@ -1,0 +1,109 @@
+{
+  "exact_requested_order": true,
+  "expected_packages": [
+    "github.com/snissn/gomap/TreeDB",
+    "github.com/snissn/gomap/TreeDB/tree",
+    "github.com/snissn/gomap/TreeDB/caching",
+    "github.com/snissn/gomap/TreeDB/db",
+    "github.com/snissn/gomap/TreeDB/freelist",
+    "github.com/snissn/gomap/TreeDB/internal/memtable",
+    "github.com/snissn/gomap/TreeDB/internal/mvccadmission",
+    "github.com/snissn/gomap/TreeDB/internal/primaryarena",
+    "github.com/snissn/gomap/TreeDB/internal/retainedalloc",
+    "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+    "github.com/snissn/gomap/TreeDB/internal/valuelog",
+    "github.com/snissn/gomap/TreeDB/lifecycle",
+    "github.com/snissn/gomap/TreeDB/mvcc",
+    "github.com/snissn/gomap/TreeDB/node",
+    "github.com/snissn/gomap/TreeDB/pager",
+    "github.com/snissn/gomap/TreeDB/zipper"
+  ],
+  "method": "Read retained raw log only; no rerun, source or historical summary modification",
+  "no_test_files_packages": 1,
+  "no_tests_to_run_packages": 15,
+  "raw_log_sha256": "3e8b8e15664119641b0d245294b1780b3a40f56ede13cf95d252333826ed7cdb",
+  "reported_packages": [
+    {
+      "detail": "0.003s [no tests to run]",
+      "package": "github.com/snissn/gomap/TreeDB",
+      "status": "ok"
+    },
+    {
+      "detail": "0.002s [no tests to run]",
+      "package": "github.com/snissn/gomap/TreeDB/tree",
+      "status": "ok"
+    },
+    {
+      "detail": "0.003s [no tests to run]",
+      "package": "github.com/snissn/gomap/TreeDB/caching",
+      "status": "ok"
+    },
+    {
+      "detail": "0.003s [no tests to run]",
+      "package": "github.com/snissn/gomap/TreeDB/db",
+      "status": "ok"
+    },
+    {
+      "detail": "0.001s [no tests to run]",
+      "package": "github.com/snissn/gomap/TreeDB/freelist",
+      "status": "ok"
+    },
+    {
+      "detail": "0.001s [no tests to run]",
+      "package": "github.com/snissn/gomap/TreeDB/internal/memtable",
+      "status": "ok"
+    },
+    {
+      "detail": "[no test files]",
+      "package": "github.com/snissn/gomap/TreeDB/internal/mvccadmission",
+      "status": "?"
+    },
+    {
+      "detail": "0.001s [no tests to run]",
+      "package": "github.com/snissn/gomap/TreeDB/internal/primaryarena",
+      "status": "ok"
+    },
+    {
+      "detail": "0.001s [no tests to run]",
+      "package": "github.com/snissn/gomap/TreeDB/internal/retainedalloc",
+      "status": "ok"
+    },
+    {
+      "detail": "0.002s [no tests to run]",
+      "package": "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "status": "ok"
+    },
+    {
+      "detail": "0.002s [no tests to run]",
+      "package": "github.com/snissn/gomap/TreeDB/internal/valuelog",
+      "status": "ok"
+    },
+    {
+      "detail": "0.001s [no tests to run]",
+      "package": "github.com/snissn/gomap/TreeDB/lifecycle",
+      "status": "ok"
+    },
+    {
+      "detail": "0.002s [no tests to run]",
+      "package": "github.com/snissn/gomap/TreeDB/mvcc",
+      "status": "ok"
+    },
+    {
+      "detail": "0.001s [no tests to run]",
+      "package": "github.com/snissn/gomap/TreeDB/node",
+      "status": "ok"
+    },
+    {
+      "detail": "0.001s [no tests to run]",
+      "package": "github.com/snissn/gomap/TreeDB/pager",
+      "status": "ok"
+    },
+    {
+      "detail": "0.002s [no tests to run]",
+      "package": "github.com/snissn/gomap/TreeDB/zipper",
+      "status": "ok"
+    }
+  ],
+  "runner_summary_false_reason": "Original predicate requires16 no-tests-to-run markers; mvccadmission correctly reports no test files, so15 markers+1 no-test-files is full16-package coverage.",
+  "zero_test_RUN": true
+}

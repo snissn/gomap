@@ -1,0 +1,11 @@
+{
+  "actual": 202,
+  "at_utc": "2026-10-16T03:13:19.364590+00:00",
+  "explanation": "Three new tests and the previously ordinary-owned release_queue_test.go add four paths to the198 staged predecessor. Exact current set equals predecessor union24 repair paths.",
+  "metadata_refresh_executed": false,
+  "original_expected": 201,
+  "source_changed": false,
+  "staged_tree": "bedb66102bc2032c102af91c5e9b04cd40ef0b5e",
+  "status": "staging succeeded; root-only expected-count assertion failed",
+  "successor": "finish-origin-inventory.py"
+}

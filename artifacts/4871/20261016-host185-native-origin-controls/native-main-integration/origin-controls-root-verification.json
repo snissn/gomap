@@ -1,0 +1,37 @@
+{
+  "verified_utc": "2026-10-16T03:25:19.376860+00:00",
+  "evidence_manifest_sha256": "9bbb05aab3bbd83167498f86048ee64183b52edbff48f69088810005ba2b416c",
+  "archive_sha256": "3fdc9555184bd235bb7736380b60c9050739c192c03d03b9b185591396361de0",
+  "archive_payloads": 21,
+  "results": [
+    {
+      "id": "normal-TreeDB-db",
+      "status": "PASS",
+      "exit_code": 0,
+      "elapsed_seconds": 12.34291417710483,
+      "pid": 975764,
+      "pgid": 975764,
+      "top_level_pass_count": 31,
+      "stop_reasons": []
+    },
+    {
+      "id": "normal-TreeDB-internal-rootpublication",
+      "status": "STOP",
+      "exit_code": 1,
+      "elapsed_seconds": 1.205218518152833,
+      "pid": 975965,
+      "pgid": 975965,
+      "top_level_pass_count": 16,
+      "stop_reasons": [
+        "nonzero exit",
+        "missing named top RUN/PASS",
+        "missing required child RUN/PASS",
+        "FAIL test",
+        "observed RUN without PASS"
+      ]
+    }
+  ],
+  "remaining_calls_unexecuted": 17,
+  "all_source_and_process_receipts_verified": true,
+  "rerun": false
+}

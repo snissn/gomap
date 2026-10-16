@@ -1,0 +1,132 @@
+{
+  "reviewer": "ordinary_review",
+  "actual_model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW",
+  "hosted_model_routing_unavailable_reason": "Hosted manual review cannot pin required exact gpt-6.1-sol; independent explicitly routed internal fallback used.",
+  "candidate_edits_by_reviewer": false,
+  "disposition": "ACCEPT",
+  "disposition_scope": "Frozen origin-repair source only; focused normal/race controls pending, no native qualification or allowance",
+  "source_manifest_sha256": "787445cb4cbdda78d329b9c927c6e77fbe2ce48cd669214509790c3e9305b118",
+  "source_archive_sha256": "158c914d4996fc3d4fbc9e7881518f32c1d04ccb322e708c7c8d70af562a1889",
+  "delta_sha256": "56597769336950e159dae981ba010a7c45c4236f69ff30e7fc2d9993614f3065",
+  "files": 10375,
+  "changed_paths": 24,
+  "modified": 21,
+  "added": 3,
+  "deleted": 0,
+  "findings": [],
+  "predecessor_disposition": "REJECT I1/I2 for d76289 retained without alteration; source fixes accepted here, runtime closure pending.",
+  "coverage": [
+    "Full24-path delta and affected shared callers, three added test files",
+    "Explicit ordinary/native constructor, root bank/table, claim, promotion and RAM image admission",
+    "Ordinary table lookup/rehashed old+new backing overlap and pre-reserved actual traversal",
+    "Ordinary certificate compensation versus attached native certificate/image custody and original abort refund",
+    "Every queue census entry and changed native production caller; pending-only debt, ordinary refusal/transfer, native SAME RemovalWork completion",
+    "Ordinary counted release/Abort, native containing callback and alias-before-refund ordering",
+    "No fields/representation changes in21 production struct definitions from changed paths; actual sizeof expressions unchanged",
+    "New held-root fixture observes actual node/head geometry, reads all retained cuts and reopens; primitive controls preserve native strictness"
+  ],
+  "I1_resolution": "Explicit origin dispatch preserves ordinary Lease.Resize/Close with original admission and compensation; native strict helpers remain unchanged.",
+  "I2_resolution": "Ordinary counted table helper preserves admitted rehash; native finite aggregate helper still refuses unsupported rehash before construction.",
+  "pricing": {
+    "retained_layout_delta": 0,
+    "struct_definitions_compared": 21,
+    "new_retained_state": false,
+    "ordinary_rehash_records": "3+3H+3N plus original lookup-link reservations",
+    "ordinary_rehash_bytes": "8H*sizeof(pointer)+2N*sizeof(entry)",
+    "native_full_seal_extra": "Explicit certificate helper1record,2*sizeof(ReadRootCertificateV6)+2*sizeof(bank), plus SAME strict growth; full validation primitive is not phased actual producer.",
+    "F": "Existing phased postactivation F293 expression byte-exact; not full invocation measurement or allowance.",
+    "R": "Existing R145 expression byte-exact, included in F.",
+    "remaining": "Private backing/aggregate retained total/whole Finish dynamic geometry remain incomplete."
+  },
+  "compile_evidence": {
+    "exit_code": 0,
+    "elapsed_seconds": 124.32889502029866,
+    "packages_requested": [
+      "TreeDB",
+      "TreeDB/tree",
+      "TreeDB/caching",
+      "TreeDB/db",
+      "TreeDB/freelist",
+      "TreeDB/internal/memtable",
+      "TreeDB/internal/mvccadmission",
+      "TreeDB/internal/primaryarena",
+      "TreeDB/internal/retainedalloc",
+      "TreeDB/internal/rootpublication",
+      "TreeDB/internal/valuelog",
+      "TreeDB/lifecycle",
+      "TreeDB/mvcc",
+      "TreeDB/node",
+      "TreeDB/pager",
+      "TreeDB/zipper"
+    ],
+    "packages_reported": [
+      "TreeDB",
+      "TreeDB/tree",
+      "TreeDB/caching",
+      "TreeDB/db",
+      "TreeDB/freelist",
+      "TreeDB/internal/memtable",
+      "TreeDB/internal/mvccadmission",
+      "TreeDB/internal/primaryarena",
+      "TreeDB/internal/retainedalloc",
+      "TreeDB/internal/rootpublication",
+      "TreeDB/internal/valuelog",
+      "TreeDB/lifecycle",
+      "TreeDB/mvcc",
+      "TreeDB/node",
+      "TreeDB/pager",
+      "TreeDB/zipper"
+    ],
+    "all16_reported": true,
+    "RUN_nodes": 0,
+    "leader_joined": true,
+    "group_and_children_empty": true,
+    "source_before_equals_frozen": true,
+    "source_after_equals_frozen": true,
+    "raw_summary_caveat": "summary.all_requested_packages_reported is false; independent raw reconciliation counts15ok plus1no-test-files and confirms all16 requested packages. No rerun or metadata replacement."
+  },
+  "focused_controls": {
+    "status": "PENDING_ROOT_SELECTION_AND_EXECUTION",
+    "proposal": "native-decision/origin-repair-review-extract/control-proposal.json",
+    "calls": 19
+  },
+  "evidence_hashes": {
+    "native-main-integration/origin-repair/source-frozen.json": "787445cb4cbdda78d329b9c927c6e77fbe2ce48cd669214509790c3e9305b118",
+    "native-main-integration/origin-repair/source-frozen.tar.gz": "158c914d4996fc3d4fbc9e7881518f32c1d04ccb322e708c7c8d70af562a1889",
+    "native-main-integration/origin-repair/origin-repair.delta.patch": "56597769336950e159dae981ba010a7c45c4236f69ff30e7fc2d9993614f3065",
+    "native-main-integration/origin-repair/freeze-receipt.json": "b197987b7456e99107c989c213585cc20927484ba93b4c6482c4c9dc8d3c5e8c",
+    "native-main-integration/origin-repair/release-callsite-census.json": "c87c9e417bd1bee9059c859242a64f0a9d599b45c73eaddb92183e2d1e9885c4",
+    "native-main-integration/origin-repair/release-callsite-ledger.json": "82a714bb0f0dba6a28219ff569bc258b471c3005de5971253c94ab03db702aa4",
+    "native-main-integration/origin-repair/origin-and-pricing-ledger.md": "f344a7287e0ce238cee58bc64e58a7148458bef27026170fc4b15e71dc8b9ee6",
+    "native-main-integration/origin-repair/verification/identity.json": "91d82b1c44203d7c668ccfe9f02352d908eebe3bbe768fbcc9ab077f5f0a5e39",
+    "native-main-integration/origin-repair/verification/summary.json": "9c5f1f8c9b02e12d1a1f6a1d36e431a9ab93eeb5221587703a2d189876c84915",
+    "native-main-integration/origin-repair/verification/compile-only/command.json": "8a368ff92230a734ceefa4c121265d90894f1922dea0386970697563a7d97707",
+    "native-main-integration/origin-repair/verification/compile-only/process.json": "aefef326e84993f14de6e300ac6671dcd87c5b7554e83d732a1c7db0f5dee2ab",
+    "native-main-integration/origin-repair/verification/compile-only/result.json": "9935cddf4c6966491c0b8f9c6f74342a1b182622d4961c19a8516890d5d5cd1e",
+    "native-main-integration/origin-repair/verification/compile-only/run.log": "3e8b8e15664119641b0d245294b1780b3a40f56ede13cf95d252333826ed7cdb",
+    "native-decision/origin-repair-review-extract/identity-verification.json": "f5fcb3b6dde9fb4fe9ed8062ebb6a65fe5ec9440f8d0aa0a9901d34cc1b0bfc4",
+    "native-decision/origin-repair-review-extract/compile-verification.json": "6447001ae4d7841d180a35cb59ba58d52476876e1b3eee959aef16e9b53d25d7",
+    "native-decision/origin-repair-review-extract/control-proposal.json": "44ba1e3c4530afeef18986310ec272c6a8c141fdc6d10bb7d62fd0ee4e36ce5b"
+  },
+  "review_lease_released": true,
+  "limitations": [
+    "No Go/runtime/build/tests/benchmark executed by reviewer.",
+    "No actual native publication/activation/final driver/actual33; primitive and synthetic callback success is not qualification.",
+    "No complete retention/Finish total or numeric allowance; Q32/1MiB/33/80/4096 remain RED/ACK0.",
+    "Current metadata remains predecessor inventory until root refreshes; no CI/mergeability claim."
+  ],
+  "compiler_binding_independently_verified": {
+    "go_binary_sha256": {
+      "actual": "d68b7abbc40d0844f673f6cf06ae3cded225c50437c6454fa37ef178d079fe65",
+      "recorded": "d68b7abbc40d0844f673f6cf06ae3cded225c50437c6454fa37ef178d079fe65",
+      "equal": true
+    },
+    "compile_binary_sha256": {
+      "actual": "3bb421d581f60b9ab48c2c73adf5c018557e89af32ad018d9c4417afa4bf90c1",
+      "recorded": "3bb421d581f60b9ab48c2c73adf5c018557e89af32ad018d9c4417afa4bf90c1",
+      "equal": true
+    }
+  }
+}

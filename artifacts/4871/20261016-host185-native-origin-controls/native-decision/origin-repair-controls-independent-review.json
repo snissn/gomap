@@ -1,0 +1,86 @@
+{
+  "ACK": 0,
+  "Q32": "RED",
+  "actual33_executed": false,
+  "actual_leaders_joined_groups_empty": true,
+  "actual_model": "gpt-6.1-sol",
+  "bindings": {
+    "base_source_manifest": "787445cb4cbdda78d329b9c927c6e77fbe2ce48cd669214509790c3e9305b118",
+    "db_raw": "71988855c0f5befa833bd78ca142c1676efa4e67897d4a3d4a99c42607df5e97",
+    "evidence_archive": "3fdc9555184bd235bb7736380b60c9050739c192c03d03b9b185591396361de0",
+    "evidence_manifest": "9bbb05aab3bbd83167498f86048ee64183b52edbff48f69088810005ba2b416c",
+    "final_source_archive": "9d60ef1a4d1960aa63a0fabbb99b55b57c61262ca9bdaa867160303994cbf7ed",
+    "final_source_manifest": "e434542a59d55cf67c90d6a16c5787abeb908efda4c1c705033658b9ba8e0577",
+    "final_staged_tree": "7354d5a24c03ea69f39489d33c2013ba0907f9d6",
+    "preserved_source_review_json": "7f68dc548dceb43d05e5cb5b81b00da3fefbbb45a64a78a7c5131b94018093a3",
+    "preserved_source_review_md": "919013501fdbdd0e75ff74c7cbbeb395da5f8e81558463273755f7acf5726d3f",
+    "rootpublication_raw": "1d9511ff810681455444b7e4c767ba3c12a99bea8a15aab34976db81fee6662b",
+    "selection_json": "9aa62ed39b31d92fb238fa1251facf85d567d16c84c9e5781350000710eb7331",
+    "selection_md": "d86a94d86b13cac9efeddad57cb4b72b22fd774aa8797cbbbbdd28f0bb27eff9"
+  },
+  "candidate_edits_by_reviewer": false,
+  "commands_authorized": 19,
+  "commands_executed": 2,
+  "commands_unexecuted": 17,
+  "control_disposition": "REJECT",
+  "findings": [
+    {
+      "boundaries": {
+        "callback_reserve_refusal": 5,
+        "cleanup_progress_yield": 32,
+        "hypothetical_single_call_total_not_authorized": 41,
+        "pre_lookup_refusal": 3,
+        "queue_pre_effect_refusal": 11,
+        "same_original_empty_queue_completion_retry": 12
+      },
+      "id": "C1",
+      "line": 313,
+      "minimal_repair": "Fixture-only explicit source-derived stage assertions; preserve3, add5, retain11, assert32 progress/yield, then same-original bounded12 retry; preserve cause/receipt/no-replay/alias-before-refund checks. No production pricing or Q32 change.",
+      "path": "TreeDB/internal/rootpublication/durable_root_transaction_work_callbacks_v6_test.go",
+      "source_custody_bug_established": false,
+      "trigger": "Both resource-custody children expect release callback after record limit3, but immutable table lookup requires two additional admitted records.",
+      "type": "fixture-boundary blocker"
+    }
+  ],
+  "hosted_review_unavailability_reason": "Hosted manual review cannot pin the user-required exact model; not requested.",
+  "independent_archive_live_index_verification": true,
+  "lease": "RELEASED",
+  "metadata_disposition": "ACCEPT",
+  "native_publication_accepted": false,
+  "normal_top_authorized": 66,
+  "numeric_allowance_granted": false,
+  "observed": [
+    {
+      "all_pass": 75,
+      "all_run": 75,
+      "call": "normal-TreeDB-db",
+      "exit": 0,
+      "top_pass": 31,
+      "top_run": 31
+    },
+    {
+      "all_pass": 29,
+      "all_run": 32,
+      "call": "normal-TreeDB-internal-rootpublication",
+      "exit": 1,
+      "top_pass": 16,
+      "top_run": 17
+    }
+  ],
+  "overall_scoped_disposition": "REJECT controls pending fixture correction and separately authorized evidence",
+  "policy_only_changed_field": "discovery_source_sha256",
+  "python_tests_pass": 58,
+  "qualification_accepted": false,
+  "race_top_authorized": 63,
+  "reasoning_effort": "high",
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW",
+  "reviewer": "/root/ordinary_review",
+  "reviewer_runtime_executed": false,
+  "selected_test_files": 34,
+  "source_before_after_equal": true,
+  "source_disposition": "ACCEPT preserved source-only review; metadata-only successor binding accepted",
+  "source_files": 10375,
+  "source_report_overwritten": false,
+  "staged_paths": 202,
+  "written_utc": "2026-10-16T03:21:54.664546+00:00"
+}

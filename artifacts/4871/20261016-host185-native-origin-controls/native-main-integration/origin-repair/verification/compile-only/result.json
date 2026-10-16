@@ -1,0 +1,839 @@
+{
+  "adopted_children_reaped": [],
+  "elapsed_seconds": 124.32889502029866,
+  "ended_utc": "2026-10-16T03:11:05.378050+00:00",
+  "exit_code": 0,
+  "group_and_children_empty": true,
+  "leader_joined": true,
+  "name": "compile-only",
+  "observed_group_processes": [
+    {
+      "comm": "go",
+      "pgid": 966042,
+      "pid": 966042,
+      "ppid": 965973,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 966042,
+      "pid": 966063,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 966042,
+      "pid": 966067,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 966042,
+      "pid": 966071,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 966042,
+      "pid": 966101,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 966042,
+      "pid": 966121,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 966042,
+      "pid": 966126,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 966042,
+      "pid": 966141,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 966042,
+      "pid": 966145,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 966042,
+      "pid": 966149,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 966042,
+      "pid": 966260,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 966042,
+      "pid": 966264,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 966042,
+      "pid": 966268,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 966042,
+      "pid": 966280,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 966042,
+      "pid": 966284,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 966042,
+      "pid": 966492,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 966042,
+      "pid": 966496,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 966042,
+      "pid": 966501,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 966042,
+      "pid": 966506,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 966042,
+      "pid": 966510,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "S"
+    },
+    {
+      "comm": "link",
+      "pgid": 966042,
+      "pid": 966523,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 966042,
+      "pid": 966531,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 966042,
+      "pid": 966539,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 966042,
+      "pid": 966547,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 966042,
+      "pid": 966551,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 966042,
+      "pid": 966559,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 966042,
+      "pid": 966567,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 966042,
+      "pid": 966579,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 966042,
+      "pid": 966587,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 966042,
+      "pid": 966822,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 966042,
+      "pid": 966826,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 966042,
+      "pid": 966841,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 966042,
+      "pid": 966852,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 966042,
+      "pid": 966857,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 966042,
+      "pid": 966872,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 966042,
+      "pid": 966913,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "link",
+      "pgid": 966042,
+      "pid": 966921,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 966042,
+      "pid": 966925,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 966042,
+      "pid": 966929,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 966042,
+      "pid": 966933,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 966042,
+      "pid": 966945,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 966042,
+      "pid": 967137,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 966042,
+      "pid": 967203,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 966042,
+      "pid": 967212,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "link",
+      "pgid": 966042,
+      "pid": 967220,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 966042,
+      "pid": 967226,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 966042,
+      "pid": 967250,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 966042,
+      "pid": 967268,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 966042,
+      "pid": 967382,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 966042,
+      "pid": 967387,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 966042,
+      "pid": 967399,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 966042,
+      "pid": 967466,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 966042,
+      "pid": 967471,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 966042,
+      "pid": 967622,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 966042,
+      "pid": 967626,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 966042,
+      "pid": 967635,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 966042,
+      "pid": 967639,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 966042,
+      "pid": 967644,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "link",
+      "pgid": 966042,
+      "pid": 967648,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 966042,
+      "pid": 967653,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 966042,
+      "pid": 967657,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 966042,
+      "pid": 967661,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 966042,
+      "pid": 967665,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 966042,
+      "pid": 967673,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 966042,
+      "pid": 967916,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 966042,
+      "pid": 967951,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "link",
+      "pgid": 966042,
+      "pid": 967963,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 966042,
+      "pid": 967972,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 966042,
+      "pid": 967988,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 966042,
+      "pid": 967993,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 966042,
+      "pid": 968001,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 966042,
+      "pid": 968017,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 966042,
+      "pid": 968023,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 966042,
+      "pid": 968027,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 966042,
+      "pid": 968035,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "link",
+      "pgid": 966042,
+      "pid": 968039,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 966042,
+      "pid": 968043,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 966042,
+      "pid": 968047,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 966042,
+      "pid": 968081,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 966042,
+      "pid": 968094,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "S"
+    },
+    {
+      "comm": "link",
+      "pgid": 966042,
+      "pid": 968155,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 966042,
+      "pid": 968170,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "S"
+    },
+    {
+      "comm": "link",
+      "pgid": 966042,
+      "pid": 968181,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 966042,
+      "pid": 968189,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 966042,
+      "pid": 968194,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 966042,
+      "pid": 968198,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "S"
+    },
+    {
+      "comm": "link",
+      "pgid": 966042,
+      "pid": 968206,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 966042,
+      "pid": 968211,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 966042,
+      "pid": 968215,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 966042,
+      "pid": 968232,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "S"
+    },
+    {
+      "comm": "link",
+      "pgid": 966042,
+      "pid": 968241,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 966042,
+      "pid": 968245,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 966042,
+      "pid": 968253,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "link",
+      "pgid": 966042,
+      "pid": 968268,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 966042,
+      "pid": 968272,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 966042,
+      "pid": 968280,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 966042,
+      "pid": 968291,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 966042,
+      "pid": 968369,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "link",
+      "pgid": 966042,
+      "pid": 968377,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 966042,
+      "pid": 968381,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 966042,
+      "pid": 968385,
+      "ppid": 966042,
+      "session": 966042,
+      "state": "S"
+    }
+  ],
+  "pgid": 966042,
+  "pid": 966042,
+  "remaining_direct_or_adopted_children": [],
+  "remaining_group_members": [],
+  "residual_observed_before_cleanup": false,
+  "signals": [],
+  "source_after_equals_frozen": true,
+  "source_before_after_equal": true,
+  "source_before_equals_frozen": true,
+  "started_utc": "2026-10-16T03:09:01.049146+00:00",
+  "subreaper_enabled": true,
+  "test_RUN_count": 0,
+  "test_RUN_names": [],
+  "timeout": false,
+  "top_level_fail_count": 0,
+  "top_level_fail_names": [],
+  "top_level_pass_count": 0,
+  "top_level_pass_names": [],
+  "top_level_skip_count": 0,
+  "top_level_skip_names": []
+}

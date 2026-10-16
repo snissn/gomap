@@ -1,0 +1,33 @@
+{
+  "argv": [
+    "git",
+    "add",
+    "--",
+    "TreeDB/db/native_mvcc_root_preparation_v6.go",
+    "TreeDB/db/native_mvcc_root_preparation_v6_test.go",
+    "TreeDB/db/native_mvcc_snapshot_close_v6.go",
+    "TreeDB/db/primary_bank_release_work_v6.go",
+    "TreeDB/db/primary_member_retirement_work_v6.go",
+    "TreeDB/db/primary_origin_compatibility_test.go",
+    "TreeDB/db/primary_runtime_disposal_work_v6.go",
+    "TreeDB/db/primary_seal_release_work_v6.go",
+    "TreeDB/db/primary_visible_abort_work_v6.go",
+    "TreeDB/internal/primaryarena/arena.go",
+    "TreeDB/internal/primaryarena/bundle.go",
+    "TreeDB/internal/primaryarena/directory_seal_work_v6.go",
+    "TreeDB/internal/primaryarena/native_mvcc_group_v6.go",
+    "TreeDB/internal/primaryarena/origin_compatibility_test.go",
+    "TreeDB/internal/primaryarena/read_root_v6.go",
+    "TreeDB/internal/primaryarena/release_queue.go",
+    "TreeDB/internal/primaryarena/release_queue_test.go",
+    "TreeDB/internal/rootpublication/durable_root_transaction_native_mvcc_v6.go",
+    "TreeDB/internal/rootpublication/durable_root_transaction_work_callbacks_v6_test.go",
+    "TreeDB/internal/rootpublication/native_primary_finish_work_v6.go",
+    "TreeDB/internal/rootpublication/primary_origin_compatibility_test.go",
+    "TreeDB/internal/rootpublication/primary_prepared_abort_work_v6_test.go",
+    "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+    "TreeDB/pager/primary_read_root_v6.go"
+  ],
+  "exit_code": 0,
+  "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

@@ -1,0 +1,8 @@
+{
+  "evidence_archive_sha256": "3fdc9555184bd235bb7736380b60c9050739c192c03d03b9b185591396361de0",
+  "evidence_manifest_sha256": "9bbb05aab3bbd83167498f86048ee64183b52edbff48f69088810005ba2b416c",
+  "files_archived": 21,
+  "handoff_json_sha256": "fe1b425716a31e76630dc99333e2d722556b9d582c78ff608422cc8e06c33b1f",
+  "handoff_md_sha256": "f653c1ca98d63b6d4c0ab58adc8898f840a7a5acb37ec1c520afb5373f7d1e3b",
+  "runtime_lease": "RELEASED"
+}

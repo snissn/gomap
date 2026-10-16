@@ -1,0 +1,23 @@
+{
+  "added": 3,
+  "base_source_manifest_sha256": "d76289da830b8f2c856e8f0595f37a541de99368b2e582b1ae290bdab532ce9a",
+  "changed_files": 24,
+  "changed_inventory_sha256": "98aefa1b3b6f07405d3b9c285e0059e0b8acecd684a95db45d38ea3eeea01075",
+  "compile_executed": false,
+  "deleted": 0,
+  "delta_sha256": "56597769336950e159dae981ba010a7c45c4236f69ff30e7fc2d9993614f3065",
+  "modified": 21,
+  "native_publication_executed": false,
+  "protected_unchanged": {
+    ".github/ci/ci_impact.json": "8dddfd075143fde0513b1e8d41974949729f2434076e5ceb2d785b171d97747c",
+    "TreeDB/db/primary_review_repairs_test.go": "b1b6f3a0bec33e19db2609a60c8793a10ec2aa74d1c603675c9fd288a12bfd84",
+    "TreeDB/internal/retainedalloc/owner_growth_work.go": "74735769ff46c27445a03ae785dad4e1a8ae3ecf84358d039486e0de9dcabf35",
+    "TreeDB/internal/retainedalloc/owner_work.go": "d4727141cffdc31205bc99854746a91fe10e19bdc628f643206d9ca94fd8aabe"
+  },
+  "selection_sha256": "54c32af15d0e0db95fabdd7a28f4d1e41280b32fe3eb6faca327e74d426c760c",
+  "source_archive_sha256": "158c914d4996fc3d4fbc9e7881518f32c1d04ccb322e708c7c8d70af562a1889",
+  "source_files": 10375,
+  "source_manifest_sha256": "787445cb4cbdda78d329b9c927c6e77fbe2ce48cd669214509790c3e9305b118",
+  "status": "Q32 RED/ACK0/noAllowanceChosen",
+  "test_bodies_executed": false
+}

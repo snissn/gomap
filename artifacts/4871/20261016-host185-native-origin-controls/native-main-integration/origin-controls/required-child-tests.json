@@ -1,0 +1,44 @@
+{
+  "TestNativePagerOperationsPartialConstructionAndCancellationV6": [
+    "before-output",
+    "output-only",
+    "custody-before-owner",
+    "complete",
+    "resume-output",
+    "resume-custody",
+    "owner-overflow"
+  ],
+  "TestNativePreparedAbortUsesOriginalBuilderOrCandidateReceiptV6": [
+    "builder",
+    "candidate"
+  ],
+  "TestNativeRootPreparationSourceTerminalV6": [
+    "before-acquire",
+    "last-owner",
+    "independent-held-owner",
+    "partial-scratch-cancel-and-refund"
+  ],
+  "TestNativeStablePagerPartialTokenCancellationV6": [
+    "before-token",
+    "growth-refusal",
+    "token-only",
+    "before-pinned-backing",
+    "before-retain",
+    "after-retain"
+  ],
+  "TestPrimaryConstructionV6SiblingFailureDisposal": [
+    "apply",
+    "copy",
+    "build"
+  ],
+  "TestPrimaryDataCertificateV6RefusalKeepsAcceptedCache": [
+    "seeded=false/prepare",
+    "seeded=false/activate",
+    "seeded=true/prepare",
+    "seeded=true/activate"
+  ],
+  "TestPrimaryFinishResourceRefusalAndFailureCustodyV6": [
+    "retry",
+    "failure"
+  ]
+}

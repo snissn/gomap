@@ -1,0 +1,44 @@
+# Origin repair source ledger
+
+Frozen successor source787445cb,10,375files;24path delta from previous integrated source d76289, rejected after its first control. This packet repairs ordinary Lease compatibility. It selects no native allowance or publication runtime.
+
+| Shared seam | Ordinary origin | Native origin |
+|---|---|---|
+| Transaction constructor | existing native=false: SAME AddPending, metrics Reserve unchanged; original failure RemovePending | existing native=true: unchanged strict AddPendingWithOrdinalWork; same partial transaction retained before fallible root preparation |
+| Read-root bank/table | PrepareConstructedReadRootV6 / PrepareReadRootV6 -> core false; original Add bank then counted original table node/Add/rehash, compensate bank on refusal | new named PrepareNativeConstructedReadRootV6 -> core true, original aggregate bank+node WorkLease admission, no rehash and no fallback |
+| Component claim | existing PrepareClaim/native=false: Add, ordinary chunk preparation and Cancel/refund | existing PrepareNativeClaimV6/native=true: strict AddWithOrdinalWork and existing retained partial Claim |
+| Directory image | existing writeBundleLocked -> core false, SAME Add/copy/Register/Remove compensation even with metrics work | DirectorySealWorkV6 and native current-absence group -> named writeNativeBundleLockedV6/core true; retained image attached before fallible registration, typed growth only |
+| Full transaction seal | SealPrimaryConstructionV6 reads existing nativeWorkOwned=false -> original certificate Add/Remove and image ordinary core | same method nativeWorkOwned=true -> named SealNativeConstructedReadRootV6; same full validation, existing attached native certificate helper and retained image; no synchronous ordinary refund on refusal. Phased actual producer remains DirectorySealWorkV6. |
+| Promotion storage | allocatePrimaryPromotionStorageV6 receives existing c.nativeWorkOwned=false: AddPending, original compensation defer unchanged | native=true: strict AddPendingWithOrdinalWork; same original preborn promotion custody; partial/private cancellation unchanged |
+| Queue progress | ReleaseQueueStep/shared false and ReleaseStep/ProgressOrdinaryRelease: actual work remains counted but aliases detach before original Remove/Resize/Close | named ReleaseNativeQueueStepV6/shared true: SAME queue.refund and refundOwner/charge, unchanged RemovalWork; nil work refused |
+| Abort | same shared transaction abort phases use c.nativeWorkOwned=false queue entry with ordinary maxwork | c.nativeWorkOwned=true uses native queue entry; original receipt/callback/terminal ownership unchanged |
+
+There is no interface-failure fallback, vector-size inference, replacement owner or extra retained state. The full seal dispatch is necessary because existing native primitive controls invoke SealPrimaryConstructionV6 on an actual native constructor. Routing every such shared call through the ordinary image core would silently weaken that path. Its ordinary certificate allocation/compensation statements remain unchanged; the native branch uses the already maintained bank-attached certificate custody.
+
+## Queue caller closure
+
+release-callsite-census.json records every textual ReleaseQueueStep, ReleaseNativeQueueStepV6, ReleaseStep, ProgressOrdinaryRelease, PreserveOrdinaryReleaseQueue and shared-core definition/call, including tests. release-callsite-ledger.json annotates every row. Production native callers are:
+
+- db/native_mvcc_root_preparation_v6.go: original preparation/source cleanup and terminal close, SAME embedded queue.
+- db/native_mvcc_snapshot_close_v6.go: bounded snapshot primary root release before snapshot/root/queue reset.
+- db/primary_visible_abort_work_v6.go: original native visible member's finite abort completion.
+- db/primary_member_retirement_work_v6.go: member's retired record and transferred oldState PRIMARY edge.
+- db/primary_runtime_disposal_work_v6.go: only existing disposalNative branch.
+- db/primary_seal_release_work_v6.go: only existing disposalNative branch.
+- db/primary_bank_release_work_v6.go: only established releaseNative branch; ordinary contract enters with nil work and ordinary Drop.
+- rootpublication/native_primary_finish_work_v6.go: original native receipt's physical queue before original Set release.
+- rootpublication/durable_root_transaction_native_mvcc_v6.go: existing nativeWorkOwned branch; sibling ordinary branch calls ordinary ReleaseQueueStep.
+
+Ordinary db/db.go Snapshot.Close retains ReleaseQueueStep(nil); actual native snapshot close is the separate typed method above. Zipper ProgressOrdinaryRelease retains nonnil metric work on the arena ordinary queue. ReleaseStep delegates to ordinary entry. Existing fixture/drain helpers using ReleaseStep remain ordinary. Four native queue test files switch to the named native entry; test flow, limits and assertions remain otherwise unchanged.
+
+A detached refund is real remaining custody even when bankHead=0 and groupHead=nil. Shared emptyLocked includes refundOwner; ordinary Progress checks that predicate. Ordinary queue execution refuses existing refundOwner before queue mutation/refund, for nil and counted work. PreserveOrdinaryReleaseQueue refuses it before transferring either physical head. Native execution completes it using the SAME RemovalWork before inspecting physical emptiness. No initialized mutex/RemovalWork is copied by this repair. New actual queue control reaches this state by constructing/dropping/releasing a real root, verifies shared emptiness plus ordinary/nil/transfer refusal, then drains its original native completion.
+
+## Actual pricing and retained traffic
+
+No containing type fields, backing allocations, owner identities, root refs or retained counters are added. Arena, bank, Claim, ReleaseQueue, transaction construction, promotion, receipt, runtime, Snapshot and token layouts are byte-identical definitions. Thus every existing unsafe.Sizeof-based admission still describes the same concrete storage; delta retained bytes =0. All edited native constructors/claim/phased seal/image/native queue use their original reservation statements and original typed owner operations. Native dispatch changes are protected scalar policy selection within the already admitted original header/control unit, not new independently retained work. Queue.emptyLocked's extra refundOwner read is covered by the existing 2*sizeof(ReleaseQueue) queue traffic (formerly bank/group-only logical emptiness skipped that real state). No postactivation body changes: source F293 and R145 expressions remain byte-exact and retain their prior applicability/unknowns; this repair does not assert a complete observed whole-invocation bound.
+
+The ordinary table wrapper now counts actual lookup links before reading each link: one record and sizeof(pointer)+2*sizeof(entry) per visit, including terminal nil. Under the SAME table lock, rehash pre-reserves 3+3H+3N records and 8H*sizeof(pointer)+2N*sizeof(entry) bytes, where H=len(heads) and N=count; arithmetic checked before reserve/effects. This includes new2H allocation initialization, H head traversal, N original link/relink traffic and install/refund controls. The original separately rounded node and new-head Add retain old+new backing overlap before allocation; old full-capacity charge is refunded only after table replacement. Ordinary Lease.Resize/Close remain ordinary service, not incorrectly reinterpreted as native WorkLease. Native finite table construction is unchanged and still refuses rehash before admission or constructor call. No guessed table capacity or lowered native charge is introduced.
+
+The native full-validation seal helper (existing non-phased primitive caller) now also explicitly debits existing prepareReadRootCertificateLockedV6: 1 record,2*sizeof(certificate)+2*sizeof(bank), plus SAME strict owner growth. It attaches private certificate to bank before image work, so refusal does not create an ordinary compensation parent. Its existing whole-directory validation remains one indivisible unit of 1+groupCountPresent+PrimaryDirectoryMaxEntries records; it is not the public Q32 phased producer or a new native success claim.
+
+Three added test files contain four top-level controls. They remain unexecuted: real ordinary held snapshots across observed count512/heads512 with Lease-only budget, read/close/reopen; ordinary counted claim/read-root/release with paired native refusal; original ordinary constructor/promotion storage compensation/Abort with actual Lease.Resize/Close and paired native unsupported no-effect; real native accounting-only queue refusal and final drain. No synthetic successful activation/receipt/publication is added. The existing cache-refusal fixture and both strict owner helper files remain byte-exact as recorded in freeze-receipt.json.

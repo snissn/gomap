@@ -1,0 +1,82 @@
+{
+  "HANDOFF.md": {
+    "bytes": 1682,
+    "sha256": "f653c1ca98d63b6d4c0ab58adc8898f840a7a5acb37ec1c520afb5373f7d1e3b"
+  },
+  "handoff.json": {
+    "bytes": 2110,
+    "sha256": "fe1b425716a31e76630dc99333e2d722556b9d582c78ff608422cc8e06c33b1f"
+  },
+  "identity.json": {
+    "bytes": 5295,
+    "sha256": "e05bc04b31eda061e16460a388d5e909be898a0f4abc3362ee867284db8fd776"
+  },
+  "normal-TreeDB-db/command.json": {
+    "bytes": 6507,
+    "sha256": "754b835a0761670909fb6fd80dac482365ed69e73a252c9e5528f39e48b5d6d8"
+  },
+  "normal-TreeDB-db/process.json": {
+    "bytes": 145,
+    "sha256": "11eaf9a871a29f4edcd35ec120ad6c92d2c3ac6488b9980ec19b37eb38ef6a8a"
+  },
+  "normal-TreeDB-db/result.json": {
+    "bytes": 16763,
+    "sha256": "1e0c5edef466f80b9d0a7356ae658674bf8074701bc2d7c1b04e2ec9434ea084"
+  },
+  "normal-TreeDB-db/run.log": {
+    "bytes": 11588,
+    "sha256": "71988855c0f5befa833bd78ca142c1676efa4e67897d4a3d4a99c42607df5e97"
+  },
+  "normal-TreeDB-db/source-after.json": {
+    "bytes": 1588862,
+    "sha256": "e434542a59d55cf67c90d6a16c5787abeb908efda4c1c705033658b9ba8e0577"
+  },
+  "normal-TreeDB-db/source-before.json": {
+    "bytes": 1588862,
+    "sha256": "e434542a59d55cf67c90d6a16c5787abeb908efda4c1c705033658b9ba8e0577"
+  },
+  "normal-TreeDB-internal-rootpublication/command.json": {
+    "bytes": 4415,
+    "sha256": "a1286a042cddb1ed6516a2005ca7287362b7ee4f7deb10ef65ed2dfba49dd55c"
+  },
+  "normal-TreeDB-internal-rootpublication/process.json": {
+    "bytes": 145,
+    "sha256": "40f1c9813304671a64f0b339514b371b4f63db9c2cd37ced78014d1c293bb8c7"
+  },
+  "normal-TreeDB-internal-rootpublication/result.json": {
+    "bytes": 8188,
+    "sha256": "36468a82c49ac97572c8b84094628de5f20b5223f38b558b83fc5a6b93d2e05c"
+  },
+  "normal-TreeDB-internal-rootpublication/run.log": {
+    "bytes": 5345,
+    "sha256": "1d9511ff810681455444b7e4c767ba3c12a99bea8a15aab34976db81fee6662b"
+  },
+  "normal-TreeDB-internal-rootpublication/source-after.json": {
+    "bytes": 1588862,
+    "sha256": "e434542a59d55cf67c90d6a16c5787abeb908efda4c1c705033658b9ba8e0577"
+  },
+  "normal-TreeDB-internal-rootpublication/source-before.json": {
+    "bytes": 1588862,
+    "sha256": "e434542a59d55cf67c90d6a16c5787abeb908efda4c1c705033658b9ba8e0577"
+  },
+  "required-child-tests.json": {
+    "bytes": 1049,
+    "sha256": "f52ee791bc9a3b0495b1cf6664bd236670af9b9cd33c4e4be8eee221d60a8468"
+  },
+  "run-controls.py": {
+    "bytes": 10815,
+    "sha256": "df24ab15549c3a18a52b88448e7c03da71e1215137f47ed2ce8cc6eb1a763c1f"
+  },
+  "selection.json": {
+    "bytes": 40950,
+    "sha256": "9aa62ed39b31d92fb238fa1251facf85d567d16c84c9e5781350000710eb7331"
+  },
+  "selection.md": {
+    "bytes": 4096,
+    "sha256": "d86a94d86b13cac9efeddad57cb4b72b22fd774aa8797cbbbbdd28f0bb27eff9"
+  },
+  "summary.json": {
+    "bytes": 1447,
+    "sha256": "e57bf36c60f7b726c1591ca533ca4c84060601dc6da409414fc4413c6bb8173e"
+  }
+}

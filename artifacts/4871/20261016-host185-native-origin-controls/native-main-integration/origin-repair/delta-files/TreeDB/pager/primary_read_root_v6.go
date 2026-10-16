@@ -1,0 +1,408 @@
+package pager
+
+import (
+	"errors"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
+	"github.com/snissn/gomap/TreeDB/page"
+	"sync"
+	"unsafe"
+)
+
+const PrimaryReadRootLocalBaseV6 uint64 = 1 << 60
+const primaryReadRootBucketsV6 = 256
+
+// This is the single address index for both custody and reads. Fixed heads have
+// no hidden Go map capacity. Removed nodes release actual backing; monotone IDs
+// prevent a stale address from resolving to a newly allocated root.
+type primaryReadRootEntryV6 struct {
+	id    uint64
+	image []byte
+	owner any
+	next  *primaryReadRootEntryV6
+}
+type primaryReadRootTableV6 struct {
+	mu            sync.RWMutex
+	heads         []*primaryReadRootEntryV6
+	count         int
+	clearPosition int
+	retention     *retainedalloc.Owner
+}
+
+func (t *primaryReadRootTableV6) find(id uint64) *primaryReadRootEntryV6 {
+	if len(t.heads) == 0 {
+		return nil
+	}
+	for e := t.heads[id%uint64(len(t.heads))]; e != nil; e = e.next {
+		if e.id == id {
+			return e
+		}
+	}
+	return nil
+}
+func (p *Pager) SetPrimaryMetadataOwnerV6(owner *retainedalloc.Owner) {
+	t := &p.immutableReadRoots
+	t.retention = owner
+	// Initial fixed backing is included in the owner's constructor envelope.
+	t.heads = make([]*primaryReadRootEntryV6, primaryReadRootBucketsV6)
+}
+
+// PreparePrimaryReadRootOwnerV6 admits the sole table node before allocation.
+// Custody exists before sealing; readers see no image until registration.
+func (p *Pager) PreparePrimaryReadRootOwnerV6(local uint64, owner any) error {
+	_, err := p.PrepareOrdinaryPrimaryReadRootOwnerWithWorkV6(local, owner, nil)
+	return err
+}
+
+// PrepareOrdinaryPrimaryReadRootOwnerWithWorkV6 counts the original ordinary
+// constructor without requiring a finite WorkLease. Rehash remains the SAME
+// admitted old/new backing overlap under the original table lock.
+func (p *Pager) PrepareOrdinaryPrimaryReadRootOwnerWithWorkV6(local uint64, owner any, w *iterator.OrdinalScanWork) (bool, error) {
+	if p == nil || owner == nil || local < PrimaryReadRootLocalBaseV6 || local >= page.PrimaryBankNamespace {
+		return false, errors.New("pager: invalid read-root owner")
+	}
+	t := &p.immutableReadRoots
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if len(t.heads) == 0 {
+		return false, errors.New("pager: absent read-root table")
+	}
+	link := &t.heads[local%uint64(len(t.heads))]
+	for {
+		if ok, err := pagerReserve(w, 1, uint64(unsafe.Sizeof(*link))+2*uint64(unsafe.Sizeof(primaryReadRootEntryV6{}))); !ok || err != nil {
+			return false, err
+		}
+		e := *link
+		if e == nil {
+			break
+		}
+		if e.id == local {
+			return false, errors.New("pager: duplicate read-root owner")
+		}
+		link = &e.next
+	}
+	// Reserve every actual rehash visit/copy before changing owner accounting.
+	// count and heads are protected by the same lock through installation.
+	if t.count >= len(t.heads)*2 {
+		headCount, nodeCount := uint64(len(t.heads)), uint64(t.count)
+		ptr, entry := uint64(unsafe.Sizeof((*primaryReadRootEntryV6)(nil))), uint64(unsafe.Sizeof(primaryReadRootEntryV6{}))
+		if headCount > (^uint64(0)-3)/3 || nodeCount > (^uint64(0)-3-headCount*3)/3 {
+			return false, retainedalloc.ErrCapacity
+		}
+		records := 3 + headCount*3 + nodeCount*3
+		if headCount > ^uint64(0)/(8*ptr) || nodeCount > (^uint64(0)-headCount*8*ptr)/(2*entry) {
+			return false, retainedalloc.ErrCapacity
+		}
+		bytes := headCount*8*ptr + nodeCount*2*entry
+		if ok, err := pagerReserve(w, records, bytes); !ok || err != nil {
+			return false, err
+		}
+	}
+	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(primaryReadRootEntryV6{})))
+	if t.retention != nil {
+		if err := t.retention.Add(charge); err != nil {
+			return false, err
+		}
+	}
+	if t.count >= len(t.heads)*2 {
+		newCharge := retainedalloc.AllocationCharge(uint64(len(t.heads)*2) * uint64(unsafe.Sizeof((*primaryReadRootEntryV6)(nil))))
+		if t.retention != nil {
+			if err := t.retention.Add(newCharge); err != nil {
+				t.retention.Remove(charge)
+				return false, err
+			}
+		}
+		next := make([]*primaryReadRootEntryV6, len(t.heads)*2)
+		for _, head := range t.heads {
+			for e := head; e != nil; {
+				oldNext := e.next
+				i := e.id % uint64(len(next))
+				e.next = next[i]
+				next[i] = e
+				e = oldNext
+			}
+		}
+		oldCharge := retainedalloc.AllocationCharge(uint64(cap(t.heads)) * uint64(unsafe.Sizeof((*primaryReadRootEntryV6)(nil))))
+		t.heads = next
+		if t.retention != nil {
+			t.retention.Remove(oldCharge)
+		}
+	}
+	bucket := local % uint64(len(t.heads))
+	t.count++
+	t.heads[bucket] = &primaryReadRootEntryV6{id: local, owner: owner, next: t.heads[bucket]}
+	return true, nil
+}
+
+// PrimaryReadRootOwnerConstructorV6 is the concrete arena's original, already
+// admitted construction operand. Under the caller's arena lock its constructor
+// is nonfallible and cannot reenter the pager or allocate any other control.
+// It creates only the independently charged bank after aggregate admission.
+type PrimaryReadRootOwnerConstructorV6 interface {
+	ConstructPrimaryReadRootOwnerV6() any
+}
+
+// PrepareConstructedPrimaryReadRootOwnerWithWorkV6 keeps aggregate allocation
+// admission, construction and table installation in the original arena->table
+// lock order. It never returns a lock/permit or an installed partial owner.
+// Rehash is deliberately unsupported on this finite route before any effect.
+func (p *Pager) PrepareConstructedPrimaryReadRootOwnerWithWorkV6(local uint64, metadata *retainedalloc.Owner, bankCharge uint64, constructor PrimaryReadRootOwnerConstructorV6, w *iterator.OrdinalScanWork) (bool, error) {
+	if w == nil || !w.Reserve(2, 2*uint64(unsafe.Sizeof(primaryReadRootTableV6{}))+2*uint64(unsafe.Sizeof(primaryReadRootEntryV6{}))+2*uint64(unsafe.Sizeof(constructor))) {
+		return false, nil
+	}
+	if p == nil || constructor == nil || metadata == nil || bankCharge == 0 || local < PrimaryReadRootLocalBaseV6 || local >= page.PrimaryBankNamespace {
+		return false, retainedalloc.ErrWorkRequired
+	}
+	t := &p.immutableReadRoots
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.retention != metadata || len(t.heads) == 0 || t.count >= len(t.heads)*2 {
+		return false, retainedalloc.ErrWorkRequired
+	}
+	link := &t.heads[local%uint64(len(t.heads))]
+	for {
+		if !w.Reserve(1, uint64(unsafe.Sizeof(*link))+2*uint64(unsafe.Sizeof(primaryReadRootEntryV6{}))) {
+			return false, nil
+		}
+		e := *link
+		if e == nil {
+			break
+		}
+		if e.id == local {
+			return false, retainedalloc.ErrWorkRequired
+		}
+		link = &e.next
+	}
+	nodeCharge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(primaryReadRootEntryV6{})))
+	if bankCharge > ^uint64(0)-nodeCharge {
+		return false, retainedalloc.ErrCapacity
+	}
+	if ready, err := retainedalloc.AddWithOrdinalWork(metadata, bankCharge+nodeCharge, w); !ready || err != nil {
+		return false, err
+	}
+	// Everything after aggregate admission is the concrete original
+	// constructor and nonfallible table install, under unchanged exclusions.
+	owner := constructor.ConstructPrimaryReadRootOwnerV6()
+	bucket := local % uint64(len(t.heads))
+	t.heads[bucket] = &primaryReadRootEntryV6{id: local, owner: owner, next: t.heads[bucket]}
+	t.count++
+	return true, nil
+}
+
+func (p *Pager) PrimaryReadRootOwnerV6(local uint64) any {
+	t := &p.immutableReadRoots
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if e := t.find(local); e != nil {
+		return e.owner
+	}
+	return nil
+}
+
+// PrimaryReadRootOwnerWithWorkV6 uses the SAME address table and returns the
+// existing owner borrow. Each original bucket link is admitted before it is
+// inspected; there is no count-first traversal or copied lookup directory.
+func (p *Pager) PrimaryReadRootOwnerWithWorkV6(local uint64, w *iterator.OrdinalScanWork) (any, bool) {
+	if w == nil || !w.Reserve(1, uint64(unsafe.Sizeof(primaryReadRootTableV6{}))) {
+		return nil, false
+	}
+	t := &p.immutableReadRoots
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if len(t.heads) == 0 {
+		return nil, true
+	}
+	link := &t.heads[local%uint64(len(t.heads))]
+	for {
+		if !w.Reserve(1, uint64(unsafe.Sizeof(*link))+uint64(unsafe.Sizeof(primaryReadRootEntryV6{}))) {
+			return nil, false
+		}
+		e := *link
+		if e == nil {
+			return nil, true
+		}
+		if e.id == local {
+			return e.owner, true
+		}
+		link = &e.next
+	}
+}
+func (p *Pager) primaryReadRootImageV6(local uint64) ([]byte, bool) {
+	t := &p.immutableReadRoots
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if e := t.find(local); e != nil && e.image != nil {
+		return e.image, true
+	}
+	return nil, false
+}
+func (p *Pager) RegisterPrimaryReadRootV6(local uint64, image []byte, w *iterator.OrdinalScanWork) (bool, error) {
+	if ok, err := pagerReserve(w, 1, uint64(2*page.PageSize+128)); !ok || err != nil {
+		return ok, err
+	}
+	if p == nil || local < PrimaryReadRootLocalBaseV6 || local >= page.PrimaryBankNamespace || len(image) != page.PageSize || page.DecodeHeader(image).PageID != page.PrimaryBankNamespace+local || !page.VerifyChecksumNonMutating(image) {
+		return false, errors.New("pager: invalid immutable primary read root")
+	}
+	t := &p.immutableReadRoots
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	var e *primaryReadRootEntryV6
+	if w == nil {
+		e = t.find(local)
+	} else {
+		if len(t.heads) == 0 {
+			return false, retainedalloc.ErrWorkRequired
+		}
+		link := &t.heads[local%uint64(len(t.heads))]
+		for {
+			if !w.Reserve(1, uint64(unsafe.Sizeof(*link))+2*uint64(unsafe.Sizeof(primaryReadRootEntryV6{}))) {
+				return false, nil
+			}
+			e = *link
+			if e == nil || e.id == local {
+				break
+			}
+			link = &e.next
+		}
+	}
+	if e == nil || e.image != nil {
+		return false, errors.New("pager: invalid immutable read registration")
+	}
+	e.image = image
+	return true, nil
+}
+func (p *Pager) RemovePrimaryReadRootV6(local uint64, w *iterator.OrdinalScanWork) (bool, error) {
+	owner, charge, ready, err := p.removePrimaryReadRootV6(local, w)
+	if ready && owner != nil {
+		owner.Remove(charge)
+	}
+	return ready, err
+}
+
+// RemovePrimaryReadRootAccountingV6 returns only the original node's accounting
+// after unlink/scrub and callback return. Its original arena queue owns the
+// external RemovalWork and must retain the result across admission refusal.
+func (p *Pager) RemovePrimaryReadRootAccountingV6(local uint64, w *iterator.OrdinalScanWork) (*retainedalloc.Owner, uint64, bool, error) {
+	if w == nil {
+		return nil, 0, false, retainedalloc.ErrWorkRequired
+	}
+	return p.removePrimaryReadRootV6(local, w)
+}
+func (p *Pager) removePrimaryReadRootV6(local uint64, w *iterator.OrdinalScanWork) (*retainedalloc.Owner, uint64, bool, error) {
+	if ok, err := pagerReserve(w, 1, 128); !ok || err != nil {
+		return nil, 0, ok, err
+	}
+	if p == nil || local < PrimaryReadRootLocalBaseV6 || local >= page.PrimaryBankNamespace {
+		return nil, 0, false, errors.New("pager: invalid read address retirement")
+	}
+	t := &p.immutableReadRoots
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if len(t.heads) == 0 {
+		return nil, 0, false, errors.New("pager: absent read address retirement")
+	}
+	link := &t.heads[local%uint64(len(t.heads))]
+	for {
+		if w != nil && !w.Reserve(1, uint64(unsafe.Sizeof(*link))+2*uint64(unsafe.Sizeof(primaryReadRootEntryV6{}))) {
+			return nil, 0, false, nil
+		}
+		e := *link
+		if e == nil || e.id == local {
+			break
+		}
+		link = &e.next
+	}
+	if *link == nil {
+		return nil, 0, false, errors.New("pager: absent read address retirement")
+	}
+	e := *link
+	*link = e.next
+	t.count--
+	e.image = nil
+	e.owner = nil
+	e.next = nil
+	return t.retention, retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(primaryReadRootEntryV6{}))), true, nil
+}
+
+// PrimaryMetadataBaselineV6 includes the companion pager wrapper and its exact
+// fixed address heads. OS mappings and existing decode/cache policy are separate.
+func (p *Pager) PrimaryMetadataBaselineV6() uint64 {
+	alloc := retainedalloc.AllocationCharge
+	ptr := uint64(unsafe.Sizeof(uintptr(0)))
+	size := alloc(uint64(cap(p.chunks))*3*ptr) + alloc(uint64(cap(p.mappings))*uint64(unsafe.Sizeof(mappingOwner{}))) + alloc(uint64(cap(p.dirtyChunks.words))*8)
+	if view := p.atomicChunks.Load(); view != nil {
+		size += alloc(uint64(unsafe.Sizeof(chunkList{})))
+		if len(p.chunks) == 0 || len(view.data) == 0 || &p.chunks[0] != &view.data[0] {
+			size += alloc(uint64(cap(view.data)) * 3 * ptr)
+		}
+	}
+	if v := p.verified.Load(); v != nil {
+		size += alloc(uint64(unsafe.Sizeof(verifiedBitset{}))) + alloc(uint64(cap(v.chunks))*3*ptr) + uint64(len(v.chunks))*alloc(verifiedChunkWords*8)
+	}
+	if v := p.prefetched.Load(); v != nil {
+		size += alloc(uint64(unsafe.Sizeof(prefetchBitset{}))) + alloc(uint64(cap(v.words))*8)
+	}
+
+	return size + retainedalloc.AllocationCharge(uint64(primaryReadRootBucketsV6)*uint64(unsafe.Sizeof((*primaryReadRootEntryV6)(nil)))) + retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(Pager{}))) +
+		retainedalloc.AllocationCharge(uint64(len(p.path)))
+}
+func (p *Pager) ClearPrimaryReadRootsV6() {
+	for {
+		done, err := p.ClearPrimaryReadRootsWorkV6(nil)
+		if err != nil {
+			panic(err)
+		}
+		if done {
+			return
+		}
+	}
+}
+
+func (p *Pager) PrimaryMetadataFixedV6() uint64 {
+	return retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(Pager{}))) + retainedalloc.AllocationCharge(uint64(len(p.path)))
+}
+
+// NativeReadRootTableGeometryForTestV6 reports one original table backing and
+// one looked-up node. TableNodeCount is maintained by that same table; uniform
+// node layout needs no preliminary uncharged traversal. The image is borrowed.
+type NativeReadRootTableGeometryForTestV6 struct {
+	Present, SameOwner, SameImage, TableOwnerMatches, Overflow                         bool
+	HeadCapacity, HeadRaw, HeadCharge, TableNodeCount, NodeRaw, NodeCharge, ImageBytes uint64
+}
+
+func (p *Pager) MaintenanceNativeReadRootTableGeometryForTestV6(local uint64, owner any, image []byte, metadata *retainedalloc.Owner, w *iterator.OrdinalScanWork) (g NativeReadRootTableGeometryForTestV6, ready bool) {
+	if p == nil || w == nil || !w.Reserve(2, 2*uint64(unsafe.Sizeof(primaryReadRootTableV6{}))+2*uint64(unsafe.Sizeof(g))) {
+		return g, false
+	}
+	t := &p.immutableReadRoots
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	g.HeadCapacity, g.HeadRaw, g.TableNodeCount = uint64(cap(t.heads)), uint64(unsafe.Sizeof((*primaryReadRootEntryV6)(nil))), uint64(t.count)
+	if g.HeadCapacity > ^uint64(0)/g.HeadRaw {
+		g.Overflow = true
+		return g, true
+	}
+	g.HeadCharge = retainedalloc.AllocationCharge(g.HeadCapacity * g.HeadRaw)
+	g.NodeRaw = uint64(unsafe.Sizeof(primaryReadRootEntryV6{}))
+	g.NodeCharge = retainedalloc.AllocationCharge(g.NodeRaw)
+	g.TableOwnerMatches = t.retention == metadata
+	if len(t.heads) == 0 {
+		return g, true
+	}
+	link := &t.heads[local%uint64(len(t.heads))]
+	for {
+		if !w.Reserve(1, 2*uint64(unsafe.Sizeof(primaryReadRootEntryV6{}))+uint64(unsafe.Sizeof(*link))) {
+			return g, false
+		}
+		e := *link
+		if e == nil {
+			return g, true
+		}
+		if e.id == local {
+			g.Present, g.SameOwner, g.ImageBytes = true, e.owner == owner, uint64(len(e.image))
+			g.SameImage = len(e.image) == len(image) && (len(image) == 0 || &e.image[0] == &image[0])
+			return g, true
+		}
+		link = &e.next
+	}
+}

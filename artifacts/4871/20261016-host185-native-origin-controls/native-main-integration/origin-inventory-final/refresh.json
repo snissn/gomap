@@ -1,0 +1,8 @@
+{
+  "argv": [
+    "python3",
+    ".github/scripts/refresh_ci_impact_inventory.py"
+  ],
+  "exit_code": 0,
+  "log_sha256": "5fb1c804537ff4fb401e38ac18cdffe5d909f1fd9c06b3c0d3a1211b06d377a9"
+}

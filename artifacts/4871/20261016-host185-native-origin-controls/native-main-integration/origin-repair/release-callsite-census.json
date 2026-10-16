@@ -1,0 +1,296 @@
+[
+  {
+    "function": "func (s *Snapshot) finalizeCloseRead(oneShot bool) error {",
+    "line": 2306,
+    "path": "TreeDB/db/db.go",
+    "source": "ready, progress, e := arena.ReleaseQueueStep(&s.primaryRelease, nil)"
+  },
+  {
+    "function": "func (s *Snapshot) finalizeCloseRead(oneShot bool) error {",
+    "line": 2317,
+    "path": "TreeDB/db/db.go",
+    "source": "primaryCleanupErr = errors.Join(primaryCleanupErr, arena.PreserveOrdinaryReleaseQueue(&s.primaryRelease))"
+  },
+  {
+    "function": "func (s *nativeMVCCRootPreparationV6) closeScratchStep(w *iterator.OrdinalScanWork) (bool, error) {",
+    "line": 207,
+    "path": "TreeDB/db/native_mvcc_root_preparation_v6.go",
+    "source": "ready, progress, err := s.arena.ReleaseNativeQueueStepV6(&s.queue, w)"
+  },
+  {
+    "function": "func (s *nativeMVCCRootPreparationV6) closeStep(w *iterator.OrdinalScanWork) (bool, error) {",
+    "line": 256,
+    "path": "TreeDB/db/native_mvcc_root_preparation_v6.go",
+    "source": "ready, progress, err := s.arena.ReleaseNativeQueueStepV6(&s.queue, w)"
+  },
+  {
+    "function": "func (f *nativeSourceWitnessFixtureV6) dropHeldRoot(t *testing.T) {",
+    "line": 124,
+    "path": "TreeDB/db/native_mvcc_root_preparation_v6_test.go",
+    "source": "ready, progress, err := f.arena.ReleaseNativeQueueStepV6(&q, nativeSourceWorkV6(32))"
+  },
+  {
+    "function": "func TestNativeRootPreparationSourceTerminalV6(t *testing.T) {",
+    "line": 227,
+    "path": "TreeDB/db/native_mvcc_root_preparation_v6_test.go",
+    "source": "if ready, progress, err := f.arena.ReleaseStep(nativeSourceWorkV6(32)); !ready || progress || err != nil || f.arena.Counters().BanksFreed != freed {"
+  },
+  {
+    "function": "func (s *Snapshot) CloseNativeMVCCSnapshotStepV6(w *iterator.OrdinalScanWork) (bool, error) {",
+    "line": 70,
+    "path": "TreeDB/db/native_mvcc_snapshot_close_v6.go",
+    "source": "ready, progress, err := s.primaryRoot.arena.ReleaseNativeQueueStepV6(&s.primaryRelease, w)"
+  },
+  {
+    "function": "func continuePrimaryBankConstructionReleaseV6(claims *primaryBankConstructionV5, w *iterator.OrdinalScanWork) (primaryRuntimeDisposalCompletionV6, bool, error) {",
+    "line": 99,
+    "path": "TreeDB/db/primary_bank_release_work_v6.go",
+    "source": "ready, progress, err := claims.idx.primary.ReleaseNativeQueueStepV6(&claims.releaseQueue, w)"
+  },
+  {
+    "function": "func (m *rootPublicationVisibleMemberV1) continueRetirementV6(a *primaryarena.Arena, w *iterator.OrdinalScanWork) (bool, error) {",
+    "line": 57,
+    "path": "TreeDB/db/primary_member_retirement_work_v6.go",
+    "source": "ready, progress, err := a.ReleaseNativeQueueStepV6(&m.retiredRecordQueue, w)"
+  },
+  {
+    "function": "func (m *rootPublicationVisibleMemberV1) continueRetirementV6(a *primaryarena.Arena, w *iterator.OrdinalScanWork) (bool, error) {",
+    "line": 120,
+    "path": "TreeDB/db/primary_member_retirement_work_v6.go",
+    "source": "ready, progress, err := a.ReleaseNativeQueueStepV6(&m.retiredRecordQueue, w)"
+  },
+  {
+    "function": "func TestPrimaryManifestScratchRefusesBeforeBankClaim(t *testing.T) {",
+    "line": 50,
+    "path": "TreeDB/db/primary_publication_scratch_test.go",
+    "source": "ready, progress, err := a.ReleaseStep(nil)"
+  },
+  {
+    "function": "func TestPrimaryBankConstructionReplacementOverlapAndOnceDisposal(t *testing.T) {",
+    "line": 126,
+    "path": "TreeDB/db/primary_publication_scratch_test.go",
+    "source": "ready, progress, err := a.ReleaseStep(nil)"
+  },
+  {
+    "function": "func TestPrimaryDataCertificateV6RefusalKeepsAcceptedCache(t *testing.T) {",
+    "line": 104,
+    "path": "TreeDB/db/primary_review_repairs_test.go",
+    "source": "ready, progress, e := arena.ReleaseStep(nil)"
+  },
+  {
+    "function": "func TestPrimaryClosedIteratorDetachesOriginalRootV6(t *testing.T) {",
+    "line": 300,
+    "path": "TreeDB/db/primary_review_repairs_test.go",
+    "source": "ready, progress, err := arena.ReleaseStep(nil)"
+  },
+  {
+    "function": "func continuePrimaryRuntimeDisposalV6(a *primaryarena.Arena, r *primaryDurableRuntimeV5, w *iterator.OrdinalScanWork,",
+    "line": 218,
+    "path": "TreeDB/db/primary_runtime_disposal_work_v6.go",
+    "source": "ready, progress, err := a.ReleaseNativeQueueStepV6(&r.disposalQueue, w)"
+  },
+  {
+    "function": "func TestPrimaryRuntimeDisposalRetainsOriginalQueueAndAccountingV6(t *testing.T) {",
+    "line": 66,
+    "path": "TreeDB/db/primary_runtime_disposal_work_v6_test.go",
+    "source": "if ok, progress, err := a.ReleaseStep(&iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20}); !ok || progress || err != nil || a.Counters().BanksFreed != freed {"
+  },
+  {
+    "function": "func continuePrimaryPublicationSealReleaseV6(s *primaryPublicationSealV5, w *iterator.OrdinalScanWork, release primaryResourceReleaseWithWorkV6) (bool, error) {",
+    "line": 114,
+    "path": "TreeDB/db/primary_seal_release_work_v6.go",
+    "source": "ready, progress, err := a.ReleaseNativeQueueStepV6(&s.disposalQueue, w)"
+  },
+  {
+    "function": "func (runtime *rootPublicationRuntimeV1) completeNativeVisibleMemberAbortV6(m *rootPublicationVisibleMemberV1, cow *freelist.PreparedCOWCandidateV1, input rootpublication.DurableRootCallbackInput, w *iterator.OrdinalScanWork) (bool, error) {",
+    "line": 79,
+    "path": "TreeDB/db/primary_visible_abort_work_v6.go",
+    "source": "ready, progress, err := runtime.idx.primary.ReleaseNativeQueueStepV6(&m.retiredRecordQueue, w)"
+  },
+  {
+    "function": "func TestTopologyPublicationPreservesPrimaryRootLifetime(t *testing.T) {",
+    "line": 243,
+    "path": "TreeDB/db/state_value_log_lifetime_test.go",
+    "source": "ready, progress, e := arena.ReleaseStep(nil)"
+  },
+  {
+    "function": "func (a *Arena) ReleaseStep(w *iterator.OrdinalScanWork) (bool, bool, error) {",
+    "line": 817,
+    "path": "TreeDB/internal/primaryarena/arena.go",
+    "source": "func (a *Arena) ReleaseStep(w *iterator.OrdinalScanWork) (bool, bool, error) {"
+  },
+  {
+    "function": "func (a *Arena) ReleaseStep(w *iterator.OrdinalScanWork) (bool, bool, error) {",
+    "line": 818,
+    "path": "TreeDB/internal/primaryarena/arena.go",
+    "source": "return a.ReleaseQueueStep(&a.ordinaryRelease, w)"
+  },
+  {
+    "function": "func (a *Arena) ReleaseQueueStep(queue *ReleaseQueue, w *iterator.OrdinalScanWork) (bool, bool, error) {",
+    "line": 820,
+    "path": "TreeDB/internal/primaryarena/arena.go",
+    "source": "func (a *Arena) ReleaseQueueStep(queue *ReleaseQueue, w *iterator.OrdinalScanWork) (bool, bool, error) {"
+  },
+  {
+    "function": "func (a *Arena) ReleaseQueueStep(queue *ReleaseQueue, w *iterator.OrdinalScanWork) (bool, bool, error) {",
+    "line": 821,
+    "path": "TreeDB/internal/primaryarena/arena.go",
+    "source": "return a.releaseQueueStep(queue, w, false)"
+  },
+  {
+    "function": "func (a *Arena) ReleaseNativeQueueStepV6(queue *ReleaseQueue, w *iterator.OrdinalScanWork) (bool, bool, error) {",
+    "line": 826,
+    "path": "TreeDB/internal/primaryarena/arena.go",
+    "source": "func (a *Arena) ReleaseNativeQueueStepV6(queue *ReleaseQueue, w *iterator.OrdinalScanWork) (bool, bool, error) {"
+  },
+  {
+    "function": "func (a *Arena) ReleaseNativeQueueStepV6(queue *ReleaseQueue, w *iterator.OrdinalScanWork) (bool, bool, error) {",
+    "line": 830,
+    "path": "TreeDB/internal/primaryarena/arena.go",
+    "source": "return a.releaseQueueStep(queue, w, true)"
+  },
+  {
+    "function": "func (a *Arena) releaseQueueStep(queue *ReleaseQueue, w *iterator.OrdinalScanWork, native bool) (bool, bool, error) {",
+    "line": 833,
+    "path": "TreeDB/internal/primaryarena/arena.go",
+    "source": "func (a *Arena) releaseQueueStep(queue *ReleaseQueue, w *iterator.OrdinalScanWork, native bool) (bool, bool, error) {"
+  },
+  {
+    "function": "func testDrain(t *testing.T, a *Arena) {",
+    "line": 85,
+    "path": "TreeDB/internal/primaryarena/arena_test.go",
+    "source": "ok, progress, e := a.ReleaseStep(w)"
+  },
+  {
+    "function": "func TestPrimaryArenaIndependentCustodyAndIncrementalReuse(t *testing.T) {",
+    "line": 134,
+    "path": "TreeDB/internal/primaryarena/arena_test.go",
+    "source": "if ok, progress, e := a.ReleaseStep(w); ok || progress || e != nil {"
+  },
+  {
+    "function": "func TestOrdinaryPrimaryCountedClaimAndReleaseLeaseV6(t *testing.T) {",
+    "line": 41,
+    "path": "TreeDB/internal/primaryarena/origin_compatibility_test.go",
+    "source": "ready, progress, e := a.ReleaseStep(&iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20})"
+  },
+  {
+    "function": "func TestNativePrimaryAccountingOnlyQueueCannotBeAssistedV6(t *testing.T) {",
+    "line": 90,
+    "path": "TreeDB/internal/primaryarena/origin_compatibility_test.go",
+    "source": "if ready, progress, e := a.ReleaseNativeQueueStepV6(&q, &iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20}); !ready || !progress || e != nil || q.refundOwner == nil || q.bankHead != 0 || q.groupHead != nil {"
+  },
+  {
+    "function": "func TestNativePrimaryAccountingOnlyQueueCannotBeAssistedV6(t *testing.T) {",
+    "line": 101,
+    "path": "TreeDB/internal/primaryarena/origin_compatibility_test.go",
+    "source": "if ready, progress, e := a.ReleaseQueueStep(&q, w); ready || progress || !errors.Is(e, retainedalloc.ErrWorkRequired) || q.refundOwner != owner || q.refundCharge != charge || a.MetadataOwner().Bytes() != bytes || a.Counters() != counters {"
+  },
+  {
+    "function": "func TestNativePrimaryAccountingOnlyQueueCannotBeAssistedV6(t *testing.T) {",
+    "line": 105,
+    "path": "TreeDB/internal/primaryarena/origin_compatibility_test.go",
+    "source": "if e := a.PreserveOrdinaryReleaseQueue(&q); !errors.Is(e, retainedalloc.ErrWorkRequired) || q.refundOwner != owner || q.refundCharge != charge {"
+  },
+  {
+    "function": "func TestNativePrimaryAccountingOnlyQueueCannotBeAssistedV6(t *testing.T) {",
+    "line": 109,
+    "path": "TreeDB/internal/primaryarena/origin_compatibility_test.go",
+    "source": "ready, progress, e := a.ReleaseNativeQueueStepV6(&q, &iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20})"
+  },
+  {
+    "function": "func (a *Arena) ProgressOrdinaryRelease(steps int, w *iterator.OrdinalScanWork) (bool, error) {",
+    "line": 40,
+    "path": "TreeDB/internal/primaryarena/release_queue.go",
+    "source": "func (a *Arena) ProgressOrdinaryRelease(steps int, w *iterator.OrdinalScanWork) (bool, error) {"
+  },
+  {
+    "function": "func (a *Arena) ProgressOrdinaryRelease(steps int, w *iterator.OrdinalScanWork) (bool, error) {",
+    "line": 53,
+    "path": "TreeDB/internal/primaryarena/release_queue.go",
+    "source": "ready, progress, err := a.ReleaseStep(w)"
+  },
+  {
+    "function": "func (a *Arena) PreserveOrdinaryReleaseQueue(q *ReleaseQueue) error {",
+    "line": 72,
+    "path": "TreeDB/internal/primaryarena/release_queue.go",
+    "source": "func (a *Arena) PreserveOrdinaryReleaseQueue(q *ReleaseQueue) error {"
+  },
+  {
+    "function": "func TestPrimaryArenaOwnedReleaseQueueCannotReceiveOrdinaryAssistance(t *testing.T) {",
+    "line": 26,
+    "path": "TreeDB/internal/primaryarena/release_queue_test.go",
+    "source": "if ready, err = a.ProgressOrdinaryRelease(32, work); !ready || err != nil {"
+  },
+  {
+    "function": "func TestPrimaryArenaOwnedReleaseQueueCannotReceiveOrdinaryAssistance(t *testing.T) {",
+    "line": 35,
+    "path": "TreeDB/internal/primaryarena/release_queue_test.go",
+    "source": "ready, progress, err := a.ReleaseNativeQueueStepV6(queue, work)"
+  },
+  {
+    "function": "func (t *DurableRootTransaction) abortNativeMVCCConstructionStepLockedV6(w *iterator.OrdinalScanWork, terminal *primaryConstructionReleaseState, removal *retainedalloc.RemovalWork) (bool, error) {",
+    "line": 285,
+    "path": "TreeDB/internal/rootpublication/durable_root_transaction_native_mvcc_v6.go",
+    "source": "ready, progress, err = c.arena.ReleaseNativeQueueStepV6(&c.cleanupQueue, w)"
+  },
+  {
+    "function": "func (t *DurableRootTransaction) abortNativeMVCCConstructionStepLockedV6(w *iterator.OrdinalScanWork, terminal *primaryConstructionReleaseState, removal *retainedalloc.RemovalWork) (bool, error) {",
+    "line": 287,
+    "path": "TreeDB/internal/rootpublication/durable_root_transaction_native_mvcc_v6.go",
+    "source": "ready, progress, err = c.arena.ReleaseQueueStep(&c.cleanupQueue, w)"
+  },
+  {
+    "function": "func TestNativeMVCCPrivateConstructorPhysicalAbortV6(t *testing.T) {",
+    "line": 160,
+    "path": "TreeDB/internal/rootpublication/durable_root_transaction_native_mvcc_v6_test.go",
+    "source": "if ready, err := a.ProgressOrdinaryRelease(32, &iterator.OrdinalScanWork{RecordLimit: 256, ByteLimit: 1 << 20}); !ready || err != nil || a.MetadataOwner().Bytes() != before || a.Counters().BanksFreed != counts.BanksFreed {"
+  },
+  {
+    "function": "func TestNativeTransactionBindingUsesSuppliedWorkV6(t *testing.T) {",
+    "line": 220,
+    "path": "TreeDB/internal/rootpublication/durable_root_transaction_work_callbacks_v6_test.go",
+    "source": "ready, progress, err := a.ReleaseNativeQueueStepV6(&txn.constructionV6.cleanupQueue, w)"
+  },
+  {
+    "function": "func TestPrimaryFinishResourceRefusalAndFailureCustodyV6(t *testing.T) {",
+    "line": 302,
+    "path": "TreeDB/internal/rootpublication/durable_root_transaction_work_callbacks_v6_test.go",
+    "source": "ready, progress, err := a.ReleaseNativeQueueStepV6(&originalConstruction.cleanupQueue, w)"
+  },
+  {
+    "function": "func TestPrimaryFinishResourceRefusalAndFailureCustodyV6(t *testing.T) {",
+    "line": 319,
+    "path": "TreeDB/internal/rootpublication/durable_root_transaction_work_callbacks_v6_test.go",
+    "source": "if ready, progress, err := a.ReleaseStep(&iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20}); !ready || progress || err != nil || a.Counters().BanksFreed != freed {"
+  },
+  {
+    "function": "func (s *PrimaryConstructionReleaseWork) ContinueFinishWorkV6(w *iterator.OrdinalScanWork, release func(*StableResourceSet, *iterator.OrdinalScanWork) (bool, error)) (bool, error) {",
+    "line": 98,
+    "path": "TreeDB/internal/rootpublication/native_primary_finish_work_v6.go",
+    "source": "ready, progress, err := c.arena.ReleaseNativeQueueStepV6(&c.cleanupQueue, work)"
+  },
+  {
+    "function": "func metadataDrain(t *testing.T, a *primaryarena.Arena) {",
+    "line": 42,
+    "path": "TreeDB/internal/rootpublication/primary_bank_metadata_v5_test.go",
+    "source": "ok, progress, e := a.ReleaseStep(w)"
+  },
+  {
+    "function": "func TestNativePreparedAbortUsesOriginalBuilderOrCandidateReceiptV6(t *testing.T) {",
+    "line": 51,
+    "path": "TreeDB/internal/rootpublication/primary_prepared_abort_work_v6_test.go",
+    "source": "ready, progress, err := a.ReleaseNativeQueueStepV6(&queue, w)"
+  },
+  {
+    "function": "func TestPrimaryArenaOrdinaryZipperCoalescesAndMaterializesDataOnly(t *testing.T) {",
+    "line": 138,
+    "path": "TreeDB/zipper/primary_arena_test.go",
+    "source": "ok, progress, e := a.ReleaseStep(w)"
+  },
+  {
+    "function": "func (z *Zipper) applyPrimaryDirectory(rootID uint64, ops []batch.Entry, ranges []batch.DeleteRange, cfg applyRunConfig) (root uint64, retired []uint64, metrics adaptive.Metrics, err error) {",
+    "line": 357,
+    "path": "TreeDB/zipper/primary_directory.go",
+    "source": "_, err = z.primaryArena.ProgressOrdinaryRelease(32, work)"
+  }
+]

@@ -1,0 +1,131 @@
+{
+  "causal_classification": "Source-proven stale fixture boundary assumptions, not evidence that original custody was lost. Finite shared table lookup correctly consumes original work before root mutation/callback. No product change recommended for this failure.",
+  "conditional_geometry": "Exactly one fresh native constructed RAM root at bucket head; no certificate/image/children/groups, no enrolled bindings or active enrollment; owner/table initialized by original OpenCapsule. Other live roots/enrollments require actual link/binding work, not these fixture constants.",
+  "confirmed_raw": "First3-record call returns ready=false err=nil calls0 effects0; both retry/failure subcases stop at line315. Later calls unexecuted inside those subcases.",
+  "failed_raw_log_sha256": "1d9511ff810681455444b7e4c767ba3c12a99bea8a15aab34976db81fee6662b",
+  "first_refusal": {
+    "callback_calls": 0,
+    "consumed": 3,
+    "failed_next_reserve_records": 1,
+    "limit": 3,
+    "minimum_before_callback": 5,
+    "root_drop_effect": false,
+    "source": "pager/primary_read_root_v6.go:206"
+  },
+  "inspected_source_hashes": {
+    "TreeDB/internal/iterator/ordinal.go": "64973cf26a3a713b48a35ac20a088f25866a7ebae1c98a9aa683849049d8c4ca",
+    "TreeDB/internal/primaryarena/arena.go": "515e86b817e326f21fd7c8cebf8c748de871b4efad472280490221c93d312553",
+    "TreeDB/internal/primaryarena/release_queue.go": "8d21fd802582b4b00b507f228b91b2ad54faaf6f14827adc4b395168c15d9e6e",
+    "TreeDB/internal/retainedalloc/owner_work.go": "d4727141cffdc31205bc99854746a91fe10e19bdc628f643206d9ca94fd8aabe",
+    "TreeDB/internal/rootpublication/durable_root_transaction_work_callbacks_v6_test.go": "e89c544b2c6373116bdb8bf3262fb3df645a64918cc9a4e11d6d389f0c1f6dff",
+    "TreeDB/internal/rootpublication/native_primary_finish_work_v6.go": "81a5ee22c812cd5561c1863581692fc16b194fb01e0107799a8877b8b74cd65b",
+    "TreeDB/internal/rootpublication/primary_terminal_completion_v6.go": "5f4070a0884cfc31ecb13249562b96267b5a249a69029075fef6b08ed2f0794d",
+    "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go": "7b8790f943894d5c571bcfd58742d8d61e0c07ee9b59a7b23a7a76a0dd141f3a",
+    "TreeDB/internal/rootpublication/resource_set.go": "ea4775015a3c261007b1682724b8aab9784cdec1528b0fe83a2fc0417bd3944c",
+    "TreeDB/pager/primary_read_root_v6.go": "2c3c8041a53ef9cf3cb42b83c44ac08df7bf7573ccb856affe60489f10611083"
+  },
+  "proposed_vectors": [
+    {
+      "limit": 3,
+      "meaning": "Retain original early table-header lookup refusal; original root/drop counters/callback count0/metadata preserved."
+    },
+    {
+      "limit": 5,
+      "meaning": "Exact callback admission refusal after successful SAME original root drop; callback count1/effects0; original root cleared and dropcount increments once."
+    },
+    {
+      "branch": "retry only",
+      "limit": 11,
+      "meaning": "Descriptor1+callback1; queue10 refuses before physical effects; callback count2/effects0."
+    },
+    {
+      "branch": "retry only",
+      "consumed_records": 31,
+      "limit": 32,
+      "meaning": "Descriptor1+callback1+detachQueue14+refundQueue15; bank/node freed once, exact accounting finished, next emptyQueue10 refuses. callback count3/effects0, SAME member/Set retained."
+    },
+    {
+      "branch": "retry only",
+      "consumed_records": 12,
+      "limit": 32,
+      "meaning": "Descriptor1+callback1+emptyQueue10; callback count4/effects1; SAME Set released/checked once and original terminal returned."
+    },
+    {
+      "branch": "failure only",
+      "consumed_records": 2,
+      "limit": 32,
+      "meaning": "Descriptor1+callback1; injected genuine physical cause before queue drain. callback count2/effects1; sticky first error/custody preserved on zero-work retry and Abort."
+    }
+  ],
+  "public_status": "Q32 RED/ACK0; no actual33/native publication/allowance",
+  "recommended_scope": "Test-fixture-only repair in existing durable_root_transaction_work_callbacks_v6_test.go, retaining3 and11 controls and original32 quanta; add exact5 boundary and explicit two32 retry continuations with all custody/counter/sticky-error/terminal assertions. No production source/accounting/cap changes.",
+  "sibling_findings": [
+    "TestNativeTransactionBindingUsesSuppliedWorkV6 keeps independent visible root ref; Drop decrements without queueing last bank, then queue empty10 fits32; it already PASSED in failed call.",
+    "TestPrimaryFinishWorkRefusalResumesOriginalV6 keeps its existing ordinary1-record refusal and100 funded adapter, not selected in consumed call; no implied native32 guarantee.",
+    "ContinueFinishWorkV6 drives the same work-bearing queue and returns false across physical/accounting phases; it does not promise one32-call completion.",
+    "Error branch preserves first physical cause before later reservations; zero-work sticky retry and Abort are intended error identity checks, not cleanup success."
+  ],
+  "single_retry_call_formula": "1+1+(10+2+2)+(10+5)+10=41; not a proposed allowance",
+  "single_retry_call_full_records": 41,
+  "source_archive_sha256": "9d60ef1a4d1960aa63a0fabbb99b55b57c61262ca9bdaa867160303994cbf7ed",
+  "source_files": 10375,
+  "source_manifest_sha256": "e434542a59d55cf67c90d6a16c5787abeb908efda4c1c705033658b9ba8e0577",
+  "stage_prices": [
+    {
+      "bytes": "2*sizeof(DurableRootTransaction)+2*sizeof(primaryTransactionConstructionV6)",
+      "operation": "Finish descriptor/control scrub preadmission",
+      "records": 1,
+      "source": "primary_transaction_construction_v6.go:461"
+    },
+    {
+      "bytes": "2*sizeof(bank)+2*sizeof(ReleaseQueue)",
+      "operation": "Root drop outer preadmission",
+      "records": 2,
+      "source": "primaryarena/arena.go:767-769"
+    },
+    {
+      "bytes": "sizeof(primaryReadRootTableV6)",
+      "operation": "SAME protected read-root table header",
+      "records": 1,
+      "source": "pager/primary_read_root_v6.go:206"
+    },
+    {
+      "bytes": "sizeof(pointer)+sizeof(primaryReadRootEntryV6)",
+      "operation": "SAME first matching bucket link",
+      "records": 1,
+      "source": "pager/primary_read_root_v6.go:217"
+    },
+    {
+      "bytes": "8",
+      "operation": "Fixture release dispatch",
+      "records": 1,
+      "source": "durable_root_transaction_work_callbacks_v6_test.go:288-293"
+    },
+    {
+      "bytes": "18*sizeof(bank)+2*sizeof(Group)+2*sizeof(ReleaseQueue)",
+      "operation": "Each native queue invocation, including final empty observation",
+      "records": 10,
+      "source": "primaryarena/arena.go:834-837"
+    },
+    {
+      "bytes": "sizeof(primaryReadRootTableV6)+sizeof(pointer)+sizeof(primaryReadRootEntryV6)",
+      "operation": "Bank lookup header+matching link",
+      "records": 2,
+      "source": "primaryarena/arena.go:917;pager/primary_read_root_v6.go:205-228"
+    },
+    {
+      "bytes": "128+sizeof(pointer)+2*sizeof(primaryReadRootEntryV6)",
+      "operation": "Pager node remove header+matching link",
+      "records": 2,
+      "source": "pager/primary_read_root_v6.go:292,306"
+    },
+    {
+      "bytes": "6*sizeof(RemovalWork)+6*sizeof(Owner)+2*sizeof(EnrollmentWork)+384",
+      "operation": "No-enrollment exact queue accounting: bind/remove/active-header/cursor-init/reset",
+      "records": 5,
+      "source": "owner_work.go:333,266,77,105,379;arena.go:848"
+    }
+  ],
+  "status": "READ_ONLY_SOURCE_DIAGNOSIS; no edits/runtime/retry",
+  "validation_proposal": "After root selects immutable test-only successor, exact focused normal then race TestPrimaryFinishResourceRefusalAndFailureCustodyV6 with both child names under pinned env/first-failure stop. Root may then separately select resumed larger focused sequence; do not reuse consumed grant."
+}

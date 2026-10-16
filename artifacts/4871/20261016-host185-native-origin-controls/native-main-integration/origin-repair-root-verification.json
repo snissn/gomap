@@ -1,0 +1,18 @@
+{
+  "added": 3,
+  "all_other_source_unchanged": true,
+  "at_utc": "2026-10-16T03:09:28.376991+00:00",
+  "deleted": 0,
+  "delta_payloads_verified": 24,
+  "files_verified": 10375,
+  "modified": 21,
+  "protected_unchanged": {
+    ".github/ci/ci_impact.json": "8dddfd075143fde0513b1e8d41974949729f2434076e5ceb2d785b171d97747c",
+    "TreeDB/db/primary_review_repairs_test.go": "b1b6f3a0bec33e19db2609a60c8793a10ec2aa74d1c603675c9fd288a12bfd84",
+    "TreeDB/internal/retainedalloc/owner_growth_work.go": "74735769ff46c27445a03ae785dad4e1a8ae3ecf84358d039486e0de9dcabf35",
+    "TreeDB/internal/retainedalloc/owner_work.go": "d4727141cffdc31205bc99854746a91fe10e19bdc628f643206d9ca94fd8aabe"
+  },
+  "runtime_executed": false,
+  "source_archive_sha256": "158c914d4996fc3d4fbc9e7881518f32c1d04ccb322e708c7c8d70af562a1889",
+  "source_manifest_sha256": "787445cb4cbdda78d329b9c927c6e77fbe2ce48cd669214509790c3e9305b118"
+}
