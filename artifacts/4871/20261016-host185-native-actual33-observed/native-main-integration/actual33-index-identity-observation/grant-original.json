@@ -1,0 +1,78 @@
+{
+  "at_utc": "2026-10-16T04:21:32.514210+00:00",
+  "authority": "Original user execute-and-merge instruction; root accepts exact source pin-identity correction and independently accepted four focused normal/race calls. ONE promoted previsibility observation on final23e; no native publication.",
+  "benchmark_authorized": false,
+  "command": {
+    "argv": [
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+      "test",
+      "-p=1",
+      "./TreeDB/mvcc",
+      "-run",
+      "^TestNativeMVCCRealBackendRouteRefusalPreservesCustodyV6$",
+      "-count=1",
+      "-v",
+      "-timeout=3m"
+    ],
+    "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+    "env": {
+      "CGO_ENABLED": "1",
+      "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+      "GODEBUG": "",
+      "GOENV": "off",
+      "GOFLAGS": "",
+      "GOGC": "100",
+      "GOMAXPROCS": "2",
+      "GOMEMLIMIT": "8GiB",
+      "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+      "GOPROXY": "off",
+      "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+      "GOSUMDB": "off",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-index-identity-observation/tmp"
+    },
+    "executed": false,
+    "name": "actual33-promoted-index-identity-previsibility-observation",
+    "native_final_driver_publication_authorized": false,
+    "outer_timeout_seconds": 240,
+    "public_status": "Q32 RED/ACK0",
+    "requires_root_verification_grant": true,
+    "source_archive": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-pin-inventory-final/source-final.tar.gz",
+    "source_archive_sha256": "ea996ddc0c637f7674efded9f0611b3d2108554b460ea35d9859e6b47cf25293",
+    "source_manifest": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-pin-inventory-final/source-final.json",
+    "source_manifest_sha256": "23e37a210f156838de8adecbf8532c0cd16cd12f6d6c37fb05529b7974d0869f",
+    "source_tree": "52ca5ef561f6d27928356ca2f836e722be7c4b31"
+  },
+  "focused_control_evidence_manifest_sha256": "37a628ec174e1d42208711a3226ae2902ff78b7cf8a7e4be0079d129d4606e39",
+  "maximum_commands": 1,
+  "ownership": {
+    "children": false,
+    "evidence": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-index-identity-observation",
+    "git_github": "root only",
+    "model": "gpt-6.1-sol",
+    "operator": "/root/native_prerequisite",
+    "source_mutations": false
+  },
+  "prior_attempt": "Actual33source041b failed invalid duplicate/original File pointer observer at index0, preserved artifact34. Six-path correction21bc then focused positive capture failure PC1 (canonical physical pinGeneration0 versus full logical token identity), preserved artifact35. Two-path61cdf correction/rootmetadata23e now normal+race fourcalls PASS7tops31children per mode with independent ACCEPT. No unchanged-source retry.",
+  "prior_review_sha256": "874064a5f909afb71fa48965e2f8817c4fa417e0e98fb8f97f4d7ff360cf378e",
+  "producer_limits": {
+    "bytes": 1048576,
+    "files": 17,
+    "guards": [
+      80,
+      4096
+    ],
+    "history": 33,
+    "indexes": 2,
+    "input": 32,
+    "records": 32,
+    "resources": 16
+  },
+  "publication_runtime_authorized": false,
+  "retries": 0,
+  "review_sha256": "87218a8f14555e9e79abbcff773cfeefdf30b93bb58ecb08caa1137a43777dc8",
+  "scope": "ONE same selected promoted mode:33realversions/floor32/phase26/candidate8/seal13/two-original-index observer, newerwriter34/stale cancel/oldreader/reopen; unchangedQ32/1MiB/80/4096. Full token logical identity and canonical physical pin checks required. No native finaldriver/enqueue/adopt/fence/Consume/Finish/ACK allowance. All missing retention rows stay unavailable; non-atomic scalar observations do not establish complete union/general F/Finish bound. Capture allraw and stop afteronecall; no retry/edit/broader experiment. Anyfailure returns packet andlease before diagnosis/fix.",
+  "source_files": 10377,
+  "source_manifest_sha256": "23e37a210f156838de8adecbf8532c0cd16cd12f6d6c37fb05529b7974d0869f"
+}

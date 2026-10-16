@@ -1,0 +1,48 @@
+{
+  "actual33_executed": true,
+  "actual_command_executed": true,
+  "commands_executed": 1,
+  "commands_not_executed": [],
+  "elapsed_seconds": 15.365162452682853,
+  "exit_code": 0,
+  "grant_sha256": "528319a6ec86afd06b0927a3ef82126731c97326e352db75b9d8f769acce4530",
+  "group_empty": true,
+  "index_unchanged": true,
+  "leader_joined": true,
+  "native_publication_executed": false,
+  "observer_groups_present": [
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
+  "original_grant_template_executed": false,
+  "pgid": 1035617,
+  "pid": 1035617,
+  "public_status": "Q32 RED/ACK0/noAllowanceChosen",
+  "retained_union_complete": false,
+  "runtime_lease": "RELEASED",
+  "selected_test": [
+    "TestNativeMVCCRealBackendRouteRefusalPreservesCustodyV6"
+  ],
+  "source_archive": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-pin-inventory-final/source-final.tar.gz",
+  "source_archive_sha256": "ea996ddc0c637f7674efded9f0611b3d2108554b460ea35d9859e6b47cf25293",
+  "source_files": 10377,
+  "source_frozen": true,
+  "source_manifest": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-pin-inventory-final/source-final.json",
+  "source_manifest_sha256": "23e37a210f156838de8adecbf8532c0cd16cd12f6d6c37fb05529b7974d0869f",
+  "source_mutated": false,
+  "source_tree": "52ca5ef561f6d27928356ca2f836e722be7c4b31",
+  "status": "PASS",
+  "stop_reasons": [],
+  "subreaper_verified": true,
+  "test_FAIL_names": [],
+  "test_PASS_names": [
+    "TestNativeMVCCRealBackendRouteRefusalPreservesCustodyV6"
+  ],
+  "test_RUN_names": [
+    "TestNativeMVCCRealBackendRouteRefusalPreservesCustodyV6"
+  ],
+  "test_SKIP_names": []
+}

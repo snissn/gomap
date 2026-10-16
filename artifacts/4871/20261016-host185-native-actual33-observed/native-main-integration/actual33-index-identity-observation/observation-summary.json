@@ -1,0 +1,29 @@
+{
+  "groups_present": [
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
+  "interpretation": "Exact raw scalar observations only; complete applicable invocation arithmetic is not a complete retained union/general F/Finish bound.",
+  "numeric_allowance_chosen": false,
+  "observations_are_not_atomic": true,
+  "payload_lines": 60,
+  "payload_log_sha256": "501a70e18d37dfe8b61dbedc927fe71d61fe3d59de07265e6588fc8829ca314f",
+  "raw_formula_rows": [
+    "    native_prune_backend_route_v6_test.go:176: native-observer group=3 expression=F293+D+2K+23P+8M+3S+N+Z+V+A K=1 keyBytes=41 D=0 P=1 M=3 S=1 Nupper=1 Z=0 V=8 A=13 computedRecords=367 computedBytes=871273 applicableComplete=true observationsAreNotAtomic=true noAllowanceChosen=true publishedGCOutputs=2 privatePrebornHeaders=0"
+  ],
+  "raw_incomplete_rows": [
+    "    native_prune_backend_route_v6_test.go:176: native-observer group=5 retainedUnionComplete=false namedIncomplete=private-captured-txn-clone-maps,private-sink-ID-map,conditional-private-planner-replacedMetadata-map,nonempty-resource-logical-graphs,charge-transfer-dedup,current-owner-observations-not-atomic futureFinish=FutureGeometryUnobserved; phase7-backing-RemovalWork+BindFinish+alias-clear -> original-ContinueFinish/Retire -> post.oldState-root-and-Set-transfer -> real-release-queue/node/dependency/lastowner -> both-original-index-capture-Snapshot-and-custody -> original-Set-close -> output/input/private-scratch -> enrollment-and-outer-lease-last-alias -> original-terminal-token; hardIO=sticky-whole-original-frame-and-receipt-with-incomplete-Close/Stop noTransitiveHeapClaim=true noAllowance=true Q32=RED ACK=0"
+  ],
+  "raw_log_sha256": "731fad25957e4079efce1c0212aec1413ec2c51abe59d8722a478c68232f5c00",
+  "raw_original_index_rows": [
+    "    native_prune_backend_route_v6_test.go:176: native-observer group=4 sourceSymbol=db.nativeStablePagerCaptureV6.constructOwnedOperationsV6+pager.NativeFileFenceWorkV6 index=0 geometry={Token:{Released:false Owned:true Imported:false NativeNamespace:true StableNamespace:true Linked:true PathBytes:197 RequiredRIDs:0 StableRIDs:0 TokenCharge:1744 PhysicalCharge:912 NamespaceCharge:944 NamespaceRefs:1 MetadataRefs:1 DirectoryCharge:0 PhysicalBackingPresent:true SamePhysicalNamespaceOwner:true} Pager:{Pages:13 Target:16 Chunks:1 ChunkSize:4194304 VerifiedChunks:1 PrefetchWords:1 DirtyWords:1 Dirty:1 Span:1 SyncConcurrency:4 PathBytes:186 PolicyTarget:0 NativeSyncRecords:10 NativeSyncBytes:1472 PageRecords:5 PageBytes:9216 CapsuleRecords:14 CapsuleBytes:26144 CapacityCovered:true FileBacked:true Closing:false MappedFlush:false Populate:false NativeFenceSupported:true DirtyMembershipPreserved:true AdjacentVerificationMayBeLost:true Overflow:false} SameSnapshot:true SameNativeCallback:true OperationRefs:1 OperationsCharge:512 PathBytes:186 WrapperCharge:2048 SnapshotRaw:1720 CustodyCharge:512 ConstructionPhase:8 OperationsPhase:3 SameRetainedCapture:true SameTokenOperations:true SameMetadata:true SameRegistry:true SamePhysicalOwner:true SameSelectedPager:true CustodyPresent:true CustodyComplete:false} ready=true work=11/212992",
+    "    native_prune_backend_route_v6_test.go:176: native-observer group=4 sourceSymbol=db.nativeStablePagerCaptureV6.constructOwnedOperationsV6+pager.NativeFileFenceWorkV6 index=1 geometry={Token:{Released:false Owned:true Imported:false NativeNamespace:true StableNamespace:true Linked:true PathBytes:205 RequiredRIDs:0 StableRIDs:0 TokenCharge:1744 PhysicalCharge:912 NamespaceCharge:944 NamespaceRefs:1 MetadataRefs:1 DirectoryCharge:0 PhysicalBackingPresent:true SamePhysicalNamespaceOwner:true} Pager:{Pages:11 Target:0 Chunks:1 ChunkSize:1048576 VerifiedChunks:1 PrefetchWords:1 DirtyWords:1 Dirty:1 Span:1 SyncConcurrency:1 PathBytes:194 PolicyTarget:0 NativeSyncRecords:10 NativeSyncBytes:1472 PageRecords:5 PageBytes:9216 CapsuleRecords:14 CapsuleBytes:26144 CapacityCovered:true FileBacked:true Closing:false MappedFlush:false Populate:false NativeFenceSupported:true DirtyMembershipPreserved:true AdjacentVerificationMayBeLost:false Overflow:false} SameSnapshot:true SameNativeCallback:true OperationRefs:1 OperationsCharge:512 PathBytes:194 WrapperCharge:2048 SnapshotRaw:1720 CustodyCharge:512 ConstructionPhase:8 OperationsPhase:3 SameRetainedCapture:true SameTokenOperations:true SameMetadata:true SameRegistry:true SamePhysicalOwner:true SameSelectedPager:true CustodyPresent:true CustodyComplete:false} ready=true work=11/212992"
+  ],
+  "raw_original_refusal_rows": [
+    "    native_prune_backend_route_v6_test.go:158: first actual route refusal: calls=160 phase=26 error=native MVCC transaction requires its original work-bearing caller"
+  ],
+  "retained_union_complete": false
+}

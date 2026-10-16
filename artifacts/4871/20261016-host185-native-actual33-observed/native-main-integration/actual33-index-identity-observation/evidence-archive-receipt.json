@@ -1,0 +1,8 @@
+{
+  "archive_files": 21,
+  "archive_sha256": "a1e4a52adc9da27bea2d7f9904e1f631d70237a66387114e8da4c7e42c3a962d",
+  "manifest_sha256": "befaed470f705be5d54f0ddcbb13be2730d23eaac30f7cf6751773e2558d81e0",
+  "source_archive_is_separate_verified_immutable_input": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/index-pin-inventory-final/source-final.tar.gz",
+  "source_archive_sha256": "ea996ddc0c637f7674efded9f0611b3d2108554b460ea35d9859e6b47cf25293",
+  "verified": true
+}

@@ -1,0 +1,167 @@
+{
+  "M4_selected_leaf_names": [],
+  "adopted_children_reaped": [],
+  "elapsed_seconds": 15.365162452682853,
+  "ended_utc": "2026-10-16T04:24:53.570453+00:00",
+  "exit_code": 0,
+  "expected_top_level_names": [
+    "TestNativeMVCCRealBackendRouteRefusalPreservesCustodyV6"
+  ],
+  "group_and_children_empty": true,
+  "id": "actual33-promoted-index-identity-previsibility-observation",
+  "leader_joined": true,
+  "missing_child_names": [],
+  "missing_top_names": [],
+  "observed_group_processes": [
+    {
+      "comm": "go",
+      "pgid": 1035617,
+      "pid": 1035617,
+      "ppid": 1035582,
+      "session": 1035617,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1035617,
+      "pid": 1035638,
+      "ppid": 1035617,
+      "session": 1035617,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1035617,
+      "pid": 1035743,
+      "ppid": 1035617,
+      "session": 1035617,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1035617,
+      "pid": 1035747,
+      "ppid": 1035617,
+      "session": 1035617,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1035617,
+      "pid": 1035799,
+      "ppid": 1035617,
+      "session": 1035617,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1035617,
+      "pid": 1035803,
+      "ppid": 1035617,
+      "session": 1035617,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1035617,
+      "pid": 1035869,
+      "ppid": 1035617,
+      "session": 1035617,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1035617,
+      "pid": 1035873,
+      "ppid": 1035617,
+      "session": 1035617,
+      "state": "R"
+    },
+    {
+      "comm": "link",
+      "pgid": 1035617,
+      "pid": 1035886,
+      "ppid": 1035617,
+      "session": 1035617,
+      "state": "D"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1035617,
+      "pid": 1035894,
+      "ppid": 1035617,
+      "session": 1035617,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1035617,
+      "pid": 1035912,
+      "ppid": 1035617,
+      "session": 1035617,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1035617,
+      "pid": 1035916,
+      "ppid": 1035617,
+      "session": 1035617,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1035617,
+      "pid": 1035920,
+      "ppid": 1035617,
+      "session": 1035617,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1035617,
+      "pid": 1035928,
+      "ppid": 1035617,
+      "session": 1035617,
+      "state": "S"
+    },
+    {
+      "comm": "mvcc.test",
+      "pgid": 1035617,
+      "pid": 1035934,
+      "ppid": 1035617,
+      "session": 1035617,
+      "state": "S"
+    }
+  ],
+  "pgid": 1035617,
+  "pid": 1035617,
+  "raw_log_sha256": "731fad25957e4079efce1c0212aec1413ec2c51abe59d8722a478c68232f5c00",
+  "remaining_direct_or_adopted_children": [],
+  "remaining_group_members": [],
+  "required_child_names": [],
+  "residual_before_cleanup": {
+    "children": [],
+    "group": []
+  },
+  "signals": [],
+  "source_before_after_frozen": true,
+  "started_utc": "2026-10-16T04:24:38.205305+00:00",
+  "status": "PASS",
+  "stop_reasons": [],
+  "subreaper_verified": true,
+  "test_FAIL_names": [],
+  "test_PASS_names": [
+    "TestNativeMVCCRealBackendRouteRefusalPreservesCustodyV6"
+  ],
+  "test_RUN_names": [
+    "TestNativeMVCCRealBackendRouteRefusalPreservesCustodyV6"
+  ],
+  "test_SKIP_names": [],
+  "timeout": false,
+  "top_level_RUN_names": [
+    "TestNativeMVCCRealBackendRouteRefusalPreservesCustodyV6"
+  ],
+  "top_level_pass_count": 1,
+  "unexpected_top_names": []
+}

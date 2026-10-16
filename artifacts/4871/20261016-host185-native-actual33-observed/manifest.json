@@ -1,0 +1,290 @@
+[
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/CONTINUATION-20261016.md",
+    "path": "CONTINUATION-20261016.md",
+    "source_bytes": 36321,
+    "source_sha256": "e07fa05e418fd5c5e6ae53610f4546179a7f9fbdafd3f44fe01f789599cb1209",
+    "stored_bytes": 36321,
+    "stored_sha256": "e07fa05e418fd5c5e6ae53610f4546179a7f9fbdafd3f44fe01f789599cb1209",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/actual33-index-identity-independent-review.json",
+    "path": "native-decision/actual33-index-identity-independent-review.json",
+    "source_bytes": 8095,
+    "source_sha256": "ff3ef979a1fed281b7e190f334b7bede8302ee8010dad5d2dfe3976ce147cc6d",
+    "stored_bytes": 8095,
+    "stored_sha256": "ff3ef979a1fed281b7e190f334b7bede8302ee8010dad5d2dfe3976ce147cc6d",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/actual33-index-identity-independent-review.md",
+    "path": "native-decision/actual33-index-identity-independent-review.md",
+    "source_bytes": 5047,
+    "source_sha256": "414a7fe779be5b822470119002b033ba9f005c237555ea4288c70c07e5492139",
+    "stored_bytes": 5047,
+    "stored_sha256": "414a7fe779be5b822470119002b033ba9f005c237555ea4288c70c07e5492139",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/private-control-capacity-design.md",
+    "path": "native-decision/private-control-capacity-design.md",
+    "source_bytes": 19420,
+    "source_sha256": "85300d41421f8c5d3bfa762c07cc02e2f364091f946c2052945a4e1e730ccee6",
+    "stored_bytes": 19420,
+    "stored_sha256": "85300d41421f8c5d3bfa762c07cc02e2f364091f946c2052945a4e1e730ccee6",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/private-control-capacity-performance-advice.json",
+    "path": "native-decision/private-control-capacity-performance-advice.json",
+    "source_bytes": 4701,
+    "source_sha256": "e9e03e47038dcdac17b3d05ba4ce2e2160fa82eb429e51b8e6deaad5c4f3e45e",
+    "stored_bytes": 4701,
+    "stored_sha256": "e9e03e47038dcdac17b3d05ba4ce2e2160fa82eb429e51b8e6deaad5c4f3e45e",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/private-control-capacity-performance-advice.md",
+    "path": "native-decision/private-control-capacity-performance-advice.md",
+    "source_bytes": 14130,
+    "source_sha256": "f6a50997343c53d9419f5193b985725aedd1018d43b6d208cbe182304a6964d0",
+    "stored_bytes": 14130,
+    "stored_sha256": "f6a50997343c53d9419f5193b985725aedd1018d43b6d208cbe182304a6964d0",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-index-pin-actual33-observation-grant.json",
+    "path": "native-decision/root-index-pin-actual33-observation-grant.json",
+    "source_bytes": 4172,
+    "source_sha256": "528319a6ec86afd06b0927a3ef82126731c97326e352db75b9d8f769acce4530",
+    "stored_bytes": 4172,
+    "stored_sha256": "528319a6ec86afd06b0927a3ef82126731c97326e352db75b9d8f769acce4530",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-private-hash-capacity-selection.md",
+    "path": "native-decision/root-private-hash-capacity-selection.md",
+    "source_bytes": 9358,
+    "source_sha256": "063f85d21e071fb4bf20d79c00af6d1a601dc6c6db15aa0baa04e358bef7cb32",
+    "stored_bytes": 9358,
+    "stored_sha256": "063f85d21e071fb4bf20d79c00af6d1a601dc6c6db15aa0baa04e358bef7cb32",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-index-identity-observation/HANDOFF.md",
+    "path": "native-main-integration/actual33-index-identity-observation/HANDOFF.md",
+    "source_bytes": 2151,
+    "source_sha256": "6700ee797cc219bb53c6b1424ead7497b43af07a464bc4fee2f7dfcaf64ae336",
+    "stored_bytes": 2151,
+    "stored_sha256": "6700ee797cc219bb53c6b1424ead7497b43af07a464bc4fee2f7dfcaf64ae336",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-index-identity-observation/actual33-promoted-index-identity-previsibility-observation/command.json",
+    "path": "native-main-integration/actual33-index-identity-observation/actual33-promoted-index-identity-previsibility-observation/command.json",
+    "source_bytes": 2156,
+    "source_sha256": "b9aa8793c895b1dce8266e7fe691b588f8ed8955673c7e4b6ef880fa80adcd08",
+    "stored_bytes": 2156,
+    "stored_sha256": "b9aa8793c895b1dce8266e7fe691b588f8ed8955673c7e4b6ef880fa80adcd08",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-index-identity-observation/actual33-promoted-index-identity-previsibility-observation/process.json",
+    "path": "native-main-integration/actual33-index-identity-observation/actual33-promoted-index-identity-previsibility-observation/process.json",
+    "source_bytes": 148,
+    "source_sha256": "f4f814b64a046a68b5826510964cbd4cdb43c4331fed8d281391a5854cec4715",
+    "stored_bytes": 148,
+    "stored_sha256": "f4f814b64a046a68b5826510964cbd4cdb43c4331fed8d281391a5854cec4715",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-index-identity-observation/actual33-promoted-index-identity-previsibility-observation/result.json",
+    "path": "native-main-integration/actual33-index-identity-observation/actual33-promoted-index-identity-previsibility-observation/result.json",
+    "source_bytes": 3627,
+    "source_sha256": "d99e2efe70f8c981b34110d79e467fe25ecba6a4989a0fd82b44ca86db00ab83",
+    "stored_bytes": 3627,
+    "stored_sha256": "d99e2efe70f8c981b34110d79e467fe25ecba6a4989a0fd82b44ca86db00ab83",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-index-identity-observation/actual33-promoted-index-identity-previsibility-observation/run.log",
+    "path": "native-main-integration/actual33-index-identity-observation/actual33-promoted-index-identity-previsibility-observation/run.log.gz",
+    "source_bytes": 26880,
+    "source_sha256": "731fad25957e4079efce1c0212aec1413ec2c51abe59d8722a478c68232f5c00",
+    "stored_bytes": 4842,
+    "stored_sha256": "f3b180b9f1ab934a96fb845f6200ba09d712913665ba5a1291937793a96343d9",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-index-identity-observation/actual33-promoted-index-identity-previsibility-observation/source-after.json",
+    "path": "native-main-integration/actual33-index-identity-observation/actual33-promoted-index-identity-previsibility-observation/source-after.json.gz",
+    "source_bytes": 1589116,
+    "source_sha256": "23e37a210f156838de8adecbf8532c0cd16cd12f6d6c37fb05529b7974d0869f",
+    "stored_bytes": 463637,
+    "stored_sha256": "d419ba89ab3f99136e6774b92b5976e9ef674b6d0ca8294ecd932d209dcad9a3",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-index-identity-observation/actual33-promoted-index-identity-previsibility-observation/source-before.json",
+    "path": "native-main-integration/actual33-index-identity-observation/actual33-promoted-index-identity-previsibility-observation/source-before.json.gz",
+    "source_bytes": 1589116,
+    "source_sha256": "23e37a210f156838de8adecbf8532c0cd16cd12f6d6c37fb05529b7974d0869f",
+    "stored_bytes": 463638,
+    "stored_sha256": "8779f821d67ef939c389ab90ead4f8a1cefe483a1be5c50429d12cbdc2624a38",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-index-identity-observation/evidence-archive-receipt.json",
+    "path": "native-main-integration/actual33-index-identity-observation/evidence-archive-receipt.json",
+    "source_bytes": 486,
+    "source_sha256": "c807acdcdf7ff590e7c735c495154408606d0deedeb1c018925fededbf17ff40",
+    "stored_bytes": 486,
+    "stored_sha256": "c807acdcdf7ff590e7c735c495154408606d0deedeb1c018925fededbf17ff40",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-index-identity-observation/evidence-manifest.json",
+    "path": "native-main-integration/actual33-index-identity-observation/evidence-manifest.json",
+    "source_bytes": 2144,
+    "source_sha256": "befaed470f705be5d54f0ddcbb13be2730d23eaac30f7cf6751773e2558d81e0",
+    "stored_bytes": 2144,
+    "stored_sha256": "befaed470f705be5d54f0ddcbb13be2730d23eaac30f7cf6751773e2558d81e0",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-index-identity-observation/grant-original.json",
+    "path": "native-main-integration/actual33-index-identity-observation/grant-original.json",
+    "source_bytes": 4172,
+    "source_sha256": "528319a6ec86afd06b0927a3ef82126731c97326e352db75b9d8f769acce4530",
+    "stored_bytes": 4172,
+    "stored_sha256": "528319a6ec86afd06b0927a3ef82126731c97326e352db75b9d8f769acce4530",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-index-identity-observation/grant.json",
+    "path": "native-main-integration/actual33-index-identity-observation/grant.json",
+    "source_bytes": 4172,
+    "source_sha256": "528319a6ec86afd06b0927a3ef82126731c97326e352db75b9d8f769acce4530",
+    "stored_bytes": 4172,
+    "stored_sha256": "528319a6ec86afd06b0927a3ef82126731c97326e352db75b9d8f769acce4530",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-index-identity-observation/handoff.json",
+    "path": "native-main-integration/actual33-index-identity-observation/handoff.json",
+    "source_bytes": 1635,
+    "source_sha256": "c65c12ff4bfb6065e2d1af26693c7693efc6cbf7a2f2d5368a4fa814f48299b5",
+    "stored_bytes": 1635,
+    "stored_sha256": "c65c12ff4bfb6065e2d1af26693c7693efc6cbf7a2f2d5368a4fa814f48299b5",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-index-identity-observation/identity.json",
+    "path": "native-main-integration/actual33-index-identity-observation/identity.json",
+    "source_bytes": 1103,
+    "source_sha256": "b80035f30cd0cf93704b309a9f9946c2c0dbdcfe46efb39d81df5fa5181288f5",
+    "stored_bytes": 1103,
+    "stored_sha256": "b80035f30cd0cf93704b309a9f9946c2c0dbdcfe46efb39d81df5fa5181288f5",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-index-identity-observation/index-after.json",
+    "path": "native-main-integration/actual33-index-identity-observation/index-after.json",
+    "source_bytes": 184,
+    "source_sha256": "f89a1354e7f23f2c68d43010ae4f69d7a183c0389d3c18a7dc570d4336c92d6b",
+    "stored_bytes": 184,
+    "stored_sha256": "f89a1354e7f23f2c68d43010ae4f69d7a183c0389d3c18a7dc570d4336c92d6b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-index-identity-observation/index-binding.json",
+    "path": "native-main-integration/actual33-index-identity-observation/index-binding.json",
+    "source_bytes": 2851,
+    "source_sha256": "d2548d3c26710d1aad2746ea19c2578ed1b1186074426bc41f7e3b4b92150f50",
+    "stored_bytes": 2851,
+    "stored_sha256": "d2548d3c26710d1aad2746ea19c2578ed1b1186074426bc41f7e3b4b92150f50",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-index-identity-observation/observation-summary.json",
+    "path": "native-main-integration/actual33-index-identity-observation/observation-summary.json",
+    "source_bytes": 4708,
+    "source_sha256": "3771500df86bded8e0892d8d3aca543d4f7e93f133df343073b171ac5cfbd110",
+    "stored_bytes": 4708,
+    "stored_sha256": "3771500df86bded8e0892d8d3aca543d4f7e93f133df343073b171ac5cfbd110",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-index-identity-observation/observer-payload.log",
+    "path": "native-main-integration/actual33-index-identity-observation/observer-payload.log.gz",
+    "source_bytes": 25508,
+    "source_sha256": "501a70e18d37dfe8b61dbedc927fe71d61fe3d59de07265e6588fc8829ca314f",
+    "stored_bytes": 4548,
+    "stored_sha256": "d1f08c2057568ea3a4c51461c9d8ff3cf96e245bf20d88f59b3c93778b0517b7",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-index-identity-observation/package-evidence.py",
+    "path": "native-main-integration/actual33-index-identity-observation/package-evidence.py",
+    "source_bytes": 6267,
+    "source_sha256": "453f84d0f86bb5166c6a0de031394018e567fb06cf4b03a45f605808b45a9aa0",
+    "stored_bytes": 6267,
+    "stored_sha256": "453f84d0f86bb5166c6a0de031394018e567fb06cf4b03a45f605808b45a9aa0",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-index-identity-observation/required-child-tests.json",
+    "path": "native-main-integration/actual33-index-identity-observation/required-child-tests.json",
+    "source_bytes": 3,
+    "source_sha256": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+    "stored_bytes": 3,
+    "stored_sha256": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-index-identity-observation/run-observation.py",
+    "path": "native-main-integration/actual33-index-identity-observation/run-observation.py",
+    "source_bytes": 12875,
+    "source_sha256": "7a0e28fb4c9ad7a7135ca8a49d187e5c3fdbc3d0ab89c8bdb61539d0b15de257",
+    "stored_bytes": 12875,
+    "stored_sha256": "7a0e28fb4c9ad7a7135ca8a49d187e5c3fdbc3d0ab89c8bdb61539d0b15de257",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-index-identity-observation/selection.json",
+    "path": "native-main-integration/actual33-index-identity-observation/selection.json",
+    "source_bytes": 2613,
+    "source_sha256": "e46bc2ecd076a5ee9de00313d2af9fd2645f1b89e62ecb674e18e1da56ba3e24",
+    "stored_bytes": 2613,
+    "stored_sha256": "e46bc2ecd076a5ee9de00313d2af9fd2645f1b89e62ecb674e18e1da56ba3e24",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-index-identity-observation/summary.json",
+    "path": "native-main-integration/actual33-index-identity-observation/summary.json",
+    "source_bytes": 761,
+    "source_sha256": "f7d44fefd65ce3c31145067f4558660027746209fa15bb9eb0e667636fea2862",
+    "stored_bytes": 761,
+    "stored_sha256": "f7d44fefd65ce3c31145067f4558660027746209fa15bb9eb0e667636fea2862",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-index-identity-root-verification.json",
+    "path": "native-main-integration/actual33-index-identity-root-verification.json",
+    "source_bytes": 1085,
+    "source_sha256": "fdb8a040ac85498ff799264c36f66fa251aa8be30bc175fb39fcde103854afac",
+    "stored_bytes": 1085,
+    "stored_sha256": "fdb8a040ac85498ff799264c36f66fa251aa8be30bc175fb39fcde103854afac",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/verify-actual33-index-identity.py",
+    "path": "native-main-integration/verify-actual33-index-identity.py",
+    "source_bytes": 5478,
+    "source_sha256": "3e7f70cf8eb6edba9d5d8fe40ae21cdddf00b672a0fb28de7765184e0066772a",
+    "stored_bytes": 5478,
+    "stored_sha256": "3e7f70cf8eb6edba9d5d8fe40ae21cdddf00b672a0fb28de7765184e0066772a",
+    "encoding": "identity"
+  }
+]

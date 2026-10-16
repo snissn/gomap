@@ -1,0 +1,161 @@
+{
+  "verdict": "ACCEPT",
+  "scope": "Truthful source-bound actual33 previsibility refusal/observer evidence and explicitly bounded inferences only.",
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW",
+  "reviewer": "/root/ordinary_review",
+  "model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "candidate_edits_by_reviewer": false,
+  "hosted_model_routing_unavailability_reason": "Hosted manual review cannot pin the explicitly required exact gpt-6.1-sol model; independent explicitly routed internal reviewer used.",
+  "completed_utc": "2026-10-16T04:29:21.383361+00:00",
+  "source": {
+    "manifest_sha256": "23e37a210f156838de8adecbf8532c0cd16cd12f6d6c37fb05529b7974d0869f",
+    "archive_sha256": "ea996ddc0c637f7674efded9f0611b3d2108554b460ea35d9859e6b47cf25293",
+    "files": 10377,
+    "archive_members_independently_rehashed": 10377,
+    "root_recorded_staged_tree": "52ca5ef561f6d27928356ca2f836e722be7c4b31",
+    "fixture": "TreeDB/mvcc/native_prune_backend_route_v6_test.go",
+    "fixture_sha256": "80d8d4c7a933f05d7a3b7bbdead961e2cdd8757fc15288e086c98b968d7835c8",
+    "live_source_read": false,
+    "committed_head_claim": false
+  },
+  "evidence": {
+    "archive_sha256": "a1e4a52adc9da27bea2d7f9904e1f631d70237a66387114e8da4c7e42c3a962d",
+    "manifest_sha256": "befaed470f705be5d54f0ddcbb13be2730d23eaac30f7cf6751773e2558d81e0",
+    "payload_files": 20,
+    "archive_regular_members_including_manifest": 21,
+    "grant_sha256": "528319a6ec86afd06b0927a3ef82126731c97326e352db75b9d8f769acce4530",
+    "runner_sha256": "7a0e28fb4c9ad7a7135ca8a49d187e5c3fdbc3d0ab89c8bdb61539d0b15de257",
+    "raw_log_sha256": "731fad25957e4079efce1c0212aec1413ec2c51abe59d8722a478c68232f5c00",
+    "observer_payload_sha256": "501a70e18d37dfe8b61dbedc927fe71d61fe3d59de07265e6588fc8829ca314f",
+    "observer_payload_lines": 60,
+    "root_verification_sha256": "fdb8a040ac85498ff799264c36f66fa251aa8be30bc175fb39fcde103854afac"
+  },
+  "execution": {
+    "commands": 1,
+    "retries": 0,
+    "selected_test": "TestNativeMVCCRealBackendRouteRefusalPreservesCustodyV6",
+    "normal": true,
+    "race": false,
+    "top_level_RUN": 1,
+    "top_level_PASS": 1,
+    "children": 0,
+    "pid": 1035617,
+    "pgid": 1035617,
+    "elapsed_runner_seconds": 15.365162452682853,
+    "test_body_reported_seconds": 0.17,
+    "exit_code": 0,
+    "leader_joined": true,
+    "groups_direct_and_adopted_children_empty": true,
+    "timeout": false,
+    "signals": [],
+    "source_before_after_equal": true,
+    "retained_index_before_after_equal": true
+  },
+  "source_coverage": [
+    "Read complete selected test/helper and all assertions/early-return paths; only promoted mode selected.",
+    "Read prune phase26, native Fence preflight through builder/enqueue boundary, and allocator ValidateSource stale branch.",
+    "Read F seven-row calculator/remainder and basis/index/custody/Set/Owner/bank/frame/snapshot/key/capture/lease scalar observation implementations; compose unchanged prior accepted observer/source reviews for transitive helpers.",
+    "Compared one-command runner adaptation with independently reviewed four-control runner; exact grant argv/env/deadline validated; cleanup/parser core unchanged."
+  ],
+  "checks": [
+    "Independently rehashed every frozen source archive member and all evidence payload/archive members.",
+    "Verified root grant hash, original executed:false template versus executed:true launch, exact single argv/env/cwd and pinned Go/compiler hashes.",
+    "Read entire raw log and independently parsed exact one RUN/PASS with no skip/failure/panic; no race mode claimed.",
+    "Verified 60-line observer extraction, groups1-5, all five post-group basis checks ready/same, both original index rows ready with mandatory identity/custody flags.",
+    "Recomputed 367 records/871273 bytes from emitted source-expression rows; checked formula operands and all logged work within32/1MiB.",
+    "Verified before/after frozen manifest hashes, referenced root inventory receipts/index equality, PID/PGID/timestamps/join/empty group and adopted-child receipts.",
+    "Read root independent source/archive/index/process verifier, consistent with independent evidence checks."
+  ],
+  "observed": {
+    "history_versions": 33,
+    "discard_floor": 32,
+    "first_refusal_calls": 160,
+    "cursor_phase": 26,
+    "candidate_phase": 8,
+    "seal_phase": 13,
+    "selected_entries": 1,
+    "anchor_required": true,
+    "original_index_count": 2,
+    "groups": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "same_retained_capture_both": true,
+    "custody_present_both": true,
+    "custody_complete_both": false,
+    "basis_after_each_group_same": true,
+    "expression": "F293+D+2K+23P+8M+3S+N+Z+V+A",
+    "operands": {
+      "K": 1,
+      "keyBytes": 41,
+      "D": 0,
+      "P": 1,
+      "M": 3,
+      "S": 1,
+      "Nupper": 1,
+      "Z": 0,
+      "V": 8,
+      "A": 13
+    },
+    "computed_source_expression_records": 367,
+    "computed_source_expression_bytes": 871273,
+    "applicableComplete_reported": true,
+    "observations_atomic": false
+  },
+  "assertion_inferences": [
+    "Every PruneVersions return in selected loop stays <=32records/1MiB, Pruned0 and Completefalse; expected original work-required error occurs at phase26 with retained selected+anchor and private prepared operands.",
+    "Selected old key is unchanged in DB and held oldReader before later writer34.",
+    "A genuine ordinary CommitDurable writer34 succeeds; SAME preparation then returns ErrCOWPreparationStaleV6, never ready.",
+    "SAME cursor Close succeeds; newer key/value survives cancellation, checkpoint, DB close and reopen.",
+    "OldReader is explicitly closed after writer34; source does not reread it after that writer. Reopen assertion checks newer key, not all original history."
+  ],
+  "unavailable": {
+    "complete_disjoint_retained_total_bytes": null,
+    "complete_general_F": null,
+    "future_Finish_geometry": null,
+    "future_Finish_work_bound": null,
+    "transitive_heap_total": null,
+    "nonempty_resource_geometry": null,
+    "charge_transfer_dedup": null,
+    "private_map_backing_bytes": null,
+    "later_writer_actual_native_success_geometry": null
+  },
+  "incomplete_rows": [
+    "Private captured transaction clone maps",
+    "Private sink ID map",
+    "Conditional private planner replacedMetadata map (absent in observed geometry; generalized case remains incomplete)",
+    "Nonempty resource logical graphs",
+    "Physical allocation/Owner/lease transfer dedup",
+    "Atomic whole-graph and current-owner observations",
+    "Future genuine publication receipt/Finish/last-owner geometry"
+  ],
+  "findings": [],
+  "limitations": [
+    "PASS is a normal previsibility safety/observation control; no actual native visible/durable publication or ACK acceptance.",
+    "367/871273 is arithmetic over separately observed source operands, not actual completed final-call counters, a general fixed bound, or a numeric allowance. The record expression exceeds32; no Q32 fit follows from bytes below1MiB.",
+    "Per-probe Q32/1MiB success and unchanged scalar basis do not prove atomic whole-graph consistency or future concurrent geometry.",
+    "Owner envelopes/policy reservations, physical rows, borrowed bank images, shared Set backing and embedded headers must not be blindly summed. No total inferred.",
+    "Actual private preparation/cancellation and ordinary durable fixture writers execute; no genuine native enqueue/adoption/activation/fence/Consume/publication Finish is credited.",
+    "Only promoted actual33 mode ran; copied-parent mode siblings and race are not rerun here.",
+    "Historical041b actual33 and21bc focused failures retain original attribution, never relabeled."
+  ],
+  "public_status": {
+    "Q32": "RED",
+    "ACK": 0,
+    "work_records_limit": 32,
+    "work_bytes_limit": 1048576,
+    "fixture_history": 33,
+    "original_guards": [
+      80,
+      4096
+    ],
+    "numeric_allowance_chosen": false,
+    "native_publication_qualified": false,
+    "publication_runtime_grant": false
+  },
+  "lease": "released after artifact finalization"
+}

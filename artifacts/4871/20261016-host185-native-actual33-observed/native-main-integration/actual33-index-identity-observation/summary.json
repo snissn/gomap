@@ -1,0 +1,20 @@
+{
+  "actual33_executed": true,
+  "all_authorized_pass": true,
+  "all_groups_empty": true,
+  "commands_executed": 1,
+  "commands_not_executed": [],
+  "completed_utc": "2026-10-16T04:24:54.431350+00:00",
+  "native_publication_executed": false,
+  "public_status": "Q32 RED/ACK0; no allowance",
+  "results": [
+    {
+      "id": "actual33-promoted-index-identity-previsibility-observation",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-index-identity-observation/actual33-promoted-index-identity-previsibility-observation/result.json",
+      "status": "PASS"
+    }
+  ],
+  "source_files": 10377,
+  "source_manifest_sha256": "23e37a210f156838de8adecbf8532c0cd16cd12f6d6c37fb05529b7974d0869f",
+  "source_still_frozen": true
+}

@@ -1,0 +1,17 @@
+{
+  "verified_utc": "2026-10-16T04:27:43.308405+00:00",
+  "verifier_sha256": "3e7f70cf8eb6edba9d5d8fe40ae21cdddf00b672a0fb28de7765184e0066772a",
+  "source_files": 10377,
+  "source_manifest_sha256": "23e37a210f156838de8adecbf8532c0cd16cd12f6d6c37fb05529b7974d0869f",
+  "source_archive_sha256": "ea996ddc0c637f7674efded9f0611b3d2108554b460ea35d9859e6b47cf25293",
+  "evidence_archive_sha256": "a1e4a52adc9da27bea2d7f9904e1f631d70237a66387114e8da4c7e42c3a962d",
+  "evidence_archive_members": 21,
+  "evidence_manifest_sha256": "befaed470f705be5d54f0ddcbb13be2730d23eaac30f7cf6751773e2558d81e0",
+  "execution_result": "PASS one actual33previsibility control; groups1-5 emitted; newer writer34/stale cancellation/reopen assertions reached",
+  "diagnosis": "not inferred by verifier",
+  "command_metadata_note": "Original grant executed:false preserved; launched receipt executed:true with actual PID/PGID bound.",
+  "runtime_repeated": false,
+  "source_and_index_unchanged": true,
+  "processes_joined_and_absent": true,
+  "public_status": "Q32 RED/ACK0; no native publication or allowance"
+}

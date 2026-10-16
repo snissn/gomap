@@ -1,0 +1,19 @@
+{
+  "VERSION": "go1.26.3\ntime 2026-05-04T20:36:18Z\n",
+  "archive_verified_files": 10377,
+  "compiler_sha256": "3bb421d581f60b9ab48c2c73adf5c018557e89af32ad018d9c4417afa4bf90c1",
+  "go_binary": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+  "go_sha256": "d68b7abbc40d0844f673f6cf06ae3cded225c50437c6454fa37ef178d079fe65",
+  "runner_pgid": 1035582,
+  "runner_pid": 1035582,
+  "runner_sha256": "7a0e28fb4c9ad7a7135ca8a49d187e5c3fdbc3d0ab89c8bdb61539d0b15de257",
+  "selected_test_files": {
+    "TreeDB/mvcc/native_prune_backend_route_v6_test.go": "80d8d4c7a933f05d7a3b7bbdead961e2cdd8757fc15288e086c98b968d7835c8"
+  },
+  "selection_json_sha256": "528319a6ec86afd06b0927a3ef82126731c97326e352db75b9d8f769acce4530",
+  "selection_md_sha256": "528319a6ec86afd06b0927a3ef82126731c97326e352db75b9d8f769acce4530",
+  "source_archive_sha256": "ea996ddc0c637f7674efded9f0611b3d2108554b460ea35d9859e6b47cf25293",
+  "source_manifest_sha256": "23e37a210f156838de8adecbf8532c0cd16cd12f6d6c37fb05529b7974d0869f",
+  "started_utc": "2026-10-16T04:24:37.063322+00:00",
+  "subreaper_verified": true
+}
