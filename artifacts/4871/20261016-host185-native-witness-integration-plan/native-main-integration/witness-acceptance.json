@@ -1,0 +1,39 @@
+{
+  "at_utc": "2026-10-16T02:23:10.680169+00:00",
+  "disposition": "ACCEPT_SCOPED_SOURCE_WITNESS_REPAIR",
+  "source_manifest_sha256": "4b230aa27b6a51d2394d2cd237403f956ac4897afb4b76e9e2e47bfb39947fd2",
+  "archive_sha256": "44682995595a636fe99ab3febcebca1802f8992574eb4fab8dbef49f355ea03c",
+  "source_files": 10349,
+  "review_json_sha256": "95a9adfd4170b07a6f80eb59fb6b58a8e5a2b6050d7b43084341f5cfcac87ea1",
+  "review_markdown_sha256": "e192c022c7d6dd854c434d5c938dec667e007cc3c069420a2c0f646b1c46a521",
+  "packet_sha256": "6f4030e7f658822751791bbfdc079d96437fa1d71479983efefb25e13636c4d5",
+  "root_full_input_binding_sha256": "29f92604f8e011927d9cc5d9625db4d608ce33395d46cd5babc7e58f3209f06e",
+  "commands": [
+    {
+      "name": "compile-only",
+      "result_sha256": "f5f901f97e13d4792ba532ea6a4af42dd3423a5c92a9c07c15430bb2a8152fff",
+      "command_sha256": "6187ba3bd74f6f3dfbec5d14908de1f189a1646d0b8970a1d0ecfeaa3a6aaca5",
+      "log_sha256": "3b426179cad1494182c9f3a938962ac94dd035d5cc20c039baf4732dd423c94d",
+      "exit": 0
+    },
+    {
+      "name": "primitive-normal",
+      "result_sha256": "7ac9fabee46dc33ad5b9803fbdd78907e8da477753676593fd27fe39d787aa99",
+      "command_sha256": "3022924482463d3f96ebe2a9dd3ca71eb6d757a2fb0fbb571f8dc7aa7757cdb2",
+      "log_sha256": "fb488281c9499198cccf472afa3b3ebcea04ddb332e1352b3ea5c8582b4d639f",
+      "exit": 0
+    },
+    {
+      "name": "primitive-race",
+      "result_sha256": "0210efd926d551d5b7375c3b1b8312d74b0a3eeff532c1b43b2c0a3b093c6cb8",
+      "command_sha256": "cd328c6b1de9a32d6c90894bcd2d29727d480d69e09bb07ae0e82ee7948b5e74",
+      "log_sha256": "106be7ca36ef435e7751bab8f81002c0ff520292e7d498c43259eda861f51c2b",
+      "exit": 0
+    }
+  ],
+  "positive_real_receipt_to_source_cleanup": "SOURCE ordering only, not runtime proven",
+  "actual33_granted": false,
+  "native_publication_accepted": false,
+  "Q32": "RED/ACK0",
+  "next": "separately selected coherent source integration onto merged0149"
+}

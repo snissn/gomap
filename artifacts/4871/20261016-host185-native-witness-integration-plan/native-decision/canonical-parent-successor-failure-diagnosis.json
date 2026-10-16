@@ -1,0 +1,112 @@
+{
+  "task": "read-only canonical-parent successor failure diagnosis",
+  "source_manifest_sha256": "c6545a7247ce3180de81cf4c8136b1d0fa04e423ec014b44a6aac1965960cd4f",
+  "source_count": 10348,
+  "source_writes": false,
+  "runtime_executed": false,
+  "git_gh_actions": false,
+  "children": false,
+  "finding": "successful root preparation clears/drops exact source witness before mandatory phase7 gate comparison",
+  "classification": "source-provable native prerequisite defect; raw generic failure does not identify first predicate",
+  "observation": {
+    "calls": 160,
+    "phase": 26,
+    "error": "durable-root candidate base changed",
+    "observer_rows": 0,
+    "newer_writer_controls_reached": false,
+    "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/canonical-parent-repair-observation/actual33-promoted-prebuilder-observation-after-parent-repair",
+    "pgid": 874842,
+    "attempt_consumed": true
+  },
+  "proposal": {
+    "retain": "SAME original acquired source Ref/canonical certificate, no new Acquire or owner",
+    "split": "successful scratch/group readiness versus actual terminal source release",
+    "private_terminal": "same rootPreparation.closeStep at original cancel caller",
+    "published_terminal": "preserve rootPreparation across receipt Finish, drain original source queue before root frame reset",
+    "sticky_error": "retain original source edge/frame under existing recovery-required barrier",
+    "authority_gate": "unchanged exact durable parent/member/prefix validation",
+    "observer_siblings": [
+      "SameCurrentRoot/FullBasisReady",
+      "source bank role0"
+    ],
+    "new_framework": false,
+    "numeric_allowance": null
+  },
+  "caps_unchanged": true,
+  "public_Q32": "RED",
+  "ACK": 0,
+  "report_sha256": "cafe3424cc9c561f0ffdc15536668447949f5efd028bc3bd18443c174fea4876",
+  "inspected_source": {
+    "TreeDB/db/native_mvcc_root_preparation_v6.go": {
+      "sha256": "1c7d744d5c33efcf9bce17c428888085860cfab8a1595842fe071d8fe7732862",
+      "frozen_entry": "1c7d744d5c33efcf9bce17c428888085860cfab8a1595842fe071d8fe7732862",
+      "matches_frozen": true
+    },
+    "TreeDB/db/native_mvcc_final_basis_v6.go": {
+      "sha256": "de28b7bc7b266176f9de038dba26e8c95aae3d4a8b090d99d3f79b58cfc9cf15",
+      "frozen_entry": "de28b7bc7b266176f9de038dba26e8c95aae3d4a8b090d99d3f79b58cfc9cf15",
+      "matches_frozen": true
+    },
+    "TreeDB/db/native_mvcc_seal_preparation_v6.go": {
+      "sha256": "3c8feaa2077fc6646bac1db0c54aded13c3a956c135f72c3339f155ac20567b3",
+      "frozen_entry": "3c8feaa2077fc6646bac1db0c54aded13c3a956c135f72c3339f155ac20567b3",
+      "matches_frozen": true
+    },
+    "TreeDB/db/native_mvcc_published_terminal_v6.go": {
+      "sha256": "2efc111a2d2706878b88572498cecd21e9cca7aede421b0abe24e025f98c137e",
+      "frozen_entry": "2efc111a2d2706878b88572498cecd21e9cca7aede421b0abe24e025f98c137e",
+      "matches_frozen": true
+    },
+    "TreeDB/db/native_mvcc_current_delete_v6.go": {
+      "sha256": "5dbc2fb4c8993ed43075650989d63616ae9afd4310b18aaee94c1f9443a9f600",
+      "frozen_entry": "5dbc2fb4c8993ed43075650989d63616ae9afd4310b18aaee94c1f9443a9f600",
+      "matches_frozen": true
+    },
+    "TreeDB/db/native_prebuilder_observer_for_test_v6.go": {
+      "sha256": "686452eebfb98fe8b05e734557dce3f3dd042bc0c06c0d53237bb84dc2bfcc4f",
+      "frozen_entry": "686452eebfb98fe8b05e734557dce3f3dd042bc0c06c0d53237bb84dc2bfcc4f",
+      "matches_frozen": true
+    },
+    "TreeDB/db/primary_authority_scope_v6.go": {
+      "sha256": "04ebc049d24a42a3fce89fed5cb3e2caa5cba04fe1010abc83b7243da46274ff",
+      "frozen_entry": "04ebc049d24a42a3fce89fed5cb3e2caa5cba04fe1010abc83b7243da46274ff",
+      "matches_frozen": true
+    },
+    "TreeDB/db/native_mvcc_candidate_preparation_v6.go": {
+      "sha256": "45d7dd34004bc14b94fa1592ebe7979f3f33e8924d176d49cc8c49a56df937a7",
+      "frozen_entry": "45d7dd34004bc14b94fa1592ebe7979f3f33e8924d176d49cc8c49a56df937a7",
+      "matches_frozen": true
+    },
+    "TreeDB/db/native_mvcc_final_publication_v6.go": {
+      "sha256": "8b36f28459b30a52cc0d3f7fa07c79138db1213c48c476c8c19c1963543b6839",
+      "frozen_entry": "8b36f28459b30a52cc0d3f7fa07c79138db1213c48c476c8c19c1963543b6839",
+      "matches_frozen": true
+    },
+    "TreeDB/db/durable_root_runtime.go": {
+      "sha256": "e472aeae3ff832a79b6621d97150fe5b90b9165a0d5fb328991b9d114095aa30",
+      "frozen_entry": "e472aeae3ff832a79b6621d97150fe5b90b9165a0d5fb328991b9d114095aa30",
+      "matches_frozen": true
+    },
+    "TreeDB/internal/primaryarena/arena.go": {
+      "sha256": "a587d56658f9217b4cfce21c20077c145cfd1765cb6e545145925f8f61dfe43f",
+      "frozen_entry": "a587d56658f9217b4cfce21c20077c145cfd1765cb6e545145925f8f61dfe43f",
+      "matches_frozen": true
+    },
+    "TreeDB/internal/primaryarena/read_root_v6.go": {
+      "sha256": "3d07ba4e9222fc998b675422ab4aa015cf3eea694ec8957f0b78a1382b14fdc4",
+      "frozen_entry": "3d07ba4e9222fc998b675422ab4aa015cf3eea694ec8957f0b78a1382b14fdc4",
+      "matches_frozen": true
+    },
+    "TreeDB/mvcc/prune_cursor_v6.go": {
+      "sha256": "67741d492a926d94dc347f2a073f883b2bf2d793334e1de79095d46bf58c9cba",
+      "frozen_entry": "67741d492a926d94dc347f2a073f883b2bf2d793334e1de79095d46bf58c9cba",
+      "matches_frozen": true
+    },
+    "TreeDB/mvcc/native_prune_backend_route_v6_test.go": {
+      "sha256": "f5c7ea6ed4e2fa1a57001411e4d1ca602f178593318cd3fc6784afb02288eb9f",
+      "frozen_entry": "f5c7ea6ed4e2fa1a57001411e4d1ca602f178593318cd3fc6784afb02288eb9f",
+      "matches_frozen": true
+    }
+  },
+  "source_binding_note": "Only inspected files checked against immutable root-owned full manifest; no full new runtime source scan claimed."
+}

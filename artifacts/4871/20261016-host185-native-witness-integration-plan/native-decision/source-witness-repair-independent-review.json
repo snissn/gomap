@@ -1,0 +1,698 @@
+{
+  "disposition": "ACCEPT",
+  "scope": "seven-path frozen source witness repair and affected caller closure",
+  "reviewer_model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "mode": "INTERNAL_SUBAGENT_REVIEW",
+  "hosted_review_unavailability": "Manual hosted review cannot pin the explicitly required exact model; not requested.",
+  "candidate_edits_by_reviewer": false,
+  "children": false,
+  "reviewer_Go_or_runtime_executions": 0,
+  "Git_or_GitHub_mutations": false,
+  "findings": [],
+  "manifest_sha256": "4b230aa27b6a51d2394d2cd237403f956ac4897afb4b76e9e2e47bfb39947fd2",
+  "archive_sha256": "44682995595a636fe99ab3febcebca1802f8992574eb4fab8dbef49f355ea03c",
+  "source_files": 10349,
+  "archive_all_payloads_verified": true,
+  "live_manifest_paths_verified_before_and_at_report": true,
+  "live_mismatches": [],
+  "evidence_manifest_mismatches": [],
+  "changed_files": [
+    {
+      "added": false,
+      "after_sha256": "db40776e4d6183121b768298325d68615f0946e03f5a22e01d4dba986318820b",
+      "before_sha256": "de28b7bc7b266176f9de038dba26e8c95aae3d4a8b090d99d3f79b58cfc9cf15",
+      "bytes": 8078,
+      "path": "TreeDB/db/native_mvcc_final_basis_v6.go"
+    },
+    {
+      "added": false,
+      "after_sha256": "91d3149c742d69a8e15e4049822700a340d940657d554aa4ec13983d30567de7",
+      "before_sha256": "2efc111a2d2706878b88572498cecd21e9cca7aede421b0abe24e025f98c137e",
+      "bytes": 3531,
+      "path": "TreeDB/db/native_mvcc_published_terminal_v6.go"
+    },
+    {
+      "added": false,
+      "after_sha256": "a77d4f872dd96bc3a900e14aa608c72abebab0ecd1b81239b89ae59091e16012",
+      "before_sha256": "1c7d744d5c33efcf9bce17c428888085860cfab8a1595842fe071d8fe7732862",
+      "bytes": 9711,
+      "path": "TreeDB/db/native_mvcc_root_preparation_v6.go"
+    },
+    {
+      "added": true,
+      "after_sha256": "935fd15849450e98487ef7171c47f28676e29d0ac7e81f860156a6ffc41f88f1",
+      "before_sha256": null,
+      "bytes": 13881,
+      "path": "TreeDB/db/native_mvcc_root_preparation_v6_test.go"
+    },
+    {
+      "added": false,
+      "after_sha256": "55e104f6992d6450385cc7c01974a4649f4b8a4abd0b4aaab2a779d4c48d0926",
+      "before_sha256": "3c8feaa2077fc6646bac1db0c54aded13c3a956c135f72c3339f155ac20567b3",
+      "bytes": 27717,
+      "path": "TreeDB/db/native_mvcc_seal_preparation_v6.go"
+    },
+    {
+      "added": false,
+      "after_sha256": "e30b91f8ff46d471c584ecf3b0a53ed9655b39c2d323e965fe6a12a3e12379ac",
+      "before_sha256": "200954ea8763651ad988965a68c5d14b152c1f63c90a053ac7bb0eb651acae83",
+      "bytes": 4588,
+      "path": "TreeDB/db/native_prebuilder_pricing_for_test_v6.go"
+    },
+    {
+      "added": false,
+      "after_sha256": "599cb06617d92611d861207ecc7daa5a5aead36fecd79fc8683d60aa580cae66",
+      "before_sha256": "f5c7ea6ed4e2fa1a57001411e4d1ca602f178593318cd3fc6784afb02288eb9f",
+      "bytes": 22903,
+      "path": "TreeDB/mvcc/native_prune_backend_route_v6_test.go"
+    }
+  ],
+  "baseline_manifest_sha256": "c6545a7247ce3180de81cf4c8136b1d0fa04e423ec014b44a6aac1965960cd4f",
+  "pricing": {
+    "F_fixed_records": 291,
+    "F_delta_records": 2,
+    "F_delta_bytes_linux_amd64": 145,
+    "R_fixed_records": 145,
+    "layout_or_new_backing_delta": 0,
+    "complete_dynamic_Finish_bound": false,
+    "complete_retained_union": false
+  },
+  "controls": {
+    "compile-only": {
+      "adopted_children_reaped": [],
+      "elapsed_seconds": 54.57249065907672,
+      "ended_utc": "2026-10-16T02:16:16.770257+00:00",
+      "exit_code": 0,
+      "group_and_children_empty": true,
+      "leader_joined": true,
+      "name": "compile-only",
+      "observed_group_processes": [
+        {
+          "comm": "go",
+          "pgid": 902642,
+          "pid": 902642,
+          "ppid": 902572,
+          "session": 902642,
+          "state": "S"
+        },
+        {
+          "comm": "compile",
+          "pgid": 902642,
+          "pid": 902656,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "R"
+        },
+        {
+          "comm": "compile",
+          "pgid": 902642,
+          "pid": 902669,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "S"
+        },
+        {
+          "comm": "compile",
+          "pgid": 902642,
+          "pid": 903011,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "S"
+        },
+        {
+          "comm": "compile",
+          "pgid": 902642,
+          "pid": 903015,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "R"
+        },
+        {
+          "comm": "compile",
+          "pgid": 902642,
+          "pid": 903032,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "R"
+        },
+        {
+          "comm": "compile",
+          "pgid": 902642,
+          "pid": 903037,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "R"
+        },
+        {
+          "comm": "compile",
+          "pgid": 902642,
+          "pid": 903041,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "R"
+        },
+        {
+          "comm": "compile",
+          "pgid": 902642,
+          "pid": 903205,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "S"
+        },
+        {
+          "comm": "compile",
+          "pgid": 902642,
+          "pid": 903209,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "S"
+        },
+        {
+          "comm": "compile",
+          "pgid": 902642,
+          "pid": 903219,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "R"
+        },
+        {
+          "comm": "compile",
+          "pgid": 902642,
+          "pid": 903223,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "R"
+        },
+        {
+          "comm": "compile",
+          "pgid": 902642,
+          "pid": 903227,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "R"
+        },
+        {
+          "comm": "link",
+          "pgid": 902642,
+          "pid": 903235,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "R"
+        },
+        {
+          "comm": "vet",
+          "pgid": 902642,
+          "pid": 903246,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "S"
+        },
+        {
+          "comm": "vet",
+          "pgid": 902642,
+          "pid": 903251,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "S"
+        },
+        {
+          "comm": "vet",
+          "pgid": 902642,
+          "pid": 903255,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "S"
+        },
+        {
+          "comm": "vet",
+          "pgid": 902642,
+          "pid": 903260,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "S"
+        },
+        {
+          "comm": "vet",
+          "pgid": 902642,
+          "pid": 903268,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "S"
+        },
+        {
+          "comm": "vet",
+          "pgid": 902642,
+          "pid": 903290,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "S"
+        },
+        {
+          "comm": "compile",
+          "pgid": 902642,
+          "pid": 903307,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "R"
+        },
+        {
+          "comm": "compile",
+          "pgid": 902642,
+          "pid": 903311,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "R"
+        },
+        {
+          "comm": "compile",
+          "pgid": 902642,
+          "pid": 903385,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "R"
+        },
+        {
+          "comm": "compile",
+          "pgid": 902642,
+          "pid": 903404,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "S"
+        },
+        {
+          "comm": "compile",
+          "pgid": 902642,
+          "pid": 903412,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "R"
+        },
+        {
+          "comm": "compile",
+          "pgid": 902642,
+          "pid": 903417,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "S"
+        },
+        {
+          "comm": "link",
+          "pgid": 902642,
+          "pid": 903425,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "S"
+        },
+        {
+          "comm": "vet",
+          "pgid": 902642,
+          "pid": 903429,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "R"
+        },
+        {
+          "comm": "vet",
+          "pgid": 902642,
+          "pid": 903439,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "R"
+        },
+        {
+          "comm": "vet",
+          "pgid": 902642,
+          "pid": 903443,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "S"
+        },
+        {
+          "comm": "vet",
+          "pgid": 902642,
+          "pid": 903447,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "R"
+        },
+        {
+          "comm": "vet",
+          "pgid": 902642,
+          "pid": 903451,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "S"
+        },
+        {
+          "comm": "link",
+          "pgid": 902642,
+          "pid": 903464,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "S"
+        }
+      ],
+      "pgid": 902642,
+      "pid": 902642,
+      "remaining_direct_or_adopted_children": [],
+      "remaining_group_members": [],
+      "signals": [],
+      "source_after_equals_frozen": true,
+      "source_before_after_equal": true,
+      "source_before_equals_frozen": true,
+      "started_utc": "2026-10-16T02:15:22.197759+00:00",
+      "subreaper_enabled": true,
+      "test_RUN_count": 0,
+      "test_RUN_names": [],
+      "timeout": false,
+      "top_level_fail_count": 0,
+      "top_level_fail_names": [],
+      "top_level_pass_count": 0,
+      "top_level_pass_names": [],
+      "top_level_skip_count": 0,
+      "top_level_skip_names": []
+    },
+    "primitive-normal": {
+      "adopted_children_reaped": [],
+      "elapsed_seconds": 1.8257413851097226,
+      "ended_utc": "2026-10-16T02:16:19.663227+00:00",
+      "exit_code": 0,
+      "group_and_children_empty": true,
+      "leader_joined": true,
+      "name": "primitive-normal",
+      "observed_group_processes": [
+        {
+          "comm": "go",
+          "pgid": 903473,
+          "pid": 903473,
+          "ppid": 902572,
+          "session": 903473,
+          "state": "S"
+        },
+        {
+          "comm": "link",
+          "pgid": 903473,
+          "pid": 903496,
+          "ppid": 903473,
+          "session": 903473,
+          "state": "R"
+        }
+      ],
+      "pgid": 903473,
+      "pid": 903473,
+      "remaining_direct_or_adopted_children": [],
+      "remaining_group_members": [],
+      "signals": [],
+      "source_after_equals_frozen": true,
+      "source_before_after_equal": true,
+      "source_before_equals_frozen": true,
+      "started_utc": "2026-10-16T02:16:17.837486+00:00",
+      "subreaper_enabled": true,
+      "test_RUN_count": 7,
+      "test_RUN_names": [
+        "TestNativeRootPreparationSourceWitnessV6",
+        "TestNativeRootPreparationSourceTerminalV6",
+        "TestNativeRootPreparationSourceTerminalV6/before-acquire",
+        "TestNativeRootPreparationSourceTerminalV6/last-owner",
+        "TestNativeRootPreparationSourceTerminalV6/independent-held-owner",
+        "TestNativeRootPreparationSourceTerminalV6/partial-scratch-cancel-and-refund",
+        "TestNativePublishedRootPreparationDrainV6"
+      ],
+      "timeout": false,
+      "top_level_fail_count": 0,
+      "top_level_fail_names": [],
+      "top_level_pass_count": 3,
+      "top_level_pass_names": [
+        "TestNativeRootPreparationSourceWitnessV6",
+        "TestNativeRootPreparationSourceTerminalV6",
+        "TestNativePublishedRootPreparationDrainV6"
+      ],
+      "top_level_skip_count": 0,
+      "top_level_skip_names": []
+    },
+    "primitive-race": {
+      "adopted_children_reaped": [],
+      "elapsed_seconds": 57.64397049834952,
+      "ended_utc": "2026-10-16T02:17:18.398765+00:00",
+      "exit_code": 0,
+      "group_and_children_empty": true,
+      "leader_joined": true,
+      "name": "primitive-race",
+      "observed_group_processes": [
+        {
+          "comm": "go",
+          "pgid": 903595,
+          "pid": 903595,
+          "ppid": 902572,
+          "session": 903595,
+          "state": "S"
+        },
+        {
+          "comm": "compile",
+          "pgid": 903595,
+          "pid": 903616,
+          "ppid": 903595,
+          "session": 903595,
+          "state": "R"
+        },
+        {
+          "comm": "compile",
+          "pgid": 903595,
+          "pid": 903900,
+          "ppid": 903595,
+          "session": 903595,
+          "state": "S"
+        },
+        {
+          "comm": "compile",
+          "pgid": 903595,
+          "pid": 903936,
+          "ppid": 903595,
+          "session": 903595,
+          "state": "R"
+        },
+        {
+          "comm": "compile",
+          "pgid": 903595,
+          "pid": 903991,
+          "ppid": 903595,
+          "session": 903595,
+          "state": "R"
+        },
+        {
+          "comm": "compile",
+          "pgid": 903595,
+          "pid": 903995,
+          "ppid": 903595,
+          "session": 903595,
+          "state": "S"
+        },
+        {
+          "comm": "compile",
+          "pgid": 903595,
+          "pid": 903999,
+          "ppid": 903595,
+          "session": 903595,
+          "state": "S"
+        },
+        {
+          "comm": "compile",
+          "pgid": 903595,
+          "pid": 904196,
+          "ppid": 903595,
+          "session": 903595,
+          "state": "S"
+        },
+        {
+          "comm": "compile",
+          "pgid": 903595,
+          "pid": 904200,
+          "ppid": 903595,
+          "session": 903595,
+          "state": "R"
+        },
+        {
+          "comm": "compile",
+          "pgid": 903595,
+          "pid": 904241,
+          "ppid": 903595,
+          "session": 903595,
+          "state": "R"
+        },
+        {
+          "comm": "compile",
+          "pgid": 903595,
+          "pid": 904282,
+          "ppid": 903595,
+          "session": 903595,
+          "state": "S"
+        },
+        {
+          "comm": "link",
+          "pgid": 903595,
+          "pid": 904294,
+          "ppid": 903595,
+          "session": 903595,
+          "state": "S"
+        },
+        {
+          "comm": "vet",
+          "pgid": 903595,
+          "pid": 904311,
+          "ppid": 903595,
+          "session": 903595,
+          "state": "R"
+        },
+        {
+          "comm": "vet",
+          "pgid": 903595,
+          "pid": 904327,
+          "ppid": 903595,
+          "session": 903595,
+          "state": "R"
+        },
+        {
+          "comm": "vet",
+          "pgid": 903595,
+          "pid": 904335,
+          "ppid": 903595,
+          "session": 903595,
+          "state": "R"
+        },
+        {
+          "comm": "vet",
+          "pgid": 903595,
+          "pid": 904339,
+          "ppid": 903595,
+          "session": 903595,
+          "state": "S"
+        },
+        {
+          "comm": "vet",
+          "pgid": 903595,
+          "pid": 904346,
+          "ppid": 903595,
+          "session": 903595,
+          "state": "S"
+        },
+        {
+          "comm": "vet",
+          "pgid": 903595,
+          "pid": 904358,
+          "ppid": 903595,
+          "session": 903595,
+          "state": "R"
+        },
+        {
+          "comm": "vet",
+          "pgid": 903595,
+          "pid": 904362,
+          "ppid": 903595,
+          "session": 903595,
+          "state": "R"
+        },
+        {
+          "comm": "db.test",
+          "pgid": 903595,
+          "pid": 904367,
+          "ppid": 903595,
+          "session": 903595,
+          "state": "S"
+        }
+      ],
+      "pgid": 903595,
+      "pid": 903595,
+      "remaining_direct_or_adopted_children": [],
+      "remaining_group_members": [],
+      "signals": [],
+      "source_after_equals_frozen": true,
+      "source_before_after_equal": true,
+      "source_before_equals_frozen": true,
+      "started_utc": "2026-10-16T02:16:20.754792+00:00",
+      "subreaper_enabled": true,
+      "test_RUN_count": 7,
+      "test_RUN_names": [
+        "TestNativeRootPreparationSourceWitnessV6",
+        "TestNativeRootPreparationSourceTerminalV6",
+        "TestNativeRootPreparationSourceTerminalV6/before-acquire",
+        "TestNativeRootPreparationSourceTerminalV6/last-owner",
+        "TestNativeRootPreparationSourceTerminalV6/independent-held-owner",
+        "TestNativeRootPreparationSourceTerminalV6/partial-scratch-cancel-and-refund",
+        "TestNativePublishedRootPreparationDrainV6"
+      ],
+      "timeout": false,
+      "top_level_fail_count": 0,
+      "top_level_fail_names": [],
+      "top_level_pass_count": 3,
+      "top_level_pass_names": [
+        "TestNativeRootPreparationSourceWitnessV6",
+        "TestNativeRootPreparationSourceTerminalV6",
+        "TestNativePublishedRootPreparationDrainV6"
+      ],
+      "top_level_skip_count": 0,
+      "top_level_skip_names": []
+    }
+  },
+  "integration": {
+    "compatible": true,
+    "new_shared_divergences": 0,
+    "counts": {
+      "identical": 10061,
+      "ordinary_owned": 108,
+      "native_owned": 181,
+      "divergent": 22,
+      "union": 10372
+    },
+    "application_actions": 203,
+    "additions": 114,
+    "modifications": 89,
+    "deletions": 0,
+    "next": "separately selected coherent integration and repricing before any separate actual33 grant"
+  },
+  "limits": [
+    "Publication runtime not executed or accepted",
+    "Q32 RED/ACK0 unchanged",
+    "Actual33 unexecuted",
+    "Positive completed receipt to source disposal is SOURCE ordering only; phase9 test is synthetic",
+    "No complete disjoint retained total or dynamic Finish geometry",
+    "No numeric allowance",
+    "No integrated source or final qualification acceptance"
+  ],
+  "evidence_sha256": {
+    "native-build/source-witness-repair-source/source-frozen.json": "4b230aa27b6a51d2394d2cd237403f956ac4897afb4b76e9e2e47bfb39947fd2",
+    "native-build/source-witness-repair-source/source-frozen.tar.gz": "44682995595a636fe99ab3febcebca1802f8992574eb4fab8dbef49f355ea03c",
+    "native-build/source-witness-repair-source/source.delta.patch": "570054880a30bfe5ff6c1f85ddf664188b27ea6787c289fc93ffcd665f593938",
+    "native-build/source-witness-repair-source/changed-files.json": "f2c73e8e569fdfbd5cabd809640c0e638e3db0f4e8e6cf40d6b9ec303dc5ecfd",
+    "native-build/source-witness-repair-source/receipt.json": "cffe8281ba2a1bf1788e13dcc77ab70745b52a2c4ba07b2a09272e7392bd038c",
+    "native-build/source-witness-repair-source/README.md": "3f1bca0c35f2ecf8122c054a7ac965063b0f176e6b5f5fab4d01ce1add75ec5e",
+    "native-build/source-witness-repair-source/evidence-manifest.json": "fe015c164645aa62c7acff04f22a0971b411c61f17536208f851cc0f7a5f1e88",
+    "native-build/source-witness-repair-source/run-verification.py": "e69f1aa5cb36091e5f7d325f0ac15e99b81bce9cf704f2c097b6e7157d1d56b5",
+    "native-decision/source-witness-repair-packet.md": "3f1bca0c35f2ecf8122c054a7ac965063b0f176e6b5f5fab4d01ce1add75ec5e",
+    "native-decision/source-witness-repair-packet.json": "6f4030e7f658822751791bbfdc079d96437fa1d71479983efefb25e13636c4d5",
+    "native-decision/root-source-witness-repair-selection.md": "c83ce87ffcf7ff1bdf1b5d9838c52a59838fc4cebfcf3d54b429410616c9045a",
+    "native-decision/canonical-parent-successor-failure-diagnosis.md": "cafe3424cc9c561f0ffdc15536668447949f5efd028bc3bd18443c174fea4876",
+    "native-decision/ordinary-native-integration-plan.json": "ad82b887c0e451c3af5aa3673f3351d10497eafe1939a6d56a82f839ac01aa72",
+    "native-build/source-witness-repair-source/verification/compile-only/command.json": "6187ba3bd74f6f3dfbec5d14908de1f189a1646d0b8970a1d0ecfeaa3a6aaca5",
+    "native-build/source-witness-repair-source/verification/compile-only/process.json": "94fe711aef64522d60beb4576dd2ad48144eba5e4b7179301e3bb2fb063b242c",
+    "native-build/source-witness-repair-source/verification/compile-only/result.json": "f5f901f97e13d4792ba532ea6a4af42dd3423a5c92a9c07c15430bb2a8152fff",
+    "native-build/source-witness-repair-source/verification/compile-only/run.log": "3b426179cad1494182c9f3a938962ac94dd035d5cc20c039baf4732dd423c94d",
+    "native-build/source-witness-repair-source/verification/compile-only/source-before.json": "4b230aa27b6a51d2394d2cd237403f956ac4897afb4b76e9e2e47bfb39947fd2",
+    "native-build/source-witness-repair-source/verification/compile-only/source-after.json": "4b230aa27b6a51d2394d2cd237403f956ac4897afb4b76e9e2e47bfb39947fd2",
+    "native-build/source-witness-repair-source/verification/primitive-normal/command.json": "3022924482463d3f96ebe2a9dd3ca71eb6d757a2fb0fbb571f8dc7aa7757cdb2",
+    "native-build/source-witness-repair-source/verification/primitive-normal/process.json": "69490a24060cb22a09f28754373e7393c9d117a8d59c360615d8a90191431fa5",
+    "native-build/source-witness-repair-source/verification/primitive-normal/result.json": "7ac9fabee46dc33ad5b9803fbdd78907e8da477753676593fd27fe39d787aa99",
+    "native-build/source-witness-repair-source/verification/primitive-normal/run.log": "fb488281c9499198cccf472afa3b3ebcea04ddb332e1352b3ea5c8582b4d639f",
+    "native-build/source-witness-repair-source/verification/primitive-normal/source-before.json": "4b230aa27b6a51d2394d2cd237403f956ac4897afb4b76e9e2e47bfb39947fd2",
+    "native-build/source-witness-repair-source/verification/primitive-normal/source-after.json": "4b230aa27b6a51d2394d2cd237403f956ac4897afb4b76e9e2e47bfb39947fd2",
+    "native-build/source-witness-repair-source/verification/primitive-race/command.json": "cd328c6b1de9a32d6c90894bcd2d29727d480d69e09bb07ae0e82ee7948b5e74",
+    "native-build/source-witness-repair-source/verification/primitive-race/process.json": "f634161eefb6b553893d82a4a0ee3932e84cbcdab823cfcce5ae1b21bf0fc37b",
+    "native-build/source-witness-repair-source/verification/primitive-race/result.json": "0210efd926d551d5b7375c3b1b8312d74b0a3eeff532c1b43b2c0a3b093c6cb8",
+    "native-build/source-witness-repair-source/verification/primitive-race/run.log": "106be7ca36ef435e7751bab8f81002c0ff520292e7d498c43259eda861f51c2b",
+    "native-build/source-witness-repair-source/verification/primitive-race/source-before.json": "4b230aa27b6a51d2394d2cd237403f956ac4897afb4b76e9e2e47bfb39947fd2",
+    "native-build/source-witness-repair-source/verification/primitive-race/source-after.json": "4b230aa27b6a51d2394d2cd237403f956ac4897afb4b76e9e2e47bfb39947fd2"
+  },
+  "markdown_sha256": "e192c022c7d6dd854c434d5c938dec667e007cc3c069420a2c0f646b1c46a521",
+  "lease_released": true,
+  "at_utc": "2026-10-16T02:21:44.109171+00:00"
+}

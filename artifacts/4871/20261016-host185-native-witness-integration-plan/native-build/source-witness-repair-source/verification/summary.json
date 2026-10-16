@@ -1,0 +1,29 @@
+{
+  "all_groups_empty": true,
+  "commands_executed": 3,
+  "commands_not_executed": [],
+  "completed_utc": "2026-10-16T02:17:19.298990+00:00",
+  "native_publication_runtime": false,
+  "public_status": "Q32 RED/ACK0",
+  "results": [
+    {
+      "exit_code": 0,
+      "name": "compile-only",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/source-witness-repair-source/verification/compile-only/result.json"
+    },
+    {
+      "exit_code": 0,
+      "name": "primitive-normal",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/source-witness-repair-source/verification/primitive-normal/result.json"
+    },
+    {
+      "exit_code": 0,
+      "name": "primitive-race",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/source-witness-repair-source/verification/primitive-race/result.json"
+    }
+  ],
+  "source_files": 10349,
+  "source_manifest_sha256": "4b230aa27b6a51d2394d2cd237403f956ac4897afb4b76e9e2e47bfb39947fd2",
+  "source_still_frozen": true,
+  "stopped_at_first_failure": false
+}

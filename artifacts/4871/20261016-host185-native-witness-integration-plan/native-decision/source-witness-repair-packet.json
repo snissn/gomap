@@ -1,0 +1,651 @@
+{
+  "actual33_executed": false,
+  "baseline": "canonical-parent c65410348",
+  "caps_changed": false,
+  "changed_paths": [
+    {
+      "added": false,
+      "after_sha256": "db40776e4d6183121b768298325d68615f0946e03f5a22e01d4dba986318820b",
+      "before_sha256": "de28b7bc7b266176f9de038dba26e8c95aae3d4a8b090d99d3f79b58cfc9cf15",
+      "bytes": 8078,
+      "path": "TreeDB/db/native_mvcc_final_basis_v6.go"
+    },
+    {
+      "added": false,
+      "after_sha256": "91d3149c742d69a8e15e4049822700a340d940657d554aa4ec13983d30567de7",
+      "before_sha256": "2efc111a2d2706878b88572498cecd21e9cca7aede421b0abe24e025f98c137e",
+      "bytes": 3531,
+      "path": "TreeDB/db/native_mvcc_published_terminal_v6.go"
+    },
+    {
+      "added": false,
+      "after_sha256": "a77d4f872dd96bc3a900e14aa608c72abebab0ecd1b81239b89ae59091e16012",
+      "before_sha256": "1c7d744d5c33efcf9bce17c428888085860cfab8a1595842fe071d8fe7732862",
+      "bytes": 9711,
+      "path": "TreeDB/db/native_mvcc_root_preparation_v6.go"
+    },
+    {
+      "added": true,
+      "after_sha256": "935fd15849450e98487ef7171c47f28676e29d0ac7e81f860156a6ffc41f88f1",
+      "before_sha256": null,
+      "bytes": 13881,
+      "path": "TreeDB/db/native_mvcc_root_preparation_v6_test.go"
+    },
+    {
+      "added": false,
+      "after_sha256": "55e104f6992d6450385cc7c01974a4649f4b8a4abd0b4aaab2a779d4c48d0926",
+      "before_sha256": "3c8feaa2077fc6646bac1db0c54aded13c3a956c135f72c3339f155ac20567b3",
+      "bytes": 27717,
+      "path": "TreeDB/db/native_mvcc_seal_preparation_v6.go"
+    },
+    {
+      "added": false,
+      "after_sha256": "e30b91f8ff46d471c584ecf3b0a53ed9655b39c2d323e965fe6a12a3e12379ac",
+      "before_sha256": "200954ea8763651ad988965a68c5d14b152c1f63c90a053ac7bb0eb651acae83",
+      "bytes": 4588,
+      "path": "TreeDB/db/native_prebuilder_pricing_for_test_v6.go"
+    },
+    {
+      "added": false,
+      "after_sha256": "599cb06617d92611d861207ecc7daa5a5aead36fecd79fc8683d60aa580cae66",
+      "before_sha256": "f5c7ea6ed4e2fa1a57001411e4d1ca602f178593318cd3fc6784afb02288eb9f",
+      "bytes": 22903,
+      "path": "TreeDB/mvcc/native_prune_backend_route_v6_test.go"
+    }
+  ],
+  "native_publication_runtime": false,
+  "next_integration": "root-owned NEW isolated ordinary0149 worktree; no integration in this batch",
+  "open": [
+    "actual integrated route recovery",
+    "completed real receipt/Finish/newer durable writer",
+    "private clone/sink/planner maps",
+    "incomplete shard Z",
+    "dynamic last-owner/registry/enrollment geometry",
+    "full retained dedup/Finish",
+    "ordinary integration/public progress"
+  ],
+  "packet_md_sha256": "3f1bca0c35f2ecf8122c054a7ac965063b0f176e6b5f5fab4d01ce1add75ec5e",
+  "positive_real_receipt_to_root_ordering": "source-reviewed only; not runtime proven",
+  "public_status": "Q32 RED/ACK0",
+  "selection": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-source-witness-repair-selection.md",
+  "source": {
+    "baseline_source_manifest_sha256": "c6545a7247ce3180de81cf4c8136b1d0fa04e423ec014b44a6aac1965960cd4f",
+    "delta_patch_sha256": "570054880a30bfe5ff6c1f85ddf664188b27ea6787c289fc93ffcd665f593938",
+    "grant_sha256": "c83ce87ffcf7ff1bdf1b5d9838c52a59838fc4cebfcf3d54b429410616c9045a",
+    "native_publication_runtime": false,
+    "public_status": "Q32 RED/ACK0",
+    "source_archive_sha256": "44682995595a636fe99ab3febcebca1802f8992574eb4fab8dbef49f355ea03c",
+    "source_files": 10349,
+    "source_manifest_sha256": "4b230aa27b6a51d2394d2cd237403f956ac4897afb4b76e9e2e47bfb39947fd2"
+  },
+  "source_runtime_lease": "released",
+  "tests": [
+    {
+      "adopted_children_reaped": [],
+      "elapsed_seconds": 54.57249065907672,
+      "ended_utc": "2026-10-16T02:16:16.770257+00:00",
+      "exit_code": 0,
+      "group_and_children_empty": true,
+      "leader_joined": true,
+      "name": "compile-only",
+      "observed_group_processes": [
+        {
+          "comm": "go",
+          "pgid": 902642,
+          "pid": 902642,
+          "ppid": 902572,
+          "session": 902642,
+          "state": "S"
+        },
+        {
+          "comm": "compile",
+          "pgid": 902642,
+          "pid": 902656,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "R"
+        },
+        {
+          "comm": "compile",
+          "pgid": 902642,
+          "pid": 902669,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "S"
+        },
+        {
+          "comm": "compile",
+          "pgid": 902642,
+          "pid": 903011,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "S"
+        },
+        {
+          "comm": "compile",
+          "pgid": 902642,
+          "pid": 903015,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "R"
+        },
+        {
+          "comm": "compile",
+          "pgid": 902642,
+          "pid": 903032,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "R"
+        },
+        {
+          "comm": "compile",
+          "pgid": 902642,
+          "pid": 903037,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "R"
+        },
+        {
+          "comm": "compile",
+          "pgid": 902642,
+          "pid": 903041,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "R"
+        },
+        {
+          "comm": "compile",
+          "pgid": 902642,
+          "pid": 903205,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "S"
+        },
+        {
+          "comm": "compile",
+          "pgid": 902642,
+          "pid": 903209,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "S"
+        },
+        {
+          "comm": "compile",
+          "pgid": 902642,
+          "pid": 903219,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "R"
+        },
+        {
+          "comm": "compile",
+          "pgid": 902642,
+          "pid": 903223,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "R"
+        },
+        {
+          "comm": "compile",
+          "pgid": 902642,
+          "pid": 903227,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "R"
+        },
+        {
+          "comm": "link",
+          "pgid": 902642,
+          "pid": 903235,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "R"
+        },
+        {
+          "comm": "vet",
+          "pgid": 902642,
+          "pid": 903246,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "S"
+        },
+        {
+          "comm": "vet",
+          "pgid": 902642,
+          "pid": 903251,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "S"
+        },
+        {
+          "comm": "vet",
+          "pgid": 902642,
+          "pid": 903255,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "S"
+        },
+        {
+          "comm": "vet",
+          "pgid": 902642,
+          "pid": 903260,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "S"
+        },
+        {
+          "comm": "vet",
+          "pgid": 902642,
+          "pid": 903268,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "S"
+        },
+        {
+          "comm": "vet",
+          "pgid": 902642,
+          "pid": 903290,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "S"
+        },
+        {
+          "comm": "compile",
+          "pgid": 902642,
+          "pid": 903307,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "R"
+        },
+        {
+          "comm": "compile",
+          "pgid": 902642,
+          "pid": 903311,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "R"
+        },
+        {
+          "comm": "compile",
+          "pgid": 902642,
+          "pid": 903385,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "R"
+        },
+        {
+          "comm": "compile",
+          "pgid": 902642,
+          "pid": 903404,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "S"
+        },
+        {
+          "comm": "compile",
+          "pgid": 902642,
+          "pid": 903412,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "R"
+        },
+        {
+          "comm": "compile",
+          "pgid": 902642,
+          "pid": 903417,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "S"
+        },
+        {
+          "comm": "link",
+          "pgid": 902642,
+          "pid": 903425,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "S"
+        },
+        {
+          "comm": "vet",
+          "pgid": 902642,
+          "pid": 903429,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "R"
+        },
+        {
+          "comm": "vet",
+          "pgid": 902642,
+          "pid": 903439,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "R"
+        },
+        {
+          "comm": "vet",
+          "pgid": 902642,
+          "pid": 903443,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "S"
+        },
+        {
+          "comm": "vet",
+          "pgid": 902642,
+          "pid": 903447,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "R"
+        },
+        {
+          "comm": "vet",
+          "pgid": 902642,
+          "pid": 903451,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "S"
+        },
+        {
+          "comm": "link",
+          "pgid": 902642,
+          "pid": 903464,
+          "ppid": 902642,
+          "session": 902642,
+          "state": "S"
+        }
+      ],
+      "pgid": 902642,
+      "pid": 902642,
+      "remaining_direct_or_adopted_children": [],
+      "remaining_group_members": [],
+      "signals": [],
+      "source_after_equals_frozen": true,
+      "source_before_after_equal": true,
+      "source_before_equals_frozen": true,
+      "started_utc": "2026-10-16T02:15:22.197759+00:00",
+      "subreaper_enabled": true,
+      "test_RUN_count": 0,
+      "test_RUN_names": [],
+      "timeout": false,
+      "top_level_fail_count": 0,
+      "top_level_fail_names": [],
+      "top_level_pass_count": 0,
+      "top_level_pass_names": [],
+      "top_level_skip_count": 0,
+      "top_level_skip_names": []
+    },
+    {
+      "adopted_children_reaped": [],
+      "elapsed_seconds": 1.8257413851097226,
+      "ended_utc": "2026-10-16T02:16:19.663227+00:00",
+      "exit_code": 0,
+      "group_and_children_empty": true,
+      "leader_joined": true,
+      "name": "primitive-normal",
+      "observed_group_processes": [
+        {
+          "comm": "go",
+          "pgid": 903473,
+          "pid": 903473,
+          "ppid": 902572,
+          "session": 903473,
+          "state": "S"
+        },
+        {
+          "comm": "link",
+          "pgid": 903473,
+          "pid": 903496,
+          "ppid": 903473,
+          "session": 903473,
+          "state": "R"
+        }
+      ],
+      "pgid": 903473,
+      "pid": 903473,
+      "remaining_direct_or_adopted_children": [],
+      "remaining_group_members": [],
+      "signals": [],
+      "source_after_equals_frozen": true,
+      "source_before_after_equal": true,
+      "source_before_equals_frozen": true,
+      "started_utc": "2026-10-16T02:16:17.837486+00:00",
+      "subreaper_enabled": true,
+      "test_RUN_count": 7,
+      "test_RUN_names": [
+        "TestNativeRootPreparationSourceWitnessV6",
+        "TestNativeRootPreparationSourceTerminalV6",
+        "TestNativeRootPreparationSourceTerminalV6/before-acquire",
+        "TestNativeRootPreparationSourceTerminalV6/last-owner",
+        "TestNativeRootPreparationSourceTerminalV6/independent-held-owner",
+        "TestNativeRootPreparationSourceTerminalV6/partial-scratch-cancel-and-refund",
+        "TestNativePublishedRootPreparationDrainV6"
+      ],
+      "timeout": false,
+      "top_level_fail_count": 0,
+      "top_level_fail_names": [],
+      "top_level_pass_count": 3,
+      "top_level_pass_names": [
+        "TestNativeRootPreparationSourceWitnessV6",
+        "TestNativeRootPreparationSourceTerminalV6",
+        "TestNativePublishedRootPreparationDrainV6"
+      ],
+      "top_level_skip_count": 0,
+      "top_level_skip_names": []
+    },
+    {
+      "adopted_children_reaped": [],
+      "elapsed_seconds": 57.64397049834952,
+      "ended_utc": "2026-10-16T02:17:18.398765+00:00",
+      "exit_code": 0,
+      "group_and_children_empty": true,
+      "leader_joined": true,
+      "name": "primitive-race",
+      "observed_group_processes": [
+        {
+          "comm": "go",
+          "pgid": 903595,
+          "pid": 903595,
+          "ppid": 902572,
+          "session": 903595,
+          "state": "S"
+        },
+        {
+          "comm": "compile",
+          "pgid": 903595,
+          "pid": 903616,
+          "ppid": 903595,
+          "session": 903595,
+          "state": "R"
+        },
+        {
+          "comm": "compile",
+          "pgid": 903595,
+          "pid": 903900,
+          "ppid": 903595,
+          "session": 903595,
+          "state": "S"
+        },
+        {
+          "comm": "compile",
+          "pgid": 903595,
+          "pid": 903936,
+          "ppid": 903595,
+          "session": 903595,
+          "state": "R"
+        },
+        {
+          "comm": "compile",
+          "pgid": 903595,
+          "pid": 903991,
+          "ppid": 903595,
+          "session": 903595,
+          "state": "R"
+        },
+        {
+          "comm": "compile",
+          "pgid": 903595,
+          "pid": 903995,
+          "ppid": 903595,
+          "session": 903595,
+          "state": "S"
+        },
+        {
+          "comm": "compile",
+          "pgid": 903595,
+          "pid": 903999,
+          "ppid": 903595,
+          "session": 903595,
+          "state": "S"
+        },
+        {
+          "comm": "compile",
+          "pgid": 903595,
+          "pid": 904196,
+          "ppid": 903595,
+          "session": 903595,
+          "state": "S"
+        },
+        {
+          "comm": "compile",
+          "pgid": 903595,
+          "pid": 904200,
+          "ppid": 903595,
+          "session": 903595,
+          "state": "R"
+        },
+        {
+          "comm": "compile",
+          "pgid": 903595,
+          "pid": 904241,
+          "ppid": 903595,
+          "session": 903595,
+          "state": "R"
+        },
+        {
+          "comm": "compile",
+          "pgid": 903595,
+          "pid": 904282,
+          "ppid": 903595,
+          "session": 903595,
+          "state": "S"
+        },
+        {
+          "comm": "link",
+          "pgid": 903595,
+          "pid": 904294,
+          "ppid": 903595,
+          "session": 903595,
+          "state": "S"
+        },
+        {
+          "comm": "vet",
+          "pgid": 903595,
+          "pid": 904311,
+          "ppid": 903595,
+          "session": 903595,
+          "state": "R"
+        },
+        {
+          "comm": "vet",
+          "pgid": 903595,
+          "pid": 904327,
+          "ppid": 903595,
+          "session": 903595,
+          "state": "R"
+        },
+        {
+          "comm": "vet",
+          "pgid": 903595,
+          "pid": 904335,
+          "ppid": 903595,
+          "session": 903595,
+          "state": "R"
+        },
+        {
+          "comm": "vet",
+          "pgid": 903595,
+          "pid": 904339,
+          "ppid": 903595,
+          "session": 903595,
+          "state": "S"
+        },
+        {
+          "comm": "vet",
+          "pgid": 903595,
+          "pid": 904346,
+          "ppid": 903595,
+          "session": 903595,
+          "state": "S"
+        },
+        {
+          "comm": "vet",
+          "pgid": 903595,
+          "pid": 904358,
+          "ppid": 903595,
+          "session": 903595,
+          "state": "R"
+        },
+        {
+          "comm": "vet",
+          "pgid": 903595,
+          "pid": 904362,
+          "ppid": 903595,
+          "session": 903595,
+          "state": "R"
+        },
+        {
+          "comm": "db.test",
+          "pgid": 903595,
+          "pid": 904367,
+          "ppid": 903595,
+          "session": 903595,
+          "state": "S"
+        }
+      ],
+      "pgid": 903595,
+      "pid": 903595,
+      "remaining_direct_or_adopted_children": [],
+      "remaining_group_members": [],
+      "signals": [],
+      "source_after_equals_frozen": true,
+      "source_before_after_equal": true,
+      "source_before_equals_frozen": true,
+      "started_utc": "2026-10-16T02:16:20.754792+00:00",
+      "subreaper_enabled": true,
+      "test_RUN_count": 7,
+      "test_RUN_names": [
+        "TestNativeRootPreparationSourceWitnessV6",
+        "TestNativeRootPreparationSourceTerminalV6",
+        "TestNativeRootPreparationSourceTerminalV6/before-acquire",
+        "TestNativeRootPreparationSourceTerminalV6/last-owner",
+        "TestNativeRootPreparationSourceTerminalV6/independent-held-owner",
+        "TestNativeRootPreparationSourceTerminalV6/partial-scratch-cancel-and-refund",
+        "TestNativePublishedRootPreparationDrainV6"
+      ],
+      "timeout": false,
+      "top_level_fail_count": 0,
+      "top_level_fail_names": [],
+      "top_level_pass_count": 3,
+      "top_level_pass_names": [
+        "TestNativeRootPreparationSourceWitnessV6",
+        "TestNativeRootPreparationSourceTerminalV6",
+        "TestNativePublishedRootPreparationDrainV6"
+      ],
+      "top_level_skip_count": 0,
+      "top_level_skip_names": []
+    }
+  ],
+  "work": {
+    "F_after": "291+D+2K+23P+8M+3S+N+Z+V+A",
+    "F_before": "289+D+2K+23P+8M+3S+N+Z+V+A",
+    "F_bytes_delta": 145,
+    "R_after_unchanged": "145+21P+7M+3S+N",
+    "containing_size_delta": 0,
+    "new_source_Acquire": 0,
+    "new_storage_allocations": 0,
+    "source_comparison_bytes_linux_amd64_go1_26_3": 145,
+    "source_comparison_records": 2,
+    "terminal": "source_alias_scrub + release_control + original_Drop_and_protected_lookup + SUM(original_ReleaseQueueStep_and_concrete_RemovalWork) + final_frame_clear",
+    "universal_Finish_numeric_bound": null
+  }
+}

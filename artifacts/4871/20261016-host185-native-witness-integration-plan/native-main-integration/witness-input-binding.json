@@ -1,0 +1,33 @@
+{
+  "additions": 114,
+  "archive_files_verified": 10349,
+  "archive_sha256": "44682995595a636fe99ab3febcebca1802f8992574eb4fab8dbef49f355ea03c",
+  "at_utc": "2026-10-16T02:20:16.907724+00:00",
+  "census_sha256": "4b52059b80c0de764276a7f8abaa77e4da99f2dac4c215664b5987db1493b849",
+  "counts": {
+    "divergent": 22,
+    "identical": 10061,
+    "native-owned": 181,
+    "ordinary-owned": 108
+  },
+  "deletions": 0,
+  "delta_paths": [
+    "TreeDB/db/native_mvcc_final_basis_v6.go",
+    "TreeDB/db/native_mvcc_published_terminal_v6.go",
+    "TreeDB/db/native_mvcc_root_preparation_v6.go",
+    "TreeDB/db/native_mvcc_root_preparation_v6_test.go",
+    "TreeDB/db/native_mvcc_seal_preparation_v6.go",
+    "TreeDB/db/native_prebuilder_pricing_for_test_v6.go",
+    "TreeDB/mvcc/native_prune_backend_route_v6_test.go"
+  ],
+  "live_native_files_verified": 10349,
+  "modifications": 89,
+  "ordinary_clean": true,
+  "ordinary_files_verified": 10258,
+  "ordinary_head": "0149d78dba2574b09d7119d2631ec78a144e088d",
+  "runtime_executed": false,
+  "selected_actions": 203,
+  "source_manifest_sha256": "4b230aa27b6a51d2394d2cd237403f956ac4897afb4b76e9e2e47bfb39947fd2",
+  "source_mutations": false,
+  "union_paths": 10372
+}

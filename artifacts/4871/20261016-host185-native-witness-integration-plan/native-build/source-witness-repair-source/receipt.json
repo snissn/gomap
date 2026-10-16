@@ -1,0 +1,10 @@
+{
+  "baseline_source_manifest_sha256": "c6545a7247ce3180de81cf4c8136b1d0fa04e423ec014b44a6aac1965960cd4f",
+  "delta_patch_sha256": "570054880a30bfe5ff6c1f85ddf664188b27ea6787c289fc93ffcd665f593938",
+  "grant_sha256": "c83ce87ffcf7ff1bdf1b5d9838c52a59838fc4cebfcf3d54b429410616c9045a",
+  "native_publication_runtime": false,
+  "public_status": "Q32 RED/ACK0",
+  "source_archive_sha256": "44682995595a636fe99ab3febcebca1802f8992574eb4fab8dbef49f355ea03c",
+  "source_files": 10349,
+  "source_manifest_sha256": "4b230aa27b6a51d2394d2cd237403f956ac4897afb4b76e9e2e47bfb39947fd2"
+}

@@ -1,0 +1,8 @@
+[
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/source-witness-repair-source/source-frozen.tar.gz",
+    "bytes": 155987823,
+    "sha256": "44682995595a636fe99ab3febcebca1802f8992574eb4fab8dbef49f355ea03c",
+    "reason": "Large local source archive, exact executable or hosted raw artifact ZIP; not copied remotely. Full source manifests, changed source and extracted nonbinary evidence retained; original local bytes remain hash bound."
+  }
+]

@@ -1,0 +1,58 @@
+{
+  "adopted_children_reaped": [],
+  "elapsed_seconds": 1.8257413851097226,
+  "ended_utc": "2026-10-16T02:16:19.663227+00:00",
+  "exit_code": 0,
+  "group_and_children_empty": true,
+  "leader_joined": true,
+  "name": "primitive-normal",
+  "observed_group_processes": [
+    {
+      "comm": "go",
+      "pgid": 903473,
+      "pid": 903473,
+      "ppid": 902572,
+      "session": 903473,
+      "state": "S"
+    },
+    {
+      "comm": "link",
+      "pgid": 903473,
+      "pid": 903496,
+      "ppid": 903473,
+      "session": 903473,
+      "state": "R"
+    }
+  ],
+  "pgid": 903473,
+  "pid": 903473,
+  "remaining_direct_or_adopted_children": [],
+  "remaining_group_members": [],
+  "signals": [],
+  "source_after_equals_frozen": true,
+  "source_before_after_equal": true,
+  "source_before_equals_frozen": true,
+  "started_utc": "2026-10-16T02:16:17.837486+00:00",
+  "subreaper_enabled": true,
+  "test_RUN_count": 7,
+  "test_RUN_names": [
+    "TestNativeRootPreparationSourceWitnessV6",
+    "TestNativeRootPreparationSourceTerminalV6",
+    "TestNativeRootPreparationSourceTerminalV6/before-acquire",
+    "TestNativeRootPreparationSourceTerminalV6/last-owner",
+    "TestNativeRootPreparationSourceTerminalV6/independent-held-owner",
+    "TestNativeRootPreparationSourceTerminalV6/partial-scratch-cancel-and-refund",
+    "TestNativePublishedRootPreparationDrainV6"
+  ],
+  "timeout": false,
+  "top_level_fail_count": 0,
+  "top_level_fail_names": [],
+  "top_level_pass_count": 3,
+  "top_level_pass_names": [
+    "TestNativeRootPreparationSourceWitnessV6",
+    "TestNativeRootPreparationSourceTerminalV6",
+    "TestNativePublishedRootPreparationDrainV6"
+  ],
+  "top_level_skip_count": 0,
+  "top_level_skip_names": []
+}
