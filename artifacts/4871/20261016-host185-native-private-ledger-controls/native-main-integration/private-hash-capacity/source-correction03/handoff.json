@@ -1,0 +1,70 @@
+{
+  "added_paths": 0,
+  "baseline_archive_sha256": "4ca1cb5dbd75b3ddcf40c10c4f99dd273572716032ebe4ace2e1240cffd34e51",
+  "baseline_manifest_sha256": "d0cba17d5cef5666f2856cc9bf0278b0ec7eedcd9946b2aadf5ffaac344d3247",
+  "changed_paths": 1,
+  "changed_paths_sha256": "9a3722d00f1db30151e610d97a614f7083788bfae1ac68dd63754cafb5f1e0c8",
+  "changed_source_archive_sha256": "48e2f46048ef76041eff18dd34cea0f492336510b977f1c6a0d135999aed4b2c",
+  "completed_utc": "2026-10-16T05:42:34.735057+00:00",
+  "controls": {
+    "actual_calls": 11,
+    "all_process_groups_and_children_empty": true,
+    "all_selected_actual_calls_pass": true,
+    "direct_normal_child_RUN": 46,
+    "direct_normal_top_pass": 10,
+    "metadata_disposition": {
+      "cause": "run-controls.py final summary retained len(results)==12 from preceding selection; actual selected count is11; launch assertion and exact command inventory both correctly use11",
+      "preserved_raw_all_authorized_pass": false,
+      "remedy": "raw runner/summary unchanged; this derived receipt reconciles all11 per-call PASS against exact selected11 and records reused normal separately; no rerun"
+    },
+    "no_new_source_or_runtime_after_sequence": true,
+    "normal_with_reuse_child_RUN": 125,
+    "normal_with_reuse_top_pass": 28,
+    "race_child_RUN": 125,
+    "race_top_pass": 28,
+    "raw_summary_sha256": "7e8fef1752925b98929978b451985af5783e63b4f7dd74021e8055b96e395347",
+    "reused_normal_freelist": {
+      "all_production_and_freelist_test_files_byte_identical": true,
+      "current_manifest_sha256": "d6a090b25f8df158f0f3e830c009cabe6959b65339f9528eedbae63e8e036798",
+      "normal_freelist_child_RUN": 79,
+      "normal_freelist_top_pass": 18,
+      "only_changed_source": "TreeDB/internal/rootpublication/selected_manifest_ledger_test.go",
+      "original_result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-hash-capacity/source-correction02/controls/normal-freelist-private-capacity/result.json",
+      "original_result_sha256": "3a234e01fce895f44163563db1cb13af3321f8cde8d72d760d37387857a0030b",
+      "original_source_manifest_sha256": "d0cba17d5cef5666f2856cc9bf0278b0ec7eedcd9946b2aadf5ffaac344d3247",
+      "rerun": false,
+      "selected_by": "0b59848d273c6c2f57ac16009946f7bc190182237388e9c0a65ee66cb9e0af6b"
+    },
+    "selected_calls": 11,
+    "source_final_live_recheck_equal": true,
+    "source_manifest_sha256": "d6a090b25f8df158f0f3e830c009cabe6959b65339f9528eedbae63e8e036798"
+  },
+  "created_utc": "2026-10-16T05:37:50.905876+00:00",
+  "deleted_paths": 0,
+  "modified_paths": 1,
+  "next_runtime": "root separate disposition required",
+  "price_lifetime_caller_applicability_sha256": "8f929477ad5db67b898543360990590b5932611744a1218c93550cab93f5cb4b",
+  "public_status": "Q32 RED/ACK0; no allowance; actual33 not executed on this source",
+  "selections": {
+    "root-private-clone-admission-addendum.md": "f6562e909c70c89852736c54f5a0a85c3eb2cc7c45e00cfb19c59a5abf5799f3",
+    "root-private-directory-fixture-repair.md": "0b59848d273c6c2f57ac16009946f7bc190182237388e9c0a65ee66cb9e0af6b",
+    "root-private-focused-fixture-repair.md": "5edc42e6133f4b7a3d3f0c611bada23e48fa7b6f050c9cd482c01085e3b77c06",
+    "root-private-hash-capacity-selection.md": "063f85d21e071fb4bf20d79c00af6d1a601dc6c6db15aa0baa04e358bef7cb32",
+    "root-private-ledger-correction-and-controls.md": "cac20b5e0ca11c9f2fe9d6e255b178654ac383d93918f25ac76cb3fc7be84202",
+    "root-selected-ledger-manifest-addendum.md": "71fdc8eee2b444378c7516f4a7f8bcbb994e193b740f8d76b8f5d11f9bc29cef",
+    "root-selected-ledger-zipper-access-addendum.md": "eacc4b3cf83d2de987e7bb6cc4a14af8642a104c7527c715ce1138714236fc53",
+    "root-selected-private-ledger-addendum.md": "57acdd9e31ec65f32d7164883ff11da7209838037ac340466a681b77444c57ec"
+  },
+  "source_archive_sha256": "3f65af587c0df94cd89fa82c98196d5d1da997782ca882b3ca8dfb279e97effa",
+  "source_delta_sha256": "9968e2d81031e0cfe845b395f75864ad0ad5fb3f8c166894c0cd59a3909a065a",
+  "source_equals_verified_archive": true,
+  "source_files": 10389,
+  "source_manifest_sha256": "d6a090b25f8df158f0f3e830c009cabe6959b65339f9528eedbae63e8e036798",
+  "source_previous_failure_packets_preserved": [
+    "source-correction01",
+    "source-correction02"
+  ],
+  "source_review_notice": "root reports independent complete composed source ACCEPT; no native runtime qualification implied",
+  "source_runtime_lease": "released; no further edits or Go jobs authorized by this packet",
+  "status": "all11 renewed selected calls PASS plus explicit unchanged normal reuse; source frozen"
+}

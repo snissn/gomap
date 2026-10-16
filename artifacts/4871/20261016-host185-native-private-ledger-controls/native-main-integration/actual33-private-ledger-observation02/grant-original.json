@@ -1,0 +1,97 @@
+{
+  "at_utc": "2026-10-16T05:47:01.653635+00:00",
+  "authority": "Existing user execute-and-merge instruction. One replacement setup-only attempt: prior sole command failed before compilation/test RUN due missing TMPDIR; original failure retained. No product/test source or work-limit change. Source/controls already accepted; this does not retry a product result.",
+  "benchmark_authorized": false,
+  "command": {
+    "argv": [
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+      "test",
+      "-p=1",
+      "./TreeDB/mvcc",
+      "-run",
+      "^TestNativeMVCCRealBackendRouteRefusalPreservesCustodyV6$",
+      "-count=1",
+      "-v",
+      "-timeout=3m"
+    ],
+    "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+    "env": {
+      "CGO_ENABLED": "1",
+      "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+      "GODEBUG": "",
+      "GOENV": "off",
+      "GOFLAGS": "",
+      "GOGC": "100",
+      "GOMAXPROCS": "2",
+      "GOMEMLIMIT": "8GiB",
+      "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+      "GOPROXY": "off",
+      "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+      "GOSUMDB": "off",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-private-ledger-tmp02"
+    },
+    "executed": false,
+    "name": "actual33-private-capacity-selected-ledger-observation02",
+    "native_final_driver_publication_authorized": false,
+    "outer_timeout_seconds": 240,
+    "public_status": "Q32 RED/ACK0",
+    "requires_root_verification_grant": true,
+    "source_archive": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-hash-inventory-final/source-final.tar.gz",
+    "source_archive_sha256": "c5699a0ffd003eac5553fc732e37ac9b8732bd90e495e71473c6a13f7c8518b6",
+    "source_manifest": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-hash-inventory-final/source-final.json",
+    "source_manifest_sha256": "8f3a55720f95ec0a9cdf7e18a0360fd09b9385d41a25b28076a3d95157db9889",
+    "source_tree": "d63bc97e893e518c87687831a6e0a01a357268f2"
+  },
+  "focused_control_root_verification_sha256": "63ca0d127819125998f3d57987fdc139c3dabd2188b89641c186ebe9e156201d",
+  "focused_controls_independent_review_sha256": "60305ae5bb2afb3da6e409b69a107c460554cc0bb3921b8d46dc2206d31e5042",
+  "maximum_commands": 1,
+  "ownership": {
+    "children": false,
+    "evidence": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-private-ledger-observation02",
+    "git_github": "root only",
+    "model": "gpt-6.1-sol",
+    "operator": "/root/native_prerequisite",
+    "source_mutations": false
+  },
+  "prior_attempt": "Prior23e actual33 PASS is preserved. Successor15f0 ledger defects corrected; correction01/02 failed fixture packets preserved. Finald6a090 source independently ACCEPTc585, all11 selected calls PASS plus explicitly reused d0cba normalfreelist. Raw summary stale twelve-call literal preserved, root derives eleven-call pass from exact inventory. Root final8f3a changes only CI-impact discovery hash and stages216paths; no Go source differs from accepted/tested source.",
+  "prior_setup_failure": {
+    "cause": "exact configured TMPDIR absent; root precreated and checked replacement task directory",
+    "grant_sha256": "2d2836725507c08a4a37a24179da49b1401355532734bd49e8f31010f0cfb6d7",
+    "handoff": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-private-ledger-observation/HANDOFF.md",
+    "handoff_sha256": "1c3f8bd3d5837b4c44cdefc3afa0673e281e99fad8763a3bff65ce0145cb365c",
+    "pid": 1110239,
+    "raw_sha256": "856d1ee87a57142b1558195e85c51586faa3ad48d8e5fcb065dcdfba2bc57f8c",
+    "replacement_is_additional_command_attempt": true,
+    "result_sha256": "0373ae72ee2fbb6ff707186009a83ec0a0ca59aa4a31bf9cc6007c14043c8b75",
+    "source_index_unchanged": true,
+    "test_RUN_count": 0
+  },
+  "producer_limits": {
+    "bytes": 1048576,
+    "files": 17,
+    "guards": [
+      80,
+      4096
+    ],
+    "history": 33,
+    "indexes": 2,
+    "input": 32,
+    "records": 32,
+    "resources": 16
+  },
+  "publication_runtime_authorized": false,
+  "retries": 0,
+  "review_sha256": "c5851ec8e237ab32784181e2615c3e8c3f0bc02cdc26162162c0e84063168159",
+  "root_inventory_receipt_sha256": "24d243711e54ff9d2547a3f3fa628baac9d32c1aaec86d74e6fc048b52e0a73c",
+  "scope": "ONE same original promoted mode:33 real versions/floor32/phase26/candidate8/seal13/two-original-index observer, newerwriter34/stale cancel/oldreader/reopen; unchanged Q32/1MiB/80/4096. Run corrected selected-ledger helper and require supported selected-empty completion under the existing test assertions. Record every exact P row and separate shared/owner-envelope/incomplete domains; no silently complete physical retained union. Recompute only observations from actual frozen source; old367/871273 is not allowance. No native finaldriver/enqueue/adopt/fence/Consume/Finish/ACK allowance. Bind source archive, full manifest, staged tree/index and process identity immediately before and after the single launch. Capture all raw; stop after one call regardless outcome. No retry/source edit/broader experiment. Failure returns immutable packet before any repair.",
+  "source_files": 10389,
+  "source_manifest_sha256": "8f3a55720f95ec0a9cdf7e18a0360fd09b9385d41a25b28076a3d95157db9889",
+  "temporary_directory_preflight": {
+    "mount_verified": true,
+    "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-private-ledger-tmp02",
+    "root_created_before_grant": true,
+    "write_read_unlink_probe": true
+  }
+}

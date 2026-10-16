@@ -1,0 +1,106 @@
+{
+  "HANDOFF.md": {
+    "bytes": 1949,
+    "sha256": "2c30cb3a4c0aa9e7ce78e13e06f1dda6f5c43380a10f323b657c3d8529ecb6ff"
+  },
+  "changed-paths.json": {
+    "bytes": 283,
+    "sha256": "0dfb124a7f5e13ffc40ce81aa14a23727e4aed2a1ee2f82ae54844969ecbe665"
+  },
+  "controls/identity.json": {
+    "bytes": 3123,
+    "sha256": "962d1ad9709b05476d099850d4f615c30af9b4b182fac3618e2512458c5aa4a7"
+  },
+  "controls/normal-freelist-private-capacity/command.json": {
+    "bytes": 4016,
+    "sha256": "1a8aa241b72f2e49a9b104c9b32577d940b8e7d687e61d8b9dded94f2652352e"
+  },
+  "controls/normal-freelist-private-capacity/environment.json": {
+    "bytes": 8163,
+    "sha256": "95833f5f5bdcef08418c1ec581f4143011f15ccf98ba85bb8b4e34c7459f8280"
+  },
+  "controls/normal-freelist-private-capacity/process.json": {
+    "bytes": 144,
+    "sha256": "7079cd13a10fa0a43946fe149cb3583c96fa8293b62d9f39350a1d1339c925c7"
+  },
+  "controls/normal-freelist-private-capacity/result.json": {
+    "bytes": 16182,
+    "sha256": "3a234e01fce895f44163563db1cb13af3321f8cde8d72d760d37387857a0030b"
+  },
+  "controls/normal-freelist-private-capacity/run.log": {
+    "bytes": 14316,
+    "sha256": "38be0632fc119724e47792a2d821d5c179f85813f1d16f0c0b171019e3b27965"
+  },
+  "controls/normal-freelist-private-capacity/source-after.json": {
+    "bytes": 1590645,
+    "sha256": "d0cba17d5cef5666f2856cc9bf0278b0ec7eedcd9946b2aadf5ffaac344d3247"
+  },
+  "controls/normal-freelist-private-capacity/source-before.json": {
+    "bytes": 1590645,
+    "sha256": "d0cba17d5cef5666f2856cc9bf0278b0ec7eedcd9946b2aadf5ffaac344d3247"
+  },
+  "controls/normal-rootpublication-selected-ledger/command.json": {
+    "bytes": 2127,
+    "sha256": "455b49245643a303fab3d383bc1e83a6693400b0cf389cc92f533d29afc23a24"
+  },
+  "controls/normal-rootpublication-selected-ledger/environment.json": {
+    "bytes": 8169,
+    "sha256": "7c89b81d1821eb3067929b236d982e22b6323aa902d4af99e35e5a8d88f1794d"
+  },
+  "controls/normal-rootpublication-selected-ledger/process.json": {
+    "bytes": 144,
+    "sha256": "b86fdc184a92d81a931c4aae7c1ca812db2520e579e085e9f19327270f012c7c"
+  },
+  "controls/normal-rootpublication-selected-ledger/result.json": {
+    "bytes": 5272,
+    "sha256": "8bdc38d3805f53f026dfb1b24a65962af4c3f4fad21f87bee050c4f82836a90c"
+  },
+  "controls/normal-rootpublication-selected-ledger/run.log": {
+    "bytes": 2968,
+    "sha256": "7abd3b7d6bfed56b20a7958ba74fbb4dfcce02352ee2ac64d5da2b725786d1d3"
+  },
+  "controls/normal-rootpublication-selected-ledger/source-after.json": {
+    "bytes": 1590645,
+    "sha256": "d0cba17d5cef5666f2856cc9bf0278b0ec7eedcd9946b2aadf5ffaac344d3247"
+  },
+  "controls/normal-rootpublication-selected-ledger/source-before.json": {
+    "bytes": 1590645,
+    "sha256": "d0cba17d5cef5666f2856cc9bf0278b0ec7eedcd9946b2aadf5ffaac344d3247"
+  },
+  "controls/summary.json": {
+    "bytes": 1501,
+    "sha256": "3102d6cf46ad674a1d6c9a23955197fd3351ea7307efe779f045dfd224be3527"
+  },
+  "failure-diagnosis.json": {
+    "bytes": 1714,
+    "sha256": "124c125cd5be579a77edfeefe0a5f0f22128c54ed97dab7f4f56a058bfc7bf8d"
+  },
+  "failure-diagnosis.md": {
+    "bytes": 2986,
+    "sha256": "e339b8f5dee1498bd26fdaf51be35748d20c90312caf9df114dae30a30e49196"
+  },
+  "freeze-receipt.json": {
+    "bytes": 1829,
+    "sha256": "e8dfede22d9086003863eb7a12f5d24b9f9b74cb2f886cf7b76e90a22b6717e0"
+  },
+  "handoff.json": {
+    "bytes": 4259,
+    "sha256": "c36a0f664665c28a44e7fc0116665e5a4083806380ce6b243fe0bbcad830f157"
+  },
+  "proposed-commands.json": {
+    "bytes": 26616,
+    "sha256": "4c3dbf26d178f9f5295140f5b6f2d58ddd0548ab9d888f0b44c845cae216cea0"
+  },
+  "run-controls.py": {
+    "bytes": 9996,
+    "sha256": "d84d43f71b36a2892ad102c3ba7bdca41799096a3419178d1c547f39cf595968"
+  },
+  "source-delta.patch": {
+    "bytes": 4978,
+    "sha256": "37272a6bc03539c622ad2a50b978b8c68cf060d5885021a7a62984af10145e67"
+  },
+  "source-frozen.json": {
+    "bytes": 1590645,
+    "sha256": "d0cba17d5cef5666f2856cc9bf0278b0ec7eedcd9946b2aadf5ffaac344d3247"
+  }
+}

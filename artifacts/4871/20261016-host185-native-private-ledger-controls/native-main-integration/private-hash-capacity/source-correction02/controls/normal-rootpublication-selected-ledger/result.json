@@ -1,0 +1,167 @@
+{
+  "adopted_children_reaped": [],
+  "child_RUN_count": 18,
+  "elapsed_seconds": 7.532753250095993,
+  "ended_utc": "2026-10-16T05:34:44.017527+00:00",
+  "exit_code": 1,
+  "group_and_children_empty": true,
+  "leader_joined": true,
+  "missing_named_top_RUN_PASS": [
+    "TestSelectedSetAllocationPairsV6"
+  ],
+  "name": "normal-rootpublication-selected-ledger",
+  "observed_group_processes": [
+    {
+      "comm": "go",
+      "pgid": 1099025,
+      "pid": 1099025,
+      "ppid": 1098884,
+      "session": 1099025,
+      "state": "Z"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1099025,
+      "pid": 1099039,
+      "ppid": 1099025,
+      "session": 1099025,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1099025,
+      "pid": 1099122,
+      "ppid": 1099025,
+      "session": 1099025,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1099025,
+      "pid": 1099126,
+      "ppid": 1099025,
+      "session": 1099025,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1099025,
+      "pid": 1099138,
+      "ppid": 1099025,
+      "session": 1099025,
+      "state": "R"
+    },
+    {
+      "comm": "link",
+      "pgid": 1099025,
+      "pid": 1099150,
+      "ppid": 1099025,
+      "session": 1099025,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1099025,
+      "pid": 1099158,
+      "ppid": 1099025,
+      "session": 1099025,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1099025,
+      "pid": 1099169,
+      "ppid": 1099025,
+      "session": 1099025,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1099025,
+      "pid": 1099173,
+      "ppid": 1099025,
+      "session": 1099025,
+      "state": "S"
+    }
+  ],
+  "pgid": 1099025,
+  "pid": 1099025,
+  "raw_log_sha256": "7abd3b7d6bfed56b20a7958ba74fbb4dfcce02352ee2ac64d5da2b725786d1d3",
+  "remaining_direct_or_adopted_children": [],
+  "remaining_group_members": [],
+  "required_top_level_names": [
+    "TestNativeIndexObserverOriginalBackingV6",
+    "TestSelectedEmptyManifestConstructorLedgerV6",
+    "TestSelectedSetAllocationPairsV6"
+  ],
+  "residual_observed_before_cleanup": false,
+  "signals": [],
+  "source_after_equals_frozen": true,
+  "source_before_after_equal": true,
+  "source_before_equals_frozen": true,
+  "started_utc": "2026-10-16T05:34:36.484776+00:00",
+  "status": "STOP",
+  "stop_reasons": [
+    "nonzero exit",
+    "top RUN inventory",
+    "RUN without PASS or FAIL"
+  ],
+  "subreaper_enabled": true,
+  "test_FAIL_names": [
+    "TestSelectedSetAllocationPairsV6",
+    "TestSelectedSetAllocationPairsV6/empty-directory"
+  ],
+  "test_PASS_names": [
+    "TestNativeIndexObserverOriginalBackingV6",
+    "TestNativeIndexObserverOriginalBackingV6/platform",
+    "TestNativeIndexObserverOriginalBackingV6/volume",
+    "TestNativeIndexObserverOriginalBackingV6/object",
+    "TestNativeIndexObserverOriginalBackingV6/generation",
+    "TestNativeIndexObserverOriginalBackingV6/missing-backing",
+    "TestNativeIndexObserverOriginalBackingV6/wrong-file",
+    "TestNativeIndexObserverOriginalBackingV6/wrong-refs",
+    "TestNativeIndexObserverOriginalBackingV6/zero-refs",
+    "TestNativeIndexObserverOriginalBackingV6/wrong-owner",
+    "TestNativeIndexObserverOriginalBackingV6/wrong-registry",
+    "TestNativeIndexObserverOriginalBackingV6/missing-pin",
+    "TestNativeIndexObserverOriginalBackingV6/wrong-pin-identity",
+    "TestNativeIndexObserverOriginalBackingV6/wrong-pin-platform",
+    "TestNativeIndexObserverOriginalBackingV6/wrong-pin-volume",
+    "TestNativeIndexObserverOriginalBackingV6/wrong-pin-object",
+    "TestNativeIndexObserverOriginalBackingV6/released",
+    "TestSelectedEmptyManifestConstructorLedgerV6",
+    "TestSelectedSetAllocationPairsV6/kinds"
+  ],
+  "test_RUN_names": [
+    "TestNativeIndexObserverOriginalBackingV6",
+    "TestNativeIndexObserverOriginalBackingV6/platform",
+    "TestNativeIndexObserverOriginalBackingV6/volume",
+    "TestNativeIndexObserverOriginalBackingV6/object",
+    "TestNativeIndexObserverOriginalBackingV6/generation",
+    "TestNativeIndexObserverOriginalBackingV6/missing-backing",
+    "TestNativeIndexObserverOriginalBackingV6/wrong-file",
+    "TestNativeIndexObserverOriginalBackingV6/wrong-refs",
+    "TestNativeIndexObserverOriginalBackingV6/zero-refs",
+    "TestNativeIndexObserverOriginalBackingV6/wrong-owner",
+    "TestNativeIndexObserverOriginalBackingV6/wrong-registry",
+    "TestNativeIndexObserverOriginalBackingV6/missing-pin",
+    "TestNativeIndexObserverOriginalBackingV6/wrong-pin-identity",
+    "TestNativeIndexObserverOriginalBackingV6/wrong-pin-platform",
+    "TestNativeIndexObserverOriginalBackingV6/wrong-pin-volume",
+    "TestNativeIndexObserverOriginalBackingV6/wrong-pin-object",
+    "TestNativeIndexObserverOriginalBackingV6/released",
+    "TestSelectedEmptyManifestConstructorLedgerV6",
+    "TestSelectedSetAllocationPairsV6",
+    "TestSelectedSetAllocationPairsV6/kinds",
+    "TestSelectedSetAllocationPairsV6/empty-directory"
+  ],
+  "test_SKIP_names": [],
+  "timeout": false,
+  "top_level_RUN_names": [
+    "TestNativeIndexObserverOriginalBackingV6",
+    "TestSelectedEmptyManifestConstructorLedgerV6",
+    "TestSelectedSetAllocationPairsV6"
+  ],
+  "top_level_pass_count": 2,
+  "unexpected_top_RUN": []
+}

@@ -1,0 +1,31 @@
+{
+  "calls_run": 2,
+  "directory_ref_decrement_before_error": false,
+  "failure": "ordinary callback directory constructor paired with strict finite Set release",
+  "physical_directory_callback_ran": false,
+  "proposed_production_changes": false,
+  "source_bindings": {
+    "TreeDB/internal/rootpublication/dependency_directory_reader_v2.go": "fc310abbe149e01e0b31a6b72c736c092205fa61977bf76efdd436ed40bbf6e0",
+    "TreeDB/internal/rootpublication/dependency_directory_release_work.go": "5e385b327382778fa9f1e586d80a26a089f973e43682320badea689b8d193443",
+    "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go": "49855cb3646a6cebe9e5869a0f2e3df287d6c17d14e3792357b10d6883440308",
+    "TreeDB/internal/rootpublication/resource_set_graph_release_work_v6.go": "d86f5f8b78a3ca41834c19619917ec625c4ff10b92b02f7ccd51050af9c6b1ff",
+    "TreeDB/internal/rootpublication/selected_manifest_ledger_test.go": "16f48e2dc70b6384d8833a8c1d95b56c0f45b4300086b4fd22b0811fc8405bc9"
+  },
+  "source_edits_after_freeze": false,
+  "source_manifest_sha256": "d0cba17d5cef5666f2856cc9bf0278b0ec7eedcd9946b2aadf5ffaac344d3247",
+  "status": "STOP; read-only diagnosis; awaiting root",
+  "throwing_symbol": "DependencyDirectoryReleaseWork.bind: ownedReleaseWork==nil with nonnil w",
+  "unexecuted_calls": [
+    "normal-retainedalloc-selected-ledger",
+    "normal-db-selected-ledger",
+    "normal-zipper-selected-ledger",
+    "normal-mvcc-checked-ledger",
+    "race-freelist-private-capacity",
+    "race-rootpublication-selected-ledger",
+    "race-retainedalloc-selected-ledger",
+    "race-db-selected-ledger",
+    "race-zipper-selected-ledger",
+    "race-mvcc-checked-ledger"
+  ],
+  "wrapper_release_already_started": true
+}

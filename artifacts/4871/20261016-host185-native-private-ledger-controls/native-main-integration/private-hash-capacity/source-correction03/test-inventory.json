@@ -1,0 +1,187 @@
+{
+  "calls": [
+    {
+      "child_RUN": 18,
+      "elapsed_seconds": 7.6277392050251365,
+      "name": "normal-rootpublication-selected-ledger",
+      "pgid": 1102088,
+      "pid": 1102088,
+      "raw_sha256": "94b99cb7ec47fa97f73363e0d1367feb32d22bd7b216a7cea6a7c17effe94b09",
+      "top_PASS": 3,
+      "tops": [
+        "TestNativeIndexObserverOriginalBackingV6",
+        "TestSelectedEmptyManifestConstructorLedgerV6",
+        "TestSelectedSetAllocationPairsV6"
+      ]
+    },
+    {
+      "child_RUN": 0,
+      "elapsed_seconds": 1.1501109562814236,
+      "name": "normal-retainedalloc-selected-ledger",
+      "pgid": 1102397,
+      "pid": 1102397,
+      "raw_sha256": "00368da21a5ee05ffdb9bd67049418628fb74604ddbb8f6108a8409d90e54714",
+      "top_PASS": 1,
+      "tops": [
+        "TestSelectedEnrollmentConstructorLedgerV6"
+      ]
+    },
+    {
+      "child_RUN": 2,
+      "elapsed_seconds": 45.576004724018276,
+      "name": "normal-db-selected-ledger",
+      "pgid": 1102467,
+      "pid": 1102467,
+      "raw_sha256": "ced62de71e3e5adb088ad5c7bdd655dfdf5c20fb0b072680615898579eb3fb03",
+      "top_PASS": 3,
+      "tops": [
+        "TestNativeIndexObserverOriginalCapturesV6",
+        "TestNativeSelectedManifestTransferredHolderV6",
+        "TestNativeSelectedSetTransferredHoldersV6"
+      ]
+    },
+    {
+      "child_RUN": 0,
+      "elapsed_seconds": 8.432830813340843,
+      "name": "normal-zipper-selected-ledger",
+      "pgid": 1103168,
+      "pid": 1103168,
+      "raw_sha256": "2f90b2d673ebf2e4d39db5e0fb2df28b2a059da4ee93cb37b263f77ff4b6d60a",
+      "top_PASS": 1,
+      "tops": [
+        "TestMaterializedSelectedLedgerOwnerAndPointerMapV6"
+      ]
+    },
+    {
+      "child_RUN": 26,
+      "elapsed_seconds": 15.707469154149294,
+      "name": "normal-mvcc-checked-ledger",
+      "pgid": 1103331,
+      "pid": 1103331,
+      "raw_sha256": "11953981ae50f1025988d41f9ba8012719e70658fc9bf819e48dab266ea6bf35",
+      "top_PASS": 2,
+      "tops": [
+        "TestNativeSelectedConstructorLedgerCheckedArithmeticV6",
+        "TestNativeSelectedSetLedgerCombinationsV6"
+      ]
+    },
+    {
+      "child_RUN": 79,
+      "elapsed_seconds": 5.732191097922623,
+      "name": "race-freelist-private-capacity",
+      "pgid": 1103779,
+      "pid": 1103779,
+      "raw_sha256": "d6272c8514183600515dc2cdd49a25f9d2fdacd234569944d67b9423e1137268",
+      "top_PASS": 18,
+      "tops": [
+        "TestPrivateCapacitySetSemanticsAndScalingV6",
+        "TestPrivateCapacityCollisionsOverflowAndUnsupportedV6",
+        "TestPrivateCapacityEveryTurnRefusalAndCancelV6",
+        "TestPrivateCapacitySnapshotIndependentPlanAndPeakV6",
+        "TestPrivateCapacityBoundCaptureCanonicalAndStaleV6",
+        "TestPrivateCapacityPartialCloneAdmissionCancelV6",
+        "TestPrivateCapacityPublishedCleanupPreservesCanonicalV6",
+        "TestPrivateCapacityOversizedSnapshotAndAllocationV6",
+        "TestPrivateCapacitySinkDuplicateAndCommittedResumeV6",
+        "TestPrivateCapacityAbandonedVectorAdmissionAndCancelV6",
+        "TestCanonicalMaterializationWholeConstructorMatchesOrdinaryV1",
+        "TestCanonicalMaterializationRefusalPreservesOriginalClaimV1",
+        "TestPrivateCOWPreparationUsesOriginalSlotOnlyAtAdoptionV6",
+        "TestPrivateCOWPreparationCannotAdoptOverRealForegroundWriterV6",
+        "TestPrivateCOWAtomicAdoptionActivationRefusesBeforeSlotOrLedgerEffectsV6",
+        "TestPrivateCOWAtomicAdoptionCannotReplaceForegroundTxnV6",
+        "TestPrivateCOWMetadataClaimLeavesSharedDATAWithOriginalTxnV6",
+        "TestPrivateCOWLateDATAClaimConflictHasNoPartialEffectsV6"
+      ]
+    },
+    {
+      "child_RUN": 18,
+      "elapsed_seconds": 13.143408557865769,
+      "name": "race-rootpublication-selected-ledger",
+      "pgid": 1103902,
+      "pid": 1103902,
+      "raw_sha256": "2e333f852b7d9a8dd72a93b7140b95d043efcd289c214cbf0abe9d5e480067a6",
+      "top_PASS": 3,
+      "tops": [
+        "TestNativeIndexObserverOriginalBackingV6",
+        "TestSelectedEmptyManifestConstructorLedgerV6",
+        "TestSelectedSetAllocationPairsV6"
+      ]
+    },
+    {
+      "child_RUN": 0,
+      "elapsed_seconds": 3.3788528009317815,
+      "name": "race-retainedalloc-selected-ledger",
+      "pgid": 1104175,
+      "pid": 1104175,
+      "raw_sha256": "0914e908a45b313ba5015782defd759830aacdc4be5fb5d06bc8473534b31c3d",
+      "top_PASS": 1,
+      "tops": [
+        "TestSelectedEnrollmentConstructorLedgerV6"
+      ]
+    },
+    {
+      "child_RUN": 2,
+      "elapsed_seconds": 65.49894612189382,
+      "name": "race-db-selected-ledger",
+      "pgid": 1104249,
+      "pid": 1104249,
+      "raw_sha256": "e912289ac510234969021bc01ff84ae42cdd9c51abd90ba4a6782ba3d49d9bb6",
+      "top_PASS": 3,
+      "tops": [
+        "TestNativeIndexObserverOriginalCapturesV6",
+        "TestNativeSelectedManifestTransferredHolderV6",
+        "TestNativeSelectedSetTransferredHoldersV6"
+      ]
+    },
+    {
+      "child_RUN": 0,
+      "elapsed_seconds": 12.413407466839999,
+      "name": "race-zipper-selected-ledger",
+      "pgid": 1105786,
+      "pid": 1105786,
+      "raw_sha256": "53e3f45795cd32d194d6d317a7febac16a3fea254dc953f49ad539834d778917",
+      "top_PASS": 1,
+      "tops": [
+        "TestMaterializedSelectedLedgerOwnerAndPointerMapV6"
+      ]
+    },
+    {
+      "child_RUN": 26,
+      "elapsed_seconds": 21.82833530427888,
+      "name": "race-mvcc-checked-ledger",
+      "pgid": 1106174,
+      "pid": 1106174,
+      "raw_sha256": "d504ca52acc841fda98b5e6cf6dc16ef8421787bea7275c5e10c26f0753b2949",
+      "top_PASS": 2,
+      "tops": [
+        "TestNativeSelectedConstructorLedgerCheckedArithmeticV6",
+        "TestNativeSelectedSetLedgerCombinationsV6"
+      ]
+    }
+  ],
+  "reused_normal": {
+    "all_production_and_freelist_test_files_byte_identical": true,
+    "current_manifest_sha256": "d6a090b25f8df158f0f3e830c009cabe6959b65339f9528eedbae63e8e036798",
+    "normal_freelist_child_RUN": 79,
+    "normal_freelist_top_pass": 18,
+    "only_changed_source": "TreeDB/internal/rootpublication/selected_manifest_ledger_test.go",
+    "original_result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-hash-capacity/source-correction02/controls/normal-freelist-private-capacity/result.json",
+    "original_result_sha256": "3a234e01fce895f44163563db1cb13af3321f8cde8d72d760d37387857a0030b",
+    "original_source_manifest_sha256": "d0cba17d5cef5666f2856cc9bf0278b0ec7eedcd9946b2aadf5ffaac344d3247",
+    "rerun": false,
+    "selected_by": "0b59848d273c6c2f57ac16009946f7bc190182237388e9c0a65ee66cb9e0af6b"
+  },
+  "selected_test_files": {
+    "TreeDB/db/native_index_observer_v6_test.go": "d467bc1cbbd02219ba9c67cd9b49d5957c1058e16dc13b72c87dfd720c3b2639",
+    "TreeDB/db/native_selected_ledger_v6_test.go": "f8f70732d60ebfa169b4ab877b70657f34b7dba17ef83f7dddb416d0e4bf4b4a",
+    "TreeDB/freelist/allocator_preparation_work_v6_test.go": "17b104c537f03f45848b1e06b7cc3d03cd45f677ee05ef93d6c2035a8ff123d0",
+    "TreeDB/freelist/generation_v1_materialize_work_test.go": "b89c2118b87e82fb1a753585d970f53df022a4b8ad6b7cd43808374a980c261b",
+    "TreeDB/freelist/private_control_capacity_v6_test.go": "e83201279fc824bebc60f60b9cf1736cb010492680500ce389feb9924beddf90",
+    "TreeDB/internal/retainedalloc/selected_enrollment_for_test_v6_test.go": "2f7aca04e2c57850b281b3077cbf0e4aa7a5dd35d17efe17a6f2ac1537996745",
+    "TreeDB/internal/rootpublication/native_index_observer_v6_test.go": "95f00f734c7403864838a723f3c640f24bb6a3c677b3f5181f676ba3260433b2",
+    "TreeDB/internal/rootpublication/selected_manifest_ledger_test.go": "778a2b047cf88ab2d57c5e46fb070403498fb6db08feeda2cdb77e00e386df25",
+    "TreeDB/mvcc/native_selected_ledger_test.go": "3251575df7f8c112726d5f57b3d0e4b9bc65e69fc08e5cf94eabfe05d6f5cf33",
+    "TreeDB/zipper/materialized_selected_ledger_test.go": "5ebe51b4dc158c49b3a538f377e2bf641f87b8b8f83bcd0f7beed9910c952c36"
+  }
+}

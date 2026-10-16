@@ -1,0 +1,19 @@
+{
+  "HANDOFF.md": "1c3f8bd3d5837b4c44cdefc3afa0673e281e99fad8763a3bff65ce0145cb365c",
+  "actual33-private-capacity-selected-ledger-observation/command.json": "5e897ad0bd745f144a2430ce7f6354fe2ab6965b3881b6b5c8302746c171ffeb",
+  "actual33-private-capacity-selected-ledger-observation/process.json": "e9eb63aeadc41052029477f756b9646542890052b3fcbde0c128e22600f4a03e",
+  "actual33-private-capacity-selected-ledger-observation/result.json": "0373ae72ee2fbb6ff707186009a83ec0a0ca59aa4a31bf9cc6007c14043c8b75",
+  "actual33-private-capacity-selected-ledger-observation/run.log": "856d1ee87a57142b1558195e85c51586faa3ad48d8e5fcb065dcdfba2bc57f8c",
+  "actual33-private-capacity-selected-ledger-observation/source-after.json": "8f3a55720f95ec0a9cdf7e18a0360fd09b9385d41a25b28076a3d95157db9889",
+  "actual33-private-capacity-selected-ledger-observation/source-before.json": "8f3a55720f95ec0a9cdf7e18a0360fd09b9385d41a25b28076a3d95157db9889",
+  "grant-original.json": "2d2836725507c08a4a37a24179da49b1401355532734bd49e8f31010f0cfb6d7",
+  "grant.json": "2d2836725507c08a4a37a24179da49b1401355532734bd49e8f31010f0cfb6d7",
+  "handoff.json": "19e45a1ddadceb1cb0bc18c1a093b317f5ea6cf688567625790858f6fd75c0b0",
+  "identity.json": "dbb255f5d3c151a0c7511ff237ec5196fec8dc9bd25a5b82d156519b93946868",
+  "index-after.json": "41e11f3f10734f9c73fbe70cca153a17d0af33141c12334328ea6f2e8b85ec3a",
+  "index-binding.json": "763e8a86597d64e2fe6de853497c4197930f095c6962348acae77c74e51150a0",
+  "required-child-tests.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+  "run-observation.py": "ad0001f51b51abef570dbab54640a8fc8edd2cb6d6e3d014f9a70b91a1841596",
+  "selection.json": "7672eb269e76ea014afc5c02400e46dcf7b4993ab5bbd944f81e48060f82075f",
+  "summary.json": "16833853587efd64c0e2be60da5849cc95ecfc4141608f2aebb43e5e5b48aace"
+}

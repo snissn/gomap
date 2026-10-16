@@ -1,0 +1,94 @@
+{
+  "reviewer": "/root/ordinary_review",
+  "actual_model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW; immutable source and completed evidence",
+  "hosted_review_unavailability_reason": "Hosted manual review cannot pin explicitly required exact gpt-6.1-sol; no hosted manual request.",
+  "candidate_edits_by_reviewer": false,
+  "verdict": "ACCEPT",
+  "scope": "Exact source-correction03 one-file fixture and composed production/observer source by byte identity. Focused batch acceptance remains pending final packet.",
+  "source_manifest_sha256": "d6a090b25f8df158f0f3e830c009cabe6959b65339f9528eedbae63e8e036798",
+  "source_archive_sha256": "3f65af587c0df94cd89fa82c98196d5d1da997782ca882b3ca8dfb279e97effa",
+  "patch_sha256": "9968e2d81031e0cfe845b395f75864ad0ad5fb3f8c166894c0cd59a3909a065a",
+  "source_files_verified": 10389,
+  "whole_archive_verified": true,
+  "baseline_manifest_sha256": "d0cba17d5cef5666f2856cc9bf0278b0ec7eedcd9946b2aadf5ffaac344d3247",
+  "delta": {
+    "modified": [
+      "TreeDB/internal/rootpublication/selected_manifest_ledger_test.go"
+    ],
+    "added": [],
+    "deleted": []
+  },
+  "changed_file_sha256": "778a2b047cf88ab2d57c5e46fb070403498fb6db08feeda2cdb77e00e386df25",
+  "findings": [],
+  "resolved_D1": "Ordinary-only provider replaced with original Work directory constructor and explicit admitted typed counter collaborator; strict production capability check remains unchanged.",
+  "source_checks": [
+    "Read entire changed file and complete delta, original Work constructor, directory Bind/Continue phases and Set graph cleanup callers.",
+    "All10389 archive payloads matched manifest; exactly one test file modified vsd0cba.",
+    "Provider has no publication/file-fence claim, no independent physical/metadata charge and returns truthful empty completion.",
+    "Provider admits exact fixed scalar traffic before counter effect, yields without effect on zero work, and records at most one effect. Test is sequential; no hidden concurrent counter race.",
+    "Original real directory/Set constructors, wrapper-vs-backing allocation equality, shared/distinct self-pairs, unsupported nonempty shape and observer-no-effects checks preserved.",
+    "All nonlast Set-edge release/completion loops remain finite Q32/1MiB, detach Set aliases before containing accounting completion and must invoke no provider effect.",
+    "Final original directory edges use finite original Bind then Continue; caller holder cleared after successful transfer, original directory clears tree/provider/metadata aliases before refund. Exactly two total collaborator effects, one each and final Owner.Bytes zero remain required.",
+    "No production/observer/allocator/canonical-output changes; earlier source dispositions carry by exact byte identity."
+  ],
+  "completed_controls_inspected": [
+    {
+      "name": "normal-rootpublication-selected-ledger",
+      "status": "PASS",
+      "top_pass": 3,
+      "child_run_pass": 18,
+      "source_stable": true,
+      "leader_joined": true,
+      "groups_children_empty": true
+    },
+    {
+      "name": "normal-retainedalloc-selected-ledger",
+      "status": "PASS",
+      "top_pass": 1,
+      "child_run_pass": 0,
+      "source_stable": true,
+      "leader_joined": true,
+      "groups_children_empty": true
+    }
+  ],
+  "reused_control": {
+    "name": "normal-freelist-private-capacity",
+    "original_source_manifest_sha256": "d0cba17d5cef5666f2856cc9bf0278b0ec7eedcd9946b2aadf5ffaac344d3247",
+    "top_pass": 18,
+    "child_pass": 79,
+    "rerun": false,
+    "applicability": "Complete manifest comparison proves only a rootpublication _test.go changed; production/freelist test/compiler/argv bindings retained, with explicit original attribution.",
+    "original_result_sha256": "3a234e01fce895f44163563db1cb13af3321f8cde8d72d760d37387857a0030b"
+  },
+  "focused_batch_disposition": "PENDING; remaining commands/races not relabeled PASS. Review completed per-command payloads only; final operator packet not yet available at source verdict.",
+  "evidence_hashes": {
+    "native-main-integration/private-hash-capacity/source-correction03/source-frozen.json": "d6a090b25f8df158f0f3e830c009cabe6959b65339f9528eedbae63e8e036798",
+    "native-main-integration/private-hash-capacity/source-correction03/source-frozen.tar.gz": "3f65af587c0df94cd89fa82c98196d5d1da997782ca882b3ca8dfb279e97effa",
+    "native-main-integration/private-hash-capacity/source-correction03/source-delta.patch": "9968e2d81031e0cfe845b395f75864ad0ad5fb3f8c166894c0cd59a3909a065a",
+    "native-main-integration/private-hash-capacity/source-correction03/freeze-receipt.json": "6fc06acd8e2e2c7ab84b41ec4635d9afa6e44b0d486e923d999edd0993fe632d",
+    "native-main-integration/private-hash-capacity/source-correction03/controls/reused-normal-freelist-applicability.json": "20a3ab977d96b45ff73e019815bc80836d105f0d08ce3ff6dab5c73b489a202d",
+    "native-decision/root-private-directory-fixture-repair.md": "0b59848d273c6c2f57ac16009946f7bc190182237388e9c0a65ee66cb9e0af6b",
+    "native-main-integration/private-hash-capacity/source-correction03/controls/normal-rootpublication-selected-ledger/run.log": "94b99cb7ec47fa97f73363e0d1367feb32d22bd7b216a7cea6a7c17effe94b09",
+    "native-main-integration/private-hash-capacity/source-correction03/controls/normal-rootpublication-selected-ledger/result.json": "1168d072e88b88d7def081d333681e329d769829b04f1f7264ba155643693fcb",
+    "native-main-integration/private-hash-capacity/source-correction03/controls/normal-rootpublication-selected-ledger/command.json": "c40d26ef5d973c500284b9ef1f29101327cb0f625750f57371363c60d9d889e0",
+    "native-main-integration/private-hash-capacity/source-correction03/controls/normal-rootpublication-selected-ledger/source-before.json": "d6a090b25f8df158f0f3e830c009cabe6959b65339f9528eedbae63e8e036798",
+    "native-main-integration/private-hash-capacity/source-correction03/controls/normal-rootpublication-selected-ledger/source-after.json": "d6a090b25f8df158f0f3e830c009cabe6959b65339f9528eedbae63e8e036798",
+    "native-main-integration/private-hash-capacity/source-correction03/controls/normal-retainedalloc-selected-ledger/run.log": "00368da21a5ee05ffdb9bd67049418628fb74604ddbb8f6108a8409d90e54714",
+    "native-main-integration/private-hash-capacity/source-correction03/controls/normal-retainedalloc-selected-ledger/result.json": "722b267f2e1e43b653d0abf9d2c47467aea0c4bd29bef3fbc7f5ca63e5d1e03d",
+    "native-main-integration/private-hash-capacity/source-correction03/controls/normal-retainedalloc-selected-ledger/command.json": "fbe7821b96fe7168685c8d96b314673fdc2f54d1dd14bc300d06198014ed6180",
+    "native-main-integration/private-hash-capacity/source-correction03/controls/normal-retainedalloc-selected-ledger/source-before.json": "d6a090b25f8df158f0f3e830c009cabe6959b65339f9528eedbae63e8e036798",
+    "native-main-integration/private-hash-capacity/source-correction03/controls/normal-retainedalloc-selected-ledger/source-after.json": "d6a090b25f8df158f0f3e830c009cabe6959b65339f9528eedbae63e8e036798"
+  },
+  "limits": [
+    "Typed counter is a test collaborator, not real native physical publication or file-fence evidence.",
+    "No actual33 successor/native finaldriver/publication executed by reviewer or accepted here.",
+    "No complete physical retained union, general Finish/Close, aggregate F, numeric allowance or Q32 fit acceptance.",
+    "Original Q32 RED/ACK0/no allowance remains.",
+    "Prior source-correction01/02 failures remain preserved."
+  ],
+  "reviewer_runtime": "None; read-only Python archive hashing and receipt parsing only.",
+  "lease_released": true,
+  "created_utc": "2026-10-16T05:39:45.499031+00:00"
+}

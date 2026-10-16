@@ -1,0 +1,9 @@
+# Correction02 one-file fixture repair and stopped controls
+
+Source d0cba17d5cef5666f2856cc9bf0278b0ec7eedcd9946b2aadf5ffaac344d3247; full archive4ca1cb5dbd75b3ddcf40c10c4f99dd273572716032ebe4ace2e1240cffd34e51.10389files, one modified test source vs correction01, no additions/deletions. Changed archivee6c19b5bd8bbcd6bb7afeddd7aa90c165a4658337fb231c8fce2535d90e6fc83, exact delta37272a6bc03539c622ad2a50b978b8c68cf060d5885021a7a62984af10145e67. All source remains frozen; failed correction01 and every older artifact preserved.
+
+Exactly three selected fixture fixes: actual Stats.TotalBytes+new external header filler; checked all-four-control live/debt equation; exactly3 available records at growth phase3. No production implementation, F, retained owner or public limit change. The amended Peak also verifies actual governing capacity error and unchanged original array/count/version. No separate compile cycle.
+
+Call1 normal-freelist PASS18tops/79children,2.484400s. Call2 normal-rootpublication STOP:2topPASS/1FAIL,18children,7.532753s. The empty-directory pair fixture was constructed with ordinary-only callback capability, then correctly refused by finite directory cleanup. Read failure-diagnosis.md/json; it distinguishes wrapper graph adoption from directory ref decrement and unexecuted physical callback. The remaining10calls, including all6race, were not run. No retry or source change. Some earlier selected allocator controls do genuine allocator-only adoption/cleanup under their explicit grant; no native DB publication/finaldriver/actual33 was run.
+
+Full command/env/compiler/source-before/after/PID/PGID/subreaper/raw receipts in controls. Pinned Go1.26.3 offline,-p1/GOMAXPROCS2,3m inner/240s outer. Both groups/children empty, leader joined, no timeout/intervention/drift. Final live10389 recheck equals manifest. Source/runtime leases released pending root disposition; Q32/1MiB/33/80/4096 unchanged RED/ACK0, no allowance.

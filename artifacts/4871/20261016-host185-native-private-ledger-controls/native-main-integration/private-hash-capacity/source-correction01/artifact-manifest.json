@@ -1,0 +1,82 @@
+{
+  "HANDOFF.md": {
+    "bytes": 1664,
+    "sha256": "3d6ffe74a7a8258248d1e4b9f3c8158d8674548cd1f96917ba81ad3806f3ace5"
+  },
+  "changed-paths.json": {
+    "bytes": 1978,
+    "sha256": "4c352c5f280a7442dabef015d2803d3b893df921e883473d22a062568ea8f707"
+  },
+  "controls/identity.json": {
+    "bytes": 3009,
+    "sha256": "52daf7eec1a743c178f1bdb2d54c3d76cfb2a11c065b156851346eeecaa30dc5"
+  },
+  "controls/normal-freelist-private-capacity/command.json": {
+    "bytes": 4016,
+    "sha256": "e405fb9a46413acc2cfcc7fc5f95c34c4899a574f605b87b7f135af4dd386b5e"
+  },
+  "controls/normal-freelist-private-capacity/environment.json": {
+    "bytes": 8302,
+    "sha256": "3baae7bef71a4f4afa3d36172075d21d59c4612c8a37d78e59ec50cc6cafa019"
+  },
+  "controls/normal-freelist-private-capacity/process.json": {
+    "bytes": 144,
+    "sha256": "ff53c0f0d893913f079f523702e0c67b2cc9cc14e9381ff2312e526fa7a445f9"
+  },
+  "controls/normal-freelist-private-capacity/result.json": {
+    "bytes": 16598,
+    "sha256": "951b8cbc576327104e00c5c0b5d2c030d6b72ebd73e70da9c99fedd1c4879d0c"
+  },
+  "controls/normal-freelist-private-capacity/run.log": {
+    "bytes": 14719,
+    "sha256": "0729f4583dd3f0968823614b2a495c0663d182ad50fef86ebdccb579a08112fb"
+  },
+  "controls/normal-freelist-private-capacity/source-after.json": {
+    "bytes": 1590645,
+    "sha256": "6c525298d214717016b20b93eafd04c1b19ef0044b6ee32eab443ba376ebe7fd"
+  },
+  "controls/normal-freelist-private-capacity/source-before.json": {
+    "bytes": 1590645,
+    "sha256": "6c525298d214717016b20b93eafd04c1b19ef0044b6ee32eab443ba376ebe7fd"
+  },
+  "controls/summary.json": {
+    "bytes": 1250,
+    "sha256": "fb44c969542b093d65555c09250a07e43247a9929e10433e270ef507e4c90701"
+  },
+  "failure-diagnosis.json": {
+    "bytes": 2232,
+    "sha256": "bef7eae49932e8dd2ccb6e40d183b417b05463952a53987b62f2d2fcc9cf58e1"
+  },
+  "failure-diagnosis.md": {
+    "bytes": 6766,
+    "sha256": "89ebfc34b16d5935c2ee237e16b8ea1f4ca83b925b1ecd99f69d162cbf169855"
+  },
+  "freeze-receipt.json": {
+    "bytes": 1715,
+    "sha256": "3500532d7aee0f09cb537d56df5a94641146c8bc971312106d336f6ebbe92f2c"
+  },
+  "handoff.json": {
+    "bytes": 3340,
+    "sha256": "dce73550064326671af067494c354c0acb3ce164b1992d8cd3d4c3921545651e"
+  },
+  "pricing-caller-ledger.md": {
+    "bytes": 3451,
+    "sha256": "bf31c83ad67178ce471b7be035e6a00bdb0e353f2665d808b90b07061857de73"
+  },
+  "proposed-commands.json": {
+    "bytes": 26437,
+    "sha256": "2df01b9fc9588a65ac64218d8ca52d8fa631c84fa3073053894884dd8dd107f5"
+  },
+  "run-controls.py": {
+    "bytes": 10004,
+    "sha256": "1d7cfa7a753eb277f33cb3e0f607b6a591eb9085e1b8001fc4de3d16cf031675"
+  },
+  "source-delta.patch": {
+    "bytes": 28911,
+    "sha256": "53e6311c3ce82bd41fdadea938d297647dc2599eac4fa42d1aca2c3a667d6a31"
+  },
+  "source-frozen.json": {
+    "bytes": 1590645,
+    "sha256": "6c525298d214717016b20b93eafd04c1b19ef0044b6ee32eab443ba376ebe7fd"
+  }
+}

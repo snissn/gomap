@@ -1,0 +1,100 @@
+{
+  "adopted_children_reaped": [],
+  "child_RUN_count": 0,
+  "elapsed_seconds": 8.432830813340843,
+  "ended_utc": "2026-10-16T05:39:12.758251+00:00",
+  "exit_code": 0,
+  "group_and_children_empty": true,
+  "leader_joined": true,
+  "missing_named_top_RUN_PASS": [],
+  "name": "normal-zipper-selected-ledger",
+  "observed_group_processes": [
+    {
+      "comm": "go",
+      "pgid": 1103168,
+      "pid": 1103168,
+      "ppid": 1102063,
+      "session": 1103168,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1103168,
+      "pid": 1103182,
+      "ppid": 1103168,
+      "session": 1103168,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1103168,
+      "pid": 1103193,
+      "ppid": 1103168,
+      "session": 1103168,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1103168,
+      "pid": 1103284,
+      "ppid": 1103168,
+      "session": 1103168,
+      "state": "R"
+    },
+    {
+      "comm": "link",
+      "pgid": 1103168,
+      "pid": 1103302,
+      "ppid": 1103168,
+      "session": 1103168,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1103168,
+      "pid": 1103312,
+      "ppid": 1103168,
+      "session": 1103168,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1103168,
+      "pid": 1103316,
+      "ppid": 1103168,
+      "session": 1103168,
+      "state": "R"
+    }
+  ],
+  "pgid": 1103168,
+  "pid": 1103168,
+  "raw_log_sha256": "2f90b2d673ebf2e4d39db5e0fb2df28b2a059da4ee93cb37b263f77ff4b6d60a",
+  "remaining_direct_or_adopted_children": [],
+  "remaining_group_members": [],
+  "required_top_level_names": [
+    "TestMaterializedSelectedLedgerOwnerAndPointerMapV6"
+  ],
+  "residual_observed_before_cleanup": false,
+  "signals": [],
+  "source_after_equals_frozen": true,
+  "source_before_after_equal": true,
+  "source_before_equals_frozen": true,
+  "started_utc": "2026-10-16T05:39:04.325429+00:00",
+  "status": "PASS",
+  "stop_reasons": [],
+  "subreaper_enabled": true,
+  "test_FAIL_names": [],
+  "test_PASS_names": [
+    "TestMaterializedSelectedLedgerOwnerAndPointerMapV6"
+  ],
+  "test_RUN_names": [
+    "TestMaterializedSelectedLedgerOwnerAndPointerMapV6"
+  ],
+  "test_SKIP_names": [],
+  "timeout": false,
+  "top_level_RUN_names": [
+    "TestMaterializedSelectedLedgerOwnerAndPointerMapV6"
+  ],
+  "top_level_pass_count": 1,
+  "unexpected_top_RUN": []
+}

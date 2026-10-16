@@ -1,0 +1,17 @@
+{
+  "verified_utc": "2026-10-16T05:52:13.591430+00:00",
+  "verifier_sha256": "8c692042e3d77366031c8b13e6bae649bc1c47b73a6434338a92a31c9a7cba2b",
+  "source_files": 10389,
+  "source_manifest_sha256": "8f3a55720f95ec0a9cdf7e18a0360fd09b9385d41a25b28076a3d95157db9889",
+  "source_archive_sha256": "c5699a0ffd003eac5553fc732e37ac9b8732bd90e495e71473c6a13f7c8518b6",
+  "evidence_archive_sha256": "1a53711f441d94550c129be507673f1686ab8e545ac5d4e21f39b9131c1ccf73",
+  "evidence_archive_members": 18,
+  "evidence_manifest_sha256": "dcae08185e27b831bc6013d7101ff2266bbaa20bde1dcbd2ba8358760545f416",
+  "execution_result": "SETUP_STOP",
+  "semantic_result": "Setup stopped before test bodies; original missing TMPDIR evidence preserved.",
+  "command_metadata_note": "Grant executed:false is a template; actual receipt records executed:true and PID/PGID.",
+  "runtime_repeated": false,
+  "source_and_index_unchanged": true,
+  "processes_joined_and_absent": true,
+  "public_status": "Q32 RED/ACK0; no native publication or allowance"
+}

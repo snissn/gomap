@@ -1,0 +1,11 @@
+# Native private capacity controls and incomplete actual ledger observation
+
+The finite private hash/clone and selected ledger source received composed independent source acceptance. All focused controls pass: 28 top-level and 125 child tests in each of normal and race modes. Normal freelist is explicitly reused from correction02 after a complete byte comparison; eleven remaining calls executed on correction03. The original correction03 summary's stale twelve-call condition is retained alongside independently derived results. All earlier fixture failures remain preserved.
+
+Root finalized only CI-impact discovery metadata, staged 216 paths, and froze source manifest 8f3a55720f95ec0a9cdf7e18a0360fd09b9385d41a25b28076a3d95157db9889 / source archive c5699a0ffd003eac5553fc732e37ac9b8732bd90e495e71473c6a13f7c8518b6 / staged tree d63bc97e893e518c87687831a6e0a01a357268f2. Product source is not yet committed or merged.
+
+The first actual33 launch stopped before compilation/test bodies because its exact TMPDIR was absent. A separately authorized setup correction and preflight then ran one actual33 control. That command passed, but the selected retained accounting goal failed: a test helper attempted to charge two whole 796032-byte cursors under the unchanged 1MiB diagnostic allowance and returned early after logging refusal. No completed numeric P was emitted. This is preserved as PASS_LEDGER_INCOMPLETE, not accepted selected closure. A focused helper repair is being diagnosed; no unchanged rerun was performed.
+
+Both packets' complete archives, exact commands/environment/compiler, source before/after, staged index and joined process groups were independently verified. Original owner/capture identities and explicit private capacity rows were observed, but the observations are non-atomic. F367/882745 is an observed conditional expression, not an allowance or Finish proof.
+
+Q32/1MiB/33/80/4096 remains RED/ACK0. Native publication/Finish, complete selected retention, real caller diagnostic, C1/C3, performance/platform qualification and final graph gates remain open. Ordinary PR5127 is already merged. Full local archives are hash-bound separately; remote payloads preserve manifests, patches, logs, receipts and review reports.

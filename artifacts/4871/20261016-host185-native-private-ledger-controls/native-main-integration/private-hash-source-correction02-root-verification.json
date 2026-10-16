@@ -1,0 +1,43 @@
+{
+  "verified_utc": "2026-10-16T05:37:53.969863+00:00",
+  "source_manifest_sha256": "d0cba17d5cef5666f2856cc9bf0278b0ec7eedcd9946b2aadf5ffaac344d3247",
+  "source_archive_sha256": "4ca1cb5dbd75b3ddcf40c10c4f99dd273572716032ebe4ace2e1240cffd34e51",
+  "source_files": 10389,
+  "changed_paths": [
+    "TreeDB/freelist/private_control_capacity_v6_test.go"
+  ],
+  "source_archive_and_runtime_bindings_verified": true,
+  "process_groups_joined_empty_no_intervention": true,
+  "index_not_launch_bound": true,
+  "result": "STOP",
+  "commands_executed": 2,
+  "unexecuted_commands": 10,
+  "rows": [
+    {
+      "name": "normal-freelist-private-capacity",
+      "top_RUN": 18,
+      "top_PASS": 18,
+      "top_FAIL": [],
+      "child_RUN": 79,
+      "elapsed_seconds": 2.48440013313666,
+      "raw_sha256": "38be0632fc119724e47792a2d821d5c179f85813f1d16f0c0b171019e3b27965",
+      "result_sha256": "3a234e01fce895f44163563db1cb13af3321f8cde8d72d760d37387857a0030b",
+      "pid": 1098979,
+      "pgid": 1098979
+    },
+    {
+      "name": "normal-rootpublication-selected-ledger",
+      "top_RUN": 3,
+      "top_PASS": 2,
+      "top_FAIL": [
+        "TestSelectedSetAllocationPairsV6"
+      ],
+      "child_RUN": 18,
+      "elapsed_seconds": 7.532753250095993,
+      "raw_sha256": "7abd3b7d6bfed56b20a7958ba74fbb4dfcce02352ee2ac64d5da2b725786d1d3",
+      "result_sha256": "8bdc38d3805f53f026dfb1b24a65962af4c3f4fad21f87bee050c4f82836a90c",
+      "pid": 1099025,
+      "pgid": 1099025
+    }
+  ]
+}

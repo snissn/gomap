@@ -1,0 +1,46 @@
+{
+  "argv": [
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+    "test",
+    "-p=1",
+    "./TreeDB/internal/rootpublication",
+    "-run",
+    "^(TestNativeIndexObserverOriginalBackingV6|TestSelectedEmptyManifestConstructorLedgerV6|TestSelectedSetAllocationPairsV6)$",
+    "-count=1",
+    "-v",
+    "-timeout=3m"
+  ],
+  "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+  "env": {
+    "CGO_ENABLED": "1",
+    "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+    "GODEBUG": "",
+    "GOENV": "off",
+    "GOFLAGS": "",
+    "GOGC": "100",
+    "GOMAXPROCS": "2",
+    "GOMEMLIMIT": "8GiB",
+    "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+    "GOPROXY": "off",
+    "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+    "GOSUMDB": "off",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off",
+    "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-hash-capacity/source-correction02/controls/normal-rootpublication-selected-ledger/tmp"
+  },
+  "executed": true,
+  "grant_sha256": "5edc42e6133f4b7a3d3f0c611bada23e48fa7b6f050c9cd482c01085e3b77c06",
+  "identity": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-hash-capacity/source-correction02/controls/identity.json",
+  "name": "normal-rootpublication-selected-ledger",
+  "outer_timeout_seconds": 240,
+  "required_top_level_tests": [
+    "TestNativeIndexObserverOriginalBackingV6",
+    "TestSelectedEmptyManifestConstructorLedgerV6",
+    "TestSelectedSetAllocationPairsV6"
+  ],
+  "requires_new_root_runtime_selection": false,
+  "root_selection": "root-private-ledger-correction-and-controls.md",
+  "scope": "Original constructors/scalar observers/finite cleanup; DB group uses actual original empty Open, warm captures and close, synthetic holder only; no native publication.",
+  "source_archive": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-hash-capacity/source-correction02/source-frozen.tar.gz",
+  "source_archive_sha256": "4ca1cb5dbd75b3ddcf40c10c4f99dd273572716032ebe4ace2e1240cffd34e51"
+}

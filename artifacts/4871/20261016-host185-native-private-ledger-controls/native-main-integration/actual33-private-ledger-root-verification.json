@@ -1,0 +1,17 @@
+{
+  "verified_utc": "2026-10-16T05:52:22.625198+00:00",
+  "verifier_sha256": "8c692042e3d77366031c8b13e6bae649bc1c47b73a6434338a92a31c9a7cba2b",
+  "source_files": 10389,
+  "source_manifest_sha256": "8f3a55720f95ec0a9cdf7e18a0360fd09b9385d41a25b28076a3d95157db9889",
+  "source_archive_sha256": "c5699a0ffd003eac5553fc732e37ac9b8732bd90e495e71473c6a13f7c8518b6",
+  "evidence_archive_sha256": "17e51595b54d63d897f94cf2ce38967c1d1e7910cef0cbdd761523953f242adf",
+  "evidence_archive_members": 21,
+  "evidence_manifest_sha256": "90a0fcbe1233a100989cd1ba091ff3fd34ab4b43cbdf3c09bbf46f07fbd56e27",
+  "execution_result": "PASS_LEDGER_INCOMPLETE",
+  "semantic_result": "Test PASS but accounting goal FAILED: early cursor observer refusal prevents numeric selected P; no native publication or allowance.",
+  "command_metadata_note": "Grant executed:false is a template; actual receipt records executed:true and PID/PGID.",
+  "runtime_repeated": false,
+  "source_and_index_unchanged": true,
+  "processes_joined_and_absent": true,
+  "public_status": "Q32 RED/ACK0; no native publication or allowance"
+}

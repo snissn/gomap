@@ -1,0 +1,177 @@
+{
+  "schema_version": 1,
+  "reviewer": "/root/ordinary_review",
+  "actual_model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "mode": "INTERNAL_SUBAGENT_REVIEW; immutable read-only source and evidence",
+  "hosted_review_unavailability_reason": "Hosted manual review cannot pin the explicitly required exact gpt-6.1-sol model; no hosted manual review requested.",
+  "candidate_edits_by_reviewer": false,
+  "verdict": "REJECT",
+  "verdict_scope": "Exact frozen 6c525 correction packet, including fixtures and first focused-control result. Corrected observer/Set-ledger source has no remaining confirmed blocker; the three fixture blockers prevent packet/control acceptance.",
+  "source_manifest_sha256": "6c525298d214717016b20b93eafd04c1b19ef0044b6ee32eab443ba376ebe7fd",
+  "source_archive_sha256": "061ed6dc8c9eab89d371e5e8dfd5e92883d074d654f32221291b538ba323cd7c",
+  "source_patch_sha256": "53e6311c3ce82bd41fdadea938d297647dc2599eac4fa42d1aca2c3a667d6a31",
+  "source_files_verified": 10389,
+  "archive_all_files_verified": true,
+  "baseline_manifest_sha256": "15f0548d03b03923cc8785816b21ee957df3a4f114a2578cba0ef3bbbdd142ec",
+  "exact_delta": {
+    "modified": 7,
+    "added": 0,
+    "deleted": 0
+  },
+  "changed_paths": [
+    {
+      "baseline_sha256": "ceb344de2f6285af5348bc53594313ecb8c73d174e5edd83ddb229211fd98b01",
+      "final_sha256": "1765478c51692dedc1f0cd7e36510d9f3aaf9db0d63743c7b26c6a4e3beb3871",
+      "path": "TreeDB/db/native_prebuilder_observer_for_test_v6.go",
+      "status": "modified"
+    },
+    {
+      "baseline_sha256": "1c995f12ce46d9228b15fab5140e7bd7edc24b9a2437d570092b40eee95bc795",
+      "final_sha256": "fce39859ca04c85c3fc27e04e404213bffc34806a85b094f91ea57b6f99955ca",
+      "path": "TreeDB/db/native_selected_ledger_for_test_v6.go",
+      "status": "modified"
+    },
+    {
+      "baseline_sha256": "81acd119eb7ddaacde4fada6f49d9f5480e51fcae4eac9e75d6327cd7bc88618",
+      "final_sha256": "f8f70732d60ebfa169b4ab877b70657f34b7dba17ef83f7dddb416d0e4bf4b4a",
+      "path": "TreeDB/db/native_selected_ledger_v6_test.go",
+      "status": "modified"
+    },
+    {
+      "baseline_sha256": "30b7fc7a6c9ed8cc3cc67e3c0cb390df7ff25fd268e6cfb2d21a7f118e579b8d",
+      "final_sha256": "d6b9a11ec3323cfbcb201e04375344c476c1786e58ec5c91aefced5d857d2714",
+      "path": "TreeDB/freelist/private_control_capacity_v6_test.go",
+      "status": "modified"
+    },
+    {
+      "baseline_sha256": "bd4d3d57eee3ea1e1c2e67af8807f8d358bd1a959960a87a9f0a853247b549b0",
+      "final_sha256": "8f851edcd07e524cc420b4e76ac345eb16fd6359b33e2482eab24c3a5f918205",
+      "path": "TreeDB/internal/rootpublication/native_prebuilder_retention_for_test_v6.go",
+      "status": "modified"
+    },
+    {
+      "baseline_sha256": "138c8a5bfac504ee1a2cf4fd3036a14cc5301b0d8912b7b21d3e6dab5ac9c19c",
+      "final_sha256": "16f48e2dc70b6384d8833a8c1d95b56c0f45b4300086b4fd22b0811fc8405bc9",
+      "path": "TreeDB/internal/rootpublication/selected_manifest_ledger_test.go",
+      "status": "modified"
+    },
+    {
+      "baseline_sha256": "8930abfab00a85d71f3b52cb59d9811f8b7d456e0bce4bf6cbae32f1c38423f0",
+      "final_sha256": "3251575df7f8c112726d5f57b3d0e4b9bc65e69fc08e5cf94eabfe05d6f5cf33",
+      "path": "TreeDB/mvcc/native_selected_ledger_test.go",
+      "status": "modified"
+    }
+  ],
+  "resolved_prior_findings": {
+    "L1": "Four actual retained Set wrappers are observed and independently counted; wrapper equality is no longer falsely required for member/seal.",
+    "L2": "Role3 follows actual phase13 seal.primary.proofResources with cleared preparation/transfer guards; wrappers/kinds/empty backing dedup independently by actual allocation equality.",
+    "L3": "Snapshot build continuation now checks live<=Owner.Bytes<=live+debt with overflow guards and exact completed endpoints. Its independent budget arm has C1; sibling partial-clone assertion has C2."
+  },
+  "findings": [
+    {
+      "id": "C1",
+      "classification": "fixture setup blocker; no demonstrated production defect",
+      "path": "TreeDB/freelist/private_control_capacity_v6_test.go",
+      "line": 265,
+      "trigger": "TestPrivateCapacitySnapshotIndependentPlanAndPeakV6 governing-budget arm",
+      "cause": "AcquireRetention(4096-limited.Bytes()-128) assumes the Owner payload is the entire governing budget. NewCOWBudget charges its control, Enroll carries the original external lease, and AcquireExternal adds another rounded COWExternalLease header. The fill allocation fails before insert(9), so this does not test peak overlap refusal.",
+      "source_anchors": [
+        "TreeDB/internal/memtable/cow_budget.go:66",
+        "TreeDB/internal/memtable/cow_budget.go:104",
+        "TreeDB/internal/memtable/cow_budget.go:128"
+      ],
+      "minimum_correction": "Compute checked filler payload from the actual budget TotalBytes, the additional rounded external-lease header, and source-derived new/old array charges. Assert the filler succeeds and the chosen occupancy permits final replacement alone but refuses old+new overlap. Keep insertion error, no-new-key/no-next, original-owner, and final cleanup oracles."
+    },
+    {
+      "id": "C2",
+      "classification": "fixture accounting oracle blocker; no demonstrated production defect",
+      "path": "TreeDB/freelist/private_control_capacity_v6_test.go",
+      "line": 404,
+      "trigger": "TestPrivateCapacityPartialCloneAdmissionCancelV6 with 18,19,20 available records",
+      "cause": "The exact Owner.Bytes equality includes changed/replaced detached debt after original RemovePendingWork has already debited Owner.bytes, before shrink/reset clears the scalar debt. This is the same valid refund window fixed in the Snapshot test, still present in its sibling partial-clone assertion.",
+      "source_anchors": [
+        "TreeDB/freelist/private_control_capacity_v6.go:305",
+        "TreeDB/freelist/allocator_preparation_work_v6.go:387",
+        "TreeDB/internal/retainedalloc/owner_work.go:250",
+        "TreeDB/internal/retainedalloc/owner_work.go:402"
+      ],
+      "minimum_correction": "Checked-sum all still-live clone/header/vector/table/snapshot/sort charges as live, and changed/replaced scalar debt separately. Require live<=Owner.Bytes<=live+debt during this continuation, exact charge equality at pre-debit endpoints, and exact no-alias/zero-owner/debt completion after the SAME cancellation. Do not change production removal or omit live storage."
+    },
+    {
+      "id": "C3",
+      "classification": "fixture work-progress blocker; no demonstrated production defect",
+      "path": "TreeDB/freelist/private_control_capacity_v6_test.go",
+      "line": 502,
+      "trigger": "TestPrivateCapacitySinkDuplicateAndCommittedResumeV6 stops at phase3 after 1000 turns",
+      "cause": "Each phase3 call has only two available records. insert entry costs one, allocation admission costs one, and the unbound original Owner Add requires one more. No allocation occurs; the fixture never reaches its claimed phase11 detach/refund boundary.",
+      "source_anchors": [
+        "TreeDB/freelist/private_control_capacity_v6.go:87",
+        "TreeDB/freelist/private_control_capacity_v6.go:143",
+        "TreeDB/internal/retainedalloc/owner_growth_work.go:13",
+        "TreeDB/freelist/private_control_capacity_v6.go:222"
+      ],
+      "minimum_correction": "For this exact no-binding Owner, expose the three-record phase3 admission unit, while retaining the three-record phase10 entry+commit pause and Q32 cap. Require progress to real phase11, one committed key, old-array alias absence, debt custody, SAME continuation completion, duplicate-insert semantics and final owner zero. No blanket allowance increase or phase manipulation."
+    }
+  ],
+  "read_caller_bindings": {
+    "TreeDB/freelist/private_control_capacity_v6.go": "420650d5ffc161497e796b6549bec4ce257677c12cd8b124836d73555fe66844",
+    "TreeDB/freelist/allocator_preparation_work_v6.go": "a1cfbb466c90cd410c9380b76e638de019716e73483456f1e66923a8932ade85",
+    "TreeDB/internal/retainedalloc/owner_work.go": "d4727141cffdc31205bc99854746a91fe10e19bdc628f643206d9ca94fd8aabe",
+    "TreeDB/internal/retainedalloc/owner_growth_work.go": "74735769ff46c27445a03ae785dad4e1a8ae3ecf84358d039486e0de9dcabf35",
+    "TreeDB/internal/memtable/cow_budget.go": "f3102bd2d83c3009ff5cf470634ce9046ae35d95a59f2a106f9e147a8615a823",
+    "TreeDB/internal/rootpublication/resource_set_clone_work_v6.go": "117279f05552e0f467769380f9525e592ab18e95614b9c973699ec6d44e61444",
+    "TreeDB/internal/rootpublication/primary_empty_candidate_work_v6.go": "56c85430928b3a399404bd5f23c49af5c11c5e3bac5f1b40157467eaf42193bb",
+    "TreeDB/internal/rootpublication/resource_set_allocation.go": "8d366ae46f74d914665b2e7d68cd29ac568fc74a56087491b85dfc02ae1f6258",
+    "TreeDB/db/native_mvcc_candidate_preparation_v6.go": "45d7dd34004bc14b94fa1592ebe7979f3f33e8924d176d49cc8c49a56df937a7",
+    "TreeDB/db/native_mvcc_seal_preparation_v6.go": "e30088d2ab5ad5810fbe62c28c00495798adff8b133a50d7da7f0255fd930bae"
+  },
+  "source_checks": [
+    "All 10389 archive payload hashes matched manifest with no duplicates/missing/extra files.",
+    "Exactly seven modified paths versus immutable 15f0; read every full delta and affected constructor/holder/refund callers.",
+    "All four surviving wrapper roles, actual proof transfer, original owner/live/selected and empty-shape guards checked.",
+    "Constructor SetCharge already includes Extras; distinct wrapper metadata and shared kind/empty allocations counted once without Owner.Bytes addition.",
+    "Every fixed-role/pair inspection and row accumulation is admitted; supported four-wrapper arithmetic uses <=22 records under unchanged Q32.",
+    "Positive real constructor/holder tests and by-value combination positives/negatives inspected; no fabricated successful publication inferred.",
+    "Focused source-before/source-after manifests both exactly equal frozen manifest. Raw log hash recomputed; raw top-level inventory matches 18 RUN,15 PASS,3 FAIL."
+  ],
+  "control_result": {
+    "commands_executed": 1,
+    "commands_not_run": 11,
+    "normal_top_run": 18,
+    "normal_top_pass": 15,
+    "normal_top_fail": 3,
+    "race_executed": false,
+    "skip": false,
+    "timeout": false,
+    "first_failure_stop": true,
+    "source_stable": true,
+    "leader_joined": true,
+    "remaining_groups_or_children": false,
+    "all_authorized_pass": false,
+    "reviewer_execution": "None; read-only Python hashing/parsing only."
+  },
+  "evidence_hashes": {
+    "native-main-integration/private-hash-capacity/source-correction01/source-frozen.json": "6c525298d214717016b20b93eafd04c1b19ef0044b6ee32eab443ba376ebe7fd",
+    "native-main-integration/private-hash-capacity/source-correction01/source-frozen.tar.gz": "061ed6dc8c9eab89d371e5e8dfd5e92883d074d654f32221291b538ba323cd7c",
+    "native-main-integration/private-hash-capacity/source-correction01/source-delta.patch": "53e6311c3ce82bd41fdadea938d297647dc2599eac4fa42d1aca2c3a667d6a31",
+    "native-main-integration/private-hash-capacity/source-correction01/freeze-receipt.json": "3500532d7aee0f09cb537d56df5a94641146c8bc971312106d336f6ebbe92f2c",
+    "native-main-integration/private-hash-capacity/source-correction01/changed-paths.json": "4c352c5f280a7442dabef015d2803d3b893df921e883473d22a062568ea8f707",
+    "native-main-integration/private-hash-capacity/source-correction01/controls/summary.json": "fb44c969542b093d65555c09250a07e43247a9929e10433e270ef507e4c90701",
+    "native-main-integration/private-hash-capacity/source-correction01/controls/normal-freelist-private-capacity/command.json": "e405fb9a46413acc2cfcc7fc5f95c34c4899a574f605b87b7f135af4dd386b5e",
+    "native-main-integration/private-hash-capacity/source-correction01/controls/normal-freelist-private-capacity/result.json": "951b8cbc576327104e00c5c0b5d2c030d6b72ebd73e70da9c99fedd1c4879d0c",
+    "native-main-integration/private-hash-capacity/source-correction01/controls/normal-freelist-private-capacity/run.log": "0729f4583dd3f0968823614b2a495c0663d182ad50fef86ebdccb579a08112fb",
+    "native-main-integration/private-hash-capacity/source-correction01/controls/normal-freelist-private-capacity/source-before.json": "6c525298d214717016b20b93eafd04c1b19ef0044b6ee32eab443ba376ebe7fd",
+    "native-main-integration/private-hash-capacity/source-correction01/controls/normal-freelist-private-capacity/source-after.json": "6c525298d214717016b20b93eafd04c1b19ef0044b6ee32eab443ba376ebe7fd",
+    "native-decision/root-private-ledger-correction-and-controls.md": "cac20b5e0ca11c9f2fe9d6e255b178654ac383d93918f25ac76cb3fc7be84202"
+  },
+  "limits": [
+    "No actual33 successor observation executed.",
+    "No complete physical/transitive retained union, fixed aggregate F/Finish/Close allowance, numeric allowance, Q32 fit, native publication or qualification acceptance.",
+    "Selected empty constructor admission envelope remains a diagnostic domain with explicit unsupported/opaque refusal, not a whole-heap result.",
+    "Earlier provisional production/hash/clone review remains attributed to its original immutable source; current seven paths do not modify those production paths.",
+    "No new compile-only repetition claimed; only the first normal freelist control ran on this correction. New DB/rootpublication/mvcc controls and all races remain unexecuted."
+  ],
+  "lease_released": true,
+  "created_utc": "2026-10-16T05:32:35.695178+00:00"
+}

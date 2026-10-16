@@ -1,0 +1,12 @@
+{
+  "all_production_and_freelist_test_files_byte_identical": true,
+  "current_manifest_sha256": "d6a090b25f8df158f0f3e830c009cabe6959b65339f9528eedbae63e8e036798",
+  "normal_freelist_child_RUN": 79,
+  "normal_freelist_top_pass": 18,
+  "only_changed_source": "TreeDB/internal/rootpublication/selected_manifest_ledger_test.go",
+  "original_result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-hash-capacity/source-correction02/controls/normal-freelist-private-capacity/result.json",
+  "original_result_sha256": "3a234e01fce895f44163563db1cb13af3321f8cde8d72d760d37387857a0030b",
+  "original_source_manifest_sha256": "d0cba17d5cef5666f2856cc9bf0278b0ec7eedcd9946b2aadf5ffaac344d3247",
+  "rerun": false,
+  "selected_by": "0b59848d273c6c2f57ac16009946f7bc190182237388e9c0a65ee66cb9e0af6b"
+}

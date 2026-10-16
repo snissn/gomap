@@ -1,0 +1,25 @@
+{
+  "added_paths": 0,
+  "baseline_archive_sha256": "7fd459782bcd9bea535b91956324c424b2a8703a102a71526917202130b6eacc",
+  "baseline_manifest_sha256": "15f0548d03b03923cc8785816b21ee957df3a4f114a2578cba0ef3bbbdd142ec",
+  "changed_paths": 7,
+  "changed_paths_sha256": "4c352c5f280a7442dabef015d2803d3b893df921e883473d22a062568ea8f707",
+  "changed_source_archive_sha256": "287de57e9a08066ec1501b1330cb4963291363b1bbb6409560cf631a8e4872cb",
+  "created_utc": "2026-10-16T05:26:02.263141+00:00",
+  "deleted_paths": 0,
+  "modified_paths": 7,
+  "selections": {
+    "root-private-clone-admission-addendum.md": "f6562e909c70c89852736c54f5a0a85c3eb2cc7c45e00cfb19c59a5abf5799f3",
+    "root-private-hash-capacity-selection.md": "063f85d21e071fb4bf20d79c00af6d1a601dc6c6db15aa0baa04e358bef7cb32",
+    "root-private-ledger-correction-and-controls.md": "cac20b5e0ca11c9f2fe9d6e255b178654ac383d93918f25ac76cb3fc7be84202",
+    "root-selected-ledger-manifest-addendum.md": "71fdc8eee2b444378c7516f4a7f8bcbb994e193b740f8d76b8f5d11f9bc29cef",
+    "root-selected-ledger-zipper-access-addendum.md": "eacc4b3cf83d2de987e7bb6cc4a14af8642a104c7527c715ce1138714236fc53",
+    "root-selected-private-ledger-addendum.md": "57acdd9e31ec65f32d7164883ff11da7209838037ac340466a681b77444c57ec"
+  },
+  "source_archive_sha256": "061ed6dc8c9eab89d371e5e8dfd5e92883d074d654f32221291b538ba323cd7c",
+  "source_delta_sha256": "53e6311c3ce82bd41fdadea938d297647dc2599eac4fa42d1aca2c3a667d6a31",
+  "source_equals_verified_archive": true,
+  "source_files": 10389,
+  "source_manifest_sha256": "6c525298d214717016b20b93eafd04c1b19ef0044b6ee32eab443ba376ebe7fd",
+  "status": "source frozen before authorized narrow normal/race; no actual33/publication runtime"
+}

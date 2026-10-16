@@ -1,0 +1,42 @@
+{
+  "diagnosis_runtime_observation": false,
+  "further_runtime_executed": false,
+  "lease": "source/runtime released after stopped call; artifact-only handoff",
+  "production_change_proposed": false,
+  "public_status": "Q32 RED/ACK0; no allowance",
+  "recommended_source_scope": [
+    "TestPrivateCapacitySnapshotIndependentPlanAndPeakV6",
+    "TestPrivateCapacityPartialCloneAdmissionCancelV6",
+    "TestPrivateCapacitySinkDuplicateAndCommittedResumeV6"
+  ],
+  "source_bindings": {
+    "TreeDB/freelist/allocator_preparation_work_v6.go": "a1cfbb466c90cd410c9380b76e638de019716e73483456f1e66923a8932ade85",
+    "TreeDB/freelist/allocator_preparation_work_v6_test.go": "17b104c537f03f45848b1e06b7cc3d03cd45f677ee05ef93d6c2035a8ff123d0",
+    "TreeDB/freelist/generation_v1_encode_work.go": "5974f322233ca919445db563d49fce08c1861c1547e3ef66d558318d241366b9",
+    "TreeDB/freelist/generation_v1_txn.go": "04a9692b3937333e761734fa8a0c8b0158d1c61c6b2eeb919d00f53c80fc3571",
+    "TreeDB/freelist/private_control_capacity_v6.go": "420650d5ffc161497e796b6549bec4ce257677c12cd8b124836d73555fe66844",
+    "TreeDB/freelist/private_control_capacity_v6_test.go": "d6b9a11ec3323cfbcb201e04375344c476c1786e58ec5c91aefced5d857d2714",
+    "TreeDB/internal/memtable/cow_budget.go": "f3102bd2d83c3009ff5cf470634ce9046ae35d95a59f2a106f9e147a8615a823",
+    "TreeDB/internal/retainedalloc/owner.go": "aa2725812345880c152932466ee45dfa2d31b69562309595afb98d354e725c3d",
+    "TreeDB/internal/retainedalloc/owner_growth_work.go": "74735769ff46c27445a03ae785dad4e1a8ae3ecf84358d039486e0de9dcabf35",
+    "TreeDB/internal/retainedalloc/owner_work.go": "d4727141cffdc31205bc99854746a91fe10e19bdc628f643206d9ca94fd8aabe"
+  },
+  "source_derived_partial_clone_records": {
+    "capture_through_snapshots": 11,
+    "nil_head_start": 20,
+    "owner_debit": 18,
+    "receipt_reset": 21,
+    "removal_bind": 17,
+    "shrink_header": 19,
+    "snapshot_detach": 16,
+    "snapshot_zero_insert_complete": 15
+  },
+  "source_manifest_sha256": "6c525298d214717016b20b93eafd04c1b19ef0044b6ee32eab443ba376ebe7fd",
+  "status": "first call failed; source frozen; diagnosis read-only",
+  "tests": {
+    "child_run": 79,
+    "top_fail": 3,
+    "top_pass": 15,
+    "top_run": 18
+  }
+}

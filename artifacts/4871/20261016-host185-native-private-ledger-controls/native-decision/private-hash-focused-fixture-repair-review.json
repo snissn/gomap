@@ -1,0 +1,111 @@
+{
+  "reviewer": "/root/ordinary_review",
+  "actual_model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW; immutable source/evidence only",
+  "hosted_review_unavailability_reason": "Hosted manual review cannot pin the explicitly required exact gpt-6.1-sol model; not requested.",
+  "candidate_edits_by_reviewer": false,
+  "verdict": "REJECT",
+  "verdict_scope": "Overall frozen d0cba snapshot/control readiness due unchanged sibling D1. The exact one-file C1-C3 fixture delta is ACCEPT.",
+  "fixture_delta_verdict": "ACCEPT",
+  "production_observer_disposition": "Prior production/observer source acceptance carries by exact byte identity; no new source blocker found in those paths.",
+  "source_files_verified": 10389,
+  "archive_all_payloads_verified": true,
+  "source_manifest_sha256": "d0cba17d5cef5666f2856cc9bf0278b0ec7eedcd9946b2aadf5ffaac344d3247",
+  "source_archive_sha256": "4ca1cb5dbd75b3ddcf40c10c4f99dd273572716032ebe4ace2e1240cffd34e51",
+  "delta_sha256": "37272a6bc03539c622ad2a50b978b8c68cf060d5885021a7a62984af10145e67",
+  "baseline_manifest_sha256": "6c525298d214717016b20b93eafd04c1b19ef0044b6ee32eab443ba376ebe7fd",
+  "delta": {
+    "modified": [
+      "TreeDB/freelist/private_control_capacity_v6_test.go"
+    ],
+    "added": [],
+    "deleted": []
+  },
+  "changed_file_sha256": "e83201279fc824bebc60f60b9cf1736cb010492680500ce389feb9924beddf90",
+  "resolved_findings": {
+    "C1": "Filler derives from actual governing TotalBytes and rounded new external-lease header; checked new-old headroom proves standalone replacement fits but old+new overlap fails, and error must be ErrCOWCapacity. Stronger backing-pointer/count/version/no-key custody assertions.",
+    "C2": "Checked live sum covers all four controls, clone/header/vectors and both sort buffers. Detached debt is separate; live<=Owner.Bytes<=live+debt and exact debt-zero equality. SAME bounded cancellation still requires owner zero.",
+    "C3": "Exactly three remaining records at real phase3 as at phases7/10; two elsewhere. This permits entry+allocation+unbound Owner admission and genuinely pauses at phase11 without changing Q32, phase manually or operation identity. Exact committed-key/debt/no-next, duplicate/sink and final owner-zero checks unchanged."
+  },
+  "findings": [
+    {
+      "id": "D1",
+      "classification": "unchanged sibling test capability mismatch; no production defect demonstrated",
+      "path": "TreeDB/internal/rootpublication/selected_manifest_ledger_test.go",
+      "constructor_lines": [
+        137,
+        142
+      ],
+      "failure_line": 213,
+      "cause": "The empty-directory arm uses NewOwnedLocalPrimaryDependencyDirectoryV5, which initializes ordinary ownedRelease and leaves ownedReleaseWork nil. Its later Set.ReleaseFromWithWorkV6 enters DependencyDirectoryReleaseWork.bind; the latter rejects absent ownedReleaseWork with ErrWorkRequired before dropping a directory ref. This cannot be repaired by more Q32 work.",
+      "custody": "The Set graph may already have claimed ResourceOwnerReleased and dropped its exclusive wrapper allocation ref before encountering this unsupported directory edge. Only the directory-ref effect is prevented; this is not a globally effect-free Set abort or permission to refund. Original release frame/charge remains responsible.",
+      "source_anchors": [
+        "TreeDB/internal/rootpublication/dependency_directory_reader_v2.go:88",
+        "TreeDB/internal/rootpublication/dependency_directory_release_work.go:76",
+        "TreeDB/internal/rootpublication/resource_set_graph_release_work_v6.go:19",
+        "TreeDB/internal/rootpublication/resource_set_graph_release_work_v6.go:110"
+      ],
+      "minimum_correction_selected_by_root": "Test-only use of original NewOwnedWorkLocalPrimaryDependencyDirectoryV6 with an admitted bounded counter producer, preserving constructor equality/negative shape assertions, finite Set/completion and final original directory-edge cleanup, physical count exactly two and final owner zero. No production strictness change, increased budget or fabricated publication."
+    }
+  ],
+  "review_coverage": [
+    "Entire changed test file and complete one-file patch read.",
+    "Whole 10389-file archive checked against manifest; exact one modification/zero add/delete versus 6c525.",
+    "Original privateArrayCharge, insert state machine, Owner.Add work admission, removal/debit/reset, COWBudget allocation/resize and cancellation callers inspected from immutable source.",
+    "Sibling failing Set test, ordinary vs typed directory constructors and full Set/directory release path independently traced.",
+    "Both launched command/raw/result/before/after source payloads checked; raw hashes and process join/custody checked."
+  ],
+  "control_results": {
+    "normal_freelist": {
+      "top_run": 18,
+      "top_pass": 18,
+      "children_run_pass": 79,
+      "status": "PASS",
+      "source_attribution": "d0cba only, not relabeled a later snapshot"
+    },
+    "normal_rootpublication": {
+      "top_run": 3,
+      "top_pass": 2,
+      "top_fail": 1,
+      "failed_child": "TestSelectedSetAllocationPairsV6/empty-directory",
+      "status": "STOP"
+    },
+    "remaining_calls_unrun": 10,
+    "race_executed": false,
+    "skip": false,
+    "timeout": false,
+    "source_before_after_equals_frozen": true,
+    "leaders_joined": true,
+    "groups_children_empty": true,
+    "first_failure_stop": true,
+    "reviewer_runtime": "None"
+  },
+  "reuse_boundary": "Normal freelist18/79 may be reused after a strictly rootpublication-test-only successor if unchanged relevant source/compiler/argv bindings are verified; preserve original d0cba attribution. Root owns authorization for remaining calls.",
+  "evidence_hashes": {
+    "native-main-integration/private-hash-capacity/source-correction02/source-frozen.json": "d0cba17d5cef5666f2856cc9bf0278b0ec7eedcd9946b2aadf5ffaac344d3247",
+    "native-main-integration/private-hash-capacity/source-correction02/source-frozen.tar.gz": "4ca1cb5dbd75b3ddcf40c10c4f99dd273572716032ebe4ace2e1240cffd34e51",
+    "native-main-integration/private-hash-capacity/source-correction02/source-delta.patch": "37272a6bc03539c622ad2a50b978b8c68cf060d5885021a7a62984af10145e67",
+    "native-main-integration/private-hash-capacity/source-correction02/freeze-receipt.json": "e8dfede22d9086003863eb7a12f5d24b9f9b74cb2f886cf7b76e90a22b6717e0",
+    "native-main-integration/private-hash-capacity/source-correction02/controls/summary.json": "3102d6cf46ad674a1d6c9a23955197fd3351ea7307efe779f045dfd224be3527",
+    "native-decision/root-private-focused-fixture-repair.md": "5edc42e6133f4b7a3d3f0c611bada23e48fa7b6f050c9cd482c01085e3b77c06",
+    "native-decision/root-private-directory-fixture-repair.md": "0b59848d273c6c2f57ac16009946f7bc190182237388e9c0a65ee66cb9e0af6b",
+    "native-main-integration/private-hash-capacity/source-correction02/controls/normal-freelist-private-capacity/run.log": "38be0632fc119724e47792a2d821d5c179f85813f1d16f0c0b171019e3b27965",
+    "native-main-integration/private-hash-capacity/source-correction02/controls/normal-freelist-private-capacity/result.json": "3a234e01fce895f44163563db1cb13af3321f8cde8d72d760d37387857a0030b",
+    "native-main-integration/private-hash-capacity/source-correction02/controls/normal-freelist-private-capacity/command.json": "1a8aa241b72f2e49a9b104c9b32577d940b8e7d687e61d8b9dded94f2652352e",
+    "native-main-integration/private-hash-capacity/source-correction02/controls/normal-freelist-private-capacity/source-before.json": "d0cba17d5cef5666f2856cc9bf0278b0ec7eedcd9946b2aadf5ffaac344d3247",
+    "native-main-integration/private-hash-capacity/source-correction02/controls/normal-freelist-private-capacity/source-after.json": "d0cba17d5cef5666f2856cc9bf0278b0ec7eedcd9946b2aadf5ffaac344d3247",
+    "native-main-integration/private-hash-capacity/source-correction02/controls/normal-rootpublication-selected-ledger/run.log": "7abd3b7d6bfed56b20a7958ba74fbb4dfcce02352ee2ac64d5da2b725786d1d3",
+    "native-main-integration/private-hash-capacity/source-correction02/controls/normal-rootpublication-selected-ledger/result.json": "8bdc38d3805f53f026dfb1b24a65962af4c3f4fad21f87bee050c4f82836a90c",
+    "native-main-integration/private-hash-capacity/source-correction02/controls/normal-rootpublication-selected-ledger/command.json": "455b49245643a303fab3d383bc1e83a6693400b0cf389cc92f533d29afc23a24",
+    "native-main-integration/private-hash-capacity/source-correction02/controls/normal-rootpublication-selected-ledger/source-before.json": "d0cba17d5cef5666f2856cc9bf0278b0ec7eedcd9946b2aadf5ffaac344d3247",
+    "native-main-integration/private-hash-capacity/source-correction02/controls/normal-rootpublication-selected-ledger/source-after.json": "d0cba17d5cef5666f2856cc9bf0278b0ec7eedcd9946b2aadf5ffaac344d3247"
+  },
+  "limits": [
+    "No actual33 successor observation, native finaldriver/publication, complete physical union or aggregate F/Finish allowance acceptance.",
+    "Q32 RED/ACK0/no numeric allowance remains unchanged.",
+    "Source-only repair acceptance does not imply unexecuted DB/mvcc/rootpublication/race controls pass."
+  ],
+  "lease_released": true,
+  "created_utc": "2026-10-16T05:37:26.686101+00:00"
+}

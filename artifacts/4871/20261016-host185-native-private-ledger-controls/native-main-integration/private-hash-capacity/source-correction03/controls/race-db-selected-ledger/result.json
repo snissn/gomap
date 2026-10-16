@@ -1,0 +1,296 @@
+{
+  "adopted_children_reaped": [],
+  "child_RUN_count": 2,
+  "elapsed_seconds": 65.49894612189382,
+  "ended_utc": "2026-10-16T05:41:01.568296+00:00",
+  "exit_code": 0,
+  "group_and_children_empty": true,
+  "leader_joined": true,
+  "missing_named_top_RUN_PASS": [],
+  "name": "race-db-selected-ledger",
+  "observed_group_processes": [
+    {
+      "comm": "go",
+      "pgid": 1104249,
+      "pid": 1104249,
+      "ppid": 1102063,
+      "session": 1104249,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1104249,
+      "pid": 1104267,
+      "ppid": 1104249,
+      "session": 1104249,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1104249,
+      "pid": 1104272,
+      "ppid": 1104249,
+      "session": 1104249,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1104249,
+      "pid": 1104341,
+      "ppid": 1104249,
+      "session": 1104249,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1104249,
+      "pid": 1104345,
+      "ppid": 1104249,
+      "session": 1104249,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1104249,
+      "pid": 1104349,
+      "ppid": 1104249,
+      "session": 1104249,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1104249,
+      "pid": 1104367,
+      "ppid": 1104249,
+      "session": 1104249,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1104249,
+      "pid": 1104372,
+      "ppid": 1104249,
+      "session": 1104249,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1104249,
+      "pid": 1104376,
+      "ppid": 1104249,
+      "session": 1104249,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1104249,
+      "pid": 1104729,
+      "ppid": 1104249,
+      "session": 1104249,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1104249,
+      "pid": 1104733,
+      "ppid": 1104249,
+      "session": 1104249,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1104249,
+      "pid": 1104745,
+      "ppid": 1104249,
+      "session": 1104249,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1104249,
+      "pid": 1104749,
+      "ppid": 1104249,
+      "session": 1104249,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1104249,
+      "pid": 1104753,
+      "ppid": 1104249,
+      "session": 1104249,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1104249,
+      "pid": 1105518,
+      "ppid": 1104249,
+      "session": 1104249,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1104249,
+      "pid": 1105525,
+      "ppid": 1104249,
+      "session": 1104249,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1104249,
+      "pid": 1105538,
+      "ppid": 1104249,
+      "session": 1104249,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1104249,
+      "pid": 1105542,
+      "ppid": 1104249,
+      "session": 1104249,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1104249,
+      "pid": 1105546,
+      "ppid": 1104249,
+      "session": 1104249,
+      "state": "S"
+    },
+    {
+      "comm": "link",
+      "pgid": 1104249,
+      "pid": 1105554,
+      "ppid": 1104249,
+      "session": 1104249,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1104249,
+      "pid": 1105564,
+      "ppid": 1104249,
+      "session": 1104249,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1104249,
+      "pid": 1105568,
+      "ppid": 1104249,
+      "session": 1104249,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1104249,
+      "pid": 1105576,
+      "ppid": 1104249,
+      "session": 1104249,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1104249,
+      "pid": 1105580,
+      "ppid": 1104249,
+      "session": 1104249,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1104249,
+      "pid": 1105596,
+      "ppid": 1104249,
+      "session": 1104249,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1104249,
+      "pid": 1105619,
+      "ppid": 1104249,
+      "session": 1104249,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1104249,
+      "pid": 1105627,
+      "ppid": 1104249,
+      "session": 1104249,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1104249,
+      "pid": 1105631,
+      "ppid": 1104249,
+      "session": 1104249,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1104249,
+      "pid": 1105651,
+      "ppid": 1104249,
+      "session": 1104249,
+      "state": "S"
+    },
+    {
+      "comm": "db.test",
+      "pgid": 1104249,
+      "pid": 1105657,
+      "ppid": 1104249,
+      "session": 1104249,
+      "state": "S"
+    }
+  ],
+  "pgid": 1104249,
+  "pid": 1104249,
+  "raw_log_sha256": "e912289ac510234969021bc01ff84ae42cdd9c51abd90ba4a6782ba3d49d9bb6",
+  "remaining_direct_or_adopted_children": [],
+  "remaining_group_members": [],
+  "required_top_level_names": [
+    "TestNativeIndexObserverOriginalCapturesV6",
+    "TestNativeSelectedManifestTransferredHolderV6",
+    "TestNativeSelectedSetTransferredHoldersV6"
+  ],
+  "residual_observed_before_cleanup": false,
+  "signals": [],
+  "source_after_equals_frozen": true,
+  "source_before_after_equal": true,
+  "source_before_equals_frozen": true,
+  "started_utc": "2026-10-16T05:39:56.069352+00:00",
+  "status": "PASS",
+  "stop_reasons": [],
+  "subreaper_enabled": true,
+  "test_FAIL_names": [],
+  "test_PASS_names": [
+    "TestNativeIndexObserverOriginalCapturesV6",
+    "TestNativeIndexObserverOriginalCapturesV6/DATA",
+    "TestNativeIndexObserverOriginalCapturesV6/PRIMARY",
+    "TestNativeSelectedManifestTransferredHolderV6",
+    "TestNativeSelectedSetTransferredHoldersV6"
+  ],
+  "test_RUN_names": [
+    "TestNativeIndexObserverOriginalCapturesV6",
+    "TestNativeIndexObserverOriginalCapturesV6/DATA",
+    "TestNativeIndexObserverOriginalCapturesV6/PRIMARY",
+    "TestNativeSelectedManifestTransferredHolderV6",
+    "TestNativeSelectedSetTransferredHoldersV6"
+  ],
+  "test_SKIP_names": [],
+  "timeout": false,
+  "top_level_RUN_names": [
+    "TestNativeIndexObserverOriginalCapturesV6",
+    "TestNativeSelectedManifestTransferredHolderV6",
+    "TestNativeSelectedSetTransferredHoldersV6"
+  ],
+  "top_level_pass_count": 3,
+  "unexpected_top_RUN": []
+}

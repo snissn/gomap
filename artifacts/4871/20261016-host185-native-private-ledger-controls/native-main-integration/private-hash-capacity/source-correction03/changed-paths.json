@@ -1,0 +1,8 @@
+[
+  {
+    "baseline_sha256": "16f48e2dc70b6384d8833a8c1d95b56c0f45b4300086b4fd22b0811fc8405bc9",
+    "final_sha256": "778a2b047cf88ab2d57c5e46fb070403498fb6db08feeda2cdb77e00e386df25",
+    "path": "TreeDB/internal/rootpublication/selected_manifest_ledger_test.go",
+    "status": "modified"
+  }
+]

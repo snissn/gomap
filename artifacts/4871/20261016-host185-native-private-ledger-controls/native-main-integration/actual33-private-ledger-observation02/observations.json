@@ -1,0 +1,16 @@
+{
+  "F_expression": "F293+D+2K+23P+8M+3S+N+Z+V+A",
+  "allowance_chosen": false,
+  "computed_bytes": 882745,
+  "computed_records": 367,
+  "explicit_private_capacity_observed": true,
+  "five_groups_emitted": true,
+  "numeric_P_emitted": false,
+  "observations_atomic": false,
+  "private_maps_nil_observed": true,
+  "retained_union_complete": false,
+  "same_original_two_index_capture_predicates_observed": true,
+  "selected_constructor_ledger_complete": false,
+  "selected_constructor_obstruction": "cursor observer refusal",
+  "whole_retained_bound_claimed": false
+}

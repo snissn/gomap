@@ -1,0 +1,100 @@
+{
+  "adopted_children_reaped": [],
+  "child_RUN_count": 0,
+  "elapsed_seconds": 3.3788528009317815,
+  "ended_utc": "2026-10-16T05:39:55.000277+00:00",
+  "exit_code": 0,
+  "group_and_children_empty": true,
+  "leader_joined": true,
+  "missing_named_top_RUN_PASS": [],
+  "name": "race-retainedalloc-selected-ledger",
+  "observed_group_processes": [
+    {
+      "comm": "go",
+      "pgid": 1104175,
+      "pid": 1104175,
+      "ppid": 1102063,
+      "session": 1104175,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1104175,
+      "pid": 1104193,
+      "ppid": 1104175,
+      "session": 1104175,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1104175,
+      "pid": 1104197,
+      "ppid": 1104175,
+      "session": 1104175,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1104175,
+      "pid": 1104202,
+      "ppid": 1104175,
+      "session": 1104175,
+      "state": "R"
+    },
+    {
+      "comm": "link",
+      "pgid": 1104175,
+      "pid": 1104215,
+      "ppid": 1104175,
+      "session": 1104175,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1104175,
+      "pid": 1104229,
+      "ppid": 1104175,
+      "session": 1104175,
+      "state": "R"
+    },
+    {
+      "comm": "retainedalloc.t",
+      "pgid": 1104175,
+      "pid": 1104239,
+      "ppid": 1104175,
+      "session": 1104175,
+      "state": "S"
+    }
+  ],
+  "pgid": 1104175,
+  "pid": 1104175,
+  "raw_log_sha256": "0914e908a45b313ba5015782defd759830aacdc4be5fb5d06bc8473534b31c3d",
+  "remaining_direct_or_adopted_children": [],
+  "remaining_group_members": [],
+  "required_top_level_names": [
+    "TestSelectedEnrollmentConstructorLedgerV6"
+  ],
+  "residual_observed_before_cleanup": false,
+  "signals": [],
+  "source_after_equals_frozen": true,
+  "source_before_after_equal": true,
+  "source_before_equals_frozen": true,
+  "started_utc": "2026-10-16T05:39:51.621428+00:00",
+  "status": "PASS",
+  "stop_reasons": [],
+  "subreaper_enabled": true,
+  "test_FAIL_names": [],
+  "test_PASS_names": [
+    "TestSelectedEnrollmentConstructorLedgerV6"
+  ],
+  "test_RUN_names": [
+    "TestSelectedEnrollmentConstructorLedgerV6"
+  ],
+  "test_SKIP_names": [],
+  "timeout": false,
+  "top_level_RUN_names": [
+    "TestSelectedEnrollmentConstructorLedgerV6"
+  ],
+  "top_level_pass_count": 1,
+  "unexpected_top_RUN": []
+}

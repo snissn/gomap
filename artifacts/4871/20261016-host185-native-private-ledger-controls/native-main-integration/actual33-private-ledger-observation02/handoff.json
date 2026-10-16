@@ -1,0 +1,42 @@
+{
+  "actual_pgid": 1111706,
+  "actual_pid": 1111706,
+  "command_launched": true,
+  "command_status": "PASS",
+  "completed_utc": "2026-10-16T05:48:16.423656+00:00",
+  "grant_sha256": "7f9e952d0a097f4a148f91ddf7e3c3b528e547008f359c959208cc706f74535d",
+  "joined_group_empty": true,
+  "leases": {
+    "runtime": "released",
+    "source": "released"
+  },
+  "no_followup_runtime": true,
+  "observations": {
+    "F_expression": "F293+D+2K+23P+8M+3S+N+Z+V+A",
+    "allowance_chosen": false,
+    "computed_bytes": 882745,
+    "computed_records": 367,
+    "explicit_private_capacity_observed": true,
+    "five_groups_emitted": true,
+    "numeric_P_emitted": false,
+    "observations_atomic": false,
+    "private_maps_nil_observed": true,
+    "retained_union_complete": false,
+    "same_original_two_index_capture_predicates_observed": true,
+    "selected_constructor_ledger_complete": false,
+    "selected_constructor_obstruction": "cursor observer refusal",
+    "whole_retained_bound_claimed": false
+  },
+  "raw_log_sha256": "8e9d26834de54d2868d54fd7728cd0ba56eeb3a8c8aeb980fe3c5dcc742c9e7a",
+  "result_sha256": "dd8b01d6beef904fb58ae00ecb0dcfb4580f2481cd9709d53a60e2c3992233a1",
+  "root_recorded_tree": "d63bc97e893e518c87687831a6e0a01a357268f2",
+  "runner_sha256": "e63f89de7137250b0251463f55ff7a4d14d211b514d18df27272e849fb403840",
+  "selected_observation_goal_complete": false,
+  "source_and_index_unchanged": true,
+  "source_archive": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-hash-inventory-final/source-final.tar.gz",
+  "source_archive_sha256": "c5699a0ffd003eac5553fc732e37ac9b8732bd90e495e71473c6a13f7c8518b6",
+  "source_files": 10389,
+  "source_manifest_sha256": "8f3a55720f95ec0a9cdf7e18a0360fd09b9385d41a25b28076a3d95157db9889",
+  "test_PASS_count": 1,
+  "test_RUN_count": 1
+}

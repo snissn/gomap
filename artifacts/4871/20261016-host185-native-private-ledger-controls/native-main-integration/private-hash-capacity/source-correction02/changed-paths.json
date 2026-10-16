@@ -1,0 +1,8 @@
+[
+  {
+    "baseline_sha256": "d6b9a11ec3323cfbcb201e04375344c476c1786e58ec5c91aefced5d857d2714",
+    "final_sha256": "e83201279fc824bebc60f60b9cf1736cb010492680500ce389feb9924beddf90",
+    "path": "TreeDB/freelist/private_control_capacity_v6_test.go",
+    "status": "modified"
+  }
+]

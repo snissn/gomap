@@ -1,0 +1,108 @@
+{
+  "adopted_children_reaped": [],
+  "child_RUN_count": 0,
+  "elapsed_seconds": 12.413407466839999,
+  "ended_utc": "2026-10-16T05:41:15.053354+00:00",
+  "exit_code": 0,
+  "group_and_children_empty": true,
+  "leader_joined": true,
+  "missing_named_top_RUN_PASS": [],
+  "name": "race-zipper-selected-ledger",
+  "observed_group_processes": [
+    {
+      "comm": "go",
+      "pgid": 1105786,
+      "pid": 1105786,
+      "ppid": 1102063,
+      "session": 1105786,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1105786,
+      "pid": 1105805,
+      "ppid": 1105786,
+      "session": 1105786,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1105786,
+      "pid": 1105824,
+      "ppid": 1105786,
+      "session": 1105786,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1105786,
+      "pid": 1105957,
+      "ppid": 1105786,
+      "session": 1105786,
+      "state": "S"
+    },
+    {
+      "comm": "link",
+      "pgid": 1105786,
+      "pid": 1105976,
+      "ppid": 1105786,
+      "session": 1105786,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1105786,
+      "pid": 1105992,
+      "ppid": 1105786,
+      "session": 1105786,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1105786,
+      "pid": 1105996,
+      "ppid": 1105786,
+      "session": 1105786,
+      "state": "R"
+    },
+    {
+      "comm": "zipper.test",
+      "pgid": 1105786,
+      "pid": 1106006,
+      "ppid": 1105786,
+      "session": 1105786,
+      "state": "S"
+    }
+  ],
+  "pgid": 1105786,
+  "pid": 1105786,
+  "raw_log_sha256": "53e3f45795cd32d194d6d317a7febac16a3fea254dc953f49ad539834d778917",
+  "remaining_direct_or_adopted_children": [],
+  "remaining_group_members": [],
+  "required_top_level_names": [
+    "TestMaterializedSelectedLedgerOwnerAndPointerMapV6"
+  ],
+  "residual_observed_before_cleanup": false,
+  "signals": [],
+  "source_after_equals_frozen": true,
+  "source_before_after_equal": true,
+  "source_before_equals_frozen": true,
+  "started_utc": "2026-10-16T05:41:02.639950+00:00",
+  "status": "PASS",
+  "stop_reasons": [],
+  "subreaper_enabled": true,
+  "test_FAIL_names": [],
+  "test_PASS_names": [
+    "TestMaterializedSelectedLedgerOwnerAndPointerMapV6"
+  ],
+  "test_RUN_names": [
+    "TestMaterializedSelectedLedgerOwnerAndPointerMapV6"
+  ],
+  "test_SKIP_names": [],
+  "timeout": false,
+  "top_level_RUN_names": [
+    "TestMaterializedSelectedLedgerOwnerAndPointerMapV6"
+  ],
+  "top_level_pass_count": 1,
+  "unexpected_top_RUN": []
+}

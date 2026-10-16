@@ -1,0 +1,93 @@
+{
+  "added_paths": 0,
+  "baseline_archive_sha256": "061ed6dc8c9eab89d371e5e8dfd5e92883d074d654f32221291b538ba323cd7c",
+  "baseline_manifest_sha256": "6c525298d214717016b20b93eafd04c1b19ef0044b6ee32eab443ba376ebe7fd",
+  "changed_paths": 1,
+  "changed_paths_sha256": "0dfb124a7f5e13ffc40ce81aa14a23727e4aed2a1ee2f82ae54844969ecbe665",
+  "changed_source_archive_sha256": "e6c19b5bd8bbcd6bb7afeddd7aa90c165a4658337fb231c8fce2535d90e6fc83",
+  "created_utc": "2026-10-16T05:36:13.686498+00:00",
+  "deleted_paths": 0,
+  "diagnosis_json_sha256": "124c125cd5be579a77edfeefe0a5f0f22128c54ed97dab7f4f56a058bfc7bf8d",
+  "diagnosis_md_sha256": "e339b8f5dee1498bd26fdaf51be35748d20c90312caf9df114dae30a30e49196",
+  "lease": "source/runtime released; awaiting root fixture disposition",
+  "modified_paths": 1,
+  "process_results": [
+    {
+      "exit_code": 0,
+      "group_and_children_empty": true,
+      "leader_joined": true,
+      "name": "normal-freelist-private-capacity",
+      "pgid": 1098979,
+      "pid": 1098979,
+      "source_before_after_equal": true,
+      "timeout": false
+    },
+    {
+      "exit_code": 1,
+      "group_and_children_empty": true,
+      "leader_joined": true,
+      "name": "normal-rootpublication-selected-ledger",
+      "pgid": 1099025,
+      "pid": 1099025,
+      "source_before_after_equal": true,
+      "timeout": false
+    }
+  ],
+  "runtime_summary": {
+    "actual33_executed": false,
+    "all_authorized_pass": false,
+    "all_groups_empty": true,
+    "commands_executed": 2,
+    "commands_not_executed": [
+      "normal-retainedalloc-selected-ledger",
+      "normal-db-selected-ledger",
+      "normal-zipper-selected-ledger",
+      "normal-mvcc-checked-ledger",
+      "race-freelist-private-capacity",
+      "race-rootpublication-selected-ledger",
+      "race-retainedalloc-selected-ledger",
+      "race-db-selected-ledger",
+      "race-zipper-selected-ledger",
+      "race-mvcc-checked-ledger"
+    ],
+    "completed_utc": "2026-10-16T05:34:44.934363+00:00",
+    "native_publication_runtime": false,
+    "public_status": "Q32 RED/ACK0; no allowance",
+    "results": [
+      {
+        "exit_code": 0,
+        "name": "normal-freelist-private-capacity",
+        "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-hash-capacity/source-correction02/controls/normal-freelist-private-capacity/result.json",
+        "status": "PASS"
+      },
+      {
+        "exit_code": 1,
+        "name": "normal-rootpublication-selected-ledger",
+        "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-hash-capacity/source-correction02/controls/normal-rootpublication-selected-ledger/result.json",
+        "status": "STOP"
+      }
+    ],
+    "source_files": 10389,
+    "source_manifest_sha256": "d0cba17d5cef5666f2856cc9bf0278b0ec7eedcd9946b2aadf5ffaac344d3247",
+    "source_still_frozen": true,
+    "stopped_at_first_failure": true,
+    "top_pass_normal": 20,
+    "top_pass_race": 0
+  },
+  "selections": {
+    "root-private-clone-admission-addendum.md": "f6562e909c70c89852736c54f5a0a85c3eb2cc7c45e00cfb19c59a5abf5799f3",
+    "root-private-focused-fixture-repair.md": "5edc42e6133f4b7a3d3f0c611bada23e48fa7b6f050c9cd482c01085e3b77c06",
+    "root-private-hash-capacity-selection.md": "063f85d21e071fb4bf20d79c00af6d1a601dc6c6db15aa0baa04e358bef7cb32",
+    "root-private-ledger-correction-and-controls.md": "cac20b5e0ca11c9f2fe9d6e255b178654ac383d93918f25ac76cb3fc7be84202",
+    "root-selected-ledger-manifest-addendum.md": "71fdc8eee2b444378c7516f4a7f8bcbb994e193b740f8d76b8f5d11f9bc29cef",
+    "root-selected-ledger-zipper-access-addendum.md": "eacc4b3cf83d2de987e7bb6cc4a14af8642a104c7527c715ce1138714236fc53",
+    "root-selected-private-ledger-addendum.md": "57acdd9e31ec65f32d7164883ff11da7209838037ac340466a681b77444c57ec"
+  },
+  "source_archive_sha256": "4ca1cb5dbd75b3ddcf40c10c4f99dd273572716032ebe4ace2e1240cffd34e51",
+  "source_delta_sha256": "37272a6bc03539c622ad2a50b978b8c68cf060d5885021a7a62984af10145e67",
+  "source_equals_verified_archive": true,
+  "source_files": 10389,
+  "source_live_recheck_equal": true,
+  "source_manifest_sha256": "d0cba17d5cef5666f2856cc9bf0278b0ec7eedcd9946b2aadf5ffaac344d3247",
+  "status": "STOP on second focused call; no further edits/runtime"
+}

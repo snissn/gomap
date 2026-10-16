@@ -1,0 +1,359 @@
+{
+  "verdict": "ACCEPT",
+  "scope": "Independent evidence acceptance of the selected focused normal/race controls on correction03, composed with explicitly attributed unchanged normal-freelist reuse; not native publication qualification.",
+  "reviewer": "/root/ordinary_review",
+  "model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "mode": "INTERNAL_SUBAGENT_REVIEW",
+  "hosted_review_unavailability_reason": "Hosted manual review cannot pin the explicitly required model; internal independent exact-model review was selected.",
+  "candidate_edits_by_reviewer": false,
+  "runtime_executed_by_reviewer": false,
+  "children_spawned": false,
+  "created_utc": "2026-10-16T05:46:10.128448+00:00",
+  "source": {
+    "manifest_sha256": "d6a090b25f8df158f0f3e830c009cabe6959b65339f9528eedbae63e8e036798",
+    "archive_sha256": "3f65af587c0df94cd89fa82c98196d5d1da997782ca882b3ca8dfb279e97effa",
+    "files": 10389,
+    "source_acceptance_carried_from": {
+      "path": "native-decision/private-hash-directory-fixture-review.md",
+      "sha256": "c5851ec8e237ab32784181e2615c3e8c3f0bc02cdc26162162c0e84063168159"
+    },
+    "current_archive_reverification": "Prior independent source review retained; this task independently verified all per-command before/after manifests equal the accepted frozen manifest. No mutable worktree inspection or new whole archive extraction.",
+    "index_not_launch_bound": true
+  },
+  "bindings": {
+    "native-main-integration/private-hash-capacity/source-correction03/artifact-manifest.json": "0b06aebf6e9367589f5c95e0244afbbd803a0fa833003ec1f77b40d46351bba6",
+    "native-main-integration/private-hash-capacity/source-correction03/run-controls.py": "42529cf1b87238af834819c32201638636cf6d203dc4b9e9cebff8ba43253337",
+    "native-main-integration/private-hash-capacity/source-correction03/proposed-commands.json": "d7102c02cff06a898629114d9ff77f3ae909e12a2161a67e39e111c68d48f0b4",
+    "native-main-integration/private-hash-capacity/source-correction03/controls/identity.json": "4aa0c28e80c4ae892392776547fddc3d98f39444fde5627d30fa698dacf4d508",
+    "native-main-integration/private-hash-capacity/source-correction03/controls/summary.json": "7e8fef1752925b98929978b451985af5783e63b4f7dd74021e8055b96e395347",
+    "native-main-integration/private-hash-capacity/source-correction03/controls/final-derived-receipt.json": "f07d70cd961207b5ef10eefe81237dd0ed12f65100426a238148e794007cbd39",
+    "native-main-integration/private-hash-capacity/source-correction03/HANDOFF.md": "b5dd990537388822e36887584830d3a9c84ddcb9dd5c5c7e03a096ee4bc5e26d",
+    "native-main-integration/private-hash-capacity/source-correction03/test-inventory.json": "55294073749a3b10d1bb681ab547d80a398a399cd87f13d81ea9d4ace863ce76",
+    "native-main-integration/private-hash-source-correction03-root-verification.json": "63ca0d127819125998f3d57987fdc139c3dabd2188b89641c186ebe9e156201d"
+  },
+  "verified_artifact_manifest_entries": 98,
+  "checks": [
+    "All 98 artifact manifest payloads independently rehashed with matching byte counts.",
+    "All eleven actual argv/cwd/required names/environment overrides exactly match the eleven selected proposals and grant.",
+    "Go1.26.3 go/compiler binary hashes independently matched identity; selected ten test file hashes and selection file hashes matched.",
+    "Every raw top/child RUN has exactly one PASS; anchored top inventory exact; no FAIL/SKIP/race report/panic or duplicate RUN.",
+    "All eleven exit zero, leaders joined, original groups and direct/adopted children empty, no signals, timeout, residual-process intervention or stop reasons.",
+    "Per-call source-before/source-after equal accepted d6a090 manifest; sequential recorded start/end order without overlapping selected calls.",
+    "Compared complete 10389-file correction02/03 manifests: exactly rootpublication selected_manifest_ledger_test.go differs; copied reused payloads equal originals.",
+    "Reviewed fail-closed runner launch, timeout/group kill/reaping and raw validation; independently reproduced its one summary-only count error."
+  ],
+  "actual_calls": [
+    {
+      "name": "normal-rootpublication-selected-ledger",
+      "top_pass": 3,
+      "child_run_pass": 18,
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "./TreeDB/internal/rootpublication",
+        "-run",
+        "^(TestNativeIndexObserverOriginalBackingV6|TestSelectedEmptyManifestConstructorLedgerV6|TestSelectedSetAllocationPairsV6)$",
+        "-count=1",
+        "-v",
+        "-timeout=3m"
+      ],
+      "raw_sha256": "94b99cb7ec47fa97f73363e0d1367feb32d22bd7b216a7cea6a7c17effe94b09",
+      "command_sha256": "c40d26ef5d973c500284b9ef1f29101327cb0f625750f57371363c60d9d889e0",
+      "result_sha256": "1168d072e88b88d7def081d333681e329d769829b04f1f7264ba155643693fcb",
+      "process_sha256": "3c52e08b3c60a9bde0d7aa8bc1b9a0c1ecd9f93a7ae8e90a58fa69377226461e",
+      "environment_sha256": "1a5331687cb67bd1d8b7dd8c12d6b8f677d1951a86c21dd440d8b6adaf742678",
+      "source_before_sha256": "d6a090b25f8df158f0f3e830c009cabe6959b65339f9528eedbae63e8e036798",
+      "source_after_sha256": "d6a090b25f8df158f0f3e830c009cabe6959b65339f9528eedbae63e8e036798",
+      "joined_empty_without_intervention": true
+    },
+    {
+      "name": "normal-retainedalloc-selected-ledger",
+      "top_pass": 1,
+      "child_run_pass": 0,
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "./TreeDB/internal/retainedalloc",
+        "-run",
+        "^(TestSelectedEnrollmentConstructorLedgerV6)$",
+        "-count=1",
+        "-v",
+        "-timeout=3m"
+      ],
+      "raw_sha256": "00368da21a5ee05ffdb9bd67049418628fb74604ddbb8f6108a8409d90e54714",
+      "command_sha256": "fbe7821b96fe7168685c8d96b314673fdc2f54d1dd14bc300d06198014ed6180",
+      "result_sha256": "722b267f2e1e43b653d0abf9d2c47467aea0c4bd29bef3fbc7f5ca63e5d1e03d",
+      "process_sha256": "37024825cf8ea88eb28b12008dc7c4eef4bc1641ec669383a96cc268c4e87112",
+      "environment_sha256": "6920547f0ab8b52f708fef30fb7af63835f4dc9590889289b8938698f00bff4f",
+      "source_before_sha256": "d6a090b25f8df158f0f3e830c009cabe6959b65339f9528eedbae63e8e036798",
+      "source_after_sha256": "d6a090b25f8df158f0f3e830c009cabe6959b65339f9528eedbae63e8e036798",
+      "joined_empty_without_intervention": true
+    },
+    {
+      "name": "normal-db-selected-ledger",
+      "top_pass": 3,
+      "child_run_pass": 2,
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "./TreeDB/db",
+        "-run",
+        "^(TestNativeIndexObserverOriginalCapturesV6|TestNativeSelectedManifestTransferredHolderV6|TestNativeSelectedSetTransferredHoldersV6)$",
+        "-count=1",
+        "-v",
+        "-timeout=3m"
+      ],
+      "raw_sha256": "ced62de71e3e5adb088ad5c7bdd655dfdf5c20fb0b072680615898579eb3fb03",
+      "command_sha256": "94ee85a0ab5e1dd0b90631c8cf209a151bf180793c3ea91526fc9a5cd771f56a",
+      "result_sha256": "43ce5692a779a23f3b4d6262f136c361e11ecc5d5ec85792b66cc399220405ed",
+      "process_sha256": "2ca306885bbfb81a7c31f8f7d395f6dfe12d380a3d9c7c5a2d0f0d9ac1cfd3a6",
+      "environment_sha256": "49b03feb029321b2584777c67244c0868afcb0b590579d63df1ce3a95ff1449d",
+      "source_before_sha256": "d6a090b25f8df158f0f3e830c009cabe6959b65339f9528eedbae63e8e036798",
+      "source_after_sha256": "d6a090b25f8df158f0f3e830c009cabe6959b65339f9528eedbae63e8e036798",
+      "joined_empty_without_intervention": true
+    },
+    {
+      "name": "normal-zipper-selected-ledger",
+      "top_pass": 1,
+      "child_run_pass": 0,
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "./TreeDB/zipper",
+        "-run",
+        "^(TestMaterializedSelectedLedgerOwnerAndPointerMapV6)$",
+        "-count=1",
+        "-v",
+        "-timeout=3m"
+      ],
+      "raw_sha256": "2f90b2d673ebf2e4d39db5e0fb2df28b2a059da4ee93cb37b263f77ff4b6d60a",
+      "command_sha256": "358c8b5f0f60a19d87a476c4aef23d7b7a34d7249428157c2079b0c89a4ba44d",
+      "result_sha256": "a0339062d147140e898a247994ce0506c7af81235f4d581a7597258eb4571d02",
+      "process_sha256": "0926c0d20e321a9f1b9e6d7abc7afd3b34c84a8e188eca2065c4d8058c11a2b1",
+      "environment_sha256": "900b177e89df896b098fe92ee9f3c1da4599d5f1a7924bce94d3cadd619664f5",
+      "source_before_sha256": "d6a090b25f8df158f0f3e830c009cabe6959b65339f9528eedbae63e8e036798",
+      "source_after_sha256": "d6a090b25f8df158f0f3e830c009cabe6959b65339f9528eedbae63e8e036798",
+      "joined_empty_without_intervention": true
+    },
+    {
+      "name": "normal-mvcc-checked-ledger",
+      "top_pass": 2,
+      "child_run_pass": 26,
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "./TreeDB/mvcc",
+        "-run",
+        "^(TestNativeSelectedConstructorLedgerCheckedArithmeticV6|TestNativeSelectedSetLedgerCombinationsV6)$",
+        "-count=1",
+        "-v",
+        "-timeout=3m"
+      ],
+      "raw_sha256": "11953981ae50f1025988d41f9ba8012719e70658fc9bf819e48dab266ea6bf35",
+      "command_sha256": "0953f56b8d88efb8e493285e23bb0036a3a82bd3ff6fb698e6f9bfca60a4adf0",
+      "result_sha256": "edee6b62d3f60539e3d1f95292b5b4b4ce4f9bbfa055dcf1216c8558637bf29b",
+      "process_sha256": "dc15efb2a69e860f81005a729da5653070a98366046b7a0e234f1580bbec5ddd",
+      "environment_sha256": "2959d4e192f18c26fa4189cb4aed78c13da7f8d209c507ea79277a436a8e96e9",
+      "source_before_sha256": "d6a090b25f8df158f0f3e830c009cabe6959b65339f9528eedbae63e8e036798",
+      "source_after_sha256": "d6a090b25f8df158f0f3e830c009cabe6959b65339f9528eedbae63e8e036798",
+      "joined_empty_without_intervention": true
+    },
+    {
+      "name": "race-freelist-private-capacity",
+      "top_pass": 18,
+      "child_run_pass": 79,
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "-race",
+        "./TreeDB/freelist",
+        "-run",
+        "^(TestPrivateCapacitySetSemanticsAndScalingV6|TestPrivateCapacityCollisionsOverflowAndUnsupportedV6|TestPrivateCapacityEveryTurnRefusalAndCancelV6|TestPrivateCapacitySnapshotIndependentPlanAndPeakV6|TestPrivateCapacityBoundCaptureCanonicalAndStaleV6|TestPrivateCapacityPartialCloneAdmissionCancelV6|TestPrivateCapacityPublishedCleanupPreservesCanonicalV6|TestPrivateCapacityOversizedSnapshotAndAllocationV6|TestPrivateCapacitySinkDuplicateAndCommittedResumeV6|TestPrivateCapacityAbandonedVectorAdmissionAndCancelV6|TestCanonicalMaterializationWholeConstructorMatchesOrdinaryV1|TestCanonicalMaterializationRefusalPreservesOriginalClaimV1|TestPrivateCOWPreparationUsesOriginalSlotOnlyAtAdoptionV6|TestPrivateCOWPreparationCannotAdoptOverRealForegroundWriterV6|TestPrivateCOWAtomicAdoptionActivationRefusesBeforeSlotOrLedgerEffectsV6|TestPrivateCOWAtomicAdoptionCannotReplaceForegroundTxnV6|TestPrivateCOWMetadataClaimLeavesSharedDATAWithOriginalTxnV6|TestPrivateCOWLateDATAClaimConflictHasNoPartialEffectsV6)$",
+        "-count=1",
+        "-v",
+        "-timeout=3m"
+      ],
+      "raw_sha256": "d6272c8514183600515dc2cdd49a25f9d2fdacd234569944d67b9423e1137268",
+      "command_sha256": "944f02d8b5fd7654b368d5ec0123a5f2adeaf6720df9cd982b24d44b8e4838c5",
+      "result_sha256": "8e296bd66157f3645568222369d13bfa369a1042e39844e8a676e09012ad34d0",
+      "process_sha256": "d05ca36b13a0b50b20113ec85eea488f3c46a9eecf0a0359952895a26b7db0d1",
+      "environment_sha256": "85c342df58e8d4a2215d0d7cb1eb39a9e1e2ed648ab2f8d0f3c55d854004c3de",
+      "source_before_sha256": "d6a090b25f8df158f0f3e830c009cabe6959b65339f9528eedbae63e8e036798",
+      "source_after_sha256": "d6a090b25f8df158f0f3e830c009cabe6959b65339f9528eedbae63e8e036798",
+      "joined_empty_without_intervention": true
+    },
+    {
+      "name": "race-rootpublication-selected-ledger",
+      "top_pass": 3,
+      "child_run_pass": 18,
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "-race",
+        "./TreeDB/internal/rootpublication",
+        "-run",
+        "^(TestNativeIndexObserverOriginalBackingV6|TestSelectedEmptyManifestConstructorLedgerV6|TestSelectedSetAllocationPairsV6)$",
+        "-count=1",
+        "-v",
+        "-timeout=3m"
+      ],
+      "raw_sha256": "2e333f852b7d9a8dd72a93b7140b95d043efcd289c214cbf0abe9d5e480067a6",
+      "command_sha256": "03cf97163c888c660bc2cda1d6a0035ae993123a06e709ce3792b11103f405be",
+      "result_sha256": "841825b0a545ea4009abbfe7e8b9e6a879d66853a233cd82186660dc44d89724",
+      "process_sha256": "7cca1b6807cd943fc5a76e221e041e08975f26867b21930cef25dd6a989b9f2c",
+      "environment_sha256": "818fa68262b607ea7e5b0720f6ee50908d65cc9684177a25470fc013781bf435",
+      "source_before_sha256": "d6a090b25f8df158f0f3e830c009cabe6959b65339f9528eedbae63e8e036798",
+      "source_after_sha256": "d6a090b25f8df158f0f3e830c009cabe6959b65339f9528eedbae63e8e036798",
+      "joined_empty_without_intervention": true
+    },
+    {
+      "name": "race-retainedalloc-selected-ledger",
+      "top_pass": 1,
+      "child_run_pass": 0,
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "-race",
+        "./TreeDB/internal/retainedalloc",
+        "-run",
+        "^(TestSelectedEnrollmentConstructorLedgerV6)$",
+        "-count=1",
+        "-v",
+        "-timeout=3m"
+      ],
+      "raw_sha256": "0914e908a45b313ba5015782defd759830aacdc4be5fb5d06bc8473534b31c3d",
+      "command_sha256": "e87d5109b38d70aab5b4eed86e0aac7b8eaf20304fa0b29fc5c8eea873f75fff",
+      "result_sha256": "7ff6eb28b16f53ec486b1fc3eec7afbae2483e370aa8a42a28364bc180a11d1d",
+      "process_sha256": "1e5b175f10f76a9af71b2a17d9f762a5eea0bd1e938b0bc65efbd81e48643c9c",
+      "environment_sha256": "2786b3c5ca73c7b999359528cc4ba8ec6b5e6e9be832bd64b5f0c65d298deb93",
+      "source_before_sha256": "d6a090b25f8df158f0f3e830c009cabe6959b65339f9528eedbae63e8e036798",
+      "source_after_sha256": "d6a090b25f8df158f0f3e830c009cabe6959b65339f9528eedbae63e8e036798",
+      "joined_empty_without_intervention": true
+    },
+    {
+      "name": "race-db-selected-ledger",
+      "top_pass": 3,
+      "child_run_pass": 2,
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "-race",
+        "./TreeDB/db",
+        "-run",
+        "^(TestNativeIndexObserverOriginalCapturesV6|TestNativeSelectedManifestTransferredHolderV6|TestNativeSelectedSetTransferredHoldersV6)$",
+        "-count=1",
+        "-v",
+        "-timeout=3m"
+      ],
+      "raw_sha256": "e912289ac510234969021bc01ff84ae42cdd9c51abd90ba4a6782ba3d49d9bb6",
+      "command_sha256": "a01a059581b921416b2289a48c2a624c2f89efbdf211465e02701652d457f6d0",
+      "result_sha256": "59ebaefa9009aba4602b7221fcea252f407b79383593c6854f531fd1b8290382",
+      "process_sha256": "8d92da77f470fea25562008b033586845de9cbd8aab82fe667f8997d43084fa5",
+      "environment_sha256": "5c41e7528c48a7bd5d3c4a14de62baabaccf2128a66b3d21afb3d1035de54e38",
+      "source_before_sha256": "d6a090b25f8df158f0f3e830c009cabe6959b65339f9528eedbae63e8e036798",
+      "source_after_sha256": "d6a090b25f8df158f0f3e830c009cabe6959b65339f9528eedbae63e8e036798",
+      "joined_empty_without_intervention": true
+    },
+    {
+      "name": "race-zipper-selected-ledger",
+      "top_pass": 1,
+      "child_run_pass": 0,
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "-race",
+        "./TreeDB/zipper",
+        "-run",
+        "^(TestMaterializedSelectedLedgerOwnerAndPointerMapV6)$",
+        "-count=1",
+        "-v",
+        "-timeout=3m"
+      ],
+      "raw_sha256": "53e3f45795cd32d194d6d317a7febac16a3fea254dc953f49ad539834d778917",
+      "command_sha256": "f2021c7c022e6a68383ede183ee2ea387818c7372f05db8d9cace4410b1dad85",
+      "result_sha256": "0a3e57115d8b07ace76ec01e3a2113ec7f143cf5412f0dd5b2fc2e9adbc1c274",
+      "process_sha256": "ea95aa3284aba283e348911d5d5541da5f97c11bc365babb39d203bc6308da63",
+      "environment_sha256": "3f438252655ffe95b3bb871732ea1f7e4c4c4a08317ead365e0ab7d65991a069",
+      "source_before_sha256": "d6a090b25f8df158f0f3e830c009cabe6959b65339f9528eedbae63e8e036798",
+      "source_after_sha256": "d6a090b25f8df158f0f3e830c009cabe6959b65339f9528eedbae63e8e036798",
+      "joined_empty_without_intervention": true
+    },
+    {
+      "name": "race-mvcc-checked-ledger",
+      "top_pass": 2,
+      "child_run_pass": 26,
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "-race",
+        "./TreeDB/mvcc",
+        "-run",
+        "^(TestNativeSelectedConstructorLedgerCheckedArithmeticV6|TestNativeSelectedSetLedgerCombinationsV6)$",
+        "-count=1",
+        "-v",
+        "-timeout=3m"
+      ],
+      "raw_sha256": "d504ca52acc841fda98b5e6cf6dc16ef8421787bea7275c5e10c26f0753b2949",
+      "command_sha256": "e764745d6e13ce968a82cfd4050a2392ec076cc4da80f78974db687e25173547",
+      "result_sha256": "8ce2d07af4c0fb65ae985595d1a12347839b6f0bf67380816f3eab51af30a7a3",
+      "process_sha256": "043c9e643ae09133e4b85429a76107cef403a0b0b76666f068631825ff54cb17",
+      "environment_sha256": "ab21aff04d89165b498747ad509d4e1658dd5d7a460502e84b1e8de7a328b3a2",
+      "source_before_sha256": "d6a090b25f8df158f0f3e830c009cabe6959b65339f9528eedbae63e8e036798",
+      "source_after_sha256": "d6a090b25f8df158f0f3e830c009cabe6959b65339f9528eedbae63e8e036798",
+      "joined_empty_without_intervention": true
+    }
+  ],
+  "totals": {
+    "new_calls": 11,
+    "direct_normal": {
+      "top_pass": 10,
+      "child_pass": 46
+    },
+    "race": {
+      "top_pass": 28,
+      "child_pass": 125
+    },
+    "normal_including_reuse": {
+      "top_pass": 28,
+      "child_pass": 125
+    }
+  },
+  "reuse": {
+    "rerun": false,
+    "source_manifest_sha256": "d0cba17d5cef5666f2856cc9bf0278b0ec7eedcd9946b2aadf5ffaac344d3247",
+    "result_sha256": "3a234e01fce895f44163563db1cb13af3321f8cde8d72d760d37387857a0030b",
+    "raw_sha256": "38be0632fc119724e47792a2d821d5c179f85813f1d16f0c0b171019e3b27965",
+    "tops": 18,
+    "children": 79,
+    "applicability": "All production and freelist tests unchanged by complete source-manifest comparison; sole differing path belongs to rootpublication test package. Explicitly selected reuse, not relabeled as correction03 execution."
+  },
+  "findings": [
+    {
+      "id": "M1",
+      "severity": "reporting-only",
+      "location": "source-correction03/run-controls.py final summary all_authorized_pass",
+      "cause": "Final summary tests len(results)==12 although launch assertion, proposals and authorization correctly contain eleven calls.",
+      "disposition": "Raw false flag and original runner retained. Derived receipt independently reconciles exactly eleven selected/executed PASS calls; no rerun, sample exclusion, source change, threshold waiver, or hidden runtime failure."
+    }
+  ],
+  "blocking_findings": [],
+  "limits": [
+    "Focused constructor, admission/refusal/cancellation, allocator-private primitives, finite cleanup, scalar/pair/dedup/checked-ledger controls only. DB controls use original captures and synthetic holder geometry, not genuine native activation/publication.",
+    "No current-source actual33 execution, complete selected real retained-union measurement, aggregate F or Finish proof, numeric allowance, Q32/1MiB fit, public native publication, platform/performance qualification or CI/mergeability acceptance.",
+    "Original prior failure packets and source-only review remain historical records.",
+    "Q32 RED/ACK0; no allowance chosen."
+  ],
+  "lease_released": true
+}

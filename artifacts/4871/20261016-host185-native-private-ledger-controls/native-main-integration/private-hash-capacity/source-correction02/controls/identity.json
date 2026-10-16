@@ -1,0 +1,36 @@
+{
+  "archive": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-hash-capacity/source-correction02/source-frozen.tar.gz",
+  "archive_sha256": "4ca1cb5dbd75b3ddcf40c10c4f99dd273572716032ebe4ace2e1240cffd34e51",
+  "archive_verified_files": 10389,
+  "compile_binary_sha256": "3bb421d581f60b9ab48c2c73adf5c018557e89af32ad018d9c4417afa4bf90c1",
+  "go_binary": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+  "go_binary_sha256": "d68b7abbc40d0844f673f6cf06ae3cded225c50437c6454fa37ef178d079fe65",
+  "goroot_VERSION": "go1.26.3\ntime 2026-05-04T20:36:18Z\n",
+  "grant_sha256": "5edc42e6133f4b7a3d3f0c611bada23e48fa7b6f050c9cd482c01085e3b77c06",
+  "proposed_commands_sha256": "4c3dbf26d178f9f5295140f5b6f2d58ddd0548ab9d888f0b44c845cae216cea0",
+  "runner_pgid": 1098884,
+  "runner_pid": 1098884,
+  "runner_sha256": "d84d43f71b36a2892ad102c3ba7bdca41799096a3419178d1c547f39cf595968",
+  "selected_test_files": {
+    "TreeDB/db/native_index_observer_v6_test.go": "d467bc1cbbd02219ba9c67cd9b49d5957c1058e16dc13b72c87dfd720c3b2639",
+    "TreeDB/db/native_selected_ledger_v6_test.go": "f8f70732d60ebfa169b4ab877b70657f34b7dba17ef83f7dddb416d0e4bf4b4a",
+    "TreeDB/freelist/allocator_preparation_work_v6_test.go": "17b104c537f03f45848b1e06b7cc3d03cd45f677ee05ef93d6c2035a8ff123d0",
+    "TreeDB/freelist/generation_v1_materialize_work_test.go": "b89c2118b87e82fb1a753585d970f53df022a4b8ad6b7cd43808374a980c261b",
+    "TreeDB/freelist/private_control_capacity_v6_test.go": "e83201279fc824bebc60f60b9cf1736cb010492680500ce389feb9924beddf90",
+    "TreeDB/internal/retainedalloc/selected_enrollment_for_test_v6_test.go": "2f7aca04e2c57850b281b3077cbf0e4aa7a5dd35d17efe17a6f2ac1537996745",
+    "TreeDB/internal/rootpublication/native_index_observer_v6_test.go": "95f00f734c7403864838a723f3c640f24bb6a3c677b3f5181f676ba3260433b2",
+    "TreeDB/internal/rootpublication/selected_manifest_ledger_test.go": "16f48e2dc70b6384d8833a8c1d95b56c0f45b4300086b4fd22b0811fc8405bc9",
+    "TreeDB/mvcc/native_selected_ledger_test.go": "3251575df7f8c112726d5f57b3d0e4b9bc65e69fc08e5cf94eabfe05d6f5cf33",
+    "TreeDB/zipper/materialized_selected_ledger_test.go": "5ebe51b4dc158c49b3a538f377e2bf641f87b8b8f83bcd0f7beed9910c952c36"
+  },
+  "selection_bindings": {
+    "root-private-clone-admission-addendum.md": "f6562e909c70c89852736c54f5a0a85c3eb2cc7c45e00cfb19c59a5abf5799f3",
+    "root-private-focused-fixture-repair.md": "5edc42e6133f4b7a3d3f0c611bada23e48fa7b6f050c9cd482c01085e3b77c06",
+    "root-private-hash-capacity-selection.md": "063f85d21e071fb4bf20d79c00af6d1a601dc6c6db15aa0baa04e358bef7cb32",
+    "root-private-ledger-correction-and-controls.md": "cac20b5e0ca11c9f2fe9d6e255b178654ac383d93918f25ac76cb3fc7be84202",
+    "root-selected-ledger-manifest-addendum.md": "71fdc8eee2b444378c7516f4a7f8bcbb994e193b740f8d76b8f5d11f9bc29cef",
+    "root-selected-ledger-zipper-access-addendum.md": "eacc4b3cf83d2de987e7bb6cc4a14af8642a104c7527c715ce1138714236fc53",
+    "root-selected-private-ledger-addendum.md": "57acdd9e31ec65f32d7164883ff11da7209838037ac340466a681b77444c57ec"
+  },
+  "subreaper_verified": true
+}

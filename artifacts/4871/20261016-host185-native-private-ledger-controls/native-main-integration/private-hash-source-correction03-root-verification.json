@@ -1,0 +1,153 @@
+{
+  "verified_utc": "2026-10-16T05:42:59.206252+00:00",
+  "source_manifest_sha256": "d6a090b25f8df158f0f3e830c009cabe6959b65339f9528eedbae63e8e036798",
+  "source_archive_sha256": "3f65af587c0df94cd89fa82c98196d5d1da997782ca882b3ca8dfb279e97effa",
+  "source_files": 10389,
+  "changed_paths": [
+    "TreeDB/internal/rootpublication/selected_manifest_ledger_test.go"
+  ],
+  "source_archive_and_runtime_bindings_verified": true,
+  "process_groups_joined_empty_no_intervention": true,
+  "index_not_launch_bound": true,
+  "result": "PASS",
+  "commands_executed": 11,
+  "unexecuted_commands": 0,
+  "raw_summary_all_authorized_pass": false,
+  "summary_discrepancy": "Raw summary retains false from stale literal 12; all 11 authorized calls are independently verified below.",
+  "reused_normal_freelist": true,
+  "reused_result_sha256": "3a234e01fce895f44163563db1cb13af3321f8cde8d72d760d37387857a0030b",
+  "rows": [
+    {
+      "name": "normal-rootpublication-selected-ledger",
+      "top_RUN": 3,
+      "top_PASS": 3,
+      "top_FAIL": [],
+      "child_RUN": 18,
+      "elapsed_seconds": 7.6277392050251365,
+      "raw_sha256": "94b99cb7ec47fa97f73363e0d1367feb32d22bd7b216a7cea6a7c17effe94b09",
+      "result_sha256": "1168d072e88b88d7def081d333681e329d769829b04f1f7264ba155643693fcb",
+      "pid": 1102088,
+      "pgid": 1102088
+    },
+    {
+      "name": "normal-retainedalloc-selected-ledger",
+      "top_RUN": 1,
+      "top_PASS": 1,
+      "top_FAIL": [],
+      "child_RUN": 0,
+      "elapsed_seconds": 1.1501109562814236,
+      "raw_sha256": "00368da21a5ee05ffdb9bd67049418628fb74604ddbb8f6108a8409d90e54714",
+      "result_sha256": "722b267f2e1e43b653d0abf9d2c47467aea0c4bd29bef3fbc7f5ca63e5d1e03d",
+      "pid": 1102397,
+      "pgid": 1102397
+    },
+    {
+      "name": "normal-db-selected-ledger",
+      "top_RUN": 3,
+      "top_PASS": 3,
+      "top_FAIL": [],
+      "child_RUN": 2,
+      "elapsed_seconds": 45.576004724018276,
+      "raw_sha256": "ced62de71e3e5adb088ad5c7bdd655dfdf5c20fb0b072680615898579eb3fb03",
+      "result_sha256": "43ce5692a779a23f3b4d6262f136c361e11ecc5d5ec85792b66cc399220405ed",
+      "pid": 1102467,
+      "pgid": 1102467
+    },
+    {
+      "name": "normal-zipper-selected-ledger",
+      "top_RUN": 1,
+      "top_PASS": 1,
+      "top_FAIL": [],
+      "child_RUN": 0,
+      "elapsed_seconds": 8.432830813340843,
+      "raw_sha256": "2f90b2d673ebf2e4d39db5e0fb2df28b2a059da4ee93cb37b263f77ff4b6d60a",
+      "result_sha256": "a0339062d147140e898a247994ce0506c7af81235f4d581a7597258eb4571d02",
+      "pid": 1103168,
+      "pgid": 1103168
+    },
+    {
+      "name": "normal-mvcc-checked-ledger",
+      "top_RUN": 2,
+      "top_PASS": 2,
+      "top_FAIL": [],
+      "child_RUN": 26,
+      "elapsed_seconds": 15.707469154149294,
+      "raw_sha256": "11953981ae50f1025988d41f9ba8012719e70658fc9bf819e48dab266ea6bf35",
+      "result_sha256": "edee6b62d3f60539e3d1f95292b5b4b4ce4f9bbfa055dcf1216c8558637bf29b",
+      "pid": 1103331,
+      "pgid": 1103331
+    },
+    {
+      "name": "race-freelist-private-capacity",
+      "top_RUN": 18,
+      "top_PASS": 18,
+      "top_FAIL": [],
+      "child_RUN": 79,
+      "elapsed_seconds": 5.732191097922623,
+      "raw_sha256": "d6272c8514183600515dc2cdd49a25f9d2fdacd234569944d67b9423e1137268",
+      "result_sha256": "8e296bd66157f3645568222369d13bfa369a1042e39844e8a676e09012ad34d0",
+      "pid": 1103779,
+      "pgid": 1103779
+    },
+    {
+      "name": "race-rootpublication-selected-ledger",
+      "top_RUN": 3,
+      "top_PASS": 3,
+      "top_FAIL": [],
+      "child_RUN": 18,
+      "elapsed_seconds": 13.143408557865769,
+      "raw_sha256": "2e333f852b7d9a8dd72a93b7140b95d043efcd289c214cbf0abe9d5e480067a6",
+      "result_sha256": "841825b0a545ea4009abbfe7e8b9e6a879d66853a233cd82186660dc44d89724",
+      "pid": 1103902,
+      "pgid": 1103902
+    },
+    {
+      "name": "race-retainedalloc-selected-ledger",
+      "top_RUN": 1,
+      "top_PASS": 1,
+      "top_FAIL": [],
+      "child_RUN": 0,
+      "elapsed_seconds": 3.3788528009317815,
+      "raw_sha256": "0914e908a45b313ba5015782defd759830aacdc4be5fb5d06bc8473534b31c3d",
+      "result_sha256": "7ff6eb28b16f53ec486b1fc3eec7afbae2483e370aa8a42a28364bc180a11d1d",
+      "pid": 1104175,
+      "pgid": 1104175
+    },
+    {
+      "name": "race-db-selected-ledger",
+      "top_RUN": 3,
+      "top_PASS": 3,
+      "top_FAIL": [],
+      "child_RUN": 2,
+      "elapsed_seconds": 65.49894612189382,
+      "raw_sha256": "e912289ac510234969021bc01ff84ae42cdd9c51abd90ba4a6782ba3d49d9bb6",
+      "result_sha256": "59ebaefa9009aba4602b7221fcea252f407b79383593c6854f531fd1b8290382",
+      "pid": 1104249,
+      "pgid": 1104249
+    },
+    {
+      "name": "race-zipper-selected-ledger",
+      "top_RUN": 1,
+      "top_PASS": 1,
+      "top_FAIL": [],
+      "child_RUN": 0,
+      "elapsed_seconds": 12.413407466839999,
+      "raw_sha256": "53e3f45795cd32d194d6d317a7febac16a3fea254dc953f49ad539834d778917",
+      "result_sha256": "0a3e57115d8b07ace76ec01e3a2113ec7f143cf5412f0dd5b2fc2e9adbc1c274",
+      "pid": 1105786,
+      "pgid": 1105786
+    },
+    {
+      "name": "race-mvcc-checked-ledger",
+      "top_RUN": 2,
+      "top_PASS": 2,
+      "top_FAIL": [],
+      "child_RUN": 26,
+      "elapsed_seconds": 21.82833530427888,
+      "raw_sha256": "d504ca52acc841fda98b5e6cf6dc16ef8421787bea7275c5e10c26f0753b2949",
+      "result_sha256": "8ce2d07af4c0fb65ae985595d1a12347839b6f0bf67380816f3eab51af30a7a3",
+      "pid": 1106174,
+      "pgid": 1106174
+    }
+  ]
+}

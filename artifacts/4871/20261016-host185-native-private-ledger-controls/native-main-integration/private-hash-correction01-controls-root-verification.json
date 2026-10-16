@@ -1,0 +1,26 @@
+{
+  "verified_utc": "2026-10-16T05:29:49.256739+00:00",
+  "source_manifest_sha256": "6c525298d214717016b20b93eafd04c1b19ef0044b6ee32eab443ba376ebe7fd",
+  "runner_sha256": "1d7cfa7a753eb277f33cb3e0f607b6a591eb9085e1b8001fc4de3d16cf031675",
+  "raw_sha256": "0729f4583dd3f0968823614b2a495c0663d182ad50fef86ebdccb579a08112fb",
+  "command_sha256": "e405fb9a46413acc2cfcc7fc5f95c34c4899a574f605b87b7f135af4dd386b5e",
+  "result_sha256": "951b8cbc576327104e00c5c0b5d2c030d6b72ebd73e70da9c99fedd1c4879d0c",
+  "actual_commands": 1,
+  "unexecuted_commands": 11,
+  "top_tests": 18,
+  "top_pass": 15,
+  "top_fail": [
+    "TestPrivateCapacitySnapshotIndependentPlanAndPeakV6",
+    "TestPrivateCapacityPartialCloneAdmissionCancelV6",
+    "TestPrivateCapacitySinkDuplicateAndCommittedResumeV6"
+  ],
+  "child_RUN": 79,
+  "elapsed_seconds": 2.492958527058363,
+  "pid": 1092275,
+  "pgid": 1092275,
+  "runner_pid": 1092245,
+  "joined_empty_no_intervention": true,
+  "all_before_after_source_and_tool_bindings_verified": true,
+  "result": "FAIL preserved; no retry or production acceptance",
+  "index_not_launch_bound": true
+}
