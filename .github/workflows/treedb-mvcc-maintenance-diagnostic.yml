@@ -1,0 +1,60 @@
+name: "TreeDB: bounded maintenance diagnostic (manual only)"
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnostic:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    name: fixed 5bca / a17fe fourteen-call diagnostic
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - name: Initialize retained attempt packet
+        run: |
+          mkdir "$RUNNER_TEMP/mvcc-maintenance-setup"
+          printf '%s\n' 'Only fixed separately reviewed bounded diagnostics are authorized.' "harness=$GITHUB_SHA" "run=$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT" > "$RUNNER_TEMP/mvcc-maintenance-setup/scope.txt"
+
+      - name: Checkout reviewed diagnostic harness
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Setup exact Go 1.26.3
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: "1.26.3"
+          check-latest: false
+          cache: false
+
+      - name: Check syntax, receipts and fixed workflow contract (no Go execution)
+        run: python3 -B .github/scripts/mvcc_maintenance_test.py > "$RUNNER_TEMP/mvcc-maintenance-setup/pure-tests.log" 2>&1
+
+      - name: Prepare exact inputs and collect once
+        run: python3 -B .github/scripts/mvcc_maintenance_bootstrap.py > "$RUNNER_TEMP/mvcc-maintenance-setup/bootstrap.log" 2>&1
+
+      - name: Upload complete attempt, including failure/refusal
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: bounded-maintenance-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/mvcc-maintenance-a17fe/*.json
+            ${{ runner.temp }}/mvcc-maintenance-a17fe/*.log
+            ${{ runner.temp }}/mvcc-maintenance-a17fe/compiler
+            ${{ runner.temp }}/mvcc-maintenance-a17fe/archives
+            ${{ runner.temp }}/mvcc-maintenance-a17fe/go1.26.3-linux-amd64.tar.gz
+            ${{ runner.temp }}/mvcc-maintenance-a17fe/harness
+            ${{ runner.temp }}/mvcc-maintenance-a17fe/performance-185
+            !${{ runner.temp }}/mvcc-maintenance-a17fe/performance-185/**/tmp
+            ${{ runner.temp }}/mvcc-maintenance-setup
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 14

@@ -8,9 +8,11 @@
     "Nested modules (benchmarks/experiments/third_party) and Haystack/JavaScript clients have manual or absent qualification; changes force full existing CI, not coverage expansion.",
     "No package reverse closure or test-level elimination is qualified; production/test/script/unknown/new input changes choose full.",
     "MVCC and sparse/owner paired benchmarks execute explicit head/base contexts; ordinary PR correctness uses merge candidate.",
-    "C3 hosted qualification is manual, capacity-only by default and requires a separate actual same-VM construction acceptance; forecasts grant no execution or performance qualification."
+    "C3 hosted qualification is manual, capacity-only by default and requires a separate actual same-VM construction acceptance; forecasts grant no execution or performance qualification.",
+    "M0 observation is manual diagnostic-only on a separately fixed product; no forecast starts it or replaces failed M0 acceptance.",
+    "Bounded maintenance comparison is a manually granted diagnostic on fixed baseline/candidate products; no forecast starts it or establishes cost, M0 or native acceptance."
   ],
-  "discovery_source_sha256": "f6e8c710369dbebf037d36708cfea8257a6b1cacc2512b0d7ac3dde23f80d56e",
+  "discovery_source_sha256": "f7f11621d2e7166736c3dd7abce082655dabae46ec4aa62c6844caa6f9a3caed",
   "dynamic_consumers": [
     {
       "behavior": "AST/WalkDir discovery and go test subprocess producer witnesses; all TreeDB test/race members retained",
@@ -88,6 +90,20 @@
         "Makefile"
       ],
       "source": "go build/test embed and generators"
+    },
+    {
+      "behavior": "Manual diagnostic pins product2588c, archives and hashes all tracked product/harness inputs, imports the checked candidate observer and applies a checked test overlay; no omission or qualification authority.",
+      "inputs": [
+        "**"
+      ],
+      "source": ".github/scripts/mvcc_m0_observation.py"
+    },
+    {
+      "behavior": "Manual fixed-product maintenance diagnostic archives and hashes all tracked product and harness inputs, compiles existing selected packages, and imports the fixed candidate process observer; no omission or qualification authority.",
+      "inputs": [
+        "**"
+      ],
+      "source": ".github/scripts/mvcc_maintenance_bootstrap.py"
     }
   ],
   "global_inputs": [
@@ -129,7 +145,7 @@
       "mode": "100644"
     },
     ".github/scripts/test_ci_impact.py": {
-      "git_blob": "fc7cde6c604a0472266ae04ee8df309ef880dbd5",
+      "git_blob": "d2d9c76a5aa06549582df275d42705cab4b10565",
       "mode": "100644"
     },
     ".github/scripts/test_treedb_ci_contract.py": {
@@ -429,6 +445,19 @@
         "tags": "entry command defaults/flags retained"
       },
       "workflow": "sparse-catalog-qualification.yml"
+    },
+    {
+      "id": "treedb-mvcc-maintenance-diagnostic/diagnostic/single",
+      "job": "diagnostic",
+      "owner": "CI maintainer with affected MVCC maintenance harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {},
+        "race": false,
+        "runs_on": "ubuntu-24.04",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "treedb-mvcc-maintenance-diagnostic.yml"
     },
     {
       "id": "treedb-tests/mvcc-raw-path-gate/single",
@@ -1037,6 +1066,19 @@
       "workflow": "treedb-tests.yml"
     },
     {
+      "id": "treedb-vacuum-m0-observation/observe/single",
+      "job": "observe",
+      "owner": "CI maintainer with affected M0 harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {},
+        "race": false,
+        "runs_on": "ubuntu-24.04",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "treedb-vacuum-m0-observation.yml"
+    },
+    {
       "id": "treedb-vacuum-m0/capture/single",
       "job": "capture",
       "owner": "CI maintainer with affected package/harness owner",
@@ -1166,7 +1208,9 @@
         "redis-bench.yml",
         "root-tests.yml",
         "sparse-catalog-qualification.yml",
+        "treedb-mvcc-maintenance-diagnostic.yml",
         "treedb-tests.yml",
+        "treedb-vacuum-m0-observation.yml",
         "treedb-vacuum-m0.yml",
         "unified-bench-suites.yml",
         "unified-bench-tests.yml"
@@ -1188,7 +1232,9 @@
         "redis-bench.yml",
         "root-tests.yml",
         "sparse-catalog-qualification.yml",
+        "treedb-mvcc-maintenance-diagnostic.yml",
         "treedb-tests.yml",
+        "treedb-vacuum-m0-observation.yml",
         "treedb-vacuum-m0.yml",
         "unified-bench-suites.yml",
         "unified-bench-tests.yml"
@@ -1210,7 +1256,9 @@
         "redis-bench.yml",
         "root-tests.yml",
         "sparse-catalog-qualification.yml",
+        "treedb-mvcc-maintenance-diagnostic.yml",
         "treedb-tests.yml",
+        "treedb-vacuum-m0-observation.yml",
         "treedb-vacuum-m0.yml",
         "unified-bench-suites.yml",
         "unified-bench-tests.yml"
@@ -1221,9 +1269,11 @@
     },
     {
       "consumers": [
-        "treedb-tests.yml/test",
+        "root-tests.yml/test",
+        "treedb-mvcc-maintenance-diagnostic.yml",
         "treedb-tests.yml/race",
-        "root-tests.yml/test"
+        "treedb-tests.yml/test",
+        "treedb-vacuum-m0-observation.yml"
       ],
       "glob": "docs/**",
       "reason": "docs-and-tracked-utf8-naming-consumers"
@@ -1241,7 +1291,9 @@
         "redis-bench.yml",
         "root-tests.yml",
         "sparse-catalog-qualification.yml",
+        "treedb-mvcc-maintenance-diagnostic.yml",
         "treedb-tests.yml",
+        "treedb-vacuum-m0-observation.yml",
         "treedb-vacuum-m0.yml",
         "unified-bench-suites.yml",
         "unified-bench-tests.yml"
@@ -1263,7 +1315,9 @@
         "redis-bench.yml",
         "root-tests.yml",
         "sparse-catalog-qualification.yml",
+        "treedb-mvcc-maintenance-diagnostic.yml",
         "treedb-tests.yml",
+        "treedb-vacuum-m0-observation.yml",
         "treedb-vacuum-m0.yml",
         "unified-bench-suites.yml",
         "unified-bench-tests.yml"
@@ -1285,7 +1339,9 @@
         "redis-bench.yml",
         "root-tests.yml",
         "sparse-catalog-qualification.yml",
+        "treedb-mvcc-maintenance-diagnostic.yml",
         "treedb-tests.yml",
+        "treedb-vacuum-m0-observation.yml",
         "treedb-vacuum-m0.yml",
         "unified-bench-suites.yml",
         "unified-bench-tests.yml"
@@ -1307,7 +1363,9 @@
         "redis-bench.yml",
         "root-tests.yml",
         "sparse-catalog-qualification.yml",
+        "treedb-mvcc-maintenance-diagnostic.yml",
         "treedb-tests.yml",
+        "treedb-vacuum-m0-observation.yml",
         "treedb-vacuum-m0.yml",
         "unified-bench-suites.yml",
         "unified-bench-tests.yml"
@@ -1329,7 +1387,9 @@
         "redis-bench.yml",
         "root-tests.yml",
         "sparse-catalog-qualification.yml",
+        "treedb-mvcc-maintenance-diagnostic.yml",
         "treedb-tests.yml",
+        "treedb-vacuum-m0-observation.yml",
         "treedb-vacuum-m0.yml",
         "unified-bench-suites.yml",
         "unified-bench-tests.yml"
@@ -1351,7 +1411,9 @@
         "redis-bench.yml",
         "root-tests.yml",
         "sparse-catalog-qualification.yml",
+        "treedb-mvcc-maintenance-diagnostic.yml",
         "treedb-tests.yml",
+        "treedb-vacuum-m0-observation.yml",
         "treedb-vacuum-m0.yml",
         "unified-bench-suites.yml",
         "unified-bench-tests.yml"
@@ -1373,7 +1435,9 @@
         "redis-bench.yml",
         "root-tests.yml",
         "sparse-catalog-qualification.yml",
+        "treedb-mvcc-maintenance-diagnostic.yml",
         "treedb-tests.yml",
+        "treedb-vacuum-m0-observation.yml",
         "treedb-vacuum-m0.yml",
         "unified-bench-suites.yml",
         "unified-bench-tests.yml"
@@ -2169,6 +2233,52 @@
       },
       "sha256": "8e4cff3764f31a85972ff9383a5e9cf7b1280d119bb7d0d0138bfcd4b7c9effe"
     },
+    "treedb-mvcc-maintenance-diagnostic.yml": {
+      "coverage": "existing execution only; triggers/path filters are unchanged",
+      "events": {
+        "workflow_dispatch": null
+      },
+      "git_blob": "5db1627d00d523c4611092c2ba8aac5465b64506",
+      "jobs": {
+        "diagnostic": {
+          "checkout": [
+            {
+              "fetch-depth": 0,
+              "persist-credentials": false,
+              "ref": "${{ github.sha }}"
+            }
+          ],
+          "commands": [
+            {
+              "command_sha256": "dc2d7506fa6e28a95565b0bd60299cfa8a1f345e73aa6997a4c6d954f73fab67",
+              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:19",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Initialize retained attempt packet"
+            },
+            {
+              "command_sha256": "3bbcd578a6db06320b9181f1fcbdfcdce89d8c99b0b433ef9e2aeab17bd27a64",
+              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:38",
+              "invocation": "python3 -B .github/scripts/mvcc_maintenance_test.py > \"$RUNNER_TEMP/mvcc-maintenance-setup/pure-tests.log\" 2>&1",
+              "name": "Check syntax, receipts and fixed workflow contract (no Go execution)"
+            },
+            {
+              "command_sha256": "38d56548962e86f55dc4e1a22895ea3a0f33ff34d2b49ed50514f1359bcc6615",
+              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:41",
+              "invocation": "python3 -B .github/scripts/mvcc_maintenance_bootstrap.py > \"$RUNNER_TEMP/mvcc-maintenance-setup/bootstrap.log\" 2>&1",
+              "name": "Prepare exact inputs and collect once"
+            }
+          ],
+          "environment": {
+            "PYTHONDONTWRITEBYTECODE": "1"
+          },
+          "matrix": null,
+          "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": false,
+          "runs_on": "ubuntu-24.04"
+        }
+      },
+      "sha256": "2d682ddfe8416722c6408e033606700217b614858c78e7479d25caa294c126c8"
+    },
     "treedb-tests.yml": {
       "coverage": "existing execution only; triggers/path filters are unchanged",
       "events": {
@@ -2690,6 +2800,68 @@
         }
       },
       "sha256": "6ff7766261056eb9d06231a305d3a4a5585d25bc75b856298044d09582c50e7e"
+    },
+    "treedb-vacuum-m0-observation.yml": {
+      "coverage": "existing execution only; triggers/path filters are unchanged",
+      "events": {
+        "workflow_dispatch": null
+      },
+      "git_blob": "a468c5a9a6a2d444bbb2bec7d125f913dd743c32",
+      "jobs": {
+        "observe": {
+          "checkout": [
+            {
+              "path": "harness",
+              "persist-credentials": false,
+              "ref": "${{ github.sha }}"
+            },
+            {
+              "path": "product",
+              "persist-credentials": false,
+              "ref": "2588cd26780fe9ffd8c33797fc6a2bfdf2c00d49"
+            }
+          ],
+          "commands": [
+            {
+              "command_sha256": "83c151a329f01337b2e85556f339af2828e60d50f952b2e0337697a2bc2a60a2",
+              "entrypoint": ".github/workflows/treedb-vacuum-m0-observation.yml:18",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Start bounded packet"
+            },
+            {
+              "command_sha256": "1e67dbeaa01a271ad10fc3c9e43a8bae8d06049d7d15ae37c114d3a624a2e48d",
+              "entrypoint": ".github/workflows/treedb-vacuum-m0-observation.yml:38",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Verify official complete Go SDK"
+            },
+            {
+              "command_sha256": "8718ba8b2c6db4d6e7a7fc5b5ed26e80a838f9f3b73c666c81a0bd7391c2a528",
+              "entrypoint": ".github/workflows/treedb-vacuum-m0-observation.yml:48",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Pure harness validation"
+            },
+            {
+              "command_sha256": "dd54f13fc361b57705deec35e53a8d5337714a6b2b2748ffe4106bf4b475356d",
+              "entrypoint": ".github/workflows/treedb-vacuum-m0-observation.yml:53",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "One original full observation schedule"
+            },
+            {
+              "command_sha256": "749600a42aa5841e3e0c8a3381d2e762585e719d621c5e880b7cc10198147da1",
+              "entrypoint": ".github/workflows/treedb-vacuum-m0-observation.yml:62",
+              "if": "always()",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Retain setup and terminal state on every outcome"
+            }
+          ],
+          "environment": {},
+          "matrix": null,
+          "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": false,
+          "runs_on": "ubuntu-24.04"
+        }
+      },
+      "sha256": "257ee8b3e313e38df5728153d636558f6a4c55372dfe39d6924afdefb97c618c"
     },
     "treedb-vacuum-m0.yml": {
       "coverage": "existing execution only; triggers/path filters are unchanged",
