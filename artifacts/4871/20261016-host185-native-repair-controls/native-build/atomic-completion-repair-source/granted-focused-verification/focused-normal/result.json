@@ -1,0 +1,123 @@
+{
+  "adopted_children_reaped": [],
+  "elapsed_seconds": 2.5028059878386557,
+  "ended_utc": "2026-10-16T00:37:28.463656+00:00",
+  "exit_code": 1,
+  "group_and_children_empty": true,
+  "leader_joined": true,
+  "name": "focused-normal",
+  "observed_group_processes": [
+    {
+      "comm": "go",
+      "pgid": 794805,
+      "pid": 794805,
+      "ppid": 793550,
+      "session": 794805,
+      "state": "S"
+    },
+    {
+      "comm": "link",
+      "pgid": 794805,
+      "pid": 794823,
+      "ppid": 794805,
+      "session": 794805,
+      "state": "S"
+    },
+    {
+      "comm": "link",
+      "pgid": 794805,
+      "pid": 794838,
+      "ppid": 794805,
+      "session": 794805,
+      "state": "R"
+    },
+    {
+      "comm": "link",
+      "pgid": 794805,
+      "pid": 794851,
+      "ppid": 794805,
+      "session": 794805,
+      "state": "S"
+    },
+    {
+      "comm": "db.test",
+      "pgid": 794805,
+      "pid": 794863,
+      "ppid": 794805,
+      "session": 794805,
+      "state": "S"
+    },
+    {
+      "comm": "link",
+      "pgid": 794805,
+      "pid": 794870,
+      "ppid": 794805,
+      "session": 794805,
+      "state": "S"
+    }
+  ],
+  "pgid": 794805,
+  "pid": 794805,
+  "remaining_direct_or_adopted_children": [],
+  "remaining_group_members": [],
+  "signals": [],
+  "source_after_equals_frozen": true,
+  "source_before_after_equal": true,
+  "source_before_equals_frozen": true,
+  "started_utc": "2026-10-16T00:37:25.960851+00:00",
+  "subreaper_enabled": true,
+  "test_RUN_count": 24,
+  "test_RUN_names": [
+    "TestNativeAtomicOwnerGrowthAdmitsBeforeEffects",
+    "TestNativeAtomicOwnerGrowthPricesOriginalRollback",
+    "TestNativeOwnerGrowthAdapterPreservesYield",
+    "TestNativeOwnerGrowthAdapterPreservesUnsupported",
+    "TestOriginalCleanupCustodyKeepsSameRegistryUntilActualCompletion",
+    "TestOriginalCleanupCustodyKeepsSameRegistryUntilActualCompletion/consumed",
+    "TestOriginalCleanupCustodyKeepsSameRegistryUntilActualCompletion/failed",
+    "TestOriginalCleanupCustodyOverflowRefusesBeforeEffects",
+    "TestOriginalCleanupCustodyTypedGrowthAndRefundV6",
+    "TestOriginalCleanupCustodyTypedUnsupportedAndOrdinaryV6",
+    "TestOriginalCleanupCustodyTypedClosingAndOverflowV6",
+    "TestNativePublishedOutputAdmissionBeforeAdoptionV6",
+    "TestNativePublishedOutputAdmissionBeforeAdoptionV6/1",
+    "TestNativePublishedOutputAdmissionBeforeAdoptionV6/2",
+    "TestNativePublishedOutputAdmissionBeforeAdoptionV6/5",
+    "TestNativeSnapshotPublicationUsesSameLeafOperandV6",
+    "TestNativeIncompleteClosePreservesOriginalRuntimeV6",
+    "TestNativeCompletedCloseRetainsOrdinaryTeardownV6",
+    "TestNativeBindingCrossesOriginalTeardownGateV6",
+    "TestNativeNoDebtClosePreservesOrdinaryHookErrorV6",
+    "TestNativeFiniteOriginalClosureSizesV6",
+    "TestNativePagerOperationsPartialConstructionAndCancellationV6",
+    "TestNativePagerOperationsPartialConstructionAndCancellationV6/before-output",
+    "TestNativeFiniteCursorAdmissionSizesV6"
+  ],
+  "timeout": false,
+  "top_level_fail_count": 1,
+  "top_level_fail_names": [
+    "TestNativePagerOperationsPartialConstructionAndCancellationV6"
+  ],
+  "top_level_pass_count": 17,
+  "top_level_pass_names": [
+    "TestNativeAtomicOwnerGrowthAdmitsBeforeEffects",
+    "TestNativeAtomicOwnerGrowthPricesOriginalRollback",
+    "TestNativeOwnerGrowthAdapterPreservesYield",
+    "TestNativeOwnerGrowthAdapterPreservesUnsupported",
+    "TestOriginalCleanupCustodyKeepsSameRegistryUntilActualCompletion",
+    "TestOriginalCleanupCustodyOverflowRefusesBeforeEffects",
+    "TestOriginalCleanupCustodyTypedGrowthAndRefundV6",
+    "TestOriginalCleanupCustodyTypedUnsupportedAndOrdinaryV6",
+    "TestOriginalCleanupCustodyTypedClosingAndOverflowV6",
+    "TestNativePublishedOutputAdmissionBeforeAdoptionV6",
+    "TestNativeSnapshotPublicationUsesSameLeafOperandV6",
+    "TestNativeIncompleteClosePreservesOriginalRuntimeV6",
+    "TestNativeCompletedCloseRetainsOrdinaryTeardownV6",
+    "TestNativeBindingCrossesOriginalTeardownGateV6",
+    "TestNativeNoDebtClosePreservesOrdinaryHookErrorV6",
+    "TestNativeFiniteOriginalClosureSizesV6",
+    "TestNativeFiniteCursorAdmissionSizesV6"
+  ],
+  "top_level_skip_count": 0,
+  "top_level_skip_names": []
+}

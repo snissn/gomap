@@ -1,0 +1,130 @@
+{
+  "commands": [
+    {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "./TreeDB/internal/retainedalloc",
+        "./TreeDB/internal/rootpublication",
+        "./TreeDB/db",
+        "./TreeDB/mvcc",
+        "-run",
+        "^$",
+        "-count=1",
+        "-v",
+        "-timeout=3m"
+      ],
+      "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native",
+      "env": {
+        "CGO_ENABLED": "1",
+        "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+        "GODEBUG": "",
+        "GOENV": "off",
+        "GOFLAGS": "",
+        "GOGC": "100",
+        "GOMAXPROCS": "2",
+        "GOMEMLIMIT": "8GiB",
+        "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+        "GOPROXY": "off",
+        "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+        "GOSUMDB": "off",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off",
+        "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-source/compile-only/tmp"
+      },
+      "executed": false,
+      "name": "compile-only",
+      "outer_timeout_seconds": 230,
+      "requires_root_verification_grant": true,
+      "requires_separate_actual33_scope": false
+    },
+    {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "./TreeDB/internal/retainedalloc",
+        "./TreeDB/internal/rootpublication",
+        "./TreeDB/db",
+        "./TreeDB/mvcc",
+        "-run",
+        "^(TestNativePublishedOutputAdmissionBeforeAdoptionV6|TestNativeSnapshotPublicationUsesSameLeafOperandV6|TestNativeIncompleteClosePreservesOriginalRuntimeV6|TestNativeCompletedCloseRetainsOrdinaryTeardownV6|TestNativeBindingCrossesOriginalTeardownGateV6|TestNativeNoDebtClosePreservesOrdinaryHookErrorV6|TestNativePagerOperationsPartialConstructionAndCancellationV6|TestOriginalCleanupCustodyTypedGrowthAndRefundV6|TestOriginalCleanupCustodyTypedUnsupportedAndOrdinaryV6|TestOriginalCleanupCustodyTypedClosingAndOverflowV6|TestOriginalCleanupCustodyKeepsSameRegistryUntilActualCompletion|TestOriginalCleanupCustodyOverflowRefusesBeforeEffects|TestNativeAtomicOwnerGrowthAdmitsBeforeEffects|TestNativeAtomicOwnerGrowthPricesOriginalRollback|TestNativeOwnerGrowthAdapterPreservesYield|TestNativeOwnerGrowthAdapterPreservesUnsupported|TestNativeStablePagerPartialTokenCancellationV6|TestNativeFiniteOriginalClosureSizesV6|TestNativeFiniteCursorAdmissionSizesV6|TestNativePublicationRemainderAndFloorV6)$",
+        "-count=1",
+        "-v",
+        "-timeout=3m"
+      ],
+      "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native",
+      "env": {
+        "CGO_ENABLED": "1",
+        "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+        "GODEBUG": "",
+        "GOENV": "off",
+        "GOFLAGS": "",
+        "GOGC": "100",
+        "GOMAXPROCS": "2",
+        "GOMEMLIMIT": "8GiB",
+        "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+        "GOPROXY": "off",
+        "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+        "GOSUMDB": "off",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off",
+        "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-source/focused-normal/tmp"
+      },
+      "executed": false,
+      "name": "focused-normal",
+      "outer_timeout_seconds": 230,
+      "requires_root_verification_grant": true,
+      "requires_separate_actual33_scope": false
+    },
+    {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "-race",
+        "./TreeDB/internal/retainedalloc",
+        "./TreeDB/internal/rootpublication",
+        "./TreeDB/db",
+        "./TreeDB/mvcc",
+        "-run",
+        "^(TestNativePublishedOutputAdmissionBeforeAdoptionV6|TestNativeSnapshotPublicationUsesSameLeafOperandV6|TestNativeIncompleteClosePreservesOriginalRuntimeV6|TestNativeCompletedCloseRetainsOrdinaryTeardownV6|TestNativeBindingCrossesOriginalTeardownGateV6|TestNativeNoDebtClosePreservesOrdinaryHookErrorV6|TestNativePagerOperationsPartialConstructionAndCancellationV6|TestOriginalCleanupCustodyTypedGrowthAndRefundV6|TestOriginalCleanupCustodyTypedUnsupportedAndOrdinaryV6|TestOriginalCleanupCustodyTypedClosingAndOverflowV6|TestOriginalCleanupCustodyKeepsSameRegistryUntilActualCompletion|TestOriginalCleanupCustodyOverflowRefusesBeforeEffects|TestNativeAtomicOwnerGrowthAdmitsBeforeEffects|TestNativeAtomicOwnerGrowthPricesOriginalRollback|TestNativeOwnerGrowthAdapterPreservesYield|TestNativeOwnerGrowthAdapterPreservesUnsupported|TestNativeStablePagerPartialTokenCancellationV6|TestNativeFiniteOriginalClosureSizesV6|TestNativeFiniteCursorAdmissionSizesV6|TestNativePublicationRemainderAndFloorV6)$",
+        "-count=1",
+        "-v",
+        "-timeout=3m"
+      ],
+      "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native",
+      "env": {
+        "CGO_ENABLED": "1",
+        "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+        "GODEBUG": "",
+        "GOENV": "off",
+        "GOFLAGS": "",
+        "GOGC": "100",
+        "GOMAXPROCS": "2",
+        "GOMEMLIMIT": "8GiB",
+        "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+        "GOPROXY": "off",
+        "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+        "GOSUMDB": "off",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off",
+        "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-source/focused-race/tmp"
+      },
+      "executed": false,
+      "name": "focused-race",
+      "outer_timeout_seconds": 300,
+      "requires_root_verification_grant": true,
+      "requires_separate_actual33_scope": false
+    }
+  ],
+  "runner_obligations": [
+    "Preserve full tracked+new source archive before run and source-before/after manifests.",
+    "Record exact compiler/env/argv/PID/PGID and bounded outer timeout.",
+    "On timeout terminate entire group and join leader; inspect actual remaining group membership.",
+    "Preserve first errors; no blanket child-group claim from leader join.",
+    "No numeric allowance or native activation/enqueue/fence/Finish runtime is authorized."
+  ],
+  "source_manifest_sha256": "83b71641be6460d2ece624fec51b8a84ad3ecea158844eb1c61b0828a72f0fcd"
+}

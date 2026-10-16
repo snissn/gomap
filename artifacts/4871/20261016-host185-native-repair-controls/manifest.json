@@ -1,0 +1,1001 @@
+[
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-accepted-source/files/TreeDB/db/db.go",
+    "path": "native-build/atomic-completion-accepted-source/files/TreeDB/db/db.go.gz",
+    "source_bytes": 212436,
+    "source_sha256": "7a7788637691958b068e6e7352ad8562d79338a3a2bacc51a9afdd4d754d3ca8",
+    "stored_bytes": 52034,
+    "stored_sha256": "9b626af403c9fda0f276288b227e46d4aeab19266b63cab92185734350b34315",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-accepted-source/files/TreeDB/db/durable_primary_runtime_v5.go",
+    "path": "native-build/atomic-completion-accepted-source/files/TreeDB/db/durable_primary_runtime_v5.go",
+    "source_bytes": 36405,
+    "source_sha256": "b75b40f88596cd75e8b60edc68c5ca8526de41187e68f2b61ba5d81261ea788b",
+    "stored_bytes": 36405,
+    "stored_sha256": "b75b40f88596cd75e8b60edc68c5ca8526de41187e68f2b61ba5d81261ea788b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-accepted-source/files/TreeDB/db/native_activation_output_admission_v6_test.go",
+    "path": "native-build/atomic-completion-accepted-source/files/TreeDB/db/native_activation_output_admission_v6_test.go",
+    "source_bytes": 2082,
+    "source_sha256": "9387481e5eada2975d03bb951a269a012c9034a78411d95f3ebcbf3391e1d14d",
+    "stored_bytes": 2082,
+    "stored_sha256": "9387481e5eada2975d03bb951a269a012c9034a78411d95f3ebcbf3391e1d14d",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-accepted-source/files/TreeDB/db/native_close_barrier_v6_test.go",
+    "path": "native-build/atomic-completion-accepted-source/files/TreeDB/db/native_close_barrier_v6_test.go",
+    "source_bytes": 5457,
+    "source_sha256": "7d1c67455d774668e37c41452bdd481d7999573bdebeea588a4a38ce7bc4dd7a",
+    "stored_bytes": 5457,
+    "stored_sha256": "7d1c67455d774668e37c41452bdd481d7999573bdebeea588a4a38ce7bc4dd7a",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-accepted-source/files/TreeDB/db/native_mvcc_candidate_preparation_v6.go",
+    "path": "native-build/atomic-completion-accepted-source/files/TreeDB/db/native_mvcc_candidate_preparation_v6.go",
+    "source_bytes": 10233,
+    "source_sha256": "45d7dd34004bc14b94fa1592ebe7979f3f33e8924d176d49cc8c49a56df937a7",
+    "stored_bytes": 10233,
+    "stored_sha256": "45d7dd34004bc14b94fa1592ebe7979f3f33e8924d176d49cc8c49a56df937a7",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-accepted-source/files/TreeDB/db/native_mvcc_current_delete_v6.go",
+    "path": "native-build/atomic-completion-accepted-source/files/TreeDB/db/native_mvcc_current_delete_v6.go",
+    "source_bytes": 19900,
+    "source_sha256": "5dbc2fb4c8993ed43075650989d63616ae9afd4310b18aaee94c1f9443a9f600",
+    "stored_bytes": 19900,
+    "stored_sha256": "5dbc2fb4c8993ed43075650989d63616ae9afd4310b18aaee94c1f9443a9f600",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-accepted-source/files/TreeDB/db/native_mvcc_final_basis_v6.go",
+    "path": "native-build/atomic-completion-accepted-source/files/TreeDB/db/native_mvcc_final_basis_v6.go",
+    "source_bytes": 7620,
+    "source_sha256": "62667066c8d16b4309d49b13735779089e62f2dc714e05809a0f2a0731903ad8",
+    "stored_bytes": 7620,
+    "stored_sha256": "62667066c8d16b4309d49b13735779089e62f2dc714e05809a0f2a0731903ad8",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-accepted-source/files/TreeDB/db/native_mvcc_final_publication_v6.go",
+    "path": "native-build/atomic-completion-accepted-source/files/TreeDB/db/native_mvcc_final_publication_v6.go",
+    "source_bytes": 4577,
+    "source_sha256": "8b36f28459b30a52cc0d3f7fa07c79138db1213c48c476c8c19c1963543b6839",
+    "stored_bytes": 4577,
+    "stored_sha256": "8b36f28459b30a52cc0d3f7fa07c79138db1213c48c476c8c19c1963543b6839",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-accepted-source/files/TreeDB/db/native_mvcc_publication_binding_v6.go",
+    "path": "native-build/atomic-completion-accepted-source/files/TreeDB/db/native_mvcc_publication_binding_v6.go",
+    "source_bytes": 3273,
+    "source_sha256": "91564ea1dbeb0c445eb2e5d29bc85b1b68b9d1abd04ac1d8bc57b155ba0f0772",
+    "stored_bytes": 3273,
+    "stored_sha256": "91564ea1dbeb0c445eb2e5d29bc85b1b68b9d1abd04ac1d8bc57b155ba0f0772",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-accepted-source/files/TreeDB/db/native_mvcc_published_terminal_v6.go",
+    "path": "native-build/atomic-completion-accepted-source/files/TreeDB/db/native_mvcc_published_terminal_v6.go",
+    "source_bytes": 3193,
+    "source_sha256": "2efc111a2d2706878b88572498cecd21e9cca7aede421b0abe24e025f98c137e",
+    "stored_bytes": 3193,
+    "stored_sha256": "2efc111a2d2706878b88572498cecd21e9cca7aede421b0abe24e025f98c137e",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-accepted-source/files/TreeDB/db/native_mvcc_seal_preparation_v6.go",
+    "path": "native-build/atomic-completion-accepted-source/files/TreeDB/db/native_mvcc_seal_preparation_v6.go",
+    "source_bytes": 26121,
+    "source_sha256": "d53b48552baf34119602606b7bcc4f56a9bc50c49686f2eba388f63751f0f7e8",
+    "stored_bytes": 26121,
+    "stored_sha256": "d53b48552baf34119602606b7bcc4f56a9bc50c49686f2eba388f63751f0f7e8",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-accepted-source/files/TreeDB/db/native_pager_operations_construction_v6_test.go",
+    "path": "native-build/atomic-completion-accepted-source/files/TreeDB/db/native_pager_operations_construction_v6_test.go",
+    "source_bytes": 7537,
+    "source_sha256": "336184e6ba124a8ab4c711a966e05dbef19d5c85176861bdd6b07a8dda6a437a",
+    "stored_bytes": 7537,
+    "stored_sha256": "336184e6ba124a8ab4c711a966e05dbef19d5c85176861bdd6b07a8dda6a437a",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-accepted-source/files/TreeDB/db/native_publication_remainder_v6.go",
+    "path": "native-build/atomic-completion-accepted-source/files/TreeDB/db/native_publication_remainder_v6.go",
+    "source_bytes": 8408,
+    "source_sha256": "8a8b84445dda87a651f88c78842aa633376b01f524d4ae23b0e70f028af5a370",
+    "stored_bytes": 8408,
+    "stored_sha256": "8a8b84445dda87a651f88c78842aa633376b01f524d4ae23b0e70f028af5a370",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-accepted-source/files/TreeDB/db/native_publication_remainder_v6_test.go",
+    "path": "native-build/atomic-completion-accepted-source/files/TreeDB/db/native_publication_remainder_v6_test.go",
+    "source_bytes": 3873,
+    "source_sha256": "11f984143c8de370d7ae1f9271f01ec1eb767b275a876bd75fc9b36067c9f5f4",
+    "stored_bytes": 3873,
+    "stored_sha256": "11f984143c8de370d7ae1f9271f01ec1eb767b275a876bd75fc9b36067c9f5f4",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-accepted-source/files/TreeDB/db/native_stable_pager_capture_v6.go",
+    "path": "native-build/atomic-completion-accepted-source/files/TreeDB/db/native_stable_pager_capture_v6.go",
+    "source_bytes": 19835,
+    "source_sha256": "a5b9f6023ccb7460005b49ba086a901f436a4b1ce43d51f7c800afc05c9184a6",
+    "stored_bytes": 19835,
+    "stored_sha256": "a5b9f6023ccb7460005b49ba086a901f436a4b1ce43d51f7c800afc05c9184a6",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-accepted-source/files/TreeDB/db/native_visible_capacity_work_v6.go",
+    "path": "native-build/atomic-completion-accepted-source/files/TreeDB/db/native_visible_capacity_work_v6.go",
+    "source_bytes": 1831,
+    "source_sha256": "880ae85894c4051e11e80839c43270cbf616f8ca87fdca5a0cc462897f72cfc9",
+    "stored_bytes": 1831,
+    "stored_sha256": "880ae85894c4051e11e80839c43270cbf616f8ca87fdca5a0cc462897f72cfc9",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-accepted-source/files/TreeDB/db/primary_authority_scope_v6.go",
+    "path": "native-build/atomic-completion-accepted-source/files/TreeDB/db/primary_authority_scope_v6.go",
+    "source_bytes": 6212,
+    "source_sha256": "3f498dd74f18f421ac2296aade78165034a4077926b83fff012287f4aeef9269",
+    "stored_bytes": 6212,
+    "stored_sha256": "3f498dd74f18f421ac2296aade78165034a4077926b83fff012287f4aeef9269",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-accepted-source/files/TreeDB/db/primary_materialization_work_v6.go",
+    "path": "native-build/atomic-completion-accepted-source/files/TreeDB/db/primary_materialization_work_v6.go",
+    "source_bytes": 3127,
+    "source_sha256": "e784a2ff4950e9ae366252f6c48a904cd504e74390ba95554462415ae20d9ea7",
+    "stored_bytes": 3127,
+    "stored_sha256": "e784a2ff4950e9ae366252f6c48a904cd504e74390ba95554462415ae20d9ea7",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-accepted-source/files/TreeDB/db/primary_ordered_post_work_v6.go",
+    "path": "native-build/atomic-completion-accepted-source/files/TreeDB/db/primary_ordered_post_work_v6.go",
+    "source_bytes": 3474,
+    "source_sha256": "d457014cbfd7133f526d3d2a8ae683f6f1d05c19a326ee2e2103927f13781650",
+    "stored_bytes": 3474,
+    "stored_sha256": "d457014cbfd7133f526d3d2a8ae683f6f1d05c19a326ee2e2103927f13781650",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-accepted-source/files/TreeDB/db/primary_runtime_metadata.go",
+    "path": "native-build/atomic-completion-accepted-source/files/TreeDB/db/primary_runtime_metadata.go",
+    "source_bytes": 8018,
+    "source_sha256": "37ec071287c944ef9012a2a49ae8582070caa9cb6463be31e7193347c36f40b0",
+    "stored_bytes": 8018,
+    "stored_sha256": "37ec071287c944ef9012a2a49ae8582070caa9cb6463be31e7193347c36f40b0",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-accepted-source/files/TreeDB/db/primary_runtime_metadata_test.go",
+    "path": "native-build/atomic-completion-accepted-source/files/TreeDB/db/primary_runtime_metadata_test.go",
+    "source_bytes": 6180,
+    "source_sha256": "c0dbd2d96b9e0936c2737ab842f7f8630d5dae7aad1666de1fc3338f7b50685d",
+    "stored_bytes": 6180,
+    "stored_sha256": "c0dbd2d96b9e0936c2737ab842f7f8630d5dae7aad1666de1fc3338f7b50685d",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-accepted-source/files/TreeDB/db/primary_storage_operations_v6.go",
+    "path": "native-build/atomic-completion-accepted-source/files/TreeDB/db/primary_storage_operations_v6.go",
+    "source_bytes": 6679,
+    "source_sha256": "2337bdc3f21b9e8bb493fb4c2396c9be46614b03f34fafea8625011dfe978382",
+    "stored_bytes": 6679,
+    "stored_sha256": "2337bdc3f21b9e8bb493fb4c2396c9be46614b03f34fafea8625011dfe978382",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-accepted-source/files/TreeDB/db/primary_visible_abort_work_v6.go",
+    "path": "native-build/atomic-completion-accepted-source/files/TreeDB/db/primary_visible_abort_work_v6.go",
+    "source_bytes": 4467,
+    "source_sha256": "b8deb9d4af2c71094e9197ed0cadae4e7a99993e557b88bb0eb1adf2dab57889",
+    "stored_bytes": 4467,
+    "stored_sha256": "b8deb9d4af2c71094e9197ed0cadae4e7a99993e557b88bb0eb1adf2dab57889",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-accepted-source/files/TreeDB/db/root_publication_activation.go",
+    "path": "native-build/atomic-completion-accepted-source/files/TreeDB/db/root_publication_activation.go",
+    "source_bytes": 81984,
+    "source_sha256": "bd431f5f851fdbd934ddb0ffbcc903bc13019b95ebe8a45dfb035b7612468d61",
+    "stored_bytes": 81984,
+    "stored_sha256": "bd431f5f851fdbd934ddb0ffbcc903bc13019b95ebe8a45dfb035b7612468d61",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-accepted-source/files/TreeDB/db/snapshot_publication_work_v6.go",
+    "path": "native-build/atomic-completion-accepted-source/files/TreeDB/db/snapshot_publication_work_v6.go",
+    "source_bytes": 4369,
+    "source_sha256": "f00be8ccae837d085cbd3b0c6bac0f3f1c2ed055d9354dab2eba58f83901d06a",
+    "stored_bytes": 4369,
+    "stored_sha256": "f00be8ccae837d085cbd3b0c6bac0f3f1c2ed055d9354dab2eba58f83901d06a",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-accepted-source/files/TreeDB/db/stable_pager_owned_operations.go",
+    "path": "native-build/atomic-completion-accepted-source/files/TreeDB/db/stable_pager_owned_operations.go",
+    "source_bytes": 11535,
+    "source_sha256": "033f88c049979a5c218ec7c24634fae4c72d6b510247da3941937fd87bef3b3b",
+    "stored_bytes": 11535,
+    "stored_sha256": "033f88c049979a5c218ec7c24634fae4c72d6b510247da3941937fd87bef3b3b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-accepted-source/files/TreeDB/freelist/allocator_cow.go",
+    "path": "native-build/atomic-completion-accepted-source/files/TreeDB/freelist/allocator_cow.go",
+    "source_bytes": 25630,
+    "source_sha256": "0be749f18a8ecfc6f5ac4be338055b662e8a8c245bd67989ac46f7679e25ff88",
+    "stored_bytes": 25630,
+    "stored_sha256": "0be749f18a8ecfc6f5ac4be338055b662e8a8c245bd67989ac46f7679e25ff88",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-accepted-source/files/TreeDB/freelist/allocator_failure_work_v6.go",
+    "path": "native-build/atomic-completion-accepted-source/files/TreeDB/freelist/allocator_failure_work_v6.go",
+    "source_bytes": 1502,
+    "source_sha256": "929d94594a0f9f0a6e50955c2fa396e8a3b58a8b55a5b0662c464f86e515d425",
+    "stored_bytes": 1502,
+    "stored_sha256": "929d94594a0f9f0a6e50955c2fa396e8a3b58a8b55a5b0662c464f86e515d425",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-accepted-source/files/TreeDB/freelist/allocator_publication_work_v6.go",
+    "path": "native-build/atomic-completion-accepted-source/files/TreeDB/freelist/allocator_publication_work_v6.go",
+    "source_bytes": 9795,
+    "source_sha256": "db606aa3225a911755f10a59390ca9c9127c492b59b8c7a5ceae7944d8e5a360",
+    "stored_bytes": 9795,
+    "stored_sha256": "db606aa3225a911755f10a59390ca9c9127c492b59b8c7a5ceae7944d8e5a360",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-accepted-source/files/TreeDB/freelist/allocator_publication_work_v6_test.go",
+    "path": "native-build/atomic-completion-accepted-source/files/TreeDB/freelist/allocator_publication_work_v6_test.go",
+    "source_bytes": 5778,
+    "source_sha256": "0b080c2297dbcf4a8c5ce348f628e52b70f0bc2d93955df829aa0646ffa7e309",
+    "stored_bytes": 5778,
+    "stored_sha256": "0b080c2297dbcf4a8c5ce348f628e52b70f0bc2d93955df829aa0646ffa7e309",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-accepted-source/files/TreeDB/freelist/generation_v1_format.go",
+    "path": "native-build/atomic-completion-accepted-source/files/TreeDB/freelist/generation_v1_format.go",
+    "source_bytes": 17931,
+    "source_sha256": "261f8405daa14e3a51977e4141c1ae3b1c71b0fd2d7efd54174367d17d3537c6",
+    "stored_bytes": 17931,
+    "stored_sha256": "261f8405daa14e3a51977e4141c1ae3b1c71b0fd2d7efd54174367d17d3537c6",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-accepted-source/files/TreeDB/freelist/generation_v1_publication_work_v6.go",
+    "path": "native-build/atomic-completion-accepted-source/files/TreeDB/freelist/generation_v1_publication_work_v6.go",
+    "source_bytes": 4290,
+    "source_sha256": "fe3111fc989793ac2bc151426bf3c36aa6d8ed026bd61e5dc1a935f18e99f007",
+    "stored_bytes": 4290,
+    "stored_sha256": "fe3111fc989793ac2bc151426bf3c36aa6d8ed026bd61e5dc1a935f18e99f007",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-accepted-source/files/TreeDB/freelist/native_publication_bound_v6.go",
+    "path": "native-build/atomic-completion-accepted-source/files/TreeDB/freelist/native_publication_bound_v6.go",
+    "source_bytes": 5585,
+    "source_sha256": "f4c621a160bec98deacad47140e04be0d294d653894cc0cb0de5cb4fb640ac51",
+    "stored_bytes": 5585,
+    "stored_sha256": "f4c621a160bec98deacad47140e04be0d294d653894cc0cb0de5cb4fb640ac51",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-accepted-source/files/TreeDB/internal/rootpublication/coordinator.go",
+    "path": "native-build/atomic-completion-accepted-source/files/TreeDB/internal/rootpublication/coordinator.go",
+    "source_bytes": 54803,
+    "source_sha256": "3289de5a237288a0ba30b1744c0a25a15e0043de4cfd4c569ce1108368dc231f",
+    "stored_bytes": 54803,
+    "stored_sha256": "3289de5a237288a0ba30b1744c0a25a15e0043de4cfd4c569ce1108368dc231f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-accepted-source/files/TreeDB/internal/rootpublication/native_builder_work_v6.go",
+    "path": "native-build/atomic-completion-accepted-source/files/TreeDB/internal/rootpublication/native_builder_work_v6.go",
+    "source_bytes": 7233,
+    "source_sha256": "90a0e265648b62e883a46c9e6ae7792bf1a39070b94e2c9e1c51af51d80bc993",
+    "stored_bytes": 7233,
+    "stored_sha256": "90a0e265648b62e883a46c9e6ae7792bf1a39070b94e2c9e1c51af51d80bc993",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-accepted-source/files/TreeDB/internal/rootpublication/native_primary_finish_work_v6.go",
+    "path": "native-build/atomic-completion-accepted-source/files/TreeDB/internal/rootpublication/native_primary_finish_work_v6.go",
+    "source_bytes": 6557,
+    "source_sha256": "c6a1ef44ea9bdec5701afd442b0d28d703214457c9d9e553c2e1a9f871a20cd2",
+    "stored_bytes": 6557,
+    "stored_sha256": "c6a1ef44ea9bdec5701afd442b0d28d703214457c9d9e553c2e1a9f871a20cd2",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-accepted-source/files/TreeDB/internal/rootpublication/native_publication_v6.go",
+    "path": "native-build/atomic-completion-accepted-source/files/TreeDB/internal/rootpublication/native_publication_v6.go",
+    "source_bytes": 28552,
+    "source_sha256": "bc527bca53fb225fef4165cb3ac2ea5d9b4cb7659ac6b5d0a1261cfe6f182534",
+    "stored_bytes": 28552,
+    "stored_sha256": "bc527bca53fb225fef4165cb3ac2ea5d9b4cb7659ac6b5d0a1261cfe6f182534",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-accepted-source/files/TreeDB/internal/rootpublication/primary_terminal_completion_v6.go",
+    "path": "native-build/atomic-completion-accepted-source/files/TreeDB/internal/rootpublication/primary_terminal_completion_v6.go",
+    "source_bytes": 4732,
+    "source_sha256": "5f4070a0884cfc31ecb13249562b96267b5a249a69029075fef6b08ed2f0794d",
+    "stored_bytes": 4732,
+    "stored_sha256": "5f4070a0884cfc31ecb13249562b96267b5a249a69029075fef6b08ed2f0794d",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-accepted-source/files/TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+    "path": "native-build/atomic-completion-accepted-source/files/TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+    "source_bytes": 27096,
+    "source_sha256": "1c61ddb08a86ecf70f966006e21981125302ba2b6054a02d21c5edd93a531870",
+    "stored_bytes": 27096,
+    "stored_sha256": "1c61ddb08a86ecf70f966006e21981125302ba2b6054a02d21c5edd93a531870",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-accepted-source/files/TreeDB/internal/rootpublication/resource_empty_sync_work_v6.go",
+    "path": "native-build/atomic-completion-accepted-source/files/TreeDB/internal/rootpublication/resource_empty_sync_work_v6.go",
+    "source_bytes": 2210,
+    "source_sha256": "e639a7f4fbbd96d77c2f1fd2765a76ead2a6cdb070d62199c003fc933a175212",
+    "stored_bytes": 2210,
+    "stored_sha256": "e639a7f4fbbd96d77c2f1fd2765a76ead2a6cdb070d62199c003fc933a175212",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-accepted-source/files/TreeDB/internal/rootpublication/resource_index_sync_work_v6.go",
+    "path": "native-build/atomic-completion-accepted-source/files/TreeDB/internal/rootpublication/resource_index_sync_work_v6.go",
+    "source_bytes": 4690,
+    "source_sha256": "925563404dd295d3ec80d4cbe34c38a735a571132826140c31ddba65262822ad",
+    "stored_bytes": 4690,
+    "stored_sha256": "925563404dd295d3ec80d4cbe34c38a735a571132826140c31ddba65262822ad",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-accepted-source/files/TreeDB/internal/rootpublication/resource_original_cleanup.go",
+    "path": "native-build/atomic-completion-accepted-source/files/TreeDB/internal/rootpublication/resource_original_cleanup.go",
+    "source_bytes": 12096,
+    "source_sha256": "be01b344603485b43b21d89bd37a9acab5edd23a3f392a0dbc513c6722a490fb",
+    "stored_bytes": 12096,
+    "stored_sha256": "be01b344603485b43b21d89bd37a9acab5edd23a3f392a0dbc513c6722a490fb",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-accepted-source/files/TreeDB/internal/rootpublication/resource_original_custody_work_v6_test.go",
+    "path": "native-build/atomic-completion-accepted-source/files/TreeDB/internal/rootpublication/resource_original_custody_work_v6_test.go",
+    "source_bytes": 5452,
+    "source_sha256": "5cb42184696bac099a3d7324c9156ad2c2fea68ed1343be14376280eb79f3346",
+    "stored_bytes": 5452,
+    "stored_sha256": "5cb42184696bac099a3d7324c9156ad2c2fea68ed1343be14376280eb79f3346",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-accepted-source/files/TreeDB/internal/rootpublication/resource_set_release_work_v6.go",
+    "path": "native-build/atomic-completion-accepted-source/files/TreeDB/internal/rootpublication/resource_set_release_work_v6.go",
+    "source_bytes": 10285,
+    "source_sha256": "b3b6d77ea2f6af4e8c75a88d5fdaed62d5a56b4546ca6b1e2d7dd64421bc4993",
+    "stored_bytes": 10285,
+    "stored_sha256": "b3b6d77ea2f6af4e8c75a88d5fdaed62d5a56b4546ca6b1e2d7dd64421bc4993",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-accepted-source/files/TreeDB/mvcc/native_prune_backend_route_v6_test.go",
+    "path": "native-build/atomic-completion-accepted-source/files/TreeDB/mvcc/native_prune_backend_route_v6_test.go",
+    "source_bytes": 13013,
+    "source_sha256": "ec745d34ed885c1c85edcea494ba8115a6f7a8877de18b22e5f5534229589c6b",
+    "stored_bytes": 13013,
+    "stored_sha256": "ec745d34ed885c1c85edcea494ba8115a6f7a8877de18b22e5f5534229589c6b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-accepted-source/files/TreeDB/mvcc/prune_cursor_v6.go",
+    "path": "native-build/atomic-completion-accepted-source/files/TreeDB/mvcc/prune_cursor_v6.go",
+    "source_bytes": 27829,
+    "source_sha256": "67741d492a926d94dc347f2a073f883b2bf2d793334e1de79095d46bf58c9cba",
+    "stored_bytes": 27829,
+    "stored_sha256": "67741d492a926d94dc347f2a073f883b2bf2d793334e1de79095d46bf58c9cba",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-accepted-source/files/TreeDB/pager/grow_work.go",
+    "path": "native-build/atomic-completion-accepted-source/files/TreeDB/pager/grow_work.go",
+    "source_bytes": 24157,
+    "source_sha256": "631b6fee62736c7e407c911b685e8f4fa5d5496d81c9c79f5194018c9cac5fa0",
+    "stored_bytes": 24157,
+    "stored_sha256": "631b6fee62736c7e407c911b685e8f4fa5d5496d81c9c79f5194018c9cac5fa0",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-accepted-source/files/TreeDB/pager/native_file_fence_linux_v6.go",
+    "path": "native-build/atomic-completion-accepted-source/files/TreeDB/pager/native_file_fence_linux_v6.go",
+    "source_bytes": 1143,
+    "source_sha256": "5fd7ca9620c24e81694905f223ad8279c884a9e8a5391585fdf584091496e4ae",
+    "stored_bytes": 1143,
+    "stored_sha256": "5fd7ca9620c24e81694905f223ad8279c884a9e8a5391585fdf584091496e4ae",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-accepted-source/files/TreeDB/pager/native_file_fence_linux_v6_test.go",
+    "path": "native-build/atomic-completion-accepted-source/files/TreeDB/pager/native_file_fence_linux_v6_test.go",
+    "source_bytes": 4918,
+    "source_sha256": "4005bbec5143eb3efcf9c39115ea5671d65b4acc15f7f3b2881b90e3cf803a38",
+    "stored_bytes": 4918,
+    "stored_sha256": "4005bbec5143eb3efcf9c39115ea5671d65b4acc15f7f3b2881b90e3cf803a38",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-accepted-source/files/TreeDB/pager/native_file_fence_other_v6.go",
+    "path": "native-build/atomic-completion-accepted-source/files/TreeDB/pager/native_file_fence_other_v6.go",
+    "source_bytes": 281,
+    "source_sha256": "a23092a8cc08d156f6d75843d79b904945aa125196f95ca591dcf1c9099a085f",
+    "stored_bytes": 281,
+    "stored_sha256": "a23092a8cc08d156f6d75843d79b904945aa125196f95ca591dcf1c9099a085f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-accepted-source/files/TreeDB/pager/native_file_fence_v6.go",
+    "path": "native-build/atomic-completion-accepted-source/files/TreeDB/pager/native_file_fence_v6.go",
+    "source_bytes": 2446,
+    "source_sha256": "1fd9ba6dc061e533ddacfc0fdc050938f59a65ea59d2010604c388d52c5a4f25",
+    "stored_bytes": 2446,
+    "stored_sha256": "1fd9ba6dc061e533ddacfc0fdc050938f59a65ea59d2010604c388d52c5a4f25",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-accepted-source/files/TreeDB/pager/write_work.go",
+    "path": "native-build/atomic-completion-accepted-source/files/TreeDB/pager/write_work.go",
+    "source_bytes": 20002,
+    "source_sha256": "fb82200f629812f20f6aa35744d4197e5e79d4cee750eee9413cd1fee52a288b",
+    "stored_bytes": 20002,
+    "stored_sha256": "fb82200f629812f20f6aa35744d4197e5e79d4cee750eee9413cd1fee52a288b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-accepted-source/root-binding.json",
+    "path": "native-build/atomic-completion-accepted-source/root-binding.json",
+    "source_bytes": 9875,
+    "source_sha256": "1741af5447d713d489175c107c12cbb960273e4d3eace6df7368c18c2204242d",
+    "stored_bytes": 9875,
+    "stored_sha256": "1741af5447d713d489175c107c12cbb960273e4d3eace6df7368c18c2204242d",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-fixture-successor/failure-disposition.md",
+    "path": "native-build/atomic-completion-repair-fixture-successor/failure-disposition.md",
+    "source_bytes": 1692,
+    "source_sha256": "5f7eb8b4c149c39c7ba40be23cfe5150b1803613db6f4476420981318739b3ec",
+    "stored_bytes": 1692,
+    "stored_sha256": "5f7eb8b4c149c39c7ba40be23cfe5150b1803613db6f4476420981318739b3ec",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-fixture-successor/fixture-only.patch",
+    "path": "native-build/atomic-completion-repair-fixture-successor/fixture-only.patch.gz",
+    "source_bytes": 4563,
+    "source_sha256": "d7beeb394ed5a8f3e651779b4bcd7af5d64237f8534fcc588a773bcd6cbebebd",
+    "stored_bytes": 1686,
+    "stored_sha256": "529ae07f1a94b031cab10d73c6d01c2bbf1f00848d14046faffade895434d4b2",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-fixture-successor/granted-focused-verification/compile-only/command.json",
+    "path": "native-build/atomic-completion-repair-fixture-successor/granted-focused-verification/compile-only/command.json",
+    "source_bytes": 1606,
+    "source_sha256": "c42408dadf042546bdce5e6a36287f30303573924b7c48aae390f4d99ad3ea63",
+    "stored_bytes": 1606,
+    "stored_sha256": "c42408dadf042546bdce5e6a36287f30303573924b7c48aae390f4d99ad3ea63",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-fixture-successor/granted-focused-verification/compile-only/process.json",
+    "path": "native-build/atomic-completion-repair-fixture-successor/granted-focused-verification/compile-only/process.json",
+    "source_bytes": 141,
+    "source_sha256": "e78f4439b4eea3726f3b6b4d29299a76340281a7072061d512d43cefa8be1e67",
+    "stored_bytes": 141,
+    "stored_sha256": "e78f4439b4eea3726f3b6b4d29299a76340281a7072061d512d43cefa8be1e67",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-fixture-successor/granted-focused-verification/compile-only/result.json",
+    "path": "native-build/atomic-completion-repair-fixture-successor/granted-focused-verification/compile-only/result.json",
+    "source_bytes": 3745,
+    "source_sha256": "ace105cb6bec15bde515d574b7f9eb9a46dc6215ddfbddd14d3697affff8f8ca",
+    "stored_bytes": 3745,
+    "stored_sha256": "ace105cb6bec15bde515d574b7f9eb9a46dc6215ddfbddd14d3697affff8f8ca",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-fixture-successor/granted-focused-verification/compile-only/run.log",
+    "path": "native-build/atomic-completion-repair-fixture-successor/granted-focused-verification/compile-only/run.log.gz",
+    "source_bytes": 456,
+    "source_sha256": "225c63386c7fa7f62386201ef90bac08895e074548831cf6da5a875fc6640659",
+    "stored_bytes": 161,
+    "stored_sha256": "f7fa1664eaa2c49395772faee024feac8a4bb983dfea3073fba27061a8a375eb",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-fixture-successor/granted-focused-verification/compile-only/source-after.json",
+    "path": "native-build/atomic-completion-repair-fixture-successor/granted-focused-verification/compile-only/source-after.json.gz",
+    "source_bytes": 1584867,
+    "source_sha256": "83b71641be6460d2ece624fec51b8a84ad3ecea158844eb1c61b0828a72f0fcd",
+    "stored_bytes": 462016,
+    "stored_sha256": "2b258ee5c64641f151491676705a3bcc8169874af441b93f6123035076402b88",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-fixture-successor/granted-focused-verification/compile-only/source-before.json",
+    "path": "native-build/atomic-completion-repair-fixture-successor/granted-focused-verification/compile-only/source-before.json.gz",
+    "source_bytes": 1584867,
+    "source_sha256": "83b71641be6460d2ece624fec51b8a84ad3ecea158844eb1c61b0828a72f0fcd",
+    "stored_bytes": 462017,
+    "stored_sha256": "eba2bf699ca28bc94c3bd7f5691852993f31f31e7a8db8f0053ef9b89446cb3d",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-fixture-successor/granted-focused-verification/focused-normal/command.json",
+    "path": "native-build/atomic-completion-repair-fixture-successor/granted-focused-verification/focused-normal/command.json",
+    "source_bytes": 2607,
+    "source_sha256": "d646e24588d7883fd3bebbf8f7d80f046da948656659459083fc58841cc6f1c4",
+    "stored_bytes": 2607,
+    "stored_sha256": "d646e24588d7883fd3bebbf8f7d80f046da948656659459083fc58841cc6f1c4",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-fixture-successor/granted-focused-verification/focused-normal/process.json",
+    "path": "native-build/atomic-completion-repair-fixture-successor/granted-focused-verification/focused-normal/process.json",
+    "source_bytes": 141,
+    "source_sha256": "86d76c4decd1d36cc5187ffcca644aa7af852999274c2e35e4fc7f41506489e6",
+    "stored_bytes": 141,
+    "stored_sha256": "86d76c4decd1d36cc5187ffcca644aa7af852999274c2e35e4fc7f41506489e6",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-fixture-successor/granted-focused-verification/focused-normal/result.json",
+    "path": "native-build/atomic-completion-repair-fixture-successor/granted-focused-verification/focused-normal/result.json",
+    "source_bytes": 5492,
+    "source_sha256": "01dfced47597194aaba9086574e204b2a402c739f59228d5b0d66aab61ecaf9b",
+    "stored_bytes": 5492,
+    "stored_sha256": "01dfced47597194aaba9086574e204b2a402c739f59228d5b0d66aab61ecaf9b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-fixture-successor/granted-focused-verification/focused-normal/run.log",
+    "path": "native-build/atomic-completion-repair-fixture-successor/granted-focused-verification/focused-normal/run.log.gz",
+    "source_bytes": 9241,
+    "source_sha256": "9953cea9413f9f70ed1bdfe5ad888857e4328144919cc23422be327b8d55467f",
+    "stored_bytes": 1621,
+    "stored_sha256": "28735bece3203d62f0c69c4e5c084fec5dd34935bc3f33db34437a3280238410",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-fixture-successor/granted-focused-verification/focused-normal/source-after.json",
+    "path": "native-build/atomic-completion-repair-fixture-successor/granted-focused-verification/focused-normal/source-after.json.gz",
+    "source_bytes": 1584867,
+    "source_sha256": "83b71641be6460d2ece624fec51b8a84ad3ecea158844eb1c61b0828a72f0fcd",
+    "stored_bytes": 462016,
+    "stored_sha256": "2b258ee5c64641f151491676705a3bcc8169874af441b93f6123035076402b88",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-fixture-successor/granted-focused-verification/focused-normal/source-before.json",
+    "path": "native-build/atomic-completion-repair-fixture-successor/granted-focused-verification/focused-normal/source-before.json.gz",
+    "source_bytes": 1584867,
+    "source_sha256": "83b71641be6460d2ece624fec51b8a84ad3ecea158844eb1c61b0828a72f0fcd",
+    "stored_bytes": 462017,
+    "stored_sha256": "eba2bf699ca28bc94c3bd7f5691852993f31f31e7a8db8f0053ef9b89446cb3d",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-fixture-successor/granted-focused-verification/focused-race/command.json",
+    "path": "native-build/atomic-completion-repair-fixture-successor/granted-focused-verification/focused-race/command.json",
+    "source_bytes": 2616,
+    "source_sha256": "4650739b00086372aabdb83b278a02733407be001e7e3a38adefe2b91b5918b3",
+    "stored_bytes": 2616,
+    "stored_sha256": "4650739b00086372aabdb83b278a02733407be001e7e3a38adefe2b91b5918b3",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-fixture-successor/granted-focused-verification/focused-race/process.json",
+    "path": "native-build/atomic-completion-repair-fixture-successor/granted-focused-verification/focused-race/process.json",
+    "source_bytes": 141,
+    "source_sha256": "59e9fadcde9fa7c9bfeca59f67ac3b9158812ca502ad59d9abf8ca181f8938b6",
+    "stored_bytes": 141,
+    "stored_sha256": "59e9fadcde9fa7c9bfeca59f67ac3b9158812ca502ad59d9abf8ca181f8938b6",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-fixture-successor/granted-focused-verification/focused-race/result.json",
+    "path": "native-build/atomic-completion-repair-fixture-successor/granted-focused-verification/focused-race/result.json",
+    "source_bytes": 13234,
+    "source_sha256": "a6ff694d6759d356b40ef49c7836eebc3375778232df6763a3bf1ef08763e35e",
+    "stored_bytes": 13234,
+    "stored_sha256": "a6ff694d6759d356b40ef49c7836eebc3375778232df6763a3bf1ef08763e35e",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-fixture-successor/granted-focused-verification/focused-race/run.log",
+    "path": "native-build/atomic-completion-repair-fixture-successor/granted-focused-verification/focused-race/run.log.gz",
+    "source_bytes": 9241,
+    "source_sha256": "afe84dd2e4e742637359dd60a7465722dc542d007961e27e233cb9b788c30fb9",
+    "stored_bytes": 1619,
+    "stored_sha256": "f2126a5da95c16d0ec9082eb0a2fec0e43d1faa6e646c28c68d9b7a5921c7499",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-fixture-successor/granted-focused-verification/focused-race/source-after.json",
+    "path": "native-build/atomic-completion-repair-fixture-successor/granted-focused-verification/focused-race/source-after.json.gz",
+    "source_bytes": 1584867,
+    "source_sha256": "83b71641be6460d2ece624fec51b8a84ad3ecea158844eb1c61b0828a72f0fcd",
+    "stored_bytes": 462016,
+    "stored_sha256": "2b258ee5c64641f151491676705a3bcc8169874af441b93f6123035076402b88",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-fixture-successor/granted-focused-verification/focused-race/source-before.json",
+    "path": "native-build/atomic-completion-repair-fixture-successor/granted-focused-verification/focused-race/source-before.json.gz",
+    "source_bytes": 1584867,
+    "source_sha256": "83b71641be6460d2ece624fec51b8a84ad3ecea158844eb1c61b0828a72f0fcd",
+    "stored_bytes": 462017,
+    "stored_sha256": "eba2bf699ca28bc94c3bd7f5691852993f31f31e7a8db8f0053ef9b89446cb3d",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-fixture-successor/granted-focused-verification/identity.json",
+    "path": "native-build/atomic-completion-repair-fixture-successor/granted-focused-verification/identity.json",
+    "source_bytes": 862,
+    "source_sha256": "04a5732ce3de638e1d520a14d6e0a1e5c01c80a08d33c00d11f6d7b802c0f349",
+    "stored_bytes": 862,
+    "stored_sha256": "04a5732ce3de638e1d520a14d6e0a1e5c01c80a08d33c00d11f6d7b802c0f349",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-fixture-successor/granted-focused-verification/summary.json",
+    "path": "native-build/atomic-completion-repair-fixture-successor/granted-focused-verification/summary.json",
+    "source_bytes": 1122,
+    "source_sha256": "b81afda06c91a2ca176cb5513adb3cb7a656f85681b91187f0282158eb20ff1f",
+    "stored_bytes": 1122,
+    "stored_sha256": "b81afda06c91a2ca176cb5513adb3cb7a656f85681b91187f0282158eb20ff1f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-fixture-successor/granted-focused-verification/verification-report.md",
+    "path": "native-build/atomic-completion-repair-fixture-successor/granted-focused-verification/verification-report.md",
+    "source_bytes": 3104,
+    "source_sha256": "87bb16721972be42cbde4eb77c3f7bba7a108374a9fc87d242d07489a928fb88",
+    "stored_bytes": 3104,
+    "stored_sha256": "87bb16721972be42cbde4eb77c3f7bba7a108374a9fc87d242d07489a928fb88",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-fixture-successor/parent-authorization.json",
+    "path": "native-build/atomic-completion-repair-fixture-successor/parent-authorization.json",
+    "source_bytes": 1507,
+    "source_sha256": "4fe6291297eba5bd31b471a735640e34f12675b9b3c9b1412340415a07535d92",
+    "stored_bytes": 1507,
+    "stored_sha256": "4fe6291297eba5bd31b471a735640e34f12675b9b3c9b1412340415a07535d92",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-fixture-successor/proposed-commands.json",
+    "path": "native-build/atomic-completion-repair-fixture-successor/proposed-commands.json",
+    "source_bytes": 6476,
+    "source_sha256": "ac7490ebc38dd888c321d0f889a719576fc7a26ad61a59d981416754850fc101",
+    "stored_bytes": 6476,
+    "stored_sha256": "ac7490ebc38dd888c321d0f889a719576fc7a26ad61a59d981416754850fc101",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-fixture-successor/receipt.json",
+    "path": "native-build/atomic-completion-repair-fixture-successor/receipt.json",
+    "source_bytes": 899,
+    "source_sha256": "69903ebab433090ac9390d9f8928b9b6d7249bb102d337dea57e358808cf66eb",
+    "stored_bytes": 899,
+    "stored_sha256": "69903ebab433090ac9390d9f8928b9b6d7249bb102d337dea57e358808cf66eb",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-fixture-successor/repair-delta.json",
+    "path": "native-build/atomic-completion-repair-fixture-successor/repair-delta.json",
+    "source_bytes": 326,
+    "source_sha256": "3c1348b24d55c3856b076eab3993a6b82fa355ccc5e645286c84625ceacde0d4",
+    "stored_bytes": 326,
+    "stored_sha256": "3c1348b24d55c3856b076eab3993a6b82fa355ccc5e645286c84625ceacde0d4",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-fixture-successor/run-granted-focused.py",
+    "path": "native-build/atomic-completion-repair-fixture-successor/run-granted-focused.py",
+    "source_bytes": 7263,
+    "source_sha256": "5a9c64b0b4975673d34d82634e835e501f322c5161a7b3e87767363ab2c71f89",
+    "stored_bytes": 7263,
+    "stored_sha256": "5a9c64b0b4975673d34d82634e835e501f322c5161a7b3e87767363ab2c71f89",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-fixture-successor/source-frozen.json",
+    "path": "native-build/atomic-completion-repair-fixture-successor/source-frozen.json.gz",
+    "source_bytes": 1584867,
+    "source_sha256": "83b71641be6460d2ece624fec51b8a84ad3ecea158844eb1c61b0828a72f0fcd",
+    "stored_bytes": 462017,
+    "stored_sha256": "441ce57be3b16802b013a6f319ebe849a9889418dbbe13cca3401e3ef0fff3fa",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-source/granted-focused-verification/compile-only/command.json",
+    "path": "native-build/atomic-completion-repair-source/granted-focused-verification/compile-only/command.json",
+    "source_bytes": 1584,
+    "source_sha256": "f6ee3f99388a053a03b0da820a28629d6bc44cee7c2352390c0f446f5dc5ef28",
+    "stored_bytes": 1584,
+    "stored_sha256": "f6ee3f99388a053a03b0da820a28629d6bc44cee7c2352390c0f446f5dc5ef28",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-source/granted-focused-verification/compile-only/process.json",
+    "path": "native-build/atomic-completion-repair-source/granted-focused-verification/compile-only/process.json",
+    "source_bytes": 141,
+    "source_sha256": "a408750bccacb69b7737333af12733499e227b39e453b6116e77f34e554bbd0a",
+    "stored_bytes": 141,
+    "stored_sha256": "a408750bccacb69b7737333af12733499e227b39e453b6116e77f34e554bbd0a",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-source/granted-focused-verification/compile-only/result.json",
+    "path": "native-build/atomic-completion-repair-source/granted-focused-verification/compile-only/result.json",
+    "source_bytes": 8103,
+    "source_sha256": "1915c101b79b3791c36e89e3567ecc58d36875e5fb974544d8df46f26158a4f7",
+    "stored_bytes": 8103,
+    "stored_sha256": "1915c101b79b3791c36e89e3567ecc58d36875e5fb974544d8df46f26158a4f7",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-source/granted-focused-verification/compile-only/run.log",
+    "path": "native-build/atomic-completion-repair-source/granted-focused-verification/compile-only/run.log.gz",
+    "source_bytes": 456,
+    "source_sha256": "895e202d25c2309952f92ad814c33189fbd12b36d1d109400d2d3b136bcf10ea",
+    "stored_bytes": 162,
+    "stored_sha256": "00c30e08889d5d591ea86dad0aa5c511ac5a35f87cf2a310eaa373784d8d7f32",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-source/granted-focused-verification/compile-only/source-after.json",
+    "path": "native-build/atomic-completion-repair-source/granted-focused-verification/compile-only/source-after.json.gz",
+    "source_bytes": 1584867,
+    "source_sha256": "dd03a710cb0a0c277465d6fd5f913c7455b4f3cad4515503516e39210a39e4db",
+    "stored_bytes": 462017,
+    "stored_sha256": "0f0aa215e167013f80f13421b46f319a1bf93a2cacb0efae422e0f7f80fa0021",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-source/granted-focused-verification/compile-only/source-before.json",
+    "path": "native-build/atomic-completion-repair-source/granted-focused-verification/compile-only/source-before.json.gz",
+    "source_bytes": 1584867,
+    "source_sha256": "dd03a710cb0a0c277465d6fd5f913c7455b4f3cad4515503516e39210a39e4db",
+    "stored_bytes": 462018,
+    "stored_sha256": "1a9f4b970489d4b44215571ecd3c90732d377d30deff3ef1d5bd45023ad83ae7",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-source/granted-focused-verification/focused-normal/command.json",
+    "path": "native-build/atomic-completion-repair-source/granted-focused-verification/focused-normal/command.json",
+    "source_bytes": 2585,
+    "source_sha256": "2dcea9d85ec9fe8b4ba9e675649d8191cd010695292aa9b10d8e50249c1d5b95",
+    "stored_bytes": 2585,
+    "stored_sha256": "2dcea9d85ec9fe8b4ba9e675649d8191cd010695292aa9b10d8e50249c1d5b95",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-source/granted-focused-verification/focused-normal/process.json",
+    "path": "native-build/atomic-completion-repair-source/granted-focused-verification/focused-normal/process.json",
+    "source_bytes": 141,
+    "source_sha256": "64f0b48aee4f5e5b0cf139646a9638e4a2c701f15eafe38c8a94514309107ab2",
+    "stored_bytes": 141,
+    "stored_sha256": "64f0b48aee4f5e5b0cf139646a9638e4a2c701f15eafe38c8a94514309107ab2",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-source/granted-focused-verification/focused-normal/result.json",
+    "path": "native-build/atomic-completion-repair-source/granted-focused-verification/focused-normal/result.json",
+    "source_bytes": 4204,
+    "source_sha256": "02b5265219e71773a7f8fc2bf3dbd6ea9cacba18423b52085ee9eaeefe339212",
+    "stored_bytes": 4204,
+    "stored_sha256": "02b5265219e71773a7f8fc2bf3dbd6ea9cacba18423b52085ee9eaeefe339212",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-source/granted-focused-verification/focused-normal/run.log",
+    "path": "native-build/atomic-completion-repair-source/granted-focused-verification/focused-normal/run.log.gz",
+    "source_bytes": 7622,
+    "source_sha256": "36dc9163b56f166c91e1dfcb11e2e76e3831314c78f98d9c1a6a9146b259dd69",
+    "stored_bytes": 1667,
+    "stored_sha256": "879237d7cc45988d940f9bf11e5f9628243e81f3d2e29761dc8891c0533b342b",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-source/granted-focused-verification/focused-normal/source-after.json",
+    "path": "native-build/atomic-completion-repair-source/granted-focused-verification/focused-normal/source-after.json.gz",
+    "source_bytes": 1584867,
+    "source_sha256": "dd03a710cb0a0c277465d6fd5f913c7455b4f3cad4515503516e39210a39e4db",
+    "stored_bytes": 462017,
+    "stored_sha256": "0f0aa215e167013f80f13421b46f319a1bf93a2cacb0efae422e0f7f80fa0021",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-source/granted-focused-verification/focused-normal/source-before.json",
+    "path": "native-build/atomic-completion-repair-source/granted-focused-verification/focused-normal/source-before.json.gz",
+    "source_bytes": 1584867,
+    "source_sha256": "dd03a710cb0a0c277465d6fd5f913c7455b4f3cad4515503516e39210a39e4db",
+    "stored_bytes": 462018,
+    "stored_sha256": "1a9f4b970489d4b44215571ecd3c90732d377d30deff3ef1d5bd45023ad83ae7",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-source/granted-focused-verification/identity.json",
+    "path": "native-build/atomic-completion-repair-source/granted-focused-verification/identity.json",
+    "source_bytes": 740,
+    "source_sha256": "849b2189b074c2c755527b2c9ad24a7065548ea01152487b544304b176aacfa9",
+    "stored_bytes": 740,
+    "stored_sha256": "849b2189b074c2c755527b2c9ad24a7065548ea01152487b544304b176aacfa9",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-source/granted-focused-verification/summary.json",
+    "path": "native-build/atomic-completion-repair-source/granted-focused-verification/summary.json",
+    "source_bytes": 890,
+    "source_sha256": "c2e903df43ee053a73b0d3d078b11c6131b2c58b19afd1a74231802b724b6ee9",
+    "stored_bytes": 890,
+    "stored_sha256": "c2e903df43ee053a73b0d3d078b11c6131b2c58b19afd1a74231802b724b6ee9",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-source/granted-focused-verification/verification-report.md",
+    "path": "native-build/atomic-completion-repair-source/granted-focused-verification/verification-report.md",
+    "source_bytes": 3017,
+    "source_sha256": "ebfeaf0bbf4aef6554e20656b9a64ff2d50e7f0d9ea6d0a954a061875ac89963",
+    "stored_bytes": 3017,
+    "stored_sha256": "ebfeaf0bbf4aef6554e20656b9a64ff2d50e7f0d9ea6d0a954a061875ac89963",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-source/prior-packet-union.json",
+    "path": "native-build/atomic-completion-repair-source/prior-packet-union.json",
+    "source_bytes": 8481,
+    "source_sha256": "192760ee35ce56f6c9a6dec34aa434b4dd517e3f8a19fb8c278b55b28eb6b354",
+    "stored_bytes": 8481,
+    "stored_sha256": "192760ee35ce56f6c9a6dec34aa434b4dd517e3f8a19fb8c278b55b28eb6b354",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-source/proposed-commands.json",
+    "path": "native-build/atomic-completion-repair-source/proposed-commands.json",
+    "source_bytes": 9131,
+    "source_sha256": "4381cb1b4416b2f20d1a180118eefe594d242f1393628f3093dfee2cdbee0821",
+    "stored_bytes": 9131,
+    "stored_sha256": "4381cb1b4416b2f20d1a180118eefe594d242f1393628f3093dfee2cdbee0821",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-source/receipt.json",
+    "path": "native-build/atomic-completion-repair-source/receipt.json",
+    "source_bytes": 1982,
+    "source_sha256": "2bc7bd3f3e263d198c08b04a8c22131f1376597b1f991a4b83bb4e8449bde8dd",
+    "stored_bytes": 1982,
+    "stored_sha256": "2bc7bd3f3e263d198c08b04a8c22131f1376597b1f991a4b83bb4e8449bde8dd",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-source/repair-delta.json",
+    "path": "native-build/atomic-completion-repair-source/repair-delta.json",
+    "source_bytes": 4009,
+    "source_sha256": "9ca14105403dd1f43499a93648b1fa5e2e77d29149d7f2605e3e08ff5596e7a4",
+    "stored_bytes": 4009,
+    "stored_sha256": "9ca14105403dd1f43499a93648b1fa5e2e77d29149d7f2605e3e08ff5596e7a4",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-source/repair-vs-rejected.patch",
+    "path": "native-build/atomic-completion-repair-source/repair-vs-rejected.patch.gz",
+    "source_bytes": 46103,
+    "source_sha256": "f55ef3d05a0871596cb2a3c25d1c44efd8cf6e0a2ece94701574fc7da87fa119",
+    "stored_bytes": 11075,
+    "stored_sha256": "5e17d547f23794e2955ad646f2e0fd996e2c9a710e523f1f36c17c7feebc0152",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-source/root-focused-verification-grant.json",
+    "path": "native-build/atomic-completion-repair-source/root-focused-verification-grant.json",
+    "source_bytes": 7198,
+    "source_sha256": "290b46b50b82ba38b093d80447dfadd4f983ddc31f70a90652df8468ef56f690",
+    "stored_bytes": 7198,
+    "stored_sha256": "290b46b50b82ba38b093d80447dfadd4f983ddc31f70a90652df8468ef56f690",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-source/run-granted-focused.py",
+    "path": "native-build/atomic-completion-repair-source/run-granted-focused.py",
+    "source_bytes": 6974,
+    "source_sha256": "f483e4843bd0189c0d946372b4c290245482898f3ecef979084c47a80c9a8f33",
+    "stored_bytes": 6974,
+    "stored_sha256": "f483e4843bd0189c0d946372b4c290245482898f3ecef979084c47a80c9a8f33",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-source/source-frozen.json",
+    "path": "native-build/atomic-completion-repair-source/source-frozen.json.gz",
+    "source_bytes": 1584867,
+    "source_sha256": "dd03a710cb0a0c277465d6fd5f913c7455b4f3cad4515503516e39210a39e4db",
+    "stored_bytes": 462018,
+    "stored_sha256": "dffb73b381a043c21486dc3401ba656093b017e9aa513dd7a99734773dde47c4",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/atomic-completion-fixture-successor-review.json",
+    "path": "native-decision/atomic-completion-fixture-successor-review.json",
+    "source_bytes": 6165,
+    "source_sha256": "a3fead9a1711014c100eb2ae593c0fd5e07cd6509a17c19a23c9d539f2b23b05",
+    "stored_bytes": 6165,
+    "stored_sha256": "a3fead9a1711014c100eb2ae593c0fd5e07cd6509a17c19a23c9d539f2b23b05",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/atomic-completion-fixture-successor-review.md",
+    "path": "native-decision/atomic-completion-fixture-successor-review.md",
+    "source_bytes": 5046,
+    "source_sha256": "4bc0eac6af0697a36cde21e921d8ff8f4c0896ce87bc790040e32025de2e6d66",
+    "stored_bytes": 5046,
+    "stored_sha256": "4bc0eac6af0697a36cde21e921d8ff8f4c0896ce87bc790040e32025de2e6d66",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/atomic-completion-repair-independent-review.json",
+    "path": "native-decision/atomic-completion-repair-independent-review.json",
+    "source_bytes": 19659,
+    "source_sha256": "9fa1077d8ba02734b1ed98b555570068c8d57b14bcaed67552bde7fa7eaee1a1",
+    "stored_bytes": 19659,
+    "stored_sha256": "9fa1077d8ba02734b1ed98b555570068c8d57b14bcaed67552bde7fa7eaee1a1",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/atomic-completion-repair-independent-review.md",
+    "path": "native-decision/atomic-completion-repair-independent-review.md",
+    "source_bytes": 10401,
+    "source_sha256": "e803f5f278ce42260f8bd8c579d95a306f0643ff43535f71db8c273516c6d89a",
+    "stored_bytes": 10401,
+    "stored_sha256": "e803f5f278ce42260f8bd8c579d95a306f0643ff43535f71db8c273516c6d89a",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/atomic-completion-repair-successor.md",
+    "path": "native-decision/atomic-completion-repair-successor.md",
+    "source_bytes": 24111,
+    "source_sha256": "9f32ced578eea898348f352fc3ec4426fd582e2be2c030f585fb176af09115b0",
+    "stored_bytes": 24111,
+    "stored_sha256": "9f32ced578eea898348f352fc3ec4426fd582e2be2c030f585fb176af09115b0",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-prebuilder-observer-selection.md",
+    "path": "native-decision/root-prebuilder-observer-selection.md",
+    "source_bytes": 3870,
+    "source_sha256": "5ab6a8bd750e83c4e7ff63e5447fff7a9ababf96dcb2c8560ad0df9b16f08278",
+    "stored_bytes": 3870,
+    "stored_sha256": "5ab6a8bd750e83c4e7ff63e5447fff7a9ababf96dcb2c8560ad0df9b16f08278",
+    "encoding": "identity"
+  }
+]

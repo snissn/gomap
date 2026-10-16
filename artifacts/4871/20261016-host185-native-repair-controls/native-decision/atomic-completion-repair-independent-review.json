@@ -1,0 +1,424 @@
+{
+  "schema": "independent-native-source-review-v1",
+  "created_utc": "2026-10-16T00:40:52.000882+00:00",
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW",
+  "reviewer": "ordinary_review independent reviewer",
+  "actual_model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "candidate_edits_by_reviewer": false,
+  "children_spawned": 0,
+  "disposition": "REJECT",
+  "disposition_scope": "Complete exact frozen packet, due NR4. N1/N2/N3 product repairs have no remaining source blocker in inspected graph; this is not runtime/publication acceptance.",
+  "hosted_review_unavailability_reason": "Manual hosted review cannot pin the required gpt-6.1-sol model; hosted review was not requested. This is an explicitly routed independent internal review.",
+  "bindings": {
+    "source_manifest": {
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-source/source-frozen.json",
+      "sha256": "dd03a710cb0a0c277465d6fd5f913c7455b4f3cad4515503516e39210a39e4db",
+      "files": 10342
+    },
+    "source_archive": {
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-source/source-frozen.tar.gz",
+      "sha256": "c528ec5d9b7e6a438ac39d079dfa948fdeac137fd106a6e23bbceffeda615834"
+    },
+    "repair_patch": {
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-source/repair-vs-rejected.patch",
+      "sha256": "f55ef3d05a0871596cb2a3c25d1c44efd8cf6e0a2ece94701574fc7da87fa119"
+    },
+    "successor_document": {
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/atomic-completion-repair-successor.md",
+      "sha256": "9f32ced578eea898348f352fc3ec4426fd582e2be2c030f585fb176af09115b0"
+    },
+    "root_selection": {
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-atomic-completion-repair-selection.md",
+      "sha256": "cd43a01ad975e8fa64d9c810e733cb650eb003cdececb20de97b26ed021e12de"
+    },
+    "proposed_commands": {
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-source/proposed-commands.json",
+      "sha256": "4381cb1b4416b2f20d1a180118eefe594d242f1393628f3093dfee2cdbee0821"
+    },
+    "go_executable_sha256": "d68b7abbc40d0844f673f6cf06ae3cded225c50437c6454fa37ef178d079fe65"
+  },
+  "delta_paths": [
+    {
+      "after_sha256": "7a7788637691958b068e6e7352ad8562d79338a3a2bacc51a9afdd4d754d3ca8",
+      "before_sha256": "ee6355e0e9f7f0de046e31dcaecd18de338d655f486a7a3062fb71eedd21da3f",
+      "new": false,
+      "path": "TreeDB/db/db.go"
+    },
+    {
+      "after_sha256": "9387481e5eada2975d03bb951a269a012c9034a78411d95f3ebcbf3391e1d14d",
+      "before_sha256": null,
+      "new": true,
+      "path": "TreeDB/db/native_activation_output_admission_v6_test.go"
+    },
+    {
+      "after_sha256": "7d1c67455d774668e37c41452bdd481d7999573bdebeea588a4a38ce7bc4dd7a",
+      "before_sha256": null,
+      "new": true,
+      "path": "TreeDB/db/native_close_barrier_v6_test.go"
+    },
+    {
+      "after_sha256": "45d7dd34004bc14b94fa1592ebe7979f3f33e8924d176d49cc8c49a56df937a7",
+      "before_sha256": "13171a43a1fcfa1c3980b0ff2f864fcd71a847d259d0cbd3b5a543f709a49a4c",
+      "new": false,
+      "path": "TreeDB/db/native_mvcc_candidate_preparation_v6.go"
+    },
+    {
+      "after_sha256": "91564ea1dbeb0c445eb2e5d29bc85b1b68b9d1abd04ac1d8bc57b155ba0f0772",
+      "before_sha256": "41deaf59f1876ca527438b32b3063c3dcee5de146dc115d3060db73c313f243b",
+      "new": false,
+      "path": "TreeDB/db/native_mvcc_publication_binding_v6.go"
+    },
+    {
+      "after_sha256": "d53b48552baf34119602606b7bcc4f56a9bc50c49686f2eba388f63751f0f7e8",
+      "before_sha256": "0b915c70c91836f6757701f6215998c4a8eba4178bd61222e5b8cd38239b5b95",
+      "new": false,
+      "path": "TreeDB/db/native_mvcc_seal_preparation_v6.go"
+    },
+    {
+      "after_sha256": "c948fdb8b76c231df5af6e6618b81b42125d9e30f217110f791bcfa577b349c3",
+      "before_sha256": null,
+      "new": true,
+      "path": "TreeDB/db/native_pager_operations_construction_v6_test.go"
+    },
+    {
+      "after_sha256": "a5b9f6023ccb7460005b49ba086a901f436a4b1ce43d51f7c800afc05c9184a6",
+      "before_sha256": "145275e3a77a6de3196c4ebf1e1fcd883550d025c9a02be0ab9be1072fd48d82",
+      "new": false,
+      "path": "TreeDB/db/native_stable_pager_capture_v6.go"
+    },
+    {
+      "after_sha256": "b8deb9d4af2c71094e9197ed0cadae4e7a99993e557b88bb0eb1adf2dab57889",
+      "before_sha256": "962a083cb831d17ef4575d55652616f47d2fd5dc2002ebfea3002c02ca3152a9",
+      "new": false,
+      "path": "TreeDB/db/primary_visible_abort_work_v6.go"
+    },
+    {
+      "after_sha256": "bd431f5f851fdbd934ddb0ffbcc903bc13019b95ebe8a45dfb035b7612468d61",
+      "before_sha256": "e93ed7dc145e7bd75f092b47a423b3aa80e3c8354ba6a40b0da0936bea1a9881",
+      "new": false,
+      "path": "TreeDB/db/root_publication_activation.go"
+    },
+    {
+      "after_sha256": "f00be8ccae837d085cbd3b0c6bac0f3f1c2ed055d9354dab2eba58f83901d06a",
+      "before_sha256": "b2643401fe9bc4ddd2edad345576aaeab6af5c131f76576d39c1d4fa51d9dbcf",
+      "new": false,
+      "path": "TreeDB/db/snapshot_publication_work_v6.go"
+    },
+    {
+      "after_sha256": "033f88c049979a5c218ec7c24634fae4c72d6b510247da3941937fd87bef3b3b",
+      "before_sha256": "fce2a69f1e0f9df61e866ed336f38cfdb6cca198cb3c01f3f4b8063beafaefc1",
+      "new": false,
+      "path": "TreeDB/db/stable_pager_owned_operations.go"
+    },
+    {
+      "after_sha256": "bc527bca53fb225fef4165cb3ac2ea5d9b4cb7659ac6b5d0a1261cfe6f182534",
+      "before_sha256": "9965bfc50403d76f30594877979f36f6ffc393f72d1261dc84d43de07c622b26",
+      "new": false,
+      "path": "TreeDB/internal/rootpublication/native_publication_v6.go"
+    },
+    {
+      "after_sha256": "be01b344603485b43b21d89bd37a9acab5edd23a3f392a0dbc513c6722a490fb",
+      "before_sha256": "bd32a33dae246b2beb47b16ec971ec1d9f3a3f2f0806582993539061b4181dbf",
+      "new": false,
+      "path": "TreeDB/internal/rootpublication/resource_original_cleanup.go"
+    },
+    {
+      "after_sha256": "5cb42184696bac099a3d7324c9156ad2c2fea68ed1343be14376280eb79f3346",
+      "before_sha256": null,
+      "new": true,
+      "path": "TreeDB/internal/rootpublication/resource_original_custody_work_v6_test.go"
+    },
+    {
+      "after_sha256": "ec745d34ed885c1c85edcea494ba8115a6f7a8877de18b22e5f5534229589c6b",
+      "before_sha256": "2d01b312acd40c1a6f72104048c85c60a5e28356d374a39bfa6885f6ce302e50",
+      "new": false,
+      "path": "TreeDB/mvcc/native_prune_backend_route_v6_test.go"
+    }
+  ],
+  "prior_packet_union_paths": [
+    {
+      "path": "TreeDB/db/db.go",
+      "sha256": "7a7788637691958b068e6e7352ad8562d79338a3a2bacc51a9afdd4d754d3ca8"
+    },
+    {
+      "path": "TreeDB/db/durable_primary_runtime_v5.go",
+      "sha256": "b75b40f88596cd75e8b60edc68c5ca8526de41187e68f2b61ba5d81261ea788b"
+    },
+    {
+      "path": "TreeDB/db/native_activation_output_admission_v6_test.go",
+      "sha256": "9387481e5eada2975d03bb951a269a012c9034a78411d95f3ebcbf3391e1d14d"
+    },
+    {
+      "path": "TreeDB/db/native_close_barrier_v6_test.go",
+      "sha256": "7d1c67455d774668e37c41452bdd481d7999573bdebeea588a4a38ce7bc4dd7a"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_candidate_preparation_v6.go",
+      "sha256": "45d7dd34004bc14b94fa1592ebe7979f3f33e8924d176d49cc8c49a56df937a7"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_current_delete_v6.go",
+      "sha256": "5dbc2fb4c8993ed43075650989d63616ae9afd4310b18aaee94c1f9443a9f600"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_final_basis_v6.go",
+      "sha256": "62667066c8d16b4309d49b13735779089e62f2dc714e05809a0f2a0731903ad8"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_final_publication_v6.go",
+      "sha256": "8b36f28459b30a52cc0d3f7fa07c79138db1213c48c476c8c19c1963543b6839"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_publication_binding_v6.go",
+      "sha256": "91564ea1dbeb0c445eb2e5d29bc85b1b68b9d1abd04ac1d8bc57b155ba0f0772"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_published_terminal_v6.go",
+      "sha256": "2efc111a2d2706878b88572498cecd21e9cca7aede421b0abe24e025f98c137e"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_seal_preparation_v6.go",
+      "sha256": "d53b48552baf34119602606b7bcc4f56a9bc50c49686f2eba388f63751f0f7e8"
+    },
+    {
+      "path": "TreeDB/db/native_pager_operations_construction_v6_test.go",
+      "sha256": "c948fdb8b76c231df5af6e6618b81b42125d9e30f217110f791bcfa577b349c3"
+    },
+    {
+      "path": "TreeDB/db/native_publication_remainder_v6.go",
+      "sha256": "8a8b84445dda87a651f88c78842aa633376b01f524d4ae23b0e70f028af5a370"
+    },
+    {
+      "path": "TreeDB/db/native_publication_remainder_v6_test.go",
+      "sha256": "11f984143c8de370d7ae1f9271f01ec1eb767b275a876bd75fc9b36067c9f5f4"
+    },
+    {
+      "path": "TreeDB/db/native_stable_pager_capture_v6.go",
+      "sha256": "a5b9f6023ccb7460005b49ba086a901f436a4b1ce43d51f7c800afc05c9184a6"
+    },
+    {
+      "path": "TreeDB/db/native_visible_capacity_work_v6.go",
+      "sha256": "880ae85894c4051e11e80839c43270cbf616f8ca87fdca5a0cc462897f72cfc9"
+    },
+    {
+      "path": "TreeDB/db/primary_authority_scope_v6.go",
+      "sha256": "3f498dd74f18f421ac2296aade78165034a4077926b83fff012287f4aeef9269"
+    },
+    {
+      "path": "TreeDB/db/primary_materialization_work_v6.go",
+      "sha256": "e784a2ff4950e9ae366252f6c48a904cd504e74390ba95554462415ae20d9ea7"
+    },
+    {
+      "path": "TreeDB/db/primary_ordered_post_work_v6.go",
+      "sha256": "d457014cbfd7133f526d3d2a8ae683f6f1d05c19a326ee2e2103927f13781650"
+    },
+    {
+      "path": "TreeDB/db/primary_runtime_metadata.go",
+      "sha256": "37ec071287c944ef9012a2a49ae8582070caa9cb6463be31e7193347c36f40b0"
+    },
+    {
+      "path": "TreeDB/db/primary_runtime_metadata_test.go",
+      "sha256": "c0dbd2d96b9e0936c2737ab842f7f8630d5dae7aad1666de1fc3338f7b50685d"
+    },
+    {
+      "path": "TreeDB/db/primary_storage_operations_v6.go",
+      "sha256": "2337bdc3f21b9e8bb493fb4c2396c9be46614b03f34fafea8625011dfe978382"
+    },
+    {
+      "path": "TreeDB/db/primary_visible_abort_work_v6.go",
+      "sha256": "b8deb9d4af2c71094e9197ed0cadae4e7a99993e557b88bb0eb1adf2dab57889"
+    },
+    {
+      "path": "TreeDB/db/root_publication_activation.go",
+      "sha256": "bd431f5f851fdbd934ddb0ffbcc903bc13019b95ebe8a45dfb035b7612468d61"
+    },
+    {
+      "path": "TreeDB/db/snapshot_publication_work_v6.go",
+      "sha256": "f00be8ccae837d085cbd3b0c6bac0f3f1c2ed055d9354dab2eba58f83901d06a"
+    },
+    {
+      "path": "TreeDB/db/stable_pager_owned_operations.go",
+      "sha256": "033f88c049979a5c218ec7c24634fae4c72d6b510247da3941937fd87bef3b3b"
+    },
+    {
+      "path": "TreeDB/freelist/allocator_cow.go",
+      "sha256": "0be749f18a8ecfc6f5ac4be338055b662e8a8c245bd67989ac46f7679e25ff88"
+    },
+    {
+      "path": "TreeDB/freelist/allocator_failure_work_v6.go",
+      "sha256": "929d94594a0f9f0a6e50955c2fa396e8a3b58a8b55a5b0662c464f86e515d425"
+    },
+    {
+      "path": "TreeDB/freelist/allocator_publication_work_v6.go",
+      "sha256": "db606aa3225a911755f10a59390ca9c9127c492b59b8c7a5ceae7944d8e5a360"
+    },
+    {
+      "path": "TreeDB/freelist/allocator_publication_work_v6_test.go",
+      "sha256": "0b080c2297dbcf4a8c5ce348f628e52b70f0bc2d93955df829aa0646ffa7e309"
+    },
+    {
+      "path": "TreeDB/freelist/generation_v1_format.go",
+      "sha256": "261f8405daa14e3a51977e4141c1ae3b1c71b0fd2d7efd54174367d17d3537c6"
+    },
+    {
+      "path": "TreeDB/freelist/generation_v1_publication_work_v6.go",
+      "sha256": "fe3111fc989793ac2bc151426bf3c36aa6d8ed026bd61e5dc1a935f18e99f007"
+    },
+    {
+      "path": "TreeDB/freelist/native_publication_bound_v6.go",
+      "sha256": "f4c621a160bec98deacad47140e04be0d294d653894cc0cb0de5cb4fb640ac51"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/coordinator.go",
+      "sha256": "3289de5a237288a0ba30b1744c0a25a15e0043de4cfd4c569ce1108368dc231f"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/native_builder_work_v6.go",
+      "sha256": "90a0e265648b62e883a46c9e6ae7792bf1a39070b94e2c9e1c51af51d80bc993"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/native_primary_finish_work_v6.go",
+      "sha256": "c6a1ef44ea9bdec5701afd442b0d28d703214457c9d9e553c2e1a9f871a20cd2"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/native_publication_v6.go",
+      "sha256": "bc527bca53fb225fef4165cb3ac2ea5d9b4cb7659ac6b5d0a1261cfe6f182534"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/primary_terminal_completion_v6.go",
+      "sha256": "5f4070a0884cfc31ecb13249562b96267b5a249a69029075fef6b08ed2f0794d"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+      "sha256": "1c61ddb08a86ecf70f966006e21981125302ba2b6054a02d21c5edd93a531870"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_empty_sync_work_v6.go",
+      "sha256": "e639a7f4fbbd96d77c2f1fd2765a76ead2a6cdb070d62199c003fc933a175212"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_index_sync_work_v6.go",
+      "sha256": "925563404dd295d3ec80d4cbe34c38a735a571132826140c31ddba65262822ad"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_original_cleanup.go",
+      "sha256": "be01b344603485b43b21d89bd37a9acab5edd23a3f392a0dbc513c6722a490fb"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_original_custody_work_v6_test.go",
+      "sha256": "5cb42184696bac099a3d7324c9156ad2c2fea68ed1343be14376280eb79f3346"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_set_release_work_v6.go",
+      "sha256": "b3b6d77ea2f6af4e8c75a88d5fdaed62d5a56b4546ca6b1e2d7dd64421bc4993"
+    },
+    {
+      "path": "TreeDB/mvcc/native_prune_backend_route_v6_test.go",
+      "sha256": "ec745d34ed885c1c85edcea494ba8115a6f7a8877de18b22e5f5534229589c6b"
+    },
+    {
+      "path": "TreeDB/mvcc/prune_cursor_v6.go",
+      "sha256": "67741d492a926d94dc347f2a073f883b2bf2d793334e1de79095d46bf58c9cba"
+    },
+    {
+      "path": "TreeDB/pager/grow_work.go",
+      "sha256": "631b6fee62736c7e407c911b685e8f4fa5d5496d81c9c79f5194018c9cac5fa0"
+    },
+    {
+      "path": "TreeDB/pager/native_file_fence_linux_v6.go",
+      "sha256": "5fd7ca9620c24e81694905f223ad8279c884a9e8a5391585fdf584091496e4ae"
+    },
+    {
+      "path": "TreeDB/pager/native_file_fence_linux_v6_test.go",
+      "sha256": "4005bbec5143eb3efcf9c39115ea5671d65b4acc15f7f3b2881b90e3cf803a38"
+    },
+    {
+      "path": "TreeDB/pager/native_file_fence_other_v6.go",
+      "sha256": "a23092a8cc08d156f6d75843d79b904945aa125196f95ca591dcf1c9099a085f"
+    },
+    {
+      "path": "TreeDB/pager/native_file_fence_v6.go",
+      "sha256": "1fd9ba6dc061e533ddacfc0fdc050938f59a65ea59d2010604c388d52c5a4f25"
+    },
+    {
+      "path": "TreeDB/pager/write_work.go",
+      "sha256": "fb82200f629812f20f6aa35744d4197e5e79d4cee750eee9413cd1fee52a288b"
+    }
+  ],
+  "identity_checks": {
+    "all_current_files_equal_manifest_before_separately_authorized_fixture_successor": 10342,
+    "all_archive_files_equal_manifest": 10342,
+    "missing_or_extra_archive_files": 0,
+    "exact_delta_paths": 16,
+    "union_paths": 52,
+    "git_commands_run": 0,
+    "live_worktree_no_longer_claimed_frozen_after_root_authorized_successor": true
+  },
+  "findings": [
+    {
+      "id": "NR4",
+      "severity": "blocking-test-fixture",
+      "path": "TreeDB/db/native_pager_operations_construction_v6_test.go",
+      "line": 32,
+      "source_sha256": "c948fdb8b76c231df5af6e6618b81b42125d9e30f217110f791bcfa577b349c3",
+      "trigger": "Fresh empty no-WAL DB with lazy PRIMARY initialization; first before-output subtest.",
+      "cause": "The fixture dereferences idx.primary.Pager() before the original capture initializes PRIMARY. idx.primary is nil, so none of the intended staged-construction/cancellation assertions runs.",
+      "correction": "Use the existing original warm-capture/actual-close setup before recording callback/refund baselines, assert the initialized PRIMARY owner, then exercise the same seven boundaries and real bounded cleanup. Preserve all original limits and assertions.",
+      "evidence": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-source/granted-focused-verification/verification-report.md",
+      "successor_status": "Root authorized a separate fixture-only successor; not included in this frozen review."
+    }
+  ],
+  "prior_findings": [
+    {
+      "id": "N1",
+      "status": "resolved-source",
+      "reason": "Private preborn headers removed. Both original published outputs reserve actual traffic before adoption and allocate only after successful adoption, immediately into original published GC lifetime. Same leaf-generation operand replaces temporary state."
+    },
+    {
+      "id": "N2",
+      "status": "resolved-source",
+      "reason": "Bind crosses original teardown gate; Close joins outside exclusive gate and preserves original runtime/receipt graph on unresolved native custody before handoff, Stop or teardown."
+    },
+    {
+      "id": "N3",
+      "status": "resolved-source-verification-incomplete",
+      "reason": "Same constructor stages actual callback/path, original custody and owner retain with typed actual-owner growth; partial edges remain attached through typed cancellation and actual removal. NR4 prevents staged runtime verification."
+    }
+  ],
+  "pricing": {
+    "F": "281 + D + 2K + 23P + 8M + 3S + N + Z + V + A",
+    "expanded_basis": "140 + D + 2K + 2P + M + Z + V + A + R; R = 141 + 21P + 7M + 3S + N",
+    "actual_F_observed": false,
+    "complete_disjoint_retained_total_observed": false,
+    "new_output_bytes": "sizeof(DBState) + sizeof(snapshotView), plus unchanged initialization traffic",
+    "fresh_constructor_records_zero_bindings_non_nil_owner": 8,
+    "constructor_growth_is_actual_owner_binding_dependent": true,
+    "Q32_progress_proven": false
+  },
+  "verification": {
+    "reviewer_executed_tests_builds_benchmarks": 0,
+    "root_report_inspected": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-source/granted-focused-verification/verification-report.md",
+    "root_compile_only": "PASS four packages exact frozen source",
+    "root_focused_normal": "17 top-level PASS, one FAIL before N3 constructor; package panic prevents later DB tests",
+    "root_focused_race": "not executed",
+    "root_actual33": "not executed in this grant",
+    "proposed_selectors_statically_checked": 22
+  },
+  "ledger_limits": [
+    "Original published DBState/snapshotView GC outputs explicitly remain original legacy output domain; no deterministic last-alias refund or heap/residency total claimed.",
+    "Owner budget allowance and overlapping backing/enrollment lease totals are not a disjoint physical-allocation union.",
+    "Dynamic later-writer Finish geometry remains conditional; actual aggregate F and retained total require source-bound observation.",
+    "Original runtime notification/timer GC service boundary and inherited canonical DATA domain are explicit; no silent enrollment claim."
+  ],
+  "qualification": {
+    "native_publication_accepted": false,
+    "runtime_allowance_granted": false,
+    "numeric_allowance_selected": false,
+    "Q32_1MiB": "original 33/80/4096 RED/ACK0 unchanged",
+    "CI_claim": false,
+    "performance_claim": false,
+    "ordinary_PR_acceptance_claim": false
+  },
+  "next_boundary": "Repair NR4 in a separately frozen fixture successor, review its byte delta and rerun only root-authorized focused verification. A same-fixture prebuilder scalar observer is a defensible later diagnostic proposal after that boundary, not permission to execute and not publication qualification."
+}

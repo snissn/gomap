@@ -1,0 +1,18 @@
+{
+  "archive_verified_files": 10342,
+  "at_utc": "2026-10-16T00:40:21.217741+00:00",
+  "authorization_sha256": "4fe6291297eba5bd31b471a735640e34f12675b9b3c9b1412340415a07535d92",
+  "commands_sha256": "ac7490ebc38dd888c321d0f889a719576fc7a26ad61a59d981416754850fc101",
+  "delta_paths": [
+    "TreeDB/db/native_pager_operations_construction_v6_test.go"
+  ],
+  "fixture_patch_sha256": "d7beeb394ed5a8f3e651779b4bcd7af5d64237f8534fcc588a773bcd6cbebebd",
+  "prior_frozen_manifest_sha256": "dd03a710cb0a0c277465d6fd5f913c7455b4f3cad4515503516e39210a39e4db",
+  "production_unchanged": true,
+  "public_status": "Q32 RED/ACK0",
+  "source_after_archive_equal": true,
+  "source_archive_sha256": "80c9ef74424ba0e6972c6eb24d6af156a59a9a9fbd324cb84621e2126b6af405",
+  "source_files": 10342,
+  "source_frozen": true,
+  "source_manifest_sha256": "83b71641be6460d2ece624fec51b8a84ad3ecea158844eb1c61b0828a72f0fcd"
+}

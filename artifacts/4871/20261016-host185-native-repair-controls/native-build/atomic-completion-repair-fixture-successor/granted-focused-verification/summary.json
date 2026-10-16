@@ -1,0 +1,29 @@
+{
+  "all_groups_empty": true,
+  "commands_executed": 3,
+  "commands_not_executed": [],
+  "completed_utc": "2026-10-16T00:43:04.172329+00:00",
+  "native_publication_runtime": false,
+  "public_status": "Q32 RED/ACK0",
+  "results": [
+    {
+      "exit_code": 0,
+      "name": "compile-only",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-fixture-successor/granted-focused-verification/compile-only/result.json"
+    },
+    {
+      "exit_code": 0,
+      "name": "focused-normal",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-fixture-successor/granted-focused-verification/focused-normal/result.json"
+    },
+    {
+      "exit_code": 0,
+      "name": "focused-race",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-fixture-successor/granted-focused-verification/focused-race/result.json"
+    }
+  ],
+  "source_files": 10342,
+  "source_manifest_sha256": "83b71641be6460d2ece624fec51b8a84ad3ecea158844eb1c61b0828a72f0fcd",
+  "source_still_frozen": true,
+  "stopped_at_first_failure": false
+}

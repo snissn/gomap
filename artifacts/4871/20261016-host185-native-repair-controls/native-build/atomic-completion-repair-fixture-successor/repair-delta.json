@@ -1,0 +1,8 @@
+[
+  {
+    "after_sha256": "336184e6ba124a8ab4c711a966e05dbef19d5c85176861bdd6b07a8dda6a437a",
+    "before_sha256": "c948fdb8b76c231df5af6e6618b81b42125d9e30f217110f791bcfa577b349c3",
+    "classification": "test fixture only; production unchanged",
+    "path": "TreeDB/db/native_pager_operations_construction_v6_test.go"
+  }
+]

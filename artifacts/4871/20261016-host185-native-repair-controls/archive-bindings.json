@@ -1,0 +1,14 @@
+[
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-fixture-successor/source-frozen.tar.gz",
+    "bytes": 181283307,
+    "sha256": "80c9ef74424ba0e6972c6eb24d6af156a59a9a9fbd324cb84621e2126b6af405",
+    "reason": "Full reconstructable source archive or binary retained locally; hash binding retained here."
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-source/source-frozen.tar.gz",
+    "bytes": 181282848,
+    "sha256": "c528ec5d9b7e6a438ac39d079dfa948fdeac137fd106a6e23bbceffeda615834",
+    "reason": "Full reconstructable source archive or binary retained locally; hash binding retained here."
+  }
+]

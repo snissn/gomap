@@ -1,0 +1,565 @@
+{
+  "adopted_children_reaped": [],
+  "elapsed_seconds": 98.87115464871749,
+  "ended_utc": "2026-10-16T00:43:03.378596+00:00",
+  "exit_code": 0,
+  "group_and_children_empty": true,
+  "leader_joined": true,
+  "name": "focused-race",
+  "observed_group_processes": [
+    {
+      "comm": "go",
+      "pgid": 798625,
+      "pid": 798625,
+      "ppid": 797790,
+      "session": 798625,
+      "state": "S"
+    },
+    {
+      "comm": "link",
+      "pgid": 798625,
+      "pid": 798648,
+      "ppid": 798625,
+      "session": 798625,
+      "state": "S"
+    },
+    {
+      "comm": "retainedalloc.t",
+      "pgid": 798625,
+      "pid": 798660,
+      "ppid": 798625,
+      "session": 798625,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 798625,
+      "pid": 798665,
+      "ppid": 798625,
+      "session": 798625,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 798625,
+      "pid": 798670,
+      "ppid": 798625,
+      "session": 798625,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 798625,
+      "pid": 798700,
+      "ppid": 798625,
+      "session": 798625,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 798625,
+      "pid": 798710,
+      "ppid": 798625,
+      "session": 798625,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 798625,
+      "pid": 798719,
+      "ppid": 798625,
+      "session": 798625,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 798625,
+      "pid": 798802,
+      "ppid": 798625,
+      "session": 798625,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 798625,
+      "pid": 798862,
+      "ppid": 798625,
+      "session": 798625,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 798625,
+      "pid": 798872,
+      "ppid": 798625,
+      "session": 798625,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 798625,
+      "pid": 798890,
+      "ppid": 798625,
+      "session": 798625,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 798625,
+      "pid": 798894,
+      "ppid": 798625,
+      "session": 798625,
+      "state": "R"
+    },
+    {
+      "comm": "link",
+      "pgid": 798625,
+      "pid": 798898,
+      "ppid": 798625,
+      "session": 798625,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 798625,
+      "pid": 798954,
+      "ppid": 798625,
+      "session": 798625,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 798625,
+      "pid": 798992,
+      "ppid": 798625,
+      "session": 798625,
+      "state": "R"
+    },
+    {
+      "comm": "rootpublication",
+      "pgid": 798625,
+      "pid": 799000,
+      "ppid": 798625,
+      "session": 798625,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 798625,
+      "pid": 799010,
+      "ppid": 798625,
+      "session": 798625,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 798625,
+      "pid": 799014,
+      "ppid": 798625,
+      "session": 798625,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 798625,
+      "pid": 799018,
+      "ppid": 798625,
+      "session": 798625,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 798625,
+      "pid": 799022,
+      "ppid": 798625,
+      "session": 798625,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 798625,
+      "pid": 799027,
+      "ppid": 798625,
+      "session": 798625,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 798625,
+      "pid": 799031,
+      "ppid": 798625,
+      "session": 798625,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 798625,
+      "pid": 799035,
+      "ppid": 798625,
+      "session": 798625,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 798625,
+      "pid": 799119,
+      "ppid": 798625,
+      "session": 798625,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 798625,
+      "pid": 799556,
+      "ppid": 798625,
+      "session": 798625,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 798625,
+      "pid": 799561,
+      "ppid": 798625,
+      "session": 798625,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 798625,
+      "pid": 799594,
+      "ppid": 798625,
+      "session": 798625,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 798625,
+      "pid": 799598,
+      "ppid": 798625,
+      "session": 798625,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 798625,
+      "pid": 799602,
+      "ppid": 798625,
+      "session": 798625,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 798625,
+      "pid": 799932,
+      "ppid": 798625,
+      "session": 798625,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 798625,
+      "pid": 799936,
+      "ppid": 798625,
+      "session": 798625,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 798625,
+      "pid": 799940,
+      "ppid": 798625,
+      "session": 798625,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 798625,
+      "pid": 799944,
+      "ppid": 798625,
+      "session": 798625,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 798625,
+      "pid": 799948,
+      "ppid": 798625,
+      "session": 798625,
+      "state": "S"
+    },
+    {
+      "comm": "link",
+      "pgid": 798625,
+      "pid": 799956,
+      "ppid": 798625,
+      "session": 798625,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 798625,
+      "pid": 799962,
+      "ppid": 798625,
+      "session": 798625,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 798625,
+      "pid": 799966,
+      "ppid": 798625,
+      "session": 798625,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 798625,
+      "pid": 799974,
+      "ppid": 798625,
+      "session": 798625,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 798625,
+      "pid": 799978,
+      "ppid": 798625,
+      "session": 798625,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 798625,
+      "pid": 799991,
+      "ppid": 798625,
+      "session": 798625,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 798625,
+      "pid": 799999,
+      "ppid": 798625,
+      "session": 798625,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 798625,
+      "pid": 800011,
+      "ppid": 798625,
+      "session": 798625,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 798625,
+      "pid": 800028,
+      "ppid": 798625,
+      "session": 798625,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 798625,
+      "pid": 800040,
+      "ppid": 798625,
+      "session": 798625,
+      "state": "R"
+    },
+    {
+      "comm": "db.test",
+      "pgid": 798625,
+      "pid": 800048,
+      "ppid": 798625,
+      "session": 798625,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 798625,
+      "pid": 800128,
+      "ppid": 798625,
+      "session": 798625,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 798625,
+      "pid": 800132,
+      "ppid": 798625,
+      "session": 798625,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 798625,
+      "pid": 800145,
+      "ppid": 798625,
+      "session": 798625,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 798625,
+      "pid": 800149,
+      "ppid": 798625,
+      "session": 798625,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 798625,
+      "pid": 800153,
+      "ppid": 798625,
+      "session": 798625,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 798625,
+      "pid": 800158,
+      "ppid": 798625,
+      "session": 798625,
+      "state": "S"
+    },
+    {
+      "comm": "link",
+      "pgid": 798625,
+      "pid": 800197,
+      "ppid": 798625,
+      "session": 798625,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 798625,
+      "pid": 800262,
+      "ppid": 798625,
+      "session": 798625,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 798625,
+      "pid": 800272,
+      "ppid": 798625,
+      "session": 798625,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 798625,
+      "pid": 800276,
+      "ppid": 798625,
+      "session": 798625,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 798625,
+      "pid": 800281,
+      "ppid": 798625,
+      "session": 798625,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 798625,
+      "pid": 800289,
+      "ppid": 798625,
+      "session": 798625,
+      "state": "S"
+    },
+    {
+      "comm": "mvcc.test",
+      "pgid": 798625,
+      "pid": 800293,
+      "ppid": 798625,
+      "session": 798625,
+      "state": "S"
+    }
+  ],
+  "pgid": 798625,
+  "pid": 798625,
+  "remaining_direct_or_adopted_children": [],
+  "remaining_group_members": [],
+  "signals": [],
+  "source_after_equals_frozen": true,
+  "source_before_after_equal": true,
+  "source_before_equals_frozen": true,
+  "started_utc": "2026-10-16T00:41:24.507441+00:00",
+  "subreaper_enabled": true,
+  "test_RUN_count": 41,
+  "test_RUN_names": [
+    "TestNativeAtomicOwnerGrowthAdmitsBeforeEffects",
+    "TestNativeAtomicOwnerGrowthPricesOriginalRollback",
+    "TestNativeOwnerGrowthAdapterPreservesYield",
+    "TestNativeOwnerGrowthAdapterPreservesUnsupported",
+    "TestOriginalCleanupCustodyKeepsSameRegistryUntilActualCompletion",
+    "TestOriginalCleanupCustodyKeepsSameRegistryUntilActualCompletion/consumed",
+    "TestOriginalCleanupCustodyKeepsSameRegistryUntilActualCompletion/failed",
+    "TestOriginalCleanupCustodyOverflowRefusesBeforeEffects",
+    "TestOriginalCleanupCustodyTypedGrowthAndRefundV6",
+    "TestOriginalCleanupCustodyTypedUnsupportedAndOrdinaryV6",
+    "TestOriginalCleanupCustodyTypedClosingAndOverflowV6",
+    "TestNativePublishedOutputAdmissionBeforeAdoptionV6",
+    "TestNativePublishedOutputAdmissionBeforeAdoptionV6/1",
+    "TestNativePublishedOutputAdmissionBeforeAdoptionV6/2",
+    "TestNativePublishedOutputAdmissionBeforeAdoptionV6/5",
+    "TestNativeSnapshotPublicationUsesSameLeafOperandV6",
+    "TestNativeIncompleteClosePreservesOriginalRuntimeV6",
+    "TestNativeCompletedCloseRetainsOrdinaryTeardownV6",
+    "TestNativeBindingCrossesOriginalTeardownGateV6",
+    "TestNativeNoDebtClosePreservesOrdinaryHookErrorV6",
+    "TestNativeFiniteOriginalClosureSizesV6",
+    "TestNativePagerOperationsPartialConstructionAndCancellationV6",
+    "TestNativePagerOperationsPartialConstructionAndCancellationV6/before-output",
+    "TestNativePagerOperationsPartialConstructionAndCancellationV6/output-only",
+    "TestNativePagerOperationsPartialConstructionAndCancellationV6/custody-before-owner",
+    "TestNativePagerOperationsPartialConstructionAndCancellationV6/complete",
+    "TestNativePagerOperationsPartialConstructionAndCancellationV6/resume-output",
+    "TestNativePagerOperationsPartialConstructionAndCancellationV6/resume-custody",
+    "TestNativePagerOperationsPartialConstructionAndCancellationV6/owner-overflow",
+    "TestNativePublicationRemainderAndFloorV6",
+    "TestNativePublicationRemainderAndFloorV6/success",
+    "TestNativePublicationRemainderAndFloorV6/refusal",
+    "TestNativePublicationRemainderAndFloorV6/error",
+    "TestNativeStablePagerPartialTokenCancellationV6",
+    "TestNativeStablePagerPartialTokenCancellationV6/before-token",
+    "TestNativeStablePagerPartialTokenCancellationV6/growth-refusal",
+    "TestNativeStablePagerPartialTokenCancellationV6/token-only",
+    "TestNativeStablePagerPartialTokenCancellationV6/before-pinned-backing",
+    "TestNativeStablePagerPartialTokenCancellationV6/before-retain",
+    "TestNativeStablePagerPartialTokenCancellationV6/after-retain",
+    "TestNativeFiniteCursorAdmissionSizesV6"
+  ],
+  "timeout": false,
+  "top_level_fail_count": 0,
+  "top_level_fail_names": [],
+  "top_level_pass_count": 20,
+  "top_level_pass_names": [
+    "TestNativeAtomicOwnerGrowthAdmitsBeforeEffects",
+    "TestNativeAtomicOwnerGrowthPricesOriginalRollback",
+    "TestNativeOwnerGrowthAdapterPreservesYield",
+    "TestNativeOwnerGrowthAdapterPreservesUnsupported",
+    "TestOriginalCleanupCustodyKeepsSameRegistryUntilActualCompletion",
+    "TestOriginalCleanupCustodyOverflowRefusesBeforeEffects",
+    "TestOriginalCleanupCustodyTypedGrowthAndRefundV6",
+    "TestOriginalCleanupCustodyTypedUnsupportedAndOrdinaryV6",
+    "TestOriginalCleanupCustodyTypedClosingAndOverflowV6",
+    "TestNativePublishedOutputAdmissionBeforeAdoptionV6",
+    "TestNativeSnapshotPublicationUsesSameLeafOperandV6",
+    "TestNativeIncompleteClosePreservesOriginalRuntimeV6",
+    "TestNativeCompletedCloseRetainsOrdinaryTeardownV6",
+    "TestNativeBindingCrossesOriginalTeardownGateV6",
+    "TestNativeNoDebtClosePreservesOrdinaryHookErrorV6",
+    "TestNativeFiniteOriginalClosureSizesV6",
+    "TestNativePagerOperationsPartialConstructionAndCancellationV6",
+    "TestNativePublicationRemainderAndFloorV6",
+    "TestNativeStablePagerPartialTokenCancellationV6",
+    "TestNativeFiniteCursorAdmissionSizesV6"
+  ],
+  "top_level_skip_count": 0,
+  "top_level_skip_names": []
+}

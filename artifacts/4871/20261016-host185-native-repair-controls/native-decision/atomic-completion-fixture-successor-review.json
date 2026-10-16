@@ -1,0 +1,115 @@
+{
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW",
+  "reviewer": "ordinary_review",
+  "actual_model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "created_utc": "2026-10-16T00:44:41.077162+00:00",
+  "candidate_edits_by_reviewer": false,
+  "children_spawned": 0,
+  "disposition": "ACCEPT",
+  "scope": "Exact frozen N1/N2/N3 source successor composed with prior complete product review and this one-file fixture repair. No observer acceptance or actual publication qualification.",
+  "findings": [],
+  "resolved_findings": [
+    {
+      "id": "NR4",
+      "status": "resolved",
+      "reason": "Real original no-WAL warm capture/close installs lazy PRIMARY and settles scratch custody before baselines; all seven constructor/cancellation controls now execute and pass normal/race."
+    }
+  ],
+  "source_manifest_sha256": "83b71641be6460d2ece624fec51b8a84ad3ecea158844eb1c61b0828a72f0fcd",
+  "source_files": 10342,
+  "archive_sha256": "80c9ef74424ba0e6972c6eb24d6af156a59a9a9fbd324cb84621e2126b6af405",
+  "archive_path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-fixture-successor/source-frozen.tar.gz",
+  "patch_sha256": "d7beeb394ed5a8f3e651779b4bcd7af5d64237f8534fcc588a773bcd6cbebebd",
+  "prior_manifest_sha256": "dd03a710cb0a0c277465d6fd5f913c7455b4f3cad4515503516e39210a39e4db",
+  "changed_paths": [
+    {
+      "path": "TreeDB/db/native_pager_operations_construction_v6_test.go",
+      "sha256": "336184e6ba124a8ab4c711a966e05dbef19d5c85176861bdd6b07a8dda6a437a"
+    }
+  ],
+  "all_other_archive_paths_byte_identical": 10341,
+  "archive_manifest_all_files_verified": 10342,
+  "live_worktree_equality_claimed": false,
+  "prior_product_review": {
+    "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/atomic-completion-repair-independent-review.json",
+    "sha256": "9fa1077d8ba02734b1ed98b555570068c8d57b14bcaed67552bde7fa7eaee1a1",
+    "N1": "resolved-source",
+    "N2": "resolved-source",
+    "N3": "resolved-source; new staged control now verified normal/race"
+  },
+  "checks": [
+    {
+      "name": "compile-only",
+      "exit_code": 0,
+      "elapsed_seconds": 40.87240803707391,
+      "pid": 797800,
+      "pgid": 797800,
+      "leader_joined": true,
+      "group_and_children_empty": true,
+      "source_before_after_equals_manifest": true,
+      "top_level_pass_count": 0,
+      "total_RUN_entries": 0,
+      "subtest_pass_count": 0,
+      "top_level_skip_count": 0,
+      "result_sha256": "ace105cb6bec15bde515d574b7f9eb9a46dc6215ddfbddd14d3697affff8f8ca",
+      "raw_log_sha256": "225c63386c7fa7f62386201ef90bac08895e074548831cf6da5a875fc6640659",
+      "evidence_directory": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-fixture-successor/granted-focused-verification/compile-only"
+    },
+    {
+      "name": "focused-normal",
+      "exit_code": 0,
+      "elapsed_seconds": 3.0354030169546604,
+      "pid": 798555,
+      "pgid": 798555,
+      "leader_joined": true,
+      "group_and_children_empty": true,
+      "source_before_after_equals_manifest": true,
+      "top_level_pass_count": 20,
+      "total_RUN_entries": 41,
+      "subtest_pass_count": 21,
+      "top_level_skip_count": 0,
+      "result_sha256": "01dfced47597194aaba9086574e204b2a402c739f59228d5b0d66aab61ecaf9b",
+      "raw_log_sha256": "9953cea9413f9f70ed1bdfe5ad888857e4328144919cc23422be327b8d55467f",
+      "evidence_directory": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-fixture-successor/granted-focused-verification/focused-normal"
+    },
+    {
+      "name": "focused-race",
+      "exit_code": 0,
+      "elapsed_seconds": 98.87115464871749,
+      "pid": 798625,
+      "pgid": 798625,
+      "leader_joined": true,
+      "group_and_children_empty": true,
+      "source_before_after_equals_manifest": true,
+      "top_level_pass_count": 20,
+      "total_RUN_entries": 41,
+      "subtest_pass_count": 21,
+      "top_level_skip_count": 0,
+      "result_sha256": "a6ff694d6759d356b40ef49c7836eebc3375778232df6763a3bf1ef08763e35e",
+      "raw_log_sha256": "afe84dd2e4e742637359dd60a7465722dc542d007961e27e233cb9b788c30fb9",
+      "evidence_directory": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-fixture-successor/granted-focused-verification/focused-race"
+    }
+  ],
+  "source_checks": [
+    "Read complete fixture-only patch and full archived successor fixture.",
+    "Compared all archive file identities with prior archive; exactly one test changed, all production unchanged.",
+    "Compared every successor archive member with full manifest; zero missing or extra files.",
+    "Read existing native_stable_pager_capture_v6_test.go to verify real original warm-capture/close precedent.",
+    "Verified seven limits/stages/resume/overflow cases unchanged; zero-work refusal, same-output identity, retained owner/custody and final actual-refund checks preserved.",
+    "Verified new stable capture and wrapper-borrow baseline assertions and cleanup defer order.",
+    "Inspected full compile/normal/race raw logs, commands, results, identity and all six before/after source manifests."
+  ],
+  "reviewer_runtime_commands_executed": 0,
+  "verification_performed_by": "Root-authorized separate verification process; reviewer read retained evidence only.",
+  "qualification_limits": [
+    "No actual33 route, builder acquire, enqueue, adoption, fence, Consume, native Finish or publication exercised by these controls.",
+    "Full F remains symbolic 281+D+2K+23P+8M+3S+N+Z+V+A; actual aggregate and canonical disjoint retained total unobserved.",
+    "Published legacy DBState/snapshotView GC boundary and dynamic later-writer Finish qualifications from prior product review remain.",
+    "Original Q32/1MiB and33/80/4096 RED/ACK0 unchanged.",
+    "Observer successor source and any observer runtime are outside this manifest/review.",
+    "No Git/GitHub, CI, performance, ordinary PR merge, native qualification or numeric/runtime allowance claim."
+  ],
+  "hosted_review_unavailability_reason": "Manual hosted AI review cannot pin required gpt-6.1-sol model; not requested. Explicit independent internal fallback.",
+  "lease_released": true
+}

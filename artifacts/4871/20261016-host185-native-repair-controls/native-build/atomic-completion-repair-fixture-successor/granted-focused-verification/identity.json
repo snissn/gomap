@@ -1,0 +1,14 @@
+{
+  "archive": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-fixture-successor/source-frozen.tar.gz",
+  "archive_sha256": "80c9ef74424ba0e6972c6eb24d6af156a59a9a9fbd324cb84621e2126b6af405",
+  "archive_verified_files": 10342,
+  "compile_binary_sha256": "3bb421d581f60b9ab48c2c73adf5c018557e89af32ad018d9c4417afa4bf90c1",
+  "go_binary": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+  "go_binary_sha256": "d68b7abbc40d0844f673f6cf06ae3cded225c50437c6454fa37ef178d079fe65",
+  "goroot_VERSION": "go1.26.3\ntime 2026-05-04T20:36:18Z\n",
+  "grant_sha256": "290b46b50b82ba38b093d80447dfadd4f983ddc31f70a90652df8468ef56f690",
+  "runner_pgid": 797790,
+  "runner_pid": 797790,
+  "subreaper_verified": true,
+  "successor_parent_authorization_sha256": "4fe6291297eba5bd31b471a735640e34f12675b9b3c9b1412340415a07535d92"
+}

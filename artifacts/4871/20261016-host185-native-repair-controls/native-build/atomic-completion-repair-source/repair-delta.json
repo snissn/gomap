@@ -1,0 +1,98 @@
+[
+  {
+    "after_sha256": "7a7788637691958b068e6e7352ad8562d79338a3a2bacc51a9afdd4d754d3ca8",
+    "before_sha256": "ee6355e0e9f7f0de046e31dcaecd18de338d655f486a7a3062fb71eedd21da3f",
+    "new": false,
+    "path": "TreeDB/db/db.go"
+  },
+  {
+    "after_sha256": "9387481e5eada2975d03bb951a269a012c9034a78411d95f3ebcbf3391e1d14d",
+    "before_sha256": null,
+    "new": true,
+    "path": "TreeDB/db/native_activation_output_admission_v6_test.go"
+  },
+  {
+    "after_sha256": "7d1c67455d774668e37c41452bdd481d7999573bdebeea588a4a38ce7bc4dd7a",
+    "before_sha256": null,
+    "new": true,
+    "path": "TreeDB/db/native_close_barrier_v6_test.go"
+  },
+  {
+    "after_sha256": "45d7dd34004bc14b94fa1592ebe7979f3f33e8924d176d49cc8c49a56df937a7",
+    "before_sha256": "13171a43a1fcfa1c3980b0ff2f864fcd71a847d259d0cbd3b5a543f709a49a4c",
+    "new": false,
+    "path": "TreeDB/db/native_mvcc_candidate_preparation_v6.go"
+  },
+  {
+    "after_sha256": "91564ea1dbeb0c445eb2e5d29bc85b1b68b9d1abd04ac1d8bc57b155ba0f0772",
+    "before_sha256": "41deaf59f1876ca527438b32b3063c3dcee5de146dc115d3060db73c313f243b",
+    "new": false,
+    "path": "TreeDB/db/native_mvcc_publication_binding_v6.go"
+  },
+  {
+    "after_sha256": "d53b48552baf34119602606b7bcc4f56a9bc50c49686f2eba388f63751f0f7e8",
+    "before_sha256": "0b915c70c91836f6757701f6215998c4a8eba4178bd61222e5b8cd38239b5b95",
+    "new": false,
+    "path": "TreeDB/db/native_mvcc_seal_preparation_v6.go"
+  },
+  {
+    "after_sha256": "c948fdb8b76c231df5af6e6618b81b42125d9e30f217110f791bcfa577b349c3",
+    "before_sha256": null,
+    "new": true,
+    "path": "TreeDB/db/native_pager_operations_construction_v6_test.go"
+  },
+  {
+    "after_sha256": "a5b9f6023ccb7460005b49ba086a901f436a4b1ce43d51f7c800afc05c9184a6",
+    "before_sha256": "145275e3a77a6de3196c4ebf1e1fcd883550d025c9a02be0ab9be1072fd48d82",
+    "new": false,
+    "path": "TreeDB/db/native_stable_pager_capture_v6.go"
+  },
+  {
+    "after_sha256": "b8deb9d4af2c71094e9197ed0cadae4e7a99993e557b88bb0eb1adf2dab57889",
+    "before_sha256": "962a083cb831d17ef4575d55652616f47d2fd5dc2002ebfea3002c02ca3152a9",
+    "new": false,
+    "path": "TreeDB/db/primary_visible_abort_work_v6.go"
+  },
+  {
+    "after_sha256": "bd431f5f851fdbd934ddb0ffbcc903bc13019b95ebe8a45dfb035b7612468d61",
+    "before_sha256": "e93ed7dc145e7bd75f092b47a423b3aa80e3c8354ba6a40b0da0936bea1a9881",
+    "new": false,
+    "path": "TreeDB/db/root_publication_activation.go"
+  },
+  {
+    "after_sha256": "f00be8ccae837d085cbd3b0c6bac0f3f1c2ed055d9354dab2eba58f83901d06a",
+    "before_sha256": "b2643401fe9bc4ddd2edad345576aaeab6af5c131f76576d39c1d4fa51d9dbcf",
+    "new": false,
+    "path": "TreeDB/db/snapshot_publication_work_v6.go"
+  },
+  {
+    "after_sha256": "033f88c049979a5c218ec7c24634fae4c72d6b510247da3941937fd87bef3b3b",
+    "before_sha256": "fce2a69f1e0f9df61e866ed336f38cfdb6cca198cb3c01f3f4b8063beafaefc1",
+    "new": false,
+    "path": "TreeDB/db/stable_pager_owned_operations.go"
+  },
+  {
+    "after_sha256": "bc527bca53fb225fef4165cb3ac2ea5d9b4cb7659ac6b5d0a1261cfe6f182534",
+    "before_sha256": "9965bfc50403d76f30594877979f36f6ffc393f72d1261dc84d43de07c622b26",
+    "new": false,
+    "path": "TreeDB/internal/rootpublication/native_publication_v6.go"
+  },
+  {
+    "after_sha256": "be01b344603485b43b21d89bd37a9acab5edd23a3f392a0dbc513c6722a490fb",
+    "before_sha256": "bd32a33dae246b2beb47b16ec971ec1d9f3a3f2f0806582993539061b4181dbf",
+    "new": false,
+    "path": "TreeDB/internal/rootpublication/resource_original_cleanup.go"
+  },
+  {
+    "after_sha256": "5cb42184696bac099a3d7324c9156ad2c2fea68ed1343be14376280eb79f3346",
+    "before_sha256": null,
+    "new": true,
+    "path": "TreeDB/internal/rootpublication/resource_original_custody_work_v6_test.go"
+  },
+  {
+    "after_sha256": "ec745d34ed885c1c85edcea494ba8115a6f7a8877de18b22e5f5534229589c6b",
+    "before_sha256": "2d01b312acd40c1a6f72104048c85c60a5e28356d374a39bfa6885f6ce302e50",
+    "new": false,
+    "path": "TreeDB/mvcc/native_prune_backend_route_v6_test.go"
+  }
+]

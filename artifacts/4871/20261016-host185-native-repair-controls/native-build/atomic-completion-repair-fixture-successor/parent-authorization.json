@@ -1,0 +1,9 @@
+{
+  "channel": "collaboration NEW_TASK",
+  "instruction": "Authorized test-fixture-only repair in native/TreeDB/db/native_pager_operations_construction_v6_test.go. Empty Open lazily initializes PRIMARY: use supported original setup/warm capture+actual close from existing native_stable_pager_capture_v6_test.go, same intended no-WAL profile, before reading actual idx/primary and baseline counters. Audit fixture whole path for other ordering/cleanup mismatches; no production code changes. Retain prior failed frozen source; publish distinct successor source manifest/archive+exact 1-file delta and failure disposition. Then authorized compile+focused-normal+focused-race once on successor using same exact proposal regex/env/bounds, robust runner and full source bindings; stop/report first failure, no further automatic edits/retries. No actual33/publication runtime. Reviewer informed product unchanged and will bind exact test successor after. Own only this test source and new evidence; no Git/GH/children.",
+  "note": "Local transcript receipt, not a separately signed root file; source successor execution explicitly authorized in parent message.",
+  "prior_grant": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-source/root-focused-verification-grant.json",
+  "prior_grant_sha256": "290b46b50b82ba38b093d80447dfadd4f983ddc31f70a90652df8468ef56f690",
+  "sender": "/root",
+  "source_manifest_sha256": "83b71641be6460d2ece624fec51b8a84ad3ecea158844eb1c61b0828a72f0fcd"
+}
