@@ -1,0 +1,37 @@
+{
+  "source_manifest_sha256": "a2ffdb13492ee217c892745f3cc3a6ce02ba82fbaeb03023a2f0496a38ce5387",
+  "source_archive_sha256": "896a8b1d53bcad78128a126106485df12ace7d7062c8132b921a3b20795b3771",
+  "git_identity": {
+    "HEAD": "0149d78dba2574b09d7119d2631ec78a144e088d",
+    "index_sha256": "07161c1dc6c88fb230c74700b4ddd76b975a613540949423512d6786f7c86823"
+  },
+  "raw_index_sha256": "4c6b63357522cd951fd864e661b167f52e6debcd5d5e150e002fdba478f4dbe1",
+  "scope": "selected-finaldriver-real-diagnostic-controls",
+  "actual_native_driver_authorized": true,
+  "authority": "Existing explicit user graph4871 execute-and-merge authorization; coordinator independently selects exact frozen-source bounded genuine diagnostic fixture after source review and focused PASS.",
+  "proposed_commands_sha256": "b9404cb5c3abf28ce73509659ebe26b47310274fbe190545a499f3759fc3b028",
+  "runner_sha256": "3d6ecfc279ae6d3cde424a23d11472e9fe81c67d26f00627571034de496b7520",
+  "authorized_command_names": [
+    "real-ready-cancel",
+    "real-stale-before-fence",
+    "real-frozen-limits",
+    "real-pruner-enabled-refusal",
+    "real-once-ack",
+    "real-paused-finish-close"
+  ],
+  "focused_accept_sha256": "7fe8b653377069bda216fb151ce4cae2cfadf40b93c6b37cf01cc68c38f494c7",
+  "whole_source_review_sha256": "e79e1df35a7e81de61086fea7f44a74bc612e76a75779ad05100ce6a78ac501e",
+  "numeric_G": null,
+  "G_selection": "Evaluate exact source nativeSelectedDiagnosticEnvelopeV6 from fresh original pre-cursor scalars; refuse missing/overflow/unsupported shapes; freeze componentwise six-family sum BEFORE cursor birth; ready validation may only reject.",
+  "original_public_caps_unchanged": true,
+  "original_public_Q32_status": "RED/ACK0; no qualification or waiver from diagnostic result",
+  "source_custody": "No source edits or concurrent producer during selection/runtime. Actual designated later durable successor and held old reader are fixture-owned.",
+  "expected_top_level_passes": 6,
+  "expected_child_runs": 6,
+  "stops": "First nonzero exit, envelope unavailable, ready mismatch, missing/extra RUN or child, noPASS, skip/race/panic, source/index drift, timeout/intervention/residual process. No unchanged retry or in-place G increase.",
+  "created_utc": "2026-10-16T09:40:52.510740+00:00",
+  "root_repair_verify_sha256": "7ed7de3f371d97b286417760e316c74904381b95dc3eed0f707058a16a1dfb5b",
+  "focused_reuse": "Fresh affected normal4/5 plus race4/5; pure envelope1/4 PASS with source-proven corrected root inventory, preserved original STOP. Prior unrelated controls carry by unchanged input bytes only.",
+  "superseded_failure": "F5a diagnostic pruner config and F5b original rollback order/receipt fixed, with connected ordinary Abandon Set survival repair. Genuine enabled-pruner refusal arm precedes onceACK.",
+  "proposal_correction": "Worker proposal all selected hashes match frozen manifest; exact byte copy selected."
+}

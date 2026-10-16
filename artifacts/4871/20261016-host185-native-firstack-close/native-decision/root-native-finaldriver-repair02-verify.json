@@ -1,0 +1,15 @@
+{
+  "verified_all_live_archive_files": 10431,
+  "exact_one_path_delta": [
+    "TreeDB/mvcc/native_finaldriver_diagnostic_v6_test.go"
+  ],
+  "production_formula_focused_test_inputs_unchanged": true,
+  "index_unchanged": true,
+  "focused_accept_parent_sha256": "aeba8a7c609bdbb99db9a989d49d65781ab13a14fd22612d01b31cfa593819ea",
+  "prior_actual_failure": "F2 cache guard inversion before G/cursor; no publication, all groups joined, no unchanged retry",
+  "prior_actual_raw_sha256": "919544a56c4faeddfdd8c20a3e289def96b056897ea3d4c33719f0850231ec5b",
+  "runner": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-focused-controls/run-real-controls-repair02.py",
+  "runner_sha256": "5f4eccf51909d06a40b0806d311382518e3b7015723b8daab3a80200c1a9133d",
+  "proposal_sha256": "8bae3bdf8b54c032a1eac356c41ef33140fe53a9f78218acb169500dff6d24e8",
+  "source_review_pending": true
+}

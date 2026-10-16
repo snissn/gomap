@@ -1,0 +1,65 @@
+{
+  "mode": "INTERNAL_SUBAGENT_READ_ONLY_ADVICE",
+  "reviewer": "/root/ordinary_review",
+  "model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "candidate_edits_by_reviewer": false,
+  "source_manifest": "5cde43f24dcc86eaa8c2017bbc6cb0dc81a29e749d9420d27be2ab4f2e4e140d",
+  "source_archive_sha256": "0bcaee68f1b6a058bd358b5096265771d35ba503143ac9f8e255b2c215fad8f4",
+  "source_file_count": 10389,
+  "extraction_verified_files": 34,
+  "extraction_mismatches": [],
+  "input_bindings_sha256": "60bf56bd789579610ffafc266b68c7181a3d0470e9fa92d87af50304a937c724",
+  "inspected_source_sha256": {
+    "TreeDB/freelist/allocator_cow.go": "0be749f18a8ecfc6f5ac4be338055b662e8a8c245bd67989ac46f7679e25ff88",
+    "TreeDB/freelist/allocator_preparation_work_v6.go": "a1cfbb466c90cd410c9380b76e638de019716e73483456f1e66923a8932ade85",
+    "TreeDB/freelist/append_work.go": "36a72ebed5d4a5f8f54607e964ad3e0901e9106d9c94d8526f9773dc21610807",
+    "TreeDB/freelist/generation_v1_encode_work.go": "5974f322233ca919445db563d49fce08c1861c1547e3ef66d558318d241366b9",
+    "TreeDB/freelist/generation_v1_materialize_work.go": "81eeb0407551b194ed29e6f7be60ea3156709109bf74d9a8e191782715a106f3",
+    "TreeDB/freelist/generation_v1_materialize_output_work.go": "e1d1a6cc87a3469e2f0a220f4682baf837e7c810eb8732d25f3878850abbc267",
+    "TreeDB/freelist/generation_v1_metadata_claim_work.go": "4c1f8f1836c6f67126fae98215da928a05ec339734b1dedbcef530ad7f9994ae",
+    "TreeDB/freelist/generation_v1_metadata_reuse.go": "cdf12a419667a15410d1cbdb18ed20f59b464130b68a4da2c2074f86ed0a10f4",
+    "TreeDB/freelist/generation_v1_metadata_reuse_work.go": "2a1c7ca9deb82422702c8e3366f8fe3327f2cab392aee0c928dcba32305a3efd",
+    "TreeDB/freelist/generation_v1_reservation.go": "7b9bc7bab43275d159998b7b9c5b77d61d3069e7d14419ab69d4e5a09b214201",
+    "TreeDB/freelist/generation_v1_reservation_inventory_work.go": "5ff05425add02fbad993215b9112fa4470f43e412cff0fb963d1c965cdc90f41",
+    "TreeDB/freelist/generation_v1_reservation_finalize_work.go": "337b1b73f18bc3d4991afcf92b8c5911101a4d577f2e912c45e585653f397678",
+    "TreeDB/freelist/generation_v1_reservation_work.go": "bec5478b853b3c95e4d2f9b9d97dace7e76d34f2b80a9fff5acd538eb7f53c75"
+  },
+  "disposition": "FINITE_CONDITIONAL_RESERVATION_FAMILY_BOUND",
+  "actual_reservation_formulas": {
+    "storage_records": "1+c+n*(1+o+n)+n*(1+i+n)+u*(1+v+u)",
+    "storage_bytes": "s(reservation)+128*(1+c+o+n)+8*n*(1+i+n)+s(reservationInterval)*u*(1+v+u)",
+    "reused_records": "Sr(n,b)+2+z+n*(2+z+c)+m*(1+z+c)",
+    "reused_bytes": "Sb(n,b)+24*Rreuse",
+    "tail_records": "Sr(n,f+1)+2+z+2*n*(1+z+c)+(o+z+c+1)^2+f",
+    "tail_bytes": "Sb(n,f+1)+24*Rtail",
+    "selected_native_data_count": 0,
+    "inventory_attempts_max": 5,
+    "reused_claim_attempts_max": 4,
+    "sort_compound_unit": "(1,E*s(ReservationExtentV1))+Aowner",
+    "final_vector_capacity": "E+J+1",
+    "encoder_descriptors": "Q*(8+s([]byte))"
+  },
+  "required_predicates": [
+    "Original A/B/X/E/J/Q/M/H checked transform and supported format",
+    "No extra producer during first-ready preparation",
+    "SAME fresh candidate absence before first successful claim, otherwise retain old coverage v or reject shape",
+    "COWPrepareProfile LedgerOwners/LedgerCandidates/LedgerBurnedTailRanges census",
+    "Concrete SAME Owner finite WorkLease support and original enrollment/binding maxima",
+    "Original output/canonical DATA domain preserved"
+  ],
+  "findings": {
+    "new_unadmitted_scalable_payload_operations": [],
+    "fixed_scalar_guards": "No dedicated local Reserve; do not relabel fixture G as admission or infer outer pricing not inspected here",
+    "existing_other_family_pin_remove_gap": "outside this family, separately reported and selected for repair"
+  },
+  "claims": {
+    "numeric_G": false,
+    "numeric_allowance": false,
+    "runtime_executed": false,
+    "publication_acceptance": false,
+    "Q32_fit": false,
+    "whole_retention_or_Finish_complete": false
+  },
+  "report_sha256": "cb0ae6216fc92a75b543e1b89c1e17cd3bb00c953e08acb6babdc5103ef56bbb"
+}

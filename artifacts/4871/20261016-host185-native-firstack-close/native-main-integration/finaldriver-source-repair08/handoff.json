@@ -1,0 +1,32 @@
+{
+  "Go_compiler_tests_executed": false,
+  "artifacts": {
+    "README.md": "81d360fbc037f44bd499e0c76aec96e3fcd04cd35588e8cf3a9d3f5281720116",
+    "caller-disposition.json": "58353017201950d0ab24fc99eb49b41b3e6f0bf9e89c46c303ec8ee74f876221",
+    "changed-files.json": "fd3bc973ea5948433265daa9dd02eef64cdaabd618e8b6173c98a304a7b8f38e",
+    "changed-source.tar.gz": "88598d01d18d311cbdf498c024c3cebc6029fb7a2dc9b3c0ef808471274b4121",
+    "diagnosis.json": "82cb319127362c83416a21846882c90cf9b945c015cf1f6f86c3baddeb48586f",
+    "freeze.json": "75b8c3da2a2c0bbdc8a2adfb9a1efa15760e3dc11d181783ea972d14c8b29a8f",
+    "invariance.json": "90c8b51b54145fff4ad15cbed5e919503706b9f10903bcfdf8f4cea8e254af4b",
+    "pricing-and-lifetime.json": "a92002eb4c5ddd5d74f8e809e46205c2bd4fa4bd34ae7138523e6c0168b15fd1",
+    "proposed-commands.json": "632ecd0f59581ba76a0575800b0e918ca78b366f92ffaff583b8e1268e4d275f",
+    "proposed-real-commands.json": "a877887b3500edefd4df19668839c562d55ae45daa93d7272e6981d929f267da",
+    "proposed-regression-commands.json": "632ecd0f59581ba76a0575800b0e918ca78b366f92ffaff583b8e1268e4d275f",
+    "source-frozen.json": "824fa0286c45825ff1fdfb9b7a4e087950887a329eb68388281ef1f5d625fca0",
+    "source-frozen.tar.gz": "1371d99c9945ef2eea254fe5c16867e777aa54ec8fde4341566bbd85d008493e",
+    "source.delta.patch": "9b2add7025997cd92aa2bc98fc488ae6ecac6758dcab37c2bddf6143328a4a3b"
+  },
+  "changed_paths": 1,
+  "files": 10433,
+  "index_sha256": "4c6b63357522cd951fd864e661b167f52e6debcd5d5e150e002fdba478f4dbe1",
+  "next_action": "root immutable review then explicit normal/race selection; no automatic runtime",
+  "packet": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source-repair08",
+  "production_changed": false,
+  "proposals_unexecuted": true,
+  "runtime_lease_released": true,
+  "source_archive_sha256": "1371d99c9945ef2eea254fe5c16867e777aa54ec8fde4341566bbd85d008493e",
+  "source_lease_released": true,
+  "source_manifest_sha256": "824fa0286c45825ff1fdfb9b7a4e087950887a329eb68388281ef1f5d625fca0",
+  "source_root": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+  "status": "FROZEN_SOURCE_ONLY_REPAIR08_TEST_FIXTURE"
+}

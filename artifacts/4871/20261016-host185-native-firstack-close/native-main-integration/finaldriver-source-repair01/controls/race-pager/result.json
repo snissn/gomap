@@ -1,0 +1,118 @@
+{
+  "adopted_children_reaped": [],
+  "child_RUN_count": 5,
+  "elapsed_seconds": 2.9468840761110187,
+  "ended_utc": "2026-10-16T08:47:57.601099+00:00",
+  "exit_code": 0,
+  "expected_child_RUN_names": [
+    "TestPrimaryReadRootImageLookupAdmissionV6/empty",
+    "TestPrimaryReadRootImageLookupAdmissionV6/present",
+    "TestPrimaryReadRootImageLookupAdmissionV6/missing",
+    "TestNativeGrowthOriginalOwnerAdmissionV6/unbound",
+    "TestNativeGrowthOriginalOwnerAdmissionV6/concrete"
+  ],
+  "group_and_children_empty": true,
+  "leader_joined": true,
+  "missing_named_top_RUN_PASS": [],
+  "name": "race-pager",
+  "observed_group_processes": [
+    {
+      "comm": "go",
+      "pgid": 1274990,
+      "pid": 1274990,
+      "ppid": 1273222,
+      "session": 1274990,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1274990,
+      "pid": 1275009,
+      "ppid": 1274990,
+      "session": 1274990,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1274990,
+      "pid": 1275013,
+      "ppid": 1274990,
+      "session": 1274990,
+      "state": "S"
+    },
+    {
+      "comm": "link",
+      "pgid": 1274990,
+      "pid": 1275021,
+      "ppid": 1274990,
+      "session": 1274990,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1274990,
+      "pid": 1275031,
+      "ppid": 1274990,
+      "session": 1274990,
+      "state": "R"
+    },
+    {
+      "comm": "pager.test",
+      "pgid": 1274990,
+      "pid": 1275037,
+      "ppid": 1274990,
+      "session": 1274990,
+      "state": "S"
+    }
+  ],
+  "pgid": 1274990,
+  "pid": 1274990,
+  "raw_log_sha256": "8e4366f90db11a838ff45f747aabc3ff7534b162de5027f03701a45a1b5f8559",
+  "remaining_direct_or_adopted_children": [],
+  "remaining_group_members": [],
+  "required_top_level_names": [
+    "TestPrimaryReadRootImageLookupAdmissionV6",
+    "TestNativeGrowthOriginalOwnerAdmissionV6",
+    "TestNativeGrowthPrivateBackingCancelCustodyV6"
+  ],
+  "residual_observed_before_cleanup": false,
+  "signals": [],
+  "source_after_equals_frozen": true,
+  "source_before_after_equal": true,
+  "source_before_equals_frozen": true,
+  "started_utc": "2026-10-16T08:47:54.654215+00:00",
+  "status": "PASS",
+  "stop_reasons": [],
+  "subreaper_enabled": true,
+  "test_FAIL_names": [],
+  "test_PASS_names": [
+    "TestNativeGrowthOriginalOwnerAdmissionV6",
+    "TestNativeGrowthOriginalOwnerAdmissionV6/unbound",
+    "TestNativeGrowthOriginalOwnerAdmissionV6/concrete",
+    "TestNativeGrowthPrivateBackingCancelCustodyV6",
+    "TestPrimaryReadRootImageLookupAdmissionV6",
+    "TestPrimaryReadRootImageLookupAdmissionV6/empty",
+    "TestPrimaryReadRootImageLookupAdmissionV6/present",
+    "TestPrimaryReadRootImageLookupAdmissionV6/missing"
+  ],
+  "test_RUN_names": [
+    "TestNativeGrowthOriginalOwnerAdmissionV6",
+    "TestNativeGrowthOriginalOwnerAdmissionV6/unbound",
+    "TestNativeGrowthOriginalOwnerAdmissionV6/concrete",
+    "TestNativeGrowthPrivateBackingCancelCustodyV6",
+    "TestPrimaryReadRootImageLookupAdmissionV6",
+    "TestPrimaryReadRootImageLookupAdmissionV6/empty",
+    "TestPrimaryReadRootImageLookupAdmissionV6/present",
+    "TestPrimaryReadRootImageLookupAdmissionV6/missing"
+  ],
+  "test_SKIP_names": [],
+  "timeout": false,
+  "tmp_write_read_unlink_preflight": true,
+  "top_level_RUN_names": [
+    "TestNativeGrowthOriginalOwnerAdmissionV6",
+    "TestNativeGrowthPrivateBackingCancelCustodyV6",
+    "TestPrimaryReadRootImageLookupAdmissionV6"
+  ],
+  "top_level_pass_count": 3,
+  "unexpected_top_RUN": []
+}

@@ -1,0 +1,50 @@
+{
+  "disposition": "ACCEPT",
+  "scope": "Frozen repair06 F6 source correction; readiness for separately selected focused and selected single-join diagnostic controls only",
+  "reviewer": "/root/ordinary_review",
+  "model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "mode": "INTERNAL_SUBAGENT_REVIEW",
+  "candidate_edits_by_reviewer": false,
+  "children": false,
+  "source_manifest_sha256": "971367d10cfd714f6ff08c552acc2073c4e4982fb918155e416aacb2d0aea05a",
+  "archive_sha256": "f286230f2dc0b06aaf5adfc7695a649211036e3e43042412ceed13b13ee4ea59",
+  "files": 10433,
+  "full_archive_live_match": true,
+  "unchanged_parent_paths": 10431,
+  "changed_paths": {
+    "TreeDB/internal/rootpublication/native_publication_v6.go": "0261ac95cb3853f5399e89990acdbd912a4bf8cc84d95700cfd14a2e3fa6e2c0",
+    "TreeDB/internal/rootpublication/native_publication_join_scrub_v6_test.go": "5409729f46a6f9ee84250842d290f8aa508ddfa5548e6dcdc193d97960e37cdd"
+  },
+  "delta_sha256": "7ecb7c2c98bb5b38e341451566f86d1cd5b848325975e6257c629b2d14cd114e",
+  "delta_independently_reproduced": true,
+  "changed_archive_sha256": "fbb285a91df84499606d19e57f86f3442578d125c0f0574900618bb48fa0bb97",
+  "raw_index_sha256": "4c6b63357522cd951fd864e661b167f52e6debcd5d5e150e002fdba478f4dbe1",
+  "F6": "RESOLVED_SOURCE_ONLY",
+  "new_blockers": [],
+  "runtime_by_reviewer": false,
+  "runtime_pass_claim": false,
+  "proposals_verified": {
+    "normal_race": "6 tops/6 children each; unexecuted",
+    "real": "once-ack then paused-finish-close;1top/1child each;unexecuted",
+    "source_bindings": true
+  },
+  "packet_sha256": {
+    "README.md": "dba2ea60ea88f6d5ee2b609f191482918b2302ae4967b267f7173df0025fb73b",
+    "freeze.json": "325a67123e3da736ac349fcc065665bc96e9ba9eb9d6d9442e33926536c006ff",
+    "handoff.json": "ca0120a11474370aa69897346205887a8782997275200ea7418e60fa3ab45a54",
+    "pricing-and-lifetime.json": "652a7e1c61132f1d59afc964799704ad042538362371018fded3c83dbe7f1229",
+    "caller-disposition.json": "cbf50da62d8e6fa20cddcfcb6cde6ac6251c7f476a260f9d67a4ac827b90e7f4",
+    "invariance.json": "ccb51ce1dcce44ce776dbfd577f48a1380cdffcebccf30628c6268170423f1c1",
+    "proposed-regression-commands.json": "e815d7d023eebb207c40cf42b7964665f04751c1bfce06a103c5ed149cd7cfd0",
+    "proposed-real-commands.json": "d500dd32025f27cbaeb8579bb1dcd12c20b658fed72643541bd808b16722f41a"
+  },
+  "limits": [
+    "Concurrent public Close containing-admission lifetime unresolved; synthetic mutex/callback tests do not prove it.",
+    "Synchronous general Join list traversal can be quadratic; not Q32 or aggregate Close bounded.",
+    "No F/G/retained-P increase or numeric allowance chosen.",
+    "No actual repair06 native publication, Finish/Close success, Q32 fit, full qualification or merge claim."
+  ],
+  "hosted_review_unavailability_reason": "Manual hosted review cannot pin required exact model; not requested.",
+  "lease_released": true
+}

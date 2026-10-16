@@ -1,0 +1,60 @@
+{
+  "reviewer": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "mode": "independent-read-only-advisory",
+  "source_manifest_sha256": "5cde43f24dcc86eaa8c2017bbc6cb0dc81a29e749d9420d27be2ab4f2e4e140d",
+  "archive_sha256": "0bcaee68f1b6a058bd358b5096265771d35ba503143ac9f8e255b2c215fad8f4",
+  "disposition": "CONDITIONAL_FORMULAS_NOT_RUNTIME_APPROVAL",
+  "first_unresolved_seam": "IdentityPin last-idle synchronous embedded registry Owner.Remove: whole-work admission, actual binding capacity/type proof",
+  "pin_vectors": {
+    "observed_nonlast": "P0",
+    "last_idle": "P0+PH+C*PC+Rwhole(B)",
+    "whole_remove": "I+(B+1)*(H+V+J+B*(Kbinding+V+Dbinding+V))"
+  },
+  "owned_pager": "2Uremove+Oconsume+OclaimSnapshot+SnapshotFamily+ArenaBind+ProofSupport+Custody+Uremove+Oend",
+  "predicates": [
+    "registry not closing before cursor joins",
+    "actual table capacity C bound through designated successor",
+    "all registry owner bindings plus active pending bounded/concrete COW types",
+    "DB/index owner retained through native callback close",
+    "ordered no competing rope-ref CAS mutations during physical drain",
+    "actual selected empty Set/manifest/provider guards"
+  ],
+  "inspected_source_sha256": {
+    "TreeDB/db/native_mvcc_snapshot_close_v6.go": "56d2268c196d5624f95f78207cdd657e494c227fa467c4bc0c3f93f419c7d4c1",
+    "TreeDB/db/native_stable_pager_capture_v6.go": "a5b9f6023ccb7460005b49ba086a901f436a4b1ce43d51f7c800afc05c9184a6",
+    "TreeDB/db/primary_arena_release_work.go": "d3a617c32599768e604e818599d130c0d6ed1abb96b31a56f6a73b7eb87ee302",
+    "TreeDB/db/stable_pager_owned_operations.go": "033f88c049979a5c218ec7c24634fae4c72d6b510247da3941937fd87bef3b3b",
+    "TreeDB/internal/retainedalloc/owner.go": "aa2725812345880c152932466ee45dfa2d31b69562309595afb98d354e725c3d",
+    "TreeDB/internal/retainedalloc/owner_work.go": "d4727141cffdc31205bc99854746a91fe10e19bdc628f643206d9ca94fd8aabe",
+    "TreeDB/internal/rootpublication/namespace_proof_close_work.go": "df6f00386a2c3d5523c5a5e99135990b13dc98eaf6e396de54ebc1db5188b1f7",
+    "TreeDB/internal/rootpublication/namespace_token_release_work_v6.go": "e1c129ae775189b4489b3e4c5de49a3fd5eb819494a625164257be9bcfbbe2d5",
+    "TreeDB/internal/rootpublication/pin_registry.go": "770993e8d91fb63b2f47e9a8b757fe28140cc66520e96be5e5df0ccd06b35653",
+    "TreeDB/internal/rootpublication/pin_registry_capture_work_v6.go": "3200ad2c59d83cfbfe037189bd5967028b6167e343f794d39822c7bf995ab09d",
+    "TreeDB/internal/rootpublication/registry_capacity.go": "0c35c4c6a0194474ac2134ad8aa1574795f48e0b77ef82e95eb791a52b709b7d",
+    "TreeDB/internal/rootpublication/resource_graph_physical_release_work_v6.go": "9460134cb1476fa0f097d069ca6b5a1711da19ddb1976fd24902cc5b2efad79c",
+    "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go": "49855cb3646a6cebe9e5869a0f2e3df287d6c17d14e3792357b10d6883440308",
+    "TreeDB/internal/rootpublication/resource_original_cleanup.go": "be01b344603485b43b21d89bd37a9acab5edd23a3f392a0dbc513c6722a490fb",
+    "TreeDB/internal/rootpublication/resource_set_graph_release_work_v6.go": "d86f5f8b78a3ca41834c19619917ec625c4ff10b92b02f7ccd51050af9c6b1ff",
+    "TreeDB/internal/rootpublication/resource_token_release_work_v6.go": "a9e659cfcea57b775c81920ea8fd8bff36f6554dab88ce8405555593601a1c70",
+    "TreeDB/internal/memtable/native_retention_work.go": "0863e195a9720e1490ddb1e0c6599533510de1523fb3f09a4ca1d7debb541fba",
+    "TreeDB/internal/memtable/cow_budget.go": "f3102bd2d83c3009ff5cf470634ce9046ae35d95a59f2a106f9e147a8615a823"
+  },
+  "md_sha256": "8aba76bd42351a61b4b102af52d087ce171156b0f7c70c216da1cbedc142148c",
+  "go_executed": false,
+  "source_mutated": false,
+  "native_publication_accepted": false,
+  "numeric_allowance_chosen": false,
+  "enforcement_recommendation": "Source-equivalent complete census and whole Remove admitted+consumed under same registry.mu and Owner.mu; refuse before effects; no unlocked permit. Alternative pin RemovalWork needs genuine registry lifetime obligation because closeIfIdleLocked ignores activePins.",
+  "whole_census": "(2,2s(NativeOwnerGeometryForTestV6)+2s(Owner)+2s(EnrollmentWork))+B*((2,2s(binding)+2s(NativeOwnerGeometryForTestV6))+(1,2s(COWExternalLease)+2s(COWBudget)+2s(NativeRetentionLeaseGeometryForTestV6)))",
+  "selected_fix_implemented_in_reviewed_source": false,
+  "whole_removal_supported_predicates": [
+    "owner open not retired cleanupFailed; no active/enrolling enrollment",
+    "amount <= owner.bytes",
+    "all bindings counted including zero-ref and cleanup-held",
+    "each lease concrete original open COWExternalLease matched to its own binding budget",
+    "each lease payload >= owner.bytes; rollback == 0; no independent direct Close",
+    "atomic census admission and shrink under same registry.mu/Owner.mu",
+    "fixed infallible teardown callback with no locks allocations failure or reentry"
+  ]
+}

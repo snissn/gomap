@@ -1,0 +1,14 @@
+{
+  "actual_mvcc_route": "unchanged; genuine native finaldriver/onceACK/Finish still requires root separate runtime grant; no evidence upgraded by this source repair",
+  "affected_successor_callers": [
+    "TestNativePublicationPausedFinishAllowsOrdinaryDurableSuccessor",
+    "TestNativePublicationLateRefusalRequiresCustodyWithoutPoisoningSuccessor"
+  ],
+  "first_fence": "nativeControlFenceV6 only adds return of actual existing fixture; previous original singleton Enqueue/Consume/Release assertions unchanged",
+  "ordinary_test_model_boundary": "original Activate callback validates PreparedCOW but does not separately activate allocator vector, matching existing DurableRootTransaction fixture. Actual original Consume writes pages then PublishCOWCandidate; no new native production meaning claimed.",
+  "other_helper_users": "remaining6 tops and6children retain original07 behavior; all8tops6children proposed to cover common helper return and constructor scope",
+  "shared_constructor": "nativePublicationControlV6 unchanged from07; default realClock/StartupSynchronous retained",
+  "successor_execution": "ordinary Enqueue invokes original Activate; maintained WaitThrough dispatchPublication(true) invokes original Publisher success then consumeDurableRootGroup before final Set release/frontier ACK. Helper never manually consumes successor.",
+  "successor_oracles": "before WaitThrough: Activated/Coordinator, Activate1, Consume0, Set Coordinator, allocator still base; after WaitThrough: Consumed/Released, Consume1/Abort0/Fail0, Set Released, exact current allocator pointer+Ref, same canonical lineage/sequence2. First Set Coordinator, receipt fenced/uncompleted, Close0, first Consume remains1.",
+  "successor_setup": "new helper builds only test-owned genuine DurableRootTransaction on SAME first pager/allocator. Fresh candidateID, exact parent BaseID/BaseDigest, same lineage, next sequence. Abort/Fail/Activate/Consume use original APIs with exact PreparedCOW identity checks."
+}

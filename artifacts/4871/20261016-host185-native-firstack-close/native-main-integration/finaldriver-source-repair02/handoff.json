@@ -1,0 +1,28 @@
+{
+  "status": "FROZEN_TEST_ONLY_PREDICATE_REPAIR_COMPLETE",
+  "source_manifest_sha256": "a7f05aa0a824de9f37664f1504636453133ad9b4d6d14a86826abeedd6bded2a",
+  "source_archive_sha256": "aa282fb7a4892023781dd9862a9f2000e92cccacc36edf42329cd0106a4f0dd9",
+  "source_files": 10431,
+  "changed_paths": 1,
+  "production_changed": false,
+  "source_lease_released": true,
+  "runtime_lease_released": true,
+  "go_commands": 0,
+  "test_bodies": 0,
+  "focused_reused_tops_children": [
+    56,
+    116
+  ],
+  "real_commands_proposed_unexecuted": 5,
+  "Q32": "RED",
+  "ACK": 0,
+  "files": {
+    "freeze.json": "0f8e87760af63629a68734f1a592c2fc4928465ce6cc0faf6bd6ccba003ce4c7",
+    "source.delta.patch": "fa54ed9e6b06fdbdf1b002cb46066099a8dd09576f9f9c0b670533bef35e6315",
+    "changed-files.json": "5e3cc23d99c9355cfbdfeadfc6b9d769918e1d5d3003ee22ca5cf647215f2130",
+    "README.md": "4089a8caabc6742b529fc7ab273259d0075470cab43314e619146c028bc0da3b",
+    "reused-focused-controls.json": "fdf28198ee7cd8888de4c71186b02dad3cfa75bafe530ceed39adefe6edb77b7",
+    "invariance.json": "346907f79709b71b7bd3b4b3ebc53b2098d06b522202ee5346b23080f2296950",
+    "proposed-real-commands.json": "6876b1d9af917c077ad4519ff5103b05c366a956420f4212f4e3b805627be697"
+  }
+}

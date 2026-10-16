@@ -1,0 +1,83 @@
+{
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW",
+  "actual_model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "candidate_edits_by_reviewer": false,
+  "children_spawned": false,
+  "verdict": "REJECT",
+  "verdict_scope": "Exact frozen complete diagnostic packet: one confirmed fixture blocker; no additional blocking production/pricing source defect identified within selected diagnostic domain.",
+  "production_and_envelope_source_disposition": "ACCEPT_SCOPED_CONDITIONAL",
+  "source": {
+    "manifest_sha256": "282a5adb2a9bb73051078274098f9783f80eabec94c0c623257694cfeda4f475",
+    "archive_sha256": "c72d4aae4acfe17f7fd26ebb1eabb102022e4c24f2eae5f17f41c822486ac78e",
+    "delta_sha256": "ad0ebd23e72dc78cbe5848bf93f9da944a96ce1ff7c1796fcd7b97b2159630e8",
+    "file_count": 10431,
+    "changed_paths": 67,
+    "base": "5cde43f24dcc86eaa8c2017bbc6cb0dc81a29e749d9420d27be2ab4f2e4e140d",
+    "head": "0149d78dba2574b09d7119d2631ec78a144e088d",
+    "identity": "uncommitted frozen source; HEAD alone does not identify candidate",
+    "full_archive_verified": true,
+    "full_live_verified_before_writer_successor": true,
+    "core_files": {
+      "TreeDB/mvcc/native_finaldriver_envelope_test.go": "c84d8e74682e0024f963c29283f613e32189e4cdaa5488940bbc063a9d6a7e4f",
+      "TreeDB/mvcc/native_finaldriver_precursor_test.go": "02ecc538748a09db4afbb34df7c06c7523772bb1f9c88fed00cf797b5ab925c1",
+      "TreeDB/mvcc/native_finaldriver_diagnostic_v6_test.go": "7bc58df840d068edd7145043ca017f32c5da861de127eafd2c39cfdb31fd1f23",
+      "TreeDB/zipper/materialized_input_growth_work_v6_test.go": "208c37c9bba96463e074223d693c2e75eb680043e1afb27b4361703303de41ec"
+    }
+  },
+  "findings": [
+    {
+      "id": "F1",
+      "severity": "blocking-fixture",
+      "path": "TreeDB/zipper/materialized_input_growth_work_v6_test.go",
+      "line": 114,
+      "trigger": "All three constructor/entries/payload children after producer CloseStep and RemovePendingWork",
+      "cause": "The still-live enrollment is deferred at line40. Owner.Enroll charges Enrollment and binding controls (owner.go230-271); producer refund therefore correctly restores the enrolled baseline, not zero. Raw residual is192.",
+      "correction": "Capture original enrolled Owner.Bytes and budget ExternalBytes before producer birth; require refund restores both baselines; explicitly close enrollment and then require final zero. Preserve existing pre-effect refusal, SAME producer resume, alias detach and bounded cleanup assertions.",
+      "production_defect": false
+    }
+  ],
+  "coverage": [
+    "Checked all10431 archive and initial frozen live file hashes and exact archive path set. Reviewed changed connected driver/precursor/envelope and child pricing against original Reserve and saved-progress sources.",
+    "Precursor checked allocator/vector/hash/registry/table/owner bounds, checked arithmetic and format refusal; actual ready validates same basis and transformed geometry before Fence.",
+    "Birth and preparation: original public/caching/backend Snapshot, dual edges and lookup locks; PRIMARY Claim/Growth same-owner handoff; capture/namespace/registry admission and partial error custody; projection/zipper/node/allocator work prefixes.",
+    "Fence and terminal: public caller preadmission, real phase26 ready, real phase27 Finish, original transaction/source witness and one ACK; strict graph/Set/token/pager/owner/queue/cancel/Close families.",
+    "Four prior price helpers byte-identical. Nine prior custody targets formatting-only: production semantic diffs reread; formatting receipt retained. Other changed dependency source independently reviewed.",
+    "Diagnostic fixture genuine original caller route, held old reader, actual durable successor34, FinishDetached&&!AccountingComplete, Close joining and reopen assertions; no private phase advancement or synthesized completion."
+  ],
+  "focused_controls": {
+    "source_manifest_sha256": "282a5adb2a9bb73051078274098f9783f80eabec94c0c623257694cfeda4f475",
+    "normal_pass_packages": [
+      "mvcc",
+      "primaryarena",
+      "pager",
+      "rootpublication"
+    ],
+    "normal_pass_top": 17,
+    "normal_pass_children": 33,
+    "first_failure": "normal-zipper; one top, three children, final enrollment-baseline assertion",
+    "remaining_normal_and_all_race": "NOT RUN after first failure",
+    "group_join_status": "summary reports all groups empty; not a fresh independent complete runtime process audit",
+    "actual_native_driver_executed": false
+  },
+  "artifacts_sha256": {
+    "source-frozen.json": "282a5adb2a9bb73051078274098f9783f80eabec94c0c623257694cfeda4f475",
+    "source-frozen.tar.gz": "c72d4aae4acfe17f7fd26ebb1eabb102022e4c24f2eae5f17f41c822486ac78e",
+    "source.delta.patch": "ad0ebd23e72dc78cbe5848bf93f9da944a96ce1ff7c1796fcd7b97b2159630e8",
+    "custody-subreview-formatting.json": "ae13d5cbd7f2cdf4fa646f4515c654e4e82923ca0db2bd9d632904b13ac24074",
+    "operation-and-retention-ledger.md": "211d4be970faa62f3ec2742f18d7ce008ad91d72f71281e40621eb5400f483d3",
+    "proposed-real-commands.json": "b98a5958fc60f9f1ddd9fa91bb489e0595ea348aedf136ec6644fc4b0fffbdcd",
+    "controls/summary.json": "244bea9820129610761e01df9bbb427a0b4bc177425110bb09d00321267084bb",
+    "controls/normal-zipper/run.log": "630e796268c3fa878e407480df3b711f7404ef751f88f9ecb940fbb9acbf060f"
+  },
+  "limitations": [
+    "This is selected Linux empty-dependency, single DATA leaf, fresh one-cursor B1 diagnostic source readiness, not general work proof or merge approval.",
+    "No numeric G evaluated/approved. G sums six conservative entry-to-next-persistent-progress families and remains conditional on checked child/domain predicates.",
+    "No new P total/whole retained union/atomic shared graph/FutureFinish bound approved; earlier selected constructor totals belong to older source and must be recomputed.",
+    "Q32/1MiB/33/80/4096 remains RED/ACK0; new honest256-record minimum observations refuse earlier. Old phase26 observations are historical.",
+    "No genuine new-source ready/Fence/publication/Finish/ACK/DB.Close/reopen runtime executed by reviewer or claimed by this review.",
+    "Proposed five real arms require separate exact-source authorization after fixture repair and focused-control disposition.",
+    "No new hard-I/O injection success, nonempty/platform/public concurrency/performance or sustained qualification."
+  ],
+  "hosted_review_unavailability_reason": "Required exact gpt-6.1-sol routing cannot be pinned by hosted manual review; this is explicitly routed independent internal fallback."
+}

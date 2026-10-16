@@ -1,0 +1,25 @@
+{
+  "utc": "2026-10-16T09:25:21.840632+00:00",
+  "scope": "Root accepts F5 diagnosis and narrowly necessary repair policy; no repair05 source/runtime acceptance",
+  "source_manifest_sha256": "a38583301e50103c204b47563bed43385908705bbcc1db2eb4c4105a05e099bd",
+  "source_archive_sha256": "b0b3cf3ddcca6517d41ea33e3860437e38ba3cdbd206dda6af3831b96553f300",
+  "advice_files_sha256": {
+    "native-finaldriver-work-binding-failure.md": "c025c22b2dad7b77ec8ac0659f23a72e0353e8286082f8326d333f4a8a09ca1c",
+    "native-finaldriver-work-binding-failure.json": "1f494da518242dbb8d4936e9bb458806a9dabc08e54b22156e3b5a5de7128e44",
+    "native-finaldriver-work-binding-rollback-advice.md": "0aa193d3aaa81ad6e27a15834afcae489dc8ab4e2bc10038c2fd0da9c0aa0bd7",
+    "native-finaldriver-work-binding-rollback-advice.json": "18492535a71ae79fc7c96080b3ecceaa1b56389b8e93fdf087635ddba936dff0"
+  },
+  "root_full_markdown_read": true,
+  "f5a": "NoWALFast leaves pruner enabled; original validator refuses before allocator adoption. Success diagnostic must disable it explicitly; separate genuine enabled-pruner arm must refuse and cleanly close. Guard remains.",
+  "f5b": "Constructed transaction transfer checks destination Set owner, so rollback must restore Set first. Effective Owner() concealed stale raw txn.owner. Genuine regression checks both and original finite abort.",
+  "unexpected_rollback_failure": "Latch original embedded physicalCleanupReceipt with first activation and rollback causes plus ownership sentinel. Coordinator poison references SAME receipt. Return existing failure before native release Bind/Continue owner checks, no dispose/refund/replay. Reserve actual fixed traffic before effects and update source-derived work price. Normal rollback remains unpoisoned.",
+  "source_owner": "/root/native_prerequisite exact gpt-6.1-sol; no runtime/Git",
+  "root_owned": "Git, GitHub, runtime selection and execution",
+  "not_claimed": [
+    "repair05 accepted",
+    "new numeric allowance",
+    "actual native publication or ACK",
+    "Q32 fit",
+    "general concurrency or full graph qualification"
+  ]
+}

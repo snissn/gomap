@@ -1,0 +1,109 @@
+{
+  "adopted_children_reaped": [],
+  "child_RUN_count": 2,
+  "elapsed_seconds": 2.823764973785728,
+  "ended_utc": "2026-10-16T08:47:53.512580+00:00",
+  "exit_code": 0,
+  "expected_child_RUN_names": [
+    "TestPrimaryArenaAcquireDetachAdmitsLookupBeforeOwnershipChangeV6/finite",
+    "TestPrimaryArenaAcquireDetachAdmitsLookupBeforeOwnershipChangeV6/ordinary"
+  ],
+  "group_and_children_empty": true,
+  "leader_joined": true,
+  "missing_named_top_RUN_PASS": [],
+  "name": "race-primaryarena",
+  "observed_group_processes": [
+    {
+      "comm": "go",
+      "pgid": 1274925,
+      "pid": 1274925,
+      "ppid": 1273222,
+      "session": 1274925,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1274925,
+      "pid": 1274943,
+      "ppid": 1274925,
+      "session": 1274925,
+      "state": "S"
+    },
+    {
+      "comm": "link",
+      "pgid": 1274925,
+      "pid": 1274956,
+      "ppid": 1274925,
+      "session": 1274925,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1274925,
+      "pid": 1274966,
+      "ppid": 1274925,
+      "session": 1274925,
+      "state": "R"
+    },
+    {
+      "comm": "primaryarena.te",
+      "pgid": 1274925,
+      "pid": 1274972,
+      "ppid": 1274925,
+      "session": 1274925,
+      "state": "S"
+    }
+  ],
+  "pgid": 1274925,
+  "pid": 1274925,
+  "raw_log_sha256": "01f09a2d0c36b351f8eed70e1dc2edde3e8dd902bd087d352376d45497546f5e",
+  "remaining_direct_or_adopted_children": [],
+  "remaining_group_members": [],
+  "required_top_level_names": [
+    "TestPrimaryArenaAcquireAdmitsActualLookupV6",
+    "TestPrimaryArenaCertificateAdmitsLookupBeforeTransferV6",
+    "TestPrimaryArenaAcquireDetachAdmitsLookupBeforeOwnershipChangeV6",
+    "TestPrimaryArenaPromotionSecondLookupRefusalHasNoAcquireV6",
+    "TestPrimaryArenaAcquireAfterAdmissionUsesOriginalLookupV6"
+  ],
+  "residual_observed_before_cleanup": false,
+  "signals": [],
+  "source_after_equals_frozen": true,
+  "source_before_after_equal": true,
+  "source_before_equals_frozen": true,
+  "started_utc": "2026-10-16T08:47:50.688813+00:00",
+  "status": "PASS",
+  "stop_reasons": [],
+  "subreaper_enabled": true,
+  "test_FAIL_names": [],
+  "test_PASS_names": [
+    "TestPrimaryArenaAcquireAdmitsActualLookupV6",
+    "TestPrimaryArenaCertificateAdmitsLookupBeforeTransferV6",
+    "TestPrimaryArenaAcquireDetachAdmitsLookupBeforeOwnershipChangeV6",
+    "TestPrimaryArenaAcquireDetachAdmitsLookupBeforeOwnershipChangeV6/finite",
+    "TestPrimaryArenaAcquireDetachAdmitsLookupBeforeOwnershipChangeV6/ordinary",
+    "TestPrimaryArenaPromotionSecondLookupRefusalHasNoAcquireV6",
+    "TestPrimaryArenaAcquireAfterAdmissionUsesOriginalLookupV6"
+  ],
+  "test_RUN_names": [
+    "TestPrimaryArenaAcquireAdmitsActualLookupV6",
+    "TestPrimaryArenaCertificateAdmitsLookupBeforeTransferV6",
+    "TestPrimaryArenaAcquireDetachAdmitsLookupBeforeOwnershipChangeV6",
+    "TestPrimaryArenaAcquireDetachAdmitsLookupBeforeOwnershipChangeV6/finite",
+    "TestPrimaryArenaAcquireDetachAdmitsLookupBeforeOwnershipChangeV6/ordinary",
+    "TestPrimaryArenaPromotionSecondLookupRefusalHasNoAcquireV6",
+    "TestPrimaryArenaAcquireAfterAdmissionUsesOriginalLookupV6"
+  ],
+  "test_SKIP_names": [],
+  "timeout": false,
+  "tmp_write_read_unlink_preflight": true,
+  "top_level_RUN_names": [
+    "TestPrimaryArenaAcquireAdmitsActualLookupV6",
+    "TestPrimaryArenaCertificateAdmitsLookupBeforeTransferV6",
+    "TestPrimaryArenaAcquireDetachAdmitsLookupBeforeOwnershipChangeV6",
+    "TestPrimaryArenaPromotionSecondLookupRefusalHasNoAcquireV6",
+    "TestPrimaryArenaAcquireAfterAdmissionUsesOriginalLookupV6"
+  ],
+  "top_level_pass_count": 5,
+  "unexpected_top_RUN": []
+}

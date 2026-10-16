@@ -1,0 +1,44 @@
+{
+  "mode": "READ_ONLY_SOURCE_ADVICE",
+  "model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "candidate_edits_by_reviewer": false,
+  "source_manifest_sha256": "5cde43f24dcc86eaa8c2017bbc6cb0dc81a29e749d9420d27be2ab4f2e4e140d",
+  "source_archive_sha256": "0bcaee68f1b6a058bd358b5096265771d35ba503143ac9f8e255b2c215fad8f4",
+  "inspected_source": {
+    "TreeDB/native_mvcc_prune.go": "5b83457193e35ac1f04afda4e2621284e8c91474a730d677a6731911f01c8b3f",
+    "TreeDB/mvcc/prune_cursor_v6.go": "67741d492a926d94dc347f2a073f883b2bf2d793334e1de79095d46bf58c9cba",
+    "TreeDB/mvcc/versions.go": "aa88729578b2eafb1c44b23f94a52c924132cf2bb03362d1bd98e031bdeb8f53",
+    "TreeDB/internal/mvccadmission/admission.go": "14a91279780df01c1cff031e92f33d5dae7d0bb866ee461a60825a906e289a67",
+    "TreeDB/internal/mvccadmission/request.go": "fdec511ce5b0b8c534b5f2155a52ecce159b5671d9ad19acd2294b6ae6a9b74e",
+    "TreeDB/internal/mvcckey/codec.go": "b506d858b5821e7489c79e1a4d90fff84ee1807bc86e527563322ce22e142775",
+    "TreeDB/db/native_mvcc_current_delete_v6.go": "5dbc2fb4c8993ed43075650989d63616ae9afd4310b18aaee94c1f9443a9f600",
+    "TreeDB/db/native_mvcc_allocator_preparation_v6.go": "e4e0e03847f2c006adf77b81b47cc0aa6506b18ffd630200bf2c5787a393068f",
+    "TreeDB/db/primary_read_certificate_v6.go": "13f39e21c4a4b2ab000f9f2491c2ab160def34b4a1ae1d629164f64f03009fe9",
+    "TreeDB/tree/native_mvcc_selection_v6.go": "9679a06002cacfde901e707ff314461d53d5c8005172b27aca1a6c2fda4bf834",
+    "TreeDB/internal/memtable/cow_budget.go": "f3102bd2d83c3009ff5cf470634ce9046ae35d95a59f2a106f9e147a8615a823",
+    "TreeDB/internal/memtable/native_retention_work.go": "0863e195a9720e1490ddb1e0c6599533510de1523fb3f09a4ca1d7debb541fba"
+  },
+  "trusted_children": [
+    "native-finaldriver-projection-progress-bound",
+    "native-finaldriver-caching-capture-progress-bound",
+    "native-finaldriver-primary-construction-progress-bound",
+    "native-finaldriver-capture-progress-bound",
+    "native-finaldriver-terminal-unit-bound",
+    "native-finaldriver-resource-terminal-bound"
+  ],
+  "disposition": "CONDITIONAL_SYMBOLIC_CURSOR_COMPOSITION",
+  "unbounded_selected_parent_operation_found": false,
+  "fixed_boundaries": [
+    "beginBatchFlush copy last buffered key including invalid-current-record branch",
+    "phase20 ReleaseCodecBytes synchronous Resize requires concrete V traffic/enforcement disposition",
+    "public Close returned lease.Close fixed V tail outside closeStep"
+  ],
+  "next_action": "Compose source-shaped parent compounds with reviewed child units and independently review frozen successor ready/birth/admission changes. Do not choose a numerical allowance from this report.",
+  "no_go_execution": true,
+  "no_publication_grant": true,
+  "native_publication_accepted": false,
+  "q32_acceptance": false,
+  "numeric_G": null,
+  "md_sha256": "03553d5eddf80b4aeeac60ac05338cc529858444533e5947bb5c551c3e7a8884"
+}

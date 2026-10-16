@@ -1,0 +1,144 @@
+{
+  "disposition": "ACCEPT",
+  "scope": "REPAIR05_FROZEN_SOURCE_READINESS_ONLY",
+  "mode": "INTERNAL_SUBAGENT_REVIEW",
+  "reviewer": "/root/ordinary_review",
+  "actual_model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "candidate_edits_by_reviewer": false,
+  "source_count": 10432,
+  "parent_unchanged_paths": 10423,
+  "modified_paths": 8,
+  "added_paths": 1,
+  "deleted_paths": 0,
+  "source_bindings": {
+    "source-frozen.json": "a2ffdb13492ee217c892745f3cc3a6ce02ba82fbaeb03023a2f0496a38ce5387",
+    "source-frozen.tar.gz": "896a8b1d53bcad78128a126106485df12ace7d7062c8132b921a3b20795b3771",
+    "source.delta.patch": "5bf33a7a8f9237115283964d6de558a65e9389943c6e37b229ca0c276e7a97ff",
+    "changed-files.json": "634ff4685009ac499fd3b582ecc83cee67a4e785adf26f857f46ca52e4f498f9",
+    "changed-source.tar.gz": "f6d5d1a464f12cd82db6e99a86d1717ceea7e3335a2c0a7d5eea26915e5b4247",
+    "README.md": "ae2c4ea88aefc09c75c97bc273c832a79a8d908570cadb697c3e74991fd08adb",
+    "handoff.json": "82179772a211a97eb016e56f29ccb4d45a89785cb7e609ef54bd500b29f27368",
+    "pricing-and-lifetime.json": "f335d08b5ee2d3b57357c3265d2a740d94a20e358c0dab24da0f355f7c5da458",
+    "caller-disposition.json": "11d05c6639ded9c734e1ca500e9fc8806e4fc4f606d98c55c323f9b8fafe4cf2",
+    "invariance.json": "09c6e04be49da523e1d4552e1d5039abc319e58940ae127e5fc955a117dad65d",
+    "proposed-regression-commands.json": "1031f466336507b25e2180266f1f632590f2299ca526787384d0bfec030f9c6a",
+    "proposed-real-commands.json": "b9404cb5c3abf28ce73509659ebe26b47310274fbe190545a499f3759fc3b028"
+  },
+  "changed_paths": [
+    {
+      "after_sha256": "7e71d2340ccceec2224ea68ed8c8dae003d7fadf812da644d90b7a19d9ea5311",
+      "before_sha256": "16d472880a0fae2f97604b7e4976e9d777c0b36f4d0259726cc3da80567634a9",
+      "change": "modify",
+      "path": "TreeDB/db/native_prebuilder_pricing_for_test_v6.go"
+    },
+    {
+      "after_sha256": "4bde2a0ee0c873f1e98430fb052434f4bef61f561aafa2bb3db7933c8c0b9cd7",
+      "before_sha256": null,
+      "change": "add",
+      "path": "TreeDB/internal/rootpublication/constructed_activation_rollback_v6_test.go"
+    },
+    {
+      "after_sha256": "8d861b321eceea1daa6966b783f9e550bb2189d66c6256a0132f7513848e7ef1",
+      "before_sha256": "3289de5a237288a0ba30b1744c0a25a15e0043de4cfd4c569ce1108368dc231f",
+      "change": "modify",
+      "path": "TreeDB/internal/rootpublication/coordinator.go"
+    },
+    {
+      "after_sha256": "8740b9059ed25ff512cb40072a6b62e4c03c059e5706698d8fd514e071cb08a1",
+      "before_sha256": "8fd128df950f05d6861c84db06c2e82ae58aebbd86f55df622450f242fedddc0",
+      "change": "modify",
+      "path": "TreeDB/internal/rootpublication/durable_root_transaction.go"
+    },
+    {
+      "after_sha256": "323a886264e45b769c66d60cc5e35b1c4210c2374e83e240bf440846937f22c2",
+      "before_sha256": "f1ceef27c3065f2b5f7ef28d156f5bab42de113ffe99b19ed0350ba975cf0785",
+      "change": "modify",
+      "path": "TreeDB/internal/rootpublication/durable_root_transaction_native_mvcc_v6.go"
+    },
+    {
+      "after_sha256": "554af180803b7f9fd52f5e89082bf7d4974cafe43308d6fe0c7eeb2a3a814af4",
+      "before_sha256": "48e6893c7b5df7558166ae35c59f0e184896cea004d900a49386bf375f0fe952",
+      "change": "modify",
+      "path": "TreeDB/internal/rootpublication/primary_empty_candidate_work_v6.go"
+    },
+    {
+      "after_sha256": "fc322fe8d3a2ead1dd84fcd569cbadc6b3511099f48b454e685b2eaf5dd9d5aa",
+      "before_sha256": "3fc00c9bc50e6cf749ea6d129bd5b252a0e57b7cde8a9b80438e4a2156022aef",
+      "change": "modify",
+      "path": "TreeDB/internal/rootpublication/types.go"
+    },
+    {
+      "after_sha256": "7b2d04223f54617e3adfa29467671c2819a8d1a9cd00ee923303d9568b8dd396",
+      "before_sha256": "fd8908784bcd9b462c4ecd58ad82c21a2eb0b737dcf05b808275aaa8e3cb0b70",
+      "change": "modify",
+      "path": "TreeDB/mvcc/native_finaldriver_diagnostic_v6_test.go"
+    },
+    {
+      "after_sha256": "aac9cbee09bf06fc9b836e501f98451ac4d396ddd2f59dc29ee1633021b70a7a",
+      "before_sha256": "28dd70502f4ab5b452ba43124b65457112f3ad29ee46f1bc5096af4bf4d5068e",
+      "change": "modify",
+      "path": "TreeDB/mvcc/native_prune_backend_route_v6_test.go"
+    }
+  ],
+  "checks": {
+    "full_archive_manifest_equality": true,
+    "full_live_manifest_equality": true,
+    "exact_nine_path_parent_delta": true,
+    "all_handoff_payload_hashes": true,
+    "proposal_test_file_bindings": true,
+    "raw_index_sha256": "4c6b63357522cd951fd864e661b167f52e6debcd5d5e150e002fdba478f4dbe1",
+    "runtime_by_reviewer": false
+  },
+  "findings": [],
+  "resolved": [
+    {
+      "id": "F5a",
+      "resolution": "Successful diagnostic opts disable background pruning; explicit genuine enabled-pruner refusal/cancel/DB.Close arm preserves production guard."
+    },
+    {
+      "id": "F5b",
+      "resolution": "Set-before-transaction checked rollback; unexpected failure uses original fixed 3-cause receipt/owner, coordinator poison references same receipt; fixed work admitted before effects."
+    },
+    {
+      "id": "F5b-close",
+      "resolution": "Bind and ContinueWork observe sticky original receipt before effective-owner validation; original abort header moved once before reads, admitted child avoids duplicate debit."
+    },
+    {
+      "id": "ordinary-Abandon",
+      "resolution": "Capture independent Set before constructed abort scrubs inline candidate; release after abort success only; real ordinary public Abandon regression checks baseline."
+    }
+  ],
+  "pricing": {
+    "new_records": 5,
+    "bytes": "2*sizeof(DurableRootTransaction)+2*sizeof(durableRootCleanupFailureV6)+4*sizeof(error)+2*sizeof(retainedalloc.Owner)+2*sizeof(durableRootGroupExtension)",
+    "enqueue_records_before": 46,
+    "enqueue_records_after": 51,
+    "fixed_F_label_before": 293,
+    "fixed_F_label_after": 298,
+    "retained_layout_delta": 0,
+    "new_retained_allocations": 0,
+    "numeric_grant_chosen": false
+  },
+  "control_scope": {
+    "source_reviewed_new_constructed_cases": [
+      "ordinary",
+      "native-work",
+      "native-rollback-failure"
+    ],
+    "regression_proposal": "normal/race four tops and five children per mode",
+    "actual_route_proposal": "six separate one-top/one-child normal calls, negative pruner before successful publication arms",
+    "runtime_evidence_verdict": "PENDING_SEPARATE_REVIEW",
+    "synthetic_continuation": "Only sticky-error observation ordering, no publication/disposal authority."
+  },
+  "limits": [
+    "Scoped source acceptance, not product/merge acceptance.",
+    "No Go/compiler/tests/benchmarks/runtime or Git/GitHub mutation by reviewer.",
+    "Root-selected focused controls running separately; no PASS inferred.",
+    "No successful native publication, genuine Finish, final Close join or current actual33 run established by this review.",
+    "Unexpected rollback-failure true NativePublication join remains source-order evidence; standalone injected control has no actual publication receipt.",
+    "Original Q32/1MiB/33/80/4096 unchanged; Q32 RED/ACK0 remains; no numeric allowance.",
+    "Prior immutable ordinary/native source coverage carries only where byte identity proves unchanged."
+  ],
+  "hosted_model_routing_unavailability": "Hosted manual review cannot pin the explicitly required exact gpt-6.1-sol model; independent internal fallback used."
+}

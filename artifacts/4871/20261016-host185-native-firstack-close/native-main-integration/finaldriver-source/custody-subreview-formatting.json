@@ -1,0 +1,60 @@
+{
+  "rows": [
+    {
+      "path": "TreeDB/pager/grow_work.go",
+      "reviewed_sha256": "a482d1f04cc40bf11112d636f8999f0965adc68003dd1fd4f0e2c3976c6c2bf9",
+      "current_sha256": "12194397502779ef2ed55c8243ec998f2b712000f576f461e50eb8709449c3e6",
+      "gofmt_only_delta": true
+    },
+    {
+      "path": "TreeDB/pager/native_growth_admission_v6_test.go",
+      "reviewed_sha256": "64763c60878797fffb6f67f1a828c2c05197b01e0952e9ca2d5c1b0532d58863",
+      "current_sha256": "22e6da2d655f20b3c36ca7cb32051b265b7a09349567b36311ceff9aef6b4ff4",
+      "gofmt_only_delta": true
+    },
+    {
+      "path": "TreeDB/pager/native_growth_private_cancel_unix_v6_test.go",
+      "reviewed_sha256": "a85ec845b4713fd445ae3978a676b490762b58cb1f59d1d4764693b8b9081f87",
+      "current_sha256": "6a1db14e467c9bf4cdf5a3015c0ede5d5f18048eaf0398dbb35b16a248770eb9",
+      "gofmt_only_delta": true
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/arena.go",
+      "reviewed_sha256": "e4dcaab220f56710d18b0e62a8bad87fdf7818f8c10d4c4fc1e5ca41963eadcd",
+      "current_sha256": "f1a2fd47dfd1408c75e2eadb8b82e9019a3bbdf1624c8ca2ead9b2618163456b",
+      "gofmt_only_delta": true
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/arena_lookup_admission_v6_test.go",
+      "reviewed_sha256": "1b25c8eed58513dff7237964697437977baf4359ebd8dc04befd1b2816e601d5",
+      "current_sha256": "aed0712539154b686836f8d784489fb5b798af72c19b44b8de95f532e7500f84",
+      "gofmt_only_delta": true
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_snapshot_v6.go",
+      "reviewed_sha256": "9e65db00cb94f842ecb3ddb082892ca8b7e17cfba3d8c46c77f0609c1a70858d",
+      "current_sha256": "3878b71192c0537270fce7d2d97f0199d76594f5ccf419fd8e9bfa1033775940",
+      "gofmt_only_delta": true
+    },
+    {
+      "path": "TreeDB/db/native_snapshot_birth_lookup_v6_test.go",
+      "reviewed_sha256": "9cbe23d93f7e055708a58e1efcb858b5dd994793bb052877d871d4697c62934a",
+      "current_sha256": "d2090dc7b59539783119589c03ec0a2eed21e76960c8db52b4e9073ddac921ef",
+      "gofmt_only_delta": true
+    },
+    {
+      "path": "TreeDB/db/native_claim_growth_custody_v6_test.go",
+      "reviewed_sha256": "39acc039b8551f862f6d413d425ed7262f50bd2b21927ea1f72007274d979f7a",
+      "current_sha256": "178de60ae2e425785f64f6b7678946890cd9c6ca16663e36ddaf9e06ec532a2a",
+      "gofmt_only_delta": true
+    },
+    {
+      "path": "TreeDB/db/primary_slot_custody_v6_test.go",
+      "reviewed_sha256": "796e7d5f871377fe4aa8d4dd8887d3fa1b2e48aa1dbd882b26c5a6da624b8b23",
+      "current_sha256": "be1611da5cbcf3a2934dd3faa09bb83f59932ce279ae3f0a0ed5b54fe70dc8e1",
+      "gofmt_only_delta": true
+    }
+  ],
+  "gofmt_only_all_targets": true,
+  "no_Go_compiler_test_run": true
+}

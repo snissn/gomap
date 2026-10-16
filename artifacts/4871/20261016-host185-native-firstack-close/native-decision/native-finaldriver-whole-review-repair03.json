@@ -1,0 +1,36 @@
+{
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW",
+  "actual_model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "candidate_edits_by_reviewer": false,
+  "verdict": "ACCEPT",
+  "scope": "Exact repair03 source-only diagnostic readiness; no runtime or numeric allowance approval",
+  "manifest_sha256": "8f644d53679cc584cc241dd517dd2ccdf16f6e4c8899fa62819c3a520214b2cb",
+  "archive_sha256": "66f82d9f0cef64cb920c9ed9c314b017d076b4a18f7bcb6316e50611df7d2bbb",
+  "delta_sha256": "08e23880b98f9b745d22cd968016588a7a2ef35ba81bb1e2a73912d1640ba0ca",
+  "source_files": 10431,
+  "all_archive_hashes_and_exact_pathset_verified": true,
+  "exact_changed_file": {
+    "path": "TreeDB/mvcc/native_finaldriver_diagnostic_v6_test.go",
+    "before_sha256": "cf8018fdb2ac82db7c16e00f34302ccf699fe46d86e3e85a0b7925e30283f068",
+    "after_sha256": "79f33a8f379eee962b84152207f3ab10bade1dbf44c6eb8d5f07d08230c887d4",
+    "other_files_unchanged": 10430
+  },
+  "F3": {
+    "status": "RESOLVED_SOURCE",
+    "cause": "Original freelist observer209 counts Data=len(private.allocated) and216 explicitly reports NewIDs=Data/NewIDsExact=false. Prior diagnostic demanded impossible exactness.",
+    "correction": "Validate NewIDs==Data and NewIDs<=prebirth Allocator.Allocated; retain every other ready guard and original false exactness.",
+    "safety": "Duplicate-count conservative upper bound dominates distinct claims; no exact-discovery scan or fabricated exactness required. New bound is the existing private-allocation structural bound, not observed runtime cardinality.",
+    "observed_failure": "Repair02 ready-cancel reached ready then failed before Fence, with G78487records/41682916bytes. These are historical diagnostic output, not a selected runtime allowance or Q32 claim.",
+    "failure_raw_sha256": "b6f56644a7251c3876bf88564de6c09ff20be93cd1f2357352dba198231b352c"
+  },
+  "findings": [],
+  "coverage_reuse": "Whole-review01 plus repair01/02 source coverage carries by exact identity for all unchanged production/formula and other source; F3 supersedes previously missed impossible test predicate.",
+  "limits": [
+    "No Go/test/runtime executed by reviewer.",
+    "No successor ready/Fence/publication/Finish/ACK/Close/reopen result asserted.",
+    "No evaluated/approved numeric allowance or complete retained-union/general progress proof.",
+    "Q32 remains RED/ACK0; separate exact-source runtime grant/evidence review required."
+  ],
+  "lease_released": true
+}

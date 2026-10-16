@@ -1,0 +1,162 @@
+{
+  "adopted_children_reaped": [],
+  "child_RUN_count": 5,
+  "elapsed_seconds": 11.837273950688541,
+  "ended_utc": "2026-10-16T09:40:14.706501+00:00",
+  "exit_code": 0,
+  "expected_child_RUN_names": [
+    "TestConstructedPrimaryActivationRollbackPreservesCustodyV6/ordinary",
+    "TestConstructedPrimaryActivationRollbackPreservesCustodyV6/native-work",
+    "TestConstructedPrimaryActivationRollbackPreservesCustodyV6/native-rollback-failure",
+    "TestNativePreparedAbortUsesOriginalBuilderOrCandidateReceiptV6/builder",
+    "TestNativePreparedAbortUsesOriginalBuilderOrCandidateReceiptV6/candidate"
+  ],
+  "group_and_children_empty": true,
+  "leader_joined": true,
+  "missing_named_top_RUN_PASS": [],
+  "name": "race-rootpublication-rollback",
+  "observed_group_processes": [
+    {
+      "comm": "go",
+      "pgid": 1331565,
+      "pid": 1331565,
+      "ppid": 1331457,
+      "session": 1331565,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1331565,
+      "pid": 1331584,
+      "ppid": 1331565,
+      "session": 1331565,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1331565,
+      "pid": 1331598,
+      "ppid": 1331565,
+      "session": 1331565,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1331565,
+      "pid": 1331779,
+      "ppid": 1331565,
+      "session": 1331565,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1331565,
+      "pid": 1331839,
+      "ppid": 1331565,
+      "session": 1331565,
+      "state": "R"
+    },
+    {
+      "comm": "link",
+      "pgid": 1331565,
+      "pid": 1331851,
+      "ppid": 1331565,
+      "session": 1331565,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1331565,
+      "pid": 1331861,
+      "ppid": 1331565,
+      "session": 1331565,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1331565,
+      "pid": 1331865,
+      "ppid": 1331565,
+      "session": 1331565,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1331565,
+      "pid": 1331869,
+      "ppid": 1331565,
+      "session": 1331565,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1331565,
+      "pid": 1331873,
+      "ppid": 1331565,
+      "session": 1331565,
+      "state": "R"
+    },
+    {
+      "comm": "rootpublication",
+      "pgid": 1331565,
+      "pid": 1331880,
+      "ppid": 1331565,
+      "session": 1331565,
+      "state": "S"
+    }
+  ],
+  "pgid": 1331565,
+  "pid": 1331565,
+  "raw_log_sha256": "a82607a0f5e559d3b2235765e99543193c74bf2888f4c089c2860760bd2727f6",
+  "remaining_direct_or_adopted_children": [],
+  "remaining_group_members": [],
+  "required_top_level_names": [
+    "TestConstructedPrimaryActivationRollbackPreservesCustodyV6",
+    "TestDurableRootActivationFailureRollsBackOwnershipBeforeVisibility",
+    "TestEnqueueBuiltValidationAndActivationFailurePreserveFinalLease",
+    "TestNativePreparedAbortUsesOriginalBuilderOrCandidateReceiptV6"
+  ],
+  "residual_observed_before_cleanup": false,
+  "signals": [],
+  "source_after_equals_frozen": true,
+  "source_before_after_equal": true,
+  "source_before_equals_frozen": true,
+  "started_utc": "2026-10-16T09:40:02.869221+00:00",
+  "status": "PASS",
+  "stop_reasons": [],
+  "subreaper_enabled": true,
+  "test_FAIL_names": [],
+  "test_PASS_names": [
+    "TestConstructedPrimaryActivationRollbackPreservesCustodyV6",
+    "TestConstructedPrimaryActivationRollbackPreservesCustodyV6/ordinary",
+    "TestConstructedPrimaryActivationRollbackPreservesCustodyV6/native-work",
+    "TestConstructedPrimaryActivationRollbackPreservesCustodyV6/native-rollback-failure",
+    "TestEnqueueBuiltValidationAndActivationFailurePreserveFinalLease",
+    "TestDurableRootActivationFailureRollsBackOwnershipBeforeVisibility",
+    "TestNativePreparedAbortUsesOriginalBuilderOrCandidateReceiptV6",
+    "TestNativePreparedAbortUsesOriginalBuilderOrCandidateReceiptV6/builder",
+    "TestNativePreparedAbortUsesOriginalBuilderOrCandidateReceiptV6/candidate"
+  ],
+  "test_RUN_names": [
+    "TestConstructedPrimaryActivationRollbackPreservesCustodyV6",
+    "TestConstructedPrimaryActivationRollbackPreservesCustodyV6/ordinary",
+    "TestConstructedPrimaryActivationRollbackPreservesCustodyV6/native-work",
+    "TestConstructedPrimaryActivationRollbackPreservesCustodyV6/native-rollback-failure",
+    "TestEnqueueBuiltValidationAndActivationFailurePreserveFinalLease",
+    "TestDurableRootActivationFailureRollsBackOwnershipBeforeVisibility",
+    "TestNativePreparedAbortUsesOriginalBuilderOrCandidateReceiptV6",
+    "TestNativePreparedAbortUsesOriginalBuilderOrCandidateReceiptV6/builder",
+    "TestNativePreparedAbortUsesOriginalBuilderOrCandidateReceiptV6/candidate"
+  ],
+  "test_SKIP_names": [],
+  "timeout": false,
+  "tmp_write_read_unlink_preflight": true,
+  "top_level_RUN_names": [
+    "TestConstructedPrimaryActivationRollbackPreservesCustodyV6",
+    "TestEnqueueBuiltValidationAndActivationFailurePreserveFinalLease",
+    "TestDurableRootActivationFailureRollsBackOwnershipBeforeVisibility",
+    "TestNativePreparedAbortUsesOriginalBuilderOrCandidateReceiptV6"
+  ],
+  "top_level_pass_count": 4,
+  "unexpected_top_RUN": []
+}

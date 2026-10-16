@@ -1,0 +1,10 @@
+{
+  "full_native_actual_route": "unchanged mvcc diagnostic fixture uses real production preparation/Consume/Finish; proposed later only onceACK and pausedFinishClose remain separate from focused synthetic controls",
+  "new_join_controls": "same original helper constructor; other new join controls have no fence and retain their unchanged actual Bind/Complete/scrub/lease assertions",
+  "prior_evidence": "repair06 first focused failure preserved; no race/actual06 result exists. No prior failure converted into pass by source reasoning.",
+  "production_join": "repair06 production canonical live-list membership implementation unchanged",
+  "scheduler": "StartupSynchronous preserves original background exclusion. Original WaitThrough dispatchPublication(true) drives successor; no CompleteStartup bypass or arbitrary delay. This proves ordinary engine progress, not ordinary background scheduler service.",
+  "separate_ambiguity": "same genuine singleton Enqueue helper; no Consume before ambiguous Release; original recovery transfer/release asserted",
+  "shared_constructor": "nativePublicationControlV6 used by all8 selected tops; no other production/test file changed",
+  "shared_success_helper": "nativeControlFenceV6 used by 4 original success/Stop/late-error controls and new JoinRetainsLinked/fenced child"
+}

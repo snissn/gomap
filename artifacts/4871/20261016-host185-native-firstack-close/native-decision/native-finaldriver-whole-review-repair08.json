@@ -1,0 +1,65 @@
+{
+  "disposition": "ACCEPT",
+  "scope": "Repair08 one-file synthetic coordinator fixture source readiness; composed unchanged production Join source acceptance; no focused runtime or real native diagnostic outcome accepted.",
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW",
+  "reviewer_model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "candidate_edits_by_reviewer": false,
+  "children_spawned": false,
+  "runtime_executed_by_reviewer": false,
+  "hosted_review_unavailability_reason": "Manual hosted review cannot pin the required exact model; no hosted review requested.",
+  "source_manifest_sha256": "824fa0286c45825ff1fdfb9b7a4e087950887a329eb68388281ef1f5d625fca0",
+  "source_archive_sha256": "1371d99c9945ef2eea254fe5c16867e777aa54ec8fde4341566bbd85d008493e",
+  "files": 10433,
+  "parent_manifest_sha256": "398fd377bd569c52341e10cc9c90d6bd0762fec7a2ffc39413b4148d0dfe1750",
+  "delta_sha256": "9b2add7025997cd92aa2bc98fc488ae6ecac6758dcab37c2bddf6143328a4a3b",
+  "changed_paths": {
+    "TreeDB/internal/rootpublication/native_publication_v6_test.go": "3301064ea565ed137cb1a0d61d3b86ba2a17a9c51fe23e5ca7fc1b28653ad47e"
+  },
+  "unchanged_paths": 10432,
+  "raw_index_sha256": "4c6b63357522cd951fd864e661b167f52e6debcd5d5e150e002fdba478f4dbe1",
+  "verification": {
+    "full_archive_paths_and_hashes": true,
+    "all_live_source_hashes": true,
+    "exact_one_path_delta_reproduced": true,
+    "handoff_artifact_hashes": true,
+    "proposals_selected_source_hashes": true
+  },
+  "historical_reviews": {
+    "native-finaldriver-whole-review-repair06.md": "d3841dfca124814133384374938feabe1cad72d9b288062073f86194e302702c",
+    "native-finaldriver-whole-review-repair07.md": "6f205fcd817677a0d0c9e12f3d6b62e012da48805391e3f15e72bfbed8fcd9bd",
+    "native-finaldriver-repair07-runtime-disposition.md": "66281115d5078ca6bfebd011875b0c22251d4cdbaeb3ba1f9dd6a74580640adf"
+  },
+  "findings": [],
+  "F7": "Resolved: rootless successor replaced by actual sequence2 transaction on SAME first allocator/pager/capability and exact canonical generation parent.",
+  "constructor_and_caller_proof": [
+    "First fence returns its original fixture; after first genuine Consume allocator current generation is exact first prepared generation, first tx Released and Consume1.",
+    "Successor PrepareCOWCandidateV1 uses same allocator with fresh candidateID/generation/commit2; reservation BaseID/BaseDigest prove exact original parent before Enqueue.",
+    "Same durable lineage and consecutive sequence satisfy actual preflightDurableRootLocked; original Enqueue activates transaction2 and preserves raw Coordinator owner/Set/current base.",
+    "WaitThrough uses original synchronous startup dispatchPublication(true), successful Publisher, finishPublishLocked/consumeDurableRootGroup and ordinary Set/terminal cleanup. No manual successor Consume.",
+    "Actual Consume verifies exact PreparedCOW and original base, truncates/writes same pager and calls original PublishCOWCandidateV1 on same allocator; after return asserts current exact generation pointer+Ref, tx Released, Set Released, Consume1/Abort0/Fail0.",
+    "Original receipt remains fenced/incomplete and sole native dispatch, original Set Coordinator, original Close0 and Consume1 during successor; original successful/late-error Close assertions remain."
+  ],
+  "all_helper_callers": [
+    "TestNativePublicationJoinAcceptsScrubbedOriginalV6",
+    "TestNativePublicationJoinRetainsLinkedCompletionV6",
+    "TestNativePublicationJoinConcurrentScrubbedOriginalV6",
+    "TestNativePublicationPausedFinishAllowsOrdinaryDurableSuccessor",
+    "TestNativePublicationStopJoinsIdleOriginalBeforeSchedulerStop",
+    "TestNativePublicationLateRefusalRequiresCustodyWithoutPoisoningSuccessor",
+    "TestNativePublicationAmbiguityCannotReleaseTurnAsSuccess",
+    "TestNativePublicationStopSettlesFailedOriginalAndStillStops"
+  ],
+  "limits": [
+    "Synthetic ordinary callbacks are genuine original allocator operations but run outside unchanged first Begin/Release32-record/1MiB vector; no full native-turn Q32 claim.",
+    "Default realClock and retained startup dispatcher scope unchanged; no background scheduler progress qualification.",
+    "Production, layout, F/G/P, actual native fixture and all10432 other paths unchanged.",
+    "Repair07 six normal tops/six children PASS and two failures remain exact07 historical results; no race/actual07 outcome inferred.",
+    "Fresh focused normal/race pending; real onceACK/pausedFinishClose require separate root selection.",
+    "Concurrent containing-admission boundary from06 unchanged; Q32 RED/ACK0 and all remaining qualification gates preserved."
+  ],
+  "proposals": {
+    "proposed-regression-commands.json": "632ecd0f59581ba76a0575800b0e918ca78b366f92ffaff583b8e1268e4d275f",
+    "proposed-real-commands.json": "a877887b3500edefd4df19668839c562d55ae45daa93d7272e6981d929f267da"
+  }
+}

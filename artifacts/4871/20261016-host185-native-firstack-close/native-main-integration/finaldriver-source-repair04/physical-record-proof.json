@@ -1,0 +1,31 @@
+{
+  "ACK0_public_gate": true,
+  "Q32_bytes": 1048576,
+  "Q32_records": 32,
+  "current_expression_source_changed": false,
+  "derived_before_first_cursor": true,
+  "floor_key_bytes": 13,
+  "floor_value_bytes": 9,
+  "old_key_bytes": 41,
+  "positive_native_publication_qualified": false,
+  "prior_numeric_G_reused": false,
+  "retention_layout_changed": false,
+  "seed_value_bytes": 2,
+  "selected_key_bound": 41,
+  "selected_value_bound": 9,
+  "semantic_review_json_sha256": "69eda0fc66584e757cd1e20f961dd3704de3dfdcd5b59970a72e020fb48b0f9d",
+  "semantic_review_md_sha256": "72864d0d3e6986a4399231c065073043f2396605a20c459ee62637e1f237c155",
+  "source_anchors": [
+    "mvcc.go CommitAt recordValueV1 prefix",
+    "versions.go AdvanceDiscardFloor fixed nine-byte tag plus BigEndian uint64",
+    "versions.go discardFloorKey thirteen-byte physical key",
+    "materialized_write_work.go forwards full raw record Value into leaf builder"
+  ],
+  "source_encoding": {
+    "TreeDB/internal/mvcckey/codec.go": "b506d858b5821e7489c79e1a4d90fff84ee1807bc86e527563322ce22e142775",
+    "TreeDB/mvcc/mvcc.go": "b0f9fcc0393ef56a94609379a178627c01661cad58940fa8573633a33d1370d5",
+    "TreeDB/mvcc/versions.go": "aa88729578b2eafb1c44b23f94a52c924132cf2bb03362d1bd98e031bdeb8f53"
+  },
+  "successor_key_bytes": 36,
+  "successor_value_bytes": 6
+}

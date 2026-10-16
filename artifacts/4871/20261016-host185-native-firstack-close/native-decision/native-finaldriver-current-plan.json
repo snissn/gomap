@@ -1,0 +1,305 @@
+{
+  "ACK": 0,
+  "G": {
+    "bootstrap": {
+      "choice": "A-priori selected-shape envelope from original pre-cursor operands; one fresh cursor freezes G on its first call; ready verifies actual geometry <= envelope before Fence.",
+      "lookup_bootstrap": "Pre-cursor table count Npre plus conservative selected-native constructor additions from the exact one-frame route bounds Nready; use L=Nready+5 in G. Fresh ready observation N0 must be <=Nready; observed historical N0=4 is not substituted.",
+      "method": "Bounded admitted test-only scalar observations under original locks; use current source constructor sizing/growth rules as pure checked transforms. Require selected one-leaf/one-output-frame/empty-dependency shape; derive metadata and retired/hash maxima from captured allocator/source topology, not prior measured 3 pages or caps16. Sum owner forward/rollback permits. No new cursor/work/owner authority is used to learn G.",
+      "pre_cursor_inputs": [
+        "actual target sizeof and fixed source stack/codec constants",
+        "known 33 fixture encoded key/value lengths, BatchSize=1 and original floor/profile/leaf flags",
+        "existing retained source root path/leaf entry and payload bounds; current allocator logical/physical extent and source allocated/abandoned/map counts",
+        "current runtime debt/visible/seal prefix, actual owner bindings and active-enrollment absence, same-pager table count",
+        "clean cache and first explicit checkpoint predicate, no extra producer until ready"
+      ],
+      "remaining_implementation_proof": "Implement the finite selected constructor-count transform (including freelist metadata placement/retirement/private-hash capacities) alongside its unit rows; if a source maximum cannot be derived for the asserted pre-shape, leave G unavailable and do not create/execute the finaldriver cursor. No general owner-graph walker.",
+      "validation": "Before Fence re-observe exact actual ready operands; require each cardinality/capacity/owner/pager/shape <= its precomputed component bound. Unsupported/overflow/mismatch refuses before adoption. Ready-time actual F may only validate the fixed envelope, never increase frozen limits."
+    },
+    "expression": "max(F(theta)+C_fence(theta), U_birth(theta), U_prepare(theta), U_finish(theta,L), U_cancel(theta,L), U_close(theta,L), O_selected(theta))",
+    "missing_inputs": [
+      "final sizeof/caller prices after ready-bit source",
+      "fixed per-family local+replay path expressions and supported shape maxima",
+      "fresh SAME-pager N0 and single-successor route predicates",
+      "selected Finish/Close capabilities and current original-owner/enrollment geometry",
+      "source-derived pre-ready bounds before fixed G birth, not adaptive G from its own cursor"
+    ],
+    "numeric_value": null,
+    "unit_definition": "For each reachable persisted phase/index: full reentered root-to-child prefix + all child admission/effects through next persisted progress; no individual-Reserve-only maximum.",
+    "vector_ops": "checked componentwise sum and max"
+  },
+  "Go_or_runtime_executed": false,
+  "Q32": "RED",
+  "children": false,
+  "created_utc": "2026-10-16T06:13:53.586811+00:00",
+  "current_planning_extraction": {
+    "baseline_8f3a_to_final_delta": [
+      ".github/ci/ci_impact.json",
+      "TreeDB/mvcc/native_prune_backend_route_v6_test.go",
+      "TreeDB/mvcc/native_selected_ledger_test.go"
+    ],
+    "input_receipt_sha256": "e6b99e8a3a06ccc6d2c2d26d8d2faaabe2eb84969a10ae1ff2bb2d09abc760a9",
+    "production_hashes_in_extraction_match_current": true
+  },
+  "implementation_seams": [
+    {
+      "change": "One publicationReady scalar; admitted real bounded return after same candidate/seal/Bind; fresh final call; named caller/phase/stats pricing and immutable limits; no failure reset.",
+      "path": "TreeDB/mvcc/prune_cursor_v6.go",
+      "symbols": [
+        "PruneCursor",
+        "pruneNativeV6",
+        "step:26,27,22,20",
+        "closeStepLockedV6"
+      ]
+    },
+    {
+      "change": "Admitted by-value published-phase, original release detached, original witness present and receipt state; no pointer/owner/resource escape.",
+      "path": "TreeDB/db/native_prebuilder_observer_for_test_v6.go",
+      "symbols": [
+        "proposed MaintenanceNativeFinishGeometryForTestV6"
+      ]
+    },
+    {
+      "change": "Reuse same release mutex/finishing/phase, price only original scalar observation; no pause hook or physical replacement.",
+      "path": "TreeDB/internal/rootpublication/native_primary_finish_work_v6.go",
+      "symbols": [
+        "FinishDetachedV6",
+        "proposed work-bearing scalar view"
+      ]
+    },
+    {
+      "change": "Under original coordinator mutex read bound/turn/fenced/complete/same-owner/recovery flags; no list walk or new registry.",
+      "path": "TreeDB/internal/rootpublication/native_publication_v6.go",
+      "symbols": [
+        "NativePublicationV6",
+        "proposed original-receipt scalar observer"
+      ]
+    },
+    {
+      "change": "Explicit fixed named expression, caller+F plus replay-prefix+next-progress max; fail closed unsupported/overflow; no arbitrary grant.",
+      "path": "TreeDB/mvcc/native_finaldriver_envelope_test.go (proposed new)",
+      "symbols": [
+        "checked G evaluator",
+        "unit rows"
+      ]
+    },
+    {
+      "change": "Fresh original33 fixtures/cursor with fixed reviewed G; original Q32 control unchanged; actual source identities and old-reader checks after each claimed event.",
+      "path": "TreeDB/mvcc/native_finaldriver_diagnostic_v6_test.go (proposed new)",
+      "symbols": [
+        "ready/cancel/stale",
+        "ACK diagnostic",
+        "genuine FinishDetached DB.Close diagnostic"
+      ]
+    }
+  ],
+  "lookup": {
+    "formula": "L=N0+5; Lookup=(1+L,T+L*(ptr+E)); Remove=(1+L,128+L*(ptr+2E))",
+    "fresh_predicate_required": true,
+    "max_successor_nodes": 4,
+    "observed_L_if_fresh_N0_still4": 9,
+    "same_pager_no_alias_sum": true
+  },
+  "mode": "READ_ONLY_CURRENT_SOURCE_IMPLEMENTATION_PLAN",
+  "model": "gpt-6.1-sol",
+  "next_action": "Root may select coherent source construction; freeze/review checked full envelope and focused evidence before any genuine finaldriver runtime.",
+  "no_numeric_allowance": true,
+  "observations": {
+    "F_bytes": 882745,
+    "F_records": 367,
+    "N0_observed": 4,
+    "P": 1710512,
+    "P_complete": true,
+    "P_named_roots": 1728304,
+    "named_complete": true,
+    "numeric_G": null,
+    "observation_nonatomic": true,
+    "ordinary_oldReader_assertion_order": "Original oldReader.Get is before Commit34, not proof after successor."
+  },
+  "prior_advice_refresh": {
+    "native-final-caller-fixture-design": {
+      "changed": {
+        "TreeDB/mvcc/native_prune_backend_route_v6_test.go": {
+          "current": "28dd70502f4ab5b452ba43124b65457112f3ad29ee46f1bc5096af4bf4d5068e",
+          "prior": "43f2542f60d83c471ecffe38b8406fb6670a107e0cd8d1b298aadd89e7fbed37"
+        }
+      },
+      "report_json_sha256": "77ca5014998871e6b0f4753b3c1148cf78f35775f547c13bd961b5ee1d193aac",
+      "report_md_sha256": "c3f8a5e28c484501433de77ed0f9423971e4175a521d6cd85691e7a3101e7113",
+      "unchanged": {
+        "TreeDB/db/native_close_barrier_v6_test.go": "7d1c67455d774668e37c41452bdd481d7999573bdebeea588a4a38ce7bc4dd7a",
+        "TreeDB/db/native_mvcc_current_delete_v6.go": "5dbc2fb4c8993ed43075650989d63616ae9afd4310b18aaee94c1f9443a9f600",
+        "TreeDB/db/native_mvcc_final_publication_v6.go": "8b36f28459b30a52cc0d3f7fa07c79138db1213c48c476c8c19c1963543b6839",
+        "TreeDB/db/native_mvcc_publication_binding_v6.go": "91564ea1dbeb0c445eb2e5d29bc85b1b68b9d1abd04ac1d8bc57b155ba0f0772",
+        "TreeDB/db/native_mvcc_published_terminal_v6.go": "91d3149c742d69a8e15e4049822700a340d940657d554aa4ec13983d30567de7",
+        "TreeDB/internal/rootpublication/native_primary_finish_work_v6.go": "81a5ee22c812cd5561c1863581692fc16b194fb01e0107799a8877b8b74cd65b",
+        "TreeDB/internal/rootpublication/native_publication_v6.go": "bc527bca53fb225fef4165cb3ac2ea5d9b4cb7659ac6b5d0a1261cfe6f182534",
+        "TreeDB/internal/rootpublication/native_publication_v6_test.go": "3923cb39219e8ad6d68db4c5adba434c9a8c11d41b6f9bc5dd80dcdd90925d2c",
+        "TreeDB/mvcc/prune_cursor_v6.go": "67741d492a926d94dc347f2a073f883b2bf2d793334e1de79095d46bf58c9cba"
+      }
+    },
+    "native-finaldriver-successor-lookup-advice": {
+      "changed": {
+        "TreeDB/db/native_prebuilder_observer_for_test_v6.go": {
+          "current": "1765478c51692dedc1f0cd7e36510d9f3aaf9db0d63743c7b26c6a4e3beb3871",
+          "prior": "20b8f4bc53b7c6a94ace277227387e6a206ca80ae741dfb63112378281f43285"
+        },
+        "TreeDB/internal/primaryarena/retention.go": {
+          "current": "c4d9150bda025702051ed62da3936434725bc33acd6cf222cd25944b64b69a1b",
+          "prior": "5bd00ed26ccfbfe8eae96188351ac5bdf388e328efc3d32d50dd7e5eaef7f559"
+        },
+        "TreeDB/mvcc/native_prune_backend_route_v6_test.go": {
+          "current": "28dd70502f4ab5b452ba43124b65457112f3ad29ee46f1bc5096af4bf4d5068e",
+          "prior": "43f2542f60d83c471ecffe38b8406fb6670a107e0cd8d1b298aadd89e7fbed37"
+        }
+      },
+      "report_json_sha256": "119bc4d1a9ea4853e18d1fc993e82be8e05758a92c628fa8ed5651654a740833",
+      "report_md_sha256": "7bab422b16f9361c549800e5436a35821ee4f6a604d694d8e7f718b95663ed27",
+      "unchanged": {
+        "TreeDB/caching/db.go": "763ec9e5f088ba012a2fbb8006367d041db96179cbdf61767d29538f14945f9d",
+        "TreeDB/caching/flush_run_planner.go": "d5d58d6e566d9494bb813f27b85310b22366125cb9307119ca9e7387f4b75858",
+        "TreeDB/caching/mvcc_admission.go": "f42a75f729f04289692626dde3356beb435c67f3c4474e1089dfe595aad1bc96",
+        "TreeDB/caching/root_domain.go": "ab8ffc47d524513abe1320a177f5a5a9ed44ca90d54517697ab90ff74275d150",
+        "TreeDB/db/batch.go": "4b856f778b7afe20564f7fad7233b17ec397198f0b00e6cf3fdcf26b2e9347d0",
+        "TreeDB/db/db.go": "214aed2602d788a88e9e6d4b767847dd729088414319245eb30e779a095ac354",
+        "TreeDB/db/durable_primary_runtime_v5.go": "b75b40f88596cd75e8b60edc68c5ca8526de41187e68f2b61ba5d81261ea788b",
+        "TreeDB/db/primary_capsule_recovery_v6.go": "988c969ec318cf8bf96b9b258282b74aa3f893bbdd179f5c913ac1ed33798e1e",
+        "TreeDB/db/primary_capsule_runtime_v6.go": "b38015acaa0836307bc6107f4fc6e03cabf29b97b9d11c9c7acf1e1ee7a26106",
+        "TreeDB/db/root_publication_build_group.go": "99c3f6706606561b6aab5ad0e74f63116092a8e0d093f531149d241191df1b5f",
+        "TreeDB/internal/primaryarena/read_root_v6.go": "ebb053bf4be6d291d6fb38aed2969572c06cc397337ad07b526e1a120567141c",
+        "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go": "7b8790f943894d5c571bcfd58742d8d61e0c07ee9b59a7b23a7a76a0dd141f3a",
+        "TreeDB/mvcc/mvcc.go": "b0f9fcc0393ef56a94609379a178627c01661cad58940fa8573633a33d1370d5",
+        "TreeDB/pager/primary_read_root_close_work.go": "81cece0fed7431727375f97a3ddae3ad4bafaf265c5bd4e23358c468d70fdae9",
+        "TreeDB/pager/primary_read_root_v6.go": "2c3c8041a53ef9cf3cb42b83c44ac08df7bf7573ccb856affe60489f10611083",
+        "TreeDB/profiles.go": "60e637ca9ad0493f5ebac36bf49ed18bbc2b4fe04c93aadbca25004e675c9742",
+        "TreeDB/public.go": "77f871c4a65f95648b9d2af85dbf9cc9ba50dc5fdca174eb36d2cc576ba846dc",
+        "TreeDB/zipper/primary_directory.go": "c6996011293253e166ed603d9d508488429fb524108370a8c0003e2771a5c29b",
+        "TreeDB/zipper/read_only_prepare.go": "889e8d822c388405958e3a235a7b5b5f8a19508bad781dfd853c12f80c1b3881",
+        "TreeDB/zipper/zipper.go": "7f653816183ed1c153f960d53d0bd602721c3e9fb18f4c5bacad25ae49345c71"
+      }
+    },
+    "native-finaldriver-unit-envelope-design": {
+      "changed": {
+        "TreeDB/freelist/allocator_preparation_work_v6.go": {
+          "current": "a1cfbb466c90cd410c9380b76e638de019716e73483456f1e66923a8932ade85",
+          "prior": "28dfe60ee9a77fe8717552672db403d343af42daa1bf05bdc25b33bcfde817ca"
+        }
+      },
+      "report_json_sha256": "b66d83b2795c0dc7fba583ed3b64a47c273f6d72296733e0285f3077d956ee42",
+      "report_md_sha256": "7a28a18711a2572909b428dbaa5bb97755b4e14000a2b8384c080e2baeca80f8",
+      "unchanged": {
+        "TreeDB/caching/native_mvcc_prune_v6.go": "de3f7cb5b0d23988bde5c12b0bad9c2c27c8b36926618fbee9b83cefcf4a0965",
+        "TreeDB/db/native_mvcc_allocator_preparation_v6.go": "e4e0e03847f2c006adf77b81b47cc0aa6506b18ffd630200bf2c5787a393068f",
+        "TreeDB/db/native_mvcc_candidate_preparation_v6.go": "45d7dd34004bc14b94fa1592ebe7979f3f33e8924d176d49cc8c49a56df937a7",
+        "TreeDB/db/native_mvcc_current_delete_v6.go": "5dbc2fb4c8993ed43075650989d63616ae9afd4310b18aaee94c1f9443a9f600",
+        "TreeDB/db/native_mvcc_final_publication_v6.go": "8b36f28459b30a52cc0d3f7fa07c79138db1213c48c476c8c19c1963543b6839",
+        "TreeDB/db/native_mvcc_materialized_write_v6.go": "94cdb8ab57f7f3c85d145e7f3f22c46720cf1aec4b88df6ad93706483947a9a1",
+        "TreeDB/db/native_mvcc_publication_binding_v6.go": "91564ea1dbeb0c445eb2e5d29bc85b1b68b9d1abd04ac1d8bc57b155ba0f0772",
+        "TreeDB/db/native_mvcc_published_terminal_v6.go": "91d3149c742d69a8e15e4049822700a340d940657d554aa4ec13983d30567de7",
+        "TreeDB/db/native_mvcc_root_preparation_v6.go": "25c3d21cf4978dfb27e95eaa1a1617e42a700f2afd490aa9e82e592b853024fd",
+        "TreeDB/db/native_mvcc_seal_preparation_v6.go": "e30088d2ab5ad5810fbe62c28c00495798adff8b133a50d7da7f0255fd930bae",
+        "TreeDB/db/native_mvcc_snapshot_close_v6.go": "56d2268c196d5624f95f78207cdd657e494c227fa467c4bc0c3f93f419c7d4c1",
+        "TreeDB/db/primary_seal_release_work_v6.go": "04b6571bdda40805ed7ae402fbaa8ebb6619f43af6cded3bc57b22413b85f4aa",
+        "TreeDB/freelist/private_control_capacity_v6.go": "420650d5ffc161497e796b6549bec4ce257677c12cd8b124836d73555fe66844",
+        "TreeDB/internal/iterator/ordinal.go": "64973cf26a3a713b48a35ac20a088f25866a7ebae1c98a9aa683849049d8c4ca",
+        "TreeDB/internal/memtable/native_retention_work.go": "0863e195a9720e1490ddb1e0c6599533510de1523fb3f09a4ca1d7debb541fba",
+        "TreeDB/internal/primaryarena/arena.go": "515e86b817e326f21fd7c8cebf8c748de871b4efad472280490221c93d312553",
+        "TreeDB/internal/retainedalloc/owner_growth_work.go": "74735769ff46c27445a03ae785dad4e1a8ae3ecf84358d039486e0de9dcabf35",
+        "TreeDB/internal/retainedalloc/owner_work.go": "d4727141cffdc31205bc99854746a91fe10e19bdc628f643206d9ca94fd8aabe",
+        "TreeDB/internal/rootpublication/native_primary_finish_work_v6.go": "81a5ee22c812cd5561c1863581692fc16b194fb01e0107799a8877b8b74cd65b",
+        "TreeDB/internal/rootpublication/native_publication_v6.go": "bc527bca53fb225fef4165cb3ac2ea5d9b4cb7659ac6b5d0a1261cfe6f182534",
+        "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go": "7b8790f943894d5c571bcfd58742d8d61e0c07ee9b59a7b23a7a76a0dd141f3a",
+        "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go": "49855cb3646a6cebe9e5869a0f2e3df287d6c17d14e3792357b10d6883440308",
+        "TreeDB/internal/valuelog/cow_leaf_projection.go": "34e69cb7ed983c991b12458bdf68e2b1b7cc62989d3a3b3cd3472f66b7299b48",
+        "TreeDB/mvcc/prune_cursor_v6.go": "67741d492a926d94dc347f2a073f883b2bf2d793334e1de79095d46bf58c9cba",
+        "TreeDB/pager/primary_read_root_v6.go": "2c3c8041a53ef9cf3cb42b83c44ac08df7bf7573ccb856affe60489f10611083",
+        "TreeDB/tree/charged_projection.go": "fbbba00616eff7eb91ec385faf22582b968133807bfbc9e1765f3bb2749e4c2d",
+        "TreeDB/zipper/materialized_input_work_v6.go": "e4da7a9fbf43dda839521cd40dc1857bb0a204c5ad3d2eb5fb5967270c170831",
+        "TreeDB/zipper/materialized_write_work.go": "5fa7ed027fcab735aab154427f1ed11f4bc03a908b445fc76898bfbab7b84055"
+      }
+    }
+  },
+  "required_controls": [
+    "pure checked vector/overflow and repeated-prefix counterexample",
+    "actual ready return/cancel/stale/changed-limit latch",
+    "unchanged original Q32 actual33 and both copied-parent controls",
+    "separate actual ACK/held-selected-reader-after-publication-and-successor/reopen",
+    "separate actual FinishDetached pause/newer ordinary durable writer/zeroACK/real DB.Close join/idempotence/reopen"
+  ],
+  "retention": {
+    "H01_additions": "source+target distinct allocations; source/parent image alias once; same pager table node-count observation once",
+    "P_additions": "only actual containing cursor layout/rounding changes or separately admitted real new retained storage; planned observers/evaluator are synchronous by-value, no new native backing",
+    "current_P_not_a_runtime_grant": true,
+    "excluded": [
+      "shared H02/H03",
+      "transitive heap",
+      "nonempty logical resource closure",
+      "unobserved future Finish geometry"
+    ]
+  },
+  "source": {
+    "archive": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-inventory-final/source-final.tar.gz",
+    "archive_sha256": "0bcaee68f1b6a058bd358b5096265771d35ba503143ac9f8e255b2c215fad8f4",
+    "files_verified": 10389,
+    "manifest": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-inventory-final/source-final.json",
+    "manifest_sha256": "5cde43f24dcc86eaa8c2017bbc6cb0dc81a29e749d9420d27be2ab4f2e4e140d",
+    "observation_evidence_archive": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/actual33-cursor-ledger-observation/evidence.tar.gz",
+    "observation_evidence_sha256": "dd1fa65e7a2331758a45f490df85516e1cc975d787ff1c2e5f741970e0e5e806",
+    "tree": "e523999e97e0af545da0072359cd1ac2fc57b5eb"
+  },
+  "source_edits": false,
+  "source_hashes": {
+    "TreeDB/caching/db.go": "763ec9e5f088ba012a2fbb8006367d041db96179cbdf61767d29538f14945f9d",
+    "TreeDB/caching/flush_run_planner.go": "d5d58d6e566d9494bb813f27b85310b22366125cb9307119ca9e7387f4b75858",
+    "TreeDB/caching/mvcc_admission.go": "f42a75f729f04289692626dde3356beb435c67f3c4474e1089dfe595aad1bc96",
+    "TreeDB/caching/native_mvcc_prune_v6.go": "de3f7cb5b0d23988bde5c12b0bad9c2c27c8b36926618fbee9b83cefcf4a0965",
+    "TreeDB/caching/root_domain.go": "ab8ffc47d524513abe1320a177f5a5a9ed44ca90d54517697ab90ff74275d150",
+    "TreeDB/db/batch.go": "4b856f778b7afe20564f7fad7233b17ec397198f0b00e6cf3fdcf26b2e9347d0",
+    "TreeDB/db/db.go": "214aed2602d788a88e9e6d4b767847dd729088414319245eb30e779a095ac354",
+    "TreeDB/db/durable_primary_runtime_v5.go": "b75b40f88596cd75e8b60edc68c5ca8526de41187e68f2b61ba5d81261ea788b",
+    "TreeDB/db/native_close_barrier_v6_test.go": "7d1c67455d774668e37c41452bdd481d7999573bdebeea588a4a38ce7bc4dd7a",
+    "TreeDB/db/native_mvcc_allocator_preparation_v6.go": "e4e0e03847f2c006adf77b81b47cc0aa6506b18ffd630200bf2c5787a393068f",
+    "TreeDB/db/native_mvcc_candidate_preparation_v6.go": "45d7dd34004bc14b94fa1592ebe7979f3f33e8924d176d49cc8c49a56df937a7",
+    "TreeDB/db/native_mvcc_current_delete_v6.go": "5dbc2fb4c8993ed43075650989d63616ae9afd4310b18aaee94c1f9443a9f600",
+    "TreeDB/db/native_mvcc_final_publication_v6.go": "8b36f28459b30a52cc0d3f7fa07c79138db1213c48c476c8c19c1963543b6839",
+    "TreeDB/db/native_mvcc_materialized_write_v6.go": "94cdb8ab57f7f3c85d145e7f3f22c46720cf1aec4b88df6ad93706483947a9a1",
+    "TreeDB/db/native_mvcc_publication_binding_v6.go": "91564ea1dbeb0c445eb2e5d29bc85b1b68b9d1abd04ac1d8bc57b155ba0f0772",
+    "TreeDB/db/native_mvcc_published_terminal_v6.go": "91d3149c742d69a8e15e4049822700a340d940657d554aa4ec13983d30567de7",
+    "TreeDB/db/native_mvcc_root_preparation_v6.go": "25c3d21cf4978dfb27e95eaa1a1617e42a700f2afd490aa9e82e592b853024fd",
+    "TreeDB/db/native_mvcc_seal_preparation_v6.go": "e30088d2ab5ad5810fbe62c28c00495798adff8b133a50d7da7f0255fd930bae",
+    "TreeDB/db/native_mvcc_snapshot_close_v6.go": "56d2268c196d5624f95f78207cdd657e494c227fa467c4bc0c3f93f419c7d4c1",
+    "TreeDB/db/native_prebuilder_observer_for_test_v6.go": "1765478c51692dedc1f0cd7e36510d9f3aaf9db0d63743c7b26c6a4e3beb3871",
+    "TreeDB/db/primary_capsule_recovery_v6.go": "988c969ec318cf8bf96b9b258282b74aa3f893bbdd179f5c913ac1ed33798e1e",
+    "TreeDB/db/primary_capsule_runtime_v6.go": "b38015acaa0836307bc6107f4fc6e03cabf29b97b9d11c9c7acf1e1ee7a26106",
+    "TreeDB/db/primary_seal_release_work_v6.go": "04b6571bdda40805ed7ae402fbaa8ebb6619f43af6cded3bc57b22413b85f4aa",
+    "TreeDB/db/root_publication_build_group.go": "99c3f6706606561b6aab5ad0e74f63116092a8e0d093f531149d241191df1b5f",
+    "TreeDB/freelist/allocator_preparation_work_v6.go": "a1cfbb466c90cd410c9380b76e638de019716e73483456f1e66923a8932ade85",
+    "TreeDB/freelist/private_control_capacity_v6.go": "420650d5ffc161497e796b6549bec4ce257677c12cd8b124836d73555fe66844",
+    "TreeDB/internal/iterator/ordinal.go": "64973cf26a3a713b48a35ac20a088f25866a7ebae1c98a9aa683849049d8c4ca",
+    "TreeDB/internal/memtable/native_retention_work.go": "0863e195a9720e1490ddb1e0c6599533510de1523fb3f09a4ca1d7debb541fba",
+    "TreeDB/internal/primaryarena/arena.go": "515e86b817e326f21fd7c8cebf8c748de871b4efad472280490221c93d312553",
+    "TreeDB/internal/primaryarena/read_root_v6.go": "ebb053bf4be6d291d6fb38aed2969572c06cc397337ad07b526e1a120567141c",
+    "TreeDB/internal/primaryarena/retention.go": "c4d9150bda025702051ed62da3936434725bc33acd6cf222cd25944b64b69a1b",
+    "TreeDB/internal/retainedalloc/owner_growth_work.go": "74735769ff46c27445a03ae785dad4e1a8ae3ecf84358d039486e0de9dcabf35",
+    "TreeDB/internal/retainedalloc/owner_work.go": "d4727141cffdc31205bc99854746a91fe10e19bdc628f643206d9ca94fd8aabe",
+    "TreeDB/internal/rootpublication/native_primary_finish_work_v6.go": "81a5ee22c812cd5561c1863581692fc16b194fb01e0107799a8877b8b74cd65b",
+    "TreeDB/internal/rootpublication/native_publication_v6.go": "bc527bca53fb225fef4165cb3ac2ea5d9b4cb7659ac6b5d0a1261cfe6f182534",
+    "TreeDB/internal/rootpublication/native_publication_v6_test.go": "3923cb39219e8ad6d68db4c5adba434c9a8c11d41b6f9bc5dd80dcdd90925d2c",
+    "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go": "7b8790f943894d5c571bcfd58742d8d61e0c07ee9b59a7b23a7a76a0dd141f3a",
+    "TreeDB/internal/rootpublication/resource_graph_release_work_v6.go": "49855cb3646a6cebe9e5869a0f2e3df287d6c17d14e3792357b10d6883440308",
+    "TreeDB/internal/valuelog/cow_leaf_projection.go": "34e69cb7ed983c991b12458bdf68e2b1b7cc62989d3a3b3cd3472f66b7299b48",
+    "TreeDB/mvcc/mvcc.go": "b0f9fcc0393ef56a94609379a178627c01661cad58940fa8573633a33d1370d5",
+    "TreeDB/mvcc/native_prune_backend_route_v6_test.go": "28dd70502f4ab5b452ba43124b65457112f3ad29ee46f1bc5096af4bf4d5068e",
+    "TreeDB/mvcc/native_selected_ledger_test.go": "3353e402cf3545339346061775dcba60b03bc85174c86690748572e267dfc41a",
+    "TreeDB/mvcc/prune_cursor_v6.go": "67741d492a926d94dc347f2a073f883b2bf2d793334e1de79095d46bf58c9cba",
+    "TreeDB/pager/primary_read_root_close_work.go": "81cece0fed7431727375f97a3ddae3ad4bafaf265c5bd4e23358c468d70fdae9",
+    "TreeDB/pager/primary_read_root_v6.go": "2c3c8041a53ef9cf3cb42b83c44ac08df7bf7573ccb856affe60489f10611083",
+    "TreeDB/profiles.go": "60e637ca9ad0493f5ebac36bf49ed18bbc2b4fe04c93aadbca25004e675c9742",
+    "TreeDB/public.go": "77f871c4a65f95648b9d2af85dbf9cc9ba50dc5fdca174eb36d2cc576ba846dc",
+    "TreeDB/tree/charged_projection.go": "fbbba00616eff7eb91ec385faf22582b968133807bfbc9e1765f3bb2749e4c2d",
+    "TreeDB/zipper/materialized_input_work_v6.go": "e4da7a9fbf43dda839521cd40dc1857bb0a204c5ad3d2eb5fb5967270c170831",
+    "TreeDB/zipper/materialized_write_work.go": "5fa7ed027fcab735aab154427f1ed11f4bc03a908b445fc76898bfbab7b84055",
+    "TreeDB/zipper/primary_directory.go": "c6996011293253e166ed603d9d508488429fb524108370a8c0003e2771a5c29b",
+    "TreeDB/zipper/read_only_prepare.go": "889e8d822c388405958e3a235a7b5b5f8a19508bad781dfd853c12f80c1b3881",
+    "TreeDB/zipper/zipper.go": "7f653816183ed1c153f960d53d0bd602721c3e9fb18f4c5bacad25ae49345c71"
+  }
+}

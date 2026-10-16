@@ -1,0 +1,14 @@
+[
+  {
+    "after_sha256": "5409729f46a6f9ee84250842d290f8aa508ddfa5548e6dcdc193d97960e37cdd",
+    "before_sha256": null,
+    "change": "add",
+    "path": "TreeDB/internal/rootpublication/native_publication_join_scrub_v6_test.go"
+  },
+  {
+    "after_sha256": "0261ac95cb3853f5399e89990acdbd912a4bf8cc84d95700cfd14a2e3fa6e2c0",
+    "before_sha256": "3e1cb7dc7beb72c3962fbd83398adc5f523868d0eb4767b89df9be4440443d15",
+    "change": "modify",
+    "path": "TreeDB/internal/rootpublication/native_publication_v6.go"
+  }
+]

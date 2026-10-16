@@ -1,0 +1,17 @@
+{
+  "utc": "2026-10-16T09:39:51.141098+00:00",
+  "disposition": "PASS_TEST_BODY_WITH_PRESERVED_RUNNER_INVENTORY_STOP",
+  "cause": "Root proposal incorrectly declared zero children; source lines274/318/324/330 define four. No source/runtime repair or test rerun needed.",
+  "actual_children": [
+    "supported-selected-shape",
+    "sum",
+    "multiply",
+    "missing-shape"
+  ],
+  "raw_log_sha256": "ab338b501b9351bdf11d3514649f03e38e0157376f61355c1cb7e5bcebd48f72",
+  "result_sha256": "82d550bd53219309d2f0cc2a91b50e7dd54d4ca8e98f33769b936f2ae77c377b",
+  "source_manifest_sha256": "a2ffdb13492ee217c892745f3cc3a6ce02ba82fbaeb03023a2f0496a38ce5387",
+  "source_and_process_invariants_verified": true,
+  "remaining": "race-rootpublication-rollback only",
+  "actual_native_driver_authorized": false
+}

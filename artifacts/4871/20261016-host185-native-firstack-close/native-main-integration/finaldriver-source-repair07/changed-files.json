@@ -1,0 +1,8 @@
+[
+  {
+    "after_sha256": "d003918fbd8aba1387e1e8f55133406e20aa2f090f433f35922683af1cf7ea60",
+    "before_sha256": "3923cb39219e8ad6d68db4c5adba434c9a8c11d41b6f9bc5dd80dcdd90925d2c",
+    "change": "modify",
+    "path": "TreeDB/internal/rootpublication/native_publication_v6_test.go"
+  }
+]

@@ -1,0 +1,12 @@
+{
+  "source_manifest_sha256": "8f644d53679cc584cc241dd517dd2ccdf16f6e4c8899fa62819c3a520214b2cb",
+  "source_archive_sha256": "66f82d9f0cef64cb920c9ed9c314b017d076b4a18f7bcb6316e50611df7d2bbb",
+  "verified_delta": [
+    "TreeDB/mvcc/native_finaldriver_diagnostic_v6_test.go"
+  ],
+  "unchanged_files": 10430,
+  "production_formulas_selected_focused_tests_unchanged": true,
+  "focused_accept_sha256": "aeba8a7c609bdbb99db9a989d49d65781ab13a14fd22612d01b31cfa593819ea",
+  "source_lease_released": true,
+  "actual_runtime_pending_review_and_selection": true
+}

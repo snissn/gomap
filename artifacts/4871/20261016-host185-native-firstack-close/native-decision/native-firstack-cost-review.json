@@ -1,0 +1,45 @@
+{
+  "review_mode": "INTERNAL_SUBAGENT_READ_ONLY_DESIGN_REVIEW",
+  "reviewer_model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "candidate_edits_by_reviewer": false,
+  "disposition": "ACCEPT_CONDITIONAL_DESIGN",
+  "source_candidate_reviewed": "repair07/repair08 unchanged diagnostic/envelope/precursor/ledger bytes; immutable prior extraction verified against frozen07",
+  "bindings": {
+    "plan": {
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-firstack-cost-plan.md",
+      "sha256": "80b39a30aaf0f8a96d3231b3876a534caed701f4c9d3c6a3c6480feeeeaca1f7"
+    },
+    "diagnostic": {
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/repair05-review-source/TreeDB/mvcc/native_finaldriver_diagnostic_v6_test.go",
+      "sha256": "7b2d04223f54617e3adfa29467671c2819a8d1a9cd00ee923303d9568b8dd396"
+    },
+    "envelope": {
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/repair05-review-source/TreeDB/mvcc/native_finaldriver_envelope_test.go",
+      "sha256": "c84d8e74682e0024f963c29283f613e32189e4cdaa5488940bbc063a9d6a7e4f"
+    },
+    "precursor": {
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/repair05-review-source/TreeDB/mvcc/native_finaldriver_precursor_test.go",
+      "sha256": "02ecc538748a09db4afbb34df7c06c7523772bb1f9c88fed00cf797b5ab925c1"
+    },
+    "ledger": {
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/repair05-review-source/TreeDB/mvcc/native_selected_ledger_test.go",
+      "sha256": "3353e402cf3545339346061775dcba60b03bc85174c86690748572e267dfc41a"
+    }
+  },
+  "findings": [],
+  "required_plan_update": "Replace repair07 prerequisite with selected exact successor and successful focused + genuine onceACK/pausedFinishClose controls. Source08 ACCEPT alone is insufficient.",
+  "recommendation": "Share original testing.TB diagnostic runner; optional test-only meter wraps only public PruneVersions; preserve all semantic oracles. Three fresh 1x processes after separate source/runtime selection.",
+  "measurement_limits": [
+    "starting-phase attribution only",
+    "process-wide allocation windows with ReadMemStats instrumentation perturbation",
+    "public-call sum excludes designated writer and observations, but they affect later state",
+    "whole birth-to-ACK interval includes all gaps",
+    "no before/after speedup or whole-native qualification"
+  ],
+  "runtime_executed_by_reviewer": false,
+  "source_or_runtime_grant": false,
+  "native_publication_qualification": false,
+  "Q32_fit": false,
+  "numeric_allowance_chosen": false
+}

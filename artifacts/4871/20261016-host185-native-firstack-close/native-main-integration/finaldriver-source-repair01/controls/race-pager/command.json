@@ -1,0 +1,60 @@
+{
+  "argv": [
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+    "test",
+    "-p=1",
+    "-parallel=1",
+    "-count=1",
+    "-v",
+    "-timeout=3m",
+    "-race",
+    "-run",
+    "^(TestPrimaryReadRootImageLookupAdmissionV6|TestNativeGrowthOriginalOwnerAdmissionV6|TestNativeGrowthPrivateBackingCancelCustodyV6)$",
+    "./TreeDB/pager"
+  ],
+  "behavior": "pure/standalone original primitives and ordinary setup only; no native selected finaldriver/publication",
+  "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+  "env": {
+    "CGO_ENABLED": "1",
+    "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+    "GODEBUG": "",
+    "GOENV": "off",
+    "GOFLAGS": "",
+    "GOGC": "100",
+    "GOMAXPROCS": "2",
+    "GOMEMLIMIT": "8GiB",
+    "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+    "GOPROXY": "off",
+    "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+    "GOSUMDB": "off",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off",
+    "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source-repair01/controls/race-pager/tmp"
+  },
+  "executed": true,
+  "expected_child_count": 5,
+  "expected_top_level_count": 3,
+  "grant_sha256": "b1678b07f8dc39004b2512ec86bb111b3c151fbf8559b0d68dec2e5b26bccb05",
+  "identity": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source-repair01/controls/identity.json",
+  "name": "race-pager",
+  "outer_timeout_seconds": 600,
+  "race": true,
+  "required_child_tests": {
+    "TestNativeGrowthOriginalOwnerAdmissionV6": [
+      "unbound",
+      "concrete"
+    ],
+    "TestPrimaryReadRootImageLookupAdmissionV6": [
+      "empty",
+      "present",
+      "missing"
+    ]
+  },
+  "required_top_level_tests": [
+    "TestPrimaryReadRootImageLookupAdmissionV6",
+    "TestNativeGrowthOriginalOwnerAdmissionV6",
+    "TestNativeGrowthPrivateBackingCancelCustodyV6"
+  ],
+  "source_archive": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source-repair01/source-frozen.tar.gz",
+  "source_archive_sha256": "3492a17d4ab432bb8f3089aaba9a8c1ff583a88ca620db1a3747c4d42bc49e5c"
+}

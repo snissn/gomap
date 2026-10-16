@@ -1,0 +1,23 @@
+{
+  "F_G_retained_expressions_unchanged": true,
+  "actual_fixture_unchanged": true,
+  "all_parent_files_except_native_publication_unchanged": true,
+  "exact_changed_paths": [
+    "TreeDB/internal/rootpublication/native_publication_join_scrub_v6_test.go",
+    "TreeDB/internal/rootpublication/native_publication_v6.go"
+  ],
+  "prior_actual_rows_candidate_applicability": "ready/stale/frozen/pruner normal cleanup ends cursor before DB.Close; no source changes to their fixture/preparation/F/G/caps. Root may reuse only that narrow unchanged path proof; this packet proposes fresh onceACK and pausedClose, not blanket current-head qualification.",
+  "prior_five_actual_PASS": "historical repair05 exact source result, not a fresh repair06 result",
+  "production_layout_unchanged": true,
+  "unchanged_semantic_inputs": {
+    "TreeDB/db/db.go": "214aed2602d788a88e9e6d4b767847dd729088414319245eb30e779a095ac354",
+    "TreeDB/db/native_mvcc_final_publication_v6.go": "8b36f28459b30a52cc0d3f7fa07c79138db1213c48c476c8c19c1963543b6839",
+    "TreeDB/db/native_prebuilder_pricing_for_test_v6.go": "7e71d2340ccceec2224ea68ed8c8dae003d7fadf812da644d90b7a19d9ea5311",
+    "TreeDB/internal/rootpublication/coordinator.go": "8d861b321eceea1daa6966b783f9e550bb2189d66c6256a0132f7513848e7ef1",
+    "TreeDB/internal/rootpublication/primary_empty_candidate_work_v6.go": "554af180803b7f9fd52f5e89082bf7d4974cafe43308d6fe0c7eeb2a3a814af4",
+    "TreeDB/mvcc/native_finaldriver_diagnostic_v6_test.go": "7b2d04223f54617e3adfa29467671c2819a8d1a9cd00ee923303d9568b8dd396",
+    "TreeDB/mvcc/native_finaldriver_envelope_test.go": "c84d8e74682e0024f963c29283f613e32189e4cdaa5488940bbc063a9d6a7e4f",
+    "TreeDB/mvcc/native_finaldriver_precursor_test.go": "02ecc538748a09db4afbb34df7c06c7523772bb1f9c88fed00cf797b5ab925c1",
+    "TreeDB/mvcc/prune_cursor_v6.go": "fdf142b8487e289db98fe5dda13d9bb52f81af50396654468e25afd806e26250"
+  }
+}

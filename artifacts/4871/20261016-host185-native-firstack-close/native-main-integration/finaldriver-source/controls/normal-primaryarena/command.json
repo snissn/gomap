@@ -1,0 +1,56 @@
+{
+  "argv": [
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+    "test",
+    "-p=1",
+    "-parallel=1",
+    "-count=1",
+    "-v",
+    "-timeout=3m",
+    "-run",
+    "^(TestPrimaryArenaAcquireAdmitsActualLookupV6|TestPrimaryArenaCertificateAdmitsLookupBeforeTransferV6|TestPrimaryArenaAcquireDetachAdmitsLookupBeforeOwnershipChangeV6|TestPrimaryArenaPromotionSecondLookupRefusalHasNoAcquireV6|TestPrimaryArenaAcquireAfterAdmissionUsesOriginalLookupV6)$",
+    "./TreeDB/internal/primaryarena"
+  ],
+  "behavior": "pure/standalone original primitives and ordinary setup only; no native selected finaldriver/publication",
+  "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+  "env": {
+    "CGO_ENABLED": "1",
+    "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+    "GODEBUG": "",
+    "GOENV": "off",
+    "GOFLAGS": "",
+    "GOGC": "100",
+    "GOMAXPROCS": "2",
+    "GOMEMLIMIT": "8GiB",
+    "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+    "GOPROXY": "off",
+    "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+    "GOSUMDB": "off",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off",
+    "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-focused-controls/normal-primaryarena/tmp"
+  },
+  "executed": true,
+  "expected_child_count": 2,
+  "expected_top_level_count": 5,
+  "grant_sha256": "c6d4b4b04d33d2a20a8d587530a0029be4c8169437f18c23c61745e7b9b2db85",
+  "identity": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source/controls/identity.json",
+  "name": "normal-primaryarena",
+  "outer_timeout_seconds": 600,
+  "race": false,
+  "required_child_tests": {
+    "TestPrimaryArenaAcquireDetachAdmitsLookupBeforeOwnershipChangeV6": [
+      "finite",
+      "ordinary"
+    ]
+  },
+  "required_top_level_tests": [
+    "TestPrimaryArenaAcquireAdmitsActualLookupV6",
+    "TestPrimaryArenaCertificateAdmitsLookupBeforeTransferV6",
+    "TestPrimaryArenaAcquireDetachAdmitsLookupBeforeOwnershipChangeV6",
+    "TestPrimaryArenaPromotionSecondLookupRefusalHasNoAcquireV6",
+    "TestPrimaryArenaAcquireAfterAdmissionUsesOriginalLookupV6"
+  ],
+  "source_archive": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source/source-frozen.tar.gz",
+  "source_archive_sha256": "c72d4aae4acfe17f7fd26ebb1eabb102022e4c24f2eae5f17f41c822486ac78e"
+}

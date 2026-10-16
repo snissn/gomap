@@ -1,0 +1,18 @@
+{
+  "production_formula_and_selected_focused_inputs_unchanged": true,
+  "source_manifest_exact_one_file_delta": [
+    "TreeDB/mvcc/native_finaldriver_diagnostic_v6_test.go"
+  ],
+  "focused_accept_sha256": "aeba8a7c609bdbb99db9a989d49d65781ab13a14fd22612d01b31cfa593819ea",
+  "failed_raw_sha256": "b6f56644a7251c3876bf88564de6c09ff20be93cd1f2357352dba198231b352c",
+  "failed_result_sha256": "0bdd2e7d0b91ddd51e8b074f00e12bd4e9e889f0fc2674876fa3efb189748bcd",
+  "earlier_actual_no_complete_arm": true,
+  "observed_G": {
+    "records": 78487,
+    "bytes": 41682916
+  },
+  "G_not_enlarged_or_mutated": true,
+  "no_publication_before_ready_validation": true,
+  "runner_sha256": "6d3235b94271fa3efca99df59aef74547d55b4bf23eb259ddc35f8038d68a347",
+  "proposal_sha256": "a65d1b9f90d5570e836ec63dbbc311a064885bbee2cd854bcea2e7e2358c1038"
+}

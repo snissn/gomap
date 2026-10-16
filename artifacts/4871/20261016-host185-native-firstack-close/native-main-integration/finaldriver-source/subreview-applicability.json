@@ -1,0 +1,49 @@
+[
+  {
+    "report": "native-finaldriver-custody-subreview01.json",
+    "report_sha256": "4a291091235880ee712f305dd42c358922997bb482dee9feeb87659b5d56bb21",
+    "target_applicability": {
+      "TreeDB/pager/grow_work.go": false,
+      "TreeDB/pager/native_growth_admission_v6_test.go": false,
+      "TreeDB/pager/native_growth_private_cancel_unix_v6_test.go": false,
+      "TreeDB/internal/primaryarena/arena.go": false,
+      "TreeDB/internal/primaryarena/arena_lookup_admission_v6_test.go": false,
+      "TreeDB/db/native_mvcc_snapshot_v6.go": false,
+      "TreeDB/db/native_snapshot_birth_lookup_v6_test.go": false,
+      "TreeDB/db/native_claim_growth_custody_v6_test.go": false,
+      "TreeDB/db/primary_slot_custody_v6_test.go": false
+    },
+    "dependency_applicability": {
+      "TreeDB/db/native_mvcc_seal_preparation_v6.go": true,
+      "TreeDB/db/native_mvcc_snapshot_close_v6.go": true,
+      "TreeDB/db/primary_arena_owner_v5.go": true,
+      "TreeDB/db/pools.go": true,
+      "TreeDB/caching/native_mvcc_prune_v6.go": false,
+      "TreeDB/internal/primaryarena/read_root_v6.go": true,
+      "TreeDB/internal/primaryarena/release_queue.go": true,
+      "TreeDB/internal/retainedalloc/owner_atomic_remove_work.go": false,
+      "TreeDB/internal/retainedalloc/owner_work.go": true,
+      "TreeDB/internal/retainedalloc/owner_growth_work.go": true,
+      "TreeDB/internal/retainedalloc/owner_enroll_work.go": true,
+      "TreeDB/internal/retainedalloc/owner.go": true,
+      "TreeDB/internal/memtable/native_retention_work.go": true,
+      "TreeDB/pager/pager.go": false,
+      "AGENTS.md": true,
+      "TreeDB/AGENTS.md": true,
+      "CONTRIBUTING.md": true
+    },
+    "full_final_source_review_claimed": false
+  },
+  {
+    "report": "native-finaldriver-price-subreview01.json",
+    "report_sha256": "5fb4673b7d209ecbd1d4ad9bf0ab5691feb4ecbb0b3bccdf86c604bc98cb5cea",
+    "target_applicability": {
+      "TreeDB/caching/native_capture_price_for_test_v6.go": true,
+      "TreeDB/db/native_preparation_price_for_test_v6.go": true,
+      "TreeDB/db/native_snapshot_price_for_test_v6.go": true,
+      "TreeDB/internal/rootpublication/native_capture_price_for_test_v6.go": true
+    },
+    "dependency_applicability": {},
+    "full_final_source_review_claimed": false
+  }
+]

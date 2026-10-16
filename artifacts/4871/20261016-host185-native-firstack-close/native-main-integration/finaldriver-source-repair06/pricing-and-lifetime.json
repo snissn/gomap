@@ -1,0 +1,20 @@
+{
+  "G_expression_changed": false,
+  "G_numeric_allowance_chosen": false,
+  "alias_lifetime": "same containing completion lease; callback may clear embedded receipt before return; canonical membership is authoritative. No read/write/lease parking into detached receipt. Owner and receipt locals cleared before closing returned lease.",
+  "caps": "Q32/1MiB/33/80/4096 unchanged; Q32 product gate remains RED and original public ACK0; separately named diagnostic onceACK evidence remains distinct",
+  "containing_size_delta": 0,
+  "native_F_bytes_delta": 0,
+  "native_F_records_delta": 0,
+  "new_join_work": {
+    "general_n_successes": "with n initially live receipts and no insertions, successful head callbacks scan n-1,n-2,...,0 nodes: n*(n-1)/2 comparisons; new producers/partial callbacks follow ordinary synchronous driver policy",
+    "selected_single_owner_success": "after genuine unlink there are zero remaining live nodes; no detached receipt load",
+    "selected_still_live_refusal": "head match takes one canonical node; existing fenced/error/parked-lease checks remain on that node",
+    "under_lock": "one original live-list pointer comparison and next-pointer read per examined canonical node after each callback, plus fixed local/result checks"
+  },
+  "new_production_allocations": 0,
+  "quota_boundary": "G covers each original finite invocation/unit, not the aggregate number of synchronous Close/Stop units or total DB.Close traffic. No fake native reservation or claimed whole-DB.Close latency bound.",
+  "reason": "new loop belongs to existing ordinary synchronous Join, with no OrdinalScanWork argument. Original finite closeStep units and their same frozen limits remain unchanged; closeLocked resets work between units under existing ordinary Close policy.",
+  "retained_P_delta": 0,
+  "unsupported_concurrency": "synthetic caller race checks do not close concurrent public Close/local owner alias retained-admission lifetime; no new keeper/ref/owner/registry"
+}

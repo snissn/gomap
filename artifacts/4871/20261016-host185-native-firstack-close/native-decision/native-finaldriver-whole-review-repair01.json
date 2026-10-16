@@ -1,0 +1,48 @@
+{
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW",
+  "actual_model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "verdict": "ACCEPT",
+  "scope": "Source-only conditional readiness of exact frozen finaldriver diagnostic successor; F1 fixture repaired. No numeric allowance or native publication approval.",
+  "candidate_edits_by_reviewer": false,
+  "source_manifest_sha256": "30e0fe7fb53fa4eafef910fa6e50da5d8126cc225341da8de45b6a1d9cd2d206",
+  "source_archive_sha256": "3492a17d4ab432bb8f3089aaba9a8c1ff583a88ca620db1a3747c4d42bc49e5c",
+  "delta_sha256": "81335393a5264603b4dafe8e2c313bc063fd09b4aa7278de2c702e6f1f24499c",
+  "source_files": 10431,
+  "full_archive_manifest_verified": true,
+  "exact_manifest_delta": {
+    "path": "TreeDB/zipper/materialized_input_growth_work_v6_test.go",
+    "before_sha256": "208c37c9bba96463e074223d693c2e75eb680043e1afb27b4361703303de41ec",
+    "after_sha256": "ea579dd51060b5441dc32cf2f3ae544cd118026c55a5871882ad4370170cbaf0",
+    "added": 0,
+    "deleted": 0
+  },
+  "prior_review_sha256": {
+    "native-finaldriver-whole-review01.md": "7d251e21990a84cf890faed6c7feaaaecf64973cdfb1f5648175e3c6232a9217",
+    "native-finaldriver-whole-review01.json": "4c52de67c12fdcd67bfa920bb4b2721ad90da28355d60e4265f4b485c6f515b2"
+  },
+  "F1": {
+    "disposition": "RESOLVED_SOURCE",
+    "checks": [
+      "Enrolled owner and budget ExternalBytes baseline captured before every producer allocation.",
+      "Original tiny-work refusal and SAME producer retry assertions unchanged.",
+      "CloseStep must explicitly finish within unchanged PrimaryDirectoryMaxEntries+4 calls and preserve existing alias-detachment and original-owner checks.",
+      "RemovePendingWork must explicitly finish within unchanged16 calls, each original Q32/1MiB.",
+      "Producer refund must restore both exact independent enrollment baselines.",
+      "Explicit real enrollment.Close precedes final owner/budget zero assertions; original deferred Close remains safe idempotent cleanup."
+    ],
+    "weakened_assertions": false
+  },
+  "findings": [],
+  "coverage_composition": "All production, pricing, envelope, diagnostic driver, policy and other test bytes are identical to reviewed282a5adb. Prior whole-source coverage and selected-domain conditions carry by exact identity.",
+  "runtime_status": "Root is running remaining focused controls separately. Reviewer ran no Go/compiler/tests/runtime. This verdict does not assert their outcome or refresh previous four-package passes as successor reruns.",
+  "preserved_limits": [
+    "No evaluated numeric G or approved runtime allowance.",
+    "No genuine current-source native ready/Fence/publication/Finish/ACK/DB.Close/reopen runtime claim.",
+    "No whole retained-union/shared-atomic/FutureFinish or general platform/concurrency qualification.",
+    "Q32/1MiB/33/80/4096 remains RED/ACK0; honest minimum-scan refusal remains.",
+    "Separate exact-source focused-control disposition and explicit real-driver authorization still required."
+  ],
+  "hosted_review_unavailability_reason": "Hosted manual review cannot pin required exact gpt-6.1-sol; explicitly routed independent internal review used.",
+  "lease_released": true
+}

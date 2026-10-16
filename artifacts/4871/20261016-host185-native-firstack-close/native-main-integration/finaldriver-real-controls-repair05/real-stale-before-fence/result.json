@@ -1,0 +1,74 @@
+{
+  "adopted_children_reaped": [],
+  "child_RUN_count": 1,
+  "elapsed_seconds": 1.726739841978997,
+  "ended_utc": "2026-10-16T09:41:12.958665+00:00",
+  "exit_code": 0,
+  "expected_child_RUN_names": [
+    "TestNativeSelectedOriginalSplitDiagnosticV6/stale-before-fence"
+  ],
+  "group_and_children_empty": true,
+  "leader_joined": true,
+  "missing_named_top_RUN_PASS": [],
+  "name": "real-stale-before-fence",
+  "observed_group_processes": [
+    {
+      "comm": "go",
+      "pgid": 1332703,
+      "pid": 1332703,
+      "ppid": 1332363,
+      "session": 1332703,
+      "state": "S"
+    },
+    {
+      "comm": "link",
+      "pgid": 1332703,
+      "pid": 1332725,
+      "ppid": 1332703,
+      "session": 1332703,
+      "state": "R"
+    },
+    {
+      "comm": "mvcc.test",
+      "pgid": 1332703,
+      "pid": 1332736,
+      "ppid": 1332703,
+      "session": 1332703,
+      "state": "S"
+    }
+  ],
+  "pgid": 1332703,
+  "pid": 1332703,
+  "raw_log_sha256": "126a3e0348b56a3ddc59e20d04936713fe10cb0be803e2f710e120609a3fbf2e",
+  "remaining_direct_or_adopted_children": [],
+  "remaining_group_members": [],
+  "required_top_level_names": [
+    "TestNativeSelectedOriginalSplitDiagnosticV6"
+  ],
+  "residual_observed_before_cleanup": false,
+  "signals": [],
+  "source_after_equals_frozen": true,
+  "source_before_after_equal": true,
+  "source_before_equals_frozen": true,
+  "started_utc": "2026-10-16T09:41:11.231924+00:00",
+  "status": "PASS",
+  "stop_reasons": [],
+  "subreaper_enabled": true,
+  "test_FAIL_names": [],
+  "test_PASS_names": [
+    "TestNativeSelectedOriginalSplitDiagnosticV6",
+    "TestNativeSelectedOriginalSplitDiagnosticV6/stale-before-fence"
+  ],
+  "test_RUN_names": [
+    "TestNativeSelectedOriginalSplitDiagnosticV6",
+    "TestNativeSelectedOriginalSplitDiagnosticV6/stale-before-fence"
+  ],
+  "test_SKIP_names": [],
+  "timeout": false,
+  "tmp_write_read_unlink_preflight": true,
+  "top_level_RUN_names": [
+    "TestNativeSelectedOriginalSplitDiagnosticV6"
+  ],
+  "top_level_pass_count": 1,
+  "unexpected_top_RUN": []
+}

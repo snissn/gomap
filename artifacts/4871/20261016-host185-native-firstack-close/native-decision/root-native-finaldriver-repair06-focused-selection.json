@@ -1,0 +1,23 @@
+{
+  "utc": "2026-10-16T09:53:03.476133+00:00",
+  "scope": "focused-finaldriver-correctness-controls",
+  "actual_native_driver_authorized": false,
+  "source_manifest_sha256": "971367d10cfd714f6ff08c552acc2073c4e4982fb918155e416aacb2d0aea05a",
+  "source_archive_sha256": "f286230f2dc0b06aaf5adfc7695a649211036e3e43042412ceed13b13ee4ea59",
+  "proposed_commands_sha256": "e815d7d023eebb207c40cf42b7964665f04751c1bfce06a103c5ed149cd7cfd0",
+  "runner_sha256": "e52b7847ff89cb65978c49cd9cc5b91c1d7c8f2f0f3ffae9fe3e23cef292b642",
+  "git_identity": {
+    "HEAD": "0149d78dba2574b09d7119d2631ec78a144e088d",
+    "index_sha256": "07161c1dc6c88fb230c74700b4ddd76b975a613540949423512d6786f7c86823"
+  },
+  "authorized_command_names": [
+    "normal-rootpublication-join",
+    "race-rootpublication-join"
+  ],
+  "source_verification": {
+    "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-finaldriver-repair06-source-verify.json",
+    "sha256": "66023c75ecfe7e6d272989fcf2384fa2766667d4a2b9d6242703620274c6da34"
+  },
+  "first_failure_stop": true,
+  "purpose": "Original receipt canonical live-list repair: scrubbed completion, linked refusal, concurrent synthetic original callbacks, Stop and late-refusal normal/race. No actual native driver."
+}

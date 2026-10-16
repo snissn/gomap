@@ -1,0 +1,54 @@
+{
+  "mode": "READ_ONLY_SOURCE_ADVICE",
+  "reviewer_model": "gpt-6.1-sol",
+  "reasoning": "high",
+  "disposition": "NECESSARY_SOURCE_REPAIR",
+  "source_manifest_sha256": "5cde43f24dcc86eaa8c2017bbc6cb0dc81a29e749d9420d27be2ab4f2e4e140d",
+  "source_archive_sha256": "0bcaee68f1b6a058bd358b5096265771d35ba503143ac9f8e255b2c215fad8f4",
+  "immutable_file_bindings": {
+    "TreeDB/pager/grow_work.go": "631b6fee62736c7e407c911b685e8f4fa5d5496d81c9c79f5194018c9cac5fa0",
+    "TreeDB/pager/pager.go": "2ce5317be3fcf54157e98315ac1a9e107ab03c71a7487a503cf04ff3db8e07a6",
+    "TreeDB/internal/primaryarena/arena.go": "515e86b817e326f21fd7c8cebf8c748de871b4efad472280490221c93d312553",
+    "TreeDB/internal/retainedalloc/owner_growth_work.go": "74735769ff46c27445a03ae785dad4e1a8ae3ecf84358d039486e0de9dcabf35",
+    "TreeDB/internal/retainedalloc/owner_work.go": "d4727141cffdc31205bc99854746a91fe10e19bdc628f643206d9ca94fd8aabe",
+    "TreeDB/internal/retainedalloc/owner.go": "aa2725812345880c152932466ee45dfa2d31b69562309595afb98d354e725c3d",
+    "TreeDB/internal/memtable/native_retention_work.go": "0863e195a9720e1490ddb1e0c6599533510de1523fb3f09a4ca1d7debb541fba"
+  },
+  "potential_reuse_only_mutable_helper": {
+    "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated/TreeDB/internal/retainedalloc/owner_atomic_remove_work.go",
+    "sha256": "a872ad2fd9c0e2d640d431417c9af259c3e1fe96cc0d0faf0e81834cfc59c41b",
+    "source_acceptance": false
+  },
+  "findings": [
+    "PRIMARY tail Claim reaches Growth with SAME nonnil arena metadata owner; spare mapped capacity does not exclude Growth wrapper/capture.",
+    "Wrapper Add, capture Add, install Remove and Cancel Remove are unmetered in immutable source.",
+    "Wrapper charge must survive Growth method return and original Claim alias; whole-owner shrink admission alone does not establish last-alias."
+  ],
+  "minimal_repair": [
+    "Reserve wrapper constructor before AddWithWork, then infallible allocation; no compensation Remove on work refusal.",
+    "Capture ready/error protocol with AddWithWork(next) before captured flag and allocations; charge once.",
+    "Acquire original metadataReadMu before whole SAME-owner shrink admission; infallible install removes old backing only and transfers new backing into Pager.",
+    "After suffix unmaps, atomic admitted cancellation clears private backing before removing next charge, retaining wrapper charge and original errors.",
+    "Native Claim takes original completed Growth wrapper accounting into existing Claim metadataCharge, clears child alias, then uses existing parent detach/RemovalWork receipt."
+  ],
+  "supported_helper_conditions": [
+    "SAME Owner.mu across admission/effect; same concrete open WorkLease budget/payload; no active enrollment, retired/closed/cleanupFailed owner.",
+    "Do not require rollback==0; stale scratch is irrelevant under Owner.mu.",
+    "Teardown callback performs no lock, allocation, failure or reentry; obtain pager/metadataReadMu outside callback."
+  ],
+  "controls": [
+    "zero/boundary work constructor refusal before owner effect/allocation",
+    "capture Add refusal then SAME Growth resume, no duplicate charge",
+    "final install shrink refusal before pager and Claim callback; exactly once after resume",
+    "cancel partial unmap/resume and final shrink refusal preserving wrapper custody",
+    "genuine unmap failure sticky/no refund",
+    "nonempty governing bindings and unsupported lease fail closed",
+    "native parent successful and cancelled detach preserve wrapper charge until actual Claim-parent alias removal",
+    "ordinary nil-work behavior unchanged"
+  ],
+  "runtime_executed": false,
+  "numeric_allowance_chosen": false,
+  "source_acceptance": false,
+  "native_publication_accepted": false,
+  "details": "native-finaldriver-primary-growth-admission-decision.md"
+}

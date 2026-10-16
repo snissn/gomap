@@ -1,0 +1,77 @@
+{
+  "mode": "INTERNAL_SUBAGENT_READ_ONLY_DIAGNOSIS",
+  "reviewer": "/root/ordinary_review",
+  "model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "candidate_edits_by_reviewer": false,
+  "disposition": "REJECT_REPAIR04_REAL_DRIVER_READINESS",
+  "source_manifest_sha256": "a38583301e50103c204b47563bed43385908705bbcc1db2eb4c4105a05e099bd",
+  "source_archive_sha256": "b0b3cf3ddcca6517d41ea33e3860437e38ba3cdbd206dda6af3831b96553f300",
+  "raw_log_sha256": "d36a16bd0cdd2d7132b2c3889c84e96b9f5db93537c2e4cb918db62cc2d03978",
+  "verified_extracted_go_files": 3396,
+  "inspected_source_bindings": {
+    "TreeDB/mvcc/native_finaldriver_diagnostic_v6_test.go": "fd8908784bcd9b462c4ecd58ad82c21a2eb0b737dcf05b808275aaa8e3cb0b70",
+    "TreeDB/profiles.go": "60e637ca9ad0493f5ebac36bf49ed18bbc2b4fe04c93aadbca25004e675c9742",
+    "TreeDB/db/db.go": "214aed2602d788a88e9e6d4b767847dd729088414319245eb30e779a095ac354",
+    "TreeDB/db/prune.go": "916ac95b292dcf7438a5fd966155dc7027ab78dc9c1bb0e5f17eb739b828d98f",
+    "TreeDB/mvcc/prune_cursor_v6.go": "fdf142b8487e289db98fe5dda13d9bb52f81af50396654468e25afd806e26250",
+    "TreeDB/db/native_mvcc_final_publication_v6.go": "8b36f28459b30a52cc0d3f7fa07c79138db1213c48c476c8c19c1963543b6839",
+    "TreeDB/db/primary_ordered_post_work_v6.go": "d457014cbfd7133f526d3d2a8ae683f6f1d05c19a326ee2e2103927f13781650",
+    "TreeDB/db/primary_visible_member_work_v6.go": "623a8de1f205f844a50850ced3f03cef0a2374c6f4ea123c666c97b781495d32",
+    "TreeDB/db/root_publication_activation.go": "bddc5b78b31193aa7632f161cb8e71a5c1f1ca62d813adb11f52b09ad98b0ce9",
+    "TreeDB/db/primary_visible_transaction_spec_v6.go": "51a3ab18c6131d5a61fe2ab5f2e307fc3e1ea33c1d1246a039bc4688115a0454",
+    "TreeDB/db/native_mvcc_candidate_preparation_v6.go": "45d7dd34004bc14b94fa1592ebe7979f3f33e8924d176d49cc8c49a56df937a7",
+    "TreeDB/db/native_mvcc_final_basis_v6.go": "db40776e4d6183121b768298325d68615f0946e03f5a22e01d4dba986318820b",
+    "TreeDB/db/primary_storage_operations_v6.go": "2337bdc3f21b9e8bb493fb4c2396c9be46614b03f34fafea8625011dfe978382",
+    "TreeDB/db/primary_materialization_work_v6.go": "e784a2ff4950e9ae366252f6c48a904cd504e74390ba95554462415ae20d9ea7",
+    "TreeDB/db/durable_root_runtime.go": "e472aeae3ff832a79b6621d97150fe5b90b9165a0d5fb328991b9d114095aa30",
+    "TreeDB/db/native_mvcc_current_delete_v6.go": "5dbc2fb4c8993ed43075650989d63616ae9afd4310b18aaee94c1f9443a9f600",
+    "TreeDB/db/primary_visible_abort_work_v6.go": "700a68e3c5687ecca18566a3d9114b84dd497aa3377f57f8afd2bbcd7bb657b6",
+    "TreeDB/freelist/allocator_preparation_work_v6.go": "a1cfbb466c90cd410c9380b76e638de019716e73483456f1e66923a8932ade85",
+    "TreeDB/internal/rootpublication/coordinator.go": "3289de5a237288a0ba30b1744c0a25a15e0043de4cfd4c569ce1108368dc231f",
+    "TreeDB/internal/rootpublication/durable_root_transaction.go": "8fd128df950f05d6861c84db06c2e82ae58aebbd86f55df622450f242fedddc0",
+    "TreeDB/internal/rootpublication/durable_root_transaction_native_mvcc_v6.go": "f1ceef27c3065f2b5f7ef28d156f5bab42de113ffe99b19ed0350ba975cf0785",
+    "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go": "7b8790f943894d5c571bcfd58742d8d61e0c07ee9b59a7b23a7a76a0dd141f3a",
+    "TreeDB/internal/rootpublication/native_publication_v6.go": "3e1cb7dc7beb72c3962fbd83398adc5f523868d0eb4767b89df9be4440443d15",
+    "TreeDB/internal/rootpublication/resource_empty_sync_work_v6.go": "e639a7f4fbbd96d77c2f1fd2765a76ead2a6cdb070d62199c003fc933a175212",
+    "TreeDB/internal/rootpublication/resource_index_sync_work_v6.go": "925563404dd295d3ec80d4cbe34c38a735a571132826140c31ddba65262822ad",
+    "TreeDB/internal/rootpublication/resource_set_release_work_v6.go": "b3b6d77ea2f6af4e8c75a88d5fdaed62d5a56b4546ca6b1e2d7dd64421bc4993",
+    "TreeDB/internal/rootpublication/durable_root_transaction_test.go": "a5294f68236e0af1a0f1822f886934c9c190a406bf6550dffdcbacb5f43f1467",
+    "TreeDB/internal/rootpublication/durable_root_transaction_work_callbacks_v6_test.go": "610f8f493d9bce2e9719c75943da2b039260d3610213d1a60701e267d8376976"
+  },
+  "findings": [
+    {
+      "id": "F5a",
+      "kind": "fixture_supported_shape",
+      "path": "TreeDB/mvcc/native_finaldriver_diagnostic_v6_test.go:25",
+      "guard": "TreeDB/db/primary_ordered_post_work_v6.go:27",
+      "finding": "NoWALFast retains enabled background pruner; native activation rejects it before allocator adoption.",
+      "correction": "Explicitly disable background prune for successful selected diagnostic, retain genuine enabled-pruner refusal and successful finite Close control."
+    },
+    {
+      "id": "F5b",
+      "kind": "production_rollback_custody",
+      "path": "TreeDB/internal/rootpublication/coordinator.go:393",
+      "finding": "Constructed transaction rollback runs before Set rollback, violates transaction.transfer destination-owner guard, ignores error, leaves raw txn.owner Coordinator and Set Candidate.",
+      "correction": "Set rollback before transaction rollback; check both errors; preserve original/rollback errors in preadmitted embedded failure receipt on invariant failure; test raw owner and genuine finite abort/cleanup."
+    }
+  ],
+  "observations": {
+    "original_error": "ErrNativeMVCCRootWorkRequiredV6",
+    "cleanup_error": "original durable-root cleanup failed",
+    "runtime_activation_observed": false,
+    "runtime_finish_observed": false,
+    "raw_stage_instrumented": false,
+    "source_mandatory_pre_activation_rejection": true,
+    "work_pointer_drop_found": false,
+    "g_records_logged": 78487,
+    "g_bytes_logged": 41682871
+  },
+  "limits": [
+    "No execution or runtime mutation by reviewer.",
+    "Raw generic sentinel alone does not uniquely locate stage; deterministic profile guard and rollback contradiction are source-derived and match observed failure.",
+    "No claim that corrected source reaches publication or that G/Q32 fits.",
+    "No actual driver allowance, publication qualification or product acceptance."
+  ],
+  "hosted_review_unavailability": "Hosted manual review cannot pin the explicitly required exact gpt-6.1-sol model; internal read-only fallback used."
+}

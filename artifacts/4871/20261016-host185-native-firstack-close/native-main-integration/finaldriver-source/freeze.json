@@ -1,0 +1,23 @@
+{
+  "status": "FROZEN_SOURCE_ONLY_UNEXECUTED",
+  "source_root": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+  "baseline_manifest": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-inventory-final/source-final.json",
+  "baseline_manifest_sha256": "5cde43f24dcc86eaa8c2017bbc6cb0dc81a29e749d9420d27be2ab4f2e4e140d",
+  "source_manifest": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source/source-frozen.json",
+  "source_manifest_sha256": "282a5adb2a9bb73051078274098f9783f80eabec94c0c623257694cfeda4f475",
+  "source_archive": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source/source-frozen.tar.gz",
+  "source_archive_sha256": "c72d4aae4acfe17f7fd26ebb1eabb102022e4c24f2eae5f17f41c822486ac78e",
+  "source_files": 10431,
+  "changed_paths": 67,
+  "added": 42,
+  "modified": 25,
+  "deleted": [],
+  "changed_archive_sha256": "6f66f77ebcadb6d18c1086702367065d03160b6b00dd570cab39d49e06beccf9",
+  "delta_sha256": "ad0ebd23e72dc78cbe5848bf93f9da944a96ce1ff7c1796fcd7b97b2159630e8",
+  "index_path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/coordinator/.git/worktrees/native-integrated/index",
+  "index_sha256": "4c6b63357522cd951fd864e661b167f52e6debcd5d5e150e002fdba478f4dbe1",
+  "source_mutation_after_freeze": false,
+  "go_commands_executed": 0,
+  "test_bodies_executed": 0,
+  "actual_native_publication_executed": false
+}

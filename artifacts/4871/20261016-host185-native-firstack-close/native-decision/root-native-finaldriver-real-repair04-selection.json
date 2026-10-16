@@ -1,0 +1,36 @@
+{
+  "source_manifest_sha256": "a38583301e50103c204b47563bed43385908705bbcc1db2eb4c4105a05e099bd",
+  "source_archive_sha256": "b0b3cf3ddcca6517d41ea33e3860437e38ba3cdbd206dda6af3831b96553f300",
+  "git_identity": {
+    "HEAD": "0149d78dba2574b09d7119d2631ec78a144e088d",
+    "index_sha256": "07161c1dc6c88fb230c74700b4ddd76b975a613540949423512d6786f7c86823"
+  },
+  "raw_index_sha256": "4c6b63357522cd951fd864e661b167f52e6debcd5d5e150e002fdba478f4dbe1",
+  "scope": "selected-finaldriver-real-diagnostic-controls",
+  "actual_native_driver_authorized": true,
+  "authority": "Existing explicit user graph4871 execute-and-merge authorization; coordinator independently selects exact frozen-source bounded genuine diagnostic fixture after source review and focused PASS.",
+  "proposed_commands_sha256": "9ee8b549d64d50ac804fb5af15ee3476d2cdd1e6157975189605c3f5d55baeed",
+  "runner_sha256": "14c70bd45e52890450bd5f5d84a1ea121bb064bc7196670ce9b35bbb6f553b6a",
+  "authorized_command_names": [
+    "real-ready-cancel",
+    "real-stale-before-fence",
+    "real-frozen-limits",
+    "real-once-ack",
+    "real-paused-finish-close"
+  ],
+  "focused_accept_sha256": "aeba8a7c609bdbb99db9a989d49d65781ab13a14fd22612d01b31cfa593819ea",
+  "whole_source_review_sha256": "d985ce0489811e997901eb67cce14e9ab84133886a5d09e052ad99df1f641069",
+  "numeric_G": null,
+  "G_selection": "Evaluate exact source nativeSelectedDiagnosticEnvelopeV6 from fresh original pre-cursor scalars; refuse missing/overflow/unsupported shapes; freeze componentwise six-family sum BEFORE cursor birth; ready validation may only reject.",
+  "original_public_caps_unchanged": true,
+  "original_public_Q32_status": "RED/ACK0; no qualification or waiver from diagnostic result",
+  "source_custody": "No source edits or concurrent producer during selection/runtime. Actual designated later durable successor and held old reader are fixture-owned.",
+  "expected_top_level_passes": 5,
+  "expected_child_runs": 5,
+  "stops": "First nonzero exit, envelope unavailable, ready mismatch, missing/extra RUN or child, noPASS, skip/race/panic, source/index drift, timeout/intervention/residual process. No unchanged retry or in-place G increase.",
+  "created_utc": "2026-10-16T09:09:47.244910+00:00",
+  "root_repair_verify_sha256": "3edc376ca5460f7707f50f776aeb2a8cee579c9199690e4152837eb31ec6f594",
+  "focused_reuse": "All56top/116child results unchanged production/formula/selected-focused-test inputs; only excluded actual diagnostic test changed.",
+  "superseded_failure": "F4 physical MVCC domain corrected before cursor to key41/value9; reevaluate source expression freshly. Old underbound G and ready-cancel not reused.",
+  "proposal_correction": "Preserved original worker proposal; root proposal selected_test_files now exactly equals repair04 manifest."
+}

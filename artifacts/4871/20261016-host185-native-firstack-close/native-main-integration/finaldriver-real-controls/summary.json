@@ -1,0 +1,30 @@
+{
+  "actual_native_driver_authorized": true,
+  "all_authorized_pass": false,
+  "all_groups_empty": true,
+  "commands_executed": 1,
+  "commands_not_executed": [
+    "real-stale-before-fence",
+    "real-frozen-limits",
+    "real-once-ack",
+    "real-paused-finish-close"
+  ],
+  "completed_utc": "2026-10-16T08:50:49.385428+00:00",
+  "git_identity_still_frozen": true,
+  "native_diagnostic_runtime": true,
+  "public_status": "Original Q32 remains RED/ACK0; diagnostic grant is not product acceptance",
+  "results": [
+    {
+      "exit_code": 1,
+      "name": "real-ready-cancel",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-real-controls/real-ready-cancel/result.json",
+      "status": "STOP"
+    }
+  ],
+  "source_files": 10431,
+  "source_manifest_sha256": "30e0fe7fb53fa4eafef910fa6e50da5d8126cc225341da8de45b6a1d9cd2d206",
+  "source_still_frozen": true,
+  "stopped_at_first_failure": true,
+  "top_pass_normal": 0,
+  "top_pass_race": 0
+}

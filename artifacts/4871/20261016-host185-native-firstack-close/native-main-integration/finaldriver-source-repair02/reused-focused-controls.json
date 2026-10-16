@@ -1,0 +1,120 @@
+{
+  "applicability": "Only unselected real diagnostic test changed; all focused test functions, production/build/pricing inputs unchanged. mvcc package test container has a different source file but all selected focused functions and dependencies are byte-identical; no fresh execution is claimed.",
+  "results": [
+    {
+      "name": "normal-mvcc",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source/controls/normal-mvcc/result.json",
+      "result_sha256": "4e3ecd43bf806f63d1cf18b6015f7f6a7f828ccfb8727e435f75f8abb78e9887",
+      "run_log_sha256": "cb660a601807a6577d2be8918763a624ff6c49ea62a8a700ae3e32c17fc8f20f",
+      "tops": 4,
+      "children": 4
+    },
+    {
+      "name": "normal-primaryarena",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source/controls/normal-primaryarena/result.json",
+      "result_sha256": "997b722b01ffd51f605a11160e28605364efb9223f5c30c6d8619882f539a443",
+      "run_log_sha256": "bfc79a907848342bceafba9a92dc2dd3e06540d38acd7e4047ab99388bac4f56",
+      "tops": 5,
+      "children": 2
+    },
+    {
+      "name": "normal-pager",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source/controls/normal-pager/result.json",
+      "result_sha256": "87d3590c1fa1dc36e3e33e7de31fe935714e014707fc2b6cdf5da781956f8dac",
+      "run_log_sha256": "6d7e33c780538738579a2abec39fc5ed458774d10b46c7d18cbddeac999ce83e",
+      "tops": 3,
+      "children": 5
+    },
+    {
+      "name": "normal-rootpublication",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source/controls/normal-rootpublication/result.json",
+      "result_sha256": "fae2f5bc09d3ed633c5d9812d41d6bd30ca1a328b57c19d0cf163358333c7538",
+      "run_log_sha256": "24eab82b799774b8c18040c955d0fc4a0e4bdce3f203e3ed2f23ce707cbecab1",
+      "tops": 5,
+      "children": 22
+    },
+    {
+      "name": "normal-zipper",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source-repair01/controls/normal-zipper/result.json",
+      "result_sha256": "709619357a331ec892663e5dd80b8a837fea99532470fa95f0d3240be708172a",
+      "run_log_sha256": "c9816614f35028bbdd6771582c344c81488ad7a1fcc3c13f3be23f652c5e50ee",
+      "tops": 1,
+      "children": 3
+    },
+    {
+      "name": "normal-db",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source-repair01/controls/normal-db/result.json",
+      "result_sha256": "7ee6f365f12588250ec407137641c842667c0de0b10bb2e4ecdecb64295f8df0",
+      "run_log_sha256": "05734becb72230a5b13c30dda766068e70fdee9b528e8cd7ce72b22dedabac52",
+      "tops": 9,
+      "children": 17
+    },
+    {
+      "name": "normal-freelist",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source-repair01/controls/normal-freelist/result.json",
+      "result_sha256": "719ccfe6c8d00fb1d0c0b39074445d408e0e83f95b31b50dd9df399a70055a6e",
+      "run_log_sha256": "033063be1b157be705e3f833a7a07a19221d05f36adaa48d34335da48dca2b89",
+      "tops": 1,
+      "children": 5
+    },
+    {
+      "name": "race-mvcc",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source-repair01/controls/race-mvcc/result.json",
+      "result_sha256": "4d6205c3bef4b03fb7e4045f7171f330448c621e3f2d381e944443fef6ca2ba5",
+      "run_log_sha256": "c36910c73579d58d4504f2081bec47c930bc98a6cd8fbbd69d388267eb20a8d6",
+      "tops": 4,
+      "children": 4
+    },
+    {
+      "name": "race-primaryarena",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source-repair01/controls/race-primaryarena/result.json",
+      "result_sha256": "b22a3298bcd2ee05340ceebb197fba07491547194dffe50c7e58cfaa41e924e0",
+      "run_log_sha256": "01f09a2d0c36b351f8eed70e1dc2edde3e8dd902bd087d352376d45497546f5e",
+      "tops": 5,
+      "children": 2
+    },
+    {
+      "name": "race-pager",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source-repair01/controls/race-pager/result.json",
+      "result_sha256": "d99eda554b44ddea354273d9515c576da6fd6bf0a9895ba666c673a3a07d20ea",
+      "run_log_sha256": "8e4366f90db11a838ff45f747aabc3ff7534b162de5027f03701a45a1b5f8559",
+      "tops": 3,
+      "children": 5
+    },
+    {
+      "name": "race-rootpublication",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source-repair01/controls/race-rootpublication/result.json",
+      "result_sha256": "12e87f435c707de753635115fd0e9a6671b9e22a2a3f824f9aaaef58d9b912ab",
+      "run_log_sha256": "a4edd992998416560f1150e39cc5d9e13622810b1542900ec7dc995e24ad6f11",
+      "tops": 5,
+      "children": 22
+    },
+    {
+      "name": "race-zipper",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source-repair01/controls/race-zipper/result.json",
+      "result_sha256": "71771763e3b4d9dbe1e81cdeda87e67ff16de56f8eb8034b21a5982ac3297110",
+      "run_log_sha256": "edb78d281a06efc73557bf9d65a339d62997d4e8af3ea001957090d1f4dd5b0e",
+      "tops": 1,
+      "children": 3
+    },
+    {
+      "name": "race-db",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source-repair01/controls/race-db/result.json",
+      "result_sha256": "77e16079f3fc9cc2d471bc3ed69bf53127958e4b8be33e145c31a8297edddf07",
+      "run_log_sha256": "582e3337d3a71c10367bcb5891ce42921d856b1d7919761c1c7cd374d1fbd7f9",
+      "tops": 9,
+      "children": 17
+    },
+    {
+      "name": "race-freelist",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source-repair01/controls/race-freelist/result.json",
+      "result_sha256": "78ceb163d8ec87d15a0327b4a196db042e75e6f344a4aab5fa710c088c8238c0",
+      "run_log_sha256": "a304e761512cda1835d9e10860e5a7dd3cfb8c8b89d5343e284ff65e056a49f1",
+      "tops": 1,
+      "children": 5
+    }
+  ],
+  "top_level_total": 56,
+  "child_total": 116,
+  "rerun_proposed": false
+}

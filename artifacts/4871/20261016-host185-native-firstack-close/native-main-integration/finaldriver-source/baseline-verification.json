@@ -1,0 +1,11 @@
+{
+  "source_manifest": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-inventory-final/source-final.json",
+  "source_manifest_sha256": "5cde43f24dcc86eaa8c2017bbc6cb0dc81a29e749d9420d27be2ab4f2e4e140d",
+  "archive": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/private-ledger-cursor-inventory-final/source-final.tar.gz",
+  "archive_sha256": "0bcaee68f1b6a058bd358b5096265771d35ba503143ac9f8e255b2c215fad8f4",
+  "live_checked_count": 10389,
+  "index": "/mnt/fast4tb/gomap-mvcc-4871-20261015/coordinator/.git/worktrees/native-integrated/index",
+  "index_sha256": "4c6b63357522cd951fd864e661b167f52e6debcd5d5e150e002fdba478f4dbe1",
+  "utc": "2026-10-16T06:22:35.370321+00:00",
+  "no_git_command": true
+}

@@ -1,0 +1,38 @@
+{
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW",
+  "actual_model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "candidate_edits_by_reviewer": false,
+  "verdict": "ACCEPT",
+  "scope": "Repair02 source-only selected diagnostic readiness; no runtime grant or native qualification",
+  "manifest_sha256": "a7f05aa0a824de9f37664f1504636453133ad9b4d6d14a86826abeedd6bded2a",
+  "archive_sha256": "aa282fb7a4892023781dd9862a9f2000e92cccacc36edf42329cd0106a4f0dd9",
+  "delta_sha256": "fa54ed9e6b06fdbdf1b002cb46066099a8dd09576f9f9c0b670533bef35e6315",
+  "full_archive_verified": true,
+  "source_files": 10431,
+  "manifest_difference": {
+    "path": "TreeDB/mvcc/native_finaldriver_diagnostic_v6_test.go",
+    "before": "7bc58df840d068edd7145043ca017f32c5da861de127eafd2c39cfdb31fd1f23",
+    "after": "cf8018fdb2ac82db7c16e00f34302ccf699fe46d86e3e85a0b7925e30283f068",
+    "other_files_unchanged": 10430
+  },
+  "F2": {
+    "classification": "fixture predicate inversion; missed by previous source review",
+    "status": "RESOLVED_SOURCE",
+    "source_cause": "Observer caching/native_mvcc_prune_v6.go403 sets COWMode=db.cow!=nil; original capture129-130 refuses db.cow!=nil. Original diagnostic82 required the refused state through !cache.COWMode.",
+    "repair": "Reject cache.COWMode; preserve closing/readiness guards, original options and actual empty-frontier capture validation.",
+    "observed_effect": "First real-ready-cancel failed before G or cursor birth; no native publication result established.",
+    "raw_log_sha256": "919544a56c4faeddfdd8c20a3e289def96b056897ea3d4c33719f0850231ec5b",
+    "result_sha256": "d301d987a7c2d4e06c53e03bc3c48feb9ac43bb29e9307fc58c3071b11dd1ac0",
+    "prior_acceptance": "Historical source disposition does not negate this demonstrated missed fixture blocker."
+  },
+  "reused_source_coverage": "Previous whole-review01 plus repair01 compose for all unchanged production/formula/custody/envelope/test bytes. No broad re-review performed.",
+  "runtime_evidence_limit": "Inspected first failed raw/result with joined groups, no signals, exact source before/after; no independent complete runtime package audit. No successor runtime executed or claimed. Focused pass reuse in worker README is not independently reviewed by this narrow task.",
+  "limits": [
+    "No numeric allowance selected or G evaluated.",
+    "No genuine successor ready/Fence/Finish/ACK/Close/reopen claim.",
+    "Q32 remains RED/ACK0.",
+    "Separate exact-source runtime selection and evidence review required."
+  ],
+  "lease_released": true
+}

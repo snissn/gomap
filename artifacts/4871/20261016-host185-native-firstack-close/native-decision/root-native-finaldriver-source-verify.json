@@ -1,0 +1,12 @@
+{
+  "manifest_sha256": "282a5adb2a9bb73051078274098f9783f80eabec94c0c623257694cfeda4f475",
+  "archive_sha256": "c72d4aae4acfe17f7fd26ebb1eabb102022e4c24f2eae5f17f41c822486ac78e",
+  "file_count": 10431,
+  "full_live_source_equals_manifest": true,
+  "full_archive_equals_manifest": true,
+  "git_identity": {
+    "HEAD": "0149d78dba2574b09d7119d2631ec78a144e088d",
+    "index_sha256": "07161c1dc6c88fb230c74700b4ddd76b975a613540949423512d6786f7c86823"
+  },
+  "utc": "2026-10-16T08:36:50.181106+00:00"
+}

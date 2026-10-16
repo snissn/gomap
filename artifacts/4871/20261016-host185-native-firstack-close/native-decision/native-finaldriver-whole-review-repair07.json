@@ -1,0 +1,80 @@
+{
+  "disposition": "ACCEPT",
+  "scope": "Repair07 one-file synthetic coordinator fixture source; composed with historical repair06 scoped source acceptance. Focused runtime and actual native driver acceptance pending.",
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW",
+  "reviewer_model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "candidate_edits_by_reviewer": false,
+  "children_spawned": false,
+  "go_or_runtime_executed_by_reviewer": false,
+  "hosted_review_unavailability_reason": "Manual hosted review cannot pin the explicitly required exact model; no hosted review requested.",
+  "source_manifest_sha256": "398fd377bd569c52341e10cc9c90d6bd0762fec7a2ffc39413b4148d0dfe1750",
+  "source_archive_sha256": "437acc30342c067bd36ab7c4387cc9a9d57dae7d937bc6f931816c56a4a00772",
+  "source_files": 10433,
+  "parent_manifest_sha256": "971367d10cfd714f6ff08c552acc2073c4e4982fb918155e416aacb2d0aea05a",
+  "delta_sha256": "4b6f6763a9a340a96875b2a7501058f5684bcdfc9b8e521beece2acf2a55128e",
+  "changed_paths": {
+    "TreeDB/internal/rootpublication/native_publication_v6_test.go": "d003918fbd8aba1387e1e8f55133406e20aa2f090f433f35922683af1cf7ea60"
+  },
+  "unchanged_paths": 10432,
+  "raw_index_sha256": "4c6b63357522cd951fd864e661b167f52e6debcd5d5e150e002fdba478f4dbe1",
+  "verification": {
+    "full_archive_members_and_hashes": true,
+    "full_live_files_equal_manifest": true,
+    "exact_one_path_delta_reconstructed": true,
+    "handoff_artifacts_all_hashed": true,
+    "proposal_selected_source_hashes": true,
+    "index_unchanged": true
+  },
+  "findings": [],
+  "resolved_fixture_failure": {
+    "cause": "Old empty-Set candidate had zero durable group members; Release refused before Join. FakeClock is supported by Begin/Release and was not the first refusal.",
+    "correction": "Existing real PreparedCOW/transaction fixture, original Enqueue activation and ordinary Consume before success Release; no direct phase/group mutation."
+  },
+  "custody_checks": [
+    "Enqueue asserts actual activated phase/raw Coordinator transaction owner, activation count1, Consume count0 and Coordinator Set.",
+    "Success invokes original allocator Consume, asserts consumed/released transaction, Consume count1 and still Coordinator Set, then releases only publication turn.",
+    "Ambiguous result performs no Consume, preserves activated Coordinator transaction and Set, then proves paired Recovery transfer and Released terminal ownership."
+  ],
+  "work": {
+    "shared_begin_release_limit_records": 32,
+    "shared_byte_limit": 1048576,
+    "real_clock_begin_records": 5,
+    "real_clock_release_success_records_timer_absent": 24,
+    "real_clock_release_success_records_timer_present": 26,
+    "combined_success_max_records": 31,
+    "combined_ambiguity_max_records": 21,
+    "ordinary_setup_consume_recovery_outside_synthetic_vector": true,
+    "F_G_P_or_production_layout_delta": 0
+  },
+  "scheduler": "StartupSynchronous stays true; no CompleteStartup bypass. Original WaitThrough -> dispatchPublication(true) permits activeDispatch==nativeDispatch and publishes successor through ordinary engine after native head detach. No background scheduler progress claim.",
+  "coverage": [
+    "Complete changed test file, unchanged original durable fixture/allocator callback, activate/consume/recovery transaction paths, Begin/Release Reserve rows, timer/clock permits, startup dispatch and all eight top-level helper users/six new child cases.",
+    "Unchanged repair06 canonical Join implementation and new scrub/concurrency tests carry by byte identity; no repeated unrelated whole-source review."
+  ],
+  "proposals": {
+    "focused": {
+      "sha256": "6d01ad41bd3173c04ae648aa3498d92384402f2743d8fa1892b540b11a0dbd90",
+      "commands": 2,
+      "per_mode_tops": 8,
+      "per_mode_children": 6,
+      "status": "source-consistent; root grant and execution required"
+    },
+    "actual": {
+      "sha256": "86b81a964c239eb3b24f93e80d6e2a015aca76e0157e9c2c47c81127303f564e",
+      "commands": 2,
+      "arms": [
+        "once-ack",
+        "paused-finish-close"
+      ],
+      "status": "separate root selection required; no allowance granted"
+    }
+  },
+  "historical_evidence": "Repair06 normal failures remain preserved and are not passes. No repair06 race or actual driver run inferred.",
+  "limits": [
+    "No fresh compile/test/race/runtime evidence accepted in this source report.",
+    "Synthetic coordinator control uses genuine ordinary allocator callbacks; it is not full finite native Consume or whole native Q32 proof.",
+    "Repair06 concurrent containing-admission lifetime limitation remains: externally retained synthetic owners do not prove concurrent public Close admission custody.",
+    "Original Q32 remains RED/ACK0; no new scalar allowance, F/G/P, retained-union, final qualification, performance or merge claim."
+  ]
+}

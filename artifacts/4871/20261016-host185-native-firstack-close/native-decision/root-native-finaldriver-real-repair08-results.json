@@ -1,0 +1,44 @@
+{
+  "utc": "2026-10-16T10:13:14.541027+00:00",
+  "disposition": "GENUINE_ONCE_ACK_AND_PAUSED_FINISH_DB_CLOSE_PASS",
+  "source_manifest_sha256": "824fa0286c45825ff1fdfb9b7a4e087950887a329eb68388281ef1f5d625fca0",
+  "commands": [
+    {
+      "name": "real-once-ack",
+      "raw_sha256": "103abab09a2bb00118660a1652bd8b5432fd879bd61fb5ad123dd5dddbd67215",
+      "result_sha256": "93c182609971099a20b19b28b22b41ad0526035190fb7cb7bdf1e21032a69ca7",
+      "RUN_PASS": [
+        "TestNativeSelectedOriginalSplitDiagnosticV6",
+        "TestNativeSelectedOriginalSplitDiagnosticV6/once-ack"
+      ],
+      "prebirth_G_and_genuine_Finish_position": true
+    },
+    {
+      "name": "real-paused-finish-close",
+      "raw_sha256": "8b877f8db2747f4f1dab2011190164a183142ec7037ec94516e0c4dcecf5ecf5",
+      "result_sha256": "39e5c5507fc3b334e91de5973b6e7a02f618a5d85e6a712250bca7d7f72deafb",
+      "RUN_PASS": [
+        "TestNativeSelectedOriginalSplitDiagnosticV6",
+        "TestNativeSelectedOriginalSplitDiagnosticV6/paused-finish-close"
+      ],
+      "prebirth_G_and_genuine_Finish_position": true
+    }
+  ],
+  "root_independent_raw_source_process_verification": true,
+  "source_files": 10433,
+  "source_scope": "repair06 canonical live-list Join fix plus genuine coordinator fixtures07/08; no G expression change",
+  "verified_public_semantics": [
+    "native publication reaches genuine detached accounting-incomplete Finish with original receipt and no ACK",
+    "held old reader remains readable after native publication and actual newer durable Commit34",
+    "once-ack original Finish yields exactly one record and one batch ACK, replayed cursor Close is harmless",
+    "paused-Finish public DB.Close joins original cursor and returns with retention released",
+    "both arms reopen and preserve selected deletion, anchor32/future33, floor32 and actual newer writer34"
+  ],
+  "original_Q32_status": "RED/ACK0 unchanged; source-derived selected diagnostic G is not product acceptance",
+  "remaining": [
+    "complete supported work-accounting/progress contract",
+    "concurrent containing-admission lifetime",
+    "all19 and C1/C3",
+    "fault shrink format performance and downstream graph qualification"
+  ]
+}

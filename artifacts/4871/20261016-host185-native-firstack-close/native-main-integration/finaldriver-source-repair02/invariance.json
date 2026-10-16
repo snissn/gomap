@@ -1,0 +1,17 @@
+{
+  "source_authority": {
+    "TreeDB/caching/native_mvcc_prune_v6.go": "fa28a868ae4e606a4528a16c036a8ae68f0104e4a61c5cb0332b3ae024b382a5",
+    "TreeDB/mvcc/native_finaldriver_diagnostic_v6_test.go": "cf8018fdb2ac82db7c16e00f34302ccf699fe46d86e3e85a0b7925e30283f068"
+  },
+  "predicate": "if !ready || cache.Closing || cache.COWMode",
+  "production_authority": "StepNativeMVCCCaptureV6 rejects db.cow!=nil; observer defines COWMode=db.cow!=nil",
+  "all_other_paths_unchanged": 10430,
+  "production_and_pricing_unchanged": true,
+  "failed_raw_files": {
+    "result.json": "d301d987a7c2d4e06c53e03bc3c48feb9ac43bb29e9307fc58c3071b11dd1ac0",
+    "command.json": "6862754a787d556f1d2f6637d89cb9851a69ce058c709f1a13426be23f0ed0b4",
+    "run.log": "919544a56c4faeddfdd8c20a3e289def96b056897ea3d4c33719f0850231ec5b"
+  },
+  "focused_control_reuse": "reused-focused-controls.json;56tops116children",
+  "no_new_runtime": true
+}

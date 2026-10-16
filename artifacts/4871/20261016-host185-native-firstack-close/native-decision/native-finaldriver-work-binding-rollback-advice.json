@@ -1,0 +1,31 @@
+{
+  "mode": "INTERNAL_SUBAGENT_READ_ONLY_ADVICE",
+  "model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "reviewer": "/root/ordinary_review",
+  "candidate_edits_by_reviewer": false,
+  "input_manifest": "a38583301e50103c204b47563bed43385908705bbcc1db2eb4c4105a05e099bd",
+  "input_archive": "b0b3cf3ddcca6517d41ea33e3860437e38ba3cdbd206dda6af3831b96553f300",
+  "inspected_bindings": {
+    "TreeDB/internal/rootpublication/coordinator.go": "3289de5a237288a0ba30b1744c0a25a15e0043de4cfd4c569ce1108368dc231f",
+    "TreeDB/internal/rootpublication/native_publication_v6.go": "3e1cb7dc7beb72c3962fbd83398adc5f523868d0eb4767b89df9be4440443d15",
+    "TreeDB/internal/rootpublication/durable_root_transaction.go": "8fd128df950f05d6861c84db06c2e82ae58aebbd86f55df622450f242fedddc0",
+    "TreeDB/internal/rootpublication/durable_root_transaction_native_mvcc_v6.go": "f1ceef27c3065f2b5f7ef28d156f5bab42de113ffe99b19ed0350ba975cf0785",
+    "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go": "7b8790f943894d5c571bcfd58742d8d61e0c07ee9b59a7b23a7a76a0dd141f3a",
+    "TreeDB/db/native_mvcc_current_delete_v6.go": "5dbc2fb4c8993ed43075650989d63616ae9afd4310b18aaee94c1f9443a9f600"
+  },
+  "decision": "COORDINATOR_POISON_ALONE_INSUFFICIENT_FOR_STICKY_ORIGINAL_FAILURE_CUSTODY",
+  "minimum": [
+    "Correct Set-before-transaction rollback; normal rollback remains unpoisoned and returns original activation error.",
+    "On unexpected rollback failure latch both original activation and rollback causes plus ownership sentinel in original transaction embedded fixed receipt, first latch immutable.",
+    "Set existing coordinator poison to same receipt if not already poisoned; no new error allocation/registry/owner.",
+    "Observe original transaction physicalCleanupError before owner validation in release Bind and ContinueWork so Close reports sticky original receipt without attempting disposal.",
+    "Reserve fixed failure-mutation work before activation/ownership effects; no after-failure work refusal."
+  ],
+  "nonclaims": [
+    "Not a physical-I/O ambiguity classification.",
+    "No successful Close, cleanup, refund or publication claim on invariant failure.",
+    "No source implementation acceptance or runtime grant."
+  ],
+  "hosted_review_unavailability": "Hosted manual review cannot pin required exact model; internal exact-model advice used."
+}

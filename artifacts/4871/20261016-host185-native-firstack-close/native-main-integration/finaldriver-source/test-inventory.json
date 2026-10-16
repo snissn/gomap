@@ -1,0 +1,154 @@
+{
+  "groups": {
+    "mvcc": [
+      "TestNativeFinaldriverEnvelopeCheckedArithmeticV6",
+      "TestNativeCursorBatchFlushAdmissionPreservesSelectionV6",
+      "TestNativeCursorFinalLeaseCloseAdmissionV6",
+      "TestNativeCursorBatchRefundAdmissionV6"
+    ],
+    "primaryarena": [
+      "TestPrimaryArenaAcquireAdmitsActualLookupV6",
+      "TestPrimaryArenaCertificateAdmitsLookupBeforeTransferV6",
+      "TestPrimaryArenaAcquireDetachAdmitsLookupBeforeOwnershipChangeV6",
+      "TestPrimaryArenaPromotionSecondLookupRefusalHasNoAcquireV6",
+      "TestPrimaryArenaAcquireAfterAdmissionUsesOriginalLookupV6"
+    ],
+    "pager": [
+      "TestPrimaryReadRootImageLookupAdmissionV6",
+      "TestNativeGrowthOriginalOwnerAdmissionV6",
+      "TestNativeGrowthPrivateBackingCancelCustodyV6"
+    ],
+    "rootpublication": [
+      "TestNativeIdentityPinAtomicLastIdleRemovalV6",
+      "TestNativeIdentityUnobserveAtomicLastIdleRemovalV6",
+      "TestNativeObserveConstructorAdmissionV6",
+      "TestNativeRegistryPreCursorScanV6",
+      "TestNativeNamespaceConstructorOwnerAdmissionV6"
+    ],
+    "zipper": [
+      "TestMaterializedInputGrowthUsesOriginalFiniteOwnerV6"
+    ],
+    "db": [
+      "TestNativeSnapshotMinimumAcquisitionAdmissionV6",
+      "TestNativeSnapshotMinimumTerminalScanAdmissionV6",
+      "TestNativeSnapshotMinimumHistoricalFallbackEnvelopeV6",
+      "TestNativeSnapshotBirthLookupAdmissionAndOriginalCleanupV6",
+      "TestNativeSealInstalledClaimGrowthHandoffRefusalV6",
+      "TestPrimaryPromotionSharesImmutableLogicalRootV6",
+      "TestPrimaryPromotionCustodyRefusalHasNoPartialAcquireV6",
+      "TestNativeStablePagerPartialTokenCancellationV6",
+      "TestNativePagerOperationsPartialConstructionAndCancellationV6"
+    ],
+    "freelist": [
+      "TestNativeSelectedAllocatorStructuralEnvelopeV6"
+    ]
+  },
+  "required_child_tests": {
+    "TestNativeFinaldriverEnvelopeCheckedArithmeticV6": [
+      "supported-selected-shape",
+      "sum",
+      "multiply",
+      "missing-shape"
+    ],
+    "TestPrimaryArenaAcquireDetachAdmitsLookupBeforeOwnershipChangeV6": [
+      "finite",
+      "ordinary"
+    ],
+    "TestPrimaryReadRootImageLookupAdmissionV6": [
+      "empty",
+      "present",
+      "missing"
+    ],
+    "TestNativeGrowthOriginalOwnerAdmissionV6": [
+      "unbound",
+      "concrete"
+    ],
+    "TestNativeIdentityPinAtomicLastIdleRemovalV6": [
+      "unbound",
+      "concrete",
+      "unsupported",
+      "ordinary",
+      "nonlast",
+      "observed"
+    ],
+    "TestNativeIdentityUnobserveAtomicLastIdleRemovalV6": [
+      "idle",
+      "nonlast"
+    ],
+    "TestNativeObserveConstructorAdmissionV6": [
+      "empty",
+      "spare",
+      "collision",
+      "tombstone",
+      "doubling",
+      "bound-replacement",
+      "unsupported",
+      "capacity",
+      "ordinary"
+    ],
+    "TestNativeNamespaceConstructorOwnerAdmissionV6": [
+      "work-refusal",
+      "unsupported",
+      "success",
+      "duplicate-failure",
+      "ordinary"
+    ],
+    "TestMaterializedInputGrowthUsesOriginalFiniteOwnerV6": [
+      "constructor",
+      "entries",
+      "payload"
+    ],
+    "TestNativeSnapshotMinimumAcquisitionAdmissionV6": [
+      "original-Q32",
+      "byte-unit-too-large",
+      "record-remainder-short",
+      "byte-remainder-short"
+    ],
+    "TestNativeStablePagerPartialTokenCancellationV6": [
+      "before-token",
+      "growth-refusal",
+      "token-only",
+      "before-pinned-backing",
+      "before-retain",
+      "after-retain"
+    ],
+    "TestNativePagerOperationsPartialConstructionAndCancellationV6": [
+      "before-output",
+      "output-only",
+      "custody-before-owner",
+      "complete",
+      "resume-output",
+      "resume-custody",
+      "owner-overflow"
+    ],
+    "TestNativeSelectedAllocatorStructuralEnvelopeV6": [
+      "invalid",
+      "physical-ahead",
+      "data-overflow",
+      "inventory-overflow",
+      "chain-format"
+    ]
+  },
+  "focused_test_files": {
+    "TreeDB/mvcc/native_finaldriver_envelope_test.go": "c84d8e74682e0024f963c29283f613e32189e4cdaa5488940bbc063a9d6a7e4f",
+    "TreeDB/mvcc/native_cursor_tail_admission_test.go": "c5caf6d72da340601aababad87b0b303c83fce85f326a8773effb2af552473c9",
+    "TreeDB/internal/primaryarena/arena_lookup_admission_v6_test.go": "aed0712539154b686836f8d784489fb5b798af72c19b44b8de95f532e7500f84",
+    "TreeDB/pager/primary_read_root_image_work_v6_test.go": "40ac92d01cc3ee01da21ec51b7757b726640451cba02d163db13364ad360ae79",
+    "TreeDB/pager/native_growth_private_cancel_unix_v6_test.go": "6a1db14e467c9bf4cdf5a3015c0ede5d5f18048eaf0398dbb35b16a248770eb9",
+    "TreeDB/pager/native_growth_admission_v6_test.go": "22e6da2d655f20b3c36ca7cb32051b265b7a09349567b36311ceff9aef6b4ff4",
+    "TreeDB/internal/rootpublication/pin_atomic_removal_work_v6_test.go": "7dda9bff2961b92c45b7203aeff1d5296165c0a076b5d71b6993a4c396167ba5",
+    "TreeDB/internal/rootpublication/pin_observe_constructor_work_v6_test.go": "d8f02bfb836913bf835c99aaecd88b8aff29889b67299a2e6299bac51b0c4a6a",
+    "TreeDB/internal/rootpublication/namespace_constructor_work_v6_test.go": "58805d66438683e1764e411b8a04d667eaabb95d681928a8435e71e8805aadd3",
+    "TreeDB/zipper/materialized_input_growth_work_v6_test.go": "208c37c9bba96463e074223d693c2e75eb680043e1afb27b4361703303de41ec",
+    "TreeDB/db/native_claim_growth_custody_v6_test.go": "178de60ae2e425785f64f6b7678946890cd9c6ca16663e36ddaf9e06ec532a2a",
+    "TreeDB/db/native_stable_pager_capture_v6_test.go": "278f996347dea753455a12c40cc51717f7adbc542e32cb27864b2e88f835a63d",
+    "TreeDB/db/native_snapshot_minimum_admission_v6_test.go": "8343a007ed04283cc7c2a247ef827c8c7245d011894a370a90b33368a417256d",
+    "TreeDB/db/native_snapshot_birth_lookup_v6_test.go": "d2090dc7b59539783119589c03ec0a2eed21e76960c8db52b4e9073ddac921ef",
+    "TreeDB/db/native_pager_operations_construction_v6_test.go": "336184e6ba124a8ab4c711a966e05dbef19d5c85176861bdd6b07a8dda6a437a",
+    "TreeDB/db/primary_slot_custody_v6_test.go": "be1611da5cbcf3a2934dd3faa09bb83f59932ce279ae3f0a0ed5b54fe70dc8e1",
+    "TreeDB/freelist/native_pre_cursor_for_test_v6_test.go": "83848b6c93f0b0308e4383de8f102b3e42f0b6b3ee6f804817c8ef2e5968be36"
+  },
+  "new_real_test": "TreeDB/mvcc/native_finaldriver_diagnostic_v6_test.go",
+  "focused_top_level_per_mode": 28,
+  "focused_children_per_mode": 58
+}

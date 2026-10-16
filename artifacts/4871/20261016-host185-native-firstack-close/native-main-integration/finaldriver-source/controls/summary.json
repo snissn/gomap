@@ -1,0 +1,59 @@
+{
+  "actual_native_driver_authorized": false,
+  "all_authorized_pass": false,
+  "all_groups_empty": true,
+  "commands_executed": 5,
+  "commands_not_executed": [
+    "normal-db",
+    "normal-freelist",
+    "race-mvcc",
+    "race-primaryarena",
+    "race-pager",
+    "race-rootpublication",
+    "race-zipper",
+    "race-db",
+    "race-freelist"
+  ],
+  "completed_utc": "2026-10-16T08:40:54.722621+00:00",
+  "git_identity_still_frozen": true,
+  "native_publication_runtime": false,
+  "public_status": "Q32 RED/ACK0; no allowance",
+  "results": [
+    {
+      "exit_code": 0,
+      "name": "normal-mvcc",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source/controls/normal-mvcc/result.json",
+      "status": "PASS"
+    },
+    {
+      "exit_code": 0,
+      "name": "normal-primaryarena",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source/controls/normal-primaryarena/result.json",
+      "status": "PASS"
+    },
+    {
+      "exit_code": 0,
+      "name": "normal-pager",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source/controls/normal-pager/result.json",
+      "status": "PASS"
+    },
+    {
+      "exit_code": 0,
+      "name": "normal-rootpublication",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source/controls/normal-rootpublication/result.json",
+      "status": "PASS"
+    },
+    {
+      "exit_code": 1,
+      "name": "normal-zipper",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source/controls/normal-zipper/result.json",
+      "status": "STOP"
+    }
+  ],
+  "source_files": 10431,
+  "source_manifest_sha256": "282a5adb2a9bb73051078274098f9783f80eabec94c0c623257694cfeda4f475",
+  "source_still_frozen": true,
+  "stopped_at_first_failure": true,
+  "top_pass_normal": 17,
+  "top_pass_race": 0
+}

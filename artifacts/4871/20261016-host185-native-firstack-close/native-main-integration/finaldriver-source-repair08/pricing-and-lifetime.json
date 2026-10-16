@@ -1,0 +1,90 @@
+{
+  "ambiguity_combined_records_timer_present": 21,
+  "ambiguity_error_row": {
+    "bytes": "2*sizeof(error)+sizeof([]error)+2*sizeof(error)+sizeof(c.waiters)+sizeof(c.poison)+sizeof(c.publishNow)+sizeof(c.wakeReason)+2*sizeof(PublishAttempt)+16",
+    "records": 6,
+    "replaces_success_tail": "realClock1+transaction1+canonical14"
+  },
+  "byte_evidence": "Exact typed expressions above remain original Reserve calls; no new scalar byte allowance or numeric sizeof claim. The unchanged1MiB vector enforces bytes at execution. Compile/test remains unexecuted here. Channel size112 is the original pinnedGo1.26.3/linux/amd64 diagnostic service contract, not new retained ownership.",
+  "combined_records_success_timer_absent": 29,
+  "combined_records_success_timer_present": 31,
+  "first_cause": "grouplen0, not clock rejection",
+  "lifetime": "Successful fixture transaction consumes once and releases its original owner; original Set remains Coordinator until receipt owner cleanup. Ambiguous fixture has no Consume, remains Coordinator until original TakeRecoveryHandoff moves transaction+Set together, then releases exactly those original edges. Existing failed Set controls retain original disposal assertions.",
+  "native_F_delta": 0,
+  "native_G_expression_delta": 0,
+  "native_P_delta": 0,
+  "new_production_owner_or_allocation": false,
+  "ordinary_fixture_work": "Existing original ordinary Prepare/Enqueue/Consume/recovery callbacks and empty Set release are explicitly outside this synthetic finite Begin/Release vector. They are not a native nil-work fallback or proof of full native atomic bound.",
+  "original_vector": {
+    "ByteLimit": 1048576,
+    "RecordLimit": 32,
+    "no_reset_or_limit_change": true,
+    "same_vector_between_Begin_and_Release": true
+  },
+  "production_containing_size_delta": 0,
+  "repair08_delta": "No production/native F/G/P/layout change. Only test-owned ordinary successor setup now uses genuine same-allocator transaction instead of invalid rootless candidate. Its Prepare/Enqueue/WaitThrough/pager writes are original ordinary work outside the unchanged synthetic first Begin/Release vector.",
+  "rows_success_with_timer": [
+    {
+      "bytes": "sizeof(NativePublicationV6)+128",
+      "records": 1,
+      "symbol": "BeginNativePublicationTurnV6 entry"
+    },
+    {
+      "bytes": "112+3*sizeof(chan struct{})",
+      "records": 3,
+      "symbol": "Begin admitNativeNotifyV6"
+    },
+    {
+      "bytes": "sizeof(Clock interface)+sizeof(time.Time)",
+      "records": 1,
+      "symbol": "Begin admitNativeClockLockedV6 realClock"
+    },
+    {
+      "bytes": "sizeof(NativePublicationV6)+128",
+      "records": 1,
+      "symbol": "ReleaseNativePublicationTurnV6 entry"
+    },
+    {
+      "bytes": "sizeof(c.pending slice)+sizeof(c.waiters slice)+sizeof(durableRootGroupExtension)",
+      "records": 2,
+      "symbol": "Release singleton geometry"
+    },
+    {
+      "bytes": "112+3*sizeof(chan struct{})",
+      "records": 3,
+      "symbol": "Release admitNativeNotifyV6"
+    },
+    {
+      "bytes": "sizeof(chan struct{})",
+      "records": 1,
+      "symbol": "Release admitNativeWakeV6"
+    },
+    {
+      "bytes": "sizeof(Timer interface)",
+      "records": 1,
+      "symbol": "Release admitNativeTimerStopLockedV6 header"
+    },
+    {
+      "bytes": "sizeof(Timer interface)+sizeof(time.Timer)",
+      "records": 2,
+      "symbol": "Release optional installed realTimer"
+    },
+    {
+      "bytes": "sizeof(Clock interface)+sizeof(time.Time)",
+      "records": 1,
+      "symbol": "Release admitNativeClockLockedV6 realClock"
+    },
+    {
+      "bytes": "sizeof(DurableRootTransaction)+sizeof(DurableRootCallbackInput)",
+      "records": 1,
+      "symbol": "Release singleton transaction inspection"
+    },
+    {
+      "bytes": "sizeof(primaryPublicationCompletionV6)+4*sizeof(Frontier)+2*sizeof(PublishAttempt)+2*sizeof(c.pending slice)+2*sizeof(c.waiters slice)+12*sizeof(uint64)",
+      "records": 14,
+      "symbol": "Release canonical completion"
+    }
+  ],
+  "runtime_claim": "No08 tests ran; the07 first singleton/control PASS is historical, not proof08 overall PASS.",
+  "scope_boundary": "Q32 product gate RED/ACK0 remains. Synthetic control success, if observed later, does not qualify full native publication or concurrent containing-admission lifetime. Existing repair06 concurrency boundary unchanged."
+}

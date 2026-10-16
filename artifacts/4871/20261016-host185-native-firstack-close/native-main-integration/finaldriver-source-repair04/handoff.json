@@ -1,0 +1,31 @@
+{
+  "Go_compiler_gofmt_or_tests_executed": false,
+  "Q32": "RED",
+  "files": {
+    "README.md": "1230d034ec0a71350a898b818e335dce092f4e30b8f6992ad5e2b1e469703d73",
+    "changed-files.json": "7d2ca19f2263be137b55b813b09a94b6780b1aa835c579509a57520d18d3f21e",
+    "changed-source.tar.gz": "fa0a9ede8ed12fffceaabf96613d3b7e23e77769a5fa01b806d2441f38c9b076",
+    "freeze.json": "8084bc2c57071142b52d9a4f99a2dc62563f5f27e7cdb2ebac1fc4f618a1f6c1",
+    "invariance.json": "8684bbc4af0c32043d30608a1e917ac7941a579634a5701cf059329c3f4b2527",
+    "physical-record-proof.json": "beaf19c3d0670f0452dadae103719261f6f79014e4dfa180f09aab247a07a0ce",
+    "proposed-real-commands.json": "d91d32ebdce1cc004f1879f8c34085580e05cf43923fd885230d9a86ea73df7a",
+    "source-frozen.json": "a38583301e50103c204b47563bed43385908705bbcc1db2eb4c4105a05e099bd",
+    "source-frozen.tar.gz": "b0b3cf3ddcca6517d41ea33e3860437e38ba3cdbd206dda6af3831b96553f300",
+    "source.delta.patch": "330e03687fb03d4b5809373391f986e2c578be4c866d50aa4d68b14f9bb53892"
+  },
+  "focused_children_reusable": 116,
+  "focused_top_level_reusable": 56,
+  "no_positive_publication_acceptance": true,
+  "prior_G_reused": false,
+  "proposals_executed": 0,
+  "public_ACK": 0,
+  "real_proposals": 5,
+  "runtime_lease_released": true,
+  "scope": "Exactly one real-diagnostic test file; no production/formula/layout/cap changes",
+  "selected_physical_key_bytes": 41,
+  "selected_physical_value_bytes": 9,
+  "source_archive_sha256": "b0b3cf3ddcca6517d41ea33e3860437e38ba3cdbd206dda6af3831b96553f300",
+  "source_lease_released": true,
+  "source_manifest_sha256": "a38583301e50103c204b47563bed43385908705bbcc1db2eb4c4105a05e099bd",
+  "status": "SOURCE_REPAIR04_COMPLETE_UNEXECUTED"
+}

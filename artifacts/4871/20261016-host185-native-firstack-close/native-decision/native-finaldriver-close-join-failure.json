@@ -1,0 +1,72 @@
+{
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW; independent read-only source and failed-evidence diagnosis",
+  "reviewer": "/root/ordinary_review",
+  "model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "candidate_edits_by_reviewer": false,
+  "hosted_review_unavailability_reason": "Manual hosted review cannot pin the required model; not requested.",
+  "disposition": "REJECT",
+  "scope": "F6 paused genuine Finish -> actual DB.Close original coordinator join, exact repair05",
+  "source_manifest_sha256": "a2ffdb13492ee217c892745f3cc3a6ce02ba82fbaeb03023a2f0496a38ce5387",
+  "source_archive_sha256": "896a8b1d53bcad78128a126106485df12ace7d7062c8132b921a3b20795b3771",
+  "archive_file_count": 10432,
+  "full_archive_equals_manifest": true,
+  "read_source_sha256": {
+    "TreeDB/internal/rootpublication/native_publication_v6.go": "3e1cb7dc7beb72c3962fbd83398adc5f523868d0eb4767b89df9be4440443d15",
+    "TreeDB/internal/rootpublication/coordinator.go": "8d861b321eceea1daa6966b783f9e550bb2189d66c6256a0132f7513848e7ef1",
+    "TreeDB/internal/rootpublication/native_terminal_price_for_test_v6.go": "670271786f4c6385f85146ec507143f9560cb53cf6de3f8db09a47bb584839f9",
+    "TreeDB/db/native_mvcc_publication_binding_v6.go": "91564ea1dbeb0c445eb2e5d29bc85b1b68b9d1abd04ac1d8bc57b155ba0f0772",
+    "TreeDB/db/native_mvcc_published_terminal_v6.go": "91d3149c742d69a8e15e4049822700a340d940657d554aa4ec13983d30567de7",
+    "TreeDB/db/native_mvcc_current_delete_v6.go": "5dbc2fb4c8993ed43075650989d63616ae9afd4310b18aaee94c1f9443a9f600",
+    "TreeDB/db/db.go": "214aed2602d788a88e9e6d4b767847dd729088414319245eb30e779a095ac354",
+    "TreeDB/db/native_close_barrier_v6_test.go": "7d1c67455d774668e37c41452bdd481d7999573bdebeea588a4a38ce7bc4dd7a",
+    "TreeDB/mvcc/prune_cursor_v6.go": "fdf142b8487e289db98fe5dda13d9bb52f81af50396654468e25afd806e26250",
+    "TreeDB/mvcc/native_finaldriver_diagnostic_v6_test.go": "7b2d04223f54617e3adfa29467671c2819a8d1a9cd00ee923303d9568b8dd396",
+    "TreeDB/mvcc/native_finaldriver_envelope_test.go": "c84d8e74682e0024f963c29283f613e32189e4cdaa5488940bbc063a9d6a7e4f"
+  },
+  "failed_evidence_sha256": {
+    "command.json": "f94f86fb74c00f51d7ba49dc2d3d01fa225df67b8af1f9d3b2f08c8e8b026263",
+    "result.json": "475bf63fd0198a1e992ee346eb3d778f1f6f75ae8d40e8e581ffc53f836e8228",
+    "process.json": "9189aa31cc00925f6ca895c8f1232ae77ec33834a807d14db1588b865f4342a5",
+    "run.log": "2880afe6ddc64455ccdffac893ee19d7510b922e840ba8d627f1ac6ad211945f"
+  },
+  "findings": [
+    {
+      "id": "F6",
+      "severity": "blocking",
+      "location": "TreeDB/internal/rootpublication/native_publication_v6.go:636",
+      "trigger": "Join closes original cursor from genuine phase8 detached/accounting-incomplete Finish; cursor completes/unlinks original embedded receipt and zeroes prepared before callback returns.",
+      "cause": "Join reads old embedded receipt.complete after physical owner callback; zeroed receipt falsely says incomplete. It then stores returned containing lease into detached receipt.refusedCompletion and reports protocol failure.",
+      "correction": "Under Coordinator.mu scan canonical linked receipts by address after callback; treat absence as settlement; inspect/update fields only through matched live node while locked. Capture late error locally before unlock; clear original identity/owner aliases before closing returned lease.",
+      "scope_limit": "Addresses selected single join and stale receipt field access; full concurrent external-close retained-admission lifetime is not proved by list membership or Go liveness."
+    }
+  ],
+  "actual_execution_by_reviewer": false,
+  "runtime_observed": {
+    "argv_selector": "^TestNativeSelectedOriginalSplitDiagnosticV6$/^paused-finish-close$",
+    "exit_code": 1,
+    "timeout": false,
+    "group_and_children_empty": true,
+    "genuine_detached_finish_observed": true,
+    "accounting_complete_at_pause": false,
+    "actual_db_close_failed": true
+  },
+  "minimal_controls": [
+    "Original owner completes then scrubs embedded receipt before callback return; Join succeeds and returned lease closes exactly once.",
+    "Still-linked failed owner retains original error/custody; returned lease remains on live receipt, never refunded.",
+    "Concurrent synthetic joins/cursor Close discriminate stale field reads and exactly-once lease consumption; do not infer a stronger retained-lifetime contract from those tests.",
+    "Rerun selected genuine paused-finish-close only after source review/root grant; preserve current STOP."
+  ],
+  "pricing": {
+    "production_ordinal_reservations_changed_by_recommendation": false,
+    "new_allocation_required": false,
+    "numeric_grant_increase_justified": false,
+    "list_scan": "Synchronous Join scans canonical live list; selected one-owner policy has at most one current link. Reassess any whole-Close source-traffic formula claiming inclusion of this extra scan; it is not added to native CompleteWithWork reserves."
+  },
+  "limits": [
+    "No repair/source implementation reviewed here.",
+    "No new Go/compiler/test/runtime execution.",
+    "No Q32/1MiB fit, complete union or general Finish numeric proof, concurrent retained-admission guarantee, merge approval or universal native qualification.",
+    "Other five real-arm PASS results are root-reported context; this diagnosis independently inspects failed arm, not their full packets."
+  ]
+}

@@ -1,0 +1,36 @@
+{
+  "status": "FROZEN_TEST_ONLY_SUCCESSOR_READY_FOR_ROOT_REVIEW",
+  "source_manifest_sha256": "30e0fe7fb53fa4eafef910fa6e50da5d8126cc225341da8de45b6a1d9cd2d206",
+  "source_archive_sha256": "3492a17d4ab432bb8f3089aaba9a8c1ff583a88ca620db1a3747c4d42bc49e5c",
+  "source_files": 10431,
+  "changed_paths": 1,
+  "production_changed": false,
+  "go_commands": 0,
+  "test_bodies": 0,
+  "source_lease_released": true,
+  "runtime_lease_released": true,
+  "Q32": "RED",
+  "ACK": 0,
+  "commands_proposed": 10,
+  "new_normal_tops_children": [
+    11,
+    25
+  ],
+  "new_race_tops_children": [
+    28,
+    58
+  ],
+  "reused_normal_tops_children": [
+    17,
+    33
+  ],
+  "files": {
+    "freeze.json": "78ff0bb6f51cb64f0dc40eeddb12dc14f40a537cd8603c30b259e83844c524df",
+    "changed-files.json": "3789e6d8a6f2993d4d88ef3c9c01f20c2a9592206447c1405e947f2a8691f5aa",
+    "source.delta.patch": "81335393a5264603b4dafe8e2c313bc063fd09b4aa7278de2c702e6f1f24499c",
+    "proposed-commands.json": "be6138e62dbb6edd21706a8cf874a76a04d13294341ee469b013e4337d2719c3",
+    "reused-controls.json": "5f44bbe40d8253b39cb10eb7554691c78ac0730104bbd73628c4459aa68c3cff",
+    "invariance.json": "f1064b16691c0ee43d8c01b74a793ea427798e29d4f56d37e49456bc7b6f1cdb",
+    "README.md": "5d24d29cc880f0b949d2930cb59e8eb5d39378fdfc8e1d3792c00bd24222fab7"
+  }
+}

@@ -1,0 +1,50 @@
+{
+  "utc": "2026-10-16T09:55:27.437744+00:00",
+  "status": "FOCUSED_STOP_SHARED_FIXTURE_INCOMPATIBLE",
+  "scope": "repair06 focused normal; no race or actual",
+  "source_manifest_sha256": "971367d10cfd714f6ff08c552acc2073c4e4982fb918155e416aacb2d0aea05a",
+  "raw_log_sha256": "3dd00ae7fe1d5f1e68ae7bc5bceba775f53be1c4aa729f3931e5efea79b999bf",
+  "normal_top_pass": 2,
+  "normal_top_fail": 4,
+  "child_pass": 5,
+  "child_fail": 1,
+  "failure": "ReleaseNativePublicationTurnV6 rejects len(candidate.durableRootGroup().members)!=1 because candidateWithEmptyResourceSet has no DurableRoot; FakeClock is supported by Begin/Release clock permits",
+  "raw_runs": [
+    "TestNativePublicationJoinAcceptsScrubbedOriginalV6",
+    "TestNativePublicationJoinAcceptsScrubbedOriginalV6/success",
+    "TestNativePublicationJoinAcceptsScrubbedOriginalV6/first-error",
+    "TestNativePublicationJoinRetainsLinkedCompletionV6",
+    "TestNativePublicationJoinRetainsLinkedCompletionV6/unfenced",
+    "TestNativePublicationJoinRetainsLinkedCompletionV6/fenced-first-error",
+    "TestNativePublicationJoinConcurrentScrubbedOriginalV6",
+    "TestNativePublicationJoinConcurrentScrubbedOriginalV6/two-joins",
+    "TestNativePublicationJoinConcurrentScrubbedOriginalV6/join-and-original-close",
+    "TestNativePublicationStopJoinsIdleOriginalBeforeSchedulerStop",
+    "TestNativePublicationLateRefusalRequiresCustodyWithoutPoisoningSuccessor",
+    "TestNativePublicationStopSettlesFailedOriginalAndStillStops"
+  ],
+  "raw_passes": [
+    "TestNativePublicationJoinAcceptsScrubbedOriginalV6",
+    "TestNativePublicationJoinAcceptsScrubbedOriginalV6/success",
+    "TestNativePublicationJoinAcceptsScrubbedOriginalV6/first-error",
+    "TestNativePublicationJoinRetainsLinkedCompletionV6/unfenced",
+    "TestNativePublicationJoinConcurrentScrubbedOriginalV6",
+    "TestNativePublicationJoinConcurrentScrubbedOriginalV6/two-joins",
+    "TestNativePublicationJoinConcurrentScrubbedOriginalV6/join-and-original-close"
+  ],
+  "raw_failures": [
+    "TestNativePublicationJoinRetainsLinkedCompletionV6",
+    "TestNativePublicationJoinRetainsLinkedCompletionV6/fenced-first-error",
+    "TestNativePublicationStopJoinsIdleOriginalBeforeSchedulerStop",
+    "TestNativePublicationLateRefusalRequiresCustodyWithoutPoisoningSuccessor",
+    "TestNativePublicationStopSettlesFailedOriginalAndStillStops"
+  ],
+  "all_source_before_after_equal": true,
+  "all_source_files": 10433,
+  "process_group_empty_independently_rechecked": true,
+  "intervention": false,
+  "selected_next": "source-only shared fixture repair07, original source/runtime06 evidence retained",
+  "production_source_fix_acceptance_separate": true,
+  "Q32": "RED/ACK0 unchanged",
+  "diagnosis_correction": "Full call-chain inspection supersedes preliminary clock attribution. Release does not call AdmitNativePublicationCompletionV6; its separate realClock guard is not reached here."
+}

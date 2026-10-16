@@ -1,0 +1,22 @@
+{
+  "actual_executed": false,
+  "changed_paths": [
+    "TreeDB/mvcc/native_finaldriver_diagnostic_v6_test.go"
+  ],
+  "focused_input_reuse": "All production, formula and focused test inputs byte-identical; only excluded actual diagnostic fixture changed.",
+  "git_identity": {
+    "HEAD": "0149d78dba2574b09d7119d2631ec78a144e088d",
+    "index_sha256": "07161c1dc6c88fb230c74700b4ddd76b975a613540949423512d6786f7c86823"
+  },
+  "live_and_archive_equal_manifest": true,
+  "patch_verified": true,
+  "raw_index_sha256": "4c6b63357522cd951fd864e661b167f52e6debcd5d5e150e002fdba478f4dbe1",
+  "root_proposal_sha256": "9ee8b549d64d50ac804fb5af15ee3476d2cdd1e6157975189605c3f5d55baeed",
+  "runner_sha256": "14c70bd45e52890450bd5f5d84a1ea121bb064bc7196670ce9b35bbb6f553b6a",
+  "source_archive_sha256": "b0b3cf3ddcca6517d41ea33e3860437e38ba3cdbd206dda6af3831b96553f300",
+  "source_count": 10431,
+  "source_manifest_sha256": "a38583301e50103c204b47563bed43385908705bbcc1db2eb4c4105a05e099bd",
+  "status": "VERIFIED_ONE_TEST_PHYSICAL_RECORD_REPAIR",
+  "unchanged_paths": 10430,
+  "utc": "2026-10-16T09:09:31.852835+00:00"
+}

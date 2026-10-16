@@ -1,0 +1,52 @@
+{
+  "mode": "READ_ONLY_SOURCE_ADVICE",
+  "reviewer_model": "gpt-6.1-sol",
+  "reasoning": "high",
+  "candidate_edits": false,
+  "source_manifest_sha256": "5cde43f24dcc86eaa8c2017bbc6cb0dc81a29e749d9420d27be2ab4f2e4e140d",
+  "source_archive_sha256": "0bcaee68f1b6a058bd358b5096265771d35ba503143ac9f8e255b2c215fad8f4",
+  "source_files": {
+    "TreeDB/node/primary_directory_v1.go": "532160409cbac93085b6884c29994fbdaf8801d8fc7fa4200f6aa9e35bca0230",
+    "TreeDB/internal/primaryarena/read_root_v6.go": "ebb053bf4be6d291d6fb38aed2969572c06cc397337ad07b526e1a120567141c",
+    "TreeDB/tree/native_mvcc_selection_v6.go": "9679a06002cacfde901e707ff314461d53d5c8005172b27aca1a6c2fda4bf834",
+    "TreeDB/tree/charged_projection.go": "fbbba00616eff7eb91ec385faf22582b968133807bfbc9e1765f3bb2749e4c2d",
+    "TreeDB/tree/tree.go": "1ddafdc83e6a4f8037593faeaf897ae039675187d78ab4168fd3c45b654f3564",
+    "TreeDB/tree/primary_directory.go": "4f393a3d62d2d585b4fee908ff81308b5b7d21434745e7127906f4182ab2873e"
+  },
+  "reused_reports": {
+    "native-finaldriver-zipper-progress-bound.md": "7145e8b12c57130495505afce2cc04360f83392f773d41dc0f30f1b4f8cd414b",
+    "native-finaldriver-zipper-progress-bound.json": "0af33d54883ea78c3c53a5fedf0b92436860cf5959080db113fe250a8d2a9046",
+    "native-finaldriver-terminal-unit-bound.md": "4e170295e7cb844c85fef3569899dd7991b6ebeb64c1b55c651af5ea78700e4d",
+    "native-finaldriver-terminal-unit-bound.json": "e2c527c5874848a6794adeee3b4d616887cc377831d89f0754613682cc3499fe"
+  },
+  "disposition": "SYMBOLIC_CHILD_BOUND_COMPLETE_UNDER_NAMED_SELECTED_PREDICATES",
+  "constructor": "(1,ChargedProjectionRetainedCharge()+sizeof(tree.Tree))",
+  "top_begin": "(1,sizeof(node.LeafEntry)+64)",
+  "base_begin": "(1,64)",
+  "step_generic_entry": "(0,0)",
+  "same_phase_compounds": [
+    "CompareWhole+(1,16)",
+    "DecodeStep+(1,sizeof(node.LeafEntry))",
+    "CompareWhole+(1,64)"
+  ],
+  "next_progress": "componentwise_max(all actual local rows, named original child units and compound rows) + actual enclosing caller prefix",
+  "constructor_retention": "existing exact caller admission; constructor Reserve is work only",
+  "finite_scan_counts": {
+    "base_binary_pivots": "ceil(log2(n+1))",
+    "directory_binary_pivots": "ceil(log2(d+1))",
+    "candidate_iterations_per_operation": "n+d+2 conservative",
+    "selected_data_depth_max": 1,
+    "embedded_close_stack": 50
+  },
+  "no_execution": true,
+  "numeric_allowance_chosen": false,
+  "native_publication_accepted": false,
+  "Q32_fit_claimed": false,
+  "limitations": [
+    "named root reader/image-admission conditions still required",
+    "arbitrary internal-tree path excluded",
+    "no independent writer before ready; held reader idle",
+    "whole retained union and finaldriver not accepted",
+    "actual outer caller prefix must be composed"
+  ]
+}

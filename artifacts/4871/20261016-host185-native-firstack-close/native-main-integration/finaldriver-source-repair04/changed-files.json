@@ -1,0 +1,7 @@
+[
+  {
+    "after_sha256": "fd8908784bcd9b462c4ecd58ad82c21a2eb0b737dcf05b808275aaa8e3cb0b70",
+    "before_sha256": "79f33a8f379eee962b84152207f3ab10bade1dbf44c6eb8d5f07d08230c887d4",
+    "path": "TreeDB/mvcc/native_finaldriver_diagnostic_v6_test.go"
+  }
+]

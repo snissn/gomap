@@ -1,0 +1,106 @@
+{
+  "adopted_children_reaped": [],
+  "child_RUN_count": 1,
+  "elapsed_seconds": 4.442175780888647,
+  "ended_utc": "2026-10-16T09:10:05.168698+00:00",
+  "exit_code": 0,
+  "expected_child_RUN_names": [
+    "TestNativeSelectedOriginalSplitDiagnosticV6/ready-cancel"
+  ],
+  "group_and_children_empty": true,
+  "leader_joined": true,
+  "missing_named_top_RUN_PASS": [],
+  "name": "real-ready-cancel",
+  "observed_group_processes": [
+    {
+      "comm": "go",
+      "pgid": 1304429,
+      "pid": 1304429,
+      "ppid": 1304323,
+      "session": 1304429,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1304429,
+      "pid": 1304448,
+      "ppid": 1304429,
+      "session": 1304429,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1304429,
+      "pid": 1304459,
+      "ppid": 1304429,
+      "session": 1304429,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1304429,
+      "pid": 1304611,
+      "ppid": 1304429,
+      "session": 1304429,
+      "state": "S"
+    },
+    {
+      "comm": "link",
+      "pgid": 1304429,
+      "pid": 1304635,
+      "ppid": 1304429,
+      "session": 1304429,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1304429,
+      "pid": 1304682,
+      "ppid": 1304429,
+      "session": 1304429,
+      "state": "R"
+    },
+    {
+      "comm": "mvcc.test",
+      "pgid": 1304429,
+      "pid": 1304696,
+      "ppid": 1304429,
+      "session": 1304429,
+      "state": "D"
+    }
+  ],
+  "pgid": 1304429,
+  "pid": 1304429,
+  "raw_log_sha256": "725695bb25ab54cdcc310362dd781de0ab21abda3d60dab5b5c3e40384900d9e",
+  "remaining_direct_or_adopted_children": [],
+  "remaining_group_members": [],
+  "required_top_level_names": [
+    "TestNativeSelectedOriginalSplitDiagnosticV6"
+  ],
+  "residual_observed_before_cleanup": false,
+  "signals": [],
+  "source_after_equals_frozen": true,
+  "source_before_after_equal": true,
+  "source_before_equals_frozen": true,
+  "started_utc": "2026-10-16T09:10:00.726512+00:00",
+  "status": "PASS",
+  "stop_reasons": [],
+  "subreaper_enabled": true,
+  "test_FAIL_names": [],
+  "test_PASS_names": [
+    "TestNativeSelectedOriginalSplitDiagnosticV6",
+    "TestNativeSelectedOriginalSplitDiagnosticV6/ready-cancel"
+  ],
+  "test_RUN_names": [
+    "TestNativeSelectedOriginalSplitDiagnosticV6",
+    "TestNativeSelectedOriginalSplitDiagnosticV6/ready-cancel"
+  ],
+  "test_SKIP_names": [],
+  "timeout": false,
+  "tmp_write_read_unlink_preflight": true,
+  "top_level_RUN_names": [
+    "TestNativeSelectedOriginalSplitDiagnosticV6"
+  ],
+  "top_level_pass_count": 1,
+  "unexpected_top_RUN": []
+}

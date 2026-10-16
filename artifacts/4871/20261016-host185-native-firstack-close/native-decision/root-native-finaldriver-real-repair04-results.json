@@ -1,0 +1,36 @@
+{
+  "utc": "2026-10-16T09:12:04.469621+00:00",
+  "scope": "Independent raw inventory/source/join check; three fresh diagnostic negative arms pass, positive onceACK failed, pausedFinish unexecuted.",
+  "checks": [
+    {
+      "name": "real-ready-cancel",
+      "status": "PASS",
+      "run_log_sha256": "725695bb25ab54cdcc310362dd781de0ab21abda3d60dab5b5c3e40384900d9e",
+      "result_sha256": "29f5c42ac9786be33d1a89d60e591564963b0e13a5d1a1f4af83070c745906cf"
+    },
+    {
+      "name": "real-stale-before-fence",
+      "status": "PASS",
+      "run_log_sha256": "e2607ceda8ccf90c1dacbe9a50980453e12a6aa4005e88f398c41283b745623c",
+      "result_sha256": "38d54e4760d458366b38c90bf2eeed32195a3b287fc9e38edec506436b3a876d"
+    },
+    {
+      "name": "real-frozen-limits",
+      "status": "PASS",
+      "run_log_sha256": "561acd1fff00a0a565c9a7d0d98de854bbdba6e7b1588cac8e688a21c1ed46f2",
+      "result_sha256": "c1574b679f6169a9cc90516da9cab08ac40ea09fbfa106268c6bcede6024f06c"
+    },
+    {
+      "name": "real-once-ack",
+      "status": "STOP",
+      "run_log_sha256": "d36a16bd0cdd2d7132b2c3889c84e96b9f5db93537c2e4cb918db62cc2d03978",
+      "result_sha256": "141e775ad77c5d92f8e9190d8ff2762c0c16e59864847627e5b4e4951583fd92"
+    }
+  ],
+  "all_groups_joined": true,
+  "source_unchanged": true,
+  "source_manifest_sha256": "a38583301e50103c204b47563bed43385908705bbcc1db2eb4c4105a05e099bd",
+  "failure": "F5 original publish/Finish ErrNativeMVCCRootWorkRequiredV6, followed by sticky original cleanup failure and DB.Close incomplete native join. Production seam diagnosis pending.",
+  "native_publication_or_ACK_success": false,
+  "Q32_status": "RED/ACK0"
+}

@@ -1,0 +1,64 @@
+{
+  "argv": [
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+    "test",
+    "-p=1",
+    "-parallel=1",
+    "-count=1",
+    "-v",
+    "-timeout=3m",
+    "-run",
+    "^(TestNativePublicationJoinAcceptsScrubbedOriginalV6|TestNativePublicationJoinRetainsLinkedCompletionV6|TestNativePublicationJoinConcurrentScrubbedOriginalV6|TestNativePublicationStopJoinsIdleOriginalBeforeSchedulerStop|TestNativePublicationStopSettlesFailedOriginalAndStillStops|TestNativePublicationLateRefusalRequiresCustodyWithoutPoisoningSuccessor)$",
+    "./TreeDB/internal/rootpublication"
+  ],
+  "behavior": "synthetic original receipt scrub/refusal/concurrency plus existing ordinary Coordinator Stop, paused original receipt and ordinary durable successor controls; no real native final driver",
+  "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+  "env": {
+    "CGO_ENABLED": "1",
+    "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+    "GODEBUG": "",
+    "GOENV": "off",
+    "GOFLAGS": "",
+    "GOGC": "100",
+    "GOMAXPROCS": "2",
+    "GOMEMLIMIT": "8GiB",
+    "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+    "GOPROXY": "off",
+    "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+    "GOSUMDB": "off",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off",
+    "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source-repair06/controls/normal-rootpublication-join/tmp"
+  },
+  "executed": true,
+  "expected_child_count": 6,
+  "expected_top_level_count": 6,
+  "grant_sha256": "499de161212159de057b7a032d277c3c87ccf26c4e1fba871c24b3cc370e17b4",
+  "identity": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source-repair06/controls/identity.json",
+  "name": "normal-rootpublication-join",
+  "outer_timeout_seconds": 600,
+  "required_child_tests": {
+    "TestNativePublicationJoinAcceptsScrubbedOriginalV6": [
+      "success",
+      "first-error"
+    ],
+    "TestNativePublicationJoinConcurrentScrubbedOriginalV6": [
+      "two-joins",
+      "join-and-original-close"
+    ],
+    "TestNativePublicationJoinRetainsLinkedCompletionV6": [
+      "unfenced",
+      "fenced-first-error"
+    ]
+  },
+  "required_top_level_tests": [
+    "TestNativePublicationJoinAcceptsScrubbedOriginalV6",
+    "TestNativePublicationJoinRetainsLinkedCompletionV6",
+    "TestNativePublicationJoinConcurrentScrubbedOriginalV6",
+    "TestNativePublicationStopJoinsIdleOriginalBeforeSchedulerStop",
+    "TestNativePublicationStopSettlesFailedOriginalAndStillStops",
+    "TestNativePublicationLateRefusalRequiresCustodyWithoutPoisoningSuccessor"
+  ],
+  "source_archive": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source-repair06/source-frozen.tar.gz",
+  "source_archive_sha256": "f286230f2dc0b06aaf5adfc7695a649211036e3e43042412ceed13b13ee4ea59"
+}

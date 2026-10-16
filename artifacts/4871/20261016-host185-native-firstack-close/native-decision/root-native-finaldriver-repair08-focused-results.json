@@ -1,0 +1,65 @@
+{
+  "utc": "2026-10-16T10:11:39.325225+00:00",
+  "disposition": "FOCUSED_NORMAL_RACE_PASS",
+  "source_manifest_sha256": "824fa0286c45825ff1fdfb9b7a4e087950887a329eb68388281ef1f5d625fca0",
+  "commands": [
+    {
+      "name": "normal-rootpublication-join",
+      "raw_sha256": "77efc2af1f73990e03ce1b7d13d6545d4a48610ef576316bbde10643c999680f",
+      "result_sha256": "b0c486fb626110191903b0fa428959a05394e13edc19cae426b2e4e7aeb1e679",
+      "RUN_PASS": [
+        "TestNativePublicationJoinAcceptsScrubbedOriginalV6",
+        "TestNativePublicationJoinAcceptsScrubbedOriginalV6/success",
+        "TestNativePublicationJoinAcceptsScrubbedOriginalV6/first-error",
+        "TestNativePublicationJoinRetainsLinkedCompletionV6",
+        "TestNativePublicationJoinRetainsLinkedCompletionV6/unfenced",
+        "TestNativePublicationJoinRetainsLinkedCompletionV6/fenced-first-error",
+        "TestNativePublicationJoinConcurrentScrubbedOriginalV6",
+        "TestNativePublicationJoinConcurrentScrubbedOriginalV6/two-joins",
+        "TestNativePublicationJoinConcurrentScrubbedOriginalV6/join-and-original-close",
+        "TestNativePublicationPausedFinishAllowsOrdinaryDurableSuccessor",
+        "TestNativePublicationStopJoinsIdleOriginalBeforeSchedulerStop",
+        "TestNativePublicationLateRefusalRequiresCustodyWithoutPoisoningSuccessor",
+        "TestNativePublicationAmbiguityCannotReleaseTurnAsSuccess",
+        "TestNativePublicationStopSettlesFailedOriginalAndStillStops"
+      ],
+      "tops": 8,
+      "children": 6
+    },
+    {
+      "name": "race-rootpublication-join",
+      "raw_sha256": "2d19bb3e13f5cd580edb9b21f6d52ea128b694e1ceccd272dc1130f1fb6b1d0e",
+      "result_sha256": "d8e2d1ec19f2003aa47a7d0422e42646245498b242c01c148293b8c40f28ac52",
+      "RUN_PASS": [
+        "TestNativePublicationJoinAcceptsScrubbedOriginalV6",
+        "TestNativePublicationJoinAcceptsScrubbedOriginalV6/success",
+        "TestNativePublicationJoinAcceptsScrubbedOriginalV6/first-error",
+        "TestNativePublicationJoinRetainsLinkedCompletionV6",
+        "TestNativePublicationJoinRetainsLinkedCompletionV6/unfenced",
+        "TestNativePublicationJoinRetainsLinkedCompletionV6/fenced-first-error",
+        "TestNativePublicationJoinConcurrentScrubbedOriginalV6",
+        "TestNativePublicationJoinConcurrentScrubbedOriginalV6/two-joins",
+        "TestNativePublicationJoinConcurrentScrubbedOriginalV6/join-and-original-close",
+        "TestNativePublicationPausedFinishAllowsOrdinaryDurableSuccessor",
+        "TestNativePublicationStopJoinsIdleOriginalBeforeSchedulerStop",
+        "TestNativePublicationLateRefusalRequiresCustodyWithoutPoisoningSuccessor",
+        "TestNativePublicationAmbiguityCannotReleaseTurnAsSuccess",
+        "TestNativePublicationStopSettlesFailedOriginalAndStillStops"
+      ],
+      "tops": 8,
+      "children": 6
+    }
+  ],
+  "root_independent_raw_source_process_verification": true,
+  "source_files": 10433,
+  "normal": {
+    "tops": 8,
+    "children": 6
+  },
+  "race": {
+    "tops": 8,
+    "children": 6
+  },
+  "actual_executed": false,
+  "public_Q32_status": "RED/ACK0; no allowance or concurrent containing-admission proof"
+}

@@ -1,0 +1,94 @@
+{
+  "adopted_children_reaped": [],
+  "child_RUN_count": 5,
+  "elapsed_seconds": 2.533661340828985,
+  "ended_utc": "2026-10-16T08:47:15.014280+00:00",
+  "exit_code": 0,
+  "expected_child_RUN_names": [
+    "TestNativeSelectedAllocatorStructuralEnvelopeV6/invalid",
+    "TestNativeSelectedAllocatorStructuralEnvelopeV6/physical-ahead",
+    "TestNativeSelectedAllocatorStructuralEnvelopeV6/data-overflow",
+    "TestNativeSelectedAllocatorStructuralEnvelopeV6/inventory-overflow",
+    "TestNativeSelectedAllocatorStructuralEnvelopeV6/chain-format"
+  ],
+  "group_and_children_empty": true,
+  "leader_joined": true,
+  "missing_named_top_RUN_PASS": [],
+  "name": "normal-freelist",
+  "observed_group_processes": [
+    {
+      "comm": "go",
+      "pgid": 1274237,
+      "pid": 1274237,
+      "ppid": 1273222,
+      "session": 1274237,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1274237,
+      "pid": 1274250,
+      "ppid": 1274237,
+      "session": 1274237,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1274237,
+      "pid": 1274264,
+      "ppid": 1274237,
+      "session": 1274237,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1274237,
+      "pid": 1274280,
+      "ppid": 1274237,
+      "session": 1274237,
+      "state": "R"
+    }
+  ],
+  "pgid": 1274237,
+  "pid": 1274237,
+  "raw_log_sha256": "033063be1b157be705e3f833a7a07a19221d05f36adaa48d34335da48dca2b89",
+  "remaining_direct_or_adopted_children": [],
+  "remaining_group_members": [],
+  "required_top_level_names": [
+    "TestNativeSelectedAllocatorStructuralEnvelopeV6"
+  ],
+  "residual_observed_before_cleanup": false,
+  "signals": [],
+  "source_after_equals_frozen": true,
+  "source_before_after_equal": true,
+  "source_before_equals_frozen": true,
+  "started_utc": "2026-10-16T08:47:12.480619+00:00",
+  "status": "PASS",
+  "stop_reasons": [],
+  "subreaper_enabled": true,
+  "test_FAIL_names": [],
+  "test_PASS_names": [
+    "TestNativeSelectedAllocatorStructuralEnvelopeV6",
+    "TestNativeSelectedAllocatorStructuralEnvelopeV6/invalid",
+    "TestNativeSelectedAllocatorStructuralEnvelopeV6/physical-ahead",
+    "TestNativeSelectedAllocatorStructuralEnvelopeV6/data-overflow",
+    "TestNativeSelectedAllocatorStructuralEnvelopeV6/inventory-overflow",
+    "TestNativeSelectedAllocatorStructuralEnvelopeV6/chain-format"
+  ],
+  "test_RUN_names": [
+    "TestNativeSelectedAllocatorStructuralEnvelopeV6",
+    "TestNativeSelectedAllocatorStructuralEnvelopeV6/invalid",
+    "TestNativeSelectedAllocatorStructuralEnvelopeV6/physical-ahead",
+    "TestNativeSelectedAllocatorStructuralEnvelopeV6/data-overflow",
+    "TestNativeSelectedAllocatorStructuralEnvelopeV6/inventory-overflow",
+    "TestNativeSelectedAllocatorStructuralEnvelopeV6/chain-format"
+  ],
+  "test_SKIP_names": [],
+  "timeout": false,
+  "tmp_write_read_unlink_preflight": true,
+  "top_level_RUN_names": [
+    "TestNativeSelectedAllocatorStructuralEnvelopeV6"
+  ],
+  "top_level_pass_count": 1,
+  "unexpected_top_RUN": []
+}

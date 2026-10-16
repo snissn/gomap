@@ -1,0 +1,43 @@
+{
+  "predecessor_manifest_sha256": "282a5adb2a9bb73051078274098f9783f80eabec94c0c623257694cfeda4f475",
+  "results": [
+    {
+      "name": "normal-mvcc",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source/controls/normal-mvcc/result.json",
+      "result_sha256": "4e3ecd43bf806f63d1cf18b6015f7f6a7f828ccfb8727e435f75f8abb78e9887",
+      "run_log_sha256": "cb660a601807a6577d2be8918763a624ff6c49ea62a8a700ae3e32c17fc8f20f",
+      "top_level_count": 4,
+      "child_count": 4,
+      "applicability": "Single successor delta is a zipper-only test function. Every production source, build/config file and all passed test sources are byte-identical; no runtime PASS for repaired test is claimed."
+    },
+    {
+      "name": "normal-primaryarena",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source/controls/normal-primaryarena/result.json",
+      "result_sha256": "997b722b01ffd51f605a11160e28605364efb9223f5c30c6d8619882f539a443",
+      "run_log_sha256": "bfc79a907848342bceafba9a92dc2dd3e06540d38acd7e4047ab99388bac4f56",
+      "top_level_count": 5,
+      "child_count": 2,
+      "applicability": "Single successor delta is a zipper-only test function. Every production source, build/config file and all passed test sources are byte-identical; no runtime PASS for repaired test is claimed."
+    },
+    {
+      "name": "normal-pager",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source/controls/normal-pager/result.json",
+      "result_sha256": "87d3590c1fa1dc36e3e33e7de31fe935714e014707fc2b6cdf5da781956f8dac",
+      "run_log_sha256": "6d7e33c780538738579a2abec39fc5ed458774d10b46c7d18cbddeac999ce83e",
+      "top_level_count": 3,
+      "child_count": 5,
+      "applicability": "Single successor delta is a zipper-only test function. Every production source, build/config file and all passed test sources are byte-identical; no runtime PASS for repaired test is claimed."
+    },
+    {
+      "name": "normal-rootpublication",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source/controls/normal-rootpublication/result.json",
+      "result_sha256": "fae2f5bc09d3ed633c5d9812d41d6bd30ca1a328b57c19d0cf163358333c7538",
+      "run_log_sha256": "24eab82b799774b8c18040c955d0fc4a0e4bdce3f203e3ed2f23ce707cbecab1",
+      "top_level_count": 5,
+      "child_count": 22,
+      "applicability": "Single successor delta is a zipper-only test function. Every production source, build/config file and all passed test sources are byte-identical; no runtime PASS for repaired test is claimed."
+    }
+  ],
+  "top_level_total": 17,
+  "child_total": 33
+}

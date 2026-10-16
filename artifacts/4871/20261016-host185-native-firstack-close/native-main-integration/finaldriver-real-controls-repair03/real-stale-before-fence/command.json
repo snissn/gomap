@@ -1,0 +1,50 @@
+{
+  "argv": [
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+    "test",
+    "-p=1",
+    "-parallel=1",
+    "-count=1",
+    "-v",
+    "-timeout=3m",
+    "-run",
+    "^TestNativeSelectedOriginalSplitDiagnosticV6$/^stale-before-fence$",
+    "./TreeDB/mvcc"
+  ],
+  "behavior": "genuine DB native preparation; positive arms genuinely publish and Finish; requires separate explicit grant",
+  "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+  "env": {
+    "CGO_ENABLED": "1",
+    "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+    "GODEBUG": "",
+    "GOENV": "off",
+    "GOFLAGS": "",
+    "GOGC": "100",
+    "GOMAXPROCS": "2",
+    "GOMEMLIMIT": "8GiB",
+    "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+    "GOPROXY": "off",
+    "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+    "GOSUMDB": "off",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off",
+    "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-real-controls-repair03/real-stale-before-fence/tmp"
+  },
+  "executed": true,
+  "expected_child_count": 1,
+  "expected_top_level_count": 1,
+  "grant_sha256": "c6c0965a943fe323e6067d8dc75ec6673859897fb134554e6c51d03ba3d2fe8f",
+  "identity": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-real-controls-repair03/identity.json",
+  "name": "real-stale-before-fence",
+  "outer_timeout_seconds": 240,
+  "required_child_tests": {
+    "TestNativeSelectedOriginalSplitDiagnosticV6": [
+      "stale-before-fence"
+    ]
+  },
+  "required_top_level_tests": [
+    "TestNativeSelectedOriginalSplitDiagnosticV6"
+  ],
+  "source_archive": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source-repair03/source-frozen.tar.gz",
+  "source_archive_sha256": "66f82d9f0cef64cb920c9ed9c314b017d076b4a18f7bcb6316e50611df7d2bbb"
+}

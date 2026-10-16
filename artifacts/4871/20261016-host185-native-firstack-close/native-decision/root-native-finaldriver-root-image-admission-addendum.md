@@ -1,0 +1,9 @@
+# Admit the original immutable root image lookup
+
+Source-only addition under the existing finaldriver source lease. No execution or numeric grant follows.
+
+The immutable source5cde MaterializedInputWorkV6 reads its captured basis.treeRoot through NativeMVCCFrameReaderV6 and Pager.GetWithWork. A capsule read root is a RAM directory at primaryarena.Namespace plus pager.PrimaryReadRootLocalBaseV6 plus serial. Pager.getWithWork admits namespace dispatch and then calls primaryReadRootImageV6; that helper calls the original table.find with no per-link work admission. The separate PrimaryReadRootOwnerWithWorkV6 does admit each link, but is not the image helper called on this path. A larger G cannot supply missing execution admission.
+
+Select a narrow shared original image-lookup helper with optional OrdinalScanWork, under the SAME table RLock. Finite work admits the actual table header and each original bucket link before reading it, including terminal nil, with the same typed header/link accounting pattern as the existing owner lookup. Keep the original image, table, node, ownership and nil-work behavior. Return refusal separately from not-found so ordinary page errors retain their meaning. No count-first scan, copied index, lookup cache, new owner or new lifetime edge. Route GetWithWork's existing RAM-root case through this helper, retaining all existing namespace/header admission. Bound the whole restarted lookup by the existing checked L=Npre+6; add its repeated Get/reader parent prefix.
+
+Add focused empty/missing/present lookup controls, refusal before each actual link with unchanged table/image/owner custody, enough-work exact image identity and original nil behavior. More than one node in the tested bucket must distinguish per-link charging from a constant charge. Preserve original owner lookup and ordinary publication semantics. Include the exact changes in the coherent finaldriver freeze and independent review.

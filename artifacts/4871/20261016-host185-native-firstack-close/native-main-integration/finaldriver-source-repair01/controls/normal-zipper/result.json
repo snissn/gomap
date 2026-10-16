@@ -1,0 +1,104 @@
+{
+  "adopted_children_reaped": [],
+  "child_RUN_count": 3,
+  "elapsed_seconds": 8.219999985769391,
+  "ended_utc": "2026-10-16T08:46:28.149543+00:00",
+  "exit_code": 0,
+  "expected_child_RUN_names": [
+    "TestMaterializedInputGrowthUsesOriginalFiniteOwnerV6/constructor",
+    "TestMaterializedInputGrowthUsesOriginalFiniteOwnerV6/entries",
+    "TestMaterializedInputGrowthUsesOriginalFiniteOwnerV6/payload"
+  ],
+  "group_and_children_empty": true,
+  "leader_joined": true,
+  "missing_named_top_RUN_PASS": [],
+  "name": "normal-zipper",
+  "observed_group_processes": [
+    {
+      "comm": "go",
+      "pgid": 1273302,
+      "pid": 1273302,
+      "ppid": 1273222,
+      "session": 1273302,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1273302,
+      "pid": 1273315,
+      "ppid": 1273302,
+      "session": 1273302,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1273302,
+      "pid": 1273319,
+      "ppid": 1273302,
+      "session": 1273302,
+      "state": "R"
+    },
+    {
+      "comm": "link",
+      "pgid": 1273302,
+      "pid": 1273354,
+      "ppid": 1273302,
+      "session": 1273302,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1273302,
+      "pid": 1273362,
+      "ppid": 1273302,
+      "session": 1273302,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1273302,
+      "pid": 1273366,
+      "ppid": 1273302,
+      "session": 1273302,
+      "state": "S"
+    }
+  ],
+  "pgid": 1273302,
+  "pid": 1273302,
+  "raw_log_sha256": "c9816614f35028bbdd6771582c344c81488ad7a1fcc3c13f3be23f652c5e50ee",
+  "remaining_direct_or_adopted_children": [],
+  "remaining_group_members": [],
+  "required_top_level_names": [
+    "TestMaterializedInputGrowthUsesOriginalFiniteOwnerV6"
+  ],
+  "residual_observed_before_cleanup": false,
+  "signals": [],
+  "source_after_equals_frozen": true,
+  "source_before_after_equal": true,
+  "source_before_equals_frozen": true,
+  "started_utc": "2026-10-16T08:46:19.929535+00:00",
+  "status": "PASS",
+  "stop_reasons": [],
+  "subreaper_enabled": true,
+  "test_FAIL_names": [],
+  "test_PASS_names": [
+    "TestMaterializedInputGrowthUsesOriginalFiniteOwnerV6",
+    "TestMaterializedInputGrowthUsesOriginalFiniteOwnerV6/constructor",
+    "TestMaterializedInputGrowthUsesOriginalFiniteOwnerV6/entries",
+    "TestMaterializedInputGrowthUsesOriginalFiniteOwnerV6/payload"
+  ],
+  "test_RUN_names": [
+    "TestMaterializedInputGrowthUsesOriginalFiniteOwnerV6",
+    "TestMaterializedInputGrowthUsesOriginalFiniteOwnerV6/constructor",
+    "TestMaterializedInputGrowthUsesOriginalFiniteOwnerV6/entries",
+    "TestMaterializedInputGrowthUsesOriginalFiniteOwnerV6/payload"
+  ],
+  "test_SKIP_names": [],
+  "timeout": false,
+  "tmp_write_read_unlink_preflight": true,
+  "top_level_RUN_names": [
+    "TestMaterializedInputGrowthUsesOriginalFiniteOwnerV6"
+  ],
+  "top_level_pass_count": 1,
+  "unexpected_top_RUN": []
+}

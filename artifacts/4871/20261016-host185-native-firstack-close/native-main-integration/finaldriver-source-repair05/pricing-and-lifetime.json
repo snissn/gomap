@@ -1,0 +1,74 @@
+{
+  "guards": {
+    "ACK0_until_original_complete": true,
+    "Q32_gate": "RED",
+    "Q32_unchanged": true,
+    "byte_1MiB_unchanged": true,
+    "fixture_33_80_4096_unchanged": true,
+    "runtime_grant": false
+  },
+  "new_failure_work": {
+    "admission_site": "Coordinator.enqueueLockedWithNativeReceiptV6 after original preflight, before Set/transaction forward transfer or activation",
+    "bytes_expression": "2*sizeof(DurableRootTransaction)+2*sizeof(durableRootCleanupFailureV6)+4*sizeof(error)+2*sizeof(retainedalloc.Owner)+2*sizeof(durableRootGroupExtension)",
+    "failure_site": "same original activation error branch; no post-effect Reserve or allocation",
+    "numeric_bytes": "evaluated by original unsafe.Sizeof helper in the pinned compiler; no Go execution in this source-only packet",
+    "ordinary_nil_work": "no new ordinal reservation; same original owner transfer and contextual error policy",
+    "records": 5,
+    "rows": [
+      {
+        "purpose": "single-member group selection and original transaction lock/state",
+        "records": 1
+      },
+      {
+        "purpose": "original transaction sticky-error state",
+        "records": 1
+      },
+      {
+        "purpose": "embedded original receipt original/cause/interface initialization",
+        "records": 1
+      },
+      {
+        "purpose": "fixed original metadata-owner cleanup-failed markings; both optional original owner descriptors covered",
+        "records": 1
+      },
+      {
+        "purpose": "original coordinator poison error interface if empty",
+        "records": 1
+      }
+    ],
+    "source_symbol": "enqueueActivationRollbackFailureWorkV6"
+  },
+  "no_double_charge": [
+    "The actual failure reservation runs once before effects; the estimator adds it once. Failure-latch implementation has no further Reserve. It is funded also when activation succeeds.",
+    "ContinueWork relocates its preexisting abort-entry header (1,2*sizeof(DurableRootTransaction)+2*sizeof(primaryTransactionConstructionV6)) ahead of sticky/owner checks and calls the admitted child. It does not charge that same header twice.",
+    "Bind uses its existing descriptor/header reservation for the newly ordered sticky-error read.",
+    "Ordinary Abandon saves one stack operand for the SAME existing Set edge; no retain, clone or new allocation is added."
+  ],
+  "pricing": {
+    "F_expression": "298+D+2K+23P+8M+3S+N+Z+V+A",
+    "G": "unchanged nativeSelectedDiagnosticEnvelopeV6 checked composition reads NativeCoordinatorPriceForTestV6; no replacement scalar, no stale measured bound",
+    "enqueue_byte_delta": "same exact new_failure_work.bytes_expression, added once",
+    "enqueue_records_after": 51,
+    "enqueue_records_before": 46,
+    "fixed_F_after": 298,
+    "fixed_F_before": 293,
+    "observer": "group3 expression label F298; DB source-table comment F298"
+  },
+  "retention": {
+    "P_delta": 0,
+    "containing_layout_changes": false,
+    "existing_receipt": "DurableRootTransaction.physicalCleanupReceipt (original pointer and fixed three causes)",
+    "first_error": "existing physicalCleanupError is never replaced",
+    "named_root_edge_delta": 0,
+    "new_causes": [
+      "activationErr",
+      "rollbackErr",
+      "ErrDurableRootOwnership"
+    ],
+    "new_retained_allocations": 0,
+    "ordinary_Abandon": "saved independent Set survives inline candidate scrub; release only after successful abort; abort failure preserves Set",
+    "successful_rollback": "Candidate Set/raw transaction owners restored; original builder remains live; original finite/native or ordinary disposal owns each edge exactly once",
+    "unexpected_failure": "original transaction, Set, construction/candidate, physical roots, linked actual publication frame/lease and charges stay with existing owners; no Abort/Close success or disputed refund"
+  },
+  "source_manifest_sha256": "a2ffdb13492ee217c892745f3cc3a6ce02ba82fbaeb03023a2f0496a38ce5387"
+}

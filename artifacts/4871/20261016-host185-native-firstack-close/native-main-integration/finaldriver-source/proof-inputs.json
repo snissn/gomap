@@ -1,0 +1,80 @@
+{
+  "frozen_source_manifest_sha256": "282a5adb2a9bb73051078274098f9783f80eabec94c0c623257694cfeda4f475",
+  "inputs": [
+    {
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-finaldriver-bootstrap-root-bound.md",
+      "sha256": "9ae1cab3117998db62fd89651cff9340c983910726c100c21fff2e14583de818",
+      "scope": "source proof input; current implementation composition in operation-and-retention-ledger.md; no runtime allowance"
+    },
+    {
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-finaldriver-bootstrap-allocator-bound.md",
+      "sha256": "b15137919a695c8afdf75713d5b4df5520b8ee9053f43483e37df9e21714db44",
+      "scope": "source proof input; current implementation composition in operation-and-retention-ledger.md; no runtime allowance"
+    },
+    {
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-finaldriver-pager-growth-bound.md",
+      "sha256": "9a539b0c81931c4584e3e2bfad769bd6ba6df039f7ddb2666271440d49bede59",
+      "scope": "source proof input; current implementation composition in operation-and-retention-ledger.md; no runtime allowance"
+    },
+    {
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-finaldriver-allocator-state-progress-bound.md",
+      "sha256": "bb2d8dd0c4a44d0279bdd654fc494804f90f8477d08aa91c4904006e5902e8e9",
+      "scope": "source proof input; current implementation composition in operation-and-retention-ledger.md; no runtime allowance"
+    },
+    {
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-finaldriver-reservation-progress-bound.md",
+      "sha256": "cb0ae6216fc92a75b543e1b89c1e17cd3bb00c953e08acb6babdc5103ef56bbb",
+      "scope": "source proof input; current implementation composition in operation-and-retention-ledger.md; no runtime allowance"
+    },
+    {
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-finaldriver-terminal-unit-bound.md",
+      "sha256": "4e170295e7cb844c85fef3569899dd7991b6ebeb64c1b55c651af5ea78700e4d",
+      "scope": "source proof input; current implementation composition in operation-and-retention-ledger.md; no runtime allowance"
+    },
+    {
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-finaldriver-resource-terminal-bound.md",
+      "sha256": "8aba76bd42351a61b4b102af52d087ce171156b0f7c70c216da1cbedc142148c",
+      "scope": "source proof input; current implementation composition in operation-and-retention-ledger.md; no runtime allowance"
+    },
+    {
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-finaldriver-zipper-progress-bound.md",
+      "sha256": "7145e8b12c57130495505afce2cc04360f83392f773d41dc0f30f1b4f8cd414b",
+      "scope": "source proof input; current implementation composition in operation-and-retention-ledger.md; no runtime allowance"
+    },
+    {
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-finaldriver-leaf-encoder-progress-bound.md",
+      "sha256": "82802a4f414fa138a99ec134db33da5b33310e4b273d47272f9adf31bbdc0082",
+      "scope": "source proof input; current implementation composition in operation-and-retention-ledger.md; no runtime allowance"
+    },
+    {
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-finaldriver-projection-progress-bound.md",
+      "sha256": "244958850bd4d000488d03c707247af5aa1afce8223d21c8b46499eada6517c2",
+      "scope": "source proof input; current implementation composition in operation-and-retention-ledger.md; no runtime allowance"
+    },
+    {
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-finaldriver-primary-construction-progress-bound.md",
+      "sha256": "f855f1f9537ea7016f2093fcc11ae7ed19221d05e5e2a229b192e0302a0c60eb",
+      "scope": "source proof input; current implementation composition in operation-and-retention-ledger.md; no runtime allowance"
+    },
+    {
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-finaldriver-capture-progress-bound.md",
+      "sha256": "df463075f44333bde60b02c845f95c2bdd3261e597b79ad912fe4c77ce15ce93",
+      "scope": "source proof input; current implementation composition in operation-and-retention-ledger.md; no runtime allowance"
+    },
+    {
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-finaldriver-caching-capture-progress-bound.md",
+      "sha256": "e4c33057a2e8579fc0630d595fe72ec5efee0fdee30b37deb6494b4d12994c6f",
+      "scope": "source proof input; current implementation composition in operation-and-retention-ledger.md; no runtime allowance"
+    },
+    {
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/native-finaldriver-cursor-progress-bound.md",
+      "sha256": "03553d5eddf80b4aeeac60ac05338cc529858444533e5947bb5c551c3e7a8884",
+      "scope": "source proof input; current implementation composition in operation-and-retention-ledger.md; no runtime allowance"
+    }
+  ],
+  "current_source_overrides": [
+    "Snapshot minimum explicitly admits 256 records before each scan; Q32 blocked.",
+    "Original owner growth/removal and physical lookup seams are implemented and included in current typed expressions.",
+    "Selected G is not numerically evaluated or granted by this packet."
+  ]
+}

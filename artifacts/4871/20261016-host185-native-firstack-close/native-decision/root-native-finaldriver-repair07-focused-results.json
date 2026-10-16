@@ -1,0 +1,51 @@
+{
+  "utc": "2026-10-16T10:06:42.672241+00:00",
+  "disposition": "FOCUSED_STOP_SUCCESSOR_FIXTURE_LINEAGE",
+  "source_manifest_sha256": "398fd377bd569c52341e10cc9c90d6bd0762fec7a2ffc39413b4148d0dfe1750",
+  "raw_log_sha256": "ce41df687cb008a1f7fdda21e33eca3dc2035d74665f61655b377bdfbd06ac66",
+  "root_independent_raw_inventory": {
+    "run": [
+      "TestNativePublicationJoinAcceptsScrubbedOriginalV6",
+      "TestNativePublicationJoinAcceptsScrubbedOriginalV6/success",
+      "TestNativePublicationJoinAcceptsScrubbedOriginalV6/first-error",
+      "TestNativePublicationJoinRetainsLinkedCompletionV6",
+      "TestNativePublicationJoinRetainsLinkedCompletionV6/unfenced",
+      "TestNativePublicationJoinRetainsLinkedCompletionV6/fenced-first-error",
+      "TestNativePublicationJoinConcurrentScrubbedOriginalV6",
+      "TestNativePublicationJoinConcurrentScrubbedOriginalV6/two-joins",
+      "TestNativePublicationJoinConcurrentScrubbedOriginalV6/join-and-original-close",
+      "TestNativePublicationPausedFinishAllowsOrdinaryDurableSuccessor",
+      "TestNativePublicationStopJoinsIdleOriginalBeforeSchedulerStop",
+      "TestNativePublicationLateRefusalRequiresCustodyWithoutPoisoningSuccessor",
+      "TestNativePublicationAmbiguityCannotReleaseTurnAsSuccess",
+      "TestNativePublicationStopSettlesFailedOriginalAndStillStops"
+    ],
+    "pass": [
+      "TestNativePublicationJoinAcceptsScrubbedOriginalV6",
+      "TestNativePublicationJoinAcceptsScrubbedOriginalV6/success",
+      "TestNativePublicationJoinAcceptsScrubbedOriginalV6/first-error",
+      "TestNativePublicationJoinRetainsLinkedCompletionV6",
+      "TestNativePublicationJoinRetainsLinkedCompletionV6/unfenced",
+      "TestNativePublicationJoinRetainsLinkedCompletionV6/fenced-first-error",
+      "TestNativePublicationJoinConcurrentScrubbedOriginalV6",
+      "TestNativePublicationJoinConcurrentScrubbedOriginalV6/two-joins",
+      "TestNativePublicationJoinConcurrentScrubbedOriginalV6/join-and-original-close",
+      "TestNativePublicationStopJoinsIdleOriginalBeforeSchedulerStop",
+      "TestNativePublicationAmbiguityCannotReleaseTurnAsSuccess",
+      "TestNativePublicationStopSettlesFailedOriginalAndStillStops"
+    ],
+    "fail": [
+      "TestNativePublicationPausedFinishAllowsOrdinaryDurableSuccessor",
+      "TestNativePublicationLateRefusalRequiresCustodyWithoutPoisoningSuccessor"
+    ]
+  },
+  "all_source_before_after_equal": true,
+  "all_groups_joined_no_intervention": true,
+  "normal_tops_pass": 6,
+  "normal_children_pass": 6,
+  "race_executed": false,
+  "actual_executed": false,
+  "cause": "The real first durable transaction arms consecutive lineage; both old generic candidate(t,2,1) successors lack the next durable-root transaction. Enqueue correctly refuses. No claim of production regression from these fixture failures.",
+  "next": "One-file genuine successor fixture repair08; no limit, source policy, or G change.",
+  "public_Q32_status": "RED/ACK0; unchanged"
+}

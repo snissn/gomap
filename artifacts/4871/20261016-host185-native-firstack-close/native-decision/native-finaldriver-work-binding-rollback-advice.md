@@ -1,0 +1,21 @@
+# Repair05 rollback-failure policy addendum
+
+Coordinator poison alone is insufficient for sticky original native cleanup/error custody. This adds to, and does not replace, the immutable F5 diagnosis.
+
+Input is immutable repair04 manifest `a38583301e50103c204b47563bed43385908705bbcc1db2eb4c4105a05e099bd`, archive `b0b3cf3ddcca6517d41ea33e3860437e38ba3cdbd206dda6af3831b96553f300`. Exact inspected file hashes are in the JSON companion.
+
+`coordinator.terminalErrorLocked` (1343) returns poison, blocking new work. However `JoinNativePublicationsV6` (native_publication_v6.go603–659) does not inspect that field before calling the original owner's Close. A rejected pre-enqueue transaction is not in c.pending, so ordinary Stop/recovery pending capture (coordinator.go1469 onward) does not establish custody for it. The native receipt/original cursor is its existing containing graph. A bare poison error neither prevents private disposal nor preserves the initial activation error through subsequent Close.
+
+Minimum implementation on the unexpected rollback-failure branch:
+
+1. Keep corrected Set-before-transaction order. Normal successful rollback returns the original activation refusal/error and does not poison.
+2. Under the original transaction mutex, latch its existing physicalCleanupReceipt/physicalCleanupError, fixed causes `{activationErr, rollbackErr, ErrDurableRootOwnership}`. Preserve the first receipt/causes on repeated observation. The original struct already has three error slots and an original-transaction edge (durable_root_transaction.go145–168,454–469). Do not create an errors.Join/fmt graph or a new ownership record. Retain actual Set/transaction owners and all original charged aliases; do not force ownership normalization.
+3. Assign c.poison to that SAME receipt if it was nil, so later coordinator errors expose both causes. Returning the original activation error immediately can preserve its primary status if all later paths retain/surface the receipt; returning the receipt directly is clearer and makes both causes immediately errors.Is-visible. Neither policy permits replacing the activation cause with rollbackErr alone.
+4. Ensure original finite Close/abort entry observes the sticky receipt before owner validation. `PrimaryConstructionReleaseWork.Bind` currently validates owner at native_mvcc_v6.go109 before the downstream physicalCleanupError guard at165; ContinueWork validates owner at140 first. A failed rollback can leave Coordinator ownership, so merely setting t.physicalCleanupError will not make these entry points return it. After their existing work admission and t.mu lock, check this existing error before owner validation, returning it without binding/progress/disposal. No new continuation or registry is needed.
+5. Admit the fixed error-record writes before activation/transfers. Work shortage after an invariant failure must not mask its cause. Charge any newly performed fixed traffic in the source formula; embedded storage needs no new retained allocation.
+
+This branch represents failed ownership rollback/cleanup, not evidence of physical-I/O ambiguity or a successful teardown. The original linked receipt/frame remains charged. Join may honestly add existing incomplete-join protocol context; it must not claim completion/refund. The selected native path already requires zero waiters and singleton custody, so this repair does not require new waiter/recovery machinery or an arbitrary global graph redesign. Ordinary nonconstructed error policy need not be broadened beyond the actual shared rollback correction.
+
+Controls should discriminate normal rollback from this invariant-failure policy: normal refusal is genuinely cleanable and unpoisoned; forced rollback failure preserves both errors and the same receipt, repeated Close does not invoke disposal or refund. Raw t.owner and Set owner must be inspected for the normal constructed transaction regression, since Owner() delegates to the Set.
+
+Read-only advice by explicitly routed gpt-6.1-sol/high (`/root/ordinary_review`); source edits false, no runtime/Go/Git/GitHub actions. No repair05 source acceptance, numeric allowance or publication qualification. Hosted manual review cannot pin the required exact model.

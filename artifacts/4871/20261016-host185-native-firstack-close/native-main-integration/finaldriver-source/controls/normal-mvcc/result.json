@@ -1,0 +1,335 @@
+{
+  "adopted_children_reaped": [],
+  "child_RUN_count": 4,
+  "elapsed_seconds": 23.276056822855026,
+  "ended_utc": "2026-10-16T08:40:30.002368+00:00",
+  "exit_code": 0,
+  "expected_child_RUN_names": [
+    "TestNativeFinaldriverEnvelopeCheckedArithmeticV6/supported-selected-shape",
+    "TestNativeFinaldriverEnvelopeCheckedArithmeticV6/sum",
+    "TestNativeFinaldriverEnvelopeCheckedArithmeticV6/multiply",
+    "TestNativeFinaldriverEnvelopeCheckedArithmeticV6/missing-shape"
+  ],
+  "group_and_children_empty": true,
+  "leader_joined": true,
+  "missing_named_top_RUN_PASS": [],
+  "name": "normal-mvcc",
+  "observed_group_processes": [
+    {
+      "comm": "go",
+      "pgid": 1267883,
+      "pid": 1267883,
+      "ppid": 1267817,
+      "session": 1267883,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1267883,
+      "pid": 1267906,
+      "ppid": 1267883,
+      "session": 1267883,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1267883,
+      "pid": 1267910,
+      "ppid": 1267883,
+      "session": 1267883,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1267883,
+      "pid": 1267914,
+      "ppid": 1267883,
+      "session": 1267883,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1267883,
+      "pid": 1267919,
+      "ppid": 1267883,
+      "session": 1267883,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1267883,
+      "pid": 1267923,
+      "ppid": 1267883,
+      "session": 1267883,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1267883,
+      "pid": 1267927,
+      "ppid": 1267883,
+      "session": 1267883,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1267883,
+      "pid": 1267997,
+      "ppid": 1267883,
+      "session": 1267883,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1267883,
+      "pid": 1268001,
+      "ppid": 1267883,
+      "session": 1267883,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1267883,
+      "pid": 1268005,
+      "ppid": 1267883,
+      "session": 1267883,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1267883,
+      "pid": 1268017,
+      "ppid": 1267883,
+      "session": 1267883,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1267883,
+      "pid": 1268027,
+      "ppid": 1267883,
+      "session": 1267883,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1267883,
+      "pid": 1268032,
+      "ppid": 1267883,
+      "session": 1267883,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1267883,
+      "pid": 1268094,
+      "ppid": 1267883,
+      "session": 1267883,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1267883,
+      "pid": 1268098,
+      "ppid": 1267883,
+      "session": 1267883,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1267883,
+      "pid": 1268102,
+      "ppid": 1267883,
+      "session": 1267883,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1267883,
+      "pid": 1268192,
+      "ppid": 1267883,
+      "session": 1267883,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1267883,
+      "pid": 1268197,
+      "ppid": 1267883,
+      "session": 1267883,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1267883,
+      "pid": 1268202,
+      "ppid": 1267883,
+      "session": 1267883,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1267883,
+      "pid": 1268206,
+      "ppid": 1267883,
+      "session": 1267883,
+      "state": "S"
+    },
+    {
+      "comm": "link",
+      "pgid": 1267883,
+      "pid": 1268218,
+      "ppid": 1267883,
+      "session": 1267883,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1267883,
+      "pid": 1268248,
+      "ppid": 1267883,
+      "session": 1267883,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1267883,
+      "pid": 1268256,
+      "ppid": 1267883,
+      "session": 1267883,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1267883,
+      "pid": 1268268,
+      "ppid": 1267883,
+      "session": 1267883,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1267883,
+      "pid": 1268272,
+      "ppid": 1267883,
+      "session": 1267883,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1267883,
+      "pid": 1268280,
+      "ppid": 1267883,
+      "session": 1267883,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1267883,
+      "pid": 1268292,
+      "ppid": 1267883,
+      "session": 1267883,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1267883,
+      "pid": 1268304,
+      "ppid": 1267883,
+      "session": 1267883,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1267883,
+      "pid": 1268309,
+      "ppid": 1267883,
+      "session": 1267883,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1267883,
+      "pid": 1268317,
+      "ppid": 1267883,
+      "session": 1267883,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1267883,
+      "pid": 1268321,
+      "ppid": 1267883,
+      "session": 1267883,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1267883,
+      "pid": 1268325,
+      "ppid": 1267883,
+      "session": 1267883,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1267883,
+      "pid": 1268329,
+      "ppid": 1267883,
+      "session": 1267883,
+      "state": "S"
+    }
+  ],
+  "pgid": 1267883,
+  "pid": 1267883,
+  "raw_log_sha256": "cb660a601807a6577d2be8918763a624ff6c49ea62a8a700ae3e32c17fc8f20f",
+  "remaining_direct_or_adopted_children": [],
+  "remaining_group_members": [],
+  "required_top_level_names": [
+    "TestNativeFinaldriverEnvelopeCheckedArithmeticV6",
+    "TestNativeCursorBatchFlushAdmissionPreservesSelectionV6",
+    "TestNativeCursorFinalLeaseCloseAdmissionV6",
+    "TestNativeCursorBatchRefundAdmissionV6"
+  ],
+  "residual_observed_before_cleanup": false,
+  "signals": [],
+  "source_after_equals_frozen": true,
+  "source_before_after_equal": true,
+  "source_before_equals_frozen": true,
+  "started_utc": "2026-10-16T08:40:06.726303+00:00",
+  "status": "PASS",
+  "stop_reasons": [],
+  "subreaper_enabled": true,
+  "test_FAIL_names": [],
+  "test_PASS_names": [
+    "TestNativeCursorBatchFlushAdmissionPreservesSelectionV6",
+    "TestNativeCursorFinalLeaseCloseAdmissionV6",
+    "TestNativeCursorBatchRefundAdmissionV6",
+    "TestNativeFinaldriverEnvelopeCheckedArithmeticV6",
+    "TestNativeFinaldriverEnvelopeCheckedArithmeticV6/supported-selected-shape",
+    "TestNativeFinaldriverEnvelopeCheckedArithmeticV6/sum",
+    "TestNativeFinaldriverEnvelopeCheckedArithmeticV6/multiply",
+    "TestNativeFinaldriverEnvelopeCheckedArithmeticV6/missing-shape"
+  ],
+  "test_RUN_names": [
+    "TestNativeCursorBatchFlushAdmissionPreservesSelectionV6",
+    "TestNativeCursorFinalLeaseCloseAdmissionV6",
+    "TestNativeCursorBatchRefundAdmissionV6",
+    "TestNativeFinaldriverEnvelopeCheckedArithmeticV6",
+    "TestNativeFinaldriverEnvelopeCheckedArithmeticV6/supported-selected-shape",
+    "TestNativeFinaldriverEnvelopeCheckedArithmeticV6/sum",
+    "TestNativeFinaldriverEnvelopeCheckedArithmeticV6/multiply",
+    "TestNativeFinaldriverEnvelopeCheckedArithmeticV6/missing-shape"
+  ],
+  "test_SKIP_names": [],
+  "timeout": false,
+  "tmp_write_read_unlink_preflight": true,
+  "top_level_RUN_names": [
+    "TestNativeCursorBatchFlushAdmissionPreservesSelectionV6",
+    "TestNativeCursorFinalLeaseCloseAdmissionV6",
+    "TestNativeCursorBatchRefundAdmissionV6",
+    "TestNativeFinaldriverEnvelopeCheckedArithmeticV6"
+  ],
+  "top_level_pass_count": 4,
+  "unexpected_top_RUN": []
+}

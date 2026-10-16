@@ -1,0 +1,66 @@
+{
+  "disposition": "REJECT",
+  "scope": "Repair07 complete shared fixture/control readiness; original repair06 production Join source acceptance unchanged. Append-only disposition supersedes repair07 no-blocker claim for successor call chains.",
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW",
+  "reviewer_model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "candidate_edits_by_reviewer": false,
+  "runtime_executed_by_reviewer": false,
+  "source_manifest_sha256": "398fd377bd569c52341e10cc9c90d6bd0762fec7a2ffc39413b4148d0dfe1750",
+  "source_archive_sha256": "437acc30342c067bd36ab7c4387cc9a9d57dae7d937bc6f931816c56a4a00772",
+  "prior_review_preserved": true,
+  "prior_review_md_sha256": "6f205fcd817677a0d0c9e12f3d6b62e012da48805391e3f15e72bfbed8fcd9bd",
+  "evidence": {
+    "run.log": "ce41df687cb008a1f7fdda21e33eca3dc2035d74665f61655b377bdfbd06ac66",
+    "result.json": "9f7d46ef05033391ecdf311cbd5a9c3a1427d14333443a5c75caef0acf7f10ff",
+    "command.json": "1c7f4499c49337ec058d9255b1ce48d3689f195760513e5fb9dacce8e910be4a",
+    "environment.json": "c6b8e6674b8bca06627161d82e736ba2956e177f6a92ea38873c4a8604e1a273",
+    "process.json": "806f30d313f8bcd37ad5839eb279361a6531f282d65ea6a7c6ff2b40939df02c",
+    "source-before.json": "398fd377bd569c52341e10cc9c90d6bd0762fec7a2ffc39413b4148d0dfe1750",
+    "source-after.json": "398fd377bd569c52341e10cc9c90d6bd0762fec7a2ffc39413b4148d0dfe1750"
+  },
+  "observed": {
+    "normal_top_RUN": 8,
+    "normal_top_PASS": 6,
+    "normal_top_FAIL": 2,
+    "normal_children_PASS": 6,
+    "skips": 0,
+    "exit_code": 1,
+    "race_executed": false,
+    "actual_driver_executed": false,
+    "source_before_after_frozen_equal": true,
+    "leader_joined": true,
+    "group_and_children_empty": true
+  },
+  "findings": [
+    {
+      "id": "F7",
+      "kind": "test fixture semantic incompatibility",
+      "paths": [
+        "TreeDB/internal/rootpublication/native_publication_v6_test.go:121",
+        "TreeDB/internal/rootpublication/native_publication_v6_test.go:166"
+      ],
+      "trigger": "First genuine seq1 transaction is consumed and Release establishes durableRootLineage and sequence1; successor remains rootless candidate(t,2,1).",
+      "causal_path": "Release -> completePublicationScalarsLockedV6 updates lineage/sequence; Enqueue -> preflightDurableRootLocked rejects missing durable group at coordinator.go528-529 before successor activation.",
+      "minimal_correction": "Prepare genuine sequence2 transaction on SAME original allocator/pager/ledger after first PublishCOWCandidateV1, matching lineage and fresh candidate identity. Enqueue performs activation and original WaitThrough ordinary engine performs publisher/consumeDurableRootGroup, releasing tx2 and Set2. No manual second Consume, direct phase/group/lineage edits or separate allocator falsely described as continuation."
+    }
+  ],
+  "required_controls": [
+    "Return/preserve first fixture from nativeControlFenceV6 to construct same allocator successor.",
+    "Check allocator.COWGenerationV1 is first published generation before seq2 preparation; check same pointer identity for allocator and pager.",
+    "Assert successor activation/Consume counts1, terminal transaction and Set Released, allocator generation is actual second candidate, and durable/admission sequence2.",
+    "Assert original native Set1/receipt remains coordinator-owned/incomplete across successor and is physically completed only by original late Close; late Finish cannot regress durable/admission2.",
+    "Ambiguity does not use successor and must keep its existing activated-unconsumed transaction/recovery assertions.",
+    "Preserve shared Begin+Release32/1MiB and all existing deadlines; ordinary constructor/publication callbacks remain outside synthetic vector."
+  ],
+  "coverage": [
+    "Re-read full07 file, all helper users including both failing successor Enqueues, original candidate(t) rootless constructor, coordinator preflight/scalar completion/startup dispatcher/finishPublish consume/cleanup, genuine allocator preparation/publish and transaction callback implementation."
+  ],
+  "reviewer_error": "The07 review checked that WaitThrough can dispatch in startup mode but failed to apply durable-lineage preflight to its existing rootless successors. Its all-callers readiness conclusion was incorrect; original report retained unchanged.",
+  "limits": [
+    "No production repair justified by this failure.",
+    "No repair07 runtime acceptance; six passing normal tops/six children retain exact07 attribution only.",
+    "No race or actual native driver result inferred.",
+    "Q32 RED/ACK0, concurrent containing-admission limitation, F/G/P and native qualification remain unchanged."
+  ]
+}

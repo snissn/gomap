@@ -1,0 +1,71 @@
+{
+  "mode": "READ_ONLY_IMMUTABLE_SOURCE_ADVICE",
+  "reviewer": "/root/ordinary_review",
+  "model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "source_manifest_sha256": "5cde43f24dcc86eaa8c2017bbc6cb0dc81a29e749d9420d27be2ab4f2e4e140d",
+  "source_archive_sha256": "0bcaee68f1b6a058bd358b5096265771d35ba503143ac9f8e255b2c215fad8f4",
+  "inspected_source_sha256": {
+    "TreeDB/node/builder.go": "8a7b341d5b40c97da6131652ab4176ebb8f23519c0182b48037c10116b6022df",
+    "TreeDB/node/builder_work.go": "d1f8fdd6f7af4a4cf3c4a6b221ea9d5e80263abd73545f75d310745005b0951f",
+    "TreeDB/node/builder_columnar_work.go": "961493eae7adab41ef97244a2fe03af2abf1c4198c948fce1d6af2956f64cc08",
+    "TreeDB/node/internal_builder_work.go": "17478dd201bafefe83cddfacbdf550a40c338b9218e927d4fa7de6512a9b9c4a",
+    "TreeDB/zipper/materialized_write_work.go": "5fa7ed027fcab735aab154427f1ed11f4bc03a908b445fc76898bfbab7b84055",
+    "TreeDB/zipper/leaf_merge_work.go": "8fde2fb26ad6828377cf49ccb0816990282e937283c93af12aba9c86d9b93fd6",
+    "TreeDB/zipper/zipper.go": "7f653816183ed1c153f960d53d0bd602721c3e9fb18f4c5bacad25ae49345c71",
+    "TreeDB/mvcc/native_prune_backend_route_v6_test.go": "28dd70502f4ab5b452ba43124b65457112f3ad29ee46f1bc5096af4bf4d5068e"
+  },
+  "extracted_inspected_files_verified": 8,
+  "candidate_edits_by_reviewer": false,
+  "child_symbols": [
+    "Builder.ResetWithOptionsWithWork",
+    "Builder.AddLeafEntryWithRevisionWithWorkAndReserve",
+    "Builder.AddLeafEntryWithRevisionWithWork",
+    "Builder.addColumnarPrefixWithWork",
+    "Builder.prepareColumnarAddScratch",
+    "Builder.FinishNoNodeWithWork",
+    "Builder.packLeafColumnarPrefixV2"
+  ],
+  "formula": {
+    "plain_add": "(p+6,2*p+3*k+v+ValuePtrSize+EntryRevisionSize+64)",
+    "plain_prefix_key_limit": 64,
+    "combined_scratch_max": "(5,q*sizeof(prefixEntry)+2*(65536+sizeof(byteArenaHandle)))",
+    "combined_append": "(6,2*k+v+t+sizeof(prefixEntry)+64)",
+    "combined_pack_entry": "(8,2*(P+ValuePtrSize)+leafColumnarPrefixV2MetaSize+EntryRevisionSize)",
+    "finish": "(2,P+NodeHeaderSize)",
+    "reset_combined": "(3,sizeof(Builder)+1024*sizeof(prefixEntry)) plus actual old-internal clear"
+  },
+  "required_predicates": [
+    "Actual effective flags observed before constructor",
+    "Adaptive leaf encoding false",
+    "No unbounded diagnostic codec fallback",
+    "Columnar implies prefix",
+    "Internal base-delta excluded or separately source-admitted",
+    "Fresh builder or exact old internal scratch bound",
+    "Original combined Reset supplies original entry handle",
+    "Finite plain prefix keys <=64",
+    "Source K/V maxima from actual decoded old leaf+ops",
+    "Original per-page capacity/uint16 bounds and SAME borrowed operand lifetime"
+  ],
+  "conditional_unadmitted_constructor_branches": [
+    {
+      "flags": "LeafColumnar && !LeafPrefixCompression",
+      "source": "builder_columnar_work.go:39; builder.go:329-337",
+      "disposition": "Exclude before Reset or select actual admission seam; later typed Add refusal does not cover constructor"
+    },
+    {
+      "flags": "InternalBaseDelta",
+      "source": "builder.go:339-354",
+      "disposition": "Outside one-leaf child scope; exclude or separately source-admit"
+    }
+  ],
+  "nonclaims": {
+    "numeric_G": false,
+    "runtime_grant": false,
+    "publication": false,
+    "Q32_fit": false,
+    "mutable_source_acceptance": false,
+    "retention_domain_expansion": false
+  },
+  "report_sha256": "82802a4f414fa138a99ec134db33da5b33310e4b273d47272f9adf31bbdc0082"
+}

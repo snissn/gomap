@@ -1,0 +1,27 @@
+{
+  "all_nonselected_paths_byte_identical": true,
+  "unchanged_file_count": 10430,
+  "production_formula_layout_lifetime_unchanged": true,
+  "selected_function_only": "TestMaterializedInputGrowthUsesOriginalFiniteOwnerV6",
+  "selected_file": {
+    "path": "TreeDB/zipper/materialized_input_growth_work_v6_test.go",
+    "before_sha256": "208c37c9bba96463e074223d693c2e75eb680043e1afb27b4361703303de41ec",
+    "after_sha256": "ea579dd51060b5441dc32cf2f3ae544cd118026c55a5871882ad4370170cbaf0",
+    "status": "modified"
+  },
+  "predecessor_raw_and_proposal_preserved": {
+    "proposal_sha256": "7e8a5bc1cb203f96b6f0ca3a4da6212eed3a007567419f93039e66d7c8b32a2d",
+    "raw_summary_sha256": "244bea9820129610761e01df9bbb427a0b4bc177425110bb09d00321267084bb",
+    "failed_run_log_sha256": "630e796268c3fa878e407480df3b711f7404ef751f88f9ecb940fbb9acbf060f"
+  },
+  "passed_normal_reuse": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source-repair01/reused-controls.json",
+  "successor_commands": {
+    "count": 10,
+    "normal_top": 11,
+    "normal_children": 25,
+    "race_top": 28,
+    "race_children": 58,
+    "fresh_TMPDIR_per_command": true
+  },
+  "no_runtime_or_gofmt_executed": true
+}

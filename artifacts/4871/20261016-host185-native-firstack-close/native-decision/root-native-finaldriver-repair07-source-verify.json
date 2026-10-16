@@ -1,0 +1,24 @@
+{
+  "utc": "2026-10-16T10:02:02.333718+00:00",
+  "disposition": "EXACT_FROZEN_REPAIR_BYTES_VERIFIED",
+  "packet": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source-repair07",
+  "parent": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source-repair06",
+  "source_files": 10433,
+  "changed_paths": [
+    "TreeDB/internal/rootpublication/native_publication_v6_test.go"
+  ],
+  "unchanged_paths": 10432,
+  "source_manifest_sha256": "398fd377bd569c52341e10cc9c90d6bd0762fec7a2ffc39413b4148d0dfe1750",
+  "source_archive_sha256": "437acc30342c067bd36ab7c4387cc9a9d57dae7d937bc6f931816c56a4a00772",
+  "full_parent_and_successor_archives_verified": true,
+  "exact_patch_reproduced": true,
+  "live_source_equal": true,
+  "raw_index_sha256": "4c6b63357522cd951fd864e661b167f52e6debcd5d5e150e002fdba478f4dbe1",
+  "git_identity": {
+    "HEAD": "0149d78dba2574b09d7119d2631ec78a144e088d",
+    "index_sha256": "07161c1dc6c88fb230c74700b4ddd76b975a613540949423512d6786f7c86823"
+  },
+  "verifier_sha256": "4f448c13918f27e98082f06952ebcfab8ad7e1a30e264509f793e82ebd9b3271",
+  "source_review_separate": true,
+  "runtime_authorized": false
+}

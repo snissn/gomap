@@ -1,0 +1,36 @@
+{
+  "actual_first_refusal": {
+    "cause": "candidateWithEmptyResourceSet constructs an empty durableRootGroup. Begin accepts it, Release rejects before result/clock/transaction processing. t.Helper attributes both errors to the calling test line; raw alone does not distinguish Begin/Release.",
+    "path": "TreeDB/internal/rootpublication/native_publication_v6.go",
+    "predicate": "len(group.members)!=1",
+    "symbol": "Coordinator.ReleaseNativePublicationTurnV6"
+  },
+  "failed_parent_raw": {
+    "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source-repair06/controls/normal-rootpublication-join/run.log",
+    "sha256": "3dd00ae7fe1d5f1e68ae7bc5bceba775f53be1c4aa729f3931e5efea79b999bf",
+    "source_manifest_sha256": "971367d10cfd714f6ff08c552acc2073c4e4982fb918155e416aacb2d0aea05a",
+    "status": "preserved; normal stopped; race and real commands not run"
+  },
+  "minimal_scope": "one existing test file; no production, layout, price, retained owner, error graph or actual finaldriver fixture change",
+  "repair": "Only original test helper file: default realClock; StartupSynchronous scheduler exclusion; genuine existing ordinary PreparedCOW+transaction+candidate fixture; original Enqueue activation, original Consume separately for success, actual Release with same original work. Ambiguity keeps activated transaction unconsumed and verifies original recovery handoff/release.",
+  "scheduling": "startup mode stays enabled throughout. CompleteStartup requires activeDispatch0 and is intentionally not called while receipt lives. WaitThrough registers original waiter/request then dispatchPublication(true); eligibility allows activeDispatch==nativeDispatch after native pending detach. This is the original ordinary engine driven synchronously, not background-scheduler progress.",
+  "secondary_bound": "A genuine singleton with FakeClock and installed timer would require Begin6+Release27=33 in the shared original32 vector. Default realClock requires Begin5+Release26=31. No cap or vector reset added.",
+  "source_bindings": {
+    "TreeDB/freelist/allocator_cow.go": "0be749f18a8ecfc6f5ac4be338055b662e8a8c245bd67989ac46f7679e25ff88",
+    "TreeDB/freelist/generation_v1_txn.go": "04a9692b3937333e761734fa8a0c8b0158d1c61c6b2eeb919d00f53c80fc3571",
+    "TreeDB/internal/rootpublication/coordinator.go": "8d861b321eceea1daa6966b783f9e550bb2189d66c6256a0132f7513848e7ef1",
+    "TreeDB/internal/rootpublication/coordinator_handoff_prepare_test.go": "2ca4c60bbe937800d4fca8a967fb72f0b03765caf3c8163a029da42a5a9db50c",
+    "TreeDB/internal/rootpublication/coordinator_service_work_v6.go": "f7f97fc38178f01d2efc75282f635cb6590b9288df50f9d54afcbd5ecfc48b0c",
+    "TreeDB/internal/rootpublication/durable_root_transaction.go": "8740b9059ed25ff512cb40072a6b62e4c03c059e5706698d8fd514e071cb08a1",
+    "TreeDB/internal/rootpublication/durable_root_transaction_test.go": "a5294f68236e0af1a0f1822f886934c9c190a406bf6550dffdcbacb5f43f1467",
+    "TreeDB/internal/rootpublication/native_publication_join_scrub_v6_test.go": "5409729f46a6f9ee84250842d290f8aa508ddfa5548e6dcdc193d97960e37cdd",
+    "TreeDB/internal/rootpublication/native_publication_v6.go": "0261ac95cb3853f5399e89990acdbd912a4bf8cc84d95700cfd14a2e3fa6e2c0",
+    "TreeDB/internal/rootpublication/native_publication_v6_test.go": "d003918fbd8aba1387e1e8f55133406e20aa2f090f433f35922683af1cf7ea60",
+    "TreeDB/internal/rootpublication/resource_set.go": "ea4775015a3c261007b1682724b8aab9784cdec1528b0fe83a2fc0417bd3944c"
+  },
+  "source_only_limits": "No compiler or test body executed; genuine ordinary fixture Consume invokes allocator/pager callbacks outside synthetic Begin/Release accounting. These controls do not qualify the full native turn/Consume/fence or public Q32 completion.",
+  "superseded_preliminary_causes": [
+    "FakeClock unsupported at Begin is false: admitNativeClockLockedV6 explicitly supports *FakeClock.",
+    "ReleaseNativePublicationTurnV6 does not call AdmitNativePublicationCompletionV6; the separate completion-plan realClock guard was not this helper call chain."
+  ]
+}

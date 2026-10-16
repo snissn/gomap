@@ -1,0 +1,24 @@
+{
+  "archive": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source-repair01/source-frozen.tar.gz",
+  "archive_sha256": "3492a17d4ab432bb8f3089aaba9a8c1ff583a88ca620db1a3747c4d42bc49e5c",
+  "archive_verified_files": 10431,
+  "compile_binary_sha256": "3bb421d581f60b9ab48c2c73adf5c018557e89af32ad018d9c4417afa4bf90c1",
+  "git_identity": {
+    "HEAD": "0149d78dba2574b09d7119d2631ec78a144e088d",
+    "index_sha256": "07161c1dc6c88fb230c74700b4ddd76b975a613540949423512d6786f7c86823"
+  },
+  "go_binary": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+  "go_binary_sha256": "d68b7abbc40d0844f673f6cf06ae3cded225c50437c6454fa37ef178d079fe65",
+  "goroot_VERSION": "go1.26.3\ntime 2026-05-04T20:36:18Z\n",
+  "grant_sha256": "11c99a615dfc15406dd5c3b19e7d67ba1921816b0229731c93721306f324f3a6",
+  "proposed_commands_sha256": "f2f0c5777ca8669da3153032d4d3db74e9ca19858f736ab7b47a3de84fe3d4d2",
+  "runner_pgid": 1277442,
+  "runner_pid": 1277442,
+  "runner_sha256": "49a3d5d1e451ffa63178a51ac898428963a718bef53bef494a0fa1b4803bd668",
+  "selected_test_files": {
+    "TreeDB/mvcc/native_finaldriver_diagnostic_v6_test.go": "7bc58df840d068edd7145043ca017f32c5da861de127eafd2c39cfdb31fd1f23",
+    "TreeDB/mvcc/native_finaldriver_envelope_test.go": "c84d8e74682e0024f963c29283f613e32189e4cdaa5488940bbc063a9d6a7e4f",
+    "TreeDB/mvcc/native_finaldriver_precursor_test.go": "02ecc538748a09db4afbb34df7c06c7523772bb1f9c88fed00cf797b5ab925c1"
+  },
+  "subreaper_verified": true
+}

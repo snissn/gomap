@@ -1,0 +1,97 @@
+{
+  "review_mode": "INTERNAL_READ_ONLY_PRODUCTION_SUBREVIEW",
+  "model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "candidate_edits_by_reviewer": false,
+  "disposition": "ACCEPT",
+  "scope": "nine frozen target files and affected included call chains only",
+  "manifest_sha256": "ebb93dae2e498544ff7ac42540c2a1b81b10cc1f51ebee1a49ac7f521358fe11",
+  "verified_manifest_entries": 356,
+  "baseline_manifest_sha256": "5cde43f24dcc86eaa8c2017bbc6cb0dc81a29e749d9420d27be2ab4f2e4e140d",
+  "target_diff_sha256": "6ddde1927356881bf6ac823d0b8f6cacf7f6cbe7a14fbb7de7c681bad6a2a858",
+  "targets": {
+    "TreeDB/pager/grow_work.go": {
+      "bytes": 27560,
+      "sha256": "a482d1f04cc40bf11112d636f8999f0965adc68003dd1fd4f0e2c3976c6c2bf9",
+      "target": true
+    },
+    "TreeDB/pager/native_growth_admission_v6_test.go": {
+      "bytes": 4719,
+      "sha256": "64763c60878797fffb6f67f1a828c2c05197b01e0952e9ca2d5c1b0532d58863",
+      "target": true
+    },
+    "TreeDB/pager/native_growth_private_cancel_unix_v6_test.go": {
+      "bytes": 2420,
+      "sha256": "a85ec845b4713fd445ae3978a676b490762b58cb1f59d1d4764693b8b9081f87",
+      "target": true
+    },
+    "TreeDB/internal/primaryarena/arena.go": {
+      "bytes": 47378,
+      "sha256": "e4dcaab220f56710d18b0e62a8bad87fdf7818f8c10d4c4fc1e5ca41963eadcd",
+      "target": true
+    },
+    "TreeDB/internal/primaryarena/arena_lookup_admission_v6_test.go": {
+      "bytes": 8397,
+      "sha256": "1b25c8eed58513dff7237964697437977baf4359ebd8dc04befd1b2816e601d5",
+      "target": true
+    },
+    "TreeDB/db/native_mvcc_snapshot_v6.go": {
+      "bytes": 9963,
+      "sha256": "9e65db00cb94f842ecb3ddb082892ca8b7e17cfba3d8c46c77f0609c1a70858d",
+      "target": true
+    },
+    "TreeDB/db/native_snapshot_birth_lookup_v6_test.go": {
+      "bytes": 3253,
+      "sha256": "9cbe23d93f7e055708a58e1efcb858b5dd994793bb052877d871d4697c62934a",
+      "target": true
+    },
+    "TreeDB/db/native_claim_growth_custody_v6_test.go": {
+      "bytes": 3642,
+      "sha256": "39acc039b8551f862f6d413d425ed7262f50bd2b21927ea1f72007274d979f7a",
+      "target": true
+    },
+    "TreeDB/db/primary_slot_custody_v6_test.go": {
+      "bytes": 6081,
+      "sha256": "796e7d5f871377fe4aa8d4dd8887d3fa1b2e48aa1dbd882b26c5a6da624b8b23",
+      "target": true
+    }
+  },
+  "inspected_dependency_hashes": {
+    "TreeDB/db/native_mvcc_seal_preparation_v6.go": "e30088d2ab5ad5810fbe62c28c00495798adff8b133a50d7da7f0255fd930bae",
+    "TreeDB/db/native_mvcc_snapshot_close_v6.go": "56d2268c196d5624f95f78207cdd657e494c227fa467c4bc0c3f93f419c7d4c1",
+    "TreeDB/db/primary_arena_owner_v5.go": "9caf72a6befd8003de73e06db67d7705be6a992a75dbea3d8dec8483f3b6d8c1",
+    "TreeDB/db/pools.go": "e01cb50addc5b4b3b0cb6d75e54b05a5917bef319b38e212d9140f6aca931755",
+    "TreeDB/caching/native_mvcc_prune_v6.go": "5096f9a416f82d4a31962dfdaf3abd8e4d714d75468be9ceb5dad4bc2689b850",
+    "TreeDB/internal/primaryarena/read_root_v6.go": "75654de9e97fcaace9a1465872144b57c1bafab72956ca1b00c463a1470a278e",
+    "TreeDB/internal/primaryarena/release_queue.go": "8d21fd802582b4b00b507f228b91b2ad54faaf6f14827adc4b395168c15d9e6e",
+    "TreeDB/internal/retainedalloc/owner_atomic_remove_work.go": "a872ad2fd9c0e2d640d431417c9af259c3e1fe96cc0d0faf0e81834cfc59c41b",
+    "TreeDB/internal/retainedalloc/owner_work.go": "d4727141cffdc31205bc99854746a91fe10e19bdc628f643206d9ca94fd8aabe",
+    "TreeDB/internal/retainedalloc/owner_growth_work.go": "74735769ff46c27445a03ae785dad4e1a8ae3ecf84358d039486e0de9dcabf35",
+    "TreeDB/internal/retainedalloc/owner_enroll_work.go": "41e6e2370ea5df1c5965dc40146ddf5ecd61d824b48e0987076aeb22e8a5a054",
+    "TreeDB/internal/retainedalloc/owner.go": "aa2725812345880c152932466ee45dfa2d31b69562309595afb98d354e725c3d",
+    "TreeDB/internal/memtable/native_retention_work.go": "0863e195a9720e1490ddb1e0c6599533510de1523fb3f09a4ca1d7debb541fba",
+    "TreeDB/pager/pager.go": "8c08e6ce5abcef3502bb3ea7315bf2be1837b769d26fb50656571921369da6c5",
+    "AGENTS.md": "320c5ed8a179e15886cd58832f76d7906f5d76c189500e756f0adb957d6ecf99",
+    "TreeDB/AGENTS.md": "1cb6426fe7a764a79f8e97f7e164669232c350fb8ce2e7850558e0b7f42bb854",
+    "CONTRIBUTING.md": "7842035e4e975b6010532c52ebf55a562f92a5d379f14fa0f2a0de91c5744b9b"
+  },
+  "policy_hashes": {
+    "root-native-finaldriver-primary-growth-selection.md": "0ff0610cebc07d95394c2ba77f33209dd81761a8bbca6d74b56792a371fe620b",
+    "root-native-finaldriver-snapshot-birth-lookup-selection.md": "04c371a95cd57e07f13775ad28b87faae6c43b9a02715b39b84fc85ccdc59416",
+    "root-native-finaldriver-arena-lookup-admission-addendum.md": "870114afaaa8597959eef92ed5ba649b8c3616c2ebc614fb8e2b2886d3f50852"
+  },
+  "blocking_findings": [],
+  "test_assessment": "source reviewed; no execution authorized or performed",
+  "runtime_pass_claim": false,
+  "full_final_source_acceptance": false,
+  "numeric_allowance": null,
+  "native_publication_accepted": false,
+  "q32_fit": false,
+  "limitations": [
+    "global source remains mutable",
+    "no current compiler/test/race/ELF binding in this review",
+    "new tests do not independently cover nonzero old pager backing replacement under concrete binding, genuine unmap failure, postbirth manager failure or full owned-cache callback concurrency",
+    "AcquireAfterAdmission callback requires documented non-reentry contract"
+  ],
+  "report_md_sha256": "647e2d8db099bf74c2b87e1452c94475e192a7a4c03c176ce4e79711057269a1"
+}

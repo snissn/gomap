@@ -1,0 +1,165 @@
+{
+  "adopted_children_reaped": [],
+  "child_RUN_count": 6,
+  "elapsed_seconds": 11.99375112587586,
+  "ended_utc": "2026-10-16T10:10:50.320101+00:00",
+  "exit_code": 0,
+  "expected_child_RUN_names": [
+    "TestNativePublicationJoinAcceptsScrubbedOriginalV6/success",
+    "TestNativePublicationJoinAcceptsScrubbedOriginalV6/first-error",
+    "TestNativePublicationJoinConcurrentScrubbedOriginalV6/two-joins",
+    "TestNativePublicationJoinConcurrentScrubbedOriginalV6/join-and-original-close",
+    "TestNativePublicationJoinRetainsLinkedCompletionV6/unfenced",
+    "TestNativePublicationJoinRetainsLinkedCompletionV6/fenced-first-error"
+  ],
+  "group_and_children_empty": true,
+  "leader_joined": true,
+  "missing_named_top_RUN_PASS": [],
+  "name": "race-rootpublication-join",
+  "observed_group_processes": [
+    {
+      "comm": "go",
+      "pgid": 1359193,
+      "pid": 1359193,
+      "ppid": 1358966,
+      "session": 1359193,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1359193,
+      "pid": 1359212,
+      "ppid": 1359193,
+      "session": 1359193,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1359193,
+      "pid": 1359286,
+      "ppid": 1359193,
+      "session": 1359193,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1359193,
+      "pid": 1359297,
+      "ppid": 1359193,
+      "session": 1359193,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1359193,
+      "pid": 1359311,
+      "ppid": 1359193,
+      "session": 1359193,
+      "state": "R"
+    },
+    {
+      "comm": "link",
+      "pgid": 1359193,
+      "pid": 1359323,
+      "ppid": 1359193,
+      "session": 1359193,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1359193,
+      "pid": 1359334,
+      "ppid": 1359193,
+      "session": 1359193,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1359193,
+      "pid": 1359342,
+      "ppid": 1359193,
+      "session": 1359193,
+      "state": "S"
+    },
+    {
+      "comm": "rootpublication",
+      "pgid": 1359193,
+      "pid": 1359352,
+      "ppid": 1359193,
+      "session": 1359193,
+      "state": "S"
+    }
+  ],
+  "pgid": 1359193,
+  "pid": 1359193,
+  "raw_log_sha256": "2d19bb3e13f5cd580edb9b21f6d52ea128b694e1ceccd272dc1130f1fb6b1d0e",
+  "remaining_direct_or_adopted_children": [],
+  "remaining_group_members": [],
+  "required_top_level_names": [
+    "TestNativePublicationJoinAcceptsScrubbedOriginalV6",
+    "TestNativePublicationJoinRetainsLinkedCompletionV6",
+    "TestNativePublicationJoinConcurrentScrubbedOriginalV6",
+    "TestNativePublicationPausedFinishAllowsOrdinaryDurableSuccessor",
+    "TestNativePublicationStopJoinsIdleOriginalBeforeSchedulerStop",
+    "TestNativePublicationLateRefusalRequiresCustodyWithoutPoisoningSuccessor",
+    "TestNativePublicationAmbiguityCannotReleaseTurnAsSuccess",
+    "TestNativePublicationStopSettlesFailedOriginalAndStillStops"
+  ],
+  "residual_observed_before_cleanup": false,
+  "signals": [],
+  "source_after_equals_frozen": true,
+  "source_before_after_equal": true,
+  "source_before_equals_frozen": true,
+  "started_utc": "2026-10-16T10:10:38.326351+00:00",
+  "status": "PASS",
+  "stop_reasons": [],
+  "subreaper_enabled": true,
+  "test_FAIL_names": [],
+  "test_PASS_names": [
+    "TestNativePublicationJoinAcceptsScrubbedOriginalV6",
+    "TestNativePublicationJoinAcceptsScrubbedOriginalV6/success",
+    "TestNativePublicationJoinAcceptsScrubbedOriginalV6/first-error",
+    "TestNativePublicationJoinRetainsLinkedCompletionV6",
+    "TestNativePublicationJoinRetainsLinkedCompletionV6/unfenced",
+    "TestNativePublicationJoinRetainsLinkedCompletionV6/fenced-first-error",
+    "TestNativePublicationJoinConcurrentScrubbedOriginalV6",
+    "TestNativePublicationJoinConcurrentScrubbedOriginalV6/two-joins",
+    "TestNativePublicationJoinConcurrentScrubbedOriginalV6/join-and-original-close",
+    "TestNativePublicationPausedFinishAllowsOrdinaryDurableSuccessor",
+    "TestNativePublicationStopJoinsIdleOriginalBeforeSchedulerStop",
+    "TestNativePublicationLateRefusalRequiresCustodyWithoutPoisoningSuccessor",
+    "TestNativePublicationAmbiguityCannotReleaseTurnAsSuccess",
+    "TestNativePublicationStopSettlesFailedOriginalAndStillStops"
+  ],
+  "test_RUN_names": [
+    "TestNativePublicationJoinAcceptsScrubbedOriginalV6",
+    "TestNativePublicationJoinAcceptsScrubbedOriginalV6/success",
+    "TestNativePublicationJoinAcceptsScrubbedOriginalV6/first-error",
+    "TestNativePublicationJoinRetainsLinkedCompletionV6",
+    "TestNativePublicationJoinRetainsLinkedCompletionV6/unfenced",
+    "TestNativePublicationJoinRetainsLinkedCompletionV6/fenced-first-error",
+    "TestNativePublicationJoinConcurrentScrubbedOriginalV6",
+    "TestNativePublicationJoinConcurrentScrubbedOriginalV6/two-joins",
+    "TestNativePublicationJoinConcurrentScrubbedOriginalV6/join-and-original-close",
+    "TestNativePublicationPausedFinishAllowsOrdinaryDurableSuccessor",
+    "TestNativePublicationStopJoinsIdleOriginalBeforeSchedulerStop",
+    "TestNativePublicationLateRefusalRequiresCustodyWithoutPoisoningSuccessor",
+    "TestNativePublicationAmbiguityCannotReleaseTurnAsSuccess",
+    "TestNativePublicationStopSettlesFailedOriginalAndStillStops"
+  ],
+  "test_SKIP_names": [],
+  "timeout": false,
+  "tmp_write_read_unlink_preflight": true,
+  "top_level_RUN_names": [
+    "TestNativePublicationJoinAcceptsScrubbedOriginalV6",
+    "TestNativePublicationJoinRetainsLinkedCompletionV6",
+    "TestNativePublicationJoinConcurrentScrubbedOriginalV6",
+    "TestNativePublicationPausedFinishAllowsOrdinaryDurableSuccessor",
+    "TestNativePublicationStopJoinsIdleOriginalBeforeSchedulerStop",
+    "TestNativePublicationLateRefusalRequiresCustodyWithoutPoisoningSuccessor",
+    "TestNativePublicationAmbiguityCannotReleaseTurnAsSuccess",
+    "TestNativePublicationStopSettlesFailedOriginalAndStillStops"
+  ],
+  "top_level_pass_count": 8,
+  "unexpected_top_RUN": []
+}

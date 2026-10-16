@@ -1,0 +1,37 @@
+{
+  "mode": "INDEPENDENT_READ_ONLY_ADVICE",
+  "reviewer": "/root/ordinary_review",
+  "model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "candidate_edits": false,
+  "source_manifest_sha256": "a2ffdb13492ee217c892745f3cc3a6ce02ba82fbaeb03023a2f0496a38ce5387",
+  "source_archive_sha256": "896a8b1d53bcad78128a126106485df12ace7d7062c8132b921a3b20795b3771",
+  "source_files": {
+    "TreeDB/db/native_mvcc_final_publication_v6.go": "8b36f28459b30a52cc0d3f7fa07c79138db1213c48c476c8c19c1963543b6839",
+    "TreeDB/db/native_mvcc_final_basis_v6.go": "db40776e4d6183121b768298325d68615f0946e03f5a22e01d4dba986318820b",
+    "TreeDB/db/native_publication_remainder_v6.go": "8a8b84445dda87a651f88c78842aa633376b01f524d4ae23b0e70f028af5a370",
+    "TreeDB/db/primary_authority_scope_v6.go": "04ebc049d24a42a3fce89fed5cb3e2caa5cba04fe1010abc83b7243da46274ff",
+    "TreeDB/freelist/allocator_publication_work_v6.go": "1bc722c85e4aaad079f11683183707d2ef2a91b0a841e4678f4e4d1aa9cb03a9",
+    "TreeDB/db/native_mvcc_allocator_preparation_v6.go": "7b1d5fa6f53911ea15819772d59e3c7999f2e6fb7d0141a2feb50bef73c03803",
+    "TreeDB/internal/rootpublication/primary_empty_candidate_work_v6.go": "554af180803b7f9fd52f5e89082bf7d4974cafe43308d6fe0c7eeb2a3a814af4",
+    "TreeDB/internal/rootpublication/native_publication_v6.go": "3e1cb7dc7beb72c3962fbd83398adc5f523868d0eb4767b89df9be4440443d15",
+    "TreeDB/mvcc/native_finaldriver_envelope_test.go": "c84d8e74682e0024f963c29283f613e32189e4cdaa5488940bbc063a9d6a7e4f",
+    "TreeDB/mvcc/native_finaldriver_diagnostic_v6_test.go": "7b2d04223f54617e3adfa29467671c2819a8d1a9cd00ee923303d9568b8dd396"
+  },
+  "recommendation": "B as explicit contract inquiry only; no revised allowance selected",
+  "first_decision": "Whether protected-geometry C(theta) with explicit supported bound/progress policy is permitted, or atomic control must remain history-independent.",
+  "if_history_independent_first_source_prerequisite": "Same canonical ledger committed/prefix-detach transition and exact per-ID/burned-coverage cleanup in original charged Finish; not claimed sufficient alone.",
+  "unclosed": [
+    "General protected geometry/producers for atomic cut",
+    "Continuing-writer compatible finalization and progress",
+    "General retained union and future Finish/Close costs",
+    "F6 actual Close defect",
+    "C1/C3/all19/input32/resources16/files17/twoindex/fault/format/shrink/performance"
+  ],
+  "original_q32_red_retained": true,
+  "diagnostic_G_not_reused": true,
+  "numeric_allowance": null,
+  "runtime_grant": false,
+  "source_implementation_grant": false,
+  "qualification": false
+}

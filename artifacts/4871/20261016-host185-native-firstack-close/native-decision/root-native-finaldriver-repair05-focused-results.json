@@ -1,0 +1,62 @@
+{
+  "utc": "2026-10-16T09:40:52.510740+00:00",
+  "disposition": "ACCEPT_FOCUSED_SOURCE_CONTROLS",
+  "source_manifest_sha256": "a2ffdb13492ee217c892745f3cc3a6ce02ba82fbaeb03023a2f0496a38ce5387",
+  "independent_source_review_sha256": "e79e1df35a7e81de61086fea7f44a74bc612e76a75779ad05100ce6a78ac501e",
+  "results": [
+    {
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source-repair05/controls/normal-rootpublication-rollback",
+      "raw_log_sha256": "cd2b84b77bb4e21f0143646199c2d36471fe0a388e0dae10652c1476bdd58388",
+      "result_sha256": "03ec55c5b9b6a729a60ea900874bd5c9a5abd652291420ac5aca6d73a0a2731c",
+      "verified_PASS_tests": [
+        "TestConstructedPrimaryActivationRollbackPreservesCustodyV6",
+        "TestConstructedPrimaryActivationRollbackPreservesCustodyV6/ordinary",
+        "TestConstructedPrimaryActivationRollbackPreservesCustodyV6/native-work",
+        "TestConstructedPrimaryActivationRollbackPreservesCustodyV6/native-rollback-failure",
+        "TestEnqueueBuiltValidationAndActivationFailurePreserveFinalLease",
+        "TestDurableRootActivationFailureRollsBackOwnershipBeforeVisibility",
+        "TestNativePreparedAbortUsesOriginalBuilderOrCandidateReceiptV6",
+        "TestNativePreparedAbortUsesOriginalBuilderOrCandidateReceiptV6/builder",
+        "TestNativePreparedAbortUsesOriginalBuilderOrCandidateReceiptV6/candidate"
+      ],
+      "harness_inventory_corrected": false
+    },
+    {
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source-repair05/controls/normal-mvcc-envelope",
+      "raw_log_sha256": "ab338b501b9351bdf11d3514649f03e38e0157376f61355c1cb7e5bcebd48f72",
+      "result_sha256": "82d550bd53219309d2f0cc2a91b50e7dd54d4ca8e98f33769b936f2ae77c377b",
+      "verified_PASS_tests": [
+        "TestNativeFinaldriverEnvelopeCheckedArithmeticV6",
+        "TestNativeFinaldriverEnvelopeCheckedArithmeticV6/supported-selected-shape",
+        "TestNativeFinaldriverEnvelopeCheckedArithmeticV6/sum",
+        "TestNativeFinaldriverEnvelopeCheckedArithmeticV6/multiply",
+        "TestNativeFinaldriverEnvelopeCheckedArithmeticV6/missing-shape"
+      ],
+      "harness_inventory_corrected": true
+    },
+    {
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source-repair05/focused-resume01/controls/race-rootpublication-rollback",
+      "raw_log_sha256": "a82607a0f5e559d3b2235765e99543193c74bf2888f4c089c2860760bd2727f6",
+      "result_sha256": "0ad697e5de340e2ecd7837a99f37e855dc9ac6a67b56d39677924729d29bc623",
+      "verified_PASS_tests": [
+        "TestConstructedPrimaryActivationRollbackPreservesCustodyV6",
+        "TestConstructedPrimaryActivationRollbackPreservesCustodyV6/ordinary",
+        "TestConstructedPrimaryActivationRollbackPreservesCustodyV6/native-work",
+        "TestConstructedPrimaryActivationRollbackPreservesCustodyV6/native-rollback-failure",
+        "TestEnqueueBuiltValidationAndActivationFailurePreserveFinalLease",
+        "TestDurableRootActivationFailureRollsBackOwnershipBeforeVisibility",
+        "TestNativePreparedAbortUsesOriginalBuilderOrCandidateReceiptV6",
+        "TestNativePreparedAbortUsesOriginalBuilderOrCandidateReceiptV6/builder",
+        "TestNativePreparedAbortUsesOriginalBuilderOrCandidateReceiptV6/candidate"
+      ],
+      "harness_inventory_corrected": false
+    }
+  ],
+  "normal_top": 5,
+  "normal_child": 9,
+  "race_top": 4,
+  "race_child": 5,
+  "original_harness_STOP_preserved": true,
+  "inventory_correction_sha256": "4fa99b3b7f5a686e47de747a9c1f6e542cc3d829b5289ba31c9aa93cf0b41604",
+  "actual_driver_executed": false
+}

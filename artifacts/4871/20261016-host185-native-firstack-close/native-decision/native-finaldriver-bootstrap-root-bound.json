@@ -1,0 +1,56 @@
+{
+  "disposition": "SOURCE_BOUND_AVAILABLE_FOR_SELECTED_PREFIX",
+  "review_mode": "INTERNAL_SUBAGENT_READ_ONLY_ADVICE",
+  "reviewer": "/root/ordinary_review",
+  "model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "candidate_edits_by_reviewer": false,
+  "source_manifest_sha256": "5cde43f24dcc86eaa8c2017bbc6cb0dc81a29e749d9420d27be2ab4f2e4e140d",
+  "source_archive_sha256": "0bcaee68f1b6a058bd358b5096265771d35ba503143ac9f8e255b2c215fad8f4",
+  "source_file_count": 10389,
+  "source_tree": "e523999e97e0af545da0072359cd1ac2fc57b5eb",
+  "inputs": {
+    "native-main-integration/private-ledger-cursor-inventory-final/source-final.json": "5cde43f24dcc86eaa8c2017bbc6cb0dc81a29e749d9420d27be2ab4f2e4e140d",
+    "native-decision/root-native-finaldriver-source-selection.md": "c3b1e699386b05bf79acdb2e60c444d622ec506bbee6e95b5630a08f243c2d27",
+    "native-decision/native-finaldriver-current-plan.md": "8b3031123ee30f42304f8de1bf7de2093782c29e8e2e1a3edab6fc7b403dfc45",
+    "native-decision/native-finaldriver-successor-lookup-advice.md": "7bab422b16f9361c549800e5436a35821ee4f6a604d694d8e7f718b95663ed27"
+  },
+  "inspected_source_hashes": {
+    "TreeDB/db/native_mvcc_current_delete_v6.go": "5dbc2fb4c8993ed43075650989d63616ae9afd4310b18aaee94c1f9443a9f600",
+    "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go": "7b8790f943894d5c571bcfd58742d8d61e0c07ee9b59a7b23a7a76a0dd141f3a",
+    "TreeDB/internal/primaryarena/read_root_v6.go": "ebb053bf4be6d291d6fb38aed2969572c06cc397337ad07b526e1a120567141c",
+    "TreeDB/pager/primary_read_root_v6.go": "2c3c8041a53ef9cf3cb42b83c44ac08df7bf7573ccb856affe60489f10611083",
+    "TreeDB/db/native_mvcc_root_preparation_v6.go": "25c3d21cf4978dfb27e95eaa1a1617e42a700f2afd490aa9e82e592b853024fd",
+    "TreeDB/db/native_mvcc_materialized_write_v6.go": "94cdb8ab57f7f3c85d145e7f3f22c46720cf1aec4b88df6ad93706483947a9a1",
+    "TreeDB/zipper/materialized_write_work.go": "5fa7ed027fcab735aab154427f1ed11f4bc03a908b445fc76898bfbab7b84055",
+    "TreeDB/mvcc/prune_cursor_v6.go": "67741d492a926d94dc347f2a073f883b2bf2d793334e1de79095d46bf58c9cba",
+    "TreeDB/caching/native_mvcc_prune_v6.go": "de3f7cb5b0d23988bde5c12b0bad9c2c27c8b36926618fbee9b83cefcf4a0965",
+    "TreeDB/db/primary_capsule_runtime_v6.go": "b38015acaa0836307bc6107f4fc6e03cabf29b97b9d11c9c7acf1e1ee7a26106"
+  },
+  "bound": {
+    "native_additive_maximum": 1,
+    "Npre": "SAME pager immutableReadRoots.count, sampled after fixture seed/checkpoint/reopen and before fresh cursor construction",
+    "Nready_hat": "checked_add(Npre, 1)",
+    "after_one_selected_ordinary_successor": "checked_add(Npre, 5)",
+    "all_link_visits_including_nil_sentinel": "checked_add(Npre, 6)"
+  },
+  "conditions": [
+    "Fresh original cursor, exactly one original frame/B1 and first ready/Fence boundary",
+    "No other writers, maintenance, reopen, replacement cursor, or second batch before ready",
+    "The prior successor advice applies unchanged to the ONE selected CommitAt(34, fresh key, durable value, CommitDurable)",
+    "All arithmetic checked; refusals and incomplete observation stay refusals, never zero"
+  ],
+  "proof": [
+    "Native constructor returns the SAME partially constructed DurableRootTransaction; caller retains it before ready/error inspection. Resume reuses it.",
+    "Construction root nonzero short-circuits further construction. Exactly one linked entry/count increment follows all potentially refusing work and aggregate admission; no post-install ready/error refusal exists.",
+    "Root preparation and promotion retain/register existing source/constructed references; materialized output builds DATA pages. None creates another RAM read-root node on this selected route.",
+    "Failed pre-install attempts add zero nodes; an installed but abandoned retained node is the SAME sole node until original removal. Existing unsealed/failed entries are included in Npre count."
+  ],
+  "limitations": [
+    "Advice only; no execution or source mutation.",
+    "No numeric work/retention allowance, complete G, Finish total, publication acceptance or Q32 fit.",
+    "Bound does not cover second batch/fresh replacement cursor/extra producers/reopen.",
+    "Existing Q32 refusal/ACK0 and native publication nonqualification unchanged."
+  ],
+  "findings": []
+}

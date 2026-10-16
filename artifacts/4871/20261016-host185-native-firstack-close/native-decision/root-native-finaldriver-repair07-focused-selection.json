@@ -1,0 +1,23 @@
+{
+  "utc": "2026-10-16T10:05:11.492421+00:00",
+  "scope": "focused-finaldriver-correctness-controls",
+  "actual_native_driver_authorized": false,
+  "source_manifest_sha256": "398fd377bd569c52341e10cc9c90d6bd0762fec7a2ffc39413b4148d0dfe1750",
+  "source_archive_sha256": "437acc30342c067bd36ab7c4387cc9a9d57dae7d937bc6f931816c56a4a00772",
+  "proposed_commands_sha256": "6d01ad41bd3173c04ae648aa3498d92384402f2743d8fa1892b540b11a0dbd90",
+  "runner_sha256": "e52b7847ff89cb65978c49cd9cc5b91c1d7c8f2f0f3ffae9fe3e23cef292b642",
+  "git_identity": {
+    "HEAD": "0149d78dba2574b09d7119d2631ec78a144e088d",
+    "index_sha256": "07161c1dc6c88fb230c74700b4ddd76b975a613540949423512d6786f7c86823"
+  },
+  "authorized_command_names": [
+    "normal-rootpublication-join",
+    "race-rootpublication-join"
+  ],
+  "source_verification": {
+    "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-finaldriver-repair07-source-verify.json",
+    "sha256": "126ec4efa812ba94d4c0ba56ead151a419dfbff1a218296b9cf303d589d3c0b2"
+  },
+  "first_failure_stop": true,
+  "purpose": "Original canonical live-list join fix, with real ordinary allocator-backed transaction fixtures for all shared helper users; focused normal/race only. No actual native driver."
+}

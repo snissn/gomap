@@ -1,0 +1,18 @@
+{
+  "archive_and_live_verified_files": 10431,
+  "one_test_only_changed": [
+    "TreeDB/zipper/materialized_input_growth_work_v6_test.go"
+  ],
+  "production_unchanged": true,
+  "index_unchanged": true,
+  "proposal_only_changes_selection_and_fresh_TMPDIR": true,
+  "reused_pass_top_child": [
+    17,
+    33
+  ],
+  "selection": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-finaldriver-focused-repair01-selection.json",
+  "selection_sha256": "b1678b07f8dc39004b2512ec86bb111b3c151fbf8559b0d68dec2e5b26bccb05",
+  "runner": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-focused-controls/run-controls-repair01.py",
+  "runner_sha256": "e52b7847ff89cb65978c49cd9cc5b91c1d7c8f2f0f3ffae9fe3e23cef292b642",
+  "actual_driver_authorized": false
+}

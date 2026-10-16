@@ -1,0 +1,31 @@
+{
+  "actual_native_driver_authorized": false,
+  "all_authorized_pass": true,
+  "all_groups_empty": true,
+  "commands_executed": 2,
+  "commands_not_executed": [],
+  "completed_utc": "2026-10-16T10:10:51.266258+00:00",
+  "git_identity_still_frozen": true,
+  "native_publication_runtime": false,
+  "public_status": "Q32 RED/ACK0; no allowance",
+  "results": [
+    {
+      "exit_code": 0,
+      "name": "normal-rootpublication-join",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source-repair08/controls/normal-rootpublication-join/result.json",
+      "status": "PASS"
+    },
+    {
+      "exit_code": 0,
+      "name": "race-rootpublication-join",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source-repair08/controls/race-rootpublication-join/result.json",
+      "status": "PASS"
+    }
+  ],
+  "source_files": 10433,
+  "source_manifest_sha256": "824fa0286c45825ff1fdfb9b7a4e087950887a329eb68388281ef1f5d625fca0",
+  "source_still_frozen": true,
+  "stopped_at_first_failure": false,
+  "top_pass_normal": 8,
+  "top_pass_race": 8
+}

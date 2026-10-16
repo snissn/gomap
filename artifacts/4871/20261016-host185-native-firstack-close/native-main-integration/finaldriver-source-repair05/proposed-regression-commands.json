@@ -1,0 +1,126 @@
+{
+  "commands": [
+    {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "-parallel=1",
+        "-count=1",
+        "-v",
+        "-timeout=3m",
+        "-run",
+        "^(TestConstructedPrimaryActivationRollbackPreservesCustodyV6|TestDurableRootActivationFailureRollsBackOwnershipBeforeVisibility|TestEnqueueBuiltValidationAndActivationFailurePreserveFinalLease|TestNativePreparedAbortUsesOriginalBuilderOrCandidateReceiptV6)$",
+        "./TreeDB/internal/rootpublication"
+      ],
+      "behavior": "real original constructed PRIMARY/callback activation refusal; no successful native enqueue/adoption/publication; ordinary and work-bearing rollback, sticky injected rollback error, original finite abort plus legacy controls",
+      "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+      "env": {
+        "CGO_ENABLED": "1",
+        "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+        "GODEBUG": "",
+        "GOENV": "off",
+        "GOFLAGS": "",
+        "GOGC": "100",
+        "GOMAXPROCS": "2",
+        "GOMEMLIMIT": "8GiB",
+        "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+        "GOPROXY": "off",
+        "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+        "GOSUMDB": "off",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off",
+        "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source-repair05/controls/normal-rootpublication-rollback/tmp"
+      },
+      "executed": false,
+      "expected_child_count": 5,
+      "expected_top_level_count": 4,
+      "name": "normal-rootpublication-rollback",
+      "outer_timeout_seconds": 600,
+      "required_child_tests": {
+        "TestConstructedPrimaryActivationRollbackPreservesCustodyV6": [
+          "ordinary",
+          "native-work",
+          "native-rollback-failure"
+        ],
+        "TestNativePreparedAbortUsesOriginalBuilderOrCandidateReceiptV6": [
+          "builder",
+          "candidate"
+        ]
+      },
+      "required_top_level_tests": [
+        "TestConstructedPrimaryActivationRollbackPreservesCustodyV6",
+        "TestDurableRootActivationFailureRollsBackOwnershipBeforeVisibility",
+        "TestEnqueueBuiltValidationAndActivationFailurePreserveFinalLease",
+        "TestNativePreparedAbortUsesOriginalBuilderOrCandidateReceiptV6"
+      ]
+    },
+    {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "-parallel=1",
+        "-count=1",
+        "-v",
+        "-timeout=3m",
+        "-race",
+        "-run",
+        "^(TestConstructedPrimaryActivationRollbackPreservesCustodyV6|TestDurableRootActivationFailureRollsBackOwnershipBeforeVisibility|TestEnqueueBuiltValidationAndActivationFailurePreserveFinalLease|TestNativePreparedAbortUsesOriginalBuilderOrCandidateReceiptV6)$",
+        "./TreeDB/internal/rootpublication"
+      ],
+      "behavior": "real original constructed PRIMARY/callback activation refusal; no successful native enqueue/adoption/publication; ordinary and work-bearing rollback, sticky injected rollback error, original finite abort plus legacy controls",
+      "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+      "env": {
+        "CGO_ENABLED": "1",
+        "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+        "GODEBUG": "",
+        "GOENV": "off",
+        "GOFLAGS": "",
+        "GOGC": "100",
+        "GOMAXPROCS": "2",
+        "GOMEMLIMIT": "8GiB",
+        "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+        "GOPROXY": "off",
+        "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+        "GOSUMDB": "off",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off",
+        "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source-repair05/controls/race-rootpublication-rollback/tmp"
+      },
+      "executed": false,
+      "expected_child_count": 5,
+      "expected_top_level_count": 4,
+      "name": "race-rootpublication-rollback",
+      "outer_timeout_seconds": 600,
+      "required_child_tests": {
+        "TestConstructedPrimaryActivationRollbackPreservesCustodyV6": [
+          "ordinary",
+          "native-work",
+          "native-rollback-failure"
+        ],
+        "TestNativePreparedAbortUsesOriginalBuilderOrCandidateReceiptV6": [
+          "builder",
+          "candidate"
+        ]
+      },
+      "required_top_level_tests": [
+        "TestConstructedPrimaryActivationRollbackPreservesCustodyV6",
+        "TestDurableRootActivationFailureRollsBackOwnershipBeforeVisibility",
+        "TestEnqueueBuiltValidationAndActivationFailurePreserveFinalLease",
+        "TestNativePreparedAbortUsesOriginalBuilderOrCandidateReceiptV6"
+      ]
+    }
+  ],
+  "first_failure_stop": true,
+  "normal_before_race": true,
+  "selected_test_files": {
+    "TreeDB/internal/rootpublication/constructed_activation_rollback_v6_test.go": "4bde2a0ee0c873f1e98430fb052434f4bef61f561aafa2bb3db7933c8c0b9cd7",
+    "TreeDB/internal/rootpublication/coordinator_handoff_prepare_test.go": "2ca4c60bbe937800d4fca8a967fb72f0b03765caf3c8163a029da42a5a9db50c",
+    "TreeDB/internal/rootpublication/durable_root_transaction_test.go": "a5294f68236e0af1a0f1822f886934c9c190a406bf6550dffdcbacb5f43f1467",
+    "TreeDB/internal/rootpublication/primary_prepared_abort_work_v6_test.go": "c01f4b4e80c22cac4398c8034b10a59c97f270e68f183d5c7bff9493c551a542"
+  },
+  "source_archive_sha256": "896a8b1d53bcad78128a126106485df12ace7d7062c8132b921a3b20795b3771",
+  "source_manifest_sha256": "a2ffdb13492ee217c892745f3cc3a6ce02ba82fbaeb03023a2f0496a38ce5387",
+  "status": "PROPOSED_NOT_SELECTED_UNEXECUTED"
+}

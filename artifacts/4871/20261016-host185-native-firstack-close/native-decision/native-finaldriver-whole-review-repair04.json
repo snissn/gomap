@@ -1,0 +1,50 @@
+{
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW",
+  "actual_reviewer_model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "candidate_edits_by_reviewer": false,
+  "hosted_model_routing_unavailability": "Manual hosted review cannot pin the required exact model; no hosted review requested.",
+  "source_verdict": "ACCEPT",
+  "scope": "Conditional exact-source diagnostic fixture readiness; F4 resolution composed with unchanged prior connected production/formula reviews. Not runtime or native publication acceptance.",
+  "source_manifest_sha256": "a38583301e50103c204b47563bed43385908705bbcc1db2eb4c4105a05e099bd",
+  "source_archive_sha256": "b0b3cf3ddcca6517d41ea33e3860437e38ba3cdbd206dda6af3831b96553f300",
+  "source_files": 10431,
+  "archive_all_members_match_manifest": true,
+  "parent_manifest_sha256": "8f644d53679cc584cc241dd517dd2ccdf16f6e4c8899fa62819c3a520214b2cb",
+  "exact_changed_paths": [
+    "TreeDB/mvcc/native_finaldriver_diagnostic_v6_test.go"
+  ],
+  "changed_file_sha256": "fd8908784bcd9b462c4ecd58ad82c21a2eb0b737dcf05b808275aaa8e3cb0b70",
+  "delta_sha256": "330e03687fb03d4b5809373391f986e2c578be4c866d50aa4d68b14f9bb53892",
+  "unchanged_files": 10430,
+  "F4": "RESOLVED in source: source-derived physical key41/value9 before cursor; exact tagged physical oracles and independent held-reader cancel equality.",
+  "checked_rows": {
+    "old_baseline": "lines71-72 require recordValueV1||1",
+    "floor": "lines76-80 build own floor tag + big-endian uint64(32), exact pre-cursor check;292-293 exact reopen",
+    "bound": "lines102-104 derive max(oldKey,floorKey)=41, max(verified oldValue2,floorRecord9)=9 before cursor; known successor key36/value6 also within maxima",
+    "cancel": "lines151-159 read selectedExpected from live original held Snapshot before Close, exact current DATA equality afterward",
+    "raw_expectations": "line191 tagged successor;288 tagged32/33;296 tagged successor",
+    "invariants": "Original limits, ready guard, genuine detached Finish custody, held-reader/successor schedule, onceACK and Close/reopen unchanged."
+  },
+  "source_blockers": [],
+  "artifact_findings": [
+    {
+      "id": "P1",
+      "severity": "pre-launch metadata correction",
+      "path": "native-main-integration/finaldriver-source-repair04/proposed-real-commands.json:selected_test_files",
+      "actual": "diagnostic hash remains repair03 79f33a8f379eee962b84152207f3ab10bade1dbf44c6eb8d5f07d08230c887d4",
+      "required": "Bind actual repair04 diagnostic fd8908784bcd9b462c4ecd58ad82c21a2eb0b737dcf05b808275aaa8e3cb0b70 before root selects/runs. No source change needed.",
+      "source_acceptance_affected": false
+    }
+  ],
+  "inspected": [
+    "Full source archive every file hash versus manifest; full manifest delta versus repair03; full changed diagnostic file and exact patch; README/freeze/invariance/physical-record proof; proposed five commands and selected test bindings.",
+    "F4 semantic report72864d0d/69eda0fc and unchanged encoding/node/zipper source identities."
+  ],
+  "runtime": "No Go/compiler/test/benchmark/driver/runtime performed by reviewer. All five fresh real arms remain unexecuted in reviewed packet. Old underbound G/results not reused.",
+  "numeric_allowance": null,
+  "Q32_acceptance": false,
+  "native_publication_qualification": false,
+  "full_retained_union_or_future_finish_acceptance": false,
+  "lease_released": true
+}

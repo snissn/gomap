@@ -1,0 +1,146 @@
+{
+  "adopted_children_reaped": [],
+  "child_RUN_count": 5,
+  "elapsed_seconds": 7.7593284086324275,
+  "ended_utc": "2026-10-16T09:37:07.566765+00:00",
+  "exit_code": 0,
+  "expected_child_RUN_names": [
+    "TestConstructedPrimaryActivationRollbackPreservesCustodyV6/ordinary",
+    "TestConstructedPrimaryActivationRollbackPreservesCustodyV6/native-work",
+    "TestConstructedPrimaryActivationRollbackPreservesCustodyV6/native-rollback-failure",
+    "TestNativePreparedAbortUsesOriginalBuilderOrCandidateReceiptV6/builder",
+    "TestNativePreparedAbortUsesOriginalBuilderOrCandidateReceiptV6/candidate"
+  ],
+  "group_and_children_empty": true,
+  "leader_joined": true,
+  "missing_named_top_RUN_PASS": [],
+  "name": "normal-rootpublication-rollback",
+  "observed_group_processes": [
+    {
+      "comm": "go",
+      "pgid": 1328983,
+      "pid": 1328983,
+      "ppid": 1328934,
+      "session": 1328983,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1328983,
+      "pid": 1329027,
+      "ppid": 1328983,
+      "session": 1328983,
+      "state": "R"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1328983,
+      "pid": 1329056,
+      "ppid": 1328983,
+      "session": 1328983,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1328983,
+      "pid": 1329061,
+      "ppid": 1328983,
+      "session": 1328983,
+      "state": "S"
+    },
+    {
+      "comm": "compile",
+      "pgid": 1328983,
+      "pid": 1329065,
+      "ppid": 1328983,
+      "session": 1328983,
+      "state": "R"
+    },
+    {
+      "comm": "link",
+      "pgid": 1328983,
+      "pid": 1329077,
+      "ppid": 1328983,
+      "session": 1328983,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1328983,
+      "pid": 1329085,
+      "ppid": 1328983,
+      "session": 1328983,
+      "state": "R"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1328983,
+      "pid": 1329089,
+      "ppid": 1328983,
+      "session": 1328983,
+      "state": "S"
+    },
+    {
+      "comm": "vet",
+      "pgid": 1328983,
+      "pid": 1329093,
+      "ppid": 1328983,
+      "session": 1328983,
+      "state": "S"
+    }
+  ],
+  "pgid": 1328983,
+  "pid": 1328983,
+  "raw_log_sha256": "cd2b84b77bb4e21f0143646199c2d36471fe0a388e0dae10652c1476bdd58388",
+  "remaining_direct_or_adopted_children": [],
+  "remaining_group_members": [],
+  "required_top_level_names": [
+    "TestConstructedPrimaryActivationRollbackPreservesCustodyV6",
+    "TestDurableRootActivationFailureRollsBackOwnershipBeforeVisibility",
+    "TestEnqueueBuiltValidationAndActivationFailurePreserveFinalLease",
+    "TestNativePreparedAbortUsesOriginalBuilderOrCandidateReceiptV6"
+  ],
+  "residual_observed_before_cleanup": false,
+  "signals": [],
+  "source_after_equals_frozen": true,
+  "source_before_after_equal": true,
+  "source_before_equals_frozen": true,
+  "started_utc": "2026-10-16T09:36:59.807430+00:00",
+  "status": "PASS",
+  "stop_reasons": [],
+  "subreaper_enabled": true,
+  "test_FAIL_names": [],
+  "test_PASS_names": [
+    "TestConstructedPrimaryActivationRollbackPreservesCustodyV6",
+    "TestConstructedPrimaryActivationRollbackPreservesCustodyV6/ordinary",
+    "TestConstructedPrimaryActivationRollbackPreservesCustodyV6/native-work",
+    "TestConstructedPrimaryActivationRollbackPreservesCustodyV6/native-rollback-failure",
+    "TestEnqueueBuiltValidationAndActivationFailurePreserveFinalLease",
+    "TestDurableRootActivationFailureRollsBackOwnershipBeforeVisibility",
+    "TestNativePreparedAbortUsesOriginalBuilderOrCandidateReceiptV6",
+    "TestNativePreparedAbortUsesOriginalBuilderOrCandidateReceiptV6/builder",
+    "TestNativePreparedAbortUsesOriginalBuilderOrCandidateReceiptV6/candidate"
+  ],
+  "test_RUN_names": [
+    "TestConstructedPrimaryActivationRollbackPreservesCustodyV6",
+    "TestConstructedPrimaryActivationRollbackPreservesCustodyV6/ordinary",
+    "TestConstructedPrimaryActivationRollbackPreservesCustodyV6/native-work",
+    "TestConstructedPrimaryActivationRollbackPreservesCustodyV6/native-rollback-failure",
+    "TestEnqueueBuiltValidationAndActivationFailurePreserveFinalLease",
+    "TestDurableRootActivationFailureRollsBackOwnershipBeforeVisibility",
+    "TestNativePreparedAbortUsesOriginalBuilderOrCandidateReceiptV6",
+    "TestNativePreparedAbortUsesOriginalBuilderOrCandidateReceiptV6/builder",
+    "TestNativePreparedAbortUsesOriginalBuilderOrCandidateReceiptV6/candidate"
+  ],
+  "test_SKIP_names": [],
+  "timeout": false,
+  "tmp_write_read_unlink_preflight": true,
+  "top_level_RUN_names": [
+    "TestConstructedPrimaryActivationRollbackPreservesCustodyV6",
+    "TestEnqueueBuiltValidationAndActivationFailurePreserveFinalLease",
+    "TestDurableRootActivationFailureRollsBackOwnershipBeforeVisibility",
+    "TestNativePreparedAbortUsesOriginalBuilderOrCandidateReceiptV6"
+  ],
+  "top_level_pass_count": 4,
+  "unexpected_top_RUN": []
+}

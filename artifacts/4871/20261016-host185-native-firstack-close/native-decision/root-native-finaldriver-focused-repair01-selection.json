@@ -1,0 +1,36 @@
+{
+  "scope": "focused-finaldriver-correctness-controls",
+  "actual_native_driver_authorized": false,
+  "authority": "existing user execute-and-merge graph4871; coordinator selects focused correctness only",
+  "source_manifest_sha256": "30e0fe7fb53fa4eafef910fa6e50da5d8126cc225341da8de45b6a1d9cd2d206",
+  "source_archive_sha256": "3492a17d4ab432bb8f3089aaba9a8c1ff583a88ca620db1a3747c4d42bc49e5c",
+  "proposed_commands_sha256": "be6138e62dbb6edd21706a8cf874a76a04d13294341ee469b013e4337d2719c3",
+  "runner_sha256": "e52b7847ff89cb65978c49cd9cc5b91c1d7c8f2f0f3ffae9fe3e23cef292b642",
+  "authorized_command_names": [
+    "normal-zipper",
+    "normal-db",
+    "normal-freelist",
+    "race-mvcc",
+    "race-primaryarena",
+    "race-pager",
+    "race-rootpublication",
+    "race-zipper",
+    "race-db",
+    "race-freelist"
+  ],
+  "git_identity": {
+    "HEAD": "0149d78dba2574b09d7119d2631ec78a144e088d",
+    "index_sha256": "07161c1dc6c88fb230c74700b4ddd76b975a613540949423512d6786f7c86823"
+  },
+  "raw_index_sha256": "4c6b63357522cd951fd864e661b167f52e6debcd5d5e150e002fdba478f4dbe1",
+  "stops": "first nonzero exit, source or index drift, missing RUN/PASS, unexpected subtest or skip, leak/race/panic or intervention; no unchanged retries",
+  "expected_top_level_passes": 39,
+  "expected_child_runs": 83,
+  "real_driver_approval_pending": [
+    "whole-envelope/driver source review",
+    "focused controls PASS",
+    "separate actual-driver selection"
+  ],
+  "created_utc": "2026-10-16T08:46:07.589851+00:00",
+  "prior_passing_normal_reuse": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source-repair01/reused-controls.json"
+}

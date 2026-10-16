@@ -1,0 +1,67 @@
+{
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW",
+  "actual_model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "verdict": "REJECT_CURRENT_FIXTURE_F4",
+  "candidate_edits_by_reviewer": false,
+  "source_manifest_sha256": "8f644d53679cc584cc241dd517dd2ccdf16f6e4c8899fa62819c3a520214b2cb",
+  "archive_sha256": "66f82d9f0cef64cb920c9ed9c314b017d076b4a18f7bcb6316e50611df7d2bbb",
+  "inspected_source_hashes": {
+    "TreeDB/mvcc/mvcc.go": "b0f9fcc0393ef56a94609379a178627c01661cad58940fa8573633a33d1370d5",
+    "TreeDB/mvcc/versions.go": "aa88729578b2eafb1c44b23f94a52c924132cf2bb03362d1bd98e031bdeb8f53",
+    "TreeDB/internal/mvcckey/codec.go": "b506d858b5821e7489c79e1a4d90fff84ee1807bc86e527563322ce22e142775",
+    "TreeDB/mvcc/native_finaldriver_diagnostic_v6_test.go": "79f33a8f379eee962b84152207f3ab10bade1dbf44c6eb8d5f07d08230c887d4",
+    "TreeDB/mvcc/native_finaldriver_envelope_test.go": "c84d8e74682e0024f963c29283f613e32189e4cdaa5488940bbc063a9d6a7e4f",
+    "TreeDB/node/native_leaf_price_for_test_v6.go": "01d9e3a47de8e94d8c4fe8e921cb8822dcdd9cbb99b8cc84f583c0cb52a3da48",
+    "TreeDB/zipper/leaf_merge_work.go": "8fde2fb26ad6828377cf49ccb0816990282e937283c93af12aba9c86d9b93fd6",
+    "TreeDB/zipper/materialized_write_work.go": "5fa7ed027fcab735aab154427f1ed11f4bc03a908b445fc76898bfbab7b84055"
+  },
+  "F4": {
+    "classification": "Fixture physical-record encoding and price-input domain error; previous source acceptance missed it",
+    "raw_expectations": {
+      "seed_ts": "[recordValueV1,byte(ts)] =2bytes",
+      "old_ts1": "[recordValueV1,1]",
+      "newer_ts34": "recordValueV1 concatenated with newer =6bytes",
+      "discard_floor32": "[discardFloorRecordV1] concatenated with big-endian uint64(32) =9bytes"
+    },
+    "prebirth_physical_value_bound": 9,
+    "physical_key_bound": {
+      "anchor": 41,
+      "floor": 13,
+      "newer": 36,
+      "max": 41
+    },
+    "cause": "Store.CommitAt wraps logical values with one tag; AdvanceDiscardFloor writes independent9byte floor record to same DATA. Raw TreeDB Get does not decode MVCC envelope. Leaf materialization copies unrelated retained entries too, including floor, so price input cannot be logical payload length1.",
+    "locations": [
+      "mvcc.go243-248",
+      "versions.go23-25,721-735",
+      "diagnostic_v6_test.go87-89,172,269,274",
+      "materialized_write_work.go276-284",
+      "leaf_merge_work.go164-168"
+    ],
+    "minimal_repair": [
+      "Derive source fixture physical value bound max(1+len(seed payload),1+len(newer payload),1+8)=9 BEFORE first cursor and pass that to existing expression.",
+      "Keep max physical key len(encoded anchor)=41; correct comment that all keys same length (floor13/newer36).",
+      "Use exact raw tagged values in stale newer and reopened32/33/newer assertions.",
+      "Assert oldValue equals [recordValueV1,1] before using it for held-reader comparisons.",
+      "Keep genuine stale refusal, original caps, ready validation and public route unchanged."
+    ],
+    "optional_stronger_checks": [
+      "Verify actual floor raw record against its9byte expected encoding before cursor/reopen; no new producer or geometry discovery.",
+      "Ready-cancel selected raw equality can derive timestamp through codec rather than merely nonempty."
+    ]
+  },
+  "node_zipper_domain": "NativeLeafPriceForTestV6 uses valueBytes for actual leaf bytes copied/encoded. Original merge emits every unaffected old entry regardless of MVCC namespace; original materialized writer feeds full raw r.Value to WithWork Builder. The persisted floor is outside version namespace but within selected DATA base leaf, so9 is required.",
+  "unsupported_attribution": "Historical ready G78487/41682916 had under-specified physical value operand; passing ready-cancel does not validate it as correct source bound or qualify native completion. Reevaluate expression after source-derived fix; do not add empirical allowance.",
+  "runtime_and_source_actions": "No Go/runtime/source/Git/GH or children. No publication/runtime approval.",
+  "lease_released": true,
+  "expanded_fixture_audit": {
+    "scope": "All five arms and terminal/reopen assertions in immutable repair03, including held-reader/successor/Close ordering.",
+    "additional_encoding_mismatches": [],
+    "preservation_oracle_recommendation": "Read selectedExpected from genuine held old Snapshot before cancellation; require success/nonempty and compare current DATA exactly after c.Close. Applicable also to frozen-limit/stale cancellation. Do not derive oracle from producer batch output.",
+    "positive_lifetime": "Old Snapshot physical comparisons are valid with exact initial baseline. Designated held reader closes before owning DB.Close in both positive arms.",
+    "reopen": "Selected nil is valid physical deletion check; retained32/33 and newer need tagged bytes; floor32 is independent9byte raw metadata.",
+    "additional_production_or_formula_change_justified": false,
+    "runtime_success_claim": false
+  }
+}

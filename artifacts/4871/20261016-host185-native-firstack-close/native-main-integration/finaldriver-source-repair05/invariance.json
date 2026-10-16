@@ -1,0 +1,22 @@
+{
+  "Q32_scan_and_fence_designs": "parked, not implemented",
+  "diagnostic_physical_input_bounds": "unchanged source-derived key41/value9",
+  "envelope_child_price_changed": "Enqueue includes five fixed failure records/actual bytes",
+  "envelope_expression_source_unchanged": true,
+  "native_final_publisher_unchanged": true,
+  "prior_focused_results": "historical exact input only; no blanket reuse for coordinator-dependent runtime",
+  "prior_real_ready_cancel_stale_frozen": "historical repair04 scope; new pruner configuration and price require fresh proposals",
+  "production_guard_unchanged": true,
+  "strict_work_owner_helpers_unchanged": true,
+  "unchanged_semantic_inputs": {
+    "TreeDB/db/native_mvcc_final_publication_v6.go": "8b36f28459b30a52cc0d3f7fa07c79138db1213c48c476c8c19c1963543b6839",
+    "TreeDB/db/primary_ordered_post_work_v6.go": "d457014cbfd7133f526d3d2a8ae683f6f1d05c19a326ee2e2103927f13781650",
+    "TreeDB/db/primary_visible_member_work_v6.go": "623a8de1f205f844a50850ced3f03cef0a2374c6f4ea123c666c97b781495d32",
+    "TreeDB/internal/retainedalloc/owner.go": "aa2725812345880c152932466ee45dfa2d31b69562309595afb98d354e725c3d",
+    "TreeDB/internal/retainedalloc/owner_work.go": "d4727141cffdc31205bc99854746a91fe10e19bdc628f643206d9ca94fd8aabe",
+    "TreeDB/internal/rootpublication/native_builder_work_v6.go": "90a0e265648b62e883a46c9e6ae7792bf1a39070b94e2c9e1c51af51d80bc993",
+    "TreeDB/internal/rootpublication/native_publication_v6.go": "3e1cb7dc7beb72c3962fbd83398adc5f523868d0eb4767b89df9be4440443d15",
+    "TreeDB/mvcc/native_finaldriver_envelope_test.go": "c84d8e74682e0024f963c29283f613e32189e4cdaa5488940bbc063a9d6a7e4f",
+    "TreeDB/mvcc/native_finaldriver_precursor_test.go": "02ecc538748a09db4afbb34df7c06c7523772bb1f9c88fed00cf797b5ab925c1"
+  }
+}

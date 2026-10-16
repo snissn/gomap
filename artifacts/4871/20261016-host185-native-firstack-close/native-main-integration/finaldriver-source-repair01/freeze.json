@@ -1,0 +1,23 @@
+{
+  "status": "FROZEN_TEST_ONLY_SUCCESSOR_UNEXECUTED",
+  "source_root": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+  "source_manifest": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source-repair01/source-frozen.json",
+  "source_manifest_sha256": "30e0fe7fb53fa4eafef910fa6e50da5d8126cc225341da8de45b6a1d9cd2d206",
+  "source_archive": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source-repair01/source-frozen.tar.gz",
+  "source_archive_sha256": "3492a17d4ab432bb8f3089aaba9a8c1ff583a88ca620db1a3747c4d42bc49e5c",
+  "source_files": 10431,
+  "changed_paths": 1,
+  "production_changed": false,
+  "formula_changed": false,
+  "parent_manifest_sha256": "282a5adb2a9bb73051078274098f9783f80eabec94c0c623257694cfeda4f475",
+  "parent_archive_sha256": "c72d4aae4acfe17f7fd26ebb1eabb102022e4c24f2eae5f17f41c822486ac78e",
+  "changed_archive_sha256": "a946791e206bcacf323ae13cdaafb1a1ee67f7cc1f1aafe151190b8742b96eef",
+  "delta_sha256": "81335393a5264603b4dafe8e2c313bc063fd09b4aa7278de2c702e6f1f24499c",
+  "index_path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/coordinator/.git/worktrees/native-integrated/index",
+  "index_sha256": "4c6b63357522cd951fd864e661b167f52e6debcd5d5e150e002fdba478f4dbe1",
+  "go_commands_executed": 0,
+  "test_bodies_executed": 0,
+  "gofmt_executed": false,
+  "source_lease_released": true,
+  "runtime_lease_released": true
+}

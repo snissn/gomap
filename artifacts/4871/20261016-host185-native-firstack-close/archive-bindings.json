@@ -1,0 +1,62 @@
+[
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source/source-frozen.tar.gz",
+    "bytes": 181518468,
+    "sha256": "c72d4aae4acfe17f7fd26ebb1eabb102022e4c24f2eae5f17f41c822486ac78e",
+    "reason": "Full archive retained locally and hash-bound; individual source manifests, raw logs and receipts copied remotely."
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source-repair01/source-frozen.tar.gz",
+    "bytes": 181518593,
+    "sha256": "3492a17d4ab432bb8f3089aaba9a8c1ff583a88ca620db1a3747c4d42bc49e5c",
+    "reason": "Full archive retained locally and hash-bound; individual source manifests, raw logs and receipts copied remotely."
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source-repair02/source-frozen.tar.gz",
+    "bytes": 181518646,
+    "sha256": "aa282fb7a4892023781dd9862a9f2000e92cccacc36edf42329cd0106a4f0dd9",
+    "reason": "Full archive retained locally and hash-bound; individual source manifests, raw logs and receipts copied remotely."
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source-repair03/source-frozen.tar.gz",
+    "bytes": 172628397,
+    "sha256": "66f82d9f0cef64cb920c9ed9c314b017d076b4a18f7bcb6316e50611df7d2bbb",
+    "reason": "Full archive retained locally and hash-bound; individual source manifests, raw logs and receipts copied remotely."
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source-repair04/source-frozen.tar.gz",
+    "bytes": 155831434,
+    "sha256": "b0b3cf3ddcca6517d41ea33e3860437e38ba3cdbd206dda6af3831b96553f300",
+    "reason": "Full archive retained locally and hash-bound; individual source manifests, raw logs and receipts copied remotely."
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source-repair05/focused-resume01/source-frozen.tar.gz",
+    "bytes": 160086327,
+    "sha256": "896a8b1d53bcad78128a126106485df12ace7d7062c8132b921a3b20795b3771",
+    "reason": "Full archive retained locally and hash-bound; individual source manifests, raw logs and receipts copied remotely."
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source-repair05/source-frozen.tar.gz",
+    "bytes": 160086327,
+    "sha256": "896a8b1d53bcad78128a126106485df12ace7d7062c8132b921a3b20795b3771",
+    "reason": "Full archive retained locally and hash-bound; individual source manifests, raw logs and receipts copied remotely."
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source-repair06/source-frozen.tar.gz",
+    "bytes": 160089854,
+    "sha256": "f286230f2dc0b06aaf5adfc7695a649211036e3e43042412ceed13b13ee4ea59",
+    "reason": "Full archive retained locally and hash-bound; individual source manifests, raw logs and receipts copied remotely."
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source-repair07/source-frozen.tar.gz",
+    "bytes": 160090951,
+    "sha256": "437acc30342c067bd36ab7c4387cc9a9d57dae7d937bc6f931816c56a4a00772",
+    "reason": "Full archive retained locally and hash-bound; individual source manifests, raw logs and receipts copied remotely."
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source-repair08/source-frozen.tar.gz",
+    "bytes": 160091827,
+    "sha256": "1371d99c9945ef2eea254fe5c16867e777aa54ec8fde4341566bbd85d008493e",
+    "reason": "Full archive retained locally and hash-bound; individual source manifests, raw logs and receipts copied remotely."
+  }
+]

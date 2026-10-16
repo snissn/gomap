@@ -1,0 +1,20 @@
+{
+  "status": "FROZEN_PREDECESSOR_FOCUSED_ZIPPER_FIXTURE_FAILURE_PRESERVED",
+  "source_manifest_sha256": "282a5adb2a9bb73051078274098f9783f80eabec94c0c623257694cfeda4f475",
+  "source_runtime_leases_released": true,
+  "worker_go_commands_before_freeze": 0,
+  "root_controls": "controls/; stopped after first failing normal zipper; no later calls/race",
+  "Q32": "RED",
+  "ACK": 0,
+  "files": {
+    "freeze.json": "7224d96bcd23d027cde0dd939d40db3ad4e1a811e41a03835c509a204ef7a3a9",
+    "proof-inputs.json": "eb6ca51c25341ebf51e855dacf649491f760c305e64e1e9eed0267497ced4d65",
+    "operation-and-retention-ledger.md": "211d4be970faa62f3ec2742f18d7ce008ad91d72f71281e40621eb5400f483d3",
+    "proposed-commands.json": "7e8a5bc1cb203f96b6f0ca3a4da6212eed3a007567419f93039e66d7c8b32a2d",
+    "proposed-real-commands.json": "b98a5958fc60f9f1ddd9fa91bb489e0595ea348aedf136ec6644fc4b0fffbdcd",
+    "test-inventory.json": "56d9ce4fb3fd8010530c02cfa9492c6254ac16d9562a94a8c06de5e27269eb76",
+    "subreview-applicability.json": "22e88f900ecb23672e0df183960ffe47bf143e421621d95daee72ef85f7ba6c8",
+    "custody-subreview-formatting.json": "ae13d5cbd7f2cdf4fa646f4515c654e4e82923ca0db2bd9d632904b13ac24074",
+    "README.md": "407cdd4a370d3dde0f4e3145813fa946fcee629b147a49cc24f089a1af2364d5"
+  }
+}

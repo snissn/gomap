@@ -1,0 +1,135 @@
+{
+  "commands": [
+    {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "-parallel=1",
+        "-count=1",
+        "-v",
+        "-timeout=3m",
+        "-run",
+        "^(TestNativePublicationJoinAcceptsScrubbedOriginalV6|TestNativePublicationJoinRetainsLinkedCompletionV6|TestNativePublicationJoinConcurrentScrubbedOriginalV6|TestNativePublicationStopJoinsIdleOriginalBeforeSchedulerStop|TestNativePublicationStopSettlesFailedOriginalAndStillStops|TestNativePublicationLateRefusalRequiresCustodyWithoutPoisoningSuccessor)$",
+        "./TreeDB/internal/rootpublication"
+      ],
+      "behavior": "synthetic original receipt scrub/refusal/concurrency plus existing ordinary Coordinator Stop, paused original receipt and ordinary durable successor controls; no real native final driver",
+      "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+      "env": {
+        "CGO_ENABLED": "1",
+        "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+        "GODEBUG": "",
+        "GOENV": "off",
+        "GOFLAGS": "",
+        "GOGC": "100",
+        "GOMAXPROCS": "2",
+        "GOMEMLIMIT": "8GiB",
+        "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+        "GOPROXY": "off",
+        "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+        "GOSUMDB": "off",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off",
+        "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source-repair06/controls/normal-rootpublication-join/tmp"
+      },
+      "executed": false,
+      "expected_child_count": 6,
+      "expected_top_level_count": 6,
+      "name": "normal-rootpublication-join",
+      "outer_timeout_seconds": 600,
+      "required_child_tests": {
+        "TestNativePublicationJoinAcceptsScrubbedOriginalV6": [
+          "success",
+          "first-error"
+        ],
+        "TestNativePublicationJoinConcurrentScrubbedOriginalV6": [
+          "two-joins",
+          "join-and-original-close"
+        ],
+        "TestNativePublicationJoinRetainsLinkedCompletionV6": [
+          "unfenced",
+          "fenced-first-error"
+        ]
+      },
+      "required_top_level_tests": [
+        "TestNativePublicationJoinAcceptsScrubbedOriginalV6",
+        "TestNativePublicationJoinRetainsLinkedCompletionV6",
+        "TestNativePublicationJoinConcurrentScrubbedOriginalV6",
+        "TestNativePublicationStopJoinsIdleOriginalBeforeSchedulerStop",
+        "TestNativePublicationStopSettlesFailedOriginalAndStillStops",
+        "TestNativePublicationLateRefusalRequiresCustodyWithoutPoisoningSuccessor"
+      ]
+    },
+    {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "-parallel=1",
+        "-count=1",
+        "-v",
+        "-timeout=3m",
+        "-race",
+        "-run",
+        "^(TestNativePublicationJoinAcceptsScrubbedOriginalV6|TestNativePublicationJoinRetainsLinkedCompletionV6|TestNativePublicationJoinConcurrentScrubbedOriginalV6|TestNativePublicationStopJoinsIdleOriginalBeforeSchedulerStop|TestNativePublicationStopSettlesFailedOriginalAndStillStops|TestNativePublicationLateRefusalRequiresCustodyWithoutPoisoningSuccessor)$",
+        "./TreeDB/internal/rootpublication"
+      ],
+      "behavior": "synthetic original receipt scrub/refusal/concurrency plus existing ordinary Coordinator Stop, paused original receipt and ordinary durable successor controls; no real native final driver",
+      "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+      "env": {
+        "CGO_ENABLED": "1",
+        "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+        "GODEBUG": "",
+        "GOENV": "off",
+        "GOFLAGS": "",
+        "GOGC": "100",
+        "GOMAXPROCS": "2",
+        "GOMEMLIMIT": "8GiB",
+        "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+        "GOPROXY": "off",
+        "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+        "GOSUMDB": "off",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off",
+        "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source-repair06/controls/race-rootpublication-join/tmp"
+      },
+      "executed": false,
+      "expected_child_count": 6,
+      "expected_top_level_count": 6,
+      "name": "race-rootpublication-join",
+      "outer_timeout_seconds": 600,
+      "required_child_tests": {
+        "TestNativePublicationJoinAcceptsScrubbedOriginalV6": [
+          "success",
+          "first-error"
+        ],
+        "TestNativePublicationJoinConcurrentScrubbedOriginalV6": [
+          "two-joins",
+          "join-and-original-close"
+        ],
+        "TestNativePublicationJoinRetainsLinkedCompletionV6": [
+          "unfenced",
+          "fenced-first-error"
+        ]
+      },
+      "required_top_level_tests": [
+        "TestNativePublicationJoinAcceptsScrubbedOriginalV6",
+        "TestNativePublicationJoinRetainsLinkedCompletionV6",
+        "TestNativePublicationJoinConcurrentScrubbedOriginalV6",
+        "TestNativePublicationStopJoinsIdleOriginalBeforeSchedulerStop",
+        "TestNativePublicationStopSettlesFailedOriginalAndStillStops",
+        "TestNativePublicationLateRefusalRequiresCustodyWithoutPoisoningSuccessor"
+      ]
+    }
+  ],
+  "concurrency_scope": "synthetic externally kept-alive owner only; not a concurrent containing-admission proof",
+  "first_failure_stop": true,
+  "normal_before_race": true,
+  "selected_test_files": {
+    "TreeDB/internal/rootpublication/native_publication_join_scrub_v6_test.go": "5409729f46a6f9ee84250842d290f8aa508ddfa5548e6dcdc193d97960e37cdd",
+    "TreeDB/internal/rootpublication/native_publication_v6_test.go": "3923cb39219e8ad6d68db4c5adba434c9a8c11d41b6f9bc5dd80dcdd90925d2c"
+  },
+  "source_archive_sha256": "f286230f2dc0b06aaf5adfc7695a649211036e3e43042412ceed13b13ee4ea59",
+  "source_manifest_sha256": "971367d10cfd714f6ff08c552acc2073c4e4982fb918155e416aacb2d0aea05a",
+  "status": "PROPOSED_NOT_SELECTED_UNEXECUTED"
+}

@@ -1,0 +1,72 @@
+{
+  "utc": "2026-10-16T09:43:31.292338+00:00",
+  "source_manifest_sha256": "a2ffdb13492ee217c892745f3cc3a6ce02ba82fbaeb03023a2f0496a38ce5387",
+  "runtime_summary_sha256": "04dedf87ed8fe9a8117dc48cd315d88067cc89be14ea17462d368b3950fa199a",
+  "selection_sha256": "ddd1a500aa7a0ab48fb322bf0b76c66d2118f31cb3532aca4e24048026c8daf9",
+  "results": [
+    {
+      "name": "real-ready-cancel",
+      "status": "PASS",
+      "raw_log_sha256": "f5382463ac1b715e75f6fe0e1de81154318fd537d1888d48d48a7ead9bfcf023",
+      "result_sha256": "ec46a2fbc3432d70501c60c62a63800cd231ffb8c70dc014e7cd5d0d2366a5ba",
+      "G_records": 78492,
+      "G_bytes": 41684991,
+      "elapsed_seconds": 1.7528869407251477,
+      "genuine_Finish_position_reached": false
+    },
+    {
+      "name": "real-stale-before-fence",
+      "status": "PASS",
+      "raw_log_sha256": "126a3e0348b56a3ddc59e20d04936713fe10cb0be803e2f710e120609a3fbf2e",
+      "result_sha256": "e22b9fdd68e00e6a331107c1e3c581b637e9441fcc55368704a8127caecc6f62",
+      "G_records": 78492,
+      "G_bytes": 41685219,
+      "elapsed_seconds": 1.726739841978997,
+      "genuine_Finish_position_reached": false
+    },
+    {
+      "name": "real-frozen-limits",
+      "status": "PASS",
+      "raw_log_sha256": "3ab3c5c68a8cbcdd2af9e9b629e57a66390aac2b54f4967f2b54439d3e9903c2",
+      "result_sha256": "296ee49a5b061d4a1fa2cd4ac55bca7cf511802881a9c3b69837feffbbef6576",
+      "G_records": 78492,
+      "G_bytes": 41685029,
+      "elapsed_seconds": 1.733341280836612,
+      "genuine_Finish_position_reached": false
+    },
+    {
+      "name": "real-pruner-enabled-refusal",
+      "status": "PASS",
+      "raw_log_sha256": "0b9295fdebd36b6f5905f74e0734dc4d0287d1f0f235366ffe3d0a54e8cc7899",
+      "result_sha256": "db4c64eeadcc348534b67351a60322f648ac3f94e6fecfecdf01be964c895ae4",
+      "G_records": 78492,
+      "G_bytes": 41685333,
+      "elapsed_seconds": 1.7210014457814395,
+      "genuine_Finish_position_reached": false
+    },
+    {
+      "name": "real-once-ack",
+      "status": "PASS",
+      "raw_log_sha256": "5eab2473c550410c4c8075b0e1516d02833c7aa9e59471853ced678fd8c4ef68",
+      "result_sha256": "e8b8d08c094701f1be7073b9af8e66df7261e51f6a8cc886a0757532737d665c",
+      "G_records": 78492,
+      "G_bytes": 41684820,
+      "elapsed_seconds": 1.736619501374662,
+      "genuine_Finish_position_reached": true
+    },
+    {
+      "name": "real-paused-finish-close",
+      "status": "STOP",
+      "raw_log_sha256": "2880afe6ddc64455ccdffac893ee19d7510b922e840ba8d627f1ac6ad211945f",
+      "result_sha256": "475bf63fd0198a1e992ee346eb3d778f1f6f75ae8d40e8e581ffc53f836e8228",
+      "G_records": 78492,
+      "G_bytes": 41685257,
+      "elapsed_seconds": 1.737291706725955,
+      "genuine_Finish_position_reached": true
+    }
+  ],
+  "all_process_groups_joined": true,
+  "source_index_unchanged": true,
+  "scope": "Five diagnostic arms PASS. OnceACK actual fence/Finish/exactACK/held-reader-after-native-and-successor/reopen verified by unchanged assertion path. Paused Finish reaches genuine boundary but actual DB.Close fails join protocol. OriginalQ32 RED/ACK0 remains.",
+  "failure": "F6 Join reads original receipt after owner Close; source diagnosis in progress, no rerun or source mutation."
+}

@@ -1,0 +1,45 @@
+{
+  "callers": [
+    {
+      "disposition": "same contextual ordinary error wrapper; Set-first checked rollback; nil-work ordinary policy unchanged",
+      "symbol": "Coordinator.Enqueue/EnqueueBuilt \u2192 enqueueLockedWithNativeReceiptV6(receipt=nil)"
+    },
+    {
+      "disposition": "shared work-bearing regression adapter; new failure budget before ownership/activation; returns contextual original cause/receipt",
+      "symbol": "Coordinator.EnqueueBuiltWithWorkV6 \u2192 enqueueLockedWithNativeReceiptV6(receipt=nil,w)"
+    },
+    {
+      "disposition": "same original native frame/inline backing, fixed failure budget before effects; exact original cause or SAME embedded failure receipt; no native fmt allocation",
+      "symbol": "Coordinator.EnqueueNativeBuiltWithWorkV6 \u2192 enqueueLockedWithNativeReceiptV6(receipt=r,w)"
+    },
+    {
+      "disposition": "same two original causes/third spare slot, factored through fixed array by value; behavior preserved",
+      "symbol": "DurableRootTransaction.recordPhysicalCleanupFailureLocked"
+    },
+    {
+      "disposition": "existing admitted transaction header; sticky receipt before owner/phase check; no attachment on error",
+      "symbol": "PrimaryConstructionReleaseWork.Bind"
+    },
+    {
+      "disposition": "original entry debit moved before lock/error/owner reads; admitted child retains SAME abort phases/RemovalWork; sticky error no effects",
+      "symbol": "PrimaryConstructionReleaseWork.ContinueWork"
+    },
+    {
+      "disposition": "ordinary loop calls original admitting wrapper, exactly one entry debit; native synchronous refusal unchanged",
+      "symbol": "DurableRootTransaction.abortConstructionLockedV6"
+    },
+    {
+      "disposition": "SAME Set operand captured before original group abort clears inline descriptor; release after success only",
+      "symbol": "PreparedRootCandidate.Abandon"
+    },
+    {
+      "disposition": "connected original cleanup now releases captured Set even after constructed inline candidate reset",
+      "symbol": "DB ordinary activation caller candidate.Abandon (root_publication_activation.go)"
+    },
+    {
+      "disposition": "no new join policy; existing owner/receipt graph remains linked on original cleanup error; Bind/Continue now expose SAME full cause receipt before effective-owner mismatch",
+      "symbol": "JoinNativePublicationsV6 \u2192 owner.CloseNativePublicationV6 \u2192 cursor/current-delete/root-preparation cleanup"
+    }
+  ],
+  "source_manifest_sha256": "a2ffdb13492ee217c892745f3cc3a6ce02ba82fbaeb03023a2f0496a38ce5387"
+}

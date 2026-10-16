@@ -1,0 +1,52 @@
+{
+  "concurrency_boundary": {
+    "receipt_address_rebinding": "no receipt rebinding is introduced; original terminal closes that cursor; general concurrent/new-batch accounting is not qualified",
+    "selected_actual_schedule": "one DB.Close join of paused original cursor; no concurrent public Close/multiple Join accounting claim",
+    "source_supported": "original owner mutex prevents duplicate physical phases; after callback there are no detached receipt field reads; synthetic two-Join and Join+original-Close tests keep owner externally alive",
+    "unresolved": "a concurrent public Close may refund the containing admission while another join holds a local owner alias; no new retained edge or handshake selected/implemented; Go reachability and race freedom do not prove retained accounting closure"
+  },
+  "owner_and_terminal": {
+    "first_error": "callback error retained locally through later receipt joins; live fenced error first-wins copied under c.mu; incomplete unfenced error retains existing protocol wrapping; recovery-required early path unchanged",
+    "join_after_callback": "saved receipt address compared only to canonical live nodes under c.mu; absence settled regardless detached fields; found live node supplies firstError/refusedCompletion; live, owner and saved receipt aliases cleared before completion.Close",
+    "lease_refusal": "only still-linked original receipt retains returned lease; no refund on incomplete callback; duplicate lease panic unchanged; tests explicitly drain their fixture-owned error graph, not a new production retry/disposal mechanism",
+    "ordering": "original cursor mutex serializes physical phases; close phase0 waits for original current-delete completion/unlink then clears whole prepared value; containing lease returned only after original terminal detaches all aliases; no edit",
+    "path": "TreeDB/mvcc/prune_cursor_v6.go",
+    "symbols": [
+      "PruneCursor.Close",
+      "PruneCursor.CloseNativePublicationV6",
+      "PruneCursor.CloseNativePublicationStepV6",
+      "PruneCursor.closeLockedV6",
+      "PruneCursor.closeStepLockedV6"
+    ]
+  },
+  "production_callers": [
+    {
+      "caller": "Coordinator.Stop",
+      "disposition": "Join before scheduler stop; existing nativeDispatch barrier retains incomplete graph; settled error still reaches stopErr and scheduler teardown",
+      "path": "TreeDB/internal/rootpublication/coordinator.go:828"
+    },
+    {
+      "caller": "DB.close before exclusive teardown gate",
+      "disposition": "owner callback outside teardownMu; outstanding-native check unchanged",
+      "path": "TreeDB/db/db.go:3529"
+    },
+    {
+      "caller": "DB.close gate recheck loop",
+      "disposition": "release gate before callback; original registration/closing barrier unchanged",
+      "path": "TreeDB/db/db.go:3551"
+    }
+  ],
+  "receipt_writers": [
+    {
+      "effect": "only production list insertion, under c.mu; unchanged",
+      "path": "TreeDB/internal/rootpublication/native_publication_v6.go:100",
+      "symbol": "BindNativePublicationV6"
+    },
+    {
+      "effect": "only production unlink, under c.mu after original ownership/counters/builder/pending validation; unchanged",
+      "path": "TreeDB/internal/rootpublication/native_publication_v6.go:564",
+      "symbol": "completeNativePublicationWithWorkV6"
+    }
+  ],
+  "scope": "only ordinary synchronous Coordinator.JoinNativePublicationsV6 and focused synthetic receipt-owner tests; no cursor or receipt interface change"
+}

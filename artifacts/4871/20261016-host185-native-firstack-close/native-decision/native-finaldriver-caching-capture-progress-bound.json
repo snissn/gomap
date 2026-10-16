@@ -1,0 +1,59 @@
+{
+  "mode": "READ_ONLY_SOURCE_ADVICE",
+  "reviewer_model": "gpt-6.1-sol",
+  "reasoning": "high",
+  "source_manifest_sha256": "5cde43f24dcc86eaa8c2017bbc6cb0dc81a29e749d9420d27be2ab4f2e4e140d",
+  "source_archive_sha256": "0bcaee68f1b6a058bd358b5096265771d35ba503143ac9f8e255b2c215fad8f4",
+  "files": {
+    "TreeDB/caching/native_mvcc_prune_v6.go": "de3f7cb5b0d23988bde5c12b0bad9c2c27c8b36926618fbee9b83cefcf4a0965",
+    "TreeDB/caching/root_domain.go": "ab8ffc47d524513abe1320a177f5a5a9ed44ca90d54517697ab90ff74275d150",
+    "TreeDB/caching/cow_cut.go": "ae6782d80dccb0ce82b3a8e7cab3aae8226e9eb71a83b1837ae67636a46a0286",
+    "TreeDB/caching/db.go": "763ec9e5f088ba012a2fbb8006367d041db96179cbdf61767d29538f14945f9d",
+    "TreeDB/db/native_mvcc_snapshot_v6.go": "40c137a22889c6d3fd2b498e0e577c4c990e736b9a9e921d308faef03551c8ba",
+    "TreeDB/db/native_mvcc_snapshot_close_v6.go": "56d2268c196d5624f95f78207cdd657e494c227fa467c4bc0c3f93f419c7d4c1",
+    "TreeDB/db/pools.go": "e01cb50addc5b4b3b0cb6d75e54b05a5917bef319b38e212d9140f6aca931755",
+    "TreeDB/db/primary_arena_owner_v5.go": "9caf72a6befd8003de73e06db67d7705be6a992a75dbea3d8dec8483f3b6d8c1",
+    "TreeDB/db/index_gen.go": "3042fbcfac5dfbd74687d03e767dde7bb2a6e42ddde21fb20957a28b118eeb03",
+    "TreeDB/internal/retainedalloc/owner_enroll_work.go": "41e6e2370ea5df1c5965dc40146ddf5ecd61d824b48e0987076aeb22e8a5a054",
+    "TreeDB/internal/memtable/cow_budget.go": "f3102bd2d83c3009ff5cf470634ce9046ae35d95a59f2a106f9e147a8615a823",
+    "TreeDB/internal/memtable/native_retention_work.go": "0863e195a9720e1490ddb1e0c6599533510de1523fb3f09a4ca1d7debb541fba",
+    "TreeDB/internal/memtable/btree.go": "41bcd8825b01d0fe2e934f9550663d81b3819daa6319f42de3383462bc6dc42a",
+    "TreeDB/internal/memtable/memtable.go": "37ae1d25c7c17e067616b28710e1076f64626360d3bd8b67620f04c6513c3b2e",
+    "TreeDB/internal/memtable/hash_sorted.go": "85b3c8a1f13196ad6136d21c5507fc0f90fffd0452112662b91db54f49dffa90",
+    "TreeDB/internal/memtable/append_only.go": "2ded0ffefe6b8e251897f60f76ea9410ad01ea431f127810b5dfe9ca8517eed2",
+    "TreeDB/internal/valuelog/manager.go": "936e18e7ec9d01adc037518b773e19631fa15845ebbb9e93f1f263f55aa09ce2",
+    "TreeDB/internal/valuelog/manager_wrapper_work.go": "5334f40ff52115e1e7696974351452582dad0daaeb5713ebdae9f0c433d3e7e1",
+    "TreeDB/lifecycle/native_mvcc_registry.go": "20b49a38337e9f4e40bca1157fbca00d0e8e5231c5ba8ea26de4c0eccdc88213",
+    "TreeDB/lifecycle/registry.go": "e6ecf1518c6de2696fdf1a53f592815305ee814ecc679ef64283d7962b88b47f",
+    "TreeDB/internal/primaryarena/arena.go": "515e86b817e326f21fd7c8cebf8c748de871b4efad472280490221c93d312553",
+    "TreeDB/internal/primaryarena/release_queue.go": "8d21fd802582b4b00b507f228b91b2ad54faaf6f14827adc4b395168c15d9e6e"
+  },
+  "disposition": "CONDITIONAL_PROGRESS_ENVELOPE_WITH_REQUIRED_PRIMARY_LOOKUP_REPAIR",
+  "critical_gap": "Post-birth work-bearing PRIMARY Acquire cannot yield under existing capturePhase2; original plain Acquire omits lookup admission. Narrow same-arena AcquireAfterAdmissionV6 plus protected physicalOwner precheck, guaranteed retain and immediate Snapshot attachment closes birth without an escaping permit; generic callback lock contract must be explicit.",
+  "saved_progress": [
+    "budget creation",
+    "cache shard probe unless version invalidated",
+    "pending original producer lease/enrollment cursors",
+    "Snapshot allocation/owned error custody",
+    "metadata adoption",
+    "registry atomic handle and final readable store"
+  ],
+  "whole_repeated_prefixes": [
+    "CaptureEntry+Frontier before Snapshot exists",
+    "BackendInspect+FixedRefs+remaining callback preflight before Snapshot birth",
+    "one binding Visit before refused lease Resize",
+    "one admitted registry probe per CAS retry"
+  ],
+  "scalar_parameters": [
+    "S actual cache shards",
+    "k actual distinct metadata producers<=2",
+    "B_i actual original linked binding counts",
+    "L=Npre+6 lookup links including sentinel",
+    "T=16 fixed registry shards"
+  ],
+  "runtime_executed": false,
+  "numeric_allowance_chosen": false,
+  "source_acceptance": false,
+  "native_publication_accepted": false,
+  "details": "native-finaldriver-caching-capture-progress-bound.md"
+}

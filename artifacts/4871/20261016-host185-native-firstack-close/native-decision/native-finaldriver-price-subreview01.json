@@ -1,0 +1,84 @@
+{
+  "disposition": "ACCEPT",
+  "scope": "Conditional source pricing subreview of four marked helpers only",
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW",
+  "reviewer": "/root/ordinary_review",
+  "model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "candidate_edits_by_reviewer": false,
+  "manifest_sha256": "b57baa69ad1fc1041411f5cc0317b5b0c3f48c0cba3b53599a4a076b8d49a7f5",
+  "manifest_file_count": 1387,
+  "all_manifest_files_verified": true,
+  "manifest_mismatches": [],
+  "targets": {
+    "TreeDB/caching/native_capture_price_for_test_v6.go": {
+      "bytes": 1907,
+      "sha256": "7e69414f57272b2b930846f7500a02f5bb9ee7c697a61268e76be3c26a2fed2f",
+      "target": true
+    },
+    "TreeDB/db/native_preparation_price_for_test_v6.go": {
+      "bytes": 10204,
+      "sha256": "ca5614b05d9c7210bb147bed0b08aa17cb525aa59bd2f597f2eb564ebc8b3b29",
+      "target": true
+    },
+    "TreeDB/db/native_snapshot_price_for_test_v6.go": {
+      "bytes": 3118,
+      "sha256": "e2ebf62845c6b45c6cfd63dca5c97fb3fb6151e83ef811566909105875035b44",
+      "target": true
+    },
+    "TreeDB/internal/rootpublication/native_capture_price_for_test_v6.go": {
+      "bytes": 6136,
+      "sha256": "2d3cbbbf1da46a1293d7f389cabff13c543ebf6a2cbfefcf35f502041be5a417",
+      "target": true
+    }
+  },
+  "blocking_findings": [],
+  "coverage": [
+    {
+      "target": "TreeDB/caching/native_capture_price_for_test_v6.go",
+      "result": "ACCEPT_CONDITIONAL",
+      "checked": "Budget read/birth, capture entry, frontier, root domains and per-shard probe rows match original caching/native_mvcc_prune_v6.go. Probe indexes and birth phases persist; shard multiplication is checked. Close helper covers its named entry prefix, not enrollment cancellation or Snapshot cleanup."
+    },
+    {
+      "target": "TreeDB/db/native_snapshot_price_for_test_v6.go",
+      "result": "ACCEPT_CONDITIONAL",
+      "checked": "Original BeginNativeMVCCSnapshotV6 inspection, fixed references, optional manager/leaf/Set rows, primary fixed preflight plus actual AcquireAfterAdmission fixed/lookup, and original admission callback are included. Registry bound includes both full shard passes and final readiness. Optional rows overestimate absent selected components; postbirth enrollment remains a separate child."
+    },
+    {
+      "target": "TreeDB/internal/rootpublication/native_capture_price_for_test_v6.go",
+      "result": "ACCEPT_CONDITIONAL",
+      "checked": "Creation proof, namespace binding, original cleanup custody and staged stable-index-token constructor rows checked against original callers. Both policy traversals, token strings, identity hash/probe capacity, pin/state, phase-seven retains and detach are covered. Fixed phase-one token prefix may repeat, but each admitted child allocation saves its state; envelope includes that prefix and all missing child Add units."
+    },
+    {
+      "target": "TreeDB/db/native_preparation_price_for_test_v6.go",
+      "result": "ACCEPT_CONDITIONAL",
+      "checked": "Root, candidate, seal and individual capture envelopes checked against original persisted phases, refunds, arena/owner children, table lookups and runtime slice growth. Binary-search prefix bounded by directory count. Growth uses checked max(4,2*cap), including old length and charged old full capacity. Seal includes ONE capture envelope because its DATA/PRIMARY capture index persists. Empty manifest SealMetadata has no dependency-edge allocation/loop; physical manifest identity uses direct arena addressing. Its fixed scratch/children row matches sizeof operands."
+    }
+  ],
+  "required_conditional_inputs": [
+    "Fresh selected B1 cursor; one DATA source leaf; empty dependency/leaf-resource closure; captured/current root components identical; no additional producer or unmodeled concurrent registry/owner mutation before ready. The designated old reader remains idle.",
+    "LookupNodes bounds all actual table links and terminal sentinel for the relevant calls. RegistryCapacity bounds probe-array capacity, not merely live entries, including constructor/observation growth.",
+    "Owner Add, removal, queue, Observe/Unobserve, Write, Arena and Primary child inputs must independently dominate their actual entry-to-next-persisted-progress units, including binding visits and rollback. A Complete flag is an assertion of these prerequisites, not independent proof.",
+    "VisibleCapacity, DebtCapacity and SealsCapacity bound both reachable old backing and its charged full capacity; counts and capacities must come from the supported pre-cursor census and its separately proved transformation, with no intervening unsupported growth.",
+    "Namespace/file/path/logical-lane/platform lengths bound the actual strings, including duplicated-file suffixes. DB IndexFileBytes means full file.Name length. Snapshot producer arity must bound actual callback operands; interpreting it only as deduplicated owners requires a separate equality proof (the selected two producer owners are distinct).",
+    "Selected borrowed PRIMARY certificate already exists; selected empty manifest has zero dependency edges. Nonempty folds/groups/manifest edges and lazy certificate birth are outside the four-target envelope.",
+    "Snapshot postbirth enrollment, caching caller/cursor ancestors, transaction birth, terminal cancellation/error paths and actual caller tails must be separately composed. Stable capture successful phase-seven operation/namespace releases are nonlast because the token owns the matching edges."
+  ],
+  "checks_actually_run": [
+    "Read-only Python SHA256 and byte-size verification of all 1387 manifest files, repeated at report freeze",
+    "Read complete four marked helpers and affected original constructor/progress/capture/registry/runtime growth sources",
+    "Read exact-snapshot root AGENTS.md, TreeDB/AGENTS.md, CONTRIBUTING.md; prior constructor/capture/caching advice used as context"
+  ],
+  "not_run": [
+    "Go/compiler/test/benchmark/profile/runtime",
+    "Git/GitHub mutation or network",
+    "Live mutable source inspection"
+  ],
+  "limitations": [
+    "No global G or numeric allowance",
+    "No complete retained union, future Finish, Close or cancellation envelope acceptance",
+    "No test execution or test-result claim",
+    "No native publication or Q32/1MiB fit acceptance; original qualification remains unchanged",
+    "Other child price helpers, including the separate Promotion capsule-size correction, are outside target scope and require their own exact binding"
+  ]
+}

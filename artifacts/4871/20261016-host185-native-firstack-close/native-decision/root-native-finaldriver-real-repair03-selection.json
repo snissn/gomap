@@ -1,0 +1,35 @@
+{
+  "source_manifest_sha256": "8f644d53679cc584cc241dd517dd2ccdf16f6e4c8899fa62819c3a520214b2cb",
+  "source_archive_sha256": "66f82d9f0cef64cb920c9ed9c314b017d076b4a18f7bcb6316e50611df7d2bbb",
+  "git_identity": {
+    "HEAD": "0149d78dba2574b09d7119d2631ec78a144e088d",
+    "index_sha256": "07161c1dc6c88fb230c74700b4ddd76b975a613540949423512d6786f7c86823"
+  },
+  "raw_index_sha256": "4c6b63357522cd951fd864e661b167f52e6debcd5d5e150e002fdba478f4dbe1",
+  "scope": "selected-finaldriver-real-diagnostic-controls",
+  "actual_native_driver_authorized": true,
+  "authority": "Existing explicit user graph4871 execute-and-merge authorization; coordinator independently selects exact frozen-source bounded genuine diagnostic fixture after source review and focused PASS.",
+  "proposed_commands_sha256": "a65d1b9f90d5570e836ec63dbbc311a064885bbee2cd854bcea2e7e2358c1038",
+  "runner_sha256": "6d3235b94271fa3efca99df59aef74547d55b4bf23eb259ddc35f8038d68a347",
+  "authorized_command_names": [
+    "real-ready-cancel",
+    "real-stale-before-fence",
+    "real-frozen-limits",
+    "real-once-ack",
+    "real-paused-finish-close"
+  ],
+  "focused_accept_sha256": "aeba8a7c609bdbb99db9a989d49d65781ab13a14fd22612d01b31cfa593819ea",
+  "whole_source_review_sha256": "cc0a11b13ec2659d60ab1adb3d0924af74f879c2f361e5d54fe325607e629f6e",
+  "numeric_G": null,
+  "G_selection": "Evaluate exact source nativeSelectedDiagnosticEnvelopeV6 from fresh original pre-cursor scalars; refuse missing/overflow/unsupported shapes; freeze componentwise six-family sum BEFORE cursor birth; ready validation may only reject.",
+  "original_public_caps_unchanged": true,
+  "original_public_Q32_status": "RED/ACK0; no qualification or waiver from diagnostic result",
+  "source_custody": "No source edits or concurrent producer during selection/runtime. Actual designated later durable successor and held old reader are fixture-owned.",
+  "expected_top_level_passes": 5,
+  "expected_child_runs": 5,
+  "stops": "First nonzero exit, envelope unavailable, ready mismatch, missing/extra RUN or child, noPASS, skip/race/panic, source/index drift, timeout/intervention/residual process. No unchanged retry or in-place G increase.",
+  "created_utc": "2026-10-16T08:58:55.299633+00:00",
+  "root_repair_verify_sha256": "45e1f9088e32ab51be8a5366ff25527320865a491f5f0ac26d14d6190c185d45",
+  "focused_reuse": "All56top/116child results unchanged production/formula/selected-focused-test inputs; actual diagnostic test only source-compatible ready-count assertion corrected.",
+  "superseded_failure": "F3 impossible exactness assertion after ready before Fence; old raw preserved, no completed actual arm reused, G expression unchanged."
+}

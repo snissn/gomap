@@ -1,0 +1,59 @@
+{
+  "argv": [
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+    "test",
+    "-p=1",
+    "-parallel=1",
+    "-count=1",
+    "-v",
+    "-timeout=3m",
+    "-run",
+    "^(TestConstructedPrimaryActivationRollbackPreservesCustodyV6|TestDurableRootActivationFailureRollsBackOwnershipBeforeVisibility|TestEnqueueBuiltValidationAndActivationFailurePreserveFinalLease|TestNativePreparedAbortUsesOriginalBuilderOrCandidateReceiptV6)$",
+    "./TreeDB/internal/rootpublication"
+  ],
+  "behavior": "real original constructed PRIMARY/callback activation refusal; no successful native enqueue/adoption/publication; ordinary and work-bearing rollback, sticky injected rollback error, original finite abort plus legacy controls",
+  "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+  "env": {
+    "CGO_ENABLED": "1",
+    "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+    "GODEBUG": "",
+    "GOENV": "off",
+    "GOFLAGS": "",
+    "GOGC": "100",
+    "GOMAXPROCS": "2",
+    "GOMEMLIMIT": "8GiB",
+    "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+    "GOPROXY": "off",
+    "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+    "GOSUMDB": "off",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off",
+    "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source-repair05/controls/normal-rootpublication-rollback/tmp"
+  },
+  "executed": true,
+  "expected_child_count": 5,
+  "expected_top_level_count": 4,
+  "grant_sha256": "b5798380c760b2a7ad5d659c7c794e12842213c7f8b6bf9db127f2b8ced21313",
+  "identity": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source-repair05/controls/identity.json",
+  "name": "normal-rootpublication-rollback",
+  "outer_timeout_seconds": 600,
+  "required_child_tests": {
+    "TestConstructedPrimaryActivationRollbackPreservesCustodyV6": [
+      "ordinary",
+      "native-work",
+      "native-rollback-failure"
+    ],
+    "TestNativePreparedAbortUsesOriginalBuilderOrCandidateReceiptV6": [
+      "builder",
+      "candidate"
+    ]
+  },
+  "required_top_level_tests": [
+    "TestConstructedPrimaryActivationRollbackPreservesCustodyV6",
+    "TestDurableRootActivationFailureRollsBackOwnershipBeforeVisibility",
+    "TestEnqueueBuiltValidationAndActivationFailurePreserveFinalLease",
+    "TestNativePreparedAbortUsesOriginalBuilderOrCandidateReceiptV6"
+  ],
+  "source_archive": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-source-repair05/source-frozen.tar.gz",
+  "source_archive_sha256": "896a8b1d53bcad78128a126106485df12ace7d7062c8132b921a3b20795b3771"
+}

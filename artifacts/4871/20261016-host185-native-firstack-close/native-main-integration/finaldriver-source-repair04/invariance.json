@@ -1,0 +1,29 @@
+{
+  "corrected_expression_operand": {
+    "key_bytes": "max(len(oldKey),len(discardFloorKey))",
+    "selected_key_bytes": 41,
+    "selected_value_bytes": 9,
+    "value_bytes": "max(len(oldValue),len(floorRecord))"
+  },
+  "exact_changed_source": [
+    "TreeDB/mvcc/native_finaldriver_diagnostic_v6_test.go"
+  ],
+  "expression_changed": false,
+  "focused_accept_sha256": "aeba8a7c609bdbb99db9a989d49d65781ab13a14fd22612d01b31cfa593819ea",
+  "focused_child_tests_reusable": 116,
+  "focused_input_invariance": "Only the separately excluded real diagnostic fixture changed; every other source, test, build and policy file matches repair03.",
+  "focused_top_level_tests_reusable": 56,
+  "formula_changed": false,
+  "go_or_test_executed": false,
+  "no_public_Q32_cap_change": true,
+  "prior_ready_cancel_result_reused": false,
+  "prior_results": {
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-real-controls-repair03/real-ready-cancel/result.json": "12167c18d2dacaeb6f230b50be77a7aa0c2c5099d932f985bfbdf4fa7fb53368",
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-real-controls-repair03/real-ready-cancel/run.log": "72dbae399b0681e88aee94a303a3ad70a0dd12ea5e58f2eb15bec5aec9416879",
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-real-controls-repair03/real-stale-before-fence/result.json": "3f0e54c1933d1b4fe5bd76a1fb0fd589ef25def6613558acec469c4d60417e92",
+    "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/finaldriver-real-controls-repair03/real-stale-before-fence/run.log": "6713dca4d6e4d6ddf5d22d8496c9c0f9830a53287922d5ece7dff869d5964cf0"
+  },
+  "production_changed": false,
+  "reason_all_five_real_arms_proposed": "Physical value bound changes from 1 to 9 before first cursor; pre-cursor raw assertions and ready-cancel oracle strengthened. No numerical G is inferred from prior runs.",
+  "unchanged_source_files": 10430
+}

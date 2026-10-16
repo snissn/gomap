@@ -1,0 +1,20 @@
+{
+  "status": "FROZEN_ONE_TEST_CONSERVATIVE_COUNT_GUARD_UNEXECUTED",
+  "source_root": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-integrated",
+  "source_manifest_sha256": "8f644d53679cc584cc241dd517dd2ccdf16f6e4c8899fa62819c3a520214b2cb",
+  "source_archive_sha256": "66f82d9f0cef64cb920c9ed9c314b017d076b4a18f7bcb6316e50611df7d2bbb",
+  "source_files": 10431,
+  "changed_paths": 1,
+  "unchanged_paths": 10430,
+  "production_changed": false,
+  "formula_changed": false,
+  "parent_manifest_sha256": "a7f05aa0a824de9f37664f1504636453133ad9b4d6d14a86826abeedd6bded2a",
+  "parent_archive_sha256": "aa282fb7a4892023781dd9862a9f2000e92cccacc36edf42329cd0106a4f0dd9",
+  "delta_sha256": "08e23880b98f9b745d22cd968016588a7a2ef35ba81bb1e2a73912d1640ba0ca",
+  "changed_archive_sha256": "14545d37035268cbac8c62b896ef7eea5146a3c4a8b75454cc61ab8152245bce",
+  "index_path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/coordinator/.git/worktrees/native-integrated/index",
+  "index_sha256": "4c6b63357522cd951fd864e661b167f52e6debcd5d5e150e002fdba478f4dbe1",
+  "source_lease_released": true,
+  "runtime_lease_released": true,
+  "go_executed": false
+}

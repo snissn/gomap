@@ -1,0 +1,31 @@
+{
+  "utc": "2026-10-16T09:36:30.526262+00:00",
+  "status": "VERIFIED_REPAIR05_SOURCE_DELTA_FOR_FOCUSED_CONTROLS",
+  "source_manifest_sha256": "a2ffdb13492ee217c892745f3cc3a6ce02ba82fbaeb03023a2f0496a38ce5387",
+  "source_archive_sha256": "896a8b1d53bcad78128a126106485df12ace7d7062c8132b921a3b20795b3771",
+  "source_count": 10432,
+  "changed_paths": [
+    "TreeDB/db/native_prebuilder_pricing_for_test_v6.go",
+    "TreeDB/internal/rootpublication/constructed_activation_rollback_v6_test.go",
+    "TreeDB/internal/rootpublication/coordinator.go",
+    "TreeDB/internal/rootpublication/durable_root_transaction.go",
+    "TreeDB/internal/rootpublication/durable_root_transaction_native_mvcc_v6.go",
+    "TreeDB/internal/rootpublication/primary_empty_candidate_work_v6.go",
+    "TreeDB/internal/rootpublication/types.go",
+    "TreeDB/mvcc/native_finaldriver_diagnostic_v6_test.go",
+    "TreeDB/mvcc/native_prune_backend_route_v6_test.go"
+  ],
+  "unchanged_paths": 10423,
+  "patch_verified": true,
+  "live_and_archive_equal_manifest": true,
+  "raw_index_sha256": "4c6b63357522cd951fd864e661b167f52e6debcd5d5e150e002fdba478f4dbe1",
+  "git_identity": {
+    "HEAD": "0149d78dba2574b09d7119d2631ec78a144e088d",
+    "index_sha256": "07161c1dc6c88fb230c74700b4ddd76b975a613540949423512d6786f7c86823"
+  },
+  "root_focused_proposal_sha256": "033cada71f5f05feee06fb37db685c89420ab1eddbcab227061816f224db684d",
+  "runner_sha256": "e52b7847ff89cb65978c49cd9cc5b91c1d7c8f2f0f3ffae9fe3e23cef292b642",
+  "independent_source_review": "pending; actual driver not selected",
+  "actual_executed": false,
+  "root_read_full_delta": true
+}
