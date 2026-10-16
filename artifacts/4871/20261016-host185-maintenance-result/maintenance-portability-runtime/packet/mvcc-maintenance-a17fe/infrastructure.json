@@ -1,0 +1,38 @@
+{
+  "actions_cache_used": false,
+  "affinity_required": [
+    0,
+    1
+  ],
+  "baseline": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+  "candidate": "a17febafb5353897c59a4e17f992e34c47a2585b",
+  "fresh_task_build_and_module_caches": true,
+  "infrastructure_limits": [
+    "INFRASTRUCTURE_UNAVAILABLE: runner: dedicated persistent runner; ephemeral ubuntu24.04 used",
+    "INFRASTRUCTURE_UNAVAILABLE: cache: persistent cache; fresh task caches used",
+    "GitHub14day artifact retention requires durable project archival"
+  ],
+  "local_host185_collection": "REFUSED before any benchmark; external processes exceeded2%; executed0",
+  "persistent_runner_available": false,
+  "persistent_task_cache_available": false,
+  "python": "3.12.3 (main, Aug 31 2026, 10:18:26) [GCC 13.3.0]",
+  "review_and_root_grant": "external prerequisites to manual dispatch; this receipt does not assert review acceptance",
+  "runner": {
+    "GITHUB_EVENT_NAME": "workflow_dispatch",
+    "GITHUB_REF": "refs/heads/main",
+    "GITHUB_REPOSITORY": "snissn/gomap",
+    "GITHUB_RUN_ATTEMPT": "1",
+    "GITHUB_RUN_ID": "38833428170",
+    "GITHUB_SHA": "637129789378c33027a234997b6cdd57f20fd0fe",
+    "GITHUB_WORKFLOW_REF": "snissn/gomap/.github/workflows/treedb-mvcc-maintenance-diagnostic.yml@refs/heads/main",
+    "GITHUB_WORKFLOW_SHA": "637129789378c33027a234997b6cdd57f20fd0fe",
+    "ImageOS": "ubuntu24",
+    "ImageVersion": "20261012.334.1",
+    "RUNNER_ARCH": "X64",
+    "RUNNER_NAME": "GitHub Actions 1000547864",
+    "RUNNER_OS": "Linux"
+  },
+  "runner_temp": "/home/runner/work/_temp/mvcc-maintenance-a17fe",
+  "scope": "separately granted bounded diagnostic from landed harness; no qualification claim",
+  "toolchain_origin": "pinned setup-go action/tool cache on ephemeral hosted image; exact executable hash enforced"
+}

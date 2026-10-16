@@ -1,0 +1,39 @@
+{
+  "at_utc": "2026-10-16T01:13:55.326481+00:00",
+  "binaries": {
+    "baseline-db": {
+      "package": "./TreeDB/db",
+      "path": "/home/runner/work/_temp/mvcc-maintenance-a17fe/performance-185/maintenance-build-02/baseline-db.test",
+      "sha256": "02b933d130d2580c5f1f92d130b112e3d0a57d05e58ce7945837bd622f5ba530",
+      "source_head": "5bca87ffe6e1bfba2d693264d2dc82936adc234f"
+    },
+    "baseline-public": {
+      "package": "./TreeDB",
+      "path": "/home/runner/work/_temp/mvcc-maintenance-a17fe/performance-185/maintenance-build-02/baseline-public.test",
+      "sha256": "6d4f97f8b638214357e4e0274c4c043f8e695899549a497446d845373f697a9e",
+      "source_head": "5bca87ffe6e1bfba2d693264d2dc82936adc234f"
+    },
+    "candidate-db": {
+      "package": "./TreeDB/db",
+      "path": "/home/runner/work/_temp/mvcc-maintenance-a17fe/performance-185/maintenance-build-02/candidate-db.test",
+      "sha256": "1873bb68914e0259511ebcaed0cd3e6e04eec2b2f11826508c2c1dd219c34e9c",
+      "source_head": "a17febafb5353897c59a4e17f992e34c47a2585b"
+    },
+    "candidate-public": {
+      "package": "./TreeDB",
+      "path": "/home/runner/work/_temp/mvcc-maintenance-a17fe/performance-185/maintenance-build-02/candidate-public.test",
+      "sha256": "c938e2befa2f915e13252ab69d70ddba6e34eccd1d94ca9f85a203f773ca9a31",
+      "source_head": "a17febafb5353897c59a4e17f992e34c47a2585b"
+    }
+  },
+  "builder_sha256": "223178a8e185e7402488af30fdd906970c84306aebaba9a7107dda228e1a9f79",
+  "compiler_sha256": "d68b7abbc40d0844f673f6cf06ae3cded225c50437c6454fa37ef178d079fe65",
+  "heads": {
+    "baseline": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+    "candidate": "a17febafb5353897c59a4e17f992e34c47a2585b"
+  },
+  "source_after_sha256": "36bc79deae1989a6c15ccc5bfc0a2f3b688de1dca0310d50634acde86ddd2e2f",
+  "source_before_sha256": "36bc79deae1989a6c15ccc5bfc0a2f3b688de1dca0310d50634acde86ddd2e2f",
+  "source_unchanged": true,
+  "test_bodies_executed": false
+}

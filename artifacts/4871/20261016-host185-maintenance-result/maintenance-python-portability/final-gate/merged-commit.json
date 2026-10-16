@@ -1,0 +1,40 @@
+{
+  "sha": "637129789378c33027a234997b6cdd57f20fd0fe",
+  "node_id": "C_kwDOIdn7C9oAKDYzNzEyOTc4OTM3OGMzMzAyN2EyMzQ5OTdiNmNkZDU3ZjIwZmQwZmU",
+  "url": "https://api.github.com/repos/snissn/gomap/git/commits/637129789378c33027a234997b6cdd57f20fd0fe",
+  "html_url": "https://github.com/snissn/gomap/commit/637129789378c33027a234997b6cdd57f20fd0fe",
+  "author": {
+    "name": "Mikers",
+    "email": "snissn@gmail.com",
+    "date": "2026-10-16T01:07:28Z"
+  },
+  "committer": {
+    "name": "GitHub",
+    "email": "noreply@github.com",
+    "date": "2026-10-16T01:07:28Z"
+  },
+  "tree": {
+    "sha": "5be6bbba648dd8f794368040138ffff1d5ffc84b",
+    "url": "https://api.github.com/repos/snissn/gomap/git/trees/5be6bbba648dd8f794368040138ffff1d5ffc84b"
+  },
+  "message": "Merge pull request #5138 from snissn/codex/4871-maintenance-python-portability-185-20261016\n\nci: make maintenance source checks portable across Python versions",
+  "parents": [
+    {
+      "sha": "9165c53e4d82d12231af8404b0b7c5aea13530a6",
+      "url": "https://api.github.com/repos/snissn/gomap/git/commits/9165c53e4d82d12231af8404b0b7c5aea13530a6",
+      "html_url": "https://github.com/snissn/gomap/commit/9165c53e4d82d12231af8404b0b7c5aea13530a6"
+    },
+    {
+      "sha": "8db93fec7176d23bad95168954884da807ee1da4",
+      "url": "https://api.github.com/repos/snissn/gomap/git/commits/8db93fec7176d23bad95168954884da807ee1da4",
+      "html_url": "https://github.com/snissn/gomap/commit/8db93fec7176d23bad95168954884da807ee1da4"
+    }
+  ],
+  "verification": {
+    "verified": true,
+    "reason": "valid",
+    "signature": "-----BEGIN PGP SIGNATURE-----\n\nwsFcBAABCAAQBQJq0XjQCRC1aQ7uu5UhlAAAmJMQAEX2FeZubUk+SV8J3YEPCwc3\nfQXpmDUnTR6KE7fC57olFy2JFIXU/jouI36WV45aJopASiOO+Qou/nq/o9WZqpfg\n0qnrm60CqZd8fcw1nXWWvSrNIoSvqdBgf7sqWNZplcrUa1Eyq/AEkRR4k+a0RIwB\nwJB7mt13aDwpZOkaususZJQ1jtTyRUqlIgvE76UCmMo/R33vEHzafV0SMExPhoK7\noxv/yP+W+4pyob1SoQygx39rmTmjvrVK0N5ZXrju1RKb7uD8dG0CcCJbSFtCGWJN\na2cDqh7jQjq0J9aY1R7pFVqQIKRAXOQd7AUv3eRuFmw2jL9HtK53+KH3WEDWAWXe\nbYR/RBVoljGQAnwzd2l8V0/F93owLyYQxWpqg5UUIGSVcKd63bImQYfzZ6Rgv+aA\nmlZxsvfsNBVy9cS+IPeCCERc6vuCrz9mOTP2h0xIeOlqKtq9JgpxdwvrPgDOwP+R\njrM4Fny6LcpnaUdNmMus73Ankx1nGRbfharl1XPD/2m7nhReIbV32XCfcXKt101L\nd8Hj9QmWem4hlrDbNwju87ZCtl8flAosLqK7MEurWqrmifD/DLm05vOzmr2AtHXF\nkltyQ+fgnAIZu3nFSqs0nY8Rf7Mzx6mSWFNbBFDKUXCv9ej+KqqPBpOJ8GvoeB5R\nSj7uRsHlqfcOrmcRJRex\n=NOTm\n-----END PGP SIGNATURE-----\n",
+    "payload": "tree 5be6bbba648dd8f794368040138ffff1d5ffc84b\nparent 9165c53e4d82d12231af8404b0b7c5aea13530a6\nparent 8db93fec7176d23bad95168954884da807ee1da4\nauthor Mikers <snissn@gmail.com> 1792112848 -1000\ncommitter GitHub <noreply@github.com> 1792112848 -1000\n\nMerge pull request #5138 from snissn/codex/4871-maintenance-python-portability-185-20261016\n\nci: make maintenance source checks portable across Python versions",
+    "verified_at": "2026-10-16T01:07:29Z"
+  }
+}

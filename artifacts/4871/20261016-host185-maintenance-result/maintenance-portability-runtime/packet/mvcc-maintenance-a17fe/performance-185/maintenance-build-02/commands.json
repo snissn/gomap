@@ -1,0 +1,122 @@
+[
+  {
+    "argv": [
+      "/home/runner/work/_temp/mvcc-maintenance-a17fe/toolchains/go1.26.3/bin/go",
+      "test",
+      "-p",
+      "1",
+      "-c",
+      "-o",
+      "/home/runner/work/_temp/mvcc-maintenance-a17fe/performance-185/maintenance-build-02/baseline-public.test",
+      "./TreeDB"
+    ],
+    "cwd": "/home/runner/work/_temp/mvcc-maintenance-a17fe/coordinator",
+    "elapsed_s": 65.064116316,
+    "exit": 0,
+    "group_join": {
+      "adopted_children": [],
+      "cleanup_elapsed_s": 2.7871000014556557e-05,
+      "cleanup_limit_s": 2,
+      "kill_requested": false,
+      "leader_joined": true,
+      "pgid": 2744,
+      "pid": 2744,
+      "process_group_empty": true,
+      "unexpected_survivors": false
+    },
+    "interrupted": null,
+    "log": "baseline-public.build.log",
+    "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "timeout_s": 600
+  },
+  {
+    "argv": [
+      "/home/runner/work/_temp/mvcc-maintenance-a17fe/toolchains/go1.26.3/bin/go",
+      "test",
+      "-p",
+      "1",
+      "-c",
+      "-o",
+      "/home/runner/work/_temp/mvcc-maintenance-a17fe/performance-185/maintenance-build-02/baseline-db.test",
+      "./TreeDB/db"
+    ],
+    "cwd": "/home/runner/work/_temp/mvcc-maintenance-a17fe/coordinator",
+    "elapsed_s": 41.06035900500001,
+    "exit": 0,
+    "group_join": {
+      "adopted_children": [],
+      "cleanup_elapsed_s": 2.7170000009846262e-05,
+      "cleanup_limit_s": 2,
+      "kill_requested": false,
+      "leader_joined": true,
+      "pgid": 5920,
+      "pid": 5920,
+      "process_group_empty": true,
+      "unexpected_survivors": false
+    },
+    "interrupted": null,
+    "log": "baseline-db.build.log",
+    "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "timeout_s": 600
+  },
+  {
+    "argv": [
+      "/home/runner/work/_temp/mvcc-maintenance-a17fe/toolchains/go1.26.3/bin/go",
+      "test",
+      "-p",
+      "1",
+      "-c",
+      "-o",
+      "/home/runner/work/_temp/mvcc-maintenance-a17fe/performance-185/maintenance-build-02/candidate-public.test",
+      "./TreeDB"
+    ],
+    "cwd": "/home/runner/work/_temp/mvcc-maintenance-a17fe/ordinary-repair",
+    "elapsed_s": 47.07213581099995,
+    "exit": 0,
+    "group_join": {
+      "adopted_children": [],
+      "cleanup_elapsed_s": 2.8431999965050636e-05,
+      "cleanup_limit_s": 2,
+      "kill_requested": false,
+      "leader_joined": true,
+      "pgid": 6270,
+      "pid": 6270,
+      "process_group_empty": true,
+      "unexpected_survivors": false
+    },
+    "interrupted": null,
+    "log": "candidate-public.build.log",
+    "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "timeout_s": 600
+  },
+  {
+    "argv": [
+      "/home/runner/work/_temp/mvcc-maintenance-a17fe/toolchains/go1.26.3/bin/go",
+      "test",
+      "-p",
+      "1",
+      "-c",
+      "-o",
+      "/home/runner/work/_temp/mvcc-maintenance-a17fe/performance-185/maintenance-build-02/candidate-db.test",
+      "./TreeDB/db"
+    ],
+    "cwd": "/home/runner/work/_temp/mvcc-maintenance-a17fe/ordinary-repair",
+    "elapsed_s": 41.20899747799996,
+    "exit": 0,
+    "group_join": {
+      "adopted_children": [],
+      "cleanup_elapsed_s": 2.581799998324641e-05,
+      "cleanup_limit_s": 2,
+      "kill_requested": false,
+      "leader_joined": true,
+      "pgid": 6990,
+      "pid": 6990,
+      "process_group_empty": true,
+      "unexpected_survivors": false
+    },
+    "interrupted": null,
+    "log": "candidate-db.build.log",
+    "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "timeout_s": 600
+  }
+]

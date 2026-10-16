@@ -1,0 +1,32 @@
+{
+  "total_count": 1,
+  "jobs": [
+    {
+      "id": 116757100874,
+      "run_id": 38833428170,
+      "workflow_name": "TreeDB: bounded maintenance diagnostic (manual only)",
+      "head_branch": "main",
+      "run_url": "https://api.github.com/repos/snissn/gomap/actions/runs/38833428170",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOIdn7C88AAAAbL0P5Sg",
+      "head_sha": "637129789378c33027a234997b6cdd57f20fd0fe",
+      "url": "https://api.github.com/repos/snissn/gomap/actions/jobs/116757100874",
+      "html_url": "https://github.com/snissn/gomap/actions/runs/38833428170/job/116757100874",
+      "status": "queued",
+      "conclusion": null,
+      "created_at": "2026-10-16T01:07:48Z",
+      "started_at": "2026-10-16T01:07:48Z",
+      "completed_at": null,
+      "name": "fixed 5bca / a17fe fourteen-call diagnostic",
+      "steps": [],
+      "check_run_url": "https://api.github.com/repos/snissn/gomap/check-runs/116757100874",
+      "labels": [
+        "ubuntu-24.04"
+      ],
+      "runner_id": null,
+      "runner_name": null,
+      "runner_group_id": null,
+      "runner_group_name": null
+    }
+  ]
+}

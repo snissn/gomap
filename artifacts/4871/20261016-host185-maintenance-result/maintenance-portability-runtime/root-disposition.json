@@ -1,0 +1,15 @@
+{
+  "at_utc": "2026-10-16T01:27:29.919873+00:00",
+  "candidate": "a17febafb5353897c59a4e17f992e34c47a2585b",
+  "baseline": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+  "run_id": 38833428170,
+  "attempt": 1,
+  "disposition": "ACCEPT measured checkpoint allocation and8/16cohort-retention tradeoffs; ordinary final gates still required",
+  "root_disposition_sha256": "aadd9cd57a0c110ed6e308f0341708bf2171d9d80301b76bd57cc3722f234f41",
+  "independent_review_sha256": "6246c406898795958f01460dfc6d527f2daa7c30b6da1f3bfb54bd5dc2ae2256",
+  "retained_verification_sha256": "2fa44f7c6d05ad10001df4f284e029f139e55b24019c330912c956abb391edb2",
+  "issue_scope_sha256": "d81e91bf49fa338f1eaad3fcfee57ab3d1532a25c0cbfde9ca08e55f9c8f8c33",
+  "new_runtime_authorized": false,
+  "native_qualification": false,
+  "original_M0_replaced": false
+}

@@ -1,0 +1,76 @@
+{
+  "authority": "Original user explicitly authorized sole-coordinator execution and merge of graph 4871; root grants this one frozen bounded diagnostic.",
+  "baseline": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+  "candidate": "a17febafb5353897c59a4e17f992e34c47a2585b",
+  "environment": {
+    "GOGC": 100,
+    "GOMAXPROCS": 2,
+    "GOMEMLIMIT": "8GiB",
+    "affinity": [
+      0,
+      1
+    ],
+    "go": "1.26.3",
+    "go_sha256": "d68b7abbc40d0844f673f6cf06ae3cded225c50437c6454fa37ef178d079fe65"
+  },
+  "failure_policy": "Busy preflight refuses zero benchmark calls; busy measurement is contaminated. Preserve all attempted raws, failures, source/SDK/ELF archives and group-join receipts. No rerun or selective sample replacement.",
+  "gate_sha256": "bff928c47d116070a67f09608045178208a1df1d93a038da2ced5dfe5308e7cd",
+  "granted_utc": "2026-10-16T01:07:45.091766+00:00",
+  "harness_head": "637129789378c33027a234997b6cdd57f20fd0fe",
+  "harness_review_sha256": "550548b6c36bf37fd6ef6da748ee2421766fda4582f3b7d96db1d747a1ad8ac9",
+  "harness_tree": "5be6bbba648dd8f794368040138ffff1d5ffc84b",
+  "infrastructure": [
+    "INFRASTRUCTURE_UNAVAILABLE: runner: no dedicated quiet persistent runner is available for this scope; use ephemeral ubuntu-24.04 and retain actual host observations.",
+    "INFRASTRUCTURE_UNAVAILABLE: cache: no persistent build cache; fresh task caches, possible hosted setup-go toolcache, exact SDK hash mandatory.",
+    "INFRASTRUCTURE_UNAVAILABLE: storage: hosted artifacts expire after14days; root will retain the complete downloaded packet and publish durable evidence bindings."
+  ],
+  "limits": {
+    "build_seconds_each": 600,
+    "cleanup_only_seconds": 2,
+    "external_process_percent": 2,
+    "go_child_seconds": 120,
+    "job_minutes": 120,
+    "outer_benchmark_seconds": 150,
+    "quiet_preflight_seconds": 10,
+    "sample_ms": 250
+  },
+  "maximum_attempts": 1,
+  "maximum_benchmark_processes": 14,
+  "maximum_dispatches": 1,
+  "prior_failed_attempt": {
+    "benchmark_calls": 0,
+    "head": "9165c53e4d82d12231af8404b0b7c5aea13530a6",
+    "repair_pr": 5138,
+    "run_id": 38830037922
+  },
+  "product_review_sha256": "1a060f07b1d345267223936912751690db7c6bfb0cbefdc5e5efbe713f7e66d4",
+  "qualification": "Diagnostic only. This grant does not accept ordinary cost, failed original M0, native Q32/ACK0, sustained performance or graph completion.",
+  "ref": "main",
+  "reviewed_harness_parent": "8db93fec7176d23bad95168954884da807ee1da4",
+  "runtime_authorized": true,
+  "schedule": "Checkpoint16x three AB/BA pairs; production Vacuum1x three AB/BA pairs; candidate cohort8/16 each128x. Existing unchanged benchmark bodies, count1, run-empty, no overlays.",
+  "sources": {
+    "baseline": {
+      "files": 9936,
+      "git_tree_sha256": "6aa108f0f6d9f1a9ead11e6d022bfd56618cd41ef7a2b44f78b51187173b41c3",
+      "manifest_sha256": "ce59762ffc6d5a93c14a96927d232a8481a1fc52b262bd2c4de76eb62b03058e",
+      "source_head": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+      "tree": "e448be5924b4a8e66a4894090460fb559f241354"
+    },
+    "candidate": {
+      "files": 10246,
+      "git_tree_sha256": "ed4962d0e687ef027ccaa64c97f46c2abf656a973c2ea67357ea9dd154cea75f",
+      "manifest_sha256": "22aabd96fb63261284cdf7e75efc43b01ca992df8aa1dd72aba38ad0462035dc",
+      "source_head": "a17febafb5353897c59a4e17f992e34c47a2585b",
+      "tree": "3d61eacb580bb65ff2696627f85f483f0bde85f5"
+    },
+    "harness": {
+      "files": 9948,
+      "git_tree_sha256": "4b8c85450934630845fedb392bb0ace1e361225a5da839369c69aba3066f490b",
+      "manifest_sha256": "f0744d868fe0bb1d42259fe874fbc3ab7981820911cd3aa3e43a148b3285da04",
+      "source_head": "8db93fec7176d23bad95168954884da807ee1da4",
+      "tree": "5be6bbba648dd8f794368040138ffff1d5ffc84b"
+    }
+  },
+  "workflow": "treedb-mvcc-maintenance-diagnostic.yml"
+}

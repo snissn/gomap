@@ -1,0 +1,17 @@
+{
+  "at_utc": "2026-10-16T01:07:11.230482+00:00",
+  "authorization": "User explicitly authorized sole-coordinator execute-and-merge for graph 4871; no local human approval restriction.",
+  "base": "9165c53e4d82d12231af8404b0b7c5aea13530a6",
+  "checks_success": 50,
+  "head": "8db93fec7176d23bad95168954884da807ee1da4",
+  "hosted_unavailability": "Manual hosted AI review cannot pin required gpt-6.1-sol; not requested. This is the explicitly routed independent internal fallback, not a hosted review outcome.",
+  "review_disposition": "ACCEPT",
+  "review_json_sha256": "550548b6c36bf37fd6ef6da748ee2421766fda4582f3b7d96db1d747a1ad8ac9",
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW",
+  "review_model": "gpt-6.1-sol",
+  "runtime_calls": 0,
+  "source_files": 9948,
+  "source_manifest_sha256": "f0744d868fe0bb1d42259fe874fbc3ab7981820911cd3aa3e43a148b3285da04",
+  "tree": "5be6bbba648dd8f794368040138ffff1d5ffc84b",
+  "unresolved_threads": 0
+}

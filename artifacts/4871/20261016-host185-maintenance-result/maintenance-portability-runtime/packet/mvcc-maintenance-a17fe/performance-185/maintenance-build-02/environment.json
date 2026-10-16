@@ -1,0 +1,18 @@
+{
+  "CGO_ENABLED": "1",
+  "GOAMD64": "v1",
+  "GOCACHE": "/home/runner/work/_temp/mvcc-maintenance-a17fe/ordinary-work/cache",
+  "GODEBUG": "",
+  "GOENV": "off",
+  "GOFLAGS": "",
+  "GOGC": "100",
+  "GOMAXPROCS": "2",
+  "GOMEMLIMIT": "8GiB",
+  "GOMODCACHE": "/home/runner/work/_temp/mvcc-maintenance-a17fe/ordinary-work/modcache",
+  "GOPROXY": "off",
+  "GOROOT": "/home/runner/work/_temp/mvcc-maintenance-a17fe/toolchains/go1.26.3",
+  "GOSUMDB": "off",
+  "GOTOOLCHAIN": "local",
+  "GOWORK": "off",
+  "TMPDIR": "/home/runner/work/_temp/mvcc-maintenance-a17fe/performance-185/maintenance-build-02/tmp"
+}

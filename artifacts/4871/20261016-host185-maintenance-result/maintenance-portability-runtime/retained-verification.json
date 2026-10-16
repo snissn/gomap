@@ -1,0 +1,38 @@
+{
+  "archives": {
+    "baseline": {
+      "files": 9936,
+      "sha256": "d7e8e90efa9415cad44d345dc675caf5407851ec78c9f4cec058fd06b5c6594e"
+    },
+    "candidate": {
+      "files": 10246,
+      "sha256": "0e56538b0fdcb0131d62dc4f11520a3086b6cab52736b20bf53fc33dd1e2c81d"
+    },
+    "harness": {
+      "files": 9948,
+      "sha256": "268fcce7c548f544e0c45d26c13e53750c742f0f653e3a8e0412cfb9fb7b5611"
+    },
+    "sdk": {
+      "files": 15022,
+      "sha256": "33e4d8216e836a71d7c7100c80dcfdbb6fe9aa0b73563447d7f3689e7326d411"
+    }
+  },
+  "artifact_files": 105,
+  "attempt": 1,
+  "benchmark_calls": 14,
+  "binary_hashes": {
+    "baseline-db": "02b933d130d2580c5f1f92d130b112e3d0a57d05e58ce7945837bd622f5ba530",
+    "baseline-public": "6d4f97f8b638214357e4e0274c4c043f8e695899549a497446d845373f697a9e",
+    "candidate-db": "1873bb68914e0259511ebcaed0cd3e6e04eec2b2f11826508c2c1dd219c34e9c",
+    "candidate-public": "c938e2befa2f915e13252ab69d70ddba6e34eccd1d94ca9f85a203f773ca9a31"
+  },
+  "bootstrap_commands": 34,
+  "build_commands": 4,
+  "grant_sha256": "ded213416e2115a755177c8ab00e77bc0db5ec744abce7207bf6450de8ed1416",
+  "process_groups_joined": 52,
+  "qualification": "No binaries executed during this verification. Independent raw/quiet review and root cost disposition remain separate; no original M0/native/graph acceptance.",
+  "run": 38833428170,
+  "verdict": "PASS retained byte/source/SDK/ELF/command binding only",
+  "verified_utc": "2026-10-16T01:21:24.626243+00:00",
+  "zip_sha256": "1d0d58628a85f6738c9155be7b218805d0545efefa80f5546820a64af2f1fb46"
+}

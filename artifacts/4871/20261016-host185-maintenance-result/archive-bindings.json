@@ -1,0 +1,74 @@
+[
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/maintenance-portability-runtime/attempt.zip",
+    "bytes": 678316712,
+    "sha256": "1d0d58628a85f6738c9155be7b218805d0545efefa80f5546820a64af2f1fb46",
+    "reason": "Exact downloaded transport archive, source archive, SDK or executable retained locally and verified; complete local byte binding retained here. Source commits are remotely available; this is not a claim of remote binary storage."
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/maintenance-portability-runtime/packet/mvcc-maintenance-a17fe/archives/baseline.tar.gz",
+    "bytes": 158683045,
+    "sha256": "d7e8e90efa9415cad44d345dc675caf5407851ec78c9f4cec058fd06b5c6594e",
+    "reason": "Exact downloaded transport archive, source archive, SDK or executable retained locally and verified; complete local byte binding retained here. Source commits are remotely available; this is not a claim of remote binary storage."
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/maintenance-portability-runtime/packet/mvcc-maintenance-a17fe/archives/candidate.tar.gz",
+    "bytes": 159356685,
+    "sha256": "0e56538b0fdcb0131d62dc4f11520a3086b6cab52736b20bf53fc33dd1e2c81d",
+    "reason": "Exact downloaded transport archive, source archive, SDK or executable retained locally and verified; complete local byte binding retained here. Source commits are remotely available; this is not a claim of remote binary storage."
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/maintenance-portability-runtime/packet/mvcc-maintenance-a17fe/archives/harness.tar.gz",
+    "bytes": 158714036,
+    "sha256": "268fcce7c548f544e0c45d26c13e53750c742f0f653e3a8e0412cfb9fb7b5611",
+    "reason": "Exact downloaded transport archive, source archive, SDK or executable retained locally and verified; complete local byte binding retained here. Source commits are remotely available; this is not a claim of remote binary storage."
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/maintenance-portability-runtime/packet/mvcc-maintenance-a17fe/compiler/compile",
+    "bytes": 25774723,
+    "sha256": "3bb421d581f60b9ab48c2c73adf5c018557e89af32ad018d9c4417afa4bf90c1",
+    "reason": "Exact downloaded transport archive, source archive, SDK or executable retained locally and verified; complete local byte binding retained here. Source commits are remotely available; this is not a claim of remote binary storage."
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/maintenance-portability-runtime/packet/mvcc-maintenance-a17fe/compiler/go",
+    "bytes": 15434598,
+    "sha256": "d68b7abbc40d0844f673f6cf06ae3cded225c50437c6454fa37ef178d079fe65",
+    "reason": "Exact downloaded transport archive, source archive, SDK or executable retained locally and verified; complete local byte binding retained here. Source commits are remotely available; this is not a claim of remote binary storage."
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/maintenance-portability-runtime/packet/mvcc-maintenance-a17fe/compiler/link",
+    "bytes": 6680481,
+    "sha256": "dac2c3179a6efe737181d79cda5e09b03c3df74df83bebd8864b5f0c61ef9cf3",
+    "reason": "Exact downloaded transport archive, source archive, SDK or executable retained locally and verified; complete local byte binding retained here. Source commits are remotely available; this is not a claim of remote binary storage."
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/maintenance-portability-runtime/packet/mvcc-maintenance-a17fe/go1.26.3-linux-amd64.tar.gz",
+    "bytes": 67700769,
+    "sha256": "33e4d8216e836a71d7c7100c80dcfdbb6fe9aa0b73563447d7f3689e7326d411",
+    "reason": "Exact downloaded transport archive, source archive, SDK or executable retained locally and verified; complete local byte binding retained here. Source commits are remotely available; this is not a claim of remote binary storage."
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/maintenance-portability-runtime/packet/mvcc-maintenance-a17fe/performance-185/maintenance-build-02/baseline-db.test",
+    "bytes": 55570096,
+    "sha256": "02b933d130d2580c5f1f92d130b112e3d0a57d05e58ce7945837bd622f5ba530",
+    "reason": "Exact downloaded transport archive, source archive, SDK or executable retained locally and verified; complete local byte binding retained here. Source commits are remotely available; this is not a claim of remote binary storage."
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/maintenance-portability-runtime/packet/mvcc-maintenance-a17fe/performance-185/maintenance-build-02/baseline-public.test",
+    "bytes": 52475055,
+    "sha256": "6d4f97f8b638214357e4e0274c4c043f8e695899549a497446d845373f697a9e",
+    "reason": "Exact downloaded transport archive, source archive, SDK or executable retained locally and verified; complete local byte binding retained here. Source commits are remotely available; this is not a claim of remote binary storage."
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/maintenance-portability-runtime/packet/mvcc-maintenance-a17fe/performance-185/maintenance-build-02/candidate-db.test",
+    "bytes": 61446548,
+    "sha256": "1873bb68914e0259511ebcaed0cd3e6e04eec2b2f11826508c2c1dd219c34e9c",
+    "reason": "Exact downloaded transport archive, source archive, SDK or executable retained locally and verified; complete local byte binding retained here. Source commits are remotely available; this is not a claim of remote binary storage."
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/maintenance-portability-runtime/packet/mvcc-maintenance-a17fe/performance-185/maintenance-build-02/candidate-public.test",
+    "bytes": 56928317,
+    "sha256": "c938e2befa2f915e13252ab69d70ddba6e34eccd1d94ca9f85a203f773ca9a31",
+    "reason": "Exact downloaded transport archive, source archive, SDK or executable retained locally and verified; complete local byte binding retained here. Source commits are remotely available; this is not a claim of remote binary storage."
+  }
+]

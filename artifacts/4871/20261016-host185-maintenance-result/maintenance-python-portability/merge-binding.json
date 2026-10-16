@@ -1,0 +1,12 @@
+{
+  "head": "8db93fec7176d23bad95168954884da807ee1da4",
+  "base": "9165c53e4d82d12231af8404b0b7c5aea13530a6",
+  "merged": "637129789378c33027a234997b6cdd57f20fd0fe",
+  "tree": "5be6bbba648dd8f794368040138ffff1d5ffc84b",
+  "merged_at": "2026-10-16T01:07:28Z",
+  "checks_success": 50,
+  "review": "INTERNAL_SUBAGENT_REVIEW gpt-6.1-sol ACCEPT",
+  "unresolved_threads": 0,
+  "runtime_calls": 0,
+  "worktree_retained": "Required exact source/provenance for fresh bounded diagnostic."
+}

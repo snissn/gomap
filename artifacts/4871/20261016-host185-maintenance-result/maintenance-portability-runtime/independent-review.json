@@ -1,0 +1,228 @@
+{
+  "schema": 1,
+  "reviewer": "independent exact gpt-6.1-sol; offline source/raw review",
+  "run_id": 38833428170,
+  "attempt": 1,
+  "harness_head": "637129789378c33027a234997b6cdd57f20fd0fe",
+  "baseline": "5bca87ffe6e1bfba2d693264d2dc82936adc234f",
+  "candidate": "a17febafb5353897c59a4e17f992e34c47a2585b",
+  "bounded_evidence_verdict": "ACCEPT",
+  "basis": [
+    "All14 raw SHA/routes/iteration counts/-2 concurrency/order and exact argv independently verified",
+    "All raw metric units and values independently parsed without executing packet code",
+    "All summary medians, paired timings, cohort results match",
+    "Strict unchanged2percent quiet conclusion independently recomputed from all42+151 raw process tables",
+    "Root separate retained source/SDK/ELF/52 command-join verification PASS bound by hash"
+  ],
+  "cost_acceptance": {
+    "status": "root decision pending; not granted by this review",
+    "recommendation": "Recommend root explicitly disposition this exact measured checkpoint residual and both cohort physical-retention rows as the ordinary engineering tradeoff. Existing complete packet and semantic controls suffice for that bounded decision; this reviewer does not grant the root decision or claim minimality, necessity, causal packing saving, a universal ceiling, or file deletion.",
+    "checkpoint_median_bytes_absolute": 13029,
+    "checkpoint_median_bytes_percent": 2.832532930994369,
+    "checkpoint_median_allocations_absolute": 24,
+    "checkpoint_median_allocations_percent": 2.79394644935973,
+    "checkpoint_pair_bytes_absolute": [
+      13182.0,
+      19969.0,
+      13029.0
+    ],
+    "specific_unproven_facts": [
+      "Numerical timed saving due to packing relative to2588 is not established: this packet compares full a17fe candidate with original base, no matched2588 arm",
+      "No disjoint current timer-window allocation partition proves every residual byte/object necessary or minimal",
+      "No stable timing benefit or future workload cost ceiling is established"
+    ],
+    "next_bounded_decision": "Choose explicit acceptance or rejection of the actual measured cost now; retain these unproven claims as unproven. No new broad allocation/benchmark loop or retry requested."
+  },
+  "other_gates": {
+    "original_M0": "prior FAIL remains unresolved; no replacement or unchanged-head retry acceptance",
+    "native_Q32_ACK0": "not tested or accepted",
+    "exact_newhead_original_CI": "not replaced by this diagnostic; advancing ordinary PR requires its original exact-head gates",
+    "sustained_universal_performance": "not established"
+  },
+  "root_verification": {
+    "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/maintenance-portability-runtime/retained-verification.json",
+    "sha256": "2fa44f7c6d05ad10001df4f284e029f139e55b24019c330912c956abb391edb2",
+    "verdict": "PASS retained byte/source/SDK/ELF/command binding only",
+    "artifact_files": 105,
+    "bootstrap_commands": 34,
+    "build_commands": 4,
+    "benchmark_calls": 14,
+    "process_groups_joined": 52,
+    "scope": "root independently owns full archive/source/SDK/ELF/transport verification; this reviewer did not duplicate that full proof"
+  },
+  "sources_inspected": [
+    {
+      "archive": "candidate.tar.gz",
+      "path": "scripts/mvcc_primary_cost_gate.py",
+      "sha256": "58c58cbd8ec10a44681e9d3bd6f2dc8049869b16a45388530983438c2a9f44fb",
+      "inspection": "process CPU observer actual allowance/tick accumulation/normalization"
+    },
+    {
+      "archive": "candidate.tar.gz",
+      "path": "TreeDB/cow_public_cost_bench_test.go",
+      "sha256": "7f3b0a1fa48e41ce8dca25df6406fe8480ae69429cc5b562792282f2422e65be",
+      "inspection": "actual forced-pointer durable btree dirty checkpoint route and timer/fixture metric boundary"
+    },
+    {
+      "archive": "candidate.tar.gz",
+      "path": "TreeDB/db/vacuum_collection_bench_test.go",
+      "sha256": "86365555acec7e0f11ff9f90913a6bd07c1998fd4c07341c1dd1feaab21ec6a6",
+      "inspection": "actual public production vacuum branch, foreground fixed work and output limitations"
+    },
+    {
+      "archive": "candidate.tar.gz",
+      "path": "TreeDB/db/durable_root_bench_test.go",
+      "sha256": "ddcb7d9b1f2af926e7c4c8050d3adc6c919fbe69899529e7df4cf882ba23717e",
+      "inspection": "cohort selected kind adoption, actual reader/scope lifetime, original inode/value check and terminal cleanup"
+    },
+    {
+      "archive": "candidate.tar.gz",
+      "path": "TreeDB/internal/rootpublication/resource_generic_diagnostics.go",
+      "sha256": "084811f8df05515037223ef4e6ebd43ffde2860005303ba20ec9893fcbca75ea",
+      "inspection": "packed immutable diagnostic constructor and preservation of owned text/metrics identity"
+    },
+    {
+      "archive": "candidate.tar.gz",
+      "path": "TreeDB/batch/batch.go",
+      "sha256": "c6c7a89d39594d24a1078ff9529b6f7f0eb0de7a284bf55b7a0cd41185ecc22a",
+      "inspection": "inline MVCCInput geometry, no timed attribution"
+    },
+    {
+      "archive": "harness.tar.gz",
+      "path": ".github/scripts/mvcc_maintenance_collect.py",
+      "sha256": "fcc1291961907e6b3bde63ac1bc992a90eb379479bd04da243ecd8207b65f557",
+      "inspection": "schedule, fixed selectors/counts, raw parser, subprocess route, summaries and process observation"
+    },
+    {
+      "archive": "harness.tar.gz",
+      "path": ".github/scripts/mvcc_maintenance_bootstrap.py",
+      "sha256": "69ddd5266db59a42611b924ebb68a522a789c7fae89fbdc1f53a83571fe79366",
+      "inspection": "original join_group, waited leader, adopted target PGID reap and absence check"
+    }
+  ],
+  "inputs": [
+    {
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/maintenance-portability-runtime/grant.json",
+      "sha256": "ded213416e2115a755177c8ab00e77bc0db5ec744abce7207bf6450de8ed1416"
+    },
+    {
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/maintenance-portability-runtime/retained-verification.json",
+      "sha256": "2fa44f7c6d05ad10001df4f284e029f139e55b24019c330912c956abb391edb2"
+    },
+    {
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/maintenance-portability-runtime/download-receipt.json",
+      "sha256": "950eb8ed9d7d7edf1d54abce1afbeff3041efb102dec5357c2948fa67c307444"
+    },
+    {
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/maintenance-portability-runtime/independent-metrics.json",
+      "sha256": "f7718c9cee6f69470398388e3234e570405e11f7d5fb9ca590e070c8c0f4c0e0"
+    },
+    {
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/maintenance-portability-runtime/independent-quiet.json",
+      "sha256": "1adb4dc8cfe465f4bbf7c411071d9ab77485f28ccc34a8da4e6f5251223b91c4"
+    },
+    {
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/maintenance-portability-runtime/packet/mvcc-maintenance-a17fe/performance-185/maintenance-bounded-02/binding.json",
+      "sha256": "c25d284aed4b35e9a4ca65988968a0aefd23f3ba9bd2aea5c5dc007cb0765d8f"
+    },
+    {
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/maintenance-portability-runtime/packet/mvcc-maintenance-a17fe/performance-185/maintenance-bounded-02/commands.json",
+      "sha256": "3c2d20790177e2f8ee2c29db1ca63970217db8f29489e6455a08b87c0da906e4"
+    },
+    {
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/maintenance-portability-runtime/packet/mvcc-maintenance-a17fe/performance-185/maintenance-bounded-02/result.json",
+      "sha256": "05972dbe166c64c3ba21b48f884cb24fab6e0b2b6d18ad75f78190bf1a7dc2fb"
+    },
+    {
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/maintenance-portability-runtime/packet/mvcc-maintenance-a17fe/performance-185/maintenance-bounded-02/preflight.json",
+      "sha256": "96eecc344d3a92d97c4e28192a64b165b07aeff0990035a8dba68716a7ac5779"
+    },
+    {
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/maintenance-portability-runtime/packet/mvcc-maintenance-a17fe/performance-185/maintenance-bounded-02/measurement-quiet.json",
+      "sha256": "e20731e1204087dc4890375abba3472b3650206459fcb96744313469dce5c66f"
+    },
+    {
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-diagnostic-packing/root-disposition.md",
+      "sha256": "9eaf6402142457f5929b587fefd7046efde2bdcf45386158606a6958bf9fb99b"
+    },
+    {
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-residual-cost-review/review.md",
+      "sha256": "1171749c161dcbfaacebe125c38fe13fdd24da519b787888bd29457310964df2"
+    },
+    {
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/m0-observation-runtime/root-disposition.md",
+      "sha256": "e34b6d05d9de5e5dacb794b65cdf2cba6f3a7a7b81aaf032d41fdc84989b0a31"
+    },
+    {
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/maintenance-portability-runtime/issue-5111-live.json",
+      "sha256": "d81e91bf49fa338f1eaad3fcfee57ab3d1532a25c0cbfde9ca08e55f9c8f8c33"
+    }
+  ],
+  "runtime_executed": false,
+  "source_mutated": false,
+  "limitations": [
+    "Whole-window per-process average >=2% rule, not 250ms interval peak or all-process aggregate rule",
+    "Allowed ancestry and descendants recomputed from each raw process table, PID identity includes start time",
+    "Processes entirely between samples and final unobserved ticks of exited processes may be missed",
+    "CPU quietness does not establish disk isolation, scheduler stability, GC/runtime or timing causality",
+    "No host PSI/cgroup/GC per-call export in these process-only observation logs",
+    "Normal group receipts prove waited leader, adopted-child reap loop for target PGID and empty target PGID; no claim covering descendants that escaped that PGID",
+    "Finish elapsed uses retained summary timestamp; conservative last raw denominator also remains below2%",
+    "Three matched pairs per operation, no confidence interval or population bound",
+    "One off-timer cleanup event per cohort, no cleanup distribution",
+    "Drained cohort files remain8/16; allreportedGCdeletionszero; no physical disk reclaim claim",
+    "Vacuum fixture lacks full digest and physical bytes/shrink ratio",
+    "No per-call GC/STW/concurrent-GC/assist/scheduler/PSI observation; quietCPU cannot assign cause",
+    "No retry, selective replacement, benchmark/source correction or new runtime authorization"
+  ],
+  "issue_scope": {
+    "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/maintenance-portability-runtime/issue-5111-live.json",
+    "body_line_68": "Material unexplained regressions block maturity until corrected or explicitly accepted; no new numeric targets without qualified harness",
+    "body_line_106": "Cohort physical-retention cost must be measured and accepted before maturity; conservative construction permission is not regression acceptance"
+  },
+  "cohort_rows": [
+    {
+      "files": 8,
+      "timed_bytes_per_op": 3722,
+      "timed_allocations_per_op": 14,
+      "held_files": 8,
+      "drained_files": 8,
+      "held_file_bytes": 6528,
+      "drained_file_bytes": 6528,
+      "held_old_DATA_bytes": 262144,
+      "held_old_PRIMARY_bytes": 1048576,
+      "governor_held_bytes": 305424,
+      "governor_after_reader_bytes": 222064,
+      "governor_after_scope_bytes": 162592,
+      "governor_closed_bytes": 0,
+      "last_reader_cleanup_ns": 51165,
+      "GC_deletions": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "files": 16,
+      "timed_bytes_per_op": 3786,
+      "timed_allocations_per_op": 14,
+      "held_files": 16,
+      "drained_files": 16,
+      "held_file_bytes": 13056,
+      "drained_file_bytes": 13056,
+      "held_old_DATA_bytes": 262144,
+      "held_old_PRIMARY_bytes": 1048576,
+      "governor_held_bytes": 432336,
+      "governor_after_reader_bytes": 278832,
+      "governor_after_scope_bytes": 162592,
+      "governor_closed_bytes": 0,
+      "last_reader_cleanup_ns": 69463,
+      "GC_deletions": [
+        0,
+        0,
+        0
+      ]
+    }
+  ],
+  "cohort_interpretation": "Both sizes exercise actual terminal physical handle closure and zero owner/lease/governor assertions at DB.Close; remaining original paths observed after scope drain are not deleted. Governor quantities are policy accounting, not a physical sum."
+}

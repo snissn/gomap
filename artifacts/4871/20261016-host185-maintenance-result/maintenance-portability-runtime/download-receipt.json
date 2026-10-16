@@ -1,0 +1,16 @@
+{
+  "api_digest": "sha256:1d0d58628a85f6738c9155be7b218805d0545efefa80f5546820a64af2f1fb46",
+  "api_size_in_bytes": 678316712,
+  "archive_digest_verified": true,
+  "artifact_id": 12018760026,
+  "at_utc": "2026-10-16T01:18:16.775232+00:00",
+  "bytes": 678316712,
+  "exit": 0,
+  "extracted_bytes": 846200170,
+  "extracted_files": 109,
+  "extracted_manifest_sha256": "833802c5aa56dccbbd929df928e1962bbb3e2cfe8a5051a1386dedbf056c352e",
+  "run_id": 38833428170,
+  "sha256": "1d0d58628a85f6738c9155be7b218805d0545efefa80f5546820a64af2f1fb46",
+  "source_run_conclusion": "success",
+  "stderr": ""
+}

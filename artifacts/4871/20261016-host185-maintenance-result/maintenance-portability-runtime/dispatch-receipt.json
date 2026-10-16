@@ -1,0 +1,10 @@
+{
+  "completed_utc": "2026-10-16T01:07:47.229346+00:00",
+  "exit": 0,
+  "grant_sha256": "ded213416e2115a755177c8ab00e77bc0db5ec744abce7207bf6450de8ed1416",
+  "request_count": 1,
+  "retry_allowed": false,
+  "started_utc": "2026-10-16T01:07:45.599649+00:00",
+  "stderr": "",
+  "stdout": ""
+}
