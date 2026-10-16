@@ -1,0 +1,8 @@
+{
+  "source_manifest_sha256": "9e3596eb05d4222ba4acf747a4045452efb8210a55a74201f5923da1fef0ad88",
+  "archive_sha256": "a2e7deb7559d66138abe6eaed5cc9d0760498469b9a1fc2c4300f7a641530c12",
+  "verified_archive_files": 10346,
+  "verified_full_changed_files": 16,
+  "base_manifest_sha256": "83b71641be6460d2ece624fec51b8a84ad3ecea158844eb1c61b0828a72f0fcd",
+  "reconstruct": "Remote3dd8d2d original source plus artifact26 full52 accepted83 files, then source03 full16 delta-files. All exact fullfiles and manifests retained; archive local."
+}

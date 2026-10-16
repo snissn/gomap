@@ -1,0 +1,98 @@
+[
+  {
+    "after_sha256": "de3f7cb5b0d23988bde5c12b0bad9c2c27c8b36926618fbee9b83cefcf4a0965",
+    "before_sha256": "a7e9995caab721956ffd890957c50830b1e8186ed19e329b5740354cb808279a",
+    "new": false,
+    "path": "TreeDB/caching/native_mvcc_prune_v6.go"
+  },
+  {
+    "after_sha256": "c1703996e71d4631de3a03e2cb3ed3dd89b4ce8be7eae20cd5b810a2c84ce2ab",
+    "before_sha256": "d53b48552baf34119602606b7bcc4f56a9bc50c49686f2eba388f63751f0f7e8",
+    "new": false,
+    "path": "TreeDB/db/native_mvcc_seal_preparation_v6.go"
+  },
+  {
+    "after_sha256": "686452eebfb98fe8b05e734557dce3f3dd042bc0c06c0d53237bb84dc2bfcc4f",
+    "before_sha256": null,
+    "new": true,
+    "path": "TreeDB/db/native_prebuilder_observer_for_test_v6.go"
+  },
+  {
+    "after_sha256": "349eed0cc06605fb760973822a5fb26bdaa688cc107552e6fafbaa6305f8fbb0",
+    "before_sha256": null,
+    "new": true,
+    "path": "TreeDB/db/native_prebuilder_pricing_for_test_v6.go"
+  },
+  {
+    "after_sha256": "b4a0b14badbd80cad63d1cdd23d821a3abd4d49c72ce36e9d42dec2d7670a465",
+    "before_sha256": "db606aa3225a911755f10a59390ca9c9127c492b59b8c7a5ceae7944d8e5a360",
+    "new": false,
+    "path": "TreeDB/freelist/allocator_publication_work_v6.go"
+  },
+  {
+    "after_sha256": "60947c0cabc7e99a701fe69631e996373af0eaa42b171fa226ec25b6111b24ec",
+    "before_sha256": "f4c621a160bec98deacad47140e04be0d294d653894cc0cb0de5cb4fb640ac51",
+    "new": false,
+    "path": "TreeDB/freelist/native_publication_bound_v6.go"
+  },
+  {
+    "after_sha256": "0863e195a9720e1490ddb1e0c6599533510de1523fb3f09a4ca1d7debb541fba",
+    "before_sha256": "8390d5272b835cdd9f4a98b170d4faefb19b8661e75590d106cce24460793bc3",
+    "new": false,
+    "path": "TreeDB/internal/memtable/native_retention_work.go"
+  },
+  {
+    "after_sha256": "fdec511ce5b0b8c534b5f2155a52ecce159b5671d9ad19acd2294b6ae6a9b74e",
+    "before_sha256": "8d9160b3764c5ca17eda2046e58f18dcbb11a5a3623884b31b65e8c02493f57c",
+    "new": false,
+    "path": "TreeDB/internal/mvccadmission/request.go"
+  },
+  {
+    "after_sha256": "3f91beb3aaf5700e33b790d30d268d95182ef12daa56bcd96b7ac051f820b56d",
+    "before_sha256": "cde43d1f6ffb83910c74cb43cc2bded73d8aa39eec3308c68d256b50642f4aa2",
+    "new": false,
+    "path": "TreeDB/internal/primaryarena/retention.go"
+  },
+  {
+    "after_sha256": "d4727141cffdc31205bc99854746a91fe10e19bdc628f643206d9ca94fd8aabe",
+    "before_sha256": "045bf03e4c3cd651694aa3829b448669e0c9051f8d26e8ef2b0efab5dd3cf55d",
+    "new": false,
+    "path": "TreeDB/internal/retainedalloc/owner_work.go"
+  },
+  {
+    "after_sha256": "fc6f3ad4c914531ef2777c917da712eb74a3a9a18a8e481263be2251f905c135",
+    "before_sha256": null,
+    "new": true,
+    "path": "TreeDB/internal/rootpublication/native_prebuilder_retention_for_test_v6.go"
+  },
+  {
+    "after_sha256": "93e3f78ee8522a1be9bce080cbb3cafcda2e1c739b757d5387416f193ceca76c",
+    "before_sha256": "8aa9f727c83e0973a30d0e13168b4cd0ac08ad750bc6ef8b8d77ca9f60e972f0",
+    "new": false,
+    "path": "TreeDB/internal/rootpublication/primary_empty_candidate_work_v6.go"
+  },
+  {
+    "after_sha256": "2cce6d4805c2f69db00e4a9f93d1d1b5aa54d0e87a3d496a93167212b96d51e4",
+    "before_sha256": "ec745d34ed885c1c85edcea494ba8115a6f7a8877de18b22e5f5534229589c6b",
+    "new": false,
+    "path": "TreeDB/mvcc/native_prune_backend_route_v6_test.go"
+  },
+  {
+    "after_sha256": "1c7038fa4d0cadbeb397cf2ea033fab256a6fe3085136d8aa015e2f095c9402b",
+    "before_sha256": "1f32f38adcd75751069482363a4e55d6998df1fedb4020136e993caa04100c67",
+    "new": false,
+    "path": "TreeDB/pager/primary_read_root_v6.go"
+  },
+  {
+    "after_sha256": "b0ac447b9c5b69fe0cb92268c98c1c5550c8c3df2dabcec6bef20540ea8b5bdf",
+    "before_sha256": "fb82200f629812f20f6aa35744d4197e5e79d4cee750eee9413cd1fee52a288b",
+    "new": false,
+    "path": "TreeDB/pager/write_work.go"
+  },
+  {
+    "after_sha256": "506c9bfa63d13289d9963dd69754c2cf4b157d3698478878cfe98972306bf3ce",
+    "before_sha256": null,
+    "new": true,
+    "path": "TreeDB/zipper/materialized_observer_for_test_v6.go"
+  }
+]

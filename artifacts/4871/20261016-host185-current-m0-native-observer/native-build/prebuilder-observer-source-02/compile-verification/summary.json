@@ -1,0 +1,19 @@
+{
+  "all_groups_empty": true,
+  "commands_executed": 1,
+  "commands_not_executed": [],
+  "completed_utc": "2026-10-16T01:16:23.741105+00:00",
+  "native_publication_runtime": false,
+  "public_status": "Q32 RED/ACK0",
+  "results": [
+    {
+      "exit_code": 0,
+      "name": "compile-only",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/prebuilder-observer-source-02/compile-verification/compile-only/result.json"
+    }
+  ],
+  "source_files": 10346,
+  "source_manifest_sha256": "e79baff2c224c50e25e355ef7832e1772322cb5f4b139da68080738104bc34c8",
+  "source_still_frozen": true,
+  "stopped_at_first_failure": false
+}

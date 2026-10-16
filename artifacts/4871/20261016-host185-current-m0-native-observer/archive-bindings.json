@@ -1,0 +1,20 @@
+[
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/prebuilder-observer-source-01/source-frozen.tar.gz",
+    "bytes": 180925381,
+    "sha256": "8fa0a28f311fe160ca6102ec1f803e2b518a6435bf1b8ead4ebe8ead433b16c5",
+    "reason": "Large local reconstructable source archive or exact executable; not copied remotely. Full changed source files and complete manifests retained; remote predecessor source/artifacts reconstruct native source."
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/prebuilder-observer-source-02/source-frozen.tar.gz",
+    "bytes": 180925465,
+    "sha256": "141b79619e5a85278313a522793799bfecd86526dd89fffc1b6204cdf95725d4",
+    "reason": "Large local reconstructable source archive or exact executable; not copied remotely. Full changed source files and complete manifests retained; remote predecessor source/artifacts reconstruct native source."
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/prebuilder-observer-source-03/source-frozen.tar.gz",
+    "bytes": 180925425,
+    "sha256": "a2e7deb7559d66138abe6eaed5cc9d0760498469b9a1fc2c4300f7a641530c12",
+    "reason": "Large local reconstructable source archive or exact executable; not copied remotely. Full changed source files and complete manifests retained; remote predecessor source/artifacts reconstruct native source."
+  }
+]

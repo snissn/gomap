@@ -1,0 +1,104 @@
+{
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW",
+  "reviewer": "/root/ordinary_review",
+  "model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "candidate_edits_by_reviewer": false,
+  "disposition": "REJECT",
+  "scope": "Safe truthful source-only prebuilder observation; complete sixteen-path observer delta and final01-to02 corrections. Not native publication acceptance.",
+  "base_manifest_sha256": "83b71641be6460d2ece624fec51b8a84ad3ecea158844eb1c61b0828a72f0fcd",
+  "head_sha_or_manifest": "e79baff2c224c50e25e355ef7832e1772322cb5f4b139da68080738104bc34c8",
+  "source_archive_sha256": "141b79619e5a85278313a522793799bfecd86526dd89fffc1b6204cdf95725d4",
+  "source_delta_sha256": "88144f1dc0ff0c2e72e06e1998b7de80a502e774b6fe8ec60c0e4e9c3bfafb7b",
+  "source_files": 10346,
+  "changed_paths": {
+    "TreeDB/caching/native_mvcc_prune_v6.go": "de3f7cb5b0d23988bde5c12b0bad9c2c27c8b36926618fbee9b83cefcf4a0965",
+    "TreeDB/db/native_mvcc_seal_preparation_v6.go": "3c8feaa2077fc6646bac1db0c54aded13c3a956c135f72c3339f155ac20567b3",
+    "TreeDB/db/native_prebuilder_observer_for_test_v6.go": "686452eebfb98fe8b05e734557dce3f3dd042bc0c06c0d53237bb84dc2bfcc4f",
+    "TreeDB/db/native_prebuilder_pricing_for_test_v6.go": "349eed0cc06605fb760973822a5fb26bdaa688cc107552e6fafbaa6305f8fbb0",
+    "TreeDB/freelist/allocator_publication_work_v6.go": "31535906b71b519ce2d4fee11ef4205de7a34f99a77293115eb6a98f6ec0d103",
+    "TreeDB/freelist/native_publication_bound_v6.go": "60947c0cabc7e99a701fe69631e996373af0eaa42b171fa226ec25b6111b24ec",
+    "TreeDB/internal/memtable/native_retention_work.go": "0863e195a9720e1490ddb1e0c6599533510de1523fb3f09a4ca1d7debb541fba",
+    "TreeDB/internal/mvccadmission/request.go": "fdec511ce5b0b8c534b5f2155a52ecce159b5671d9ad19acd2294b6ae6a9b74e",
+    "TreeDB/internal/primaryarena/retention.go": "5bd00ed26ccfbfe8eae96188351ac5bdf388e328efc3d32d50dd7e5eaef7f559",
+    "TreeDB/internal/retainedalloc/owner_work.go": "d4727141cffdc31205bc99854746a91fe10e19bdc628f643206d9ca94fd8aabe",
+    "TreeDB/internal/rootpublication/native_prebuilder_retention_for_test_v6.go": "fc6f3ad4c914531ef2777c917da712eb74a3a9a18a8e481263be2251f905c135",
+    "TreeDB/internal/rootpublication/primary_empty_candidate_work_v6.go": "5b896f1050a95ae0d51a699fba23476540d36a7ce9242fcf6dfd343b7d1c7a16",
+    "TreeDB/mvcc/native_prune_backend_route_v6_test.go": "9817d6caf85738faeabff2a67ebb42d90d4d8ddb154f7de25e284cac439a6a7e",
+    "TreeDB/pager/primary_read_root_v6.go": "1c7038fa4d0cadbeb397cf2ea033fab256a6fe3085136d8aa015e2f095c9402b",
+    "TreeDB/pager/write_work.go": "b0ac447b9c5b69fe0cb92268c98c1c5550c8c3df2dabcec6bef20540ea8b5bdf",
+    "TreeDB/zipper/materialized_observer_for_test_v6.go": "506c9bfa63d13289d9963dd69754c2cf4b157d3698478878cfe98972306bf3ce"
+  },
+  "artifacts_sha256": {
+    "source-frozen.json": "e79baff2c224c50e25e355ef7832e1772322cb5f4b139da68080738104bc34c8",
+    "source-frozen.tar.gz": "141b79619e5a85278313a522793799bfecd86526dd89fffc1b6204cdf95725d4",
+    "source.delta.patch": "88144f1dc0ff0c2e72e06e1998b7de80a502e774b6fe8ec60c0e4e9c3bfafb7b",
+    "receipt.json": "1233797dd83ab0dd2eb2f6d6ed676ac911dd42e6cceffc4352c1c59f1fe7c6a4",
+    "changed-files.json": "1d22888e50182e4cc0b3c1c140ef82885ba169da03046a923f1b8762ed4eedfc",
+    "proposed-actual33-command.json": "81e52f221df526a6541cb04f8eae0b9913c1a2ab2d5b2d05bfe38aee6a22644b",
+    "compile-verification/identity.json": "e41f279e43b9ed665360c02a092472d02f8a2e34a7f2a9873998cded512f0659",
+    "compile-verification/summary.json": "7ce5ef9551bfa6e3dac581f97dfc3960d2154eee23909705df4ebb88c6a99202",
+    "compile-verification/compile-only/command.json": "81bd1cf27d889e370d5d3305220778a4a08863e2d4ce7a58ca1efc2915664bb0",
+    "compile-verification/compile-only/result.json": "9196cbdc300ecd3e0867901be94cc090518c811da8dabd82a86d45348add32a8",
+    "compile-verification/compile-only/run.log": "82bdcfb9a688312dfd3022001c85375708111df5f6c96d29f8390088d0ce814b"
+  },
+  "checks_performed": [
+    "Read all sixteen changed source paths and complete base83-to02 patch; compared all five01-to02 changed paths.",
+    "Independently hashed all10346 archive files against manifest, with exact path set and no mismatches; immutable extraction used for source review.",
+    "Compile before/after manifest objects equal final frozen manifest; pinned Go and compile executable hashes independently checked.",
+    "Read both01 and02 compile command/process/result/raw receipts: exit0, zero test RUNs, leader joined, process groups and adopted/direct children empty.",
+    "Traced actual original driver, final basis, Cut/request, bound/R, Z, V/A, coordinator acquire/enqueue/release/completion and original runtime service pricing.",
+    "Inspected actual33 command exact selector, caps, environment, deadlines, original fixture refusal/new-writer/stale/cancel/reader/reopen assertions. No command executed by reviewer."
+  ],
+  "findings": [
+    {
+      "id": "OBS1",
+      "severity": "blocking-source-price",
+      "path": "TreeDB/internal/rootpublication/primary_empty_candidate_work_v6.go",
+      "line": 198,
+      "trigger": "MaintenanceNativeGeometryForTestV6 -> coordinator.EnqueueBytes -> checked group3 computedBytes",
+      "cause": "Line193 already counts both EnqueueNativeBuiltWithWorkV6 notification permits. Line198 adds a third g.NotifyBytes, although enqueueLockedWithNativeReceiptV6 has no notification operation and the wrapper admits/commits exactly notify and startNotify.",
+      "effect": "EnqueueBytes and reported F computedBytes are overstated by 136 bytes on pinned Go1.26.3/linux/amd64 while described as actual source Reserve traffic. No unsafe underadmission is alleged.",
+      "correction": "Remove the trailing + g.NotifyBytes at line198 and correct lines199-200. Keep EnqueueRecords=46 and F fixed records281 unchanged; bind a successor and verify the row against the original two permit admissions."
+    }
+  ],
+  "nonblocking_limits": [
+    {
+      "id": "OBS-L1",
+      "path": "TreeDB/db/native_prebuilder_observer_for_test_v6.go:284",
+      "description": "With nonnil next leaf view, snapshot price scans256 acquisition shards at one record each and cannot finish within Q32. It correctly returns ready=false, does not mutate or retain traversal state, and forces applicableComplete=false. No F total follows."
+    },
+    {
+      "id": "OBS-L2",
+      "description": "Private captured transaction maps, sink page-ID map and conditional planner replacedMetadata map are explicit opaque backing. Owner envelopes, physical allocation rows and policy lease reservations remain separate; retainedUnionComplete=false is mandatory."
+    },
+    {
+      "id": "OBS-L3",
+      "description": "Separate short protected observations plus matching scalar basis do not form an atomic whole-owner snapshot. Future Finish after another ordinary writer is conditional/unobserved."
+    }
+  ],
+  "proposed_actual33_command": {
+    "artifact_sha256": "81e52f221df526a6541cb04f8eae0b9913c1a2ab2d5b2d05bfe38aee6a22644b",
+    "scope_source_review": "Existing single promoted previsibility test selector, count1, unchanged Q32/1MiB and original fixture guards; suitable only after OBS1 source correction/rebinding and separate root grant.",
+    "execution": "UNEXECUTED",
+    "runtime_authorized_by_this_review": false
+  },
+  "validation_evidence": {
+    "01_compile_elapsed_seconds": 96.54151016892865,
+    "02_compile_elapsed_seconds": 93.15929061779752,
+    "02_test_bodies_run": 0,
+    "reviewer_runtime_operations": 0
+  },
+  "claims_not_made": [
+    "Actual33 observation PASS",
+    "Actual aggregate applicable F or complete retained total",
+    "Numeric allowance",
+    "Native publication/build/enqueue/adoption/fence/Consume/Finish/ACK",
+    "Q32/1MiB qualification",
+    "Ordinary/native integration",
+    "Hosted correctness/performance/mergeability"
+  ],
+  "unavailability_evidence": "Explicit required gpt-6.1-sol routing cannot be pinned by manual hosted review; hosted review was not requested. This is the actual routed independent read-only subagent review, not a hosted or simulated review.",
+  "lease": "released after report; no source/runtime lease held",
+  "completed_utc": "2026-10-16T01:23:58.609526+00:00"
+}

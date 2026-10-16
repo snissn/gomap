@@ -1,0 +1,63 @@
+{
+  "at_utc": "2026-10-16T01:31:04.855149+00:00",
+  "authority": "Original user execute-and-merge instruction; root selected source-only observer and now grants ONE exact frozen previsibility promoted fixture observation after independent review.",
+  "benchmark_authorized": false,
+  "command": {
+    "argv": [
+      "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+      "test",
+      "-p=1",
+      "./TreeDB/mvcc",
+      "-run",
+      "^TestNativeMVCCRealBackendRouteRefusalPreservesCustodyV6$",
+      "-count=1",
+      "-v",
+      "-timeout=3m"
+    ],
+    "cwd": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native",
+    "env": {
+      "CGO_ENABLED": "1",
+      "GOCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/cache",
+      "GODEBUG": "",
+      "GOENV": "off",
+      "GOFLAGS": "",
+      "GOGC": "100",
+      "GOMAXPROCS": "2",
+      "GOMEMLIMIT": "8GiB",
+      "GOMODCACHE": "/mnt/fast4tb/gomap-mvcc-4871-20261015/ordinary-work/modcache",
+      "GOPROXY": "off",
+      "GOROOT": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3",
+      "GOSUMDB": "off",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "TMPDIR": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/prebuilder-observation03/tmp"
+    },
+    "executed": false,
+    "name": "actual33-promoted-prebuilder-observation",
+    "outer_timeout_seconds": 240,
+    "requires_root_verification_grant": true,
+    "requires_separate_actual33_scope": false,
+    "source_only_selection_sha256": "5ab6a8bd750e83c4e7ff63e5447fff7a9ababf96dcb2c8560ad0df9b16f08278"
+  },
+  "maximum_commands": 1,
+  "prior_review_sha256": "4932f538d117b55ba2c9a92c2896d68de0589608b25739ed2cbc08612f9c2a1b",
+  "producer_limits": {
+    "bytes": 1048576,
+    "files": 17,
+    "guards": [
+      80,
+      4096
+    ],
+    "history": 33,
+    "indexes": 2,
+    "input": 32,
+    "records": 32,
+    "resources": 16
+  },
+  "proposed_command_sha256": "ac13bca228af8ea27b40b79567342a042628dde70f72ee124dff55e3205e31a5",
+  "publication_runtime_authorized": false,
+  "retries": 0,
+  "review_sha256": "98e91a025f8a4b728d1d0e4d8a44f0d19152cf0713a6b652567bd6cc8b219b36",
+  "scope": "Observe original phase26/candidate8/seal13 refusal, actual33inputs/newerwriter/stalecancel/oldreader/reopen under unchangedcaps. No native finaldriver/enqueue/adopt/fence/Consume/Finish/ACK allowance; incomplete F/retainedunion must remain incomplete.",
+  "source_manifest_sha256": "9e3596eb05d4222ba4acf747a4045452efb8210a55a74201f5923da1fef0ad88"
+}

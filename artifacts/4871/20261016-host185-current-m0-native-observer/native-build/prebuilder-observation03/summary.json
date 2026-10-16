@@ -1,0 +1,19 @@
+{
+  "all_groups_empty": true,
+  "commands_executed": 1,
+  "commands_not_executed": [],
+  "completed_utc": "2026-10-16T01:31:12.128236+00:00",
+  "native_publication_runtime": false,
+  "public_status": "Q32 RED/ACK0",
+  "results": [
+    {
+      "exit_code": 1,
+      "name": "actual33-promoted-prebuilder-observation",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/prebuilder-observation03/actual33-promoted-prebuilder-observation/result.json"
+    }
+  ],
+  "source_files": 10346,
+  "source_manifest_sha256": "9e3596eb05d4222ba4acf747a4045452efb8210a55a74201f5923da1fef0ad88",
+  "source_still_frozen": true,
+  "stopped_at_first_failure": true
+}

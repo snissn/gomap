@@ -1,0 +1,22 @@
+{
+  "F_fixed_records": 281,
+  "actual_notify_admission_lines": [
+    139,
+    152
+  ],
+  "after": "5e3ad4df80ae76fb70fe678f84097fd75c45ecfa5bb66c284a48a8d0216f3620",
+  "after_manifest": "9e3596eb05d4222ba4acf747a4045452efb8210a55a74201f5923da1fef0ad88",
+  "before": "5b896f1050a95ae0d51a699fba23476540d36a7ce9242fcf6dfd343b7d1c7a16",
+  "before_manifest": "e79baff2c224c50e25e355ef7832e1772322cb5f4b139da68080738104bc34c8",
+  "changed_paths": [
+    "TreeDB/internal/rootpublication/primary_empty_candidate_work_v6.go"
+  ],
+  "enqueue_records": 46,
+  "finding": "OBS1",
+  "narrow_delta_sha256": "2cb1cd3be6c9bdafdac62439b9485b8eee1acbb569b4dc14fdf1e778a54751fc",
+  "price_correction_bytes_pinned_linux_amd64": -136,
+  "production_execution_unchanged": true,
+  "runtime_executed": false,
+  "source_review_disposition": "pending independent03 review",
+  "source_symbol": "Coordinator.EnqueueNativeBuiltWithWorkV6"
+}

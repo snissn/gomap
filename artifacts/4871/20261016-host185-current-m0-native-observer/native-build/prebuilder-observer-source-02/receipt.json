@@ -1,0 +1,36 @@
+{
+  "actual33_runtime": false,
+  "archive_verified_files": 10346,
+  "at_utc": "2026-10-16T01:14:38.494899+00:00",
+  "base_manifest_sha256": "83b71641be6460d2ece624fec51b8a84ad3ecea158844eb1c61b0828a72f0fcd",
+  "changed_paths": [
+    "TreeDB/caching/native_mvcc_prune_v6.go",
+    "TreeDB/db/native_mvcc_seal_preparation_v6.go",
+    "TreeDB/db/native_prebuilder_observer_for_test_v6.go",
+    "TreeDB/db/native_prebuilder_pricing_for_test_v6.go",
+    "TreeDB/freelist/allocator_publication_work_v6.go",
+    "TreeDB/freelist/native_publication_bound_v6.go",
+    "TreeDB/internal/memtable/native_retention_work.go",
+    "TreeDB/internal/mvccadmission/request.go",
+    "TreeDB/internal/primaryarena/retention.go",
+    "TreeDB/internal/retainedalloc/owner_work.go",
+    "TreeDB/internal/rootpublication/native_prebuilder_retention_for_test_v6.go",
+    "TreeDB/internal/rootpublication/primary_empty_candidate_work_v6.go",
+    "TreeDB/mvcc/native_prune_backend_route_v6_test.go",
+    "TreeDB/pager/primary_read_root_v6.go",
+    "TreeDB/pager/write_work.go",
+    "TreeDB/zipper/materialized_observer_for_test_v6.go"
+  ],
+  "delta_sha256": "88144f1dc0ff0c2e72e06e1998b7de80a502e774b6fe8ec60c0e4e9c3bfafb7b",
+  "native_publication_runtime": false,
+  "new_paths": [
+    "TreeDB/db/native_prebuilder_observer_for_test_v6.go",
+    "TreeDB/db/native_prebuilder_pricing_for_test_v6.go",
+    "TreeDB/internal/rootpublication/native_prebuilder_retention_for_test_v6.go",
+    "TreeDB/zipper/materialized_observer_for_test_v6.go"
+  ],
+  "selection_sha256": "5ab6a8bd750e83c4e7ff63e5447fff7a9ababf96dcb2c8560ad0df9b16f08278",
+  "source_archive_sha256": "141b79619e5a85278313a522793799bfecd86526dd89fffc1b6204cdf95725d4",
+  "source_manifest_sha256": "e79baff2c224c50e25e355ef7832e1772322cb5f4b139da68080738104bc34c8",
+  "status": "Q32 RED/ACK0"
+}

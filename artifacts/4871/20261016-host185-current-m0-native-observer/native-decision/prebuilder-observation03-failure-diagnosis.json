@@ -1,0 +1,131 @@
+{
+  "all_inspected_sources_match_frozen03": true,
+  "classification": "prior native final-basis prerequisite defect; protective pre-effect false stale refusal; no observer-induced mutation or demonstrated fixture misuse",
+  "concrete_blocker": {
+    "base0_to_target1": {
+      "base_user_root": 3,
+      "embedded_parent_user_root": 7
+    },
+    "base1_to_target0": {
+      "base_user_root": 6,
+      "embedded_parent_user_root": 4
+    },
+    "line": 92,
+    "path": "TreeDB/db/native_mvcc_final_basis_v6.go",
+    "predicate": "promotion.View.Parent().Record != base.record",
+    "why": "capsule codec relocates embedded parent UserRootPageID to target capsule page +2, versus prior current slot page +1; target is opposite base slot"
+  },
+  "correct_current_projection": {
+    "change_needed": false,
+    "lines": [
+      555,
+      556,
+      557,
+      558
+    ],
+    "path": "TreeDB/db/native_mvcc_seal_preparation_v6.go",
+    "projection": "target capsule page +1; zero ParentRecordPageID/ParentCommitSeq/ParentRecordDigest"
+  },
+  "inspected_source_hashes": {
+    "TreeDB/db/durable_primary_runtime_v5.go": "b75b40f88596cd75e8b60edc68c5ca8526de41187e68f2b61ba5d81261ea788b",
+    "TreeDB/db/native_mvcc_candidate_preparation_v6.go": "45d7dd34004bc14b94fa1592ebe7979f3f33e8924d176d49cc8c49a56df937a7",
+    "TreeDB/db/native_mvcc_final_basis_v6.go": "62667066c8d16b4309d49b13735779089e62f2dc714e05809a0f2a0731903ad8",
+    "TreeDB/db/native_mvcc_final_publication_v6.go": "8b36f28459b30a52cc0d3f7fa07c79138db1213c48c476c8c19c1963543b6839",
+    "TreeDB/db/native_mvcc_publication_binding_v6.go": "91564ea1dbeb0c445eb2e5d29bc85b1b68b9d1abd04ac1d8bc57b155ba0f0772",
+    "TreeDB/db/native_mvcc_root_preparation_v6.go": "1c7d744d5c33efcf9bce17c428888085860cfab8a1595842fe071d8fe7732862",
+    "TreeDB/db/native_mvcc_seal_preparation_v6.go": "3c8feaa2077fc6646bac1db0c54aded13c3a956c135f72c3339f155ac20567b3",
+    "TreeDB/db/native_stable_pager_capture_v6.go": "a5b9f6023ccb7460005b49ba086a901f436a4b1ce43d51f7c800afc05c9184a6",
+    "TreeDB/db/primary_authority_scope_v6.go": "3f498dd74f18f421ac2296aade78165034a4077926b83fff012287f4aeef9269",
+    "TreeDB/db/primary_capsule_runtime_v6.go": "b38015acaa0836307bc6107f4fc6e03cabf29b97b9d11c9c7acf1e1ee7a26106",
+    "TreeDB/internal/rootpublication/primary_capsule_v6.go": "29269031e7a1c3ee02cd2dbeb47fba6f8914f1259faec78f6acdda348e2616d3",
+    "TreeDB/internal/rootpublication/primary_capsule_v6_test.go": "2f23071f875273f6d3a897bc77b1181934d2c6d6de5cdf24c163ef3d7b3a4972",
+    "TreeDB/internal/rootpublication/primary_empty_candidate_work_v6.go": "5e3ad4df80ae76fb70fe678f84097fd75c45ecfa5bb66c284a48a8d0216f3620",
+    "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go": "1c61ddb08a86ecf70f966006e21981125302ba2b6054a02d21c5edd93a531870",
+    "TreeDB/mvcc/native_prune_backend_route_v6_test.go": "9817d6caf85738faeabff2a67ebb42d90d4d8ddb154f7de25e284cac439a6a7e",
+    "TreeDB/mvcc/prune_cursor_v6.go": "67741d492a926d94dc347f2a073f883b2bf2d793334e1de79095d46bf58c9cba"
+  },
+  "lease_released": true,
+  "minimal_repair": {
+    "parent_projection": [
+      "UserRootPageID=PrimaryCapsulePageV6(target)+2",
+      "ParentRecordPageID=0",
+      "ParentCommitSeq=0",
+      "ParentRecordDigest=[32]byte{}"
+    ],
+    "preserve": "full record equality after ONLY those format-defined changes, full saved base record/meta/slot and generation-tagged parent Ref, transaction, prefix, active seal and sequence validations; no scalar sequence shortcut",
+    "pricing": "admit any additional fixed local copy/initialization/compare traffic before reads; update source-bound F/pricing if operations change, no allowance/cap increase",
+    "proposal_only": true,
+    "scope": [
+      "TreeDB/db/native_mvcc_final_basis_v6.go",
+      "TreeDB/db/primary_authority_scope_v6.go",
+      "narrow same-package db pure parent record projection/comparison helper and focused tests",
+      "actual matching fixed pricing/observer rows only if added work/traffic requires changes"
+    ]
+  },
+  "mode": "read-only diagnosis; no source edits/build/test/runtime/Git/GH",
+  "observed": {
+    "calls": 159,
+    "error": "durable-root candidate base changed",
+    "go_test_elapsed_seconds": 1.7207242147997022,
+    "group_and_children_empty": true,
+    "observer_rows": 0,
+    "phase": 26,
+    "source_equal": true,
+    "test_body_elapsed_seconds_from_log": 0.18,
+    "test_exit_code": 1
+  },
+  "public_status": "Q32 RED/ACK0",
+  "raw_log_limit": "No predicate-level or candidate/seal scalar output; raw log alone does not distinguish every stale return. Source proves unavoidable parent mismatch if final gate reached and matching error; no successful aggregate observation claim. A later corrected run could expose additional failures.",
+  "result_sha256": "a7e5ac3744d73215fc9b37f58835faef45546820cbd2abe00cc888eb02e1aade",
+  "run_log_sha256": "3020c78f9087ba558bf7822d933c831bdbe35fe5f92a7104320b5b52415439f7",
+  "sibling_blocker": {
+    "failure": "ErrDurableRootOwnership",
+    "line": 73,
+    "path": "TreeDB/db/primary_authority_scope_v6.go",
+    "predicate": "promotion.View.Parent().Record != db.durableRoot.record",
+    "stage": "after activation/materialization/index sync but before authority write; not reached by this failure"
+  },
+  "source_archive_sha256": "a2e7deb7559d66138abe6eaed5cc9d0760498469b9a1fc2c4300f7a641530c12",
+  "source_manifest_sha256": "9e3596eb05d4222ba4acf747a4045452efb8210a55a74201f5923da1fef0ad88",
+  "test_proposals": {
+    "all_executed_by_diagnoser": false,
+    "all_require_root_grant": true,
+    "existing_previsibility": [
+      "go",
+      "test",
+      "-p=1",
+      "./TreeDB/mvcc",
+      "-run",
+      "^(TestNativeMVCCRealBackendRouteRefusalPreservesCustodyV6|TestNativeMVCCCopiedParentAcrossBothDurableSlotsV6)$",
+      "-count=1",
+      "-v",
+      "-timeout=3m"
+    ],
+    "pure_normal": [
+      "go",
+      "test",
+      "-p=1",
+      "./TreeDB/db",
+      "./TreeDB/internal/rootpublication",
+      "-run",
+      "^(TestNativeCapsuleParentRecordProjectionV6|TestPrimaryCapsuleV6CompleteIndependentSlots)$",
+      "-count=1",
+      "-v",
+      "-timeout=3m"
+    ],
+    "pure_race": [
+      "go",
+      "test",
+      "-race",
+      "-p=1",
+      "./TreeDB/db",
+      "./TreeDB/internal/rootpublication",
+      "-run",
+      "^(TestNativeCapsuleParentRecordProjectionV6|TestPrimaryCapsuleV6CompleteIndependentSlots)$",
+      "-count=1",
+      "-v",
+      "-timeout=3m"
+    ],
+    "toolchain": "pinned Go1.26.3, GOMAXPROCS2, task-local caches/TMPDIR, full source/archive/compiler/PID/PGID/subreaper/join receipts"
+  }
+}

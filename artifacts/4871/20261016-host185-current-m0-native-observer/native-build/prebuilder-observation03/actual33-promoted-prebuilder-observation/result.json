@@ -1,0 +1,58 @@
+{
+  "adopted_children_reaped": [],
+  "elapsed_seconds": 1.7207242147997022,
+  "ended_utc": "2026-10-16T01:31:11.087005+00:00",
+  "exit_code": 1,
+  "group_and_children_empty": true,
+  "leader_joined": true,
+  "name": "actual33-promoted-prebuilder-observation",
+  "observed_group_processes": [
+    {
+      "comm": "go",
+      "pgid": 852902,
+      "pid": 852902,
+      "ppid": 852887,
+      "session": 852902,
+      "state": "S"
+    },
+    {
+      "comm": "link",
+      "pgid": 852902,
+      "pid": 852961,
+      "ppid": 852902,
+      "session": 852902,
+      "state": "R"
+    },
+    {
+      "comm": "mvcc.test",
+      "pgid": 852902,
+      "pid": 853001,
+      "ppid": 852902,
+      "session": 852902,
+      "state": "S"
+    }
+  ],
+  "pgid": 852902,
+  "pid": 852902,
+  "remaining_direct_or_adopted_children": [],
+  "remaining_group_members": [],
+  "signals": [],
+  "source_after_equals_frozen": true,
+  "source_before_after_equal": true,
+  "source_before_equals_frozen": true,
+  "started_utc": "2026-10-16T01:31:09.366276+00:00",
+  "subreaper_enabled": true,
+  "test_RUN_count": 1,
+  "test_RUN_names": [
+    "TestNativeMVCCRealBackendRouteRefusalPreservesCustodyV6"
+  ],
+  "timeout": false,
+  "top_level_fail_count": 1,
+  "top_level_fail_names": [
+    "TestNativeMVCCRealBackendRouteRefusalPreservesCustodyV6"
+  ],
+  "top_level_pass_count": 0,
+  "top_level_pass_names": [],
+  "top_level_skip_count": 0,
+  "top_level_skip_names": []
+}

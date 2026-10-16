@@ -1,0 +1,367 @@
+{
+  "schema": 1,
+  "reviewer": "independent gpt-6.1-sol; read-only source advice",
+  "source": {
+    "base": "3dd8d2d11d129ea93fc6277215d06d7a4ba65650",
+    "manifest": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-fixture-successor/source-frozen.json",
+    "manifest_sha256": "83b71641be6460d2ece624fec51b8a84ad3ecea158844eb1c61b0828a72f0fcd",
+    "archive": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/atomic-completion-repair-fixture-successor/source-frozen.tar.gz",
+    "archive_sha256": "80c9ef74424ba0e6972c6eb24d6af156a59a9a9fbd324cb84621e2126b6af405",
+    "extraction": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/observer-retention-provenance-extraction"
+  },
+  "runtime_executed": false,
+  "source_mutated": false,
+  "complete_retained_total_established": false,
+  "numeric_allowance_established": false,
+  "future_finish_geometry_established": false,
+  "rows": [
+    {
+      "id": "snapshot-additional-roots",
+      "classification": "misidentified shape; source bound available",
+      "source": [
+        "TreeDB/db/db.go:1608",
+        "TreeDB/db/pools.go:83",
+        "TreeDB/db/root_snapshot.go:19",
+        "TreeDB/db/durable_root_runtime.go:1941"
+      ],
+      "fact": "No rootTreesByHandle map exists. rootTrees is a slice, fresh Get initializes nil; additional treeAtRoot calls append value entries. Index-only capture constructor never populates this slice.",
+      "decision": "Observe actual role/cap and Q(cap*sizeof(snapshotRootTree)) once if nonzero; no invented map fix.",
+      "unknown": "Actual reader role capacity at observation; no runtime performed."
+    },
+    {
+      "id": "primary-read-root-table",
+      "classification": "constructor/maintained bound exists; expose provenance and dedup",
+      "source": [
+        "TreeDB/pager/primary_read_root_v6.go:43",
+        "TreeDB/pager/primary_read_root_v6.go:110",
+        "TreeDB/pager/primary_read_root_v6.go:200",
+        "TreeDB/internal/primaryarena/read_root_v6.go:96",
+        "TreeDB/internal/primaryarena/bundle.go:266"
+      ],
+      "fact": "Explicit heads slice capacity, independent per-root table entry, independently allocated RAM bank and image. Existing metadataCharge tracks bank-associated admissions; pager entry image borrows bank image.",
+      "decision": "Original preadmitted Ref/incarnation lookup plus table node/header and alias facts; heads once. Do not add per-component charges atop bank aggregate or Owner.bytes.",
+      "unknown": "Observed selected Ref membership, actual charges/capacity, shared versus distinct role identities."
+    },
+    {
+      "id": "allocator-private-copies",
+      "classification": "opaque private preparation/control map backing; no persistent output transfer",
+      "source": [
+        "TreeDB/freelist/allocator_preparation_work_v6.go:161",
+        "TreeDB/freelist/allocator_preparation_work_v6.go:229",
+        "TreeDB/freelist/allocator_preparation_work_v6.go:238",
+        "TreeDB/freelist/generation_v1_txn.go:211",
+        "TreeDB/freelist/allocator_cow.go:423"
+      ],
+      "fact": "Native paused preparation retains independent clone header, allocated/abandoned vectors and changedChunks/replacedMetadata maps. Fixed header and vector capacity geometries are known; actual map backing is not. Ordinary private preparation makes analogous copies. Existing BindRetainedOwner only binds normalization scratch. During nonfallible adoption private txn temporarily occupies a.cow.txn, but install replaces it with distinct successor before return. Canonical generation/candidate contain no txn/map/sink fields; nested preparation aliases retain private clone until typed reset.",
+      "decision": "Captured clone maps are private control storage, not persistent output; keep physical map row incomplete. Ordinary constructor analogue proves neither novelty nor exemption. Extend SAME original producer owner/lifecycle only after source-supported constructor backing bound is established.",
+      "unknown": "Actual map heap backing; whether each object is present in selected observer role; no complete union or newly-native allocation count inferred."
+    },
+    {
+      "id": "candidate-sink-and-successor",
+      "classification": "additional conditional private map roles; ownership transfer matters",
+      "source": [
+        "TreeDB/db/native_mvcc_allocator_preparation_v6.go:20",
+        "TreeDB/freelist/generation_v1_emit_work.go:128",
+        "TreeDB/freelist/generation_v1_begin_work.go:39",
+        "TreeDB/freelist/generation_v1_begin_work.go:202",
+        "TreeDB/freelist/allocator_activation_work.go:123"
+      ],
+      "fact": "Embedded CandidatePageSink can own pageIDs validation map. Prepared successor has two maps and becomes canonical live allocator txn on install; it is not duplicated by an output role after alias drop. Shared ordinary producers use the same map operations. Sink/map never transfers into canonical output; inner reset clears borrowed sink aliases, outer admitted reset finally clears embedded map. Refusal retains outer alias. Successor transfers separately into live allocator.",
+      "decision": "Presence/role rows if retained at observation; map backing opaque unless separately justified. No refund when only private alias drops but live allocator owns same allocation.",
+      "unknown": "Actual phase/live sink or successor map presence and backing; future native Finish geometry."
+    },
+    {
+      "id": "identity-registry-tables",
+      "classification": "capacity-supported original table storage",
+      "source": [
+        "TreeDB/internal/rootpublication/registry_capacity.go:1",
+        "TreeDB/internal/rootpublication/pin_registry.go:22"
+      ],
+      "fact": "registryTable cells slice, stored charge, explicit growth and old alias drop; not an opaque Go map.",
+      "decision": "Use actual cap/charge and payload provenance under original lock. Count four actual tables only when present, their registry header once, no Owner.bytes addition.",
+      "unknown": "Actual current table occupancy/capacities and selected-native share."
+    },
+    {
+      "id": "manifest-proof-set-certificates",
+      "classification": "existing per-allocation admissions; role dedup still required",
+      "source": [
+        "TreeDB/internal/rootpublication/resource_allocation.go:27",
+        "TreeDB/internal/rootpublication/resource_set_clone_work_v6.go:16",
+        "TreeDB/internal/rootpublication/primary_empty_candidate_work_v6.go:14",
+        "TreeDB/db/native_mvcc_seal_preparation_v6.go:552",
+        "TreeDB/internal/rootpublication/primary_data_certificate_v6.go:64"
+      ],
+      "fact": "Manifest independent header and resourceAllocation charged before creation; seal receives same pointers. Cloned Set has independent wrapper while sharing kind backing or empty dependency directory. Root metadata admission may conservatively reserve a certificate that reuses prior certificate pointer.",
+      "decision": "Fixed original-guard role equality matrix. Count resourceAllocation once per independent allocation; shared backing/directory/cert once. Distinguish charge upper envelope from exact instantiated allocation geometry.",
+      "unknown": "Actual pointer equalities at observation; bank charge may include conservative admission slack."
+    },
+    {
+      "id": "metadata-reuse-planning-map",
+      "classification": "conditional independent private planning map; opaque backing",
+      "source": [
+        "TreeDB/freelist/generation_v1_metadata_reuse_work.go:215",
+        "TreeDB/freelist/generation_v1_metadata_reuse_work.go:274"
+      ],
+      "fact": "planned header inline, most fields initially alias txn, replacedMetadata independently maps.Clone. Successful txn mutation does not transfer planned map into output/live successor. Held in nested reuse work until reset/replanning.",
+      "decision": "Record actual presence and independent-map role; backing unknown. Do not multiply aliased other planned fields.",
+      "unknown": "Actual reuse-planning branch/phase at selected observation and map backing allocation."
+    }
+  ],
+  "decision": "Expose existing PRIMARY/slice provenance under original locks; retain named opaque private-map rows. Governed private maps require a separately justified constructor storage bound and original-owner lifetime, not guessed map capacity or a broader exemption.",
+  "inspected_source": [
+    {
+      "path": "TreeDB/db/db.go",
+      "sha256": "7a7788637691958b068e6e7352ad8562d79338a3a2bacc51a9afdd4d754d3ca8",
+      "inspection": "targeted constructors, ownership/alias lifetime and charge source; not whole-file correctness certification"
+    },
+    {
+      "path": "TreeDB/db/pools.go",
+      "sha256": "b187c1083cbf794a286f0bfd02082f3a320f0b16d561c828645c2a0b4a41fa0c",
+      "inspection": "targeted constructors, ownership/alias lifetime and charge source; not whole-file correctness certification"
+    },
+    {
+      "path": "TreeDB/db/root_snapshot.go",
+      "sha256": "c549bb0e922c1ac9c992d6e469e4288e3e6a1cce9b7197ebcdc62b2ccd7fb876",
+      "inspection": "targeted constructors, ownership/alias lifetime and charge source; not whole-file correctness certification"
+    },
+    {
+      "path": "TreeDB/db/durable_root_runtime.go",
+      "sha256": "e472aeae3ff832a79b6621d97150fe5b90b9165a0d5fb328991b9d114095aa30",
+      "inspection": "targeted constructors, ownership/alias lifetime and charge source; not whole-file correctness certification"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_snapshot_v6.go",
+      "sha256": "40c137a22889c6d3fd2b498e0e577c4c990e736b9a9e921d308faef03551c8ba",
+      "inspection": "targeted constructors, ownership/alias lifetime and charge source; not whole-file correctness certification"
+    },
+    {
+      "path": "TreeDB/db/native_stable_pager_capture_v6.go",
+      "sha256": "a5b9f6023ccb7460005b49ba086a901f436a4b1ce43d51f7c800afc05c9184a6",
+      "inspection": "targeted constructors, ownership/alias lifetime and charge source; not whole-file correctness certification"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_allocator_preparation_v6.go",
+      "sha256": "e4e0e03847f2c006adf77b81b47cc0aa6506b18ffd630200bf2c5787a393068f",
+      "inspection": "targeted constructors, ownership/alias lifetime and charge source; not whole-file correctness certification"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_seal_preparation_v6.go",
+      "sha256": "d53b48552baf34119602606b7bcc4f56a9bc50c49686f2eba388f63751f0f7e8",
+      "inspection": "targeted constructors, ownership/alias lifetime and charge source; not whole-file correctness certification"
+    },
+    {
+      "path": "TreeDB/db/native_mvcc_candidate_preparation_v6.go",
+      "sha256": "45d7dd34004bc14b94fa1592ebe7979f3f33e8924d176d49cc8c49a56df937a7",
+      "inspection": "targeted constructors, ownership/alias lifetime and charge source; not whole-file correctness certification"
+    },
+    {
+      "path": "TreeDB/freelist/allocator_preparation_work_v6.go",
+      "sha256": "7fcb1ba0fa7630274baf245ee639eeb87b0a808a303f108cf8411fe1455a1fb1",
+      "inspection": "targeted constructors, ownership/alias lifetime and charge source; not whole-file correctness certification"
+    },
+    {
+      "path": "TreeDB/freelist/allocator_cow.go",
+      "sha256": "0be749f18a8ecfc6f5ac4be338055b662e8a8c245bd67989ac46f7679e25ff88",
+      "inspection": "targeted constructors, ownership/alias lifetime and charge source; not whole-file correctness certification"
+    },
+    {
+      "path": "TreeDB/freelist/generation_v1_txn.go",
+      "sha256": "2fd0e71a4461d53f08c3bfcafbc31cb2692dfcf6b19f8758ae66b48b6271575b",
+      "inspection": "targeted constructors, ownership/alias lifetime and charge source; not whole-file correctness certification"
+    },
+    {
+      "path": "TreeDB/freelist/generation_v1_begin_work.go",
+      "sha256": "5404cab5529b4d10022e10a3959d1e02a6cc03c0aa6cfa3259f20bf59e113a01",
+      "inspection": "targeted constructors, ownership/alias lifetime and charge source; not whole-file correctness certification"
+    },
+    {
+      "path": "TreeDB/freelist/generation_v1_emit_work.go",
+      "sha256": "25b9dc485941f3ccf2aec90433dc0cdfc4d9ac7f9a4badc4de0ced8fa488857a",
+      "inspection": "targeted constructors, ownership/alias lifetime and charge source; not whole-file correctness certification"
+    },
+    {
+      "path": "TreeDB/freelist/generation_v1_format.go",
+      "sha256": "261f8405daa14e3a51977e4141c1ae3b1c71b0fd2d7efd54174367d17d3537c6",
+      "inspection": "targeted constructors, ownership/alias lifetime and charge source; not whole-file correctness certification"
+    },
+    {
+      "path": "TreeDB/freelist/generation_v1_reservation_inventory_work.go",
+      "sha256": "f483300877c25c0947bd920f9756b322987eafa0677bd381d629e13d6e3d98a7",
+      "inspection": "targeted constructors, ownership/alias lifetime and charge source; not whole-file correctness certification"
+    },
+    {
+      "path": "TreeDB/freelist/allocator_activation_work.go",
+      "sha256": "a431ed3b9fca5c06d242ad2197eb6e0bfe6a12a0ce08e5453ae94d7cb4c2c680",
+      "inspection": "targeted constructors, ownership/alias lifetime and charge source; not whole-file correctness certification"
+    },
+    {
+      "path": "TreeDB/freelist/append_retirement_work_v6.go",
+      "sha256": "448ce1ed3aeccfcb2eba02255a89e7387e07901f1e54a293bbe74f135642703e",
+      "inspection": "targeted constructors, ownership/alias lifetime and charge source; not whole-file correctness certification"
+    },
+    {
+      "path": "TreeDB/pager/primary_read_root_v6.go",
+      "sha256": "1f32f38adcd75751069482363a4e55d6998df1fedb4020136e993caa04100c67",
+      "inspection": "targeted constructors, ownership/alias lifetime and charge source; not whole-file correctness certification"
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/arena.go",
+      "sha256": "a587d56658f9217b4cfce21c20077c145cfd1765cb6e545145925f8f61dfe43f",
+      "inspection": "targeted constructors, ownership/alias lifetime and charge source; not whole-file correctness certification"
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/read_root_v6.go",
+      "sha256": "3d07ba4e9222fc998b675422ab4aa015cf3eea694ec8957f0b78a1382b14fdc4",
+      "inspection": "targeted constructors, ownership/alias lifetime and charge source; not whole-file correctness certification"
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/bundle.go",
+      "sha256": "b64b5bd706b3b7275f1cbfedda3e827a2f4d07a7c5796e15627bb83461ecd305",
+      "inspection": "targeted constructors, ownership/alias lifetime and charge source; not whole-file correctness certification"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/registry_capacity.go",
+      "sha256": "0c35c4c6a0194474ac2134ad8aa1574795f48e0b77ef82e95eb791a52b709b7d",
+      "inspection": "targeted constructors, ownership/alias lifetime and charge source; not whole-file correctness certification"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/pin_registry.go",
+      "sha256": "770993e8d91fb63b2f47e9a8b757fe28140cc66520e96be5e5df0ccd06b35653",
+      "inspection": "targeted constructors, ownership/alias lifetime and charge source; not whole-file correctness certification"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "sha256": "1e0e3508a3b8dfb3e222eafb6fdffdf32033688dfc1608482a307265d0e39a2b",
+      "inspection": "targeted constructors, ownership/alias lifetime and charge source; not whole-file correctness certification"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_set_clone_work_v6.go",
+      "sha256": "117279f05552e0f467769380f9525e592ab18e95614b9c973699ec6d44e61444",
+      "inspection": "targeted constructors, ownership/alias lifetime and charge source; not whole-file correctness certification"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/primary_empty_candidate_work_v6.go",
+      "sha256": "8aa9f727c83e0973a30d0e13168b4cd0ac08ad750bc6ef8b8d77ca9f60e972f0",
+      "inspection": "targeted constructors, ownership/alias lifetime and charge source; not whole-file correctness certification"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/primary_data_certificate_v6.go",
+      "sha256": "90f9e24db240428d46fe5486e84ce1c072a8b9806086d9dff7b270b9aba4045e",
+      "inspection": "targeted constructors, ownership/alias lifetime and charge source; not whole-file correctness certification"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+      "sha256": "1c61ddb08a86ecf70f966006e21981125302ba2b6054a02d21c5edd93a531870",
+      "inspection": "targeted constructors, ownership/alias lifetime and charge source; not whole-file correctness certification"
+    },
+    {
+      "path": "TreeDB/internal/retainedalloc/owner.go",
+      "sha256": "aa2725812345880c152932466ee45dfa2d31b69562309595afb98d354e725c3d",
+      "inspection": "targeted constructors, ownership/alias lifetime and charge source; not whole-file correctness certification"
+    },
+    {
+      "path": "TreeDB/internal/memtable/cow_budget.go",
+      "sha256": "f3102bd2d83c3009ff5cf470634ce9046ae35d95a59f2a106f9e147a8615a823",
+      "inspection": "targeted constructors, ownership/alias lifetime and charge source; not whole-file correctness certification"
+    },
+    {
+      "path": "TreeDB/internal/memtable/native_retention_work.go",
+      "sha256": "8390d5272b835cdd9f4a98b170d4faefb19b8661e75590d106cce24460793bc3",
+      "inspection": "targeted constructors, ownership/alias lifetime and charge source; not whole-file correctness certification"
+    },
+    {
+      "path": "TreeDB/zipper/materialized_write_work.go",
+      "sha256": "5fa7ed027fcab735aab154427f1ed11f4bc03a908b445fc76898bfbab7b84055",
+      "inspection": "targeted constructors, ownership/alias lifetime and charge source; not whole-file correctness certification"
+    },
+    {
+      "path": "TreeDB/freelist/generation_v1_materialize_work.go",
+      "sha256": "80824f4394fddfdec0dba6a76b0261b2c28dc658d70ef7fb69d9cb83824fabe0",
+      "inspection": "output fields and original transaction/sink alias endpoints"
+    },
+    {
+      "path": "TreeDB/freelist/generation_v1_materialize_output_work.go",
+      "sha256": "2ab6d11e86265b62baeacb0488b4a82f27404117b7d9dc4495bd1b894ccaf401",
+      "inspection": "output fields and original transaction/sink alias endpoints"
+    },
+    {
+      "path": "TreeDB/freelist/generation_v1_metadata_reuse_work.go",
+      "sha256": "35da38fcecdc5508eef6bd2c48ce22e7f59fbf3eff106bc0f0ea592759cfb4ad",
+      "inspection": "independent planning map lifetime; existing capacity storage API and dependency limitations"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/identity_capacity_table.go",
+      "sha256": "95b98aa75c21b3882d7c8f78a31aca13b709a6ab5bcf9b6fa1ad21ba57adb0e5",
+      "inspection": "independent planning map lifetime; existing capacity storage API and dependency limitations"
+    }
+  ],
+  "decision_documents": [
+    {
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-prebuilder-observer-selection.md",
+      "sha256": "5ab6a8bd750e83c4e7ff63e5447fff7a9ababf96dcb2c8560ad0df9b16f08278",
+      "status": "decision document read; not source archive member"
+    },
+    {
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/atomic-completion-repair-successor.md",
+      "sha256": "9f32ced578eea898348f352fc3ec4426fd582e2be2c030f585fb176af09115b0",
+      "status": "decision document read; not source archive member"
+    },
+    {
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/atomic-completion-observer-plan.md",
+      "sha256": "d2ba076b985ff87bd134c410b1acbe5fbe407be8e6fadde8470b9b2bfc7f9546",
+      "status": "decision document read; not source archive member"
+    },
+    {
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/atomic-completion-frozen-packet.md",
+      "sha256": "4d004a97faf71b4e0eb2194fb4b73dd80be34652ce6c80d4b5d82a7e948dad0c",
+      "status": "specific inherited DATA/private control boundary read; decision document not source archive"
+    },
+    {
+      "path": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/finite-original-closure-forecast.md",
+      "sha256": "5af6d7ef2d6ef6241bd9f3ad84bf474105b9e47e6197c709127c367681eddcf2",
+      "status": "specific inherited DATA/private control boundary read; decision document not source archive"
+    }
+  ],
+  "limitations": [
+    "No actual observer values or runtime allocations measured",
+    "Not all source construction paths imply live selected fixture allocations",
+    "Ordinary shared staging analogue does not prove a newly native allocation or waive governed paused lifetime",
+    "Owner upper envelopes and conservative certificate admissions are not exact independently instantiated allocation geometry",
+    "Matching scalar basis is not atomic whole-graph snapshot",
+    "No original DATA transitive enrollment or GC/service exemption widening",
+    "No progress inference from conservative sum",
+    "Nonempty logical resource graph provenance not established by selected empty manifest/Set constructors"
+  ],
+  "alias_trace": {
+    "private_clone": "temporary a.cow.txn adoption alias replaced by successor before return; persistent maps retained by preparation only; terminal Cancel or published-only ClosePublished reset",
+    "sink": "embedded header, independent map; borrowed by preparation/materialization/recordingSink; no candidate/generation output edge; inner then outer reset clears",
+    "successor": "private activation aliases -> SAME live a.cow.txn; preparer aliases scrubbed; no premature terminal refund",
+    "canonical_output": "generation/root/images retained under original DATA boundary; clearing private controls cannot destroy shared output"
+  },
+  "repair_alternatives": {
+    "A": {
+      "action": "Original owner admission and typed cleanup with defensible conservative existing-map bound",
+      "available_in_frozen_source": false,
+      "reason": "Only counts/hints/work bytes; no source-backed retained capacity/growth overlap bound. No guessed map constants."
+    },
+    "B": {
+      "action": "Reuse maintained capacity-owned storage pattern for private native controls only",
+      "pattern": "registryTable explicit cells, charge, capacity, old/new overlap",
+      "drop_in_available": false,
+      "reason": "rootpublication-private helper, StableIdentity exported wrapper, dependency direction and ordinary operations; needs storage-only factoring/local uint64 work-bearing instantiation without new identity authority",
+      "preserve": [
+        "ordinary map fast path",
+        "canonical live successor storage",
+        "original bound Owner",
+        "Q32/caps",
+        "actual last-alias typed cleanup"
+      ],
+      "scope": [
+        "captured private changed/replaced sets",
+        "planned replacement set when present",
+        "sink validation IDs",
+        "all native private mutation/enumeration/stats accessors"
+      ]
+    }
+  }
+}

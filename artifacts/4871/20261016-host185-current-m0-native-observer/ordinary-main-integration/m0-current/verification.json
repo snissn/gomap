@@ -1,0 +1,34 @@
+{
+  "head": "6d3fc3a6e3582810d7c80fc46b784a9b30fada80",
+  "run_id": 38835454968,
+  "attempt": 1,
+  "all_raw_metric_summaries_recomputed": true,
+  "cv_float_tolerance": "rel1e-14/abs1e-15 for one-ULP Python stdlib differences; samples/means/medians exact",
+  "raw_files": 20,
+  "cpu": "AMD EPYC 7763",
+  "go": "go1.26.9",
+  "gates": {
+    "legacy_completed_without_abort": true,
+    "legacy_cv_at_most_10_percent": true,
+    "public_status_explicit": true
+  },
+  "CV_percent": {
+    "vacuum-total-ns/op": 0.41943668632729647,
+    "max-writer-pause-ns": 2.4414166548747978,
+    "foreground-p99-ns/op": 2.088746534573786
+  },
+  "public_success_samples": 6,
+  "public_typed_retry_samples": 4,
+  "minimum_public_foreground_overlap": 16.0,
+  "limits": [
+    "Original current-head M0 stability/classification evidence only; no packing causal improvement.",
+    "Fixture metadata nested status remains initial offline/probe classification; final result uses actual public rows.",
+    "Hosted original workflow uses module-selected Go1.26.9; separate maintenance evidence remains pinned Go1.26.3.",
+    "No downloaded Go code executed for verification."
+  ],
+  "sha256": {
+    "artifact.zip": "80bdd5dec78b8dda23b185bbe52d7e6adae0a26bb315b6d9967ffe3f4581dadf",
+    "run.log": "39fd77e06cd65a7a17729314d49d3a61f68472276671d85b1ea31e5a442fe0c2",
+    "results.json": "f15377de8881880a0b8d78c2688e7d3f3e09156eac893d4b53c5328dd75053ce"
+  }
+}

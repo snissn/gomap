@@ -1,0 +1,475 @@
+{
+  "OBS1": {
+    "F_fixed_records": 281,
+    "actual_notify_admission_lines": [
+      139,
+      152
+    ],
+    "after": "5e3ad4df80ae76fb70fe678f84097fd75c45ecfa5bb66c284a48a8d0216f3620",
+    "after_manifest": "9e3596eb05d4222ba4acf747a4045452efb8210a55a74201f5923da1fef0ad88",
+    "before": "5b896f1050a95ae0d51a699fba23476540d36a7ce9242fcf6dfd343b7d1c7a16",
+    "before_manifest": "e79baff2c224c50e25e355ef7832e1772322cb5f4b139da68080738104bc34c8",
+    "changed_paths": [
+      "TreeDB/internal/rootpublication/primary_empty_candidate_work_v6.go"
+    ],
+    "enqueue_records": 46,
+    "finding": "OBS1",
+    "narrow_delta_sha256": "2cb1cd3be6c9bdafdac62439b9485b8eee1acbb569b4dc14fdf1e778a54751fc",
+    "price_correction_bytes_pinned_linux_amd64": -136,
+    "production_execution_unchanged": true,
+    "runtime_executed": false,
+    "source_review_disposition": "pending independent03 review",
+    "source_symbol": "Coordinator.EnqueueNativeBuiltWithWorkV6"
+  },
+  "actual33_executed": false,
+  "compile_result": {
+    "adopted_children_reaped": [],
+    "elapsed_seconds": 79.70780859002843,
+    "ended_utc": "2026-10-16T01:27:04.811545+00:00",
+    "exit_code": 0,
+    "group_and_children_empty": true,
+    "leader_joined": true,
+    "name": "compile-only",
+    "observed_group_processes": [
+      {
+        "comm": "go",
+        "pgid": 845364,
+        "pid": 845364,
+        "ppid": 845248,
+        "session": 845364,
+        "state": "S"
+      },
+      {
+        "comm": "compile",
+        "pgid": 845364,
+        "pid": 845378,
+        "ppid": 845364,
+        "session": 845364,
+        "state": "S"
+      },
+      {
+        "comm": "compile",
+        "pgid": 845364,
+        "pid": 845401,
+        "ppid": 845364,
+        "session": 845364,
+        "state": "R"
+      },
+      {
+        "comm": "compile",
+        "pgid": 845364,
+        "pid": 845488,
+        "ppid": 845364,
+        "session": 845364,
+        "state": "R"
+      },
+      {
+        "comm": "compile",
+        "pgid": 845364,
+        "pid": 845492,
+        "ppid": 845364,
+        "session": 845364,
+        "state": "R"
+      },
+      {
+        "comm": "compile",
+        "pgid": 845364,
+        "pid": 845501,
+        "ppid": 845364,
+        "session": 845364,
+        "state": "R"
+      },
+      {
+        "comm": "link",
+        "pgid": 845364,
+        "pid": 845515,
+        "ppid": 845364,
+        "session": 845364,
+        "state": "S"
+      },
+      {
+        "comm": "vet",
+        "pgid": 845364,
+        "pid": 845523,
+        "ppid": 845364,
+        "session": 845364,
+        "state": "R"
+      },
+      {
+        "comm": "vet",
+        "pgid": 845364,
+        "pid": 845527,
+        "ppid": 845364,
+        "session": 845364,
+        "state": "S"
+      },
+      {
+        "comm": "vet",
+        "pgid": 845364,
+        "pid": 845531,
+        "ppid": 845364,
+        "session": 845364,
+        "state": "S"
+      },
+      {
+        "comm": "vet",
+        "pgid": 845364,
+        "pid": 845535,
+        "ppid": 845364,
+        "session": 845364,
+        "state": "R"
+      },
+      {
+        "comm": "compile",
+        "pgid": 845364,
+        "pid": 845546,
+        "ppid": 845364,
+        "session": 845364,
+        "state": "S"
+      },
+      {
+        "comm": "compile",
+        "pgid": 845364,
+        "pid": 845552,
+        "ppid": 845364,
+        "session": 845364,
+        "state": "R"
+      },
+      {
+        "comm": "compile",
+        "pgid": 845364,
+        "pid": 845556,
+        "ppid": 845364,
+        "session": 845364,
+        "state": "R"
+      },
+      {
+        "comm": "compile",
+        "pgid": 845364,
+        "pid": 845560,
+        "ppid": 845364,
+        "session": 845364,
+        "state": "R"
+      },
+      {
+        "comm": "compile",
+        "pgid": 845364,
+        "pid": 845571,
+        "ppid": 845364,
+        "session": 845364,
+        "state": "R"
+      },
+      {
+        "comm": "compile",
+        "pgid": 845364,
+        "pid": 845697,
+        "ppid": 845364,
+        "session": 845364,
+        "state": "R"
+      },
+      {
+        "comm": "compile",
+        "pgid": 845364,
+        "pid": 845885,
+        "ppid": 845364,
+        "session": 845364,
+        "state": "R"
+      },
+      {
+        "comm": "compile",
+        "pgid": 845364,
+        "pid": 845890,
+        "ppid": 845364,
+        "session": 845364,
+        "state": "S"
+      },
+      {
+        "comm": "compile",
+        "pgid": 845364,
+        "pid": 846055,
+        "ppid": 845364,
+        "session": 845364,
+        "state": "S"
+      },
+      {
+        "comm": "compile",
+        "pgid": 845364,
+        "pid": 846060,
+        "ppid": 845364,
+        "session": 845364,
+        "state": "S"
+      },
+      {
+        "comm": "compile",
+        "pgid": 845364,
+        "pid": 846220,
+        "ppid": 845364,
+        "session": 845364,
+        "state": "R"
+      },
+      {
+        "comm": "link",
+        "pgid": 845364,
+        "pid": 846224,
+        "ppid": 845364,
+        "session": 845364,
+        "state": "R"
+      },
+      {
+        "comm": "vet",
+        "pgid": 845364,
+        "pid": 846229,
+        "ppid": 845364,
+        "session": 845364,
+        "state": "R"
+      },
+      {
+        "comm": "vet",
+        "pgid": 845364,
+        "pid": 846237,
+        "ppid": 845364,
+        "session": 845364,
+        "state": "S"
+      },
+      {
+        "comm": "vet",
+        "pgid": 845364,
+        "pid": 846245,
+        "ppid": 845364,
+        "session": 845364,
+        "state": "R"
+      },
+      {
+        "comm": "vet",
+        "pgid": 845364,
+        "pid": 846250,
+        "ppid": 845364,
+        "session": 845364,
+        "state": "R"
+      },
+      {
+        "comm": "vet",
+        "pgid": 845364,
+        "pid": 846274,
+        "ppid": 845364,
+        "session": 845364,
+        "state": "R"
+      },
+      {
+        "comm": "vet",
+        "pgid": 845364,
+        "pid": 846282,
+        "ppid": 845364,
+        "session": 845364,
+        "state": "S"
+      },
+      {
+        "comm": "vet",
+        "pgid": 845364,
+        "pid": 846293,
+        "ppid": 845364,
+        "session": 845364,
+        "state": "S"
+      },
+      {
+        "comm": "compile",
+        "pgid": 845364,
+        "pid": 846304,
+        "ppid": 845364,
+        "session": 845364,
+        "state": "R"
+      },
+      {
+        "comm": "compile",
+        "pgid": 845364,
+        "pid": 846338,
+        "ppid": 845364,
+        "session": 845364,
+        "state": "R"
+      },
+      {
+        "comm": "compile",
+        "pgid": 845364,
+        "pid": 846497,
+        "ppid": 845364,
+        "session": 845364,
+        "state": "R"
+      },
+      {
+        "comm": "compile",
+        "pgid": 845364,
+        "pid": 846505,
+        "ppid": 845364,
+        "session": 845364,
+        "state": "R"
+      },
+      {
+        "comm": "link",
+        "pgid": 845364,
+        "pid": 846514,
+        "ppid": 845364,
+        "session": 845364,
+        "state": "S"
+      },
+      {
+        "comm": "vet",
+        "pgid": 845364,
+        "pid": 846521,
+        "ppid": 845364,
+        "session": 845364,
+        "state": "R"
+      },
+      {
+        "comm": "vet",
+        "pgid": 845364,
+        "pid": 846529,
+        "ppid": 845364,
+        "session": 845364,
+        "state": "R"
+      },
+      {
+        "comm": "vet",
+        "pgid": 845364,
+        "pid": 846540,
+        "ppid": 845364,
+        "session": 845364,
+        "state": "R"
+      },
+      {
+        "comm": "compile",
+        "pgid": 845364,
+        "pid": 846549,
+        "ppid": 845364,
+        "session": 845364,
+        "state": "R"
+      },
+      {
+        "comm": "compile",
+        "pgid": 845364,
+        "pid": 846631,
+        "ppid": 845364,
+        "session": 845364,
+        "state": "R"
+      },
+      {
+        "comm": "compile",
+        "pgid": 845364,
+        "pid": 846636,
+        "ppid": 845364,
+        "session": 845364,
+        "state": "R"
+      },
+      {
+        "comm": "link",
+        "pgid": 845364,
+        "pid": 846654,
+        "ppid": 845364,
+        "session": 845364,
+        "state": "R"
+      },
+      {
+        "comm": "vet",
+        "pgid": 845364,
+        "pid": 846663,
+        "ppid": 845364,
+        "session": 845364,
+        "state": "R"
+      },
+      {
+        "comm": "vet",
+        "pgid": 845364,
+        "pid": 846667,
+        "ppid": 845364,
+        "session": 845364,
+        "state": "R"
+      },
+      {
+        "comm": "vet",
+        "pgid": 845364,
+        "pid": 846671,
+        "ppid": 845364,
+        "session": 845364,
+        "state": "R"
+      }
+    ],
+    "pgid": 845364,
+    "pid": 845364,
+    "remaining_direct_or_adopted_children": [],
+    "remaining_group_members": [],
+    "signals": [],
+    "source_after_equals_frozen": true,
+    "source_before_after_equal": true,
+    "source_before_equals_frozen": true,
+    "started_utc": "2026-10-16T01:25:45.103729+00:00",
+    "subreaper_enabled": true,
+    "test_RUN_count": 0,
+    "test_RUN_names": [],
+    "timeout": false,
+    "top_level_fail_count": 0,
+    "top_level_fail_names": [],
+    "top_level_pass_count": 0,
+    "top_level_pass_names": [],
+    "top_level_skip_count": 0,
+    "top_level_skip_names": []
+  },
+  "compiler_identity": {
+    "archive": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/prebuilder-observer-source-03/source-frozen.tar.gz",
+    "archive_sha256": "a2e7deb7559d66138abe6eaed5cc9d0760498469b9a1fc2c4300f7a641530c12",
+    "archive_verified_files": 10346,
+    "compile_binary_sha256": "3bb421d581f60b9ab48c2c73adf5c018557e89af32ad018d9c4417afa4bf90c1",
+    "go_binary": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+    "go_binary_sha256": "d68b7abbc40d0844f673f6cf06ae3cded225c50437c6454fa37ef178d079fe65",
+    "goroot_VERSION": "go1.26.3\ntime 2026-05-04T20:36:18Z\n",
+    "grant_sha256": "5ab6a8bd750e83c4e7ff63e5447fff7a9ababf96dcb2c8560ad0df9b16f08278",
+    "runner_pgid": 845248,
+    "runner_pid": 845248,
+    "subreaper_verified": true
+  },
+  "first_errors": [],
+  "frozen": true,
+  "native_publication_executed": false,
+  "numeric_allowance_selected": false,
+  "packet": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/prebuilder-observer-source03-packet.md",
+  "packet_sha256": "26378a5c491306be3a49b64d02aa8c74f60a505529beedafd81dc7477727213e",
+  "proposed_one_actual33_command": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/prebuilder-observer-source-03/proposed-actual33-command.json",
+  "proposed_one_actual33_command_sha256": "ac13bca228af8ea27b40b79567342a042628dde70f72ee124dff55e3205e31a5",
+  "public_status": "Q32 RED/ACK0",
+  "rejected02_and_reviews_preserved": true,
+  "source": {
+    "actual33_runtime": false,
+    "archive_verified_files": 10346,
+    "at_utc": "2026-10-16T01:25:23.371060+00:00",
+    "base_manifest_sha256": "83b71641be6460d2ece624fec51b8a84ad3ecea158844eb1c61b0828a72f0fcd",
+    "changed_paths": [
+      "TreeDB/caching/native_mvcc_prune_v6.go",
+      "TreeDB/db/native_mvcc_seal_preparation_v6.go",
+      "TreeDB/db/native_prebuilder_observer_for_test_v6.go",
+      "TreeDB/db/native_prebuilder_pricing_for_test_v6.go",
+      "TreeDB/freelist/allocator_publication_work_v6.go",
+      "TreeDB/freelist/native_publication_bound_v6.go",
+      "TreeDB/internal/memtable/native_retention_work.go",
+      "TreeDB/internal/mvccadmission/request.go",
+      "TreeDB/internal/primaryarena/retention.go",
+      "TreeDB/internal/retainedalloc/owner_work.go",
+      "TreeDB/internal/rootpublication/native_prebuilder_retention_for_test_v6.go",
+      "TreeDB/internal/rootpublication/primary_empty_candidate_work_v6.go",
+      "TreeDB/mvcc/native_prune_backend_route_v6_test.go",
+      "TreeDB/pager/primary_read_root_v6.go",
+      "TreeDB/pager/write_work.go",
+      "TreeDB/zipper/materialized_observer_for_test_v6.go"
+    ],
+    "delta_sha256": "6d5ce90f2049439d0adf2f56aa0d1a5bba1ea1cd21f32ada4acc32bdec0bf764",
+    "native_publication_runtime": false,
+    "new_paths": [
+      "TreeDB/db/native_prebuilder_observer_for_test_v6.go",
+      "TreeDB/db/native_prebuilder_pricing_for_test_v6.go",
+      "TreeDB/internal/rootpublication/native_prebuilder_retention_for_test_v6.go",
+      "TreeDB/zipper/materialized_observer_for_test_v6.go"
+    ],
+    "selection_sha256": "5ab6a8bd750e83c4e7ff63e5447fff7a9ababf96dcb2c8560ad0df9b16f08278",
+    "source_archive_sha256": "a2e7deb7559d66138abe6eaed5cc9d0760498469b9a1fc2c4300f7a641530c12",
+    "source_manifest_sha256": "9e3596eb05d4222ba4acf747a4045452efb8210a55a74201f5923da1fef0ad88",
+    "status": "Q32 RED/ACK0"
+  },
+  "source_runtime_lease_released": true
+}

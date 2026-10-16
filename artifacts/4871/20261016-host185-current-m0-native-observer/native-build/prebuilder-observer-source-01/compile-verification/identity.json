@@ -1,0 +1,13 @@
+{
+  "archive": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/prebuilder-observer-source-01/source-frozen.tar.gz",
+  "archive_sha256": "8fa0a28f311fe160ca6102ec1f803e2b518a6435bf1b8ead4ebe8ead433b16c5",
+  "archive_verified_files": 10346,
+  "compile_binary_sha256": "3bb421d581f60b9ab48c2c73adf5c018557e89af32ad018d9c4417afa4bf90c1",
+  "go_binary": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+  "go_binary_sha256": "d68b7abbc40d0844f673f6cf06ae3cded225c50437c6454fa37ef178d079fe65",
+  "goroot_VERSION": "go1.26.3\ntime 2026-05-04T20:36:18Z\n",
+  "grant_sha256": "5ab6a8bd750e83c4e7ff63e5447fff7a9ababf96dcb2c8560ad0df9b16f08278",
+  "runner_pgid": 827592,
+  "runner_pid": 827592,
+  "subreaper_verified": true
+}
