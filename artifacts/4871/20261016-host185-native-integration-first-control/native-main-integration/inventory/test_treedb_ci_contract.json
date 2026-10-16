@@ -1,0 +1,8 @@
+{
+  "argv": [
+    "python3",
+    ".github/scripts/test_treedb_ci_contract.py"
+  ],
+  "exit_code": 0,
+  "log_sha256": "c6b9b1f09add0403cc07e90bfdf272129b1ddfa2f8f7675ea8218862f2516371"
+}

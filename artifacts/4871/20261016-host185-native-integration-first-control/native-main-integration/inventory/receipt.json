@@ -1,0 +1,20 @@
+{
+  "at_utc": "2026-10-16T02:42:11.163100+00:00",
+  "base_manifest_sha256": "56f77963dffe17198ce428f27f635f44d9b946183939a1b108a044d40a34009e",
+  "changed_policy_fields": [
+    "discovery_source_sha256"
+  ],
+  "go_runtime_executed": false,
+  "policy_after_sha256": "8dddfd075143fde0513b1e8d41974949729f2434076e5ceb2d785b171d97747c",
+  "policy_before_sha256": "bcdc7a79f589b4c3201e12b9fd54073b064bc3e2c800a7ac45a2ae14564f91fd",
+  "source_archive_sha256": "0cbcb39f0493fcca4bf42c4963f135272196cb19ee8847eb80b0729607f1fc6d",
+  "source_changes_beyond_policy": false,
+  "source_delta": [
+    ".github/ci/ci_impact.json"
+  ],
+  "source_files": 10372,
+  "source_manifest_sha256": "d76289da830b8f2c856e8f0595f37a541de99368b2e582b1ae290bdab532ce9a",
+  "staged_path_count": 198,
+  "tree_after": "8ef1b40c8dada8ab00872b4a69124ebe7877b283",
+  "tree_before": "bea9e1ae6db4ca59b61f1db6ab484def2be6a1e1"
+}

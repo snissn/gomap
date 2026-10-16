@@ -1,0 +1,13 @@
+{
+  "archive": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/source-frozen.tar.gz",
+  "archive_sha256": "422da27116a0a21315b149e4972e131c738f74628d6172734979f13c8ea2e2f6",
+  "archive_verified_files": 10372,
+  "compile_binary_sha256": "3bb421d581f60b9ab48c2c73adf5c018557e89af32ad018d9c4417afa4bf90c1",
+  "go_binary": "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+  "go_binary_sha256": "d68b7abbc40d0844f673f6cf06ae3cded225c50437c6454fa37ef178d079fe65",
+  "goroot_VERSION": "go1.26.3\ntime 2026-05-04T20:36:18Z\n",
+  "grant_sha256": "75a6aeb46b19af4d14f89bffa6954672d6e25b15d2e3f410567284903ea8f253",
+  "runner_pgid": 921447,
+  "runner_pid": 921447,
+  "subreaper_verified": true
+}

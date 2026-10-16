@@ -1,0 +1,156 @@
+[
+  {
+    "decision": "Clean3-way composition: ordinary afterCOWRefresh/second finish under writer fence; native append/leafwriter/value-log birth and retained cancellation remain.",
+    "integrated_sha256": "763ec9e5f088ba012a2fbb8006367d041db96179cbdf61767d29538f14945f9d",
+    "native_sha256": "5ec3376741a3b61480208af5055d9a8a5147498b8542d33b34fc260c97aeee12",
+    "ordinary_sha256": "666e3b833cd9bc4164b5d5379e946b9b27ed44869e72cfe6a900625998391387",
+    "path": "TreeDB/caching/db.go"
+  },
+  {
+    "decision": "Native Close join/debt/teardown-gate protocol retained; ordinary single capture exit, immutable private one-shot empty exclusion with nil reader, every other nonnil Set pin, inline Snapshot first cache, State borrow docs, rootReuse\u2192db.mu publication and CompactIndex exact Set capture added. Terminal cache clears before durable root withdrawal. Native factored snapshot publication remains, preserving ordinary filter/epoch semantics.",
+    "integrated_sha256": "214aed2602d788a88e9e6d4b767847dd729088414319245eb30e779a095ac354",
+    "native_sha256": "7a7788637691958b068e6e7352ad8562d79338a3a2bacc51a9afdd4d754d3ca8",
+    "ordinary_sha256": "74e56bf28efe2806352ee1f205db6de5199ca5377ee7ee6595955fcf5ae7ae82",
+    "path": "TreeDB/db/db.go"
+  },
+  {
+    "decision": "Witness retained. Ordinary absent Set flags, diagnostic capture cleanup and lazy generic resource builder already present. Shared original stable-index Snapshot constructor and typed storage executor retained.",
+    "integrated_sha256": "e472aeae3ff832a79b6621d97150fe5b90b9165a0d5fb328991b9d114095aa30",
+    "native_sha256": "e472aeae3ff832a79b6621d97150fe5b90b9165a0d5fb328991b9d114095aa30",
+    "ordinary_sha256": "eb708af7ae7c01c8eb94f489c9c131c8dadb9006beee9fc7127b555091c08c26",
+    "path": "TreeDB/db/durable_root_runtime.go"
+  },
+  {
+    "decision": "Witness atomic idxMu\u2192wrapperMu eligibility/consume retained. Before close ownership acceptance, gate now also rejects populated inline first cache and historical rebind aliases/errors. No alternate reader is silently scrubbed after refund. Existing whole Snapshot traffic includes these fields.",
+    "integrated_sha256": "2c9c8271cd58e7b90e5825b07a6d8ec355341cbe0f88133a714464c30a3aa79d",
+    "native_sha256": "9efae28de7a7ed33af994bd123a07be3b7ffccb53333b80c513a64308f36cd32",
+    "ordinary_sha256": "3d4de86fde886f9122d1dc1353fb67bddf58680d1b26136e2cafdbb6e2f58640",
+    "path": "TreeDB/db/native_mvcc_snapshot_close_v6.go"
+  },
+  {
+    "decision": "Exact ordinary superset.",
+    "integrated_sha256": "636add1dc3a87e76a9873c3fbff64869335698f04510a83d4a4376094bbe3044",
+    "native_sha256": "9b56d9fac3d54d536e9cab759f52627b49ef0ed78c4fe71b3b4b191621761c1d",
+    "ordinary_sha256": "636add1dc3a87e76a9873c3fbff64869335698f04510a83d4a4376094bbe3044",
+    "path": "TreeDB/db/one_shot_custody_test.go"
+  },
+  {
+    "decision": "Exact ordinary: inline cache/overflow/tree aliases scrubbed before terminal owner completion; private one-shot exclusions preserved.",
+    "integrated_sha256": "e01cb50addc5b4b3b0cb6d75e54b05a5917bef319b38e212d9140f6aca931755",
+    "native_sha256": "b187c1083cbf794a286f0bfd02082f3a320f0b16d561c828645c2a0b4a41fa0c",
+    "ordinary_sha256": "e01cb50addc5b4b3b0cb6d75e54b05a5917bef319b38e212d9140f6aca931755",
+    "path": "TreeDB/db/pools.go"
+  },
+  {
+    "decision": "Clean3-way composition: ordinary nonlast edge fast path/last recheck plus native finite construction, retain and custody.",
+    "integrated_sha256": "9caf72a6befd8003de73e06db67d7705be6a992a75dbea3d8dec8483f3b6d8c1",
+    "native_sha256": "952cb84278f5919afe3a17cb44e75591ec4600105af0969f85b14cf947129d1d",
+    "ordinary_sha256": "5af224fd8a56a5479d36c2e22b2aa78912e22577d52c693bb8c54b567cd46758",
+    "path": "TreeDB/db/primary_arena_owner_v5.go"
+  },
+  {
+    "decision": "Clean3-way composition: ordinary unsupported relative namespace refusal before acquisition plus native fixed third metadata decoder operand.",
+    "integrated_sha256": "cb4a6df384ad84755a798796521aabbf7e7b094714bf56dcb6fae8480617bd4d",
+    "native_sha256": "610aecca48704b682e7797fe1ab53493037603b79588526d65289c10db8f099b",
+    "ordinary_sha256": "331bf7f58d7ac16863b5ffef181ad9db4f2293e744db9562dfdca7c3f65b5b46",
+    "path": "TreeDB/db/primary_offline_pair_v6.go"
+  },
+  {
+    "decision": "Native finite member/seal/debt backing/publisher retained. Remove prepare-time DATA certificate cache publication. Add ordinary prepared hook, exact existing-root original constructor binding, and early terminal cache detach. Actual accepted assignment is in the factored ordinary/native Activate callbacks below.",
+    "integrated_sha256": "bddc5b78b31193aa7632f161cb8e71a5c1f1ca62d813adb11f52b09ad98b0ce9",
+    "native_sha256": "bd431f5f851fdbd934ddb0ffbcc903bc13019b95ebe8a45dfb035b7612468d61",
+    "ordinary_sha256": "3fc85073c8434a119ce3b1998e0eb78d05c2a7107e7cd9e9c5ab8a59fb4b73ee",
+    "path": "TreeDB/db/root_publication_activation.go"
+  },
+  {
+    "decision": "Witness retained. Already clones/admittedly charges syncPath and preserves ordinary callbacks. Native staged custody constructor/typed release and explicit native sync retained.",
+    "integrated_sha256": "033f88c049979a5c218ec7c24634fae4c72d6b510247da3941937fd87bef3b3b",
+    "native_sha256": "033f88c049979a5c218ec7c24634fae4c72d6b510247da3941937fd87bef3b3b",
+    "ordinary_sha256": "8e7ef4509c85d4334fd99fa9cd85a68f158b3d7372e5e9f7ac7c14aeb579b266",
+    "path": "TreeDB/db/stable_pager_owned_operations.go"
+  },
+  {
+    "decision": "Exact ordinary result: unsupported read-only relative namespace refusal before capture authority; native extension is in the original adjacent finite capture constructor.",
+    "integrated_sha256": "7151ca8caf44e56afb2d3f7ddc529961db69b21faee022aa9bdae0ce6d1af1f2",
+    "native_sha256": "08dbc2fc598a294ca5f7e9217a5cf53eb0ae661898e8937ccc9edcbb542bc51b",
+    "ordinary_sha256": "7151ca8caf44e56afb2d3f7ddc529961db69b21faee022aa9bdae0ce6d1af1f2",
+    "path": "TreeDB/db/stable_resource.go"
+  },
+  {
+    "decision": "Clean3-way composition: ordinary same-DATA vacuum shared capture/release/recoverable handling, replacement-base recapture and rootReuse cutover; native third decoder retained. Ordinary-owned vacuum helpers untouched.",
+    "integrated_sha256": "bf73141090cbaeb5f04af3ccd6c9930935033414edc8df443bd442e334e29446",
+    "native_sha256": "e1ad93be86354691cad14e97d2d91219997d4294afedf7dec98e18131e8cb708",
+    "ordinary_sha256": "6fa641605954ae45bb25e2b23868a0a7cccf0f6cba7691914e4859d3d21f41ab",
+    "path": "TreeDB/db/vacuum_online.go"
+  },
+  {
+    "decision": "Exact ordinary test superset.",
+    "integrated_sha256": "ead999e43155641dd6b47a1888633cfacaa54d8626dff42134c42c5246447d1e",
+    "native_sha256": "5202f85eee540a33a1bafb41260ca0367b74dbba509092f1ad661652488c0580",
+    "ordinary_sha256": "ead999e43155641dd6b47a1888633cfacaa54d8626dff42134c42c5246447d1e",
+    "path": "TreeDB/db/vacuum_original_completion_test.go"
+  },
+  {
+    "decision": "Witness retained. Ordinary absent closure/monotone frontier fixes already present. Native receipt/pending prefix/changed waiter/demand reconciliation/dispatch and join/Stop preserved; no blocking Enqueue gate introduced.",
+    "integrated_sha256": "3289de5a237288a0ba30b1744c0a25a15e0043de4cfd4c569ce1108368dc231f",
+    "native_sha256": "3289de5a237288a0ba30b1744c0a25a15e0043de4cfd4c569ce1108368dc231f",
+    "ordinary_sha256": "3b415763b02c4e2b9a6f19b5fff4ed8e23849e50a08af3554c37bbefa2bc120d",
+    "path": "TreeDB/internal/rootpublication/coordinator.go"
+  },
+  {
+    "decision": "Witness retained. Ordinary fixed two-edge/scratch ownership decoder already present; native Into fixed decoder remains.",
+    "integrated_sha256": "385d65261d9d3be22c570188b0c822f4045f7570c13229b3a1c9106ec4ac0dac",
+    "native_sha256": "385d65261d9d3be22c570188b0c822f4045f7570c13229b3a1c9106ec4ac0dac",
+    "ordinary_sha256": "bffe5e9c18ff2bd0eafc82da653fe98472ea3c48a59c913f0dc055851369b7e7",
+    "path": "TreeDB/internal/rootpublication/primary_bank_metadata_v5.go"
+  },
+  {
+    "decision": "Witness retained. Original shared scalar frontier with guarded durable sequence, ordinary eager settlement and native separate physical terminal accounting remain. All native callbacks detach at actual completion.",
+    "integrated_sha256": "5f4070a0884cfc31ecb13249562b96267b5a249a69029075fef6b08ed2f0794d",
+    "native_sha256": "5f4070a0884cfc31ecb13249562b96267b5a249a69029075fef6b08ed2f0794d",
+    "ordinary_sha256": "1a696f69bf53cbd1727233c57e8e3c6ba10084a9a66ffca4b93437b0d7681c77",
+    "path": "TreeDB/internal/rootpublication/primary_terminal_completion_v6.go"
+  },
+  {
+    "decision": "Exact ordinary: immutable generic diagnostics, selected/raw-union guards, mixed namespace comparison, typed-nil and Stats paths. Existing native shared typed release lives in its original adjacent work files and is not replaced.",
+    "integrated_sha256": "ea4775015a3c261007b1682724b8aab9784cdec1528b0fe83a2fc0417bd3944c",
+    "native_sha256": "4c72669c5f99d2cb4cfefb57b962d20e36ce946429ae030834595f91e7f5a38f",
+    "ordinary_sha256": "ea4775015a3c261007b1682724b8aab9784cdec1528b0fe83a2fc0417bd3944c",
+    "path": "TreeDB/internal/rootpublication/resource_set.go"
+  },
+  {
+    "decision": "Compose generic-only immutable diagnostics pointer, clone sharing, mixed namespace comparisons and namespace atomic diagnostic counter/sync updates/terminal clear into SAME native-factored initializer and native constructors. Selected metadata tokens allocate no generic diagnostic object. Native partial construction/cancellation and finite namespace proof methods remain.",
+    "integrated_sha256": "463fcd6b40680b2d81c9f142efd99b787c98cc4d2ca5fa56b0a3ab50413c02e0",
+    "native_sha256": "c5df683f7d1a0c8e98d4c57c3cc6f688b8499233c9f59d0a6b017cf6e42b5ed2",
+    "ordinary_sha256": "51594dbbb09d0e1d0d1352da74a790a639d8cb2b395777d07d21f0b423b4400a",
+    "path": "TreeDB/internal/rootpublication/resource_token.go"
+  },
+  {
+    "decision": "Witness retained. Original parent-held construction/remap joins/nil-absent behavior already present; shared staged constructor and lock-held promotion helper retained.",
+    "integrated_sha256": "936e18e7ec9d01adc037518b773e19631fa15845ebbb9e93f1f263f55aa09ce2",
+    "native_sha256": "936e18e7ec9d01adc037518b773e19631fa15845ebbb9e93f1f263f55aa09ce2",
+    "ordinary_sha256": "bf16356324aef7f9f978b2f581ed49d0ec7e253767e9973a961f7d7152655710",
+    "path": "TreeDB/internal/valuelog/manager.go"
+  },
+  {
+    "decision": "Exact portable ordinary test.",
+    "integrated_sha256": "575a515486c6b3d901d42616e957c59b8267acb5743daaeb55bdac0d49ea9e69",
+    "native_sha256": "b2e0f1c96d3f639e1fa2be49aac0b798d16a0d66edffcea5d3d2377c0e6c743b",
+    "ordinary_sha256": "575a515486c6b3d901d42616e957c59b8267acb5743daaeb55bdac0d49ea9e69",
+    "path": "TreeDB/internal/valuelog/native_mvcc_file_close_test.go"
+  },
+  {
+    "decision": "Ordinary DATA-only Get fast path, IsVerified retained/core split and getLocalMapping composed. Native explicit selector/cache Store0/Linux same retained-FD single-attempt barrier preserved. Generic work-bearing callers do not select native semantics.",
+    "integrated_sha256": "2ce5317be3fcf54157e98315ac1a9e107ab03c71a7487a503cf04ff3db8e07a6",
+    "native_sha256": "71a8f8d8a4f52bf8493c3b8d459ac4ebeb2c933df1e0deefd16ef4800f9f4787",
+    "ordinary_sha256": "a48823560451bc2355c2aff35d3d9ec2b19a8a65f6513e712bc0e9176f27a2db",
+    "path": "TreeDB/pager/pager.go"
+  },
+  {
+    "decision": "Witness retained. Ordinary unchangedPrimaryBase already present; native/ordinary share original leafMergeCursor and revision sizing.",
+    "integrated_sha256": "7f653816183ed1c153f960d53d0bd602721c3e9fb18f4c5bacad25ae49345c71",
+    "native_sha256": "7f653816183ed1c153f960d53d0bd602721c3e9fb18f4c5bacad25ae49345c71",
+    "ordinary_sha256": "03c0dacef19c72e4695f148d31e684d5fb331754f56130ebf752aaea26b70269",
+    "path": "TreeDB/zipper/zipper.go"
+  }
+]

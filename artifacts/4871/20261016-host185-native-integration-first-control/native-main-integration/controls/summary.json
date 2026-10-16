@@ -1,0 +1,33 @@
+{
+  "actual33_executed": false,
+  "all_authorized_pass": false,
+  "all_groups_empty": true,
+  "commands_executed": 1,
+  "commands_not_executed": [
+    "normal-TreeDB-internal-rootpublication",
+    "normal-TreeDB-pager",
+    "normal-TreeDB-internal-valuelog",
+    "normal-TreeDB-caching",
+    "normal-TreeDB",
+    "normal-one-M4-pointer-cell",
+    "race-TreeDB-db",
+    "race-TreeDB-internal-rootpublication",
+    "race-TreeDB-pager",
+    "race-TreeDB-internal-valuelog",
+    "race-TreeDB-caching",
+    "race-TreeDB"
+  ],
+  "completed_utc": "2026-10-16T02:48:21.540243+00:00",
+  "native_publication_executed": false,
+  "public_status": "Q32 RED/ACK0; no allowance",
+  "results": [
+    {
+      "id": "normal-TreeDB-db",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/controls/normal-TreeDB-db/result.json",
+      "status": "STOP"
+    }
+  ],
+  "source_files": 10372,
+  "source_manifest_sha256": "d76289da830b8f2c856e8f0595f37a541de99368b2e582b1ae290bdab532ce9a",
+  "source_still_frozen": true
+}

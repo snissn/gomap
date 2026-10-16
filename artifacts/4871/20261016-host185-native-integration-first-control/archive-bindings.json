@@ -1,0 +1,26 @@
+[
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/base-source.tar.gz",
+    "bytes": 155840904,
+    "sha256": "64005f331afa338b95af854fff89c051ad38e3c62877d3e12daa33d31f574f5b",
+    "reason": "Full source or evidence archive retained locally and hash-bound; individual manifests, source delta payloads, logs and receipts copied remotely."
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/source-frozen.tar.gz",
+    "bytes": 156066144,
+    "sha256": "422da27116a0a21315b149e4972e131c738f74628d6172734979f13c8ea2e2f6",
+    "reason": "Full source or evidence archive retained locally and hash-bound; individual manifests, source delta payloads, logs and receipts copied remotely."
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/controls/evidence.tar.gz",
+    "bytes": 939975,
+    "sha256": "56ac90869e114a468a3841177e03167f9e8747febfa5b24ef493f208d6fb3896",
+    "reason": "Full source or evidence archive retained locally and hash-bound; individual manifests, source delta payloads, logs and receipts copied remotely."
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/inventory/source-final.tar.gz",
+    "bytes": 181387872,
+    "sha256": "0cbcb39f0493fcca4bf42c4963f135272196cb19ee8847eb80b0729607f1fc6d",
+    "reason": "Full source or evidence archive retained locally and hash-bound; individual manifests, source delta payloads, logs and receipts copied remotely."
+  }
+]

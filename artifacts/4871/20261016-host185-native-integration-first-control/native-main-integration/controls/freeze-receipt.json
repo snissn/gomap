@@ -1,0 +1,12 @@
+{
+  "archive_sha256": "56ac90869e114a468a3841177e03167f9e8747febfa5b24ef493f208d6fb3896",
+  "created_utc": "2026-10-16T02:49:19.156523+00:00",
+  "manifest_sha256": "98898ddf23519d4f967f9e01d339e841c2687b35a9de166f43e68e487a34a5f2",
+  "next_calls_executed": false,
+  "payload_files": 12,
+  "runner_finished_and_joined": true,
+  "source_manifest_sha256": "d76289da830b8f2c856e8f0595f37a541de99368b2e582b1ae290bdab532ce9a",
+  "source_runtime_lease_released": true,
+  "source_unchanged": true,
+  "status": "STOP_FIRST_CALL_FAILURE"
+}

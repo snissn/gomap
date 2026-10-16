@@ -1,0 +1,430 @@
+{
+  "actual33_authorized": false,
+  "added_existing_tests": [
+    "TestNativeMVCCSnapshotPinsOwnedEmptySet",
+    "TestSnapshotInlineRootCacheSurvivesOverflowUntilIteratorClose"
+  ],
+  "commands": [
+    {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "-parallel=1",
+        "-run",
+        "^(TestCurrentStateValueLogConsumersRetainExactSet|TestTopologyPublicationPreservesPrimaryRootLifetime|TestTopologyPublishersWaitForSnapshotSetCapture|TestOneShotReadCustodyMatchesCapturedResources|TestOneShotLiveValueLogReadSurvivesConcurrentDBClose|TestOneShotEmptyReadRetainsOnlyLegacyStateWrapper|TestOneShotReadCapturePublicationAndRelease|TestPrimaryDataCertificateV6RefusalKeepsAcceptedCache|TestPrimaryDataCertificateV6TerminalDetachesBeforeWithdrawal|TestPrimaryClosedIteratorDetachesOriginalRootV6|TestPrimarySharedTransactionV6ReusesExactDataCertificate|TestPrimaryOwnerWorkActualArenaNamespaceAndExternalContainingReceipt|TestPrimaryOwnerOrdinaryNonlastPreservesStickySiblingError|TestPrimaryOwnerOrdinaryNonlastHasNoUnadmittedReceiptAllocation|TestNativeIncompleteClosePreservesOriginalRuntimeV6|TestNativeCompletedCloseRetainsOrdinaryTeardownV6|TestNativeBindingCrossesOriginalTeardownGateV6|TestNativeNoDebtClosePreservesOrdinaryHookErrorV6|TestNativeMVCCSnapshotActualCaptureAndCancellation|TestNativeStablePagerPartialTokenCancellationV6|TestNativePagerOperationsPartialConstructionAndCancellationV6|TestNativeRootPreparationSourceWitnessV6|TestNativeRootPreparationSourceTerminalV6|TestNativePublishedRootPreparationDrainV6|TestNativePublishedOutputAdmissionBeforeAdoptionV6|TestNativeSnapshotPublicationUsesSameLeafOperandV6|TestPrimaryJointVacuumV6SuccessfulReplacement|TestPrimaryJointVacuumV6PointersAndIndependentFallback|TestNativeMVCCSnapshotPinsOwnedEmptySet|TestSnapshotInlineRootCacheSurvivesOverflowUntilIteratorClose)$",
+        "-count=1",
+        "-v",
+        "-timeout=3m",
+        "./TreeDB/db"
+      ],
+      "id": "normal-TreeDB-db",
+      "outer_timeout_seconds": 300,
+      "package": "./TreeDB/db",
+      "race": false,
+      "selector": "^(TestCurrentStateValueLogConsumersRetainExactSet|TestTopologyPublicationPreservesPrimaryRootLifetime|TestTopologyPublishersWaitForSnapshotSetCapture|TestOneShotReadCustodyMatchesCapturedResources|TestOneShotLiveValueLogReadSurvivesConcurrentDBClose|TestOneShotEmptyReadRetainsOnlyLegacyStateWrapper|TestOneShotReadCapturePublicationAndRelease|TestPrimaryDataCertificateV6RefusalKeepsAcceptedCache|TestPrimaryDataCertificateV6TerminalDetachesBeforeWithdrawal|TestPrimaryClosedIteratorDetachesOriginalRootV6|TestPrimarySharedTransactionV6ReusesExactDataCertificate|TestPrimaryOwnerWorkActualArenaNamespaceAndExternalContainingReceipt|TestPrimaryOwnerOrdinaryNonlastPreservesStickySiblingError|TestPrimaryOwnerOrdinaryNonlastHasNoUnadmittedReceiptAllocation|TestNativeIncompleteClosePreservesOriginalRuntimeV6|TestNativeCompletedCloseRetainsOrdinaryTeardownV6|TestNativeBindingCrossesOriginalTeardownGateV6|TestNativeNoDebtClosePreservesOrdinaryHookErrorV6|TestNativeMVCCSnapshotActualCaptureAndCancellation|TestNativeStablePagerPartialTokenCancellationV6|TestNativePagerOperationsPartialConstructionAndCancellationV6|TestNativeRootPreparationSourceWitnessV6|TestNativeRootPreparationSourceTerminalV6|TestNativePublishedRootPreparationDrainV6|TestNativePublishedOutputAdmissionBeforeAdoptionV6|TestNativeSnapshotPublicationUsesSameLeafOperandV6|TestPrimaryJointVacuumV6SuccessfulReplacement|TestPrimaryJointVacuumV6PointersAndIndependentFallback|TestNativeMVCCSnapshotPinsOwnedEmptySet|TestSnapshotInlineRootCacheSurvivesOverflowUntilIteratorClose)$",
+      "status": "AUTHORIZED_ONCE_BY_ROOT",
+      "top_level_tests": [
+        "TestCurrentStateValueLogConsumersRetainExactSet",
+        "TestTopologyPublicationPreservesPrimaryRootLifetime",
+        "TestTopologyPublishersWaitForSnapshotSetCapture",
+        "TestOneShotReadCustodyMatchesCapturedResources",
+        "TestOneShotLiveValueLogReadSurvivesConcurrentDBClose",
+        "TestOneShotEmptyReadRetainsOnlyLegacyStateWrapper",
+        "TestOneShotReadCapturePublicationAndRelease",
+        "TestPrimaryDataCertificateV6RefusalKeepsAcceptedCache",
+        "TestPrimaryDataCertificateV6TerminalDetachesBeforeWithdrawal",
+        "TestPrimaryClosedIteratorDetachesOriginalRootV6",
+        "TestPrimarySharedTransactionV6ReusesExactDataCertificate",
+        "TestPrimaryOwnerWorkActualArenaNamespaceAndExternalContainingReceipt",
+        "TestPrimaryOwnerOrdinaryNonlastPreservesStickySiblingError",
+        "TestPrimaryOwnerOrdinaryNonlastHasNoUnadmittedReceiptAllocation",
+        "TestNativeIncompleteClosePreservesOriginalRuntimeV6",
+        "TestNativeCompletedCloseRetainsOrdinaryTeardownV6",
+        "TestNativeBindingCrossesOriginalTeardownGateV6",
+        "TestNativeNoDebtClosePreservesOrdinaryHookErrorV6",
+        "TestNativeMVCCSnapshotActualCaptureAndCancellation",
+        "TestNativeStablePagerPartialTokenCancellationV6",
+        "TestNativePagerOperationsPartialConstructionAndCancellationV6",
+        "TestNativeRootPreparationSourceWitnessV6",
+        "TestNativeRootPreparationSourceTerminalV6",
+        "TestNativePublishedRootPreparationDrainV6",
+        "TestNativePublishedOutputAdmissionBeforeAdoptionV6",
+        "TestNativeSnapshotPublicationUsesSameLeafOperandV6",
+        "TestPrimaryJointVacuumV6SuccessfulReplacement",
+        "TestPrimaryJointVacuumV6PointersAndIndependentFallback",
+        "TestNativeMVCCSnapshotPinsOwnedEmptySet",
+        "TestSnapshotInlineRootCacheSurvivesOverflowUntilIteratorClose"
+      ]
+    },
+    {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "-parallel=1",
+        "-run",
+        "^(TestGenericResourceDiagnosticsOwnAllNamespaceText|TestGenericResourceDiagnosticsSurviveConcurrentPhysicalRelease|TestRawLogicalUnionRefusesSelectedAliasesBeforeEscape|TestGenericAbsentDiagnosticBackingDoesNotAllocate|TestGenericEmptyCloneUsesAbsentClosure|TestEmptyDirectoryCloneRetainsIndependentCustody|TestStableNamespaceParentGenerationTracksExactParentIdentity|TestStableNamespaceCreationProofRejectsReplacementBeforeBind)$",
+        "-count=1",
+        "-v",
+        "-timeout=2m",
+        "./TreeDB/internal/rootpublication"
+      ],
+      "id": "normal-TreeDB-internal-rootpublication",
+      "outer_timeout_seconds": 240,
+      "package": "./TreeDB/internal/rootpublication",
+      "race": false,
+      "selector": "^(TestGenericResourceDiagnosticsOwnAllNamespaceText|TestGenericResourceDiagnosticsSurviveConcurrentPhysicalRelease|TestRawLogicalUnionRefusesSelectedAliasesBeforeEscape|TestGenericAbsentDiagnosticBackingDoesNotAllocate|TestGenericEmptyCloneUsesAbsentClosure|TestEmptyDirectoryCloneRetainsIndependentCustody|TestStableNamespaceParentGenerationTracksExactParentIdentity|TestStableNamespaceCreationProofRejectsReplacementBeforeBind)$",
+      "status": "AUTHORIZED_ONCE_BY_ROOT",
+      "top_level_tests": [
+        "TestGenericResourceDiagnosticsOwnAllNamespaceText",
+        "TestGenericResourceDiagnosticsSurviveConcurrentPhysicalRelease",
+        "TestRawLogicalUnionRefusesSelectedAliasesBeforeEscape",
+        "TestGenericAbsentDiagnosticBackingDoesNotAllocate",
+        "TestGenericEmptyCloneUsesAbsentClosure",
+        "TestEmptyDirectoryCloneRetainsIndependentCustody",
+        "TestStableNamespaceParentGenerationTracksExactParentIdentity",
+        "TestStableNamespaceCreationProofRejectsReplacementBeforeBind"
+      ]
+    },
+    {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "-parallel=1",
+        "-run",
+        "^(TestNativeWordInvalidationKeepsOrdinaryMaskedPolicyV6|TestNativeRetainedFileFencePreservesDirtyAndRetiredIdentityV6)$",
+        "-count=1",
+        "-v",
+        "-timeout=2m",
+        "./TreeDB/pager"
+      ],
+      "id": "normal-TreeDB-pager",
+      "outer_timeout_seconds": 240,
+      "package": "./TreeDB/pager",
+      "race": false,
+      "selector": "^(TestNativeWordInvalidationKeepsOrdinaryMaskedPolicyV6|TestNativeRetainedFileFencePreservesDirtyAndRetiredIdentityV6)$",
+      "status": "AUTHORIZED_ONCE_BY_ROOT",
+      "top_level_tests": [
+        "TestNativeWordInvalidationKeepsOrdinaryMaskedPolicyV6",
+        "TestNativeRetainedFileFencePreservesDirtyAndRetiredIdentityV6"
+      ]
+    },
+    {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "-parallel=1",
+        "-run",
+        "^(TestNativeMVCCOriginalFilePhysicalClose|TestNativeOriginalMappingFreshQuantumTooSmall)$",
+        "-count=1",
+        "-v",
+        "-timeout=2m",
+        "./TreeDB/internal/valuelog"
+      ],
+      "id": "normal-TreeDB-internal-valuelog",
+      "outer_timeout_seconds": 240,
+      "package": "./TreeDB/internal/valuelog",
+      "race": false,
+      "selector": "^(TestNativeMVCCOriginalFilePhysicalClose|TestNativeOriginalMappingFreshQuantumTooSmall)$",
+      "status": "AUTHORIZED_ONCE_BY_ROOT",
+      "top_level_tests": [
+        "TestNativeMVCCOriginalFilePhysicalClose",
+        "TestNativeOriginalMappingFreshQuantumTooSmall"
+      ]
+    },
+    {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "-parallel=1",
+        "-run",
+        "^(TestCOWMaintenancePostRefreshSettlementKeepsFenceAndOldCut|TestCOWDBCloseWaitsForAdmittedPointerReadAndDelayedOwnersClose)$",
+        "-count=1",
+        "-v",
+        "-timeout=2m",
+        "./TreeDB/caching"
+      ],
+      "id": "normal-TreeDB-caching",
+      "outer_timeout_seconds": 240,
+      "package": "./TreeDB/caching",
+      "race": false,
+      "selector": "^(TestCOWMaintenancePostRefreshSettlementKeepsFenceAndOldCut|TestCOWDBCloseWaitsForAdmittedPointerReadAndDelayedOwnersClose)$",
+      "status": "AUTHORIZED_ONCE_BY_ROOT",
+      "top_level_tests": [
+        "TestCOWMaintenancePostRefreshSettlementKeepsFenceAndOldCut",
+        "TestCOWDBCloseWaitsForAdmittedPointerReadAndDelayedOwnersClose"
+      ]
+    },
+    {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "-parallel=1",
+        "-run",
+        "^(TestPrimaryJointVacuumV6DefaultOuterLeafMaterializationReaderAndCut)$",
+        "-count=1",
+        "-v",
+        "-timeout=3m",
+        "./TreeDB"
+      ],
+      "id": "normal-TreeDB",
+      "outer_timeout_seconds": 300,
+      "package": "./TreeDB",
+      "race": false,
+      "selector": "^(TestPrimaryJointVacuumV6DefaultOuterLeafMaterializationReaderAndCut)$",
+      "status": "AUTHORIZED_ONCE_BY_ROOT",
+      "top_level_tests": [
+        "TestPrimaryJointVacuumV6DefaultOuterLeafMaterializationReaderAndCut"
+      ]
+    },
+    {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "-parallel=1",
+        "-run",
+        "^TestIndexVacuumM4CertificationMatrix$/^pointer-values$/^backend-vacuum-online$",
+        "-count=1",
+        "-v",
+        "-timeout=3m",
+        "./TreeDB"
+      ],
+      "id": "normal-one-M4-pointer-cell",
+      "outer_timeout_seconds": 300,
+      "package": "./TreeDB",
+      "race": false,
+      "required_leaf": "TestIndexVacuumM4CertificationMatrix/pointer-values/backend-vacuum-online",
+      "required_selected_cells": 1,
+      "selector": "^TestIndexVacuumM4CertificationMatrix$/^pointer-values$/^backend-vacuum-online$",
+      "status": "AUTHORIZED_ONCE_BY_ROOT",
+      "top_level_tests": [
+        "TestIndexVacuumM4CertificationMatrix"
+      ]
+    },
+    {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "-parallel=1",
+        "-race",
+        "-run",
+        "^(TestCurrentStateValueLogConsumersRetainExactSet|TestTopologyPublicationPreservesPrimaryRootLifetime|TestTopologyPublishersWaitForSnapshotSetCapture|TestOneShotReadCustodyMatchesCapturedResources|TestOneShotLiveValueLogReadSurvivesConcurrentDBClose|TestOneShotEmptyReadRetainsOnlyLegacyStateWrapper|TestOneShotReadCapturePublicationAndRelease|TestPrimaryDataCertificateV6RefusalKeepsAcceptedCache|TestPrimaryDataCertificateV6TerminalDetachesBeforeWithdrawal|TestPrimaryClosedIteratorDetachesOriginalRootV6|TestPrimarySharedTransactionV6ReusesExactDataCertificate|TestPrimaryOwnerWorkActualArenaNamespaceAndExternalContainingReceipt|TestPrimaryOwnerOrdinaryNonlastPreservesStickySiblingError|TestNativeIncompleteClosePreservesOriginalRuntimeV6|TestNativeCompletedCloseRetainsOrdinaryTeardownV6|TestNativeBindingCrossesOriginalTeardownGateV6|TestNativeNoDebtClosePreservesOrdinaryHookErrorV6|TestNativeMVCCSnapshotActualCaptureAndCancellation|TestNativeStablePagerPartialTokenCancellationV6|TestNativePagerOperationsPartialConstructionAndCancellationV6|TestNativeRootPreparationSourceWitnessV6|TestNativeRootPreparationSourceTerminalV6|TestNativePublishedRootPreparationDrainV6|TestNativePublishedOutputAdmissionBeforeAdoptionV6|TestNativeSnapshotPublicationUsesSameLeafOperandV6|TestPrimaryJointVacuumV6SuccessfulReplacement|TestPrimaryJointVacuumV6PointersAndIndependentFallback|TestNativeMVCCSnapshotPinsOwnedEmptySet|TestSnapshotInlineRootCacheSurvivesOverflowUntilIteratorClose)$",
+        "-count=1",
+        "-v",
+        "-timeout=5m",
+        "./TreeDB/db"
+      ],
+      "id": "race-TreeDB-db",
+      "outer_timeout_seconds": 420,
+      "package": "./TreeDB/db",
+      "race": true,
+      "selector": "^(TestCurrentStateValueLogConsumersRetainExactSet|TestTopologyPublicationPreservesPrimaryRootLifetime|TestTopologyPublishersWaitForSnapshotSetCapture|TestOneShotReadCustodyMatchesCapturedResources|TestOneShotLiveValueLogReadSurvivesConcurrentDBClose|TestOneShotEmptyReadRetainsOnlyLegacyStateWrapper|TestOneShotReadCapturePublicationAndRelease|TestPrimaryDataCertificateV6RefusalKeepsAcceptedCache|TestPrimaryDataCertificateV6TerminalDetachesBeforeWithdrawal|TestPrimaryClosedIteratorDetachesOriginalRootV6|TestPrimarySharedTransactionV6ReusesExactDataCertificate|TestPrimaryOwnerWorkActualArenaNamespaceAndExternalContainingReceipt|TestPrimaryOwnerOrdinaryNonlastPreservesStickySiblingError|TestNativeIncompleteClosePreservesOriginalRuntimeV6|TestNativeCompletedCloseRetainsOrdinaryTeardownV6|TestNativeBindingCrossesOriginalTeardownGateV6|TestNativeNoDebtClosePreservesOrdinaryHookErrorV6|TestNativeMVCCSnapshotActualCaptureAndCancellation|TestNativeStablePagerPartialTokenCancellationV6|TestNativePagerOperationsPartialConstructionAndCancellationV6|TestNativeRootPreparationSourceWitnessV6|TestNativeRootPreparationSourceTerminalV6|TestNativePublishedRootPreparationDrainV6|TestNativePublishedOutputAdmissionBeforeAdoptionV6|TestNativeSnapshotPublicationUsesSameLeafOperandV6|TestPrimaryJointVacuumV6SuccessfulReplacement|TestPrimaryJointVacuumV6PointersAndIndependentFallback|TestNativeMVCCSnapshotPinsOwnedEmptySet|TestSnapshotInlineRootCacheSurvivesOverflowUntilIteratorClose)$",
+      "status": "AUTHORIZED_ONCE_BY_ROOT",
+      "top_level_tests": [
+        "TestCurrentStateValueLogConsumersRetainExactSet",
+        "TestTopologyPublicationPreservesPrimaryRootLifetime",
+        "TestTopologyPublishersWaitForSnapshotSetCapture",
+        "TestOneShotReadCustodyMatchesCapturedResources",
+        "TestOneShotLiveValueLogReadSurvivesConcurrentDBClose",
+        "TestOneShotEmptyReadRetainsOnlyLegacyStateWrapper",
+        "TestOneShotReadCapturePublicationAndRelease",
+        "TestPrimaryDataCertificateV6RefusalKeepsAcceptedCache",
+        "TestPrimaryDataCertificateV6TerminalDetachesBeforeWithdrawal",
+        "TestPrimaryClosedIteratorDetachesOriginalRootV6",
+        "TestPrimarySharedTransactionV6ReusesExactDataCertificate",
+        "TestPrimaryOwnerWorkActualArenaNamespaceAndExternalContainingReceipt",
+        "TestPrimaryOwnerOrdinaryNonlastPreservesStickySiblingError",
+        "TestNativeIncompleteClosePreservesOriginalRuntimeV6",
+        "TestNativeCompletedCloseRetainsOrdinaryTeardownV6",
+        "TestNativeBindingCrossesOriginalTeardownGateV6",
+        "TestNativeNoDebtClosePreservesOrdinaryHookErrorV6",
+        "TestNativeMVCCSnapshotActualCaptureAndCancellation",
+        "TestNativeStablePagerPartialTokenCancellationV6",
+        "TestNativePagerOperationsPartialConstructionAndCancellationV6",
+        "TestNativeRootPreparationSourceWitnessV6",
+        "TestNativeRootPreparationSourceTerminalV6",
+        "TestNativePublishedRootPreparationDrainV6",
+        "TestNativePublishedOutputAdmissionBeforeAdoptionV6",
+        "TestNativeSnapshotPublicationUsesSameLeafOperandV6",
+        "TestPrimaryJointVacuumV6SuccessfulReplacement",
+        "TestPrimaryJointVacuumV6PointersAndIndependentFallback",
+        "TestNativeMVCCSnapshotPinsOwnedEmptySet",
+        "TestSnapshotInlineRootCacheSurvivesOverflowUntilIteratorClose"
+      ]
+    },
+    {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "-parallel=1",
+        "-race",
+        "-run",
+        "^(TestGenericResourceDiagnosticsOwnAllNamespaceText|TestGenericResourceDiagnosticsSurviveConcurrentPhysicalRelease|TestRawLogicalUnionRefusesSelectedAliasesBeforeEscape|TestGenericEmptyCloneUsesAbsentClosure|TestEmptyDirectoryCloneRetainsIndependentCustody|TestStableNamespaceParentGenerationTracksExactParentIdentity|TestStableNamespaceCreationProofRejectsReplacementBeforeBind)$",
+        "-count=1",
+        "-v",
+        "-timeout=3m",
+        "./TreeDB/internal/rootpublication"
+      ],
+      "id": "race-TreeDB-internal-rootpublication",
+      "outer_timeout_seconds": 300,
+      "package": "./TreeDB/internal/rootpublication",
+      "race": true,
+      "selector": "^(TestGenericResourceDiagnosticsOwnAllNamespaceText|TestGenericResourceDiagnosticsSurviveConcurrentPhysicalRelease|TestRawLogicalUnionRefusesSelectedAliasesBeforeEscape|TestGenericEmptyCloneUsesAbsentClosure|TestEmptyDirectoryCloneRetainsIndependentCustody|TestStableNamespaceParentGenerationTracksExactParentIdentity|TestStableNamespaceCreationProofRejectsReplacementBeforeBind)$",
+      "status": "AUTHORIZED_ONCE_BY_ROOT",
+      "top_level_tests": [
+        "TestGenericResourceDiagnosticsOwnAllNamespaceText",
+        "TestGenericResourceDiagnosticsSurviveConcurrentPhysicalRelease",
+        "TestRawLogicalUnionRefusesSelectedAliasesBeforeEscape",
+        "TestGenericEmptyCloneUsesAbsentClosure",
+        "TestEmptyDirectoryCloneRetainsIndependentCustody",
+        "TestStableNamespaceParentGenerationTracksExactParentIdentity",
+        "TestStableNamespaceCreationProofRejectsReplacementBeforeBind"
+      ]
+    },
+    {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "-parallel=1",
+        "-race",
+        "-run",
+        "^(TestNativeWordInvalidationKeepsOrdinaryMaskedPolicyV6|TestNativeRetainedFileFencePreservesDirtyAndRetiredIdentityV6)$",
+        "-count=1",
+        "-v",
+        "-timeout=3m",
+        "./TreeDB/pager"
+      ],
+      "id": "race-TreeDB-pager",
+      "outer_timeout_seconds": 300,
+      "package": "./TreeDB/pager",
+      "race": true,
+      "selector": "^(TestNativeWordInvalidationKeepsOrdinaryMaskedPolicyV6|TestNativeRetainedFileFencePreservesDirtyAndRetiredIdentityV6)$",
+      "status": "AUTHORIZED_ONCE_BY_ROOT",
+      "top_level_tests": [
+        "TestNativeWordInvalidationKeepsOrdinaryMaskedPolicyV6",
+        "TestNativeRetainedFileFencePreservesDirtyAndRetiredIdentityV6"
+      ]
+    },
+    {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "-parallel=1",
+        "-race",
+        "-run",
+        "^(TestNativeMVCCOriginalFilePhysicalClose|TestNativeOriginalMappingFreshQuantumTooSmall)$",
+        "-count=1",
+        "-v",
+        "-timeout=3m",
+        "./TreeDB/internal/valuelog"
+      ],
+      "id": "race-TreeDB-internal-valuelog",
+      "outer_timeout_seconds": 300,
+      "package": "./TreeDB/internal/valuelog",
+      "race": true,
+      "selector": "^(TestNativeMVCCOriginalFilePhysicalClose|TestNativeOriginalMappingFreshQuantumTooSmall)$",
+      "status": "AUTHORIZED_ONCE_BY_ROOT",
+      "top_level_tests": [
+        "TestNativeMVCCOriginalFilePhysicalClose",
+        "TestNativeOriginalMappingFreshQuantumTooSmall"
+      ]
+    },
+    {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "-parallel=1",
+        "-race",
+        "-run",
+        "^(TestCOWMaintenancePostRefreshSettlementKeepsFenceAndOldCut|TestCOWDBCloseWaitsForAdmittedPointerReadAndDelayedOwnersClose)$",
+        "-count=1",
+        "-v",
+        "-timeout=3m",
+        "./TreeDB/caching"
+      ],
+      "id": "race-TreeDB-caching",
+      "outer_timeout_seconds": 300,
+      "package": "./TreeDB/caching",
+      "race": true,
+      "selector": "^(TestCOWMaintenancePostRefreshSettlementKeepsFenceAndOldCut|TestCOWDBCloseWaitsForAdmittedPointerReadAndDelayedOwnersClose)$",
+      "status": "AUTHORIZED_ONCE_BY_ROOT",
+      "top_level_tests": [
+        "TestCOWMaintenancePostRefreshSettlementKeepsFenceAndOldCut",
+        "TestCOWDBCloseWaitsForAdmittedPointerReadAndDelayedOwnersClose"
+      ]
+    },
+    {
+      "argv": [
+        "/mnt/fast4tb/gomap-mvcc-4871-20261015/toolchains/go1.26.3/bin/go",
+        "test",
+        "-p=1",
+        "-parallel=1",
+        "-race",
+        "-run",
+        "^(TestPrimaryJointVacuumV6DefaultOuterLeafMaterializationReaderAndCut)$",
+        "-count=1",
+        "-v",
+        "-timeout=5m",
+        "./TreeDB"
+      ],
+      "id": "race-TreeDB",
+      "outer_timeout_seconds": 420,
+      "package": "./TreeDB",
+      "race": true,
+      "selector": "^(TestPrimaryJointVacuumV6DefaultOuterLeafMaterializationReaderAndCut)$",
+      "status": "AUTHORIZED_ONCE_BY_ROOT",
+      "top_level_tests": [
+        "TestPrimaryJointVacuumV6DefaultOuterLeafMaterializationReaderAndCut"
+      ]
+    }
+  ],
+  "native_publication_authorized": false,
+  "normal_top_level_tests": 46,
+  "proposal_json_sha256": "9074c95cf274327305da7e237225b47e78ddb6ee2e252ea5b1a1892a9a9d325e",
+  "race_top_level_tests": 43,
+  "selected_test_files": {
+    "TreeDB/caching/cow_maintenance_lifetime_test.go": "77c38a50f7344f21ccc989817843cfc83c88938310d502e67f8646e86f5f4cde",
+    "TreeDB/caching/cow_pointer_read_test.go": "d0f75793711599f421ad53803b510c75fbbdfb7cabb906a3371f48d446308ba5",
+    "TreeDB/db/native_activation_output_admission_v6_test.go": "9387481e5eada2975d03bb951a269a012c9034a78411d95f3ebcbf3391e1d14d",
+    "TreeDB/db/native_close_barrier_v6_test.go": "7d1c67455d774668e37c41452bdd481d7999573bdebeea588a4a38ce7bc4dd7a",
+    "TreeDB/db/native_mvcc_root_preparation_v6_test.go": "54a94b11278464dd28b35965e1c6f4d94e363fc6409fcd1f2c074662b1883e08",
+    "TreeDB/db/native_mvcc_snapshot_capture_test.go": "c674d95a5d07d892646c1338c3ac85b84cc8bd682608e2931d2822918d914ca7",
+    "TreeDB/db/native_pager_operations_construction_v6_test.go": "336184e6ba124a8ab4c711a966e05dbef19d5c85176861bdd6b07a8dda6a437a",
+    "TreeDB/db/native_stable_pager_capture_v6_test.go": "278f996347dea753455a12c40cc51717f7adbc542e32cb27864b2e88f835a63d",
+    "TreeDB/db/one_shot_custody_test.go": "636add1dc3a87e76a9873c3fbff64869335698f04510a83d4a4376094bbe3044",
+    "TreeDB/db/one_shot_read_test.go": "91d68242340a3553cc5353575792d685dd0f3b96654a23ef62a0926665504764",
+    "TreeDB/db/primary_arena_release_work_test.go": "0625809f86b1788a77b1c69e590342e0d614852dc2c9db6cc73cd23ff2881c95",
+    "TreeDB/db/primary_joint_vacuum_v6_test.go": "5376ec6db9bca74c93f7801aa93dc055d291fda8e35ddc1910186d0647cd89ec",
+    "TreeDB/db/primary_review_repairs_test.go": "b1b6f3a0bec33e19db2609a60c8793a10ec2aa74d1c603675c9fd288a12bfd84",
+    "TreeDB/db/primary_shared_transaction_v6_test.go": "120fc4d96910f59bc3cf1eae71ce5a6618eac887c96b2285a1be08c5cccc5a7f",
+    "TreeDB/db/snapshot_probe_test.go": "3c14efda2da479fc9944c6ff6b20d1341f25040ad67463edb7f85077787f776e",
+    "TreeDB/db/state_value_log_lifetime_test.go": "6035278881e302793c169b52d9ad6582f494db2356475ae0d78269b28bf34bd6",
+    "TreeDB/index_vacuum_m4_matrix_test.go": "a8bfd73d143c7e5172f9a16aaf496c0e71c208df101927fe6839315fbcea5db3",
+    "TreeDB/internal/rootpublication/resource_absent_closure_test.go": "1bc570d6ef54901a37732aec0628c6c7a715fce18deea0657060a0fc28a835a2",
+    "TreeDB/internal/rootpublication/resource_generic_diagnostics_test.go": "d9fe5cd0a27dedd05ce0bf4cee594f54478e601eec25d28e3c4323976af3b6da",
+    "TreeDB/internal/rootpublication/resource_identity_unix_test.go": "bb5eacdd94b91ce215cbf2aefa578145494e4fea0a17814fa0bffb04c14c34ed",
+    "TreeDB/internal/valuelog/native_mvcc_file_close_test.go": "575a515486c6b3d901d42616e957c59b8267acb5743daaeb55bdac0d49ea9e69",
+    "TreeDB/pager/native_file_fence_linux_v6_test.go": "4005bbec5143eb3efcf9c39115ea5671d65b4acc15f7f3b2881b90e3cf803a38",
+    "TreeDB/primary_joint_vacuum_v6_test.go": "7e2c64e061b0c457dcd5e4ceae75fcb42d751b7333b6c8bfb1677534b04a48ee"
+  },
+  "selection_sha256": "f0b218c6f83248a8eb03c9c920fc73c8ba264a53f8ece9dd1fd42ec291616e7c",
+  "source_archive": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/inventory/source-final.tar.gz",
+  "source_archive_sha256": "0cbcb39f0493fcca4bf42c4963f135272196cb19ee8847eb80b0729607f1fc6d",
+  "source_files": 10372,
+  "source_manifest": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/inventory/source-final.json",
+  "source_manifest_sha256": "d76289da830b8f2c856e8f0595f37a541de99368b2e582b1ae290bdab532ce9a",
+  "source_mutations_allowed": false,
+  "source_tree": "8ef1b40c8dada8ab00872b4a69124ebe7877b283",
+  "stop_at_first_failure": true
+}

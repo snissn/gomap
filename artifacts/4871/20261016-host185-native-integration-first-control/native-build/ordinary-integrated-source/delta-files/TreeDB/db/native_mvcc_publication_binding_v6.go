@@ -1,0 +1,76 @@
+package db
+
+import (
+	"unsafe"
+
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+)
+
+// BindNativeMVCCPublicationV6 links the SAME admitted selected-delete frame to
+// the original coordinator. It adds no wrapper, independent resource edge or
+// publication authority. The owner is the original containing PruneCursor;
+// its physical close returns its original lease only after this link detaches.
+// Binding is a private bounded step, not permission to enqueue or yield with
+// an active publication turn.
+func (c *NativeMVCCCurrentDeleteV6) BindNativeMVCCPublicationV6(owner rootpublication.NativePublicationOwnerV6, w *iterator.OrdinalScanWork) (bool, error) {
+	if c == nil || w == nil || owner == nil {
+		return false, ErrNativeMVCCSnapshotWork
+	}
+	if !w.Reserve(2, uint64(unsafe.Sizeof(*c))+2*uint64(unsafe.Sizeof(c.publicationCoordinator))+uint64(unsafe.Sizeof(c.publicationBound))+uint64(unsafe.Sizeof(c.db.teardownMu))+uint64(unsafe.Sizeof(c.db.closing))) {
+		return false, nil
+	}
+	if c.publicationBound {
+		return true, nil
+	}
+	if c.phase != 4 || c.db == nil {
+		return false, rootpublication.ErrDurableRootOwnership
+	}
+	// Registration crosses the SAME producer/teardown gate. Close never joins
+	// while holding this gate, and its protected recheck sees every prior bind.
+	c.db.teardownMu.RLock()
+	defer c.db.teardownMu.RUnlock()
+	if c.db.closing.Load() {
+		return false, ErrClosed
+	}
+	runtime := c.db.rootPublication
+	if runtime == nil || runtime.coordinator == nil {
+		return false, rootpublication.ErrDurableRootOwnership
+	}
+	coordinator := runtime.coordinator
+	ready, err := coordinator.BindNativePublicationV6(&c.publication, owner, w)
+	if ready && err == nil {
+		c.publicationCoordinator, c.publicationBound = coordinator, true
+	}
+	return ready, err
+}
+
+// Only actual successful physical cancellation/completion reaches this helper.
+// A failed callback leaves the SAME linked frame and containing charge intact;
+// retained=true is never inferred merely from a returned error. No builder,
+// pending entry or active attempt may still borrow this containing storage.
+func (c *NativeMVCCCurrentDeleteV6) completeNativePublicationBindingV6(w *iterator.OrdinalScanWork) (bool, error) {
+	if !w.Reserve(1, 2*uint64(unsafe.Sizeof(c.publicationCoordinator))+2*uint64(unsafe.Sizeof(c.publicationBound))) {
+		return false, nil
+	}
+	if !c.publicationBound {
+		return true, nil
+	}
+	ready, err := c.publicationCoordinator.CompleteNativePublicationWithWorkV6(&c.publication, nil, false, w)
+	if ready && err == nil {
+		c.publicationCoordinator, c.publicationBound = nil, false
+	}
+	return ready, err
+}
+
+// NativeMVCCPublicationRecoveryErrorV6 observes only the immutable error view
+// of the SAME linked original receipt. It cannot detach/refund physical custody.
+func (c *NativeMVCCCurrentDeleteV6) NativeMVCCPublicationRecoveryErrorV6(w *iterator.OrdinalScanWork) (error, bool) {
+	if c == nil || w == nil || !w.Reserve(1, uint64(unsafe.Sizeof(c.publicationCoordinator))+uint64(unsafe.Sizeof(c.publicationBound))) {
+		return nil, false
+	}
+	if !c.publicationBound || c.publicationCoordinator == nil {
+		return nil, true
+	}
+	return c.publicationCoordinator.NativePublicationRecoveryErrorV6(&c.publication, w)
+}

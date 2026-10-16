@@ -1,0 +1,68 @@
+[
+  {
+    "common_sha256": null,
+    "integrated_sha256": "6e72667d5cb7f880f1b8611ce855eed191ec7c9b5a6573db3b028030cb7f6784",
+    "native_preserved": false,
+    "native_sha256": "b1f6e0054a54669eee8e362e665f1f46919f7dc4c60c4eafa881bd3caffede29",
+    "new_relative_common": true,
+    "ordinary_preserved": false,
+    "ordinary_sha256": null,
+    "path": "TreeDB/db/native_capsule_parent_v6_test.go",
+    "status": "native-owned"
+  },
+  {
+    "common_sha256": null,
+    "integrated_sha256": "54a94b11278464dd28b35965e1c6f4d94e363fc6409fcd1f2c074662b1883e08",
+    "native_preserved": false,
+    "native_sha256": "935fd15849450e98487ef7171c47f28676e29d0ac7e81f860156a6ffc41f88f1",
+    "new_relative_common": true,
+    "ordinary_preserved": false,
+    "ordinary_sha256": null,
+    "path": "TreeDB/db/native_mvcc_root_preparation_v6_test.go",
+    "status": "native-owned"
+  },
+  {
+    "common_sha256": null,
+    "integrated_sha256": "cace8067fd2f8273574d0798db92e5ba31219f22e7e43f6e5b606fb03626ee70",
+    "native_preserved": false,
+    "native_sha256": "e30b91f8ff46d471c584ecf3b0a53ed9655b39c2d323e965fe6a12a3e12379ac",
+    "new_relative_common": true,
+    "ordinary_preserved": false,
+    "ordinary_sha256": null,
+    "path": "TreeDB/db/native_prebuilder_pricing_for_test_v6.go",
+    "status": "native-owned"
+  },
+  {
+    "common_sha256": null,
+    "integrated_sha256": "623a8de1f205f844a50850ced3f03cef0a2374c6f4ea123c666c97b781495d32",
+    "native_preserved": false,
+    "native_sha256": "61488122ae896306234b6b17bd621c0b5aee08142edc758d7e0e4620f2a571d9",
+    "new_relative_common": true,
+    "ordinary_preserved": false,
+    "ordinary_sha256": null,
+    "path": "TreeDB/db/primary_visible_member_work_v6.go",
+    "status": "native-owned"
+  },
+  {
+    "common_sha256": null,
+    "integrated_sha256": "51a3ab18c6131d5a61fe2ab5f2e307fc3e1ea33c1d1246a039bc4688115a0454",
+    "native_preserved": false,
+    "native_sha256": "31b5d8f66239a1c12fec6a93e34564972b34c1dd72ec245f1ef086f3ce89615f",
+    "new_relative_common": true,
+    "ordinary_preserved": false,
+    "ordinary_sha256": null,
+    "path": "TreeDB/db/primary_visible_transaction_spec_v6.go",
+    "status": "native-owned"
+  },
+  {
+    "common_sha256": null,
+    "integrated_sha256": "d234442527141be4e52b5bba5e607d28e6aea916f6e8670b4bca7962beabbc29",
+    "native_preserved": false,
+    "native_sha256": "599cb06617d92611d861207ecc7daa5a5aead36fecd79fc8683d60aa580cae66",
+    "new_relative_common": true,
+    "ordinary_preserved": false,
+    "ordinary_sha256": null,
+    "path": "TreeDB/mvcc/native_prune_backend_route_v6_test.go",
+    "status": "native-owned"
+  }
+]

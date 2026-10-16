@@ -1,0 +1,138 @@
+{
+  "classification": "PRODUCT_ORDINARY_NATIVE_ORIGIN_DISPATCH_REGRESSION",
+  "first_source_proven_construction_throw": "owner_growth_work.go:40-42 (WorkLease assertion), reached from explicitly ordinary constructor AddPending at primary_transaction_construction_v6.go:66",
+  "focused_controls_proposed_only": [
+    {
+      "assertions": "all four actual late prepare/activate refusal hooks, accepted cache unchanged, genuine old Snapshot and original disposal; do not make its Lease a WorkLease",
+      "package": "./TreeDB/db",
+      "scope": "existing failure control, unchanged",
+      "selector": "^TestPrimaryDataCertificateV6RefusalKeepsAcceptedCache$"
+    },
+    {
+      "assertions": "Real ordinary SetSync with retained independent Snapshots until live read-root table crosses initial512 entries and grows; preserve reads, exact root identity, ordinary counters/retention accounting and Close/reopen; no changed public cap or native route. Observe original protected table geometry in same-package test only, not a production authority.",
+      "package": "./TreeDB/db",
+      "proposal": "TestOrdinaryPrimaryHeldRootTableGrowthPreservesLeaseCompatibilityV6",
+      "scope": "new ordinary public held-root boundary"
+    },
+    {
+      "assertions": "ordinary nonnil work construction, component claim, read-root seal, ReleaseStep/ProgressOrdinaryRelease and partial failure cleanup; plain Lease sees actual Resize/Close, no lost refund/debt, aliases scrubbed before refund; native counterpart refuses same unsupported lease before effects",
+      "package": "./TreeDB/internal/primaryarena",
+      "proposal": "TestOrdinaryPrimaryCountedWorkSupportsLeaseOnlyRetentionV6",
+      "scope": "ordinary counted cleanup compatibility"
+    },
+    {
+      "assertions": "same original ordinary constructor origin, counted work, partial constructor/seal error compensation, original promotion allocation+abort/Finish; verify no native fallback and original terminal receipt semantics",
+      "package": "./TreeDB/internal/rootpublication",
+      "proposal": "TestOrdinaryPrimaryConstructionAndPromotionUseOriginalLeaseV6",
+      "scope": "ordinary private abort and promotion"
+    },
+    {
+      "assertions": "finite refusal remains false,nil; unsupported remains ErrWorkRequired before effects; rollback exact",
+      "package": "./TreeDB/internal/retainedalloc",
+      "scope": "existing native guard controls",
+      "selector": "^(TestNativeAtomicOwnerGrowthAdmitsBeforeEffects|TestNativeAtomicOwnerGrowthPricesOriginalRollback|TestNativeOwnerGrowthAdapterPreservesYield|TestNativeOwnerGrowthAdapterPreservesUnsupported)$"
+    },
+    {
+      "assertions": "no allocation/serial/count mutation on refusal, unsupported finite table rehash still pre-effect",
+      "package": "./TreeDB/pager",
+      "scope": "existing finite table guards",
+      "selector": "^(TestPrimaryReadRootConstructionRefusesBeforeAllocationV6|TestPrimaryReadRootConstructionGrowthYieldV6)$"
+    },
+    {
+      "assertions": "original retained physical failure, no double abort/refund, true containing terminal/ACK/Stop ordering",
+      "package": "./TreeDB/zipper ./TreeDB/internal/rootpublication",
+      "scope": "existing constructor failure and terminal controls",
+      "selector": "^(TestPrimaryConstructionV6SiblingFailureDisposal|TestPrimaryFinishContainingRefundJoinsOriginalCall|TestPrimaryFinishAccountingBeforeAckAndStop)$"
+    }
+  ],
+  "observed_failure": "normal-TreeDB-db: four seeded/prepare/activate children return ErrWorkRequired before prepared hook",
+  "ordinary_reference": {
+    "archive_sha256": "64005f331afa338b95af854fff89c051ad38e3c62877d3e12daa33d31f574f5b",
+    "base_source_manifest": "native-build/ordinary-integrated-source/base-source.json",
+    "base_source_manifest_sha256": "8f32bf3ea51c2b082f5c9cfce2b8066e6202ae89ea6e696ef44899ffb5d09476",
+    "reference": "immutable ordinary0149 integration baseline"
+  },
+  "product_mutated": false,
+  "public_status": "Q32 RED/ACK0; no allowance; no native publication grant",
+  "recommendation": "Keep strict finite owner adapters unchanged. Select original retention/cleanup primitives by existing explicit construction/claim/transaction origin, with minimal factored native/ordinary arena entry/core for shared read-root and sealing/queue operations. Retain ordinary work-counter reservations, errors and accounting. Never infer origin from maxwork size, lease capability, or budget failure. No fixture conversion to WorkLease.",
+  "rows": [
+    {
+      "cause": "native=false still passes ordinary metrics work to strict AddPendingWithOrdinalWork; Lease-only enrollment fails before transaction allocation",
+      "id": "first-constructor",
+      "path": "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go:49,58,66",
+      "repair": "Use existing native constructor origin for owner retention admission; ordinary AddPending, native strict work adapter."
+    },
+    {
+      "cause": "w!=nil selects finite aggregate constructor for ordinary maxwork; rejects Lease-only owner and valid ordinary table growth at count>=2*256",
+      "id": "read-root-and-table",
+      "path": "TreeDB/internal/primaryarena/read_root_v6.go:96-130; TreeDB/pager/primary_read_root_v6.go:54-102,110-143",
+      "repair": "Preserve ordinary counted traversal/charge and original supported bank+table constructor/rehash; select finite aggregate/no-rehash route only from explicit native constructor entry."
+    },
+    {
+      "cause": "PrepareClaim(native=false,w=maxwork) uses strict owner Add for Claim; original ordinary chunk allocation remains plain Add",
+      "id": "component-claim",
+      "path": "TreeDB/internal/primaryarena/arena.go:267-280,321,374-380; TreeDB/zipper/primary_directory.go:77-92",
+      "repair": "Use existing native bool for Claim accounting; preserve ordinary Add/newChunk and native typed Add/partial ownership."
+    },
+    {
+      "cause": "ordinary SealPrimaryConstruction->sealDirectoryConstructed->writeBundleLocked(maxwork) selects new retained finite image Add",
+      "id": "read-image-seal",
+      "path": "TreeDB/internal/primaryarena/bundle.go:266-311; TreeDB/internal/primaryarena/arena.go:683; TreeDB/internal/primaryarena/directory_seal_work_v6.go:138",
+      "repair": "Factor shared core with explicit originating native seal selector; ordinary original Add/copy/register/compensation, finite native same retained image/retry custody."
+    },
+    {
+      "cause": "ordinary activated transaction creates promotion with maxwork; allocation helper now requires WorkLease",
+      "id": "promotion-storage",
+      "path": "TreeDB/db/primary_capsule_runtime_v6.go:204-206; TreeDB/internal/rootpublication/primary_transaction_construction_v6.go:280,291-296,329-346",
+      "repair": "Use existing c.nativeWorkOwned for retention growth; ordinary stays counted work + AddPending/compensation; private native storage stays finite."
+    },
+    {
+      "cause": "ordinary maxwork ReleaseStep now installs strict finite RemovalWork; plain Lease cannot shrink through it; nil-work caller ignores queued refundOwner",
+      "id": "queue-refund",
+      "path": "TreeDB/internal/primaryarena/arena.go:807-822,877-881,933-964,976-981; TreeDB/internal/primaryarena/release_queue.go:34-47; TreeDB/internal/retainedalloc/owner_work.go:139-141,398-425",
+      "repair": "Separate existing ordinary and native queue execution policy explicitly. Ordinary keeps original Remove and actual lease Resize/Close after alias scrub; native keeps same queue/RemovalWork capability, cancellation and no ordinary assistance. Never discard/steal an already native-owned accounting continuation."
+    },
+    {
+      "cause": "ordinary Abort loops shared cleanup with maxwork; unconditional ReleaseQueueStep reaches finite queue refund; can preserve unintended sticky error after private failure",
+      "id": "ordinary-abort",
+      "path": "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go:235-244; TreeDB/internal/rootpublication/durable_root_transaction_native_mvcc_v6.go:162-175,281-287",
+      "repair": "Choose queue accounting policy from existing c.nativeWorkOwned in shared abort; keep ordinary original error/physical custody and native original typed abort."
+    }
+  ],
+  "safe_existing_dispatch": [
+    "AdmitRootMetadata wrapper supplies nil to WithWork; ordinary DATA proof constructor uses wrapper, so not an additional throwing site",
+    "ordinary newPrimaryBankConstructionV5/ensureCapacity/ClaimMetadataBanksIntoOrdinary retain original AddPending and explicit ordinary APIs",
+    "ordinary durable_primary_runtime_v5.go manifest SealMetadata supplies nil; finite generic SealMetadata dependency limitation exists but is not on this immediate ordinary seal chain"
+  ],
+  "source_files": 10372,
+  "source_manifest_sha256": "d76289da830b8f2c856e8f0595f37a541de99368b2e582b1ae290bdab532ce9a",
+  "source_only": true,
+  "source_sha256": {
+    "TreeDB/db/api.go": "33563eb6b2e7e3bc3800c1647528a9c300b122585fe34ce48778ce7d9eb0e31e",
+    "TreeDB/db/batch.go": "4b856f778b7afe20564f7fad7233b17ec397198f0b00e6cf3fdcf26b2e9347d0",
+    "TreeDB/db/commit_combiner.go": "53251026d6e2904704ba678051e8b6c55aece1253de48236a1091aaae9a62f0f",
+    "TreeDB/db/primary_bank_construction_v5.go": "667aa341a55f8de6f19545244495af914ab783f4a646189ec3f717ca203f11b8",
+    "TreeDB/db/primary_capsule_runtime_v6.go": "b38015acaa0836307bc6107f4fc6e03cabf29b97b9d11c9c7acf1e1ee7a26106",
+    "TreeDB/db/primary_review_repairs_test.go": "b1b6f3a0bec33e19db2609a60c8793a10ec2aa74d1c603675c9fd288a12bfd84",
+    "TreeDB/internal/primaryarena/arena.go": "a587d56658f9217b4cfce21c20077c145cfd1765cb6e545145925f8f61dfe43f",
+    "TreeDB/internal/primaryarena/bundle.go": "b64b5bd706b3b7275f1cbfedda3e827a2f4d07a7c5796e15627bb83461ecd305",
+    "TreeDB/internal/primaryarena/metadata.go": "4e4bcb2b567e9283dd3eddc0c0557a515d7875b2cd2d7d94394e9da26287639f",
+    "TreeDB/internal/primaryarena/read_root_v6.go": "3d07ba4e9222fc998b675422ab4aa015cf3eea694ec8957f0b78a1382b14fdc4",
+    "TreeDB/internal/primaryarena/release_queue.go": "1563a6837570688f22095e7c79ca4b0f802a0a687083ffab218d21ebf4b6cf14",
+    "TreeDB/internal/primaryarena/retention.go": "5bd00ed26ccfbfe8eae96188351ac5bdf388e328efc3d32d50dd7e5eaef7f559",
+    "TreeDB/internal/retainedalloc/owner_growth_work.go": "74735769ff46c27445a03ae785dad4e1a8ae3ecf84358d039486e0de9dcabf35",
+    "TreeDB/internal/retainedalloc/owner_work.go": "d4727141cffdc31205bc99854746a91fe10e19bdc628f643206d9ca94fd8aabe",
+    "TreeDB/internal/rootpublication/durable_root_transaction_native_mvcc_v6.go": "eda53efc3dda66e785ae9df99dd758dca924a7e0f103382f88de59a1c2b92460",
+    "TreeDB/internal/rootpublication/primary_data_certificate_v6.go": "90f9e24db240428d46fe5486e84ce1c072a8b9806086d9dff7b270b9aba4045e",
+    "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go": "1c61ddb08a86ecf70f966006e21981125302ba2b6054a02d21c5edd93a531870",
+    "TreeDB/pager/primary_read_root_v6.go": "1c7038fa4d0cadbeb397cf2ea033fab256a6fe3085136d8aa015e2f095c9402b",
+    "TreeDB/zipper/primary_directory.go": "c6996011293253e166ed603d9d508488429fb524108370a8c0003e2771a5c29b",
+    "TreeDB/zipper/zipper.go": "7f653816183ed1c153f960d53d0bd602721c3e9fb18f4c5bacad25ae49345c71"
+  },
+  "source_uncertainty": [
+    "Raw failure log lacks call stack. The first unavoidable new constructor check is proven, not uniquely sampled as the machine instruction in each failed child. Prior ordinary release may encounter the independently proven cleanup incompatibility if residual releasable custody exists.",
+    "Downstream image/promotion/rehash failures are source-proven reachable defects after earlier gates are repaired, not additional observed runtime failures.",
+    "Many-held-root exact public writer count depends on existing live slots/roots and must be measured through protected geometry in its new control; threshold is actual table count512 with heads256, not a guessed write count."
+  ],
+  "tests_or_go_executed": false
+}

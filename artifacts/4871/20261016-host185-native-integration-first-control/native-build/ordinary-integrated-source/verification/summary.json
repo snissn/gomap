@@ -1,0 +1,19 @@
+{
+  "all_groups_empty": true,
+  "commands_executed": 1,
+  "commands_not_executed": [],
+  "completed_utc": "2026-10-16T02:39:46.389936+00:00",
+  "native_publication_runtime": false,
+  "public_status": "Q32 RED/ACK0",
+  "results": [
+    {
+      "exit_code": 0,
+      "name": "compile-only",
+      "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/verification/compile-only/result.json"
+    }
+  ],
+  "source_files": 10372,
+  "source_manifest_sha256": "56f77963dffe17198ce428f27f635f44d9b946183939a1b108a044d40a34009e",
+  "source_still_frozen": true,
+  "stopped_at_first_failure": false
+}

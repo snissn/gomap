@@ -1,0 +1,48 @@
+{
+  "metadata_manifest": "d76289da830b8f2c856e8f0595f37a541de99368b2e582b1ae290bdab532ce9a",
+  "metadata_archive": "0cbcb39f0493fcca4bf42c4963f135272196cb19ee8847eb80b0729607f1fc6d",
+  "count": 10372,
+  "delta": [
+    ".github/ci/ci_impact.json"
+  ],
+  "policy_fields": [
+    "discovery_source_sha256"
+  ],
+  "live_bad": [],
+  "staged_blob_bad": [],
+  "compile_input_and_output_match": true,
+  "compile_test_run_markers": 0,
+  "compile_pass_lines": [
+    "ok  \tgithub.com/snissn/gomap/TreeDB\t0.003s [no tests to run]",
+    "ok  \tgithub.com/snissn/gomap/TreeDB/tree\t0.002s [no tests to run]",
+    "ok  \tgithub.com/snissn/gomap/TreeDB/caching\t0.002s [no tests to run]",
+    "ok  \tgithub.com/snissn/gomap/TreeDB/db\t0.003s [no tests to run]",
+    "ok  \tgithub.com/snissn/gomap/TreeDB/freelist\t0.002s [no tests to run]",
+    "ok  \tgithub.com/snissn/gomap/TreeDB/internal/memtable\t0.001s [no tests to run]",
+    "ok  \tgithub.com/snissn/gomap/TreeDB/internal/primaryarena\t0.001s [no tests to run]",
+    "ok  \tgithub.com/snissn/gomap/TreeDB/internal/retainedalloc\t0.001s [no tests to run]",
+    "ok  \tgithub.com/snissn/gomap/TreeDB/internal/rootpublication\t0.002s [no tests to run]",
+    "ok  \tgithub.com/snissn/gomap/TreeDB/internal/valuelog\t0.002s [no tests to run]",
+    "ok  \tgithub.com/snissn/gomap/TreeDB/lifecycle\t0.001s [no tests to run]",
+    "ok  \tgithub.com/snissn/gomap/TreeDB/mvcc\t0.003s [no tests to run]",
+    "ok  \tgithub.com/snissn/gomap/TreeDB/node\t0.001s [no tests to run]",
+    "ok  \tgithub.com/snissn/gomap/TreeDB/pager\t0.001s [no tests to run]",
+    "ok  \tgithub.com/snissn/gomap/TreeDB/zipper\t0.002s [no tests to run]"
+  ],
+  "metadata_logs": {
+    "refresh.log": "5fb1c804537ff4fb401e38ac18cdffe5d909f1fd9c06b3c0d3a1211b06d377a9",
+    "source-contract.log": "4a90d77e83312d4e40674133586a5899aabb38a922cf1c63a5c628d4954a0baa",
+    "test_ci_impact.log": "aa5ff7cd2a594c5f8110670490bae2c0225f26848aef48f982164e16e90ae97d",
+    "test_treedb_windows_core_headroom.log": "3dcc9b97af69dcd097e6be10b9105afc444885f3e1b41ec7f7e25a469fa8939f",
+    "tree-before.log": "8f35701e27a392901de4ad4a5f9a1cdcde72034f63ed1408700eed8256d0bd8f",
+    "test_refresh_ci_impact_inventory.log": "376b7c66785020179f8794f3dd973394110d4117880928fa3a3e79fbf0e37cd5",
+    "complete-staged-check.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stage-frozen.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "staged-check.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "staged-stat.log": "c5d762986ac388ffe5479cbeb87fe73ca44756635b09cf14588d29d1bb1d1e61",
+    "tree-after.log": "54e6bc783073c6ddcd0b4deb5a5a4b11a2f85a766f23d6589ca51504238b7e19",
+    "staged-paths.log": "233e5f32965dcea33eb7c73da7e8f4a01c3ab85be67292810a25c2e10fd560f9",
+    "stage-policy.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "test_treedb_ci_contract.log": "c6b9b1f09add0403cc07e90bfdf272129b1ddfa2f8f7675ea8218862f2516371"
+  }
+}

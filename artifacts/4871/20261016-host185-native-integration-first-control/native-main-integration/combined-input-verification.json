@@ -1,0 +1,30 @@
+{
+  "actual_changed": 197,
+  "additions": 114,
+  "archive_files_verified": 10372,
+  "archive_sha256": "422da27116a0a21315b149e4972e131c738f74628d6172734979f13c8ea2e2f6",
+  "at_utc": "2026-10-16T02:38:32.928024+00:00",
+  "counts": {
+    "divergent": 22,
+    "identical": 10061,
+    "native-owned": 181,
+    "ordinary-owned": 108
+  },
+  "deletions": 0,
+  "focused_delta_bytes": 64468,
+  "focused_delta_sha256": "55f9858aa2425f5d1d34606f195db3f2a8a7064de51fac385585e5904383607d",
+  "live_files_verified": 10372,
+  "manifest_sha256": "56f77963dffe17198ce428f27f635f44d9b946183939a1b108a044d40a34009e",
+  "modifications": 83,
+  "native_adaptations": [
+    "TreeDB/db/native_capsule_parent_v6_test.go",
+    "TreeDB/db/native_mvcc_root_preparation_v6_test.go",
+    "TreeDB/db/native_prebuilder_pricing_for_test_v6.go",
+    "TreeDB/db/primary_visible_member_work_v6.go",
+    "TreeDB/db/primary_visible_transaction_spec_v6.go",
+    "TreeDB/mvcc/native_prune_backend_route_v6_test.go"
+  ],
+  "runtime_executed": false,
+  "selected_actions": 203,
+  "source_mutations": false
+}

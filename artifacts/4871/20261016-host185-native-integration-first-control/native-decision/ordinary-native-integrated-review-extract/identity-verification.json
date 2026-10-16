@@ -1,0 +1,50 @@
+{
+  "manifest_sha256": "56f77963dffe17198ce428f27f635f44d9b946183939a1b108a044d40a34009e",
+  "archive_sha256": "422da27116a0a21315b149e4972e131c738f74628d6172734979f13c8ea2e2f6",
+  "files": 10372,
+  "live_mismatches": [],
+  "archive_mismatches": [],
+  "preservation_mismatches": [],
+  "counts": {
+    "ordinary-owned": 108,
+    "identical": 10061,
+    "divergent": 22,
+    "native-owned": 181
+  },
+  "changed": 197,
+  "added": 114,
+  "modified": 83,
+  "deleted": 0,
+  "native_adaptations": [
+    "TreeDB/db/native_capsule_parent_v6_test.go",
+    "TreeDB/db/native_mvcc_root_preparation_v6_test.go",
+    "TreeDB/db/native_prebuilder_pricing_for_test_v6.go",
+    "TreeDB/db/primary_visible_member_work_v6.go",
+    "TreeDB/db/primary_visible_transaction_spec_v6.go",
+    "TreeDB/mvcc/native_prune_backend_route_v6_test.go"
+  ],
+  "divergent": [
+    "TreeDB/caching/db.go",
+    "TreeDB/db/db.go",
+    "TreeDB/db/durable_root_runtime.go",
+    "TreeDB/db/native_mvcc_snapshot_close_v6.go",
+    "TreeDB/db/one_shot_custody_test.go",
+    "TreeDB/db/pools.go",
+    "TreeDB/db/primary_arena_owner_v5.go",
+    "TreeDB/db/primary_offline_pair_v6.go",
+    "TreeDB/db/root_publication_activation.go",
+    "TreeDB/db/stable_pager_owned_operations.go",
+    "TreeDB/db/stable_resource.go",
+    "TreeDB/db/vacuum_online.go",
+    "TreeDB/db/vacuum_original_completion_test.go",
+    "TreeDB/internal/rootpublication/coordinator.go",
+    "TreeDB/internal/rootpublication/primary_bank_metadata_v5.go",
+    "TreeDB/internal/rootpublication/primary_terminal_completion_v6.go",
+    "TreeDB/internal/rootpublication/resource_set.go",
+    "TreeDB/internal/rootpublication/resource_token.go",
+    "TreeDB/internal/valuelog/manager.go",
+    "TreeDB/internal/valuelog/native_mvcc_file_close_test.go",
+    "TreeDB/pager/pager.go",
+    "TreeDB/zipper/zipper.go"
+  ]
+}

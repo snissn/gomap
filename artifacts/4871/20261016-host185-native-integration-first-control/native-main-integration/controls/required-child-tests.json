@@ -1,0 +1,25 @@
+{
+  "TestNativePagerOperationsPartialConstructionAndCancellationV6": [
+    "before-output",
+    "output-only",
+    "custody-before-owner",
+    "complete",
+    "resume-output",
+    "resume-custody",
+    "owner-overflow"
+  ],
+  "TestNativeRootPreparationSourceTerminalV6": [
+    "before-acquire",
+    "last-owner",
+    "independent-held-owner",
+    "partial-scratch-cancel-and-refund"
+  ],
+  "TestNativeStablePagerPartialTokenCancellationV6": [
+    "before-token",
+    "growth-refusal",
+    "token-only",
+    "before-pinned-backing",
+    "before-retain",
+    "after-retain"
+  ]
+}

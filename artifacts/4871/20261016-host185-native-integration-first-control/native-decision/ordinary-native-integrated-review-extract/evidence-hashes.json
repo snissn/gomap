@@ -1,0 +1,44 @@
+{
+  "files": {
+    "native-decision/ordinary-native-integrated-packet.md": "52049a1a6fe3b1fcd18ab2f2bb39134360503c1e3f57572fea1f18fdee0e6c1f",
+    "native-decision/root-native-ordinary-integration-selection.md": "75a6aeb46b19af4d14f89bffa6954672d6e25b15d2e3f410567284903ea8f253",
+    "native-decision/root-native-integrated-controls-selection.md": "f0b218c6f83248a8eb03c9c920fc73c8ba264a53f8ece9dd1fd42ec291616e7c",
+    "native-decision/root-native-integrated-controls-selection.json": "35591560945779881a8772a4efac7beb481efd0463278b72e714aa5f7da485c9",
+    "native-decision/ordinary-native-integration-plan.md": "cfb39f69c38fbc2c0369dfab9d789a92e952d9fd93e48589ff1c297eadd9d98d",
+    "native-decision/ordinary-native-integration-plan.json": "ad82b887c0e451c3af5aa3673f3351d10497eafe1939a6d56a82f839ac01aa72",
+    "native-main-integration/witness-input-census.json": "4b52059b80c0de764276a7f8abaa77e4da99f2dac4c215664b5987db1493b849",
+    "native-decision/source-witness-repair-independent-review.md": "e192c022c7d6dd854c434d5c938dec667e007cc3c069420a2c0f646b1c46a521",
+    "native-build/ordinary-integrated-source/verification/summary.json": "e3a620fbb881e9ad7051b27c7f1d684f595f4a9e2e2d439c56c6e89306b1931e",
+    "native-build/ordinary-integrated-source/verification/identity.json": "047bee779484877303e396522147a0e691c757eddb9785f55c9660756e169ba9",
+    "native-build/ordinary-integrated-source/verification/compile-only/command.json": "917d54b242c154762153bdaff64dc7133086b82cc788d81d608c382d67b3a848",
+    "native-build/ordinary-integrated-source/verification/compile-only/process.json": "4bcc32885a02d3033a7ceadf10c56b75d8e2ac86f9275d52bf91220087c02944",
+    "native-build/ordinary-integrated-source/verification/compile-only/result.json": "62113e21111a8a00d34d00caf8a84c5fa55b79820827740c24c82a675c77edf2",
+    "native-build/ordinary-integrated-source/verification/compile-only/run.log": "7e2806de81d54d8c48bb14d8006af28fca0587c3036800177c2c0b9206da8167",
+    "native-main-integration/inventory/receipt.json": "77d04a976e1fac29222b6cc6de2266f2d6c23d5d00e87823cb0b53305720d395",
+    "compiler_actual_sha256": "3bb421d581f60b9ab48c2c73adf5c018557e89af32ad018d9c4417afa4bf90c1",
+    "go_actual_sha256": "d68b7abbc40d0844f673f6cf06ae3cded225c50437c6454fa37ef178d079fe65"
+  },
+  "pure_contracts": {
+    "test_ci_impact": {
+      "sha256": "aa5ff7cd2a594c5f8110670490bae2c0225f26848aef48f982164e16e90ae97d",
+      "tests": 21,
+      "ok": true
+    },
+    "test_refresh_ci_impact_inventory": {
+      "sha256": "376b7c66785020179f8794f3dd973394110d4117880928fa3a3e79fbf0e37cd5",
+      "tests": 15,
+      "ok": true
+    },
+    "test_treedb_ci_contract": {
+      "sha256": "c6b9b1f09add0403cc07e90bfdf272129b1ddfa2f8f7675ea8218862f2516371",
+      "tests": 6,
+      "ok": true
+    },
+    "test_treedb_windows_core_headroom": {
+      "sha256": "3dcc9b97af69dcd097e6be10b9105afc444885f3e1b41ec7f7e25a469fa8939f",
+      "tests": 16,
+      "ok": true
+    }
+  },
+  "pure_count": 58
+}

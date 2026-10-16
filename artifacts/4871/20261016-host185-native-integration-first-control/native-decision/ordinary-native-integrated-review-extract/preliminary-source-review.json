@@ -1,0 +1,171 @@
+{
+  "reviewer": "ordinary_review",
+  "actual_model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "review_mode": "INTERNAL_SUBAGENT_REVIEW",
+  "hosted_model_routing_unavailable_reason": "Hosted manual review cannot pin the required exact gpt-6.1-sol model; independent explicitly routed internal review used.",
+  "candidate_edits_by_reviewer": false,
+  "disposition": "ACCEPT",
+  "scope": "Frozen ordinary/native source integration before previsibility; not whole native completion, numeric allowance, actual33 or publication acceptance.",
+  "compile_manifest_sha256": "56f77963dffe17198ce428f27f635f44d9b946183939a1b108a044d40a34009e",
+  "compile_archive_sha256": "422da27116a0a21315b149e4972e131c738f74628d6172734979f13c8ea2e2f6",
+  "final_manifest_sha256": "d76289da830b8f2c856e8f0595f37a541de99368b2e582b1ae290bdab532ce9a",
+  "final_archive_sha256": "0cbcb39f0493fcca4bf42c4963f135272196cb19ee8847eb80b0729607f1fc6d",
+  "staged_tree": "8ef1b40c8dada8ab00872b4a69124ebe7877b283",
+  "source_files": 10372,
+  "findings": [],
+  "census": {
+    "manifest_sha256": "56f77963dffe17198ce428f27f635f44d9b946183939a1b108a044d40a34009e",
+    "archive_sha256": "422da27116a0a21315b149e4972e131c738f74628d6172734979f13c8ea2e2f6",
+    "files": 10372,
+    "live_mismatches": [],
+    "archive_mismatches": [],
+    "preservation_mismatches": [],
+    "counts": {
+      "ordinary-owned": 108,
+      "identical": 10061,
+      "divergent": 22,
+      "native-owned": 181
+    },
+    "changed": 197,
+    "added": 114,
+    "modified": 83,
+    "deleted": 0,
+    "native_adaptations": [
+      "TreeDB/db/native_capsule_parent_v6_test.go",
+      "TreeDB/db/native_mvcc_root_preparation_v6_test.go",
+      "TreeDB/db/native_prebuilder_pricing_for_test_v6.go",
+      "TreeDB/db/primary_visible_member_work_v6.go",
+      "TreeDB/db/primary_visible_transaction_spec_v6.go",
+      "TreeDB/mvcc/native_prune_backend_route_v6_test.go"
+    ],
+    "divergent": [
+      "TreeDB/caching/db.go",
+      "TreeDB/db/db.go",
+      "TreeDB/db/durable_root_runtime.go",
+      "TreeDB/db/native_mvcc_snapshot_close_v6.go",
+      "TreeDB/db/one_shot_custody_test.go",
+      "TreeDB/db/pools.go",
+      "TreeDB/db/primary_arena_owner_v5.go",
+      "TreeDB/db/primary_offline_pair_v6.go",
+      "TreeDB/db/root_publication_activation.go",
+      "TreeDB/db/stable_pager_owned_operations.go",
+      "TreeDB/db/stable_resource.go",
+      "TreeDB/db/vacuum_online.go",
+      "TreeDB/db/vacuum_original_completion_test.go",
+      "TreeDB/internal/rootpublication/coordinator.go",
+      "TreeDB/internal/rootpublication/primary_bank_metadata_v5.go",
+      "TreeDB/internal/rootpublication/primary_terminal_completion_v6.go",
+      "TreeDB/internal/rootpublication/resource_set.go",
+      "TreeDB/internal/rootpublication/resource_token.go",
+      "TreeDB/internal/valuelog/manager.go",
+      "TreeDB/internal/valuelog/native_mvcc_file_close_test.go",
+      "TreeDB/pager/pager.go",
+      "TreeDB/zipper/zipper.go"
+    ]
+  },
+  "metadata_delta": [
+    ".github/ci/ci_impact.json"
+  ],
+  "policy_fields": [
+    "discovery_source_sha256"
+  ],
+  "independent_verification": {
+    "all_compile_archive_entries": true,
+    "all_final_archive_entries": true,
+    "all_final_live_entries": true,
+    "all_final_staged_blobs": true,
+    "compile_source_before_after": true,
+    "compiler_and_go_sha256": true,
+    "reviewer_ran_Go_or_tests": false
+  },
+  "coverage": [
+    "Full native-to-integrated and ordinary-to-integrated patches for all 22 semantic resolutions and six adapted native-owned paths",
+    "Actual native and ordinary accepted certificate callbacks, pre-adoption price, final driver lock interval and terminal cache clear",
+    "Shared token initializer, partial selected construction/cancellation, generic-only packed diagnostics, mixed namespace comparison and counter identity",
+    "Capture publication exclusion, nonnil empty Set pin, private one-shot reader exclusion, inline root/overflow lifetime, native close eligibility",
+    "Ordinary same-DATA vacuum shared capture, post-refresh maintenance writer fence, pager DATA lookup/verification and explicit native mode",
+    "Coordinator ordinary nil-work route, eager waiter settlement, Stop/native join custody; witness receipt-before-source terminal ordering",
+    "F293 role6 cache term and R145 phase boundary; actual sizeof-based independently allocated vs contained backing",
+    "Final metadata field-only refresh and 58 retained Python contract outcomes"
+  ],
+  "compile_evidence": {
+    "all_groups_empty": true,
+    "commands_executed": 1,
+    "commands_not_executed": [],
+    "completed_utc": "2026-10-16T02:39:46.389936+00:00",
+    "native_publication_runtime": false,
+    "public_status": "Q32 RED/ACK0",
+    "results": [
+      {
+        "exit_code": 0,
+        "name": "compile-only",
+        "result": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/verification/compile-only/result.json"
+      }
+    ],
+    "source_files": 10372,
+    "source_manifest_sha256": "56f77963dffe17198ce428f27f635f44d9b946183939a1b108a044d40a34009e",
+    "source_still_frozen": true,
+    "stopped_at_first_failure": false
+  },
+  "focused_controls": {
+    "status": "PENDING",
+    "root_selection": "native-decision/root-native-integrated-controls-selection.json",
+    "calls": 13,
+    "normal_top_level": 46,
+    "race_top_level": 43,
+    "reviewer_did_not_execute": true
+  },
+  "limitations": [
+    "Positive native accepted-cache assignment and native inline-cache close-refusal branch are source-only, not exercised as successful native publication.",
+    "Genuine completed-receipt ContinueFinish to source terminal remains source ordering, not successful publication runtime.",
+    "F293 and R145 are source expressions; no measured full F/retention/Finish total or allowance. R is included in F, not additive.",
+    "Private txn clone maps, sink ID map and replacedMetadata control rows remain explicitly incomplete; no canonical-output relabeling.",
+    "No broad CI, platform runtime, performance, full M4 matrix, 8x output, native final driver or actual33 executed by this review.",
+    "Q32/1MiB/33/80/4096 unchanged RED/ACK0; noAllowanceChosen and native_publication_accepted=false."
+  ],
+  "evidence_hashes": {
+    "files": {
+      "native-decision/ordinary-native-integrated-packet.md": "52049a1a6fe3b1fcd18ab2f2bb39134360503c1e3f57572fea1f18fdee0e6c1f",
+      "native-decision/root-native-ordinary-integration-selection.md": "75a6aeb46b19af4d14f89bffa6954672d6e25b15d2e3f410567284903ea8f253",
+      "native-decision/root-native-integrated-controls-selection.md": "f0b218c6f83248a8eb03c9c920fc73c8ba264a53f8ece9dd1fd42ec291616e7c",
+      "native-decision/root-native-integrated-controls-selection.json": "35591560945779881a8772a4efac7beb481efd0463278b72e714aa5f7da485c9",
+      "native-decision/ordinary-native-integration-plan.md": "cfb39f69c38fbc2c0369dfab9d789a92e952d9fd93e48589ff1c297eadd9d98d",
+      "native-decision/ordinary-native-integration-plan.json": "ad82b887c0e451c3af5aa3673f3351d10497eafe1939a6d56a82f839ac01aa72",
+      "native-main-integration/witness-input-census.json": "4b52059b80c0de764276a7f8abaa77e4da99f2dac4c215664b5987db1493b849",
+      "native-decision/source-witness-repair-independent-review.md": "e192c022c7d6dd854c434d5c938dec667e007cc3c069420a2c0f646b1c46a521",
+      "native-build/ordinary-integrated-source/verification/summary.json": "e3a620fbb881e9ad7051b27c7f1d684f595f4a9e2e2d439c56c6e89306b1931e",
+      "native-build/ordinary-integrated-source/verification/identity.json": "047bee779484877303e396522147a0e691c757eddb9785f55c9660756e169ba9",
+      "native-build/ordinary-integrated-source/verification/compile-only/command.json": "917d54b242c154762153bdaff64dc7133086b82cc788d81d608c382d67b3a848",
+      "native-build/ordinary-integrated-source/verification/compile-only/process.json": "4bcc32885a02d3033a7ceadf10c56b75d8e2ac86f9275d52bf91220087c02944",
+      "native-build/ordinary-integrated-source/verification/compile-only/result.json": "62113e21111a8a00d34d00caf8a84c5fa55b79820827740c24c82a675c77edf2",
+      "native-build/ordinary-integrated-source/verification/compile-only/run.log": "7e2806de81d54d8c48bb14d8006af28fca0587c3036800177c2c0b9206da8167",
+      "native-main-integration/inventory/receipt.json": "77d04a976e1fac29222b6cc6de2266f2d6c23d5d00e87823cb0b53305720d395",
+      "compiler_actual_sha256": "3bb421d581f60b9ab48c2c73adf5c018557e89af32ad018d9c4417afa4bf90c1",
+      "go_actual_sha256": "d68b7abbc40d0844f673f6cf06ae3cded225c50437c6454fa37ef178d079fe65"
+    },
+    "pure_contracts": {
+      "test_ci_impact": {
+        "sha256": "aa5ff7cd2a594c5f8110670490bae2c0225f26848aef48f982164e16e90ae97d",
+        "tests": 21,
+        "ok": true
+      },
+      "test_refresh_ci_impact_inventory": {
+        "sha256": "376b7c66785020179f8794f3dd973394110d4117880928fa3a3e79fbf0e37cd5",
+        "tests": 15,
+        "ok": true
+      },
+      "test_treedb_ci_contract": {
+        "sha256": "c6b9b1f09add0403cc07e90bfdf272129b1ddfa2f8f7675ea8218862f2516371",
+        "tests": 6,
+        "ok": true
+      },
+      "test_treedb_windows_core_headroom": {
+        "sha256": "3dcc9b97af69dcd097e6be10b9105afc444885f3e1b41ec7f7e25a469fa8939f",
+        "tests": 16,
+        "ok": true
+      }
+    },
+    "pure_count": 58
+  }
+}

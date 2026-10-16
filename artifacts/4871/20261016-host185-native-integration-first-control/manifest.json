@@ -1,0 +1,2603 @@
+[
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/CONTINUATION-20261016.md",
+    "path": "CONTINUATION-20261016.md",
+    "source_bytes": 14272,
+    "source_sha256": "29f0174f6eebf9804c596e18c0b1c29d15b26d117b433c4faa079f73d798c66c",
+    "stored_bytes": 14272,
+    "stored_sha256": "29f0174f6eebf9804c596e18c0b1c29d15b26d117b433c4faa079f73d798c66c",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/22-decisions.json",
+    "path": "native-build/ordinary-integrated-source/22-decisions.json",
+    "source_bytes": 11948,
+    "source_sha256": "5f3da56c753d7d9d3882807d0027571f439d7722c5133ace545f4463e3254f88",
+    "stored_bytes": 11948,
+    "stored_sha256": "5f3da56c753d7d9d3882807d0027571f439d7722c5133ace545f4463e3254f88",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/base-source.json",
+    "path": "native-build/ordinary-integrated-source/base-source.json.gz",
+    "source_bytes": 1574289,
+    "source_sha256": "8f32bf3ea51c2b082f5c9cfce2b8066e6202ae89ea6e696ef44899ffb5d09476",
+    "stored_bytes": 457922,
+    "stored_sha256": "5892dfd99c2044ed1826d2d2e805b4ced2cd14aa5fca88f4b1be7a4d9346e958",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/changed-files.json",
+    "path": "native-build/ordinary-integrated-source/changed-files.json",
+    "source_bytes": 96058,
+    "source_sha256": "e50bcd7449791c7f6d05434462e9f2a7aa719c2818756a5af260444edc91001c",
+    "stored_bytes": 96058,
+    "stored_sha256": "e50bcd7449791c7f6d05434462e9f2a7aa719c2818756a5af260444edc91001c",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/caching/db.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/caching/db.go.gz",
+    "source_bytes": 1410640,
+    "source_sha256": "763ec9e5f088ba012a2fbb8006367d041db96179cbdf61767d29538f14945f9d",
+    "stored_bytes": 257259,
+    "stored_sha256": "573c80f08c82e83516d258bd4243523871540c652218bb2c67461e42c39f9db4",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/caching/lane.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/caching/lane.go",
+    "source_bytes": 5889,
+    "source_sha256": "48401109478af8a4d4d8457e7d82d8408b9e3d65f6f82dcf926cc7a728936ced",
+    "stored_bytes": 5889,
+    "stored_sha256": "48401109478af8a4d4d8457e7d82d8408b9e3d65f6f82dcf926cc7a728936ced",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/caching/leaf_page_log.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/caching/leaf_page_log.go",
+    "source_bytes": 22967,
+    "source_sha256": "574b0bb8fc875cabd8e969434a1bde1400f4712779438e8ff7856d83b3606285",
+    "stored_bytes": 22967,
+    "stored_sha256": "574b0bb8fc875cabd8e969434a1bde1400f4712779438e8ff7856d83b3606285",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/caching/leaf_writer_birth_work.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/caching/leaf_writer_birth_work.go",
+    "source_bytes": 4215,
+    "source_sha256": "75f3d57a035af3dba1b92a37ade9e000bbc8d8f63a91ec7cf31efba732b46068",
+    "stored_bytes": 4215,
+    "stored_sha256": "75f3d57a035af3dba1b92a37ade9e000bbc8d8f63a91ec7cf31efba732b46068",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/caching/native_mvcc_prune_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/caching/native_mvcc_prune_v6.go",
+    "source_bytes": 13861,
+    "source_sha256": "de3f7cb5b0d23988bde5c12b0bad9c2c27c8b36926618fbee9b83cefcf4a0965",
+    "stored_bytes": 13861,
+    "stored_sha256": "de3f7cb5b0d23988bde5c12b0bad9c2c27c8b36926618fbee9b83cefcf4a0965",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/db/command_wal_publish.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/db/command_wal_publish.go",
+    "source_bytes": 38213,
+    "source_sha256": "4ebc5ac3788447ff92f3216c9997c21f0794ac3975ef0b9cdc3b945dbe5c0426",
+    "stored_bytes": 38213,
+    "stored_sha256": "4ebc5ac3788447ff92f3216c9997c21f0794ac3975ef0b9cdc3b945dbe5c0426",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/db/db.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/db/db.go.gz",
+    "source_bytes": 214800,
+    "source_sha256": "214aed2602d788a88e9e6d4b767847dd729088414319245eb30e779a095ac354",
+    "stored_bytes": 52848,
+    "stored_sha256": "c5af4f3c0f248954bc661a02b54fee87b6fbf4ec4aaaea29e94480c0f1448ddb",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/db/durable_primary_runtime_v5.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/db/durable_primary_runtime_v5.go",
+    "source_bytes": 36405,
+    "source_sha256": "b75b40f88596cd75e8b60edc68c5ca8526de41187e68f2b61ba5d81261ea788b",
+    "stored_bytes": 36405,
+    "stored_sha256": "b75b40f88596cd75e8b60edc68c5ca8526de41187e68f2b61ba5d81261ea788b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/db/durable_primary_snapshot_rebind_v5.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/db/durable_primary_snapshot_rebind_v5.go",
+    "source_bytes": 11287,
+    "source_sha256": "42b29025c05cf1faa89390d39f38e4ec29517c9041bfcd4320aaa84adfa625ca",
+    "stored_bytes": 11287,
+    "stored_sha256": "42b29025c05cf1faa89390d39f38e4ec29517c9041bfcd4320aaa84adfa625ca",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/db/durable_root_runtime.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/db/durable_root_runtime.go",
+    "source_bytes": 138435,
+    "source_sha256": "e472aeae3ff832a79b6621d97150fe5b90b9165a0d5fb328991b9d114095aa30",
+    "stored_bytes": 138435,
+    "stored_sha256": "e472aeae3ff832a79b6621d97150fe5b90b9165a0d5fb328991b9d114095aa30",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/db/leaf_generation_runtime.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/db/leaf_generation_runtime.go",
+    "source_bytes": 9860,
+    "source_sha256": "ba90c797e623c9b92157d0aeb216c8bb7b3a4adce77a0c1fadd846e08445d572",
+    "stored_bytes": 9860,
+    "stored_sha256": "ba90c797e623c9b92157d0aeb216c8bb7b3a4adce77a0c1fadd846e08445d572",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/db/leaf_generation_stale_work_v6_test.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/db/leaf_generation_stale_work_v6_test.go",
+    "source_bytes": 2063,
+    "source_sha256": "8b2593c71c1a94bb84b43535d5c707d69fedf043847e1c2e11eba327b27977b6",
+    "stored_bytes": 2063,
+    "stored_sha256": "8b2593c71c1a94bb84b43535d5c707d69fedf043847e1c2e11eba327b27977b6",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/db/leaf_page_log.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/db/leaf_page_log.go",
+    "source_bytes": 49260,
+    "source_sha256": "b21930c1af447a0fc412265ad30ae84c3aba3985a14ee0cd78c93402b87915fa",
+    "stored_bytes": 49260,
+    "stored_sha256": "b21930c1af447a0fc412265ad30ae84c3aba3985a14ee0cd78c93402b87915fa",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/db/native_activation_output_admission_v6_test.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/db/native_activation_output_admission_v6_test.go",
+    "source_bytes": 2082,
+    "source_sha256": "9387481e5eada2975d03bb951a269a012c9034a78411d95f3ebcbf3391e1d14d",
+    "stored_bytes": 2082,
+    "stored_sha256": "9387481e5eada2975d03bb951a269a012c9034a78411d95f3ebcbf3391e1d14d",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/db/native_capsule_parent_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/db/native_capsule_parent_v6.go",
+    "source_bytes": 1415,
+    "source_sha256": "1492d32435b5e4bf53c45c6c8c8c635f37351ba27117f96633ba605141894cb3",
+    "stored_bytes": 1415,
+    "stored_sha256": "1492d32435b5e4bf53c45c6c8c8c635f37351ba27117f96633ba605141894cb3",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/db/native_capsule_parent_v6_test.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/db/native_capsule_parent_v6_test.go",
+    "source_bytes": 7441,
+    "source_sha256": "6e72667d5cb7f880f1b8611ce855eed191ec7c9b5a6573db3b028030cb7f6784",
+    "stored_bytes": 7441,
+    "stored_sha256": "6e72667d5cb7f880f1b8611ce855eed191ec7c9b5a6573db3b028030cb7f6784",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/db/native_close_barrier_v6_test.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/db/native_close_barrier_v6_test.go",
+    "source_bytes": 5457,
+    "source_sha256": "7d1c67455d774668e37c41452bdd481d7999573bdebeea588a4a38ce7bc4dd7a",
+    "stored_bytes": 5457,
+    "stored_sha256": "7d1c67455d774668e37c41452bdd481d7999573bdebeea588a4a38ce7bc4dd7a",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/db/native_data_dependency_release_work_v6_test.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/db/native_data_dependency_release_work_v6_test.go",
+    "source_bytes": 2627,
+    "source_sha256": "f2e1723da2701030c1d0f09688e50c3af04201e78c62bf8c8cf54ed73b442a85",
+    "stored_bytes": 2627,
+    "stored_sha256": "f2e1723da2701030c1d0f09688e50c3af04201e78c62bf8c8cf54ed73b442a85",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/db/native_finite_closure_pricing_v6_test.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/db/native_finite_closure_pricing_v6_test.go",
+    "source_bytes": 2647,
+    "source_sha256": "b024cb93449be127f7ee14726c2450f9acf7a7b4145af11bbd81108d59407d8d",
+    "stored_bytes": 2647,
+    "stored_sha256": "b024cb93449be127f7ee14726c2450f9acf7a7b4145af11bbd81108d59407d8d",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/db/native_mvcc_allocator_preparation_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/db/native_mvcc_allocator_preparation_v6.go",
+    "source_bytes": 9508,
+    "source_sha256": "e4e0e03847f2c006adf77b81b47cc0aa6506b18ffd630200bf2c5787a393068f",
+    "stored_bytes": 9508,
+    "stored_sha256": "e4e0e03847f2c006adf77b81b47cc0aa6506b18ffd630200bf2c5787a393068f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/db/native_mvcc_candidate_preparation_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/db/native_mvcc_candidate_preparation_v6.go",
+    "source_bytes": 10233,
+    "source_sha256": "45d7dd34004bc14b94fa1592ebe7979f3f33e8924d176d49cc8c49a56df937a7",
+    "stored_bytes": 10233,
+    "stored_sha256": "45d7dd34004bc14b94fa1592ebe7979f3f33e8924d176d49cc8c49a56df937a7",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/db/native_mvcc_current_delete_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/db/native_mvcc_current_delete_v6.go",
+    "source_bytes": 19900,
+    "source_sha256": "5dbc2fb4c8993ed43075650989d63616ae9afd4310b18aaee94c1f9443a9f600",
+    "stored_bytes": 19900,
+    "stored_sha256": "5dbc2fb4c8993ed43075650989d63616ae9afd4310b18aaee94c1f9443a9f600",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/db/native_mvcc_data_dependency_release_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/db/native_mvcc_data_dependency_release_v6.go",
+    "source_bytes": 5445,
+    "source_sha256": "ecdb6c46c73694163eb224b97f7855c3a70915e0d89df5c0b0c35c65d9f957f0",
+    "stored_bytes": 5445,
+    "stored_sha256": "ecdb6c46c73694163eb224b97f7855c3a70915e0d89df5c0b0c35c65d9f957f0",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/db/native_mvcc_final_basis_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/db/native_mvcc_final_basis_v6.go",
+    "source_bytes": 8078,
+    "source_sha256": "db40776e4d6183121b768298325d68615f0946e03f5a22e01d4dba986318820b",
+    "stored_bytes": 8078,
+    "stored_sha256": "db40776e4d6183121b768298325d68615f0946e03f5a22e01d4dba986318820b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/db/native_mvcc_final_publication_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/db/native_mvcc_final_publication_v6.go",
+    "source_bytes": 4577,
+    "source_sha256": "8b36f28459b30a52cc0d3f7fa07c79138db1213c48c476c8c19c1963543b6839",
+    "stored_bytes": 4577,
+    "stored_sha256": "8b36f28459b30a52cc0d3f7fa07c79138db1213c48c476c8c19c1963543b6839",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/db/native_mvcc_materialized_write_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/db/native_mvcc_materialized_write_v6.go",
+    "source_bytes": 8080,
+    "source_sha256": "94cdb8ab57f7f3c85d145e7f3f22c46720cf1aec4b88df6ad93706483947a9a1",
+    "stored_bytes": 8080,
+    "stored_sha256": "94cdb8ab57f7f3c85d145e7f3f22c46720cf1aec4b88df6ad93706483947a9a1",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/db/native_mvcc_publication_binding_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/db/native_mvcc_publication_binding_v6.go",
+    "source_bytes": 3273,
+    "source_sha256": "91564ea1dbeb0c445eb2e5d29bc85b1b68b9d1abd04ac1d8bc57b155ba0f0772",
+    "stored_bytes": 3273,
+    "stored_sha256": "91564ea1dbeb0c445eb2e5d29bc85b1b68b9d1abd04ac1d8bc57b155ba0f0772",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/db/native_mvcc_published_terminal_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/db/native_mvcc_published_terminal_v6.go",
+    "source_bytes": 3531,
+    "source_sha256": "91d3149c742d69a8e15e4049822700a340d940657d554aa4ec13983d30567de7",
+    "stored_bytes": 3531,
+    "stored_sha256": "91d3149c742d69a8e15e4049822700a340d940657d554aa4ec13983d30567de7",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/db/native_mvcc_root_preparation_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/db/native_mvcc_root_preparation_v6.go",
+    "source_bytes": 9711,
+    "source_sha256": "a77d4f872dd96bc3a900e14aa608c72abebab0ecd1b81239b89ae59091e16012",
+    "stored_bytes": 9711,
+    "stored_sha256": "a77d4f872dd96bc3a900e14aa608c72abebab0ecd1b81239b89ae59091e16012",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/db/native_mvcc_root_preparation_v6_test.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/db/native_mvcc_root_preparation_v6_test.go",
+    "source_bytes": 13891,
+    "source_sha256": "54a94b11278464dd28b35965e1c6f4d94e363fc6409fcd1f2c074662b1883e08",
+    "stored_bytes": 13891,
+    "stored_sha256": "54a94b11278464dd28b35965e1c6f4d94e363fc6409fcd1f2c074662b1883e08",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/db/native_mvcc_seal_preparation_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/db/native_mvcc_seal_preparation_v6.go",
+    "source_bytes": 27717,
+    "source_sha256": "55e104f6992d6450385cc7c01974a4649f4b8a4abd0b4aaab2a779d4c48d0926",
+    "stored_bytes": 27717,
+    "stored_sha256": "55e104f6992d6450385cc7c01974a4649f4b8a4abd0b4aaab2a779d4c48d0926",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/db/native_mvcc_snapshot_close_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/db/native_mvcc_snapshot_close_v6.go",
+    "source_bytes": 7096,
+    "source_sha256": "2c9c8271cd58e7b90e5825b07a6d8ec355341cbe0f88133a714464c30a3aa79d",
+    "stored_bytes": 7096,
+    "stored_sha256": "2c9c8271cd58e7b90e5825b07a6d8ec355341cbe0f88133a714464c30a3aa79d",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/db/native_pager_operations_construction_v6_test.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/db/native_pager_operations_construction_v6_test.go",
+    "source_bytes": 7537,
+    "source_sha256": "336184e6ba124a8ab4c711a966e05dbef19d5c85176861bdd6b07a8dda6a437a",
+    "stored_bytes": 7537,
+    "stored_sha256": "336184e6ba124a8ab4c711a966e05dbef19d5c85176861bdd6b07a8dda6a437a",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/db/native_prebuilder_observer_for_test_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/db/native_prebuilder_observer_for_test_v6.go",
+    "source_bytes": 15407,
+    "source_sha256": "686452eebfb98fe8b05e734557dce3f3dd042bc0c06c0d53237bb84dc2bfcc4f",
+    "stored_bytes": 15407,
+    "stored_sha256": "686452eebfb98fe8b05e734557dce3f3dd042bc0c06c0d53237bb84dc2bfcc4f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/db/native_prebuilder_pricing_for_test_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/db/native_prebuilder_pricing_for_test_v6.go",
+    "source_bytes": 4720,
+    "source_sha256": "cace8067fd2f8273574d0798db92e5ba31219f22e7e43f6e5b606fb03626ee70",
+    "stored_bytes": 4720,
+    "stored_sha256": "cace8067fd2f8273574d0798db92e5ba31219f22e7e43f6e5b606fb03626ee70",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/db/native_publication_remainder_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/db/native_publication_remainder_v6.go",
+    "source_bytes": 8408,
+    "source_sha256": "8a8b84445dda87a651f88c78842aa633376b01f524d4ae23b0e70f028af5a370",
+    "stored_bytes": 8408,
+    "stored_sha256": "8a8b84445dda87a651f88c78842aa633376b01f524d4ae23b0e70f028af5a370",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/db/native_publication_remainder_v6_test.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/db/native_publication_remainder_v6_test.go",
+    "source_bytes": 3873,
+    "source_sha256": "0737ba837a4cc1a77177efa6183e7db1b88a47b19de88ba92159c6d974d692a8",
+    "stored_bytes": 3873,
+    "stored_sha256": "0737ba837a4cc1a77177efa6183e7db1b88a47b19de88ba92159c6d974d692a8",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/db/native_stable_pager_capture_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/db/native_stable_pager_capture_v6.go",
+    "source_bytes": 19835,
+    "source_sha256": "a5b9f6023ccb7460005b49ba086a901f436a4b1ce43d51f7c800afc05c9184a6",
+    "stored_bytes": 19835,
+    "stored_sha256": "a5b9f6023ccb7460005b49ba086a901f436a4b1ce43d51f7c800afc05c9184a6",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/db/native_stable_pager_capture_v6_test.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/db/native_stable_pager_capture_v6_test.go",
+    "source_bytes": 4195,
+    "source_sha256": "278f996347dea753455a12c40cc51717f7adbc542e32cb27864b2e88f835a63d",
+    "stored_bytes": 4195,
+    "stored_sha256": "278f996347dea753455a12c40cc51717f7adbc542e32cb27864b2e88f835a63d",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/db/native_visible_capacity_work_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/db/native_visible_capacity_work_v6.go",
+    "source_bytes": 1831,
+    "source_sha256": "880ae85894c4051e11e80839c43270cbf616f8ca87fdca5a0cc462897f72cfc9",
+    "stored_bytes": 1831,
+    "stored_sha256": "880ae85894c4051e11e80839c43270cbf616f8ca87fdca5a0cc462897f72cfc9",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/db/primary_arena_owner_v5.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/db/primary_arena_owner_v5.go",
+    "source_bytes": 9064,
+    "source_sha256": "9caf72a6befd8003de73e06db67d7705be6a992a75dbea3d8dec8483f3b6d8c1",
+    "stored_bytes": 9064,
+    "stored_sha256": "9caf72a6befd8003de73e06db67d7705be6a992a75dbea3d8dec8483f3b6d8c1",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/db/primary_authority_scope_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/db/primary_authority_scope_v6.go",
+    "source_bytes": 6478,
+    "source_sha256": "04ebc049d24a42a3fce89fed5cb3e2caa5cba04fe1010abc83b7243da46274ff",
+    "stored_bytes": 6478,
+    "stored_sha256": "04ebc049d24a42a3fce89fed5cb3e2caa5cba04fe1010abc83b7243da46274ff",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/db/primary_bank_construction_v5.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/db/primary_bank_construction_v5.go",
+    "source_bytes": 6597,
+    "source_sha256": "667aa341a55f8de6f19545244495af914ab783f4a646189ec3f717ca203f11b8",
+    "stored_bytes": 6597,
+    "stored_sha256": "667aa341a55f8de6f19545244495af914ab783f4a646189ec3f717ca203f11b8",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/db/primary_bank_release_work_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/db/primary_bank_release_work_v6.go",
+    "source_bytes": 5343,
+    "source_sha256": "f34e07b1c96e91355161521ed99371167ec0cdd5ed67b210157d77520fa50462",
+    "stored_bytes": 5343,
+    "stored_sha256": "f34e07b1c96e91355161521ed99371167ec0cdd5ed67b210157d77520fa50462",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/db/primary_capsule_runtime_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/db/primary_capsule_runtime_v6.go",
+    "source_bytes": 10771,
+    "source_sha256": "b38015acaa0836307bc6107f4fc6e03cabf29b97b9d11c9c7acf1e1ee7a26106",
+    "stored_bytes": 10771,
+    "stored_sha256": "b38015acaa0836307bc6107f4fc6e03cabf29b97b9d11c9c7acf1e1ee7a26106",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/db/primary_materialization_work_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/db/primary_materialization_work_v6.go",
+    "source_bytes": 3127,
+    "source_sha256": "e784a2ff4950e9ae366252f6c48a904cd504e74390ba95554462415ae20d9ea7",
+    "stored_bytes": 3127,
+    "stored_sha256": "e784a2ff4950e9ae366252f6c48a904cd504e74390ba95554462415ae20d9ea7",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/db/primary_member_retirement_work_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/db/primary_member_retirement_work_v6.go",
+    "source_bytes": 7424,
+    "source_sha256": "a8d71f262bae481816fd609e439fea26cc1a9ed766be7f51c2747e5dbb49a965",
+    "stored_bytes": 7424,
+    "stored_sha256": "a8d71f262bae481816fd609e439fea26cc1a9ed766be7f51c2747e5dbb49a965",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/db/primary_offline_pair_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/db/primary_offline_pair_v6.go",
+    "source_bytes": 16208,
+    "source_sha256": "cb4a6df384ad84755a798796521aabbf7e7b094714bf56dcb6fae8480617bd4d",
+    "stored_bytes": 16208,
+    "stored_sha256": "cb4a6df384ad84755a798796521aabbf7e7b094714bf56dcb6fae8480617bd4d",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/db/primary_ordered_post_work_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/db/primary_ordered_post_work_v6.go",
+    "source_bytes": 3474,
+    "source_sha256": "d457014cbfd7133f526d3d2a8ae683f6f1d05c19a326ee2e2103927f13781650",
+    "stored_bytes": 3474,
+    "stored_sha256": "d457014cbfd7133f526d3d2a8ae683f6f1d05c19a326ee2e2103927f13781650",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/db/primary_runtime_disposal_work_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/db/primary_runtime_disposal_work_v6.go",
+    "source_bytes": 10558,
+    "source_sha256": "70212b77a76be45c65d4d47502c4af2b1806932c623e4ced96837a35a81bc942",
+    "stored_bytes": 10558,
+    "stored_sha256": "70212b77a76be45c65d4d47502c4af2b1806932c623e4ced96837a35a81bc942",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/db/primary_runtime_metadata.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/db/primary_runtime_metadata.go",
+    "source_bytes": 8018,
+    "source_sha256": "37ec071287c944ef9012a2a49ae8582070caa9cb6463be31e7193347c36f40b0",
+    "stored_bytes": 8018,
+    "stored_sha256": "37ec071287c944ef9012a2a49ae8582070caa9cb6463be31e7193347c36f40b0",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/db/primary_runtime_metadata_test.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/db/primary_runtime_metadata_test.go",
+    "source_bytes": 6180,
+    "source_sha256": "c0dbd2d96b9e0936c2737ab842f7f8630d5dae7aad1666de1fc3338f7b50685d",
+    "stored_bytes": 6180,
+    "stored_sha256": "c0dbd2d96b9e0936c2737ab842f7f8630d5dae7aad1666de1fc3338f7b50685d",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/db/primary_seal_commit_work_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/db/primary_seal_commit_work_v6.go",
+    "source_bytes": 4510,
+    "source_sha256": "694e53c10cc493ad2235dddf6877b3dc04760d778bcf5de2ecf7996e890f112c",
+    "stored_bytes": 4510,
+    "stored_sha256": "694e53c10cc493ad2235dddf6877b3dc04760d778bcf5de2ecf7996e890f112c",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/db/primary_seal_release_work_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/db/primary_seal_release_work_v6.go",
+    "source_bytes": 10382,
+    "source_sha256": "6dfb7fc60d2b79bc6217071b495343d3825e54f4567f702b7650052c52bb954f",
+    "stored_bytes": 10382,
+    "stored_sha256": "6dfb7fc60d2b79bc6217071b495343d3825e54f4567f702b7650052c52bb954f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/db/primary_storage_operations_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/db/primary_storage_operations_v6.go",
+    "source_bytes": 6679,
+    "source_sha256": "2337bdc3f21b9e8bb493fb4c2396c9be46614b03f34fafea8625011dfe978382",
+    "stored_bytes": 6679,
+    "stored_sha256": "2337bdc3f21b9e8bb493fb4c2396c9be46614b03f34fafea8625011dfe978382",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/db/primary_visible_abort_work_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/db/primary_visible_abort_work_v6.go",
+    "source_bytes": 4467,
+    "source_sha256": "b8deb9d4af2c71094e9197ed0cadae4e7a99993e557b88bb0eb1adf2dab57889",
+    "stored_bytes": 4467,
+    "stored_sha256": "b8deb9d4af2c71094e9197ed0cadae4e7a99993e557b88bb0eb1adf2dab57889",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/db/primary_visible_member_work_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/db/primary_visible_member_work_v6.go",
+    "source_bytes": 5526,
+    "source_sha256": "623a8de1f205f844a50850ced3f03cef0a2374c6f4ea123c666c97b781495d32",
+    "stored_bytes": 5526,
+    "stored_sha256": "623a8de1f205f844a50850ced3f03cef0a2374c6f4ea123c666c97b781495d32",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/db/primary_visible_transaction_spec_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/db/primary_visible_transaction_spec_v6.go",
+    "source_bytes": 6145,
+    "source_sha256": "51a3ab18c6131d5a61fe2ab5f2e307fc3e1ea33c1d1246a039bc4688115a0454",
+    "stored_bytes": 6145,
+    "stored_sha256": "51a3ab18c6131d5a61fe2ab5f2e307fc3e1ea33c1d1246a039bc4688115a0454",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/db/root_publication_activation.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/db/root_publication_activation.go",
+    "source_bytes": 82906,
+    "source_sha256": "bddc5b78b31193aa7632f161cb8e71a5c1f1ca62d813adb11f52b09ad98b0ce9",
+    "stored_bytes": 82906,
+    "stored_sha256": "bddc5b78b31193aa7632f161cb8e71a5c1f1ca62d813adb11f52b09ad98b0ce9",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/db/snapshot_publication_work_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/db/snapshot_publication_work_v6.go",
+    "source_bytes": 4369,
+    "source_sha256": "f00be8ccae837d085cbd3b0c6bac0f3f1c2ed055d9354dab2eba58f83901d06a",
+    "stored_bytes": 4369,
+    "stored_sha256": "f00be8ccae837d085cbd3b0c6bac0f3f1c2ed055d9354dab2eba58f83901d06a",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/db/stable_pager_owned_operations.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/db/stable_pager_owned_operations.go",
+    "source_bytes": 11535,
+    "source_sha256": "033f88c049979a5c218ec7c24634fae4c72d6b510247da3941937fd87bef3b3b",
+    "stored_bytes": 11535,
+    "stored_sha256": "033f88c049979a5c218ec7c24634fae4c72d6b510247da3941937fd87bef3b3b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/db/vacuum_online.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/db/vacuum_online.go",
+    "source_bytes": 88884,
+    "source_sha256": "bf73141090cbaeb5f04af3ccd6c9930935033414edc8df443bd442e334e29446",
+    "stored_bytes": 88884,
+    "stored_sha256": "bf73141090cbaeb5f04af3ccd6c9930935033414edc8df443bd442e334e29446",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/allocator_activation_work.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/allocator_activation_work.go",
+    "source_bytes": 5198,
+    "source_sha256": "a431ed3b9fca5c06d242ad2197eb6e0bfe6a12a0ce08e5453ae94d7cb4c2c680",
+    "stored_bytes": 5198,
+    "stored_sha256": "a431ed3b9fca5c06d242ad2197eb6e0bfe6a12a0ce08e5453ae94d7cb4c2c680",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/allocator_cow.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/allocator_cow.go",
+    "source_bytes": 25630,
+    "source_sha256": "0be749f18a8ecfc6f5ac4be338055b662e8a8c245bd67989ac46f7679e25ff88",
+    "stored_bytes": 25630,
+    "stored_sha256": "0be749f18a8ecfc6f5ac4be338055b662e8a8c245bd67989ac46f7679e25ff88",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/allocator_failure_work_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/allocator_failure_work_v6.go",
+    "source_bytes": 1502,
+    "source_sha256": "929d94594a0f9f0a6e50955c2fa396e8a3b58a8b55a5b0662c464f86e515d425",
+    "stored_bytes": 1502,
+    "stored_sha256": "929d94594a0f9f0a6e50955c2fa396e8a3b58a8b55a5b0662c464f86e515d425",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/allocator_failure_work_v6_test.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/allocator_failure_work_v6_test.go",
+    "source_bytes": 4947,
+    "source_sha256": "e7e65546eb4cbb9ee729e7b04510d6d65d0f7e6e41208f2c02a7dce0810d72da",
+    "stored_bytes": 4947,
+    "stored_sha256": "e7e65546eb4cbb9ee729e7b04510d6d65d0f7e6e41208f2c02a7dce0810d72da",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/allocator_preparation_work_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/allocator_preparation_work_v6.go",
+    "source_bytes": 25550,
+    "source_sha256": "7fcb1ba0fa7630274baf245ee639eeb87b0a808a303f108cf8411fe1455a1fb1",
+    "stored_bytes": 25550,
+    "stored_sha256": "7fcb1ba0fa7630274baf245ee639eeb87b0a808a303f108cf8411fe1455a1fb1",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/allocator_preparation_work_v6_test.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/allocator_preparation_work_v6_test.go",
+    "source_bytes": 13768,
+    "source_sha256": "17b104c537f03f45848b1e06b7cc3d03cd45f677ee05ef93d6c2035a8ff123d0",
+    "stored_bytes": 13768,
+    "stored_sha256": "17b104c537f03f45848b1e06b7cc3d03cd45f677ee05ef93d6c2035a8ff123d0",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/allocator_publication_work_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/allocator_publication_work_v6.go",
+    "source_bytes": 10939,
+    "source_sha256": "31535906b71b519ce2d4fee11ef4205de7a34f99a77293115eb6a98f6ec0d103",
+    "stored_bytes": 10939,
+    "stored_sha256": "31535906b71b519ce2d4fee11ef4205de7a34f99a77293115eb6a98f6ec0d103",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/allocator_publication_work_v6_test.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/allocator_publication_work_v6_test.go",
+    "source_bytes": 5778,
+    "source_sha256": "0b080c2297dbcf4a8c5ce348f628e52b70f0bc2d93955df829aa0646ffa7e309",
+    "stored_bytes": 5778,
+    "stored_sha256": "0b080c2297dbcf4a8c5ce348f628e52b70f0bc2d93955df829aa0646ffa7e309",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/append_retirement_work_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/append_retirement_work_v6.go",
+    "source_bytes": 4134,
+    "source_sha256": "448ce1ed3aeccfcb2eba02255a89e7387e07901f1e54a293bbe74f135642703e",
+    "stored_bytes": 4134,
+    "stored_sha256": "448ce1ed3aeccfcb2eba02255a89e7387e07901f1e54a293bbe74f135642703e",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/append_work.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/append_work.go",
+    "source_bytes": 5597,
+    "source_sha256": "36a72ebed5d4a5f8f54607e964ad3e0901e9106d9c94d8526f9773dc21610807",
+    "stored_bytes": 5597,
+    "stored_sha256": "36a72ebed5d4a5f8f54607e964ad3e0901e9106d9c94d8526f9773dc21610807",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/append_work_test.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/append_work_test.go",
+    "source_bytes": 3804,
+    "source_sha256": "d00434cf12fbd9699b49456b5af031f307171acdb699ff5cabe5dabc49e84f95",
+    "stored_bytes": 3804,
+    "stored_sha256": "d00434cf12fbd9699b49456b5af031f307171acdb699ff5cabe5dabc49e84f95",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/candidate_root_membership_v1.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/candidate_root_membership_v1.go",
+    "source_bytes": 2032,
+    "source_sha256": "8361e4ec8fecbfc1383ec7c4a4abeb62da15310788609b9231af643af50956f2",
+    "stored_bytes": 2032,
+    "stored_sha256": "8361e4ec8fecbfc1383ec7c4a4abeb62da15310788609b9231af643af50956f2",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/generation_snapshot_v1.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/generation_snapshot_v1.go",
+    "source_bytes": 4367,
+    "source_sha256": "bea87b3a0339b7949c0dfc2c8bb126258ddcddf69b800d1c3a16b4b1172e6579",
+    "stored_bytes": 4367,
+    "stored_sha256": "bea87b3a0339b7949c0dfc2c8bb126258ddcddf69b800d1c3a16b4b1172e6579",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/generation_v1_begin_work.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/generation_v1_begin_work.go",
+    "source_bytes": 9067,
+    "source_sha256": "5404cab5529b4d10022e10a3959d1e02a6cc03c0aa6cfa3259f20bf59e113a01",
+    "stored_bytes": 9067,
+    "stored_sha256": "5404cab5529b4d10022e10a3959d1e02a6cc03c0aa6cfa3259f20bf59e113a01",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/generation_v1_emit_work.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/generation_v1_emit_work.go",
+    "source_bytes": 8400,
+    "source_sha256": "25b9dc485941f3ccf2aec90433dc0cdfc4d9ac7f9a4badc4de0ced8fa488857a",
+    "stored_bytes": 8400,
+    "stored_sha256": "25b9dc485941f3ccf2aec90433dc0cdfc4d9ac7f9a4badc4de0ced8fa488857a",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/generation_v1_emit_work_test.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/generation_v1_emit_work_test.go",
+    "source_bytes": 7648,
+    "source_sha256": "87dea65c5311f0869e9774c86744a66b3a0a6f4f8914433cf0c443c9160fdb61",
+    "stored_bytes": 7648,
+    "stored_sha256": "87dea65c5311f0869e9774c86744a66b3a0a6f4f8914433cf0c443c9160fdb61",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/generation_v1_encode_work.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/generation_v1_encode_work.go",
+    "source_bytes": 6401,
+    "source_sha256": "5974f322233ca919445db563d49fce08c1861c1547e3ef66d558318d241366b9",
+    "stored_bytes": 6401,
+    "stored_sha256": "5974f322233ca919445db563d49fce08c1861c1547e3ef66d558318d241366b9",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/generation_v1_format.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/generation_v1_format.go",
+    "source_bytes": 17931,
+    "source_sha256": "261f8405daa14e3a51977e4141c1ae3b1c71b0fd2d7efd54174367d17d3537c6",
+    "stored_bytes": 17931,
+    "stored_sha256": "261f8405daa14e3a51977e4141c1ae3b1c71b0fd2d7efd54174367d17d3537c6",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/generation_v1_materialize_output_work.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/generation_v1_materialize_output_work.go",
+    "source_bytes": 9959,
+    "source_sha256": "2ab6d11e86265b62baeacb0488b4a82f27404117b7d9dc4495bd1b894ccaf401",
+    "stored_bytes": 9959,
+    "stored_sha256": "2ab6d11e86265b62baeacb0488b4a82f27404117b7d9dc4495bd1b894ccaf401",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/generation_v1_materialize_work.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/generation_v1_materialize_work.go",
+    "source_bytes": 6420,
+    "source_sha256": "80824f4394fddfdec0dba6a76b0261b2c28dc658d70ef7fb69d9cb83824fabe0",
+    "stored_bytes": 6420,
+    "stored_sha256": "80824f4394fddfdec0dba6a76b0261b2c28dc658d70ef7fb69d9cb83824fabe0",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/generation_v1_materialize_work_test.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/generation_v1_materialize_work_test.go",
+    "source_bytes": 4477,
+    "source_sha256": "b89c2118b87e82fb1a753585d970f53df022a4b8ad6b7cd43808374a980c261b",
+    "stored_bytes": 4477,
+    "stored_sha256": "b89c2118b87e82fb1a753585d970f53df022a4b8ad6b7cd43808374a980c261b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/generation_v1_metadata_claim_work.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/generation_v1_metadata_claim_work.go",
+    "source_bytes": 3614,
+    "source_sha256": "4c1f8f1836c6f67126fae98215da928a05ec339734b1dedbcef530ad7f9994ae",
+    "stored_bytes": 3614,
+    "stored_sha256": "4c1f8f1836c6f67126fae98215da928a05ec339734b1dedbcef530ad7f9994ae",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/generation_v1_metadata_reuse.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/generation_v1_metadata_reuse.go",
+    "source_bytes": 8032,
+    "source_sha256": "cdf12a419667a15410d1cbdb18ed20f59b464130b68a4da2c2074f86ed0a10f4",
+    "stored_bytes": 8032,
+    "stored_sha256": "cdf12a419667a15410d1cbdb18ed20f59b464130b68a4da2c2074f86ed0a10f4",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/generation_v1_metadata_reuse_work.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/generation_v1_metadata_reuse_work.go",
+    "source_bytes": 9039,
+    "source_sha256": "35da38fcecdc5508eef6bd2c48ce22e7f59fbf3eff106bc0f0ea592759cfb4ad",
+    "stored_bytes": 9039,
+    "stored_sha256": "35da38fcecdc5508eef6bd2c48ce22e7f59fbf3eff106bc0f0ea592759cfb4ad",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/generation_v1_prune_work.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/generation_v1_prune_work.go",
+    "source_bytes": 4399,
+    "source_sha256": "3963a1e4c9a44b52cd72fbf2f2081e744831e0fe8caf6acf9a9e7fc5d0df5c6b",
+    "stored_bytes": 4399,
+    "stored_sha256": "3963a1e4c9a44b52cd72fbf2f2081e744831e0fe8caf6acf9a9e7fc5d0df5c6b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/generation_v1_publication_work_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/generation_v1_publication_work_v6.go",
+    "source_bytes": 4290,
+    "source_sha256": "fe3111fc989793ac2bc151426bf3c36aa6d8ed026bd61e5dc1a935f18e99f007",
+    "stored_bytes": 4290,
+    "stored_sha256": "fe3111fc989793ac2bc151426bf3c36aa6d8ed026bd61e5dc1a935f18e99f007",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/generation_v1_reservation.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/generation_v1_reservation.go",
+    "source_bytes": 21596,
+    "source_sha256": "7b9bc7bab43275d159998b7b9c5b77d61d3069e7d14419ab69d4e5a09b214201",
+    "stored_bytes": 21596,
+    "stored_sha256": "7b9bc7bab43275d159998b7b9c5b77d61d3069e7d14419ab69d4e5a09b214201",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/generation_v1_reservation_finalize_work.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/generation_v1_reservation_finalize_work.go",
+    "source_bytes": 3768,
+    "source_sha256": "337b1b73f18bc3d4991afcf92b8c5911101a4d577f2e912c45e585653f397678",
+    "stored_bytes": 3768,
+    "stored_sha256": "337b1b73f18bc3d4991afcf92b8c5911101a4d577f2e912c45e585653f397678",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/generation_v1_reservation_inventory_work.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/generation_v1_reservation_inventory_work.go",
+    "source_bytes": 12156,
+    "source_sha256": "f483300877c25c0947bd920f9756b322987eafa0677bd381d629e13d6e3d98a7",
+    "stored_bytes": 12156,
+    "stored_sha256": "f483300877c25c0947bd920f9756b322987eafa0677bd381d629e13d6e3d98a7",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/generation_v1_reservation_scratch_test.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/generation_v1_reservation_scratch_test.go",
+    "source_bytes": 3500,
+    "source_sha256": "caeaaf0c2d22dad55f8268d753269697900adfa64082c9a1d0e4a3a216765fdd",
+    "stored_bytes": 3500,
+    "stored_sha256": "caeaaf0c2d22dad55f8268d753269697900adfa64082c9a1d0e4a3a216765fdd",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/generation_v1_reservation_work.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/generation_v1_reservation_work.go",
+    "source_bytes": 6346,
+    "source_sha256": "bec5478b853b3c95e4d2f9b9d97dace7e76d34f2b80a9fff5acd538eb7f53c75",
+    "stored_bytes": 6346,
+    "stored_sha256": "bec5478b853b3c95e4d2f9b9d97dace7e76d34f2b80a9fff5acd538eb7f53c75",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/generation_v1_reservation_work_test.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/generation_v1_reservation_work_test.go",
+    "source_bytes": 9992,
+    "source_sha256": "6bbdad66ea579f93b20b0893a5927d0941c2557ac0639c99b96422d1573128b5",
+    "stored_bytes": 9992,
+    "stored_sha256": "6bbdad66ea579f93b20b0893a5927d0941c2557ac0639c99b96422d1573128b5",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/generation_v1_tree.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/generation_v1_tree.go",
+    "source_bytes": 10767,
+    "source_sha256": "485430d1ec3011db73d92279125d6c9788a1deffcde725ce273fb5251aa5233e",
+    "stored_bytes": 10767,
+    "stored_sha256": "485430d1ec3011db73d92279125d6c9788a1deffcde725ce273fb5251aa5233e",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/generation_v1_tree_work.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/generation_v1_tree_work.go",
+    "source_bytes": 12272,
+    "source_sha256": "6c5349f46f47fb3370cb7ba2e7d1ef9e73fb3a5f71df3a54f92bd289d6cba53f",
+    "stored_bytes": 12272,
+    "stored_sha256": "6c5349f46f47fb3370cb7ba2e7d1ef9e73fb3a5f71df3a54f92bd289d6cba53f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/generation_v1_tree_work_test.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/generation_v1_tree_work_test.go",
+    "source_bytes": 8523,
+    "source_sha256": "2bafa014d8fbe1968e74ce6030a972ae2b2ec703fc717a1d27d0dd9ae0fdddf8",
+    "stored_bytes": 8523,
+    "stored_sha256": "2bafa014d8fbe1968e74ce6030a972ae2b2ec703fc717a1d27d0dd9ae0fdddf8",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/generation_v1_txn.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/generation_v1_txn.go",
+    "source_bytes": 25344,
+    "source_sha256": "2fd0e71a4461d53f08c3bfcafbc31cb2692dfcf6b19f8758ae66b48b6271575b",
+    "stored_bytes": 25344,
+    "stored_sha256": "2fd0e71a4461d53f08c3bfcafbc31cb2692dfcf6b19f8758ae66b48b6271575b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/native_publication_bound_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/native_publication_bound_v6.go",
+    "source_bytes": 7281,
+    "source_sha256": "60947c0cabc7e99a701fe69631e996373af0eaa42b171fa226ec25b6111b24ec",
+    "stored_bytes": 7281,
+    "stored_sha256": "60947c0cabc7e99a701fe69631e996373af0eaa42b171fa226ec25b6111b24ec",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/reservation_rollback_work_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/freelist/reservation_rollback_work_v6.go",
+    "source_bytes": 834,
+    "source_sha256": "9f9c32bc727d9b0667a0c6a900401f8513317396ec5ce2332046c4dbbe913761",
+    "stored_bytes": 834,
+    "stored_sha256": "9f9c32bc727d9b0667a0c6a900401f8513317396ec5ce2332046c4dbbe913761",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/memtable/native_retention_work.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/memtable/native_retention_work.go",
+    "source_bytes": 3535,
+    "source_sha256": "0863e195a9720e1490ddb1e0c6599533510de1523fb3f09a4ca1d7debb541fba",
+    "stored_bytes": 3535,
+    "stored_sha256": "0863e195a9720e1490ddb1e0c6599533510de1523fb3f09a4ca1d7debb541fba",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/mvccadmission/request.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/mvccadmission/request.go",
+    "source_bytes": 4156,
+    "source_sha256": "fdec511ce5b0b8c534b5f2155a52ecce159b5671d9ad19acd2294b6ae6a9b74e",
+    "stored_bytes": 4156,
+    "stored_sha256": "fdec511ce5b0b8c534b5f2155a52ecce159b5671d9ad19acd2294b6ae6a9b74e",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/primaryarena/arena.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/primaryarena/arena.go",
+    "source_bytes": 44083,
+    "source_sha256": "a587d56658f9217b4cfce21c20077c145cfd1765cb6e545145925f8f61dfe43f",
+    "stored_bytes": 44083,
+    "stored_sha256": "a587d56658f9217b4cfce21c20077c145cfd1765cb6e545145925f8f61dfe43f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/primaryarena/bundle.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/primaryarena/bundle.go",
+    "source_bytes": 13200,
+    "source_sha256": "b64b5bd706b3b7275f1cbfedda3e827a2f4d07a7c5796e15627bb83461ecd305",
+    "stored_bytes": 13200,
+    "stored_sha256": "b64b5bd706b3b7275f1cbfedda3e827a2f4d07a7c5796e15627bb83461ecd305",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/primaryarena/directory_seal_work_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/primaryarena/directory_seal_work_v6.go",
+    "source_bytes": 5101,
+    "source_sha256": "547175689c698d1556d59f20880d21c5ecf4bbacfc2564be00730baca85fcfa6",
+    "stored_bytes": 5101,
+    "stored_sha256": "547175689c698d1556d59f20880d21c5ecf4bbacfc2564be00730baca85fcfa6",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/primaryarena/group_construction_work_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/primaryarena/group_construction_work_v6.go",
+    "source_bytes": 1722,
+    "source_sha256": "f58f7fe6aa67b6318d3afd624a51048da8c91449fa47013c43ef70e616916e5b",
+    "stored_bytes": 1722,
+    "stored_sha256": "f58f7fe6aa67b6318d3afd624a51048da8c91449fa47013c43ef70e616916e5b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/primaryarena/metadata.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/primaryarena/metadata.go",
+    "source_bytes": 6398,
+    "source_sha256": "4e4bcb2b567e9283dd3eddc0c0557a515d7875b2cd2d7d94394e9da26287639f",
+    "stored_bytes": 6398,
+    "stored_sha256": "4e4bcb2b567e9283dd3eddc0c0557a515d7875b2cd2d7d94394e9da26287639f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/primaryarena/metadata_work_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/primaryarena/metadata_work_v6.go",
+    "source_bytes": 3969,
+    "source_sha256": "817ea7caba64579932c51685a18be04a71a1c1d4a0942a0300b6af86d7a8da5c",
+    "stored_bytes": 3969,
+    "stored_sha256": "817ea7caba64579932c51685a18be04a71a1c1d4a0942a0300b6af86d7a8da5c",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/primaryarena/native_mvcc_group_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/primaryarena/native_mvcc_group_v6.go",
+    "source_bytes": 6902,
+    "source_sha256": "0d1bded3493858192b13ac889770d201b2ee96ec3d0f388a99d63c52529d62c2",
+    "stored_bytes": 6902,
+    "stored_sha256": "0d1bded3493858192b13ac889770d201b2ee96ec3d0f388a99d63c52529d62c2",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/primaryarena/physical_close_work.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/primaryarena/physical_close_work.go",
+    "source_bytes": 3187,
+    "source_sha256": "72d9ee92691fca7512ad3f872e3ec6b8bd47d2a0a414a57efb173069beba09d5",
+    "stored_bytes": 3187,
+    "stored_sha256": "72d9ee92691fca7512ad3f872e3ec6b8bd47d2a0a414a57efb173069beba09d5",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/primaryarena/read_root_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/primaryarena/read_root_v6.go",
+    "source_bytes": 18188,
+    "source_sha256": "3d07ba4e9222fc998b675422ab4aa015cf3eea694ec8957f0b78a1382b14fdc4",
+    "stored_bytes": 18188,
+    "stored_sha256": "3d07ba4e9222fc998b675422ab4aa015cf3eea694ec8957f0b78a1382b14fdc4",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/primaryarena/release_queue.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/primaryarena/release_queue.go",
+    "source_bytes": 2706,
+    "source_sha256": "1563a6837570688f22095e7c79ca4b0f802a0a687083ffab218d21ebf4b6cf14",
+    "stored_bytes": 2706,
+    "stored_sha256": "1563a6837570688f22095e7c79ca4b0f802a0a687083ffab218d21ebf4b6cf14",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/primaryarena/retention.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/primaryarena/retention.go",
+    "source_bytes": 5014,
+    "source_sha256": "5bd00ed26ccfbfe8eae96188351ac5bdf388e328efc3d32d50dd7e5eaef7f559",
+    "stored_bytes": 5014,
+    "stored_sha256": "5bd00ed26ccfbfe8eae96188351ac5bdf388e328efc3d32d50dd7e5eaef7f559",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/retainedalloc/owner_enroll_work.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/retainedalloc/owner_enroll_work.go",
+    "source_bytes": 17422,
+    "source_sha256": "41e6e2370ea5df1c5965dc40146ddf5ecd61d824b48e0987076aeb22e8a5a054",
+    "stored_bytes": 17422,
+    "stored_sha256": "41e6e2370ea5df1c5965dc40146ddf5ecd61d824b48e0987076aeb22e8a5a054",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/retainedalloc/owner_growth_work.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/retainedalloc/owner_growth_work.go",
+    "source_bytes": 2772,
+    "source_sha256": "74735769ff46c27445a03ae785dad4e1a8ae3ecf84358d039486e0de9dcabf35",
+    "stored_bytes": 2772,
+    "stored_sha256": "74735769ff46c27445a03ae785dad4e1a8ae3ecf84358d039486e0de9dcabf35",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/retainedalloc/owner_growth_work_test.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/retainedalloc/owner_growth_work_test.go",
+    "source_bytes": 5184,
+    "source_sha256": "a9842bd7d906645dc5228a09620c3f5f28a973147914729253aefac0f1ea2645",
+    "stored_bytes": 5184,
+    "stored_sha256": "a9842bd7d906645dc5228a09620c3f5f28a973147914729253aefac0f1ea2645",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/retainedalloc/owner_work.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/retainedalloc/owner_work.go",
+    "source_bytes": 21252,
+    "source_sha256": "d4727141cffdc31205bc99854746a91fe10e19bdc628f643206d9ca94fd8aabe",
+    "stored_bytes": 21252,
+    "stored_sha256": "d4727141cffdc31205bc99854746a91fe10e19bdc628f643206d9ca94fd8aabe",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/retainedalloc/owner_work_test.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/retainedalloc/owner_work_test.go",
+    "source_bytes": 8129,
+    "source_sha256": "5ba4c2321c556f1195fbda4db632de802b7bf9cb9792eb808b8b2e1fd8842e03",
+    "stored_bytes": 8129,
+    "stored_sha256": "5ba4c2321c556f1195fbda4db632de802b7bf9cb9792eb808b8b2e1fd8842e03",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/admission.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/admission.go",
+    "source_bytes": 6444,
+    "source_sha256": "520a7ad2ae5aa385b3425ef5839411458067bf6d23c4f28a90a09593ecbd601e",
+    "stored_bytes": 6444,
+    "stored_sha256": "520a7ad2ae5aa385b3425ef5839411458067bf6d23c4f28a90a09593ecbd601e",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/coordinator.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/coordinator.go",
+    "source_bytes": 54803,
+    "source_sha256": "3289de5a237288a0ba30b1744c0a25a15e0043de4cfd4c569ce1108368dc231f",
+    "stored_bytes": 54803,
+    "stored_sha256": "3289de5a237288a0ba30b1744c0a25a15e0043de4cfd4c569ce1108368dc231f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/coordinator_service_work_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/coordinator_service_work_v6.go",
+    "source_bytes": 7378,
+    "source_sha256": "f7f97fc38178f01d2efc75282f635cb6590b9288df50f9d54afcbd5ecfc48b0c",
+    "stored_bytes": 7378,
+    "stored_sha256": "f7f97fc38178f01d2efc75282f635cb6590b9288df50f9d54afcbd5ecfc48b0c",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/coordinator_service_work_v6_test.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/coordinator_service_work_v6_test.go",
+    "source_bytes": 4299,
+    "source_sha256": "0e1914add0a82d77143f8104e63897fa06ddd89f0d311806f0cbfd7f479b9f98",
+    "stored_bytes": 4299,
+    "stored_sha256": "0e1914add0a82d77143f8104e63897fa06ddd89f0d311806f0cbfd7f479b9f98",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/dependency_directory_release_work.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/dependency_directory_release_work.go",
+    "source_bytes": 9684,
+    "source_sha256": "5e385b327382778fa9f1e586d80a26a089f973e43682320badea689b8d193443",
+    "stored_bytes": 9684,
+    "stored_sha256": "5e385b327382778fa9f1e586d80a26a089f973e43682320badea689b8d193443",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/durable_format_v1.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/durable_format_v1.go",
+    "source_bytes": 41618,
+    "source_sha256": "b2232144a6cb12ccff59b324c5ae23b377c2842ab85b2c767dfa8de3f41f8ef3",
+    "stored_bytes": 41618,
+    "stored_sha256": "b2232144a6cb12ccff59b324c5ae23b377c2842ab85b2c767dfa8de3f41f8ef3",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/durable_root_transaction.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/durable_root_transaction.go",
+    "source_bytes": 27238,
+    "source_sha256": "8fd128df950f05d6861c84db06c2e82ae58aebbd86f55df622450f242fedddc0",
+    "stored_bytes": 27238,
+    "stored_sha256": "8fd128df950f05d6861c84db06c2e82ae58aebbd86f55df622450f242fedddc0",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/durable_root_transaction_native_mvcc_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/durable_root_transaction_native_mvcc_v6.go",
+    "source_bytes": 10958,
+    "source_sha256": "eda53efc3dda66e785ae9df99dd758dca924a7e0f103382f88de59a1c2b92460",
+    "stored_bytes": 10958,
+    "stored_sha256": "eda53efc3dda66e785ae9df99dd758dca924a7e0f103382f88de59a1c2b92460",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/durable_root_transaction_work_callbacks_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/durable_root_transaction_work_callbacks_v6.go",
+    "source_bytes": 1798,
+    "source_sha256": "7e28a89dd1f4eb9da1e609041e8a97f4a94cf0bfb1c3594887a938fff14dfd7a",
+    "stored_bytes": 1798,
+    "stored_sha256": "7e28a89dd1f4eb9da1e609041e8a97f4a94cf0bfb1c3594887a938fff14dfd7a",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/durable_root_transaction_work_callbacks_v6_test.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/durable_root_transaction_work_callbacks_v6_test.go",
+    "source_bytes": 20405,
+    "source_sha256": "cb2b2479a386b73b81afa8a856462f23c420c0c24df2598bd5d2369c144aff54",
+    "stored_bytes": 20405,
+    "stored_sha256": "cb2b2479a386b73b81afa8a856462f23c420c0c24df2598bd5d2369c144aff54",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/index_token_construction_work_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/index_token_construction_work_v6.go",
+    "source_bytes": 9556,
+    "source_sha256": "da748bf95e4cdad4f6780515ade4298a0142d3078ca185dad8d33b1869f9d18a",
+    "stored_bytes": 9556,
+    "stored_sha256": "da748bf95e4cdad4f6780515ade4298a0142d3078ca185dad8d33b1869f9d18a",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/namespace_token_release_work_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/namespace_token_release_work_v6.go",
+    "source_bytes": 2340,
+    "source_sha256": "e1c129ae775189b4489b3e4c5de49a3fd5eb819494a625164257be9bcfbbe2d5",
+    "stored_bytes": 2340,
+    "stored_sha256": "e1c129ae775189b4489b3e4c5de49a3fd5eb819494a625164257be9bcfbbe2d5",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/native_builder_work_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/native_builder_work_v6.go",
+    "source_bytes": 7233,
+    "source_sha256": "90a0e265648b62e883a46c9e6ae7792bf1a39070b94e2c9e1c51af51d80bc993",
+    "stored_bytes": 7233,
+    "stored_sha256": "90a0e265648b62e883a46c9e6ae7792bf1a39070b94e2c9e1c51af51d80bc993",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/native_prebuilder_retention_for_test_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/native_prebuilder_retention_for_test_v6.go",
+    "source_bytes": 6922,
+    "source_sha256": "fc6f3ad4c914531ef2777c917da712eb74a3a9a18a8e481263be2251f905c135",
+    "stored_bytes": 6922,
+    "stored_sha256": "fc6f3ad4c914531ef2777c917da712eb74a3a9a18a8e481263be2251f905c135",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/native_primary_finish_work_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/native_primary_finish_work_v6.go",
+    "source_bytes": 6557,
+    "source_sha256": "c6a1ef44ea9bdec5701afd442b0d28d703214457c9d9e553c2e1a9f871a20cd2",
+    "stored_bytes": 6557,
+    "stored_sha256": "c6a1ef44ea9bdec5701afd442b0d28d703214457c9d9e553c2e1a9f871a20cd2",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/native_publication_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/native_publication_v6.go",
+    "source_bytes": 28552,
+    "source_sha256": "bc527bca53fb225fef4165cb3ac2ea5d9b4cb7659ac6b5d0a1261cfe6f182534",
+    "stored_bytes": 28552,
+    "stored_sha256": "bc527bca53fb225fef4165cb3ac2ea5d9b4cb7659ac6b5d0a1261cfe6f182534",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/native_publication_v6_test.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/native_publication_v6_test.go",
+    "source_bytes": 7154,
+    "source_sha256": "3923cb39219e8ad6d68db4c5adba434c9a8c11d41b6f9bc5dd80dcdd90925d2c",
+    "stored_bytes": 7154,
+    "stored_sha256": "3923cb39219e8ad6d68db4c5adba434c9a8c11d41b6f9bc5dd80dcdd90925d2c",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/pin_registry.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/pin_registry.go",
+    "source_bytes": 30431,
+    "source_sha256": "770993e8d91fb63b2f47e9a8b757fe28140cc66520e96be5e5df0ccd06b35653",
+    "stored_bytes": 30431,
+    "stored_sha256": "770993e8d91fb63b2f47e9a8b757fe28140cc66520e96be5e5df0ccd06b35653",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/pin_registry_capture_work_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/pin_registry_capture_work_v6.go",
+    "source_bytes": 3211,
+    "source_sha256": "3200ad2c59d83cfbfe037189bd5967028b6167e343f794d39822c7bf995ab09d",
+    "stored_bytes": 3211,
+    "stored_sha256": "3200ad2c59d83cfbfe037189bd5967028b6167e343f794d39822c7bf995ab09d",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/pin_registry_observe_work_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/pin_registry_observe_work_v6.go",
+    "source_bytes": 2064,
+    "source_sha256": "563e54c4ba74a1774283876fc69016b4489ba9327115ea04a5aabe72f6fd83e5",
+    "stored_bytes": 2064,
+    "stored_sha256": "563e54c4ba74a1774283876fc69016b4489ba9327115ea04a5aabe72f6fd83e5",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/primary_bank_metadata_v5.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/primary_bank_metadata_v5.go",
+    "source_bytes": 8068,
+    "source_sha256": "385d65261d9d3be22c570188b0c822f4045f7570c13229b3a1c9106ec4ac0dac",
+    "stored_bytes": 8068,
+    "stored_sha256": "385d65261d9d3be22c570188b0c822f4045f7570c13229b3a1c9106ec4ac0dac",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/primary_capsule_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/primary_capsule_v6.go",
+    "source_bytes": 17496,
+    "source_sha256": "29269031e7a1c3ee02cd2dbeb47fba6f8914f1259faec78f6acdda348e2616d3",
+    "stored_bytes": 17496,
+    "stored_sha256": "29269031e7a1c3ee02cd2dbeb47fba6f8914f1259faec78f6acdda348e2616d3",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/primary_directory_seal_work_v6_test.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/primary_directory_seal_work_v6_test.go",
+    "source_bytes": 2866,
+    "source_sha256": "53c045157e2cbcb9346b2a2bd1e4a962efa105bbaef190cf882a2dc16e54a952",
+    "stored_bytes": 2866,
+    "stored_sha256": "53c045157e2cbcb9346b2a2bd1e4a962efa105bbaef190cf882a2dc16e54a952",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/primary_empty_candidate_work_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/primary_empty_candidate_work_v6.go",
+    "source_bytes": 19644,
+    "source_sha256": "5e3ad4df80ae76fb70fe678f84097fd75c45ecfa5bb66c284a48a8d0216f3620",
+    "stored_bytes": 19644,
+    "stored_sha256": "5e3ad4df80ae76fb70fe678f84097fd75c45ecfa5bb66c284a48a8d0216f3620",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/primary_prepared_abort_work_v6_test.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/primary_prepared_abort_work_v6_test.go",
+    "source_bytes": 3648,
+    "source_sha256": "b9db389cac1c9fa9667b15b66580881a402ed98f5992d1005f386535f6dcab68",
+    "stored_bytes": 3648,
+    "stored_sha256": "b9db389cac1c9fa9667b15b66580881a402ed98f5992d1005f386535f6dcab68",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/primary_terminal_completion_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/primary_terminal_completion_v6.go",
+    "source_bytes": 4732,
+    "source_sha256": "5f4070a0884cfc31ecb13249562b96267b5a249a69029075fef6b08ed2f0794d",
+    "stored_bytes": 4732,
+    "stored_sha256": "5f4070a0884cfc31ecb13249562b96267b5a249a69029075fef6b08ed2f0794d",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+    "source_bytes": 27096,
+    "source_sha256": "1c61ddb08a86ecf70f966006e21981125302ba2b6054a02d21c5edd93a531870",
+    "stored_bytes": 27096,
+    "stored_sha256": "1c61ddb08a86ecf70f966006e21981125302ba2b6054a02d21c5edd93a531870",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/resource_allocation.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/resource_allocation.go",
+    "source_bytes": 6094,
+    "source_sha256": "1e0e3508a3b8dfb3e222eafb6fdffdf32033688dfc1608482a307265d0e39a2b",
+    "stored_bytes": 6094,
+    "stored_sha256": "1e0e3508a3b8dfb3e222eafb6fdffdf32033688dfc1608482a307265d0e39a2b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/resource_allocation_test.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/resource_allocation_test.go",
+    "source_bytes": 17270,
+    "source_sha256": "20b9584f221ed92adf7fca494bfd4ffd750dc8b0244dd9076bccdb1d815cbfd8",
+    "stored_bytes": 17270,
+    "stored_sha256": "20b9584f221ed92adf7fca494bfd4ffd750dc8b0244dd9076bccdb1d815cbfd8",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/resource_empty_sync_work_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/resource_empty_sync_work_v6.go",
+    "source_bytes": 2210,
+    "source_sha256": "e639a7f4fbbd96d77c2f1fd2765a76ead2a6cdb070d62199c003fc933a175212",
+    "stored_bytes": 2210,
+    "stored_sha256": "e639a7f4fbbd96d77c2f1fd2765a76ead2a6cdb070d62199c003fc933a175212",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/resource_graph_physical_release_work_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/resource_graph_physical_release_work_v6.go",
+    "source_bytes": 5893,
+    "source_sha256": "9460134cb1476fa0f097d069ca6b5a1711da19ddb1976fd24902cc5b2efad79c",
+    "stored_bytes": 5893,
+    "stored_sha256": "9460134cb1476fa0f097d069ca6b5a1711da19ddb1976fd24902cc5b2efad79c",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/resource_graph_release_work_v6.go",
+    "source_bytes": 25050,
+    "source_sha256": "49855cb3646a6cebe9e5869a0f2e3df287d6c17d14e3792357b10d6883440308",
+    "stored_bytes": 25050,
+    "stored_sha256": "49855cb3646a6cebe9e5869a0f2e3df287d6c17d14e3792357b10d6883440308",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/resource_index_sync_work_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/resource_index_sync_work_v6.go",
+    "source_bytes": 4690,
+    "source_sha256": "925563404dd295d3ec80d4cbe34c38a735a571132826140c31ddba65262822ad",
+    "stored_bytes": 4690,
+    "stored_sha256": "925563404dd295d3ec80d4cbe34c38a735a571132826140c31ddba65262822ad",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/resource_original_cleanup.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/resource_original_cleanup.go",
+    "source_bytes": 12096,
+    "source_sha256": "be01b344603485b43b21d89bd37a9acab5edd23a3f392a0dbc513c6722a490fb",
+    "stored_bytes": 12096,
+    "stored_sha256": "be01b344603485b43b21d89bd37a9acab5edd23a3f392a0dbc513c6722a490fb",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/resource_original_custody_work_v6_test.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/resource_original_custody_work_v6_test.go",
+    "source_bytes": 5452,
+    "source_sha256": "5cb42184696bac099a3d7324c9156ad2c2fea68ed1343be14376280eb79f3346",
+    "stored_bytes": 5452,
+    "stored_sha256": "5cb42184696bac099a3d7324c9156ad2c2fea68ed1343be14376280eb79f3346",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/resource_set_allocation.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/resource_set_allocation.go",
+    "source_bytes": 4712,
+    "source_sha256": "8d366ae46f74d914665b2e7d68cd29ac568fc74a56087491b85dfc02ae1f6258",
+    "stored_bytes": 4712,
+    "stored_sha256": "8d366ae46f74d914665b2e7d68cd29ac568fc74a56087491b85dfc02ae1f6258",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/resource_set_clone_work_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/resource_set_clone_work_v6.go",
+    "source_bytes": 3698,
+    "source_sha256": "117279f05552e0f467769380f9525e592ab18e95614b9c973699ec6d44e61444",
+    "stored_bytes": 3698,
+    "stored_sha256": "117279f05552e0f467769380f9525e592ab18e95614b9c973699ec6d44e61444",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/resource_set_clone_work_v6_test.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/resource_set_clone_work_v6_test.go",
+    "source_bytes": 2434,
+    "source_sha256": "9c156aba44fb0b4d4590504be96aae4196adfd6ce0cda49e8b29324b3d7881a2",
+    "stored_bytes": 2434,
+    "stored_sha256": "9c156aba44fb0b4d4590504be96aae4196adfd6ce0cda49e8b29324b3d7881a2",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/resource_set_release_work_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/resource_set_release_work_v6.go",
+    "source_bytes": 10285,
+    "source_sha256": "b3b6d77ea2f6af4e8c75a88d5fdaed62d5a56b4546ca6b1e2d7dd64421bc4993",
+    "stored_bytes": 10285,
+    "stored_sha256": "b3b6d77ea2f6af4e8c75a88d5fdaed62d5a56b4546ca6b1e2d7dd64421bc4993",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/resource_token.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/resource_token.go",
+    "source_bytes": 105962,
+    "source_sha256": "463fcd6b40680b2d81c9f142efd99b787c98cc4d2ca5fa56b0a3ab50413c02e0",
+    "stored_bytes": 105962,
+    "stored_sha256": "463fcd6b40680b2d81c9f142efd99b787c98cc4d2ca5fa56b0a3ab50413c02e0",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/resource_token_allocation.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/resource_token_allocation.go",
+    "source_bytes": 12506,
+    "source_sha256": "093351a97507768afde45afa288b6a6b46234fcecb866f9d612f8aa7603a1ed5",
+    "stored_bytes": 12506,
+    "stored_sha256": "093351a97507768afde45afa288b6a6b46234fcecb866f9d612f8aa7603a1ed5",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/resource_token_release_work_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/rootpublication/resource_token_release_work_v6.go",
+    "source_bytes": 8282,
+    "source_sha256": "a9e659cfcea57b775c81920ea8fd8bff36f6554dab88ce8405555593601a1c70",
+    "stored_bytes": 8282,
+    "stored_sha256": "a9e659cfcea57b775c81920ea8fd8bff36f6554dab88ce8405555593601a1c70",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/valuelog/frame_preparer.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/valuelog/frame_preparer.go",
+    "source_bytes": 20124,
+    "source_sha256": "97e47c96819ce288b8f74ca14e09a528a05fd93aa8c9278455316e0003ca863f",
+    "stored_bytes": 20124,
+    "stored_sha256": "97e47c96819ce288b8f74ca14e09a528a05fd93aa8c9278455316e0003ca863f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/valuelog/leaf_append_work.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/valuelog/leaf_append_work.go",
+    "source_bytes": 5119,
+    "source_sha256": "a89c09f8aef39a3253c894e71587d23c3ff77fc23a6dba1420b5a08b02321d69",
+    "stored_bytes": 5119,
+    "stored_sha256": "a89c09f8aef39a3253c894e71587d23c3ff77fc23a6dba1420b5a08b02321d69",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/valuelog/manager.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/valuelog/manager.go",
+    "source_bytes": 103361,
+    "source_sha256": "936e18e7ec9d01adc037518b773e19631fa15845ebbb9e93f1f263f55aa09ce2",
+    "stored_bytes": 103361,
+    "stored_sha256": "936e18e7ec9d01adc037518b773e19631fa15845ebbb9e93f1f263f55aa09ce2",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/valuelog/segment_open_work.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/valuelog/segment_open_work.go",
+    "source_bytes": 2923,
+    "source_sha256": "2cb8c499f2438e0824da5d6535ffa7d7bf10e1837526a3341cec814edf6730f7",
+    "stored_bytes": 2923,
+    "stored_sha256": "2cb8c499f2438e0824da5d6535ffa7d7bf10e1837526a3341cec814edf6730f7",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/valuelog/segment_registration_work.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/valuelog/segment_registration_work.go",
+    "source_bytes": 7748,
+    "source_sha256": "0df917901ec1a74675c98a1326b92885ce386e903a9c8b53673adc88493bbcb1",
+    "stored_bytes": 7748,
+    "stored_sha256": "0df917901ec1a74675c98a1326b92885ce386e903a9c8b53673adc88493bbcb1",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/valuelog/writer.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/valuelog/writer.go",
+    "source_bytes": 80909,
+    "source_sha256": "ad0a252ad8d14c609ba8287a1097e62c9321019e4674ca0f4d04b6c6a3c90f11",
+    "stored_bytes": 80909,
+    "stored_sha256": "ad0a252ad8d14c609ba8287a1097e62c9321019e4674ca0f4d04b6c6a3c90f11",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/internal/valuelog/writer_creation_work.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/internal/valuelog/writer_creation_work.go",
+    "source_bytes": 5335,
+    "source_sha256": "05f81878d618b5aff526bef4dbf9066b75c7fea6e45ab7cef98a098d53342d04",
+    "stored_bytes": 5335,
+    "stored_sha256": "05f81878d618b5aff526bef4dbf9066b75c7fea6e45ab7cef98a098d53342d04",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/lifecycle/graveyard_empty_work_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/lifecycle/graveyard_empty_work_v6.go",
+    "source_bytes": 622,
+    "source_sha256": "48b24ec200ad7eab892e4ab0af8e3e2b1cfeba0e7af98627d555de754c77f3ae",
+    "stored_bytes": 622,
+    "stored_sha256": "48b24ec200ad7eab892e4ab0af8e3e2b1cfeba0e7af98627d555de754c77f3ae",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/lifecycle/registry.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/lifecycle/registry.go",
+    "source_bytes": 7960,
+    "source_sha256": "e6ecf1518c6de2696fdf1a53f592815305ee814ecc679ef64283d7962b88b47f",
+    "stored_bytes": 7960,
+    "stored_sha256": "e6ecf1518c6de2696fdf1a53f592815305ee814ecc679ef64283d7962b88b47f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/lifecycle/registry_unregister_work_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/lifecycle/registry_unregister_work_v6.go",
+    "source_bytes": 1129,
+    "source_sha256": "4c41f33db282ea75025ef38a167a44d02e73c5ebe19e2c65d4c79f0fa037199a",
+    "stored_bytes": 1129,
+    "stored_sha256": "4c41f33db282ea75025ef38a167a44d02e73c5ebe19e2c65d4c79f0fa037199a",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/mvcc/native_finite_cursor_pricing_v6_test.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/mvcc/native_finite_cursor_pricing_v6_test.go",
+    "source_bytes": 420,
+    "source_sha256": "575943d15bceef3849fd0615d0ad2f9189b76ca863ca00e7c6321088de17bdb8",
+    "stored_bytes": 420,
+    "stored_sha256": "575943d15bceef3849fd0615d0ad2f9189b76ca863ca00e7c6321088de17bdb8",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/mvcc/native_prune_backend_route_v6_test.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/mvcc/native_prune_backend_route_v6_test.go",
+    "source_bytes": 22903,
+    "source_sha256": "d234442527141be4e52b5bba5e607d28e6aea916f6e8670b4bca7962beabbc29",
+    "stored_bytes": 22903,
+    "stored_sha256": "d234442527141be4e52b5bba5e607d28e6aea916f6e8670b4bca7962beabbc29",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/mvcc/prune_cursor_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/mvcc/prune_cursor_v6.go",
+    "source_bytes": 27829,
+    "source_sha256": "67741d492a926d94dc347f2a073f883b2bf2d793334e1de79095d46bf58c9cba",
+    "stored_bytes": 27829,
+    "stored_sha256": "67741d492a926d94dc347f2a073f883b2bf2d793334e1de79095d46bf58c9cba",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/mvcc/versions.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/mvcc/versions.go",
+    "source_bytes": 23762,
+    "source_sha256": "aa88729578b2eafb1c44b23f94a52c924132cf2bb03362d1bd98e031bdeb8f53",
+    "stored_bytes": 23762,
+    "stored_sha256": "aa88729578b2eafb1c44b23f94a52c924132cf2bb03362d1bd98e031bdeb8f53",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/node/builder.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/node/builder.go",
+    "source_bytes": 49277,
+    "source_sha256": "8a7b341d5b40c97da6131652ab4176ebb8f23519c0182b48037c10116b6022df",
+    "stored_bytes": 49277,
+    "stored_sha256": "8a7b341d5b40c97da6131652ab4176ebb8f23519c0182b48037c10116b6022df",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/node/builder_columnar_work.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/node/builder_columnar_work.go",
+    "source_bytes": 12672,
+    "source_sha256": "961493eae7adab41ef97244a2fe03af2abf1c4198c948fce1d6af2956f64cc08",
+    "stored_bytes": 12672,
+    "stored_sha256": "961493eae7adab41ef97244a2fe03af2abf1c4198c948fce1d6af2956f64cc08",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/node/builder_work.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/node/builder_work.go",
+    "source_bytes": 3717,
+    "source_sha256": "d1f8fdd6f7af4a4cf3c4a6b221ea9d5e80263abd73545f75d310745005b0951f",
+    "stored_bytes": 3717,
+    "stored_sha256": "d1f8fdd6f7af4a4cf3c4a6b221ea9d5e80263abd73545f75d310745005b0951f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/node/internal_builder_work.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/node/internal_builder_work.go",
+    "source_bytes": 1064,
+    "source_sha256": "17478dd201bafefe83cddfacbdf550a40c338b9218e927d4fa7de6512a9b9c4a",
+    "stored_bytes": 1064,
+    "stored_sha256": "17478dd201bafefe83cddfacbdf550a40c338b9218e927d4fa7de6512a9b9c4a",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/node/primary_directory_decode_work_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/node/primary_directory_decode_work_v6.go",
+    "source_bytes": 4609,
+    "source_sha256": "67a8fcfe31abe12aad9d7624d963c3bebc9a5bc68aa1ac94d61255dfcfbeef29",
+    "stored_bytes": 4609,
+    "stored_sha256": "67a8fcfe31abe12aad9d7624d963c3bebc9a5bc68aa1ac94d61255dfcfbeef29",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/node/primary_directory_decode_work_v6_test.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/node/primary_directory_decode_work_v6_test.go",
+    "source_bytes": 2538,
+    "source_sha256": "2286e0dd594584f56d781914e1442d2cf545845b7fcbcf4a6e278a529c05331c",
+    "stored_bytes": 2538,
+    "stored_sha256": "2286e0dd594584f56d781914e1442d2cf545845b7fcbcf4a6e278a529c05331c",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/node/primary_directory_encode_work_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/node/primary_directory_encode_work_v6.go",
+    "source_bytes": 3925,
+    "source_sha256": "40ac034dc763234a23a777c54d661b650f3a45639d9ef6110874d5875dd23fc5",
+    "stored_bytes": 3925,
+    "stored_sha256": "40ac034dc763234a23a777c54d661b650f3a45639d9ef6110874d5875dd23fc5",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/pager/grow_work.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/pager/grow_work.go",
+    "source_bytes": 24157,
+    "source_sha256": "631b6fee62736c7e407c911b685e8f4fa5d5496d81c9c79f5194018c9cac5fa0",
+    "stored_bytes": 24157,
+    "stored_sha256": "631b6fee62736c7e407c911b685e8f4fa5d5496d81c9c79f5194018c9cac5fa0",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/pager/native_file_fence_linux_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/pager/native_file_fence_linux_v6.go",
+    "source_bytes": 1143,
+    "source_sha256": "5fd7ca9620c24e81694905f223ad8279c884a9e8a5391585fdf584091496e4ae",
+    "stored_bytes": 1143,
+    "stored_sha256": "5fd7ca9620c24e81694905f223ad8279c884a9e8a5391585fdf584091496e4ae",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/pager/native_file_fence_linux_v6_test.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/pager/native_file_fence_linux_v6_test.go",
+    "source_bytes": 4918,
+    "source_sha256": "4005bbec5143eb3efcf9c39115ea5671d65b4acc15f7f3b2881b90e3cf803a38",
+    "stored_bytes": 4918,
+    "stored_sha256": "4005bbec5143eb3efcf9c39115ea5671d65b4acc15f7f3b2881b90e3cf803a38",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/pager/native_file_fence_other_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/pager/native_file_fence_other_v6.go",
+    "source_bytes": 281,
+    "source_sha256": "a23092a8cc08d156f6d75843d79b904945aa125196f95ca591dcf1c9099a085f",
+    "stored_bytes": 281,
+    "stored_sha256": "a23092a8cc08d156f6d75843d79b904945aa125196f95ca591dcf1c9099a085f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/pager/native_file_fence_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/pager/native_file_fence_v6.go",
+    "source_bytes": 2446,
+    "source_sha256": "1fd9ba6dc061e533ddacfc0fdc050938f59a65ea59d2010604c388d52c5a4f25",
+    "stored_bytes": 2446,
+    "stored_sha256": "1fd9ba6dc061e533ddacfc0fdc050938f59a65ea59d2010604c388d52c5a4f25",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/pager/pager.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/pager/pager.go",
+    "source_bytes": 47802,
+    "source_sha256": "2ce5317be3fcf54157e98315ac1a9e107ab03c71a7487a503cf04ff3db8e07a6",
+    "stored_bytes": 47802,
+    "stored_sha256": "2ce5317be3fcf54157e98315ac1a9e107ab03c71a7487a503cf04ff3db8e07a6",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/pager/primary_capsule_write_test.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/pager/primary_capsule_write_test.go",
+    "source_bytes": 3833,
+    "source_sha256": "3d0b36c3f5fc54a279298003861c8ab712f751b7c6bedc6fe2565cd9ad5b3c3d",
+    "stored_bytes": 3833,
+    "stored_sha256": "3d0b36c3f5fc54a279298003861c8ab712f751b7c6bedc6fe2565cd9ad5b3c3d",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/pager/primary_read_root_construction_work_v6_test.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/pager/primary_read_root_construction_work_v6_test.go",
+    "source_bytes": 3585,
+    "source_sha256": "837c0eef7e6f52739b45a41896216b2bbb379fd2db25152916c050e07f330013",
+    "stored_bytes": 3585,
+    "stored_sha256": "837c0eef7e6f52739b45a41896216b2bbb379fd2db25152916c050e07f330013",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/pager/primary_read_root_retirement_work_v6_test.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/pager/primary_read_root_retirement_work_v6_test.go",
+    "source_bytes": 1504,
+    "source_sha256": "8fdbcc18f10c766bcc57f2b8ca47738b41b83aed83623ca0ec1c455289bd9f22",
+    "stored_bytes": 1504,
+    "stored_sha256": "8fdbcc18f10c766bcc57f2b8ca47738b41b83aed83623ca0ec1c455289bd9f22",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/pager/primary_read_root_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/pager/primary_read_root_v6.go",
+    "source_bytes": 13375,
+    "source_sha256": "1c7038fa4d0cadbeb397cf2ea033fab256a6fe3085136d8aa015e2f095c9402b",
+    "stored_bytes": 13375,
+    "stored_sha256": "1c7038fa4d0cadbeb397cf2ea033fab256a6fe3085136d8aa015e2f095c9402b",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/pager/write_work.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/pager/write_work.go",
+    "source_bytes": 20568,
+    "source_sha256": "b0ac447b9c5b69fe0cb92268c98c1c5550c8c3df2dabcec6bef20540ea8b5bdf",
+    "stored_bytes": 20568,
+    "stored_sha256": "b0ac447b9c5b69fe0cb92268c98c1c5550c8c3df2dabcec6bef20540ea8b5bdf",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/zipper/leaf_merge_work.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/zipper/leaf_merge_work.go",
+    "source_bytes": 5594,
+    "source_sha256": "8fde2fb26ad6828377cf49ccb0816990282e937283c93af12aba9c86d9b93fd6",
+    "stored_bytes": 5594,
+    "stored_sha256": "8fde2fb26ad6828377cf49ccb0816990282e937283c93af12aba9c86d9b93fd6",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/zipper/materialized_input_work_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/zipper/materialized_input_work_v6.go",
+    "source_bytes": 11925,
+    "source_sha256": "e4da7a9fbf43dda839521cd40dc1857bb0a204c5ad3d2eb5fb5967270c170831",
+    "stored_bytes": 11925,
+    "stored_sha256": "e4da7a9fbf43dda839521cd40dc1857bb0a204c5ad3d2eb5fb5967270c170831",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/zipper/materialized_observer_for_test_v6.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/zipper/materialized_observer_for_test_v6.go",
+    "source_bytes": 3816,
+    "source_sha256": "506c9bfa63d13289d9963dd69754c2cf4b157d3698478878cfe98972306bf3ce",
+    "stored_bytes": 3816,
+    "stored_sha256": "506c9bfa63d13289d9963dd69754c2cf4b157d3698478878cfe98972306bf3ce",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/zipper/materialized_write_work.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/zipper/materialized_write_work.go",
+    "source_bytes": 30120,
+    "source_sha256": "5fa7ed027fcab735aab154427f1ed11f4bc03a908b445fc76898bfbab7b84055",
+    "stored_bytes": 30120,
+    "stored_sha256": "5fa7ed027fcab735aab154427f1ed11f4bc03a908b445fc76898bfbab7b84055",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/delta-files/TreeDB/zipper/zipper.go",
+    "path": "native-build/ordinary-integrated-source/delta-files/TreeDB/zipper/zipper.go",
+    "source_bytes": 134537,
+    "source_sha256": "7f653816183ed1c153f960d53d0bd602721c3e9fb18f4c5bacad25ae49345c71",
+    "stored_bytes": 134537,
+    "stored_sha256": "7f653816183ed1c153f960d53d0bd602721c3e9fb18f4c5bacad25ae49345c71",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/freeze.py",
+    "path": "native-build/ordinary-integrated-source/freeze.py",
+    "source_bytes": 3753,
+    "source_sha256": "8e4d8be74c3f6ed775b82ddaf21a9246eb22716de1a942a07e0bc6e0b52421b1",
+    "stored_bytes": 3753,
+    "stored_sha256": "8e4d8be74c3f6ed775b82ddaf21a9246eb22716de1a942a07e0bc6e0b52421b1",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/integration-census.json",
+    "path": "native-build/ordinary-integrated-source/integration-census.json.gz",
+    "source_bytes": 6083943,
+    "source_sha256": "1fd71b0664470c0a19b738b2cb63d3aaba1089af71ad381b892882d5f7d802e6",
+    "stored_bytes": 638747,
+    "stored_sha256": "dd71f4e388b3a6b02629f803d92974375f0217aa64fb8e51ebc65846d1bc00a6",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/merged-base.delta.patch",
+    "path": "native-build/ordinary-integrated-source/merged-base.delta.patch.gz",
+    "source_bytes": 1227889,
+    "source_sha256": "e86f2c369b0200edc468ed4d092305f4c6e643d14bf5e364b23b23ea0f8611a0",
+    "stored_bytes": 267773,
+    "stored_sha256": "f6538a7ce0c91aa2a33305a6aa3ca23d93c5c969fb928b03a5c71dd9af4fd103",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/native-owned-adaptations.json",
+    "path": "native-build/ordinary-integrated-source/native-owned-adaptations.json",
+    "source_bytes": 2618,
+    "source_sha256": "9871d4efddcc11955e4ac8b10776b2cdbdc25fc66c74dc4d8bf3bc76e83528af",
+    "stored_bytes": 2618,
+    "stored_sha256": "9871d4efddcc11955e4ac8b10776b2cdbdc25fc66c74dc4d8bf3bc76e83528af",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/proposed-commands.json",
+    "path": "native-build/ordinary-integrated-source/proposed-commands.json",
+    "source_bytes": 1920,
+    "source_sha256": "923878fa79aaae462d82bfff0df933477ac655effc1ded5fd9094dffc708a4fb",
+    "stored_bytes": 1920,
+    "stored_sha256": "923878fa79aaae462d82bfff0df933477ac655effc1ded5fd9094dffc708a4fb",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/proposed-focused-commands.json",
+    "path": "native-build/ordinary-integrated-source/proposed-focused-commands.json",
+    "source_bytes": 68197,
+    "source_sha256": "51f8eb211bcec2bbf92d36f249a503e0fd85c0c95809d986717758ab38dfa20d",
+    "stored_bytes": 68197,
+    "stored_sha256": "51f8eb211bcec2bbf92d36f249a503e0fd85c0c95809d986717758ab38dfa20d",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/receipt.json",
+    "path": "native-build/ordinary-integrated-source/receipt.json",
+    "source_bytes": 1206,
+    "source_sha256": "ddc7cba1354d42fc2e3732037b312a6f2eda30016c925bbc6fccf6093edb2684",
+    "stored_bytes": 1206,
+    "stored_sha256": "ddc7cba1354d42fc2e3732037b312a6f2eda30016c925bbc6fccf6093edb2684",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/run-verification.py",
+    "path": "native-build/ordinary-integrated-source/run-verification.py",
+    "source_bytes": 7263,
+    "source_sha256": "541c95b024c79fd97082ceda6b0b3ae3095ec42caa8d24d36e9eedac551f5ad0",
+    "stored_bytes": 7263,
+    "stored_sha256": "541c95b024c79fd97082ceda6b0b3ae3095ec42caa8d24d36e9eedac551f5ad0",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/source-frozen.json",
+    "path": "native-build/ordinary-integrated-source/source-frozen.json.gz",
+    "source_bytes": 1588469,
+    "source_sha256": "56f77963dffe17198ce428f27f635f44d9b946183939a1b108a044d40a34009e",
+    "stored_bytes": 463414,
+    "stored_sha256": "2986794ba60616d21ac172758741c5f7bc7e001e5c26629a43e5c77caacd6ddb",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/verification/compile-only/command.json",
+    "path": "native-build/ordinary-integrated-source/verification/compile-only/command.json",
+    "source_bytes": 1990,
+    "source_sha256": "917d54b242c154762153bdaff64dc7133086b82cc788d81d608c382d67b3a848",
+    "stored_bytes": 1990,
+    "stored_sha256": "917d54b242c154762153bdaff64dc7133086b82cc788d81d608c382d67b3a848",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/verification/compile-only/process.json",
+    "path": "native-build/ordinary-integrated-source/verification/compile-only/process.json",
+    "source_bytes": 141,
+    "source_sha256": "4bcc32885a02d3033a7ceadf10c56b75d8e2ac86f9275d52bf91220087c02944",
+    "stored_bytes": 141,
+    "stored_sha256": "4bcc32885a02d3033a7ceadf10c56b75d8e2ac86f9275d52bf91220087c02944",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/verification/compile-only/result.json",
+    "path": "native-build/ordinary-integrated-source/verification/compile-only/result.json",
+    "source_bytes": 19595,
+    "source_sha256": "62113e21111a8a00d34d00caf8a84c5fa55b79820827740c24c82a675c77edf2",
+    "stored_bytes": 19595,
+    "stored_sha256": "62113e21111a8a00d34d00caf8a84c5fa55b79820827740c24c82a675c77edf2",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/verification/compile-only/run.log",
+    "path": "native-build/ordinary-integrated-source/verification/compile-only/run.log.gz",
+    "source_bytes": 1739,
+    "source_sha256": "7e2806de81d54d8c48bb14d8006af28fca0587c3036800177c2c0b9206da8167",
+    "stored_bytes": 266,
+    "stored_sha256": "350d25aaac52c3127544ca37f7900d9f511041816ab6e1942d6323667ea47300",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/verification/compile-only/source-after.json",
+    "path": "native-build/ordinary-integrated-source/verification/compile-only/source-after.json.gz",
+    "source_bytes": 1588469,
+    "source_sha256": "56f77963dffe17198ce428f27f635f44d9b946183939a1b108a044d40a34009e",
+    "stored_bytes": 463413,
+    "stored_sha256": "8338e3ab3f828bbab6eb7cd5970cbe9a757d66bfe262c237f724b1e26e975afe",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/verification/compile-only/source-before.json",
+    "path": "native-build/ordinary-integrated-source/verification/compile-only/source-before.json.gz",
+    "source_bytes": 1588469,
+    "source_sha256": "56f77963dffe17198ce428f27f635f44d9b946183939a1b108a044d40a34009e",
+    "stored_bytes": 463414,
+    "stored_sha256": "b85e4c6b6c1be0d629cc069138d5edd24047fec4703b7c5f96a8cb7ab4b3cc57",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/verification/identity.json",
+    "path": "native-build/ordinary-integrated-source/verification/identity.json",
+    "source_bytes": 735,
+    "source_sha256": "047bee779484877303e396522147a0e691c757eddb9785f55c9660756e169ba9",
+    "stored_bytes": 735,
+    "stored_sha256": "047bee779484877303e396522147a0e691c757eddb9785f55c9660756e169ba9",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/verification/summary.json",
+    "path": "native-build/ordinary-integrated-source/verification/summary.json",
+    "source_bytes": 624,
+    "source_sha256": "e3a620fbb881e9ad7051b27c7f1d684f595f4a9e2e2d439c56c6e89306b1931e",
+    "stored_bytes": 624,
+    "stored_sha256": "e3a620fbb881e9ad7051b27c7f1d684f595f4a9e2e2d439c56c6e89306b1931e",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-build/ordinary-integrated-source/witness-to-integrated.delta.patch",
+    "path": "native-build/ordinary-integrated-source/witness-to-integrated.delta.patch.gz",
+    "source_bytes": 476913,
+    "source_sha256": "6f623bae30eee6aef48a3c1261fe64e5af65554b92d47fa74fc7be00f768e883",
+    "stored_bytes": 125035,
+    "stored_sha256": "190c7d814fdb22f435074fac4b8a8583b137418613779de2bcf5f3761eb71cff",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/ordinary-native-integrated-independent-review.json",
+    "path": "native-decision/ordinary-native-integrated-independent-review.json",
+    "source_bytes": 18770,
+    "source_sha256": "a05910907845ed7a8e27a072c522ae7452663099549dd872d819ef3d1048a9bc",
+    "stored_bytes": 18770,
+    "stored_sha256": "a05910907845ed7a8e27a072c522ae7452663099549dd872d819ef3d1048a9bc",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/ordinary-native-integrated-independent-review.md",
+    "path": "native-decision/ordinary-native-integrated-independent-review.md",
+    "source_bytes": 14151,
+    "source_sha256": "a9fa60d42b16e372bfb0765868bc95f4d0f1e70009c58958a04f3c3ec1f52a42",
+    "stored_bytes": 14151,
+    "stored_sha256": "a9fa60d42b16e372bfb0765868bc95f4d0f1e70009c58958a04f3c3ec1f52a42",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/ordinary-native-integrated-packet.json",
+    "path": "native-decision/ordinary-native-integrated-packet.json",
+    "source_bytes": 1934,
+    "source_sha256": "81348ea97fdc97aac52d50e11bd725d52fc585c673a83708d980a6cedf812bd2",
+    "stored_bytes": 1934,
+    "stored_sha256": "81348ea97fdc97aac52d50e11bd725d52fc585c673a83708d980a6cedf812bd2",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/ordinary-native-integrated-packet.md",
+    "path": "native-decision/ordinary-native-integrated-packet.md",
+    "source_bytes": 22606,
+    "source_sha256": "52049a1a6fe3b1fcd18ab2f2bb39134360503c1e3f57572fea1f18fdee0e6c1f",
+    "stored_bytes": 22606,
+    "stored_sha256": "52049a1a6fe3b1fcd18ab2f2bb39134360503c1e3f57572fea1f18fdee0e6c1f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/ordinary-native-integrated-review-extract/evidence-hashes.json",
+    "path": "native-decision/ordinary-native-integrated-review-extract/evidence-hashes.json",
+    "source_bytes": 2975,
+    "source_sha256": "e97362c6d8f9fb1d66715ea10116ac21b077342917b2f0f1bfe3de33d3dbac55",
+    "stored_bytes": 2975,
+    "stored_sha256": "e97362c6d8f9fb1d66715ea10116ac21b077342917b2f0f1bfe3de33d3dbac55",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/ordinary-native-integrated-review-extract/failed-control-verification.json",
+    "path": "native-decision/ordinary-native-integrated-review-extract/failed-control-verification.json",
+    "source_bytes": 461,
+    "source_sha256": "53d3ad9b7d0eca39b28a0486234265beb9032fc0a3ff284dc45366a69525e63e",
+    "stored_bytes": 461,
+    "stored_sha256": "53d3ad9b7d0eca39b28a0486234265beb9032fc0a3ff284dc45366a69525e63e",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/ordinary-native-integrated-review-extract/identity-verification.json",
+    "path": "native-decision/ordinary-native-integrated-review-extract/identity-verification.json",
+    "source_bytes": 1836,
+    "source_sha256": "9aef99ce899adcbf5bb970b0506a3d8a5c9aa2a2378aebfb0a470a883d75f8e1",
+    "stored_bytes": 1836,
+    "stored_sha256": "9aef99ce899adcbf5bb970b0506a3d8a5c9aa2a2378aebfb0a470a883d75f8e1",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/ordinary-native-integrated-review-extract/metadata-verification.json",
+    "path": "native-decision/ordinary-native-integrated-review-extract/metadata-verification.json",
+    "source_bytes": 3040,
+    "source_sha256": "ea10dad77b4b4837a1e3e89f76d1286e0ebbeb50ad71c109b9ca922adf718461",
+    "stored_bytes": 3040,
+    "stored_sha256": "ea10dad77b4b4837a1e3e89f76d1286e0ebbeb50ad71c109b9ca922adf718461",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/ordinary-native-integrated-review-extract/native-to-integrated.patch",
+    "path": "native-decision/ordinary-native-integrated-review-extract/native-to-integrated.patch.gz",
+    "source_bytes": 57390,
+    "source_sha256": "4563c61ddca9f8619ae9df0189c95c3bd2c185364876a6f08175f4177c630642",
+    "stored_bytes": 16137,
+    "stored_sha256": "124aafa9378a95c2897950a8a8c41c7a588dd0f61639760a0c533e5b9260db0a",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/ordinary-native-integrated-review-extract/ordinary-to-integrated.patch",
+    "path": "native-decision/ordinary-native-integrated-review-extract/ordinary-to-integrated.patch.gz",
+    "source_bytes": 92160,
+    "source_sha256": "b63af9e85978a7a19a6660286af4f5fef38c9a31cbfda73f8372b0538d283450",
+    "stored_bytes": 23116,
+    "stored_sha256": "a3feb3ef5e7aadecf1ded0a44f23edb6ac00081e2da0eafdd5e1c839563dc857",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/ordinary-native-integrated-review-extract/preliminary-source-review.json",
+    "path": "native-decision/ordinary-native-integrated-review-extract/preliminary-source-review.json",
+    "source_bytes": 9324,
+    "source_sha256": "523c6a6011df65d9002e2f4ceaa831b322497bf4053c29104c16d031844ec0a0",
+    "stored_bytes": 9324,
+    "stored_sha256": "523c6a6011df65d9002e2f4ceaa831b322497bf4053c29104c16d031844ec0a0",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/ordinary-native-integrated-review-extract/preliminary-source-review.md",
+    "path": "native-decision/ordinary-native-integrated-review-extract/preliminary-source-review.md",
+    "source_bytes": 7945,
+    "source_sha256": "531065b4e6c5e5cfe5c5633c86bcb4c1735f076f4698768c8351e0ee2db34f93",
+    "stored_bytes": 7945,
+    "stored_sha256": "531065b4e6c5e5cfe5c5633c86bcb4c1735f076f4698768c8351e0ee2db34f93",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/ordinary-native-integration-control-plan.json",
+    "path": "native-decision/ordinary-native-integration-control-plan.json",
+    "source_bytes": 56468,
+    "source_sha256": "9074c95cf274327305da7e237225b47e78ddb6ee2e252ea5b1a1892a9a9d325e",
+    "stored_bytes": 56468,
+    "stored_sha256": "9074c95cf274327305da7e237225b47e78ddb6ee2e252ea5b1a1892a9a9d325e",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/ordinary-native-integration-control-plan.md",
+    "path": "native-decision/ordinary-native-integration-control-plan.md",
+    "source_bytes": 33325,
+    "source_sha256": "5db1d3ec8d50c220ed1737743683c42012fcb334abf14c1092e86dbf156c2e36",
+    "stored_bytes": 33325,
+    "stored_sha256": "5db1d3ec8d50c220ed1737743683c42012fcb334abf14c1092e86dbf156c2e36",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/ordinary-native-lease-compatibility-diagnosis.json",
+    "path": "native-decision/ordinary-native-lease-compatibility-diagnosis.json",
+    "source_bytes": 12031,
+    "source_sha256": "7e4a31305b55d3b39af1c04c06de2064cd130d592247a99a0adbbc7244ef365e",
+    "stored_bytes": 12031,
+    "stored_sha256": "7e4a31305b55d3b39af1c04c06de2064cd130d592247a99a0adbbc7244ef365e",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/ordinary-native-lease-compatibility-diagnosis.md",
+    "path": "native-decision/ordinary-native-lease-compatibility-diagnosis.md",
+    "source_bytes": 8217,
+    "source_sha256": "b1a715ad2059bee9c8268c59ae9d01bb82237607a2a7d8a311cc8b8cf29c944d",
+    "stored_bytes": 8217,
+    "stored_sha256": "b1a715ad2059bee9c8268c59ae9d01bb82237607a2a7d8a311cc8b8cf29c944d",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-integrated-controls-selection.json",
+    "path": "native-decision/root-native-integrated-controls-selection.json",
+    "source_bytes": 25915,
+    "source_sha256": "35591560945779881a8772a4efac7beb481efd0463278b72e714aa5f7da485c9",
+    "stored_bytes": 25915,
+    "stored_sha256": "35591560945779881a8772a4efac7beb481efd0463278b72e714aa5f7da485c9",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-native-integrated-controls-selection.md",
+    "path": "native-decision/root-native-integrated-controls-selection.md",
+    "source_bytes": 6163,
+    "source_sha256": "f0b218c6f83248a8eb03c9c920fc73c8ba264a53f8ece9dd1fd42ec291616e7c",
+    "stored_bytes": 6163,
+    "stored_sha256": "f0b218c6f83248a8eb03c9c920fc73c8ba264a53f8ece9dd1fd42ec291616e7c",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-decision/root-ordinary-native-origin-repair-selection.md",
+    "path": "native-decision/root-ordinary-native-origin-repair-selection.md",
+    "source_bytes": 7261,
+    "source_sha256": "54c32af15d0e0db95fabdd7a28f4d1e41280b32fe3eb6faca327e74d426c760c",
+    "stored_bytes": 7261,
+    "stored_sha256": "54c32af15d0e0db95fabdd7a28f4d1e41280b32fe3eb6faca327e74d426c760c",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/combined-input-verification.json",
+    "path": "native-main-integration/combined-input-verification.json",
+    "source_bytes": 1066,
+    "source_sha256": "28c7ac2eda8a064efd4523e1a72f2e9686c093e3dcd479dc63b414d40a2826a0",
+    "stored_bytes": 1066,
+    "stored_sha256": "28c7ac2eda8a064efd4523e1a72f2e9686c093e3dcd479dc63b414d40a2826a0",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/controls/evidence-manifest.json",
+    "path": "native-main-integration/controls/evidence-manifest.json",
+    "source_bytes": 1157,
+    "source_sha256": "98898ddf23519d4f967f9e01d339e841c2687b35a9de166f43e68e487a34a5f2",
+    "stored_bytes": 1157,
+    "stored_sha256": "98898ddf23519d4f967f9e01d339e841c2687b35a9de166f43e68e487a34a5f2",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/controls/freeze-receipt.json",
+    "path": "native-main-integration/controls/freeze-receipt.json",
+    "source_bytes": 530,
+    "source_sha256": "4c7da78dbf0411ce6f12aadf97ac126377e343417c1ad61face84edad18bb12d",
+    "stored_bytes": 530,
+    "stored_sha256": "4c7da78dbf0411ce6f12aadf97ac126377e343417c1ad61face84edad18bb12d",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/controls/handoff.json",
+    "path": "native-main-integration/controls/handoff.json",
+    "source_bytes": 6250,
+    "source_sha256": "20ffdccf294baa2e90bc1e8aee59d23a8dfb77955d0645cbddcda53dddf10db5",
+    "stored_bytes": 6250,
+    "stored_sha256": "20ffdccf294baa2e90bc1e8aee59d23a8dfb77955d0645cbddcda53dddf10db5",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/controls/handoff.md",
+    "path": "native-main-integration/controls/handoff.md",
+    "source_bytes": 2168,
+    "source_sha256": "af1b063431a92b6ac32c4872dfeafb2903d48c6357570e5915ff0a15f7eaf231",
+    "stored_bytes": 2168,
+    "stored_sha256": "af1b063431a92b6ac32c4872dfeafb2903d48c6357570e5915ff0a15f7eaf231",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/controls/identity.json",
+    "path": "native-main-integration/controls/identity.json",
+    "source_bytes": 3787,
+    "source_sha256": "f2c348b680d3315760dd04e548397f7ef8be2917506afe88e82b6fa37a896d4e",
+    "stored_bytes": 3787,
+    "stored_sha256": "f2c348b680d3315760dd04e548397f7ef8be2917506afe88e82b6fa37a896d4e",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/controls/normal-TreeDB-db/command.json",
+    "path": "native-main-integration/controls/normal-TreeDB-db/command.json",
+    "source_bytes": 6208,
+    "source_sha256": "f4e06995f772edd53edff39ea68426cc131669b8ee9c6fda66697de4769c2730",
+    "stored_bytes": 6208,
+    "stored_sha256": "f4e06995f772edd53edff39ea68426cc131669b8ee9c6fda66697de4769c2730",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/controls/normal-TreeDB-db/process.json",
+    "path": "native-main-integration/controls/normal-TreeDB-db/process.json",
+    "source_bytes": 145,
+    "source_sha256": "87107751c9137cafc82efd9b7bccf3c3a4656c3d208ff3c660136f74a6607b6e",
+    "stored_bytes": 145,
+    "stored_sha256": "87107751c9137cafc82efd9b7bccf3c3a4656c3d208ff3c660136f74a6607b6e",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/controls/normal-TreeDB-db/result.json",
+    "path": "native-main-integration/controls/normal-TreeDB-db/result.json",
+    "source_bytes": 16325,
+    "source_sha256": "58acfe0e25562e7f05aec1e2b37f6b81dcf79e7416088b43aa6af4adcd3b9229",
+    "stored_bytes": 16325,
+    "stored_sha256": "58acfe0e25562e7f05aec1e2b37f6b81dcf79e7416088b43aa6af4adcd3b9229",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/controls/normal-TreeDB-db/run.log",
+    "path": "native-main-integration/controls/normal-TreeDB-db/run.log.gz",
+    "source_bytes": 12022,
+    "source_sha256": "82d9bbf401ea6c285a23164669c9a38a0adfc5399720717d44ff10a34d27cc4c",
+    "stored_bytes": 1879,
+    "stored_sha256": "870f7da5fb246182b420b1a6c32dca3488d0c6b70ec0c083d4656a9f0dc38133",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/controls/normal-TreeDB-db/source-after.json",
+    "path": "native-main-integration/controls/normal-TreeDB-db/source-after.json.gz",
+    "source_bytes": 1588469,
+    "source_sha256": "d76289da830b8f2c856e8f0595f37a541de99368b2e582b1ae290bdab532ce9a",
+    "stored_bytes": 463414,
+    "stored_sha256": "5e2316572c17ff4df090e5aa05564396715c48043abbf9a0ea22845b83e816b2",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/controls/normal-TreeDB-db/source-before.json",
+    "path": "native-main-integration/controls/normal-TreeDB-db/source-before.json.gz",
+    "source_bytes": 1588469,
+    "source_sha256": "d76289da830b8f2c856e8f0595f37a541de99368b2e582b1ae290bdab532ce9a",
+    "stored_bytes": 463415,
+    "stored_sha256": "4b6cabf15ffe3b8c70ac4e8e13b5caabc63ac10d4f61230dabdd3a4ff21fc547",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/controls/required-child-tests.json",
+    "path": "native-main-integration/controls/required-child-tests.json",
+    "source_bytes": 578,
+    "source_sha256": "314b1bdf5751f6871eb22547bb098a6c0210dce6db159fdf2fb8d2113f4ce425",
+    "stored_bytes": 578,
+    "stored_sha256": "314b1bdf5751f6871eb22547bb098a6c0210dce6db159fdf2fb8d2113f4ce425",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/controls/run-controls.py",
+    "path": "native-main-integration/controls/run-controls.py",
+    "source_bytes": 10393,
+    "source_sha256": "75d0b26299947f9ae3acf0f22dfb44f73ea91990316e3970f8304157a13c919f",
+    "stored_bytes": 10393,
+    "stored_sha256": "75d0b26299947f9ae3acf0f22dfb44f73ea91990316e3970f8304157a13c919f",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/controls/summary.json",
+    "path": "native-main-integration/controls/summary.json",
+    "source_bytes": 1024,
+    "source_sha256": "d4cbeb933cca7acd8eb798568c35e868413e56688feec1426db111912da4eac9",
+    "stored_bytes": 1024,
+    "stored_sha256": "d4cbeb933cca7acd8eb798568c35e868413e56688feec1426db111912da4eac9",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/controls-failure-root-verification.json",
+    "path": "native-main-integration/controls-failure-root-verification.json",
+    "source_bytes": 1036,
+    "source_sha256": "0e70ff2ad02908ee8cac833fcc0d965b11559fdfb582a1d7fac48b2ab85bd210",
+    "stored_bytes": 1036,
+    "stored_sha256": "0e70ff2ad02908ee8cac833fcc0d965b11559fdfb582a1d7fac48b2ab85bd210",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/inventory/complete-staged-check.json",
+    "path": "native-main-integration/inventory/complete-staged-check.json",
+    "source_bytes": 175,
+    "source_sha256": "4060ffb60e6412d551c795b2c8b1ee96d691f615b9a6918e82825c7fa8f8c058",
+    "stored_bytes": 175,
+    "stored_sha256": "4060ffb60e6412d551c795b2c8b1ee96d691f615b9a6918e82825c7fa8f8c058",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/inventory/complete-staged-check.log",
+    "path": "native-main-integration/inventory/complete-staged-check.log.gz",
+    "source_bytes": 0,
+    "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stored_bytes": 46,
+    "stored_sha256": "2ded953d307b1fd69ca41abed3c2de50dc8b5812d9ac47e95ef301148f681e18",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/inventory/policy-after.json",
+    "path": "native-main-integration/inventory/policy-after.json",
+    "source_bytes": 117317,
+    "source_sha256": "8dddfd075143fde0513b1e8d41974949729f2434076e5ceb2d785b171d97747c",
+    "stored_bytes": 117317,
+    "stored_sha256": "8dddfd075143fde0513b1e8d41974949729f2434076e5ceb2d785b171d97747c",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/inventory/policy-before.json",
+    "path": "native-main-integration/inventory/policy-before.json",
+    "source_bytes": 117317,
+    "source_sha256": "bcdc7a79f589b4c3201e12b9fd54073b064bc3e2c800a7ac45a2ae14564f91fd",
+    "stored_bytes": 117317,
+    "stored_sha256": "bcdc7a79f589b4c3201e12b9fd54073b064bc3e2c800a7ac45a2ae14564f91fd",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/inventory/receipt.json",
+    "path": "native-main-integration/inventory/receipt.json",
+    "source_bytes": 891,
+    "source_sha256": "77d04a976e1fac29222b6cc6de2266f2d6c23d5d00e87823cb0b53305720d395",
+    "stored_bytes": 891,
+    "stored_sha256": "77d04a976e1fac29222b6cc6de2266f2d6c23d5d00e87823cb0b53305720d395",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/inventory/refresh.json",
+    "path": "native-main-integration/inventory/refresh.json",
+    "source_bytes": 190,
+    "source_sha256": "c0123ac3a0ac66e2c6bb357438ee6ee3fb20e55aa9ef35b71fa633aa104b4da1",
+    "stored_bytes": 190,
+    "stored_sha256": "c0123ac3a0ac66e2c6bb357438ee6ee3fb20e55aa9ef35b71fa633aa104b4da1",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/inventory/refresh.log",
+    "path": "native-main-integration/inventory/refresh.log.gz",
+    "source_bytes": 79,
+    "source_sha256": "5fb1c804537ff4fb401e38ac18cdffe5d909f1fd9c06b3c0d3a1211b06d377a9",
+    "stored_bytes": 106,
+    "stored_sha256": "bda4c8e9b1340fdaefd08d11c1b535b18b2972d791744152259c06056665cef2",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/inventory/source-contract.json",
+    "path": "native-main-integration/inventory/source-contract.json",
+    "source_bytes": 205,
+    "source_sha256": "742c8be37c9ee5a8aceed1f89fe4d7d559dc517692fde0cebd251a3bab4c27db",
+    "stored_bytes": 205,
+    "stored_sha256": "742c8be37c9ee5a8aceed1f89fe4d7d559dc517692fde0cebd251a3bab4c27db",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/inventory/source-contract.log",
+    "path": "native-main-integration/inventory/source-contract.log.gz",
+    "source_bytes": 83,
+    "source_sha256": "4a90d77e83312d4e40674133586a5899aabb38a922cf1c63a5c628d4954a0baa",
+    "stored_bytes": 112,
+    "stored_sha256": "ae5ec5dba59d17341c80378f10d66b5500abe0243d9e04420a14a69ae049e694",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/inventory/source-final.json",
+    "path": "native-main-integration/inventory/source-final.json.gz",
+    "source_bytes": 1588469,
+    "source_sha256": "d76289da830b8f2c856e8f0595f37a541de99368b2e582b1ae290bdab532ce9a",
+    "stored_bytes": 463414,
+    "stored_sha256": "fbdd7d7a227ecff8aac523dbfb12ea82b81cc13dffd0af28cbe77b7a70d31597",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/inventory/stage-frozen.json",
+    "path": "native-main-integration/inventory/stage-frozen.json",
+    "source_bytes": 11006,
+    "source_sha256": "e3807180a6b931bd54c1a5f3f771964e444fae0a820164c497496016796e5a46",
+    "stored_bytes": 11006,
+    "stored_sha256": "e3807180a6b931bd54c1a5f3f771964e444fae0a820164c497496016796e5a46",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/inventory/stage-frozen.log",
+    "path": "native-main-integration/inventory/stage-frozen.log.gz",
+    "source_bytes": 0,
+    "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stored_bytes": 37,
+    "stored_sha256": "46e42763b954b8de361dc8dd2e2368798805b67c4dfa79b70adb5fa2880dcc09",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/inventory/stage-policy.json",
+    "path": "native-main-integration/inventory/stage-policy.json",
+    "source_bytes": 186,
+    "source_sha256": "5abcd70241f0048e1fdc951ba3297b394cb51514750c7470daa886fd8c13d166",
+    "stored_bytes": 186,
+    "stored_sha256": "5abcd70241f0048e1fdc951ba3297b394cb51514750c7470daa886fd8c13d166",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/inventory/stage-policy.log",
+    "path": "native-main-integration/inventory/stage-policy.log.gz",
+    "source_bytes": 0,
+    "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stored_bytes": 37,
+    "stored_sha256": "0907dac19967fccb24f5d28949755774a71e42316c6334861bd5f752c4129cf4",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/inventory/staged-check.json",
+    "path": "native-main-integration/inventory/staged-check.json",
+    "source_bytes": 175,
+    "source_sha256": "4060ffb60e6412d551c795b2c8b1ee96d691f615b9a6918e82825c7fa8f8c058",
+    "stored_bytes": 175,
+    "stored_sha256": "4060ffb60e6412d551c795b2c8b1ee96d691f615b9a6918e82825c7fa8f8c058",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/inventory/staged-check.log",
+    "path": "native-main-integration/inventory/staged-check.log.gz",
+    "source_bytes": 0,
+    "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stored_bytes": 37,
+    "stored_sha256": "59356016b2b59be0449f323723b4a31bd75b62924e981c8c4d5d6c6d8ca8d7d1",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/inventory/staged-paths.json",
+    "path": "native-main-integration/inventory/staged-paths.json",
+    "source_bytes": 189,
+    "source_sha256": "36dd35392152775a051e7f20bae3913ff4f7b854e5a782a8ceb11553e6ce8756",
+    "stored_bytes": 189,
+    "stored_sha256": "36dd35392152775a051e7f20bae3913ff4f7b854e5a782a8ceb11553e6ce8756",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/inventory/staged-paths.log",
+    "path": "native-main-integration/inventory/staged-paths.log.gz",
+    "source_bytes": 9474,
+    "source_sha256": "233e5f32965dcea33eb7c73da7e8f4a01c3ab85be67292810a25c2e10fd560f9",
+    "stored_bytes": 1609,
+    "stored_sha256": "d95a926edb809f0594f61baf46f91c1a933be2367f4831d23e9771c1eb8858fa",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/inventory/staged-stat.json",
+    "path": "native-main-integration/inventory/staged-stat.json",
+    "source_bytes": 174,
+    "source_sha256": "a36442b5f254686aac305fedaab2d7748878fc8828a2db7d969c0a7bea509d40",
+    "stored_bytes": 174,
+    "stored_sha256": "a36442b5f254686aac305fedaab2d7748878fc8828a2db7d969c0a7bea509d40",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/inventory/staged-stat.log",
+    "path": "native-main-integration/inventory/staged-stat.log.gz",
+    "source_bytes": 12429,
+    "source_sha256": "c5d762986ac388ffe5479cbeb87fe73ca44756635b09cf14588d29d1bb1d1e61",
+    "stored_bytes": 2721,
+    "stored_sha256": "15c28cab369710fd8d58b169a6c984aafede7ab99f10d01ff91087f3040b63b6",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/inventory/test_ci_impact.json",
+    "path": "native-main-integration/inventory/test_ci_impact.json",
+    "source_bytes": 177,
+    "source_sha256": "8cf739457cb9e5e4679c4d38f5cd30ec9c438491de050866ec91fe8f7a952584",
+    "stored_bytes": 177,
+    "stored_sha256": "8cf739457cb9e5e4679c4d38f5cd30ec9c438491de050866ec91fe8f7a952584",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/inventory/test_ci_impact.log",
+    "path": "native-main-integration/inventory/test_ci_impact.log.gz",
+    "source_bytes": 120,
+    "source_sha256": "aa5ff7cd2a594c5f8110670490bae2c0225f26848aef48f982164e16e90ae97d",
+    "stored_bytes": 74,
+    "stored_sha256": "9da02b187ee506c47d93db41f6fb6b26bff32e7559015ccd80c1f9310e2bcba8",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/inventory/test_refresh_ci_impact_inventory.json",
+    "path": "native-main-integration/inventory/test_refresh_ci_impact_inventory.json",
+    "source_bytes": 195,
+    "source_sha256": "039f1dcefcee6e68aae03731e98e1316684b7f917f930186651d8485a618f261",
+    "stored_bytes": 195,
+    "stored_sha256": "039f1dcefcee6e68aae03731e98e1316684b7f917f930186651d8485a618f261",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/inventory/test_refresh_ci_impact_inventory.log",
+    "path": "native-main-integration/inventory/test_refresh_ci_impact_inventory.log.gz",
+    "source_bytes": 115,
+    "source_sha256": "376b7c66785020179f8794f3dd973394110d4117880928fa3a3e79fbf0e37cd5",
+    "stored_bytes": 92,
+    "stored_sha256": "c1552d102d3715e9dd56407726cca098c0ad8b4d2e7129e8608dc26437c7f40c",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/inventory/test_treedb_ci_contract.json",
+    "path": "native-main-integration/inventory/test_treedb_ci_contract.json",
+    "source_bytes": 186,
+    "source_sha256": "3517e8e8a492d18b800552ac018d86ae492086f9dd049bf6d26cf5d6f744082c",
+    "stored_bytes": 186,
+    "stored_sha256": "3517e8e8a492d18b800552ac018d86ae492086f9dd049bf6d26cf5d6f744082c",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/inventory/test_treedb_ci_contract.log",
+    "path": "native-main-integration/inventory/test_treedb_ci_contract.log.gz",
+    "source_bytes": 104,
+    "source_sha256": "c6b9b1f09add0403cc07e90bfdf272129b1ddfa2f8f7675ea8218862f2516371",
+    "stored_bytes": 82,
+    "stored_sha256": "ab4cea8a3e578130f32537f30ad73a032a3d25b519b492f6d6534e005a2c0f56",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/inventory/test_treedb_windows_core_headroom.json",
+    "path": "native-main-integration/inventory/test_treedb_windows_core_headroom.json",
+    "source_bytes": 196,
+    "source_sha256": "ecd66b48727173e48234cf056f7ebf17069aa574ffe9596448e2154cfeca1b03",
+    "stored_bytes": 196,
+    "stored_sha256": "ecd66b48727173e48234cf056f7ebf17069aa574ffe9596448e2154cfeca1b03",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/inventory/test_treedb_windows_core_headroom.log",
+    "path": "native-main-integration/inventory/test_treedb_windows_core_headroom.log.gz",
+    "source_bytes": 115,
+    "source_sha256": "3dcc9b97af69dcd097e6be10b9105afc444885f3e1b41ec7f7e25a469fa8939f",
+    "stored_bytes": 93,
+    "stored_sha256": "b2be212d179ce2586ac9fa367edad80a9bec333f64e1c1d8c96c1dac2277fa7f",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/inventory/tree-after.json",
+    "path": "native-main-integration/inventory/tree-after.json",
+    "source_bytes": 150,
+    "source_sha256": "df699de7714277c18c465857e177bf7f18aaa6c848161fb70e7ee15d130ec752",
+    "stored_bytes": 150,
+    "stored_sha256": "df699de7714277c18c465857e177bf7f18aaa6c848161fb70e7ee15d130ec752",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/inventory/tree-after.log",
+    "path": "native-main-integration/inventory/tree-after.log.gz",
+    "source_bytes": 41,
+    "source_sha256": "54e6bc783073c6ddcd0b4deb5a5a4b11a2f85a766f23d6589ca51504238b7e19",
+    "stored_bytes": 74,
+    "stored_sha256": "e7042789c3c09da774d714d6c07855782a721fe6d23b87efe4dbaf523d66b289",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/inventory/tree-before.json",
+    "path": "native-main-integration/inventory/tree-before.json",
+    "source_bytes": 150,
+    "source_sha256": "bea539ea5c9faefd9bbbba6dc1c91fedcc576ca953c1a2c15d49ad7a3b4c2378",
+    "stored_bytes": 150,
+    "stored_sha256": "bea539ea5c9faefd9bbbba6dc1c91fedcc576ca953c1a2c15d49ad7a3b4c2378",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/inventory/tree-before.log",
+    "path": "native-main-integration/inventory/tree-before.log.gz",
+    "source_bytes": 41,
+    "source_sha256": "8f35701e27a392901de4ad4a5f9a1cdcde72034f63ed1408700eed8256d0bd8f",
+    "stored_bytes": 74,
+    "stored_sha256": "5a6bd2624348fd405192465cd2e115e62dee4f5b45b7bbf9deb9bcb34c4d9256",
+    "encoding": "gzip"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/refresh-inventory.py",
+    "path": "native-main-integration/refresh-inventory.py",
+    "source_bytes": 3365,
+    "source_sha256": "5b01aba8193528388a096e646cfa0371e79fa747e59a451e53b892df30d69a81",
+    "stored_bytes": 3365,
+    "stored_sha256": "5b01aba8193528388a096e646cfa0371e79fa747e59a451e53b892df30d69a81",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/verify-combined.py",
+    "path": "native-main-integration/verify-combined.py",
+    "source_bytes": 3611,
+    "source_sha256": "7f9c45bd6470eed51d457efe6d91e483c21020189a67235d4bf1de02aff01cd9",
+    "stored_bytes": 3611,
+    "stored_sha256": "7f9c45bd6470eed51d457efe6d91e483c21020189a67235d4bf1de02aff01cd9",
+    "encoding": "identity"
+  },
+  {
+    "source": "/mnt/fast4tb/gomap-mvcc-4871-20261015/native-main-integration/witness-selected-composition.patch",
+    "path": "native-main-integration/witness-selected-composition.patch.gz",
+    "source_bytes": 64468,
+    "source_sha256": "55f9858aa2425f5d1d34606f195db3f2a8a7064de51fac385585e5904383607d",
+    "stored_bytes": 18032,
+    "stored_sha256": "59859d4a2efd4af91113c4acce2f361e2af621ed50df8eacf9f1fcdb5e00d894",
+    "encoding": "gzip"
+  }
+]
