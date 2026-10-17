@@ -482,21 +482,30 @@ func (s *Store) PruneVersions(options PruneOptions) (stats PruneStats, err error
 			return stats, err
 		}
 	}
-	snapshotter, ok := s.db.(snapshotDB)
-	if !ok {
+	var snapshot treedb.Snapshot
+	if s.readCuts != nil {
+		// Floor admission and physical capture are one cut. The original cut
+		// retains every source before ordinary delete batches can run; readers
+		// admitted earlier keep that cut even after the floor advances.
+		snapshot, err = s.readCuts.AcquireMVCCReadCut()
 		s.mu.Unlock()
-		return stats, ErrSnapshotUnavailable
-	}
-	snapshot := snapshotter.AcquireSnapshot()
-	if _, qualified := s.db.(versionRangeSuccessorDB); qualified {
-		// The shared successor combines retained tables with a later backend
-		// snapshot. Deleting its winning tombstone anchor could otherwise expose
-		// an older retained value without an observed physical tombstone.
-		// ponytail: fence the whole streaming prune with the existing Store lock;
-		// consider narrower capture only after measurement and a source proof.
-		defer s.mu.Unlock()
+		if err != nil {
+			return stats, storageError("acquire prune snapshot", err)
+		}
 	} else {
-		s.mu.Unlock()
+		snapshotter, ok := s.db.(snapshotDB)
+		if !ok {
+			s.mu.Unlock()
+			return stats, ErrSnapshotUnavailable
+		}
+		snapshot = snapshotter.AcquireSnapshot()
+		if _, qualified := s.db.(versionRangeSuccessorDB); qualified {
+			// Legacy successors combine retained tables with a later backend
+			// snapshot. Keep their established fence through physical deletion.
+			defer s.mu.Unlock()
+		} else {
+			s.mu.Unlock()
+		}
 	}
 	if snapshot == nil {
 		return stats, storageError("acquire prune snapshot", treedb.ErrClosed)

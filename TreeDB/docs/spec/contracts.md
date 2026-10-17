@@ -211,22 +211,21 @@ Retained-version iteration and discard/pruning extend that opt-in owner:
   older versions. When that anchor is a tombstone, the tombstone is deleted
   only after all older versions, so a crash cannot expose an older value;
   allowed reads then observe absence until a newer value exists.
-- In eligible legacy producers, pruning is a reverse scan plus bounded delete
-  batches. Batch size alone does not bound the entire pass. COW pruning refuses
-  before floor/WAL effects pending its separate maintenance qualification. Durable mode
-  re-syncs the floor before its first delete; interrupted runs are safe and
-  idempotent. TreeDB snapshots acquired before floor advancement keep their
-  pinned physical view until close.
+- Pruning uses a reverse scan plus ordinary bounded delete batches. Batch size
+  bounds one publication, not the entire pass. Durable mode re-syncs the floor
+  before its first delete; interrupted runs are safe and idempotent. TreeDB
+  snapshots acquired before floor advancement keep their pinned physical view
+  until close.
 - Floor advancement and pruning are serialized by one owner-local maintenance
-  lock. With the qualified successor capability, pruning holds the Store
-  floor lock exclusively through its scan, physical delete batches (including
-  durable acknowledgement), and iterator/snapshot cleanup. Foreground reads,
-  commits and snapshot acquisition wait; snapshots already pinned remain
-  readable. This full-prune foreground fence is a correctness-driven ceiling,
-  pending measurement before any narrower capture protocol. Adapters without
-  the capability retain the earlier release after floor/snapshot capture and
-  allow foreground operations during pruning. The maintenance lock prevents
-  the captured floor from advancing underneath either prune path.
+  lock. COW pruning captures the original complete read cut under Store floor
+  admission and releases foreground admission before constructing its iterator
+  or deleting records. Every selected version is at/below the captured floor;
+  concurrent allowed writes are strictly above it and cannot replace selected
+  physical keys. Existing old cuts retain their original sources and pointers.
+  Legacy successor producers combine retained tables with a later backend
+  snapshot and keep their established exclusive Store fence through deletion
+  and cleanup. Batch-only adapters retain release after floor/snapshot capture.
+  The maintenance lock prevents floor advancement underneath either prune path.
 - Successful prune accounting satisfies `Visited = Retained + Pruned`.
   `Skipped` is the subset of `Retained` with timestamps above the captured
   floor, not a disjoint outcome counter. Partial-error statistics report only
@@ -357,10 +356,9 @@ teardown. Snapshot/iterator Close remains safe after DB Close, but subsequent
 storage reads return a closed error. `GetManyView` callbacks run outside
 read/writer/publication locks with admitted temporary value ownership; empty
 input still observes closed-handle checks. Store floor admission remains required;
-qualified COW groups and reads use the capture protocol above. COW `PruneVersions` remains unsupported. Pruning eligibility refuses
-before floor loading/re-sync, snapshot acquisition, physical deletes or WAL
-effects, including when a persisted floor already exists. This refusal does not
-qualify bounded maintenance, replay or the full C3/C4 lifecycle gates.
+qualified COW groups, reads and managed-history pruning use the capture protocol
+above. External timestamps remain explicit opt-in history; ordinary transactions
+use complete engine views and do not acquire application timestamp semantics.
 
 ### 2.6 Target versioned entry reads
 

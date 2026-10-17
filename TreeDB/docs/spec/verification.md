@@ -209,8 +209,18 @@ also checkpoint, rewrite and GC while the Store read cut remains pinned.
 from broad legacy successor-method presence and verifies floor exclusion through
 the admitted write. `TestC3ReadCutFailureAndClose` and
 `TestC3ReadCutCapacityRefusalHasNoFallback` preserve admission/storage/Close errors,
-release pinned ownership and resume after finite refusal. Unsupported prune
-checks preserve the existing floor and WAL/publication/capture counters.
+release pinned ownership and resume after finite refusal.
+
+`TestManagedHistoryFloorAdvancePreservesOpenCut` covers all three production
+profiles with inline/forced-pointer records, out-of-order timestamps, an old
+iterator through floor advancement/deletion/checkpoint, later writes above the
+floor, and reopen. `TestManagedHistoryTombstoneAnchorCrashOrder` terminates a
+process after floor persistence and each single-record durable deletion,
+verifies the anchor survives until hidden values are gone, and resumes pruning.
+`TestManagedHistoryPruneCapturedCutReleasesAdmission` pauses reverse iterator
+construction after capture and requires a foreground write ACK before release.
+These replace the former COW prune refusal witness; they do not establish a
+bounded duration for a whole pass or a Q32 primitive-work limit.
 
 `TestC3COWSuccessorFallbackCompletesBeforeQueuedDBClose` exercises physical
 tombstone and retained disk fallback with inline/pointer values. Its captured
