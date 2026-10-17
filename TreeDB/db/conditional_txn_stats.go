@@ -8,10 +8,9 @@ func (db *DB) appendConditionalTxnStats(stats map[string]string) {
 	}
 
 	db.conditionalOracle.mu.Lock()
-	activeRecords := len(db.conditionalOracle.active)
-	retainedPoints := len(db.conditionalOracle.recent)
-	retainedRanges := len(db.conditionalOracle.ranges)
-	rootConflictActive := db.conditionalOracle.rootSeq != 0
+	activeRecords, _, _ := db.conditionalOracle.history.State()
+	retainedPoints, retainedRanges, rootConflictActive := db.conditionalOracle.history.Counts()
+	barriers := db.conditionalOracle.history.BarrierStats()
 	db.conditionalOracle.mu.Unlock()
 
 	stats["treedb.conditional_txn.active"] = fmt.Sprintf("%d", db.conditionalActiveTxnCount.Load())
@@ -28,6 +27,10 @@ func (db *DB) appendConditionalTxnStats(stats map[string]string) {
 	stats["treedb.conditional_oracle.retained_points"] = fmt.Sprintf("%d", retainedPoints)
 	stats["treedb.conditional_oracle.retained_ranges"] = fmt.Sprintf("%d", retainedRanges)
 	stats["treedb.conditional_oracle.root_conflict_active"] = fmt.Sprintf("%t", rootConflictActive)
+	stats["treedb.conditional_oracle.barrier_effect_capacity_total"] = fmt.Sprintf("%d", barriers.EffectCapacity)
+	stats["treedb.conditional_oracle.barrier_byte_capacity_total"] = fmt.Sprintf("%d", barriers.ByteCapacity)
+	stats["treedb.conditional_oracle.barrier_logical_replacement_total"] = fmt.Sprintf("%d", barriers.LogicalReplacement)
+	stats["treedb.conditional_oracle.barrier_conflicts_total"] = fmt.Sprintf("%d", barriers.Conflicts)
 	stats["treedb.conditional_oracle.recorded_points_total"] = fmt.Sprintf("%d", db.conditionalOracleRecordedPoints.Load())
 	stats["treedb.conditional_oracle.recorded_ranges_total"] = fmt.Sprintf("%d", db.conditionalOracleRecordedRanges.Load())
 	stats["treedb.conditional_oracle.root_markers_total"] = fmt.Sprintf("%d", db.conditionalOracleRootMarkers.Load())

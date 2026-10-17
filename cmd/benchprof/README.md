@@ -890,3 +890,42 @@ packet owns collection counts and performance acceptance; these commands alone
 do not qualify them. Go benchmark logs and optional `go test` profiles are
 standalone artifacts, **not benchprof inputs**. Existing unified-bench/benchprof
 artifact names and schemas are unchanged.
+
+### Standalone raw COW transaction cost (#5140)
+
+`BenchmarkPublicCOWTxn` measures the newly enabled public raw transaction path:
+three production profiles, Point1/Point10/Scan/ReverseScan, and History0/History2048.
+ScanNewer2048/ReverseScanNewer2048 add a 2,048-key unrelated batch after capture
+(with History0), separating newer-chunk validation cost from old-history cost. Each
+iteration reads its opening view, permits an unrelated write, then commits its
+staged write. It reports ns/op, B/op, allocs/op, journal/index occupancy, cumulative
+validation/lease timing deltas, final-drain-ns, and live/peak charged engine bytes.
+Scan and ReverseScan early-close after their first result. Lease wait/hold per iteration covers
+both the unrelated ordinary write and transaction; it is not isolated txn wait.
+Setup and final
+Close are outside the timed ACK loop; this is not full-drain throughput.
+
+From the repository root, using the declared Go toolchain:
+
+```sh
+python3 scripts/raw_cow_txn_capture.py --out /tmp/raw-cow-txn-cost --benchtime 128x --count 3
+```
+
+The dedicated runner builds once and starts a fresh process for each sample.
+Artifacts are `manifest.json` (source/harness/binary hashes, argv and exit codes),
+`source.patch`, and `sample-01.txt` etc. `--profiles` adds a separate instrumented
+process producing `diagnostic.txt`, `cpu.pprof` and `allocs.pprof`; inspect these
+with `go tool pprof`, not benchprof. They are Go test profiles, not unified-bench
+profile-dir inputs. `--binary`, `--bench` and `--benchtime` support an exact
+candidate and bounded diagnostic shape. An external `--binary` requires
+`--binary-manifest` with matching `binary_sha256` and the complete current
+`sources` hash map (local dependency/test source, assembly and embedded inputs,
+module/workspace config and runner); stale or unbound binaries reject. The
+manifest also records `go version -m`, Go build flags/platform/CGO configuration
+and GOMAXPROCS/GOGC/GOMEMLIMIT. Each command embeds its raw stdout and hash.
+Custom `--bench` filters require each exact `--expect-row`; default captures
+require all 30 rows and terminal PASS. Logs are flushed and hashed before the
+manifest is atomically replaced; incomplete runs remain invalid evidence.
+Keep uninstrumented samples and profile
+results separate. No pre-P1 speedup comparison exists for this unsupported
+entrypoint; use existing equivalent raw/legacy workloads for regression controls.

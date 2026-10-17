@@ -201,7 +201,7 @@ Retained-version iteration and discard/pruning extend that opt-in owner:
   positional range spans are never attached to a filtered queue; newest-source
   duplicate precedence and physical delete filtering are unchanged.
   Explicit COW mode instead retains the already-published shard/source/backend
-  cut without rotating shards; its initial capability supports forward traversal.
+  cut without rotating shards; its raw read capability supports forward and reverse traversal.
 - A nonzero global discard floor is the greatest timestamp that may be
   discarded, matching Badger managed-mode `SetDiscardTs` boundary semantics.
   Reads and read-timestamp scans at or below it are rejected; commits must be
@@ -333,12 +333,12 @@ side stores do not inherit this main-store budget. No on-disk format changes.
 [coherent COW cut contract](cow-cache-publication.md). Snapshot capture pins one
 complete shard/source/backend-basis cut without rotation, record copying or
 history sorting. Owned point/versioned reads, presence/prefix queries,
-successors and forward iterators all resolve through that cut, including when
+successors and forward/reverse iterators all resolve through that cut, including when
 the cache is empty. Public copies preserve empty-value and missing-key semantics.
 
 Supported mutations are point Set/Delete, explicit sync variants and point
 batches, including encoded MVCC groups and raw physical-delete replay.
-Conditional/callback mutations, range deletion, reverse traversal and manual
+Callback mutations, native range deletion and manual
 backend/root bypass refuse before callbacks, WAL append, floor changes or
 visible point effects. Mixed unsupported batches are not partially applied.
 These are explicit-mode exceptions to the broader raw/iterator API below;
@@ -357,8 +357,7 @@ teardown. Snapshot/iterator Close remains safe after DB Close, but subsequent
 storage reads return a closed error. `GetManyView` callbacks run outside
 read/writer/publication locks with admitted temporary value ownership; empty
 input still observes closed-handle checks. Store floor admission remains required;
-qualified COW groups and reads use the capture protocol above. COW reverse
-iteration and `PruneVersions` remain unsupported. Pruning eligibility refuses
+qualified COW groups and reads use the capture protocol above. COW `PruneVersions` remains unsupported. Pruning eligibility refuses
 before floor loading/re-sync, snapshot acquisition, physical deletes or WAL
 effects, including when a persisted floor already exists. This refusal does not
 qualify bounded maintenance, replay or the full C3/C4 lifecycle gates.
@@ -489,7 +488,7 @@ read/precondition validation.
 
 - `Iterator(start, end)` yields ascending lexicographic keys.
 - `ReverseIterator(start, end)` yields descending order over the same bound domain
-  in modes that support reverse traversal; explicit COW mode refuses it.
+  including qualified public COW snapshots and transaction overlays.
 
 ### 4.2 Bounds
 
@@ -892,3 +891,11 @@ root/dependency owners and remaining names, poisoning subsequent mutation with
 rollforward runs under LOCK before legacy cleanup; malformed markers refuse
 without cleanup. Namespace rebind and synced decision deletion precede writer
 admission. Ordinary relaxed and command-WAL ACK promises remain unchanged.
+
+### Public raw COW transactions
+
+The qualified public COW implementation follows [raw-cow-transactions.md](raw-cow-transactions.md):
+one opening view, staged point effects and forward/reverse predicates, latest-root
+R-union-W validation, bounded history with ErrTxnTooOld, and named open-iterator
+mutation rejection. This implemented capability is separate from the legacy
+conditional target text above and from managed external timestamps.

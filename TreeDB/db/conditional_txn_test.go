@@ -394,7 +394,7 @@ func TestConditionalTxnAllowsDirectSameRootPublish(t *testing.T) {
 	assertDBValue(t, d, "target", "value")
 }
 
-func TestConditionalTxnStatsExposeOracleAndCleanup(t *testing.T) {
+func TestConditionalTxnStatsExposeBoundedHistory(t *testing.T) {
 	d, err := Open(Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -423,11 +423,14 @@ func TestConditionalTxnStatsExposeOracleAndCleanup(t *testing.T) {
 		t.Fatalf("concurrent guard write: %v", err)
 	}
 	stats = d.Stats()
+	if got := stats["treedb.conditional_oracle.active_records"]; got != "2" {
+		t.Fatalf("retained record stats=%q, want 2", got)
+	}
 	if got := stats["treedb.conditional_oracle.retained_points"]; got != "1" {
 		t.Fatalf("retained point stats=%q, want 1", got)
 	}
-	if got := stats["treedb.conditional_oracle.recorded_points_total"]; got != "1" {
-		t.Fatalf("recorded point stats=%q, want 1", got)
+	if got := stats["treedb.conditional_oracle.recorded_points_total"]; got != "2" {
+		t.Fatalf("continuously recorded point stats=%q, want 2", got)
 	}
 
 	if err := tx.Set([]byte("target"), []byte("value")); err != nil {
@@ -452,8 +455,11 @@ func TestConditionalTxnStatsExposeOracleAndCleanup(t *testing.T) {
 	if got := stats["treedb.conditional_txn.read_set.max"]; got != "1" {
 		t.Fatalf("read-set max stats=%q, want 1", got)
 	}
-	if got := stats["treedb.conditional_oracle.retained_points"]; got != "0" {
-		t.Fatalf("retained point stats after cleanup=%q, want 0", got)
+	if got := stats["treedb.conditional_oracle.active_records"]; got != "2" {
+		t.Fatalf("retained record stats=%q, want 2", got)
+	}
+	if got := stats["treedb.conditional_oracle.retained_points"]; got != "1" {
+		t.Fatalf("bounded history must outlive transaction cleanup: retained=%q, want 1", got)
 	}
 }
 

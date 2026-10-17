@@ -64,15 +64,15 @@ func TestCOWReadAdapterCursorOwnsOldRoot(t *testing.T) {
 	}
 }
 
-func TestCOWReadAdapterRefusesReverseAndCallback(t *testing.T) {
+func TestCOWReadAdapterRefusesCallbackAndReversesEmpty(t *testing.T) {
 	table := &cowTable{}
 	called := false
 	if err := table.PutWithCallback(nil, nil, func(_, _ []byte) error { called = true; return nil }); !errors.Is(err, ErrCOWUnsupported) || called {
 		t.Fatalf("callback refusal: called=%v err=%v", called, err)
 	}
 	it := table.NewReverseIterator(nil, nil)
-	if it.Valid() || !errors.Is(it.Error(), ErrCOWUnsupported) {
-		t.Fatalf("reverse refusal: valid=%v err=%v", it.Valid(), it.Error())
+	if it.Valid() || it.Error() != nil {
+		t.Fatalf("empty reverse: valid=%v err=%v", it.Valid(), it.Error())
 	}
 	if err := it.Close(); err != nil {
 		t.Fatal(err)

@@ -50,3 +50,9 @@ for floor and source-selection fallback rules.
 - HashDB does not expose an ordered iterator.
 - HashDB exposes `ForEach(fn)` which iterates all live keys in arbitrary order.
   - For the sharded `*hashdb.HashDB` entrypoint, `ForEach` takes an exclusive snapshot (blocks writers, flushes shard caches, then iterates backend state).
+
+A qualified public TreeDB COW transaction's forward and reverse iterators merge the retained
+opening cut with all preceding staged writes. Its dependency is the whole
+requested interval, including empty results, early close and later Seek.
+Mutation while any iterator is open returns `ErrTxnIteratorOpen`; commit and
+close invalidate children. Key/Value views expire at Next, Seek or Close.

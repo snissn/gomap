@@ -10,6 +10,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -17,6 +18,7 @@ import (
 // cowBackendBasis is shared by successor cuts. A handoff captures one new
 // backend snapshot before publication; readers never independently capture it.
 type cowBackendBasis struct {
+	logicalSeq      uint64
 	refs            atomic.Int64
 	snapshot        *backenddb.Snapshot
 	lease           *memtable.COWExternalLease
@@ -54,14 +56,16 @@ func (b *cowBackendBasis) release() error {
 // All members are immutable after installation. refs is controlled by cutMu;
 // dropping the last reference transfers bounded retirement to the caller.
 type cowReadCut struct {
-	refs    int
-	shards  []cowTable
-	frozen  []cowTable // oldest to newest; every member precedes basis
-	basis   *cowBackendBasis
-	sources []memtable.Table
-	domains []rootDomainSnapshot
-	lease   *memtable.COWExternalLease
-	cache   *cowCache
+	visibleCommandLSN uint64
+	logicalSeq        uint64
+	refs              int
+	shards            []cowTable
+	frozen            []cowTable // oldest to newest; every member precedes basis
+	basis             *cowBackendBasis
+	sources           []memtable.Table
+	domains           []rootDomainSnapshot
+	lease             *memtable.COWExternalLease
+	cache             *cowCache
 }
 
 func (c *cowReadCut) drain() error {
@@ -84,25 +88,31 @@ func (c *cowReadCut) drain() error {
 // cowCache serializes private preparation separately from the brief read latch.
 // writeMu admission and the existing command barrier remain outside this owner.
 type cowCache struct {
-	writerMu        sync.Mutex
-	readMu          sync.RWMutex
-	readClosed      atomic.Bool
-	refreshRequired atomic.Bool // maintenance changed the basis before refresh admission
-	cutMu           sync.Mutex
-	cut             *cowReadCut
-	writers         []*memtable.COWWriter
-	budget          *memtable.COWBudget
-	closed          bool
-	lease           *memtable.COWExternalLease
-	activeCuts      atomic.Int64
-	captureCalls    atomic.Uint64
-	prepareCalls    atomic.Uint64
-	publications    atomic.Uint64
-	rollovers       atomic.Uint64
-	handoffs        atomic.Uint64
-	closeRetired    []memtable.COWRetirement
-	generationBase  uint64           // exact identical empty-generation startup history charge
-	handoff         *cowFlushHandoff // serialized by the existing flush coordinator
+	journalBarrierActive                                                                           atomic.Bool
+	journalBarrierEffects, journalBarrierBytes, journalBarrierReplacement, journalBarrierConflicts atomic.Uint64
+	commitWaitNs, commitHoldNs, validationNs, tooOld                                               atomic.Uint64
+	journalCount, journalBytes, journalFloor, journalPoints, journalRanges                         atomic.Uint64
+	txnOwner                                                                                       *transactionowner.Owner
+	journal                                                                                        *txnJournal
+	writerMu                                                                                       sync.Mutex
+	readMu                                                                                         sync.RWMutex
+	readClosed                                                                                     atomic.Bool
+	refreshRequired                                                                                atomic.Bool // maintenance changed the basis before refresh admission
+	cutMu                                                                                          sync.Mutex
+	cut                                                                                            *cowReadCut
+	writers                                                                                        []*memtable.COWWriter
+	budget                                                                                         *memtable.COWBudget
+	closed                                                                                         bool
+	lease                                                                                          *memtable.COWExternalLease
+	activeCuts                                                                                     atomic.Int64
+	captureCalls                                                                                   atomic.Uint64
+	prepareCalls                                                                                   atomic.Uint64
+	publications                                                                                   atomic.Uint64
+	rollovers                                                                                      atomic.Uint64
+	handoffs                                                                                       atomic.Uint64
+	closeRetired                                                                                   []memtable.COWRetirement
+	generationBase                                                                                 uint64           // exact identical empty-generation startup history charge
+	handoff                                                                                        *cowFlushHandoff // serialized by the existing flush coordinator
 }
 
 // Backend wrapper capture uses a separate lease: a basis can outlive every
@@ -389,7 +399,7 @@ func (c *cowCache) prepare(groups [][]memtable.COWMutation, opts []memtable.COWP
 		}
 		p.prepared[i] = staged
 	}
-	next := &cowReadCut{refs: 1, shards: make([]cowTable, len(groups)), frozen: make([]cowTable, len(old.frozen)), basis: old.basis, lease: lease, cache: c}
+	next := &cowReadCut{visibleCommandLSN: old.visibleCommandLSN, logicalSeq: old.logicalSeq, refs: 1, shards: make([]cowTable, len(groups)), frozen: make([]cowTable, len(old.frozen)), basis: old.basis, lease: lease, cache: c}
 	next.basis.retain()
 	copy(next.frozen, old.frozen)
 	for i := range next.frozen {
@@ -502,6 +512,12 @@ func (c *cowCache) closeWithBudget(closeBudget bool) error {
 	old.refs--
 	last := old.refs == 0
 	c.cutMu.Unlock()
+	// FIFO/index cleanup and admission release are finite but stay outside
+	// the publication latch; writer exclusion still prevents mutation.
+	if c.journal != nil {
+		c.journal.Close()
+		c.updateTxnStats()
+	}
 	for i, w := range c.writers {
 		retired[i] = w.Close()
 	}

@@ -12,6 +12,7 @@ import (
 type Point string
 
 const (
+	BeforeCOWAdmission           Point = "before-cow-admission"
 	BeforeCOWPreparation         Point = "before-cow-preparation"
 	AfterCOWPreparation          Point = "after-cow-preparation"
 	AfterCOWCanonicalPreparation Point = "after-cow-canonical-preparation"

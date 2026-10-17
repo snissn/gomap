@@ -34,16 +34,25 @@ func (db *DB) cowStatsInto(stats map[string]string) {
 		{"capture_calls_total", c.captureCalls.Load()}, {"prepare_calls_total", c.prepareCalls.Load()},
 		{"publications_total", c.publications.Load()}, {"rollovers_total", c.rollovers.Load()},
 		{"handoffs_total", c.handoffs.Load()},
+		{"txn.journal_effects", c.journalCount.Load()}, {"txn.journal_bytes", c.journalBytes.Load()}, {"txn.history_floor", c.journalFloor.Load()},
+		{"txn.index_points", c.journalPoints.Load()}, {"txn.range_effects", c.journalRanges.Load()}, {"txn.too_old_total", c.tooOld.Load()},
+		{"txn.barrier_effect_capacity_total", c.journalBarrierEffects.Load()}, {"txn.barrier_byte_capacity_total", c.journalBarrierBytes.Load()},
+		{"txn.barrier_logical_replacement_total", c.journalBarrierReplacement.Load()}, {"txn.barrier_conflicts_total", c.journalBarrierConflicts.Load()},
+		{"txn.commit_wait_ns", c.commitWaitNs.Load()}, {"txn.commit_hold_ns", c.commitHoldNs.Load()}, {"txn.validation_ns", c.validationNs.Load()},
 	} {
 		stats["treedb.cache.cow."+v.name] = strconv.FormatUint(v.value, 10)
 	}
 	c.cutMu.Lock()
 	current, frozen := 0, 0
+	logicalSeq := uint64(0)
 	if c.cut != nil {
+		logicalSeq = c.cut.logicalSeq
 		current = len(c.cut.shards)
 		frozen = len(c.cut.frozen)
 	}
 	c.cutMu.Unlock()
+	stats["treedb.cache.cow.txn.logical_seq"] = strconv.FormatUint(logicalSeq, 10)
+	stats["treedb.cache.cow.txn.barrier_active"] = strconv.FormatBool(c.journalBarrierActive.Load())
 	stats["treedb.cache.cow.current_roots"] = strconv.Itoa(current)
 	stats["treedb.cache.cow.frozen_roots"] = strconv.Itoa(frozen)
 	stats["treedb.cache.cow.refresh_required"] = strconv.FormatBool(c.refreshRequired.Load())

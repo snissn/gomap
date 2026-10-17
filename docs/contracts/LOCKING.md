@@ -115,3 +115,10 @@ search, independent-node projection, restore/replay, leadership changes and
 ambiguous apply after an owner has released admission remain governed by their
 existing fail-closed identity and proof checks; this local lease does not certify
 them or add retries.
+
+Public raw COW publication retains one logical writer lease from final history
+reservation/validation through canonical command append and complete cut/history
+installation. Backend append borrows the caller's preflighted staging guard;
+it cannot drain or release that guard. The cut latch only swaps an already-built
+version. Group durability waits and physical retirement follow lease release.
+Arbitrary application append callbacks cannot enter this qualified lease.

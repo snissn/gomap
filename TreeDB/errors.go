@@ -7,6 +7,8 @@ import (
 )
 
 var (
+	ErrTxnTooOld       = caching.ErrTxnTooOld
+	ErrTxnIteratorOpen = caching.ErrTxnIteratorOpen
 	// ErrLocked indicates the database directory is already opened by another process.
 	ErrLocked = db.ErrLocked
 	// ErrMemtableFull indicates the cached memtable has reached its hard cap.

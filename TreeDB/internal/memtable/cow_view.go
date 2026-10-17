@@ -95,11 +95,11 @@ func (v *COWView) Close() {
 // it. Record returns immutable strings, avoiding per-entry defensive copies.
 // One cursor serializes Next/Seek/Record/Close; independent cursors read together.
 type COWCursor struct {
-	mu             sync.Mutex
-	view           *COWView
-	iter           btree.MapIter[string, cowValue]
-	end            string
-	bounded, valid bool
+	mu                                    sync.Mutex
+	view                                  *COWView
+	iter                                  btree.MapIter[string, cowValue]
+	start, end                            string
+	bounded, lowerBounded, valid, reverse bool
 }
 
 func (r *COWRoot) Cursor(start, end []byte) (*COWCursor, error) {
@@ -143,6 +143,15 @@ func cowCursorStackCharge(height int) (uint64, bool) {
 // CursorWithExtraBytes reserves an existing iterator adapter's wrapper and
 // copied domain bounds in the same view admission as the cursor itself.
 func (r *COWRoot) CursorWithExtraBytes(start, end []byte, extraBytes uint64) (*COWCursor, error) {
+	return r.cursorWithExtraBytes(start, end, extraBytes, false)
+}
+
+// ReverseCursorWithExtraBytes uses the same admitted immutable tree/view owner
+// and bounded traversal stack, moving Last/Prev without materializing records.
+func (r *COWRoot) ReverseCursorWithExtraBytes(start, end []byte, extraBytes uint64) (*COWCursor, error) {
+	return r.cursorWithExtraBytes(start, end, extraBytes, true)
+}
+func (r *COWRoot) cursorWithExtraBytes(start, end []byte, extraBytes uint64, reverse bool) (*COWCursor, error) {
 	stack, ok := cowCursorStackCharge(r.Height())
 	if !ok {
 		return nil, ErrCOWCapacity
@@ -155,6 +164,12 @@ func (r *COWRoot) CursorWithExtraBytes(start, end []byte, extraBytes uint64) (*C
 	if !ok {
 		return nil, ErrCOWCapacity
 	}
+	if reverse {
+		extra, ok = cowAdd(extra, cowAllocation(uint64(len(start))))
+		if !ok {
+			return nil, ErrCOWCapacity
+		}
+	}
 	extra, ok = cowAdd(extra, extraBytes)
 	if !ok {
 		return nil, ErrCOWCapacity
@@ -163,9 +178,15 @@ func (r *COWRoot) CursorWithExtraBytes(start, end []byte, extraBytes uint64) (*C
 	if err != nil {
 		return nil, err
 	}
-	c := &COWCursor{view: v, iter: r.tree.Iter(), end: string(end), bounded: end != nil}
-	c.valid = cowIteratorSeek(r.tree, &c.iter, start)
-	c.checkEnd()
+	c := &COWCursor{view: v, iter: r.tree.Iter(), end: string(end), bounded: end != nil, reverse: reverse}
+	if reverse {
+		c.start = string(start)
+		c.lowerBounded = start != nil
+		c.seekReverse(nil)
+	} else {
+		c.valid = cowIteratorSeek(r.tree, &c.iter, start)
+		c.checkEnd()
+	}
 	return c, nil
 }
 
@@ -178,7 +199,7 @@ func (v *COWView) Cursor(start, end []byte) (*COWCursor, error) {
 	return v.root.Cursor(start, end)
 }
 func (c *COWCursor) checkEnd() {
-	if c.valid && c.bounded && c.iter.Key() >= c.end {
+	if c.valid && ((c.bounded && c.iter.Key() >= c.end) || (c.reverse && c.lowerBounded && c.iter.Key() < c.start)) {
 		c.valid = false
 	}
 }
@@ -187,6 +208,10 @@ func (c *COWCursor) Seek(key []byte) error {
 	defer c.mu.Unlock()
 	if c.view == nil {
 		return ErrCOWClosed
+	}
+	if c.reverse {
+		c.seekReverse(key)
+		return nil
 	}
 	c.valid = cowIteratorSeek(c.view.root.tree, &c.iter, key)
 	c.checkEnd()
@@ -199,10 +224,35 @@ func (c *COWCursor) Next() error {
 		return ErrCOWClosed
 	}
 	if c.valid {
-		c.valid = c.iter.Next()
+		if c.reverse {
+			c.valid = c.iter.Prev()
+		} else {
+			c.valid = c.iter.Next()
+		}
 		c.checkEnd()
 	}
 	return nil
+}
+func (c *COWCursor) seekReverse(key []byte) {
+	if key == nil || (c.bounded && string(key) >= c.end) {
+		if c.bounded {
+			if c.iter.Seek(c.end) {
+				c.valid = c.iter.Prev()
+			} else {
+				c.valid = c.iter.Last()
+			}
+		} else {
+			c.valid = c.iter.Last()
+		}
+	} else if cowIteratorSeek(c.view.root.tree, &c.iter, key) {
+		c.valid = true
+		if c.iter.Key() > string(key) {
+			c.valid = c.iter.Prev()
+		}
+	} else {
+		c.valid = c.iter.Last()
+	}
+	c.checkEnd()
 }
 func (c *COWCursor) Record() (COWRecord, bool, error) {
 	c.mu.Lock()
@@ -223,6 +273,7 @@ func (c *COWCursor) Close() {
 	c.valid = false
 	c.iter = btree.MapIter[string, cowValue]{}
 	c.end = ""
+	c.start = ""
 	c.mu.Unlock()
 	if v != nil {
 		v.Close()
