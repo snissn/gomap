@@ -1,7 +1,6 @@
 package valuelog
 
 import (
-	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"testing"
@@ -44,8 +43,9 @@ func TestFileProducerContainingRefundAfterOriginalCallUnlock(t *testing.T) {
 		t.Fatal(e)
 	}
 	observed, locked := false, false
+	activeRelease := false
 	wrapper := &containingUnlockBudget{actual: budget, observe: func() {
-		if f.producerMetadata == nil {
+		if activeRelease && f.producerMetadata == nil {
 			observed = true
 			if !f.closeMu.TryLock() {
 				locked = true
@@ -66,15 +66,13 @@ func TestFileProducerContainingRefundAfterOriginalCallUnlock(t *testing.T) {
 	if e = m.Close(); e != nil {
 		t.Fatal(e)
 	}
-	done := false
-	for i := 0; i < 1000 && !done; i++ {
-		done, e = m.ReleaseNativeMVCCSetStep(set, &iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20})
-		if e != nil {
-			t.Fatal(e)
-		}
+	activeRelease = true
+	if e = m.Release(set); e != nil {
+		t.Fatal(e)
 	}
-	if !done || !observed || locked {
-		t.Fatalf("actual containing Resize before original caller unlock: done=%t observed=%t locked=%t", done, observed, locked)
+	activeRelease = false
+	if !observed || locked || set.Files != nil {
+		t.Fatalf("actual containing Resize before original caller unlock: observed=%t locked=%t", observed, locked)
 	}
 	capture.Close()
 	budget.Close()

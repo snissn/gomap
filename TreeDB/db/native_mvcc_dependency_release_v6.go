@@ -1,11 +1,16 @@
 package db
 
 import (
+	"errors"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"unsafe"
 )
+
+// Retained by independent bounded physical release helpers after Q32 Store
+// capture retirement. This is a real cleanup capability refusal.
+var ErrNativeMVCCSnapshotWork = errors.New("native MVCC snapshot requires original work-bearing capture/cleanup")
 
 // Match the original physical pager's eligibility before a directory transfers
 // its last reference to native cleanup. Ordinary disposal remains available.
