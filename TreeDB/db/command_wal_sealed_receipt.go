@@ -8,15 +8,14 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
-// commandWALSealReceipt is admitted with an explicit sealed-completion request
-// before assignment. Ordinary commands allocate no receipt cell. Only the
+// commandWALSealReceipt belongs to an explicit sealed-completion request.
+// Ordinary backend requests own this heap cell; bounded native requests admit
+// its containing NativeSealReceipt before allocation. Commands without an
+// explicit sealed request allocate no cell. Only the
 // existing candidate acceptance boundary can bind its exact physical receipt.
-type commandWALSealReceipt struct {
-	mu      sync.Mutex
-	receipt rootpublication.PhysicalSealReceipt
-}
+type commandWALSealReceipt = NativeSealReceipt
 
-func (c *commandWALSealReceipt) bind(receipt rootpublication.PhysicalSealReceipt) {
+func (c *NativeSealReceipt) bind(receipt rootpublication.PhysicalSealReceipt) {
 	c.mu.Lock()
 	if !c.receipt.Valid() {
 		c.receipt = receipt
@@ -40,6 +39,58 @@ func (intent *CommandWALIntent) PrepareSealedReceipt() error {
 	return nil
 }
 
+// PrepareSealedReceiptWithAdmission reserves the explicit native request from
+// its SAME original allocator before allocation. The caller must defer
+// ReleaseNativeSealedReceipt on every outcome. An accepted adapter independently
+// retains the original cell before assignment and ends that edge at disposal.
+func (intent *CommandWALIntent) PrepareSealedReceiptWithAdmission(allocator NativeSemanticAllocator) error {
+	if intent == nil || intent.inner.lsn != 0 || allocator == nil || intent.inner.sealedReceipt != nil {
+		return ErrCommandWALRejected
+	}
+	lease, err := allocator.AdmitNativeBytes(NativeSealReceiptAllocationBytes())
+	if err != nil {
+		return err
+	}
+	cell := &NativeSealReceipt{lease: lease}
+	cell.refs.Store(1)
+	intent.inner.sealedReceipt = cell
+	return nil
+}
+
+func (intent *CommandWALIntent) NativeSealedReceiptAdmitted() bool {
+	return intent != nil && intent.inner.sealedReceipt != nil && intent.inner.sealedReceipt.lease != nil
+}
+
+// TakeNativeSealReceipt transfers exactly one additional original request edge
+// to the accepted adapter. No assignment or allocation occurs here.
+func (intent *CommandWALIntent) TakeNativeSealReceipt() (*NativeSealReceipt, error) {
+	if intent == nil || intent.inner.lsn != 0 || intent.inner.sealedReceipt == nil || intent.inner.sealedReceipt.lease == nil {
+		return nil, ErrCommandWALRejected
+	}
+	cell := intent.inner.sealedReceipt
+	if !cell.claimed.CompareAndSwap(false, true) {
+		return nil, ErrCommandWALRejected
+	}
+	cell.refs.Add(1)
+	return cell, nil
+}
+
+// ReleaseNativeSealedReceipt ends the caller's original edge after it has copied
+// the independent physical receipt. It is idempotent; assigned failure leaves
+// the adapter's SAME cell/charge in terminal custody.
+func (intent *CommandWALIntent) ReleaseNativeSealedReceipt() {
+	if intent == nil || intent.inner.sealedReceipt == nil || intent.inner.sealedReceipt.lease == nil {
+		return
+	}
+	cell := intent.inner.sealedReceipt
+	intent.inner.sealedReceipt = nil
+	refund := cell.ReleaseNativeSeal()
+	cell = nil
+	if refund != nil {
+		refund.Close()
+	}
+}
+
 func (intent *CommandWALIntent) ExactSealedReceipt() rootpublication.PhysicalSealReceipt {
 	if intent == nil || intent.inner.lsn == 0 || intent.inner.sealedReceipt == nil {
 		return rootpublication.PhysicalSealReceipt{}
@@ -51,7 +102,7 @@ func (intent *CommandWALIntent) ExactSealedReceipt() rootpublication.PhysicalSea
 	return receipt
 }
 
-func (c *commandWALSealReceipt) BindAcceptedPhysicalSeal(receipt rootpublication.PhysicalSealReceipt) {
+func (c *NativeSealReceipt) BindAcceptedPhysicalSeal(receipt rootpublication.PhysicalSealReceipt) {
 	c.bind(receipt)
 }
 
@@ -66,13 +117,15 @@ func (intent *CommandWALIntent) RequestsExactSeal() bool {
 	return intent != nil && intent.inner.sealedReceipt != nil
 }
 
-// NativeSealReceipt is one explicit NoWAL sync request's exact physical cell.
+// NativeSealReceipt is one explicit native WAL or NoWAL request's exact cell.
 // Its caller admits AllocationBytes before allocation and keeps that independent
 // lease until the returned by-value physical receipt has been copied out.
 type NativeSealReceipt struct {
-	cell  commandWALSealReceipt
-	refs  atomic.Int32
-	lease NativeAllocationReceipt
+	mu      sync.Mutex
+	receipt rootpublication.PhysicalSealReceipt
+	refs    atomic.Int32
+	claimed atomic.Bool
+	lease   NativeAllocationReceipt
 }
 
 func NewNativeSealReceipt(lease NativeAllocationReceipt) *NativeSealReceipt {
@@ -96,16 +149,16 @@ func (c *NativeSealReceipt) ReleaseNativeSeal() NativeAllocationReceipt {
 	}
 	lease := c.lease
 	c.lease = nil
+	c.mu.Lock()
+	c.receipt = rootpublication.PhysicalSealReceipt{}
+	c.mu.Unlock()
 	return lease
 }
 
 func NativeSealReceiptAllocationBytes() uint64 { return uint64(unsafe.Sizeof(NativeSealReceipt{})) }
-func (c *NativeSealReceipt) BindAcceptedPhysicalSeal(receipt rootpublication.PhysicalSealReceipt) {
-	c.cell.bind(receipt)
-}
 func (c *NativeSealReceipt) Receipt() rootpublication.PhysicalSealReceipt {
-	c.cell.mu.Lock()
-	receipt := c.cell.receipt
-	c.cell.mu.Unlock()
+	c.mu.Lock()
+	receipt := c.receipt
+	c.mu.Unlock()
 	return receipt
 }
