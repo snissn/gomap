@@ -16,6 +16,11 @@ type cowRefusingSemanticHandoff struct {
 	refuse atomic.Bool
 }
 
+func (s *cowRefusingSemanticHandoff) PrepareRollover() (backenddb.NativeSemanticState, error) {
+	s.Retain()
+	return s, nil
+}
+
 func (s *cowRefusingSemanticHandoff) PrepareHandoff(latest backenddb.NativeSemanticState, _ *backenddb.Snapshot) (backenddb.NativeSemanticState, error) {
 	if s.refuse.Load() {
 		return nil, memtable.ErrCOWCapacity

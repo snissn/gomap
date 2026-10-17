@@ -425,8 +425,13 @@ WAL custody is not transferred to cache readers. After append and release of
 the WAL barrier, one already-prepared cut is installed without allocation,
 rebase or root rebuilding. The `no_wal_fast` profile uses the same final metadata authority;
 explicit sync releases writer/admission ownership before sealed-root Checkpoint.
-Unsupported surfaces and capacity refusal stop before acceptance. Post-append
-ambiguity/poison/reopen rules are unchanged.
+Unsupported raw surfaces and raw capacity refusal stop before acceptance.
+Native composite preparation uses the same owner and final installer: its admitted
+internal finalizer may bind actual-LSN assets after assignment, and any failure
+there retains original assigned custody and poisons continuation without a partial
+install. Ordinary NoWAL native publication needs no canonical intent; typed
+actual-LSN finalization remains a WAL operation. Post-append ambiguity/poison/reopen
+rules are unchanged.
 
 For public command-WAL stores in this mode, the main physical backend uses the
 existing PRIMARY capsule constructor and promotion. Foreground acknowledgement
@@ -718,8 +723,10 @@ versions without backward-compatibility guarantees.
 
 The bounded vector prepare executor acquires its stable generation pin before
 raw admission. Its actual Append staging guard owns one teardown reader and
-the raw publication mutex through Finalize/Abort. Prepared callbacks retain and
-transfer that DB-minted guard in Append Options without reacquiring raw or the
+the raw publication mutex during materialization. Finalize/Abort invalidate the
+borrower and release the original materialization owner before any requested
+exact-seal wait. Prepared callbacks retain and transfer that DB-minted guard in
+Append Options without reacquiring raw or the
 global append mutex. Ordinary Append mints its typed guard after the existing
 public barriers drain, retaining the actual raw-admission release as well.
 DB-validated capture borrowers

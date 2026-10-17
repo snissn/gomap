@@ -50,6 +50,13 @@ func (c *NativeSemanticCapture) NativeAllocator() backenddb.NativeSemanticAlloca
 	}
 	return c.cache.budget
 }
+func (c *NativeSemanticCapture) NativeMaintenanceAllocator() backenddb.NativeSemanticAllocator {
+	if c == nil || c.cut == nil || c.cache == nil {
+		return nil
+	}
+	return c.cache.maintenance
+}
+
 func (c *NativeSemanticCapture) Close() error {
 	if c == nil || c.cut == nil {
 		return nil

@@ -144,7 +144,10 @@ func (db *DB) rotateCOWCheckpointFrontier(ctx context.Context, postFrontier bool
 			db.reportError(cleanupErr)
 			return joinCOWCleanupError(err, cleanupErr)
 		}
-		if !errors.Is(err, memtable.ErrCOWCapacity) || attempt != 0 || len(c.cut.frozen) == 0 {
+		// A complete captured prefix can contain native-only sources. Raw
+		// table count alone does not describe its reclaimable coverage.
+		if !errors.Is(err, memtable.ErrCOWCapacity) || attempt != 0 ||
+			(len(c.cut.frozen) == 0 && c.cut.frozenLogicalSeq <= c.cut.basis.logicalSeq) {
 			return err
 		}
 		// A full source frontier can be reclaimed before rotating the mutable

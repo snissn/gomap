@@ -25,6 +25,11 @@ func newTestSemanticState(finish func() error) *testSemanticState {
 	s.cleanup.Work = s
 	return s
 }
+func (s *testSemanticState) PrepareRollover() (backenddb.NativeSemanticState, error) {
+	s.Retain()
+	return s, nil
+}
+
 func (s *testSemanticState) Retain() {
 	if s.refs.Add(1) <= 1 {
 		panic("retain dead semantic state")

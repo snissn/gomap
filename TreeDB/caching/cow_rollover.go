@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"unsafe"
 
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
 
@@ -21,6 +22,8 @@ type cowRollover struct {
 	scratch   *memtable.COWExternalLease
 	cutLease  *memtable.COWExternalLease
 	old       *cowReadCut
+	opening   *cowReadCut                   // native private cleanup queues before this cut leaves
+	semantic  backenddb.NativeSemanticState // owned until successor adoption
 	installed bool
 }
 
@@ -67,6 +70,19 @@ func (c *cowCache) prepareRollover() (*cowRollover, error) {
 		}
 		p.roots[i], p.resources[i] = root, resources
 	}
+	if old.semanticRootSet != nil {
+		p.opening = c.retainCut()
+		if p.opening == nil {
+			return p, backenddb.ErrClosed
+		}
+		p.semantic, err = old.semanticRootSet.PrepareRollover()
+		if err != nil {
+			return p, err
+		}
+		if p.semantic == nil {
+			return p, backenddb.ErrNativeSemanticUnsupported
+		}
+	}
 	// All admitted history is precharged against potential retirement. Source
 	// count is the only additional Freeze admission and is serialized here.
 	for i, w := range p.writers {
@@ -76,9 +92,12 @@ func (c *cowCache) prepareRollover() (*cowRollover, error) {
 			}
 		}
 	}
-	next := &cowReadCut{visibleCommandLSN: old.visibleCommandLSN, logicalSeq: old.logicalSeq, frozenLogicalSeq: old.logicalSeq, frozenCommandLSN: old.visibleCommandLSN, frozenSemanticRootSet: old.semanticRootSet, semanticRootSet: old.semanticRootSet, refs: 1, cache: c, lease: p.cutLease, basis: old.basis, shards: make([]cowTable, n), frozen: make([]cowTable, len(old.frozen), len(old.frozen)+count)}
+	next := &cowReadCut{visibleCommandLSN: old.visibleCommandLSN, logicalSeq: old.logicalSeq, frozenLogicalSeq: old.logicalSeq, frozenCommandLSN: old.visibleCommandLSN, frozenSemanticRootSet: old.semanticRootSet, semanticRootSet: p.semantic, refs: 1, cache: c, lease: p.cutLease, basis: old.basis, shards: make([]cowTable, n), frozen: make([]cowTable, len(old.frozen), len(old.frozen)+count)}
 	next.basis.retain()
-	retainCOWSemanticState(next)
+	p.semantic = nil // next adopts the returned active successor exactly once
+	if next.frozenSemanticRootSet != nil {
+		next.frozenSemanticRootSet.Retain()
+	}
 	copy(next.frozen, old.frozen)
 	for i := range next.frozen {
 		if !next.frozen[i].root.Retain() {
@@ -130,33 +149,83 @@ func (p *cowRollover) drain() error {
 		return nil
 	}
 	var cleanupErr error
+	cache, opening, next, old := p.cache, p.opening, p.next, p.old
+	p.cache, p.opening, p.next, p.old = nil, nil, nil, nil
+	p.resources = nil // roots own these; end aliases before their final callbacks
 	if p.installed {
+		// The installed cut owns these edges; the preparation only borrowed them.
+		next = nil
+		p.cutLease = nil
 		for i := range p.retired {
 			p.retired[i].Drain()
 		}
-		if p.old != nil {
-			cleanupErr = p.old.drain()
+		if old != nil {
+			cleanupErr = old.drain()
+			old = nil
 		}
 	} else {
-		// Preparation failed before successor installation. No newly created writer
-		// was visible and no source callback may run until this unlocked drain.
+		if next != nil {
+			// A completely prepared but unpublished successor owns all its raw
+			// and semantic edges. Do not release the new roots a second time below.
+			clear(p.roots)
+			for i := range next.shards {
+				r := next.shards[i].root.Release()
+				next.shards[i] = cowTable{}
+				r.Drain()
+			}
+			for i := range next.frozen {
+				r := next.frozen[i].root.Release()
+				next.frozen[i] = cowTable{}
+				r.Drain()
+			}
+			basis := next.basis
+			next.basis = nil
+			cleanupErr = basis.release()
+			cache.releasePrivateSemanticState(next)
+			next.lease, next.cache = nil, nil
+			next.shards, next.frozen, next.sources, next.domains = nil, nil, nil, nil
+			next = nil
+		}
+		// No newly created writer was visible. All release traversal and
+		// actual resource callbacks run after owner/admission release.
 		for i, root := range p.roots {
 			if root != nil {
-				r := root.Release()
-				r.Drain()
 				p.roots[i] = nil
-			}
-		}
-		for _, w := range p.writers {
-			if w != nil {
-				r := w.Close()
+				r := root.Release()
+				root = nil
 				r.Drain()
 			}
 		}
-		if p.cutLease != nil {
-			p.cutLease.Close()
+		for i, w := range p.writers {
+			if w != nil {
+				p.writers[i] = nil
+				r := w.Close()
+				w = nil
+				r.Drain()
+			}
 		}
+		if p.semantic != nil {
+			record := p.semantic.Release()
+			p.semantic = nil
+			cache.semanticMu.Lock()
+			cache.enqueueSemanticLocked(record)
+			cache.semanticMu.Unlock()
+			cache.wakeSemanticCleanup()
+		}
+		lease := p.cutLease
+		p.cutLease = nil
+		lease.Close()
 	}
-	p.scratch.Close()
+	// End all preparation aliases before either containing-owner refund. The
+	// retained opening cut survives every private semantic cleanup enqueue.
+	scratch := p.scratch
+	p.scratch = nil
+	p.writers, p.roots, p.resources, p.retired = nil, nil, nil, nil
+	if opening != nil {
+		cleanupErr = joinCOWCleanupError(cleanupErr, cache.releaseCut(opening))
+		opening = nil
+	}
+	cache, p = nil, nil
+	scratch.Close()
 	return cleanupErr
 }

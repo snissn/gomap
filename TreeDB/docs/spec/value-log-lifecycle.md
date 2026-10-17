@@ -518,7 +518,14 @@ cuts preserve index/vlog/dictionary authority across checkpoint and equivalent
 backend maintenance. GC/rewrite/leaf packing serialize and refresh the backend
 basis through the existing flush fence; retired cleanup runs outside
 writer/admission/publication locks. A referenced or pinned persistent segment
-cannot be deleted because it is old. See
+cannot be deleted because it is old. Physical rewrite preserves the winning
+pointer revision and verifies the selected source identity before substitution;
+a logically equivalent root does not retire another view's physical owner.
+Native semantic cleanup transfers its original sparse resource owners to the
+existing cleanup worker. A failed physical close/unlink retains that same Work,
+resource and admitted charge; observing the failure or closing the DB cannot
+retry it or grant deletion permission. Successful containing refunds follow
+original alias detachment through independent completion receipts. See
 [COW resource and handoff ownership](cow-cache-publication.md).
 
 ## 6. Rewrite/Compaction

@@ -20,6 +20,11 @@ type nativeBuildFailureState struct {
 	failure   error
 }
 
+func (s *nativeBuildFailureState) PrepareRollover() (backenddb.NativeSemanticState, error) {
+	s.Retain()
+	return s, nil
+}
+
 func (s *nativeBuildFailureState) PrepareBuild(*backenddb.RootPublicationBuildGroup, *backenddb.Snapshot, *backenddb.StableResourceCaptureLease) error {
 	s.builds++
 	if s.retryable && s.builds == 1 {
