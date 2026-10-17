@@ -18,7 +18,6 @@ type Batch struct {
 	physicalOnly                       bool
 	logicalMVCCInput                   bool
 	commandWALPublishIntent            *commandWALBatchIntent
-	conditionalTxnID                   uint64
 	flushApplySpanNativeFallbackReason FlushSpanRunFallbackReason
 	rootPublicationBuildGroup          *RootPublicationBuildGroup
 	rootPublicationBuildGroupFinal     bool
@@ -450,7 +449,7 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent, maxEnt
 		b.db.vacuum.RecordApplyPlan(entries, ranges)
 	}
 	conditionalMutation := conditionalCommitMutation{
-		entries: entries, ranges: ranges, ownerTxnID: b.conditionalTxnID, physicalOnly: b.physicalOnly && !b.logicalMVCCInput, admission: b.batch.MVCCInputSummary(),
+		entries: entries, ranges: ranges, physicalOnly: b.physicalOnly && !b.logicalMVCCInput, admission: b.batch.MVCCInputSummary(),
 	}
 	vlogRefDelta, err := b.db.buildValueLogRefDeltaForApply(idx, rootID, newRoot, baseSeq, entries, ranges, &applyResult)
 	if err != nil {
@@ -760,7 +759,7 @@ func (b *Batch) writeSerializedAttempt(sync bool, intent *commandWALBatchIntent,
 		b.db.vacuum.RecordApplyPlan(entries, ranges)
 	}
 	conditionalMutation := conditionalCommitMutation{
-		entries: entries, ranges: ranges, ownerTxnID: b.conditionalTxnID, physicalOnly: b.physicalOnly && !b.logicalMVCCInput, admission: b.batch.MVCCInputSummary(),
+		entries: entries, ranges: ranges, physicalOnly: b.physicalOnly && !b.logicalMVCCInput, admission: b.batch.MVCCInputSummary(),
 	}
 	vlogRefDelta, err := b.db.buildValueLogRefDeltaForApply(idx, rootID, newRoot, baseSeq, entries, ranges, &applyResult)
 	if err != nil {
@@ -897,7 +896,7 @@ func (b *Batch) Close() error {
 		b.batch = nil
 		b.logicalMVCCInput = false
 		b.commandWALPublishIntent = nil
-		b.conditionalTxnID = 0
+
 		b.flushApplySpanNativeFallbackReason = FlushSpanRunFallbackUnknown
 		b.rootPublicationBuildGroup = nil
 		b.rootPublicationBuildGroupFinal = false
@@ -906,7 +905,7 @@ func (b *Batch) Close() error {
 	b.batch = nil
 	b.logicalMVCCInput = false
 	b.commandWALPublishIntent = nil
-	b.conditionalTxnID = 0
+
 	b.flushApplySpanNativeFallbackReason = FlushSpanRunFallbackUnknown
 	b.rootPublicationBuildGroup = nil
 	b.rootPublicationBuildGroupFinal = false
@@ -921,7 +920,7 @@ func (b *Batch) Reset() {
 	b.batch.Reset()
 	b.logicalMVCCInput = false
 	b.commandWALPublishIntent = nil
-	b.conditionalTxnID = 0
+
 	b.flushApplySpanNativeFallbackReason = FlushSpanRunFallbackUnknown
 	b.rootPublicationBuildGroup = nil
 	b.rootPublicationBuildGroupFinal = false

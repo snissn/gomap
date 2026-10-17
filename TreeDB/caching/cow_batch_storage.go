@@ -1,9 +1,11 @@
 package caching
 
 import (
+	"time"
 	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/batch"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -12,6 +14,12 @@ import (
 // cowBatchState exists only for explicitly admitted COW batches. Keeping its
 // ownership and prediction fields separate preserves ordinary batch allocations.
 type cowBatchState struct {
+	holdBegan         time.Time
+	receipt           COWPublicationReceipt
+	inPublication     bool
+	guard             *backenddb.CommandWALStagingGuardV1
+	txn               *ConditionalTxn
+	trustedAppend     bool
 	lease             *memtable.COWExternalLease
 	storage           *cowBatchStorage
 	err               error
@@ -50,7 +58,11 @@ func (db *DB) AcquireCOWAllocation(bytes uint64) (*memtable.COWExternalLease, er
 }
 
 func (db *DB) newCOWBatch(hint int) *Batch {
-	lease, err := db.cow.budget.AcquireExternal(memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowBatchOwner{}))))
+	charge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowBatchOwner{})))
+	if db.externalCommandWAL && db.cow.txnOwner != nil {
+		charge += memtable.COWAllocationCharge(backenddb.CommandWALStagingGuardAllocationBytesV1())
+	}
+	lease, err := db.cow.budget.AcquireExternal(charge)
 	if err != nil {
 		return &cowDeniedBatch
 	}
@@ -119,30 +131,18 @@ func (b *Batch) cowAddEntry(e batch.Entry, owned bool) error {
 		if n < len(e.Key) {
 			return memtable.ErrCOWCapacity
 		}
-		if cap(b.copyArena)-len(b.copyArena) < n {
-			capacity := cap(b.copyArena) * 2
-			if capacity < 256 {
-				capacity = 256
-			}
-			if capacity > 64<<10 {
-				capacity = 64 << 10
-			}
-			if capacity < n {
-				capacity = n
-			}
-			if err := b.cowAdmitStorage(memtable.COWAllocationCharge(uint64(capacity))); err != nil {
-				return err
-			}
-			b.copyArena = make([]byte, 0, capacity)
+		buf, err := b.cowCopyStorage(n)
+		if err != nil {
+			return err
 		}
-		start := len(b.copyArena)
-		b.copyArena = append(b.copyArena, e.Key...)
-		e.Key = normalizeRawKVPointKey(b.copyArena[start:len(b.copyArena):len(b.copyArena)])
+		copy(buf, e.Key)
+		e.Key = normalizeRawKVPointKey(buf[:len(e.Key):len(e.Key)])
 		if e.Type == batch.OpPut {
-			start = len(b.copyArena)
-			b.copyArena = append(b.copyArena, e.Value...)
-			e.Value = normalizeRawKVValue(b.copyArena[start:len(b.copyArena):len(b.copyArena)])
+			value := buf[len(e.Key):]
+			copy(value, e.Value)
+			e.Value = normalizeRawKVValue(value)
 		}
+
 	} else {
 		b.hasViewOps = true
 	}
@@ -199,6 +199,9 @@ func (b *Batch) cowReset() {
 	b.commandWALPreparedRevision, b.commandWALMaterializedRID = false, false
 	b.entryRevision = page.LegacyEntryRevision
 	b.cowState.err = nil
+	if b.cowState.txn != nil {
+		return
+	}
 	for b.cowState.storage != nil {
 		owner := b.cowState.storage
 		b.cowState.storage = owner.next
@@ -256,4 +259,32 @@ func putCOWValueLogPtrs(ptrs []page.ValuePtr, observer valuelog.ProducedFrameObs
 	if observer == nil {
 		putValueLogPtrs(ptrs)
 	}
+}
+
+// cowCopyStorage is the existing batch's admitted, chunked immutable arena.
+// Read dependencies share its transaction lifetime instead of growing a second
+// arena whose discarded backing remains aliased by old read-index keys.
+func (b *Batch) cowCopyStorage(n int) ([]byte, error) {
+	if n < 0 {
+		return nil, memtable.ErrCOWCapacity
+	}
+	if cap(b.copyArena)-len(b.copyArena) < n {
+		capacity := cap(b.copyArena) * 2
+		if capacity < 256 {
+			capacity = 256
+		}
+		if capacity > 64<<10 {
+			capacity = 64 << 10
+		}
+		if capacity < n {
+			capacity = n
+		}
+		if err := b.cowAdmitStorage(memtable.COWAllocationCharge(uint64(capacity))); err != nil {
+			return nil, err
+		}
+		b.copyArena = make([]byte, 0, capacity)
+	}
+	start := len(b.copyArena)
+	b.copyArena = b.copyArena[:start+n]
+	return b.copyArena[start : start+n : start+n], nil
 }

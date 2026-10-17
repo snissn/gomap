@@ -588,7 +588,6 @@ func (install *rootPublicationVisibleInstallV1) activate(activateAllocator func(
 		newState.LeafGenerationStateVersion = db.leafGenerationStateVersion
 	}
 	db.state.Store(newState)
-	install.conditionalMutation.record(db, install.next.CommitSeq)
 	if install.commandWALPublish {
 		previousApplied := uint64(0)
 		if install.post.oldState != nil {
@@ -616,6 +615,7 @@ func (install *rootPublicationVisibleInstallV1) completeOrderedPostActivation() 
 	}
 	install.postActivationCompleted = true
 	db := install.db
+	install.conditionalMutation.record(db, install.next.CommitSeq)
 	var reportErr error
 	if db.valueLogRefTracker != nil {
 		if scanned := install.vlogRefCounts; scanned != nil {

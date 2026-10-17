@@ -1,8 +1,10 @@
 package caching
 
 import (
+	"errors"
 	"fmt"
 	"slices"
+	"time"
 	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/batch"
@@ -10,6 +12,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -18,6 +21,7 @@ import (
 const cowResourceValueLogFile = 1
 
 type cowBatchPreparation struct {
+	mutation     txnMutationOwner
 	cut          *cowPreparedCut
 	scratch      *memtable.COWExternalLease
 	files        [][]uint32
@@ -28,9 +32,12 @@ type cowBatchPreparation struct {
 // PrepareExternalCommandWALPublication is called under the command append
 // sequencer, after its final point revisions have been assigned. Cached value
 // placement has already finished. No command frame exists yet.
-func (b *Batch) PrepareExternalCommandWALPublication() error {
+func (b *Batch) PrepareExternalCommandWALPublication() (err error) {
 	if b.db.cow == nil {
 		return nil
+	}
+	if b.db.cow.txnOwner != nil && !b.cowState.inPublication {
+		return ErrCOWUnsupported
 	}
 	if b.cowState.prepared != nil {
 		return fmt.Errorf("COW batch already prepared")
@@ -42,6 +49,40 @@ func (b *Batch) PrepareExternalCommandWALPublication() error {
 		return err
 	}
 	c := b.db.cow
+	if c.cut.logicalSeq == ^uint64(0) {
+		return memtable.ErrCOWCapacity
+	}
+	if err := c.ensureTxnJournal(); err != nil {
+		return err
+	}
+	var mutation txnMutationOwner
+	if c.journal != nil {
+		defer func() {
+			if err != nil {
+				c.updateTxnStats()
+			}
+		}()
+		mutation, err = c.journal.Prepare(b.entries, nil, false)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			if mutation.Valid() {
+				mutation.Cancel()
+			}
+		}()
+		if b.cowState.txn != nil {
+			started := time.Now()
+			err = b.cowState.txn.validateCOWJournal()
+			c.validationNs.Add(uint64(time.Since(started)))
+			if errors.Is(err, ErrTxnTooOld) {
+				c.tooOld.Add(1)
+			}
+			if err != nil {
+				return err
+			}
+		}
+	}
 	n := len(b.entries)
 	shards := len(c.writers)
 	bytes := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowBatchPreparation{}))) +
@@ -63,6 +104,8 @@ func (b *Batch) PrepareExternalCommandWALPublication() error {
 		return err
 	}
 	p := &cowBatchPreparation{scratch: lease, files: make([][]uint32, shards), resources: make([]*cowLiveResource, 0, 2*n), dictionaries: make([][]uint64, shards)}
+	p.mutation = mutation
+	mutation = txnMutationOwner{}
 	b.cowState.prepared = p // caller drains all cancellation, including partial stage
 	// Prediction has finished. Reuse its admitted scalar/group/mutation backing,
 	// replacing predicted pointers/revisions with the final canonical entries.
@@ -236,6 +279,13 @@ func (b *Batch) cancelCOWPublication() *cowBatchPreparation {
 	}
 	p := b.cowState.prepared
 	b.cowState.prepared = nil
+	if p != nil && p.mutation.Valid() {
+		// Shared preparation storage must be free before the writer lease ends.
+		// Cut/resource retirement below can then overlap a later preparation.
+		p.mutation.Cancel()
+		p.mutation = txnMutationOwner{}
+		b.db.cow.updateTxnStats()
+	}
 	if p != nil && p.cut != nil {
 		p.cut.cancel()
 	}
@@ -270,6 +320,14 @@ func (b *Batch) writeCOWPublication(syncWrite bool, unlock func()) error {
 		}
 	}
 	if err != nil {
+		// Append identity survives an outer registration error. Mark poison
+		// before the raw/writer lease ends even if no group ticket was issued.
+		if b.cowState.receipt.Assigned {
+			if poisoner, ok := b.db.backend.(interface{ MarkCommandWALRecoveryRequired() }); ok {
+				poisoner.MarkCommandWALRecoveryRequired()
+			}
+			b.cowState.receipt.Uncertain = true
+		}
 		p := b.cancelCOWPublication()
 		unlock()
 		if p != nil {
@@ -285,7 +343,16 @@ func (b *Batch) writeCOWPublication(syncWrite bool, unlock func()) error {
 	// Accepted publication is nonfallible. This existing internal observation
 	// seam may pause tests, but an observer cannot revoke an accepted frame.
 	_ = durabilitycut.EmitBasic(durabilitycut.BeforeCOWCutSwap, durabilitycut.ResourceAuxiliary, b.db.dir)
+	if p.mutation.Valid() {
+		p.cut.next.logicalSeq = b.db.cow.cut.logicalSeq + 1
+		b.db.cow.journal.Install(p.mutation, p.cut.next.logicalSeq)
+		b.db.cow.updateTxnStats()
+		p.mutation = txnMutationOwner{}
+	}
+	p.cut.next.visibleCommandLSN = b.cowState.receipt.AssignedLSN
 	old := p.cut.publish()
+	b.cowState.receipt.LogicalInstalled = true
+	b.cowState.receipt.LogicalSeq = p.cut.next.logicalSeq
 	var mutableBytes int64
 	for _, shard := range p.cut.next.shards {
 		mutableBytes += shard.size
@@ -308,7 +375,11 @@ func (b *Batch) writeCOWPublication(syncWrite bool, unlock func()) error {
 	b.updateBatchCopyHint()
 	b.Reset()
 	if checkpoint {
-		return b.db.Checkpoint()
+		err := b.db.Checkpoint()
+		if err == nil {
+			b.cowState.receipt.SealedLogicalSeq = b.cowState.receipt.LogicalSeq
+		}
+		return err
 	}
 	return nil
 }
@@ -333,4 +404,92 @@ func (db *DB) cowPoint(key, value []byte, put, syncWrite bool) error {
 		return err
 	}
 	return closeErr
+}
+
+// AuthorizeCOWAppend admits only the bridge belonging to this privately owned
+// public DB. Public NoWAL batches cannot turn arbitrary callbacks into P work.
+func (b *Batch) AuthorizeCOWAppend(owner *transactionowner.Owner) error {
+	if b != nil && b.cowState != nil && b.cowState.err != nil {
+		return b.cowState.err
+	}
+	if b == nil || b.db == nil || b.db.cow == nil || owner == nil || owner != b.db.cow.txnOwner {
+		return ErrCOWUnsupported
+	}
+	b.cowState.trustedAppend = true
+	return nil
+}
+func (b *Batch) COWAppendGuard() *backenddb.CommandWALStagingGuardV1 {
+	if b == nil || b.cowState == nil || !b.cowState.trustedAppend {
+		return nil
+	}
+	return b.cowState.guard
+}
+
+// EntriesForTxn exposes only the transaction's native staging to its public
+// adapter; it is borrowed until the synchronous write returns.
+func (b *Batch) EntriesForTxn() []batch.Entry { return b.entries }
+
+// COWPublicationReceipt keeps acceptance, logical visibility, WAL completion and
+// sealed coverage distinct. It extends the existing request's publication state;
+// it is neither persisted nor a second command ledger.
+type COWPublicationReceipt struct {
+	AssignedLSN, LogicalSeq                                        uint64
+	Assigned, Uncertain, LogicalInstalled, WALCompleted, WALStable bool
+	SealedLogicalSeq                                               uint64
+}
+
+func (b *Batch) RecordCOWAppend(owner *transactionowner.Owner, lsn uint64, appendErr error, synced bool) error {
+	if b == nil || b.db == nil || b.db.cow == nil || owner == nil || owner != b.db.cow.txnOwner || !b.cowState.inPublication {
+		return ErrCOWUnsupported
+	}
+	b.cowState.receipt.AssignedLSN = lsn
+	b.cowState.receipt.Assigned = lsn != 0
+	b.cowState.receipt.Uncertain = lsn != 0 && appendErr != nil
+	b.cowState.receipt.WALCompleted = lsn != 0 && appendErr == nil
+	b.cowState.receipt.WALStable = lsn != 0 && appendErr == nil && synced
+	return nil
+}
+func (b *Batch) COWReceipt() COWPublicationReceipt {
+	if b == nil || b.cowState == nil {
+		return COWPublicationReceipt{}
+	}
+	return b.cowState.receipt
+}
+
+func (b *Batch) CompleteCOWAcknowledgement(owner *transactionowner.Owner, durable bool, err error) {
+	if b == nil || b.db == nil || b.db.cow == nil || owner == nil || owner != b.db.cow.txnOwner {
+		return
+	}
+	if b.cowState.receipt.LogicalInstalled && err == nil {
+		b.cowState.receipt.WALCompleted = true
+		b.cowState.receipt.WALStable = durable
+	}
+	if b.cowState.receipt.Assigned && err != nil {
+		b.cowState.receipt.Uncertain = true
+	}
+}
+
+// AcquireCOWAppendGuard runs inside the public group append callback, after all
+// cache admission/pressure waits. It never invokes a barrier or drains work.
+func (b *Batch) AcquireCOWAppendGuard(owner *transactionowner.Owner) error {
+	if b == nil || b.db == nil || b.db.cow == nil || owner == nil || owner != b.db.cow.txnOwner || !b.cowState.inPublication || b.cowState.guard != nil {
+		return ErrCOWUnsupported
+	}
+	provider, ok := b.db.backend.(interface {
+		LockCommandWALStagingGuardV1() (*backenddb.CommandWALStagingGuardV1, error)
+		PreflightPrivateCOWCommand(*transactionowner.Owner) error
+	})
+	if !ok {
+		return ErrCOWUnsupported
+	}
+	guard, err := provider.LockCommandWALStagingGuardV1()
+	if err != nil {
+		return err
+	}
+	if err = provider.PreflightPrivateCOWCommand(owner); err != nil {
+		guard.Release()
+		return err
+	}
+	b.cowState.guard = guard
+	return nil
 }

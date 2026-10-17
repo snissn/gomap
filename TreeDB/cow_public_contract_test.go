@@ -284,27 +284,35 @@ func TestCOWPublicContractUnsupportedBeforeEffects(t *testing.T) {
 				}
 			}
 			for _, open := range []func() (*ConditionalTxn, error){database.NewConditionalTxn, database.NewConditionalTxnWithSnapshot} {
-				if tx, err := open(); !errors.Is(err, ErrConditionalTxnUnsupported) || tx != nil {
-					t.Fatalf("conditional txn=%v err=%v", tx, err)
+				tx, err := open()
+				if err != nil || tx == nil {
+					t.Fatalf("qualified raw transaction=%v err=%v", tx, err)
+				}
+				if err = tx.Close(); err != nil {
+					t.Fatal(err)
 				}
 			}
 			if err := database.DeleteRange([]byte("a"), []byte("z")); !errors.Is(err, caching.ErrCOWUnsupported) {
 				t.Fatalf("DeleteRange=%v", err)
 			}
-			if it, err := database.ReverseIterator(nil, nil); !errors.Is(err, caching.ErrCOWUnsupported) || it != nil {
+			if it, err := database.ReverseIterator(nil, nil); err != nil {
 				t.Fatalf("reverse iterator=%v err=%v", it, err)
+			} else if err := it.Close(); err != nil {
+				t.Fatal(err)
 			}
 			snap := database.AcquireSnapshot()
 			if snap == nil {
 				t.Fatal("snapshot unavailable")
 			}
 			defer snap.Close()
-			if it, err := snap.ReverseIterator(nil, nil); !errors.Is(err, caching.ErrCOWUnsupported) || it != nil {
+			if it, err := snap.ReverseIterator(nil, nil); err != nil {
 				t.Fatalf("snapshot reverse iterator=%v err=%v", it, err)
+			} else if err := it.Close(); err != nil {
+				t.Fatal(err)
 			}
 			called := false
-			if err := snap.ReverseIterate(nil, nil, func([]byte, []byte) error { called = true; return nil }); !errors.Is(err, caching.ErrCOWUnsupported) || called {
-				t.Fatalf("unsupported reverse iteration invoked callback=%t err=%v", called, err)
+			if err := snap.ReverseIterate(nil, nil, func([]byte, []byte) error { called = true; return nil }); err != nil || !called {
+				t.Fatalf("reverse snapshot iteration callback=%t err=%v", called, err)
 			}
 			batch := database.NewBatch()
 			if batch == nil {

@@ -118,3 +118,11 @@ public operation admission while that independent cleanup edge remains live.
 Failed original cleanup preserves the exact Snapshot at that owner; private
 one-shot reads may be reused only after successful cleanup. This custody rule
 does not add a public Snapshot read-after-DB.Close guarantee.
+
+Qualified public TreeDB COW transactions are goroutine-confined handles. Their
+body reads one retained opening view plus staged writes; commit validates R∪W
+against the bounded engine mutation history and applies to latest roots.
+`ErrTxnTooOld` is a retryable transaction-history expiration, distinct from a
+changed dependency. Open transaction iterators reject further mutation with
+`ErrTxnIteratorOpen`; commit/close invalidates children. See
+`TreeDB/docs/spec/raw-cow-transactions.md` for the supported ownership fence.

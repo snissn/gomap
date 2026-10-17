@@ -125,6 +125,24 @@ func (s *Snapshot) OwnedPointerProjectionIterator(start, end []byte, readLeaf fu
 	return it, nil
 }
 
+// OwnedReversePointerProjectionIterator borrows the same exact tree and admitted
+// fixed projection storage, with reverse movement and the original domain.
+func (s *Snapshot) OwnedReversePointerProjectionIterator(start, end []byte, readLeaf func(page.LeafLogPtr, []byte) ([]byte, error)) (iterator.UnsafeIterator, error) {
+	if s == nil {
+		return nil, ErrClosed
+	}
+	if err := s.beginRead(); err != nil {
+		return nil, err
+	}
+	defer s.endRead()
+	it := s.tree.OwnedReversePointerProjectionIterator(start, end, readLeaf)
+	if err := it.Error(); err != nil {
+		_ = it.Close()
+		return nil, err
+	}
+	return it, nil
+}
+
 // GetEntryExactWithFixedScratch reads a persisted entry with caller-admitted
 // fixed-page scratch. The returned slices remain borrowed from this snapshot
 // and the scratch until the next operation using either.

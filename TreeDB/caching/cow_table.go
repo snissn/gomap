@@ -93,6 +93,12 @@ func (t *cowTable) SeekGE(start, end []byte) ([]byte, []byte, page.ValuePtr, byt
 	return cowBytes(r.Key), cowBytes(r.Value), r.Ptr, r.Flags, r.Revision, found
 }
 func (t *cowTable) NewIterator(start, end []byte) iterator.UnsafeIterator {
+	return t.newIterator(start, end, false)
+}
+func (t *cowTable) NewReverseIterator(start, end []byte) iterator.UnsafeIterator {
+	return t.newIterator(start, end, true)
+}
+func (t *cowTable) newIterator(start, end []byte, reverse bool) iterator.UnsafeIterator {
 	if t.root == nil {
 		return &cowEmptyCompatibilityIterator
 	}
@@ -100,7 +106,13 @@ func (t *cowTable) NewIterator(start, end []byte) iterator.UnsafeIterator {
 	// independently charges the cursor, tree traversal stack and cursor end bound.
 	extra := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowIterator{}))) +
 		memtable.COWAllocationCharge(uint64(len(start))) + memtable.COWAllocationCharge(uint64(len(end)))
-	c, err := t.root.CursorWithExtraBytes(start, end, extra)
+	var c *memtable.COWCursor
+	var err error
+	if reverse {
+		c, err = t.root.ReverseCursorWithExtraBytes(start, end, extra)
+	} else {
+		c, err = t.root.CursorWithExtraBytes(start, end, extra)
+	}
 	if err != nil {
 		return refusedCOWIterator(err)
 	}
@@ -113,9 +125,6 @@ func (t *cowTable) NewIterator(start, end []byte) iterator.UnsafeIterator {
 	}
 	it.load()
 	return it
-}
-func (*cowTable) NewReverseIterator(_, _ []byte) iterator.UnsafeIterator {
-	return &cowUnsupportedIterator
 }
 
 type cowIterator struct {
