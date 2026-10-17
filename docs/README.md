@@ -51,6 +51,7 @@ Behavioral guarantees for downstream systems (e.g., replication layers).
 
 - **[Benchmark Spec](BENCHMARK_SPEC.md)**: Methodology and test definitions.
 - **[TreeDB Canonical Benchmark Runbook](benchmarks/treedb_canonical_benchmark_runbook.md)**: Standard TreeDB engine, collections, Mongo gateway, profiling, and reporting workflows.
+- **[TreeDB VectorDBBench Cohere 10M Lifecycle](benchmarks/treedb_vectordbbench_cohere10m_lifecycle_2026-09-01.md)**: Production-shaped durable load, deferred graph build, cold reopen, search, profiling, and teardown qualification.
 - **[YCSB MongoDB / TreeDB Status](benchmarks/ycsb_mongodb_treedb_current.md)**: Current report index and rerun plan for MongoDB, `treedb-native`, and TreeDB Mongo gateway.
 - **[TreeDB Collections Canonical Benchmark](benchmarks/collections_canonical_benchmark.md)**: Canonical TreeDB-vs-SQLite collection benchmark and maintenance-phase semantics.
 - **[Two-Index Collection Insert Rerun](benchmarks/collections_insert_two_index_exhaustive_main_2026-06-04.md)**: Current TreeDB-vs-SQLite two-index insert throughput and exhaustive/VACUUM-equivalent compacted storage rows.

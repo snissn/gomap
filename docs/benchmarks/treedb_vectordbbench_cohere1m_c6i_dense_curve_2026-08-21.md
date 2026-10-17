@@ -7,6 +7,11 @@ graph-traversal points and the 14 non-dominated scalar-u8-plus-FP32-rerank
 points. The campaign retains all 42 TreeDB operating points, including
 scalar-u8-only and dominated rerank screening cells, in the tables and CSV.
 
+This report owns the dense TreeDB search curves and directional public
+VDBBench comparison. The [Cohere 10M lifecycle report](treedb_vectordbbench_cohere10m_lifecycle_2026-09-01.md)
+separately owns production-shaped durable load, offline build, cold-reopen, and
+single-configuration search qualification.
+
 ![Cohere Medium 1M QPS versus recall](treedb_vectordbbench_cohere1m_c6i_dense_qps_recall_2026-08-21.png)
 
 The plot uses a linear QPS scale and includes all 49 points in the public
