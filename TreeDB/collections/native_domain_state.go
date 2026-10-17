@@ -21,6 +21,7 @@ type nativeDomainState struct {
 	interpretation uint64
 	storagePolicy  backenddb.OrderedRootStoragePolicy
 	pending        *memtable.COWRoot
+	captured       *nativePendingSources
 	refund         *cowbtree.OwnedMapRefund
 	finished       bool
 }
@@ -79,8 +80,13 @@ func (nativeDomainLifetime) Release(d *nativeDomainState) (cowbtree.OwnedMapComp
 	// The original COW source alias is detached before its generation worker
 	// refunds source backing. No source ownership is reconstructed from names.
 	retirement.Drain()
+	captured := d.captured
+	d.captured = nil
+	done := captured.release()
+	captured = nil
 	refund := d.refund
 	d.refund = nil
 	d.name = ""
-	return refund.Completion(), nil
+	done.Append(refund.Completion())
+	return done, nil
 }

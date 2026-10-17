@@ -113,7 +113,11 @@ func ForkCOWWriter(root *COWRoot) (*COWWriter, error) {
 		b.mu.Unlock()
 		return nil, ErrCOWClosed
 	}
-	if g.frozen || !cowFits(b.limits.MaxGenerationBytes, g.history, charge) ||
+	// Existing reservations may belong to another captured-root fork. Include
+	// their full original charge conservatively; it contains every byte that
+	// can become generation history, plus bounded preparation scratch.
+	if g.frozen || !cowFits(b.limits.MaxGenerationBytes, g.history, g.pending) ||
+		!cowFits(b.limits.MaxGenerationBytes, g.history+g.pending, charge) ||
 		!b.retirementFitsLocked(charge) || !b.addLocked(charge) {
 		b.mu.Unlock()
 		return nil, ErrCOWCapacity
@@ -434,7 +438,8 @@ func (w *COWWriter) Prepare(entries []COWMutation, opts COWPrepareOptions) (*COW
 	}
 	total := c.Total()
 	if g.frozen || !cowFits(b.limits.MaxInFlightBytes, b.stats.ReservedBytes, total) ||
-		!cowFits(b.limits.MaxGenerationBytes, g.history, c.History()) ||
+		!cowFits(b.limits.MaxGenerationBytes, g.history, g.pending) ||
+		!cowFits(b.limits.MaxGenerationBytes, g.history+g.pending, c.History()) ||
 		!b.retirementFitsLocked(total) ||
 		opts.ResourceSlots > b.limits.MaxResources-len(g.ids) || !b.addLocked(total) {
 		b.mu.Unlock()
@@ -701,6 +706,23 @@ type COWRoot struct {
 	tree       *btree.Map[string, cowValue]
 	generation *cowGeneration
 	refs       int
+}
+
+// AcquireCapturedSource admits one original captured-source owner and its
+// independent allocation receipt against this root's SAME budget. It does not
+// freeze shared generations or alter private fork publication/cancellation.
+// The caller attaches this receipt to the original source, shares that owner
+// across views, and closes it only after detaching its last root/resource edge.
+func (r *COWRoot) AcquireCapturedSource(bytes uint64) (*COWExternalLease, error) {
+	if r == nil {
+		return nil, ErrCOWClosed
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.refs == 0 || r.tree == nil {
+		return nil, ErrCOWClosed
+	}
+	return r.generation.budget.acquireExternal(bytes, true)
 }
 
 func (r *COWRoot) Retain() bool {

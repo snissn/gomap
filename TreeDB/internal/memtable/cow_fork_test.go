@@ -212,3 +212,105 @@ func TestCOWCapturedForkRefusesFrozenClosedAndResourceRaces(t *testing.T) {
 		t.Fatal(budget.Stats())
 	}
 }
+
+func TestCOWCapturedForkGenerationCapIncludesOriginalPendingReservations(t *testing.T) {
+	budget, writer := cowTestWriter(t, DefaultCOWLimits())
+	root := cowTestPublish(t, writer, cowTestEntries(1))
+	left, err := ForkCOWWriter(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	right, err := ForkCOWWriter(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries := []COWMutation{{Key: []byte("00000000"), Value: make([]byte, 8192)}}
+	charge, err := left.estimate(entries, COWPrepareOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := writer.generation
+	budget.mu.Lock()
+	// Each prepare fits against installed history in isolation, but both
+	// cannot fit. Existing original reservation is authoritative before Publish.
+	budget.limits.MaxGenerationBytes = g.history + charge.Total() + charge.History()/2
+	budget.mu.Unlock()
+	prepared, err := left.Prepare(entries, COWPrepareOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := budget.Stats()
+	if _, err = right.Prepare(entries, COWPrepareOptions{}); !errors.Is(err, ErrCOWCapacity) {
+		t.Fatal("fork ignored original pending generation reservation", err)
+	}
+	if budget.Stats() != before {
+		t.Fatal("refused fork preparation changed accounting")
+	}
+	budget.mu.Lock()
+	budget.limits.MaxGenerationBytes = g.history + g.pending
+	budget.mu.Unlock()
+	if _, err = ForkCOWWriter(root); !errors.Is(err, ErrCOWCapacity) {
+		t.Fatal("header admission ignored original pending reservation", err)
+	}
+	if budget.Stats() != before {
+		t.Fatal("refused header changed accounting")
+	}
+	next := prepared.Publish()
+	prepared = nil
+	if g.history > budget.limits.MaxGenerationBytes {
+		t.Fatal("publication exceeded finite generation cap")
+	}
+	cowTestClose(left)
+	cowTestClose(right)
+	cowTestClose(writer)
+	budget.Close()
+	cowTestRelease(root)
+	cowTestRelease(next)
+	if budget.Stats().TotalBytes != 0 {
+		t.Fatal(budget.Stats())
+	}
+}
+
+func TestCOWCapturedForkPreservesAlreadyPreparedResourceReservation(t *testing.T) {
+	limits := DefaultCOWLimits()
+	limits.MaxResources = 1
+	budget, writer := cowTestWriter(t, limits)
+	root := cowTestPublish(t, writer, cowTestEntries(1))
+	original, err := writer.Prepare(nil, COWPrepareOptions{ResourceSlots: 1, ResourceBytes: 64})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fork, err := ForkCOWWriter(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := budget.Stats()
+	if _, err = fork.Prepare(nil, COWPrepareOptions{ResourceSlots: 1}); !errors.Is(err, ErrCOWPending) {
+		t.Fatal("fork raced an existing original ID reservation", err)
+	}
+	if budget.Stats() != before {
+		t.Fatal("resource refusal changed accounting")
+	}
+	var releases atomic.Int64
+	if err = original.AttachResources([]COWResourceID{{Kind: 1, ID: 99}}, func() { releases.Add(1) }); err != nil {
+		t.Fatal(err)
+	}
+	next := original.Publish()
+	original = nil
+	other := cowTestPublish(t, fork, []COWMutation{{Key: []byte("other"), Value: []byte("value")}})
+	cowTestClose(fork)
+	if _, err = writer.Prepare(nil, COWPrepareOptions{ResourceSlots: 1}); !errors.Is(err, ErrCOWCapacity) {
+		t.Fatal("original finite ID capacity was bypassed", err)
+	}
+	cowTestClose(writer)
+	budget.Close()
+	cowTestRelease(root)
+	cowTestRelease(next)
+	if releases.Load() != 0 {
+		t.Fatal("fork lost original resource owner")
+	}
+	cowTestRelease(other)
+	if releases.Load() != 1 || budget.Stats().TotalBytes != 0 {
+		t.Fatal(releases.Load(), budget.Stats())
+	}
+}

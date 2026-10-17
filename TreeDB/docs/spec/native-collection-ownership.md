@@ -38,3 +38,36 @@ this pointer so its existing admission calculation prices the changed node.
 Before maturity, compare exact baseline/candidate `BenchmarkCOWPrepareReplace`
 binaries under the frozen measurement protocol and run the applicable product
 raw-path gate. The pointer is a measured construction cost, not a free change.
+
+The complete private engine graph now separates immutable schema, logical
+collection incarnation, full domain/name directories and sparse pending
+collections/domains. A shared schema is copied only at construction or explicit
+replacement. Directory nodes own actual descriptor edges. Engine retain and
+last release only change one atomic reference and return the original preborn
+cleanup record; catalog traversal belongs to that record on the existing
+worker. Its independently admitted terminal receipt owns no engine or work
+backpointer. Sparse mutation custody separately owns only newly touched plans.
+Assigned failure records the first error and retains those exact original plans
+and charges, without retaining a complete engine ancestor.
+
+Native pending sources have an active immutable root and a finite captured
+source list. Physical source ownership and list-position metadata are separate:
+multiple views/list positions share the same original root and source-slot
+receipt. The receipt uses the root's original COW budget and the existing finite
+source counter. Native read views must retain their enclosing engine/source
+owner through all root access. A directly acquired lower COW view separately
+retains its generation/view charge; it is not a detached native engine view.
+Rotation does not freeze a generation with private forks. Already prepared
+forks may finish or cancel privately; the complete-cut basis check must reject
+an old physical basis before canonical assignment. New active writes after
+rotation use a fresh generation. No-op rotation retains the same descriptor
+without consuming a source slot. Canceled private rotation refunds the original
+slot after detaching its resource and containing descriptor aliases.
+
+Captured-prefix handoff remains a construction gate: it must clone only newer
+list-position metadata, share original physical-source receipts, drop the
+accepted prefix, and preserve newer active effects. Required build/handoff
+metadata must use the existing preadmitted maintenance capacity before physical
+acceptance. Producer exhaustion must not prevent completion of an accepted
+handoff. These ownership foundations do not activate collection producers or
+replace the required public transaction, recovery and retention evidence.
