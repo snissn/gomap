@@ -3,7 +3,10 @@ package db
 import (
 	"errors"
 	"github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
+	"github.com/snissn/gomap/TreeDB/internal/txnhistory"
 )
 
 var ErrNativeSemanticUnsupported = errors.New("treedb: command kind has no native semantic preparation")
@@ -46,4 +49,106 @@ type NativePreparedPublication struct {
 	Projections                 []rootpublication.ParticipantProjection
 	Custody                     NativeSemanticCustody
 	AdmittedBytes, CleanupBytes uint64
+	Effects                     []txnhistory.Effect
+	Dependencies                []txnhistory.Dependency
+	StartSequence               uint64
+	Finalizer                   NativePublicationFinalizer
+	Resources                   *NativePublicationResources
+}
+
+// NativePublicationFinalizer is the original internal, admitted native plan.
+// Identity-free eligibility, footprint, dependencies and limits are complete
+// before append. This phase privately binds actual assigned identities/assets;
+// it cannot publish, acquire collection locks, or alter Entries/Effects.
+// On error original Custody must retain every partial resource independently.
+// NativeAssignedFailureCustody is implemented by the SAME original sparse
+// custody. It records failure against that already admitted sparse ledger
+// before lower private aliases end. result.State is borrowed during this call;
+// lower releases its owned edge afterward. Keep no whole EngineVersion here.
+// This is infallible O(1), with no destructor,
+// allocation or collection mutex; every earlier partial asset is already owned.
+type NativeAssignedFailureCustody interface {
+	RetainAssignedNativeFailure(NativeFinalizedPublication, error)
+}
+
+type NativePublicationFinalizer interface {
+	FinalizeNativePublication(CommandWALPublishContext) (NativeFinalizedPublication, error)
+}
+
+type NativeFinalizedPublication struct {
+	State       NativeSemanticState
+	Projections []rootpublication.ParticipantProjection
+}
+
+// NativeAllocationReceipt is an independently admitted accounting authority.
+// It has no native state/resource backpointer and is completed after final use.
+type NativeAllocationReceipt interface{ Close() }
+
+// NativeSemanticAllocator is the SAME original budget authority. Retaining it
+// keeps no capture, state, Snapshot, cache or ancestor EngineVersion alive.
+type NativeSemanticAllocator interface {
+	AdmitNativeBytes(uint64) (*memtable.COWExternalLease, error)
+}
+
+// NativeSemanticCapture borrows a single complete immutable cut until Close.
+type NativeSemanticCapture interface {
+	State() NativeSemanticState
+	Snapshot() *Snapshot
+	LogicalSequence() uint64
+	AdmitNativeBytes(uint64) (NativeAllocationReceipt, error)
+	NativeAllocator() NativeSemanticAllocator
+	Close() error
+}
+
+// NativePublicationResult distinguishes transfer, canonical assignment, logical
+// installation, WAL completion and exact physical sealing. Consumed transfers
+// the original descriptor custody even when a later assigned phase fails.
+type NativePublicationResult struct {
+	Consumed, Assigned, Uncertain, LogicalInstalled, WALCompleted, WALStable bool
+	AssignedLSN, LogicalSequence                                             uint64
+	Seal                                                                     rootpublication.PhysicalSealReceipt
+}
+
+// NativeSemanticBridge is fixed once at Open to the backend's SAME private COW
+// owner. It introduces neither a participant registry nor a publication lane.
+type NativeSemanticBridge interface {
+	CaptureNativeCut() (NativeSemanticCapture, error)
+	WriteNativePublication(*NativePreparedPublication, *CommandWALIntent, bool) (NativePublicationResult, error)
+}
+
+func (db *DB) BindNativeSemanticBridge(owner *transactionowner.Owner, bridge NativeSemanticBridge) error {
+	if db == nil || owner == nil || db.privateCOWOwner != owner || bridge == nil || db.nativeSemanticBridge != nil {
+		return ErrNativeSemanticUnsupported
+	}
+	db.nativeSemanticBridge = bridge
+	return nil
+}
+func (db *DB) HasNativeSemanticBridge() bool { return db != nil && db.nativeSemanticBridge != nil }
+func (db *DB) CaptureNativeSemanticState() (NativeSemanticCapture, error) {
+	if !db.HasNativeSemanticBridge() {
+		return nil, ErrNativeSemanticUnsupported
+	}
+	return db.nativeSemanticBridge.CaptureNativeCut()
+}
+func (db *DB) WriteNativePublication(native *NativePreparedPublication, intent *CommandWALIntent, sync bool) (NativePublicationResult, error) {
+	if !db.HasNativeSemanticBridge() {
+		return NativePublicationResult{}, ErrNativeSemanticUnsupported
+	}
+	return db.nativeSemanticBridge.WriteNativePublication(native, intent, sync)
+}
+
+// ValidateNativeCommandIntent keeps unmigrated command kinds fail-closed using
+// the SAME replay registration. No handler or preparation executes under P.
+func (db *DB) ValidateNativeCommandIntent(owner *transactionowner.Owner, intent *CommandWALIntent) error {
+	if err := db.PreflightPrivateCOWCommand(owner); err != nil {
+		return err
+	}
+	if intent == nil || intent.AssignedLSN() != 0 {
+		return ErrCommandWALRejected
+	}
+	registration, ok := lookupCommandWALReplayHandler(intent.inner.kind)
+	if !ok || registration.nativePrepare == nil {
+		return ErrNativeSemanticUnsupported
+	}
+	return nil
 }

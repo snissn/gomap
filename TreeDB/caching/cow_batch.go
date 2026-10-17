@@ -72,7 +72,19 @@ func (b *Batch) PrepareExternalCommandWALPublication() (err error) {
 				c.updateTxnStats()
 			}
 		}()
-		mutation, err = c.journal.Prepare(b.entries, nil, false)
+		if owner := b.cowState.native; owner != nil {
+			plan := owner.plan
+			changed, validateErr := c.journal.DependenciesChanged(plan.StartSequence, plan.Dependencies)
+			if validateErr != nil {
+				return validateErr
+			}
+			if changed {
+				return backenddb.ErrConcurrentModification
+			}
+			mutation, err = c.journal.PrepareEffects(b.entries, nil, false, plan.Effects)
+		} else {
+			mutation, err = c.journal.Prepare(b.entries, nil, false)
+		}
 		if err != nil {
 			return err
 		}
@@ -318,7 +330,9 @@ func (p *cowBatchPreparation) drainCancelled() error {
 			resource.close()
 		}
 	}
-	p.scratch.Close()
+	if cleanupErr == nil {
+		p.scratch.Close()
+	}
 	return cleanupErr
 }
 
@@ -336,6 +350,17 @@ func (b *Batch) writeCOWPublication(syncWrite bool, unlock func()) error {
 		} else {
 			err = finalizer.FinalizeRawKVEntryScanForCachedPublication(b.PrepareExternalCommandWALPublication, b.finalizeCOWPublication, b.Replay, len(b.entries))
 		}
+	}
+	if err != nil && b.cowState.receipt.Assigned && b.cowState.native != nil {
+		if poisoner, ok := b.db.backend.(interface{ MarkCommandWALRecoveryRequired() }); ok {
+			poisoner.MarkCommandWALRecoveryRequired()
+		}
+		b.cowState.receipt.Uncertain = true
+		b.db.cow.prefix.PoisonAccepted(err)
+		p := b.cowState.prepared
+		owner, opening := b.parkAssignedNative(p, err)
+		unlock()
+		return b.drainAssignedNative(owner, opening, p, err)
 	}
 	if err != nil {
 		// Append identity survives an outer registration error. Mark poison
@@ -380,6 +405,13 @@ func (b *Batch) writeCOWPublication(syncWrite bool, unlock func()) error {
 			poisoner.MarkCommandWALRecoveryRequired()
 		}
 		b.cowState.receipt.Uncertain = b.cowState.receipt.Assigned
+		if native != nil && b.cowState.receipt.Assigned {
+			native.opening = nativeOpening
+			b.db.cow.prefix.PoisonAccepted(publishErr)
+			owner, opening := b.parkAssignedNative(p, publishErr)
+			unlock()
+			return b.drainAssignedNative(owner, opening, p, publishErr)
+		}
 		if native != nil {
 			native.opening = nativeOpening
 		}

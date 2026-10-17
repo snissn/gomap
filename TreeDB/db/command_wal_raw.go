@@ -1486,6 +1486,19 @@ func (db *DB) finalizeRawKVEntryScanWithoutCommandWAL(prepare func() error, fina
 	// explicitly; the cache's writer owner serializes preparation/publication.
 	db.teardownMu.RLock()
 	defer db.teardownMu.RUnlock()
+	return db.finalizeRawKVEntryScanForOwnedCachedPublication(prepare, finalize, scanEntries, opHint)
+}
+
+// FinalizeNativeRawUnderGuard shares the original raw/teardown staging owner;
+// reacquiring teardown while Close queues would deadlock its existing reader.
+func (db *DB) FinalizeNativeRawUnderGuard(guard *CommandWALStagingGuardV1, prepare func() error, finalize RawKVCommandWALFinalize, scanEntries func(func(batchpkg.Entry) error) error, opHint int) error {
+	if err := guard.ValidateDBV1(db); err != nil {
+		return err
+	}
+	return db.finalizeRawKVEntryScanForOwnedCachedPublication(prepare, finalize, scanEntries, opHint)
+}
+
+func (db *DB) finalizeRawKVEntryScanForOwnedCachedPublication(prepare func() error, finalize RawKVCommandWALFinalize, scanEntries func(func(batchpkg.Entry) error) error, opHint int) error {
 	if db.closing.Load() {
 		return ErrClosed
 	}
