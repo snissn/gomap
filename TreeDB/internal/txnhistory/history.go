@@ -3,6 +3,7 @@
 package txnhistory
 
 import (
+	"encoding/binary"
 	"errors"
 	"github.com/snissn/gomap/TreeDB/batch"
 	"hash/maphash"
@@ -31,6 +32,7 @@ type BarrierStats struct {
 	Active                                                      bool
 }
 type effect struct {
+	namespace                        Namespace
 	key, end                         string
 	rangeEffect, barrier, endBounded bool
 	barrierReason                    barrierReason
@@ -46,8 +48,9 @@ type mutation struct {
 	inlineKey [32]byte
 }
 type latest struct {
-	key string
-	seq uint64
+	namespace Namespace
+	key       string
+	seq       uint64
 }
 
 // Prepared is a by-value capability for one serialized preaccept reservation.
@@ -113,15 +116,25 @@ func (j *History) clearPending(closeLease bool) {
 		lease.Close()
 	}
 }
-func (j *History) slot(key string) int {
-	i := int(maphash.String(j.seed, key) & uint64(len(j.index)-1))
-	for j.index[i].seq != 0 && j.index[i].key != key {
+func (j *History) slot(key string) int { return j.slotIn(Namespace{}, key) }
+func (j *History) slotIn(namespace Namespace, key string) int {
+	hash := maphash.String(j.seed, key)
+	if namespace != (Namespace{}) {
+		var identity [25]byte
+		identity[0] = byte(namespace.Kind)
+		binary.LittleEndian.PutUint64(identity[1:9], namespace.Collection)
+		binary.LittleEndian.PutUint64(identity[9:17], namespace.Domain)
+		binary.LittleEndian.PutUint64(identity[17:25], namespace.Interpretation)
+		hash ^= maphash.Bytes(j.seed, identity[:])
+	}
+	i := int(hash & uint64(len(j.index)-1))
+	for j.index[i].seq != 0 && (j.index[i].key != key || j.index[i].namespace != namespace) {
 		i = (i + 1) & (len(j.index) - 1)
 	}
 	return i
 }
-func (j *History) remove(key string, seq uint64) {
-	i := j.slot(key)
+func (j *History) remove(namespace Namespace, key string, seq uint64) {
+	i := j.slotIn(namespace, key)
 	if j.index[i].seq != seq {
 		return
 	}
@@ -130,7 +143,7 @@ func (j *History) remove(key string, seq uint64) {
 	for k := (i + 1) & (len(j.index) - 1); j.index[k].seq != 0; k = (k + 1) & (len(j.index) - 1) {
 		e := j.index[k]
 		j.index[k] = latest{}
-		j.index[j.slot(e.key)] = e
+		j.index[j.slotIn(e.namespace, e.key)] = e
 	}
 }
 func (j *History) Evict() {
@@ -139,7 +152,7 @@ func (j *History) Evict() {
 		j.floor = e.seq
 	}
 	if !e.rangeEffect && !e.barrier {
-		j.remove(e.key, e.seq)
+		j.remove(e.namespace, e.key, e.seq)
 	}
 	if e.rangeEffect {
 		j.ranges--
@@ -156,7 +169,18 @@ func (j *History) Evict() {
 		e.lease.Close()
 	}
 }
+
+// Prepare preserves the raw-key API. Semantic participants use PrepareEffects
+// so raw byte keys never carry catalog or collection identities.
 func (j *History) Prepare(entries []batch.Entry, ranges []batch.DeleteRange, barrier bool) (Prepared, error) {
+	return j.PrepareEffects(entries, ranges, barrier, nil)
+}
+
+// PrepareEffects reserves one command in the SAME FIFO and latest-key index.
+// All backing is owned before Install. Overflow collapses only the affected
+// namespaces to conservative barriers; it never turns semantic keys into raw
+// entries or changes the history floor for an unaccepted command.
+func (j *History) PrepareEffects(entries []batch.Entry, ranges []batch.DeleteRange, barrier bool, native []Effect) (Prepared, error) {
 	if j == nil || len(j.records) == 0 {
 		return Prepared{}, errors.New("treedb: transaction history closed")
 	}
@@ -166,21 +190,42 @@ func (j *History) Prepare(entries []batch.Entry, ranges []batch.DeleteRange, bar
 	if j.nextToken == ^uint64(0) {
 		return Prepared{}, errors.New("treedb: transaction history preparation identity exhausted")
 	}
-	n := 1
+	for _, e := range native {
+		if e.Kind < PointEffect || e.Kind > BarrierEffect {
+			return Prepared{}, ErrInvalidEffect
+		}
+	}
 	reason := barrierLogicalReplacement
-	if len(entries) > len(j.records) || len(ranges) > len(j.records)-len(entries) {
-		barrier = true
-		reason = barrierEffectCapacity
+	collapse := false
+	// Arithmetic is checked against finite ring capacity before addition.
+	n := len(entries)
+	if len(ranges) > len(j.records) || n > len(j.records)-len(ranges) {
+		collapse = true
 	} else {
-		n = len(entries) + len(ranges)
+		n += len(ranges)
+		if len(native) > len(j.records)-n {
+			collapse = true
+		} else {
+			n += len(native)
+		}
+	}
+	if barrier {
+		if n >= len(j.records) {
+			collapse = true
+		} else {
+			n++
+		}
+	}
+	if collapse {
+		reason = barrierEffectCapacity
 	}
 	keyBytes := uint64(0)
 	addKey := func(key []byte) {
-		if barrier {
+		if collapse {
 			return
 		}
 		if uint64(len(key)) > j.maxBytes/2-keyBytes {
-			barrier = true
+			collapse = true
 			reason = barrierByteCapacity
 			return
 		}
@@ -196,8 +241,42 @@ func (j *History) Prepare(entries []batch.Entry, ranges []batch.DeleteRange, bar
 		addKey(r.Start)
 		addKey(r.End)
 	}
-	if barrier {
-		n = 1
+	for _, e := range native {
+		if e.Kind != BarrierEffect {
+			addKey(e.Key)
+			if e.Kind == RangeEffect {
+				addKey(e.End)
+			}
+		}
+	}
+	if !collapse && uint64(n)*uint64(unsafe.Sizeof(effect{}))+keyBytes+256 > j.maxBytes {
+		collapse = true
+		reason = barrierByteCapacity
+	}
+	effects := j.staging[:0]
+	if collapse {
+		addNamespace := func(ns Namespace) bool {
+			for _, e := range effects {
+				if e.namespace == ns {
+					return true
+				}
+			}
+			if len(effects) == len(j.records) {
+				return false
+			}
+			effects = append(effects, effect{namespace: ns, barrier: true, barrierReason: reason})
+			return true
+		}
+		if len(entries) != 0 || len(ranges) != 0 || barrier {
+			addNamespace(Namespace{})
+		}
+		for _, e := range native {
+			if !addNamespace(e.Namespace) {
+				clear(effects)
+				return Prepared{}, ErrEffectCapacity
+			}
+		}
+		n = len(effects)
 		keyBytes = 0
 	}
 	if n == 0 {
@@ -205,30 +284,21 @@ func (j *History) Prepare(entries []batch.Entry, ranges []batch.DeleteRange, bar
 	}
 	charge := uint64(n)*uint64(unsafe.Sizeof(effect{})) + keyBytes + 256
 	if charge > j.maxBytes {
-		barrier = true
-		reason = barrierByteCapacity
-		n = 1
-		keyBytes = 0
-		charge = uint64(unsafe.Sizeof(effect{})) + 256
-	}
-	if charge > j.maxBytes {
-		return Prepared{}, errors.New("treedb: transaction history capacity exhausted")
+		clear(effects)
+		return Prepared{}, ErrEffectCapacity
 	}
 	var lease Lease
 	var err error
-	// Descriptor/ring capacity was admitted once. Only fresh immutable key
-	// backing needs a per-command allocation/lease; empty barriers need neither.
-	inline := !barrier && len(entries) == 1 && len(ranges) == 0 && entries[0].Type != batch.OpDeleteRange && keyBytes <= uint64(len(mutation{}.inlineKey))
+	inline := !collapse && !barrier && len(native) == 0 && len(entries) == 1 && len(ranges) == 0 && entries[0].Type != batch.OpDeleteRange && keyBytes <= uint64(len(mutation{}.inlineKey))
 	if j.admit != nil && keyBytes != 0 && !inline {
 		lease, err = j.admit(0, 0, keyBytes, 0, 0)
 		if err != nil {
+			clear(effects)
 			return Prepared{}, err
 		}
 	}
-	j.pending = preparation{effects: j.staging[:0], bytes: charge, lease: lease, inline: inline}
-	if barrier {
-		j.pending.effects = append(j.pending.effects, effect{barrier: true, barrierReason: reason})
-	} else {
+	j.pending = preparation{effects: effects, bytes: charge, lease: lease, inline: inline}
+	if !collapse {
 		var arena []byte
 		if inline {
 			arena = j.pending.inlineKey[:keyBytes]
@@ -245,6 +315,9 @@ func (j *History) Prepare(entries []batch.Entry, ranges []batch.DeleteRange, bar
 			}
 			return unsafe.String(unsafe.SliceData(part), len(part))
 		}
+		if barrier {
+			j.pending.effects = append(j.pending.effects, effect{barrier: true, barrierReason: barrierLogicalReplacement})
+		}
 		for _, e := range entries {
 			if e.Type == batch.OpDeleteRange {
 				if !batch.IsDeleteRangeNoop(e.Key, e.Value) {
@@ -259,27 +332,43 @@ func (j *History) Prepare(entries []batch.Entry, ranges []batch.DeleteRange, bar
 				j.pending.effects = append(j.pending.effects, effect{key: own(r.Start), end: own(r.End), rangeEffect: true, endBounded: r.End != nil})
 			}
 		}
-		if len(j.pending.effects) > 1 {
-			slices.SortFunc(j.pending.effects, func(a, b effect) int {
-				if a.rangeEffect != b.rangeEffect {
-					if a.rangeEffect {
-						return 1
-					}
-					return -1
+		for _, e := range native {
+			switch e.Kind {
+			case PointEffect:
+				j.pending.effects = append(j.pending.effects, effect{namespace: e.Namespace, key: own(e.Key)})
+			case RangeEffect:
+				if !batch.IsDeleteRangeNoop(e.Key, e.End) {
+					j.pending.effects = append(j.pending.effects, effect{namespace: e.Namespace, key: own(e.Key), end: own(e.End), rangeEffect: true, endBounded: e.End != nil})
 				}
-				return strings.Compare(a.key, b.key)
-			})
-		}
-		out := j.pending.effects[:0]
-		for _, e := range j.pending.effects {
-			if e.rangeEffect || len(out) == 0 || out[len(out)-1].key != e.key {
-				out = append(out, e)
+			case BarrierEffect:
+				j.pending.effects = append(j.pending.effects, effect{namespace: e.Namespace, barrier: true, barrierReason: barrierLogicalReplacement})
 			}
 		}
-		clear(j.pending.effects[len(out):])
-		j.pending.effects = out
 	}
-	if len(j.pending.effects) == 0 {
+	// Points precede ranges/barriers for the existing chunk binary search. Within
+	// points use the explicit namespace tuple and then canonical byte ordering.
+	slices.SortFunc(j.pending.effects, func(a, b effect) int {
+		ap, bp := !a.rangeEffect && !a.barrier, !b.rangeEffect && !b.barrier
+		if ap != bp {
+			if ap {
+				return -1
+			}
+			return 1
+		}
+		if c := compareNamespace(a.namespace, b.namespace); c != 0 {
+			return c
+		}
+		return strings.Compare(a.key, b.key)
+	})
+	out := j.pending.effects[:0]
+	for _, e := range j.pending.effects {
+		if e.rangeEffect || e.barrier || len(out) == 0 || out[len(out)-1].namespace != e.namespace || out[len(out)-1].key != e.key {
+			out = append(out, e)
+		}
+	}
+	clear(j.pending.effects[len(out):])
+	j.pending.effects = out
+	if len(out) == 0 {
 		j.clearPending(true)
 		return Prepared{}, nil
 	}
@@ -317,7 +406,10 @@ func (j *History) Install(p Prepared, seq uint64) bool {
 		}
 		j.count++
 		if e.barrier {
-			j.barrierSeq = seq
+			if e.namespace == (Namespace{}) {
+				j.barrierSeq = seq
+			}
+			j.rangeSeq = seq
 			switch e.barrierReason {
 			case barrierEffectCapacity:
 				j.barriers.EffectCapacity++
@@ -330,11 +422,11 @@ func (j *History) Install(p Prepared, seq uint64) bool {
 			j.ranges++
 			j.rangeSeq = seq
 		} else {
-			i := j.slot(e.key)
+			i := j.slotIn(e.namespace, e.key)
 			if j.index[i].seq == 0 {
 				j.points++
 			}
-			j.index[i] = latest{key: e.key, seq: seq}
+			j.index[i] = latest{namespace: e.namespace, key: e.key, seq: seq}
 		}
 	}
 	j.records[end].releaseBytes = j.pending.bytes
@@ -411,13 +503,16 @@ func (j *History) chunkBounds(begin int) (pointsEnd, end int) {
 	return lo, end
 }
 func (j *History) PointChanged(start uint64, key []byte) bool {
+	return j.PointChangedIn(start, Namespace{}, key)
+}
+func (j *History) PointChangedIn(start uint64, namespace Namespace, key []byte) bool {
 	if j == nil {
 		return false
 	}
-	if start < j.floor || j.barrierSeq > start {
+	if start < j.floor || (namespace == (Namespace{}) && j.barrierSeq > start) {
 		return true
 	}
-	if j.index[j.slot(string(key))].seq > start {
+	if j.index[j.slotIn(namespace, string(key))].seq > start {
 		return true
 	}
 	if j.rangeSeq <= start {
@@ -427,7 +522,7 @@ func (j *History) PointChanged(start uint64, key []byte) bool {
 		pointsEnd, end := j.chunkBounds(k)
 		for r := pointsEnd; r < end; r++ {
 			e := &j.records[(j.head+r)%len(j.records)]
-			if e.rangeEffect && string(key) >= e.key && (!e.endBounded || string(key) < e.end) {
+			if e.namespace == namespace && (e.barrier || e.rangeEffect && string(key) >= e.key && (!e.endBounded || string(key) < e.end)) {
 				return true
 			}
 		}
@@ -436,10 +531,13 @@ func (j *History) PointChanged(start uint64, key []byte) bool {
 	return false
 }
 func (j *History) RangeChanged(start uint64, lo, hi []byte) bool {
+	return j.RangeChangedIn(start, Namespace{}, lo, hi)
+}
+func (j *History) RangeChangedIn(start uint64, namespace Namespace, lo, hi []byte) bool {
 	if j == nil {
 		return false
 	}
-	if start < j.floor || j.barrierSeq > start {
+	if start < j.floor || (namespace == (Namespace{}) && j.barrierSeq > start) {
 		return true
 	}
 	if batch.IsDeleteRangeNoop(lo, hi) {
@@ -450,18 +548,23 @@ func (j *History) RangeChanged(start uint64, lo, hi []byte) bool {
 		lower, upper := k, pointsEnd
 		for lower < upper {
 			mid := lower + (upper-lower)/2
-			if j.records[(j.head+mid)%len(j.records)].key < string(lo) {
+			e := &j.records[(j.head+mid)%len(j.records)]
+			c := compareNamespace(e.namespace, namespace)
+			if c < 0 || c == 0 && e.key < string(lo) {
 				lower = mid + 1
 			} else {
 				upper = mid
 			}
 		}
-		if lower < pointsEnd && (hi == nil || j.records[(j.head+lower)%len(j.records)].key < string(hi)) {
-			return true
+		if lower < pointsEnd {
+			e := &j.records[(j.head+lower)%len(j.records)]
+			if e.namespace == namespace && (hi == nil || e.key < string(hi)) {
+				return true
+			}
 		}
 		for r := pointsEnd; r < end; r++ {
 			e := &j.records[(j.head+r)%len(j.records)]
-			if e.rangeEffect && (hi == nil || e.key < string(hi)) && (!e.endBounded || string(lo) < e.end) {
+			if e.namespace == namespace && (e.barrier || e.rangeEffect && (hi == nil || e.key < string(hi)) && (!e.endBounded || string(lo) < e.end)) {
 				return true
 			}
 		}
