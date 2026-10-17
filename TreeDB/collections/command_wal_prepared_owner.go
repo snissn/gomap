@@ -13,19 +13,21 @@ import (
 // It refers to the original collection and actual operation-owned locks. The
 // callback must finalize or abort its appended frame before returning.
 type CommandWALAdmittedCollection struct {
-	collection           *Collection
-	admission            *collectionCommandWALAdmission
-	partitionStorageHeld bool
-	preparation          *VectorPartitionPrepareCompletionV1
-	partitionSourcePin   *backenddb.Snapshot
-	partitionCapture     *backenddb.StableResourceCaptureLease
-	replayOperation      *backenddb.CommandWALIntent
-	staging              *commandwalapply.StagingGuard
+	collection              *Collection
+	admission               *collectionCommandWALAdmission
+	partitionStorageHeld    bool
+	preparation             *VectorPartitionPrepareCompletionV1
+	partitionSourcePin      *backenddb.Snapshot
+	partitionCapture        *backenddb.StableResourceCaptureLease
+	replayOperation         *backenddb.CommandWALIntent
+	staging                 *commandwalapply.StagingGuard
+	releaseMaterialization  func()
+	releasePartitionStorage func()
 }
 
 // WithPreparedCommandWALMutation owns schema, vector coverage/admission and
-// mutation before the caller appends a frame, through its apply and Finalize or
-// Abort. Pre-assignment foreign drains unwind only this operation's leases.
+// mutation before the caller appends a frame and through materialization.
+// Finalize or Abort expires the owner before waiting for its exact seal.
 func (c *Collection) WithPreparedCommandWALMutation(apply func(*CommandWALAdmittedCollection) error) error {
 	return c.withPreparedCommandWALMutation(func() func() { return c.lockVectorIndexCoverageMutationWithColdCarrier(true) }, false, apply)
 }
@@ -44,7 +46,12 @@ func (c *Collection) withPreparedCommandWALMutationAndReplayIntent(acquire func(
 		return errors.New("collections: prepared command WAL callback is nil")
 	}
 	unlockSchema := c.lockCollectionSchemaRead()
-	defer unlockSchema()
+	schemaHeld := true
+	defer func() {
+		if schemaHeld {
+			unlockSchema()
+		}
+	}()
 	admissionState := collectionCommandWALAdmission{collection: c, acquire: acquire, release: acquire(), prepared: true}
 	admission := &admissionState
 	defer admission.unlock()
@@ -79,6 +86,26 @@ func (c *Collection) withPreparedCommandWALMutationAndReplayIntent(acquire func(
 		return err
 	}
 	owner := &CommandWALAdmittedCollection{collection: c, admission: admission, replayOperation: replay}
+	owner.releaseMaterialization = func() {
+		owner.collection, owner.admission, owner.replayOperation, owner.staging = nil, nil, nil, nil
+		owner.partitionCapture, owner.partitionSourcePin, owner.preparation = nil, nil, nil
+		owner.partitionStorageHeld = false
+		releaseStorage := owner.releasePartitionStorage
+		owner.releasePartitionStorage = nil
+		if held {
+			held = false
+			mutation.Unlock()
+		}
+		admission.unlock()
+		if schemaHeld {
+			schemaHeld = false
+			unlockSchema()
+		}
+		if releaseStorage != nil {
+			releaseStorage()
+		}
+	}
+	defer owner.ReleaseMaterialization()
 	if !fromReplay && c.db.CommandWALEnabled() {
 		actualGuard, err := c.lockCommandWALStagingGuardWithAdmission(admission, flushBuffered)
 		if err != nil {
@@ -91,8 +118,24 @@ func (c *Collection) withPreparedCommandWALMutationAndReplayIntent(acquire func(
 		}
 		defer staging.Release()
 		owner.staging = staging
+		if err := staging.BindMaterializationOwner(owner); err != nil {
+			return err
+		}
 	}
 	return apply(owner)
+}
+
+// ReleaseMaterialization expires every borrowed executor view before dropping
+// the original operation's locks. The callback's defers may call it again.
+func (owner *CommandWALAdmittedCollection) ReleaseMaterialization() {
+	if owner == nil {
+		return
+	}
+	release := owner.releaseMaterialization
+	owner.releaseMaterialization = nil
+	if release != nil {
+		release()
+	}
 }
 
 func (owner *CommandWALAdmittedCollection) validate() error {
@@ -120,8 +163,16 @@ func (owner *CommandWALAdmittedCollection) CommandWALAppendOptions(sync bool) (c
 	return commandwalapply.Options{Sync: sync, Staging: owner.staging}, nil
 }
 
-func (owner *CommandWALAdmittedCollection) Meta() CollectionMeta { return owner.collection.Meta() }
+func (owner *CommandWALAdmittedCollection) Meta() CollectionMeta {
+	if owner.validate() != nil {
+		return CollectionMeta{}
+	}
+	return owner.collection.Meta()
+}
 func (owner *CommandWALAdmittedCollection) MetaView() CollectionMeta {
+	if owner.validate() != nil {
+		return CollectionMeta{}
+	}
 	return owner.collection.MetaView()
 }
 func (owner *CommandWALAdmittedCollection) Get(id []byte) ([]byte, error) {

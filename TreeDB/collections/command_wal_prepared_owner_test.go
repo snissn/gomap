@@ -11,10 +11,102 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commandwalapply"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
 
-func TestCollectionCommandWALPreparedOwnerRetainsAdmissionThroughFinalize(t *testing.T) {
+func TestCollectionCommandWALSealedWaitReleasesOriginalGates(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{Name: "users", Options: CollectionOptions{DocumentFormat: DocumentFormatJSON}})
+	d := openCollectionCommandWALDB(t, dir)
+	defer d.Close()
+	col, err := NewCollectionManager(d).OpenCollection("users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := commitlog.EncodeCollectionInsertBatchByIDPayload("users", []commitlog.CollectionDocument{{ID: []byte("u1"), Document: []byte(`{"name":"Ada"}`)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame, err := commandwalapply.CollectionInsertBatchByIDFrame(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealHeld, releaseSeal := make(chan struct{}), make(chan struct{})
+	var signal, release sync.Once
+	defer release.Do(func() { close(releaseSeal) })
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Root == dir && event.Point == durabilitycut.BeforePublicationSealWrite {
+			signal.Do(func() { close(sealHeld) })
+			<-releaseSeal
+		}
+		return nil
+	})
+	defer restore()
+	done := make(chan error, 1)
+	go func() {
+		done <- col.WithPreparedCommandWALMutation(func(owner *CommandWALAdmittedCollection) error {
+			opts, err := owner.CommandWALAppendOptions(true)
+			if err != nil {
+				return err
+			}
+			h, _, err := commandwalapply.Append(d, frame, commandwalapply.ApplyMetadata{}, opts)
+			if err != nil {
+				return err
+			}
+			defer commandwalapply.Abort(d, h)
+			if _, err := owner.InsertBatchWithCommandWALIntent([][]byte{[]byte("u1")}, [][]byte{[]byte(`{"name":"Ada"}`)}, false, h.CommandWALIntent()); err != nil {
+				return err
+			}
+			_, err = commandwalapply.Finalize(d, h, commandwalapply.ApplyMetadata{}, commandwalapply.Options{Sync: true})
+			return err
+		})
+	}()
+	waitCollectionCommandWALSignal(t, sealHeld, "original physical seal held")
+	coord := col.collectionSchemaCoordinator()
+	waitPreparedOwnerCondition(t, func() bool {
+		m, ok := col.tryLockMutation()
+		if !ok {
+			return false
+		}
+		m.Unlock()
+		if !coord.schemaMu.TryLock() {
+			return false
+		}
+		coord.schemaMu.Unlock()
+		if !coord.nativeVectorAdmissionMu.TryLock() {
+			return false
+		}
+		coord.nativeVectorAdmissionMu.Unlock()
+		return true
+	}, "collection gates released while original seal is held")
+	guardDone := make(chan error, 1)
+	go func() {
+		g, err := d.LockCommandWALStagingGuardV1()
+		if err == nil {
+			g.Release()
+		}
+		guardDone <- err
+	}()
+	if err := waitCollectionCommandWALErr(t, guardDone, "another writer acquiring original raw/teardown gates during seal wait"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("sealed result returned before exact seal: %v", err)
+	default:
+	}
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- d.Close() }()
+	release.Do(func() { close(releaseSeal) })
+	if err := waitCollectionCommandWALErr(t, done, "original exact seal completion"); err != nil {
+		t.Fatal(err)
+	}
+	if err := waitCollectionCommandWALErr(t, closeDone, "concurrent Close progress"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCollectionCommandWALPreparedOwnerExpiresBeforeSealedWait(t *testing.T) {
 	dir := prepareCollectionCommandWALDir(t, CollectionMeta{Name: "users", Options: CollectionOptions{DocumentFormat: DocumentFormatJSON}})
 	d := openCollectionCommandWALDB(t, dir)
 	safeClose := true
@@ -122,31 +214,28 @@ func TestCollectionCommandWALPreparedOwnerRetainsAdmissionThroughFinalize(t *tes
 	}, "exclusive native writer queued behind assigned owner and ordinary reader")
 	close(execute)
 	waitCollectionCommandWALSignal(t, finalized, "assigned executor reaching real Finalize behind queued native writer")
-	if got := d.State().AppliedCommandLSN; got != 1 {
-		t.Fatalf("applied after Finalize=%d, want 1", got)
+	if got := d.State().AppliedCommandLSN; got < 1 {
+		t.Fatalf("applied after Finalize=%d, want at least 1", got)
 	}
-	if mutation, ok := col.tryLockMutation(); ok {
+	if err := waitCollectionCommandWALErr(t, ordinaryDone, "ordinary insert after materialization release"); err != nil {
+		t.Fatal(err)
+	}
+	waitCollectionCommandWALSignal(t, writerDone, "native writer after materialization release")
+	if err := escaped.validate(); err == nil {
+		t.Fatal("owner remained active after Finalize")
+	}
+	if escaped.Meta().Name != "" || escaped.MetaView().Name != "" {
+		t.Fatal("expired owner exposed metadata")
+	}
+	if mutation, ok := col.tryLockMutation(); !ok {
+		t.Fatal("mutation retained after Finalize")
+	} else {
 		mutation.Unlock()
-		t.Fatal("mutation released before prepared callback returned")
-	}
-	select {
-	case err := <-ordinaryDone:
-		t.Fatalf("ordinary insert escaped prepared callback: %v", err)
-	default:
-	}
-	select {
-	case <-writerDone:
-		t.Fatal("native writer escaped prepared callback")
-	default:
 	}
 	close(exit)
 	if err := waitCollectionCommandWALErr(t, ownerDone, "prepared owner callback returning"); err != nil {
 		t.Fatal(err)
 	}
-	if err := waitCollectionCommandWALErr(t, ordinaryDone, "ordinary insert after prepared owner exit"); err != nil {
-		t.Fatal(err)
-	}
-	waitCollectionCommandWALSignal(t, writerDone, "native writer after prepared owner exit")
 	safeClose = true
 	if err := escaped.validate(); err == nil {
 		t.Fatal("escaped facade still active after callback")
@@ -215,19 +304,23 @@ func TestCollectionCommandWALPreparedOwnerRetainsMutationThroughAbort(t *testing
 			return err
 		}
 		commandwalapply.Abort(d, handle)
-		if mutation, ok := col.tryLockMutation(); ok {
+		if owner.validate() == nil {
+			return errors.New("aborted owner remained active")
+		}
+		if mutation, ok := col.tryLockMutation(); !ok {
+			return errors.New("actual mutation retained after Abort")
+		} else {
 			mutation.Unlock()
-			return errors.New("actual mutation released by Abort before callback exit")
 		}
 		coord := col.collectionSchemaCoordinator()
-		if coord.schemaMu.TryLock() {
-			coord.schemaMu.Unlock()
-			return errors.New("schema released by Abort before callback exit")
+		if !coord.schemaMu.TryLock() {
+			return errors.New("schema retained after Abort")
 		}
-		if coord.nativeVectorAdmissionMu.TryLock() {
-			coord.nativeVectorAdmissionMu.Unlock()
-			return errors.New("native admission released by Abort before callback exit")
+		coord.schemaMu.Unlock()
+		if !coord.nativeVectorAdmissionMu.TryLock() {
+			return errors.New("native admission retained after Abort")
 		}
+		coord.nativeVectorAdmissionMu.Unlock()
 		return nil
 	})
 	if err != nil {

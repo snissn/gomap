@@ -94,3 +94,44 @@ func TestVectorPrepareStorageOwnerIdentityAndExpiryV1(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestVectorPrepareStorageMaterializationReleasePreservesCaptureV1(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), CommandWAL: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	capture, err := AcquireVectorPrepareStableCaptureV1(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer capture.Close()
+	var retained *VectorPrepareStorageOwnerV1
+	if err := capture.WithStorageBarrierV1(context.Background(), func(owner *VectorPrepareStorageOwnerV1) error {
+		retained = owner
+		return owner.withDBV1(db, func(pin *backenddb.Snapshot) error {
+			if pin == nil {
+				t.Fatal("missing original pin")
+			}
+			owner.state.releaseMaterializationLockedV1()
+			if owner.state.pin != nil || owner.state.active {
+				t.Fatal("borrow survived materialization")
+			}
+			release, ok := tryVectorPartitionStorageBarrier(db.Dir())
+			if !ok {
+				t.Fatal("original storage barrier held after materialization")
+			}
+			release()
+			return nil
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := retained.ValidateDBV1(db); err == nil {
+		t.Fatal("released owner revived")
+	}
+	// The caller's reusable capture owns its original pin independently.
+	if err := capture.WithStorageBarrierV1(context.Background(), func(owner *VectorPrepareStorageOwnerV1) error { return owner.ValidateDBV1(db) }); err != nil {
+		t.Fatal(err)
+	}
+}

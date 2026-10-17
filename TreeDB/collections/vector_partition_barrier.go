@@ -33,15 +33,26 @@ func WithVectorPartitionStorageBarrierV1(root string, fn func() error) error {
 // root-scoped barrier cancellation-aware. Once fn starts it remains
 // responsible for observing ctx itself.
 func WithVectorPartitionStorageBarrierWithContextV1(ctx context.Context, root string, fn func() error) error {
+	release, err := acquireVectorPartitionStorageBarrierV1(ctx, root)
+	if err != nil {
+		return err
+	}
+	defer release()
+	return fn()
+}
+
+// The returned closure releases the original barrier once. Prepared executors
+// may finish materialization before their outer callback finishes waiting.
+func acquireVectorPartitionStorageBarrierV1(ctx context.Context, root string) (func(), error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
-		return err
+		return nil, err
 	}
 	canonical, err := canonicalVectorPartitionStorageRootV1(root)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	vectorPartitionStorageBarriersV1.Lock()
 	entry := vectorPartitionStorageBarriersV1.entries[canonical]
@@ -60,7 +71,7 @@ func WithVectorPartitionStorageBarrierWithContextV1(ctx context.Context, root st
 			delete(vectorPartitionStorageBarriersV1.entries, canonical)
 		}
 		vectorPartitionStorageBarriersV1.Unlock()
-		return ctx.Err()
+		return nil, ctx.Err()
 	case <-entry.gate:
 		if err := ctx.Err(); err != nil {
 			entry.gate <- struct{}{}
@@ -70,19 +81,21 @@ func WithVectorPartitionStorageBarrierWithContextV1(ctx context.Context, root st
 				delete(vectorPartitionStorageBarriersV1.entries, canonical)
 			}
 			vectorPartitionStorageBarriersV1.Unlock()
-			return err
+			return nil, err
 		}
 	}
-	defer func() {
-		entry.gate <- struct{}{}
-		vectorPartitionStorageBarriersV1.Lock()
-		entry.refs--
-		if entry.refs == 0 {
-			delete(vectorPartitionStorageBarriersV1.entries, canonical)
-		}
-		vectorPartitionStorageBarriersV1.Unlock()
-	}()
-	return fn()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			entry.gate <- struct{}{}
+			vectorPartitionStorageBarriersV1.Lock()
+			entry.refs--
+			if entry.refs == 0 {
+				delete(vectorPartitionStorageBarriersV1.entries, canonical)
+			}
+			vectorPartitionStorageBarriersV1.Unlock()
+		})
+	}, nil
 }
 
 func canonicalVectorPartitionStorageRootV1(root string) (string, error) {
@@ -149,11 +162,12 @@ type VectorPrepareStorageOwnerV1 struct {
 	state *vectorPrepareStorageOwnerStateV1
 }
 type vectorPrepareStorageOwnerStateV1 struct {
-	mu     sync.Mutex
-	db     *backenddb.DB
-	root   string
-	pin    *backenddb.Snapshot
-	active bool
+	mu             sync.Mutex
+	db             *backenddb.DB
+	root           string
+	pin            *backenddb.Snapshot
+	active         bool
+	releaseBarrier func()
 }
 
 func AcquireVectorPrepareStableCaptureV1(db *backenddb.DB) (*VectorPrepareStableCaptureV1, error) {
@@ -199,17 +213,21 @@ func (capture *VectorPrepareStableCaptureV1) WithStorageBarrierV1(ctx context.Co
 	if err != nil || root != state.root {
 		return errors.New("collections: vector prepare capture root changed")
 	}
-	return WithVectorPartitionStorageBarrierWithContextV1(ctx, state.root, func() error {
-		ownerState := &vectorPrepareStorageOwnerStateV1{db: state.db, root: state.root, pin: state.pin, active: true}
+	releaseBarrier, err := acquireVectorPartitionStorageBarrierV1(ctx, state.root)
+	if err != nil {
+		return err
+	}
+	defer releaseBarrier()
+	{
+		ownerState := &vectorPrepareStorageOwnerStateV1{db: state.db, root: state.root, pin: state.pin, active: true, releaseBarrier: releaseBarrier}
 		owner := &VectorPrepareStorageOwnerV1{state: ownerState}
 		defer func() {
 			ownerState.mu.Lock()
-			ownerState.active = false
-			ownerState.pin = nil
+			ownerState.releaseMaterializationLockedV1()
 			ownerState.mu.Unlock()
 		}()
 		return fn(owner)
-	})
+	}
 }
 
 // ValidateDBV1 checks identity without exposing the snapshot. The collection
@@ -249,4 +267,17 @@ func (owner *VectorPrepareStorageOwnerV1) withDBV1(db *backenddb.DB, fn func(*ba
 		return err
 	}
 	return fn(state.pin)
+}
+
+// Called only by the original executor inside withDBV1, which owns state.mu.
+// The stable capture retains its own reusable snapshot; this ends the owner's
+// borrowed pin and original storage barrier, rather than closing that capture.
+func (state *vectorPrepareStorageOwnerStateV1) releaseMaterializationLockedV1() {
+	state.active = false
+	state.pin = nil
+	release := state.releaseBarrier
+	state.releaseBarrier = nil
+	if release != nil {
+		release()
+	}
 }

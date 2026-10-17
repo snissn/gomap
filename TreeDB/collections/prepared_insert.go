@@ -2,6 +2,7 @@ package collections
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"sort"
@@ -9,6 +10,7 @@ import (
 	"time"
 	"unsafe"
 
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
 
@@ -592,15 +594,39 @@ func (p *PreparedInsertBatch) Commit() ([][]byte, error) {
 	}
 	defer p.release()
 	c := p.collection
-	unlockSchema := c.lockCollectionSchemaRead()
-	defer unlockSchema()
-	admissionState := c.lockCollectionCommandWALAdmission()
-	admission := &admissionState
-	defer admission.unlock()
-	resultIDs, err := c.insertBatchWithCommandWALIntentSchemaLocked(p.ids, p.documents, false, nil, nil,
-		insertBatchExecutionOptions{admission: admission, returnResultIDs: true, prepared: p})
-	if err == nil {
-		err = commitAmbiguousError("PreparedInsertBatch vector index maintenance", c.notifyVectorIndexesUpsert(resultIDs))
+	// Materialization owns schema, vector admission, mutation and staging only
+	// inside this scope. Exact physical sealing is awaited after every lease has
+	// unwound, so another publisher or Close can provide the required progress.
+	var intent *backenddb.CommandWALIntent
+	resultIDs, err := func() ([][]byte, error) {
+		unlockSchema := c.lockCollectionSchemaRead()
+		defer unlockSchema()
+		admissionState := c.lockCollectionCommandWALAdmission()
+		admission := &admissionState
+		defer admission.unlock()
+		var err error
+		intent, err = c.newCollectionInsertCommandWALIntent(collectionDocumentsFromNoIndexEntries(p.entries), nil, nil)
+		if err != nil {
+			return nil, err
+		}
+		if intent == nil {
+			return nil, ErrPreparedInsertIneligible
+		}
+		if err = intent.PrepareSealedReceipt(); err != nil {
+			return nil, err
+		}
+		resultIDs, err := c.insertBatchWithCommandWALIntentSchemaLocked(p.ids, p.documents, false, nil, intent,
+			insertBatchExecutionOptions{admission: admission, returnResultIDs: true, prepared: p})
+		if err == nil {
+			err = commitAmbiguousError("PreparedInsertBatch vector index maintenance", c.notifyVectorIndexesUpsert(resultIDs))
+		}
+		return resultIDs, c.invalidateVectorIndexCoverageOnAcceptedMutation(err)
+	}()
+	if err != nil {
+		return resultIDs, err
 	}
-	return resultIDs, c.invalidateVectorIndexCoverageOnAcceptedMutation(err)
+	if err = intent.ExactSealedReceipt().Wait(context.Background()); err != nil {
+		return resultIDs, commitAmbiguousError("PreparedInsertBatch sealed completion", err)
+	}
+	return resultIDs, nil
 }

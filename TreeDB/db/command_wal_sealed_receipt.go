@@ -24,7 +24,10 @@ func (c *commandWALSealReceipt) bind(receipt rootpublication.PhysicalSealReceipt
 
 // PrepareSealedReceipt reserves the original request's completion cell before
 // command assignment. It is needed by deterministic apply and prepared APIs;
-// a current AppliedLSN sample cannot manufacture this receipt later.
+// a current AppliedLSN sample cannot manufacture this receipt later. A successful
+// request transfers admission/sealed waiting to this original caller: after
+// materialization returns, release all progress-critical leases then wait the
+// ExactSealedReceipt before returning a sealed result.
 func (intent *CommandWALIntent) PrepareSealedReceipt() error {
 	if intent == nil || intent.inner.lsn != 0 {
 		return ErrCommandWALRejected
