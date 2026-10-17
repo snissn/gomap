@@ -42,10 +42,11 @@ type cowPairLayout struct {
 	key   string
 }
 type cowNodeLayout struct {
-	isoid    uint64
-	count    int
-	items    []cowPairLayout
-	children *[]*cowNodeLayout
+	ownership unsafe.Pointer // optional cowbtree owned descriptor node metadata
+	isoid     uint64
+	count     int
+	items     []cowPairLayout
+	children  *[]*cowNodeLayout
 }
 
 // COWRetirement is a bounded ownership transfer, not a background queue.

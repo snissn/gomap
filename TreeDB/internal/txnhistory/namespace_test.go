@@ -37,6 +37,21 @@ func TestHistorySemanticNamespacesCannotCollideWithArbitraryRawBytes(t *testing.
 	}
 }
 
+func TestHistoryRawBarrierDoesNotCopyCoveredRawKeys(t *testing.T) {
+	h, _ := New(8, 4096, nil)
+	defer h.Close()
+	ns := Namespace{Kind: CollectionNamespace, Collection: 7, Domain: 1}
+	large := bytes.Repeat([]byte("x"), 1<<16)
+	p, err := h.PrepareEffects([]batch.Entry{{Key: large}}, []batch.DeleteRange{{Start: large}}, true,
+		[]Effect{{Namespace: ns, Kind: PointEffect, Key: []byte("native")}})
+	if err != nil || !h.Install(p, 1) {
+		t.Fatal(err)
+	}
+	if h.count != 2 || !h.PointChanged(0, []byte("anything")) || !h.PointChangedIn(0, ns, []byte("native")) || h.PointChangedIn(0, ns, []byte("other")) {
+		t.Fatal("raw barrier copied redundant raw effects or collapsed native point")
+	}
+}
+
 func TestHistoryCatalogAbsenceListingRecreateAndUniquePrefixABA(t *testing.T) {
 	h, _ := New(32, 1<<20, nil)
 	defer h.Close()

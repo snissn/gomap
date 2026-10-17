@@ -53,6 +53,7 @@ type Map[K ordered, V any] struct {
 	max           int // max items
 	copyValues    bool
 	isoCopyValues bool
+	sealed        bool
 }
 
 func NewMap[K ordered, V any](degree int) *Map[K, V] {
@@ -62,10 +63,11 @@ func NewMap[K ordered, V any](degree int) *Map[K, V] {
 }
 
 type mapNode[K ordered, V any] struct {
-	isoid    uint64
-	count    int
-	items    []mapPair[K, V]
-	children *[]*mapNode[K, V]
+	ownership *ownedMapNode[K, V]
+	isoid     uint64
+	count     int
+	items     []mapPair[K, V]
+	children  *[]*mapNode[K, V]
 }
 
 // Copy the node for safe isolation.
@@ -102,6 +104,12 @@ func (tr *Map[K, V]) copyWithWork(n *mapNode[K, V], w Work) (*mapNode[K, V], boo
 	return n2, true
 }
 
+func (tr *Map[K, V]) assertMutable() {
+	if tr.sealed {
+		panic("cowbtree: mutation of sealed immutable map")
+	}
+}
+
 // isoLoad loads the provided node and, if needed, performs a copy-on-write.
 func (tr *Map[K, V]) isoLoad(cn **mapNode[K, V], mut bool) *mapNode[K, V] {
 	n, _ := tr.isoLoadWithWork(cn, mut, nil)
@@ -109,6 +117,9 @@ func (tr *Map[K, V]) isoLoad(cn **mapNode[K, V], mut bool) *mapNode[K, V] {
 }
 
 func (tr *Map[K, V]) isoLoadWithWork(cn **mapNode[K, V], mut bool, w Work) (*mapNode[K, V], bool) {
+	if mut && tr.sealed {
+		panic("cowbtree: mutation of sealed immutable map")
+	}
 	if !tr.admitLoad(w) {
 		return nil, false
 	}
@@ -127,6 +138,9 @@ func (tr *Map[K, V]) Copy() *Map[K, V] {
 }
 
 func (tr *Map[K, V]) IsoCopy() *Map[K, V] {
+	if tr.sealed {
+		panic("cowbtree: use immutable owned builder for sealed map")
+	}
 	tr2 := new(Map[K, V])
 	*tr2 = *tr
 	tr2.isoid = newIsoID()
@@ -222,6 +236,9 @@ func (tr *Map[K, V]) Set(key K, value V) (V, bool) {
 // A node/backing allocation must fit as a whole. Opaque value Copy/IsoCopy
 // callbacks are refused before invocation when isolation needs a bounded copy.
 func (tr *Map[K, V]) SetWithWork(key K, value V, w Work) (previous V, replaced, ready bool, err error) {
+	if tr.sealed {
+		panic("cowbtree: mutation of sealed immutable map")
+	}
 	if !tr.admitHeader(w) {
 		return tr.empty.value, false, false, nil
 	}
@@ -379,6 +396,7 @@ func (tr *Map[K, V]) Scan(iter func(key K, value V) bool) {
 }
 
 func (tr *Map[K, V]) ScanMut(iter func(key K, value V) bool) {
+	tr.assertMutable()
 	tr.scan(iter, true)
 }
 
@@ -429,6 +447,7 @@ func (tr *Map[K, V]) Get(key K) (V, bool) {
 // Mut methods may modify the tree structure and should have the same
 // considerations as other mutable operations like Set, Delete, Clear, etc.
 func (tr *Map[K, V]) GetMut(key K) (V, bool) {
+	tr.assertMutable()
 	return tr.get(key, true)
 }
 
@@ -457,6 +476,7 @@ func (tr *Map[K, V]) Len() int {
 // Delete a value for a key and returns the deleted value.
 // Returns false if there was no value by that key found.
 func (tr *Map[K, V]) Delete(key K) (V, bool) {
+	tr.assertMutable()
 	if tr.root == nil {
 		return tr.empty.value, false
 	}
@@ -613,6 +633,7 @@ func (tr *Map[K, V]) Ascend(pivot K, iter func(key K, value V) bool) {
 }
 
 func (tr *Map[K, V]) AscendMut(pivot K, iter func(key K, value V) bool) {
+	tr.assertMutable()
 	tr.ascend(pivot, iter, true)
 }
 
@@ -659,6 +680,7 @@ func (tr *Map[K, V]) Reverse(iter func(key K, value V) bool) {
 }
 
 func (tr *Map[K, V]) ReverseMut(iter func(key K, value V) bool) {
+	tr.assertMutable()
 	tr.reverse(iter, true)
 }
 
@@ -703,6 +725,7 @@ func (tr *Map[K, V]) Descend(pivot K, iter func(key K, value V) bool) {
 }
 
 func (tr *Map[K, V]) DescendMut(pivot K, iter func(key K, value V) bool) {
+	tr.assertMutable()
 	tr.descend(pivot, iter, true)
 }
 
@@ -745,6 +768,7 @@ func (tr *Map[K, V]) nodeDescend(cn **mapNode[K, V], pivot K,
 
 // Load is for bulk loading pre-sorted items
 func (tr *Map[K, V]) Load(key K, value V) (V, bool) {
+	tr.assertMutable()
 	item := mapPair[K, V]{key: key, value: value}
 	if tr.root == nil {
 		return tr.Set(item.key, item.value)
@@ -783,6 +807,7 @@ func (tr *Map[K, V]) Min() (K, V, bool) {
 }
 
 func (tr *Map[K, V]) MinMut() (K, V, bool) {
+	tr.assertMutable()
 	return tr.minMut(true)
 }
 
@@ -807,6 +832,7 @@ func (tr *Map[K, V]) Max() (K, V, bool) {
 }
 
 func (tr *Map[K, V]) MaxMut() (K, V, bool) {
+	tr.assertMutable()
 	return tr.maxMut(true)
 }
 
@@ -827,6 +853,7 @@ func (tr *Map[K, V]) maxMut(mut bool) (K, V, bool) {
 // PopMin removes the minimum item in tree and returns it.
 // Returns nil if the tree has no items.
 func (tr *Map[K, V]) PopMin() (K, V, bool) {
+	tr.assertMutable()
 	if tr.root == nil {
 		return tr.empty.key, tr.empty.value, false
 	}
@@ -869,6 +896,7 @@ func (tr *Map[K, V]) PopMin() (K, V, bool) {
 // PopMax removes the maximum item in tree and returns it.
 // Returns nil if the tree has no items.
 func (tr *Map[K, V]) PopMax() (K, V, bool) {
+	tr.assertMutable()
 	if tr.root == nil {
 		return tr.empty.key, tr.empty.value, false
 	}
@@ -914,6 +942,7 @@ func (tr *Map[K, V]) GetAt(index int) (K, V, bool) {
 }
 
 func (tr *Map[K, V]) GetAtMut(index int) (K, V, bool) {
+	tr.assertMutable()
 	return tr.getAt(index, true)
 }
 
@@ -942,6 +971,7 @@ func (tr *Map[K, V]) getAt(index int, mut bool) (K, V, bool) {
 // DeleteAt deletes the item at index.
 // Return nil if the tree is empty or the index is out of bounds.
 func (tr *Map[K, V]) DeleteAt(index int) (K, V, bool) {
+	tr.assertMutable()
 	if tr.root == nil || index < 0 || index >= tr.count {
 		return tr.empty.key, tr.empty.value, false
 	}
@@ -1036,6 +1066,7 @@ func (tr *Map[K, V]) Iter() MapIter[K, V] {
 }
 
 func (tr *Map[K, V]) IterMut() MapIter[K, V] {
+	tr.assertMutable()
 	return tr.iter(true)
 }
 
@@ -1237,6 +1268,7 @@ func (tr *Map[K, V]) Values() []V {
 }
 
 func (tr *Map[K, V]) ValuesMut() []V {
+	tr.assertMutable()
 	return tr.values(true)
 }
 
@@ -1292,6 +1324,7 @@ func (tr *Map[K, V]) KeyValues() ([]K, []V) {
 }
 
 func (tr *Map[K, V]) KeyValuesMut() ([]K, []V) {
+	tr.assertMutable()
 	return tr.keyValues(true)
 }
 
@@ -1326,6 +1359,9 @@ func (tr *Map[K, V]) nodeKeyValues(cn **mapNode[K, V], keys []K, values []V,
 
 // Clear will delete all items.
 func (tr *Map[K, V]) Clear() {
+	if tr.sealed {
+		panic("cowbtree: mutation of sealed immutable map")
+	}
 	tr.count = 0
 	tr.root = nil
 }

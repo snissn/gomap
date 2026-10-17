@@ -195,6 +195,11 @@ func (j *History) PrepareEffects(entries []batch.Entry, ranges []batch.DeleteRan
 			return Prepared{}, ErrInvalidEffect
 		}
 	}
+	// A raw logical-replacement barrier already covers every raw key/range.
+	// Preserve its constant record/key cost while retaining native namespaces.
+	if barrier {
+		entries, ranges = nil, nil
+	}
 	reason := barrierLogicalReplacement
 	collapse := false
 	// Arithmetic is checked against finite ring capacity before addition.
