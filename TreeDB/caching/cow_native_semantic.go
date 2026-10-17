@@ -320,12 +320,22 @@ func (db *DB) WriteNativePublication(native *backenddb.NativePreparedPublication
 	if err = backend.ValidateNativeCommandIntent(owner, intent); err != nil {
 		return result, err
 	}
+	if intent.RequestsExactSeal() && !intent.NativeSealedReceiptAdmitted() {
+		return result, ErrCOWUnsupported
+	}
 	b := db.NewBatchWithSize(len(native.Entries))
 	defer func() { err = joinCOWCleanupError(err, b.Close()) }()
 	if err = b.SetNativeSemanticPublication(owner, native); err != nil {
 		return result, err
 	}
 	result.Consumed = true
+	if intent.RequestsExactSeal() {
+		sealed, takeErr := intent.TakeNativeSealReceipt()
+		if takeErr != nil {
+			return result, takeErr
+		}
+		b.cowState.native.sealReceipt = sealed
+	}
 	b.cowState.native.sealTarget = intent.NativeSealTarget()
 	err = b.WriteAfterCommandWALAppendWithPreparedRevision(sync, func() error {
 		if err := b.AcquireCOWAppendGuard(owner); err != nil {
