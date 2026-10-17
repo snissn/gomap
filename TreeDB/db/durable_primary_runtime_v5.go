@@ -44,14 +44,11 @@ type primaryDurableRuntimeV5 struct {
 	// The containing descriptor is independently pending until all original
 	// physical and resource edges complete. Root wrappers retain their own
 	// root-owned charges and never subsidize this descriptor.
-	disposalMu              sync.Mutex
-	metadata                *retainedalloc.Owner
-	metadataCharge          uint64
-	disposalAttempted       bool
-	disposalPhase           uint8
-	disposalIndex           int
-	disposalNative          bool
-	disposalQueue           primaryarena.ReleaseQueue
+	disposalMu        sync.Mutex
+	metadata          *retainedalloc.Owner
+	metadataCharge    uint64
+	disposalAttempted bool
+
 	disposalErr             error
 	disposalFailure         originalDBCleanupFailure
 	arena                   *primaryarena.Arena
@@ -61,10 +58,6 @@ type primaryDurableRuntimeV5 struct {
 	rebuildScratchCharge    uint64
 }
 type primaryPublicationSealV5 struct {
-	disposalPhase     uint8
-	disposalIndex     int
-	disposalNative    bool
-	disposalQueue     primaryarena.ReleaseQueue
 	disposalMu        sync.Mutex
 	disposalAttempted bool
 	disposalErr       error
@@ -874,7 +867,7 @@ func (runtime *rootPublicationRuntimeV1) commitPrimarySealV5(seal *rootPublicati
 }
 
 func (seal *primaryPublicationSealV5) release() error {
-	_, err := continuePrimaryPublicationSealReleaseV6(seal, nil, nil)
+	_, err := releasePrimaryPublicationSealV6(seal)
 	return err
 }
 

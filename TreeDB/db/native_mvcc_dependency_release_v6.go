@@ -5,56 +5,31 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
-	"unsafe"
 )
 
 // Retained by independent bounded physical release helpers after Q32 Store
 // capture retirement. This is a real cleanup capability refusal.
 var ErrNativeMVCCSnapshotWork = errors.New("native MVCC snapshot requires original work-bearing capture/cleanup")
 
-// Match the original physical pager's eligibility before a directory transfers
-// its last reference to native cleanup. Ordinary disposal remains available.
+// The original synchronous lease owns this cleanup route. A bounded caller
+// cannot transfer its last edge to it.
 func (lease *primaryDependencyLeaseV5) SupportsBoundedDependencyDirectoryReleaseV6() bool {
-	lease.mu.Lock()
-	defer lease.mu.Unlock()
-	if lease.closed {
-		// Eligibility only: the directory's cached cleanupConsumed/failure
-		// still distinguishes actual consumption from sticky original debt.
-		return true
-	}
-	// The live lease owns an arena edge; another owner borrower cannot close
-	// or refund this physical owner while lease.mu protects its transfer.
-	return lease.owner != nil && lease.owner.arena != nil && lease.owner.arena.Pager().SupportsBoundedPhysicalClose()
+	return false
 }
 
-// The SAME admitted lease carries original physical progress, then returns its
-// containing charge by value after unlocking. Its directory clears the typed
-// provider alias before actual external removal.
+// The SAME admitted lease disposes its original root and owner edge. The
+// directory clears its provider alias before consuming the containing refund.
 func (lease *primaryDependencyLeaseV5) ReleaseDependencyDirectoryWorkV6(work *iterator.OrdinalScanWork) (consumed, ready bool, completion rootpublication.DependencyDirectoryReleaseCompletionV6, err error) {
+	if work != nil {
+		return false, true, completion, ErrNativeMVCCSnapshotWork
+	}
 	lease.mu.Lock()
 	if lease.closed {
 		consumed, err = !lease.failed, lease.cleanupErr
 		lease.mu.Unlock()
 		return consumed, true, completion, err
 	}
-	if lease.releasePhase != 0 && work == nil && lease.releaseNative {
-		lease.mu.Unlock()
-		return false, true, completion, ErrNativeMVCCSnapshotWork
-	}
-	ordinaryWork := iterator.OrdinalScanWork{RecordLimit: ^uint64(0), ByteLimit: ^uint64(0)}
-	w := work
-	if w == nil {
-		w = &ordinaryWork
-	}
-	if lease.releasePhase == 0 {
-		if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*lease))+2*uint64(unsafe.Sizeof(primaryArenaOwnerV5{}))) {
-			lease.mu.Unlock()
-			return false, false, completion, nil
-		}
-		lease.releaseMetadata = lease.owner.arena.MetadataOwner()
-		lease.releaseNative = work != nil
-		lease.releasePhase = 1
-	}
+	metadata := lease.owner.arena.MetadataOwner()
 	fail := func(cause error) (bool, bool, rootpublication.DependencyDirectoryReleaseCompletionV6, error) {
 		if cause == nil {
 			cause = rootpublication.ErrResourceOwnership
@@ -62,69 +37,37 @@ func (lease *primaryDependencyLeaseV5) ReleaseDependencyDirectoryWorkV6(work *it
 		lease.closed = true
 		lease.failure.causes = [3]error{cause, rootpublication.ErrResourceOwnership}
 		lease.cleanupErr = &lease.failure
-		lease.releaseMetadata.CleanupFailed()
-		custodyOwner := lease.owner
-		if custodyOwner == nil {
-			custodyOwner = lease.releaseWork.owner
-		}
-		lease.owner = custodyOwner
-		custodyOwner.retainFailedDependency(lease, lease.cleanupErr)
+		metadata.CleanupFailed()
+		lease.owner.retainFailedDependency(lease, lease.cleanupErr)
 		result := lease.cleanupErr
 		lease.mu.Unlock()
 		return false, true, rootpublication.DependencyDirectoryReleaseCompletionV6{}, result
 	}
-	if lease.releasePhase == 1 {
-		if lease.ref.PageID != 0 {
-			ready, err := lease.owner.arena.Drop(lease.ref, w)
-			if err != nil {
-				return fail(err)
-			}
-			if !ready {
-				lease.mu.Unlock()
-				return false, false, completion, nil
-			}
-			lease.ref = primaryarena.Ref{}
-		}
-		lease.releasePhase = 2
-	}
-	if lease.releasePhase == 2 {
-		ready, err := bindPrimaryArenaRelease(&lease.releaseWork.primaryArenaReleaseState, lease.owner, lease.releaseNative, w)
+	if lease.ref.PageID != 0 {
+		ready, err := lease.owner.arena.Drop(lease.ref, nil)
 		if err != nil {
 			return fail(err)
 		}
 		if !ready {
-			lease.mu.Unlock()
-			return false, false, completion, nil
+			return fail(rootpublication.ErrResourceOwnership)
 		}
-		lease.ownerReleaseConsumed = true
-		// The SAME external physical receipt now owns the last arena edge.
-		// Clear the caller alias before its terminal containing refund.
-		lease.owner = nil
-		lease.releasePhase = 3
+		lease.ref = primaryarena.Ref{}
 	}
-	if lease.releasePhase == 3 {
-		ready, debt, err := continuePrimaryArenaRelease(&lease.releaseWork.primaryArenaReleaseState, &lease.releaseWork.proof, &lease.releaseWork.parentRefund, &lease.releaseWork.ownerRefund, w)
-		if !ready && err == nil {
-			lease.mu.Unlock()
-			return false, false, completion, nil
-		}
-		if debt || !ready {
-			return fail(err)
-		}
-		lease.cleanupErr = err
-		lease.releasePhase = 4
+	owner := lease.owner
+	consumed, debt, ownerCompletion, err := owner.releaseOriginalWithOutcome()
+	lease.ownerReleaseConsumed = consumed
+	if !consumed || debt {
+		return fail(err)
 	}
-	if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*lease))) {
-		lease.mu.Unlock()
-		return false, false, completion, nil
-	}
-	completion = rootpublication.DependencyDirectoryReleaseCompletionV6{Metadata: lease.releaseMetadata, Charge: lease.metadataCharge}
-	lease.metadataCharge = 0
-	lease.releaseMetadata = nil
-	lease.owner = nil
+	// End both aliases before refunding the physical owner. The lease remains
+	// charged until the containing directory releases its provider alias.
+	owner, lease.owner = nil, nil
+	lease.cleanupErr = err
 	lease.directory = nil
 	lease.closed = true
-	err = lease.cleanupErr
+	completion = rootpublication.DependencyDirectoryReleaseCompletionV6{Metadata: metadata, Charge: lease.metadataCharge}
+	lease.metadataCharge = 0
 	lease.mu.Unlock()
+	ownerCompletion.complete()
 	return true, true, completion, err
 }

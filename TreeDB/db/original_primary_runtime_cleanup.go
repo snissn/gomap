@@ -27,7 +27,7 @@ func bindReservedPrimaryRuntimeV5(r *primaryDurableRuntimeV5, a *primaryarena.Ar
 // published current transfer the actual DBState root here at terminal disposal;
 // a stale runtime.current alias is never a second lifetime edge.
 func releasePrimaryRuntimeV5(a *primaryarena.Arena, r *primaryDurableRuntimeV5) error {
-	completion, ready, err := continuePrimaryRuntimeDisposalV6(a, r, nil, nil)
+	completion, ready, err := releasePrimaryRuntimeOriginalV6(a, r)
 	// The shared driver has returned through the actual disposing scope. End this
 	// adapter's runtime alias before consuming only its by-value accounting.
 	r = nil

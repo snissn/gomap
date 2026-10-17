@@ -125,9 +125,6 @@ type rootPublicationSealBaseV1 struct {
 // the retry, Prepare creates a successor seal and retains this seal as ordered
 // allocator debt until the successor publishes.
 type rootPublicationSealV1 struct {
-	disposalPhase   uint8
-	disposalNative  bool
-	disposalIndex   int
 	disposalMu      sync.Mutex
 	disposalErr     error
 	disposalFailure originalDBCleanupFailure
@@ -260,7 +257,8 @@ func (runtime *rootPublicationRuntimeV1) cloneVisibleResourcesWithWorkMax(maxRes
 }
 
 func (seal *rootPublicationSealV1) release() error {
-	completion, _, err := continueRootPublicationSealReleaseV6(seal, nil, nil)
+	completion, _, err := releaseRootPublicationSealV6(seal)
+	seal = nil
 	completion.complete()
 	return err
 }
