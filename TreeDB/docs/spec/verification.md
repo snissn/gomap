@@ -4255,3 +4255,46 @@ P1 reverse/range and fallback gates: `TestPublicCOWTxnReverseOverlaySeekAndLifet
 `BenchmarkPublicCOWTxn` reports enabled point/range/reverse costs with old retained
 history and newer unrelated point chunks; it has no unsupported-baseline speedup
 comparator. See both benchmark READMEs for the exact fresh-process capture.
+
+## Complete COW prefix, original custody and sealed completion
+
+The lower native seam is independently testable while unmigrated collection
+producers retain their existing barriers. Passing these controls does not claim
+that every collection producer uses native immutable descriptors.
+
+| Obligation | Source-supported controls |
+|---|---|
+| Exact complete basis and accepted handoff | `TestCheckpointRejectsMixedSystemRoot`, `TestCheckpointRejectsPublishedSemanticSystemRoot`, `TestAcceptedSnapshotReceiptRetainsCandidateTuple`, `TestDelayedHandoffUsesAcceptedGeneration`, `TestCOWCheckpointRealAcceptedReportedErrorRetainsPrefixAndDoesNotReplay` |
+| Original native assignment custody and safe fence | `TestCOWNativeAssignedFailureRetainsOriginalAssetWithoutRawNeighbors`, `TestCOWNativeBridgeKeepsUnconvertedProducerFence`, `TestCOWNativeWALExactRequestRequiresOriginalAdmission` |
+| NoWAL visibility versus explicit seal; same bounded journal | `TestCOWNativeNoWALBridgeMinimalJournalAndExactSync`, public raw transaction namespace/history controls |
+| Untouched refusal versus terminal materialization | `TestCOWNativeBuildCapacityBeforeAndAfterOriginalAssetMutation` uses an actual partial file before its terminal capacity error |
+| Real destruction, notification and concurrent Close | `TestCOWPublicSemanticDestructorAndNotificationCloseGuard` includes actual original file close and failed directory unlink; `TestCloseBorrowsAdmittedTeardownGuard` checks borrowed teardown admission |
+| Maintenance headroom and retained physical views | `TestMinimumCapacityCheckpointMakesProgress`, `TestRetainedViewMaintenanceRefreshAndClose`, `TestMaintenanceDrainUsesOriginalRetiredGeneration`, `TestCOWPublicSelectedSourceRewriteKeepsOldCuts` |
+
+Run the affected lower lifecycle suites and compile the complete TreeDB tree:
+
+```sh
+GOWORK=off go test ./TreeDB/... -run '^$' -count=1
+GOWORK=off go test ./TreeDB/internal/rootpublication ./TreeDB/caching ./TreeDB/db -count=1
+GOWORK=off go test ./TreeDB -run 'Test(COW|PublicCOW|MinimumCapacityCheckpointMakesProgress|RetainedViewMaintenanceRefreshAndClose)' -count=1
+```
+
+Prepared collection and deterministic apply controls also exercise real canonical
+frames, held physical seal workers, another writer and Close. Their accepted
+proof must be captured before original materialization release; result and
+progress become observable only after the exact request seal. Run the applicable
+`collections`, `internal/raftapply` and `internal/commandwalapply` tests and race
+controls when changing that boundary. Both recovery slots, parent/WAL lineage,
+corrupt-newest fallback, selected-source revisions and physical identity pins
+remain required affected backend coverage; an in-memory prefix test is not a
+replacement for them.
+
+`BenchmarkCOWPublicDirtyCost` is a bounded public before/after diagnostic. Bind
+baseline/candidate heads, unchanged harness blob, binaries, toolchain, profiles,
+fixed operation counts and host noise; use fresh alternating paired processes.
+Report ordinary ACK, capture/read/release and dirty Checkpoint separately, with
+bytes/objects, latency tails, admitted peak and actual final Close zero-debt
+observations. Fixture construction and final Close are excluded from benchmark
+timers. These measurements do not establish sustained throughput, full-drain
+latency or unsupported native-baseline speedups. Retained qualification requires
+the reviewed/landed harness and frozen product source.

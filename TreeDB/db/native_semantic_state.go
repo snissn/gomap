@@ -29,6 +29,14 @@ type NativeSemanticState interface {
 	Retain()
 	Release() *rootpublication.SemanticCleanup
 	SparseProjections() []rootpublication.ParticipantProjection
+	// PrepareRollover prepares an equivalent physical active successor before
+	// any raw Freeze or cut installation. Any nonnil result transfers one owned
+	// edge, including on error: the caller only releases a failed private result
+	// outside publication/writer/cut gates. Its preborn Work already owns every
+	// partial allocation. Success must return nonnil (Retain this state if
+	// unchanged); nil/error proves preallocation refusal. Frozen capture keeps
+	// its distinct original retained edge.
+	PrepareRollover() (NativeSemanticState, error)
 	// PrepareBuild uses this captured complete logical basis and original
 	// teardown lease. It never recaptures current metadata or acquires P.
 	// Only NativeSemanticBuildRetryableRefusal permits another build attempt;
@@ -109,6 +117,9 @@ type NativeSemanticCapture interface {
 	LogicalSequence() uint64
 	AdmitNativeBytes(uint64) (NativeAllocationReceipt, error)
 	NativeAllocator() NativeSemanticAllocator
+	// NativeMaintenanceAllocator is the SAME reserved physical-progress budget,
+	// used for build/successor metadata, never native producer source occupancy.
+	NativeMaintenanceAllocator() NativeSemanticAllocator
 	Close() error
 }
 

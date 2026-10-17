@@ -28,6 +28,11 @@ type publicSemanticCleanupState struct {
 	failure   error
 }
 
+func (s *publicSemanticCleanupState) PrepareRollover() (backenddb.NativeSemanticState, error) {
+	s.Retain()
+	return s, nil
+}
+
 func (s *publicSemanticCleanupState) Retain() { s.refs.Add(1) }
 func (s *publicSemanticCleanupState) Release() *rootpublication.SemanticCleanup {
 	if s.refs.Add(-1) == 0 {

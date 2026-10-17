@@ -1,9 +1,11 @@
 package db
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"go/ast"
+	"go/format"
 	"go/importer"
 	"go/parser"
 	"go/token"
@@ -113,7 +115,7 @@ func TestCollectionPublicationPathsConvergeOnCoherentSnapshotPublication(t *test
 		t.Errorf("coherent publication slot %s escapes typed analysis in %s: %s", escape.slot, publicationGuardFuncID(escape.caller), escape.detail)
 	}
 	for _, write := range analysis.stateWrites {
-		t.Errorf("published DBState mutated in %s: %s", publicationGuardFuncID(write.caller), write.detail)
+		t.Errorf("published DBState mutated at %s in %s: %s", source.fset.Position(write.pos), publicationGuardFuncID(write.caller), write.detail)
 	}
 
 	if analysis.publishSnapshotView == nil {
@@ -613,7 +615,7 @@ func publicationGuardFindStateWrites(t *testing.T, source *publicationGuardSourc
 				}
 				for _, arg := range n.Args {
 					if ta.expr(arg)&(publicationGuardTaintState|publicationGuardTaintContainer) != 0 {
-						writes = append(writes, publicationGuardStateWrite{caller: caller, pos: arg.Pos(), detail: "published DBState escapes to a call without an analyzed body"})
+						writes = append(writes, publicationGuardStateWrite{caller: caller, pos: arg.Pos(), detail: fmt.Sprintf("published DBState escapes to a call without an analyzed body: callee=%s argument=%s", publicationGuardRender(source.fset, n.Fun), publicationGuardRender(source.fset, arg))})
 					}
 				}
 			}
@@ -1350,4 +1352,12 @@ func containsPublicationGuardFinding(findings []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func publicationGuardRender(fset *token.FileSet, node ast.Node) string {
+	var out bytes.Buffer
+	if err := format.Node(&out, fset, node); err != nil {
+		return fmt.Sprintf("%T", node)
+	}
+	return out.String()
 }

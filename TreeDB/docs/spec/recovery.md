@@ -55,7 +55,13 @@ reopen, durable roots and Applied-LSN coverage determine replay/cleanup; an
 in-memory receipt or visible cut does not prove durability. `no_wal_fast` recovery
 continues to select a complete sealed root, and recent relaxed writes can be
 absent. Value-log and dictionary assets referenced by the selected recovery
-state remain persistent dependencies.
+state remain persistent dependencies. Both selectable recovery slots and their
+required immediate parents remain live even when their logical roots coincide.
+WAL retirement uses the minimum selectable-root applied frontier together with
+stable-prefix, lineage and physical-identity proofs; neither a visible maximum
+nor a successful physical seal manufactures stable WAL coverage. Equivalent
+pointer rewrite preserves the winning current revision and exact retained file
+identity while old views retain their original read authority.
 
 Qualification must select COW through actual public Open. Process-crash tests
 and modeled stable-image/power-loss cuts are separate evidence classes; ordinary

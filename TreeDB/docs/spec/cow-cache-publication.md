@@ -238,7 +238,8 @@ path rather than activating the legacy streaming bypass.
 ## Prepare, canonicalize, finalize, publish
 
 The command sequencer covers all changed-shard preparation and complete-cut
-installation. All allocation/refusal points precede acceptance:
+installation. For ordinary raw writes, all allocation/refusal points precede
+acceptance:
 
 1. Admit staged operations, successor roots/cut and concrete resource owners.
    Public command-WAL batches admit their own wrapper and scan the inner owned
@@ -286,9 +287,11 @@ bounded canonical physical chunks oldest to newest, and uses one existing
 `RootPublicationBuildGroup` for one final backend publication. Intermediate
 chunk progress does not remove old-prefix precedence.
 
-After backend acceptance, handoff captures/adopts the successor basis and
-removes only the exact proved-covered prefix. Newer mutable roots and later
-frozen sources stay in the successor cut. Admission/capture refusal retains
+Before backend acceptance, the group admits the exact successor Snapshot and
+handoff/cleanup capacity. After acceptance, handoff adopts that retained receipt's
+basis, without acquiring a current Snapshot, and removes only the exact
+proved-covered prefix. Newer mutable roots and later frozen sources stay in the
+successor cut. Handoff admission refusal retains
 the accepted receipt and captured prefix; a permitted retry finishes handoff
 instead of reapplying the prefix. Backend acceptance remains an irreversible
 receipt even if later durability waiting or cleanup returns an error. The
@@ -324,6 +327,59 @@ adds no checkpoint or durable-root publication.
 Value-log segments remain persistent storage: deletion uses existing
 reachability/pin/scanner authorities, never segment age or a second COW GC
 tracker. Retired owner cleanup occurs outside writer/admission/cut locks.
+
+## Complete-prefix and native ownership seam
+
+The existing lower publication owner keeps one finite accepted FIFO for the DB.
+Each entry distinguishes canonical assignment or uncertainty, complete logical
+installation, WAL completion and the exact physical seal. V (visible logical
+sequence), C (visible command prefix), W (stable WAL prefix) and S (sealed root)
+are separate; a NoWAL publication has no fabricated command LSN or W advance.
+A captured finite prefix T includes every accepted entry through its boundary,
+with sparse native domain projections against the same complete raw/system/catalog
+basis. One build group publishes that boundary. An uncovered legacy producer
+blocks the raw path before append; a partial native candidate cannot advance
+coverage.
+
+The fixed backend-to-cache native bridge uses the existing owner and command-WAL
+handler registration direction. Identity-free capability, dependency, footprint
+and admission checks run before canonical assignment. An internal admitted native
+finalizer may then construct actual-LSN assets privately. Any failure after
+assignment retains the original sparse partial-resource ledger and assigned
+identity, poisons continuation and installs no partial cut. Final installation
+under the cut latch does not allocate or execute a destructor. A stale equivalent
+physical basis requires preparation against the compatible latest basis before
+acceptance; it is not itself a logical transaction conflict. The same bounded
+transaction journal separates raw and semantic namespaces. These lower seams do
+not activate collection producers whose legacy barriers are still registered.
+
+Native build materialization of an already logically accepted plan is terminal
+on failure. Only `NativeSemanticBuildRetryableRefusal` proves an untouched
+preadmission refusal; an ordinary capacity error after original asset creation
+cannot restart or overwrite that work. Accepted disk publication retries only
+its exact handoff and never rebuilds or reapplies its prefix.
+
+Last semantic release detaches one preborn cleanup record in constant work and
+enqueues it before the last retained cut leaves the active-cut count. The
+existing flush worker performs actual destruction outside publication, build and
+cut gates; cleanup wakes preserve unrelated coalesced flush requests. Close stops
+admission and joins outside worker-needed gates. If user cuts survive Close, the
+same worker continues only cleanup until closed, initial Close cleanup complete,
+zero active cuts and no runnable/running cleanup are serialized together.
+Successful destruction returns an independent accounting receipt; original record
+and resource aliases end before that receipt refunds their containing allocation.
+Failure parks the same original Work, objects, error and charge, without replay.
+A tiny guard bound at Open rejects same-caller public/cache/backend Close from
+actual Finish, destruction and error-notification callbacks before side effects;
+unrelated Close waits normally. No additional scheduler is introduced.
+
+Explicit sealed requests release their publication/materialization in-flight
+count and original staging, collection and teardown progress gates before
+waiting on their own physical receipt. Deterministic apply computes its immutable
+accepted proof before releasing the owner and publishes result/progress only
+after that exact seal succeeds. Reusable vector captures keep their caller-owned
+pin while releasing the storage-progress barrier needed by the seal worker.
+NoWAL explicit boundaries retain the full captured drain.
 
 ## Verification and performance scope
 
