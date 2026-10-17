@@ -84,14 +84,32 @@ func (c *cowCache) installCOWBasis(basis *cowBackendBasis, covered *cowReadCut) 
 		return nil, err
 	}
 	if err = basis.snapshot.ActivatePrimaryMetadataProducer(); err != nil {
-		next.lease.Close()
+		refund := c.releasePrivateCOWBasisInstall(next)
+		next = nil
+		refund.Close()
 		return nil, err
 	}
 	old, err := c.installPreparedCOWBasis(basis, covered, next)
 	if err != nil {
-		next.lease.Close()
+		refund := c.releasePrivateCOWBasisInstall(next)
+		next = nil
+		refund.Close()
 	}
 	return old, err
+}
+
+// A failed private successor owns no published raw-root edges. End its semantic
+// edges while the retained opening cut still keeps the cleanup lane alive;
+// return only independent accounting after all containing aliases are scrubbed.
+func (c *cowCache) releasePrivateCOWBasisInstall(next *cowReadCut) *memtable.COWExternalLease {
+	if next == nil {
+		return nil
+	}
+	c.releasePrivateSemanticState(next)
+	refund := next.lease
+	next.lease, next.cache, next.basis = nil, nil, nil
+	next.shards, next.frozen, next.sources, next.domains = nil, nil, nil, nil
+	return refund
 }
 
 func (c *cowCache) installPreparedCOWBasis(basis *cowBackendBasis, covered, next *cowReadCut) (*cowReadCut, error) {
@@ -202,15 +220,14 @@ func (db *DB) completeCOWHandoff() error {
 	}
 	c.handoff = nil
 	h.next = nil // the installed cut now owns the admitted descriptor
-	err = joinCOWCleanupError(err, h.basis.release())
-	h.basis = nil
 	c.handoffs.Add(1)
 	if old != nil {
 		err = joinCOWCleanupError(err, old.drain())
 	}
-	err = joinCOWCleanupError(err, c.releaseCut(h.cut))
-	h.guard.Release()
-	h.lease.Close()
+	refund, cleanupErr := h.release(c)
+	h = nil
+	err = joinCOWCleanupError(err, cleanupErr)
+	refund.Close()
 	return err
 }
 
@@ -270,9 +287,18 @@ func (db *DB) flushCOWFrozenCut(syncFlush bool, publish *checkpointCommandWALPub
 		return joinCOWCleanupError(err, c.releaseCut(cut))
 	}
 	h := &cowFlushHandoff{cut: cut, lease: lease}
+	handoffOwned := true
 	defer func() {
-		if !h.accepted {
-			retErr = joinCOWCleanupError(retErr, h.abort(c))
+		if handoffOwned {
+			prefix := h.prefix
+			h.prefix = rootpublication.AcceptedCut{}
+			if prefix.Valid() {
+				retErr = joinCOWCleanupError(retErr, prefix.Abandon())
+			}
+			refund, cleanupErr := h.release(c)
+			h = nil
+			retErr = joinCOWCleanupError(retErr, cleanupErr)
+			refund.Close()
 		}
 	}()
 	var localPublish checkpointCommandWALPublish
@@ -335,13 +361,25 @@ func (db *DB) flushCOWFrozenCut(syncFlush bool, publish *checkpointCommandWALPub
 				return e
 			}
 			return snapshot.ActivatePrimaryMetadataProducer()
-		}, func() error { err := h.basis.release(); h.basis = nil; return err })
+		}, func() error {
+			basis := h.basis
+			h.basis = nil
+			return basis.release()
+		})
 	}
 	if err != nil {
 		return errors.Join(err, group.Close())
 	}
 	if captured := cut.frozenSemanticRootSet; captured != nil {
 		if err = captured.PrepareBuild(group, cut.basis.snapshot, h.guard); err != nil {
+			var refusal backenddb.NativeSemanticBuildRetryableRefusal
+			if !errors.As(err, &refusal) {
+				// Logical acceptance predates this physical build. A partial native
+				// failure cannot be skipped or rebuilt by a later checkpoint, even
+				// when its underlying cause happens to be a capacity error.
+				c.prefix.PoisonAccepted(err)
+				group.MarkNativeSemanticBuildRecoveryRequired()
+			}
 			return errors.Join(err, group.Close())
 		}
 	}
@@ -392,6 +430,7 @@ func (db *DB) flushCOWFrozenCut(syncFlush bool, publish *checkpointCommandWALPub
 	if group.Accepted() {
 		h.accepted, h.seal = true, group.AcceptedSealReceipt()
 		c.handoff = h
+		handoffOwned, h = false, nil
 		if err != nil {
 			return err
 		}
@@ -400,18 +439,21 @@ func (db *DB) flushCOWFrozenCut(syncFlush bool, publish *checkpointCommandWALPub
 	return err
 }
 
-func (h *cowFlushHandoff) abort(c *cowCache) error {
-	var err error
-	if h.prefix.Valid() {
-		err = h.prefix.Abandon()
-	}
-	err = joinCOWCleanupError(err, h.basis.release())
-	if h.next != nil {
-		c.releasePrivateSemanticState(h.next)
-		h.next.lease.Close()
-	}
-	h.guard.Release()
-	err = joinCOWCleanupError(err, c.releaseCut(h.cut))
-	h.lease.Close()
-	return err
+// release detaches the original handoff aliases before invoking any finalizer.
+// A failed basis retains itself on its preborn OriginalCleanupCustody, and a
+// failed group retains its own physical owner; neither is flattened into h.
+// The caller ends its h alias before completing the independent final refund.
+func (h *cowFlushHandoff) release(c *cowCache) (*memtable.COWExternalLease, error) {
+	basis, next, cut, guard, refund := h.basis, h.next, h.cut, h.guard, h.lease
+	h.basis, h.next, h.cut, h.guard, h.lease = nil, nil, nil, nil, nil
+	h.prefix, h.seal = rootpublication.AcceptedCut{}, rootpublication.PhysicalSealReceipt{}
+	nextRefund := c.releasePrivateCOWBasisInstall(next)
+	next = nil
+	nextRefund.Close()
+	err := basis.release()
+	basis = nil
+	err = joinCOWCleanupError(err, c.releaseCut(cut))
+	cut = nil
+	guard.Release()
+	return refund, err
 }

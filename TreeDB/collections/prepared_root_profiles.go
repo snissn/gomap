@@ -45,6 +45,9 @@ func preparedInsertPublisherReserveBytes() int64 {
 	reserve += 3 * preparedInsertPublisherMaxRecordBytes
 	reserve += preparedInsertPublisherMaxCacheBytes
 	reserve += preparedInsertPublisherFixedBytes
+	// The exact request cell lives through the out-of-gate sealed wait. Commit
+	// clears its original intent alias before releasing this publisher token.
+	reserve += int64(backenddb.NativeSealReceiptAllocationBytes())
 	return reserve
 }
 

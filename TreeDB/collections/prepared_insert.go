@@ -592,12 +592,16 @@ func (p *PreparedInsertBatch) Commit() ([][]byte, error) {
 	if p == nil || !p.state.CompareAndSwap(0, 1) {
 		return nil, errors.New("collections: prepared insert already consumed")
 	}
-	defer p.release()
+	var intent *backenddb.CommandWALIntent
+	defer func() {
+		intent.ReleaseSealedReceipt()
+		intent = nil
+		p.release()
+	}()
 	c := p.collection
 	// Materialization owns schema, vector admission, mutation and staging only
 	// inside this scope. Exact physical sealing is awaited after every lease has
 	// unwound, so another publisher or Close can provide the required progress.
-	var intent *backenddb.CommandWALIntent
 	resultIDs, err := func() ([][]byte, error) {
 		unlockSchema := c.lockCollectionSchemaRead()
 		defer unlockSchema()

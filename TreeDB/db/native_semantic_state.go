@@ -11,6 +11,15 @@ import (
 
 var ErrNativeSemanticUnsupported = errors.New("treedb: command kind has no native semantic preparation")
 
+// NativeSemanticBuildRetryableRefusal proves that PrepareBuild refused before
+// mutating its original build ledger, allocating assets, or beginning fallible
+// materialization. A capacity error after those effects is terminal instead.
+// This classification carries no resource or failure custody of its own.
+type NativeSemanticBuildRetryableRefusal struct{ Cause error }
+
+func (e NativeSemanticBuildRetryableRefusal) Error() string { return e.Cause.Error() }
+func (e NativeSemanticBuildRetryableRefusal) Unwrap() error { return e.Cause }
+
 // NativeSemanticState is a native immutable semantic/catalog root set paired
 // with the SAME raw COW cut and exact backend Snapshot. Implementations belong
 // to higher-level packages; db/caching never import their implementation.
@@ -22,6 +31,8 @@ type NativeSemanticState interface {
 	SparseProjections() []rootpublication.ParticipantProjection
 	// PrepareBuild uses this captured complete logical basis and original
 	// teardown lease. It never recaptures current metadata or acquires P.
+	// Only NativeSemanticBuildRetryableRefusal permits another build attempt;
+	// every other failure preserves the original ledger and poisons continuation.
 	PrepareBuild(*RootPublicationBuildGroup, *Snapshot, *StableResourceCaptureLease) error
 	// PrepareHandoff prepares a successor against latest logical state using
 	// only captured-T touched domains. Distinct suffix-domain headers/sequence
