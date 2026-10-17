@@ -3,6 +3,7 @@ package txnhistory
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"github.com/snissn/gomap/TreeDB/batch"
 	"testing"
 )
@@ -32,7 +33,7 @@ func TestHistoryPreparedCopiesCannotActOnSuccessorsAndLastSlotOwnsLease(t *testi
 	if j.Install(old, 99) {
 		t.Fatal("consumed capability installed twice")
 	}
-	next, err := j.Prepare([]batch.Entry{{Key: []byte("unaccepted")}}, nil, false)
+	next, err := j.Prepare([]batch.Entry{{Key: bytes.Repeat([]byte("unaccepted"), 8)}}, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +63,7 @@ func TestHistoryPreparedCopiesCannotActOnSuccessorsAndLastSlotOwnsLease(t *testi
 	}
 }
 
-func TestHistoryPointPreparationUsesOnlyOwnedKeyAllocation(t *testing.T) {
+func TestHistoryShortPointPreparationUsesOriginalSlotWithoutAllocation(t *testing.T) {
 	j, _ := New(8, 1<<20, nil)
 	defer j.Close()
 	entry := []batch.Entry{{Key: []byte("owned-key")}}
@@ -76,8 +77,57 @@ func TestHistoryPointPreparationUsesOnlyOwnedKeyAllocation(t *testing.T) {
 		if !j.Install(p, seq) {
 			panic("install")
 		}
-	}); got > 1 {
-		t.Fatalf("point preparation allocated %g, want only immutable key backing", got)
+	}); got != 0 {
+		t.Fatalf("short point preparation allocated %g, want original FIFO-slot custody", got)
+	}
+}
+
+func TestHistoryInlinePointCustodySurvivesCancelWrapAndCallerReuse(t *testing.T) {
+	var leases []*countedHistoryLease
+	j, _ := New(8, 1<<20, func(a, b, c, d, e uint64) (Lease, error) {
+		l := new(countedHistoryLease)
+		leases = append(leases, l)
+		return l, nil
+	})
+	defer j.Close()
+	want := make(map[uint64]string)
+	var stale Prepared
+	for seq := uint64(1); seq <= 64; seq++ {
+		// Cancel at the same vacant slot that the next accepted key will use.
+		canceled, err := j.Prepare([]batch.Entry{{Key: []byte("canceled")}}, nil, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		canceled.Cancel()
+		key := []byte(fmt.Sprintf("key-%d", seq%3))
+		want[seq] = string(key)
+		p, err := j.Prepare([]batch.Entry{{Key: key}}, nil, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		clear(key) // The prepared command already owns its input.
+		canceled.Cancel()
+		stale.Cancel()
+		if !p.Valid() || !j.Install(p, seq) || j.Install(canceled, seq+100) {
+			t.Fatal("stale preparation changed current custody")
+		}
+		stale = p
+		for k := 0; k < j.count; k++ {
+			r := &j.records[(j.head+k)%len(j.records)]
+			if r.key != want[r.seq] {
+				t.Fatalf("record %d key=%q want=%q", r.seq, r.key, want[r.seq])
+			}
+		}
+		if got := j.index[j.slot(want[seq])]; got.key != want[seq] || got.seq != seq {
+			t.Fatalf("latest index lost accepted key: %+v", got)
+		}
+	}
+	if len(leases) != 1 {
+		t.Fatalf("inline keys allocated dynamic leases: %d", len(leases))
+	}
+	j.Close()
+	if leases[0].closes != 1 {
+		t.Fatal("original ring charge did not drain")
 	}
 }
 

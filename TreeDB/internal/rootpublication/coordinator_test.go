@@ -1864,6 +1864,11 @@ func TestRandomizedCoordinatorModel(t *testing.T) {
 		pendingBytes += bytes
 		pendingCommits++
 		if hardAdmission {
+			// Admission waits for bounded pending debt, not terminal resource
+			// accounting. Join the durable frontier before comparing this model.
+			if err := c.WaitThrough(context.Background(), seq); err != nil {
+				t.Fatalf("step %d hard-admission durability: %v", step, err)
+			}
 			durable = seq
 			pendingBytes, pendingCommits = 0, 0
 		}

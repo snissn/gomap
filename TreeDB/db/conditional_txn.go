@@ -79,6 +79,20 @@ func (db *DB) NewConditionalTxn() (*ConditionalTxn, error) {
 		return nil, ErrClosed
 	}
 
+	// The standalone compatibility snapshot must include previously
+	// acknowledged registered producers. Otherwise this transaction's own
+	// sync-time drain would turn those earlier writes into a later root barrier.
+	// Drain before taking a snapshot or any transaction-owned publication gate.
+	if db.commandWAL {
+		unlock, err := db.LockCommandWALPublishWithBarriers()
+		if err != nil {
+			return nil, err
+		}
+		unlock()
+	} else if err := db.drainNoWALSyncPublishBarriers(); err != nil {
+		return nil, err
+	}
+
 	db.conditionalActiveTxnCount.Add(1)
 	snap := db.AcquireSnapshot()
 	if snap == nil {

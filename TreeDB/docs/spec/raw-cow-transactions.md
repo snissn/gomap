@@ -68,6 +68,11 @@ range effects are relevant. Backend and legacy-cache compatibility wrappers use
 this same history implementation rather than active-start maps or full-map
 minimum pruning.
 
+Singleton point keys of at most 32 bytes use backing embedded in their original
+FIFO slot. The larger fixed ring is charged at construction; the slot is reused
+only after its record and matching index alias retire. Long keys, bulk commands
+and native ranges retain the existing immutable arena and final-slot lease.
+
 Every accepted logical producer advances the clock, even with no transactions
 open. Equivalent rollover, checkpoint and maintenance handoff preserve the
 logical sequence. History eviction advances its floor before removing the first
@@ -82,6 +87,12 @@ instead of unbounded effects. Preparing a future barrier does not invalidate
 transactions until acceptance. Standalone legacy compatibility histories retain
 at most 4,096 effects and 4 MiB of record payload; they have no active-start
 registry. Capacity limits describe ownership, not RSS or write-latency guarantees.
+
+Standalone backend compatibility transactions drain already-acknowledged
+registered producers before capturing their opening disk snapshot, without
+holding the raw staging guard during capture. Commit still performs its normal
+drain and requested durability boundary. A producer that refills after opening
+may legitimately cause a later conflict; the opening sequence is never rebased.
 
 The existing COW writer lease spans final reserve/evict/validation, canonical
 append and complete cut/journal installation. The backend append primitive
@@ -121,8 +132,8 @@ preparation nonce prevents stale copies or deferred cancel/install calls from
 acting on a later reservation. The nonce grants ownership, not logical order.
 Cancellation consumes the reservation under the writer lease before releasing
 shared staging; independent cut/resource retirement then runs outside that lease.
-Immutable keys use one command-owned backing allocation; the command's final
-physical FIFO slot owns its original capacity and admission lease until every
+Keys outside the short-singleton path use one command-owned backing allocation;
+the command's final physical FIFO slot owns its capacity and admission lease until every
 preceding fragment evicts. Reserve-before-validation makes that final slot
 unique among retained commands, so it also identifies binary-search chunks.
 There is no per-command prepared/effect owner allocation or generic pool.

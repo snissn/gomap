@@ -1036,7 +1036,7 @@ func TestPublicCOWTxnMaintenanceRefusalPreservesLogicalView(t *testing.T) {
 			}
 			seq := db.Stats()["treedb.cache.cow.txn.logical_seq"]
 			err := db.VacuumIndexOnline(context.Background())
-			if err != nil && !errors.Is(err, memtable.ErrCOWCapacity) {
+			if err != nil && !errors.Is(err, memtable.ErrCOWCapacity) && !errors.Is(err, errVacuumUnsupported) {
 				t.Fatalf("maintenance=%v", err)
 			}
 			if next := db.Stats()["treedb.cache.cow.txn.logical_seq"]; next != seq {

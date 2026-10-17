@@ -16,6 +16,14 @@ func TestNoWALSyncBarrierDrainAndFailure(t *testing.T) {
 					t.Fatal(err)
 				}
 				defer database.Close()
+				var tx *ConditionalTxn
+				if boundary == "conditional" {
+					tx, err = database.NewConditionalTxn()
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer tx.Close()
+				}
 				drained := false
 				sentinel := errors.New("local drain failed")
 				unregister := database.RegisterCommandWALRawPublishBarrier(func() error {
@@ -56,12 +64,7 @@ func TestNoWALSyncBarrierDrainAndFailure(t *testing.T) {
 					err = batch.WriteSync()
 					_ = batch.Close()
 				case "conditional":
-					tx, e := database.NewConditionalTxn()
-					if e != nil {
-						t.Fatal(e)
-					}
-					defer tx.Close()
-					if e = tx.Set([]byte("later"), []byte("value")); e != nil {
+					if e := tx.Set([]byte("later"), []byte("value")); e != nil {
 						t.Fatal(e)
 					}
 					err = tx.CommitSync()
@@ -150,6 +153,14 @@ func TestNoWALSyncBarrierDoesNotChasePostDrainWrites(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer database.Close()
+			var tx *ConditionalTxn
+			if boundary == "conditional" {
+				tx, err = database.NewConditionalTxn()
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer tx.Close()
+			}
 			var observed, drained [2]int
 			for i := range observed {
 				unregister := database.RegisterCommandWALRawPublishBarrier(func() error {
@@ -178,11 +189,6 @@ func TestNoWALSyncBarrierDoesNotChasePostDrainWrites(t *testing.T) {
 				err = batch.WriteSync()
 				_ = batch.Close()
 			case "conditional":
-				tx, e := database.NewConditionalTxn()
-				if e != nil {
-					t.Fatal(e)
-				}
-				defer tx.Close()
 				if err := tx.Set([]byte("later"), []byte("value")); err != nil {
 					t.Fatal(err)
 				}

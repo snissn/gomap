@@ -20,7 +20,7 @@ func (c *cowCache) ensureTxnJournal() error {
 		return nil
 	}
 	n := 4096
-	for n > 8 && uint64(n)*200 > c.budget.Limits().MaxInFlightBytes/16 {
+	for n > 8 && uint64(n)*256 > c.budget.Limits().MaxInFlightBytes/16 {
 		n /= 2
 	}
 	var err error

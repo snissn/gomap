@@ -113,9 +113,12 @@ func TestCOWPublicReadOwnerCaptureRacesClose(t *testing.T) {
 					}
 				},
 				func() {
-					_, err := database.ReverseIterator(nil, nil)
+					it, err := database.ReverseIterator(nil, nil)
 					if err != nil && !errors.Is(err, ErrClosed) && !errors.Is(err, caching.ErrCOWUnsupported) {
 						t.Errorf("reverse refusal: %v", err)
+					}
+					if it != nil {
+						check(it.Close())
 					}
 				},
 				func() {

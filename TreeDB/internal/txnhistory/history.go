@@ -41,6 +41,9 @@ type mutation struct {
 	chunkEnd     int
 	releaseBytes uint64
 	lease        Lease
+	// Short singleton keys belong to their original FIFO slot. The slot is
+	// not reused until its record and any matching latest-index alias retire.
+	inlineKey [32]byte
 }
 type latest struct {
 	key string
@@ -214,7 +217,8 @@ func (j *History) Prepare(entries []batch.Entry, ranges []batch.DeleteRange, bar
 	var err error
 	// Descriptor/ring capacity was admitted once. Only fresh immutable key
 	// backing needs a per-command allocation/lease; empty barriers need neither.
-	if j.admit != nil && keyBytes != 0 {
+	inline := !barrier && len(entries) == 1 && len(ranges) == 0 && entries[0].Type != batch.OpDeleteRange && keyBytes <= uint64(len(mutation{}.inlineKey))
+	if j.admit != nil && keyBytes != 0 && !inline {
 		lease, err = j.admit(0, 0, keyBytes, 0, 0)
 		if err != nil {
 			return Prepared{}, err
@@ -224,7 +228,15 @@ func (j *History) Prepare(entries []batch.Entry, ranges []batch.DeleteRange, bar
 	if barrier {
 		j.pending.effects = append(j.pending.effects, effect{barrier: true, barrierReason: reason})
 	} else {
-		arena := make([]byte, keyBytes)
+		var arena []byte
+		if inline {
+			// Prepare already evicted enough records, so this slot is vacant.
+			// Its backing stays at the same address through Install or Cancel.
+			slot := (j.head + j.count) % len(j.records)
+			arena = j.records[slot].inlineKey[:keyBytes]
+		} else {
+			arena = make([]byte, keyBytes)
+		}
 		off := 0
 		own := func(key []byte) string {
 			copy(arena[off:], key)
@@ -289,7 +301,10 @@ func (j *History) Install(p Prepared, seq uint64) bool {
 	j.bytes += j.pending.bytes
 	for _, e := range j.pending.effects {
 		slot := (j.head + j.count) % len(j.records)
-		j.records[slot] = mutation{effect: e, seq: seq, chunkEnd: end}
+		record := &j.records[slot]
+		// e.key may point into this exact slot's inline backing. Preserve it
+		// while replacing the header; never redirect it to a local copy.
+		*record = mutation{effect: e, seq: seq, chunkEnd: end, inlineKey: record.inlineKey}
 		j.count++
 		if e.barrier {
 			j.barrierSeq = seq
