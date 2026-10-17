@@ -6,7 +6,27 @@ import "sync/atomic"
 // the existing cache flush worker, outside publication and read latches. Each
 // physical member is detached only after successful destruction; failure keeps
 // the exact original objects and their admitted charges on this same Work.
-type SemanticCleanupWork interface{ FinishSemanticCleanup() error }
+type SemanticCleanupWork interface {
+	FinishSemanticCleanup() (SemanticCleanupCompletion, error)
+}
+
+// SemanticCleanupRefund is the original independent accounting receipt. It must
+// own no callback, Work or containing EngineVersion alias. Physical destruction
+// has already succeeded before this receipt leaves the original Work.
+type SemanticCleanupRefund interface{ Close() }
+
+// SemanticCleanupCompletion carries only the original final accounting action.
+// The worker clears all embedded record aliases before completing this value.
+// A failed destructor returns an empty completion and retains its original debt.
+type SemanticCleanupCompletion struct{ Refund SemanticCleanupRefund }
+
+func (c SemanticCleanupCompletion) Complete() {
+	refund := c.Refund
+	c.Refund = nil
+	if refund != nil {
+		refund.Close()
+	}
+}
 
 // SemanticCleanup is embedded and admitted once in each native EngineVersion.
 // Last-reference release merely detaches and enqueues this original record.
@@ -28,14 +48,17 @@ func (w *SemanticCleanup) EnqueueOnce() bool {
 // Finish invokes original destruction once. Observing a terminal failure never
 // retries any successful or failed destructor and never drops original custody.
 // The sole worker serializes this method with its queue transfer.
-func (w *SemanticCleanup) Finish() error {
+func (w *SemanticCleanup) Finish() (SemanticCleanupCompletion, error) {
 	if w.attempted {
-		return w.Err
+		return SemanticCleanupCompletion{}, w.Err
 	}
 	w.attempted = true
-	w.Err = w.Work.FinishSemanticCleanup()
+	completion, err := w.Work.FinishSemanticCleanup()
+	w.Err = err
 	if w.Err == nil {
 		w.Work = nil
+	} else if completion.Refund != nil {
+		panic("failed semantic cleanup transferred final refund")
 	}
-	return w.Err
+	return completion, w.Err
 }

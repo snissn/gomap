@@ -1,6 +1,9 @@
 package caching
 
-import "github.com/snissn/gomap/TreeDB/internal/rootpublication"
+import (
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+)
 
 // Queue metadata is part of the original admitted cowCache control. Only the
 // existing flushLoop consumes it. The same latch serializes enqueue, active-cut
@@ -21,9 +24,13 @@ func (c *cowCache) enqueueSemanticLocked(record *rootpublication.SemanticCleanup
 	c.semanticTail = record
 }
 func (c *cowCache) wakeSemanticCleanup() {
-	if c.flushWake != nil {
+	wakeSemanticCleanup(c.flushWake)
+}
+
+func wakeSemanticCleanup(wake chan struct{}) {
+	if wake != nil {
 		select {
-		case c.flushWake <- struct{}{}:
+		case wake <- struct{}{}:
 		default:
 		}
 	}
@@ -31,6 +38,7 @@ func (c *cowCache) wakeSemanticCleanup() {
 
 func (cut *cowReadCut) releaseSemanticState() {
 	c := cut.cache
+	cut.cache = nil
 	// Native Release only detaches one original record. It cannot traverse
 	// catalogs, invoke destructors, block, or allocate.
 	var semantic, frozen *rootpublication.SemanticCleanup
@@ -42,16 +50,20 @@ func (cut *cowReadCut) releaseSemanticState() {
 		frozen = cut.frozenSemanticRootSet.Release()
 		cut.frozenSemanticRootSet = nil
 	}
+	var refund *memtable.COWExternalLease
 	c.semanticMu.Lock()
 	c.enqueueSemanticLocked(semantic)
 	c.enqueueSemanticLocked(frozen)
 	// Enqueue MUST precede the last cut leaving the terminal predicate.
 	c.activeCuts.Add(-1)
 	if c.flushWake == nil && c.closeCleanupDone && c.readClosed.Load() && c.activeCuts.Load() == 0 && c.semanticHead == nil && c.semanticFailed == nil && !c.semanticRunning && (c.prefix == nil || !c.prefix.AcceptedCleanupFailed()) {
-		c.lease.Close()
+		refund = c.lease
+		c.lease = nil
 	}
+	wake := c.flushWake
 	c.semanticMu.Unlock()
-	c.wakeSemanticCleanup()
+	wakeSemanticCleanup(wake)
+	refund.Close()
 }
 
 func retainCOWSemanticState(cut *cowReadCut) {
@@ -84,9 +96,11 @@ func (db *DB) drainSemanticCleanup() {
 		c.semanticMu.Unlock()
 		// Guard actual destruction AND the synchronous NotifyError callback. Close
 		// from this caller must refuse before public/cache waits on this worker.
+		var completion rootpublication.SemanticCleanupCompletion
 		err := db.ownedCloseGuard.EnterCleanup()
+		entered := err == nil
 		if err == nil {
-			err = record.Finish()
+			completion, err = record.Finish()
 			if err != nil {
 				if c.prefix != nil {
 					c.prefix.PoisonAccepted(err)
@@ -96,7 +110,6 @@ func (db *DB) drainSemanticCleanup() {
 					db.notifyError(err)
 				}
 			}
-			db.ownedCloseGuard.Leave()
 		} else {
 			// No protected callback scope exists on this protocol failure. Publish the
 			// terminal error and wake prefix waiters without recursively notifying.
@@ -117,6 +130,13 @@ func (db *DB) drainSemanticCleanup() {
 			c.semanticFailed = record
 		}
 		c.semanticMu.Unlock()
+		// The record can be embedded in the refunded EngineVersion. No record
+		// or Work access may follow completion of the independent receipt.
+		record = nil
+		completion.Complete()
+		if entered {
+			db.ownedCloseGuard.LeaveCleanup()
+		}
 	}
 }
 
@@ -126,15 +146,19 @@ func (db *DB) semanticCleanupTerminal() bool {
 		return true
 	}
 	c.semanticMu.Lock()
-	defer c.semanticMu.Unlock()
 	if !c.readClosed.Load() || !c.closeCleanupDone || c.activeCuts.Load() != 0 || c.semanticHead != nil || c.semanticRunning {
+		c.semanticMu.Unlock()
 		return false
 	}
 	c.semanticStopped = true
+	var refund *memtable.COWExternalLease
 	// Failed original work remains in terminal custody and keeps its charge.
 	if c.semanticFailed == nil && (c.prefix == nil || !c.prefix.AcceptedCleanupFailed()) {
-		c.lease.Close()
+		refund = c.lease
+		c.lease = nil
 	}
+	c.semanticMu.Unlock()
+	refund.Close()
 	return true
 }
 

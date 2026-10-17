@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
@@ -13,6 +14,7 @@ type testSemanticState struct {
 	refs     atomic.Int32
 	cleanup  rootpublication.SemanticCleanup
 	finish   func() error
+	refund   rootpublication.SemanticCleanupRefund
 	calls    int
 	resource *struct{ charge uint64 }
 }
@@ -46,15 +48,17 @@ func (s *testSemanticState) PrepareHandoff(latest backenddb.NativeSemanticState,
 	latest.Retain()
 	return latest, nil
 }
-func (s *testSemanticState) FinishSemanticCleanup() error {
+func (s *testSemanticState) FinishSemanticCleanup() (rootpublication.SemanticCleanupCompletion, error) {
 	s.calls++
 	if s.finish != nil {
 		if err := s.finish(); err != nil {
-			return err
+			return rootpublication.SemanticCleanupCompletion{}, err
 		}
 	}
 	s.resource = nil
-	return nil
+	refund := s.refund
+	s.refund = nil
+	return rootpublication.SemanticCleanupCompletion{Refund: refund}, nil
 }
 
 func TestCOWSemanticPrivateCancelEnqueuesBeforeOpeningCutWithdrawal(t *testing.T) {
@@ -133,5 +137,58 @@ func TestCOWSemanticGuardRefusalPoisonsWithoutUnsafeNotification(t *testing.T) {
 	db.drainSemanticCleanup() // bare test factory deliberately has no original guard
 	if db.backgroundError() != rootpublication.ErrPublisherProtocol || state.calls != 0 || state.cleanup.Work != state || c.semanticFailed != &state.cleanup || notifications != 0 {
 		t.Fatal("guard refusal lost original terminal custody")
+	}
+}
+
+// This test observer deliberately inspects the original owner at the actual
+// refund boundary. Production receipts are independent accounting leases only.
+type observingSemanticRefund struct {
+	lease   *memtable.COWExternalLease
+	observe func()
+	calls   int
+}
+
+func (r *observingSemanticRefund) Close() {
+	r.calls++
+	r.observe()
+	r.lease.Close()
+}
+
+func TestCOWSemanticOriginalCompletionScrubsBeforeContainingRefund(t *testing.T) {
+	db, c := cowCutFixture(t)
+	db.ownedCloseGuard = db.backend.(*backenddb.DB).OwnedCallbackCloseGuard()
+	lease, err := c.budget.AcquireExternal(8192)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := c.budget.Stats()
+	state := newTestSemanticState(nil)
+	refund := &observingSemanticRefund{lease: lease}
+	refund.observe = func() {
+		if state.cleanup.Work != nil || state.cleanup.Next != nil || state.cleanup.Err != nil || state.resource != nil || state.refund != nil {
+			t.Fatal("original owner/record aliases survived until containing refund")
+		}
+		if c.budget.Stats() != before {
+			t.Fatal("containing charge refunded before original completion")
+		}
+		if err := db.Close(); err == nil || db.closing.Load() {
+			t.Fatal("refund escaped original Close guard")
+		}
+		if !c.semanticMu.TryLock() {
+			t.Fatal("containing refund ran under queue latch")
+		}
+		c.semanticMu.Unlock()
+	}
+	state.refund = refund
+	c.semanticMu.Lock()
+	c.enqueueSemanticLocked(state.Release())
+	c.semanticMu.Unlock()
+	db.drainSemanticCleanup()
+	if refund.calls != 1 || c.budget.Stats().ExternalBytes >= before.ExternalBytes {
+		t.Fatal("original containing charge not refunded exactly once")
+	}
+	db.drainSemanticCleanup()
+	if refund.calls != 1 {
+		t.Fatal("completion replayed")
 	}
 }

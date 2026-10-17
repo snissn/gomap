@@ -37,20 +37,23 @@ func (b *cowBackendBasis) release() error {
 		return nil
 	}
 	b.completionMu.Lock()
-	snapshot := b.snapshot
+	snapshot, priorErr := b.snapshot, b.cleanupErr
+	var refund *memtable.COWExternalLease
+	if b.completed && b.cleanupErr == nil {
+		refund, b.lease = b.lease, nil
+	}
 	b.completionMu.Unlock()
-	var err error
+	// Close may synchronously complete and refund this SAME basis. Capture the
+	// exact prior refusal first and never access b after the original callback.
 	if snapshot != nil {
-		err = snapshot.Close()
+		return joinCOWCleanupError(priorErr, snapshot.Close())
+	}
+	if refund != nil {
+		refund.Close()
 	} else {
 		b.SnapshotCleanupCompleted(nil)
 	}
-	b.completionMu.Lock()
-	defer b.completionMu.Unlock()
-	if b.cleanupErr != nil {
-		return b.cleanupErr
-	}
-	return err
+	return priorErr
 }
 
 // All members are immutable after installation. refs is controlled by cutMu;
@@ -81,9 +84,13 @@ func (c *cowReadCut) drain() error {
 		r := c.frozen[i].root.Release()
 		r.Drain()
 	}
-	err := c.basis.release()
-	c.lease.Close()
+	basis := c.basis
+	c.basis, c.shards, c.frozen, c.sources, c.domains = nil, nil, nil, nil, nil
+	err := basis.release()
+	lease := c.lease
+	c.lease = nil
 	c.releaseSemanticState()
+	lease.Close()
 	return err
 }
 
@@ -548,6 +555,10 @@ func (p *cowPreparedCut) publishAccepted(ticket rootpublication.AcceptedTicket) 
 	c.cutMu.Lock()
 	old := c.cut
 	c.cut = p.next
+	if p.native != nil {
+		p.native.plan = nil
+		p.native = nil
+	}
 	if ticket.Valid() {
 		install.Commit()
 	}
@@ -633,12 +644,14 @@ func (c *cowCache) closeWithBudget(closeBudget bool) error {
 			c.prefixLease.Close()
 		}
 	}
+	var refund *memtable.COWExternalLease
 	c.semanticMu.Lock()
 	c.closeCleanupDone = true
 	if c.flushWake == nil && c.activeCuts.Load() == 0 && c.semanticHead == nil && c.semanticFailed == nil && (c.prefix == nil || !c.prefix.AcceptedCleanupFailed()) {
-		c.lease.Close()
+		refund, c.lease = c.lease, nil
 	}
 	c.semanticMu.Unlock()
+	refund.Close()
 	return err
 }
 

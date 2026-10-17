@@ -39,10 +39,10 @@ func (c *NativeSemanticCapture) Close() error {
 	if c == nil || c.cut == nil {
 		return nil
 	}
-	cut := c.cut
-	c.cut = nil
-	err := c.cache.releaseCut(cut)
-	c.lease.Close()
+	cut, cache, lease := c.cut, c.cache, c.lease
+	c.cut, c.cache, c.lease = nil, nil, nil
+	err := cache.releaseCut(cut)
+	lease.Close() // final containing-owner access follows alias scrubbing
 	return err
 }
 
@@ -65,16 +65,21 @@ type cowNativeOwner struct {
 }
 
 func (o *cowNativeOwner) ReleaseAccepted() error {
-	if o.custody != nil {
-		record := o.custody.ReleaseNativeCustody()
-		o.custody = nil
-		o.cache.semanticMu.Lock()
-		o.cache.enqueueSemanticLocked(record)
-		o.cache.semanticMu.Unlock()
-		o.cache.wakeSemanticCleanup()
+	// All paths detach the opening cut BEFORE ownership reaches the queue or this
+	// destructor. Neither success nor cancellation may use o after this refund.
+	if o.opening != nil || o.plan != nil {
+		panic("native custody transferred before private aliases detached")
 	}
-	// All owner aliases to native resources have been detached or transferred.
-	o.lease.Close()
+	cache, custody, lease := o.cache, o.custody, o.lease
+	o.cache, o.custody, o.lease = nil, nil, nil
+	if custody != nil {
+		record := custody.ReleaseNativeCustody()
+		cache.semanticMu.Lock()
+		cache.enqueueSemanticLocked(record)
+		cache.semanticMu.Unlock()
+		cache.wakeSemanticCleanup()
+	}
+	lease.Close()
 	return nil
 }
 
@@ -116,21 +121,27 @@ func (b *Batch) releaseNativePublication() {
 		return
 	}
 	b.cowState.native = nil
-	if owner.plan != nil {
-		native := owner.plan
-		owner.plan = nil
-		if native.State != nil {
-			record := native.State.Release()
-			native.State = nil
-			owner.cache.semanticMu.Lock()
-			owner.cache.enqueueSemanticLocked(record)
-			owner.cache.semanticMu.Unlock()
-			owner.cache.wakeSemanticCleanup()
-		}
+	cache, opening, native := owner.cache, owner.opening, owner.plan
+	owner.opening, owner.plan = nil, nil
+	if native != nil && native.State != nil {
+		record := native.State.Release()
+		native.State = nil
+		cache.semanticMu.Lock()
+		cache.enqueueSemanticLocked(record)
+		cache.semanticMu.Unlock()
+		cache.wakeSemanticCleanup()
 	}
+	// Opening survives until BOTH private state and sparse custody have queued.
+	// ReleaseAccepted refunds owner; no caller reads its fields afterward.
+	custody := owner.custody
+	owner.custody = nil
+	if custody != nil {
+		record := custody.ReleaseNativeCustody()
+		cache.semanticMu.Lock()
+		cache.enqueueSemanticLocked(record)
+		cache.semanticMu.Unlock()
+		cache.wakeSemanticCleanup()
+	}
+	_ = cache.releaseCut(opening)
 	_ = owner.ReleaseAccepted()
-	// Private state and sparse custody enqueue BEFORE the opening cut can leave
-	// the serialized closed/zero-active-cut terminal predicate.
-	_ = owner.cache.releaseCut(owner.opening)
-	owner.opening = nil
 }

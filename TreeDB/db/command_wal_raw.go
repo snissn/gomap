@@ -22,6 +22,7 @@ import (
 )
 
 type commandWALBatchIntent struct {
+	sealedReceipt       *commandWALSealReceipt
 	kind                commitlog.CommandKind
 	scope               commitlog.CommandScope
 	payloadFormat       commitlog.PayloadFormat
@@ -2867,10 +2868,12 @@ func commandWALFinalizeOptions(intent *commandWALBatchIntent) finalizeCommitOpti
 		appliedRange = CommandWALLSNRange{First: intent.lsn, Last: intent.lsn}
 	}
 	return finalizeCommitOptions{
-		commandWALPublish: true,
-		appliedCommandLSN: appliedRange.Last,
-		appliedRanges:     []CommandWALLSNRange{appliedRange},
-		maxEntryRevision:  intent.maxEntryRevision,
+		commandWALPublish:   true,
+		commandWALSeal:      intent.sealedReceipt,
+		commandWALSealGroup: intent.durablePrefixGroup,
+		appliedCommandLSN:   appliedRange.Last,
+		appliedRanges:       []CommandWALLSNRange{appliedRange},
+		maxEntryRevision:    intent.maxEntryRevision,
 	}
 }
 

@@ -2,7 +2,6 @@ package db
 
 import (
 	"errors"
-	"sync"
 	"sync/atomic"
 
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
@@ -12,22 +11,23 @@ import (
 // by the public, cache and backend handles. It retains only this tiny caller
 // cell, never a containing DB, and remains valid after those handles detach.
 type OwnedCallbackCloseGuard struct {
-	caller atomic.Uint64
-	scope  sync.Mutex
+	caller  atomic.Uint64 // existing serialized publication Finish lane
+	cleanup atomic.Uint64 // existing serialized cache cleanup worker lane
 }
 
 // CheckClose must precede any Close side effect or wait.
 func (g *OwnedCallbackCloseGuard) CheckClose() error {
 	if g != nil {
-		if caller := g.caller.Load(); caller != 0 && caller == currentGoroutineID() {
+		if caller := currentGoroutineID(); caller != 0 && (g.caller.Load() == caller || g.cleanup.Load() == caller) {
 			return errPublicationCallbackCloseV6
 		}
 	}
 	return nil
 }
 
-// Enter marks the actual destructor/error notification invocation. The worker
-// owns serialized callbacks; nested/concurrent invocation is a protocol error.
+// Enter marks the existing serialized publication Finish lane. Independent
+// cleanup is allowed to overlap: blocking here would invert coordinator.mu
+// against a destructor that consults the original coordinator.
 func (g *OwnedCallbackCloseGuard) Enter() error {
 	if g == nil {
 		return rootpublication.ErrPublisherProtocol
@@ -36,18 +36,14 @@ func (g *OwnedCallbackCloseGuard) Enter() error {
 	if caller == 0 {
 		return rootpublication.ErrPublisherProtocol
 	}
-	if !g.scope.TryLock() {
-		return rootpublication.ErrDurableRootOwnership
-	}
-	if !g.caller.CompareAndSwap(0, caller) {
-		g.scope.Unlock()
+	if g.cleanup.Load() == caller || !g.caller.CompareAndSwap(0, caller) {
 		return rootpublication.ErrDurableRootOwnership
 	}
 	return nil
 }
 
-// EnterCleanup waits only outside progress-critical gates for an independent
-// original publisher callback to finish. Same-caller recursion still refuses.
+// EnterCleanup marks only the existing flush worker lane. Each fixed lane owns
+// its marker; nested callbacks on either lane refuse without a mutex or wait.
 func (g *OwnedCallbackCloseGuard) EnterCleanup() error {
 	if g == nil {
 		return rootpublication.ErrPublisherProtocol
@@ -56,14 +52,13 @@ func (g *OwnedCallbackCloseGuard) EnterCleanup() error {
 	if caller == 0 {
 		return rootpublication.ErrPublisherProtocol
 	}
-	if g.caller.Load() == caller {
+	if g.caller.Load() == caller || !g.cleanup.CompareAndSwap(0, caller) {
 		return rootpublication.ErrDurableRootOwnership
 	}
-	g.scope.Lock()
-	g.caller.Store(caller)
 	return nil
 }
-func (g *OwnedCallbackCloseGuard) Leave() { g.caller.Store(0); g.scope.Unlock() }
+func (g *OwnedCallbackCloseGuard) Leave()        { g.caller.Store(0) }
+func (g *OwnedCallbackCloseGuard) LeaveCleanup() { g.cleanup.Store(0) }
 
 // OwnedCallbackCloseGuard returns the capability bound when this DB opened.
 func (db *DB) OwnedCallbackCloseGuard() *OwnedCallbackCloseGuard {

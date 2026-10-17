@@ -1332,6 +1332,14 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 	}
 	candidateOwned = false
 	install.post.physicalSeal = receipt.SealReceipt()
+	if opts.commandWALSeal != nil {
+		opts.commandWALSeal.bind(install.post.physicalSeal)
+	}
+	for _, intent := range opts.commandWALSealGroup {
+		if intent != nil && intent.inner.sealedReceipt != nil {
+			intent.inner.sealedReceipt.bind(install.post.physicalSeal)
+		}
+	}
 	if opts.publishTiming != nil {
 		opts.publishTiming.FinalizeCandidateDependencyBytes += candidate.DependencyBytes()
 		opts.publishTiming.FinalizeCandidateOwnedBytes += candidate.OwnedBytes()

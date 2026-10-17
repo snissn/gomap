@@ -37,3 +37,35 @@ func TestOwnedFinishFirstCallbackCloseRefusesBeforeHooksV6(t *testing.T) {
 		t.Fatal(e)
 	}
 }
+
+func TestOwnedFinishConcurrentCleanupAllowsActualPrimaryPublicationV6(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir(), IndexPrimaryDirectory: true, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	entered, release, done := make(chan error, 1), make(chan struct{}), make(chan struct{})
+	go func() {
+		err := db.ownedFinishGuardV6.EnterCleanup()
+		entered <- err
+		if err == nil {
+			<-release
+			db.ownedFinishGuardV6.LeaveCleanup()
+		}
+		close(done)
+	}()
+	if err := <-entered; err != nil {
+		t.Fatal(err)
+	}
+	defer func() { close(release); <-done }()
+	before := db.State().CommitSeq
+	if err := db.SetSync([]byte("real-primary"), []byte("while-cleanup-held")); err != nil {
+		t.Fatal(err)
+	}
+	if db.State().CommitSeq <= before {
+		t.Fatal("actual publication did not advance")
+	}
+	if db.ownedFinishGuardV6.cleanup.Load() == 0 || db.ownedFinishGuardV6.caller.Load() != 0 {
+		t.Fatal("independent callback lane marker lost")
+	}
+}

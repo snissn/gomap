@@ -46,7 +46,9 @@ func (mutation conditionalCommitMutation) record(db *DB, commitSeq uint64) {
 }
 
 type finalizeCommitOptions struct {
-	negativeCoverage *negativeRootCoverage
+	commandWALSeal      *commandWALSealReceipt
+	commandWALSealGroup []*CommandWALIntent
+	negativeCoverage    *negativeRootCoverage
 	// prepareSnapshotReceipt runs with candidate/teardown custody and rootReuseMu
 	abortSnapshotReceipt func() error
 	// before EnqueueBuilt. Failure is preaccept; original cleanup remains owned.

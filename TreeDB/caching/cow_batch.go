@@ -368,12 +368,21 @@ func (b *Batch) writeCOWPublication(syncWrite bool, unlock func()) error {
 		p.mutation = txnMutationOwner{}
 	}
 	p.cut.next.visibleCommandLSN = b.cowState.receipt.AssignedLSN
+	native := b.cowState.native
+	var nativeOpening *cowReadCut
+	if native != nil {
+		nativeOpening = native.opening
+		native.opening = nil
+	}
 	old, publishErr := p.cut.publishAccepted(b.cowState.accepted)
 	if publishErr != nil {
 		if poisoner, ok := b.db.backend.(interface{ MarkCommandWALRecoveryRequired() }); ok {
 			poisoner.MarkCommandWALRecoveryRequired()
 		}
 		b.cowState.receipt.Uncertain = b.cowState.receipt.Assigned
+		if native != nil {
+			native.opening = nativeOpening
+		}
 		p.cut.cancel()
 		unlock()
 		return joinCOWCleanupError(publishErr, p.drainCancelled())
@@ -381,11 +390,9 @@ func (b *Batch) writeCOWPublication(syncWrite bool, unlock func()) error {
 	b.cowState.accepted = rootpublication.AcceptedTicket{}
 	b.cowState.receipt.LogicalInstalled = true
 	b.cowState.receipt.LogicalSeq = p.cut.next.logicalSeq
-	native := b.cowState.native
 	if native != nil {
 		// The cut owns State; the accepted queue owns sparse custody. No queue
 		// edge may retain the whole caller descriptor or captured EngineVersion.
-		native.plan = nil
 		b.cowState.native = nil
 	}
 	var mutableBytes int64
@@ -396,9 +403,8 @@ func (b *Batch) writeCOWPublication(syncWrite bool, unlock func()) error {
 	// Batch storage is no longer borrowed: C1 copied changed payloads before
 	// the append. Release admission and owner before retirement or checkpoint.
 	unlock()
-	if native != nil {
-		err = joinCOWCleanupError(err, b.db.cow.releaseCut(native.opening))
-		native.opening = nil
+	if nativeOpening != nil {
+		err = joinCOWCleanupError(err, b.db.cow.releaseCut(nativeOpening))
 	}
 	for _, resource := range p.resources {
 		if resource.definition != nil {

@@ -4,6 +4,7 @@ package commandwalapply
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"sync"
 
@@ -185,9 +186,8 @@ func Append(db *backenddb.DB, frame LoweredFrame, meta ApplyMetadata, opts Optio
 	}
 	applyAppendMu.Lock()
 	defer applyAppendMu.Unlock()
-	if err := checkContiguousAppendReady(db, appliedCommandLSN(db)); err != nil {
-		return Handle{}, Result{}, err
-	}
+	// Existing barrier acquisition drains earlier pending commands outside its
+	// leases, THEN appendIntentWithStagingGuard checks exact continuity.
 	actualGuard, err := db.LockCommandWALStagingGuardWithBarriersV1()
 	if err != nil {
 		return Handle{}, Result{}, err
@@ -233,6 +233,9 @@ func prepareAppendIntent(db *backenddb.DB, frame LoweredFrame) (*backenddb.Comma
 	if intent == nil {
 		return nil, fmt.Errorf("%w: command wal apply intent unavailable", backenddb.ErrCommandWALUnsupported)
 	}
+	if err := intent.PrepareSealedReceipt(); err != nil {
+		return nil, err
+	}
 	return intent, nil
 }
 
@@ -272,14 +275,22 @@ func Finalize(db *backenddb.DB, handle Handle, _ ApplyMetadata, opts Options) (R
 	if handle.staging != nil {
 		defer handle.staging.Release()
 	}
-	if applied := appliedCommandLSN(db); applied >= handle.lsn {
-		return Result{
-			LSN:               handle.lsn,
-			Status:            StatusLocallyRootRecoverable,
-			AppliedCommandLSN: applied,
-		}, nil
+	seal := handle.intent.ExactSealedReceipt()
+	if !seal.Valid() {
+		if appliedCommandLSN(db) >= handle.lsn {
+			return Result{}, fmt.Errorf("%w: sampled applied prefix has no exact command seal", backenddb.ErrCommandWALRejected)
+		}
+		if err := db.PublishStagedCommandWALNoop(handle.intent, opts.Sync); err != nil {
+			return Result{}, err
+		}
+		seal = handle.intent.ExactSealedReceipt()
 	}
-	if err := db.PublishStagedCommandWALNoop(handle.intent, opts.Sync); err != nil {
+	// Drop original staging/materialization ownership BEFORE sealed waiting.
+	// Release is idempotent; the deferred guard covers all earlier failures.
+	if handle.staging != nil {
+		handle.staging.Release()
+	}
+	if err := seal.Wait(context.Background()); err != nil {
 		return Result{}, err
 	}
 	applied := appliedCommandLSN(db)
