@@ -187,11 +187,32 @@ returns no state edge and parks its exact owned private partial on the original
 ledger. Engine cleanup finishes this ledger before releasing directories; a
 failed ledger preserves those exact source edges and its original charge.
 
-Physical domain construction is only one component. Captured system catalog,
-schema, incarnation counter, outcomes, and the exact stable resource closure
-must still join the same group before the complete semantic interface can be
-activated. Constructor and private physical-root controls do not qualify public
-transaction/read routing or producer migration.
+The engine's actual pending system mutations use a native catalog source with
+the same prewrite active-plus-captured source bound as row domains. Schema,
+incarnation-counter, and outcome encodings must be supplied by their original
+producer plan; a catalog-only helper does not update schema directories by
+itself. The source has no independently published physical root. Build streams
+its captured rows into the complete group's exact private system root.
+
+Qualified physical root descriptor keys are copied from captured schema names
+under the original build floor. Their values reside in the admitted result
+array. After domain materialization, Build reuses a domain's fixed entry scratch
+to apply those descriptors to the same system root. Flushing at collection
+boundaries preserves sorted deltas even when incarnation and schema-name
+orders differ, without a catalog-sized sorting allocation. Only the group's
+outer final batch accepts catalog rows and physical roots together.
+
+Catalog rollover and handoff use the same original source/position ownership
+and preaccepted two-successor promise. A no-op checkpoint retains the same
+state, and handoff removes only the exact captured metadata prefix while
+preserving newer active/captured metadata and the newer next-incarnation value.
+Cancellation adds no source slot; old pre-rotation engine views keep the
+original generation slot until their actual last edge.
+
+Complete producer encodings, the exact stable resource closure, and native
+public read/transaction routing still have to join before the complete semantic
+interface can be activated. Constructor and private physical-root controls do
+not qualify producer migration.
 
 Construction controls exercise latest and captured successors after exact
 producer exhaustion and maintenance admission Close, then prove independent

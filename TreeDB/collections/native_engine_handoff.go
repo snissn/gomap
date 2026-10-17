@@ -17,6 +17,10 @@ type nativeBuiltDomain struct {
 	// empty proves the captured descriptor had no pending physical source.
 	// Its unchanged root cannot consume any newer source in latest.
 	empty bool
+	// Build-only qualified key/value storage belongs to the original admitted
+	// result array. Handoff never samples a current collection name.
+	rootKey   string
+	rootValue [8]byte
 }
 
 // prepareNativeEngineHandoff rebases only captured touched domains onto their
@@ -28,6 +32,10 @@ type nativeBuiltDomain struct {
 // ledger and return nil/error; unlike rollover, the handoff ABI transfers no
 // partial state to its caller.
 func prepareNativeEngineHandoff(latest *nativeEngineVersion, built []nativeBuiltDomain, collections int, allocation backenddb.NativeSemanticAllocator) (*nativeEngineVersion, error) {
+	return prepareNativeEngineHandoffWithCatalog(latest, built, collections, nil, allocation)
+}
+
+func prepareNativeEngineHandoffWithCatalog(latest *nativeEngineVersion, built []nativeBuiltDomain, collections int, catalog *nativeBuiltDomain, allocation backenddb.NativeSemanticAllocator) (*nativeEngineVersion, error) {
 	if latest == nil || allocation == nil || collections < 0 {
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
@@ -50,7 +58,13 @@ func prepareNativeEngineHandoff(latest *nativeEngineVersion, built []nativeBuilt
 	if groups > collections {
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
-	if len(built) == 0 {
+	if catalog != nil && (catalog.collection != 0 || catalog.name != nativeCatalogDomainName || catalog.interpretation != 1 || catalog.root != 0 || catalog.oldBaseRoot != 0 || catalog.boundary == nil || catalog.empty) {
+		return nil, backenddb.ErrNativeSemanticUnsupported
+	}
+	if catalog != nil && latest.catalog == nil {
+		return nil, backenddb.ErrRootPublicationBasisMismatch
+	}
+	if len(built) == 0 && catalog == nil {
 		latest.Retain()
 		return latest, nil
 	}
@@ -61,6 +75,23 @@ func prepareNativeEngineHandoff(latest *nativeEngineVersion, built []nativeBuilt
 	p := next.preparation
 	defer p.sealPrivateBuilders(next)
 	admit := func(n uint64) (cowbtree.OwnedMapLease, error) { return allocation.AdmitNativeBytes(n) }
+	if latest.catalog != nil {
+		if catalog == nil {
+			(nativeDomainLifetime{}).Retain(latest.catalog)
+			next.catalog = latest.catalog
+		} else {
+			var scratch cowbtree.OwnedMapCompletion
+			next.catalog, scratch, err = prepareNativeDomainHandoff(latest.catalog, catalog, admit)
+			next.refund.children.Append(scratch)
+			if err != nil {
+				return next, err
+			}
+		}
+	}
+	if len(built) == 0 {
+		retainNativeEngineDirectories(next, latest)
+		return next, nil
+	}
 	p.names, err = cowbtree.NewOwnedMapBuilder(latest.names, collections, nativeCollectionLifetime{}, admit)
 	if err != nil {
 		return next, err
@@ -99,30 +130,14 @@ func prepareNativeEngineHandoff(latest *nativeEngineVersion, built []nativeBuilt
 			if !ok || current.interpretation != result.interpretation {
 				continue
 			}
-			if current.baseRoot != result.oldBaseRoot {
-				return next, backenddb.ErrRootPublicationBasisMismatch
-			}
-			domain, e := newNativeDomainState(current.name, result.root, current.interpretation, current.storagePolicy, nil, admit)
+			domain, scratch, e := prepareNativeDomainHandoff(current, result, admit)
 			if domain != nil {
 				p.ownedDomains = append(p.ownedDomains, domain)
 			}
+			next.refund.children.Append(scratch)
 			if e != nil {
 				return next, e
 			}
-			if result.empty || current.pending != result.boundary {
-				if current.pending != nil && !current.pending.RetainOwned() {
-					return next, memtable.ErrCOWClosed
-				}
-				domain.pending = current.pending
-				var scratch cowbtree.OwnedMapCompletion
-				domain.captured, scratch, e = prepareNativeSourceSuffix(current.captured, result.boundary, admit)
-				next.refund.children.Append(scratch)
-				if e != nil {
-					return next, e
-				}
-			}
-			// current.pending == boundary is the captured frozen state itself:
-			// the accepted root already includes it and every older source.
 			if err = p.domainBuilder.Set(result.name, domain); err != nil {
 				return next, err
 			}
@@ -177,4 +192,26 @@ func prepareNativeEngineHandoff(latest *nativeEngineVersion, built []nativeBuilt
 	next.pending = p.pending.Seal()
 	p.pending = nil
 	return next, nil
+}
+
+// prepareNativeDomainHandoff adopts every partial into its returned descriptor
+// before any later fallible step. The caller must attach it to its original
+// Work before inspecting err. The exact captured boundary alone removes prefix
+// sources; newer active and captured sources remain independently owned.
+func prepareNativeDomainHandoff(current *nativeDomainState, result *nativeBuiltDomain, admit cowbtree.OwnedMapAdmit) (domain *nativeDomainState, scratch cowbtree.OwnedMapCompletion, err error) {
+	if current.baseRoot != result.oldBaseRoot {
+		return nil, scratch, backenddb.ErrRootPublicationBasisMismatch
+	}
+	domain, err = newNativeDomainState(current.name, result.root, current.interpretation, current.storagePolicy, nil, admit)
+	if err != nil {
+		return domain, scratch, err
+	}
+	if result.empty || current.pending != result.boundary {
+		if current.pending != nil && !current.pending.RetainOwned() {
+			return domain, scratch, memtable.ErrCOWClosed
+		}
+		domain.pending = current.pending
+		domain.captured, scratch, err = prepareNativeSourceSuffix(current.captured, result.boundary, admit)
+	}
+	return domain, scratch, err
 }

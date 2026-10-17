@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"encoding/binary"
 	"errors"
 	"unsafe"
 
@@ -30,16 +31,18 @@ func (a *nativeBuildAllocation) AdmitNativeBytes(n uint64) (*memtable.COWExterna
 // original system-catalog and durable-resource closure must join the same group
 // before any caller may activate the higher-level interface.
 type nativeEngineBuild struct {
-	domains     []*nativeDomainBuild
-	built       []nativeBuiltDomain
-	allocation  nativeBuildAllocation
-	collections int
-	handoffs    int
-	partial     *nativeEngineVersion
-	failure     error
-	started     bool
-	complete    bool
-	refund      *cowbtree.OwnedMapRefund
+	domains      []*nativeDomainBuild
+	built        []nativeBuiltDomain
+	catalog      *nativeDomainBuild
+	catalogBuilt nativeBuiltDomain
+	allocation   nativeBuildAllocation
+	collections  int
+	handoffs     int
+	partial      *nativeEngineVersion
+	failure      error
+	started      bool
+	complete     bool
+	refund       *cowbtree.OwnedMapRefund
 }
 
 // prepareNativeEngineBuild reserves all domain scratch and BOTH sparse
@@ -64,6 +67,11 @@ func prepareNativeEngineBuild(captured *nativeEngineVersion) (*nativeEngineBuild
 	if err != nil {
 		return nil, err
 	}
+	keys, err := nativeEngineRootDescriptorKeyCharge(captured)
+	if err != nil || keys > ^uint64(0)-bytes {
+		return nil, memtable.ErrCOWCapacity
+	}
+	bytes, floor = bytes+keys, floor+keys
 	lease, err := captured.maintenance.AdmitNativeBytes(bytes)
 	if err != nil {
 		if errors.Is(err, memtable.ErrCOWCapacity) {
@@ -81,6 +89,24 @@ func prepareNativeEngineBuild(captured *nativeEngineVersion) (*nativeEngineBuild
 	}
 	captured.build = b
 	admit := func(n uint64) (cowbtree.OwnedMapLease, error) { return b.allocation.AdmitNativeBytes(n) }
+	if nativeCatalogHasPending(captured.catalog) {
+		source := captured.catalog
+		if source.name != nativeCatalogDomainName || source.baseRoot != 0 || source.interpretation != 1 || source.storagePolicy != 0 {
+			b.failure = backenddb.ErrNativeSemanticUnsupported
+			return b, b.failure
+		}
+		b.catalog, err = newNativeDomainBuild(source, captured.allocator.Limits().MaxSources, admit)
+		if err != nil {
+			b.failure = err
+			return b, err
+		}
+		b.catalog.catalog = true
+		boundary := source.pending
+		if boundary == nil {
+			boundary = source.captured.source.root
+		}
+		b.catalogBuilt = nativeBuiltDomain{name: nativeCatalogDomainName, interpretation: 1, boundary: boundary}
+	}
 	captured.pending.Scan(func(id uint64, c *nativeCollectionState) bool {
 		if c.incarnation != id {
 			b.failure = backenddb.ErrNativeSemanticUnsupported
@@ -106,7 +132,8 @@ func prepareNativeEngineBuild(captured *nativeEngineVersion) (*nativeEngineBuild
 			b.built = append(b.built, nativeBuiltDomain{
 				collection: id, interpretation: d.interpretation, name: d.name,
 				oldBaseRoot: d.baseRoot, root: d.baseRoot, boundary: boundary,
-				empty: boundary == nil,
+				empty:   boundary == nil,
+				rootKey: systemCollectionRootPrefix + c.schema.meta.Name + "/" + name,
 			})
 			return true
 		})
@@ -159,6 +186,18 @@ func (b *nativeEngineBuild) materializeDomains(group nativeOrderedRootBuilder) e
 		return backenddb.ErrNativeSemanticUnsupported
 	}
 	b.started = true
+	if len(b.domains) != 0 {
+		if _, ok := group.(nativeSystemRootBuilder); !ok {
+			b.failure = backenddb.ErrNativeSemanticUnsupported
+			return b.failure
+		}
+	}
+	if b.catalog != nil {
+		if _, err := b.catalog.materialize(group); err != nil {
+			b.failure = err
+			return err
+		}
+	}
 	for i, work := range b.domains {
 		root, err := work.materialize(group)
 		if err != nil {
@@ -166,6 +205,11 @@ func (b *nativeEngineBuild) materializeDomains(group nativeOrderedRootBuilder) e
 			return err
 		}
 		b.built[i].root = root
+		binary.BigEndian.PutUint64(b.built[i].rootValue[:], root)
+	}
+	if err := b.materializeRootDescriptors(group); err != nil {
+		b.failure = err
+		return err
 	}
 	b.complete = true
 	return nil
@@ -179,7 +223,11 @@ func (b *nativeEngineBuild) prepareHandoff(latest *nativeEngineVersion) (*native
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
 	b.handoffs++
-	next, err := prepareNativeEngineHandoff(latest, b.built, b.collections, &b.allocation)
+	var catalog *nativeBuiltDomain
+	if b.catalog != nil {
+		catalog = &b.catalogBuilt
+	}
+	next, err := prepareNativeEngineHandoffWithCatalog(latest, b.built, b.collections, catalog, &b.allocation)
 	if err != nil {
 		b.partial, b.failure = next, err
 		return nil, err // partial belongs to this original, never the caller
@@ -196,6 +244,16 @@ func (b *nativeEngineBuild) finish() (done cowbtree.OwnedMapCompletion, err erro
 	}
 	clear(b.built)
 	b.built = nil
+	b.catalogBuilt = nativeBuiltDomain{}
+	if b.catalog != nil {
+		child, err := b.catalog.finish()
+		done.Append(child)
+		if err != nil {
+			b.failure = err
+			return done, err
+		}
+		b.catalog = nil
+	}
 	for i, work := range b.domains {
 		child, err := work.finish()
 		done.Append(child)

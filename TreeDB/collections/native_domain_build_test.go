@@ -6,6 +6,7 @@ import (
 	"testing"
 	"unsafe"
 
+	"github.com/snissn/gomap/TreeDB/batch"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/cowbtree"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
@@ -27,6 +28,15 @@ func (c *nativeDomainBuildControl) BuildNativeOrderedRoot(input backenddb.Ordere
 		return 0, c.failure
 	}
 	return c.group.BuildNativeOrderedRoot(input)
+}
+
+func (c *nativeDomainBuildControl) BuildNativeSystemDelta(delta *batch.Batch) error {
+	c.calls++
+	c.maxRows = max(c.maxRows, delta.Len())
+	if c.calls == c.failAt {
+		return c.failure
+	}
+	return c.group.BuildNativeSystemDelta(delta)
 }
 
 func TestNativeDomainBuildCapturedSourcesUsesBoundedOriginalScratch(t *testing.T) {

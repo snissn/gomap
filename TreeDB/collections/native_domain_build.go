@@ -20,6 +20,10 @@ type nativeOrderedRootBuilder interface {
 	BuildNativeOrderedRoot(backenddb.OrderedRootDeltaBatchPublishInput) (uint64, error)
 }
 
+type nativeSystemRootBuilder interface {
+	BuildNativeSystemDelta(*batch.Batch) error
+}
+
 var _ nativeOrderedRootBuilder = (*backenddb.RootPublicationBuildGroup)(nil)
 
 // nativeDomainBuild owns one captured descriptor edge and bounded temporary
@@ -34,6 +38,7 @@ type nativeDomainBuild struct {
 	failure  error
 	started  bool
 	complete bool
+	catalog  bool
 	refund   *cowbtree.OwnedMapRefund
 	// Match the existing batch's bounded small-file path. Flush before a
 	// fifth distinct pointer file so this scratch never allocates a file map.
@@ -93,6 +98,11 @@ func (b *nativeDomainBuild) materialize(group nativeOrderedRootBuilder) (uint64,
 	if b.started || group == nil {
 		return 0, backenddb.ErrNativeSemanticUnsupported
 	}
+	if b.catalog {
+		if _, ok := group.(nativeSystemRootBuilder); !ok {
+			return 0, backenddb.ErrNativeSemanticUnsupported
+		}
+	}
 	b.started = true
 	for positions := b.source.captured; positions != nil; positions = positions.older {
 		if len(b.roots) == cap(b.roots) {
@@ -126,7 +136,7 @@ func (b *nativeDomainBuild) buildSource(group nativeOrderedRootBuilder, root *me
 		case row.Flags&node.FlagTombstone != 0:
 			b.failure = b.delta.AppendDeleteViewTrustedSortedUniqueWithRevision(key, row.Revision)
 		case row.Flags&node.FlagPointer != 0:
-			if !page.IsValueLogFileID(row.Ptr.FileID) {
+			if b.catalog || !page.IsValueLogFileID(row.Ptr.FileID) {
 				b.failure = backenddb.ErrNativeSemanticUnsupported
 				break
 			}
@@ -163,11 +173,17 @@ func (b *nativeDomainBuild) flush(group nativeOrderedRootBuilder) {
 	if b.delta.IsEmpty() {
 		return
 	}
-	next, err := group.BuildNativeOrderedRoot(backenddb.OrderedRootDeltaBatchPublishInput{
-		BaseRoot: b.root, Delta: b.delta, StoragePolicy: b.source.storagePolicy,
-	})
-	if err == nil {
-		b.root = next
+	var err error
+	if b.catalog {
+		err = group.(nativeSystemRootBuilder).BuildNativeSystemDelta(b.delta)
+	} else {
+		var next uint64
+		next, err = group.BuildNativeOrderedRoot(backenddb.OrderedRootDeltaBatchPublishInput{
+			BaseRoot: b.root, Delta: b.delta, StoragePolicy: b.source.storagePolicy,
+		})
+		if err == nil {
+			b.root = next
+		}
 	}
 	b.failure = err
 	b.delta.Reset() // no borrowed entry survives synchronous physical apply

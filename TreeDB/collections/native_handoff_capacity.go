@@ -36,6 +36,31 @@ func nativeHandoffCapacity(captured *nativeEngineVersion) (bytes uint64, collect
 		bytes += charge + header
 		return true
 	}
+	addDomain := func(name string) bool {
+		if !add(nativeDomainStateCharge(name)) {
+			return false
+		}
+		// prepareNativeSourceSuffix admits one bounded borrowed-pointer
+		// scratch vector/refund, then one position/refund per newer source.
+		ptrSize := uint64(unsafe.Sizeof(uintptr(0)))
+		if uint64(maxSources) > ^uint64(0)/ptrSize {
+			err = memtable.ErrCOWCapacity
+			return false
+		}
+		ptrs := memtable.COWAllocationCharge(uint64(maxSources) * ptrSize)
+		refund := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowbtree.OwnedMapRefund{})))
+		if ptrs > ^uint64(0)-refund || !add(ptrs+refund) {
+			err = memtable.ErrCOWCapacity
+			return false
+		}
+		position := memtable.COWAllocationCharge(nativePendingSourcesCharge())
+		if position > ^uint64(0)-header || uint64(maxSources) > ^uint64(0)/(position+header) || uint64(maxSources)*(position+header) > ^uint64(0)-bytes {
+			err = memtable.ErrCOWCapacity
+			return false
+		}
+		bytes += uint64(maxSources) * (position + header)
+		return true
+	}
 	captured.pending.Scan(func(_ uint64, c *nativeCollectionState) bool {
 		touched := c.pending.Len()
 		if touched == 0 {
@@ -55,35 +80,17 @@ func nativeHandoffCapacity(captured *nativeEngineVersion) (bytes uint64, collect
 		if !add(charge) || !add(charge) || !add(nativeCollectionStateCharge()) {
 			return false
 		}
-		c.pending.Scan(func(name string, _ *nativeDomainState) bool {
-			if !add(nativeDomainStateCharge(name)) {
-				return false
-			}
-			// prepareNativeSourceSuffix admits one bounded borrowed-pointer
-			// scratch vector/refund, then one position/refund per newer source.
-			ptrSize := uint64(unsafe.Sizeof(uintptr(0)))
-			if uint64(maxSources) > ^uint64(0)/ptrSize {
-				err = memtable.ErrCOWCapacity
-				return false
-			}
-			ptrs := memtable.COWAllocationCharge(uint64(maxSources) * ptrSize)
-			refund := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowbtree.OwnedMapRefund{})))
-			if ptrs > ^uint64(0)-refund || !add(ptrs+refund) {
-				err = memtable.ErrCOWCapacity
-				return false
-			}
-			position := memtable.COWAllocationCharge(nativePendingSourcesCharge())
-			if position > ^uint64(0)-header || uint64(maxSources) > ^uint64(0)/(position+header) || uint64(maxSources)*(position+header) > ^uint64(0)-bytes {
-				err = memtable.ErrCOWCapacity
-				return false
-			}
-			bytes += uint64(maxSources) * (position + header)
-			return true
-		})
+		c.pending.Scan(func(name string, _ *nativeDomainState) bool { return addDomain(name) })
 		return err == nil
 	})
 	if err != nil {
 		return 0, 0, 0, err
+	}
+	if nativeCatalogHasPending(captured.catalog) {
+		if domains == int(^uint(0)>>1) || !addDomain(nativeCatalogDomainName) {
+			return 0, 0, 0, memtable.ErrCOWCapacity
+		}
+		domains++ // actual metadata source, not a slot-only catalog placeholder
 	}
 	if domains == 0 {
 		return 0, 0, 0, nil

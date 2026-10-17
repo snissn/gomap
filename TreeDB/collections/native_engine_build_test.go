@@ -3,7 +3,6 @@ package collections
 import (
 	"errors"
 	"fmt"
-	"github.com/snissn/gomap/TreeDB/batch"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/cowbtree"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
@@ -55,6 +54,18 @@ func TestNativeEngineBuildOwnsSparseWorkAndBothSuccessors(t *testing.T) {
 	nativeTestFinishEngine(t, &captured)
 	captured = withSecondary
 	withSecondary = nil
+	metadata, err := encodeCollectionMeta(CollectionMeta{Name: "collection"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	withCatalog, err := prepareNativeEngineCatalogUpdate(captured, []memtable.COWMutation{{Key: []byte(systemCollectionMetaKey("collection")), Value: metadata, Flags: node.FlagInline, Revision: 17}}, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata = nil
+	nativeTestFinishEngine(t, &captured)
+	captured = withCatalog
+	withCatalog = nil
 	active, err := prepareNativeEngineRollover(captured)
 	if err != nil {
 		t.Fatal(err)
@@ -93,23 +104,11 @@ func TestNativeEngineBuildOwnsSparseWorkAndBothSuccessors(t *testing.T) {
 	}
 	defer group.Close()
 	control := &nativeDomainBuildControl{group: group}
-	if err := build.materializeDomains(control); err != nil || control.calls != 4 || !build.complete || before != budget.Stats() {
+	if err := build.materializeDomains(control); err != nil || control.calls != 6 || !build.complete || before != budget.Stats() {
 		t.Fatal("physical domain build exceeded its original reservation", err, control.calls, before, budget.Stats())
 	}
-	// Persist just these test root descriptors through the SAME physical group.
-	// This exercises actual physical acceptance; it does not substitute for the
-	// complete native catalog/resource closure, which remains unactivated.
-	delta := batch.NewOwnedBounded(nil, int(^uint(0)>>1), 2)
-	for _, result := range build.built {
-		if err := delta.AppendViewTrustedSortedUnique([]byte("native-test/"+result.name), encodeRootID(result.root)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := group.BuildNativeSystemDelta(delta); err != nil {
-		t.Fatal(err)
-	}
-	delta.Close()
-	delta = nil
+	// Catalog metadata and physical root descriptors were built in that SAME
+	// group; only this final physical batch installs the complete result.
 	final := database.NewPhysicalBatch().(*backenddb.Batch)
 	if err := final.SetRootPublicationBuildGroup(group, true); err != nil {
 		t.Fatal(err)
@@ -124,7 +123,25 @@ func TestNativeEngineBuildOwnsSparseWorkAndBothSuccessors(t *testing.T) {
 	}
 	accepted := database.AcquireSnapshot()
 	defer accepted.Close()
+	state, ok := accepted.StateToken()
+	if !ok {
+		t.Fatal("missing exact accepted state")
+	}
+	metaEntry, err := accepted.GetEntryAtRoot(state.SystemRootPageID, []byte(systemCollectionMetaKey("collection")))
+	if err != nil || metaEntry.Revision != 17 {
+		t.Fatal("same group lost captured catalog metadata", metaEntry, err)
+	}
+	if meta, err := decodeCollectionMeta(metaEntry.Value); err != nil || meta.Name != "collection" {
+		t.Fatal("captured schema was not accepted with its physical roots", meta, err)
+	}
 	for _, result := range build.built {
+		rootEntry, err := accepted.GetEntryAtRoot(state.SystemRootPageID, []byte(systemCollectionRootKey("collection/"+result.name)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if root, err := decodeRootID(rootEntry.Value); err != nil || root != result.root {
+			t.Fatal("physical root descriptor not installed with schema", result.name, root, err)
+		}
 		key, value := "0000", "captured"
 		if result.name == "secondary" {
 			key, value = "index", "0000"
@@ -262,5 +279,43 @@ func TestNativeEnginePartialOwnsSealedEdgesAfterOpeningClose(t *testing.T) {
 	nativeTestFinishEngine(t, &partial)
 	if budget.Stats().TotalBytes != 0 || maintenance.Stats().TotalBytes != 0 {
 		t.Fatal(budget.Stats(), maintenance.Stats())
+	}
+}
+
+func TestNativeEngineRootDescriptorFailureKeepsOriginalBuiltDomain(t *testing.T) {
+	captured, budget, maintenance := nativeTestBuildEngine(t, 1)
+	build, err := prepareNativeEngineBuild(captured)
+	if err != nil {
+		t.Fatal(err)
+	}
+	database, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), Durability: backenddb.DurabilityWALOffRelaxed, ResolvedProfile: backenddb.ProfileNoWALFast, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	basis := database.AcquireSnapshot()
+	defer basis.Close()
+	group, err := database.BeginRootPublicationBuildGroupFromSnapshot(basis)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer group.Close()
+	failure := errors.New("original root descriptor chunk failed")
+	control := &nativeDomainBuildControl{group: group, failAt: 2, failure: failure}
+	if err := build.materializeDomains(control); err != failure || !build.domains[0].complete || build.built[0].root == 0 || build.domains[0].delta.Len() != 0 || group.Accepted() {
+		t.Fatal("late metadata failure lost original built root or exposed partial", err)
+	}
+	before := budget.Stats()
+	if err := build.materializeDomains(control); err != failure || control.calls != 2 {
+		t.Fatal("late metadata failure replayed original physical work", err)
+	}
+	work := captured.Release()
+	if _, err := work.Finish(); err != failure || captured.build != build || build.built[0].rootKey == "" || captured.collections == nil {
+		t.Fatal("late metadata failure lost original descriptor/source custody", err)
+	}
+	budget.Close()
+	maintenance.Close()
+	if got := budget.Stats(); got.ExternalBytes != before.ExternalBytes || got.HistoryBytes != before.HistoryBytes || got.Sources != before.Sources {
+		t.Fatal("Close dropped original metadata failure custody", before, got)
 	}
 }

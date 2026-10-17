@@ -36,7 +36,8 @@ func prepareNativeEngineRollover(base *nativeEngineVersion) (*nativeEngineVersio
 	if domains < 0 {
 		return nil, memtable.ErrCOWCapacity
 	}
-	if domains == 0 {
+	catalogTouched := base.catalog != nil && base.catalog.pending != nil && base.catalog.pending.Len() != 0
+	if domains == 0 && !catalogTouched {
 		base.Retain()
 		return base, nil
 	}
@@ -47,6 +48,16 @@ func prepareNativeEngineRollover(base *nativeEngineVersion) (*nativeEngineVersio
 	p := next.preparation
 	defer p.sealPrivateBuilders(next)
 	admit := func(n uint64) (cowbtree.OwnedMapLease, error) { return base.maintenance.AdmitNativeBytes(n) }
+	if base.catalog != nil {
+		next.catalog, err = prepareNativeDomainRollover(base.catalog, admit)
+		if err != nil {
+			return next, err
+		}
+	}
+	if domains == 0 {
+		retainNativeEngineDirectories(next, base)
+		return next, nil
+	}
 	p.names, err = cowbtree.NewOwnedMapBuilder(base.names, collections, nativeCollectionLifetime{}, admit)
 	if err != nil {
 		return next, err

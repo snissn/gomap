@@ -15,10 +15,14 @@ import (
 // pending contains only collections with physical work, distinct from the full
 // names/incarnation directories. Structural sharing owns actual node edges.
 type nativeEngineVersion struct {
-	refs            atomic.Int64
-	names           *cowbtree.OwnedMap[string, *nativeCollectionState]
-	collections     *cowbtree.OwnedMap[uint64, *nativeCollectionState]
-	pending         *cowbtree.OwnedMap[uint64, *nativeCollectionState]
+	refs        atomic.Int64
+	names       *cowbtree.OwnedMap[string, *nativeCollectionState]
+	collections *cowbtree.OwnedMap[uint64, *nativeCollectionState]
+	pending     *cowbtree.OwnedMap[uint64, *nativeCollectionState]
+	// catalog contains actual pending system-tree mutations, independently of
+	// touched physical collection domains. Its native generation consumes the
+	// same active+captured Sources bound before the first catalog mutation.
+	catalog         *nativeDomainState
 	nextIncarnation uint64
 	allocator       backenddb.NativeSemanticAllocator
 	maintenance     backenddb.NativeSemanticAllocator
@@ -100,9 +104,17 @@ func (e *nativeEngineVersion) FinishSemanticCleanup() (rootpublication.SemanticC
 		e.build = nil
 	}
 	var failure error
-	child, err := finishNativeCollectionDirectory(&e.pending)
+	child, err := (nativeDomainLifetime{}).Release(e.catalog)
 	e.refund.children.Append(child)
+	if err == nil {
+		e.catalog = nil
+	}
 	failure = err
+	child, err = finishNativeCollectionDirectory(&e.pending)
+	e.refund.children.Append(child)
+	if failure == nil {
+		failure = err
+	}
 	child, err = finishNativeCollectionDirectory(&e.collections)
 	e.refund.children.Append(child)
 	if failure == nil {

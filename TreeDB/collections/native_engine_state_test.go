@@ -74,9 +74,17 @@ func nativeTestEngine(t *testing.T, budget *memtable.COWBudget, base *nativeEngi
 	names := nativeTestNameDirectory(t, oldNames, collection, admit)
 	collections := nativeTestCollectionDirectory(t, oldCollections, collection, admit)
 	pendingCollections := nativeTestCollectionDirectory(t, oldPendingCollections, collection, admit)
-	engine, err := newNativeEngineVersion(names, collections, pendingCollections, 2, budget, budget)
+	nextIncarnation := uint64(2)
+	if base != nil {
+		nextIncarnation = base.nextIncarnation
+	}
+	engine, err := newNativeEngineVersion(names, collections, pendingCollections, nextIncarnation, budget, budget)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if base != nil && base.catalog != nil {
+		(nativeDomainLifetime{}).Retain(base.catalog)
+		engine.catalog = base.catalog
 	}
 	completion, err := (nativeCollectionLifetime{}).Release(collection)
 	collection = nil
