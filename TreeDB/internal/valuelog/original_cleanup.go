@@ -2,6 +2,7 @@ package valuelog
 
 import (
 	"errors"
+
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"os"
@@ -45,6 +46,9 @@ func (e *ManagerCleanupFailure) OriginalCleanupPriorAvailable() bool {
 	e.manager.mu.Lock()
 	defer e.manager.mu.Unlock()
 	return e.prior == nil
+}
+func (e *ManagerCleanupFailure) OriginalCleanupPriorBinding() rootpublication.OriginalCleanupPriorBinding {
+	return rootpublication.BindOriginalCleanupPriorRW(&e.manager.mu, &e.prior)
 }
 func (e *ManagerCleanupFailure) TryLinkPriorCleanupError(prior error) bool {
 	e.manager.mu.Lock()
