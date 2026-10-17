@@ -91,8 +91,11 @@ Private whole-engine rollover adopts each partial domain, map builder and
 collection into its preborn original successor work before the next fallible
 stage. On error the returned successor is private and owned: lower publication
 queues its release after leaving gates, without reading or installing it.
-The original worker cancels unsealed builders before queued opening-cut cleanup
-can release their borrowed basis. Sparse source suffix construction clones only newer list
+Before either helper returns, infallible sealing from the original admitted
+cohorts converts every remaining private builder into owned child/value edges.
+This also covers failure: a parked partial must survive opening/latest cut
+cleanup without retaining that whole engine. Its maps remain private throughout.
+Sparse source suffix construction clones only newer list
 positions and shares original source slots; a failed suffix construction returns
 its exact owned partial list and independent scratch receipt for worker cleanup.
 
@@ -166,9 +169,51 @@ build, keeps its descriptor, last successful private root identity and charge,
 and prevents a second build attempt or destructor retry. Integration into the
 complete engine build/resource ledger remains an activation gate.
 
+### Original engine build ledger (construction)
+
+The captured engine adopts `nativeEngineBuild` before constructing any domain
+scratch. One original maintenance reservation includes the ledger, fixed result
+and domain-pointer arrays, every domain scratch child and independent receipt,
+and both sparse handoff constructors. Child transfers preserve the original
+ledger floor; neither traversal nor accepted handoff asks for fresh admission.
+Only an untouched initial capacity refusal can prove build retry eligibility.
+Once construction begins, the first failure belongs to that same ledger.
+
+The ledger owns exact domain descriptor edges and no engine, snapshot, cache,
+or physical group ancestor. Results borrow their name and boundary from those
+owned descriptors. An empty captured domain carries an explicit unchanged-root
+proof; it cannot consume any later active or captured source. A failed handoff
+returns no state edge and parks its exact owned private partial on the original
+ledger. Engine cleanup finishes this ledger before releasing directories; a
+failed ledger preserves those exact source edges and its original charge.
+
+Physical domain construction is only one component. Captured system catalog,
+schema, incarnation counter, outcomes, and the exact stable resource closure
+must still join the same group before the complete semantic interface can be
+activated. Constructor and private physical-root controls do not qualify public
+transaction/read routing or producer migration.
+
 Construction controls exercise latest and captured successors after exact
 producer exhaustion and maintenance admission Close, then prove independent
 accepted-prefix source retirement with the newer suffix alive. A late private
 failure retains the original pending edge until its exact partial Work cleans
 up off-gate. Full native `PrepareBuild`/`PrepareHandoff` integration and the
 public captured collection/transaction routes are still open.
+
+`COWRoot.RetainOwned` shares a caller-owned immutable root during that accepted
+maintenance construction. It adds no generation, source, pin, resource or byte
+admission, including after budget Close. The original owner stays live through
+the call, and a zero-reference root cannot be revived. Ordinary `Retain` keeps
+its existing Close refusal. The last actual root/writer/source edge still owns
+the original generation charge and finite source slot.
+
+The reconstructed composite payload codec is construction-only. Its bounded
+planner and whole validator preserve ordered raw/JSON/inline typed row members,
+explicit collection incarnation, and borrowed payload ownership; they exclude
+recursive composites and standalone DDL/import/graph/partition protocols. A
+malformed final member exposes no valid prefix to the scanner. Encoding owns one
+command image and completes validation before changing caller output capacity.
+The V2 frame identity still rejects this command kind: canonical aggregate RID
+fencing, the durable-only typed gate, full-frame admission, native final-effect
+preparation and one outer replay/install must join before it can be emitted or
+replayed. Payload codec tests alone do not qualify composite transactions.

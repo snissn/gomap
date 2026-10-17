@@ -754,6 +754,24 @@ func (r *COWRoot) Retain() bool {
 	r.refs++
 	return true
 }
+
+// RetainOwned shares an immutable root already owned by the caller. Native
+// maintenance uses it to transfer an existing source edge into its preadmitted
+// successor, including after budget Close. It acquires no generation, source
+// slot, pin, allocation, or admission authority. The caller must keep its own
+// root edge through this call; a released root cannot be revived.
+func (r *COWRoot) RetainOwned() bool {
+	if r == nil {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.refs == 0 {
+		return false
+	}
+	r.refs++
+	return true
+}
 func (r *COWRoot) Release() COWRetirement {
 	r.mu.Lock()
 	defer r.mu.Unlock()

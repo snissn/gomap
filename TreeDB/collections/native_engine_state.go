@@ -23,6 +23,7 @@ type nativeEngineVersion struct {
 	allocator       backenddb.NativeSemanticAllocator
 	maintenance     backenddb.NativeSemanticAllocator
 	preparation     *nativeEnginePreparation
+	build           *nativeEngineBuild
 	cleanup         rootpublication.SemanticCleanup
 	refund          *nativeEngineRefund
 }
@@ -84,6 +85,20 @@ func (e *nativeEngineVersion) Release() *rootpublication.SemanticCleanup {
 // successful fields and original independent receipts; failed originals remain
 // on this same work. Final accounting follows the worker's record/Work detach.
 func (e *nativeEngineVersion) FinishSemanticCleanup() (rootpublication.SemanticCleanupCompletion, error) {
+	if e.build != nil {
+		child, err := e.build.finish()
+		e.refund.children.Append(child)
+		if err != nil {
+			// This original ledger still borrows exact directory/source edges.
+			// Park them together; no sibling cleanup may drop those aliases.
+			done := e.refund.children
+			e.refund.children = cowbtree.OwnedMapCompletion{}
+			child = cowbtree.OwnedMapCompletion{}
+			done.Complete()
+			return rootpublication.SemanticCleanupCompletion{}, err
+		}
+		e.build = nil
+	}
 	var failure error
 	child, err := finishNativeCollectionDirectory(&e.pending)
 	e.refund.children.Append(child)

@@ -10,9 +10,10 @@ import (
 
 // nativeEnginePreparation is the original finite private successor ledger.
 // Every fallible constructor attaches its result here before the next stage.
-// Unsealed builders borrow the lower opening cut; error rollback queues this
-// Work before withdrawing that cut, preserving single-worker cleanup order.
-// Successful sealing owns real child edges and clears every builder alias.
+// Unsealed builders borrow the lower opening cut only during construction.
+// Before returning any private partial, sealPrivateBuilders attaches its exact
+// child/value edges, including on error. The original failed Work can then stay
+// parked after the opening/latest cut leaves. No engine ancestor is retained.
 type nativeEnginePreparation struct {
 	names                               *cowbtree.OwnedMapBuilder[string, *nativeCollectionState]
 	collections, pending                *cowbtree.OwnedMapBuilder[uint64, *nativeCollectionState]
@@ -21,6 +22,33 @@ type nativeEnginePreparation struct {
 	schema                              *nativeSchemaState
 	ownedDomains                        []*nativeDomainState
 	ownedCollections                    []*nativeCollectionState
+}
+
+// sealPrivateBuilders completes ownership, not publication. Seal is infallible
+// from each original admitted mutation cohort. No fallible child admission is
+// added while converting the private partial's borrowed tree edges to owned
+// edges. Both complete and partial successors use the same cleanup path.
+func (p *nativeEnginePreparation) sealPrivateBuilders(e *nativeEngineVersion) {
+	if p.names != nil {
+		e.names = p.names.Seal()
+		p.names = nil
+	}
+	if p.collections != nil {
+		e.collections = p.collections.Seal()
+		p.collections = nil
+	}
+	if p.pending != nil {
+		e.pending = p.pending.Seal()
+		p.pending = nil
+	}
+	if p.domainBuilder != nil {
+		p.domains = p.domainBuilder.Seal()
+		p.domainBuilder = nil
+	}
+	if p.pendingDomainBuilder != nil {
+		p.pendingDomains = p.pendingDomainBuilder.Seal()
+		p.pendingDomainBuilder = nil
+	}
 }
 
 func newNativeEnginePreparation(base *nativeEngineVersion, collectionCount, domainCount int, allocation backenddb.NativeSemanticAllocator) (*nativeEngineVersion, error) {

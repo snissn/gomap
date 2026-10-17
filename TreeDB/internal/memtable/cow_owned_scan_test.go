@@ -1,10 +1,57 @@
 package memtable
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/node"
 )
+
+func TestCOWCapturedOwnedRetainAfterClosePreservesOriginalLastOwner(t *testing.T) {
+	budget, err := NewCOWBudget(DefaultCOWLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer, err := budget.NewNativeCOWWriter(128)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := cowTestPublish(t, writer, []COWMutation{{Key: []byte("key"), Value: []byte("owned"), Flags: node.FlagInline}})
+	cowTestClose(writer)
+	writer = nil
+	budget.Close()
+	before := budget.Stats()
+	if root.Retain() || !root.RetainOwned() || before != budget.Stats() || before.Sources != 1 {
+		t.Fatal("owned successor changed original admission or ordinary Close refusal", before, budget.Stats())
+	}
+	// The independently retained root edge survives release of the opening edge.
+	// Concurrent maintenance transfers remain covered by that held owner.
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for range 100 {
+			if !root.RetainOwned() {
+				t.Error("owned root could not be shared")
+				return
+			}
+			cowTestRelease(root)
+		}
+	}()
+	cowTestRelease(root)
+	wg.Wait()
+	if row, ok := root.Get([]byte("key")); !ok || row.Value != "owned" || budget.Stats() != before {
+		t.Fatal("successor lost exact original root/source", row, ok, budget.Stats())
+	}
+	cowTestRelease(root)
+	if root.RetainOwned() || budget.Stats().TotalBytes != 0 || budget.Stats().Sources != 0 {
+		t.Fatal("released root revived or original generation was not refunded", budget.Stats())
+	}
+	root = nil
+	if root.RetainOwned() {
+		t.Fatal("nil root retained")
+	}
+}
 
 func TestCOWCapturedOwnedScanNeedsNoNewAdmission(t *testing.T) {
 	budget, writer := cowTestWriter(t, DefaultCOWLimits())

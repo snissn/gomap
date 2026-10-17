@@ -59,6 +59,7 @@ func prepareNativeEngineHandoff(latest *nativeEngineVersion, built []nativeBuilt
 		return nil, err
 	}
 	p := next.preparation
+	defer p.sealPrivateBuilders(next)
 	admit := func(n uint64) (cowbtree.OwnedMapLease, error) { return allocation.AdmitNativeBytes(n) }
 	p.names, err = cowbtree.NewOwnedMapBuilder(latest.names, collections, nativeCollectionLifetime{}, admit)
 	if err != nil {
@@ -109,7 +110,7 @@ func prepareNativeEngineHandoff(latest *nativeEngineVersion, built []nativeBuilt
 				return next, e
 			}
 			if result.empty || current.pending != result.boundary {
-				if current.pending != nil && !current.pending.Retain() {
+				if current.pending != nil && !current.pending.RetainOwned() {
 					return next, memtable.ErrCOWClosed
 				}
 				domain.pending = current.pending

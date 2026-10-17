@@ -45,6 +45,7 @@ func prepareNativeEngineRollover(base *nativeEngineVersion) (*nativeEngineVersio
 		return nil, err
 	}
 	p := next.preparation
+	defer p.sealPrivateBuilders(next)
 	admit := func(n uint64) (cowbtree.OwnedMapLease, error) { return base.maintenance.AdmitNativeBytes(n) }
 	p.names, err = cowbtree.NewOwnedMapBuilder(base.names, collections, nativeCollectionLifetime{}, admit)
 	if err != nil {
