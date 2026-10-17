@@ -4,8 +4,9 @@
 raw point operations and externally encoded MVCC versions. It is independent
 of the durability profile. Existing `append_only`, `btree`, adaptive selection
 and profile defaults retain their own dispatch. COW is a pre-alpha capability;
-selecting it does not add conflict detection, a transaction scheduler, or new
-MVCC timestamp semantics. `TreeDB/mvcc` retains Store floor admission while
+qualified public ownership also enables the raw transaction contract in
+[raw-cow-transactions.md](raw-cow-transactions.md). Application MVCC timestamp
+semantics remain separate. `TreeDB/mvcc` retains Store floor admission while
 qualified coherent read cuts permit shared grouped publication admission.
 
 ## Selection and finite admission
@@ -220,13 +221,13 @@ allocation ownership audit are documented in
 The initial capability supports `Set`, `SetSync`, `Delete`, `DeleteSync`, point
 batches, encoded MVCC point/grouped commits and recorded raw physical deletion
 replay. Reads include owned point/versioned reads, presence/prefix queries,
-forward successor and forward iteration over the same coherent cut.
+forward successor and forward/reverse iteration over the same coherent cut.
 Empty point keys and values preserve the ordinary public API semantics through
 staging, checkpoint and reopen. Successor presence is reported by `found`; a
 zero-length returned key/value alone does not indicate absence.
 
-Callback mutation (`Update`/`UpdateSync`), CAS/conditional transactions, range
-deletion, reverse traversal, adapter-only after-write `SetViewWithReplayBytes` /
+Callback mutation (`Update`/`UpdateSync`), native range
+deletion, adapter-only after-write `SetViewWithReplayBytes` /
 `DeleteViewWithReplayBytes` retention, and manual-root/backend mutation bypass are
 unsupported. Refusal precedes user callbacks, command append, MVCC floor
 mutation and visible point effects. Unsupported batch operations are rejected at staging before adding an
@@ -426,3 +427,7 @@ preserves existing missing-key normalization and refusal sentinels. The owned
 iterator closes its bound child after excluding active moves, detaches consumed
 Snapshot aliases and only then releases its wrapper allocation; failed physical
 basis cleanup retains the original basis independently.
+
+Public raw conditional transactions are supported under the ownership and bounded
+history rules in [raw-cow-transactions.md](raw-cow-transactions.md). Standalone
+caller-owned backend combinations remain fail-closed.

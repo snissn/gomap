@@ -23,6 +23,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/limits"
 	"github.com/snissn/gomap/TreeDB/internal/mvccadmission"
 	"github.com/snissn/gomap/TreeDB/internal/templatedb"
+	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
 	publiciterator "github.com/snissn/gomap/TreeDB/iterator"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/template"
@@ -161,6 +162,7 @@ type UpdateFunc = db.UpdateFunc
 
 // DB is the public TreeDB handle (cached mode by default; read-only opens skip caching).
 type DB struct {
+	txnOwner                             *transactionowner.Owner
 	cached                               *caching.DB
 	backend                              *db.DB
 	dictdb                               *db.DB
@@ -1130,10 +1132,18 @@ func openResolved(opts Options) (*DB, error) {
 		valueLogMaxSegmentBytes = int64(^uint32(0)) - 4
 	}
 
+	txnOwner := transactionowner.New()
+	if opts.MemtableMode == "cow_btree" {
+		if err := backend.BindPrivateCOWOwner(txnOwner); err != nil {
+			backend.Close()
+			return nil, err
+		}
+	}
 	cached, err := caching.Open(opts.Dir, backend, caching.Options{
 		FlushThreshold:                             opts.FlushThreshold,
 		MemtableMode:                               opts.MemtableMode,
 		COWMemtableLimits:                          opts.COWMemtableLimits,
+		TransactionOwner:                           txnOwner,
 		MemtableShards:                             opts.MemtableShards,
 		DomainIngressWorkers:                       opts.DomainIngressWorkers,
 		DomainIngressQueueSize:                     opts.DomainIngressQueueSize,
@@ -1233,7 +1243,7 @@ func openResolved(opts Options) (*DB, error) {
 
 	cached.SetDictStore(dictStore)
 	cached.SetTemplateStore(templateStore)
-	out := &DB{cached: cached, backend: backend, dictdb: dictBackend, templateDB: templateDB, writePath: writePath, commandWALCached: opts.CommandWAL, publicBatchWriteSyncPhaseEnabled: opts.CommandWAL && opts.PublicBatchWriteSyncPhaseStats, notifyError: opts.NotifyError, resolvedProfile: Profile(opts.ResolvedProfile), deprecatedProfileAlias: Profile(opts.DeprecatedProfileAlias), durabilityMode: computeDurabilityMode(opts), valueLogReadIntegrity: valueLogReadIntegrityLabel(opts), dir: rootDir}
+	out := &DB{txnOwner: txnOwner, cached: cached, backend: backend, dictdb: dictBackend, templateDB: templateDB, writePath: writePath, commandWALCached: opts.CommandWAL, publicBatchWriteSyncPhaseEnabled: opts.CommandWAL && opts.PublicBatchWriteSyncPhaseStats, notifyError: opts.NotifyError, resolvedProfile: Profile(opts.ResolvedProfile), deprecatedProfileAlias: Profile(opts.DeprecatedProfileAlias), durabilityMode: computeDurabilityMode(opts), valueLogReadIntegrity: valueLogReadIntegrityLabel(opts), dir: rootDir}
 	if out.commandWALCached {
 		// ponytail: reuse the existing bounded logical-payload budget. Larger
 		// point values use the batch's compact persistent-value references.
@@ -2235,7 +2245,24 @@ func (db *DB) initConditionalTxn(tx *ConditionalTxn, withSnapshot bool) error {
 	}
 	defer db.lifecycleMu.RUnlock()
 	if db.cached != nil && db.cached.COWMode() {
-		return ErrConditionalTxnUnsupported
+		if err := db.cached.InitOwnedCOWTxn(&tx.cached, db.txnOwner, func(b *caching.Batch, sync bool) error {
+			if !db.commandWALCached {
+				if sync {
+					return b.WriteSync()
+				}
+				return b.Write()
+			}
+			wrapper := newCommandWALPublicBatch(db, b, len(b.EntriesForTxn()))
+			defer wrapper.closeCOWAdapter()
+			wrapper.dirty = len(b.EntriesForTxn()) > 0
+			wrapper.opCount = len(b.EntriesForTxn())
+			return wrapper.write(sync, sync || db.commandWALOrdinaryWriteRequiresSync())
+		}); err != nil {
+			return err
+		}
+		tx.cachedActive = true
+		tx.snapshotExposed = true
+		return nil
 	}
 	if db.cached != nil {
 		if db.commandWALCached {
@@ -2838,7 +2865,7 @@ func (db *DB) vacuumIndexOnlineStats(ctx context.Context) (VacuumOnlineStats, er
 	// ponytail: this blocks those writers for one vacuum; add generation-aware
 	// buffer rebasing only if the measured maintenance pause requires it.
 	var unlockCommandWALPublish func()
-	if db.commandWALCached {
+	if db.commandWALCached && (db.cached == nil || !db.cached.COWMode()) {
 		unlockCommandWALPublish, err = db.backend.LockCommandWALPublishWithBarriers()
 		if err != nil {
 			return VacuumOnlineStats{}, err
@@ -2848,6 +2875,19 @@ func (db *DB) vacuumIndexOnlineStats(ctx context.Context) (VacuumOnlineStats, er
 
 	var onlineStats VacuumOnlineStats
 	err = db.runCachedBackendMaintenance(func() error {
+		if db.commandWALCached && db.cached != nil && db.cached.COWMode() {
+			// COW's maintenance writer fence precedes raw staging, matching
+			// foreground cache -> group gate -> raw order. No higher-level
+			// barrier callbacks are eligible on this private raw-only backend.
+			guard, guardErr := db.backend.LockCommandWALStagingGuardV1()
+			if guardErr != nil {
+				return guardErr
+			}
+			defer guard.Release()
+			if err := db.backend.PreflightPrivateCOWCommand(db.txnOwner); err != nil {
+				return err
+			}
+		}
 		var runErr error
 		onlineStats, runErr = db.backend.VacuumIndexOnlineWithStats(ctx)
 		return runErr

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/snissn/gomap/TreeDB/internal/mvccadmission"
+	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
 	"io"
 	"log"
 	"math"
@@ -8460,7 +8461,9 @@ type backendIndexFragmenter interface {
 }
 
 type Options struct {
-	FlushThreshold int64
+	// TransactionOwner is minted only by the public wrapper that privately owns its backend.
+	TransactionOwner *transactionowner.Owner
+	FlushThreshold   int64
 
 	// MemtableMode selects the in-memory write buffer implementation.
 	// Supported: "skiplist", "hash_sorted", "btree", "append_only", "adaptive".
@@ -12864,6 +12867,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 			return nil, ErrCOWUnsupported
 		}
 		cowOwner, err = newCOWCache(provider, shardCount, cowLimits)
+		if cowOwner != nil {
+			cowOwner.txnOwner = opts.TransactionOwner
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -26448,6 +26454,14 @@ func (db *DB) flushSomeBlocking(sync bool, maxMemtables int, maxDuration time.Du
 }
 
 func (db *DB) Close() error {
+	defer func() {
+		db.conditionalOracle.mu.Lock()
+		defer db.conditionalOracle.mu.Unlock()
+		if db.conditionalOracle.history != nil {
+			db.conditionalOracle.history.Close()
+			db.conditionalOracle.history = nil
+		}
+	}()
 	defer db.closeNativeMVCCBudgetV6()
 	// Keep actual producer governors live through the final backend checkpoint,
 	// arena/registry disposal and dictionary cleanup. Failed cleanup retains debt.
@@ -27427,7 +27441,7 @@ func (db *DB) publishCommandWALRangeSpanLayer(start, end []byte, appendCommand f
 		db.mu.Unlock()
 		return err
 	}
-	db.conditionalRecordCommittedEntries(nil, spans, 0)
+	db.conditionalRecordCommittedEntries(nil, spans)
 	db.publishMemtablesLocked()
 	db.mu.Unlock()
 
@@ -32182,10 +32196,9 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.range_span.spans_flushed_total"] = fmt.Sprintf("%d", db.rangeSpanSpansFlushed.Load())
 	stats["treedb.cache.range_span.flush_batches_total"] = fmt.Sprintf("%d", db.rangeSpanFlushBatches.Load())
 	db.conditionalOracle.mu.Lock()
-	conditionalActiveRecords := len(db.conditionalOracle.active)
-	conditionalRetainedPoints := len(db.conditionalOracle.recent)
-	conditionalRetainedRanges := len(db.conditionalOracle.ranges)
-	conditionalRootConflictActive := db.conditionalOracle.rootSeq != 0
+	conditionalActiveRecords := 0
+	conditionalRetainedPoints, conditionalRetainedRanges, conditionalRootConflictActive := db.conditionalOracle.history.Counts()
+	conditionalBarriers := db.conditionalOracle.history.BarrierStats()
 	db.conditionalOracle.mu.Unlock()
 	stats["treedb.cache.conditional_txn.active"] = fmt.Sprintf("%d", db.conditionalActiveTxnCount.Load())
 	stats["treedb.cache.conditional_txn.started_total"] = fmt.Sprintf("%d", db.conditionalTxnStarted.Load())
@@ -32200,6 +32213,10 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.conditional_txn.oracle.retained_points"] = fmt.Sprintf("%d", conditionalRetainedPoints)
 	stats["treedb.cache.conditional_txn.oracle.retained_ranges"] = fmt.Sprintf("%d", conditionalRetainedRanges)
 	stats["treedb.cache.conditional_txn.oracle.root_conflict_active"] = fmt.Sprintf("%t", conditionalRootConflictActive)
+	stats["treedb.cache.conditional_txn.oracle.barrier_effect_capacity_total"] = fmt.Sprintf("%d", conditionalBarriers.EffectCapacity)
+	stats["treedb.cache.conditional_txn.oracle.barrier_byte_capacity_total"] = fmt.Sprintf("%d", conditionalBarriers.ByteCapacity)
+	stats["treedb.cache.conditional_txn.oracle.barrier_logical_replacement_total"] = fmt.Sprintf("%d", conditionalBarriers.LogicalReplacement)
+	stats["treedb.cache.conditional_txn.oracle.barrier_conflicts_total"] = fmt.Sprintf("%d", conditionalBarriers.Conflicts)
 	stats["treedb.cache.conditional_txn.oracle.recorded_points_total"] = fmt.Sprintf("%d", db.conditionalOracleRecordedPoints.Load())
 	stats["treedb.cache.conditional_txn.oracle.recorded_ranges_total"] = fmt.Sprintf("%d", db.conditionalOracleRecordedRanges.Load())
 	stats["treedb.cache.conditional_txn.oracle.root_markers_total"] = fmt.Sprintf("%d", db.conditionalOracleRootMarkers.Load())
@@ -34482,7 +34499,7 @@ func (db *DB) Drain() error {
 // Iterator implements DB.Iterator
 func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 	if db.cow != nil {
-		return db.cowIterator(start, end)
+		return db.cowIterator(start, end, false)
 	}
 	iteratorDebug := iteratorDebugEnabled.Load()
 	if iteratorDebug {
@@ -34942,7 +34959,7 @@ func (it *concatUnsafeIterator) Domain() (start, end []byte) { return nil, nil }
 
 func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 	if db.cow != nil {
-		return nil, ErrCOWUnsupported
+		return db.cowIterator(start, end, true)
 	}
 	db.beginForegroundRead()
 	transferForegroundRead := func(it merging.Iterator) merging.Iterator {
@@ -35213,7 +35230,6 @@ type Batch struct {
 	commandWALCompactReplay     bool
 	commandWALCompactRanges     []batch.DeleteRange
 	commandWALCompactPointStart int
-	conditionalTxnID            uint64
 }
 
 func (db *DB) NewBatch() *Batch {
@@ -36331,7 +36347,7 @@ func (b *Batch) Reset() {
 	b.commandWALCompactReplay = false
 	b.commandWALCompactRanges = nil
 	b.commandWALCompactPointStart = 0
-	b.conditionalTxnID = 0
+
 	if b.ptrValueIdxs != nil {
 		b.ptrValueIdxs = b.ptrValueIdxs[:0]
 	}
@@ -37531,6 +37547,9 @@ type CommandWALBatchWriteTiming struct {
 // visible in the mutable table. This is intentionally limited to command-WAL
 // public mode, where the cached redo log is disabled.
 func (b *Batch) WriteAfterCommandWALAppend(sync bool, appendCommand func() error) error {
+	if b != nil && b.db != nil && b.db.cow != nil && b.db.cow.txnOwner != nil && !b.cowState.trustedAppend {
+		return ErrCOWUnsupported
+	}
 	if b != nil && b.cowState != nil && b.cowState.err != nil {
 		return b.cowState.err
 	}
@@ -37567,6 +37586,9 @@ func (b *Batch) WriteAfterCommandWALAppend(sync bool, appendCommand func() error
 // unassigned through preflight; appendCommand must arrange their assignment
 // while holding the command-WAL append serialization boundary.
 func (b *Batch) WriteAfterCommandWALAppendWithPreparedRevision(sync bool, appendCommand func() error) error {
+	if b != nil && b.db != nil && b.db.cow != nil && b.db.cow.txnOwner != nil && !b.cowState.trustedAppend {
+		return ErrCOWUnsupported
+	}
 	if b != nil && b.cowState != nil && b.cowState.err != nil {
 		return b.cowState.err
 	}
@@ -37581,6 +37603,11 @@ func (b *Batch) WriteAfterCommandWALAppendWithPreparedRevision(sync bool, append
 	}
 	if !b.db.externalCommandWAL {
 		return fmt.Errorf("cachingdb: command wal batch writes require external command wal cached mode")
+	}
+	if b.db.cow != nil {
+		if err := durabilitycut.EmitBasic(durabilitycut.BeforeCOWAdmission, durabilitycut.ResourceAuxiliary, b.db.dir); err != nil {
+			return err
+		}
 	}
 	b.db.waitForCheckpointForWrite()
 	if b.backend != nil {
@@ -37606,6 +37633,9 @@ func (b *Batch) WriteAfterCommandWALAppendWithPreparedRevision(sync bool, append
 // measuring non-overlapping request phases. Normal writes use the unmeasured
 // method above and do not pay these clock reads.
 func (b *Batch) WriteAfterCommandWALAppendMeasured(sync bool, appendCommand func() error) (timing CommandWALBatchWriteTiming, err error) {
+	if b != nil && b.db != nil && b.db.cow != nil && b.db.cow.txnOwner != nil && !b.cowState.trustedAppend {
+		return timing, ErrCOWUnsupported
+	}
 	if b != nil && b.cowState != nil && b.cowState.err != nil {
 		return timing, b.cowState.err
 	}
@@ -37664,6 +37694,9 @@ func (b *Batch) WriteAfterCommandWALAppendMeasured(sync bool, appendCommand func
 // revision ordering while exposing the same phase diagnostics as the ordinary
 // measured command-WAL batch path.
 func (b *Batch) WriteAfterCommandWALAppendWithPreparedRevisionMeasured(sync bool, appendCommand func() error) (timing CommandWALBatchWriteTiming, err error) {
+	if b != nil && b.db != nil && b.db.cow != nil && b.db.cow.txnOwner != nil && !b.cowState.trustedAppend {
+		return timing, ErrCOWUnsupported
+	}
 	if b != nil && b.cowState != nil && b.cowState.err != nil {
 		return timing, b.cowState.err
 	}
@@ -37742,7 +37775,7 @@ func (b *Batch) write(sync bool) error {
 
 	if b.backend != nil {
 		err := b.writeBackendBatchSerialized(b.backend, sync, func() {
-			b.db.conditionalRecordCommittedEntries(b.backendConditionalEntries, nil, 0)
+			b.db.conditionalRecordCommittedEntries(b.backendConditionalEntries, nil)
 		}, func() {
 			if b.batchRange.valid {
 				b.db.mu.Lock()
@@ -37982,7 +38015,7 @@ func (b *Batch) writeRangeSpanBatch(sync bool, ranges []batch.DeleteRange) (err 
 		b.db.mu.Unlock()
 		return err
 	}
-	b.db.conditionalRecordCommittedEntries(nil, ranges, 0)
+	b.db.conditionalRecordCommittedEntries(nil, ranges)
 	b.db.publishMemtablesLocked()
 	b.db.mu.Unlock()
 
@@ -38066,7 +38099,7 @@ func (b *Batch) tryWriteWALOffStreamBypass(sync bool) (bool, error) {
 	}
 
 	err = b.writeBackendBatchSerialized(backendBatch, sync, func() {
-		b.db.conditionalRecordCommittedEntries(ops, nil, 0)
+		b.db.conditionalRecordCommittedEntries(ops, nil)
 	}, nil)
 	if cerr := backendBatch.Close(); cerr != nil && err == nil {
 		err = cerr
@@ -38090,6 +38123,26 @@ func (b *Batch) tryWriteWALOffStreamBypass(sync bool) (bool, error) {
 }
 
 func (b *Batch) writeRegular(syncWrite bool) error {
+	if b.db.cow != nil {
+		b.cowState.receipt = COWPublicationReceipt{}
+	}
+	if b.db.cow != nil && !b.db.externalCommandWAL {
+		if err := durabilitycut.EmitBasic(durabilitycut.BeforeCOWAdmission, durabilitycut.ResourceAuxiliary, b.db.dir); err != nil {
+			return err
+		}
+	}
+	if b.db.cow != nil && b.db.cow.txnOwner != nil {
+		provider, ok := b.db.backend.(interface {
+			PreflightPrivateCOWCommand(*transactionowner.Owner) error
+		})
+		if !ok {
+			return ErrCOWUnsupported
+		}
+		if err := provider.PreflightPrivateCOWCommand(b.db.cow.txnOwner); err != nil {
+			return err
+		}
+	}
+
 	if err := b.db.beginDirectWrite(); err != nil {
 		return err
 	}
@@ -38101,13 +38154,33 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 		if len(b.entries) == 0 {
 			// Empty writes publish no cut. A WAL-off explicit sync still covers
 			// preceding writes; release admission before its checkpoint barrier.
+			var covered uint64
+			if syncWrite && !b.db.externalCommandWAL {
+				b.db.cow.cutMu.Lock()
+				if b.db.cow.cut != nil {
+					covered = b.db.cow.cut.logicalSeq
+				}
+				b.db.cow.cutMu.Unlock()
+			}
 			unlockWriteMu()
-			return b.db.syncBarrierAfterWrite(syncWrite)
+			err := b.db.syncBarrierAfterWrite(syncWrite)
+			if err == nil && syncWrite && !b.db.externalCommandWAL {
+				b.cowState.receipt.SealedLogicalSeq = covered
+			}
+			return err
 		}
 		if err := b.cowPrepareWriteStorage(); err != nil {
 			unlockWriteMu()
 			return err
 		}
+		leaseWaitStart := time.Now()
+		defer func() {
+			if b.cowState.guard != nil {
+				b.cowState.guard.Release()
+				b.cowState.guard = nil
+			}
+		}()
+
 		for {
 			b.db.cow.writerMu.Lock()
 			rollover, err := b.cowGenerationRollover()
@@ -38137,6 +38210,8 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 			}
 			break
 		}
+		b.cowState.holdBegan = time.Now()
+		b.db.cow.commitWaitNs.Add(uint64(time.Since(leaseWaitStart)))
 		capture, err := newCOWFrameCapture(b.db.cow.budget, len(b.entries))
 		if err != nil {
 			b.db.cow.writerMu.Unlock()
@@ -38144,9 +38219,16 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 			return err
 		}
 		b.cowState.producer = capture
+		b.cowState.inPublication = true
 		previousUnlock := unlockWriteMu
 		unlockWriteMu = func() {
+			b.cowState.inPublication = false
+			b.db.cow.commitHoldNs.Add(uint64(time.Since(b.cowState.holdBegan)))
 			b.db.cow.writerMu.Unlock()
+			if b.cowState.guard != nil {
+				b.cowState.guard.Release()
+				b.cowState.guard = nil
+			}
 			previousUnlock()
 			b.cowState.producer = nil
 			capture.close()
@@ -38760,7 +38842,7 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 	}
 	admission = b.db.beginMVCCInputCut()
 	admission.ObserveSummary(b.mvccSummary)
-	b.db.conditionalRecordCommittedEntries(b.entries, nil, b.conditionalTxnID)
+	b.db.conditionalRecordCommittedEntries(b.entries, nil)
 
 	if allDeletes {
 		shardIdxSets := b.shardIdxSets
@@ -39584,7 +39666,7 @@ func (b *Batch) writeBypass(sync bool) (err error) {
 	}
 
 	err = b.writeBackendBatchSerialized(backendBatch, sync, func() {
-		b.db.conditionalRecordCommittedEntries(ops, nil, 0)
+		b.db.conditionalRecordCommittedEntries(ops, nil)
 	}, nil)
 
 	if err != nil {
@@ -39662,7 +39744,7 @@ func (b *Batch) Close() error {
 	b.entryRevision = page.LegacyEntryRevision
 	b.ptrValueIdxs = nil
 	b.stableViewValueLeaseChunks = nil
-	b.conditionalTxnID = 0
+
 	b.valueCopyShard = nil
 	b.appendOnlyDirectValueCopier = nil
 	b.commandWALCompactReplay = false

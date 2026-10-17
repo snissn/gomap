@@ -5,10 +5,13 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/internal/collectionwal"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
+	"github.com/snissn/gomap/TreeDB/internal/txnhistory"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
 var (
+	// ErrTxnTooOld means the bounded conflict FIFO no longer covers the opening view.
+	ErrTxnTooOld = txnhistory.ErrTooOld
 	// ErrLocked indicates the database directory is already opened by another process.
 	ErrLocked = lockfile.ErrLocked
 	// ErrReadOnly indicates a write was attempted on a read-only DB handle.

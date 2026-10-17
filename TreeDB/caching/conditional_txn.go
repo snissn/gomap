@@ -8,6 +8,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/txnhistory"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/tree"
@@ -28,10 +29,10 @@ const (
 // staged in the ordinary cached batch and commit through the normal
 // memtable/journal path after validation under the exclusive writer gate.
 type ConditionalTxn struct {
+	cow      *cowTxnState
 	db       *DB
 	batch    *Batch
 	snap     *Snapshot
-	id       uint64
 	startSeq uint64
 
 	closed bool
@@ -51,17 +52,7 @@ type conditionalReadPrecondition struct {
 
 type conditionalConflictOracle struct {
 	mu      sync.Mutex
-	nextID  uint64
-	active  map[uint64]uint64
-	recent  map[string]uint64
-	ranges  []conditionalRecentRange
-	rootSeq uint64
-}
-
-type conditionalRecentRange struct {
-	start string
-	end   string
-	seq   uint64
+	history *txnhistory.History
 }
 
 // NewConditionalTxn opens a cached conditional transaction.
@@ -95,7 +86,7 @@ func (db *DB) initConditionalTxn(tx *ConditionalTxn, withSnapshot bool) error {
 	if tx == nil {
 		return backenddb.ErrConditionalTxnClosed
 	}
-	if tx.id != 0 || (!tx.closed && (tx.db != nil || tx.batch != nil)) {
+	if !tx.closed && (tx.db != nil || tx.batch != nil) {
 		return backenddb.ErrConditionalTxnClosed
 	}
 	if db == nil || db.backend == nil {
@@ -109,24 +100,23 @@ func (db *DB) initConditionalTxn(tx *ConditionalTxn, withSnapshot bool) error {
 		return backenddb.ErrClosed
 	}
 
-	id := db.conditionalRegisterTxn()
+	db.conditionalActiveTxnCount.Add(1)
 	start := db.conditionalSeq.Load()
-	db.conditionalSetTxnStart(id, start)
 
 	var snap *Snapshot
 	if withSnapshot {
 		snap = db.AcquireSnapshot()
 		if snap == nil {
-			db.conditionalUnregisterTxn(id)
+			db.conditionalActiveTxnCount.Add(-1)
 			return backenddb.ErrClosed
 		}
 	}
 
 	*tx = ConditionalTxn{
-		db:       db,
-		batch:    db.NewBatch(),
-		snap:     snap,
-		id:       id,
+		db:    db,
+		batch: db.NewBatch(),
+		snap:  snap,
+
 		startSeq: start,
 	}
 	tx.reads = tx.inlineReads[:0]
@@ -150,6 +140,14 @@ func (tx *ConditionalTxn) Snapshot() *Snapshot {
 func (tx *ConditionalTxn) ReserveReadSet(n int) {
 	if tx == nil || n <= cap(tx.reads) {
 		return
+	}
+	if tx.cow != nil {
+		if uint64(n) > ^uint64(0)/128 {
+			return
+		}
+		if err := tx.cowAdmit(uint64(n) * 128); err != nil {
+			return
+		}
 	}
 	next := make([]conditionalReadPrecondition, len(tx.reads), n)
 	copy(next, tx.reads)
@@ -301,6 +299,17 @@ func (tx *ConditionalTxn) stagedReadAppend(key, dst []byte) ([]byte, page.EntryR
 	if tx == nil || tx.batch == nil || len(tx.batch.entries) == 0 {
 		return dst, page.LegacyEntryRevision, false, false, nil
 	}
+	if tx.cow != nil && tx.cow.writeIndex != nil {
+		idx, ok := tx.cow.writeIndex[conditionalBytesString(key)]
+		if !ok {
+			return dst, page.LegacyEntryRevision, false, false, nil
+		}
+		e := tx.batch.entries[idx]
+		if e.Type == batch.OpDelete {
+			return dst, e.Revision, true, true, nil
+		}
+		return append(dst, e.Value...), e.Revision, true, false, nil
+	}
 	for i := len(tx.batch.entries) - 1; i >= 0; i-- {
 		entry := tx.batch.entries[i]
 		switch entry.Type {
@@ -341,68 +350,124 @@ func (tx *ConditionalTxn) Has(key []byte) (bool, error) {
 
 // Set stages a conditional put in the cached TreeDB batch.
 func (tx *ConditionalTxn) Set(key, value []byte) error {
-	if err := tx.ensureOpen(); err != nil {
+	if err := tx.ensureMutation(); err != nil {
 		return err
 	}
-	return tx.batch.Set(key, value)
+	if err := tx.admitCOWStagedWrite(); err != nil {
+		return err
+	}
+	if err := tx.batch.Set(key, value); err != nil {
+		return err
+	}
+	tx.recordCOWStagedWrite()
+	return nil
 }
 
 // SetWithRevision stages a put with an explicit native entry revision.
 func (tx *ConditionalTxn) SetWithRevision(key, value []byte, revision page.EntryRevision) error {
-	if err := tx.ensureOpen(); err != nil {
+	if err := tx.ensureMutation(); err != nil {
 		return err
 	}
-	return tx.batch.SetWithRevision(key, value, revision)
+	if err := tx.admitCOWStagedWrite(); err != nil {
+		return err
+	}
+	if err := tx.batch.SetWithRevision(key, value, revision); err != nil {
+		return err
+	}
+	tx.recordCOWStagedWrite()
+	return nil
 }
 
 // SetView stages a put without copying key/value bytes. The caller must keep
 // both slices immutable until Commit, CommitSync, or Close returns.
 func (tx *ConditionalTxn) SetView(key, value []byte) error {
-	if err := tx.ensureOpen(); err != nil {
+	if err := tx.ensureMutation(); err != nil {
 		return err
 	}
-	return tx.batch.SetView(key, value)
+	if err := tx.admitCOWStagedWrite(); err != nil {
+		return err
+	}
+	if err := tx.batch.SetView(key, value); err != nil {
+		return err
+	}
+	tx.recordCOWStagedWrite()
+	return nil
 }
 
 // SetViewWithRevision is SetView with an explicit native entry revision.
 func (tx *ConditionalTxn) SetViewWithRevision(key, value []byte, revision page.EntryRevision) error {
-	if err := tx.ensureOpen(); err != nil {
+	if err := tx.ensureMutation(); err != nil {
 		return err
 	}
-	return tx.batch.SetViewWithRevision(key, value, revision)
+	if err := tx.admitCOWStagedWrite(); err != nil {
+		return err
+	}
+	if err := tx.batch.SetViewWithRevision(key, value, revision); err != nil {
+		return err
+	}
+	tx.recordCOWStagedWrite()
+	return nil
 }
 
 // Delete stages a conditional tombstone in the cached TreeDB batch.
 func (tx *ConditionalTxn) Delete(key []byte) error {
-	if err := tx.ensureOpen(); err != nil {
+	if err := tx.ensureMutation(); err != nil {
 		return err
 	}
-	return tx.batch.Delete(key)
+	if err := tx.admitCOWStagedWrite(); err != nil {
+		return err
+	}
+	if err := tx.batch.Delete(key); err != nil {
+		return err
+	}
+	tx.recordCOWStagedWrite()
+	return nil
 }
 
 // DeleteWithRevision stages a tombstone with an explicit native entry revision.
 func (tx *ConditionalTxn) DeleteWithRevision(key []byte, revision page.EntryRevision) error {
-	if err := tx.ensureOpen(); err != nil {
+	if err := tx.ensureMutation(); err != nil {
 		return err
 	}
-	return tx.batch.DeleteWithRevision(key, revision)
+	if err := tx.admitCOWStagedWrite(); err != nil {
+		return err
+	}
+	if err := tx.batch.DeleteWithRevision(key, revision); err != nil {
+		return err
+	}
+	tx.recordCOWStagedWrite()
+	return nil
 }
 
 // DeleteView stages a tombstone without copying key bytes. The caller must keep
 // key immutable until Commit, CommitSync, or Close returns.
 func (tx *ConditionalTxn) DeleteView(key []byte) error {
-	if err := tx.ensureOpen(); err != nil {
+	if err := tx.ensureMutation(); err != nil {
 		return err
 	}
-	return tx.batch.DeleteView(key)
+	if err := tx.admitCOWStagedWrite(); err != nil {
+		return err
+	}
+	if err := tx.batch.DeleteView(key); err != nil {
+		return err
+	}
+	tx.recordCOWStagedWrite()
+	return nil
 }
 
 // DeleteViewWithRevision is DeleteView with an explicit native entry revision.
 func (tx *ConditionalTxn) DeleteViewWithRevision(key []byte, revision page.EntryRevision) error {
-	if err := tx.ensureOpen(); err != nil {
+	if err := tx.ensureMutation(); err != nil {
 		return err
 	}
-	return tx.batch.DeleteViewWithRevision(key, revision)
+	if err := tx.admitCOWStagedWrite(); err != nil {
+		return err
+	}
+	if err := tx.batch.DeleteViewWithRevision(key, revision); err != nil {
+		return err
+	}
+	tx.recordCOWStagedWrite()
+	return nil
 }
 
 // Commit validates recorded reads and publishes staged writes without forcing a
@@ -425,6 +490,9 @@ func (tx *ConditionalTxn) Close() error {
 func (tx *ConditionalTxn) commit(sync bool) (err error) {
 	if err := tx.ensureOpen(); err != nil {
 		return err
+	}
+	if tx.cow != nil {
+		return tx.cowCommit(sync)
 	}
 	defer func() {
 		tx.db.observeConditionalTxnCommit(len(tx.reads), err)
@@ -458,16 +526,25 @@ func (tx *ConditionalTxn) commit(sync bool) (err error) {
 		return nil
 	}
 	tx.batch.streamBypassOff = true
-	tx.batch.conditionalTxnID = tx.id
 	return tx.batch.writeRegularLocked(sync, unlockWriteMu)
 }
 
 func (tx *ConditionalTxn) validateReadSetAtPublish() error {
-	if len(tx.reads) == 0 {
+	if len(tx.reads) == 0 && (tx.batch == nil || len(tx.batch.entries) == 0) {
 		return nil
+	}
+	if err := tx.db.conditionalHistoryError(tx.startSeq); err != nil {
+		return err
 	}
 	if tx.db.conditionalReadSetChangedSince(tx.startSeq, tx.reads) {
 		return backenddb.ErrConcurrentModification
+	}
+	if tx.batch != nil {
+		for _, e := range tx.batch.entries {
+			if tx.db.conditionalReadKeyChangedSince(tx.startSeq, e.Key) {
+				return backenddb.ErrConcurrentModification
+			}
+		}
 	}
 	return nil
 }
@@ -487,20 +564,41 @@ func (tx *ConditionalTxn) finish() error {
 		return nil
 	}
 	tx.closed = true
+	if tx.cow != nil {
+		for it := range tx.cow.iterators {
+			_ = it.Close()
+		}
+	}
 	db := tx.db
-	id := tx.id
-	tx.id = 0
 	var err error
 	if tx.snap != nil {
 		err = errors.Join(err, tx.snap.Close())
 		tx.snap = nil
 	}
+	if tx.cow != nil {
+		tx.cow.ranges = nil
+		tx.cow.writeIndex = nil
+		tx.cow.iterators = nil
+		tx.cow.write = nil
+		tx.reads = nil
+		tx.readIndex = nil
+		tx.keyArena = nil
+		clear(tx.inlineReads[:])
+
+	}
+	if tx.batch != nil && tx.cow != nil {
+		tx.batch.cowState.txn = nil
+	}
+
 	if tx.batch != nil {
 		err = errors.Join(err, tx.batch.Close())
 		tx.batch = nil
 	}
-	if db != nil && id != 0 {
-		db.conditionalUnregisterTxn(id)
+	if tx.cow != nil {
+		tx.cow.lease.Close()
+	}
+	if db != nil {
+		db.conditionalActiveTxnCount.Add(-1)
 		db.conditionalTxnClosed.Add(1)
 	}
 	return err
@@ -514,9 +612,24 @@ func (tx *ConditionalTxn) recordRead(key []byte, revision page.EntryRevision, fo
 		}
 		return nil
 	}
-	start := len(tx.keyArena)
-	tx.keyArena = append(tx.keyArena, key...)
-	owned := tx.keyArena[start:]
+	if tx.cow != nil {
+		if err := tx.cowAdmit(uint64(unsafe.Sizeof(conditionalReadPrecondition{}))*4 + 128); err != nil {
+			return err
+		}
+	}
+	var owned []byte
+	if tx.cow != nil {
+		var err error
+		owned, err = tx.batch.cowCopyStorage(len(key))
+		if err != nil {
+			return err
+		}
+		copy(owned, key)
+	} else {
+		start := len(tx.keyArena)
+		tx.keyArena = append(tx.keyArena, key...)
+		owned = tx.keyArena[start:]
+	}
 	idx := len(tx.reads)
 	tx.reads = append(tx.reads, conditionalReadPrecondition{
 		key:      owned,
@@ -570,103 +683,30 @@ func bytesEqual(a, b []byte) bool {
 	return true
 }
 
-func (db *DB) conditionalRegisterTxn() uint64 {
-	db.conditionalOracle.mu.Lock()
-	defer db.conditionalOracle.mu.Unlock()
-	db.conditionalOracle.nextID++
-	id := db.conditionalOracle.nextID
-	if db.conditionalOracle.active == nil {
-		db.conditionalOracle.active = make(map[uint64]uint64)
+func (db *DB) conditionalHistoryLocked() *txnhistory.History {
+	if db.conditionalOracle.history == nil {
+		db.conditionalOracle.history, _ = txnhistory.New(4096, 4<<20, nil)
 	}
-	db.conditionalOracle.active[id] = 0
-	db.conditionalActiveTxnCount.Add(1)
-	return id
+	return db.conditionalOracle.history
 }
-
-func (db *DB) conditionalSetTxnStart(id uint64, start uint64) {
-	if db == nil || id == 0 {
-		return
-	}
-	db.conditionalOracle.mu.Lock()
-	if _, ok := db.conditionalOracle.active[id]; ok {
-		db.conditionalOracle.active[id] = start
-	}
-	db.conditionalPruneOracleLocked()
-	db.conditionalOracle.mu.Unlock()
-}
-
-func (db *DB) conditionalUnregisterTxn(id uint64) {
-	if db == nil || id == 0 {
-		return
-	}
-	db.conditionalOracle.mu.Lock()
-	if _, ok := db.conditionalOracle.active[id]; ok {
-		delete(db.conditionalOracle.active, id)
-		db.conditionalActiveTxnCount.Add(-1)
-	}
-	db.conditionalPruneOracleLocked()
-	db.conditionalOracle.mu.Unlock()
-}
-
-func (db *DB) conditionalRecordCommittedEntries(entries []batch.Entry, ranges []batch.DeleteRange, ownerTxnID uint64) {
-	if db == nil || db.conditionalActiveTxnCount.Load() <= 0 || (len(entries) == 0 && len(ranges) == 0) {
+func (db *DB) conditionalRecordCommittedEntries(entries []batch.Entry, ranges []batch.DeleteRange) {
+	if db == nil || (len(entries) == 0 && len(ranges) == 0) {
 		return
 	}
 	db.conditionalOracle.mu.Lock()
 	defer db.conditionalOracle.mu.Unlock()
-	if len(db.conditionalOracle.active) == 0 {
-		return
+	j := db.conditionalHistoryLocked()
+	p, err := j.Prepare(entries, ranges, false)
+	if err != nil {
+		panic(err)
 	}
-	if ownerTxnID != 0 && len(db.conditionalOracle.active) == 1 {
-		if _, ok := db.conditionalOracle.active[ownerTxnID]; ok {
-			return
-		}
-	}
-	seq := db.conditionalSeq.Add(1)
-	pointCount := 0
-	rangeCount := 0
-	for i := range entries {
-		switch entries[i].Type {
-		case batch.OpPut, batch.OpDelete:
-			if db.conditionalOracle.recent == nil {
-				db.conditionalOracle.recent = make(map[string]uint64, len(entries))
-			}
-			db.conditionalOracle.recent[string(entries[i].Key)] = seq
-			pointCount++
-		case batch.OpDeleteRange:
-			if batch.IsDeleteRangeNoop(entries[i].Key, entries[i].Value) {
-				continue
-			}
-			db.conditionalOracle.ranges = append(db.conditionalOracle.ranges, conditionalRecentRange{
-				start: string(entries[i].Key),
-				end:   string(entries[i].Value),
-				seq:   seq,
-			})
-			rangeCount++
-		}
-	}
-	for i := range ranges {
-		db.conditionalOracle.ranges = append(db.conditionalOracle.ranges, conditionalRecentRange{
-			start: string(ranges[i].Start),
-			end:   string(ranges[i].End),
-			seq:   seq,
-		})
-	}
-	rangeCount += len(ranges)
-	if pointCount > 0 {
-		db.conditionalOracleRecordedPoints.Add(uint64(pointCount))
-	}
-	if rangeCount > 0 {
-		db.conditionalOracleRecordedRanges.Add(uint64(rangeCount))
-	}
+	j.Install(p, db.conditionalSeq.Add(1))
+	db.conditionalOracleRecordedPoints.Add(uint64(len(entries)))
+	db.conditionalOracleRecordedRanges.Add(uint64(len(ranges)))
 }
-
 func (db *DB) conditionalRecordPointWrite(op batch.OpType, key []byte) {
-	if db == nil || db.conditionalActiveTxnCount.Load() <= 0 {
-		return
-	}
 	entry := [1]batch.Entry{{Type: op, Key: key}}
-	db.conditionalRecordCommittedEntries(entry[:], nil, 0)
+	db.conditionalRecordCommittedEntries(entry[:], nil)
 }
 
 func (db *DB) observeConditionalTxnCommit(readSetLen int, err error) {
@@ -686,87 +726,40 @@ func (db *DB) observeConditionalTxnCommit(readSetLen int, err error) {
 	}
 }
 
+func (db *DB) conditionalHistoryError(start uint64) error {
+	db.conditionalOracle.mu.Lock()
+	defer db.conditionalOracle.mu.Unlock()
+	if db.conditionalOracle.history == nil {
+		return nil
+	}
+	if err := db.conditionalOracle.history.Check(start); err != nil {
+		return err
+	}
+	if db.conditionalOracle.history.BarrierConflict(start) {
+		return backenddb.ErrConcurrentModification
+	}
+	return nil
+}
 func (db *DB) conditionalReadSetChangedSince(start uint64, reads []conditionalReadPrecondition) bool {
-	if db == nil || len(reads) == 0 {
+	if db == nil {
 		return false
 	}
 	db.conditionalOracle.mu.Lock()
 	defer db.conditionalOracle.mu.Unlock()
-	if db.conditionalOracle.rootSeq > start {
-		return true
-	}
-	for i := range reads {
-		if db.conditionalOracle.recent[conditionalBytesString(reads[i].key)] > start {
+	for _, r := range reads {
+		if db.conditionalOracle.history.PointChanged(start, r.key) {
 			return true
-		}
-		for j := range db.conditionalOracle.ranges {
-			r := db.conditionalOracle.ranges[j]
-			if r.seq > start && conditionalKeyInStringRange(reads[i].key, r.start, r.end) {
-				return true
-			}
 		}
 	}
 	return false
 }
-
 func (db *DB) conditionalReadKeyChangedSince(start uint64, key []byte) bool {
 	if db == nil {
 		return false
 	}
 	db.conditionalOracle.mu.Lock()
 	defer db.conditionalOracle.mu.Unlock()
-	if db.conditionalOracle.rootSeq > start {
-		return true
-	}
-	if db.conditionalOracle.recent[conditionalBytesString(key)] > start {
-		return true
-	}
-	for i := range db.conditionalOracle.ranges {
-		r := db.conditionalOracle.ranges[i]
-		if r.seq > start && conditionalKeyInStringRange(key, r.start, r.end) {
-			return true
-		}
-	}
-	return false
-}
-
-func (db *DB) conditionalPruneOracleLocked() {
-	db.conditionalOraclePrunes.Add(1)
-	pointsBefore := len(db.conditionalOracle.recent)
-	rangesBefore := len(db.conditionalOracle.ranges)
-	if len(db.conditionalOracle.active) == 0 {
-		clear(db.conditionalOracle.recent)
-		clear(db.conditionalOracle.ranges)
-		db.conditionalOracle.ranges = db.conditionalOracle.ranges[:0]
-		db.conditionalOracle.rootSeq = 0
-		conditionalAddIntMetric(&db.conditionalOraclePrunedPoints, pointsBefore)
-		conditionalAddIntMetric(&db.conditionalOraclePrunedRanges, rangesBefore)
-		return
-	}
-	oldest := uint64(^uint64(0))
-	for _, start := range db.conditionalOracle.active {
-		if start < oldest {
-			oldest = start
-		}
-	}
-	for key, seq := range db.conditionalOracle.recent {
-		if seq <= oldest {
-			delete(db.conditionalOracle.recent, key)
-		}
-	}
-	kept := db.conditionalOracle.ranges[:0]
-	for i := range db.conditionalOracle.ranges {
-		if db.conditionalOracle.ranges[i].seq > oldest {
-			kept = append(kept, db.conditionalOracle.ranges[i])
-		}
-	}
-	clear(db.conditionalOracle.ranges[len(kept):])
-	db.conditionalOracle.ranges = kept
-	if db.conditionalOracle.rootSeq <= oldest {
-		db.conditionalOracle.rootSeq = 0
-	}
-	conditionalAddIntMetric(&db.conditionalOraclePrunedPoints, pointsBefore-len(db.conditionalOracle.recent))
-	conditionalAddIntMetric(&db.conditionalOraclePrunedRanges, rangesBefore-len(db.conditionalOracle.ranges))
+	return db.conditionalOracle.history.PointChanged(start, key)
 }
 
 func conditionalBytesString(b []byte) string {
@@ -774,34 +767,6 @@ func conditionalBytesString(b []byte) string {
 		return ""
 	}
 	return unsafe.String(unsafe.SliceData(b), len(b))
-}
-
-func conditionalKeyInStringRange(key []byte, start, end string) bool {
-	return (len(start) == 0 || compareBytesString(key, start) >= 0) &&
-		(len(end) == 0 || compareBytesString(key, end) < 0)
-}
-
-func compareBytesString(key []byte, bound string) int {
-	n := len(key)
-	if len(bound) < n {
-		n = len(bound)
-	}
-	for i := 0; i < n; i++ {
-		if key[i] < bound[i] {
-			return -1
-		}
-		if key[i] > bound[i] {
-			return 1
-		}
-	}
-	switch {
-	case len(key) < len(bound):
-		return -1
-	case len(key) > len(bound):
-		return 1
-	default:
-		return 0
-	}
 }
 
 func conditionalAddIntMetric(dst *atomic.Uint64, delta int) {

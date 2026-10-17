@@ -1266,10 +1266,9 @@ Required performance evidence:
 - `BenchmarkConditionalTxnReadSet10000`
 - Raw write baseline comparison showing entry revision metadata does not add a
   second ordered-root write or lookup per operation.
-- M0 placeholder benchmarks live in
-  `TreeDB/db/conditional_kv_contract_bench_test.go`; #3424/#3425 must replace
-  them with non-skipped benchmarks and allocation evidence before closing the
-  feature stack.
+- Implemented backend benchmarks live in
+  `TreeDB/db/conditional_kv_contract_bench_test.go`; they exercise native
+  conditional reads and commits and report allocation evidence.
 
 ## 10.2 External-Version MVCC Key Codec
 
@@ -4214,3 +4213,35 @@ sets `IndexPrimaryDirectory`, asserts selected PRIMARY output and reports separa
 arena/registry retained metadata and DATA/PRIMARY extents after the timed work.
 Setup is outside the timer. It introduces no performance threshold and grants
 no acceptance until the matched source/harness packet is frozen and measured.
+
+## Public raw COW transaction verification
+
+The public gates are TestPublicTxnNoOvertakeAfterAppendBeforeInstall,
+TestPublicCOWTxnDisjointCommitsPreserveBoth, TestPublicCOWTxnEmptyRangePhantom,
+TestPublicCOWTxnMutationWithOpenIteratorRejected, TestPublicCOWTxnABAWriteSkewAndBlindOverlap,
+TestPublicCOWTxnStagedOverlayRangeDeleteAndChildren, TestPublicCOWTxnRangeBoundsAndDisjointProgress,
+and TestPublicCOWTxnEmptySyncAndOpeningView. Internal shared history tests include
+TestTxnJournalPartialEvictionFloor and native-range/key-ownership/retention controls.
+Public promotion also requires applicable COW grouping, race, pointer reopen,
+accepted-error and Close gates and performance evidence as specified by P1.
+
+
+Additional P1 lifetime and lock-order gates:
+`TestPublicCOWTxnSnapshotRejectsReusableHandle`,
+`TestPublicCOWTxnCheckpointAdmissionLockOrder`,
+`TestPublicCOWTxnHigherLevelBarrierFailsEligibility`,
+`TestPublicCOWTxnAcceptedErrorPoisonsBeforeLaterAcceptance`,
+`TestPublicCOWTxnSyncReopen`, and
+`TestPublicCOWTxnAllPointProducersShareHistory`.
+
+P1 reverse/range and fallback gates: `TestPublicCOWTxnReverseOverlaySeekAndLifetime`,
+`TestPublicCOWTxnReverseFullPredicateAfterSeekAndEarlyClose`,
+`TestPublicCOWTxnAllFFPrefixUnboundedPredicate`,
+`TestCOWTxnRangeUnionPreservesDomains`,
+`TestHistoryNewerSuffixAcrossWrapAndSharedSequences`,
+`TestHistorySortedChunkQueriesMatchLinearReferenceAcrossWrap`,
+`TestHistoryBarrierReasonsOnlyAdvanceOnInstall`, and
+`TestPublicCOWTxnCapacityBarrierReportsAcceptedFallbackAndAbort`.
+`BenchmarkPublicCOWTxn` reports enabled point/range/reverse costs with old retained
+history and newer unrelated point chunks; it has no unsupported-baseline speedup
+comparator. See both benchmark READMEs for the exact fresh-process capture.

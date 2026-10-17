@@ -36,11 +36,13 @@ type conditionalCommitMutation struct {
 	admission    mvccadmission.Summary
 	entries      []batchpkg.Entry
 	ranges       []batchpkg.DeleteRange
-	ownerTxnID   uint64
 }
 
 func (mutation conditionalCommitMutation) record(db *DB, commitSeq uint64) {
-	db.conditionalRecordCommittedEntries(mutation.entries, mutation.ranges, mutation.ownerTxnID, commitSeq)
+	if mutation.physicalOnly {
+		return
+	}
+	db.conditionalRecordCommittedEntries(mutation.entries, mutation.ranges, commitSeq)
 }
 
 type finalizeCommitOptions struct {
@@ -86,10 +88,9 @@ type finalizeCommitOptions struct {
 	// acquires that same fence before stopping and draining the recorder, so a
 	// visible old-generation commit cannot fall between publication and capture.
 	recordVacuumMutation func()
-	// conditionalMutation installs exact point/range conflict evidence at
-	// the same visibility cut as the new root. It runs while db.mu still excludes
-	// readers from sampling that root, so a conditional transaction cannot
-	// validate in the gap between root visibility and oracle publication.
+	// conditionalMutation installs exact conflict evidence after root swap,
+	// outside the view latch and before durablePublishMu permits the next
+	// builder/validator to proceed. New snapshots already include this sequence.
 	conditionalMutation conditionalCommitMutation
 	// durableResources transfers producer-owned exact external handles into the
 	// candidate root's dependency manifest. The finalizer consumes the set.

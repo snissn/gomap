@@ -143,7 +143,7 @@ type cowOwnedIterator struct {
 	err      error
 }
 
-func (db *DB) cowIterator(start, end []byte) (merging.Iterator, error) {
+func (db *DB) cowIterator(start, end []byte, reverse bool) (merging.Iterator, error) {
 	lease, err := db.cow.budget.AcquireExternal(memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowOwnedIterator{}))))
 	if err != nil {
 		return nil, err
@@ -153,7 +153,7 @@ func (db *DB) cowIterator(start, end []byte) (merging.Iterator, error) {
 		lease.Close()
 		return nil, err
 	}
-	it, err := s.bindNewIterator(func() (merging.Iterator, error) { return s.buildIteratorLocked(start, end, false) })
+	it, err := s.bindNewIterator(func() (merging.Iterator, error) { return s.buildIteratorLocked(start, end, reverse) })
 	if err != nil {
 		err = joinCOWCleanupError(err, s.Close())
 		lease.Close()
@@ -255,9 +255,6 @@ func (it *cowMergeIterator) readLeaf(ptr page.LeafLogPtr, dst []byte) ([]byte, e
 }
 
 func (s *Snapshot) buildCOWIteratorLocked(start, end []byte, reverse bool) (merging.Iterator, error) {
-	if reverse {
-		return nil, ErrCOWUnsupported
-	}
 	// Only this retained basis can prove the disk source empty; current backend
 	// emptiness and legacy cache metadata cannot justify skipping it.
 	empty, err := s.cowCut.basis.snapshot.OwnedUserRootEmpty()
@@ -277,6 +274,9 @@ func (s *Snapshot) buildCOWIteratorLocked(start, end []byte, reverse bool) (merg
 		count++
 	}
 	wrapper, heap := merging.ForwardAllocationSizes(count)
+	if reverse {
+		wrapper, heap = merging.ReverseAllocationSizes(count)
+	}
 	bytes := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowMergeIterator{}))) +
 		memtable.COWAllocationCharge(uint64(count)*uint64(unsafe.Sizeof(merging.IteratorSource{}))) +
 		memtable.COWAllocationCharge(wrapper) + memtable.COWAllocationCharge(heap)
@@ -288,7 +288,7 @@ func (s *Snapshot) buildCOWIteratorLocked(start, end []byte, reverse bool) (merg
 		return nil, err
 	}
 	it := &cowMergeIterator{snapshot: s, lease: lease}
-	sources, err := s.cowIteratorSources(start, end, queue, count, empty, it)
+	sources, err := s.cowIteratorSources(start, end, queue, count, empty, it, reverse)
 	if err != nil {
 		it.workspace.close()
 		lease.Close()
@@ -304,20 +304,36 @@ func (s *Snapshot) buildCOWIteratorLocked(start, end []byte, reverse bool) (merg
 			return nil, err
 		}
 	}
-	it.Iterator = merging.NewMergingIteratorWithFixedHeap(sources, start, end)
+	if reverse {
+		it.Iterator = merging.NewReverseMergingIteratorWithFixedHeap(sources, start, end)
+	} else {
+		it.Iterator = merging.NewMergingIteratorWithFixedHeap(sources, start, end)
+	}
 	return it, nil
 }
 
-func (s *Snapshot) cowIteratorSources(start, end []byte, queue []memtable.Table, count int, empty bool, owner *cowMergeIterator) ([]merging.IteratorSource, error) {
+func (s *Snapshot) cowIteratorSources(start, end []byte, queue []memtable.Table, count int, empty bool, owner *cowMergeIterator, reverse bool) ([]merging.IteratorSource, error) {
 	sources := make([]merging.IteratorSource, 0, count)
 	for i := len(queue) - 1; i >= 0; i-- {
 		if queue[i].Len() == 0 {
 			continue
 		}
-		sources = append(sources, merging.IteratorSource{Iter: queue[i].NewIterator(start, end), Priority: len(sources)})
+		var source iterator.UnsafeIterator
+		if reverse {
+			source = queue[i].NewReverseIterator(start, end)
+		} else {
+			source = queue[i].NewIterator(start, end)
+		}
+		sources = append(sources, merging.IteratorSource{Iter: source, Priority: len(sources)})
 	}
 	if !empty {
-		disk, err := s.cowCut.basis.snapshot.OwnedPointerProjectionIterator(start, end, owner.readLeaf)
+		var disk iterator.UnsafeIterator
+		var err error
+		if reverse {
+			disk, err = s.cowCut.basis.snapshot.OwnedReversePointerProjectionIterator(start, end, owner.readLeaf)
+		} else {
+			disk, err = s.cowCut.basis.snapshot.OwnedPointerProjectionIterator(start, end, owner.readLeaf)
+		}
 		if err != nil {
 			for _, source := range sources {
 				_ = source.Iter.Close()

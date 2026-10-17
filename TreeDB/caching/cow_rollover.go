@@ -76,7 +76,7 @@ func (c *cowCache) prepareRollover() (*cowRollover, error) {
 			}
 		}
 	}
-	next := &cowReadCut{refs: 1, cache: c, lease: p.cutLease, basis: old.basis, shards: make([]cowTable, n), frozen: make([]cowTable, len(old.frozen), len(old.frozen)+count)}
+	next := &cowReadCut{visibleCommandLSN: old.visibleCommandLSN, logicalSeq: old.logicalSeq, refs: 1, cache: c, lease: p.cutLease, basis: old.basis, shards: make([]cowTable, n), frozen: make([]cowTable, len(old.frozen), len(old.frozen)+count)}
 	next.basis.retain()
 	copy(next.frozen, old.frozen)
 	for i := range next.frozen {

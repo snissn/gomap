@@ -1448,7 +1448,7 @@ func (db *DB) AppendRawKVCommandWALOrderedEntryScanWithHintPreparedFinalizedAndM
 	if !db.commandWAL {
 		return 0, db.finalizeRawKVEntryScanWithoutCommandWAL(prepare, finalize, scanEntries, opHint)
 	}
-	lsn, _, err := db.appendRawKVCommandWALOrderedEntryScanWithHintPreparedFinalized(prepare, finalize, scanEntries, opHint, mode, false)
+	lsn, _, err := db.appendRawKVCommandWALOrderedEntryScanWithHintPreparedFinalized(prepare, finalize, scanEntries, opHint, mode, false, nil)
 	return lsn, err
 }
 
@@ -1507,7 +1507,7 @@ func (db *DB) FinalizeRawKVEntryScanForCachedPublication(prepare func() error, f
 // AppendRawKVCommandWALOrderedEntryScanWithHintPreparedFinalizedAndModeMeasured
 // reports the same phases as the prepared path while preserving its finalizer.
 func (db *DB) AppendRawKVCommandWALOrderedEntryScanWithHintPreparedFinalizedAndModeMeasured(prepare func() error, finalize RawKVCommandWALFinalize, scanEntries func(func(batchpkg.Entry) error) error, opHint int, mode RawKVCommandWALAppendMode) (uint64, CommandWALRequestTiming, error) {
-	return db.appendRawKVCommandWALOrderedEntryScanWithHintPreparedFinalized(prepare, finalize, scanEntries, opHint, mode, true)
+	return db.appendRawKVCommandWALOrderedEntryScanWithHintPreparedFinalized(prepare, finalize, scanEntries, opHint, mode, true, nil)
 }
 
 // AppendRawKVCommandWALOrderedEntryScanWithHintPreparedMeasured is the
@@ -1527,10 +1527,10 @@ func (db *DB) AppendRawKVCommandWALOrderedEntryScanWithHintPreparedAndModeMeasur
 }
 
 func (db *DB) appendRawKVCommandWALOrderedEntryScanWithHintPrepared(prepare func() error, scanEntries func(func(batchpkg.Entry) error) error, opHint int, mode RawKVCommandWALAppendMode, measured bool) (uint64, CommandWALRequestTiming, error) {
-	return db.appendRawKVCommandWALOrderedEntryScanWithHintPreparedFinalized(prepare, nil, scanEntries, opHint, mode, measured)
+	return db.appendRawKVCommandWALOrderedEntryScanWithHintPreparedFinalized(prepare, nil, scanEntries, opHint, mode, measured, nil)
 }
 
-func (db *DB) appendRawKVCommandWALOrderedEntryScanWithHintPreparedFinalized(prepare func() error, finalize RawKVCommandWALFinalize, scanEntries func(func(batchpkg.Entry) error) error, opHint int, mode RawKVCommandWALAppendMode, measured bool) (uint64, CommandWALRequestTiming, error) {
+func (db *DB) appendRawKVCommandWALOrderedEntryScanWithHintPreparedFinalized(prepare func() error, finalize RawKVCommandWALFinalize, scanEntries func(func(batchpkg.Entry) error) error, opHint int, mode RawKVCommandWALAppendMode, measured bool, guard *CommandWALStagingGuardV1) (uint64, CommandWALRequestTiming, error) {
 	var timing CommandWALRequestTiming
 	if db == nil || !db.commandWAL {
 		return 0, timing, nil
@@ -1552,14 +1552,17 @@ func (db *DB) appendRawKVCommandWALOrderedEntryScanWithHintPreparedFinalized(pre
 		publishStart = time.Now()
 		timing.PublishLockBarrierWaitObserved = true
 	}
-	unlockCommandWALPublish, err := db.LockCommandWALPublishWithBarriers()
-	if err != nil {
-		if measured {
-			timing.PublishLockBarrierWait += time.Since(publishStart)
+	if guard != nil {
+		if err := guard.ValidateDBV1(db); err != nil {
+			return 0, timing, err
 		}
-		return 0, timing, err
+	} else {
+		unlockCommandWALPublish, err := db.LockCommandWALPublishWithBarriers()
+		if err != nil {
+			return 0, timing, err
+		}
+		defer unlockCommandWALPublish()
 	}
-	defer unlockCommandWALPublish()
 	if measured {
 		timing.PublishLockBarrierWait += time.Since(publishStart)
 	}
@@ -3068,4 +3071,15 @@ func (db *DB) ValidateCommandWALReplayOperationV1(intent *CommandWALIntent) erro
 		return ErrCommandWALRejected
 	}
 	return db.checkCommandWALReplayIntentActive(&intent.inner)
+}
+
+// AppendPreparedRawKVUnderGuard borrows an already-drained caller-owned guard.
+// It never drains or releases that guard: the caller retains it through logical
+// installation (or terminal poison). Callbacks are trusted engine preparation.
+func (db *DB) AppendPreparedRawKVUnderGuard(guard *CommandWALStagingGuardV1, prepare func() error, finalize RawKVCommandWALFinalize, scan func(func(batchpkg.Entry) error) error, hint int, mode RawKVCommandWALAppendMode) (uint64, error) {
+	if guard == nil {
+		return 0, ErrCommandWALRejected
+	}
+	lsn, _, err := db.appendRawKVCommandWALOrderedEntryScanWithHintPreparedFinalized(prepare, finalize, scan, hint, mode, false, guard)
+	return lsn, err
 }

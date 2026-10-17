@@ -89,3 +89,9 @@ For the stable surface, the expectation is:
 - Package-level docs (`doc.go`) describing purpose + caveats.
 - Doc comments for exported identifiers that are part of the stable surface.
 - Runnable examples (`Example*` tests) for the primary entrypoints.
+
+Public COW transactions reuse ConditionalTxn and add Iterator, ReverseIterator, GetAppend and
+bounded DeleteRange. ErrTxnTooOld reports finite conflict-history expiration;
+ErrTxnIteratorOpen rejects mutation while a private-view iterator remains open.
+The exact eligibility and acknowledgement contract is in
+`TreeDB/docs/spec/raw-cow-transactions.md`.

@@ -12,9 +12,9 @@ import (
 // return a transaction with a snapshot. The transaction owns the snapshot and
 // closes it on Commit, CommitSync, or Close.
 //
-// Point and versioned point reads are supported. Range iteration on this
-// transaction-owned snapshot fails closed because conditional range guards are
-// not part of the public transaction contract yet.
+// Qualified public COW transactions also support forward and reverse range iteration,
+// merged with preceding staged writes. Legacy conditional snapshots reject
+// range predicates rather than exposing untracked results.
 func (tx *ConditionalTxn) Snapshot() Snapshot {
 	if tx == nil || !tx.snapshotExposed {
 		return nil
@@ -74,11 +74,26 @@ func (s conditionalTxnSnapshot) GetVersioned(key []byte) ([]byte, EntryRevision,
 	return owned, revision, nil
 }
 
-func (s conditionalTxnSnapshot) GetVersionedAppend(key, dst []byte) ([]byte, EntryRevision, error) {
+// valid binds this borrowed wrapper to the captured native snapshot, rather
+// than to a reusable public transaction handle.
+func (s conditionalTxnSnapshot) valid() bool {
 	if s.tx == nil || s.Snapshot == nil {
+		return false
+	}
+	if s.tx.cachedActive {
+		return s.tx.cached.Snapshot() == s.Snapshot
+	}
+	return s.tx.backend != nil && s.tx.backend.Snapshot() == s.Snapshot
+}
+
+func (s conditionalTxnSnapshot) GetVersionedAppend(key, dst []byte) ([]byte, EntryRevision, error) {
+	if !s.valid() {
 		return dst, LegacyEntryRevision, ErrConditionalTxnClosed
 	}
 	key = normalizeRawKVPointKey(key)
+	if s.tx.cachedActive && s.tx.cached.COWTransaction() {
+		return s.tx.cached.GetVersionedAppend(key, dst)
+	}
 	out, revision, err := s.Snapshot.GetVersionedAppend(key, dst)
 	if errors.Is(err, ErrKeyNotFound) {
 		if recErr := s.tx.recordSnapshotReadVersion(key, revision, false); recErr != nil {
@@ -169,11 +184,17 @@ func (s conditionalTxnSnapshot) ReverseIterate(start, end []byte, fn func(key, v
 }
 
 func (s conditionalTxnSnapshot) Iterator(start, end []byte) (Iterator, error) {
-	return nil, ErrConditionalTxnUnsupported
+	if !s.valid() {
+		return nil, ErrConditionalTxnClosed
+	}
+	return s.tx.Iterator(start, end)
 }
 
 func (s conditionalTxnSnapshot) ReverseIterator(start, end []byte) (Iterator, error) {
-	return nil, ErrConditionalTxnUnsupported
+	if !s.valid() {
+		return nil, ErrConditionalTxnClosed
+	}
+	return s.tx.ReverseIterator(start, end)
 }
 
 func (tx *ConditionalTxn) recordSnapshotReadVersion(key []byte, revision EntryRevision, found bool) error {
@@ -480,4 +501,29 @@ func (tx *ConditionalTxn) Close() error {
 		return err
 	}
 	return nil
+}
+
+// Iterator reads the retained opening state merged with all preceding staged
+// writes. It records the full [start,end) predicate, including missing keys.
+func (tx *ConditionalTxn) Iterator(start, end []byte) (Iterator, error) {
+	if tx != nil && tx.cachedActive {
+		return tx.cached.Iterator(start, end)
+	}
+	return nil, ErrConditionalTxnUnsupported
+}
+func (tx *ConditionalTxn) ReverseIterator(start, end []byte) (Iterator, error) {
+	if tx != nil && tx.cachedActive {
+		return tx.cached.ReverseIterator(start, end)
+	}
+	return nil, ErrConditionalTxnUnsupported
+}
+func (tx *ConditionalTxn) DeleteRange(start, end []byte) error {
+	if tx != nil && tx.cachedActive {
+		return tx.cached.DeleteRange(start, end)
+	}
+	return ErrConditionalTxnUnsupported
+}
+func (tx *ConditionalTxn) GetAppend(key, dst []byte) ([]byte, error) {
+	value, _, err := tx.GetVersionedAppend(key, dst)
+	return value, err
 }

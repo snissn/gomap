@@ -105,7 +105,7 @@ func TestConditionalKVContractDocsPinNativeRevisionAndTxnGates(t *testing.T) {
 		"TestConditionalTxnCommandWALReplayMatchesLiveRevisionContract",
 		"BenchmarkConditionalTxnReadSet10000",
 		"does not add a second ordered-root write or lookup per operation",
-		"`TreeDB/db/conditional_kv_contract_bench_test.go`; #3424/#3425 must replace them with non-skipped benchmarks",
+		"`TreeDB/db/conditional_kv_contract_bench_test.go`; they exercise native conditional reads and commits",
 	)
 
 	adapterReadiness := collapseWhitespace(readRepoText(t, "TreeDB/docs/spec/conditional-kv-adapter-readiness.md"))
