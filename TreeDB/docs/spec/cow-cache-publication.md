@@ -48,6 +48,22 @@ leases share total, in-flight and potential-retirement admission through their
 actual cleanup. One generation resource slot is used by its resolver; it is
 not an additional physical deletion authority.
 
+The original accepted-prefix queue is bounded by both the source/generation
+product and one sixteenth of `MaxInFlightBytes`, including its actual rounded
+arrays and lease. The lazy transaction journal likewise selects its finite
+ring from the actual namespace-aware control/backing sizes. These bounds leave
+producer capacity beside the separately reserved maintenance tranche; lowering
+a byte limit never assumes an older record layout. Full queue admission first
+checkpoints outside publication gates and retries; an unsuccessful drain or
+admission leaves the next command unassigned. Explicit checkpoints use the same
+preadmitted maintenance lane even when producer admission is exhausted.
+
+On reopen the opening complete cut starts at the same recovered canonical prefix
+as its original accepted coordinator and exact disk basis. An empty checkpoint
+or Close therefore preserves that recovered prefix instead of inventing a
+zero-LSN predecessor. Logical sequence numbering remains local to the opening
+engine lifetime.
+
 Refusal preserves existing views. An operation that cannot reserve its whole
 command fails before WAL append or visibility publication. It must not split
 an accepted command, silently switch cache modes or route through a backend
