@@ -13,27 +13,23 @@ func prepareNativeDomainRollover(base *nativeDomainState, admit cowbtree.OwnedMa
 		(nativeDomainLifetime{}).Retain(base)
 		return base, nil
 	}
-	source, err := newNativePendingSource(base.pending)
-	if err != nil {
-		return nil, err
-	}
-	list, err := newNativePendingSources(source, nil, admit)
-	if err != nil {
-		done := source.release()
-		source = nil
-		done.Complete()
-		return nil, err
-	}
-	source = nil // original physical edge adopted by position
-	base.captured.retain()
-	list.older = base.captured
 	domain, err := newNativeDomainState(base.name, base.baseRoot, base.interpretation, base.storagePolicy, nil, admit)
 	if err != nil {
-		done := list.release()
-		list = nil
-		done.Complete()
 		return nil, err
 	}
-	domain.captured = list
+	// This preborn descriptor owns every partial edge before the next fallible
+	// stage. On error the caller transfers it into its original successor Work;
+	// only the existing off-gate worker may release it.
+	domain.privateSource, err = newNativePendingSource(base.pending)
+	if err != nil {
+		return domain, err
+	}
+	domain.captured, err = newNativePendingSources(domain.privateSource, nil, admit)
+	if err != nil {
+		return domain, err
+	}
+	domain.privateSource = nil // original physical edge adopted by list position
+	base.captured.retain()
+	domain.captured.older = base.captured
 	return domain, nil
 }

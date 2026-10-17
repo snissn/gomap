@@ -116,8 +116,9 @@ func ForkCOWWriter(root *COWRoot) (*COWWriter, error) {
 	// Existing reservations may belong to another captured-root fork. Include
 	// their full original charge conservatively; it contains every byte that
 	// can become generation history, plus bounded preparation scratch.
-	if g.frozen || !cowFits(b.limits.MaxGenerationBytes, g.history, g.pending) ||
-		!cowFits(b.limits.MaxGenerationBytes, g.history+g.pending, charge) ||
+	history := g.generationHistoryLocked()
+	if g.frozen || !cowFits(b.limits.MaxGenerationBytes, history, g.pending) ||
+		!cowFits(b.limits.MaxGenerationBytes, history+g.pending, charge) ||
 		!b.retirementFitsLocked(charge) || !b.addLocked(charge) {
 		b.mu.Unlock()
 		return nil, ErrCOWCapacity
@@ -438,8 +439,8 @@ func (w *COWWriter) Prepare(entries []COWMutation, opts COWPrepareOptions) (*COW
 	}
 	total := c.Total()
 	if g.frozen || !cowFits(b.limits.MaxInFlightBytes, b.stats.ReservedBytes, total) ||
-		!cowFits(b.limits.MaxGenerationBytes, g.history, g.pending) ||
-		!cowFits(b.limits.MaxGenerationBytes, g.history+g.pending, c.History()) ||
+		!cowFits(b.limits.MaxGenerationBytes, g.generationHistoryLocked(), g.pending) ||
+		!cowFits(b.limits.MaxGenerationBytes, g.generationHistoryLocked()+g.pending, c.History()) ||
 		!b.retirementFitsLocked(total) ||
 		opts.ResourceSlots > b.limits.MaxResources-len(g.ids) || !b.addLocked(total) {
 		b.mu.Unlock()
@@ -708,12 +709,13 @@ type COWRoot struct {
 	refs       int
 }
 
-// AcquireCapturedSource admits one original captured-source owner and its
-// independent allocation receipt against this root's SAME budget. It does not
+// AcquireCapturedSource claims one already admitted original source cohort AND
+// one exact root edge against this root's SAME budget. The caller owns both on
+// success. It admits no producer bytes after accepted mutation. It does not
 // freeze shared generations or alter private fork publication/cancellation.
 // The caller attaches this receipt to the original source, shares that owner
 // across views, and closes it only after detaching its last root/resource edge.
-func (r *COWRoot) AcquireCapturedSource(bytes uint64) (*COWExternalLease, error) {
+func (r *COWRoot) AcquireCapturedSource(bytes uint64) (*COWNativeSourceReservation, error) {
 	if r == nil {
 		return nil, ErrCOWClosed
 	}
@@ -722,7 +724,19 @@ func (r *COWRoot) AcquireCapturedSource(bytes uint64) (*COWExternalLease, error)
 	if r.refs == 0 || r.tree == nil {
 		return nil, ErrCOWClosed
 	}
-	return r.generation.budget.acquireExternal(bytes, true)
+	cell := r.generation.nativeSource
+	if cell == nil {
+		return nil, ErrCOWCapacity
+	}
+	b := r.generation.budget
+	b.mu.Lock()
+	err := cell.claimLocked(bytes)
+	b.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	r.refs++ // belongs to this already admitted original source, even if Close follows
+	return cell, nil
 }
 
 func (r *COWRoot) Retain() bool {

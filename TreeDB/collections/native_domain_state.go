@@ -22,6 +22,7 @@ type nativeDomainState struct {
 	storagePolicy  backenddb.OrderedRootStoragePolicy
 	pending        *memtable.COWRoot
 	captured       *nativePendingSources
+	privateSource  *nativePendingSource // partial rollover edge; never published
 	refund         *cowbtree.OwnedMapRefund
 	finished       bool
 }
@@ -83,6 +84,8 @@ func (nativeDomainLifetime) Release(d *nativeDomainState) (cowbtree.OwnedMapComp
 	captured := d.captured
 	d.captured = nil
 	done := captured.release()
+	done.Append(d.privateSource.release())
+	d.privateSource = nil
 	captured = nil
 	refund := d.refund
 	d.refund = nil

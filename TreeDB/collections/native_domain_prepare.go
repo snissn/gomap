@@ -11,7 +11,7 @@ import (
 // The backend bridge exposes this same capability to actual native producers.
 type nativeDomainAllocator interface {
 	AdmitNativeBytes(uint64) (*memtable.COWExternalLease, error)
-	NewNativeCOWWriter() (*memtable.COWWriter, error)
+	NewNativeCOWWriter(sourceOwnerBytes uint64) (*memtable.COWWriter, error)
 }
 
 // prepareNativeDomainUpdate privately prepares an owned root-local successor.
@@ -37,7 +37,7 @@ func prepareNativeDomainUpdate(base *nativeDomainState, name string, baseRoot, i
 		return nil, err
 	}
 	if writer == nil {
-		writer, err = allocator.NewNativeCOWWriter()
+		writer, err = allocator.NewNativeCOWWriter(nativePendingSourceCharge())
 		if err != nil {
 			return nil, err
 		}

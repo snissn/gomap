@@ -73,9 +73,16 @@ func TestNativeDomainRolloverSourceBoundsViewsAndSuffixGeneration(t *testing.T) 
 		t.Fatal("suffix did not preserve captured ownership")
 	}
 	before := budget.Stats()
-	if _, err := prepareNativeDomainRollover(suffix, admit); !errors.Is(err, memtable.ErrCOWCapacity) {
+	partial, err := prepareNativeDomainRollover(suffix, admit)
+	if !errors.Is(err, memtable.ErrCOWCapacity) {
 		t.Fatalf("source cap: %v", err)
 	}
+	done, err = (nativeDomainLifetime{}).Release(partial)
+	partial = nil
+	if err != nil {
+		t.Fatal(err)
+	}
+	done.Complete()
 	if after := budget.Stats(); after.TotalBytes != before.TotalBytes || after.Sources != before.Sources {
 		t.Fatal("refusal changed original accounting", after)
 	}

@@ -214,7 +214,24 @@ func TestCOWCapturedForkRefusesFrozenClosedAndResourceRaces(t *testing.T) {
 }
 
 func TestCOWCapturedForkGenerationCapIncludesOriginalPendingReservations(t *testing.T) {
-	budget, writer := cowTestWriter(t, DefaultCOWLimits())
+	t.Run("raw", func(t *testing.T) { testCOWForkPendingGenerationCap(t, false) })
+	t.Run("native-source-cohort", func(t *testing.T) { testCOWForkPendingGenerationCap(t, true) })
+}
+
+func testCOWForkPendingGenerationCap(t *testing.T, native bool) {
+	budget, err := NewCOWBudget(DefaultCOWLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var writer *COWWriter
+	if native {
+		writer, err = budget.NewNativeCOWWriter(128)
+	} else {
+		writer, err = NewCOWWriter(budget)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
 	root := cowTestPublish(t, writer, cowTestEntries(1))
 	left, err := ForkCOWWriter(root)
 	if err != nil {
@@ -233,7 +250,7 @@ func TestCOWCapturedForkGenerationCapIncludesOriginalPendingReservations(t *test
 	budget.mu.Lock()
 	// Each prepare fits against installed history in isolation, but both
 	// cannot fit. Existing original reservation is authoritative before Publish.
-	budget.limits.MaxGenerationBytes = g.history + charge.Total() + charge.History()/2
+	budget.limits.MaxGenerationBytes = g.generationHistoryLocked() + charge.Total() + charge.History()/2
 	budget.mu.Unlock()
 	prepared, err := left.Prepare(entries, COWPrepareOptions{})
 	if err != nil {
@@ -247,7 +264,7 @@ func TestCOWCapturedForkGenerationCapIncludesOriginalPendingReservations(t *test
 		t.Fatal("refused fork preparation changed accounting")
 	}
 	budget.mu.Lock()
-	budget.limits.MaxGenerationBytes = g.history + g.pending
+	budget.limits.MaxGenerationBytes = g.generationHistoryLocked() + g.pending
 	budget.mu.Unlock()
 	if _, err = ForkCOWWriter(root); !errors.Is(err, ErrCOWCapacity) {
 		t.Fatal("header admission ignored original pending reservation", err)
@@ -257,7 +274,7 @@ func TestCOWCapturedForkGenerationCapIncludesOriginalPendingReservations(t *test
 	}
 	next := prepared.Publish()
 	prepared = nil
-	if g.history > budget.limits.MaxGenerationBytes {
+	if g.generationHistoryLocked() > budget.limits.MaxGenerationBytes {
 		t.Fatal("publication exceeded finite generation cap")
 	}
 	cowTestClose(left)

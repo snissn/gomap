@@ -27,16 +27,15 @@ type nativePendingSources struct {
 	refund *cowbtree.OwnedMapRefund
 }
 
-func newNativePendingSource(root *memtable.COWRoot) (*nativePendingSource, error) {
-	charge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativePendingSource{}))) +
+func nativePendingSourceCharge() uint64 {
+	return memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativePendingSource{}))) +
 		memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowbtree.OwnedMapRefund{})))
-	lease, err := root.AcquireCapturedSource(charge)
+}
+
+func newNativePendingSource(root *memtable.COWRoot) (*nativePendingSource, error) {
+	lease, err := root.AcquireCapturedSource(nativePendingSourceCharge())
 	if err != nil {
 		return nil, err
-	}
-	if !root.Retain() {
-		lease.Close()
-		return nil, memtable.ErrCOWClosed
 	}
 	refund := new(cowbtree.OwnedMapRefund)
 	refund.Init(lease)

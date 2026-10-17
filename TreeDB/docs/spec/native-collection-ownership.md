@@ -64,6 +64,34 @@ rotation use a fresh generation. No-op rotation retains the same descriptor
 without consuming a source slot. Canceled private rotation refunds the original
 slot after detaching its resource and containing descriptor aliases.
 
+The original native writer preadmits the physical source owner's metadata
+before its first mutation can become accepted. Forks share that generation's
+original accounting cell. Capturing a root atomically claims the existing
+finite source counter and one exact root edge, without asking the producer for
+additional bytes. The cell contains no root, generation, engine or work
+backpointer. Generation cleanup and source cleanup independently detach their
+edges before the last independent allocation receipt refunds the cohort.
+Canceled rotation releases its claim while leaving the original generation's
+preadmission available for another attempt. Both installed history and pending
+fork reservations include that cohort in the finite generation limit.
+
+Source accounting across views acquired before rotation remains an activation
+gate. Such an engine owns the active pending root, rather than a later captured
+list descriptor. Its original generation must continue to hold the finite
+physical source slot after that captured list is released. Variable native
+active generations also need source admission before accepted writes, so an
+overfull first whole-cut capture cannot strand an uncaptured logical prefix.
+The current constructor controls do not establish either public read-view gate.
+
+Private whole-engine rollover adopts each partial domain, map builder and
+collection into its preborn original successor work before the next fallible
+stage. On error the returned successor is private and owned: lower publication
+queues its release after leaving gates, without reading or installing it.
+The original worker cancels unsealed builders before queued opening-cut cleanup
+can release their borrowed basis. Sparse source suffix construction clones only newer list
+positions and shares original source slots; a failed suffix construction returns
+its exact owned partial list and independent scratch receipt for worker cleanup.
+
 Captured-prefix handoff remains a construction gate: it must clone only newer
 list-position metadata, share original physical-source receipts, drop the
 accepted prefix, and preserve newer active effects. Required build/handoff

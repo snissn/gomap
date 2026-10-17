@@ -21,6 +21,8 @@ type nativeEngineVersion struct {
 	pending         *cowbtree.OwnedMap[uint64, *nativeCollectionState]
 	nextIncarnation uint64
 	allocator       backenddb.NativeSemanticAllocator
+	maintenance     backenddb.NativeSemanticAllocator
+	preparation     *nativeEnginePreparation
 	cleanup         rootpublication.SemanticCleanup
 	refund          *nativeEngineRefund
 }
@@ -44,8 +46,8 @@ func (r *nativeEngineRefund) Close() {
 
 // newNativeEngineVersion adopts directory references only on success. The
 // allocator is the original budget capability, never a bound capture method.
-func newNativeEngineVersion(names *cowbtree.OwnedMap[string, *nativeCollectionState], collections, pending *cowbtree.OwnedMap[uint64, *nativeCollectionState], nextIncarnation uint64, allocator backenddb.NativeSemanticAllocator) (*nativeEngineVersion, error) {
-	if names == nil || collections == nil || pending == nil || nextIncarnation == 0 || allocator == nil {
+func newNativeEngineVersion(names *cowbtree.OwnedMap[string, *nativeCollectionState], collections, pending *cowbtree.OwnedMap[uint64, *nativeCollectionState], nextIncarnation uint64, allocator, maintenance backenddb.NativeSemanticAllocator) (*nativeEngineVersion, error) {
+	if names == nil || collections == nil || pending == nil || nextIncarnation == 0 || allocator == nil || maintenance == nil {
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
 	charge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeEngineVersion{}))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeEngineRefund{})))
@@ -54,7 +56,7 @@ func newNativeEngineVersion(names *cowbtree.OwnedMap[string, *nativeCollectionSt
 		return nil, err
 	}
 	refund := &nativeEngineRefund{lease: lease}
-	e := &nativeEngineVersion{names: names, collections: collections, pending: pending, nextIncarnation: nextIncarnation, allocator: allocator, refund: refund}
+	e := &nativeEngineVersion{names: names, collections: collections, pending: pending, nextIncarnation: nextIncarnation, allocator: allocator, maintenance: maintenance, refund: refund}
 	e.refs.Store(1)
 	e.cleanup.Work = e
 	return e, nil
@@ -96,6 +98,14 @@ func (e *nativeEngineVersion) FinishSemanticCleanup() (rootpublication.SemanticC
 	if failure == nil {
 		failure = err
 	}
+	child, err = e.preparation.finish()
+	e.refund.children.Append(child)
+	if err == nil {
+		e.preparation = nil
+	}
+	if failure == nil {
+		failure = err
+	}
 	child = cowbtree.OwnedMapCompletion{}
 	if failure != nil {
 		// Independent successful children may finish even while the exact
@@ -105,7 +115,7 @@ func (e *nativeEngineVersion) FinishSemanticCleanup() (rootpublication.SemanticC
 		done.Complete()
 		return rootpublication.SemanticCleanupCompletion{}, failure
 	}
-	e.allocator = nil
+	e.allocator, e.maintenance = nil, nil
 	e.nextIncarnation = 0
 	refund := e.refund
 	e.refund = nil
