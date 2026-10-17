@@ -3794,6 +3794,9 @@ func (f *originalDBCleanupFailure) OriginalCleanupPriorAvailable() bool {
 	defer f.mu.Unlock()
 	return f.causes[3] == nil
 }
+func (f *originalDBCleanupFailure) OriginalCleanupPriorBinding() rootpublication.OriginalCleanupPriorBinding {
+	return rootpublication.BindOriginalCleanupPrior(&f.mu, &f.causes[3])
+}
 func (f *originalDBCleanupFailure) TryLinkPriorCleanupError(prior error) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -3823,7 +3826,7 @@ func (db *DB) retainOriginalCleanupError(err error) {
 			return
 		}
 		containsPrior := errors.Is(err, prior)
-		var original rootpublication.OriginalCleanupPriorBinder
+		var original rootpublication.OriginalCleanupPriorBinding
 		if !containsPrior {
 			original = rootpublication.SelectOriginalCleanupPrior(err, prior)
 		}
@@ -3832,7 +3835,7 @@ func (db *DB) retainOriginalCleanupError(err error) {
 			db.bgErrMu.Unlock()
 			continue
 		}
-		if containsPrior || (original != nil && original.TryLinkPriorCleanupError(prior)) {
+		if containsPrior || original.TryLink(prior) {
 			db.bgErr, db.bgErrRevision = err, revision+1
 			db.bgErrMu.Unlock()
 			return
@@ -3840,7 +3843,7 @@ func (db *DB) retainOriginalCleanupError(err error) {
 		db.bgErrMu.Unlock()
 		// Existing ordinary errors keep first-error semantics. Actual cleanup
 		// receipts provide the preborn edge needed to retain original custody.
-		if original == nil {
+		if !original.Valid() {
 			return
 		}
 	}

@@ -1425,6 +1425,9 @@ func (batch *stableNamespaceBatchCleanup) OriginalCleanupPriorAvailable() bool {
 	defer batch.mu.Unlock()
 	return batch.prior == nil
 }
+func (batch *stableNamespaceBatchCleanup) OriginalCleanupPriorBinding() OriginalCleanupPriorBinding {
+	return BindOriginalCleanupPrior(&batch.mu, &batch.prior)
+}
 func (batch *stableNamespaceBatchCleanup) TryLinkPriorCleanupError(prior error) bool {
 	batch.mu.Lock()
 	defer batch.mu.Unlock()

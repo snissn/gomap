@@ -139,6 +139,9 @@ func (failure *durableRootCleanupFailureV6) OriginalCleanupPriorAvailable() bool
 	defer failure.mu.Unlock()
 	return failure.causes[2] == nil
 }
+func (failure *durableRootCleanupFailureV6) OriginalCleanupPriorBinding() OriginalCleanupPriorBinding {
+	return BindOriginalCleanupPrior(&failure.mu, &failure.causes[2])
+}
 func (failure *durableRootCleanupFailureV6) TryLinkPriorCleanupError(prior error) bool {
 	failure.mu.Lock()
 	defer failure.mu.Unlock()
