@@ -158,6 +158,7 @@ func TestOwnedPagerOperationPostConsumptionVLogFailureRetainsGovernor(t *testing
 	faultForPostConsumptionVLogTest := errors.New("post-unlink parent sync failure")
 	physicalPager := snapshot.primaryRoot.arena.Pager()
 	originalIndex, originalLock := d.idx.Load(), d.lock
+	originalOwner := originalIndex.primaryOwner
 	t.Cleanup(func() {
 		// The failure intentionally retains the exact owner and its admitted
 		// charge. After all consumers/assertions finish, explicit fixture-only
@@ -170,8 +171,8 @@ func TestOwnedPagerOperationPostConsumptionVLogFailureRetainsGovernor(t *testing
 		if originalIndex.stableNamespaceParent != nil {
 			_ = originalIndex.stableNamespaceParent.Close()
 		}
-		if originalIndex.primaryOwner.namespaceParent != nil {
-			_ = originalIndex.primaryOwner.namespaceParent.Close()
+		if originalOwner.namespaceParent != nil {
+			_ = originalOwner.namespaceParent.Close()
 		}
 		if originalLock != nil {
 			_ = originalLock.Close()

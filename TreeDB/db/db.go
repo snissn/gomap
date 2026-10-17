@@ -2360,15 +2360,17 @@ func (s *Snapshot) finalizeCloseRead(oneShot bool) error {
 	if endForegroundRead != nil {
 		endForegroundRead()
 	}
+	var primaryOwnerCompletion primaryRuntimeDisposalCompletionV6
 	if owner := s.primaryOwner; owner != nil {
 		if err != nil {
 			// Failed original cleanup keeps this existing physical edge and exact
 			// Snapshot payload on the same owner; a Close request is not disposal.
 			owner.retainFailedSnapshot(s, err)
 		} else {
-			consumed, debt, releaseErr := owner.releaseWithOutcome(nil)
-			if consumed {
+			consumed, debt, completion, releaseErr := owner.releaseOriginalWithOutcome()
+			if consumed && !debt {
 				s.primaryOwner = nil
+				primaryOwnerCompletion = completion
 			}
 			err = releaseErr
 			if !consumed || debt {
@@ -2421,6 +2423,8 @@ func (s *Snapshot) finalizeCloseRead(oneShot bool) error {
 	if completion != nil {
 		completion.SnapshotCleanupCompleted(err)
 	}
+	s = nil
+	primaryOwnerCompletion.complete()
 	return err
 }
 

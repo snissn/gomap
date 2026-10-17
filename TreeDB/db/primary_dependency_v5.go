@@ -27,10 +27,6 @@ type primaryDependencyLeaseV5 struct {
 	failedNext           *primaryDependencyLeaseV5
 	directory            *rootpublication.DependencyDirectoryV2
 	recoveryNext         *primaryDependencyLeaseV5
-	releaseWork          primaryArenaReleaseWork
-	releasePhase         uint8
-	releaseMetadata      *retainedalloc.Owner
-	releaseNative        bool
 }
 
 func (lease *primaryDependencyLeaseV5) activate() error {

@@ -17,9 +17,6 @@ type primaryBankConstructionV5 struct {
 	releaseMu      sync.Mutex
 	releasePhase   uint8
 	releaseIndex   int
-	releaseNative  bool
-	releaseQueue   primaryarena.ReleaseQueue
-	releaseOwner   primaryArenaReleaseWork
 	idx            *indexGen
 	owner          *primaryArenaOwnerV5
 	metadata       *retainedalloc.Owner
@@ -95,7 +92,7 @@ func (claims *primaryBankConstructionV5) claim(class primaryarena.Class, count i
 // Every consumed bank edge is cleared immediately. Failed cleanup retains the
 // exact remaining references and embedded error on the existing physical owner.
 func (claims *primaryBankConstructionV5) release() error {
-	completion, ready, err := continuePrimaryBankConstructionReleaseV6(claims, nil)
+	completion, ready, err := releasePrimaryBankConstructionV6(claims)
 	claims = nil
 	if ready {
 		completion.complete()
