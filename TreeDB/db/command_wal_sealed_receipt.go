@@ -91,6 +91,21 @@ func (intent *CommandWALIntent) ReleaseNativeSealedReceipt() {
 	}
 }
 
+// ReleaseSealedReceipt ends an explicit caller's request-cell alias after
+// materialization has returned and its independent physical receipt has been
+// copied or awaited. Prepared callers do this before releasing their original
+// publisher tranche. Native requests retain their independent accepted edge.
+func (intent *CommandWALIntent) ReleaseSealedReceipt() {
+	if intent == nil {
+		return
+	}
+	if intent.NativeSealedReceiptAdmitted() {
+		intent.ReleaseNativeSealedReceipt()
+		return
+	}
+	intent.inner.sealedReceipt = nil
+}
+
 func (intent *CommandWALIntent) ExactSealedReceipt() rootpublication.PhysicalSealReceipt {
 	if intent == nil || intent.inner.lsn == 0 || intent.inner.sealedReceipt == nil {
 		return rootpublication.PhysicalSealReceipt{}

@@ -6,9 +6,23 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"unsafe"
 )
+
+type cowRefusingSemanticHandoff struct {
+	*testSemanticState
+	refuse atomic.Bool
+}
+
+func (s *cowRefusingSemanticHandoff) PrepareHandoff(latest backenddb.NativeSemanticState, _ *backenddb.Snapshot) (backenddb.NativeSemanticState, error) {
+	if s.refuse.Load() {
+		return nil, memtable.ErrCOWCapacity
+	}
+	latest.Retain()
+	return latest, nil
+}
 
 func TestCheckpointFullSourceFrontierAndNonemptyMutable(t *testing.T) {
 	dir := t.TempDir()
@@ -145,17 +159,17 @@ func TestCOWDrainRolloverRefusalPreservesActiveCut(t *testing.T) {
 func TestCOWDrainReturnsAcceptedHandoffRefusalAndRetriesWithoutReapply(t *testing.T) {
 	db := cowPointerFixture(t)
 	native := db.backend.(*backenddb.DB)
-	backend := &cowRefusingBasisBackend{DB: native}
-	db.backend = backend
 	if err := db.Set([]byte("a"), []byte("covered")); err != nil {
 		t.Fatal(err)
 	}
+	state := &cowRefusingSemanticHandoff{testSemanticState: newTestSemanticState(nil)}
+	db.cow.cut.semanticRootSet = state
 	old, err := db.acquireCOWSnapshotWithError()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer old.Close()
-	backend.refuse = true
+	state.refuse.Store(true)
 	if err = db.Drain(); !errors.Is(err, memtable.ErrCOWCapacity) {
 		t.Fatalf("hidden handoff refusal: %v", err)
 	}
@@ -166,7 +180,7 @@ func TestCOWDrainReturnsAcceptedHandoffRefusalAndRetriesWithoutReapply(t *testin
 	if got, err := native.Get([]byte("a")); err != nil || string(got) != "covered" {
 		t.Fatalf("accepted backend: %q %v", got, err)
 	}
-	backend.refuse = false
+	state.refuse.Store(false)
 	if err = db.Drain(); err != nil {
 		t.Fatal(err)
 	}

@@ -629,14 +629,10 @@ func (c *cowCache) closeWithBudget(closeBudget bool) error {
 	var err error
 	if h := c.handoff; h != nil {
 		c.handoff = nil
-		if h.next != nil {
-			c.releasePrivateSemanticState(h.next)
-			h.next.lease.Close()
-		}
-		err = c.releaseCut(h.cut)
-		err = joinCOWCleanupError(err, h.basis.release())
-		h.guard.Release()
-		h.lease.Close()
+		var refund *memtable.COWExternalLease
+		refund, err = h.release(c)
+		h = nil
+		refund.Close()
 	}
 	if last {
 		err = joinCOWCleanupError(err, old.drain())

@@ -7,6 +7,15 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
+// MarkNativeSemanticBuildRecoveryRequired fences the original backend before
+// abandoning a failed materialization of an already installed logical plan.
+// Original native/group owners retain their own failure custody; these atomic
+// flags neither destroy resources nor invoke callbacks under build locks.
+func (group *RootPublicationBuildGroup) MarkNativeSemanticBuildRecoveryRequired() {
+	group.db.publicationPoisoned.Store(true)
+	group.db.MarkCommandWALRecoveryRequired()
+}
+
 // BuildNativeOrderedRoot builds a captured native projection within the SAME
 // physical build group as raw effects. Input owns its immutable base root and
 // bounded delta; this never samples a live collection catalog or publishes.
