@@ -23,6 +23,9 @@ type BuilderHandoffReceipt struct {
 	pendingBytes      uint64
 	pendingCommits    uint64
 	hard              bool
+	logicalOwner      *Coordinator
+	cutNonce          uint64
+	through           SealedPrefix
 }
 
 // BuilderToken accounts one active candidate builder. Nested returns another
@@ -85,6 +88,20 @@ func (c *Coordinator) AcquireBuilder(ctx context.Context) (*BuilderToken, error)
 // ownership moved even when the receipt subsequently requires an admission
 // wait.
 func (c *Coordinator) EnqueueBuilt(candidate *PreparedRootCandidate, token *BuilderToken) (*BuilderHandoffReceipt, error) {
+	return c.enqueueBuiltAcceptedCut(candidate, token, AcceptedCut{})
+}
+
+// EnqueueBuiltAcceptedCut binds the finite logical prefix to this actual
+// candidate before visibility. The returned seal capability cannot be reused
+// for another cut or forged from an older accepted physical generation.
+func (c *Coordinator) EnqueueBuiltAcceptedCut(candidate *PreparedRootCandidate, token *BuilderToken, cut AcceptedCut) (*BuilderHandoffReceipt, error) {
+	if cut.owner == nil {
+		return nil, ErrAcceptedReceipt
+	}
+	return c.enqueueBuiltAcceptedCut(candidate, token, cut)
+}
+
+func (c *Coordinator) enqueueBuiltAcceptedCut(candidate *PreparedRootCandidate, token *BuilderToken, cut AcceptedCut) (*BuilderHandoffReceipt, error) {
 	if token == nil || token.handle == nil {
 		return nil, ErrBuilderLease
 	}
@@ -103,6 +120,14 @@ func (c *Coordinator) EnqueueBuilt(candidate *PreparedRootCandidate, token *Buil
 	}
 
 	c.mu.Lock()
+	if cut.owner != nil {
+		if err := cut.validatePhysicalCandidate(c, candidate); err != nil {
+			c.mu.Unlock()
+			lease.mu.Unlock()
+			handle.mu.Unlock()
+			return nil, err
+		}
+	}
 	if c.activeBuilders == 0 {
 		c.mu.Unlock()
 		lease.mu.Unlock()
@@ -127,6 +152,7 @@ func (c *Coordinator) EnqueueBuilt(candidate *PreparedRootCandidate, token *Buil
 	c.activeBuilders--
 	receipt := &BuilderHandoffReceipt{
 		coordinator: c, sequence: decision.sequence,
+		logicalOwner: cut.owner, cutNonce: cut.nonce, through: cut.through,
 		failureGeneration: decision.failureGeneration,
 		pendingBytes:      c.pendingBytes, pendingCommits: uint64(len(c.pending)), hard: decision.hard,
 	}

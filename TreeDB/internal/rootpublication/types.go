@@ -251,12 +251,16 @@ func (c *PreparedRootCandidate) Resources() *StableResourceSet { return c.resour
 // COW transaction is aborted before resource pins are released. It is
 // idempotent and cannot release coordinator-owned ownership.
 func (c *PreparedRootCandidate) Abandon() error {
+	// PRIMARY embeds this descriptor in its original transaction. Terminal
+	// Abort scrubs that containing storage, including its resource-set alias.
+	// Keep the SAME set until its independent candidate edge is consumed.
+	set := c.resourceSet()
 	for _, transaction := range c.durableRootGroup().members {
 		if err := transaction.abortFrom(ResourceOwnerCandidate); err != nil {
 			return err
 		}
 	}
-	if set := c.resourceSet(); set != nil {
+	if set != nil {
 		return set.releaseFrom(ResourceOwnerCandidate)
 	}
 	return nil

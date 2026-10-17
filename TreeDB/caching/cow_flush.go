@@ -9,6 +9,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/node"
 )
 
@@ -17,8 +18,13 @@ import (
 // its old basis. The next coordinator pass retries only the handoff.
 type cowFlushHandoff struct {
 	cut      *cowReadCut
+	basis    *cowBackendBasis
+	next     *cowReadCut
+	guard    *backenddb.StableResourceCaptureLease
 	lease    *memtable.COWExternalLease
 	accepted bool
+	prefix   rootpublication.AcceptedCut
+	seal     rootpublication.PhysicalSealReceipt
 }
 
 func (c *cowCache) captureBackendBasis(provider backendSnapshotProvider) (*cowBackendBasis, error) {
@@ -29,7 +35,7 @@ func (c *cowCache) captureBackendBasis(provider backendSnapshotProvider) (*cowBa
 		return nil, ErrCOWUnsupported
 	}
 	// Admit the callback and both captured reservation/count cells before creation.
-	scratch, err := c.budget.AcquireExternal(memtable.COWAllocationCharge(5*uint64(unsafe.Sizeof(uintptr(0)))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof((*memtable.COWExternalLease)(nil)))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof((*retainedalloc.Enrollment)(nil)))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(int(0)))))
+	scratch, err := c.maintenance.AcquireExternal(memtable.COWAllocationCharge(5*uint64(unsafe.Sizeof(uintptr(0)))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof((*memtable.COWExternalLease)(nil)))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof((*retainedalloc.Enrollment)(nil)))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(int(0)))))
 	if err != nil {
 		return nil, err
 	}
@@ -40,7 +46,7 @@ func (c *cowCache) captureBackendBasis(provider backendSnapshotProvider) (*cowBa
 			return memtable.ErrCOWCapacity
 		}
 		var e error
-		admitted, e = admitCOWBackendBasis(c.budget, s)
+		admitted, e = admitCOWBackendBasis(c.maintenance, s)
 		return e
 	})
 	if err == nil {
@@ -60,7 +66,36 @@ func (c *cowCache) captureBackendBasis(provider backendSnapshotProvider) (*cowBa
 // the exact accepted captured prefix alone is removed. A maintenance refresh
 // supplies nil coverage and preserves every source on the equivalent new tree.
 // Allocation is admitted before construction; cutMu only performs the swap.
+func (c *cowCache) prepareCOWBasisInstall() (*cowReadCut, error) {
+	shards, frozen := len(c.writers), c.budget.Limits().MaxSources
+	lease, err := c.maintenance.AcquireExternal(cowCutCharge(shards, frozen))
+	if err != nil {
+		return nil, err
+	}
+	return &cowReadCut{refs: 1, cache: c, lease: lease,
+		shards: make([]cowTable, shards), frozen: make([]cowTable, 0, frozen),
+		sources:      make([]memtable.Table, 0, shards+frozen),
+		pointSources: make([]memtable.Table, 0, shards+frozen),
+		domains:      make([]rootDomainSnapshot, shards)}, nil
+}
+
 func (c *cowCache) installCOWBasis(basis *cowBackendBasis, covered *cowReadCut) (*cowReadCut, error) {
+	next, err := c.prepareCOWBasisInstall()
+	if err != nil {
+		return nil, err
+	}
+	if err = basis.snapshot.ActivatePrimaryMetadataProducer(); err != nil {
+		next.lease.Close()
+		return nil, err
+	}
+	old, err := c.installPreparedCOWBasis(basis, covered, next)
+	if err != nil {
+		next.lease.Close()
+	}
+	return old, err
+}
+
+func (c *cowCache) installPreparedCOWBasis(basis *cowBackendBasis, covered, next *cowReadCut) (*cowReadCut, error) {
 	c.writerMu.Lock()
 	defer c.writerMu.Unlock()
 	old := c.cut
@@ -79,20 +114,20 @@ func (c *cowCache) installCOWBasis(basis *cowBackendBasis, covered *cowReadCut) 
 			}
 		}
 	}
-	lease, err := c.budget.AcquireExternal(cowCutCharge(len(old.shards), len(old.frozen)-n))
-	if err != nil {
-		return nil, err
-	}
-	if err = basis.snapshot.ActivatePrimaryMetadataProducer(); err != nil {
-		lease.Close()
-		return nil, err
+	if next == nil || basis == nil || basis.snapshot == nil || len(old.frozen)-n > cap(next.frozen) || len(old.shards) != len(next.shards) {
+		return nil, backenddb.ErrRootPublicationBasisMismatch
 	}
 	if covered != nil {
-		basis.logicalSeq = covered.logicalSeq
+		basis.logicalSeq = covered.frozenLogicalSeq
 	} else {
 		basis.logicalSeq = old.logicalSeq
 	}
-	next := &cowReadCut{visibleCommandLSN: old.visibleCommandLSN, logicalSeq: old.logicalSeq, refs: 1, cache: c, lease: lease, basis: basis, shards: make([]cowTable, len(old.shards)), frozen: make([]cowTable, len(old.frozen)-n)}
+	next.visibleCommandLSN, next.logicalSeq, next.basis = old.visibleCommandLSN, old.logicalSeq, basis
+	next.frozenLogicalSeq = old.frozenLogicalSeq
+	next.frozenCommandLSN = old.frozenCommandLSN
+	next.frozenSemanticRootSet = old.frozenSemanticRootSet
+	next.semanticRootSet = old.semanticRootSet
+	next.frozen = next.frozen[:len(old.frozen)-n]
 	basis.retain()
 	copy(next.shards, old.shards)
 	copy(next.frozen, old.frozen[n:])
@@ -125,21 +160,28 @@ func (db *DB) completeCOWHandoff() error {
 	if h == nil {
 		return nil
 	}
-	basis, err := c.captureBackendBasis(db.backend.(backendSnapshotProvider))
+	// The preaccept receipt owns this exact generation even when backend state
+	// has advanced or capture admission is now exhausted. Retry only this swap.
+	old, err := c.installPreparedCOWBasis(h.basis, h.cut, h.next)
 	if err != nil {
 		return err
 	}
-	old, err := c.installCOWBasis(basis, h.cut)
-	err = joinCOWCleanupError(err, basis.release())
-	if err != nil {
-		return err
+	if h.prefix.Valid() {
+		err = h.prefix.CompleteHandoff(h.seal)
+		if err != nil {
+			c.prefix.PoisonAccepted(err)
+		}
 	}
 	c.handoff = nil
+	h.next = nil // the installed cut now owns the admitted descriptor
+	err = joinCOWCleanupError(err, h.basis.release())
+	h.basis = nil
 	c.handoffs.Add(1)
 	if old != nil {
-		err = old.drain()
+		err = joinCOWCleanupError(err, old.drain())
 	}
 	err = joinCOWCleanupError(err, c.releaseCut(h.cut))
+	h.guard.Release()
 	h.lease.Close()
 	return err
 }
@@ -157,41 +199,118 @@ func (db *DB) flushCOWFrozen(syncFlush bool, publish *checkpointCommandWALPublis
 			return err
 		}
 	}
-	cut := c.retainCut()
+	return db.flushCOWFrozenCut(syncFlush, publish, c.retainCut())
+}
+
+// flushCOWFrozenCut consumes the one original retained source cut. Explicit
+// boundaries captured it under P before post-frontier admissions; background
+// passes use its immutable frozen logical/semantic coverage, excluding mutable
+// suffixes. Every preaccept exit unwinds through the same original owners.
+func (db *DB) flushCOWFrozenCut(syncFlush bool, publish *checkpointCommandWALPublish, cut *cowReadCut) (retErr error) {
+	c := db.cow
 	if cut == nil {
 		return backenddb.ErrClosed
 	}
-	if len(cut.frozen) == 0 {
+	target := rootpublication.SealedPrefix{LogicalSequence: cut.frozenLogicalSeq, CanonicalLSN: cut.frozenCommandLSN}
+	if publish != nil && publish.appliedLSN != 0 {
+		target.CanonicalLSN = publish.appliedLSN
+	}
+	if len(cut.frozen) == 0 && (c.prefix == nil || target == c.prefix.LogicalFrontiers().S) {
 		return c.releaseCut(cut)
 	}
 	n := len(cut.frozen)
 	chunkCap := db.flushBackendMaxEntries
-	if chunkCap <= 0 {
+	if chunkCap <= 0 || chunkCap > 1024 {
 		chunkCap = 1024
 	}
-	// The COW stream stays bounded even when legacy options disable chunking.
-	if chunkCap > 1024 {
-		chunkCap = 1024
+	entries := 0
+	for _, source := range cut.frozen {
+		entries += min(source.Len(), chunkCap-entries)
+		if entries == chunkCap {
+			break
+		}
 	}
-	charge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowFlushHandoff{}))) + memtable.COWAllocationCharge(uint64(chunkCap)*uint64(unsafe.Sizeof(batch.Entry{})))
-	lease, err := c.budget.AcquireExternal(charge)
+	if entries > 0 {
+		chunkCap = entries
+	} else if n == 0 {
+		chunkCap = 1
+	}
+	fixedCharge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowFlushHandoff{}))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(backenddb.StableResourceCaptureLease{}))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(checkpointCommandWALPublish{}))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof([1]backenddb.CommandWALLSNRange{})))
+	charge := fixedCharge + memtable.COWAllocationCharge(uint64(chunkCap)*uint64(unsafe.Sizeof(batch.Entry{})))
+	lease, err := c.maintenance.AcquireExternal(fixedCharge)
 	if err != nil {
 		return joinCOWCleanupError(err, c.releaseCut(cut))
 	}
 	h := &cowFlushHandoff{cut: cut, lease: lease}
+	defer func() {
+		if !h.accepted {
+			retErr = joinCOWCleanupError(retErr, h.abort(c))
+		}
+	}()
+	var localPublish checkpointCommandWALPublish
+	var localRange [1]backenddb.CommandWALLSNRange
+	if c.prefix != nil {
+		h.prefix, err = c.prefix.CaptureAcceptedCut(target, rootpublication.LogicalRootSet{Raw: cut, Semantic: cut.frozenSemanticRootSet})
+		if err != nil {
+			return err
+		}
+		// Canonical coverage comes from this exact accepted prefix, never a domain
+		// maximum. The queue proved every intervening assignment installed.
+		basis, ok := cut.basis.snapshot.StateToken()
+		if !ok {
+			return backenddb.ErrClosed
+		}
+		if target.CanonicalLSN > basis.AppliedCommandLSN && (publish == nil || publish.appliedLSN == 0) {
+			localRange[0] = backenddb.CommandWALLSNRange{First: basis.AppliedCommandLSN + 1, Last: target.CanonicalLSN}
+			localPublish.appliedLSN, localPublish.ranges = target.CanonicalLSN, localRange[:]
+			publish = &localPublish
+		}
+	}
 	backend, ok := db.backend.(interface {
-		BeginRootPublicationBuildGroupFromSnapshot(*backenddb.Snapshot) (*backenddb.RootPublicationBuildGroup, error)
+		AcquireStableResourceCaptureLease() (*backenddb.StableResourceCaptureLease, error)
+		DrainRetiredIndexGenerations(*backenddb.StableResourceCaptureLease) error
+		BeginRootPublicationBuildGroupBorrowingLease(*backenddb.Snapshot, *backenddb.StableResourceCaptureLease) (*backenddb.RootPublicationBuildGroup, error)
 	})
 	if !ok {
-		err = joinCOWCleanupError(ErrCOWUnsupported, c.releaseCut(cut))
-		lease.Close()
+		return ErrCOWUnsupported
+	}
+	h.guard, err = backend.AcquireStableResourceCaptureLease()
+	if err != nil {
 		return err
 	}
-	group, err := backend.BeginRootPublicationBuildGroupFromSnapshot(cut.basis.snapshot)
-	if err != nil {
-		err = joinCOWCleanupError(err, c.releaseCut(cut))
-		lease.Close()
+	if err = backend.DrainRetiredIndexGenerations(h.guard); err != nil {
 		return err
+	}
+	if err = lease.Resize(charge); err != nil {
+		return err
+	}
+	group, err := backend.BeginRootPublicationBuildGroupBorrowingLease(cut.basis.snapshot, h.guard)
+	if err != nil {
+		return err
+	}
+	if h.prefix.Valid() {
+		if err = group.BindAcceptedPrefixCut(h.prefix); err != nil {
+			return errors.Join(err, group.Close())
+		}
+	}
+	h.next, err = c.prepareCOWBasisInstall()
+	if err == nil {
+		err = group.PrepareAcceptedSnapshot(func(s backenddb.SnapshotAllocationSizes) error {
+			if s.ValueLog.MapHint > c.budget.Limits().MaxResources || s.ValueLog.FileCount > c.budget.Limits().MaxResources {
+				return memtable.ErrCOWCapacity
+			}
+			var e error
+			h.basis, e = admitCOWBackendBasis(c.maintenance, s)
+			return e
+		}, func(snapshot *backenddb.Snapshot) error {
+			if e := h.basis.adoptSnapshot(snapshot); e != nil {
+				return e
+			}
+			return snapshot.ActivatePrimaryMetadataProducer()
+		}, func() error { err := h.basis.release(); h.basis = nil; return err })
+	}
+	if err != nil {
+		return errors.Join(err, group.Close())
 	}
 	ops := make([]batch.Entry, 0, chunkCap)
 	// Sources apply oldest to newest within the same private build group. This
@@ -232,19 +351,33 @@ func (db *DB) flushCOWFrozen(syncFlush bool, publish *checkpointCommandWALPublis
 			break
 		}
 	}
+
+	if n == 0 && err == nil {
+		err = db.writeCanonicalFlushRunOpsChunk(nil, syncFlush, publish, group, true, flushCollectionBackground)
+	}
 	err = errors.Join(err, group.Close())
-	// Acceptance is the backend publication receipt, independent of a later
-	// durability or cleanup error. Preserve the exact covered prefix on its old
-	// basis so retries never reapply an already accepted group.
 	if group.Accepted() {
-		h.accepted = true
+		h.accepted, h.seal = true, group.AcceptedSealReceipt()
 		c.handoff = h
 		if err != nil {
 			return err
 		}
 		return db.completeCOWHandoff()
 	}
-	err = joinCOWCleanupError(err, c.releaseCut(cut))
-	lease.Close()
+	return err
+}
+
+func (h *cowFlushHandoff) abort(c *cowCache) error {
+	var err error
+	if h.prefix.Valid() {
+		err = h.prefix.Abandon()
+	}
+	err = joinCOWCleanupError(err, h.basis.release())
+	if h.next != nil {
+		h.next.lease.Close()
+	}
+	h.guard.Release()
+	err = joinCOWCleanupError(err, c.releaseCut(h.cut))
+	h.lease.Close()
 	return err
 }

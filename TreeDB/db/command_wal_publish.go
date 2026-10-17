@@ -46,7 +46,11 @@ func (mutation conditionalCommitMutation) record(db *DB, commitSeq uint64) {
 }
 
 type finalizeCommitOptions struct {
-	negativeCoverage            *negativeRootCoverage
+	negativeCoverage *negativeRootCoverage
+	// prepareSnapshotReceipt runs with candidate/teardown custody and rootReuseMu
+	abortSnapshotReceipt func() error
+	// before EnqueueBuilt. Failure is preaccept; original cleanup remains owned.
+	prepareSnapshotReceipt      func(*rootPublicationVisibleInstallV1) error
 	preparedLimits              *PreparedRootPublicationLimits
 	commandWALPublish           bool
 	appliedCommandLSN           uint64
@@ -64,6 +68,7 @@ type finalizeCommitOptions struct {
 	// caller-owned durable publication lock. The finalizer consumes its final
 	// handle atomically with the visible candidate handoff.
 	rootPublicationBuilder *rootpublication.BuilderToken
+	acceptedPrefixCut      *rootpublication.AcceptedCut
 	// closeTeardownPinned proves the caller acquired teardownMu for reading
 	// before Close could revoke write admission and will retain that lease
 	// through commit post-work. It permits an already-admitted publication to

@@ -22,6 +22,12 @@ func (db *DB) cowStatsInto(stats map[string]string) {
 		return
 	}
 	s := c.budget.Stats()
+	// Parent total includes this fixed reservation once. Child utilization is
+	// diagnostic, never added to total/peak or presented as extra capacity.
+	if c.maintenance != nil {
+		stats["treedb.cache.cow.maintenance_capacity_bytes"] = strconv.FormatUint(c.maintenance.Limits().MaxTotalBytes, 10)
+		stats["treedb.cache.cow.maintenance_used_bytes"] = strconv.FormatUint(c.maintenance.Stats().TotalBytes, 10)
+	}
 	for _, v := range []struct {
 		name  string
 		value uint64

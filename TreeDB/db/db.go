@@ -93,6 +93,7 @@ type snapshotView struct {
 
 type DB struct {
 	privateCOWOwner                *transactionowner.Owner
+	acceptedPrefix                 atomic.Pointer[rootpublication.Coordinator] // immutable logical owner after private binding
 	mvccAdmission                  mvccadmission.Authority
 	valueLogManager                *valuelog.Manager
 	valueLogIdentityPins           *rootpublication.IdentityPinRegistry
@@ -1944,6 +1945,14 @@ func (db *DB) captureSnapshotBoundedWithValueLogPublicationLockHeld(snap *Snapsh
 	if db.closing.Load() || db.publicationPoisoned.Load() {
 		return nil, ErrClosed
 	}
+	return db.captureSnapshotViewBoundedLocked(snap, admit, bounded, db.snapshotViewRO.Load(), true)
+}
+
+// captureSnapshotViewBoundedLocked constructs from one explicit immutable tuple.
+// The caller owns rootReuseMu and the tuple's original construction/teardown
+// custody. Candidate receipts pass current=false before acceptance; they never
+// rediscover a newer visible basis or acquire teardown recursively.
+func (db *DB) captureSnapshotViewBoundedLocked(snap *Snapshot, admit func(SnapshotAllocationSizes) error, bounded bool, view *snapshotView, current bool) (*Snapshot, error) {
 	acqShard := snapshotAcquireShard()
 	db.snapshotAcquireRO[acqShard].Add(1)
 	db.snapshotAcquireEpoch.Add(1)
@@ -1953,11 +1962,10 @@ func (db *DB) captureSnapshotBoundedWithValueLogPublicationLockHeld(snap *Snapsh
 		db.snapshotAcquireEpoch.Add(1)
 		db.snapshotAcquireRO[acqShard].Add(-1)
 	}()
-	if db.closing.Load() {
+	if current && db.closing.Load() {
 		return nil, ErrClosed
 	}
 
-	view := db.snapshotViewRO.Load()
 	if view == nil || view.idx == nil || view.state == nil {
 		return nil, ErrClosed
 	}
@@ -2015,11 +2023,11 @@ func (db *DB) captureSnapshotBoundedWithValueLogPublicationLockHeld(snap *Snapsh
 	// replacing publisher also excludes this capture through rootReuseMu.
 	// This is the same rootReuseMu -> db.mu order as original build groups.
 	db.mu.RLock()
-	if db.closing.Load() {
+	if current && db.closing.Load() {
 		db.mu.RUnlock()
 		return nil, ErrClosed
 	}
-	if db.snapshotViewRO.Load() != view {
+	if current && db.snapshotViewRO.Load() != view {
 		db.mu.RUnlock()
 		return nil, ErrSnapshotCapacity
 	}
@@ -3117,7 +3125,7 @@ func (db *DB) initializeRecoveredSnapshotV1(gen *indexGen, vm *valuelog.Manager)
 		LeafGenerationStateVersion: db.leafGenerationStateVersion,
 	}
 	oldInitialState := db.state.Swap(initialState)
-	db.publishSnapshotView(gen, initialState, vm)
+	db.publishSnapshotView(gen, initialState, vm, nil)
 	if oldInitialState != nil && oldInitialState.ValueLogSet != nil {
 		_ = vm.Release(oldInitialState.ValueLogSet)
 	}
@@ -3538,6 +3546,7 @@ func (db *DB) closeAfterHooks() error {
 	// maintenanceMu below: a closing dry-run maintenance caller may already hold
 	// maintenanceMu while waiting to observe the teardown barrier.
 	db.teardownMu.Lock()
+	db.teardownMu.Unlock()
 	var (
 		rootRuntime *rootPublicationRuntimeV1
 		rootHandoff *rootpublication.RecoveryResourceHandoff
@@ -3556,7 +3565,6 @@ func (db *DB) closeAfterHooks() error {
 		}
 		db.rootPublication = nil
 	}
-	db.teardownMu.Unlock()
 	// Writers and durable-root publication are now drained, while the command
 	// journal and its exact active namespace identity are still owned by this
 	// handle. Unavailable proof is the expected conservative result when relaxed
@@ -4002,6 +4010,7 @@ func (db *DB) readMeta(pageID uint64) (page.MetaPageBody, bool) {
 
 type finalizeCommitPost struct {
 	accepted                          bool
+	physicalSeal                      rootpublication.PhysicalSealReceipt
 	oldState                          *DBState
 	metrics                           adaptive.Metrics
 	vlogRefDelta                      *valueLogRefDelta
@@ -4334,7 +4343,7 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 		}
 		db.observeCommandWALCovered(previousApplied, nextMeta.AppliedCommandLSN)
 	}
-	db.publishSnapshotView(idx, newState, db.valueLogManager, opts.negativeCoverage)
+	db.publishSnapshotView(idx, newState, db.valueLogManager, nil, opts.negativeCoverage)
 	post.commitSeq = nextMeta.CommitSeq
 	post.vlogRefIndexID = idx.id
 	post.vlogRefDelta = vlogRefDelta
@@ -5320,14 +5329,7 @@ func (db *DB) checkReadAdmissionLocked() error {
 	return nil
 }
 
-func (db *DB) publishSnapshotView(idx *indexGen, state *DBState, vm *valuelog.Manager, coverage ...*negativeRootCoverage) {
-	if db == nil {
-		return
-	}
-	if idx == nil || state == nil {
-		db.snapshotViewRO.Store(nil)
-		return
-	}
+func (db *DB) prepareSnapshotView(idx *indexGen, state *DBState, vm *valuelog.Manager, coverage ...*negativeRootCoverage) *snapshotView {
 	old := db.snapshotViewRO.Load()
 	var negativeFilter *tree.NegativeFilter
 	if old != nil && old.idx == idx && old.state != nil {
@@ -5338,21 +5340,40 @@ func (db *DB) publishSnapshotView(idx *indexGen, state *DBState, vm *valuelog.Ma
 			negativeFilter = coverage[0].filter
 		}
 	}
-	coherentRootChanged := old == nil || old.idx == nil || old.state == nil || old.idx.id != idx.id || old.state.SystemRootPageID != state.SystemRootPageID
-	publishEpoch := db.systemRootPublishEpoch.Load()
-	if coherentRootChanged {
-		publishEpoch = db.systemRootPublishEpoch.Add(1)
+	publishEpoch := db.snapshotPublicationEpoch(idx, state)
+	return &snapshotView{negativeFilter: negativeFilter, idx: idx, state: state, vlogManager: vm, systemRootPublishEpoch: publishEpoch}
+}
+
+// snapshotPublicationEpoch predicts the sole publishSnapshotView epoch change.
+// Callers retain the original publication fence until validation and activation.
+func (db *DB) snapshotPublicationEpoch(idx *indexGen, state *DBState) uint64 {
+	old := db.snapshotViewRO.Load()
+	epoch := db.systemRootPublishEpoch.Load()
+	if old == nil || old.idx == nil || old.state == nil || old.idx.id != idx.id || old.state.SystemRootPageID != state.SystemRootPageID {
+		epoch++
+	}
+	return epoch
+}
+
+func (db *DB) publishSnapshotView(idx *indexGen, state *DBState, vm *valuelog.Manager, prepared *snapshotView, coverage ...*negativeRootCoverage) {
+	if db == nil {
+		return
+	}
+	if idx == nil || state == nil {
+		db.snapshotViewRO.Store(nil)
+		return
+	}
+	old := db.snapshotViewRO.Load()
+	if prepared == nil {
+		prepared = db.prepareSnapshotView(idx, state, vm, coverage...)
+	}
+	if prepared.systemRootPublishEpoch != db.systemRootPublishEpoch.Load() {
+		db.systemRootPublishEpoch.Add(1)
 	}
 	if old != nil && old.state != nil && old.state.LeafGenerations != nil && old.state.LeafGenerations != state.LeafGenerations {
 		db.markLeafGenerationPinSetStale(old.state.LeafGenerations.PinSet)
 	}
-	db.snapshotViewRO.Store(&snapshotView{
-		negativeFilter:         negativeFilter,
-		idx:                    idx,
-		state:                  state,
-		vlogManager:            vm,
-		systemRootPublishEpoch: publishEpoch,
-	})
+	db.snapshotViewRO.Store(prepared)
 	if state.LeafGenerations != nil && db.snapshotAcquireInFlight() == 0 {
 		db.leafGenerationPins.pruneInactiveGenerationIDs(state.LeafGenerations.GenerationOrder)
 	}
@@ -5405,7 +5426,7 @@ func (db *DB) RefreshValueLogSet() error {
 		LeafGenerationStateVersion: oldState.LeafGenerationStateVersion,
 	}
 	db.state.Store(newState)
-	db.publishSnapshotView(db.idx.Load(), newState, db.valueLogManager)
+	db.publishSnapshotView(db.idx.Load(), newState, db.valueLogManager, nil)
 
 	if oldState.ValueLogSet != nil {
 		if err := db.valueLogManager.Release(oldState.ValueLogSet); err != nil {
@@ -5456,7 +5477,7 @@ func (db *DB) publishValueLogSetNoRefresh() error {
 		LeafGenerationStateVersion: oldState.LeafGenerationStateVersion,
 	}
 	db.state.Store(newState)
-	db.publishSnapshotView(db.idx.Load(), newState, db.valueLogManager)
+	db.publishSnapshotView(db.idx.Load(), newState, db.valueLogManager, nil)
 
 	if oldState.ValueLogSet != nil {
 		if err := db.valueLogManager.Release(oldState.ValueLogSet); err != nil {

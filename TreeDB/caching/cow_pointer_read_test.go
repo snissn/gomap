@@ -157,7 +157,7 @@ func TestCOWPointerCheckpointCapturedBasisAndTombstones(t *testing.T) {
 	}
 }
 
-func TestCOWCheckpointAcceptedPrefixHandoffRefusalDrainRetry(t *testing.T) {
+func TestCOWCheckpointExactPreacceptedReceiptIgnoresCurrentCaptureRefusal(t *testing.T) {
 	db := cowPointerFixture(t)
 	backend := &cowRefusingBasisBackend{DB: db.backend.(*backenddb.DB)}
 	db.backend = backend
@@ -165,12 +165,11 @@ func TestCOWCheckpointAcceptedPrefixHandoffRefusalDrainRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	backend.refuse = true
-	if err := db.Checkpoint(); err != memtable.ErrCOWCapacity {
-		t.Fatalf("handoff refusal=%v", err)
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("exact receipt depended on current capture: %v", err)
 	}
-	h := db.cow.handoff
-	if h == nil || !h.accepted || len(db.cow.cut.frozen) == 0 || db.cow.cut.basis != h.cut.basis {
-		t.Fatal("refusal dropped accepted prefix or changed basis")
+	if db.cow.handoff != nil || len(db.cow.cut.frozen) != 0 {
+		t.Fatal("exact accepted receipt did not hand off")
 	}
 	if got, err := backend.Get([]byte("a")); err != nil || string(got) != "prefix" {
 		t.Fatalf("accepted backend=%q err=%v", got, err)

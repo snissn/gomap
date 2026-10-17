@@ -147,3 +147,18 @@ func prepareCOWEmptyRoot(w *memtable.COWWriter, budget *memtable.COWBudget) (*me
 	}
 	return p.Publish(), resources, nil
 }
+
+// The fixed resolver and empty root constructor use reserved physical progress
+// capacity. Later pointer/dictionary additions continue through producer admission.
+func prepareCOWReservedEmptyRoot(w *memtable.COWWriter, maintenance *memtable.COWBudget) (*memtable.COWRoot, *cowGenerationResources, error) {
+	resources, err := newCOWGenerationResources(maintenance)
+	if err != nil {
+		return nil, nil, err
+	}
+	root, err := w.BindReservedEmptyRoot(memtable.COWResourceID{Kind: cowResourceGenerationOwner, ID: 1}, resources.close)
+	if err != nil {
+		resources.close()
+		return nil, nil, err
+	}
+	return root, resources, nil
+}

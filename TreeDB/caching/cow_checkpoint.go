@@ -13,7 +13,7 @@ import (
 // The COW frontier is the bounded cut vector itself. The existing admission
 // flags, command cutover hook, physical publication authority and durability
 // hooks keep their ordering; legacy mutable rotation/queue copies are absent.
-func (db *DB) checkpointCOWContext(ctx context.Context, automatic bool) error {
+func (db *DB) checkpointCOWContext(ctx context.Context, automatic bool) (retErr error) {
 	start := time.Now()
 	defer func() {
 		dur := uint64(time.Since(start))
@@ -61,24 +61,14 @@ func (db *DB) checkpointCOWContext(ctx context.Context, automatic bool) error {
 	if hook := db.testBeforeCheckpointFrontierCapture; hook != nil {
 		hook()
 	}
-	c := db.cow
-	c.writerMu.Lock()
-	rollover, err := c.prepareRollover()
-	if err == nil && rollover != nil {
-		rollover.install()
-		db.mutableBytes.Store(0)
-	}
-	c.writerMu.Unlock()
-	if err == nil && db.snapshotCommandWALCheckpointCutover() && db.externalCommandWAL {
-		db.checkpointPostFrontierAdmission.Store(true)
-	}
-	db.writeMu.Unlock()
+	var frontier *cowReadCut
+	err := db.rotateCOWCheckpointFrontier(ctx, true, &frontier)
+	defer func() { retErr = joinCOWCleanupError(retErr, db.cow.releaseCut(frontier)) }()
 	db.recordCheckpointCutover(time.Since(cutover))
 	db.checkpointMu.Lock()
 	db.checkpointWriteCutoverActive.Store(false)
 	db.checkpointCond.Broadcast()
 	db.checkpointMu.Unlock()
-	rollover.drain()
 	if err != nil {
 		return err
 	}
@@ -106,7 +96,9 @@ func (db *DB) checkpointCOWContext(ctx context.Context, automatic bool) error {
 	if err = ctx.Err(); err != nil {
 		return err
 	}
-	if err = db.flushCOWFrozen(true, &publish); err != nil {
+	err = db.flushCOWFrozenCut(true, &publish, frontier)
+	frontier = nil
+	if err != nil {
 		return err
 	}
 	if publish.appliedLSN != 0 && !publish.consumed {
@@ -126,6 +118,49 @@ func (db *DB) checkpointCOWContext(ctx context.Context, automatic bool) error {
 		}
 	}
 	return db.vacuumCOWCheckpointBasis(automatic)
+}
+
+// rotateCOWCheckpointFrontier consumes the caller's exclusive writeMu fence
+// and returns with it unlocked. The existing checkpoint/Close admission fence
+// excludes writers through the finite retry, while flushMu remains outer D.
+func (db *DB) rotateCOWCheckpointFrontier(ctx context.Context, postFrontier bool, captured **cowReadCut) error {
+	c := db.cow
+	for attempt := 0; ; attempt++ {
+		c.writerMu.Lock()
+		rollover, err := c.prepareRollover()
+		if err == nil && rollover != nil {
+			rollover.install()
+			db.mutableBytes.Store(0)
+		}
+		c.writerMu.Unlock()
+		if err == nil && db.snapshotCommandWALCheckpointCutover() && db.externalCommandWAL && postFrontier {
+			db.checkpointPostFrontierAdmission.Store(true)
+		}
+		if err == nil && captured != nil {
+			*captured = c.retainCut()
+		}
+		db.writeMu.Unlock()
+		if cleanupErr := rollover.drain(); cleanupErr != nil {
+			db.reportError(cleanupErr)
+			return joinCOWCleanupError(err, cleanupErr)
+		}
+		if !errors.Is(err, memtable.ErrCOWCapacity) || attempt != 0 || len(c.cut.frozen) == 0 {
+			return err
+		}
+		// A full source frontier can be reclaimed before rotating the mutable
+		// suffix. This physical root keeps its old AppliedLSN: the command cut also
+		// covers mutable effects and is captured only after successful rotation.
+		// IO and retirement run outside both writeMu and the COW writer owner.
+		if err = db.checkpointFlushValueLogLanes(); err != nil {
+			return err
+		}
+		if err = db.flushCOWFrozen(true, nil); err != nil {
+			return err
+		}
+		if err = lockCheckpointWriteMutexContext(ctx, &db.writeMu); err != nil {
+			return err
+		}
+	}
 }
 
 // Checkpoint already owns flushMu. Close post-frontier admission and drain any
@@ -164,8 +199,11 @@ func (db *DB) rolloverCOWForFlush() error {
 	}
 	c.writerMu.Unlock()
 	db.writeMu.RUnlock()
-	p.drain()
-	return err
+	cleanupErr := p.drain()
+	if cleanupErr != nil {
+		db.reportError(cleanupErr)
+	}
+	return joinCOWCleanupError(err, cleanupErr)
 }
 
 func (db *DB) flushCOWBackground(syncFlush bool) bool {
@@ -188,19 +226,12 @@ func (db *DB) flushCOWBackground(syncFlush bool) bool {
 // teardown exclusion occur after that fence is released.
 func (db *DB) closeCOWFrontier() (closeErr error) {
 	c := db.cow
-	c.writerMu.Lock()
-	p, err := c.prepareRollover()
-	if err == nil && p != nil {
-		p.install()
-		db.mutableBytes.Store(0)
-	}
-	c.writerMu.Unlock()
-	if err == nil {
-		db.snapshotCommandWALCheckpointCutover()
-	}
-	db.writeMu.Unlock()
-	p.drain()
-	defer func() { closeErr = joinCOWCleanupError(closeErr, c.closeWithBudget(false)) }()
+	var frontier *cowReadCut
+	err := db.rotateCOWCheckpointFrontier(context.Background(), false, &frontier)
+	defer func() {
+		closeErr = joinCOWCleanupError(closeErr, c.releaseCut(frontier))
+		closeErr = joinCOWCleanupError(closeErr, c.closeWithBudget(false))
+	}()
 	if err != nil {
 		return err
 	}
@@ -214,7 +245,9 @@ func (db *DB) closeCOWFrontier() (closeErr error) {
 			return err
 		}
 	}
-	if err = db.flushCOWFrozen(true, &publish); err != nil {
+	err = db.flushCOWFrozenCut(true, &publish, frontier)
+	frontier = nil
+	if err != nil {
 		return err
 	}
 	if publish.appliedLSN != 0 && !publish.consumed {

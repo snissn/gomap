@@ -100,7 +100,7 @@ func (c *Collection) requireColumnStoreCommandWAL(meta CollectionMeta, commandWA
 		return nil
 	}
 	durabilityMode := c.db.DurabilityMode()
-	if !columnStoreProfileAllowsForegroundCommandWAL(profileSupport, durabilityMode) {
+	if durabilityMode != backenddb.DurabilityDurable {
 		return fmt.Errorf("%w: column-store writes require durable DB durability mode with command WAL enabled; relaxed durability modes are unsupported for column-store writes (collection=%q durability=%s command_wal=%t profile=%s)",
 			backenddb.ErrCommandWALRejected,
 			meta.Name,

@@ -44,12 +44,12 @@ func (c *cowCache) prepareRollover() (*cowRollover, error) {
 		2*memtable.COWAllocationCharge(uint64(n)*uint64(unsafe.Sizeof((*memtable.COWWriter)(nil)))) +
 		memtable.COWAllocationCharge(uint64(n)*uint64(unsafe.Sizeof((*cowGenerationResources)(nil)))) +
 		memtable.COWAllocationCharge(uint64(n)*uint64(unsafe.Sizeof(memtable.COWRetirement{})))
-	lease, err := c.budget.AcquireExternal(bytes)
+	lease, err := c.maintenance.AcquireExternal(bytes)
 	if err != nil {
 		return nil, err
 	}
 	p := &cowRollover{cache: c, scratch: lease, writers: make([]*memtable.COWWriter, n), roots: make([]*memtable.COWRoot, n), resources: make([]*cowGenerationResources, n), retired: make([]memtable.COWRetirement, n)}
-	p.cutLease, err = c.budget.AcquireExternal(cowCutCharge(n, len(old.frozen)+count))
+	p.cutLease, err = c.maintenance.AcquireExternal(cowCutCharge(n, len(old.frozen)+count))
 	if err != nil {
 		return p, err
 	}
@@ -57,11 +57,11 @@ func (c *cowCache) prepareRollover() (*cowRollover, error) {
 		if table.Len() == 0 {
 			continue
 		}
-		p.writers[i], err = memtable.NewCOWWriter(c.budget)
+		p.writers[i], err = memtable.NewCOWWriterWithMaintenanceConstruction(c.budget, c.maintenance)
 		if err != nil {
 			return p, err
 		}
-		root, resources, e := prepareCOWEmptyRoot(p.writers[i], c.budget)
+		root, resources, e := prepareCOWReservedEmptyRoot(p.writers[i], c.maintenance)
 		if e != nil {
 			return p, e
 		}
@@ -76,7 +76,7 @@ func (c *cowCache) prepareRollover() (*cowRollover, error) {
 			}
 		}
 	}
-	next := &cowReadCut{visibleCommandLSN: old.visibleCommandLSN, logicalSeq: old.logicalSeq, refs: 1, cache: c, lease: p.cutLease, basis: old.basis, shards: make([]cowTable, n), frozen: make([]cowTable, len(old.frozen), len(old.frozen)+count)}
+	next := &cowReadCut{visibleCommandLSN: old.visibleCommandLSN, logicalSeq: old.logicalSeq, frozenLogicalSeq: old.logicalSeq, frozenCommandLSN: old.visibleCommandLSN, frozenSemanticRootSet: old.semanticRootSet, semanticRootSet: old.semanticRootSet, refs: 1, cache: c, lease: p.cutLease, basis: old.basis, shards: make([]cowTable, n), frozen: make([]cowTable, len(old.frozen), len(old.frozen)+count)}
 	next.basis.retain()
 	copy(next.frozen, old.frozen)
 	for i := range next.frozen {
@@ -124,16 +124,17 @@ func (p *cowRollover) install() {
 	p.installed = true
 }
 
-func (p *cowRollover) drain() {
+func (p *cowRollover) drain() error {
 	if p == nil {
-		return
+		return nil
 	}
+	var cleanupErr error
 	if p.installed {
 		for i := range p.retired {
 			p.retired[i].Drain()
 		}
 		if p.old != nil {
-			p.old.drain()
+			cleanupErr = p.old.drain()
 		}
 	} else {
 		// Preparation failed before successor installation. No newly created writer
@@ -156,4 +157,5 @@ func (p *cowRollover) drain() {
 		}
 	}
 	p.scratch.Close()
+	return cleanupErr
 }

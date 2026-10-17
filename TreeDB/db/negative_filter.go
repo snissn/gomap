@@ -69,5 +69,5 @@ func (db *DB) bootstrapNegativeFilter(budget int) {
 		return
 	}
 	c := &negativeRootCoverage{bootstrap: true, idx: view.idx, baseSeq: view.state.CommitSeq, baseRoot: view.state.RootPageID, nextSeq: view.state.CommitSeq, nextRoot: view.state.RootPageID, filter: f}
-	db.publishSnapshotView(view.idx, view.state, view.vlogManager, c)
+	db.publishSnapshotView(view.idx, view.state, view.vlogManager, nil, c)
 }
