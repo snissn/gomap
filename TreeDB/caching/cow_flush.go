@@ -74,9 +74,8 @@ func (c *cowCache) prepareCOWBasisInstall() (*cowReadCut, error) {
 	}
 	return &cowReadCut{refs: 1, cache: c, lease: lease,
 		shards: make([]cowTable, shards), frozen: make([]cowTable, 0, frozen),
-		sources:      make([]memtable.Table, 0, shards+frozen),
-		pointSources: make([]memtable.Table, 0, shards+frozen),
-		domains:      make([]rootDomainSnapshot, shards)}, nil
+		sources: make([]memtable.Table, 0, shards+frozen),
+		domains: make([]rootDomainSnapshot, shards)}, nil
 }
 
 func (c *cowCache) installCOWBasis(basis *cowBackendBasis, covered *cowReadCut) (*cowReadCut, error) {

@@ -68,7 +68,7 @@ func openReadOnly(opts Options) (result *DB, retErr error) {
 		return nil, err
 	}
 
-	db := &DB{dir: opts.Dir, readOnly: true, valueLogIdentityPins: valueLogIdentityPins}
+	db := &DB{dir: opts.Dir, readOnly: true, valueLogIdentityPins: valueLogIdentityPins, ownedFinishGuardV6: &OwnedCallbackCloseGuard{}}
 	gen, err := newStartupIndexGeneration(db, lock)
 	if err != nil {
 		return nil, errors.Join(err, lock.Close())
@@ -269,7 +269,7 @@ func openReadOnlyNoLockWithRegistryV6(opts Options, valueLogIdentityPins *rootpu
 		return nil, err
 	}
 
-	db := &DB{dir: opts.Dir, readOnly: true, valueLogIdentityPins: valueLogIdentityPins}
+	db := &DB{dir: opts.Dir, readOnly: true, valueLogIdentityPins: valueLogIdentityPins, ownedFinishGuardV6: &OwnedCallbackCloseGuard{}}
 	gen, err := newStartupIndexGeneration(db, lock)
 	if err != nil {
 		return nil, err

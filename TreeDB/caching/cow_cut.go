@@ -67,7 +67,6 @@ type cowReadCut struct {
 	frozen                []cowTable // oldest to newest; every member precedes basis
 	basis                 *cowBackendBasis
 	sources               []memtable.Table
-	pointSources          []memtable.Table
 	domains               []rootDomainSnapshot
 	lease                 *memtable.COWExternalLease
 	cache                 *cowCache
@@ -270,7 +269,7 @@ func cowCutCharge(shards, frozen int) uint64 {
 	return memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowReadCut{}))) +
 		memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof(cowTable{}))) +
 		memtable.COWAllocationCharge(uint64(frozen)*uint64(unsafe.Sizeof(cowTable{}))) +
-		2*memtable.COWAllocationCharge(uint64(shards+frozen)*uint64(unsafe.Sizeof(memtable.Table(nil)))) +
+		memtable.COWAllocationCharge(uint64(shards+frozen)*uint64(unsafe.Sizeof(memtable.Table(nil)))) +
 		memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof(rootDomainSnapshot{})))
 }
 
@@ -282,34 +281,24 @@ func (c *cowReadCut) buildDomains() {
 	} else {
 		c.sources = c.sources[:0]
 	}
-	for i := range c.frozen {
-		c.sources = append(c.sources, &c.frozen[i])
-	}
-	for i := range c.shards {
-		c.sources = append(c.sources, &c.shards[i])
-	}
 	if cap(c.domains) < len(c.shards) {
 		c.domains = make([]rootDomainSnapshot, len(c.shards))
 	} else {
 		c.domains = c.domains[:len(c.shards)]
 	}
-	if cap(c.pointSources) < len(c.sources) {
-		c.pointSources = make([]memtable.Table, 0, len(c.sources))
-	} else {
-		c.pointSources = c.pointSources[:0]
-	}
-	pointSources := c.pointSources
+	// A key belongs to one fixed shard. Merge precedence between shards is
+	// irrelevant, so point and iteration views share this preadmitted vector.
+	// Within each shard frozen history remains oldest to newest, then mutable.
 	for shard := range c.shards {
-		start := len(pointSources)
+		start := len(c.sources)
 		for i := range c.frozen {
 			if c.frozen[i].shard == shard {
-				pointSources = append(pointSources, &c.frozen[i])
+				c.sources = append(c.sources, &c.frozen[i])
 			}
 		}
-		pointSources = append(pointSources, &c.shards[shard])
-		c.domains[shard] = rootDomainSnapshot{immutables: pointSources[start:len(pointSources):len(pointSources)]}
+		c.sources = append(c.sources, &c.shards[shard])
+		c.domains[shard] = rootDomainSnapshot{immutables: c.sources[start:len(c.sources):len(c.sources)]}
 	}
-	c.pointSources = pointSources
 }
 
 func (db *DB) acquireCOWSnapshot() *Snapshot {
