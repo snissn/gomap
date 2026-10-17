@@ -25,9 +25,7 @@ func (b *cowRefusingBasisBackend) AcquireSnapshotWithAllocationAdmission(admit f
 	return b.DB.AcquireSnapshotWithAllocationAdmission(admit)
 }
 
-// Until Open enables the mode, this fixture installs the private COW owner into
-// a fully initialized cached DB. All point writes still use the ordinary batch
-// placement and canonical publication entry point.
+// Open the production COW owner, including its original cleanup worker binding.
 func cowPointerFixture(t *testing.T) *DB {
 	t.Helper()
 	dir := t.TempDir()
@@ -36,7 +34,7 @@ func cowPointerFixture(t *testing.T) *DB {
 		t.Fatal(err)
 	}
 	db, err := Open(dir, backend, Options{
-		DisableWAL: true, AllowUnsafe: true, FlushThreshold: 1 << 30,
+		DisableWAL: true, AllowUnsafe: true, MemtableMode: "cow_btree", FlushThreshold: 1 << 30,
 		MemtableShards: 2, ValueLogPointerThreshold: 1,
 		ValueLogCompression: uint8(vlogCompressionOff),
 	})
@@ -44,12 +42,6 @@ func cowPointerFixture(t *testing.T) *DB {
 		_ = backend.Close()
 		t.Fatal(err)
 	}
-	c, err := newCOWCache(backend, 2, memtable.DefaultCOWLimits())
-	if err != nil {
-		_ = db.Close()
-		t.Fatal(err)
-	}
-	db.cow = c
 	t.Cleanup(func() {
 		if !db.closing.Load() {
 			_ = db.Close()

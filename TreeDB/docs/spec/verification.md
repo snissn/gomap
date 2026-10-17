@@ -4298,3 +4298,11 @@ observations. Fixture construction and final Close are excluded from benchmark
 timers. These measurements do not establish sustained throughput, full-drain
 latency or unsupported native-baseline speedups. Retained qualification requires
 the reviewed/landed harness and frozen product source.
+
+The semantic rollover controls cover distinct owned active/captured edges,
+private cancellation and partially prepared successors after Close, plus a real
+native-only logical prefix whose empty raw frontier still requires finite
+checkpoint capacity recovery. Maintenance lifetime controls pressure the actual
+reserved child budget, observe the original distinct PRIMARY/registry owners,
+and separately prove real maintenance publication can progress while producer
+headroom is exhausted. These controls do not activate unconverted collections.
