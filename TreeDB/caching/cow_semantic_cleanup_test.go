@@ -97,6 +97,48 @@ func TestCOWSemanticPrivateCancelEnqueuesBeforeOpeningCutWithdrawal(t *testing.T
 	}
 }
 
+func TestCOWCutReleaseWakesOnlyRunnableCleanupOrClosedTerminal(t *testing.T) {
+	for _, native := range []bool{false, true} {
+		t.Run(map[bool]string{false: "raw", true: "retained_native"}[native], func(t *testing.T) {
+			db, c := cowCutFixture(t)
+			db.ownedCloseGuard = db.backend.(*backenddb.DB).OwnedCallbackCloseGuard()
+			c.flushWake = make(chan struct{}, 1)
+			var state *testSemanticState
+			if native {
+				state = newTestSemanticState(nil)
+				c.cut.semanticRootSet = state
+			}
+			c.writerMu.Lock()
+			prepared := cowCutPrepare(t, c, "next")
+			old := prepared.publish()
+			c.writerMu.Unlock()
+			if old == nil {
+				t.Fatal("original cut was not released")
+			}
+			if err := old.drain(); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-c.flushWake:
+				t.Fatal("open cut release woke worker without runnable cleanup")
+			default:
+			}
+			if err := c.close(); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-c.flushWake:
+			default:
+				t.Fatal("last closed cut did not wake terminal cleanup")
+			}
+			db.drainSemanticCleanup()
+			if !db.semanticCleanupTerminal() || (state != nil && state.calls != 1) {
+				t.Fatal("original cleanup/terminal completion did not finish")
+			}
+		})
+	}
+}
+
 func TestCOWSemanticFailureParksSameWorkAndGuardsDestructorAndNotificationClose(t *testing.T) {
 	db, c := cowCutFixture(t)
 	db.ownedCloseGuard = db.backend.(*backenddb.DB).OwnedCallbackCloseGuard()

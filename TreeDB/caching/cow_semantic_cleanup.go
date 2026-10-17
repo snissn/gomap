@@ -55,12 +55,18 @@ func (cut *cowReadCut) releaseSemanticState() {
 	c.enqueueSemanticLocked(semantic)
 	c.enqueueSemanticLocked(frozen)
 	// Enqueue MUST precede the last cut leaving the terminal predicate.
-	c.activeCuts.Add(-1)
+	remaining := c.activeCuts.Add(-1)
 	if c.flushWake == nil && c.closeCleanupDone && c.readClosed.Load() && c.activeCuts.Load() == 0 && c.semanticHead == nil && c.semanticFailed == nil && !c.semanticRunning && (c.prefix == nil || !c.prefix.AcceptedCleanupFailed()) {
 		refund = c.lease
 		c.lease = nil
 	}
-	wake := c.flushWake
+	// Raw publications and retained semantic edges need no worker turn. The
+	// final closed cut must still wake the cleanup-only worker even without a
+	// record, so it can make the serialized terminal decision.
+	var wake chan struct{}
+	if semantic != nil || frozen != nil || (remaining == 0 && c.readClosed.Load()) {
+		wake = c.flushWake
+	}
 	c.semanticMu.Unlock()
 	wakeSemanticCleanup(wake)
 	refund.Close()
