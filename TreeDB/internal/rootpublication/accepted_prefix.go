@@ -34,15 +34,48 @@ type LogicalRootSet struct{ Raw, Semantic any }
 // There is no replacement asset allocator or retirement registry.
 type AcceptedCustody interface{ ReleaseAccepted() error }
 
+// AcceptedCleanupCompletion contains only independently admitted accounting
+// authorities, with no custodian/resource backpointer. Complete follows all
+// original queue and local custody alias detachment outside its latch.
+type AcceptedCleanupCompletion struct{ Refund, RequestRefund SemanticCleanupRefund }
+
+func (c AcceptedCleanupCompletion) Complete() {
+	if c.Refund != nil {
+		c.Refund.Close()
+	}
+	if c.RequestRefund != nil {
+		c.RequestRefund.Close()
+	}
+}
+
+type AcceptedCustodyCompletion interface {
+	ReleaseAcceptedCompletion() (AcceptedCleanupCompletion, error)
+}
+
+func releaseAcceptedCustody(custody AcceptedCustody) (AcceptedCleanupCompletion, error) {
+	if completion, ok := custody.(AcceptedCustodyCompletion); ok {
+		return completion.ReleaseAcceptedCompletion()
+	}
+	if custody != nil {
+		return AcceptedCleanupCompletion{}, custody.ReleaseAccepted()
+	}
+	return AcceptedCleanupCompletion{}, nil
+}
+
 // AcceptedDescriptor is pre-admitted before assignment. Install transfers its
 // original version/plan/asset custody into one bounded FIFO slot. Sequence is
 // supplied by the engine's existing clock; this owner never assigns a second
 // logical sequence. Canonical LSN remains optional for NoWAL publications.
+// PhysicalSealTarget is the preborn exact request receipt. Binding only stores
+// this finite cut's original physical receipt; it cannot execute user callbacks.
+type PhysicalSealTarget interface{ BindAcceptedPhysicalSeal(PhysicalSealReceipt) }
+
 type AcceptedDescriptor struct {
 	Sequence                    uint64
 	RootNeutral                 bool
 	Projections                 []ParticipantProjection
 	Custody                     AcceptedCustody
+	SealTarget                  PhysicalSealTarget
 	AdmittedBytes, CleanupBytes uint64
 }
 
@@ -194,6 +227,25 @@ func (ticket AcceptedTicket) entryLocked() (*acceptedPrefixState, *acceptedEntry
 	return p, e
 }
 
+// BindPreassignedCustody attaches the SAME preadmitted original owner before
+// canonical assignment. Until assignment or installation cancellation returns
+// this borrowed edge to the producer; afterwards this exact entry owns it even
+// if private materialization fails and no logical version can be installed.
+func (ticket AcceptedTicket) BindPreassignedCustody(custody AcceptedCustody) error {
+	if ticket.owner == nil || custody == nil || !reflect.TypeOf(custody).Comparable() {
+		return ErrAcceptedReceipt
+	}
+	p := &ticket.owner.accepted
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	_, e := ticket.entryLocked()
+	if e == nil || e.receipt.Assigned || e.receipt.Installed || e.descriptor.Custody != nil {
+		return ErrAcceptedReceipt
+	}
+	e.descriptor.Custody = custody
+	return nil
+}
+
 // RecordAssigned records the actual canonical append result in canonical
 // sequencer order. A nonzero identity is irreversible, even with append error.
 func (ticket AcceptedTicket) RecordAssigned(lsn uint64, appendErr error, stable bool) error {
@@ -257,7 +309,7 @@ func (ticket AcceptedTicket) BeginInstall(descriptor AcceptedDescriptor) (Accept
 		p.mu.Unlock()
 		return AcceptedInstall{}, err
 	}
-	invalid := p.closed || e == nil || e.receipt.Installed || (descriptor.Sequence != p.frontiers.V+1 && !((descriptor.RootNeutral || e.maintenance) && descriptor.Sequence == p.frontiers.V)) || e.receipt.Uncertain || (e.receipt.CanonicalLSN != 0 && e.receipt.CanonicalLSN != p.frontiers.C+1) || (len(descriptor.Projections) != 0 && descriptor.Custody == nil)
+	invalid := p.closed || e == nil || e.receipt.Installed || (descriptor.Sequence != p.frontiers.V+1 && !((descriptor.RootNeutral || e.maintenance) && descriptor.Sequence == p.frontiers.V)) || e.receipt.Uncertain || (e.receipt.CanonicalLSN != 0 && e.receipt.CanonicalLSN != p.frontiers.C+1) || (len(descriptor.Projections) != 0 && descriptor.Custody == nil) || (e.descriptor.Custody != nil && e.descriptor.Custody != descriptor.Custody)
 	if invalid {
 		err := error(ErrAcceptedReceipt)
 		if p.closed {
@@ -555,6 +607,10 @@ func (cut AcceptedCut) CompleteHandoff(seal PhysicalSealReceipt) error {
 			return ErrAcceptedReceipt
 		}
 		e.seal, e.handedOff = seal, true
+		if e.descriptor.SealTarget != nil {
+			e.descriptor.SealTarget.BindAcceptedPhysicalSeal(seal)
+			e.descriptor.SealTarget = nil
+		}
 	}
 	p.activeCut, p.cutCount = 0, 0
 	p.cutThrough, p.cutRootSet = SealedPrefix{}, LogicalRootSet{}
@@ -633,10 +689,7 @@ func (c *Coordinator) drainSealedAccepted() error {
 		p.retiring++
 		custody := e.descriptor.Custody
 		p.mu.Unlock()
-		var err error
-		if custody != nil {
-			err = custody.ReleaseAccepted()
-		}
+		completion, err := releaseAcceptedCustody(custody)
 		custody = nil
 		p.mu.Lock()
 		e = &p.entries[slot]
@@ -644,6 +697,9 @@ func (c *Coordinator) drainSealedAccepted() error {
 		p.retiring--
 		e.released = true
 		e.releaseErr = err
+		if err != nil && (completion.Refund != nil || completion.RequestRefund != nil) {
+			panic("failed accepted cleanup transferred accounting")
+		}
 		if err != nil {
 			p.poison = err
 			p.changed.Broadcast()
@@ -659,6 +715,7 @@ func (c *Coordinator) drainSealedAccepted() error {
 		p.recycleLocked(slot, e)
 		p.changed.Broadcast()
 		p.mu.Unlock()
+		completion.Complete()
 	}
 }
 
@@ -756,10 +813,7 @@ func (c *Coordinator) CloseAccepted() error {
 		e.retiring = true
 		custody := e.descriptor.Custody
 		p.mu.Unlock()
-		var err error
-		if custody != nil {
-			err = custody.ReleaseAccepted()
-		}
+		completion, err := releaseAcceptedCustody(custody)
 		custody = nil
 		p.mu.Lock()
 		e = &p.entries[i]
@@ -776,6 +830,12 @@ func (c *Coordinator) CloseAccepted() error {
 			}
 		}
 		p.changed.Broadcast()
+		if err != nil && (completion.Refund != nil || completion.RequestRefund != nil) {
+			panic("failed accepted cleanup transferred accounting")
+		}
+		p.mu.Unlock()
+		completion.Complete()
+		p.mu.Lock()
 	}
 	// Failed original entries keep their exact Custody, first error and admitted
 	// containing arrays. Successful siblings may be scrubbed/refunded once.

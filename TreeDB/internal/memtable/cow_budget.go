@@ -410,3 +410,10 @@ func cowReleaseOwners(owners []cowResourceOwner) {
 		owners[i] = cowResourceOwner{}
 	}
 }
+
+// AdmitNativeBytes shares original admission and Close behavior with native
+// immutable state. bytes describes one original containing allocation/cohort;
+// independent returned lease outlives all of that owner's aliases.
+func (b *COWBudget) AdmitNativeBytes(bytes uint64) (*COWExternalLease, error) {
+	return b.AcquireExternal(COWAllocationCharge(bytes))
+}

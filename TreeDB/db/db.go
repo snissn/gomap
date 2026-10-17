@@ -93,6 +93,7 @@ type snapshotView struct {
 
 type DB struct {
 	privateCOWOwner                *transactionowner.Owner
+	nativeSemanticBridge           NativeSemanticBridge
 	acceptedPrefix                 atomic.Pointer[rootpublication.Coordinator] // immutable logical owner after private binding
 	mvccAdmission                  mvccadmission.Authority
 	valueLogManager                *valuelog.Manager

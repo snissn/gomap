@@ -513,7 +513,9 @@ func (p *cowPreparedCut) drainCancelled() error {
 	}
 	cleanupErr = joinCOWCleanupError(cleanupErr, p.cache.releaseCut(p.opening))
 	p.opening = nil
-	p.lease.Close()
+	if cleanupErr == nil {
+		p.lease.Close()
+	}
 	return cleanupErr
 }
 func (p *cowPreparedCut) publish() *cowReadCut {
@@ -536,6 +538,7 @@ func (p *cowPreparedCut) publishAccepted(ticket rootpublication.AcceptedTicket) 
 			plan := p.native.plan
 			descriptor.Projections = plan.Projections
 			descriptor.Custody = p.native
+			descriptor.SealTarget = p.native.sealTarget
 			descriptor.AdmittedBytes = plan.AdmittedBytes
 			descriptor.CleanupBytes = plan.CleanupBytes
 		}

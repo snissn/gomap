@@ -1248,6 +1248,20 @@ func openResolved(opts Options) (*DB, error) {
 		return nil, err
 	}
 
+	if opts.MemtableMode == "cow_btree" {
+		if err := backend.BindNativeSemanticBridge(txnOwner, cached); err != nil {
+			_ = cached.Close()
+			_ = backend.Close()
+			if dictBackend != nil {
+				_ = dictBackend.Close()
+			}
+			if templateDB != nil {
+				_ = templateDB.Close()
+			}
+			return nil, err
+		}
+	}
+
 	cached.SetDictStore(dictStore)
 	cached.SetTemplateStore(templateStore)
 	out := &DB{ownedCloseGuard: backend.OwnedCallbackCloseGuard(), txnOwner: txnOwner, cached: cached, backend: backend, dictdb: dictBackend, templateDB: templateDB, writePath: writePath, commandWALCached: opts.CommandWAL, publicBatchWriteSyncPhaseEnabled: opts.CommandWAL && opts.PublicBatchWriteSyncPhaseStats, notifyError: opts.NotifyError, resolvedProfile: Profile(opts.ResolvedProfile), deprecatedProfileAlias: Profile(opts.DeprecatedProfileAlias), durabilityMode: computeDurabilityMode(opts), valueLogReadIntegrity: valueLogReadIntegrityLabel(opts), dir: rootDir}
