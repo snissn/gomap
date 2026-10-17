@@ -295,6 +295,7 @@ type cowResourceOwner struct{ release func() }
 type cowGeneration struct {
 	budget           *COWBudget
 	refs             int
+	activeWriters    int
 	history, pending uint64
 	// Fixed empty-source construction can use the one reserved tranche. All
 	// later mutation history remains charged to budget, never this lease.
@@ -343,7 +344,7 @@ func newCOWGenerationWithConstruction(b *COWBudget, base uint64, maintenance *CO
 		b.stats.HistoryBytes += base
 	}
 	b.mu.Unlock()
-	return &cowGeneration{budget: b, refs: 1, history: base, reservedCharge: reserved, constructionLease: lease,
+	return &cowGeneration{budget: b, refs: 1, activeWriters: 1, history: base, reservedCharge: reserved, constructionLease: lease,
 		ids: make([]COWResourceID, 0, b.limits.MaxResources), owners: make([]cowResourceOwner, 0, b.limits.MaxResources)}, nil
 }
 
@@ -417,3 +418,7 @@ func cowReleaseOwners(owners []cowResourceOwner) {
 func (b *COWBudget) AdmitNativeBytes(bytes uint64) (*COWExternalLease, error) {
 	return b.AcquireExternal(COWAllocationCharge(bytes))
 }
+
+// NewNativeCOWWriter keeps native root-local sources on this original budget.
+// The lower capability exposes this method without retaining a cut or cache.
+func (b *COWBudget) NewNativeCOWWriter() (*COWWriter, error) { return NewCOWWriter(b) }

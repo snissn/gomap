@@ -137,6 +137,27 @@ func (tr *Map[K, V]) Copy() *Map[K, V] {
 	return tr.IsoCopy()
 }
 
+// ImmutableCopy copies a private header and seals the returned read header.
+// The caller serializes this operation with mutation of the private receiver.
+func (tr *Map[K, V]) ImmutableCopy() *Map[K, V] {
+	copy := tr.IsoCopy()
+	copy.sealed = true
+	return copy
+}
+
+// ForkImmutable creates a private mutation header without changing the sealed
+// original. Its fresh isolation identity forces copies of every touched node.
+// The caller must hold the original node/value ownership until the fork ends.
+func (tr *Map[K, V]) ForkImmutable() *Map[K, V] {
+	if !tr.sealed {
+		panic("cowbtree: fork requires sealed immutable map")
+	}
+	copy := new(Map[K, V])
+	*copy = *tr
+	copy.isoid, copy.sealed = newIsoID(), false
+	return copy
+}
+
 func (tr *Map[K, V]) IsoCopy() *Map[K, V] {
 	if tr.sealed {
 		panic("cowbtree: use immutable owned builder for sealed map")

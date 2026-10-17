@@ -90,6 +90,46 @@ func NewCOWWriter(b *COWBudget) (*COWWriter, error) {
 	return newCOWWriterWithConstruction(b, nil)
 }
 
+// ForkCOWWriter prepares a private successor from an owned immutable source.
+// It shares only the original source generation, budget and resource owners;
+// no ancestor engine, view or published mutable header is retained. Closing one
+// fork cannot retire a generation while another private writer remains active.
+// All fork/header storage is admitted before allocation and remains in the
+// original finite generation history until its last actual owner is released.
+func ForkCOWWriter(root *COWRoot) (*COWWriter, error) {
+	if root == nil {
+		return nil, ErrCOWClosed
+	}
+	root.mu.Lock()
+	defer root.mu.Unlock()
+	if root.refs == 0 || root.tree == nil {
+		return nil, ErrCOWClosed
+	}
+	g := root.generation
+	b := g.budget
+	charge := cowAllocation(uint64(unsafe.Sizeof(COWWriter{}))) + cowAllocation(uint64(unsafe.Sizeof(btree.Map[string, cowValue]{})))
+	b.mu.Lock()
+	if b.closed {
+		b.mu.Unlock()
+		return nil, ErrCOWClosed
+	}
+	if g.frozen || !cowFits(b.limits.MaxGenerationBytes, g.history, charge) ||
+		!b.retirementFitsLocked(charge) || !b.addLocked(charge) {
+		b.mu.Unlock()
+		return nil, ErrCOWCapacity
+	}
+	if g.retired {
+		b.stats.RetiredBytes -= g.history - g.reservedCharge
+		g.retired = false
+	}
+	g.history += charge
+	b.stats.HistoryBytes += charge
+	g.refs++
+	g.activeWriters++
+	b.mu.Unlock()
+	return &COWWriter{private: root.tree.ForkImmutable(), generation: g, maxEntries: root.tree.Len()}, nil
+}
+
 // NewCOWWriterWithMaintenanceConstruction admits only a fixed empty-source
 // constructor from the original coarse reserve. Subsequent Prepare calls still
 // use the producer budget, including payload, COW nodes, resources and scratch.
@@ -140,7 +180,7 @@ func (w *COWWriter) BindReservedEmptyRoot(id COWResourceID, release func()) (*CO
 	g.ids = append(g.ids, id)
 	g.owners = append(g.owners, cowResourceOwner{release: release})
 	b.mu.Unlock()
-	return &COWRoot{tree: w.private.Copy(), generation: g, refs: 1}, nil
+	return &COWRoot{tree: w.private.ImmutableCopy(), generation: g, refs: 1}, nil
 }
 
 // COWPrepareOptions reserves the later pre-frame resource binding and C2's
@@ -385,6 +425,13 @@ func (w *COWWriter) Prepare(entries []COWMutation, opts COWPrepareOptions) (*COW
 		b.mu.Unlock()
 		return nil, ErrCOWClosed
 	}
+	// Distinct private forks may prepare ordinary rows concurrently. New
+	// resource identities still use the original single-writer reservation
+	// protocol; do not race two private resource ledgers in this generation.
+	if opts.ResourceSlots != 0 && g.activeWriters != 1 {
+		b.mu.Unlock()
+		return nil, ErrCOWPending
+	}
 	total := c.Total()
 	if g.frozen || !cowFits(b.limits.MaxInFlightBytes, b.stats.ReservedBytes, total) ||
 		!cowFits(b.limits.MaxGenerationBytes, g.history, c.History()) ||
@@ -413,7 +460,7 @@ func (w *COWWriter) Prepare(entries []COWMutation, opts COWPrepareOptions) (*COW
 		}
 		p.private.Set(ownedKey, cowValue{value: string(e.Value), ptr: e.Ptr, flags: e.Flags, revision: e.Revision})
 	}
-	p.root = &COWRoot{tree: p.private.Copy(), generation: g}
+	p.root = &COWRoot{tree: p.private.ImmutableCopy(), generation: g}
 	w.pending = p
 	return p, nil
 }
@@ -604,6 +651,9 @@ func (w *COWWriter) Freeze() error {
 	if g.frozen {
 		return nil
 	}
+	if g.activeWriters != 1 || g.pending != 0 {
+		return ErrCOWPending
+	}
 	if b.closed {
 		return ErrCOWClosed
 	}
@@ -631,7 +681,11 @@ func (w *COWWriter) Close() COWRetirement {
 	g := w.generation
 	b := g.budget
 	b.mu.Lock()
-	if !g.retired {
+	g.activeWriters--
+	if g.activeWriters < 0 {
+		panic("COW generation writer released twice")
+	}
+	if g.activeWriters == 0 && !g.retired {
 		g.retired = true
 		b.stats.RetiredBytes += g.history - g.reservedCharge
 	}

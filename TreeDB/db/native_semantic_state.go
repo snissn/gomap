@@ -88,6 +88,7 @@ type NativeAllocationReceipt interface{ Close() }
 // keeps no capture, state, Snapshot, cache or ancestor EngineVersion alive.
 type NativeSemanticAllocator interface {
 	AdmitNativeBytes(uint64) (*memtable.COWExternalLease, error)
+	NewNativeCOWWriter() (*memtable.COWWriter, error)
 }
 
 // NativeSemanticCapture borrows a single complete immutable cut until Close.

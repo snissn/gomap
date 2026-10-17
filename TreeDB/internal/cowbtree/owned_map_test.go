@@ -216,7 +216,7 @@ func TestOwnedMapSealedOriginalRejectsEveryMutationEntrypoint(t *testing.T) {
 		tr := m.tree
 		visit := func(int, *ownedTestValue) bool { return true }
 		calls := map[string]func(){
-			"Copy": func() { tr.Copy() }, "IsoCopy": func() { tr.IsoCopy() },
+			"Copy": func() { tr.Copy() }, "IsoCopy": func() { tr.IsoCopy() }, "ImmutableCopy": func() { tr.ImmutableCopy() },
 			"Set": func() { tr.Set(1, nil) }, "SetWithWork": func() { tr.SetWithWork(1, nil, nil) },
 			"Delete": func() { tr.Delete(1) }, "Load": func() { tr.Load(1, nil) }, "Clear": func() { tr.Clear() },
 			"ScanMut": func() { tr.ScanMut(visit) }, "GetMut": func() { tr.GetMut(1) },
