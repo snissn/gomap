@@ -2,7 +2,6 @@ package db
 
 import (
 	"errors"
-	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"testing"
 )
 
@@ -17,10 +16,8 @@ func TestOwnedFinishFirstCallbackCloseRefusesBeforeHooksV6(t *testing.T) {
 	if r == nil {
 		t.Fatal("missing actual publisher")
 	}
-	w := &iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20}
-	entered, e := r.EnterOwnedFinishCallbackV6(w)
-	if e != nil || !entered {
-		t.Fatalf("scope %v %v", entered, e)
+	if e = r.EnterOwnedFinishCallbackV6(); e != nil {
+		t.Fatal(e)
 	}
 	// This is FIRST Close: no terminal owner or user-hook drain has started.
 	if e = db.Close(); !errors.Is(e, errPublicationCallbackCloseV6) {

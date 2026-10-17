@@ -24,11 +24,8 @@ type primaryTransactionConstructionV6 struct {
 	candidateBound     bool
 	metadataCharge     uint64
 	terminalCompletion *primaryTerminalCompletionV6
-	// This is custody on the SAME transaction, admitted in its containing allocation.
-	nativeWorkOwned bool
-	cleanupPhase    uint8
-	cleanupQueue    primaryarena.ReleaseQueue
-	cleanupReceipt  *PrimaryConstructionReleaseWork
+	cleanupPhase       uint8
+	cleanupQueue       primaryarena.ReleaseQueue
 }
 type PrimaryPromotionV6 struct {
 	Image                  []byte
@@ -38,26 +35,18 @@ type PrimaryPromotionV6 struct {
 }
 
 func NewPrimaryConstructionTransactionV6(a *primaryarena.Arena, w *iterator.OrdinalScanWork) (primaryarena.ReadRootConstructionV6, bool, error) {
-	return newPrimaryConstructionTransactionV6(a, w, false)
-}
 
-// Native constructors keep callback and cleanup work with their original caller.
-func NewNativeMVCCPrimaryConstructionTransactionV6(a *primaryarena.Arena, w *iterator.OrdinalScanWork) (primaryarena.ReadRootConstructionV6, bool, error) {
-	return newPrimaryConstructionTransactionV6(a, w, true)
-}
-
-func newPrimaryConstructionTransactionV6(a *primaryarena.Arena, w *iterator.OrdinalScanWork, native bool) (primaryarena.ReadRootConstructionV6, bool, error) {
-	if a == nil || !a.CapsuleFormatV6() || w == nil {
+	if a == nil || !a.CapsuleFormatV6() {
 		return nil, false, ErrDurableRootOwnership
 	}
-	if !w.Reserve(3, 2*uint64(unsafe.Sizeof(DurableRootTransaction{}))+2*uint64(unsafe.Sizeof(primaryTransactionConstructionV6{}))+2*uint64(unsafe.Sizeof(primaryTerminalCompletionV6{}))) {
+	if w != nil && !w.Reserve(3, 2*uint64(unsafe.Sizeof(DurableRootTransaction{}))+2*uint64(unsafe.Sizeof(primaryTransactionConstructionV6{}))+2*uint64(unsafe.Sizeof(primaryTerminalCompletionV6{}))) {
 		return nil, false, nil
 	}
 	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(DurableRootTransaction{}))) + retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(primaryTransactionConstructionV6{}))) + retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(primaryTerminalCompletionV6{})))
 	if err := a.MetadataOwner().AddPending(charge); err != nil {
 		return nil, false, err
 	}
-	t := &DurableRootTransaction{owner: ResourceOwnerBuilder, phase: durableRootConstructingV6, constructionV6: &primaryTransactionConstructionV6{arena: a, metadataCharge: charge, nativeWorkOwned: native, terminalCompletion: &primaryTerminalCompletionV6{owner: a.MetadataOwner(), charge: charge}}}
+	t := &DurableRootTransaction{owner: ResourceOwnerBuilder, phase: durableRootConstructingV6, constructionV6: &primaryTransactionConstructionV6{arena: a, metadataCharge: charge, terminalCompletion: &primaryTerminalCompletionV6{owner: a.MetadataOwner(), charge: charge}}}
 	a.InitializeReleaseQueue(&t.constructionV6.cleanupQueue)
 	root, ready, err := a.PrepareConstructedReadRootV6(t, w)
 	if !ready || err != nil {
@@ -81,7 +70,7 @@ func (t *DurableRootTransaction) PrimaryConstructionReferenceV6() primaryarena.R
 	return t.constructionV6.root
 }
 func (t *DurableRootTransaction) SealPrimaryConstructionV6(image []byte, groups [1]*primaryarena.Group, w *iterator.OrdinalScanWork) (bool, error) {
-	if t == nil || w == nil {
+	if t == nil {
 		return false, ErrDurableRootOwnership
 	}
 	t.mu.Lock()
@@ -119,20 +108,15 @@ func (t *DurableRootTransaction) PrimaryConstructionCertificateV6() *primaryaren
 // Bind turns the SAME slot-independent constructor into an immutable visible
 // member. The resource set's existing atomic cell is the sole handoff owner.
 func (t *DurableRootTransaction) BindPrimaryVisibilityV6(spec DurableRootTransactionSpec, resources *StableResourceSet, w *iterator.OrdinalScanWork) (bool, error) {
-	if t == nil || w == nil {
+	if t == nil {
 		return false, ErrDurableRootOwnership
 	}
-	if !w.Reserve(1, 2*uint64(unsafe.Sizeof(DurableRootTransaction{}))+2*uint64(unsafe.Sizeof(DurableRootTransactionSpec{}))) {
+	if w != nil && !w.Reserve(1, 2*uint64(unsafe.Sizeof(DurableRootTransaction{}))+2*uint64(unsafe.Sizeof(DurableRootTransactionSpec{}))) {
 		return false, nil
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	c := t.constructionV6
-	// Native visibility requires the work-bearing callback contract; the
-	// existing synchronous callback binding cannot claim its continuation.
-	if c != nil && c.nativeWorkOwned {
-		return false, ErrNativeMVCCRootWorkRequiredV6
-	}
 	if c == nil || c.cleanupPhase != 0 || t.phase != durableRootConstructingV6 || c.certificate == nil || resources == nil || resources.Owner() != ResourceOwnerBuilder ||
 		spec.PreparedPrimary == nil || spec.PreparedPrimary.readCertificate != c.certificate || spec.Lineage == (DurableRootLineageID{}) || spec.Sequence == 0 ||
 		spec.Abort == nil || spec.Fail == nil {
@@ -150,8 +134,7 @@ func (t *DurableRootTransaction) BindPrimaryVisibilityV6(spec DurableRootTransac
 	// Private constructor discovery ends before publication. Runtime/coordinator
 	// retain this SAME transaction; immutable readers need only its root edge.
 	if ready, err := c.arena.DetachReadRootConstructionV6(c.root, t, w); !ready || err != nil {
-		cleanup := &iterator.OrdinalScanWork{RecordLimit: ^uint64(0), ByteLimit: ^uint64(0)}
-		_, dropErr := c.arena.Drop(c.root, cleanup)
+		_, dropErr := c.arena.Drop(c.root, nil)
 		return false, errors.Join(err, dropErr)
 	}
 	t.input = DurableRootCallbackInput{Lineage: spec.Lineage, Sequence: spec.Sequence, Payload: spec.Payload, PreparedCOW: spec.PreparedCOW, PreparedPrimary: spec.PreparedPrimary, PublicationProjection: spec.PublicationProjection}
@@ -181,17 +164,57 @@ func (t *DurableRootTransaction) releaseOwnerLockedV6() {
 	// The Set remains sole authority for its resource edge; this original owner
 	// separately records completion of transaction/descriptor custody.
 }
+
+// Abort consumes this original constructor synchronously. Its embedded queue
+// keeps physical descendants with the original owner until actual cleanup;
+// the accounting receipt leaves the containing transaction only after success.
 func (t *DurableRootTransaction) abortConstructionLockedV6(terminal *primaryConstructionReleaseState) error {
-	if t.constructionV6 != nil && t.constructionV6.nativeWorkOwned {
-		return ErrNativeMVCCRootWorkRequiredV6
+	if t.physicalCleanupError != nil {
+		return t.physicalCleanupError
 	}
-	work := &iterator.OrdinalScanWork{RecordLimit: ^uint64(0), ByteLimit: ^uint64(0)}
-	for {
-		ready, err := t.abortNativeMVCCConstructionStepLockedV6(work, terminal, nil)
-		if ready || err != nil {
-			return err
+	c := t.constructionV6
+	if c == nil || (t.phase != durableRootConstructingV6 && t.phase != durableRootPrepared) {
+		return ErrDurableRootOwnership
+	}
+	c.cleanupPhase = 1
+	for c.componentCount > 0 {
+		r := c.components[c.componentCount-1]
+		ready, err := c.arena.DropToReleaseQueue(r, &c.cleanupQueue, nil)
+		if !ready || err != nil {
+			return t.recordPhysicalCleanupFailureLocked(errors.Join(err, ErrDurableRootOwnership))
+		}
+		c.componentCount--
+		c.components[c.componentCount] = primaryarena.Ref{}
+	}
+	if c.root != (primaryarena.Ref{}) {
+		if err := c.arena.DropReadRootConstructionToReleaseQueueV6(c.root, t, &c.cleanupQueue); err != nil {
+			return t.recordPhysicalCleanupFailureLocked(err)
+		}
+		c.root = primaryarena.Ref{}
+	}
+	if t.abortComplete != nil {
+		if err := t.abortComplete(t.input); err != nil {
+			return t.recordPhysicalCleanupFailureLocked(err)
 		}
 	}
+	c.certificate, c.promotion = nil, nil
+	c.candidate, c.members = PreparedRootCandidate{}, [1]*DurableRootTransaction{}
+	t.input = DurableRootCallbackInput{}
+	t.activate, t.consume, t.abort, t.abortComplete, t.fail = nil, nil, nil, nil, nil
+	for {
+		ready, progress, err := c.arena.ReleaseQueueStep(&c.cleanupQueue, nil)
+		if !ready || err != nil {
+			return t.recordPhysicalCleanupFailureLocked(errors.Join(err, ErrDurableRootOwnership))
+		}
+		if !progress {
+			break
+		}
+	}
+	terminal.owner, terminal.charge = c.arena.MetadataOwner(), c.metadataCharge
+	t.constructionV6 = nil
+	*c = primaryTransactionConstructionV6{}
+	t.owner, t.phase = ResourceOwnerReleased, durableRootConsumed
+	return nil
 }
 
 func (t *DurableRootTransaction) PrimaryPromotionV6() *PrimaryPromotionV6 {
@@ -209,10 +232,10 @@ func (t *DurableRootTransaction) PrimaryPromotionV6() *PrimaryPromotionV6 {
 // Fresh promotion selects actual parent/target and acquires independent physical
 // closure edges. These head-bound operands never survive as private preparation.
 func (t *DurableRootTransaction) PreparePrimaryPromotionV6(record DurableRootRecordV1, projection PrimaryProjectionV5, parent *PrimaryCapsuleViewV6, parentRoot primaryarena.Ref, w *iterator.OrdinalScanWork) (result *PrimaryPromotionV6, completed bool, returnErr error) {
-	if t == nil || w == nil {
+	if t == nil {
 		return nil, false, ErrDurableRootOwnership
 	}
-	if !w.Reserve(1, 2*uint64(unsafe.Sizeof(DurableRootTransaction{}))+2*uint64(unsafe.Sizeof(PrimaryPromotionV6{}))) {
+	if w != nil && !w.Reserve(1, 2*uint64(unsafe.Sizeof(DurableRootTransaction{}))+2*uint64(unsafe.Sizeof(PrimaryPromotionV6{}))) {
 		return nil, false, nil
 	}
 	t.mu.Lock()
@@ -267,10 +290,10 @@ func (t *DurableRootTransaction) PreparePrimaryPromotionV6(record DurableRootRec
 }
 
 func (t *DurableRootTransaction) OwnPrimaryComponentV6(ref primaryarena.Ref, w *iterator.OrdinalScanWork) (bool, error) {
-	if t == nil || w == nil {
+	if t == nil {
 		return false, ErrDurableRootOwnership
 	}
-	if !w.Reserve(1, 2*uint64(unsafe.Sizeof(primaryarena.Ref{}))+2*uint64(unsafe.Sizeof(primaryTransactionConstructionV6{}))) {
+	if w != nil && !w.Reserve(1, 2*uint64(unsafe.Sizeof(primaryarena.Ref{}))+2*uint64(unsafe.Sizeof(primaryTransactionConstructionV6{}))) {
 		return false, nil
 	}
 	t.mu.Lock()
@@ -286,10 +309,7 @@ func (t *DurableRootTransaction) OwnPrimaryComponentV6(ref primaryarena.Ref, w *
 
 // The ordinary report owns this same synchronous Finish. Its actual ordinary
 // release callbacks are deliberately NOT claimed as bounded native retirement.
-func (t *DurableRootTransaction) finishOrdinaryPrimaryV6(w *iterator.OrdinalScanWork, activePins map[ResourceKind]uint64) (*primaryTerminalCompletionV6, error) {
-	if w == nil {
-		return nil, ErrDurableRootOwnership
-	}
+func (t *DurableRootTransaction) finishOrdinaryPrimaryV6(activePins map[ResourceKind]uint64) (*primaryTerminalCompletionV6, error) {
 	t.mu.Lock()
 	if t.physicalCleanupError != nil {
 		err := t.physicalCleanupError
@@ -308,7 +328,7 @@ func (t *DurableRootTransaction) finishOrdinaryPrimaryV6(w *iterator.OrdinalScan
 	// have no backpointer to this pending graph.
 	ready, err := true, error(nil)
 	if c.root != (primaryarena.Ref{}) {
-		ready, err = c.arena.Drop(c.root, w)
+		ready, err = c.arena.Drop(c.root, nil)
 		if ready && err == nil {
 			t.mu.Lock()
 			c.root = primaryarena.Ref{}
@@ -446,7 +466,7 @@ func (t *DurableRootTransaction) releasePrimaryRecoveryLockedV6() (*primaryTermi
 }
 
 func allocatePrimaryPromotionStorageV6(owner *retainedalloc.Owner, w *iterator.OrdinalScanWork) (*PrimaryPromotionV6, uint64, bool, error) {
-	if !w.Reserve(1, 2*PrimaryCapsuleSizeV6+2*uint64(unsafe.Sizeof(PrimaryPromotionV6{}))) {
+	if w != nil && !w.Reserve(1, 2*PrimaryCapsuleSizeV6+2*uint64(unsafe.Sizeof(PrimaryPromotionV6{}))) {
 		return nil, 0, false, nil
 	}
 	charge := retainedalloc.AllocationCharge(PrimaryCapsuleSizeV6) + retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(PrimaryPromotionV6{})))

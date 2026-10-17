@@ -3,9 +3,7 @@ package db
 import (
 	"errors"
 	"sync/atomic"
-	"unsafe"
 
-	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
@@ -49,17 +47,11 @@ func (db *DB) OwnedCallbackCloseGuard() *OwnedCallbackCloseGuard {
 	return db.ownedFinishGuardV6
 }
 
-func (r *rootPublicationRuntimeV1) EnterOwnedFinishCallbackV6(w *iterator.OrdinalScanWork) (bool, error) {
-	if r == nil || r.db == nil || w == nil {
-		return false, rootpublication.ErrDurableRootOwnership
+func (r *rootPublicationRuntimeV1) EnterOwnedFinishCallbackV6() error {
+	if r == nil || r.db == nil {
+		return rootpublication.ErrDurableRootOwnership
 	}
-	if !w.Reserve(2, 128+2*uint64(unsafe.Sizeof(OwnedCallbackCloseGuard{}))) {
-		return false, nil
-	}
-	if err := r.db.ownedFinishGuardV6.Enter(); err != nil {
-		return false, err
-	}
-	return true, nil
+	return r.db.ownedFinishGuardV6.Enter()
 }
 func (r *rootPublicationRuntimeV1) LeaveOwnedFinishCallbackV6() { r.db.ownedFinishGuardV6.Leave() }
 

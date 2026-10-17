@@ -79,7 +79,7 @@ func TestPrimaryFinishContainingRefundJoinsOriginalCall(t *testing.T) {
 					completePrimaryTerminalsV6(&node)
 				}
 			} else {
-				node, err := txn.finishOrdinaryPrimaryV6(&iterator.OrdinalScanWork{RecordLimit: ^uint64(0), ByteLimit: ^uint64(0)}, nil)
+				node, err := txn.finishOrdinaryPrimaryV6(nil)
 				e = err
 				if e == nil {
 					completePrimaryTerminalsV6(&node)

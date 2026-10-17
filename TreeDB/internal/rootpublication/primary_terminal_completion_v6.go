@@ -1,7 +1,6 @@
 package rootpublication
 
 import (
-	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"time"
 )
@@ -72,13 +71,6 @@ func (c *Coordinator) completePublicationLockedV6(done primaryPublicationComplet
 	c.satisfyWaitersLocked()
 	c.recomputePublishRequestLocked(true)
 	c.notifyLocked()
-}
-
-func bindPrimaryTerminalWorkV6(n *primaryTerminalCompletionV6, removal *retainedalloc.RemovalWork, w *iterator.OrdinalScanWork) (bool, error) {
-	if n == nil || removal == nil || w == nil {
-		return false, ErrDurableRootOwnership
-	}
-	return removal.BindPendingWork(n.owner, n.charge, w)
 }
 
 // The original DATA constructor shares the same outside-callback terminal
