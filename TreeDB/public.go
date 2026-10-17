@@ -162,6 +162,7 @@ type UpdateFunc = db.UpdateFunc
 
 // DB is the public TreeDB handle (cached mode by default; read-only opens skip caching).
 type DB struct {
+	ownedCloseGuard                      *db.OwnedCallbackCloseGuard
 	txnOwner                             *transactionowner.Owner
 	cached                               *caching.DB
 	backend                              *db.DB
@@ -1115,7 +1116,7 @@ func openResolved(opts Options) (*DB, error) {
 	}
 
 	if opts.ReadOnly {
-		return &DB{backend: backend, dictdb: dictBackend, templateDB: templateDB, writePath: writePath, notifyError: opts.NotifyError, resolvedProfile: Profile(opts.ResolvedProfile), deprecatedProfileAlias: Profile(opts.DeprecatedProfileAlias), durabilityMode: computeDurabilityMode(opts), valueLogReadIntegrity: valueLogReadIntegrityLabel(opts), dir: rootDir}, nil
+		return &DB{ownedCloseGuard: backend.OwnedCallbackCloseGuard(), backend: backend, dictdb: dictBackend, templateDB: templateDB, writePath: writePath, notifyError: opts.NotifyError, resolvedProfile: Profile(opts.ResolvedProfile), deprecatedProfileAlias: Profile(opts.DeprecatedProfileAlias), durabilityMode: computeDurabilityMode(opts), valueLogReadIntegrity: valueLogReadIntegrityLabel(opts), dir: rootDir}, nil
 	}
 
 	normalizeBackpressureDefaults(&opts)
@@ -1249,7 +1250,7 @@ func openResolved(opts Options) (*DB, error) {
 
 	cached.SetDictStore(dictStore)
 	cached.SetTemplateStore(templateStore)
-	out := &DB{txnOwner: txnOwner, cached: cached, backend: backend, dictdb: dictBackend, templateDB: templateDB, writePath: writePath, commandWALCached: opts.CommandWAL, publicBatchWriteSyncPhaseEnabled: opts.CommandWAL && opts.PublicBatchWriteSyncPhaseStats, notifyError: opts.NotifyError, resolvedProfile: Profile(opts.ResolvedProfile), deprecatedProfileAlias: Profile(opts.DeprecatedProfileAlias), durabilityMode: computeDurabilityMode(opts), valueLogReadIntegrity: valueLogReadIntegrityLabel(opts), dir: rootDir}
+	out := &DB{ownedCloseGuard: backend.OwnedCallbackCloseGuard(), txnOwner: txnOwner, cached: cached, backend: backend, dictdb: dictBackend, templateDB: templateDB, writePath: writePath, commandWALCached: opts.CommandWAL, publicBatchWriteSyncPhaseEnabled: opts.CommandWAL && opts.PublicBatchWriteSyncPhaseStats, notifyError: opts.NotifyError, resolvedProfile: Profile(opts.ResolvedProfile), deprecatedProfileAlias: Profile(opts.DeprecatedProfileAlias), durabilityMode: computeDurabilityMode(opts), valueLogReadIntegrity: valueLogReadIntegrityLabel(opts), dir: rootDir}
 	if out.commandWALCached {
 		// ponytail: reuse the existing bounded logical-payload budget. Larger
 		// point values use the batch's compact persistent-value references.
@@ -1847,6 +1848,9 @@ func (db *DB) closeMaintenance() error {
 func (db *DB) Close() error {
 	if db == nil {
 		return nil
+	}
+	if err := db.ownedCloseGuard.CheckClose(); err != nil {
+		return err
 	}
 	db.bgVac.deferredVectorBuildClosed.Store(true)
 	db.bgVac.Stop()

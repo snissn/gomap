@@ -33,7 +33,7 @@ func TestOwnedFinishFirstCallbackCloseRefusesBeforeHooksV6(t *testing.T) {
 	if e = db.SetSync([]byte("live"), []byte("value")); e != nil {
 		t.Fatal(e)
 	}
-	if db.ownedFinishCallerV6 != 0 {
+	if db.ownedFinishGuardV6.caller.Load() != 0 {
 		t.Fatal("callback marker retained")
 	}
 	if e = db.Close(); e != nil {

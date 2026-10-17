@@ -291,7 +291,7 @@ type DB struct {
 	closeTeardownOnce  sync.Once
 	closeTeardownErr   error
 
-	ownedFinishCallerV6 uint64
+	ownedFinishGuardV6 *OwnedCallbackCloseGuard
 
 	internalTeardownHooksMu     sync.Mutex
 	internalTeardownHooks       []func() error
@@ -2717,7 +2717,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (result *DB, retErr error) 
 		return nil, err
 	}
 
-	db := &DB{dir: opts.Dir, lock: lock, valueLogIdentityPins: valueLogIdentityPins}
+	db := &DB{dir: opts.Dir, lock: lock, valueLogIdentityPins: valueLogIdentityPins, ownedFinishGuardV6: &OwnedCallbackCloseGuard{}}
 	gen, err := newStartupIndexGeneration(db, lock)
 	if err != nil {
 		return nil, err
@@ -2785,6 +2785,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (result *DB, retErr error) 
 	}
 
 	*db = DB{
+		ownedFinishGuardV6:                 db.ownedFinishGuardV6,
 		dependencyDirectoryRequiredFeature: requiresDependencyDirectory,
 		physicalSnapshotSideStoreCapture:   opts.PhysicalSnapshotSideStoreCapture,
 
@@ -3455,11 +3456,8 @@ func (db *DB) Close() error {
 	if db == nil {
 		return nil
 	}
-	db.closeHooksMu.Lock()
-	finishCaller := db.ownedFinishCallerV6
-	db.closeHooksMu.Unlock()
-	if finishCaller != 0 && currentGoroutineID() == finishCaller {
-		return errPublicationCallbackCloseV6
+	if err := db.ownedFinishGuardV6.CheckClose(); err != nil {
+		return err
 	}
 	db.closeHooksMu.Lock()
 	closeHooksRunning := db.closeHooksRunning

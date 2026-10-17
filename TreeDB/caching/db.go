@@ -8971,7 +8971,8 @@ func (s *foregroundReaderState) end() uint32 {
 }
 
 type DB struct {
-	cow *cowCache
+	ownedCloseGuard *backenddb.OwnedCallbackCloseGuard
+	cow             *cowCache
 	// One original cache-lifetime governor for native legacy captures. COW
 	// uses cow.budget. Every original metadata owner enrolls on this same budget.
 	nativeMVCCBudget             *memtable.COWBudget // guarded by mu
@@ -13132,6 +13133,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		lanes[2].vlogGenerationClass = vlogGenerationClassCold
 	}
 	db := &DB{
+		ownedCloseGuard:                            nil,
 		dir:                                        walDir,
 		valueLogDir:                                valueLogDir,
 		leafLogDir:                                 leafLogDir,
@@ -13255,6 +13257,12 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		lanes:                                      lanes,
 		flushLaneMu:                                make([]sync.Mutex, len(lanes)),
 	}
+	if guarded, ok := backend.(interface {
+		OwnedCallbackCloseGuard() *backenddb.OwnedCallbackCloseGuard
+	}); ok {
+		db.ownedCloseGuard = guarded.OwnedCallbackCloseGuard()
+	}
+
 	db.cow = cowOwner
 	db.nativeMVCCLimits = nativeMVCCLimits
 	db.storeMemtableMode(mode)
@@ -26461,6 +26469,9 @@ func (db *DB) flushSomeBlocking(sync bool, maxMemtables int, maxDuration time.Du
 }
 
 func (db *DB) Close() error {
+	if err := db.ownedCloseGuard.CheckClose(); err != nil {
+		return err
+	}
 	defer func() {
 		db.conditionalOracle.mu.Lock()
 		defer db.conditionalOracle.mu.Unlock()
