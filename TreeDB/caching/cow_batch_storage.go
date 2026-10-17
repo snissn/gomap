@@ -5,6 +5,7 @@ import (
 	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/batch"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
