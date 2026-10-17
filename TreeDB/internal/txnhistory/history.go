@@ -94,6 +94,13 @@ type History struct {
 	barriers                                     BarrierStats
 }
 
+// ControlAllocationSizes reports the same concrete original arrays that New
+// admits before allocation. Finite callers use it to select a fitting ring
+// after record layouts change; n must satisfy New's ring-size contract.
+func ControlAllocationSizes(n int) [5]uint64 {
+	return [5]uint64{uint64(unsafe.Sizeof(History{})), uint64(n) * uint64(unsafe.Sizeof(mutation{})), uint64(2*n) * uint64(unsafe.Sizeof(latest{})), uint64(n) * uint64(unsafe.Sizeof(effect{})), 2 * uint64(unsafe.Sizeof(uintptr(0)))}
+}
+
 func New(n int, maxBytes uint64, admit Admit) (*History, error) {
 	if n < 8 || n&(n-1) != 0 || maxBytes == 0 {
 		panic("invalid finite transaction history limits")
@@ -101,7 +108,8 @@ func New(n int, maxBytes uint64, admit Admit) (*History, error) {
 	var lease Lease
 	var err error
 	if admit != nil {
-		lease, err = admit(uint64(unsafe.Sizeof(History{})), uint64(n)*uint64(unsafe.Sizeof(mutation{})), uint64(2*n)*uint64(unsafe.Sizeof(latest{})), uint64(n)*uint64(unsafe.Sizeof(effect{})), 2*uint64(unsafe.Sizeof(uintptr(0))))
+		s := ControlAllocationSizes(n)
+		lease, err = admit(s[0], s[1], s[2], s[3], s[4])
 		if err != nil {
 			return nil, err
 		}
