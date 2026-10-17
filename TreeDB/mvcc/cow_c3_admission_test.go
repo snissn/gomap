@@ -11,7 +11,6 @@ import (
 	"time"
 
 	treedb "github.com/snissn/gomap/TreeDB"
-	"github.com/snissn/gomap/TreeDB/caching"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
 
@@ -112,6 +111,15 @@ func (c *c3Cut) Iterator(a, b []byte) (treedb.Iterator, error) {
 		return nil, c.owner.constructErr
 	}
 	return c.MVCCReadSnapshot.Iterator(a, b)
+}
+func (c *c3Cut) ReverseIterator(a, b []byte) (treedb.Iterator, error) {
+	if c.owner.iterator {
+		c.pause()
+	}
+	if c.owner.constructErr != nil {
+		return nil, c.owner.constructErr
+	}
+	return c.MVCCReadSnapshot.ReverseIterator(a, b)
 }
 func (c *c3Cut) Close() error {
 	c.owner.mu.Lock()
@@ -257,38 +265,6 @@ func TestC3ReadCutFailureAndClose(t *testing.T) {
 			}
 			if stats := db.Stats(); stats["treedb.cache.cow.views"] != "0" {
 				t.Fatalf("leaked views: %s", stats["treedb.cache.cow.views"])
-			}
-		})
-	}
-}
-
-func TestC3COWPruneRefusesBeforeFloorWALEffects(t *testing.T) {
-	for _, profile := range []treedb.Profile{treedb.ProfileCommandWALDurable, treedb.ProfileCommandWALRelaxed, treedb.ProfileNoWALFast} {
-		t.Run(string(profile), func(t *testing.T) {
-			db := c3ReadDB(t, profile, false)
-			store := New(db)
-			if err := store.CommitAt(10, []Mutation{{Key: []byte("a"), Value: []byte("v")}}, CommitRelaxed); err != nil {
-				t.Fatal(err)
-			}
-			if err := store.AdvanceDiscardFloor(20, CommitRelaxed); err != nil {
-				t.Fatal(err)
-			}
-			before := db.Stats()
-			if _, err := store.PruneVersions(PruneOptions{Mode: CommitDurable}); !errors.Is(err, caching.ErrCOWUnsupported) {
-				t.Fatalf("prune=%v", err)
-			}
-			after := db.Stats()
-			if floor, err := store.DiscardFloor(); err != nil || floor != 20 {
-				t.Fatalf("refused prune floor=%d err=%v", floor, err)
-			}
-			for _, stat := range []string{"treedb.command_wal.append.count_total", "treedb.command_wal.file_sync.calls_total", "treedb.cache.cow.publications_total", "treedb.cache.cow.capture_calls_total"} {
-				if before[stat] != after[stat] {
-					t.Fatalf("prune changed %s: %s -> %s", stat, before[stat], after[stat])
-				}
-			}
-			r, err := store.GetAt([]byte("a"), 100)
-			if err != nil || !bytes.Equal(r.Value, []byte("v")) {
-				t.Fatalf("retained=%+v %v", r, err)
 			}
 		})
 	}

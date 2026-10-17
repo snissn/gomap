@@ -292,9 +292,12 @@ The ordinary raw delete path updates index reachability; existing snapshot
 roots remain retention roots. Value-log GC/rewrite may reclaim payload segments
 later only through the reachability rules in this document.
 
-The MVCC prune scan is snapshot-bound and bounded by its iterator plus delete
-batch size. A live pre-prune snapshot continues to protect and resolve its old
-value pointers. The prune's visited/retained/pruned byte accounting describes
+The MVCC prune scan is snapshot-bound; ordinary delete publications have a
+bounded batch size, while a complete pass may visit the whole history. COW uses
+its original complete retained cut and ordinary delete batches. A live pre-prune
+snapshot continues to protect and resolve its old value pointers after both
+floor advancement and logical deletion. Physical GC still needs every live and
+recovery closure to release its references. Prune byte accounting reports
 logical physical-record bytes, not immediately reclaimed segment bytes.
 
 ## 3. Reachability Source of Truth
