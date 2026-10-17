@@ -444,7 +444,7 @@ func (b *Batch) writeCOWPublication(syncWrite bool, unlock func()) error {
 		}
 	}
 	if old != nil {
-		err = old.drain()
+		err = joinCOWCleanupError(err, old.drain())
 	}
 	p.scratch.Close()
 	b.db.noteWrite()

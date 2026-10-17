@@ -69,6 +69,7 @@ func (c *Collection) WithPreparedCommandWALVectorPrepareOwnedV1(ctx context.Cont
 		return c.withPreparedCommandWALMutation(acquire, true, func(owner *CommandWALAdmittedCollection) error {
 			owner.partitionStorageHeld = true
 			owner.partitionSourcePin = sourcePin
+			owner.releasePartitionStorage = storage.state.releaseMaterializationLockedV1
 			defer func() { owner.partitionStorageHeld = false; owner.partitionSourcePin = nil }()
 			if err := owner.preflightVectorPrepareV1(v, false); err != nil {
 				return err

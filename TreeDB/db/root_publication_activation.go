@@ -1363,6 +1363,14 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 	if reportErr != nil {
 		db.reportError(reportErr)
 	}
+	// Explicit sealed APIs carry the SAME receipt out to their original owner.
+	// That owner must first unwind staging/collection/teardown and publication
+	// in-flight custody. Waiting here would retain those caller-owned gates even
+	// though this function released the backend build locks. Its later exact
+	// WaitThrough covers both hard admission and final physical sealing.
+	if opts.commandWALSeal != nil {
+		return post, nil
+	}
 	admissionStart := time.Now()
 	if err := runtime.coordinator.WaitForAdmission(context.Background(), receipt); err != nil {
 		if opts.publishTiming != nil {
