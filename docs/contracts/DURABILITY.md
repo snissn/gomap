@@ -130,3 +130,11 @@ Operational notes:
   shards.
 - Use TreeDB canonical production profiles when integrated command-WAL recovery,
   persistent value-log pointers, and stronger integrity checks are required.
+
+Qualified public raw COW transactions use the existing canonical raw command
+frame and external-reference prerequisites. A conflict, history expiration or
+admission refusal appends no frame. An assigned-command failure is ambiguous
+and poisons later acceptance before the publication lease is released. Durable
+and relaxed WAL acknowledgements retain their existing exact request-prefix
+requirements; NoWAL explicit sync seals the complete prior logical cut, including
+an empty transaction's explicit sync boundary.

@@ -123,7 +123,7 @@ func setupPublicConditionalTxnCachedBenchDB(b *testing.B, readSet int) (*DB, [][
 		b.Fatal(err)
 	}
 	b.Cleanup(func() { _ = os.RemoveAll(dir) })
-	tdb, err := Open(Options{Dir: dir})
+	tdb, err := Open(OptionsFor(ProfileNoWALFast, dir))
 	if err != nil {
 		b.Fatalf("Open: %v", err)
 	}

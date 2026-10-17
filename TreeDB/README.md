@@ -107,10 +107,10 @@ all fields are zero and otherwise requires a complete valid bundle. COW defaults
 to four fixed shards. Capacity can refuse while old readers are retained; close
 snapshots and iterators to release their ownership.
 
-Callback/conditional writes, range deletion, reverse traversal and manual backend
+Callback mutations, native range deletion and manual backend
 bypass are unsupported in this explicit mode and refuse before effects. Existing
-adaptive/append_only/btree selection remains available. COW does not add MVCC
-conflict detection or remove Store fences, and selection makes no throughput
+adaptive/append_only/btree selection remains available. Qualified public raw conditional transactions use the bounded validation
+contract below. COW does not remove Store fences, and selection makes no throughput
 promise. See [capabilities, limits and lifecycle](docs/spec/cow-cache-publication.md)
 and the [current repair and cost measurements](docs/benchmarks/cow-c2-ci-repair-5046/report.md).
 The measurements include the remaining write and pointer-read overhead; sustained

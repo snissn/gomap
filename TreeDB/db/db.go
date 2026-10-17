@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/snissn/gomap/TreeDB/internal/mvccadmission"
+	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -91,6 +92,7 @@ type snapshotView struct {
 }
 
 type DB struct {
+	privateCOWOwner                *transactionowner.Owner
 	mvccAdmission                  mvccadmission.Authority
 	valueLogManager                *valuelog.Manager
 	valueLogIdentityPins           *rootpublication.IdentityPinRegistry
@@ -3495,6 +3497,14 @@ func (db *DB) closeAfterHooksOnce() error {
 }
 
 func (db *DB) closeAfterHooks() error {
+	defer func() {
+		db.conditionalOracle.mu.Lock()
+		defer db.conditionalOracle.mu.Unlock()
+		if db.conditionalOracle.history != nil {
+			db.conditionalOracle.history.Close()
+			db.conditionalOracle.history = nil
+		}
+	}()
 	startupGen := db.idx.Load()
 	if startupGen != nil && startupGen.startupDB != db {
 		startupGen = nil
@@ -4316,7 +4326,6 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 		newState.LeafGenerationStateVersion = db.leafGenerationStateVersion
 	}
 	db.state.Store(newState)
-	opts.conditionalMutation.record(db, nextMeta.CommitSeq)
 	if opts.commandWALPublish {
 		previousApplied := uint64(0)
 		if post.oldState != nil {
@@ -4332,6 +4341,7 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 		post.drainLeafGenerationPending = true
 	}
 	db.mu.Unlock()
+	opts.conditionalMutation.record(db, nextMeta.CommitSeq)
 	db.rootReuseMu.Unlock()
 	rootReuseLocked = false
 	watermarkHold += time.Since(holdStart)

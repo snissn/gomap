@@ -62,8 +62,14 @@ type publicCommandWALGroupCommit struct {
 	bypassSoloDurable    atomic.Uint64
 }
 
-type publicCommandWALPublication struct {
-	ticket uint64
+type publicCommandWALPublication struct{ ticket uint64 }
+
+// This transient registration belongs to one caller until its ACK wait. The
+// published state remains the original compact ticket, not a second queue.
+type publicCommandWALRegistration struct {
+	publicCommandWALPublication
+	leader, awaiting, observeWait, durable bool
+	afterSoloRegister                      func(uint64)
 }
 
 const publicCommandWALFastRelaxedTicket = ^uint64(0)
@@ -89,7 +95,18 @@ func (tdb *DB) forcePublicCommandWALGroupCommit() error {
 }
 
 func (tdb *DB) appendAndRegisterPublicCommandWAL(bytes int, preparedBytes *int, durable bool, pendingBookkeeping, groupCommitWait *time.Duration, groupWaitObserved *bool, appendFrame func(sync bool) (uint64, error)) (publicCommandWALPublication, error) {
-	var publication publicCommandWALPublication
+	registration, err := tdb.registerPublicCommandWAL(bytes, preparedBytes, durable, pendingBookkeeping, appendFrame)
+	if err != nil {
+		return registration.publicCommandWALPublication, err
+	}
+	return tdb.awaitPublicCommandWAL(registration, groupCommitWait, groupWaitObserved)
+}
+
+// registerPublicCommandWAL appends/registers without awaiting another request's
+// durability or publication. COW calls it only after admission and installs its
+// complete cut before invoking awaitPublicCommandWAL.
+func (tdb *DB) registerPublicCommandWAL(bytes int, preparedBytes *int, durable bool, pendingBookkeeping *time.Duration, appendFrame func(sync bool) (uint64, error)) (publicCommandWALRegistration, error) {
+	var publication publicCommandWALRegistration
 	if tdb == nil || !tdb.commandWALCached || tdb.backend == nil || appendFrame == nil {
 		return publication, ErrClosed
 	}
@@ -164,26 +181,43 @@ func (tdb *DB) appendAndRegisterPublicCommandWAL(bytes int, preparedBytes *int, 
 		return publication, err
 	}
 	publication.ticket = ticket
-	if groupWaitObserved != nil {
-		*groupWaitObserved = true
+	publication.leader = leader
+	publication.awaiting = true
+	publication.observeWait = true
+	publication.durable = durable
+	return publication, nil
+}
+
+func (tdb *DB) awaitPublicCommandWAL(publication publicCommandWALRegistration, groupCommitWait *time.Duration, groupWaitObserved *bool) (publicCommandWALPublication, error) {
+	if !publication.awaiting {
+		return publication.publicCommandWALPublication, nil
 	}
-	if hook := tdb.commandWALGroupCommit.testAfterRegister; hook != nil {
-		hook(ticket, durable)
+	if publication.afterSoloRegister != nil {
+		publication.afterSoloRegister(publication.ticket)
+	}
+	if publication.observeWait {
+		if groupWaitObserved != nil {
+			*groupWaitObserved = true
+		}
+		if hook := tdb.commandWALGroupCommit.testAfterRegister; hook != nil {
+			hook(publication.ticket, publication.durable)
+		}
 	}
 	waitStart := time.Now()
-	ticket, err = tdb.commandWALGroupCommit.awaitRegistered(tdb, ticket, leader, false, true)
-	if groupCommitWait != nil {
+	ticket, err := tdb.commandWALGroupCommit.awaitRegistered(tdb, publication.ticket, publication.leader, false, publication.observeWait)
+	if groupCommitWait != nil && publication.observeWait {
 		*groupCommitWait += time.Since(waitStart)
 	}
 	publication.ticket = ticket
-	return publication, err
+	publication.awaiting = false
+	return publication.publicCommandWALPublication, err
 }
 
 func (tdb *DB) trySoloDurablePublicCommandWAL(
 	pendingBookkeeping *time.Duration,
 	appendFrame func(sync bool) (uint64, error),
-) (publicCommandWALPublication, bool, error) {
-	var publication publicCommandWALPublication
+) (publicCommandWALRegistration, bool, error) {
+	var publication publicCommandWALRegistration
 	group := &tdb.commandWALGroupCommit
 	if group.durableIntents.Load() != 1 {
 		return publication, false, nil
@@ -249,14 +283,10 @@ func (tdb *DB) trySoloDurablePublicCommandWAL(
 	if err != nil || ticket == 0 {
 		return publication, true, err
 	}
-	if afterSoloRegister != nil {
-		afterSoloRegister(ticket)
-	}
-
 	publication.ticket = ticket
-	ticket, err = group.awaitRegistered(tdb, ticket, false, false, false)
-	publication.ticket = ticket
-	return publication, true, err
+	publication.awaiting = true
+	publication.afterSoloRegister = afterSoloRegister
+	return publication, true, nil
 }
 
 func (group *publicCommandWALGroupCommit) soloDurableSyncEligibleLocked() bool {

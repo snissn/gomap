@@ -87,7 +87,12 @@ func (c *cowCache) installCOWBasis(basis *cowBackendBasis, covered *cowReadCut) 
 		lease.Close()
 		return nil, err
 	}
-	next := &cowReadCut{refs: 1, cache: c, lease: lease, basis: basis, shards: make([]cowTable, len(old.shards)), frozen: make([]cowTable, len(old.frozen)-n)}
+	if covered != nil {
+		basis.logicalSeq = covered.logicalSeq
+	} else {
+		basis.logicalSeq = old.logicalSeq
+	}
+	next := &cowReadCut{visibleCommandLSN: old.visibleCommandLSN, logicalSeq: old.logicalSeq, refs: 1, cache: c, lease: lease, basis: basis, shards: make([]cowTable, len(old.shards)), frozen: make([]cowTable, len(old.frozen)-n)}
 	basis.retain()
 	copy(next.shards, old.shards)
 	copy(next.frozen, old.frozen[n:])

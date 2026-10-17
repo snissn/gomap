@@ -242,7 +242,7 @@ func TestCOWBasisOwnedIteratorScrubsConsumedWrapperAliases(t *testing.T) {
 	}
 	defer c.close()
 	cache := &DB{backend: backend, cow: c, mutableShards: make([]memShard, 2), mutableShardMask: 1}
-	public, err := cache.cowIterator(nil, nil)
+	public, err := cache.cowIterator(nil, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}

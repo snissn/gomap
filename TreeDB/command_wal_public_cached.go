@@ -14,6 +14,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/mvccadmission"
+	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -473,9 +474,11 @@ var cowDeniedPublicBatch = commandWALPublicBatch{cowState: &commandWALPublicCOWS
 var cowClosedPublicBatch = commandWALPublicBatch{cowState: &commandWALPublicCOWState{batchError: ErrClosed}}
 
 type commandWALPublicCOWState struct {
-	lease      *memtable.COWExternalLease
-	batchError error
-	cow        bool
+	registration publicCommandWALRegistration
+	commandSync  bool
+	lease        *memtable.COWExternalLease
+	batchError   error
+	cow          bool
 }
 
 // The COW wrapper and state share one admitted allocation. Its interior
@@ -574,11 +577,16 @@ type commandWALPublicInnerStableViewValueLease interface {
 }
 
 func newCommandWALPublicBatch(tdb *DB, inner Batch, opHint int) *commandWALPublicBatch {
+	return newCommandWALPublicBatchWithCustody(tdb, inner, opHint, true)
+}
+func newCommandWALPublicBatchWithCustody(tdb *DB, inner Batch, opHint int, owned bool) *commandWALPublicBatch {
 	if tdb != nil && tdb.cached != nil && tdb.cached.COWMode() {
-		lease, err := tdb.cached.AcquireCOWAllocation(memtable.COWAllocationCharge(uint64(unsafe.Sizeof(commandWALPublicCOWOwner{}))))
+		lease, err := tdb.cached.AcquireCOWAllocation(memtable.COWAllocationCharge(uint64(unsafe.Sizeof(commandWALPublicCOWOwner{}))) + memtable.COWAllocationCharge(2*uint64(unsafe.Sizeof(uintptr(0)))))
 		if err != nil {
 			if inner != nil {
-				_ = inner.Close()
+				if owned {
+					_ = inner.Close()
+				}
 			}
 			if errors.Is(err, memtable.ErrCOWCapacity) {
 				return &cowDeniedPublicBatch
@@ -590,6 +598,13 @@ func newCommandWALPublicBatch(tdb *DB, inner Batch, opHint int) *commandWALPubli
 		owner := &commandWALPublicCOWOwner{batch: commandWALPublicBatch{db: tdb, inner: inner, payloadBypass: true}, state: commandWALPublicCOWState{cow: true, lease: lease}}
 		b := &owner.batch
 		b.cowState = &owner.state
+		if authorizer, ok := inner.(interface {
+			AuthorizeCOWAppend(*transactionowner.Owner) error
+		}); ok {
+			if err := authorizer.AuthorizeCOWAppend(tdb.txnOwner); err != nil {
+				b.cowState.batchError = err
+			}
+		}
 		b.disableInnerStreamingBypass()
 		b.rebindInnerViewers()
 		return b
@@ -1099,6 +1114,9 @@ func (b *commandWALPublicBatch) write(explicitSync, commandSync bool) (err error
 		}
 		defer b.db.lifecycleMu.RUnlock()
 	}
+	if b.isCOW() {
+		return b.writeCOW(explicitSync, commandSync)
+	}
 	if b.dirty {
 		leaseAttached := false
 		var writeErr error
@@ -1586,4 +1604,74 @@ func (b *commandWALPublicBatch) innerSetViewWithMVCCInput(key, value []byte, inp
 		}
 	}
 	return b.innerSetView(key, value)
+}
+
+// writeCOW enters cache admission before group registration. The canonical
+// append borrows the final no-drain guard until cut installation, then request
+// durability/publication waits happen after all cache and raw leases release.
+func (b *commandWALPublicBatch) writeCOW(explicitSync, commandSync bool) error {
+	if !b.dirty {
+		if explicitSync {
+			return b.db.syncPublicCommandWAL()
+		}
+		return b.inner.Write()
+	}
+	inner, ok := b.inner.(*caching.Batch)
+	if !ok {
+		return caching.ErrCOWUnsupported
+	}
+	b.cowState.commandSync = commandSync
+	defer func() { b.cowState.registration = publicCommandWALRegistration{} }()
+	err := inner.WriteAfterCommandWALAppendWithPreparedRevision(commandSync, b.registerCOWAppend)
+	publication := b.cowState.registration.publicCommandWALPublication
+	if err == nil {
+		publication, err = b.db.awaitPublicCommandWAL(b.cowState.registration, nil, nil)
+	}
+	b.db.finishPublicCommandWALGroupPublication(publication, err)
+	inner.CompleteCOWAcknowledgement(b.db.txnOwner, commandSync, err)
+	if err != nil {
+		return err
+	}
+	b.publishPointIngressStats()
+	b.opCount = 0
+	b.hasDeleteRange = false
+	b.dirty = false
+	b.resetPointIngressStats()
+	return nil
+}
+
+// The existing COW wrapper owns registration scratch through ACK. Named
+// callbacks avoid an escaping per-write registration cell and nested captures.
+func (b *commandWALPublicBatch) registerCOWAppend() error {
+	registration, err := b.db.registerPublicCommandWAL(b.opCount*64, nil, b.cowState.commandSync, nil, b.appendCOWFrame)
+	b.cowState.registration = registration
+	return err
+}
+func (b *commandWALPublicBatch) appendCOWFrame(appendSync bool) (uint64, error) {
+	inner := b.inner.(*caching.Batch)
+	if err := inner.AcquireCOWAppendGuard(b.db.txnOwner); err != nil {
+		return 0, err
+	}
+	lsn, err := b.db.backend.AppendPreparedRawKVUnderGuard(inner.COWAppendGuard(), b.assignCommandWALPointRevisions, b.commandWALFinalizer(), inner.Replay, b.opCount, publicRawKVCommandWALAppendMode(b.cowState.commandSync, appendSync))
+	if receiptErr := inner.RecordCOWAppend(b.db.txnOwner, lsn, err, appendSync); err == nil {
+		err = receiptErr
+	}
+	return lsn, err
+}
+
+// A transaction owns the inner batch through final acknowledgement. Releasing
+// its temporary public adapter must not release read/write arena aliases early.
+func (b *commandWALPublicBatch) closeCOWAdapter() {
+	if b == nil || b.cowState == nil || b == &cowDeniedPublicBatch || b == &cowClosedPublicBatch {
+		return
+	}
+	b.inner = nil
+	b.innerSetViewValidated = nil
+	b.innerSetViewer = nil
+	b.innerDeleteViewValidated = nil
+	b.innerDeleteViewer = nil
+	if b.cowState.lease != nil {
+		b.cowState.lease.Close()
+	}
+	b.closed = true
 }

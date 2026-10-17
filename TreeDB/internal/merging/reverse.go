@@ -2,8 +2,10 @@ package merging
 
 import (
 	"bytes"
+	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 type reverseHeapItem struct {
@@ -94,6 +96,24 @@ type ReverseMergingIterator struct {
 	err     error
 	start   []byte
 	end     []byte
+}
+
+// ReverseAllocationSizes and the fixed constructor mirror the forward COW
+// admission path: one wrapper plus a single source-bounded reusable heap.
+func ReverseAllocationSizes(sourceCount int) (wrapper, heap uint64) {
+	if sourceCount == 2 {
+		return uint64(unsafe.Sizeof(ReverseTwoWayMerger{})), 0
+	}
+	return uint64(unsafe.Sizeof(ReverseMergingIterator{})), uint64(sourceCount) * uint64(unsafe.Sizeof(reverseHeapItem{}))
+}
+func NewReverseMergingIteratorWithFixedHeap(sources []IteratorSource, start, end []byte) Iterator {
+	if len(sources) == 2 {
+		return NewReverseTwoWayMerger(sources[0].Iter, sources[1].Iter, start, end)
+	}
+	mi := &ReverseMergingIterator{sources: sources, h: make(reverseIteratorHeap, 0, len(sources)), start: start, end: end}
+	mi.rebuildHeap()
+	mi.advance()
+	return mi
 }
 
 func NewReverseMergingIterator(sources []IteratorSource, start, end []byte) Iterator {
@@ -271,6 +291,17 @@ func (mi *ReverseMergingIterator) Value() []byte {
 		mi.err = err
 	}
 	return value
+}
+
+func (mi *ReverseMergingIterator) UnsafeEntryWithRevision() ([]byte, page.ValuePtr, byte, page.EntryRevision) {
+	if !mi.valid || !mi.hasCur {
+		return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision
+	}
+	value, ptr, flags, revision := iterator.UnsafeEntryWithRevision(mi.cur.iter)
+	if err := mi.cur.iter.Error(); err != nil {
+		mi.err = err
+	}
+	return value, ptr, flags, revision
 }
 
 func (mi *ReverseMergingIterator) KeyCopy(dst []byte) []byte {
@@ -464,6 +495,17 @@ func (m *ReverseTwoWayMerger) Value() []byte {
 		m.err = err
 	}
 	return value
+}
+
+func (m *ReverseTwoWayMerger) UnsafeEntryWithRevision() ([]byte, page.ValuePtr, byte, page.EntryRevision) {
+	if !m.valid || m.cur == nil {
+		return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision
+	}
+	value, ptr, flags, revision := iterator.UnsafeEntryWithRevision(m.cur)
+	if err := m.cur.Error(); err != nil {
+		m.err = err
+	}
+	return value, ptr, flags, revision
 }
 
 func (m *ReverseTwoWayMerger) KeyCopy(dst []byte) []byte {

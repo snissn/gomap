@@ -3,6 +3,7 @@ package db
 import (
 	"errors"
 	"sync"
+	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/internal/commandwalbarrier"
 )
@@ -339,6 +340,25 @@ type commandWALStagingOwnershipV1 struct {
 	intent      *CommandWALIntent
 }
 
+// One fresh aggregate preserves shared copied-handle identity without three
+// separate wrapper/ownership/unlock allocations. It is never pooled or reused.
+type commandWALStagingGuardOwnerV1 struct {
+	guard     CommandWALStagingGuardV1
+	ownership commandWALStagingOwnershipV1
+}
+
+func newCommandWALStagingGuardV1(db *DB, unlock func()) *CommandWALStagingGuardV1 {
+	owner := &commandWALStagingGuardOwnerV1{ownership: commandWALStagingOwnershipV1{db: db, active: true, unlock: unlock}}
+	owner.guard.ownership = &owner.ownership
+	return &owner.guard
+}
+
+// CommandWALStagingGuardAllocationBytesV1 describes the concrete no-drain guard
+// allocation so its existing COW batch owner can admit it before final append.
+func CommandWALStagingGuardAllocationBytesV1() uint64 {
+	return uint64(unsafe.Sizeof(commandWALStagingGuardOwnerV1{}))
+}
+
 func (db *DB) LockCommandWALStagingGuardV1() (*CommandWALStagingGuardV1, error) {
 	if db == nil || !db.commandWAL {
 		return nil, ErrCommandWALUnsupported
@@ -353,7 +373,7 @@ func (db *DB) LockCommandWALStagingGuardV1() (*CommandWALStagingGuardV1, error) 
 		db.unlockCommandWALRawPublishWithTeardown()
 		return nil, ErrClosed
 	}
-	return &CommandWALStagingGuardV1{ownership: &commandWALStagingOwnershipV1{db: db, active: true, unlock: db.unlockCommandWALRawPublishWithTeardown}}, nil
+	return newCommandWALStagingGuardV1(db, nil), nil
 }
 
 // LockCommandWALStagingGuardWithBarriersV1 mints the same typed staging
@@ -367,7 +387,7 @@ func (db *DB) LockCommandWALStagingGuardWithBarriersV1() (*CommandWALStagingGuar
 	if err != nil {
 		return nil, err
 	}
-	return &CommandWALStagingGuardV1{ownership: &commandWALStagingOwnershipV1{db: db, active: true, unlock: unlock}}, nil
+	return newCommandWALStagingGuardV1(db, unlock), nil
 }
 
 // ValidateDBV1 verifies the actual live DB-minted guard before ownership transfer.
@@ -432,7 +452,11 @@ func (guard *CommandWALStagingGuardV1) Release() {
 		return
 	}
 	held.active = false
-	held.unlock()
+	if held.unlock != nil {
+		held.unlock()
+	} else {
+		held.db.unlockCommandWALRawPublishWithTeardown()
+	}
 }
 
 func (guard *CommandWALStagingGuardV1) validateCaptureBorrowLocked(db *DB, intent *CommandWALIntent) error {
