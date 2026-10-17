@@ -21,7 +21,7 @@ func (db *DB) refreshCOWBackendBasis() error {
 	if err != nil {
 		return err
 	}
-	old, err := db.cow.installCOWBasis(basis, nil)
+	old, err := db.installCOWBasis(basis, nil)
 	err = joinCOWCleanupError(err, basis.release())
 	if err != nil {
 		return err

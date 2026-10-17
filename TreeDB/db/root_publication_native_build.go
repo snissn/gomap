@@ -12,8 +12,15 @@ import (
 // Original native/group owners retain their own failure custody; these atomic
 // flags neither destroy resources nor invoke callbacks under build locks.
 func (group *RootPublicationBuildGroup) MarkNativeSemanticBuildRecoveryRequired() {
-	group.db.publicationPoisoned.Store(true)
-	group.db.MarkCommandWALRecoveryRequired()
+	group.db.MarkNativeSemanticRecoveryRequired()
+}
+
+// MarkNativeSemanticRecoveryRequired fences all publication on this original
+// backend after accepted native materialization or handoff failure. The original
+// sparse Work retains the exact failure resources and accounting authority.
+func (db *DB) MarkNativeSemanticRecoveryRequired() {
+	db.publicationPoisoned.Store(true)
+	db.MarkCommandWALRecoveryRequired()
 }
 
 // BuildNativeOrderedRoot builds a captured native projection within the SAME

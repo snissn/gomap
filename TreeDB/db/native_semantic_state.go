@@ -20,6 +20,15 @@ type NativeSemanticBuildRetryableRefusal struct{ Cause error }
 func (e NativeSemanticBuildRetryableRefusal) Error() string { return e.Cause.Error() }
 func (e NativeSemanticBuildRetryableRefusal) Unwrap() error { return e.Cause }
 
+// NativeSemanticHandoffRetryableRefusal proves the FIRST PrepareHandoff call
+// refused before changing its original handoff ledger or allocating anything.
+// A second-call refusal is terminal because the first successor already exists.
+// This value classifies the original error; it owns no resource or failure debt.
+type NativeSemanticHandoffRetryableRefusal struct{ Cause error }
+
+func (e NativeSemanticHandoffRetryableRefusal) Error() string { return e.Cause.Error() }
+func (e NativeSemanticHandoffRetryableRefusal) Unwrap() error { return e.Cause }
+
 // NativeSemanticState is a native immutable semantic/catalog root set paired
 // with the SAME raw COW cut and exact backend Snapshot. Implementations belong
 // to higher-level packages; db/caching never import their implementation.
@@ -45,7 +54,10 @@ type NativeSemanticState interface {
 	// PrepareHandoff prepares a successor against latest logical state using
 	// only captured-T touched domains. Distinct suffix-domain headers/sequence
 	// survive, and the exact accepted snapshot remains the physical basis.
-	// All fallible allocation precedes the logical installation latch.
+	// All fallible allocation precedes the logical installation latch. Default
+	// failure is terminal and parks the SAME original partial handoff ledger;
+	// only a first-call NativeSemanticHandoffRetryableRefusal permits retry.
+	// Error returns no state edge; partial resources already belong to Work.
 	PrepareHandoff(latest NativeSemanticState, accepted *Snapshot) (NativeSemanticState, error)
 }
 

@@ -25,6 +25,7 @@ type cowFlushHandoff struct {
 	accepted bool
 	prefix   rootpublication.AcceptedCut
 	seal     rootpublication.PhysicalSealReceipt
+	failure  error
 }
 
 func (c *cowCache) captureBackendBasis(provider backendSnapshotProvider) (*cowBackendBasis, error) {
@@ -78,7 +79,8 @@ func (c *cowCache) prepareCOWBasisInstall() (*cowReadCut, error) {
 		domains: make([]rootDomainSnapshot, shards)}, nil
 }
 
-func (c *cowCache) installCOWBasis(basis *cowBackendBasis, covered *cowReadCut) (*cowReadCut, error) {
+func (db *DB) installCOWBasis(basis *cowBackendBasis, covered *cowReadCut) (*cowReadCut, error) {
+	c := db.cow
 	next, err := c.prepareCOWBasisInstall()
 	if err != nil {
 		return nil, err
@@ -89,7 +91,7 @@ func (c *cowCache) installCOWBasis(basis *cowBackendBasis, covered *cowReadCut) 
 		refund.Close()
 		return nil, err
 	}
-	old, err := c.installPreparedCOWBasis(basis, covered, next)
+	old, _, err := db.installPreparedCOWBasis(basis, covered, next)
 	if err != nil {
 		refund := c.releasePrivateCOWBasisInstall(next)
 		next = nil
@@ -112,27 +114,28 @@ func (c *cowCache) releasePrivateCOWBasisInstall(next *cowReadCut) *memtable.COW
 	return refund
 }
 
-func (c *cowCache) installPreparedCOWBasis(basis *cowBackendBasis, covered, next *cowReadCut) (*cowReadCut, error) {
+func (db *DB) installPreparedCOWBasis(basis *cowBackendBasis, covered, next *cowReadCut) (*cowReadCut, bool, error) {
+	c := db.cow
 	c.writerMu.Lock()
 	defer c.writerMu.Unlock()
 	old := c.cut
 	if old == nil {
-		return nil, backenddb.ErrClosed
+		return nil, false, backenddb.ErrClosed
 	}
 	n := 0
 	if covered != nil {
 		n = len(covered.frozen)
 		if old.basis != covered.basis || len(old.frozen) < n {
-			return nil, backenddb.ErrRootPublicationBasisMismatch
+			return nil, false, backenddb.ErrRootPublicationBasisMismatch
 		}
 		for i := 0; i < n; i++ {
 			if old.frozen[i].root != covered.frozen[i].root {
-				return nil, backenddb.ErrRootPublicationBasisMismatch
+				return nil, false, backenddb.ErrRootPublicationBasisMismatch
 			}
 		}
 	}
 	if next == nil || basis == nil || basis.snapshot == nil || len(old.frozen)-n > cap(next.frozen) || len(old.shards) != len(next.shards) {
-		return nil, backenddb.ErrRootPublicationBasisMismatch
+		return nil, false, backenddb.ErrRootPublicationBasisMismatch
 	}
 	if covered != nil {
 		basis.logicalSeq = covered.frozenLogicalSeq
@@ -152,7 +155,15 @@ func (c *cowCache) installPreparedCOWBasis(basis *cowBackendBasis, covered, next
 	if captured != nil {
 		state, err := captured.PrepareHandoff(old.semanticRootSet, basis.snapshot)
 		if err != nil {
-			return nil, err
+			_, retryable := err.(backenddb.NativeSemanticHandoffRetryableRefusal)
+			if !retryable {
+				db.poisonNativeHandoff(err)
+			}
+			return nil, !retryable, err
+		}
+		if state == nil {
+			db.poisonNativeHandoff(rootpublication.ErrPublisherProtocol)
+			return nil, true, rootpublication.ErrPublisherProtocol
 		}
 		next.semanticRootSet = state
 		if old.frozenSemanticRootSet == old.semanticRootSet {
@@ -163,8 +174,14 @@ func (c *cowCache) installPreparedCOWBasis(basis *cowBackendBasis, covered, next
 		} else if old.frozenSemanticRootSet != nil {
 			frozen, err := captured.PrepareHandoff(old.frozenSemanticRootSet, basis.snapshot)
 			if err != nil {
+				db.poisonNativeHandoff(err)
 				c.releasePrivateSemanticState(next)
-				return nil, err
+				return nil, true, err
+			}
+			if frozen == nil {
+				db.poisonNativeHandoff(rootpublication.ErrPublisherProtocol)
+				c.releasePrivateSemanticState(next)
+				return nil, true, rootpublication.ErrPublisherProtocol
 			}
 			next.frozenSemanticRootSet = frozen
 		}
@@ -195,9 +212,16 @@ func (c *cowCache) installPreparedCOWBasis(basis *cowBackendBasis, covered, next
 	last := old.refs == 0
 	c.cutMu.Unlock()
 	if last {
-		return old, nil
+		return old, false, nil
 	}
-	return nil, nil
+	return nil, false, nil
+}
+
+func (db *DB) poisonNativeHandoff(err error) {
+	db.cow.prefix.PoisonAccepted(err)
+	if marker, ok := db.backend.(interface{ MarkNativeSemanticRecoveryRequired() }); ok {
+		marker.MarkNativeSemanticRecoveryRequired()
+	}
 }
 
 func (db *DB) completeCOWHandoff() error {
@@ -206,10 +230,16 @@ func (db *DB) completeCOWHandoff() error {
 	if h == nil {
 		return nil
 	}
+	if h.failure != nil {
+		return h.failure
+	}
 	// The preaccept receipt owns this exact generation even when backend state
 	// has advanced or capture admission is now exhausted. Retry only this swap.
-	old, err := c.installPreparedCOWBasis(h.basis, h.cut, h.next)
+	old, terminal, err := db.installPreparedCOWBasis(h.basis, h.cut, h.next)
 	if err != nil {
+		if terminal {
+			h.failure = err // same admitted handoff; never replay either preparation
+		}
 		return err
 	}
 	if h.prefix.Valid() {
@@ -446,7 +476,7 @@ func (db *DB) flushCOWFrozenCut(syncFlush bool, publish *checkpointCommandWALPub
 func (h *cowFlushHandoff) release(c *cowCache) (*memtable.COWExternalLease, error) {
 	basis, next, cut, guard, refund := h.basis, h.next, h.cut, h.guard, h.lease
 	h.basis, h.next, h.cut, h.guard, h.lease = nil, nil, nil, nil, nil
-	h.prefix, h.seal = rootpublication.AcceptedCut{}, rootpublication.PhysicalSealReceipt{}
+	h.prefix, h.seal, h.failure = rootpublication.AcceptedCut{}, rootpublication.PhysicalSealReceipt{}, nil
 	nextRefund := c.releasePrivateCOWBasisInstall(next)
 	next = nil
 	nextRefund.Close()
