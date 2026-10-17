@@ -1135,7 +1135,13 @@ func openResolved(opts Options) (*DB, error) {
 	txnOwner := transactionowner.New()
 	if opts.MemtableMode == "cow_btree" {
 		if err := backend.BindPrivateCOWOwner(txnOwner); err != nil {
-			backend.Close()
+			_ = backend.Close()
+			if dictBackend != nil {
+				_ = dictBackend.Close()
+			}
+			if templateDB != nil {
+				_ = templateDB.Close()
+			}
 			return nil, err
 		}
 	}

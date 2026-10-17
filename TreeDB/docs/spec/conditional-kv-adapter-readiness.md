@@ -26,8 +26,8 @@ Downstream adapters should use TreeDB's native APIs directly:
 
 | Class | Behavior |
 | --- | --- |
-| TreeDB native supported | Raw KV `Get`/`Set`/`Delete`/batch operations; versioned entry reads; backend conditional transactions; public cached conditional transactions when public command WAL is not enabled; backend command-WAL accepted conditional commits with deterministic raw-KV payloads and explicit entry revisions; public command-WAL ordinary raw KV writes with revision-preserving reopen. |
-| TreeDB native fail-closed | Public cached command-WAL conditional transactions return `ErrConditionalTxnUnsupported` on legacy mutable caches; qualified public COW transactions use canonical raw command frames; public command-WAL `Update`/`UpdateSync` return `ErrCommandWALRejected`; unsupported conditional range guards must fail closed rather than under-detect conflicts. |
+| TreeDB native supported | Raw KV `Get`/`Set`/`Delete`/batch operations; versioned entry reads; backend conditional transactions; public cached conditional transactions when public command WAL is not enabled; backend command-WAL accepted conditional commits with deterministic raw-KV payloads and explicit entry revisions; public command-WAL ordinary raw KV writes with revision-preserving reopen; qualified public COW conditional transactions with canonical raw command frames. |
+| TreeDB native fail-closed | Public cached command-WAL conditional transactions return `ErrConditionalTxnUnsupported` on legacy mutable caches; public command-WAL `Update`/`UpdateSync` return `ErrCommandWALRejected`; unsupported conditional range guards must fail closed rather than under-detect conflicts. |
 | Adapter-level hard error | Badger-style encryption and in-memory-only mode are rejected by `TreeDB/integration/kvstoreadapter.OpenConfig` before opening a DB directory, using `ErrUnsupportedAdapterFeature`. |
 | Explicitly out of scope | Full Badger API parity, managed timestamps, sequences, TTL, user meta, stream APIs, a full NornicDB adapter, and a distributed Raft implementation. |
 
@@ -44,8 +44,8 @@ The public cached command-WAL wrapper supports qualified public COW conditional
 transactions as specified in [raw-cow-transactions.md](raw-cow-transactions.md).
 Conditional transactions intentionally fail closed on legacy mutable caches.
 That keeps downstream adapters from observing a mixed pending-memtable/backend
-transaction contract before accepted conditional command frames exist for the
-public cached path.
+transaction contract on legacy mutable caches, which do not yet have accepted conditional
+command frames.
 
 ## Verification
 

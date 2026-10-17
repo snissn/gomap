@@ -1292,6 +1292,9 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 			opts.publishTiming.FinalizeHardAdmissionCount++
 		}
 	}
+	if hook := db.testAfterDurableRootVisibleInstallHook; hook != nil {
+		hook()
+	}
 	reportErr := install.completeOrderedPostActivation()
 	post = install.post
 	post.accepted = true

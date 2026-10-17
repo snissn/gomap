@@ -67,22 +67,22 @@ def main():
         for profile in ['command_wal_durable', 'command_wal_relaxed', 'no_wal_fast']
         for shape in ['Point1', 'Point10', 'Scan', 'ReverseScan', 'ScanNewer2048', 'ReverseScanNewer2048']
         for history in [0, 2048] if history == 0 or not shape.endswith('Newer2048')])
+    if args.binary and not args.binary_manifest:
+        parser.error('--binary requires --binary-manifest with binary_sha256 and sources')
     root = Path(__file__).resolve().parent.parent
     out = args.out.resolve()
-    out.mkdir(parents=True, exist_ok=False)
     binary = args.binary.resolve() if args.binary else out / 'treedb.test'
     source_hashes = runtime_sources(root)
+    provenance = None
+    if args.binary:
+        provenance = json.loads(args.binary_manifest.read_text())
+        if provenance.get('binary_sha256') != sha(binary) or provenance.get('sources') != source_hashes:
+            parser.error('external binary manifest does not match binary and current source/harness hashes')
+    out.mkdir(parents=True, exist_ok=False)
     if not args.binary:
         subprocess.run(['go', 'test', '-buildvcs=false', '-c', '-o', str(binary), './TreeDB'], cwd=root, check=True)
         if runtime_sources(root) != source_hashes:
             raise SystemExit('runtime source changed during build; no samples captured')
-    provenance = None
-    if args.binary:
-        if not args.binary_manifest:
-            parser.error('--binary requires --binary-manifest with binary_sha256 and sources')
-        provenance = json.loads(args.binary_manifest.read_text())
-        if provenance.get('binary_sha256') != sha(binary) or provenance.get('sources') != source_hashes:
-            parser.error('external binary manifest does not match binary and current source/harness hashes')
     manifest = {
         'head': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip(),
         'go': subprocess.check_output(['go', 'version'], cwd=root, text=True).strip(),

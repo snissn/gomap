@@ -131,6 +131,88 @@ func TestHistoryInlinePointCustodySurvivesCancelWrapAndCallerReuse(t *testing.T)
 	}
 }
 
+func TestHistoryRefusedOrCanceledPreparationPreservesAcceptedHistory(t *testing.T) {
+	for _, capacity := range []string{"slots", "bytes"} {
+		for _, refusal := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/refusal=%t", capacity, refusal), func(t *testing.T) {
+				limit, accepted := uint64(1<<20), 8
+				if capacity == "bytes" {
+					limit, accepted = 1024, 2
+				}
+				denied := errors.New("history staging admission refused")
+				deny := false
+				var leases []*countedHistoryLease
+				j, err := New(8, limit, func(a, b, c, d, e uint64) (Lease, error) {
+					if deny {
+						return nil, denied
+					}
+					lease := new(countedHistoryLease)
+					leases = append(leases, lease)
+					return lease, nil
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer j.Close()
+				keys := make([][]byte, accepted)
+				for i := range keys {
+					keys[i] = bytes.Repeat([]byte{byte('a' + i)}, 64)
+					p, err := j.Prepare([]batch.Entry{{Key: keys[i]}}, nil, false)
+					if err != nil || !j.Install(p, uint64(i+1)) {
+						t.Fatalf("seed history %d: %v", i, err)
+					}
+				}
+				count, used, floor := j.State()
+				if floor != 0 {
+					t.Fatalf("fixture already expired: %d", floor)
+				}
+				deny = refusal
+				key := []byte("private inline key")
+				if refusal || capacity == "bytes" {
+					key = bytes.Repeat([]byte("z"), 64)
+				}
+				p, err := j.Prepare([]batch.Entry{{Key: key}}, nil, false)
+				if refusal {
+					if !errors.Is(err, denied) || p.Valid() {
+						t.Fatalf("refused preparation=%+v err=%v", p, err)
+					}
+				} else if err != nil || !p.Valid() {
+					t.Fatalf("cancellable preparation=%+v err=%v", p, err)
+				}
+				for _, beforeCancel := range []bool{true, false} {
+					if !beforeCancel {
+						p.Cancel()
+					}
+					if n, b, f := j.State(); n != count || b != used || f != floor {
+						t.Fatalf("unaccepted preparation changed history: %d/%d/%d want %d/%d/%d", n, b, f, count, used, floor)
+					}
+					if err := j.Check(0); err != nil {
+						t.Fatalf("unaccepted preparation expired existing reader: %v", err)
+					}
+					for _, key := range keys {
+						if !j.PointChanged(0, key) {
+							t.Fatalf("accepted conflict evidence lost for %q", key)
+						}
+					}
+					for _, lease := range leases[:accepted+1] {
+						if lease.closes != 0 {
+							t.Fatal("unaccepted preparation released accepted custody")
+						}
+					}
+				}
+				deny = false
+				p, err = j.Prepare([]batch.Entry{{Key: key}}, nil, false)
+				if err != nil || !j.Install(p, uint64(accepted+1)) {
+					t.Fatalf("accepted replacement: %v", err)
+				}
+				if !errors.Is(j.Check(0), ErrTooOld) {
+					t.Fatal("accepted replacement did not advance bounded-history floor")
+				}
+			})
+		}
+	}
+}
+
 func TestHistoryBarrierReasonsOnlyAdvanceOnInstall(t *testing.T) {
 	j, _ := New(8, 4096, nil)
 	defer j.Close()

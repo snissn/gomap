@@ -586,6 +586,7 @@ type DB struct {
 	testBeforeFinalizeCommitHook                   func()
 	testAfterFinalizeRootSerializationReleaseHook  func()
 	testDurableRootCandidatePreparedHook           func()
+	testAfterDurableRootVisibleInstallHook         func()
 	testRootPublicationDependencyBytes             atomic.Uint64
 	testScanCandidateExternalReferencesHook        func()
 	testCheckpointAfterPoisonPreflightHook         func()

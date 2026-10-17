@@ -68,10 +68,13 @@ range effects are relevant. Backend and legacy-cache compatibility wrappers use
 this same history implementation rather than active-start maps or full-map
 minimum pruning.
 
-Singleton point keys of at most 32 bytes use backing embedded in their original
-FIFO slot. The larger fixed ring is charged at construction; the slot is reused
-only after its record and matching index alias retire. Long keys, bulk commands
-and native ranges retain the existing immutable arena and final-slot lease.
+Singleton point keys of at most 32 bytes use one private preparation buffer,
+then copy into their accepted FIFO slot. Both fixed backings are charged at
+construction; the slot is reused only after its record and matching index alias
+retire. Long keys, bulk commands and native ranges retain the existing immutable
+arena and final-slot lease. Refused or canceled preparation preserves the accepted
+history, its floor and its original leases. Eviction happens only at accepted
+installation, after validation against the still-complete retained history.
 
 Every accepted logical producer advances the clock, even with no transactions
 open. Equivalent rollover, checkpoint and maintenance handoff preserve the
@@ -94,8 +97,8 @@ holding the raw staging guard during capture. Commit still performs its normal
 drain and requested durability boundary. A producer that refills after opening
 may legitimately cause a later conflict; the opening sequence is never rebased.
 
-The existing COW writer lease spans final reserve/evict/validation, canonical
-append and complete cut/journal installation. The backend append primitive
+The existing COW writer lease spans private reservation, final validation,
+canonical append, then eviction and complete cut/journal installation. The backend append primitive
 borrows the caller's actual staging/teardown guard and neither drains
 nor releases it. Owner/barrier readiness preflight occurs before cache admission;
 final no-drain guard acquisition occurs inside group append after cache admission
@@ -134,8 +137,10 @@ Cancellation consumes the reservation under the writer lease before releasing
 shared staging; independent cut/resource retirement then runs outside that lease.
 Keys outside the short-singleton path use one command-owned backing allocation;
 the command's final physical FIFO slot owns its capacity and admission lease until every
-preceding fragment evicts. Reserve-before-validation makes that final slot
-unique among retained commands, so it also identifies binary-search chunks.
+preceding fragment evicts. Accepted installation retires enough old records
+before reusing that final slot, making it unique among retained commands and a
+valid identifier for binary-search chunks. Pending key storage is separately
+admitted before validation; capacity refusal never discards accepted history.
 There is no per-command prepared/effect owner allocation or generic pool.
 Each concrete fixed backing, callback environment and dynamic key allocation is
 independently conservatively charged; a fixed five-size callback avoids variadic

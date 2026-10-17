@@ -72,6 +72,10 @@ type preparation struct {
 	bytes   uint64
 	lease   Lease
 	token   uint64
+	inline  bool
+	// One private singleton staging buffer preserves accepted slot/index bytes
+	// until Install. It belongs to the already admitted History allocation.
+	inlineKey [32]byte
 }
 type History struct {
 	records                                      []mutation
@@ -210,9 +214,6 @@ func (j *History) Prepare(entries []batch.Entry, ranges []batch.DeleteRange, bar
 	if charge > j.maxBytes {
 		return Prepared{}, errors.New("treedb: transaction history capacity exhausted")
 	}
-	for j.count > 0 && (j.count+n > len(j.records) || j.bytes+charge > j.maxBytes) {
-		j.Evict()
-	}
 	var lease Lease
 	var err error
 	// Descriptor/ring capacity was admitted once. Only fresh immutable key
@@ -224,16 +225,13 @@ func (j *History) Prepare(entries []batch.Entry, ranges []batch.DeleteRange, bar
 			return Prepared{}, err
 		}
 	}
-	j.pending = preparation{effects: j.staging[:0], bytes: charge, lease: lease}
+	j.pending = preparation{effects: j.staging[:0], bytes: charge, lease: lease, inline: inline}
 	if barrier {
 		j.pending.effects = append(j.pending.effects, effect{barrier: true, barrierReason: reason})
 	} else {
 		var arena []byte
 		if inline {
-			// Prepare already evicted enough records, so this slot is vacant.
-			// Its backing stays at the same address through Install or Cancel.
-			slot := (j.head + j.count) % len(j.records)
-			arena = j.records[slot].inlineKey[:keyBytes]
+			arena = j.pending.inlineKey[:keyBytes]
 		} else {
 			arena = make([]byte, keyBytes)
 		}
@@ -297,14 +295,26 @@ func (j *History) Install(p Prepared, seq uint64) bool {
 	if p.history != j || !p.Valid() {
 		return false
 	}
+	// Preparation owns all new backing before final validation, but cannot
+	// expire another transaction or discard accepted evidence. Only an accepted
+	// installation retires old records. Callers keep writer exclusion here and
+	// invoke Install outside the view-install latch; lease release may lock.
+	for j.count > 0 && (j.count+len(j.pending.effects) > len(j.records) || j.bytes > j.maxBytes-j.pending.bytes) {
+		j.Evict()
+	}
 	end := (j.head + j.count + len(j.pending.effects) - 1) % len(j.records)
 	j.bytes += j.pending.bytes
 	for _, e := range j.pending.effects {
 		slot := (j.head + j.count) % len(j.records)
 		record := &j.records[slot]
-		// e.key may point into this exact slot's inline backing. Preserve it
-		// while replacing the header; never redirect it to a local copy.
-		*record = mutation{effect: e, seq: seq, chunkEnd: end, inlineKey: record.inlineKey}
+		*record = mutation{effect: e, seq: seq, chunkEnd: end}
+		if j.pending.inline {
+			copy(record.inlineKey[:], e.key)
+			if len(e.key) != 0 {
+				e.key = unsafe.String(&record.inlineKey[0], len(e.key))
+			}
+			record.key = e.key
+		}
 		j.count++
 		if e.barrier {
 			j.barrierSeq = seq

@@ -32200,7 +32200,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.range_span.spans_flushed_total"] = fmt.Sprintf("%d", db.rangeSpanSpansFlushed.Load())
 	stats["treedb.cache.range_span.flush_batches_total"] = fmt.Sprintf("%d", db.rangeSpanFlushBatches.Load())
 	db.conditionalOracle.mu.Lock()
-	conditionalActiveRecords := 0
+	conditionalActiveRecords, _, _ := db.conditionalOracle.history.State()
 	conditionalRetainedPoints, conditionalRetainedRanges, conditionalRootConflictActive := db.conditionalOracle.history.Counts()
 	conditionalBarriers := db.conditionalOracle.history.BarrierStats()
 	db.conditionalOracle.mu.Unlock()

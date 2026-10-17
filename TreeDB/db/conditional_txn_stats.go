@@ -8,7 +8,7 @@ func (db *DB) appendConditionalTxnStats(stats map[string]string) {
 	}
 
 	db.conditionalOracle.mu.Lock()
-	activeRecords := 0
+	activeRecords, _, _ := db.conditionalOracle.history.State()
 	retainedPoints, retainedRanges, rootConflictActive := db.conditionalOracle.history.Counts()
 	barriers := db.conditionalOracle.history.BarrierStats()
 	db.conditionalOracle.mu.Unlock()

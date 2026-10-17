@@ -423,6 +423,9 @@ func TestConditionalTxnStatsExposeBoundedHistory(t *testing.T) {
 		t.Fatalf("concurrent guard write: %v", err)
 	}
 	stats = d.Stats()
+	if got := stats["treedb.conditional_oracle.active_records"]; got != "2" {
+		t.Fatalf("retained record stats=%q, want 2", got)
+	}
 	if got := stats["treedb.conditional_oracle.retained_points"]; got != "1" {
 		t.Fatalf("retained point stats=%q, want 1", got)
 	}
@@ -451,6 +454,9 @@ func TestConditionalTxnStatsExposeBoundedHistory(t *testing.T) {
 	}
 	if got := stats["treedb.conditional_txn.read_set.max"]; got != "1" {
 		t.Fatalf("read-set max stats=%q, want 1", got)
+	}
+	if got := stats["treedb.conditional_oracle.active_records"]; got != "2" {
+		t.Fatalf("retained record stats=%q, want 2", got)
 	}
 	if got := stats["treedb.conditional_oracle.retained_points"]; got != "1" {
 		t.Fatalf("bounded history must outlive transaction cleanup: retained=%q, want 1", got)
