@@ -118,11 +118,17 @@ possible successors. It includes the complete private successor ledger, three
 global map builders, two map builders per touched collection, each touched
 domain/collection descriptor, source-position and scratch capacities bounded by
 the original finite source limit, and every independent allocation receipt.
-Directory builders use the existing maintained map admission formula, with a
-maximum representable height to cover later catalog growth. This conservative
-height bound remains a sizing concern for large touched sets; required default
-capacity/progress controls and a tighter source-bound item ceiling remain open
-before activation. No configured capacity is increased to conceal this cost.
+Directory builders use the existing maintained map admission formula. Their
+item ceiling follows the original governing `MaxTotalBytes` divided by the
+concrete map-pair size: each logical directory item occupies an actual node
+backing slot, and the original node cohort remains charged until its last edge.
+This remains valid with aliased descriptor values and empty names. The
+maintenance child is included through its original parent reservation, never
+added as separate capacity. Captured mutation counts are added to that item
+ceiling to match the maintained builder's conservative height formula. The
+maximum representable height helper remains available as a conservative bound.
+Default whole-prefix progress controls and producer eligibility remain required
+before activation; no configured capacity is increased to conceal this cost.
 
 `COWExternalLease.SplitNativeBytes` transfers already admitted bytes from the
 same original held build reservation into independent child receipts. It uses
@@ -132,6 +138,33 @@ byte counter, and checks the finite receipt-count bound. A child has no parent,
 Work, state or resource pointer. Existing promised capacity remains usable after
 fresh maintenance admission closes. An insufficient accepted promise is a
 terminal original-ledger error, not a reason to acquire replacement capacity.
+
+### Bounded physical domain construction
+
+The private `nativeDomainBuild` owns one exact immutable domain descriptor,
+bounded captured-source pointer scratch and a fresh 256-entry batch. All scratch
+is admitted before allocation from original maintenance capacity. It applies
+captured sources from oldest to newest, followed by the captured active root,
+through the existing `RootPublicationBuildGroup.BuildNativeOrderedRoot` method.
+Replacements, deletions and entry revisions follow that order. No current
+catalog or engine ancestor is retained or sampled.
+
+`COWRoot.ScanOwned` traverses under the existing descriptor/source edge; it
+admits no additional cursor or view, including after budget Close. Batch bytes
+borrow immutable generation strings through each synchronous apply and are
+cleared before the next apply. Pointer batches also record the original file
+IDs for the group's existing pin path, flushing before a fifth distinct file
+would allocate a batch file map. Exact pointer/dictionary and typed asset
+closures still have to accompany the complete build before producer activation.
+
+`batch.NewOwnedBounded` uses exact fresh backing with terminal unpooled cleanup.
+Close clears the complete entry backing and arena headers and detaches callbacks
+and readers. The original native build worker must detach this batch before
+completing its original containing receipt; no sync.Pool keeps refunded native
+backing alive. A materialization failure is sticky on the same original domain
+build, keeps its descriptor, last successful private root identity and charge,
+and prevents a second build attempt or destructor retry. Integration into the
+complete engine build/resource ledger remains an activation gate.
 
 Construction controls exercise latest and captured successors after exact
 producer exhaustion and maintenance admission Close, then prove independent

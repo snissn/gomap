@@ -175,12 +175,40 @@ func NewOwnedMapBuilder[K ordered, V any](base *OwnedMap[K, V], mutations int, l
 }
 
 // OwnedMapBuilderMaximumCharge bounds a sparse builder against any later
-// degree-32 directory size representable by this process. Native physical
-// handoff reserves this finite maintenance capacity before acceptance, while
-// later suffix writes may grow the latest directory. It uses exactly the same
+// degree-32 directory size representable by this process, when no narrower
+// original charged-byte bound is available. It uses exactly the same
 // node/cohort formula as NewOwnedMapBuilder; it allocates or retains nothing.
 func OwnedMapBuilderMaximumCharge[K ordered, V any](mutations int) (uint64, error) {
 	return ownedMapBuilderCharge[K, V](int(^uint(0)>>1), 63, mutations)
+}
+
+// OwnedMapBuilderBudgetCharge bounds a later degree-32 builder from the SAME
+// governing charged-byte ceiling for directories built only by NewOwnedMapBuilder.
+// Every item occupies one mapPair slot in a
+// source-owned node backing array; structural sharing never duplicates a node
+// position within one tree. Original cohorts retain their charge until their
+// last actual node/header edge. Thus even aliased values and empty strings
+// cannot create more live directory items than totalBytes/sizeof(mapPair).
+//
+// totalBytes includes the original maintenance parent reservation, rather than
+// adding its child capacity a second time. This covers later catalog growth
+// without relying on a separate descriptor per logical name or a future budget
+// admission. Mutations are added because the maintained builder's conservative
+// height formula includes count+mutations even for replacement-only changes.
+func OwnedMapBuilderBudgetCharge[K ordered, V any](totalBytes uint64, mutations int) (uint64, error) {
+	if mutations < 0 {
+		return 0, ErrOwnedMap
+	}
+	itemBytes := uint64(unsafe.Sizeof(mapPair[K, V]{}))
+	if itemBytes == 0 {
+		return 0, ErrOwnedMap
+	}
+	count := totalBytes / itemBytes
+	maximum := uint64(int(^uint(0) >> 1))
+	if count > maximum || uint64(mutations) > maximum-count {
+		return 0, ErrOwnedMap
+	}
+	return ownedMapBuilderCharge[K, V](int(count)+mutations, 63, mutations)
 }
 
 func ownedMapBuilderCharge[K ordered, V any](maxItems, degreeMax, mutations int) (uint64, error) {

@@ -98,6 +98,7 @@ type batchPoolKind uint8
 const (
 	batchPoolKindDefault batchPoolKind = iota
 	batchPoolKindLargeEntries
+	batchPoolKindOwned
 )
 
 const (
@@ -151,6 +152,16 @@ func NewBoundedRetainingLargeEntries(reader ValueReader, threshold, entries int)
 		sorted:          true,
 		compacted:       true,
 	}
+}
+
+// NewOwnedBounded allocates the exact entry capacity owned by an enclosing
+// admitted operation. Close clears borrowed aliases and drops its backing;
+// neither the batch nor its buffers enter a pool. The owner must bound appends
+// and account for any additional storage its chosen operations allocate.
+func NewOwnedBounded(reader ValueReader, threshold, entries int) *Batch {
+	b := NewBoundedRetainingLargeEntries(reader, threshold, entries)
+	b.poolKind = batchPoolKindOwned
+	return b
 }
 
 // Acquire returns a reusable Batch from the pool.
@@ -300,15 +311,24 @@ func (b *Batch) resetArenaLocked() {
 	b.arenaChunks = b.arenaChunks[:1]
 }
 
-// Close returns the batch to the pool.
+// Close clears the batch and returns pooled batches to their pool. Owned
+// batches instead detach all borrowed aliases and drop their admitted backing.
 func (b *Batch) Close() error {
 	Release(b)
 	return nil
 }
 
-// Release resets and returns the batch to the pool.
+// Release closes an owned batch or resets and returns a pooled batch.
 func Release(b *Batch) {
 	if b == nil {
+		return
+	}
+	if b.poolKind == batchPoolKindOwned {
+		// Clear all borrowed aliases before the enclosing operation can refund
+		// its original backing reservation, including tails after compaction.
+		clear(b.entries[:cap(b.entries)])
+		clear(b.arenaChunks[:cap(b.arenaChunks)])
+		*b = Batch{poolKind: batchPoolKindOwned, closed: true}
 		return
 	}
 	b.resetForPool()

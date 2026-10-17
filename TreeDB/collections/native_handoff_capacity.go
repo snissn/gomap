@@ -11,7 +11,7 @@ import (
 // nativeHandoffCapacity bounds BOTH complete successors requested by the lower
 // handoff: latest logical state and, when distinct, the original frozen state.
 // Only captured touched collections/domains contribute mutations. Later catalog
-// growth is covered by the maintained tree's maximum representable height;
+// growth is covered by the maintained tree's finite governing byte ceiling;
 // newer source positions are bounded by the SAME original source limit.
 //
 // The returned bytes must be reserved before physical acceptance, separately
@@ -21,7 +21,8 @@ func nativeHandoffCapacity(captured *nativeEngineVersion) (bytes uint64, collect
 	if captured == nil || captured.pending == nil || captured.allocator == nil {
 		return 0, 0, 0, backenddb.ErrNativeSemanticUnsupported
 	}
-	maxSources := captured.allocator.Limits().MaxSources
+	limits := captured.allocator.Limits()
+	maxSources := limits.MaxSources
 	if maxSources <= 0 {
 		return 0, 0, 0, memtable.ErrCOWCapacity
 	}
@@ -46,7 +47,7 @@ func nativeHandoffCapacity(captured *nativeEngineVersion) (bytes uint64, collect
 		}
 		collections++
 		domains += touched
-		charge, e := cowbtree.OwnedMapBuilderMaximumCharge[string, *nativeDomainState](touched)
+		charge, e := cowbtree.OwnedMapBuilderBudgetCharge[string, *nativeDomainState](limits.MaxTotalBytes, touched)
 		if e != nil {
 			err = e
 			return false
@@ -94,11 +95,11 @@ func nativeHandoffCapacity(captured *nativeEngineVersion) (bytes uint64, collect
 	if !add(charge) {
 		return 0, 0, 0, memtable.ErrCOWCapacity
 	}
-	nameMap, err := cowbtree.OwnedMapBuilderMaximumCharge[string, *nativeCollectionState](collections)
+	nameMap, err := cowbtree.OwnedMapBuilderBudgetCharge[string, *nativeCollectionState](limits.MaxTotalBytes, collections)
 	if err != nil {
 		return 0, 0, 0, err
 	}
-	idMap, err := cowbtree.OwnedMapBuilderMaximumCharge[uint64, *nativeCollectionState](collections)
+	idMap, err := cowbtree.OwnedMapBuilderBudgetCharge[uint64, *nativeCollectionState](limits.MaxTotalBytes, collections)
 	if err != nil {
 		return 0, 0, 0, err
 	}

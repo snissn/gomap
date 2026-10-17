@@ -778,6 +778,17 @@ func (r *COWRoot) Get(key []byte) (COWRecord, bool) {
 	return record, true
 }
 
+// ScanOwned scans this immutable root in key order using the caller's existing
+// source/cut edge. It admits no view or cursor and retains no callback or record.
+// The caller must keep that edge until every borrowed key/value alias has been
+// cleared. Callbacks run outside publication/cut gates and must not release the
+// enclosing source while scanning. Returning false stops the scan immediately.
+func (r *COWRoot) ScanOwned(iter func(COWRecord) bool) {
+	r.tree.Scan(func(key string, value cowValue) bool {
+		return iter(COWRecord{Key: key, Value: value.value, Ptr: value.ptr, Revision: value.revision, Flags: value.flags})
+	})
+}
+
 // SeekGE uses the already owned cut/source reference and allocates no cursor,
 // view or key conversion. Default builds search one path; treedb_safe uses
 // read-only rank binary search, O(log N * height), to avoid unsafe conversions.

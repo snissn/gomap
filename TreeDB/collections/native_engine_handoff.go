@@ -14,6 +14,9 @@ type nativeBuiltDomain struct {
 	name                       string
 	oldBaseRoot, root          uint64
 	boundary                   *memtable.COWRoot
+	// empty proves the captured descriptor had no pending physical source.
+	// Its unchanged root cannot consume any newer source in latest.
+	empty bool
 }
 
 // prepareNativeEngineHandoff rebases only captured touched domains onto their
@@ -30,7 +33,9 @@ func prepareNativeEngineHandoff(latest *nativeEngineVersion, built []nativeBuilt
 	}
 	groups := 0
 	for i := range built {
-		if built[i].collection == 0 || built[i].interpretation == 0 || built[i].name == "" || built[i].boundary == nil {
+		if built[i].collection == 0 || built[i].interpretation == 0 || built[i].name == "" ||
+			(built[i].empty && (built[i].boundary != nil || built[i].root != built[i].oldBaseRoot)) ||
+			(!built[i].empty && built[i].boundary == nil) {
 			return nil, backenddb.ErrNativeSemanticUnsupported
 		}
 		if i == 0 || built[i-1].collection != built[i].collection {
@@ -103,7 +108,7 @@ func prepareNativeEngineHandoff(latest *nativeEngineVersion, built []nativeBuilt
 			if e != nil {
 				return next, e
 			}
-			if current.pending != result.boundary {
+			if result.empty || current.pending != result.boundary {
 				if current.pending != nil && !current.pending.Retain() {
 					return next, memtable.ErrCOWClosed
 				}
