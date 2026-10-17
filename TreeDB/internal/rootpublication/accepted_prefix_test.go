@@ -270,3 +270,58 @@ func TestAcceptedPrefixPreservesOriginalAssignedFailure(t *testing.T) {
 		t.Fatal("repeated Close lost original failure", err)
 	}
 }
+
+func TestAcceptedCloseRetainsOriginalFailedCustodyAndContainingArrays(t *testing.T) {
+	c, err := New(Options{StartupSynchronous: true, Publisher: PublisherFunc(func(context.Context, *PreparedRootCandidate) PublishResult {
+		return PublishResult{Outcome: PublishSucceeded}
+	})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stopClean(t, c)
+	if err = c.ConfigureAcceptedPrefix(2, LogicalFrontiers{}); err != nil {
+		t.Fatal(err)
+	}
+	failure := errors.New("original destruction failed")
+	failedCalls, successCalls := 0, 0
+	resource := &struct{ charge uint64 }{8192}
+	failed := &prefixOriginalCustody{release: func() error { failedCalls++; return failure }}
+	successful := &prefixOriginalCustody{release: func() error { successCalls++; return nil }}
+	for i, custody := range []*prefixOriginalCustody{failed, successful} {
+		ticket, e := c.ReserveAccepted(false)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if e = ticket.RecordAssigned(uint64(i+1), nil, false); e != nil {
+			t.Fatal(e)
+		}
+		if e = ticket.InstallAccepted(AcceptedDescriptor{Sequence: uint64(i + 1), Custody: custody, Projections: []ParticipantProjection{{Domain: 1, Plan: resource, Assets: resource}}}); e != nil {
+			t.Fatal(e)
+		}
+	}
+	originalEntries, originalOrder, originalFree := &c.accepted.entries[0], &c.accepted.order[0], &c.accepted.free[0]
+	for attempt := 0; attempt < 2; attempt++ {
+		if err = c.CloseAccepted(); !errors.Is(err, failure) {
+			t.Fatalf("close %d: %v", attempt, err)
+		}
+		if !c.AcceptedCleanupFailed() || &c.accepted.entries[0] != originalEntries || &c.accepted.order[0] != originalOrder || &c.accepted.free[0] != originalFree {
+			t.Fatal("lost original containing owner")
+		}
+		found := false
+		for i := range c.accepted.entries {
+			entry := &c.accepted.entries[i]
+			if entry.descriptor.Custody == failed {
+				found = true
+				if entry.releaseErr != failure || entry.descriptor.Projections[0].Assets != resource || resource.charge != 8192 {
+					t.Fatal("lost original resource/failure/charge")
+				}
+			}
+			if entry.descriptor.Custody == successful {
+				t.Fatal("successful sibling retained")
+			}
+		}
+		if !found || failedCalls != 1 || successCalls != 1 {
+			t.Fatalf("replayed/lost originals: %v %d %d", found, failedCalls, successCalls)
+		}
+	}
+}

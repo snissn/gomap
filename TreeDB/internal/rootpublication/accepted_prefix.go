@@ -766,7 +766,9 @@ func (c *Coordinator) CloseAccepted() error {
 		e.retiring = false
 		e.released = true
 		e.releaseErr = err
-		e.descriptor = AcceptedDescriptor{}
+		if err == nil {
+			e.descriptor = AcceptedDescriptor{}
+		}
 		if err != nil {
 			originalErr = errors.Join(originalErr, err)
 			if p.poison == nil {
@@ -775,14 +777,42 @@ func (c *Coordinator) CloseAccepted() error {
 		}
 		p.changed.Broadcast()
 	}
-	// No native assets or usable queue capability survives this withdrawal.
-	clear(p.entries)
-	clear(p.order)
-	clear(p.free)
-	p.entries, p.order, p.free = nil, nil, nil
+	// Failed original entries keep their exact Custody, first error and admitted
+	// containing arrays. Successful siblings may be scrubbed/refunded once.
+	failed := false
+	for i := range p.entries {
+		if p.entries[i].releaseErr != nil {
+			failed = true
+			break
+		}
+	}
+	if !failed {
+		clear(p.entries)
+		clear(p.order)
+		clear(p.free)
+		p.entries, p.order, p.free = nil, nil, nil
+	}
 	p.count, p.freeCount, p.head = 0, 0, 0
 	p.closeErr, p.closeDone = originalErr, true
 	p.changed.Broadcast()
 	p.mu.Unlock()
 	return originalErr
+}
+
+// AcceptedCleanupFailed reports terminal original custody still retained in
+// the original queue allocation. The caller must retain its containing lease.
+func (c *Coordinator) AcceptedCleanupFailed() bool {
+	c = c.AcceptedPrefixOwner()
+	if c == nil {
+		return false
+	}
+	p := &c.accepted
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for i := range p.entries {
+		if p.entries[i].releaseErr != nil {
+			return true
+		}
+	}
+	return false
 }

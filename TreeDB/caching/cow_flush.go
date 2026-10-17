@@ -124,8 +124,37 @@ func (c *cowCache) installPreparedCOWBasis(basis *cowBackendBasis, covered, next
 	next.visibleCommandLSN, next.logicalSeq, next.basis = old.visibleCommandLSN, old.logicalSeq, basis
 	next.frozenLogicalSeq = old.frozenLogicalSeq
 	next.frozenCommandLSN = old.frozenCommandLSN
-	next.frozenSemanticRootSet = old.frozenSemanticRootSet
-	next.semanticRootSet = old.semanticRootSet
+	// Rebase only captured-T native domains onto latest logical state using the
+	// exact accepted Snapshot. Preparation is outside cutMu and must acquire
+	// no collection mutex. Failure leaves the original accepted handoff intact.
+	captured := old.semanticRootSet
+	if covered != nil {
+		captured = covered.frozenSemanticRootSet
+	}
+	if captured != nil {
+		state, err := captured.PrepareHandoff(old.semanticRootSet, basis.snapshot)
+		if err != nil {
+			return nil, err
+		}
+		next.semanticRootSet = state
+		if old.frozenSemanticRootSet == old.semanticRootSet {
+			next.frozenSemanticRootSet = state
+			if state != nil {
+				state.Retain()
+			}
+		} else if old.frozenSemanticRootSet != nil {
+			frozen, err := captured.PrepareHandoff(old.frozenSemanticRootSet, basis.snapshot)
+			if err != nil {
+				c.releasePrivateSemanticState(next)
+				return nil, err
+			}
+			next.frozenSemanticRootSet = frozen
+		}
+	} else {
+		next.frozenSemanticRootSet = old.frozenSemanticRootSet
+		next.semanticRootSet = old.semanticRootSet
+		retainCOWSemanticState(next)
+	}
 	next.frozen = next.frozen[:len(old.frozen)-n]
 	basis.retain()
 	copy(next.shards, old.shards)
@@ -311,6 +340,11 @@ func (db *DB) flushCOWFrozenCut(syncFlush bool, publish *checkpointCommandWALPub
 	if err != nil {
 		return errors.Join(err, group.Close())
 	}
+	if captured := cut.frozenSemanticRootSet; captured != nil {
+		if err = captured.PrepareBuild(group, cut.basis.snapshot, h.guard); err != nil {
+			return errors.Join(err, group.Close())
+		}
+	}
 	ops := make([]batch.Entry, 0, chunkCap)
 	// Sources apply oldest to newest within the same private build group. This
 	// preserves tombstones and precedence without a second materialized merge.
@@ -373,6 +407,7 @@ func (h *cowFlushHandoff) abort(c *cowCache) error {
 	}
 	err = joinCOWCleanupError(err, h.basis.release())
 	if h.next != nil {
+		c.releasePrivateSemanticState(h.next)
 		h.next.lease.Close()
 	}
 	h.guard.Release()

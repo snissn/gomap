@@ -32,7 +32,7 @@ func (c *cowCache) prepareRollover() (*cowRollover, error) {
 			count++
 		}
 	}
-	if count == 0 {
+	if count == 0 && old.logicalSeq == old.frozenLogicalSeq {
 		return nil, nil
 	}
 	limits := c.budget.Limits()
@@ -78,6 +78,7 @@ func (c *cowCache) prepareRollover() (*cowRollover, error) {
 	}
 	next := &cowReadCut{visibleCommandLSN: old.visibleCommandLSN, logicalSeq: old.logicalSeq, frozenLogicalSeq: old.logicalSeq, frozenCommandLSN: old.visibleCommandLSN, frozenSemanticRootSet: old.semanticRootSet, semanticRootSet: old.semanticRootSet, refs: 1, cache: c, lease: p.cutLease, basis: old.basis, shards: make([]cowTable, n), frozen: make([]cowTable, len(old.frozen), len(old.frozen)+count)}
 	next.basis.retain()
+	retainCOWSemanticState(next)
 	copy(next.frozen, old.frozen)
 	for i := range next.frozen {
 		if !next.frozen[i].root.Retain() {

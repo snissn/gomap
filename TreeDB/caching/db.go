@@ -8971,6 +8971,7 @@ func (s *foregroundReaderState) end() uint32 {
 }
 
 type DB struct {
+	flushRequested atomic.Bool
 	ownedCloseGuard *backenddb.OwnedCallbackCloseGuard
 	cow             *cowCache
 	// One original cache-lifetime governor for native legacy captures. COW
@@ -13456,6 +13457,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 
 	// Start background flusher
 	db.wg.Add(1)
+	if db.cow != nil { db.cow.flushWake = db.flushCh }
 	go db.flushLoop()
 	db.startVlogGenerationLoop()
 	db.startVlogShapeLoop()
@@ -28547,6 +28549,7 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 	if !db.disableJournal {
 		if db.canReuseWALSegments() {
 			if triggerFlush {
+				db.flushRequested.Store(true)
 				select {
 				case db.flushCh <- struct{}{}:
 				default:
@@ -28562,6 +28565,7 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 	}
 
 	if triggerFlush {
+		db.flushRequested.Store(true)
 		select {
 		case db.flushCh <- struct{}{}:
 		default:
@@ -28748,6 +28752,7 @@ func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) erro
 	}
 
 	if triggerFlush {
+		db.flushRequested.Store(true)
 		select {
 		case db.flushCh <- struct{}{}:
 		default:
@@ -29291,20 +29296,28 @@ func (db *DB) untrackValueLogSegmentFromLane(l *lane, path string) bool {
 }
 
 func (db *DB) flushLoop() {
-	defer db.wg.Done()
-
-	for {
-		select {
-		case <-db.closeCh:
-			// Flush all remaining with sync on close.
-			db.flushAll(true)
-			return
-		case <-db.flushCh:
-			// Background flush is async when WAL is enabled. Without a WAL, we
-			// upgrade to a synced flush unless RelaxedSync is set.
-			db.flushAll(false)
-		}
-	}
+ // Close joins eligible work, not user-held cuts. The SAME goroutine remains
+ // cleanup-only until the final retained cut transfers its preborn work.
+ joined := false
+ defer func() { if !joined { db.wg.Done() } }()
+ for {
+  select {
+  case <-db.closeCh:
+   db.flushAll(true)
+   db.drainSemanticCleanup()
+   db.wg.Done()
+   joined = true
+   for {
+    db.drainSemanticCleanup()
+    if db.semanticCleanupTerminal() { return }
+    <-db.flushCh
+   }
+  case <-db.flushCh:
+   db.drainSemanticCleanup()
+   // Coalesced real requests survive cleanup-only wake consumption.
+   if db.flushRequested.Swap(false) { db.flushAll(false) }
+  }
+ }
 }
 
 func (db *DB) flushSyncRequested(sync bool) bool {
@@ -34428,6 +34441,7 @@ func (db *DB) Stats() map[string]string {
 
 // TriggerFlush schedules a background flush pass (best-effort).
 func (db *DB) TriggerFlush() {
+	db.flushRequested.Store(true)
 	select {
 	case db.flushCh <- struct{}{}:
 	default:
@@ -38182,7 +38196,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 
 func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 	if b.db.cow != nil {
-		if len(b.entries) == 0 {
+		if len(b.entries) == 0 && b.cowState.native==nil {
 			// Empty writes publish no cut. A WAL-off explicit sync still covers
 			// preceding writes; release admission before its checkpoint barrier.
 			var covered uint64
@@ -38229,6 +38243,7 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 				if err != nil {
 					return err
 				}
+				b.db.flushRequested.Store(true)
 				select {
 				case b.db.flushCh <- struct{}{}:
 				default:

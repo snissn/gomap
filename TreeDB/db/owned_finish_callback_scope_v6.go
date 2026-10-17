@@ -2,6 +2,7 @@ package db
 
 import (
 	"errors"
+	"sync"
 	"sync/atomic"
 	"unsafe"
 
@@ -12,7 +13,10 @@ import (
 // OwnedCallbackCloseGuard is the original, immutable Close capability shared
 // by the public, cache and backend handles. It retains only this tiny caller
 // cell, never a containing DB, and remains valid after those handles detach.
-type OwnedCallbackCloseGuard struct{ caller atomic.Uint64 }
+type OwnedCallbackCloseGuard struct {
+	caller atomic.Uint64
+	scope  sync.Mutex
+}
 
 // CheckClose must precede any Close side effect or wait.
 func (g *OwnedCallbackCloseGuard) CheckClose() error {
@@ -34,12 +38,34 @@ func (g *OwnedCallbackCloseGuard) Enter() error {
 	if caller == 0 {
 		return rootpublication.ErrPublisherProtocol
 	}
+	if !g.scope.TryLock() {
+		return rootpublication.ErrDurableRootOwnership
+	}
 	if !g.caller.CompareAndSwap(0, caller) {
+		g.scope.Unlock()
 		return rootpublication.ErrDurableRootOwnership
 	}
 	return nil
 }
-func (g *OwnedCallbackCloseGuard) Leave() { g.caller.Store(0) }
+
+// EnterCleanup waits only outside progress-critical gates for an independent
+// original publisher callback to finish. Same-caller recursion still refuses.
+func (g *OwnedCallbackCloseGuard) EnterCleanup() error {
+	if g == nil {
+		return rootpublication.ErrPublisherProtocol
+	}
+	caller := currentGoroutineID()
+	if caller == 0 {
+		return rootpublication.ErrPublisherProtocol
+	}
+	if g.caller.Load() == caller {
+		return rootpublication.ErrDurableRootOwnership
+	}
+	g.scope.Lock()
+	g.caller.Store(caller)
+	return nil
+}
+func (g *OwnedCallbackCloseGuard) Leave() { g.caller.Store(0); g.scope.Unlock() }
 
 // OwnedCallbackCloseGuard returns the capability bound when this DB opened.
 func (db *DB) OwnedCallbackCloseGuard() *OwnedCallbackCloseGuard {

@@ -5,7 +5,6 @@ import (
 	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/batch"
-	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
@@ -15,6 +14,7 @@ import (
 // cowBatchState exists only for explicitly admitted COW batches. Keeping its
 // ownership and prediction fields separate preserves ordinary batch allocations.
 type cowBatchState struct {
+	native                       *cowNativeOwner
 	holdBegan                    time.Time
 	receipt                      COWPublicationReceipt
 	accepted                     rootpublication.AcceptedTicket
@@ -182,6 +182,7 @@ func (b *Batch) cowReset() {
 	if b == &cowDeniedBatch {
 		return
 	}
+	b.releaseNativePublication()
 	b.entries = nil
 	b.copyArena = nil
 	b.shardAdds = nil

@@ -49,6 +49,9 @@ func (b *Batch) PrepareExternalCommandWALPublication() (err error) {
 		return err
 	}
 	c := b.db.cow
+	if owner := b.cowState.native; owner != nil && owner.plan.Basis != c.cut.semanticRootSet {
+		return backenddb.ErrRootPublicationBasisMismatch
+	}
 	if c.cut.logicalSeq == ^uint64(0) {
 		return memtable.ErrCOWCapacity
 	}
@@ -210,7 +213,7 @@ func (b *Batch) PrepareExternalCommandWALPublication() (err error) {
 				memtable.COWAllocationCharge(2*uint64(unsafe.Sizeof(uintptr(0))))
 		}
 	}
-	p.cut, err = c.prepare(groups, opts)
+	p.cut, err = c.prepareNative(groups, opts, b.cowState.native)
 	if err == nil {
 		err = durabilitycut.EmitBasic(durabilitycut.AfterCOWPreparation, durabilitycut.ResourceAuxiliary, b.db.dir)
 	}
@@ -358,8 +361,8 @@ func (b *Batch) writeCOWPublication(syncWrite bool, unlock func()) error {
 	// Accepted publication is nonfallible. This existing internal observation
 	// seam may pause tests, but an observer cannot revoke an accepted frame.
 	_ = durabilitycut.EmitBasic(durabilitycut.BeforeCOWCutSwap, durabilitycut.ResourceAuxiliary, b.db.dir)
+	p.cut.next.logicalSeq = b.db.cow.cut.logicalSeq + 1
 	if p.mutation.Valid() {
-		p.cut.next.logicalSeq = b.db.cow.cut.logicalSeq + 1
 		b.db.cow.journal.Install(p.mutation, p.cut.next.logicalSeq)
 		b.db.cow.updateTxnStats()
 		p.mutation = txnMutationOwner{}
@@ -378,6 +381,13 @@ func (b *Batch) writeCOWPublication(syncWrite bool, unlock func()) error {
 	b.cowState.accepted = rootpublication.AcceptedTicket{}
 	b.cowState.receipt.LogicalInstalled = true
 	b.cowState.receipt.LogicalSeq = p.cut.next.logicalSeq
+	native := b.cowState.native
+	if native != nil {
+		// The cut owns State; the accepted queue owns sparse custody. No queue
+		// edge may retain the whole caller descriptor or captured EngineVersion.
+		native.plan = nil
+		b.cowState.native = nil
+	}
 	var mutableBytes int64
 	for _, shard := range p.cut.next.shards {
 		mutableBytes += shard.size
@@ -386,6 +396,10 @@ func (b *Batch) writeCOWPublication(syncWrite bool, unlock func()) error {
 	// Batch storage is no longer borrowed: C1 copied changed payloads before
 	// the append. Release admission and owner before retirement or checkpoint.
 	unlock()
+	if native != nil {
+		err = joinCOWCleanupError(err, b.db.cow.releaseCut(native.opening))
+		native.opening = nil
+	}
 	for _, resource := range p.resources {
 		if resource.definition != nil {
 			resource.definition.ReleaseCapture()
@@ -531,7 +545,7 @@ func (b *Batch) AcquireCOWAppendGuard(owner *transactionowner.Owner) error {
 // original admission is retried once. Retained readers do not need to end.
 func (b *Batch) admitCOWAccepted() error {
 	c := b.db.cow
-	if c.prefix == nil || len(b.entries) == 0 || b.cowState.accepted.Valid() {
+	if c.prefix == nil || (len(b.entries) == 0 && b.cowState.native == nil) || b.cowState.accepted.Valid() {
 		return nil
 	}
 	ticket, err := c.prefix.ReserveAccepted(false)

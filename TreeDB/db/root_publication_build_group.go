@@ -26,23 +26,25 @@ type privatePrimaryConstructionV6 interface {
 // This is an internal cross-package bridge for caching; callers outside TreeDB
 // internals must not depend on it as a stable API.
 type RootPublicationBuildGroup struct {
-	negativeCoverage *negativeRootCoverage
-	mu               sync.Mutex
+	nativeResources    *rootpublication.StableResourceSet
+	nativeRequirements rootpublication.StableLogicalObligationRequirements
+	negativeCoverage   *negativeRootCoverage
+	mu                 sync.Mutex
 
-	db              *DB
-	coordinator     *rootpublication.Coordinator
-	builder         *rootpublication.BuilderToken
-	idx             *indexGen
-	tracker         *allocTracker
-	registryID      int64
-	registered      bool
-	capturedBasis   *Snapshot
-	captureLease    *StableResourceCaptureLease
-	snapshotAdmit   func(SnapshotAllocationSizes) error
-	snapshotAdopt   func(*Snapshot) error
-	snapshotCancel  func() error
-	snapshotReceipt *Snapshot
-	physicalSeal    rootpublication.PhysicalSealReceipt
+	db                *DB
+	coordinator       *rootpublication.Coordinator
+	builder           *rootpublication.BuilderToken
+	idx               *indexGen
+	tracker           *allocTracker
+	registryID        int64
+	registered        bool
+	capturedBasis     *Snapshot
+	captureLease      *StableResourceCaptureLease
+	snapshotAdmit     func(SnapshotAllocationSizes) error
+	snapshotAdopt     func(*Snapshot) error
+	snapshotCancel    func() error
+	snapshotReceipt   *Snapshot
+	physicalSeal      rootpublication.PhysicalSealReceipt
 	acceptedPrefixCut rootpublication.AcceptedCut
 
 	// Only original factory outputs enter these two custody cells. baseRoot is
@@ -440,6 +442,8 @@ func (group *RootPublicationBuildGroup) finalizeLocked(b *Batch, syncWrite bool)
 	}
 	opts := finalizeCommitOptions{
 		negativeCoverage:            group.negativeCoverage,
+		durableResources:            group.nativeResources,
+		durableResourceRequirements: group.nativeRequirements,
 		prepareSnapshotReceipt:      group.prepareSnapshotReceiptLocked,
 		abortSnapshotReceipt:        group.snapshotCancel,
 		skipPrePublishFlush:         true,
@@ -455,7 +459,9 @@ func (group *RootPublicationBuildGroup) finalizeLocked(b *Batch, syncWrite bool)
 		recordVacuumMutation:        recordVacuumMutation,
 		durableIndex:                group.idx,
 	}
-	if group.acceptedPrefixCut.Valid() { opts.acceptedPrefixCut = &group.acceptedPrefixCut }
+	if group.acceptedPrefixCut.Valid() {
+		opts.acceptedPrefixCut = &group.acceptedPrefixCut
+	}
 	if intent != nil {
 		commandOpts := commandWALFinalizeOptions(intent)
 		commandOpts.skipPrePublishFlush = opts.skipPrePublishFlush
@@ -474,8 +480,11 @@ func (group *RootPublicationBuildGroup) finalizeLocked(b *Batch, syncWrite bool)
 		commandOpts.prepareSnapshotReceipt = opts.prepareSnapshotReceipt
 		commandOpts.abortSnapshotReceipt = opts.abortSnapshotReceipt
 		commandOpts.acceptedPrefixCut = opts.acceptedPrefixCut
+		commandOpts.durableResources = opts.durableResources
+		commandOpts.durableResourceRequirements = opts.durableResourceRequirements
 		opts = commandOpts
 	}
+	group.nativeResources = nil // finalize owns the original closure on every exit
 	post, err := db.finalizeCommitLockedWithOptions(
 		group.currentRoot, group.systemRoot, group.retired, syncWrite, group.metrics,
 		group.touchedValueLogSegmentSliceLocked(), db.indexOuterLeavesInValueLog,
@@ -583,6 +592,22 @@ func (group *RootPublicationBuildGroup) cleanupLocked(abandon bool) error {
 		}
 		group.releaseBuildLocksLocked()
 		return group.cleanupErr
+	}
+	if group.nativeResources != nil {
+		if err := group.nativeResources.ReleaseWithError(); err != nil {
+			// Retain the SAME group, original closure, tracker and charge on
+			// existing terminal build-failure custody, never retry destruction.
+			group.failed = true
+			group.closed = true
+			group.cleanupErr = group.retainPrimaryFailureLocked(err)
+			if group.capturedBasis != nil {
+				group.capturedBasis.endRead()
+				group.capturedBasis = nil
+			}
+			group.releaseBuildLocksLocked()
+			return group.cleanupErr
+		}
+		group.nativeResources = nil
 	}
 	if group.capturedBasis != nil {
 		group.capturedBasis.endRead()
@@ -728,9 +753,15 @@ func (group *RootPublicationBuildGroup) AcceptedSealReceipt() rootpublication.Ph
 // this cut before the final batch; the captured Snapshot already fixes the
 // complete physical user/semantic basis. Enqueue validates the same opaque cut
 // and its actual canonical frontier before making the candidate visible.
-func(group *RootPublicationBuildGroup)BindAcceptedPrefixCut(cut rootpublication.AcceptedCut)error{
- if group==nil || !cut.Valid(){return ErrRootPublicationBasisMismatch}
- group.mu.Lock();defer group.mu.Unlock()
- if group.closed || group.accepted || group.acceptedPrefixCut.Valid() || group.capturedBasis==nil{return ErrRootPublicationBasisMismatch}
- group.acceptedPrefixCut=cut;return nil
+func (group *RootPublicationBuildGroup) BindAcceptedPrefixCut(cut rootpublication.AcceptedCut) error {
+	if group == nil || !cut.Valid() {
+		return ErrRootPublicationBasisMismatch
+	}
+	group.mu.Lock()
+	defer group.mu.Unlock()
+	if group.closed || group.accepted || group.acceptedPrefixCut.Valid() || group.capturedBasis == nil {
+		return ErrRootPublicationBasisMismatch
+	}
+	group.acceptedPrefixCut = cut
+	return nil
 }

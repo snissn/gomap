@@ -60,8 +60,8 @@ type cowReadCut struct {
 	logicalSeq            uint64
 	frozenLogicalSeq      uint64 // immutable coverage of frozen sources, excluding newer mutable effects
 	frozenCommandLSN      uint64
-	frozenSemanticRootSet any
-	semanticRootSet       any // immutable semantic/catalog projection installed with this same raw cut
+	frozenSemanticRootSet backenddb.NativeSemanticState
+	semanticRootSet       backenddb.NativeSemanticState // immutable semantic/catalog projection installed with this same raw cut
 	refs                  int
 	shards                []cowTable
 	frozen                []cowTable // oldest to newest; every member precedes basis
@@ -83,9 +83,7 @@ func (c *cowReadCut) drain() error {
 	}
 	err := c.basis.release()
 	c.lease.Close()
-	if c.cache.activeCuts.Add(-1) == 0 && c.cache.readClosed.Load() {
-		c.cache.lease.Close()
-	}
+	c.releaseSemanticState()
 	return err
 }
 
@@ -120,6 +118,10 @@ type cowCache struct {
 	closeRetired                                                                                   []memtable.COWRetirement
 	generationBase                                                                                 uint64           // exact identical empty-generation startup history charge
 	handoff                                                                                        *cowFlushHandoff // serialized by the existing flush coordinator
+	semanticMu                                                                                     sync.Mutex
+	semanticHead, semanticTail, semanticFailed                                                     *rootpublication.SemanticCleanup
+	semanticRunning, semanticStopped, closeCleanupDone                                             bool
+	flushWake                                                                                      chan struct{}
 }
 
 // Backend wrapper capture uses a separate lease: a basis can outlive every
@@ -369,6 +371,8 @@ func (c *cowCache) releaseCut(cut *cowReadCut) error {
 type cowPreparedCut struct {
 	cache    *cowCache
 	next     *cowReadCut
+	opening  *cowReadCut
+	native   *cowNativeOwner
 	prepared []*memtable.COWPrepared
 	consumed bool
 	retired  []memtable.COWRetirement
@@ -376,6 +380,10 @@ type cowPreparedCut struct {
 }
 
 func (c *cowCache) prepare(groups [][]memtable.COWMutation, opts []memtable.COWPrepareOptions) (*cowPreparedCut, error) {
+	return c.prepareNative(groups, opts, nil)
+}
+
+func (c *cowCache) prepareNative(groups [][]memtable.COWMutation, opts []memtable.COWPrepareOptions, native *cowNativeOwner) (*cowPreparedCut, error) {
 	c.prepareCalls.Add(1)
 	// The caller owns writerMu continuously through prepare/cancel/publication.
 	old := c.cut
@@ -389,7 +397,7 @@ func (c *cowCache) prepare(groups [][]memtable.COWMutation, opts []memtable.COWP
 			break
 		}
 	}
-	if first < 0 {
+	if first < 0 && native == nil {
 		return nil, fmt.Errorf("empty COW publication")
 	}
 	dedupBytes := uint64(0)
@@ -410,6 +418,10 @@ func (c *cowCache) prepare(groups [][]memtable.COWMutation, opts []memtable.COWP
 		return nil, err
 	}
 	p := &cowPreparedCut{cache: c, prepared: make([]*memtable.COWPrepared, len(groups)), retired: make([]memtable.COWRetirement, len(groups)), lease: lease}
+	c.cutMu.Lock()
+	old.refs++
+	p.opening = old
+	c.cutMu.Unlock()
 	for i := range groups {
 		if len(groups[i]) == 0 {
 			continue
@@ -423,6 +435,7 @@ func (c *cowCache) prepare(groups [][]memtable.COWMutation, opts []memtable.COWP
 	}
 	next := &cowReadCut{visibleCommandLSN: old.visibleCommandLSN, logicalSeq: old.logicalSeq, frozenLogicalSeq: old.frozenLogicalSeq, frozenCommandLSN: old.frozenCommandLSN, frozenSemanticRootSet: old.frozenSemanticRootSet, semanticRootSet: old.semanticRootSet, refs: 1, shards: make([]cowTable, len(groups)), frozen: make([]cowTable, len(old.frozen)), basis: old.basis, lease: lease, cache: c}
 	next.basis.retain()
+	retainCOWSemanticState(next)
 	copy(next.frozen, old.frozen)
 	for i := range next.frozen {
 		if !next.frozen[i].root.Retain() {
@@ -444,6 +457,17 @@ func (c *cowCache) prepare(groups [][]memtable.COWMutation, opts []memtable.COWP
 		}
 	}
 	next.buildDomains()
+	if native != nil {
+		// Opening cut still retains the old edge, so this cannot run cleanup.
+		if next.semanticRootSet != nil {
+			if record := next.semanticRootSet.Release(); record != nil {
+				panic("lost opening semantic edge")
+			}
+		}
+		next.semanticRootSet = native.plan.State
+		native.plan.State = nil
+		p.native = native
+	}
 	p.next = next
 	return p, nil
 }
@@ -474,11 +498,14 @@ func (p *cowPreparedCut) drainCancelled() error {
 			r := p.next.frozen[i].root.Release()
 			r.Drain()
 		}
+		p.cache.releasePrivateSemanticState(p.next)
 		cleanupErr = p.next.basis.release()
 	}
 	for i := range p.retired {
 		p.retired[i].Drain()
 	}
+	cleanupErr = joinCOWCleanupError(cleanupErr, p.cache.releaseCut(p.opening))
+	p.opening = nil
 	p.lease.Close()
 	return cleanupErr
 }
@@ -497,7 +524,15 @@ func (p *cowPreparedCut) publishAccepted(ticket rootpublication.AcceptedTicket) 
 	var install rootpublication.AcceptedInstall
 	if ticket.Valid() {
 		var err error
-		install, err = ticket.BeginInstall(rootpublication.AcceptedDescriptor{Sequence: p.next.logicalSeq})
+		descriptor := rootpublication.AcceptedDescriptor{Sequence: p.next.logicalSeq}
+		if p.native != nil {
+			plan := p.native.plan
+			descriptor.Projections = plan.Projections
+			descriptor.Custody = p.native
+			descriptor.AdmittedBytes = plan.AdmittedBytes
+			descriptor.CleanupBytes = plan.CleanupBytes
+		}
+		install, err = ticket.BeginInstall(descriptor)
 		if err != nil {
 			return nil, err
 		}
@@ -518,6 +553,11 @@ func (p *cowPreparedCut) publishAccepted(ticket rootpublication.AcceptedTicket) 
 	}
 	c.activeCuts.Add(1)
 	old.refs--
+	if p.opening != old {
+		panic("COW opening cut changed")
+	}
+	old.refs--
+	p.opening = nil
 	last := old.refs == 0
 	c.cutMu.Unlock()
 	p.consumed = true
@@ -575,11 +615,12 @@ func (c *cowCache) closeWithBudget(closeBudget bool) error {
 	var err error
 	if h := c.handoff; h != nil {
 		c.handoff = nil
-		err = c.releaseCut(h.cut)
-		err = joinCOWCleanupError(err, h.basis.release())
 		if h.next != nil {
+			c.releasePrivateSemanticState(h.next)
 			h.next.lease.Close()
 		}
+		err = c.releaseCut(h.cut)
+		err = joinCOWCleanupError(err, h.basis.release())
 		h.guard.Release()
 		h.lease.Close()
 	}
@@ -588,8 +629,16 @@ func (c *cowCache) closeWithBudget(closeBudget bool) error {
 	}
 	if c.prefix != nil {
 		err = joinCOWCleanupError(err, c.prefix.CloseAccepted())
-		c.prefixLease.Close()
+		if !c.prefix.AcceptedCleanupFailed() {
+			c.prefixLease.Close()
+		}
 	}
+	c.semanticMu.Lock()
+	c.closeCleanupDone = true
+	if c.flushWake == nil && c.activeCuts.Load() == 0 && c.semanticHead == nil && c.semanticFailed == nil && (c.prefix == nil || !c.prefix.AcceptedCleanupFailed()) {
+		c.lease.Close()
+	}
+	c.semanticMu.Unlock()
 	return err
 }
 
