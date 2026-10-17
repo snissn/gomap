@@ -56,16 +56,21 @@ func (b *cowBackendBasis) release() error {
 // All members are immutable after installation. refs is controlled by cutMu;
 // dropping the last reference transfers bounded retirement to the caller.
 type cowReadCut struct {
-	visibleCommandLSN uint64
-	logicalSeq        uint64
-	refs              int
-	shards            []cowTable
-	frozen            []cowTable // oldest to newest; every member precedes basis
-	basis             *cowBackendBasis
-	sources           []memtable.Table
-	domains           []rootDomainSnapshot
-	lease             *memtable.COWExternalLease
-	cache             *cowCache
+	visibleCommandLSN     uint64
+	logicalSeq            uint64
+	frozenLogicalSeq      uint64 // immutable coverage of frozen sources, excluding newer mutable effects
+	frozenCommandLSN      uint64
+	frozenSemanticRootSet any
+	semanticRootSet       any // immutable semantic/catalog projection installed with this same raw cut
+	refs                  int
+	shards                []cowTable
+	frozen                []cowTable // oldest to newest; every member precedes basis
+	basis                 *cowBackendBasis
+	sources               []memtable.Table
+	pointSources          []memtable.Table
+	domains               []rootDomainSnapshot
+	lease                 *memtable.COWExternalLease
+	cache                 *cowCache
 }
 
 func (c *cowReadCut) drain() error {
@@ -102,6 +107,9 @@ type cowCache struct {
 	cut                                                                                            *cowReadCut
 	writers                                                                                        []*memtable.COWWriter
 	budget                                                                                         *memtable.COWBudget
+	maintenance                                                                                    *memtable.COWBudget
+	prefix                                                                                         *rootpublication.Coordinator
+	prefixLease                                                                                    *memtable.COWExternalLease
 	closed                                                                                         bool
 	lease                                                                                          *memtable.COWExternalLease
 	activeCuts                                                                                     atomic.Int64
@@ -124,6 +132,14 @@ func newCOWCache(provider backendSnapshotProvider, shards int, limits memtable.C
 	}
 	budget, err := memtable.NewCOWBudget(limits)
 	if err != nil {
+		return nil, err
+	}
+	// One finite constructor/receipt/successor tranche is admitted before any
+	// producer is exposed. Its capacity remains charged once in the parent.
+	maintenanceBytes := min(limits.MaxInFlightBytes, limits.MaxTotalBytes, limits.MaxRetiredBytes) / 2
+	maintenance, err := budget.ReserveMaintenance(maintenanceBytes)
+	if err != nil {
+		budget.Close()
 		return nil, err
 	}
 	// Keep the established callback envelope and captured-cell admission ceiling.
@@ -159,7 +175,7 @@ func newCOWCache(provider backendSnapshotProvider, shards int, limits memtable.C
 			return memtable.ErrCOWCapacity
 		}
 		var e error
-		admitted, e = admitCOWBackendBasis(budget, sizes)
+		admitted, e = admitCOWBackendBasis(maintenance, sizes)
 		return e
 	})
 	if err == nil {
@@ -175,7 +191,7 @@ func newCOWCache(provider backendSnapshotProvider, shards int, limits memtable.C
 		}
 		return nil, joinCOWCleanupError(err, cleanupErr)
 	}
-	c := &cowCache{budget: budget, writers: make([]*memtable.COWWriter, shards), lease: cacheLease, closeRetired: make([]memtable.COWRetirement, shards)}
+	c := &cowCache{budget: budget, maintenance: maintenance, writers: make([]*memtable.COWWriter, shards), lease: cacheLease, closeRetired: make([]memtable.COWRetirement, shards)}
 	cut := &cowReadCut{refs: 1, shards: make([]cowTable, shards), basis: admitted, lease: cutLease, cache: c}
 	for i := range c.writers {
 		beforeHistory := budget.Stats().HistoryBytes
@@ -261,15 +277,28 @@ func cowCutCharge(shards, frozen int) uint64 {
 // buildDomains prepares existing lookup/merge adapters before publication.
 // Fixed vectors plus the bounded frontier are the only capture-visible metadata.
 func (c *cowReadCut) buildDomains() {
-	c.sources = make([]memtable.Table, 0, len(c.frozen)+len(c.shards))
+	if cap(c.sources) < len(c.frozen)+len(c.shards) {
+		c.sources = make([]memtable.Table, 0, len(c.frozen)+len(c.shards))
+	} else {
+		c.sources = c.sources[:0]
+	}
 	for i := range c.frozen {
 		c.sources = append(c.sources, &c.frozen[i])
 	}
 	for i := range c.shards {
 		c.sources = append(c.sources, &c.shards[i])
 	}
-	c.domains = make([]rootDomainSnapshot, len(c.shards))
-	pointSources := make([]memtable.Table, 0, len(c.sources))
+	if cap(c.domains) < len(c.shards) {
+		c.domains = make([]rootDomainSnapshot, len(c.shards))
+	} else {
+		c.domains = c.domains[:len(c.shards)]
+	}
+	if cap(c.pointSources) < len(c.sources) {
+		c.pointSources = make([]memtable.Table, 0, len(c.sources))
+	} else {
+		c.pointSources = c.pointSources[:0]
+	}
+	pointSources := c.pointSources
 	for shard := range c.shards {
 		start := len(pointSources)
 		for i := range c.frozen {
@@ -280,6 +309,7 @@ func (c *cowReadCut) buildDomains() {
 		pointSources = append(pointSources, &c.shards[shard])
 		c.domains[shard] = rootDomainSnapshot{immutables: pointSources[start:len(pointSources):len(pointSources)]}
 	}
+	c.pointSources = pointSources
 }
 
 func (db *DB) acquireCOWSnapshot() *Snapshot {
@@ -331,6 +361,9 @@ func (c *cowCache) retainCut() *cowReadCut {
 	return c.cut
 }
 func (c *cowCache) releaseCut(cut *cowReadCut) error {
+	if cut == nil {
+		return nil
+	}
 	c.cutMu.Lock()
 	cut.refs--
 	last := cut.refs == 0
@@ -399,7 +432,7 @@ func (c *cowCache) prepare(groups [][]memtable.COWMutation, opts []memtable.COWP
 		}
 		p.prepared[i] = staged
 	}
-	next := &cowReadCut{visibleCommandLSN: old.visibleCommandLSN, logicalSeq: old.logicalSeq, refs: 1, shards: make([]cowTable, len(groups)), frozen: make([]cowTable, len(old.frozen)), basis: old.basis, lease: lease, cache: c}
+	next := &cowReadCut{visibleCommandLSN: old.visibleCommandLSN, logicalSeq: old.logicalSeq, frozenLogicalSeq: old.frozenLogicalSeq, frozenCommandLSN: old.frozenCommandLSN, frozenSemanticRootSet: old.frozenSemanticRootSet, semanticRootSet: old.semanticRootSet, refs: 1, shards: make([]cowTable, len(groups)), frozen: make([]cowTable, len(old.frozen)), basis: old.basis, lease: lease, cache: c}
 	next.basis.retain()
 	copy(next.frozen, old.frozen)
 	for i := range next.frozen {
@@ -439,7 +472,8 @@ func (p *cowPreparedCut) cancel() {
 		}
 	}
 }
-func (p *cowPreparedCut) drainCancelled() {
+func (p *cowPreparedCut) drainCancelled() error {
+	var cleanupErr error
 	if p.next != nil {
 		for i := range p.next.shards {
 			if p.prepared[i] == nil {
@@ -451,16 +485,34 @@ func (p *cowPreparedCut) drainCancelled() {
 			r := p.next.frozen[i].root.Release()
 			r.Drain()
 		}
-		p.next.basis.release()
+		cleanupErr = p.next.basis.release()
 	}
 	for i := range p.retired {
 		p.retired[i].Drain()
 	}
 	p.lease.Close()
+	return cleanupErr
 }
 func (p *cowPreparedCut) publish() *cowReadCut {
+	old, err := p.publishAccepted(rootpublication.AcceptedTicket{})
+	if err != nil {
+		panic(err)
+	}
+	return old
+}
+
+func (p *cowPreparedCut) publishAccepted(ticket rootpublication.AcceptedTicket) (*cowReadCut, error) {
 	if p.consumed {
 		panic("consumed COW cut")
+	}
+	var install rootpublication.AcceptedInstall
+	if ticket.Valid() {
+		var err error
+		install, err = ticket.BeginInstall(rootpublication.AcceptedDescriptor{Sequence: p.next.logicalSeq})
+		if err != nil {
+			return nil, err
+		}
+		defer install.Abort()
 	}
 	for _, s := range p.prepared {
 		if s != nil {
@@ -472,15 +524,18 @@ func (p *cowPreparedCut) publish() *cowReadCut {
 	c.cutMu.Lock()
 	old := c.cut
 	c.cut = p.next
+	if ticket.Valid() {
+		install.Commit()
+	}
 	c.activeCuts.Add(1)
 	old.refs--
 	last := old.refs == 0
 	c.cutMu.Unlock()
 	p.consumed = true
 	if last {
-		return old
+		return old, nil
 	}
-	return nil
+	return nil, nil
 }
 func (c *cowCache) beginRead() bool {
 	c.readMu.RLock()
@@ -532,10 +587,19 @@ func (c *cowCache) closeWithBudget(closeBudget bool) error {
 	if h := c.handoff; h != nil {
 		c.handoff = nil
 		err = c.releaseCut(h.cut)
+		err = joinCOWCleanupError(err, h.basis.release())
+		if h.next != nil {
+			h.next.lease.Close()
+		}
+		h.guard.Release()
 		h.lease.Close()
 	}
 	if last {
 		err = joinCOWCleanupError(err, old.drain())
+	}
+	if c.prefix != nil {
+		err = joinCOWCleanupError(err, c.prefix.CloseAccepted())
+		c.prefixLease.Close()
 	}
 	return err
 }

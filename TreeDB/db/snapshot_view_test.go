@@ -68,7 +68,7 @@ func TestDBAndSnapshotStateTokenIsCoherentImmutableAndAllocationFree(t *testing.
 	idx.refs.Store(1)
 	db.idx.Store(idx)
 	db.state.Store(state)
-	db.publishSnapshotView(idx, state, nil)
+	db.publishSnapshotView(idx, state, nil, nil)
 
 	token, ok := db.StateToken()
 	if !ok {
@@ -134,7 +134,7 @@ func TestAcquireSnapshot_UsesPublishedCoherentView(t *testing.T) {
 	db := &DB{snapPool: NewSnapshotPool()}
 	db.idx.Store(idx1)
 	db.state.Store(state1)
-	db.publishSnapshotView(idx1, state1, nil)
+	db.publishSnapshotView(idx1, state1, nil, nil)
 
 	// Simulate an in-flight raw idx/state update without publishing a new view.
 	db.idx.Store(idx2)
@@ -165,7 +165,7 @@ func TestAcquireSnapshot_UsesPublishedCoherentView(t *testing.T) {
 
 	// Flip published snapshot metadata to idx2, then make idx1 the live index so
 	// idx2 reads are stale and must use registry pinning.
-	db.publishSnapshotView(idx2, state2, nil)
+	db.publishSnapshotView(idx2, state2, nil, nil)
 	db.idx.Store(idx1)
 
 	snap2 := db.AcquireSnapshot()
@@ -210,7 +210,7 @@ func TestMinPinnedSnapshotCommitSeqTracksCurrentAndRetiredGenerations(t *testing
 		t.Fatalf("MinPinnedSnapshotCommitSeq without snapshots=%d, want MaxUint64", got)
 	}
 
-	db.publishSnapshotView(idx1, state1, nil)
+	db.publishSnapshotView(idx1, state1, nil, nil)
 	snap1 := db.AcquireSnapshot()
 	if snap1 == nil {
 		t.Fatal("AcquireSnapshot returned nil for first view")
@@ -221,7 +221,7 @@ func TestMinPinnedSnapshotCommitSeqTracksCurrentAndRetiredGenerations(t *testing
 
 	db.idx.Store(idx2)
 	db.state.Store(state2)
-	db.publishSnapshotView(idx2, state2, nil)
+	db.publishSnapshotView(idx2, state2, nil, nil)
 	snap2 := db.AcquireSnapshot()
 	if snap2 == nil {
 		t.Fatal("AcquireSnapshot returned nil for second view")
@@ -307,7 +307,7 @@ func TestMinPinnedSnapshotCommitSeqRescansAcquireCompletedDuringScan(t *testing.
 	db := &DB{snapPool: NewSnapshotPool()}
 	db.idx.Store(idx)
 	db.trackIndex(idx)
-	db.publishSnapshotView(idx, state, nil)
+	db.publishSnapshotView(idx, state, nil, nil)
 
 	var snap *Snapshot
 	hookCalls := 0
@@ -387,7 +387,7 @@ func TestAcquireSnapshot_ReleasesPinnedValueLogSetOnRegistryNil(t *testing.T) {
 	vm := &valuelog.Manager{}
 
 	db := &DB{snapPool: NewSnapshotPool()}
-	db.publishSnapshotView(idx, state, vm)
+	db.publishSnapshotView(idx, state, vm, nil)
 
 	if snap := db.AcquireSnapshot(); snap != nil {
 		t.Fatal("expected nil snapshot when registry is unavailable")
@@ -406,7 +406,7 @@ func TestAcquireSnapshot_ReturnsNilWhenDBIsClosing(t *testing.T) {
 	state := &DBState{CommitSeq: 7, RootPageID: 1}
 
 	db := &DB{snapPool: NewSnapshotPool()}
-	db.publishSnapshotView(idx, state, nil)
+	db.publishSnapshotView(idx, state, nil, nil)
 	db.closing.Store(true)
 
 	if snap := db.AcquireSnapshot(); snap != nil {
@@ -444,7 +444,7 @@ func TestAcquireSnapshot_CurrentLeafGenerationViewOnlyPinsWhenItTurnsStale(t *te
 		LeafGenerations: view,
 	}
 
-	db.publishSnapshotView(idx, state, nil)
+	db.publishSnapshotView(idx, state, nil, nil)
 
 	snap := db.AcquireSnapshot()
 	if snap == nil {
@@ -477,7 +477,7 @@ func TestAcquireSnapshot_CurrentLeafGenerationViewOnlyPinsWhenItTurnsStale(t *te
 		RootPageID:      2,
 		LeafGenerations: db.currentLeafGenerationView(),
 	}
-	db.publishSnapshotView(idx, state2, nil)
+	db.publishSnapshotView(idx, state2, nil, nil)
 
 	if got, want := db.leafGenerationPinCountForTesting(1), uint64(1); got != want {
 		_ = snap.Close()
@@ -519,7 +519,7 @@ func TestAcquireSnapshot_SharedLeafGenerationPinSetAmortizesPins(t *testing.T) {
 		RootPageID:      1,
 		LeafGenerations: view,
 	}
-	db.publishSnapshotView(idx, state, nil)
+	db.publishSnapshotView(idx, state, nil, nil)
 
 	snap1 := db.AcquireSnapshot()
 	if snap1 == nil {
@@ -554,7 +554,7 @@ func TestAcquireSnapshot_SharedLeafGenerationPinSetAmortizesPins(t *testing.T) {
 		RootPageID:      2,
 		LeafGenerations: db.currentLeafGenerationView(),
 	}
-	db.publishSnapshotView(idx, state2, nil)
+	db.publishSnapshotView(idx, state2, nil, nil)
 
 	if got, want := db.leafGenerationPinCountForTesting(1), uint64(1); got != want {
 		_ = snap2.Close()
@@ -607,7 +607,7 @@ func TestAcquireSnapshot_SharedLeafGenerationPinSet_RemainsPinnedAcrossPublish(t
 		RootPageID:      1,
 		LeafGenerations: db.currentLeafGenerationView(),
 	}
-	db.publishSnapshotView(idx, state1, nil)
+	db.publishSnapshotView(idx, state1, nil, nil)
 
 	snap := db.AcquireSnapshot()
 	if snap == nil {
@@ -629,7 +629,7 @@ func TestAcquireSnapshot_SharedLeafGenerationPinSet_RemainsPinnedAcrossPublish(t
 		RootPageID:      2,
 		LeafGenerations: db.currentLeafGenerationView(),
 	}
-	db.publishSnapshotView(idx, state2, nil)
+	db.publishSnapshotView(idx, state2, nil, nil)
 
 	if got, want := db.leafGenerationPinCountForTesting(1), uint64(1); got != want {
 		_ = snap.Close()
@@ -665,7 +665,7 @@ func TestAcquireSnapshot_ManualLeafGenerationViewFallbackStillPinsPerSnapshot(t 
 	}
 
 	db := &DB{snapPool: NewSnapshotPool()}
-	db.publishSnapshotView(idx, state, nil)
+	db.publishSnapshotView(idx, state, nil, nil)
 
 	snap1 := db.AcquireSnapshot()
 	if snap1 == nil {
@@ -717,7 +717,7 @@ func TestAcquireSnapshot_DoesNotLeakLeafGenerationPinsOnRegistryNil(t *testing.T
 	}
 
 	db := &DB{snapPool: NewSnapshotPool()}
-	db.publishSnapshotView(idx, state, nil)
+	db.publishSnapshotView(idx, state, nil, nil)
 
 	if snap := db.AcquireSnapshot(); snap != nil {
 		t.Fatal("expected nil snapshot when registry is unavailable")
@@ -863,7 +863,7 @@ func TestPublishSnapshotView_SkipsPruneDuringInFlightSnapshotAcquire(t *testing.
 	}
 
 	db.snapshotAcquireRO[0].Store(1)
-	db.publishSnapshotView(idx, state, nil)
+	db.publishSnapshotView(idx, state, nil, nil)
 	db.leafGenerationPins.mu.RLock()
 	_, stillTracked := db.leafGenerationPins.refs[7]
 	db.leafGenerationPins.mu.RUnlock()
@@ -872,7 +872,7 @@ func TestPublishSnapshotView_SkipsPruneDuringInFlightSnapshotAcquire(t *testing.
 	}
 
 	db.snapshotAcquireRO[0].Store(0)
-	db.publishSnapshotView(idx, state, nil)
+	db.publishSnapshotView(idx, state, nil, nil)
 	db.leafGenerationPins.mu.RLock()
 	_, stillTracked = db.leafGenerationPins.refs[7]
 	db.leafGenerationPins.mu.RUnlock()
@@ -936,7 +936,7 @@ func TestPublishSnapshotView_AllowsNilOldLeafGenerations(t *testing.T) {
 	db := &DB{}
 	idx := &indexGen{}
 
-	db.publishSnapshotView(idx, &DBState{CommitSeq: 1, RootPageID: 1}, nil)
+	db.publishSnapshotView(idx, &DBState{CommitSeq: 1, RootPageID: 1}, nil, nil)
 	db.publishSnapshotView(idx, &DBState{
 		CommitSeq:  2,
 		RootPageID: 2,
@@ -944,7 +944,7 @@ func TestPublishSnapshotView_AllowsNilOldLeafGenerations(t *testing.T) {
 			CurrentGenerationID: 1,
 			GenerationOrder:     []uint64{1},
 		},
-	}, nil)
+	}, nil, nil)
 
 	view := db.snapshotViewRO.Load()
 	if view == nil || view.state == nil || view.state.LeafGenerations == nil {

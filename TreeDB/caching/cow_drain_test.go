@@ -5,9 +5,69 @@ import (
 	"errors"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"path/filepath"
 	"testing"
 	"unsafe"
 )
+
+func TestCheckpointFullSourceFrontierAndNonemptyMutable(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: filepath.Join(dir, "backend"), DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	limits := memtable.DefaultCOWLimits()
+	limits.MaxSources, limits.MaxGenerations = 2, 6
+	db, err := Open(dir, backend, Options{DisableWAL: true, AllowUnsafe: true, FlushThreshold: 1 << 30, MemtableShards: 1, MemtableMode: "cow_btree", COWMemtableLimits: limits})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatal(err)
+	}
+	defer func() {
+		if !db.closing.Load() {
+			_ = db.Close()
+		}
+	}()
+	for _, value := range []string{"first", "second"} {
+		if err := db.Set([]byte(value), []byte(value)); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.rolloverCOWForFlush(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Set([]byte("mutable"), []byte("latest")); err != nil {
+		t.Fatal(err)
+	}
+	if len(db.cow.cut.frozen) != limits.MaxSources || db.cow.cut.shards[0].Len() == 0 || db.cow.budget.Stats().Views != 0 {
+		t.Fatal("fixture does not fill the source frontier without readers")
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint at full source frontier: %v", err)
+	}
+	for key, want := range map[string]string{"first": "first", "second": "second", "mutable": "latest"} {
+		if got, err := backend.Get([]byte(key)); err != nil || string(got) != want {
+			t.Fatalf("covered %s=(%q,%v)", key, got, err)
+		}
+	}
+	if err := db.Set([]byte("after"), []byte("progress")); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	if stats := db.COWMemoryStats(); stats.Sources != 0 || stats.Generations != 1 || stats.Views != 0 || db.cow.activeCuts.Load() != 1 || db.cow.handoff != nil {
+		t.Fatalf("checkpoint did not reclaim frontier: %+v cuts=%d", stats, db.cow.activeCuts.Load())
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	stats := db.COWMemoryStats()
+	t.Logf("closed producer total=%d external=%d sources=%d generations=%d views=%d", stats.TotalBytes, stats.ExternalBytes, stats.Sources, stats.Generations, stats.Views)
+	if stats.TotalBytes != 0 || stats.ExternalBytes != 0 || stats.Sources != 0 || stats.Generations != 0 || stats.Views != 0 {
+		t.Fatal("frontier ownership remained after Close")
+	}
+}
 
 func TestCOWDrainPublishesActivePointersAndTombstones(t *testing.T) {
 	db := cowPointerFixture(t)
@@ -59,10 +119,10 @@ func TestCOWDrainRolloverRefusalPreservesActiveCut(t *testing.T) {
 	if err := db.Set([]byte("a"), []byte("active")); err != nil {
 		t.Fatal(err)
 	}
-	before := db.cow.budget.Stats()
+	before := db.cow.maintenance.Stats()
 	cut := db.cow.cut
 	overhead := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
-	pressure, err := db.cow.budget.AcquireExternal(db.cow.budget.Limits().MaxInFlightBytes - before.ReservedBytes - overhead)
+	pressure, err := db.cow.maintenance.AcquireExternal(db.cow.maintenance.Limits().MaxTotalBytes - before.TotalBytes - overhead)
 	if err != nil {
 		t.Fatal(err)
 	}

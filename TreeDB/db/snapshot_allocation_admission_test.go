@@ -84,7 +84,7 @@ func TestSnapshotAllocationAdmissionRequiresSharedLeafPinSet(t *testing.T) {
 	idx.refs.Store(1)
 	state := &DBState{CommitSeq: 1, RootPageID: 1, LeafGenerations: &leafGenerationView{GenerationOrder: []uint64{1}}}
 	d := &DB{snapPool: NewSnapshotPool()}
-	d.publishSnapshotView(idx, state, nil)
+	d.publishSnapshotView(idx, state, nil, nil)
 	called := false
 	s, err := d.AcquireSnapshotWithAllocationAdmission(func(SnapshotAllocationSizes) error { called = true; return nil })
 	if s != nil || err != ErrSnapshotCapacity || called {

@@ -52,6 +52,13 @@ func (b *Batch) PrepareExternalCommandWALPublication() (err error) {
 	if c.cut.logicalSeq == ^uint64(0) {
 		return memtable.ErrCOWCapacity
 	}
+	if c.prefix != nil && !b.cowState.accepted.Valid() {
+		ticket, err := c.prefix.ReserveAccepted(false)
+		if err != nil {
+			return acceptedAdmissionError(err)
+		}
+		b.cowState.accepted = ticket
+	}
 	if err := c.ensureTxnJournal(); err != nil {
 		return err
 	}
@@ -289,12 +296,19 @@ func (b *Batch) cancelCOWPublication() *cowBatchPreparation {
 	if p != nil && p.cut != nil {
 		p.cut.cancel()
 	}
+	if b.cowState.accepted.Valid() && !b.cowState.receipt.Assigned {
+		if err := b.cowState.accepted.CancelAccepted(); err != nil {
+			b.db.reportError(err)
+		}
+	}
+	b.cowState.accepted = rootpublication.AcceptedTicket{}
 	return p
 }
 
-func (p *cowBatchPreparation) drainCancelled() {
+func (p *cowBatchPreparation) drainCancelled() error {
+	var cleanupErr error
 	if p.cut != nil {
-		p.cut.drainCancelled()
+		cleanupErr = p.cut.drainCancelled()
 	}
 	for _, resource := range p.resources {
 		if !resource.attached {
@@ -302,6 +316,7 @@ func (p *cowBatchPreparation) drainCancelled() {
 		}
 	}
 	p.scratch.Close()
+	return cleanupErr
 }
 
 func (b *Batch) writeCOWPublication(syncWrite bool, unlock func()) error {
@@ -331,7 +346,7 @@ func (b *Batch) writeCOWPublication(syncWrite bool, unlock func()) error {
 		p := b.cancelCOWPublication()
 		unlock()
 		if p != nil {
-			p.drainCancelled()
+			err = joinCOWCleanupError(err, p.drainCancelled())
 		}
 		return err
 	}
@@ -350,7 +365,17 @@ func (b *Batch) writeCOWPublication(syncWrite bool, unlock func()) error {
 		p.mutation = txnMutationOwner{}
 	}
 	p.cut.next.visibleCommandLSN = b.cowState.receipt.AssignedLSN
-	old := p.cut.publish()
+	old, publishErr := p.cut.publishAccepted(b.cowState.accepted)
+	if publishErr != nil {
+		if poisoner, ok := b.db.backend.(interface{ MarkCommandWALRecoveryRequired() }); ok {
+			poisoner.MarkCommandWALRecoveryRequired()
+		}
+		b.cowState.receipt.Uncertain = b.cowState.receipt.Assigned
+		p.cut.cancel()
+		unlock()
+		return joinCOWCleanupError(publishErr, p.drainCancelled())
+	}
+	b.cowState.accepted = rootpublication.AcceptedTicket{}
 	b.cowState.receipt.LogicalInstalled = true
 	b.cowState.receipt.LogicalSeq = p.cut.next.logicalSeq
 	var mutableBytes int64
@@ -367,13 +392,17 @@ func (b *Batch) writeCOWPublication(syncWrite bool, unlock func()) error {
 		}
 	}
 	if old != nil {
-		old.drain()
+		err = old.drain()
 	}
 	p.scratch.Close()
 	b.db.noteWrite()
 	b.updateBatchEntryHint()
 	b.updateBatchCopyHint()
 	b.Reset()
+	if err != nil {
+		b.db.reportError(err)
+		return err
+	}
 	if checkpoint {
 		err := b.db.Checkpoint()
 		if err == nil {
@@ -447,6 +476,9 @@ func (b *Batch) RecordCOWAppend(owner *transactionowner.Owner, lsn uint64, appen
 	b.cowState.receipt.Uncertain = lsn != 0 && appendErr != nil
 	b.cowState.receipt.WALCompleted = lsn != 0 && appendErr == nil
 	b.cowState.receipt.WALStable = lsn != 0 && appendErr == nil && synced
+	if b.cowState.accepted.Valid() {
+		return b.cowState.accepted.RecordAssigned(lsn, appendErr, synced)
+	}
 	return nil
 }
 func (b *Batch) COWReceipt() COWPublicationReceipt {
@@ -491,5 +523,27 @@ func (b *Batch) AcquireCOWAppendGuard(owner *transactionowner.Owner) error {
 		return err
 	}
 	b.cowState.guard = guard
+	return nil
+}
+
+// admitCOWAccepted reserves the queue slot before any producer/publication gate.
+// A full finite prefix is sealed using the reserved maintenance lane, then the
+// original admission is retried once. Retained readers do not need to end.
+func (b *Batch) admitCOWAccepted() error {
+	c := b.db.cow
+	if c.prefix == nil || len(b.entries) == 0 || b.cowState.accepted.Valid() {
+		return nil
+	}
+	ticket, err := c.prefix.ReserveAccepted(false)
+	if errors.Is(err, rootpublication.ErrAcceptedCapacity) {
+		if err = b.db.Checkpoint(); err != nil {
+			return err
+		}
+		ticket, err = c.prefix.ReserveAccepted(false)
+	}
+	if err != nil {
+		return acceptedAdmissionError(err)
+	}
+	b.cowState.accepted = ticket
 	return nil
 }

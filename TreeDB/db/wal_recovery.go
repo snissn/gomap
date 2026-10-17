@@ -816,7 +816,7 @@ func (db *DB) ensureCommandWALRecoverySnapshotView() {
 		state.ValueLogSet = db.valueLogManager.CurrentSetNoRefresh()
 	}
 	if db.state.CompareAndSwap(nil, state) {
-		db.publishSnapshotView(db.idx.Load(), state, db.valueLogManager)
+		db.publishSnapshotView(db.idx.Load(), state, db.valueLogManager, nil)
 		return
 	}
 	if state.ValueLogSet != nil && db.valueLogManager != nil {

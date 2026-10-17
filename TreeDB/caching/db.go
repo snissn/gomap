@@ -12870,6 +12870,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 				cowOwner.close()
 			}
 		}()
+		if err := cowOwner.bindAcceptedPrefix(provider); err != nil {
+			return nil, err
+		}
 	}
 	var indexer *memtable.HashSortedIndexer
 	if !cowMode {
@@ -38134,6 +38137,19 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 		}
 	}
 
+	if b.db.cow != nil {
+		if err := b.admitCOWAccepted(); err != nil {
+			return err
+		}
+		defer func() {
+			if b.cowState.accepted.Valid() && !b.cowState.receipt.Assigned {
+				if err := b.cowState.accepted.CancelAccepted(); err != nil {
+					b.db.reportError(err)
+				}
+				b.cowState.accepted = rootpublication.AcceptedTicket{}
+			}
+		}()
+	}
 	if err := b.db.beginDirectWrite(); err != nil {
 		return err
 	}
@@ -38182,7 +38198,10 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 				}
 				b.db.cow.writerMu.Unlock()
 				unlockWriteMu()
-				rollover.drain()
+				if cleanupErr := rollover.drain(); cleanupErr != nil {
+					b.db.reportError(cleanupErr)
+					return joinCOWCleanupError(err, cleanupErr)
+				}
 				if err != nil {
 					return err
 				}
