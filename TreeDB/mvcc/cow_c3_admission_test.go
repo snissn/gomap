@@ -1,7 +1,6 @@
 package mvcc
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"os"

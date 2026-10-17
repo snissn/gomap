@@ -6,8 +6,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/snissn/gomap/TreeDB/internal/iterator"
 )
 
 // Queue the real asynchronous remap behind Manager.mu, then close the original
@@ -95,50 +93,4 @@ func TestOriginalFileCloseJoinsQueuedRemapBeforePhysicalRetirement(t *testing.T)
 			}
 		})
 	}
-}
-
-func TestNativeOriginalCloseGatesRemapAdmissionBeforeYield(t *testing.T) {
-	previous := enableCurrentWritableMmap
-	enableCurrentWritableMmap = true
-	defer func() { enableCurrentWritableMmap = previous }()
-	m, f, _ := originalTerminalFixture(t)
-	if err := m.PromoteCurrentWritable(f.ID); err != nil {
-		t.Fatal(err)
-	}
-	m.mu.Lock()
-	var unlock sync.Once
-	release := func() { unlock.Do(m.mu.Unlock) }
-	defer release()
-	f.maybeScheduleRemap()
-	if !f.remapRequested.Load() {
-		t.Fatal("actual remap did not queue")
-	}
-	if done, err := f.CloseNativeMVCCStep(&iterator.OrdinalScanWork{}); done || err != nil || f.closed.Load() {
-		release()
-		t.Fatal("refused native close mutated admission", done, err)
-	}
-	work := &iterator.OrdinalScanWork{RecordLimit: 1, ByteLimit: 1 << 20}
-	if done, err := f.CloseNativeMVCCStep(work); done || err != nil || !f.closed.Load() || !f.nativeClose.nativeOwned {
-		release()
-		t.Fatal("admitted native close did not gate queued remap", done, err)
-	}
-	release()
-	f.remapWorkers.Wait()
-	f.maybeScheduleRemap()
-	if f.remapRequested.Load() {
-		t.Fatal("accepted retirement readmitted remap")
-	}
-	for i := 0; i < 100; i++ {
-		done, err := f.CloseNativeMVCCStep(&iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if done {
-			if err := m.Close(); err != nil {
-				t.Fatal(err)
-			}
-			return
-		}
-	}
-	t.Fatal("native close did not finish after actual worker exited")
 }

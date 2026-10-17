@@ -8971,13 +8971,9 @@ func (s *foregroundReaderState) end() uint32 {
 }
 
 type DB struct {
-	flushRequested atomic.Bool
-	ownedCloseGuard *backenddb.OwnedCallbackCloseGuard
-	cow             *cowCache
-	// One original cache-lifetime governor for native legacy captures. COW
-	// uses cow.budget. Every original metadata owner enrolls on this same budget.
-	nativeMVCCBudget             *memtable.COWBudget // guarded by mu
-	nativeMVCCLimits             memtable.COWLimits
+	flushRequested               atomic.Bool
+	ownedCloseGuard              *backenddb.OwnedCallbackCloseGuard
+	cow                          *cowCache
 	writeWaitForCheckpointActive atomic.Int64
 
 	mu          sync.RWMutex
@@ -12521,13 +12517,6 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		modeStr = strings.TrimPrefix(modeStr, "adaptive:")
 	}
 	cowMode := modeStr == "cow_btree"
-	nativeMVCCLimits := opts.COWMemtableLimits
-	if nativeMVCCLimits == (memtable.COWLimits{}) {
-		nativeMVCCLimits = memtable.DefaultCOWLimits()
-	}
-	if err := nativeMVCCLimits.Validate(); err != nil {
-		return nil, err
-	}
 	var cowLimits memtable.COWLimits
 	if cowMode {
 		var e error
@@ -13265,7 +13254,6 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	}
 
 	db.cow = cowOwner
-	db.nativeMVCCLimits = nativeMVCCLimits
 	db.storeMemtableMode(mode)
 	if opts.IndexOuterLeavesInValueLog {
 		db.leafLog.id = leafLogLaneID
@@ -13457,7 +13445,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 
 	// Start background flusher
 	db.wg.Add(1)
-	if db.cow != nil { db.cow.flushWake = db.flushCh }
+	if db.cow != nil {
+		db.cow.flushWake = db.flushCh
+	}
 	go db.flushLoop()
 	db.startVlogGenerationLoop()
 	db.startVlogShapeLoop()
@@ -26482,7 +26472,6 @@ func (db *DB) Close() error {
 			db.conditionalOracle.history = nil
 		}
 	}()
-	defer db.closeNativeMVCCBudgetV6()
 	// Keep actual producer governors live through the final backend checkpoint,
 	// arena/registry disposal and dictionary cleanup. Failed cleanup retains debt.
 	if db.cow != nil {
@@ -29296,28 +29285,36 @@ func (db *DB) untrackValueLogSegmentFromLane(l *lane, path string) bool {
 }
 
 func (db *DB) flushLoop() {
- // Close joins eligible work, not user-held cuts. The SAME goroutine remains
- // cleanup-only until the final retained cut transfers its preborn work.
- joined := false
- defer func() { if !joined { db.wg.Done() } }()
- for {
-  select {
-  case <-db.closeCh:
-   db.flushAll(true)
-   db.drainSemanticCleanup()
-   db.wg.Done()
-   joined = true
-   for {
-    db.drainSemanticCleanup()
-    if db.semanticCleanupTerminal() { return }
-    <-db.flushCh
-   }
-  case <-db.flushCh:
-   db.drainSemanticCleanup()
-   // Coalesced real requests survive cleanup-only wake consumption.
-   if db.flushRequested.Swap(false) { db.flushAll(false) }
-  }
- }
+	// Close joins eligible work, not user-held cuts. The SAME goroutine remains
+	// cleanup-only until the final retained cut transfers its preborn work.
+	joined := false
+	defer func() {
+		if !joined {
+			db.wg.Done()
+		}
+	}()
+	for {
+		select {
+		case <-db.closeCh:
+			db.flushAll(true)
+			db.drainSemanticCleanup()
+			db.wg.Done()
+			joined = true
+			for {
+				db.drainSemanticCleanup()
+				if db.semanticCleanupTerminal() {
+					return
+				}
+				<-db.flushCh
+			}
+		case <-db.flushCh:
+			db.drainSemanticCleanup()
+			// Coalesced real requests survive cleanup-only wake consumption.
+			if db.flushRequested.Swap(false) {
+				db.flushAll(false)
+			}
+		}
+	}
 }
 
 func (db *DB) flushSyncRequested(sync bool) bool {
@@ -38196,7 +38193,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 
 func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 	if b.db.cow != nil {
-		if len(b.entries) == 0 && b.cowState.native==nil {
+		if len(b.entries) == 0 && b.cowState.native == nil {
 			// Empty writes publish no cut. A WAL-off explicit sync still covers
 			// preceding writes; release admission before its checkpoint barrier.
 			var covered uint64

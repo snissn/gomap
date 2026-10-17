@@ -1580,7 +1580,6 @@ type Options struct {
 // the pointer and any later method call remains invalid even after subsequent
 // snapshots are acquired.
 type Snapshot struct {
-	nativeMVCC nativeMVCCSnapshotStateV6
 	// A failed historical rebind retains both exact original root operands.
 	primaryRebindRoot      primaryStateRootV5
 	primaryRebindErr       error
@@ -1788,7 +1787,7 @@ func (db *DB) captureSnapshotForReadWithValueLogPublicationLockHeld(snap *Snapsh
 			}()
 		}
 		if rollbackManager != nil {
-			snap.nativeMVCC.managerRelease.ReleaseOriginal(rollbackManager)
+			rollbackManager.ReleaseSnapshotWrapper()
 		}
 	}()
 	if db.closing.Load() || db.publicationPoisoned.Load() {
@@ -2058,7 +2057,7 @@ func (db *DB) captureSnapshotViewBoundedLocked(snap *Snapshot, admit func(Snapsh
 		}
 		defer func() {
 			if !managerBorrowAdopted {
-				snap.nativeMVCC.managerRelease.ReleaseOriginal(vm)
+				vm.ReleaseSnapshotWrapper()
 			}
 		}()
 	}
@@ -2255,9 +2254,6 @@ func (s *Snapshot) closeRead(oneShot bool) error {
 	if s == nil {
 		return nil
 	}
-	if s.nativeMVCC.workOwned {
-		return ErrNativeMVCCSnapshotWork
-	}
 	if !oneShot {
 		s.iteratorMu.Lock()
 	}
@@ -2280,9 +2276,6 @@ func (s *Snapshot) finalizeCloseIfUnreferenced() error {
 }
 
 func (s *Snapshot) finalizeCloseRead(oneShot bool) error {
-	if s.nativeMVCC.workOwned {
-		return nil
-	}
 	if !oneShot {
 		s.iteratorMu.Lock()
 	}
@@ -2399,7 +2392,7 @@ func (s *Snapshot) finalizeCloseRead(oneShot bool) error {
 	if err == nil && managerBorrowed {
 		s.vlogManager = nil
 		s.vlogWrapperBorrowed = false
-		s.nativeMVCC.managerRelease.ReleaseOriginal(originalManager)
+		originalManager.ReleaseSnapshotWrapper()
 	}
 	metadata.CloseAfterCleanup(err)
 	if indexBorrowed {
