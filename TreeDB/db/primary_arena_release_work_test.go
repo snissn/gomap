@@ -4,27 +4,19 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"reflect"
-	"runtime"
 	"testing"
-	"unsafe"
 
-	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
-func TestPrimaryOwnerWorkActualArenaNamespaceAndExternalContainingReceipt(t *testing.T) {
+func TestPrimaryOwnerOrdinaryActualArenaNamespaceAndContainingReceipt(t *testing.T) {
 	dir := t.TempDir()
 	a, err := primaryarena.Open(filepath.Join(dir, "primary"))
 	if err != nil {
 		t.Fatal(err)
-	}
-	if !a.Pager().SupportsBoundedPhysicalClose() {
-		a.Close()
-		t.Skip("bounded mapping unsupported")
 	}
 	owner, err := newPrimaryArenaOwnerV5(a)
 	if err != nil {
@@ -61,58 +53,32 @@ func TestPrimaryOwnerWorkActualArenaNamespaceAndExternalContainingReceipt(t *tes
 			t.Fatal(err)
 		}
 	}
-	external, err := memtable.NewCOWBudget(memtable.DefaultCOWLimits())
-	if err != nil {
-		t.Fatal(err)
-	}
-	admission, err := external.AcquireExternal(memtable.COWAllocationCharge(uint64(unsafe.Sizeof(primaryArenaReleaseWork{}))))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var receipt primaryArenaReleaseWork
-	if ready, err := receipt.Bind(owner, &iterator.OrdinalScanWork{}); ready || err != nil || owner.refs != 1 {
-		t.Fatal("refused bind changed actual edge", err)
-	}
-	if ready, err := receipt.Bind(owner, &iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20}); !ready || err != nil {
-		t.Fatal(err)
-	}
 	held := owner
+	consumed, debt, completion, err := owner.releaseOriginalWithOutcome()
 	owner = nil
-	if consumed, debt, err := held.releaseWithOutcome(nil); consumed || debt || !errors.Is(err, ErrNativeMVCCSnapshotWork) {
-		t.Fatal("ordinary last release stole original continuation", err)
+	if !consumed || debt || err != nil {
+		t.Fatal(consumed, debt, err)
 	}
-	turns := 0
-	for {
-		w := iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20}
-		ready, debt, err := receipt.ContinueWork(&w)
-		if err != nil || w.Records > 32 || w.Bytes > 1<<20 {
-			t.Fatal("physical original cleanup", err)
-		}
-		if ready {
-			if debt {
-				t.Fatal("completed physical cleanup reports debt")
-			}
-			break
-		}
-		if !debt {
-			t.Fatal("paused physical cleanup lost exact custody")
-		}
-		// Physical close polls the original pager grower without waiting inside
-		// its bounded turn. Give that worker a chance to observe its stop signal.
-		runtime.Gosched()
-		turns++
-		if turns > 4096 {
-			pagerState := reflect.ValueOf(a.Pager()).Elem()
-			stack := make([]byte, 64<<10)
-			stack = stack[:runtime.Stack(stack, true)]
-			t.Fatalf("physical finish permanently refused: receiptPhase=%d arenaPhase=%d pagerPhase=%d growDone=%#x work=%+v ownerRefs=%d metadataBytes=%d physicalClosed=%t\n%s",
-				receipt.phase, reflect.ValueOf(a).Elem().FieldByName("closeWork").FieldByName("phase").Int(),
-				pagerState.FieldByName("closeWork").FieldByName("phase").Int(), pagerState.FieldByName("growDone").Pointer(),
-				w, held.refs, metadata.Bytes(), metadata.PhysicalClosed(), stack)
-		}
-	}
-	if turns < 2 || receipt.owner != nil || held.arena != nil || held.namespaceParent != nil || held.namespaceProof != nil || held.metadataCharge != 0 || !metadata.PhysicalClosed() {
+	if held.arena != nil || held.namespaceParent != nil || held.namespaceProof != nil || held.metadataCharge != 0 || !metadata.PhysicalClosed() {
 		t.Fatal("aliases/physical finish incomplete")
+	}
+	if completion.charge == 0 || metadata.Bytes() < completion.charge {
+		t.Fatal("physical cleanup refunded its own containing receipt")
+	}
+	if !held.closeWork.mu.TryLock() {
+		t.Fatal("physical cleanup returned with owner lock held")
+	}
+	held.closeWork.mu.Unlock()
+	pending := metadata.Bytes()
+	charge = completion.charge
+	held = nil
+	completion.complete()
+	if metadata.Bytes() != pending-charge {
+		t.Fatal("independent containing refund missing")
+	}
+	completion.complete()
+	if metadata.Bytes() != pending-charge {
+		t.Fatal("containing receipt replayed")
 	}
 	for i, capture := range captures {
 		capture.Close()
@@ -121,9 +87,7 @@ func TestPrimaryOwnerWorkActualArenaNamespaceAndExternalContainingReceipt(t *tes
 			t.Fatal("held capture metadata leaked")
 		}
 	}
-	admission.Close()
-	external.Close()
-	if metadata.Bytes() != 0 || external.Stats().TotalBytes != 0 {
+	if metadata.Bytes() != 0 {
 		t.Fatal("exact final containing refund incomplete")
 	}
 }
@@ -183,5 +147,29 @@ func TestPrimaryOwnerOrdinaryNonlastPreservesStickySiblingError(t *testing.T) {
 	}
 	if owner.arena != a || owner.metadataCharge == 0 || !owner.closeWork.done {
 		t.Fatal("original sticky cleanup debt was lost")
+	}
+}
+
+func TestPrimaryOwnerOriginalPhysicalFailureKeepsSameReceiptAndCharge(t *testing.T) {
+	a, err := primaryarena.OpenCapsule(filepath.Join(t.TempDir(), "primary"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner, err := newPrimaryArenaOwnerV5(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, charge := a.MetadataOwner(), owner.metadataCharge
+	if err = a.Pager().WithStableResourceFile(func(file *os.File) error { return file.Close() }); err != nil {
+		t.Fatal(err)
+	}
+	consumed, debt, first := owner.releaseWithOutcome(nil)
+	if !consumed || !debt || !errors.Is(first, os.ErrClosed) || owner.arena != a || owner.metadataCharge != charge || metadata.Bytes() < charge {
+		t.Fatalf("physical failure custody consumed=%t debt=%t err=%v", consumed, debt, first)
+	}
+	bytes, counters := metadata.Bytes(), a.Counters()
+	consumed, debt, again := owner.releaseWithOutcome(nil)
+	if consumed || !debt || again != first || metadata.Bytes() != bytes || a.Counters() != counters {
+		t.Fatal("original failed cleanup replayed or replaced its receipt", consumed, debt, again)
 	}
 }

@@ -124,6 +124,7 @@ func (g *indexGen) release() int32 {
 }
 
 func (g *indexGen) close() error {
+	var primaryOwnerCompletion primaryRuntimeDisposalCompletionV6
 	g.closeOnce.Do(func() {
 		defer func() {
 			g.wrapperMu.Lock()
@@ -209,15 +210,25 @@ func (g *indexGen) close() error {
 				g.primaryOwner.retainFailedDataGeneration(g)
 				g.primary.MetadataOwner().CleanupFailed()
 			} else {
-				_, debt, err := g.primaryOwner.releaseWithOutcome(nil)
+				consumed, debt, completion, err := g.primaryOwner.releaseOriginalWithOutcome()
 				g.closeErr = err
-				if debt {
+				if !consumed || debt {
 					g.primaryOwner.retainFailedDataGeneration(g)
+				} else {
+					g.primaryOwner, g.primary = nil, nil
+					if g.zipper != nil {
+						g.zipper.SetPrimaryArena(nil)
+						g.zipper.SetPrimaryConstructionFailureV6(nil)
+					}
+					primaryOwnerCompletion = completion
 				}
 			}
 		}
 	})
-	return g.closeErr
+	err := g.closeErr
+	g = nil
+	primaryOwnerCompletion.complete()
+	return err
 }
 
 // The terminal bit and borrow count share one atomic handoff. A release
