@@ -8,7 +8,6 @@ import (
 	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/freelist"
-	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -444,9 +443,6 @@ func (transaction *DurableRootTransaction) recordPhysicalCleanupFailureLocked(er
 }
 
 func (transaction *DurableRootTransaction) activateFromCoordinator() error {
-	return transaction.activateFromCoordinatorWithWork(nil)
-}
-func (transaction *DurableRootTransaction) activateFromCoordinatorWithWork(w *iterator.OrdinalScanWork) error {
 	if transaction == nil {
 		return nil
 	}
@@ -463,9 +459,6 @@ func (transaction *DurableRootTransaction) activateFromCoordinatorWithWork(w *it
 }
 
 func (transaction *DurableRootTransaction) consumeFromCoordinator() error {
-	return transaction.consumeFromCoordinatorWithWork(nil)
-}
-func (transaction *DurableRootTransaction) consumeFromCoordinatorWithWork(w *iterator.OrdinalScanWork) error {
 	if transaction == nil {
 		return nil
 	}
