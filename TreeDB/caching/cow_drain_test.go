@@ -23,7 +23,7 @@ func (s *cowRefusingSemanticHandoff) PrepareRollover() (backenddb.NativeSemantic
 
 func (s *cowRefusingSemanticHandoff) PrepareHandoff(latest backenddb.NativeSemanticState, _ *backenddb.Snapshot) (backenddb.NativeSemanticState, error) {
 	if s.refuse.Load() {
-		return nil, memtable.ErrCOWCapacity
+		return nil, backenddb.NativeSemanticHandoffRetryableRefusal{Cause: memtable.ErrCOWCapacity}
 	}
 	latest.Retain()
 	return latest, nil
