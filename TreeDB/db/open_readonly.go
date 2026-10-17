@@ -223,7 +223,7 @@ func openReadOnly(opts Options) (result *DB, retErr error) {
 		LeafGenerationStateVersion: db.leafGenerationStateVersion,
 	}
 	db.state.Store(initialState)
-	db.publishSnapshotView(gen, initialState, vm)
+	db.publishSnapshotView(gen, initialState, vm, nil)
 
 	// No WAL replay, no background workers in read-only mode.
 	db.bootstrapNegativeFilter(opts.NegativeLookupFilterBytes)
@@ -423,7 +423,7 @@ func openReadOnlyNoLockWithRegistryV6(opts Options, valueLogIdentityPins *rootpu
 		LeafGenerationStateVersion: db.leafGenerationStateVersion,
 	}
 	db.state.Store(initialState)
-	db.publishSnapshotView(gen, initialState, vm)
+	db.publishSnapshotView(gen, initialState, vm, nil)
 
 	db.bootstrapNegativeFilter(opts.NegativeLookupFilterBytes)
 	return db, nil

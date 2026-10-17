@@ -86,6 +86,20 @@ type COWWriter struct {
 }
 
 func NewCOWWriter(b *COWBudget) (*COWWriter, error) {
+	return newCOWWriterWithConstruction(b, nil)
+}
+
+// NewCOWWriterWithMaintenanceConstruction admits only a fixed empty-source
+// constructor from the original coarse reserve. Subsequent Prepare calls still
+// use the producer budget, including payload, COW nodes, resources and scratch.
+func NewCOWWriterWithMaintenanceConstruction(b, maintenance *COWBudget) (*COWWriter, error) {
+	if maintenance == nil {
+		return nil, ErrCOWCapacity
+	}
+	return newCOWWriterWithConstruction(b, maintenance)
+}
+
+func newCOWWriterWithConstruction(b, maintenance *COWBudget) (*COWWriter, error) {
 	if b == nil {
 		return nil, fmt.Errorf("nil COW budget")
 	}
@@ -93,11 +107,39 @@ func NewCOWWriter(b *COWBudget) (*COWWriter, error) {
 		cowAllocation(uint64(unsafe.Sizeof(btree.Map[string, cowValue]{}))) +
 		cowAllocation(uint64(b.limits.MaxResources)*uint64(unsafe.Sizeof(COWResourceID{}))) +
 		cowAllocation(uint64(b.limits.MaxResources)*uint64(unsafe.Sizeof(cowResourceOwner{})))
-	g, err := newCOWGeneration(b, base)
+	if maintenance != nil {
+		// Same immutable empty-root/map wrapper envelope as Prepare(nil), with
+		// no mutable payload or resource-growth allowance hidden in the reserve.
+		base += 2*cowAllocation(uint64(unsafe.Sizeof(btree.Map[string, cowValue]{}))) + cowAllocation(uint64(unsafe.Sizeof(COWRoot{})))
+	}
+	g, err := newCOWGenerationWithConstruction(b, base, maintenance)
 	if err != nil {
 		return nil, err
 	}
 	return &COWWriter{private: btree.NewMap[string, cowValue](btreeDefaultDegree), generation: g}, nil
+}
+
+// BindReservedEmptyRoot installs the one already-admitted generation resolver
+// before this empty source can become visible. Original generation release owns
+// both its callback and construction lease; no alternate finalizer is created.
+func (w *COWWriter) BindReservedEmptyRoot(id COWResourceID, release func()) (*COWRoot, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed || w.pending != nil || w.private.Len() != 0 || release == nil {
+		return nil, ErrCOWPending
+	}
+	g := w.generation
+	b := g.budget
+	b.mu.Lock()
+	if b.closed || g.constructionLease == nil || g.frozen || len(g.ids) != 0 || cap(g.ids) == 0 || cap(g.owners) == 0 {
+		b.mu.Unlock()
+		return nil, ErrCOWCapacity
+	}
+	g.refs++
+	g.ids = append(g.ids, id)
+	g.owners = append(g.owners, cowResourceOwner{release: release})
+	b.mu.Unlock()
+	return &COWRoot{tree: w.private.Copy(), generation: g, refs: 1}, nil
 }
 
 // COWPrepareOptions reserves the later pre-frame resource binding and C2's
@@ -539,6 +581,7 @@ func (p *COWPrepared) drain() {
 	b.stats.RetiredBytes -= charge
 	b.releaseControlLocked()
 	b.mu.Unlock()
+	b.releaseMaintenanceReservation()
 }
 
 // Freeze is pre-frame admission for a write-side source rollover. C2 reserves
@@ -563,13 +606,13 @@ func (w *COWWriter) Freeze() error {
 	if b.closed {
 		return ErrCOWClosed
 	}
-	if b.stats.Sources >= b.limits.MaxSources || !cowFits(b.limits.MaxRetiredBytes, b.stats.RetiredBytes, g.history) {
+	if b.stats.Sources >= b.limits.MaxSources || !cowFits(b.limits.MaxRetiredBytes, b.stats.RetiredBytes, g.history-g.reservedCharge) {
 		return ErrCOWCapacity
 	}
 	g.frozen = true
 	g.retired = true
 	b.stats.Sources++
-	b.stats.RetiredBytes += g.history
+	b.stats.RetiredBytes += g.history - g.reservedCharge
 	return nil
 }
 
@@ -589,7 +632,7 @@ func (w *COWWriter) Close() COWRetirement {
 	b.mu.Lock()
 	if !g.retired {
 		g.retired = true
-		b.stats.RetiredBytes += g.history
+		b.stats.RetiredBytes += g.history - g.reservedCharge
 	}
 	b.mu.Unlock()
 	w.generation = nil

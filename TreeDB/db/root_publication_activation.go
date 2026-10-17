@@ -85,6 +85,8 @@ type rootPublicationVisibleInstallV1 struct {
 	metadataCharge   uint64
 	visibleHead      int
 	primaryRoot      *primaryStateRootV5
+	preparedState    *DBState
+	preparedView     *snapshotView
 	negativeCoverage *negativeRootCoverage
 	db               *DB
 	idx              *indexGen
@@ -354,6 +356,7 @@ func newRootPublicationRuntimeModeV1(db *DB, idx *indexGen, durable durableRootR
 		OldestRecoverableCommitSeq: oldest,
 		DurableRootLineage:         runtime.lineage,
 		DurableRootSequence:        durable.record.CommitSeq,
+		AcceptedPrefixOwner:        db.acceptedPrefix.Load(),
 	})
 	if err != nil {
 		return nil, errors.Join(err, runtime.release())
@@ -516,6 +519,31 @@ func (install *rootPublicationVisibleInstallV1) abort() error {
 	return nil
 }
 
+// prepareState freezes the same candidate tuple used by activation and an
+// optional accepted-generation Snapshot. The build fence excludes another
+// publisher until activation; no current snapshot is sampled afterward.
+func (install *rootPublicationVisibleInstallV1) prepareState() *DBState {
+	if install.preparedState != nil {
+		return install.preparedState
+	}
+	db := install.db
+	state := &DBState{
+		primaryRoot:       install.primaryRoot,
+		CommitSeq:         install.next.CommitSeq,
+		RootPageID:        install.next.UserRootPageID,
+		SystemRootPageID:  install.next.SystemRootPageID,
+		AppliedCommandLSN: install.next.AppliedCommandLSN,
+		MaxEntryRevision:  page.EntryRevision(install.next.MaxEntryRevision),
+		ValueLogSet:       install.valueLogSet,
+		LeafGenerations:   install.leafGenerationView,
+	}
+	if install.leafGenerationView != nil {
+		state.LeafGenerationStateVersion = db.leafGenerationStateVersion + 1
+	}
+	install.preparedState = state
+	return state
+}
+
 func (install *rootPublicationVisibleInstallV1) activate(activateAllocator func() error) error {
 	if install == nil || install.db == nil || install.idx == nil || install.activated {
 		return errors.New("invalid root-publication visible install")
@@ -562,6 +590,11 @@ func (install *rootPublicationVisibleInstallV1) activate(activateAllocator func(
 			admission.Refuse()
 		}
 	}
+	if view := install.preparedView; view != nil && (view.idx != install.idx || view.state != install.preparedState || view.vlogManager != db.valueLogManager || view.systemRootPublishEpoch != db.snapshotPublicationEpoch(install.idx, install.preparedState)) {
+		admission.Abort()
+		db.mu.Unlock()
+		return ErrRootPublicationBasisMismatch
+	}
 	if err := activateAllocator(); err != nil {
 		admission.Abort()
 		db.mu.Unlock()
@@ -573,20 +606,11 @@ func (install *rootPublicationVisibleInstallV1) activate(activateAllocator func(
 	if install.installLeafManifest {
 		db.leafGenerationManifest = install.leafManifest
 	}
-	newState := &DBState{
-		primaryRoot:       install.primaryRoot,
-		CommitSeq:         install.next.CommitSeq,
-		RootPageID:        install.next.UserRootPageID,
-		SystemRootPageID:  install.next.SystemRootPageID,
-		AppliedCommandLSN: install.next.AppliedCommandLSN,
-		MaxEntryRevision:  page.EntryRevision(install.next.MaxEntryRevision),
-		ValueLogSet:       install.valueLogSet,
-		LeafGenerations:   install.leafGenerationView,
-	}
+	newState := install.prepareState()
 	if install.leafGenerationView != nil {
-		db.leafGenerationStateVersion++
-		newState.LeafGenerationStateVersion = db.leafGenerationStateVersion
+		db.leafGenerationStateVersion = newState.LeafGenerationStateVersion
 	}
+
 	db.state.Store(newState)
 	if install.commandWALPublish {
 		previousApplied := uint64(0)
@@ -595,7 +619,7 @@ func (install *rootPublicationVisibleInstallV1) activate(activateAllocator func(
 		}
 		db.observeCommandWALCovered(previousApplied, install.next.AppliedCommandLSN)
 	}
-	db.publishSnapshotView(install.idx, newState, db.valueLogManager, install.negativeCoverage)
+	db.publishSnapshotView(install.idx, newState, db.valueLogManager, install.preparedView, install.negativeCoverage)
 	admission.Commit()
 	db.mu.Unlock()
 	install.valueLogSet = nil
@@ -1231,6 +1255,9 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 	candidateOwned := true
 	defer func() {
 		if candidateOwned {
+			if opts.abortSnapshotReceipt != nil {
+				retErr = errors.Join(retErr, opts.abortSnapshotReceipt())
+			}
 			if abandonErr := candidate.Abandon(); abandonErr != nil {
 				if idx.primaryOwner != nil {
 					abandonErr = idx.primaryOwner.retainFailedTransactionV6(candidate.DurableRoot(), abandonErr)
@@ -1240,6 +1267,19 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 			}
 		}
 	}()
+
+	// Prepare the exact visible tuple before acceptance and the installation
+	// latch, including the filter and predicted system-root publication epoch.
+	state := install.prepareState()
+	db.mu.RLock()
+	install.preparedView = db.prepareSnapshotView(idx, state, db.valueLogManager, opts.negativeCoverage)
+	db.mu.RUnlock()
+
+	if opts.prepareSnapshotReceipt != nil {
+		if err := opts.prepareSnapshotReceipt(install); err != nil {
+			return post, prePublishErr(fmt.Errorf("prepare accepted snapshot receipt: %w", err))
+		}
+	}
 
 	if releaseRootSerialization := opts.releaseRootSerialization; releaseRootSerialization != nil {
 		releaseRootSerialization()
@@ -1265,12 +1305,21 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 	}
 
 	enqueueStart := time.Now()
-	receipt, enqueueErr := runtime.coordinator.EnqueueBuilt(candidate, builder)
+	var receipt *rootpublication.BuilderHandoffReceipt
+	var enqueueErr error
+	if opts.acceptedPrefixCut != nil {
+		receipt, enqueueErr = runtime.coordinator.EnqueueBuiltAcceptedCut(candidate, builder, *opts.acceptedPrefixCut)
+	} else {
+		receipt, enqueueErr = runtime.coordinator.EnqueueBuilt(candidate, builder)
+	}
 	if opts.publishTiming != nil {
 		opts.publishTiming.FinalizeEnqueueActivation += time.Since(enqueueStart)
 	}
 	if enqueueErr != nil {
 		enqueueErr = publicRootPublicationErrorV1(enqueueErr)
+		if opts.abortSnapshotReceipt != nil {
+			enqueueErr = errors.Join(enqueueErr, opts.abortSnapshotReceipt())
+		}
 		if abandonErr := candidate.Abandon(); abandonErr != nil {
 			if idx.primaryOwner != nil {
 				abandonErr = idx.primaryOwner.retainFailedTransactionV6(candidate.DurableRoot(), abandonErr)
@@ -1282,6 +1331,7 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 		return post, prePublishErr(enqueueErr)
 	}
 	candidateOwned = false
+	install.post.physicalSeal = receipt.SealReceipt()
 	if opts.publishTiming != nil {
 		opts.publishTiming.FinalizeCandidateDependencyBytes += candidate.DependencyBytes()
 		opts.publishTiming.FinalizeCandidateOwnedBytes += candidate.OwnedBytes()

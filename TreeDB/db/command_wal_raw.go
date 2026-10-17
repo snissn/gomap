@@ -581,11 +581,38 @@ func (db *DB) SyncCommandWALAppliedPrefix() (physicalSync bool, err error) {
 }
 
 func (db *DB) appendCommandWALDurablePrefixBarrier() (uint64, error) {
-	return db.appendCommandWALIntent(&commandWALBatchIntent{
+	intent := &commandWALBatchIntent{
 		kind: commitlog.CommandKindDurablePrefixBarrier, scope: commitlog.CommandScopeSystem,
 		payloadFormat: commitlog.PayloadFormatDurablePrefixBarrierV1,
 		statsPath:     commandWALAppendStatsBarrier, statsPathSet: true,
-	}, true)
+	}
+	owner := db.acceptedPrefix.Load()
+	var ticket rootpublication.AcceptedTicket
+	if owner != nil {
+		var err error
+		ticket, err = owner.ReserveAccepted(false)
+		if errors.Is(err, rootpublication.ErrAcceptedCapacity) {
+			ticket, err = owner.ReserveAccepted(true)
+		}
+		if err != nil {
+			return 0, err
+		}
+	}
+	lsn, err := db.appendCommandWALIntent(intent, true)
+	if owner == nil {
+		return lsn, err
+	}
+	if intent.lsn == 0 {
+		return lsn, errors.Join(err, ticket.CancelAccepted())
+	}
+	if recordErr := ticket.RecordAssigned(intent.lsn, err, err == nil); recordErr != nil {
+		return intent.lsn, errors.Join(err, recordErr)
+	}
+	if err = ticket.InstallAccepted(rootpublication.AcceptedDescriptor{Sequence: owner.LogicalFrontiers().V, RootNeutral: true}); err != nil {
+		owner.PoisonAccepted(err)
+		return intent.lsn, err
+	}
+	return intent.lsn, nil
 }
 
 func (db *DB) flushCommandWAL(sync bool, observe bool) error {
@@ -1065,6 +1092,7 @@ func (db *DB) closeCommandWALDurablePrefixThrough(lsn uint64) {
 		return
 	}
 	commandWALStoreMax(&db.commandWALDurableLSN, lsn)
+	db.acceptedPrefix.Load().ObserveStableWAL(lsn)
 	db.commandWALDebt.releaseThrough(lsn)
 }
 

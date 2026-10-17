@@ -340,7 +340,7 @@ func (db *DB) publishCompactStorageValueLogSet(valueLogSet *valuelog.Set) error 
 		LeafGenerationStateVersion: oldState.LeafGenerationStateVersion,
 	}
 	db.state.Store(newState)
-	db.publishSnapshotView(db.idx.Load(), newState, db.valueLogManager)
+	db.publishSnapshotView(db.idx.Load(), newState, db.valueLogManager, nil)
 	db.mu.Unlock()
 	if oldState.ValueLogSet != nil {
 		return db.valueLogManager.Release(oldState.ValueLogSet)

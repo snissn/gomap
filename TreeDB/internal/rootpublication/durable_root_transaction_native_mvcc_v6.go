@@ -2,6 +2,7 @@ package rootpublication
 
 import (
 	"errors"
+	"fmt"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
@@ -146,7 +147,7 @@ func (t *DurableRootTransaction) abortNativeMVCCConstructionStepLockedV6(w *iter
 		r := c.components[c.componentCount-1]
 		ready, err := c.arena.DropToReleaseQueue(r, &c.cleanupQueue, w)
 		if err != nil {
-			return false, t.recordPhysicalCleanupFailureLocked(err)
+			return false, t.recordPhysicalCleanupFailureLocked(fmt.Errorf("abort PRIMARY component: %w", err))
 		}
 		if !ready {
 			return false, nil
@@ -161,7 +162,7 @@ func (t *DurableRootTransaction) abortNativeMVCCConstructionStepLockedV6(w *iter
 		if c.root != (primaryarena.Ref{}) {
 			ready, err := c.arena.DropNativeMVCCConstructionToReleaseQueueV6(c.root, t, &c.cleanupQueue, w)
 			if err != nil {
-				return false, t.recordPhysicalCleanupFailureLocked(err)
+				return false, t.recordPhysicalCleanupFailureLocked(fmt.Errorf("abort PRIMARY constructor: %w", err))
 			}
 			if !ready {
 				return false, nil
@@ -179,7 +180,7 @@ func (t *DurableRootTransaction) abortNativeMVCCConstructionStepLockedV6(w *iter
 				return false, t.recordPhysicalCleanupFailureLocked(ErrNativeMVCCRootWorkRequiredV6)
 			}
 			if err := t.abortComplete(t.input); err != nil {
-				return false, t.recordPhysicalCleanupFailureLocked(err)
+				return false, t.recordPhysicalCleanupFailureLocked(fmt.Errorf("abort PRIMARY completion: %w", err))
 			}
 		}
 		// Dispose every certificate/image/callback alias BEFORE the bank's
@@ -194,7 +195,7 @@ func (t *DurableRootTransaction) abortNativeMVCCConstructionStepLockedV6(w *iter
 	for c.cleanupPhase == 4 {
 		ready, progress, err := c.arena.ReleaseQueueStep(&c.cleanupQueue, w)
 		if err != nil {
-			return false, t.recordPhysicalCleanupFailureLocked(err)
+			return false, t.recordPhysicalCleanupFailureLocked(fmt.Errorf("abort PRIMARY release queue: %w", err))
 		}
 		if !ready {
 			return false, nil

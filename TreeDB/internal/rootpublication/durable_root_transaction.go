@@ -394,7 +394,7 @@ func (transaction *DurableRootTransaction) abortFrom(owner ResourceOwnerState) e
 			return transaction.abortConstructionLockedV6(&terminal)
 		}
 		if err := transaction.abort(transaction.input); err != nil {
-			return transaction.recordPhysicalCleanupFailureLocked(err)
+			return transaction.recordPhysicalCleanupFailureLocked(fmt.Errorf("abort durable-root visible state: %w", err))
 		}
 		if transaction.isConstructedPrimaryV6() {
 			return transaction.abortConstructionLockedV6(&terminal)

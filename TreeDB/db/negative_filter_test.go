@@ -264,7 +264,7 @@ func TestNegativeFilterCurrentRootMetadataCoverage(t *testing.T) {
 			if uncovered {
 				// Model a prior unknown-lineage publication with the same visible state.
 				d.clearSnapshotView()
-				d.publishSnapshotView(original.idx, original.state, original.vlogManager)
+				d.publishSnapshotView(original.idx, original.state, original.vlogManager, nil)
 			}
 			for _, publish := range []func() error{
 				d.RefreshCommandWALCheckpointFallback,
@@ -314,7 +314,7 @@ func TestNegativeFilterUnknownPublicationAndBudgetStayExact(t *testing.T) {
 	before := d.snapshotViewRO.Load()
 	state := cloneDBState(before.state)
 	state.CommitSeq++
-	d.publishSnapshotView(before.idx, state, before.vlogManager)
+	d.publishSnapshotView(before.idx, state, before.vlogManager, nil)
 	if d.snapshotViewRO.Load().negativeFilter != nil {
 		t.Fatal("unknown publication retained coverage")
 	}
@@ -323,7 +323,7 @@ func TestNegativeFilterUnknownPublicationAndBudgetStayExact(t *testing.T) {
 	}
 	state2 := cloneDBState(state)
 	state2.CommitSeq++
-	d.publishSnapshotView(before.idx, state2, before.vlogManager)
+	d.publishSnapshotView(before.idx, state2, before.vlogManager, nil)
 	if d.snapshotViewRO.Load().negativeFilter != nil {
 		t.Fatal("descendant recovered coverage")
 	}

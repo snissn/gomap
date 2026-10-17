@@ -178,9 +178,9 @@ func TestCollectionPublicationPathsConvergeOnCoherentSnapshotPublication(t *test
 				if !ok || publicationGuardCalledFunc(call.Fun, source.info) != analysis.publishSnapshotView {
 					return true
 				}
-				want := 3
+				want := 4
 				if wantPublishCoverage[publicationGuardFuncID(caller)] {
-					want = 4
+					want = 5
 				}
 				if len(call.Args) != want {
 					t.Errorf("%s membership coverage arguments=%d want %d", publicationGuardFuncID(caller), len(call.Args), want)

@@ -1370,7 +1370,7 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 				return err
 			}
 			if changed || systemLeavesAppended {
-				stagedLeafGenerationView = newLeafGenerationView(stagedLeafManifest)
+				stagedLeafGenerationView = db.leafGenerationViewForManifest(stagedLeafManifest)
 				leafGenerationChanged = true
 			}
 		}
@@ -1483,7 +1483,7 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 			if olderReplacement != nil {
 				olderReplacement.resources = preparedOlder
 			}
-			stagedLeafGenerationView = newLeafGenerationView(persistedManifest)
+			stagedLeafGenerationView = db.leafGenerationViewForManifest(persistedManifest)
 		}
 		if hook := db.vacuumPagerSyncHook; hook != nil {
 			hook(vacuumPagerSyncFinal)
@@ -1498,7 +1498,7 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 				var persistedPrimaryManifest *leafGenerationManifest
 				selected, replacementPrimary, finalSyncErr = db.writeRebuiltPrimaryRootsV5(ctx, replacementGen, recoverableRoots, *olderReplacement, rebuiltDurableRootV1{meta: nextMeta, resources: durableResources}, newPath, &persistedPrimaryManifest, sharedBase)
 				if persistedPrimaryManifest != nil {
-					stagedLeafGenerationView = newLeafGenerationView(persistedPrimaryManifest)
+					stagedLeafGenerationView = db.leafGenerationViewForManifest(persistedPrimaryManifest)
 					leafGenerationChanged = true
 				}
 			}
@@ -1788,7 +1788,7 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 			db.valueLogRefTracker.invalidate()
 			valueLogRefTrackerErr = err
 		}
-		db.publishSnapshotView(newGen, newState, db.valueLogManager)
+		db.publishSnapshotView(newGen, newState, db.valueLogManager, nil)
 		db.rootPublication = replacementRuntime
 		replacementRuntime = nil
 		replacementPrimary = nil

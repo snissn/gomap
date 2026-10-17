@@ -7,6 +7,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/batch"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -16,6 +17,7 @@ import (
 type cowBatchState struct {
 	holdBegan         time.Time
 	receipt           COWPublicationReceipt
+	accepted          rootpublication.AcceptedTicket
 	inPublication     bool
 	guard             *backenddb.CommandWALStagingGuardV1
 	txn               *ConditionalTxn

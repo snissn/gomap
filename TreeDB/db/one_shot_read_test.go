@@ -114,7 +114,7 @@ func TestOneShotReadCapturePublicationAndRelease(t *testing.T) {
 	d.idx.Store(idx)
 	state1 := &DBState{CommitSeq: 11, RootPageID: 1}
 	state2 := &DBState{CommitSeq: 22, RootPageID: 2}
-	d.publishSnapshotView(idx, state1, nil)
+	d.publishSnapshotView(idx, state1, nil, nil)
 
 	// A pending capture must see the view published under the exclusive lock.
 	d.valueLogPublicationMu.Lock()
@@ -129,7 +129,7 @@ func TestOneShotReadCapturePublicationAndRelease(t *testing.T) {
 		done <- r
 	}()
 	<-started
-	d.publishSnapshotView(idx, state2, nil)
+	d.publishSnapshotView(idx, state2, nil, nil)
 	d.valueLogPublicationMu.Unlock()
 	r := <-done
 	if r == nil {
@@ -177,7 +177,7 @@ func TestOneShotReadRejectedCaptureReleasesValueLogPin(t *testing.T) {
 	segment.RefCount.Store(1)
 	set := &valuelog.Set{Files: map[uint32]*valuelog.File{1: segment}}
 	d := &DB{snapPool: NewSnapshotPool()}
-	d.publishSnapshotView(idx, &DBState{CommitSeq: 1, RootPageID: 1, ValueLogSet: set}, &valuelog.Manager{})
+	d.publishSnapshotView(idx, &DBState{CommitSeq: 1, RootPageID: 1, ValueLogSet: set}, &valuelog.Manager{}, nil)
 	if read, err := d.acquireOneShotReadOrErr(); read != nil || !errors.Is(err, ErrClosed) {
 		t.Fatalf("capture without registry=%v, %v", read, err)
 	}

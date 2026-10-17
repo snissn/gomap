@@ -28,6 +28,9 @@ type Options struct {
 	// must identify InitialDurableFrontier.
 	DurableRootLineage  DurableRootLineageID
 	DurableRootSequence uint64
+	// AcceptedPrefixOwner retains the original logical owner when replacing a
+	// physical index runtime. Physical Frontier values remain commit sequences.
+	AcceptedPrefixOwner *Coordinator
 }
 
 type pendingEntry struct {
@@ -44,10 +47,13 @@ type drainRequest struct {
 	err error
 }
 
-// Coordinator owns only in-memory scheduling state. It is intentionally not
-// reachable from any production TreeDB handle in this ticket.
+// Coordinator owns production root-publication scheduling and the optional
+// bounded logical accepted prefix. Physical Frontiers and logical V/C/W/S are
+// distinct authorities with explicit receipt mappings between them.
 type Coordinator struct {
-	mu sync.Mutex
+	mu            sync.Mutex
+	acceptedOwner *Coordinator
+	accepted      acceptedPrefixState
 
 	clock              Clock
 	publisher          Publisher
@@ -169,7 +175,8 @@ func New(options Options) (*Coordinator, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	c := &Coordinator{
-		clock: clock, publisher: options.Publisher, fixedPublishDelay: options.FixedPublishDelay, startupSynchronous: options.StartupSynchronous, ctx: ctx, cancel: cancel,
+		acceptedOwner: options.AcceptedPrefixOwner.AcceptedPrefixOwner(),
+		clock:         clock, publisher: options.Publisher, fixedPublishDelay: options.FixedPublishDelay, startupSynchronous: options.StartupSynchronous, ctx: ctx, cancel: cancel,
 		wake: make(chan struct{}, 1), changed: make(chan struct{}), done: make(chan struct{}), wakeReason: WakeNone,
 		visible: options.InitialDurableFrontier, durable: options.InitialDurableFrontier,
 		oldestRecoverable:  options.OldestRecoverableCommitSeq,
@@ -759,6 +766,24 @@ func (c *Coordinator) dispatchPublication(startup bool) bool {
 		c.activeDispatch--
 		c.notifyLocked()
 		c.mu.Unlock()
+	}
+	// Logical custody joins only after original physical Finish/accounting and
+	// every coordinator lock have returned. The exact physical receipt remains
+	// distinct from both logical sequence and canonical command LSN.
+	if completion.success {
+		c.observeAcceptedPhysicalSeal(c, completion.frontier.commitSeq)
+		if err := c.drainSealedAccepted(); err != nil {
+			c.mu.Lock()
+			c.poison = errors.Join(c.poison, err, ErrRecoveryRequired)
+			c.notifyLocked()
+			c.mu.Unlock()
+		}
+	}
+	c.mu.Lock()
+	physicalError := c.poison
+	c.mu.Unlock()
+	if physicalError != nil {
+		c.PoisonAccepted(physicalError)
 	}
 	return progress
 }
