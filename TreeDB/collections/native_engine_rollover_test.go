@@ -107,3 +107,43 @@ func TestNativeEngineRolloverPartialAdmissionOwnsExactSparseWork(t *testing.T) {
 	}
 	t.Fatal("never reached complete rollover")
 }
+
+func TestNativeEnginePreRotationEdgeKeepsOriginalPhysicalSourceSlot(t *testing.T) {
+	budget, err := memtable.NewCOWBudget(memtable.DefaultCOWLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	admit := func(n uint64) (cowbtree.OwnedMapLease, error) { return budget.AdmitNativeBytes(n) }
+	schema, err := newNativeSchemaState(&CollectionMeta{Name: "collection"}, admit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	domain, err := prepareNativeDomainUpdate(nil, "primary", 0, 1, 0, []memtable.COWMutation{{Key: []byte("key"), Value: []byte("old")}}, budget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := nativeTestEngine(t, budget, nil, domain, schema)
+	domain, schema = nil, nil
+	base.Retain()
+	held := base // actual original engine edge, acquired before rotation
+	next, err := prepareNativeEngineRollover(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nativeTestFinishEngine(t, &base)
+	nativeTestFinishEngine(t, &next)
+	if budget.Stats().Sources != 1 {
+		t.Fatal("captured list dropped old active engine's physical slot", budget.Stats())
+	}
+	c, _ := held.collections.Get(1)
+	d, _ := c.domains.Get("primary")
+	if row, ok := d.pending.Get([]byte("key")); !ok || row.Value != "old" {
+		t.Fatal(row, ok)
+	}
+	c, d = nil, nil
+	budget.Close()
+	nativeTestFinishEngine(t, &held)
+	if budget.Stats().Sources != 0 || budget.Stats().TotalBytes != 0 {
+		t.Fatal(budget.Stats())
+	}
+}

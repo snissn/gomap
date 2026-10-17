@@ -118,6 +118,7 @@ type NativeAllocationReceipt interface{ Close() }
 // NativeSemanticAllocator is the SAME original budget authority. Retaining it
 // keeps no capture, state, Snapshot, cache or ancestor EngineVersion alive.
 type NativeSemanticAllocator interface {
+	Limits() memtable.COWLimits
 	AdmitNativeBytes(uint64) (*memtable.COWExternalLease, error)
 	NewNativeCOWWriter(sourceOwnerBytes uint64) (*memtable.COWWriter, error)
 }

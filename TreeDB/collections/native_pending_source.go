@@ -72,8 +72,7 @@ func (s *nativePendingSource) release() (done cowbtree.OwnedMapCompletion) {
 // admit is original producer admission during rollover; accepted handoff uses
 // its existing preadmitted maintenance construction capacity instead.
 func newNativePendingSources(source *nativePendingSource, older *nativePendingSources, admit cowbtree.OwnedMapAdmit) (*nativePendingSources, error) {
-	charge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativePendingSources{}))) +
-		memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowbtree.OwnedMapRefund{})))
+	charge := nativePendingSourcesCharge()
 	lease, err := admit(charge)
 	if err != nil {
 		return nil, err
@@ -123,4 +122,9 @@ func (s *nativePendingSources) get(key []byte) (memtable.COWRecord, bool) {
 		}
 	}
 	return memtable.COWRecord{}, false
+}
+
+func nativePendingSourcesCharge() uint64 {
+	return memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativePendingSources{}))) +
+		memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowbtree.OwnedMapRefund{})))
 }

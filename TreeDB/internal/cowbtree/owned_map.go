@@ -152,32 +152,11 @@ func NewOwnedMapBuilder[K ordered, V any](base *OwnedMap[K, V], mutations int, l
 	if mutations > int(^uint(0)>>1)-count {
 		return nil, ErrOwnedMap
 	}
-	// Use the maintained degree's occupancy bound, rather than binary-tree
-	// height. A degree-32 height-h map has at least 2*32^(h-1)-1 items.
-	height, minimum := uint64(1), uint64(1)
-	degree := uint64((degreeMax + 1) / 2)
-	for minimum <= uint64(count+mutations) {
-		if minimum > (^uint64(0)-(degree-1))/degree {
-			break
-		}
-		minimum = minimum*degree + degree - 1
-		if minimum > uint64(count+mutations) {
-			break
-		}
-		height++
+	charge, err := ownedMapBuilderCharge[K, V](count+mutations, degreeMax, mutations)
+	if err != nil {
+		return nil, err
 	}
-	nodes := uint64(mutations) * (2*height + 3)
-	if mutations != 0 && nodes/uint64(mutations) != 2*height+3 {
-		return nil, ErrOwnedMap
-	}
-	// Growth allocates less than twice final capacity. Metadata and child
-	// headers are charged even for leaves; this is coarse finite admission.
-	nodeBytes := uint64(unsafe.Sizeof(mapNode[K, V]{})) + uint64(unsafe.Sizeof(ownedMapNode[K, V]{})) + 2*uint64(degreeMax)*uint64(unsafe.Sizeof(mapPair[K, V]{})) + 2*uint64(degreeMax+1)*uint64(unsafe.Sizeof(uintptr(0))) + uint64(unsafe.Sizeof([]*mapNode[K, V]{})) + 128
-	baseBytes := uint64(unsafe.Sizeof(OwnedMapBuilder[K, V]{})) + uint64(unsafe.Sizeof(OwnedMap[K, V]{})) + uint64(unsafe.Sizeof(Map[K, V]{})) + uint64(unsafe.Sizeof(ownedMapAllocation{})) + 256
-	if nodes > (^uint64(0)-baseBytes)/nodeBytes {
-		return nil, ErrOwnedMap
-	}
-	lease, err := admit(baseBytes + nodes*nodeBytes)
+	lease, err := admit(charge)
 	if err != nil {
 		return nil, err
 	}
@@ -193,6 +172,47 @@ func NewOwnedMapBuilder[K ordered, V any](base *OwnedMap[K, V], mutations int, l
 		tree.isoid, tree.sealed = newIsoID(), false
 	}
 	return &OwnedMapBuilder[K, V]{tree: tree, allocation: a, lifetime: lifetime, remaining: mutations}, nil
+}
+
+// OwnedMapBuilderMaximumCharge bounds a sparse builder against any later
+// degree-32 directory size representable by this process. Native physical
+// handoff reserves this finite maintenance capacity before acceptance, while
+// later suffix writes may grow the latest directory. It uses exactly the same
+// node/cohort formula as NewOwnedMapBuilder; it allocates or retains nothing.
+func OwnedMapBuilderMaximumCharge[K ordered, V any](mutations int) (uint64, error) {
+	return ownedMapBuilderCharge[K, V](int(^uint(0)>>1), 63, mutations)
+}
+
+func ownedMapBuilderCharge[K ordered, V any](maxItems, degreeMax, mutations int) (uint64, error) {
+	if maxItems < 0 || mutations < 0 || degreeMax < 63 {
+		return 0, ErrOwnedMap
+	}
+	// Use the maintained degree's occupancy bound, rather than binary-tree
+	// height. A degree-32 height-h map has at least 2*32^(h-1)-1 items.
+	height, minimum := uint64(1), uint64(1)
+	degree := uint64((degreeMax + 1) / 2)
+	for minimum <= uint64(maxItems) {
+		if minimum > (^uint64(0)-(degree-1))/degree {
+			break
+		}
+		minimum = minimum*degree + degree - 1
+		if minimum > uint64(maxItems) {
+			break
+		}
+		height++
+	}
+	nodes := uint64(mutations) * (2*height + 3)
+	if mutations != 0 && nodes/uint64(mutations) != 2*height+3 {
+		return 0, ErrOwnedMap
+	}
+	// Growth allocates less than twice final capacity. Metadata and child
+	// headers are charged even for leaves; this is coarse finite admission.
+	nodeBytes := uint64(unsafe.Sizeof(mapNode[K, V]{})) + uint64(unsafe.Sizeof(ownedMapNode[K, V]{})) + 2*uint64(degreeMax)*uint64(unsafe.Sizeof(mapPair[K, V]{})) + 2*uint64(degreeMax+1)*uint64(unsafe.Sizeof(uintptr(0))) + uint64(unsafe.Sizeof([]*mapNode[K, V]{})) + 128
+	baseBytes := uint64(unsafe.Sizeof(OwnedMapBuilder[K, V]{})) + uint64(unsafe.Sizeof(OwnedMap[K, V]{})) + uint64(unsafe.Sizeof(Map[K, V]{})) + uint64(unsafe.Sizeof(ownedMapAllocation{})) + 256
+	if nodes > (^uint64(0)-baseBytes)/nodeBytes {
+		return 0, ErrOwnedMap
+	}
+	return baseBytes + nodes*nodeBytes, nil
 }
 
 func (b *OwnedMapBuilder[K, V]) Set(key K, value V) error {

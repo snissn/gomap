@@ -163,6 +163,13 @@ type COWExternalLease struct {
 }
 
 func (b *COWBudget) AcquireExternal(bytes uint64) (*COWExternalLease, error) {
+	return b.acquireExternal(bytes, false)
+}
+
+// nativeSource is used only by the original prewrite native generation cell.
+// Slot and metadata admission are one original budget operation; the cell,
+// rather than the external allocation receipt, releases the slot at last edge.
+func (b *COWBudget) acquireExternal(bytes uint64, nativeSource bool) (*COWExternalLease, error) {
 	charge, ok := cowAdd(bytes, cowAllocation(uint64(unsafe.Sizeof(COWExternalLease{}))))
 	if !ok {
 		return nil, ErrCOWCapacity
@@ -172,13 +179,16 @@ func (b *COWBudget) AcquireExternal(bytes uint64) (*COWExternalLease, error) {
 	if b.closed {
 		return nil, ErrCOWClosed
 	}
-	if b.stats.ExternalLeases == int(^uint(0)>>1) || !cowFits(b.limits.MaxInFlightBytes, b.stats.ReservedBytes, charge) ||
+	if (nativeSource && b.stats.Sources >= b.limits.MaxSources) || b.stats.ExternalLeases == int(^uint(0)>>1) || !cowFits(b.limits.MaxInFlightBytes, b.stats.ReservedBytes, charge) ||
 		!b.retirementFitsLocked(charge) || !b.addLocked(charge) {
 		return nil, ErrCOWCapacity
 	}
 	b.stats.ReservedBytes += charge
 	b.stats.ExternalBytes += charge
 	b.stats.ExternalLeases++
+	if nativeSource {
+		b.stats.Sources++
+	}
 	return &COWExternalLease{budget: b, charge: charge}, nil
 }
 

@@ -54,34 +54,38 @@ Native pending sources have an active immutable root and a finite captured
 source list. Physical source ownership and list-position metadata are separate:
 multiple views/list positions share the same original root and source-slot
 receipt. The receipt uses the root's original COW budget and the existing finite
-source counter. Native read views must retain their enclosing engine/source
+source counter. Every variable native ACTIVE or captured generation reserves
+one slot before its first accepted mutation, sharing the same counter with
+raw frozen sources. Native read views must retain their enclosing engine/source
 owner through all root access. A directly acquired lower COW view separately
 retains its generation/view charge; it is not a detached native engine view.
 Rotation does not freeze a generation with private forks. Already prepared
 forks may finish or cancel privately; the complete-cut basis check must reject
 an old physical basis before canonical assignment. New active writes after
 rotation use a fresh generation. No-op rotation retains the same descriptor
-without consuming a source slot. Canceled private rotation refunds the original
-slot after detaching its resource and containing descriptor aliases.
+without consuming another source slot. Canceled private rotation preserves its
+original active generation's slot and adds no captured-source slot. The slot
+refund follows the last real generation/root/writer/source edge.
 
 The original native writer preadmits the physical source owner's metadata
-before its first mutation can become accepted. Forks share that generation's
-original accounting cell. Capturing a root atomically claims the existing
-finite source counter and one exact root edge, without asking the producer for
+before its first mutation can become accepted. Source-slot and metadata-byte
+admission are one original budget operation. Forks share that generation's
+original accounting cell. Capturing a root atomically claims one exact root
+edge in that existing source, without asking the producer for
 additional bytes. The cell contains no root, generation, engine or work
 backpointer. Generation cleanup and source cleanup independently detach their
 edges before the last independent allocation receipt refunds the cohort.
 Canceled rotation releases its claim while leaving the original generation's
-preadmission available for another attempt. Both installed history and pending
+slot and metadata preadmission available for another attempt. Both installed history and pending
 fork reservations include that cohort in the finite generation limit.
 
-Source accounting across views acquired before rotation remains an activation
-gate. Such an engine owns the active pending root, rather than a later captured
-list descriptor. Its original generation must continue to hold the finite
-physical source slot after that captured list is released. Variable native
-active generations also need source admission before accepted writes, so an
-overfull first whole-cut capture cannot strand an uncaptured logical prefix.
-The current constructor controls do not establish either public read-view gate.
+An engine acquired before rotation owns the active pending root, rather than a
+later captured list descriptor. Its original generation continues to hold the
+physical source slot after that captured list is released. Admitting active
+sources before accepted writes also prevents an overfull first whole-cut
+capture from stranding an uncaptured logical prefix. Actual public native
+read-view and transaction routing remain activation gates; private constructor
+controls do not establish those public paths.
 
 Private whole-engine rollover adopts each partial domain, map builder and
 collection into its preborn original successor work before the next fallible
@@ -99,3 +103,39 @@ metadata must use the existing preadmitted maintenance capacity before physical
 acceptance. Producer exhaustion must not prevent completion of an accepted
 handoff. These ownership foundations do not activate collection producers or
 replace the required public transaction, recovery and retention evidence.
+
+### Original handoff capacity (construction)
+
+The sparse handoff helper replaces only captured touched domains with their
+accepted physical roots. It preserves later active roots and newer captured
+source positions, shares their original physical owners, and removes the
+accepted captured prefix. Logical incarnation and interpretation checks keep
+newer catalog changes. The separate captured successor removes the materialized
+pending domains from its pending directory.
+
+Before physical acceptance, `nativeHandoffCapacity` calculates capacity for both
+possible successors. It includes the complete private successor ledger, three
+global map builders, two map builders per touched collection, each touched
+domain/collection descriptor, source-position and scratch capacities bounded by
+the original finite source limit, and every independent allocation receipt.
+Directory builders use the existing maintained map admission formula, with a
+maximum representable height to cover later catalog growth. This conservative
+height bound remains a sizing concern for large touched sets; required default
+capacity/progress controls and a tighter source-bound item ceiling remain open
+before activation. No configured capacity is increased to conceal this cost.
+
+`COWExternalLease.SplitNativeBytes` transfers already admitted bytes from the
+same original held build reservation into independent child receipts. It uses
+the same aggregate rounding as native admission, preserves an explicit original
+build-ledger floor and the parent receipt, changes no total/reserved/external
+byte counter, and checks the finite receipt-count bound. A child has no parent,
+Work, state or resource pointer. Existing promised capacity remains usable after
+fresh maintenance admission closes. An insufficient accepted promise is a
+terminal original-ledger error, not a reason to acquire replacement capacity.
+
+Construction controls exercise latest and captured successors after exact
+producer exhaustion and maintenance admission Close, then prove independent
+accepted-prefix source retirement with the newer suffix alive. A late private
+failure retains the original pending edge until its exact partial Work cleans
+up off-gate. Full native `PrepareBuild`/`PrepareHandoff` integration and the
+public captured collection/transaction routes are still open.

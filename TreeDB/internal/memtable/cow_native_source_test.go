@@ -52,7 +52,7 @@ func TestCOWNativeSourceCaptureRequiresNoProducerHeadroom(t *testing.T) {
 	if err != nil {
 		t.Fatal("capture depended on producer headroom", err)
 	}
-	if got := b.Stats(); got.TotalBytes != full.TotalBytes || got.ReservedBytes != full.ReservedBytes || got.Sources != full.Sources+1 {
+	if got := b.Stats(); got.TotalBytes != full.TotalBytes || got.ReservedBytes != full.ReservedBytes || got.Sources != full.Sources {
 		t.Fatal("capture admitted new storage", full, got)
 	}
 	if _, err = r.AcquireCapturedSource(128); !errors.Is(err, ErrCOWPending) {
@@ -63,7 +63,7 @@ func TestCOWNativeSourceCaptureRequiresNoProducerHeadroom(t *testing.T) {
 	retirement.Drain()
 	claim.Close()
 	claim = nil
-	if b.Stats().Sources != 0 {
+	if b.Stats().Sources != 1 {
 		t.Fatal(b.Stats())
 	}
 	// Original generation metadata remains available to the next attempt.
@@ -141,6 +141,55 @@ func TestCOWNativeSourceReservationRefusesBeforeWriterAndChecksOriginalCapacity(
 	retirement := r.Release()
 	r = nil
 	retirement.Drain()
+	if b.Stats().TotalBytes != 0 {
+		t.Fatal(b.Stats())
+	}
+}
+
+func TestCOWNativeActiveAndRawFrozenSourcesUseSameOriginalFiniteCounter(t *testing.T) {
+	limits := DefaultCOWLimits()
+	limits.MaxSources = 1
+	b, raw := cowTestWriter(t, limits)
+	r := cowTestPublish(t, raw, cowTestEntries(1))
+	if err := raw.Freeze(); err != nil {
+		t.Fatal(err)
+	}
+	before := b.Stats()
+	if _, err := b.NewNativeCOWWriter(128); !errors.Is(err, ErrCOWCapacity) {
+		t.Fatal("native bypassed raw source", err)
+	}
+	if b.Stats() != before {
+		t.Fatal("source refusal changed original accounting")
+	}
+	cowTestClose(raw)
+	raw = nil
+	cowTestRelease(r)
+	r = nil
+	native, err := b.NewNativeCOWWriter(128)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.Stats().Sources != 1 {
+		t.Fatal("active native source was not admitted", b.Stats())
+	}
+	raw, err = NewCOWWriter(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = raw.Freeze(); !errors.Is(err, ErrCOWCapacity) {
+		t.Fatal("raw bypassed active native source", err)
+	}
+	cowTestClose(native)
+	native = nil
+	if b.Stats().Sources != 0 {
+		t.Fatal("last native writer retained slot", b.Stats())
+	}
+	if err = raw.Freeze(); err != nil {
+		t.Fatal(err)
+	}
+	b.Close()
+	cowTestClose(raw)
+	raw = nil
 	if b.Stats().TotalBytes != 0 {
 		t.Fatal(b.Stats())
 	}

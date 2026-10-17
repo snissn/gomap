@@ -34,9 +34,7 @@ func newNativeDomainState(name string, baseRoot, interpretation uint64, policy b
 	if name == "" || interpretation == 0 || admit == nil {
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
-	charge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeDomainState{}))) +
-		memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowbtree.OwnedMapRefund{}))) +
-		memtable.COWAllocationCharge(uint64(len(name)))
+	charge := nativeDomainStateCharge(name)
 	lease, err := admit(charge)
 	if err != nil {
 		return nil, err
@@ -92,4 +90,14 @@ func (nativeDomainLifetime) Release(d *nativeDomainState) (cowbtree.OwnedMapComp
 	d.name = ""
 	done.Append(refund.Completion())
 	return done, nil
+}
+
+func nativeDomainStateCharge(name string) uint64 {
+	metadata := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeDomainState{}))) +
+		memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowbtree.OwnedMapRefund{})))
+	text := memtable.COWAllocationCharge(uint64(len(name)))
+	if text > ^uint64(0)-metadata {
+		return ^uint64(0) // original admission rejects before allocating anything
+	}
+	return metadata + text
 }

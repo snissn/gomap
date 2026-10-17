@@ -11,7 +11,7 @@ import (
 
 func TestNativeDomainRolloverSourceBoundsViewsAndSuffixGeneration(t *testing.T) {
 	limits := memtable.DefaultCOWLimits()
-	limits.MaxSources = 1
+	limits.MaxSources = 2
 	budget, err := memtable.NewCOWBudget(limits)
 	if err != nil {
 		t.Fatal(err)
@@ -73,27 +73,33 @@ func TestNativeDomainRolloverSourceBoundsViewsAndSuffixGeneration(t *testing.T) 
 		t.Fatal("suffix did not preserve captured ownership")
 	}
 	before := budget.Stats()
-	partial, err := prepareNativeDomainRollover(suffix, admit)
-	if !errors.Is(err, memtable.ErrCOWCapacity) {
-		t.Fatalf("source cap: %v", err)
-	}
-	done, err = (nativeDomainLifetime{}).Release(partial)
-	partial = nil
+	// The fresh active suffix owns its physical slot before accepted writes;
+	// capturing it consumes no additional source capacity.
+	secondCaptured, err := prepareNativeDomainRollover(suffix, admit)
 	if err != nil {
 		t.Fatal(err)
 	}
-	done.Complete()
-	if after := budget.Stats(); after.TotalBytes != before.TotalBytes || after.Sources != before.Sources {
-		t.Fatal("refusal changed original accounting", after)
+	if budget.Stats().Sources != 2 {
+		t.Fatal(budget.Stats())
+	}
+	refused, err := prepareNativeDomainUpdate(nil, "other", 0, 1, 0, []memtable.COWMutation{{Key: []byte("other"), Value: []byte("refused")}}, budget)
+	if !errors.Is(err, memtable.ErrCOWCapacity) {
+		t.Fatalf("prewrite active source cap: %v", err)
+	}
+	if refused != nil {
+		t.Fatal("active source refusal produced state")
+	}
+	if budget.Stats().Sources != before.Sources {
+		t.Fatal("capture/refusal changed original source slots", budget.Stats())
 	}
 	// A view independently keeps the exact captured root after domains and the
-	// original budget close. Its generation backing outlives the source slot.
+	// original budget close. Its original generation and source slot both survive until that last view.
 	view, err := rotated.captured.source.root.Acquire(0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	budget.Close()
-	for _, d := range []*nativeDomainState{old, rotated, suffix} {
+	for _, d := range []*nativeDomainState{old, rotated, suffix, secondCaptured} {
 		done, err = (nativeDomainLifetime{}).Release(d)
 		if err != nil {
 			t.Fatal(err)
@@ -101,8 +107,8 @@ func TestNativeDomainRolloverSourceBoundsViewsAndSuffixGeneration(t *testing.T) 
 		d = nil
 		done.Complete()
 	}
-	old, rotated, suffix = nil, nil, nil
-	if budget.Stats().Sources != 0 || budget.Stats().TotalBytes == 0 {
+	old, rotated, suffix, secondCaptured = nil, nil, nil, nil
+	if budget.Stats().Sources != 1 || budget.Stats().TotalBytes == 0 {
 		t.Fatal(budget.Stats())
 	}
 	if row, ok, err := view.Get([]byte("key")); err != nil || !ok || row.Value != "old" {
@@ -115,7 +121,7 @@ func TestNativeDomainRolloverSourceBoundsViewsAndSuffixGeneration(t *testing.T) 
 	}
 }
 
-func TestNativeDomainCanceledRolloverRefundsOriginalSlotAndPreservesForkCancellation(t *testing.T) {
+func TestNativeDomainCanceledRolloverKeepsOriginalSlotAndPreservesForkCancellation(t *testing.T) {
 	budget, err := memtable.NewCOWBudget(memtable.DefaultCOWLimits())
 	if err != nil {
 		t.Fatal(err)
@@ -138,9 +144,39 @@ func TestNativeDomainCanceledRolloverRefundsOriginalSlotAndPreservesForkCancella
 		t.Fatal(err)
 	}
 	after := budget.Stats()
-	if after.Sources != 0 || after.TotalBytes != before.TotalBytes || after.ReservedBytes != before.ReservedBytes {
+	if after.Sources != before.Sources || after.TotalBytes != before.TotalBytes || after.ReservedBytes != before.ReservedBytes {
 		t.Fatal(before, after)
 	}
+	calls := 0
+	partial, err := prepareNativeDomainRollover(old, func(n uint64) (cowbtree.OwnedMapLease, error) {
+		calls++
+		if calls == 2 {
+			return nil, refusal
+		}
+		return budget.AdmitNativeBytes(n)
+	})
+	if err != refusal || partial == nil || partial.privateSource == nil {
+		t.Fatal("missing original partial source", err)
+	}
+	done, err := (nativeDomainLifetime{}).Release(partial)
+	partial = nil
+	if err != nil {
+		t.Fatal(err)
+	}
+	done.Complete()
+	if budget.Stats().Sources != before.Sources {
+		t.Fatal("cancel changed active source slot", budget.Stats())
+	}
+	rotated, err := prepareNativeDomainRollover(old, func(n uint64) (cowbtree.OwnedMapLease, error) { return budget.AdmitNativeBytes(n) })
+	if err != nil {
+		t.Fatal("cancel lost original capture claim", err)
+	}
+	done, err = (nativeDomainLifetime{}).Release(rotated)
+	rotated = nil
+	if err != nil {
+		t.Fatal(err)
+	}
+	done.Complete()
 	retirement := prepared.Cancel()
 	prepared = nil
 	retirement.Drain()
@@ -151,7 +187,7 @@ func TestNativeDomainCanceledRolloverRefundsOriginalSlotAndPreservesForkCancella
 		t.Fatal(row)
 	}
 	budget.Close()
-	done, err := (nativeDomainLifetime{}).Release(old)
+	done, err = (nativeDomainLifetime{}).Release(old)
 	old = nil
 	if err != nil {
 		t.Fatal(err)

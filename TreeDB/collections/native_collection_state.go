@@ -32,7 +32,7 @@ func newNativeCollectionState(incarnation uint64, schema *nativeSchemaState, dom
 	if incarnation == 0 || schema == nil || domains == nil || pending == nil || admit == nil {
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
-	charge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeCollectionState{}))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowbtree.OwnedMapRefund{})))
+	charge := nativeCollectionStateCharge()
 	lease, err := admit(charge)
 	if err != nil {
 		return nil, err
@@ -99,4 +99,9 @@ func finishNativeDomainDirectory(slot **cowbtree.OwnedMap[string, *nativeDomainS
 	*slot = nil
 	m = nil
 	return completion, nil
+}
+
+func nativeCollectionStateCharge() uint64 {
+	return memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeCollectionState{}))) +
+		memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowbtree.OwnedMapRefund{})))
 }

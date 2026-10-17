@@ -27,20 +27,9 @@ func newNativeEnginePreparation(base *nativeEngineVersion, collectionCount, doma
 	if base == nil || collectionCount < 0 || domainCount < 0 || allocation == nil {
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
-	count := uint64(collectionCount) + uint64(domainCount)
-	ptr := uint64(unsafe.Sizeof(uintptr(0)))
-	if count > ^uint64(0)/ptr {
-		return nil, memtable.ErrCOWCapacity
-	}
-	charge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeEngineVersion{}))) +
-		memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeEngineRefund{}))) +
-		memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeEnginePreparation{})))
-	for _, bytes := range [2]uint64{uint64(collectionCount) * ptr, uint64(domainCount) * ptr} {
-		backing := memtable.COWAllocationCharge(bytes)
-		if backing > ^uint64(0)-charge {
-			return nil, memtable.ErrCOWCapacity
-		}
-		charge += backing
+	charge, err := nativeEnginePreparationCharge(collectionCount, domainCount)
+	if err != nil {
+		return nil, err
 	}
 	lease, err := allocation.AdmitNativeBytes(charge)
 	if err != nil {
@@ -50,6 +39,28 @@ func newNativeEnginePreparation(base *nativeEngineVersion, collectionCount, doma
 	e.refs.Store(1)
 	e.cleanup.Work = e
 	return e, nil
+}
+
+func nativeEnginePreparationCharge(collectionCount, domainCount int) (uint64, error) {
+	if collectionCount < 0 || domainCount < 0 {
+		return 0, memtable.ErrCOWCapacity
+	}
+	count := uint64(collectionCount) + uint64(domainCount)
+	ptr := uint64(unsafe.Sizeof(uintptr(0)))
+	if count > ^uint64(0)/ptr {
+		return 0, memtable.ErrCOWCapacity
+	}
+	charge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeEngineVersion{}))) +
+		memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeEngineRefund{}))) +
+		memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeEnginePreparation{})))
+	for _, bytes := range [2]uint64{uint64(collectionCount) * ptr, uint64(domainCount) * ptr} {
+		backing := memtable.COWAllocationCharge(bytes)
+		if backing > ^uint64(0)-charge {
+			return 0, memtable.ErrCOWCapacity
+		}
+		charge += backing
+	}
+	return charge, nil
 }
 
 func (p *nativeEnginePreparation) finish() (done cowbtree.OwnedMapCompletion, failure error) {

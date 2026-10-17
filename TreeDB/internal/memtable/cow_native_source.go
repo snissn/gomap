@@ -5,6 +5,8 @@ import "unsafe"
 // COWNativeSourceReservation is the original preadmitted native source cohort.
 // It owns no root, generation, source, work record or engine backpointer. The
 // generation and its one original captured source share this accounting cell.
+// Variable native ACTIVE and captured generations consume the SAME finite
+// source counter from their first prewrite admission until the last true edge.
 // All live fields are guarded by the original budget; the last edge clears
 // budget too, after both original release operations have acquired their lock.
 type COWNativeSourceReservation struct {
@@ -24,7 +26,7 @@ func (b *COWBudget) NewNativeCOWWriter(sourceOwnerBytes uint64) (*COWWriter, err
 	if !ok {
 		return nil, ErrCOWCapacity
 	}
-	lease, err := b.AcquireExternal(charge)
+	lease, err := b.acquireExternal(charge, true)
 	if err != nil {
 		return nil, err
 	}
@@ -74,12 +76,11 @@ func (c *COWNativeSourceReservation) claimLocked(bytes uint64) error {
 	if c.claimed {
 		return ErrCOWPending
 	}
-	if bytes > c.capacity || b.stats.Sources >= b.limits.MaxSources {
+	if bytes > c.capacity {
 		return ErrCOWCapacity
 	}
 	c.refs++
 	c.claimed = true
-	b.stats.Sources++
 	return nil
 }
 
@@ -102,6 +103,7 @@ func (c *COWNativeSourceReservation) takeFinalLeaseLocked() *COWExternalLease {
 		return nil
 	}
 	lease := c.lease
+	c.budget.stats.Sources--
 	c.lease = nil
 	c.budget = nil
 	c.capacity = 0
@@ -110,7 +112,8 @@ func (c *COWNativeSourceReservation) takeFinalLeaseLocked() *COWExternalLease {
 
 // Close completes the original source claim after its actual root/resource and
 // containing source aliases have detached. A canceled rollover can reuse the
-// preadmitted cell while its original generation still exists.
+// preadmitted cell while its original generation still exists. Cancellation
+// adds or refunds no physical source slot; the original active source owns it.
 func (c *COWNativeSourceReservation) Close() {
 	if c == nil {
 		return
@@ -122,7 +125,6 @@ func (c *COWNativeSourceReservation) Close() {
 		panic("COW native source claim released twice")
 	}
 	c.claimed = false
-	b.stats.Sources--
 	c.refs--
 	lease := c.takeFinalLeaseLocked()
 	b.mu.Unlock()
