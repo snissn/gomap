@@ -9,67 +9,59 @@ import (
 )
 
 func TestCOWBasisCompletionWaitsForActualOriginalIterator(t *testing.T) {
-	for _, primary := range []bool{false, true} {
-		name := "DATA"
-		if primary {
-			name = "PRIMARY"
-		}
-		t.Run(name, func(t *testing.T) {
-			backend, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), IndexPrimaryDirectory: primary})
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer backend.Close()
-			if err = backend.SetSync([]byte("disk"), []byte("basis")); err != nil {
-				t.Fatal(err)
-			}
-			c, err := newCOWCache(backend, 2, memtable.DefaultCOWLimits())
-			if err != nil {
-				t.Fatal(err)
-			}
-			cache := &DB{backend: backend, cow: c, mutableShards: make([]memShard, 2), mutableShardMask: 1}
-			outer := cache.AcquireSnapshot()
-			if outer == nil {
-				t.Fatal("outer capture")
-			}
-			original := outer.cowCut.basis
-			reader, err := original.snapshot.Iterator(nil, nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err = c.closeWithBudget(false); err != nil {
-				t.Fatal(err)
-			}
-			if err = backend.Close(); err != nil {
-				t.Fatal(err)
-			}
-			c.budget.Close()
-			if err = outer.Close(); err != nil {
-				t.Fatal(err)
-			}
-			original.completionMu.Lock()
-			pending := !original.completed && original.snapshot != nil
-			original.completionMu.Unlock()
-			before := c.budget.Stats()
-			if !pending || before.ExternalBytes == 0 || before.ExternalLeases == 0 {
-				t.Fatalf("Close request refunded original pending payload: %+v", before)
-			}
-			if err = outer.Close(); err != nil {
-				t.Fatal(err)
-			}
-			if got := c.budget.Stats(); got != before {
-				t.Fatal("repeat outer Close changed pending capacity")
-			}
-			if err = reader.Close(); err != nil {
-				t.Fatal(err)
-			}
-			original.completionMu.Lock()
-			completed := original.completed && original.cleanupErr == nil && original.snapshot == nil && original.pins == nil
-			original.completionMu.Unlock()
-			if got := c.budget.Stats(); !completed || got.ExternalBytes != 0 || got.ExternalLeases != 0 {
-				t.Fatalf("actual completion retained original payload or charge: %+v", got)
-			}
-		})
+	backend, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer backend.Close()
+	if err = backend.SetSync([]byte("disk"), []byte("basis")); err != nil {
+		t.Fatal(err)
+	}
+	c, err := newCOWCache(backend, 2, memtable.DefaultCOWLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache := &DB{backend: backend, cow: c, mutableShards: make([]memShard, 2), mutableShardMask: 1}
+	outer := cache.AcquireSnapshot()
+	if outer == nil {
+		t.Fatal("outer capture")
+	}
+	original := outer.cowCut.basis
+	reader, err := original.snapshot.Iterator(nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = c.closeWithBudget(false); err != nil {
+		t.Fatal(err)
+	}
+	if err = backend.Close(); err != nil {
+		t.Fatal(err)
+	}
+	c.budget.Close()
+	if err = outer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	original.completionMu.Lock()
+	pending := !original.completed && original.snapshot != nil
+	original.completionMu.Unlock()
+	before := c.budget.Stats()
+	if !pending || before.ExternalBytes == 0 || before.ExternalLeases == 0 {
+		t.Fatalf("Close request refunded original pending payload: %+v", before)
+	}
+	if err = outer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.budget.Stats(); got != before {
+		t.Fatal("repeat outer Close changed pending capacity")
+	}
+	if err = reader.Close(); err != nil {
+		t.Fatal(err)
+	}
+	original.completionMu.Lock()
+	completed := original.completed && original.cleanupErr == nil && original.snapshot == nil && original.pins == nil
+	original.completionMu.Unlock()
+	if got := c.budget.Stats(); !completed || got.ExternalBytes != 0 || got.ExternalLeases != 0 {
+		t.Fatalf("actual completion retained original payload or charge: %+v", got)
 	}
 }
 
@@ -86,37 +78,29 @@ func (p *cowBasisAlreadyClosedProvider) AcquireSnapshotWithAllocationAdmission(a
 	return s, err
 }
 func TestCOWBasisStartupAndHandoffPostcaptureClose(t *testing.T) {
-	for _, primary := range []bool{false, true} {
-		name := "DATA"
-		if primary {
-			name = "PRIMARY"
-		}
-		t.Run(name, func(t *testing.T) {
-			backend, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), IndexPrimaryDirectory: primary})
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer backend.Close()
-			provider := &cowBasisAlreadyClosedProvider{DB: backend, closeCapture: true}
-			if c, err := newCOWCache(provider, 2, memtable.DefaultCOWLimits()); c != nil || !errors.Is(err, backenddb.ErrClosed) {
-				t.Fatalf("closed startup capture admitted: cache=%v err=%v", c, err)
-			}
-			provider.closeCapture = false
-			c, err := newCOWCache(provider, 2, memtable.DefaultCOWLimits())
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer c.close()
-			before := c.budget.Stats()
-			provider.closeCapture = true
-			if b, err := c.captureBackendBasis(provider); b != nil || !errors.Is(err, backenddb.ErrClosed) {
-				t.Fatalf("closed handoff capture admitted: basis=%v err=%v", b, err)
-			}
-			after := c.budget.Stats()
-			if after.ExternalBytes != before.ExternalBytes || after.ExternalLeases != before.ExternalLeases {
-				t.Fatalf("actually completed refusal leaked charge: before=%+v after=%+v", before, after)
-			}
-		})
+	backend, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer backend.Close()
+	provider := &cowBasisAlreadyClosedProvider{DB: backend, closeCapture: true}
+	if c, err := newCOWCache(provider, 2, memtable.DefaultCOWLimits()); c != nil || !errors.Is(err, backenddb.ErrClosed) {
+		t.Fatalf("closed startup capture admitted: cache=%v err=%v", c, err)
+	}
+	provider.closeCapture = false
+	c, err := newCOWCache(provider, 2, memtable.DefaultCOWLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.close()
+	before := c.budget.Stats()
+	provider.closeCapture = true
+	if b, err := c.captureBackendBasis(provider); b != nil || !errors.Is(err, backenddb.ErrClosed) {
+		t.Fatalf("closed handoff capture admitted: basis=%v err=%v", b, err)
+	}
+	after := c.budget.Stats()
+	if after.ExternalBytes != before.ExternalBytes || after.ExternalLeases != before.ExternalLeases {
+		t.Fatalf("actually completed refusal leaked charge: before=%+v after=%+v", before, after)
 	}
 }
 
@@ -169,66 +153,58 @@ func TestCOWBasisCompletionRegistrationRefusalRetainsOriginalDebt(t *testing.T) 
 }
 
 func TestCOWBasisPostcaptureRefusalJoinsPendingOriginalIterator(t *testing.T) {
-	for _, primary := range []bool{false, true} {
-		name := "DATA"
-		if primary {
-			name = "PRIMARY"
-		}
-		t.Run(name, func(t *testing.T) {
-			backend, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), IndexPrimaryDirectory: primary})
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer backend.Close()
-			budget, err := memtable.NewCOWBudget(memtable.DefaultCOWLimits())
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer budget.Close()
-			var original *cowBackendBasis
-			snapshot, err := backend.AcquireSnapshotWithAllocationAdmission(func(s backenddb.SnapshotAllocationSizes) error {
-				var e error
-				original, e = admitCOWBackendBasis(budget, s)
-				return e
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			reader, err := snapshot.Iterator(nil, nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err = snapshot.Close(); err != nil {
-				t.Fatal(err)
-			}
-			if err = original.adoptSnapshot(snapshot); err == nil {
-				t.Fatal("closed pending original capture admitted")
-			}
-			if err = original.release(); err != nil {
-				t.Fatal(err)
-			}
-			budget.Close()
-			original.completionMu.Lock()
-			pending := !original.completed && original.snapshot == snapshot
-			original.completionMu.Unlock()
-			if got := budget.Stats(); !pending || got.ExternalBytes == 0 || got.ExternalLeases == 0 {
-				t.Fatalf("postcapture refusal treated Close acceptance as completion: %+v", got)
-			}
-			if err = reader.Close(); err != nil {
-				t.Fatal(err)
-			}
-			original.completionMu.Lock()
-			done := original.completed && original.snapshot == nil && original.cleanupErr == nil
-			original.completionMu.Unlock()
-			if got := budget.Stats(); !done || got.ExternalBytes != 0 || got.ExternalLeases != 0 {
-				t.Fatalf("actual original completion failed to settle refusal: %+v", got)
-			}
-		})
+	backend, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer backend.Close()
+	budget, err := memtable.NewCOWBudget(memtable.DefaultCOWLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer budget.Close()
+	var original *cowBackendBasis
+	snapshot, err := backend.AcquireSnapshotWithAllocationAdmission(func(s backenddb.SnapshotAllocationSizes) error {
+		var e error
+		original, e = admitCOWBackendBasis(budget, s)
+		return e
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, err := snapshot.Iterator(nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = snapshot.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = original.adoptSnapshot(snapshot); err == nil {
+		t.Fatal("closed pending original capture admitted")
+	}
+	if err = original.release(); err != nil {
+		t.Fatal(err)
+	}
+	budget.Close()
+	original.completionMu.Lock()
+	pending := !original.completed && original.snapshot == snapshot
+	original.completionMu.Unlock()
+	if got := budget.Stats(); !pending || got.ExternalBytes == 0 || got.ExternalLeases == 0 {
+		t.Fatalf("postcapture refusal treated Close acceptance as completion: %+v", got)
+	}
+	if err = reader.Close(); err != nil {
+		t.Fatal(err)
+	}
+	original.completionMu.Lock()
+	done := original.completed && original.snapshot == nil && original.cleanupErr == nil
+	original.completionMu.Unlock()
+	if got := budget.Stats(); !done || got.ExternalBytes != 0 || got.ExternalLeases != 0 {
+		t.Fatalf("actual original completion failed to settle refusal: %+v", got)
 	}
 }
 
 func TestCOWBasisOwnedIteratorScrubsConsumedWrapperAliases(t *testing.T) {
-	backend, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), IndexPrimaryDirectory: true})
+	backend, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
