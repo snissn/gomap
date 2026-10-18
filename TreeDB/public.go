@@ -781,6 +781,13 @@ func Open(opts Options) (*DB, error) {
 }
 
 func openResolved(opts Options) (*DB, error) {
+	return openResolvedWithCacheRole(opts, false)
+}
+
+// backendOnly leaves logical publication with the returned backend. Physical
+// profile/format options are resolved unchanged before selecting cache services.
+// This choice is made only at Open; a live cache never changes its owner role.
+func openResolvedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
 	if opts.MemtableMode == "cow_btree" {
 		if opts.ReadOnly {
 			return nil, caching.ErrCOWUnsupported
@@ -1133,8 +1140,15 @@ func openResolved(opts Options) (*DB, error) {
 		valueLogMaxSegmentBytes = int64(^uint32(0)) - 4
 	}
 
+	cacheMode := opts.MemtableMode
+	if backendOnly && cacheMode == "cow_btree" {
+		// Backend-root producers publish directly. Reuse the ordinary cache's
+		// leaf/value-log services without binding a second logical authority.
+		// Keep opts intact: durable COW storage policy above still selects PRIMARY.
+		cacheMode = "btree"
+	}
 	txnOwner := transactionowner.New()
-	if opts.MemtableMode == "cow_btree" {
+	if cacheMode == "cow_btree" {
 		if err := backend.BindPrivateCOWOwner(txnOwner); err != nil {
 			_ = backend.Close()
 			if dictBackend != nil {
@@ -1148,7 +1162,7 @@ func openResolved(opts Options) (*DB, error) {
 	}
 	cached, err := caching.Open(opts.Dir, backend, caching.Options{
 		FlushThreshold:                             opts.FlushThreshold,
-		MemtableMode:                               opts.MemtableMode,
+		MemtableMode:                               cacheMode,
 		COWMemtableLimits:                          opts.COWMemtableLimits,
 		TransactionOwner:                           txnOwner,
 		MemtableShards:                             opts.MemtableShards,
@@ -1248,7 +1262,7 @@ func openResolved(opts Options) (*DB, error) {
 		return nil, err
 	}
 
-	if opts.MemtableMode == "cow_btree" {
+	if cacheMode == "cow_btree" {
 		if err := backend.BindNativeSemanticBridge(txnOwner, cached); err != nil {
 			_ = cached.Close()
 			_ = backend.Close()
