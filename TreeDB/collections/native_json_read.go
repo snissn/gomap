@@ -319,8 +319,12 @@ func (r *NativeJSONRead) readLeaf(ptr page.LeafLogPtr, dst []byte) ([]byte, erro
 			return nil, err
 		}
 	}
+	rawBytes := uint64(0)
+	if shape.Compressed {
+		rawBytes = shape.RawBytes
+	}
 	charge := memtable.COWAllocationCharge(shape.PayloadBytes())
-	for _, bytes := range []uint64{shape.RawBytes, sizes.OwnerWrapper} {
+	for _, bytes := range []uint64{rawBytes, sizes.OwnerWrapper} {
 		part := memtable.COWAllocationCharge(bytes)
 		if part > ^uint64(0)-charge {
 			return nil, memtable.ErrCOWCapacity
@@ -331,7 +335,11 @@ func (r *NativeJSONRead) readLeaf(ptr page.LeafLogPtr, dst []byte) ([]byte, erro
 	if err != nil {
 		return nil, err
 	}
-	input, raw := make([]byte, shape.PayloadBytes()), make([]byte, shape.RawBytes)
+	input := make([]byte, shape.PayloadBytes())
+	var raw []byte
+	if shape.Compressed {
+		raw = make([]byte, rawBytes)
+	}
 	var decoder *valuelog.COWDecoder
 	var decode valuelog.COWDecodeFunc
 	defer func() {
