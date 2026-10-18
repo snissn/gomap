@@ -8,6 +8,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
 	"github.com/snissn/gomap/TreeDB/internal/txnhistory"
+	"github.com/snissn/gomap/TreeDB/node"
 )
 
 var ErrNativeSemanticUnsupported = errors.New("treedb: command kind has no native semantic preparation")
@@ -222,4 +223,14 @@ func (db *DB) ValidateNativeCommandIntent(owner *transactionowner.Owner, intent 
 		return ErrNativeSemanticUnsupported
 	}
 	return nil
+}
+
+// NativePhysicalReader resolves only an already captured physical root. The
+// original capture must remain live through the call; concurrent Close on that
+// same capture is excluded by its enclosing read/transaction scope. A true
+// copyValue returns exact-length caller-owned inline bytes; false is a metadata
+// probe and returns no Value. Key is omitted for exact point lookup. No physical scratch
+// escapes, and dictionary/codec eligibility remains the native bounded contract.
+type NativePhysicalReader interface {
+	NativeEntryAtRoot(root uint64, key []byte, copyValue bool) (node.LeafEntry, error)
 }
