@@ -1,6 +1,7 @@
 package rootpublication
 
 import (
+	"errors"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"slices"
 	"unsafe"
@@ -9,7 +10,7 @@ import (
 // This scratch owns only temporary entry edges. Each output token has its own
 // physical pin and each output summary has its own retained allocation edges.
 // Inputs remain immutable and independently releasable throughout construction.
-func rebuildOwnedResourceKindCollision(left, right *resourceKindBacking, owner *retainedalloc.Owner) (*resourceKindBacking, error) {
+func rebuildOwnedResourceKindCollision(left, right *resourceKindBacking, owner *retainedalloc.Owner) (_ *resourceKindBacking, retErr error) {
 	count := 0
 	for _, source := range [2]*resourceKindBacking{left, right} {
 		for _, cell := range source.cells {
@@ -34,11 +35,30 @@ func rebuildOwnedResourceKindCollision(left, right *resourceKindBacking, owner *
 		return nil, err
 	}
 	entries := make([]privateEntry, 0, count)
+	// Each refused release already retains its SAME original allocation. Link
+	// that receipt before the scratch drops its alias; never replace custody
+	// with a wrapper or insert an already reachable receipt into its own chain.
+	keepFailure := func(receipt *originalReleaseFailure) {
+		if !errors.Is(retErr, receipt) {
+			receipt.LinkPriorCleanupError(retErr)
+			retErr = receipt
+		}
+	}
+	releaseEntry := func(backing *resourceEntryBacking) {
+		token := backing.entries[0].token
+		if ResourceOwnerState(token.owner.Load()) == ResourceOwnerToken {
+			if err := token.ReleaseWithError(); err != nil {
+				keepFailure(&token.cleanupFailure)
+			}
+		}
+		if err := backing.release(); err != nil {
+			keepFailure(&backing.allocation.failure)
+		}
+	}
 	defer func() {
 		for _, entry := range entries {
 			if entry.backing != nil {
-				entry.backing.entries[0].token.Release()
-				entry.backing.release()
+				releaseEntry(entry.backing)
 			}
 		}
 		clear(entries[:cap(entries)])
@@ -73,8 +93,11 @@ func rebuildOwnedResourceKindCollision(left, right *resourceKindBacking, owner *
 					return false
 				}
 				entries[i] = privateEntry{backing: replacement}
-				existing.token.Release()
-				backing.release()
+				releaseEntry(backing)
+				if retErr != nil {
+					buildErr = retErr
+					return false
+				}
 				return true
 			}
 			backing, e := cloneOwnedResourceEntryUnion(incoming, nil, owner)
@@ -204,7 +227,10 @@ func cloneOwnedResourceEntryUnion(left, right *stableResourceEntry, owner *retai
 	}
 	backing, err := newOwnedResourceEntryHistory(left, right, cloned, owner)
 	if err != nil {
-		cloned.Release()
+		if cleanupErr := cloned.ReleaseWithError(); cleanupErr != nil {
+			cloned.cleanupFailure.LinkPriorCleanupError(err)
+			return nil, &cloned.cleanupFailure
+		}
 		return nil, err
 	}
 	return backing, nil
