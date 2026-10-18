@@ -12,9 +12,26 @@ func (db *DB) ActivateNativeSemanticOwner() error {
 	if db == nil || db.nativeSemanticBridge == nil {
 		return ErrNativeSemanticUnsupported
 	}
-	bridge, ok := db.nativeSemanticBridge.(interface{ ActivateNativeSemanticOwner() error })
+	if db.closing.Load() {
+		return ErrClosed
+	}
+	if err := db.commandWALPoisonedError(); err != nil {
+		return err
+	}
+	bridge, ok := db.nativeSemanticBridge.(interface {
+		ActivateNativeSemanticOwner() error
+		CheckNativeSemanticOwnerOpen() error
+	})
 	if !ok {
 		return ErrNativeSemanticUnsupported
+	}
+	// Cache teardown starts before backend teardown. Check the SAME fixed-once
+	// bridge's existing close gate even when activation is already complete.
+	if err := bridge.CheckNativeSemanticOwnerOpen(); err != nil {
+		return err
+	}
+	if db.nativeSemanticActive.Load() {
+		return nil
 	}
 	return bridge.ActivateNativeSemanticOwner()
 }
@@ -66,15 +83,15 @@ func (db *DB) ActivatePrivateCOWSemanticOwner(owner *transactionowner.Owner, bas
 	if db.closing.Load() {
 		return ErrClosed
 	}
+	if err := db.commandWALPoisonedError(); err != nil {
+		return err
+	}
 	if db.nativeSemanticActive.Load() {
 		return nil
 	}
 	state, ok := stateTokenFromState(db.state.Load())
 	if !ok || state != basis || db.legacyCommandProducers != 0 || len(db.commandWALRawBarriers) != 0 || db.semanticUnownedInFlight != 0 || db.commandWALReplayLSN.Load() != 0 || db.conditionalActiveTxnCount.Load() != 0 {
 		return ErrNativeSemanticUnsupported
-	}
-	if err := db.commandWALPoisonedError(); err != nil {
-		return err
 	}
 	prefix := db.acceptedPrefix.Load()
 	if prefix == nil {
