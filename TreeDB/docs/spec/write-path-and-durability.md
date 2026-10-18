@@ -620,6 +620,14 @@ plus new `AppliedLSN`, never a split state. A future
 checkpoint-without-publication mode must report command WAL debt and retain all
 required WAL segments and external refs.
 
+In COW mode, explicit checkpoint also joins the original accepted-custody
+retirement through its captured logical/canonical endpoint. Physical durability
+can complete before that retirement advances the sealed logical frontier; the
+checkpoint joins both without extending coverage to post-cut writes. Idle
+fallback convergence joins the corresponding exact basis before comparing the
+frontiers. These joins preserve original cleanup failures and do not wait for
+the separate semantic cleanup worker.
+
 For a cached command-WAL checkpoint with no pending public frames, maintenance
 may republish the selected roots with the same `AppliedCommandLSN` only when
 the recovery-selectable fallback slot still has an older applied LSN. It writes
