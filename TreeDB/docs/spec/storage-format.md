@@ -464,6 +464,25 @@ context. The active target is the user-command WAL: command frames ordered by
 cleanup records, and golden encodings must be maintained here and mapped to
 tests in `TreeDB/docs/spec/verification.md` as each milestone lands.
 
+The experimental native JSON transaction route also accepts command kind 2
+(`CompositeMutation`), system scope, payload format 17 (`CompositeMutationV1`),
+inside the existing command frame. The payload starts with little-endian
+`uint16` version 1 and member count. Each member has little-endian kind and
+payload-format `uint16` fields, an incarnation `uint64`, payload-length `uint32`,
+and that many payload bytes. There are at most 128 members; payload plus the
+base command-frame header must fit 768 KiB. Existing outer frame limits still
+apply. Members have no independent LSN, frame extensions or publication.
+
+The currently active subset permits at most one raw `RawKVBatchV1` member
+containing inline Set operations, and untyped JSON `CollectionInsertBatchByIDV1`
+members for supported unindexed collections. Raw incarnation is zero; collection
+incarnation is the persisted nonzero logical catalog identity. The wider payload
+codec does not activate typed, update/delete, external-RID, nested or other
+unsupported members. Whole payload validation precedes member application.
+Foreground binds the final raw revision bytes into preadmitted outer capacity
+before append, preserving native member bytes. See `recovery.md` for aggregate
+replay. This pre-alpha activation does not add a compatibility migration.
+
 The operator restorable file set, live backup barrier, and restore validation
 procedure are defined in `TreeDB/docs/spec/backup-restore.md`. A live
 filesystem-level copy without that barrier is unsupported once command-WAL

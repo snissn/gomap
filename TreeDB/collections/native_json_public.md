@@ -18,10 +18,11 @@ on the public database continue through the same owner after native activation.
 Backend-only `OpenBackendWithCachedLeafLog*` constructors serve the legacy
 backend-authoritative route and do not provide this native capability.
 
-The two-phase frontend is `manager.Begin(collection)`, then transaction
-`InsertBatch(ids, documents)`, `Get(id)`, `Commit()` and `Close()`. It binds one
-supported collection and accepts one strictly sorted insert batch; a second
-staging call refuses while preserving the first batch. Other staging failures
+The two-phase frontend is `manager.Begin(collection, additional...)`, then
+transaction `InsertBatchInto`, `GetFrom`, `Commit()` and `Close()`. Single-collection
+callers can use `InsertBatch(ids, documents)` and `Get(id)`. Each bound collection
+accepts one strictly sorted insert batch; a second staging call for that collection
+refuses while preserving the first batch. Other staging failures
 terminally invalidate the transaction. Always close the transaction, including
 on refusal. One-shot `manager.InsertBatch` delegates to this frontend and no
 longer holds the manager mutex through planning and commit.
@@ -44,8 +45,8 @@ and commit disjoint inserts A then B without reopening or body retry. Write/writ
 and missing-read/write conflicts refuse before assigned LSN advances. A staged
 transaction survives equivalent physical checkpoint/handoff. Exact values survive
 checkpoint/reopen, and original cache accounting and identity pins reach zero in
-all three profiles. This is a singleton collection proof; composite transactions,
-other operations and the full acceptance packet remain open.
+all three profiles. This is the singleton collection proof; the selected composite
+proof is described below. Other operations and the full acceptance packet remain open.
 
 `TestNativeJSONExternalPublicOwnerLifecycle` is the external-package
 entry proof for durable, relaxed and NoWAL profiles. It uses only exported APIs:
@@ -144,8 +145,8 @@ Known limitations and RED controls remain explicit:
   remain part of that work.
 - Native JSON insert transactions now use original dependency validation before
   latest-state immutable preparation. Create and other unmigrated native producer
-  plans retain their existing exact-prepared-Basis restrictions; this singleton
-  proof does not establish cross-domain/composite rebase or the full matrix.
+  plans retain their existing exact-prepared-Basis restrictions. The selected
+  insert/composite proofs do not establish the full producer and operation matrix.
 
 Empty physical frontiers use fresh immutable successor headers with build=nil;
 the original captured build stays single-use. Both zero-count preparations,
