@@ -29,6 +29,8 @@ func TestNativeJSONPublicRawTwoCollectionsAtomicTxn(t *testing.T) {
 			opts.MemtableMode = "cow_btree"
 			opts.FlushThreshold = 1 << 30
 			opts.BackgroundCheckpointInterval = -1
+			opts.BackgroundCheckpointIdleDuration = -1
+			opts.MaxWALBytes = -1
 			database, err := Open(opts)
 			if err != nil {
 				t.Fatal(err)
@@ -62,6 +64,21 @@ func TestNativeJSONPublicRawTwoCollectionsAtomicTxn(t *testing.T) {
 			if err = database.Checkpoint(); err != nil {
 				t.Fatal(err)
 			}
+			diskApplied := func() uint64 {
+				snapshot := handle.AcquireSnapshot()
+				if snapshot == nil {
+					t.Fatal("missing physical Snapshot")
+				}
+				token, ok := snapshot.StateToken()
+				if err := snapshot.Close(); err != nil {
+					t.Fatal(err)
+				}
+				if !ok {
+					t.Fatal("missing physical StateToken")
+				}
+				return token.AppliedCommandLSN
+			}
+			initialApplied := diskApplied()
 			held, err := manager.Begin("a", "b")
 			if err != nil {
 				t.Fatal(err)
@@ -119,6 +136,11 @@ func TestNativeJSONPublicRawTwoCollectionsAtomicTxn(t *testing.T) {
 			}
 			t.Logf("PUBLIC COMPOSITE ACK profile=%s lsn=%d", profile, assigned())
 			if childDir != "" {
+				applied := diskApplied()
+				if applied != initialApplied || applied >= assigned() {
+					t.Fatalf("child composite not unapplied: initial=%d disk=%d accepted=%d", initialApplied, applied, assigned())
+				}
+				t.Logf("CRASH CUT initial=%d disk=%d accepted=%d", initialApplied, applied, assigned())
 				os.Exit(0)
 			}
 			for _, name := range []string{"a", "b"} {
@@ -226,15 +248,19 @@ func TestNativeJSONPublicRawTwoCollectionsAtomicTxn(t *testing.T) {
 		return
 	}
 	dir := t.TempDir()
-	child := exec.Command(os.Args[0], "-test.run=^TestNativeJSONPublicRawTwoCollectionsAtomicTxn$")
+	child := exec.Command(os.Args[0], "-test.run=^TestNativeJSONPublicRawTwoCollectionsAtomicTxn$", "-test.v")
 	child.Env = append(os.Environ(), "GOMAP_NATIVE_COMPOSITE_CRASH_DIR="+dir)
-	if output, err := child.CombinedOutput(); err != nil {
-		t.Fatalf("crash child: %v\n%s", err, output)
+	output, childErr := child.CombinedOutput()
+	t.Logf("crash child output:\n%s", output)
+	if childErr != nil {
+		t.Fatalf("crash child: %v\n%s", childErr, output)
 	}
 	before := workstats.Read().Replay.FramesApplied
 	opts := OptionsFor(ProfileCommandWALDurable, dir)
 	opts.MemtableMode = "cow_btree"
 	opts.BackgroundCheckpointInterval = -1
+	opts.BackgroundCheckpointIdleDuration = -1
+	opts.MaxWALBytes = -1
 	database, err := Open(opts)
 	if err != nil {
 		t.Fatalf("COMPOSITE REPLAY OPEN: %v", err)
