@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -83,6 +84,8 @@ func (db *DB) checkpointCOWContext(ctx context.Context, automatic bool) (retErr 
 	if err = db.checkpointFlushValueLogLanes(); err != nil {
 		return err
 	}
+	// Preserve the original captured endpoint before the flush consumes frontier.
+	through := rootpublication.SealedPrefix{LogicalSequence: frontier.frozenLogicalSeq, CanonicalLSN: frontier.frozenCommandLSN}
 	var publish checkpointCommandWALPublish
 	if hook := db.testBeforeCheckpointFrontierDrain; hook != nil {
 		hook()
@@ -100,6 +103,16 @@ func (db *DB) checkpointCOWContext(ctx context.Context, automatic bool) (retErr 
 	}
 	if err = db.backendCheckpointBoundary(automatic); err != nil {
 		return err
+	}
+	if !automatic && db.cow.prefix != nil {
+		// Physical WaitThrough wakes before the dispatcher finishes accepted
+		// custody retirement. Join that SAME captured endpoint, including an
+		// original release already running on the dispatcher. Keep flushMu so
+		// direct Close cannot detach/refund prefix during this wait; accepted
+		// custody only queues cleanup and needs none of the cache writer gates.
+		if err = db.cow.prefix.WaitAccepted(ctx, through); err != nil {
+			return err
+		}
 	}
 	if publish.appliedLSN != 0 || publish.consumed {
 		if err = db.cleanupCommandWALCheckpointBoundary(automatic, true); err != nil {
