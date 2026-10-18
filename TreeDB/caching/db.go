@@ -7983,6 +7983,7 @@ type backendMaintenanceOptions struct {
 	skipCheckpoint        bool
 	skipRetainedPruneWait bool
 	afterCOWRefresh       func() error
+	cowCheckpointFallback bool
 }
 
 func (db *DB) runWithBackendMaintenance(fn func() error) error {
@@ -8024,6 +8025,9 @@ func (db *DB) runWithBackendMaintenanceOptions(opts backendMaintenanceOptions, f
 		db.writeMu.Unlock()
 		if err := db.completeCOWHandoff(); err != nil {
 			return err
+		}
+		if opts.cowCheckpointFallback {
+			return db.refreshCOWCheckpointFallback()
 		}
 		db.cow.refreshRequired.Store(true)
 	}

@@ -441,6 +441,11 @@ func (tdb *DB) refreshPublicCommandWALCheckpointFallback() error {
 	if tdb == nil || !tdb.commandWALCached || tdb.backend == nil {
 		return nil
 	}
+	if tdb.cached != nil && tdb.cached.COWMode() {
+		// The cache admission/flush fence excludes its canonical owner. Do not
+		// hold the public operation gate while waiting for admitted writers.
+		return tdb.cached.RefreshCOWCommandWALCheckpointFallback()
+	}
 	tdb.commandWALPublicOperationGate.Lock()
 	defer tdb.commandWALPublicOperationGate.Unlock()
 	first, last := tdb.publicCommandWALPendingRange()
