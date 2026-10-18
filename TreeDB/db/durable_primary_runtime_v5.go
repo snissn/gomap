@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
-	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -80,39 +79,49 @@ func (db *DB) primaryCurrentRootV5() *primaryStateRootV5 {
 	return db.durableRoot.primary.current
 }
 
-// ValidateDATAIndexOpen refuses the retired pre-alpha PRIMARY representation.
-// It only inspects the namespace, so public Open can call it before opening
-// independent side stores and backend Open can call it before recovery writes.
-func ValidateDATAIndexOpen(dir string, primaryRequested bool) error {
-	if primaryRequested {
-		return fmt.Errorf("%w: IndexPrimaryDirectory is retired; rebuild on DATA", ErrLegacyFormatRebuildRequired)
+// PRIMARY remains available through its existing explicit option or persisted arena.
+// Ordinary fresh stores, including NoWAL and COW, continue to select DATA.
+func (db *DB) attachPrimaryArenaV5(idx *indexGen, opts Options) error {
+	path := filepath.Join(db.dir, primaryIndexFileName)
+	_, e := os.Stat(path)
+	existing := e == nil
+	if e != nil && !os.IsNotExist(e) {
+		return e
 	}
-	for _, name := range []string{primaryIndexFileName, primaryNewFileName} {
-		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
-			return fmt.Errorf("%w: retired PRIMARY file %s; rebuild on DATA", ErrLegacyFormatRebuildRequired, name)
-		} else if !os.IsNotExist(err) {
-			return err
-		}
-	}
-	// A committed joint swap is also retired, even if interruption left its
-	// PRIMARY file absent. Do not let ordinary DATA swap recovery consume it.
-	f, err := os.Open(filepath.Join(dir, indexReadyFileName))
-	if os.IsNotExist(err) {
+	if !existing && !opts.IndexPrimaryDirectory {
 		return nil
 	}
-	if err != nil {
-		return err
+	if db.readOnly && !existing {
+		return errors.New("read-only primary open requires an existing arena")
 	}
-	var magic [8]byte
-	n, readErr := io.ReadFull(f, magic[:])
-	closeErr := f.Close()
-	if n == len(magic) && string(magic[:]) == jointSwapMagicV6 {
-		return fmt.Errorf("%w: retired joint DATA/PRIMARY swap; rebuild on DATA", ErrLegacyFormatRebuildRequired)
+	if !existing && idx.pager.PageCount() >= 2 {
+		return fmt.Errorf("%w: primary bank format requires rebuild", ErrLegacyFormatRebuildRequired)
 	}
-	if readErr != nil && readErr != io.EOF && readErr != io.ErrUnexpectedEOF {
-		return readErr
+	var a *primaryarena.Arena
+	if existing {
+		a, e = primaryarena.OpenExisting(path, db.readOnly)
+	} else {
+		a, e = primaryarena.OpenCapsule(path)
 	}
-	return closeErr
+	if e != nil {
+		return e
+	}
+	if e = a.SetOwnedMetadataDecoder(rootpublication.PrimaryBankMetadataEdgesV5, rootpublication.PrimaryBankMetadataEdgesOwnedV5); e != nil {
+		a.Close()
+		return e
+	}
+	if e = idx.pager.AttachPrimaryBankPager(a.Pager()); e != nil {
+		a.Close()
+		return e
+	}
+	idx.primary = a
+	idx.primaryOwner, e = newPrimaryArenaOwnerV5(a)
+	if e != nil {
+		idx.primary = nil
+		return errors.Join(e, a.Close())
+	}
+	idx.zipper.SetPrimaryArena(a)
+	return nil
 }
 
 func (db *DB) recoverDurablePrimaryV5(idx *indexGen) (retErr error) {

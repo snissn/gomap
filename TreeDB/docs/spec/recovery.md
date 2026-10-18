@@ -2,17 +2,16 @@
 
 This document defines startup recovery behavior.
 
-Public and backend startup select the existing DATA recovery implementation.
-Persisted PRIMARY arenas, staged PRIMARY files and joint DATA/PRIMARY swap
-records require a pre-alpha rebuild. Public Open, OpenBackend and the cached-leaf
-backend factory inspect the complete resolved layout before opening any side
-store; backend swap/replay recovery cannot consume a refused layout. Supported public
-read-only opens use the uncached `btree` role on the same persisted DATA; public
-`ReadOnly+cow_btree` remains unsupported. Successful DATA recovery independently
-validates both slots, their exact dependencies and required parent records.
-Command-WAL startup initializes the ordinary DATA publication coordinator and
-exact recovered snapshot before replay, running synchronously until replay and
-post-replay readiness complete. Native multi-root replay uses that same owner.
+Ordinary new public and backend stores select the existing DATA recovery
+implementation. Explicit `IndexPrimaryDirectory` and persisted PRIMARY arenas
+temporarily retain the original PRIMARY attach/recovery and joint-swap paths;
+final format refusal follows consumer migration. Supported public read-only
+opens use the uncached `btree` role on either persisted representation; public
+`ReadOnly+cow_btree` remains unsupported. Successful recovery independently
+validates both slots, exact dependencies and required parent records. DATA
+command-WAL startup and PRIMARY capsule startup initialize the same publication
+coordinator and exact recovered snapshot before replay, synchronously until
+post-replay readiness. Native multi-root replay uses that original owner.
 
 Typed `column_graph` public serving admission is process-local: after ordinary
 replay/open, explicitly call `EnsureColumnGraphServing` with positive limits.
@@ -167,12 +166,10 @@ recovery-required error unless the caller explicitly requests a stale read-only
 mode. Silent stale read-only open is incompatible with durable-at-ack command
 semantics.
 
-## Retired PRIMARY capsule recovery reference
+## Temporarily supported explicit PRIMARY capsule recovery
 
-The following describes the former implementation for pinned fixture analysis.
-Current Open refuses this representation before recovery; it selects DATA as
-described above. These legacy routines remain only until their final consumers
-are removed.
+The existing explicit option and persisted arena use this maintained recovery
+path. Ordinary new stores default to DATA; final PRIMARY removal remains pending.
 
 For a checked V6 `index.db.primary` arena, Open decodes exactly the two fixed
 complete three-page capsules. It independently validates each current root
@@ -846,10 +843,10 @@ interpret leftover private `manifest.gc.*.tmp` evidence as an unreferenced
 revision to delete. Further revision maintenance refuses that evidence pending
 explicit recovery investigation.
 
-## Retired joint DATA/PRIMARY capsule vacuum reference
+## Joint DATA/PRIMARY capsule vacuum recovery
 
-This former protocol is retained for diagnostic reference. Current factories
-refuse its committed marker before opening or repairing a store.
+This existing protocol remains active for the temporary explicit/persisted
+PRIMARY route. It does not change the ordinary new-store DATA default.
 
 V6 vacuum fences the complete private pair, current/parent dependencies and
 staging names before a checksummed `TDJCOM06` COMMIT in `index.db.new.ready`.

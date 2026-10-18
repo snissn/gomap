@@ -11,12 +11,10 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"sync"
 	"testing"
 
 	tree "github.com/snissn/gomap/TreeDB"
-	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
@@ -399,139 +397,80 @@ func directDATAFixtureHashes(t *testing.T, dir string) map[string]directDATAFixt
 	return files
 }
 
-func TestDirectDATAPersistedPRIMARYRequiresRebuild(t *testing.T) {
-	dir := directDATAFixtureDir(t, "original-primary")
-	directDATAExtractPRIMARYFixture(t, dir)
-	before := directDATAFixtureHashes(t, dir)
-	for _, readOnly := range []bool{false, true} {
-		opts := directDATAOptions(dir)
-		if readOnly {
-			opts = directDATAReadOnlyOptions(opts)
-		}
-		database, err := tree.Open(opts)
-		if database != nil {
-			_ = database.Close()
-		}
-		if !errors.Is(err, backenddb.ErrLegacyFormatRebuildRequired) || !strings.Contains(strings.ToLower(err.Error()), "rebuild") {
-			t.Fatalf("PRIMARY readOnly=%v: DB=%v error=%v; want explicit pre-alpha rebuild refusal", readOnly, database != nil, err)
-		}
-		after := directDATAFixtureHashes(t, dir)
-		if len(after) != len(before) {
-			t.Fatalf("PRIMARY refusal changed file inventory readOnly=%v", readOnly)
-		}
-		for name, original := range before {
-			current, ok := after[name]
-			if !ok || current.fingerprint != original.fingerprint || !os.SameFile(original.identity, current.identity) {
-				t.Fatalf("PRIMARY refusal mutated identity/content of %s readOnly=%v", name, readOnly)
-			}
-		}
+// Temporary P2 delivery preserves the existing explicit/persisted PRIMARY role.
+// Final format refusal and removal remain P5 work; default DATA proofs stay above.
+func TestDATAFactoriesPreserveExplicitAndPersistedPRIMARY(t *testing.T) {
+	type store interface {
+		SetSync([]byte, []byte) error
+		Get([]byte) ([]byte, error)
+		Checkpoint() error
 	}
-	retiredDir := filepath.Join(t.TempDir(), "uncreated")
-	retired := directDATAOptions(retiredDir)
-	retired.IndexPrimaryDirectory = true
-	if database, err := tree.Open(retired); database != nil || !errors.Is(err, backenddb.ErrLegacyFormatRebuildRequired) {
-		t.Fatalf("retired PRIMARY request: database=%v err=%v", database != nil, err)
-	}
-	if _, err := os.Stat(retiredDir); !os.IsNotExist(err) {
-		t.Fatalf("retired request created directory: %v", err)
-	}
-	opts := directDATAOptions(directDATAFixtureDir(t, "rebuilt"))
-	database, err := tree.Open(opts)
-	if err != nil {
-		t.Fatal("fresh rebuilt DATA directory", err)
-	}
-	if err := database.Set([]byte("rebuilt"), []byte("new-data")); err != nil {
-		t.Fatal(err)
-	}
-	if err := database.Checkpoint(); err != nil {
-		t.Fatal(err)
-	}
-	if got, err := database.Get([]byte("rebuilt")); err != nil || string(got) != "new-data" {
-		t.Fatalf("rebuilt DATA: %q %v", got, err)
-	}
-	if err := database.Close(); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// Every exported factory must refuse the complete layout before opening even
-// an earlier, otherwise valid side store. Reuse the real retired main fixture;
-// side-store cases need only the namespace marker that the preflight refuses.
-func TestDATAFactoriesRefuseBeforeMutation(t *testing.T) {
 	factories := []struct {
 		name string
-		open func(tree.Options) (bool, error)
+		open func(tree.Options) (store, func() error, error)
 	}{
-		{"Open", func(opts tree.Options) (bool, error) {
-			database, err := tree.Open(opts)
-			if database != nil {
-				_ = database.Close()
+		{"Open", func(opts tree.Options) (store, func() error, error) {
+			d, err := tree.Open(opts)
+			if err != nil {
+				return nil, nil, err
 			}
-			return database != nil, err
+			return d, d.Close, nil
 		}},
-		{"OpenBackend", func(opts tree.Options) (bool, error) {
-			backend, close, err := tree.OpenBackend(opts)
-			if close != nil {
-				_ = close()
-			}
-			return backend != nil, err
+		{"OpenBackend", func(opts tree.Options) (store, func() error, error) {
+			d, close, err := tree.OpenBackend(opts)
+			return d, close, err
 		}},
-		{"OpenBackendWithCachedLeafLog", func(opts tree.Options) (bool, error) {
-			backend, close, err := tree.OpenBackendWithCachedLeafLog(opts)
-			if close != nil {
-				_ = close()
-			}
-			return backend != nil, err
+		{"OpenBackendWithCachedLeafLog", func(opts tree.Options) (store, func() error, error) {
+			d, close, err := tree.OpenBackendWithCachedLeafLog(opts)
+			return d, close, err
 		}},
 	}
 	for _, factory := range factories {
-		t.Run(factory.name, func(t *testing.T) {
-			for _, retiredStore := range []string{"maindb", "dictdb", "templatedb"} {
-				t.Run(retiredStore, func(t *testing.T) {
-					dir := directDATAFixtureDir(t, "refused")
-					if retiredStore == "maindb" {
-						directDATAExtractPRIMARYFixture(t, dir)
-					} else {
-						for _, store := range []string{"maindb", "dictdb", "templatedb"} {
-							if err := os.MkdirAll(filepath.Join(dir, store), 0700); err != nil {
-								t.Fatal(err)
-							}
-						}
-						if err := os.WriteFile(filepath.Join(dir, retiredStore, "index.db.primary"), []byte("retired format"), 0600); err != nil {
-							t.Fatal(err)
-						}
-					}
-					before := directDATAFixtureHashes(t, dir)
-					for _, readOnly := range []bool{false, true} {
-						opts := directDATAOptions(dir)
-						if readOnly {
-							opts = directDATAReadOnlyOptions(opts)
-						}
-						opened, err := factory.open(opts)
-						if opened || !errors.Is(err, backenddb.ErrLegacyFormatRebuildRequired) {
-							t.Fatalf("readOnly=%v: opened=%v error=%v; want rebuild refusal", readOnly, opened, err)
-						}
-						after := directDATAFixtureHashes(t, dir)
-						if len(after) != len(before) {
-							t.Fatalf("readOnly=%v changed file inventory: before=%d after=%d", readOnly, len(before), len(after))
-						}
-						for name, original := range before {
-							current, ok := after[name]
-							if !ok || current.fingerprint != original.fingerprint || !os.SameFile(original.identity, current.identity) {
-								t.Fatalf("readOnly=%v mutated identity/content of %s", readOnly, name)
-							}
+		for _, readOnly := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/readOnly=%v", factory.name, readOnly), func(t *testing.T) {
+				opts := directDATAOptions(t.TempDir())
+				opts.IndexPrimaryDirectory = true
+				database, close, err := factory.open(opts)
+				if err != nil {
+					t.Fatal("explicit PRIMARY", err)
+				}
+				t.Cleanup(func() {
+					if close != nil {
+						if err := close(); err != nil {
+							t.Error(err)
 						}
 					}
 				})
-			}
-			retired := directDATAOptions(filepath.Join(t.TempDir(), "uncreated"))
-			retired.IndexPrimaryDirectory = true
-			if opened, err := factory.open(retired); opened || !errors.Is(err, backenddb.ErrLegacyFormatRebuildRequired) {
-				t.Fatalf("retired option: opened=%v error=%v", opened, err)
-			}
-			if _, err := os.Stat(retired.Dir); !os.IsNotExist(err) {
-				t.Fatalf("retired option created namespace: %v", err)
-			}
-		})
+				want := []byte("preserved-inline")
+				if err := database.SetSync([]byte("selected"), want); err != nil {
+					t.Fatal(err)
+				}
+				if err := database.Checkpoint(); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := os.Stat(filepath.Join(opts.Dir, "maindb", "index.db.primary")); err != nil {
+					t.Fatal("actual PRIMARY arena", err)
+				}
+				if err := close(); err != nil {
+					t.Fatal(err)
+				}
+				close = nil
+				opts.IndexPrimaryDirectory = false
+				if readOnly {
+					opts = directDATAReadOnlyOptions(opts)
+				}
+				database, close, err = factory.open(opts)
+				if err != nil {
+					t.Fatal("persisted PRIMARY", err)
+				}
+				if got, err := database.Get([]byte("selected")); err != nil || !bytes.Equal(got, want) {
+					t.Fatalf("persisted value: len=%d err=%v", len(got), err)
+				}
+				if err := close(); err != nil {
+					t.Fatal(err)
+				}
+				close = nil
+			})
+		}
 	}
 }

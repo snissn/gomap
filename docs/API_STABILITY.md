@@ -46,11 +46,12 @@ changes until the project reaches a stable post-pre-alpha phase.
 
 This repo is a dev project; formats may evolve rapidly.
 
-The pre-alpha TreeDB PRIMARY arena format is retired. Opening an existing
-`index.db.primary` directory or requesting `IndexPrimaryDirectory` returns the
-rebuild-required error before persisted files are changed. Fresh directories
-use the existing DATA durable-root format, including NoWAL and COW cache modes.
-This is an intentional rebuild boundary, without an in-place migration.
+Ordinary new TreeDB directories use the existing DATA durable-root format,
+including NoWAL and COW cache modes. The existing explicit
+`IndexPrimaryDirectory` option and persisted `index.db.primary` directories
+temporarily retain their original construction/recovery paths. Final refusal
+and removal follow consumer migration; no in-place representation converter
+or stable cross-version format guarantee is introduced.
 
 Rules of thumb:
 - Do not expect on-disk format compatibility across commits unless explicitly stated.

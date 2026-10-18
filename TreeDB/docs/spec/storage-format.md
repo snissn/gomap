@@ -12,22 +12,22 @@ cleaning, compacting, or rewriting the directory. Typed-column image,
 descriptor, manifest, and schema evolution follows the fail-closed policy in
 `typed-column-schema-evolution.md`.
 
-## DATA root selection and retired PRIMARY directories
+## DATA default and temporary explicit PRIMARY support
 
-New opens select the existing DATA B-tree and dual durable-meta slots in
+Ordinary new stores select the existing DATA B-tree and dual durable-meta slots in
 `index.db`, including `no_wal_fast` and `cow_btree`. The physical seal uses the
 existing `DurableRootRecordV1`, dependency closure and freelist generation. COW
 cache visibility is separate from that durable authority. Pointer-backed values
 remain persistent value-log dependencies.
 
-The pre-alpha `index.db.primary` representation is retired. Public and backend
-read-write/read-only opens refuse it with `ErrLegacyFormatRebuildRequired` and
-rebuild guidance before recovery or any factory opens a side store. The full
-resolved main/dictionary/template layout is checked before the first such open.
-A staged PRIMARY file or committed joint DATA/PRIMARY swap also refuses.
-`IndexPrimaryDirectory=true` refuses rather than selecting a fallback. Rebuild
-an old PRIMARY directory; there is no in-place converter. DATA slot selection
-still validates both complete roots and each required immediate parent.
+The existing `IndexPrimaryDirectory=true` option temporarily retains its PRIMARY
+constructor for explicit callers. An existing `index.db.primary` arena selects
+its original recovery path even when the option is false, including read-only
+opens and joint DATA/PRIMARY swap recovery. There is no in-place conversion
+between DATA and PRIMARY: selecting PRIMARY on a nonempty DATA store still
+requires a rebuild. Final PRIMARY refusal and removal follow consumer migration;
+this intermediate delivery does not claim that retirement. Both representations
+retain their original dependency, two-root and immediate-parent validation.
 
 ## All-level vector-partition router identity
 
@@ -861,13 +861,14 @@ volatile ordinary-ACK and durable boundary contracts.
 This is a pre-alpha format cutover. A non-empty legacy meta body fails open with
 `ErrLegacyFormatRebuildRequired`; recovery does not reinterpret or migrate it.
 
-### 3.0 Retired PRIMARY capsules V6 (diagnostic reference)
+### 3.0 Explicit PRIMARY capsules V6 (temporary support)
 
-This is the former `index.db.primary` format used by pinned diagnostic fixtures.
-Current public and backend opens refuse it and select DATA for fresh directories;
-`IndexPrimaryDirectory` no longer activates this format. The old checked arena
-header is `TDPRCAPB`, version 6. The layout below is retained until the last
-legacy format consumers are removed, not as a supported opening policy.
+Fresh stores explicitly selecting `IndexPrimaryDirectory` use `index.db.primary`;
+existing arenas retain their checked format. Ordinary NoWAL and COW options no
+longer implicitly select PRIMARY. Its checked arena header is `TDPRCAPB`, version
+6; opening never relabels an older arena. This temporary maintained route keeps
+its original constructor and recovery ownership pending final consumer migration
+and representation removal. Native bounded-publication qualification remains open.
 
 The PRIMARY file reserves local pages 0 through 7. Exactly two eligible fixed
 capsules occupy local pages `[2,5)` and `[5,8)`; allocator banks begin at 8.

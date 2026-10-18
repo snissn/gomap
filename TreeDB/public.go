@@ -833,9 +833,6 @@ func openResolvedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := validateDATAOpenLayout(layout, opts.IndexPrimaryDirectory); err != nil {
-		return nil, err
-	}
 	rootDir := layout.rootDir
 	maindbDir := layout.mainDir
 	dictdbDir := layout.dictdbDir

@@ -433,11 +433,11 @@ install. Ordinary NoWAL native publication needs no canonical intent; typed
 actual-LSN finalization remains a WAL operation. Post-append ambiguity/poison/reopen
 rules are unchanged.
 
-For public command-WAL stores in this mode, the main physical backend uses the
-existing DATA root publication path. Foreground acknowledgement installs the
+For ordinary new public command-WAL stores in this mode, the main physical backend
+uses the existing DATA root publication path. Foreground acknowledgement installs the
 prepared C1 cut against its existing backend snapshot; it does not checkpoint
 on acknowledgement. Dictionary and template stores have independent lifetimes
-and select the same DATA representation. A newly acquired cut after checkpoint binds the exact
+and default to DATA unless explicitly selecting or reopening PRIMARY. A newly acquired cut after checkpoint binds the exact
 successor backend StateToken, while held cuts retain their original basis and values.
 
 Checkpoint flushes one captured prefix against its captured backend basis,
@@ -450,6 +450,10 @@ Explicit command-WAL checkpoint also converges the fallback DATA slot when
 needed. The two slots must bind matching complete roots and applied command
 coverage before cleanup; a matching LSN alone does not establish that proof.
 See [COW publication and lock ordering](cow-cache-publication.md).
+
+The temporary explicit/persisted PRIMARY route retains its original capsule
+constructor and promotion. Its fallback refresh compares complete directory
+operands across distinct fixed slot addresses; matching LSNs alone are insufficient.
 
 ## 4. Backend Commit Model
 
@@ -753,10 +757,10 @@ The [production and benchmark profile audit](no-wal-fast-audit.md) records publi
 collection boundary coverage, persistent closure, both recoverable generations,
 benchmark profile mapping, and the allocation consequences of explicit drains.
 
-### Retired PRIMARY V6 constructor reference
+### Temporary explicit PRIMARY V6 constructor
 
-The following documents the former PRIMARY path for diagnostic fixtures.
-Current Open refuses PRIMARY; ordinary DATA publication is described above.
+The existing explicit/persisted PRIMARY path retains this constructor until
+consumer migration and final representation removal. Ordinary new stores use DATA.
 
 Selected V6 ordinary writes construct their independently immutable logical
 directory under the existing durable-root transaction. Relaxed visibility and
@@ -779,10 +783,9 @@ poisons publication, and refuses later writes until recovery. Durable report
 finishes the ordinary transaction synchronously; this ordinary callback path is
 not bounded native Accepted/Finish qualification.
 
-## Retired capsule-format joint vacuum reference
+## Capsule-format joint vacuum durability
 
-Current factories refuse the former joint marker before opening or repairing
-any store. The following preserves the old diagnostic format contract.
+The temporary explicit/persisted PRIMARY path retains this joint protocol.
 
 Vacuum rebuilds private DATA/PRIMARY files, both eligible roots and their finite
 parent closures against one genuine DATA generation. Each actual external

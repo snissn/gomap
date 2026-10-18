@@ -1341,7 +1341,8 @@ type Options struct {
 	IndexPackedValuePtr bool
 	// IndexInternalBaseDelta enables the experimental internal-node base-delta encoding.
 	IndexInternalBaseDelta bool
-	// IndexPrimaryDirectory is retired. Open refuses true with rebuild guidance.
+	// IndexPrimaryDirectory explicitly selects the pre-alpha complete base-and-delta PRIMARY.
+	// Fresh stores default to DATA; existing PRIMARY arenas retain their original format.
 	IndexPrimaryDirectory bool
 
 	// IndexOuterLeavesInValueLog stores B+Tree leaf pages (the pages containing
@@ -2443,9 +2444,6 @@ func Open(opts Options) (*DB, error) {
 	if opts.Dir == "" {
 		return nil, errors.New("db dir required")
 	}
-	if err := ValidateDATAIndexOpen(opts.Dir, opts.IndexPrimaryDirectory); err != nil {
-		return nil, err
-	}
 	if err := ValidateDurabilityProfileGate(opts.Dir, opts.ResolvedProfile); err != nil {
 		return nil, err
 	}
@@ -2703,9 +2701,6 @@ func resolveInlineThresholdAndAdaptive(opts Options) (*adaptive.Controller, int)
 }
 
 func openWithLock(opts Options, lock *lockfile.Lock) (result *DB, retErr error) {
-	if err := ValidateDATAIndexOpen(opts.Dir, opts.IndexPrimaryDirectory); err != nil {
-		return nil, err
-	}
 	valueLogIdentityPins := rootpublication.NewIdentityPinRegistry()
 	registryTransferred := false
 	defer func() {
@@ -2883,6 +2878,10 @@ func openWithLock(opts Options, lock *lockfile.Lock) (result *DB, retErr error) 
 	gen.zipper.SetIndexColumnarLeaves(opts.IndexColumnarLeaves)
 	gen.zipper.SetIndexPackedValuePtr(opts.IndexPackedValuePtr)
 	gen.zipper.SetIndexInternalBaseDelta(opts.IndexInternalBaseDelta)
+	gen.zipper.SetPrimaryDirectory(opts.IndexPrimaryDirectory)
+	if err := db.attachPrimaryArenaV5(gen, opts); err != nil {
+		return nil, err
+	}
 	gen.zipper.SetOuterLeavesInValueLog(opts.IndexOuterLeavesInValueLog)
 	db.leafPageReadCache = newLeafPageReadCacheWithWriteAdmission(configuredLeafPageReadCacheEntries(opts.LeafPageReadCacheEntries), opts.LeafPageReadCacheWriteAdmission)
 	gen.zipper.SetLeafPageReader(db.leafPageReader(vm))
@@ -2895,9 +2894,9 @@ func openWithLock(opts Options, lock *lockfile.Lock) (result *DB, retErr error) 
 	db.seedEntryRevisionFloor()
 
 	// Typed replay can build several roots in one original publication group.
-	// Give DATA replay the same coordinator and exact captured frontier as
-	// foreground construction, with scheduling synchronous until readiness.
-	if opts.CommandWAL {
+	// DATA WAL replay and original PRIMARY capsules use the same coordinator
+	// and exact captured frontier, synchronously until readiness.
+	if opts.CommandWAL || (gen.primary != nil && gen.primary.CapsuleFormatV6()) {
 		if opts.IndexOuterLeavesInValueLog {
 			manifest, selectedExact, err := db.loadSelectedDurableLeafGenerationManifest()
 			if err == nil && !selectedExact {
@@ -3918,9 +3917,15 @@ func (db *DB) recover() error {
 		if db.readOnly {
 			return errors.New("read-only open requires an existing index with meta pages")
 		}
+		if idx.primary != nil {
+			return db.initializeDurablePrimaryV5(idx)
+		}
 		return db.initializeDurableRootV1(idx)
 	}
 
+	if idx.primary != nil {
+		return db.recoverDurablePrimaryV5(idx)
+	}
 	selected, err := selectDurableRootWithMetadataV1(p, p.PageCount(), db.valueLogIdentityPins.MetadataOwner(), db.validateDurableDependencyManifestV1, db.dependencyDirectoryValidatorV2(idx))
 	if err != nil {
 		return err

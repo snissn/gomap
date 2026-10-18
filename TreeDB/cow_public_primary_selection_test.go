@@ -2,7 +2,6 @@ package treedb
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -280,7 +279,7 @@ func TestCOWPublicDATASelectionLayeredPublication(t *testing.T) {
 	}
 }
 
-func TestCOWPublicDATASelectionModeAndRetiredFlag(t *testing.T) {
+func TestCOWPublicDATASelectionAndExplicitPRIMARY(t *testing.T) {
 	for _, profile := range []Profile{ProfileCommandWALDurable, ProfileCommandWALRelaxed, ProfileNoWALFast} {
 		for _, mode := range []string{"append_only", "btree", "cow_btree"} {
 			for _, explicit := range []bool{false, true} {
@@ -292,18 +291,36 @@ func TestCOWPublicDATASelectionModeAndRetiredFlag(t *testing.T) {
 					opts.DisableSideStores = true
 					opts.DisableBackgroundPrune = true
 					database, err := Open(opts)
-					if explicit {
-						if database != nil || !errors.Is(err, ErrLegacyFormatRebuildRequired) {
-							t.Fatalf("retired flag: database=%v err=%v", database != nil, err)
-						}
-						return
-					}
 					if err != nil {
 						t.Fatal(err)
 					}
 					defer database.Close()
-					if primaryarena.IsPage(database.backend.State().RootPageID) {
-						t.Fatal("ordinary default selected PRIMARY")
+					if primaryarena.IsPage(database.backend.State().RootPageID) != explicit {
+						t.Fatalf("physical selection: explicit=%v root=%d", explicit, database.backend.State().RootPageID)
+					}
+					if err := database.SetSync([]byte("selected"), []byte("preserved")); err != nil {
+						t.Fatal(err)
+					}
+					if err := database.Checkpoint(); err != nil {
+						t.Fatal(err)
+					}
+					if err := database.Close(); err != nil {
+						t.Fatal(err)
+					}
+					opts.IndexPrimaryDirectory = false // Persisted format, not the option, selects reopen.
+					reopened, err := Open(opts)
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer reopened.Close()
+					if primaryarena.IsPage(reopened.backend.State().RootPageID) != explicit {
+						t.Fatal("reopen changed physical representation")
+					}
+					if got, err := reopened.Get([]byte("selected")); err != nil || string(got) != "preserved" {
+						t.Fatalf("reopen: %q %v", got, err)
+					}
+					if err := reopened.Close(); err != nil {
+						t.Fatal(err)
 					}
 				})
 			}
