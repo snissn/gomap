@@ -355,6 +355,7 @@ func newRootPublicationRuntimeModeV1(db *DB, idx *indexGen, durable durableRootR
 		DurableRootLineage:         runtime.lineage,
 		DurableRootSequence:        durable.record.CommitSeq,
 		AcceptedPrefixOwner:        db.acceptedPrefix.Load(),
+		MetadataOwner:              metadata,
 	})
 	if err != nil {
 		return nil, errors.Join(err, runtime.release())
@@ -847,17 +848,14 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 		}
 		install.primaryRoot = &primaryStateRootV5{arena: runtime.idx.primary, ref: bundle.Directory, dataCommit: generation.CommitSeq(), certificate: certificate}
 	}
-	var memberMetadata uint64
-	if transaction != nil {
-		memberMetadata = primaryVisibleMetadataV6()
-		if e := runtime.idx.primary.MetadataOwner().AddPending(memberMetadata); e != nil {
-			return nil, false, e
-		}
+	memberMetadata := primaryVisibleMetadataV6()
+	if e := runtime.metadata.AddPending(memberMetadata); e != nil {
+		return nil, false, e
 	}
-	memberMetadataOwned := memberMetadata != 0
+	memberMetadataOwned := true
 	defer func() {
 		if memberMetadataOwned {
-			runtime.idx.primary.MetadataOwner().RemovePending(memberMetadata)
+			runtime.metadata.RemovePending(memberMetadata)
 		}
 	}()
 	member := &rootPublicationVisibleMemberV1{
@@ -997,7 +995,8 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 		if err != nil {
 			return nil, false, err
 		}
-		install.metadataCharge = 0 // SAME transaction terminal node owns the admitted header.
+		memberMetadataOwned = false
+		install.metadataCharge = 0 // SAME transaction terminal owns the admitted member/header.
 	}
 	member.transaction = transaction
 	preparedOwned = false
@@ -2064,6 +2063,10 @@ func (runtime *rootPublicationRuntimeV1) release() error {
 			first = err
 		}
 	}
+	var publicationCompletion rootpublication.StableResourceTokenReleaseCompletionV6
+	if first == nil {
+		publicationCompletion, first = runtime.coordinator.ReleasePhysicalMetadata()
+	}
 	if first != nil {
 		runtime.disposalFailure.retainCause(0, first)
 		runtime.disposalErr = &runtime.disposalFailure
@@ -2104,6 +2107,7 @@ func (runtime *rootPublicationRuntimeV1) release() error {
 	idx = nil
 	runtime.disposalMu.Unlock()
 	runtime = nil
+	publicationCompletion.Complete()
 	if owner != nil {
 		owner.RemovePending(charge)
 	}

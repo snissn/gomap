@@ -813,7 +813,7 @@ func (snapshot *Snapshot) captureOwnedStableIndexFileResource() (*rootpublicatio
 		return nil, err
 	}
 	defer snapshot.endRead()
-	var metadata *retainedalloc.Owner
+	metadata := snapshot.db.valueLogIdentityPins.MetadataOwner()
 	if snapshot.idx != nil && snapshot.idx.primary != nil {
 		metadata = snapshot.idx.primary.MetadataOwner()
 	}
@@ -855,7 +855,7 @@ func (db *DB) StableResourceMetadataOwner() *retainedalloc.Owner {
 	db.idxMu.Lock()
 	defer db.idxMu.Unlock()
 	idx := db.idx.Load()
-	if idx == nil || idx.primary == nil {
+	if idx == nil {
 		return nil
 	}
 	return db.valueLogIdentityPins.MetadataOwner()

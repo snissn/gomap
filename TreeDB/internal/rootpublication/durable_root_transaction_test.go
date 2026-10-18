@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/freelist"
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
 )
@@ -34,6 +35,10 @@ func newDurableRootTransactionFixture(t *testing.T, lineage DurableRootLineageID
 }
 
 func newDurableRootTransactionFixtureWithPayload(t *testing.T, lineage DurableRootLineageID, seq uint64, withPayload bool) *durableRootTransactionFixture {
+	return newDurableRootTransactionFixtureWithMetadata(t, lineage, seq, withPayload, nil)
+}
+
+func newDurableRootTransactionFixtureWithMetadata(t *testing.T, lineage DurableRootLineageID, seq uint64, withPayload bool, metadata *retainedalloc.Owner) *durableRootTransactionFixture {
 	t.Helper()
 	p, err := pager.Open(filepath.Join(t.TempDir(), "index.db"), 64*1024)
 	if err != nil {
@@ -91,7 +96,8 @@ func newDurableRootTransactionFixtureWithPayload(t *testing.T, lineage DurableRo
 		fixture.payload = DurableRootPayload{TargetMetaPageID: seq % 2, Meta: meta, Record: record}
 	}
 	fixture.tx, err = NewDurableRootTransaction(DurableRootTransactionSpec{
-		Lineage: lineage, Sequence: seq, Payload: fixture.payload, PreparedCOW: fixture.prepared,
+		TerminalMetadataOwnerV6: metadata,
+		Lineage:                 lineage, Sequence: seq, Payload: fixture.payload, PreparedCOW: fixture.prepared,
 		Activate: func(input DurableRootCallbackInput) error {
 			fixture.activates.Add(1)
 			if input.PreparedCOW != fixture.prepared {
@@ -133,7 +139,14 @@ func newDurableRootTransactionFixtureWithPayload(t *testing.T, lineage DurableRo
 	if err != nil {
 		t.Fatal(err)
 	}
-	fixture.resources, err = NewStableResourceSetBuilder().Freeze()
+	builder := NewStableResourceSetBuilder()
+	if metadata != nil {
+		builder, err = NewStableResourceSetBuilderWithMetadata(metadata)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	fixture.resources, err = builder.Freeze()
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,9 +1,33 @@
 package rootpublication
 
-// physicalDurabilityUnion borrows members' exact tokens for the publisher
-// callback. Original candidate sets retain ownership through success, retry,
-// or recovery retention. This capability cannot answer logical metadata APIs.
+import (
+	"errors"
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
+)
+
+// physicalDurabilityUnion retains members' exact physical tokens for the
+// publisher callback. Admitted inputs use the original owned builder; the
+// caller releases this private view before original members finish. Generic
+// diagnostic inputs retain their borrowed view. Neither has logical authority.
 func physicalDurabilityUnion(candidates []*PreparedRootCandidate) (*StableResourceSet, error) {
+	if len(candidates) != 0 && candidates[0].resourceSet().MetadataOwner() != nil {
+		var previous *DurableRootTransaction
+		for _, candidate := range candidates {
+			var err error
+			previous, err = validatePhysicalDurabilityMember(previous, candidate)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return buildOwnedPhysicalUnion(candidates[0].resourceSet().MetadataOwner(), func(visit func(*StableResourceSet) error) error {
+			for _, candidate := range candidates {
+				if err := visit(candidate.resourceSet()); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	}
 	sets, err := physicalDurabilityMemberSets(candidates)
 	if err != nil {
 		return nil, err
@@ -16,6 +40,21 @@ func physicalDurabilityUnion(candidates []*PreparedRootCandidate) (*StableResour
 // escapes this call. Every member must first pass validatePhysicalDurabilityMember.
 // Compatibility checks share the publication merge primitive.
 func physicalDurabilityCount(sets []*StableResourceSet) (int, error) {
+	if len(sets) != 0 && sets[0].MetadataOwner() != nil {
+		view, err := buildOwnedPhysicalUnion(sets[0].MetadataOwner(), func(visit func(*StableResourceSet) error) error {
+			for _, set := range sets {
+				if err := visit(set); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			return 0, err
+		}
+		count := view.Len()
+		return count, view.ReleaseWithError()
+	}
 	count, err := unionStableResourceSets(stableResourceViewPhysicalCount, sets...)
 	if err != nil {
 		return 0, err
@@ -119,4 +158,62 @@ func ClonePhysicalReachabilityUnion(sources ...*StableResourceSet) (*StableResou
 		owned.extras.physical = append(owned.extras.physical, directory)
 	}
 	return owned, nil
+}
+
+// Use the original admitted builder, rather than a second flat descriptor/cache
+// union. The clones retain each exact physical producer while the callback is
+// active; logical directory obligations never enter this physical capability.
+func buildOwnedPhysicalUnion(owner *retainedalloc.Owner, sources func(func(*StableResourceSet) error) error) (_ *StableResourceSet, retErr error) {
+	builder, err := NewStableResourceSetBuilderWithMetadata(owner)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if cleanup := builder.AbandonWithError(); cleanup != nil {
+			receipt := &builder.metadata.failure
+			if !errors.Is(retErr, receipt) {
+				receipt.LinkPriorCleanupError(retErr)
+			}
+			retErr = receipt
+		}
+	}()
+	err = sources(func(source *StableResourceSet) error {
+		if source == nil {
+			return nil
+		}
+		if source.MetadataOwner() != owner {
+			return ErrResourceOwnership
+		}
+		var failure error
+		source.rangeEntries(func(entry *stableResourceEntry) bool {
+			token := activeEntryToken(*entry)
+			clone, err := token.cloneOwnedPinnedDirectory(entry.logicalLane, entry.resourceID, entry.diagnosticPath, entry.frontier, token.reachability, nil, nil, nil)
+			if err != nil {
+				failure = err
+				return false
+			}
+			clone.importedFields = entry.reachability
+			failure = builder.Add(clone)
+			clone.importedFields = nil
+			if failure != nil {
+				if cleanup := clone.ReleaseWithError(); cleanup != nil {
+					receipt := &clone.cleanupFailure
+					if !errors.Is(failure, receipt) {
+						receipt.LinkPriorCleanupError(failure)
+					}
+					failure = receipt
+				}
+			}
+			return failure == nil
+		})
+		return failure
+	})
+	if err != nil {
+		return nil, err
+	}
+	result, err := builder.Freeze()
+	if err == nil {
+		result.physicalOnly = true
+	}
+	return result, err
 }
