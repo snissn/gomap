@@ -18,6 +18,35 @@ on the public database continue through the same owner after native activation.
 Backend-only `OpenBackendWithCachedLeafLog*` constructors serve the legacy
 backend-authoritative route and do not provide this native capability.
 
+The two-phase frontend is `manager.Begin(collection)`, then transaction
+`InsertBatch(ids, documents)`, `Get(id)`, `Commit()` and `Close()`. It binds one
+supported collection and accepts one strictly sorted insert batch; a second
+staging call refuses while preserving the first batch. Other staging failures
+terminally invalidate the transaction. Always close the transaction, including
+on refusal. One-shot `manager.InsertBatch` delegates to this frontend and no
+longer holds the manager mutex through planning and commit.
+
+The opening is the existing P1 conditional transaction's single Snapshot,
+logical sequence, batch and shared journal. Staged IDs/documents, canonical
+payload, Effects and read dependencies remain transaction-owned through commit.
+Get observes the opening plus own staged rows; original point reads, including
+missing rows, and catalog identity are validated along with write intent before
+canonical assignment. Commit composes the same immutable staged mutations onto
+the latest compatible complete engine only after that validation. It neither
+reruns the body nor captures/retries another opening. The internal preparation
+returns original partial ownership to existing off-gate cancellation on error;
+there is no application callback or inline cleanup under publication exclusion.
+Containing transaction admission is refunded after its mutex is unlocked.
+
+`TestNativeJSONPublicConditionalTransactions` is the selected public proof:
+two transactions begin before either commits, read opening and own staged values,
+and commit disjoint inserts A then B without reopening or body retry. Write/write
+and missing-read/write conflicts refuse before assigned LSN advances. A staged
+transaction survives equivalent physical checkpoint/handoff. Exact values survive
+checkpoint/reopen, and original cache accounting and identity pins reach zero in
+all three profiles. This is a singleton collection proof; composite transactions,
+other operations and the full acceptance packet remain open.
+
 `TestNativeJSONExternalPublicOwnerLifecycle` is the external-package
 entry proof for durable, relaxed and NoWAL profiles. It uses only exported APIs:
 native Create/Insert, a later ordinary raw Set, identical State/Snapshot/sequence
@@ -104,19 +133,20 @@ Known limitations and RED controls remain explicit:
   preflight parity remain open. The foreground proof does not exercise these
   callbacks as composite children.
 - Shared create identity/counter effects now use the existing serialized builders
-  on both WAL and NoWAL paths. A new concurrent different-name create control is
-  RED: durable Close reports `root publication captured basis mismatch`, and
-  NoWAL Create reports `durable-root candidate base changed`. The control and
-  first failure logs are preserved; no retries or lock workaround were added.
+  on both WAL and NoWAL paths. Historical legacy concurrent-create diagnostics
+  reproduced NoWAL `durable-root candidate base changed` on both baseline and
+  candidate. The former durable captured-basis failure used the obsolete
+  constructor role; the corrected native public constructor now passes the
+  selected lifecycle proofs. That evidence does not qualify general concurrent
+  legacy create behavior. Original failure logs remain preserved.
 - Full producer migration, unsupported-shape refusal coverage, resource closure,
   admission proofs, broader race/recovery suites and performance gates remain
   required. Hook-free replay manager lifetimes outside the selected handlers
   remain part of that work.
-- The lower bridge currently requires the prepared Basis to equal the current
-  semantic State before dependency validation. An unrelated native install or
-  equivalent physical handoff can therefore reject an otherwise disjoint plan.
-  Required reprepare/rebase behavior remains open; the restricted public fixtures
-  do not establish disjoint concurrent transaction support.
+- Native JSON insert transactions now use original dependency validation before
+  latest-state immutable preparation. Create and other unmigrated native producer
+  plans retain their existing exact-prepared-Basis restrictions; this singleton
+  proof does not establish cross-domain/composite rebase or the full matrix.
 
 Empty physical frontiers use fresh immutable successor headers with build=nil;
 the original captured build stays single-use. Both zero-count preparations,

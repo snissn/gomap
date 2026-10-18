@@ -1,7 +1,6 @@
 package collections
 
 import (
-	"bytes"
 	"errors"
 	"unsafe"
 
@@ -15,155 +14,17 @@ import (
 	"github.com/snissn/gomap/TreeDB/tree"
 )
 
-// InsertBatch is the restricted unindexed JSON operation. IDs must be strictly
-// ordered; unsupported shapes refuse before effects or canonical assignment.
+// InsertBatch is the one-shot form of Begin, staged InsertBatch, and Commit.
 func (m *NativeJSONManager) InsertBatch(name string, ids, documents [][]byte) (resultErr error) {
-	if err := ValidateCollectionName(name); err != nil {
-		return err
-	}
-	if m == nil || m.db == nil {
-		return backenddb.ErrClosed
-	}
-	if len(ids) != len(documents) || len(ids) == 0 {
-		return backenddb.ErrNativeSemanticUnsupported
-	}
-	for i := range ids {
-		if len(ids[i]) == 0 || documents[i] == nil || (i > 0 && bytes.Compare(ids[i-1], ids[i]) >= 0) {
-			return backenddb.ErrNativeSemanticUnsupported
-		}
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	capture, err := m.db.CaptureNativeSemanticState()
+	tx, err := m.Begin(name)
 	if err != nil {
 		return err
 	}
-	defer func() { resultErr = errors.Join(resultErr, capture.Close()) }()
-	base, ok := capture.State().(*nativeEngineVersion)
-	if capture.State() != nil && !ok {
-		return backenddb.ErrNativeSemanticUnsupported
-	}
-	if base == nil {
-		base, err = importNativeJSONCatalog(capture)
-		if base != nil {
-			defer func() {
-				record := base.Release()
-				base = nil
-				resultErr = errors.Join(resultErr, finishPrivateNative(record))
-			}()
-		}
-		if err != nil {
-			return err
-		}
-	}
-	c, ok := base.names.Get(name)
-	if !ok {
-		return tree.ErrKeyNotFound
-	}
-	if _, err := nativeJSONMeta(*c.schema.meta); err != nil {
+	defer func() { resultErr = errors.Join(resultErr, tx.Close()) }()
+	if err = tx.InsertBatch(ids, documents); err != nil {
 		return err
 	}
-	if base.inventory != nil {
-		return backenddb.ErrNativeSemanticUnsupported
-	}
-	// This lease covers the identity-free planner's exact unindexed/sorted
-	// branch and command payload. The caller keeps it through synchronous
-	// bridge preparation/append; accepted roots and history own independent copies.
-	charge, err := nativeJSONInsertCharge(name, ids, documents)
-	if err != nil {
-		return err
-	}
-	control, err := base.allocator.AdmitNativeBytes(charge)
-	if err != nil {
-		return err
-	}
-	defer control.Close()
-	// End every planner/payload/publication alias in this private call before
-	// refunding its containing control lease. Nothing from this scratch scope is
-	// transferred into the accepted sparse custody.
-	return func() (resultErr error) {
-		custody, err := newNativeMutationCustody(0, 1, base.allocator)
-		if err != nil {
-			return err
-		}
-		var native *backenddb.NativePreparedPublication
-		defer func() {
-			if custody != nil {
-				record := custody.ReleaseNativeCustody()
-				custody = nil
-				resultErr = errors.Join(resultErr, finishPrivateNative(record))
-			}
-		}()
-		planner := insertBatchPlanner{collection: name, primaryRoot: "primary", templateRoot: "templates", directBufferedRuns: true, options: collectionOptions{documentFormat: DocumentFormatJSON}}
-		plan, err := planner.planInsertBatch(ids, documents)
-		if err != nil {
-			return err
-		}
-		defer func() { plan = nil }()
-		rows := plan.directBufferedInsert.primaryEntries
-		old, _ := c.domains.Get("primary")
-		if old != nil {
-			read, err := newNativeDomainRead(old, capture.Snapshot())
-			if err != nil {
-				return err
-			}
-			// Read scratch/file resolution retains the exact opening capture.
-			probe := NativeJSONRead{capture: capture}
-			for _, row := range rows {
-				entry, err := read.getEntry(row.key, &probe.scratch, probe.readLeaf)
-				if err == nil && entry.Flags&node.FlagTombstone == 0 {
-					return ErrDocumentExists
-				}
-				if err != nil && !errors.Is(err, tree.ErrKeyNotFound) {
-					return err
-				}
-			}
-			read = nativeDomainRead{}
-			probe.capture, probe.scratch = nil, nativeDomainReadScratch{}
-		}
-		mutations := make([]memtable.COWMutation, len(rows))
-		effects := make([]txnhistory.Effect, len(rows))
-		ns := txnhistory.Namespace{Kind: txnhistory.CollectionNamespace, Collection: c.incarnation, Domain: 1, Interpretation: 1}
-		for i, row := range rows {
-			mutations[i] = memtable.COWMutation{Key: row.key, Value: row.value, Flags: node.FlagInline}
-			effects[i] = txnhistory.Effect{Namespace: ns, Kind: txnhistory.PointEffect, Key: row.key}
-		}
-		next, err := prepareNativeJSONPrimary(base, c, mutations)
-		mutations = nil
-		if err != nil {
-			if next != nil {
-				record := next.Release()
-				next = nil
-				err = errors.Join(err, finishPrivateNative(record))
-			}
-			return err
-		}
-		replacement, _ := next.collections.Get(c.incarnation)
-		(nativeCollectionLifetime{}).Retain(replacement)
-		custody.adoptCollection(replacement)
-		replacement = nil
-		native = &backenddb.NativePreparedPublication{Basis: capture.State(), State: next, Custody: custody, StartSequence: capture.LogicalSequence(), Effects: effects, Dependencies: effects}
-		custody, next = nil, nil
-		docs := make([]commitlog.CollectionDocument, len(rows))
-		for i, row := range rows {
-			docs[i] = commitlog.CollectionDocument{ID: row.key, Document: row.value}
-		}
-		payload, err := commitlog.EncodeCollectionInsertBatchByIDPayload(name, docs)
-		docs, rows, effects, plan = nil, nil, nil, nil
-		if err != nil {
-			return errors.Join(err, cancelPrivateNativePublication(native))
-		}
-		intent, err := m.db.NewTrustedCommandWALIntent(commitlog.CommandKindCollectionInsertBatchByID, commitlog.CommandScopeCollection, commitlog.PayloadFormatCollectionInsertBatchByIDV1, payload)
-		if err != nil {
-			return errors.Join(err, cancelPrivateNativePublication(native))
-		}
-		result, err := m.db.WriteNativePublication(native, intent, false)
-		plan, payload, intent = nil, nil, nil
-		if !result.Consumed {
-			err = errors.Join(err, cancelPrivateNativePublication(native))
-		}
-		return err
-	}()
+	return tx.Commit()
 }
 
 func nativeJSONInsertCharge(name string, ids, documents [][]byte) (uint64, error) {

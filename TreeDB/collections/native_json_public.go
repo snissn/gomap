@@ -237,7 +237,10 @@ func prepareNativeJSONCreateCommand(_ *backenddb.DB, env commitlog.CommandEnvelo
 func cancelPrivateNativePublication(native *backenddb.NativePreparedPublication) error {
 	state, custody := native.State, native.Custody
 	native.State, native.Custody = nil, nil
-	record := state.Release()
+	var record *rootpublication.SemanticCleanup
+	if state != nil {
+		record = state.Release()
+	}
 	state = nil
 	err := finishPrivateNative(record)
 	if custody != nil {
