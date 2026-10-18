@@ -31,7 +31,7 @@ func (db *DB) refreshCOWCheckpointFallback() (retErr error) {
 		return backenddb.ErrClosed
 	}
 	frontiers := c.prefix.LogicalFrontiers()
-	if cut.logicalSeq != frontiers.S.LogicalSequence || cut.visibleCommandLSN != frontiers.S.CanonicalLSN || len(cut.frozen) != 0 || cut.basis.logicalSeq != cut.logicalSeq {
+	if cut.logicalSeq != frontiers.V || cut.visibleCommandLSN != frontiers.C || cut.basis.logicalSeq != frontiers.S.LogicalSequence || cut.logicalSeq < frontiers.S.LogicalSequence || cut.visibleCommandLSN < frontiers.S.CanonicalLSN {
 		return backenddb.ErrRootPublicationBasisMismatch
 	}
 	basis, live := cut.basis.snapshot.StateToken()
@@ -41,6 +41,15 @@ func (db *DB) refreshCOWCheckpointFallback() (retErr error) {
 	needed, err := backend.CommandWALCheckpointFallbackNeedsRefresh(basis)
 	if err != nil || !needed {
 		return err
+	}
+	// A writer admitted after Checkpoint may already own a newer suffix.
+	// Optional idle convergence must neither fail that completed boundary nor
+	// seal the suffix. Its next explicit checkpoint will carry the coverage.
+	if cut.logicalSeq > frontiers.S.LogicalSequence || cut.visibleCommandLSN > frontiers.S.CanonicalLSN {
+		return nil
+	}
+	if len(cut.frozen) != 0 {
+		return backenddb.ErrRootPublicationBasisMismatch
 	}
 	err = db.flushCOWFrozenCutForFallback(true, nil, cut, true)
 	cut = nil // the same flush owner consumed the original retained cut

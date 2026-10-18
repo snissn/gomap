@@ -47,8 +47,19 @@ preadmitted accepted Snapshot and exact handoff. It neither advances logical
 coverage/command identity nor uses the ordinary same-root publisher. The generic
 post-maintenance recapture is skipped. Legacy non-COW refresh is unchanged.
 
-The first bounded regression run proves activated public raw Checkpoint/Close/
-reopen for all profiles. It also exposes a prior activation-batch regression for
-standalone caching.Open without a bound transaction owner: its first ordinary
-NoWAL write is rejected. This checkpoint is unaccepted until that compatibility
-boundary and the remaining focused accepted-error controls are resolved.
+Standalone caches without a bound transaction owner retain the ordinary raw
+finalizer. The private finalizer still requires the exact nonnil bound owner;
+ordinary backend admission continues to reject an activated semantic backend.
+Sibling native attachment, transaction and append-guard paths retain their
+existing exact-owner checks.
+
+An unsealed suffix admitted after the caller's completed checkpoint defers
+optional idle convergence. The route first checks the exact physical basis and
+cut V/C correspondence; it neither rejects a valid newer suffix nor seals it.
+The next explicit checkpoint owns that suffix's durability boundary. Complete
+physical-basis and prefix inconsistencies still fail closed.
+
+Focused and race controls cover standalone raw writes, accepted-reported-error
+custody, exact preaccepted Snapshot handoff, active ordinary alias refusal, and
+activated public raw Checkpoint/Close/reopen across all profiles. Higher-level
+native semantic activation and whole-packet qualification remain separate gates.
