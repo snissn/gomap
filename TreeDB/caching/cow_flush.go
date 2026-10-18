@@ -282,6 +282,11 @@ func (db *DB) flushCOWFrozen(syncFlush bool, publish *checkpointCommandWALPublis
 // passes use its immutable frozen logical/semantic coverage, excluding mutable
 // suffixes. Every preaccept exit unwinds through the same original owners.
 func (db *DB) flushCOWFrozenCut(syncFlush bool, publish *checkpointCommandWALPublish, cut *cowReadCut) (retErr error) {
+	return db.flushCOWFrozenCutForFallback(syncFlush, publish, cut, false)
+}
+
+// forceIdle is private to the exact-basis, fully sealed fallback predicate path.
+func (db *DB) flushCOWFrozenCutForFallback(syncFlush bool, publish *checkpointCommandWALPublish, cut *cowReadCut, forceIdle bool) (retErr error) {
 	c := db.cow
 	if cut == nil {
 		return backenddb.ErrClosed
@@ -290,7 +295,7 @@ func (db *DB) flushCOWFrozenCut(syncFlush bool, publish *checkpointCommandWALPub
 	if publish != nil && publish.appliedLSN != 0 {
 		target.CanonicalLSN = publish.appliedLSN
 	}
-	if len(cut.frozen) == 0 && (c.prefix == nil || target == c.prefix.LogicalFrontiers().S) {
+	if !forceIdle && len(cut.frozen) == 0 && (c.prefix == nil || target == c.prefix.LogicalFrontiers().S) {
 		return c.releaseCut(cut)
 	}
 	n := len(cut.frozen)

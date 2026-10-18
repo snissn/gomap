@@ -38,3 +38,17 @@ same-root recovery-slot refresh has no accepted-cut authority and is correctly
 refused by the current fence. The new all-profile public control preserves this
 failure. No fallback exemption/general maintenance authority is implemented;
 this checkpoint is not dependency-ready or a native activation claim.
+
+Idle command-WAL recovery-slot convergence uses the COW maintenance admission
+and flush fence. It checks the existing real fallback predicate against the exact
+fully sealed cut's complete StateToken. Only a required convergence runs the
+existing empty final physical batch with an AcceptedCut, complete build,
+preadmitted accepted Snapshot and exact handoff. It neither advances logical
+coverage/command identity nor uses the ordinary same-root publisher. The generic
+post-maintenance recapture is skipped. Legacy non-COW refresh is unchanged.
+
+The first bounded regression run proves activated public raw Checkpoint/Close/
+reopen for all profiles. It also exposes a prior activation-batch regression for
+standalone caching.Open without a bound transaction owner: its first ordinary
+NoWAL write is rejected. This checkpoint is unaccepted until that compatibility
+boundary and the remaining focused accepted-error controls are resolved.
