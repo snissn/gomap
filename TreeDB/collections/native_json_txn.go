@@ -292,7 +292,7 @@ func (t *NativeJSONTxn) InsertBatchInto(name string, ids, documents [][]byte) (r
 		if g.probe.domain.domain == nil {
 			break
 		}
-		entry, err := g.probe.domain.getEntry(row.key, &g.probe.scratch, g.probe.readLeaf)
+		entry, err := g.probe.getEntry(row.key)
 		if err == nil && entry.Flags&node.FlagTombstone == 0 {
 			return ErrDocumentExists
 		}
@@ -555,7 +555,9 @@ func (t *NativeJSONTxn) Commit() (resultErr error) {
 	for i := 0; i < t.count; i++ {
 		t.bindings[i].probe.capture = nil
 		t.bindings[i].probe.domain = nativeDomainRead{}
-		t.bindings[i].probe.scratch = nativeDomainReadScratch{}
+		if lease := t.bindings[i].probe.detachScratch(); lease != nil {
+			lease.Close()
+		}
 	}
 	result, err := t.core.CommitNative(native, intent, false)
 	t.custody = nil
@@ -587,7 +589,11 @@ func (t *NativeJSONTxn) Close() error {
 func (t *NativeJSONTxn) closeLocked() (error, []*memtable.COWExternalLease, *memtable.COWExternalLease) {
 	var err error
 	for i := range t.bindings {
+		lease := t.bindings[i].probe.detachScratch()
 		t.bindings[i] = nativeJSONTxnBinding{}
+		if lease != nil {
+			lease.Close()
+		}
 	}
 	t.bindings = nil
 	t.dependencies = nil

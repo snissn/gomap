@@ -32,16 +32,18 @@ func importNativeJSONCatalog(capture backenddb.NativeSemanticCapture) (base *nat
 	}
 	// Two fixed merge workspaces and one successor key own all borrowed scan
 	// aliases; the original snapshot remains held by capture throughout.
-	lease, err := capture.NativeAllocator().AdmitNativeBytes(memtable.COWAllocationCharge(uint64(unsafe.Sizeof(NativeJSONRead{}))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeDomainReadScratch{}))) + memtable.COWAllocationCharge(page.PageSize+1))
+	lease, err := capture.NativeAllocator().AdmitNativeBytes(memtable.COWAllocationCharge(uint64(unsafe.Sizeof(NativeJSONRead{}))) + 2*memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeDomainReadScratch{}))) + memtable.COWAllocationCharge(page.PageSize+1))
 	if err != nil {
 		return base, err
 	}
-	probe := NativeJSONRead{capture: capture}
+	var scanScratch nativeDomainReadScratch
+	probe := NativeJSONRead{capture: capture, scratch: &scanScratch}
 	var scratch nativeDomainReadScratch
 	var cursor [page.PageSize + 1]byte
 	defer func() {
 		probe = NativeJSONRead{}
 		scratch = nativeDomainReadScratch{}
+		scanScratch = nativeDomainReadScratch{}
 		cursor = [page.PageSize + 1]byte{}
 		lease.Close()
 	}()

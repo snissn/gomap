@@ -47,22 +47,39 @@ func nativeDomainRecordEntry(row memtable.COWRecord) node.LeafEntry {
 // getEntry preserves tombstones and pointer metadata. Only the enclosing
 // captured merge suppresses deletions and resolves values using its exact
 // source resources. An absent newer source never suppresses an older source.
-func (r *nativeDomainRead) getEntry(key []byte, scratch *nativeDomainReadScratch, readLeaf func(page.LeafLogPtr, []byte) ([]byte, error)) (node.LeafEntry, error) {
-	if r == nil || r.domain == nil || scratch == nil {
-		return node.LeafEntry{}, backenddb.ErrNativeSemanticUnsupported
+// memoryEntry resolves the original newest-first logical sources. A false
+// result requires a physical base lookup; it never changes that precedence.
+func (r *nativeDomainRead) memoryEntry(key []byte) (node.LeafEntry, bool, error) {
+	if r == nil || r.domain == nil {
+		return node.LeafEntry{}, true, backenddb.ErrNativeSemanticUnsupported
 	}
 	if r.domain.pending != nil {
 		if row, ok := r.domain.pending.Get(key); ok {
-			return nativeDomainRecordEntry(row), nil
+			return nativeDomainRecordEntry(row), true, nil
 		}
 	}
 	if row, ok := r.domain.captured.get(key); ok {
-		return nativeDomainRecordEntry(row), nil
+		return nativeDomainRecordEntry(row), true, nil
 	}
 	if !r.hasBase {
-		return node.LeafEntry{}, tree.ErrKeyNotFound
+		return node.LeafEntry{}, true, tree.ErrKeyNotFound
+	}
+	return node.LeafEntry{}, false, nil
+}
+
+func (r *nativeDomainRead) baseEntry(key []byte, scratch *nativeDomainReadScratch, readLeaf func(page.LeafLogPtr, []byte) ([]byte, error)) (node.LeafEntry, error) {
+	if scratch == nil {
+		return node.LeafEntry{}, backenddb.ErrNativeSemanticUnsupported
 	}
 	return r.base.GetEntryExactWithFixedScratch(key, scratch.key[:], scratch.leaf[:], readLeaf)
+}
+
+func (r *nativeDomainRead) getEntry(key []byte, scratch *nativeDomainReadScratch, readLeaf func(page.LeafLogPtr, []byte) ([]byte, error)) (node.LeafEntry, error) {
+	entry, resolved, err := r.memoryEntry(key)
+	if resolved {
+		return entry, err
+	}
+	return r.baseEntry(key, scratch, readLeaf)
 }
 
 // seekGE merges one candidate per original finite physical source. Sources are

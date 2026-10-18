@@ -114,6 +114,18 @@ lower-owned. Foreground planner/payload scratch is caller-owned through the
 synchronous bridge call, then its containing lease is refunded after scratch
 aliases end. Accepted COW rows and journal effects own independent copies.
 
+Each captured JSON read owns a small scope. Pending/captured logical hits and
+no-base misses need no page workspace. Physical metadata/base traversal lazily
+admits one scope-owned workspace from the same original producer budget, then
+reuses it under the scope mutex until Close. Borrowed transaction probes detach
+that independent scratch receipt without closing their original P1 capture;
+complete catalog import explicitly admits both scan and lookup workspaces.
+Scratch aliases end before refund, and containing read admission still refunds
+after mutex unlock. Returned inline and pointer values are exact-length owned
+copies. A fresh disk-backed Get still pays for physical scratch; explicit held
+reads amortize it without changing ordinary Get's fresh-cut visibility. No pool,
+retained collection snapshot, decoder policy or pointer-file authority changes.
+
 Known limitations and RED controls remain explicit:
 
 - Recovered first mutation imports the complete catalog descriptors, without a
