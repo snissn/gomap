@@ -69,7 +69,7 @@ func (builder *StableResourceSetBuilder) addAdmittedToken(token *StableResourceT
 		return err
 	}
 	var view stableResourceKindView
-	err = appendOwnedResourceEntryToView(&view, backing, owner)
+	leaf, err := appendOwnedResourceEntryToView(&view, backing, owner)
 	backing.release()
 	if err != nil {
 		builder.mu.Unlock()
@@ -99,6 +99,10 @@ func (builder *StableResourceSetBuilder) addAdmittedToken(token *StableResourceT
 		incoming.release()
 		return err
 	}
+	// The singleton leaf is still private, including when next shares it.
+	// All fallible preparation and the original Token claim precede attaching
+	// the physical release edge. Metadata aliases were retained throughout.
+	leaf.entries = leaf.metadata.backing.entries[:1:1]
 	old := builder.kindViews
 	builder.kindViews = next
 	builder.mu.Unlock()

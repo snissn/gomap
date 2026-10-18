@@ -19,7 +19,13 @@ func rebuildOwnedResourceKindCollision(left, right *resourceKindBacking, owner *
 			count += cell.view.count
 		}
 	}
-	width := uint64(unsafe.Sizeof((*resourceEntryBacking)(nil)))
+	// The existing admitted scratch retains the exact private leaf alongside
+	// its entry until the cloned Token's physical edge can transfer to it.
+	type privateEntry struct {
+		backing *resourceEntryBacking
+		leaf    *stableResourceEntryNode
+	}
+	width := uint64(unsafe.Sizeof(privateEntry{}))
 	if uint64(count) > ^uint64(0)/width {
 		return nil, retainedalloc.ErrCapacity
 	}
@@ -27,12 +33,12 @@ func rebuildOwnedResourceKindCollision(left, right *resourceKindBacking, owner *
 	if err != nil {
 		return nil, err
 	}
-	entries := make([]*resourceEntryBacking, 0, count)
+	entries := make([]privateEntry, 0, count)
 	defer func() {
 		for _, entry := range entries {
-			if entry != nil {
-				entry.entries[0].token.Release()
-				entry.release()
+			if entry.backing != nil {
+				entry.backing.entries[0].token.Release()
+				entry.backing.release()
 			}
 		}
 		clear(entries[:cap(entries)])
@@ -42,7 +48,8 @@ func rebuildOwnedResourceKindCollision(left, right *resourceKindBacking, owner *
 	var buildErr error
 	for _, source := range [2]*resourceKindBacking{left, right} {
 		rangeStableResourceKindViews(source, func(incoming *stableResourceEntry) bool {
-			for i, backing := range entries {
+			for i, private := range entries {
+				backing := private.backing
 				existing := &backing.entries[0]
 				if existing.token.kind == incoming.token.kind && existing.token.logicalKey() == incoming.token.logicalKey() && !existing.token.samePhysicalIdentity(incoming.token) {
 					buildErr = ErrResourceConflict
@@ -65,7 +72,7 @@ func rebuildOwnedResourceKindCollision(left, right *resourceKindBacking, owner *
 					buildErr = e
 					return false
 				}
-				entries[i] = replacement
+				entries[i] = privateEntry{backing: replacement}
 				existing.token.Release()
 				backing.release()
 				return true
@@ -75,7 +82,7 @@ func rebuildOwnedResourceKindCollision(left, right *resourceKindBacking, owner *
 				buildErr = e
 				return false
 			}
-			entries = append(entries, backing)
+			entries = append(entries, privateEntry{backing: backing})
 			return true
 		})
 		if buildErr != nil {
@@ -92,6 +99,11 @@ func rebuildOwnedResourceKindCollision(left, right *resourceKindBacking, owner *
 	}
 	cells := make([]resourceKindCell, 0, kindCapacity)
 	defer func() {
+		// These are construction borrows of leaves owned by the views. End
+		// them before a failed build can dispose and refund those views.
+		for i := range entries {
+			entries[i].leaf = nil
+		}
 		for _, cell := range cells {
 			releaseStableResourceKindView(cell.view)
 		}
@@ -99,7 +111,8 @@ func rebuildOwnedResourceKindCollision(left, right *resourceKindBacking, owner *
 		cellsAllocation.drop()
 		cellsAllocation.refund()
 	}()
-	for _, backing := range entries {
+	for i := range entries {
+		backing := entries[i].backing
 		entry := &backing.entries[0]
 		index := -1
 		for i := range cells {
@@ -113,7 +126,8 @@ func rebuildOwnedResourceKindCollision(left, right *resourceKindBacking, owner *
 			index = len(cells) - 1
 		}
 		view := &cells[index].view
-		if err = appendOwnedResourceEntryToView(view, backing, owner); err != nil {
+		entries[i].leaf, err = appendOwnedResourceEntryToView(view, backing, owner)
+		if err != nil {
 			return nil, err
 		}
 	}
@@ -126,15 +140,26 @@ func rebuildOwnedResourceKindCollision(left, right *resourceKindBacking, owner *
 	for i := range cells {
 		cells[i].view = stableResourceKindView{}
 	}
-	for _, backing := range entries {
+	for _, private := range entries {
+		backing := private.backing
 		if err = backing.entries[0].token.claim(ResourceOwnerShared); err != nil {
-			result.release()
+			for i := range entries {
+				entries[i].leaf = nil
+			}
+			if cleanupErr := result.release(); cleanupErr != nil {
+				// Failed graph disposal retains this original descriptor and
+				// marks its admitted receipt before returning the child error.
+				result.allocation.failure.LinkPriorCleanupError(err)
+				return nil, &result.allocation.failure
+			}
 			return nil, err
 		}
+		private.leaf.entries = backing.entries[:1:1]
 	}
-	for i, backing := range entries {
+	for i := range entries {
+		backing := entries[i].backing
+		entries[i] = privateEntry{}
 		backing.release()
-		entries[i] = nil
 	}
 	return result, nil
 }
@@ -242,39 +267,42 @@ func ownedFrontierUnion(owner *retainedalloc.Owner, a, b DurableFrontier) (Durab
 	return out, allocation, nil
 }
 
-func appendOwnedResourceEntryToView(view *stableResourceKindView, backing *resourceEntryBacking, owner *retainedalloc.Owner) error {
+// Append retains metadata and a detached private leaf. Its caller must attach
+// the physical entry slice only after the Token's Shared claim succeeds.
+func appendOwnedResourceEntryToView(view *stableResourceKindView, backing *resourceEntryBacking, owner *retainedalloc.Owner) (*stableResourceEntryNode, error) {
 	entry := &backing.entries[0]
 	logical, err := insertOwnedResourceLogical(view.logical, entry, owner)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	releaseOwnedResourceLogical(view.logical)
 	view.logical = logical
 	physical, err := insertOwnedResourcePhysical(view.physical, entry, owner)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	releaseOwnedResourcePhysical(view.physical)
 	view.physical = physical
 	leaf, err := newOwnedStableResourceEntryLeaf(backing, 0, 1, owner)
 	if err != nil {
-		return err
+		return nil, err
 	}
+	leaf.entries = nil
 	root, err := concatOwnedAdmittedStableResourceEntryNodes(view.root, leaf, owner)
 	if err != nil {
 		leaf.release()
-		return err
+		return nil, err
 	}
 	view.root = root
 	fields, err := mergeResourceFieldBackings(owner, view.fields, entry.reachability)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	view.fields.release()
 	view.fields = fields
 	_, added, err := mergeOwnedResourceMembership(&view.logicalMembership, entry.outgoing.index, owner)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	view.logicalMembershipCount += added
 	view.count++
@@ -282,7 +310,7 @@ func appendOwnedResourceEntryToView(view *stableResourceKindView, backing *resou
 	if view.directory == nil {
 		view.directory = entry.outgoing.directory
 	}
-	return nil
+	return leaf, nil
 }
 
 func subtractOwnedFieldCommitments(target, removed *resourceFieldBacking) error {
