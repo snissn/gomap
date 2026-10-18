@@ -183,8 +183,8 @@ func TestNativeDomainReadPendingOnlyAndInvalidOwners(t *testing.T) {
 	if _, ok, err := read.seekGE([]byte("z"), nil, &scratch, nil); err != nil || ok {
 		t.Fatal(ok, err)
 	}
-	if _, err := read.getEntry([]byte("key"), nil, nil); err != backenddb.ErrNativeSemanticUnsupported {
-		t.Fatal(err)
+	if entry, err := read.getEntry([]byte("key"), nil, nil); err != nil || string(entry.Value) != "value" {
+		t.Fatal("logical hit required physical scratch", entry, err)
 	}
 	read = nativeDomainRead{}
 	if _, err := read.getEntry(nil, &scratch, nil); err != backenddb.ErrNativeSemanticUnsupported {

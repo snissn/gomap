@@ -24,7 +24,8 @@ type NativeJSONRead struct {
 	capture       backenddb.NativeSemanticCapture
 	domain        nativeDomainRead
 	privateDomain *nativeDomainState
-	scratch       nativeDomainReadScratch
+	scratch       *nativeDomainReadScratch
+	scratchLease  *memtable.COWExternalLease
 	lease         *memtable.COWExternalLease
 	failure       error
 }
@@ -65,6 +66,9 @@ func (m *NativeJSONManager) Capture(name string) (result *NativeJSONRead, result
 		}
 		if token.SystemRootPageID == 0 {
 			return nil, tree.ErrKeyNotFound
+		}
+		if _, err := r.physicalScratch(); err != nil {
+			return nil, err
 		}
 		reader, err := capture.Snapshot().NativeReaderAtRoot(token.SystemRootPageID)
 		if err != nil {
@@ -162,6 +166,42 @@ func (m *NativeJSONManager) Get(collection string, id []byte) (value []byte, res
 	return r.Get(id)
 }
 
+// physicalScratch is private to this read scope and serialized by its owner.
+// Borrowed txn/import probes retain their original capture; only scratch owns
+// this independent receipt. No page storage is needed for a logical-source hit.
+func (r *NativeJSONRead) physicalScratch() (*nativeDomainReadScratch, error) {
+	if r.scratch == nil {
+		lease, err := r.capture.NativeAllocator().AdmitNativeBytes(memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeDomainReadScratch{}))))
+		if err != nil {
+			return nil, err
+		}
+		r.scratch = &nativeDomainReadScratch{}
+		r.scratchLease = lease
+	}
+	return r.scratch, nil
+}
+
+func (r *NativeJSONRead) getEntry(id []byte) (node.LeafEntry, error) {
+	entry, resolved, err := r.domain.memoryEntry(id)
+	if resolved {
+		return entry, err
+	}
+	scratch, err := r.physicalScratch()
+	if err != nil {
+		return node.LeafEntry{}, err
+	}
+	return r.domain.baseEntry(id, scratch, r.readLeaf)
+}
+
+// detachScratch ends every scope alias before the independent receipt refunds.
+// It never closes a borrowed capture, including the original P1 txn core.
+func (r *NativeJSONRead) detachScratch() *memtable.COWExternalLease {
+	r.scratch = nil
+	lease := r.scratchLease
+	r.scratchLease = nil
+	return lease
+}
+
 func (r *NativeJSONRead) Get(id []byte) ([]byte, error) {
 	if r == nil {
 		return nil, backenddb.ErrClosed
@@ -174,7 +214,7 @@ func (r *NativeJSONRead) Get(id []byte) ([]byte, error) {
 	if r.domain.domain == nil {
 		return nil, tree.ErrKeyNotFound
 	}
-	entry, err := r.domain.getEntry(id, &r.scratch, r.readLeaf)
+	entry, err := r.getEntry(id)
 	if err != nil {
 		return nil, err
 	}
@@ -185,7 +225,9 @@ func (r *NativeJSONRead) Get(id []byte) ([]byte, error) {
 		return r.readValue(entry.ValuePtr)
 	}
 	// The result belongs to the caller, not to retained database accounting.
-	return append([]byte(nil), entry.Value...), nil
+	value := make([]byte, len(entry.Value))
+	copy(value, entry.Value)
+	return value, nil
 }
 
 // readValue borrows only this read scope's exact Snapshot file Set. Get holds
@@ -252,7 +294,9 @@ func (r *NativeJSONRead) readValue(ptr page.ValuePtr) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return append([]byte(nil), value...), nil
+	owned := make([]byte, len(value))
+	copy(owned, value)
+	return owned, nil
 }
 
 func (r *NativeJSONRead) readLeaf(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
@@ -328,7 +372,8 @@ func (r *NativeJSONRead) Close() error {
 		r.mu.Unlock()
 		return nil
 	}
-	r.domain, r.scratch = nativeDomainRead{}, nativeDomainReadScratch{}
+	r.domain = nativeDomainRead{}
+	scratchLease := r.detachScratch()
 	r.meta = CollectionMeta{}
 	metadataLease := r.metadataLease
 	r.metadataLease = nil
@@ -346,6 +391,9 @@ func (r *NativeJSONRead) Close() error {
 	r.lease = nil
 	r.mu.Unlock()
 	r = nil
+	if scratchLease != nil {
+		scratchLease.Close()
+	}
 	if metadataLease != nil {
 		metadataLease.Close()
 	}
