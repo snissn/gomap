@@ -93,6 +93,9 @@ type snapshotView struct {
 
 type DB struct {
 	privateCOWOwner                *transactionowner.Owner
+	nativeSemanticActive           atomic.Bool
+	legacyCommandProducers         uint64 // commandWALRawBarrierMu
+	semanticUnownedInFlight        uint64 // commandWALRawBarrierMu
 	nativeSemanticBridge           NativeSemanticBridge
 	acceptedPrefix                 atomic.Pointer[rootpublication.Coordinator] // immutable logical owner after private binding
 	mvccAdmission                  mvccadmission.Authority
@@ -4043,9 +4046,15 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	// Producer closures are move-only inputs. Merge transfers their handles to
 	// the durable candidate; every earlier exit releases them here.
 	defer opts.durableResources.Release()
-	prePublishErr := func(err error) error {
-		return wrapFinalizeCommitError(err, true)
+	prePublishErr := func(err error) error { return wrapFinalizeCommitError(err, true) }
+	tracked, admissionErr := db.beginSemanticBackendOperation(nil, opts.acceptedPrefixCut != nil && opts.acceptedPrefixCut.Valid())
+	if admissionErr != nil {
+		if opts.rootPublicationBuilder != nil {
+			opts.rootPublicationBuilder.Release()
+		}
+		return post, prePublishErr(admissionErr)
 	}
+	defer db.endSemanticBackendOperation(tracked)
 	if db.readOnly {
 		return post, ErrReadOnly
 	}

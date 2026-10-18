@@ -292,6 +292,9 @@ func (b *Batch) write(sync bool) error {
 	if b == nil || b.db == nil {
 		return fmt.Errorf("missing db")
 	}
+	if b.db.nativeSemanticActive.Load() && b.rootPublicationBuildGroup == nil {
+		return ErrNativeSemanticUnsupported
+	}
 	if b.db.readOnly {
 		return ErrReadOnly
 	}
