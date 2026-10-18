@@ -26,8 +26,8 @@ field and satisfy the consistency checks. It is not a process RSS quota.
 | Field | Default | Ownership counted |
 | --- | --- | --- |
 | `MaxViews` | 1,024 | Active root views and cursors |
-| `MaxGenerations` | 64 | Writable, frozen and still-pinned generations |
-| `MaxSources` | 32 | Frozen sources through final retained-owner drain |
+| `MaxGenerations` | 64 | Writable, parked empty successors, frozen and still-pinned generations |
+| `MaxSources` | 32 | Dirty active raw generations and frozen sources through final retained-owner drain |
 | `MaxResources` | 256 | Distinct generation resource identities |
 | `MaxGenerationBytes` | 64 MiB | Cumulative generation allocation charge |
 | `MaxTotalBytes` | 512 MiB | Generation history and admitted external storage |
@@ -78,6 +78,28 @@ An oversized indivisible command refuses before producer or journal effects.
 Rollover rejoins write admission iteratively after unlocked retirement and
 signals the ordinary flush worker. It neither scans history nor hides a
 foreground checkpoint inside an accepted publication.
+
+Before a raw shard's first dirty acceptance, its original generation reserves a
+source slot and the cache constructs the actual empty rollover writer/root using
+the existing maintenance constructor. Both must succeed before canonical append
+or logical publication. The preparation owns partial provision until install;
+cancellation returns the source slot and drains the empty successor outside
+publication gates. Later writes to that same dirty generation reuse its provision.
+
+The cache owns one parked empty successor per dirty raw shard. Read cuts never
+retain that successor. Rollover adopts it without another generation allocation;
+a refused rollover leaves the exact parked ownership available for retry. The
+empty successor reserves no source until its own first dirty acceptance. Close
+drains unused parked ownership outside writer/cut gates. A dirty generation's
+source slot survives its last real view, root and writer edge even if it has not
+been frozen. Standalone memtable writers retain Freeze-time source admission.
+
+This moves fixed empty-writer, root and resolver construction to the first dirty
+write, and adds bounded original cache/preparation vectors. It does not claim a
+performance improvement or cover other maintenance-byte/native-build admission
+obligations. P3 native generation source cells remain their independent original
+owners in the same shared budget; raw provision must neither double charge nor
+refund those cells.
 
 ## One immutable read cut
 

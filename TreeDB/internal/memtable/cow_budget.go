@@ -313,6 +313,7 @@ type cowGeneration struct {
 	constructionLease *COWExternalLease
 	nativeSource      *COWNativeSourceReservation // opt-in original native cohort
 	frozen, retired   bool
+	rawSourceReserved bool // cache first-dirty admission; independent of native source cells
 	drainClaimed      bool
 	ids               []COWResourceID
 	owners            []cowResourceOwner
@@ -390,7 +391,7 @@ func (g *cowGeneration) drain() {
 	b.mu.Unlock()
 	cowReleaseOwners(g.owners)
 	b.mu.Lock()
-	history, frozen, retired := g.history-g.reservedCharge, g.frozen, g.retired
+	history, frozen, retired := g.history-g.reservedCharge, g.frozen || g.rawSourceReserved, g.retired
 	constructionLease := g.constructionLease
 	g.constructionLease = nil
 	nativeSource := g.nativeSource

@@ -1,7 +1,6 @@
 package caching
 
 import (
-	"fmt"
 	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -30,17 +29,13 @@ type cowRollover struct {
 func (c *cowCache) prepareRollover() (*cowRollover, error) {
 	old := c.cut
 	count := 0
-	for _, table := range old.shards {
-		if table.Len() > 0 {
+	for _, successor := range c.successors {
+		if successor.writer != nil {
 			count++
 		}
 	}
 	if count == 0 && old.logicalSeq == old.frozenLogicalSeq {
 		return nil, nil
-	}
-	limits := c.budget.Limits()
-	if c.budget.Stats().Sources > limits.MaxSources-count {
-		return nil, memtable.ErrCOWCapacity
 	}
 	n := len(c.writers)
 	bytes := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowRollover{}))) +
@@ -56,19 +51,10 @@ func (c *cowCache) prepareRollover() (*cowRollover, error) {
 	if err != nil {
 		return p, err
 	}
-	for i, table := range old.shards {
-		if table.Len() == 0 {
-			continue
-		}
-		p.writers[i], err = memtable.NewCOWWriterWithMaintenanceConstruction(c.budget, c.maintenance)
-		if err != nil {
-			return p, err
-		}
-		root, resources, e := prepareCOWReservedEmptyRoot(p.writers[i], c.maintenance)
-		if e != nil {
-			return p, e
-		}
-		p.roots[i], p.resources[i] = root, resources
+	// These exact empty writers/roots were constructed before first dirty
+	// acceptance. They remain cache-owned on every refusal and retry.
+	for i, successor := range c.successors {
+		p.writers[i], p.roots[i], p.resources[i] = successor.writer, successor.root, successor.resources
 	}
 	if old.semanticRootSet != nil {
 		p.opening = c.retainCut()
@@ -83,12 +69,12 @@ func (c *cowCache) prepareRollover() (*cowRollover, error) {
 			return p, backenddb.ErrNativeSemanticUnsupported
 		}
 	}
-	// All admitted history is precharged against potential retirement. Source
-	// count is the only additional Freeze admission and is serialized here.
+	// Source cardinality was admitted with the first dirty preparation. Freeze
+	// keeps the standalone retirement checks but requires no new cache source.
 	for i, w := range p.writers {
 		if w != nil {
 			if err := c.writers[i].Freeze(); err != nil {
-				return p, fmt.Errorf("COW rollover invariant: %w", err)
+				return p, err
 			}
 		}
 	}
@@ -116,6 +102,9 @@ func (c *cowCache) prepareRollover() (*cowRollover, error) {
 			panic("lost COW rollover source")
 		}
 		next.frozen = append(next.frozen, table)
+		if !p.roots[i].Retain() {
+			panic("lost parked COW successor root")
+		}
 		next.shards[i] = cowTable{shard: i, root: p.roots[i], resources: p.resources[i], history: c.generationBase}
 	}
 	next.buildDomains()
@@ -130,6 +119,7 @@ func (p *cowRollover) install() {
 		if w != nil {
 			p.retired[i] = c.writers[i].Close()
 			c.writers[i] = w
+			c.successors[i] = cowRawSuccessor{}
 		}
 	}
 	c.cutMu.Lock()
@@ -156,6 +146,16 @@ func (p *cowRollover) drain() error {
 		// The installed cut owns these edges; the preparation only borrowed them.
 		next = nil
 		p.cutLease = nil
+		// End preparation writer aliases: the cache now owns those writers.
+		clear(p.writers)
+		for i, root := range p.roots {
+			if root != nil {
+				p.roots[i] = nil
+				retired := root.Release() // original parked edge; Next owns its separate edge
+				root = nil
+				retired.Drain()
+			}
+		}
 		for i := range p.retired {
 			p.retired[i].Drain()
 		}
@@ -186,24 +186,10 @@ func (p *cowRollover) drain() error {
 			next.shards, next.frozen, next.sources, next.domains = nil, nil, nil, nil
 			next = nil
 		}
-		// No newly created writer was visible. All release traversal and
-		// actual resource callbacks run after owner/admission release.
-		for i, root := range p.roots {
-			if root != nil {
-				p.roots[i] = nil
-				r := root.Release()
-				root = nil
-				r.Drain()
-			}
-		}
-		for i, w := range p.writers {
-			if w != nil {
-				p.writers[i] = nil
-				r := w.Close()
-				w = nil
-				r.Drain()
-			}
-		}
+		// The cache still owns the actual parked successors. Only Next's
+		// separately retained edges above were private to this attempt.
+		clear(p.roots)
+		clear(p.writers)
 		if p.semantic != nil {
 			record := p.semantic.Release()
 			p.semantic = nil
