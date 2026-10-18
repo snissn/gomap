@@ -584,6 +584,46 @@ func (p *COWPrepared) drain() {
 	b.releaseMaintenanceReservation()
 }
 
+// ReserveRawRolloverSource reserves the cache generation's source before its
+// first dirty acceptance. Standalone writers retain Freeze-time admission.
+// The original generation owns the slot through all actual root/view edges.
+func (w *COWWriter) ReserveRawRolloverSource() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed || w.pending != nil {
+		return ErrCOWPending
+	}
+	g := w.generation
+	b := g.budget
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		return ErrCOWClosed
+	}
+	if g.frozen || g.rawSourceReserved || b.stats.Sources >= b.limits.MaxSources {
+		return ErrCOWCapacity
+	}
+	g.rawSourceReserved = true
+	b.stats.Sources++
+	return nil
+}
+
+// CancelRawRolloverSource unwinds only an unpublished first-dirty preparation.
+// The cache serializes this operation with all writes and rollover.
+func (w *COWWriter) CancelRawRolloverSource() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	g := w.generation
+	b := g.budget
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if g.frozen || !g.rawSourceReserved || w.pending != nil {
+		panic("invalid raw source cancellation")
+	}
+	g.rawSourceReserved = false
+	b.stats.Sources--
+}
+
 // Freeze is pre-frame admission for a write-side source rollover. C2 reserves
 // its complete successor cut and fresh writer before making this transition.
 // Freeze cannot run while a preparation is pending. It never walks records.
@@ -606,12 +646,14 @@ func (w *COWWriter) Freeze() error {
 	if b.closed {
 		return ErrCOWClosed
 	}
-	if b.stats.Sources >= b.limits.MaxSources || !cowFits(b.limits.MaxRetiredBytes, b.stats.RetiredBytes, g.history-g.reservedCharge) {
+	if (!g.rawSourceReserved && b.stats.Sources >= b.limits.MaxSources) || !cowFits(b.limits.MaxRetiredBytes, b.stats.RetiredBytes, g.history-g.reservedCharge) {
 		return ErrCOWCapacity
 	}
 	g.frozen = true
 	g.retired = true
-	b.stats.Sources++
+	if !g.rawSourceReserved {
+		b.stats.Sources++
+	}
 	b.stats.RetiredBytes += g.history - g.reservedCharge
 	return nil
 }

@@ -123,6 +123,7 @@ type cowCache struct {
 	cutMu                                                                                          sync.Mutex
 	cut                                                                                            *cowReadCut
 	writers                                                                                        []*memtable.COWWriter
+	successors                                                                                     []cowRawSuccessor
 	budget                                                                                         *memtable.COWBudget
 	maintenance                                                                                    *memtable.COWBudget
 	prefix                                                                                         *rootpublication.Coordinator
@@ -171,6 +172,7 @@ func newCOWCache(provider backendSnapshotProvider, shards int, limits memtable.C
 		memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof((*memtable.COWWriter)(nil)))) +
 		memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof(memtable.COWRetirement{}))) +
 		memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof(memShard{})))
+	cacheBytes += memtable.COWAllocationCharge(uint64(shards) * uint64(unsafe.Sizeof(cowRawSuccessor{})))
 	cacheLease, err := budget.AcquireExternal(cacheBytes)
 	if err != nil {
 		budget.Close()
@@ -212,7 +214,7 @@ func newCOWCache(provider backendSnapshotProvider, shards int, limits memtable.C
 		}
 		return nil, joinCOWCleanupError(err, cleanupErr)
 	}
-	c := &cowCache{budget: budget, maintenance: maintenance, writers: make([]*memtable.COWWriter, shards), lease: cacheLease, closeRetired: make([]memtable.COWRetirement, shards)}
+	c := &cowCache{budget: budget, maintenance: maintenance, writers: make([]*memtable.COWWriter, shards), successors: make([]cowRawSuccessor, shards), lease: cacheLease, closeRetired: make([]memtable.COWRetirement, shards)}
 	cut := &cowReadCut{refs: 1, shards: make([]cowTable, shards), basis: admitted, lease: cutLease, cache: c}
 	for i := range c.writers {
 		beforeHistory := budget.Stats().HistoryBytes
@@ -389,14 +391,15 @@ func (c *cowCache) releaseCut(cut *cowReadCut) error {
 // are retained while changed roots remain private until publish. There is no
 // tree copy, allocation or callback in the installation latch.
 type cowPreparedCut struct {
-	cache    *cowCache
-	next     *cowReadCut
-	opening  *cowReadCut
-	native   *cowNativeOwner
-	prepared []*memtable.COWPrepared
-	consumed bool
-	retired  []memtable.COWRetirement
-	lease    *memtable.COWExternalLease
+	cache      *cowCache
+	next       *cowReadCut
+	opening    *cowReadCut
+	native     *cowNativeOwner
+	prepared   []*memtable.COWPrepared
+	successors []cowRawSuccessor // private first-dirty provisions until whole-cut install
+	consumed   bool
+	retired    []memtable.COWRetirement
+	lease      *memtable.COWExternalLease
 }
 
 func (c *cowCache) prepare(groups [][]memtable.COWMutation, opts []memtable.COWPrepareOptions) (*cowPreparedCut, error) {
@@ -421,7 +424,11 @@ func (c *cowCache) prepareNative(groups [][]memtable.COWMutation, opts []memtabl
 		return nil, fmt.Errorf("empty COW publication")
 	}
 	dedupBytes := uint64(0)
-	for _, group := range groups {
+	needsSuccessors := false
+	for i, group := range groups {
+		if len(group) != 0 && c.successors[i].writer == nil {
+			needsSuccessors = true
+		}
 		if len(group) > 1 {
 			dedupBytes += memtable.COWAllocationCharge(uint64(len(group))*128 + 4096)
 		}
@@ -433,11 +440,17 @@ func (c *cowCache) prepareNative(groups [][]memtable.COWMutation, opts []memtabl
 		memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowPreparedCut{}))) +
 		memtable.COWAllocationCharge(uint64(len(groups))*uint64(unsafe.Sizeof((*memtable.COWPrepared)(nil)))) +
 		memtable.COWAllocationCharge(uint64(len(groups))*uint64(unsafe.Sizeof(memtable.COWRetirement{})))
+	if needsSuccessors {
+		bytes += memtable.COWAllocationCharge(uint64(len(groups)) * uint64(unsafe.Sizeof(cowRawSuccessor{})))
+	}
 	lease, err := c.budget.AcquireExternal(bytes)
 	if err != nil {
 		return nil, err
 	}
 	p := &cowPreparedCut{cache: c, prepared: make([]*memtable.COWPrepared, len(groups)), retired: make([]memtable.COWRetirement, len(groups)), lease: lease}
+	if needsSuccessors {
+		p.successors = make([]cowRawSuccessor, len(groups))
+	}
 	c.cutMu.Lock()
 	old.refs++
 	p.opening = old
@@ -445,6 +458,22 @@ func (c *cowCache) prepareNative(groups [][]memtable.COWMutation, opts []memtabl
 	for i := range groups {
 		if len(groups[i]) == 0 {
 			continue
+		}
+		if c.successors[i].writer == nil {
+			if err := c.writers[i].ReserveRawRolloverSource(); err != nil {
+				p.cancel()
+				return p, err
+			}
+			p.successors[i].sourceReserved = true
+			var err error
+			p.successors[i].writer, err = memtable.NewCOWWriterWithMaintenanceConstruction(c.budget, c.maintenance)
+			if err == nil {
+				p.successors[i].root, p.successors[i].resources, err = prepareCOWReservedEmptyRoot(p.successors[i].writer, c.maintenance)
+			}
+			if err != nil {
+				p.cancel()
+				return p, err
+			}
 		}
 		staged, err := c.writers[i].Prepare(groups[i], opts[i])
 		if err != nil {
@@ -509,6 +538,10 @@ func (p *cowPreparedCut) cancel() {
 			p.prepared[i] = nil
 			p.retired[i] = s.Cancel()
 		}
+		if p.successors != nil && p.successors[i].sourceReserved {
+			p.cache.writers[i].CancelRawRolloverSource()
+			p.successors[i].sourceReserved = false
+		}
 	}
 }
 func (p *cowPreparedCut) drainCancelled() error {
@@ -542,6 +575,10 @@ func (p *cowPreparedCut) drainCancelledWithCompletion() (*memtable.COWExternalLe
 	}
 	next = nil
 	p.prepared = nil
+	for i := range p.successors {
+		p.successors[i].drain()
+	}
+	p.successors = nil
 	for i := range p.retired {
 		p.retired[i].Drain()
 	}
@@ -591,6 +628,15 @@ func (p *cowPreparedCut) publishAccepted(ticket rootpublication.AcceptedTicket) 
 		}
 	}
 	c := p.cache
+	for i := range p.successors {
+		if p.successors[i].writer != nil {
+			if c.successors[i].writer != nil {
+				panic("duplicate raw rollover successor")
+			}
+			c.successors[i] = p.successors[i]
+			p.successors[i] = cowRawSuccessor{}
+		}
+	}
 	c.publications.Add(1)
 	c.cutMu.Lock()
 	old := c.cut
@@ -662,6 +708,7 @@ func (c *cowCache) closeWithBudget(closeBudget bool) error {
 	c.writerMu.Unlock()
 	for i := range retired {
 		retired[i].Drain()
+		c.successors[i].drain()
 	}
 	var err error
 	if h := c.handoff; h != nil {

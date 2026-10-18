@@ -29,7 +29,7 @@ func (s *cowRefusingSemanticHandoff) PrepareHandoff(latest backenddb.NativeSeman
 	return latest, nil
 }
 
-func TestCheckpointFullSourceFrontierAndNonemptyMutable(t *testing.T) {
+func TestCheckpointFullSourceFrontierRefusesUnpromisedMutable(t *testing.T) {
 	dir := t.TempDir()
 	backend, err := backenddb.Open(backenddb.Options{Dir: filepath.Join(dir, "backend"), DisableBackgroundPrune: true})
 	if err != nil {
@@ -55,14 +55,20 @@ func TestCheckpointFullSourceFrontierAndNonemptyMutable(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if err := db.Set([]byte("mutable"), []byte("latest")); !errors.Is(err, memtable.ErrCOWCapacity) {
+		t.Fatalf("unpromised dirty generation accepted: %v", err)
+	}
+	if len(db.cow.cut.frozen) != limits.MaxSources || db.cow.cut.shards[0].Len() != 0 || db.cow.budget.Stats().Views != 0 {
+		t.Fatal("fixture does not fill source frontier")
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint full frontier: %v", err)
+	}
 	if err := db.Set([]byte("mutable"), []byte("latest")); err != nil {
 		t.Fatal(err)
 	}
-	if len(db.cow.cut.frozen) != limits.MaxSources || db.cow.cut.shards[0].Len() == 0 || db.cow.budget.Stats().Views != 0 {
-		t.Fatal("fixture does not fill the source frontier without readers")
-	}
 	if err := db.Checkpoint(); err != nil {
-		t.Fatalf("checkpoint at full source frontier: %v", err)
+		t.Fatal(err)
 	}
 	for key, want := range map[string]string{"first": "first", "second": "second", "mutable": "latest"} {
 		if got, err := backend.Get([]byte(key)); err != nil || string(got) != want {
@@ -140,6 +146,7 @@ func TestCOWDrainRolloverRefusalPreservesActiveCut(t *testing.T) {
 	}
 	before := db.cow.maintenance.Stats()
 	cut := db.cow.cut
+	parked := db.cow.successors[0]
 	overhead := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
 	pressure, err := db.cow.maintenance.AcquireExternal(db.cow.maintenance.Limits().MaxTotalBytes - before.TotalBytes - overhead)
 	if err != nil {
@@ -149,6 +156,9 @@ func TestCOWDrainRolloverRefusalPreservesActiveCut(t *testing.T) {
 	pressure.Close()
 	if !errors.Is(err, memtable.ErrCOWCapacity) || db.cow.cut != cut {
 		t.Fatalf("rollover refusal changed cut: %v", err)
+	}
+	if db.cow.successors[0].writer != parked.writer || db.cow.successors[0].root != parked.root {
+		t.Fatal("refusal lost original parked successor")
 	}
 	if found, err := db.backend.Has([]byte("a")); err != nil || found {
 		t.Fatalf("refused Drain published: %v %v", found, err)
