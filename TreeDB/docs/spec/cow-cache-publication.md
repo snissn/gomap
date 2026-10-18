@@ -373,6 +373,22 @@ Each entry distinguishes canonical assignment or uncertainty, complete logical
 installation, WAL completion and the exact physical seal. V (visible logical
 sequence), C (visible command prefix), W (stable WAL prefix) and S (sealed root)
 are separate; a NoWAL publication has no fabricated command LSN or W advance.
+Installed ordinary raw-only publications share a coalesced FIFO coverage run.
+The run's descriptor and receipt name its exact endpoint; iteration is not one
+visit per raw command. No raw effects move into this queue: immutable COW roots
+still own them. Native custody, projection, exact-seal request, charged and
+root-neutral entries retain their original independent slots. Canonical V+1/C+1
+validation occurs before whole-cut installation and only then can its raw slot
+merge, so assigned failures cannot disappear into a run.
+
+Before releasing the original writer exclusion, rollover marks its current
+exact V/C endpoint in that same FIFO. Writes after cutover cannot extend this
+entry, including writes before the physical worker calls CaptureAcceptedCut.
+Capture accepts only a retained endpoint; it never derives an interior LSN from
+logical sequence distance. Active or handed-off entries cannot merge. Empty
+idle convergence captures the already sealed S boundary. No additional clock,
+ledger, background scheduler, or per-command allocation is introduced.
+
 A captured finite prefix T includes every accepted entry through its boundary,
 with sparse native domain projections against the same complete raw/system/catalog
 basis. One build group publishes that boundary. An uncovered legacy producer
