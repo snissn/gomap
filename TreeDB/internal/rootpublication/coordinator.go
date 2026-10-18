@@ -113,6 +113,9 @@ type Coordinator struct {
 	rejectedCandidates   uint64
 	recoverySets         []*StableResourceSet
 	recoveryDurableRoots []*DurableRootTransaction
+	// A refused capture/transfer leaves the same original arrays here. Unlike
+	// pending publication cancellation, this is incomplete physical custody.
+	recoveryHandoffErr   error
 	resourceActivePins   map[ResourceKind]uint64
 	resourcePinHighWater map[ResourceKind]uint64
 	durableRootLineage   DurableRootLineageID
@@ -1367,6 +1370,11 @@ func (c *Coordinator) captureRecoveryResourcesLocked() {
 			}
 			if err := transaction.failFromCoordinator(cause); err != nil {
 				failure := errors.Join(ErrRecoveryRequired, fmt.Errorf("retain durable-root sequence %d: %w", transaction.Sequence(), err))
+				if c.recoveryHandoffErr == nil {
+					c.recoveryHandoffErr = failure
+				} else {
+					c.recoveryHandoffErr = errors.Join(c.recoveryHandoffErr, failure)
+				}
 				if c.poison != nil {
 					c.poison = errors.Join(c.poison, failure)
 				} else {
@@ -1477,7 +1485,10 @@ func (handoff *RecoveryResourceHandoff) ReleaseWithError() error {
 // TakeRecoveryHandoff transfers all retained coordinator pins exactly once.
 // It is valid only after poison or completed Stop; an empty terminal handoff
 // is harmless. In particular it cannot steal handles from an active Publish.
-func (c *Coordinator) TakeRecoveryHandoff() (*RecoveryResourceHandoff, error) {
+// On capture/admission/transfer refusal the result is nil: ownership and the
+// first refusal stay on this SAME coordinator. The caller must retain its
+// original publisher/coordinator payload; another call never retries disposal.
+func (c *Coordinator) TakeRecoveryHandoff() (handoff *RecoveryResourceHandoff, retErr error) {
 	if c == nil {
 		return &RecoveryResourceHandoff{}, nil
 	}
@@ -1487,6 +1498,14 @@ func (c *Coordinator) TakeRecoveryHandoff() (*RecoveryResourceHandoff, error) {
 		return nil, ErrRecoveryHandoffUnavailable
 	}
 	c.captureRecoveryResourcesLocked()
+	if c.recoveryHandoffErr != nil {
+		return nil, c.recoveryHandoffErr
+	}
+	defer func() {
+		if retErr != nil {
+			c.recoveryHandoffErr = retErr
+		}
+	}()
 	// Transfer the existing retained slice backing; no second recovery arrays
 	// or ownership lifecycle are created merely to retain a failure receipt.
 	sets, durableRoots := c.recoverySets, c.recoveryDurableRoots
@@ -1547,7 +1566,7 @@ func (c *Coordinator) TakeRecoveryHandoff() (*RecoveryResourceHandoff, error) {
 			return nil, fmt.Errorf("%w: durable-root recovery ownership transfer: %w", ErrDurableRootOwnership, err)
 		}
 	}
-	handoff := &RecoveryResourceHandoff{sets: sets, durableRoots: durableRoots, metadata: metadata}
+	handoff = &RecoveryResourceHandoff{sets: sets, durableRoots: durableRoots, metadata: metadata}
 	if metadata != nil {
 		handoff.metadataCharge = charge
 	}

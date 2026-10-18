@@ -2,6 +2,7 @@ package db
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -1155,5 +1156,50 @@ func TestBuildValueLogRefDeltaProducerInventoryErrors(t *testing.T) {
 		if delta != nil || err != nil {
 			t.Fatalf("pager delta=%v error=%v", delta, err)
 		}
+	}
+}
+
+// This isolates the runtime's consumption of a handoff error. Actual original
+// allocator capture refusal is covered by the coordinator startup replay test;
+// this does not induce end-to-end handoff admission or ownership-transfer refusal.
+func TestRootPublicationRuntimeRetainsFailedHandoffCause(t *testing.T) {
+	database, err := Open(Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cause := errors.New("original recovery handoff refused")
+	t.Cleanup(func() {
+		if err := database.Close(); err != nil && !errors.Is(err, cause) {
+			t.Errorf("Close lost original handoff cause: %v", err)
+		}
+	})
+	runtime := database.rootPublication
+	if runtime == nil || runtime.coordinator == nil || runtime.idx == nil || runtime.metadata == nil || runtime.metadataCharge == 0 {
+		t.Fatal("Open did not create the original admitted runtime")
+	}
+	coordinator, index, owner := runtime.coordinator, runtime.idx, runtime.metadata
+	if err = coordinator.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	charge, bytes, borrows := runtime.metadataCharge, owner.Bytes(), index.wrapperBorrowCountV6()
+	first := runtime.retainFailedRecoveryHandoff(cause)
+	if first != &runtime.disposalFailure || !errors.Is(first, cause) || database.backgroundError() != first {
+		t.Fatal("original runtime failure receipt or DB error edge lost")
+	}
+	later := errors.New("later handoff observation")
+	if again := runtime.retainFailedRecoveryHandoff(later); again != first || errors.Is(again, later) {
+		t.Fatal("later observation replaced the original handoff refusal")
+	}
+	if err = runtime.release(); err != first {
+		t.Fatalf("release did not preserve original refusal: %v", err)
+	}
+	if database.rootPublication != runtime || runtime.disposalFailure.payload != runtime || runtime.db != database || runtime.coordinator != coordinator || runtime.idx != index || runtime.metadata != owner || !runtime.generationBorrowed {
+		t.Fatal("failed handoff lost original runtime/coordinator/index/owner aliases")
+	}
+	if runtime.metadataCharge != charge || owner.Bytes() != bytes || index.wrapperBorrowCountV6() != borrows {
+		t.Fatal("failed handoff refunded original containing charge or generation borrow")
+	}
+	if database.backgroundError() != first || !errors.Is(database.backgroundError(), cause) {
+		t.Fatal("original runtime failure no longer reachable from DB error")
 	}
 }

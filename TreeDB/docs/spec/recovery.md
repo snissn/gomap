@@ -96,6 +96,21 @@ repairs only the discardable suffix above the durable frontier, replays complete
 commands with `LSN > AppliedLSN` through the deterministic command executor,
 then checkpoints the recovered `AppliedLSN` before cleaning covered WAL.
 
+Before command replay, DATA recovery loads the selected leaf manifest and
+captures the exact recovered snapshot, then constructs the ordinary publication
+coordinator with synchronous startup scheduling. Native multi-root replay uses
+that same constructor and publisher. Only after replay, the final visible
+snapshot, reachability tracker and appender are ready does `CompleteStartup`
+enable ordinary scheduling.
+
+A failed replay operation and failed physical teardown are distinct outcomes.
+Open returns the operation error after verified clean teardown and releases its
+original startup LOCK. Capture, handoff, physical-release, hook or incomplete
+teardown refusals retain the original startup receipt and LOCK. A refused
+coordinator handoff keeps the same runtime, exact resource arrays and containing
+charge reachable; observing its error never retries release. Public Close still
+returns both operational and cleanup errors.
+
 The command-frame V2 scanner, durable-frontier classifier, and physical suffix
 repair are the production `command_wal_v2` open path. Production append and
 reopen therefore use the same strict V2 format; V1 directories require a
@@ -155,7 +170,7 @@ recovery-required error unless the caller explicitly requests a stale read-only
 mode. Silent stale read-only open is incompatible with durable-at-ack command
 semantics.
 
-## Selected PRIMARY capsule recovery
+## Retired PRIMARY capsule recovery (historical format)
 
 For a checked V6 `index.db.primary` arena, Open decodes exactly the two fixed
 complete three-page capsules. It independently validates each current root
@@ -178,8 +193,9 @@ publication; startup must not write a DATA-format seal using PRIMARY addresses.
 The coordinator enters ordinary scheduling only after replay completes and the
 selected visible snapshot, reachability tracker and command-WAL appender are
 ready. An unfinished, failed or pending startup attempt blocks that transition.
-Replay finalizers then use the ordinary publication path. DATA-only recovery
-continues to initialize its publication runtime after recovery.
+Replay finalizers then use the ordinary publication path. This historical
+PRIMARY format is refused by current startup; DATA startup uses the synchronous
+pre-replay readiness described above.
 
 Arena bank recovery runs once at Open from the actual eligible slot and parent
 closures. Open then constructs genuinely owned copied read roots. Live slot

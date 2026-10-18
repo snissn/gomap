@@ -2268,10 +2268,14 @@ func TestCommandWALMaterializedRIDRecoveryReusedRIDSyncFailureFailsClosed(t *tes
 		}
 		return nil
 	})
-	_, err := Open(Options{Dir: dir})
+	failed, err := Open(Options{Dir: dir})
 	restore()
-	if !errors.Is(err, wantErr) {
-		t.Fatalf("Open reused RID sync error=%v, want %v", err, wantErr)
+	if failed != nil || !errors.Is(err, wantErr) {
+		t.Fatalf("Open reused RID sync db=%p error=%v, want nil and %v", failed, err, wantErr)
+	}
+	var cleanupFailure *OpenRecoveryCleanupError
+	if errors.As(err, &cleanupFailure) {
+		t.Fatalf("clean pre-seal dependency refusal retained physical startup custody: %v", err)
 	}
 
 	reopen := openCommandWALDB(t, dir)

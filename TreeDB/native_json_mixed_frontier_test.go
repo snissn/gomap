@@ -246,19 +246,19 @@ func TestNativeJSONPublicMixedOrdersCapturedFrontier(t *testing.T) {
 }
 
 // startNativeJSONPausedCheckpoint uses the existing serialized durability test
-// observer, not the obsolete public range provider. The exact PRIMARY data-sync
+// observer, not the obsolete public range provider. The exact DATA META-write
 // event occurs after the cache has captured/rotated its frontier and released
 // writeMu/writerMu, but before the accepted physical root is durable or handed
-// off. Ordinary WAL suffix writes do not sync this physical file. The CAS avoids
+// off. Ordinary WAL suffix writes do not install DATA META. The CAS avoids
 // making an unrelated observer invocation wait on a blocked sync.Once callback.
 func startNativeJSONPausedCheckpoint(t *testing.T, database *DB, dir string) func() error {
 	t.Helper()
 	reached, release := make(chan struct{}), make(chan struct{})
 	var armed atomic.Bool
 	root := filepath.Join(dir, "maindb")
-	path := filepath.Join(root, "index.db.primary")
+	path := filepath.Join(root, "index.db")
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
-		if event.Point != durabilitycut.BeforeIndexDataSync || event.Resource != durabilitycut.ResourceIndex || event.Root != root || event.Path != path || !armed.CompareAndSwap(false, true) {
+		if event.Point != durabilitycut.BeforeMetaWrite || event.Resource != durabilitycut.ResourceMeta || event.Root != root || event.Path != path || !armed.CompareAndSwap(false, true) {
 			return nil
 		}
 		close(reached)
@@ -273,13 +273,17 @@ func startNativeJSONPausedCheckpoint(t *testing.T, database *DB, dir string) fun
 	go func() { done <- database.Checkpoint() }()
 	var resumeOnce sync.Once
 	var checkpointErr error
+	var checkpointCompleted bool
 	resume := func() error {
 		resumeOnce.Do(func() {
 			close(release)
-			select {
-			case checkpointErr = <-done:
-			case <-time.After(publicCommandWALCheckpointTestTimeout):
-				checkpointErr = errors.New("native JSON checkpoint did not finish after physical pause release")
+			if !checkpointCompleted {
+				select {
+				case checkpointErr = <-done:
+					checkpointCompleted = true
+				case <-time.After(publicCommandWALCheckpointTestTimeout):
+					checkpointErr = errors.New("native JSON checkpoint did not finish after physical pause release")
+				}
 			}
 			restore()
 		})
@@ -290,8 +294,16 @@ func startNativeJSONPausedCheckpoint(t *testing.T, database *DB, dir string) fun
 			t.Errorf("paused checkpoint cleanup: %v", err)
 		}
 	})
-	if err := waitForPublicCommandWALCheckpointPhase(reached, "native JSON captured PRIMARY data sync"); err != nil {
-		t.Fatal(err)
+	select {
+	case <-reached:
+	case checkpointErr = <-done:
+		checkpointCompleted = true
+		if checkpointErr != nil {
+			t.Fatalf("native JSON checkpoint failed before captured DATA META write: %v", checkpointErr)
+		}
+		t.Fatal("native JSON checkpoint completed without captured DATA META write pause")
+	case <-time.After(publicCommandWALCheckpointTestTimeout):
+		t.Fatal("timed out waiting for native JSON captured DATA META write")
 	}
 	return resume
 }
