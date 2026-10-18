@@ -5,6 +5,7 @@ import (
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
 // cowRollover reserves the entire successor before freezing any source. The
@@ -78,6 +79,15 @@ func (c *cowCache) prepareRollover() (*cowRollover, error) {
 			}
 		}
 	}
+	// This exact V/C pair belongs to the roots being frozen, including native-
+	// only cuts. Mark it before the original writer exclusion can resume writes;
+	// the later physical builder must not infer an interior coalesced endpoint.
+	if c.prefix != nil {
+		if err := c.prefix.MarkAcceptedBoundary(rootpublication.SealedPrefix{LogicalSequence: old.logicalSeq, CanonicalLSN: old.visibleCommandLSN}); err != nil {
+			return p, err
+		}
+	}
+
 	next := &cowReadCut{visibleCommandLSN: old.visibleCommandLSN, logicalSeq: old.logicalSeq, frozenLogicalSeq: old.logicalSeq, frozenCommandLSN: old.visibleCommandLSN, frozenSemanticRootSet: old.semanticRootSet, semanticRootSet: p.semantic, refs: 1, cache: c, lease: p.cutLease, basis: old.basis, shards: make([]cowTable, n), frozen: make([]cowTable, len(old.frozen), len(old.frozen)+count)}
 	next.basis.retain()
 	p.semantic = nil // next adopts the returned active successor exactly once

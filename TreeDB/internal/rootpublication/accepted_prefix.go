@@ -66,6 +66,9 @@ func releaseAcceptedCustody(custody AcceptedCustody) (AcceptedCleanupCompletion,
 // original version/plan/asset custody into one bounded FIFO slot. Sequence is
 // supplied by the engine's existing clock; this owner never assigns a second
 // logical sequence. Canonical LSN remains optional for NoWAL publications.
+// Ordinary raw-only descriptors may coalesce into one installed coverage run;
+// their Sequence/receipt identify the run endpoint, not one visit per command.
+// Original native custody and exact request descriptors never coalesce.
 // PhysicalSealTarget is the preborn exact request receipt. Binding only stores
 // this finite cut's original physical receipt; it cannot execute user callbacks.
 type PhysicalSealTarget interface{ BindAcceptedPhysicalSeal(PhysicalSealReceipt) }
@@ -109,7 +112,7 @@ type acceptedEntry struct {
 	descriptor                     AcceptedDescriptor
 	receipt                        AcceptedReceipt
 	seal                           PhysicalSealReceipt
-	handedOff                      bool
+	handedOff, boundary            bool
 	retiring, released             bool
 	releaseErr                     error
 }
@@ -337,9 +340,72 @@ func (install *AcceptedInstall) Commit() {
 	if e.receipt.CanonicalLSN != 0 {
 		p.frontiers.C = e.receipt.CanonicalLSN
 	}
+	// The engine has completed its whole-cut swap. Only now may the transient
+	// raw slot merge into its preceding unguarded installed run. Assigned and
+	// failed preparations retain their original slots until this boundary.
+	p.coalesceRawTailLocked(install.ticket.slot, e)
 	install.done = true
 	p.changed.Broadcast()
 	p.mu.Unlock()
+}
+
+// coalesceRawTailLocked preserves the original FIFO and all sparse ownership.
+// A capture endpoint is marked while its engine writer exclusion still holds,
+// so writes before CaptureAcceptedCut arrives cannot extend that endpoint.
+func (p *acceptedPrefixState) coalesceRawTailLocked(slot int, e *acceptedEntry) {
+	if p.count < 2 || p.order[(p.head+p.count-1)%len(p.order)] != slot || !rawCoverageEntry(e) {
+		return
+	}
+	previous := &p.entries[p.order[(p.head+p.count-2)%len(p.order)]]
+	if !rawCoverageEntry(previous) || (previous.receipt.CanonicalLSN == 0) != (e.receipt.CanonicalLSN == 0) || (p.activeCut != 0 && p.count-2 < p.cutCount) {
+		return
+	}
+	previous.descriptor, previous.receipt = e.descriptor, e.receipt
+	p.count--
+	p.recycleLocked(slot, e)
+}
+
+func rawCoverageEntry(e *acceptedEntry) bool {
+	d := &e.descriptor
+	return e.receipt.Installed && !e.receipt.Uncertain && !e.receipt.Sealed &&
+		!e.maintenance && !e.boundary && !e.handedOff && !e.retiring && !e.released && e.releaseErr == nil &&
+		!d.RootNeutral && len(d.Projections) == 0 && d.Custody == nil && d.SealTarget == nil && d.AdmittedBytes == 0 && d.CleanupBytes == 0
+}
+
+// MarkAcceptedBoundary preserves the exact current engine endpoint before its
+// writer exclusion is released. Roots and the finite cut may be retained later;
+// CaptureAcceptedCut never reconstructs an interior LSN from logical distance.
+// Repeated marks are harmless. A failed rollover may leave a conservative mark.
+func (c *Coordinator) MarkAcceptedBoundary(through SealedPrefix) error {
+	c = c.AcceptedPrefixOwner()
+	if c == nil {
+		return ErrAcceptedReceipt
+	}
+	p := &c.accepted
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.poison != nil {
+		return p.poison
+	}
+	if p.closed {
+		return ErrClosed
+	}
+	if through != (SealedPrefix{LogicalSequence: p.frontiers.V, CanonicalLSN: p.frontiers.C}) {
+		return ErrAcceptedReceipt
+	}
+	if through == p.frontiers.S {
+		return nil
+	}
+	if p.count == 0 {
+		return ErrAcceptedReceipt
+	}
+	e := &p.entries[p.order[(p.head+p.count-1)%len(p.order)]]
+	if !e.receipt.Installed || e.receipt.Uncertain || e.receipt.LogicalSequence != through.LogicalSequence ||
+		(e.receipt.CanonicalLSN != 0 && e.receipt.CanonicalLSN != through.CanonicalLSN) {
+		return ErrAcceptedReceipt
+	}
+	e.boundary = true
+	return nil
 }
 
 // Abort is a deferred safeguard for a native publication that did not reach
@@ -526,6 +592,9 @@ func (c *Coordinator) CaptureAcceptedCut(through SealedPrefix, roots LogicalRoot
 	p.cutNonce++
 	if p.cutNonce == 0 {
 		panic("accepted cut nonce exhausted")
+	}
+	if count != 0 {
+		p.entries[p.order[(p.head+count-1)%len(p.order)]].boundary = true
 	}
 	p.activeCut, p.cutCount = p.cutNonce, count
 	p.cutThrough, p.cutRootSet = through, roots
