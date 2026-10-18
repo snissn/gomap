@@ -79,16 +79,15 @@ func (s *Snapshot) NativeSemanticState() backenddb.NativeSemanticState {
 // cowNativeOwner is independently admitted before assignment, never reused with
 // Batch storage. Accepted custody retains only sparse native plans/assets.
 type cowNativeOwner struct {
-	cache             *cowCache
-	plan              *backenddb.NativePreparedPublication
-	custody           backenddb.NativeSemanticCustody
-	opening           *cowReadCut
-	lease             *memtable.COWExternalLease
-	failed            error
-	failedPreparation *cowBatchPreparation
-	failedResult      backenddb.NativeFinalizedPublication
-	sealTarget        rootpublication.PhysicalSealTarget
-	sealReceipt       *backenddb.NativeSealReceipt
+	cache        *cowCache
+	plan         *backenddb.NativePreparedPublication
+	custody      backenddb.NativeSemanticCustody
+	opening      *cowReadCut
+	lease        *memtable.COWExternalLease
+	failed       error
+	failedResult backenddb.NativeFinalizedPublication
+	sealTarget   rootpublication.PhysicalSealTarget
+	sealReceipt  *backenddb.NativeSealReceipt
 }
 
 // The generic callback cannot carry containing-owner refunds safely. The
@@ -240,8 +239,8 @@ func (b *Batch) parkAssignedNative(p *cowBatchPreparation, err error) (*cowNativ
 func (b *Batch) drainAssignedNative(owner *cowNativeOwner, opening *cowReadCut, p *cowBatchPreparation, err error) error {
 	if p != nil {
 		if cleanupErr := p.drainCancelled(); cleanupErr != nil {
-			// SAME original failed physical fields/charge remain, never retried.
-			owner.failedPreparation = p
+			// A failed basis retains itself through its original registry custody;
+			// cancelled raw wrappers and unrelated neighbors have completed.
 			err = joinCOWCleanupError(err, cleanupErr)
 		}
 	}

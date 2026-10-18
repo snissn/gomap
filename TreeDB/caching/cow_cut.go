@@ -493,31 +493,53 @@ func (p *cowPreparedCut) cancel() {
 	}
 }
 func (p *cowPreparedCut) drainCancelled() error {
+	refund, err := p.drainCancelledWithCompletion()
+	p = nil
+	refund.Close()
+	return err
+}
+
+// The original containing lease also prices p and private Next. Return it only
+// after their aliases have ended, so a containing caller can detach its cut
+// field before the final independent accounting action. A failed basis already
+// retains its SAME original object and charge through its preborn registry
+// custody; this completed private wrapper is not a second failure owner.
+func (p *cowPreparedCut) drainCancelledWithCompletion() (*memtable.COWExternalLease, error) {
 	var cleanupErr error
-	if p.next != nil {
-		for i := range p.next.shards {
+	next, c := p.next, p.cache
+	p.next, p.cache, p.native = nil, nil, nil
+	if next != nil {
+		for i := range next.shards {
 			if p.prepared[i] == nil {
-				r := p.next.shards[i].root.Release()
+				r := next.shards[i].root.Release()
 				r.Drain()
 			}
 		}
-		for i := range p.next.frozen {
-			r := p.next.frozen[i].root.Release()
+		for i := range next.frozen {
+			r := next.frozen[i].root.Release()
 			r.Drain()
 		}
-		p.cache.releasePrivateSemanticState(p.next)
-		cleanupErr = p.next.basis.release()
+		c.releasePrivateSemanticState(next)
+		basis := next.basis
+		next.basis, next.shards, next.frozen, next.sources, next.domains = nil, nil, nil, nil, nil
+		next.cache, next.lease = nil, nil
+		cleanupErr = basis.release()
+		basis = nil // original failed basis, if any, remains in its own custody
 	}
+	next = nil
 	for i := range p.retired {
 		p.retired[i].Drain()
 	}
-	cleanupErr = joinCOWCleanupError(cleanupErr, p.cache.releaseCut(p.opening))
+	p.prepared, p.retired = nil, nil
+	opening := p.opening
 	p.opening = nil
-	if cleanupErr == nil {
-		p.lease.Close()
-	}
-	return cleanupErr
+	cleanupErr = joinCOWCleanupError(cleanupErr, c.releaseCut(opening))
+	opening, c = nil, nil
+	refund := p.lease
+	p.lease = nil
+	return refund, cleanupErr
 }
+
 func (p *cowPreparedCut) publish() *cowReadCut {
 	old, err := p.publishAccepted(rootpublication.AcceptedTicket{})
 	if err != nil {
