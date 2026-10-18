@@ -399,6 +399,10 @@ func persistIndexStateForDocumentFormat(format DocumentFormat) bool {
 }
 
 type CollectionManager struct {
+	initializationError                     error
+	legacyProducerRelease                   func()
+	managerCloseOnce                        sync.Once
+	managerCloseError                       error
 	db                                      *backenddb.DB
 	closeUnregister                         func()
 	closing                                 atomic.Bool
@@ -1734,7 +1738,19 @@ func OpenCollectionForRaftSourceV1(database *backenddb.DB, name string) (*Collec
 func newCollectionManager(database *backenddb.DB, opts collectionManagerOptions) *CollectionManager {
 	manager := &CollectionManager{db: database}
 	if database != nil {
+		release, err := database.AdmitLegacyCommandProducer()
+		if err != nil {
+			manager.initializationError = err
+			manager.db = nil
+			manager.closing.Store(true)
+			return manager
+		}
+		manager.legacyProducerRelease = release
 		if err := ensureColumnAssetLifecycleRegistryDB(database); err != nil {
+			manager.initializationError = err
+			manager.legacyProducerRelease()
+			manager.legacyProducerRelease = nil
+			manager.db = nil
 			manager.closing.Store(true)
 			return manager
 		}
@@ -1776,6 +1792,24 @@ func (m *CollectionManager) SetVectorIndexConstructionDecisionObserverEnabled(en
 }
 
 func (m *CollectionManager) closeForBackend() error {
+	if m == nil {
+		return nil
+	}
+	m.managerCloseOnce.Do(func() { m.managerCloseError = m.closeManagerOwned() })
+	return m.managerCloseError
+}
+
+func (m *CollectionManager) closeManagerOwned() error {
+	if m == nil {
+		return nil
+	}
+	defer func() {
+		if m.legacyProducerRelease != nil {
+			release := m.legacyProducerRelease
+			m.legacyProducerRelease = nil
+			release()
+		}
+	}()
 	m.closing.Store(true)
 	defer func() {
 		if m.commandWALRawUnregister != nil {
@@ -3413,6 +3447,9 @@ func (m *CollectionManager) holdIndexedAsyncFlushForSync(domains []*collectionWr
 // was already durable (or no command prefix exists); the WAL-free checkpoint
 // path always performs a physical sync boundary.
 func (m *CollectionManager) SyncForStandaloneWriteConcern() (physicalSync bool, err error) {
+	if m != nil && m.initializationError != nil {
+		return false, m.initializationError
+	}
 	if m == nil || m.db == nil {
 		return false, backenddb.ErrClosed
 	}
@@ -3600,6 +3637,9 @@ func (unlock collectionMutationUnlock) Unlock() {
 // process-crash recoverable under WAL-on modes and is not an fsync guarantee
 // unless composed with a sync-capable barrier.
 func (m *CollectionManager) CreateCollection(meta *CollectionMeta) (*CollectionMeta, error) {
+	if m != nil && m.initializationError != nil {
+		return nil, m.initializationError
+	}
 	if m == nil {
 		return nil, errCollectionManagerNil
 	}
@@ -3623,6 +3663,9 @@ func (m *CollectionManager) CreateCollection(meta *CollectionMeta) (*CollectionM
 // normal collection catalog executor while covering a command-WAL frame that
 // was already appended by a deterministic apply layer.
 func (m *CollectionManager) CreateCollectionWithCommandWALIntent(meta CollectionMeta, commandWALIntent *backenddb.CommandWALIntent) (*CollectionMeta, error) {
+	if m != nil && m.initializationError != nil {
+		return nil, m.initializationError
+	}
 	if m == nil {
 		return nil, errCollectionManagerNil
 	}
@@ -3659,6 +3702,9 @@ func (m *CollectionManager) CreateCollectionWithPreparedCommandWALIntentStatus(m
 // status-returning form of CreateCollectionWithPreparedCommandWALIntent with an
 // extra publish preflight composed after the existing-schema no-op check.
 func (m *CollectionManager) CreateCollectionWithPreparedCommandWALIntentStatusAndPreflight(meta CollectionMeta, prepareCommandWALIntent func() (*backenddb.CommandWALIntent, error), extraPreflight backenddb.OrderedRootGroupPreflight) (*CollectionMeta, bool, error) {
+	if m != nil && m.initializationError != nil {
+		return nil, false, m.initializationError
+	}
 	if m == nil {
 		return nil, false, errCollectionManagerNil
 	}
@@ -3740,6 +3786,21 @@ func (m *CollectionManager) createCollectionWithPreparedCommandWALIntent(normali
 		}
 		return existing.meta.copy(), true, nil
 	}
+	identityValue, identityPresent, err := getSystemValue(snap, nativeCatalogNextIncarnationKey)
+	if err != nil {
+		return nil, false, err
+	}
+	nextIdentity := uint64(1)
+	if identityPresent {
+		nextIdentity, err = nativeCatalogIdentityValue(identityValue, true)
+		if err != nil {
+			return nil, false, err
+		}
+	}
+	identityUpdates, err := nativeCreateIdentityUpdates(normalized.Name, nextIdentity)
+	if err != nil {
+		return nil, false, err
+	}
 	encoded, err := encodeCollectionMeta(normalized)
 	if err != nil {
 		return nil, false, err
@@ -3772,7 +3833,11 @@ func (m *CollectionManager) createCollectionWithPreparedCommandWALIntent(normali
 		if len(rootIDs) != len(plan.rootNames) {
 			return nil, unexpectedOrderedRootCountError(normalized.Name, len(plan.rootNames), len(rootIDs))
 		}
-		return buildSystemDeltaIterator(createCollectionSystemUpdates(normalized.Name, encoded, plan.rootNames, rootIDs))
+		updates := createCollectionSystemUpdates(normalized.Name, encoded, plan.rootNames, rootIDs)
+		for key, value := range identityUpdates {
+			updates[key] = value
+		}
+		return buildSystemDeltaIterator(updates)
 	}
 	preflight := m.createCollectionExistingSchemaPreflight(normalized, extraPreflight)
 	if m.db.CommandWALEnabled() || commandWALIntent != nil || prepareCommandWALIntent != nil {
@@ -3929,6 +3994,9 @@ func (m *CollectionManager) OpenCollection(name string) (*Collection, error) {
 }
 
 func (m *CollectionManager) openCollectionWithCommandWALIntent(name string, commandWALIntent *backenddb.CommandWALIntent) (*Collection, error) {
+	if m != nil && m.initializationError != nil {
+		return nil, m.initializationError
+	}
 	if m == nil {
 		return nil, errCollectionManagerNil
 	}
@@ -4091,6 +4159,9 @@ func (m *CollectionManager) ListCollections() ([]CollectionMeta, error) {
 // is positive. Deleted entries consume the same work budget, so callers can
 // fail closed without walking unbounded catalog history.
 func (m *CollectionManager) ListCollectionsBounded(maxCollections int) ([]CollectionMeta, bool, error) {
+	if m != nil && m.initializationError != nil {
+		return nil, false, m.initializationError
+	}
 	if m == nil {
 		return nil, false, errCollectionManagerNil
 	}
@@ -26726,3 +26797,6 @@ func ValidateIndexPath(path string) error {
 	}
 	return nil
 }
+
+// Close releases a hook-free manager after its last deterministic operation.
+func (m *CollectionManager) Close() error { return m.closeForBackend() }
