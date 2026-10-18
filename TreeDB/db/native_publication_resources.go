@@ -1,6 +1,9 @@
 package db
 
-import "github.com/snissn/gomap/TreeDB/internal/rootpublication"
+import (
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+)
 
 // NativeResourceSelector is an original captured semantic owner's immutable
 // inventory. Selection must reject resources outside that inventory; it must
@@ -31,6 +34,23 @@ func (r *NativePublicationResources) Initialize(selector NativeResourceSelector)
 	}
 	r.selector = selector
 	r.builder = rootpublication.NewStableResourceSetBuilder()
+	return nil
+}
+
+// InitializeWithMetadata selects the original captured resource allocation
+// owner. The admitted native plan already owns the carrier, inventory and an
+// independent enrollment of owner. Builder partials stay on that SAME carrier;
+// no current inventory lookup or second allocation authority is introduced.
+func (r *NativePublicationResources) InitializeWithMetadata(owner *retainedalloc.Owner, selector NativeResourceSelector) error {
+	if r == nil || owner == nil || r.builder != nil || r.resources != nil || r.failure != nil {
+		return rootpublication.ErrResourceOwnership
+	}
+	var err error
+	r.builder, err = rootpublication.NewStableResourceSetBuilderWithMetadata(owner)
+	if err != nil {
+		return err
+	}
+	r.selector = selector
 	return nil
 }
 

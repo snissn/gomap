@@ -20,6 +20,9 @@ func CloneStableResourceForSelector(source *StableResourceSet, selector StableRe
 	if source == nil || selector.Kind == "" || selector.LogicalLane == "" || selector.ResourceID == "" || selector.PhysicalGeneration == 0 {
 		return nil, ErrUnresolvedResource
 	}
+	if source.hasSelectedMetadata() {
+		return cloneSelectedStableResourceForSelector(source, selector, nil)
+	}
 	key := stableLogicalResourceKey{
 		kind: selector.Kind, lane: selector.LogicalLane,
 		resourceID: selector.ResourceID, generation: selector.PhysicalGeneration,

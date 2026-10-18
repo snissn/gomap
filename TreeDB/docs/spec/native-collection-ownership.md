@@ -272,3 +272,29 @@ This seam does not yet provide the native pending value-pointer resolver,
 complete typed asset updates, catalog bootstrap decoder, or public producer
 routing. The complete semantic interface remains fenced until those owners and
 all producer paths join the same immutable cut.
+
+### Exact selected resource construction
+
+The native opening inventory implements the lower captured selector directly.
+Its caller retains the original inventory edge and independent enrollment before
+creating a publication context. Selection follows the exact immutable logical
+resource index and looks up one exact logical obligation. It never samples the
+current backend inventory or constructs a full resource catalog copy.
+
+The opt-in selector admits its original operation ledger before borrowing the
+source kind root. That ledger adopts every private token, entry, index, kind
+root and output wrapper before later fallible work. Its single private rope
+initially owns entry metadata with physical entries detached. Only after all
+allocation succeeds does the exclusive cloned token transfer to that rope.
+Cancellation therefore never tries to release a caller-owned token as a shared
+token. Original cleanup failure returns the operation's own admitted receipt,
+which preserves the exact remaining objects and both preparation and cleanup
+errors. Error observation adds no destructor retry or replacement cleanup owner.
+
+`NativePublicationResources.InitializeWithMetadata` selects this same original
+metadata authority for its existing builder. The admitted native plan must
+already retain the inventory and enrollment. The generic constructor and
+existing context/finalization behavior are unchanged. This constructor does not
+establish that typed asset producers supply selected metadata, or that every
+shared builder partial-construction path is safe. Those producer migrations
+and public native activation remain required gates.

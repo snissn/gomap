@@ -26,6 +26,19 @@ type nativeResourceInventory struct {
 	refund     *nativeEngineRefund
 }
 
+// CloneCapturedNativeResource borrows this inventory's existing live edge. The
+// original plan must retain that edge independently before obtaining its
+// publication context. Selection uses only this exact immutable inventory;
+// neither backend runtime state nor a bound Engine/capture is consulted.
+func (i *nativeResourceInventory) CloneCapturedNativeResource(selector rootpublication.StableResourceSelector) (*rootpublication.StableResourceSet, error) {
+	if i == nil || i.refs.Load() <= 0 || i.resources == nil || i.failure != nil {
+		return nil, rootpublication.ErrResourceOwnership
+	}
+	return rootpublication.CloneStableResourceForSelector(i.resources, selector)
+}
+
+var _ backenddb.NativeResourceSelector = (*nativeResourceInventory)(nil)
+
 // prepareNativeResourceInventory is opening-only, outside all publication and
 // cut gates. basis is the exact Snapshot borrowed from the complete opening cut.
 // A nonnil partial owns one release edge on error. Missing exact identity

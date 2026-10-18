@@ -129,7 +129,8 @@ func TestNativeResourceInventoryOriginalFailureKeepsSelectionAndEnrollment(t *te
 		t.Fatal(err)
 	}
 	defer registry.Unobserve(identity)
-	token, err := rootpublication.NewStableResourceToken(rootpublication.StableResourceSpec{MetadataOwner: &owner, OwnedOperations: ops, PinRegistry: registry, Kind: rootpublication.ResourceColumnAsset, LogicalLane: "columns", ResourceID: "original", Generation: 1, DiagnosticPath: "original", File: file, Reachability: rootpublication.ReachabilityColumnManifest})
+	obligation := rootpublication.StableLogicalObligation{Class: "column", Kind: "chunk", Namespace: "original", Generation: 1, PartID: 1, FileID: 1, Length: 1, Reachability: rootpublication.ReachabilityColumnManifest, Digest: [32]byte{1}}
+	token, err := rootpublication.NewStableResourceToken(rootpublication.StableResourceSpec{MetadataOwner: &owner, OwnedOperations: ops, PinRegistry: registry, Kind: rootpublication.ResourceColumnAsset, LogicalLane: "columns", ResourceID: "original", Generation: 1, DiagnosticPath: "original", File: file, Reachability: rootpublication.ReachabilityColumnManifest, LogicalObligations: []rootpublication.StableLogicalObligation{obligation}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,8 +156,24 @@ func TestNativeResourceInventoryOriginalFailureKeepsSelectionAndEnrollment(t *te
 	inventory.refs.Store(1)
 	inventory.cleanup.Work = inventory
 	selected, enrollment, token, builder = nil, nil, nil, nil
+	selector := rootpublication.StableResourceSelector{Kind: rootpublication.ResourceColumnAsset, LogicalLane: "columns", ResourceID: "original", PhysicalGeneration: 1, Obligation: obligation}
+	clone, err := inventory.CloneCapturedNativeResource(selector)
+	if err != nil || clone.MetadataOwner() != &owner {
+		t.Fatal("captured selector escaped original inventory authority", err)
+	}
+	if err := clone.ReleaseWithError(); err != nil {
+		t.Fatal(err)
+	}
+	wrong := selector
+	wrong.Obligation.Namespace = "outside captured inventory"
+	if result, err := inventory.CloneCapturedNativeResource(wrong); result != nil || err == nil {
+		t.Fatal("captured selector accepted foreign obligation")
+	}
 	budget.Close()
 	work := inventory.release()
+	if result, err := inventory.CloneCapturedNativeResource(selector); result != nil || !errors.Is(err, rootpublication.ErrResourceOwnership) {
+		t.Fatal("released inventory authorized new selection", err)
+	}
 	before := budget.Stats()
 	beforeCalls := ops.calls.Load()
 	completion, err := work.Finish()
