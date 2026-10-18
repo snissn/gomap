@@ -85,6 +85,25 @@ type NativePreparedPublication struct {
 	StartSequence               uint64
 	Finalizer                   NativePublicationFinalizer
 	Resources                   *NativePublicationResources
+	Reprepare                   NativeLogicalPlan
+}
+
+// NativeLogicalPlan is an original transaction-owned immutable operation plan.
+// After validating every original read/write dependency under P, the SAME P1
+// installer prepares it against latest compatible roots before journal prepare
+// and canonical assignment. This is an internal planner, never an application
+// callback: no locks, waits, recapture, or publication. Every nonnil State is ONE
+// owned private edge, including on error; lower queues its cleanup off gates.
+// Entries, Effects, Dependencies and original sequence remain unchanged.
+type NativeLogicalPlan interface {
+	PrepareNativePublication(latest NativeSemanticState, exact *Snapshot) (NativeFinalizedPublication, error)
+}
+
+// NativeConditionalTxn borrows the opening cut of the existing P1 transaction.
+// CommitNative and Close end that original transaction and its opening lifetime.
+type NativeConditionalTxn interface {
+	NativeSemanticCapture
+	CommitNative(*NativePreparedPublication, *CommandWALIntent, bool) (NativePublicationResult, error)
 }
 
 // NativePublicationFinalizer is the original internal, admitted native plan.
@@ -147,6 +166,7 @@ type NativePublicationResult struct {
 // owner. It introduces neither a participant registry nor a publication lane.
 type NativeSemanticBridge interface {
 	CaptureNativeCut() (NativeSemanticCapture, error)
+	BeginNativeConditionalTxn() (NativeConditionalTxn, error)
 	WriteNativePublication(*NativePreparedPublication, *CommandWALIntent, bool) (NativePublicationResult, error)
 }
 
@@ -163,6 +183,12 @@ func (db *DB) CaptureNativeSemanticState() (NativeSemanticCapture, error) {
 		return nil, ErrNativeSemanticUnsupported
 	}
 	return db.nativeSemanticBridge.CaptureNativeCut()
+}
+func (db *DB) BeginNativeConditionalTxn() (NativeConditionalTxn, error) {
+	if !db.HasNativeSemanticBridge() {
+		return nil, ErrNativeSemanticUnsupported
+	}
+	return db.nativeSemanticBridge.BeginNativeConditionalTxn()
 }
 func (db *DB) WriteNativePublication(native *NativePreparedPublication, intent *CommandWALIntent, sync bool) (NativePublicationResult, error) {
 	if !db.HasNativeSemanticBridge() {

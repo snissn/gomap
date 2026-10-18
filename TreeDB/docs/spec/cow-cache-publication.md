@@ -538,3 +538,19 @@ postaccept recapture or block the exact accepted handoff. Source generations and
 source-slot ownership remain on their original producer budget. Full native
 collection source representation and producer activation belong to the native
 collection packet; the legacy producer fence remains until that migration.
+
+Native two-phase transactions use `BeginNativeConditionalTxn` on the same fixed
+backend bridge. Its opening State, Snapshot and sequence borrow the original P1
+`ConditionalTxn` snapshot; commit uses that transaction's original batch and
+raw read/range dependencies. The caller cannot replace its opening sequence.
+The original owned `NativeLogicalPlan` contains immutable staged effects and
+prepares them against latest compatible semantic roots under the existing
+writer/publication gate, after checking all original raw and native read/write
+dependencies and history floor. This internal operation does not recapture,
+invoke replay preparation, reacquire teardown protection, wait or publish.
+Journal preparation and canonical append occur only after the complete private
+result passes its exact-basis invariant. A nonnil partial state returned with an
+error transfers one edge to existing off-gate cancellation; original custody is
+queued before the transaction's opening cut withdraws. Commit/Close terminate
+the original transaction once. Physical handoff alone is not a logical conflict;
+changed logical dependencies still refuse before assignment.
