@@ -23,7 +23,7 @@ func init() {
 // on a package side-effect import before opening a command_wal_v2 directory.
 func RegisterCommandWALReplayHandlers() {
 	registerCommandWALReplayHandlersOnce.Do(func() {
-		backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCollectionInsertBatchByID, replayCollectionInsertBatchByIDCommandWAL)
+		backenddb.RegisterCommandWALReplayHandlerWithOptions(commitlog.CommandKindCollectionInsertBatchByID, replayCollectionInsertBatchByIDCommandWAL, backenddb.CommandWALReplayHandlerOptions{NativePrepare: prepareNativeJSONInsertCommand})
 		backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCollectionDeleteBatchByID, replayCollectionDeleteBatchByIDCommandWAL)
 		backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCollectionUpdateBatchByID, replayCollectionUpdateBatchByIDCommandWAL)
 		backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCollectionReplaceSourceByID, replayCollectionReplaceSourceByIDCommandWAL)

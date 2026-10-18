@@ -3786,21 +3786,6 @@ func (m *CollectionManager) createCollectionWithPreparedCommandWALIntent(normali
 		}
 		return existing.meta.copy(), true, nil
 	}
-	identityValue, identityPresent, err := getSystemValue(snap, nativeCatalogNextIncarnationKey)
-	if err != nil {
-		return nil, false, err
-	}
-	nextIdentity := uint64(1)
-	if identityPresent {
-		nextIdentity, err = nativeCatalogIdentityValue(identityValue, true)
-		if err != nil {
-			return nil, false, err
-		}
-	}
-	identityUpdates, err := nativeCreateIdentityUpdates(normalized.Name, nextIdentity)
-	if err != nil {
-		return nil, false, err
-	}
 	encoded, err := encodeCollectionMeta(normalized)
 	if err != nil {
 		return nil, false, err
@@ -3829,13 +3814,42 @@ func (m *CollectionManager) createCollectionWithPreparedCommandWALIntent(normali
 	if hook := testBeforeCreateCollectionPublishHook.ptr.Load(); hook != nil && hook.fn != nil {
 		hook.fn(normalized)
 	}
-	buildSystemDelta := func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+	buildSystemUpdates := func(current *backenddb.Snapshot, rootIDs []uint64) (map[string][]byte, error) {
 		if len(rootIDs) != len(plan.rootNames) {
 			return nil, unexpectedOrderedRootCountError(normalized.Name, len(plan.rootNames), len(rootIDs))
+		}
+		identityValue, identityPresent, err := getSystemValue(current, nativeCatalogNextIncarnationKey)
+		if err != nil {
+			return nil, err
+		}
+		nextIdentity := uint64(1)
+		if identityPresent {
+			nextIdentity, err = nativeCatalogIdentityValue(identityValue, true)
+			if err != nil {
+				return nil, err
+			}
+		}
+		identityUpdates, err := nativeCreateIdentityUpdates(normalized.Name, nextIdentity)
+		if err != nil {
+			return nil, err
 		}
 		updates := createCollectionSystemUpdates(normalized.Name, encoded, plan.rootNames, rootIDs)
 		for key, value := range identityUpdates {
 			updates[key] = value
+		}
+		return updates, nil
+	}
+	buildSystemDelta := func(rootIDs []uint64) (result iterator.UnsafeIterator, resultErr error) {
+		// The existing serialized system builder selects the counter. A prior
+		// schema snapshot cannot exclude simultaneous creates of other names.
+		current := m.db.AcquireSnapshot()
+		if current == nil {
+			return nil, backenddb.ErrClosed
+		}
+		defer func() { resultErr = errors.Join(resultErr, current.Close()) }()
+		updates, err := buildSystemUpdates(current, rootIDs)
+		if err != nil {
+			return nil, err
 		}
 		return buildSystemDeltaIterator(updates)
 	}
@@ -3867,12 +3881,12 @@ func (m *CollectionManager) createCollectionWithPreparedCommandWALIntent(normali
 		return normalized.copy(), false, nil
 	}
 	if len(ordered) == 0 {
-		_, _, err = m.db.PublishOrderedRootGroupWithSystemBuilder(nil, func([]uint64) (iterator.UnsafeIterator, error) {
+		_, _, err = m.db.PublishOrderedRootGroupWithSystemBuilder(nil, func([]uint64) (result iterator.UnsafeIterator, resultErr error) {
 			current := m.db.AcquireSnapshot()
 			if current == nil {
 				return nil, backenddb.ErrClosed
 			}
-			defer func() { _ = current.Close() }()
+			defer func() { resultErr = errors.Join(resultErr, current.Close()) }()
 			existing, err := loadCollectionCatalog(current, normalized.Name)
 			if err != nil {
 				return nil, err
@@ -3883,10 +3897,14 @@ func (m *CollectionManager) createCollectionWithPreparedCommandWALIntent(normali
 				}
 				return nil, errCreateCollectionNoopExistingSchema
 			}
-			return buildSystemTargetIterator(current, createCollectionSystemUpdates(normalized.Name, encoded, nil, nil))
+			updates, err := buildSystemUpdates(current, nil)
+			if err != nil {
+				return nil, err
+			}
+			return buildSystemTargetIterator(current, updates)
 		})
 	} else {
-		_, _, err = m.db.PublishOrderedRootDeltaGroupWithPreflightAndSystemDeltaBuilder(ordered, preflight, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		_, _, err = m.db.PublishOrderedRootDeltaGroupWithPreflightAndSystemDeltaBuilder(ordered, preflight, func(rootIDs []uint64) (result iterator.UnsafeIterator, resultErr error) {
 			if len(rootIDs) != len(plan.rootNames) {
 				return nil, unexpectedOrderedRootCountError(normalized.Name, len(plan.rootNames), len(rootIDs))
 			}
@@ -3894,8 +3912,12 @@ func (m *CollectionManager) createCollectionWithPreparedCommandWALIntent(normali
 			if current == nil {
 				return nil, backenddb.ErrClosed
 			}
-			defer func() { _ = current.Close() }()
-			return buildSystemTargetIterator(current, createCollectionSystemUpdates(normalized.Name, encoded, plan.rootNames, rootIDs))
+			defer func() { resultErr = errors.Join(resultErr, current.Close()) }()
+			updates, err := buildSystemUpdates(current, rootIDs)
+			if err != nil {
+				return nil, err
+			}
+			return buildSystemTargetIterator(current, updates)
 		})
 	}
 	if errors.Is(err, errCreateCollectionNoopExistingSchema) {

@@ -12,7 +12,6 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/txnhistory"
 	"github.com/snissn/gomap/TreeDB/node"
-	"github.com/snissn/gomap/TreeDB/tree"
 )
 
 // NativeJSONManager exposes only the native unindexed JSON capability. It owns
@@ -78,31 +77,7 @@ func (m *NativeJSONManager) CreateCollection(meta CollectionMeta) (created *Coll
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
 	if base == nil {
-		// Bootstrap only a demonstrably empty physical collection catalog. A
-		// recovered nonempty catalog must be imported with its persisted identities.
-		snapshot := capture.Snapshot()
-		token, valid := snapshot.StateToken()
-		if !valid {
-			return nil, backenddb.ErrClosed
-		}
-		if token.SystemRootPageID != 0 {
-			prefix := []byte(systemCollectionMetaPrefix)
-			it, scanErr := snapshot.IteratorAtRoot(token.SystemRootPageID, prefix, prefixEnd(prefix))
-			if scanErr != nil && !errors.Is(scanErr, tree.ErrKeyNotFound) {
-				return nil, scanErr
-			}
-			if it != nil {
-				nonempty := it.Valid()
-				scanErr = errors.Join(it.Error(), it.Close())
-				if scanErr != nil {
-					return nil, scanErr
-				}
-				if nonempty {
-					return nil, backenddb.ErrNativeSemanticUnsupported
-				}
-			}
-		}
-		base, err = newNativeEmptyEngine(capture.NativeAllocator(), capture.NativeMaintenanceAllocator())
+		base, err = importNativeJSONCatalog(capture)
 		if base != nil {
 			defer func() {
 				record := base.Release()
@@ -114,6 +89,7 @@ func (m *NativeJSONManager) CreateCollection(meta CollectionMeta) (created *Coll
 			return nil, err
 		}
 	}
+
 	if existing, found := base.names.Get(normalized.Name); found {
 		if !sameCollectionMeta(*existing.schema.meta, normalized) {
 			return nil, backenddb.ErrNativeSemanticUnsupported
@@ -160,7 +136,11 @@ func nativeCreateIdentityUpdates(name string, next uint64) (map[string][]byte, e
 	return map[string][]byte{nativeCatalogIncarnationPrefix + name: identity[:], nativeCatalogNextIncarnationKey: counter[:]}, nil
 }
 
-func prepareNativeJSONCreate(base *nativeEngineVersion, meta CollectionMeta) (*backenddb.NativePreparedPublication, error) {
+func prepareNativeJSONCreate(base *nativeEngineVersion, meta CollectionMeta) (publication *backenddb.NativePreparedPublication, resultErr error) {
+	// Selected cancellation owns memory-only scratch, never resource inventory.
+	if base == nil || base.inventory != nil {
+		return nil, backenddb.ErrNativeSemanticUnsupported
+	}
 	scratch, err := newNativeEnginePreparation(base, 1, 0, base.allocator)
 	if err != nil {
 		return nil, err
@@ -173,7 +153,7 @@ func prepareNativeJSONCreate(base *nativeEngineVersion, meta CollectionMeta) (*b
 		collection = nil
 		record := scratch.Release()
 		scratch = nil
-		_ = finishPrivateNative(record)
+		resultErr = errors.Join(resultErr, finishPrivateNative(record))
 	}()
 	admit := func(n uint64) (cowbtree.OwnedMapLease, error) { return base.allocator.AdmitNativeBytes(n) }
 	p.schema, err = newNativeSchemaState(&meta, admit)
@@ -214,7 +194,7 @@ func prepareNativeJSONCreate(base *nativeEngineVersion, meta CollectionMeta) (*b
 		if next != nil {
 			record := next.Release()
 			next = nil
-			_ = finishPrivateNative(record)
+			resultErr = errors.Join(resultErr, finishPrivateNative(record))
 		}
 		return nil, err
 	}
@@ -222,7 +202,7 @@ func prepareNativeJSONCreate(base *nativeEngineVersion, meta CollectionMeta) (*b
 	if err != nil {
 		record := next.Release()
 		next = nil
-		_ = finishPrivateNative(record)
+		resultErr = errors.Join(resultErr, finishPrivateNative(record))
 		return nil, err
 	}
 	(nativeCollectionLifetime{}).Retain(collection)
