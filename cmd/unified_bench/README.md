@@ -1690,6 +1690,53 @@ do not qualify them. Go benchmark logs and optional `go test` profiles are
 standalone artifacts, **not benchprof inputs**. Existing unified-bench/benchprof
 artifact names and schemas are unchanged.
 
+### Standalone retained COW and managed-history diagnostics (#5141, #5143)
+
+`BenchmarkCOWPublicRetainedHistory` in `TreeDB` measures
+`CaptureReadRelease` or `WriteACK` with H=0/1/16/128 held views, inline or
+pointer values, and `command_wal_relaxed` or `no_wal_fast`. Use a fixed
+count of at most 128 and select one leaf per fresh process. For example:
+
+```sh
+BENCH_ART=$(mktemp -d /mnt/fast4tb/gomap-retained-XXXXXX)
+mkdir -p "$BENCH_ART/tmp"
+GOWORK=off GOMAXPROCS=2 TMPDIR="$BENCH_ART/tmp" go test ./TreeDB \
+  -run '^$' \
+  -bench '^BenchmarkCOWPublicRetainedHistory$/^command_wal_relaxed$/^Pointer=true$/^H=16$/^WriteACK$' \
+  -benchtime=128x -count=1 -benchmem -v > "$BENCH_ART/retained.txt"
+```
+
+The artifact is standard Go benchmark text (ns/op, B/op, allocs/op and
+p50/p95/p99-ns), plus `COW_RETAINED_PHASE` logs before/after held-view release,
+checkpoint and final Close. Phase memory values are charged engine accounting,
+not heap or RSS. Setup, held-value checks, checkpoint and final Close are outside
+the operation timer. NoWAL ordinary ACK is volatile; a later explicit checkpoint
+does not change that timed contract. `TestCOWPublicRetainedHistoryFixture`
+checks these values and original-owner drain without qualifying performance.
+
+`TestManagedHistoryMeasurement` in `TreeDB/mvcc` is a separate opt-in,
+one-cell public Store diagnostic. Supply a fresh database directory and JSON
+output path, a production profile, and a boolean pointer layout:
+
+```sh
+TREEDB_HISTORY_MEASURE_OUT="$BENCH_ART/history.json" \
+TREEDB_HISTORY_MEASURE_DIR="$BENCH_ART/history-db" \
+TREEDB_HISTORY_MEASURE_PROFILE=command_wal_relaxed \
+TREEDB_HISTORY_MEASURE_POINTERS=true \
+GOWORK=off GOMAXPROCS=2 TMPDIR="$BENCH_ART/tmp" \
+  go test ./TreeDB/mvcc -run '^TestManagedHistoryMeasurement$' -count=1 -v \
+  > "$BENCH_ART/history.txt"
+```
+
+The JSON records profile/toolchain/layout, phase operation counts and elapsed
+nanoseconds, allocation bytes/objects, sampled heap/directory sizes, and prune
+support/results. Ordinary ACK and explicit checkpoint/Close are separate phases;
+unsupported baseline pruning is not a speedup. Freeze runtime/harness identities
+and the comparison protocol before collection. These harnesses require review
+and landing before retained qualification. Logs, JSON and optional separate Go
+test profiles are standalone artifacts, **not benchprof inputs**; unified-bench
+filenames and parser schemas are unchanged.
+
 ### Standalone raw COW transaction cost (#5140)
 
 `BenchmarkPublicCOWTxn` measures the newly enabled public raw transaction path:
