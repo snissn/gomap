@@ -322,3 +322,30 @@ ancestor or independent pin. Its containing complete read scope must retain
 both the domain and snapshot, and scrub the helper and borrowed results before
 releasing either. It is construction for future public routing; that routing
 and the exact pending pointer/typed resolver remain activation gates.
+
+### Selected original record reads
+
+`StableResourceSet.WithSelectedResourceFile` looks up one exact selected kind,
+logical resource identity and complete obligation under the original set mutex.
+It unlocks before invoking the original token's scoped file callback. Generic,
+released and mismatched sets fail closed. The caller retains the selected set
+and its original metadata enrollment and excludes that set's Release through
+callback completion. This borrowed capability does not synchronize concurrent
+Release or acquire a new pin. The callback cannot retain or close the file and
+must run outside publication and cut gates.
+
+The private selected-record read Work retains the original inventory and admits
+its copied selector strings, platform inspection storage, exact value buffers
+and existing block decoder before allocation. Before header inspection it
+checks the pointer start and header extent against the selected obligation and
+caps inspection to the remaining authorized record bytes. It revalidates the
+complete record extent, original shape and CRC. Prepared raw, Snappy and LZ4
+reads need no admission or current-path lookup. Compressed dictionary and ZSTD
+records remain unsupported until their exact captured decoder closure exists.
+
+Read calls and borrowed output use are serialized within this private scope.
+Cleanup ends decoder and buffer aliases before their independent refund, then
+releases the original inventory edge. The containing refund follows original
+Work detachment; a physical cleanup failure remains on the same original Work.
+This reader does not establish pending pointer/selector lineage, typed assets,
+dictionary definitions or public native routing.
