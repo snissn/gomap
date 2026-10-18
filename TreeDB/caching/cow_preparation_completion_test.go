@@ -4,6 +4,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
+
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
@@ -109,5 +111,106 @@ func TestCOWCancelledPreparationKeepsOriginalFailedBasisAndCharge(t *testing.T) 
 	}
 	if err := snapshot.Close(); err != nil || receipt.calls != 1 || c.budget.Stats() != before {
 		t.Fatal("observing original Snapshot repeated cleanup or refunded failure debt")
+	}
+}
+
+// Use original generation callbacks to observe the actual physical destruction
+// boundary, while its original history charge is still present.
+func TestCOWCutDetachesRawTablesBeforeGenerationCleanup(t *testing.T) {
+	for _, frozen := range []bool{false, true} {
+		t.Run(map[bool]string{false: "active", true: "frozen"}[frozen], func(t *testing.T) {
+			budget, err := memtable.NewCOWBudget(memtable.DefaultCOWLimits())
+			if err != nil {
+				t.Fatal(err)
+			}
+			writer, err := memtable.NewCOWWriter(budget)
+			if err != nil {
+				t.Fatal(err)
+			}
+			staged, err := writer.Prepare(nil, memtable.COWPrepareOptions{ResourceSlots: 1, ResourceBytes: 512})
+			if err != nil {
+				t.Fatal(err)
+			}
+			lease, err := budget.AcquireExternal(8192)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cache := &cowCache{budget: budget}
+			cache.activeCuts.Store(1)
+			cut := &cowReadCut{refs: 1, cache: cache, lease: lease}
+			var originalTables []cowTable
+			calls := 0
+			if err := staged.AttachResources([]memtable.COWResourceID{{Kind: 1, ID: 9}}, func() {
+				calls++
+				if cut.shards != nil || cut.frozen != nil || cut.sources != nil || cut.domains != nil {
+					t.Error("cut projections survived into original generation destruction")
+				}
+				for _, table := range originalTables {
+					if table.root != nil || table.resources != nil {
+						t.Error("table root/resolver alias survived original generation destruction")
+					}
+				}
+				if budget.Stats().Generations != 1 {
+					t.Error("original generation charge refunded before actual callback")
+				}
+			}); err != nil {
+				t.Fatal(err)
+			}
+			root := staged.Publish()
+			staged = nil
+			originalTables = []cowTable{{root: root, resources: &cowGenerationResources{}}}
+			root = nil
+			if frozen {
+				cut.frozen = originalTables
+				cut.shards = make([]cowTable, 1)
+			} else {
+				cut.shards = originalTables
+			}
+			cut.buildDomains()
+			retired := writer.Close()
+			writer = nil
+			retired.Drain()
+			if err := cut.drain(); err != nil {
+				t.Fatal(err)
+			}
+			cut, originalTables = nil, nil
+			budget.Close()
+			if calls != 1 || budget.Stats().TotalBytes != 0 {
+				t.Fatalf("original cleanup/refund mismatch: calls=%d stats=%+v", calls, budget.Stats())
+			}
+		})
+	}
+}
+
+func TestCOWCancelledTablesDetachBeforeOriginalResourceCleanup(t *testing.T) {
+	_, c := cowCutFixture(t)
+	c.writerMu.Lock()
+	p, err := c.prepare([][]memtable.COWMutation{{{Key: []byte("private"), Value: []byte("value")}}, nil}, []memtable.COWPrepareOptions{{ResourceSlots: 1, ResourceBytes: 512}, {}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := p.next
+	calls := 0
+	if err := p.prepared[0].AttachResources([]memtable.COWResourceID{{Kind: 1, ID: 83}}, func() {
+		calls++
+		if next.shards != nil || next.sources != nil || next.domains != nil || p.prepared != nil {
+			t.Error("cancelled private aliases survived original resource destruction")
+		}
+		if c.budget.Stats().DeferredBytes == 0 {
+			t.Error("original resource charge ended before callback")
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	p.cancel()
+	if next.shards[0].root != nil || next.shards[0].resources != nil || p.prepared[0] != nil {
+		t.Fatal("original staging alias survived Cancel refund")
+	}
+	c.writerMu.Unlock()
+	if err := p.drainCancelled(); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("original cancellation destructor calls=%d", calls)
 	}
 }

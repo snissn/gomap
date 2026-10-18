@@ -76,22 +76,35 @@ type cowReadCut struct {
 }
 
 func (c *cowReadCut) drain() error {
-	for i := range c.shards {
-		r := c.shards[i].root.Release()
-		r.Drain()
-	}
-	for i := range c.frozen {
-		r := c.frozen[i].root.Release()
-		r.Drain()
-	}
+	shards, frozen := c.shards, c.frozen
+	c.shards, c.frozen = nil, nil
+	clear(c.sources)
+	clear(c.domains)
+	c.sources, c.domains = nil, nil
+	drainCOWTables(shards)
+	drainCOWTables(frozen)
 	basis := c.basis
-	c.basis, c.shards, c.frozen, c.sources, c.domains = nil, nil, nil, nil, nil
+	c.basis = nil
 	err := basis.release()
 	lease := c.lease
 	c.lease = nil
 	c.releaseSemanticState()
 	lease.Close()
 	return err
+}
+
+// Every table is only a borrowed projection of its independently owned root.
+// Clear both root and resolver aliases before last-generation callbacks/refund.
+func drainCOWTables(tables []cowTable) {
+	for i := range tables {
+		root := tables[i].root
+		tables[i] = cowTable{}
+		if root != nil {
+			retired := root.Release()
+			root = nil
+			retired.Drain()
+		}
+	}
 }
 
 // cowCache serializes private preparation separately from the brief read latch.
@@ -488,6 +501,12 @@ func (p *cowPreparedCut) cancel() {
 	p.consumed = true
 	for i, s := range p.prepared {
 		if s != nil {
+			// Cancel can immediately refund staging storage. The private table
+			// borrows that exact root; it owns no independent root reference.
+			if p.next != nil {
+				p.next.shards[i] = cowTable{}
+			}
+			p.prepared[i] = nil
 			p.retired[i] = s.Cancel()
 		}
 	}
@@ -509,16 +528,11 @@ func (p *cowPreparedCut) drainCancelledWithCompletion() (*memtable.COWExternalLe
 	next, c := p.next, p.cache
 	p.next, p.cache, p.native = nil, nil, nil
 	if next != nil {
-		for i := range next.shards {
-			if p.prepared[i] == nil {
-				r := next.shards[i].root.Release()
-				r.Drain()
-			}
-		}
-		for i := range next.frozen {
-			r := next.frozen[i].root.Release()
-			r.Drain()
-		}
+		clear(next.sources)
+		clear(next.domains)
+		next.sources, next.domains = nil, nil
+		drainCOWTables(next.shards)
+		drainCOWTables(next.frozen)
 		c.releasePrivateSemanticState(next)
 		basis := next.basis
 		next.basis, next.shards, next.frozen, next.sources, next.domains = nil, nil, nil, nil, nil
@@ -527,10 +541,11 @@ func (p *cowPreparedCut) drainCancelledWithCompletion() (*memtable.COWExternalLe
 		basis = nil // original failed basis, if any, remains in its own custody
 	}
 	next = nil
+	p.prepared = nil
 	for i := range p.retired {
 		p.retired[i].Drain()
 	}
-	p.prepared, p.retired = nil, nil
+	p.retired = nil
 	opening := p.opening
 	p.opening = nil
 	cleanupErr = joinCOWCleanupError(cleanupErr, c.releaseCut(opening))
