@@ -117,7 +117,7 @@ Known limitations and RED controls remain explicit:
   row scan. Point reads and duplicate preflight inspect only the requested keys.
   Import cost remains proportional to catalog descriptors; metadata admission
   and broader storage-policy eligibility still require review.
-- Indexed, typed, vector, composite, live-overlay, dictionary and unsupported
+- Indexed, typed, vector, unsupported composite members, live-overlay, dictionary and unsupported
   record-layout shapes remain outside this selected route. Ordinary value-log
   pointer reads use the exact captured Snapshot's original pinned file Set,
   bounded existing inspection/decoding, and admitted scratch. They do not capture
@@ -126,12 +126,11 @@ Known limitations and RED controls remain explicit:
 - The transient CollectionMeta decode admission uses an unproved conservative
   16-times-payload estimate; raw substring guards are not a proof for escaped or
   case-varied JSON keys. These require review before acceptance.
-- The registered insert preparation returns an Effects array after its temporary
-  8-times-payload decode lease closes. Remapping keys to retained domain strings
-  covers key bytes, not the escaping array backing. Create's returned publication
-  and Effects controls also need covering admission. Exact sizing and duplicate
-  preflight parity remain open. The foreground proof does not exercise these
-  callbacks as composite children.
+- The registered insert preparation now transfers its coarse decode/control lease
+  to the original sparse custody so returned Effects backing remains covered.
+  Exact sizing and duplicate-preflight parity remain open. Create's returned
+  publication and Effects controls also need covering admission. Startup
+  composite replay does not call singleton handlers or these callbacks.
 - Shared create identity/counter effects now use the existing serialized builders
   on both WAL and NoWAL paths. Historical legacy concurrent-create diagnostics
   reproduced NoWAL `durable-root candidate base changed` on both baseline and
@@ -159,3 +158,29 @@ for ordinary raw/native continuity and idle checkpoints. Neither that proof nor
 the larger selected public proof establishes issue completion, merge readiness,
 or performance acceptance. Exact source, commands and first failures are recorded
 in the task's `artifacts/p3/public-json-rows01` manifest and logs.
+
+The selected cross-domain frontend generalizes the same `NativeJSONTxn`: use
+`Begin("a", "b")`, `GetFrom`/`InsertBatchInto` for bound collections and
+`GetRaw`/`SetRaw` for the original conditional batch. Each collection accepts one
+strictly ordered insert batch; the raw subset accepts one inline point Set.
+Limits remain the existing composite member/payload and original budget limits.
+Own-staged lookup uses binary search. No body is recaptured or retried.
+
+A multi-member commit has one canonical composite command and one aggregate
+logical install. The original raw finalizer binds actual placed/revisioned bytes
+into the admitted outer image before append. RID/external raw, typed, update and
+delete members fail closed; their full resource closure remains owed. Startup
+replay prepares all members and builds raw, collection and system roots in one
+existing RootPublicationBuildGroup, preserving the original DB-minted replay
+token through its one final publication. It requests the original replay loop's
+leaf/value-log support. The separate direct composite NativePrepare callback
+explicitly refuses; the transaction uses its original immutable Reprepare plan.
+
+`TestNativeJSONPublicRawTwoCollectionsAtomicTxn` proves opening/own staged reads,
+one-frame increment, raw/native read conflicts before assignment, complete old
+views, checkpoint/reopen and original accounting/pin zero in three profiles.
+Its durable child exits after ACK without checkpoint/Close; recovery applies
+exactly one unapplied composite frame containing all three effects. The first
+replay failure (missing existing NeedsReplayLogSupport registration flag) and
+its correction remain in artifacts/p3/composite01. This is a scoped integration
+proof; the full issue and performance/review gates remain open.

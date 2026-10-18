@@ -75,6 +75,8 @@ type NativeSemanticCustody interface {
 }
 
 type NativePreparedPublication struct {
+	// Selected composite raw members require the final inline Set representation.
+	RequireInlineCompositeRaw   bool
 	Basis                       NativeSemanticState
 	State                       NativeSemanticState
 	Entries                     []batch.Entry
@@ -103,6 +105,9 @@ type NativeLogicalPlan interface {
 // NativeConditionalTxn borrows the opening cut of the existing P1 transaction.
 // CommitNative and Close end that original transaction and its opening lifetime.
 type NativeConditionalTxn interface {
+	Get([]byte) ([]byte, error)
+	Set([]byte, []byte) error
+	NativeRawEntries() []batch.Entry
 	NativeSemanticCapture
 	CommitNative(*NativePreparedPublication, *CommandWALIntent, bool) (NativePublicationResult, error)
 }

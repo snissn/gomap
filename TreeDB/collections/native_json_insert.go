@@ -73,11 +73,19 @@ func nativeJSONInsertCharge(name string, ids, documents [][]byte) (uint64, error
 	return total, nil
 }
 
+type nativeJSONPrimaryChange struct {
+	collection *nativeCollectionState
+	entries    []memtable.COWMutation
+}
+
 func prepareNativeJSONPrimary(base *nativeEngineVersion, c *nativeCollectionState, entries []memtable.COWMutation) (*nativeEngineVersion, error) {
-	if base == nil || base.inventory != nil {
+	return prepareNativeJSONPrimaries(base, []nativeJSONPrimaryChange{{c, entries}})
+}
+func prepareNativeJSONPrimaries(base *nativeEngineVersion, changes []nativeJSONPrimaryChange) (*nativeEngineVersion, error) {
+	if base == nil || base.inventory != nil || len(changes) == 0 {
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
-	next, err := newNativeEnginePreparation(base, 1, 1, base.allocator)
+	next, err := newNativeEnginePreparation(base, len(changes), len(changes), base.allocator)
 	if err != nil {
 		return nil, err
 	}
@@ -88,62 +96,67 @@ func prepareNativeJSONPrimary(base *nativeEngineVersion, c *nativeCollectionStat
 		(nativeDomainLifetime{}).Retain(base.catalog)
 		next.catalog = base.catalog
 	}
-	old, _ := c.domains.Get("primary")
-	root, policy := uint64(0), backenddb.OrderedRootStoragePolicy(0)
-	if old != nil {
-		root, policy = old.baseRoot, old.storagePolicy
-	}
-	domain, err := prepareNativeDomainUpdate(old, "primary", root, 1, policy, entries, base.allocator)
-	if domain != nil {
-		p.ownedDomains = append(p.ownedDomains, domain)
-	}
+	p.names, err = cowbtree.NewOwnedMapBuilder(base.names, len(changes), nativeCollectionLifetime{}, admit)
 	if err != nil {
 		return next, err
 	}
-	p.domainBuilder, err = cowbtree.NewOwnedMapBuilder(c.domains, 1, nativeDomainLifetime{}, admit)
+	p.collections, err = cowbtree.NewOwnedMapBuilder(base.collections, len(changes), nativeCollectionLifetime{}, admit)
 	if err != nil {
 		return next, err
 	}
-	p.pendingDomainBuilder, err = cowbtree.NewOwnedMapBuilder(c.pending, 1, nativeDomainLifetime{}, admit)
+	p.pending, err = cowbtree.NewOwnedMapBuilder(base.pending, len(changes), nativeCollectionLifetime{}, admit)
 	if err != nil {
 		return next, err
 	}
-	if err = p.domainBuilder.Set("primary", domain); err != nil {
-		return next, err
+	for _, change := range changes {
+		c, entries := change.collection, change.entries
+		old, _ := c.domains.Get("primary")
+		root, policy := uint64(0), backenddb.OrderedRootStoragePolicy(0)
+		if old != nil {
+			root, policy = old.baseRoot, old.storagePolicy
+		}
+		domain, err := prepareNativeDomainUpdate(old, "primary", root, 1, policy, entries, base.allocator)
+		if domain != nil {
+			p.ownedDomains = append(p.ownedDomains, domain)
+		}
+		if err != nil {
+			return next, err
+		}
+		p.domainBuilder, err = cowbtree.NewOwnedMapBuilder(c.domains, 1, nativeDomainLifetime{}, admit)
+		if err != nil {
+			return next, err
+		}
+		p.pendingDomainBuilder, err = cowbtree.NewOwnedMapBuilder(c.pending, 1, nativeDomainLifetime{}, admit)
+		if err != nil {
+			return next, err
+		}
+		if err = p.domainBuilder.Set("primary", domain); err != nil {
+			return next, err
+		}
+		if err = p.pendingDomainBuilder.Set("primary", domain); err != nil {
+			return next, err
+		}
+		p.domains, p.pendingDomains = p.domainBuilder.Seal(), p.pendingDomainBuilder.Seal()
+		p.domainBuilder, p.pendingDomainBuilder = nil, nil
+		c.schema.retain()
+		p.schema = c.schema
+		replacement, err := newNativeCollectionState(c.incarnation, p.schema, p.domains, p.pendingDomains, admit)
+		if err != nil {
+			return next, err
+		}
+		p.schema, p.domains, p.pendingDomains = nil, nil, nil
+		p.ownedCollections = append(p.ownedCollections, replacement)
+		if err = p.names.Set(c.schema.meta.Name, replacement); err != nil {
+			return next, err
+		}
+		if err = p.collections.Set(c.incarnation, replacement); err != nil {
+			return next, err
+		}
+		if err = p.pending.Set(c.incarnation, replacement); err != nil {
+			return next, err
+		}
 	}
-	if err = p.pendingDomainBuilder.Set("primary", domain); err != nil {
-		return next, err
-	}
-	p.domains, p.pendingDomains = p.domainBuilder.Seal(), p.pendingDomainBuilder.Seal()
-	p.domainBuilder, p.pendingDomainBuilder = nil, nil
-	c.schema.retain()
-	p.schema = c.schema
-	replacement, err := newNativeCollectionState(c.incarnation, p.schema, p.domains, p.pendingDomains, admit)
-	if err != nil {
-		return next, err
-	}
-	p.schema, p.domains, p.pendingDomains = nil, nil, nil
-	p.ownedCollections = append(p.ownedCollections, replacement)
-	p.names, err = cowbtree.NewOwnedMapBuilder(base.names, 1, nativeCollectionLifetime{}, admit)
-	if err != nil {
-		return next, err
-	}
-	p.collections, err = cowbtree.NewOwnedMapBuilder(base.collections, 1, nativeCollectionLifetime{}, admit)
-	if err != nil {
-		return next, err
-	}
-	p.pending, err = cowbtree.NewOwnedMapBuilder(base.pending, 1, nativeCollectionLifetime{}, admit)
-	if err != nil {
-		return next, err
-	}
-	if err = p.names.Set(c.schema.meta.Name, replacement); err != nil {
-		return next, err
-	}
-	if err = p.collections.Set(c.incarnation, replacement); err != nil {
-		return next, err
-	}
-	err = p.pending.Set(c.incarnation, replacement)
-	return next, err
+	return next, nil
 }
 
 // The registered singleton preparation shares the same immutable domain and
@@ -159,7 +172,12 @@ func prepareNativeJSONInsertCommand(_ *backenddb.DB, env commitlog.CommandEnvelo
 	if err != nil {
 		return nil, err
 	}
-	defer lease.Close()
+	transferred := false
+	defer func() {
+		if !transferred {
+			lease.Close()
+		}
+	}()
 	decoded, err := commitlog.DecodeCollectionInsertBatchByIDPayload(env.Payload)
 	if err != nil {
 		return nil, err
@@ -198,6 +216,8 @@ func prepareNativeJSONInsertCommand(_ *backenddb.DB, env commitlog.CommandEnvelo
 	replacement, _ := next.collections.Get(c.incarnation)
 	(nativeCollectionLifetime{}).Retain(replacement)
 	custody.adoptCollection(replacement)
+	custody.refund.control = lease
+	transferred = true
 	// Effects own keys independently of decoded input through the retained source.
 	domain, _ := replacement.domains.Get("primary")
 	for i := range effects {

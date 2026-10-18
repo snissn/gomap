@@ -3,6 +3,7 @@ package collections
 import (
 	"bytes"
 	"errors"
+	"sort"
 	"sync"
 	"unsafe"
 
@@ -16,31 +17,57 @@ import (
 )
 
 // NativeJSONTxn uses the existing conditional transaction's single opening cut.
-// The selected frontend accepts one insert batch in one unindexed JSON collection.
+// The frontend stages one insert batch per captured unindexed JSON collection
+// and one raw point Set in the original P1 batch.
 // Get observes that opening plus its own staged inserts. Commit never reruns the
 // body; only the original immutable mutations are composed after validation.
+type nativeJSONTxnBinding struct {
+	name        string
+	incarnation uint64
+	probe       NativeJSONRead
+	plan        *nativeJSONLogicalInsert
+	payload     []byte
+	effects     []txnhistory.Effect
+}
 type NativeJSONTxn struct {
-	mu                sync.Mutex
-	db                *backenddb.DB
-	core              backenddb.NativeConditionalTxn
-	name              string
-	incarnation       uint64
-	imported          *nativeEngineVersion
-	probe             NativeJSONRead
-	dependencies      []txnhistory.Dependency
-	plan              *nativeJSONLogicalInsert
-	payload           []byte
-	effects           []txnhistory.Effect
-	lease, stageLease *memtable.COWExternalLease
-	charge            uint64
-	failure           error
+	mu           sync.Mutex
+	db           *backenddb.DB
+	core         backenddb.NativeConditionalTxn
+	bindings     []nativeJSONTxnBinding
+	count        int
+	imported     *nativeEngineVersion
+	dependencies []txnhistory.Dependency
+	custody      *nativeMutationCustody
+	rawStaged    bool
+	lease        *memtable.COWExternalLease
+	stageLeases  []*memtable.COWExternalLease
+	charge       uint64
+	failure      error
 }
 
 // Begin binds the collection's original logical incarnation and interpretation.
 // Close must be called on every outcome. Database.Close retains database ownership.
-func (m *NativeJSONManager) Begin(name string) (result *NativeJSONTxn, resultErr error) {
-	if err := ValidateCollectionName(name); err != nil {
-		return nil, err
+func (m *NativeJSONManager) Begin(name string, additional ...string) (result *NativeJSONTxn, resultErr error) {
+	if len(additional) >= commitlog.MaxCompositeMutationMembersV1 {
+		return nil, backenddb.ErrNativeSemanticUnsupported
+	}
+	names := additional
+	nameAt := func(i int) string {
+		if i == 0 {
+			return name
+		}
+		return names[i-1]
+	}
+	count := 1 + len(additional)
+	for i := 0; i < count; i++ {
+		if err := ValidateCollectionName(nameAt(i)); err != nil {
+			return nil, err
+		}
+		for j := 0; j < i; j++ {
+			if nameAt(i) == nameAt(j) {
+				return nil, backenddb.ErrNativeSemanticUnsupported
+			}
+		}
 	}
 	if m == nil || m.db == nil {
 		return nil, backenddb.ErrClosed
@@ -49,16 +76,18 @@ func (m *NativeJSONManager) Begin(name string) (result *NativeJSONTxn, resultErr
 	if err != nil {
 		return nil, err
 	}
-	charge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(NativeJSONTxn{}))) + memtable.COWAllocationCharge(uint64(len(name)))*2 + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(txnhistory.Dependency{})))
-	for _, n := range valuelog.COWInspectionMetadataAllocationSizes() {
-		charge += memtable.COWAllocationCharge(n)
+	charge := memtable.COWAllocationCharge(uint64(count)*uint64(unsafe.Sizeof(nativeJSONTxnBinding{}))) + memtable.COWAllocationCharge(uint64(count)*uint64(unsafe.Sizeof((*memtable.COWExternalLease)(nil)))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(NativeJSONTxn{}))) + memtable.COWAllocationCharge(uint64(count)*uint64(unsafe.Sizeof(txnhistory.Dependency{})))
+	for i := 0; i < count; i++ {
+		charge += 2 * memtable.COWAllocationCharge(uint64(len(nameAt(i))))
+		for _, n := range valuelog.COWInspectionMetadataAllocationSizes() {
+			charge += memtable.COWAllocationCharge(n)
+		}
 	}
 	lease, err := core.NativeAllocator().AdmitNativeBytes(charge)
 	if err != nil {
 		return nil, errors.Join(err, core.Close())
 	}
-	t := &NativeJSONTxn{db: m.db, core: core, name: string(bytes.Clone([]byte(name))), lease: lease, charge: charge}
-	t.probe.capture = core
+	t := &NativeJSONTxn{db: m.db, core: core, count: count, lease: lease, charge: charge, dependencies: make([]txnhistory.Dependency, 0, count), bindings: make([]nativeJSONTxnBinding, count), stageLeases: make([]*memtable.COWExternalLease, count)}
 	defer func() {
 		if resultErr != nil {
 			resultErr = errors.Join(resultErr, t.Close())
@@ -78,32 +107,48 @@ func (m *NativeJSONManager) Begin(name string) (result *NativeJSONTxn, resultErr
 	if base.inventory != nil {
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
-	c, ok := base.names.Get(t.name)
-	if !ok {
-		return nil, tree.ErrKeyNotFound
-	}
-	if _, err = nativeJSONMeta(*c.schema.meta); err != nil {
+	t.custody, err = newNativeMutationCustody(0, count, core.NativeAllocator())
+	if err != nil {
 		return nil, err
 	}
-	t.incarnation = c.incarnation
-	t.dependencies = []txnhistory.Dependency{{Namespace: txnhistory.Namespace{Kind: txnhistory.CatalogNamespace}, Kind: txnhistory.PointEffect, Key: []byte(t.name)}}
-	if domain, ok := c.domains.Get("primary"); ok {
-		t.probe.domain, err = newNativeDomainRead(domain, core.Snapshot())
-		if err != nil {
+	for i := 0; i < count; i++ {
+		g := &t.bindings[i]
+		g.name = string(bytes.Clone([]byte(nameAt(i))))
+		g.probe.capture = core
+		c, ok := base.names.Get(g.name)
+		if !ok {
+			return nil, tree.ErrKeyNotFound
+		}
+		if _, err = nativeJSONMeta(*c.schema.meta); err != nil {
 			return nil, err
+		}
+		g.incarnation = c.incarnation
+		t.dependencies = append(t.dependencies, txnhistory.Dependency{Namespace: txnhistory.Namespace{Kind: txnhistory.CatalogNamespace}, Kind: txnhistory.PointEffect, Key: []byte(g.name)})
+		if domain, ok := c.domains.Get("primary"); ok {
+			g.probe.domain, err = newNativeDomainRead(domain, core.Snapshot())
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 	return t, nil
 }
-
-func (t *NativeJSONTxn) namespace() txnhistory.Namespace {
-	return txnhistory.Namespace{Kind: txnhistory.CollectionNamespace, Collection: t.incarnation, Domain: 1, Interpretation: 1}
+func (g *nativeJSONTxnBinding) namespace() txnhistory.Namespace {
+	return txnhistory.Namespace{Kind: txnhistory.CollectionNamespace, Collection: g.incarnation, Domain: 1, Interpretation: 1}
+}
+func (t *NativeJSONTxn) binding(name string) *nativeJSONTxnBinding {
+	for i := 0; i < t.count; i++ {
+		if name == "" && i == 0 || t.bindings[i].name == name {
+			return &t.bindings[i]
+		}
+	}
+	return nil
 }
 
 // trackRead admits a replacement dependency array and new key before allocation.
 // The coarse lease conservatively retains previous array capacity until Close;
 // no dependency backing is refunded while a descriptor can still borrow it.
-func (t *NativeJSONTxn) trackRead(id []byte) error {
+func (t *NativeJSONTxn) trackRead(g *nativeJSONTxnBinding, id []byte) error {
 	size := uint64(unsafe.Sizeof(txnhistory.Dependency{}))
 	capacity := cap(t.dependencies)
 	var backing uint64
@@ -130,11 +175,12 @@ func (t *NativeJSONTxn) trackRead(id []byte) error {
 		copy(next, t.dependencies)
 		t.dependencies = next
 	}
-	t.dependencies = append(t.dependencies, txnhistory.Dependency{Namespace: t.namespace(), Kind: txnhistory.PointEffect, Key: bytes.Clone(id)})
+	t.dependencies = append(t.dependencies, txnhistory.Dependency{Namespace: g.namespace(), Kind: txnhistory.PointEffect, Key: bytes.Clone(id)})
 	return nil
 }
 
-func (t *NativeJSONTxn) Get(id []byte) ([]byte, error) {
+func (t *NativeJSONTxn) Get(id []byte) ([]byte, error) { return t.GetFrom("", id) }
+func (t *NativeJSONTxn) GetFrom(name string, id []byte) ([]byte, error) {
 	if t == nil {
 		return nil, backenddb.ErrClosed
 	}
@@ -146,23 +192,30 @@ func (t *NativeJSONTxn) Get(id []byte) ([]byte, error) {
 	if t.failure != nil {
 		return nil, t.failure
 	}
-	if t.plan != nil {
-		for _, row := range t.plan.mutations {
-			if bytes.Equal(row.Key, id) {
-				return bytes.Clone(row.Value), nil
-			}
+	g := t.binding(name)
+	if g == nil {
+		return nil, backenddb.ErrNativeSemanticUnsupported
+	}
+	if g.plan != nil {
+		rows := g.plan.mutations
+		i := sort.Search(len(rows), func(i int) bool { return bytes.Compare(rows[i].Key, id) >= 0 })
+		if i < len(rows) && bytes.Equal(rows[i].Key, id) {
+			return bytes.Clone(rows[i].Value), nil
 		}
 	}
-	if err := t.trackRead(id); err != nil {
+	if err := t.trackRead(g, id); err != nil {
 		t.failure = err
 		return nil, err
 	}
-	return t.probe.Get(id)
+	return g.probe.Get(id)
 }
 
 // InsertBatch stages one strictly sorted batch. A second call refuses without
 // changing the first batch. Other staging failures terminally invalidate the txn.
-func (t *NativeJSONTxn) InsertBatch(ids, documents [][]byte) (resultErr error) {
+func (t *NativeJSONTxn) InsertBatch(ids, documents [][]byte) error {
+	return t.InsertBatchInto("", ids, documents)
+}
+func (t *NativeJSONTxn) InsertBatchInto(name string, ids, documents [][]byte) (resultErr error) {
 	if t == nil {
 		return backenddb.ErrClosed
 	}
@@ -174,7 +227,11 @@ func (t *NativeJSONTxn) InsertBatch(ids, documents [][]byte) (resultErr error) {
 	if t.failure != nil {
 		return t.failure
 	}
-	if t.plan != nil {
+	g := t.binding(name)
+	if g == nil {
+		return backenddb.ErrNativeSemanticUnsupported
+	}
+	if g.plan != nil {
 		return backenddb.ErrNativeSemanticUnsupported
 	}
 	defer func() {
@@ -196,7 +253,7 @@ func (t *NativeJSONTxn) InsertBatch(ids, documents [][]byte) (resultErr error) {
 		}
 		arenaBytes += n
 	}
-	charge, err := nativeJSONInsertCharge(t.name, ids, documents)
+	charge, err := nativeJSONInsertCharge(g.name, ids, documents)
 	if err != nil {
 		return err
 	}
@@ -205,7 +262,11 @@ func (t *NativeJSONTxn) InsertBatch(ids, documents [][]byte) (resultErr error) {
 	if extra > ^uint64(0)-charge {
 		return memtable.ErrCOWCapacity
 	}
-	t.stageLease, err = t.core.NativeAllocator().AdmitNativeBytes(charge + extra)
+	index := 0
+	for &t.bindings[index] != g {
+		index++
+	}
+	t.stageLeases[index], err = t.core.NativeAllocator().AdmitNativeBytes(charge + extra)
 	if err != nil {
 		return err
 	}
@@ -220,7 +281,7 @@ func (t *NativeJSONTxn) InsertBatch(ids, documents [][]byte) (resultErr error) {
 		ownedDocs[i] = arena[offset : offset+len(documents[i])]
 		offset += len(documents[i])
 	}
-	planner := insertBatchPlanner{collection: t.name, primaryRoot: "primary", templateRoot: "templates", directBufferedRuns: true, options: collectionOptions{documentFormat: DocumentFormatJSON}}
+	planner := insertBatchPlanner{collection: g.name, primaryRoot: "primary", templateRoot: "templates", directBufferedRuns: true, options: collectionOptions{documentFormat: DocumentFormatJSON}}
 	prepared, err := planner.planInsertBatch(ownedIDs, ownedDocs)
 	if err != nil {
 		return err
@@ -228,10 +289,10 @@ func (t *NativeJSONTxn) InsertBatch(ids, documents [][]byte) (resultErr error) {
 	rows := prepared.directBufferedInsert.primaryEntries
 	// Blind insert intent is a write dependency, including an absent opening key.
 	for _, row := range rows {
-		if t.probe.domain.domain == nil {
+		if g.probe.domain.domain == nil {
 			break
 		}
-		entry, err := t.probe.domain.getEntry(row.key, &t.probe.scratch, t.probe.readLeaf)
+		entry, err := g.probe.domain.getEntry(row.key, &g.probe.scratch, g.probe.readLeaf)
 		if err == nil && entry.Flags&node.FlagTombstone == 0 {
 			return ErrDocumentExists
 		}
@@ -239,20 +300,16 @@ func (t *NativeJSONTxn) InsertBatch(ids, documents [][]byte) (resultErr error) {
 			return err
 		}
 	}
-	custody, err := newNativeMutationCustody(0, 1, t.core.NativeAllocator())
-	if err != nil {
-		return err
-	}
 	// Adopt all controls before payload encoding or another fallible operation.
-	t.plan = &nativeJSONLogicalInsert{name: t.name, incarnation: t.incarnation, bootstrap: t.imported, custody: custody, mutations: make([]memtable.COWMutation, len(rows))}
-	t.effects = make([]txnhistory.Effect, len(rows))
+	g.plan = &nativeJSONLogicalInsert{name: g.name, incarnation: g.incarnation, bootstrap: t.imported, custody: t.custody, mutations: make([]memtable.COWMutation, len(rows))}
+	g.effects = make([]txnhistory.Effect, len(rows))
 	docs := make([]commitlog.CollectionDocument, len(rows))
 	for i, row := range rows {
-		t.plan.mutations[i] = memtable.COWMutation{Key: row.key, Value: row.value, Flags: node.FlagInline}
-		t.effects[i] = txnhistory.Effect{Namespace: t.namespace(), Kind: txnhistory.PointEffect, Key: row.key}
+		g.plan.mutations[i] = memtable.COWMutation{Key: row.key, Value: row.value, Flags: node.FlagInline}
+		g.effects[i] = txnhistory.Effect{Namespace: g.namespace(), Kind: txnhistory.PointEffect, Key: row.key}
 		docs[i] = commitlog.CollectionDocument{ID: row.key, Document: row.value}
 	}
-	t.payload, err = commitlog.EncodeCollectionInsertBatchByIDPayload(t.name, docs)
+	g.payload, err = commitlog.EncodeCollectionInsertBatchByIDPayload(g.name, docs)
 	return err
 }
 
@@ -267,7 +324,15 @@ type nativeJSONLogicalInsert struct {
 	custody     *nativeMutationCustody
 }
 
-func (p *nativeJSONLogicalInsert) PrepareNativePublication(latest backenddb.NativeSemanticState, exact *backenddb.Snapshot) (backenddb.NativeFinalizedPublication, error) {
+type nativeJSONLogicalGroup struct {
+	bindings  []nativeJSONTxnBinding
+	changes   []nativeJSONPrimaryChange
+	count     int
+	bootstrap *nativeEngineVersion
+	custody   *nativeMutationCustody
+}
+
+func (p *nativeJSONLogicalGroup) PrepareNativePublication(latest backenddb.NativeSemanticState, exact *backenddb.Snapshot) (backenddb.NativeFinalizedPublication, error) {
 	if exact == nil {
 		return backenddb.NativeFinalizedPublication{}, backenddb.ErrNativeSemanticUnsupported
 	}
@@ -281,22 +346,78 @@ func (p *nativeJSONLogicalInsert) PrepareNativePublication(latest backenddb.Nati
 	if base == nil || base.inventory != nil {
 		return backenddb.NativeFinalizedPublication{}, backenddb.ErrNativeSemanticUnsupported
 	}
-	c, ok := base.collections.Get(p.incarnation)
-	named, namedOK := base.names.Get(p.name)
-	if !ok || !namedOK || named.incarnation != p.incarnation {
-		return backenddb.NativeFinalizedPublication{}, backenddb.ErrConcurrentModification
-	}
-	next, err := prepareNativeJSONPrimary(base, c, p.mutations)
-	if err != nil {
-		if next == nil {
-			return backenddb.NativeFinalizedPublication{}, err
+	changes := p.changes
+	count := 0
+	for i := 0; i < p.count; i++ {
+		g := &p.bindings[i]
+		if g.plan == nil {
+			continue
 		}
+		c, ok := base.collections.Get(g.incarnation)
+		named, nok := base.names.Get(g.name)
+		if !ok || !nok || named.incarnation != g.incarnation {
+			return backenddb.NativeFinalizedPublication{}, backenddb.ErrConcurrentModification
+		}
+		changes[count] = nativeJSONPrimaryChange{collection: c, entries: g.plan.mutations}
+		count++
+	}
+	next, err := prepareNativeJSONPrimaries(base, changes[:count])
+	if err != nil {
 		return backenddb.NativeFinalizedPublication{State: next}, err
 	}
-	replacement, _ := next.collections.Get(p.incarnation)
-	(nativeCollectionLifetime{}).Retain(replacement)
-	p.custody.adoptCollection(replacement)
+	for i := 0; i < count; i++ {
+		replacement, _ := next.collections.Get(changes[i].collection.incarnation)
+		(nativeCollectionLifetime{}).Retain(replacement)
+		p.custody.adoptCollection(replacement)
+	}
 	return backenddb.NativeFinalizedPublication{State: next}, nil
+}
+
+func (t *NativeJSONTxn) GetRaw(key []byte) ([]byte, error) {
+	if t == nil {
+		return nil, backenddb.ErrClosed
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.core == nil {
+		return nil, backenddb.ErrClosed
+	}
+	if t.failure != nil {
+		return nil, t.failure
+	}
+	raw, ok := t.core.(interface{ Get([]byte) ([]byte, error) })
+	if !ok {
+		return nil, backenddb.ErrNativeSemanticUnsupported
+	}
+	return raw.Get(key)
+}
+
+// SetRaw stages one raw point write in the SAME original P1 batch.
+func (t *NativeJSONTxn) SetRaw(key, value []byte) (err error) {
+	if t == nil {
+		return backenddb.ErrClosed
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.core == nil {
+		return backenddb.ErrClosed
+	}
+	if t.failure != nil {
+		return t.failure
+	}
+	if t.rawStaged {
+		return backenddb.ErrNativeSemanticUnsupported
+	}
+	raw, ok := t.core.(interface{ Set([]byte, []byte) error })
+	if !ok {
+		return backenddb.ErrNativeSemanticUnsupported
+	}
+	if err = raw.Set(key, value); err != nil {
+		t.failure = err
+		return err
+	}
+	t.rawStaged = true
+	return nil
 }
 
 func (t *NativeJSONTxn) Commit() (resultErr error) {
@@ -309,12 +430,15 @@ func (t *NativeJSONTxn) Commit() (resultErr error) {
 		return backenddb.ErrClosed
 	}
 	defer func() {
-		closeErr, stage, lease := t.closeLocked()
-		resultErr = errors.Join(resultErr, closeErr)
+		err, stages, lease := t.closeLocked()
+		resultErr = errors.Join(resultErr, err)
 		t.mu.Unlock()
 		t = nil
-		if stage != nil {
-			stage.Close()
+		for i := range stages {
+			if stages[i] != nil {
+				stages[i].Close()
+				stages[i] = nil
+			}
 		}
 		if lease != nil {
 			lease.Close()
@@ -323,55 +447,156 @@ func (t *NativeJSONTxn) Commit() (resultErr error) {
 	if t.failure != nil {
 		return t.failure
 	}
-	if t.plan == nil {
+	count, totalEffects := 0, 0
+	for i := 0; i < t.count; i++ {
+		g := &t.bindings[i]
+		if g.plan != nil {
+			count++
+			totalEffects += len(g.effects)
+		}
+	}
+	if count == 0 {
 		return backenddb.ErrNativeSemanticUnsupported
 	}
-	native := &backenddb.NativePreparedPublication{Basis: t.core.State(), StartSequence: t.core.LogicalSequence(), Reprepare: t.plan, Custody: t.plan.custody, Effects: t.effects, Dependencies: t.dependencies}
-	// The descriptor owns custody; the internal plan borrows it synchronously.
-	intent, err := t.db.NewTrustedCommandWALIntent(commitlog.CommandKindCollectionInsertBatchByID, commitlog.CommandScopeCollection, commitlog.PayloadFormatCollectionInsertBatchByIDV1, t.payload)
+	rawEntries := t.core.NativeRawEntries()
+	// Each distinct allocation is admitted before construction; the outer
+	// image is charged from the codec's exact plan after member planning.
+	admit := func(bytes uint64) error {
+		charge := memtable.COWAllocationCharge(bytes)
+		if charge > ^uint64(0)-t.charge {
+			return memtable.ErrCOWCapacity
+		}
+		if err := t.lease.Resize(t.charge + charge); err != nil {
+			return err
+		}
+		t.charge += charge
+		return nil
+	}
+	for _, bytes := range []uint64{
+		uint64(unsafe.Sizeof(nativeJSONLogicalGroup{})),
+		uint64(totalEffects) * uint64(unsafe.Sizeof(txnhistory.Effect{})),
+		uint64(t.count+1) * uint64(unsafe.Sizeof(commitlog.CompositeMutationMember{})),
+		uint64(t.count) * uint64(unsafe.Sizeof(nativeJSONPrimaryChange{})),
+		uint64(unsafe.Sizeof(backenddb.NativePreparedPublication{})),
+		uint64(unsafe.Sizeof(backenddb.CommandWALIntent{})),
+	} {
+		if err := admit(bytes); err != nil {
+			return err
+		}
+	}
+	var rawGrowth int
+	effects := make([]txnhistory.Effect, 0, totalEffects)
+	members := make([]commitlog.CompositeMutationMember, t.count+1)
+	memberCount := 0
+	if t.rawStaged {
+		if len(rawEntries) != 1 {
+			return backenddb.ErrNativeSemanticUnsupported
+		}
+		op := commitlog.RawKVOperation{Op: commitlog.RawKVOpSet, Key: rawEntries[0].Key, Value: rawEntries[0].Value, Revision: uint64(rawEntries[0].Revision)}
+		scan := func(visit func(commitlog.RawKVOperation) error) error { return visit(op) }
+		rawPlan, err := commitlog.PlanRawKVBatchPayloadScan(scan)
+		if err != nil {
+			return err
+		}
+		if err = admit(uint64(rawPlan.PayloadLen)); err != nil {
+			return err
+		}
+		payload, err := commitlog.EncodeRawKVBatchPayloadPlanned(rawPlan, scan)
+		if err != nil {
+			return err
+		}
+		// Actual assignment may add the revision field. Plan its maximum
+		// exact shape without mutating the original staged operation.
+		op.Revision = ^uint64(0)
+		finalPlan, err := commitlog.PlanRawKVBatchPayloadScan(scan)
+		if err != nil {
+			return err
+		}
+		rawGrowth = finalPlan.PayloadLen - rawPlan.PayloadLen
+		members[memberCount] = commitlog.CompositeMutationMember{Kind: commitlog.CommandKindRawKVBatch, PayloadFormat: commitlog.PayloadFormatRawKVBatchV1, Payload: payload}
+		memberCount++
+	}
+	for i := 0; i < t.count; i++ {
+		g := &t.bindings[i]
+		if g.plan == nil {
+			continue
+		}
+		effects = append(effects, g.effects...)
+		members[memberCount] = commitlog.CompositeMutationMember{Kind: commitlog.CommandKindCollectionInsertBatchByID, PayloadFormat: commitlog.PayloadFormatCollectionInsertBatchByIDV1, Incarnation: g.incarnation, Payload: g.payload}
+		memberCount++
+	}
+	kind, scope, format, payload := commitlog.CommandKindCollectionInsertBatchByID, commitlog.CommandScopeCollection, commitlog.PayloadFormatCollectionInsertBatchByIDV1, members[0].Payload
+	if memberCount > 1 {
+		kind, scope, format = commitlog.CommandKindCompositeMutation, commitlog.CommandScopeSystem, commitlog.PayloadFormatCompositeMutationV1
+		var err error
+		planned, planErr := commitlog.PlanCompositeMutationPayload(members[:memberCount])
+		if planErr != nil {
+			return planErr
+		}
+		capacity := planned + rawGrowth
+		if capacity > commitlog.MaxCompositeMutationPayloadBytesV1 {
+			return memtable.ErrCOWCapacity
+		}
+		if err = admit(uint64(capacity)); err != nil {
+			return err
+		}
+		payload, err = commitlog.EncodeCompositeMutationPayloadTo(make([]byte, 0, capacity), members[:memberCount])
+		if err != nil {
+			return err
+		}
+	}
+	plan := &nativeJSONLogicalGroup{bindings: t.bindings, changes: make([]nativeJSONPrimaryChange, t.count), count: t.count, bootstrap: t.imported, custody: t.custody}
+	native := &backenddb.NativePreparedPublication{RequireInlineCompositeRaw: t.rawStaged, Basis: t.core.State(), StartSequence: t.core.LogicalSequence(), Reprepare: plan, Custody: t.custody, Effects: effects, Dependencies: t.dependencies}
+	intent, err := t.db.NewTrustedCommandWALIntent(kind, scope, format, payload)
 	if err != nil {
-		t.plan.custody = nil
+		t.custody = nil
 		return errors.Join(err, cancelPrivateNativePublication(native))
 	}
-	// End borrowed read aliases before P1 commit closes its opening Snapshot.
-	t.probe.capture, t.probe.domain, t.probe.scratch = nil, nativeDomainRead{}, nativeDomainReadScratch{}
+	for i := 0; i < t.count; i++ {
+		t.bindings[i].probe.capture = nil
+		t.bindings[i].probe.domain = nativeDomainRead{}
+		t.bindings[i].probe.scratch = nativeDomainReadScratch{}
+	}
 	result, err := t.core.CommitNative(native, intent, false)
-	t.plan.custody = nil
+	t.custody = nil
 	if !result.Consumed {
 		err = errors.Join(err, cancelPrivateNativePublication(native))
 	}
-	native, intent = nil, nil
+	native, intent, plan, payload, effects = nil, nil, nil, nil, nil
 	return err
 }
-
 func (t *NativeJSONTxn) Close() error {
 	if t == nil {
 		return nil
 	}
 	t.mu.Lock()
-	err, stage, lease := t.closeLocked()
+	err, stages, lease := t.closeLocked()
 	t.mu.Unlock()
 	t = nil
-	if stage != nil {
-		stage.Close()
+	for i := range stages {
+		if stages[i] != nil {
+			stages[i].Close()
+			stages[i] = nil
+		}
 	}
 	if lease != nil {
 		lease.Close()
 	}
 	return err
 }
-func (t *NativeJSONTxn) closeLocked() (error, *memtable.COWExternalLease, *memtable.COWExternalLease) {
+func (t *NativeJSONTxn) closeLocked() (error, []*memtable.COWExternalLease, *memtable.COWExternalLease) {
 	var err error
-	if t.plan != nil && t.plan.custody != nil {
-		record := t.plan.custody.ReleaseNativeCustody()
-		t.plan.custody = nil
+	for i := range t.bindings {
+		t.bindings[i] = nativeJSONTxnBinding{}
+	}
+	t.bindings = nil
+	t.dependencies = nil
+
+	if t.custody != nil {
+		record := t.custody.ReleaseNativeCustody()
+		t.custody = nil
 		err = finishPrivateNative(record)
 	}
-	t.plan = nil
-	t.payload = nil
-	t.effects = nil
-	t.dependencies = nil
-	t.probe.capture, t.probe.domain, t.probe.scratch = nil, nativeDomainRead{}, nativeDomainReadScratch{}
 	if t.imported != nil {
 		record := t.imported.Release()
 		t.imported = nil
@@ -382,9 +607,9 @@ func (t *NativeJSONTxn) closeLocked() (error, *memtable.COWExternalLease, *memta
 		t.core = nil
 		err = errors.Join(err, core.Close())
 	}
-	t.name = ""
 	t.db = nil
-	stage, lease := t.stageLease, t.lease
-	t.stageLease, t.lease = nil, nil
-	return err, stage, lease
+	stages, lease := t.stageLeases, t.lease
+	t.stageLeases = nil
+	t.lease = nil
+	return err, stages, lease
 }

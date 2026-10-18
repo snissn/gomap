@@ -36,17 +36,22 @@ type nativeEngineVersion struct {
 // This independently preborn original accounting receipt owns no engine,
 // embedded cleanup record, collection, resource or destructor backpointer.
 type nativeEngineRefund struct {
+	control   cowbtree.OwnedMapLease
 	lease     cowbtree.OwnedMapLease
 	children  cowbtree.OwnedMapCompletion
 	inventory rootpublication.SemanticCleanupCompletion
 }
 
 func (r *nativeEngineRefund) Close() {
-	lease, children, inventory := r.lease, r.children, r.inventory
+	lease, children, inventory, control := r.lease, r.children, r.inventory, r.control
 	r.lease, r.children, r.inventory = nil, cowbtree.OwnedMapCompletion{}, rootpublication.SemanticCleanupCompletion{}
+	r.control = nil
 	r = nil
 	children.Complete()
 	inventory.Complete()
+	if control != nil {
+		control.Close()
+	}
 	if lease != nil {
 		lease.Close()
 	}
