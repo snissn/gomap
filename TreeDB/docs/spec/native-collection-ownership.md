@@ -369,3 +369,21 @@ and returns independent original receipts; the containing map or caller clears
 its own aliases before completing refunds. This descriptor is construction for
 typed staging. It does not provide typed asset finalization, exact pending
 locator/template closure, transaction routing or producer activation.
+
+### Composite external-reference preparation
+
+The composite payload helper counts external `SetRID` references across all raw
+members only after validating the entire command. The original publication
+planner admits exact caller scratch before constructing its fence. The helper
+validates the complete immutable payload and scratch length before changing
+scratch, sorts the used slots, and hashes the globally unique sorted IDs using
+the existing raw SHA256/count convention. Duplicates across member boundaries
+therefore require one external reference. Materialized-RID operations carry
+their own bytes and retain the existing raw no-external-reference semantics.
+Preparation uses no resource lookup, child frame or independent identity.
+
+The ordinary command-frame validator continues to reject composite identity
+until the full producer, durability gate, external closure and single atomic
+replay installer exist. Payload planning and fence preparation alone do not
+enable append or recovery. The final envelope must also check its complete size,
+including external references and extensions, against the composite command cap.
