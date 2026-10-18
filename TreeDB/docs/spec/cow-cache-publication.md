@@ -520,3 +520,37 @@ basis cleanup retains the original basis independently.
 Public raw conditional transactions are supported under the ownership and bounded
 history rules in [raw-cow-transactions.md](raw-cow-transactions.md). Standalone
 caller-owned backend combinations remain fail-closed.
+
+Native physical rollover prepares an owned active successor through
+`NativeSemanticState.PrepareRollover` under the existing writer owner, before
+raw source freezing and cut installation. The whole cut adopts that edge and
+separately retains the original captured semantic state. Neither the logical
+sequence nor canonical identity changes. A nonnil error result also transfers
+one private edge; its preborn cleanup record already owns every partial
+allocation, and cancellation queues it outside publication and writer gates
+before dropping the opening retained cut. Native-only captured coverage may
+therefore drive the same finite capacity drain/retry as raw frozen tables.
+
+`NativeMaintenanceAllocator` exposes only the existing reserved maintenance
+budget capability. Native build ledgers and handoff metadata must reserve their
+finite capacity before physical acceptance, so producer exhaustion cannot force
+postaccept recapture or block the exact accepted handoff. Source generations and
+source-slot ownership remain on their original producer budget. Full native
+collection source representation and producer activation belong to the native
+collection packet; the legacy producer fence remains until that migration.
+
+Native two-phase transactions use `BeginNativeConditionalTxn` on the same fixed
+backend bridge. Its opening State, Snapshot and sequence borrow the original P1
+`ConditionalTxn` snapshot; commit uses that transaction's original batch and
+raw read/range dependencies. The caller cannot replace its opening sequence.
+The original owned `NativeLogicalPlan` contains immutable staged effects and
+prepares them against latest compatible semantic roots under the existing
+writer/publication gate, after checking all original raw and native read/write
+dependencies and history floor. This internal operation does not recapture,
+invoke replay preparation, reacquire teardown protection, wait or publish.
+Journal preparation and canonical append occur only after the complete private
+result passes its exact-basis invariant. A nonnil partial state returned with an
+error transfers one edge to existing off-gate cancellation; original custody is
+queued before the transaction's opening cut withdraws. Commit/Close terminate
+the original transaction once. Physical handoff alone is not a logical conflict;
+changed logical dependencies still refuse before assignment.

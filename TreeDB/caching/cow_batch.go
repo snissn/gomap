@@ -13,6 +13,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
+	"github.com/snissn/gomap/TreeDB/internal/txnhistory"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -49,9 +50,6 @@ func (b *Batch) PrepareExternalCommandWALPublication() (err error) {
 		return err
 	}
 	c := b.db.cow
-	if owner := b.cowState.native; owner != nil && owner.plan.Basis != c.cut.semanticRootSet {
-		return backenddb.ErrRootPublicationBasisMismatch
-	}
 	if c.cut.logicalSeq == ^uint64(0) {
 		return memtable.ErrCOWCapacity
 	}
@@ -72,14 +70,43 @@ func (b *Batch) PrepareExternalCommandWALPublication() (err error) {
 				c.updateTxnStats()
 			}
 		}()
+		// Validate the ORIGINAL opening R union W and floor before any latest-root
+		// native construction. A physical basis change alone is not a conflict.
+		if b.cowState.txn != nil {
+			started := time.Now()
+			err = b.cowState.txn.validateCOWJournal()
+			c.validationNs.Add(uint64(time.Since(started)))
+			if errors.Is(err, ErrTxnTooOld) {
+				c.tooOld.Add(1)
+			}
+			if err != nil {
+				return err
+			}
+		}
 		if owner := b.cowState.native; owner != nil {
 			plan := owner.plan
-			changed, validateErr := c.journal.DependenciesChanged(plan.StartSequence, plan.Dependencies)
-			if validateErr != nil {
-				return validateErr
+			for _, dependencies := range [][]txnhistory.Dependency{plan.Dependencies, plan.Effects} {
+				changed, validateErr := c.journal.DependenciesChanged(plan.StartSequence, dependencies)
+				if validateErr != nil {
+					return validateErr
+				}
+				if changed {
+					return backenddb.ErrConcurrentModification
+				}
 			}
-			if changed {
-				return backenddb.ErrConcurrentModification
+			if plan.Reprepare != nil {
+				prepared, prepareErr := plan.Reprepare.PrepareNativePublication(c.cut.semanticRootSet, c.cut.basis.snapshot)
+				plan.State, plan.Projections = prepared.State, prepared.Projections
+				if prepareErr != nil {
+					return prepareErr
+				}
+				if plan.State == nil {
+					return ErrCOWUnsupported
+				}
+				plan.Basis = c.cut.semanticRootSet
+			}
+			if plan.Basis != c.cut.semanticRootSet {
+				return backenddb.ErrRootPublicationBasisMismatch
 			}
 			mutation, err = c.journal.PrepareEffects(b.entries, nil, false, plan.Effects)
 		} else {
@@ -93,17 +120,6 @@ func (b *Batch) PrepareExternalCommandWALPublication() (err error) {
 				mutation.Cancel()
 			}
 		}()
-		if b.cowState.txn != nil {
-			started := time.Now()
-			err = b.cowState.txn.validateCOWJournal()
-			c.validationNs.Add(uint64(time.Since(started)))
-			if errors.Is(err, ErrTxnTooOld) {
-				c.tooOld.Add(1)
-			}
-			if err != nil {
-				return err
-			}
-		}
 	}
 	n := len(b.entries)
 	shards := len(c.writers)

@@ -124,7 +124,10 @@ func (o *cowNativeOwner) ReleaseAcceptedCompletion() (rootpublication.AcceptedCl
 // success the batch consumes State/Custody on installation or cancellation;
 // Basis stays borrowed from the caller's retained capture until Write returns.
 func (b *Batch) SetNativeSemanticPublication(owner *transactionowner.Owner, native *backenddb.NativePreparedPublication) error {
-	if b == nil || b.db == nil || b.db.cow == nil || b.cowState == nil || b.closed || b.cowState.err != nil || b.cowState.native != nil || native == nil || (native.State == nil && native.Finalizer == nil) || (native.Finalizer != nil && native.Custody == nil) || owner == nil || b.db.cow.txnOwner != owner {
+	if b == nil || b.db == nil || b.db.cow == nil || b.cowState == nil || b.closed || b.cowState.err != nil || b.cowState.native != nil || native == nil || (native.State == nil && native.Finalizer == nil && native.Reprepare == nil) || (native.Finalizer != nil && native.Custody == nil) || owner == nil || b.db.cow.txnOwner != owner {
+		return ErrCOWUnsupported
+	}
+	if native.Reprepare != nil && native.State != nil {
 		return ErrCOWUnsupported
 	}
 	if native.Finalizer != nil {
@@ -265,6 +268,19 @@ func (db *DB) WriteNativePublication(native *backenddb.NativePreparedPublication
 	if db == nil {
 		return result, backenddb.ErrClosed
 	}
+	if db.cow == nil || native == nil {
+		return result, ErrCOWUnsupported
+	}
+	b := db.NewBatchWithSize(len(native.Entries))
+	defer func() { err = joinCOWCleanupError(err, b.Close()) }()
+	return db.writeNativePublication(b, native, intent, sync)
+}
+
+// writeNativePublication also accepts the original batch of a P1 transaction.
+func (db *DB) writeNativePublication(b *Batch, native *backenddb.NativePreparedPublication, intent *backenddb.CommandWALIntent, sync bool) (result backenddb.NativePublicationResult, err error) {
+	if db == nil {
+		return result, backenddb.ErrClosed
+	}
 	backend, ok := db.backend.(*backenddb.DB)
 	if !ok || db.cow == nil || native == nil || (intent != nil && intent.AssignedLSN() != 0) {
 		return result, ErrCOWUnsupported
@@ -277,10 +293,8 @@ func (db *DB) WriteNativePublication(native *backenddb.NativePreparedPublication
 		if err = backend.PreflightPrivateCOWCommand(owner); err != nil {
 			return result, err
 		}
-		b := db.NewBatchWithSize(len(native.Entries))
 		var sealed *backenddb.NativeSealReceipt
 		defer func() {
-			err = joinCOWCleanupError(err, b.Close())
 			if sealed != nil {
 				if !result.Consumed {
 					if refund := sealed.ReleaseNativeSeal(); refund != nil {
@@ -329,8 +343,6 @@ func (db *DB) WriteNativePublication(native *backenddb.NativePreparedPublication
 	if intent.RequestsExactSeal() && !intent.NativeSealedReceiptAdmitted() {
 		return result, ErrCOWUnsupported
 	}
-	b := db.NewBatchWithSize(len(native.Entries))
-	defer func() { err = joinCOWCleanupError(err, b.Close()) }()
 	if err = b.SetNativeSemanticPublication(owner, native); err != nil {
 		return result, err
 	}
