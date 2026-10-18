@@ -298,3 +298,27 @@ existing context/finalization behavior are unchanged. This constructor does not
 establish that typed asset producers supply selected metadata, or that every
 shared builder partial-construction path is safe. Those producer migrations
 and public native activation remain required gates.
+
+### Captured root metadata reads
+
+`Snapshot.NativeReaderAtRoot` returns a reader by value against the same retained
+snapshot. It does not append to the snapshot's root cache. The primary root
+copies the original captured tree, preserving its namespace and bounds; other
+roots use that snapshot's pager and value reader. The caller admits its reader
+storage first and retains the exact snapshot through each operation and every
+borrowed entry use. Root IDs must come from that same complete captured closure.
+Fixed-scratch point, successor and emptiness operations use the existing
+snapshot read guard, including concurrent Close exclusion. No new iterator
+registration or independent snapshot lifetime is implied.
+
+The private native domain metadata merge borrows its original domain descriptor
+and this exact basis. It probes the active source, captured sources newest first,
+then the persisted base. Successor reads compare one candidate per finite source;
+equal keys preserve the newest effect. Physical tombstones remain visible to the
+enclosing merge, and pointer entries remain metadata until the captured resource
+resolver supplies their actual owner. The caller's preadmitted fixed scratch
+owns traversal storage. This helper creates no cursor, source array, engine
+ancestor or independent pin. Its containing complete read scope must retain
+both the domain and snapshot, and scrub the helper and borrowed results before
+releasing either. It is construction for future public routing; that routing
+and the exact pending pointer/typed resolver remain activation gates.
