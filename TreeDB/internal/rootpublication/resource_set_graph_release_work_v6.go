@@ -1,22 +1,8 @@
 package rootpublication
 
-import (
-	"github.com/snissn/gomap/TreeDB/internal/iterator"
-	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
-	"unsafe"
-)
+import "github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 
-// ReleaseFromWithWorkV6 consumes the SAME selected Set and retains its original
-// metadata as the last-edge continuation. The parent must clear its Set alias
-// before completing the returned accounting-only receipt.
-func (set *StableResourceSet) ReleaseFromWithWorkV6(expected ResourceOwnerState, w *iterator.OrdinalScanWork) (StableResourceTokenReleaseCompletionV6, bool, error) {
-	if w == nil {
-		return StableResourceTokenReleaseCompletionV6{}, false, retainedalloc.ErrWorkRequired
-	}
-	return set.releaseSelectedGraphV6(expected, nil, w)
-}
-
-func (set *StableResourceSet) releaseSelectedGraphV6(expected ResourceOwnerState, counts map[ResourceKind]uint64, w *iterator.OrdinalScanWork) (StableResourceTokenReleaseCompletionV6, bool, error) {
+func (set *StableResourceSet) releaseSelectedGraphV6(expected ResourceOwnerState, counts map[ResourceKind]uint64) (StableResourceTokenReleaseCompletionV6, bool, error) {
 	var empty StableResourceTokenReleaseCompletionV6
 	if set == nil {
 		return empty, true, nil
@@ -33,31 +19,18 @@ func (set *StableResourceSet) releaseSelectedGraphV6(expected ResourceOwnerState
 	}
 	root := &a.release
 	if root.running {
-		// Ordinary duplicate release retains its old in-progress result. A
-		// work-bearing continuation can retry after this original actor returns.
-		if w == nil {
-			return empty, false, ErrResourceOwnership
-		}
-		return empty, false, nil
+		// A duplicate release cannot enter the same physical release actor.
+		return empty, false, ErrResourceOwnership
 	}
 	if root.current == nil {
 		if set.Owner() != expected {
 			return empty, false, ErrResourceOwnership
-		}
-		// Native coordinator pin-accounting uses the protected visible-edge
-		// consumption path. Last-Set retirement here cannot hide that full traversal.
-		if w != nil && (counts != nil || len(set.entries) != 0 || len(set.pinHighWater) != 0 ||
-			(set.extras != nil && len(set.extras.logicalMembershipEvidence) != 0)) {
-			return empty, false, retainedalloc.ErrWorkRequired
 		}
 		if a.refs.Load() != 1 {
 			return empty, false, ErrResourceOwnership
 		}
 		if err := a.cleanupResult(); err != nil {
 			return empty, false, err
-		}
-		if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(*set))+2*uint64(unsafe.Sizeof(*a))) {
-			return empty, false, nil
 		}
 		if !set.owner.CompareAndSwap(uint32(expected), uint32(ResourceOwnerReleased)) {
 			return empty, false, ErrResourceOwnership
@@ -79,7 +52,7 @@ func (set *StableResourceSet) releaseSelectedGraphV6(expected ResourceOwnerState
 			set.mu.Lock()
 			root.running = false
 		}()
-		return root.continueWork(w)
+		return root.releaseGraph()
 	}()
 	if err != nil {
 		return empty, false, err
@@ -92,13 +65,13 @@ func (set *StableResourceSet) releaseSelectedGraphV6(expected ResourceOwnerState
 	return StableResourceTokenReleaseCompletionV6{owner: completion.owner, charge: completion.charge}, true, nil
 }
 
-func (root *resourceReleaseFrameV6) stepSet(f *resourceReleaseFrameV6, set *StableResourceSet, w *iterator.OrdinalScanWork) (bool, error) {
+func (root *resourceReleaseFrameV6) stepSet(f *resourceReleaseFrameV6, set *StableResourceSet) (bool, error) {
 	switch f.phase {
 	case 0:
 		if set.extras != nil && f.index < len(set.extras.physical) {
 			d := set.extras.physical[f.index]
 			if d != nil {
-				ready, e := root.releaseDirectory(d, w)
+				ready, e := root.releaseDirectory(d)
 				if !ready || e != nil {
 					return false, e
 				}
@@ -112,7 +85,7 @@ func (root *resourceReleaseFrameV6) stepSet(f *resourceReleaseFrameV6, set *Stab
 		}
 	case 1:
 		if set.extras != nil && set.extras.empty != nil {
-			ready, e := root.releaseDirectory(set.extras.empty, w)
+			ready, e := root.releaseDirectory(set.extras.empty)
 			if !ready || e != nil {
 				return false, e
 			}
@@ -131,16 +104,13 @@ func (root *resourceReleaseFrameV6) stepSet(f *resourceReleaseFrameV6, set *Stab
 	case 3:
 		if set.kindViews != nil {
 			n := set.kindViews
-			if ready, e := root.child(n.allocation, n, w); !ready || e != nil {
+			if ready, e := root.child(n.allocation, n); !ready || e != nil {
 				return false, e
 			}
 			set.kindViews = nil
 		}
 		f.phase = 4
 	default:
-		if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(*set))) {
-			return false, nil
-		}
 		set.entries, set.kindViews, set.extras, set.pinHighWater = nil, nil, nil, nil
 		f.value = nil
 	}

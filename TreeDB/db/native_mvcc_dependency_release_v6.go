@@ -2,7 +2,7 @@ package db
 
 import (
 	"errors"
-	"github.com/snissn/gomap/TreeDB/internal/iterator"
+
 	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
@@ -11,26 +11,17 @@ import (
 // capture retirement. This is a real cleanup capability refusal.
 var ErrNativeMVCCSnapshotWork = errors.New("native MVCC snapshot requires original work-bearing capture/cleanup")
 
-// The original synchronous lease owns this cleanup route. A bounded caller
-// cannot transfer its last edge to it.
-func (lease *primaryDependencyLeaseV5) SupportsBoundedDependencyDirectoryReleaseV6() bool {
-	return false
-}
-
 // The SAME admitted lease disposes its original root and owner edge. The
 // directory clears its provider alias before consuming the containing refund.
-func (lease *primaryDependencyLeaseV5) ReleaseDependencyDirectoryWorkV6(work *iterator.OrdinalScanWork) (consumed, ready bool, completion rootpublication.DependencyDirectoryReleaseCompletionV6, err error) {
-	if work != nil {
-		return false, true, completion, ErrNativeMVCCSnapshotWork
-	}
+func (lease *primaryDependencyLeaseV5) ReleaseDependencyDirectoryV6() (consumed bool, completion rootpublication.DependencyDirectoryReleaseCompletionV6, err error) {
 	lease.mu.Lock()
 	if lease.closed {
 		consumed, err = !lease.failed, lease.cleanupErr
 		lease.mu.Unlock()
-		return consumed, true, completion, err
+		return consumed, completion, err
 	}
 	metadata := lease.owner.arena.MetadataOwner()
-	fail := func(cause error) (bool, bool, rootpublication.DependencyDirectoryReleaseCompletionV6, error) {
+	fail := func(cause error) (bool, rootpublication.DependencyDirectoryReleaseCompletionV6, error) {
 		if cause == nil {
 			cause = rootpublication.ErrResourceOwnership
 		}
@@ -41,7 +32,7 @@ func (lease *primaryDependencyLeaseV5) ReleaseDependencyDirectoryWorkV6(work *it
 		lease.owner.retainFailedDependency(lease, lease.cleanupErr)
 		result := lease.cleanupErr
 		lease.mu.Unlock()
-		return false, true, rootpublication.DependencyDirectoryReleaseCompletionV6{}, result
+		return false, rootpublication.DependencyDirectoryReleaseCompletionV6{}, result
 	}
 	if lease.ref.PageID != 0 {
 		ready, err := lease.owner.arena.Drop(lease.ref, nil)
@@ -69,5 +60,5 @@ func (lease *primaryDependencyLeaseV5) ReleaseDependencyDirectoryWorkV6(work *it
 	lease.metadataCharge = 0
 	lease.mu.Unlock()
 	ownerCompletion.complete()
-	return true, true, completion, err
+	return true, completion, err
 }

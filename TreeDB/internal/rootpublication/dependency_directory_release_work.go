@@ -1,11 +1,8 @@
 package rootpublication
 
 import (
-	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/pager"
-	"sync"
-	"unsafe"
 )
 
 // Completion carries only the exact original admission after the producer
@@ -15,48 +12,40 @@ type DependencyDirectoryReleaseCompletionV6 struct {
 	Charge   uint64
 }
 
-// A typed original producer performs its actual physical phases. ready=false
-// is resumable admission refusal; ready=true, consumed=false is sticky debt.
+// A typed original producer reports its own consumed edge independently of
+// earlier sibling errors. Failed physical ownership remains with that producer.
 type DependencyDirectoryReleaseProviderV6 interface {
-	ReleaseDependencyDirectoryWorkV6(*iterator.OrdinalScanWork) (consumed, ready bool, completion DependencyDirectoryReleaseCompletionV6, err error)
+	ReleaseDependencyDirectoryV6() (consumed bool, completion DependencyDirectoryReleaseCompletionV6, err error)
 }
 
-// The original parent admits this external receipt at its own birth. It never
-// allocates a callback, substitutes a root owner or builds a disposal list.
-type DependencyDirectoryReleaseWork struct {
-	mu                              sync.Mutex
-	directory                       *DependencyDirectoryV2
-	completion                      DependencyDirectoryReleaseCompletionV6
-	directoryOwner                  *retainedalloc.Owner
-	directoryCharge                 uint64
-	producerRefund, directoryRefund retainedalloc.RemovalWork
-	phase                           uint8
-	bound, consumed                 bool
-	readerDetached                  bool
-	err                             error
+// This stack receipt only carries original accounting across the return from
+// the disposing method. It neither owns physical storage nor schedules cleanup.
+type dependencyDirectoryRelease struct {
+	directory       *DependencyDirectoryV2
+	completion      DependencyDirectoryReleaseCompletionV6
+	directoryOwner  *retainedalloc.Owner
+	directoryCharge uint64
+	phase           uint8
+	bound, consumed bool
+	err             error
 }
 
-func directoryReleaseReserve(w *iterator.OrdinalScanWork, records, bytes uint64) bool {
-	return w == nil || w.Reserve(records, bytes)
-}
-
-func NewOwnedWorkLocalPrimaryDependencyDirectoryV6(p *pager.Pager, ref DependencyDirectoryRefV2, extent uint64, metadata *retainedalloc.Owner, release DependencyDirectoryReleaseProviderV6) (*DependencyDirectoryV2, error) {
+func NewOwnedTypedLocalPrimaryDependencyDirectoryV6(p *pager.Pager, ref DependencyDirectoryRefV2, extent uint64, metadata *retainedalloc.Owner, release DependencyDirectoryReleaseProviderV6) (*DependencyDirectoryV2, error) {
 	if release == nil {
 		return nil, ErrResourceOwnership
 	}
-	// The constructor's original canonical geometry and allocation admission
-	// remain in one maintained implementation. This static callback never runs.
+	// Retain the original canonical geometry and allocation admission.
 	directory, err := NewOwnedLocalPrimaryDependencyDirectoryV5(p, ref, extent, metadata, unusedTypedDirectoryRelease)
 	if err != nil {
 		return nil, err
 	}
 	directory.ownedRelease = nil
-	directory.ownedReleaseWork = release
+	directory.ownedReleaseProvider = release
 	return directory, nil
 }
 
-// DATA and PRIMARY use the SAME canonical directory constructor and release receipt.
-func NewOwnedWorkDependencyDirectoryV6(p *pager.Pager, ref DependencyDirectoryRefV2, extent uint64, metadata *retainedalloc.Owner, provider DependencyDirectoryReleaseProviderV6) (*DependencyDirectoryV2, error) {
+// DATA and PRIMARY use the same canonical constructor and independent receipt.
+func NewOwnedTypedDependencyDirectoryV6(p *pager.Pager, ref DependencyDirectoryRefV2, extent uint64, metadata *retainedalloc.Owner, provider DependencyDirectoryReleaseProviderV6) (*DependencyDirectoryV2, error) {
 	if provider == nil {
 		return nil, ErrResourceOwnership
 	}
@@ -65,39 +54,16 @@ func NewOwnedWorkDependencyDirectoryV6(p *pager.Pager, ref DependencyDirectoryRe
 
 func unusedTypedDirectoryRelease() (bool, error) { return false, ErrResourceOwnership }
 
-func (s *DependencyDirectoryReleaseWork) Bind(directory *DependencyDirectoryV2, w *iterator.OrdinalScanWork) (bool, error) {
-	if w == nil {
-		return false, retainedalloc.ErrWorkRequired
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.bind(directory, w)
-}
-func (s *DependencyDirectoryReleaseWork) bind(directory *DependencyDirectoryV2, w *iterator.OrdinalScanWork) (bool, error) {
+func (s *dependencyDirectoryRelease) bind(directory *DependencyDirectoryV2) (bool, error) {
 	if s.bound {
 		return false, ErrResourceOwnership
 	}
 	if directory == nil {
-		s.bound = true
-		s.consumed = true
-		s.phase = 4
+		s.bound, s.consumed, s.phase = true, true, 3
 		return true, nil
 	}
-	if w != nil {
-		if eligibility, ok := directory.ownedReleaseWork.(interface{ SupportsBoundedDependencyDirectoryReleaseV6() bool }); ok && !eligibility.SupportsBoundedDependencyDirectoryReleaseV6() {
-			return false, retainedalloc.ErrWorkRequired
-		}
-	}
-	if w != nil && directory.ownedReleaseWork == nil {
-		return false, retainedalloc.ErrWorkRequired
-	}
-	if !directoryReleaseReserve(w, 1, 2*uint64(unsafe.Sizeof(*directory))+2*uint64(unsafe.Sizeof(*s))) {
-		return false, nil
-	}
 	if directory.cleanupDone.Load() {
-		s.bound = true
-		s.consumed = directory.cleanupConsumed
-		s.phase = 4
+		s.bound, s.consumed, s.phase = true, directory.cleanupConsumed, 3
 		if directory.cleanupFailure.causes[0] != nil {
 			if s.consumed {
 				s.err = directory.cleanupFailure.causes[0]
@@ -119,68 +85,48 @@ func (s *DependencyDirectoryReleaseWork) bind(directory *DependencyDirectoryV2, 
 		return false, retainedalloc.ErrWorkRequired
 	}
 	if !last {
-		s.phase = 4
-		s.consumed = true
+		s.phase, s.consumed = 3, true
 		return true, nil
 	}
-	directory.releaseNative = w != nil
 	s.directory = directory
 	return true, nil
 }
-func (s *DependencyDirectoryReleaseWork) ContinueWork(w *iterator.OrdinalScanWork) (consumed, ready bool, err error) {
-	if w == nil {
-		return false, false, retainedalloc.ErrWorkRequired
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.continueWork(w)
-}
-func (s *DependencyDirectoryReleaseWork) fail(directory *DependencyDirectoryV2, err error) (bool, bool, error) {
+
+func (s *dependencyDirectoryRelease) fail(directory *DependencyDirectoryV2, err error) (bool, bool, error) {
 	if err == nil {
 		err = ErrResourceOwnership
 	}
-	directory.cleanupFailure.original = directory
-	directory.cleanupFailure.causes[0] = err
+	directory.cleanupFailure.original, directory.cleanupFailure.causes[0] = directory, err
 	directory.cleanupConsumed = false
 	if directory.metadata != nil {
 		directory.metadata.CleanupFailed()
 	}
 	directory.cleanupDone.Store(true)
-	s.err = &directory.cleanupFailure
-	s.phase = 4
+	s.err, s.phase = &directory.cleanupFailure, 3
 	return false, true, s.err
 }
-func (s *DependencyDirectoryReleaseWork) continueWork(w *iterator.OrdinalScanWork) (bool, bool, error) {
+
+func (s *dependencyDirectoryRelease) release() (bool, bool, error) {
 	if !s.bound {
 		return false, false, ErrResourceOwnership
 	}
-	if s.phase == 4 {
+	if s.phase == 3 {
 		return s.consumed, true, s.err
 	}
 	directory := s.directory
-	if s.phase < 3 && directory == nil {
+	if s.phase < 2 && directory == nil {
 		return false, false, ErrResourceOwnership
 	}
 	if s.phase == 0 {
-		if !directoryReleaseReserve(w, 1, 2*uint64(unsafe.Sizeof(*directory))) {
-			return false, false, nil
+		if directory.tree != nil {
+			// End the last physical reader alias before producer physical close.
+			directory.tree.Reset(nil, nil, 0)
 		}
-		if !s.readerDetached {
-			if directory.tree != nil {
-				if !directoryReleaseReserve(w, 1, 2*uint64(unsafe.Sizeof(*directory.tree))) {
-					return false, false, nil
-				}
-				// The last capability edge is already transferred. End the original
-				// physical reader alias before its producer can complete physical close.
-				directory.tree.Reset(nil, nil, 0)
-			}
-			s.readerDetached = true
-		}
-		consumed, ready := true, true
+		consumed := true
 		var err error
-		if directory.ownedReleaseWork != nil {
-			provider := directory.ownedReleaseWork
-			consumed, ready, s.completion, err = provider.ReleaseDependencyDirectoryWorkV6(w)
+		if directory.ownedReleaseProvider != nil {
+			provider := directory.ownedReleaseProvider
+			consumed, s.completion, err = provider.ReleaseDependencyDirectoryV6()
 			provider = nil
 		} else if directory.metadata != nil {
 			callback := directory.ownedRelease
@@ -191,83 +137,36 @@ func (s *DependencyDirectoryReleaseWork) continueWork(w *iterator.OrdinalScanWor
 			callback()
 			callback = nil
 		}
-		if !ready && err == nil {
-			return false, false, nil
-		}
 		if !consumed {
-			return s.fail(directory, err)
-		}
-		if !ready {
 			return s.fail(directory, err)
 		}
 		if s.completion.Charge != 0 && (s.completion.Metadata == nil || s.completion.Metadata != directory.metadata) {
 			return s.fail(directory, ErrResourceOwnership)
 		}
 		s.err = err
+		s.directoryOwner, s.directoryCharge = directory.metadata, directory.metadataCharge
 		s.phase = 1
 	}
 	if s.phase == 1 {
-		if w != nil {
-			if s.completion.Charge != 0 {
-				ready, err := s.producerRefund.BindPendingWork(s.completion.Metadata, s.completion.Charge, w)
-				if !ready || err != nil {
-					return false, false, err
-				}
-			}
-			if directory.metadataCharge != 0 {
-				ready, err := s.directoryRefund.BindPendingWork(directory.metadata, directory.metadataCharge, w)
-				if !ready || err != nil {
-					return false, false, err
-				}
-			}
-		}
-		s.directoryOwner, s.directoryCharge = directory.metadata, directory.metadataCharge
-		s.phase = 2
-	}
-	if s.phase == 2 {
-		if !directoryReleaseReserve(w, 1, 2*uint64(unsafe.Sizeof(*directory))+2*uint64(unsafe.Sizeof(*s))) {
-			return false, false, nil
-		}
-		directory.tree = nil
-		directory.release = nil
-		directory.ownedRelease = nil
-		directory.ownedReleaseWork = nil
-		directory.metadata = nil
-		directory.metadataCharge = 0
+		directory.tree, directory.release, directory.ownedRelease, directory.ownedReleaseProvider = nil, nil, nil, nil
+		directory.metadata, directory.metadataCharge = nil, 0
 		directory.cleanupConsumed = true
 		directory.cleanupFailure.causes[0] = s.err
 		directory.cleanupDone.Store(true)
-		s.directory = nil
-		directory = nil
-		s.phase = 3
+		s.directory, directory = nil, nil
+		s.phase = 2
 		// Return through the actual disposing method before containing refunds.
 		return false, false, nil
 	}
 	directory = nil
 	if s.completion.Charge != 0 {
-		if w == nil {
-			s.completion.Metadata.RemovePending(s.completion.Charge)
-		} else {
-			ready, err := s.producerRefund.ContinueWork(w)
-			if !ready || err != nil {
-				return false, false, err
-			}
-		}
+		s.completion.Metadata.RemovePending(s.completion.Charge)
 		s.completion = DependencyDirectoryReleaseCompletionV6{}
 	}
 	if s.directoryCharge != 0 {
-		if w == nil {
-			s.directoryOwner.RemovePending(s.directoryCharge)
-		} else {
-			ready, err := s.directoryRefund.ContinueWork(w)
-			if !ready || err != nil {
-				return false, false, err
-			}
-		}
-		s.directoryOwner = nil
-		s.directoryCharge = 0
+		s.directoryOwner.RemovePending(s.directoryCharge)
+		s.directoryOwner, s.directoryCharge = nil, 0
 	}
-	s.phase = 4
-	s.consumed = true
+	s.phase, s.consumed = 3, true
 	return true, true, s.err
 }

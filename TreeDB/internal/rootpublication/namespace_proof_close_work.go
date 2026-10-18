@@ -187,26 +187,6 @@ func (proof *StableNamespaceCreationProof) addCloseErrorLocked(err error) {
 	}
 }
 
-// SupportsNativeReleaseV6 checks the actual owned producer route before its
-// parent's last edge is accepted. Foreign/manual proofs retain ordinary use.
-func (proof *StableNamespaceCreationProof) SupportsNativeReleaseV6(w *iterator.OrdinalScanWork) (bool, error) {
-	if proof == nil {
-		return true, nil
-	}
-	if w == nil {
-		return false, retainedalloc.ErrWorkRequired
-	}
-	if !namespaceProofReleaseReserve(w, 1, 2*uint64(unsafe.Sizeof(*proof))+64) {
-		return false, nil
-	}
-	proof.mu.Lock()
-	defer proof.mu.Unlock()
-	if proof.metadata == nil || proof.closeWork.native || proof.closeWork.done || proof.released.Load() {
-		return false, ErrResourceOwnership
-	}
-	return true, nil
-}
-
 // The ordinary nil driver executes this same close sequence synchronously.
 func namespaceProofReleaseReserve(w *iterator.OrdinalScanWork, records, bytes uint64) bool {
 	return w == nil || w.Reserve(records, bytes)

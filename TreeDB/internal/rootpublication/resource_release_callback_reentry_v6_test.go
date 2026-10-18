@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 )
 
@@ -40,10 +39,7 @@ func TestSelectedResourceReleaseCallbackCanInspectOriginalSetV6(t *testing.T) {
 						inspected <- errors.New("concurrent duplicate release lost its in-progress result")
 						return
 					}
-					if _, ready, err := selected.ReleaseFromWithWorkV6(ResourceOwnerBuilder, &iterator.OrdinalScanWork{}); ready || err != nil {
-						inspected <- errors.New("concurrent continuation did not retain the original release actor")
-						return
-					}
+
 					inspected <- nil
 				}()
 				select {

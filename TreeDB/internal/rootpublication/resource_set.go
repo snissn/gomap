@@ -4315,7 +4315,7 @@ func (set *StableResourceSet) releaseFrom(owner ResourceOwnerState) error {
 // contribution ends at this SAME Set edge consumption, not before root disposal.
 func (set *StableResourceSet) releaseFromWithActivePins(owner ResourceOwnerState, counts map[ResourceKind]uint64) (err error) {
 	if set != nil && set.selected && set.metadata != nil {
-		completion, _, err := set.releaseSelectedGraphV6(owner, counts, nil)
+		completion, _, err := set.releaseSelectedGraphV6(owner, counts)
 		if err != nil {
 			// Public ordinary release preserves the original containing receipt.
 			// Recovery must distinguish physical cleanup refusal from corrupt
