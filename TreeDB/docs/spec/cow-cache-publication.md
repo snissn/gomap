@@ -357,6 +357,23 @@ basis. One build group publishes that boundary. An uncovered legacy producer
 blocks the raw path before append; a partial native candidate cannot advance
 coverage.
 
+
+COW checkpoint and Close take canonical coverage only from the retained cut's
+`frozenCommandLSN` and its exact disk snapshot basis. The accepted queue must
+prove every assignment in that interval installed before the same BuildGroup
+publishes it. Public raw pending counters are notifications, not coverage; native
+and raw ordering does not change that rule, and no separate root-neutral batch
+completes COW coverage. The flush returns its actual coverage/completion status
+for cleanup, including native-only prefixes with zero raw entries.
+
+At the exclusive writer cutover, the COW cache rotates the active command WAL
+independently of public raw notifications. After value-log lane flush, it preserves
+the WAL flush/readiness boundary before building the exact captured prefix. Later
+suffix bytes may become durable without entering that root. Rotation or root
+publication never fabricates W; only the original canonical WAL owner records
+its completed stable prefix. Non-COW caches retain their public producer coverage
+provider and existing group-commit behavior.
+
 The fixed backend-to-cache native bridge uses the existing owner and command-WAL
 handler registration direction. Identity-free capability, dependency, footprint
 and admission checks run before canonical assignment. An internal admitted native
