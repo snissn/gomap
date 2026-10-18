@@ -355,6 +355,16 @@ func (b *Batch) writeCOWPublication(syncWrite bool, unlock func()) error {
 	var err error
 	if b.commandWALAppend != nil {
 		err = b.commandWALAppend()
+	} else if b.db.cow.txnOwner == nil {
+		// Standalone caches use ordinary admission; nil is never private authority.
+		finalizer, ok := b.db.backend.(interface {
+			FinalizeRawKVEntryScanForCachedPublication(func() error, backenddb.RawKVCommandWALFinalize, func(func(batch.Entry) error) error, int) error
+		})
+		if !ok {
+			err = fmt.Errorf("COW cache requires canonical backend finalization")
+		} else {
+			err = finalizer.FinalizeRawKVEntryScanForCachedPublication(b.PrepareExternalCommandWALPublication, b.finalizeCOWPublication, b.Replay, len(b.entries))
+		}
 	} else {
 		finalizer, ok := b.db.backend.(interface {
 			FinalizePrivateCOWPublication(*transactionowner.Owner, func() error, backenddb.RawKVCommandWALFinalize, func(func(batch.Entry) error) error, int) error
