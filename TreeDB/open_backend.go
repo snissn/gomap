@@ -18,6 +18,9 @@ func OpenBackend(opts Options) (*db.DB, func() error, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	if err := validateDATAOpenLayout(layout, opts.IndexPrimaryDirectory); err != nil {
+		return nil, nil, err
+	}
 	opts.DisableSideStores = layout.disableSideStores
 
 	// Apply persisted storage/runtime knobs so direct maintenance opens agree

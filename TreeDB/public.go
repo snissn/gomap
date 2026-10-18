@@ -833,6 +833,9 @@ func openResolvedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := validateDATAOpenLayout(layout, opts.IndexPrimaryDirectory); err != nil {
+		return nil, err
+	}
 	rootDir := layout.rootDir
 	maindbDir := layout.mainDir
 	dictdbDir := layout.dictdbDir
@@ -1103,13 +1106,8 @@ func openResolvedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
 		}
 		return nil, fmt.Errorf("treedb: snapshot side store %q has no owner", name)
 	}
-	// Foreground COW writes publish the prepared cache cut under command-WAL
-	// authority. Its physical checkpoint uses the existing PRIMARY constructor
-	// and promotion. Select only the main backend after side-store options have
-	// been copied; those independent stores retain their existing format policy.
-	if opts.CommandWAL && opts.MemtableMode == "cow_btree" {
-		opts.IndexPrimaryDirectory = true
-	}
+	// COW foreground authority and physical DATA sealing remain distinct. The
+	// existing DATA publisher is shared by cached and ordinary backend callers.
 	opts.Dir = maindbDir
 	backend, err := db.Open(opts)
 	if err != nil {
@@ -1144,7 +1142,7 @@ func openResolvedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
 	if backendOnly && cacheMode == "cow_btree" {
 		// Backend-root producers publish directly. Reuse the ordinary cache's
 		// leaf/value-log services without binding a second logical authority.
-		// Keep opts intact: durable COW storage policy above still selects PRIMARY.
+		// Keep the requested physical and durability options intact for DATA.
 		cacheMode = "btree"
 	}
 	txnOwner := transactionowner.New()

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/snissn/gomap/TreeDB/db"
 )
 
 type openDirLayout struct {
@@ -13,6 +15,21 @@ type openDirLayout struct {
 	dictdbDir         string
 	templatedbDir     string
 	disableSideStores bool
+}
+
+// Inspect every resolved store before any factory opens a writable side store.
+func validateDATAOpenLayout(layout openDirLayout, primaryRequested bool) error {
+	if err := db.ValidateDATAIndexOpen(layout.mainDir, primaryRequested); err != nil {
+		return err
+	}
+	if !layout.disableSideStores {
+		for _, dir := range []string{layout.dictdbDir, layout.templatedbDir} {
+			if err := db.ValidateDATAIndexOpen(dir, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func resolveOpenDirLayout(dir string, disableSideStores bool) (openDirLayout, error) {

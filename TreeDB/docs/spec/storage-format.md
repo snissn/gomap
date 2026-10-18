@@ -12,6 +12,23 @@ cleaning, compacting, or rewriting the directory. Typed-column image,
 descriptor, manifest, and schema evolution follows the fail-closed policy in
 `typed-column-schema-evolution.md`.
 
+## DATA root selection and retired PRIMARY directories
+
+New opens select the existing DATA B-tree and dual durable-meta slots in
+`index.db`, including `no_wal_fast` and `cow_btree`. The physical seal uses the
+existing `DurableRootRecordV1`, dependency closure and freelist generation. COW
+cache visibility is separate from that durable authority. Pointer-backed values
+remain persistent value-log dependencies.
+
+The pre-alpha `index.db.primary` representation is retired. Public and backend
+read-write/read-only opens refuse it with `ErrLegacyFormatRebuildRequired` and
+rebuild guidance before recovery or any factory opens a side store. The full
+resolved main/dictionary/template layout is checked before the first such open.
+A staged PRIMARY file or committed joint DATA/PRIMARY swap also refuses.
+`IndexPrimaryDirectory=true` refuses rather than selecting a fallback. Rebuild
+an old PRIMARY directory; there is no in-place converter. DATA slot selection
+still validates both complete roots and each required immediate parent.
+
 ## All-level vector-partition router identity
 
 The global all-level spherical router uses model format
@@ -844,19 +861,13 @@ volatile ordinary-ACK and durable boundary contracts.
 This is a pre-alpha format cutover. A non-empty legacy meta body fails open with
 `ErrLegacyFormatRebuildRequired`; recovery does not reinterpret or migrate it.
 
-### 3.0 Selected PRIMARY capsules V6 (construction)
+### 3.0 Retired PRIMARY capsules V6 (diagnostic reference)
 
-Fresh `no_wal_fast` backend stores, and fresh stores explicitly selecting
-`IndexPrimaryDirectory`, use `index.db.primary`. Public command-WAL stores using
-`MemtableMode="cow_btree"` also select PRIMARY for the main backend after dictionary
-and template options are copied; automatic selection does not change side-store
-format policy. Its checked arena header is
-`TDPRCAPB`, version 6. Existing arena identity and version are checked on open;
-opening never relabels a V1 bank arena as a capsule arena. Other fresh profiles
-and modes retain the DATA-selector format below. Selecting PRIMARY on a non-empty
-DATA-selector store returns `ErrLegacyFormatRebuildRequired`; rebuild the pre-alpha
-store rather than interpreting its existing pages as PRIMARY capsules. The selected format is pre-alpha and
-its native bounded-publication qualification remains incomplete.
+This is the former `index.db.primary` format used by pinned diagnostic fixtures.
+Current public and backend opens refuse it and select DATA for fresh directories;
+`IndexPrimaryDirectory` no longer activates this format. The old checked arena
+header is `TDPRCAPB`, version 6. The layout below is retained until the last
+legacy format consumers are removed, not as a supported opening policy.
 
 The PRIMARY file reserves local pages 0 through 7. Exactly two eligible fixed
 capsules occupy local pages `[2,5)` and `[5,8)`; allocator banks begin at 8.

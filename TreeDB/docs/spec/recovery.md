@@ -2,6 +2,18 @@
 
 This document defines startup recovery behavior.
 
+Public and backend startup select the existing DATA recovery implementation.
+Persisted PRIMARY arenas, staged PRIMARY files and joint DATA/PRIMARY swap
+records require a pre-alpha rebuild. Public Open, OpenBackend and the cached-leaf
+backend factory inspect the complete resolved layout before opening any side
+store; backend swap/replay recovery cannot consume a refused layout. Supported public
+read-only opens use the uncached `btree` role on the same persisted DATA; public
+`ReadOnly+cow_btree` remains unsupported. Successful DATA recovery independently
+validates both slots, their exact dependencies and required parent records.
+Command-WAL startup initializes the ordinary DATA publication coordinator and
+exact recovered snapshot before replay, running synchronously until replay and
+post-replay readiness complete. Native multi-root replay uses that same owner.
+
 Typed `column_graph` public serving admission is process-local: after ordinary
 replay/open, explicitly call `EnsureColumnGraphServing` with positive limits.
 Queries do not bootstrap/reconcile manifests. A failed ensure stays fail closed
@@ -155,7 +167,12 @@ recovery-required error unless the caller explicitly requests a stale read-only
 mode. Silent stale read-only open is incompatible with durable-at-ack command
 semantics.
 
-## Selected PRIMARY capsule recovery
+## Retired PRIMARY capsule recovery reference
+
+The following describes the former implementation for pinned fixture analysis.
+Current Open refuses this representation before recovery; it selects DATA as
+described above. These legacy routines remain only until their final consumers
+are removed.
 
 For a checked V6 `index.db.primary` arena, Open decodes exactly the two fixed
 complete three-page capsules. It independently validates each current root
@@ -829,7 +846,10 @@ interpret leftover private `manifest.gc.*.tmp` evidence as an unreferenced
 revision to delete. Further revision maintenance refuses that evidence pending
 explicit recovery investigation.
 
-## Joint DATA/PRIMARY capsule vacuum recovery
+## Retired joint DATA/PRIMARY capsule vacuum reference
+
+This former protocol is retained for diagnostic reference. Current factories
+refuse its committed marker before opening or repairing a store.
 
 V6 vacuum fences the complete private pair, current/parent dependencies and
 staging names before a checksummed `TDJCOM06` COMMIT in `index.db.new.ready`.
