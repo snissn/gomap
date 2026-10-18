@@ -7,6 +7,32 @@ embed or return a broad legacy manager or collection. Legacy construction must
 hold the same backend's producer admission; unsupported live producers remain
 fenced. Repeated activation uses the same live owner.
 
+The selected public entry is an ordinary `treedb.Open` with
+`Options.MemtableMode = "cow_btree"`, followed by
+`database.NativeSemanticBackend()` and
+`collections.NewNativeJSONManager(handle)`. The backend capability belongs to
+that original public database. Keep the database open while managers and captured
+reads use it; close captured reads first, then report the result of
+`database.Close()`. Do not close the capability separately. Ordinary raw methods
+on the public database continue through the same owner after native activation.
+Backend-only `OpenBackendWithCachedLeafLog*` constructors serve the legacy
+backend-authoritative route and do not provide this native capability.
+
+`TestNativeJSONExternalPublicOwnerLifecycle` is the external-package
+entry proof for durable, relaxed and NoWAL profiles. It uses only exported APIs:
+native Create/Insert, a later ordinary raw Set, identical State/Snapshot/sequence
+from the two public capture routes, held native and raw reads across a checkpoint,
+Close and reopen, and the first recovered native mutation. WAL profiles require a
+nonzero recovered canonical LSN. Its original identity-pin registries must drain
+without cleanup errors. The first run after the constructor-role checkpoint is
+RED for durable and relaxed profiles: native Create/Insert, raw Set and exact
+shared-capture checks succeed, then the mixed public checkpoint reports
+`pending public command WAL starts at 3 after applied 0`. Close preserves that
+failure. NoWAL passes the full external lifecycle. No repair or waived assertion
+is included. The internal tests below still pass and separately provide original
+cache-accounting final-zero, true suffix overlap and unapplied-WAL replay evidence;
+they do not substitute for the failing external WAL route.
+
 `TestNativeJSONPublicCreateInsertCapturedViewCheckpointReplay` exercises actual
 public native Create and InsertBatch, exact Get results, a held old read, and a
 newer native insertion after the checkpoint cut was frozen. The existing public
@@ -73,6 +99,11 @@ Known limitations and RED controls remain explicit:
   admission proofs, broader race/recovery suites and performance gates remain
   required. Hook-free replay manager lifetimes outside the selected handlers
   remain part of that work.
+- The lower bridge currently requires the prepared Basis to equal the current
+  semantic State before dependency validation. An unrelated native install or
+  equivalent physical handoff can therefore reject an otherwise disjoint plan.
+  Required reprepare/rebase behavior remains open; the restricted public fixtures
+  do not establish disjoint concurrent transaction support.
 
 Empty physical frontiers use fresh immutable successor headers with build=nil;
 the original captured build stays single-use. Both zero-count preparations,
