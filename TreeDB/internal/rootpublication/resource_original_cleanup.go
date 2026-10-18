@@ -2,7 +2,6 @@ package rootpublication
 
 import (
 	"errors"
-	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"os"
 	"strings"
@@ -256,50 +255,4 @@ func newOwnedOriginalObservedStableResourceToken(spec StableResourceSpec) (*Stab
 	}
 	token.observationCleanup = observation
 	return token, nil
-}
-
-// CompleteWithWorkV6 consumes this exact successful original action. A closing
-// registry may need variable-size table disposal, which this route explicitly
-// refuses before consuming custody. Ordinary shutdown retains that authority.
-// The caller detaches its custody alias before refunding the returned value.
-func (custody *OriginalCleanupCustody) CompleteWithWorkV6(w *iterator.OrdinalScanWork) (StableResourceTokenReleaseCompletionV6, bool, error) {
-	var empty StableResourceTokenReleaseCompletionV6
-	if custody == nil {
-		return empty, true, nil
-	}
-	if w == nil {
-		return empty, false, retainedalloc.ErrWorkRequired
-	}
-	backing := (*resourcePinnedBacking)(custody)
-	registry := backing.registry
-	if registry == nil {
-		return empty, false, ErrResourceOwnership
-	}
-	registry.mu.Lock()
-	defer registry.mu.Unlock()
-	if backing.custodyCompleted.Load() {
-		if backing.failure != nil {
-			return empty, false, backing.failure
-		}
-		return empty, true, nil
-	}
-	if registry.closing {
-		return empty, false, retainedalloc.ErrWorkRequired
-	}
-	if backing.refs.Load() != 1 || backing.file != nil || backing.sourceRoot != nil || registry.originalCleanupEdges == 0 {
-		return empty, false, ErrResourceOwnership
-	}
-	if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*backing))+128) {
-		return empty, false, nil
-	}
-	if !backing.custodyCompleted.CompareAndSwap(false, true) {
-		return empty, false, ErrResourceOwnership
-	}
-	backing.refs.Store(0)
-	completion := StableResourceTokenReleaseCompletionV6{owner: backing.owner, charge: backing.charge}
-	backing.owner, backing.charge = nil, 0
-	registry.originalCleanupEdges--
-	// !closing was established under this same lock: no registry disposal is
-	// deferred or silently run as part of this fixed original-edge consumption.
-	return completion, true, nil
 }

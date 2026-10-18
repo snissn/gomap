@@ -1,14 +1,8 @@
 package rootpublication
 
-import (
-	"github.com/snissn/gomap/TreeDB/internal/iterator"
-	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
-	"unsafe"
-)
-
 // These claims consume existing physical edges. Their continuation is embedded
 // in the exact original last-owner object, never a replacement release owner.
-func (root *resourceReleaseFrameV6) rope(n *stableResourceEntryNode, w *iterator.OrdinalScanWork) (bool, error) {
+func (root *resourceReleaseFrameV6) rope(n *stableResourceEntryNode) (bool, error) {
 	if n == nil {
 		return true, nil
 	}
@@ -19,13 +13,7 @@ func (root *resourceReleaseFrameV6) rope(n *stableResourceEntryNode, w *iterator
 		return true, nil
 	}
 	if n.metadata == nil {
-		if w != nil {
-			return false, retainedalloc.ErrWorkRequired
-		}
 		return true, n.release()
-	}
-	if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(*n))+2*uint64(unsafe.Sizeof(*n.metadata))) {
-		return false, nil
 	}
 	for {
 		refs := n.refs.Load()
@@ -33,9 +21,6 @@ func (root *resourceReleaseFrameV6) rope(n *stableResourceEntryNode, w *iterator
 			return false, ErrResourceOwnership
 		}
 		if !n.refs.CompareAndSwap(refs, refs-1) {
-			if !resourceGraphReserveV6(w, 1, 16) {
-				return false, nil
-			}
 			continue
 		}
 		if refs != 1 {
@@ -48,19 +33,14 @@ func (root *resourceReleaseFrameV6) rope(n *stableResourceEntryNode, w *iterator
 	}
 }
 
-func (root *resourceReleaseFrameV6) backing(b *resourcePinnedBacking, w *iterator.OrdinalScanWork) (bool, error) {
+func (root *resourceReleaseFrameV6) backing(b *resourcePinnedBacking) (bool, error) {
 	if b == nil {
 		return true, nil
 	}
 	if b.failure != nil {
 		return false, b.failure
 	}
-	if w != nil && b.owner == nil {
-		return false, retainedalloc.ErrWorkRequired
-	}
-	if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(*b))) {
-		return false, nil
-	}
+
 	refs := b.refs.Add(-1)
 	if refs < 0 {
 		panic("unbalanced resource pinned backing")
@@ -74,29 +54,14 @@ func (root *resourceReleaseFrameV6) backing(b *resourcePinnedBacking, w *iterato
 	return true, nil
 }
 
-func (root *resourceReleaseFrameV6) token(t *StableResourceToken, expected ResourceOwnerState, w *iterator.OrdinalScanWork) (bool, error) {
+func (root *resourceReleaseFrameV6) token(t *StableResourceToken, expected ResourceOwnerState) (bool, error) {
 	if t == nil {
 		return true, nil
 	}
 	if t.cleanupDone.Load() {
 		return true, t.releaseResult()
 	}
-	if w != nil {
-		if t.metadata == nil || t.physicalBacking == nil || t.onRelease != nil || t.observationCleanup != nil || t.releaseObservation != nil {
-			return false, retainedalloc.ErrWorkRequired
-		}
-		if ns := t.namespace; ns != nil && t.importedSource == nil {
-			ns.mu.Lock()
-			supported := ns.metadata != nil && ns.batch == nil && ns.originalCleanup == nil && !ns.released.Load()
-			ns.mu.Unlock()
-			if !supported {
-				return false, retainedalloc.ErrWorkRequired
-			}
-		}
-	}
-	if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(*t))) {
-		return false, nil
-	}
+
 	if !t.owner.CompareAndSwap(uint32(expected), uint32(ResourceOwnerReleased)) {
 		return false, t.releaseResult()
 	}
@@ -112,17 +77,14 @@ func (root *resourceReleaseFrameV6) token(t *StableResourceToken, expected Resou
 	return true, nil
 }
 
-func (root *resourceReleaseFrameV6) stepToken(f *resourceReleaseFrameV6, t *StableResourceToken, w *iterator.OrdinalScanWork) (bool, error) {
+func (root *resourceReleaseFrameV6) stepToken(f *resourceReleaseFrameV6, t *StableResourceToken) (bool, error) {
 	switch f.phase {
 	case 0:
 		if t.physicalBacking != nil {
-			if ready, e := root.backing(t.physicalBacking, w); !ready || e != nil {
+			if ready, e := root.backing(t.physicalBacking); !ready || e != nil {
 				return false, e
 			}
 		} else {
-			if w != nil {
-				return false, retainedalloc.ErrWorkRequired
-			}
 			if e := t.releasePinnedReference(); e != nil {
 				return false, e
 			}
@@ -131,26 +93,19 @@ func (root *resourceReleaseFrameV6) stepToken(f *resourceReleaseFrameV6, t *Stab
 		f.phase = 1
 	case 1:
 		if t.namespace != nil && t.importedSource == nil {
-			ready, e := root.tokenNamespace(f, t, w)
+			ready, e := root.tokenNamespace(t)
 			if !ready || e != nil {
 				return false, e
 			}
 		}
 		f.phase = 2
 	case 2:
-		if w == nil {
-			t.identityPin.Release()
-		} else {
-			ready, e := t.identityPin.ReleaseWithWorkV6(w)
-			if !ready || e != nil {
-				return false, e
-			}
-		}
+		t.identityPin.Release()
 		t.identityPin = nil
 		f.phase = 3
 	case 3:
 		if t.directory != nil {
-			ready, e := root.releaseDirectory(t.directory, w)
+			ready, e := root.releaseDirectory(t.directory)
 			if !ready || e != nil {
 				return false, e
 			}
@@ -158,9 +113,6 @@ func (root *resourceReleaseFrameV6) stepToken(f *resourceReleaseFrameV6, t *Stab
 		}
 		f.phase = 4
 	case 4:
-		if w != nil && (t.onRelease != nil || t.observationCleanup != nil || t.releaseObservation != nil) {
-			return false, retainedalloc.ErrWorkRequired
-		}
 		if t.onRelease != nil {
 			t.onRelease()
 			t.onRelease = nil
@@ -180,7 +132,7 @@ func (root *resourceReleaseFrameV6) stepToken(f *resourceReleaseFrameV6, t *Stab
 		t.namespace = nil
 		f.phase = 5
 	case 5:
-		if ready, e := root.tokenMetadata(t, w); !ready || e != nil {
+		if ready, e := root.tokenMetadata(t); !ready || e != nil {
 			return false, e
 		}
 		f.phase = 6
@@ -191,81 +143,8 @@ func (root *resourceReleaseFrameV6) stepToken(f *resourceReleaseFrameV6, t *Stab
 	return true, nil
 }
 
-func (root *resourceReleaseFrameV6) tokenNamespace(f *resourceReleaseFrameV6, t *StableResourceToken, w *iterator.OrdinalScanWork) (bool, error) {
-	ns := t.namespace
-	if w == nil {
-		return true, ns.release()
-	}
-	ns.mu.Lock()
-	defer ns.mu.Unlock()
-	fail := func(e error) (bool, error) {
-		ns.cleanupFailure.add(e)
-		ns.cleanupErr = &ns.cleanupFailure
-		if ns.metadata != nil {
-			ns.metadata.CleanupFailed()
-		}
-		if ns.cleanupRegistry != nil {
-			ns.cleanupRegistry.retainFailedNamespace(ns)
-		}
-		return false, e
-	}
-	s := &t.releaseWork
-	if s.namespacePhase == 0 {
-		if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*ns))) {
-			return false, nil
-		}
-		if ns.refs.Load() <= 0 {
-			return fail(ErrResourceOwnership)
-		}
-		if ns.refs.Add(-1) > 0 {
-			s.namespacePhase = 3
-			return true, nil
-		}
-		ns.released.Store(true)
-		s.namespacePhase = 1
-	}
-	if s.namespacePhase == 1 {
-		if ns.persistence != nil && ns.persistence != ns.parent {
-			if !w.Reserve(1, 128) {
-				return false, nil
-			}
-			if e := ns.persistence.Close(); e != nil {
-				return fail(e)
-			}
-			ns.persistence = nil
-		}
-		s.namespacePhase = 2
-	}
-	if s.namespacePhase == 2 {
-		if ns.parent != nil {
-			if !w.Reserve(1, 128) {
-				return false, nil
-			}
-			parent := ns.parent
-			if e := parent.Close(); e != nil {
-				return fail(e)
-			}
-			ns.parent = nil
-			if ns.persistence == parent {
-				ns.persistence = nil
-			}
-		}
-		if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*ns))) {
-			return false, nil
-		}
-		// Namespace storage can have a distinct original owner. Detach all token
-		// aliases before its final accounting release; no namespace callback remains.
-		owner, charge := ns.metadata, ns.metadataCharge
-		ns.metadata, ns.metadataCharge = nil, 0
-		ns.oldName, ns.newName, ns.diagnosticPath = "", "", ""
-		ns.adapter, ns.cleanupRegistry = nil, nil
-		t.namespace = nil
-		s.namespacePhase = 3
-		if owner != nil {
-			owner.RemovePending(charge)
-		}
-	}
-	return true, nil
+func (root *resourceReleaseFrameV6) tokenNamespace(t *StableResourceToken) (bool, error) {
+	return true, t.namespace.release()
 }
 
 func releaseOwnedTokenPhysicalV6(t *StableResourceToken) error {
@@ -275,7 +154,7 @@ func releaseOwnedTokenPhysicalV6(t *StableResourceToken) error {
 	root := &t.releaseWork.graph
 	*root = resourceReleaseFrameV6{value: t, owner: t.metadata.owner}
 	root.current = root
-	completion, _, err := root.continueWork(nil)
+	completion, _, err := root.releaseGraph()
 	if err != nil {
 		return t.releaseResult()
 	}

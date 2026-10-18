@@ -70,7 +70,7 @@ func releaseOwnedResourceRope(node *stableResourceEntryNode) error {
 		return nil
 	}
 	var root resourceReleaseFrameV6
-	if ready, err := root.rope(node, nil); !ready || err != nil {
+	if ready, err := root.rope(node); !ready || err != nil {
 		return err
 	}
 	if root.current == nil {
@@ -79,7 +79,7 @@ func releaseOwnedResourceRope(node *stableResourceEntryNode) error {
 	driver := root.current
 	driver.parent = nil
 	driver.current = driver
-	completion, _, err := driver.continueWork(nil)
+	completion, _, err := driver.releaseGraph()
 	if err != nil {
 		return err
 	}

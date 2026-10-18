@@ -123,12 +123,9 @@ func releaseRootPublicationSealV6(s *rootPublicationSealV1) (primaryRuntimeDispo
 		s.token = nil
 	}
 	if s.manifest != nil {
-		completion, ready, err := s.manifest.ReleaseOwnedMetadataWithWorkV6(nil)
+		completion, err := s.manifest.ReleaseOwnedMetadataWithCompletionV6()
 		if err != nil {
 			return fail(err)
-		}
-		if !ready {
-			return fail(rootpublication.ErrResourceOwnership)
 		}
 		s.manifest = nil
 		completion.Complete()

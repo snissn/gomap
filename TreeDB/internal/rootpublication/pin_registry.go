@@ -3,7 +3,6 @@ package rootpublication
 import (
 	"errors"
 	"fmt"
-	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"os"
 	"strings"
@@ -243,101 +242,27 @@ func (registry *IdentityPinRegistry) release(identity StableIdentity) error {
 	return nil
 }
 
-// ReleaseWithWorkV6 consumes only the original pin. An observed or nonlast
-// state has no outgoing metadata cleanup and is a literal constant-size edge.
-// Native last-idle cleanup remains an explicit pre-effect refusal until its
-// registry-table/metadata disposal stages are bound to this SAME pin.
-func (pin *IdentityPin) ReleaseWithWorkV6(w *iterator.OrdinalScanWork) (bool, error) {
+// Release consumes this exact pin once; failed registry release remains sticky.
+func (pin *IdentityPin) Release() {
 	if pin == nil {
-		return true, nil
+		return
 	}
 	pin.releaseMu.Lock()
 	defer pin.releaseMu.Unlock()
 	if pin.released {
-		return true, pin.releaseError
+		return
 	}
 	registry := pin.registry
 	if registry == nil {
 		pin.released = true
-		return true, nil
+		return
 	}
-	if w == nil {
-		pin.releaseError = registry.release(pin.identity)
-		pin.released = true
-		if pin.releaseError == nil {
-			pin.registry = nil
-			pin.state = nil
-		}
-		return true, pin.releaseError
-	}
-	if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*pin))+2*uint64(unsafe.Sizeof(identityPinState{}))+128) {
-		return false, nil
-	}
-	registry.mu.Lock()
-	state := pin.state
-	if state == nil || state.pins == 0 {
-		registry.mu.Unlock()
-		return false, ErrUnbalancedResourcePin
-	}
-	if state.pins == 1 && state.observers == 0 && !state.deleting {
-		// A closing authority owns variable table teardown. Refuse that class
-		// before consuming this pin, rather than invoking Close under work.
-		if registry.closing {
-			registry.mu.Unlock()
-			return false, retainedalloc.ErrWorkRequired
-		}
-		table := &registry.states
-		if len(table.cells) == 0 {
-			registry.mu.Unlock()
-			return false, ErrUnbalancedResourcePin
-		}
-		if !w.Reserve(1, uint64(len(pin.identity.Platform))+uint64(len(pin.identity.ObjectID))) {
-			registry.mu.Unlock()
-			return false, nil
-		}
-		mask := len(table.cells) - 1
-		found := -1
-		for i := int(table.hash(pin.identity)) & mask; ; i = (i + 1) & mask {
-			if !w.Reserve(1, 2*uint64(unsafe.Sizeof(table.cells[i]))+2*uint64(unsafe.Sizeof(*state))) {
-				registry.mu.Unlock()
-				return false, nil
-			}
-			cell := &table.cells[i]
-			if cell.status == 0 {
-				break
-			}
-			if cell.status == 1 && cell.key == pin.identity {
-				if cell.value != state || cell.payload != 0 {
-					registry.mu.Unlock()
-					return false, ErrUnbalancedResourcePin
-				}
-				found = i
-				break
-			}
-		}
-		if found < 0 {
-			registry.mu.Unlock()
-			return false, ErrUnbalancedResourcePin
-		}
-		// Every probe and the removal are admitted under the original lock.
-		// A refused probe leaves both the table and this exact pin untouched.
-		table.cells[found] = registryCell[StableIdentity, *identityPinState]{status: 2}
-		table.count--
-		registry.metadata.Remove(retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(*state))))
-	}
-	state.pins--
-	registry.activePins--
-	if state.pins == 0 && state.zero != nil {
-		close(state.zero)
-		state.zero = nil
-	}
+	pin.releaseError = registry.release(pin.identity)
 	pin.released = true
-	pin.registry = nil
-	pin.state = nil
-	registry.mu.Unlock()
-	return true, nil
+	if pin.releaseError == nil {
+		pin.registry, pin.state = nil, nil
+	}
 }
-func (pin *IdentityPin) Release() { _, _ = pin.ReleaseWithWorkV6(nil) }
 
 func (registry *IdentityPinRegistry) Observe(identity StableIdentity) error {
 	identity, err := validateRegistryIdentity(identity)

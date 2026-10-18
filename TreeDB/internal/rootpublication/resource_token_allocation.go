@@ -56,7 +56,7 @@ func (backing *resourcePinnedBacking) release() error {
 		return nil
 	}
 	var holder resourceReleaseFrameV6
-	if ready, err := holder.backing(backing, nil); !ready || err != nil {
+	if ready, err := holder.backing(backing); !ready || err != nil {
 		return err
 	}
 	if holder.current == nil {
@@ -65,7 +65,7 @@ func (backing *resourcePinnedBacking) release() error {
 	root := holder.current
 	root.parent = nil
 	root.current = root
-	completion, _, err := root.continueWork(nil)
+	completion, _, err := root.releaseGraph()
 	if err != nil {
 		return err
 	}
@@ -227,7 +227,7 @@ func (token *StableResourceToken) releaseMetadata() error {
 		return nil
 	}
 	var holder resourceReleaseFrameV6
-	if ready, err := holder.tokenMetadata(token, nil); !ready || err != nil {
+	if ready, err := holder.tokenMetadata(token); !ready || err != nil {
 		return err
 	}
 	if holder.current == nil {
@@ -236,7 +236,7 @@ func (token *StableResourceToken) releaseMetadata() error {
 	root := holder.current
 	root.parent = nil
 	root.current = root
-	completion, _, err := root.continueWork(nil)
+	completion, _, err := root.releaseGraph()
 	if err != nil {
 		return err
 	}
