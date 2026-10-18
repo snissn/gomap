@@ -4270,6 +4270,7 @@ that every collection producer uses native immutable descriptors.
 | Untouched refusal versus terminal materialization | `TestCOWNativeBuildCapacityBeforeAndAfterOriginalAssetMutation` uses an actual partial file before its terminal capacity error |
 | Real destruction, notification and concurrent Close | `TestCOWPublicSemanticDestructorAndNotificationCloseGuard` includes actual original file close and failed directory unlink; `TestCloseBorrowsAdmittedTeardownGuard` checks borrowed teardown admission |
 | Maintenance headroom and retained physical views | `TestMinimumCapacityCheckpointMakesProgress`, `TestRetainedViewMaintenanceRefreshAndClose`, `TestMaintenanceDrainUsesOriginalRetiredGeneration`, `TestCOWPublicSelectedSourceRewriteKeepsOldCuts` |
+| Finite small-budget recovery and retained reuse | `TestCOWPublicSmallBudgetAcceptedPrefixDrainsAndReopens`, `TestCOWAcceptedPrefixRepeatedDrainReuse`, `TestCOWPublicRetainedHistoryFixture` use actual checkpoint/reopen or canonical appends, held pointer bytes and final original-owner accounting. The retained benchmark remains construction-only until reviewed. |
 
 Run the affected lower lifecycle suites and compile the complete TreeDB tree:
 

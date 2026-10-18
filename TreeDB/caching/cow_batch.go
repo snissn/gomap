@@ -322,18 +322,32 @@ func (b *Batch) cancelCOWPublication() *cowBatchPreparation {
 
 func (p *cowBatchPreparation) drainCancelled() error {
 	var cleanupErr error
-	if p.cut != nil {
-		cleanupErr = p.cut.drainCancelled()
+	if cut := p.cut; cut != nil {
+		p.cut = nil
+		refund, err := cut.drainCancelledWithCompletion()
+		cleanupErr = err
+		cut = nil
+		refund.Close()
 	}
 	for _, resource := range p.resources {
 		if !resource.attached {
 			resource.close()
 		}
 	}
-	if cleanupErr == nil {
-		p.scratch.Close()
-	}
+	refund := p.detachScratch()
+	p = nil
+	refund.Close()
 	return cleanupErr
+}
+
+// End every borrowed preparation alias before returning its original containing
+// allocation receipt. The caller performs the final refund after its last use.
+func (p *cowBatchPreparation) detachScratch() *memtable.COWExternalLease {
+	refund := p.scratch
+	p.cut, p.scratch = nil, nil
+	p.files, p.resources, p.dictionaries = nil, nil, nil
+	p.mutation = txnMutationOwner{}
+	return refund
 }
 
 func (b *Batch) writeCOWPublication(syncWrite bool, unlock func()) error {
@@ -446,7 +460,9 @@ func (b *Batch) writeCOWPublication(syncWrite bool, unlock func()) error {
 	if old != nil {
 		err = joinCOWCleanupError(err, old.drain())
 	}
-	p.scratch.Close()
+	refund := p.detachScratch()
+	p = nil
+	refund.Close()
 	b.db.noteWrite()
 	b.updateBatchEntryHint()
 	b.updateBatchCopyHint()
