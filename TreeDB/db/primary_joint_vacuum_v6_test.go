@@ -358,7 +358,7 @@ func runPrimaryJointCrashV6(t *testing.T, dir, mode, phase string) bool {
 }
 func preparePrimaryJointCrashV6(t *testing.T, dir string) uint64 {
 	t.Helper()
-	d, e := Open(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+	d, e := Open(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, IndexPrimaryDirectory: true, DisableBackgroundPrune: true})
 	if e != nil {
 		t.Fatal(e)
 	}
