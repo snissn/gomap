@@ -4262,6 +4262,17 @@ The lower native seam is independently testable while unmigrated collection
 producers retain their existing barriers. Passing these controls does not claim
 that every collection producer uses native immutable descriptors.
 
+The publication source guard supplements the typed writer inventory and catches
+its covered alias/escape regressions. It is not a sound analysis of arbitrary Go
+or proof of the same-prefix contract. Its callgraph check finds a path to the
+publisher; it does not prove call ordering, argument identity or publication on
+every successful path. Scalar field-address aliases require explicit review.
+Custody hashes bind the reviewed method/observer surface and detect drift; they
+do not prove that surface correct. Review the exact runtime's complete-basis
+comparison, accepted-cut binding, retained-generation handoff and published-state
+writes alongside the discriminating controls below. A checker PASS cannot replace
+that review, recovery/race evidence or public performance gates.
+
 | Obligation | Source-supported controls |
 |---|---|
 | Exact complete basis and accepted handoff | `TestCheckpointRejectsMixedSystemRoot`, `TestCheckpointRejectsPublishedSemanticSystemRoot`, `TestAcceptedSnapshotReceiptRetainsCandidateTuple`, `TestDelayedHandoffUsesAcceptedGeneration`, `TestCOWCheckpointRealAcceptedReportedErrorRetainsPrefixAndDoesNotReplay` |

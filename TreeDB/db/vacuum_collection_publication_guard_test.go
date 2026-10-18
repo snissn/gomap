@@ -23,6 +23,11 @@ import (
 
 const publicationGuardPackagePath = "github.com/snissn/gomap/TreeDB/db"
 
+// This is a supplementary writer-inventory and alias regression guard, not a
+// sound analysis of arbitrary Go or a proof of coherent publication. Callgraph
+// reachability is existential: ordering, argument identity and every successful
+// path require runtime review and discriminating tests. Review field-address
+// aliases explicitly; scalar fields do not retain the analyzer's DBState taint.
 type publicationGuardSource struct {
 	fset  *token.FileSet
 	pkg   *types.Package

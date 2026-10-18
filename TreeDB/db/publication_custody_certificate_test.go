@@ -13,8 +13,10 @@ import (
 
 // These certificates describe an error's complete Go method surface, not its
 // physical payload. An opaque Is callback can call those methods but cannot
-// directly access private fields. A source change fails closed. Callback bodies
-// and every retained error child remain subject to the ordinary source analysis.
+// directly access private fields. A source change fails closed against these
+// bindings; a matching hash detects no drift but does not establish semantic
+// correctness. Callback bodies and every retained error child remain subject to
+// the ordinary source analysis and the runtime review described in verification.md.
 var publicationGuardCustodyCertificates = map[string]string{
 	"errors.joinError": "49915178189d923b36d5d74dbcd3c6122074c406a25e114f5db931c413dca2ab",
 	"fmt.wrapError":    "007335e22e8290a1a5ba1a46cdd63424ec5cfe897b6e225fd5f50b2bcdaefd7f",
