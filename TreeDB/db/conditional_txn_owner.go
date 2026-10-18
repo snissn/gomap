@@ -62,7 +62,7 @@ func (db *DB) PreflightPrivateCOWCommand(owner *transactionowner.Owner) error {
 		return err
 	}
 	db.commandWALRawBarrierMu.Lock()
-	ready := len(db.commandWALRawBarriers) == 0
+	ready := len(db.commandWALRawBarriers) == 0 && db.legacyCommandProducers == 0
 	db.commandWALRawBarrierMu.Unlock()
 	if !ready {
 		return ErrConditionalTxnUnsupported

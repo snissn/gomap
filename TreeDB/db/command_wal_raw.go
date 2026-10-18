@@ -17,11 +17,13 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
 type commandWALBatchIntent struct {
+	privateCOWOwner     *transactionowner.Owner
 	sealedReceipt       *commandWALSealReceipt
 	kind                commitlog.CommandKind
 	scope               commitlog.CommandScope
@@ -1486,6 +1488,27 @@ func (db *DB) finalizeRawKVEntryScanWithoutCommandWAL(prepare func() error, fina
 	// explicitly; the cache's writer owner serializes preparation/publication.
 	db.teardownMu.RLock()
 	defer db.teardownMu.RUnlock()
+	tracked, err := db.beginSemanticBackendOperation(nil, false)
+	if err != nil {
+		return err
+	}
+	defer db.endSemanticBackendOperation(tracked)
+	return db.finalizeRawKVEntryScanForOwnedCachedPublication(prepare, finalize, scanEntries, opHint)
+}
+
+// FinalizePrivateCOWPublication retains the original raw cache owner in NoWAL
+// mode; ordinary backend callbacks acquire no authority from this seam.
+func (db *DB) FinalizePrivateCOWPublication(owner *transactionowner.Owner, prepare func() error, finalize RawKVCommandWALFinalize, scanEntries func(func(batchpkg.Entry) error) error, opHint int) error {
+	if db == nil || owner == nil || owner != db.privateCOWOwner {
+		return ErrNativeSemanticUnsupported
+	}
+	db.teardownMu.RLock()
+	defer db.teardownMu.RUnlock()
+	tracked, err := db.beginSemanticBackendOperation(owner, false)
+	if err != nil {
+		return err
+	}
+	defer db.endSemanticBackendOperation(tracked)
 	return db.finalizeRawKVEntryScanForOwnedCachedPublication(prepare, finalize, scanEntries, opHint)
 }
 
@@ -1636,6 +1659,9 @@ func (db *DB) appendRawKVCommandWALOrderedEntryScanWithHintPreparedFinalized(pre
 		return 0, timing, err
 	}
 	intent.rawKVFinalize = finalize
+	if guard != nil {
+		intent.privateCOWOwner = guard.privateCOWOwnerFor(db)
+	}
 	defer releaseUnassignedCommandWALIntent(intent)
 	lsn, err := db.appendCommandWALIntentWithTiming(intent, mode.sync(), func() *CommandWALRequestTiming {
 		if measured {
@@ -2708,6 +2734,14 @@ func (db *DB) appendCommandWALIntentWithTiming(intent *commandWALBatchIntent, sy
 	if db == nil {
 		return 0, ErrClosed
 	}
+	// Already-assigned physical/replay continuations above do not assign another
+	// command. Only a real new frame needs admission against semantic activation.
+	tracked, admissionErr := db.beginSemanticBackendOperation(intent.privateCOWOwner, false)
+	if admissionErr != nil {
+		return 0, admissionErr
+	}
+	defer db.endSemanticBackendOperation(tracked)
+
 	if db.closing.Load() || db.commandJournal == nil {
 		return 0, db.commandWALJournalUnavailableError()
 	}

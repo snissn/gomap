@@ -357,12 +357,12 @@ func (b *Batch) writeCOWPublication(syncWrite bool, unlock func()) error {
 		err = b.commandWALAppend()
 	} else {
 		finalizer, ok := b.db.backend.(interface {
-			FinalizeRawKVEntryScanForCachedPublication(func() error, backenddb.RawKVCommandWALFinalize, func(func(batch.Entry) error) error, int) error
+			FinalizePrivateCOWPublication(*transactionowner.Owner, func() error, backenddb.RawKVCommandWALFinalize, func(func(batch.Entry) error) error, int) error
 		})
 		if !ok {
 			err = fmt.Errorf("COW cache requires canonical backend finalization")
 		} else {
-			err = finalizer.FinalizeRawKVEntryScanForCachedPublication(b.PrepareExternalCommandWALPublication, b.finalizeCOWPublication, b.Replay, len(b.entries))
+			err = finalizer.FinalizePrivateCOWPublication(b.db.cow.txnOwner, b.PrepareExternalCommandWALPublication, b.finalizeCOWPublication, b.Replay, len(b.entries))
 		}
 	}
 	if err != nil && b.cowState.receipt.Assigned && b.cowState.native != nil {
@@ -576,13 +576,13 @@ func (b *Batch) AcquireCOWAppendGuard(owner *transactionowner.Owner) error {
 		return ErrCOWUnsupported
 	}
 	provider, ok := b.db.backend.(interface {
-		LockCommandWALStagingGuardV1() (*backenddb.CommandWALStagingGuardV1, error)
+		LockPrivateCOWStagingGuard(*transactionowner.Owner) (*backenddb.CommandWALStagingGuardV1, error)
 		PreflightPrivateCOWCommand(*transactionowner.Owner) error
 	})
 	if !ok {
 		return ErrCOWUnsupported
 	}
-	guard, err := provider.LockCommandWALStagingGuardV1()
+	guard, err := provider.LockPrivateCOWStagingGuard(owner)
 	if err != nil {
 		return err
 	}
