@@ -179,10 +179,77 @@ func (r *NativeJSONRead) Get(id []byte) ([]byte, error) {
 		return nil, tree.ErrKeyNotFound
 	}
 	if entry.Flags&node.FlagPointer != 0 {
-		return nil, backenddb.ErrNativeSemanticUnsupported
+		return r.readValue(entry.ValuePtr)
 	}
 	// The result belongs to the caller, not to retained database accounting.
 	return append([]byte(nil), entry.Value...), nil
+}
+
+// readValue borrows only this read scope's exact Snapshot file Set. Get holds
+// r.mu, so Close cannot detach that Snapshot until decode and scratch cleanup
+// finish. Returned bytes are an independent caller-owned copy.
+func (r *NativeJSONRead) readValue(ptr page.ValuePtr) ([]byte, error) {
+	f, _, err := r.capture.Snapshot().PinnedValueLogFile(ptr.FileID)
+	if err != nil {
+		return nil, err
+	}
+	limit := r.capture.NativeAllocator().Limits().MaxInFlightBytes
+	shape, err := valuelog.InspectCOWRecord(f, ptr, valuelog.COWReadLimits{MaxRecordBytes: limit, MaxRawBytes: limit, MaxValueBytes: limit})
+	if err != nil {
+		return nil, err
+	}
+	var sizes valuelog.COWDecoderAllocationSizes
+	if shape.Compressed {
+		if shape.DictID != 0 || (shape.Codec != valuelog.BlockCodecSnappy && shape.Codec != valuelog.BlockCodecLZ4) {
+			return nil, valuelog.ErrCOWReadUnsupported
+		}
+		sizes, err = valuelog.COWBlockDecoderRetentionSizes(shape.Codec, shape.RawBytes, shape.PayloadBytes())
+		if err != nil {
+			return nil, err
+		}
+	}
+	charge := uint64(0)
+	for _, bytes := range [4]uint64{shape.PayloadBytes(), shape.RawBytes, shape.ValueBytes, sizes.OwnerWrapper} {
+		part := memtable.COWAllocationCharge(bytes)
+		if part > ^uint64(0)-charge {
+			return nil, memtable.ErrCOWCapacity
+		}
+		charge += part
+	}
+	lease, err := r.capture.NativeAllocator().AdmitNativeBytes(charge)
+	if err != nil {
+		return nil, err
+	}
+	input, raw, output := make([]byte, shape.PayloadBytes()), make([]byte, shape.RawBytes), make([]byte, shape.ValueBytes)
+	var decoder *valuelog.COWDecoder
+	var decode valuelog.COWDecodeFunc
+	var value []byte
+	defer func() {
+		if decoder != nil {
+			decoder.Close()
+			decoder = nil
+		}
+		decode = nil
+		input, raw, output, value = nil, nil, nil, nil
+		lease.Close()
+	}()
+	if shape.Compressed {
+		decoder, err = valuelog.NewCOWBlockDecoder(shape.Codec, shape.RawBytes, shape.PayloadBytes(), func(actual valuelog.COWDecoderAllocationSizes) error {
+			if actual != sizes {
+				return memtable.ErrCOWCapacity
+			}
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+		decode = decoder.Decode
+	}
+	value, err = valuelog.ReadCOWRecord(f, ptr, shape, true, input, raw, output, decode)
+	if err != nil {
+		return nil, err
+	}
+	return append([]byte(nil), value...), nil
 }
 
 func (r *NativeJSONRead) readLeaf(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
@@ -219,15 +286,16 @@ func (r *NativeJSONRead) readLeaf(ptr page.LeafLogPtr, dst []byte) ([]byte, erro
 	}
 	input, raw := make([]byte, shape.PayloadBytes()), make([]byte, shape.RawBytes)
 	var decoder *valuelog.COWDecoder
+	var decode valuelog.COWDecodeFunc
 	defer func() {
 		if decoder != nil {
 			decoder.Close()
 			decoder = nil
 		}
+		decode = nil
 		input, raw = nil, nil
 		lease.Close()
 	}()
-	var decode valuelog.COWDecodeFunc
 	if shape.Compressed {
 		decoder, err = valuelog.NewCOWBlockDecoder(shape.Codec, shape.RawBytes, shape.PayloadBytes(), func(actual valuelog.COWDecoderAllocationSizes) error {
 			if actual != sizes {

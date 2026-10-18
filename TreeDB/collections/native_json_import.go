@@ -16,7 +16,8 @@ import (
 // importNativeJSONCatalog is a private complete import of the exact physical
 // catalog. It publishes nothing and retains no snapshot/resource inventory.
 // Every descriptor is memory-only; physical readers retain the enclosing cut's
-// original Snapshot. Unsupported metadata, roots and values refuse before ACK.
+// original Snapshot. Unsupported metadata, roots and overlays refuse before ACK; row values are
+// resolved lazily by exact captured reads, never scanned during import.
 func importNativeJSONCatalog(capture backenddb.NativeSemanticCapture) (base *nativeEngineVersion, resultErr error) {
 	token, ok := capture.Snapshot().StateToken()
 	if !ok {
@@ -31,18 +32,17 @@ func importNativeJSONCatalog(capture backenddb.NativeSemanticCapture) (base *nat
 	}
 	// Two fixed merge workspaces and one successor key own all borrowed scan
 	// aliases; the original snapshot remains held by capture throughout.
-	lease, err := capture.NativeAllocator().AdmitNativeBytes(memtable.COWAllocationCharge(uint64(unsafe.Sizeof(NativeJSONRead{}))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeDomainReadScratch{}))) + memtable.COWAllocationCharge(2*(page.PageSize+1)))
+	lease, err := capture.NativeAllocator().AdmitNativeBytes(memtable.COWAllocationCharge(uint64(unsafe.Sizeof(NativeJSONRead{}))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeDomainReadScratch{}))) + memtable.COWAllocationCharge(page.PageSize+1))
 	if err != nil {
 		return base, err
 	}
 	probe := NativeJSONRead{capture: capture}
 	var scratch nativeDomainReadScratch
-	var cursor, rowCursor [page.PageSize + 1]byte
+	var cursor [page.PageSize + 1]byte
 	defer func() {
 		probe = NativeJSONRead{}
 		scratch = nativeDomainReadScratch{}
 		cursor = [page.PageSize + 1]byte{}
-		rowCursor = [page.PageSize + 1]byte{}
 		lease.Close()
 	}()
 	reader, err := capture.Snapshot().NativeReaderAtRoot(token.SystemRootPageID)
@@ -183,30 +183,18 @@ func importNativeJSONCatalog(capture backenddb.NativeSemanticCapture) (base *nat
 		if !ok {
 			return backenddb.ErrNativeSemanticUnsupported
 		}
-		d, _ := c.domains.Get("primary")
-		read, err := newNativeDomainRead(d, capture.Snapshot())
+		d, ok := c.domains.Get("primary")
+		if !ok {
+			return backenddb.ErrNativeSemanticUnsupported
+		}
+		root, err := decodeRootID(entry.Value)
 		if err != nil {
 			return err
 		}
-		start := []byte(nil)
-		for {
-			entry, found, err := read.seekGE(start, nil, &scratch, probe.readLeaf)
-			if err != nil {
-				return err
-			}
-			if !found {
-				return nil
-			}
-			if entry.Flags&node.FlagPointer != 0 {
-				return backenddb.ErrNativeSemanticUnsupported
-			}
-			if len(entry.Key) > page.PageSize {
-				return memtable.ErrCOWCapacity
-			}
-			n := copy(rowCursor[:], entry.Key)
-			rowCursor[n] = 0
-			start = rowCursor[:n+1]
+		if root != d.baseRoot {
+			return backenddb.ErrNativeSemanticUnsupported
 		}
+		return nil
 	})
 	return base, err
 }

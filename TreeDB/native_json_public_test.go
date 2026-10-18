@@ -1,11 +1,15 @@
 package treedb
 
 import (
+	"encoding/binary"
 	"errors"
 	"github.com/snissn/gomap/TreeDB/internal/workstats"
+	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/tree"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"testing"
 
@@ -316,4 +320,220 @@ func TestNativeJSONPublicCreateInsertCapturedViewCheckpointReplay(t *testing.T) 
 		t.Fatalf("recovered original accounting: %+v", got)
 	}
 	t.Log("RECOVERED COMPLETE CATALOG mutation/checkpoint/Close original zero")
+}
+
+// Recovered physical pointer rows remain in their original roots. First mutation
+// imports descriptors, not all row contents, and reads resolve via its exact cut.
+func TestNativeJSONPublicRecoveredPointersDescriptorImport(t *testing.T) {
+	dir := os.Getenv("GOMAP_NATIVE_JSON_POINTER_CRASH_DIR")
+	childMode := dir != ""
+	if !childMode {
+		dir = t.TempDir()
+	}
+	opts := OptionsFor(ProfileCommandWALDurable, dir)
+	opts.MemtableMode = "cow_btree"
+	opts.FlushThreshold = 1 << 30
+	opts.BackgroundCheckpointInterval = -1
+	opts.ValueLog.PointerThreshold = 1
+	opts.ValueLog.ForcePointers = true
+	value := `{"body":"` + strings.Repeat("pointer-row", 128) + `"}`
+	if !childMode {
+		child := exec.Command(os.Args[0], "-test.run=^TestNativeJSONPublicRecoveredPointersDescriptorImport$")
+		child.Env = append(os.Environ(), "GOMAP_NATIVE_JSON_POINTER_CRASH_DIR="+dir)
+		if output, err := child.CombinedOutput(); err != nil {
+			t.Fatalf("pointer crash child: %v\n%s", err, output)
+		}
+	}
+	database, err := Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed := false
+	t.Cleanup(func() {
+		if !closed {
+			if err := database.Close(); err != nil {
+				t.Errorf("cleanup Close: %v", err)
+			}
+		}
+	})
+	if childMode {
+		manager, err := collections.NewNativeJSONManager(database.backend)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range []string{"rows", "other"} {
+			if _, err := manager.CreateCollection(collections.CollectionMeta{Name: name}); err != nil {
+				t.Fatal(err)
+			}
+			if err := manager.InsertBatch(name, [][]byte{[]byte("old")}, [][]byte{[]byte(value)}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		os.Exit(0)
+	}
+	// Verify actual recovered pointer representation before native activation.
+	snapshot := database.backend.AcquireSnapshot()
+	if snapshot == nil {
+		t.Fatal("nil verification snapshot")
+	}
+	token, ok := snapshot.StateToken()
+	if !ok {
+		t.Fatal("nil verification token")
+	}
+	originalRoots := make(map[string]uint64, 2)
+	originalPointers := make(map[string]page.ValuePtr, 2)
+	for _, name := range []string{"rows", "other"} {
+		root, err := snapshot.GetAtRoot(token.SystemRootPageID, []byte("collections/root/"+name+"/primary"))
+		if err != nil || len(root) != 8 {
+			t.Fatalf("recovered root %s: %x %v", name, root, err)
+		}
+		entry, err := snapshot.GetEntryAtRoot(binary.BigEndian.Uint64(root), []byte("old"))
+		if err != nil || entry.Flags&node.FlagPointer == 0 {
+			t.Fatalf("REAL POINTER required %s: %+v %v", name, entry, err)
+		}
+		originalRoots[name] = binary.BigEndian.Uint64(root)
+		originalPointers[name] = entry.ValuePtr
+		t.Logf("VERIFIED recovered pointer %s FileID=%d Offset=%d", name, entry.ValuePtr.FileID, entry.ValuePtr.Offset)
+	}
+	if err := snapshot.Close(); err != nil {
+		t.Fatal(err)
+	}
+	snapshot = nil
+	checkOriginalPointers := func(database *DB) {
+		snapshot := database.backend.AcquireSnapshot()
+		if snapshot == nil {
+			t.Fatal("nil physical pointer check Snapshot")
+		}
+		token, ok := snapshot.StateToken()
+		if !ok {
+			t.Fatal("nil physical pointer check token")
+		}
+		for _, name := range []string{"rows", "other"} {
+			raw, err := snapshot.GetAtRoot(token.SystemRootPageID, []byte("collections/root/"+name+"/primary"))
+			if err != nil || len(raw) != 8 {
+				t.Fatalf("physical root %s: %x %v", name, raw, err)
+			}
+			root := binary.BigEndian.Uint64(raw)
+			if name == "other" && root != originalRoots[name] {
+				t.Fatalf("untouched root changed: before=%d after=%d", originalRoots[name], root)
+			}
+			entry, err := snapshot.GetEntryAtRoot(root, []byte("old"))
+			if err != nil || entry.Flags&node.FlagPointer == 0 || entry.ValuePtr != originalPointers[name] {
+				t.Fatalf("original pointer changed %s: %+v %v", name, entry, err)
+			}
+		}
+		if err := snapshot.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	manager, err := collections.NewNativeJSONManager(database.backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	held, err := manager.Capture("rows")
+	if err != nil {
+		t.Fatal(err)
+	}
+	heldClosed := false
+	t.Cleanup(func() {
+		if !heldClosed {
+			if err := held.Close(); err != nil {
+				t.Errorf("held cleanup: %v", err)
+			}
+		}
+	})
+	if err := manager.InsertBatch("rows", [][]byte{[]byte("new")}, [][]byte{[]byte(`{"n":1}`)}); err != nil {
+		t.Fatalf("FIRST DESCRIPTOR-ONLY MUTATION: %v", err)
+	}
+	if got, err := held.Get([]byte("old")); err != nil || string(got) != value {
+		t.Fatalf("held recovered pointer %q: %v", got, err)
+	}
+	if _, err := held.Get([]byte("new")); !errors.Is(err, tree.ErrKeyNotFound) {
+		t.Fatalf("held new absence: %v", err)
+	}
+	before := database.backend.Stats()["treedb.command_wal.live_accepted_max_lsn"]
+	if err := manager.InsertBatch("rows", [][]byte{[]byte("old")}, [][]byte{[]byte(`{"bad":1}`)}); !errors.Is(err, collections.ErrDocumentExists) {
+		t.Fatalf("duplicate pointer refusal: %v", err)
+	}
+	if after := database.backend.Stats()["treedb.command_wal.live_accepted_max_lsn"]; before == "" || before != after {
+		t.Fatalf("duplicate appended: before=%s after=%s", before, after)
+	}
+	reached, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	database.cached.SetCommandWALCheckpointPublishHook(func(sync bool) (uint64, []backenddb.CommandWALLSNRange, error) {
+		once.Do(func() { close(reached) })
+		<-release
+		return database.preparePublicCommandWALPendingPublish(sync)
+	})
+	done := make(chan error, 1)
+	go func() { done <- database.Checkpoint() }()
+	<-reached
+	if err := manager.InsertBatch("rows", [][]byte{[]byte("suffix")}, [][]byte{[]byte(`{"n":2}`)}); err != nil {
+		close(release)
+		<-done
+		t.Fatal(err)
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatalf("pointer suffix handoff: %v", err)
+	}
+	database.cached.SetCommandWALCheckpointPublishHook(database.preparePublicCommandWALPendingPublish)
+	checkOriginalPointers(database)
+	for _, name := range []string{"rows", "other"} {
+		if got, err := manager.Get(name, []byte("old")); err != nil || string(got) != value {
+			t.Fatalf("untouched pointer %s %q: %v", name, got, err)
+		}
+	}
+	if got, err := held.Get([]byte("old")); err != nil || string(got) != value {
+		t.Fatalf("held pointer after handoff %q: %v", got, err)
+	}
+	heldClosed = true
+	if err := held.Close(); err != nil {
+		t.Fatal(err)
+	}
+	cache := database.cached
+	registry := database.backend.ValueLogIdentityPinRegistry()
+	closed = true
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := cache.COWMemoryStats(); got.TotalBytes != 0 || got.Sources != 0 || got.Views != 0 || got.ExternalLeases != 0 || got.Generations != 0 {
+		t.Fatalf("pointer final accounting: %+v", got)
+	}
+	if got := registry.Stats(); got.ActivePins != 0 || got.ActiveIdentities != 0 || got.ActiveStableNamespaceLinks != 0 || registry.CleanupError() != nil {
+		t.Fatalf("pointer final pin accounting: %+v cleanup=%v", got, registry.CleanupError())
+	}
+	database, err = Open(opts)
+	if err != nil {
+		t.Fatalf("pointer final reopen: %v", err)
+	}
+	closed = false
+	checkOriginalPointers(database)
+	manager, err = collections.NewNativeJSONManager(database.backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"rows", "other"} {
+		if got, err := manager.Get(name, []byte("old")); err != nil || string(got) != value {
+			t.Fatalf("reopened pointer %s %q: %v", name, got, err)
+		}
+	}
+	for _, row := range []struct{ id, value string }{{"new", `{"n":1}`}, {"suffix", `{"n":2}`}} {
+		if got, err := manager.Get("rows", []byte(row.id)); err != nil || string(got) != row.value {
+			t.Fatalf("reopened native row %s %q: %v", row.id, got, err)
+		}
+	}
+	cache = database.cached
+	registry = database.backend.ValueLogIdentityPinRegistry()
+	closed = true
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := cache.COWMemoryStats(); got.TotalBytes != 0 || got.Sources != 0 || got.Views != 0 || got.ExternalLeases != 0 || got.Generations != 0 {
+		t.Fatalf("reopened final accounting: %+v", got)
+	}
+	if got := registry.Stats(); got.ActivePins != 0 || got.ActiveIdentities != 0 || got.ActiveStableNamespaceLinks != 0 || registry.CleanupError() != nil {
+		t.Fatalf("reopened final pin accounting: %+v cleanup=%v", got, registry.CleanupError())
+	}
+	t.Log("DESCRIPTOR-ONLY IMPORT and lazy pointer reads; original source/pin/byte zero after handoff and reopen")
 }
