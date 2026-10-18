@@ -64,10 +64,9 @@ func prepareNativeEngineHandoffWithCatalog(latest *nativeEngineVersion, built []
 	if catalog != nil && latest.catalog == nil {
 		return nil, backenddb.ErrRootPublicationBasisMismatch
 	}
-	if len(built) == 0 && catalog == nil {
-		latest.Retain()
-		return latest, nil
-	}
+	// Even an empty physical frontier consumes the captured state's original
+	// build ledger. A fresh successor shares only immutable directories/catalog,
+	// so the next idle checkpoint cannot replay that single-use ledger.
 	next, err := newNativeEnginePreparation(latest, collections, len(built), allocation)
 	if err != nil {
 		return nil, err

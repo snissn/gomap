@@ -8,18 +8,22 @@ same backend's producer admission; refused managers retain a named error and
 expose no writable collection. Existing singleton startup replay remains the
 canonical dispatcher, with scoped admitted manager lifetime.
 
-The first actual public Create and capture passed in
-`TestNativeJSONPublicCreateActivation`. The actual public cached checkpoint
-failed with `ErrNativeSemanticUnsupported`. Public Close and final accounting
-zero were not reached. The larger selected test
+`TestNativeJSONPublicCreateActivation` now passes actual public Create/capture,
+public checkpoint, an ordinary public raw Set/Get with unchanged native catalog,
+another checkpoint, an idle checkpoint, public Close, and final original cache
+accounting zero. It checks one logical advance and canonical applied LSN 1→2
+for the raw write. This is a lifecycle proof, not collection row read/write or
+recovery coverage. The earlier public checkpoint refusal remains recorded in the
+historical first discriminator log. The larger selected test
 `TestNativeJSONPublicCreateInsertCapturedViewCheckpointReplay` is not implemented.
 InsertBatch/Get, held old reads across insertion, suffix handoff, canonical WAL
 crash recovery, and import of recovered native catalog identities remain open.
 
 Known source obligations before acceptance:
 
-- Bind handoff to the exact accepted snapshot using original build receipt
-  authority. Merely checking a nonnil snapshot is insufficient.
+- Preserve the lower exact accepted-snapshot invariant: both production
+  PrepareHandoff calls receive the same group's preaccepted h.basis Snapshot.
+  The upper adapter does not recapture or introduce separate identity authority.
 - Prove complete native projection/resource coverage; nil SparseProjections is
   currently specific to the initial JSON construction, not all-domain evidence.
 - Route all original private cleanup errors/custody through the original owner.
@@ -28,10 +32,15 @@ Known source obligations before acceptance:
   storage before allocation with the same finite original budget.
 - The newly shared create identity/counter effects need concurrent different-name
   legacy-create exclusion/revalidation; a counter sampled before publication is
-  insufficient. Sequential singleton replay alone does not prove this boundary.
+  insufficient. Non-WAL legacy create branches also still omit the shared
+  identity updates. Sequential singleton replay alone does not prove parity.
 - Complete every hook-free replay manager's lifetime beyond the selected JSON
   handler scopes. Held legacy admission must continue to block native activation.
 
+Empty physical frontiers now create fresh immutable successor headers with no
+build ledger, using both independently charged headers reserved before acceptance.
+The original captured build remains single-use. Required two-successor capacity
+continues to use the same maintenance promise, including after budget Close.
+
 No performance gate, full public JSON proof, recovery, or readiness claim follows
-from the first Create. The known lower owner activation/Close/fallback defect is
-also unaccepted. No production release or merge is authorized by this checkpoint.
+from this lifecycle checkpoint. No production release or merge is authorized.

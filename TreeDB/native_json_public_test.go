@@ -2,12 +2,14 @@ package treedb
 
 import (
 	"errors"
+	"testing"
+
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
-	"testing"
 )
 
-// This discriminator proves Create activation only. The selected larger proof
+// This discriminator proves Create activation and checkpoint/Close continuity.
+// The selected larger proof
 // still requires InsertBatch/Get, held old reads, newer suffix handoff, canonical
 // WAL crash recovery, and recovered native catalog bootstrap.
 func TestNativeJSONPublicCreateActivation(t *testing.T) {
@@ -20,7 +22,15 @@ func TestNativeJSONPublicCreateActivation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer database.Close()
+	closed := false
+	t.Cleanup(func() {
+		if !closed {
+			closed = true
+			if err := database.Close(); err != nil {
+				t.Errorf("cleanup PUBLIC CLOSE: %v", err)
+			}
+		}
+	})
 	manager, err := collections.NewNativeJSONManager(database.backend)
 	if err != nil {
 		t.Fatal(err)
@@ -50,21 +60,54 @@ func TestNativeJSONPublicCreateActivation(t *testing.T) {
 	if captured.State() == nil || captured.LogicalSequence() == 0 {
 		t.Fatal("Create did not install native engine at a logical sequence")
 	}
+	createdSequence := captured.LogicalSequence()
 	if err := captured.Close(); err != nil {
 		t.Fatal(err)
 	}
 	t.Log("CAPTURED NATIVE STATE retained and released")
-	if err := database.Checkpoint(); err != nil {
-		t.Fatalf("PUBLIC CHECKPOINT: %v", err)
+	for pass := 0; pass < 3; pass++ {
+		// A real ordinary write forces another physical build while the native
+		// catalog is unchanged. Idle checkpoints alone can skip that build.
+		if pass == 1 {
+			if err := database.Set([]byte("mixed-raw"), []byte("after-native-create")); err != nil {
+				t.Fatalf("PUBLIC RAW SET: %v", err)
+			}
+			t.Log("PUBLIC RAW SET installed")
+		}
+		wantSequence, wantLSN := createdSequence, uint64(1)
+		if pass > 0 {
+			wantSequence++
+			wantLSN++
+			value, err := database.Get([]byte("mixed-raw"))
+			if err != nil || string(value) != "after-native-create" {
+				t.Fatalf("PUBLIC RAW GET pass %d: value %q, error %v", pass, value, err)
+			}
+		}
+		if err := database.Checkpoint(); err != nil {
+			t.Fatalf("PUBLIC CHECKPOINT pass %d: %v", pass, err)
+		}
+		current, err := database.backend.CaptureNativeSemanticState()
+		if err != nil {
+			t.Fatal(err)
+		}
+		sequence, hasState := current.LogicalSequence(), current.State() != nil
+		basis, ok := current.Snapshot().StateToken()
+		if err := current.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if !hasState || sequence != wantSequence || !ok || basis.AppliedCommandLSN != wantLSN {
+			t.Fatalf("PUBLIC CHECKPOINT pass %d: native=%v logical=%d want=%d basis=%+v wantLSN=%d", pass, hasState, sequence, wantSequence, basis, wantLSN)
+		}
+		t.Logf("PUBLIC CHECKPOINT pass %d completed", pass)
 	}
-	t.Log("PUBLIC CHECKPOINT completed")
+	cache := database.cached // retain the original diagnostic owner through Close
+	closed = true
 	if err := database.Close(); err != nil {
 		t.Fatalf("PUBLIC CLOSE: %v", err)
 	}
 	t.Log("PUBLIC CLOSE completed")
-	for _, key := range []string{"total_bytes", "sources", "views", "external_leases", "generations"} {
-		if got := database.cached.COWMemoryStats(); got.TotalBytes != 0 || got.Sources != 0 || got.Views != 0 || got.ExternalLeases != 0 || got.Generations != 0 {
-			t.Fatalf("final %s: %+v", key, got)
-		}
+	if got := cache.COWMemoryStats(); got.TotalBytes != 0 || got.Sources != 0 || got.Views != 0 || got.ExternalLeases != 0 || got.Generations != 0 {
+		t.Fatalf("original final accounting: %+v", got)
 	}
+	t.Log("ORIGINAL FINAL ACCOUNTING zero")
 }

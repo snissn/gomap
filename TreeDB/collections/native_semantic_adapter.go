@@ -25,6 +25,13 @@ func (e *nativeEngineVersion) PrepareBuild(group *backenddb.RootPublicationBuild
 	}
 	return build.materializeDomains(group)
 }
+
+// The two production callers are installPreparedCOWBasis in caching/cow_flush.go.
+// Both receive basis.snapshot from the SAME group's preaccepted h.basis adopter;
+// its accepted-cut receipt and retained opening cut establish exact physical
+// identity. This adapter never recaptures a Snapshot or creates another authority.
+// Type/non-nil checks here and the original complete/two-call/domain checks in
+// build.prepareHandoff preserve that lower caller contract.
 func (e *nativeEngineVersion) PrepareHandoff(latest backenddb.NativeSemanticState, accepted *backenddb.Snapshot) (backenddb.NativeSemanticState, error) {
 	current, ok := latest.(*nativeEngineVersion)
 	if !ok || accepted == nil || e.build == nil {

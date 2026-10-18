@@ -93,7 +93,17 @@ func nativeHandoffCapacity(captured *nativeEngineVersion) (bytes uint64, collect
 		domains++ // actual metadata source, not a slot-only catalog placeholder
 	}
 	if domains == 0 {
-		return 0, 0, 0, nil
+		// The lower installer may request both latest and frozen successors even
+		// for an empty frontier. Admit both original headers before acceptance;
+		// each split child also needs its independent lease header.
+		charge, chargeErr := nativeEnginePreparationCharge(0, 0)
+		if chargeErr != nil {
+			return 0, 0, 0, chargeErr
+		}
+		if !add(charge) || bytes > ^uint64(0)/2 {
+			return 0, 0, 0, memtable.ErrCOWCapacity
+		}
+		return bytes * 2, 0, 0, nil
 	}
 	charge, err := nativeEnginePreparationCharge(collections, domains)
 	if err != nil {
