@@ -1,6 +1,7 @@
 package treedb
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"os/exec"
@@ -14,6 +15,7 @@ import (
 )
 
 func TestNativeJSONPublicRawTwoCollectionsAtomicTxn(t *testing.T) {
+	const crashExitCode = 97
 	childDir := os.Getenv("GOMAP_NATIVE_COMPOSITE_CRASH_DIR")
 	profiles := []Profile{ProfileCommandWALDurable, ProfileCommandWALRelaxed, ProfileNoWALFast}
 	if childDir != "" {
@@ -141,7 +143,7 @@ func TestNativeJSONPublicRawTwoCollectionsAtomicTxn(t *testing.T) {
 					t.Fatalf("child composite not unapplied: initial=%d disk=%d accepted=%d", initialApplied, applied, assigned())
 				}
 				t.Logf("CRASH CUT initial=%d disk=%d accepted=%d", initialApplied, applied, assigned())
-				os.Exit(0)
+				os.Exit(crashExitCode)
 			}
 			for _, name := range []string{"a", "b"} {
 				if _, err = held.GetFrom(name, []byte("x")); !errors.Is(err, tree.ErrKeyNotFound) {
@@ -223,6 +225,14 @@ func TestNativeJSONPublicRawTwoCollectionsAtomicTxn(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			reopenedClosed := false
+			t.Cleanup(func() {
+				if !reopenedClosed {
+					if err := reopened.Close(); err != nil {
+						t.Errorf("reopened cleanup Close: %v", err)
+					}
+				}
+			})
 			h, err := reopened.NativeSemanticBackend()
 			if err != nil {
 				t.Fatal(err)
@@ -239,6 +249,7 @@ func TestNativeJSONPublicRawTwoCollectionsAtomicTxn(t *testing.T) {
 			if value, err := reopened.Get([]byte("raw")); err != nil || string(value) != "newer" {
 				t.Fatalf("reopen raw %q: %v", value, err)
 			}
+			reopenedClosed = true
 			if err = reopened.Close(); err != nil {
 				t.Fatal(err)
 			}
@@ -252,21 +263,57 @@ func TestNativeJSONPublicRawTwoCollectionsAtomicTxn(t *testing.T) {
 	child.Env = append(os.Environ(), "GOMAP_NATIVE_COMPOSITE_CRASH_DIR="+dir)
 	output, childErr := child.CombinedOutput()
 	t.Logf("crash child output:\n%s", output)
-	if childErr != nil {
-		t.Fatalf("crash child: %v\n%s", childErr, output)
+	var exitErr *exec.ExitError
+	if !errors.As(childErr, &exitErr) || exitErr.ExitCode() != crashExitCode || bytes.Contains(output, []byte("DATA RACE")) {
+		t.Fatalf("crash child must exit %d without race warning: %v\n%s", crashExitCode, childErr, output)
 	}
-	before := workstats.Read().Replay.FramesApplied
+	// Diagnostic runs retain the complete postdeath image BEFORE Open can
+	// classify/replay/repair it. The optional directory is externally owned.
+	if retainDir := os.Getenv("GOMAP_NATIVE_COMPOSITE_RETAIN_DIR"); retainDir != "" {
+		if err := os.MkdirAll(retainDir, 0755); err != nil {
+			t.Fatal(err)
+		}
+		saved, err := os.MkdirTemp(retainDir, "pre-reopen-")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = os.CopyFS(saved, os.DirFS(dir)); err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("RETAINED PRE-REOPEN DB %s", saved)
+	}
+	before := workstats.Read().Replay
 	opts := OptionsFor(ProfileCommandWALDurable, dir)
 	opts.MemtableMode = "cow_btree"
 	opts.BackgroundCheckpointInterval = -1
 	opts.BackgroundCheckpointIdleDuration = -1
 	opts.MaxWALBytes = -1
 	database, err := Open(opts)
+	after := workstats.Read().Replay
+	attempted, applied, replayErrors := after.FramesAttempted-before.FramesAttempted, after.FramesApplied-before.FramesApplied, after.FrameErrors-before.FrameErrors
+	t.Logf("REPLAY attempted=%d applied=%d errors=%d open=%v", attempted, applied, replayErrors, err)
 	if err != nil {
 		t.Fatalf("COMPOSITE REPLAY OPEN: %v", err)
 	}
-	if n := workstats.Read().Replay.FramesApplied - before; n != 1 {
-		t.Fatalf("unapplied composite frames=%d want1", n)
+	replayClosed := false
+	t.Cleanup(func() {
+		if !replayClosed {
+			if err := database.Close(); err != nil {
+				t.Errorf("replay cleanup Close: %v", err)
+			}
+		}
+	})
+	physical := database.backend.AcquireSnapshot()
+	if physical == nil {
+		t.Fatal("missing reopened physical Snapshot")
+	}
+	token, tokenOK := physical.StateToken()
+	if err := physical.Close(); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("REOPEN PHYSICAL appliedLSN=%d token=%v", token.AppliedCommandLSN, tokenOK)
+	if !tokenOK {
+		t.Error("missing reopened physical token")
 	}
 	h, err := database.NativeSemanticBackend()
 	if err != nil {
@@ -277,14 +324,22 @@ func TestNativeJSONPublicRawTwoCollectionsAtomicTxn(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"a", "b"} {
-		if value, err := m.Get(name, []byte("x")); err != nil || string(value) != `{"v":"`+name+`"}` {
-			t.Fatalf("replay %s %q: %v", name, value, err)
+		value, err := m.Get(name, []byte("x"))
+		t.Logf("REPLAY EFFECT %s=%q error=%v", name, value, err)
+		if err != nil || string(value) != `{"v":"`+name+`"}` {
+			t.Errorf("replay %s %q: %v", name, value, err)
 		}
 	}
-	if value, err := database.Get([]byte("raw")); err != nil || string(value) != "new" {
-		t.Fatalf("replay raw %q: %v", value, err)
+	value, err := database.Get([]byte("raw"))
+	t.Logf("REPLAY EFFECT raw=%q error=%v", value, err)
+	if err != nil || string(value) != "new" {
+		t.Errorf("replay raw %q: %v", value, err)
+	}
+	if applied != 1 {
+		t.Errorf("unapplied composite frames=%d want1", applied)
 	}
 	cache, registry := database.cached, h.ValueLogIdentityPinRegistry()
+	replayClosed = true
 	if err = database.Close(); err != nil {
 		t.Fatal(err)
 	}
