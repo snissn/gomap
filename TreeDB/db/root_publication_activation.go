@@ -383,6 +383,9 @@ func stopRootPublicationRuntimeV1(runtime *rootPublicationRuntimeV1) (*rootpubli
 	}
 	stopErr := runtime.coordinator.Stop(context.Background())
 	handoff, handoffErr := runtime.coordinator.TakeRecoveryHandoff()
+	if handoffErr != nil {
+		handoffErr = runtime.retainFailedRecoveryHandoff(handoffErr)
+	}
 	if stopErr != nil || handoffErr != nil {
 		return handoff, errors.Join(publicRootPublicationErrorV1(stopErr), publicRootPublicationErrorV1(handoffErr))
 	}
@@ -2010,6 +2013,25 @@ func (runtime *rootPublicationRuntimeV1) failAmbiguousSeal(seal *rootPublication
 	if seal.prepared != nil {
 		_ = seal.idx.allocator.FailCOWCandidateV1(seal.prepared, poison)
 	}
+}
+
+// A refused handoff still owns the SAME coordinator's original recovery
+// arrays. Publish that runtime through its embedded physical-failure receipt
+// before any caller can withdraw discovery or attempt containing refund.
+func (runtime *rootPublicationRuntimeV1) retainFailedRecoveryHandoff(cause error) error {
+	runtime.disposalMu.Lock()
+	if !runtime.disposalAttempted {
+		runtime.disposalAttempted = true
+		runtime.disposalFailure.retainCause(0, cause)
+		runtime.disposalErr = &runtime.disposalFailure
+		if runtime.metadata != nil {
+			runtime.metadata.CleanupFailed()
+		}
+	}
+	err, db := runtime.disposalErr, runtime.db
+	runtime.disposalMu.Unlock()
+	db.retainOriginalCleanupError(err)
+	return err
 }
 
 // The coordinator is stopped before terminal disposal. Physical callbacks do

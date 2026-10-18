@@ -88,6 +88,14 @@ repairs only the discardable suffix above the durable frontier, replays complete
 commands with `LSN > AppliedLSN` through the deterministic command executor,
 then checkpoints the recovered `AppliedLSN` before cleaning covered WAL.
 
+A failed replay operation and failed physical teardown are distinct outcomes.
+Open returns the operation error after verified clean teardown and releases its
+original startup LOCK. Capture, handoff, physical-release, hook or incomplete
+teardown refusals retain the original startup receipt and LOCK. A refused
+coordinator handoff keeps the same runtime, exact resource arrays and containing
+charge reachable; observing its error never retries release. Public Close still
+returns both operational and cleanup errors.
+
 The command-frame V2 scanner, durable-frontier classifier, and physical suffix
 repair are the production `command_wal_v2` open path. Production append and
 reopen therefore use the same strict V2 format; V1 directories require a

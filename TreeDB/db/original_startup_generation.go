@@ -59,7 +59,14 @@ func (g *indexGen) finishStartupFailure(operation error, closeLock bool) (*retai
 	}
 	var cleanup error
 	if g.startupConstructed {
-		cleanup = g.startupDB.Close()
+		outcome, physical, completed := g.startupDB.closeWithCleanupOutcome()
+		operation = errors.Join(operation, outcome)
+		cleanup = physical
+		if !completed {
+			// An early guard, reentrant callback or incomplete teardown cannot
+			// authorize LOCK release merely because no physical error exists yet.
+			cleanup = errors.Join(cleanup, ErrRecoveryRequired)
+		}
 	} else {
 		cleanup = g.close()
 		cleanup = errors.Join(cleanup, g.closeStartupManager())

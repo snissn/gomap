@@ -112,3 +112,44 @@ func TestStartupReplayStopRetainsExactFailedResource(t *testing.T) {
 		t.Fatal("original recovery handoff did not complete")
 	}
 }
+
+// A real original allocator Fail callback can refuse capture. Stop's pending
+// outcome must not conceal that refusal or authorize a handoff/second disposal.
+func TestStartupReplayCaptureRefusalRetainsOriginalTransaction(t *testing.T) {
+	fixture := newDurableRootTransactionFixture(t, durableLineage(1), 2)
+	refused := errors.New("original allocator capture refused")
+	originalFail := fixture.tx.fail
+	fixture.tx.fail = func(input DurableRootCallbackInput, cause error) error {
+		if err := originalFail(input, cause); err != nil {
+			return err
+		}
+		return refused
+	}
+	c, err := New(Options{StartupSynchronous: true, Publisher: PublisherFunc(func(context.Context, *PreparedRootCandidate) PublishResult {
+		t.Fatal("startup scheduler published without caller")
+		return PublishResult{}
+	})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = c.Enqueue(context.Background(), fixture.candidate); err != nil {
+		t.Fatal(err)
+	}
+	if err = c.Stop(context.Background()); !errors.Is(err, refused) || !errors.Is(err, ErrPublicationStopped) {
+		t.Fatalf("stop lost pending/capture outcome: %v", err)
+	}
+	first, err := c.TakeRecoveryHandoff()
+	if first != nil || !errors.Is(err, refused) {
+		t.Fatalf("capture refusal handed off: %p %v", first, err)
+	}
+	if len(c.recoveryDurableRoots) != 1 || c.recoveryDurableRoots[0] != fixture.tx || fixture.tx.Owner() != ResourceOwnerCoordinator || fixture.failures.Load() != 1 {
+		t.Fatal("capture refusal lost same original transaction or repeated Fail")
+	}
+	second, again := c.TakeRecoveryHandoff()
+	if second != nil || again != err || fixture.failures.Load() != 1 {
+		t.Fatal("handoff observation retried original physical refusal")
+	}
+	if err = c.Stop(context.Background()); !errors.Is(err, refused) || fixture.failures.Load() != 1 {
+		t.Fatal("repeated stop lost original capture refusal")
+	}
+}

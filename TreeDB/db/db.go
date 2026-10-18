@@ -289,11 +289,14 @@ type DB struct {
 	// non-zero only while closeHooksRunning is true.
 	closeHooksOwner          uint64
 	closeHooksCloseRequested bool
+	closeHooksErr            error
 	// closeHooksWaitHook is a deterministic test seam for the concurrent waiter.
-	closeHooksWaitHook func()
-	closeHooksWG       sync.WaitGroup
-	closeTeardownOnce  sync.Once
-	closeTeardownErr   error
+	closeHooksWaitHook      func()
+	closeHooksWG            sync.WaitGroup
+	closeTeardownOnce       sync.Once
+	closeTeardownErr        error
+	closeTeardownCleanupErr error
+	closeTeardownCompleted  bool
 
 	ownedFinishGuardV6 *OwnedCallbackCloseGuard
 
@@ -3263,6 +3266,7 @@ func (db *DB) runCloseHooks() (retErr error) {
 	db.closeHooksMu.Unlock()
 	defer func() {
 		db.closeHooksMu.Lock()
+		db.closeHooksErr = retErr
 		db.closeHooksOwner = 0
 		db.closeHooksRunning = false
 		db.closeHooksMu.Unlock()
@@ -3454,11 +3458,18 @@ func (db *DB) runCaptureTeardownHooksLocked() error {
 }
 
 func (db *DB) Close() error {
+	err, _, _ := db.closeWithCleanupOutcome()
+	return err
+}
+
+// Publication outcome and physical teardown are independent. Startup consumes
+// this original completion result; a failed drain alone cannot retain LOCK.
+func (db *DB) closeWithCleanupOutcome() (outcome, cleanup error, completed bool) {
 	if db == nil {
-		return nil
+		return nil, nil, true
 	}
 	if err := db.ownedFinishGuardV6.CheckClose(); err != nil {
-		return err
+		return err, err, false
 	}
 	db.closeHooksMu.Lock()
 	closeHooksRunning := db.closeHooksRunning
@@ -3473,7 +3484,7 @@ func (db *DB) Close() error {
 			db.closeHooksMu.Lock()
 			db.closeHooksCloseRequested = true
 			db.closeHooksMu.Unlock()
-			return nil
+			return nil, nil, false
 		}
 		if closeHooksWaitHook != nil {
 			closeHooksWaitHook()
@@ -3491,7 +3502,10 @@ func (db *DB) Close() error {
 	if err := db.closeAfterHooksOnce(); err != nil {
 		errs = append(errs, err)
 	}
-	return errors.Join(errs...)
+	db.closeHooksMu.Lock()
+	hookCleanup := db.closeHooksErr
+	db.closeHooksMu.Unlock()
+	return errors.Join(errs...), errors.Join(hookCleanup, db.closeTeardownCleanupErr), db.closeTeardownCompleted
 }
 
 func (db *DB) closeAfterHooksOnce() error {
@@ -3499,12 +3513,13 @@ func (db *DB) closeAfterHooksOnce() error {
 		if testDBCloseHook != nil {
 			testDBCloseHook(db)
 		}
-		db.closeTeardownErr = db.closeAfterHooks()
+		db.closeTeardownErr, db.closeTeardownCleanupErr = db.closeAfterHooks()
+		db.closeTeardownCompleted = true
 	})
 	return db.closeTeardownErr
 }
 
-func (db *DB) closeAfterHooks() error {
+func (db *DB) closeAfterHooks() (outcome, cleanup error) {
 	defer func() {
 		db.conditionalOracle.mu.Lock()
 		defer db.conditionalOracle.mu.Unlock()
@@ -3517,7 +3532,13 @@ func (db *DB) closeAfterHooks() error {
 	if startupGen != nil && startupGen.startupDB != db {
 		startupGen = nil
 	}
-	var errs []error
+	var errs, cleanupErrs []error
+	cleanupFailed := func(err error) {
+		if err != nil {
+			errs = append(errs, err)
+			cleanupErrs = append(cleanupErrs, err)
+		}
+	}
 
 	// User callbacks have flushed their higher-level buffers. First pass through
 	// maintenanceMu so an already-admitted maintenance operation can finish
@@ -3560,9 +3581,10 @@ func (db *DB) closeAfterHooks() error {
 		var err error
 		rootHandoff, err = rootRuntime.coordinator.TakeRecoveryHandoff()
 		if err != nil {
-			errs = append(errs, fmt.Errorf("take root publication recovery handoff: %w", publicRootPublicationErrorV1(err)))
+			cleanupFailed(rootRuntime.retainFailedRecoveryHandoff(err))
+		} else {
+			db.rootPublication = nil
 		}
-		db.rootPublication = nil
 	}
 	// Writers and durable-root publication are now drained, while the command
 	// journal and its exact active namespace identity are still owned by this
@@ -3577,7 +3599,7 @@ func (db *DB) closeAfterHooks() error {
 			!errors.Is(err, errDurableWALCleanupProofUnavailable) &&
 			!errors.Is(err, errDurableWALCleanupProofStale) &&
 			!errors.Is(err, commitlog.ErrCommandWALCleanupSnapshotStale) {
-			errs = append(errs, fmt.Errorf("cleanup command WAL during close: %w", err))
+			cleanupFailed(fmt.Errorf("cleanup command WAL during close: %w", err))
 		}
 	}
 
@@ -3586,7 +3608,7 @@ func (db *DB) closeAfterHooks() error {
 	db.maintenanceMu.Lock()
 	defer db.maintenanceMu.Unlock()
 	if err := db.runInternalTeardownHooksMaintenanceLocked(); err != nil {
-		errs = append(errs, err)
+		cleanupFailed(err)
 	}
 	leafPageLog := db.leafPageLog
 	leafGenerationManifestStore := db.leafGenerationManifestStore
@@ -3598,18 +3620,18 @@ func (db *DB) closeAfterHooks() error {
 	db.teardownMu.Lock()
 	defer db.teardownMu.Unlock()
 	if err := db.runCaptureTeardownHooksLocked(); err != nil {
-		errs = append(errs, err)
+		cleanupFailed(err)
 	}
 	db.stopCommitCombiner()
 	db.pruner.Stop()
 	if db.valueLogRefTracker != nil {
 		if err := db.persistValueLogRefTracker(); err != nil {
-			errs = append(errs, err)
+			cleanupFailed(err)
 		}
 	}
 	if err := db.valueLogRefTracker.close(); err != nil {
 		db.retainOriginalCleanupError(err)
-		errs = append(errs, err)
+		cleanupFailed(err)
 	}
 	if db.ghostManager != nil {
 		db.closeGhostManagerCompletionV6(true)
@@ -3634,7 +3656,7 @@ func (db *DB) closeAfterHooks() error {
 		time.Sleep(closeSnapshotDrainSleep)
 	}
 	if remaining := db.snapshotAcquireInFlight(); remaining > 0 {
-		errs = append(errs, fmt.Errorf("db: Close timed out waiting for %d in-flight read-only snapshot acquisitions to complete", remaining))
+		cleanupFailed(fmt.Errorf("db: Close timed out waiting for %d in-flight read-only snapshot acquisitions to complete", remaining))
 	}
 	if rootRuntime != nil {
 		// Current/slot/parent roots still carry the cached proof allowance here.
@@ -3647,14 +3669,14 @@ func (db *DB) closeAfterHooks() error {
 		}
 	}
 	if err := db.releaseDurableRootResourcesV1(); err != nil {
-		errs = append(errs, err)
+		cleanupFailed(err)
 	}
 	if err := db.closeAllIndexes(); err != nil {
-		errs = append(errs, err)
+		cleanupFailed(err)
 	}
 	if group, ok := leafPageLog.(*leafPageLogLaneGroup); ok {
 		if err := group.CloseSelectedLanes(); err != nil {
-			errs = append(errs, err)
+			cleanupFailed(err)
 		}
 	}
 	db.commandWALDebt.releaseAll()
@@ -3665,7 +3687,7 @@ func (db *DB) closeAfterHooks() error {
 		if terminalState != nil {
 			if err := vm.Release(terminalState.ValueLogSet); err != nil {
 				db.retainOriginalCleanupError(vm.CleanupError())
-				errs = append(errs, err)
+				cleanupFailed(err)
 			}
 		}
 		var err error
@@ -3675,12 +3697,12 @@ func (db *DB) closeAfterHooks() error {
 			err = vm.Close()
 		}
 		if err != nil {
-			errs = append(errs, err)
+			cleanupFailed(err)
 		}
 	}
 	if commandJournal != nil {
 		if err := commandJournal.Close(); err != nil {
-			errs = append(errs, err)
+			cleanupFailed(err)
 		}
 	}
 	// Pending candidate handles and allocator transactions stay pinned through
@@ -3688,13 +3710,13 @@ func (db *DB) closeAfterHooks() error {
 	// coordinator's exact recovery handoff be released.
 	if rootRuntime != nil {
 		if err := rootRuntime.release(); err != nil {
-			errs = append(errs, err)
+			cleanupFailed(err)
 		}
 	}
 	if rootHandoff != nil {
 		if err := rootHandoff.ReleaseWithError(); err != nil {
 			db.retainOriginalCleanupError(err)
-			errs = append(errs, err)
+			cleanupFailed(err)
 		}
 	}
 	// Namespace sync proofs are valid only for this DB lifetime. Stable
@@ -3702,17 +3724,17 @@ func (db *DB) closeAfterHooks() error {
 	// after shutdown, while a later DB instance establishes fresh evidence.
 	db.valueLogIdentityPins.Close()
 	if err := db.valueLogIdentityPins.CleanupError(); err != nil {
-		errs = append(errs, err)
+		cleanupFailed(err)
 	}
 	if lock != nil && startupGen == nil {
 		if err := lock.Close(); err != nil {
-			errs = append(errs, err)
+			cleanupFailed(err)
 		}
 	}
 	if bgErr := db.backgroundError(); bgErr != nil {
-		errs = append(errs, bgErr)
+		cleanupFailed(bgErr)
 	}
-	return errors.Join(errs...)
+	return errors.Join(errs...), errors.Join(cleanupErrs...)
 }
 
 func currentGoroutineID() uint64 {
