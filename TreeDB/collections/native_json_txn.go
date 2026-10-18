@@ -210,7 +210,7 @@ func (t *NativeJSONTxn) GetFrom(name string, id []byte) ([]byte, error) {
 	return g.probe.Get(id)
 }
 
-// InsertBatch stages one strictly sorted batch. A second call refuses without
+// InsertBatch stages one batch through the shared immutable planner. A second call refuses without
 // changing the first batch. Other staging failures terminally invalidate the txn.
 func (t *NativeJSONTxn) InsertBatch(ids, documents [][]byte) error {
 	return t.InsertBatchInto("", ids, documents)
@@ -244,7 +244,7 @@ func (t *NativeJSONTxn) InsertBatchInto(name string, ids, documents [][]byte) (r
 	}
 	var arenaBytes uint64
 	for i, id := range ids {
-		if len(id) == 0 || documents[i] == nil || (i > 0 && bytes.Compare(ids[i-1], id) >= 0) {
+		if len(id) == 0 || documents[i] == nil {
 			return backenddb.ErrNativeSemanticUnsupported
 		}
 		n := uint64(len(id)) + uint64(len(documents[i]))

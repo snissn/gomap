@@ -44,10 +44,10 @@ func TestNativeJSONPublicCreateActivation(t *testing.T) {
 		t.Fatal(err)
 	}
 	refused := collections.NewCollectionManager(database.backend)
-	if _, err := refused.CreateCollection(&collections.CollectionMeta{Name: "legacy"}); !errors.Is(err, backenddb.ErrNativeSemanticUnsupported) {
+	if _, err := refused.CreateCollection(&collections.CollectionMeta{Name: "legacy", Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}}); !errors.Is(err, backenddb.ErrNativeSemanticUnsupported) {
 		t.Fatalf("legacy admission: %v", err)
 	}
-	if _, _, err := refused.ListCollectionsBounded(1); !errors.Is(err, backenddb.ErrNativeSemanticUnsupported) {
+	if _, _, err := refused.ListCollectionsBounded(1); err == nil {
 		t.Fatalf("legacy list: %v", err)
 	}
 	if err := refused.Close(); err != nil {

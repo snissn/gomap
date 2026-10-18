@@ -399,6 +399,7 @@ func persistIndexStateForDocumentFormat(format DocumentFormat) bool {
 }
 
 type CollectionManager struct {
+	nativeJSON                              *NativeJSONManager
 	initializationError                     error
 	legacyProducerRelease                   func()
 	managerCloseOnce                        sync.Once
@@ -423,6 +424,7 @@ type collectionManagerOptions struct {
 }
 
 type Collection struct {
+	nativeJSON                  *NativeJSONManager
 	typedGraphReconcile         *typedGraphReconcileToken
 	db                          *backenddb.DB
 	manager                     *CollectionManager
@@ -1739,6 +1741,18 @@ func newCollectionManager(database *backenddb.DB, opts collectionManagerOptions)
 	manager := &CollectionManager{db: database}
 	if database != nil {
 		release, err := database.AdmitLegacyCommandProducer()
+		if errors.Is(err, backenddb.ErrNativeSemanticUnsupported) {
+			native, nativeErr := NewNativeJSONManager(database)
+			if nativeErr == nil {
+				manager.db = nil // no legacy write domain or producer can escape this role
+				manager.nativeJSON = native
+				if opts.registerBackendHooks {
+					manager.closeUnregister = database.RegisterCloseHookBefore(manager.closeForBackend)
+				}
+				return manager
+			}
+			err = nativeErr
+		}
 		if err != nil {
 			manager.initializationError = err
 			manager.db = nil
@@ -1826,6 +1840,9 @@ func (m *CollectionManager) closeManagerOwned() error {
 }
 
 func (m *CollectionManager) isClosing() bool {
+	if m.nativeJSON != nil {
+		return m.closing.Load() || m.nativeJSON.db.IsClosing()
+	}
 	return m.closing.Load() || m.db == nil || m.db.IsClosing()
 }
 
@@ -3637,6 +3654,15 @@ func (unlock collectionMutationUnlock) Unlock() {
 // process-crash recoverable under WAL-on modes and is not an fsync guarantee
 // unless composed with a sync-capable barrier.
 func (m *CollectionManager) CreateCollection(meta *CollectionMeta) (*CollectionMeta, error) {
+	if m != nil && m.nativeJSON != nil {
+		if m.isClosing() {
+			return nil, backenddb.ErrClosed
+		}
+		if meta == nil {
+			return nil, errors.New("collections: nil collection metadata")
+		}
+		return m.nativeJSON.CreateCollection(*meta)
+	}
 	if m != nil && m.initializationError != nil {
 		return nil, m.initializationError
 	}
@@ -4016,6 +4042,15 @@ func (m *CollectionManager) OpenCollection(name string) (*Collection, error) {
 }
 
 func (m *CollectionManager) openCollectionWithCommandWALIntent(name string, commandWALIntent *backenddb.CommandWALIntent) (*Collection, error) {
+	if m != nil && m.nativeJSON != nil {
+		if m.isClosing() {
+			return nil, backenddb.ErrClosed
+		}
+		if commandWALIntent != nil {
+			return nil, backenddb.ErrNativeSemanticUnsupported
+		}
+		return m.openNativeCollection(name)
+	}
 	if m != nil && m.initializationError != nil {
 		return nil, m.initializationError
 	}
@@ -4818,6 +4853,13 @@ func (c *Collection) dropIndexes(names map[string]struct{}, all bool) (*Collecti
 // relaxed success remains process-local until Flush, FlushAll, Checkpoint, or
 // Close covers the write.
 func (c *Collection) Insert(id, document []byte) ([]byte, error) {
+	if c != nil && c.nativeJSON != nil {
+		ids, err := c.nativeInsertBatch([][]byte{id}, [][]byte{document})
+		if err != nil {
+			return nil, err
+		}
+		return ids[0], nil
+	}
 	if c == nil {
 		return nil, errCollectionNil
 	}
@@ -11654,6 +11696,9 @@ func (c *Collection) insertOneViaBatchWithCoverageLocked(id, document []byte, ad
 // batch recoverable as one mutation boundary. Ordinary pre-commit errors expose
 // no partial batch. Post-commit failures must be reported as commit-ambiguous.
 func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
+	if c != nil && c.nativeJSON != nil {
+		return c.nativeInsertBatch(ids, documents)
+	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
 	admissionState := c.lockCollectionCommandWALAdmission()
@@ -11974,6 +12019,12 @@ func (c *Collection) insertBatchWithCommandWALIntent(ids, documents [][]byte, tr
 }
 
 func (c *Collection) insertBatchWithCommandWALIntentSchemaLocked(ids, documents [][]byte, trustedValidBSON bool, templateEncoder *TemplateV1Encoder, commandWALIntent *backenddb.CommandWALIntent, execOpts insertBatchExecutionOptions) (resultIDs [][]byte, resultErr error) {
+	if c != nil && c.nativeJSON != nil {
+		if trustedValidBSON || templateEncoder != nil || commandWALIntent != nil || execOpts.trustedFloat32Projection != nil || execOpts.prepared != nil || execOpts.splitInsert != nil || execOpts.insertStats != nil {
+			return nil, backenddb.ErrNativeSemanticUnsupported
+		}
+		return c.nativeInsertBatch(ids, documents)
+	}
 	defer func() { resultErr = c.invalidateVectorIndexCoverageOnAcceptedMutation(resultErr) }()
 
 	if c == nil {
@@ -22743,6 +22794,9 @@ func (c *Collection) StoredDocumentJSON(document []byte) ([]byte, error) {
 // JSON payload. The returned slice is owned by the caller. Missing documents return
 // (dst[:0], false, nil).
 func (c *Collection) GetInto(documentID []byte, dst []byte) ([]byte, bool, error) {
+	if c != nil && c.nativeJSON != nil {
+		return c.nativeGetInto(documentID, dst)
+	}
 	if c == nil {
 		return dst[:0], false, errCollectionNil
 	}

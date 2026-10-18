@@ -18,6 +18,8 @@ import (
 // NativeJSONRead owns one exact complete-cut capture. It exposes no mutable
 // legacy handle; returned values are copied before the captured scratch is reused.
 type NativeJSONRead struct {
+	meta          CollectionMeta
+	metadataLease *memtable.COWExternalLease
 	mu            sync.Mutex
 	capture       backenddb.NativeSemanticCapture
 	domain        nativeDomainRead
@@ -98,8 +100,8 @@ func (m *NativeJSONManager) Capture(name string) (result *NativeJSONRead, result
 			return nil, backenddb.ErrNativeSemanticUnsupported
 		}
 		policy, err := collectionRootStoragePolicy(meta, collectionPrimaryRootName(name))
+		r.meta, r.metadataLease = meta, transient
 		meta = CollectionMeta{}
-		transient.Close()
 		if err != nil {
 			return nil, err
 		}
@@ -139,6 +141,7 @@ func (m *NativeJSONManager) Capture(name string) (result *NativeJSONRead, result
 	if !ok {
 		return nil, tree.ErrKeyNotFound
 	}
+	r.meta = *c.schema.meta
 	d, ok := c.domains.Get("primary")
 	if !ok {
 		return r, nil
@@ -326,6 +329,9 @@ func (r *NativeJSONRead) Close() error {
 		return nil
 	}
 	r.domain, r.scratch = nativeDomainRead{}, nativeDomainReadScratch{}
+	r.meta = CollectionMeta{}
+	metadataLease := r.metadataLease
+	r.metadataLease = nil
 	var err error
 	if r.privateDomain != nil {
 		done, releaseErr := (nativeDomainLifetime{}).Release(r.privateDomain)
@@ -340,6 +346,9 @@ func (r *NativeJSONRead) Close() error {
 	r.lease = nil
 	r.mu.Unlock()
 	r = nil
+	if metadataLease != nil {
+		metadataLease.Close()
+	}
 	lease.Close()
 	return err
 }

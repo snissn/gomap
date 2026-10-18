@@ -3,9 +3,11 @@
 This is provisional integration for issue #5142, not an accepted collection mode
 or completion of the full native collection packet. `NewNativeJSONManager`
 explicitly activates the fixed cache/backend owner. Its restricted methods never
-embed or return a broad legacy manager or collection. Legacy construction must
-hold the same backend's producer admission; unsupported live producers remain
-fenced. Repeated activation uses the same live owner.
+embed or return a broad legacy manager or collection. Before activation, existing managers hold the same backend's legacy producer
+admission and retain their original barriers. After explicit activation, ordinary
+and hook-free CollectionManager construction select the same fixed native JSON
+core without a legacy backend, write domain, coordinator or raw barrier. Unsupported
+legacy producers remain fenced. Repeated activation uses the same live owner.
 
 The selected public entry is an ordinary `treedb.Open` with
 `Options.MemtableMode = "cow_btree"`, followed by
@@ -21,7 +23,7 @@ backend-authoritative route and do not provide this native capability.
 The two-phase frontend is `manager.Begin(collection, additional...)`, then
 transaction `InsertBatchInto`, `GetFrom`, `Commit()` and `Close()`. Single-collection
 callers can use `InsertBatch(ids, documents)` and `Get(id)`. Each bound collection
-accepts one strictly sorted insert batch; a second staging call for that collection
+accepts one insert batch (the existing immutable planner sorts its primary keys); a second staging call for that collection
 refuses while preserving the first batch. Other staging failures
 terminally invalidate the transaction. Always close the transaction, including
 on refusal. One-shot `manager.InsertBatch` delegates to this frontend and no
@@ -185,3 +187,36 @@ exactly one unapplied composite frame containing all three effects. The first
 replay failure (missing existing NeedsReplayLogSupport registration flag) and
 its correction remain in artifacts/p3/composite01. This is a scoped integration
 proof; the full issue and performance/review gates remain open.
+
+## Existing collection API checkpoint
+
+After `database.NativeSemanticBackend()` explicitly activates the original COW
+owner, `collections.NewCollectionManager(handle)` and the hook-free replay-manager
+constructor support JSON `CreateCollection`, `OpenCollection`, `Insert`,
+`InsertBatch`, `Get`/`GetInto`, and `OpenCollectionReadView` with full-document
+`FetchDocumentsByID`. Both frontends stage through the same `NativeJSONTxn` and
+`insertBatchPlanner`; input IDs may be unsorted, returned IDs preserve input order,
+and duplicate insertion fails before assignment. Captured reads retain the exact
+complete cut and keep old rows visible across later native writes and checkpoint.
+Close each read view and manager before closing the original public database.
+
+This route does not auto-activate an ordinary Open or remove preactivation legacy
+barriers. Indexed/typed collection creation, secondary-index DDL, update/delete,
+prepared replay-intent application, projected fetches, list, standalone sync and
+stats-specific insert variants remain unsupported on these native handles. Their
+legacy backend/write-domain authority is absent; metadata-only vector registration
+also refuses before changing its runtime maps. Manager configuration and Close
+remain safe without creating a legacy producer.
+
+`TestNativeExistingCollectionPublicLifecycle` proves the selected existing API in
+all three profiles, including exact response IDs/values, refusal without WAL
+assignment, held read visibility, checkpoint/reopen, and original final bytes,
+sources, leases, views, generations and identity pins at zero. Its durable child
+exits at sentinel 97 with disk LSN below the two acknowledged singleton frames;
+reopen must apply exactly those create/insert frames and recover both rows.
+
+Added lifetime costs are one native core per existing manager, caller-owned
+Collection metadata/handle and result-ID arena, and one admitted read-view wrapper.
+Recovered read metadata now stays under its original admitted decode lease until
+read Close. No performance improvement is claimed; existing native metadata sizing,
+full producer/type/index coverage and graph performance gates remain open.
