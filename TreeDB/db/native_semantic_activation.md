@@ -73,3 +73,28 @@ cache Close begins before it calls backend Close. The narrow cache-open probe is
 observational and grants no activation/publication authority. First activation
 retains all existing quiescence checks; direct private calls retain exact nonnil
 owner validation and reject poison even when already active.
+
+Constructor roles
+
+Ordinary public `treedb.Open` retains its original COW owner when requested.
+`database.NativeSemanticBackend()` uses the existing public lifecycle selection
+and calls that backend's existing activation operation before returning its
+handle. Refusal returns no handle. Activation never attaches/rebuilds a journal
+or migrates earlier backend publications. The handle borrows the public DB's
+lifetime; callers must close the public DB, not the backend. Restricted native
+managers can consume this handle without importing collections into TreeDB.
+
+`OpenBackendWithCachedLeafLog`, its Stats variant and its deferred-vector-build
+maintenance variant instead leave logical publication with the returned backend.
+They reuse the original non-COW cache's persistent leaf/value-log services and
+Close/side-store lifetime. A requested `cow_btree` becomes actual `btree` cache
+services only after original profile/index policy has selected the backend's
+physical options (including command-WAL COW PRIMARY). Actual cache stats report
+`btree`. These factories bind no private COW owner or native semantic bridge;
+native activation explicitly refuses. Existing legacy backend-root producers
+remain on their original authority. Applications selecting native semantics use
+ordinary `Open` and `NativeSemanticBackend` instead.
+
+This is an opening-time lifecycle choice. No live cut, accepted history, or
+frontier is reset, recaptured, or reconciled with direct legacy publications.
+Full legacy-producer migration and whole-packet qualification remain open.

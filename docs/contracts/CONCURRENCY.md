@@ -126,3 +126,21 @@ against the bounded engine mutation history and applies to latest roots.
 changed dependency. Open transaction iterators reject further mutation with
 `ErrTxnIteratorOpen`; commit/close invalidates children. See
 `TreeDB/docs/spec/raw-cow-transactions.md` for the supported ownership fence.
+
+### Backend-root and native constructor lifetimes
+
+`OpenBackendWithCachedLeafLog` and its stats/maintenance variants return backend
+publication authority plus original cached persistent-log services. Requested
+physical/profile policy is preserved; requested `cow_btree` uses actual `btree`
+cache services and does not bind a logical COW owner. Stats report the actual
+cache mode. Keep the returned cleanup callback and invoke it to close services
+and side stores in their original order. Native semantic activation refuses on
+this backend-only lifecycle.
+
+For restricted native semantics, use ordinary `Open` with `cow_btree`, then
+`NativeSemanticBackend()`. The method returns a backend only after existing
+activation succeeds, with all first-activation quiescence checks intact. Its
+handle borrows the public DB lifetime: close the public DB rather than closing
+the borrowed backend. Raw cache writes and native publications share that same
+owner; ordinary direct backend publication aliases remain fenced. There is no
+lazy attachment or migration between these constructor lifecycles.

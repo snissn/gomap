@@ -42,3 +42,23 @@ func (db *DB) SetNativeSemanticPublication(b Batch, native *backenddb.NativePrep
 	}
 	return inner.SetNativeSemanticPublication(db.txnOwner, native)
 }
+
+// NativeSemanticBackend selects this DB's existing complete-cut COW authority
+// and returns its backend for restricted native semantic consumers. Activation
+// must succeed before any handle escapes; it refuses incompatible or pending
+// work and never migrates a backend-only factory. Ordinary raw Open remains
+// unactivated until this call. The returned handle borrows this DB's lifetime:
+// keep this DB open, and close this DB rather than the backend.
+func (db *DB) NativeSemanticBackend() (*backenddb.DB, error) {
+	_, backend, err := db.captureReadOwners()
+	if err != nil {
+		return nil, err
+	}
+	if backend == nil {
+		return nil, backenddb.ErrNativeSemanticUnsupported
+	}
+	if err := backend.ActivateNativeSemanticOwner(); err != nil {
+		return nil, err
+	}
+	return backend, nil
+}
