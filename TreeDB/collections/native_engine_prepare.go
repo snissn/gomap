@@ -66,6 +66,10 @@ func newNativeEnginePreparation(base *nativeEngineVersion, collectionCount, doma
 	e := &nativeEngineVersion{nextIncarnation: base.nextIncarnation, allocator: base.allocator, maintenance: base.maintenance, refund: &nativeEngineRefund{lease: lease}, preparation: &nativeEnginePreparation{ownedDomains: make([]*nativeDomainState, 0, domainCount), ownedCollections: make([]*nativeCollectionState, 0, collectionCount)}}
 	e.refs.Store(1)
 	e.cleanup.Work = e
+	if base.inventory != nil {
+		base.inventory.retain()
+		e.inventory = base.inventory
+	}
 	return e, nil
 }
 

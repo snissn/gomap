@@ -23,6 +23,7 @@ type nativeEngineVersion struct {
 	// touched physical collection domains. Its native generation consumes the
 	// same active+captured Sources bound before the first catalog mutation.
 	catalog         *nativeDomainState
+	inventory       *nativeResourceInventory
 	nextIncarnation uint64
 	allocator       backenddb.NativeSemanticAllocator
 	maintenance     backenddb.NativeSemanticAllocator
@@ -35,15 +36,17 @@ type nativeEngineVersion struct {
 // This independently preborn original accounting receipt owns no engine,
 // embedded cleanup record, collection, resource or destructor backpointer.
 type nativeEngineRefund struct {
-	lease    cowbtree.OwnedMapLease
-	children cowbtree.OwnedMapCompletion
+	lease     cowbtree.OwnedMapLease
+	children  cowbtree.OwnedMapCompletion
+	inventory rootpublication.SemanticCleanupCompletion
 }
 
 func (r *nativeEngineRefund) Close() {
-	lease, children := r.lease, r.children
-	r.lease, r.children = nil, cowbtree.OwnedMapCompletion{}
+	lease, children, inventory := r.lease, r.children, r.inventory
+	r.lease, r.children, r.inventory = nil, cowbtree.OwnedMapCompletion{}, rootpublication.SemanticCleanupCompletion{}
 	r = nil
 	children.Complete()
+	inventory.Complete()
 	if lease != nil {
 		lease.Close()
 	}
@@ -141,6 +144,21 @@ func (e *nativeEngineVersion) FinishSemanticCleanup() (rootpublication.SemanticC
 		e.refund.children = cowbtree.OwnedMapCompletion{}
 		done.Complete()
 		return rootpublication.SemanticCleanupCompletion{}, failure
+	}
+	if e.inventory != nil {
+		work := e.inventory.release()
+		if work != nil {
+			done, err := work.Finish()
+			if err != nil {
+				children := e.refund.children
+				e.refund.children = cowbtree.OwnedMapCompletion{}
+				children.Complete()
+				return rootpublication.SemanticCleanupCompletion{}, err
+			}
+			e.refund.inventory = done
+		}
+		e.inventory = nil
+		work = nil
 	}
 	e.allocator, e.maintenance = nil, nil
 	e.nextIncarnation = 0

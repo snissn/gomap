@@ -238,3 +238,37 @@ The V2 frame identity still rejects this command kind: canonical aggregate RID
 fencing, the durable-only typed gate, full-frame admission, native final-effect
 preparation and one outer replay/install must join before it can be emitted or
 replayed. Payload codec tests alone do not qualify composite transactions.
+
+### Catalog directory and exact opening inventory (construction)
+
+The common private catalog replacement helper applies create, rename, drop and
+schema replacement to both name and incarnation directories and to actual
+system-tree mutations. Create consumes the monotone next incarnation; rename
+preserves it; drop does not reclaim it. Before admission, the helper requires
+the matching durable name identity, counter, metadata and removal effects.
+Original producer plans remain responsible for canonical schema validation and
+complete physical root descriptor effects. Partial builders acquire their real
+shared edges before returning, including after a later admission refusal.
+
+Opening resource selection uses the existing recoverable-root capture and all
+five captured snapshot identity fields. A missing exact identity requires
+reprepare; selection never falls back to current visible resources. An explicit
+opening import may convert generic metadata once into the original registry's
+selected persistent representation. Subsequent same-owner imports share its
+persistent roots. This opening census is not a collection commit operation.
+
+The original native inventory owns an independent enrollment in the same
+budget before import, then releases the original census off-gate. Engines share
+one inventory descriptor directly, without retaining an engine ancestor or the
+census. Last cleanup releases selected resources before its enrollment and
+returns the original independent containing receipt only after aliases detach.
+Any original census or physical resource cleanup failure parks the same
+inventory Work, selected set, enrollment and charge. Error observation does not
+retry its destructor. The opening basis must already enroll the original
+storage registry before the census allocates; the actual cache basis supplies
+that premise.
+
+This seam does not yet provide the native pending value-pointer resolver,
+complete typed asset updates, catalog bootstrap decoder, or public producer
+routing. The complete semantic interface remains fenced until those owners and
+all producer paths join the same immutable cut.

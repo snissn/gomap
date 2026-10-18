@@ -4,6 +4,7 @@ import (
 	"errors"
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
 	"github.com/snissn/gomap/TreeDB/internal/txnhistory"
@@ -120,6 +121,9 @@ type NativeAllocationReceipt interface{ Close() }
 type NativeSemanticAllocator interface {
 	Limits() memtable.COWLimits
 	AdmitNativeBytes(uint64) (*memtable.COWExternalLease, error)
+	// AcquireRetention enrolls existing storage-owned metadata in this SAME
+	// budget. The enrollment carries no engine, capture or cache backpointer.
+	AcquireRetention(uint64) (retainedalloc.Lease, error)
 	NewNativeCOWWriter(sourceOwnerBytes uint64) (*memtable.COWWriter, error)
 }
 

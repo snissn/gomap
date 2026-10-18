@@ -1310,6 +1310,31 @@ reject older metadata versions instead of migrating them.
 
 ## 3.2 Collection Document Payloads
 
+### Native catalog incarnation records (construction)
+
+The native immutable catalog implementation under construction reserves these
+ordinary system-tree keys:
+
+- `collections/native/v1/next-incarnation`: next unused logical collection ID.
+- `collections/native/v1/incarnation/<collection-name>`: the live name's ID.
+
+Both values are exactly 16 bytes: ASCII `NCI1` at offsets 0–3, a kind byte
+at offset 4 (`0` for an incarnation, `1` for the next counter), three zero
+reserved bytes, and a nonzero big-endian `uint64` at offsets 8–15. Unknown
+versions, wrong kinds, nonzero reserved bytes, zero IDs and truncated values
+are invalid. These IDs are independent of physical root page IDs and WAL LSNs.
+
+Creation consumes the current counter and advances it in the same complete
+catalog publication as the metadata and name record. Rename moves the name
+record without changing its ID. Drop removes the name record without reducing
+the counter; recreating the same name gets a fresh ID. A counter equal to the
+maximum `uint64` represents exhaustion and refuses further creation before
+admission. Existing catalogs without identity records require an explicit
+opening decision; a reader must not invent IDs from physical page IDs.
+
+These records currently have private build/reopen controls. Public collection
+producer activation and native catalog bootstrap remain incomplete.
+
 ### 3.2.1 BSON-ordered scalar secondary-index keys (v2)
 
 An index whose persisted metadata selects `bson-ordered-v2` is valid only for a
