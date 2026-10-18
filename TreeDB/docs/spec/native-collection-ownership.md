@@ -349,3 +349,23 @@ releases the original inventory edge. The containing refund follows original
 Work detachment; a physical cleanup failure remains on the same original Work.
 This reader does not establish pending pointer/selector lineage, typed assets,
 dictionary definitions or public native routing.
+
+### Identity-free typed row backing
+
+The private staged typed row reuses `columnDeclaredRow` and the existing narrow
+typed string/float32-vector schema gate. It copies the document ID, map key,
+declared strings/vectors and retained non-column payload after original budget
+admission, and retains its immutable schema. The originating planner must first
+validate retained payload semantics and write-profile eligibility. A staged row
+owns no physical coordinates, manifest identity, provisional LSN or reconstructed
+JSON projection. Asset-borrowed carriers and unrelated hidden values reject
+before admission. Canonical normalized-cosine vectors are validated and copied
+without a second normalization.
+
+Sealed row overlays keep the latest row or tombstone under its owned key. Old
+overlays retain their original row/schema backing across replacement, deletion,
+recreation and budget Close. Last row release clears payload and schema aliases
+and returns independent original receipts; the containing map or caller clears
+its own aliases before completing refunds. This descriptor is construction for
+typed staging. It does not provide typed asset finalization, exact pending
+locator/template closure, transaction routing or producer activation.
