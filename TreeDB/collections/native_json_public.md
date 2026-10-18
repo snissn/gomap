@@ -24,20 +24,33 @@ native Create/Insert, a later ordinary raw Set, identical State/Snapshot/sequenc
 from the two public capture routes, held native and raw reads across a checkpoint,
 Close and reopen, and the first recovered native mutation. WAL profiles require a
 nonzero recovered canonical LSN. Its original identity-pin registries must drain
-without cleanup errors. The first run after the constructor-role checkpoint is
+without cleanup errors. The first run after the constructor-role checkpoint was
 RED for durable and relaxed profiles: native Create/Insert, raw Set and exact
 shared-capture checks succeed, then the mixed public checkpoint reports
 `pending public command WAL starts at 3 after applied 0`. Close preserves that
-failure. NoWAL passes the full external lifecycle. No repair or waived assertion
-is included. The internal tests below still pass and separately provide original
-cache-accounting final-zero, true suffix overlap and unapplied-WAL replay evidence;
-they do not substitute for the failing external WAL route.
+failure. That original regression and failure log remain unchanged. After the
+lower frozen-cut coverage fix, all three external profile cells pass normally
+and with race detection. The internal tests below separately provide original
+cache-accounting final-zero, true suffix overlap and unapplied-WAL replay evidence.
+
+`TestNativeJSONPublicMixedOrdersCapturedFrontier` is an internal scheduling
+companion, distinct from the external entry proof. It exercises native-first/raw-last
+and raw-first/native-last commands. WAL cases pause the existing durability
+observer at the original PRIMARY file's data sync, after frontier capture and
+producer-lock release but before durable publication and handoff. Two newer
+native/raw commands complete before the pause is released. The first physical
+Snapshot must cover exactly the old complete prefix (LSN 3), exclude the newer
+suffix (through LSN 5), and contain only old values; latest memory sees the suffix,
+and held native/raw views remain old. A second drain covers the suffix, then reopen
+checks all values. All six ordering/profile cells pass normally and with race
+detection. NoWAL cells exercise sequential lifecycle, since they exclude
+post-frontier admission. No new production scheduling hook is introduced.
 
 `TestNativeJSONPublicCreateInsertCapturedViewCheckpointReplay` exercises actual
 public native Create and InsertBatch, exact Get results, a held old read, and a
-newer native insertion after the checkpoint cut was frozen. The existing public
-checkpoint hook pauses before forwarding the captured publication; the newer
-insertion proceeds while that original cut is pending. Handoff preserves both
+newer native insertion after the checkpoint cut was frozen. The same existing
+durability observer pauses physical publication; the newer insertion proceeds
+while that original cut is pending. Handoff preserves both
 the held old row and the newer suffix. Public Close requires original cache
 bytes, sources, views, external leases and generations to reach zero.
 

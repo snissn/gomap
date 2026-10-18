@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/collections"
@@ -174,19 +173,11 @@ func TestNativeJSONPublicRowsCapturedCheckpoint(t *testing.T) {
 			}
 		}
 	})
-	reached, release := make(chan struct{}), make(chan struct{})
-	var once sync.Once
-	database.cached.SetCommandWALCheckpointPublishHook(func(sync bool) (uint64, []backenddb.CommandWALLSNRange, error) {
-		once.Do(func() { close(reached) })
-		<-release
-		return database.preparePublicCommandWALPendingPublish(sync)
-	})
-	checkpointDone := make(chan error, 1)
-	go func() { checkpointDone <- database.Checkpoint() }()
-	<-reached
+	resume := startNativeJSONPausedCheckpoint(t, database, opts.Dir)
 	if err = manager.InsertBatch("rows", [][]byte{[]byte("b")}, [][]byte{[]byte(`{"n":2}`)}); err != nil {
-		close(release)
-		<-checkpointDone
+		if checkpointErr := resume(); checkpointErr != nil {
+			t.Errorf("checkpoint after suffix error: %v", checkpointErr)
+		}
 		t.Fatalf("NEWER INSERT: %v", err)
 	}
 	if got, err := held.Get([]byte("a")); err != nil || string(got) != `{"n":1}` {
@@ -195,11 +186,9 @@ func TestNativeJSONPublicRowsCapturedCheckpoint(t *testing.T) {
 	if _, err := held.Get([]byte("b")); !errors.Is(err, tree.ErrKeyNotFound) {
 		t.Fatalf("held old absence: %v", err)
 	}
-	close(release)
-	if err = <-checkpointDone; err != nil {
+	if err = resume(); err != nil {
 		t.Fatalf("CHECKPOINT with newer suffix: %v", err)
 	}
-	database.cached.SetCommandWALCheckpointPublishHook(database.preparePublicCommandWALPendingPublish)
 	t.Log("REAL FROZEN CUT handed off while newer native suffix survives")
 	for _, id := range []string{"a", "b"} {
 		want := `{"n":1}`
@@ -458,26 +447,16 @@ func TestNativeJSONPublicRecoveredPointersDescriptorImport(t *testing.T) {
 	if after := database.backend.Stats()["treedb.command_wal.live_accepted_max_lsn"]; before == "" || before != after {
 		t.Fatalf("duplicate appended: before=%s after=%s", before, after)
 	}
-	reached, release := make(chan struct{}), make(chan struct{})
-	var once sync.Once
-	database.cached.SetCommandWALCheckpointPublishHook(func(sync bool) (uint64, []backenddb.CommandWALLSNRange, error) {
-		once.Do(func() { close(reached) })
-		<-release
-		return database.preparePublicCommandWALPendingPublish(sync)
-	})
-	done := make(chan error, 1)
-	go func() { done <- database.Checkpoint() }()
-	<-reached
+	resume := startNativeJSONPausedCheckpoint(t, database, opts.Dir)
 	if err := manager.InsertBatch("rows", [][]byte{[]byte("suffix")}, [][]byte{[]byte(`{"n":2}`)}); err != nil {
-		close(release)
-		<-done
+		if checkpointErr := resume(); checkpointErr != nil {
+			t.Errorf("checkpoint after suffix error: %v", checkpointErr)
+		}
 		t.Fatal(err)
 	}
-	close(release)
-	if err := <-done; err != nil {
+	if err := resume(); err != nil {
 		t.Fatalf("pointer suffix handoff: %v", err)
 	}
-	database.cached.SetCommandWALCheckpointPublishHook(database.preparePublicCommandWALPendingPublish)
 	checkOriginalPointers(database)
 	for _, name := range []string{"rows", "other"} {
 		if got, err := manager.Get(name, []byte("old")); err != nil || string(got) != value {
