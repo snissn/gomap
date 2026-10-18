@@ -84,12 +84,6 @@ func (db *DB) checkpointCOWContext(ctx context.Context, automatic bool) (retErr 
 		return err
 	}
 	var publish checkpointCommandWALPublish
-	if hook := db.loadCommandWALCheckpointPublishHook(); hook != nil {
-		publish.appliedLSN, publish.ranges, err = hook(true)
-		if err != nil {
-			return err
-		}
-	}
 	if hook := db.testBeforeCheckpointFrontierDrain; hook != nil {
 		hook()
 	}
@@ -100,11 +94,6 @@ func (db *DB) checkpointCOWContext(ctx context.Context, automatic bool) (retErr 
 	frontier = nil
 	if err != nil {
 		return err
-	}
-	if publish.appliedLSN != 0 && !publish.consumed {
-		if _, err = db.publishCommandWALCheckpointApplied(publish.appliedLSN, publish.ranges); err != nil {
-			return err
-		}
 	}
 	if err = ctx.Err(); err != nil {
 		return err
@@ -133,6 +122,20 @@ func (db *DB) rotateCOWCheckpointFrontier(ctx context.Context, postFrontier bool
 			db.mutableBytes.Store(0)
 		}
 		c.writerMu.Unlock()
+		// writeMu still excludes every same-owner append. Rotate the journal at
+		// this complete raw+semantic cut, independently of public raw notices.
+		// Rotation is a file fence; only the canonical WAL owner can advance W.
+		if err == nil && db.externalCommandWAL {
+			wal, ok := db.backend.(interface {
+				CommandWALActiveBytes() int64
+				RotateCommandWALActiveSegment(bool) error
+			})
+			if !ok {
+				err = ErrCOWUnsupported
+			} else if wal.CommandWALActiveBytes() > 0 {
+				err = wal.RotateCommandWALActiveSegment(true)
+			}
+		}
 		if err == nil && db.snapshotCommandWALCheckpointCutover() && db.externalCommandWAL && postFrontier {
 			db.checkpointPostFrontierAdmission.Store(true)
 		}
@@ -242,21 +245,10 @@ func (db *DB) closeCOWFrontier() (closeErr error) {
 		return err
 	}
 	var publish checkpointCommandWALPublish
-	if hook := db.loadCommandWALCheckpointPublishHook(); hook != nil {
-		publish.appliedLSN, publish.ranges, err = hook(true)
-		if err != nil {
-			return err
-		}
-	}
 	err = db.flushCOWFrozenCut(true, &publish, frontier)
 	frontier = nil
 	if err != nil {
 		return err
-	}
-	if publish.appliedLSN != 0 && !publish.consumed {
-		if _, err = db.publishCommandWALCheckpointApplied(publish.appliedLSN, publish.ranges); err != nil {
-			return err
-		}
 	}
 	if err = db.backendCheckpointBoundary(false); err != nil {
 		return err

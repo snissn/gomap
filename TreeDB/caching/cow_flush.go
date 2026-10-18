@@ -288,13 +288,18 @@ func (db *DB) flushCOWFrozenCut(syncFlush bool, publish *checkpointCommandWALPub
 // forceIdle is private to the exact-basis, fully sealed fallback predicate path.
 func (db *DB) flushCOWFrozenCutForFallback(syncFlush bool, publish *checkpointCommandWALPublish, cut *cowReadCut, forceIdle bool) (retErr error) {
 	c := db.cow
+	// The caller receives completion only. Coverage is always reconstructed
+	// from this immutable cut and its exact captured disk basis below.
+	completed := publish
+	var localPublish checkpointCommandWALPublish
+	publish = &localPublish
+	if completed != nil {
+		*completed = checkpointCommandWALPublish{}
+	}
 	if cut == nil {
 		return backenddb.ErrClosed
 	}
 	target := rootpublication.SealedPrefix{LogicalSequence: cut.frozenLogicalSeq, CanonicalLSN: cut.frozenCommandLSN}
-	if publish != nil && publish.appliedLSN != 0 {
-		target.CanonicalLSN = publish.appliedLSN
-	}
 	if !forceIdle && len(cut.frozen) == 0 && (c.prefix == nil || target == c.prefix.LogicalFrontiers().S) {
 		return c.releaseCut(cut)
 	}
@@ -336,7 +341,6 @@ func (db *DB) flushCOWFrozenCutForFallback(syncFlush bool, publish *checkpointCo
 			refund.Close()
 		}
 	}()
-	var localPublish checkpointCommandWALPublish
 	var localRange [1]backenddb.CommandWALLSNRange
 	if c.prefix != nil {
 		h.prefix, err = c.prefix.CaptureAcceptedCut(target, rootpublication.LogicalRootSet{Raw: cut, Semantic: cut.frozenSemanticRootSet})
@@ -349,10 +353,30 @@ func (db *DB) flushCOWFrozenCutForFallback(syncFlush bool, publish *checkpointCo
 		if !ok {
 			return backenddb.ErrClosed
 		}
-		if target.CanonicalLSN > basis.AppliedCommandLSN && (publish == nil || publish.appliedLSN == 0) {
+		if target.CanonicalLSN > basis.AppliedCommandLSN {
 			localRange[0] = backenddb.CommandWALLSNRange{First: basis.AppliedCommandLSN + 1, Last: target.CanonicalLSN}
 			localPublish.appliedLSN, localPublish.ranges = target.CanonicalLSN, localRange[:]
-			publish = &localPublish
+		}
+	}
+	// The value-log lanes are flushed before checkpoint enters here. Keep the
+	// WAL flush/readiness boundary even though its old per-producer coverage
+	// provider is no longer used. A later suffix may also become durable, but
+	// it cannot enlarge this cut's applied range or semantic build.
+	if db.externalCommandWAL {
+		wal, ok := db.backend.(interface {
+			FlushCommandWAL(bool) error
+			CheckCommandWALPublishReady() error
+		})
+		if !ok {
+			return ErrCOWUnsupported
+		}
+		if syncFlush {
+			err = wal.FlushCommandWAL(true)
+		} else {
+			err = wal.CheckCommandWALPublishReady()
+		}
+		if err != nil {
+			return err
 		}
 	}
 	backend, ok := db.backend.(interface {
@@ -462,6 +486,12 @@ func (db *DB) flushCOWFrozenCutForFallback(syncFlush bool, publish *checkpointCo
 		err = db.writeCanonicalFlushRunOpsChunk(nil, syncFlush, publish, group, true, flushCollectionBackground)
 	}
 	err = errors.Join(err, group.Close())
+	// End local coverage accesses before completeCOWHandoff can refund this
+	// original control tranche. Only scalar completion escapes, never ranges.
+	if completed != nil {
+		completed.appliedLSN = localPublish.appliedLSN
+		completed.consumed = localPublish.consumed
+	}
 	if group.Accepted() {
 		h.accepted, h.seal = true, group.AcceptedSealReceipt()
 		c.handoff = h
