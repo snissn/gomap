@@ -63,3 +63,13 @@ Focused and race controls cover standalone raw writes, accepted-reported-error
 custody, exact preaccepted Snapshot handoff, active ordinary alias refusal, and
 activated public raw Checkpoint/Close/reopen across all profiles. Higher-level
 native semantic activation and whole-packet qualification remain separate gates.
+
+Backend ActivateNativeSemanticOwner is monotone and idempotent for its SAME
+fixed-once owner. After activation, live native state, retained captures and
+pending writes do not repeat the first-activation quiescence test or change any
+root, reference, logical frontier or command identity. Backend close/poison and
+the fixed cache bridge's original closing gate are checked before this no-op:
+cache Close begins before it calls backend Close. The narrow cache-open probe is
+observational and grants no activation/publication authority. First activation
+retains all existing quiescence checks; direct private calls retain exact nonnil
+owner validation and reject poison even when already active.

@@ -10,6 +10,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/batch"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -231,5 +232,126 @@ func TestCOWNativeActivationRefusesPendingAndRetainedOpening(t *testing.T) {
 	}
 	if err := backend.ActivateNativeSemanticOwner(); err != nil {
 		t.Fatalf("compatible drained basis=%v", err)
+	}
+}
+
+func TestCOWNativeActivationRepeatWithLiveSemanticCutAndPendingWrite(t *testing.T) {
+	cache, backend := nativeActivationFixture(t, false)
+	if err := backend.ActivateNativeSemanticOwner(); err != nil {
+		t.Fatal(err)
+	}
+	opening, err := backend.CaptureNativeSemanticState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := nativeBridgeState(t, opening)
+	publication := &backenddb.NativePreparedPublication{Basis: opening.State(), State: state, StartSequence: opening.LogicalSequence()}
+	result, err := backend.WriteNativePublication(publication, nil, false)
+	if closeErr := opening.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
+	if err != nil || !result.LogicalInstalled {
+		t.Fatalf("semantic publication=%+v,%v", result, err)
+	}
+	held, err := backend.CaptureNativeSemanticState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	if held.State() != state {
+		t.Fatal("missing original live semantic state")
+	}
+	if err := cache.Set([]byte("pending"), []byte("newer")); err != nil {
+		t.Fatal(err)
+	}
+	basis, ok := backend.StateToken()
+	if !ok {
+		t.Fatal("missing physical basis")
+	}
+	frontiers, refs, cuts := cache.cow.prefix.LogicalFrontiers(), state.refs.Load(), cache.cow.activeCuts.Load()
+	if frontiers.V <= frontiers.S.LogicalSequence {
+		t.Fatal("fixture lacks unsealed logical work")
+	}
+	for i := 0; i < 2; i++ {
+		if err := backend.ActivateNativeSemanticOwner(); err != nil {
+			t.Fatalf("repeat activation with live cut=%v", err)
+		}
+	}
+	after, _ := backend.StateToken()
+	if after != basis || cache.cow.prefix.LogicalFrontiers() != frontiers || state.refs.Load() != refs || cache.cow.activeCuts.Load() != cuts {
+		t.Fatal("repeat activation changed original logical/physical ownership")
+	}
+	for _, wrong := range []*transactionowner.Owner{nil, transactionowner.New()} {
+		if err := backend.ActivatePrivateCOWSemanticOwner(wrong, basis); !errors.Is(err, backenddb.ErrNativeSemanticUnsupported) {
+			t.Fatalf("private wrong-owner repeat=%v", err)
+		}
+	}
+	callbacks := 0
+	err = backend.FinalizeRawKVEntryScanForCachedPublication(func() error { callbacks++; return nil }, nil, nil, 0)
+	if !errors.Is(err, backenddb.ErrNativeSemanticUnsupported) || callbacks != 0 {
+		t.Fatalf("repeat activation widened ordinary alias=%v,callbacks=%d", err, callbacks)
+	}
+}
+
+type heldNativeActivationBackendClose struct {
+	*backenddb.DB
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (b *heldNativeActivationBackendClose) Close() error {
+	close(b.entered)
+	<-b.release
+	return b.DB.Close()
+}
+
+func TestCOWNativeActivationRepeatRejectsCacheClosingBeforeBackend(t *testing.T) {
+	cache, backend := nativeActivationFixture(t, false)
+	if err := backend.ActivateNativeSemanticOwner(); err != nil {
+		t.Fatal(err)
+	}
+	held := &heldNativeActivationBackendClose{DB: backend, entered: make(chan struct{}), release: make(chan struct{})}
+	cache.backend = held
+	var releaseOnce sync.Once
+	defer releaseOnce.Do(func() { close(held.release) })
+	done := make(chan error, 1)
+	go func() { done <- cache.Close() }()
+	select {
+	case <-held.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("cache Close did not reach backend")
+	}
+	// Backend teardown has not started; refusal must come from the cache's
+	// original admission gate, not from a later backend Close flag.
+	if _, live := backend.StateToken(); !live {
+		t.Fatal("fixture backend closed before observation")
+	}
+	if err := backend.ActivateNativeSemanticOwner(); !errors.Is(err, backenddb.ErrClosed) {
+		t.Fatalf("repeat while cache closes=%v", err)
+	}
+	releaseOnce.Do(func() { close(held.release) })
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.ActivateNativeSemanticOwner(); !errors.Is(err, backenddb.ErrClosed) {
+		t.Fatalf("repeat after backend Close=%v", err)
+	}
+}
+
+func TestCOWNativeActivationRepeatRejectsPoisonedOwner(t *testing.T) {
+	cache, backend := nativeBridgeFixture(t, false)
+	if err := backend.ActivateNativeSemanticOwner(); err != nil {
+		t.Fatal(err)
+	}
+	backend.MarkNativeSemanticRecoveryRequired()
+	if err := backend.ActivateNativeSemanticOwner(); !errors.Is(err, backenddb.ErrRecoveryRequired) {
+		t.Fatalf("repeat after poison=%v", err)
+	}
+	basis, _ := backend.StateToken()
+	if err := backend.ActivatePrivateCOWSemanticOwner(cache.cow.txnOwner, basis); !errors.Is(err, backenddb.ErrRecoveryRequired) {
+		t.Fatalf("private repeat after poison=%v", err)
+	}
+	if err := cache.Close(); err != nil && !errors.Is(err, backenddb.ErrRecoveryRequired) {
+		t.Fatalf("poisoned original Close=%v", err)
 	}
 }
