@@ -113,6 +113,8 @@ type DurableRootTransaction struct {
 	finishBusy             bool
 	constructionV6         *primaryTransactionConstructionV6
 	terminalMetadataV6     *primaryTerminalCompletionV6
+	dataCandidate          PreparedRootCandidate
+	dataMember             [1]*DurableRootTransaction
 	failedCleanupMu        sync.Mutex
 	failedCleanupOwner     any
 	failedCleanupNext      *DurableRootTransaction
@@ -375,9 +377,9 @@ func (transaction *DurableRootTransaction) transfer(from, to ResourceOwnerState)
 	return nil
 }
 
-func (transaction *DurableRootTransaction) abortFrom(owner ResourceOwnerState) error {
+func (transaction *DurableRootTransaction) abortFromWithResources(owner ResourceOwnerState, resources *StableResourceSet) (StableResourceTokenReleaseCompletionV6, error) {
 	if transaction == nil {
-		return nil
+		return StableResourceTokenReleaseCompletionV6{}, nil
 	}
 	var terminal primaryConstructionReleaseState
 	err := func() error {
@@ -401,12 +403,19 @@ func (transaction *DurableRootTransaction) abortFrom(owner ResourceOwnerState) e
 		if transaction.isConstructedPrimaryV6() {
 			return transaction.abortConstructionLockedV6(&terminal)
 		}
+		if resources != nil {
+			if err := resources.releaseFrom(owner); err != nil {
+				return transaction.recordPhysicalCleanupFailureLocked(err)
+			}
+		}
 		if transaction.abortComplete != nil {
 			if err := transaction.abortComplete(transaction.input); err != nil {
 				return transaction.recordPhysicalCleanupFailureLocked(err)
 			}
 		}
 		transaction.releaseOwnerLockedV6()
+		transaction.dataCandidate = PreparedRootCandidate{}
+		transaction.dataMember = [1]*DurableRootTransaction{}
 		if node := transaction.terminalMetadataV6; node != nil {
 			transaction.terminalMetadataV6 = nil
 			transaction.input = DurableRootCallbackInput{Lineage: transaction.input.Lineage, Sequence: transaction.input.Sequence}
@@ -415,19 +424,16 @@ func (transaction *DurableRootTransaction) abortFrom(owner ResourceOwnerState) e
 		}
 		return nil
 	}()
-	transaction = nil
-	if err != nil {
-		return err
-	}
-	if terminal.owner != nil {
-		terminal.owner.RemovePending(terminal.charge)
-	}
-	return nil
+	return StableResourceTokenReleaseCompletionV6{owner: terminal.owner, charge: terminal.charge}, err
 }
 
-// The first original disposal refusal is terminal for this object. A callback
-// may already have consumed physical edges before returning the error; neither
-// Abort nor Finish/Close may replay those actions or replace the first receipt.
+func (transaction *DurableRootTransaction) abortFrom(owner ResourceOwnerState) error {
+	completion, err := transaction.abortFromWithResources(owner, nil)
+	transaction = nil
+	completion.Complete()
+	return err
+}
+
 func (transaction *DurableRootTransaction) recordPhysicalCleanupFailureLocked(err error) error {
 	if transaction.physicalCleanupError == nil {
 		transaction.physicalCleanupReceipt.mu.Lock()
@@ -545,6 +551,8 @@ func (transaction *DurableRootTransaction) releaseFromRecovery() (*primaryTermin
 		transaction.phase = durableRootConsumed
 		node := transaction.terminalMetadataV6
 		transaction.terminalMetadataV6 = nil
+		transaction.dataCandidate = PreparedRootCandidate{}
+		transaction.dataMember = [1]*DurableRootTransaction{}
 		return node, nil
 	}
 	if transaction.ownerLockedV6() == ResourceOwnerReleased {

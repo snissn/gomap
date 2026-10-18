@@ -108,9 +108,11 @@ func (db *DB) drainSemanticCleanup() {
 		if err == nil {
 			completion, err = record.Finish()
 			if err != nil {
+				c.semanticMu.Lock()
 				if c.prefix != nil {
 					c.prefix.PoisonAccepted(err)
 				}
+				c.semanticMu.Unlock()
 				db.retainOriginalCleanupError(err)
 				if db.notifyError != nil {
 					db.notifyError(err)
@@ -119,9 +121,11 @@ func (db *DB) drainSemanticCleanup() {
 		} else {
 			// No protected callback scope exists on this protocol failure. Publish the
 			// terminal error and wake prefix waiters without recursively notifying.
+			c.semanticMu.Lock()
 			if c.prefix != nil {
 				c.prefix.PoisonAccepted(err)
 			}
+			c.semanticMu.Unlock()
 			db.retainOriginalCleanupError(err)
 		}
 		c.semanticMu.Lock()

@@ -836,7 +836,7 @@ func (c *Coordinator) AcceptedError() error {
 // CloseAccepted follows producer withdrawal and the last disk drain. It joins
 // an original release already in flight without holding gates it needs, then
 // consumes each remaining original reference once, preserving terminal poison.
-func (c *Coordinator) CloseAccepted() error {
+func (c *Coordinator) closeAccepted() error {
 	c = c.AcceptedPrefixOwner()
 	if c == nil {
 		return nil
@@ -944,4 +944,24 @@ func (c *Coordinator) AcceptedCleanupFailed() bool {
 		}
 	}
 	return false
+}
+
+// CloseAcceptedWithCompletion leaves the original containing refund with the
+// caller, which may still need the final cleanup observation before detaching.
+func (c *Coordinator) CloseAcceptedWithCompletion() (StableResourceTokenReleaseCompletionV6, error) {
+	err := c.closeAccepted()
+	c = c.AcceptedPrefixOwner()
+	if c == nil {
+		return StableResourceTokenReleaseCompletionV6{}, err
+	}
+	c.mu.Lock()
+	completion := c.metadataHeaderCompletionLocked()
+	c.mu.Unlock()
+	return completion, err
+}
+func (c *Coordinator) CloseAccepted() error {
+	completion, err := c.CloseAcceptedWithCompletion()
+	c = nil
+	completion.Complete()
+	return err
 }

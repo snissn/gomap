@@ -722,10 +722,21 @@ func (c *cowCache) closeWithBudget(closeBudget bool) error {
 		err = joinCOWCleanupError(err, old.drain())
 	}
 	if c.prefix != nil {
-		err = joinCOWCleanupError(err, c.prefix.CloseAccepted())
-		if !c.prefix.AcceptedCleanupFailed() {
-			c.prefixLease.Close()
+		prefix := c.prefix
+		completion, closeErr := prefix.CloseAcceptedWithCompletion()
+		err = joinCOWCleanupError(err, closeErr)
+		// Physical/checkpoint users are withdrawn under the caller's flushMu.
+		// Retained-cut/cleanup-only readers use the existing semantic latch.
+		var prefixRefund *memtable.COWExternalLease
+		c.semanticMu.Lock()
+		if !prefix.AcceptedCleanupFailed() {
+			c.prefix = nil
+			prefixRefund, c.prefixLease = c.prefixLease, nil
 		}
+		c.semanticMu.Unlock()
+		prefix = nil
+		prefixRefund.Close()
+		completion.Complete()
 	}
 	var refund *memtable.COWExternalLease
 	c.semanticMu.Lock()

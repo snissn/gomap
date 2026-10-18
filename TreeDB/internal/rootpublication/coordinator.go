@@ -31,6 +31,7 @@ type Options struct {
 	// AcceptedPrefixOwner retains the original logical owner when replacing a
 	// physical index runtime. Physical Frontier values remain commit sequences.
 	AcceptedPrefixOwner *Coordinator
+	MetadataOwner       *retainedalloc.Owner
 }
 
 type pendingEntry struct {
@@ -51,9 +52,12 @@ type drainRequest struct {
 // bounded logical accepted prefix. Physical Frontiers and logical V/C/W/S are
 // distinct authorities with explicit receipt mappings between them.
 type Coordinator struct {
-	mu            sync.Mutex
-	acceptedOwner *Coordinator
-	accepted      acceptedPrefixState
+	mu                                           sync.Mutex
+	acceptedOwner                                *Coordinator
+	accepted                                     acceptedPrefixState
+	metadataOwner                                *retainedalloc.Owner
+	metadataHeaderCharge, metadataPhysicalCharge uint64
+	physicalMetadataDone                         bool
 
 	clock              Clock
 	publisher          Publisher
@@ -176,10 +180,17 @@ func New(options Options) (*Coordinator, error) {
 	if clock == nil {
 		clock = realClock{}
 	}
+	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(Coordinator{})))
+	if options.MetadataOwner != nil {
+		if err := options.MetadataOwner.AddPending(charge); err != nil {
+			return nil, err
+		}
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	c := &Coordinator{
 		acceptedOwner: options.AcceptedPrefixOwner.AcceptedPrefixOwner(),
-		clock:         clock, publisher: options.Publisher, fixedPublishDelay: options.FixedPublishDelay, startupSynchronous: options.StartupSynchronous, ctx: ctx, cancel: cancel,
+		metadataOwner: options.MetadataOwner, metadataHeaderCharge: charge,
+		clock: clock, publisher: options.Publisher, fixedPublishDelay: options.FixedPublishDelay, startupSynchronous: options.StartupSynchronous, ctx: ctx, cancel: cancel,
 		wake: make(chan struct{}, 1), changed: make(chan struct{}), done: make(chan struct{}), wakeReason: WakeNone,
 		visible: options.InitialDurableFrontier, durable: options.InitialDurableFrontier,
 		oldestRecoverable:  options.OldestRecoverableCommitSeq,
@@ -237,6 +248,11 @@ func (c *Coordinator) enqueueLocked(candidate *PreparedRootCandidate, supersede 
 	if candidate == nil {
 		return enqueueDecision{}, fmt.Errorf("%w: nil candidate", ErrInvalidCandidate)
 	}
+	// Selected publication has one original metadata owner, including an empty
+	// physical closure. Refuse missing/foreign sets before any union allocation.
+	if c.metadataOwner != nil && candidate.resourceSet().MetadataOwner() != c.metadataOwner {
+		return enqueueDecision{}, ErrResourceOwnership
+	}
 	if candidate.frontier.commitSeq <= c.visible.commitSeq ||
 		(c.visible.commitSeq != 0 && !candidate.frontier.Dominates(c.visible)) {
 		return enqueueDecision{}, fmt.Errorf("%w: frontier %d does not dominate visible %d", ErrInvalidCandidate, candidate.frontier.commitSeq, c.visible.commitSeq)
@@ -249,7 +265,20 @@ func (c *Coordinator) enqueueLocked(candidate *PreparedRootCandidate, supersede 
 		return enqueueDecision{}, err
 	}
 	if candidateSet := candidate.resourceSet(); candidateSet != nil {
+		scratch := retainedalloc.AllocationCharge(uint64(len(c.pending)+1) * uint64(unsafe.Sizeof((*StableResourceSet)(nil))))
+		if c.metadataOwner != nil {
+			if err := c.metadataOwner.AddPending(scratch); err != nil {
+				return enqueueDecision{}, err
+			}
+		}
 		sets := make([]*StableResourceSet, 0, len(c.pending)+1)
+		defer func() {
+			clear(sets)
+			sets = nil
+			if c.metadataOwner != nil {
+				c.metadataOwner.RemovePending(scratch)
+			}
+		}()
 		var unionCount int
 		var err error
 		var previous *DurableRootTransaction
@@ -295,9 +324,17 @@ func (c *Coordinator) enqueueLocked(candidate *PreparedRootCandidate, supersede 
 		if physical := stableSetPhysicalCount(sets); physical > unionCount {
 			c.resourceCoalesces = saturatingAdd(c.resourceCoalesces, uint64(physical-unionCount))
 		}
+		if err := c.admitPendingCapacity(candidate); err != nil {
+			return enqueueDecision{}, err
+		}
 		if err := candidateSet.transfer(ResourceOwnerCandidate, ResourceOwnerCoordinator); err != nil {
 			c.rejectedCandidates++
 			return enqueueDecision{}, fmt.Errorf("%w: enqueue resource transfer: %w", ErrInvalidCandidate, err)
+		}
+	}
+	if candidate.resourceSet() == nil {
+		if err := c.admitPendingCapacity(candidate); err != nil {
+			return enqueueDecision{}, err
 		}
 	}
 	if err := transferDurableRootGroup(candidate.durableRootGroup(), ResourceOwnerCandidate, ResourceOwnerCoordinator); err != nil {
@@ -505,6 +542,10 @@ func (c *Coordinator) WaitThrough(ctx context.Context, seq uint64) error {
 		c.mu.Unlock()
 		return fmt.Errorf("%w: wait sequence %d exceeds visible %d", ErrInvalidCandidate, seq, c.visible.commitSeq)
 	}
+	if err := growPublicationSlice(c, &c.waiters, len(c.waiters)+1); err != nil {
+		c.mu.Unlock()
+		return err
+	}
 	waiter := &durabilityWaiter{seq: seq, ch: make(chan error, 1)}
 	c.waiters = append(c.waiters, waiter)
 	c.requestPublishLocked(WakeWaiter)
@@ -591,6 +632,10 @@ func (c *Coordinator) Drain(ctx context.Context) error {
 	if len(c.pending) == 0 && !c.publishing {
 		c.mu.Unlock()
 		return nil
+	}
+	if err := growPublicationSlice(c, &c.drains, len(c.drains)+1); err != nil {
+		c.mu.Unlock()
+		return err
 	}
 	request := &drainRequest{}
 	c.drains = append(c.drains, request)
@@ -758,6 +803,7 @@ func (c *Coordinator) dispatchPublication(startup bool) bool {
 	// The original Prepare/Publish/Report call has returned: callback, group,
 	// candidate and activeAttempt no longer borrow the refunded headers.
 	completePrimaryTerminalsV6(&completion.head)
+	completion.scratch.Complete()
 	if completion.active {
 		c.mu.Lock()
 		if completion.success {
@@ -798,12 +844,24 @@ func (c *Coordinator) dispatchPublicationCallV6(startup bool) (bool, primaryPubl
 		c.mu.Unlock()
 		return false, primaryPublicationCompletionV6{}
 	}
+	scratch, admitErr := c.admitAttemptLocked()
+	if admitErr != nil {
+		c.recordRetryableLocked(admitErr, PublishAttempt{candidate: c.pending[len(c.pending)-1].candidate, groupSize: uint64(len(c.pending)), drains: c.drains, waiters: c.waiters})
+		c.mu.Unlock()
+		return true, primaryPublicationCompletionV6{}
+	}
 	groupSize := len(c.pending)
 	group := make([]*PreparedRootCandidate, groupSize)
 	for i := range group {
 		group[i] = c.pending[i].candidate
 	}
-	candidate, coalesceErr := coalesceCandidates(group)
+	var candidate *PreparedRootCandidate
+	var coalesceErr error
+	if c.metadataOwner != nil {
+		candidate, coalesceErr = coalesceAdmittedCandidates(group)
+	} else {
+		candidate, coalesceErr = coalesceCandidates(group)
+	}
 	if coalesceErr != nil {
 		c.resourceConflicts++
 		c.poison = errors.Join(ErrRecoveryRequired, coalesceErr)
@@ -812,7 +870,9 @@ func (c *Coordinator) dispatchPublicationCallV6(startup bool) (bool, primaryPubl
 		c.captureRecoveryResourcesLocked()
 		c.notifyLocked()
 		c.mu.Unlock()
-		return true, primaryPublicationCompletionV6{}
+		clear(group)
+		group = nil
+		return true, primaryPublicationCompletionV6{scratch: scratch}
 	}
 	c.recordPublishTriggerLocked(c.wakeReason)
 	c.publishNow = false
@@ -843,18 +903,37 @@ func (c *Coordinator) dispatchPublicationCallV6(startup bool) (bool, primaryPubl
 		c.reportingAttempt = prepareErr != nil
 		c.mu.Unlock()
 		if prepareErr != nil {
-			completion, _ := c.reportPublishResultOwnedV6(attempt, PublishResult{Outcome: PublishRetryableFailure, Err: prepareErr})
+			result := PublishResult{Outcome: PublishRetryableFailure, Err: prepareErr}
+			if c.metadataOwner != nil && len(group) > 1 {
+				if err := candidate.resourceSet().ReleaseWithError(); err != nil {
+					result = PublishResult{Outcome: PublishAmbiguous, Err: errors.Join(prepareErr, err)}
+				}
+				candidate.extensions.resourceSet = nil
+			}
+			completion, _ := c.reportPublishResultOwnedV6(attempt, result)
+			completion.scratch = scratch
+			if c.metadataOwner != nil && len(group) > 1 {
+				clear(candidate.durableRootGroup().members)
+				candidate.extensions = extensionSlots{}
+			}
 			clear(group)
 			group, candidate, attempt = nil, nil, PublishAttempt{}
 			return true, completion
 		}
 	}
 	result := c.publisher.Publish(c.ctx, candidate)
+	if c.metadataOwner != nil && len(group) > 1 {
+		if err := candidate.resourceSet().ReleaseWithError(); err != nil {
+			result = PublishResult{Outcome: PublishAmbiguous, Err: errors.Join(result.Err, err)}
+		}
+		candidate.extensions.resourceSet = nil
+	}
 	c.mu.Lock()
 	c.reportingAttempt = true
 	c.mu.Unlock()
 	completion, _ := c.reportPublishResultOwnedV6(attempt, result)
-	if completion.detached && len(group) > 1 {
+	completion.scratch = scratch
+	if (completion.detached || c.metadataOwner != nil) && len(group) > 1 {
 		// Coalescing allocated this private descriptor/member backing. Original
 		// pending candidates retain any failed sibling; this call releases only
 		// its scratch aliases before accounting the consumed prefix.
@@ -1000,7 +1079,9 @@ func (c *Coordinator) finishPublishLocked(candidate *PreparedRootCandidate, grou
 			*entry = pendingEntry{}
 			completed++
 		}
-		c.pending = append([]pendingEntry(nil), c.pending[remove:]...)
+		copy(c.pending, c.pending[remove:])
+		clear(c.pending[len(c.pending)-remove:])
+		c.pending = c.pending[:len(c.pending)-remove]
 		if removedBytes <= c.pendingBytes {
 			c.pendingBytes -= removedBytes
 		} else {
@@ -1065,8 +1146,10 @@ func (c *Coordinator) recordRetryableLocked(err error, attempt PublishAttempt) {
 	c.preMetaFailures++
 	c.failureGeneration++
 	c.lastRetryableError = err
-	c.retryAttempt = attempt
-	c.lastFailureSeq = attempt.candidate.frontier.commitSeq
+	c.retryAttempt = PublishAttempt{groupSize: attempt.groupSize}
+	if attempt.candidate != nil {
+		c.lastFailureSeq = attempt.candidate.frontier.commitSeq
+	}
 	c.failCapturedWaitersLocked(err, attempt.waiters)
 	c.failCapturedDrainsLocked(err, attempt.drains)
 	c.recomputeRetryPublishRequestLocked(attempt)
@@ -1130,15 +1213,19 @@ func hasUncapturedDrain(current, captured []*drainRequest) bool {
 	if len(current) == 0 {
 		return false
 	}
-	set := make(map[*drainRequest]struct{}, len(captured))
-	for _, request := range captured {
-		set[request] = struct{}{}
-	}
 	for _, request := range current {
-		if request.err == nil {
-			if _, ok := set[request]; !ok {
-				return true
+		if request.err != nil {
+			continue
+		}
+		found := false
+		for _, original := range captured {
+			if original == request {
+				found = true
+				break
 			}
+		}
+		if !found {
+			return true
 		}
 	}
 	return false
@@ -1157,13 +1244,12 @@ func (c *Coordinator) failCapturedDrainsLocked(err error, captured []*drainReque
 	if len(captured) == 0 {
 		return
 	}
-	set := make(map[*drainRequest]struct{}, len(captured))
-	for _, request := range captured {
-		set[request] = struct{}{}
-	}
 	for _, request := range c.drains {
-		if _, ok := set[request]; ok {
-			request.err = err
+		for _, original := range captured {
+			if original == request {
+				request.err = err
+				break
+			}
 		}
 	}
 }
@@ -1172,14 +1258,17 @@ func (c *Coordinator) failCapturedWaitersLocked(err error, captured []*durabilit
 	if len(captured) == 0 {
 		return
 	}
-	set := make(map[*durabilityWaiter]struct{}, len(captured))
-	for _, waiter := range captured {
-		set[waiter] = struct{}{}
-	}
 	waiters := c.waiters
 	remaining := waiters[:0]
 	for _, waiter := range waiters {
-		if _, ok := set[waiter]; ok {
+		found := false
+		for _, original := range captured {
+			if original == waiter {
+				found = true
+				break
+			}
+		}
+		if found {
 			waiter.ch <- err
 		} else {
 			remaining = append(remaining, waiter)
@@ -1208,7 +1297,7 @@ func (c *Coordinator) failWaitersLocked(err error) {
 		waiter.ch <- err
 	}
 	clear(c.waiters)
-	c.waiters = nil
+	c.waiters = c.waiters[:0]
 }
 
 func (c *Coordinator) terminalErrorLocked() error {
@@ -1338,23 +1427,18 @@ func (c *Coordinator) observeResourcePinHighWaterLocked() {
 }
 
 func (c *Coordinator) captureRecoveryResourcesLocked() {
-	seen := make(map[*StableResourceSet]struct{}, len(c.recoverySets)+len(c.pending))
-	for _, set := range c.recoverySets {
-		seen[set] = struct{}{}
-	}
 	for _, entry := range c.pending {
 		set := entry.candidate.resourceSet()
 		if set == nil {
 			continue
 		}
-		if _, ok := seen[set]; !ok {
-			c.recoverySets = append(c.recoverySets, set)
-			seen[set] = struct{}{}
+		seen := false
+		for _, original := range c.recoverySets {
+			seen = seen || original == set
 		}
-	}
-	seenRoots := make(map[*DurableRootTransaction]struct{}, len(c.recoveryDurableRoots)+len(c.pending))
-	for _, transaction := range c.recoveryDurableRoots {
-		seenRoots[transaction] = struct{}{}
+		if !seen {
+			c.recoverySets = append(c.recoverySets, set)
+		}
 	}
 	cause := c.poison
 	if cause == nil {
@@ -1365,7 +1449,11 @@ func (c *Coordinator) captureRecoveryResourcesLocked() {
 			if transaction == nil || transaction.Owner() != ResourceOwnerCoordinator {
 				continue
 			}
-			if _, ok := seenRoots[transaction]; ok {
+			seen := false
+			for _, original := range c.recoveryDurableRoots {
+				seen = seen || original == transaction
+			}
+			if seen {
 				continue
 			}
 			if err := transaction.failFromCoordinator(cause); err != nil {
@@ -1382,10 +1470,10 @@ func (c *Coordinator) captureRecoveryResourcesLocked() {
 				}
 			}
 			c.recoveryDurableRoots = append(c.recoveryDurableRoots, transaction)
-			seenRoots[transaction] = struct{}{}
 		}
 	}
-	c.pending = nil
+	clear(c.pending)
+	c.pending = c.pending[:0]
 	c.pendingBytes = 0
 	c.firstPendingAt = time.Time{}
 }
@@ -1509,23 +1597,21 @@ func (c *Coordinator) TakeRecoveryHandoff() (handoff *RecoveryResourceHandoff, r
 	// Transfer the existing retained slice backing; no second recovery arrays
 	// or ownership lifecycle are created merely to retain a failure receipt.
 	sets, durableRoots := c.recoverySets, c.recoveryDurableRoots
-	var metadata *retainedalloc.Owner
+	metadata := c.metadataOwner
 	for _, transaction := range durableRoots {
-		transaction.mu.Lock()
-		if transaction.constructionV6 != nil {
-			metadata = transaction.constructionV6.arena.MetadataOwner()
-		}
-		transaction.mu.Unlock()
-		if metadata != nil {
-			break
+		owner := transaction.metadataOwnerV1()
+		if metadata == nil {
+			metadata = owner
+		} else if owner != nil && owner != metadata {
+			return nil, ErrResourceOwnership
 		}
 	}
-	if metadata == nil {
-		for _, set := range sets {
-			if set != nil && set.metadata != nil {
-				metadata = set.metadata.owner
-				break
-			}
+	for _, set := range sets {
+		owner := set.MetadataOwner()
+		if metadata == nil {
+			metadata = owner
+		} else if owner != nil && owner != metadata {
+			return nil, ErrResourceOwnership
 		}
 	}
 	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(RecoveryResourceHandoff{})))
@@ -1569,6 +1655,11 @@ func (c *Coordinator) TakeRecoveryHandoff() (handoff *RecoveryResourceHandoff, r
 	handoff = &RecoveryResourceHandoff{sets: sets, durableRoots: durableRoots, metadata: metadata}
 	if metadata != nil {
 		handoff.metadataCharge = charge
+	}
+	if c.metadataOwner != nil {
+		arrays := retainedalloc.AllocationCharge(uint64(cap(sets))*uint64(unsafe.Sizeof((*StableResourceSet)(nil)))) + retainedalloc.AllocationCharge(uint64(cap(durableRoots))*uint64(unsafe.Sizeof((*DurableRootTransaction)(nil))))
+		handoff.metadataCharge += arrays
+		c.metadataPhysicalCharge -= arrays
 	}
 	c.recoverySets, c.recoveryDurableRoots = nil, nil
 	// Pending contributions have genuinely moved to recovery custody. Failed

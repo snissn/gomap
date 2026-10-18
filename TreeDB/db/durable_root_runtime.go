@@ -804,7 +804,7 @@ func (db *DB) captureDurableValueLogResourcesV1(idx *indexGen, next page.MetaPag
 }
 
 func (db *DB) captureDurableValueLogResourcesWithLimitsV1(idx *indexGen, next page.MetaPageBody, delta *valueLogRefDelta, exactPackedFileIDs map[uint32]struct{}, valueLogPublicationLocked bool, scanned *candidateValueLogRefCountsV1, limits *PreparedRootPublicationLimits) (*rootpublication.StableResourceSet, error) {
-	var metadata *retainedalloc.Owner
+	metadata := db.valueLogIdentityPins.MetadataOwner()
 	if idx != nil && idx.primary != nil {
 		metadata = idx.primary.MetadataOwner()
 	}
@@ -1020,7 +1020,7 @@ func (db *DB) captureDurableRootResourcesFromBaseWithRefCountsV1(idx *indexGen, 
 			retErr = errors.Join(retErr, db.retainResourceCleanupError(original.ReleaseWithError()))
 		}(additional)
 	}
-	var metadata *retainedalloc.Owner
+	metadata := db.valueLogIdentityPins.MetadataOwner()
 	if idx != nil && idx.primary != nil {
 		metadata = idx.primary.MetadataOwner()
 	}

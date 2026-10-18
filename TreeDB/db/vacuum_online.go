@@ -1522,7 +1522,7 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 		}
 		var selectionErr error
 		if replacementGen.primary == nil {
-			selected, selectionErr = selectDurableRootV1(newPager, newPager.PageCount(), db.validateDurableDependencyManifestV1, db.dependencyDirectoryValidatorV2(replacementGen))
+			selected, selectionErr = selectDurableRootWithMetadataV1(newPager, newPager.PageCount(), db.valueLogIdentityPins.MetadataOwner(), db.validateDurableDependencyManifestV1, db.dependencyDirectoryValidatorV2(replacementGen))
 		}
 		if selectionErr != nil {
 			unlockCutover(false)
