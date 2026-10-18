@@ -1,6 +1,11 @@
 package caching
 
-import backenddb "github.com/snissn/gomap/TreeDB/db"
+import (
+	"context"
+
+	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+)
 
 // RefreshCOWCommandWALCheckpointFallback converges recovery slots through the
 // same complete-cut physical build and exact Snapshot handoff as a checkpoint.
@@ -30,17 +35,29 @@ func (db *DB) refreshCOWCheckpointFallback() (retErr error) {
 	if cut == nil || c.prefix == nil {
 		return backenddb.ErrClosed
 	}
-	frontiers := c.prefix.LogicalFrontiers()
-	if cut.logicalSeq != frontiers.V || cut.visibleCommandLSN != frontiers.C || cut.basis.logicalSeq != frontiers.S.LogicalSequence || cut.logicalSeq < frontiers.S.LogicalSequence || cut.visibleCommandLSN < frontiers.S.CanonicalLSN {
-		return backenddb.ErrRootPublicationBasisMismatch
-	}
 	basis, live := cut.basis.snapshot.StateToken()
 	if !live {
 		return backenddb.ErrClosed
 	}
 	needed, err := backend.CommandWALCheckpointFallbackNeedsRefresh(basis)
-	if err != nil || !needed {
+	if err != nil {
 		return err
+	}
+	// An automatic pass may install this exact basis after the preceding
+	// explicit checkpoint joined its own endpoint. The backend predicate has
+	// completed physical sealing and released its publication gates; join the
+	// original accepted custody before comparing the two completion frontiers.
+	// flushMu keeps direct Close from detaching the original prefix meanwhile.
+	through := rootpublication.SealedPrefix{LogicalSequence: cut.basis.logicalSeq, CanonicalLSN: basis.AppliedCommandLSN}
+	if err = c.prefix.WaitAccepted(context.Background(), through); err != nil {
+		return err
+	}
+	frontiers := c.prefix.LogicalFrontiers()
+	if cut.logicalSeq != frontiers.V || cut.visibleCommandLSN != frontiers.C || cut.basis.logicalSeq != frontiers.S.LogicalSequence || cut.logicalSeq < frontiers.S.LogicalSequence || cut.visibleCommandLSN < frontiers.S.CanonicalLSN {
+		return backenddb.ErrRootPublicationBasisMismatch
+	}
+	if !needed {
+		return nil
 	}
 	// A writer admitted after Checkpoint may already own a newer suffix.
 	// Optional idle convergence must neither fail that completed boundary nor
