@@ -59,10 +59,15 @@ func TestDATAActualPublicationUsesOriginalEnrolledOwner(t *testing.T) {
 		t.Fatal("held original builder did not preserve two accepted DATA members")
 	}
 	for _, member := range runtime.visibleMembers[runtime.visibleHead:] {
-		if member.primary != nil || member.transaction == nil || member.transaction.Owner() != rootpublication.ResourceOwnerCoordinator || member.resources.MetadataOwner() != owner || member.install.metadata != owner {
+		if member.primary != nil || member.transaction == nil || member.transaction.Owner() != rootpublication.ResourceOwnerCoordinator || member.install.metadata != owner {
 			runtime.mu.Unlock()
-			t.Fatal("accepted DATA member/resource/terminal lost same owner")
+			t.Fatal("accepted DATA member/terminal lost same owner")
 		}
+	}
+	latest := runtime.visibleMembers[len(runtime.visibleMembers)-1]
+	if runtime.visibleResources != latest.resources || runtime.visibleResources.MetadataOwner() != owner {
+		runtime.mu.Unlock()
+		t.Fatal("current DATA visible closure lost same owner")
 	}
 	runtime.mu.Unlock()
 	if budget.Stats().TotalBytes == 0 {
