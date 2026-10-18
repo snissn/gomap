@@ -13,11 +13,12 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
-func publicPrimaryBasis(t *testing.T, snapshot Snapshot) backenddb.StateToken {
+func publicPhysicalBasis(t *testing.T, snapshot Snapshot) backenddb.StateToken {
 	t.Helper()
 	owner, ok := snapshot.(interface {
 		StateToken() (backenddb.StateToken, bool)
@@ -32,13 +33,16 @@ func publicPrimaryBasis(t *testing.T, snapshot Snapshot) backenddb.StateToken {
 	return token
 }
 
-// Actual ordinary public defaults select PRIMARY only at the physical backend
+// Actual ordinary public defaults select DATA at the physical backend
 // boundary. C1 foreground and checkpoint successor tokens remain distinct.
-func TestCOWPublicPrimarySelectionLayeredPublication(t *testing.T) {
+func TestCOWPublicDATASelectionLayeredPublication(t *testing.T) {
 	for _, profile := range []Profile{ProfileCommandWALDurable, ProfileCommandWALRelaxed} {
 		for _, pointer := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/pointer=%v", profile, pointer), func(t *testing.T) {
 				database, opts, _ := cowPublicContractOpen(t, profile, func(opts *Options) {
+					if root := os.Getenv("GOMAP_P5_RETAIN_FIXTURE_ROOT"); root != "" {
+						opts.Dir = filepath.Join(root, t.Name())
+					}
 					opts.BackgroundCheckpointInterval = -1
 					opts.BackgroundCheckpointIdleDuration = -1
 					opts.DisableBackgroundPrune = true
@@ -54,10 +58,10 @@ func TestCOWPublicPrimarySelectionLayeredPublication(t *testing.T) {
 				if !ok {
 					t.Fatal("backend basis missing")
 				}
-				if !primaryarena.IsPage(basis.RootPageID) {
-					t.Fatal("main backend omitted PRIMARY selection")
+				if primaryarena.IsPage(basis.RootPageID) {
+					t.Fatal("main backend omitted DATA selection")
 				}
-				if _, err := os.Stat(filepath.Join(opts.Dir, "maindb", "index.db.primary")); err != nil {
+				if _, err := os.Stat(filepath.Join(opts.Dir, "maindb", "index.db.primary")); !os.IsNotExist(err) {
 					t.Fatal(err)
 				}
 				if database.dictdb == nil {
@@ -73,7 +77,7 @@ func TestCOWPublicPrimarySelectionLayeredPublication(t *testing.T) {
 					t.Fatal("default disabled template policy changed")
 				}
 				var mu sync.Mutex
-				var authority []durabilitycut.Point
+				var authority []durabilitycut.Event
 				var swaps int
 				var observationErr error
 				restore := durabilitycut.Install(func(event durabilitycut.Event) error {
@@ -88,11 +92,11 @@ func TestCOWPublicPrimarySelectionLayeredPublication(t *testing.T) {
 					if event.Resource != durabilitycut.ResourceMeta || (event.Point != durabilitycut.BeforeMetaWrite && event.Point != durabilitycut.AfterMetaWrite && event.Point != durabilitycut.BeforeMetaSync && event.Point != durabilitycut.AfterMetaSync) {
 						return nil
 					}
-					if event.Path != filepath.Join(opts.Dir, "maindb", "index.db.primary") || event.StablePath == nil || event.Length != 3*int64(page.PageSize) || (event.Offset != 2*int64(page.PageSize) && event.Offset != 5*int64(page.PageSize)) {
+					if event.Path != filepath.Join(opts.Dir, "maindb", "index.db") || ((event.Point == durabilitycut.BeforeMetaWrite || event.Point == durabilitycut.AfterMetaWrite) && (event.Length != int64(page.PageSize) || (event.Offset != 0 && event.Offset != int64(page.PageSize)))) {
 						observationErr = fmt.Errorf("selected checkpoint authority event: %+v", event)
 						return observationErr
 					}
-					authority = append(authority, event.Point)
+					authority = append(authority, event)
 					return nil
 				})
 				active := true
@@ -116,7 +120,7 @@ func TestCOWPublicPrimarySelectionLayeredPublication(t *testing.T) {
 				}
 				_ = batch.Close()
 				// Command-WAL sync acknowledges its stable WAL prefix, then swaps the
-				// prepared C1 cut; it must not force physical PRIMARY checkpoint on ACK.
+				// prepared C1 cut; it must not force physical DATA checkpoint on ACK.
 				if state, _ := database.backend.StateToken(); state != basis {
 					t.Fatalf("ACK changed physical basis: %v -> %v", basis, state)
 				}
@@ -125,7 +129,7 @@ func TestCOWPublicPrimarySelectionLayeredPublication(t *testing.T) {
 					t.Fatal("dirty C1 cut missing")
 				}
 				defer dirty.Close()
-				if token := publicPrimaryBasis(t, dirty); token != basis {
+				if token := publicPhysicalBasis(t, dirty); token != basis {
 					t.Fatalf("dirty cut rebased: %v", token)
 				}
 				for _, key := range []string{"a", "b"} {
@@ -139,23 +143,23 @@ func TestCOWPublicPrimarySelectionLayeredPublication(t *testing.T) {
 				beforeAuthority, beforeSwaps := len(authority), swaps
 				mu.Unlock()
 				if beforeAuthority != 0 || beforeSwaps != 1 {
-					t.Fatalf("foreground path PRIMARY=%d C1=%d", beforeAuthority, beforeSwaps)
+					t.Fatalf("foreground path DATA=%d C1=%d", beforeAuthority, beforeSwaps)
 				}
 				if err := database.Checkpoint(); err != nil {
 					t.Fatal(err)
 				}
 				successor, ok := database.backend.StateToken()
-				if !ok || successor.CommitSeq <= basis.CommitSeq || !primaryarena.IsPage(successor.RootPageID) {
+				if !ok || successor.CommitSeq <= basis.CommitSeq || primaryarena.IsPage(successor.RootPageID) {
 					t.Fatalf("physical successor %v", successor)
 				}
-				if token := publicPrimaryBasis(t, dirty); token != basis {
+				if token := publicPhysicalBasis(t, dirty); token != basis {
 					t.Fatalf("old cut basis changed %v", token)
 				}
 				fresh := database.AcquireSnapshot()
 				if fresh == nil {
 					t.Fatal("successor cut missing")
 				}
-				if token := publicPrimaryBasis(t, fresh); token != successor {
+				if token := publicPhysicalBasis(t, fresh); token != successor {
 					t.Fatalf("successor exact basis=%v want=%v", token, successor)
 				}
 				for _, key := range []string{"a", "b"} {
@@ -163,7 +167,7 @@ func TestCOWPublicPrimarySelectionLayeredPublication(t *testing.T) {
 				}
 				_ = fresh.Close()
 				mu.Lock()
-				points := append([]durabilitycut.Point(nil), authority...)
+				events := append([]durabilitycut.Event(nil), authority...)
 				observedErr := observationErr
 				mu.Unlock()
 				restore()
@@ -172,13 +176,61 @@ func TestCOWPublicPrimarySelectionLayeredPublication(t *testing.T) {
 					t.Fatal(observedErr)
 				}
 				want := []durabilitycut.Point{durabilitycut.BeforeMetaWrite, durabilitycut.AfterMetaWrite, durabilitycut.BeforeMetaSync, durabilitycut.AfterMetaSync}
-				if len(points) != len(want) {
-					t.Fatalf("PRIMARY promotion cuts %v", points)
+				if len(events) != 2*len(want) {
+					t.Fatalf("DATA seal plus fallback convergence events %+v", events)
 				}
-				for n := range want {
-					if points[n] != want[n] {
-						t.Fatalf("PRIMARY promotion order %v", points)
+				for n, event := range events {
+					if event.Point != want[n%len(want)] {
+						t.Fatalf("DATA seal order %+v", events)
 					}
+				}
+				if events[0].Offset == events[4].Offset || events[0].Offset != events[1].Offset || events[4].Offset != events[5].Offset {
+					t.Fatalf("DATA seals did not alternate exact slots: %+v", events)
+				}
+				// Both records are still in the final two slots. Decode after the
+				// explicit checkpoint rather than reading inside a physical seal.
+				f, err := os.Open(filepath.Join(opts.Dir, "maindb", "index.db"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				var metas [2]page.DurableMetaV1
+				var records [2]rootpublication.DurableRootRecordV1
+				for n := range records {
+					image := make([]byte, page.PageSize)
+					if _, err := f.ReadAt(image, events[4*n].Offset); err != nil {
+						_ = f.Close()
+						t.Fatal(err)
+					}
+					if !page.VerifyChecksumNonMutating(image) {
+						_ = f.Close()
+						t.Fatal("DATA meta checksum")
+					}
+					meta, err := page.DecodeDurableMetaV1(image[page.PageHeaderSize:])
+					if err != nil {
+						_ = f.Close()
+						t.Fatal(err)
+					}
+					if _, err := f.ReadAt(image, int64(meta.RootRecordPageID)*int64(page.PageSize)); err != nil {
+						_ = f.Close()
+						t.Fatal(err)
+					}
+					record, err := rootpublication.DecodeDurableRootRecordV1(image, meta.RootRecordPageID, meta.RootRecordDigest)
+					if err != nil || record.CommitSeq != meta.CommitSeq || record.DurableSeq != meta.DurableSeq {
+						_ = f.Close()
+						t.Fatalf("DATA slot record: %+v %v", record, err)
+					}
+					metas[n], records[n] = meta, record
+					t.Logf("checkpoint seal%d slot=%d commit=%d record=%d digest=%x roots=%d/%d appliedLSN=%d", n+1, events[4*n].Offset/int64(page.PageSize), record.CommitSeq, meta.RootRecordPageID, meta.RootRecordDigest, record.UserRootPageID, record.SystemRootPageID, record.AppliedCommandLSN)
+				}
+				if err := f.Close(); err != nil {
+					t.Fatal(err)
+				}
+				first, final := records[0], records[1]
+				if first.CommitSeq <= basis.CommitSeq || final.CommitSeq != first.CommitSeq+1 || final.DurableSeq != first.DurableSeq+1 ||
+					first.AppliedCommandLSN == 0 || final.AppliedCommandLSN != first.AppliedCommandLSN || final.UserRootPageID != first.UserRootPageID || final.SystemRootPageID != first.SystemRootPageID ||
+					final.ParentCommitSeq != first.CommitSeq || final.ParentRecordPageID != metas[0].RootRecordPageID || final.ParentRecordDigest != metas[0].RootRecordDigest ||
+					final.CommitSeq != successor.CommitSeq || final.UserRootPageID != successor.RootPageID || final.SystemRootPageID != successor.SystemRootPageID || final.AppliedCommandLSN != successor.AppliedCommandLSN {
+					t.Fatalf("DATA checkpoint fallback did not preserve exact same-root/LSN convergence: first=%+v final=%+v basis=%+v", first, final, successor)
 				}
 				stats := database.Stats()
 				handoffs, err := strconv.ParseUint(stats["treedb.cache.cow.handoffs_total"], 10, 64)
@@ -193,7 +245,7 @@ func TestCOWPublicPrimarySelectionLayeredPublication(t *testing.T) {
 				if next == nil {
 					t.Fatal("successor dirty C1 missing")
 				}
-				if token := publicPrimaryBasis(t, next); token != successor {
+				if token := publicPhysicalBasis(t, next); token != successor {
 					t.Fatalf("next C1 basis=%v want=%v", token, successor)
 				}
 				cowPublicContractSnapshotValue(t, next, "a", []byte("second"), true)
@@ -211,8 +263,8 @@ func TestCOWPublicPrimarySelectionLayeredPublication(t *testing.T) {
 					t.Fatal("ordinary reopen", err)
 				}
 				defer reopened.Close()
-				if !primaryarena.IsPage(reopened.backend.State().RootPageID) {
-					t.Fatal("reopen lost PRIMARY authority")
+				if primaryarena.IsPage(reopened.backend.State().RootPageID) {
+					t.Fatal("reopen lost DATA authority")
 				}
 				if got, err := reopened.Get([]byte("b")); err != nil || !bytes.Equal(got, value) {
 					t.Fatalf("reopened pointer/inline %d %v", len(got), err)
@@ -228,7 +280,7 @@ func TestCOWPublicPrimarySelectionLayeredPublication(t *testing.T) {
 	}
 }
 
-func TestCOWPublicPrimarySelectionModeAndExplicitFlag(t *testing.T) {
+func TestCOWPublicDATASelectionModeAndRetiredFlag(t *testing.T) {
 	for _, profile := range []Profile{ProfileCommandWALDurable, ProfileCommandWALRelaxed, ProfileNoWALFast} {
 		for _, mode := range []string{"append_only", "btree", "cow_btree"} {
 			for _, explicit := range []bool{false, true} {
@@ -240,13 +292,18 @@ func TestCOWPublicPrimarySelectionModeAndExplicitFlag(t *testing.T) {
 					opts.DisableSideStores = true
 					opts.DisableBackgroundPrune = true
 					database, err := Open(opts)
+					if explicit {
+						if database != nil || !errors.Is(err, ErrLegacyFormatRebuildRequired) {
+							t.Fatalf("retired flag: database=%v err=%v", database != nil, err)
+						}
+						return
+					}
 					if err != nil {
 						t.Fatal(err)
 					}
 					defer database.Close()
-					selected := primaryarena.IsPage(database.backend.State().RootPageID)
-					if want := explicit || mode == "cow_btree" || profile == ProfileNoWALFast; selected != want {
-						t.Fatalf("actual selection=%v want=%v", selected, want)
+					if primaryarena.IsPage(database.backend.State().RootPageID) {
+						t.Fatal("ordinary default selected PRIMARY")
 					}
 				})
 			}
@@ -254,7 +311,7 @@ func TestCOWPublicPrimarySelectionModeAndExplicitFlag(t *testing.T) {
 	}
 }
 
-func TestCOWPublicPrimarySelectionNonemptyDATARequiresRebuild(t *testing.T) {
+func TestCOWPublicDATASelectionReopensExistingDATA(t *testing.T) {
 	for _, profile := range []Profile{ProfileCommandWALDurable, ProfileCommandWALRelaxed} {
 		t.Run(string(profile), func(t *testing.T) {
 			opts := OptionsFor(profile, t.TempDir())
@@ -276,32 +333,23 @@ func TestCOWPublicPrimarySelectionNonemptyDATARequiresRebuild(t *testing.T) {
 			opts.MemtableMode = "cow_btree"
 			opts.MemtableShards = 2
 			candidate, err := Open(opts)
-			if candidate != nil {
-				candidate.Close()
-				t.Fatal("nonempty DATA silently reinterpreted")
-			}
-			if !errors.Is(err, ErrLegacyFormatRebuildRequired) {
-				t.Fatalf("rebuild refusal %v", err)
-			}
-			if _, err := os.Stat(filepath.Join(opts.Dir, "index.db.primary")); !os.IsNotExist(err) {
-				t.Fatalf("refused open installed PRIMARY: %v", err)
-			}
-			opts.MemtableMode = "btree"
-			original, err := Open(opts)
 			if err != nil {
-				t.Fatal("original mode reopen", err)
+				t.Fatal("COW reopen of existing DATA", err)
 			}
-			defer original.Close()
-			if got, err := original.Get([]byte("legacy-data")); err != nil || string(got) != "preserved" {
-				t.Fatalf("refusal changed old DATA %q %v", got, err)
+			defer candidate.Close()
+			if primaryarena.IsPage(candidate.backend.State().RootPageID) {
+				t.Fatal("existing DATA reopened as PRIMARY")
+			}
+			if got, err := candidate.Get([]byte("legacy-data")); err != nil || string(got) != "preserved" {
+				t.Fatalf("DATA reopen changed value %q %v", got, err)
 			}
 		})
 	}
 }
 
-// Fallback convergence may publish a new physical PRIMARY root even when the
+// Fallback convergence may publish a new physical DATA root even when the
 // cached checkpoint had no dirty entries. The next C1 write must inherit it.
-func TestCOWPublicPrimaryEmptyCheckpointPreservesSuccessorBasis(t *testing.T) {
+func TestCOWPublicDATAEmptyCheckpointPreservesSuccessorBasis(t *testing.T) {
 	for _, profile := range []Profile{ProfileCommandWALDurable, ProfileCommandWALRelaxed} {
 		for _, pointer := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/pointer=%v", profile, pointer), func(t *testing.T) {
@@ -334,19 +382,19 @@ func TestCOWPublicPrimaryEmptyCheckpointPreservesSuccessorBasis(t *testing.T) {
 					t.Fatal("missing old cut")
 				}
 				defer old.Close()
-				oldBasis := publicPrimaryBasis(t, old)
+				oldBasis := publicPhysicalBasis(t, old)
 				if err := database.Checkpoint(); err != nil {
 					t.Fatal("empty checkpoint", err)
 				}
 				successor, ok := database.backend.StateToken()
-				if !ok || !primaryarena.IsPage(successor.RootPageID) {
-					t.Fatal("missing actual PRIMARY successor")
+				if !ok || primaryarena.IsPage(successor.RootPageID) {
+					t.Fatal("missing actual DATA successor")
 				}
 				fresh := database.AcquireSnapshot()
 				if fresh == nil {
 					t.Fatal("missing fresh cut")
 				}
-				actual := publicPrimaryBasis(t, fresh)
+				actual := publicPhysicalBasis(t, fresh)
 				if err := fresh.Close(); err != nil {
 					t.Fatal(err)
 				}
@@ -354,7 +402,7 @@ func TestCOWPublicPrimaryEmptyCheckpointPreservesSuccessorBasis(t *testing.T) {
 				if actual != successor {
 					t.Errorf("empty checkpoint left stale COW basis: got=%v want=%v", actual, successor)
 				}
-				if publicPrimaryBasis(t, old) != oldBasis {
+				if publicPhysicalBasis(t, old) != oldBasis {
 					t.Fatal("empty checkpoint mutated retained old cut")
 				}
 				cowPublicContractSnapshotValue(t, old, "a", second, true)

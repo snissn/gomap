@@ -23,6 +23,9 @@ func wrapReadOnlyValueLogRecoveryError(err error) error {
 }
 
 func openReadOnly(opts Options) (result *DB, retErr error) {
+	if err := ValidateDATAIndexOpen(opts.Dir, opts.IndexPrimaryDirectory); err != nil {
+		return nil, err
+	}
 	if _, err := validateFreelistTopologyGateV2(opts.Dir); err != nil {
 		return nil, err
 	}
@@ -184,9 +187,6 @@ func openReadOnly(opts Options) (result *DB, retErr error) {
 	gen.zipper.SetLeafPageReader(db.leafPageReader(vm))
 	gen.zipper.SetMaintenanceOpsPerCoalesce(opts.MaintenanceOpsPerCoalesce)
 
-	if err := db.attachPrimaryArenaV5(gen, opts); err != nil {
-		return nil, err
-	}
 	if err := db.recover(); err != nil {
 		return nil, err
 	}
@@ -234,6 +234,9 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 	return openReadOnlyNoLockWithRegistryV6(opts, nil, nil)
 }
 func openReadOnlyNoLockWithRegistryV6(opts Options, valueLogIdentityPins *rootpublication.IdentityPinRegistry, lock *lockfile.Lock) (result *DB, retErr error) {
+	if err := ValidateDATAIndexOpen(opts.Dir, opts.IndexPrimaryDirectory); err != nil {
+		return nil, err
+	}
 	if _, err := validateFreelistTopologyGateV2(opts.Dir); err != nil {
 		return nil, err
 	}
@@ -384,9 +387,6 @@ func openReadOnlyNoLockWithRegistryV6(opts Options, valueLogIdentityPins *rootpu
 	gen.zipper.SetLeafPageReader(db.leafPageReader(vm))
 	gen.zipper.SetMaintenanceOpsPerCoalesce(opts.MaintenanceOpsPerCoalesce)
 
-	if err := db.attachPrimaryArenaV5(gen, opts); err != nil {
-		return nil, err
-	}
 	if err := db.recover(); err != nil {
 		return nil, err
 	}

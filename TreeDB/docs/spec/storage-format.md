@@ -12,6 +12,22 @@ cleaning, compacting, or rewriting the directory. Typed-column image,
 descriptor, manifest, and schema evolution follows the fail-closed policy in
 `typed-column-schema-evolution.md`.
 
+## DATA root selection and retired PRIMARY directories
+
+New opens select the existing DATA B-tree and dual durable-meta slots in
+`index.db`, including `no_wal_fast` and `cow_btree`. The physical seal uses the
+existing `DurableRootRecordV1`, dependency closure and freelist generation. COW
+cache visibility is separate from that durable authority. Pointer-backed values
+remain persistent value-log dependencies.
+
+The pre-alpha `index.db.primary` representation is retired. Public and backend
+read-write/read-only opens refuse it with `ErrLegacyFormatRebuildRequired` and
+rebuild guidance before recovery or public side-store startup mutates files.
+A staged PRIMARY file or committed joint DATA/PRIMARY swap also refuses.
+`IndexPrimaryDirectory=true` refuses rather than selecting a fallback. Rebuild
+an old PRIMARY directory; there is no in-place converter. DATA slot selection
+still validates both complete roots and each required immediate parent.
+
 ## All-level vector-partition router identity
 
 The global all-level spherical router uses model format

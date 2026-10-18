@@ -833,6 +833,16 @@ func openResolvedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := db.ValidateDATAIndexOpen(layout.mainDir, opts.IndexPrimaryDirectory); err != nil {
+		return nil, err
+	}
+	if !layout.disableSideStores {
+		for _, sideDir := range []string{layout.dictdbDir, layout.templatedbDir} {
+			if err := db.ValidateDATAIndexOpen(sideDir, false); err != nil {
+				return nil, err
+			}
+		}
+	}
 	rootDir := layout.rootDir
 	maindbDir := layout.mainDir
 	dictdbDir := layout.dictdbDir
@@ -1103,13 +1113,8 @@ func openResolvedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
 		}
 		return nil, fmt.Errorf("treedb: snapshot side store %q has no owner", name)
 	}
-	// Foreground COW writes publish the prepared cache cut under command-WAL
-	// authority. Its physical checkpoint uses the existing PRIMARY constructor
-	// and promotion. Select only the main backend after side-store options have
-	// been copied; those independent stores retain their existing format policy.
-	if opts.CommandWAL && opts.MemtableMode == "cow_btree" {
-		opts.IndexPrimaryDirectory = true
-	}
+	// COW foreground authority and physical DATA sealing remain distinct. The
+	// existing DATA publisher is shared by cached and ordinary backend callers.
 	opts.Dir = maindbDir
 	backend, err := db.Open(opts)
 	if err != nil {

@@ -2,6 +2,14 @@
 
 This document defines startup recovery behavior.
 
+Public and backend startup select the existing DATA recovery implementation.
+Persisted PRIMARY arenas, staged PRIMARY files and joint DATA/PRIMARY swap
+records require a pre-alpha rebuild. This refusal happens before public side
+stores or backend swap/replay recovery can alter the directory. Supported public
+read-only opens use the uncached `btree` role on the same persisted DATA; public
+`ReadOnly+cow_btree` remains unsupported. Successful DATA recovery independently
+validates both slots, their exact dependencies and required parent records.
+
 Typed `column_graph` public serving admission is process-local: after ordinary
 replay/open, explicitly call `EnsureColumnGraphServing` with positive limits.
 Queries do not bootstrap/reconcile manifests. A failed ensure stays fail closed

@@ -17,6 +17,11 @@ surface with no durability promise.
 | `no_wal_fast` | relaxed | sealed durable root covering the call | sealed durable root | verify |
 | `bench_unsafe` | no promise | no promise | no production promise | benchmark-selected |
 
+Physical seals use the existing DATA B-tree root record and two durable-meta
+slots in `index.db`. A COW cache cut or an ordinary volatile acknowledgement is
+not a physical seal. Retired PRIMARY directories require a rebuild at Open;
+there is no fallback that changes these durability boundaries.
+
 `command_wal_durable` ordinary acknowledgements survive power loss through the
 stable typed command frame and every required value-log, outer-leaf, or
 auxiliary dependency. Backend-root publication may happen later.
