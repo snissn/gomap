@@ -182,15 +182,25 @@ func (r *NativeJSONRead) physicalScratch() (*nativeDomainReadScratch, error) {
 }
 
 func (r *NativeJSONRead) getEntry(id []byte) (node.LeafEntry, error) {
+	entry, _, err := r.lookupEntry(id, false)
+	return entry, err
+}
+
+func (r *NativeJSONRead) lookupEntry(id []byte, copyValue bool) (node.LeafEntry, bool, error) {
 	entry, resolved, err := r.domain.memoryEntry(id)
 	if resolved {
-		return entry, err
+		return entry, false, err
+	}
+	if physical, ok := r.capture.(backenddb.NativePhysicalReader); ok {
+		entry, err = physical.NativeEntryAtRoot(r.domain.domain.baseRoot, id, copyValue)
+		return entry, copyValue, err
 	}
 	scratch, err := r.physicalScratch()
 	if err != nil {
-		return node.LeafEntry{}, err
+		return node.LeafEntry{}, false, err
 	}
-	return r.domain.baseEntry(id, scratch, r.readLeaf)
+	entry, err = r.domain.baseEntry(id, scratch, r.readLeaf)
+	return entry, false, err
 }
 
 // detachScratch ends every scope alias before the independent receipt refunds.
@@ -214,7 +224,7 @@ func (r *NativeJSONRead) Get(id []byte) ([]byte, error) {
 	if r.domain.domain == nil {
 		return nil, tree.ErrKeyNotFound
 	}
-	entry, err := r.getEntry(id)
+	entry, owned, err := r.lookupEntry(id, true)
 	if err != nil {
 		return nil, err
 	}
@@ -223,6 +233,9 @@ func (r *NativeJSONRead) Get(id []byte) ([]byte, error) {
 	}
 	if entry.Flags&node.FlagPointer != 0 {
 		return r.readValue(entry.ValuePtr)
+	}
+	if owned {
+		return entry.Value, nil
 	}
 	// The result belongs to the caller, not to retained database accounting.
 	value := make([]byte, len(entry.Value))

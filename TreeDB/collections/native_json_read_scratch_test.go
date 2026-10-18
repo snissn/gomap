@@ -108,6 +108,10 @@ func TestNativeJSONReadLazyScratchOwnership(t *testing.T) {
 	if base.scratch != nil {
 		t.Fatal("live-state Capture eagerly allocated scratch")
 	}
+	check(base)
+	if base.scratch != nil || base.scratchLease != nil {
+		t.Fatal("shared basis physical read allocated duplicate scope scratch")
+	}
 	refused, err := memtable.NewCOWBudget(memtable.DefaultCOWLimits())
 	if err != nil {
 		t.Fatal(err)
@@ -121,7 +125,7 @@ func TestNativeJSONReadLazyScratchOwnership(t *testing.T) {
 	if base.scratch != nil || base.scratchLease != nil || refused.Stats().TotalBytes != 0 {
 		t.Fatal("refusal left partial scratch ownership")
 	}
-	base.capture = original
+	base.capture = nativeReadRefusingAllocator{original, original.NativeAllocator()}
 	check(base)
 	if base.scratch == nil || base.scratchLease == nil {
 		t.Fatal("physical read lacks original scratch admission")
@@ -179,6 +183,7 @@ func TestNativeJSONReadLazyScratchOwnership(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		txn.bindings[0].probe.capture = nativeReadRefusingAllocator{txn.bindings[0].probe.capture, txn.core.NativeAllocator()}
 		if _, err = txn.Get([]byte("a")); err != nil {
 			t.Fatal(err)
 		}

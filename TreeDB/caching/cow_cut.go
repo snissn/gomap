@@ -18,6 +18,8 @@ import (
 // cowBackendBasis is shared by successor cuts. A handoff captures one new
 // backend snapshot before publication; readers never independently capture it.
 type cowBackendBasis struct {
+	readMu          sync.Mutex // serializes physical workspace reuse, never publication gates
+	reader          *cowReadWorkspace
 	logicalSeq      uint64
 	refs            atomic.Int64
 	snapshot        *backenddb.Snapshot
@@ -35,6 +37,14 @@ func (b *cowBackendBasis) retain() { b.refs.Add(1) }
 func (b *cowBackendBasis) release() error {
 	if b == nil || b.refs.Add(-1) != 0 {
 		return nil
+	}
+	b.readMu.Lock()
+	reader := b.reader
+	b.reader = nil
+	b.readMu.Unlock()
+	if reader != nil {
+		reader.close()
+		reader = nil
 	}
 	b.completionMu.Lock()
 	snapshot, priorErr := b.snapshot, b.cleanupErr

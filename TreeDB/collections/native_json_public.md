@@ -232,3 +232,12 @@ Collection metadata/handle and result-ID arena, and one admitted read-view wrapp
 Recovered read metadata now stays under its original admitted decode lease until
 read Close. No performance improvement is claimed; existing native metadata sizing,
 full producer/type/index coverage and graph performance gates remain open.
+
+Physical JSON point reads retain their opening complete cut and reuse bounded
+traversal/codec buffers owned by its exact immutable backend basis. Physical
+reads sharing one basis serialize while using those buffers and copying inline
+results into caller-owned output. A physical handoff gives later reads a new
+basis; held reads keep the old basis and its original admitted buffers until its
+last owner closes. Pending/captured logical-source precedence and pointer-value
+resolution are unchanged. Recovered catalog decoding still uses its existing
+scope-owned metadata scratch; it is not amortized by this row-read workspace.
