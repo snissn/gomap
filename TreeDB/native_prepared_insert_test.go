@@ -277,9 +277,9 @@ func TestNativePreparedInsertRejectsNonDurableProfiles(t *testing.T) {
 	for _, profile := range []Profile{ProfileCommandWALRelaxed, ProfileNoWALFast} {
 		t.Run(string(profile), func(t *testing.T) {
 			opts := indexedSliceOptions(profile, t.TempDir())
-			// The maintained legacy factory can create this empty typed catalog.
-			// Reopen through the public native role with the same profile: typed
-			// reads remain eligible, but preparation must refuse before a txn.
+			// The maintained benchmark-relaxed catalog profile permits legacy
+			// creation under this same durability profile. Public native typed
+			// reads remain eligible; preparation must still refuse before a txn.
 			backend, closeLegacy, err := OpenBackendWithCachedLeafLog(opts)
 			if err != nil {
 				t.Fatal(err)
@@ -292,7 +292,9 @@ func TestNativePreparedInsertRejectsNonDurableProfiles(t *testing.T) {
 			legacyManager := collections.NewCollectionManager(backend)
 			t.Cleanup(func() { _ = legacyManager.Close() })
 			fixture := nativeColumnPendingCaseFor(t, "int64")
-			if _, err := legacyManager.CreateCollection(nativeColumnPendingMeta(fixture)); err != nil {
+			meta := nativeColumnPendingMeta(fixture)
+			meta.Options.ColumnStore.ProfileSupport = collections.ColumnStoreProfileBenchmarkRelaxed
+			if _, err := legacyManager.CreateCollection(meta); err != nil {
 				t.Fatal(err)
 			}
 			if err := legacyManager.Close(); err != nil {
