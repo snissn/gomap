@@ -1,16 +1,16 @@
 package collections
 
 import (
-	"bytes"
 	"errors"
+	"strings"
+	"unsafe"
+
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/cowbtree"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/tree"
-	"strings"
-	"unsafe"
 )
 
 // importNativeJSONCatalog is a private complete import of the exact physical
@@ -100,13 +100,9 @@ func importNativeJSONCatalog(capture backenddb.NativeSemanticCapture) (base *nat
 		}
 	}
 	err = scan(systemCollectionMetaPrefix, func(entry node.LeafEntry) error {
-		// Restricted metadata has no arrays or column subobject. Refuse these
-		// before general decode, keeping transient allocation bounded by a fixed
-		// scalar struct plus input strings and the existing JSON decoder scratch.
+		// Charge input-sized decode scratch before parsing scalar-index schema.
+		// Unsupported column/vector/compound metadata still refuses below.
 		raw := entry.Value
-		if bytes.ContainsAny(raw, "[]") || bytes.Contains(raw, []byte("column_store")) {
-			return backenddb.ErrNativeSemanticUnsupported
-		}
 		if uint64(len(raw)) > (^uint64(0)-uint64(unsafe.Sizeof(CollectionMeta{})))/16 {
 			return memtable.ErrCOWCapacity
 		}
@@ -138,19 +134,7 @@ func importNativeJSONCatalog(capture backenddb.NativeSemanticCapture) (base *nat
 		if _, exists := base.collections.Get(id); exists {
 			return errNativeCatalogIdentity
 		}
-		root := uint64(0)
-		rootRaw, err := get(systemCollectionRootKey(collectionPrimaryRootName(meta.Name)))
-		if err == nil {
-			root, err = decodeRootID(rootRaw)
-		}
-		if err != nil && !errors.Is(err, tree.ErrKeyNotFound) {
-			return err
-		}
-		policy, err := collectionRootStoragePolicy(meta, collectionPrimaryRootName(meta.Name))
-		if err != nil {
-			return err
-		}
-		next, err := importNativeJSONCollection(base, meta, id, root, policy)
+		next, err := importNativeJSONCollection(base, meta, id, get)
 		if err != nil {
 			if next != nil {
 				record := next.Release()
@@ -177,15 +161,15 @@ func importNativeJSONCatalog(capture backenddb.NativeSemanticCapture) (base *nat
 	}
 	err = scan(systemCollectionRootPrefix, func(entry node.LeafEntry) error {
 		qualified := strings.TrimPrefix(string(entry.Key), systemCollectionRootPrefix)
-		if !strings.HasSuffix(qualified, "/primary") {
+		name, domain, found := strings.Cut(qualified, "/")
+		if !found {
 			return backenddb.ErrNativeSemanticUnsupported
 		}
-		name := strings.TrimSuffix(qualified, "/primary")
 		c, ok := base.names.Get(name)
-		if !ok {
+		if !ok || nativeJSONDomainNumber(*c.schema.meta, domain) == 0 {
 			return backenddb.ErrNativeSemanticUnsupported
 		}
-		d, ok := c.domains.Get("primary")
+		d, ok := c.domains.Get(domain)
 		if !ok {
 			return backenddb.ErrNativeSemanticUnsupported
 		}
@@ -201,11 +185,12 @@ func importNativeJSONCatalog(capture backenddb.NativeSemanticCapture) (base *nat
 	return base, err
 }
 
-func importNativeJSONCollection(base *nativeEngineVersion, meta CollectionMeta, id, root uint64, policy backenddb.OrderedRootStoragePolicy) (next *nativeEngineVersion, err error) {
+func importNativeJSONCollection(base *nativeEngineVersion, meta CollectionMeta, id uint64, get func(string) ([]byte, error)) (next *nativeEngineVersion, err error) {
 	if base.inventory != nil || base.build != nil {
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	} // private import only
-	next, err = newNativeEnginePreparation(base, 1, 1, base.allocator)
+	roots := collectionRootNames(meta)
+	next, err = newNativeEnginePreparation(base, 1, len(roots), base.allocator)
 	if err != nil {
 		return nil, err
 	}
@@ -216,12 +201,7 @@ func importNativeJSONCollection(base *nativeEngineVersion, meta CollectionMeta, 
 	if err != nil {
 		return next, err
 	}
-	domain, err := newNativeDomainState("primary", root, 1, policy, nil, admit)
-	if err != nil {
-		return next, err
-	}
-	p.ownedDomains = append(p.ownedDomains, domain)
-	p.domainBuilder, err = cowbtree.NewOwnedMapBuilder[string, *nativeDomainState](nil, 1, nativeDomainLifetime{}, admit)
+	p.domainBuilder, err = cowbtree.NewOwnedMapBuilder[string, *nativeDomainState](nil, len(roots), nativeDomainLifetime{}, admit)
 	if err != nil {
 		return next, err
 	}
@@ -229,8 +209,30 @@ func importNativeJSONCollection(base *nativeEngineVersion, meta CollectionMeta, 
 	if err != nil {
 		return next, err
 	}
-	if err = p.domainBuilder.Set("primary", domain); err != nil {
-		return next, err
+	for _, qualified := range roots {
+		root := uint64(0)
+		raw, readErr := get(systemCollectionRootKey(qualified))
+		if readErr == nil {
+			root, readErr = decodeRootID(raw)
+		}
+		if readErr != nil && !errors.Is(readErr, tree.ErrKeyNotFound) {
+			return next, readErr
+		}
+		policy, policyErr := collectionRootStoragePolicy(meta, qualified)
+		if policyErr != nil {
+			return next, policyErr
+		}
+		name := strings.TrimPrefix(qualified, meta.Name+"/")
+		domain, domainErr := newNativeDomainState(name, root, 1, policy, nil, admit)
+		if domain != nil {
+			p.ownedDomains = append(p.ownedDomains, domain)
+		}
+		if domainErr != nil {
+			return next, domainErr
+		}
+		if err = p.domainBuilder.Set(name, domain); err != nil {
+			return next, err
+		}
 	}
 	p.sealPrivateBuilders(next)
 	c, err := newNativeCollectionState(id, p.schema, p.domains, p.pendingDomains, admit)

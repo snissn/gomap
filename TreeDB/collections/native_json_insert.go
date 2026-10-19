@@ -189,8 +189,9 @@ func prepareNativeJSONPrimaries(base *nativeEngineVersion, changes []nativeJSONP
 	return next, nil
 }
 
-// The registered singleton preparation shares the same immutable domain and
-// directory replacement as the public planner; it never invokes replay install.
+// The registered singleton preparation retains its unindexed capability only.
+// Indexed foreground writes use the original ConditionalTxn logical planner;
+// startup recovery invokes the registered replay handler, not this callback.
 func prepareNativeJSONInsertCommand(_ *backenddb.DB, env commitlog.CommandEnvelope, basis backenddb.NativeSemanticState, snapshot *backenddb.Snapshot, _ *backenddb.StableResourceCaptureLease) (publication *backenddb.NativePreparedPublication, resultErr error) {
 	base, ok := basis.(*nativeEngineVersion)
 	if !ok || base.inventory != nil || snapshot == nil {
@@ -216,6 +217,9 @@ func prepareNativeJSONInsertCommand(_ *backenddb.DB, env commitlog.CommandEnvelo
 	c, ok := base.names.Get(decoded.Collection)
 	if !ok {
 		return nil, tree.ErrKeyNotFound
+	}
+	if len(c.schema.meta.Indexes) != 0 {
+		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
 	if _, err = nativeJSONMeta(*c.schema.meta); err != nil {
 		return nil, err

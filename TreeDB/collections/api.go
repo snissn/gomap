@@ -14004,6 +14004,9 @@ func (c *Collection) deleteDocumentIf(documentID []byte, predicate func(current 
 // delete batch recoverable as one mutation boundary. Pre-commit errors expose no
 // partial batch; post-commit failures must be commit-ambiguous.
 func (c *Collection) DeleteBatch(documentIDs [][]byte) (int, error) {
+	if c != nil && c.nativeJSON != nil {
+		return 0, backenddb.ErrNativeSemanticUnsupported
+	}
 	if c == nil {
 		return 0, errCollectionNil
 	}
@@ -14940,6 +14943,9 @@ func (c *Collection) updateDirectBSONSet(documentID []byte, spec bsonSetUpdate) 
 // pre-commit unless explicitly documented otherwise and must expose no partial
 // batch. Post-commit failures must be commit-ambiguous for the whole batch.
 func (c *Collection) UpdateBatch(items []UpdateBatchItem) ([]UpdateBatchResult, error) {
+	if c != nil && c.nativeJSON != nil {
+		return nil, backenddb.ErrNativeSemanticUnsupported
+	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
 	admissionState := c.lockCollectionCommandWALAdmission()
@@ -23694,7 +23700,29 @@ func (c *Collection) ScanIndexRange(indexName string, opts IndexRangeOptions, fn
 	return truncated, err
 }
 
-func (c *Collection) findByIndexValue(indexName string, value any, maxResults int) ([][]byte, bool, error) {
+func (c *Collection) findByIndexValue(indexName string, value any, maxResults int) (result [][]byte, truncated bool, resultErr error) {
+	if c != nil && c.nativeJSON != nil {
+		if maxResults < 0 {
+			return nil, false, errors.New("collections: max index results cannot be negative")
+		}
+		read, err := c.nativeJSON.Capture(c.name)
+		if err != nil {
+			return nil, false, err
+		}
+		defer func() { resultErr = errors.Join(resultErr, read.Close()) }()
+		err = read.visitIndexValueIDs(indexName, value, func(id []byte) error {
+			if maxResults > 0 && len(result) == maxResults {
+				truncated = true
+				return errNativeIndexVisitComplete
+			}
+			result = append(result, bytes.Clone(id))
+			return nil
+		})
+		if errors.Is(err, errNativeIndexVisitComplete) {
+			err = nil
+		}
+		return result, truncated, err
+	}
 	if maxResults < 0 {
 		return nil, false, errors.New("collections: max index results cannot be negative")
 	}
@@ -23715,6 +23743,9 @@ func orderedBSONIndexRequiresCompoundRangeAPI(idx IndexDefinition) bool {
 }
 
 func (c *Collection) scanIndexRange(indexName string, opts IndexRangeOptions, fn func(id []byte) (bool, error)) (bool, bool, error) {
+	if c != nil && c.nativeJSON != nil {
+		return false, false, backenddb.ErrNativeSemanticUnsupported
+	}
 	if c == nil {
 		return false, false, errCollectionNil
 	}

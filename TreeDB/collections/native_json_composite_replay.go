@@ -3,10 +3,13 @@ package collections
 import (
 	"encoding/binary"
 	"errors"
+	"strings"
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
 
@@ -71,7 +74,7 @@ func replayNativeJSONComposite(db *backenddb.DB, env commitlog.CommandEnvelope) 
 			return err
 		}
 		for _, old := range ordered {
-			if old.name == decoded.Collection {
+			if strings.HasPrefix(old.name, decoded.Collection+"/") {
 				return backenddb.ErrNativeSemanticUnsupported
 			}
 		}
@@ -119,13 +122,16 @@ func replayNativeJSONComposite(db *backenddb.DB, env commitlog.CommandEnvelope) 
 		for i, row := range decoded.Documents {
 			ids[i], docs[i] = row.ID, row.Document
 		}
-		planner := insertBatchPlanner{collection: decoded.Collection, primaryRoot: "primary", templateRoot: "templates", directBufferedRuns: true, options: collectionOptions{documentFormat: DocumentFormatJSON}}
+		planner, err := nativeJSONInsertPlanner(meta)
+		if err != nil {
+			return err
+		}
 		plan, err := planner.planInsertBatch(ids, docs)
 		if err != nil {
 			return err
 		}
 		if root != 0 {
-			exists, err := snapshot.HasAnySortedAtRoot(root, ids)
+			exists, err := snapshot.HasAnySortedAtRoot(root, plan.primaryKeys)
 			if err != nil {
 				return err
 			}
@@ -133,11 +139,67 @@ func replayNativeJSONComposite(db *backenddb.DB, env commitlog.CommandEnvelope) 
 				return ErrDocumentExists
 			}
 		}
-		delta := batch.New(nil, int(^uint(0)>>1))
-		ordered = append(ordered, prepared{name: decoded.Collection, root: root, policy: policy, delta: delta})
-		for _, row := range plan.directBufferedInsert.primaryEntries {
-			if err = delta.Set(row.key, row.value); err != nil {
+		// Startup owns this ephemeral plan through its existing Snapshot/group;
+		// no native allocator or fresh foreground capture is constructed.
+		primary := make([]memtable.COWMutation, len(plan.directBufferedInsert.primaryEntries))
+		additional, _, err := extractNativeInsertEffects(decoded.Collection, id, plan.directBufferedInsert, primary, func(uint64) error { return nil })
+		if err != nil {
+			return err
+		}
+		for _, run := range plan.directBufferedInsert.uniqueValueRootPlans {
+			encoded, err := read(systemCollectionRootKey(collectionSecondaryRootName(meta.Name, run.indexName)))
+			if errors.Is(err, tree.ErrKeyNotFound) {
+				continue
+			}
+			if err != nil {
 				return err
+			}
+			indexRoot, err := decodeRootID(encoded)
+			if err != nil {
+				return err
+			}
+			exists, err := snapshot.HasPrefixesAtRoot(indexRoot, run.prefixes)
+			if err != nil {
+				return err
+			}
+			for _, conflict := range exists {
+				if conflict {
+					return ErrUniqueIndexConflict
+				}
+			}
+		}
+		for i := 0; i <= len(additional); i++ {
+			qualified, baseRoot, storage, entries := collectionPrimaryRootName(decoded.Collection), root, policy, primary
+			if i > 0 {
+				input := additional[i-1]
+				qualified = decoded.Collection + "/" + input.name
+				storage = input.policy
+				entries = input.entries
+				encoded, err := read(systemCollectionRootKey(qualified))
+				baseRoot = 0
+				if err == nil {
+					baseRoot, err = decodeRootID(encoded)
+				}
+				if err != nil && !errors.Is(err, tree.ErrKeyNotFound) {
+					return err
+				}
+			}
+			if _, err := read(systemCollectionRootOverlayKey(qualified)); err == nil {
+				return backenddb.ErrNativeSemanticUnsupported
+			} else if !errors.Is(err, tree.ErrKeyNotFound) {
+				return err
+			}
+			delta := batch.New(nil, int(^uint(0)>>1))
+			ordered = append(ordered, prepared{name: qualified, root: baseRoot, policy: storage, delta: delta})
+			for _, row := range entries {
+				if row.Flags&node.FlagTombstone != 0 {
+					err = delta.Delete(row.Key)
+				} else {
+					err = delta.Set(row.Key, row.Value)
+				}
+				if err != nil {
+					return err
+				}
 			}
 		}
 		return nil
@@ -167,7 +229,7 @@ func replayNativeJSONComposite(db *backenddb.DB, env commitlog.CommandEnvelope) 
 		var value [8]byte
 		binary.BigEndian.PutUint64(value[:], root)
 		// Collection roots use the same persisted encoding as every other producer.
-		if err = system.Set([]byte(systemCollectionRootKey(collectionPrimaryRootName(input.name))), value[:]); err != nil {
+		if err = system.Set([]byte(systemCollectionRootKey(input.name)), value[:]); err != nil {
 			return err
 		}
 	}

@@ -17,7 +17,7 @@ import (
 )
 
 // NativeJSONTxn uses the existing conditional transaction's single opening cut.
-// The frontend stages one insert batch per captured unindexed JSON collection
+// The frontend stages one insert batch per captured scalar-indexed JSON collection
 // and one raw point Set in the original P1 batch.
 // Get observes that opening plus its own staged inserts. Commit never reruns the
 // body; only the original immutable mutations are composed after validation.
@@ -123,6 +123,8 @@ func (m *NativeJSONManager) Begin(name string, additional ...string) (result *Na
 			return nil, err
 		}
 		g.incarnation = c.incarnation
+		g.probe.collection = c
+		g.probe.meta = *c.schema.meta
 		t.dependencies = append(t.dependencies, txnhistory.Dependency{Namespace: txnhistory.Namespace{Kind: txnhistory.CatalogNamespace}, Kind: txnhistory.PointEffect, Key: []byte(g.name)})
 		if domain, ok := c.domains.Get("primary"); ok {
 			g.probe.domain, err = newNativeDomainRead(domain, core.Snapshot())
@@ -149,6 +151,9 @@ func (t *NativeJSONTxn) binding(name string) *nativeJSONTxnBinding {
 // The coarse lease conservatively retains previous array capacity until Close;
 // no dependency backing is refunded while a descriptor can still borrow it.
 func (t *NativeJSONTxn) trackRead(g *nativeJSONTxnBinding, id []byte) error {
+	return t.trackDependency(g.namespace(), txnhistory.PointEffect, id, nil)
+}
+func (t *NativeJSONTxn) trackDependency(namespace txnhistory.Namespace, kind txnhistory.EffectKind, id, end []byte) error {
 	size := uint64(unsafe.Sizeof(txnhistory.Dependency{}))
 	capacity := cap(t.dependencies)
 	var backing uint64
@@ -162,7 +167,7 @@ func (t *NativeJSONTxn) trackRead(g *nativeJSONTxnBinding, id []byte) error {
 		}
 		backing = memtable.COWAllocationCharge(uint64(capacity) * size)
 	}
-	key := memtable.COWAllocationCharge(uint64(len(id)))
+	key := memtable.COWAllocationCharge(uint64(len(id))) + memtable.COWAllocationCharge(uint64(len(end)))
 	if key > ^uint64(0)-backing || backing+key > ^uint64(0)-t.charge {
 		return memtable.ErrCOWCapacity
 	}
@@ -175,7 +180,7 @@ func (t *NativeJSONTxn) trackRead(g *nativeJSONTxnBinding, id []byte) error {
 		copy(next, t.dependencies)
 		t.dependencies = next
 	}
-	t.dependencies = append(t.dependencies, txnhistory.Dependency{Namespace: g.namespace(), Kind: txnhistory.PointEffect, Key: bytes.Clone(id)})
+	t.dependencies = append(t.dependencies, txnhistory.Dependency{Namespace: namespace, Kind: kind, Key: bytes.Clone(id), End: bytes.Clone(end)})
 	return nil
 }
 
@@ -257,6 +262,11 @@ func (t *NativeJSONTxn) InsertBatchInto(name string, ids, documents [][]byte) (r
 	if err != nil {
 		return err
 	}
+	indexedCharge, err := nativeJSONIndexedPlanCharge(g.probe.meta, ids, documents)
+	if err != nil || indexedCharge > ^uint64(0)-charge {
+		return memtable.ErrCOWCapacity
+	}
+	charge += indexedCharge
 	// Staged inputs outlive caller buffers, unlike the old synchronous planner.
 	extra := memtable.COWAllocationCharge(arenaBytes) + memtable.COWAllocationCharge(uint64(len(ids))*uint64(unsafe.Sizeof([]byte{})))*2 + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeJSONLogicalInsert{})))
 	if extra > ^uint64(0)-charge {
@@ -281,7 +291,10 @@ func (t *NativeJSONTxn) InsertBatchInto(name string, ids, documents [][]byte) (r
 		ownedDocs[i] = arena[offset : offset+len(documents[i])]
 		offset += len(documents[i])
 	}
-	planner := insertBatchPlanner{collection: g.name, primaryRoot: "primary", templateRoot: "templates", directBufferedRuns: true, options: collectionOptions{documentFormat: DocumentFormatJSON}}
+	planner, err := nativeJSONInsertPlanner(g.probe.meta)
+	if err != nil {
+		return err
+	}
 	prepared, err := planner.planInsertBatch(ownedIDs, ownedDocs)
 	if err != nil {
 		return err
@@ -299,6 +312,13 @@ func (t *NativeJSONTxn) InsertBatchInto(name string, ids, documents [][]byte) (r
 		if err != nil && !errors.Is(err, tree.ErrKeyNotFound) {
 			return err
 		}
+	}
+	if err = checkNativeInsertUnique(g.probe.collection, &g.probe, prepared.directBufferedInsert, func(domain uint64, start, end []byte) error {
+		ns := g.namespace()
+		ns.Domain = domain
+		return t.trackDependency(ns, txnhistory.RangeEffect, start, end)
+	}); err != nil {
+		return err
 	}
 	// Adopt all controls before payload encoding or another fallible operation.
 	g.plan = &nativeJSONLogicalInsert{name: g.name, incarnation: g.incarnation, bootstrap: t.imported, custody: t.custody, mutations: make([]memtable.COWMutation, len(rows))}
@@ -570,6 +590,8 @@ func (t *NativeJSONTxn) Commit() (resultErr error) {
 	for i := 0; i < t.count; i++ {
 		t.bindings[i].probe.capture = nil
 		t.bindings[i].probe.domain = nativeDomainRead{}
+		t.bindings[i].probe.collection = nil
+		t.bindings[i].probe.meta = CollectionMeta{}
 		if lease := t.bindings[i].probe.detachScratch(); lease != nil {
 			lease.Close()
 		}

@@ -222,6 +222,15 @@ func (v *CollectionReadView) Meta() (CollectionMeta, error) {
 // index. IDs are borrowed until the callback returns. Callback errors stop the
 // scan and are returned; a missing index is an error, not an empty result.
 func (v *CollectionReadView) VisitIndexValueIDs(indexName string, value any, visit func([]byte) error) error {
+	if v != nil && v.nativeRead != nil {
+		if v.closed {
+			return backenddb.ErrClosed
+		}
+		if visit == nil {
+			return errors.New("collections: nil index ID visitor")
+		}
+		return v.nativeRead.visitIndexValueIDs(indexName, value, visit)
+	}
 	if err := v.validateOpen(); err != nil {
 		return err
 	}

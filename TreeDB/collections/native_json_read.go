@@ -1,13 +1,11 @@
 package collections
 
 import (
-	"bytes"
 	"errors"
 	"sync"
 	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
-	"github.com/snissn/gomap/TreeDB/internal/cowbtree"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -21,9 +19,12 @@ type NativeJSONRead struct {
 	meta          CollectionMeta
 	metadataLease *memtable.COWExternalLease
 	mu            sync.Mutex
+	visits        uint32
+	closing       bool
 	capture       backenddb.NativeSemanticCapture
 	domain        nativeDomainRead
-	privateDomain *nativeDomainState
+	collection    *nativeCollectionState
+	privateEngine *nativeEngineVersion
 	scratch       *nativeDomainReadScratch
 	scratchLease  *memtable.COWExternalLease
 	lease         *memtable.COWExternalLease
@@ -60,85 +61,11 @@ func (m *NativeJSONManager) Capture(name string) (result *NativeJSONRead, result
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
 	if base == nil {
-		token, ok := capture.Snapshot().StateToken()
-		if !ok {
-			return nil, backenddb.ErrClosed
-		}
-		if token.SystemRootPageID == 0 {
-			return nil, tree.ErrKeyNotFound
-		}
-		if _, err := r.physicalScratch(); err != nil {
-			return nil, err
-		}
-		reader, err := capture.Snapshot().NativeReaderAtRoot(token.SystemRootPageID)
+		r.privateEngine, err = importNativeJSONCatalog(capture)
 		if err != nil {
 			return nil, err
 		}
-		entry, err := reader.GetEntryExactWithFixedScratch([]byte(systemCollectionMetaKey(name)), r.scratch.key[:], r.scratch.leaf[:], r.readLeaf)
-		if err != nil {
-			return nil, err
-		}
-		if entry.Flags&(node.FlagPointer|node.FlagTombstone) != 0 || bytes.ContainsAny(entry.Value, "[]") || bytes.Contains(entry.Value, []byte("column_store")) {
-			return nil, backenddb.ErrNativeSemanticUnsupported
-		}
-		if uint64(len(entry.Value)) > (^uint64(0)-uint64(unsafe.Sizeof(CollectionMeta{})))/16 {
-			return nil, memtable.ErrCOWCapacity
-		}
-		transient, err := capture.NativeAllocator().AdmitNativeBytes(memtable.COWAllocationCharge(uint64(len(entry.Value))*16 + uint64(unsafe.Sizeof(CollectionMeta{}))))
-		if err != nil {
-			return nil, err
-		}
-		meta, err := decodeCollectionMeta(entry.Value)
-		if err == nil {
-			meta, err = nativeJSONMeta(meta)
-		}
-		entry = node.LeafEntry{}
-		if err != nil {
-			meta = CollectionMeta{}
-			transient.Close()
-			return nil, err
-		}
-		if meta.Name != name {
-			meta = CollectionMeta{}
-			transient.Close()
-			return nil, backenddb.ErrNativeSemanticUnsupported
-		}
-		policy, err := collectionRootStoragePolicy(meta, collectionPrimaryRootName(name))
-		r.meta, r.metadataLease = meta, transient
-		meta = CollectionMeta{}
-		if err != nil {
-			return nil, err
-		}
-		overlay, overlayErr := reader.GetEntryExactWithFixedScratch([]byte(systemCollectionRootOverlayKey(collectionPrimaryRootName(name))), r.scratch.key[:], r.scratch.leaf[:], r.readLeaf)
-		if overlayErr == nil && overlay.Flags&node.FlagTombstone == 0 {
-			return nil, backenddb.ErrNativeSemanticUnsupported
-		}
-		if overlayErr != nil && !errors.Is(overlayErr, tree.ErrKeyNotFound) {
-			return nil, overlayErr
-		}
-		overlay = node.LeafEntry{}
-		entry, err = reader.GetEntryExactWithFixedScratch([]byte(systemCollectionRootKey(collectionPrimaryRootName(name))), r.scratch.key[:], r.scratch.leaf[:], r.readLeaf)
-		root := uint64(0)
-		if err == nil {
-			if entry.Flags&(node.FlagPointer|node.FlagTombstone) != 0 {
-				return nil, backenddb.ErrNativeSemanticUnsupported
-			}
-			root, err = decodeRootID(entry.Value)
-		}
-		if err != nil && !errors.Is(err, tree.ErrKeyNotFound) {
-			return nil, err
-		}
-		entry = node.LeafEntry{}
-		admit := func(n uint64) (cowbtree.OwnedMapLease, error) { return capture.NativeAllocator().AdmitNativeBytes(n) }
-		r.privateDomain, err = newNativeDomainState("primary", root, 1, policy, nil, admit)
-		if err != nil {
-			return nil, err
-		}
-		r.domain, err = newNativeDomainRead(r.privateDomain, capture.Snapshot())
-		if err != nil {
-			return nil, err
-		}
-		return r, nil
+		base = r.privateEngine
 	}
 
 	c, ok := base.names.Get(name)
@@ -146,6 +73,7 @@ func (m *NativeJSONManager) Capture(name string) (result *NativeJSONRead, result
 		return nil, tree.ErrKeyNotFound
 	}
 	r.meta = *c.schema.meta
+	r.collection = c
 	d, ok := c.domains.Get("primary")
 	if !ok {
 		return r, nil
@@ -218,7 +146,7 @@ func (r *NativeJSONRead) Get(id []byte) ([]byte, error) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.capture == nil || r.failure != nil {
+	if r.capture == nil || r.failure != nil || r.closing {
 		return nil, backenddb.ErrClosed
 	}
 	if r.domain.domain == nil {
@@ -376,6 +304,14 @@ func (r *NativeJSONRead) Close() error {
 		return nil
 	}
 	r.mu.Lock()
+	// A visitor releases the read mutex while invoking user code. Its original
+	// scope keeps the capture and containing receipt until that operation ends;
+	// Close invalidates new reads now and the last visitor performs disposal.
+	if r.visits != 0 {
+		r.closing = true
+		r.mu.Unlock()
+		return nil
+	}
 	if r.failure != nil {
 		err := r.failure
 		r.mu.Unlock()
@@ -391,11 +327,11 @@ func (r *NativeJSONRead) Close() error {
 	metadataLease := r.metadataLease
 	r.metadataLease = nil
 	var err error
-	if r.privateDomain != nil {
-		done, releaseErr := (nativeDomainLifetime{}).Release(r.privateDomain)
-		r.privateDomain = nil
-		done.Complete()
-		err = releaseErr
+	r.collection = nil
+	if r.privateEngine != nil {
+		record := r.privateEngine.Release()
+		r.privateEngine = nil
+		err = finishPrivateNative(record)
 	}
 	err = errors.Join(err, r.capture.Close())
 	r.failure = err

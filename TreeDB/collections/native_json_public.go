@@ -14,7 +14,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/node"
 )
 
-// NativeJSONManager exposes only the native unindexed JSON capability. It owns
+// NativeJSONManager exposes only the native scalar-indexed JSON capability. It owns
 // no legacy manager and never registers a raw publication barrier.
 type NativeJSONManager struct {
 	db *backenddb.DB
@@ -36,8 +36,13 @@ func nativeJSONMeta(meta CollectionMeta) (CollectionMeta, error) {
 	if err != nil {
 		return CollectionMeta{}, err
 	}
-	if len(normalized.Indexes)+len(normalized.VectorIndexes)+len(normalized.TextIndexes) != 0 || normalized.Options.ColumnStore != nil || normalizedDocumentFormat(normalized.Options.DocumentFormat) != DocumentFormatJSON {
+	if len(normalized.VectorIndexes)+len(normalized.TextIndexes) != 0 || normalized.Options.ColumnStore != nil || normalized.Options.AllowArrayValuesInIndex || normalizedDocumentFormat(normalized.Options.DocumentFormat) != DocumentFormatJSON {
 		return CollectionMeta{}, backenddb.ErrNativeSemanticUnsupported
+	}
+	for _, index := range normalized.Indexes {
+		if index.MultiKey || len(index.Components) != 0 || (index.ValueType != IndexValueString && index.ValueType != IndexValueBool && index.ValueType != IndexValueInt64 && index.ValueType != IndexValueDouble) {
+			return CollectionMeta{}, backenddb.ErrNativeSemanticUnsupported
+		}
 	}
 	return normalized, nil
 }
