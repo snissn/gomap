@@ -358,9 +358,9 @@ func TestVacuumIndexOnlineBindsDescriptorlessOlderRootClosure(t *testing.T) {
 			}
 
 			database.maintenanceMu.Lock()
+			defer database.maintenanceMu.Unlock()
 			roots, err := database.captureRecoverableRootSetWithMaintenanceLockHeld(context.Background())
 			if err != nil {
-				database.maintenanceMu.Unlock()
 				t.Fatal(err)
 			}
 			defer roots.Release()
@@ -372,24 +372,21 @@ func TestVacuumIndexOnlineBindsDescriptorlessOlderRootClosure(t *testing.T) {
 			})
 			source, ok := roots.lookupRootResources(key)
 			if !ok || source == nil {
-				database.maintenanceMu.Unlock()
 				t.Fatal("older root has no captured exact closure")
 			}
 			var valueLog, index bool
-			for _, descriptor := range mustStableResourceDescriptors(t, source) {
-				valueLog = valueLog || descriptor.Kind() == rootpublication.ResourceValueLog
-				index = index || descriptor.Kind() == rootpublication.ResourceIndex
+			for _, descriptor := range stableResourcePhysicalIdentitiesForTest(t, source) {
+				valueLog = valueLog || descriptor.Kind == rootpublication.ResourceValueLog
+				index = index || descriptor.Kind == rootpublication.ResourceIndex
 			}
 			if !valueLog || index {
-				database.maintenanceMu.Unlock()
-				t.Fatalf("older closure kinds=%+v, want external value-log dependency and no index descriptor", mustStableResourceDescriptors(t, source))
+				t.Fatalf("older closure kinds=%+v, want external value-log dependency and no index descriptor", stableResourcePhysicalIdentitiesForTest(t, source))
 			}
 			if test.mutate != nil {
 				test.mutate(roots, key)
 			}
 			var stats VacuumOnlineStats
 			err = database.vacuumIndexOnlineRebuildV1(context.Background(), false, nil, roots, nil, time.Now(), &stats)
-			database.maintenanceMu.Unlock()
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -463,9 +460,9 @@ func TestVacuumIndexOnlineBindsDescriptorlessCurrentRootClosure(t *testing.T) {
 			}
 
 			database.maintenanceMu.Lock()
+			defer database.maintenanceMu.Unlock()
 			roots, err := database.captureRecoverableRootSetWithMaintenanceLockHeld(context.Background())
 			if err != nil {
-				database.maintenanceMu.Unlock()
 				t.Fatal(err)
 			}
 			defer roots.Release()
@@ -479,24 +476,21 @@ func TestVacuumIndexOnlineBindsDescriptorlessCurrentRootClosure(t *testing.T) {
 			key := recoverableRootIdentity(visibleRoot)
 			source, ok := roots.lookupRootResources(key)
 			if !ok || source == nil {
-				database.maintenanceMu.Unlock()
 				t.Fatal("visible root has no captured exact closure")
 			}
 			var valueLog, outerLeaf bool
-			for _, descriptor := range mustStableResourceDescriptors(t, source) {
-				valueLog = valueLog || descriptor.Kind() == rootpublication.ResourceValueLog
-				outerLeaf = outerLeaf || descriptor.Kind() == rootpublication.ResourceOuterLeafLog
+			for _, descriptor := range stableResourcePhysicalIdentitiesForTest(t, source) {
+				valueLog = valueLog || descriptor.Kind == rootpublication.ResourceValueLog
+				outerLeaf = outerLeaf || descriptor.Kind == rootpublication.ResourceOuterLeafLog
 			}
 			if !valueLog || !outerLeaf {
-				database.maintenanceMu.Unlock()
-				t.Fatalf("visible closure kinds=%+v, want value-log and outer-leaf dependencies", mustStableResourceDescriptors(t, source))
+				t.Fatalf("visible closure kinds=%+v, want value-log and outer-leaf dependencies", stableResourcePhysicalIdentitiesForTest(t, source))
 			}
 			if test.mutate != nil {
 				test.mutate(roots, key)
 			}
 			var stats VacuumOnlineStats
 			err = database.vacuumIndexOnlineRebuildV1(context.Background(), false, nil, roots, nil, time.Now(), &stats)
-			database.maintenanceMu.Unlock()
 			if err != nil {
 				t.Fatal(err)
 			}

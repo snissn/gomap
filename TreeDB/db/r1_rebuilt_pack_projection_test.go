@@ -16,14 +16,14 @@ import (
 
 // Copy only the physical identity fields used by these assertions; diagnostic
 // descriptors themselves borrow backing until their admitted scope closes.
-type r1PhysicalIdentity struct {
+type stableResourcePhysicalIdentityForTest struct {
 	Kind       rootpublication.ResourceKind
 	Generation uint64
 	identity   rootpublication.StableIdentity
 	path       string
 }
 
-func r1PhysicalIdentities(t *testing.T, set *rootpublication.StableResourceSet) []r1PhysicalIdentity {
+func stableResourcePhysicalIdentitiesForTest(t *testing.T, set *rootpublication.StableResourceSet) []stableResourcePhysicalIdentityForTest {
 	t.Helper()
 	diagnostics, err := set.AcquirePhysicalDiagnostics()
 	if err != nil {
@@ -34,11 +34,11 @@ func r1PhysicalIdentities(t *testing.T, set *rootpublication.StableResourceSet) 
 			t.Fatal(err)
 		}
 	}()
-	var result []r1PhysicalIdentity
+	var result []stableResourcePhysicalIdentityForTest
 	for _, entry := range diagnostics.Physical() {
 		identity := entry.Identity()
 		identity.Platform = strings.Clone(identity.Platform)
-		result = append(result, r1PhysicalIdentity{
+		result = append(result, stableResourcePhysicalIdentityForTest{
 			Kind: entry.Kind, Generation: entry.Generation,
 			identity: identity, path: strings.Clone(entry.DiagnosticPath()),
 		})
@@ -69,8 +69,8 @@ func TestR1RebuiltCurrentRootDropsUnreachablePackedDependency(t *testing.T) {
 		t.Fatal(err)
 	}
 	selected := database.durableRoot.slotResources[database.durableRoot.slot]
-	var pack r1PhysicalIdentity
-	for _, entry := range r1PhysicalIdentities(t, selected) {
+	var pack stableResourcePhysicalIdentityForTest
+	for _, entry := range stableResourcePhysicalIdentitiesForTest(t, selected) {
 		if entry.Kind == rootpublication.ResourceOuterLeafPack {
 			pack = entry
 			break
@@ -107,7 +107,7 @@ func TestR1RebuiltCurrentRootDropsUnreachablePackedDependency(t *testing.T) {
 		t.Fatal("packed current-root publication bypassed exact candidate scan")
 	}
 	contains := func(set *rootpublication.StableResourceSet) bool {
-		for _, entry := range r1PhysicalIdentities(t, set) {
+		for _, entry := range stableResourcePhysicalIdentitiesForTest(t, set) {
 			if entry.Kind == pack.Kind && entry.identity == pack.identity {
 				return true
 			}
@@ -203,7 +203,7 @@ func TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority(t *testing.T) {
 		t.Fatal(err)
 	}
 	var generation uint64
-	for _, entry := range r1PhysicalIdentities(t, database.durableRoot.slotResources[database.durableRoot.slot]) {
+	for _, entry := range stableResourcePhysicalIdentitiesForTest(t, database.durableRoot.slotResources[database.durableRoot.slot]) {
 		if entry.Kind == rootpublication.ResourceOuterLeafPack {
 			generation = entry.Generation
 			break
@@ -214,7 +214,7 @@ func TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority(t *testing.T) {
 	}
 	t.Run("physical-alias", func(t *testing.T) {
 		var packPath string
-		for _, entry := range r1PhysicalIdentities(t, database.durableRoot.slotResources[database.durableRoot.slot]) {
+		for _, entry := range stableResourcePhysicalIdentitiesForTest(t, database.durableRoot.slotResources[database.durableRoot.slot]) {
 			if entry.Kind == rootpublication.ResourceOuterLeafPack && entry.Generation == generation {
 				packPath = filepath.Join(dir, entry.path)
 			}
