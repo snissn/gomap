@@ -890,3 +890,21 @@ successor that names it as parent. Commit sequences may jump between durable
 seals; the boundary is the successor's recorded commit, not the old commit plus
 one. The strict reuse boundary must preserve both selectable slots and their
 immediate parent records until the replacement seal is durable.
+
+
+V2 dependency-directory recovery and binding use the selected generation's
+original metadata owner (the DATA identity registry or retained PRIMARY arena).
+Actual publication refuses foreign or unowned resource sets before directory
+construction. Unowned utility callers retain the generic diagnostic contract.
+Physical-entry censuses, decoder scratch, retained directory keys, field
+summaries, and changed-record batch capacity are admitted before allocation.
+Logical records remain synchronous immutable borrows; changed keys still use
+the existing COW zipper and both selectable roots retain their original leases.
+
+Ordinary owned V2 binding validates only the selected physical directory records
+and retains the original entry's immutable field commitments and logical count.
+Recovery reconstructs those summaries by streaming the persisted logical records.
+Cross-owner duplicate validation sorts an admitted array of borrowed delta-only
+identities; it does not flatten retained logical history. Privately admitted
+directory batches are disposed without pooling before their original charge is
+refunded.

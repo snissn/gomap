@@ -306,6 +306,19 @@ func (b *Batch) Close() error {
 	return nil
 }
 
+// CloseWithoutPooling retires a privately admitted batch without transferring
+// its header or backing into a pool. All borrowed entry and arena views must be
+// finished before this call; their slots and every header alias are cleared
+// before the caller may refund its original allocation charge.
+func (b *Batch) CloseWithoutPooling() error {
+	if b != nil {
+		clear(b.entries[:cap(b.entries)])
+		clear(b.arenaChunks[:cap(b.arenaChunks)])
+		*b = Batch{closed: true}
+	}
+	return nil
+}
+
 // Release resets and returns the batch to the pool.
 func Release(b *Batch) {
 	if b == nil {

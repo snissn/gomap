@@ -60,6 +60,9 @@ func BindDependencyDirectoryV2(source *StableResourceSet, directory *DependencyD
 	if owner == ResourceOwnerReleased || owner == ResourceOwnerTransferred {
 		return nil, ErrResourceOwnership
 	}
+	if source.metadata != nil {
+		return bindOwnedDependencyDirectoryV2(source, directory)
+	}
 	builder := NewStableResourceSetBuilder()
 	defer builder.Abandon()
 	var bindErr error
