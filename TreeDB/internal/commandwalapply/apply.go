@@ -186,8 +186,12 @@ func Append(db *backenddb.DB, frame LoweredFrame, meta ApplyMetadata, opts Optio
 	}
 	applyAppendMu.Lock()
 	defer applyAppendMu.Unlock()
-	// Existing barrier acquisition drains earlier pending commands outside its
-	// leases, THEN appendIntentWithStagingGuard checks exact continuity.
+	// An outstanding handle still owns raw staging. Refuse its uncovered frame
+	// before trying to acquire that same lease; Finalize/Abort must release it.
+	// This is only preflight: the actual guard checks continuity again below.
+	if err := checkContiguousAppendReady(db, appliedCommandLSN(db)); err != nil {
+		return Handle{}, Result{}, err
+	}
 	actualGuard, err := db.LockCommandWALStagingGuardWithBarriersV1()
 	if err != nil {
 		return Handle{}, Result{}, err
