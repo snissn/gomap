@@ -82,9 +82,11 @@ func TestDurabilityProfilePublicEntrypointInventory(t *testing.T) {
 	vlogRewriteBodies := profileInventoryFunctionBodies(t, filepath.Join(treeDBDir, "vlog_rewrite.go"))
 	profileInventoryRequireBody(t, vlogRewriteBodies, "ValueLogRewriteOffline", "resolveOpenProfileOptions")
 	profileInventoryRequireBody(t, backendOpenBodies, "OpenBackend", "resolveOpenProfileOptions")
-	profileInventoryRequireBody(t, backendOpenBodies, "OpenBackendWithCachedLeafLog", "Open(opts)")
+	profileInventoryRequireBody(t, backendOpenBodies, "OpenBackendWithCachedLeafLog", "openBackendWithCachedServices(opts)")
 	profileInventoryRequireBody(t, backendOpenBodies, "OpenBackendWithCachedLeafLogStats", "OpenBackendWithCachedLeafLogStatsAndDeferredVectorBuildMaintenance(opts)")
-	profileInventoryRequireBody(t, backendOpenBodies, "OpenBackendWithCachedLeafLogStatsAndDeferredVectorBuildMaintenance", "Open(opts)")
+	profileInventoryRequireBody(t, backendOpenBodies, "OpenBackendWithCachedLeafLogStatsAndDeferredVectorBuildMaintenance", "openBackendWithCachedServices(opts)")
+	profileInventoryRequireBody(t, backendOpenBodies, "openBackendWithCachedServices", "resolveOpenProfileOptions(&opts)")
+	profileInventoryRequireBody(t, backendOpenBodies, "openBackendWithCachedServices", "openResolvedWithCacheRole(opts, true)")
 	profileInventoryRequireBody(t, profileBodies, "OptionsFor", "ApplyProfile")
 	profileInventoryRequireBody(t, profileBodies, "OptionsForBenchmark", "ApplyBenchmarkProfile")
 	for _, name := range []string{"ApplyProfile", "ApplyBenchmarkProfile"} {

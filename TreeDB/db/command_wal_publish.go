@@ -324,12 +324,28 @@ func (db *DB) RefreshCommandWALCheckpointFallback() error {
 	if db == nil || !db.commandWAL {
 		return nil
 	}
+	return db.refreshDurableRootFallback()
+}
+
+// Maintenance may also converge an unjournaled fallback after rebuilding the
+// index. Both slots then retain the already-durable current closure; independent
+// readers and prepared members keep their own old resources pinned through GC.
+func (db *DB) refreshDurableRootFallback() error {
+	if db == nil {
+		return ErrClosed
+	}
 	// Keep the predicate and same-LSN publication in the raw-publish domain.
 	// The public cached owner holds its operation gate as well, but backend
 	// command-WAL publishers do not use that gate. Holding this existing
 	// backend serialization prevents an intervening command frame from making
 	// the sampled AppliedCommandLSN stale before the fallback is refreshed.
 	unlockCommandWALPublish := db.lockCommandWALRawPublishWithTeardown()
+	if !db.commandWAL {
+		// The command-WAL guard is a no-op in this profile. The inner current-
+		// root publisher still requires original teardown custody.
+		db.teardownMu.RLock()
+		unlockCommandWALPublish = db.teardownMu.RUnlock
+	}
 	defer unlockCommandWALPublish()
 	// Vacuum replaces the publication runtime while holding writeMu and db.mu.
 	// Keep its cutover out through the matching durable-slot sample.
@@ -358,6 +374,10 @@ func (db *DB) RefreshCommandWALCheckpointFallback() error {
 	fallback := db.durableRoot.slotRecord[db.durableRoot.slot^1]
 	state := db.state.Load()
 	needsRefresh := state != nil && db.commandWALCheckpointFallbackNeedsRefreshLocked(state.AppliedCommandLSN, selected, fallback)
+	if !db.commandWAL {
+		needsRefresh = state != nil && selected.AppliedCommandLSN == state.AppliedCommandLSN &&
+			(fallback.AppliedCommandLSN != selected.AppliedCommandLSN || !db.commandWALCheckpointRootsEqualLocked(selected, fallback))
+	}
 	db.durablePublishMu.Unlock()
 	db.writeMu.RUnlock()
 	if !needsRefresh {
