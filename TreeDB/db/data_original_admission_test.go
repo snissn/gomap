@@ -179,12 +179,18 @@ func testDATAActualPublicationUsesOriginalEnrolledOwner(t *testing.T, directory 
 	}
 	selected = nil
 	snapshot := d.AcquireSnapshot()
+	if directory && d.MinPinnedReaderCommitSeq() != snapshot.state.CommitSeq {
+		t.Fatal("actual DATA snapshot lost reader-capable protection")
+	}
 	entry, readErr := snapshot.GetEntryExact([]byte("pointer"))
 	got, valueErr := snapshot.Get([]byte("pointer"))
 	closeErr := snapshot.Close()
 	snapshot = nil
 	if readErr != nil || valueErr != nil || closeErr != nil || entry.ValuePtr != pointer || !bytes.Equal(got, pointerValue) {
 		t.Fatalf("published pointer=%+v want=%+v value=%q read=%v valueErr=%v close=%v", entry.ValuePtr, pointer, got, readErr, valueErr, closeErr)
+	}
+	if directory && (d.MinPinnedReaderCommitSeq() != math.MaxUint64 || d.MinPinnedSnapshotCommitSeq() == math.MaxUint64) {
+		t.Fatal("actual directory must retain page reuse protection without claiming an asset reader")
 	}
 	d.SetValueLogAppender(nil)
 	if err = appender.close(); err != nil {

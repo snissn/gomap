@@ -461,6 +461,14 @@ part of this capture.
 
 ## 4. GC Algorithm (`DB.ValueLogGC`)
 
+DATA dependency directories retain their pages and index generation in the same
+registry as readers. These page-only pins still restrict page reuse, pruning and
+generation retirement. They do not alone classify column-asset candidates as
+readable by an older snapshot. Snapshot and captured recoverable-root-set pins
+remain reader-capable until their original release. Column-asset deletion also
+retains its exact durable-root identity pins, fallback protection and deletion
+revalidation; a directory page pin is not a substitute for those resource edges.
+
 For each segment in current value-log set:
 
 1. determine referenced set (incremental counters when valid; otherwise full scan),

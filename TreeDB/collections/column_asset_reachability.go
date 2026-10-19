@@ -535,7 +535,10 @@ func (c *Collection) columnAssetReachabilityOlderSnapshotPinned(planCommitSeq ui
 	if c == nil || c.db == nil {
 		return false
 	}
-	return c.db.MinPinnedSnapshotCommitSeq() < planCommitSeq
+	// Directory page retention alone cannot read superseded assets. Captured
+	// recoverable roots and snapshots remain reader-capable pins; exact durable
+	// resource identity pins separately guard candidate deletion.
+	return c.db.MinPinnedReaderCommitSeq() < planCommitSeq
 }
 
 func columnAssetReachabilityInputFromSnapshotView(view columnPhysicalScanSnapshotView, opts columnAssetReachabilityOptionsInternal) columnAssetReachabilityInput {

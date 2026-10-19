@@ -812,7 +812,8 @@ func columnAssetLifecycleByteClasses(plan ColumnAssetReachabilityPlan, pins Colu
 func (c *Collection) columnAssetLifecycleSnapshotFence(planCommitSeq uint64) ColumnAssetLifecycleSnapshotFence {
 	minPinned := uint64(math.MaxUint64)
 	if c != nil && c.db != nil {
-		minPinned = c.db.MinPinnedSnapshotCommitSeq()
+		// Match asset candidate protection, excluding directory-only page pins.
+		minPinned = c.db.MinPinnedReaderCommitSeq()
 	}
 	return ColumnAssetLifecycleSnapshotFence{
 		PlanCommitSeq:               planCommitSeq,

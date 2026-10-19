@@ -18,18 +18,31 @@ const (
 	registerHintUnset    = -1
 )
 
+type pinPurpose uint32
+
+const (
+	readerPin pinPurpose = iota
+	pageRetentionPin
+)
+
+type registryPin struct {
+	seq     uint64
+	purpose pinPurpose
+}
+
 type readerRegistryShard struct {
-	seq   atomic.Uint64
-	count atomic.Int32
-	_     [52]byte
+	seq     atomic.Uint64
+	count   atomic.Int32
+	purpose atomic.Uint32
+	_       [48]byte
 }
 
 type ReaderRegistry struct {
 	mu sync.Mutex
 
-	// seqs stores pinned commit seqs by handle index (handle = idx+1).
-	// A value of math.MaxUint64 indicates a free slot.
-	seqs []uint64
+	// seqs stores pins by handle index (handle = idx+1).
+	// A sequence of math.MaxUint64 indicates a free slot.
+	seqs []registryPin
 	free []int
 
 	// min caches the lowest pinned seq when dirty=false. When there are no active
@@ -60,19 +73,34 @@ func (r *ReaderRegistry) Register(seq uint64) int64 {
 // the handle and the shard index used for the fast path (if available).
 // If hint is negative, a fresh shard hint is chosen.
 func (r *ReaderRegistry) RegisterWithHint(seq uint64, hint int) (int64, int) {
+	return r.registerWithHint(seq, hint, readerPin, false)
+}
+
+// RegisterPageRetention pins pages without claiming that a reader can access
+// the logical assets described by them. It uses the same registry and release
+// handle as reader pins; MinPinnedSeq includes both purposes.
+func (r *ReaderRegistry) RegisterPageRetention(seq uint64) int64 {
+	id, _ := r.registerWithHint(seq, registerHintUnset, pageRetentionPin, false)
+	return id
+}
+
+// RegisterFastWithHint uses only the registry's existing fixed shard storage.
+// It returns zero when all shards hold other sequence/purpose cohorts. Bounded
+// callers can refuse admission without growing the fallback seqs/free arrays.
+func (r *ReaderRegistry) RegisterFastWithHint(seq uint64, hint int) (int64, int) {
+	return r.registerWithHint(seq, hint, readerPin, true)
+}
+
+func (r *ReaderRegistry) registerWithHint(seq uint64, hint int, purpose pinPurpose, fastOnly bool) (int64, int) {
 	if hint < 0 {
 		hint = int(r.nextFastShard.Add(1)-1) & fastReaderShardMask
 	} else {
 		hint &= fastReaderShardMask
 	}
 
-	// Joining an already-published shard is safe without the registry mutex: it
-	// cannot lower the pinned sequence observed by MinPinnedSeq. Claiming an
-	// empty shard can lower that minimum, so serialize first publication with
-	// MinPinnedSeq's scan. Otherwise the scan can pair a recycled shard's old,
-	// higher seq with the claimant's new positive count and reclaim pages below
-	// an in-flight reader's actual generation.
-	if id := r.tryJoinFast(seq, hint); id != 0 {
+	// Joining an already-published sequence/purpose cohort cannot lower either
+	// minimum. First publication can, so serialize it with both minimum scans.
+	if id := r.tryJoinFastForPurpose(seq, hint, purpose); id != 0 {
 		return id, hint
 	}
 
@@ -81,15 +109,18 @@ func (r *ReaderRegistry) RegisterWithHint(seq uint64, hint int) (int64, int) {
 
 	for i := 0; i < fastReaderShardCount; i++ {
 		idx := (hint + i) & fastReaderShardMask
-		if id := r.tryJoinFast(seq, idx); id != 0 {
+		if id := r.tryJoinFastForPurpose(seq, idx, purpose); id != 0 {
 			return id, idx
 		}
 	}
 	for i := 0; i < fastReaderShardCount; i++ {
 		idx := (hint + i) & fastReaderShardMask
-		if id := r.tryClaimFast(seq, idx); id != 0 {
+		if id := r.tryClaimFastForPurpose(seq, idx, purpose); id != 0 {
 			return id, idx
 		}
+	}
+	if fastOnly {
+		return 0, registerHintUnset
 	}
 
 	var idx int
@@ -98,42 +129,13 @@ func (r *ReaderRegistry) RegisterWithHint(seq uint64, hint int) (int64, int) {
 		r.free = r.free[:n-1]
 	} else {
 		idx = len(r.seqs)
-		r.seqs = append(r.seqs, math.MaxUint64)
+		r.seqs = append(r.seqs, registryPin{seq: math.MaxUint64})
 	}
-	r.seqs[idx] = seq
+	r.seqs[idx] = registryPin{seq: seq, purpose: purpose}
 	if seq < r.min {
 		r.min = seq
 	}
 	return int64(idx + 1), registerHintUnset
-}
-
-// RegisterFastWithHint uses only the registry's existing fixed shard storage.
-// It returns zero when all shards hold other sequence cohorts. Bounded callers
-// can refuse admission without growing the fallback seqs/free arrays.
-func (r *ReaderRegistry) RegisterFastWithHint(seq uint64, hint int) (int64, int) {
-	if hint < 0 {
-		hint = int(r.nextFastShard.Add(1)-1) & fastReaderShardMask
-	} else {
-		hint &= fastReaderShardMask
-	}
-	if id := r.tryJoinFast(seq, hint); id != 0 {
-		return id, hint
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	for i := 0; i < fastReaderShardCount; i++ {
-		idx := (hint + i) & fastReaderShardMask
-		if id := r.tryJoinFast(seq, idx); id != 0 {
-			return id, idx
-		}
-	}
-	for i := 0; i < fastReaderShardCount; i++ {
-		idx := (hint + i) & fastReaderShardMask
-		if id := r.tryClaimFast(seq, idx); id != 0 {
-			return id, idx
-		}
-	}
-	return 0, registerHintUnset
 }
 
 // Unregister removes a reader.
@@ -162,19 +164,19 @@ func (r *ReaderRegistry) Unregister(id int64) {
 	if idx < 0 || idx >= len(r.seqs) {
 		return
 	}
-	old := r.seqs[idx]
+	old := r.seqs[idx].seq
 	if old == math.MaxUint64 {
 		return
 	}
-	r.seqs[idx] = math.MaxUint64
+	r.seqs[idx] = registryPin{seq: math.MaxUint64}
 	r.free = append(r.free, idx)
 	if old == r.min {
 		r.dirty = true
 	}
 }
 
-// MinPinnedSeq returns the lowest sequence number currently pinned by any reader.
-// If no readers are active, returns MaxUint64 (meaning no restriction from readers).
+// MinPinnedSeq returns the lowest sequence number pinned for either purpose.
+// If no pins are active, it returns MaxUint64. Reuse and pruning use this minimum.
 func (r *ReaderRegistry) MinPinnedSeq() uint64 {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -189,9 +191,9 @@ func (r *ReaderRegistry) MinPinnedSeq() uint64 {
 	}
 
 	min := uint64(math.MaxUint64)
-	for _, seq := range r.seqs {
-		if seq < min {
-			min = seq
+	for _, pin := range r.seqs {
+		if pin.seq < min {
+			min = pin.seq
 		}
 	}
 	r.min = min
@@ -202,13 +204,35 @@ func (r *ReaderRegistry) MinPinnedSeq() uint64 {
 	return min
 }
 
+// MinReaderPinnedSeq excludes only explicitly page-retention-only pins. Existing
+// reader-capable registrations, including recoverable-root captures, still count.
+func (r *ReaderRegistry) MinReaderPinnedSeq() uint64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	min := r.loadFastMinForPurpose(true)
+	for _, pin := range r.seqs {
+		if pin.purpose == readerPin && pin.seq < min {
+			min = pin.seq
+		}
+	}
+	return min
+}
+
 func (r *ReaderRegistry) loadFastMin() uint64 {
+	return r.loadFastMinForPurpose(false)
+}
+
+func (r *ReaderRegistry) loadFastMinForPurpose(readersOnly bool) uint64 {
 	min := uint64(math.MaxUint64)
 	for i := range r.fastShards {
 		// Read seq before count to bias races toward a conservative (lower)
 		// min rather than a potentially over-optimistic recycled seq value.
 		seq := r.fastShards[i].seq.Load()
 		if r.fastShards[i].count.Load() <= 0 {
+			continue
+		}
+		if readersOnly && pinPurpose(r.fastShards[i].purpose.Load()) != readerPin {
 			continue
 		}
 		if seq < min {
@@ -230,7 +254,11 @@ func (r *ReaderRegistry) tryAcquireFast(seq uint64, hint int) int64 {
 }
 
 func (r *ReaderRegistry) tryJoinFast(seq uint64, shard int) int64 {
-	if r.fastShards[shard].seq.Load() != seq {
+	return r.tryJoinFastForPurpose(seq, shard, readerPin)
+}
+
+func (r *ReaderRegistry) tryJoinFastForPurpose(seq uint64, shard int, purpose pinPurpose) int64 {
+	if r.fastShards[shard].seq.Load() != seq || pinPurpose(r.fastShards[shard].purpose.Load()) != purpose {
 		return 0
 	}
 
@@ -242,7 +270,7 @@ func (r *ReaderRegistry) tryJoinFast(seq uint64, shard int) int64 {
 		if !r.fastShards[shard].count.CompareAndSwap(c, c+1) {
 			continue
 		}
-		if r.fastShards[shard].seq.Load() == seq {
+		if r.fastShards[shard].seq.Load() == seq && pinPurpose(r.fastShards[shard].purpose.Load()) == purpose {
 			return makeFastHandle(shard)
 		}
 		r.fastShards[shard].count.Add(-1)
@@ -251,15 +279,20 @@ func (r *ReaderRegistry) tryJoinFast(seq uint64, shard int) int64 {
 }
 
 func (r *ReaderRegistry) tryClaimFast(seq uint64, shard int) int64 {
+	return r.tryClaimFastForPurpose(seq, shard, readerPin)
+}
+
+func (r *ReaderRegistry) tryClaimFastForPurpose(seq uint64, shard int, purpose pinPurpose) int64 {
 	// Only the goroutine that wins this CAS is allowed to publish a new seq for
 	// the shard. This prevents claim losers from overwriting an active shard seq.
 	if !r.fastShards[shard].count.CompareAndSwap(0, -1) {
-		return r.tryJoinFast(seq, shard)
+		return r.tryJoinFastForPurpose(seq, shard, purpose)
 	}
 
-	// Publish the candidate sequence before making the counter positive so that
-	// concurrent min-seq readers never observe a stale higher watermark.
+	// Publish both cohort fields before making the counter positive. First
+	// claims hold mu, so neither minimum scan can mix fields from recycled pins.
 	r.fastShards[shard].seq.Store(seq)
+	r.fastShards[shard].purpose.Store(uint32(purpose))
 	r.fastShards[shard].count.Store(1)
 	return makeFastHandle(shard)
 }
