@@ -279,7 +279,11 @@ func (token *StableResourceToken) cloneOwnedPinnedDirectory(lane, id, path strin
 	if err != nil {
 		return nil, err
 	}
-	obligations, err := newResourceObligationBacking(owner, values, field)
+	// A selected physical entry can retain obligations from several fields.
+	// field is its representative reachability, not a restriction on the union;
+	// validate each retained obligation against its own exact field. Producer
+	// construction still validates against spec.Reachability above.
+	obligations, err := newResourceObligationBacking(owner, values, "")
 	if err != nil {
 		allocation.drop()
 		allocation.refund()

@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
-	"syscall"
 	"testing"
 	"time"
 
@@ -71,6 +70,7 @@ func TestManagedHistoryMeasurement(t *testing.T) {
 		Name                                    string
 		HeapAlloc, HeapObjects                  uint64
 		DirectoryBytes, AllocatedDirectoryBytes int64
+		AllocatedDirectoryBytesAvailable        bool
 	}
 	packet := struct {
 		Profile        treedb.Profile
@@ -96,7 +96,7 @@ func TestManagedHistoryMeasurement(t *testing.T) {
 		runtime.GC()
 		var mem runtime.MemStats
 		runtime.ReadMemStats(&mem)
-		r := retained{Name: name, HeapAlloc: mem.HeapAlloc, HeapObjects: mem.HeapObjects}
+		r := retained{Name: name, HeapAlloc: mem.HeapAlloc, HeapObjects: mem.HeapObjects, AllocatedDirectoryBytesAvailable: true}
 		e := filepath.WalkDir(dir, func(path string, d fs.DirEntry, e error) error {
 			if e != nil {
 				return e
@@ -109,9 +109,9 @@ func TestManagedHistoryMeasurement(t *testing.T) {
 				return e
 			}
 			r.DirectoryBytes += info.Size()
-			if st, ok := info.Sys().(*syscall.Stat_t); ok {
-				r.AllocatedDirectoryBytes += st.Blocks * 512
-			}
+			allocated, available := managedHistoryAllocatedBytes(info)
+			r.AllocatedDirectoryBytes += allocated
+			r.AllocatedDirectoryBytesAvailable = r.AllocatedDirectoryBytesAvailable && available
 			return nil
 		})
 		if e != nil {

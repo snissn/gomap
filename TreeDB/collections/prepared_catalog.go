@@ -17,7 +17,7 @@ func (c *Collection) catalogForPreparedInsertSnapshot(snap *backenddb.Snapshot, 
 		return nil, backenddb.ErrClosed
 	}
 	snap.MarkForegroundRead()
-	if cached := c.cachedCatalogForSnapshot(snap, true); cached != nil {
+	if cached := c.cachedCatalogForSnapshot(snap); cached != nil {
 		if err := checkPreparedCatalogShape(cached); err != nil {
 			return nil, err
 		}

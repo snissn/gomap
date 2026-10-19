@@ -99,6 +99,19 @@ func TestOwnedImportedTokenDirectoryLifetimeAndRefusal(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			// A failed final physical release deliberately retains namespace
+			// custody. Close only the fixture's OS handles after all assertions;
+			// do not retry logical cleanup or refund its retained debt. Windows
+			// otherwise cannot remove the temporary directory or linked child.
+			namespaceParent, namespacePersistence := namespace.parent, namespace.persistence
+			t.Cleanup(func() {
+				if namespacePersistence != nil && namespacePersistence != namespaceParent {
+					_ = namespacePersistence.Close()
+				}
+				if namespaceParent != nil {
+					_ = namespaceParent.Close()
+				}
+			})
 			if err = namespace.Stabilize(); err != nil {
 				t.Fatal(err)
 			}

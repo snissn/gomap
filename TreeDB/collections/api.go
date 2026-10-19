@@ -4332,29 +4332,28 @@ func (c *Collection) MetaView() CollectionMeta {
 }
 
 // SameCachedCatalog reports whether both handles are cached against the same
-// collection catalog state. For commit-agnostic catalog shapes, the system root
-// is the catalog identity; data-only commits can advance CommitSeq without
-// changing collection metadata or root descriptors.
+// collection catalog state. DATA pages can be reused after their snapshots are
+// released, so matching system root page IDs also require the same commit.
 func (c *Collection) SameCachedCatalog(other *Collection) bool {
 	if c == nil || other == nil {
 		return false
 	}
-	cName, cSystemRoot, cCommitSeq, cCommitAgnostic := c.cachedCatalogIdentity()
-	otherName, otherSystemRoot, otherCommitSeq, otherCommitAgnostic := other.cachedCatalogIdentity()
+	cName, cSystemRoot, cCommitSeq := c.cachedCatalogIdentity()
+	otherName, otherSystemRoot, otherCommitSeq := other.cachedCatalogIdentity()
 	return cName != "" &&
 		cName == otherName &&
 		cSystemRoot != 0 &&
 		cSystemRoot == otherSystemRoot &&
-		(cCommitSeq == otherCommitSeq || (cCommitAgnostic && otherCommitAgnostic))
+		cCommitSeq == otherCommitSeq
 }
 
-func (c *Collection) cachedCatalogIdentity() (name string, systemRoot, commitSeq uint64, commitAgnostic bool) {
+func (c *Collection) cachedCatalogIdentity() (name string, systemRoot, commitSeq uint64) {
 	if c == nil {
-		return "", 0, 0, false
+		return "", 0, 0
 	}
 	c.catalogMu.RLock()
 	defer c.catalogMu.RUnlock()
-	return c.meta.Name, c.catalogSystemRoot, c.catalogCommitSeq, c.canReuseCachedCatalogAcrossDataOnlyCommits(c.catalog)
+	return c.meta.Name, c.catalogSystemRoot, c.catalogCommitSeq
 }
 
 // CreateIndex creates and backfills one secondary index as a schema barrier.
@@ -21316,9 +21315,9 @@ func (c *Collection) catalogForSnapshotWithWriteDomainLocked(snap *backenddb.Sna
 
 // cachedCatalogForSnapshot only reads the immutable handle-local entry. In
 // particular it never waits for writeDomain.mu or retains a snapshot. Typed
-// owner capture requires exact commits; the general catalog path may retain
-// its existing non-vector, command-WAL data-only-commit exception.
-func (c *Collection) cachedCatalogForSnapshot(snap *backenddb.Snapshot, allowDataOnlyCommits bool) *collectionCatalog {
+// owner capture and the general catalog path both require
+// the exact commit as well: recycled DATA page IDs cannot identify a catalog.
+func (c *Collection) cachedCatalogForSnapshot(snap *backenddb.Snapshot) *collectionCatalog {
 	if c == nil || snap == nil {
 		return nil
 	}
@@ -21329,7 +21328,7 @@ func (c *Collection) cachedCatalogForSnapshot(snap *backenddb.Snapshot, allowDat
 	cached := c.catalog
 	if cached != nil && cached.pager == snap.Pager() && systemRoot != 0 &&
 		c.catalogSystemRoot == systemRoot &&
-		(c.catalogCommitSeq == commitSeq || (allowDataOnlyCommits && c.canReuseCachedCatalogAcrossDataOnlyCommits(cached))) {
+		c.catalogCommitSeq == commitSeq {
 		return cached
 	}
 	return nil
@@ -21343,7 +21342,7 @@ func (c *Collection) catalogForSnapshotWithWriteDomainLockState(snap *backenddb.
 	systemRoot := snapshotSystemRoot(snap)
 	commitSeq := snapshotCommitSeq(snap)
 
-	if cached := c.cachedCatalogForSnapshot(snap, true); cached != nil {
+	if cached := c.cachedCatalogForSnapshot(snap); cached != nil {
 		return cached, nil
 	}
 
@@ -21377,14 +21376,6 @@ func (c *Collection) collectionName() string {
 		return c.name
 	}
 	return c.meta.Name
-}
-
-func (c *Collection) canReuseCachedCatalogAcrossDataOnlyCommits(catalog *collectionCatalog) bool {
-	return c != nil &&
-		c.db != nil &&
-		c.db.CommandWALEnabled() &&
-		catalog != nil &&
-		len(catalog.meta.VectorIndexes) == 0
 }
 
 func cachedWriteDomainCatalogForState(domain *collectionWriteDomain, systemRoot, commitSeq uint64) *collectionCatalog {

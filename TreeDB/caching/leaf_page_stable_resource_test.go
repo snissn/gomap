@@ -54,13 +54,18 @@ func TestCachingLeafPageLogStableBatchPinsExactRawSegment(t *testing.T) {
 	if len(ptrs) != len(pages) {
 		t.Fatalf("pointer count=%d want %d", len(ptrs), len(pages))
 	}
-	descriptors := mustStableResourceDescriptors(t, resources)
+	diagnostics, err := resources.AcquirePhysicalDiagnostics()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer diagnostics.Close()
+	descriptors := diagnostics.Physical()
 	if len(descriptors) != 1 {
 		t.Fatalf("resource count=%d want 1", len(descriptors))
 	}
 	descriptor := descriptors[0]
-	if descriptor.Kind() != rootpublication.ResourceOuterLeafLog {
-		t.Fatalf("kind=%q want %q", descriptor.Kind(), rootpublication.ResourceOuterLeafLog)
+	if descriptor.Kind != rootpublication.ResourceOuterLeafLog {
+		t.Fatalf("kind=%q want %q", descriptor.Kind, rootpublication.ResourceOuterLeafLog)
 	}
 	fields := descriptor.ReachabilityFields()
 	if len(fields) != 1 || fields[0] != rootpublication.ReachabilityOuterLeafRawPointer {
@@ -72,7 +77,12 @@ func TestCachingLeafPageLogStableBatchPinsExactRawSegment(t *testing.T) {
 	if _, err := cached.valueLogIdentityPins.BeginDelete(descriptor.Identity()); !errors.Is(err, rootpublication.ErrResourcePinned) {
 		t.Fatalf("delete pinned raw segment error=%v want ErrResourcePinned", err)
 	}
-	stats := resources.Stats(time.Now())
+	statsDiagnostics, err := resources.AcquireStats(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer statsDiagnostics.Close()
+	stats := statsDiagnostics.Stats()
 	if len(stats) != 1 || stats[0].NamespaceSyncs != 1 {
 		t.Fatalf("stable resource stats=%+v want one creation namespace sync", stats)
 	}
@@ -94,18 +104,23 @@ func TestCachingLeafPageLogStableBatchPinsExactRawSegment(t *testing.T) {
 	if err := os.WriteFile(segmentPath, bytes.Repeat([]byte{0xee}, page.PageSize), 0o600); err != nil {
 		t.Fatalf("create path replacement: %v", err)
 	}
-	token := resources.Tokens()[0]
 	got := make([]byte, 8)
-	if _, err := token.ReadAt(got, int64(ptrs[0].Offset)); err != nil {
+	if err := resources.WithScopedTokens(func(tokens []*rootpublication.StableResourceToken) error {
+		if len(tokens) != 1 {
+			t.Fatalf("scoped token count=%d want 1", len(tokens))
+		}
+		_, err := tokens[0].ReadAt(got, int64(ptrs[0].Offset))
+		return err
+	}); err != nil {
 		t.Fatalf("read pinned segment after path replacement: %v", err)
 	}
 	if bytes.Equal(got, bytes.Repeat([]byte{0xee}, len(got))) {
 		t.Fatal("stable token reopened the replacement pathname")
 	}
-	if filepath.Clean(token.DiagnosticPath()) == filepath.Clean(segmentPath) {
+	if filepath.Clean(descriptor.DiagnosticPath()) == filepath.Clean(segmentPath) {
 		t.Fatal("diagnostic path must be DB-relative")
 	}
-	if got, want := filepath.Dir(filepath.FromSlash(token.DiagnosticPath())), "leaf_vlog"; got != want {
+	if got, want := filepath.Dir(filepath.FromSlash(descriptor.DiagnosticPath())), "leaf_vlog"; got != want {
 		t.Fatalf("diagnostic directory=%q want %q", got, want)
 	}
 }
@@ -160,12 +175,17 @@ func TestCachingLeafPageLogStablePreparedBatchCapturesEveryReferencedSegment(t *
 	if len(referenced) < 2 {
 		t.Fatalf("batch referenced %d segments; test did not exercise rotation", len(referenced))
 	}
-	descriptors := mustStableResourceDescriptors(t, resources)
+	diagnostics, err := resources.AcquirePhysicalDiagnostics()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer diagnostics.Close()
+	descriptors := diagnostics.Physical()
 	if len(descriptors) != len(referenced) {
 		t.Fatalf("captured descriptors=%d referenced segments=%d", len(descriptors), len(referenced))
 	}
 	for _, descriptor := range descriptors {
-		fileID := uint32(descriptor.Generation())
+		fileID := uint32(descriptor.Generation)
 		if _, ok := referenced[fileID]; !ok {
 			t.Fatalf("captured unrelated segment file_id=%d referenced=%v", fileID, referenced)
 		}
@@ -175,15 +195,20 @@ func TestCachingLeafPageLogStablePreparedBatchCapturesEveryReferencedSegment(t *
 		t.Fatalf("missing captured segment IDs: %v", referenced)
 	}
 	namespaceTokens := 0
-	for _, token := range resources.Tokens() {
-		if token.Namespace() != nil {
+	for _, descriptor := range descriptors {
+		if _, ok := descriptor.Namespace(); ok {
 			namespaceTokens++
 		}
 	}
 	if namespaceTokens != len(descriptors) {
 		t.Fatalf("namespace-bearing tokens=%d descriptors=%d want exact create evidence for every newly created referenced segment", namespaceTokens, len(descriptors))
 	}
-	stats := resources.Stats(time.Now())
+	statsDiagnostics, err := resources.AcquireStats(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer statsDiagnostics.Close()
+	stats := statsDiagnostics.Stats()
 	if len(stats) != 1 || stats[0].NamespaceSyncs != uint64(namespaceTokens) {
 		t.Fatalf("stable multi-segment stats=%+v want %d namespace syncs", stats, namespaceTokens)
 	}
@@ -319,8 +344,13 @@ func TestCachingLeafPageLogStableCaptureExcludesFollowingConcurrentRotation(t *t
 	if ordinary.ptr.FileID == stable.ptr.FileID {
 		t.Fatalf("ordinary append did not rotate: stable=%d ordinary=%d", stable.ptr.FileID, ordinary.ptr.FileID)
 	}
-	descriptors := mustStableResourceDescriptors(t, stable.resources)
-	if len(descriptors) != 1 || uint32(descriptors[0].Generation()) != stable.ptr.ValueLogFileID() {
+	diagnostics, err := stable.resources.AcquirePhysicalDiagnostics()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer diagnostics.Close()
+	descriptors := diagnostics.Physical()
+	if len(descriptors) != 1 || uint32(descriptors[0].Generation) != stable.ptr.ValueLogFileID() {
 		t.Fatalf("stable descriptors=%v want only file_id=%d", descriptors, stable.ptr.ValueLogFileID())
 	}
 }
@@ -399,8 +429,13 @@ func TestCachingLeafPageLogStableCertifiesRelaxedOrdinaryRotationBeforeAppend(t 
 	if second.FileID == first.FileID {
 		t.Fatalf("ordinary rotation did not advance leaf segment: first=%d second=%d", first.FileID, second.FileID)
 	}
-	descriptors := mustStableResourceDescriptors(t, secondResources)
-	if len(descriptors) != 1 || descriptors[0].Generation() != uint64(second.ValueLogFileID()) {
+	diagnostics, err := secondResources.AcquirePhysicalDiagnostics()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer diagnostics.Close()
+	descriptors := diagnostics.Physical()
+	if len(descriptors) != 1 || descriptors[0].Generation != uint64(second.ValueLogFileID()) {
 		t.Fatalf("retry resources=%v want exact generation %d", descriptors, second.ValueLogFileID())
 	}
 }
