@@ -3,9 +3,11 @@ package collections
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"math"
 	"os"
 	"reflect"
+	"slices"
 	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/batch"
@@ -466,6 +468,122 @@ func prepareNativeTypedMaterializationCore(input nativeTypedMaterializeInput) (w
 	return w, nil
 }
 
+// This index borrows immutable input bytes. It selects a captured physical cut;
+// it never changes the command history or the deltas retained by logical views.
+// A negative row denotes deleted[-row-1]; nonnegative rows win a same-member
+// source deletion, exactly as nativeTypedDelta.find does.
+type nativeTypedMaterializeMutation struct {
+	id    []byte
+	delta int
+	row   int
+}
+
+func selectNativeTypedMaterializeMutations(deltas []*nativeTypedDelta) ([]nativeTypedMaterializeMutation, error) {
+	var count uint64
+	var previousLSN uint64
+	var previousMember uint32
+	for _, d := range deltas {
+		// Validate the complete original order, including shadowed members.
+		if d == nil || d.appliedLSN == 0 || len(d.rows) != len(d.retained) ||
+			(previousLSN != 0 && (d.appliedLSN < previousLSN || (d.appliedLSN == previousLSN && d.memberOrdinal <= previousMember))) {
+			return nil, backenddb.ErrNativeSemanticUnsupported
+		}
+		previousLSN, previousMember = d.appliedLSN, d.memberOrdinal
+		for i, row := range d.rows {
+			if len(row.ID) == 0 || (i > 0 && bytes.Compare(d.rows[i-1].ID, row.ID) >= 0) {
+				return nil, backenddb.ErrNativeSemanticUnsupported
+			}
+		}
+		for _, id := range d.deleted {
+			if len(id) == 0 {
+				return nil, backenddb.ErrNativeSemanticUnsupported
+			}
+		}
+		if err := nativeTypedCheckedAdd(&count, uint64(len(d.rows))); err != nil {
+			return nil, err
+		}
+		if err := nativeTypedCheckedAdd(&count, uint64(len(d.deleted))); err != nil {
+			return nil, err
+		}
+	}
+	if count == 0 || count > uint64(int(^uint(0)>>1)) {
+		return nil, backenddb.ErrNativeSemanticUnsupported
+	}
+	// The existing per-mutation 2 KiB run/control allowance covers this index
+	// and the selected row/residual/delete headers below. Check their rounded
+	// worst case before allocation; ID, value and residual backing is borrowed.
+	// The bound deliberately counts every header for every input mutation even
+	// though only one member's selected headers are live during construction.
+	var selectionBytes uint64
+	for _, width := range []uint64{uint64(unsafe.Sizeof(nativeTypedMaterializeMutation{})), uint64(unsafe.Sizeof(columnDeclaredRow{})), uint64(unsafe.Sizeof([]byte{})), uint64(unsafe.Sizeof([]byte{}))} {
+		n, err := nativeTypedCheckedMul(count, width)
+		if err != nil {
+			return nil, err
+		}
+		if err = nativeTypedCheckedAdd(&selectionBytes, memtable.COWAllocationCharge(n)); err != nil {
+			return nil, err
+		}
+	}
+	allowance, err := nativeTypedCheckedMul(count, 2048)
+	if err != nil || selectionBytes > allowance {
+		return nil, memtable.ErrCOWCapacity
+	}
+	mutations := make([]nativeTypedMaterializeMutation, 0, int(count))
+	for delta, d := range deltas {
+		for row, value := range d.rows {
+			mutations = append(mutations, nativeTypedMaterializeMutation{id: value.ID, delta: delta, row: row})
+		}
+		for row, id := range d.deleted {
+			mutations = append(mutations, nativeTypedMaterializeMutation{id: id, delta: delta, row: -row - 1})
+		}
+	}
+	// O(N log N), independent of the number of members and distinct IDs. The
+	// first occurrence of each ID is its last writer in this exact prefix.
+	slices.SortFunc(mutations, func(a, b nativeTypedMaterializeMutation) int {
+		if order := bytes.Compare(a.id, b.id); order != 0 {
+			return order
+		}
+		if a.delta != b.delta {
+			if a.delta > b.delta {
+				return -1
+			}
+			return 1
+		}
+		if a.row >= 0 && b.row < 0 {
+			return -1
+		}
+		if a.row < 0 && b.row >= 0 {
+			return 1
+		}
+		return 0
+	})
+	winners := 0
+	for i := 0; i < len(mutations); {
+		next := i + 1
+		for next < len(mutations) && bytes.Equal(mutations[i].id, mutations[next].id) {
+			next++
+		}
+		mutations[winners] = mutations[i]
+		winners++
+		i = next
+	}
+	clear(mutations[winners:])
+	mutations = mutations[:winners]
+	// Restore original member order and sort its selected rows and deletions by
+	// ID. Canonical deletion IDs may retain caller order. The materializer keeps
+	// the original member's LSN/ordinal.
+	slices.SortFunc(mutations, func(a, b nativeTypedMaterializeMutation) int {
+		if a.delta != b.delta {
+			if a.delta < b.delta {
+				return -1
+			}
+			return 1
+		}
+		return bytes.Compare(a.id, b.id)
+	})
+	return mutations, nil
+}
+
 func (w *nativeTypedMaterialization) materialize() (resultErr error) {
 	if w == nil || w.started {
 		return backenddb.ErrNativeSemanticUnsupported
@@ -480,21 +598,25 @@ func (w *nativeTypedMaterialization) materialize() (resultErr error) {
 			w.complete = true
 		}
 	}()
+	mutations, err := selectNativeTypedMaterializeMutations(w.input.deltas)
+	if err != nil {
+		return err
+	}
 	rootDir, registry, err := w.input.group.NativeColumnAssetBuildContext()
 	if err != nil {
 		return err
 	}
 	context := columnPhysicalAssetBuildContext{rootDir: rootDir, registry: registry, recovery: w.input.capture, codec: &w.codec, singleOutput: true}
-	var previousLSN uint64
-	var previousMember uint32
-	for _, d := range w.input.deltas {
-		if d.appliedLSN == 0 || (previousLSN != 0 && (d.appliedLSN < previousLSN || (d.appliedLSN == previousLSN && d.memberOrdinal <= previousMember))) {
-			return backenddb.ErrNativeSemanticUnsupported
+	for start := 0; start < len(mutations); {
+		end := start + 1
+		for end < len(mutations) && mutations[end].delta == mutations[start].delta {
+			end++
 		}
-		previousLSN, previousMember = d.appliedLSN, d.memberOrdinal
-		if err = w.materializeDelta(context, d); err != nil {
+		d := w.input.deltas[mutations[start].delta]
+		if err = w.materializeDelta(context, d, mutations[start:end]); err != nil {
 			return err
 		}
+		start = end
 	}
 	w.resources, err = w.resourceBuilder.Freeze()
 	if err != nil {
@@ -504,7 +626,7 @@ func (w *nativeTypedMaterialization) materialize() (resultErr error) {
 	return nil
 }
 
-func (w *nativeTypedMaterialization) materializeDelta(context columnPhysicalAssetBuildContext, d *nativeTypedDelta) error {
+func (w *nativeTypedMaterialization) materializeDelta(context columnPhysicalAssetBuildContext, d *nativeTypedDelta, selected []nativeTypedMaterializeMutation) error {
 	// Each command's semantic phase precedes its typed encoder phase. The
 	// maintained asset helper also closes after joining its encoder goroutine;
 	// drop again here before the next command.
@@ -513,40 +635,57 @@ func (w *nativeTypedMaterialization) materializeDelta(context columnPhysicalAsse
 	if cfg.ActiveManifest != nil && cfg.ActiveManifest.Generation == ^uint64(0) {
 		return memtable.ErrCOWCapacity
 	}
+	rowCount := 0
+	for _, mutation := range selected {
+		if mutation.row >= 0 {
+			rowCount++
+		}
+	}
+	rows := make([]columnDeclaredRow, 0, rowCount)
+	residual := make([][]byte, 0, rowCount)
+	deletedIDs := make([][]byte, 0, len(selected)-rowCount)
+	for _, mutation := range selected {
+		if mutation.row >= 0 {
+			rows = append(rows, d.rows[mutation.row])
+			residual = append(residual, d.retained[mutation.row])
+		} else {
+			deletedIDs = append(deletedIDs, d.deleted[-mutation.row-1])
+		}
+	}
 	// The input already IS the retained noncolumn carrier. A zero-declaration
 	// view preserves every residual field through the maintained semantic codec;
 	// no full JSON document or declared-column shadow is reconstructed here.
 	residualConfig := cfg
 	residualConfig.Columns = nil
-	ids := make([][]byte, len(d.rows))
-	documents := make([]columnWriteDocument, len(d.rows))
-	for i, row := range d.rows {
+	ids := make([][]byte, len(rows))
+	documents := make([]columnWriteDocument, len(rows))
+	for i, row := range rows {
 		ids[i] = row.ID
 		documents[i] = columnWriteDocument{ID: row.ID}
 	}
 	var retained columnRetainedPayloadStorageDocuments
 	var err error
-	if columnRetainedPayloadEffectiveEncoding(&cfg) == ColumnRetainedPayloadEncodingSemanticStreamV1 && len(d.rows) != 0 {
-		retained, err = prepareColumnRetainedSemanticStreamV1StorageDocumentsWithIDsConstruction(residualConfig, ids, d.retained, int64(w.capacity), true)
+	if columnRetainedPayloadEffectiveEncoding(&cfg) == ColumnRetainedPayloadEncodingSemanticStreamV1 && len(rows) != 0 {
+		retained, err = prepareColumnRetainedSemanticStreamV1StorageDocumentsWithIDsConstruction(residualConfig, ids, residual, int64(w.capacity), true)
 		if err != nil {
 			return err
 		}
 		defer retained.semanticStreamBlocks.(*memtable.AppendOnly).ReleaseDropEntries()
 	} else {
-		retained.documents = d.retained
+		retained.documents = residual
 	}
 	for i := range documents {
 		documents[i].Document = retained.documents[i]
 	}
-	deleted := make([]columnWriteDocument, len(d.deleted))
-	for i, id := range d.deleted {
+	deleted := make([]columnWriteDocument, len(deletedIDs))
+	for i, id := range deletedIDs {
 		deleted[i] = columnWriteDocument{ID: id}
 	}
 	op := d.operation
 	if op == "" {
 		op = ColumnPublishOperationInsert
 	}
-	input := columnWritePublishInput{meta: w.meta, operation: op, documents: documents, rows: len(documents), declaredRows: d.rows, declaredRowsReady: true}
+	input := columnWritePublishInput{meta: w.meta, operation: op, documents: documents, rows: len(documents), declaredRows: rows, declaredRowsReady: true}
 	if len(deleted) != 0 {
 		if len(documents) == 0 {
 			input.operation, input.documents, input.rows = ColumnPublishOperationDelete, deleted, len(deleted)
@@ -558,7 +697,7 @@ func (w *nativeTypedMaterialization) materializeDelta(context columnPhysicalAsse
 		PrepareAssets: func(hook ColumnPublishAssetPrepareInput) (ColumnPublishPreparedAssets, error) {
 			prepared, e := context.prepareAssets(input, hook)
 			if e != nil {
-				return prepared, e
+				return prepared, fmt.Errorf("collections: native typed assets collection=%q lsn=%d member=%d: %w", w.meta.Name, d.appliedLSN, d.memberOrdinal, e)
 			}
 			if prepared.stableResources == nil {
 				return prepared, backenddb.ErrNativeSemanticUnsupported
@@ -569,7 +708,7 @@ func (w *nativeTypedMaterialization) materializeDelta(context columnPhysicalAsse
 			if cloneErr != nil {
 				prepared.stableResources.Release()
 				prepared.stableResources = nil
-				return prepared, cloneErr
+				return prepared, fmt.Errorf("collections: native typed asset custody clone: %w", cloneErr)
 			}
 			// Merge consumes its child. Preserve the plan's independent set for
 			// its own closure validation and retain the clone in original work.
@@ -577,7 +716,7 @@ func (w *nativeTypedMaterialization) materializeDelta(context columnPhysicalAsse
 				custody.Release()
 				prepared.stableResources.Release()
 				prepared.stableResources = nil
-				return prepared, e
+				return prepared, fmt.Errorf("collections: native typed asset custody merge: %w", e)
 			}
 			return prepared, nil
 		}, EncodeManifest: encodeColumnManifestIdentityForWrite,
@@ -602,10 +741,10 @@ func (w *nativeTypedMaterialization) materializeDelta(context columnPhysicalAsse
 	if err != nil {
 		return err
 	}
-	if err = w.buildDeletedDocuments(0, d.deleted); err != nil {
+	if err = w.buildDeletedDocuments(0, deletedIDs); err != nil {
 		return err
 	}
-	if err = w.buildDeletedDocuments(2, d.deleted); err != nil {
+	if err = w.buildDeletedDocuments(2, deletedIDs); err != nil {
 		return err
 	}
 	rowPartID := columnPhysicalRowAssetPartID
