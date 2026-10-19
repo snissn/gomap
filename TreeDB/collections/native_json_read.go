@@ -160,7 +160,7 @@ func (r *NativeJSONRead) Get(id []byte) ([]byte, error) {
 		return nil, tree.ErrKeyNotFound
 	}
 	if entry.Flags&node.FlagPointer != 0 {
-		return r.readValue(entry.ValuePtr)
+		return r.readValue(entry.ValuePtr, nil)
 	}
 	if owned {
 		return entry.Value, nil
@@ -174,7 +174,7 @@ func (r *NativeJSONRead) Get(id []byte) ([]byte, error) {
 // readValue borrows only this read scope's exact Snapshot file Set. Get holds
 // r.mu, so Close cannot detach that Snapshot until decode and scratch cleanup
 // finish. Returned bytes are an independent caller-owned copy.
-func (r *NativeJSONRead) readValue(ptr page.ValuePtr) ([]byte, error) {
+func (r *NativeJSONRead) readValue(ptr page.ValuePtr, admitOutput func(uint64) error) ([]byte, error) {
 	f, _, err := r.capture.Snapshot().PinnedValueLogFile(ptr.FileID)
 	if err != nil {
 		return nil, err
@@ -234,6 +234,14 @@ func (r *NativeJSONRead) readValue(ptr page.ValuePtr) ([]byte, error) {
 	value, err = valuelog.ReadCOWRecord(f, ptr, shape, true, input, raw, output, decode)
 	if err != nil {
 		return nil, err
+	}
+	// Public Get returns caller-owned memory. An internal retained consumer must
+	// instead admit this independent output before allocation, while decoder
+	// temporaries remain owned by the original scoped read receipt.
+	if admitOutput != nil {
+		if err = admitOutput(memtable.COWAllocationCharge(uint64(len(value)))); err != nil {
+			return nil, err
+		}
 	}
 	owned := make([]byte, len(value))
 	copy(owned, value)

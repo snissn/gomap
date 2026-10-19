@@ -3,8 +3,8 @@ package commitlog
 import "encoding/binary"
 
 // ValidateSelectedCompositeMutation restricts active frames to inline raw point
-// Set and untyped JSON insert members. The wider payload codec stays reusable;
-// external RID/typed/update/delete runtime closures are not activated here.
+// Set and scalar JSON row members. The aggregate replay reduces the ordered
+// members before building roots; external RID/typed closures remain fenced.
 func ValidateSelectedCompositeMutation(payload []byte) error {
 	rawCount := 0
 	return ScanCompositeMutationPayload(payload, func(m CompositeMutationMember) error {
@@ -22,6 +22,16 @@ func ValidateSelectedCompositeMutation(payload []byte) error {
 			})
 		case CommandKindCollectionInsertBatchByID:
 			if m.PayloadFormat != PayloadFormatCollectionInsertBatchByIDV1 {
+				return ErrCommandWALUnsupportedKind
+			}
+			return nil
+		case CommandKindCollectionUpdateBatchByID:
+			if m.PayloadFormat != PayloadFormatCollectionUpdateBatchByIDV1 {
+				return ErrCommandWALUnsupportedKind
+			}
+			return nil
+		case CommandKindCollectionDeleteBatchByID:
+			if m.PayloadFormat != PayloadFormatCollectionDeleteBatchByIDV1 {
 				return ErrCommandWALUnsupportedKind
 			}
 			return nil

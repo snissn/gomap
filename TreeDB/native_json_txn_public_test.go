@@ -104,8 +104,8 @@ func TestNativeJSONPublicConditionalTransactions(t *testing.T) {
 			if err := b.InsertBatch(ids, docs); err != nil {
 				t.Fatal(err)
 			}
-			if err := b.InsertBatch([][]byte{[]byte("second")}, [][]byte{[]byte(`{"n":99}`)}); !errors.Is(err, backenddb.ErrNativeSemanticUnsupported) {
-				t.Fatalf("second stage must preserve first: %v", err)
+			if err := b.InsertBatch([][]byte{[]byte("second")}, [][]byte{[]byte(`{"n":99}`)}); err != nil {
+				t.Fatalf("second ordered stage: %v", err)
 			}
 			ids[0][0] = 'z'
 			docs[0][5] = '9' // staging owns input bytes
@@ -113,6 +113,7 @@ func TestNativeJSONPublicConditionalTransactions(t *testing.T) {
 			read(b, "seed", `{"n":0}`)
 			read(a, "a", `{"n":1}`)
 			read(b, "b", `{"n":2}`)
+			read(b, "second", `{"n":99}`)
 			absent(a, "never")
 			absent(b, "never")
 			if err := a.Commit(); err != nil {
@@ -156,7 +157,7 @@ func TestNativeJSONPublicConditionalTransactions(t *testing.T) {
 			}
 			check := func(m *collections.NativeJSONManager) {
 				t.Helper()
-				for id, want := range map[string]string{"seed": `{"n":0}`, "a": `{"n":1}`, "b": `{"n":2}`, "same": `{"n":3}`, "x": `{"n":5}`, "handoff": `{"n":7}`} {
+				for id, want := range map[string]string{"seed": `{"n":0}`, "a": `{"n":1}`, "b": `{"n":2}`, "second": `{"n":99}`, "same": `{"n":3}`, "x": `{"n":5}`, "handoff": `{"n":7}`} {
 					if got, err := m.Get("rows", []byte(id)); err != nil || string(got) != want {
 						t.Fatalf("Get %s=%q want %q: %v", id, got, want, err)
 					}

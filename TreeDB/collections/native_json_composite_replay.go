@@ -1,9 +1,10 @@
 package collections
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
-	"strings"
+	"fmt"
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -16,8 +17,8 @@ import (
 // Foreground CRUD and composite commands use the original transaction's
 // captured immutable plan. This registration marks only that fixed capability;
 // direct registered/assigned preparation cannot create a transaction, fabricate
-// a captured plan or invoke startup replay. Composite CRUD remains fenced by
-// the aggregate frontend until its complete executor is available.
+// a captured plan or invoke startup replay. Registered/assigned CRUD still
+// refuses without that captured authority.
 func prepareNativeJSONTxnPlanMarker(*backenddb.DB, commitlog.CommandEnvelope, backenddb.NativeSemanticState, *backenddb.Snapshot, *backenddb.StableResourceCaptureLease) (*backenddb.NativePreparedPublication, error) {
 	return nil, backenddb.ErrNativeSemanticUnsupported
 }
@@ -63,136 +64,232 @@ func replayNativeJSONComposite(db *backenddb.DB, env commitlog.CommandEnvelope) 
 	}()
 	var raw []byte
 	read := func(key string) ([]byte, error) { return snapshot.GetAtRoot(token.SystemRootPageID, []byte(key)) }
+	type collectionRows struct {
+		name        string
+		incarnation uint64
+		meta        CollectionMeta
+		root        uint64
+		rows        nativeJSONRows
+		planner     insertBatchPlanner
+		runtimes    []indexRuntime
+	}
+	var collections []*collectionRows
+	noAdmission := func(uint64) error { return nil }
+	rootFor := func(qualified string) (uint64, error) {
+		if _, err := read(systemCollectionRootOverlayKey(qualified)); err == nil {
+			return 0, backenddb.ErrNativeSemanticUnsupported
+		} else if !errors.Is(err, tree.ErrKeyNotFound) {
+			return 0, err
+		}
+		encoded, err := read(systemCollectionRootKey(qualified))
+		if errors.Is(err, tree.ErrKeyNotFound) {
+			return 0, nil
+		}
+		if err != nil {
+			return 0, err
+		}
+		return decodeRootID(encoded)
+	}
 	err = commitlog.ScanCompositeMutationPayload(env.Payload, func(member commitlog.CompositeMutationMember) error {
 		if member.Kind == commitlog.CommandKindRawKVBatch {
 			raw = member.Payload
 			return nil
 		}
-		decoded, err := commitlog.DecodeCollectionInsertBatchByIDPayload(member.Payload)
-		if err != nil {
-			return err
-		}
-		if err = ValidateCollectionName(decoded.Collection); err != nil {
-			return err
-		}
-		for _, old := range ordered {
-			if strings.HasPrefix(old.name, decoded.Collection+"/") {
+		var name string
+		var docs []commitlog.CollectionDocument
+		var ids [][]byte
+		switch member.Kind {
+		case commitlog.CommandKindCollectionInsertBatchByID:
+			decoded, err := commitlog.DecodeCollectionInsertBatchByIDPayload(member.Payload)
+			if err != nil {
+				return err
+			}
+			name, docs = decoded.Collection, decoded.Documents
+		case commitlog.CommandKindCollectionUpdateBatchByID:
+			decoded, err := commitlog.DecodeCollectionUpdateBatchByIDPayload(member.Payload)
+			if err != nil {
+				return err
+			}
+			if decoded.Colocated != nil {
 				return backenddb.ErrNativeSemanticUnsupported
 			}
-		}
-		encoded, err := read(systemCollectionMetaKey(decoded.Collection))
-		if err != nil {
-			return err
-		}
-		meta, err := decodeCollectionMeta(encoded)
-		if err != nil {
-			return err
-		}
-		meta, err = nativeJSONMeta(meta)
-		if err != nil {
-			return err
-		}
-		if meta.Name != decoded.Collection {
+			name, docs = decoded.Collection, decoded.Documents
+		case commitlog.CommandKindCollectionDeleteBatchByID:
+			decoded, err := commitlog.DecodeCollectionDeleteBatchByIDPayload(member.Payload)
+			if err != nil {
+				return err
+			}
+			if decoded.Colocated != nil {
+				return backenddb.ErrNativeSemanticUnsupported
+			}
+			name, ids = decoded.Collection, decoded.IDs
+		default:
 			return backenddb.ErrNativeSemanticUnsupported
 		}
-		identity, err := read(nativeCatalogIncarnationPrefix + decoded.Collection)
-		if err != nil {
+		if err := ValidateCollectionName(name); err != nil {
 			return err
 		}
-		id, err := nativeCatalogIdentityValue(identity, false)
-		if err != nil || id != member.Incarnation {
+		var target *collectionRows
+		for _, old := range collections {
+			if old.name == name {
+				target = old
+				break
+			}
+		}
+		if target == nil {
+			encoded, err := read(systemCollectionMetaKey(name))
+			if err != nil {
+				return err
+			}
+			meta, err := decodeCollectionMeta(encoded)
+			if err != nil {
+				return err
+			}
+			meta, err = nativeJSONMeta(meta)
+			if err != nil {
+				return err
+			}
+			if meta.Name != name {
+				return backenddb.ErrNativeSemanticUnsupported
+			}
+			identity, err := read(nativeCatalogIncarnationPrefix + name)
+			if err != nil {
+				return err
+			}
+			id, err := nativeCatalogIdentityValue(identity, false)
+			if err != nil || id != member.Incarnation {
+				return errNativeCatalogIdentity
+			}
+			root, err := rootFor(collectionPrimaryRootName(name))
+			if err != nil {
+				return err
+			}
+			planner, err := nativeJSONInsertPlanner(meta)
+			if err != nil {
+				return err
+			}
+			runtimes, err := planner.indexRuntimes()
+			if err != nil {
+				return err
+			}
+			target = &collectionRows{name: name, incarnation: id, meta: meta, root: root, planner: planner, runtimes: runtimes}
+			collections = append(collections, target)
+		} else if target.incarnation != member.Incarnation {
 			return errNativeCatalogIdentity
 		}
-		if _, err = read(systemCollectionRootOverlayKey(collectionPrimaryRootName(decoded.Collection))); err == nil {
-			return backenddb.ErrNativeSemanticUnsupported
-		} else if !errors.Is(err, tree.ErrKeyNotFound) {
-			return err
+		original := func(id []byte) ([]byte, error) {
+			if target.root == 0 {
+				return nil, tree.ErrKeyNotFound
+			}
+			return snapshot.GetAtRoot(target.root, id)
 		}
-		root := uint64(0)
-		encoded, err = read(systemCollectionRootKey(collectionPrimaryRootName(decoded.Collection)))
-		if err == nil {
-			root, err = decodeRootID(encoded)
-		}
-		if err != nil && !errors.Is(err, tree.ErrKeyNotFound) {
-			return err
-		}
-		policy, err := collectionRootStoragePolicy(meta, collectionPrimaryRootName(decoded.Collection))
-		if err != nil {
-			return err
-		}
-		ids, docs := make([][]byte, len(decoded.Documents)), make([][]byte, len(decoded.Documents))
-		for i, row := range decoded.Documents {
-			ids[i], docs[i] = row.ID, row.Document
-		}
-		planner, err := nativeJSONInsertPlanner(meta)
-		if err != nil {
-			return err
-		}
-		plan, err := planner.planInsertBatch(ids, docs)
-		if err != nil {
-			return err
-		}
-		if root != 0 {
-			exists, err := snapshot.HasAnySortedAtRoot(root, plan.primaryKeys)
+		for _, doc := range docs {
+			// Validate every canonical intermediate before reducing it. A later
+			// delete must not erase a captured scalar-schema error. Use exactly
+			// the foreground preparation/extraction contract: unindexed JSON
+			// preserves opaque bytes, while indexed documents require valid JSON.
+			normalized, _, _, _, err := prepareInsertDocuments([][]byte{doc.Document}, target.planner.options)
 			if err != nil {
 				return err
 			}
-			if exists {
+			if _, err = orderedIndexStateForDocumentWithArena(normalized[0], target.runtimes, target.planner.options, nil); err != nil {
+				return err
+			}
+			row, err := target.rows.touch(doc.ID, original, noAdmission)
+			if err != nil {
+				return err
+			}
+			if member.Kind == commitlog.CommandKindCollectionInsertBatchByID && row.current != nil {
 				return ErrDocumentExists
 			}
+			if member.Kind == commitlog.CommandKindCollectionUpdateBatchByID && row.current == nil {
+				return tree.ErrKeyNotFound
+			}
+			row.current = bytes.Clone(normalized[0])
 		}
-		// Startup owns this ephemeral plan through its existing Snapshot/group;
-		// no native allocator or fresh foreground capture is constructed.
-		primary := make([]memtable.COWMutation, len(plan.directBufferedInsert.primaryEntries))
-		additional, _, err := extractNativeInsertEffects(decoded.Collection, id, plan.directBufferedInsert, primary, func(uint64) error { return nil })
+		for _, id := range ids {
+			row, err := target.rows.touch(id, original, noAdmission)
+			if err != nil {
+				return err
+			}
+			row.current = nil
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	for _, target := range collections {
+		plan, changed, runtimes, err := nativeJSONFinalRows(target.name, target.meta, &target.rows, noAdmission)
 		if err != nil {
 			return err
 		}
-		for _, run := range plan.directBufferedInsert.uniqueValueRootPlans {
-			encoded, err := read(systemCollectionRootKey(collectionSecondaryRootName(meta.Name, run.indexName)))
-			if errors.Is(err, tree.ErrKeyNotFound) {
+		replacements := batchUniqueReplacementOwners(runtimes, changed)
+		for runtimeIdx, runtime := range runtimes {
+			if !runtime.def.unique {
 				continue
 			}
+			root, err := rootFor(collectionSecondaryRootName(target.name, runtime.def.name))
 			if err != nil {
 				return err
 			}
-			indexRoot, err := decodeRootID(encoded)
-			if err != nil {
-				return err
+			if root == 0 {
+				continue
 			}
-			exists, err := snapshot.HasPrefixesAtRoot(indexRoot, run.prefixes)
-			if err != nil {
-				return err
-			}
-			for _, conflict := range exists {
-				if conflict {
-					return ErrUniqueIndexConflict
+			for _, item := range changed {
+				if !preparedBatchUpdateIndexChanged(item, runtimeIdx) {
+					continue
+				}
+				for _, encoded := range item.newState.valuesAt(runtimeIdx) {
+					_, prefix, err := appendIndexValuePrefixSlice(make([]byte, 0, 2+len(encoded)), encoded)
+					if err != nil {
+						return err
+					}
+					it, err := snapshot.IteratorAtRoot(root, prefix, prefixEnd(prefix))
+					if err != nil {
+						return err
+					}
+					err = func() (resultErr error) {
+						defer func() { resultErr = errors.Join(resultErr, it.Close()) }()
+						for ; it.Valid(); it.Next() {
+							if it.IsDeleted() {
+								continue
+							}
+							owner, err := indexKeyDocumentID(runtime.def.valueType, it.UnsafeKey())
+							if err != nil {
+								return err
+							}
+							if batchUpdateUniqueOwnerConflicts(runtime.def.name, encoded, owner, item.documentID, replacements) {
+								return fmt.Errorf("%w %q", ErrUniqueIndexConflict, runtime.def.name)
+							}
+						}
+						return it.Error()
+					}()
+					if err != nil {
+						return err
+					}
 				}
 			}
 		}
+		primary := make([]memtable.COWMutation, len(plan.primaryEntries))
+		additional, _, err := extractNativeInsertEffects(target.name, target.incarnation, plan, primary, noAdmission)
+		if err != nil {
+			return err
+		}
 		for i := 0; i <= len(additional); i++ {
-			qualified, baseRoot, storage, entries := collectionPrimaryRootName(decoded.Collection), root, policy, primary
+			qualified, entries := collectionPrimaryRootName(target.name), primary
+			policy := nativeInsertRootPolicy(plan, qualified)
 			if i > 0 {
 				input := additional[i-1]
-				qualified = decoded.Collection + "/" + input.name
-				storage = input.policy
-				entries = input.entries
-				encoded, err := read(systemCollectionRootKey(qualified))
-				baseRoot = 0
-				if err == nil {
-					baseRoot, err = decodeRootID(encoded)
-				}
-				if err != nil && !errors.Is(err, tree.ErrKeyNotFound) {
-					return err
-				}
+				qualified = target.name + "/" + input.name
+				policy, entries = input.policy, input.entries
 			}
-			if _, err := read(systemCollectionRootOverlayKey(qualified)); err == nil {
-				return backenddb.ErrNativeSemanticUnsupported
-			} else if !errors.Is(err, tree.ErrKeyNotFound) {
+			root, err := rootFor(qualified)
+			if err != nil {
 				return err
 			}
 			delta := batch.New(nil, int(^uint(0)>>1))
-			ordered = append(ordered, prepared{name: qualified, root: baseRoot, policy: storage, delta: delta})
+			ordered = append(ordered, prepared{name: qualified, root: root, policy: policy, delta: delta})
 			for _, row := range entries {
 				if row.Flags&node.FlagTombstone != 0 {
 					err = delta.Delete(row.Key)
@@ -204,10 +301,6 @@ func replayNativeJSONComposite(db *backenddb.DB, env commitlog.CommandEnvelope) 
 				}
 			}
 		}
-		return nil
-	})
-	if err != nil {
-		return err
 	}
 	physical := db.NewPhysicalBatch().(*backenddb.Batch)
 	defer func() { resultErr = errors.Join(resultErr, physical.Close()) }()
