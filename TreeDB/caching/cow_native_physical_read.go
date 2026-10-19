@@ -10,11 +10,11 @@ import (
 
 // nativeEntryAtRoot shares only physical decoding/traversal, never logical
 // visibility. The caller's original cut retains this basis through copy-out.
-func (b *cowBackendBasis) nativeEntryAtRoot(budget *memtable.COWBudget, root uint64, key []byte, copyValue bool) (node.LeafEntry, error) {
+func (b *cowBackendBasis) nativeEntryAtRoot(cache *cowCache, root uint64, key []byte, copyValue bool) (node.LeafEntry, error) {
 	b.readMu.Lock()
 	defer b.readMu.Unlock()
-	limit := budget.Limits().MaxInFlightBytes
-	w, err := b.physicalWorkspaceLocked(budget, valuelog.COWReadLimits{MaxRecordBytes: limit, MaxRawBytes: limit, MaxValueBytes: limit})
+	limit := cache.budget.Limits().MaxInFlightBytes
+	w, err := b.physicalWorkspaceLocked(cache.budget, valuelog.COWReadLimits{MaxRecordBytes: limit, MaxRawBytes: limit, MaxValueBytes: limit})
 	if err != nil {
 		return node.LeafEntry{}, err
 	}
@@ -26,7 +26,9 @@ func (b *cowBackendBasis) nativeEntryAtRoot(budget *memtable.COWBudget, root uin
 	if err != nil {
 		return node.LeafEntry{}, err
 	}
-	entry, err := reader.GetEntryExactWithFixedScratch(key, point.key[:], point.leaf[:], w.readLeaf)
+	entry, err := reader.GetEntryExactWithFixedScratch(key, point.key[:], point.leaf[:], func(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
+		return b.readPhysicalLeafLocked(cache, ptr, dst, true)
+	})
 	if err != nil {
 		return node.LeafEntry{}, err
 	}
@@ -46,7 +48,7 @@ func (c *NativeSemanticCapture) NativeEntryAtRoot(root uint64, key []byte, copyV
 	if c == nil || c.cut == nil || c.cache == nil {
 		return node.LeafEntry{}, backenddb.ErrClosed
 	}
-	return c.cut.basis.nativeEntryAtRoot(c.cache.budget, root, key, copyValue)
+	return c.cut.basis.nativeEntryAtRoot(c.cache, root, key, copyValue)
 }
 func (tx *nativeConditionalTxn) NativeEntryAtRoot(root uint64, key []byte, copyValue bool) (node.LeafEntry, error) {
 	if tx == nil || tx.ConditionalTxn == nil {
@@ -55,18 +57,17 @@ func (tx *nativeConditionalTxn) NativeEntryAtRoot(root uint64, key []byte, copyV
 	if err := tx.ensureOpen(); err != nil {
 		return node.LeafEntry{}, err
 	}
-	return tx.snap.cowCut.basis.nativeEntryAtRoot(tx.db.cow.budget, root, key, copyValue)
+	return tx.snap.cowCut.basis.nativeEntryAtRoot(tx.db.cow, root, key, copyValue)
 }
 
-// nativeValueAtPointer borrows the exact basis file and the SAME admitted
-// dictionary-free decoder used by raw value reads. No pointer/file/caller scope
-// is retained by the workspace. Copy-out and retained-output admission complete
-// while readMu still excludes every other scratch borrower.
-func (b *cowBackendBasis) nativeValueAtPointer(budget *memtable.COWBudget, ptr page.ValuePtr, admitOutput func(uint64) error) ([]byte, error) {
-	b.readMu.Lock()
-	defer b.readMu.Unlock()
-	limit := budget.Limits().MaxInFlightBytes
-	w, err := b.physicalWorkspaceLocked(budget, valuelog.COWReadLimits{MaxRecordBytes: limit, MaxRawBytes: limit, MaxValueBytes: limit})
+// nativeValueAtPointer borrows the exact retained basis file and the original
+// cache's dictionary-free decoder. No basis/file/caller scope is retained by
+// scratch. Copy-out and retained-output admission finish under physicalMu.
+func (b *cowBackendBasis) nativeValueAtPointer(cache *cowCache, ptr page.ValuePtr, admitOutput func(uint64) error) ([]byte, error) {
+	cache.physicalMu.Lock()
+	defer cache.physicalMu.Unlock()
+	limit := cache.budget.Limits().MaxInFlightBytes
+	w, err := cache.physicalWorkspaceLocked(valuelog.COWReadLimits{MaxRecordBytes: limit, MaxRawBytes: limit, MaxValueBytes: limit})
 	if err != nil {
 		return nil, err
 	}
@@ -99,7 +100,7 @@ func (c *NativeSemanticCapture) NativeValueAtPointer(ptr page.ValuePtr, admitOut
 	if c == nil || c.cut == nil || c.cache == nil {
 		return nil, backenddb.ErrClosed
 	}
-	return c.cut.basis.nativeValueAtPointer(c.cache.budget, ptr, admitOutput)
+	return c.cut.basis.nativeValueAtPointer(c.cache, ptr, admitOutput)
 }
 
 func (tx *nativeConditionalTxn) NativeValueAtPointer(ptr page.ValuePtr, admitOutput func(uint64) error) ([]byte, error) {
@@ -109,5 +110,5 @@ func (tx *nativeConditionalTxn) NativeValueAtPointer(ptr page.ValuePtr, admitOut
 	if err := tx.ensureOpen(); err != nil {
 		return nil, err
 	}
-	return tx.snap.cowCut.basis.nativeValueAtPointer(tx.db.cow.budget, ptr, admitOutput)
+	return tx.snap.cowCut.basis.nativeValueAtPointer(tx.db.cow, ptr, admitOutput)
 }

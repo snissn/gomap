@@ -35,8 +35,8 @@ type cowBackendBasis struct {
 }
 
 // physicalWorkspaceLocked borrows only the immutable backend snapshot. Each
-// caller sets its original inspection limits under readMu; codecs are shared,
-// but visibility, dictionaries and pointer values remain on the caller's cut.
+// caller sets its original inspection limits under readMu. This workspace owns
+// traversal only; dictionary-free decoding belongs to the original cowCache.
 func (b *cowBackendBasis) physicalWorkspaceLocked(budget *memtable.COWBudget, limits valuelog.COWReadLimits) (*cowReadWorkspace, error) {
 	if b.reader == nil {
 		w, err := admitCOWReadWorkspace(budget, limits)
@@ -137,6 +137,10 @@ func drainCOWTables(tables []cowTable) {
 // cowCache serializes private preparation separately from the brief read latch.
 // writeMu admission and the existing command barrier remain outside this owner.
 type cowCache struct {
+	// Lock order is scope/caller -> basis.readMu -> physicalMu -> budget.mu.
+	// Pure decoder scratch never acquires a basis, scope or publication lock.
+	physicalMu                                                                                     sync.Mutex
+	physicalReader                                                                                 *cowReadWorkspace
 	journalBarrierActive                                                                           atomic.Bool
 	journalBarrierEffects, journalBarrierBytes, journalBarrierReplacement, journalBarrierConflicts atomic.Uint64
 	commitWaitNs, commitHoldNs, validationNs, tooOld                                               atomic.Uint64
@@ -772,6 +776,9 @@ func (c *cowCache) closeWithBudget(closeBudget bool) error {
 		refund, c.lease = c.lease, nil
 	}
 	c.semanticMu.Unlock()
+	if refund != nil {
+		c.closePhysicalReader()
+	}
 	refund.Close()
 	return err
 }

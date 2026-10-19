@@ -62,7 +62,7 @@ func TestCOWReadCodecReplacementRefusalRetry(t *testing.T) {
 			t.Error(err)
 		}
 	}()
-	budget, basis := db.cow.budget, s.cowCut.basis
+	budget := db.cow.budget
 	shapes := make([]valuelog.COWRecordShape, len(keys))
 	for i := range keys {
 		entry, err := s.GetEntryExact(keys[i])
@@ -100,19 +100,19 @@ func TestCOWReadCodecReplacementRefusalRetry(t *testing.T) {
 	if got, err := s.Get(keys[1]); err != nil || !bytes.Equal(got, values[1]) {
 		t.Fatalf("replacement read: %d %v", len(got), err)
 	}
-	basis.readMu.Lock()
-	if len(basis.reader.codecs) != 1 {
-		basis.readMu.Unlock()
+	db.cow.physicalMu.Lock()
+	if len(db.cow.physicalReader.codecs) != 1 {
+		db.cow.physicalMu.Unlock()
 		t.Fatal("expected one shared codec")
 	}
-	codec := basis.reader.codecs[0]
+	codec := db.cow.physicalReader.codecs[0]
 	if codec == nil || uint64(cap(codec.raw)) < cowReadCapacity(shapes[0].RawBytes) || uint64(cap(codec.input)) < cowReadCapacity(shapes[1].PayloadBytes()) {
-		basis.readMu.Unlock()
+		db.cow.physicalMu.Unlock()
 		t.Fatal("successful replacement shrank a previously admitted dimension")
 	}
 	receipt := codec.lease
 	codec = nil
-	basis.readMu.Unlock()
+	db.cow.physicalMu.Unlock()
 	before := budget.Stats()
 	overhead := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
 	pressure, err := budget.AcquireExternal(budget.Limits().MaxInFlightBytes - before.ReservedBytes - overhead)
@@ -123,9 +123,9 @@ func TestCOWReadCodecReplacementRefusalRetry(t *testing.T) {
 	if got, err := s.Get(keys[2]); !errors.Is(err, memtable.ErrCOWCapacity) || got != nil {
 		t.Fatalf("replacement under full original budget: %d %v", len(got), err)
 	}
-	basis.readMu.Lock()
-	empty := len(basis.reader.codecs) == 1 && basis.reader.codecs[0] == nil
-	basis.readMu.Unlock()
+	db.cow.physicalMu.Lock()
+	empty := len(db.cow.physicalReader.codecs) == 1 && db.cow.physicalReader.codecs[0] == nil
+	db.cow.physicalMu.Unlock()
 	if !empty || !errors.Is(receipt.Resize(1), memtable.ErrCOWClosed) {
 		t.Fatal("refusal retained old scratch/receipt")
 	}
@@ -141,7 +141,7 @@ func TestCOWReadCodecReplacementRefusalRetry(t *testing.T) {
 	if got, err := s.Get(keys[0]); err != nil || !bytes.Equal(got, values[0]) {
 		t.Fatalf("old record after retry: %d %v", len(got), err)
 	}
-	owned, basis = nil, nil
+	owned = nil
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}

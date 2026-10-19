@@ -69,6 +69,9 @@ func (cut *cowReadCut) releaseSemanticState() {
 	}
 	c.semanticMu.Unlock()
 	wakeSemanticCleanup(wake)
+	if refund != nil {
+		c.closePhysicalReader()
+	}
 	refund.Close()
 }
 
@@ -168,6 +171,9 @@ func (db *DB) semanticCleanupTerminal() bool {
 		c.lease = nil
 	}
 	c.semanticMu.Unlock()
+	if refund != nil {
+		c.closePhysicalReader()
+	}
 	refund.Close()
 	return true
 }

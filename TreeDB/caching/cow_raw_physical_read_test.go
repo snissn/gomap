@@ -93,14 +93,14 @@ func TestCOWRawBasisWorkspaceLifetime(t *testing.T) {
 	if got, err := a.Get([]byte("a000")); err != nil || !bytes.Equal(got, want) {
 		t.Fatalf("initial physical leaf: %d %v", len(got), err)
 	}
-	basis.readMu.Lock()
+	db.cow.physicalMu.Lock()
 	compressedLeaf := false
-	for _, codec := range basis.reader.codecs {
+	for _, codec := range db.cow.physicalReader.codecs {
 		if codec != nil && codec.codec == valuelog.BlockCodecZSTD && codec.id == 0 {
 			compressedLeaf = true
 		}
 	}
-	basis.readMu.Unlock()
+	db.cow.physicalMu.Unlock()
 	if !compressedLeaf {
 		t.Fatal("fixture did not read a real dictionary-free ZSTD leaf before pointer decoding")
 	}
@@ -124,7 +124,7 @@ func TestCOWRawBasisWorkspaceLifetime(t *testing.T) {
 	check(b)
 	// Both actual leaf and value records require ZSTD. A second generic decoder
 	// envelope cannot fit the default producer tranche; both reads must share
-	// the original basis codec without changing the caller's file resolver.
+	// the original cache codec without changing the caller's file resolver.
 	entry, err := a.GetEntryExact([]byte("p"))
 	if err != nil {
 		t.Fatal(err)
@@ -140,7 +140,7 @@ func TestCOWRawBasisWorkspaceLifetime(t *testing.T) {
 	file = nil
 	for _, snapshot := range []*Snapshot{a, b} {
 		if len(snapshot.cowReader.codecs) != 0 {
-			t.Fatal("caller duplicated the basis-owned dictionary-free decoder")
+			t.Fatal("caller duplicated the cache-owned dictionary-free decoder")
 		}
 	}
 	workspace, point, receipt := basis.reader, basis.reader.point, basis.reader.lease
@@ -148,7 +148,7 @@ func TestCOWRawBasisWorkspaceLifetime(t *testing.T) {
 	if !ok {
 		t.Fatal("missing basis token")
 	}
-	if _, err := basis.nativeEntryAtRoot(budget, token.RootPageID, []byte("a000"), true); !errors.Is(err, valuelog.ErrCOWReadUnsupported) {
+	if _, err := basis.nativeEntryAtRoot(db.cow, token.RootPageID, []byte("a000"), true); !errors.Is(err, valuelog.ErrCOWReadUnsupported) {
 		t.Fatalf("raw initialization changed native codec policy: %v", err)
 	}
 	var wg sync.WaitGroup
@@ -224,6 +224,24 @@ func TestCOWRawBasisWorkspaceLifetime(t *testing.T) {
 	check(b)
 	if db.cow.cut.basis == basis {
 		t.Fatal("handoff did not replace physical basis")
+	}
+	// The successor's dictionary-free leaves and pointer must use the original
+	// cache scratch too, while old basis files remain independently retained.
+	shared := db.cow.physicalReader
+	current, err := db.acquireCOWSnapshotWithError()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := current.Get([]byte("p")); err != nil || !bytes.Equal(got, pointer) {
+		t.Fatalf("new physical basis pointer: %d %v", len(got), err)
+	}
+	if db.cow.physicalReader != shared || len(current.cowCut.basis.reader.codecs) != 0 || len(basis.reader.codecs) != 0 {
+		t.Fatal("physical bases duplicated dictionary-free leaf/value decoding")
+	}
+	check(b)
+	shared = nil
+	if err := current.Close(); err != nil {
+		t.Fatal(err)
 	}
 	workspace, point, basis = nil, nil, nil
 	if err := b.Close(); err != nil {

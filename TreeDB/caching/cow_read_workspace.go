@@ -45,10 +45,10 @@ type cowReadWorkspace struct {
 	point         *cowPointScratch
 }
 
-// Cut-local workspaces are serialized by cowReadMu; the exact physical basis
-// workspace is serialized by basis.readMu. Each codec reuses its admitted
-// input/raw buffers across frames. Admission survives until its original owner
-// closes; no global codec cache is consulted.
+// Cut-local workspaces are serialized by cowReadMu; basis traversal uses
+// basis.readMu. Dictionary-free codecs use the original cache's physicalMu and
+// retain no Snapshot, file, pointer or dictionary authority. Their admission
+// survives through the cache's original last-cut/closed cleanup gate.
 func (s *Snapshot) cowWorkspaceLocked() (*cowReadWorkspace, error) {
 	if s.cowReader != nil {
 		return s.cowReader, nil
@@ -82,6 +82,33 @@ func admitCOWReadWorkspace(budget *memtable.COWBudget, limits valuelog.COWReadLi
 	}
 	w := &cowReadWorkspace{budget: budget, limits: limits, lease: lease}
 	return w, nil
+}
+
+// physicalWorkspaceLocked requires physicalMu. Only the original cache owns
+// this admitted scratch; snapshot/basis remain nil even across physical handoffs.
+func (c *cowCache) physicalWorkspaceLocked(limits valuelog.COWReadLimits) (*cowReadWorkspace, error) {
+	if c.physicalReader == nil {
+		w, err := admitCOWReadWorkspace(c.budget, limits)
+		if err != nil {
+			return nil, err
+		}
+		c.physicalReader = w
+	}
+	c.physicalReader.limits = limits
+	return c.physicalReader, nil
+}
+
+// Only the winner of an original cache refund gate calls this, after its last
+// cut has withdrawn and before refunding the containing cache allocation.
+func (c *cowCache) closePhysicalReader() {
+	c.physicalMu.Lock()
+	reader := c.physicalReader
+	c.physicalReader = nil
+	if reader != nil {
+		reader.close()
+		reader = nil
+	}
+	c.physicalMu.Unlock()
 }
 
 // Point traversal needs page scratch; a winning cached pointer does not.
@@ -163,6 +190,9 @@ func (w *cowReadWorkspace) file(ptr page.ValuePtr) (*os.File, error) {
 		f, _, err := w.basis.PinnedValueLogFile(ptr.FileID)
 		return f, err
 	}
+	if w.snapshot == nil {
+		return nil, valuelog.ErrCOWReadUnsupported
+	}
 	cut := w.snapshot.cowCut
 	id := memtable.COWResourceID{Kind: cowResourceValueLogFile, ID: uint64(ptr.FileID)}
 	for i := range cut.shards {
@@ -186,7 +216,7 @@ func (w *cowReadWorkspace) file(ptr page.ValuePtr) (*os.File, error) {
 }
 
 func (w *cowReadWorkspace) definition(id uint64) ([]byte, *dictdb.DictionaryReadDefinition, error) {
-	if w.basis != nil {
+	if w.snapshot == nil {
 		return nil, nil, valuelog.ErrCOWReadUnsupported
 	}
 	cut := w.snapshot.cowCut
@@ -358,26 +388,30 @@ func (w *cowReadWorkspace) read(ptr page.ValuePtr, leaf bool, dst []byte) ([]byt
 	if w.basis != nil && shape.Compressed && (shape.DictID != 0 || (shape.Codec != valuelog.BlockCodecSnappy && shape.Codec != valuelog.BlockCodecLZ4)) {
 		return nil, valuelog.ErrCOWReadUnsupported
 	}
-	if !leaf && shape.Compressed && shape.DictID == 0 && w.snapshot != nil {
-		return w.readSharedValue(f, ptr, shape)
+	if shape.Compressed && shape.DictID == 0 && w.snapshot != nil {
+		return w.readSharedRecord(f, ptr, shape, leaf, dst)
 	}
 	return w.readInspected(f, ptr, shape, leaf, dst)
 }
 
 // The caller's admitted read owns f and the inspected pointer; neither escapes
-// this call. Only dictionary-free codec/input/raw backing belongs to the basis.
-// Copy into the original caller workspace before releasing shared scratch.
-func (w *cowReadWorkspace) readSharedValue(f *os.File, ptr page.ValuePtr, shape valuelog.COWRecordShape) ([]byte, error) {
-	basis := w.snapshot.cowCut.basis
-	basis.readMu.Lock()
-	defer basis.readMu.Unlock()
-	shared, err := basis.physicalWorkspaceLocked(w.budget, w.limits)
+// this call. Dictionary-free codec/input/raw backing belongs to the SAME cache
+// across bases. Value copy-out and leaf decode into caller dst finish under its
+// mutex; the shared workspace never retains caller authority or output aliases.
+func (w *cowReadWorkspace) readSharedRecord(f *os.File, ptr page.ValuePtr, shape valuelog.COWRecordShape, leaf bool, dst []byte) ([]byte, error) {
+	c := w.snapshot.cowCache
+	c.physicalMu.Lock()
+	defer c.physicalMu.Unlock()
+	shared, err := c.physicalWorkspaceLocked(w.limits)
 	if err != nil {
 		return nil, err
 	}
-	value, err := shared.readInspected(f, ptr, shape, false, nil)
+	value, err := shared.readInspected(f, ptr, shape, leaf, dst)
 	if err != nil {
 		return nil, err
+	}
+	if leaf {
+		return value, nil // ReadCOWLeafPage returns only the original caller dst.
 	}
 	if err = w.grow(0, uint64(len(value))); err != nil {
 		return nil, err
@@ -432,8 +466,14 @@ var errCOWPhysicalDictionary = errors.New("cow physical leaf requires cut dictio
 
 // Both cowReadMu and basis.readMu are held. No caller cut is stored in reader.
 func (s *Snapshot) cowPhysicalLeafLocked(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
-	w := s.cowCut.basis.reader
-	f, err := w.file(ptr.ValuePtr())
+	return s.cowCut.basis.readPhysicalLeafLocked(s.cowCache, ptr, dst, false)
+}
+
+// basis.readMu protects traversal dst. Physical decoding takes physicalMu only
+// after that mutex; the cache scratch never takes a basis lock in return.
+func (b *cowBackendBasis) readPhysicalLeafLocked(c *cowCache, ptr page.LeafLogPtr, dst []byte, native bool) ([]byte, error) {
+	w := b.reader
+	f, _, err := b.snapshot.PinnedValueLogFile(ptr.ValuePtr().FileID)
 	if err != nil {
 		return nil, err
 	}
@@ -441,8 +481,20 @@ func (s *Snapshot) cowPhysicalLeafLocked(ptr page.LeafLogPtr, dst []byte) ([]byt
 	if err != nil {
 		return nil, err
 	}
-	if shape.DictID != 0 {
+	if !native && shape.DictID != 0 {
 		return nil, errCOWPhysicalDictionary
+	}
+	if native && shape.Compressed && (shape.DictID != 0 || (shape.Codec != valuelog.BlockCodecSnappy && shape.Codec != valuelog.BlockCodecLZ4)) {
+		return nil, valuelog.ErrCOWReadUnsupported
+	}
+	if shape.Compressed {
+		c.physicalMu.Lock()
+		defer c.physicalMu.Unlock()
+		shared, err := c.physicalWorkspaceLocked(w.limits)
+		if err != nil {
+			return nil, err
+		}
+		return shared.readInspected(f, ptr.ValuePtr(), shape, true, dst)
 	}
 	return w.readInspected(f, ptr.ValuePtr(), shape, true, dst)
 }

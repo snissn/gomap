@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -50,13 +51,13 @@ func TestCOWNativeBasisWorkspaceLifetime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = basis.nativeEntryAtRoot(budget, token.RootPageID, []byte("a"), true); !errors.Is(err, memtable.ErrCOWCapacity) || basis.reader != nil {
+	if _, err = basis.nativeEntryAtRoot(db.cow, token.RootPageID, []byte("a"), true); !errors.Is(err, memtable.ErrCOWCapacity) || basis.reader != nil {
 		t.Fatalf("admission refusal: %v", err)
 	}
 	pressure.Close()
 	check := func() {
 		t.Helper()
-		entry, err := basis.nativeEntryAtRoot(budget, token.RootPageID, []byte("a"), true)
+		entry, err := basis.nativeEntryAtRoot(db.cow, token.RootPageID, []byte("a"), true)
 		if err != nil || string(entry.Value) != "old" || cap(entry.Value) != len(entry.Value) {
 			t.Errorf("old physical read: %q %v", entry.Value, err)
 			return
@@ -215,8 +216,8 @@ func TestCOWNativeValueWorkspaceAdmissionAndLifetime(t *testing.T) {
 	}
 	read(a.(backenddb.NativePhysicalValueReader))
 	read(tx.(backenddb.NativePhysicalValueReader))
-	workspace := basis.reader
-	if workspace == nil || len(workspace.codecs) != 1 || workspace.codecs[0] == nil || workspace.codecs[0].codec != valuelog.BlockCodecZSTD || workspace.codecs[0].id != 0 {
+	workspace := db.cow.physicalReader
+	if workspace == nil || workspace.snapshot != nil || workspace.basis != nil || len(workspace.codecs) != 1 || workspace.codecs[0] == nil || workspace.codecs[0].codec != valuelog.BlockCodecZSTD || workspace.codecs[0].id != 0 {
 		t.Fatal("actual pointer did not activate one dictionary-free ZSTD decoder")
 	}
 	codec, receipt := workspace.codecs[0], workspace.lease
@@ -267,10 +268,11 @@ func TestCOWNativeValueWorkspaceAdmissionAndLifetime(t *testing.T) {
 		t.Fatal(err)
 	}
 	wg.Wait()
-	if basis.reader != workspace || workspace.codecs[0] != codec {
+	if db.cow.physicalReader != workspace || workspace.codecs[0] != codec {
 		t.Fatal("distinct opening scopes replaced shared decoder backing")
 	}
-	if err := db.Set([]byte("p"), []byte("new")); err != nil {
+	currentWant := bytes.Repeat([]byte("native-current-pointer"), 256)
+	if err := db.Set([]byte("p"), currentWant); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Checkpoint(); err != nil {
@@ -281,26 +283,78 @@ func TestCOWNativeValueWorkspaceAdmissionAndLifetime(t *testing.T) {
 	}
 	read(b.(backenddb.NativePhysicalValueReader))
 	read(tx.(backenddb.NativePhysicalValueReader))
-	basis, workspace, codec = nil, nil, nil
+	current, err := backend.CaptureNativeSemanticState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer current.Close()
+	currentToken, ok := current.Snapshot().StateToken()
+	if !ok {
+		t.Fatal("missing current physical token")
+	}
+	currentEntry, err := current.Snapshot().GetEntryAtRoot(currentToken.RootPageID, []byte("p"))
+	if err != nil || currentEntry.Flags&node.FlagPointer == 0 {
+		t.Fatalf("current persistent pointer: %+v %v", currentEntry, err)
+	}
+	currentPtr := currentEntry.ValuePtr
+	currentEntry = node.LeafEntry{}
+	checkCurrent := func() {
+		t.Helper()
+		got, err := current.(backenddb.NativePhysicalValueReader).NativeValueAtPointer(currentPtr, nil)
+		if err != nil || !bytes.Equal(got, currentWant) || len(got) != cap(got) {
+			t.Fatalf("current original pointer: length=%d error=%v", len(got), err)
+		}
+		got[0] ^= 1
+	}
+	for i := 0; i < 8; i++ {
+		checkCurrent()
+		read(b.(backenddb.NativePhysicalValueReader))
+	}
+	if db.cow.physicalReader != workspace || workspace.codecs[0] != codec || codec.lease == nil || workspace.snapshot != nil || workspace.basis != nil {
+		t.Fatal("physical handoff duplicated scratch or retained caller authority")
+	}
+	if basis.reader != nil && len(basis.reader.codecs) != 0 {
+		t.Fatal("old physical basis retained dictionary-free decoder")
+	}
 	if err := tx.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := b.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if !errors.Is(receipt.Resize(1), memtable.ErrCOWClosed) {
-		t.Fatal("last original basis edge retained workspace admission")
-	}
-	receipt = nil
 	if _, err := a.(backenddb.NativePhysicalValueReader).NativeValueAtPointer(ptr, nil); !errors.Is(err, backenddb.ErrClosed) {
 		t.Fatalf("closed capture value read: %v", err)
 	}
 	if _, err := tx.(backenddb.NativePhysicalValueReader).NativeValueAtPointer(ptr, nil); !errors.Is(err, backenddb.ErrConditionalTxnClosed) {
 		t.Fatalf("closed transaction value read: %v", err)
 	}
+	// DB.Close withdraws producers, not the original held cut/file authority.
+	// Both warmed physical bases must retain the SAME admitted decoder until
+	// the last capture ends, without attempting fresh admission after Close.
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
+	checkCurrent()
+	read(b.(backenddb.NativePhysicalValueReader))
+	if db.cow.physicalReader != workspace || workspace.codecs[0] != codec {
+		t.Fatal("DB.Close withdrew held decoder backing")
+	}
+	basis, workspace, codec = nil, nil, nil
+	if err := b.Close(); err != nil {
+		t.Fatal(err)
+	}
+	checkCurrent()
+	if err := current.Close(); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for budget.Stats().TotalBytes != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("original cleanup-only worker did not refund last cache edge", budget.Stats())
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if !errors.Is(receipt.Resize(1), memtable.ErrCOWClosed) {
+		t.Fatal("last original cache edge retained workspace admission")
+	}
+	receipt = nil
 	if stats := budget.Stats(); stats.TotalBytes != 0 || stats.Sources != 0 || stats.Views != 0 {
 		t.Fatal("final original ownership", stats)
 	}
