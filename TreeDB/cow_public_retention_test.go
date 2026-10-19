@@ -97,6 +97,18 @@ func TestCOWPublicRetentionRefusalDrainAndResume(t *testing.T) {
 					}
 				}
 			}
+			// Retain the pressure generation itself so background handoff cannot
+			// free its slots before the plateau retries finish.
+			snapshot := database.AcquireSnapshot()
+			if snapshot == nil {
+				t.Fatal("current pressure cut capture refused")
+			}
+			pinned = append(pinned, snapshot)
+			for _, key := range keys {
+				if got, err := snapshot.Get(key); err != nil || !bytes.Equal(got, value(2)) {
+					t.Fatalf("pinned pressure cut key%q len%d err%v", key, len(got), err)
+				}
+			}
 			if got := cache.COWMemoryStats().Generations; got != 8 {
 				t.Fatalf("two whole predecessor cuts plus current and parked successor generations=%d, want8", got)
 			}
