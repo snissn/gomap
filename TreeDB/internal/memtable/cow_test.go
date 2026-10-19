@@ -402,7 +402,7 @@ func TestCOWDependencyLayoutContract(t *testing.T) {
 	if items.Type.Elem().Size() != unsafe.Sizeof(cowPairLayout{}) {
 		t.Fatalf("pair size %d mirror %d", items.Type.Elem().Size(), unsafe.Sizeof(cowPairLayout{}))
 	}
-	for _, name := range []string{"isoid", "count", "items", "children"} {
+	for _, name := range []string{"ownership", "isoid", "count", "items", "children"} {
 		got, ok := actualNode.FieldByName(name)
 		want, _ := reflect.TypeOf(cowNodeLayout{}).FieldByName(name)
 		if !ok || got.Offset != want.Offset {
