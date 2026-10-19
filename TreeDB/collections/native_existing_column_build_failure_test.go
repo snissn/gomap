@@ -13,6 +13,7 @@ import (
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/workstats"
 )
@@ -326,7 +327,7 @@ func runNativeColumnAcceptedBuildFailure(t *testing.T, two bool) {
 	if failedIdentity == (rootpublication.StableIdentity{}) || failedIdentity != outputs[targetNamespace] {
 		t.Fatal("missing exact failed second output identity")
 	}
-	checkOutputPins := func() {
+	checkOutputPins := func(wantDeleteError error) {
 		t.Helper()
 		var previous rootpublication.StableIdentity
 		for _, collection := range collections {
@@ -336,7 +337,7 @@ func runNativeColumnAcceptedBuildFailure(t *testing.T, two bool) {
 				t.Fatalf("original partial output lost exact independent pin: namespace=%s identity=%+v", namespace, identity)
 			}
 			previous = identity
-			if lease, err := handle.ValueLogIdentityPinRegistry().BeginDelete(identity); !errors.Is(err, rootpublication.ErrResourcePinned) {
+			if lease, err := handle.ValueLogIdentityPinRegistry().BeginDelete(identity); lease != nil || !errors.Is(err, wantDeleteError) {
 				if lease != nil {
 					lease.Abort()
 				}
@@ -344,7 +345,7 @@ func runNativeColumnAcceptedBuildFailure(t *testing.T, two bool) {
 			}
 		}
 	}
-	checkOutputPins()
+	checkOutputPins(rootpublication.ErrResourcePinned)
 	if stats := handle.ValueLogIdentityPinRegistry().Stats(); stats.ActivePins == 0 || stats.ActiveIdentities == 0 || stats.ActiveStableNamespaceLinks == 0 {
 		t.Fatalf("partial output authority lost: %+v", stats)
 	}
@@ -375,7 +376,9 @@ func runNativeColumnAcceptedBuildFailure(t *testing.T, two bool) {
 	}
 	// Failed accepted work is terminal for this owner. Do not reset its ledger,
 	// retry output construction, or manufacture cleanup after the failed Close.
-	checkOutputPins()
+	// Registry Close makes new deletion leases terminal while retaining each
+	// original output pin until its real release.
+	checkOutputPins(retainedalloc.ErrClosed)
 	fmt.Println(marker)
 	os.Exit(exitCode)
 }
