@@ -1160,7 +1160,9 @@ func (db *DB) ensureValueLogSegmentRegisteredAt(path string, fileID uint32) (boo
 }
 
 func (db *DB) isLeafGenerationSegmentPath(path string) bool {
-	if db == nil || path == "" || db.leafGenerationManifest == nil {
+	// Registration runs outside publication locks. Classification depends on
+	// the immutable layout option, not the concurrently replaced manifest.
+	if db == nil || path == "" || !db.indexOuterLeavesInValueLog {
 		return false
 	}
 	leafDir := LeafLogDirPath(db.dir)
