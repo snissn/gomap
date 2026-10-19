@@ -129,8 +129,9 @@ func TestNativeExistingJSONIndexDDLLifecycle(t *testing.T) {
 				t.Fatalf("duplicate backfill must refuse atomically: %v", err)
 			}
 			assertUnchanged(lsn, sequence)
-			if _, err := users.FindByIndexValue("unique_city", "hnl"); !errors.Is(err, collections.ErrIndexNotFound) {
-				t.Fatalf("failed unique index became visible: %v", err)
+			checkMetadata("city", "email")
+			if ids, err := users.FindByIndexValue("unique_city", "hnl"); err != nil || ids != nil {
+				t.Fatalf("failed unique index lookup IDs=%q err=%v, want nil/nil", ids, err)
 			}
 			want["u1"] = []byte(`{"email":"a@example.com","city":"bos"}`)
 			if _, err := users.UpdateBatch([]collections.UpdateBatchItem{{DocumentID: []byte("u1"), Update: func([]byte) ([]byte, bool, error) { return want["u1"], true, nil }}}); err != nil {
@@ -177,8 +178,8 @@ func TestNativeExistingJSONIndexDDLLifecycle(t *testing.T) {
 				t.Fatalf("stale data plan committed across DDL: %v", err)
 			}
 			assertUnchanged(lsn, sequence)
-			if _, err := users.FindByIndexValue("city", "hnl"); !errors.Is(err, collections.ErrIndexNotFound) {
-				t.Fatalf("dropped current index: %v", err)
+			if ids, err := users.FindByIndexValue("city", "hnl"); err != nil || ids != nil {
+				t.Fatalf("dropped current index IDs=%q err=%v, want nil/nil", ids, err)
 			}
 			checkIndex("email", "c@example.com", "u3")
 			checkHeldIndex := func() {
@@ -226,8 +227,8 @@ func TestNativeExistingJSONIndexDDLLifecycle(t *testing.T) {
 			}
 			checkMetadata()
 			for _, name := range []string{"city", "email"} {
-				if _, err := users.FindByIndexValue(name, "unused"); !errors.Is(err, collections.ErrIndexNotFound) {
-					t.Fatalf("DropAllIndexes %s: %v", name, err)
+				if ids, err := users.FindByIndexValue(name, "unused"); err != nil || ids != nil {
+					t.Fatalf("DropAllIndexes %s IDs=%q err=%v, want nil/nil", name, ids, err)
 				}
 			}
 			want["u5"] = []byte(`{"email":"e@example.com","city":"sea"}`)
@@ -313,8 +314,8 @@ func TestNativeExistingJSONIndexDDLLifecycle(t *testing.T) {
 			for _, query := range []struct{ id, email string }{{"u1", "a@example.com"}, {"u2", "b@example.com"}, {"u3", "c@example.com"}, {"u4", "d@example.com"}, {"u5", "e@example.com"}} {
 				checkIndex("email", query.email, query.id)
 			}
-			if _, err := users.FindByIndexValue("city", "hnl"); !errors.Is(err, collections.ErrIndexNotFound) {
-				t.Fatalf("dropped schema reappeared after reopen: %v", err)
+			if ids, err := users.FindByIndexValue("city", "hnl"); err != nil || ids != nil {
+				t.Fatalf("dropped schema reappeared after reopen IDs=%q err=%v, want nil/nil", ids, err)
 			}
 			closeOriginal()
 		})
