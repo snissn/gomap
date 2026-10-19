@@ -23,6 +23,8 @@ import (
 // payloads unapplied; neither a copied WAL nor a JSON insert stands in for them.
 func TestNativeExistingTypedOperations(t *testing.T) {
 	if dir := os.Getenv("GOMAP_TYPED_OPS_CRASH_DIR"); dir != "" {
+		// Keep the exact unapplied replay basis; periodic GC may checkpoint.
+		t.Setenv("TREEDB_DISABLE_VLOG_GENERATION_LOOP", "1")
 		runNativeTypedOperations(t, dir, os.Getenv("GOMAP_TYPED_OPS_FAMILY"), os.Getenv("GOMAP_TYPED_OPS_MODE"))
 		return
 	}
@@ -298,14 +300,14 @@ func runNativeTypedOperations(t *testing.T, dir, family, mode string) {
 	}
 	checkHeld()
 	if mode == "typed-insert" {
-		if indexedCRUDAppliedLSN(t, handle) != 1 {
-			t.Fatal("insert child did not keep basis1")
+		if applied := indexedCRUDAppliedLSN(t, handle); applied != 1 {
+			t.Fatalf("insert child did not keep basis1: applied=%d", applied)
 		}
 		if err := handle.FlushCommandWAL(true); err != nil {
 			t.Fatal(err)
 		}
-		if indexedCRUDAppliedLSN(t, handle) != 1 {
-			t.Fatal("WAL flush applied typed insert")
+		if applied := indexedCRUDAppliedLSN(t, handle); applied != 1 {
+			t.Fatalf("WAL flush applied typed insert: applied=%d", applied)
 		}
 		t.Log("TYPED OPS UNAPPLIED typed-insert basis=1 accepted=2")
 		os.Exit(97)

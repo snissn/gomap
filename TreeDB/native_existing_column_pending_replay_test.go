@@ -108,6 +108,8 @@ func testNativeColumnPendingCase(t *testing.T, family string, fixture nativeColu
 	t.Helper()
 	const sentinel = 97
 	if dir := os.Getenv("GOMAP_COLUMN_PENDING_CRASH_DIR"); dir != "" {
+		// Keep the exact unapplied replay basis; periodic GC may checkpoint.
+		t.Setenv("TREEDB_DISABLE_VLOG_GENERATION_LOOP", "1")
 		runNativeColumnPending(t, dir, true, fixture)
 		return
 	}

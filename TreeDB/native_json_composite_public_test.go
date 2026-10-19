@@ -19,6 +19,8 @@ func TestNativeJSONPublicRawTwoCollectionsAtomicTxn(t *testing.T) {
 	childDir := os.Getenv("GOMAP_NATIVE_COMPOSITE_CRASH_DIR")
 	profiles := []Profile{ProfileCommandWALDurable, ProfileCommandWALRelaxed, ProfileNoWALFast}
 	if childDir != "" {
+		// Keep the exact unapplied replay basis; periodic GC may checkpoint.
+		t.Setenv("TREEDB_DISABLE_VLOG_GENERATION_LOOP", "1")
 		profiles = profiles[:1]
 	}
 	for _, profile := range profiles {

@@ -22,6 +22,10 @@ import (
 func TestNativeExistingIndexedJSONCRUDSingletonReplay(t *testing.T) {
 	const sentinel = 97
 	childDir, childProfile := os.Getenv("GOMAP_INDEXED_CRUD_CRASH_DIR"), os.Getenv("GOMAP_INDEXED_CRUD_PROFILE")
+	if childDir != "" {
+		// Keep the exact unapplied replay basis; periodic GC may checkpoint.
+		t.Setenv("TREEDB_DISABLE_VLOG_GENERATION_LOOP", "1")
+	}
 	for _, profile := range []Profile{ProfileCommandWALDurable, ProfileCommandWALRelaxed, ProfileNoWALFast} {
 		if childDir != "" && string(profile) != childProfile {
 			continue

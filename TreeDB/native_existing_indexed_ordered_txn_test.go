@@ -23,6 +23,10 @@ import (
 func TestNativeExistingIndexedJSONOrderedRowsAtomicReplay(t *testing.T) {
 	const sentinel = 97
 	childDir, childProfile := os.Getenv("GOMAP_ORDERED_ROWS_DIR"), os.Getenv("GOMAP_ORDERED_ROWS_PROFILE")
+	if childDir != "" {
+		// Keep the exact unapplied replay basis; periodic GC may checkpoint.
+		t.Setenv("TREEDB_DISABLE_VLOG_GENERATION_LOOP", "1")
+	}
 	for _, profile := range []Profile{ProfileCommandWALDurable, ProfileCommandWALRelaxed, ProfileNoWALFast} {
 		if childDir != "" && childProfile != string(profile) {
 			continue

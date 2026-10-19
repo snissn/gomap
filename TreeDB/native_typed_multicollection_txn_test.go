@@ -18,6 +18,8 @@ import (
 
 func TestNativeTypedMultiCollectionTxn(t *testing.T) {
 	if dir := os.Getenv("GOMAP_TYPED_MULTI_CRASH_DIR"); dir != "" {
+		// Keep the exact unapplied replay basis; periodic GC may checkpoint.
+		t.Setenv("TREEDB_DISABLE_VLOG_GENERATION_LOOP", "1")
 		runNativeTypedMultiCollectionTxn(t, dir, true)
 		return
 	}

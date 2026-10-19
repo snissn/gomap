@@ -18,6 +18,8 @@ func TestNativeExistingCollectionPublicLifecycle(t *testing.T) {
 	child := os.Getenv("GOMAP_EXISTING_COLLECTION_CRASH_DIR")
 	profiles := []Profile{ProfileCommandWALDurable, ProfileCommandWALRelaxed, ProfileNoWALFast}
 	if child != "" {
+		// Keep the exact unapplied replay basis; periodic GC may checkpoint.
+		t.Setenv("TREEDB_DISABLE_VLOG_GENERATION_LOOP", "1")
 		profiles = profiles[:1]
 	}
 	for _, profile := range profiles {
@@ -304,6 +306,10 @@ func TestNativeExistingCollectionJournalSyncCrashReopen(t *testing.T) {
 	const childDirEnv = "GOMAP_NATIVE_JOURNAL_SYNC_CRASH_DIR"
 	const childProfileEnv = "GOMAP_NATIVE_JOURNAL_SYNC_CRASH_PROFILE"
 	childDir := os.Getenv(childDirEnv)
+	if childDir != "" {
+		// Preserve the journal-only boundary without a periodic GC checkpoint.
+		t.Setenv("TREEDB_DISABLE_VLOG_GENERATION_LOOP", "1")
+	}
 	options := func(profile Profile, dir string) Options {
 		opts := OptionsFor(profile, dir)
 		opts.MemtableMode = "cow_btree"
