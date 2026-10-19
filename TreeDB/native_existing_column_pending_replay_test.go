@@ -175,7 +175,7 @@ func testNativeColumnPendingCase(t *testing.T, family string, fixture nativeColu
 }
 
 func nativeColumnPendingMeta(fixture nativeColumnPendingCase) *collections.CollectionMeta {
-	encoding := collections.ColumnRetainedPayloadEncodingSemanticStreamV1
+	var encoding collections.ColumnRetainedPayloadEncoding = collections.ColumnRetainedPayloadEncodingSemanticStreamV1
 	if fixture.typedSeed != nil {
 		encoding = collections.ColumnRetainedPayloadEncodingJSON
 	}
