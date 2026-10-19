@@ -113,6 +113,57 @@ func TestIdentityPinRegistryRejectsUnobservedPin(t *testing.T) {
 	}
 }
 
+func TestIdentityPinClonePreservesConsumedObservationCustody(t *testing.T) {
+	registry := NewIdentityPinRegistry()
+	defer registry.Close()
+	identity := testStableIdentity(1)
+	if err := registry.Observe(identity); err != nil {
+		t.Fatal(err)
+	}
+	original, err := registry.Pin(identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer original.Release()
+	if err := registry.Unobserve(identity); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.Pin(identity); !errors.Is(err, ErrResourceConflict) {
+		t.Fatalf("fresh Pin without observation = %v, want ErrResourceConflict", err)
+	}
+	clone, err := original.clone()
+	if err != nil {
+		t.Fatalf("clone retained pin: %v", err)
+	}
+	defer clone.Release()
+	original.Release()
+	if _, err := original.clone(); !errors.Is(err, ErrResourceOwnership) {
+		t.Fatalf("clone released pin = %v, want ErrResourceOwnership", err)
+	}
+	if _, err := registry.BeginDelete(identity); !errors.Is(err, ErrResourcePinned) {
+		t.Fatalf("delete while clone survives = %v, want ErrResourcePinned", err)
+	}
+	clone.Release()
+	if _, err := clone.clone(); !errors.Is(err, ErrResourceOwnership) {
+		t.Fatalf("clone released last pin = %v, want ErrResourceOwnership", err)
+	}
+	if got := registry.ActivePins(); got != 0 {
+		t.Fatalf("active pins after last release = %d, want 0", got)
+	}
+	if got := registry.ActiveIdentities(); got != 0 {
+		t.Fatalf("active identities after last release = %d, want 0", got)
+	}
+	lease, err := registry.BeginDelete(identity)
+	if err != nil {
+		t.Fatalf("delete after last pin: %v", err)
+	}
+	lease.CommitDeleted()
+	registry.Close()
+	if got := registry.MetadataOwner().Bytes(); got != 0 {
+		t.Fatalf("registry bytes after Close = %d, want 0", got)
+	}
+}
+
 func TestIdentityPinRegistryRejectsLatePinAfterFinalObserverRetires(t *testing.T) {
 	registry := NewIdentityPinRegistry()
 	identity := testStableIdentity(1)

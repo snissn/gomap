@@ -732,7 +732,7 @@ func (token *StableResourceToken) cloneSharedPinnedDirectory(logicalLane, resour
 	var identityPin *IdentityPin
 	if token.identityPin != nil {
 		var err error
-		identityPin, err = token.identityPin.registry.Pin(token.identity)
+		identityPin, err = token.identityPin.clone()
 		if err != nil {
 			return nil, fmt.Errorf("pin stable resource identity: %w", err)
 		}

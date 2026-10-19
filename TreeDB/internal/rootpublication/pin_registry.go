@@ -216,6 +216,36 @@ func (registry *IdentityPinRegistry) Pin(identity StableIdentity) (*IdentityPin,
 	return &IdentityPin{registry: registry, identity: identity, state: state}, nil
 }
 
+// clone extends an existing exact physical edge, rather than admitting a new
+// producer observation. Its source pin keeps this same state alive even after
+// the producer has consumed its final observation.
+func (pin *IdentityPin) clone() (*IdentityPin, error) {
+	if pin == nil {
+		return nil, ErrResourceOwnership
+	}
+	pin.releaseMu.Lock()
+	defer pin.releaseMu.Unlock()
+	if pin.released || pin.registry == nil || pin.state == nil {
+		return nil, ErrResourceOwnership
+	}
+	registry := pin.registry
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	state := registry.states.get(pin.identity)
+	if state != pin.state || state.pins == 0 || state.retired {
+		return nil, ErrResourceConflict
+	}
+	if state.deleting {
+		return nil, ErrResourceDeletionInProgress
+	}
+	if state.pins == ^uint64(0) || registry.activePins == ^uint64(0) {
+		return nil, retainedalloc.ErrCapacity
+	}
+	state.pins++
+	registry.activePins++
+	return &IdentityPin{registry: registry, identity: pin.identity, state: state}, nil
+}
+
 func (registry *IdentityPinRegistry) release(identity StableIdentity) error {
 	identity, err := validateRegistryIdentity(identity)
 	if err != nil {

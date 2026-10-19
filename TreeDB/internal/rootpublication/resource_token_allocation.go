@@ -307,7 +307,7 @@ func (token *StableResourceToken) cloneOwnedPinnedDirectory(lane, id, path strin
 	}
 	var identityPin *IdentityPin
 	if spec.PinRegistry != nil {
-		identityPin, err = spec.PinRegistry.Pin(token.identity)
+		identityPin, err = token.identityPin.clone()
 		if err != nil {
 			if directory != nil {
 				directory.Release()
