@@ -786,7 +786,16 @@ func TestPrimaryBorrowedCohortRebuildFailureReleasesPrivateManifests(t *testing.
 		return nil
 	})
 	if err != nil {
-		t.Fatal(err)
+		var original *originalDBCleanupFailure
+		if errors.As(err, &original) {
+			original.mu.Lock()
+			causes := original.causes
+			original.mu.Unlock()
+			for i, cause := range causes {
+				t.Logf("original cleanup cause[%d]=%T %v", i, cause, cause)
+			}
+		}
+		t.Fatalf("refused rebuild cleanup: ownership=%t stale=%t closed=%t: %v", errors.Is(err, rootpublication.ErrResourceOwnership), errors.Is(err, primaryarena.ErrStale), errors.Is(err, os.ErrClosed), err)
 	}
 	loan.wrapper.Close()
 	if !oldArena.MetadataOwner().PhysicalClosed() || oldArena.MetadataOwner().Bytes() != 0 || f.budget.Stats().ExternalBytes != 0 || f.budget.Stats().ExternalLeases != 0 {

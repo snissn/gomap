@@ -628,24 +628,36 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 			retErr = errors.Join(retErr, db.releaseCapturedRootResources(resources))
 		}
 	}()
-	defer func() {
-		if replacementRuntime == nil {
-			return
+	// Refused private rebuilds must stop and consume their original handoff
+	// while the replacement's physical metadata owner still admits it. Closing
+	// the replacement pager first would make TakeRecoveryHandoff fail ErrClosed.
+	releaseReplacementRuntime := func() error {
+		runtime := replacementRuntime
+		if runtime == nil {
+			return nil
 		}
-		handoff, handoffErr := stopRootPublicationRuntimeV1(replacementRuntime)
+		replacementRuntime = nil
+		handoff, handoffErr := stopRootPublicationRuntimeV1(runtime)
+		var cleanupErr error
 		if handoffErr != nil {
 			db.publicationPoisoned.Store(true)
-			retErr = errors.Join(retErr, ErrRecoveryRequired, handoffErr)
+			cleanupErr = errors.Join(ErrRecoveryRequired, handoffErr)
 		}
-		retErr = errors.Join(retErr, replacementRuntime.release())
+		cleanupErr = errors.Join(cleanupErr, runtime.release())
 		if err := handoff.ReleaseWithError(); err != nil {
 			db.retainOriginalCleanupError(err)
-			retErr = errors.Join(retErr, ErrRecoveryRequired, err)
+			cleanupErr = errors.Join(cleanupErr, ErrRecoveryRequired, err)
 		}
-	}()
+		return cleanupErr
+	}
+	defer func() { retErr = errors.Join(retErr, releaseReplacementRuntime()) }()
 	var replacementCleanupErr error
 	defer func() { retErr = errors.Join(retErr, replacementCleanupErr) }()
 	closeNewPager := func() error {
+		if err := releaseReplacementRuntime(); err != nil {
+			replacementCleanupErr = errors.Join(replacementCleanupErr, err)
+			return err // The retained original failure still owns its operands.
+		}
 		err := replacementGen.close()
 		if err != nil && replacementCleanupErr == nil {
 			replacementCleanupErr = err

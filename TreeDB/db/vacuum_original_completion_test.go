@@ -185,7 +185,7 @@ func TestOfflineReplacementOriginalPagerCompletion(t *testing.T) {
 // the final manifest before its record/capsule is sealed.
 func TestVacuumPrimaryProofOuterLeafSegmentsSealAfterAllRoots(t *testing.T) {
 	dir := t.TempDir()
-	opts := Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed,
+	opts := Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed,
 		DisableBackgroundPrune: true, ChunkSize: 64 << 10, KeepRecent: 1, PreferAppendAlloc: true, IndexOuterLeavesInValueLog: true}
 	d, err := Open(opts)
 	if err != nil {
@@ -371,7 +371,7 @@ func TestPrimaryJointNamespaceRebindKeepsOriginalParents(t *testing.T) {
 			} else {
 				dir = t.TempDir()
 			}
-			d, err := Open(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+			d, err := Open(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -762,7 +762,7 @@ func TestOfflineSourceLateNamespaceRefusalRetainsOriginalLock(t *testing.T) {
 	for _, fault := range []bool{false, true} {
 		t.Run(map[bool]string{false: "semantic-refusal", true: "late-parent-refusal"}[fault], func(t *testing.T) {
 			dir := t.TempDir()
-			opts := Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true}
+			opts := Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true}
 			seed, err := Open(opts)
 			if err != nil {
 				t.Fatal(err)

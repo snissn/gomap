@@ -18,7 +18,7 @@ import (
 
 func TestPrimaryCapsuleOrdinaryAuthorityAndExactFallbackV6(t *testing.T) {
 	dir := t.TempDir()
-	opts := Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true}
+	opts := Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true}
 	db, e := Open(opts)
 	if e != nil {
 		t.Fatal(e)
@@ -117,7 +117,7 @@ func TestPrimaryCapsuleOrdinaryAuthorityAndExactFallbackV6(t *testing.T) {
 
 func TestPrimaryCapsulePostInstallFenceFailureRetainsCustodyV6(t *testing.T) {
 	dir := t.TempDir()
-	opts := Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true}
+	opts := Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true}
 	db, e := Open(opts)
 	if e != nil {
 		t.Fatal(e)
@@ -194,7 +194,7 @@ func TestPrimaryCapsulePostInstallFenceFailureRetainsCustodyV6(t *testing.T) {
 }
 
 func TestPrimaryCapsuleCapturedRecoverableReadRootsSurviveSlotReuseV6(t *testing.T) {
-	db, e := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+	db, e := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -247,7 +247,7 @@ func TestPrimaryCapsuleCapturedRecoverableReadRootsSurviveSlotReuseV6(t *testing
 // successful-vacuum or crash-recovery qualification.
 func TestPrimaryCapsuleVacuumCutRefusesBeforeNamespaceMutationV6(t *testing.T) {
 	dir := t.TempDir()
-	db, e := Open(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+	db, e := Open(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 	if e != nil {
 		t.Fatal(e)
 	}

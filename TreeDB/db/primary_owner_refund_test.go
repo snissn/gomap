@@ -43,7 +43,7 @@ func (l *primaryRefundLease) Close() { l.actual.Close() }
 func TestPrimaryOwnerRefundFollowsOriginalCallerAliasAndUnlock(t *testing.T) {
 	for _, route := range []string{"generation", "snapshot", "pager"} {
 		t.Run(route, func(t *testing.T) {
-			d, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+			d, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 			if err != nil {
 				t.Fatal(err)
 			}

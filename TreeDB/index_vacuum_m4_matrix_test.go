@@ -314,7 +314,7 @@ func runIndexVacuumM4MatrixCell(t *testing.T, fixture indexVacuumM4Fixture, lane
 	cell.Details["freelist_reclaimable_pages_before"] = strconv.FormatUint(report.FreelistReclaimablePages, 10)
 	cell.Details["freelist_reclaimable_ratio_ppm_before"] = strconv.FormatUint(report.FreelistReclaimableRatioPPM, 10)
 	cell.HighDebt = report.FreelistReclaimableValid && report.FreelistReclaimableRatioPPM >= 500_000
-	if !opts.IndexOuterLeavesInValueLog && !cell.HighDebt {
+	if !cell.HighDebt {
 		t.Fatalf("fixture failed to establish real DATA freelist debt: %+v", report)
 	}
 	// Every deterministic matrix fixture is seeded with reclaimable index debt.
@@ -492,12 +492,12 @@ func openIndexVacuumM4Fixture(t *testing.T, opts Options, fixture indexVacuumM4F
 			t.Fatalf("close generation=%d: %v", generation, err)
 		}
 	}
-	if !opts.IndexOuterLeavesInValueLog {
-		// Small PRIMARY-only updates can advance slot/parent horizons without
-		// materializing another DATA freelist generation. Seed actual retired
-		// DATA bases through three bounded rebuilds; one or two leave the inline
-		// fixture with zero reclaimable pages. Keep the resulting debt explicit
-		// so every maintenance lane must exercise its original production trigger.
+	{
+		// Seed real retired DATA bases for every layout, including outer leaves.
+		// Ordinary overwrites alone leave the outer-leaf fixture too small to
+		// distinguish its fixed post-compaction metadata from reclaimable debt.
+		// Keep the same >=50% debt precondition and >=40% shrink gate in every
+		// supported lane; these bounded rebuilds create actual producer debt.
 		for rebuild := 0; rebuild < 3; rebuild++ {
 			before, err := database.backend.IndexVacuumTriggerReport()
 			if err != nil {
