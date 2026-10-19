@@ -85,7 +85,7 @@ func BenchmarkDependencyDirectoryV2OwnedDeltaPublication(b *testing.B) {
 				if err := registry.Observe(identity); err != nil {
 					return nil, err
 				}
-				token, err := rootpublication.NewStableResourceToken(rootpublication.StableResourceSpec{MetadataOwner: owner, PinRegistry: registry, OriginalObservation: registry, Kind: rootpublication.ResourceColumnAsset, LogicalLane: "columns", ResourceID: "1", Generation: 1, DiagnosticPath: "columns/1", File: file, Frontier: rootpublication.DurableFrontier{Bytes: fileBytes}, Stability: rootpublication.ResourceImmutable, Reachability: rootpublication.ReachabilityColumnManifest, LogicalObligations: values, ContentSynced: true})
+				token, err := rootpublication.NewStableResourceToken(rootpublication.StableResourceSpec{MetadataOwner: owner, PinRegistry: registry, OriginalObservation: registry, Kind: rootpublication.ResourceColumnAsset, LogicalLane: "columns", ResourceID: "1", Generation: 1, DiagnosticPath: "columns/1", File: file, Frontier: rootpublication.DurableFrontier{Bytes: fileBytes}, Reachability: rootpublication.ReachabilityColumnManifest, LogicalObligations: values, ContentSynced: true})
 				if err != nil {
 					return nil, errors.Join(err, registry.Unobserve(identity))
 				}
