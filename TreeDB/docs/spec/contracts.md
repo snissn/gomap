@@ -469,7 +469,13 @@ read/precondition validation.
   transaction lock as the production design.
 - Recent committed write fingerprints are retained only while active
   transactions can conflict with them. They are in-memory conflict-detection
-  state, not persistent tombstones.
+  state, not persistent tombstones. The adaptive cache still advances its
+  logical publication sequence when no conditional transaction is active,
+  without copying those publications into conflict history. Transaction
+  enrollment and opening snapshot capture exclude publication through the same
+  write gate; an existing consumer keeps full bounded history (including ABA
+  conflicts and expiry). Inactive writes do not reset the retained history or
+  its coverage floor. COW uses its separate accepted-prefix journal.
 - Range reads and `DeleteRange` must either participate in documented range
   guards or fail closed with a stable unsupported/conflict error. They must not
   silently under-detect conflicts.
