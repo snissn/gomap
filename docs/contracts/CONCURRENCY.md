@@ -144,3 +144,11 @@ handle borrows the public DB lifetime: close the public DB rather than closing
 the borrowed backend. Raw cache writes and native publications share that same
 owner; ordinary direct backend publication aliases remain fenced. There is no
 lazy attachment or migration between these constructor lifecycles.
+
+Native standalone scalar JSON index DDL validates the entire captured primary
+range and writes the collection's existing catalog-name conflict effect before
+canonical assignment. Native data transactions retain that catalog dependency
+for every bound collection, including read-only inputs to a writing transaction;
+schema ABA therefore invalidates a stale plan. Held read views keep the original
+immutable schema and index roots. Unrelated physical checkpoint progress does
+not itself constitute a logical schema conflict.

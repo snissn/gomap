@@ -67,7 +67,7 @@ limits still apply; native staging also independently copies caller inputs.
 
 These are explicit eligibility limits of the provisional implementation. Broad
 producer migration remains required: assigned/apply and Raft producers,
-import/source controls, multi-column and additional typed layouts, standalone schema/index/drop/rename, and derived-index lifecycle still
+import/source controls, multi-column and additional typed layouts, standalone schema/drop/rename, non-scalar index DDL and derived-index lifecycle still
 need their complete public-path integration. Staged transactional DDL and
 approximate vector/hybrid or asynchronous text predicates in writing transactions
 remain excluded by the accepted capability contract.
@@ -161,3 +161,32 @@ retirement, current documentation and mature current-head review/CI. Those
 obligations remain open. DATA is selected for new stores; explicit or persisted
 PRIMARY compatibility remains until actual consumers migrate and the retirement
 gates pass. This document does not retire that path or claim a performance gain.
+
+## Standalone scalar index DDL
+
+Activated ordinary JSON handles support `CreateIndex`, `DropIndex`,
+`DropIndexes` and `DropAllIndexes` through one immutable catalog transition.
+Creation backfills the complete captured primary cut, including pending rows,
+using the maintained scalar encoder and uniqueness checks. A duplicate unique
+backfill refuses before canonical assignment. Typed, text, vector, compound and
+multikey index DDL remain outside this capability.
+
+Every transition writes the existing catalog-name conflict effect. Native
+transactions depend on that name even when the collection is only read to derive
+another write, so schema ABA invalidates the original transaction. Backfill also
+retains a complete primary range dependency: concurrent document changes cannot
+silently escape the new index. A directly registered singleton preparation has
+no reprepare and keeps the stricter original exact-state basis check. Physical
+progress alone can rebase the captured DDL plan onto the latest compatible
+immutable state. Primary/template domains and their resources remain shared;
+only schema-derived index domains are replaced. Held views retain their old
+schema and index interpretation.
+
+Catalog index mutation uses command kind 201 and payload format 17; create
+collection remains kind 200. Startup validates the prior schema/incarnation and
+reconstructs the complete new indexes in the original single replay build group.
+The command contains no predicted LSN, physical roots or new schema epoch.
+Temporary schema/JSON construction backing is admitted before normalization and
+encoding and released after synchronous publication drops its borrowed aliases.
+This is a bounded operation allowance, not a claim that Go's existing global
+JSON encoder cache disappears at receipt release.

@@ -4366,6 +4366,9 @@ func (c *Collection) CreateIndex(def IndexDefinition) (*CollectionMeta, error) {
 	if c == nil {
 		return nil, errCollectionNil
 	}
+	if c.nativeJSON != nil {
+		return c.nativeJSON.mutateIndexes(c.meta.Name, &def, nil, false)
+	}
 	if c.db == nil {
 		return nil, errCollectionDBNil
 	}
@@ -4753,6 +4756,9 @@ func (c *Collection) DropAllIndexes() (*CollectionMeta, error) {
 func (c *Collection) dropIndexes(names map[string]struct{}, all bool) (*CollectionMeta, error) {
 	if c == nil {
 		return nil, errCollectionNil
+	}
+	if c.nativeJSON != nil {
+		return c.nativeJSON.mutateIndexes(c.meta.Name, nil, names, all)
 	}
 	if c.db == nil {
 		return nil, errCollectionDBNil

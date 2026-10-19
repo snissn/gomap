@@ -28,13 +28,23 @@ func (db *DB) StageCompositeRawReplay(intent *CommandWALIntent, b *Batch, payloa
 // AttachCompositeReplayGroup preserves the DB-minted callback-scoped replay
 // token through the final group's single publication. No new append occurs.
 func (b *Batch) AttachCompositeReplayGroup(intent *CommandWALIntent, group *RootPublicationBuildGroup) error {
+	return b.attachNativeReplayGroup(intent, group, commitlog.CommandKindCompositeMutation)
+}
+
+// AttachCatalogIndexReplayGroup uses the same original callback-scoped replay
+// authority for one logical catalog index transition and its complete roots.
+func (b *Batch) AttachCatalogIndexReplayGroup(intent *CommandWALIntent, group *RootPublicationBuildGroup) error {
+	return b.attachNativeReplayGroup(intent, group, commitlog.CommandKindCatalogIndexMutation)
+}
+
+func (b *Batch) attachNativeReplayGroup(intent *CommandWALIntent, group *RootPublicationBuildGroup, kind commitlog.CommandKind) error {
 	if b == nil || b.db == nil {
 		return ErrClosed
 	}
 	if err := b.db.ValidateCommandWALReplayOperationV1(intent); err != nil {
 		return err
 	}
-	if intent.inner.kind != commitlog.CommandKindCompositeMutation {
+	if intent.inner.kind != kind {
 		return ErrCommandWALRejected
 	}
 	if err := b.SetRootPublicationBuildGroup(group, true); err != nil {
