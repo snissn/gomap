@@ -206,6 +206,12 @@ func (db *DB) pointSuccessorOwnedBackend(view *memtableView, start, end []byte) 
 		return pointSuccessorCandidate{}, true, err
 	}
 	entry, found, err := provider.SeekGEOwnedAtRoot(rootID, start, end)
+	// Only a direct payload failure can defer materialization until winner
+	// selection. In particular, errors.Join with failed capture cleanup must
+	// remain immediate; errors.As/Is would incorrectly bypass that custody.
+	if _, pointerFailure := err.(*backenddb.OwnedSuccessorPointerError); pointerFailure {
+		return pointSuccessorCandidate{}, false, nil
+	}
 	return pointSuccessorCandidate{key: entry.Key, value: entry.Value, ptr: entry.ValuePtr, flags: entry.Flags, revision: entry.Revision, found: found}, true, err
 }
 

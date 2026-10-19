@@ -8,6 +8,16 @@ import (
 	"github.com/snissn/gomap/TreeDB/tree"
 )
 
+// OwnedSuccessorPointerError identifies only eager pointer payload failure after
+// successful traversal. Cache callers may retry the metadata-only cursor only
+// when this is the direct returned error. A joined cleanup error is not eligible.
+type OwnedSuccessorPointerError struct{ Err error }
+
+func (e *OwnedSuccessorPointerError) Error() string {
+	return "owned successor pointer: " + e.Err.Error()
+}
+func (e *OwnedSuccessorPointerError) Unwrap() error { return e.Err }
+
 // SeekGEOwnedAtRoot is the synchronous cache-backend successor capability. A
 // nonzero root must belong to the caller's retained published-root closure;
 // zero selects this capture's current root. It includes physical tombstones.
@@ -48,7 +58,7 @@ func (r *oneShotRead) seekGEOwnedAtRoot(rootID uint64, start, end []byte) (node.
 		// Materialize before Close even if the cache later selects a newer candidate.
 		entry.Value, err = s.reader.ReadUnsafeAppend(entry.ValuePtr, []byte{})
 		if err != nil {
-			return node.LeafEntry{}, false, err
+			return node.LeafEntry{}, false, &OwnedSuccessorPointerError{Err: err}
 		}
 		if entry.Value == nil {
 			entry.Value = []byte{}

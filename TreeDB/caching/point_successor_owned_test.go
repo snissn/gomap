@@ -3,6 +3,7 @@ package caching
 import (
 	"bytes"
 	"errors"
+	"os"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -11,6 +12,7 @@ import (
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/mvcckey"
 	"github.com/snissn/gomap/TreeDB/node"
 )
@@ -27,6 +29,7 @@ type ownedSuccessorBackend struct {
 	entered     chan struct{}
 	resume      chan struct{}
 	barrierOnce sync.Once
+	ownedError  error
 }
 
 var errOwnedSuccessorTestRefusal = errors.New("owned backend read refused")
@@ -34,6 +37,9 @@ var errOwnedSuccessorTestRefusal = errors.New("owned backend read refused")
 func (b *ownedSuccessorBackend) SeekGEOwnedAtRoot(root uint64, start, end []byte) (node.LeafEntry, bool, error) {
 	b.ownedCalls.Add(1)
 	b.lastRoot.Store(root)
+	if b.ownedError != nil {
+		return node.LeafEntry{}, false, b.ownedError
+	}
 	if b.refusal.Load() {
 		return node.LeafEntry{}, false, errOwnedSuccessorTestRefusal
 	}
@@ -89,14 +95,21 @@ func TestSeekGEVersionRangeOwnedBackendOutputRootAndFallback(t *testing.T) {
 	if _, got, _, err := db.SeekGEVersionRange(lower, upper); err != nil || string(got) != "old" {
 		t.Fatal(got, err)
 	}
-	// A real checkpoint supplies the live view's explicit published root. The
-	// synchronous operation must receive that identity rather than current-max.
+	// Publish a real frozen iterator root through the maintained grouped-root
+	// publisher. Ordinary Checkpoint alone need not install root-domain state.
 	newer, _ := mvcckey.Encode([]byte("one-key"), 80)
 	if err := db.Set(newer, []byte("newer")); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Checkpoint(); err != nil {
 		t.Fatal(err)
+	}
+	rootTable := newRootDomainTestTable(t, rootDomainTestOp{key: string(newer), value: "newer"})
+	db.mu.Lock()
+	db.rootIteratorState.immutables = []memtable.Table{rootTable}
+	db.mu.Unlock()
+	if err := db.publishInstalledRootSet(&publishedRootSet{generation: 1, iterator: publishedRootRef{}}); err != nil {
+		t.Fatal("publish real iterator root", err)
 	}
 	view := db.retainMemtableView()
 	snap, ok := liveIteratorRootDomainSnapshot(view)
@@ -240,5 +253,86 @@ func TestSeekGEVersionRangeOwnedBackendWriterAndCloseExclusion(t *testing.T) {
 	}
 	if err := backend.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSeekGEVersionRangeOwnedBackendPointerFailureWinnerAndCleanup(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer backend.Close()
+	db, err := Open(dir, backend, Options{DisableWAL: true, AllowUnsafe: true, MemtableMode: "btree", FlushThreshold: 1 << 30, MemtableShards: 4, MaxQueuedMemtables: -1, ValueLogPointerThreshold: 1, ValueLogCompression: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	lower, _ := mvcckey.Encode([]byte("one-key"), 100)
+	oldKey, _ := mvcckey.Encode([]byte("one-key"), 10)
+	newer, _ := mvcckey.Encode([]byte("one-key"), 80)
+	upper, _ := mvcckey.AppendKeyVersionsUpper(nil, []byte("one-key"))
+	if err := db.Set(oldKey, bytes.Repeat([]byte("pointer"), 1024)); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	ptr := mustBackendUserPointer(t, backend, oldKey)
+	snapshot := backend.AcquireSnapshot()
+	if snapshot == nil {
+		t.Fatal("missing original value-log capture")
+	}
+	defer snapshot.Close()
+	file, _, err := snapshot.PinnedValueLogFile(ptr.FileID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	corrupt, err := os.OpenFile(file.Name(), os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer corrupt.Close()
+	var saved [1]byte
+	if _, err := corrupt.ReadAt(saved[:], int64(ptr.Offset)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := corrupt.WriteAt([]byte{saved[0] ^ 0xff}, int64(ptr.Offset)); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if _, err := corrupt.WriteAt(saved[:], int64(ptr.Offset)); err != nil {
+			t.Error(err)
+		}
+	}()
+	_, _, payloadErr := backend.SeekGEOwnedAtRoot(0, lower, upper)
+	if _, ok := payloadErr.(*backenddb.OwnedSuccessorPointerError); !ok {
+		t.Fatalf("fixture did not fail only eager payload: %T %v", payloadErr, payloadErr)
+	}
+	if err := db.ensureBackendRange(); err != nil {
+		t.Fatal(err)
+	}
+	observed := &ownedSuccessorBackend{DB: backend}
+	db.backend = observed
+	// Non-exact mutable version wins over the corrupt older disk candidate.
+	if err := db.Set(newer, []byte("newer")); err != nil {
+		t.Fatal(err)
+	}
+	key, value, found, err := db.SeekGEVersionRange(lower, upper)
+	if err != nil || !found || !bytes.Equal(key, newer) || string(value) != "newer" {
+		t.Fatalf("losing pointer: %x %q %t %v", key, value, found, err)
+	}
+	if observed.ownedCalls.Load() != 1 {
+		t.Fatal("eager capture was not attempted")
+	}
+	// Starting at the older version excludes the newer key: payload failure is
+	// still reported when that real disk pointer wins the metadata-only merge.
+	if _, _, found, err := db.SeekGEVersionRange(oldKey, upper); err == nil || found {
+		t.Fatal("winning corrupt pointer was hidden", found, err)
+	}
+	cleanupErr := errors.New("original capture cleanup refused")
+	observed.ownedError = errors.Join(payloadErr, cleanupErr)
+	if _, _, found, err := db.SeekGEVersionRange(lower, upper); found || !errors.Is(err, cleanupErr) {
+		t.Fatal("joined cleanup failure bypassed", found, err)
 	}
 }
