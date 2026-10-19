@@ -46,6 +46,28 @@ func TestNativeExistingJSONIndexDDLLifecycle(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			peer, err := manager.OpenCollection("users")
+			if err != nil {
+				t.Fatal(err)
+			}
+			checkMetadata := func(expected ...string) {
+				t.Helper()
+				for _, collection := range []*collections.Collection{users, peer} {
+					for _, meta := range []collections.CollectionMeta{collection.Meta(), collection.MetaView()} {
+						names := make([]string, len(meta.Indexes))
+						for i, index := range meta.Indexes {
+							names[i] = index.Name
+						}
+						sort.Strings(names)
+						if fmt.Sprint(names) != fmt.Sprint(expected) {
+							t.Fatalf("current metadata indexes=%q want=%q", names, expected)
+						}
+						if len(meta.Indexes) != 0 {
+							meta.Indexes[0].Name = "caller-mutated-copy"
+						}
+					}
+				}
+			}
 			original := []byte(`{"email":"a@example.com","city":"hnl"}`)
 			want := map[string][]byte{
 				"u1": original,
@@ -78,6 +100,7 @@ func TestNativeExistingJSONIndexDDLLifecycle(t *testing.T) {
 			if _, err := users.CreateIndex(email); err != nil {
 				t.Fatal(err)
 			}
+			checkMetadata("city", "email")
 			checkIndex := func(index, value string, expected ...string) {
 				t.Helper()
 				ids, err := users.FindByIndexValue(index, value)
@@ -148,6 +171,7 @@ func TestNativeExistingJSONIndexDDLLifecycle(t *testing.T) {
 			if _, err := users.DropIndex("city"); err != nil {
 				t.Fatal(err)
 			}
+			checkMetadata("email")
 			lsn, sequence = handle.CommandWALNextLSN(), database.Stats()["treedb.cache.cow.txn.logical_seq"]
 			if err := stale.Commit(); !errors.Is(err, backenddb.ErrConcurrentModification) {
 				t.Fatalf("stale data plan committed across DDL: %v", err)
@@ -200,6 +224,7 @@ func TestNativeExistingJSONIndexDDLLifecycle(t *testing.T) {
 			if _, err := users.DropAllIndexes(); err != nil {
 				t.Fatal(err)
 			}
+			checkMetadata()
 			for _, name := range []string{"city", "email"} {
 				if _, err := users.FindByIndexValue(name, "unused"); !errors.Is(err, collections.ErrIndexNotFound) {
 					t.Fatalf("DropAllIndexes %s: %v", name, err)
@@ -212,6 +237,7 @@ func TestNativeExistingJSONIndexDDLLifecycle(t *testing.T) {
 			if _, err := users.CreateIndex(email); err != nil {
 				t.Fatal(err)
 			}
+			checkMetadata("email")
 			checkIndex("email", "e@example.com", "u5")
 			checkRows := func() {
 				t.Helper()
