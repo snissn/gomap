@@ -10,12 +10,26 @@ import (
 // Lookups borrow the caller's original admitted codec and immutable entry
 // edges. The entry, rather than its representative token, owns membership.
 func lookupOwnedEntryObligationV2(entry *stableResourceEntry, o StableLogicalObligation, s *ownedDirectoryCodecV2) (StableLogicalObligation, bool, error) {
+	return lookupOwnedEntryObligationWithScopeV2(entry, o, s, nil)
+}
+
+func lookupOwnedEntryObligationWithScopeV2(entry *stableResourceEntry, o StableLogicalObligation, s *ownedDirectoryCodecV2, scope *ownedDirectoryCodecScopeV2) (StableLogicalObligation, bool, error) {
 	v := entry.logicalObligations
 	if actual, found := findStableLogicalObligationIndex(v.index, o, nil); found {
 		return actual, true, nil
 	}
 	if v.directory == nil {
 		return StableLogicalObligation{}, false, nil
+	}
+	if scope != nil {
+		if scope.owner != v.directory.metadata {
+			return StableLogicalObligation{}, false, ErrResourceOwnership
+		}
+		var err error
+		s, err = scope.get()
+		if err != nil {
+			return StableLogicalObligation{}, false, err
+		}
 	}
 	if s == nil {
 		return StableLogicalObligation{}, false, ErrResourceOwnership
@@ -69,6 +83,9 @@ func lookupOwnedViewObligationV2(view stableResourceKindView, kind ResourceKind,
 // physical pins and indexes stay immutable. New physical entries use the same
 // original-owner clone/claim/leaf protocol as the maintained owned builder.
 func mergeOwnedDirectoryKindView(next *stableResourceKindView, child stableResourceKindView, owner *retainedalloc.Owner) (retErr error) {
+	// One admitted backing is reused only after each nested probe has returned.
+	scope := ownedDirectoryCodecScopeV2{owner: owner}
+	defer scope.close()
 	rangeStableResourceLogicalIndex(child.logical, func(entry *stableResourceEntry) bool {
 		if entry.outgoing == nil || entry.logicalObligations.directory != nil {
 			retErr = ErrResourceOwnership
@@ -85,7 +102,7 @@ func mergeOwnedDirectoryKindView(next *stableResourceKindView, child stableResou
 				retErr = ErrResourceConflict
 				return false
 			}
-			retErr = appendOwnedPhysicalHistoryToView(next, old, entry, owner)
+			retErr = appendOwnedPhysicalHistoryToViewWithScope(next, old, entry, owner, &scope)
 			return retErr == nil
 		}
 		// A different logical representative of a coalescible physical owner

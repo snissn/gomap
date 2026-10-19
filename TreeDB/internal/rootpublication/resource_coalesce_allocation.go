@@ -387,6 +387,15 @@ func subtractOwnedFieldCommitments(target, removed *resourceFieldBacking) error 
 // Only incoming operands are inspected and inserted; the old physical rope
 // and immutable history remain genuinely shared, rather than cloned.
 func newOwnedResourceEntryHistory(left, right *stableResourceEntry, token *StableResourceToken, owner *retainedalloc.Owner) (*resourceEntryBacking, error) {
+	scope := ownedDirectoryCodecScopeV2{owner: owner}
+	defer scope.close()
+	return newOwnedResourceEntryHistoryWithScope(left, right, token, owner, &scope)
+}
+
+func newOwnedResourceEntryHistoryWithScope(left, right *stableResourceEntry, token *StableResourceToken, owner *retainedalloc.Owner, scope *ownedDirectoryCodecScopeV2) (*resourceEntryBacking, error) {
+	if scope.owner != owner {
+		return nil, ErrResourceOwnership
+	}
 	backing, err := newResourceEntryBacking(owner, 1)
 	if err != nil {
 		return nil, err
@@ -470,7 +479,6 @@ func newOwnedResourceEntryHistory(left, right *stableResourceEntry, token *Stabl
 		return fail(err)
 	}
 	count := left.logicalObligations.count
-	var codec *ownedDirectoryCodecV2
 	var insertErr error
 	var insert func(*stableLogicalObligationIndexNode) bool
 	insert = func(n *stableLogicalObligationIndexNode) bool {
@@ -489,7 +497,7 @@ func newOwnedResourceEntryHistory(left, right *stableResourceEntry, token *Stabl
 			insertErr = ErrUnresolvedResource
 			return false
 		}
-		actual, present, e := lookupOwnedEntryObligationV2(left, n.obligation, codec)
+		actual, present, e := lookupOwnedEntryObligationWithScopeV2(left, n.obligation, nil, scope)
 		if e != nil {
 			insertErr = e
 			return false
@@ -507,7 +515,12 @@ func newOwnedResourceEntryHistory(left, right *stableResourceEntry, token *Stabl
 		restoredBase := false
 		if left.logicalObligations.directory != nil {
 			if _, removed := left.logicalObligations.removedValue(n.obligation); removed {
-				_, e := codec.lookupLogical(left.logicalObligations.directory, n.obligation, func(key []byte, actual StableLogicalObligation) error {
+				codec, e := scope.get()
+				if e != nil {
+					insertErr = e
+					return false
+				}
+				_, e = codec.lookupLogical(left.logicalObligations.directory, n.obligation, func(key []byte, actual StableLogicalObligation) error {
 					restoredBase = bytes.Equal(key, left.logicalObligations.owner) && actual == n.obligation
 					return nil
 				})
@@ -554,21 +567,10 @@ func newOwnedResourceEntryHistory(left, right *stableResourceEntry, token *Stabl
 		}
 		return insert(n.right)
 	}
-	apply := func(s *ownedDirectoryCodecV2) error {
-		codec = s
-		if !insert(rightIndex) {
-			return insertErr
-		}
-		return nil
+	if !insert(rightIndex) {
+		return fail(insertErr)
 	}
-	if out.directory != nil {
-		err = withOwnedDirectoryCodecV2(owner, apply)
-	} else {
-		err = apply(nil)
-	}
-	if err != nil {
-		return fail(err)
-	}
+
 	if token == left.token && right != nil {
 		entry.frontier, out.frontier, err = ownedFrontierUnion(owner, left.frontier, right.frontier)
 		if err != nil {
@@ -663,8 +665,14 @@ func coalesceOwnedPhysicalHistory(target, incoming *resourceKindBacking, owner *
 	return next, true, nil
 }
 
-func appendOwnedPhysicalHistoryToView(view *stableResourceKindView, old, child *stableResourceEntry, owner *retainedalloc.Owner) (retErr error) {
-	replacement, e := newOwnedResourceEntryHistory(old, child, old.token, owner)
+func appendOwnedPhysicalHistoryToView(view *stableResourceKindView, old, child *stableResourceEntry, owner *retainedalloc.Owner) error {
+	scope := ownedDirectoryCodecScopeV2{owner: owner}
+	defer scope.close()
+	return appendOwnedPhysicalHistoryToViewWithScope(view, old, child, owner, &scope)
+}
+
+func appendOwnedPhysicalHistoryToViewWithScope(view *stableResourceKindView, old, child *stableResourceEntry, owner *retainedalloc.Owner, scope *ownedDirectoryCodecScopeV2) (retErr error) {
+	replacement, e := newOwnedResourceEntryHistoryWithScope(old, child, old.token, owner, scope)
 	if e != nil {
 		return e
 	}
@@ -692,42 +700,35 @@ func appendOwnedPhysicalHistoryToView(view *stableResourceKindView, old, child *
 	view.physical = physical
 	// Persisted duplicates are absent from the pending index. Do not count or
 	// emit them again merely because a producer repeats an existing member.
-	merge := func(s *ownedDirectoryCodecV2) error {
-		var merge func(*stableLogicalObligationIndexNode) error
-		merge = func(n *stableLogicalObligationIndexNode) error {
-			if n == nil {
-				return nil
+	var merge func(*stableLogicalObligationIndexNode) error
+	merge = func(n *stableLogicalObligationIndexNode) error {
+		if n == nil {
+			return nil
+		}
+		if err := merge(n.left); err != nil {
+			return err
+		}
+		_, present, err := lookupOwnedEntryObligationWithScopeV2(old, n.obligation, nil, scope)
+		if err != nil {
+			return err
+		}
+		if !present {
+			i, found := slices.BinarySearchFunc(n.backing.values, n.obligation, compareResourceObligation)
+			if !found {
+				return ErrResourceOwnership
 			}
-			if err := merge(n.left); err != nil {
-				return err
-			}
-			_, present, err := lookupOwnedEntryObligationV2(old, n.obligation, s)
+			next, err := insertOwnedResourceObligationIndex(view.logicalMembership, n.backing, i, owner)
 			if err != nil {
 				return err
 			}
-			if !present {
-				i, found := slices.BinarySearchFunc(n.backing.values, n.obligation, compareResourceObligation)
-				if !found {
-					return ErrResourceOwnership
-				}
-				next, err := insertOwnedResourceObligationIndex(view.logicalMembership, n.backing, i, owner)
-				if err != nil {
-					return err
-				}
-				if next != view.logicalMembership {
-					releaseOwnedResourceObligationIndex(view.logicalMembership)
-					view.logicalMembership = next
-				}
+			if next != view.logicalMembership {
+				releaseOwnedResourceObligationIndex(view.logicalMembership)
+				view.logicalMembership = next
 			}
-			return merge(n.right)
 		}
-		return merge(child.outgoing.index)
+		return merge(n.right)
 	}
-	if old.logicalObligations.directory != nil {
-		e = withOwnedDirectoryCodecV2(owner, merge)
-	} else {
-		e = merge(nil)
-	}
+	e = merge(child.outgoing.index)
 	if e != nil {
 		return e
 	}
