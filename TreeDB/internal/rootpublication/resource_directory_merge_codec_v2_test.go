@@ -58,6 +58,77 @@ func TestOwnedDirectoryMultiPhysicalAppendScopeAndRefusal(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { bound.Release() }()
+	// Joining disjoint entries from one directory must not admit an overlap or
+	// substitute another directory, even when its records and owner agree.
+	beforeGuards, budgetBeforeGuards := owner.Bytes(), budget.bytes
+	otherDirectory, otherReleased := importedOwnedDirectoryLifetimeFixture(t, source, &owner)
+	defer func() {
+		if otherDirectory != nil {
+			otherDirectory.Release()
+		}
+	}()
+	otherBound, err := BindDependencyDirectoryV2(imported, otherDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { otherBound.Release() }()
+	for _, tc := range []struct {
+		name string
+		set  *StableResourceSet
+		want error
+	}{
+		{"overlap", bound, ErrResourceOwnership},
+		{"different_directory", otherBound, ErrResourceConflict},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			before, beforeBudget := owner.Bytes(), budget.bytes
+			left, err := CloneStableResourceSetExcludingKinds(bound)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { left.Release() }()
+			right, err := CloneStableResourceSetExcludingKinds(tc.set)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { right.Release() }()
+			out, err := NewStableResourceSetBuilderWithMetadata(&owner)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if out != nil {
+					out.Abandon()
+				}
+			}()
+			if err = out.Merge(left); err != nil {
+				t.Fatal(err)
+			}
+			if err = out.Merge(right); !errors.Is(err, tc.want) || right.Owner() != ResourceOwnerBuilder {
+				t.Fatalf("refused merge err=%v owner=%v", err, right.Owner())
+			}
+			if err = out.AbandonWithError(); err != nil {
+				t.Fatal(err)
+			}
+			out = nil
+			left.Release()
+			left = nil
+			right.Release()
+			right = nil
+			if owner.Bytes() != before || budget.bytes != beforeBudget {
+				t.Fatal("refused directory merge retained private backing")
+			}
+			assertDependencyDirectoryRecordStreamV2(t, bound, oldValues)
+			assertDependencyDirectoryRecordStreamV2(t, otherBound, oldValues)
+		})
+	}
+	otherBound.Release()
+	otherBound = nil
+	otherDirectory.Release()
+	otherDirectory = nil
+	if otherReleased.calls != 1 || owner.Bytes() != beforeGuards || budget.bytes != budgetBeforeGuards {
+		t.Fatal("guard controls retained their independent directory")
+	}
 	producerBuilder := NewStableResourceSetBuilder()
 	defer producerBuilder.Abandon()
 	for _, original := range source.Tokens() {

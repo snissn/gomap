@@ -127,7 +127,11 @@ func mergeOwnedResourceKindBackings(target, incoming *resourceKindBacking) (*res
 			continue
 		}
 		old := next.cells[index]
-		if directory {
+		// Bind adds disjoint entries from the same retained directory. Their
+		// immutable indexes and summaries already have independent custody;
+		// append-only merging is reserved for incoming unbound deltas.
+		sameDirectory := compatible && old.view.directory != nil && old.view.directory == cell.view.directory
+		if directory && !sameDirectory {
 			// The admitted next descriptor owns every partial edge, including
 			// the SAME failed physical cleanup receipt on refusal.
 			if err := mergeOwnedDirectoryKindView(&next.cells[index].view, cell.view, owner); err != nil {
