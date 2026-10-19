@@ -800,13 +800,18 @@ func TestOfflineSourceLateNamespaceRefusalRetainsOriginalLock(t *testing.T) {
 			}
 			source := d.idx.Load()
 			source.retainOfflineSourceV1(d, lock)
+			originalMetadata := source.primary.MetadataOwner()
+			beforeScope := originalMetadata.Bytes()
 			scope, err := d.captureOfflinePrimaryScopeV6()
 			if err != nil {
 				t.Fatal(err)
 			}
 			parent := scope.stableNamespaceParent
 			scopeOwner, scopeCharge := scope.stableNamespaceMetadata, scope.stableNamespaceParentCharge
-			if parent == nil || scopeCharge == 0 || source.metadataCharge == 0 {
+			// The successful receipt includes the original private registry as
+			// well as its parent/control storage. Capture only this admission.
+			scopeAdmission := originalMetadata.Bytes() - beforeScope
+			if scopeOwner != originalMetadata || scopeAdmission <= scopeCharge || parent == nil || scopeCharge == 0 || source.metadataCharge == 0 {
 				t.Fatal("actual admitted source/namespace operands missing")
 			}
 			// This is the real source physical completion before the outer
@@ -825,7 +830,7 @@ func TestOfflineSourceLateNamespaceRefusalRetainsOriginalLock(t *testing.T) {
 			metadata, charge, cleanup := scope.releaseOfflineNamespaceScopeV6()
 			operation := errors.New("ordinary semantic operation refusal")
 			if !fault {
-				if cleanup != nil || metadata != scopeOwner || charge != scopeCharge {
+				if cleanup != nil || metadata != scopeOwner || charge != scopeAdmission {
 					t.Fatalf("successful original scope disposal: %v charge=%d", cleanup, charge)
 				}
 				scope, parent = nil, nil

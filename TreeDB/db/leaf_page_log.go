@@ -962,7 +962,7 @@ func (db *DB) setLeafPageLog(log LeafPageLog, wrap bool) {
 	if binder, ok := log.(leafPageLogStableMetadataBinder); ok {
 		if err := binder.bindStableResourceMetadata(db.StableResourceMetadataOwner()); err != nil {
 			if writer, ok := log.(*rewriteWriter); ok {
-				writer.stableRegistryErr = err
+				writer.stableRegistryErr = errors.Join(writer.stableRegistryErr, err)
 			}
 		}
 	}

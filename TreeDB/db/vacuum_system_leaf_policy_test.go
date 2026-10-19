@@ -5,8 +5,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"io"
-	"os"
 	"runtime"
 	"testing"
 
@@ -280,27 +278,13 @@ func vacuumSystemManifestFiles(t *testing.T, d *DB, allSlots bool) map[uint32]st
 			continue
 		}
 		var manifest *leafGenerationManifest
-		for _, token := range d.durableRoot.slotResources[slot].Tokens() {
-			if token.Kind() != rootpublication.ResourceOuterLeafManifest {
-				continue
-			}
-			if manifest != nil {
-				t.Fatalf("slot %d has multiple manifests", slot)
-			}
-			err := token.WithPinnedFile(func(f *os.File) error {
-				data, err := io.ReadAll(io.NewSectionReader(f, 0, int64(token.Frontier().Bytes)))
-				if err != nil {
-					return err
-				}
-				manifest, err = decodeLeafGenerationManifest(data, token.ResourceID())
-				return err
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if manifest.ManifestRevision != token.Generation() {
-				t.Fatal("manifest revision mismatch")
-			}
+		err := d.durableRoot.slotResources[slot].WithScopedTokens(func(tokens []*rootpublication.StableResourceToken) error {
+			var err error
+			manifest, _, err = loadSelectedDurableLeafGenerationManifestTokens(tokens)
+			return err
+		})
+		if err != nil {
+			t.Fatal(err)
 		}
 		if manifest == nil {
 			t.Fatalf("slot %d has no exact manifest: selected=%d record=%+v resources=%+v manifest_mode=%v vacuum=%+v", slot, d.durableRoot.slot, record, mustStableResourceDescriptors(t, d.durableRoot.slotResources[slot]), d.leafGenerationManifestStore.mode, d.VacuumOnlineStats())

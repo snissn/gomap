@@ -220,6 +220,14 @@ func TestOuterLeafReplacementManifestPreservesAppendOnlyBaseDependencyReuse(t *t
 		generation: 1, kind: rootpublication.ResourceOuterLeafManifest,
 		reachability: rootpublication.ReachabilityOuterLeafGeneration, frontier: 4096,
 	})
+	// The synthetic manifest joins the selected closure under its original
+	// metadata owner, just as production captures import producer resources.
+	defer oldManifest.Release()
+	oldManifest, err = rootpublication.ImportStableResourceSetMetadata(selectedClone.MetadataOwner(), oldManifest)
+	if err != nil {
+		selectedClone.Release()
+		t.Fatalf("admit old manifest: %v", err)
+	}
 	baseBuilder := rootpublication.NewStableResourceSetBuilder()
 	if err := baseBuilder.Merge(selectedClone); err != nil {
 		selectedClone.Release()
@@ -260,20 +268,33 @@ func TestOuterLeafReplacementManifestPreservesAppendOnlyBaseDependencyReuse(t *t
 	if scans != 0 {
 		t.Fatalf("append-only replacement manifest candidate scans=%d want 0", scans)
 	}
+	diagnostics, err := captured.AcquirePhysicalDiagnostics()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := diagnostics.CloseWithError(); err != nil {
+			t.Error(err)
+		}
+	}()
 	foundCurrentLeaf, foundNewManifest := false, false
-	for _, descriptor := range mustStableResourceDescriptors(t, captured) {
-		switch descriptor.Kind() {
+	for _, descriptor := range diagnostics.Physical() {
+		switch descriptor.Kind {
 		case rootpublication.ResourceOuterLeafLog:
-			foundCurrentLeaf = foundCurrentLeaf || descriptor.Generation() == uint64(leafLog.fileID)
+			foundCurrentLeaf = foundCurrentLeaf || descriptor.Generation == uint64(leafLog.fileID)
 		case rootpublication.ResourceOuterLeafManifest:
-			if descriptor.Generation() == 1 {
+			if descriptor.Generation == 1 {
 				t.Fatal("captured resources retained superseded outer-leaf manifest")
 			}
-			foundNewManifest = foundNewManifest || descriptor.Generation() == 2
+			foundNewManifest = foundNewManifest || descriptor.Generation == 2
 		}
 	}
 	if !foundCurrentLeaf || !foundNewManifest {
-		t.Fatalf("captured descriptors=%+v, want current raw leaf and replacement manifest", mustStableResourceDescriptors(t, captured))
+		t.Fatalf("captured descriptors=%+v, want current raw leaf and replacement manifest", diagnostics.Physical())
+	}
+
+	if err := diagnostics.CloseWithError(); err != nil {
+		t.Fatal(err)
 	}
 
 	plannerBase := stableContractResourceSet(t, stableContractDescriptor{
@@ -1034,11 +1055,20 @@ func TestOuterLeafOrdinaryAdditiveProducerInventory(t *testing.T) {
 				if len(leafLog.createdSegments) != 0 {
 					t.Fatal("registration did not consume created inventory")
 				}
-				descriptors := mustStableResourceDescriptors(t, database.durableRoot.slotResources[database.durableRoot.slot])
+				diagnostics, err := database.durableRoot.slotResources[database.durableRoot.slot].AcquirePhysicalDiagnostics()
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer func() {
+					if err := diagnostics.CloseWithError(); err != nil {
+						t.Error(err)
+					}
+				}()
+				descriptors := diagnostics.Physical()
 				for _, segment := range uniqueLeafPageLogSegmentsForTest(registered, leafLog.currentSegments) {
 					found := false
 					for _, descriptor := range descriptors {
-						if descriptor.Kind() == rootpublication.ResourceOuterLeafLog && descriptor.Generation() == uint64(segment.FileID) {
+						if descriptor.Kind == rootpublication.ResourceOuterLeafLog && descriptor.Generation == uint64(segment.FileID) {
 							info, err := os.Stat(segment.Path)
 							if err != nil {
 								t.Fatal(err)
@@ -1053,6 +1083,10 @@ func TestOuterLeafOrdinaryAdditiveProducerInventory(t *testing.T) {
 						t.Fatalf("published closure missing producer segment %d", segment.FileID)
 					}
 				}
+				if err := diagnostics.CloseWithError(); err != nil {
+					t.Fatal(err)
+				}
+				descriptors = nil
 				tracked := snapshotCandidateTracker(database)
 				if !tracked.valid || tracked.sequence != database.currentCommitSeq() || tracked.counts[values[0].FileID] != uint64((publication+1)*count) {
 					t.Fatalf("logical tracker=%+v", tracked)
