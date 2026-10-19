@@ -13,6 +13,9 @@ import (
 // raw barrier. Both public frontends use the same NativeJSONTxn preparation.
 func (m *CollectionManager) openNativeCollection(name string) (collection *Collection, resultErr error) {
 	read, err := m.nativeJSON.Capture(name)
+	if errors.Is(err, tree.ErrKeyNotFound) {
+		return nil, errors.Join(ErrCollectionNotFound, err)
+	}
 	if err != nil {
 		return nil, err
 	}

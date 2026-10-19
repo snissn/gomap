@@ -54,6 +54,12 @@ func (h *Harness) applyCollectionMutationV1(entry raftentry.CommandEntryV1, meta
 	if err != nil {
 		return raftentry.ApplyResultV1{}, err
 	}
+	if manager := h.replayCollectionManager(); manager != nil && manager.UsesNativeCommandWALApply() {
+		if scoped {
+			return raftentry.ApplyResultV1{}, codedError(raftentry.ErrorUnsupportedFeatureV1, "raftapply: colocated vector mutation is not a native JSON producer")
+		}
+		return h.applyNativeCollectionMutationV1(entry, meta, mutation)
+	}
 	collection, err := h.replayCollectionManager().OpenCollection(mutation.collection)
 	if err != nil {
 		return raftentry.ApplyResultV1{}, codeCollectionApplyError(err)

@@ -854,3 +854,22 @@ memtable-only ACK. NoWALFast retains its later Checkpoint/safe-Close durability
 boundary. Neither floor metadata nor an ordinary ACK
 certifies a completed maintenance source cut. Protected-floor issuance and
 bounded native retirement are deferred from this ordinary prerequisite.
+
+### Native deterministic collection apply
+
+Eligible ordinary JSON deterministic create/insert/replace/delete commands keep
+their existing canonical singleton frames unassigned until the original native
+publication gate validates catalog/data dependencies. The same publisher appends,
+records accepted custody and installs the complete logical cut. It then waits for
+its admitted exact physical seal before deterministic result/progress persistence.
+No-effect commands retain their original frame and logical successor. The request
+sync flag controls command-WAL synchronization; it does not replace physical seal
+completion. Legacy preassigned apply remains separate and is not accepted by the
+native owner.
+
+A request-local, nonblocking/no-reentry post-append observer can report an error
+after the original accepted receipt is recorded and before visibility. The
+original assigned-failure path retains sparse custody, poisons publication and
+requires recovery; result/progress are not persisted. Existing canonical replay
+recovers the frame. This adds no WAL format, owner, startup replay route or
+assignment authority.

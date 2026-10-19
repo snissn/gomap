@@ -37,6 +37,9 @@ type ApplyFaultContextV1 struct {
 	AppliedCommandLSN uint64
 }
 
+// In native collection apply, FaultAfterLocalWALAppendBeforeVisibleV1 runs
+// synchronously under the original publication gate. That observer must be
+// nonblocking and must not reenter the DB or acquire application locks.
 type FaultInjector interface {
 	InjectApplyFault(FaultPointV1, ApplyFaultContextV1) error
 }

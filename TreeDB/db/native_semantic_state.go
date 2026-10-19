@@ -105,6 +105,12 @@ type NativePreparedPublication struct {
 	Finalizer                   NativePublicationFinalizer
 	Resources                   *NativePublicationResources
 	Reprepare                   NativeLogicalPlan
+	// ObserveAssigned is the request-local deterministic apply fault seam. It runs
+	// once after successful original append/receipt recording, before visibility.
+	// It must not block, reenter the DB, allocate publication work or acquire
+	// application locks. It grants no assignment or installation authority.
+	// The publisher detaches it before calling, including on assigned failure.
+	ObserveAssigned func(uint64) error
 }
 
 // NativeLogicalPlan is an original transaction-owned immutable operation plan.

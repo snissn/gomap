@@ -44,6 +44,9 @@ func (h *Harness) applyCreateCollectionV1(entry raftentry.CommandEntryV1, meta A
 	if alreadyExisting {
 		checkPublishCatalogVersion = nil
 	}
+	if manager := h.replayCollectionManager(); manager != nil && manager.UsesNativeCommandWALApply() {
+		return h.applyNativeCreateCollectionV1(entry, meta, collectionMeta)
+	}
 	frame, err := commandwalapply.CatalogCreateCollectionFrame(payload)
 	if err != nil {
 		return raftentry.ApplyResultV1{}, codedError(raftentry.ErrorMalformedEntryV1, "raftapply: lower catalog create collection: %v", err)

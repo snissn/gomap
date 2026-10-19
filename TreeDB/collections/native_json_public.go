@@ -61,7 +61,11 @@ func finishPrivateNative(work *rootpublication.SemanticCleanup) error {
 
 // CreateCollection prepares one immutable successor before entering the same
 // canonical command-WAL bridge used by raw COW publication.
-func (m *NativeJSONManager) CreateCollection(meta CollectionMeta) (created *CollectionMeta, resultErr error) {
+func (m *NativeJSONManager) CreateCollection(meta CollectionMeta) (*CollectionMeta, error) {
+	return m.createCollection(meta, nil)
+}
+
+func (m *NativeJSONManager) createCollection(meta CollectionMeta, apply *nativeCommandWALApplyCommit) (created *CollectionMeta, resultErr error) {
 	if m == nil || m.db == nil {
 		return nil, backenddb.ErrClosed
 	}
@@ -98,13 +102,23 @@ func (m *NativeJSONManager) CreateCollection(meta CollectionMeta) (created *Coll
 		}
 	}
 
+	var native *backenddb.NativePreparedPublication
 	if existing, found := base.names.Get(normalized.Name); found {
 		if !sameCollectionMeta(*existing.schema.meta, normalized) {
 			return nil, backenddb.ErrNativeSemanticUnsupported
 		}
-		return existing.schema.meta.copy(), nil
+		if apply == nil {
+			return existing.schema.meta.copy(), nil
+		}
+		apply.alreadyApplied = true
+		next, prepErr := prepareNativeCommandWALNoop(base)
+		if prepErr != nil {
+			return nil, prepErr
+		}
+		native = &backenddb.NativePreparedPublication{State: next}
+	} else {
+		native, err = prepareNativeJSONCreate(base, normalized)
 	}
-	native, err := prepareNativeJSONCreate(base, normalized)
 	if err != nil {
 		return nil, err
 	}
@@ -119,7 +133,19 @@ func (m *NativeJSONManager) CreateCollection(meta CollectionMeta) (created *Coll
 		cleanupErr := cancelPrivateNativePublication(native)
 		return nil, errors.Join(err, cleanupErr)
 	}
-	result, err := m.db.WriteNativePublication(native, intent, false)
+	sync := false
+	if apply != nil {
+		sync = apply.sync
+		native.ObserveAssigned = apply.observe
+		if err = intent.PrepareSealedReceiptWithAdmission(capture.NativeAllocator()); err != nil {
+			return nil, errors.Join(err, cancelPrivateNativePublication(native))
+		}
+		defer intent.ReleaseNativeSealedReceipt()
+	}
+	result, err := m.db.WriteNativePublication(native, intent, sync)
+	if apply != nil {
+		apply.result = result
+	}
 	if !result.Consumed {
 		err = errors.Join(err, cancelPrivateNativePublication(native))
 	}

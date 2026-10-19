@@ -81,7 +81,7 @@ the immutable directory count to report truncation. A nil engine first requires
 the existing full physical-catalog import, outside that names-traversal bound.
 
 These are explicit eligibility limits of the provisional implementation. Broad
-producer migration remains required: assigned/apply and Raft producers,
+producer migration remains required beyond the ordinary JSON deterministic apply slice: typed/BSON/derived assigned and Raft producers,
 import/source controls, additional typed layouts, standalone schema/drop/rename, non-scalar index DDL and derived-index lifecycle still
 need their complete public-path integration. Staged transactional DDL and
 approximate vector/hybrid or asynchronous text predicates in writing transactions
@@ -215,3 +215,28 @@ Temporary schema/JSON construction backing is admitted before normalization and
 encoding and released after synchronous publication drops its borrowed aliases.
 This is a bounded operation allowance, not a claim that Go's existing global
 JSON encoder cache disappears at receipt release.
+
+## Deterministic JSON apply
+
+The deterministic collection apply producer routes eligible JSON catalog create,
+by-ID insert, replace and delete through the same native conditional/catalog
+preparation and original canonical publisher. Frames retain their existing
+singleton kinds and payload formats. Dependency validation precedes assignment;
+replace counts matched rows separately from byte-changing rows, and delete frames
+retain all requested IDs. A same-metadata create or empty mutation still appends
+its canonical frame and advances one logical successor.
+
+This producer requests the original admitted exact seal receipt. It completes
+physical coverage before computing/storing the deterministic result and progress,
+while the request's sync flag retains its command-WAL durability meaning. The
+legacy append seam cannot preassign native intents; custom legacy append seams
+refuse on this route. Unsupported typed, BSON and colocated-vector deterministic
+mutations remain refused before assignment.
+
+The request-local post-append fault observer runs synchronously after append and
+receipt recording, before native finalization/visibility. It must be nonblocking
+and must not reenter the database or acquire locks. Its failure uses the existing
+assigned-failure custody and poisons the original publication owner; it creates
+no result or progress record. Startup replay recovers the original canonical
+frame, without fabricating a deterministic apply result. Ordinary writers have
+no observer.
