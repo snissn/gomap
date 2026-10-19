@@ -17,7 +17,7 @@ import (
 )
 
 // A committed inline typed member belongs to the complete logical cut before
-// its captured-prefix physical build. A real output rollback failure must keep
+// its captured-prefix physical build. A post-close closure failure must keep
 // that whole cut and the original failed build alive without installing a disk
 // basis. Only a fresh ordinary owner may recover its canonical aggregate.
 func TestNativeExistingColumnAcceptedBuildFailureCustody(t *testing.T) {
@@ -218,59 +218,53 @@ func TestNativeExistingColumnAcceptedBuildFailureCustody(t *testing.T) {
 	}
 	checkCompleteCut()
 
-	failure := errors.New("native accepted typed build parent rollback sync failure")
 	var selected atomic.Bool
-	var rollbackCalls atomic.Int32
-	originalSync := syncStableColumnAssetParentRollback
-	syncStableColumnAssetParentRollback = func(parent *os.File) error {
-		if selected.Load() {
-			rollbackCalls.Add(1)
-			return failure
+	observed := make(map[string]rootpublication.StableIdentity)
+	restoreObserve := setColumnAssetStableBeforeObserveTestHook(func(_, file *os.File, name string) {
+		if handle.CommandWALNextLSN() == 4 {
+			identity, err := rootpublication.StableIdentityFromFile(file)
+			if err != nil {
+				t.Fatal(err)
+			}
+			observed[name] = identity
 		}
-		return originalSync(parent)
-	}
-	defer func() { syncStableColumnAssetParentRollback = originalSync }()
+	})
+	defer restoreObserve()
+	var failedIdentity rootpublication.StableIdentity
 	restore := setColumnAssetStableObligationTestHook(func(ref ColumnAssetRef, _ rootpublication.StableLogicalObligation, _ *rootpublication.StableNamespaceToken) columnAssetStableCaptureTestDecision {
 		if ref.Kind == ColumnAssetKindTCS1TypedColumnPart && handle.CommandWALNextLSN() == 4 && selected.CompareAndSwap(false, true) {
+			failedIdentity = observed[columnAssetSegmentFileName(ref.FileID)]
 			return columnAssetStableCaptureOmitToken
 		}
 		return columnAssetStableCaptureKeep
 	})
 	defer restore()
-	var originalFile, originalParent *os.File
-	restoreRollback := setColumnAssetStableBeforeRollbackTestHook(func(parent, file *os.File, _ string) {
-		if selected.Load() {
-			originalParent, originalFile = parent, file
-		}
-	})
-	defer restoreRollback()
 	err = database.Checkpoint()
-	if !selected.Load() || rollbackCalls.Load() != 1 || !errors.Is(err, failure) || !errors.Is(err, rootpublication.ErrUnresolvedResource) {
-		t.Fatalf("real accepted build failure: selected=%v rollback=%d err=%v", selected.Load(), rollbackCalls.Load(), err)
+	if !selected.Load() || !errors.Is(err, rootpublication.ErrUnresolvedResource) {
+		t.Fatalf("real accepted build closure failure: selected=%v err=%v", selected.Load(), err)
 	}
 	restore()
-	restoreRollback()
-	syncStableColumnAssetParentRollback = originalSync
+	restoreObserve()
 	if handle.CommandWALNextLSN() != 4 || physicalLSN() != 2 || database.Stats()["treedb.cache.cow.txn.logical_seq"] != sequence {
 		t.Fatal("failed build changed the accepted logical cut or installed a partial disk basis")
 	}
 	build := engine.build
-	if build == nil || build.refund == nil || build.allocation.parent == nil || !errors.Is(build.failure, failure) || build.complete {
+	if build == nil || build.refund == nil || build.allocation.parent == nil || !errors.Is(build.failure, rootpublication.ErrUnresolvedResource) || build.complete {
 		t.Fatal("accepted failure lost its original incomplete physical build/refund")
 	}
+	failure := build.failure
 	refund, allocation := build.refund, build.allocation.parent
-	if originalFile == nil || originalParent == nil {
-		t.Fatal("failed rollback lost original file/parent authority")
+	// The construction session has closed normally. The original native build
+	// must retain the captured partial set, including the exact new output's pin;
+	// the missing logical obligation prevents installing that physical basis.
+	if failedIdentity == (rootpublication.StableIdentity{}) || handle.ValueLogIdentityPinRegistry().PinCount(failedIdentity) == 0 {
+		t.Fatal("original failed output lost its exact identity pin")
 	}
-	if _, err := originalFile.Stat(); err != nil {
-		t.Fatalf("original failed output closed before owner shutdown: %v", err)
-	}
-	if _, err := originalParent.Stat(); err != nil {
-		t.Fatalf("original rollback parent closed before owner shutdown: %v", err)
-	}
-	failedIdentity, err := rootpublication.StableIdentityFromFile(originalFile)
-	if err != nil || handle.ValueLogIdentityPinRegistry().PinCount(failedIdentity) == 0 {
-		t.Fatalf("original failed output lost its exact identity pin: %v", err)
+	if lease, err := handle.ValueLogIdentityPinRegistry().BeginDelete(failedIdentity); !errors.Is(err, rootpublication.ErrResourcePinned) {
+		if lease != nil {
+			lease.Abort()
+		}
+		t.Fatalf("failed output deletion fence: %v", err)
 	}
 	if stats := handle.ValueLogIdentityPinRegistry().Stats(); stats.ActivePins == 0 || stats.ActiveIdentities == 0 || stats.ActiveStableNamespaceLinks == 0 {
 		t.Fatalf("partial output authority lost: %+v", stats)

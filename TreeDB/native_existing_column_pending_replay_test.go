@@ -4,13 +4,13 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/collections"
@@ -22,20 +22,64 @@ import (
 // The ordinary manager and the original conditional transaction must share the
 // typed pending projection, canonical raw+collection frame, and captured assets.
 // Create is intentionally a hard failure while native typed storage is absent.
-// Assigned asset-failure poison/custody remains a separate, unproved gate: the
-// collection asset fault hooks are package-private, and this public fixture does
-// not manufacture another publisher or guess an assigned failure boundary.
+// The collections-package fault fixture separately exercises actual post-close
+// closure failure, original accepted-build custody, poison and fresh replay.
 func TestNativeExistingColumnPendingCapturedReplay(t *testing.T) {
-	const sentinel = 97
-	if dir := os.Getenv("GOMAP_COLUMN_PENDING_CRASH_DIR"); dir != "" {
-		runNativeColumnPending(t, dir, true)
+	testNativeColumnPendingFamily(t, "int64")
+}
+
+func TestNativeExistingColumnStringVectorPendingCapturedReplay(t *testing.T) {
+	if family := os.Getenv("GOMAP_COLUMN_PENDING_FAMILY"); family != "" {
+		testNativeColumnPendingFamily(t, family)
 		return
 	}
-	t.Run("durable", func(t *testing.T) { runNativeColumnPending(t, t.TempDir(), false) })
+	for _, family := range []string{"string", "float32_vector"} {
+		t.Run(family, func(t *testing.T) { testNativeColumnPendingFamily(t, family) })
+	}
+}
+
+type nativeColumnPendingCase struct {
+	column collections.ColumnStoreColumn
+	docs   [3][]byte // seed, one, two; independent public result oracle
+}
+
+func nativeColumnPendingCaseFor(t *testing.T, family string) nativeColumnPendingCase {
+	t.Helper()
+	switch family {
+	case "int64":
+		return nativeColumnPendingCase{
+			column: collections.ColumnStoreColumn{Name: "time_us", Path: "time_us", ValueType: collections.ColumnStoreValueInt64, Owner: collections.TypedStorageOwnerColumnPart},
+			docs:   [3][]byte{[]byte(`{"time_us":7,"payload":"seed"}`), []byte(`{"time_us":11,"payload":"one"}`), []byte(`{"time_us":19,"payload":"two"}`)},
+		}
+	case "string":
+		return nativeColumnPendingCase{
+			column: collections.ColumnStoreColumn{Name: "label", Path: "label", ValueType: collections.ColumnStoreValueString, Owner: collections.TypedStorageOwnerColumnPart},
+			docs:   [3][]byte{[]byte(`{"label":"repeat","payload":"seed"}`), []byte(`{"label":"repeat","payload":"one"}`), []byte(`{"label":"quote\" slash\\ tab\t unicode \u263a","payload":"two"}`)},
+		}
+	case "float32_vector":
+		return nativeColumnPendingCase{
+			column: collections.ColumnStoreColumn{Name: "embedding", Path: "embedding", ValueType: collections.ColumnStoreValueFloat32Vector, VectorDims: 3, Owner: collections.TypedStorageOwnerColumnPart},
+			docs:   [3][]byte{[]byte(`{"embedding":[1,-2,0.5],"payload":"seed"}`), []byte(`{"embedding":[0,3.25,-4.5],"payload":"one"}`), []byte(`{"embedding":[-1.5,2,8.125],"payload":"two"}`)},
+		}
+	default:
+		t.Fatalf("unknown typed lifecycle family %q", family)
+		return nativeColumnPendingCase{}
+	}
+}
+
+func testNativeColumnPendingFamily(t *testing.T, family string) {
+	t.Helper()
+	fixture := nativeColumnPendingCaseFor(t, family)
+	const sentinel = 97
+	if dir := os.Getenv("GOMAP_COLUMN_PENDING_CRASH_DIR"); dir != "" {
+		runNativeColumnPending(t, dir, true, fixture)
+		return
+	}
+	t.Run("durable", func(t *testing.T) { runNativeColumnPending(t, t.TempDir(), false, fixture) })
 	t.Run("unapplied-replay", func(t *testing.T) {
 		dir := t.TempDir()
-		cmd := exec.Command(os.Args[0], "-test.run=^TestNativeExistingColumnPendingCapturedReplay$", "-test.v")
-		cmd.Env = append(os.Environ(), "GOMAP_COLUMN_PENDING_CRASH_DIR="+dir)
+		cmd := exec.Command(os.Args[0], "-test.run=^"+strings.Split(t.Name(), "/")[0]+"$", "-test.v")
+		cmd.Env = append(os.Environ(), "GOMAP_COLUMN_PENDING_CRASH_DIR="+dir, "GOMAP_COLUMN_PENDING_FAMILY="+family)
 		output, err := cmd.CombinedOutput()
 		t.Logf("child:\n%s", output)
 		var exit *exec.ExitError
@@ -53,7 +97,7 @@ func TestNativeExistingColumnPendingCapturedReplay(t *testing.T) {
 			_ = database.Close()
 			t.Fatalf("one aggregate replay: %+v -> %+v", before, after)
 		}
-		checkNativeColumnReopened(t, database)
+		checkNativeColumnReopened(t, database, fixture)
 	})
 	for _, profile := range []Profile{ProfileCommandWALRelaxed, ProfileNoWALFast} {
 		t.Run(string(profile)+"/refuse-before-admission", func(t *testing.T) {
@@ -78,7 +122,7 @@ func TestNativeExistingColumnPendingCapturedReplay(t *testing.T) {
 			}()
 			lsn, sequence := handle.CommandWALNextLSN(), database.Stats()["treedb.cache.cow.txn.logical_seq"]
 			before, pins := database.cached.COWMemoryStats(), handle.ValueLogIdentityPinRegistry().Stats()
-			if _, err := manager.CreateCollection(nativeColumnPendingMeta()); !errors.Is(err, backenddb.ErrNativeSemanticUnsupported) {
+			if _, err := manager.CreateCollection(nativeColumnPendingMeta(fixture)); !errors.Is(err, backenddb.ErrNativeSemanticUnsupported) {
 				t.Fatalf("unsupported typed profile admitted Create: %v", err)
 			}
 			after := database.cached.COWMemoryStats()
@@ -94,16 +138,16 @@ func TestNativeExistingColumnPendingCapturedReplay(t *testing.T) {
 	}
 }
 
-func nativeColumnPendingMeta() *collections.CollectionMeta {
+func nativeColumnPendingMeta(fixture nativeColumnPendingCase) *collections.CollectionMeta {
 	return &collections.CollectionMeta{Name: "events", Options: collections.CollectionOptions{ColumnStore: &collections.ColumnStoreConfig{
 		Enabled:                 true,
-		Columns:                 []collections.ColumnStoreColumn{{Name: "time_us", Path: "time_us", ValueType: collections.ColumnStoreValueInt64, Owner: collections.TypedStorageOwnerColumnPart}},
+		Columns:                 []collections.ColumnStoreColumn{fixture.column},
 		RetainedPayload:         collections.ColumnRetainedPayloadNonColumn,
 		RetainedPayloadEncoding: collections.ColumnRetainedPayloadEncodingSemanticStreamV1,
 	}}}
 }
 
-func runNativeColumnPending(t *testing.T, dir string, crash bool) {
+func runNativeColumnPending(t *testing.T, dir string, crash bool, fixture nativeColumnPendingCase) {
 	t.Helper()
 	opts := indexedSliceOptions(ProfileCommandWALDurable, dir)
 	database, err := Open(opts)
@@ -130,14 +174,36 @@ func runNativeColumnPending(t *testing.T, dir string, crash bool) {
 			}
 		}
 	})
-	if _, err := manager.CreateCollection(nativeColumnPendingMeta()); err != nil {
+	if _, err := manager.CreateCollection(nativeColumnPendingMeta(fixture)); err != nil {
 		t.Fatalf("ordinary native typed Create: %v", err)
 	}
 	collection, err := manager.OpenCollection("events")
 	if err != nil {
 		t.Fatal(err)
 	}
-	seed := []byte(`{"time_us":7,"payload":"seed"}`)
+	if fixture.column.ValueType == collections.ColumnStoreValueFloat32Vector {
+		lsn, sequence := handle.CommandWALNextLSN(), database.Stats()["treedb.cache.cow.txn.logical_seq"]
+		basis, pins := indexedCRUDAppliedLSN(t, handle), handle.ValueLogIdentityPinRegistry().Stats()
+		for _, invalid := range []string{
+			`{"embedding":[1,2],"payload":"short"}`,
+			`{"embedding":[1,2,3,4],"payload":"long"}`,
+			`{"embedding":[1,"two",3],"payload":"type"}`,
+			`{"embedding":[1,2,1e100],"payload":"float32 overflow"}`,
+			`{"embedding":null,"payload":"null"}`,
+			`{"payload":"missing"}`,
+		} {
+			if _, err := collection.InsertBatch([][]byte{[]byte("invalid")}, [][]byte{[]byte(invalid)}); err == nil {
+				t.Fatalf("invalid vector accepted: %s", invalid)
+			}
+			if handle.CommandWALNextLSN() != lsn || database.Stats()["treedb.cache.cow.txn.logical_seq"] != sequence || indexedCRUDAppliedLSN(t, handle) != basis || handle.ValueLogIdentityPinRegistry().Stats() != pins {
+				t.Fatal("invalid vector changed canonical publication or physical resources")
+			}
+			if got, err := collection.Get([]byte("invalid")); err != nil || got != nil {
+				t.Fatalf("invalid vector became visible: %s %v", got, err)
+			}
+		}
+	}
+	seed := fixture.docs[0]
 	if ids, err := collection.InsertBatch([][]byte{[]byte("seed")}, [][]byte{seed}); err != nil || len(ids) != 1 || string(ids[0]) != "seed" {
 		t.Fatalf("ordinary typed InsertBatch: %q %v", ids, err)
 	}
@@ -183,7 +249,7 @@ func runNativeColumnPending(t *testing.T, dir string, crash bool) {
 			t.Error(err)
 		}
 	})
-	docs := [][]byte{[]byte(`{"time_us":11,"payload":"one"}`), []byte(`{"time_us":19,"payload":"two"}`)}
+	docs := fixture.docs[1:]
 	if err := tx.InsertBatch([][]byte{[]byte("one"), []byte("two")}, docs); err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +297,7 @@ func runNativeColumnPending(t *testing.T, dir string, crash bool) {
 	if handle.CommandWALNextLSN() != basis+2 || indexedCRUDAppliedLSN(t, handle) != basis || database.Stats()["treedb.cache.cow.txn.logical_seq"] != strconv.FormatUint(sequence+1, 10) {
 		t.Fatal("raw+typed commit did not install exactly one logical publication and one pending frame")
 	}
-	checkNativeColumnCurrent(t, manager, database)
+	checkNativeColumnCurrent(t, manager, database, fixture)
 	checkOld()
 	if err := handle.FlushCommandWAL(true); err != nil {
 		t.Fatal(err)
@@ -250,7 +316,7 @@ func runNativeColumnPending(t *testing.T, dir string, crash bool) {
 	if indexedCRUDAppliedLSN(t, handle) != basis+1 {
 		t.Fatal("checkpoint omitted aggregate typed suffix")
 	}
-	checkNativeColumnCurrent(t, manager, database)
+	checkNativeColumnCurrent(t, manager, database, fixture)
 	checkOld()
 	if err := held.Close(); err != nil {
 		t.Fatal(err)
@@ -273,7 +339,7 @@ func runNativeColumnPending(t *testing.T, dir string, crash bool) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	checkNativeColumnReopened(t, reopened)
+	checkNativeColumnReopened(t, reopened, fixture)
 }
 
 func requireNativeColumnJSON(t *testing.T, got, want []byte) {
@@ -290,28 +356,25 @@ func requireNativeColumnJSON(t *testing.T, got, want []byte) {
 	}
 }
 
-func checkNativeColumnCurrent(t *testing.T, manager *collections.CollectionManager, database *DB) {
+func checkNativeColumnCurrent(t *testing.T, manager *collections.CollectionManager, database *DB, fixture nativeColumnPendingCase) {
 	t.Helper()
 	collection, err := manager.OpenCollection("events")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, row := range []struct {
-		id   string
-		time int
-	}{{"seed", 7}, {"one", 11}, {"two", 19}} {
-		got, err := collection.Get([]byte(row.id))
+	for i, id := range []string{"seed", "one", "two"} {
+		got, err := collection.Get([]byte(id))
 		if err != nil {
 			t.Fatal(err)
 		}
-		requireNativeColumnJSON(t, got, []byte(fmt.Sprintf(`{"time_us":%d,"payload":%q}`, row.time, row.id)))
+		requireNativeColumnJSON(t, got, fixture.docs[i])
 	}
 	if got, err := database.Get([]byte("column/raw")); err != nil || string(got) != "complete" {
 		t.Fatalf("aggregate raw %q %v", got, err)
 	}
 }
 
-func checkNativeColumnReopened(t *testing.T, database *DB) {
+func checkNativeColumnReopened(t *testing.T, database *DB, fixture nativeColumnPendingCase) {
 	t.Helper()
 	defer func() {
 		if err := database.Close(); err != nil {
@@ -328,7 +391,7 @@ func checkNativeColumnReopened(t *testing.T, database *DB) {
 			t.Error(err)
 		}
 	}()
-	checkNativeColumnCurrent(t, manager, database)
+	checkNativeColumnCurrent(t, manager, database, fixture)
 	if indexedCRUDAppliedLSN(t, handle) != 3 {
 		t.Fatal("reopened typed LSN is not the single aggregate frame")
 	}

@@ -113,7 +113,16 @@ func nativeTypedMeta(meta CollectionMeta) bool {
 		return false
 	}
 	col := cfg.Columns[0]
-	return col.Path != "" && !strings.Contains(col.Path, ".") && col.ValueType == ColumnStoreValueInt64 && col.Owner == TypedStorageOwnerColumnPart &&
+	switch col.ValueType {
+	case ColumnStoreValueInt64, ColumnStoreValueString:
+	case ColumnStoreValueFloat32Vector:
+		if col.Nullable || columnStoreFloat32VectorElementsPerRow(col) <= 0 {
+			return false
+		}
+	default:
+		return false
+	}
+	return col.Path != "" && !strings.Contains(col.Path, ".") && col.Owner == TypedStorageOwnerColumnPart &&
 		cfg.RetainedPayload == ColumnRetainedPayloadNonColumn &&
 		columnRetainedPayloadEffectiveEncoding(cfg) == ColumnRetainedPayloadEncodingSemanticStreamV1
 }

@@ -32,8 +32,41 @@ func nativeTypedJSONReadCharge(bytes uint64) (uint64, error) {
 	}
 	return maps, nil
 }
+
+// A declared string/vector adds one object member, not one map entry per
+// value byte. Keep the original residual/map bound and separately cover typed
+// JSON output, escaping and old/replacement marshal backing.
+func nativeTypedReconstructionCharge(residual, path, typedJSON uint64) (uint64, error) {
+	if err := nativeTypedCheckedAdd(&residual, path); err != nil {
+		return 0, err
+	}
+	if err := nativeTypedCheckedAdd(&residual, 20); err != nil {
+		return 0, err
+	}
+	total, err := nativeTypedJSONReadCharge(residual)
+	if err != nil {
+		return 0, err
+	}
+	if typedJSON > 20 {
+		output, e := nativeTypedCheckedMul(typedJSON-20, 24)
+		if e != nil {
+			return 0, e
+		}
+		err = nativeTypedCheckedAdd(&total, memtable.COWAllocationCharge(output))
+	}
+	return total, err
+}
+
 func (r *NativeJSONRead) reconstructPendingTyped(row *columnDeclaredRow, residual []byte) (result []byte, resultErr error) {
-	charge, err := nativeTypedJSONReadCharge(uint64(len(residual)) + 20 + uint64(len(r.meta.Options.ColumnStore.Columns[0].Path)))
+	col := r.meta.Options.ColumnStore.Columns[0]
+	if row == nil || len(row.Values) != 1 {
+		return nil, backenddb.ErrNativeSemanticUnsupported
+	}
+	_, typedJSON, err := nativeTypedValueCapacity(col, row.Values[0])
+	if err != nil {
+		return nil, err
+	}
+	charge, err := nativeTypedReconstructionCharge(uint64(len(residual)), uint64(len(col.Path)), typedJSON)
 	if err != nil {
 		return nil, err
 	}
@@ -74,7 +107,27 @@ func (r *NativeJSONRead) reconstructTyped(id, value []byte) (result []byte, resu
 	if err != nil {
 		return nil, err
 	}
-	jsonCharge, err := nativeTypedJSONReadCharge(uint64(len(value)) + uint64(len(r.meta.Options.ColumnStore.Columns[0].Path)) + 20)
+	// Inspect compressed string dictionary lengths under this original read
+	// receipt before decoder/output allocation. Preflight owns no retained cache
+	// or file alias, and releases its scratch before semantic decoding starts.
+	extra, typedJSON, err := nativeTypedFamilyReadCapacity(r.meta, r.capture.Snapshot(), manifest.baseRoot, r.database.ColumnAssetRootDir(), func(n uint64) error {
+		if e := nativeTypedCheckedAdd(&n, charge); e != nil {
+			return e
+		}
+		return lease.Resize(n)
+	})
+	if err == nil {
+		err = lease.Resize(charge)
+	}
+	if err != nil {
+		lease.Close()
+		return nil, err
+	}
+	if err = nativeTypedCheckedAdd(&physical, extra); err != nil {
+		lease.Close()
+		return nil, err
+	}
+	jsonCharge, err := nativeTypedReconstructionCharge(uint64(len(value)), uint64(len(r.meta.Options.ColumnStore.Columns[0].Path)), typedJSON)
 	if err != nil {
 		lease.Close()
 		return nil, err
