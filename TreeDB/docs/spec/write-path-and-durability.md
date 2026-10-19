@@ -867,6 +867,13 @@ sync flag controls command-WAL synchronization; it does not replace physical sea
 completion. Legacy preassigned apply remains separate and is not accepted by the
 native owner.
 
+The cluster adapter's advisory preflight uses the same native captured row
+staging and final unique-owner validation, releasing all private work before it
+returns. Create preflight uses the same normalized metadata eligibility as apply.
+Preflight does not assign, install, seal, persist results/progress or reserve a
+future plan; apply captures again and validates catalog/data dependencies under
+the original gate. Legacy preflight retains its existing admitted route.
+
 A request-local, nonblocking/no-reentry post-append observer can report an error
 after the original accepted receipt is recorded and before visibility. The
 original assigned-failure path retains sparse custody, poisons publication and

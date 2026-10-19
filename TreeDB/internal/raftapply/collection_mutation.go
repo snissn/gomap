@@ -346,6 +346,26 @@ func (h *Harness) preflightCollectionMutationWithOptionsV1(mutation *collectionM
 	if err != nil {
 		return nil, codeCollectionApplyError(err)
 	}
+	if !prepareFrameDocuments && manager.UsesNativeCommandWALApply() {
+		if err := validateCollectionMutationFormatV1(mutation, collection.Meta().Options.DocumentFormat); err != nil {
+			return nil, err
+		}
+		var kind commitlog.CommandKind
+		switch mutation.command {
+		case nativewire.CommandInsertBatch:
+			kind = commitlog.CommandKindCollectionInsertBatchByID
+		case nativewire.CommandReplaceBatch:
+			kind = commitlog.CommandKindCollectionUpdateBatchByID
+		case nativewire.CommandDeleteBatch:
+			kind = commitlog.CommandKindCollectionDeleteBatchByID
+		default:
+			return nil, codedError(raftentry.ErrorUnsupportedFeatureV1, "raftapply: native deterministic mutation is not ordinary JSON insert/replace/delete")
+		}
+		if err := manager.PreflightNativeCommandWALMutation(mutation.collection, mutation.documentFormat, kind, mutation.ids, mutation.documents); err != nil {
+			return nil, codeCollectionApplyError(err)
+		}
+		return collection, nil
+	}
 	if err := h.preflightOpenedCollectionMutationV1(mutation, prepareFrameDocuments, collection); err != nil {
 		return nil, err
 	}
@@ -363,20 +383,10 @@ type collectionMutationPreparationV1 interface {
 }
 
 func (h *Harness) preflightOpenedCollectionMutationV1(mutation *collectionMutationV1, prepareFrameDocuments bool, collection collectionMutationPreparationV1) error {
-	if mutation.command == nativewire.CommandInsertBatch || mutation.command == nativewire.CommandReplaceBatch || mutation.command == nativewire.CommandUpdateBSONSet {
-		format, err := normalizeApplyDocumentFormat(collection.Meta().Options.DocumentFormat)
-		if err != nil {
-			return codedError(raftentry.ErrorUnsupportedFeatureV1, "raftapply: collection %q has unsupported document format: %v", mutation.collection, err)
-		}
-		if format != mutation.documentFormat {
-			return codedError(raftentry.ErrorRejectedConflictV1, "raftapply: deterministic document format %q does not match collection %q format %q", mutation.documentFormat, mutation.collection, format)
-		}
-		if mutation.command != nativewire.CommandUpdateBSONSet {
-			if err := validateMutationDocumentsV1(format, mutation.documents); err != nil {
-				return err
-			}
-		}
+	if err := validateCollectionMutationFormatV1(mutation, collection.Meta().Options.DocumentFormat); err != nil {
+		return err
 	}
+
 	switch mutation.command {
 	case nativewire.CommandInsertBatch:
 		if err := collection.PreflightCommandWALMutation(collections.ColumnPublishOperationInsert); err != nil {
@@ -441,6 +451,26 @@ func (h *Harness) preflightOpenedCollectionMutationV1(mutation *collectionMutati
 		}
 	default:
 		return codedError(raftentry.ErrorUnsupportedCommandV1, "raftapply: unsupported mutation command %d", mutation.command)
+	}
+	return nil
+}
+
+// Both native advisory staging and the legacy admitted wrapper retain the
+// original lowered format and document validation before their own planners.
+func validateCollectionMutationFormatV1(mutation *collectionMutationV1, documentFormat collections.DocumentFormat) error {
+	if mutation.command == nativewire.CommandInsertBatch || mutation.command == nativewire.CommandReplaceBatch || mutation.command == nativewire.CommandUpdateBSONSet {
+		format, err := normalizeApplyDocumentFormat(documentFormat)
+		if err != nil {
+			return codedError(raftentry.ErrorUnsupportedFeatureV1, "raftapply: collection %q has unsupported document format: %v", mutation.collection, err)
+		}
+		if format != mutation.documentFormat {
+			return codedError(raftentry.ErrorRejectedConflictV1, "raftapply: deterministic document format %q does not match collection %q format %q", mutation.documentFormat, mutation.collection, format)
+		}
+		if mutation.command != nativewire.CommandUpdateBSONSet {
+			if err := validateMutationDocumentsV1(format, mutation.documents); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }

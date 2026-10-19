@@ -233,6 +233,17 @@ legacy append seam cannot preassign native intents; custom legacy append seams
 refuse on this route. Unsupported typed, BSON and colocated-vector deterministic
 mutations remain refused before assignment.
 
+External deterministic preflight uses the same identity-free native row staging
+and final unique-owner validation, then closes its captured transaction and all
+partial plans. It does not reserve the plan or assign a WAL identity, install a
+logical successor, seal, or persist apply progress/results. Empty and unchanged
+mutations validate without creating a no-effect successor. Native create
+preflight uses the same metadata eligibility as apply, including its ordinary
+JSON-only role. Apply captures again and revalidates its original catalog/data
+dependencies under the publication gate; a successful advisory check is not a
+promise that a later conflicting apply will succeed. Legacy preflight remains on
+its existing admitted wrapper.
+
 The request-local post-append fault observer runs synchronously after append and
 receipt recording, before native finalization/visibility. It must be nonblocking
 and must not reenter the database or acquire locks. Its failure uses the existing

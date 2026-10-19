@@ -178,6 +178,11 @@ func (h *Harness) preflightCreateCollectionV1(meta collections.CollectionMeta, p
 	if manager == nil {
 		return false, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: nil collection manager cannot preflight create collection")
 	}
+	if manager.UsesNativeCommandWALApply() {
+		if err := manager.PreflightNativeCommandWALCreate(meta); err != nil {
+			return false, codeCollectionApplyError(err)
+		}
+	}
 	existing, err := manager.OpenCollection(meta.Name)
 	if errors.Is(err, collections.ErrCollectionNotFound) {
 		return false, nil

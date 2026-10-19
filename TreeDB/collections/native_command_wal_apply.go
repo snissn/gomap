@@ -44,68 +44,17 @@ func (m *CollectionManager) ApplyNativeCommandWALCreate(meta CollectionMeta, syn
 // commands. The original conditional transaction owns all reads, scalar index
 // effects and OCC dependencies; its publisher assigns the still-unassigned frame.
 func (m *CollectionManager) ApplyNativeCommandWALMutation(name string, format DocumentFormat, kind commitlog.CommandKind, ids, documents [][]byte, sync bool, observe func(uint64) error) (result NativeCommandWALApplyResult, resultErr error) {
-	if !m.UsesNativeCommandWALApply() || m.isClosing() {
-		return result, backenddb.ErrClosed
-	}
-	if kind != commitlog.CommandKindCollectionInsertBatchByID && kind != commitlog.CommandKindCollectionUpdateBatchByID && kind != commitlog.CommandKindCollectionDeleteBatchByID {
-		return result, backenddb.ErrNativeSemanticUnsupported
-	}
-	if kind != commitlog.CommandKindCollectionDeleteBatchByID && (len(ids) != len(documents) || normalizedDocumentFormat(format) != DocumentFormatJSON) {
-		return result, backenddb.ErrNativeSemanticUnsupported
-	}
-	tx, err := m.nativeJSON.Begin(name)
+	tx, err := m.beginNativeCommandWALMutation(name, format, kind, ids, documents)
 	if err != nil {
 		return result, err
 	}
 	defer func() { resultErr = errors.Join(resultErr, tx.Close()) }()
-	g := tx.binding(name)
-	if g == nil || g.probe.meta.Options.ColumnStore != nil || normalizedDocumentFormat(g.probe.meta.Options.DocumentFormat) != DocumentFormatJSON {
-		return result, backenddb.ErrNativeSemanticUnsupported
-	}
-	// Admission precedes the adapter's header arrays and synchronous callbacks.
-	// The ordinary row staging separately admits its own retained copies.
-	if err = tx.admitRowControls(g, len(ids)); err != nil {
+	var docs []commitlog.CollectionDocument
+	result, docs, err = tx.stageNativeCommandWALMutation(name, kind, ids, documents)
+	if err != nil {
 		return result, err
 	}
-	docs := make([]commitlog.CollectionDocument, 0, len(documents))
-	switch kind {
-	case commitlog.CommandKindCollectionInsertBatchByID:
-		if len(ids) != 0 {
-			if err = tx.InsertBatch(ids, documents); err != nil {
-				return result, err
-			}
-		}
-		for i := range documents {
-			docs = append(docs, commitlog.CollectionDocument{ID: ids[i], Document: documents[i]})
-		}
-		result.Affected = len(documents)
-	case commitlog.CommandKindCollectionUpdateBatchByID:
-		items := make([]UpdateBatchItem, len(ids))
-		for i := range ids {
-			replacement := documents[i]
-			items[i] = UpdateBatchItem{DocumentID: ids[i], Update: func(current []byte) ([]byte, bool, error) {
-				return replacement, !bytes.Equal(current, replacement), nil
-			}}
-		}
-		changed, updateErr := tx.UpdateBatch(items)
-		if updateErr != nil {
-			return result, updateErr
-		}
-		for i, item := range changed {
-			if item.Matched {
-				result.Matched++
-			}
-			if item.Modified {
-				result.Affected++
-				docs = append(docs, commitlog.CollectionDocument{ID: ids[i], Document: documents[i]})
-			}
-		}
-	case commitlog.CommandKindCollectionDeleteBatchByID:
-		result.Affected, err = tx.DeleteBatch(ids)
-		if err != nil {
-			return result, err
-		}
-	}
+	g := tx.binding(name)
 	var payload []byte
 	var payloadFormat commitlog.PayloadFormat
 	var class commandwalapply.LoweredFrameClass
@@ -144,6 +93,115 @@ func (m *CollectionManager) ApplyNativeCommandWALMutation(name string, format Do
 	err = tx.commitNativeApply(true, &apply)
 	result.Publication = apply.result
 	return result, err
+}
+
+// PreflightNativeCommandWALCreate uses the same normalized metadata eligibility
+// as native create, without preparing a successor or claiming an identity.
+func (m *CollectionManager) PreflightNativeCommandWALCreate(meta CollectionMeta) error {
+	if !m.UsesNativeCommandWALApply() || m.isClosing() {
+		return backenddb.ErrClosed
+	}
+	// The deterministic adapter remains ordinary JSON even where the public
+	// manager supports a broader typed role.
+	if meta.Options.ColumnStore != nil {
+		return backenddb.ErrNativeSemanticUnsupported
+	}
+	_, err := nativeJSONMeta(meta)
+	return err
+}
+
+// PreflightNativeCommandWALMutation is advisory: it stages and validates the
+// same captured rows and final unique owners as apply, then closes every partial
+// plan. It neither reserves that cut nor appends, installs, seals, or calls the
+// post-append observer. Apply must capture and validate again under its owner.
+func (m *CollectionManager) PreflightNativeCommandWALMutation(name string, format DocumentFormat, kind commitlog.CommandKind, ids, documents [][]byte) (resultErr error) {
+	tx, err := m.beginNativeCommandWALMutation(name, format, kind, ids, documents)
+	if err != nil {
+		return err
+	}
+	defer func() { resultErr = errors.Join(resultErr, tx.Close()) }()
+	if _, _, err = tx.stageNativeCommandWALMutation(name, kind, ids, documents); err != nil {
+		return err
+	}
+	tx.mu.Lock()
+	defer tx.mu.Unlock()
+	if tx.core == nil {
+		return backenddb.ErrClosed
+	}
+	if tx.failure != nil {
+		return tx.failure
+	}
+	if len(tx.members) == 0 {
+		// Empty/unchanged rows have no new unique owners to validate. Only apply
+		// creates their canonical no-effect member and immutable successor.
+		return nil
+	}
+	return tx.finalizeNativeRows()
+}
+
+func (m *CollectionManager) beginNativeCommandWALMutation(name string, format DocumentFormat, kind commitlog.CommandKind, ids, documents [][]byte) (*NativeJSONTxn, error) {
+	if !m.UsesNativeCommandWALApply() || m.isClosing() {
+		return nil, backenddb.ErrClosed
+	}
+	if kind != commitlog.CommandKindCollectionInsertBatchByID && kind != commitlog.CommandKindCollectionUpdateBatchByID && kind != commitlog.CommandKindCollectionDeleteBatchByID {
+		return nil, backenddb.ErrNativeSemanticUnsupported
+	}
+	if kind != commitlog.CommandKindCollectionDeleteBatchByID && (len(ids) != len(documents) || normalizedDocumentFormat(format) != DocumentFormatJSON) {
+		return nil, backenddb.ErrNativeSemanticUnsupported
+	}
+	return m.nativeJSON.Begin(name)
+}
+
+func (tx *NativeJSONTxn) stageNativeCommandWALMutation(name string, kind commitlog.CommandKind, ids, documents [][]byte) (result NativeCommandWALApplyResult, docs []commitlog.CollectionDocument, err error) {
+	g := tx.binding(name)
+	if g == nil || g.probe.meta.Options.ColumnStore != nil || normalizedDocumentFormat(g.probe.meta.Options.DocumentFormat) != DocumentFormatJSON {
+		return result, docs, backenddb.ErrNativeSemanticUnsupported
+	}
+	// Admission precedes the adapter's header arrays and synchronous callbacks.
+	// The ordinary row staging separately admits its own retained copies.
+	if err = tx.admitRowControls(g, len(ids)); err != nil {
+		return result, docs, err
+	}
+	docs = make([]commitlog.CollectionDocument, 0, len(documents))
+	switch kind {
+	case commitlog.CommandKindCollectionInsertBatchByID:
+		if len(ids) != 0 {
+			if err = tx.InsertBatch(ids, documents); err != nil {
+				return result, docs, err
+			}
+		}
+		for i := range documents {
+			docs = append(docs, commitlog.CollectionDocument{ID: ids[i], Document: documents[i]})
+		}
+		result.Affected = len(documents)
+	case commitlog.CommandKindCollectionUpdateBatchByID:
+		items := make([]UpdateBatchItem, len(ids))
+		for i := range ids {
+			replacement := documents[i]
+			items[i] = UpdateBatchItem{DocumentID: ids[i], Update: func(current []byte) ([]byte, bool, error) {
+				return replacement, !bytes.Equal(current, replacement), nil
+			}}
+		}
+		changed, updateErr := tx.UpdateBatch(items)
+		if updateErr != nil {
+			return result, docs, updateErr
+		}
+		for i, item := range changed {
+			if item.Matched {
+				result.Matched++
+			}
+			if item.Modified {
+				result.Affected++
+				docs = append(docs, commitlog.CollectionDocument{ID: ids[i], Document: documents[i]})
+			}
+		}
+	case commitlog.CommandKindCollectionDeleteBatchByID:
+		result.Affected, err = tx.DeleteBatch(ids)
+		if err != nil {
+			return result, docs, err
+		}
+	}
+	return result, docs, nil
 }
 
 // A no-effect accepted command needs its own physical build ledger while sharing
