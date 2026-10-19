@@ -3,6 +3,7 @@ package rootpublication
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"sort"
 	"unsafe"
@@ -174,22 +175,22 @@ func cloneOwnedDirectoryEntryV2(entry *stableResourceEntry, key []byte, physical
 		return nil, ErrResourceOwnership
 	}
 	if token.kind != physical.Kind || entry.logicalLane != physical.LogicalLane || entry.resourceID != physical.ResourceID || entry.diagnosticPath != physical.DiagnosticPath || token.identity != physical.Identity || token.generation != physical.Generation || token.digest != physical.Digest || !durableFrontierCovers(entry.frontier, physical.Frontier) || len(physical.Reachability) != entry.reachability.reachableCount() {
-		return nil, ErrResourceConflict
+		return nil, fmt.Errorf("%w: directory kind=%q path=%q physical equality kind=%t lane=%t id=%t path=%t identity=%t generation=%t digest=%t frontier=%t fields=%t", ErrResourceConflict, physical.Kind, physical.DiagnosticPath, token.kind == physical.Kind, entry.logicalLane == physical.LogicalLane, entry.resourceID == physical.ResourceID, entry.diagnosticPath == physical.DiagnosticPath, token.identity == physical.Identity, token.generation == physical.Generation, token.digest == physical.Digest, durableFrontierCovers(entry.frontier, physical.Frontier), len(physical.Reachability) == entry.reachability.reachableCount())
 	}
 	if exact && (!durableFrontierCovers(physical.Frontier, entry.frontier)) {
-		return nil, ErrResourceConflict
+		return nil, fmt.Errorf("%w: directory kind=%q path=%q exact frontier", ErrResourceConflict, physical.Kind, physical.DiagnosticPath)
 	}
 	for _, field := range physical.Reachability {
 		if !entry.reachability.hasReachable(field) {
-			return nil, ErrResourceConflict
+			return nil, fmt.Errorf("%w: directory kind=%q path=%q missing reachability=%q", ErrResourceConflict, physical.Kind, physical.DiagnosticPath, field)
 		}
 	}
 	namespace, present := token.diagnosticNamespace()
 	if present != (physical.Namespace != nil) {
-		return nil, ErrResourceConflict
+		return nil, fmt.Errorf("%w: directory kind=%q path=%q namespace presence", ErrResourceConflict, physical.Kind, physical.DiagnosticPath)
 	}
 	if present && (namespace.ParentIdentity != physical.Namespace.ParentIdentity || namespace.Operation != physical.Namespace.Operation || namespace.OldName != physical.Namespace.OldName || namespace.NewName != physical.Namespace.NewName || namespace.DiagnosticPath != physical.Namespace.DiagnosticPath) {
-		return nil, ErrResourceConflict
+		return nil, fmt.Errorf("%w: directory kind=%q path=%q namespace descriptor", ErrResourceConflict, physical.Kind, physical.DiagnosticPath)
 	}
 	if err := token.namespace.validateStable(); err != nil {
 		return nil, err
@@ -255,7 +256,7 @@ func recoverOwnedDependencyDirectoryV2(directory *DependencyDirectoryV2, admit f
 		count := 0
 		admitted.rangeEntriesLocked(func(entry *stableResourceEntry) bool { count++; source = entry; return count <= 1 })
 		if count != 1 || source.logicalObligations.count != 0 {
-			return nil, ErrResourceConflict
+			return nil, fmt.Errorf("%w: directory kind=%q path=%q recovered physical census count=%d", ErrResourceConflict, physical.Kind, physical.DiagnosticPath, count)
 		}
 		return cloneOwnedDirectoryEntryV2(source, key, physical, directory, false)
 	}, validate)

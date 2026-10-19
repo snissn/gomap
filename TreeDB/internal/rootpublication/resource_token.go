@@ -1884,7 +1884,7 @@ func NewRecoveredStableNamespaceTokenWithMetadata(spec StableNamespaceSpec, expe
 		return nil, err
 	}
 	if token.parentIdentity.Generation != expectedParent.Generation || !SamePhysicalIdentity(token.parentIdentity, expectedParent) {
-		cause := ErrResourceConflict
+		cause := fmt.Errorf("%w: recovered owned namespace parent identity", ErrResourceConflict)
 		if cleanupErr := token.ReleaseWithError(); cleanupErr != nil {
 			token.cleanupFailure.add(cause)
 			return nil, &token.cleanupFailure
@@ -1912,7 +1912,7 @@ func ValidateRecoveredStableNamespaceDescriptorV1(spec StableNamespaceSpec, expe
 	}
 	identity.Generation = spec.ParentGeneration
 	if identity.Generation != expectedParent.Generation || !SamePhysicalIdentity(identity, expectedParent) {
-		return ErrResourceConflict
+		return fmt.Errorf("%w: recovered namespace parent identity", ErrResourceConflict)
 	}
 	return nil
 }
