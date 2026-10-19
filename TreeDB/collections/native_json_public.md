@@ -36,12 +36,21 @@ creation and non-JSON document formats remain outside this route.
 Eligible typed collections also route `InsertTypedBatchWithStats`,
 `ReplaceTypedBatch`, `UpsertTypedBatch`, `ReplaceTypedSourceByID` and `DeleteBatch`
 through the same transaction and immutable typed projection. Current eligibility
-is one top-level column without secondary indexes or aggregate metadata:
+requires top-level declared columns without secondary indexes or aggregate metadata:
 
-- Int64, String and finite Float32Vector ColumnPart with noncolumn
+- One Int64, String or finite Float32Vector ColumnPart with noncolumn
   semantic-stream-v1 retained payload.
-- Nonnullable String RowAsset or finite Float32Vector ColumnPart with noncolumn
-  JSON retained payload.
+- One or more nonnullable String RowAsset and/or finite Float32Vector ColumnPart
+  columns with noncolumn JSON retained payload. Each row supplies every declared
+  column through the maintained typed projection or ordinary JSON input. Pending
+  reads and physical reconstruction use the same complete schema; canonical typed
+  frames retain every column in schema-name order.
+
+Column-dependent source, value, payload and reconstruction backing is admitted
+before allocation by the original transaction/read/build owner. Columns share the
+existing operation-local physical codec; captured TCIM sections are inspected once
+per asset, rather than once per column. Existing 32 MiB maintenance and 64 MiB
+in-flight limits remain in force; wider schemas do not receive extra credit.
 
 Raw, eligible scalar-indexed JSON and cross-collection JSON target durable WAL,
 relaxed WAL and production NoWAL profiles. Typed writes and transactions binding
@@ -73,7 +82,7 @@ the existing full physical-catalog import, outside that names-traversal bound.
 
 These are explicit eligibility limits of the provisional implementation. Broad
 producer migration remains required: assigned/apply and Raft producers,
-import/source controls, multi-column and additional typed layouts, standalone schema/drop/rename, non-scalar index DDL and derived-index lifecycle still
+import/source controls, additional typed layouts, standalone schema/drop/rename, non-scalar index DDL and derived-index lifecycle still
 need their complete public-path integration. Staged transactional DDL and
 approximate vector/hybrid or asynchronous text predicates in writing transactions
 remain excluded by the accepted capability contract.

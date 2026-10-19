@@ -85,8 +85,7 @@ func (c *Collection) prepareNativeInsertBatchOwned(ids, documents [][]byte, maxO
 // Shared opening state and unrelated commands in a checkpoint retain their own
 // original engine receipts and are not attributed to this request.
 func nativePreparedInsertBudget(meta CollectionMeta, ids, documents [][]byte) (owned, reserve int64, err error) {
-	// This gate requires nativeTypedMeta's exactly-one-column schema before
-	// the scalar-specific bound below can inspect Columns[0].
+	// Use the same schema-cell parser and constructor envelopes as staging.
 	retained, scratch, err := nativeTypedStageCapacity(meta, ids, documents)
 	if err != nil {
 		return 0, 0, err
@@ -103,16 +102,22 @@ func nativePreparedInsertBudget(meta CollectionMeta, ids, documents [][]byte) (o
 		if e = nativeTypedCheckedAdd(&residual, 2); e != nil {
 			return 0, 0, e
 		}
-		row, e := nativeTypedDeltaRowBuildCapacity(uint64(len(ids[i])), residual)
+		row, e := nativeTypedDeltaRowBuildCapacity(meta, uint64(len(ids[i])), residual)
 		if e != nil {
 			return 0, 0, e
 		}
-		if meta.Options.ColumnStore.Columns[0].ValueType == ColumnStoreValueString {
-			strings, e := nativeTypedCheckedMul(uint64(len(doc)), 24)
+		for _, col := range meta.Options.ColumnStore.Columns {
+			var backing uint64
+			switch col.ValueType {
+			case ColumnStoreValueString:
+				backing, e = nativeTypedCheckedMul(uint64(len(doc)), 24)
+			case ColumnStoreValueFloat32Vector:
+				backing, e = nativeTypedCheckedMul(max(uint64(len(doc)), uint64(columnStoreFloat32VectorElementsPerRow(col))), 8*12)
+			}
 			if e != nil {
 				return 0, 0, e
 			}
-			if e = nativeTypedCheckedAdd(&row, memtable.COWAllocationCharge(strings)); e != nil {
+			if e = nativeTypedCheckedAdd(&row, memtable.COWAllocationCharge(backing)); e != nil {
 				return 0, 0, e
 			}
 		}

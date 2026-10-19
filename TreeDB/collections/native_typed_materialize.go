@@ -79,29 +79,30 @@ func nativeTypedDeltaBuildCapacity(meta CollectionMeta, rows []columnDeclaredRow
 	}
 	var total uint64
 	for i, row := range rows {
-		if len(row.Values) != 1 || len(row.ID) == 0 {
+		if len(row.Values) != len(meta.Options.ColumnStore.Columns) || len(row.ID) == 0 {
 			return 0, backenddb.ErrNativeSemanticUnsupported
 		}
-		n, err := nativeTypedDeltaRowBuildCapacity(uint64(len(row.ID)), uint64(len(retained[i])))
+		n, err := nativeTypedDeltaRowBuildCapacity(meta, uint64(len(row.ID)), uint64(len(retained[i])))
 		if err != nil {
 			return 0, err
 		}
 		if err = nativeTypedCheckedAdd(&total, n); err != nil {
 			return 0, err
 		}
-		backing, _, err := nativeTypedValueCapacity(meta.Options.ColumnStore.Columns[0], row.Values[0])
-		if err != nil {
-			return 0, err
-		}
-		// The maintained prepared publisher reserves twelve dictionary source
-		// copies. The same envelope covers vector batch, granule, section and
-		// old/replacement image backing; per-row maps remain in the scalar term.
-		backing, err = nativeTypedCheckedMul(backing, 12)
-		if err != nil {
-			return 0, err
-		}
-		if err = nativeTypedCheckedAdd(&total, memtable.COWAllocationCharge(backing)); err != nil {
-			return 0, err
+		for j, col := range meta.Options.ColumnStore.Columns {
+			backing, _, err := nativeTypedValueCapacity(col, row.Values[j])
+			if err != nil {
+				return 0, err
+			}
+			// The maintained publisher's twelve source copies cover dictionary,
+			// vector, granule, section and old/replacement image backing.
+			backing, err = nativeTypedCheckedMul(backing, 12)
+			if err != nil {
+				return 0, err
+			}
+			if err = nativeTypedCheckedAdd(&total, memtable.COWAllocationCharge(backing)); err != nil {
+				return 0, err
+			}
 		}
 	}
 	manifest, err := nativeTypedManifestAppendCapacity(meta)
@@ -131,7 +132,7 @@ func nativeTypedMutationBuildCapacity(meta CollectionMeta, rows []columnDeclared
 		}
 	}
 	for _, id := range deleted {
-		n, e := nativeTypedDeltaRowBuildCapacity(uint64(len(id)), 0)
+		n, e := nativeTypedDeltaRowBuildCapacity(meta, uint64(len(id)), 0)
 		if e != nil {
 			return 0, e
 		}
@@ -186,7 +187,7 @@ func nativeTypedValueCapacity(col ColumnStoreColumn, value columnDeclaredValue) 
 	}
 }
 
-// This scalar route has no aggregate metadata: its maintained builder adds
+// This route has no aggregate metadata: its maintained builder adds
 // exactly a row part, a TCIM part and the replacement manifest header. Sixteen
 // simultaneous record/closure/mutation views each reserve four original 1 KiB
 // quota units for headers/maps and separately include all captured metadata
@@ -204,15 +205,32 @@ func nativeTypedManifestAppendCapacity(meta CollectionMeta) (uint64, error) {
 
 // Retained source bytes bound structural entries independently of their encoded
 // compression ratio. These are the maintained prepared-materializer quota terms.
-func nativeTypedDeltaRowBuildCapacity(idBytes, retainedBytes uint64) (uint64, error) {
+func nativeTypedDeltaRowBuildCapacity(meta CollectionMeta, idBytes, retainedBytes uint64) (uint64, error) {
 	structural, err := nativeTypedCheckedMul(retainedBytes, uint64(4*preparedSemanticStreamMapEntryReserveBytes+2*preparedSemanticStreamMaxPathBytes+preparedSemanticStreamMaxCursorDepth*int(unsafe.Sizeof(""))+int(unsafe.Sizeof(columnRetainedSemanticStreamPathNode{}))))
 	if err != nil {
 		return 0, err
 	}
 	total := memtable.COWAllocationCharge(structural)
-	// C=1: maintained vector expansion, typed image, C+3 sidecars, row image,
-	// root descriptors and run records; all independently owned backing rounds.
-	const perRow = 4224 + 1024 + 4*1024 + 384 + 1024 + 2048
+	// Match the maintained prepared publisher: scalar preparation per cell,
+	// TCIM containers per typed cell, C+3 sidecars, row image per cell, and
+	// original root/run controls per row. Codecs remain one shared workspace.
+	columns := uint64(len(meta.Options.ColumnStore.Columns))
+	var typedColumns uint64
+	for _, col := range meta.Options.ColumnStore.Columns {
+		if col.Owner == TypedStorageOwnerColumnPart {
+			typedColumns++
+		}
+	}
+	var perRow uint64
+	for _, term := range [][2]uint64{{4224 + 384, columns}, {1024, typedColumns}, {1024, columns + 3}, {1024 + 2048, 1}} {
+		n, err := nativeTypedCheckedMul(term[0], term[1])
+		if err != nil {
+			return 0, err
+		}
+		if err = nativeTypedCheckedAdd(&perRow, n); err != nil {
+			return 0, err
+		}
+	}
 	if err = nativeTypedCheckedAdd(&total, memtable.COWAllocationCharge(perRow)); err != nil {
 		return 0, err
 	}
@@ -937,10 +955,17 @@ func nativeTypedStageCapacity(meta CollectionMeta, ids, docs [][]byte) (retained
 	if !nativeTypedMeta(meta) || len(ids) != len(docs) {
 		return 0, 0, backenddb.ErrNativeSemanticUnsupported
 	}
-	if bytes.ContainsRune([]byte(meta.Options.ColumnStore.Columns[0].Path), '.') {
-		return 0, 0, backenddb.ErrNativeSemanticUnsupported
+	columns := meta.Options.ColumnStore.Columns
+	for _, n := range []uint64{uint64(unsafe.Sizeof(nativeTypedRows{})), uint64(unsafe.Sizeof(cowbtree.OwnedMapRefund{}))} {
+		if err = nativeTypedCheckedAdd(&retained, memtable.COWAllocationCharge(n)); err != nil {
+			return
+		}
 	}
-	for _, n := range []uint64{uint64(unsafe.Sizeof(nativeTypedRows{})), uint64(unsafe.Sizeof(cowbtree.OwnedMapRefund{})), uint64(len(ids)) * uint64(unsafe.Sizeof(columnDeclaredRow{})), uint64(len(ids)) * uint64(unsafe.Sizeof([]byte{}))} {
+	for _, width := range []uint64{uint64(unsafe.Sizeof(columnDeclaredRow{})), uint64(unsafe.Sizeof([]byte{}))} {
+		n, e := nativeTypedCheckedMul(uint64(len(ids)), width)
+		if e != nil {
+			return 0, 0, e
+		}
 		if err = nativeTypedCheckedAdd(&retained, memtable.COWAllocationCharge(n)); err != nil {
 			return
 		}
@@ -950,7 +975,16 @@ func nativeTypedStageCapacity(meta CollectionMeta, ids, docs [][]byte) (retained
 		return 0, 0, err
 	}
 	docHeaders = memtable.COWAllocationCharge(docHeaders)
+	parserSlots, err := nativeTypedCheckedMul(uint64(len(columns)), uint64(unsafe.Sizeof(jsonParserIndexValue{})))
+	if err != nil {
+		return 0, 0, err
+	}
+	parserSlots = memtable.COWAllocationCharge(parserSlots)
 	scratch = docHeaders
+	if err = nativeTypedCheckedAdd(&scratch, parserSlots); err != nil {
+		return
+	}
+	scratchHeaders := scratch
 	for i, doc := range docs {
 		var output uint64
 		output, err = nativeTypedCheckedMul(uint64(len(doc)), 6)
@@ -960,22 +994,28 @@ func nativeTypedStageCapacity(meta CollectionMeta, ids, docs [][]byte) (retained
 		if err = nativeTypedCheckedAdd(&output, 2); err != nil {
 			return
 		}
-		var declared uint64
-		switch col := meta.Options.ColumnStore.Columns[0]; col.ValueType {
-		case ColumnStoreValueString:
-			declared = uint64(len(doc)) // unescaping cannot exceed JSON source
-		case ColumnStoreValueFloat32Vector:
-			// The maintained converter allocates configured capacity before parsing
-			// and may grow on invalid overlong arrays before rejecting their length.
-			// At least two JSON source bytes are needed per additional element;
-			// twice max(configured, source) covers old/new append growth backing.
-			declared, err = nativeTypedCheckedMul(max(uint64(columnStoreFloat32VectorElementsPerRow(col)), uint64(len(doc))), 8)
-			if err != nil || declared > uint64(maxCollectionInt) {
-				return 0, 0, memtable.ErrCOWCapacity
+		values, e := nativeTypedCheckedMul(uint64(len(columns)), uint64(unsafe.Sizeof(columnDeclaredValue{})))
+		if e != nil {
+			return 0, 0, e
+		}
+		for _, n := range []uint64{uint64(len(ids[i])), values, output} {
+			if err = nativeTypedCheckedAdd(&retained, memtable.COWAllocationCharge(n)); err != nil {
+				return
 			}
 		}
-		for _, n := range []uint64{uint64(len(ids[i])), uint64(unsafe.Sizeof(columnDeclaredValue{})), output, declared} {
-			if err = nativeTypedCheckedAdd(&retained, memtable.COWAllocationCharge(n)); err != nil {
+		for _, col := range columns {
+			var declared uint64
+			switch col.ValueType {
+			case ColumnStoreValueString:
+				declared = uint64(len(doc)) // unescaping cannot exceed source
+			case ColumnStoreValueFloat32Vector:
+				// Include configured capacity and invalid source-array growth.
+				declared, err = nativeTypedCheckedMul(max(uint64(columnStoreFloat32VectorElementsPerRow(col)), uint64(len(doc))), 8)
+				if err != nil || declared > uint64(maxCollectionInt) {
+					return 0, 0, memtable.ErrCOWCapacity
+				}
+			}
+			if err = nativeTypedCheckedAdd(&retained, memtable.COWAllocationCharge(declared)); err != nil {
 				return
 			}
 		}
@@ -999,7 +1039,7 @@ func nativeTypedStageCapacity(meta CollectionMeta, ids, docs [][]byte) (retained
 			return
 		}
 		maps = memtable.COWAllocationCharge(maps)
-		if err = nativeTypedCheckedAdd(&maps, docHeaders); err != nil {
+		if err = nativeTypedCheckedAdd(&maps, scratchHeaders); err != nil {
 			return
 		}
 		scratch = max(scratch, maps)
@@ -1066,7 +1106,7 @@ func nativeTypedDecoderFixedCapacity() (uint64, error) {
 // Physical scalar reconstruction is bounded from the exact captured manifest,
 // before opening assets. Semantic-stream residual decoding is separately
 // admitted from its own stored wrapper's checked raw length by the read owner.
-func nativeTypedReadCapacity(snapshot *backenddb.Snapshot, root uint64) (uint64, error) {
+func nativeTypedReadCapacity(meta CollectionMeta, snapshot *backenddb.Snapshot, root uint64) (uint64, error) {
 	total, err := nativeTypedManifestCapacity(snapshot, root)
 	if err != nil {
 		return 0, err
@@ -1115,10 +1155,17 @@ func nativeTypedReadCapacity(snapshot *backenddb.Snapshot, root uint64) (uint64,
 			if cur.err != nil {
 				return 0, cur.err
 			}
-			// C=1 scalar vector/locator/descriptor containers use the maintained
-			// 4224+1024 per-row proof; serialized row IDs and asset input retain
-			// eight copies including decoder output and old/replacement backing.
-			rowBytes, e := nativeTypedCheckedMul(rows, 4224+1024)
+			// The maintained scalar preparation proof is per schema cell; the
+			// locator/descriptor term remains per row. Asset section raw lengths
+			// are additionally preflighted below for variable-width families.
+			cells, e := nativeTypedCheckedMul(uint64(len(meta.Options.ColumnStore.Columns)), 4224)
+			if e != nil {
+				return 0, e
+			}
+			if e = nativeTypedCheckedAdd(&cells, 1024); e != nil {
+				return 0, e
+			}
+			rowBytes, e := nativeTypedCheckedMul(rows, cells)
 			if e != nil {
 				return 0, e
 			}
@@ -1146,16 +1193,36 @@ func nativeTypedFamilyReadCapacity(meta CollectionMeta, snapshot *backenddb.Snap
 	if !nativeTypedMeta(meta) {
 		return 0, 0, backenddb.ErrNativeSemanticUnsupported
 	}
-	col := meta.Options.ColumnStore.Columns[0]
-	typedJSON = 20
-	if col.ValueType == ColumnStoreValueInt64 || root == 0 {
-		return
-	}
-	if col.ValueType == ColumnStoreValueFloat32Vector {
-		typedJSON, err = nativeTypedCheckedMul(uint64(columnStoreFloat32VectorElementsPerRow(col)), 24)
-		if err == nil {
-			err = nativeTypedCheckedAdd(&typedJSON, 2)
+	var rowStrings, typedStrings uint64
+	needsAssets := false
+	for _, col := range meta.Options.ColumnStore.Columns {
+		var n uint64
+		switch col.ValueType {
+		case ColumnStoreValueInt64:
+			n = 20
+		case ColumnStoreValueFloat32Vector:
+			n, err = nativeTypedCheckedMul(uint64(columnStoreFloat32VectorElementsPerRow(col)), 24)
+			if err == nil {
+				err = nativeTypedCheckedAdd(&n, 2)
+			}
+			needsAssets = true
+		case ColumnStoreValueString:
+			n = 2
+			needsAssets = true
+			if col.Owner == TypedStorageOwnerRowAsset {
+				rowStrings++
+			} else {
+				typedStrings++
+			}
 		}
+		if err != nil {
+			return 0, 0, err
+		}
+		if err = nativeTypedCheckedAdd(&typedJSON, n); err != nil {
+			return 0, 0, err
+		}
+	}
+	if !needsAssets || root == 0 {
 		return
 	}
 	metadata, err := nativeTypedManifestCapacity(snapshot, root)
@@ -1163,8 +1230,11 @@ func nativeTypedFamilyReadCapacity(meta CollectionMeta, snapshot *backenddb.Snap
 		return 0, 0, err
 	}
 	paths := uint64(len(rootDir))
-	for _, n := range []uint64{uint64(len(col.Path)), uint64(len(meta.Options.ColumnStore.AssetManager.Namespace))} {
-		if err = nativeTypedCheckedAdd(&paths, n); err != nil {
+	if err = nativeTypedCheckedAdd(&paths, uint64(len(meta.Options.ColumnStore.AssetManager.Namespace))); err != nil {
+		return 0, 0, err
+	}
+	for _, col := range meta.Options.ColumnStore.Columns {
+		if err = nativeTypedCheckedAdd(&paths, uint64(len(col.Path))); err != nil {
 			return 0, 0, err
 		}
 	}
@@ -1181,6 +1251,7 @@ func nativeTypedFamilyReadCapacity(meta CollectionMeta, snapshot *backenddb.Snap
 	if err = admit(metadata); err != nil {
 		return 0, 0, err
 	}
+	var rowStringBytes, typedStringBytes uint64
 	it, err := snapshot.IteratorAtRoot(root, columnManifestPartRecordPrefixBytes, nil)
 	if err != nil {
 		return 0, 0, err
@@ -1196,14 +1267,14 @@ func nativeTypedFamilyReadCapacity(meta CollectionMeta, snapshot *backenddb.Snap
 			if e != nil {
 				return 0, 0, e
 			}
-			if col.Owner == TypedStorageOwnerRowAsset && part.AssetRef.Kind == ColumnAssetKindTCS1PartImage {
+			if rowStrings != 0 && part.AssetRef.Kind == ColumnAssetKindTCS1PartImage {
 				// The maintained row image stores strings as uncompressed length-
 				// prefixed bytes. Its exact captured length bounds one declared
 				// output before the reader allocates or decodes that row image.
 				if part.AssetRef.Length < 0 {
 					return 0, 0, backenddb.ErrNativeSemanticUnsupported
 				}
-				typedJSON = max(typedJSON, uint64(part.AssetRef.Length))
+				rowStringBytes = max(rowStringBytes, uint64(part.AssetRef.Length))
 			}
 			if part.AssetRef.Kind == ColumnAssetKindTCS1TypedColumnPart {
 				if part.AssetRef.Length < 0 {
@@ -1240,7 +1311,7 @@ func nativeTypedFamilyReadCapacity(meta CollectionMeta, snapshot *backenddb.Snap
 						return 0, 0, e
 					}
 					if section.Kind == typedcolumn.ColumnPartImageSectionDictionaries {
-						typedJSON = max(typedJSON, n)
+						typedStringBytes = max(typedStringBytes, n)
 					}
 				}
 				// Dictionary keys/codes/reverse maps and reconstructed values borrow
@@ -1253,9 +1324,26 @@ func nativeTypedFamilyReadCapacity(meta CollectionMeta, snapshot *backenddb.Snap
 				if e = nativeTypedCheckedAdd(&extra, memtable.COWAllocationCharge(decoded)); e != nil {
 					return 0, 0, e
 				}
+				// The next asset may resize this operation's scratch receipt.
+				image = typedcolumn.ColumnPartImage{}
+				asset = nil
 			}
 		}
 		it.Next()
 	}
-	return extra, typedJSON, it.Error()
+	if err = it.Error(); err != nil {
+		return 0, 0, err
+	}
+	// Each string can use at most the complete row image or dictionary section.
+	// Sum the per-column bound, while inspecting each captured asset only once.
+	for _, term := range [][2]uint64{{rowStrings, rowStringBytes}, {typedStrings, typedStringBytes}} {
+		n, e := nativeTypedCheckedMul(term[0], term[1])
+		if e != nil {
+			return 0, 0, e
+		}
+		if e = nativeTypedCheckedAdd(&typedJSON, n); e != nil {
+			return 0, 0, e
+		}
+	}
+	return extra, typedJSON, nil
 }

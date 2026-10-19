@@ -118,27 +118,37 @@ func nativeTypedDeltaHeaderCharge() uint64 {
 
 func nativeTypedMeta(meta CollectionMeta) bool {
 	cfg := meta.Options.ColumnStore
-	if cfg == nil || !cfg.Enabled || len(meta.Indexes) != 0 || len(cfg.Columns) != 1 || len(cfg.AggregateMetadata) != 0 {
-		return false
-	}
-	col := cfg.Columns[0]
-	switch col.ValueType {
-	case ColumnStoreValueInt64, ColumnStoreValueString:
-	case ColumnStoreValueFloat32Vector:
-		if col.Nullable || columnStoreFloat32VectorElementsPerRow(col) <= 0 {
-			return false
-		}
-	default:
-		return false
-	}
-	if col.Path == "" || strings.Contains(col.Path, ".") || cfg.RetainedPayload != ColumnRetainedPayloadNonColumn {
+	if cfg == nil || !cfg.Enabled || len(meta.Indexes) != 0 || len(cfg.Columns) == 0 || len(cfg.AggregateMetadata) != 0 || cfg.RetainedPayload != ColumnRetainedPayloadNonColumn {
 		return false
 	}
 	encoding := columnRetainedPayloadEffectiveEncoding(cfg)
-	if encoding == ColumnRetainedPayloadEncodingJSON {
-		return !col.Nullable && ((col.ValueType == ColumnStoreValueString && col.Owner == TypedStorageOwnerRowAsset) || (col.ValueType == ColumnStoreValueFloat32Vector && col.Owner == TypedStorageOwnerColumnPart))
+	// Preserve the existing semantic-stream slice. Multiple declared columns
+	// use the maintained typed projection's non-null JSON carrier contract.
+	if encoding != ColumnRetainedPayloadEncodingJSON && (encoding != ColumnRetainedPayloadEncodingSemanticStreamV1 || len(cfg.Columns) != 1) {
+		return false
 	}
-	return col.Owner == TypedStorageOwnerColumnPart && encoding == ColumnRetainedPayloadEncodingSemanticStreamV1
+	for _, col := range cfg.Columns {
+		if col.Path == "" || strings.Contains(col.Path, ".") {
+			return false
+		}
+		switch col.ValueType {
+		case ColumnStoreValueInt64, ColumnStoreValueString:
+		case ColumnStoreValueFloat32Vector:
+			if col.Nullable || columnStoreFloat32VectorElementsPerRow(col) <= 0 {
+				return false
+			}
+		default:
+			return false
+		}
+		if encoding == ColumnRetainedPayloadEncodingJSON {
+			if col.Nullable || !((col.ValueType == ColumnStoreValueString && col.Owner == TypedStorageOwnerRowAsset) || (col.ValueType == ColumnStoreValueFloat32Vector && col.Owner == TypedStorageOwnerColumnPart)) {
+				return false
+			}
+		} else if col.Owner != TypedStorageOwnerColumnPart {
+			return false
+		}
+	}
+	return true
 }
 
 func nativeTypedProfile(database *backenddb.DB, meta CollectionMeta) error {
