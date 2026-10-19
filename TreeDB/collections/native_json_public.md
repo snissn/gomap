@@ -108,7 +108,10 @@ For canonical-inline typed effects, accepted logical state owns the immutable
 row/retained backing. Captured-prefix physical construction later materializes
 maintained row, column, manifest and locator assets off the publication gate.
 Original memory receipts cover retained and operation-local backing before
-allocation. The original build group receives the complete resource/requirement
+allocation. Successful materialization returns the ended operation workspace
+credit after codecs close and borrowed inputs are dropped. Retained outputs and
+handoff promises remain charged; failed builds retain their original custody.
+The original build group receives the complete resource/requirement
 closure; a newer suffix and held old views retain their own state and custody.
 Required external-reference prerequisites still close before recoverable
 acceptance; the deferred rule applies only to reconstructible inline effects.

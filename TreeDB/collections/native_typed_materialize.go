@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"math"
+	"os"
 	"reflect"
 	"unsafe"
 
@@ -237,13 +238,26 @@ func nativeTypedBuildWorkspaceCapacity() (uint64, error) {
 	// proof includes the full default 4 MiB window's double history, hash table,
 	// bounded literal/sequence/FSE/Huffman buffers and their growth coexistence.
 	typed := typedcolumn.BuildCodecCapacity() + uint64(1<<20) // original row-image fixed reserve
-	decoder, err := nativeTypedDecoderFixedCapacity()
-	if err != nil {
-		return 0, err
+	// Ordinary granule statistics/pruning decode none, Snappy or LZ4 payloads;
+	// their source-sized backing is in the retained construction bound. Image
+	// certification validates stored metadata and hashes without decompressing
+	// ZSTD sections. Only the benchmark granule override constructs a ZSTD
+	// decoder during building; reads retain their independent decoder bound.
+	workspace := max(semantic, typed, uint64(8<<20))
+	if raw, ok := os.LookupEnv(typedColumnBenchmarkCompressionEnv); ok {
+		compression, set, err := parseTypedColumnBenchmarkCompression(raw)
+		if err != nil {
+			return 0, err
+		}
+		if set && compression == typedcolumn.CompressionZSTD {
+			decoder, err := nativeTypedDecoderFixedCapacity()
+			if err != nil {
+				return 0, err
+			}
+			workspace = max(workspace, decoder+uint64(1<<20))
+		}
 	}
-	// Validation follows encoder close; ordered-root building follows asset
-	// validation. Their operation-local fixed workspaces do not coexist.
-	return max(semantic, typed, decoder+uint64(1<<20), uint64(8<<20)), nil
+	return workspace, nil
 }
 
 func nativeTypedCollectionBuildCapacity(meta CollectionMeta, sourceBytes uint64) (uint64, error) {
@@ -492,8 +506,8 @@ func (w *nativeTypedMaterialization) materialize() (resultErr error) {
 
 func (w *nativeTypedMaterialization) materializeDelta(context columnPhysicalAssetBuildContext, d *nativeTypedDelta) error {
 	// Each command's semantic phase precedes its typed encoder phase. The
-	// maintained asset helper also closes after joining its encoder goroutine,
-	// before validation decoders; drop again here before the next command.
+	// maintained asset helper also closes after joining its encoder goroutine;
+	// drop again here before the next command.
 	_ = w.codec.Close()
 	cfg := *w.meta.Options.ColumnStore
 	if cfg.ActiveManifest != nil && cfg.ActiveManifest.Generation == ^uint64(0) {
