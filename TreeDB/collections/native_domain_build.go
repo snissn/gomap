@@ -66,7 +66,7 @@ func newNativeDomainBuild(source *nativeDomainState, maxSources int, admit cowbt
 	(nativeDomainLifetime{}).Retain(source)
 	return &nativeDomainBuild{
 		source: source, roots: make([]*memtable.COWRoot, 0, maxSources),
-		delta: batch.NewOwnedBounded(nil, int(^uint(0)>>1), nativeBuildBatchEntries),
+		delta: batch.NewBoundedRetainingLargeEntries(nil, int(^uint(0)>>1), nativeBuildBatchEntries),
 		root:  source.baseRoot, refund: refund,
 	}, nil
 }
@@ -201,7 +201,7 @@ func (b *nativeDomainBuild) finish() (done cowbtree.OwnedMapCompletion, err erro
 	if b.failure != nil {
 		return done, b.failure
 	}
-	b.delta.Close()
+	b.delta.CloseWithoutPooling() // The original build owns this exact admitted backing.
 	b.delta = nil
 	clear(b.roots)
 	b.roots = nil
