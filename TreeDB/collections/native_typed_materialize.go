@@ -30,6 +30,9 @@ type nativeTypedMaterializeInput struct {
 	capture          *backenddb.StableResourceCaptureLease
 	allocator        backenddb.NativeSemanticAllocator
 	group            *backenddb.RootPublicationBuildGroup
+	// Fixed operation credit stays in the SAME live build parent's floor.
+	// Collections run sequentially; only their retained terms split to children.
+	sharedWorkspace uint64
 }
 type nativeTypedMaterializedRoot struct {
 	name string
@@ -225,10 +228,7 @@ func nativeTypedDeltaRowBuildCapacity(idBytes, retainedBytes uint64) (uint64, er
 	return total, nil
 }
 
-func nativeTypedCollectionBuildCapacity(meta CollectionMeta, sourceBytes uint64) (uint64, error) {
-	if !nativeTypedMeta(meta) {
-		return 0, backenddb.ErrNativeSemanticUnsupported
-	}
+func nativeTypedBuildWorkspaceCapacity() (uint64, error) {
 	// The retained builder's source-derived fixed cursor/raw/output/encoder
 	// proof already includes its 8 MiB codec allowance. Native scratch starts
 	// empty, so the unrelated maximum pooled raw buffer is absent.
@@ -243,10 +243,29 @@ func nativeTypedCollectionBuildCapacity(meta CollectionMeta, sourceBytes uint64)
 	}
 	// Validation follows encoder close; ordered-root building follows asset
 	// validation. Their operation-local fixed workspaces do not coexist.
-	total := max(semantic, typed, decoder+uint64(1<<20), uint64(8<<20))
-	if err := nativeTypedCheckedAdd(&total, sourceBytes); err != nil {
+	return max(semantic, typed, decoder+uint64(1<<20), uint64(8<<20)), nil
+}
+
+func nativeTypedCollectionBuildCapacity(meta CollectionMeta, sourceBytes uint64) (uint64, error) {
+	total, err := nativeTypedBuildWorkspaceCapacity()
+	if err != nil {
 		return 0, err
 	}
+	retained, err := nativeTypedCollectionRetainedCapacity(meta, sourceBytes)
+	if err != nil {
+		return 0, err
+	}
+	if err = nativeTypedCheckedAdd(&total, retained); err != nil {
+		return 0, err
+	}
+	return total, nil
+}
+
+func nativeTypedCollectionRetainedCapacity(meta CollectionMeta, sourceBytes uint64) (uint64, error) {
+	if !nativeTypedMeta(meta) {
+		return 0, backenddb.ErrNativeSemanticUnsupported
+	}
+	total := sourceBytes
 	backing, err := nativeSchemaBackingCharge(reflect.ValueOf(&meta), 0)
 	if err != nil {
 		return 0, err
@@ -370,7 +389,15 @@ func prepareNativeTypedMaterializationCore(input nativeTypedMaterializeInput) (w
 	}
 	var refund *cowbtree.OwnedMapRefund
 	if input.allocator != nil {
-		lease, admitErr := input.allocator.AdmitNativeBytes(amount)
+		owned := amount
+		if input.sharedWorkspace != 0 {
+			fixed, e := nativeTypedBuildWorkspaceCapacity()
+			if e != nil || input.sharedWorkspace != fixed || owned < fixed {
+				return nil, backenddb.ErrNativeSemanticUnsupported
+			}
+			owned -= fixed
+		}
+		lease, admitErr := input.allocator.AdmitNativeBytes(owned)
 		if admitErr != nil {
 			return nil, admitErr
 		}

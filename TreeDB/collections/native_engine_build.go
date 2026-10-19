@@ -8,6 +8,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/cowbtree"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
 // nativeBuildAllocation spends only the original accepted construction
@@ -31,20 +32,22 @@ func (a *nativeBuildAllocation) AdmitNativeBytes(n uint64) (*memtable.COWExterna
 // original system-catalog and durable-resource closure must join the same group
 // before any caller may activate the higher-level interface.
 type nativeEngineBuild struct {
-	typed           *nativeTypedMaterialization
-	typedCollection uint64
-	domains         []*nativeDomainBuild
-	built           []nativeBuiltDomain
-	catalog         *nativeDomainBuild
-	catalogBuilt    nativeBuiltDomain
-	allocation      nativeBuildAllocation
-	collections     int
-	handoffs        int
-	partial         *nativeEngineVersion
-	failure         error
-	started         bool
-	complete        bool
-	refund          *cowbtree.OwnedMapRefund
+	typed             []nativeTypedBuildWork
+	typedResources    *rootpublication.StableResourceSetBuilder
+	typedClosure      *rootpublication.StableResourceSet
+	typedRequirements rootpublication.StableLogicalObligationRequirements
+	domains           []*nativeDomainBuild
+	built             []nativeBuiltDomain
+	catalog           *nativeDomainBuild
+	catalogBuilt      nativeBuiltDomain
+	allocation        nativeBuildAllocation
+	collections       int
+	handoffs          int
+	partial           *nativeEngineVersion
+	failure           error
+	started           bool
+	complete          bool
+	refund            *cowbtree.OwnedMapRefund
 }
 
 // prepareNativeEngineBuild reserves all domain scratch and BOTH sparse
@@ -77,7 +80,7 @@ func prepareNativeEngineBuildAt(captured *nativeEngineVersion, basis *backenddb.
 		return nil, memtable.ErrCOWCapacity
 	}
 	bytes, floor = bytes+keys, floor+keys
-	typedBytes, typedCollection, typedCount, err := nativeTypedBuildCapacity(captured, basis)
+	typedBytes, typedFloor, typedCollections, _, err := nativeTypedBuildCapacity(captured, basis)
 	if err != nil {
 		return nil, err
 	}
@@ -85,6 +88,9 @@ func prepareNativeEngineBuildAt(captured *nativeEngineVersion, basis *backenddb.
 		return nil, memtable.ErrCOWCapacity
 	}
 	bytes += typedBytes
+	if err = nativeTypedCheckedAdd(&floor, typedFloor); err != nil {
+		return nil, err
+	}
 	lease, err := captured.maintenance.AdmitNativeBytes(bytes)
 	if err != nil {
 		if errors.Is(err, memtable.ErrCOWCapacity) {
@@ -153,7 +159,7 @@ func prepareNativeEngineBuildAt(captured *nativeEngineVersion, basis *backenddb.
 		return b.failure == nil
 	})
 	if b.failure == nil {
-		err = b.prepareTyped(typedCollection, typedCount, basis, capture, group)
+		err = b.prepareTyped(captured, typedCollections, basis, capture, group)
 		if err != nil {
 			return b, err
 		}
@@ -205,6 +211,15 @@ func (b *nativeEngineBuild) materializeDomains(group nativeOrderedRootBuilder) e
 		return backenddb.ErrNativeSemanticUnsupported
 	}
 	b.started = true
+	defer func() {
+		// Catalog or ordinary-domain failure can precede all typed work. Drop
+		// every borrowed input while preserving the original output custody.
+		for _, input := range b.typed {
+			if input.work != nil {
+				input.work.input = nativeTypedMaterializeInput{}
+			}
+		}
+	}()
 	if len(b.domains) != 0 {
 		if _, ok := group.(nativeSystemRootBuilder); !ok {
 			b.failure = backenddb.ErrNativeSemanticUnsupported
@@ -218,7 +233,7 @@ func (b *nativeEngineBuild) materializeDomains(group nativeOrderedRootBuilder) e
 		}
 	}
 	for i, work := range b.domains {
-		if b.typed != nil && b.built[i].collection == b.typedCollection {
+		if b.hasTypedCollection(b.built[i].collection) {
 			continue
 		}
 		root, err := work.materialize(group)
@@ -229,7 +244,7 @@ func (b *nativeEngineBuild) materializeDomains(group nativeOrderedRootBuilder) e
 		b.built[i].root = root
 		binary.BigEndian.PutUint64(b.built[i].rootValue[:], root)
 	}
-	if b.typed != nil {
+	if len(b.typed) != 0 {
 		physical, ok := group.(*backenddb.RootPublicationBuildGroup)
 		if !ok {
 			b.failure = backenddb.ErrNativeSemanticUnsupported
@@ -275,20 +290,38 @@ func (b *nativeEngineBuild) finish() (done cowbtree.OwnedMapCompletion, err erro
 	if b.failure != nil {
 		return done, b.failure
 	}
-	if b.typed != nil {
+	if len(b.typed) != 0 {
 		for i := range b.built {
 			b.built[i].typedMeta = nil
 		}
-		work := b.typed
-		child, e := work.release()
-		done.Append(child)
-		if e != nil {
-			b.failure = e
-			return done, e
+		for i := range b.typed {
+			work := b.typed[i].work
+			child, e := work.release()
+			done.Append(child)
+			if e != nil {
+				b.failure = e
+				return done, e
+			}
+			b.typed[i] = nativeTypedBuildWork{}
+			work = nil
 		}
 		b.typed = nil
-		work = nil
 	}
+	if b.typedResources != nil {
+		if err = b.typedResources.AbandonWithError(); err != nil {
+			b.failure = err
+			return done, err
+		}
+		b.typedResources = nil
+	}
+	if b.typedClosure != nil {
+		if err = b.typedClosure.ReleaseWithError(); err != nil {
+			b.failure = err
+			return done, err
+		}
+		b.typedClosure = nil
+	}
+	b.typedRequirements = rootpublication.StableLogicalObligationRequirements{}
 	clear(b.built)
 	b.built = nil
 	b.catalogBuilt = nativeBuiltDomain{}

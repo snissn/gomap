@@ -12,14 +12,29 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/txnhistory"
 	"github.com/snissn/gomap/TreeDB/node"
-	"github.com/snissn/gomap/TreeDB/tree"
 )
+
+// The private member chain precedes the captured opening cut. A tombstone is
+// authoritative, and an overlapping source insertion wins within its member.
+func (g *nativeJSONTxnBinding) typedRowEqual(id, retained []byte, wanted []columnDeclaredValue) (bool, bool, error) {
+	if row, old, ok := g.typed.find(id); ok {
+		if row == nil {
+			return false, false, nil
+		}
+		if wanted == nil || !bytes.Equal(bytes.TrimSpace(old), retained) {
+			return true, false, nil
+		}
+		equal, err := typedDeclaredValuesEqual(row.Values, wanted)
+		return true, equal, err
+	}
+	return g.probe.typedRowEqual(id, retained, wanted)
+}
 
 // stageNativeTypedInsert uses the maintained declared-value parser and residual
 // transform. The original independent receipt transfers with the immutable
 // delta before any transaction stage receipt can be refunded.
 func (t *NativeJSONTxn) stageNativeTypedInsert(g *nativeJSONTxnBinding, ids, documents [][]byte) (resultErr error) {
-	if len(ids) == 0 || len(ids) != len(documents) || g.typed != nil {
+	if len(ids) == 0 || len(ids) != len(documents) {
 		return backenddb.ErrNativeSemanticUnsupported
 	}
 	if err := nativeTypedProfile(t.db, g.probe.meta); err != nil {
@@ -57,10 +72,13 @@ func (t *NativeJSONTxn) stageNativeTypedInsert(g *nativeJSONTxnBinding, ids, doc
 		if len(id) == 0 {
 			return backenddb.ErrNativeSemanticUnsupported
 		}
-		if _, e := g.probe.Get(id); e == nil {
-			return ErrDocumentExists
-		} else if !errors.Is(e, tree.ErrKeyNotFound) {
+		if err = t.trackRead(g, id); err != nil {
+			return err
+		}
+		if found, _, e := g.typedRowEqual(id, nil, nil); e != nil {
 			return e
+		} else if found {
+			return ErrDocumentExists
 		}
 		docs[i] = columnWriteDocument{ID: id, Document: documents[i]}
 	}
@@ -136,7 +154,7 @@ func (t *NativeJSONTxn) adoptNativeTyped(g *nativeJSONTxnBinding, rows []columnD
 	data.refs.Store(1)
 	nodeRefund := new(cowbtree.OwnedMapRefund)
 	nodeRefund.Init(header)
-	delta := &nativeTypedDelta{data: data, rows: rows, retained: residual, deleted: deleted, operation: operation, buildCapacity: capacity, refund: nodeRefund}
+	delta := &nativeTypedDelta{previous: g.typed, data: data, rows: rows, retained: residual, deleted: deleted, operation: operation, buildCapacity: capacity, refund: nodeRefund}
 	delta.refs.Store(1)
 	g.typed = delta
 	return nil
@@ -144,23 +162,52 @@ func (t *NativeJSONTxn) adoptNativeTyped(g *nativeJSONTxnBinding, rows []columnD
 
 func (t *NativeJSONTxn) finalizeNativeTyped(g *nativeJSONTxnBinding) error {
 	d := g.typed
-	for _, charge := range []uint64{uint64(unsafe.Sizeof(nativeJSONLogicalInsert{})), uint64(len(d.rows)+len(d.deleted)) * uint64(unsafe.Sizeof(memtable.COWMutation{})), uint64(len(d.rows)+len(d.deleted)) * uint64(unsafe.Sizeof(txnhistory.Effect{})), 3 * uint64(unsafe.Sizeof(nativeJSONDomainChange{}))} {
+	var count uint64
+	for member := d; member != nil; member = member.previous {
+		if err := nativeTypedCheckedAdd(&count, uint64(len(member.rows))+uint64(len(member.deleted))); err != nil {
+			return err
+		}
+	}
+	for _, item := range []uint64{uint64(unsafe.Sizeof(memtable.COWMutation{})), uint64(unsafe.Sizeof(txnhistory.Effect{}))} {
+		charge, err := nativeTypedCheckedMul(count, item)
+		if err != nil {
+			return err
+		}
+		if err = t.admitStage(g, memtable.COWAllocationCharge(charge)); err != nil {
+			return err
+		}
+	}
+	for _, charge := range []uint64{uint64(unsafe.Sizeof(nativeJSONLogicalInsert{})), 3 * uint64(unsafe.Sizeof(nativeJSONDomainChange{}))} {
 		if err := t.admitStage(g, memtable.COWAllocationCharge(charge)); err != nil {
 			return err
 		}
 	}
-	mutations := make([]memtable.COWMutation, 0, len(d.rows)+len(d.deleted))
-	effects := make([]txnhistory.Effect, 0, len(d.rows)+len(d.deleted))
-	for _, id := range d.deleted {
-		if i := sort.Search(len(d.rows), func(i int) bool { return bytes.Compare(d.rows[i].ID, id) >= 0 }); i < len(d.rows) && bytes.Equal(d.rows[i].ID, id) {
-			continue
+	mutations := make([]memtable.COWMutation, 0, count)
+	effects := make([]txnhistory.Effect, 0, count)
+	for member := d; member != nil; member = member.previous {
+		for _, id := range member.deleted {
+			mutations = append(mutations, memtable.COWMutation{Key: id})
 		}
-		mutations = append(mutations, memtable.COWMutation{Key: id, Flags: node.FlagTombstone})
-	}
-	for _, row := range d.rows {
-		mutations = append(mutations, memtable.COWMutation{Key: row.ID, Flags: node.FlagInline})
+		for _, row := range member.rows {
+			mutations = append(mutations, memtable.COWMutation{Key: row.ID})
+		}
 	}
 	sort.Slice(mutations, func(i, j int) bool { return bytes.Compare(mutations[i].Key, mutations[j].Key) < 0 })
+	kept := 0
+	for _, mutation := range mutations {
+		if kept != 0 && bytes.Equal(mutations[kept-1].Key, mutation.Key) {
+			continue
+		}
+		row, _, _ := d.find(mutation.Key)
+		mutation.Flags = node.FlagInline
+		if row == nil {
+			mutation.Flags = node.FlagTombstone
+		}
+		mutations[kept] = mutation
+		kept++
+	}
+	clear(mutations[kept:])
+	mutations = mutations[:kept]
 	for _, mutation := range mutations {
 		effects = append(effects, txnhistory.Effect{Namespace: g.namespace(), Kind: txnhistory.PointEffect, Key: mutation.Key})
 	}
@@ -186,23 +233,43 @@ func (p *nativeJSONLogicalGroup) FinalizeNativePublication(ctx backenddb.Command
 	if p.prepared == nil || ctx.AppliedCommandLSN == 0 {
 		return backenddb.NativeFinalizedPublication{}, backenddb.ErrNativeSemanticUnsupported
 	}
+	// Only the prepared successor's cloned private headers receive identity.
+	// Its inherited tail already has canonical identity and remains immutable.
 	for i := 0; i < p.count; i++ {
-		d := p.bindings[i].typed
-		if d == nil {
+		g := &p.bindings[i]
+		if g.typed == nil {
 			continue
 		}
-		if d.appliedLSN != 0 {
+		collection, ok := p.prepared.collections.Get(g.incarnation)
+		if !ok {
 			return backenddb.NativeFinalizedPublication{}, backenddb.ErrNativeSemanticUnsupported
+		}
+		primary, ok := collection.domains.Get("primary")
+		if !ok {
+			return backenddb.NativeFinalizedPublication{}, backenddb.ErrNativeSemanticUnsupported
+		}
+		d := primary.typed
+		for staged := g.typed; staged != nil; staged = staged.previous {
+			if d == nil || d.appliedLSN != 0 || d.memberOrdinal != staged.memberOrdinal {
+				return backenddb.NativeFinalizedPublication{}, backenddb.ErrNativeSemanticUnsupported
+			}
+			d = d.previous
 		}
 	}
 	for i := 0; i < p.count; i++ {
-		d := p.bindings[i].typed
-		if d == nil {
+		g := &p.bindings[i]
+		if g.typed == nil {
 			continue
 		}
-		d.appliedLSN = ctx.AppliedCommandLSN
-		if p.raw {
-			d.memberOrdinal++
+		collection, _ := p.prepared.collections.Get(g.incarnation)
+		primary, _ := collection.domains.Get("primary")
+		d := primary.typed
+		for staged := g.typed; staged != nil; staged = staged.previous {
+			d.appliedLSN = ctx.AppliedCommandLSN
+			if p.raw {
+				d.memberOrdinal++
+			}
+			d = d.previous
 		}
 	}
 	p.prepared.Retain()
@@ -346,7 +413,7 @@ func nativeTypedBatchStageCapacity(meta CollectionMeta, ids, retained [][]byte, 
 }
 
 func (t *NativeJSONTxn) stageNativeTypedBatch(g *nativeJSONTxnBinding, ids, retained [][]byte, columns []TypedColumnBatch, deleteIDs [][]byte, kind commitlog.CommandKind, upsert bool) (results []UpdateBatchResult, matched int, resultErr error) {
-	if g.typed != nil || !nativeTypedMeta(g.probe.meta) {
+	if !nativeTypedMeta(g.probe.meta) {
 		return nil, 0, backenddb.ErrNativeSemanticUnsupported
 	}
 	if err := nativeTypedProfile(t.db, g.probe.meta); err != nil {
@@ -422,7 +489,7 @@ func (t *NativeJSONTxn) stageNativeTypedBatch(g *nativeJSONTxnBinding, ids, reta
 				return nil, 0, err
 			}
 			trimmed := bytes.TrimSpace(retained[i])
-			found, equal, e := g.probe.typedRowEqual(id, trimmed, rows[i].Values)
+			found, equal, e := g.typedRowEqual(id, trimmed, rows[i].Values)
 			if e != nil {
 				return nil, 0, e
 			}
@@ -459,7 +526,7 @@ func (t *NativeJSONTxn) stageNativeTypedBatch(g *nativeJSONTxnBinding, ids, reta
 		if err = t.trackRead(g, id); err != nil {
 			return nil, 0, err
 		}
-		found, _, e := g.probe.typedRowEqual(id, nil, nil)
+		found, _, e := g.typedRowEqual(id, nil, nil)
 		if e != nil {
 			return nil, 0, e
 		}

@@ -161,13 +161,20 @@ func prepareNativeJSONPrimaries(base *nativeEngineVersion, changes []nativeJSONP
 				return next, err
 			}
 			if i == 0 && change.typed != nil {
-				if change.typed.previous != nil {
-					return next, backenddb.ErrNativeSemanticUnsupported
+				// Clone only private headers: their original vector receipts remain
+				// shared, while reprepare never grafts into the staged chain itself.
+				typed, cloneErr := cloneNativeTypedSuffix(change.typed, nil, admit)
+				if typed != nil {
+					tail := typed
+					for tail.previous != nil {
+						tail = tail.previous
+					}
+					tail.previous = domain.typed // transfer this original inherited edge
+					domain.typed = typed         // adopt partial headers before observing error
 				}
-				inherited := domain.typed
-				change.typed.retain()
-				domain.typed = change.typed
-				change.typed.previous = inherited
+				if cloneErr != nil {
+					return next, cloneErr
+				}
 			}
 			if err = p.domainBuilder.Set(name, domain); err != nil {
 				return next, err

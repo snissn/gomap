@@ -11,6 +11,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
@@ -92,7 +93,6 @@ func replayNativeJSONComposite(db *backenddb.DB, env commitlog.CommandEnvelope) 
 		}
 		return decodeRootID(encoded)
 	}
-	var typedCollection string
 	var memberOrdinal uint32
 	err = commitlog.ScanCompositeMutationPayload(env.Payload, func(member commitlog.CompositeMutationMember) error {
 		ordinal := memberOrdinal
@@ -214,10 +214,6 @@ func replayNativeJSONComposite(db *backenddb.DB, env commitlog.CommandEnvelope) 
 			return snapshot.GetAtRoot(target.root, id)
 		}
 		if nativeTypedMeta(target.meta) {
-			if typedCollection != "" && typedCollection != name {
-				return backenddb.ErrNativeSemanticUnsupported
-			}
-			typedCollection = name
 			var rows []columnDeclaredRow
 			var residual [][]byte
 			op := ColumnPublishOperationInsert
@@ -482,6 +478,17 @@ func replayNativeJSONComposite(db *backenddb.DB, env commitlog.CommandEnvelope) 
 			return err
 		}
 	}
+	var typedResources *rootpublication.StableResourceSetBuilder
+	var typedClosure *rootpublication.StableResourceSet
+	var typedRequirements rootpublication.StableLogicalObligationRequirements
+	defer func() {
+		if typedResources != nil {
+			resultErr = errors.Join(resultErr, typedResources.AbandonWithError())
+		}
+		if typedClosure != nil {
+			resultErr = errors.Join(resultErr, typedClosure.ReleaseWithError())
+		}
+	}()
 	for _, target := range collections {
 		if len(target.typed) == 0 {
 			continue
@@ -502,10 +509,18 @@ func replayNativeJSONComposite(db *backenddb.DB, env commitlog.CommandEnvelope) 
 		if err = work.materialize(); err != nil {
 			return err
 		}
-		if err = group.SetNativeDurableResources(work.resources, work.requirements); err != nil {
+		if typedResources == nil {
+			typedResources = rootpublication.NewStableResourceSetBuilder()
+		}
+		requirements, err := rootpublication.MergeStableLogicalObligationRequirements(typedRequirements, work.requirements)
+		if err != nil {
+			return err
+		}
+		if err = typedResources.Merge(work.resources); err != nil {
 			return err
 		}
 		work.resources = nil
+		typedRequirements = requirements
 		for _, root := range work.roots {
 			var value [8]byte
 			binary.BigEndian.PutUint64(value[:], root.root)
@@ -520,6 +535,17 @@ func replayNativeJSONComposite(db *backenddb.DB, env commitlog.CommandEnvelope) 
 		if err = system.Set([]byte(systemCollectionMetaKey(target.name)), encoded); err != nil {
 			return err
 		}
+	}
+	if typedResources != nil {
+		typedClosure, err = typedResources.Freeze()
+		if err != nil {
+			return err
+		}
+		typedResources = nil
+		if err = group.SetNativeDurableResources(typedClosure, typedRequirements); err != nil {
+			return err
+		}
+		typedClosure = nil
 	}
 	if err = group.BuildNativeSystemDelta(system); err != nil {
 		return err
