@@ -29,8 +29,8 @@ Online value-log rewrite in an activated COW database uses a named,
 owner-qualified physical maintenance path. The public operation retains its
 checkpoint/protection/RID contract; a direct backend alias remains refused.
 Admitted rewrite completion, including partial-work error reconciliation, joins
-before overlapping Close disposes its original cache resources. This changes
-no WAL or on-disk format. The authority is not shared with generic callbacks,
+before overlapping Close disposes its original cache resources. WAL and on-disk
+formats remain unchanged. The authority is not shared with generic callbacks,
 pack, vacuum, or offline rewrite; see [value-log lifecycle](value-log-lifecycle.md).
 
 ## 1. Key Model

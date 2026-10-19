@@ -30,7 +30,9 @@ func TestPhysicalCloseLargeConstructorMapping(t *testing.T) {
 	if err = p.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = handle.Stat(); !errors.Is(err, os.ErrClosed) {
+	// Windows Stat reports its native invalid-handle error after Close.
+	// ReadAt checks the file's closed state consistently on every platform.
+	if _, err = handle.ReadAt(make([]byte, 1), 0); !errors.Is(err, os.ErrClosed) {
 		t.Fatal("physical file not closed", err)
 	}
 	if p.file != nil || p.chunks != nil || p.mappings != nil || p.closeWork.view != nil {

@@ -576,10 +576,11 @@ func (a *Allocator) publishActivatedCOWPrefixLockedV1(prefix []*PreparedCOWCandi
 	copy(a.cow.activated, a.cow.activated[len(prefix):])
 	clear(a.cow.activated[len(a.cow.activated)-len(prefix):])
 	a.cow.activated = a.cow.activated[:len(a.cow.activated)-len(prefix)]
-	// The live transaction may already be based on a newer visible generation.
-	// Pruning it with the newly advanced recovery horizon is conservative and
-	// does not alter any immutable activated generation.
-	a.cow.txn.PruneWithCapability(nextCapability)
+	// Leave retired pages in the successor until a real DATA candidate needs
+	// them. Eager pruning mutates its generation state and would force a new
+	// DATA generation for a later PRIMARY-only commit. Candidate preparation
+	// prunes its private rollback-isolated transaction with a fresh sealed
+	// capability before materialization.
 	a.cow.ready.Broadcast()
 	return nil
 }
@@ -694,7 +695,8 @@ func (a *Allocator) PublishCOWCandidateV1(prepared *PreparedCOWCandidateV1, next
 	if err != nil {
 		return err
 	}
-	next.PruneWithCapability(nextCapability)
+	// Reclamation belongs to actual DATA preparation, not publication of its
+	// predecessor: a clean successor can retain this generation for PRIMARY.
 	a.cow.generation = generation
 	a.cow.txn = next
 	a.cow.prepared = nil
