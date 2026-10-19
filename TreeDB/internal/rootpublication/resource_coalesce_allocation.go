@@ -298,6 +298,10 @@ func ownedFrontierUnion(owner *retainedalloc.Owner, a, b DurableFrontier) (Durab
 // the physical entry slice only after the Token's Shared claim succeeds.
 func appendOwnedResourceEntryToView(view *stableResourceKindView, backing *resourceEntryBacking, owner *retainedalloc.Owner) (*stableResourceEntryNode, error) {
 	entry := &backing.entries[0]
+	maxInt := int(^uint(0) >> 1)
+	if view.count < 0 || view.count == maxInt || view.logicalObligationCount < 0 || entry.logicalObligations.count < 0 || entry.logicalObligations.count > maxInt-view.logicalObligationCount || view.logicalMembershipCount < 0 {
+		return nil, retainedalloc.ErrCapacity
+	}
 	logical, err := insertOwnedResourceLogical(view.logical, entry, owner)
 	if err != nil {
 		return nil, err
@@ -327,11 +331,24 @@ func appendOwnedResourceEntryToView(view *stableResourceKindView, backing *resou
 	}
 	view.fields.release()
 	view.fields = fields
-	_, added, err := mergeOwnedResourceMembership(&view.logicalMembership, entry.outgoing.index, owner)
+	visited, added, err := mergeOwnedResourceMembership(&view.logicalMembership, entry.outgoing.index, owner)
 	if err != nil {
 		return nil, err
 	}
-	view.logicalMembershipCount += added
+	coverage := added
+	if entry.outgoing.directory != nil {
+		// The exact owned directory and field summary cover the live records
+		// not materialized in the pending index. Count that retained coverage,
+		// then add only pending records newly inserted into the aggregate.
+		if entry.logicalObligations.count < visited || entry.logicalObligations.count-visited > maxInt-added {
+			return nil, ErrUnresolvedResource
+		}
+		coverage += entry.logicalObligations.count - visited
+	}
+	if coverage > maxInt-view.logicalMembershipCount {
+		return nil, ErrUnresolvedResource
+	}
+	view.logicalMembershipCount += coverage
 	view.count++
 	view.logicalObligationCount += entry.logicalObligations.count
 	if view.directory == nil {
