@@ -106,7 +106,45 @@ func TestOwnedDependencyDirectoryFixedPointScope(t *testing.T) {
 				if !errors.Is(err, retainedalloc.ErrCapacity) || called || owner.Bytes() != retained || budget.bytes != budgetRetained || directory.refs.Load() != refs {
 					t.Fatalf("scratch refusal changed original custody: err=%v called=%t", err, called)
 				}
+				// Recovery's stream must refuse before opening an iterator or
+				// exposing any borrowed record, and leave the pinned root intact.
+				err = directory.walkBorrowedRecordsWithPhysical(&owner, func([]byte, []byte, DependencyManifestEntryV1) error {
+					t.Fatal("refused walk exposed physical record")
+					return nil
+				}, nil, nil)
+				if !errors.Is(err, retainedalloc.ErrCapacity) || owner.Bytes() != retained || budget.bytes != budgetRetained || directory.refs.Load() != refs {
+					t.Fatalf("walk refusal changed original custody: %v", err)
+				}
 				budget.cap = 1 << 20
+				callbackFailure := errors.New("recovery validation stopped")
+				visited := 0
+				err = directory.walkBorrowedRecordsWithPhysical(&owner, nil, func(key []byte, got StableLogicalObligation, physical DependencyManifestEntryV1) error {
+					visited++
+					if owner.Bytes() <= retained || budget.bytes <= budgetRetained || directory.refs.Load() != refs+1 {
+						t.Fatal("walk backing/root not owned through validation")
+					}
+					// An independent nested point scope must not overwrite either
+					// the outer stream's logical aliases or its physical descriptor.
+					var found bool
+					err := withOwnedDirectoryCodecV2(&owner, func(s *ownedDirectoryCodecV2) error {
+						var err error
+						found, err = s.lookupLogical(directory, obligation, func([]byte, StableLogicalObligation) error { return nil })
+						return err
+					})
+					if err != nil || !found {
+						t.Fatalf("nested lookup: found=%t err=%v", found, err)
+					}
+					if !bytes.Equal(key, physicalKey) || got != obligation || physical.ResourceID != "one" || physical.Frontier.Bytes != 4096 || len(physical.Reachability) != 1 || physical.Reachability[0] != ReachabilityColumnManifest {
+						t.Fatal("nested validation overwrote borrowed recovery records")
+					}
+					return callbackFailure
+				}, nil)
+				if !errors.Is(err, callbackFailure) || visited != 1 || owner.Bytes() != retained || budget.bytes != budgetRetained || directory.refs.Load() != refs {
+					t.Fatalf("walk callback failure retained scratch/root: visited=%d err=%v", visited, err)
+				}
+				if err := directory.ValidateWithMetadataV2(&owner, nil); err != nil || owner.Bytes() != retained || budget.bytes != budgetRetained || directory.refs.Load() != refs {
+					t.Fatalf("complete recovery walk changed custody: %v", err)
+				}
 				err = withOwnedDirectoryCodecV2(&owner, func(s *ownedDirectoryCodecV2) error {
 					if owner.Bytes() <= retained || budget.bytes <= budgetRetained {
 						t.Fatal("point scratch not admitted while borrowed")

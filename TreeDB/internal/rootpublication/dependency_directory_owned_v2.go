@@ -71,7 +71,7 @@ func buildOwnedDependencyDirectoryV2(directory *DependencyDirectoryV2, prepare f
 		census = nil
 		owner.RemovePending(charge)
 	}()
-	err := directory.walkBorrowedRecords(owner, func(key, _ []byte, physical DependencyManifestEntryV1) error {
+	err := directory.walkBorrowedRecordsWithPhysical(owner, func(key, _ []byte, physical DependencyManifestEntryV1) error {
 		if len(census) == cap(census) {
 			return ErrDependencyManifestFormat
 		}
@@ -86,7 +86,7 @@ func buildOwnedDependencyDirectoryV2(directory *DependencyDirectoryV2, prepare f
 			return ErrResourceOwnership
 		}
 		return nil
-	}, func(key []byte, obligation StableLogicalObligation) error {
+	}, func(key []byte, obligation StableLogicalObligation, physical DependencyManifestEntryV1) error {
 		i := sort.Search(len(census), func(i int) bool {
 			return bytes.Compare(census[i].backing.entries[0].logicalObligations.owner, key) >= 0
 		})
@@ -99,7 +99,9 @@ func buildOwnedDependencyDirectoryV2(directory *DependencyDirectoryV2, prepare f
 		}
 		if validate != nil {
 			if err := entry.token.WithPinnedFile(func(file *os.File) error {
-				return withOwnedDirectoryPhysicalV2(entry, func(physical DependencyManifestEntryV1) error { return validate(file, physical, obligation) })
+				// The walk has already checked this exact immutable physical
+				// record. Its descriptor stays borrowed through this callback.
+				return validate(file, physical, obligation)
 			}); err != nil {
 				return err
 			}
@@ -163,38 +165,6 @@ func buildOwnedDependencyDirectoryV2(directory *DependencyDirectoryV2, prepare f
 		builder = nil // Freeze transferred the graph and refunded its containing header.
 	}
 	return bound, err
-}
-
-// Emit a synchronous physical descriptor using admitted fixed decoder-sized
-// field storage; no public descriptor constructor or RID clone is reached.
-func withOwnedDirectoryPhysicalV2(entry *stableResourceEntry, visit func(DependencyManifestEntryV1) error) error {
-	owner := entry.backing.allocation.owner
-	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(dependencyBorrowScratch{})))
-	if err := owner.AddPending(charge); err != nil {
-		return err
-	}
-	scratch := new(dependencyBorrowScratch)
-	defer func() {
-		clear(scratch.fields[:])
-		scratch.namespace = DependencyManifestNamespaceV1{}
-		owner.RemovePending(charge)
-	}()
-	count := entry.reachability.reachableCount()
-	if count == 0 || count > len(scratch.fields) {
-		return ErrDependencyManifestFormat
-	}
-	i := 0
-	for field := range entry.reachability.reachableFields() {
-		scratch.fields[i] = field
-		i++
-	}
-	t := entry.token
-	physical := DependencyManifestEntryV1{Kind: t.kind, LogicalLane: entry.logicalLane, ResourceID: entry.resourceID, DiagnosticPath: entry.diagnosticPath, Identity: t.identity, Generation: t.generation, Digest: t.digest, Frontier: entry.frontier, Reachability: scratch.fields[:count]}
-	if namespace, ok := t.diagnosticNamespace(); ok {
-		scratch.namespace = DependencyManifestNamespaceV1{ParentIdentity: namespace.ParentIdentity, Operation: namespace.Operation, OldName: namespace.OldName, NewName: namespace.NewName, DiagnosticPath: namespace.DiagnosticPath}
-		physical.Namespace = &scratch.namespace
-	}
-	return visit(physical)
 }
 
 func cloneOwnedDirectoryEntryV2(entry *stableResourceEntry, key []byte, physical DependencyManifestEntryV1, directory *DependencyDirectoryV2, exact bool) (_ *resourceEntryBacking, retErr error) {
