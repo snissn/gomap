@@ -53,7 +53,7 @@ type drainRequest struct {
 // distinct authorities with explicit receipt mappings between them.
 type Coordinator struct {
 	mu                                           sync.Mutex
-	acceptedOwner                                *Coordinator
+	acceptedOwner                                *Coordinator // immutable; logical identity survives physical disposal
 	accepted                                     acceptedPrefixState
 	metadataOwner                                *retainedalloc.Owner
 	metadataHeaderCharge, metadataPhysicalCharge uint64
