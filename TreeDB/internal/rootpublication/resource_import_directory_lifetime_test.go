@@ -99,6 +99,9 @@ func TestOwnedImportedTokenDirectoryLifetimeAndRefusal(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			if err = namespace.Stabilize(); err != nil {
+				t.Fatal(err)
+			}
 			identity, err := StableIdentityFromFile(file)
 			if err != nil {
 				t.Fatal(err)
