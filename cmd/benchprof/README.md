@@ -984,6 +984,8 @@ Go test, not a unified-bench adapter or benchprof/profile-dir input. The frozen
 `artifacts/p3-ordered-public-cost01/prepared` packet selects exactly four fresh
 processes: NoWALFast ordinary native `Commit()` on COW/DATA, 256 or 2048 touched
 rows, ascending or descending, eight indexed UpdateBatch members plus raw Set.
+Setup seeds in bounded 256-row ordinary commands with a checkpoint after each,
+then captures one old view of the complete selected row set before measured Begin.
 It emits `ORDERED_COST` JSON with chosen foreground segments, allocation deltas,
 full lifecycle debt, resolved stats and checked final owner-zero/reopen oracles.
 Default test runs skip it; execution requires the packet's exact-source root

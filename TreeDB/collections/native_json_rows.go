@@ -65,7 +65,7 @@ func (p *nativeJSONRows) touch(id []byte, read func([]byte) ([]byte, error), adm
 
 // nativeJSONFinalRows is the maintained pure old/new-effect boundary. It is
 // independent of command kind: inserts have no old state, deletes no new state.
-func nativeJSONFinalRows(name string, meta CollectionMeta, rows *nativeJSONRows, admit func(uint64) error) (*directBufferedInsertPlan, []preparedBatchUpdate, []indexRuntime, error) {
+func nativeJSONFinalRows(name string, meta CollectionMeta, rows *nativeJSONRows, admit func(uint64) error, prepareScratch func([]byte) error) (*directBufferedInsertPlan, []preparedBatchUpdate, []indexRuntime, error) {
 	// Runtime descriptors are allocated before per-row parsing; admit them first.
 	headerCharge, err := nativeJSONIndexedPlanCharge(meta, nil, nil)
 	if err != nil {
@@ -85,29 +85,62 @@ func nativeJSONFinalRows(name string, meta CollectionMeta, rows *nativeJSONRows,
 	if err = admit(memtable.COWAllocationCharge(uint64(len(rows.rows)) * uint64(unsafe.Sizeof(preparedBatchUpdate{})))); err != nil {
 		return nil, nil, nil, err
 	}
-	changed := make([]preparedBatchUpdate, 0, len(rows.rows))
-	stats := CollectionUpdateStats{}
-	for i, row := range rows.rows {
+	// One maintained arena owns every retained old/new state. Its capacities
+	// cover at most one scalar per index: escaped strings <=2*document bytes,
+	// numeric encodings <=9 bytes, and one state/reference header per scalar.
+	var bytesCap, stateCount, maxDocument int
+	for _, row := range rows.rows {
 		for _, doc := range [][]byte{row.opening, row.current} {
-			n, err := nativeJSONIndexedPlanCharge(meta, [][]byte{row.id}, [][]byte{doc})
+			if doc == nil {
+				continue
+			}
+			n, err := nativeJSONIndexedCharge(meta, [][]byte{row.id}, [][]byte{doc}, false, false)
 			if err != nil {
 				return nil, nil, nil, err
 			}
 			if err = admit(n); err != nil {
 				return nil, nil, nil, err
 			}
+			capacity, err := nativeJSONEncodedCapacity(len(doc), len(runtimes))
+			if err != nil || capacity > int(^uint(0)>>1)-bytesCap || len(runtimes) > int(^uint(0)>>1)-stateCount {
+				return nil, nil, nil, memtable.ErrCOWCapacity
+			}
+			bytesCap += capacity
+			stateCount += len(runtimes)
+			if len(runtimes) != 0 {
+				maxDocument = max(maxDocument, len(doc))
+			}
 		}
+	}
+	// These concrete buffers are enclosed by the unchanged retained encode/
+	// secondary/state allowance above; decoder scratch is separately scoped.
+	encoder := indexEncodeArena{buf: make([]byte, 0, bytesCap), scratch: make([]byte, 0, maxDocument), states: make([][][]byte, 0, stateCount), valueRefs: make([][]byte, 0, stateCount)}
+	changed := make([]preparedBatchUpdate, 0, len(rows.rows))
+	stats := CollectionUpdateStats{}
+	for i, row := range rows.rows {
 		item := preparedBatchUpdate{itemIndex: i, documentID: row.id, document: row.current}
 		if row.opening != nil {
-			item.oldState, err = orderedIndexStateForDocumentWithArena(row.opening, runtimes, planner.options, nil)
+			if prepareScratch != nil {
+				if err = prepareScratch(row.opening); err != nil {
+					return nil, nil, nil, err
+				}
+			}
+			item.oldState, err = orderedIndexStateForDocumentWithArena(row.opening, runtimes, planner.options, &encoder)
 			if err != nil {
 				return nil, nil, nil, err
 			}
 		}
 		if row.current == nil {
 			markBatchUpdateIndexEffects(&item, runtimes, &stats)
-		} else if err = prepareBatchUpdateIndexEffects(&item, runtimes, planner.options, nil, &stats, false); err != nil {
-			return nil, nil, nil, err
+		} else {
+			if prepareScratch != nil {
+				if err = prepareScratch(row.current); err != nil {
+					return nil, nil, nil, err
+				}
+			}
+			if err = prepareBatchUpdateIndexEffects(&item, runtimes, planner.options, &encoder, &stats, false); err != nil {
+				return nil, nil, nil, err
+			}
 		}
 		changed = append(changed, item)
 	}
@@ -139,20 +172,110 @@ func (t *NativeJSONTxn) admitStage(g *nativeJSONTxnBinding, n uint64) error {
 	g.stageCharge = next
 	return nil
 }
+
+// Staging retains actual ID/document copies, not a fresh publication/planner
+// envelope per document. touch accounts opening copies independently; canonical
+// member images are admitted from their complete lengths immediately below.
 func (t *NativeJSONTxn) admitRowDocument(g *nativeJSONTxnBinding, id, doc []byte) error {
-	basic, err := nativeJSONInsertCharge(g.name, [][]byte{id}, [][]byte{doc})
+	ids := memtable.COWAllocationCharge(uint64(len(id)))
+	document := memtable.COWAllocationCharge(uint64(len(doc)))
+	if ids > (^uint64(0)-document)/2 {
+		return memtable.ErrCOWCapacity
+	}
+	return t.admitStage(g, 2*ids+document)
+}
+
+// Native schemas fence arrays/multikey/compound values. Each encoded scalar
+// therefore fits <=2*document bytes (NUL escaping) plus 16 bytes for tags/numbers.
+func nativeJSONEncodedCapacity(document, indexes int) (int, error) {
+	limit := int(^uint(0) >> 1)
+	if document > (limit-16)/2 || indexes < 0 || (indexes > 0 && 2*document+16 > limit/indexes) {
+		return 0, memtable.ErrCOWCapacity
+	}
+	return (2*document + 16) * indexes, nil
+}
+
+// One original transaction-local scratch receipt owns the maintained arena and
+// the decoder fallback envelope. Only its maximum document demand is retained.
+// No encoded validation state escapes this scope; final states use a different,
+// retained arena. Growth admits old+new coexistence before replacement.
+func (t *NativeJSONTxn) prepareValidation(g *nativeJSONTxnBinding, doc []byte) error {
+	if len(g.probe.meta.Indexes) == 0 {
+		return nil
+	}
+	n, err := nativeJSONIndexedPlanCharge(g.probe.meta, [][]byte{nil}, [][]byte{doc})
 	if err != nil {
 		return err
 	}
-	indexed, err := nativeJSONIndexedPlanCharge(g.probe.meta, [][]byte{id}, [][]byte{doc})
-	if err != nil || indexed > ^uint64(0)-basic {
+	capacity, err := nativeJSONEncodedCapacity(len(doc), len(g.probe.meta.Indexes))
+	if err != nil {
+		return err
+	}
+	if n <= g.validationCharge && capacity <= cap(g.validation.buf) && len(doc) <= cap(g.validation.scratch) {
+		return nil
+	}
+	n = max(n, g.validationCharge)
+	if n > ^uint64(0)-g.validationCharge {
 		return memtable.ErrCOWCapacity
 	}
-	extra := memtable.COWAllocationCharge(uint64(len(doc)))
-	if extra > ^uint64(0)-basic-indexed {
+	if g.validationLease == nil {
+		g.validationLease, err = t.core.NativeAllocator().AdmitNativeBytes(n)
+	} else {
+		err = g.validationLease.Resize(g.validationCharge + n)
+	}
+	if err != nil {
+		return err
+	}
+	g.validation = indexEncodeArena{buf: make([]byte, 0, capacity), scratch: make([]byte, 0, len(doc)), states: make([][][]byte, 0, len(g.probe.meta.Indexes)), valueRefs: make([][]byte, 0, len(g.probe.meta.Indexes))}
+	// Replacement detached every old arena alias before the original charge shrinks.
+	if err = g.validationLease.Resize(n); err != nil {
+		return err
+	}
+	g.validationCharge = n
+	return nil
+}
+func (t *NativeJSONTxn) validateDocument(g *nativeJSONTxnBinding, doc []byte, runtimes []indexRuntime, opts collectionOptions) error {
+	if err := t.prepareValidation(g, doc); err != nil {
+		return err
+	}
+	_, err := orderedIndexStateForDocumentWithArena(doc, runtimes, opts, &g.validation)
+	clear(g.validation.states)
+	clear(g.validation.valueRefs)
+	g.validation.buf = g.validation.buf[:0]
+	g.validation.scratch = g.validation.scratch[:0]
+	g.validation.states = g.validation.states[:0]
+	g.validation.valueRefs = g.validation.valueRefs[:0]
+	return err
+}
+
+func (t *NativeJSONTxn) admitMemberPayload(g *nativeJSONTxnBinding, docs []commitlog.CollectionDocument, ids [][]byte) error {
+	// v1 header=10+name; canonical encoders copy one header array before sort.
+	n := uint64(10 + len(g.name))
+	for _, doc := range docs {
+		extra := uint64(8) + uint64(len(doc.ID)) + uint64(len(doc.Document))
+		if extra > ^uint64(0)-n {
+			return memtable.ErrCOWCapacity
+		}
+		n += extra
+	}
+	for _, id := range ids {
+		extra := uint64(4) + uint64(len(id))
+		if extra > ^uint64(0)-n {
+			return memtable.ErrCOWCapacity
+		}
+		n += extra
+	}
+	docSize, idSize := uint64(unsafe.Sizeof(commitlog.CollectionDocument{})), uint64(unsafe.Sizeof([]byte{}))
+	if uint64(len(docs)) > ^uint64(0)/docSize || uint64(len(ids)) > ^uint64(0)/idSize {
 		return memtable.ErrCOWCapacity
 	}
-	return t.admitStage(g, basic+indexed+extra)
+	docHeaders := memtable.COWAllocationCharge(uint64(len(docs)) * docSize)
+	idHeaders := memtable.COWAllocationCharge(uint64(len(ids)) * idSize)
+	charge := memtable.COWAllocationCharge(n)
+	if docHeaders > ^uint64(0)-charge || idHeaders > ^uint64(0)-charge-docHeaders {
+		return memtable.ErrCOWCapacity
+	}
+	return t.admitStage(g, charge+docHeaders+idHeaders)
 }
 
 // Admit aggregate staging headers before the maintained planner/callback adapter.
@@ -162,7 +285,21 @@ func (t *NativeJSONTxn) admitRowControls(g *nativeJSONTxnBinding, count int) err
 	if uint64(count) > ^uint64(0)/perItem {
 		return memtable.ErrCOWCapacity
 	}
-	return t.admitStage(g, memtable.COWAllocationCharge(uint64(count)*perItem))
+	// Fixed publication/planner/read headers occur once per member scope, rather
+	// than once per row. Keep the original conservative header formula.
+	fixed, err := nativeJSONInsertCharge(g.name, nil, nil)
+	if err != nil {
+		return err
+	}
+	indexed, err := nativeJSONIndexedPlanCharge(g.probe.meta, nil, nil)
+	if err != nil || indexed > ^uint64(0)-fixed {
+		return memtable.ErrCOWCapacity
+	}
+	rows := memtable.COWAllocationCharge(uint64(count) * perItem)
+	if rows > ^uint64(0)-fixed-indexed {
+		return memtable.ErrCOWCapacity
+	}
+	return t.admitStage(g, fixed+indexed+rows)
 }
 func (t *NativeJSONTxn) touchNativeRow(g *nativeJSONTxnBinding, id []byte) (*nativeJSONRow, error) {
 	if len(id) == 0 {
@@ -279,7 +416,7 @@ func (t *NativeJSONTxn) stageNativeInsert(g *nativeJSONTxnBinding, ids, document
 		if item.document == nil {
 			return backenddb.ErrNativeSemanticUnsupported
 		}
-		if _, err := orderedIndexStateForDocumentWithArena(item.document, runtimes, planner.options, nil); err != nil {
+		if err := t.validateDocument(g, item.document, runtimes, planner.options); err != nil {
 			return err
 		}
 		row, err := t.touchNativeRow(g, item.id)
@@ -291,6 +428,9 @@ func (t *NativeJSONTxn) stageNativeInsert(g *nativeJSONTxnBinding, ids, document
 		}
 		row.current = bytes.Clone(item.document)
 		docs[i] = commitlog.CollectionDocument{ID: row.id, Document: row.current}
+	}
+	if err = t.admitMemberPayload(g, docs, nil); err != nil {
+		return err
 	}
 	payload, err := commitlog.EncodeCollectionInsertBatchByIDPayload(g.name, docs)
 	if err != nil {
@@ -380,7 +520,7 @@ func (t *NativeJSONTxn) UpdateBatchInto(name string, items []UpdateBatchItem) (r
 		if err != nil {
 			return nil, updateBatchItemError(i, err)
 		}
-		if _, err := orderedIndexStateForDocumentWithArena(normalized[0], runtimes, planner.options, nil); err != nil {
+		if err := t.validateDocument(g, normalized[0], runtimes, planner.options); err != nil {
 			return nil, updateBatchItemError(i, err)
 		}
 		row.current = normalized[0]
@@ -389,6 +529,9 @@ func (t *NativeJSONTxn) UpdateBatchInto(name string, items []UpdateBatchItem) (r
 	}
 	if len(docs) == 0 {
 		return result, nil
+	}
+	if err = t.admitMemberPayload(g, docs, nil); err != nil {
+		return nil, err
 	}
 	payload, err := commitlog.EncodeCollectionUpdateBatchByIDPayload(g.name, docs)
 	if err != nil {
@@ -444,6 +587,9 @@ func (t *NativeJSONTxn) DeleteBatchFrom(name string, ids [][]byte) (count int, r
 	if len(removed) == 0 {
 		return 0, nil
 	}
+	if err := t.admitMemberPayload(g, nil, removed); err != nil {
+		return 0, err
+	}
 	payload, err := commitlog.EncodeCollectionDeleteBatchByIDPayload(g.name, removed)
 	if err != nil {
 		return 0, err
@@ -458,7 +604,7 @@ func (t *NativeJSONTxn) finalizeNativeRows() error {
 			continue
 		}
 		admit := func(n uint64) error { return t.admitStage(g, n) }
-		direct, changed, runtimes, err := nativeJSONFinalRows(g.name, g.probe.meta, &g.rows, admit)
+		direct, changed, runtimes, err := nativeJSONFinalRows(g.name, g.probe.meta, &g.rows, admit, func(doc []byte) error { return t.prepareValidation(g, doc) })
 		if err != nil {
 			return err
 		}

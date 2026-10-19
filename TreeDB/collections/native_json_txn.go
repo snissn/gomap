@@ -20,13 +20,16 @@ import (
 // Get observes that opening plus its own ordered staged row operations. Commit never reruns the
 // body; only the original immutable mutations are composed after validation.
 type nativeJSONTxnBinding struct {
-	name        string
-	incarnation uint64
-	probe       NativeJSONRead
-	plan        *nativeJSONLogicalInsert
-	effects     []txnhistory.Effect
-	rows        nativeJSONRows
-	stageCharge uint64
+	name             string
+	incarnation      uint64
+	probe            NativeJSONRead
+	plan             *nativeJSONLogicalInsert
+	effects          []txnhistory.Effect
+	rows             nativeJSONRows
+	stageCharge      uint64
+	validation       indexEncodeArena
+	validationLease  *memtable.COWExternalLease
+	validationCharge uint64
 }
 type NativeJSONTxn struct {
 	mu           sync.Mutex
@@ -525,7 +528,11 @@ func (t *NativeJSONTxn) closeLocked() (error, []*memtable.COWExternalLease, *mem
 	var err error
 	for i := range t.bindings {
 		lease := t.bindings[i].probe.detachScratch()
+		validation := t.bindings[i].validationLease
 		t.bindings[i] = nativeJSONTxnBinding{}
+		if validation != nil {
+			validation.Close()
+		}
 		if lease != nil {
 			lease.Close()
 		}
