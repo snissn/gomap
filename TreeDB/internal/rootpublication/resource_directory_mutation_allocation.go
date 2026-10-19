@@ -294,14 +294,14 @@ func cloneOwnedDirectoryRemovingEntryV2(entry *stableResourceEntry, records []ow
 	// Removing a pending replacement preserves the original base-removal
 	// proof. Two different payloads under one key must not be normalized as
 	// conflicting removal declarations.
-	kept := 0
+	proofsKept := 0
 	for _, value := range values {
 		if _, found := slices.BinarySearchFunc(prior, value, compareResourceObligation); !found {
-			values[kept] = value
-			kept++
+			values[proofsKept] = value
+			proofsKept++
 		}
 	}
-	removed, err := combineResourceObligationBackings(owner, prior, values[:kept], "")
+	removed, err := combineResourceObligationBackings(owner, prior, values[:proofsKept], "")
 	if err != nil {
 		return nil, err
 	}
