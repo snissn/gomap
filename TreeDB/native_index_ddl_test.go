@@ -11,6 +11,70 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
+func TestNativeExistingJSONIndexDDLRejectsClosedManager(t *testing.T) {
+	for _, profile := range []Profile{ProfileCommandWALDurable, ProfileCommandWALRelaxed, ProfileNoWALFast} {
+		t.Run(string(profile), func(t *testing.T) {
+			database, err := Open(indexedSliceOptions(profile, t.TempDir()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer database.Close()
+			handle, err := database.NativeSemanticBackend()
+			if err != nil {
+				t.Fatal(err)
+			}
+			manager := collections.NewCollectionManager(handle)
+			defer manager.Close()
+			if _, err := manager.CreateCollection(&collections.CollectionMeta{Name: "users", Indexes: []collections.IndexDefinition{
+				{Name: "city", Field: "city", ValueType: collections.IndexValueString},
+				{Name: "email", Field: "email", ValueType: collections.IndexValueString},
+			}}); err != nil {
+				t.Fatal(err)
+			}
+			users, err := manager.OpenCollection("users")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := manager.Close(); err != nil {
+				t.Fatal(err)
+			}
+			next, sequence := handle.CommandWALNextLSN(), database.Stats()["treedb.cache.cow.txn.logical_seq"]
+			for _, operation := range []struct {
+				name string
+				run  func() (*collections.CollectionMeta, error)
+			}{
+				{"create", func() (*collections.CollectionMeta, error) {
+					return users.CreateIndex(collections.IndexDefinition{Name: "after_close", Field: "city", ValueType: collections.IndexValueString})
+				}},
+				{"drop", func() (*collections.CollectionMeta, error) { return users.DropIndex("city") }},
+				{"drop-many", func() (*collections.CollectionMeta, error) { return users.DropIndexes([]string{"email"}) }},
+				{"drop-all", users.DropAllIndexes},
+			} {
+				if _, err := operation.run(); !errors.Is(err, backenddb.ErrClosed) {
+					t.Errorf("%s after manager.Close: %v, want ErrClosed", operation.name, err)
+				}
+				if handle.CommandWALNextLSN() != next || database.Stats()["treedb.cache.cow.txn.logical_seq"] != sequence {
+					t.Errorf("%s after manager.Close advanced canonical identity or logical sequence", operation.name)
+				}
+			}
+			// Closing one facade does not close the database or another manager.
+			fresh := collections.NewCollectionManager(handle)
+			defer fresh.Close()
+			current, err := fresh.OpenCollection("users")
+			if err != nil {
+				t.Fatal(err)
+			}
+			indexes := current.Meta().Indexes
+			if len(indexes) != 2 || indexes[0].Name != "city" || indexes[1].Name != "email" {
+				t.Fatalf("closed-manager DDL changed current schema: %+v", indexes)
+			}
+			if _, err := current.DropIndex("city"); err != nil {
+				t.Fatalf("live manager cannot mutate indexes: %v", err)
+			}
+		})
+	}
+}
+
 // Index DDL must consume the complete native cut, rather than just its persisted
 // primary root. Catalog changes also conflict with every earlier schema binding,
 // including read-only bindings of a transaction that writes another collection.
