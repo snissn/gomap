@@ -4,9 +4,11 @@ import (
 	"errors"
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
 	"github.com/snissn/gomap/TreeDB/internal/txnhistory"
+	"github.com/snissn/gomap/TreeDB/node"
 )
 
 var ErrNativeSemanticUnsupported = errors.New("treedb: command kind has no native semantic preparation")
@@ -74,6 +76,8 @@ type NativeSemanticCustody interface {
 }
 
 type NativePreparedPublication struct {
+	// Selected composite raw members require the final inline Set representation.
+	RequireInlineCompositeRaw   bool
 	Basis                       NativeSemanticState
 	State                       NativeSemanticState
 	Entries                     []batch.Entry
@@ -102,6 +106,9 @@ type NativeLogicalPlan interface {
 // NativeConditionalTxn borrows the opening cut of the existing P1 transaction.
 // CommitNative and Close end that original transaction and its opening lifetime.
 type NativeConditionalTxn interface {
+	Get([]byte) ([]byte, error)
+	Set([]byte, []byte) error
+	NativeRawEntries() []batch.Entry
 	NativeSemanticCapture
 	CommitNative(*NativePreparedPublication, *CommandWALIntent, bool) (NativePublicationResult, error)
 }
@@ -137,7 +144,12 @@ type NativeAllocationReceipt interface{ Close() }
 // NativeSemanticAllocator is the SAME original budget authority. Retaining it
 // keeps no capture, state, Snapshot, cache or ancestor EngineVersion alive.
 type NativeSemanticAllocator interface {
+	Limits() memtable.COWLimits
 	AdmitNativeBytes(uint64) (*memtable.COWExternalLease, error)
+	// AcquireRetention enrolls existing storage-owned metadata in this SAME
+	// budget. The enrollment carries no engine, capture or cache backpointer.
+	AcquireRetention(uint64) (retainedalloc.Lease, error)
+	NewNativeCOWWriter(sourceOwnerBytes uint64) (*memtable.COWWriter, error)
 }
 
 // NativeSemanticCapture borrows a single complete immutable cut until Close.
@@ -211,4 +223,14 @@ func (db *DB) ValidateNativeCommandIntent(owner *transactionowner.Owner, intent 
 		return ErrNativeSemanticUnsupported
 	}
 	return nil
+}
+
+// NativePhysicalReader resolves only an already captured physical root. The
+// original capture must remain live through the call; concurrent Close on that
+// same capture is excluded by its enclosing read/transaction scope. A true
+// copyValue returns exact-length caller-owned inline bytes; false is a metadata
+// probe and returns no Value. Key is omitted for exact point lookup. No physical scratch
+// escapes, and dictionary/codec eligibility remains the native bounded contract.
+type NativePhysicalReader interface {
+	NativeEntryAtRoot(root uint64, key []byte, copyValue bool) (node.LeafEntry, error)
 }

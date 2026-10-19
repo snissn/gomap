@@ -12,6 +12,7 @@ import (
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/workstats"
 )
 
@@ -173,6 +174,8 @@ type documentRowLocatorCandidate struct {
 // is not concurrency-safe; callers that fetch concurrently should open one view
 // per worker or synchronize externally.
 type CollectionReadView struct {
+	nativeRead      *NativeJSONRead
+	nativeLease     *memtable.COWExternalLease
 	collection      *Collection
 	snapshot        *backenddb.Snapshot
 	catalog         *collectionCatalog
@@ -203,6 +206,12 @@ type CollectionReadView struct {
 // not the collection handle's latest catalog. It remains bound to this view
 // across subsequent data and schema publications.
 func (v *CollectionReadView) Meta() (CollectionMeta, error) {
+	if v != nil && v.nativeRead != nil {
+		if v.closed {
+			return CollectionMeta{}, backenddb.ErrClosed
+		}
+		return *v.nativeRead.meta.copy(), nil
+	}
 	if err := v.validateOpen(); err != nil {
 		return CollectionMeta{}, err
 	}
@@ -237,6 +246,9 @@ func (v *CollectionReadView) VisitIndexValueIDs(indexName string, value any, vis
 // Collection.Get visibility at open time; later writes are not visible through
 // the view.
 func (c *Collection) OpenCollectionReadView() (*CollectionReadView, error) {
+	if c != nil && c.nativeJSON != nil {
+		return c.openNativeReadView()
+	}
 	if c == nil {
 		return nil, errCollectionNil
 	}
@@ -371,6 +383,15 @@ func (v *CollectionReadView) Close() error {
 		return nil
 	}
 	v.closed = true
+	if v.nativeRead != nil {
+		read, lease := v.nativeRead, v.nativeLease
+		v.nativeRead, v.nativeLease, v.collection = nil, nil, nil
+		err := read.Close()
+		read = nil
+		v = nil
+		lease.Close()
+		return err
+	}
 	cacheErr := v.closeAssetReadCaches()
 	var snapErr error
 	if v.ownsSnap && v.snapshot != nil {
@@ -388,6 +409,9 @@ func (v *CollectionReadView) Close() error {
 // FetchDocumentsByID materializes full documents for ids in input order. Missing
 // documents produce Found=false results without failing the whole fetch.
 func (v *CollectionReadView) FetchDocumentsByID(ids [][]byte, opts DocumentFetchOptions) (DocumentFetchResponse, error) {
+	if v != nil && v.nativeRead != nil {
+		return v.fetchNativeDocuments(ids, opts)
+	}
 	endForegroundRead := v.beginForegroundRead()
 	defer endForegroundRead()
 	start := time.Now()
@@ -402,6 +426,9 @@ func (v *CollectionReadView) validateOpen() error {
 	}
 	if v.closed {
 		return errors.New("collections: collection read view is closed")
+	}
+	if v.nativeRead != nil {
+		return backenddb.ErrNativeSemanticUnsupported
 	}
 	if v.collection.db == nil || v.collection.db.IsClosing() {
 		return backenddb.ErrClosed

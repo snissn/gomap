@@ -399,6 +399,11 @@ func persistIndexStateForDocumentFormat(format DocumentFormat) bool {
 }
 
 type CollectionManager struct {
+	nativeJSON                              *NativeJSONManager
+	initializationError                     error
+	legacyProducerRelease                   func()
+	managerCloseOnce                        sync.Once
+	managerCloseError                       error
 	db                                      *backenddb.DB
 	closeUnregister                         func()
 	closing                                 atomic.Bool
@@ -419,6 +424,7 @@ type collectionManagerOptions struct {
 }
 
 type Collection struct {
+	nativeJSON                  *NativeJSONManager
 	typedGraphReconcile         *typedGraphReconcileToken
 	db                          *backenddb.DB
 	manager                     *CollectionManager
@@ -1734,7 +1740,31 @@ func OpenCollectionForRaftSourceV1(database *backenddb.DB, name string) (*Collec
 func newCollectionManager(database *backenddb.DB, opts collectionManagerOptions) *CollectionManager {
 	manager := &CollectionManager{db: database}
 	if database != nil {
+		release, err := database.AdmitLegacyCommandProducer()
+		if errors.Is(err, backenddb.ErrNativeSemanticUnsupported) {
+			native, nativeErr := NewNativeJSONManager(database)
+			if nativeErr == nil {
+				manager.db = nil // no legacy write domain or producer can escape this role
+				manager.nativeJSON = native
+				if opts.registerBackendHooks {
+					manager.closeUnregister = database.RegisterCloseHookBefore(manager.closeForBackend)
+				}
+				return manager
+			}
+			err = nativeErr
+		}
+		if err != nil {
+			manager.initializationError = err
+			manager.db = nil
+			manager.closing.Store(true)
+			return manager
+		}
+		manager.legacyProducerRelease = release
 		if err := ensureColumnAssetLifecycleRegistryDB(database); err != nil {
+			manager.initializationError = err
+			manager.legacyProducerRelease()
+			manager.legacyProducerRelease = nil
+			manager.db = nil
 			manager.closing.Store(true)
 			return manager
 		}
@@ -1776,6 +1806,24 @@ func (m *CollectionManager) SetVectorIndexConstructionDecisionObserverEnabled(en
 }
 
 func (m *CollectionManager) closeForBackend() error {
+	if m == nil {
+		return nil
+	}
+	m.managerCloseOnce.Do(func() { m.managerCloseError = m.closeManagerOwned() })
+	return m.managerCloseError
+}
+
+func (m *CollectionManager) closeManagerOwned() error {
+	if m == nil {
+		return nil
+	}
+	defer func() {
+		if m.legacyProducerRelease != nil {
+			release := m.legacyProducerRelease
+			m.legacyProducerRelease = nil
+			release()
+		}
+	}()
 	m.closing.Store(true)
 	defer func() {
 		if m.commandWALRawUnregister != nil {
@@ -1792,6 +1840,9 @@ func (m *CollectionManager) closeForBackend() error {
 }
 
 func (m *CollectionManager) isClosing() bool {
+	if m.nativeJSON != nil {
+		return m.closing.Load() || m.nativeJSON.db.IsClosing()
+	}
 	return m.closing.Load() || m.db == nil || m.db.IsClosing()
 }
 
@@ -3413,6 +3464,9 @@ func (m *CollectionManager) holdIndexedAsyncFlushForSync(domains []*collectionWr
 // was already durable (or no command prefix exists); the WAL-free checkpoint
 // path always performs a physical sync boundary.
 func (m *CollectionManager) SyncForStandaloneWriteConcern() (physicalSync bool, err error) {
+	if m != nil && m.initializationError != nil {
+		return false, m.initializationError
+	}
 	if m == nil || m.db == nil {
 		return false, backenddb.ErrClosed
 	}
@@ -3600,6 +3654,18 @@ func (unlock collectionMutationUnlock) Unlock() {
 // process-crash recoverable under WAL-on modes and is not an fsync guarantee
 // unless composed with a sync-capable barrier.
 func (m *CollectionManager) CreateCollection(meta *CollectionMeta) (*CollectionMeta, error) {
+	if m != nil && m.nativeJSON != nil {
+		if m.isClosing() {
+			return nil, backenddb.ErrClosed
+		}
+		if meta == nil {
+			return nil, errors.New("collections: nil collection metadata")
+		}
+		return m.nativeJSON.CreateCollection(*meta)
+	}
+	if m != nil && m.initializationError != nil {
+		return nil, m.initializationError
+	}
 	if m == nil {
 		return nil, errCollectionManagerNil
 	}
@@ -3623,6 +3689,9 @@ func (m *CollectionManager) CreateCollection(meta *CollectionMeta) (*CollectionM
 // normal collection catalog executor while covering a command-WAL frame that
 // was already appended by a deterministic apply layer.
 func (m *CollectionManager) CreateCollectionWithCommandWALIntent(meta CollectionMeta, commandWALIntent *backenddb.CommandWALIntent) (*CollectionMeta, error) {
+	if m != nil && m.initializationError != nil {
+		return nil, m.initializationError
+	}
 	if m == nil {
 		return nil, errCollectionManagerNil
 	}
@@ -3659,6 +3728,9 @@ func (m *CollectionManager) CreateCollectionWithPreparedCommandWALIntentStatus(m
 // status-returning form of CreateCollectionWithPreparedCommandWALIntent with an
 // extra publish preflight composed after the existing-schema no-op check.
 func (m *CollectionManager) CreateCollectionWithPreparedCommandWALIntentStatusAndPreflight(meta CollectionMeta, prepareCommandWALIntent func() (*backenddb.CommandWALIntent, error), extraPreflight backenddb.OrderedRootGroupPreflight) (*CollectionMeta, bool, error) {
+	if m != nil && m.initializationError != nil {
+		return nil, false, m.initializationError
+	}
 	if m == nil {
 		return nil, false, errCollectionManagerNil
 	}
@@ -3768,11 +3840,44 @@ func (m *CollectionManager) createCollectionWithPreparedCommandWALIntent(normali
 	if hook := testBeforeCreateCollectionPublishHook.ptr.Load(); hook != nil && hook.fn != nil {
 		hook.fn(normalized)
 	}
-	buildSystemDelta := func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+	buildSystemUpdates := func(current *backenddb.Snapshot, rootIDs []uint64) (map[string][]byte, error) {
 		if len(rootIDs) != len(plan.rootNames) {
 			return nil, unexpectedOrderedRootCountError(normalized.Name, len(plan.rootNames), len(rootIDs))
 		}
-		return buildSystemDeltaIterator(createCollectionSystemUpdates(normalized.Name, encoded, plan.rootNames, rootIDs))
+		identityValue, identityPresent, err := getSystemValue(current, nativeCatalogNextIncarnationKey)
+		if err != nil {
+			return nil, err
+		}
+		nextIdentity := uint64(1)
+		if identityPresent {
+			nextIdentity, err = nativeCatalogIdentityValue(identityValue, true)
+			if err != nil {
+				return nil, err
+			}
+		}
+		identityUpdates, err := nativeCreateIdentityUpdates(normalized.Name, nextIdentity)
+		if err != nil {
+			return nil, err
+		}
+		updates := createCollectionSystemUpdates(normalized.Name, encoded, plan.rootNames, rootIDs)
+		for key, value := range identityUpdates {
+			updates[key] = value
+		}
+		return updates, nil
+	}
+	buildSystemDelta := func(rootIDs []uint64) (result iterator.UnsafeIterator, resultErr error) {
+		// The existing serialized system builder selects the counter. A prior
+		// schema snapshot cannot exclude simultaneous creates of other names.
+		current := m.db.AcquireSnapshot()
+		if current == nil {
+			return nil, backenddb.ErrClosed
+		}
+		defer func() { resultErr = errors.Join(resultErr, current.Close()) }()
+		updates, err := buildSystemUpdates(current, rootIDs)
+		if err != nil {
+			return nil, err
+		}
+		return buildSystemDeltaIterator(updates)
 	}
 	preflight := m.createCollectionExistingSchemaPreflight(normalized, extraPreflight)
 	if m.db.CommandWALEnabled() || commandWALIntent != nil || prepareCommandWALIntent != nil {
@@ -3802,12 +3907,12 @@ func (m *CollectionManager) createCollectionWithPreparedCommandWALIntent(normali
 		return normalized.copy(), false, nil
 	}
 	if len(ordered) == 0 {
-		_, _, err = m.db.PublishOrderedRootGroupWithSystemBuilder(nil, func([]uint64) (iterator.UnsafeIterator, error) {
+		_, _, err = m.db.PublishOrderedRootGroupWithSystemBuilder(nil, func([]uint64) (result iterator.UnsafeIterator, resultErr error) {
 			current := m.db.AcquireSnapshot()
 			if current == nil {
 				return nil, backenddb.ErrClosed
 			}
-			defer func() { _ = current.Close() }()
+			defer func() { resultErr = errors.Join(resultErr, current.Close()) }()
 			existing, err := loadCollectionCatalog(current, normalized.Name)
 			if err != nil {
 				return nil, err
@@ -3818,10 +3923,14 @@ func (m *CollectionManager) createCollectionWithPreparedCommandWALIntent(normali
 				}
 				return nil, errCreateCollectionNoopExistingSchema
 			}
-			return buildSystemTargetIterator(current, createCollectionSystemUpdates(normalized.Name, encoded, nil, nil))
+			updates, err := buildSystemUpdates(current, nil)
+			if err != nil {
+				return nil, err
+			}
+			return buildSystemTargetIterator(current, updates)
 		})
 	} else {
-		_, _, err = m.db.PublishOrderedRootDeltaGroupWithPreflightAndSystemDeltaBuilder(ordered, preflight, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		_, _, err = m.db.PublishOrderedRootDeltaGroupWithPreflightAndSystemDeltaBuilder(ordered, preflight, func(rootIDs []uint64) (result iterator.UnsafeIterator, resultErr error) {
 			if len(rootIDs) != len(plan.rootNames) {
 				return nil, unexpectedOrderedRootCountError(normalized.Name, len(plan.rootNames), len(rootIDs))
 			}
@@ -3829,8 +3938,12 @@ func (m *CollectionManager) createCollectionWithPreparedCommandWALIntent(normali
 			if current == nil {
 				return nil, backenddb.ErrClosed
 			}
-			defer func() { _ = current.Close() }()
-			return buildSystemTargetIterator(current, createCollectionSystemUpdates(normalized.Name, encoded, plan.rootNames, rootIDs))
+			defer func() { resultErr = errors.Join(resultErr, current.Close()) }()
+			updates, err := buildSystemUpdates(current, rootIDs)
+			if err != nil {
+				return nil, err
+			}
+			return buildSystemTargetIterator(current, updates)
 		})
 	}
 	if errors.Is(err, errCreateCollectionNoopExistingSchema) {
@@ -3929,6 +4042,18 @@ func (m *CollectionManager) OpenCollection(name string) (*Collection, error) {
 }
 
 func (m *CollectionManager) openCollectionWithCommandWALIntent(name string, commandWALIntent *backenddb.CommandWALIntent) (*Collection, error) {
+	if m != nil && m.nativeJSON != nil {
+		if m.isClosing() {
+			return nil, backenddb.ErrClosed
+		}
+		if commandWALIntent != nil {
+			return nil, backenddb.ErrNativeSemanticUnsupported
+		}
+		return m.openNativeCollection(name)
+	}
+	if m != nil && m.initializationError != nil {
+		return nil, m.initializationError
+	}
 	if m == nil {
 		return nil, errCollectionManagerNil
 	}
@@ -4091,6 +4216,9 @@ func (m *CollectionManager) ListCollections() ([]CollectionMeta, error) {
 // is positive. Deleted entries consume the same work budget, so callers can
 // fail closed without walking unbounded catalog history.
 func (m *CollectionManager) ListCollectionsBounded(maxCollections int) ([]CollectionMeta, bool, error) {
+	if m != nil && m.initializationError != nil {
+		return nil, false, m.initializationError
+	}
 	if m == nil {
 		return nil, false, errCollectionManagerNil
 	}
@@ -4725,6 +4853,13 @@ func (c *Collection) dropIndexes(names map[string]struct{}, all bool) (*Collecti
 // relaxed success remains process-local until Flush, FlushAll, Checkpoint, or
 // Close covers the write.
 func (c *Collection) Insert(id, document []byte) ([]byte, error) {
+	if c != nil && c.nativeJSON != nil {
+		ids, err := c.nativeInsertBatch([][]byte{id}, [][]byte{document})
+		if err != nil {
+			return nil, err
+		}
+		return ids[0], nil
+	}
 	if c == nil {
 		return nil, errCollectionNil
 	}
@@ -11561,6 +11696,9 @@ func (c *Collection) insertOneViaBatchWithCoverageLocked(id, document []byte, ad
 // batch recoverable as one mutation boundary. Ordinary pre-commit errors expose
 // no partial batch. Post-commit failures must be reported as commit-ambiguous.
 func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
+	if c != nil && c.nativeJSON != nil {
+		return c.nativeInsertBatch(ids, documents)
+	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
 	admissionState := c.lockCollectionCommandWALAdmission()
@@ -11881,6 +12019,12 @@ func (c *Collection) insertBatchWithCommandWALIntent(ids, documents [][]byte, tr
 }
 
 func (c *Collection) insertBatchWithCommandWALIntentSchemaLocked(ids, documents [][]byte, trustedValidBSON bool, templateEncoder *TemplateV1Encoder, commandWALIntent *backenddb.CommandWALIntent, execOpts insertBatchExecutionOptions) (resultIDs [][]byte, resultErr error) {
+	if c != nil && c.nativeJSON != nil {
+		if trustedValidBSON || templateEncoder != nil || commandWALIntent != nil || execOpts.trustedFloat32Projection != nil || execOpts.prepared != nil || execOpts.splitInsert != nil || execOpts.insertStats != nil {
+			return nil, backenddb.ErrNativeSemanticUnsupported
+		}
+		return c.nativeInsertBatch(ids, documents)
+	}
 	defer func() { resultErr = c.invalidateVectorIndexCoverageOnAcceptedMutation(resultErr) }()
 
 	if c == nil {
@@ -22650,6 +22794,9 @@ func (c *Collection) StoredDocumentJSON(document []byte) ([]byte, error) {
 // JSON payload. The returned slice is owned by the caller. Missing documents return
 // (dst[:0], false, nil).
 func (c *Collection) GetInto(documentID []byte, dst []byte) ([]byte, bool, error) {
+	if c != nil && c.nativeJSON != nil {
+		return c.nativeGetInto(documentID, dst)
+	}
 	if c == nil {
 		return dst[:0], false, errCollectionNil
 	}
@@ -26726,3 +26873,6 @@ func ValidateIndexPath(path string) error {
 	}
 	return nil
 }
+
+// Close releases a hook-free manager after its last deterministic operation.
+func (m *CollectionManager) Close() error { return m.closeForBackend() }
