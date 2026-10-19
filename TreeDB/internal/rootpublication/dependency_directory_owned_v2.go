@@ -341,7 +341,7 @@ func bindOwnedDependencyDirectoryV2(source *StableResourceSet, directory *Depend
 			physical, key, encoded, err := s.physical(entry)
 			if err == nil {
 				var found bool
-				found, err = directory.lookupBorrowedRecordV2(key, func(key, value []byte) error {
+				found, err = directory.lookupBorrowedRecordV2(&s.points[0], key, func(key, value []byte) error {
 					if bytes.Equal(value, encoded) {
 						return nil
 					}
