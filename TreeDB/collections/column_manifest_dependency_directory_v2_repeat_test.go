@@ -53,9 +53,13 @@ func TestColumnManifestDependencyDirectoryV2RepeatedPublicAppend(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	firstManifest, err := decodeColumnManifestRecords(first.records)
+	if err != nil {
+		t.Fatal(err)
+	}
 	firstRefs := make(map[ColumnAssetRef]bool)
 	firstFiles := make(map[string]os.FileInfo)
-	for _, part := range first.manifest.Parts {
+	for _, part := range firstManifest.Parts {
 		firstRefs[part.AssetRef] = true
 		path, err := columnAssetSegmentPath(backenddb.ColumnAssetRootDirPath(dir), part.AssetRef)
 		if err != nil {
@@ -96,8 +100,12 @@ func TestColumnManifestDependencyDirectoryV2RepeatedPublicAppend(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	secondManifest, err := decodeColumnManifestRecords(second.records)
+	if err != nil {
+		t.Fatal(err)
+	}
 	sharedNewPart := false
-	for _, part := range second.manifest.Parts {
+	for _, part := range secondManifest.Parts {
 		if firstRefs[part.AssetRef] {
 			continue
 		}
