@@ -374,7 +374,11 @@ func (t *NativeJSONTxn) SetRaw(key, value []byte) (err error) {
 	return nil
 }
 
-func (t *NativeJSONTxn) Commit() (resultErr error) {
+func (t *NativeJSONTxn) Commit() error { return t.commit(false) }
+
+// The prepared API alone requests physical completion. Both modes retain the
+// same opening, logical effects, canonical command and original custody.
+func (t *NativeJSONTxn) commit(sealed bool) (resultErr error) {
 	if t == nil {
 		return backenddb.ErrClosed
 	}
@@ -522,6 +526,13 @@ func (t *NativeJSONTxn) Commit() (resultErr error) {
 		t.custody = nil
 		return errors.Join(err, cancelPrivateNativePublication(native))
 	}
+	if sealed {
+		if err = intent.PrepareSealedReceiptWithAdmission(t.core.NativeAllocator()); err != nil {
+			t.custody = nil
+			return errors.Join(err, cancelPrivateNativePublication(native))
+		}
+		defer intent.ReleaseNativeSealedReceipt()
+	}
 	for i := 0; i < t.count; i++ {
 		t.bindings[i].probe.capture = nil
 		t.bindings[i].probe.domain = nativeDomainRead{}
@@ -533,6 +544,9 @@ func (t *NativeJSONTxn) Commit() (resultErr error) {
 	}
 	members, rawEntries = nil, nil
 	result, err := t.core.CommitNative(native, intent, false)
+	if sealed && err != nil && result.LogicalInstalled {
+		err = commitAmbiguousError("PreparedInsertBatch sealed completion", err)
+	}
 	t.custody = nil
 	if !result.Consumed {
 		err = errors.Join(err, cancelPrivateNativePublication(native))

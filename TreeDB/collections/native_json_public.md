@@ -50,10 +50,24 @@ refuse before mutation admission. Existing eligible NoWAL typed-read configurati
 do not imply typed-write support. A value log remains persistent value storage
 when WAL is disabled.
 
+`Collection.PrepareInsertBatchOwned(...).Commit()` supports the eligible no-index
+Int64/String ColumnPart semantic-stream layout in the durable WAL profile. Prepare
+stages the original transaction's identity-free typed projection and canonical
+input copies; it advances no publication frontier. Conflicts against its opening
+may fail preparation early. Commit consumes the token once and revalidates its
+captured dependencies against the latest compatible complete state before effects,
+and uses its original admitted exact physical seal receipt. It returns after
+physical completion, including when a sibling publication and checkpoint changed
+the basis after preparation. Ordinary transaction Commit retains logical completion.
+Abandon and refused commits close the original transaction and its receipts.
+`maxOwnedBytes` includes conservative request/control, parser, WAL, materializer
+and publisher credit. Shared opening state and unrelated checkpoint work keep their
+own engine receipts. The ordinary owned-input contract and prepared scalar/input
+limits still apply; native staging also independently copies caller inputs.
+
 These are explicit eligibility limits of the provisional implementation. Broad
-producer migration remains required: prepared insert completion, assigned/apply
-and Raft producers, import/source controls, multi-column and additional typed
-layouts, standalone schema/index/drop/rename, and derived-index lifecycle still
+producer migration remains required: assigned/apply and Raft producers,
+import/source controls, multi-column and additional typed layouts, standalone schema/index/drop/rename, and derived-index lifecycle still
 need their complete public-path integration. Staged transactional DDL and
 approximate vector/hybrid or asynchronous text predicates in writing transactions
 remain excluded by the accepted capability contract.

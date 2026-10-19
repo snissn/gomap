@@ -57,6 +57,7 @@ const preparedInsertSchemaCopyReserveBytes = 32 << 10
 // It owns no durable identity or asset; only Commit may publish the batch.
 type PreparedInsertBatch struct {
 	collection         *Collection
+	nativeTxn          *NativeJSONTxn
 	meta               CollectionMeta
 	ids, documents     [][]byte
 	entries            []noIndexBatchEntry
@@ -365,6 +366,9 @@ func (c *Collection) PrepareInsertBatchOwned(ids, documents [][]byte, maxOwnedBy
 	if c == nil {
 		return nil, errCollectionNil
 	}
+	if c.nativeJSON != nil {
+		return c.prepareNativeInsertBatchOwned(ids, documents, maxOwnedBytes)
+	}
 	if c.db == nil {
 		return nil, errCollectionDBNil
 	}
@@ -395,48 +399,11 @@ func (c *Collection) PrepareInsertBatchOwned(ids, documents [][]byte, maxOwnedBy
 		return nil, fmt.Errorf("%w: collection catalog is not cached", ErrPreparedInsertResourceLimit)
 	}
 	meta := catalog.meta
+	if err := validatePreparedInsert(meta, ids, documents, maxOwnedBytes); err != nil {
+		return nil, err
+	}
 	cfg := meta.Options.ColumnStore
-	if cfg == nil || !cfg.Enabled || normalizedDocumentFormat(meta.Options.DocumentFormat) != DocumentFormatJSON ||
-		len(meta.Indexes) != 0 || len(meta.TextIndexes) != 0 || len(meta.VectorIndexes) != 0 ||
-		cfg.RetainedPayload != ColumnRetainedPayloadNonColumn ||
-		columnRetainedPayloadEffectiveEncoding(cfg) != ColumnRetainedPayloadEncodingSemanticStreamV1 {
-		return nil, fmt.Errorf("%w: requires no-index JSON semantic-stream column store", ErrPreparedInsertIneligible)
-	}
-	if !preparedInsertBoundedScalarColumns(cfg.Columns) {
-		return nil, fmt.Errorf("%w: prepared declared-row cursor supports one to %d Int64/String column paths of at most %d bytes", ErrPreparedInsertIneligible, preparedInsertMaxScalarColumns, preparedInsertMaxSchemaPathBytes)
-	}
-	if cfg.AssetManager == nil || len(cfg.AssetManager.Namespace) > preparedInsertMaxAssetNamespaceBytes {
-		return nil, fmt.Errorf("%w: column asset namespace exceeds %d bytes", ErrPreparedInsertIneligible, preparedInsertMaxAssetNamespaceBytes)
-	}
-	// Restrict metadata fanout and spec shape before preparation. The scalar
-	// JSONBench target declares three supported aggregate specs even when timed
-	// queries opt out of using them.
-	if !preparedInsertBoundedAggregateMetadata(*cfg) {
-		return nil, fmt.Errorf("%w: aggregate metadata is outside prepared insert eligibility", ErrPreparedInsertIneligible)
-	}
-	if maxOwnedBytes <= 0 {
-		return nil, fmt.Errorf("%w: byte limit %d", ErrPreparedInsertResourceLimit, maxOwnedBytes)
-	}
-	if len(ids) > preparedInsertMaxRows {
-		return nil, fmt.Errorf("%w: batch has %d rows, maximum %d", ErrPreparedInsertResourceLimit, len(ids), preparedInsertMaxRows)
-	}
-	for _, id := range ids {
-		if len(id) > preparedInsertMaxIDBytes {
-			return nil, fmt.Errorf("%w: document ID has %d bytes, maximum %d", ErrPreparedInsertResourceLimit, len(id), preparedInsertMaxIDBytes)
-		}
-	}
-	for _, document := range documents {
-		if len(document) > preparedInsertMaxDocumentBytes {
-			return nil, fmt.Errorf("%w: document has %d bytes, maximum %d", ErrPreparedInsertResourceLimit, len(document), preparedInsertMaxDocumentBytes)
-		}
-	}
 	inputBytes := preparedInsertInputBytes(ids, documents)
-	if inputBytes > maxOwnedBytes {
-		return nil, fmt.Errorf("%w: input bytes %d exceed %d", ErrPreparedInsertResourceLimit, inputBytes, maxOwnedBytes)
-	}
-	if !preparedInsertUnusedOuterSlotsEmpty(ids, documents) {
-		return nil, fmt.Errorf("%w: unused outer-slice slots retain uncharged buffers", ErrPreparedInsertResourceLimit)
-	}
 	// The semantic builder subtracts this same batch allowance before dividing
 	// credit among block workers. Check it before allocating entries or ordered
 	// headers: 48 B/row for entries, 72 B/row for three [][]byte headers, and
@@ -553,6 +520,53 @@ func (c *Collection) PrepareInsertBatchOwned(ids, documents [][]byte, maxOwnedBy
 		ownedBytes: ownedBytes, commitReserve: commitBudget.total, materializeReserve: commitBudget.materialization}, nil
 }
 
+// Shared eligibility and input gates precede either engine's preparation.
+func validatePreparedInsert(meta CollectionMeta, ids, documents [][]byte, maxOwnedBytes int64) error {
+	cfg := meta.Options.ColumnStore
+	if cfg == nil || !cfg.Enabled || normalizedDocumentFormat(meta.Options.DocumentFormat) != DocumentFormatJSON ||
+		len(meta.Indexes) != 0 || len(meta.TextIndexes) != 0 || len(meta.VectorIndexes) != 0 ||
+		cfg.RetainedPayload != ColumnRetainedPayloadNonColumn ||
+		columnRetainedPayloadEffectiveEncoding(cfg) != ColumnRetainedPayloadEncodingSemanticStreamV1 {
+		return fmt.Errorf("%w: requires no-index JSON semantic-stream column store", ErrPreparedInsertIneligible)
+	}
+	if !preparedInsertBoundedScalarColumns(cfg.Columns) {
+		return fmt.Errorf("%w: prepared declared-row cursor supports one to %d Int64/String column paths of at most %d bytes", ErrPreparedInsertIneligible, preparedInsertMaxScalarColumns, preparedInsertMaxSchemaPathBytes)
+	}
+	if cfg.AssetManager == nil || len(cfg.AssetManager.Namespace) > preparedInsertMaxAssetNamespaceBytes {
+		return fmt.Errorf("%w: column asset namespace exceeds %d bytes", ErrPreparedInsertIneligible, preparedInsertMaxAssetNamespaceBytes)
+	}
+	// Restrict metadata fanout and spec shape before preparation. The scalar
+	// JSONBench target declares three supported aggregate specs even when timed
+	// queries opt out of using them.
+	if !preparedInsertBoundedAggregateMetadata(*cfg) {
+		return fmt.Errorf("%w: aggregate metadata is outside prepared insert eligibility", ErrPreparedInsertIneligible)
+	}
+	if maxOwnedBytes <= 0 {
+		return fmt.Errorf("%w: byte limit %d", ErrPreparedInsertResourceLimit, maxOwnedBytes)
+	}
+	if len(ids) > preparedInsertMaxRows {
+		return fmt.Errorf("%w: batch has %d rows, maximum %d", ErrPreparedInsertResourceLimit, len(ids), preparedInsertMaxRows)
+	}
+	for _, id := range ids {
+		if len(id) > preparedInsertMaxIDBytes {
+			return fmt.Errorf("%w: document ID has %d bytes, maximum %d", ErrPreparedInsertResourceLimit, len(id), preparedInsertMaxIDBytes)
+		}
+	}
+	for _, document := range documents {
+		if len(document) > preparedInsertMaxDocumentBytes {
+			return fmt.Errorf("%w: document has %d bytes, maximum %d", ErrPreparedInsertResourceLimit, len(document), preparedInsertMaxDocumentBytes)
+		}
+	}
+	inputBytes := preparedInsertInputBytes(ids, documents)
+	if inputBytes > maxOwnedBytes {
+		return fmt.Errorf("%w: input bytes %d exceed %d", ErrPreparedInsertResourceLimit, inputBytes, maxOwnedBytes)
+	}
+	if !preparedInsertUnusedOuterSlotsEmpty(ids, documents) {
+		return fmt.Errorf("%w: unused outer-slice slots retain uncharged buffers", ErrPreparedInsertResourceLimit)
+	}
+	return nil
+}
+
 func (p *PreparedInsertBatch) OwnedBytes() int64 {
 	if p == nil {
 		return 0
@@ -571,6 +585,10 @@ func (p *PreparedInsertBatch) ReservedBytes() int64 {
 }
 
 func (p *PreparedInsertBatch) release() {
+	if p.nativeTxn != nil {
+		_ = p.nativeTxn.Close()
+		p.nativeTxn = nil
+	}
 	if p.retained.semanticStreamBlocks != nil {
 		resetCollectionRunTable(p.retained.semanticStreamBlocks)
 	}
@@ -586,11 +604,21 @@ func (p *PreparedInsertBatch) Abandon() {
 	}
 }
 
-// Commit consumes the prepared batch once and returns only after the ordinary
-// ordered durable insert has acknowledged it.
+// Commit consumes the prepared batch once and returns only after its original
+// exact physical seal receipt completes.
 func (p *PreparedInsertBatch) Commit() ([][]byte, error) {
 	if p == nil || !p.state.CompareAndSwap(0, 1) {
 		return nil, errors.New("collections: prepared insert already consumed")
+	}
+	if p.nativeTxn != nil {
+		defer p.release()
+		if p.collection.manager.isClosing() {
+			return nil, errors.Join(backenddb.ErrClosed, p.nativeTxn.Close())
+		}
+		if err := p.nativeTxn.commit(true); err != nil {
+			return nil, err
+		}
+		return p.ids, nil
 	}
 	var intent *backenddb.CommandWALIntent
 	defer func() {
