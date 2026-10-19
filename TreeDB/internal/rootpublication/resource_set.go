@@ -1884,10 +1884,17 @@ func (builder *StableResourceSetBuilder) MergeAppendOnlyLogicalObligations(child
 		oldTarget, oldChild := builder.kindViews, child.kindViews
 		builder.kindViews = merged
 		child.kindViews, child.entries = nil, nil
-		child.disposeSelectedWrapperLocked()
+		wrapperAllocation := child.metadata
+		child.metadata = nil
 		child.mu.Unlock()
+		child = nil
 		builder.mu.Unlock()
 		completeOwnedResourceKindMerge(oldTarget, oldChild, merged)
+		// The original independent receipt refunds only after the final
+		// containing-header access and all child aliases have ended.
+		if wrapperAllocation.drop() {
+			wrapperAllocation.refund()
+		}
 		directWork.AppendOnlyFastPath = 1
 		return directWork, nil
 	}
