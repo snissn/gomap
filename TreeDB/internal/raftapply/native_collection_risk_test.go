@@ -13,6 +13,7 @@ import (
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/nativewire"
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
@@ -29,6 +30,7 @@ func nativeApplyPublicOptions(dir string) treedb.Options {
 }
 
 func TestNativeCollectionDeterministicApplyNoEffectFrames(t *testing.T) {
+	t.Setenv("TREEDB_DISABLE_VLOG_GENERATION_LOOP", "1")
 	dir := t.TempDir()
 	database, err := treedb.Open(nativeApplyPublicOptions(dir))
 	if err != nil {
@@ -59,6 +61,7 @@ func TestNativeCollectionDeterministicApplyNoEffectFrames(t *testing.T) {
 	registry := backend.ValueLogIdentityPinRegistry()
 	progress, results := NewMemoryApplyProgressStore(16, 16), NewMemoryApplyResultStore(16)
 	options := Options{ProgressStore: progress, ResultStore: results}
+	var frames []commitlog.CommandEnvelope
 	apply := func(index uint64, raw []byte, status raftentry.ApplyStatusV1, affected, matched int64) {
 		t.Helper()
 		before, err := backend.CaptureNativeSemanticState()
@@ -76,6 +79,7 @@ func TestNativeCollectionDeterministicApplyNoEffectFrames(t *testing.T) {
 		if err != nil {
 			t.Fatalf("apply %d: %v result=%+v", index, err, result)
 		}
+		frames = append(frames, observeNativeApplyFrame(t, backend.Dir(), next))
 		assertApplied(t, result, status, affected)
 		if result.MatchedCount != matched || backend.CommandWALNextLSN() != next+1 || backend.State().AppliedCommandLSN != next {
 			t.Fatalf("apply %d result=%+v next/applied=%d/%d", index, result, backend.CommandWALNextLSN(), backend.State().AppliedCommandLSN)
@@ -99,9 +103,15 @@ func TestNativeCollectionDeterministicApplyNoEffectFrames(t *testing.T) {
 	apply(4, deterministicReplaceBatchEntry(t, "users", "native-noop:replace", nativewire.DocumentFormatJSON, [][]byte{[]byte("u1"), []byte("missing")}, [][]byte{doc, []byte(`{"id":"missing"}`)}), raftentry.ApplyStatusApplied, 0, 1)
 	apply(5, deterministicDeleteBatchEntry(t, "users", "native-noop:absent-delete", [][]byte{[]byte("missing")}), raftentry.ApplyStatusApplied, 0, 0)
 	apply(6, deterministicDeleteBatchEntry(t, "users", "native-noop:delete", [][]byte{[]byte("u1"), []byte("missing")}), raftentry.ApplyStatusApplied, 1, 0)
-	frames := readCommandWALFrames(t, backend.Dir())
 	if len(frames) != 6 {
 		t.Fatalf("frames=%d want 6", len(frames))
+	}
+	assertCatalogCreateFrame(t, frames[0], "users")
+	assertCollectionInsertFrame(t, frames[1], "users", map[string][]byte{"u1": doc})
+	for i, frame := range frames {
+		if frame.LSN != uint64(i+1) {
+			t.Fatalf("frame %d LSN=%d want %d", i, frame.LSN, i+1)
+		}
 	}
 	assertCatalogCreateFrame(t, frames[2], "users")
 	assertCollectionUpdateFrame(t, frames[3], "users", nil)
@@ -141,13 +151,16 @@ func TestNativeCollectionDeterministicApplyAssignedFailureReplay(t *testing.T) {
 		opts := Options{ProgressStore: progress, ResultStore: results}
 		create := deterministicCreateCollectionEntry(t, "users", "native-failure:create", testCreateCollectionMetaOptions{})
 		seed := deterministicInsertBatchEntry(t, "users", "native-failure:seed", nativewire.DocumentFormatJSON, [][]byte{[]byte("seed")}, [][]byte{[]byte(`{"id":"seed","v":1}`)})
+		var frames []commitlog.CommandEnvelope
 		for i, raw := range [][]byte{create, seed} {
+			next := backend.CommandWALNextLSN()
 			meta := applyMeta(1, uint64(i+1))
 			meta.SyncLocalCommandWAL = true
 			result, err := ApplyCommittedEntryV1(backend, raw, meta, opts)
 			if err != nil {
 				t.Fatalf("seed: %v", err)
 			}
+			frames = append(frames, observeNativeApplyFrame(t, backend.Dir(), next))
 			assertApplied(t, result, raftentry.ApplyStatusApplied, 1)
 		}
 		manager := collections.NewCollectionManager(backend)
@@ -170,6 +183,7 @@ func TestNativeCollectionDeterministicApplyAssignedFailureReplay(t *testing.T) {
 		opts.FaultInjector = singlePointFaultInjector{point: FaultAfterLocalWALAppendBeforeVisibleV1}
 		result, err := ApplyCommittedEntryV1(backend, raw, meta, opts)
 		assertRecoveryRequired(t, result, err, raftentry.ErrorUnsafeDurabilityModeV1)
+		frames = append(frames, observeNativeApplyFrame(t, backend.Dir(), next))
 		after, ok := backend.StateToken()
 		if !ok || after != token || backend.CommandWALNextLSN() != next+1 {
 			t.Fatalf("assigned failure moved physical cut: before=%+v after=%+v next=%d", token, after, backend.CommandWALNextLSN())
@@ -190,9 +204,15 @@ func TestNativeCollectionDeterministicApplyAssignedFailureReplay(t *testing.T) {
 		if err = backend.CheckStorageMaintenanceReady(); !errors.Is(err, backenddb.ErrRecoveryRequired) {
 			t.Fatalf("assigned failure did not poison original owner: %v", err)
 		}
-		frames := readCommandWALFrames(t, backend.Dir())
 		if len(frames) != 3 {
 			t.Fatalf("frames=%d want 3", len(frames))
+		}
+		assertCatalogCreateFrame(t, frames[0], "users")
+		assertCollectionInsertFrame(t, frames[1], "users", map[string][]byte{"seed": []byte(`{"id":"seed","v":1}`)})
+		for i, frame := range frames {
+			if frame.LSN != uint64(i+1) {
+				t.Fatalf("frame %d LSN=%d want %d", i, frame.LSN, i+1)
+			}
 		}
 		assertCollectionInsertFrame(t, frames[2], "users", map[string][]byte{"new": []byte(`{"id":"new","v":2}`)})
 		fmt.Println("NATIVE APPLY ASSIGNED FAILURE basis=2 accepted=3")

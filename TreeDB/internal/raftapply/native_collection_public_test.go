@@ -8,6 +8,7 @@ import (
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/nativewire"
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
 )
@@ -16,6 +17,9 @@ import (
 // owner's complete cut. This preserves its local physical-seal completion,
 // canonical singleton frames and durable result/progress contracts.
 func TestNativeCollectionDeterministicApplyPublicLifecycle(t *testing.T) {
+	// Exclude unrelated idle fallback convergence; each apply still performs its
+	// required Checkpoint and normal covered-segment cleanup.
+	t.Setenv("TREEDB_DISABLE_VLOG_GENERATION_LOOP", "1")
 	root := t.TempDir()
 	dir, storesDir := filepath.Join(root, "db"), filepath.Join(root, "apply")
 	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, dir)
@@ -45,6 +49,7 @@ func TestNativeCollectionDeterministicApplyPublicLifecycle(t *testing.T) {
 			closeDurableApplyStoresForTest(t, progress, results)
 		}
 	})
+	var frames []commitlog.CommandEnvelope
 	apply := func(index uint64, raw []byte, status raftentry.ApplyStatusV1, affected int64) raftentry.ApplyResultV1 {
 		t.Helper()
 		next := backend.CommandWALNextLSN()
@@ -62,6 +67,7 @@ func TestNativeCollectionDeterministicApplyPublicLifecycle(t *testing.T) {
 		if err != nil {
 			t.Fatalf("public native deterministic apply index %d: %v result=%+v", index, err, result)
 		}
+		frames = append(frames, observeNativeApplyFrame(t, backend.Dir(), next))
 		assertApplied(t, result, status, affected)
 		if backend.CommandWALNextLSN() != next+1 || backend.State().AppliedCommandLSN != next {
 			t.Fatalf("apply %d did not finish its exact local physical prefix: next=%d applied=%d want %d/%d", index, backend.CommandWALNextLSN(), backend.State().AppliedCommandLSN, next+1, next)
@@ -167,7 +173,6 @@ func TestNativeCollectionDeterministicApplyPublicLifecycle(t *testing.T) {
 	}
 	checkCurrent()
 	checkHeld()
-	frames := readCommandWALFrames(t, backend.Dir())
 	if len(frames) != 4 {
 		t.Fatalf("canonical frames=%d want 4", len(frames))
 	}
@@ -246,4 +251,23 @@ func TestNativeCollectionDeterministicApplyPublicLifecycle(t *testing.T) {
 	if err != nil || reopenedDigest != digest {
 		t.Fatalf("reopened digest=%x err=%v want %x", reopenedDigest, err, digest)
 	}
+}
+
+// Exact sealing may retire older covered segments. Observe each actual assigned
+// frame before the next apply instead of treating the live WAL as an archive.
+// ReadCommandFrame returns owned decoded data, unlike its scan-only sibling.
+func observeNativeApplyFrame(t *testing.T, dir string, assignedLSN uint64) commitlog.CommandEnvelope {
+	t.Helper()
+	var selected commitlog.CommandEnvelope
+	matches := 0
+	for _, frame := range readCommandWALFrames(t, dir) {
+		if frame.LSN == assignedLSN {
+			selected = frame
+			matches++
+		}
+	}
+	if matches != 1 {
+		t.Fatalf("assigned LSN %d: retained canonical frames=%d want exactly 1 at apply boundary", assignedLSN, matches)
+	}
+	return selected
 }
