@@ -252,3 +252,23 @@ basis; held reads keep the old basis and its original admitted buffers until its
 last owner closes. Pending/captured logical-source precedence and pointer-value
 resolution are unchanged. Recovered catalog decoding still uses its existing
 scope-owned metadata scratch; it is not amortized by this row-read workspace.
+
+## Indexed planner extraction checkpoint (source only)
+
+The native transaction now adapts the maintained `directBufferedInsertPlan`
+through `extractNativeInsertEffects`. Its primary mutation/effect backing is
+reused; additional template, index-state and secondary root arrays use the same
+original staging receipt, admitted before construction. The existing immutable
+collection replacement can compose all of those domain deltas into one engine
+successor, adopting every partial domain into its original preparation ledger.
+No backend protocol or atomic installer is added.
+
+This checkpoint deliberately preserves the indexed eligibility fence. The
+unchanged `TestNativeExistingIndexedJSONPublicLifecycle` still stops at indexed
+Create. Before enabling indexed JSON, complete the captured scalar reader/domain
+import, unique prefix-range absence dependencies, indexed planner admission before
+planning, and singleton/composite replay from the same complete root effects.
+Then the named public proof can advance to Update/Delete, whose shared maintained
+old/new effect extraction is also unfinished. Schema operations, assigned Raft and
+typed asset custody remain obligations of the full #5142 packet. This source-only
+extraction is not public activation or qualification evidence.

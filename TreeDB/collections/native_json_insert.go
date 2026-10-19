@@ -73,19 +73,36 @@ func nativeJSONInsertCharge(name string, ids, documents [][]byte) (uint64, error
 	return total, nil
 }
 
+// nativeJSONDomainChange is one immutable maintained-planner root delta.
+// Root names are collection-relative; they are never physical root identities.
+type nativeJSONDomainChange struct {
+	name    string
+	policy  backenddb.OrderedRootStoragePolicy
+	entries []memtable.COWMutation
+}
+
 type nativeJSONPrimaryChange struct {
-	collection *nativeCollectionState
-	entries    []memtable.COWMutation
+	collection    *nativeCollectionState
+	entries       []memtable.COWMutation
+	primaryPolicy backenddb.OrderedRootStoragePolicy
+	additional    []nativeJSONDomainChange
 }
 
 func prepareNativeJSONPrimary(base *nativeEngineVersion, c *nativeCollectionState, entries []memtable.COWMutation) (*nativeEngineVersion, error) {
-	return prepareNativeJSONPrimaries(base, []nativeJSONPrimaryChange{{c, entries}})
+	return prepareNativeJSONPrimaries(base, []nativeJSONPrimaryChange{{collection: c, entries: entries}})
 }
 func prepareNativeJSONPrimaries(base *nativeEngineVersion, changes []nativeJSONPrimaryChange) (*nativeEngineVersion, error) {
 	if base == nil || base.inventory != nil || len(changes) == 0 {
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
-	next, err := newNativeEnginePreparation(base, len(changes), len(changes), base.allocator)
+	domainCount := len(changes)
+	for _, change := range changes {
+		if len(change.additional) > int(^uint(0)>>1)-domainCount {
+			return nil, memtable.ErrCOWCapacity
+		}
+		domainCount += len(change.additional)
+	}
+	next, err := newNativeEnginePreparation(base, len(changes), domainCount, base.allocator)
 	if err != nil {
 		return nil, err
 	}
@@ -110,31 +127,44 @@ func prepareNativeJSONPrimaries(base *nativeEngineVersion, changes []nativeJSONP
 	}
 	for _, change := range changes {
 		c, entries := change.collection, change.entries
-		old, _ := c.domains.Get("primary")
-		root, policy := uint64(0), backenddb.OrderedRootStoragePolicy(0)
-		if old != nil {
-			root, policy = old.baseRoot, old.storagePolicy
-		}
-		domain, err := prepareNativeDomainUpdate(old, "primary", root, 1, policy, entries, base.allocator)
-		if domain != nil {
-			p.ownedDomains = append(p.ownedDomains, domain)
-		}
+		domainCount := 1 + len(change.additional)
+		p.domainBuilder, err = cowbtree.NewOwnedMapBuilder(c.domains, domainCount, nativeDomainLifetime{}, admit)
 		if err != nil {
 			return next, err
 		}
-		p.domainBuilder, err = cowbtree.NewOwnedMapBuilder(c.domains, 1, nativeDomainLifetime{}, admit)
+		p.pendingDomainBuilder, err = cowbtree.NewOwnedMapBuilder(c.pending, domainCount, nativeDomainLifetime{}, admit)
 		if err != nil {
 			return next, err
 		}
-		p.pendingDomainBuilder, err = cowbtree.NewOwnedMapBuilder(c.pending, 1, nativeDomainLifetime{}, admit)
-		if err != nil {
-			return next, err
-		}
-		if err = p.domainBuilder.Set("primary", domain); err != nil {
-			return next, err
-		}
-		if err = p.pendingDomainBuilder.Set("primary", domain); err != nil {
-			return next, err
+		for i := 0; i < domainCount; i++ {
+			name, policy, rows := "primary", change.primaryPolicy, entries
+			if i > 0 {
+				delta := change.additional[i-1]
+				name, policy, rows = delta.name, delta.policy, delta.entries
+			}
+			old, _ := c.domains.Get(name)
+			root := uint64(0)
+			if old != nil {
+				root = old.baseRoot
+				// The legacy primary-only adapter did not carry a policy.
+				// Preserve its exact original physical-domain policy.
+				if i == 0 {
+					policy = old.storagePolicy
+				}
+			}
+			domain, err := prepareNativeDomainUpdate(old, name, root, 1, policy, rows, base.allocator)
+			if domain != nil {
+				p.ownedDomains = append(p.ownedDomains, domain)
+			}
+			if err != nil {
+				return next, err
+			}
+			if err = p.domainBuilder.Set(name, domain); err != nil {
+				return next, err
+			}
+			if err = p.pendingDomainBuilder.Set(name, domain); err != nil {
+				return next, err
+			}
 		}
 		p.domains, p.pendingDomains = p.domainBuilder.Seal(), p.pendingDomainBuilder.Seal()
 		p.domainBuilder, p.pendingDomainBuilder = nil, nil

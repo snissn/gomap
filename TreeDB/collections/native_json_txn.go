@@ -302,11 +302,24 @@ func (t *NativeJSONTxn) InsertBatchInto(name string, ids, documents [][]byte) (r
 	}
 	// Adopt all controls before payload encoding or another fallible operation.
 	g.plan = &nativeJSONLogicalInsert{name: g.name, incarnation: g.incarnation, bootstrap: t.imported, custody: t.custody, mutations: make([]memtable.COWMutation, len(rows))}
-	g.effects = make([]txnhistory.Effect, len(rows))
+	g.plan.primaryPolicy = nativeInsertRootPolicy(prepared.directBufferedInsert, prepared.directBufferedInsert.primaryRootName)
+	stageCharge := charge + extra
+	admit := func(bytes uint64) error {
+		if bytes > ^uint64(0)-stageCharge {
+			return memtable.ErrCOWCapacity
+		}
+		if err := t.stageLeases[index].Resize(stageCharge + bytes); err != nil {
+			return err
+		}
+		stageCharge += bytes
+		return nil
+	}
+	g.plan.additional, g.effects, err = extractNativeInsertEffects(g.name, g.incarnation, prepared.directBufferedInsert, g.plan.mutations, admit)
+	if err != nil {
+		return err
+	}
 	docs := make([]commitlog.CollectionDocument, len(rows))
 	for i, row := range rows {
-		g.plan.mutations[i] = memtable.COWMutation{Key: row.key, Value: row.value, Flags: node.FlagInline}
-		g.effects[i] = txnhistory.Effect{Namespace: g.namespace(), Kind: txnhistory.PointEffect, Key: row.key}
 		docs[i] = commitlog.CollectionDocument{ID: row.key, Document: row.value}
 	}
 	g.payload, err = commitlog.EncodeCollectionInsertBatchByIDPayload(g.name, docs)
@@ -317,11 +330,13 @@ func (t *NativeJSONTxn) InsertBatchInto(name string, ids, documents [][]byte) (r
 // Opening identity and all borrowed buffers belong to NativeJSONTxn through the
 // synchronous commit. Only sparse collection custody survives acceptance.
 type nativeJSONLogicalInsert struct {
-	name        string
-	incarnation uint64
-	bootstrap   *nativeEngineVersion // private complete descriptor import only
-	mutations   []memtable.COWMutation
-	custody     *nativeMutationCustody
+	name          string
+	incarnation   uint64
+	bootstrap     *nativeEngineVersion // private complete descriptor import only
+	mutations     []memtable.COWMutation
+	additional    []nativeJSONDomainChange
+	primaryPolicy backenddb.OrderedRootStoragePolicy
+	custody       *nativeMutationCustody
 }
 
 type nativeJSONLogicalGroup struct {
@@ -358,7 +373,7 @@ func (p *nativeJSONLogicalGroup) PrepareNativePublication(latest backenddb.Nativ
 		if !ok || !nok || named.incarnation != g.incarnation {
 			return backenddb.NativeFinalizedPublication{}, backenddb.ErrConcurrentModification
 		}
-		changes[count] = nativeJSONPrimaryChange{collection: c, entries: g.plan.mutations}
+		changes[count] = nativeJSONPrimaryChange{collection: c, entries: g.plan.mutations, additional: g.plan.additional, primaryPolicy: g.plan.primaryPolicy}
 		count++
 	}
 	next, err := prepareNativeJSONPrimaries(base, changes[:count])
