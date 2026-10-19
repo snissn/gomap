@@ -136,6 +136,8 @@ func walkImportedEntry(directory *resourceImportDirectory, entry *stableResource
 	view := entry.logicalObligations
 	seen := 0
 	emit := func(o StableLogicalObligation) error {
+		// Owned removal proof masks the exact inherited payload. A live
+		// pending replacement has different integrity and must survive import.
 		if _, removed := view.removedValue(o); removed {
 			return nil
 		}

@@ -1,6 +1,7 @@
 package rootpublication
 
 import (
+	"errors"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"slices"
 	"strings"
@@ -40,7 +41,11 @@ func mergeOwnedResourceKindBackings(target, incoming *resourceKindBacking) (*res
 		compatible = !stableResourceViewsConflict(target, entry)
 		return compatible
 	})
-	if !compatible {
+	directory := false
+	for _, cell := range target.cells {
+		directory = directory || cell.view.directory != nil
+	}
+	if !compatible && !directory {
 		if next, handled, err := coalesceOwnedPhysicalHistory(target, incoming, owner); handled {
 			return next, err
 		}
@@ -122,6 +127,20 @@ func mergeOwnedResourceKindBackings(target, incoming *resourceKindBacking) (*res
 			continue
 		}
 		old := next.cells[index]
+		if directory {
+			// The admitted next descriptor owns every partial edge, including
+			// the SAME failed physical cleanup receipt on refusal.
+			if err := mergeOwnedDirectoryKindView(&next.cells[index].view, cell.view, owner); err != nil {
+				if cleanup := next.release(); cleanup != nil {
+					if binding := SelectOriginalCleanupPrior(cleanup, err); binding.Valid() && binding.TryLink(err) {
+						return nil, cleanup
+					}
+					return nil, errors.Join(err, cleanup)
+				}
+				return nil, err
+			}
+			continue
+		}
 		view, err := mergeOwnedResourceKindView(old.view, cell.view, owner)
 		if err != nil {
 			next.release()

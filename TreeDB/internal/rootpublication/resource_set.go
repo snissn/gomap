@@ -1819,6 +1819,78 @@ func (builder *StableResourceSetBuilder) MergeAppendOnlyLogicalObligations(child
 		builder.mu.Unlock()
 		return directWork, err
 	}
+	if builder.selected || child.selected || (builder.kindViews != nil && builder.kindViews.allocation != nil) {
+		owner := child.metadata
+		if !child.selected {
+			owner = nil
+		}
+		if owner == nil || (builder.metadata != nil && builder.metadata.owner != owner.owner) || (builder.kindViews != nil && (builder.kindViews.allocation == nil || builder.kindViews.allocation.owner != owner.owner)) {
+			child.mu.Unlock()
+			builder.mu.Unlock()
+			return directWork, ErrResourceOwnership
+		}
+		var admissionErr error
+		rangeStableResourceKindViews(child.kindViews, func(entry *stableResourceEntry) bool {
+			var previous *stableResourceEntry
+			if view, ok := builder.kindViews.lookup(entry.token.kind); ok {
+				previous = findStableResourceLogical(view.logical, entry.token.logicalKey())
+				if previous != nil && !previous.token.samePhysicalIdentity(entry.token) {
+					admissionErr = ErrResourceConflict
+					return false
+				}
+			}
+			// Flat owned inputs keep the established canonical-representative
+			// coalescing route. Directory-backed owners require the stable tuple
+			// above because their persisted owner key must remain immutable.
+			if previous == nil {
+				for _, cell := range viewsCells(builder.kindViews) {
+					for _, candidate := range findStableResourcePhysical(cell.view.physical, entry.token.physicalIdentityKey()) {
+						if candidate.logicalObligations.directory != nil {
+							continue
+						}
+						coalesce, err := stableResourcesCoalesce(candidate.token, entry.token)
+						if err != nil {
+							admissionErr = err
+							return false
+						}
+						if coalesce {
+							previous = candidate
+						}
+					}
+				}
+			}
+			admitted, complete, err := selectedViewsAdmit(builder.kindViews, entry, previous, nil, &directWork)
+			admissionErr = err
+			if err == nil && (!admitted || !complete) {
+				admissionErr = ErrResourceConflict
+			}
+			return admissionErr == nil
+		})
+		var merged *resourceKindBacking
+		if admissionErr == nil {
+			merged, admissionErr = mergeOwnedResourceKindBackings(builder.kindViews, child.kindViews)
+		}
+		if admissionErr != nil {
+			child.mu.Unlock()
+			builder.mu.Unlock()
+			return directWork, admissionErr
+		}
+		if !child.owner.CompareAndSwap(uint32(ResourceOwnerBuilder), uint32(ResourceOwnerTransferred)) {
+			child.mu.Unlock()
+			builder.mu.Unlock()
+			abandonOwnedResourceKindMerge(merged)
+			return directWork, ErrResourceOwnership
+		}
+		oldTarget, oldChild := builder.kindViews, child.kindViews
+		builder.kindViews = merged
+		child.kindViews, child.entries = nil, nil
+		child.disposeSelectedWrapperLocked()
+		child.mu.Unlock()
+		builder.mu.Unlock()
+		completeOwnedResourceKindMerge(oldTarget, oldChild, merged)
+		directWork.AppendOnlyFastPath = 1
+		return directWork, nil
+	}
 	merged, distinct, mergeErr := mergeDistinctStableResourceKindViews(builder.kindViews, child.kindViews, &directWork)
 	if mergeErr != nil {
 		child.mu.Unlock()

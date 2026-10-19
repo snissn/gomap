@@ -205,7 +205,7 @@ func lookupStableLogicalMembershipV2(index *stableLogicalObligationIndexNode, di
 	if entry == nil || entry.logicalObligations.directory != directory {
 		return StableLogicalObligation{}, false, nil
 	}
-	if _, removed := entry.logicalObligations.removedValue(obligation); removed {
+	if _, removed := entry.logicalObligations.removedValue(existing); removed {
 		return StableLogicalObligation{}, false, nil
 	}
 	return existing, true, nil
@@ -251,8 +251,11 @@ func (view stableLogicalObligationView) walk(visit func(StableLogicalObligation)
 // lookup checks a small unsealed producer delta before the admitted directory.
 // A directory lookup error cannot be interpreted as permission to add a key.
 func (view stableLogicalObligationView) lookup(obligation StableLogicalObligation, work *StableResourceClosureWork) (StableLogicalObligation, bool, error) {
-	if _, removed := view.removedValue(obligation); removed {
-		return StableLogicalObligation{}, false, nil
+	if view.ownedRemoved == nil {
+		// Generic diagnostics retain their established map-mask semantics.
+		if _, removed := view.removedValue(obligation); removed {
+			return StableLogicalObligation{}, false, nil
+		}
 	}
 	if existing, found := findStableLogicalObligationIndex(view.index, obligation, work); found {
 		return existing, true, nil
@@ -266,6 +269,9 @@ func (view stableLogicalObligationView) lookup(obligation StableLogicalObligatio
 	owner, existing, found, err := view.directory.LookupLogical(obligation)
 	if err != nil || !found {
 		return StableLogicalObligation{}, false, err
+	}
+	if _, removed := view.removedValue(existing); removed {
+		return StableLogicalObligation{}, false, nil
 	}
 	if !bytes.Equal(owner, view.owner) {
 		return StableLogicalObligation{}, false, fmt.Errorf("%w: logical directory key has a different physical owner", ErrResourceConflict)

@@ -1,6 +1,7 @@
 package rootpublication
 
 import (
+	"bytes"
 	"errors"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"slices"
@@ -373,17 +374,67 @@ func newOwnedResourceEntryHistory(left, right *stableResourceEntry, token *Stabl
 	if err != nil {
 		return nil, err
 	}
-	fail := func(e error) (*resourceEntryBacking, error) { backing.release(); return nil, e }
+	fail := func(e error) (*resourceEntryBacking, error) {
+		if cleanup := backing.release(); cleanup != nil {
+			if binding := SelectOriginalCleanupPrior(cleanup, e); binding.Valid() && binding.TryLink(e) {
+				return nil, cleanup
+			}
+			return nil, errors.Join(e, cleanup)
+		}
+		return nil, e
+	}
 	entry := &backing.entries[0]
 	if err = entry.bindOwnedToken(token); err != nil {
 		return fail(err)
 	}
-	a, err := newResourceAllocation(owner, retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(resourceEntryOutgoing{}))))
+	a, err := newResourceAllocation(owner, retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(resourceEntryOutgoing{})))+retainedalloc.AllocationCharge(uint64(len(left.logicalObligations.owner))))
 	if err != nil {
 		return fail(err)
 	}
 	out := &resourceEntryOutgoing{allocation: a}
 	entry.outgoing = out
+	if left.logicalObligations.directory != nil {
+		if left.logicalObligations.directory.metadata != owner {
+			return fail(ErrResourceOwnership)
+		}
+		if err := left.logicalObligations.directory.Retain(); err != nil {
+			return fail(err)
+		}
+		out.directory = left.logicalObligations.directory
+		out.directoryKey = bytes.Clone(left.logicalObligations.owner)
+	}
+	if left.outgoing.removed != nil {
+		// Only prior delta removals are inspected; directory history is untouched.
+		unmask := false
+		if right != nil {
+			for _, o := range left.outgoing.removed.values {
+				if actual, found := findStableLogicalObligationIndex(right.outgoing.index, o, nil); found && actual == o {
+					unmask = true
+					break
+				}
+			}
+		}
+		if unmask {
+			out.removed, err = newResourceObligationBacking(owner, left.outgoing.removed.values, "")
+			if err != nil {
+				return fail(err)
+			}
+			kept := 0
+			for _, o := range out.removed.values {
+				if actual, found := findStableLogicalObligationIndex(right.outgoing.index, o, nil); !found || actual != o {
+					out.removed.values[kept] = o
+					kept++
+				}
+			}
+			clear(out.removed.values[kept:])
+			out.removed.values = out.removed.values[:kept]
+		} else {
+			if !left.outgoing.removed.retain() {
+				return fail(ErrResourceOwnership)
+			}
+			out.removed = left.outgoing.removed
+		}
+	}
 	if !left.outgoing.index.retainAllocation() {
 		return fail(ErrResourceOwnership)
 	}
@@ -402,6 +453,7 @@ func newOwnedResourceEntryHistory(left, right *stableResourceEntry, token *Stabl
 		return fail(err)
 	}
 	count := left.logicalObligations.count
+	var codec *ownedDirectoryCodecV2
 	var insertErr error
 	var insert func(*stableLogicalObligationIndexNode) bool
 	insert = func(n *stableLogicalObligationIndexNode) bool {
@@ -420,19 +472,55 @@ func newOwnedResourceEntryHistory(left, right *stableResourceEntry, token *Stabl
 			insertErr = ErrUnresolvedResource
 			return false
 		}
-		next, e := insertOwnedResourceObligationIndex(out.index, n.backing, ordinal, owner)
+		actual, present, e := lookupOwnedEntryObligationV2(left, n.obligation, codec)
 		if e != nil {
 			insertErr = e
 			return false
 		}
-		if next != out.index {
+		if present {
+			if actual != n.obligation {
+				insertErr = ErrResourceConflict
+				return false
+			}
+			return insert(n.right)
+		}
+		// An identical re-add may unmask a persisted value without adding a
+		// second pending emission. A removed unsealed value has no base record
+		// and still needs its original live pending index edge.
+		restoredBase := false
+		if left.logicalObligations.directory != nil {
+			if _, removed := left.logicalObligations.removedValue(n.obligation); removed {
+				_, e := codec.lookupLogical(left.logicalObligations.directory, n.obligation, func(key []byte, actual StableLogicalObligation) error {
+					restoredBase = bytes.Equal(key, left.logicalObligations.owner) && actual == n.obligation
+					return nil
+				})
+				if e != nil {
+					insertErr = e
+					return false
+				}
+			}
+		}
+		next := out.index
+		if !restoredBase {
+			var e error
+			next, e = insertOwnedResourceObligationIndex(out.index, n.backing, ordinal, owner)
+			if e != nil {
+				insertErr = e
+				return false
+			}
+		}
+		if next != out.index || restoredBase {
 			if count == int(^uint(0)>>1) {
-				releaseOwnedResourceObligationIndex(next)
+				if next != out.index {
+					releaseOwnedResourceObligationIndex(next)
+				}
 				insertErr = retainedalloc.ErrCapacity
 				return false
 			}
-			releaseOwnedResourceObligationIndex(out.index)
-			out.index = next
+			if next != out.index {
+				releaseOwnedResourceObligationIndex(out.index)
+				out.index = next
+			}
 			count++
 			foundField := false
 			for i := range out.fields.cells {
@@ -449,8 +537,20 @@ func newOwnedResourceEntryHistory(left, right *stableResourceEntry, token *Stabl
 		}
 		return insert(n.right)
 	}
-	if !insert(rightIndex) {
-		return fail(insertErr)
+	apply := func(s *ownedDirectoryCodecV2) error {
+		codec = s
+		if !insert(rightIndex) {
+			return insertErr
+		}
+		return nil
+	}
+	if out.directory != nil {
+		err = withOwnedDirectoryCodecV2(owner, apply)
+	} else {
+		err = apply(nil)
+	}
+	if err != nil {
+		return fail(err)
 	}
 	if token == left.token && right != nil {
 		entry.frontier, out.frontier, err = ownedFrontierUnion(owner, left.frontier, right.frontier)
@@ -462,8 +562,11 @@ func newOwnedResourceEntryHistory(left, right *stableResourceEntry, token *Stabl
 		entry.frontier = token.frontier
 	}
 	entry.logicalLane, entry.resourceID, entry.diagnosticPath = token.logicalLane, token.resourceID, token.diagnosticPath
+	if out.directory != nil {
+		entry.logicalLane, entry.resourceID, entry.diagnosticPath = left.logicalLane, left.resourceID, left.diagnosticPath
+	}
 	entry.reachability = out.fields
-	entry.logicalObligations = stableLogicalObligationView{fieldSummary: out.fields, index: out.index, count: count}
+	entry.logicalObligations = stableLogicalObligationView{fieldSummary: out.fields, index: out.index, count: count, directory: out.directory, owner: out.directoryKey, ownedRemoved: out.removed}
 	entry.dependencyManifestV1 = &out.cache
 	return backing, nil
 }
@@ -543,12 +646,20 @@ func coalesceOwnedPhysicalHistory(target, incoming *resourceKindBacking, owner *
 	return next, true, nil
 }
 
-func appendOwnedPhysicalHistoryToView(view *stableResourceKindView, old, child *stableResourceEntry, owner *retainedalloc.Owner) error {
+func appendOwnedPhysicalHistoryToView(view *stableResourceKindView, old, child *stableResourceEntry, owner *retainedalloc.Owner) (retErr error) {
 	replacement, e := newOwnedResourceEntryHistory(old, child, old.token, owner)
 	if e != nil {
 		return e
 	}
-	defer replacement.release()
+	defer func() {
+		if cleanup := replacement.release(); cleanup != nil {
+			if binding := SelectOriginalCleanupPrior(cleanup, retErr); binding.Valid() && binding.TryLink(retErr) {
+				retErr = cleanup
+			} else {
+				retErr = errors.Join(retErr, cleanup)
+			}
+		}
+	}()
 	entry := &replacement.entries[0]
 	logical, e := insertOwnedResourceLogical(view.logical, entry, owner)
 	if e != nil {
@@ -562,14 +673,52 @@ func appendOwnedPhysicalHistoryToView(view *stableResourceKindView, old, child *
 	}
 	releaseOwnedResourcePhysical(view.physical)
 	view.physical = physical
-	_, added, e := mergeOwnedResourceMembership(&view.logicalMembership, child.outgoing.index, owner)
+	// Persisted duplicates are absent from the pending index. Do not count or
+	// emit them again merely because a producer repeats an existing member.
+	merge := func(s *ownedDirectoryCodecV2) error {
+		var merge func(*stableLogicalObligationIndexNode) error
+		merge = func(n *stableLogicalObligationIndexNode) error {
+			if n == nil {
+				return nil
+			}
+			if err := merge(n.left); err != nil {
+				return err
+			}
+			_, present, err := lookupOwnedEntryObligationV2(old, n.obligation, s)
+			if err != nil {
+				return err
+			}
+			if !present {
+				i, found := slices.BinarySearchFunc(n.backing.values, n.obligation, compareResourceObligation)
+				if !found {
+					return ErrResourceOwnership
+				}
+				next, err := insertOwnedResourceObligationIndex(view.logicalMembership, n.backing, i, owner)
+				if err != nil {
+					return err
+				}
+				if next != view.logicalMembership {
+					releaseOwnedResourceObligationIndex(view.logicalMembership)
+					view.logicalMembership = next
+				}
+			}
+			return merge(n.right)
+		}
+		return merge(child.outgoing.index)
+	}
+	if old.logicalObligations.directory != nil {
+		e = withOwnedDirectoryCodecV2(owner, merge)
+	} else {
+		e = merge(nil)
+	}
 	if e != nil {
 		return e
 	}
-	if added > int(^uint(0)>>1)-view.logicalMembershipCount {
+	delta := entry.logicalObligations.count - old.logicalObligations.count
+	if delta < 0 || delta > int(^uint(0)>>1)-view.logicalMembershipCount {
 		return retainedalloc.ErrCapacity
 	}
-	view.logicalMembershipCount += added
+	view.logicalMembershipCount += delta
 	fields, e := mergeResourceFieldBackings(owner, view.fields, entry.reachability)
 	if e != nil {
 		return e
@@ -580,7 +729,6 @@ func appendOwnedPhysicalHistoryToView(view *stableResourceKindView, old, child *
 	}
 	view.fields.release()
 	view.fields = fields
-	delta := entry.logicalObligations.count - old.logicalObligations.count
 	if delta < 0 || delta > int(^uint(0)>>1)-view.logicalObligationCount {
 		return retainedalloc.ErrCapacity
 	}

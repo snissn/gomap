@@ -317,6 +317,11 @@ func walkOwnedDependencyDirectoryChangesV2(source *StableResourceSet, base *Depe
 					}
 					continue
 				}
+				if pending, replaced := findStableLogicalObligationIndex(entry.logicalObligations.index, o, nil); replaced && pending != o {
+					// Keep the exact base-removal proof, but a live replacement
+					// emits one overwrite below rather than delete+put of one key.
+					continue
+				}
 				key, _, err := s.logical(item.key, o)
 				if err != nil {
 					return err
@@ -327,10 +332,18 @@ func walkOwnedDependencyDirectoryChangesV2(source *StableResourceSet, base *Depe
 				removed++
 			}
 			entry.logicalObligations.rangeDeltaValues(func(o StableLogicalObligation) bool {
+				replacement := false
 				if base != nil {
 					found, err := s.lookupLogical(base, o, func(key []byte, got StableLogicalObligation) error {
-						if got != o || !bytes.Equal(key, item.key) {
+						if !bytes.Equal(key, item.key) {
 							return ErrResourceConflict
+						}
+						if got != o {
+							original, removed := entry.logicalObligations.removedValue(got)
+							if !removed || original != got {
+								return ErrResourceConflict
+							}
+							replacement = true
 						}
 						return nil
 					})
@@ -338,7 +351,7 @@ func walkOwnedDependencyDirectoryChangesV2(source *StableResourceSet, base *Depe
 						buildErr = err
 						return false
 					}
-					if found {
+					if found && !replacement {
 						return true
 					}
 				}
@@ -360,7 +373,9 @@ func walkOwnedDependencyDirectoryChangesV2(source *StableResourceSet, base *Depe
 					buildErr = err
 					return false
 				}
-				added++
+				if !replacement {
+					added++
+				}
 				return true
 			})
 			if buildErr != nil {

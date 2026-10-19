@@ -15,7 +15,9 @@ import (
 func (v stableLogicalObligationView) removedValue(o StableLogicalObligation) (StableLogicalObligation, bool) {
 	if v.ownedRemoved != nil {
 		i, ok := slices.BinarySearchFunc(v.ownedRemoved.values, o, compareResourceObligation)
-		if ok {
+		if ok && v.ownedRemoved.values[i] == o {
+			// The proof masks this exact base value, not a live pending
+			// replacement with the same stable key and different integrity.
 			return v.ownedRemoved.values[i], true
 		}
 	}
@@ -289,7 +291,17 @@ func cloneOwnedDirectoryRemovingEntryV2(entry *stableResourceEntry, records []ow
 	if entry.logicalObligations.ownedRemoved != nil {
 		prior = entry.logicalObligations.ownedRemoved.values
 	}
-	removed, err := combineResourceObligationBackings(owner, prior, values, "")
+	// Removing a pending replacement preserves the original base-removal
+	// proof. Two different payloads under one key must not be normalized as
+	// conflicting removal declarations.
+	kept := 0
+	for _, value := range values {
+		if _, found := slices.BinarySearchFunc(prior, value, compareResourceObligation); !found {
+			values[kept] = value
+			kept++
+		}
+	}
+	removed, err := combineResourceObligationBackings(owner, prior, values[:kept], "")
 	if err != nil {
 		return nil, err
 	}

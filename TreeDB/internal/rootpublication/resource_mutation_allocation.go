@@ -231,9 +231,9 @@ func validateSelectedAppendViews(views *resourceKindBacking, m StableLogicalObli
 	return m, work, nil
 }
 
-// Selected views have constructor-complete admitted membership indexes and
-// flat obligations. Every kind is probed in canonical cell order without a
-// detached kinds slice or directory parser scratch.
+// Incoming flat values probe each kind's admitted pending index and, when
+// present, its exact immutable directory through one original-owner codec.
+// Neither admission nor duplicate detection walks retained logical history.
 func selectedViewsAdmit(views *resourceKindBacking, entry, predecessor *stableResourceEntry, excluded []ResourceKind, work *StableResourceClosureWork) (bool, bool, error) {
 	for _, cell := range viewsCells(views) {
 		if !resourceKindExcluded(cell.kind, excluded) && !stableResourceViewLogicalMembershipComplete(cell.view) {
@@ -243,31 +243,46 @@ func selectedViewsAdmit(views *resourceKindBacking, entry, predecessor *stableRe
 	if entry == nil || entry.outgoing == nil || entry.logicalObligations.directory != nil {
 		return false, false, ErrResourceOwnership
 	}
-	for o := range entry.logicalObligations.selectedValues() {
-		for _, cell := range viewsCells(views) {
-			if resourceKindExcluded(cell.kind, excluded) {
-				continue
-			}
-			if cell.view.directory != nil {
-				return false, false, nil
-			}
-			existing, found := findStableLogicalObligationIndex(cell.view.logicalMembership, o, work)
-			if !found {
-				continue
-			}
-			if predecessor != nil && predecessor.token.kind == cell.kind {
-				owned, present, err := predecessor.logicalObligations.lookup(o, nil)
-				if err != nil {
-					return false, true, err
-				}
-				if present && owned == existing && existing == o {
+	admissible := true
+	probe := func(s *ownedDirectoryCodecV2) error {
+		for o := range entry.logicalObligations.selectedValues() {
+			for _, cell := range viewsCells(views) {
+				if resourceKindExcluded(cell.kind, excluded) {
 					continue
 				}
+				existing, found, err := lookupOwnedViewObligationV2(cell.view, cell.kind, o, s, work)
+				if err != nil {
+					return err
+				}
+				if !found {
+					continue
+				}
+				if predecessor != nil && predecessor.token.kind == cell.kind {
+					owned, present, err := lookupOwnedEntryObligationV2(predecessor, o, s)
+					if err != nil {
+						return err
+					}
+					if present && owned == existing && existing == o {
+						continue
+					}
+				}
+				admissible = false
+				return nil
 			}
-			return false, true, nil
 		}
+		return nil
 	}
-	return true, true, nil
+	var err error
+	directory := false
+	for _, cell := range viewsCells(views) {
+		directory = directory || cell.view.directory != nil
+	}
+	if directory {
+		err = withOwnedDirectoryCodecV2(views.allocation.owner, probe)
+	} else {
+		err = probe(nil)
+	}
+	return admissible, true, err
 }
 func viewsCells(views *resourceKindBacking) []resourceKindCell {
 	if views == nil {
