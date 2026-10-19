@@ -108,8 +108,29 @@ func TestGetAtUsesPointSuccessorWithoutIteratorRotation(t *testing.T) {
 			t.Fatalf("%s changed across GetAt: %q -> %q", name, before[name], after[name])
 		}
 	}
-	if before["treedb.cache.queue_len"] != after["treedb.cache.queue_len"] {
-		t.Fatalf("queue length changed across GetAt: %q -> %q", before["treedb.cache.queue_len"], after["treedb.cache.queue_len"])
+	if after["treedb.cache.memtable_mode_config"] != "adaptive" || after["treedb.cache.memtable_mode"] != "btree" || after["treedb.cache.memtable_adaptive.last_reason"] != "mvcc_ordered" {
+		t.Fatalf("first qualified read did not activate ordered adaptive mode: config=%s mode=%s reason=%s", after["treedb.cache.memtable_mode_config"], after["treedb.cache.memtable_mode"], after["treedb.cache.memtable_adaptive.last_reason"])
+	}
+	// The first canonical read rotates the populated adaptive mutable and may
+	// enqueue a source that the asynchronous flusher can already have drained.
+	// Checkpoint drains that real activation debt before the steady-state oracle.
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint after first GetAt: %v", err)
+	}
+	steadyBefore := db.Stats()
+	if steadyBefore["treedb.cache.queue_len"] != "0" {
+		t.Fatalf("queue not drained after Checkpoint: %q", steadyBefore["treedb.cache.queue_len"])
+	}
+	requireResult(t, store, []byte("k"), 9, Present, 7, []byte("seven"))
+	steadyAfter := db.Stats()
+	for _, name := range []string{
+		"treedb.cache.iterator.calls_total",
+		"treedb.cache.iterator.snapshot_rotations_total",
+		"treedb.cache.queue_len",
+	} {
+		if steadyBefore[name] != steadyAfter[name] {
+			t.Fatalf("%s changed across steady-state GetAt: %q -> %q", name, steadyBefore[name], steadyAfter[name])
+		}
 	}
 }
 
