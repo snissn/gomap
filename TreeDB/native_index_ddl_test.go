@@ -259,7 +259,7 @@ func TestNativeExistingJSONIndexDDLLifecycle(t *testing.T) {
 					t.Fatal(err)
 				}
 				manager = nil
-				cache, registry := database.cached, handle.StableResourceIdentityPins()
+				cache, registry := database.cached, handle.ValueLogIdentityPinRegistry()
 				if err := database.Close(); err != nil {
 					t.Fatal(err)
 				}
