@@ -13,10 +13,12 @@ import (
 	"github.com/snissn/gomap/TreeDB/tree"
 )
 
-// Foreground uses the original transaction's immutable aggregate plan. This
-// registration is only its fixed capability; calling the singleton preparation
-// interface cannot create another transaction or invoke startup replay.
-func prepareNativeJSONCompositeMarker(*backenddb.DB, commitlog.CommandEnvelope, backenddb.NativeSemanticState, *backenddb.Snapshot, *backenddb.StableResourceCaptureLease) (*backenddb.NativePreparedPublication, error) {
+// Foreground CRUD and composite commands use the original transaction's
+// captured immutable plan. This registration marks only that fixed capability;
+// direct registered/assigned preparation cannot create a transaction, fabricate
+// a captured plan or invoke startup replay. Composite CRUD remains fenced by
+// the aggregate frontend until its complete executor is available.
+func prepareNativeJSONTxnPlanMarker(*backenddb.DB, commitlog.CommandEnvelope, backenddb.NativeSemanticState, *backenddb.Snapshot, *backenddb.StableResourceCaptureLease) (*backenddb.NativePreparedPublication, error) {
 	return nil, backenddb.ErrNativeSemanticUnsupported
 }
 
