@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -14,6 +15,8 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/powerlossoracle"
 	"github.com/snissn/gomap/TreeDB/internal/powerlossreopen"
+	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
 // This test materializes only bytes and names observed at completed production
@@ -176,6 +179,13 @@ func TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts(t *testing.
 				defer func() {
 					if closeErr := db.Close(); closeErr != nil {
 						t.Logf("interrupted original producer Close: %v", closeErr)
+						t.Logf("original cleanup stale=%v ownership=%v handoff=%v capacity=%v closed=%v",
+							errors.Is(closeErr, primaryarena.ErrStale), errors.Is(closeErr, rootpublication.ErrResourceOwnership),
+							errors.Is(closeErr, rootpublication.ErrRecoveryHandoffUnavailable), errors.Is(closeErr, backenddb.ErrSnapshotCapacity), errors.Is(closeErr, os.ErrClosed))
+						var pathErr *os.PathError
+						if errors.As(closeErr, &pathErr) {
+							t.Logf("original cleanup operation=%s path=%s error=%v", pathErr.Op, pathErr.Path, pathErr.Err)
+						}
 						if !errors.Is(closeErr, cutErr) && !errors.Is(closeErr, backenddb.ErrRecoveryRequired) {
 							t.Errorf("interrupted original producer teardown: %v", closeErr)
 						}
