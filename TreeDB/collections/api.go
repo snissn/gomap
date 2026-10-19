@@ -23720,6 +23720,10 @@ func (c *Collection) findByIndexValue(indexName string, value any, maxResults in
 		})
 		if errors.Is(err, errNativeIndexVisitComplete) {
 			err = nil
+		} else if errors.Is(err, ErrIndexNotFound) {
+			// Collection equality queries historically return no IDs for an
+			// unknown index; captured VisitIndexValueIDs reports the error.
+			return nil, false, nil
 		}
 		return result, truncated, err
 	}

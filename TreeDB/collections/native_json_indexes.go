@@ -149,7 +149,7 @@ func (r *NativeJSONRead) visitIndexValueIDs(name string, value any, visit func([
 	}
 	index, found := findIndex(r.meta.Indexes, name)
 	if !found {
-		return nil
+		return fmt.Errorf("%w: hybrid scalar filter index %q is unavailable: %w", ErrHybridSearchIndexUnavailable, name, ErrIndexNotFound)
 	}
 	if visit == nil {
 		return errors.New("collections: nil index ID visitor")
