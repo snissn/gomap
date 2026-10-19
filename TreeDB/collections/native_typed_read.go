@@ -99,7 +99,7 @@ func (r *NativeJSONRead) reconstructTyped(id, value []byte) (result []byte, resu
 	if err != nil {
 		return nil, err
 	}
-	// Four root entries use the maintained per-entry quota. Catalog wrapper,
+	// At most four root entries use the maintained per-entry quota. Catalog wrapper,
 	// Collection wrapper and independently qualified root strings are distinct.
 	charge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(collectionCatalog{}))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(Collection{}))) + 4*preparedSemanticStreamMapEntryReserveBytes
 	r.collection.domains.Scan(func(name string, _ *nativeDomainState) bool {
@@ -177,9 +177,11 @@ func (r *NativeJSONRead) reconstructTyped(id, value []byte) (result []byte, resu
 	residual = value
 	var row uint64
 	var locator bool
-	blockKey, row, locator, err = parseColumnRetainedSemanticStreamV1Locator(value)
-	if err != nil {
-		return nil, err
+	if columnStoreRetainedPayloadUsesSemanticStreamV1(r.meta.Options.ColumnStore) {
+		blockKey, row, locator, err = parseColumnRetainedSemanticStreamV1Locator(value)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if locator {
 		source, ok := r.collection.domains.Get("retained/semantic-stream-v1")

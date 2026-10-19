@@ -31,7 +31,7 @@ func nativeJSONDomainNumber(meta CollectionMeta, name string) uint64 {
 			return 5
 		}
 	case "retained/semantic-stream-v1":
-		if nativeTypedMeta(meta) {
+		if nativeTypedMeta(meta) && columnStoreRetainedPayloadUsesSemanticStreamV1(meta.Options.ColumnStore) {
 			return 6
 		}
 	}

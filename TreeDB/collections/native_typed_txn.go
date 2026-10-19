@@ -166,6 +166,9 @@ func (t *NativeJSONTxn) finalizeNativeTyped(g *nativeJSONTxnBinding) error {
 	}
 	additional := make([]nativeJSONDomainChange, 0, 3)
 	for _, name := range []string{"column/manifest", "column/row-locator", "retained/semantic-stream-v1"} {
+		if name == "retained/semantic-stream-v1" && !columnStoreRetainedPayloadUsesSemanticStreamV1(g.probe.meta.Options.ColumnStore) {
+			continue
+		}
 		policy, err := collectionRootStoragePolicy(g.probe.meta, g.name+"/"+name)
 		if err != nil {
 			return err

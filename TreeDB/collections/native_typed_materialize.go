@@ -386,7 +386,14 @@ func prepareNativeTypedMaterializationCore(input nativeTypedMaterializeInput) (w
 			w.failure = resultErr
 		}
 	}()
-	w.roots = []nativeTypedMaterializedRoot{{name: "primary"}, {name: "column/manifest", root: input.baseManifestRoot}, {name: "column/row-locator"}, {name: "retained/semantic-stream-v1"}}
+	// Match collectionRootNames: JSON carriers have three domains. Only the
+	// semantic carrier owns a fourth root; the same inventory drives replay and
+	// the live build's root-descriptor handoff.
+	w.roots = make([]nativeTypedMaterializedRoot, 0, 4)
+	w.roots = append(w.roots, nativeTypedMaterializedRoot{name: "primary"}, nativeTypedMaterializedRoot{name: "column/manifest", root: input.baseManifestRoot}, nativeTypedMaterializedRoot{name: "column/row-locator"})
+	if columnStoreRetainedPayloadUsesSemanticStreamV1(input.meta.Options.ColumnStore) {
+		w.roots = append(w.roots, nativeTypedMaterializedRoot{name: "retained/semantic-stream-v1"})
+	}
 	token, ok := input.snapshot.StateToken()
 	if !ok {
 		return w, backenddb.ErrNativeSemanticUnsupported
