@@ -1,6 +1,7 @@
 package db
 
 import (
+	"errors"
 	"os"
 	"testing"
 
@@ -14,6 +15,11 @@ func TestDependencyDirectoryV2OldReaderSlotsAndSharedSubtreeReclamation(t *testi
 		t.Fatal(err)
 	}
 	defer database.Close()
+	idx := database.idx.Load()
+	registry := database.StableResourceIdentityPinRegistry()
+	if idx == nil || idx.primary != nil || idx.metadata == nil || idx.metadata != registry.MetadataOwner() {
+		t.Fatal("not original DATA metadata owner")
+	}
 	file, err := os.CreateTemp(t.TempDir(), "directory-owner")
 	if err != nil {
 		t.Fatal(err)
@@ -26,19 +32,29 @@ func TestDependencyDirectoryV2OldReaderSlotsAndSharedSubtreeReclamation(t *testi
 	for i := range obligations {
 		obligations[i] = rootpublication.StableLogicalObligation{Class: "asset", Kind: "part", Namespace: "directory-lifetime", Digest: [32]byte{1}, Generation: 1, PartID: uint64(i + 1), FileID: 1, Length: 8, Reachability: rootpublication.ReachabilityColumnManifest}
 	}
-	token, err := rootpublication.NewStableResourceToken(rootpublication.StableResourceSpec{Kind: rootpublication.ResourceColumnAsset, LogicalLane: "columns", ResourceID: "1", Generation: 1, DiagnosticPath: "columns/1", File: file, Frontier: rootpublication.DurableFrontier{Bytes: 4096}, Reachability: rootpublication.ReachabilityColumnManifest, LogicalObligations: obligations, ContentSynced: true})
+	identity, err := rootpublication.StableIdentityFromFile(file)
 	if err != nil {
 		t.Fatal(err)
 	}
-	builder := rootpublication.NewStableResourceSetBuilder()
-	if err := builder.Add(token); err != nil {
+	if err := registry.Observe(identity); err != nil {
 		t.Fatal(err)
+	}
+	token, err := rootpublication.NewStableResourceToken(rootpublication.StableResourceSpec{MetadataOwner: idx.metadata, PinRegistry: registry, OriginalObservation: registry, Kind: rootpublication.ResourceColumnAsset, LogicalLane: "columns", ResourceID: "1", Generation: 1, DiagnosticPath: "columns/1", File: file, Frontier: rootpublication.DurableFrontier{Bytes: 4096}, Reachability: rootpublication.ReachabilityColumnManifest, LogicalObligations: obligations, ContentSynced: true})
+	if err != nil {
+		t.Fatal(errors.Join(err, registry.Unobserve(identity)))
+	}
+	builder, err := rootpublication.NewStableResourceSetBuilderWithMetadata(idx.metadata)
+	if err != nil {
+		t.Fatal(errors.Join(err, token.ReleaseWithError()))
+	}
+	if err := builder.Add(token); err != nil {
+		t.Fatal(errors.Join(err, token.ReleaseWithError(), builder.AbandonWithError()))
 	}
 	initial, err := builder.Freeze()
 	if err != nil {
-		t.Fatal(err)
+		t.Fatal(errors.Join(err, builder.AbandonWithError()))
 	}
-	idx := database.idx.Load()
+	builder, token = nil, nil
 	publish := func(resources *rootpublication.StableResourceSet, first bool) {
 		t.Helper()
 		database.durablePublishMu.Lock()
@@ -66,11 +82,18 @@ func TestDependencyDirectoryV2OldReaderSlotsAndSharedSubtreeReclamation(t *testi
 		database.meta = published
 	}
 	publish(initial, true)
+	initial = nil
 	old, err := rootpublication.CloneStableResourceSetExcludingKinds(database.durableRoot.slotResources[database.durableRoot.slot])
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer old.Release()
+	defer func() {
+		if old != nil {
+			if err := old.ReleaseWithError(); err != nil {
+				t.Error(err)
+			}
+		}
+	}()
 	oldDirectory, err := old.DependencyDirectoryV2()
 	if err != nil {
 		t.Fatal(err)
@@ -129,7 +152,12 @@ func TestDependencyDirectoryV2OldReaderSlotsAndSharedSubtreeReclamation(t *testi
 			}
 		}
 	}
-	old.Release()
+	oldDirectory = nil
+	err = old.ReleaseWithError()
+	old = nil
+	if err != nil {
+		t.Fatal(err)
+	}
 	reclaimed := make(map[uint64]bool)
 	for i := 0; i < 16; i++ {
 		advance()
