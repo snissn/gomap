@@ -3,6 +3,8 @@ package rootpublication
 import (
 	"errors"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
+	"slices"
+	"strings"
 	"unsafe"
 )
 
@@ -157,12 +159,27 @@ func cloneSelectedResourceFilteredWithPhysicalSelection(source *StableResourceSe
 	found := make([]bool, len(removed))
 	defer func() { clear(found); found = nil; removalScratch.drop(); removalScratch.refund() }()
 	var removalPlan ownedDirectoryRemovalPlanV2
+	var directoryRequirements *StableLogicalObligationRequirements
 	if removed != nil {
 		removalPlan, err = prepareOwnedDirectoryRemovalPlanV2(borrow.backing, removed, excluded, found, &work)
 		if err != nil {
 			return nil, work, err
 		}
 		defer removalPlan.close()
+	} else {
+		var hasDirectory bool
+		rangeStableResourceKindViews(borrow.backing, func(entry *stableResourceEntry) bool {
+			hasDirectory = entry.logicalObligations.directory != nil
+			return !hasDirectory
+		})
+		if hasDirectory {
+			removalPlan, err = prepareOwnedDirectoryRequirementsV2(source, borrow.backing, r, excluded, selectedKind, selected, &work)
+			if err != nil {
+				return nil, work, err
+			}
+			defer removalPlan.close()
+			directoryRequirements = &r
+		}
 	}
 	builder, err := NewStableResourceSetBuilderWithMetadata(owner)
 	if err != nil {
@@ -213,9 +230,9 @@ func cloneSelectedResourceFilteredWithPhysicalSelection(source *StableResourceSe
 				}
 				physicalFound[selectedIndex] = true
 			}
-			if removed != nil && entry.outgoing != nil && entry.logicalObligations.directory != nil {
+			if (removed != nil || directoryRequirements != nil) && entry.outgoing != nil && entry.logicalObligations.directory != nil {
 				records := removalPlan.forEntry(entry)
-				backing, e := cloneOwnedDirectoryRemovingEntryV2(entry, records, &work)
+				backing, e := cloneOwnedDirectoryRemovingEntryV2(entry, records, directoryRequirements, &work)
 				if e != nil {
 					buildErr = e
 					return false
@@ -353,8 +370,9 @@ func cloneSelectedResourceFilteredWithPhysicalSelection(source *StableResourceSe
 
 // Validation admits exact desired-membership scratch once. Every actual input
 // obligation is inspected; duplicate actual references are rejected exactly,
-// including references owned by different physical resources. No maps/index
-// walk scratch or detached diagnostics are created.
+// including references owned by different physical resources. The maintained
+// admitted diagnostic streams complete directory history with only physical
+// and desired-membership scratch, never detached or flattened logical values.
 func validateSelectedResourceRequirements(source *StableResourceSet, r StableLogicalObligationRequirements, work StableResourceClosureWork) (_ StableResourceClosureWork, retErr error) {
 	if err := validateBorrowedRequirements(r); err != nil {
 		return work, err
@@ -362,64 +380,97 @@ func validateSelectedResourceRequirements(source *StableResourceSet, r StableLog
 	if len(r.ScopedFields)+len(r.ScopedNamespaces) == 0 {
 		return work, nil
 	}
-	source.mu.Lock()
-	empty := source.emptyDependencyDirectoryLocked() != nil && source.metadata != nil && source.selectedKindViewsAccessibleLocked()
-	source.mu.Unlock()
-	if empty {
-		if len(r.Obligations) != 0 {
-			return work, ErrUnresolvedResource
+	diagnostics, err := source.AcquirePhysicalDiagnostics()
+	if err != nil {
+		return work, err
+	}
+	defer func() { retErr = errors.Join(retErr, diagnostics.CloseWithError()) }()
+	if diagnostics.allocation == nil {
+		return work, ErrResourceOwnership
+	}
+	type fieldCheck struct {
+		key   stableLogicalResourceKey
+		field ReachabilityField
+		seen  bool
+	}
+	physicalKey := func(p StableResourcePhysicalDescriptor) stableLogicalResourceKey {
+		return stableLogicalResourceKey{kind: p.Kind, lane: p.logicalLane, resourceID: p.resourceID, generation: p.Generation}
+	}
+	compare := func(a, b fieldCheck) int {
+		if stableLogicalResourceKeyLess(a.key, b.key) {
+			return -1
 		}
-		return work, nil
+		if stableLogicalResourceKeyLess(b.key, a.key) {
+			return 1
+		}
+		return strings.Compare(string(a.field), string(b.field))
 	}
-	borrow, err := source.borrowSelectedKindViews()
+	count := 0
+	for _, physical := range diagnostics.Physical() {
+		work.SourceEntriesInspected++
+		for _, field := range physical.reachability {
+			if requirementFieldScoped(r, field) {
+				if count == int(^uint(0)>>1)/int(unsafe.Sizeof(fieldCheck{})) {
+					return work, retainedalloc.ErrCapacity
+				}
+				count++
+			}
+		}
+	}
+	var charge uint64
+	if err := diagnosticChargeAdd(&charge, uint64(count), uint64(unsafe.Sizeof(fieldCheck{}))); err != nil {
+		return work, err
+	}
+	if err := diagnosticChargeAdd(&charge, uint64(len(r.Obligations)), 1); err != nil {
+		return work, err
+	}
+	allocation, err := newResourceAllocation(diagnostics.allocation.owner, charge)
 	if err != nil {
 		return work, err
 	}
-	defer func() { retErr = errors.Join(retErr, borrow.release()) }()
-	allocation, err := newResourceAllocation(borrow.backing.allocation.owner, retainedalloc.AllocationCharge(uint64(len(r.Obligations))))
-	if err != nil {
-		return work, err
-	}
+	fields := make([]fieldCheck, 0, count)
 	seen := make([]bool, len(r.Obligations))
-	defer func() { clear(seen); seen = nil; allocation.drop(); allocation.refund() }()
-	var validationErr error
-	for _, cell := range borrow.backing.cells {
-		rangeStableResourceLogicalIndex(cell.view.logical, func(entry *stableResourceEntry) bool {
-			work.SourceEntriesInspected++
-			if entry.outgoing == nil || entry.logicalObligations.directory != nil {
-				validationErr = ErrResourceOwnership
-				return false
+	defer func() {
+		clear(fields)
+		fields = nil
+		clear(seen)
+		seen = nil
+		allocation.drop()
+		allocation.refund()
+	}()
+	for _, physical := range diagnostics.Physical() {
+		for _, field := range physical.reachability {
+			if requirementFieldScoped(r, field) {
+				fields = append(fields, fieldCheck{key: physicalKey(physical), field: field})
 			}
-			for _, field := range entry.reachability.cells {
-				if !field.reachable || !requirementFieldScoped(r, field.field) {
-					continue
-				}
-				found := false
-				for o := range entry.logicalObligations.selectedValues() {
-					work.SourceObligationsInspected++
-					if o.Reachability != field.field {
-						continue
-					}
-					found = true
-					if !requirementContainsScope(r, o) {
-						continue
-					}
-					index := requirementDesired(r, o)
-					if index < 0 || seen[index] {
-						validationErr = ErrResourceConflict
-						return false
-					}
-					seen[index] = true
-				}
-				if !found {
-					validationErr = ErrUnresolvedResource
-					return false
-				}
-			}
-			return true
-		})
-		if validationErr != nil {
-			return work, validationErr
+		}
+	}
+	slices.SortFunc(fields, compare)
+	if err := diagnostics.WalkLogicalObligations(func(physical StableResourcePhysicalDescriptor, o StableLogicalObligation) error {
+		work.SourceObligationsInspected++
+		if !requirementFieldScoped(r, o.Reachability) {
+			return nil
+		}
+		i, found := slices.BinarySearchFunc(fields, fieldCheck{key: physicalKey(physical), field: o.Reachability}, compare)
+		if !found {
+			return ErrResourceOwnership
+		}
+		fields[i].seen = true
+		if !requirementContainsScope(r, o) {
+			return nil
+		}
+		index := requirementDesired(r, o)
+		if index < 0 || seen[index] {
+			return ErrResourceConflict
+		}
+		seen[index] = true
+		return nil
+	}); err != nil {
+		return work, err
+	}
+	for _, field := range fields {
+		if !field.seen {
+			return work, ErrUnresolvedResource
 		}
 	}
 	for _, o := range r.Obligations {

@@ -226,7 +226,7 @@ func prepareOwnedDirectoryRemovalPlanV2(views *resourceKindBacking, removed []St
 
 // Private successor retains the original physical/directory and pending delta
 // edges. Only the declared removals and bounded field cells are copied.
-func cloneOwnedDirectoryRemovingEntryV2(entry *stableResourceEntry, records []ownedDirectoryDeltaIdentityV2, work *StableResourceClosureWork) (backing *resourceEntryBacking, retErr error) {
+func cloneOwnedDirectoryRemovingEntryV2(entry *stableResourceEntry, records []ownedDirectoryDeltaIdentityV2, requirements *StableLogicalObligationRequirements, work *StableResourceClosureWork) (backing *resourceEntryBacking, retErr error) {
 	owner := entry.outgoing.allocation.owner
 	fields, err := newResourceFieldBacking(owner, entry.reachability.cells)
 	if err != nil {
@@ -264,7 +264,9 @@ func cloneOwnedDirectoryRemovingEntryV2(entry *stableResourceEntry, records []ow
 				break
 			}
 		}
-		if touched && cell.commitment.count == 0 {
+		// Complete requirements also remove scoped empty reachability markers.
+		// Unscoped empty fields remain independently reachable as before.
+		if (touched || requirements != nil && requirementFieldScoped(*requirements, cell.field)) && cell.commitment.count == 0 {
 			continue
 		}
 		fields.cells[kept] = cell
