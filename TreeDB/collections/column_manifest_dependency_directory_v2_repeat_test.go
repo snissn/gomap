@@ -25,13 +25,14 @@ func TestColumnManifestDependencyDirectoryV2RepeatedPublicAppend(t *testing.T) {
 		}
 	}()
 	mgr := NewCollectionManager(d)
-	col, err := mgr.CreateCollection(&CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: testColumnStoreConfig(nil)}})
+	_, err := mgr.CreateCollection(&CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: testColumnStoreConfig(nil)}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := d.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
+	col := openColumnStoreCollectionM10B(t, d, mgr)
 	insert := func(i int) {
 		t.Helper()
 		id := fmt.Sprintf("e%d", i)
