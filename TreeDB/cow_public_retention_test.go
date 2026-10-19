@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -124,16 +125,29 @@ func TestCOWPublicRetentionRefusalDrainAndResume(t *testing.T) {
 			plateau := cache.COWMemoryStats()
 			cowPublicRetentionBound(t, plateau, limits)
 			after := database.Stats()
-			for _, key := range []string{"treedb.cache.cow.publications_total", "treedb.cache.cow.rollovers_total"} {
-				if before[key] == "" || before[key] != after[key] {
-					t.Fatalf("refusal changed %s: %q -> %q", key, before[key], after[key])
-				}
+			publicationKey := "treedb.cache.cow.publications_total"
+			if before[publicationKey] == "" || before[publicationKey] != after[publicationKey] {
+				t.Fatalf("refusal changed %s: %q -> %q", publicationKey, before[publicationKey], after[publicationKey])
 			}
+			// A successful maintenance rollover can rejoin point admission before
+			// the empty successor's first dirty preparation refuses. The rejoined
+			// shard is empty, so this Set can perform at most one such rollover.
+			rolloverKey := "treedb.cache.cow.rollovers_total"
+			beforeRollovers, err := strconv.ParseUint(before[rolloverKey], 10, 64)
+			if err != nil {
+				t.Fatal(err)
+			}
+			afterRollovers, err := strconv.ParseUint(after[rolloverKey], 10, 64)
+			if err != nil || afterRollovers < beforeRollovers || afterRollovers-beforeRollovers > 1 {
+				t.Fatalf("refusal maintenance rollovers: %q -> %q, err=%v", before[rolloverKey], after[rolloverKey], err)
+			}
+			retryCounters := []string{publicationKey, rolloverKey}
 			if profile != ProfileNoWALFast {
 				for _, key := range []string{"treedb.command_wal.max_lsn", "treedb.command_wal.bytes"} {
 					if before[key] == "" || before[key] != after[key] {
 						t.Fatalf("refusal appended WAL %s: %q -> %q", key, before[key], after[key])
 					}
+					retryCounters = append(retryCounters, key)
 				}
 			}
 			for attempt := 0; attempt < 8; attempt++ {
@@ -145,6 +159,12 @@ func TestCOWPublicRetentionRefusalDrainAndResume(t *testing.T) {
 				got.PeakBytes = plateau.PeakBytes
 				if got != plateau {
 					t.Fatalf("refusal retained new charges: before%+v after%+v", plateau, got)
+				}
+				retried := database.Stats()
+				for _, key := range retryCounters {
+					if after[key] != retried[key] {
+						t.Fatalf("plateau retry%d changed %s: %q -> %q", attempt, key, after[key], retried[key])
+					}
 				}
 			}
 			for i, key := range keys {
