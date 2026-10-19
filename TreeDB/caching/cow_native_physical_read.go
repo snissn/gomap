@@ -12,16 +12,11 @@ import (
 func (b *cowBackendBasis) nativeEntryAtRoot(budget *memtable.COWBudget, root uint64, key []byte, copyValue bool) (node.LeafEntry, error) {
 	b.readMu.Lock()
 	defer b.readMu.Unlock()
-	if b.reader == nil {
-		limit := budget.Limits().MaxInFlightBytes
-		w, err := admitCOWReadWorkspace(budget, valuelog.COWReadLimits{MaxRecordBytes: limit, MaxRawBytes: limit, MaxValueBytes: limit})
-		if err != nil {
-			return node.LeafEntry{}, err
-		}
-		w.basis = b.snapshot
-		b.reader = w
+	limit := budget.Limits().MaxInFlightBytes
+	w, err := b.physicalWorkspaceLocked(budget, valuelog.COWReadLimits{MaxRecordBytes: limit, MaxRawBytes: limit, MaxValueBytes: limit})
+	if err != nil {
+		return node.LeafEntry{}, err
 	}
-	w := b.reader
 	point, err := w.pointScratch()
 	if err != nil {
 		return node.LeafEntry{}, err

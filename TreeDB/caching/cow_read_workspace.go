@@ -1,6 +1,7 @@
 package caching
 
 import (
+	"errors"
 	"os"
 	"unsafe"
 
@@ -44,9 +45,10 @@ type cowReadWorkspace struct {
 	point         *cowPointScratch
 }
 
-// Read owners are private to one snapshot and serialized by cowReadMu. Each
-// codec reuses its admitted input/raw buffers across frames. Full backing and
-// decoder admission survives until Close; no global codec cache is consulted.
+// Cut-local workspaces are serialized by cowReadMu; the exact physical basis
+// workspace is serialized by basis.readMu. Each codec reuses its admitted
+// input/raw buffers across frames. Admission survives until its original owner
+// closes; no global codec cache is consulted.
 func (s *Snapshot) cowWorkspaceLocked() (*cowReadWorkspace, error) {
 	if s.cowReader != nil {
 		return s.cowReader, nil
@@ -350,6 +352,13 @@ func (w *cowReadWorkspace) read(ptr page.ValuePtr, leaf bool, dst []byte) ([]byt
 	if w.basis != nil && shape.Compressed && (shape.DictID != 0 || (shape.Codec != valuelog.BlockCodecSnappy && shape.Codec != valuelog.BlockCodecLZ4)) {
 		return nil, valuelog.ErrCOWReadUnsupported
 	}
+	return w.readInspected(f, ptr, shape, leaf, dst)
+}
+
+// readInspected shares the maintained admission/codec/CRC path. The inspector
+// and its caller's policy have already validated this exact file and shape.
+func (w *cowReadWorkspace) readInspected(f *os.File, ptr page.ValuePtr, shape valuelog.COWRecordShape, leaf bool, dst []byte) ([]byte, error) {
+	var err error
 	var codec *cowReadCodec
 	var decode valuelog.COWDecodeFunc
 	if shape.Compressed {
@@ -384,6 +393,65 @@ func (w *cowReadWorkspace) readLeaf(ptr page.LeafLogPtr, dst []byte) ([]byte, er
 	return w.read(ptr.ValuePtr(), true, dst)
 }
 
+// Dictionary definitions belong to the caller's complete cut, never the
+// shared physical basis. This private signal retries only the physical lookup
+// through the original cut-local workspace; no public error is substituted.
+var errCOWPhysicalDictionary = errors.New("cow physical leaf requires cut dictionary")
+
+// Both cowReadMu and basis.readMu are held. No caller cut is stored in reader.
+func (s *Snapshot) cowPhysicalLeafLocked(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
+	w := s.cowCut.basis.reader
+	f, err := w.file(ptr.ValuePtr())
+	if err != nil {
+		return nil, err
+	}
+	shape, err := valuelog.InspectCOWLeafRecord(f, ptr.ValuePtr(), w.limits)
+	if err != nil {
+		return nil, err
+	}
+	if shape.DictID != 0 {
+		return nil, errCOWPhysicalDictionary
+	}
+	return w.readInspected(f, ptr.ValuePtr(), shape, true, dst)
+}
+
+// Physical entries borrow page scratch. Copy an inline value into the original
+// cut's admitted output before releasing the shared basis lock; the existing
+// cowEntryLocked callers may borrow that output only under cowReadMu.
+func (s *Snapshot) cowPhysicalEntryLocked(key []byte) (node.LeafEntry, error) {
+	basis := s.cowCut.basis
+	basis.readMu.Lock()
+	defer basis.readMu.Unlock()
+	w, err := basis.physicalWorkspaceLocked(s.cowCache.budget, s.cowCache.readLimits())
+	if err != nil {
+		return node.LeafEntry{}, err
+	}
+	point, err := w.pointScratch()
+	if err != nil {
+		return node.LeafEntry{}, err
+	}
+	entry, err := basis.snapshot.GetEntryExactWithFixedScratch(key, point.key[:], point.leaf[:], s.cowPhysicalLeafLocked)
+	if err != nil {
+		return node.LeafEntry{}, err
+	}
+	entry.Key = key
+	if entry.Flags&(node.FlagPointer|node.FlagTombstone) != 0 {
+		entry.Value = nil
+		return entry, nil
+	}
+	local, err := s.cowWorkspaceLocked()
+	if err != nil {
+		return node.LeafEntry{}, err
+	}
+	if err = local.grow(0, uint64(len(entry.Value))); err != nil {
+		return node.LeafEntry{}, err
+	}
+	value := local.output[:len(entry.Value)]
+	copy(value, entry.Value)
+	entry.Value = value
+	return entry, nil
+}
+
 func (s *Snapshot) cowEntryLocked(key []byte) (node.LeafEntry, error) {
 	val, ptr, flags, revision, found := s.lookupCachedRootDomainEntryWithRevision(key)
 	if found {
@@ -394,6 +462,11 @@ func (s *Snapshot) cowEntryLocked(key []byte) (node.LeafEntry, error) {
 		// GetEntry alone copies it into the caller-owned returned entry.
 		return node.LeafEntry{Key: key, Value: val, ValuePtr: ptr, Flags: flags, Revision: revision}, nil
 	}
+	entry, err := s.cowPhysicalEntryLocked(key)
+	if err != errCOWPhysicalDictionary {
+		return entry, err
+	}
+	// Preserve the original dictionary definition/resource lifetime and policies.
 	w, err := s.cowWorkspaceLocked()
 	if err != nil {
 		return node.LeafEntry{}, err
