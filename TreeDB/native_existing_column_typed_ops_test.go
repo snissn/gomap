@@ -268,10 +268,12 @@ func runNativeTypedOperations(t *testing.T, dir, family, mode string) {
 		t.Fatal("invalid typed input consumed canonical authority")
 	}
 	checkNativeTypedOpsCurrent(t, col, family, []nativeTypedOpsRow{a, b}, []string{"invalid", "c"})
+	var seedAppliedLSN uint64
 	if mode != "typed-insert" {
 		if err := database.Checkpoint(); err != nil {
 			t.Fatal(err)
 		}
+		seedAppliedLSN = indexedCRUDAppliedLSN(t, handle)
 		held, err = col.OpenCollectionReadView()
 		if err != nil {
 			t.Fatal(err)
@@ -352,19 +354,20 @@ func runNativeTypedOperations(t *testing.T, dir, family, mode string) {
 	if err != nil || matched != 2 {
 		t.Fatalf("mixed upsert counts unchanged existing: %d %v", matched, err)
 	}
+	upsertAppliedLSN := indexedCRUDAppliedLSN(t, handle)
 	requireNativeTypedOpsAdvance(t, database, handle, next, seq)
 	checkNativeTypedOpsFrame(t, opts, next, commitlog.CommandKindCollectionReplaceSourceByID, commitlog.PayloadFormatCollectionTypedSourceByIDV1, family, []nativeTypedOpsRow{changedB, c}, []string{"b", "c"})
 	checkNativeTypedOpsCurrent(t, col, family, []nativeTypedOpsRow{currentA, changedB, c}, nil)
 	checkHeld()
 	if mode == "typed-source" {
-		if indexedCRUDAppliedLSN(t, handle) != 2 {
-			t.Fatal("source child did not keep basis2")
+		if got := indexedCRUDAppliedLSN(t, handle); got != 2 {
+			t.Fatalf("source child did not keep basis2: seed=%d upsert=%d current=%d next=%d checkpoint_runs=%s", seedAppliedLSN, upsertAppliedLSN, got, handle.CommandWALNextLSN(), database.Stats()["treedb.cache.checkpoint.runs"])
 		}
 		if err := handle.FlushCommandWAL(true); err != nil {
 			t.Fatal(err)
 		}
-		if indexedCRUDAppliedLSN(t, handle) != 2 {
-			t.Fatal("WAL flush applied typed source")
+		if got := indexedCRUDAppliedLSN(t, handle); got != 2 {
+			t.Fatalf("WAL flush applied typed source: seed=%d upsert=%d current=%d next=%d checkpoint_runs=%s", seedAppliedLSN, upsertAppliedLSN, got, handle.CommandWALNextLSN(), database.Stats()["treedb.cache.checkpoint.runs"])
 		}
 		t.Log("TYPED OPS UNAPPLIED typed-source basis=2 accepted=3")
 		os.Exit(97)
