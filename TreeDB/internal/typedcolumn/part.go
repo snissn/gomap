@@ -84,6 +84,7 @@ type SortKeyColumn struct {
 }
 
 type Options struct {
+	BuildCodec        *BuildCodec
 	SchemaVersion     uint32
 	SchemaMode        ColumnSchemaMode
 	Columns           []ColumnDefinition
@@ -1717,7 +1718,7 @@ func (b *ColumnPartBuilder) buildColumn(batch Batch, def ColumnDefinition) (Colu
 }
 
 func (b *ColumnPartBuilder) buildColumnBlockGranule(batch Batch, def ColumnDefinition, start int, end int) (EncodedGranule, error) {
-	cfg := Config{Encoding: def.Encoding, Compression: def.Compression}
+	cfg := Config{Encoding: def.Encoding, Compression: def.Compression, BuildCodec: b.opts.BuildCodec}
 	b.builder.Reset(cfg)
 	switch def.Type {
 	case ColumnTypeFloat32:

@@ -22,6 +22,18 @@ func nativeJSONDomainNumber(meta CollectionMeta, name string) uint64 {
 		return 2
 	case "index-state":
 		return 3
+	case "column/manifest":
+		if nativeTypedMeta(meta) {
+			return 4
+		}
+	case "column/row-locator":
+		if nativeTypedMeta(meta) {
+			return 5
+		}
+	case "retained/semantic-stream-v1":
+		if nativeTypedMeta(meta) {
+			return 6
+		}
 	}
 	for i, index := range meta.Indexes {
 		if name == "index/"+index.Name {

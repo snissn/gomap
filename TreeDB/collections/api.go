@@ -424,6 +424,8 @@ type collectionManagerOptions struct {
 }
 
 type Collection struct {
+	// nativeOperationLocalReads keeps admitted temporary read backing out of global pools.
+	nativeOperationLocalReads   bool
 	nativeJSON                  *NativeJSONManager
 	typedGraphReconcile         *typedGraphReconcileToken
 	db                          *backenddb.DB

@@ -36,7 +36,7 @@ func nativeJSONMeta(meta CollectionMeta) (CollectionMeta, error) {
 	if err != nil {
 		return CollectionMeta{}, err
 	}
-	if len(normalized.VectorIndexes)+len(normalized.TextIndexes) != 0 || normalized.Options.ColumnStore != nil || normalized.Options.AllowArrayValuesInIndex || normalizedDocumentFormat(normalized.Options.DocumentFormat) != DocumentFormatJSON {
+	if len(normalized.VectorIndexes)+len(normalized.TextIndexes) != 0 || (normalized.Options.ColumnStore != nil && !nativeTypedMeta(normalized)) || normalized.Options.AllowArrayValuesInIndex || normalizedDocumentFormat(normalized.Options.DocumentFormat) != DocumentFormatJSON {
 		return CollectionMeta{}, backenddb.ErrNativeSemanticUnsupported
 	}
 	for _, index := range normalized.Indexes {
@@ -64,6 +64,9 @@ func finishPrivateNative(work *rootpublication.SemanticCleanup) error {
 func (m *NativeJSONManager) CreateCollection(meta CollectionMeta) (created *CollectionMeta, resultErr error) {
 	if m == nil || m.db == nil {
 		return nil, backenddb.ErrClosed
+	}
+	if err := nativeTypedProfile(m.db, meta); err != nil {
+		return nil, err
 	}
 	normalized, err := nativeJSONMeta(meta)
 	if err != nil {

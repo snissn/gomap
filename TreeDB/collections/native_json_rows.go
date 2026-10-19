@@ -475,7 +475,7 @@ func (t *NativeJSONTxn) UpdateBatchInto(name string, items []UpdateBatchItem) (r
 		}
 	}()
 	g := t.binding(name)
-	if g == nil {
+	if g == nil || g.probe.meta.Options.ColumnStore != nil {
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
 	if len(items) == 0 {
@@ -571,7 +571,7 @@ func (t *NativeJSONTxn) DeleteBatchFrom(name string, ids [][]byte) (count int, r
 		}
 	}()
 	g := t.binding(name)
-	if g == nil {
+	if g == nil || g.probe.meta.Options.ColumnStore != nil {
 		return 0, backenddb.ErrNativeSemanticUnsupported
 	}
 	if err := t.admitRowControls(g, len(ids)); err != nil {
@@ -613,6 +613,12 @@ func (t *NativeJSONTxn) DeleteBatchFrom(name string, ids [][]byte) (count int, r
 func (t *NativeJSONTxn) finalizeNativeRows() error {
 	for i := range t.bindings {
 		g := &t.bindings[i]
+		if g.typed != nil {
+			if err := t.finalizeNativeTyped(g); err != nil {
+				return err
+			}
+			continue
+		}
 		if len(g.rows.rows) == 0 {
 			continue
 		}

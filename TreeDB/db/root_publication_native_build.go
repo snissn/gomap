@@ -85,3 +85,23 @@ func (group *RootPublicationBuildGroup) SetNativeDurableResources(resources *roo
 	group.nativeRequirements = requirements
 	return nil
 }
+
+// NativeColumnAssetBuildContext borrows the original build group's physical
+// namespace and pin authority for synchronous captured typed materialization.
+// Neither capability may be retained in logical deltas or used to publish.
+func (group *RootPublicationBuildGroup) NativeColumnAssetBuildContext() (string, *rootpublication.IdentityPinRegistry, error) {
+	if group == nil {
+		return "", nil, ErrNativeSemanticUnsupported
+	}
+	group.mu.Lock()
+	defer group.mu.Unlock()
+	if group.db == nil || group.closed || group.failed || !group.writeLocked || !group.durablePublishLocked || group.tracker == nil || group.db.publicationPoisoned.Load() {
+		return "", nil, ErrNativeSemanticUnsupported
+	}
+	root := group.db.ColumnAssetRootDir()
+	registry := group.db.StableResourceIdentityPinRegistry()
+	if root == "" || registry == nil {
+		return "", nil, ErrNativeSemanticUnsupported
+	}
+	return root, registry, nil
+}

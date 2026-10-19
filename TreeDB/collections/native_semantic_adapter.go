@@ -19,7 +19,7 @@ func (e *nativeEngineVersion) PrepareBuild(group *backenddb.RootPublicationBuild
 	if basis == nil || lease == nil {
 		return backenddb.ErrNativeSemanticUnsupported
 	}
-	build, err := prepareNativeEngineBuild(e)
+	build, err := prepareNativeEngineBuildAt(e, basis, lease, group)
 	if err != nil {
 		return err
 	}

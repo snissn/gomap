@@ -443,6 +443,34 @@ install. Ordinary NoWAL native publication needs no canonical intent; typed
 actual-LSN finalization remains a WAL operation. Post-append ambiguity/poison/reopen
 rules are unchanged.
 
+For eligible inline typed collection inserts, the complete canonical command
+contains the input needed to rebuild the column assets. Private preparation
+retains declared typed vectors and the noncolumn residual in the original native
+state. It assigns no provisional LSN or asset generation. The original command
+append assigns the actual LSN and aggregate member ordinal before one complete
+raw-and-collection cut becomes visible. This route initially supports durable
+command WAL, one top-level `int64` column owned by `typed_column_part`,
+semantic-stream-v1 noncolumn retention, and no secondary indexes. The initial
+route admits one typed insert member per transaction and one typed collection
+per finite checkpoint cut; a second typed collection is refused before append
+until that cut drains. Other layouts, operations, profiles and broader cohorts
+require their own eligibility and lifecycle qualification.
+
+Checkpoint materializes these typed sources through the captured prefix's
+original build group, snapshot, finite reservation and resource closure. Each
+source keeps its actual command identity; checkpoint progress cannot replace it.
+The physical build installs primary, manifest, row-locator and retained-stream
+roots together, preserving held cuts and any newer accepted suffix. Inline
+replay uses the same canonical aggregate without appending another command.
+External inputs absent from that aggregate still need preaccept resource closure.
+
+Failure before complete logical installation retains original assigned custody
+and exposes no member. A later accepted physical-build failure retains the
+already complete logical cut and the original failed build and output authority,
+fences further mutations, and installs no partial disk basis. It is terminal for
+that owner; a fresh owner recovers the canonical suffix. A failed build cannot
+be retried by replacing its ledger or refunding its original reservation.
+
 For ordinary new public command-WAL stores in this mode, the main physical backend
 uses the existing DATA root publication path. Foreground acknowledgement installs the
 prepared C1 cut against its existing backend snapshot; it does not checkpoint

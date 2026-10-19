@@ -71,6 +71,14 @@ func nativeHandoffCapacity(captured *nativeEngineVersion) (bytes uint64, collect
 			return false
 		}
 		collections++
+		typedCharge, e := nativeTypedHandoffCharge(c, maxSources)
+		if e != nil {
+			err = e
+			return false
+		}
+		if typedCharge != 0 && !add(typedCharge) {
+			return false
+		}
 		domains += touched
 		charge, e := cowbtree.OwnedMapBuilderBudgetCharge[string, *nativeDomainState](limits.MaxTotalBytes, touched)
 		if e != nil {

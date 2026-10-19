@@ -2680,6 +2680,8 @@ func columnAssetVerifiedChecksumKeyForRef(rootDir string, ref ColumnAssetRef, fi
 }
 
 type columnPhysicalAssetReadCache struct {
+	// operationLocal backing is dropped before its original operation receipt closes.
+	operationLocal         bool
 	namespace              string
 	rootDir                string
 	segmentDir             string
@@ -2884,7 +2886,9 @@ func (c *columnPhysicalAssetReadCache) close() error {
 		closeErr = err
 	}
 	if c.scratch != nil {
-		putColumnPhysicalAssetReadScratch(c.scratch)
+		if !c.operationLocal {
+			putColumnPhysicalAssetReadScratch(c.scratch)
+		}
 		c.scratch = nil
 	}
 	if c.file != nil {
@@ -2956,10 +2960,14 @@ func (c *columnPhysicalAssetReadCache) read(ref ColumnAssetRef, dst []byte) ([]b
 	}
 	if ref.Length >= 0 && ref.Length <= int64(maxCollectionInt) && cap(dst) < int(ref.Length) {
 		if cap(c.scratch) < int(ref.Length) {
-			if c.scratch != nil {
-				putColumnPhysicalAssetReadScratch(c.scratch)
+			if c.operationLocal {
+				c.scratch = make([]byte, int(ref.Length))
+			} else {
+				if c.scratch != nil {
+					putColumnPhysicalAssetReadScratch(c.scratch)
+				}
+				c.scratch = getColumnPhysicalAssetReadScratch(int(ref.Length))
 			}
-			c.scratch = getColumnPhysicalAssetReadScratch(int(ref.Length))
 		}
 		dst = c.scratch
 	}

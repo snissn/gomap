@@ -17,6 +17,7 @@ import (
 // legacy handle; returned values are copied before the captured scratch is reused.
 type NativeJSONRead struct {
 	meta          CollectionMeta
+	database      *backenddb.DB
 	metadataLease *memtable.COWExternalLease
 	mu            sync.Mutex
 	visits        uint32
@@ -50,7 +51,7 @@ func (m *NativeJSONManager) Capture(name string) (result *NativeJSONRead, result
 	if err != nil {
 		return nil, errors.Join(err, capture.Close())
 	}
-	r := &NativeJSONRead{capture: capture, lease: lease}
+	r := &NativeJSONRead{capture: capture, lease: lease, database: m.db}
 	defer func() {
 		if resultErr != nil {
 			resultErr = errors.Join(resultErr, r.Close())
@@ -149,6 +150,11 @@ func (r *NativeJSONRead) Get(id []byte) ([]byte, error) {
 	if r.capture == nil || r.failure != nil || r.closing {
 		return nil, backenddb.ErrClosed
 	}
+	if nativeTypedMeta(r.meta) && r.domain.domain != nil {
+		if row, residual, ok := r.domain.domain.typed.find(id); ok {
+			return r.reconstructPendingTyped(row, residual)
+		}
+	}
 	if r.domain.domain == nil {
 		return nil, tree.ErrKeyNotFound
 	}
@@ -160,7 +166,14 @@ func (r *NativeJSONRead) Get(id []byte) ([]byte, error) {
 		return nil, tree.ErrKeyNotFound
 	}
 	if entry.Flags&node.FlagPointer != 0 {
-		return r.readValue(entry.ValuePtr, nil)
+		value, err := r.readValue(entry.ValuePtr, nil)
+		if err != nil {
+			return nil, err
+		}
+		return r.reconstructTyped(id, value)
+	}
+	if nativeTypedMeta(r.meta) {
+		return r.reconstructTyped(id, entry.Value)
 	}
 	if owned {
 		return entry.Value, nil
@@ -344,6 +357,7 @@ func (r *NativeJSONRead) Close() error {
 	r.domain = nativeDomainRead{}
 	scratchLease := r.detachScratch()
 	r.meta = CollectionMeta{}
+	r.database = nil
 	metadataLease := r.metadataLease
 	r.metadataLease = nil
 	var err error

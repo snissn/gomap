@@ -320,6 +320,8 @@ func prepareNativeEngineBasisRefresh(base *nativeEngineVersion, before, after *b
 				}
 				domain.pending = d.pending
 			}
+			d.typed.retain()
+			domain.typed = d.typed
 			d.captured.retain()
 			domain.captured = d.captured
 			if err = p.domainBuilder.Set(name, domain); err != nil {

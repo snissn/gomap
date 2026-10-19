@@ -181,6 +181,7 @@ type typedColumnAdapterDictionaryMode struct {
 }
 
 type typedColumnAdapterOptions struct {
+	BuildCodec                      *typedcolumn.BuildCodec
 	Collection                      string
 	Namespace                       string
 	SchemaVersion                   uint32
@@ -1034,6 +1035,7 @@ func typedColumnAdapterPartOptions(opts typedColumnAdapterOptions, columns []typ
 		return typedcolumn.Options{}, err
 	}
 	return typedcolumn.Options{
+		BuildCodec:    opts.BuildCodec,
 		SchemaVersion: opts.SchemaVersion,
 		SchemaMode:    typedcolumn.ColumnSchemaFixed,
 		Columns:       defs,
@@ -1353,7 +1355,7 @@ func (p *typedColumnAdapterPart) imageOptions() typedcolumn.ColumnPartImageOptio
 			logicalTypes[column.Definition.Name] = string(logical)
 		}
 	}
-	imageOpts := typedcolumn.ColumnPartImageOptions{Dictionaries: p.Dictionary, LayoutLogicalTypes: logicalTypes}
+	imageOpts := typedcolumn.ColumnPartImageOptions{Dictionaries: p.Dictionary, LayoutLogicalTypes: logicalTypes, BuildCodec: p.Options.BuildCodec}
 	if p.Options.SectionCompressionSet {
 		imageOpts.SectionCompression = p.Options.SectionCompression
 	}

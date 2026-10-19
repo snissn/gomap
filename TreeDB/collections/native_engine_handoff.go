@@ -14,6 +14,8 @@ type nativeBuiltDomain struct {
 	name                       string
 	oldBaseRoot, root          uint64
 	boundary                   *memtable.COWRoot
+	typedBoundary              *nativeTypedDelta
+	typedMeta                  *CollectionMeta
 	// empty proves the captured descriptor had no pending physical source.
 	// Its unchanged root cannot consume any newer source in latest.
 	empty bool
@@ -160,8 +162,15 @@ func prepareNativeEngineHandoffWithCatalog(latest *nativeEngineVersion, built []
 		p.domainBuilder = nil
 		p.pendingDomains = p.pendingDomainBuilder.Seal()
 		p.pendingDomainBuilder = nil
-		c.schema.retain()
-		p.schema = c.schema
+		if built[start].typedMeta != nil {
+			p.schema, err = newNativeSchemaState(built[start].typedMeta, admit)
+			if err != nil {
+				return next, err
+			}
+		} else {
+			c.schema.retain()
+			p.schema = c.schema
+		}
 		successor, e := newNativeCollectionState(id, p.schema, p.domains, p.pendingDomains, admit)
 		if e != nil {
 			return next, e
@@ -202,6 +211,10 @@ func prepareNativeDomainHandoff(current *nativeDomainState, result *nativeBuiltD
 		return nil, scratch, backenddb.ErrRootPublicationBasisMismatch
 	}
 	domain, err = newNativeDomainState(current.name, result.root, current.interpretation, current.storagePolicy, nil, admit)
+	if err != nil {
+		return domain, scratch, err
+	}
+	domain.typed, err = cloneNativeTypedSuffix(current.typed, result.typedBoundary, admit)
 	if err != nil {
 		return domain, scratch, err
 	}

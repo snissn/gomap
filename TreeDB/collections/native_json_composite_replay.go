@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"sort"
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -72,6 +73,7 @@ func replayNativeJSONComposite(db *backenddb.DB, env commitlog.CommandEnvelope) 
 		rows        nativeJSONRows
 		planner     insertBatchPlanner
 		runtimes    []indexRuntime
+		typed       []*nativeTypedDelta
 	}
 	var collections []*collectionRows
 	noAdmission := func(uint64) error { return nil }
@@ -90,7 +92,11 @@ func replayNativeJSONComposite(db *backenddb.DB, env commitlog.CommandEnvelope) 
 		}
 		return decodeRootID(encoded)
 	}
+	var typedCollection string
+	var memberOrdinal uint32
 	err = commitlog.ScanCompositeMutationPayload(env.Payload, func(member commitlog.CompositeMutationMember) error {
+		ordinal := memberOrdinal
+		memberOrdinal++
 		if member.Kind == commitlog.CommandKindRawKVBatch {
 			raw = member.Payload
 			return nil
@@ -183,6 +189,55 @@ func replayNativeJSONComposite(db *backenddb.DB, env commitlog.CommandEnvelope) 
 			}
 			return snapshot.GetAtRoot(target.root, id)
 		}
+		if nativeTypedMeta(target.meta) {
+			if typedCollection != "" && typedCollection != name {
+				return backenddb.ErrNativeSemanticUnsupported
+			}
+			typedCollection = name
+			if member.Kind != commitlog.CommandKindCollectionInsertBatchByID {
+				return backenddb.ErrNativeSemanticUnsupported
+			}
+			declared := make([]columnWriteDocument, len(docs))
+			for i, doc := range docs {
+				if _, err := original(doc.ID); err == nil {
+					return ErrDocumentExists
+				} else if !errors.Is(err, tree.ErrKeyNotFound) {
+					return err
+				}
+				for _, d := range target.typed {
+					if _, _, ok := d.find(doc.ID); ok {
+						return ErrDocumentExists
+					}
+				}
+				declared[i] = columnWriteDocument{ID: doc.ID, Document: doc.Document}
+			}
+			rows, err := extractColumnDeclaredRowsFromJSONDocuments(*target.meta.Options.ColumnStore, declared)
+			if err != nil {
+				return err
+			}
+			residual := make([][]byte, len(docs))
+			for i, doc := range docs {
+				residual[i], err = columnRetainedPayloadJSONFromJSONDocument(*target.meta.Options.ColumnStore, doc.Document)
+				if err != nil {
+					return err
+				}
+			}
+			sort.Sort(nativeTypedRowsOrder{rows: rows, retained: residual})
+			for i := 1; i < len(rows); i++ {
+				if bytes.Equal(rows[i-1].ID, rows[i].ID) {
+					return ErrDocumentExists
+				}
+			}
+			if err = nativeTypedValidateResidual(target.meta, rows, residual); err != nil {
+				return err
+			}
+			amount, err := nativeTypedDeltaBuildCapacity(target.meta, rows, residual)
+			if err != nil {
+				return err
+			}
+			target.typed = append(target.typed, &nativeTypedDelta{rows: rows, retained: residual, appliedLSN: env.LSN, memberOrdinal: ordinal, buildCapacity: amount})
+			return nil
+		}
 		for _, doc := range docs {
 			// Validate every canonical intermediate before reducing it. A later
 			// delete must not erase a captured scalar-schema error. Use exactly
@@ -220,6 +275,9 @@ func replayNativeJSONComposite(db *backenddb.DB, env commitlog.CommandEnvelope) 
 		return err
 	}
 	for _, target := range collections {
+		if len(target.typed) != 0 {
+			continue
+		}
 		plan, changed, runtimes, err := nativeJSONFinalRows(target.name, target.meta, &target.rows, noAdmission, nil)
 		if err != nil {
 			return err
@@ -309,7 +367,12 @@ func replayNativeJSONComposite(db *backenddb.DB, env commitlog.CommandEnvelope) 
 			return err
 		}
 	}
-	group, err := db.BeginRootPublicationBuildGroupFromSnapshot(snapshot)
+	capture, err := db.AcquireStableResourceCaptureLease()
+	if err != nil {
+		return err
+	}
+	defer capture.Release()
+	group, err := db.BeginRootPublicationBuildGroupBorrowingLease(snapshot, capture)
 	if err != nil {
 		return err
 	}
@@ -325,6 +388,45 @@ func replayNativeJSONComposite(db *backenddb.DB, env commitlog.CommandEnvelope) 
 		binary.BigEndian.PutUint64(value[:], root)
 		// Collection roots use the same persisted encoding as every other producer.
 		if err = system.Set([]byte(systemCollectionRootKey(input.name)), value[:]); err != nil {
+			return err
+		}
+	}
+	for _, target := range collections {
+		if len(target.typed) == 0 {
+			continue
+		}
+		manifest, err := rootFor(collectionColumnManifestRootName(target.name))
+		if err != nil {
+			return err
+		}
+		// Startup uses this original aggregate group's bounded construction scope;
+		// it never constructs a live COW budget or calls a child singleton handler.
+		work, err := prepareNativeTypedReplayMaterialization(nativeTypedMaterializeInput{meta: target.meta, baseManifestRoot: manifest, deltas: target.typed, snapshot: snapshot, capture: capture, group: group})
+		if work != nil {
+			defer func() { done, e := work.release(); done.Complete(); resultErr = errors.Join(resultErr, e) }()
+		}
+		if err != nil {
+			return err
+		}
+		if err = work.materialize(); err != nil {
+			return err
+		}
+		if err = group.SetNativeDurableResources(work.resources, work.requirements); err != nil {
+			return err
+		}
+		work.resources = nil
+		for _, root := range work.roots {
+			var value [8]byte
+			binary.BigEndian.PutUint64(value[:], root.root)
+			if err = system.Set([]byte(systemCollectionRootKey(target.name+"/"+root.name)), value[:]); err != nil {
+				return err
+			}
+		}
+		encoded, err := encodeCollectionMeta(work.meta)
+		if err != nil {
+			return err
+		}
+		if err = system.Set([]byte(systemCollectionMetaKey(target.name)), encoded); err != nil {
 			return err
 		}
 	}

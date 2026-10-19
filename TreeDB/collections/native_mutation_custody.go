@@ -16,12 +16,14 @@ import (
 // The accepted prefix transfers this exact work; no close/error path rebuilds
 // its inventory from current metadata or retains an ancestor engine.
 type nativeMutationCustody struct {
-	released        atomic.Bool
-	cleanup         rootpublication.SemanticCleanup
-	domains         []*nativeDomainState
-	collections     []*nativeCollectionState
-	refund          *nativeEngineRefund
-	assignedFailure error
+	released          atomic.Bool
+	cleanup           rootpublication.SemanticCleanup
+	domains           []*nativeDomainState
+	collections       []*nativeCollectionState
+	refund            *nativeEngineRefund
+	assignedFailure   error
+	typedResources    backenddb.NativePublicationResources
+	hasTypedResources bool
 }
 
 func newNativeMutationCustody(domainCount, collectionCount int, allocator backenddb.NativeSemanticAllocator) (*nativeMutationCustody, error) {
@@ -33,6 +35,9 @@ func newNativeMutationCustody(domainCount, collectionCount int, allocator backen
 		return nil, memtable.ErrCOWCapacity
 	}
 	charge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeMutationCustody{}))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeEngineRefund{})))
+	// Assigned typed descriptors use the original empty resource builder/set;
+	// their independent backing stays charged until this exact custody retires.
+	charge += memtable.COWAllocationCharge(uint64(unsafe.Sizeof(rootpublication.StableResourceSetBuilder{}))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(rootpublication.StableResourceSet{}))) + preparedSemanticStreamMapEntryReserveBytes
 	domainBytes := memtable.COWAllocationCharge(uint64(domainCount) * uint64(unsafe.Sizeof(uintptr(0))))
 	collectionBytes := memtable.COWAllocationCharge(uint64(collectionCount) * uint64(unsafe.Sizeof(uintptr(0))))
 	if domainBytes > ^uint64(0)-charge || collectionBytes > ^uint64(0)-charge-domainBytes {
@@ -81,6 +86,12 @@ func (w *nativeMutationCustody) FinishSemanticCleanup() (rootpublication.Semanti
 		return rootpublication.SemanticCleanupCompletion{}, w.assignedFailure
 	}
 	var failure error
+	if w.hasTypedResources {
+		if err := w.typedResources.ReleaseNativeResources(); err != nil {
+			return rootpublication.SemanticCleanupCompletion{}, err
+		}
+		w.hasTypedResources = false
+	}
 	// Collections may also own the adopted domain descriptors. Release their
 	// separate sparse planner edges before the domain edge, exactly once each.
 	for i, collection := range w.collections {

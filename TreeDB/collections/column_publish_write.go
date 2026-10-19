@@ -13,6 +13,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
 )
 
 type columnPhysicalAssetPreparationAfterPrepareHookState struct {
@@ -1506,7 +1507,22 @@ func (c *Collection) prepareColumnPhysicalAssetRowsAtIdentity(prepared ColumnPub
 	return c.prepareColumnPhysicalAssetRowsAtIdentityFromSources(prepared, input, hookInput, rows, nil, nil, generation, rowPartID, typedPartID)
 }
 
-func (c *Collection) prepareColumnPhysicalAssetRowsAtIdentityFromSources(prepared ColumnPublishPreparedAssets, input columnWritePublishInput, hookInput ColumnPublishAssetPrepareInput, rows []columnDeclaredRow, rowSource columnDeclaredRowSource, typedSource typedColumnAdapterRowSource, generation, rowPartID, typedPartID uint64) (_ ColumnPublishPreparedAssets, retErr error) {
+// columnPhysicalAssetBuildContext borrows only the original physical producer
+// capabilities. Native captured builds never manufacture a Collection or read
+// current manager metadata to invoke the maintained asset builder.
+type columnPhysicalAssetBuildContext struct {
+	rootDir      string
+	registry     *rootpublication.IdentityPinRegistry
+	recovery     StableResourceCaptureRecoveryRetainer
+	codec        *typedcolumn.BuildCodec
+	singleOutput bool
+}
+
+func (c *Collection) prepareColumnPhysicalAssetRowsAtIdentityFromSources(prepared ColumnPublishPreparedAssets, input columnWritePublishInput, hookInput ColumnPublishAssetPrepareInput, rows []columnDeclaredRow, rowSource columnDeclaredRowSource, typedSource typedColumnAdapterRowSource, generation, rowPartID, typedPartID uint64) (ColumnPublishPreparedAssets, error) {
+	return (columnPhysicalAssetBuildContext{rootDir: c.db.ColumnAssetRootDir(), registry: c.db.StableResourceIdentityPinRegistry()}).prepareRows(prepared, input, hookInput, rows, rowSource, typedSource, generation, rowPartID, typedPartID)
+}
+
+func (context columnPhysicalAssetBuildContext) prepareRows(prepared ColumnPublishPreparedAssets, input columnWritePublishInput, hookInput ColumnPublishAssetPrepareInput, rows []columnDeclaredRow, rowSource columnDeclaredRowSource, typedSource typedColumnAdapterRowSource, generation, rowPartID, typedPartID uint64) (_ ColumnPublishPreparedAssets, retErr error) {
 	if generation == 0 || rowPartID == 0 || typedPartID == 0 || rowPartID == typedPartID {
 		return ColumnPublishPreparedAssets{}, errors.New("collections: invalid column physical asset identity")
 	}
@@ -1514,7 +1530,7 @@ func (c *Collection) prepareColumnPhysicalAssetRowsAtIdentityFromSources(prepare
 	if rowSource != nil {
 		rowCount = rowSource.Len()
 	}
-	isolatedTypedOutput := columnStoreTypedScalarIndexesSupported(input.meta) && columnStoreConfigNeedsDirectViewTypedColumnAlignment(hookInput.ColumnStore)
+	isolatedTypedOutput := context.singleOutput || (columnStoreTypedScalarIndexesSupported(input.meta) && columnStoreConfigNeedsDirectViewTypedColumnAlignment(hookInput.ColumnStore))
 	cleanupAssets := make([]ColumnPreparedAsset, 0, 8)
 	defer func() {
 		if retErr != nil {
@@ -1524,7 +1540,7 @@ func (c *Collection) prepareColumnPhysicalAssetRowsAtIdentityFromSources(prepare
 			}
 			retainStableOrphans := prepared.stableResourcesRequired && columnPreparedAssetsRequireOrphanRetention(cleanupAssets)
 			if len(cleanupAssets) != 0 && !retainStableOrphans {
-				if cleanupErr := cleanupColumnPreparedAssets(c.db.ColumnAssetRootDir(), cleanupAssets); cleanupErr != nil {
+				if cleanupErr := cleanupColumnPreparedAssets(context.rootDir, cleanupAssets); cleanupErr != nil {
 					retErr = errors.Join(retErr, cleanupErr)
 				}
 			}
@@ -1609,12 +1625,12 @@ func (c *Collection) prepareColumnPhysicalAssetRowsAtIdentityFromSources(prepare
 			if ordinaryColumnStableAuthorityEnabled() {
 				prepared.stableResourcesRequired = true
 				session = newColumnPhysicalAssetAppendSessionWithStableResources(
-					c.db.ColumnAssetRootDir(), hookInput.ColumnStore, c.db.StableResourceIdentityPinRegistry(),
+					context.rootDir, hookInput.ColumnStore, context.registry, context.recovery,
 				)
 			} else {
 				// Platforms without complete retained-parent persistence keep the
 				// legacy pre-activation path and do not claim stable authority.
-				session = newColumnPhysicalAssetAppendSession(c.db.ColumnAssetRootDir(), hookInput.ColumnStore)
+				session = newColumnPhysicalAssetAppendSession(context.rootDir, hookInput.ColumnStore)
 			}
 			appendOpenDuration += time.Since(appendStart)
 			session.candidateAdmission = input.candidateAdmission
@@ -1908,9 +1924,9 @@ func (c *Collection) prepareColumnPhysicalAssetRowsAtIdentityFromSources(prepare
 			var build typedColumnPartImageBuildResult
 			var err error
 			if input.preparedTypedBatch != nil {
-				build, err = buildTypedColumnPartImageFromPreparedBatchWithResult(input.preparedTypedBatch, typedPartID)
+				build, err = buildTypedColumnPartImageFromPreparedBatchWithCodec(input.preparedTypedBatch, typedPartID, context.codec)
 			} else if typedSource == nil {
-				build, err = buildTypedColumnPartImageForDeclaredRowsWithResult(hookInput.ColumnStore, generation, typedPartID, rows)
+				build, err = buildTypedColumnPartImageForDeclaredRowsWithCodec(hookInput.ColumnStore, generation, typedPartID, rows, context.codec)
 			} else {
 				build, err = buildTypedColumnPartImageFromSourceWithResult(hookInput.ColumnStore, generation, typedPartID, typedSource)
 			}
@@ -1927,6 +1943,10 @@ func (c *Collection) prepareColumnPhysicalAssetRowsAtIdentityFromSources(prepare
 		}
 		result := <-typedColumnDone
 		typedColumnDone = nil
+		// No decoder/asset validation may retain encoder workspace under this credit.
+		if context.codec != nil {
+			_ = context.codec.Close()
+		}
 		return result, result.err
 	}
 	rowAsset, err := prepareRowAsset()

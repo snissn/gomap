@@ -24,6 +24,7 @@ type nativeJSONTxnBinding struct {
 	incarnation      uint64
 	probe            NativeJSONRead
 	plan             *nativeJSONLogicalInsert
+	typed            *nativeTypedDelta
 	effects          []txnhistory.Effect
 	rows             nativeJSONRows
 	stageCharge      uint64
@@ -118,9 +119,13 @@ func (m *NativeJSONManager) Begin(name string, additional ...string) (result *Na
 		g := &t.bindings[i]
 		g.name = string(bytes.Clone([]byte(nameAt(i))))
 		g.probe.capture = core
+		g.probe.database = m.db
 		c, ok := base.names.Get(g.name)
 		if !ok {
 			return nil, tree.ErrKeyNotFound
+		}
+		if err = nativeTypedProfile(m.db, *c.schema.meta); err != nil {
+			return nil, err
 		}
 		if _, err = nativeJSONMeta(*c.schema.meta); err != nil {
 			return nil, err
@@ -204,6 +209,11 @@ func (t *NativeJSONTxn) GetFrom(name string, id []byte) ([]byte, error) {
 	if g == nil {
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
+	if g.typed != nil {
+		if row, residual, ok := g.typed.find(id); ok {
+			return g.probe.reconstructPendingTyped(row, residual)
+		}
+	}
 	if row := g.rows.find(id); row != nil {
 		if row.current == nil {
 			return nil, tree.ErrKeyNotFound
@@ -242,6 +252,9 @@ func (t *NativeJSONTxn) InsertBatchInto(name string, ids, documents [][]byte) (r
 	if g == nil {
 		return backenddb.ErrNativeSemanticUnsupported
 	}
+	if g.probe.meta.Options.ColumnStore != nil {
+		return t.stageNativeTypedInsert(g, ids, documents)
+	}
 	return t.stageNativeInsert(g, ids, documents)
 }
 
@@ -256,6 +269,7 @@ type nativeJSONLogicalInsert struct {
 	additional    []nativeJSONDomainChange
 	primaryPolicy backenddb.OrderedRootStoragePolicy
 	custody       *nativeMutationCustody
+	typed         *nativeTypedDelta
 }
 
 type nativeJSONLogicalGroup struct {
@@ -264,6 +278,8 @@ type nativeJSONLogicalGroup struct {
 	count     int
 	bootstrap *nativeEngineVersion
 	custody   *nativeMutationCustody
+	prepared  *nativeEngineVersion
+	raw       bool
 }
 
 func (p *nativeJSONLogicalGroup) PrepareNativePublication(latest backenddb.NativeSemanticState, exact *backenddb.Snapshot) (backenddb.NativeFinalizedPublication, error) {
@@ -292,11 +308,14 @@ func (p *nativeJSONLogicalGroup) PrepareNativePublication(latest backenddb.Nativ
 		if !ok || !nok || named.incarnation != g.incarnation {
 			return backenddb.NativeFinalizedPublication{}, backenddb.ErrConcurrentModification
 		}
-		changes[count] = nativeJSONPrimaryChange{collection: c, entries: g.plan.mutations, additional: g.plan.additional, primaryPolicy: g.plan.primaryPolicy}
+		changes[count] = nativeJSONPrimaryChange{collection: c, entries: g.plan.mutations, additional: g.plan.additional, primaryPolicy: g.plan.primaryPolicy, typed: g.plan.typed}
 		count++
 	}
 	next, err := prepareNativeJSONPrimaries(base, changes[:count])
 	if err != nil {
+		return backenddb.NativeFinalizedPublication{State: next}, err
+	}
+	if err = nativeTypedEnsureConstructible(next, exact); err != nil {
 		return backenddb.NativeFinalizedPublication{State: next}, err
 	}
 	for i := 0; i < count; i++ {
@@ -304,6 +323,7 @@ func (p *nativeJSONLogicalGroup) PrepareNativePublication(latest backenddb.Nativ
 		(nativeCollectionLifetime{}).Retain(replacement)
 		p.custody.adoptCollection(replacement)
 	}
+	p.prepared = next
 	return backenddb.NativeFinalizedPublication{State: next}, nil
 }
 
@@ -480,8 +500,19 @@ func (t *NativeJSONTxn) Commit() (resultErr error) {
 			return err
 		}
 	}
-	plan := &nativeJSONLogicalGroup{bindings: t.bindings, changes: make([]nativeJSONPrimaryChange, t.count), count: t.count, bootstrap: t.imported, custody: t.custody}
+	plan := &nativeJSONLogicalGroup{bindings: t.bindings, changes: make([]nativeJSONPrimaryChange, t.count), count: t.count, bootstrap: t.imported, custody: t.custody, raw: t.rawStaged}
 	native := &backenddb.NativePreparedPublication{RequireInlineCompositeRaw: t.rawStaged, Basis: t.core.State(), StartSequence: t.core.LogicalSequence(), Reprepare: plan, Custody: t.custody, Effects: effects, Dependencies: t.dependencies}
+	for i := range t.bindings {
+		if t.bindings[i].typed != nil {
+			if err := t.custody.typedResources.Initialize(nil); err != nil {
+				return err
+			}
+			t.custody.hasTypedResources = true
+			native.Finalizer = plan
+			native.Resources = &t.custody.typedResources
+			break
+		}
+	}
 	intent, err := t.db.NewTrustedCommandWALIntent(kind, scope, format, payload)
 	if err != nil {
 		t.custody = nil
@@ -527,9 +558,15 @@ func (t *NativeJSONTxn) Close() error {
 func (t *NativeJSONTxn) closeLocked() (error, []*memtable.COWExternalLease, *memtable.COWExternalLease) {
 	var err error
 	for i := range t.bindings {
+		typed := t.bindings[i].typed
 		lease := t.bindings[i].probe.detachScratch()
 		validation := t.bindings[i].validationLease
+		// Plans and probes may borrow typed row IDs; detach the complete binding
+		// before a cancelled delta's original vector receipt can refund.
 		t.bindings[i] = nativeJSONTxnBinding{}
+		done := typed.release()
+		typed = nil
+		done.Complete()
 		if validation != nil {
 			validation.Close()
 		}

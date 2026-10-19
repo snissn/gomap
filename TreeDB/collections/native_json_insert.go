@@ -86,6 +86,7 @@ type nativeJSONPrimaryChange struct {
 	entries       []memtable.COWMutation
 	primaryPolicy backenddb.OrderedRootStoragePolicy
 	additional    []nativeJSONDomainChange
+	typed         *nativeTypedDelta
 }
 
 func prepareNativeJSONPrimary(base *nativeEngineVersion, c *nativeCollectionState, entries []memtable.COWMutation) (*nativeEngineVersion, error) {
@@ -159,6 +160,15 @@ func prepareNativeJSONPrimaries(base *nativeEngineVersion, changes []nativeJSONP
 			if err != nil {
 				return next, err
 			}
+			if i == 0 && change.typed != nil {
+				if change.typed.previous != nil {
+					return next, backenddb.ErrNativeSemanticUnsupported
+				}
+				inherited := domain.typed
+				change.typed.retain()
+				domain.typed = change.typed
+				change.typed.previous = inherited
+			}
 			if err = p.domainBuilder.Set(name, domain); err != nil {
 				return next, err
 			}
@@ -218,7 +228,7 @@ func prepareNativeJSONInsertCommand(_ *backenddb.DB, env commitlog.CommandEnvelo
 	if !ok {
 		return nil, tree.ErrKeyNotFound
 	}
-	if len(c.schema.meta.Indexes) != 0 {
+	if len(c.schema.meta.Indexes) != 0 || c.schema.meta.Options.ColumnStore != nil {
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
 	if _, err = nativeJSONMeta(*c.schema.meta); err != nil {

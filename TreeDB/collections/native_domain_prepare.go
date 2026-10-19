@@ -62,6 +62,10 @@ func prepareNativeDomainUpdate(base *nativeDomainState, name string, baseRoot, i
 		retirement.Drain()
 		return nil, err
 	}
+	if base != nil {
+		base.typed.retain()
+		domain.typed = base.typed
+	}
 	if base != nil && base.captured != nil {
 		base.captured.retain()
 		domain.captured = base.captured
