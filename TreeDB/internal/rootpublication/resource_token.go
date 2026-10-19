@@ -1812,19 +1812,11 @@ func (proof *StableNamespaceCreationProof) ReleaseWithError() error {
 		return nil
 	}
 	proof.closeMu.Lock()
-	proof.mu.Lock()
-	if proof.closeWork.native {
-		proof.mu.Unlock()
-		proof.closeMu.Unlock()
-		return retainedalloc.ErrWorkRequired
-	}
-	proof.mu.Unlock()
 	var state namespaceProofReleaseState
 	state.proof = proof
-	// Nil policy drains the same original close core without an escaping local
-	// work counter. Only the retained native receipt admits bounded work.
+	// Drive original physical cleanup before detaching the containing receipt.
 	for state.proof != nil {
-		ready, err := state.continueWork(false, nil, nil)
+		ready, err := state.continueRelease()
 		if err != nil {
 			proof.closeMu.Unlock()
 			return err
