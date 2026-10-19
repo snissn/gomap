@@ -3,7 +3,6 @@ package collections
 import (
 	"bytes"
 	"errors"
-	"sort"
 	"sync"
 	"unsafe"
 
@@ -12,30 +11,29 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/txnhistory"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
-	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
 
 // NativeJSONTxn uses the existing conditional transaction's single opening cut.
-// The frontend stages one insert batch per captured scalar-indexed JSON collection
+// The frontend stages ordered row operations per captured scalar-indexed JSON collection
 // and one raw point Set in the original P1 batch.
-// Get observes that opening plus its own staged inserts. Commit never reruns the
+// Get observes that opening plus its own ordered staged row operations. Commit never reruns the
 // body; only the original immutable mutations are composed after validation.
 type nativeJSONTxnBinding struct {
 	name        string
 	incarnation uint64
 	probe       NativeJSONRead
 	plan        *nativeJSONLogicalInsert
-	payload     []byte
-	kind        commitlog.CommandKind
-	format      commitlog.PayloadFormat
 	effects     []txnhistory.Effect
+	rows        nativeJSONRows
+	stageCharge uint64
 }
 type NativeJSONTxn struct {
 	mu           sync.Mutex
 	db           *backenddb.DB
 	core         backenddb.NativeConditionalTxn
 	bindings     []nativeJSONTxnBinding
+	members      []commitlog.CompositeMutationMember
 	count        int
 	imported     *nativeEngineVersion
 	dependencies []txnhistory.Dependency
@@ -203,15 +201,11 @@ func (t *NativeJSONTxn) GetFrom(name string, id []byte) ([]byte, error) {
 	if g == nil {
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
-	if g.plan != nil {
-		rows := g.plan.mutations
-		i := sort.Search(len(rows), func(i int) bool { return bytes.Compare(rows[i].Key, id) >= 0 })
-		if i < len(rows) && bytes.Equal(rows[i].Key, id) {
-			if rows[i].Flags&node.FlagTombstone != 0 {
-				return nil, tree.ErrKeyNotFound
-			}
-			return bytes.Clone(rows[i].Value), nil
+	if row := g.rows.find(id); row != nil {
+		if row.current == nil {
+			return nil, tree.ErrKeyNotFound
 		}
+		return bytes.Clone(row.current), nil
 	}
 	if err := t.trackRead(g, id); err != nil {
 		t.failure = err
@@ -220,8 +214,7 @@ func (t *NativeJSONTxn) GetFrom(name string, id []byte) ([]byte, error) {
 	return g.probe.Get(id)
 }
 
-// InsertBatch stages one batch through the shared immutable planner. A second call refuses without
-// changing the first batch. Other staging failures terminally invalidate the txn.
+// InsertBatch stages against the same opening and its own prior row operations.
 func (t *NativeJSONTxn) InsertBatch(ids, documents [][]byte) error {
 	return t.InsertBatchInto("", ids, documents)
 }
@@ -237,119 +230,16 @@ func (t *NativeJSONTxn) InsertBatchInto(name string, ids, documents [][]byte) (r
 	if t.failure != nil {
 		return t.failure
 	}
-	g := t.binding(name)
-	if g == nil {
-		return backenddb.ErrNativeSemanticUnsupported
-	}
-	if g.plan != nil {
-		return backenddb.ErrNativeSemanticUnsupported
-	}
 	defer func() {
 		if resultErr != nil {
 			t.failure = resultErr
 		}
 	}()
-	if len(ids) == 0 || len(ids) != len(documents) {
+	g := t.binding(name)
+	if g == nil {
 		return backenddb.ErrNativeSemanticUnsupported
 	}
-	var arenaBytes uint64
-	for i, id := range ids {
-		if len(id) == 0 || documents[i] == nil {
-			return backenddb.ErrNativeSemanticUnsupported
-		}
-		n := uint64(len(id)) + uint64(len(documents[i]))
-		if n > ^uint64(0)-arenaBytes {
-			return memtable.ErrCOWCapacity
-		}
-		arenaBytes += n
-	}
-	charge, err := nativeJSONInsertCharge(g.name, ids, documents)
-	if err != nil {
-		return err
-	}
-	indexedCharge, err := nativeJSONIndexedPlanCharge(g.probe.meta, ids, documents)
-	if err != nil || indexedCharge > ^uint64(0)-charge {
-		return memtable.ErrCOWCapacity
-	}
-	charge += indexedCharge
-	// Staged inputs outlive caller buffers, unlike the old synchronous planner.
-	extra := memtable.COWAllocationCharge(arenaBytes) + memtable.COWAllocationCharge(uint64(len(ids))*uint64(unsafe.Sizeof([]byte{})))*2 + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeJSONLogicalInsert{})))
-	if extra > ^uint64(0)-charge {
-		return memtable.ErrCOWCapacity
-	}
-	index := 0
-	for &t.bindings[index] != g {
-		index++
-	}
-	t.stageLeases[index], err = t.core.NativeAllocator().AdmitNativeBytes(charge + extra)
-	if err != nil {
-		return err
-	}
-	arena := make([]byte, arenaBytes)
-	ownedIDs, ownedDocs := make([][]byte, len(ids)), make([][]byte, len(ids))
-	offset := 0
-	for i, id := range ids {
-		copy(arena[offset:], id)
-		ownedIDs[i] = arena[offset : offset+len(id)]
-		offset += len(id)
-		copy(arena[offset:], documents[i])
-		ownedDocs[i] = arena[offset : offset+len(documents[i])]
-		offset += len(documents[i])
-	}
-	planner, err := nativeJSONInsertPlanner(g.probe.meta)
-	if err != nil {
-		return err
-	}
-	prepared, err := planner.planInsertBatch(ownedIDs, ownedDocs)
-	if err != nil {
-		return err
-	}
-	rows := prepared.directBufferedInsert.primaryEntries
-	// Blind insert intent is a write dependency, including an absent opening key.
-	for _, row := range rows {
-		if g.probe.domain.domain == nil {
-			break
-		}
-		entry, err := g.probe.getEntry(row.key)
-		if err == nil && entry.Flags&node.FlagTombstone == 0 {
-			return ErrDocumentExists
-		}
-		if err != nil && !errors.Is(err, tree.ErrKeyNotFound) {
-			return err
-		}
-	}
-	if err = checkNativeInsertUnique(g.probe.collection, &g.probe, prepared.directBufferedInsert, func(domain uint64, start, end []byte) error {
-		ns := g.namespace()
-		ns.Domain = domain
-		return t.trackDependency(ns, txnhistory.RangeEffect, start, end)
-	}); err != nil {
-		return err
-	}
-	// Adopt all controls before payload encoding or another fallible operation.
-	g.plan = &nativeJSONLogicalInsert{name: g.name, incarnation: g.incarnation, bootstrap: t.imported, custody: t.custody, mutations: make([]memtable.COWMutation, len(rows))}
-	g.plan.primaryPolicy = nativeInsertRootPolicy(prepared.directBufferedInsert, prepared.directBufferedInsert.primaryRootName)
-	stageCharge := charge + extra
-	admit := func(bytes uint64) error {
-		if bytes > ^uint64(0)-stageCharge {
-			return memtable.ErrCOWCapacity
-		}
-		if err := t.stageLeases[index].Resize(stageCharge + bytes); err != nil {
-			return err
-		}
-		stageCharge += bytes
-		return nil
-	}
-	g.plan.additional, g.effects, err = extractNativeInsertEffects(g.name, g.incarnation, prepared.directBufferedInsert, g.plan.mutations, admit)
-	if err != nil {
-		return err
-	}
-	docs := make([]commitlog.CollectionDocument, len(rows))
-	for i, row := range rows {
-		docs[i] = commitlog.CollectionDocument{ID: row.key, Document: row.value}
-	}
-	g.kind, g.format = commitlog.CommandKindCollectionInsertBatchByID, commitlog.PayloadFormatCollectionInsertBatchByIDV1
-	g.payload, err = commitlog.EncodeCollectionInsertBatchByIDPayload(g.name, docs)
-	return err
+	return t.stageNativeInsert(g, ids, documents)
 }
 
 // nativeJSONLogicalInsert is fixed internal work, not a body/replay callback.
@@ -488,6 +378,9 @@ func (t *NativeJSONTxn) Commit() (resultErr error) {
 	if t.failure != nil {
 		return t.failure
 	}
+	if err := t.finalizeNativeRows(); err != nil {
+		return err
+	}
 	count, totalEffects := 0, 0
 	for i := 0; i < t.count; i++ {
 		g := &t.bindings[i]
@@ -516,7 +409,7 @@ func (t *NativeJSONTxn) Commit() (resultErr error) {
 	for _, bytes := range []uint64{
 		uint64(unsafe.Sizeof(nativeJSONLogicalGroup{})),
 		uint64(totalEffects) * uint64(unsafe.Sizeof(txnhistory.Effect{})),
-		uint64(t.count+1) * uint64(unsafe.Sizeof(commitlog.CompositeMutationMember{})),
+		uint64(len(t.members)+1) * uint64(unsafe.Sizeof(commitlog.CompositeMutationMember{})),
 		uint64(t.count) * uint64(unsafe.Sizeof(nativeJSONPrimaryChange{})),
 		uint64(unsafe.Sizeof(backenddb.NativePreparedPublication{})),
 		uint64(unsafe.Sizeof(backenddb.CommandWALIntent{})),
@@ -527,7 +420,7 @@ func (t *NativeJSONTxn) Commit() (resultErr error) {
 	}
 	var rawGrowth int
 	effects := make([]txnhistory.Effect, 0, totalEffects)
-	members := make([]commitlog.CompositeMutationMember, t.count+1)
+	members := make([]commitlog.CompositeMutationMember, len(t.members)+1)
 	memberCount := 0
 	if t.rawStaged {
 		if len(rawEntries) != 1 {
@@ -558,23 +451,14 @@ func (t *NativeJSONTxn) Commit() (resultErr error) {
 		memberCount++
 	}
 	for i := 0; i < t.count; i++ {
-		g := &t.bindings[i]
-		if g.plan == nil {
-			continue
-		}
-		effects = append(effects, g.effects...)
-		members[memberCount] = commitlog.CompositeMutationMember{Kind: g.kind, PayloadFormat: g.format, Incarnation: g.incarnation, Payload: g.payload}
+		effects = append(effects, t.bindings[i].effects...)
+	}
+	for _, member := range t.members {
+		members[memberCount] = member
 		memberCount++
 	}
 	kind, scope, format, payload := members[0].Kind, commitlog.CommandScopeCollection, members[0].PayloadFormat, members[0].Payload
 	if memberCount > 1 {
-		// CRUD is staged only by existing one-shot Collection methods. Until the
-		// aggregate startup executor consumes CRUD effects, refuse before append.
-		for _, member := range members[:memberCount] {
-			if member.Kind != commitlog.CommandKindRawKVBatch && member.Kind != commitlog.CommandKindCollectionInsertBatchByID {
-				return backenddb.ErrNativeSemanticUnsupported
-			}
-		}
 		kind, scope, format = commitlog.CommandKindCompositeMutation, commitlog.CommandScopeSystem, commitlog.PayloadFormatCompositeMutationV1
 		var err error
 		planned, planErr := commitlog.PlanCompositeMutationPayload(members[:memberCount])
@@ -609,6 +493,7 @@ func (t *NativeJSONTxn) Commit() (resultErr error) {
 			lease.Close()
 		}
 	}
+	members, rawEntries = nil, nil
 	result, err := t.core.CommitNative(native, intent, false)
 	t.custody = nil
 	if !result.Consumed {
@@ -646,6 +531,7 @@ func (t *NativeJSONTxn) closeLocked() (error, []*memtable.COWExternalLease, *mem
 		}
 	}
 	t.bindings = nil
+	t.members = nil
 	t.dependencies = nil
 
 	if t.custody != nil {
