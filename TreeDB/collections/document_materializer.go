@@ -520,6 +520,7 @@ func (v *CollectionReadView) ensureAssetReadCaches(cfg ColumnStoreConfig, rowInt
 		if err != nil {
 			return err
 		}
+		readCache.operationLocal = v.collection.nativeOperationLocalReads
 		readCache.returnViews = true
 		readCache.forceReadAtFallback = v.forceAssetReadAtFallbackForTest
 		readCache.trustCachedVerifyFileIdentity = true
@@ -551,6 +552,7 @@ func (v *CollectionReadView) ensureAssetReadCaches(cfg ColumnStoreConfig, rowInt
 		if err != nil {
 			return err
 		}
+		readCache.operationLocal = v.collection.nativeOperationLocalReads
 		readCache.returnViews = true
 		readCache.forceReadAtFallback = v.forceAssetReadAtFallbackForTest
 		readCache.trustCachedVerifyFileIdentity = true

@@ -59,7 +59,10 @@ func nativeTypedReconstructionCharge(residual, path, typedJSON uint64) (uint64, 
 
 func (r *NativeJSONRead) reconstructPendingTyped(row *columnDeclaredRow, residual []byte) (result []byte, resultErr error) {
 	col := r.meta.Options.ColumnStore.Columns[0]
-	if row == nil || len(row.Values) != 1 {
+	if row == nil {
+		return nil, tree.ErrKeyNotFound
+	}
+	if len(row.Values) != 1 {
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
 	_, typedJSON, err := nativeTypedValueCapacity(col, row.Values[0])
@@ -277,4 +280,116 @@ func (r *NativeJSONRead) reconstructTyped(id, value []byte) (result []byte, resu
 		return nil, errors.New("collections: missing typed reconstruction")
 	}
 	return result, nil
+}
+
+// Compare exact retained bytes and authoritative declared values at this SAME
+// captured cut. Never round-trip typed values through reconstructed JSON.
+func (r *NativeJSONRead) typedRowEqual(id, retained []byte, wanted []columnDeclaredValue) (found, equal bool, resultErr error) {
+	if r.domain.domain == nil {
+		return false, false, nil
+	}
+	if row, old, ok := r.domain.domain.typed.find(id); ok {
+		if row == nil {
+			return false, false, nil
+		}
+		if !bytes.Equal(bytes.TrimSpace(old), retained) {
+			return true, false, nil
+		}
+		equal, err := typedDeclaredValuesEqual(row.Values, wanted)
+		return true, equal, err
+	}
+	entry, _, err := r.lookupEntry(id, true)
+	if errors.Is(err, tree.ErrKeyNotFound) {
+		return false, false, nil
+	}
+	if err != nil {
+		return false, false, err
+	}
+	if entry.Flags&node.FlagTombstone != 0 {
+		return false, false, nil
+	}
+	value := entry.Value
+	var valueLease *memtable.COWExternalLease
+	defer func() {
+		value = nil
+		entry = node.LeafEntry{}
+		if valueLease != nil {
+			valueLease.Close()
+		}
+	}()
+	if entry.Flags&node.FlagPointer != 0 {
+		value, err = r.readValue(entry.ValuePtr, func(n uint64) error {
+			var e error
+			valueLease, e = r.capture.NativeAllocator().AdmitNativeBytes(n)
+			return e
+		})
+		if err != nil {
+			return false, false, err
+		}
+	}
+	if !bytes.Equal(bytes.TrimSpace(value), retained) {
+		return true, false, nil
+	}
+	manifest, ok := r.collection.domains.Get("column/manifest")
+	if !ok {
+		return false, false, backenddb.ErrNativeSemanticUnsupported
+	}
+	physical, err := nativeTypedReadCapacity(r.capture.Snapshot(), manifest.baseRoot)
+	if err != nil {
+		return false, false, err
+	}
+	header := uint64(8 * preparedSemanticStreamMapEntryReserveBytes)
+	r.collection.domains.Scan(func(name string, _ *nativeDomainState) bool {
+		n := uint64(len(r.meta.Name))
+		if err = nativeTypedCheckedAdd(&n, 1); err == nil {
+			err = nativeTypedCheckedAdd(&n, uint64(len(name)))
+		}
+		if err == nil {
+			err = nativeTypedCheckedAdd(&header, memtable.COWAllocationCharge(n))
+		}
+		return err == nil
+	})
+	if err != nil {
+		return false, false, err
+	}
+	if err = nativeTypedCheckedAdd(&physical, header); err != nil {
+		return false, false, err
+	}
+	lease, err := r.capture.NativeAllocator().AdmitNativeBytes(physical)
+	if err != nil {
+		return false, false, err
+	}
+	var roots map[string]uint64
+	var catalog *collectionCatalog
+	var view *CollectionReadView
+	defer func() {
+		if view != nil {
+			resultErr = errors.Join(resultErr, view.Close())
+		}
+		view = nil
+		catalog = nil
+		roots = nil
+		lease.Close()
+	}()
+	extra, _, err := nativeTypedFamilyReadCapacity(r.meta, r.capture.Snapshot(), manifest.baseRoot, r.database.ColumnAssetRootDir(), func(n uint64) error {
+		if e := nativeTypedCheckedAdd(&n, header); e != nil {
+			return e
+		}
+		return lease.Resize(max(physical, n))
+	})
+	if err != nil {
+		return false, false, err
+	}
+	if err = nativeTypedCheckedAdd(&physical, extra); err != nil {
+		return false, false, err
+	}
+	if err = lease.Resize(physical); err != nil {
+		return false, false, err
+	}
+	roots = make(map[string]uint64, 4)
+	r.collection.domains.Scan(func(name string, d *nativeDomainState) bool { roots[r.meta.Name+"/"+name] = d.baseRoot; return true })
+	catalog = newCollectionCatalog(r.meta, roots)
+	view = newCollectionReadViewAtSnapshot(&Collection{db: r.database, nativeOperationLocalReads: true}, r.capture.Snapshot(), catalog, false, "")
+	equal, err = view.typedReplacementValuesEqual(id, wanted)
+	return true, equal, err
 }

@@ -104,33 +104,57 @@ func replayNativeJSONComposite(db *backenddb.DB, env commitlog.CommandEnvelope) 
 		var name string
 		var docs []commitlog.CollectionDocument
 		var ids [][]byte
-		switch member.Kind {
-		case commitlog.CommandKindCollectionInsertBatchByID:
-			decoded, err := commitlog.DecodeCollectionInsertBatchByIDPayload(member.Payload)
+		var typed *commitlog.CollectionTypedBatchPayload
+		if member.PayloadFormat == commitlog.PayloadFormatCollectionTypedBatchByIDV1 {
+			decoded, err := commitlog.DecodeCollectionTypedBatchPayload(member.Payload)
 			if err != nil {
 				return err
 			}
-			name, docs = decoded.Collection, decoded.Documents
-		case commitlog.CommandKindCollectionUpdateBatchByID:
-			decoded, err := commitlog.DecodeCollectionUpdateBatchByIDPayload(member.Payload)
+			typed, name = &decoded, decoded.Collection
+		} else if member.PayloadFormat == commitlog.PayloadFormatCollectionTypedSourceByIDV1 {
+			decoded, err := commitlog.DecodeCollectionTypedSourcePayload(member.Payload)
 			if err != nil {
 				return err
 			}
-			if decoded.Colocated != nil {
+			typed, name, ids = &decoded.Inserted, decoded.Inserted.Collection, decoded.DeleteIDs
+		} else {
+			switch member.Kind {
+			case commitlog.CommandKindCollectionInsertBatchByID:
+				decoded, err := commitlog.DecodeCollectionInsertBatchByIDPayload(member.Payload)
+				if err != nil {
+					return err
+				}
+				name, docs = decoded.Collection, decoded.Documents
+			case commitlog.CommandKindCollectionUpdateBatchByID:
+				decoded, err := commitlog.DecodeCollectionUpdateBatchByIDPayload(member.Payload)
+				if err != nil {
+					return err
+				}
+				if decoded.Colocated != nil {
+					return backenddb.ErrNativeSemanticUnsupported
+				}
+				name, docs = decoded.Collection, decoded.Documents
+			case commitlog.CommandKindCollectionReplaceSourceByID:
+				decoded, err := commitlog.DecodeCollectionReplaceSourceByIDPayload(member.Payload)
+				if err != nil {
+					return err
+				}
+				if len(decoded.Documents) != 0 {
+					return backenddb.ErrNativeSemanticUnsupported
+				}
+				name, ids = decoded.Collection, decoded.DeleteIDs
+			case commitlog.CommandKindCollectionDeleteBatchByID:
+				decoded, err := commitlog.DecodeCollectionDeleteBatchByIDPayload(member.Payload)
+				if err != nil {
+					return err
+				}
+				if decoded.Colocated != nil {
+					return backenddb.ErrNativeSemanticUnsupported
+				}
+				name, ids = decoded.Collection, decoded.IDs
+			default:
 				return backenddb.ErrNativeSemanticUnsupported
 			}
-			name, docs = decoded.Collection, decoded.Documents
-		case commitlog.CommandKindCollectionDeleteBatchByID:
-			decoded, err := commitlog.DecodeCollectionDeleteBatchByIDPayload(member.Payload)
-			if err != nil {
-				return err
-			}
-			if decoded.Colocated != nil {
-				return backenddb.ErrNativeSemanticUnsupported
-			}
-			name, ids = decoded.Collection, decoded.IDs
-		default:
-			return backenddb.ErrNativeSemanticUnsupported
 		}
 		if err := ValidateCollectionName(name); err != nil {
 			return err
@@ -194,49 +218,116 @@ func replayNativeJSONComposite(db *backenddb.DB, env commitlog.CommandEnvelope) 
 				return backenddb.ErrNativeSemanticUnsupported
 			}
 			typedCollection = name
-			if member.Kind != commitlog.CommandKindCollectionInsertBatchByID {
+			var rows []columnDeclaredRow
+			var residual [][]byte
+			op := ColumnPublishOperationInsert
+			switch member.Kind {
+			case commitlog.CommandKindCollectionInsertBatchByID:
+			case commitlog.CommandKindCollectionUpdateBatchByID, commitlog.CommandKindCollectionReplaceSourceByID:
+				op = ColumnPublishOperationUpdate
+			case commitlog.CommandKindCollectionDeleteBatchByID:
+				op = ColumnPublishOperationDelete
+			default:
 				return backenddb.ErrNativeSemanticUnsupported
 			}
-			declared := make([]columnWriteDocument, len(docs))
-			for i, doc := range docs {
-				if _, err := original(doc.ID); err == nil {
-					return ErrDocumentExists
-				} else if !errors.Is(err, tree.ErrKeyNotFound) {
-					return err
+			if typed != nil {
+				if columnRetainedPayloadEffectiveEncoding(*target.meta.Options.ColumnStore) != ColumnRetainedPayloadEncodingJSON {
+					return backenddb.ErrNativeSemanticUnsupported
 				}
-				for _, d := range target.typed {
-					if _, _, ok := d.find(doc.ID); ok {
-						return ErrDocumentExists
-					}
-				}
-				declared[i] = columnWriteDocument{ID: doc.ID, Document: doc.Document}
-			}
-			rows, err := extractColumnDeclaredRowsFromJSONDocuments(*target.meta.Options.ColumnStore, declared)
-			if err != nil {
-				return err
-			}
-			residual := make([][]byte, len(docs))
-			for i, doc := range docs {
-				residual[i], err = columnRetainedPayloadJSONFromJSONDocument(*target.meta.Options.ColumnStore, doc.Document)
+				projection, typedIDs, retained, err := typedProjectionFromPayload(target.meta, *typed)
 				if err != nil {
 					return err
+				}
+				declared := make([]columnWriteDocument, len(typedIDs))
+				for i, id := range typedIDs {
+					declared[i] = columnWriteDocument{ID: id, Document: retained[i]}
+				}
+				if err = applyTypedProjection(typedIDs, declared, projection); err != nil {
+					return err
+				}
+				prepared, err := prepareColumnWritePublishInputBeforeCommandWAL(columnWritePublishInput{meta: target.meta, operation: op, documents: declared, rows: len(declared)})
+				if err != nil {
+					return err
+				}
+				rows, residual = prepared.declaredRows, retained
+			} else if len(docs) != 0 {
+				if member.Kind != commitlog.CommandKindCollectionInsertBatchByID {
+					return backenddb.ErrNativeSemanticUnsupported
+				}
+				declared := make([]columnWriteDocument, len(docs))
+				for i, doc := range docs {
+					declared[i] = columnWriteDocument{ID: doc.ID, Document: doc.Document}
+				}
+				var err error
+				rows, err = extractColumnDeclaredRowsFromJSONDocuments(*target.meta.Options.ColumnStore, declared)
+				if err != nil {
+					return err
+				}
+				residual = make([][]byte, len(docs))
+				for i, doc := range docs {
+					residual[i], err = columnRetainedPayloadJSONFromJSONDocument(*target.meta.Options.ColumnStore, doc.Document)
+					if err != nil {
+						return err
+					}
+				}
+			}
+			exists := func(id []byte) (bool, error) {
+				for i := len(target.typed) - 1; i >= 0; i-- {
+					if row, _, ok := target.typed[i].find(id); ok {
+						return row != nil, nil
+					}
+				}
+				_, err := original(id)
+				if errors.Is(err, tree.ErrKeyNotFound) {
+					return false, nil
+				}
+				return err == nil, err
+			}
+			for _, row := range rows {
+				found, err := exists(row.ID)
+				if err != nil {
+					return err
+				}
+				if op == ColumnPublishOperationInsert && found {
+					return ErrDocumentExists
+				}
+				if member.Kind == commitlog.CommandKindCollectionUpdateBatchByID && !found {
+					return tree.ErrKeyNotFound
+				}
+				if member.Kind == commitlog.CommandKindCollectionReplaceSourceByID && found {
+					replacing := false
+					for _, id := range ids {
+						if bytes.Equal(id, row.ID) {
+							replacing = true
+							break
+						}
+					}
+					if !replacing {
+						return ErrDocumentExists
+					}
 				}
 			}
 			sort.Sort(nativeTypedRowsOrder{rows: rows, retained: residual})
 			for i := 1; i < len(rows); i++ {
 				if bytes.Equal(rows[i-1].ID, rows[i].ID) {
-					return ErrDocumentExists
+					return ErrDuplicateDocumentID
 				}
 			}
+			if len(rows) == 0 && len(ids) == 0 {
+				return nil
+			} // maintained empty Replace frame
 			if err = nativeTypedValidateResidual(target.meta, rows, residual); err != nil {
 				return err
 			}
-			amount, err := nativeTypedDeltaBuildCapacity(target.meta, rows, residual)
+			amount, err := nativeTypedMutationBuildCapacity(target.meta, rows, residual, ids)
 			if err != nil {
 				return err
 			}
-			target.typed = append(target.typed, &nativeTypedDelta{rows: rows, retained: residual, appliedLSN: env.LSN, memberOrdinal: ordinal, buildCapacity: amount})
+			target.typed = append(target.typed, &nativeTypedDelta{rows: rows, retained: residual, deleted: ids, operation: op, appliedLSN: env.LSN, memberOrdinal: ordinal, buildCapacity: amount})
 			return nil
+		}
+		if typed != nil {
+			return backenddb.ErrNativeSemanticUnsupported
 		}
 		for _, doc := range docs {
 			// Validate every canonical intermediate before reducing it. A later
@@ -275,7 +366,7 @@ func replayNativeJSONComposite(db *backenddb.DB, env commitlog.CommandEnvelope) 
 		return err
 	}
 	for _, target := range collections {
-		if len(target.typed) != 0 {
+		if nativeTypedMeta(target.meta) {
 			continue
 		}
 		plan, changed, runtimes, err := nativeJSONFinalRows(target.name, target.meta, &target.rows, noAdmission, nil)

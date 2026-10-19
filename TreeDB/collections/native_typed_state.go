@@ -22,6 +22,8 @@ type nativeTypedDelta struct {
 	data          *nativeTypedRows
 	rows          []columnDeclaredRow
 	retained      [][]byte
+	deleted       [][]byte
+	operation     ColumnPublishOperation
 	appliedLSN    uint64
 	memberOrdinal uint32
 	buildCapacity uint64
@@ -34,6 +36,7 @@ type nativeTypedRows struct {
 	refs     atomic.Int64
 	rows     []columnDeclaredRow
 	retained [][]byte
+	deleted  [][]byte
 	refund   *cowbtree.OwnedMapRefund
 }
 
@@ -55,7 +58,8 @@ func (r *nativeTypedRows) release() cowbtree.OwnedMapCompletion {
 	}
 	clear(r.rows)
 	clear(r.retained)
-	r.rows, r.retained = nil, nil
+	clear(r.deleted)
+	r.rows, r.retained, r.deleted = nil, nil, nil
 	refund := r.refund
 	r.refund = nil
 	return refund.Completion()
@@ -80,7 +84,7 @@ func (d *nativeTypedDelta) release() (done cowbtree.OwnedMapCompletion) {
 		data := d.data
 		d.data = nil
 
-		d.rows, d.retained = nil, nil
+		d.rows, d.retained, d.deleted = nil, nil, nil
 		if data != nil {
 			done.Append(data.release())
 		}
@@ -95,6 +99,11 @@ func (d *nativeTypedDelta) find(id []byte) (*columnDeclaredRow, []byte, bool) {
 		i := sort.Search(len(d.rows), func(i int) bool { return bytes.Compare(d.rows[i].ID, id) >= 0 })
 		if i < len(d.rows) && bytes.Equal(d.rows[i].ID, id) {
 			return &d.rows[i], d.retained[i], true
+		}
+		for _, deleted := range d.deleted {
+			if bytes.Equal(deleted, id) {
+				return nil, nil, true
+			}
 		}
 	}
 	return nil, nil, false
@@ -122,9 +131,14 @@ func nativeTypedMeta(meta CollectionMeta) bool {
 	default:
 		return false
 	}
-	return col.Path != "" && !strings.Contains(col.Path, ".") && col.Owner == TypedStorageOwnerColumnPart &&
-		cfg.RetainedPayload == ColumnRetainedPayloadNonColumn &&
-		columnRetainedPayloadEffectiveEncoding(cfg) == ColumnRetainedPayloadEncodingSemanticStreamV1
+	if col.Path == "" || strings.Contains(col.Path, ".") || cfg.RetainedPayload != ColumnRetainedPayloadNonColumn {
+		return false
+	}
+	encoding := columnRetainedPayloadEffectiveEncoding(cfg)
+	if encoding == ColumnRetainedPayloadEncodingJSON {
+		return !col.Nullable && ((col.ValueType == ColumnStoreValueString && col.Owner == TypedStorageOwnerRowAsset) || (col.ValueType == ColumnStoreValueFloat32Vector && col.Owner == TypedStorageOwnerColumnPart))
+	}
+	return col.Owner == TypedStorageOwnerColumnPart && encoding == ColumnRetainedPayloadEncodingSemanticStreamV1
 }
 
 func nativeTypedProfile(database *backenddb.DB, meta CollectionMeta) error {
@@ -146,7 +160,7 @@ func cloneNativeTypedSuffix(current, boundary *nativeTypedDelta, admit cowbtree.
 		}
 		refund := new(cowbtree.OwnedMapRefund)
 		refund.Init(lease)
-		next := &nativeTypedDelta{data: d.data, rows: d.rows, retained: d.retained, appliedLSN: d.appliedLSN, memberOrdinal: d.memberOrdinal, buildCapacity: d.buildCapacity, refund: refund}
+		next := &nativeTypedDelta{data: d.data, rows: d.rows, retained: d.retained, deleted: d.deleted, operation: d.operation, appliedLSN: d.appliedLSN, memberOrdinal: d.memberOrdinal, buildCapacity: d.buildCapacity, refund: refund}
 		next.refs.Store(1)
 		next.data.retain()
 		if tail == nil {

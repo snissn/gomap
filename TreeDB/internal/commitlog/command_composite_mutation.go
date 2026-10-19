@@ -1,6 +1,9 @@
 package commitlog
 
-import "encoding/binary"
+import (
+	"bytes"
+	"encoding/binary"
+)
 
 const (
 	CommandKindCompositeMutation     CommandKind   = 2
@@ -43,6 +46,10 @@ func validateCompositeMutationMember(member CompositeMutationMember) error {
 		if member.Incarnation == 0 || (member.PayloadFormat != PayloadFormatCollectionUpdateBatchByIDV1 && member.PayloadFormat != PayloadFormatCollectionTypedBatchByIDV1) {
 			return ErrCorrupt
 		}
+	case CommandKindCollectionReplaceSourceByID:
+		if member.Incarnation == 0 || (member.PayloadFormat != PayloadFormatCollectionTypedSourceByIDV1 && member.PayloadFormat != PayloadFormatCollectionReplaceSourceByIDV1) {
+			return ErrCorrupt
+		}
 	case CommandKindCollectionDeleteBatchByID:
 		if member.Incarnation == 0 || member.PayloadFormat != PayloadFormatCollectionDeleteBatchByIDV1 {
 			return ErrCorrupt
@@ -52,7 +59,10 @@ func validateCompositeMutationMember(member CompositeMutationMember) error {
 		// graph, split-vector, partition, and durability control commands.
 		return ErrCommandWALUnsupportedKind
 	}
-	if member.Kind != CommandKindRawKVBatch && member.PayloadFormat != PayloadFormatCollectionTypedBatchByIDV1 &&
+	if member.Kind == CommandKindCollectionReplaceSourceByID && member.PayloadFormat == PayloadFormatCollectionReplaceSourceByIDV1 {
+		return validateCompositeDeleteOnlySource(member.Payload)
+	}
+	if member.Kind != CommandKindRawKVBatch && member.PayloadFormat != PayloadFormatCollectionTypedBatchByIDV1 && member.PayloadFormat != PayloadFormatCollectionTypedSourceByIDV1 &&
 		(len(member.Payload) < 2 || binary.LittleEndian.Uint16(member.Payload[:2]) != 1) {
 		// Version-two colocated vector mutations carry standalone attempt and
 		// outcome control. They cannot enter as apparently ordinary row members.
@@ -62,6 +72,40 @@ func validateCompositeMutationMember(member CompositeMutationMember) error {
 	// identity or invoking a command application path.
 	return validateCommandEnvelopePayload(CommandEnvelope{Kind: member.Kind,
 		PayloadFormat: member.PayloadFormat, Payload: member.Payload})
+}
+
+// The maintained typed producer uses the original source codec for a delete-
+// only replacement. Reuse its existing non-owning section/header validators;
+// ordinary JSON source inserts and colocated control envelopes stay fenced.
+func validateCompositeDeleteOnlySource(payload []byte) error {
+	deleted, inserted, err := collectionTypedSourceSections(payload)
+	if err != nil {
+		return err
+	}
+	if len(deleted) < 2 || binary.LittleEndian.Uint16(deleted) != 1 {
+		return ErrCommandWALUnsupportedVersion
+	}
+	if err = validateCollectionDeleteBatchByIDPayload(deleted); err != nil {
+		return err
+	}
+	if err = validateCollectionInsertBatchByIDPayload(inserted); err != nil {
+		return err
+	}
+	oldName, _, _, err := parseCollectionBatchHeader(deleted)
+	if err != nil {
+		return err
+	}
+	newName, count, _, err := parseCollectionBatchHeader(inserted)
+	if err != nil {
+		return err
+	}
+	if count != 0 {
+		return ErrCommandWALUnsupportedKind
+	}
+	if !bytes.Equal(oldName, newName) {
+		return ErrCorrupt
+	}
+	return nil
 }
 
 // PlanCompositeMutationPayload validates every member before returning the

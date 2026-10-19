@@ -1372,6 +1372,12 @@ func (c *Collection) loadColumnManifestRecordsForPublish(rootID uint64, collecti
 }
 
 func (c *Collection) prepareColumnPhysicalAssetsForCommand(input columnWritePublishInput, hookInput ColumnPublishAssetPrepareInput) (ColumnPublishPreparedAssets, error) {
+	return (columnPhysicalAssetBuildContext{rootDir: c.db.ColumnAssetRootDir(), registry: c.db.StableResourceIdentityPinRegistry()}).prepareAssets(input, hookInput)
+}
+
+// Both ordinary and captured native publication use the same operation/source
+// asset preparation with borrowed original producer capabilities.
+func (context columnPhysicalAssetBuildContext) prepareAssets(input columnWritePublishInput, hookInput ColumnPublishAssetPrepareInput) (ColumnPublishPreparedAssets, error) {
 	if len(input.sourceDeleteDocuments) != 0 {
 		deleteInput := input
 		deleteInput.operation = ColumnPublishOperationDelete
@@ -1381,7 +1387,7 @@ func (c *Collection) prepareColumnPhysicalAssetsForCommand(input columnWritePubl
 		deleteInput.partIDOffset = 0
 		deleteHook := hookInput
 		deleteHook.Operation = ColumnPublishOperationDelete
-		deleted, err := c.prepareColumnPhysicalAssetsForCommand(deleteInput, deleteHook)
+		deleted, err := context.prepareAssets(deleteInput, deleteHook)
 		if err != nil {
 			return ColumnPublishPreparedAssets{}, err
 		}
@@ -1394,7 +1400,7 @@ func (c *Collection) prepareColumnPhysicalAssetsForCommand(input columnWritePubl
 		}
 		insertHook := hookInput
 		insertHook.Operation = ColumnPublishOperationInsert
-		inserted, err := c.prepareColumnPhysicalAssetsForCommand(insertInput, insertHook)
+		inserted, err := context.prepareAssets(insertInput, insertHook)
 		if err != nil {
 			if deleted.stableResources != nil {
 				deleted.stableResources.Release()
@@ -1426,7 +1432,11 @@ func (c *Collection) prepareColumnPhysicalAssetsForCommand(input columnWritePubl
 		if len(rows) != input.rows {
 			return ColumnPublishPreparedAssets{}, fmt.Errorf("collections: column physical asset %s prepared rows=%d rows=%d", input.operation, len(rows), input.rows)
 		}
-		return c.prepareColumnPhysicalAssetRowsForCommand(prepared, input, hookInput, rows)
+		generation := uint64(1)
+		if hookInput.CurrentManifest != nil {
+			generation = hookInput.CurrentManifest.Generation + 1
+		}
+		return context.prepareRows(prepared, input, hookInput, rows, nil, nil, generation, columnPhysicalRowAssetPartID+input.partIDOffset, typedColumnPartAssetPartID)
 	case ColumnPublishOperationDelete:
 		if len(input.documents) != input.rows {
 			return ColumnPublishPreparedAssets{}, fmt.Errorf("collections: column physical asset delete documents=%d rows=%d", len(input.documents), input.rows)
@@ -1441,7 +1451,11 @@ func (c *Collection) prepareColumnPhysicalAssetsForCommand(input columnWritePubl
 				Deleted: true,
 			}
 		}
-		return c.prepareColumnPhysicalAssetRowsForCommand(prepared, input, hookInput, rows)
+		generation := uint64(1)
+		if hookInput.CurrentManifest != nil {
+			generation = hookInput.CurrentManifest.Generation + 1
+		}
+		return context.prepareRows(prepared, input, hookInput, rows, nil, nil, generation, columnPhysicalRowAssetPartID+input.partIDOffset, typedColumnPartAssetPartID)
 	default:
 		return ColumnPublishPreparedAssets{}, fmt.Errorf("collections: unsupported column publish operation %q", input.operation)
 	}

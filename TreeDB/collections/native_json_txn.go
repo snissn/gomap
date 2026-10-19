@@ -481,7 +481,11 @@ func (t *NativeJSONTxn) Commit() (resultErr error) {
 		memberCount++
 	}
 	kind, scope, format, payload := members[0].Kind, commitlog.CommandScopeCollection, members[0].PayloadFormat, members[0].Payload
-	if memberCount > 1 {
+	typedMember := false
+	for i := 0; i < t.count; i++ {
+		typedMember = typedMember || nativeTypedMeta(t.bindings[i].probe.meta)
+	}
+	if memberCount > 1 || typedMember {
 		kind, scope, format = commitlog.CommandKindCompositeMutation, commitlog.CommandScopeSystem, commitlog.PayloadFormatCompositeMutationV1
 		var err error
 		planned, planErr := commitlog.PlanCompositeMutationPayload(members[:memberCount])

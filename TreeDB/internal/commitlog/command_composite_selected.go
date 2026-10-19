@@ -3,8 +3,8 @@ package commitlog
 import "encoding/binary"
 
 // ValidateSelectedCompositeMutation restricts active frames to inline raw point
-// Set and scalar JSON row members. The aggregate replay reduces the ordered
-// members before building roots; external RID/typed closures remain fenced.
+// Set and supported collection row members. The aggregate replay validates and
+// prepares every existing payload before its one outer installation.
 func ValidateSelectedCompositeMutation(payload []byte) error {
 	rawCount := 0
 	return ScanCompositeMutationPayload(payload, func(m CompositeMutationMember) error {
@@ -21,12 +21,17 @@ func ValidateSelectedCompositeMutation(payload []byte) error {
 				return nil
 			})
 		case CommandKindCollectionInsertBatchByID:
-			if m.PayloadFormat != PayloadFormatCollectionInsertBatchByIDV1 {
+			if m.PayloadFormat != PayloadFormatCollectionInsertBatchByIDV1 && m.PayloadFormat != PayloadFormatCollectionTypedBatchByIDV1 {
 				return ErrCommandWALUnsupportedKind
 			}
 			return nil
 		case CommandKindCollectionUpdateBatchByID:
-			if m.PayloadFormat != PayloadFormatCollectionUpdateBatchByIDV1 {
+			if m.PayloadFormat != PayloadFormatCollectionUpdateBatchByIDV1 && m.PayloadFormat != PayloadFormatCollectionTypedBatchByIDV1 {
+				return ErrCommandWALUnsupportedKind
+			}
+			return nil
+		case CommandKindCollectionReplaceSourceByID:
+			if m.PayloadFormat != PayloadFormatCollectionTypedSourceByIDV1 && m.PayloadFormat != PayloadFormatCollectionReplaceSourceByIDV1 {
 				return ErrCommandWALUnsupportedKind
 			}
 			return nil

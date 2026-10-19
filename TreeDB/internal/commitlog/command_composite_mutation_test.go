@@ -18,10 +18,19 @@ func compositeTestMembers(t *testing.T) []CompositeMutationMember {
 	if err != nil {
 		t.Fatal(err)
 	}
-	typed, err := EncodeCollectionTypedBatchPayload(CollectionTypedBatchPayload{
+	typedRows := CollectionTypedBatchPayload{
 		Collection: "typed", SchemaHash: 7, Columns: []CollectionTypedColumn{{Name: "name", Type: CollectionTypedString}},
 		Documents: []CollectionTypedDocument{{ID: []byte("id"), Values: []CollectionTypedValue{{String: "owned value"}}}},
-	})
+	}
+	typed, err := EncodeCollectionTypedBatchPayload(typedRows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := EncodeCollectionTypedSourcePayload([][]byte{[]byte("old")}, typedRows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deleteOnlySource, err := EncodeCollectionReplaceSourceByIDPayload("typed", [][]byte{[]byte("old")}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -29,6 +38,8 @@ func compositeTestMembers(t *testing.T) []CompositeMutationMember {
 		{Kind: CommandKindRawKVBatch, PayloadFormat: PayloadFormatRawKVBatchV2, Payload: raw},
 		{Kind: CommandKindCollectionInsertBatchByID, PayloadFormat: PayloadFormatCollectionInsertBatchByIDV1, Incarnation: 12, Payload: jsonRows},
 		{Kind: CommandKindCollectionUpdateBatchByID, PayloadFormat: PayloadFormatCollectionTypedBatchByIDV1, Incarnation: 13, Payload: typed},
+		{Kind: CommandKindCollectionReplaceSourceByID, PayloadFormat: PayloadFormatCollectionReplaceSourceByIDV1, Incarnation: 13, Payload: deleteOnlySource},
+		{Kind: CommandKindCollectionReplaceSourceByID, PayloadFormat: PayloadFormatCollectionTypedSourceByIDV1, Incarnation: 13, Payload: source},
 	}
 }
 
@@ -104,8 +115,15 @@ func TestCompositeMutationCodecValidatesWholeCommandBeforeVisitor(t *testing.T) 
 
 func TestCompositeMutationCodecRejectsRecursionAndStandaloneControls(t *testing.T) {
 	valid := compositeTestMembers(t)
+	ordinarySource, err := EncodeCollectionReplaceSourceByIDPayload("typed", [][]byte{[]byte("old")}, []CollectionDocument{{ID: []byte("new"), Document: []byte(`{"x":1}`)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PlanCompositeMutationPayload([]CompositeMutationMember{{Kind: CommandKindCollectionReplaceSourceByID, PayloadFormat: PayloadFormatCollectionReplaceSourceByIDV1, Incarnation: 13, Payload: ordinarySource}}); !errors.Is(err, ErrCommandWALUnsupportedKind) {
+		t.Fatal("ordinary source inserts entered typed aggregate", err)
+	}
 	for _, kind := range []CommandKind{CommandKindCompositeMutation, CommandKindCatalogCreateCollection,
-		CommandKindDurablePrefixBarrier, CommandKindCollectionReplaceSourceByID, CommandKindCollectionRebuildVectorIndex,
+		CommandKindDurablePrefixBarrier, CommandKindCollectionRebuildVectorIndex,
 		CommandKindCollectionPersistPartitionLive, CommandKindCollectionSplitVectorInsertV1, CommandKindCollectionVectorPrepareV1} {
 		member := valid[1]
 		member.Kind = kind

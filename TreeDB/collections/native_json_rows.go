@@ -571,7 +571,11 @@ func (t *NativeJSONTxn) DeleteBatchFrom(name string, ids [][]byte) (count int, r
 		}
 	}()
 	g := t.binding(name)
-	if g == nil || g.probe.meta.Options.ColumnStore != nil {
+	if g != nil && g.probe.meta.Options.ColumnStore != nil {
+		_, count, err := t.stageNativeTypedBatch(g, nil, nil, nil, ids, commitlog.CommandKindCollectionDeleteBatchByID, false)
+		return count, err
+	}
+	if g == nil {
 		return 0, backenddb.ErrNativeSemanticUnsupported
 	}
 	if err := t.admitRowControls(g, len(ids)); err != nil {

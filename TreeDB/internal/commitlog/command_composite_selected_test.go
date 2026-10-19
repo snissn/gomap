@@ -16,6 +16,9 @@ func TestSelectedCompositeBindsFinalRawRevisionWithoutChangingNativeMembers(t *t
 		t.Fatal(err)
 	}
 	members := []CompositeMutationMember{{Kind: CommandKindRawKVBatch, PayloadFormat: PayloadFormatRawKVBatchV1, Payload: raw}, {Kind: CommandKindCollectionInsertBatchByID, PayloadFormat: PayloadFormatCollectionInsertBatchByIDV1, Incarnation: 7, Payload: rows}}
+	// Exercise the existing typed and source-replacement payloads through the
+	// same complete aggregate validation and final raw-identity binding.
+	members = append(members, compositeTestMembers(t)[2:]...)
 	size, err := PlanCompositeMutationPayload(members)
 	if err != nil {
 		t.Fatal(err)
@@ -40,8 +43,13 @@ func TestSelectedCompositeBindsFinalRawRevisionWithoutChangingNativeMembers(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(decoded) != 2 || !bytes.Equal(decoded[0].Payload, canonical) || decoded[1].Incarnation != 7 || !bytes.Equal(decoded[1].Payload, rows) {
+	if len(decoded) != len(members) || !bytes.Equal(decoded[0].Payload, canonical) {
 		t.Fatal("native member or final raw changed", decoded)
+	}
+	for i := 1; i < len(members); i++ {
+		if decoded[i].Kind != members[i].Kind || decoded[i].PayloadFormat != members[i].PayloadFormat || decoded[i].Incarnation != members[i].Incarnation || !bytes.Equal(decoded[i].Payload, members[i].Payload) {
+			t.Fatal("native member or logical identity changed", i, decoded[i])
+		}
 	}
 	frame, err := EncodeCommandFrameV2(CommandEnvelope{Version: CommandFrameVersionV2, LSN: 1, Kind: CommandKindCompositeMutation, Scope: CommandScopeSystem, DurabilityClass: CommandDurabilityDurable, PayloadFormat: PayloadFormatCompositeMutationV1, Payload: bound})
 	if err != nil || len(frame) == 0 {
