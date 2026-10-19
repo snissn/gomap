@@ -176,6 +176,12 @@ func (t *NativeJSONTxn) touchNativeRow(g *nativeJSONTxnBinding, id []byte) (*nat
 	// exact captured domain/scratch until touch copies it; public Get's output is
 	// caller-owned and must not become an unadmitted internal temporary.
 	read := func(id []byte) ([]byte, error) {
+		// Create publishes catalog identity before any primary domain exists.
+		// Match NativeJSONRead.Get's captured-empty semantics while retaining
+		// the original point dependency registered above.
+		if g.probe.domain.domain == nil {
+			return nil, tree.ErrKeyNotFound
+		}
 		entry, resolved, err := g.probe.domain.memoryEntry(id)
 		if !resolved {
 			scratch, scratchErr := g.probe.physicalScratch()
