@@ -487,6 +487,20 @@ control is `TestNativeJSONPublicRawTwoCollectionsAtomicTxn`; codec binding and
 unsupported-member refusal are covered by
 `TestSelectedCompositeBindsFinalRawRevisionWithoutChangingNativeMembers`.
 
+Repeated JSON insert, update and delete members are reduced in their canonical
+order against the collection's captured opening rows. Each intermediate uses
+the same document preparation and scalar extraction as foreground staging,
+before it replaces the staged row. A later delete cannot hide an invalid
+indexed document. Unindexed JSON retains the maintained opaque-byte contract;
+replay does not impose a stricter parser. Secondary and unique effects are
+computed once from opening to final rows, so valid temporary unique collisions
+may disappear before the final uniqueness check. Each physical root is built
+once under the original startup Snapshot and build group, with one outer applied
+LSN. `TestNativeJSONCompositeReplayValidatesErasedDocuments` covers intermediate
+validation and accepted cancellations; `TestNativeExistingIndexedJSONOrderedRowsAtomicReplay`
+covers staged reads, ordered CRUD, raw effects and an actual unapplied composite
+suffix. Update callbacks execute only during foreground staging.
+
 Native JSON singleton insert, update and delete registrations also request the
 ordinary replay log support, including the leaf logger required by inherited
 ordered-root storage policy. Foreground update/delete preparation uses its

@@ -491,19 +491,22 @@ base command-frame header must fit 768 KiB. Existing outer frame limits still
 apply. Members have no independent LSN, frame extensions or publication.
 
 The currently active subset permits at most one raw `RawKVBatchV1` member
-containing inline Set operations, and untyped JSON `CollectionInsertBatchByIDV1`
-members for supported unindexed or scalar-indexed JSON collections. Raw
-incarnation is zero; collection incarnation is the persisted nonzero logical
-catalog identity. The wider payload codec does not activate typed, update/delete,
-external-RID, nested or other unsupported composite members. Whole payload
-validation precedes member application.
+containing inline Set operations, and untyped JSON insert, update and delete
+members for supported unindexed or scalar-indexed JSON collections. Repeated
+members for the same captured collection retain their original operation order.
+Raw incarnation is zero; collection incarnation is the persisted nonzero logical
+catalog identity. The wider payload codec does not activate typed, external-RID,
+nested or other unsupported composite members. Whole payload validation precedes
+member application. Indexed intermediate documents must satisfy the captured
+scalar schema even when a subsequent operation deletes them; uniqueness is
+checked against the final collection state.
 Foreground binds the final raw revision bytes into preadmitted outer capacity
 before append, preserving native member bytes. See `recovery.md` for aggregate
 replay. Singleton native JSON `UpdateBatch` and `DeleteBatch` use the existing
 `CollectionUpdateBatchByID` and `CollectionDeleteBatchByID` command kinds and
 payload formats. Update records contain accepted final documents, not application
-callbacks. These singleton commands do not extend composite-member eligibility.
-This pre-alpha activation does not add a compatibility migration.
+callbacks. Composite members reuse these payloads and retain one outer LSN and
+publication. This pre-alpha activation does not add a compatibility migration.
 
 The operator restorable file set, live backup barrier, and restore validation
 procedure are defined in `TreeDB/docs/spec/backup-restore.md`. A live

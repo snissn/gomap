@@ -4271,8 +4271,19 @@ final update documents and delete IDs in an actual two-frame unapplied WAL
 suffix, exact replay counters and surviving primary/equality values. Its NoWAL
 case likewise proves only the explicit checkpoint/reopen boundary.
 
+`TestNativeExistingIndexedJSONOrderedRowsAtomicReplay` exercises one captured
+transaction with scalar/unique updates, delete and same-ID reinsertion, staged
+reads and caller-owned output, a canceled temporary unique collision, and raw
+Set/Get. It checks final duplicate refusal before LSN advance, old-view isolation,
+one outer frame/LSN, exact primary/equality values and final resource drain.
+Durable and relaxed WAL children leave a real unapplied composite suffix;
+NoWAL covers the explicit checkpoint/reopen boundary. The backend startup control
+`TestNativeJSONCompositeReplayValidatesErasedDocuments` requires refusal of
+erased invalid indexed intermediates while preserving unindexed opaque bytes
+and valid canceled unique collisions.
+
 These controls cover the selected JSON subset. Typed/BSON/template, multikey and
-compound indexes, staged/composite CRUD, schema/rename/drop, prepared and assigned
+compound indexes, schema/rename/drop, prepared and assigned
 apply paths require their own supported executors and caller migration. Current
 unsupported operations must retain their preaccept refusal. A passing JSON
 lifecycle does not establish full collection migration or performance acceptance.
