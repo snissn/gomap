@@ -3,6 +3,7 @@ package collections
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -22,7 +23,11 @@ type nativeBuildAllocation struct {
 }
 
 func (a *nativeBuildAllocation) AdmitNativeBytes(n uint64) (*memtable.COWExternalLease, error) {
-	return a.parent.SplitNativeBytes(n, a.floor)
+	lease, err := a.parent.SplitNativeBytes(n, a.floor)
+	if err != nil {
+		return nil, fmt.Errorf("collections: native build split bytes=%d floor=%d: %w", n, a.floor, err)
+	}
+	return lease, nil
 }
 
 // nativeEngineBuild is the captured state's original sparse physical ledger.
@@ -93,6 +98,7 @@ func prepareNativeEngineBuildAt(captured *nativeEngineVersion, basis *backenddb.
 	}
 	lease, err := captured.maintenance.AdmitNativeBytes(bytes)
 	if err != nil {
+		err = fmt.Errorf("collections: native build reservation bytes=%d floor=%d typed_bytes=%d typed_floor=%d: %w", bytes, floor, typedBytes, typedFloor, err)
 		if errors.Is(err, memtable.ErrCOWCapacity) {
 			return nil, backenddb.NativeSemanticBuildRetryableRefusal{Cause: err}
 		}

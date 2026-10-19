@@ -209,9 +209,17 @@ func TestNativeMixedEngineLifecycle(t *testing.T) {
 		checkCurrent(lastRaw)
 		checkHeld()
 		if generation%cohort == 0 {
+			logMemory := func(phase string) {
+				s := database.Stats()
+				t.Logf("checkpoint generation%d %s maintenance=%s/%s cow=%+v", generation, phase,
+					s["treedb.cache.cow.maintenance_used_bytes"], s["treedb.cache.cow.maintenance_capacity_bytes"], database.cached.COWMemoryStats())
+			}
+			logMemory("before")
 			if err := database.Checkpoint(); err != nil {
+				logMemory("failed")
 				t.Fatalf("checkpoint generation%d accepted%d: %v", generation, accepted, err)
 			}
+			logMemory("after")
 			checkpoints++
 			if indexedCRUDAppliedLSN(t, handle) != next || handle.CommandWALNextLSN() != next+1 {
 				t.Fatal("checkpoint omitted an accepted command or consumed another identity")

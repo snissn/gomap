@@ -1,6 +1,8 @@
 package collections
 
 import (
+	"fmt"
+
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
@@ -10,6 +12,9 @@ var _ backenddb.NativeSemanticState = (*nativeEngineVersion)(nil)
 func (e *nativeEngineVersion) SparseProjections() []rootpublication.ParticipantProjection { return nil }
 func (e *nativeEngineVersion) PrepareRollover() (backenddb.NativeSemanticState, error) {
 	next, err := prepareNativeEngineRollover(e)
+	if err != nil {
+		err = fmt.Errorf("collections: native rollover: %w", err)
+	}
 	if next == nil {
 		return nil, err
 	}
@@ -21,9 +26,16 @@ func (e *nativeEngineVersion) PrepareBuild(group *backenddb.RootPublicationBuild
 	}
 	build, err := prepareNativeEngineBuildAt(e, basis, lease, group)
 	if err != nil {
-		return err
+		if refusal, ok := err.(backenddb.NativeSemanticBuildRetryableRefusal); ok {
+			refusal.Cause = fmt.Errorf("collections: native build prepare: %w", refusal.Cause)
+			return refusal
+		}
+		return fmt.Errorf("collections: native build prepare: %w", err)
 	}
-	return build.materializeDomains(group)
+	if err = build.materializeDomains(group); err != nil {
+		return fmt.Errorf("collections: native build materialize: %w", err)
+	}
+	return nil
 }
 
 // The two captured-flush callers are installPreparedCOWBasis in caching/cow_flush.go.
@@ -39,7 +51,11 @@ func (e *nativeEngineVersion) PrepareHandoff(latest backenddb.NativeSemanticStat
 	}
 	next, err := e.build.prepareHandoff(current)
 	if err != nil {
-		return nil, err
+		if refusal, ok := err.(backenddb.NativeSemanticHandoffRetryableRefusal); ok {
+			refusal.Cause = fmt.Errorf("collections: native handoff: %w", refusal.Cause)
+			return nil, refusal
+		}
+		return nil, fmt.Errorf("collections: native handoff: %w", err)
 	}
 	return next, nil
 }
@@ -48,6 +64,9 @@ func (e *nativeEngineVersion) PrepareHandoff(latest backenddb.NativeSemanticStat
 // Maintenance supplies the exact paired Snapshots and consumes no source prefix.
 func (e *nativeEngineVersion) PrepareBasisRefresh(before, after *backenddb.Snapshot) (backenddb.NativeSemanticState, error) {
 	next, err := prepareNativeEngineBasisRefresh(e, before, after)
+	if err != nil {
+		err = fmt.Errorf("collections: native basis refresh: %w", err)
+	}
 	if next == nil {
 		return nil, err
 	}
