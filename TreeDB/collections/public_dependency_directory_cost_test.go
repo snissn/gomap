@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
+	"runtime/pprof"
 	"testing"
 	"time"
 
@@ -23,6 +25,39 @@ func TestPublicColumnDependencyDirectoryIncrementalCost(t *testing.T) {
 	arm := os.Getenv("TREEDB_PUBLIC_DIRECTORY_COST_ARM")
 	if arm != "v1" && arm != "v2" {
 		t.Fatal("arm must be v1 or v2")
+	}
+	profileDir := os.Getenv("TREEDB_PUBLIC_DIRECTORY_ACK_PROFILE_DIR")
+	if profileDir != "" {
+		if !filepath.IsAbs(profileDir) {
+			t.Fatal("ACK profile directory must be absolute")
+		}
+		if runtime.MemProfileRate != 64<<10 {
+			t.Fatalf("ACK profile requires -test.memprofilerate=65536; observed %d", runtime.MemProfileRate)
+		}
+		if err := os.MkdirAll(profileDir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Both collections occur outside ACK's elapsed/MemStats boundary. The
+	// runtime allocation profile may lag by two GC cycles. Profile-writing
+	// allocations themselves remain identifiable harness stacks in the delta.
+	writeACKProfile := func(boundary string) {
+		t.Helper()
+		if profileDir == "" {
+			return
+		}
+		runtime.GC()
+		runtime.GC()
+		path := filepath.Join(profileDir, arm+"-ack-"+boundary+".pprof")
+		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeErr := pprof.Lookup("allocs").WriteTo(f, 0)
+		closeErr := f.Close()
+		if writeErr != nil || closeErr != nil {
+			t.Fatalf("ACK allocation profile %s: write=%v close=%v", boundary, writeErr, closeErr)
+		}
 	}
 	const batches = 32
 	type phase struct {
@@ -44,17 +79,21 @@ func TestPublicColumnDependencyDirectoryIncrementalCost(t *testing.T) {
 		NumGC                                                  uint32
 	}
 	result := struct {
-		Arm, GoVersion, DBDir string
-		Batches, BatchSize    int
-		Complete              bool
-		Phases                []phase
-		Retention             []point
-		Stats                 map[string]map[string]string
-		Work                  []ColumnPublishCandidateResourceWork
-		Assets                map[string][]asset
-		SamePhysicalAppend    bool
-		Configs               map[string]backenddb.FormatConfig
+		Arm, GoVersion, DBDir       string
+		ACKProfileDir               string `json:",omitempty"`
+		AllocationSampleRate        int
+		ProfiledTimingNonComparable bool
+		Batches, BatchSize          int
+		Complete                    bool
+		Phases                      []phase
+		Retention                   []point
+		Stats                       map[string]map[string]string
+		Work                        []ColumnPublishCandidateResourceWork
+		Assets                      map[string][]asset
+		SamePhysicalAppend          bool
+		Configs                     map[string]backenddb.FormatConfig
 	}{Arm: arm, GoVersion: runtime.Version(), DBDir: t.TempDir(), Batches: batches, BatchSize: commandWALBenchBatchSize,
+		ACKProfileDir: profileDir, AllocationSampleRate: runtime.MemProfileRate, ProfiledTimingNonComparable: profileDir != "",
 		Stats: make(map[string]map[string]string), Assets: make(map[string][]asset), Configs: make(map[string]backenddb.FormatConfig)}
 	save := func() {
 		t.Helper()
@@ -69,12 +108,18 @@ func TestPublicColumnDependencyDirectoryIncrementalCost(t *testing.T) {
 	defer save() // retain the latest outside-timer observations on assertion failure.
 	measure := func(name string, ops int, f func() error) {
 		t.Helper()
+		if name == "insert_batch_ack" {
+			writeACKProfile("before")
+		}
 		var before, after runtime.MemStats
 		runtime.ReadMemStats(&before)
 		start := time.Now()
 		err := f()
 		elapsed := time.Since(start)
 		runtime.ReadMemStats(&after)
+		if name == "insert_batch_ack" {
+			writeACKProfile("after")
+		}
 		p := phase{Name: name, Operations: ops, Nanos: elapsed.Nanoseconds(), Bytes: after.TotalAlloc - before.TotalAlloc, Objects: after.Mallocs - before.Mallocs}
 		if err != nil {
 			p.Error = err.Error()
