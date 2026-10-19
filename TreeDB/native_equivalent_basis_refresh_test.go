@@ -13,7 +13,6 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
-	"github.com/snissn/gomap/TreeDB/tree"
 )
 
 // CRUD uses the ordinary activated public frontend. The existing fenced
@@ -235,8 +234,8 @@ func TestNativeExistingCollectionEquivalentBasisRewrite(t *testing.T) {
 	if err != nil || !bytes.Equal(got, newer) {
 		t.Fatalf("unsealed suffix: %q %v", got, err)
 	}
-	if _, err = alias.Get([]byte("new")); !errors.Is(err, tree.ErrKeyNotFound) {
-		t.Fatalf("qualified alias absence: %v", err)
+	if got, err = alias.Get([]byte("new")); err != nil || got != nil {
+		t.Fatalf("qualified alias absence: %q %v", got, err)
 	}
 	for _, v := range []*collections.CollectionReadView{held, heldAlias} {
 		result, e := v.FetchDocumentsByID([][]byte{[]byte("old"), []byte("new")}, collections.DocumentFetchOptions{})
@@ -289,8 +288,8 @@ func TestNativeExistingCollectionEquivalentBasisRewrite(t *testing.T) {
 			if e != nil || !bytes.Equal(got, newer) {
 				t.Fatalf("reopen suffix: %q %v", got, e)
 			}
-		} else if !errors.Is(e, tree.ErrKeyNotFound) {
-			t.Fatalf("reopen alias absence: %v", e)
+		} else if e != nil || got != nil {
+			t.Fatalf("reopen alias absence: %q %v", got, e)
 		}
 	}
 	if err = manager.Close(); err != nil {
