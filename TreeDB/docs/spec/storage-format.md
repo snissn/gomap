@@ -4301,3 +4301,10 @@ foreign physical pair miss and rebuild through the existing full scan.
 Process-local index-generation IDs are not persisted. A completed scan never
 receives identities captured from a later current generation. No atomic-file
 rename persistence assumption can make an old physical pair eligible.
+
+Native scalar JSON index DDL uses catalog command kind **201**, payload format
+**17**, payload version **1**. It records the collection incarnation and prior/next
+canonical metadata, with physical roots reconstructed by one original replay
+build group. Kind **200** retains its create-collection meaning; collection
+metadata and page formats are unchanged. See the native scalar index catalog
+transition in [user-command-wal.md](user-command-wal.md) for the exact payload.

@@ -153,7 +153,11 @@ func prepareNativeJSONPrimaries(base *nativeEngineVersion, changes []nativeJSONP
 					policy = old.storagePolicy
 				}
 			}
-			domain, err := prepareNativeDomainUpdate(old, name, root, 1, policy, rows, base.allocator)
+			interpretation := uint64(1)
+			if old != nil {
+				interpretation = old.interpretation
+			}
+			domain, err := prepareNativeDomainUpdate(old, name, root, interpretation, policy, rows, base.allocator)
 			if domain != nil {
 				p.ownedDomains = append(p.ownedDomains, domain)
 			}

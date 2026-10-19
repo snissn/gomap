@@ -403,7 +403,16 @@ func nativeTypedBatchStageCapacity(meta CollectionMeta, ids, retained [][]byte, 
 			return
 		}
 	}
-	if err = nativeTypedCheckedAdd(&controls, 8*preparedSemanticStreamMapEntryReserveBytes); err != nil {
+	columnControls, e := nativeTypedCheckedMul(uint64(len(meta.Options.ColumnStore.Columns)), 8*preparedSemanticStreamMapEntryReserveBytes)
+	if e != nil {
+		return 0, 0, e
+	}
+	for _, col := range meta.Options.ColumnStore.Columns {
+		if err = nativeTypedCheckedAdd(&columnControls, uint64(len(col.Name))+uint64(len(col.Path))); err != nil {
+			return
+		}
+	}
+	if err = nativeTypedCheckedAdd(&controls, columnControls); err != nil {
 		return
 	}
 	if err = nativeTypedCheckedAdd(&work, memtable.COWAllocationCharge(controls)); err != nil {
@@ -463,7 +472,10 @@ func (t *NativeJSONTxn) stageNativeTypedBatch(g *nativeJSONTxnBinding, ids, reta
 	}
 	if !deleting {
 		if len(ids) == 0 && len(columns) == 0 {
-			columns = []TypedColumnBatch{{Name: g.probe.meta.Options.ColumnStore.Columns[0].Name}}
+			columns = make([]TypedColumnBatch, len(g.probe.meta.Options.ColumnStore.Columns))
+			for i, col := range g.probe.meta.Options.ColumnStore.Columns {
+				columns[i].Name = col.Name
+			}
 		}
 		p, err = newTrustedTypedProjection(g.probe.meta, ids, retained, columns)
 		if err != nil {
@@ -598,12 +610,38 @@ func (t *NativeJSONTxn) stageNativeTypedBatch(g *nativeJSONTxnBinding, ids, reta
 	if e = nativeTypedCheckedAdd(&payloadBytes, nameBytes); e != nil {
 		return nil, 0, e
 	}
-	for i, row := range rows {
-		n, _, e := nativeTypedValueCapacity(g.probe.meta.Options.ColumnStore.Columns[0], row.Values[0])
+	for _, col := range g.probe.meta.Options.ColumnStore.Columns {
+		n := uint64(len(col.Name))
+		if e = nativeTypedCheckedAdd(&n, preparedSemanticStreamMapEntryReserveBytes); e != nil {
+			return nil, 0, e
+		}
+		n, e = nativeTypedCheckedMul(n, 16)
 		if e != nil {
 			return nil, 0, e
 		}
-		for _, v := range []uint64{uint64(len(row.ID)), uint64(len(residual[i])), preparedSemanticStreamMapEntryReserveBytes} {
+		if e = nativeTypedCheckedAdd(&payloadBytes, n); e != nil {
+			return nil, 0, e
+		}
+	}
+	for i, row := range rows {
+		var n uint64
+		if len(row.Values) != len(g.probe.meta.Options.ColumnStore.Columns) {
+			return nil, 0, backenddb.ErrNativeSemanticUnsupported
+		}
+		for j, col := range g.probe.meta.Options.ColumnStore.Columns {
+			backing, _, e := nativeTypedValueCapacity(col, row.Values[j])
+			if e != nil {
+				return nil, 0, e
+			}
+			if e = nativeTypedCheckedAdd(&n, backing); e != nil {
+				return nil, 0, e
+			}
+		}
+		valueControls, e := nativeTypedCheckedMul(uint64(len(row.Values)), preparedSemanticStreamMapEntryReserveBytes)
+		if e != nil {
+			return nil, 0, e
+		}
+		for _, v := range []uint64{uint64(len(row.ID)), uint64(len(residual[i])), valueControls} {
 			if e = nativeTypedCheckedAdd(&n, v); e != nil {
 				return nil, 0, e
 			}

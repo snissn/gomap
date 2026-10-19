@@ -36,19 +36,25 @@ func nativeTypedJSONReadCharge(bytes uint64) (uint64, error) {
 // A declared string/vector adds one object member, not one map entry per
 // value byte. Keep the original residual/map bound and separately cover typed
 // JSON output, escaping and old/replacement marshal backing.
-func nativeTypedReconstructionCharge(residual, path, typedJSON uint64) (uint64, error) {
-	if err := nativeTypedCheckedAdd(&residual, path); err != nil {
-		return 0, err
-	}
-	if err := nativeTypedCheckedAdd(&residual, 20); err != nil {
-		return 0, err
+func nativeTypedReconstructionCharge(meta CollectionMeta, residual, typedJSON uint64) (uint64, error) {
+	var scalarJSON uint64
+	for _, col := range meta.Options.ColumnStore.Columns {
+		if err := nativeTypedCheckedAdd(&residual, uint64(len(col.Path))); err != nil {
+			return 0, err
+		}
+		if err := nativeTypedCheckedAdd(&residual, 20); err != nil {
+			return 0, err
+		}
+		if err := nativeTypedCheckedAdd(&scalarJSON, 20); err != nil {
+			return 0, err
+		}
 	}
 	total, err := nativeTypedJSONReadCharge(residual)
 	if err != nil {
 		return 0, err
 	}
-	if typedJSON > 20 {
-		output, e := nativeTypedCheckedMul(typedJSON-20, 24)
+	if typedJSON > scalarJSON {
+		output, e := nativeTypedCheckedMul(typedJSON-scalarJSON, 24)
 		if e != nil {
 			return 0, e
 		}
@@ -58,18 +64,23 @@ func nativeTypedReconstructionCharge(residual, path, typedJSON uint64) (uint64, 
 }
 
 func (r *NativeJSONRead) reconstructPendingTyped(row *columnDeclaredRow, residual []byte) (result []byte, resultErr error) {
-	col := r.meta.Options.ColumnStore.Columns[0]
 	if row == nil {
 		return nil, tree.ErrKeyNotFound
 	}
-	if len(row.Values) != 1 {
+	if len(row.Values) != len(r.meta.Options.ColumnStore.Columns) {
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
-	_, typedJSON, err := nativeTypedValueCapacity(col, row.Values[0])
-	if err != nil {
-		return nil, err
+	var typedJSON uint64
+	for i, col := range r.meta.Options.ColumnStore.Columns {
+		_, n, err := nativeTypedValueCapacity(col, row.Values[i])
+		if err != nil {
+			return nil, err
+		}
+		if err = nativeTypedCheckedAdd(&typedJSON, n); err != nil {
+			return nil, err
+		}
 	}
-	charge, err := nativeTypedReconstructionCharge(uint64(len(residual)), uint64(len(col.Path)), typedJSON)
+	charge, err := nativeTypedReconstructionCharge(r.meta, uint64(len(residual)), typedJSON)
 	if err != nil {
 		return nil, err
 	}
@@ -95,7 +106,7 @@ func (r *NativeJSONRead) reconstructTyped(id, value []byte) (result []byte, resu
 	if !ok {
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
-	physical, err := nativeTypedReadCapacity(r.capture.Snapshot(), manifest.baseRoot)
+	physical, err := nativeTypedReadCapacity(r.meta, r.capture.Snapshot(), manifest.baseRoot)
 	if err != nil {
 		return nil, err
 	}
@@ -130,7 +141,7 @@ func (r *NativeJSONRead) reconstructTyped(id, value []byte) (result []byte, resu
 		lease.Close()
 		return nil, err
 	}
-	jsonCharge, err := nativeTypedReconstructionCharge(uint64(len(value)), uint64(len(r.meta.Options.ColumnStore.Columns[0].Path)), typedJSON)
+	jsonCharge, err := nativeTypedReconstructionCharge(r.meta, uint64(len(value)), typedJSON)
 	if err != nil {
 		lease.Close()
 		return nil, err
@@ -336,7 +347,7 @@ func (r *NativeJSONRead) typedRowEqual(id, retained []byte, wanted []columnDecla
 	if !ok {
 		return false, false, backenddb.ErrNativeSemanticUnsupported
 	}
-	physical, err := nativeTypedReadCapacity(r.capture.Snapshot(), manifest.baseRoot)
+	physical, err := nativeTypedReadCapacity(r.meta, r.capture.Snapshot(), manifest.baseRoot)
 	if err != nil {
 		return false, false, err
 	}

@@ -4237,6 +4237,12 @@ func (m *CollectionManager) ListCollectionsBounded(maxCollections int) ([]Collec
 	if m == nil {
 		return nil, false, errCollectionManagerNil
 	}
+	if m.nativeJSON != nil {
+		if m.isClosing() {
+			return nil, false, backenddb.ErrClosed
+		}
+		return m.nativeJSON.listCollectionsBounded(maxCollections)
+	}
 	if m.db == nil {
 		return nil, false, errCollectionDBNil
 	}
@@ -4331,17 +4337,38 @@ func (c *Collection) Meta() CollectionMeta {
 	if c == nil {
 		return CollectionMeta{}
 	}
+	if c.nativeJSON != nil {
+		return c.nativeMetaCopy()
+	}
 	return *c.meta.copy()
 }
 
 // MetaView returns the collection metadata without deep-copying slice fields.
 // The returned value is for read-only internal fast paths; callers must not
-// mutate Indexes, VectorIndexes, TextIndexes, or other referenced fields.
+// mutate Indexes, VectorIndexes, TextIndexes, or other referenced fields. Native
+// handles return an owned current-schema copy because they have no mutable facade.
 func (c *Collection) MetaView() CollectionMeta {
 	if c == nil {
 		return CollectionMeta{}
 	}
+	if c.nativeJSON != nil {
+		return c.nativeMetaCopy()
+	}
 	return c.meta
+}
+
+// Native handles have no mutable catalog facade. Both metadata APIs return an
+// independent copy before their fresh original capture closes; MetaView cannot
+// lend a schema slice whose owner has already retired. Their no-error API keeps
+// the opening owned-copy fallback when a new capture is unavailable.
+func (c *Collection) nativeMetaCopy() CollectionMeta {
+	read, err := c.nativeJSON.Capture(c.meta.Name)
+	if err != nil {
+		return *c.meta.copy()
+	}
+	meta := read.meta.copy()
+	_ = read.Close()
+	return *meta
 }
 
 // SameCachedCatalog reports whether both handles are cached against the same
@@ -4378,6 +4405,9 @@ func (c *Collection) cachedCatalogIdentity() (name string, systemRoot, commitSeq
 func (c *Collection) CreateIndex(def IndexDefinition) (*CollectionMeta, error) {
 	if c == nil {
 		return nil, errCollectionNil
+	}
+	if c.nativeJSON != nil {
+		return c.nativeJSON.mutateIndexes(c.meta.Name, &def, nil, false)
 	}
 	if c.db == nil {
 		return nil, errCollectionDBNil
@@ -4766,6 +4796,9 @@ func (c *Collection) DropAllIndexes() (*CollectionMeta, error) {
 func (c *Collection) dropIndexes(names map[string]struct{}, all bool) (*CollectionMeta, error) {
 	if c == nil {
 		return nil, errCollectionNil
+	}
+	if c.nativeJSON != nil {
+		return c.nativeJSON.mutateIndexes(c.meta.Name, nil, names, all)
 	}
 	if c.db == nil {
 		return nil, errCollectionDBNil
