@@ -478,7 +478,7 @@ func (w *nativeTypedMaterialization) materializeDelta(context columnPhysicalAsse
 	}
 	var retained columnRetainedPayloadStorageDocuments
 	var err error
-	if columnRetainedPayloadEffectiveEncoding(cfg) == ColumnRetainedPayloadEncodingSemanticStreamV1 && len(d.rows) != 0 {
+	if columnRetainedPayloadEffectiveEncoding(&cfg) == ColumnRetainedPayloadEncodingSemanticStreamV1 && len(d.rows) != 0 {
 		retained, err = prepareColumnRetainedSemanticStreamV1StorageDocumentsWithIDsConstruction(residualConfig, ids, d.retained, int64(w.capacity), true)
 		if err != nil {
 			return err
@@ -826,7 +826,7 @@ func nativeTypedStageCapacity(meta CollectionMeta, ids, docs [][]byte) (retained
 func nativeTypedValidateResidual(meta CollectionMeta, rows []columnDeclaredRow, residual [][]byte) error {
 	// JSON retained bytes were validated by the maintained trusted projection.
 	// This physical carrier has no semantic-stream constructor.
-	if len(rows) == 0 || columnRetainedPayloadEffectiveEncoding(*meta.Options.ColumnStore) == ColumnRetainedPayloadEncodingJSON {
+	if len(rows) == 0 || columnRetainedPayloadEffectiveEncoding(meta.Options.ColumnStore) == ColumnRetainedPayloadEncodingJSON {
 		return nil
 	}
 	capacity, err := nativeTypedDeltaBuildCapacity(meta, rows, residual)

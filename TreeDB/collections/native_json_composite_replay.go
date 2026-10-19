@@ -231,7 +231,7 @@ func replayNativeJSONComposite(db *backenddb.DB, env commitlog.CommandEnvelope) 
 				return backenddb.ErrNativeSemanticUnsupported
 			}
 			if typed != nil {
-				if columnRetainedPayloadEffectiveEncoding(*target.meta.Options.ColumnStore) != ColumnRetainedPayloadEncodingJSON {
+				if columnRetainedPayloadEffectiveEncoding(target.meta.Options.ColumnStore) != ColumnRetainedPayloadEncodingJSON {
 					return backenddb.ErrNativeSemanticUnsupported
 				}
 				projection, typedIDs, retained, err := typedProjectionFromPayload(target.meta, *typed)

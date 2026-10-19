@@ -350,7 +350,7 @@ func (t *NativeJSONTxn) stageNativeTypedBatch(g *nativeJSONTxnBinding, ids, reta
 		return nil, 0, err
 	}
 	deleting := kind == commitlog.CommandKindCollectionDeleteBatchByID
-	if !deleting && columnRetainedPayloadEffectiveEncoding(*g.probe.meta.Options.ColumnStore) != ColumnRetainedPayloadEncodingJSON {
+	if !deleting && columnRetainedPayloadEffectiveEncoding(g.probe.meta.Options.ColumnStore) != ColumnRetainedPayloadEncodingJSON {
 		return nil, 0, backenddb.ErrNativeSemanticUnsupported
 	}
 	owned, scratch, err := nativeTypedBatchStageCapacity(g.probe.meta, ids, retained, columns, deleteIDs)
