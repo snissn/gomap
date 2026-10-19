@@ -9348,6 +9348,7 @@ type DB struct {
 	rangeSpanSpansFlushed                             atomic.Uint64
 	rangeSpanFlushBatches                             atomic.Uint64
 	memtableAdaptive                                  bool
+	memtableMVCCOrdered                               atomic.Bool // monotone actual qualified-read demand, not authority
 	memtableAdaptiveObserve                           atomic.Bool
 	memtableAdaptiveBTreeMinIters                     uint64
 	memtableAdaptiveBTreeMinItersSet                  bool
@@ -11987,6 +11988,7 @@ const (
 	adaptiveDecisionBTreeBlockedMinIters
 	adaptiveDecisionAppendSequential
 	adaptiveDecisionHashMixed
+	adaptiveDecisionMVCCOrdered
 )
 
 func adaptiveDecisionReasonString(v uint32) string {
@@ -12001,6 +12003,8 @@ func adaptiveDecisionReasonString(v uint32) string {
 		return "append_sequential"
 	case adaptiveDecisionHashMixed:
 		return "hash_mixed"
+	case adaptiveDecisionMVCCOrdered:
+		return "mvcc_ordered"
 	default:
 		return "unknown"
 	}
@@ -12414,6 +12418,18 @@ func (db *DB) chooseAdaptiveMemtableModeLocked() memtable.Mode {
 	iters := db.memtableStats.iterators.Load()
 	rangeIters := db.memtableStats.rangeIters.Load()
 
+	rangeIterPct := 0.0
+	if iters > 0 {
+		rangeIterPct = float64(rangeIters) / float64(iters)
+	}
+	// A real canonical Store successor read supplies an ordered workload hint
+	// without inventing iterator observations. Keep future mutable generations
+	// ordered even when subsequent traffic is write-heavy.
+	if db.memtableMVCCOrdered.Load() {
+		db.noteAdaptiveMemtableDecision(memtable.ModeBTree, adaptiveDecisionMVCCOrdered, writes, seqWrites, overwriteWrites, iters, rangeIters, rangeIterPct)
+		return memtable.ModeBTree
+	}
+
 	// Default to configured mode if not enough data
 	if writes < adaptiveMinWrites {
 		mode := db.currentMemtableMode()
@@ -12423,10 +12439,6 @@ func (db *DB) chooseAdaptiveMemtableModeLocked() memtable.Mode {
 
 	seqWritePct := float64(seqWrites) / float64(writes)
 	overwriteWritePct := float64(overwriteWrites) / float64(writes)
-	rangeIterPct := 0.0
-	if iters > 0 {
-		rangeIterPct = float64(rangeIters) / float64(iters)
-	}
 
 	btreeBlockedByMinIters := false
 	// 1) Range-heavy read paths benefit most from BTree order stability.
@@ -12463,7 +12475,7 @@ func (db *DB) updateAdaptiveObservationLocked() {
 	observe := db.memtableAdaptive
 	// Early rotations may finish byte warmup before a measured decision. Keep
 	// a measured append-only stop even when range deletion resets live counters.
-	if observe && !db.memtableWarmupActive && db.currentMemtableMode() == memtable.ModeAppendOnly &&
+	if observe && !db.memtableMVCCOrdered.Load() && !db.memtableWarmupActive && db.currentMemtableMode() == memtable.ModeAppendOnly &&
 		(!db.memtableAdaptiveObserve.Load() || db.memtableAdaptiveDecisionWrites.Load() >= adaptiveMinWrites) {
 		observe = false
 	}
