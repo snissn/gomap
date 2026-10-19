@@ -246,11 +246,19 @@ func (db *DB) flushCOWBackground(syncFlush bool) bool {
 func (db *DB) closeCOWFrontier() (closeErr error) {
 	c := db.cow
 	var frontier *cowReadCut
-	err := db.rotateCOWCheckpointFrontier(context.Background(), false, &frontier)
 	defer func() {
 		closeErr = joinCOWCleanupError(closeErr, c.releaseCut(frontier))
 		closeErr = joinCOWCleanupError(closeErr, c.closeWithBudget(false))
 	}()
+	// Like checkpoint, finish the original accepted physical handoff before
+	// capturing another cut. Completion may retain its original failure; it
+	// must run outside writeMu while closing and flushMu exclude new writers.
+	db.writeMu.Unlock()
+	if err := db.completeCOWHandoff(); err != nil {
+		return err
+	}
+	db.writeMu.Lock()
+	err := db.rotateCOWCheckpointFrontier(context.Background(), false, &frontier)
 	if err != nil {
 		return err
 	}
