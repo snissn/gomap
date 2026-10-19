@@ -38,9 +38,41 @@ func TestNativeExistingColumnStringVectorPendingCapturedReplay(t *testing.T) {
 	}
 }
 
+// The existing typed producer has a different physical contract from ordinary
+// JSON inserts: retained JSON and, for strings, row-asset ownership.
+func TestNativeExistingTypedBatchPendingCapturedReplay(t *testing.T) {
+	families := []string{"string", "float32_vector"}
+	if family := os.Getenv("GOMAP_COLUMN_PENDING_FAMILY"); family != "" {
+		families = []string{family}
+	}
+	for _, family := range families {
+		t.Run(family, func(t *testing.T) {
+			fixture := nativeColumnPendingCaseFor(t, family)
+			seed := collections.TypedColumnBatch{Name: fixture.column.Name}
+			switch family {
+			case "string":
+				fixture.column.Owner = collections.TypedStorageOwnerRowAsset
+				seed.Strings = []string{"repeat"}
+			case "float32_vector":
+				seed.Float32Vectors = [][]float32{{1, -2, 0.5}}
+			default:
+				t.Fatalf("unsupported typed producer family %q", family)
+			}
+			fixture.typedSeed = &seed
+			for i, id := range []string{"seed", "one", "two"} {
+				fixture.docs[i] = append([]byte(`{"id":"`+id+`",`), fixture.docs[i][1:]...)
+			}
+			testNativeColumnPendingCase(t, family, fixture)
+		})
+	}
+}
+
 type nativeColumnPendingCase struct {
 	column collections.ColumnStoreColumn
 	docs   [3][]byte // seed, one, two; independent public result oracle
+	// Non-nil selects the actual typed seed producer and its JSON residual
+	// contract; nil preserves the original ordinary JSON family fixtures.
+	typedSeed *collections.TypedColumnBatch
 }
 
 func nativeColumnPendingCaseFor(t *testing.T, family string) nativeColumnPendingCase {
@@ -69,7 +101,11 @@ func nativeColumnPendingCaseFor(t *testing.T, family string) nativeColumnPending
 
 func testNativeColumnPendingFamily(t *testing.T, family string) {
 	t.Helper()
-	fixture := nativeColumnPendingCaseFor(t, family)
+	testNativeColumnPendingCase(t, family, nativeColumnPendingCaseFor(t, family))
+}
+
+func testNativeColumnPendingCase(t *testing.T, family string, fixture nativeColumnPendingCase) {
+	t.Helper()
 	const sentinel = 97
 	if dir := os.Getenv("GOMAP_COLUMN_PENDING_CRASH_DIR"); dir != "" {
 		runNativeColumnPending(t, dir, true, fixture)
@@ -139,11 +175,15 @@ func testNativeColumnPendingFamily(t *testing.T, family string) {
 }
 
 func nativeColumnPendingMeta(fixture nativeColumnPendingCase) *collections.CollectionMeta {
+	encoding := collections.ColumnRetainedPayloadEncodingSemanticStreamV1
+	if fixture.typedSeed != nil {
+		encoding = collections.ColumnRetainedPayloadEncodingJSON
+	}
 	return &collections.CollectionMeta{Name: "events", Options: collections.CollectionOptions{ColumnStore: &collections.ColumnStoreConfig{
 		Enabled:                 true,
 		Columns:                 []collections.ColumnStoreColumn{fixture.column},
 		RetainedPayload:         collections.ColumnRetainedPayloadNonColumn,
-		RetainedPayloadEncoding: collections.ColumnRetainedPayloadEncodingSemanticStreamV1,
+		RetainedPayloadEncoding: encoding,
 	}}}
 }
 
@@ -204,8 +244,23 @@ func runNativeColumnPending(t *testing.T, dir string, crash bool, fixture native
 		}
 	}
 	seed := fixture.docs[0]
-	if ids, err := collection.InsertBatch([][]byte{[]byte("seed")}, [][]byte{seed}); err != nil || len(ids) != 1 || string(ids[0]) != "seed" {
-		t.Fatalf("ordinary typed InsertBatch: %q %v", ids, err)
+	if fixture.typedSeed != nil {
+		// The declared value exists only in the authoritative typed carrier;
+		// the independently specified complete document is solely the oracle.
+		retained := [][]byte{[]byte(`{"id":"seed","payload":"seed"}`)}
+		ids, _, err := collection.InsertTypedBatchWithStats([][]byte{[]byte("seed")}, retained, []collections.TypedColumnBatch{*fixture.typedSeed})
+		if err != nil || len(ids) != 1 || string(ids[0]) != "seed" {
+			t.Fatalf("ordinary InsertTypedBatchWithStats: %q %v", ids, err)
+		}
+		got, err := collection.Get([]byte("seed"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		requireNativeColumnJSON(t, got, seed)
+	} else {
+		if ids, err := collection.InsertBatch([][]byte{[]byte("seed")}, [][]byte{seed}); err != nil || len(ids) != 1 || string(ids[0]) != "seed" {
+			t.Fatalf("ordinary typed InsertBatch: %q %v", ids, err)
+		}
 	}
 	if err := database.Checkpoint(); err != nil {
 		t.Fatal(err)
