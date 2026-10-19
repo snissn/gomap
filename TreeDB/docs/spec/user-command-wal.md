@@ -1344,10 +1344,14 @@ same ordinary JSON collection and differ only in scalar index declarations and
 the maintained normalization defaults implied by those declarations. This does
 not change kind 200's create-only meaning or the existing metadata format.
 
-One accepted transition publishes metadata and complete rebuilt index roots
-atomically. The original catalog-name dependency fences stale schema plans,
-including read-derived writers and ABA; a primary range dependency fences rows
-changed during backfill. Recovery validates the original incarnation/prior schema
-and uses the existing callback-scoped replay identity and one build group to
-reconstruct and install all roots, without appending a child command. Typed DDL
-and unsupported index interpretations refuse before assignment.
+One accepted transition publishes metadata and index roots atomically. Creation
+backfills the complete primary cut. Pure drops retain surviving name-keyed index
+domains and index-state, remove only dropped descriptors, and remove index-state
+when the last index drops; they do not scan documents or rebuild surviving roots.
+The original catalog-name dependency fences stale schema plans, including
+read-derived writers and ABA; a primary range dependency fences rows changed
+during backfill and is conservatively retained for drops. Recovery validates the
+original incarnation/prior schema and uses the existing callback-scoped replay
+identity and one build group for the same rebuild-or-remove transition, without
+appending a child command. Typed DDL and unsupported index interpretations refuse
+before assignment.

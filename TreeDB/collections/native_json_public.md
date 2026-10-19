@@ -187,12 +187,14 @@ silently escape the new index. A directly registered singleton preparation has
 no reprepare and keeps the stricter original exact-state basis check. Physical
 progress alone can rebase the captured DDL plan onto the latest compatible
 immutable state. Primary/template domains and their resources remain shared;
-only schema-derived index domains are replaced. Held views retain their old
-schema and index interpretation.
+creation rebuilds schema-derived index domains. Pure drops retain surviving
+domains and remove only dropped names. Held views retain their old schema and
+index interpretation.
 
 Catalog index mutation uses command kind 201 and payload format 17; create
 collection remains kind 200. Startup validates the prior schema/incarnation and
-reconstructs the complete new indexes in the original single replay build group.
+performs the same backfill or name-based removal in the original single replay
+build group.
 The command contains no predicted LSN, physical roots or new schema epoch.
 Temporary schema/JSON construction backing is admitted before normalization and
 encoding and released after synchronous publication drops its borrowed aliases.

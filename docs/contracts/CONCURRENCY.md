@@ -150,5 +150,7 @@ range and writes the collection's existing catalog-name conflict effect before
 canonical assignment. Native data transactions retain that catalog dependency
 for every bound collection, including read-only inputs to a writing transaction;
 schema ABA therefore invalidates a stale plan. Held read views keep the original
-immutable schema and index roots. Unrelated physical checkpoint progress does
-not itself constitute a logical schema conflict.
+immutable schema and index roots. Pure drops preserve surviving name-keyed
+index domains without scanning documents; they retain both conflict barriers.
+Unrelated physical checkpoint progress does not itself constitute a logical
+schema conflict.
