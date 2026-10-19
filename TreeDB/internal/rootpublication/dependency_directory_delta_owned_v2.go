@@ -30,14 +30,47 @@ type ownedDirectoryCodecV2 struct {
 	points [2]ownedDirectoryPointV2
 }
 
+// The scope is private to one synchronous operation. No source, output entry or
+// directory retains it; only the original owner admits its lazy backing.
+type ownedDirectoryCodecScopeV2 struct {
+	owner   *retainedalloc.Owner
+	scratch *ownedDirectoryCodecV2
+}
+
+func (s *ownedDirectoryCodecScopeV2) get() (*ownedDirectoryCodecV2, error) {
+	if s.owner == nil {
+		return nil, ErrResourceOwnership
+	}
+	if s.scratch == nil {
+		charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(ownedDirectoryCodecV2{})))
+		if err := s.owner.AddPending(charge); err != nil {
+			return nil, err
+		}
+		s.scratch = new(ownedDirectoryCodecV2)
+	}
+	return s.scratch, nil
+}
+
+func (s *ownedDirectoryCodecScopeV2) close() {
+	owner, scratch := s.owner, s.scratch
+	s.owner, s.scratch = nil, nil
+	if scratch != nil {
+		*scratch = ownedDirectoryCodecV2{}
+		scratch = nil
+		owner.RemovePending(retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(ownedDirectoryCodecV2{}))))
+	}
+}
+
 func withOwnedDirectoryCodecV2(owner *retainedalloc.Owner, visit func(*ownedDirectoryCodecV2) error) error {
-	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(ownedDirectoryCodecV2{})))
-	if err := owner.AddPending(charge); err != nil {
+	scope := ownedDirectoryCodecScopeV2{owner: owner}
+	defer scope.close()
+	scratch, err := scope.get()
+	if err != nil {
 		return err
 	}
-	scratch := new(ownedDirectoryCodecV2)
-	defer func() { *scratch = ownedDirectoryCodecV2{}; scratch = nil; owner.RemovePending(charge) }()
-	return visit(scratch)
+	err = visit(scratch)
+	scratch = nil
+	return err
 }
 
 func (s *ownedDirectoryCodecV2) physical(entry *stableResourceEntry) (DependencyManifestEntryV1, []byte, []byte, error) {
