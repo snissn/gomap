@@ -658,7 +658,7 @@ func assertDurableRootClosureObligations3928(t *testing.T, set *rootpublication.
 		t.Fatalf("closure physical resources=%d want 1", len(physical))
 	}
 	var got []rootpublication.StableLogicalObligation
-	if err := diagnostics.WalkLogicalObligations(func(_ rootpublication.StableResourcePhysicalDescriptor, obligation rootpublication.StableLogicalObligation) error {
+	if err := set.WalkLogicalObligations(func(_ rootpublication.StableResourcePhysicalDescriptor, obligation rootpublication.StableLogicalObligation) error {
 		got = append(got, obligation)
 		return nil
 	}); err != nil {

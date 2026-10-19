@@ -9,6 +9,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/caching"
 	"github.com/snissn/gomap/TreeDB/collections"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/workstats"
 )
 
@@ -100,9 +101,6 @@ func TestNativeExistingCollectionPublicLifecycle(t *testing.T) {
 			manager.SetVectorIndexConstructionDecisionObserverEnabled(true)
 			if _, e := manager.ListCollections(); e == nil {
 				t.Fatal("unmigrated list accepted")
-			}
-			if _, e := manager.SyncForStandaloneWriteConcern(); e == nil {
-				t.Fatal("unmigrated sync accepted")
 			}
 
 			duplicateLSN := backend.CommandWALNextLSN()
@@ -296,5 +294,147 @@ func requirePublicCOWFinalZero(t *testing.T, cache *caching.DB) {
 	t.Helper()
 	if s := cache.COWMemoryStats(); s.TotalBytes != 0 || s.Sources != 0 || s.ExternalLeases != 0 || s.Views != 0 || s.Generations != 0 {
 		t.Fatalf("final resources: %+v", s)
+	}
+}
+
+// Sync is the only durability request before the child exits. In particular,
+// neither an explicit public Checkpoint nor Close can repair a missed boundary.
+func TestNativeExistingCollectionJournalSyncCrashReopen(t *testing.T) {
+	const sentinel = 97
+	const childDirEnv = "GOMAP_NATIVE_JOURNAL_SYNC_CRASH_DIR"
+	const childProfileEnv = "GOMAP_NATIVE_JOURNAL_SYNC_CRASH_PROFILE"
+	childDir := os.Getenv(childDirEnv)
+	options := func(profile Profile, dir string) Options {
+		opts := OptionsFor(profile, dir)
+		opts.MemtableMode = "cow_btree"
+		opts.FlushThreshold = 1 << 30
+		opts.BackgroundCheckpointInterval = -1
+		opts.BackgroundCheckpointIdleDuration = -1
+		opts.MaxWALBytes = -1
+		return opts
+	}
+	for _, profile := range []Profile{ProfileCommandWALDurable, ProfileCommandWALRelaxed, ProfileNoWALFast} {
+		if childDir != "" && string(profile) != os.Getenv(childProfileEnv) {
+			continue
+		}
+		t.Run(string(profile), func(t *testing.T) {
+			dir := childDir
+			if dir == "" {
+				dir = t.TempDir()
+				cmd := exec.Command(os.Args[0], "-test.run=^TestNativeExistingCollectionJournalSyncCrashReopen$", "-test.v")
+				cmd.Env = append(os.Environ(), childDirEnv+"="+dir, childProfileEnv+"="+string(profile))
+				output, err := cmd.CombinedOutput()
+				t.Logf("sync child: %s", output)
+				var exited *exec.ExitError
+				if !errors.As(err, &exited) || exited.ExitCode() != sentinel ||
+					!bytes.Contains(output, []byte("SYNC COMPLETE")) || bytes.Contains(output, []byte("DATA RACE")) {
+					t.Fatalf("sync crash boundary: %v", err)
+				}
+			}
+			database, err := Open(options(profile, dir))
+			if err != nil {
+				t.Fatal(err)
+			}
+			closed := false
+			t.Cleanup(func() {
+				if !closed {
+					if err := database.Close(); err != nil {
+						t.Errorf("cleanup Close: %v", err)
+					}
+				}
+			})
+			backend, err := database.NativeSemanticBackend()
+			if err != nil {
+				t.Fatal(err)
+			}
+			manager := collections.NewCollectionManager(backend)
+			if childDir != "" {
+				if _, err := manager.CreateCollection(&collections.CollectionMeta{Name: "rows"}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			collection, err := manager.OpenCollection("rows")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if childDir != "" {
+				if _, err := collection.InsertBatch([][]byte{[]byte("a")}, [][]byte{[]byte(`{"n":1}`)}); err != nil {
+					t.Fatal(err)
+				}
+				held, err := collection.OpenCollectionReadView()
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() {
+					if err := held.Close(); err != nil {
+						t.Errorf("held Close: %v", err)
+					}
+				})
+				if _, err := collection.InsertBatch([][]byte{[]byte("b")}, [][]byte{[]byte(`{"n":2}`)}); err != nil {
+					t.Fatal(err)
+				}
+				if err := database.Set([]byte("raw-sync"), []byte("raw-value")); err != nil {
+					t.Fatal(err)
+				}
+				accepted := backend.CommandWALNextLSN()
+				for i := 0; i < 2; i++ {
+					if physical, err := manager.SyncForStandaloneWriteConcern(); err != nil || !physical {
+						t.Fatalf("sync %d: physical=%v error=%v", i, physical, err)
+					}
+					if backend.CommandWALNextLSN() != accepted {
+						t.Fatal("sync assigned a new canonical command")
+					}
+				}
+				if backend.CommandWALEnabled() {
+					snapshot := backend.AcquireSnapshot()
+					token, ok := snapshot.StateToken()
+					if err := snapshot.Close(); err != nil {
+						t.Fatal(err)
+					}
+					if !ok || accepted == 0 || token.AppliedCommandLSN != accepted-1 {
+						t.Fatalf("sync prefix: token=%+v valid=%v next=%d", token, ok, accepted)
+					}
+				}
+				old, err := held.FetchDocumentsByID([][]byte{[]byte("a"), []byte("b")}, collections.DocumentFetchOptions{})
+				if err != nil || len(old.Results) != 2 || !old.Results[0].Found ||
+					string(old.Results[0].Document) != `{"n":1}` || old.Results[1].Found {
+					t.Fatalf("old view after sync: %+v error=%v", old.Results, err)
+				}
+				if err := held.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for i, id := range []string{"a", "b"} {
+				value, err := collection.Get([]byte(id))
+				if err != nil || string(value) != []string{`{"n":1}`, `{"n":2}`}[i] {
+					t.Fatalf("current/reopen %s: %s error=%v", id, value, err)
+				}
+			}
+			if value, err := database.Get([]byte("raw-sync")); err != nil || string(value) != "raw-value" {
+				t.Fatalf("current/reopen raw: %s error=%v", value, err)
+			}
+			if childDir != "" {
+				t.Log("SYNC COMPLETE; WAL profiles covered the accepted prefix; NoWAL covered its checkpoint")
+				os.Exit(sentinel)
+			}
+			if physical, err := manager.SyncForStandaloneWriteConcern(); err != nil || !physical {
+				t.Fatalf("reopened sync: physical=%v error=%v", physical, err)
+			}
+			if err := manager.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if physical, err := manager.SyncForStandaloneWriteConcern(); physical || !errors.Is(err, backenddb.ErrClosed) {
+				t.Fatalf("closed manager sync: physical=%v error=%v", physical, err)
+			}
+			cache, registry := database.cached, backend.ValueLogIdentityPinRegistry()
+			if err := database.Close(); err != nil {
+				t.Fatal(err)
+			}
+			closed = true
+			requirePublicCOWFinalZero(t, cache)
+			if stats := registry.Stats(); stats.ActivePins != 0 || stats.ActiveIdentities != 0 {
+				t.Fatalf("reopen pins: %+v", stats)
+			}
+		})
 	}
 }

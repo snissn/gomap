@@ -422,7 +422,7 @@ func (db *DB) prepareRootPublicationVisibleInstallV1(
 	opts finalizeCommitOptions,
 ) (_ *rootPublicationVisibleInstallV1, retErr error) {
 	metadata := db.valueLogIdentityPins.MetadataOwner()
-	if idx.primary != nil && idx.primary.CapsuleFormatV6() {
+	if idx.primary != nil {
 		metadata = idx.primary.MetadataOwner()
 	}
 	metadataCharge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(rootPublicationVisibleInstallV1{})))

@@ -3464,12 +3464,25 @@ func (m *CollectionManager) holdIndexedAsyncFlushForSync(domains []*collectionWr
 // This is intentionally stronger than FlushAll, which is only a visibility
 // and draining boundary. physicalSync is false only when a command-WAL prefix
 // was already durable (or no command prefix exists); the WAL-free checkpoint
-// path always performs a physical sync boundary.
+// path always performs a physical sync boundary. Native managers use the SAME
+// cache owner's complete captured-prefix checkpoint and report physicalSync=true.
 func (m *CollectionManager) SyncForStandaloneWriteConcern() (physicalSync bool, err error) {
 	if m != nil && m.initializationError != nil {
 		return false, m.initializationError
 	}
-	if m == nil || m.db == nil {
+	if m == nil {
+		return false, backenddb.ErrClosed
+	}
+	if m.nativeJSON != nil {
+		if m.isClosing() {
+			return false, backenddb.ErrClosed
+		}
+		if err := m.nativeJSON.db.SyncNativeSemanticPrefix(); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	if m.db == nil {
 		return false, backenddb.ErrClosed
 	}
 	if err := m.FlushAll(); err != nil {

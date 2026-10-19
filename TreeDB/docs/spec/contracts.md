@@ -753,13 +753,17 @@ Mongo gateway:
   acknowledgements use the ordinary boundary of the configured durability
   profile. In particular, `command_wal_relaxed` and `no_wal_fast` do not gain a
   stronger promise from an ordinary acknowledgement.
-- A successful standalone `j: true` acknowledgement first drains collection
-  publishing, then completes `SyncCommandWALAppliedPrefix` when command WAL is
-  enabled or `DB.Checkpoint` when it is disabled. The command-WAL boundary
-  orders persistent value-log dependencies, syncs a relaxed suffix, and
-  publishes its durable-prefix barrier as a root-neutral contiguous applied
-  command; an already-durable prefix is reused without another barrier or
-  file sync. Because existing multi-item and DDL handlers can return a command
+- A successful standalone `j: true` acknowledgement completes
+  `CollectionManager.SyncForStandaloneWriteConcern`. A native manager uses its
+  existing cache owner's checkpoint to seal and synchronize the complete
+  captured raw/collection prefix, including persistent value-log dependencies,
+  and reports a physical sync on every successful call. A legacy manager first
+  drains collection publishing, then completes `SyncCommandWALAppliedPrefix`
+  when command WAL is enabled or `DB.Checkpoint` when it is disabled. The legacy
+  command-WAL boundary syncs a relaxed suffix and publishes its durable-prefix
+  barrier as a root-neutral contiguous applied command; an already-durable
+  prefix is reused without another barrier or file sync. Because existing
+  multi-item and DDL handlers can return a command
   error after a partial mutation, an accepted `j: true` request closes this
   boundary even when the handler response is `ok: 0`; the original command
   error is preserved. This is a local crash/reopen boundary only; it does not

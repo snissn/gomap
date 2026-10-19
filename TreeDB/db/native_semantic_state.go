@@ -192,6 +192,7 @@ type NativePublicationResult struct {
 // NativeSemanticBridge is fixed once at Open to the backend's SAME private COW
 // owner. It introduces neither a participant registry nor a publication lane.
 type NativeSemanticBridge interface {
+	Checkpoint() error
 	CaptureNativeCut() (NativeSemanticCapture, error)
 	BeginNativeConditionalTxn() (NativeConditionalTxn, error)
 	WriteNativePublication(*NativePreparedPublication, *CommandWALIntent, bool) (NativePublicationResult, error)
@@ -205,6 +206,23 @@ func (db *DB) BindNativeSemanticBridge(owner *transactionowner.Owner, bridge Nat
 	return nil
 }
 func (db *DB) HasNativeSemanticBridge() bool { return db != nil && db.nativeSemanticBridge != nil }
+
+// SyncNativeSemanticPrefix seals and synchronizes the original cache owner's
+// captured complete prefix. It does not acquire a legacy command publisher or
+// grant backend aliases authority over native accepted state.
+func (db *DB) SyncNativeSemanticPrefix() error {
+	if db == nil {
+		return ErrClosed
+	}
+	if !db.nativeSemanticActive.Load() || !db.HasNativeSemanticBridge() {
+		return ErrNativeSemanticUnsupported
+	}
+	if err := db.ActivateNativeSemanticOwner(); err != nil {
+		return err
+	}
+	return db.nativeSemanticBridge.Checkpoint()
+}
+
 func (db *DB) CaptureNativeSemanticState() (NativeSemanticCapture, error) {
 	if !db.HasNativeSemanticBridge() {
 		return nil, ErrNativeSemanticUnsupported
