@@ -45,17 +45,32 @@ func mergeOwnedResourceKindBackings(target, incoming *resourceKindBacking) (*res
 	for _, cell := range target.cells {
 		directory = directory || cell.view.directory != nil
 	}
+	var incrementalHistory bool
 	if !compatible && !directory {
-		if next, handled, err := coalesceOwnedPhysicalHistory(target, incoming, owner); handled {
-			return next, err
+		var err error
+		incrementalHistory, err = canCoalesceOwnedPhysicalHistory(target, incoming)
+		if err != nil {
+			return nil, err
 		}
-		return rebuildOwnedResourceKindCollision(target, incoming, owner)
+		if !incrementalHistory {
+			return rebuildOwnedResourceKindCollision(target, incoming, owner)
+		}
 	}
 	maxInt := int(^uint(0) >> 1)
 	if incoming.len() > maxInt-target.len() {
 		return nil, retainedalloc.ErrCapacity
 	}
 	capacity := target.len() + incoming.len()
+	if incrementalHistory {
+		// Existing collision-only merges allocated only the retained target's
+		// cells. Reserve additional cells solely for genuinely new kinds.
+		capacity = target.len()
+		for _, cell := range incoming.cells {
+			if _, exists := target.lookup(cell.kind); !exists {
+				capacity++
+			}
+		}
+	}
 	width := uint64(unsafe.Sizeof(resourceKindCell{}))
 	if uint64(capacity) > ^uint64(0)/width {
 		return nil, retainedalloc.ErrCapacity
@@ -124,6 +139,32 @@ func mergeOwnedResourceKindBackings(target, incoming *resourceKindBacking) (*res
 			}
 			cell.kind = ResourceKind(strings.Clone(string(cell.kind)))
 			next.cells = append(next.cells, cell)
+			continue
+		}
+		if incrementalHistory {
+			// A mixed kind retains the target's complete membership index. Only
+			// incoming entries extend it; untouched historical entries are never
+			// reconstructed merely because another incoming resource is new.
+			var updateErr error
+			rangeStableResourceLogicalIndex(cell.view.logical, func(child *stableResourceEntry) bool {
+				view := &next.cells[index].view
+				previous := findStableResourceLogical(view.logical, child.token.logicalKey())
+				if previous != nil {
+					updateErr = appendOwnedPhysicalHistoryToView(view, previous, child, owner)
+				} else {
+					updateErr = appendOwnedNewPhysicalEntryToView(view, child, owner)
+				}
+				return updateErr == nil
+			})
+			if updateErr != nil {
+				if cleanup := next.release(); cleanup != nil {
+					if binding := SelectOriginalCleanupPrior(cleanup, updateErr); binding.Valid() && binding.TryLink(updateErr) {
+						return nil, cleanup
+					}
+					return nil, errors.Join(updateErr, cleanup)
+				}
+				return nil, updateErr
+			}
 			continue
 		}
 		old := next.cells[index]
