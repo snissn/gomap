@@ -470,3 +470,15 @@ uses the maintained full mutable threshold. Read-bearing workloads pay ordered
 insert and normal background-flush costs; no durability or MVCC retention
 boundary changes. Public correctness and workload guards remain required before
 performance acceptance.
+
+Canonical shared MVCC successor attempts use the concrete backend's synchronous
+owned successor capability. It reuses the existing private one-shot read capture
+and fixed page/ancestor scratch, preserving the retained cache view's physical
+root, normal snapshot pins, value-log readiness and integrity checks. Key and
+value bytes (including pointers) are materialized before capture cleanup; a
+backend candidate that loses to a newer in-memory candidate may therefore incur
+an eager value read/copy. Scratch adds two pages plus compact ancestor storage to
+each existing private pooled capture, without pooling exported Snapshot handles.
+Cleanup errors are returned and failed original captures remain with their
+original cleanup owner. Custom providers, general/exclusive seeks and physical
+tombstone retries retain the existing cursor path. COW read admission is unchanged.

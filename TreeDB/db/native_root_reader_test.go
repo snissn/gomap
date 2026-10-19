@@ -174,6 +174,10 @@ func TestNativeRootReaderRevisionTombstoneAndCloseOverlap(t *testing.T) {
 	if err != nil || !ok || entry.Revision != 41 || entry.Flags&node.FlagTombstone == 0 {
 		t.Fatal("lost physical tombstone", entry, ok, err)
 	}
+	owned, ok, err := d.SeekGEOwnedAtRoot(root, []byte("b"), nil)
+	if err != nil || !ok || owned.Revision != 41 || owned.Flags&node.FlagTombstone == 0 || string(owned.Key) != "b" {
+		t.Fatal("synchronous successor lost physical tombstone", owned, ok, err)
+	}
 	if _, err := reader.GetEntryExactWithFixedScratch([]byte("a"), nil, leaf[:], nil); !errors.Is(err, node.ErrCorruptedNode) {
 		t.Fatal("short scratch", err)
 	}

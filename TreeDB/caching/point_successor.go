@@ -171,6 +171,44 @@ func (db *DB) pointSuccessorDiskIterator(view *memtableView, start, end []byte) 
 	return it, func() { _ = it.Close() }, nil
 }
 
+// The private synchronous backend capability owns its output before releasing
+// the same normal snapshot capture. Custom published providers and backends that
+// do not implement it retain their existing iterator lifetime.
+type ownedBackendSuccessor interface {
+	SeekGEOwnedAtRoot(uint64, []byte, []byte) (node.LeafEntry, bool, error)
+}
+
+func (db *DB) pointSuccessorOwnedBackend(view *memtableView, start, end []byte) (pointSuccessorCandidate, bool, error) {
+	provider, ok := db.backend.(ownedBackendSuccessor)
+	if !ok {
+		return pointSuccessorCandidate{}, false, nil
+	}
+	var rootID uint64
+	if snap, ok := liveIteratorRootDomainSnapshot(view); ok && rootDomainSnapshotHasPublishedState(snap) {
+		if snap.published != nil {
+			return pointSuccessorCandidate{}, false, nil
+		}
+		rootID = snap.publishedRootID
+	} else {
+		if err := db.ensureBackendRange(); err != nil {
+			return pointSuccessorCandidate{}, true, err
+		}
+		db.mu.RLock()
+		outside := db.backendRangeKnown && !overlapsQuery(start, end, db.backendRange)
+		db.mu.RUnlock()
+		if outside {
+			return pointSuccessorCandidate{}, false, nil
+		}
+	}
+	// Preserve the ordinary backend iterator's readiness fence before reading any
+	// persisted pointer or outer leaf. The retained cache view supplies rootID.
+	if err := db.flushValueLogForBackendRead(); err != nil {
+		return pointSuccessorCandidate{}, true, err
+	}
+	entry, found, err := provider.SeekGEOwnedAtRoot(rootID, start, end)
+	return pointSuccessorCandidate{key: entry.Key, value: entry.Value, ptr: entry.ValuePtr, flags: entry.Flags, revision: entry.Revision, found: found}, true, err
+}
+
 // SeekGE returns an owned copy of the first visible physical key/value in
 // [start,end). It captures mutable and immutable state without rotating the
 // mutable memtables and never constructs a general merging iterator.
@@ -329,11 +367,23 @@ func (db *DB) seekGEAttempt(start, end []byte, shared bool, recordSelection func
 		}
 	}
 
-	disk, closeDisk, err := db.pointSuccessorDiskIterator(view, start, end)
-	if err != nil {
-		return nil, nil, false, err
+	var ownedDisk pointSuccessorCandidate
+	ownedDiskUsed := false
+	if shared {
+		ownedDisk, ownedDiskUsed, err = db.pointSuccessorOwnedBackend(view, start, end)
+		if err != nil {
+			return nil, nil, false, err
+		}
 	}
-	defer closeDisk()
+	var disk iterator.UnsafeIterator
+	if !ownedDiskUsed {
+		var closeDisk func()
+		disk, closeDisk, err = db.pointSuccessorDiskIterator(view, start, end)
+		if err != nil {
+			return nil, nil, false, err
+		}
+		defer closeDisk()
+	}
 
 	lower := start
 	for end == nil || bytes.Compare(lower, end) < 0 {
@@ -391,8 +441,12 @@ func (db *DB) seekGEAttempt(start, end []byte, shared bool, recordSelection func
 			callSources++
 			priority++
 		}
-		if disk != nil {
-			candidate, probeErr := seekPointSuccessorIterator(disk, lower, end, spans, priority)
+		if ownedDiskUsed || disk != nil {
+			candidate, probeErr := ownedDisk, error(nil)
+			if !ownedDiskUsed {
+				candidate, probeErr = seekPointSuccessorIterator(disk, lower, end, spans, priority)
+			}
+			candidate.priority = priority
 			candidate.layer = pointSuccessorLayerPublished
 			db.pointSuccessorBackendProbesTotal.Add(1)
 			callSources++
