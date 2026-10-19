@@ -70,6 +70,8 @@ func replayNativeJSONComposite(db *backenddb.DB, env commitlog.CommandEnvelope) 
 		meta        CollectionMeta
 		root        uint64
 		rows        nativeJSONRows
+		planner     insertBatchPlanner
+		runtimes    []indexRuntime
 	}
 	var collections []*collectionRows
 	noAdmission := func(uint64) error { return nil }
@@ -162,7 +164,15 @@ func replayNativeJSONComposite(db *backenddb.DB, env commitlog.CommandEnvelope) 
 			if err != nil {
 				return err
 			}
-			target = &collectionRows{name: name, incarnation: id, meta: meta, root: root}
+			planner, err := nativeJSONInsertPlanner(meta)
+			if err != nil {
+				return err
+			}
+			runtimes, err := planner.indexRuntimes()
+			if err != nil {
+				return err
+			}
+			target = &collectionRows{name: name, incarnation: id, meta: meta, root: root, planner: planner, runtimes: runtimes}
 			collections = append(collections, target)
 		} else if target.incarnation != member.Incarnation {
 			return errNativeCatalogIdentity
@@ -174,6 +184,17 @@ func replayNativeJSONComposite(db *backenddb.DB, env commitlog.CommandEnvelope) 
 			return snapshot.GetAtRoot(target.root, id)
 		}
 		for _, doc := range docs {
+			// Validate every canonical intermediate before reducing it. A later
+			// delete must not erase a captured scalar-schema error. Use exactly
+			// the foreground preparation/extraction contract: unindexed JSON
+			// preserves opaque bytes, while indexed documents require valid JSON.
+			normalized, _, _, _, err := prepareInsertDocuments([][]byte{doc.Document}, target.planner.options)
+			if err != nil {
+				return err
+			}
+			if _, err = orderedIndexStateForDocumentWithArena(normalized[0], target.runtimes, target.planner.options, nil); err != nil {
+				return err
+			}
 			row, err := target.rows.touch(doc.ID, original, noAdmission)
 			if err != nil {
 				return err
@@ -184,7 +205,7 @@ func replayNativeJSONComposite(db *backenddb.DB, env commitlog.CommandEnvelope) 
 			if member.Kind == commitlog.CommandKindCollectionUpdateBatchByID && row.current == nil {
 				return tree.ErrKeyNotFound
 			}
-			row.current = bytes.Clone(doc.Document)
+			row.current = bytes.Clone(normalized[0])
 		}
 		for _, id := range ids {
 			row, err := target.rows.touch(id, original, noAdmission)
