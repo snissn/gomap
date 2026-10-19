@@ -63,6 +63,20 @@ type NativeSemanticState interface {
 	PrepareHandoff(latest NativeSemanticState, accepted *Snapshot) (NativeSemanticState, error)
 }
 
+// NativeSemanticBasisRefresher optionally rebinds an immutable semantic root set
+// after logically equivalent backend maintenance. before and after are the exact
+// retained old/new physical Snapshots, never newly captured by the participant.
+// This is NOT an accepted flush handoff: no logical source, sequence or canonical
+// coverage may be consumed. Physical catalog roots may have moved during rewrite.
+// Every nonnil result transfers one owned PRIVATE edge, including on error; its
+// original Work owns partial construction. The caller adopts it before inspecting
+// err and releases failed private edges through its original off-gate cleanup.
+// Owners without this capability fail closed when a physical basis refresh is
+// requested. The build-only PrepareHandoff contract above remains unchanged.
+type NativeSemanticBasisRefresher interface {
+	PrepareBasisRefresh(before, after *Snapshot) (NativeSemanticState, error)
+}
+
 // NativePreparedPublication is admitted and owned before canonical assignment.
 // The native producer holds Basis through the synchronous publication and
 // transfers State plus sparse original Custody only on installation. Entries

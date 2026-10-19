@@ -31,6 +31,15 @@ on the public database continue through the same owner after native activation.
 Backend-only `OpenBackendWithCachedLeafLog*` constructors serve the legacy
 backend-authoritative route and do not provide this native capability.
 
+Equivalent backend maintenance uses the exact retained before/after physical
+Snapshots to rebind immutable native domain roots by their canonical qualified
+catalog descriptors. It preserves every pending/captured logical source and held
+old view, including when a rewrite moves aliased roots and persistent value-log
+pointers. This optional participant capability is separate from the single-use
+captured-flush build/handoff; unsupported semantic owners fail closed. Private
+partial successors use the original off-gate cleanup and maintenance admission.
+No on-disk format or canonical command changes are introduced.
+
 The two-phase frontend is `manager.Begin(collection, additional...)`, then
 transaction `InsertBatchInto`, `GetFrom`, `Commit()` and `Close()`. Single-collection
 callers can use `InsertBatch(ids, documents)` and `Get(id)`. Each bound collection

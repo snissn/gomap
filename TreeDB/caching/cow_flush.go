@@ -152,7 +152,30 @@ func (db *DB) installPreparedCOWBasis(basis *cowBackendBasis, covered, next *cow
 	if covered != nil {
 		captured = covered.frozenSemanticRootSet
 	}
-	if captured != nil {
+	if covered == nil {
+		// Maintenance changed only the physical basis. It has no captured build
+		// ledger and cannot consume a logical source or manufacture coverage.
+		// Adopt each private partial before checking err; installCOWBasis releases
+		// it through original cleanup only after this writer gate is dropped.
+		var err error
+		next.semanticRootSet, err = refreshCOWSemanticBasis(old.semanticRootSet, old.basis.snapshot, basis.snapshot)
+		if err != nil {
+			db.poisonNativeHandoff(err)
+			return nil, true, err
+		}
+		if old.frozenSemanticRootSet == old.semanticRootSet {
+			next.frozenSemanticRootSet = next.semanticRootSet
+			if next.frozenSemanticRootSet != nil {
+				next.frozenSemanticRootSet.Retain()
+			}
+		} else {
+			next.frozenSemanticRootSet, err = refreshCOWSemanticBasis(old.frozenSemanticRootSet, old.basis.snapshot, basis.snapshot)
+			if err != nil {
+				db.poisonNativeHandoff(err)
+				return nil, true, err
+			}
+		}
+	} else if captured != nil {
 		state, err := captured.PrepareHandoff(old.semanticRootSet, basis.snapshot)
 		if err != nil {
 			_, retryable := err.(backenddb.NativeSemanticHandoffRetryableRefusal)
@@ -215,6 +238,24 @@ func (db *DB) installPreparedCOWBasis(basis *cowBackendBasis, covered, next *cow
 		return old, false, nil
 	}
 	return nil, false, nil
+}
+
+// Nil is the original raw-only case. A semantic owner must explicitly prove
+// equivalent physical rebinding; retaining an unknown descriptor can leave its
+// scalar roots referring to the wrong Snapshot after rewrite/vacuum.
+func refreshCOWSemanticBasis(state backenddb.NativeSemanticState, before, after *backenddb.Snapshot) (backenddb.NativeSemanticState, error) {
+	if state == nil {
+		return nil, nil
+	}
+	refresher, ok := state.(backenddb.NativeSemanticBasisRefresher)
+	if !ok {
+		return nil, backenddb.ErrNativeSemanticUnsupported
+	}
+	next, err := refresher.PrepareBasisRefresh(before, after)
+	if err == nil && next == nil {
+		err = rootpublication.ErrPublisherProtocol
+	}
+	return next, err
 }
 
 func (db *DB) poisonNativeHandoff(err error) {

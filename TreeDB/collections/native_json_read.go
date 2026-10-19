@@ -249,11 +249,18 @@ func (r *NativeJSONRead) readValue(ptr page.ValuePtr, admitOutput func(uint64) e
 }
 
 func (r *NativeJSONRead) readLeaf(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
-	f, _, err := r.capture.Snapshot().PinnedValueLogFile(ptr.ValuePtr().FileID)
+	return readNativeSnapshotLeaf(r.capture.Snapshot(), r.capture.NativeAllocator(), ptr, dst)
+}
+
+// The exact enclosing Snapshot and original allocator are borrowed only through
+// this synchronous read. Maintenance descriptor reads reuse the same decoder,
+// admission and integrity policy without constructing another capture authority.
+func readNativeSnapshotLeaf(snapshot *backenddb.Snapshot, allocator backenddb.NativeSemanticAllocator, ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
+	f, _, err := snapshot.PinnedValueLogFile(ptr.ValuePtr().FileID)
 	if err != nil {
 		return nil, err
 	}
-	limit := r.capture.NativeAllocator().Limits().MaxInFlightBytes
+	limit := allocator.Limits().MaxInFlightBytes
 	shape, err := valuelog.InspectCOWLeafRecord(f, ptr.ValuePtr(), valuelog.COWReadLimits{MaxRecordBytes: limit, MaxRawBytes: limit, MaxValueBytes: limit})
 	if err != nil {
 		return nil, err
@@ -276,7 +283,7 @@ func (r *NativeJSONRead) readLeaf(ptr page.LeafLogPtr, dst []byte) ([]byte, erro
 		}
 		charge += part
 	}
-	lease, err := r.capture.NativeAllocator().AdmitNativeBytes(charge)
+	lease, err := allocator.AdmitNativeBytes(charge)
 	if err != nil {
 		return nil, err
 	}

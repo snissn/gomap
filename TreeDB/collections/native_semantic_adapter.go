@@ -26,7 +26,7 @@ func (e *nativeEngineVersion) PrepareBuild(group *backenddb.RootPublicationBuild
 	return build.materializeDomains(group)
 }
 
-// The two production callers are installPreparedCOWBasis in caching/cow_flush.go.
+// The two captured-flush callers are installPreparedCOWBasis in caching/cow_flush.go.
 // Both receive basis.snapshot from the SAME group's preaccepted h.basis adopter;
 // its accepted-cut receipt and retained opening cut establish exact physical
 // identity. This adapter never recaptures a Snapshot or creates another authority.
@@ -43,3 +43,15 @@ func (e *nativeEngineVersion) PrepareHandoff(latest backenddb.NativeSemanticStat
 	}
 	return next, nil
 }
+
+// PrepareBasisRefresh is independent of the single-use captured flush ledger.
+// Maintenance supplies the exact paired Snapshots and consumes no source prefix.
+func (e *nativeEngineVersion) PrepareBasisRefresh(before, after *backenddb.Snapshot) (backenddb.NativeSemanticState, error) {
+	next, err := prepareNativeEngineBasisRefresh(e, before, after)
+	if next == nil {
+		return nil, err
+	}
+	return next, err
+}
+
+var _ backenddb.NativeSemanticBasisRefresher = (*nativeEngineVersion)(nil)
