@@ -81,11 +81,22 @@ func (t *NativeJSONTxn) stageNativeTypedInsert(g *nativeJSONTxnBinding, ids, doc
 			return ErrDocumentExists
 		}
 	}
-	if err = nativeTypedValidateResidual(g.probe.meta, rows, residual); err != nil {
-		return err
-	}
+	// Parsing is complete. Drop its remaining document-header aliases before
+	// admitting constructor scratch from actual declared backing and residuals.
+	// Rows and residuals remain owned by their separate retained receipt.
+	docs = nil
 	capacity, err := nativeTypedDeltaBuildCapacity(g.probe.meta, rows, residual)
 	if err != nil {
+		return err
+	}
+	validation, err := nativeTypedCollectionBuildCapacity(g.probe.meta, capacity)
+	if err != nil {
+		return err
+	}
+	if err = work.Resize(max(scratch, validation)); err != nil {
+		return err
+	}
+	if err = nativeTypedValidateResidual(g.probe.meta, rows, residual); err != nil {
 		return err
 	}
 	refund := new(cowbtree.OwnedMapRefund)

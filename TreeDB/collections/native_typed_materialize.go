@@ -661,6 +661,8 @@ func (w *nativeTypedMaterialization) release() (cowbtree.OwnedMapCompletion, err
 // Swiss-map group entry, key/header and simultaneous old/replacement group.
 // The JSON encoder can escape each source byte to six output bytes; four
 // such source-sized buffers cover old/new marshal state and the owned copy.
+// Constructor scratch is admitted separately from the actual stripped residual
+// after these parser temporaries have been dropped.
 func nativeTypedStageCapacity(meta CollectionMeta, ids, docs [][]byte) (retained, scratch uint64, err error) {
 	if !nativeTypedMeta(meta) || len(ids) == 0 || len(ids) != len(docs) {
 		return 0, 0, backenddb.ErrNativeSemanticUnsupported
@@ -673,24 +675,19 @@ func nativeTypedStageCapacity(meta CollectionMeta, ids, docs [][]byte) (retained
 			return
 		}
 	}
-	if err = nativeTypedCheckedAdd(&scratch, memtable.COWAllocationCharge(uint64(len(ids))*uint64(unsafe.Sizeof(columnWriteDocument{})))); err != nil {
-		return
-	}
-	validationSource, err := nativeTypedManifestAppendCapacity(meta)
+	docHeaders, err := nativeTypedCheckedMul(uint64(len(ids)), uint64(unsafe.Sizeof(columnWriteDocument{})))
 	if err != nil {
 		return 0, 0, err
 	}
+	docHeaders = memtable.COWAllocationCharge(docHeaders)
+	scratch = docHeaders
 	for i, doc := range docs {
 		var output uint64
 		output, err = nativeTypedCheckedMul(uint64(len(doc)), 6)
 		if err != nil {
 			return
 		}
-		validationRow, e := nativeTypedDeltaRowBuildCapacity(uint64(len(ids[i])), output+2)
-		if e != nil {
-			return 0, 0, e
-		}
-		if err = nativeTypedCheckedAdd(&validationSource, validationRow); err != nil {
+		if err = nativeTypedCheckedAdd(&output, 2); err != nil {
 			return
 		}
 		var declared uint64
@@ -707,16 +704,7 @@ func nativeTypedStageCapacity(meta CollectionMeta, ids, docs [][]byte) (retained
 				return 0, 0, memtable.ErrCOWCapacity
 			}
 		}
-		// Include the actual family promise in this earlier conservative
-		// validation envelope too; validation must never borrow live delta credit.
-		declaredBuild, e := nativeTypedCheckedMul(declared, 12)
-		if e != nil {
-			return 0, 0, e
-		}
-		if err = nativeTypedCheckedAdd(&validationSource, memtable.COWAllocationCharge(declaredBuild)); err != nil {
-			return
-		}
-		for _, n := range []uint64{uint64(len(ids[i])), uint64(unsafe.Sizeof(columnDeclaredValue{})), output + 2, declared} {
+		for _, n := range []uint64{uint64(len(ids[i])), uint64(unsafe.Sizeof(columnDeclaredValue{})), output, declared} {
 			if err = nativeTypedCheckedAdd(&retained, memtable.COWAllocationCharge(n)); err != nil {
 				return
 			}
@@ -740,13 +728,12 @@ func nativeTypedStageCapacity(meta CollectionMeta, ids, docs [][]byte) (retained
 		if err = nativeTypedCheckedAdd(&maps, memtable.COWAllocationCharge(uint64(len(doc)))); err != nil {
 			return
 		}
-		scratch = max(scratch, memtable.COWAllocationCharge(maps)+memtable.COWAllocationCharge(uint64(len(ids))*uint64(unsafe.Sizeof(columnWriteDocument{}))))
+		maps = memtable.COWAllocationCharge(maps)
+		if err = nativeTypedCheckedAdd(&maps, docHeaders); err != nil {
+			return
+		}
+		scratch = max(scratch, maps)
 	}
-	validation, e := nativeTypedCollectionBuildCapacity(meta, validationSource)
-	if e != nil {
-		return 0, 0, e
-	}
-	scratch = max(scratch, validation)
 	return
 }
 
