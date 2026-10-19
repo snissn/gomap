@@ -1886,10 +1886,19 @@ func (ta *publicationGuardTaintAnalysis) emptyInterfaceDispatch(expr ast.Expr) b
 }
 
 func (ta *publicationGuardTaintAnalysis) transparentCall(call *ast.CallExpr) bool {
-	if fn := publicationGuardCalledFunc(call.Fun, ta.source.info); fn != nil && fn.Pkg() != nil && fn.Pkg().Path() == "os" && fn.Name() == "IsNotExist" && runtime.GOOS == "linux" && ta.verifySource("os/error.go", "f073f7fb0bad2cd69df450956b4a267b5ecfb519a9089d44fe6b6e2d6f766e18") && ta.verifySource("syscall/syscall_unix.go", "31fd5823803feb47f4ea0f13d3e0db5bd3cc6e37467bbebd8abbba8467cb20a7") {
+	if fn := publicationGuardCalledFunc(call.Fun, ta.source.info); fn != nil && fn.Pkg() != nil && fn.Pkg().Path() == "os" && fn.Name() == "IsNotExist" {
 		// Pinned underlyingErrorIs unwraps only concrete os wrappers and invokes
 		// only scalar syscall.Errno.Is; arbitrary error Is/Unwrap methods do not run.
-		return true
+		var syscallSource, syscallDigest string
+		switch runtime.GOOS {
+		case "linux", "darwin":
+			syscallSource, syscallDigest = "syscall/syscall_unix.go", "31fd5823803feb47f4ea0f13d3e0db5bd3cc6e37467bbebd8abbba8467cb20a7"
+		case "windows":
+			syscallSource, syscallDigest = "syscall/syscall_windows.go", "f1b22dde6bb980cf036561cee7ece968daa260cb622f32c96cebd52477b7a346"
+		}
+		if syscallSource != "" && ta.verifySource("os/error.go", "f073f7fb0bad2cd69df450956b4a267b5ecfb519a9089d44fe6b6e2d6f766e18") && ta.verifySource("os/error_errno.go", "3894fbb36a02dbdb543c074a2d7d316be881861dd787bb7eec06a3c074ef650b") && ta.verifySource(syscallSource, syscallDigest) {
+			return true
+		}
 	}
 	emptyDispatch := false
 	ta.withDispatchOrigins(call, func() { emptyDispatch = ta.emptyInterfaceDispatch(call.Fun) })

@@ -548,10 +548,9 @@ func TestCollectionValueLogRewriteOffline_RoundTripWithCompressedSecondaryIndexe
 		before = images()
 	}
 	rewriteStats, err := treedb.ValueLogRewriteOffline(opts)
-	if before != nil {
-		if !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
-			t.Fatalf("unsupported offline rewrite: %v", err)
-		}
+	// Only PRIMARY capsule replacement needs the complete stable namespace
+	// contract. The pager-root representation can still rewrite successfully.
+	if before != nil && errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
 		if !reflect.DeepEqual(before, images()) {
 			t.Fatal("unsupported offline rewrite changed persistent inputs")
 		}

@@ -11,7 +11,7 @@ import (
 )
 
 func TestPrimaryDependencyFailedLeaseRemainsOnActualOwner(t *testing.T) {
-	db, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+	db, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -16,7 +16,7 @@ import (
 func prepareAdvancedCompletedJointDecisionV6(t *testing.T, dir string) (Options, uint64, bool) {
 	t.Helper()
 	seq := prepareOfflinePointerPairV6(t, dir)
-	opts := Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true}
+	opts := Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true}
 	if primaryOfflinePlatformRefusal(t, opts, true) {
 		assertOfflinePointerPairV6(t, dir, seq)
 		return opts, seq, false
@@ -238,7 +238,7 @@ func TestPrimaryJointCompletedV6RejectsPhysicalChange(t *testing.T) {
 			if !rootpublication.StableRelativeNamespaceSupported() {
 				prior := preparePrimaryJointCrashV6(t, dir)
 				before := primaryPairImages(t, dir)
-				e := VacuumIndexOffline(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+				e := VacuumIndexOffline(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 				if !errors.Is(e, rootpublication.ErrNamespacePersistenceUnsupported) {
 					t.Fatalf("completed-pair platform refusal: %v", e)
 				}

@@ -18,7 +18,7 @@ import (
 )
 
 func TestPrimaryJointVacuumV6SuccessfulReplacement(t *testing.T) {
-	d, e := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+	d, e := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -59,7 +59,7 @@ func TestPrimaryJointVacuumV6PointersAndIndependentFallback(t *testing.T) {
 					t.Fatal(e)
 				}
 			}
-			opts := Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true}
+			opts := Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true}
 			d, e := Open(opts)
 			if e != nil {
 				t.Fatal(e)
@@ -189,7 +189,7 @@ func TestPrimaryJointVacuumV6PostCommitRecoveryAndCustody(t *testing.T) {
 	for _, phase := range []string{"after-commit", "before-data-rename", "after-data-rename", "before-data-barrier", "after-data-barrier", "before-primary-rename", "after-primary-rename", "before-primary-barrier", "after-primary-barrier", "before-decision-delete", "after-decision-delete", "before-deletion-barrier", "after-deletion-barrier"} {
 		t.Run(phase, func(t *testing.T) {
 			dir := t.TempDir()
-			opts := Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true}
+			opts := Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true}
 			d, e := Open(opts)
 			if e != nil {
 				t.Fatal(e)
@@ -318,7 +318,7 @@ func TestPrimaryJointCrashProcessV6(t *testing.T) {
 		}
 		return nil
 	}
-	d, e := Open(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+	d, e := Open(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -333,7 +333,7 @@ func TestPrimaryJointCrashProcessV6(t *testing.T) {
 func runPrimaryJointCrashV6(t *testing.T, dir, mode, phase string) bool {
 	t.Helper()
 	if runtime.GOOS == "windows" {
-		d, e := Open(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+		d, e := Open(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 		if e != nil {
 			t.Fatal(e)
 		}
@@ -375,7 +375,7 @@ func preparePrimaryJointCrashV6(t *testing.T, dir string) uint64 {
 }
 func assertPrimaryJointRecoveredV6(t *testing.T, dir string, want uint64) {
 	t.Helper()
-	d, e := Open(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+	d, e := Open(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -473,7 +473,7 @@ func TestPrimaryJointVacuumV6MalformedDecisionDoesNotCleanPair(t *testing.T) {
 				}
 				before[name] = sha256.Sum256(b)
 			}
-			opts := Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true}
+			opts := Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true}
 			for _, ro := range []bool{true, false} {
 				opts.ReadOnly = ro
 				d, e := Open(opts)
@@ -501,7 +501,7 @@ func TestPrimaryJointVacuumV6MalformedDecisionDoesNotCleanPair(t *testing.T) {
 func TestPrimaryJointVacuumV6OfflineUsesPairAuthority(t *testing.T) {
 	dir := t.TempDir()
 	prior := preparePrimaryJointCrashV6(t, dir)
-	opts := Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true}
+	opts := Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true}
 	if primaryOfflinePlatformRefusal(t, opts, false) {
 		assertPrimaryJointRecoveredV6(t, dir, prior)
 		return
@@ -516,7 +516,7 @@ func TestPrimaryJointVacuumV6OfflineUsesPairAuthority(t *testing.T) {
 func TestPrimaryJointVacuumV6CancellationAfterCommitRetainsDecision(t *testing.T) {
 	dir := t.TempDir()
 	preparePrimaryJointCrashV6(t, dir)
-	d, e := Open(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+	d, e := Open(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -649,7 +649,7 @@ func TestPrimaryJointVacuumV6CommittedPairPreservesIndependentFallback(t *testin
 			if e = os.WriteFile(path, image, 0600); e != nil {
 				t.Fatal(e)
 			}
-			d, e := Open(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+			d, e := Open(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 			if e != nil {
 				t.Fatal(e)
 			}
@@ -677,7 +677,7 @@ func TestPrimaryJointVacuumV6NamespaceObserverUncertainty(t *testing.T) {
 		t.Run(phase, func(t *testing.T) {
 			dir := t.TempDir()
 			prior := preparePrimaryJointCrashV6(t, dir)
-			opts := Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true}
+			opts := Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true}
 			d, e := Open(opts)
 			if e != nil {
 				t.Fatal(e)
@@ -760,7 +760,7 @@ func TestPrimaryJointVacuumV6NamespaceObserverUncertainty(t *testing.T) {
 // so custody belongs to the installed replacement and independent old readers.
 func TestPrimaryJointVacuumV6OldRuntimeRetirementErrorRetainsPublishedPair(t *testing.T) {
 	dir := t.TempDir()
-	opts := Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true}
+	opts := Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true}
 	d, e := Open(opts)
 	if e != nil {
 		t.Fatal(e)

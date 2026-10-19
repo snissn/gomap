@@ -203,7 +203,9 @@ func (c *Coordinator) ReleasePhysicalMetadata() (StableResourceTokenReleaseCompl
 	c.drains = nil
 	c.activeAttempt, c.retryAttempt = PublishAttempt{}, PublishAttempt{}
 	c.publisher, c.ctx, c.cancel, c.clock = nil, nil, nil, nil
-	c.acceptedOwner = nil
+	// acceptedOwner is immutable logical identity, not physical backing.
+	// Cleanup-only users can still inspect original failed custody after this
+	// physical runtime is disposed; never redirect them to the empty successor.
 	c.resourceActivePins, c.resourcePinHighWater = nil, nil
 	completion := c.metadataHeaderCompletionLocked()
 	completion.owner = c.metadataOwner

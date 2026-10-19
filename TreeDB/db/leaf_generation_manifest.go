@@ -399,7 +399,9 @@ func (db *DB) queueLeafGenerationWritableFileID(fileID uint32) {
 }
 
 func (db *DB) queueLeafGenerationWritableFileIDAtCommit(fileID uint32, commitSeq uint64) {
-	if db == nil || db.leafGenerationManifest == nil {
+	// Writer registration can overlap manifest publication. The layout is
+	// fixed at open; the pending inventory has its own lock below.
+	if db == nil || !db.indexOuterLeavesInValueLog {
 		return
 	}
 	rawFileID, ok := rawLeafGenerationFileID(fileID)
@@ -431,7 +433,7 @@ func (db *DB) snapshotLeafGenerationPendingFileIDs(currentFileID uint32) []leafG
 }
 
 func (db *DB) snapshotLeafGenerationPendingFileIDsWithLimit(currentFileID uint32, maxPending int) ([]leafGenerationPendingFile, error) {
-	if db == nil || db.leafGenerationManifest == nil {
+	if db == nil {
 		return nil, nil
 	}
 	currentRawFileID, _ := rawLeafGenerationFileID(currentFileID)
@@ -702,7 +704,7 @@ func (db *DB) stagedLeafGenerationManifestWithPendingResultAndLimit(base *leafGe
 }
 
 func (db *DB) noteLeafGenerationWritableFileIDs(fileIDs []uint32, commitSeq uint64) error {
-	if db == nil || db.leafGenerationManifest == nil || commitSeq == 0 || len(fileIDs) == 0 {
+	if db == nil || commitSeq == 0 || len(fileIDs) == 0 {
 		return nil
 	}
 	db.mu.RLock()
@@ -746,7 +748,7 @@ func (db *DB) noteLeafGenerationWritableFileIDs(fileIDs []uint32, commitSeq uint
 }
 
 func (db *DB) noteLeafGenerationWritableFileID(fileID uint32, commitSeq uint64) error {
-	if db == nil || db.leafGenerationManifest == nil {
+	if db == nil {
 		return nil
 	}
 	rawFileID, ok := rawLeafGenerationFileID(fileID)

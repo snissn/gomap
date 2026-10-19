@@ -5628,11 +5628,22 @@ func (db *DB) CompactIndex() (retErr error) {
 
 	// Build new tree sequentially
 	alloc := appendOnlyPageAllocator{alloc: idx.allocator}
+	var leafLog bulk.LeafPageAppender
+	if db.indexOuterLeavesInValueLog {
+		if db.leafPageLog == nil {
+			return errors.New("compact index: leaf page log not configured")
+		}
+		leafLog = db.leafPageLog
+	}
 	newRoot, err := bulk.BuildWithOptions(iter, alloc, idx.pager, bulk.BuildOptions{
 		LeafPrefixCompression: db.leafPrefixCompression,
 		LeafColumnar:          db.indexColumnarLeaves,
 		PackedValuePtr:        db.indexPackedValuePtr,
 		InternalBaseDelta:     db.indexInternalBaseDelta,
+		// Preserve the leaf storage kind so subsequent partial zipper writes
+		// cannot mix pager and leaf-log children in one internal node. Ordinary
+		// commit preparation below flushes and registers this producer's output.
+		LeafPageLog: leafLog,
 	})
 	if err != nil {
 		return err

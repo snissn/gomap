@@ -10,7 +10,7 @@ import (
 )
 
 func TestPrimaryProducerCertificateV6ActualImmutableCuts(t *testing.T) {
-	opts := Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true}
+	opts := Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true}
 	database, err := Open(opts)
 	if err != nil {
 		t.Fatal(err)
@@ -100,7 +100,7 @@ func TestPrimaryProducerCertificateV6ActualImmutableCuts(t *testing.T) {
 }
 
 func TestPrimaryProducerCertificateV6BindingAndFreshImage(t *testing.T) {
-	database, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+	database, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatal(err)
 	}

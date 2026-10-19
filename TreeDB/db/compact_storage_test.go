@@ -2561,7 +2561,7 @@ func TestCompactStorageHoldsMaintenanceLockAcrossPhases(t *testing.T) {
 	}
 }
 
-func TestCompactStorageReportsRetiringLeafGenerationAfterIndexVacuum(t *testing.T) {
+func TestCompactStorageDrainsRetiringLeafGenerationAfterIndexVacuum(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("index vacuum is unsupported on Windows; skipped-vacuum guard intentionally keeps leaf sources pinned")
 	}
@@ -2584,6 +2584,13 @@ func TestCompactStorageReportsRetiringLeafGenerationAfterIndexVacuum(t *testing.
 		if name != "leaf-generation-gc" || closedPinned {
 			return
 		}
+		// The original reader still protects the source before the cutover.
+		if _, err := os.Stat(path1); err != nil {
+			t.Fatalf("held reader lost leaf source before vacuum: %v", err)
+		}
+		if got, err := pinned.Get([]byte("k-0000")); err != nil || !bytes.Equal(got, bytes.Repeat([]byte{'a'}, 32)) {
+			t.Fatalf("held reader before vacuum=%q: %v", got, err)
+		}
 		closedPinned = true
 		if err := pinned.Close(); err != nil {
 			t.Fatalf("close pinned snapshot: %v", err)
@@ -2603,23 +2610,29 @@ func TestCompactStorageReportsRetiringLeafGenerationAfterIndexVacuum(t *testing.
 	if !closedPinned {
 		t.Fatal("phase hook did not close pinned snapshot")
 	}
-	if stats.FullyCompacted || stats.PolicyFullyCompacted || stats.ByteMinimized {
-		t.Fatalf("retiring leaf generation overstated completion: %+v", stats)
+	if !stats.FullyCompacted || !stats.PolicyFullyCompacted {
+		t.Fatalf("unheld retiring leaf generation did not converge: %+v", stats)
 	}
 	phase := compactStorageIndexVacuumPhase(t, stats)
 	if phase.Status != CompactStoragePhaseStatusSucceeded || !phase.Required || phase.Reason != "leaf_generation" {
 		t.Fatalf("index vacuum phase=%+v want required leaf-generation success", phase)
 	}
-	if stats.RemainingDebt.LeafGCGenerations == 0 {
-		t.Fatalf("retiring leaf generation missing from final debt: %+v", stats.RemainingDebt)
+	if stats.RemainingDebt.LeafGCGenerations != 0 || stats.RemainingDebt.LeafGCBytes != 0 {
+		t.Fatalf("unheld retiring leaf generation retained final debt: %+v", stats.RemainingDebt)
 	}
-	if _, err := os.Stat(path1); err != nil {
-		t.Fatalf("retiring leaf source removed while index vacuum is fenced: %v", err)
+	if _, err := os.Stat(path1); !os.IsNotExist(err) {
+		t.Fatalf("converged leaf source remains after vacuum: %v", err)
 	}
 	manifest := loadLeafGenerationManifestOrFatal(t, dir)
-	gen := findLeafGenerationByFileID(t, manifest, rawFileID1)
-	if got, want := gen.State, leafGenerationStateRetiring; got != want {
-		t.Fatalf("generation state after fenced vacuum=%q want %q manifest=%+v", got, want, manifest.Generations)
+	for _, gen := range manifest.Generations {
+		for _, fileID := range gen.FileIDs {
+			if fileID == rawFileID1 {
+				t.Fatalf("deleted source remains in manifest: %+v", gen)
+			}
+		}
+	}
+	if got, err := d.Get([]byte("k-0000")); err != nil || !bytes.Equal(got, bytes.Repeat([]byte{'b'}, 32)) {
+		t.Fatalf("current reader after vacuum=%q: %v", got, err)
 	}
 }
 
@@ -2661,8 +2674,8 @@ func TestCompactStorageKeepsPackedLeafSourcesUntilIndexVacuum(t *testing.T) {
 	if !sawLeafGC {
 		t.Fatal("leaf-generation-gc phase hook did not run")
 	}
-	if stats.FullyCompacted || stats.PolicyFullyCompacted || stats.RemainingDebt.LeafGCGenerations == 0 {
-		t.Fatalf("retained packed source must remain reported debt: %+v", stats)
+	if !stats.FullyCompacted || !stats.PolicyFullyCompacted || stats.RemainingDebt.LeafGCGenerations != 0 || stats.RemainingDebt.LeafGCBytes != 0 {
+		t.Fatalf("post-vacuum recovery convergence retained unheld leaf-GC debt: %+v", stats)
 	}
 }
 
@@ -2827,8 +2840,8 @@ func TestCompactStorageReportsAndCompactsSelectableLeafPackDebt(t *testing.T) {
 	if stats.RemainingDebt.LeafPackGenerations != 0 || stats.RemainingDebt.LeafPackBytes != 0 {
 		t.Fatalf("remaining leaf-pack debt=%+v, want none", stats.RemainingDebt)
 	}
-	if stats.FullyCompacted || stats.PolicyFullyCompacted || stats.RemainingDebt.LeafGCGenerations == 0 {
-		t.Fatalf("retained source must remain reported leaf-GC debt: %+v", stats)
+	if !stats.FullyCompacted || !stats.PolicyFullyCompacted || stats.RemainingDebt.LeafGCGenerations != 0 || stats.RemainingDebt.LeafGCBytes != 0 {
+		t.Fatalf("post-vacuum recovery convergence retained unheld leaf-GC debt: %+v", stats)
 	}
 }
 
@@ -2999,8 +3012,8 @@ func TestCompactStorageStopsLeafPackOnLowYieldResidualWithinPassBudget(t *testin
 	if stats.RemainingDebt.LeafPackGenerations != 0 || stats.RemainingDebt.LeafPackBytes != 0 {
 		t.Fatalf("expected bounded leaf-pack policy convergence, debt=%+v", stats.RemainingDebt)
 	}
-	if stats.FullyCompacted || stats.PolicyFullyCompacted || stats.RemainingDebt.LeafGCGenerations == 0 {
-		t.Fatalf("retained leaf-GC debt must keep completion false: %+v", stats)
+	if !stats.FullyCompacted || !stats.PolicyFullyCompacted || stats.RemainingDebt.LeafGCGenerations != 0 || stats.RemainingDebt.LeafGCBytes != 0 {
+		t.Fatalf("post-vacuum recovery convergence retained unheld leaf-GC debt: %+v", stats)
 	}
 }
 
@@ -3367,8 +3380,8 @@ func TestCompactStorageExhaustiveSealsCurrentLeafGeneration(t *testing.T) {
 	if !compactStoragePhaseSeen(stats.Phases, "seal-current-leaf-generation") {
 		t.Fatalf("missing seal-current-leaf-generation phase: %+v", stats.Phases)
 	}
-	if stats.ByteMinimized || stats.FullyCompacted || stats.PolicyFullyCompacted || stats.RemainingDebt.LeafGCGenerations == 0 {
-		t.Fatalf("exhaustive retained source overstated completion: byte=%t fully=%t policy=%t debt=%+v", stats.ByteMinimized, stats.FullyCompacted, stats.PolicyFullyCompacted, stats.RemainingDebt)
+	if !stats.ByteMinimized || !stats.FullyCompacted || !stats.PolicyFullyCompacted || stats.RemainingDebt.LeafGCGenerations != 0 || stats.RemainingDebt.LeafGCBytes != 0 {
+		t.Fatalf("exhaustive post-vacuum convergence retained unheld debt: byte=%t fully=%t policy=%t debt=%+v", stats.ByteMinimized, stats.FullyCompacted, stats.PolicyFullyCompacted, stats.RemainingDebt)
 	}
 	if len(stats.LeafGenerationPacks) == 0 || !stats.LeafGenerationPacks[0].Ran {
 		t.Fatalf("expected exhaustive leaf pack to run after sealing current generation: %+v", stats.LeafGenerationPacks)

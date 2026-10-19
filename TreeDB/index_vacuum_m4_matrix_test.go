@@ -314,7 +314,7 @@ func runIndexVacuumM4MatrixCell(t *testing.T, fixture indexVacuumM4Fixture, lane
 	cell.Details["freelist_reclaimable_pages_before"] = strconv.FormatUint(report.FreelistReclaimablePages, 10)
 	cell.Details["freelist_reclaimable_ratio_ppm_before"] = strconv.FormatUint(report.FreelistReclaimableRatioPPM, 10)
 	cell.HighDebt = report.FreelistReclaimableValid && report.FreelistReclaimableRatioPPM >= 500_000
-	if !opts.IndexOuterLeavesInValueLog && !cell.HighDebt {
+	if !cell.HighDebt {
 		t.Fatalf("fixture failed to establish real DATA freelist debt: %+v", report)
 	}
 	// Every deterministic matrix fixture is seeded with reclaimable index debt.
@@ -492,13 +492,13 @@ func openIndexVacuumM4Fixture(t *testing.T, opts Options, fixture indexVacuumM4F
 			t.Fatalf("close generation=%d: %v", generation, err)
 		}
 	}
-	if !opts.IndexOuterLeavesInValueLog {
-		// Small PRIMARY-only updates can advance slot/parent horizons without
-		// materializing another DATA freelist generation. Seed actual retired
-		// DATA bases through three bounded rebuilds; one or two leave the inline
-		// fixture with zero reclaimable pages. Keep the resulting debt explicit
-		// so every maintenance lane must exercise its original production trigger.
-		for rebuild := 0; rebuild < 3; rebuild++ {
+	{
+		// Seed real retired DATA bases for every layout, including outer leaves.
+		// An outer-leaf rebuild retires only its DATA internal pages, so a fixed
+		// three rebuilds does not overcome the fixed metadata floor. Stop on
+		// measured reclaimable debt, with a hard bound on fixture construction.
+		// The >=50% debt precondition and >=40% shrink gate stay the same.
+		for rebuild := 0; rebuild < 64; rebuild++ {
 			before, err := database.backend.IndexVacuumTriggerReport()
 			if err != nil {
 				t.Fatalf("trigger report before fixture rebuild: %v", err)
@@ -519,6 +519,9 @@ func openIndexVacuumM4Fixture(t *testing.T, opts Options, fixture indexVacuumM4F
 				t.Fatalf("fixture rebuild did not create a fresh DATA generation: generation=%s->%s pages=%d->%d parse=%v/%v", beforeGeneration, afterGeneration, before.TotalPages, after.TotalPages, beforeErr, afterErr)
 			}
 			t.Logf("fixture DATA rebuild=%d commit=%d->%d generation=%s->%s pages=%d->%d reclaimable=%d->%d ratio_ppm=%d->%d", rebuild+1, before.CommitSeq, after.CommitSeq, beforeGeneration, afterGeneration, before.TotalPages, after.TotalPages, before.FreelistReclaimablePages, after.FreelistReclaimablePages, before.FreelistReclaimableRatioPPM, after.FreelistReclaimableRatioPPM)
+			if rebuild >= 2 && after.FreelistReclaimableValid && after.FreelistReclaimableRatioPPM >= 500_000 {
+				break
+			}
 		}
 		for generation := 0; generation < 2; generation++ {
 			if err := database.SetSync([]byte("m4/0000"), bytes.Repeat([]byte{byte(240 + generation)}, fixture.valueSize)); err != nil {

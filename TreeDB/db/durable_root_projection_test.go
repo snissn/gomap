@@ -147,16 +147,8 @@ func TestProjectRebuiltOlderRootDurableResourcesMatchesExactScan(t *testing.T) {
 	if err := batch.Close(); err != nil {
 		t.Fatal(err)
 	}
-	builder := rootpublication.NewStableResourceSetBuilder()
-	if selected := database.durableRoot.slotResources[database.durableRoot.slot]; selected != nil {
-		if err := builder.Merge(selected); err != nil {
-			builder.Abandon()
-			t.Fatal(err)
-		}
-	}
-	source, err := builder.Freeze()
+	source, err := rootpublication.CloneStableResourceSetExcludingKinds(database.durableRoot.slotResources[database.durableRoot.slot])
 	if err != nil {
-		builder.Abandon()
 		t.Fatal(err)
 	}
 	defer source.Release()
@@ -179,25 +171,34 @@ func TestProjectRebuiltOlderRootDurableResourcesMatchesExactScan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer projectedManifest.ReleaseOwnedMetadataV1()
 	exactManifest, _, err := exact.DependencyManifestV1()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(projectedManifest.Entries(), exactManifest.Entries()) {
-		t.Fatalf("projected closure differs from exact scan\nprojected=%+v\nexact=%+v", projectedManifest.Entries(), exactManifest.Entries())
-	}
-	wantKinds := map[rootpublication.ResourceKind]bool{
-		rootpublication.ResourceValueLog: false, rootpublication.ResourceOuterLeafLog: false,
-	}
-	for _, entry := range projectedManifest.Entries() {
-		if _, ok := wantKinds[entry.Kind]; ok {
-			wantKinds[entry.Kind] = true
-		}
-	}
-	for kind, found := range wantKinds {
-		if !found {
-			t.Fatalf("dual-compute fixture missing %q", kind)
-		}
+	defer exactManifest.ReleaseOwnedMetadataV1()
+	if err := projectedManifest.WithEntriesV1(func(projectedEntries []rootpublication.DependencyManifestEntryV1) error {
+		return exactManifest.WithEntriesV1(func(exactEntries []rootpublication.DependencyManifestEntryV1) error {
+			if !reflect.DeepEqual(projectedEntries, exactEntries) {
+				t.Fatalf("projected closure differs from exact scan\nprojected=%+v\nexact=%+v", projectedEntries, exactEntries)
+			}
+			wantKinds := map[rootpublication.ResourceKind]bool{
+				rootpublication.ResourceValueLog: false, rootpublication.ResourceOuterLeafLog: false,
+			}
+			for _, entry := range projectedEntries {
+				if _, ok := wantKinds[entry.Kind]; ok {
+					wantKinds[entry.Kind] = true
+				}
+			}
+			for kind, found := range wantKinds {
+				if !found {
+					t.Fatalf("dual-compute fixture missing %q", kind)
+				}
+			}
+			return nil
+		})
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 

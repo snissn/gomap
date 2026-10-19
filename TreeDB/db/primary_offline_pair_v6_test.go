@@ -22,7 +22,7 @@ type offlineRootValueV6 struct {
 
 func prepareOfflinePointerPairV6(t *testing.T, dir string) uint64 {
 	t.Helper()
-	d, err := Open(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+	d, err := Open(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func prepareOfflinePointerPairV6(t *testing.T, dir string) uint64 {
 
 func assertOfflinePointerPairV6(t *testing.T, dir string, seq uint64) {
 	t.Helper()
-	d, err := Open(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+	d, err := Open(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +88,7 @@ func TestPrimaryOfflineVlogV6CacheInvalidationRecovery(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			opts := Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true}
+			opts := Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true}
 			if primaryOfflinePlatformRefusal(t, opts, true) {
 				assertOfflinePointerPairV6(t, dir, seq)
 				return
@@ -100,7 +100,7 @@ func TestPrimaryOfflineVlogV6CacheInvalidationRecovery(t *testing.T) {
 				}
 				return nil
 			}
-			_, err = ValueLogRewriteOffline(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+			_, err = ValueLogRewriteOffline(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 			testHookPrimaryJointSwapV6 = nil
 			if !errors.Is(err, injected) || (phase == "after-commit" && !errors.Is(err, ErrRecoveryRequired)) {
 				t.Fatalf("cut %s: %v", phase, err)
@@ -123,7 +123,7 @@ func TestPrimaryOfflineVlogV6IndependentFallback(t *testing.T) {
 		t.Run(fmt.Sprint(badSlot), func(t *testing.T) {
 			dir := t.TempDir()
 			seq := prepareOfflinePointerPairV6(t, dir)
-			opts := Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true}
+			opts := Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true}
 			if primaryOfflinePlatformRefusal(t, opts, true) {
 				assertOfflinePointerPairV6(t, dir, seq)
 				return
@@ -182,7 +182,7 @@ func TestPrimaryOfflineVlogV6IndependentFallback(t *testing.T) {
 func TestPrimaryOfflinePairV6SourceCloseFailurePreventsCommit(t *testing.T) {
 	dir := t.TempDir()
 	preparePrimaryJointCrashV6(t, dir)
-	opts := Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true}
+	opts := Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true}
 	d, err := Open(opts)
 	if err != nil {
 		t.Fatal(err)
@@ -243,7 +243,7 @@ func TestPrimaryOfflinePairV6RejectsBeforeRenameIdentityReplacement(t *testing.T
 	}
 	if !rootpublication.StableRelativeNamespaceSupported() {
 		before := primaryPairImages(t, dir)
-		err = VacuumIndexOffline(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+		err = VacuumIndexOffline(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 		if !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
 			t.Fatalf("offline platform refusal: %v", err)
 		}
@@ -265,7 +265,7 @@ func TestPrimaryOfflinePairV6RejectsBeforeRenameIdentityReplacement(t *testing.T
 		}
 		return os.WriteFile(filepath.Join(dir, indexNewFileName), []byte("foreign"), 0600)
 	}
-	err = VacuumIndexOffline(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+	err = VacuumIndexOffline(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 	testHookPrimaryJointSwapV6 = nil
 	if !errors.Is(err, ErrRecoveryRequired) {
 		t.Fatalf("replacement accepted: %v", err)
@@ -286,7 +286,7 @@ func TestPrimaryOfflinePairV6RejectsBeforeRenameIdentityReplacement(t *testing.T
 func TestPrimaryOfflinePairV6PreservesSlotsProofsAndPointerClosure(t *testing.T) {
 	for _, mode := range []string{"vacuum", "vlog"} {
 		t.Run(mode, func(t *testing.T) {
-			opts := Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true}
+			opts := Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true}
 			d, err := Open(opts)
 			if err != nil {
 				t.Fatal(err)
@@ -487,7 +487,7 @@ func TestPrimaryOfflinePairV6RetainsUncertainDecision(t *testing.T) {
 		t.Run(phase, func(t *testing.T) {
 			dir := t.TempDir()
 			prior := preparePrimaryJointCrashV6(t, dir)
-			if primaryOfflinePlatformRefusal(t, Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true}, false) {
+			if primaryOfflinePlatformRefusal(t, Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true}, false) {
 				return
 			}
 			injected := fmt.Errorf("offline injected %s", phase)
@@ -497,7 +497,7 @@ func TestPrimaryOfflinePairV6RetainsUncertainDecision(t *testing.T) {
 				}
 				return nil
 			}
-			err := VacuumIndexOffline(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+			err := VacuumIndexOffline(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 			testHookPrimaryJointSwapV6 = nil
 			if !errors.Is(err, injected) || !errors.Is(err, ErrRecoveryRequired) {
 				t.Fatalf("uncertainty: %v", err)
@@ -509,7 +509,7 @@ func TestPrimaryOfflinePairV6RetainsUncertainDecision(t *testing.T) {
 			if _, err = decodePrimaryJointDecisionV6(image); err != nil {
 				t.Fatal(err)
 			}
-			_, err = Open(Options{Dir: dir, ReadOnly: true, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed})
+			_, err = Open(Options{Dir: dir, ReadOnly: true, ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed})
 			if !errors.Is(err, ErrRecoveryRequired) {
 				t.Fatalf("readonly accepted pending pair: %v", err)
 			}
@@ -528,7 +528,7 @@ func TestPrimaryOfflinePairV6ConstructionUsesRetainedParent(t *testing.T) {
 				t.Fatal(err)
 			}
 			preparePrimaryJointCrashV6(t, dir)
-			d, err := Open(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+			d, err := Open(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -600,7 +600,7 @@ func TestPrimaryOfflinePairV6ConstructionUsesRetainedParent(t *testing.T) {
 func TestPrimaryOfflinePairV6ConstructionFailureCleansOnlyOwnedStage(t *testing.T) {
 	dir := t.TempDir()
 	preparePrimaryJointCrashV6(t, dir)
-	d, err := Open(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+	d, err := Open(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -642,7 +642,7 @@ func TestPrimaryOfflinePairV6ConstructionFailureCleansOnlyOwnedStage(t *testing.
 func TestPrimaryOfflineScopeV6ParentOutlivesPhysicalPair(t *testing.T) {
 	dir := t.TempDir()
 	preparePrimaryJointCrashV6(t, dir)
-	d, err := Open(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+	d, err := Open(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -703,7 +703,7 @@ func TestPrimaryOfflineScopeV6ParentOutlivesPhysicalPair(t *testing.T) {
 func TestPrimaryOfflineScopeV6PhysicalFailureRetainsControls(t *testing.T) {
 	dir := t.TempDir()
 	preparePrimaryJointCrashV6(t, dir)
-	d, err := Open(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+	d, err := Open(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -765,7 +765,7 @@ func TestPrimaryOfflineScopeV6PhysicalFailureRetainsControls(t *testing.T) {
 func TestPrimaryOfflineScopeV6ParentFailureRetainsExactCustody(t *testing.T) {
 	dir := t.TempDir()
 	preparePrimaryJointCrashV6(t, dir)
-	d, err := Open(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+	d, err := Open(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -815,7 +815,7 @@ func TestPrimaryOfflineScopeV6ParentFailureRetainsExactCustody(t *testing.T) {
 func TestPrimaryOfflinePairChildProducerAdmission(t *testing.T) {
 	for _, refuse := range []bool{false, true} {
 		t.Run(map[bool]string{false: "physical-completion", true: "before-create-refusal"}[refuse], func(t *testing.T) {
-			d, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+			d, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 			if err != nil {
 				t.Fatal(err)
 			}
