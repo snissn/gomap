@@ -406,9 +406,11 @@ func checkNativeTypedMultiFrame(t *testing.T, opts Options, cases []nativeTypedM
 			t.Fatalf("member%d kind=%d format=%d", i, member.Kind, member.PayloadFormat)
 		}
 	}
+	// SetRaw uses ordinary ConditionalTxn.Set, whose entry revision is legacy
+	// zero. The assigned outer command LSN does not assign an entry revision.
 	raw, err := commitlog.DecodeRawKVBatchPayload(members[0].Payload)
-	if err != nil || members[0].Incarnation != 0 || len(raw) != 1 || raw[0].Op != commitlog.RawKVOpSet || string(raw[0].Key) != "typed-multi/raw" || string(raw[0].Value) != "new" || raw[0].Revision == 0 {
-		t.Fatalf("one assigned raw binding: %+v %v", raw, err)
+	if err != nil || members[0].Incarnation != 0 || len(raw) != 1 || raw[0].Op != commitlog.RawKVOpSet || string(raw[0].Key) != "typed-multi/raw" || string(raw[0].Value) != "new" || raw[0].Revision != 0 {
+		t.Fatalf("one original raw binding: %+v %v", raw, err)
 	}
 	for _, i := range []int{1, 2, 3, 4, 5} {
 		if members[i].Incarnation == 0 {
