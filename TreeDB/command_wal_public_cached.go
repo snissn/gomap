@@ -367,7 +367,7 @@ func (tdb *DB) snapshotPublicCommandWALCheckpointCutover() {
 	tdb.commandWALCheckpointCutoverErr = nil
 	// A COW cache rotates at its complete raw+semantic cut. These counters
 	// remain public raw notification bookkeeping, never COW coverage authority.
-	if last == 0 || tdb.txnOwner != nil {
+	if last == 0 || (tdb.cached != nil && tdb.cached.COWMode()) {
 		return
 	}
 	if tdb.backend == nil {
