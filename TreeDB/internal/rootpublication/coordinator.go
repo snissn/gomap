@@ -1297,7 +1297,12 @@ func (c *Coordinator) failWaitersLocked(err error) {
 		waiter.ch <- err
 	}
 	clear(c.waiters)
-	c.waiters = c.waiters[:0]
+	if c.metadataOwner == nil {
+		c.waiters = nil
+	} else {
+		// Keep original admitted backing until physical metadata completion.
+		c.waiters = c.waiters[:0]
+	}
 }
 
 func (c *Coordinator) terminalErrorLocked() error {
