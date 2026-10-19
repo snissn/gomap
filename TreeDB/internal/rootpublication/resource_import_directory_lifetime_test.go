@@ -190,6 +190,24 @@ func TestOwnedImportedTokenDirectoryLifetimeAndRefusal(t *testing.T) {
 			if release.calls != 0 || directory.refs.Load() != 1 || original.released.Load() || producer.Stats().ActivePins != 1 {
 				t.Fatal("original edges consumed surviving clone custody")
 			}
+			// A later publication can clone this imported, already-bound token
+			// after all original caller edges have gone. Keep the SAME directory
+			// and producer root, then retire the earlier imported descriptor.
+			next, err := survivor.cloneOwnedPinnedDirectory(survivor.logicalLane, survivor.resourceID, survivor.diagnosticPath, survivor.frontier, survivor.reachability, survivor.logicalObligations, survivor.directory, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer next.Release()
+			if next.directory != directory || next.physicalBacking.sourceRoot != root || next.importedSource != original || directory.refs.Load() != 2 {
+				t.Fatal("recloning bound imported token replaced original custody")
+			}
+			if err = survivor.ReleaseWithError(); err != nil {
+				t.Fatal(err)
+			}
+			survivor = next
+			if directory.refs.Load() != 1 || release.calls != 0 || original.released.Load() {
+				t.Fatal("retiring earlier clone consumed later bound clone custody")
+			}
 			if err = survivor.WithPinnedFile(func(pinned *os.File) error {
 				got := make([]byte, len("original-resource-bytes"))
 				if _, err := pinned.ReadAt(got, 0); err != nil {
