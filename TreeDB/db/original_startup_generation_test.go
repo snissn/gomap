@@ -60,7 +60,7 @@ func TestOriginalReadOnlyStartupCleanupPhysicalRefusalRetainsLock(t *testing.T) 
 		}
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
-			seed, err := Open(Options{Dir: dir, CommandWAL: true, IndexPrimaryDirectory: true, DisableBackgroundPrune: true})
+			seed, err := Open(Options{Dir: dir, CommandWAL: true, DisableBackgroundPrune: true})
 			if err != nil {
 				t.Fatal(err)
 			}
