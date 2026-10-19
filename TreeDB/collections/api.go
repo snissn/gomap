@@ -23496,6 +23496,11 @@ func (c *Collection) scanDocumentsByIndexRange(indexName string, opts IndexRange
 	if c == nil {
 		return false, false, errCollectionNil
 	}
+	if c.nativeJSON != nil {
+		return c.scanNativeIndexRange(indexName, opts, true, func(id, document []byte) (bool, error) {
+			return fn(BorrowedDocumentRecord{ID: id, Document: document})
+		})
+	}
 	if c.db == nil {
 		return false, false, errCollectionDBNil
 	}
@@ -23747,7 +23752,9 @@ func orderedBSONIndexRequiresCompoundRangeAPI(idx IndexDefinition) bool {
 
 func (c *Collection) scanIndexRange(indexName string, opts IndexRangeOptions, fn func(id []byte) (bool, error)) (bool, bool, error) {
 	if c != nil && c.nativeJSON != nil {
-		return false, false, backenddb.ErrNativeSemanticUnsupported
+		return c.scanNativeIndexRange(indexName, opts, false, func(id, _ []byte) (bool, error) {
+			return fn(id)
+		})
 	}
 	if c == nil {
 		return false, false, errCollectionNil

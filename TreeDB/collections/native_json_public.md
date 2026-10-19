@@ -33,6 +33,15 @@ ordered JSON mutation path; supported scalar types are string, bool, int64 and
 double. Compound and multikey indexes, array index values, text/vector index
 creation and non-JSON document formats remain outside this route.
 
+Scalar JSON index reads support `FindByIndexRange`, `ScanIndexRange`,
+`FindDocumentsByIndexRange` and `ScanBorrowedDocumentsByIndexRange`. Ascending
+scans seek directly to the maintained scalar bounds and merge pending,
+captured and persisted winners from one immutable cut. Document reads resolve
+primary values from that same cut. Limits report truncation only when an
+additional live match exists; a callback stop is not truncation. Missing indexes
+are empty scans. Document ranges require a positive limit, and borrowed-document
+callbacks retain their existing no-retention/no-reentry contract.
+
 Eligible typed collections also route `InsertTypedBatchWithStats`,
 `ReplaceTypedBatch`, `UpsertTypedBatch`, `ReplaceTypedSourceByID` and `DeleteBatch`
 through the same transaction and immutable typed projection. Current eligibility
