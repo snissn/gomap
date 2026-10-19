@@ -276,10 +276,34 @@ func TestNativePreparedInsertRefusalAndConsumption(t *testing.T) {
 func TestNativePreparedInsertRejectsNonDurableProfiles(t *testing.T) {
 	for _, profile := range []Profile{ProfileCommandWALRelaxed, ProfileNoWALFast} {
 		t.Run(string(profile), func(t *testing.T) {
-			dir := t.TempDir()
-			// A persisted eligible typed collection remains readable in these
-			// profiles; preparing a write must refuse before opening a txn.
-			database, err := Open(indexedSliceOptions(ProfileCommandWALDurable, dir))
+			opts := indexedSliceOptions(profile, t.TempDir())
+			// The maintained legacy factory can create this empty typed catalog.
+			// Reopen through the public native role with the same profile: typed
+			// reads remain eligible, but preparation must refuse before a txn.
+			backend, closeLegacy, err := OpenBackendWithCachedLeafLog(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if closeLegacy != nil {
+					_ = closeLegacy()
+				}
+			})
+			legacyManager := collections.NewCollectionManager(backend)
+			t.Cleanup(func() { _ = legacyManager.Close() })
+			fixture := nativeColumnPendingCaseFor(t, "int64")
+			if _, err := legacyManager.CreateCollection(nativeColumnPendingMeta(fixture)); err != nil {
+				t.Fatal(err)
+			}
+			if err := legacyManager.Close(); err != nil {
+				t.Fatal(err)
+			}
+			closeOriginal := closeLegacy
+			closeLegacy = nil
+			if err := closeOriginal(); err != nil {
+				t.Fatal(err)
+			}
+			database, err := Open(opts)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -290,32 +314,12 @@ func TestNativePreparedInsertRejectsNonDurableProfiles(t *testing.T) {
 			}
 			manager := collections.NewCollectionManager(handle)
 			t.Cleanup(func() { _ = manager.Close() })
-			fixture := nativeColumnPendingCaseFor(t, "int64")
-			if _, err := manager.CreateCollection(nativeColumnPendingMeta(fixture)); err != nil {
-				t.Fatal(err)
-			}
-			if err := manager.Close(); err != nil {
-				t.Fatal(err)
-			}
-			cache := database.cached
-			if err := database.Close(); err != nil {
-				t.Fatal(err)
-			}
-			requirePublicCOWFinalZero(t, cache)
-			database, err = Open(indexedSliceOptions(profile, dir))
-			if err != nil {
-				t.Fatal(err)
-			}
-			handle, err = database.NativeSemanticBackend()
-			if err != nil {
-				t.Fatal(err)
-			}
-			manager = collections.NewCollectionManager(handle)
 			col, err := manager.OpenCollection("events")
 			if err != nil {
 				t.Fatal(err)
 			}
 			next, sequence := handle.CommandWALNextLSN(), database.Stats()["treedb.cache.cow.txn.logical_seq"]
+			physical := indexedCRUDAppliedLSN(t, handle)
 			before, pins := database.cached.COWMemoryStats(), handle.ValueLogIdentityPinRegistry().Stats()
 			if p, err := col.PrepareInsertBatchOwned([][]byte{[]byte("refused")}, [][]byte{fixture.docs[1]}, nativePreparedRequestLimit); p != nil || !errors.Is(err, backenddb.ErrNativeSemanticUnsupported) {
 				if p != nil {
@@ -323,13 +327,16 @@ func TestNativePreparedInsertRejectsNonDurableProfiles(t *testing.T) {
 				}
 				t.Fatalf("unsupported profile preparation p=%v: %v", p, err)
 			}
-			if handle.CommandWALNextLSN() != next || database.Stats()["treedb.cache.cow.txn.logical_seq"] != sequence || database.cached.COWMemoryStats() != before || handle.ValueLogIdentityPinRegistry().Stats() != pins {
+			if handle.CommandWALNextLSN() != next || database.Stats()["treedb.cache.cow.txn.logical_seq"] != sequence || indexedCRUDAppliedLSN(t, handle) != physical || database.cached.COWMemoryStats() != before || handle.ValueLogIdentityPinRegistry().Stats() != pins {
 				t.Fatal("unsupported profile changed frontiers or original admission")
+			}
+			if got, err := col.Get([]byte("refused")); err != nil || got != nil {
+				t.Fatalf("refused row became visible: %s %v", got, err)
 			}
 			if err := manager.Close(); err != nil {
 				t.Fatal(err)
 			}
-			cache = database.cached
+			cache := database.cached
 			if err := database.Close(); err != nil {
 				t.Fatal(err)
 			}
