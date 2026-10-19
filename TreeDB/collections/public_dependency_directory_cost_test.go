@@ -275,7 +275,11 @@ func TestPublicColumnDependencyDirectoryIncrementalCost(t *testing.T) {
 		t.Helper()
 		for i := range ids {
 			for j := range ids[i] {
-				assertCollectionDocument(t, col, string(ids[i][j]), string(docs[i][j]))
+				got, err := col.Get(ids[i][j])
+				if err != nil {
+					t.Fatalf("current batch %d row %d id=%q Get: %v want=%q", i, j, ids[i][j], err, docs[i][j])
+				}
+				assertJSONEqualM13C(t, got, docs[i][j])
 			}
 		}
 		assertColumnManifestStateM10B(t, col, batches+1, d.State().AppliedCommandLSN, mgr)
@@ -285,8 +289,18 @@ func TestPublicColumnDependencyDirectoryIncrementalCost(t *testing.T) {
 		for i := range ids {
 			for j := range ids[i] {
 				got, found, err := collectionGetAppendAtCatalogRoot(old, oldCatalog, collectionPrimaryRootName("bench"), ids[i][j], nil)
-				if err != nil || found != (i == 0) || (i == 0 && !bytes.Equal(got, docs[i][j])) {
-					t.Fatalf("old batch %d row %d found=%t err=%v", i, j, found, err)
+				if err != nil || found != (i == 0) {
+					t.Fatalf("old batch %d row %d id=%q found=%t err=%v retained=%q expected_full=%q", i, j, ids[i][j], found, err, got, docs[i][j])
+				}
+				if found {
+					// Raw primary bytes are the retained payload, not the full
+					// document. Reuse the maintained original-Snapshot reader;
+					// it reconstructs declared fields from that SAME old catalog.
+					full, fullFound := typedColumnDocumentAtSnapshot1755(t, col, old, ids[i][j])
+					if !fullFound {
+						t.Fatalf("old seed id=%q reconstruction missing; retained=%q expected_full=%q", ids[i][j], got, docs[i][j])
+					}
+					assertJSONEqualM13C(t, full, docs[i][j])
 				}
 			}
 		}
