@@ -125,11 +125,15 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		}
 	}
 	var stats treedbdb.ValueLogRewriteStats
-	err = db.runCachedBackendMaintenance(func() error {
-		var runErr error
-		stats, runErr = db.backend.ValueLogRewriteOnline(ctx, backendOpts)
-		return runErr
-	})
+	if db.cached != nil && db.cached.COWMode() {
+		stats, err = db.cached.ValueLogRewriteOnline(ctx, backendOpts)
+	} else {
+		err = db.runCachedBackendMaintenance(func() error {
+			var runErr error
+			stats, runErr = db.backend.ValueLogRewriteOnline(ctx, backendOpts)
+			return runErr
+		})
+	}
 	if err != nil {
 		return ValueLogRewriteStats{}, err
 	}

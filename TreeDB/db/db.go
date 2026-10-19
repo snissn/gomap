@@ -4083,7 +4083,16 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	// the durable candidate; every earlier exit releases them here.
 	defer opts.durableResources.Release()
 	prePublishErr := func(err error) error { return wrapFinalizeCommitError(err, true) }
-	tracked, admissionErr := db.beginSemanticBackendOperation(nil, opts.acceptedPrefixCut != nil && opts.acceptedPrefixCut.Valid())
+	var admissionErr error
+	if owner := opts.privateCOWEquivalentRewriteOwner; owner != nil {
+		if owner != db.privateCOWOwner || opts.acceptedPrefixCut != nil || opts.commandWALPublish || opts.commandWALSeal != nil || len(opts.commandWALSealGroup) != 0 || opts.appliedCommandLSN != 0 || len(opts.appliedRanges) != 0 || opts.maxEntryRevision != 0 {
+			admissionErr = ErrNativeSemanticUnsupported
+		}
+	}
+	var tracked bool
+	if admissionErr == nil {
+		tracked, admissionErr = db.beginSemanticBackendOperation(opts.privateCOWEquivalentRewriteOwner, opts.acceptedPrefixCut != nil && opts.acceptedPrefixCut.Valid())
+	}
 	if admissionErr != nil {
 		if opts.rootPublicationBuilder != nil {
 			opts.rootPublicationBuilder.Release()

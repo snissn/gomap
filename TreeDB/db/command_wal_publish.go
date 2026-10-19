@@ -17,6 +17,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -46,9 +47,13 @@ func (mutation conditionalCommitMutation) record(db *DB, commitSeq uint64) {
 }
 
 type finalizeCommitOptions struct {
-	commandWALSeal      *commandWALSealReceipt
-	commandWALSealGroup []*CommandWALIntent
-	negativeCoverage    *negativeRootCoverage
+	// privateCOWEquivalentRewriteOwner is borrowed only by the maintained online
+	// pointer rewrite. It authorizes an ordinary physical candidate, never a
+	// canonical append, accepted cut, logical install, or frontier advancement.
+	privateCOWEquivalentRewriteOwner *transactionowner.Owner
+	commandWALSeal                   *commandWALSealReceipt
+	commandWALSealGroup              []*CommandWALIntent
+	negativeCoverage                 *negativeRootCoverage
 	// prepareSnapshotReceipt runs with candidate/teardown custody and rootReuseMu
 	abortSnapshotReceipt func() error
 	// before EnqueueBuilt. Failure is preaccept; original cleanup remains owned.

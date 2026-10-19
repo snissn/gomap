@@ -68,7 +68,12 @@ func TestCOWBasisRefreshRefusalKeepsOriginalAndOwnsPartialCleanup(t *testing.T) 
 			if err = basis.release(); err != nil {
 				t.Fatal(err)
 			}
-			if err = c.close(); !errors.Is(err, failure) {
+			// This bare cache fixture has no accepted-prefix owner. installCOWBasis
+			// already returned the original refusal; Close reports actual cleanup.
+			if err = db.backend.(*backenddb.DB).CheckStorageMaintenanceReady(); !errors.Is(err, backenddb.ErrRecoveryRequired) {
+				t.Fatalf("backend publication fence lost refusal: %v", err)
+			}
+			if err = c.close(); err != nil {
 				t.Fatal(err)
 			}
 			db.drainSemanticCleanup()

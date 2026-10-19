@@ -545,6 +545,25 @@ and updates keys in bounded commit batches. Cached-mode callers must checkpoint
 first, protect cached value-log paths, and allocate rewrite RIDs from the shared
 cached allocator.
 
+In COW mode, the public wrapper routes this named operation through the cache's
+original maintenance fence and fixed private owner. Only the maintained pointer
+rewrite carries that borrowed owner into ordinary physical root publication.
+It cannot append commands, advance entry revisions or applied command LSN,
+create accepted-cut coverage, or seal an unhanded-off logical suffix. The five
+rewrite finalizer paths retain their original root/base checks, candidates,
+resource custody, durability receipts, and cleanup. A direct backend alias does
+not acquire this role after native activation. Pack, vacuum, offline rewrite,
+and arbitrary maintenance callbacks receive no permission from this route.
+
+An admitted named rewrite holds the original cache flush fence through writer
+reconciliation and exact semantic basis refresh, including when Close has
+revoked subsequent admission. Close waits for that fence before disposing cache
+readers or append lanes. An operation reporting an error after a physical batch
+may still have changed durable roots; reconciliation and refresh therefore run
+once before returning its original error. A failed refresh retains the existing
+recovery fence and original cleanup custody. Held snapshots retain their old
+physical roots and value-log owners throughout this replacement.
+
 ### 6.2 Online split leaf-generation pack (`DB.LeafGenerationPack`)
 
 Published leaf-generation views retain an immutable source manifest. GC prunes

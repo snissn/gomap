@@ -2,6 +2,16 @@
 
 This document defines write semantics for TreeDB cached mode and backend mode.
 
+The named public online value-log rewrite uses the original COW maintenance
+owner when native semantics are active. Its ordinary physical publications
+preserve entry revisions and applied command LSN; they do not represent a new
+logical transaction or accepted-prefix cut. Older already-handed-off retirement
+may complete independently. The operation reconciles append lanes and refreshes
+the exact semantic basis under its existing flush fence before an overlapping
+Close can dispose those resources, even when rewrite reports a partial-work
+error. New admission after Close remains refused. This role does not authorize
+other backend maintenance callbacks. See [value-log lifecycle](value-log-lifecycle.md).
+
 Ordinary typed INSERTs may append to a manifest-owned column asset segment under
 the serialized command-publication context. Exact retained resource authority
 must match the existing file and parent before writing; every batch retains its

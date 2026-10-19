@@ -38,6 +38,12 @@ old view, including when a rewrite moves aliased roots and persistent value-log
 pointers. This optional participant capability is separate from the single-use
 captured-flush build/handoff; unsupported semantic owners fail closed. Private
 partial successors use the original off-gate cleanup and maintenance admission.
+The named public online value-log rewrite carries only the original cache owner
+through its maintained physical finalizers. Ordinary backend aliases and generic
+maintenance callbacks do not acquire this role. Required writer reconciliation
+and exact basis refresh complete under the original flush fence through pending
+Close, including when a completed physical batch later reports an error. This
+role creates no accepted cut and does not seal an unhanded-off suffix.
 No on-disk format or canonical command changes are introduced.
 
 The two-phase frontend is `manager.Begin(collection, additional...)`, then

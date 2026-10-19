@@ -7980,6 +7980,9 @@ func (db *DB) checkpointForBackendMaintenance() error {
 }
 
 type backendMaintenanceOptions struct {
+	// completeAdmittedCOW belongs only to the named owner-qualified rewrite.
+	// Once admitted under flushMu, Close waits for reconciliation and refresh.
+	completeAdmittedCOW   bool
 	skipCheckpoint        bool
 	skipRetainedPruneWait bool
 	afterCOWRefresh       func() error
@@ -8001,6 +8004,10 @@ func (db *DB) runWithBackendMaintenanceOptions(opts backendMaintenanceOptions, f
 	for db.checkpointing.Load() || db.maintenanceActive.Load() {
 		db.checkpointCond.Wait()
 	}
+	if opts.completeAdmittedCOW && db.closing.Load() {
+		db.checkpointMu.Unlock()
+		return errDBClosing
+	}
 	// Publish the maintenance-active flag while checkpointMu is held so Checkpoint
 	// and background maintenance serialize through the same mutex/cond state.
 	db.maintenanceActive.Store(true)
@@ -8019,6 +8026,9 @@ func (db *DB) runWithBackendMaintenanceOptions(opts backendMaintenanceOptions, f
 	if db.cow != nil {
 		db.flushMu.Lock()
 		defer db.flushMu.Unlock()
+		if opts.completeAdmittedCOW && db.closing.Load() {
+			return errDBClosing
+		}
 		// maintenanceActive denies new admission; drain writers that crossed the
 		// flag before permitting backend root changes, even for skipCheckpoint.
 		db.writeMu.Lock()
@@ -8041,10 +8051,10 @@ func (db *DB) runWithBackendMaintenanceOptions(opts backendMaintenanceOptions, f
 	if fn != nil {
 		fnErr = fn()
 	}
-	if db.closing.Load() {
+	if db.closing.Load() && !opts.completeAdmittedCOW {
 		return fnErr
 	}
-	reconcileErr := db.reconcileSplitValueLogWritersAfterBackendMaintenance()
+	reconcileErr := db.reconcileSplitValueLogWritersAfterBackendMaintenanceAdmitted(opts.completeAdmittedCOW)
 	if db.cow != nil {
 		if err := db.finishCOWBackendMaintenance(errors.Join(fnErr, reconcileErr)); err != nil {
 			return err
@@ -8073,7 +8083,13 @@ func (db *DB) ReconcileAfterBackendMaintenance() error {
 }
 
 func (db *DB) reconcileSplitValueLogWritersAfterBackendMaintenance() error {
-	if db == nil || db.closing.Load() {
+	return db.reconcileSplitValueLogWritersAfterBackendMaintenanceAdmitted(false)
+}
+
+// admittedCompletion is valid only while the original maintenance flushMu lease
+// keeps Close from disposing readers, append lanes, or the captured basis.
+func (db *DB) reconcileSplitValueLogWritersAfterBackendMaintenanceAdmitted(admittedCompletion bool) error {
+	if db == nil || (db.closing.Load() && !admittedCompletion) {
 		return nil
 	}
 	if db.valueLogReader != nil {

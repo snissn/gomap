@@ -192,12 +192,19 @@ func TestNativeExistingCollectionEquivalentBasisRewrite(t *testing.T) {
 	}
 	protection.LeafGenerationProtectedRootIDs, protection.LeafGenerationProtectedSystemRootIDs = database.cached.ProtectedLeafGenerationRootIDPair()
 	protection.ReserveRIDs = database.cached.ReserveValueLogRIDs
-	var stats backenddb.ValueLogRewriteStats
-	err = database.runCachedBackendMaintenance(func() error {
-		var e error
-		stats, e = backend.ValueLogRewriteOnline(context.Background(), protection)
-		return e
-	})
+	// An ordinary backend alias cannot borrow the role merely because the same
+	// DB is activated. Refusal must precede copying or physical publication.
+	refused, refuseErr := backend.ValueLogRewriteOnline(context.Background(), protection)
+	if !errors.Is(refuseErr, backenddb.ErrNativeSemanticUnsupported) || refused.RecordsCopied != 0 {
+		t.Fatalf("ordinary backend rewrite alias: stats=%+v error=%v", refused, refuseErr)
+	}
+	unchangedRoot, unchangedPointer := physical()
+	if unchangedRoot != oldRoot || unchangedPointer != oldPointer {
+		t.Fatal("refused alias changed physical roots")
+	}
+	// Use the named operation on the SAME public cache, without the outer
+	// public convenience checkpoint: the native suffix must remain unsealed.
+	stats, err := database.cached.ValueLogRewriteOnline(context.Background(), protection)
 	if err != nil {
 		t.Fatalf("equivalent physical rewrite: %v", err)
 	}
