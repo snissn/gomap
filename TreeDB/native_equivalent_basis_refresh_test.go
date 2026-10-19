@@ -19,6 +19,17 @@ import (
 // maintenance seam schedules a real rewrite without draining the newer suffix;
 // ValueLogRewriteOnline's public wrapper normally checkpoints that suffix first.
 func TestNativeExistingCollectionEquivalentBasisRewrite(t *testing.T) {
+	testNativeExistingCollectionEquivalentBasisRewrite(t, false)
+}
+
+// Cancellation completes one synced physical batch and its bookkeeping while
+// preserving the unprocessed source and unsealed logical suffix.
+func TestNativeExistingCollectionEquivalentBasisRewritePartialCancel(t *testing.T) {
+	testNativeExistingCollectionEquivalentBasisRewrite(t, true)
+}
+
+func testNativeExistingCollectionEquivalentBasisRewrite(t *testing.T, partialCancel bool) {
+	t.Helper()
 	opts := OptionsFor(ProfileNoWALFast, t.TempDir())
 	opts.MemtableMode = "cow_btree"
 	opts.FlushThreshold = 1 << 30
@@ -51,15 +62,25 @@ func TestNativeExistingCollectionEquivalentBasisRewrite(t *testing.T) {
 	// canonical collection descriptors. Apply a system delta so the original
 	// manager-created metadata and incarnation records remain eligible for import.
 	document := []byte(`{"body":"` + string(bytes.Repeat([]byte("persistent"), 512)) + `"}`)
-	ptrs, err := seed.AppendValueLogValues([][]byte{document})
+	documents := [][]byte{document}
+	if partialCancel {
+		documents = append(documents, []byte(`{"body":"`+string(bytes.Repeat([]byte("remaining"), 512))+`"}`))
+	}
+	ptrs, err := seed.AppendValueLogValues(documents)
 	if err != nil {
 		t.Fatal(err)
 	}
-	rootTable, err := memtable.NewWithCapacityMode(1, memtable.ModeHashSorted)
+	rootTable, err := memtable.NewWithCapacityMode(len(documents), memtable.ModeHashSorted)
 	if err != nil {
 		t.Fatal(err)
 	}
 	rootTable.SetEntry([]byte("old"), nil, ptrs[0], node.FlagPointer)
+	if partialCancel {
+		if ptrs[1].FileID != ptrs[0].FileID {
+			t.Fatal("partial rewrite fixture needs both pointers in the selected source")
+		}
+		rootTable.SetEntry([]byte("remaining"), nil, ptrs[1], node.FlagPointer)
+	}
 	rootTable.Freeze()
 	_, roots, err := seed.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder([]backenddb.OrderedRootDeltaPublishInput{{
 		Iter: rootTable.NewIterator(nil, nil), StoragePolicy: backenddb.OrderedRootStoragePagerLeaves,
@@ -151,7 +172,15 @@ func TestNativeExistingCollectionEquivalentBasisRewrite(t *testing.T) {
 	if err = before.Close(); err != nil {
 		t.Fatal(err)
 	}
-	physical := func() (uint64, page.ValuePtr) {
+	prefix, _, err := backend.PrivateCOWAcceptedPrefix(database.txnOwner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frontiers := prefix.LogicalFrontiers()
+	if frontiers.V <= frontiers.S.LogicalSequence {
+		t.Fatalf("fixture lacks an unsealed logical suffix: %+v", frontiers)
+	}
+	physical := func() (uint64, page.ValuePtr, page.ValuePtr) {
 		s := backend.AcquireSnapshot()
 		if s == nil {
 			t.Fatal("nil physical snapshot")
@@ -181,9 +210,17 @@ func TestNativeExistingCollectionEquivalentBasisRewrite(t *testing.T) {
 		if e != nil || entry.Flags&node.FlagPointer == 0 {
 			t.Fatalf("actual persistent pointer: %+v %v", entry, e)
 		}
-		return root, entry.ValuePtr
+		var remaining page.ValuePtr
+		if partialCancel {
+			entry, e := s.GetEntryAtRoot(root, []byte("remaining"))
+			if e != nil || entry.Flags&node.FlagPointer == 0 {
+				t.Fatalf("actual remaining pointer: %+v %v", entry, e)
+			}
+			remaining = entry.ValuePtr
+		}
+		return root, entry.ValuePtr, remaining
 	}
-	oldRoot, oldPointer := physical()
+	oldRoot, oldPointer, remainingPointer := physical()
 	protection := backenddb.ValueLogRewriteOnlineOptions{SourceFileIDs: []uint32{oldPointer.FileID}, BatchSize: 1}
 	protection.ProtectedPaths = database.cached.ValueLogProtectedPaths()
 	if len(protection.ProtectedPaths) == 0 {
@@ -197,22 +234,60 @@ func TestNativeExistingCollectionEquivalentBasisRewrite(t *testing.T) {
 	if !errors.Is(refuseErr, backenddb.ErrNativeSemanticUnsupported) || refused.RecordsCopied != 0 {
 		t.Fatalf("ordinary backend rewrite alias: stats=%+v error=%v", refused, refuseErr)
 	}
-	unchangedRoot, unchangedPointer := physical()
-	if unchangedRoot != oldRoot || unchangedPointer != oldPointer {
+	unchangedRoot, unchangedPointer, unchangedRemaining := physical()
+	if unchangedRoot != oldRoot || unchangedPointer != oldPointer || unchangedRemaining != remainingPointer {
 		t.Fatal("refused alias changed physical roots")
+	}
+	var rewriteCtx context.Context = context.Background()
+	reservations := 0
+	if partialCancel {
+		var cancel context.CancelFunc
+		rewriteCtx, cancel = context.WithCancel(rewriteCtx)
+		defer cancel()
+		protection.SyncEachBatch = true
+		reserve := protection.ReserveRIDs
+		protection.ReserveRIDs = func(count int) (uint64, error) {
+			start, err := reserve(count)
+			if err == nil {
+				reservations++
+				if reservations == 1 {
+					// The first batch owns the original allocator's exact range.
+					// It completes append/sync/swap without another context check;
+					// cancellation is observed before scanning the remaining pointer.
+					cancel()
+				}
+			}
+			return start, err
+		}
 	}
 	// Use the named operation on the SAME public cache, without the outer
 	// public convenience checkpoint: the native suffix must remain unsealed.
-	stats, err := database.cached.ValueLogRewriteOnline(context.Background(), protection)
-	if err != nil {
+	stats, err := database.cached.ValueLogRewriteOnline(rewriteCtx, protection)
+	if partialCancel {
+		if !errors.Is(err, context.Canceled) || errors.Is(err, backenddb.ErrRecoveryRequired) || reservations != 1 {
+			t.Fatalf("completed-prefix cancellation: reservations=%d stats=%+v error=%v", reservations, stats, err)
+		}
+	} else if err != nil {
 		t.Fatalf("equivalent physical rewrite: %v", err)
 	}
 	if stats.RecordsCopied != 1 {
 		t.Fatalf("real aliased pointer rewrite: %+v", stats)
 	}
-	newRoot, newPointer := physical()
+	if partialCancel && (stats.ValueRecordsCopied != 1 || stats.ValueBytesCopied != int64(len(document))) {
+		t.Fatalf("partial rewrite copied something other than the first pointer: %+v", stats)
+	}
+	newRoot, newPointer, newRemainingPointer := physical()
 	if oldRoot == newRoot || oldPointer == newPointer {
 		t.Fatalf("rewrite did not move root/pointer: %d/%+v -> %d/%+v", oldRoot, oldPointer, newRoot, newPointer)
+	}
+	if newRemainingPointer != remainingPointer {
+		t.Fatalf("rewrite moved the unprocessed pointer: %+v -> %+v", remainingPointer, newRemainingPointer)
+	}
+	if got := prefix.LogicalFrontiers(); got != frontiers {
+		t.Fatalf("physical rewrite changed original logical frontiers: %+v -> %+v", frontiers, got)
+	}
+	if err := prefix.AcceptedError(); err != nil {
+		t.Fatalf("equivalent rewrite poisoned original accepted custody: %v", err)
 	}
 	after, err := backend.CaptureNativeSemanticState()
 	if err != nil {
@@ -229,6 +304,12 @@ func TestNativeExistingCollectionEquivalentBasisRewrite(t *testing.T) {
 		if e != nil || !bytes.Equal(got, document) {
 			t.Fatalf("current rewritten value: %q %v", got, e)
 		}
+		if partialCancel {
+			got, e = c.Get([]byte("remaining"))
+			if e != nil || !bytes.Equal(got, documents[1]) {
+				t.Fatalf("current unprocessed value: %q %v", got, e)
+			}
+		}
 	}
 	got, err := rows.Get([]byte("new"))
 	if err != nil || !bytes.Equal(got, newer) {
@@ -241,6 +322,12 @@ func TestNativeExistingCollectionEquivalentBasisRewrite(t *testing.T) {
 		result, e := v.FetchDocumentsByID([][]byte{[]byte("old"), []byte("new")}, collections.DocumentFetchOptions{})
 		if e != nil || len(result.Results) != 2 || !result.Results[0].Found || !bytes.Equal(result.Results[0].Document, document) || result.Results[1].Found {
 			t.Fatalf("old complete view: %+v %v", result, e)
+		}
+		if partialCancel {
+			result, e := v.FetchDocumentsByID([][]byte{[]byte("remaining")}, collections.DocumentFetchOptions{})
+			if e != nil || len(result.Results) != 1 || !result.Results[0].Found || !bytes.Equal(result.Results[0].Document, documents[1]) {
+				t.Fatalf("old unprocessed value: %+v %v", result, e)
+			}
 		}
 	}
 	if err = database.Checkpoint(); err != nil {
@@ -264,6 +351,9 @@ func TestNativeExistingCollectionEquivalentBasisRewrite(t *testing.T) {
 	if s := registry.Stats(); s.ActivePins != 0 || s.ActiveIdentities != 0 {
 		t.Fatalf("original pins: %+v", s)
 	}
+	if err := registry.CleanupError(); err != nil {
+		t.Fatalf("original physical cleanup: %v", err)
+	}
 	database, err = Open(opts)
 	if err != nil {
 		t.Fatal(err)
@@ -282,6 +372,12 @@ func TestNativeExistingCollectionEquivalentBasisRewrite(t *testing.T) {
 		got, e := c.Get([]byte("old"))
 		if e != nil || !bytes.Equal(got, document) {
 			t.Fatalf("reopen %s: %q %v", name, got, e)
+		}
+		if partialCancel {
+			got, e = c.Get([]byte("remaining"))
+			if e != nil || !bytes.Equal(got, documents[1]) {
+				t.Fatalf("reopen unprocessed %s: %q %v", name, got, e)
+			}
 		}
 		got, e = c.Get([]byte("new"))
 		if name == "rows" {
@@ -303,5 +399,8 @@ func TestNativeExistingCollectionEquivalentBasisRewrite(t *testing.T) {
 	requirePublicCOWFinalZero(t, cache)
 	if s := registry.Stats(); s.ActivePins != 0 || s.ActiveIdentities != 0 {
 		t.Fatalf("reopen pins: %+v", s)
+	}
+	if err := registry.CleanupError(); err != nil {
+		t.Fatalf("reopened physical cleanup: %v", err)
 	}
 }
