@@ -487,6 +487,16 @@ control is `TestNativeJSONPublicRawTwoCollectionsAtomicTxn`; codec binding and
 unsupported-member refusal are covered by
 `TestSelectedCompositeBindsFinalRawRevisionWithoutChangingNativeMembers`.
 
+Native JSON singleton insert, update and delete registrations also request the
+ordinary replay log support, including the leaf logger required by inherited
+ordered-root storage policy. Foreground update/delete preparation uses its
+original transaction's captured immutable plan. The fixed registration marker
+only admits that command kind; direct registered or assigned native preparation
+still refuses when no supported executor exists. Startup singleton replay uses
+the ordinary deterministic executor and its canonical accepted final documents
+or explicit IDs. It never reruns an update callback. Checkpoint/reopen coverage
+and replay of an actual unapplied WAL suffix are distinct verification cases.
+
 `RawKVBatchV2` adds `SetMaterializedRID(RID, value)`. Recovery reuses an
 existing RID only when its decoded value bytes match exactly. If the RID is
 absent, recovery appends `value` under that exact RID and advances the allocator

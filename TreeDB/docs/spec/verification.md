@@ -4256,6 +4256,27 @@ P1 reverse/range and fallback gates: `TestPublicCOWTxnReverseOverlaySeekAndLifet
 history and newer unrelated point chunks; it has no unsupported-baseline speedup
 comparator. See both benchmark READMEs for the exact fresh-process capture.
 
+## Native JSON collection boundary
+
+`TestNativeExistingIndexedJSONPublicLifecycle` uses the existing public
+CollectionManager/Collection API on the native COW owner in durable command WAL,
+relaxed command WAL and production NoWAL profiles. It covers scalar equality and
+unique indexes, batch unique-owner handoff, duplicate-final-owner refusal before
+LSN advance, delete/reuse, an old captured view, checkpoint/reopen and original
+resource drain. `TestNativeExistingIndexedJSONInsertCapturedReplay` separately
+covers indexed insertion and actual unapplied singleton/composite WAL suffixes;
+its NoWAL case uses an explicit checkpoint rather than claiming WAL recovery.
+`TestNativeExistingIndexedJSONCRUDSingletonReplay` separately verifies accepted
+final update documents and delete IDs in an actual two-frame unapplied WAL
+suffix, exact replay counters and surviving primary/equality values. Its NoWAL
+case likewise proves only the explicit checkpoint/reopen boundary.
+
+These controls cover the selected JSON subset. Typed/BSON/template, multikey and
+compound indexes, staged/composite CRUD, schema/rename/drop, prepared and assigned
+apply paths require their own supported executors and caller migration. Current
+unsupported operations must retain their preaccept refusal. A passing JSON
+lifecycle does not establish full collection migration or performance acceptance.
+
 ## Complete COW prefix, original custody and sealed completion
 
 The lower native seam is independently testable while unmigrated collection

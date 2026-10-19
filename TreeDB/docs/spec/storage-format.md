@@ -492,13 +492,18 @@ apply. Members have no independent LSN, frame extensions or publication.
 
 The currently active subset permits at most one raw `RawKVBatchV1` member
 containing inline Set operations, and untyped JSON `CollectionInsertBatchByIDV1`
-members for supported unindexed collections. Raw incarnation is zero; collection
-incarnation is the persisted nonzero logical catalog identity. The wider payload
-codec does not activate typed, update/delete, external-RID, nested or other
-unsupported members. Whole payload validation precedes member application.
+members for supported unindexed or scalar-indexed JSON collections. Raw
+incarnation is zero; collection incarnation is the persisted nonzero logical
+catalog identity. The wider payload codec does not activate typed, update/delete,
+external-RID, nested or other unsupported composite members. Whole payload
+validation precedes member application.
 Foreground binds the final raw revision bytes into preadmitted outer capacity
 before append, preserving native member bytes. See `recovery.md` for aggregate
-replay. This pre-alpha activation does not add a compatibility migration.
+replay. Singleton native JSON `UpdateBatch` and `DeleteBatch` use the existing
+`CollectionUpdateBatchByID` and `CollectionDeleteBatchByID` command kinds and
+payload formats. Update records contain accepted final documents, not application
+callbacks. These singleton commands do not extend composite-member eligibility.
+This pre-alpha activation does not add a compatibility migration.
 
 The operator restorable file set, live backup barrier, and restore validation
 procedure are defined in `TreeDB/docs/spec/backup-restore.md`. A live
