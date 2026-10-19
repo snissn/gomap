@@ -236,10 +236,11 @@ func TestNativeClusterAdapterPreflightLifecycle(t *testing.T) {
 		}
 	}
 	checkHeld()
-	// Duplicate IDs, a new unique owner collision, and an indexed replacement
-	// collision must all refuse without consuming either local or FSM identity.
-	preflight(deterministicInsertBatchEntry(t, "users", "native-cluster:duplicate", nativewire.DocumentFormatJSON,
-		[][]byte{[]byte("u3"), []byte("u3")}, [][]byte{[]byte(`{"id":"u3","city":"sfo"}`), []byte(`{"id":"u3","city":"nyc"}`)}), true)
+	// An existing primary ID, a new unique owner collision, and an indexed
+	// replacement collision must refuse without local or FSM identity. Duplicate
+	// IDs within one request are rejected earlier by the canonical encoder.
+	preflight(deterministicInsertBatchEntry(t, "users", "native-cluster:existing-primary", nativewire.DocumentFormatJSON,
+		[][]byte{[]byte("u1")}, [][]byte{[]byte(`{"id":"u1","city":"sfo"}`)}), true)
 	preflight(deterministicInsertBatchEntry(t, "users", "native-cluster:unique", nativewire.DocumentFormatJSON,
 		[][]byte{[]byte("u3")}, [][]byte{[]byte(`{"id":"u3","city":"hnl"}`)}), true)
 	preflight(deterministicReplaceBatchEntry(t, "users", "native-cluster:bad-replace", nativewire.DocumentFormatJSON,
