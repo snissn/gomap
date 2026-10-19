@@ -3,19 +3,32 @@ package caching
 import (
 	"errors"
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/batch"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
 func TestConditionalTxnAdaptiveInactiveHistoryEnrollment(t *testing.T) {
-	backend := newBlockingWriteBackend()
-	cache, err := Open(t.TempDir(), backend, Options{
+	dir := t.TempDir()
+	physical, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Use the maintained real-backend snapshot fixture setup. The mock used
+	// by bypass-only tests cannot supply AcquireSnapshot's concrete DB snapshot.
+	backend := &adaptiveEnrollmentBackend{DB: physical, entered: make(chan struct{}), release: make(chan struct{})}
+	cache, err := Open(dir, backend, Options{
 		MemtableMode: "adaptive", DisableWAL: true, RelaxedSync: true,
 		AllowUnsafe: true, FlushThreshold: 1,
 	})
 	if err != nil {
+		if closeErr := physical.Close(); closeErr != nil {
+			t.Errorf("backend Close after cache Open failure: %v", closeErr)
+		}
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
@@ -94,7 +107,14 @@ func TestConditionalTxnAdaptiveInactiveHistoryEnrollment(t *testing.T) {
 	if tx.startSeq != start+1 {
 		t.Fatalf("opening sequence=%d", tx.startSeq)
 	}
-	value, err := tx.Get([]byte("k"))
+	if tx.Snapshot() == nil {
+		t.Fatal("Begin did not retain the actual opening snapshot")
+	}
+	value, err := tx.Snapshot().Get([]byte("k"))
+	if err != nil || string(value) != "after" {
+		t.Fatalf("opening snapshot value=%q err=%v", value, err)
+	}
+	value, err = tx.Get([]byte("k"))
 	if err != nil || string(value) != "after" {
 		t.Fatalf("opening value=%q err=%v", value, err)
 	}
@@ -104,10 +124,47 @@ func TestConditionalTxnAdaptiveInactiveHistoryEnrollment(t *testing.T) {
 	if err := cache.SetSync([]byte("k"), []byte("later")); err != nil {
 		t.Fatal(err)
 	}
+	value, err = tx.Snapshot().Get([]byte("k"))
+	if err != nil || string(value) != "after" {
+		t.Fatalf("opening snapshot changed after later publication: value=%q err=%v", value, err)
+	}
 	if err := tx.Commit(); !errors.Is(err, backenddb.ErrConcurrentModification) {
 		t.Fatalf("active conflict=%v", err)
 	}
 }
+
+// Embed the actual DB/Batch, as the maintained accepted-report fixtures do,
+// preserving snapshot, revision and input-authority capabilities. Pause only
+// after the original backend write returns, while caching still holds writeMu.
+type adaptiveEnrollmentBackend struct {
+	*backenddb.DB
+	block   atomic.Bool
+	once    sync.Once
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (b *adaptiveEnrollmentBackend) NewBatch() batch.Interface {
+	return &adaptiveEnrollmentBatch{Batch: b.DB.NewBatch().(*backenddb.Batch), owner: b}
+}
+
+type adaptiveEnrollmentBatch struct {
+	*backenddb.Batch
+	owner *adaptiveEnrollmentBackend
+}
+
+func (b *adaptiveEnrollmentBatch) afterWrite(err error) error {
+	if err == nil && b.owner.block.Load() {
+		b.owner.once.Do(func() {
+			close(b.owner.entered)
+			<-b.owner.release
+		})
+	}
+	return err
+}
+
+func (b *adaptiveEnrollmentBatch) Write() error     { return b.afterWrite(b.Batch.Write()) }
+func (b *adaptiveEnrollmentBatch) WriteSync() error { return b.afterWrite(b.Batch.WriteSync()) }
 
 func TestConditionalTxnAdaptiveInactiveHistoryPreservesOtherConsumers(t *testing.T) {
 	cache, err := Open(t.TempDir(), newBlockingWriteBackend(), Options{
