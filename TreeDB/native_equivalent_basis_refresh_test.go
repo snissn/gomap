@@ -11,6 +11,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -180,7 +181,25 @@ func testNativeExistingCollectionEquivalentBasisRewrite(t *testing.T, partialCan
 	if frontiers.V <= frontiers.S.LogicalSequence {
 		t.Fatalf("fixture lacks an unsealed logical suffix: %+v", frontiers)
 	}
-	physical := func() (uint64, page.ValuePtr, page.ValuePtr) {
+	diagnosticLimits := opts.COWMemtableLimits
+	if diagnosticLimits == (COWMemtableLimits{}) {
+		diagnosticLimits = DefaultCOWMemtableLimits()
+	}
+	logMemory := func(stage string, scope int, key string, readErr error) {
+		if !partialCancel {
+			return
+		}
+		memory := database.cached.COWMemoryStats()
+		counters := database.cached.Stats()
+		available := func(limit, used uint64) uint64 {
+			if used >= limit {
+				return 0
+			}
+			return limit - used
+		}
+		t.Logf("partial read admission stage=%s scope=%d key=%q error=%v limits=%+v memory=%+v available_in_flight=%d available_total=%d available_retired=%d maintenance_capacity=%s maintenance_used=%s", stage, scope, key, readErr, diagnosticLimits, memory, available(diagnosticLimits.MaxInFlightBytes, memory.ReservedBytes), available(diagnosticLimits.MaxTotalBytes, memory.TotalBytes), available(diagnosticLimits.MaxRetiredBytes, memory.HistoryBytes+memory.ReservedBytes+memory.DeferredBytes), counters["treedb.cache.cow.maintenance_capacity_bytes"], counters["treedb.cache.cow.maintenance_used_bytes"])
+	}
+	physical := func(stage string) (uint64, page.ValuePtr, page.ValuePtr) {
 		s := backend.AcquireSnapshot()
 		if s == nil {
 			t.Fatal("nil physical snapshot")
@@ -193,6 +212,42 @@ func testNativeExistingCollectionEquivalentBasisRewrite(t *testing.T, partialCan
 		token, ok := s.StateToken()
 		if !ok {
 			t.Fatal("physical token")
+		}
+		logShape := func(key string, ptr page.ValuePtr) {
+			if !partialCancel {
+				return
+			}
+			file, identity, e := s.PinnedValueLogFile(ptr.FileID)
+			if e != nil {
+				t.Fatalf("diagnostic pinned %s: %v", key, e)
+			}
+			limit := diagnosticLimits.MaxInFlightBytes
+			shape, e := valuelog.InspectCOWRecord(file, ptr, valuelog.COWReadLimits{MaxRecordBytes: limit, MaxRawBytes: limit, MaxValueBytes: limit})
+			if e != nil {
+				t.Fatalf("diagnostic shape %s: %v", key, e)
+			}
+			// Use the maintained envelope with the read workspace's capacity
+			// rounding. This lower bound omits its small owner/lease wrappers.
+			var decoderLowerBound uint64
+			if shape.Compressed && shape.DictID == 0 && shape.Codec == valuelog.BlockCodecZSTD {
+				capacity := func(n uint64) uint64 {
+					c := uint64(1024)
+					for c < n {
+						c *= 2
+					}
+					return c
+				}
+				raw, input := capacity(shape.RawBytes), capacity(shape.PayloadBytes())
+				sizes, e := valuelog.COWDecoderRetentionSizes(0, raw, input, max(raw, 2048))
+				if e != nil {
+					t.Fatalf("diagnostic decoder %s: %v", key, e)
+				}
+				for _, size := range []uint64{sizes.OwnerWrapper, sizes.DefinitionCopy, sizes.RawBacking, sizes.InputBacking, sizes.SequenceBacking} {
+					decoderLowerBound += memtable.COWAllocationCharge(size)
+				}
+				decoderLowerBound += uint64(sizes.FixedAllocationCount) * memtable.COWAllocationCharge(sizes.FixedAllocationBytes)
+			}
+			t.Logf("partial physical shape stage=%s root=%+v key=%s pointer=%+v identity=%+v compressed=%t codec=%v dictionary=%d record_bytes=%d raw_bytes=%d payload_bytes=%d value_bytes=%d decoder_lower_bound=%d", stage, token, key, ptr, identity, shape.Compressed, shape.Codec, shape.DictID, shape.RecordBytes, shape.RawBytes, shape.PayloadBytes(), shape.ValueBytes, decoderLowerBound)
 		}
 		var root uint64
 		for _, name := range []string{"rows", "alias"} {
@@ -210,6 +265,7 @@ func testNativeExistingCollectionEquivalentBasisRewrite(t *testing.T, partialCan
 		if e != nil || entry.Flags&node.FlagPointer == 0 {
 			t.Fatalf("actual persistent pointer: %+v %v", entry, e)
 		}
+		logShape("old", entry.ValuePtr)
 		var remaining page.ValuePtr
 		if partialCancel {
 			entry, e := s.GetEntryAtRoot(root, []byte("remaining"))
@@ -217,10 +273,11 @@ func testNativeExistingCollectionEquivalentBasisRewrite(t *testing.T, partialCan
 				t.Fatalf("actual remaining pointer: %+v %v", entry, e)
 			}
 			remaining = entry.ValuePtr
+			logShape("remaining", remaining)
 		}
 		return root, entry.ValuePtr, remaining
 	}
-	oldRoot, oldPointer, remainingPointer := physical()
+	oldRoot, oldPointer, remainingPointer := physical("before rewrite")
 	protection := backenddb.ValueLogRewriteOnlineOptions{SourceFileIDs: []uint32{oldPointer.FileID}, BatchSize: 1}
 	protection.ProtectedPaths = database.cached.ValueLogProtectedPaths()
 	if len(protection.ProtectedPaths) == 0 {
@@ -234,7 +291,7 @@ func testNativeExistingCollectionEquivalentBasisRewrite(t *testing.T, partialCan
 	if !errors.Is(refuseErr, backenddb.ErrNativeSemanticUnsupported) || refused.RecordsCopied != 0 {
 		t.Fatalf("ordinary backend rewrite alias: stats=%+v error=%v", refused, refuseErr)
 	}
-	unchangedRoot, unchangedPointer, unchangedRemaining := physical()
+	unchangedRoot, unchangedPointer, unchangedRemaining := physical("after refused alias")
 	if unchangedRoot != oldRoot || unchangedPointer != oldPointer || unchangedRemaining != remainingPointer {
 		t.Fatal("refused alias changed physical roots")
 	}
@@ -263,6 +320,7 @@ func testNativeExistingCollectionEquivalentBasisRewrite(t *testing.T, partialCan
 	// Use the named operation on the SAME public cache, without the outer
 	// public convenience checkpoint: the native suffix must remain unsealed.
 	stats, err := database.cached.ValueLogRewriteOnline(rewriteCtx, protection)
+	logMemory("after rewrite", -1, "", err)
 	if partialCancel {
 		if !errors.Is(err, context.Canceled) || errors.Is(err, backenddb.ErrRecoveryRequired) || reservations != 1 {
 			t.Fatalf("completed-prefix cancellation: reservations=%d stats=%+v error=%v", reservations, stats, err)
@@ -276,7 +334,7 @@ func testNativeExistingCollectionEquivalentBasisRewrite(t *testing.T, partialCan
 	if partialCancel && (stats.ValueRecordsCopied != 1 || stats.ValueBytesCopied != int64(len(document))) {
 		t.Fatalf("partial rewrite copied something other than the first pointer: %+v", stats)
 	}
-	newRoot, newPointer, newRemainingPointer := physical()
+	newRoot, newPointer, newRemainingPointer := physical("after rewrite")
 	if oldRoot == newRoot || oldPointer == newPointer {
 		t.Fatalf("rewrite did not move root/pointer: %d/%+v -> %d/%+v", oldRoot, oldPointer, newRoot, newPointer)
 	}
@@ -299,32 +357,45 @@ func testNativeExistingCollectionEquivalentBasisRewrite(t *testing.T, partialCan
 	if err = after.Close(); err != nil {
 		t.Fatal(err)
 	}
-	for _, c := range []*collections.Collection{rows, alias} {
+	for scope, c := range []*collections.Collection{rows, alias} {
+		logMemory("before current Get", scope, "old", nil)
 		got, e := c.Get([]byte("old"))
+		logMemory("after current Get", scope, "old", e)
 		if e != nil || !bytes.Equal(got, document) {
 			t.Fatalf("current rewritten value: %q %v", got, e)
 		}
 		if partialCancel {
+			logMemory("before current Get", scope, "remaining", nil)
 			got, e = c.Get([]byte("remaining"))
+			logMemory("after current Get", scope, "remaining", e)
 			if e != nil || !bytes.Equal(got, documents[1]) {
 				t.Fatalf("current unprocessed value: %q %v", got, e)
 			}
 		}
 	}
+	logMemory("before current Get", 0, "new", nil)
 	got, err := rows.Get([]byte("new"))
+	logMemory("after current Get", 0, "new", err)
 	if err != nil || !bytes.Equal(got, newer) {
 		t.Fatalf("unsealed suffix: %q %v", got, err)
 	}
-	if got, err = alias.Get([]byte("new")); err != nil || got != nil {
+	logMemory("before current Get", 1, "new", nil)
+	got, err = alias.Get([]byte("new"))
+	logMemory("after current Get", 1, "new", err)
+	if err != nil || got != nil {
 		t.Fatalf("qualified alias absence: %q %v", got, err)
 	}
-	for _, v := range []*collections.CollectionReadView{held, heldAlias} {
+	for scope, v := range []*collections.CollectionReadView{held, heldAlias} {
+		logMemory("before held Fetch", scope, "old,new", nil)
 		result, e := v.FetchDocumentsByID([][]byte{[]byte("old"), []byte("new")}, collections.DocumentFetchOptions{})
+		logMemory("after held Fetch", scope, "old,new", e)
 		if e != nil || len(result.Results) != 2 || !result.Results[0].Found || !bytes.Equal(result.Results[0].Document, document) || result.Results[1].Found {
 			t.Fatalf("old complete view: %+v %v", result, e)
 		}
 		if partialCancel {
+			logMemory("before held Fetch", scope, "remaining", nil)
 			result, e := v.FetchDocumentsByID([][]byte{[]byte("remaining")}, collections.DocumentFetchOptions{})
+			logMemory("after held Fetch", scope, "remaining", e)
 			if e != nil || len(result.Results) != 1 || !result.Results[0].Found || !bytes.Equal(result.Results[0].Document, documents[1]) {
 				t.Fatalf("old unprocessed value: %+v %v", result, e)
 			}
