@@ -14005,7 +14005,7 @@ func (c *Collection) deleteDocumentIf(documentID []byte, predicate func(current 
 // partial batch; post-commit failures must be commit-ambiguous.
 func (c *Collection) DeleteBatch(documentIDs [][]byte) (int, error) {
 	if c != nil && c.nativeJSON != nil {
-		return 0, backenddb.ErrNativeSemanticUnsupported
+		return c.nativeDeleteBatch(documentIDs)
 	}
 	if c == nil {
 		return 0, errCollectionNil
@@ -14944,7 +14944,7 @@ func (c *Collection) updateDirectBSONSet(documentID []byte, spec bsonSetUpdate) 
 // batch. Post-commit failures must be commit-ambiguous for the whole batch.
 func (c *Collection) UpdateBatch(items []UpdateBatchItem) ([]UpdateBatchResult, error) {
 	if c != nil && c.nativeJSON != nil {
-		return nil, backenddb.ErrNativeSemanticUnsupported
+		return c.nativeUpdateBatch(items)
 	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
@@ -19767,71 +19767,9 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 			changed[i].primaryDocument = appendUpdateBatchPlanScratchDocument(scratch, retainedPrimaryDocuments[i])
 			changed[i].hasPrimaryDocument = true
 		}
-		if len(runtimes) > 0 {
-			if changed[i].knownAffectedIndexes && changed[i].affectedIndexRuntimeMask == 0 {
-				recordKnownUnaffectedIndexStats(runtimes, &stats)
-				continue
-			}
-			phaseStart = updateBatchStatsNow(detailedStats)
-			if p := plannerOptions.typedProjection; p != nil {
-				changed[i].newState, err = typedIndexState(p.typedRows[string(changed[i].documentID)], p.columns, runtimes, stateArena)
-			} else if changed[i].knownAffectedIndexes {
-				changed[i].newState, err = orderedIndexStateForKnownValidDocumentRuntimeMask(changed[i].document, runtimes, changed[i].affectedIndexRuntimeMask, plannerOptions, stateArena)
-			} else {
-				changed[i].newState, err = orderedIndexStateForDocumentWithArena(changed[i].document, runtimes, plannerOptions, stateArena)
-			}
-			phaseDuration := updateBatchStatsSince(detailedStats, phaseStart)
-			stats.IndexStateExtraction += phaseDuration
-			stats.NewIndexStateExtract += phaseDuration
-			if err != nil {
-				_ = snap.Close()
-				return nil, updateBatchItemError(changed[i].itemIndex, err)
-			}
-			var changedIndexes uint64
-			indexStateChanged := false
-			for runtimeIdx, runtime := range runtimes {
-				runtimeAffected := true
-				if changed[i].knownAffectedIndexes {
-					runtimeAffected = changed[i].affectedIndexRuntimeMask&(uint64(1)<<uint(runtimeIdx)) != 0
-				}
-				runtimeChanged := false
-				if runtimeAffected {
-					runtimeChanged = orderedDocumentIndexRuntimeChanged(changed[i].oldState, changed[i].newState, runtimeIdx)
-				}
-				maskBit, maskBitOK := updateIndexChangedMaskBit(runtimeIdx)
-				if !maskBitOK {
-					stats.MaskFallbacks++
-				}
-				if runtimeChanged {
-					indexStateChanged = true
-					if maskBitOK {
-						changedIndexes |= maskBit
-					}
-					stats.IndexValueChanges++
-					if runtime.def.unique {
-						stats.UniqueIndexChecks++
-					}
-					if runtimeIdx < stats.IndexStatsCount {
-						stats.IndexStats[runtimeIdx].Changed++
-						if runtime.def.unique {
-							stats.IndexStats[runtimeIdx].UniqueChecks++
-						}
-					}
-					continue
-				}
-				stats.IndexValueUnchanged++
-				if runtime.def.unique {
-					stats.UniqueIndexCheckSkips++
-				}
-				if runtimeIdx < stats.IndexStatsCount {
-					stats.IndexStats[runtimeIdx].Unchanged++
-					if runtime.def.unique {
-						stats.IndexStats[runtimeIdx].UniqueCheckSkips++
-					}
-				}
-			}
-			changed[i].changedIndexes = changedIndexes
-			changed[i].indexStateChanged = indexStateChanged
+		if err := prepareBatchUpdateIndexEffects(&changed[i], runtimes, plannerOptions, stateArena, &stats, detailedStats); err != nil {
+			_ = snap.Close()
+			return nil, updateBatchItemError(changed[i].itemIndex, err)
 		}
 	}
 	commandWALDocuments := collectionDocumentsFromPreparedBatchUpdates(changed)
@@ -20043,15 +19981,15 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 			if !item.indexStateChanged || stateTable == nil {
 				continue
 			}
-			if orderedDocumentIndexStateEmpty(item.newState) {
-				stateTable.DeleteSteal(bytes.Clone(item.documentID))
+			entry, err := batchUpdateIndexStateEntry(item, runtimes)
+			if err != nil {
+				_ = snap.Close()
+				return nil, err
+			}
+			if entry.flags&node.FlagTombstone != 0 {
+				stateTable.DeleteSteal(bytes.Clone(entry.key))
 			} else {
-				rawState, err := encodeRuntimeOrderedDocumentIndexState(item.newState, runtimes)
-				if err != nil {
-					_ = snap.Close()
-					return nil, err
-				}
-				stateTable.SetSteal(bytes.Clone(item.documentID), rawState)
+				stateTable.SetSteal(bytes.Clone(entry.key), entry.value)
 			}
 		}
 		if stateTable != nil && stateTable.Len() > 0 {
@@ -22656,7 +22594,7 @@ func rejectReplaceUniqueConflictsOrdered(snap *backenddb.Snapshot, catalog *coll
 					_ = it.Close()
 					return err
 				}
-				if !it.IsDeleted() && !bytes.Equal(ownerID, update.documentID) && !batchReplacements.allows(runtime.def.name, encoded, ownerID) {
+				if !it.IsDeleted() && batchUpdateUniqueOwnerConflicts(runtime.def.name, encoded, ownerID, update.documentID, batchReplacements) {
 					conflict = true
 					break
 				}

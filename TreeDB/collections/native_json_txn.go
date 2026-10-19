@@ -27,6 +27,8 @@ type nativeJSONTxnBinding struct {
 	probe       NativeJSONRead
 	plan        *nativeJSONLogicalInsert
 	payload     []byte
+	kind        commitlog.CommandKind
+	format      commitlog.PayloadFormat
 	effects     []txnhistory.Effect
 }
 type NativeJSONTxn struct {
@@ -205,6 +207,9 @@ func (t *NativeJSONTxn) GetFrom(name string, id []byte) ([]byte, error) {
 		rows := g.plan.mutations
 		i := sort.Search(len(rows), func(i int) bool { return bytes.Compare(rows[i].Key, id) >= 0 })
 		if i < len(rows) && bytes.Equal(rows[i].Key, id) {
+			if rows[i].Flags&node.FlagTombstone != 0 {
+				return nil, tree.ErrKeyNotFound
+			}
 			return bytes.Clone(rows[i].Value), nil
 		}
 	}
@@ -342,6 +347,7 @@ func (t *NativeJSONTxn) InsertBatchInto(name string, ids, documents [][]byte) (r
 	for i, row := range rows {
 		docs[i] = commitlog.CollectionDocument{ID: row.key, Document: row.value}
 	}
+	g.kind, g.format = commitlog.CommandKindCollectionInsertBatchByID, commitlog.PayloadFormatCollectionInsertBatchByIDV1
 	g.payload, err = commitlog.EncodeCollectionInsertBatchByIDPayload(g.name, docs)
 	return err
 }
@@ -557,11 +563,18 @@ func (t *NativeJSONTxn) Commit() (resultErr error) {
 			continue
 		}
 		effects = append(effects, g.effects...)
-		members[memberCount] = commitlog.CompositeMutationMember{Kind: commitlog.CommandKindCollectionInsertBatchByID, PayloadFormat: commitlog.PayloadFormatCollectionInsertBatchByIDV1, Incarnation: g.incarnation, Payload: g.payload}
+		members[memberCount] = commitlog.CompositeMutationMember{Kind: g.kind, PayloadFormat: g.format, Incarnation: g.incarnation, Payload: g.payload}
 		memberCount++
 	}
-	kind, scope, format, payload := commitlog.CommandKindCollectionInsertBatchByID, commitlog.CommandScopeCollection, commitlog.PayloadFormatCollectionInsertBatchByIDV1, members[0].Payload
+	kind, scope, format, payload := members[0].Kind, commitlog.CommandScopeCollection, members[0].PayloadFormat, members[0].Payload
 	if memberCount > 1 {
+		// CRUD is staged only by existing one-shot Collection methods. Until the
+		// aggregate startup executor consumes CRUD effects, refuse before append.
+		for _, member := range members[:memberCount] {
+			if member.Kind != commitlog.CommandKindRawKVBatch && member.Kind != commitlog.CommandKindCollectionInsertBatchByID {
+				return backenddb.ErrNativeSemanticUnsupported
+			}
+		}
 		kind, scope, format = commitlog.CommandKindCompositeMutation, commitlog.CommandScopeSystem, commitlog.PayloadFormatCompositeMutationV1
 		var err error
 		planned, planErr := commitlog.PlanCompositeMutationPayload(members[:memberCount])
