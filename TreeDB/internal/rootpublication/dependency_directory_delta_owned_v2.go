@@ -292,7 +292,7 @@ func walkOwnedDependencyDirectoryChangesV2(source *StableResourceSet, base *Depe
 			if inherited := entry.logicalObligations.directory; inherited != nil && inherited != base {
 				return ErrResourceConflict
 			}
-			for _, o := range entry.logicalObligations.removed {
+			for o := range entry.logicalObligations.removalValues() {
 				if base == nil {
 					return ErrResourceConflict
 				}
@@ -306,7 +306,16 @@ func walkOwnedDependencyDirectoryChangesV2(source *StableResourceSet, base *Depe
 					return err
 				}
 				if !found {
-					return ErrResourceConflict
+					// Removing an unsealed producer addition emits neither an
+					// addition nor a deletion against the inherited disk root.
+					// The original removal constructor validated this exact
+					// record before filtering its pending index. Its admitted
+					// outgoing backing retains that proof after the key ends.
+					actual, owned := entry.logicalObligations.removedValue(o)
+					if entry.logicalObligations.ownedRemoved == nil || !owned || actual != o {
+						return ErrResourceConflict
+					}
+					continue
 				}
 				key, _, err := s.logical(item.key, o)
 				if err != nil {

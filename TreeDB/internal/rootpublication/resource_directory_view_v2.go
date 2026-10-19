@@ -33,7 +33,7 @@ func (set *StableResourceSet) DependencyDirectoryV2() (*DependencyDirectoryV2, e
 			return true
 		}
 		bound++
-		if view.tail != nil || view.index != nil || len(view.removed) != 0 || (directory != nil && directory != view.directory) {
+		if view.tail != nil || view.index != nil || view.removalCount() != 0 || (directory != nil && directory != view.directory) {
 			err = fmt.Errorf("%w: dependency directory has an unsealed delta", ErrResourceConflict)
 			return false
 		}
@@ -205,7 +205,7 @@ func lookupStableLogicalMembershipV2(index *stableLogicalObligationIndexNode, di
 	if entry == nil || entry.logicalObligations.directory != directory {
 		return StableLogicalObligation{}, false, nil
 	}
-	if _, removed := entry.logicalObligations.removed[stableLogicalObligationKey(obligation)]; removed {
+	if _, removed := entry.logicalObligations.removedValue(obligation); removed {
 		return StableLogicalObligation{}, false, nil
 	}
 	return existing, true, nil
@@ -226,7 +226,7 @@ func (view stableLogicalObligationView) walk(visit func(StableLogicalObligation)
 			if err != nil {
 				return err
 			}
-			_, removed := view.removed[stableLogicalObligationKey(obligation)]
+			_, removed := view.removedValue(obligation)
 			if !removed && bytes.Equal(owner, view.owner) && !visit(obligation) {
 				return errStopDependencyDirectoryWalk
 			}
@@ -240,7 +240,7 @@ func (view stableLogicalObligationView) walk(visit func(StableLogicalObligation)
 		}
 	}
 	view.rangeDeltaValues(func(obligation StableLogicalObligation) bool {
-		if _, removed := view.removed[stableLogicalObligationKey(obligation)]; removed {
+		if _, removed := view.removedValue(obligation); removed {
 			return true
 		}
 		return visit(obligation)
@@ -251,7 +251,7 @@ func (view stableLogicalObligationView) walk(visit func(StableLogicalObligation)
 // lookup checks a small unsealed producer delta before the admitted directory.
 // A directory lookup error cannot be interpreted as permission to add a key.
 func (view stableLogicalObligationView) lookup(obligation StableLogicalObligation, work *StableResourceClosureWork) (StableLogicalObligation, bool, error) {
-	if _, removed := view.removed[stableLogicalObligationKey(obligation)]; removed {
+	if _, removed := view.removedValue(obligation); removed {
 		return StableLogicalObligation{}, false, nil
 	}
 	if existing, found := findStableLogicalObligationIndex(view.index, obligation, work); found {

@@ -15,6 +15,7 @@ type resourceEntryOutgoing struct {
 	frontierValue DurableFrontier
 	fields        *resourceFieldBacking
 	obligations   *resourceObligationBacking
+	removed       *resourceObligationBacking
 	index         *stableLogicalObligationIndexNode
 	directory     *DependencyDirectoryV2
 	directoryKey  []byte
