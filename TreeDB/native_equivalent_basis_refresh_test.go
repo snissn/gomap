@@ -49,7 +49,8 @@ func TestNativeExistingCollectionEquivalentBasisRewrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Maintained physical setup: one persistent pointer root is named by two
-	// canonical collection descriptors, exactly as in the backend rewrite tests.
+	// canonical collection descriptors. Apply a system delta so the original
+	// manager-created metadata and incarnation records remain eligible for import.
 	document := []byte(`{"body":"` + string(bytes.Repeat([]byte("persistent"), 512)) + `"}`)
 	ptrs, err := seed.AppendValueLogValues([][]byte{document})
 	if err != nil {
@@ -61,7 +62,7 @@ func TestNativeExistingCollectionEquivalentBasisRewrite(t *testing.T) {
 	}
 	rootTable.SetEntry([]byte("old"), nil, ptrs[0], node.FlagPointer)
 	rootTable.Freeze()
-	_, roots, err := seed.PublishOrderedRootGroupWithSystemBuilder([]backenddb.OrderedRootPublishInput{{
+	_, roots, err := seed.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder([]backenddb.OrderedRootDeltaPublishInput{{
 		Iter: rootTable.NewIterator(nil, nil), StoragePolicy: backenddb.OrderedRootStoragePagerLeaves,
 	}}, func(roots []uint64) (iterator.UnsafeIterator, error) {
 		descriptors, e := memtable.NewWithCapacityMode(2, memtable.ModeHashSorted)
