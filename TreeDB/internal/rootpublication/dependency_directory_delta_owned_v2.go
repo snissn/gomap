@@ -16,15 +16,22 @@ import (
 // One admitted codec workspace serves synchronous directory emissions/lookups.
 // Its fixed parser/output capacity is the existing inline directory record
 // limit; no growable canonical encoder or generic decoder is reached.
+type ownedDirectoryPointV2 struct {
+	key  [page.PageSize]byte
+	leaf [page.PageSize]byte
+}
+
 type ownedDirectoryCodecV2 struct {
 	parser dependencyBorrowScratch
 	key    [page.PageSize]byte
 	value  [page.PageSize]byte
 	owner  [page.PageSize]byte
+	// A logical record remains borrowed while its physical owner is checked.
+	points [2]ownedDirectoryPointV2
 }
 
 func withOwnedDirectoryCodecV2(owner *retainedalloc.Owner, visit func(*ownedDirectoryCodecV2) error) error {
-	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(ownedDirectoryCodecV2{}))) + 2*retainedalloc.AllocationCharge(tree.OwnedPointerProjectionAllocationSize())
+	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(ownedDirectoryCodecV2{})))
 	if err := owner.AddPending(charge); err != nil {
 		return err
 	}
@@ -74,19 +81,21 @@ func (s *ownedDirectoryCodecV2) logical(owner []byte, o StableLogicalObligation)
 	return key, value, nil
 }
 
-// Lookup visits the actual immutable record while its already-admitted owned
-// iterator is alive. Only exact absence is reported as found=false.
-func (d *DependencyDirectoryV2) lookupBorrowedRecordV2(key []byte, visit func([]byte, []byte) error) (found bool, err error) {
-	it := d.tree.OwnedPointerProjectionIterator(key, nil, nil)
-	defer it.Close()
-	if !it.Valid() || !bytes.Equal(it.UnsafeKey(), key) {
-		return false, it.Error()
+// Lookup borrows the exact immutable record through the caller's admitted
+// point slot. Only exact absence is found=false. The retained directory/source
+// owns the tree/root until visit returns; no view may escape that scope.
+func (d *DependencyDirectoryV2) lookupBorrowedRecordV2(s *ownedDirectoryPointV2, key []byte, visit func([]byte, []byte) error) (found bool, err error) {
+	entry, err := d.tree.GetEntryWithFixedScratch(key, s.key[:], s.leaf[:], nil)
+	if errors.Is(err, tree.ErrKeyNotFound) {
+		return false, nil
 	}
-	value, _, flags := it.UnsafeEntry()
-	if flags&(node.FlagPointer|node.FlagTombstone) != 0 {
+	if err != nil {
+		return false, err
+	}
+	if entry.Flags&(node.FlagPointer|node.FlagTombstone) != 0 {
 		return false, ErrDependencyManifestFormat
 	}
-	return true, visit(it.UnsafeKey(), value)
+	return true, visit(entry.Key, entry.Value)
 }
 
 func (s *ownedDirectoryCodecV2) lookupLogical(d *DependencyDirectoryV2, o StableLogicalObligation, visit func([]byte, StableLogicalObligation) error) (bool, error) {
@@ -94,12 +103,12 @@ func (s *ownedDirectoryCodecV2) lookupLogical(d *DependencyDirectoryV2, o Stable
 	if err != nil {
 		return false, err
 	}
-	return d.lookupBorrowedRecordV2(key, func(key, value []byte) error {
+	return d.lookupBorrowedRecordV2(&s.points[0], key, func(key, value []byte) error {
 		owner, got, err := decodeBorrowedLogicalV2(key, value)
 		if err != nil {
 			return err
 		}
-		found, err := d.lookupBorrowedRecordV2(owner, func(key, value []byte) error {
+		found, err := d.lookupBorrowedRecordV2(&s.points[1], owner, func(key, value []byte) error {
 			physical, err := s.parser.physical(key, value)
 			if err != nil {
 				return err
@@ -269,7 +278,7 @@ func walkOwnedDependencyDirectoryChangesV2(source *StableResourceSet, base *Depe
 			}
 			changed := true
 			if base != nil {
-				found, err := base.lookupBorrowedRecordV2(item.key, func(key, value []byte) error {
+				found, err := base.lookupBorrowedRecordV2(&s.points[0], item.key, func(key, value []byte) error {
 					changed = !bytes.Equal(encoded, value)
 					if changed {
 						_, err := s.parser.physical(key, value)
