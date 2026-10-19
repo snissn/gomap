@@ -375,10 +375,11 @@ func TestCaptureDurableRootAppendRequirementDistinctResourceDuplicateFallsBack43
 		producer.Release()
 		t.Fatalf("distinct duplicate fallback=%d work=%+v", fallbackCalls, work)
 	}
-	if base.Owner() != rootpublication.ResourceOwnerBuilder || producer.Owner() != rootpublication.ResourceOwnerTransferred {
+	baseOwner, producerOwner := base.Owner(), producer.Owner()
+	if baseOwner != rootpublication.ResourceOwnerBuilder || producerOwner != rootpublication.ResourceOwnerReleased {
 		base.Release()
 		producer.Release()
-		t.Fatalf("ownership base=%v producer=%v", base.Owner(), producer.Owner())
+		t.Fatalf("ownership base=%v producer=%v", baseOwner, producerOwner)
 	}
 	if baseReleases.Load() != 0 || producerReleases.Load() != 1 {
 		base.Release()

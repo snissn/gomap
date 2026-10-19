@@ -789,6 +789,12 @@ One bounded settle replacement runs when later GC/checkpoint phases create new
 policy debt. After a successful replacement, leaf pack/GC settles any debt from
 rewritten system leaves within the same run-wide `LeafPackMaxPasses` budget;
 completion is based on the subsequent audit.
+After each successful vacuum and its checkpoint, compaction converges the older
+durable slot onto the current root before settling GC. This uses the existing
+durable publication path, including for NoWAL, without appending a command frame
+or advancing command coverage. Held views and prepared publication members keep
+their independent resource pins. Ordinary checkpoint, rewrite, and GC retain
+their existing fallback roots; they do not perform this convergence.
 Transient stale/mutation races are `deferred`, Windows is `unsupported`, and
 permanent errors fail compaction. Deferred or unsupported required work keeps
 all completion flags false. `PolicyFullyCompacted` means selected planner debt
