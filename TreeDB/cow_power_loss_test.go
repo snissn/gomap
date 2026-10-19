@@ -155,6 +155,7 @@ func TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts(t *testing.
 	for _, profile := range []treedb.Profile{treedb.ProfileCommandWALDurable, treedb.ProfileCommandWALRelaxed, treedb.ProfileNoWALFast} {
 		for _, point := range points {
 			t.Run(fmt.Sprintf("%s/%s", profile, point), func(t *testing.T) {
+				cutErr := fmt.Errorf("modeled COW interruption at %s", point)
 				opts := treedb.OptionsFor(profile, t.TempDir())
 				opts.IndexPrimaryDirectory = true // Meta/seal interruption cuts target index.db.primary.
 				opts.MemtableMode = "cow_btree"
@@ -172,7 +173,14 @@ func TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts(t *testing.
 				if err != nil {
 					t.Fatal(err)
 				}
-				defer db.Close()
+				defer func() {
+					if closeErr := db.Close(); closeErr != nil {
+						t.Logf("interrupted original producer Close: %v", closeErr)
+						if !errors.Is(closeErr, cutErr) && !errors.Is(closeErr, backenddb.ErrRecoveryRequired) {
+							t.Errorf("interrupted original producer teardown: %v", closeErr)
+						}
+					}
+				}()
 				if err = db.SetSync([]byte("seed"), []byte("baseline")); err != nil {
 					t.Fatal(err)
 				}
@@ -184,7 +192,6 @@ func TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts(t *testing.
 					t.Fatal(err)
 				}
 				var cut *powerlossoracle.Model
-				cutErr := fmt.Errorf("modeled COW interruption at %s", point)
 				wantResource := durabilitycut.ResourceMeta
 				switch point {
 				case durabilitycut.BeforeDependencyFileSync, durabilitycut.AfterDependencyFileSync:
