@@ -9,6 +9,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
 	"github.com/snissn/gomap/TreeDB/internal/txnhistory"
 	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 var ErrNativeSemanticUnsupported = errors.New("treedb: command kind has no native semantic preparation")
@@ -247,4 +248,18 @@ func (db *DB) ValidateNativeCommandIntent(owner *transactionowner.Owner, intent 
 // escapes, and dictionary/codec eligibility remains the native bounded contract.
 type NativePhysicalReader interface {
 	NativeEntryAtRoot(root uint64, key []byte, copyValue bool) (node.LeafEntry, error)
+}
+
+// NativePhysicalValueReader decodes an already captured pointer using that
+// capture's exact retained basis and registered files. It returns exact-length,
+// independent output before releasing shared scratch. Compressed dictionaries
+// remain unsupported; dictionary-free codecs use the maintained bounded reader.
+//
+// admitOutput is nil for caller-owned public results. The existing internal
+// retained consumer may supply only its synchronous original-budget admission:
+// no application callback, capture, publication or scope lock acquisition. It
+// runs before the independent output allocation, under the basis read mutex.
+// As with NativePhysicalReader, the enclosing scope excludes same-capture Close.
+type NativePhysicalValueReader interface {
+	NativeValueAtPointer(ptr page.ValuePtr, admitOutput func(uint64) error) ([]byte, error)
 }

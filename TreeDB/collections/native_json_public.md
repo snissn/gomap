@@ -265,7 +265,12 @@ reads sharing one basis serialize while using those buffers and copying inline
 results into caller-owned output. A physical handoff gives later reads a new
 basis; held reads keep the old basis and its original admitted buffers until its
 last owner closes. Pending/captured logical-source precedence and pointer-value
-resolution are unchanged. Recovered catalog decoding still uses its existing
+resolution still uses the opening basis's registered file set. Captured native
+value reads now reuse that same basis-owned bounded decoder for dictionary-free
+Snappy, LZ4 and ZSTD records, including defaults written before activation. A
+retained internal consumer admits its independent output to its original staging
+receipt before copy-out; public results remain caller-owned. Compressed dictionary
+values remain refused. Recovered catalog decoding still uses its existing
 scope-owned metadata scratch; it is not amortized by this row-read workspace.
 
 ## Indexed planner extraction checkpoint (source only)

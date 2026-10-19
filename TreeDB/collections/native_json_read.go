@@ -175,6 +175,11 @@ func (r *NativeJSONRead) Get(id []byte) ([]byte, error) {
 // r.mu, so Close cannot detach that Snapshot until decode and scratch cleanup
 // finish. Returned bytes are an independent caller-owned copy.
 func (r *NativeJSONRead) readValue(ptr page.ValuePtr, admitOutput func(uint64) error) ([]byte, error) {
+	if physical, ok := r.capture.(backenddb.NativePhysicalValueReader); ok {
+		return physical.NativeValueAtPointer(ptr, admitOutput)
+	}
+	// Capture implementations without shared physical decoding retain their
+	// original scoped buffers and Snappy/LZ4-only, dictionary-free eligibility.
 	f, _, err := r.capture.Snapshot().PinnedValueLogFile(ptr.FileID)
 	if err != nil {
 		return nil, err
