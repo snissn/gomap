@@ -64,8 +64,44 @@ func nativeIndexDomain(name string) bool {
 	return name == "index-state" || strings.HasPrefix(name, "index/")
 }
 
+// A pure drop is an ordered subset with exactly the same index definitions.
+// Index-state values encode names, so neither surviving roots nor their pending
+// sources need to be rewritten when a declaration is removed.
+func nativeIndexSubsetRemoval(before, after []IndexDefinition) bool {
+	if len(after) >= len(before) {
+		return false
+	}
+	next := 0
+	for _, prior := range before {
+		if next < len(after) && prior.Name == after[next].Name {
+			if !indexDefinitionValuesEqual(prior, after[next]) {
+				return false
+			}
+			next++
+		}
+	}
+	return next == len(after)
+}
+
+func nativeIndexRemovedDomain(name string, after []IndexDefinition) bool {
+	if name == "index-state" {
+		return len(after) == 0
+	}
+	indexName, ok := strings.CutPrefix(name, "index/")
+	if !ok {
+		return false
+	}
+	for _, index := range after {
+		if index.Name == indexName {
+			return false
+		}
+	}
+	return true
+}
+
 // Preserve the latest primary/templates and their original physical resources.
-// Only schema-derived index domains are replaced from the complete opening cut.
+// Creation replaces schema-derived domains from the complete opening cut. Pure
+// removal retains unchanged roots, source boundaries and interpretations.
 func prepareNativeIndexMutation(base *nativeEngineVersion, old *nativeCollectionState, meta CollectionMeta, changes []nativeJSONDomainChange, effects []memtable.COWMutation, interpretation uint64) (next *nativeEngineVersion, resultErr error) {
 	scratch, err := newNativeEnginePreparation(base, 1, len(changes), base.allocator)
 	if err != nil {
@@ -84,6 +120,7 @@ func prepareNativeIndexMutation(base *nativeEngineVersion, old *nativeCollection
 	if err != nil {
 		return nil, err
 	}
+	pureDrop := nativeIndexSubsetRemoval(old.schema.meta.Indexes, meta.Indexes)
 	mutations := old.domains.Len() + len(changes)
 	p.domainBuilder, err = cowbtree.NewOwnedMapBuilder(old.domains, mutations, nativeDomainLifetime{}, admit)
 	if err != nil {
@@ -94,7 +131,7 @@ func prepareNativeIndexMutation(base *nativeEngineVersion, old *nativeCollection
 		return nil, err
 	}
 	old.domains.Scan(func(name string, _ *nativeDomainState) bool {
-		if nativeIndexDomain(name) {
+		if nativeIndexDomain(name) && (!pureDrop || nativeIndexRemovedDomain(name, meta.Indexes)) {
 			err = p.domainBuilder.Delete(name)
 			if err == nil {
 				err = p.pendingDomainBuilder.Delete(name)
@@ -213,101 +250,107 @@ func (m *NativeJSONManager) mutateIndexes(name string, create *IndexDefinition, 
 		var catalog []memtable.COWMutation
 		var plan *directBufferedInsertPlan
 		var logical *nativeIndexMutation
-		if err = admit(uint64(unsafe.Sizeof(nativeIndexMutation{})) + uint64(page.PageSize)); err != nil {
+		if err = admit(uint64(unsafe.Sizeof(nativeIndexMutation{}))); err != nil {
 			return nil, err
 		}
-		cursor := make([]byte, page.PageSize)
-		if read.domain.domain != nil {
-			var start []byte
-			for {
-				entry, found, e := nativeJSONSeekLive(&read.domain, read, start, nil, cursor)
-				if e != nil {
-					return nil, e
-				}
-				if !found {
-					break
-				}
-				if len(entry.Key) >= len(cursor) {
-					return nil, memtable.ErrCOWCapacity
-				}
-				if err = admit(uint64(len(entry.Key))); err != nil {
-					return nil, err
-				}
-				id := bytes.Clone(entry.Key)
-				var value []byte
-				if entry.Flags&node.FlagPointer != 0 {
-					value, e = read.readValue(entry.ValuePtr, admit)
-				} else {
-					if e = admit(uint64(len(entry.Value))); e == nil {
-						value = bytes.Clone(entry.Value)
-					}
-				}
-				if e != nil {
-					return nil, e
-				}
-				row, e := rows.touch(id, func([]byte) ([]byte, error) { return nil, nil }, admit)
-				if e != nil {
-					return nil, e
-				}
-				row.current = value
-				n := copy(cursor, id)
-				cursor[n] = 0
-				start = cursor[:n+1]
-			}
-		}
-		var scratchPeak uint64
-		scratch := func(doc []byte) error {
-			n, e := nativeJSONIndexedPlanCharge(meta, [][]byte{cursor}, [][]byte{doc})
-			if e != nil {
-				return e
-			}
-			if n <= scratchPeak {
-				return nil
-			}
-			if e = admit(n - scratchPeak); e != nil {
-				return e
-			}
-			scratchPeak = n
-			return nil
-		}
-		plan, _, _, err = nativeJSONFinalRows(name, meta, &rows, admit, scratch)
-		if err != nil {
-			return nil, err
-		}
-		if err = admitNativeInsertArray(len(plan.primaryEntries), uint64(unsafe.Sizeof(memtable.COWMutation{})), admit); err != nil {
-			return nil, err
-		}
-		primary := make([]memtable.COWMutation, len(plan.primaryEntries))
-		domains, _, err = extractNativeInsertEffects(name, read.collection.incarnation, plan, primary, admit)
-		if err != nil {
-			return nil, err
-		}
-		if err = admitNativeInsertArray(len(meta.Indexes)+1, uint64(unsafe.Sizeof(nativeJSONDomainChange{})), admit); err != nil {
-			return nil, err
-		}
-		complete := make([]nativeJSONDomainChange, 0, len(meta.Indexes)+1)
-		for _, domain := range domains {
-			if nativeIndexDomain(domain.name) {
-				complete = append(complete, domain)
-			}
-		}
-		domains = complete
-		// Missing/empty index roots must also replace their old physical domain.
-		for _, index := range meta.Indexes {
-			if err = admit(uint64(len("index/") + len(index.Name))); err != nil {
+		pureDrop := nativeIndexSubsetRemoval(read.meta.Indexes, meta.Indexes)
+		if !pureDrop {
+			if err = admit(uint64(page.PageSize)); err != nil {
 				return nil, err
 			}
-			relative := "index/" + index.Name
-			found := false
-			for _, d := range domains {
-				found = found || d.name == relative
+			cursor := make([]byte, page.PageSize)
+			if read.domain.domain != nil {
+				var start []byte
+				for {
+					entry, found, e := nativeJSONSeekLive(&read.domain, read, start, nil, cursor)
+					if e != nil {
+						return nil, e
+					}
+					if !found {
+						break
+					}
+					if len(entry.Key) >= len(cursor) {
+						return nil, memtable.ErrCOWCapacity
+					}
+					if err = admit(uint64(len(entry.Key))); err != nil {
+						return nil, err
+					}
+					id := bytes.Clone(entry.Key)
+					var value []byte
+					if entry.Flags&node.FlagPointer != 0 {
+						value, e = read.readValue(entry.ValuePtr, admit)
+					} else {
+						if e = admit(uint64(len(entry.Value))); e == nil {
+							value = bytes.Clone(entry.Value)
+						}
+					}
+					if e != nil {
+						return nil, e
+					}
+					row, e := rows.touch(id, func([]byte) ([]byte, error) { return nil, nil }, admit)
+					if e != nil {
+						return nil, e
+					}
+					row.current = value
+					n := copy(cursor, id)
+					cursor[n] = 0
+					start = cursor[:n+1]
+				}
 			}
-			if !found {
-				policy, _ := backendRootStoragePolicy(index.StoragePolicy)
-				if err = admit(uint64(unsafe.Sizeof(nativeJSONDomainChange{})) + uint64(len(relative))); err != nil {
+			var scratchPeak uint64
+			scratch := func(doc []byte) error {
+				n, e := nativeJSONIndexedPlanCharge(meta, [][]byte{cursor}, [][]byte{doc})
+				if e != nil {
+					return e
+				}
+				if n <= scratchPeak {
+					return nil
+				}
+				if e = admit(n - scratchPeak); e != nil {
+					return e
+				}
+				scratchPeak = n
+				return nil
+			}
+			plan, _, _, err = nativeJSONFinalRows(name, meta, &rows, admit, scratch)
+			if err != nil {
+				return nil, err
+			}
+			if err = admitNativeInsertArray(len(plan.primaryEntries), uint64(unsafe.Sizeof(memtable.COWMutation{})), admit); err != nil {
+				return nil, err
+			}
+			primary := make([]memtable.COWMutation, len(plan.primaryEntries))
+			domains, _, err = extractNativeInsertEffects(name, read.collection.incarnation, plan, primary, admit)
+			if err != nil {
+				return nil, err
+			}
+			if err = admitNativeInsertArray(len(meta.Indexes)+1, uint64(unsafe.Sizeof(nativeJSONDomainChange{})), admit); err != nil {
+				return nil, err
+			}
+			complete := make([]nativeJSONDomainChange, 0, len(meta.Indexes)+1)
+			for _, domain := range domains {
+				if nativeIndexDomain(domain.name) {
+					complete = append(complete, domain)
+				}
+			}
+			domains = complete
+			// Missing/empty index roots must also replace their old physical domain.
+			for _, index := range meta.Indexes {
+				if err = admit(uint64(len("index/") + len(index.Name))); err != nil {
 					return nil, err
 				}
-				domains = append(domains, nativeJSONDomainChange{name: relative, policy: policy})
+				relative := "index/" + index.Name
+				found := false
+				for _, d := range domains {
+					found = found || d.name == relative
+				}
+				if !found {
+					policy, _ := backendRootStoragePolicy(index.StoragePolicy)
+					if err = admit(uint64(unsafe.Sizeof(nativeJSONDomainChange{})) + uint64(len(relative))); err != nil {
+						return nil, err
+					}
+					domains = append(domains, nativeJSONDomainChange{name: relative, policy: policy})
+				}
 			}
 		}
 		before, err := encodeNormalizedCollectionMeta(read.meta)
@@ -391,13 +434,19 @@ func nativeIndexCatalogEffects(before, after CollectionMeta, encoded []byte, inc
 	if err = add(nativeCatalogNextIncarnationKey, counter[:], node.FlagInline); err != nil {
 		return nil, err
 	}
+	pureDrop := nativeIndexSubsetRemoval(before.Indexes, after.Indexes)
 	for _, index := range before.Indexes {
+		if pureDrop && !nativeIndexRemovedDomain("index/"+index.Name, after.Indexes) {
+			continue
+		}
 		if err = add(systemCollectionRootKey(collectionSecondaryRootName(before.Name, index.Name)), nil, node.FlagTombstone); err != nil {
 			return nil, err
 		}
 	}
-	if err = add(systemCollectionRootKey(collectionIndexStateRootName(before.Name)), nil, node.FlagTombstone); err != nil {
-		return nil, err
+	if !pureDrop || len(after.Indexes) == 0 {
+		if err = add(systemCollectionRootKey(collectionIndexStateRootName(before.Name)), nil, node.FlagTombstone); err != nil {
+			return nil, err
+		}
 	}
 	sort.Slice(effects, func(i, j int) bool { return bytes.Compare(effects[i].Key, effects[j].Key) < 0 })
 	return effects, nil

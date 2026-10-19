@@ -105,61 +105,65 @@ func replayNativeIndexMutation(db *backenddb.DB, env commitlog.CommandEnvelope) 
 	if err != nil {
 		return err
 	}
-	root := uint64(0)
-	encoded, err = snapshot.GetAtRoot(token.SystemRootPageID, []byte(systemCollectionRootKey(collectionPrimaryRootName(p.Collection))))
-	if err == nil {
-		root, err = decodeRootID(encoded)
-	} else if errors.Is(err, tree.ErrKeyNotFound) {
-		err = nil
-	}
-	if err != nil {
-		return err
-	}
-	if _, err = snapshot.GetAtRoot(token.SystemRootPageID, []byte(systemCollectionRootOverlayKey(collectionPrimaryRootName(p.Collection)))); err == nil {
-		return backenddb.ErrNativeSemanticUnsupported
-	} else if !errors.Is(err, tree.ErrKeyNotFound) {
-		return err
-	}
-	// Startup's original transport/construction scope owns these temporary rows,
-	// as in aggregate replay; no live COW budget or second allocator is created.
 	noAdmission := func(uint64) error { return nil }
-	var rows nativeJSONRows
-	if root != 0 {
-		it, e := snapshot.IteratorAtRoot(root, nil, nil)
-		if e != nil {
-			return e
+	pureDrop := nativeIndexSubsetRemoval(before.Indexes, after.Indexes)
+	var domains []nativeJSONDomainChange
+	if !pureDrop {
+		root := uint64(0)
+		encoded, err = snapshot.GetAtRoot(token.SystemRootPageID, []byte(systemCollectionRootKey(collectionPrimaryRootName(p.Collection))))
+		if err == nil {
+			root, err = decodeRootID(encoded)
+		} else if errors.Is(err, tree.ErrKeyNotFound) {
+			err = nil
 		}
-		e = func() (ret error) {
-			defer func() { ret = errors.Join(ret, it.Close()) }()
-			for ; it.Valid(); it.Next() {
-				if it.IsDeleted() {
-					continue
-				}
-				id := bytes.Clone(it.UnsafeKey())
-				doc := it.ValueCopy(nil)
-				if e := it.Error(); e != nil {
-					return e
-				}
-				row, e := rows.touch(id, func([]byte) ([]byte, error) { return nil, nil }, noAdmission)
-				if e != nil {
-					return e
-				}
-				row.current = doc
+		if err != nil {
+			return err
+		}
+		if _, err = snapshot.GetAtRoot(token.SystemRootPageID, []byte(systemCollectionRootOverlayKey(collectionPrimaryRootName(p.Collection)))); err == nil {
+			return backenddb.ErrNativeSemanticUnsupported
+		} else if !errors.Is(err, tree.ErrKeyNotFound) {
+			return err
+		}
+		// Startup's original transport/construction scope owns these temporary rows,
+		// as in aggregate replay; no live COW budget or second allocator is created.
+		var rows nativeJSONRows
+		if root != 0 {
+			it, e := snapshot.IteratorAtRoot(root, nil, nil)
+			if e != nil {
+				return e
 			}
-			return it.Error()
-		}()
-		if e != nil {
-			return e
+			e = func() (ret error) {
+				defer func() { ret = errors.Join(ret, it.Close()) }()
+				for ; it.Valid(); it.Next() {
+					if it.IsDeleted() {
+						continue
+					}
+					id := bytes.Clone(it.UnsafeKey())
+					doc := it.ValueCopy(nil)
+					if e := it.Error(); e != nil {
+						return e
+					}
+					row, e := rows.touch(id, func([]byte) ([]byte, error) { return nil, nil }, noAdmission)
+					if e != nil {
+						return e
+					}
+					row.current = doc
+				}
+				return it.Error()
+			}()
+			if e != nil {
+				return e
+			}
 		}
-	}
-	plan, _, _, err := nativeJSONFinalRows(p.Collection, after, &rows, noAdmission, nil)
-	if err != nil {
-		return err
-	}
-	primary := make([]memtable.COWMutation, len(plan.primaryEntries))
-	domains, _, err := extractNativeInsertEffects(p.Collection, p.Incarnation, plan, primary, noAdmission)
-	if err != nil {
-		return err
+		plan, _, _, err := nativeJSONFinalRows(p.Collection, after, &rows, noAdmission, nil)
+		if err != nil {
+			return err
+		}
+		primary := make([]memtable.COWMutation, len(plan.primaryEntries))
+		domains, _, err = extractNativeInsertEffects(p.Collection, p.Incarnation, plan, primary, noAdmission)
+		if err != nil {
+			return err
+		}
 	}
 	effects, err := nativeIndexCatalogEffects(before, after, p.Metadata, p.Incarnation, counter, noAdmission)
 	if err != nil {
@@ -218,14 +222,16 @@ func replayNativeIndexMutation(db *backenddb.DB, env commitlog.CommandEnvelope) 
 		}
 	}
 	// Explicit zero descriptors distinguish an empty new index from stale roots.
-	for _, index := range after.Indexes {
-		found := false
-		for _, d := range domains {
-			found = found || d.name == "index/"+index.Name
-		}
-		if !found {
-			if err = system.Set([]byte(systemCollectionRootKey(collectionSecondaryRootName(p.Collection, index.Name))), make([]byte, 8)); err != nil {
-				return err
+	if !pureDrop {
+		for _, index := range after.Indexes {
+			found := false
+			for _, d := range domains {
+				found = found || d.name == "index/"+index.Name
+			}
+			if !found {
+				if err = system.Set([]byte(systemCollectionRootKey(collectionSecondaryRootName(p.Collection, index.Name))), make([]byte, 8)); err != nil {
+					return err
+				}
 			}
 		}
 	}
