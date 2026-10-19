@@ -2800,10 +2800,16 @@ func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (c
 	if state != nil {
 		vlogSet = state.ValueLogSet
 	}
-	db.acquireStateValueLogSetLocked(state)
-	regID := idx.registry.Register(baseSeq)
+	regID, registerErr := idx.registry.Register(baseSeq)
+	if registerErr == nil {
+		db.acquireStateValueLogSetLocked(state)
+	}
 	db.mu.RUnlock()
 	db.rootReuseMu.RUnlock()
+	if registerErr != nil {
+		db.writeMu.RUnlock()
+		return false, registerErr
+	}
 	defer idx.registry.Unregister(regID)
 	defer func() {
 		if writeReadLocked {
@@ -2944,10 +2950,15 @@ func (db *DB) applyRewriteSwapBatchSerialized(swaps []rewriteSwap, sync bool) (r
 	if state != nil {
 		vlogSet = state.ValueLogSet
 	}
-	db.acquireStateValueLogSetLocked(state)
-	regID := idx.registry.Register(baseSeq)
+	regID, registerErr := idx.registry.Register(baseSeq)
+	if registerErr == nil {
+		db.acquireStateValueLogSetLocked(state)
+	}
 	db.mu.RUnlock()
 	db.rootReuseMu.RUnlock()
+	if registerErr != nil {
+		return registerErr
+	}
 	defer idx.registry.Unregister(regID)
 	defer func() { retErr = errors.Join(retErr, db.releaseStateValueLogSet(state)) }()
 	db.valueLogStateCaptured("rewrite-user-serialized", state)

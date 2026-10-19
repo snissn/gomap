@@ -1745,7 +1745,8 @@ type SnapshotAllocationSizes struct {
 }
 
 // ErrSnapshotCapacity reports fixed reader cohort or manual leaf-pin refusal.
-// Legacy AcquireSnapshot retains its established growable registry path.
+// Legacy AcquireSnapshot retains its growable registry path, with fallback
+// capacity now governed by the original generation owner; refusal returns nil.
 var ErrSnapshotCapacity = errors.New("bounded snapshot capacity exhausted")
 
 // AcquireSnapshotWithAllocationAdmission captures one backend basis without
@@ -1850,7 +1851,14 @@ func (db *DB) captureSnapshotForReadWithValueLogPublicationLockHeld(snap *Snapsh
 			}
 			return false
 		}
-		registryID, snap.registryShardHint = idx.registry.RegisterWithHint(state.primaryRetentionCommitV5(), snap.registryShardHint)
+		var registerErr error
+		registryID, snap.registryShardHint, registerErr = idx.registry.RegisterWithHint(state.primaryRetentionCommitV5(), snap.registryShardHint)
+		if registerErr != nil {
+			if vlogNeedsPin && vm != nil {
+				_ = vm.Release(vlogSet)
+			}
+			return false
+		}
 	}
 	if state.primaryRoot != nil {
 		if e := snap.acquirePrimaryRoot(idx, state.primaryRoot); e != nil {
@@ -2048,7 +2056,12 @@ func (db *DB) captureSnapshotViewBoundedLocked(snap *Snapshot, admit func(Snapsh
 		if bounded {
 			registryID, snap.registryShardHint = idx.registry.RegisterFastWithHint(state.primaryRetentionCommitV5(), snap.registryShardHint)
 		} else {
-			registryID, snap.registryShardHint = idx.registry.RegisterWithHint(state.primaryRetentionCommitV5(), snap.registryShardHint)
+			var registerErr error
+			registryID, snap.registryShardHint, registerErr = idx.registry.RegisterWithHint(state.primaryRetentionCommitV5(), snap.registryShardHint)
+			if registerErr != nil {
+				db.mu.RUnlock()
+				return nil, registerErr
+			}
 		}
 		if registryID == 0 {
 			db.mu.RUnlock()

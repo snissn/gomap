@@ -39,8 +39,12 @@ func (db *DB) pinDataDependencyDirectoryV6(idx *indexGen, sequence uint64, ref r
 	idx.retainWrapperBorrow()
 	// This edge keeps directory pages and their generation reusable only after
 	// release; it does not itself expose an old logical asset view to a reader.
-	lease.registryID = idx.registry.RegisterPageRetention(sequence)
-	directory, err := rootpublication.NewOwnedTypedDependencyDirectoryV6(idx.pager, ref, totalPages, metadata, lease)
+	var err error
+	lease.registryID, err = idx.registry.RegisterPageRetention(sequence)
+	var directory *rootpublication.DependencyDirectoryV2
+	if err == nil {
+		directory, err = rootpublication.NewOwnedTypedDependencyDirectoryV6(idx.pager, ref, totalPages, metadata, lease)
+	}
 	if err != nil {
 		consumed, completion, cleanup := lease.ReleaseDependencyDirectoryV6()
 		if !consumed {

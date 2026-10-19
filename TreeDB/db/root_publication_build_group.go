@@ -218,7 +218,13 @@ func (db *DB) beginRootPublicationBuildGroup(basis *Snapshot, lease *StableResou
 	group.systemRoot = db.meta.SystemRootPageID
 	group.baseSeq = db.meta.CommitSeq
 	if basis == nil {
-		group.registryID = idx.registry.Register(group.baseSeq)
+		var registerErr error
+		group.registryID, registerErr = idx.registry.Register(group.baseSeq)
+		if registerErr != nil {
+			db.mu.RUnlock()
+			db.rootReuseMu.RUnlock()
+			return nil, registerErr
+		}
 	} else {
 		group.registryID, _ = idx.registry.RegisterFastWithHint(group.baseSeq, -1)
 		if group.registryID == 0 {

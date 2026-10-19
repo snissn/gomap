@@ -4,6 +4,8 @@ import (
 	"math"
 	"sync"
 	"sync/atomic"
+
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 )
 
 const (
@@ -40,6 +42,9 @@ type readerRegistryShard struct {
 type ReaderRegistry struct {
 	mu sync.Mutex
 
+	metadata       *retainedalloc.Owner
+	metadataCharge uint64
+
 	// seqs stores pins by handle index (handle = idx+1).
 	// A sequence of math.MaxUint64 indicates a free slot.
 	seqs []registryPin
@@ -63,35 +68,38 @@ func NewReaderRegistry() *ReaderRegistry {
 }
 
 // Register adds a reader pinned to the given sequence.
-// Returns a handle to be used for Unregister.
-func (r *ReaderRegistry) Register(seq uint64) int64 {
-	id, _ := r.RegisterWithHint(seq, registerHintUnset)
-	return id
+// Returns a handle to be used for Unregister. Growth refusal returns zero and
+// the original admission error without publishing a pin.
+func (r *ReaderRegistry) Register(seq uint64) (int64, error) {
+	id, _, err := r.RegisterWithHint(seq, registerHintUnset)
+	return id, err
 }
 
 // RegisterWithHint adds a reader pinned to the given sequence and returns both
 // the handle and the shard index used for the fast path (if available).
-// If hint is negative, a fresh shard hint is chosen.
-func (r *ReaderRegistry) RegisterWithHint(seq uint64, hint int) (int64, int) {
+// If hint is negative, a fresh shard hint is chosen. Owned fallback growth is
+// admitted before allocation; on refusal the caller must roll back its capture.
+func (r *ReaderRegistry) RegisterWithHint(seq uint64, hint int) (int64, int, error) {
 	return r.registerWithHint(seq, hint, readerPin, false)
 }
 
 // RegisterPageRetention pins pages without claiming that a reader can access
 // the logical assets described by them. It uses the same registry and release
 // handle as reader pins; MinPinnedSeq includes both purposes.
-func (r *ReaderRegistry) RegisterPageRetention(seq uint64) int64 {
-	id, _ := r.registerWithHint(seq, registerHintUnset, pageRetentionPin, false)
-	return id
+func (r *ReaderRegistry) RegisterPageRetention(seq uint64) (int64, error) {
+	id, _, err := r.registerWithHint(seq, registerHintUnset, pageRetentionPin, false)
+	return id, err
 }
 
 // RegisterFastWithHint uses only the registry's existing fixed shard storage.
 // It returns zero when all shards hold other sequence/purpose cohorts. Bounded
 // callers can refuse admission without growing the fallback seqs/free arrays.
 func (r *ReaderRegistry) RegisterFastWithHint(seq uint64, hint int) (int64, int) {
-	return r.registerWithHint(seq, hint, readerPin, true)
+	id, shard, _ := r.registerWithHint(seq, hint, readerPin, true)
+	return id, shard
 }
 
-func (r *ReaderRegistry) registerWithHint(seq uint64, hint int, purpose pinPurpose, fastOnly bool) (int64, int) {
+func (r *ReaderRegistry) registerWithHint(seq uint64, hint int, purpose pinPurpose, fastOnly bool) (int64, int, error) {
 	if hint < 0 {
 		hint = int(r.nextFastShard.Add(1)-1) & fastReaderShardMask
 	} else {
@@ -101,7 +109,7 @@ func (r *ReaderRegistry) registerWithHint(seq uint64, hint int, purpose pinPurpo
 	// Joining an already-published sequence/purpose cohort cannot lower either
 	// minimum. First publication can, so serialize it with both minimum scans.
 	if id := r.tryJoinFastForPurpose(seq, hint, purpose); id != 0 {
-		return id, hint
+		return id, hint, nil
 	}
 
 	r.mu.Lock()
@@ -110,17 +118,17 @@ func (r *ReaderRegistry) registerWithHint(seq uint64, hint int, purpose pinPurpo
 	for i := 0; i < fastReaderShardCount; i++ {
 		idx := (hint + i) & fastReaderShardMask
 		if id := r.tryJoinFastForPurpose(seq, idx, purpose); id != 0 {
-			return id, idx
+			return id, idx, nil
 		}
 	}
 	for i := 0; i < fastReaderShardCount; i++ {
 		idx := (hint + i) & fastReaderShardMask
 		if id := r.tryClaimFastForPurpose(seq, idx, purpose); id != 0 {
-			return id, idx
+			return id, idx, nil
 		}
 	}
 	if fastOnly {
-		return 0, registerHintUnset
+		return 0, registerHintUnset, nil
 	}
 
 	var idx int
@@ -129,16 +137,22 @@ func (r *ReaderRegistry) registerWithHint(seq uint64, hint int, purpose pinPurpo
 		r.free = r.free[:n-1]
 	} else {
 		idx = len(r.seqs)
+		if idx == cap(r.seqs) {
+			if err := r.growFallbackLocked(); err != nil {
+				return 0, registerHintUnset, err
+			}
+		}
 		r.seqs = append(r.seqs, registryPin{seq: math.MaxUint64})
 	}
 	r.seqs[idx] = registryPin{seq: seq, purpose: purpose}
 	if seq < r.min {
 		r.min = seq
 	}
-	return int64(idx + 1), registerHintUnset
+	return int64(idx + 1), registerHintUnset, nil
 }
 
-// Unregister removes a reader.
+// Unregister removes a reader without allocating. Slow free-slot capacity was
+// admitted and allocated with the corresponding sequence-slot capacity.
 func (r *ReaderRegistry) Unregister(id int64) {
 	if id < 0 {
 		shard := int(-id - 1)

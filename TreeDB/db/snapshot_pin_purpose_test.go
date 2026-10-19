@@ -22,7 +22,10 @@ func TestMinPinnedReaderCommitSeqKeepsRetiredReaderAndPageRetention(t *testing.T
 	state := &DBState{CommitSeq: 10, RootPageID: 11}
 	database.state.Store(state)
 	database.publishSnapshotView(oldIndex, state, nil, nil)
-	page := oldIndex.registry.RegisterPageRetention(5)
+	page, registerErr := oldIndex.registry.RegisterPageRetention(5)
+	if registerErr != nil {
+		t.Fatal(registerErr)
+	}
 	defer oldIndex.registry.Unregister(page)
 	snapshot := database.AcquireSnapshot()
 	if snapshot == nil {
@@ -67,7 +70,10 @@ func TestMinPinnedReaderCommitSeqProtectsInFlightAndCompletedAcquire(t *testing.
 	state := &DBState{CommitSeq: 313, RootPageID: 11}
 	database.state.Store(state)
 	database.publishSnapshotView(index, state, nil, nil)
-	page := index.registry.RegisterPageRetention(1)
+	page, registerErr := index.registry.RegisterPageRetention(1)
+	if registerErr != nil {
+		t.Fatal(registerErr)
+	}
 	defer index.registry.Unregister(page)
 	database.snapshotAcquireRO[0].Store(1)
 	if got := database.MinPinnedReaderCommitSeq(); got != 0 {
@@ -137,7 +143,10 @@ func TestMinPinnedReaderCommitSeqIncludesCapturedRecoverableRootSet(t *testing.T
 	if want == math.MaxUint64 || set.oldestRegistryID == 0 {
 		t.Fatal("captured recoverable roots have no reader-capable pin")
 	}
-	page := set.idx.registry.RegisterPageRetention(1)
+	page, registerErr := set.idx.registry.RegisterPageRetention(1)
+	if registerErr != nil {
+		t.Fatal(registerErr)
+	}
 	defer set.idx.registry.Unregister(page)
 	// A stale set still owns its captured roots and backing until Release, even
 	// though revalidation may refuse new traversals after the live slots advance.

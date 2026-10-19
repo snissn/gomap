@@ -46,6 +46,7 @@ func TestOriginalDATAOnlySnapshotLateManagerFailureRetainedByDB(t *testing.T) {
 			vm := s.vlogManager
 			generation := s.idx
 			birthCharge := generation.metadataCharge
+			originalRegistry := generation.registry
 			var file *valuelog.File
 			for _, f := range s.state.ValueLogSet.Files {
 				file = f
@@ -95,7 +96,7 @@ func TestOriginalDATAOnlySnapshotLateManagerFailureRetainedByDB(t *testing.T) {
 			if !errors.As(retained, &original) || original != receipt || !errors.Is(retained, prior) || !errors.Is(retained, os.ErrClosed) {
 				t.Fatalf("DB lost original late Manager receipt or sibling: %v", retained)
 			}
-			if generation.wrapperBorrowCountV6() != 1 || generation.failedSnapshots != s || generation.metadataCharge != birthCharge {
+			if generation.wrapperBorrowCountV6() != 1 || generation.failedSnapshots != s || generation.metadataCharge != birthCharge || generation.registry != originalRegistry {
 				t.Fatal("failed finalization lost original generation/Snapshot borrow")
 			}
 			charge := registry.MetadataOwner().Bytes()

@@ -10,12 +10,12 @@ import (
 
 func TestReaderRegistryPinPurposesDoNotMaskEqualSequenceReader(t *testing.T) {
 	r := NewReaderRegistry()
-	page := r.RegisterPageRetention(7)
-	reader := r.Register(7)
+	page := mustRegisterPageRetention(t, r, 7)
+	reader := mustRegisterReader(t, r, 7)
 	if page == reader {
 		t.Fatal("different purposes shared a release counter")
 	}
-	pageAgain := r.RegisterPageRetention(7)
+	pageAgain := mustRegisterPageRetention(t, r, 7)
 	if pageAgain != page {
 		t.Fatal("equal sequence/purpose did not share its cohort")
 	}
@@ -48,8 +48,8 @@ func TestReaderRegistryPinPurposesFallbackAndHandleReuse(t *testing.T) {
 			t.Fatal("initial reader cohort refused")
 		}
 	}
-	page := r.RegisterPageRetention(5)
-	reader := r.Register(5)
+	page := mustRegisterPageRetention(t, r, 5)
+	reader := mustRegisterReader(t, r, 5)
 	if page <= 0 || reader <= 0 || page == reader {
 		t.Fatal("fallback pins did not receive independent handles")
 	}
@@ -64,12 +64,12 @@ func TestReaderRegistryPinPurposesFallbackAndHandleReuse(t *testing.T) {
 		t.Fatalf("fallback page pin lost from all-pin minimum: %d", got)
 	}
 	// Reuse the same original slots in both purpose directions.
-	pageAgain := r.RegisterPageRetention(3)
+	pageAgain := mustRegisterPageRetention(t, r, 3)
 	if pageAgain != reader {
 		t.Fatal("released fallback slot was not reused")
 	}
 	r.Unregister(page)
-	readerAgain := r.Register(2)
+	readerAgain := mustRegisterReader(t, r, 2)
 	if readerAgain != page {
 		t.Fatal("page fallback slot was not reusable by a reader")
 	}
@@ -94,7 +94,7 @@ func TestReaderRegistryPinPurposesFallbackAndHandleReuse(t *testing.T) {
 
 func TestReaderRegistryPurposeRecycleSerializesWithMinimumScan(t *testing.T) {
 	r := NewReaderRegistry()
-	page := r.RegisterPageRetention(7)
+	page := mustRegisterPageRetention(t, r, 7)
 	shard := int(-page - 1)
 	if shard < 0 || shard >= fastReaderShardCount {
 		t.Fatal("page pin did not use fixed shard")
@@ -105,7 +105,7 @@ func TestReaderRegistryPurposeRecycleSerializesWithMinimumScan(t *testing.T) {
 	r.mu.Lock()
 	done := make(chan int64, 1)
 	go func() {
-		id, _ := r.RegisterWithHint(7, shard)
+		id, _ := mustRegisterReaderWithHint(t, r, 7, shard)
 		done <- id
 	}()
 	select {
@@ -136,16 +136,16 @@ func TestReaderRegistryPurposeRecycleSerializesWithMinimumScan(t *testing.T) {
 
 func TestReaderRegistryConcurrentPurposeCohorts(t *testing.T) {
 	r := NewReaderRegistry()
-	page := r.RegisterPageRetention(1)
-	reader := r.Register(7)
+	page := mustRegisterPageRetention(t, r, 1)
+	reader := mustRegisterReader(t, r, 7)
 	var workers sync.WaitGroup
 	for worker := 0; worker < 4; worker++ {
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
 			for i := 0; i < 1000; i++ {
-				p := r.RegisterPageRetention(7)
-				s := r.Register(7)
+				p := mustRegisterPageRetention(t, r, 7)
+				s := mustRegisterReader(t, r, 7)
 				if r.MinPinnedSeq() != 1 || r.MinReaderPinnedSeq() != 7 {
 					t.Error("concurrent purpose join hid a held pin")
 				}
