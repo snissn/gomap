@@ -590,35 +590,41 @@ func newOwnedResourceEntryHistoryWithScope(left, right *stableResourceEntry, tok
 	return backing, nil
 }
 
-// Collision-only batches extend the existing complete index while retaining
-// the same physical root. Namespace representative changes, cross-kind aliases
-// and newly introduced physical resources retain the admitted general route.
-func coalesceOwnedPhysicalHistory(target, incoming *resourceKindBacking, owner *retainedalloc.Owner) (*resourceKindBacking, bool, error) {
+// Mixed batches may retain the original complete indexes while extending old
+// physical history and adding new resources. Classify every incoming operand
+// before constructing the private descriptor. Aliases requiring canonical
+// representative changes keep the existing exact reconstruction route.
+func canCoalesceOwnedPhysicalHistory(target, incoming *resourceKindBacking) (bool, error) {
 	handled := true
 	var validationErr error
 	rangeStableResourceKindViews(incoming, func(child *stableResourceEntry) bool {
 		current, ok := target.lookup(child.token.kind)
-		if !ok || current.directory != nil || child.logicalObligations.directory != nil {
+		if child.logicalObligations.directory != nil || ok && current.directory != nil {
 			handled = false
 			return false
 		}
-		old := findStableResourceLogical(current.logical, child.token.logicalKey())
-		if old == nil || old.outgoing == nil || child.outgoing == nil || !old.token.samePhysicalIdentity(child.token) {
-			handled = false
-			return false
+		var old *stableResourceEntry
+		if ok {
+			old = findStableResourceLogical(current.logical, child.token.logicalKey())
 		}
-		physical := findStableResourcePhysical(current.physical, old.token.physicalIdentityKey())
-		if len(physical) != 1 || physical[0] != old {
-			handled = false
-			return false
-		}
+		// A new logical entry must also be physically new across ALL kinds.
+		// Otherwise the general route chooses/validates its representative.
 		for _, c := range target.cells {
-			if c.kind != child.token.kind && len(findStableResourcePhysical(c.view.physical, old.token.physicalIdentityKey())) != 0 {
+			physical := findStableResourcePhysical(c.view.physical, child.token.physicalIdentityKey())
+			if len(physical) != 0 && (old == nil || c.kind != child.token.kind || len(physical) != 1 || physical[0] != old) {
 				handled = false
 				return false
 			}
 		}
-		if old.token.namespace == nil && child.token.namespace != nil {
+		if old == nil {
+			return true
+		}
+		if old.outgoing == nil || child.outgoing == nil || !old.token.samePhysicalIdentity(child.token) {
+			handled = false
+			return false
+		}
+		physical := findStableResourcePhysical(current.physical, old.token.physicalIdentityKey())
+		if len(physical) != 1 || physical[0] != old || old.token.namespace == nil && child.token.namespace != nil {
 			handled = false
 			return false
 		}
@@ -637,32 +643,45 @@ func coalesceOwnedPhysicalHistory(target, incoming *resourceKindBacking, owner *
 		}
 		return true
 	})
-	if !handled || validationErr != nil {
-		return nil, handled, validationErr
+	return handled, validationErr
+}
+
+// Only a genuinely new incoming resource needs an independent physical pin.
+// The original immutable input backing stays borrowed until construction ends;
+// the private leaf acquires release authority only after all its metadata is
+// admitted and the cloned token's original Shared claim succeeds.
+func appendOwnedNewPhysicalEntryToView(view *stableResourceKindView, child *stableResourceEntry, owner *retainedalloc.Owner) (retErr error) {
+	backing, err := cloneOwnedResourceEntryUnion(child, nil, owner)
+	if err != nil {
+		return err
 	}
-	next, e := copyResourceKindBacking(owner, target.cells, nil, nil, true)
-	if e != nil {
-		return nil, true, e
-	}
-	var updateErr error
-	rangeStableResourceKindViews(incoming, func(child *stableResourceEntry) bool {
-		for i := range next.cells {
-			if next.cells[i].kind != child.token.kind {
-				continue
+	defer func() {
+		keepFailure := func(receipt *originalReleaseFailure) {
+			if !errors.Is(retErr, receipt) {
+				receipt.LinkPriorCleanupError(retErr)
+				retErr = receipt
 			}
-			view := &next.cells[i].view
-			old := findStableResourceLogical(view.logical, child.token.logicalKey())
-			updateErr = appendOwnedPhysicalHistoryToView(view, old, child, owner)
-			return updateErr == nil
 		}
-		updateErr = ErrResourceConflict
-		return false
-	})
-	if updateErr != nil {
-		next.release()
-		return nil, true, updateErr
+		token := backing.entries[0].token
+		if ResourceOwnerState(token.owner.Load()) == ResourceOwnerToken {
+			if err := token.ReleaseWithError(); err != nil {
+				keepFailure(&token.cleanupFailure)
+			}
+		}
+		token = nil
+		if err := backing.release(); err != nil {
+			keepFailure(&backing.allocation.failure)
+		}
+	}()
+	leaf, err := appendOwnedResourceEntryToView(view, backing, owner)
+	if err != nil {
+		return err
 	}
-	return next, true, nil
+	if err := backing.entries[0].token.claim(ResourceOwnerShared); err != nil {
+		return err
+	}
+	leaf.entries = backing.entries[:1:1]
+	return nil
 }
 
 func appendOwnedPhysicalHistoryToView(view *stableResourceKindView, old, child *stableResourceEntry, owner *retainedalloc.Owner) error {
