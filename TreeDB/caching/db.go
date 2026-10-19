@@ -5619,60 +5619,71 @@ func (db *DB) ReclaimObservedValueLogSources(ctx context.Context, ids []uint32) 
 	if err := db.Checkpoint(); err != nil {
 		return stats, err
 	}
-	finishFence, err := db.BeginValueLogMaintenanceFence(ctx)
-	if err != nil {
-		return stats, err
-	}
-	defer finishFence()
-	if refresher, ok := db.backend.(valueLogSetRefresher); ok {
-		if err := refresher.RefreshValueLogSet(); err != nil {
-			return stats, err
-		}
-	}
-	reclaimIDs, err := db.revalidateUnreferencedObservedValueLogSources(ctx, gcer, observed)
-	if err != nil {
-		return stats, err
-	}
-	reclaimSeen := make(map[uint32]struct{}, len(reclaimIDs))
-	for _, id := range reclaimIDs {
-		reclaimSeen[id] = struct{}{}
-	}
-	pruneStats, _ := db.runRetainedValueLogPruneInline(true, reclaimSeen)
-	pruneReclaimedSegments := pruneStats.ObservedSourceRemovedSegments + pruneStats.ObservedSourceZombieMarkedSegments
-	pruneReclaimedBytes := pruneStats.ObservedSourceRemovedBytes + pruneStats.ObservedSourceZombieMarkedBytes
-	if pruneReclaimedSegments > 0 {
-		stats.SegmentsDeleted += pruneReclaimedSegments
-		stats.ObservedSourceSegmentsDeleted += pruneReclaimedSegments
-	}
-	if pruneReclaimedBytes > 0 {
-		stats.BytesDeleted += pruneReclaimedBytes
-		stats.ObservedSourceBytesDeleted += pruneReclaimedBytes
-	}
-
-	if hasValueLogGC && len(reclaimIDs) > 0 {
-		opts := db.valueLogGCOptionsForObservedSources(false, reclaimSeen)
-		opts.ObservedSourceFileIDs = reclaimIDs
-		opts.ObservedSourceAssumeUnreferenced = true
-		opts.ObservedSourceReclaimActive = true
-		gcStats, err := gcer.ValueLogGC(ctx, opts)
+	run := func() error {
+		finishFence, err := db.BeginValueLogMaintenanceFence(ctx)
 		if err != nil {
-			return stats, err
+			return err
 		}
-		gcStats.SegmentsDeleted += stats.SegmentsDeleted
-		gcStats.BytesDeleted += stats.BytesDeleted
-		gcStats.ObservedSourceSegmentsDeleted += stats.ObservedSourceSegmentsDeleted
-		gcStats.ObservedSourceBytesDeleted += stats.ObservedSourceBytesDeleted
-		stats = gcStats
-	}
-	if stats.ObservedSourceSegmentsDeleted > 0 {
-		db.cleanupMissingObservedValueLogRetains(seen)
-	}
-	if hasLeafGenerationGC {
-		if _, err := leafGcer.LeafGenerationGC(ctx, db.leafGenerationGCOptions()); err != nil {
-			return stats, err
+		defer finishFence()
+		if refresher, ok := db.backend.(valueLogSetRefresher); ok {
+			if err := refresher.RefreshValueLogSet(); err != nil {
+				return err
+			}
 		}
+		reclaimIDs, err := db.revalidateUnreferencedObservedValueLogSources(ctx, gcer, observed)
+		if err != nil {
+			return err
+		}
+		reclaimSeen := make(map[uint32]struct{}, len(reclaimIDs))
+		for _, id := range reclaimIDs {
+			reclaimSeen[id] = struct{}{}
+		}
+		pruneStats, _ := db.runRetainedValueLogPruneInline(true, reclaimSeen)
+		pruneReclaimedSegments := pruneStats.ObservedSourceRemovedSegments + pruneStats.ObservedSourceZombieMarkedSegments
+		pruneReclaimedBytes := pruneStats.ObservedSourceRemovedBytes + pruneStats.ObservedSourceZombieMarkedBytes
+		if pruneReclaimedSegments > 0 {
+			stats.SegmentsDeleted += pruneReclaimedSegments
+			stats.ObservedSourceSegmentsDeleted += pruneReclaimedSegments
+		}
+		if pruneReclaimedBytes > 0 {
+			stats.BytesDeleted += pruneReclaimedBytes
+			stats.ObservedSourceBytesDeleted += pruneReclaimedBytes
+		}
+
+		if hasValueLogGC && len(reclaimIDs) > 0 {
+			opts := db.valueLogGCOptionsForObservedSources(false, reclaimSeen)
+			opts.ObservedSourceFileIDs = reclaimIDs
+			opts.ObservedSourceAssumeUnreferenced = true
+			opts.ObservedSourceReclaimActive = true
+			gcStats, err := gcer.ValueLogGC(ctx, opts)
+			if err != nil {
+				return err
+			}
+			gcStats.SegmentsDeleted += stats.SegmentsDeleted
+			gcStats.BytesDeleted += stats.BytesDeleted
+			gcStats.ObservedSourceSegmentsDeleted += stats.ObservedSourceSegmentsDeleted
+			gcStats.ObservedSourceBytesDeleted += stats.ObservedSourceBytesDeleted
+			stats = gcStats
+		}
+		if stats.ObservedSourceSegmentsDeleted > 0 {
+			db.cleanupMissingObservedValueLogRetains(seen)
+		}
+		if hasLeafGenerationGC {
+			if _, err := leafGcer.LeafGenerationGC(ctx, db.leafGenerationGCOptions()); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
-	return stats, nil
+	if db.cow != nil {
+		// GC can advance the leaf-generation view without a root commit. Keep
+		// that change and its equivalent COW basis refresh under the same
+		// maintenance fence before admitting successor writes.
+		err = db.runWithBackendMaintenanceOptions(backendMaintenanceOptions{skipCheckpoint: true}, run)
+	} else {
+		err = run()
+	}
+	return stats, err
 }
 
 func (db *DB) revalidateUnreferencedObservedValueLogSources(ctx context.Context, gcer backendValueLogGCer, observed []uint32) ([]uint32, error) {

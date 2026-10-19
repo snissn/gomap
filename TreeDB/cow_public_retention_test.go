@@ -134,8 +134,6 @@ func TestCOWPublicRetentionRefusalDrainAndResume(t *testing.T) {
 			if refusedKey == nil || accepted == 0 {
 				t.Fatalf("expected progress then finite rollover refusal; accepted%d", accepted)
 			}
-			plateau := cache.COWMemoryStats()
-			cowPublicRetentionBound(t, plateau, limits)
 			after := database.Stats()
 			publicationKey := "treedb.cache.cow.publications_total"
 			if before[publicationKey] == "" || before[publicationKey] != after[publicationKey] {
@@ -162,6 +160,15 @@ func TestCOWPublicRetentionRefusalDrainAndResume(t *testing.T) {
 					retryCounters = append(retryCounters, key)
 				}
 			}
+			// The successful rollover before refusal may have scheduled a flush.
+			// Join that actual work before comparing retained charges; its cursor
+			// is a transient view and is not owned by a refused producer.
+			if err := cowPublicContractComplete(t, blocked, "join refusal rollover", cache.Drain); err != nil {
+				t.Fatal(err)
+			}
+			plateau := cache.COWMemoryStats()
+			cowPublicRetentionBound(t, plateau, limits)
+			after = database.Stats()
 			for attempt := 0; attempt < 8; attempt++ {
 				if err := database.Set(refusedKey, refusedValue); !errors.Is(err, memtable.ErrCOWCapacity) {
 					t.Fatalf("plateau retry%d: %v", attempt, err)
