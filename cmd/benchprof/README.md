@@ -976,3 +976,16 @@ manifest is atomically replaced; incomplete runs remain invalid evidence.
 Keep uninstrumented samples and profile
 results separate. No pre-P1 speedup comparison exists for this unsupported
 entrypoint; use existing equivalent raw/legacy workloads for regression controls.
+
+### Opt-in native ordered-row public cost diagnostic
+
+`TreeDB/TestNativeExistingIndexedJSONOrderedRowsCost` is a standalone opt-in
+Go test, not a unified-bench adapter or benchprof/profile-dir input. The frozen
+`artifacts/p3-ordered-public-cost01/prepared` packet selects exactly four fresh
+processes: NoWALFast ordinary native `Commit()` on COW/DATA, 256 or 2048 touched
+rows, ascending or descending, eight indexed UpdateBatch members plus raw Set.
+It emits `ORDERED_COST` JSON with chosen foreground segments, allocation deltas,
+full lifecycle debt, resolved stats and checked final owner-zero/reopen oracles.
+Default test runs skip it; execution requires the packet's exact-source root
+grant and fixed environment selectors. No profiling, calibration, repeats,
+baseline comparison or Dgraph throughput claim is part of this diagnostic.
