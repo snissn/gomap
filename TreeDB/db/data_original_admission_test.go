@@ -21,8 +21,15 @@ func TestDependencyDirectoryV2ActualPublicationUsesOriginalEnrolledOwner(t *test
 }
 
 func testDATAActualPublicationUsesOriginalEnrolledOwner(t *testing.T, directory bool) {
-	dir := durableRootFailureFixtureDir(t, directory)
+	dir := t.TempDir()
 	opts := Options{Dir: dir, Durability: DurabilityWALOffRelaxed, ResolvedProfile: ProfileNoWALFast, DisableBackgroundPrune: true, rootPublicationFixedDelay: 100 * time.Millisecond}
+	if directory {
+		cfg := formatConfigFromOptions(opts)
+		cfg.RequiredFeatures = appendRequiredFormatFeature(cfg.RequiredFeatures, RequiredFeatureDependencyDirectoryV2)
+		if err := SaveFormatConfig(dir, cfg); err != nil {
+			t.Fatal(err)
+		}
+	}
 	d, err := Open(opts)
 	if err != nil {
 		t.Fatal(err)

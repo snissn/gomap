@@ -2,6 +2,9 @@ package db
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -113,9 +116,51 @@ func TestDependencyDirectoryV2COWRemovalKeepsOldRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer database.Close()
-	resources, selector := dbSelectorFixture(t)
-	defer resources.Release()
 	idx := database.idx.Load()
+	registry := database.StableResourceIdentityPinRegistry()
+	if idx == nil || idx.primary != nil || idx.metadata == nil || idx.metadata != registry.MetadataOwner() {
+		t.Fatal("not original DATA metadata owner")
+	}
+	file, err := os.CreateTemp(t.TempDir(), "selector-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	if err := file.Truncate(8); err != nil {
+		t.Fatal(err)
+	}
+	obligation := rootpublication.StableLogicalObligation{Class: "asset", Kind: "part", Namespace: "columns", Generation: 3, PartID: 4, FileID: 7, Length: 8, Reachability: rootpublication.ReachabilityColumnManifest, Digest: sha256.Sum256([]byte("logical"))}
+	identity, err := rootpublication.StableIdentityFromFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Observe(identity); err != nil {
+		t.Fatal(err)
+	}
+	token, err := rootpublication.NewStableResourceToken(rootpublication.StableResourceSpec{
+		MetadataOwner: idx.metadata, PinRegistry: registry, OriginalObservation: registry,
+		Kind: rootpublication.ResourceColumnAsset, LogicalLane: "columns", ResourceID: "7", Generation: 7,
+		DiagnosticPath: "columns/7", File: file, Frontier: rootpublication.DurableFrontier{Bytes: 8},
+		Digest: sha256.Sum256([]byte("physical")), Reachability: rootpublication.ReachabilityColumnManifest,
+		LogicalObligations: []rootpublication.StableLogicalObligation{obligation}, ContentSynced: true,
+	})
+	if err != nil {
+		t.Fatal(errors.Join(err, registry.Unobserve(identity)))
+	}
+	builder, err := rootpublication.NewStableResourceSetBuilderWithMetadata(idx.metadata)
+	if err != nil {
+		t.Fatal(errors.Join(err, token.ReleaseWithError()))
+	}
+	if err := builder.Add(token); err != nil {
+		t.Fatal(errors.Join(err, token.ReleaseWithError(), builder.AbandonWithError()))
+	}
+	resources, err := builder.Freeze()
+	if err != nil {
+		t.Fatal(errors.Join(err, builder.AbandonWithError()))
+	}
+	builder, token = nil, nil
+	defer resources.Release()
+	selector := rootpublication.StableResourceSelector{Kind: rootpublication.ResourceColumnAsset, LogicalLane: "columns", ResourceID: "7", PhysicalGeneration: 7, Obligation: obligation}
 	database.rootReuseMu.Lock()
 	bound, retired, err := database.prepareDependencyDirectoryV2(idx, 2, nil, resources)
 	database.rootReuseMu.Unlock()
@@ -177,13 +222,20 @@ func TestDependencyDirectoryV2InitialEmptyAndNoop(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer database.Close()
-	builder := rootpublication.NewStableResourceSetBuilder()
-	resources, err := builder.Freeze()
+	idx := database.idx.Load()
+	if idx == nil || idx.primary != nil || idx.metadata == nil || idx.metadata != database.StableResourceIdentityPinRegistry().MetadataOwner() {
+		t.Fatal("not original DATA metadata owner")
+	}
+	builder, err := rootpublication.NewStableResourceSetBuilderWithMetadata(idx.metadata)
 	if err != nil {
 		t.Fatal(err)
 	}
+	resources, err := builder.Freeze()
+	if err != nil {
+		t.Fatal(errors.Join(err, builder.AbandonWithError()))
+	}
+	builder = nil
 	defer resources.Release()
-	idx := database.idx.Load()
 	database.rootReuseMu.Lock()
 	bound, _, err := database.prepareDependencyDirectoryV2(idx, 2, nil, resources)
 	database.rootReuseMu.Unlock()
