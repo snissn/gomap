@@ -214,7 +214,7 @@ func TestNativeExistingIndexedJSONCRUDSingletonReplay(t *testing.T) {
 			if !errors.As(err, &exit) || exit.ExitCode() != sentinel || bytes.Contains(output, []byte("DATA RACE")) {
 				t.Fatalf("child %v\n%s", err, output)
 			}
-			checkIndexedCRUDSingletonFrames(t, dir)
+			checkIndexedCRUDSingletonFrames(t, indexedSliceOptions(profile, dir))
 			before := workstats.Read().Replay
 			database, err := Open(indexedSliceOptions(profile, dir))
 			if err != nil {
@@ -314,9 +314,15 @@ func checkIndexedCRUDSingletonFinal(t *testing.T, manager *collections.Collectio
 	}
 }
 
-func checkIndexedCRUDSingletonFrames(t *testing.T, dir string) {
+func checkIndexedCRUDSingletonFrames(t *testing.T, opts Options) {
 	t.Helper()
-	paths, err := filepath.Glob(filepath.Join(backenddb.WALDirPath(dir), "commit-l0-*.log"))
+	// Resolve the same public root/side-store mapping as Open, rather than
+	// treating its configured root as a backend database directory.
+	layout, err := resolveOpenDirLayout(opts.Dir, opts.DisableSideStores)
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths, err := filepath.Glob(filepath.Join(backenddb.WALDirPath(layout.mainDir), "commit-l0-*.log"))
 	if err != nil || len(paths) == 0 {
 		t.Fatalf("canonical WAL paths=%q: %v", paths, err)
 	}
