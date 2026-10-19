@@ -4568,8 +4568,9 @@ func (db *DB) finalizeAcceptedCommitPostWorkOnError(post finalizeCommitPost) fin
 	}
 	post.vlogRefDelta = nil
 	db.finalizeCommitPostWork(post)
-	commitSeq := post.commitSeq
-	return finalizeCommitPost{accepted: true, commitSeq: commitSeq}
+	// Accepted COW groups still need this exact physical receipt to complete
+	// their original handoff when the durability wait reports an interruption.
+	return finalizeCommitPost{accepted: true, commitSeq: post.commitSeq, physicalSeal: post.physicalSeal}
 }
 
 // finalizeCommitReleasingRootSerialization transfers a completed root build to

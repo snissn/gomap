@@ -692,6 +692,9 @@ func TestRootPublicationBuildGroupCommandWALAcceptedWaitFailureDoesNotPoisonOpen
 	if !group.Accepted() {
 		t.Fatal("accepted build-group error lost its coverage receipt")
 	}
+	if !group.AcceptedSealReceipt().Valid() {
+		t.Fatal("accepted build-group wait error lost its physical seal receipt")
+	}
 	if closeErr := group.Close(); closeErr != nil || !group.Accepted() {
 		t.Fatalf("coverage receipt after close: accepted=%t err=%v", group.Accepted(), closeErr)
 	}
