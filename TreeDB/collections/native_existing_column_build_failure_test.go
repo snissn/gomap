@@ -131,12 +131,9 @@ func TestNativeExistingColumnAcceptedBuildFailureCustody(t *testing.T) {
 		t.Fatal(err)
 	}
 	physicalLSN := func() uint64 {
-		snapshot := handle.AcquireSnapshot()
-		if snapshot == nil {
-			t.Fatal("missing physical snapshot")
-		}
-		token, ok := snapshot.StateToken()
-		snapshot.Close()
+		// A failed accepted build poisons new snapshot admission. Scalar state
+		// observation remains available to verify that it installed no disk cut.
+		token, ok := handle.StateToken()
 		if !ok {
 			t.Fatal("missing physical state token")
 		}
@@ -217,6 +214,10 @@ func TestNativeExistingColumnAcceptedBuildFailureCustody(t *testing.T) {
 		}
 	}
 	checkCompleteCut()
+	physicalBefore, ok := handle.StateToken()
+	if !ok {
+		t.Fatal("missing pre-build physical state token")
+	}
 
 	var selected atomic.Bool
 	observed := make(map[string]rootpublication.StableIdentity)
@@ -245,7 +246,8 @@ func TestNativeExistingColumnAcceptedBuildFailureCustody(t *testing.T) {
 	}
 	restore()
 	restoreObserve()
-	if handle.CommandWALNextLSN() != 4 || physicalLSN() != 2 || database.Stats()["treedb.cache.cow.txn.logical_seq"] != sequence {
+	physicalAfter, ok := handle.StateToken()
+	if !ok || physicalAfter != physicalBefore || handle.CommandWALNextLSN() != 4 || database.Stats()["treedb.cache.cow.txn.logical_seq"] != sequence {
 		t.Fatal("failed build changed the accepted logical cut or installed a partial disk basis")
 	}
 	build := engine.build
