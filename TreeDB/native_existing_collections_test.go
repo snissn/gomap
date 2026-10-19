@@ -99,8 +99,8 @@ func TestNativeExistingCollectionPublicLifecycle(t *testing.T) {
 
 			manager.SetUpdateBatchDetailedStatsEnabled(true)
 			manager.SetVectorIndexConstructionDecisionObserverEnabled(true)
-			if _, e := manager.ListCollections(); e == nil {
-				t.Fatal("unmigrated list accepted")
+			if metas, e := manager.ListCollections(); e != nil || len(metas) != 1 || metas[0].Name != "rows" {
+				t.Fatalf("native collection listing=%+v err=%v", metas, e)
 			}
 
 			duplicateLSN := backend.CommandWALNextLSN()

@@ -4237,6 +4237,12 @@ func (m *CollectionManager) ListCollectionsBounded(maxCollections int) ([]Collec
 	if m == nil {
 		return nil, false, errCollectionManagerNil
 	}
+	if m.nativeJSON != nil {
+		if m.isClosing() {
+			return nil, false, backenddb.ErrClosed
+		}
+		return m.nativeJSON.listCollectionsBounded(maxCollections)
+	}
 	if m.db == nil {
 		return nil, false, errCollectionDBNil
 	}

@@ -696,6 +696,19 @@ rejected before LSN assignment unless the caller explicitly submits smaller
 independent batches; implicit atomic splitting requires a future `CommandGroup`
 protocol.
 
+Collection catalog reads:
+
+`CollectionManager.ListCollections` and `ListCollectionsBounded` return metadata
+in collection-name order. Native managers read one complete captured logical
+catalog, including pending collection creation and index DDL, and return owned
+metadata copies. A positive native limit bounds the captured names inspected and
+copied; the immutable directory's exact count determines truncation without
+scanning additional schemas. Zero and negative limits are unbounded. The legacy
+physical-catalog route retains its existing inspection budget, including deleted
+entries. A native cut without an engine first uses the existing complete physical
+catalog import; the listing limit does not bound that bootstrap construction.
+Listing assigns no command identity or logical publication.
+
 Collection metadata mutators:
 
 `Collection.UpdateTypedMetadataByID` changes explicit existing IDs only, skipping

@@ -65,6 +65,12 @@ and publisher credit. Shared opening state and unrelated checkpoint work keep th
 own engine receipts. The ordinary owned-input contract and prepared scalar/input
 limits still apply; native staging also independently copies caller inputs.
 
+Ordinary manager `ListCollections` and `ListCollectionsBounded` read the current
+captured catalog, including pending creates and index DDL. Returned schemas are
+owned copies in name order; positive limits bound names inspected/copied and use
+the immutable directory count to report truncation. A nil engine first requires
+the existing full physical-catalog import, outside that names-traversal bound.
+
 These are explicit eligibility limits of the provisional implementation. Broad
 producer migration remains required: assigned/apply and Raft producers,
 import/source controls, multi-column and additional typed layouts, standalone schema/drop/rename, non-scalar index DDL and derived-index lifecycle still
