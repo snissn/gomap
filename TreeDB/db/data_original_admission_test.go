@@ -13,7 +13,15 @@ import (
 )
 
 func TestDATAActualPublicationUsesOriginalEnrolledOwner(t *testing.T) {
-	dir := t.TempDir()
+	testDATAActualPublicationUsesOriginalEnrolledOwner(t, false)
+}
+
+func TestDependencyDirectoryV2ActualPublicationUsesOriginalEnrolledOwner(t *testing.T) {
+	testDATAActualPublicationUsesOriginalEnrolledOwner(t, true)
+}
+
+func testDATAActualPublicationUsesOriginalEnrolledOwner(t *testing.T, directory bool) {
+	dir := durableRootFailureFixtureDir(t, directory)
 	opts := Options{Dir: dir, Durability: DurabilityWALOffRelaxed, ResolvedProfile: ProfileNoWALFast, DisableBackgroundPrune: true, rootPublicationFixedDelay: 100 * time.Millisecond}
 	d, err := Open(opts)
 	if err != nil {
@@ -113,8 +121,54 @@ func TestDATAActualPublicationUsesOriginalEnrolledOwner(t *testing.T) {
 		t.Fatal(err)
 	}
 	selected := d.durableRoot.slotResources[d.durableRoot.slot]
-	if d.durableRoot.record.Directory.RootPageID != 0 || selected.Len() == 0 || selected.MetadataOwner() != owner {
-		t.Fatalf("selected V1 closure=%p resources=%d owner=%p want=%p directory=%+v", selected, selected.Len(), selected.MetadataOwner(), owner, d.durableRoot.record.Directory)
+	if (d.durableRoot.record.Directory.RootPageID != 0) != directory || selected.Len() == 0 || selected.MetadataOwner() != owner {
+		t.Fatalf("selected physical closure=%p resources=%d owner=%p want=%p directory=%+v", selected, selected.Len(), selected.MetadataOwner(), owner, d.durableRoot.record.Directory)
+	}
+	if directory {
+		pinnedDirectory, e := selected.DependencyDirectoryV2()
+		if e != nil || pinnedDirectory == nil || pinnedDirectory.MetadataOwner() != owner {
+			t.Fatalf("nonempty V2 directory owner: %p %v", pinnedDirectory, e)
+		}
+		refusal := &originalClosureAdmissionBudget{limit: math.MaxUint64}
+		finite, e := owner.Enroll(refusal)
+		if e != nil {
+			t.Fatal(e)
+		}
+		defer finite.Close()
+		before, pins, original, originalOwner := owner.Bytes(), d.valueLogIdentityPins.ActivePins(), selected, selected.Owner()
+		refusal.setLimit(before)
+		bound, bindErr := rootpublication.BindDependencyDirectoryV2(selected, pinnedDirectory)
+		recovered, recoverErr := d.recoverDependencyDirectoryResourcesV2(pinnedDirectory)
+		refusal.setLimit(math.MaxUint64)
+		if bound != nil || recovered != nil || !errors.Is(bindErr, retainedalloc.ErrCapacity) || !errors.Is(recoverErr, retainedalloc.ErrCapacity) || owner.Bytes() != before || selected != original || selected.Owner() != originalOwner || d.durableRoot.slotResources[d.durableRoot.slot] != original || d.valueLogIdentityPins.ActivePins() != pins {
+			t.Fatalf("V2 admission changed original closure: bind=%p/%v recovery=%p/%v bytes=%d want=%d pins=%d want=%d", bound, bindErr, recovered, recoverErr, owner.Bytes(), before, d.valueLogIdentityPins.ActivePins(), pins)
+		}
+		bound, e = rootpublication.BindDependencyDirectoryV2(selected, pinnedDirectory)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if bound.MetadataOwner() != owner || bound.Len() == 0 {
+			t.Fatal("V2 bound physical closure lost original owner")
+		}
+		if e = bound.ReleaseWithError(); e != nil {
+			t.Fatal(e)
+		}
+		bound = nil
+		recovered, e = d.recoverDependencyDirectoryResourcesV2(pinnedDirectory)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if recovered.MetadataOwner() != owner || recovered.Len() == 0 {
+			t.Fatal("V2 recovered physical closure lost original owner")
+		}
+		if e = recovered.ReleaseWithError(); e != nil {
+			t.Fatal(e)
+		}
+		recovered = nil
+		if owner.Bytes() != before || d.valueLogIdentityPins.ActivePins() != pins {
+			t.Fatalf("V2 temporary closure did not refund: bytes=%d want=%d pins=%d want=%d", owner.Bytes(), before, d.valueLogIdentityPins.ActivePins(), pins)
+		}
+		finite.Close()
 	}
 	selected = nil
 	snapshot := d.AcquireSnapshot()
@@ -162,8 +216,8 @@ func TestDATAActualPublicationUsesOriginalEnrolledOwner(t *testing.T) {
 		}
 	}
 	selected = reopened.durableRoot.slotResources[reopened.durableRoot.slot]
-	if reopened.durableRoot.record.Directory.RootPageID != 0 || selected.Len() == 0 || selected.MetadataOwner() != recoveredOwner {
-		t.Fatalf("recovered V1 closure=%p resources=%d owner=%p want=%p directory=%+v", selected, selected.Len(), selected.MetadataOwner(), recoveredOwner, reopened.durableRoot.record.Directory)
+	if (reopened.durableRoot.record.Directory.RootPageID != 0) != directory || selected.Len() == 0 || selected.MetadataOwner() != recoveredOwner {
+		t.Fatalf("recovered physical closure=%p resources=%d owner=%p want=%p directory=%+v", selected, selected.Len(), selected.MetadataOwner(), recoveredOwner, reopened.durableRoot.record.Directory)
 	}
 	selected = nil
 	snapshot = reopened.AcquireSnapshot()

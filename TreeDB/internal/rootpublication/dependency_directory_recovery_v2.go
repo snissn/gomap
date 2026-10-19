@@ -16,6 +16,9 @@ func RecoverDependencyDirectoryV2(directory *DependencyDirectoryV2, admit func(D
 	if directory == nil || admit == nil || validate == nil {
 		return nil, ErrResourceOwnership
 	}
+	if directory.metadata != nil {
+		return recoverOwnedDependencyDirectoryV2(directory, admit, validate)
+	}
 	builder := NewStableResourceSetBuilder()
 	defer builder.Abandon()
 	type recoveredEntry struct {

@@ -518,6 +518,8 @@ func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6) (boo
 			}
 			f.phase = 5
 		case 5:
+			clear(n.directoryKey)
+			n.directoryKey = nil
 			n.cache.mu.Lock()
 			value := n.cache.value
 			if value != nil {

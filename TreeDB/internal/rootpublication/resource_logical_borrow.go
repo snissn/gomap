@@ -199,16 +199,16 @@ func (s *dependencyBorrowScratch) physical(key, value []byte) (DependencyManifes
 // constructors are reached. Exact canonical physical and logical records and
 // all counts are checked, including records unrelated to the selected entry.
 func (d *DependencyDirectoryV2) walkBorrowed(owner *retainedalloc.Owner, visit func([]byte, StableLogicalObligation) error) error {
-	return d.walkBorrowedRecords(owner, visit, nil)
+	return d.walkBorrowedRecords(owner, nil, visit, nil)
 }
 
 // ValidateWithMetadataV2 checks every canonical record with admitted fixed
 // scratch. check is a synchronous cancellation guard, not a retained callback.
 func (d *DependencyDirectoryV2) ValidateWithMetadataV2(owner *retainedalloc.Owner, check func() error) error {
-	return d.walkBorrowedRecords(owner, nil, check)
+	return d.walkBorrowedRecords(owner, nil, nil, check)
 }
 
-func (d *DependencyDirectoryV2) walkBorrowedRecords(owner *retainedalloc.Owner, visit func([]byte, StableLogicalObligation) error, check func() error) (retErr error) {
+func (d *DependencyDirectoryV2) walkBorrowedRecords(owner *retainedalloc.Owner, physicalVisit func([]byte, []byte, DependencyManifestEntryV1) error, visit func([]byte, StableLogicalObligation) error, check func() error) (retErr error) {
 	if owner == nil || d == nil {
 		return ErrResourceOwnership
 	}
@@ -249,8 +249,14 @@ func (d *DependencyDirectoryV2) walkBorrowedRecords(owner *retainedalloc.Owner, 
 			if physical >= d.ref.PhysicalCount {
 				return ErrDependencyManifestFormat
 			}
-			if _, err := s.physical(key, value); err != nil {
+			entry, err := s.physical(key, value)
+			if err != nil {
 				return err
+			}
+			if physicalVisit != nil {
+				if err := physicalVisit(key, value, entry); err != nil {
+					return err
+				}
 			}
 			physical++
 		case dependencyLogicalKeyV2:

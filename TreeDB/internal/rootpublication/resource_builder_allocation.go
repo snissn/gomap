@@ -68,6 +68,24 @@ func (builder *StableResourceSetBuilder) addAdmittedToken(token *StableResourceT
 		builder.mu.Unlock()
 		return err
 	}
+	return builder.addPreparedAdmittedEntryLocked(token, backing)
+}
+
+// Consumes the private backing on every exit; a refused claim leaves the
+// caller Token-owned. Only the original successful claim attaches its leaf.
+func (builder *StableResourceSetBuilder) addPreparedAdmittedEntry(backing *resourceEntryBacking) error {
+	builder.mu.Lock()
+	token := backing.entries[0].token
+	if builder.closed || builder.abandoned || builder.metadata == nil || token.metadata == nil || token.metadata.owner != builder.metadata.owner || ResourceOwnerState(token.owner.Load()) != ResourceOwnerToken {
+		builder.mu.Unlock()
+		backing.release()
+		return ErrResourceOwnership
+	}
+	return builder.addPreparedAdmittedEntryLocked(token, backing)
+}
+
+func (builder *StableResourceSetBuilder) addPreparedAdmittedEntryLocked(token *StableResourceToken, backing *resourceEntryBacking) error {
+	owner := builder.metadata.owner
 	var view stableResourceKindView
 	leaf, err := appendOwnedResourceEntryToView(&view, backing, owner)
 	backing.release()

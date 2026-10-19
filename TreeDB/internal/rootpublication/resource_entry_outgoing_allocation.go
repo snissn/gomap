@@ -1,6 +1,7 @@
 package rootpublication
 
 import (
+	"bytes"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"unsafe"
 )
@@ -16,6 +17,7 @@ type resourceEntryOutgoing struct {
 	obligations   *resourceObligationBacking
 	index         *stableLogicalObligationIndexNode
 	directory     *DependencyDirectoryV2
+	directoryKey  []byte
 	cache         dependencyManifestEntryCacheV1
 }
 
@@ -30,7 +32,14 @@ func (out *resourceEntryOutgoing) release() {
 // The token descriptor and all outgoing summaries gain genuine independent
 // allocation edges. Refusal leaves the token and its physical owner unchanged.
 func newOwnedResourceEntry(owner *retainedalloc.Owner, token *StableResourceToken) (*resourceEntryBacking, error) {
-	if owner == nil || token == nil || token.metadata == nil || token.metadata.owner != owner {
+	return newOwnedResourceDirectoryEntry(owner, token, nil, nil, nil, 0)
+}
+
+// Directory summaries are private until the original builder claims the token.
+// A bound entry retains the original immutable field cells and logical count;
+// recovery constructs private cells before scanning its persisted obligations.
+func newOwnedResourceDirectoryEntry(owner *retainedalloc.Owner, token *StableResourceToken, key []byte, fields []ReachabilityField, summary *resourceFieldBacking, count int) (*resourceEntryBacking, error) {
+	if owner == nil || token == nil || token.metadata == nil || token.metadata.owner != owner || count < 0 || (summary != nil && (summary.allocation == nil || summary.allocation.owner != owner)) {
 		return nil, ErrResourceOwnership
 	}
 	backing, err := newResourceEntryBacking(owner, 1)
@@ -42,11 +51,11 @@ func newOwnedResourceEntry(owner *retainedalloc.Owner, token *StableResourceToke
 	if err = entry.bindOwnedToken(token); err != nil {
 		return fail(err)
 	}
-	allocation, err := newResourceAllocation(owner, retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(resourceEntryOutgoing{}))))
+	allocation, err := newResourceAllocation(owner, retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(resourceEntryOutgoing{})))+retainedalloc.AllocationCharge(uint64(len(key))))
 	if err != nil {
 		return fail(err)
 	}
-	out := &resourceEntryOutgoing{allocation: allocation}
+	out := &resourceEntryOutgoing{allocation: allocation, directoryKey: bytes.Clone(key)}
 	entry.outgoing = out
 	if token.directory != nil {
 		if token.directory.metadata != owner {
@@ -57,9 +66,25 @@ func newOwnedResourceEntry(owner *retainedalloc.Owner, token *StableResourceToke
 		}
 		out.directory = token.directory
 	}
-	out.fields, err = newImportedEntryFieldBacking(owner, token)
+	if summary != nil {
+		if !summary.retain() {
+			return fail(ErrResourceOwnership)
+		}
+		out.fields = summary
+	} else if key != nil {
+		out.fields, err = newDirectoryEntryFieldBacking(owner, fields)
+	} else {
+		out.fields, err = newImportedEntryFieldBacking(owner, token)
+	}
 	if err != nil {
 		return fail(err)
+	}
+	if summary != nil {
+		entry.logicalLane, entry.resourceID, entry.diagnosticPath = token.logicalLane, token.resourceID, token.diagnosticPath
+		entry.reachability = out.fields
+		entry.logicalObligations = stableLogicalObligationView{fieldSummary: out.fields, count: count, directory: out.directory, owner: out.directoryKey}
+		entry.dependencyManifestV1 = &out.cache
+		return backing, nil
 	}
 	if !token.obligationBacking.retain() {
 		return fail(ErrResourceOwnership)
@@ -79,7 +104,7 @@ func newOwnedResourceEntry(owner *retainedalloc.Owner, token *StableResourceToke
 	}
 	entry.logicalLane, entry.resourceID, entry.diagnosticPath = token.logicalLane, token.resourceID, token.diagnosticPath
 	entry.reachability = out.fields
-	entry.logicalObligations = stableLogicalObligationView{fieldSummary: out.fields, ownedValues: out.obligations, index: out.index, count: len(token.logicalObligations), directory: token.directory}
+	entry.logicalObligations = stableLogicalObligationView{fieldSummary: out.fields, ownedValues: out.obligations, index: out.index, count: len(token.logicalObligations), directory: token.directory, owner: out.directoryKey}
 	entry.dependencyManifestV1 = &out.cache
 	return backing, nil
 }
