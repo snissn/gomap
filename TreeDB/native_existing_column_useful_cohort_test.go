@@ -232,11 +232,16 @@ func requireNativeUsefulCohortFrame(t *testing.T, opts Options, lsn uint64, ids,
 				continue
 			}
 			found++
-			if frame.Kind != commitlog.CommandKindCollectionInsertBatchByID || frame.PayloadFormat != commitlog.PayloadFormatCollectionInsertBatchByIDV1 {
+			if frame.Kind != commitlog.CommandKindCompositeMutation || frame.PayloadFormat != commitlog.PayloadFormatCompositeMutationV1 {
 				_ = reader.Close()
 				t.Fatalf("cohort LSN %d kind=%v format=%v", lsn, frame.Kind, frame.PayloadFormat)
 			}
-			payload, err := commitlog.DecodeCollectionInsertBatchByIDPayload(frame.Payload)
+			members, err := commitlog.DecodeCompositeMutationPayloadView(frame.Payload)
+			if err != nil || len(members) != 1 || members[0].Incarnation == 0 || members[0].Kind != commitlog.CommandKindCollectionInsertBatchByID || members[0].PayloadFormat != commitlog.PayloadFormatCollectionInsertBatchByIDV1 {
+				_ = reader.Close()
+				t.Fatalf("cohort LSN %d exact insert member: %+v %v", lsn, members, err)
+			}
+			payload, err := commitlog.DecodeCollectionInsertBatchByIDPayload(members[0].Payload)
 			if err != nil || payload.Collection != "events" || len(payload.Documents) != len(ids) {
 				_ = reader.Close()
 				t.Fatalf("cohort LSN %d collection=%q rows=%d: %v", lsn, payload.Collection, len(payload.Documents), err)
