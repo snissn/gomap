@@ -52,7 +52,13 @@ func TestAdaptiveMVCCOrderedFirstQualifiedRead(t *testing.T) {
 			if held == nil {
 				t.Fatal("old snapshot unavailable")
 			}
-			defer held.Close()
+			defer func() {
+				if held != nil {
+					if err := held.Close(); err != nil {
+						t.Error(err)
+					}
+				}
+			}()
 			physical, err := mvcckey.Encode(logical, 10)
 			if err != nil {
 				t.Fatal(err)
@@ -112,6 +118,7 @@ func TestAdaptiveMVCCOrderedFirstQualifiedRead(t *testing.T) {
 			if err := held.Close(); err != nil {
 				t.Fatal(err)
 			}
+			held = nil
 			if err := db.Close(); err != nil {
 				t.Fatal(err)
 			}
@@ -154,7 +161,13 @@ func TestAdaptiveMVCCOrderedLateQualifiedRead(t *testing.T) {
 	if held == nil {
 		t.Fatal("old snapshot unavailable")
 	}
-	defer held.Close()
+	defer func() {
+		if held != nil {
+			if err := held.Close(); err != nil {
+				t.Error(err)
+			}
+		}
+	}()
 	// Populate the successor too: attachment must preserve both the retained
 	// snapshot's frozen source and the current mutable, regardless of flushing.
 	if err := db.Set(raw, []byte("current")); err != nil {
@@ -225,6 +238,7 @@ func TestAdaptiveMVCCOrderedLateQualifiedRead(t *testing.T) {
 	if err := held.Close(); err != nil {
 		t.Fatal(err)
 	}
+	held = nil
 }
 
 func TestMVCCOrderedReadPreservesExplicitMode(t *testing.T) {
@@ -327,7 +341,13 @@ func TestAdaptiveMVCCOrderedConcurrentFirstRead(t *testing.T) {
 	if held == nil {
 		t.Fatal("old snapshot unavailable")
 	}
-	defer held.Close()
+	defer func() {
+		if held != nil {
+			if err := held.Close(); err != nil {
+				t.Error(err)
+			}
+		}
+	}()
 	physical, err := mvcckey.Encode(key, 10)
 	if err != nil {
 		t.Fatal(err)
@@ -364,10 +384,14 @@ func TestAdaptiveMVCCOrderedConcurrentFirstRead(t *testing.T) {
 		results <- nil
 	}()
 	close(start)
+	var firstErr error
 	for range 9 {
-		if err := <-results; err != nil {
-			t.Fatal(err)
+		if err := <-results; err != nil && firstErr == nil {
+			firstErr = err
 		}
+	}
+	if firstErr != nil {
+		t.Fatal(firstErr)
 	}
 	if stats := db.Stats(); stats["treedb.cache.memtable_mode"] != "btree" || stats["treedb.cache.memtable_adaptive.last_reason"] != "mvcc_ordered" {
 		t.Fatalf("concurrent first read mode=%s reason=%s", stats["treedb.cache.memtable_mode"], stats["treedb.cache.memtable_adaptive.last_reason"])
@@ -382,4 +406,5 @@ func TestAdaptiveMVCCOrderedConcurrentFirstRead(t *testing.T) {
 	if err := held.Close(); err != nil {
 		t.Fatal(err)
 	}
+	held = nil
 }

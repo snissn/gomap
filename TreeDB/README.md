@@ -448,3 +448,25 @@ The `verify_crash.sh` script compiles a stress tool, runs it, kills it (`kill -9
 
 ## License
 MIT
+
+### External MVCC reads and adaptive memtables
+
+The concrete `mvcc.New(db)` attachment and write-only commits keep the ordinary
+adaptive policy. On an adaptive cache, its first canonical `GetAt` successor
+read selects BTree for future mutable generations and performs one normal
+mutable rotation. That read pays the rotation cost and requests ordinary
+asynchronous flush; existing frozen/queued sources, pointer lifetimes and held
+views remain owned until normal publication and retirement finish. Unordered
+old sources are not rebuilt, so late reads can still scan them until they drain.
+Subsequent reads use their ordinary read gate and a monotone atomic workload
+hint; real iterator observations remain unchanged. Write-heavy observations
+after actual read demand do not switch future mutables back to AppendOnly.
+
+Configured mode remains `adaptive`; Stats reports actual mode `btree` and
+adaptive reason `mvcc_ordered`. Generic raw `SeekGE`, noncanonical qualified
+ranges, explicit memtable modes (including COW) and backend-only handles do not
+select this policy. The normal rotation also ends append-only byte warmup and
+uses the maintained full mutable threshold. Read-bearing workloads pay ordered
+insert and normal background-flush costs; no durability or MVCC retention
+boundary changes. Public correctness and workload guards remain required before
+performance acceptance.

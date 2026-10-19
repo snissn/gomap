@@ -182,7 +182,12 @@ func (db *DB) SeekGE(start, end []byte) (key, value []byte, found bool, err erro
 // must own the reserved namespace through a single Store: no raw writes may
 // recreate physical versions deleted by pruning. Legacy producers require Store
 // grouped/prune fences; COW readers can instead use their admitted snapshot's
-// successor after qualified whole-cut capture. Logical
+// successor after qualified whole-cut capture. On adaptive non-COW caches, the
+// first canonical qualified read rotates existing mutables through the normal
+// immutable queue and selects ordered future mutables. It owns that initial
+// rotation cost and requests ordinary asynchronous flush; old sources remain
+// visible and retained until normal publication/reader retirement completes.
+// Generic SeekGE and explicit modes do not select this policy. Logical
 // tombstones are value records. Noncanonical ranges, range spans and physical
 // tombstones use the
 // generic exclusive path instead.
@@ -226,6 +231,14 @@ func (db *DB) seekGE(start, end []byte, mvccOwned bool) (key, value []byte, foun
 
 	if mvccOwned {
 		if _, canonical := mvcckey.ExactVersionRange(start, end); canonical {
+			// Do this before taking an attempt gate or retaining its view. A
+			// concurrent initializer holds writer exclusion through publication;
+			// subsequent reads use one atomic hint and their normal shared gate.
+			if db.memtableAdaptive && !db.memtableMVCCOrdered.Load() {
+				if err := db.prepareOrderedMVCCRead(); err != nil {
+					return nil, nil, false, err
+				}
+			}
 			key, value, found, err = db.seekGEAttempt(start, end, true, recordSelection)
 			if err != errPointSuccessorExclusiveRetry {
 				return key, value, found, err
