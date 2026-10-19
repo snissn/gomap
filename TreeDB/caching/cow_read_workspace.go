@@ -238,6 +238,17 @@ func (w *cowReadWorkspace) codec(shape valuelog.COWRecordShape) (*cowReadCodec, 
 			return nil, err
 		}
 	}
+	input, raw := cowReadCapacity(shape.PayloadBytes()), cowReadCapacity(shape.RawBytes)
+	if old := w.codecs[slot]; old != nil {
+		// The original read mutex excludes decoder/output borrowers. Keep both
+		// dimensions monotone, but retire scratch before replacement admission:
+		// two whole decoder envelopes need not fit the original finite budget.
+		input, raw = max(input, uint64(cap(old.input))), max(raw, uint64(cap(old.raw)))
+		w.codecs[slot] = nil
+		old.close()
+	}
+	// Refusal leaves the slot empty; the original cut/definition authority
+	// remains intact and a later read can retry normal admission.
 	var definition []byte
 	var owner *dictdb.DictionaryReadDefinition
 	var err error
@@ -247,7 +258,6 @@ func (w *cowReadWorkspace) codec(shape valuelog.COWRecordShape) (*cowReadCodec, 
 			return nil, err
 		}
 	}
-	input, raw := cowReadCapacity(shape.PayloadBytes()), cowReadCapacity(shape.RawBytes)
 	blockOnly := shape.DictID == 0 && (shape.Codec == valuelog.BlockCodecSnappy || shape.Codec == valuelog.BlockCodecLZ4)
 	var sizes valuelog.COWDecoderAllocationSizes
 	if blockOnly {
@@ -281,11 +291,7 @@ func (w *cowReadWorkspace) codec(shape valuelog.COWRecordShape) (*cowReadCodec, 
 		return nil, err
 	}
 	c := &cowReadCodec{id: shape.DictID, codec: shape.Codec, decoder: decoder, definition: owner, input: make([]byte, input), raw: make([]byte, raw), lease: lease}
-	old := w.codecs[slot]
 	w.codecs[slot] = c
-	if old != nil {
-		old.close()
-	}
 	return c, nil
 }
 
