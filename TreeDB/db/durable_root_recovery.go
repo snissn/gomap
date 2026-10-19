@@ -276,8 +276,14 @@ func validateDurableMetaCandidateWithMetadataV1(source freelist.PageSource, phys
 	} else {
 		manifest, err = rootpublication.LoadDependencyManifestWithMetadataV1(source, record.Manifest, owner)
 		defer func() { manifest.ReleaseOwnedMetadataV1() }()
+		if err != nil {
+			err = fmt.Errorf("decode durable dependency manifest: %w", err)
+		}
 		if err == nil && validateManifest != nil {
 			resources, err = validateManifest(manifest)
+			if err != nil {
+				err = fmt.Errorf("admit durable dependency manifest: %w", err)
+			}
 		}
 	}
 	if err != nil {

@@ -181,7 +181,7 @@ func (db *DB) dependencyDirectoryValidatorV2(idx *indexGen) durableDirectoryVali
 	return func(record rootpublication.DurableRootRecordV1) (*rootpublication.StableResourceSet, error) {
 		directory, err := db.pinDependencyDirectoryV2(idx, record.CommitSeq, record.Directory, record.TotalPages)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("pin durable dependency directory: %w", err)
 		}
 		defer directory.Release()
 		return db.recoverDependencyDirectoryResourcesV2(directory)
@@ -202,7 +202,12 @@ func (db *DB) pinDependencyDirectoryV2(idx *indexGen, sequence uint64, ref rootp
 	return db.pinDataDependencyDirectoryV6(idx, sequence, ref, totalPages)
 }
 
-func (db *DB) recoverDependencyDirectoryResourcesV2(directory *rootpublication.DependencyDirectoryV2) (*rootpublication.StableResourceSet, error) {
+func (db *DB) recoverDependencyDirectoryResourcesV2(directory *rootpublication.DependencyDirectoryV2) (_ *rootpublication.StableResourceSet, retErr error) {
+	defer func() {
+		if retErr != nil {
+			retErr = fmt.Errorf("dependency directory recovery: %w", retErr)
+		}
+	}()
 	return rootpublication.RecoverDependencyDirectoryV2(directory, func(entry rootpublication.DependencyManifestEntryV1) (*rootpublication.StableResourceSet, error) {
 		return db.validateDurableDependencyEntriesWithMetadataV1([]rootpublication.DependencyManifestEntryV1{entry}, true, directory.MetadataOwner())
 	}, func(file *os.File, entry rootpublication.DependencyManifestEntryV1, obligation rootpublication.StableLogicalObligation) error {
@@ -214,7 +219,7 @@ func (db *DB) recoverDependencyDirectoryResourcesV2(directory *rootpublication.D
 			// Directory decoding already checks exact owner/frontier/field.
 			return nil
 		default:
-			return rootpublication.ErrResourceConflict
+			return fmt.Errorf("%w: directory recovered logical kind=%q path=%q", rootpublication.ErrResourceConflict, entry.Kind, entry.DiagnosticPath)
 		}
 	})
 }

@@ -2851,6 +2851,9 @@ func (db *DB) validateDurableDependencyManifestV1(manifest *rootpublication.Depe
 			resources, err = db.validateDurableDependencyEntriesWithMetadataV1(entries, false, metadata)
 			return err
 		})
+		if err != nil {
+			err = fmt.Errorf("dependency owned manifest validation: %w", err)
+		}
 		return resources, err
 	}
 	return db.validateDurableDependencyEntriesV1(manifest.Entries(), false)
@@ -2861,6 +2864,12 @@ func (db *DB) validateDurableDependencyEntriesV1(entries []rootpublication.Depen
 	return db.validateDurableDependencyEntriesWithMetadataV1(entries, physicalOnly, nil)
 }
 func (db *DB) validateDurableDependencyEntriesWithMetadataV1(entries []rootpublication.DependencyManifestEntryV1, physicalOnly bool, metadata *retainedalloc.Owner) (_ *rootpublication.StableResourceSet, retErr error) {
+	// Registered first so cleanup refusals retain the same stage context.
+	defer func() {
+		if retErr != nil {
+			retErr = fmt.Errorf("dependency entry validation (physical-only=%t): %w", physicalOnly, retErr)
+		}
+	}()
 	if len(entries) == 0 {
 		return nil, nil
 	}
@@ -2868,7 +2877,7 @@ func (db *DB) validateDurableDependencyEntriesWithMetadataV1(entries []rootpubli
 		return nil, fmt.Errorf("%w: value-log manager unavailable", rootpublication.ErrUnresolvedResource)
 	}
 	if err := db.registerDurableManifestValueLogSegmentsV1(entries); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("dependency value-log registration: %w", err)
 	}
 	set := db.valueLogManager.CurrentSetNoRefresh()
 	defer func() { retErr = errors.Join(retErr, db.valueLogManager.Release(set)) }()
@@ -2900,7 +2909,7 @@ func (db *DB) validateDurableDependencyEntriesWithMetadataV1(entries []rootpubli
 			logicalLane = "db/outer-leaf-raw"
 		default:
 			if err := db.validateGenericDurableDependencyEntryWithMetadataV1(builder, entry, physicalOnly, metadata); err != nil {
-				return nil, err
+				return nil, fmt.Errorf("dependency kind=%q path=%q generic admission: %w", entry.Kind, entry.DiagnosticPath, err)
 			}
 			continue
 		}
@@ -2930,11 +2939,11 @@ func (db *DB) validateDurableDependencyEntriesWithMetadataV1(entries []rootpubli
 			Reachability: reachability, MetadataOwner: metadata,
 		})
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("dependency kind=%q path=%q value-log constructor: %w", entry.Kind, entry.DiagnosticPath, err)
 		}
 		if err := token.WithPinnedFile(func(child *os.File) error {
 			if entry.Namespace != nil && !rootpublication.SamePhysicalIdentity(file.RegisteredParentIdentity(), entry.Namespace.ParentIdentity) {
-				return rootpublication.ErrResourceConflict
+				return fmt.Errorf("%w: dependency kind=%q path=%q registered value-log parent identity", rootpublication.ErrResourceConflict, entry.Kind, entry.DiagnosticPath)
 			}
 			return validateDurableDependencyContentDescriptorV1(db.dir, child, entry, physicalOnly)
 		}); err != nil {
@@ -2961,12 +2970,12 @@ func (db *DB) validateDurableDependencyEntriesWithMetadataV1(entries []rootpubli
 			defer func(original *rootpublication.StableResourceToken) {
 				retErr = errors.Join(retErr, original.ReleaseWithError())
 			}(token)
-			return nil, err
+			return nil, fmt.Errorf("dependency kind=%q path=%q value-log builder Add: %w", entry.Kind, entry.DiagnosticPath, err)
 		}
 	}
 	resources, err := builder.Freeze()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("dependency resource builder Freeze: %w", err)
 	}
 	abandon = false
 	return resources, nil
@@ -3181,10 +3190,10 @@ func (db *DB) validateGenericDurableDependencyEntryWithMetadataV1(builder *rootp
 			DiagnosticPath: entry.Namespace.DiagnosticPath,
 		}, entry.Namespace.ParentIdentity, metadata, registry)
 		if err != nil {
-			return err
+			return fmt.Errorf("dependency kind=%q path=%q recovered namespace constructor: %w", entry.Kind, entry.DiagnosticPath, err)
 		}
 		if err := registry.Observe(identity); err != nil {
-			return errors.Join(err, namespace.ReleaseWithError())
+			return fmt.Errorf("dependency kind=%q path=%q observe: %w", entry.Kind, entry.DiagnosticPath, errors.Join(err, namespace.ReleaseWithError()))
 		}
 		observed := true
 		token, err := rootpublication.NewStableProducerResourceToken(rootpublication.StableResourceSpec{
@@ -3198,11 +3207,11 @@ func (db *DB) validateGenericDurableDependencyEntryWithMetadataV1(builder *rootp
 			if observed {
 				err = errors.Join(err, registry.Unobserve(identity))
 			}
-			return errors.Join(err, namespace.ReleaseWithError())
+			return fmt.Errorf("dependency kind=%q path=%q producer constructor field=%q: %w", entry.Kind, entry.DiagnosticPath, reachability, errors.Join(err, namespace.ReleaseWithError()))
 		}
 		observed = false
 		if err := builder.Add(token); err != nil {
-			return errors.Join(err, token.ReleaseWithError(), namespace.ReleaseWithError())
+			return fmt.Errorf("dependency kind=%q path=%q builder Add field=%q: %w", entry.Kind, entry.DiagnosticPath, reachability, errors.Join(err, token.ReleaseWithError(), namespace.ReleaseWithError()))
 		}
 		if err := namespace.ReleaseWithError(); err != nil {
 			return err

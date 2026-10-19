@@ -25,6 +25,11 @@ func (d *DependencyDirectoryV2) MetadataOwner() *retainedalloc.Owner {
 type ownedDirectoryCensusV2 struct{ backing *resourceEntryBacking }
 
 func buildOwnedDependencyDirectoryV2(directory *DependencyDirectoryV2, prepare func([]byte, DependencyManifestEntryV1) (*resourceEntryBacking, error), validate func(*os.File, DependencyManifestEntryV1, StableLogicalObligation) error) (_ *StableResourceSet, retErr error) {
+	defer func() {
+		if retErr != nil {
+			retErr = fmt.Errorf("owned dependency directory reconstruction: %w", retErr)
+		}
+	}()
 	owner := directory.metadata
 	n := directory.ref.PhysicalCount
 	if owner == nil || n > uint64(int(^uint(0)>>1))/uint64(unsafe.Sizeof(ownedDirectoryCensusV2{})) {
@@ -121,7 +126,7 @@ func buildOwnedDependencyDirectoryV2(directory *DependencyDirectoryV2, prepare f
 		return ErrUnresolvedResource
 	}, nil)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("dependency directory physical/logical stream: %w", err)
 	}
 	if n == 0 {
 		return newStableResourceSetWithEmptyDirectory(owner, directory)
@@ -156,16 +161,19 @@ func buildOwnedDependencyDirectoryV2(directory *DependencyDirectoryV2, prepare f
 		census[i].backing = nil // the original builder consumes the backing on every exit
 		if err := builder.addPreparedAdmittedEntry(backing); err != nil {
 			if cleanup := token.ReleaseWithError(); cleanup != nil {
-				return nil, errors.Join(err, cleanup)
+				return nil, fmt.Errorf("dependency directory builder entry kind=%q: %w", token.kind, errors.Join(err, cleanup))
 			}
-			return nil, err
+			return nil, fmt.Errorf("dependency directory builder entry kind=%q: %w", token.kind, err)
 		}
 	}
 	bound, err := builder.Freeze()
 	if err == nil {
 		builder = nil // Freeze transferred the graph and refunded its containing header.
 	}
-	return bound, err
+	if err != nil {
+		return bound, fmt.Errorf("dependency directory builder Freeze: %w", err)
+	}
+	return bound, nil
 }
 
 func cloneOwnedDirectoryEntryV2(entry *stableResourceEntry, key []byte, physical DependencyManifestEntryV1, directory *DependencyDirectoryV2, exact bool) (_ *resourceEntryBacking, retErr error) {
@@ -283,7 +291,7 @@ func bindOwnedDependencyDirectoryV2(source *StableResourceSet, directory *Depend
 		return nil, countErr
 	}
 	if count != directory.ref.PhysicalCount || logical != directory.ref.LogicalCount {
-		return nil, ErrResourceConflict
+		return nil, fmt.Errorf("%w: directory Bind census physical=%d/%d logical=%d/%d", ErrResourceConflict, count, directory.ref.PhysicalCount, logical, directory.ref.LogicalCount)
 	}
 	if count == 0 {
 		return newStableResourceSetWithEmptyDirectory(directory.metadata, directory)
@@ -319,7 +327,7 @@ func bindOwnedDependencyDirectoryV2(source *StableResourceSet, directory *Depend
 					if _, err := s.parser.physical(key, value); err != nil {
 						return err
 					}
-					return ErrResourceConflict
+					return fmt.Errorf("%w: directory Bind kind=%q path=%q physical encoding", ErrResourceConflict, physical.Kind, physical.DiagnosticPath)
 				})
 				if err == nil && !found {
 					err = ErrUnresolvedResource
