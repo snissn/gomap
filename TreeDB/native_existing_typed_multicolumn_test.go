@@ -20,6 +20,8 @@ import (
 
 func TestNativeExistingTypedMultiColumnLifecycle(t *testing.T) {
 	if dir := os.Getenv("GOMAP_TYPED_MULTICOLUMN_CRASH_DIR"); dir != "" {
+		// Keep the exact unapplied basis; periodic value-log GC may checkpoint.
+		t.Setenv("TREEDB_DISABLE_VLOG_GENERATION_LOOP", "1")
 		runNativeTypedMultiColumn(t, dir, true)
 		return
 	}

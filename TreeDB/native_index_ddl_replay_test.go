@@ -17,6 +17,10 @@ import (
 func TestNativeExistingJSONIndexDDLUnappliedReplay(t *testing.T) {
 	const sentinel = 97
 	childDir, childProfile := os.Getenv("GOMAP_INDEX_DDL_CRASH_DIR"), os.Getenv("GOMAP_INDEX_DDL_PROFILE")
+	if childDir != "" {
+		// Keep the exact unapplied basis; periodic value-log GC may checkpoint.
+		t.Setenv("TREEDB_DISABLE_VLOG_GENERATION_LOOP", "1")
+	}
 	for _, profile := range []Profile{ProfileCommandWALDurable, ProfileCommandWALRelaxed} {
 		if childDir != "" && childProfile != string(profile) {
 			continue
