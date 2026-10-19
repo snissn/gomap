@@ -52,6 +52,11 @@ func TestNativeExistingIndexedJSONOrderedRowsCost(t *testing.T) {
 	if runtime.GOMAXPROCS(0) != 2 {
 		t.Fatal("cost protocol requires GOMAXPROCS=2")
 	}
+	runNativeIndexedOrderedRows(t, n, order)
+}
+
+func runNativeIndexedOrderedRows(t *testing.T, n int, order string) {
+	t.Helper()
 	// All IDs, documents, callbacks and batch headers are caller inputs, prepared
 	// before lifecycle and foreground accounting, with the same bytes per order.
 	ids, seed, final := make([][]byte, n), make([][]byte, n), make([][]byte, n)
@@ -133,11 +138,16 @@ func TestNativeExistingIndexedJSONOrderedRowsCost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, err := users.InsertBatch(ids, seed); err != nil || len(got) != n {
-		t.Fatalf("seed %d: %v", len(got), err)
-	}
-	if err := database.Checkpoint(); err != nil {
-		t.Fatal(err)
+	// Bounded ordinary setup commands/checkpoints are outside the measured
+	// transaction. The held view below still captures all n seed documents.
+	for first := 0; first < n; first += 256 {
+		last := min(first+256, n)
+		if got, err := users.InsertBatch(ids[first:last], seed[first:last]); err != nil || len(got) != last-first {
+			t.Fatalf("seed %d:%d got%d: %v", first, last, len(got), err)
+		}
+		if err := database.Checkpoint(); err != nil {
+			t.Fatal(err)
+		}
 	}
 	held, err = users.OpenCollectionReadView()
 	if err != nil {
