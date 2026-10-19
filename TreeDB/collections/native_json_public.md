@@ -65,8 +65,11 @@ Use `manager.Begin("a", "b")`, then `InsertBatchInto`, `UpdateBatchInto`,
 can use `InsertBatch`, `UpdateBatch`, `DeleteBatch` and `Get`. `GetRaw`/`SetRaw`
 use the original conditional batch; the selected composite frontend accepts one
 inline raw point Set. `UpdateBatchInto` is the scalar JSON path; typed
-replacement operations use the existing typed Collection methods. Existing
-member/payload and original memory limits apply.
+replacement operations use the existing typed Collection methods. Ordered typed
+stages can span several bound collections in the same transaction, including
+insert/delete/reinsert of one key. They share the original physical build workspace
+sequentially and install one complete resource closure. Existing member/payload
+and original memory limits apply.
 Always close the transaction, including after a staging or commit error.
 
 The transaction retains one original opening cut, collection incarnation and
