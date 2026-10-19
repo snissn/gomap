@@ -14,6 +14,9 @@ import (
 )
 
 func TestMaintenanceDrainUsesOriginalRetiredGeneration(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum unsupported on windows")
+	}
 	for _, failClose := range []bool{false, true} {
 		t.Run(fmt.Sprint(failClose), func(t *testing.T) {
 			database, err := Open(Options{Dir: t.TempDir(), IndexPrimaryDirectory: true, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
