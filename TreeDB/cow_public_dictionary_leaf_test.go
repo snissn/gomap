@@ -6,12 +6,9 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/snissn/compress/zstd"
-	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/dictdb"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -144,35 +141,53 @@ func TestCOWPublicPackedDictionaryLeafOldCut(t *testing.T) {
 	if len(packed.CreatedFileIDs) == 0 {
 		t.Fatalf("no packed leaf output: %+v", packed)
 	}
-	// Observe the real packed record outside reads, exactly as the maintained
-	// pack fixture does. All rows below are then read from the installed root.
-	for _, fileID := range packed.CreatedFileIDs {
-		lane, seq := valuelog.DecodeFileID(fileID)
-		path := filepath.Join(backenddb.LeafLogDirPath(opts.Dir), fmt.Sprintf("value-l%d-%06d.log", lane, seq))
-		f, err := os.Open(path)
+	// Resolve each reported raw segment ID through the installed root's exact
+	// retained file set. Public root and backend storage paths can differ.
+	physical := database.backend.AcquireSnapshot()
+	if physical == nil {
+		t.Fatal("missing original post-pack snapshot")
+	}
+	var reader *io.SectionReader
+	defer func() {
+		reader = nil
+		if physical != nil {
+			if err := physical.Close(); err != nil {
+				t.Error(err)
+			}
+		}
+	}()
+	for _, rawID := range packed.CreatedFileIDs {
+		fileID := page.ValueLogFileID(rawID)
+		file, _, err := physical.PinnedValueLogFile(fileID)
 		if err != nil {
+			t.Fatalf("packed segment raw=%d file=%d: %v", rawID, fileID, err)
+		}
+		// The original snapshot owns this handle; SectionReader neither changes
+		// its offset nor closes it.
+		reader = io.NewSectionReader(file, 0, int64(valuelog.HeaderSize)+(2<<20))
+		file = nil
+		var header [valuelog.HeaderSize]byte
+		if _, err := io.ReadFull(reader, header[:]); err != nil {
 			t.Fatal(err)
 		}
-		var header [valuelog.HeaderSize]byte
-		_, readErr := io.ReadFull(f, header[:])
-		var body []byte
-		if readErr == nil {
-			size := binary.LittleEndian.Uint32(header[16:20])
-			if size > 2<<20 {
-				closeErr := f.Close()
-				t.Fatalf("oversized packed leaf record: %d; close=%v", size, closeErr)
-			}
-			body = make([]byte, int(size))
-			_, readErr = io.ReadFull(f, body)
+		size := binary.LittleEndian.Uint32(header[16:20])
+		if size > 2<<20 {
+			t.Fatalf("oversized packed leaf record: %d", size)
 		}
-		closeErr := f.Close()
-		if readErr != nil || closeErr != nil {
-			t.Fatalf("packed record read=%v close=%v", readErr, closeErr)
+		body := make([]byte, int(size))
+		if _, err := io.ReadFull(reader, body); err != nil {
+			t.Fatal(err)
 		}
+		reader = nil
 		frame, _, _, _, err := valuelog.DecodeFrame(body)
 		if err != nil || frame.DictID != id || frame.Flags&valuelog.FrameFlagCompressed == 0 {
 			t.Fatalf("actual packed leaf frame=%+v error=%v want compressed dictionary=%d", frame, err, id)
 		}
+	}
+	closeErr := physical.Close()
+	physical = nil
+	if closeErr != nil {
+		t.Fatal(closeErr)
 	}
 	key := []byte("dict-pack-000-0000")
 	if got, err := database.Get(key); err != nil || !bytes.Equal(got, want) {

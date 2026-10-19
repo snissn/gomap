@@ -7,13 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 	"sync"
 	"testing"
 
-	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 // Four fresh-cut readers share each original physical basis while a disjoint
@@ -75,49 +73,59 @@ func TestCOWPublicRawBasisConcurrentReadersWriterCheckpoint(t *testing.T) {
 	if leafFile == 0 {
 		t.Fatalf("no live leaf file: %+v", plan)
 	}
-	lane, seq := valuelog.DecodeFileID(leafFile)
-	f, err := os.Open(filepath.Join(backenddb.LeafLogDirPath(opts.Dir), fmt.Sprintf("value-l%d-%06d.log", lane, seq)))
+	physical := database.backend.AcquireSnapshot()
+	if physical == nil {
+		t.Fatal("missing original physical-resource snapshot")
+	}
+	var reader *io.SectionReader
+	defer func() {
+		reader = nil
+		if physical != nil {
+			if err := physical.Close(); err != nil {
+				t.Error(err)
+			}
+		}
+	}()
+	fileID := page.ValueLogFileID(leafFile)
+	file, _, err := physical.PinnedValueLogFile(fileID)
 	if err != nil {
+		t.Fatalf("live leaf segment raw=%d file=%d: %v", leafFile, fileID, err)
+	}
+	// Borrow the original registered handle without guessing public/backend
+	// layout, changing its shared offset or closing it independently.
+	reader = io.NewSectionReader(file, 0, int64(valuelog.HeaderSize)+(2<<20))
+	file = nil
+	var header [valuelog.HeaderSize]byte
+	if _, err := io.ReadFull(reader, header[:]); err != nil {
 		t.Fatal(err)
 	}
-	var header [valuelog.HeaderSize]byte
-	_, readErr := io.ReadFull(f, header[:])
-	var body []byte
-	if readErr == nil {
-		n := binary.LittleEndian.Uint32(header[16:20])
-		if n > 2<<20 {
-			closeErr := f.Close()
-			t.Fatalf("oversized leaf frame=%d close=%v", n, closeErr)
-		}
-		body = make([]byte, int(n))
-		_, readErr = io.ReadFull(f, body)
+	n := binary.LittleEndian.Uint32(header[16:20])
+	if n > 2<<20 {
+		t.Fatalf("oversized leaf frame=%d", n)
 	}
-	closeErr := f.Close()
-	if readErr != nil || closeErr != nil {
-		t.Fatalf("leaf observation read=%v close=%v", readErr, closeErr)
+	body := make([]byte, int(n))
+	if _, err := io.ReadFull(reader, body); err != nil {
+		t.Fatal(err)
 	}
+	reader = nil
 	frame, _, _, _, err := valuelog.DecodeFrame(body)
 	if err != nil || frame.DictID != 0 || frame.Flags&valuelog.FrameFlagCompressed == 0 || valuelog.BlockCodec(frame.Reserved) != valuelog.BlockCodecLZ4 {
 		t.Fatalf("actual leaf frame=%+v error=%v", frame, err)
 	}
-	physical := database.backend.AcquireSnapshot()
-	if physical == nil {
-		t.Fatal("missing original pointer-resource snapshot")
-	}
 	entry, entryErr := physical.GetEntry([]byte("p"))
 	if entryErr != nil || entry.ValuePtr.FileID == 0 {
-		closeErr := physical.Close()
-		t.Fatalf("actual pointer=%+v error=%v close=%v", entry.ValuePtr, entryErr, closeErr)
+		entry.Key, entry.Value = nil, nil
+		t.Fatalf("actual pointer=%+v error=%v", entry.ValuePtr, entryErr)
 	}
 	file, _, fileErr := physical.PinnedValueLogFile(entry.ValuePtr.FileID)
 	if fileErr != nil {
-		closeErr := physical.Close()
-		t.Fatalf("pinned pointer file=%v close=%v", fileErr, closeErr)
+		entry.Key, entry.Value = nil, nil
+		t.Fatalf("pinned pointer file=%v", fileErr)
 	}
 	shape, shapeErr := valuelog.InspectCOWRecord(file, entry.ValuePtr, valuelog.COWReadLimits{MaxRecordBytes: 64 << 20, MaxRawBytes: 64 << 20, MaxValueBytes: 64 << 20})
 	file = nil
 	entry.Key, entry.Value = nil, nil
-	closeErr = physical.Close()
+	closeErr := physical.Close()
 	physical = nil
 	if shapeErr != nil || closeErr != nil || !shape.Compressed || shape.DictID != 0 || shape.Codec != valuelog.BlockCodecLZ4 {
 		t.Fatalf("actual pointer shape=%+v error=%v close=%v", shape, shapeErr, closeErr)
