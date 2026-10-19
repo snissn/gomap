@@ -24,7 +24,8 @@ func init() {
 func RegisterCommandWALReplayHandlers() {
 	registerCommandWALReplayHandlersOnce.Do(func() {
 		backenddb.RegisterCommandWALReplayHandlerWithOptions(commitlog.CommandKindCompositeMutation, replayNativeJSONComposite, backenddb.CommandWALReplayHandlerOptions{NeedsReplayLogSupport: true, NativePrepare: prepareNativeJSONCompositeMarker})
-		backenddb.RegisterCommandWALReplayHandlerWithOptions(commitlog.CommandKindCollectionInsertBatchByID, replayCollectionInsertBatchByIDCommandWAL, backenddb.CommandWALReplayHandlerOptions{NativePrepare: prepareNativeJSONInsertCommand})
+		// Native preparation still uses ordinary replay's value-log and leaf-log setup.
+		backenddb.RegisterCommandWALReplayHandlerWithOptions(commitlog.CommandKindCollectionInsertBatchByID, replayCollectionInsertBatchByIDCommandWAL, backenddb.CommandWALReplayHandlerOptions{NeedsReplayLogSupport: true, NativePrepare: prepareNativeJSONInsertCommand})
 		backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCollectionDeleteBatchByID, replayCollectionDeleteBatchByIDCommandWAL)
 		backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCollectionUpdateBatchByID, replayCollectionUpdateBatchByIDCommandWAL)
 		backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCollectionReplaceSourceByID, replayCollectionReplaceSourceByIDCommandWAL)
