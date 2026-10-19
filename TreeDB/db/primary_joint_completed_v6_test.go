@@ -274,8 +274,22 @@ func TestPrimaryJointCompletedV6RejectsPhysicalChange(t *testing.T) {
 					t.Fatal(e)
 				}
 				for _, off := range []int64{2 * 4096, 5 * 4096} {
-					if _, e = f.WriteAt([]byte{0xff}, off+48); e != nil {
+					var original [1]byte
+					if _, e = f.ReadAt(original[:], off+48); e != nil {
 						t.Fatal(e)
+					}
+					// Flip an actual digest bit: a constant overwrite may leave
+					// one valid capsule available for independent fallback.
+					changed := [1]byte{original[0] ^ 1}
+					if _, e = f.WriteAt(changed[:], off+48); e != nil {
+						t.Fatal(e)
+					}
+					var observed [1]byte
+					if _, e = f.ReadAt(observed[:], off+48); e != nil {
+						t.Fatal(e)
+					}
+					if observed != changed || observed == original {
+						t.Fatalf("capsule digest at offset %d did not change: original=%x changed=%x observed=%x", off+48, original, changed, observed)
 					}
 				}
 				if e = f.Close(); e != nil {
