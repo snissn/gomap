@@ -82,7 +82,7 @@ func nativeJSONFinalRows(name string, meta CollectionMeta, rows *nativeJSONRows,
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	if err = admit(memtable.COWAllocationCharge(uint64(len(rows.rows)) * uint64(unsafe.Sizeof(preparedBatchUpdate{})))); err != nil {
+	if err = admitNativeInsertArray(len(rows.rows), uint64(unsafe.Sizeof(preparedBatchUpdate{})), admit); err != nil {
 		return nil, nil, nil, err
 	}
 	// One maintained arena owns every retained old/new state. Its capacities
@@ -93,13 +93,6 @@ func nativeJSONFinalRows(name string, meta CollectionMeta, rows *nativeJSONRows,
 		for _, doc := range [][]byte{row.opening, row.current} {
 			if doc == nil {
 				continue
-			}
-			n, err := nativeJSONIndexedCharge(meta, [][]byte{row.id}, [][]byte{doc}, false, false)
-			if err != nil {
-				return nil, nil, nil, err
-			}
-			if err = admit(n); err != nil {
-				return nil, nil, nil, err
 			}
 			capacity, err := nativeJSONEncodedCapacity(len(doc), len(runtimes))
 			if err != nil || capacity > int(^uint(0)>>1)-bytesCap || len(runtimes) > int(^uint(0)>>1)-stateCount {
@@ -112,8 +105,21 @@ func nativeJSONFinalRows(name string, meta CollectionMeta, rows *nativeJSONRows,
 			}
 		}
 	}
-	// These concrete buffers are enclosed by the unchanged retained encode/
-	// secondary/state allowance above; decoder scratch is separately scoped.
+	// Admit each actual backing once. Scalar-only native schemas bound every
+	// encoded image before parsing; decoder scratch has its separate high-water
+	// receipt. The final arena never grows while old/new states borrow it.
+	for _, allocation := range []struct {
+		count int
+		size  uint64
+	}{
+		{bytesCap, 1}, {maxDocument, 1},
+		{stateCount, uint64(unsafe.Sizeof([][]byte{}))},
+		{stateCount, uint64(unsafe.Sizeof([]byte{}))},
+	} {
+		if err = admitNativeInsertArray(allocation.count, allocation.size, admit); err != nil {
+			return nil, nil, nil, err
+		}
+	}
 	encoder := indexEncodeArena{buf: make([]byte, 0, bytesCap), scratch: make([]byte, 0, maxDocument), states: make([][][]byte, 0, stateCount), valueRefs: make([][]byte, 0, stateCount)}
 	changed := make([]preparedBatchUpdate, 0, len(rows.rows))
 	stats := CollectionUpdateStats{}
@@ -144,10 +150,17 @@ func nativeJSONFinalRows(name string, meta CollectionMeta, rows *nativeJSONRows,
 		}
 		changed = append(changed, item)
 	}
+	charge, stateEntries, roots, err := nativeJSONFinalPlanCharge(name, planner.options, runtimes, changed)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if err = admit(charge); err != nil {
+		return nil, nil, nil, err
+	}
 	if err = rejectBatchUniqueConflicts(runtimes, changed); err != nil {
 		return nil, nil, nil, err
 	}
-	plan, err := buildNativeCRUDFinalPlan(name, planner.options, runtimes, changed)
+	plan, err := buildNativeCRUDFinalPlan(name, planner.options, runtimes, changed, stateEntries, roots)
 	return plan, changed, runtimes, err
 }
 
@@ -611,14 +624,20 @@ func (t *NativeJSONTxn) finalizeNativeRows() error {
 		// Reserve the maintained nested unique-owner maps and copied string keys
 		// before construction. Scalar schemas contribute at most one old value per
 		// row/index; charge each actual value independently, including map headers
-		// and small-map backing, while earlier indexed allowances own plan arenas.
+		// and small-map backing. The final-plan inventory already owns its arenas.
 		uniqueCharge := memtable.COWAllocationCharge(256)
 		for runtimeIdx, runtime := range runtimes {
 			if !runtime.def.unique {
 				continue
 			}
 			for _, item := range changed {
+				if !preparedBatchUpdateIndexChanged(item, runtimeIdx) {
+					continue
+				}
 				for _, value := range item.oldState.valuesAt(runtimeIdx) {
+					if documentIndexStateContainsValue(item.newState.valuesAt(runtimeIdx), value) {
+						continue
+					}
 					n := memtable.COWAllocationCharge(uint64(len(value))) + memtable.COWAllocationCharge(uint64(len(item.documentID))) + memtable.COWAllocationCharge(uint64(len(runtime.def.name))) + memtable.COWAllocationCharge(768)
 					if n > ^uint64(0)-uniqueCharge {
 						return memtable.ErrCOWCapacity

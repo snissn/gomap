@@ -281,9 +281,18 @@ from synchronous index validation. Each binding reuses the maintained
 old and new buffers together before detaching the old arena. The existing full
 indexed-plan formula still covers decoder fallback, including nested JSON paths.
 Validation never retains extracted states. Final old/new states use one separate
-pre-sized arena and retain the original encode/key/header allowance, while the
-decoder allowance is reserved only once at its maximum live demand. Callback
-inputs and normalized output copies remain transaction-owned and admitted.
+pre-sized arena: its encoded-byte, unescape, state-header and value-reference
+capacities are admitted once before allocation from scalar bounds on the old and
+new documents. After encoding establishes actual lengths, one census admits the
+maintained primary ID copies, secondary key/entry buffers, index-state output,
+plan/root/policy backing, and unique-conflict maps before those builders run.
+Root arrays are pre-sized; sorting reuses their backing. Unique replacement maps
+retain their conservative control/growth allowance for the old values actually
+removed. No temporary decoder object graph is retained per row; its original
+high-water receipt remains separate. Final backing stays on the original stage
+receipt through synchronous publication and is refunded after all transaction
+aliases detach. Callback inputs and normalized output copies remain
+transaction-owned and admitted.
 
 Fixed publication/read/inspection controls are charged once per command member,
 not for every document copy. Canonical member lengths and possible sort-header
