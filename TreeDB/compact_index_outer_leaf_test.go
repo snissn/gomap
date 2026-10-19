@@ -9,12 +9,9 @@ import (
 )
 
 func TestCompactIndexOuterLeavesRemainWritableAndReopen(t *testing.T) {
-	opts := treedb.Options{
-		Dir:                        t.TempDir(),
-		Durability:                 treedb.DurabilityWALOffRelaxed,
-		IndexOuterLeavesInValueLog: true,
-		DisableBackgroundPrune:     true,
-	}
+	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, t.TempDir())
+	opts.IndexOuterLeavesInValueLog = true
+	opts.DisableBackgroundPrune = true
 	database, err := treedb.Open(opts)
 	if err != nil {
 		t.Fatal(err)
