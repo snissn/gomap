@@ -22693,6 +22693,22 @@ func (c *Collection) Get(documentID []byte) ([]byte, error) {
 // should reuse one materializer so the backend snapshot and template resolver
 // are shared across the request.
 func (c *Collection) NewStoredDocumentJSONMaterializer() (*StoredDocumentJSONMaterializer, error) {
+	if c != nil && c.nativeJSON != nil {
+		read, err := c.nativeJSON.Capture(c.name)
+		if err != nil {
+			return nil, err
+		}
+		format := normalizedDocumentFormat(read.meta.Options.DocumentFormat)
+		err = read.Close()
+		if err != nil {
+			return nil, err
+		}
+		if format != DocumentFormatJSON {
+			return nil, backenddb.ErrNativeSemanticUnsupported
+		}
+		// JSON materialization is an owned copy and needs no retained resolver.
+		return &StoredDocumentJSONMaterializer{documentFormat: format}, nil
+	}
 	if c == nil {
 		return nil, errCollectionNil
 	}
@@ -24676,6 +24692,12 @@ func (c *Collection) ScanDocuments(maxDocuments int) ([]DocumentRecord, bool, er
 // the collection is exhausted, or fn returns false. Unlike ScanDocumentsFunc,
 // it does not materialize or reconstruct document payloads.
 func (c *Collection) ScanDocumentIDsFunc(maxDocuments int, fn func([]byte) (bool, error)) (bool, error) {
+	if c != nil && c.nativeJSON != nil {
+		if fn == nil {
+			return false, errors.New("collections: scan callback is nil")
+		}
+		return c.nativeScanDocuments(nil, maxDocuments, false, func(record DocumentRecord) (bool, error) { return fn(record.ID) })
+	}
 	if c == nil {
 		return false, errCollectionNil
 	}
@@ -24831,6 +24853,9 @@ func (c *Collection) scanDocumentsFunc(afterID []byte, maxDocuments int, fn func
 }
 
 func (c *Collection) scanDocumentsFuncWithVectorMutationState(afterID []byte, maxDocuments int, fn func(DocumentRecord) (bool, error), admissionLocked, vectorMutationLocked bool) (bool, error) {
+	if c != nil && c.nativeJSON != nil {
+		return c.nativeScanDocuments(afterID, maxDocuments, true, fn)
+	}
 	if c == nil {
 		return false, errCollectionNil
 	}

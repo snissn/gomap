@@ -240,3 +240,12 @@ assigned-failure custody and poisons the original publication owner; it creates
 no result or progress record. Startup replay recovers the original canonical
 frame, without fabricating a deterministic apply result. Ordinary writers have
 no observer.
+
+Public primary ID/document scans retain one complete native capture, merge its
+pending/captured/physical primary sources with the maintained successor seek,
+and resolve document pointers through that same capture. Limits count live rows;
+truncation requires an additional live row. Callback buffers are caller-owned,
+and callbacks run outside the read mutex while the original capture remains
+retained. JSON materialization copies bytes without a legacy resolver. Logical
+vector receipt queries prove absence only for a current captured non-column
+schema; native typed roles continue to refuse those unsupported receipt APIs.

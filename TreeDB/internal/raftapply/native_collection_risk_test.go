@@ -250,3 +250,110 @@ func TestNativeCollectionDeterministicApplyAssignedFailureReplay(t *testing.T) {
 		t.Fatalf("recovery fabricated apply progress: found=%v err=%v", found, err)
 	}
 }
+
+// Public scans use one original cut even when a callback publishes another cut.
+// Returned IDs/documents remain owned after traversal and its capture close.
+func TestNativeCollectionPublicScanCapturedCut(t *testing.T) {
+	database, err := treedb.Open(nativeApplyPublicOptions(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	backend, err := database.NativeSemanticBackend()
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := collections.NewCollectionManager(backend)
+	t.Cleanup(func() {
+		if err := manager.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	if _, err = manager.CreateCollection(&collections.CollectionMeta{Name: "scan"}); err != nil {
+		t.Fatal(err)
+	}
+	collection, err := manager.OpenCollection("scan")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := [][]byte{[]byte("c"), []byte("a"), []byte("b")}
+	docs := [][]byte{[]byte(`{"id":"c"}`), []byte(`{"id":"a"}`), []byte(`{"id":"b"}`)}
+	if _, err = collection.InsertBatch(ids, docs); err != nil {
+		t.Fatal(err)
+	}
+	if err = database.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	var records []collections.DocumentRecord
+	truncated, err := collection.ScanDocumentsFunc(3, func(record collections.DocumentRecord) (bool, error) {
+		records = append(records, record)
+		if len(records) == 1 {
+			if _, err := collection.InsertBatch([][]byte{[]byte("d")}, [][]byte{[]byte(`{"id":"d"}`)}); err != nil {
+				return false, err
+			}
+			if _, err := collection.DeleteBatch([][]byte{[]byte("c")}); err != nil {
+				return false, err
+			}
+		}
+		return true, nil
+	})
+	if err != nil || truncated || len(records) != 3 {
+		t.Fatalf("captured scan count=%d truncated=%v err=%v", len(records), truncated, err)
+	}
+	for i, want := range []string{"a", "b", "c"} {
+		if string(records[i].ID) != want || string(records[i].Document) != `{"id":"`+want+`"}` {
+			t.Fatalf("record %d=%+v", i, records[i])
+		}
+		records[i].ID[0] = '!'
+		records[i].Document[0] = '!'
+	}
+	var got []string
+	truncated, err = collection.ScanDocumentIDsFunc(2, func(id []byte) (bool, error) {
+		got = append(got, string(id))
+		id[0] = '!'
+		return true, nil
+	})
+	if err != nil || !truncated || fmt.Sprint(got) != "[a b]" {
+		t.Fatalf("bounded ID scan=%v truncated=%v err=%v", got, truncated, err)
+	}
+	got = nil
+	truncated, err = collection.ScanDocumentsAfterFunc([]byte("b"), 1, func(record collections.DocumentRecord) (bool, error) {
+		got = append(got, string(record.ID))
+		return true, nil
+	})
+	if err != nil || truncated || fmt.Sprint(got) != "[d]" {
+		t.Fatalf("after scan=%v truncated=%v err=%v", got, truncated, err)
+	}
+	truncated, err = collection.ScanDocumentIDsFunc(2, func([]byte) (bool, error) { return false, nil })
+	if err != nil || truncated {
+		t.Fatalf("callback stop truncated=%v err=%v", truncated, err)
+	}
+	stop := errors.New("scan callback failure")
+	_, err = collection.ScanDocumentsFunc(2, func(collections.DocumentRecord) (bool, error) { return false, stop })
+	if !errors.Is(err, stop) {
+		t.Fatalf("callback error=%v", err)
+	}
+	if value, err := collection.Get([]byte("a")); err != nil || string(value) != `{"id":"a"}` {
+		t.Fatalf("copy ownership value=%s err=%v", value, err)
+	}
+	materializer, err := collection.NewStoredDocumentJSONMaterializer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := []byte(`{"id":"a"}`)
+	owned, err := materializer.StoredDocumentJSON(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owned[0] = '!'
+	if raw[0] != '{' {
+		t.Fatal("materializer returned borrowed JSON")
+	}
+	if err = materializer.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
