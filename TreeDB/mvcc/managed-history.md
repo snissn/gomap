@@ -25,6 +25,13 @@ not wait synchronously for user-held cuts. Physical deletion still requires
 unreachability; neither the logical discard floor nor segment age authorizes
 removing live persistent value-log data.
 
+Shared namespace, pager and retained-metadata cleanup uses the ordinary original
+owner paths. These paths close physical handles and detach borrowed aliases
+before refunding their original charges; a failed physical close keeps its
+original custody and admission. Unused separate work-priced close/enrollment
+frontends have been removed. PRIMARY construction and promotion remain separate
+format-owner operations until their representation is retired.
+
 `TestManagedHistoryFloorAdvancePreservesOpenCut` covers all production durability
 profiles with inline and forced-pointer values. The tombstone crash-order test
 uses fresh child processes at the successful floor and delete sync boundaries.
