@@ -259,10 +259,11 @@ func (w *cowReadWorkspace) codec(shape valuelog.COWRecordShape) (*cowReadCodec, 
 		return nil, err
 	}
 	c := &cowReadCodec{id: shape.DictID, codec: shape.Codec, decoder: decoder, definition: owner, input: make([]byte, input), raw: make([]byte, raw), lease: lease}
-	if old := w.codecs[slot]; old != nil {
+	old := w.codecs[slot]
+	w.codecs[slot] = c
+	if old != nil {
 		old.close()
 	}
-	w.codecs[slot] = c
 	return c, nil
 }
 
@@ -273,17 +274,24 @@ func (c *cowReadCodec) close() {
 	c.raw = nil
 	c.definition.Close()
 	c.definition = nil
-	c.lease.Close()
+	lease := c.lease
+	c.lease = nil
+	lease.Close()
 }
 func (w *cowReadWorkspace) close() {
 	if w == nil {
 		return
 	}
 	if w.point != nil {
-		w.point.lease.Close()
+		point := w.point
 		w.point = nil
+		lease := point.lease
+		point.lease = nil
+		point = nil
+		lease.Close()
 	}
-	for _, c := range w.codecs {
+	for i, c := range w.codecs {
+		w.codecs[i] = nil
 		if c != nil {
 			c.close()
 		}
@@ -291,11 +299,18 @@ func (w *cowReadWorkspace) close() {
 	w.codecs = nil
 	w.input = nil
 	w.output = nil
-	for a := w.allocations; a != nil; a = a.next {
-		a.lease.Close()
+	for w.allocations != nil {
+		a := w.allocations
+		w.allocations = a.next
+		lease := a.lease
+		a.next, a.lease = nil, nil
+		a = nil
+		lease.Close()
 	}
-	w.allocations = nil
-	w.lease.Close()
+	w.snapshot = nil
+	lease := w.lease
+	w.lease = nil
+	lease.Close()
 }
 
 func (w *cowReadWorkspace) read(ptr page.ValuePtr, leaf bool, dst []byte) ([]byte, error) {
