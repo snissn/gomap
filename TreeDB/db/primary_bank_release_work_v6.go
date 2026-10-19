@@ -24,14 +24,17 @@ func releasePrimaryBankConstructionV6(claims *primaryBankConstructionV5) (primar
 		claims.releaseMu.Unlock()
 		return empty, false, result
 	}
-	if claims.owner == nil || claims.idx == nil || claims.idx.primary != claims.owner.arena {
+	// Construction retained this exact owner. Terminal index teardown may
+	// already have withdrawn idx.primary while this independent edge is live.
+	if claims.owner == nil || claims.owner.arena == nil {
 		return fail(rootpublication.ErrResourceOwnership)
 	}
+	a := claims.owner.arena
 	claims.releasePhase = 1
 	for claims.releaseIndex < len(claims.refs) {
 		i := claims.releaseIndex
 		if claims.refs[i] != (primaryarena.Ref{}) {
-			consumed, err := claims.idx.primary.Drop(claims.refs[i], nil)
+			consumed, err := a.Drop(claims.refs[i], nil)
 			if err != nil {
 				return fail(err)
 			}

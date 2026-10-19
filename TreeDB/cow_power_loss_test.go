@@ -186,6 +186,9 @@ func TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts(t *testing.
 						if errors.As(closeErr, &pathErr) {
 							t.Logf("original cleanup operation=%s path=%s error=%v", pathErr.Op, pathErr.Path, pathErr.Err)
 						}
+						if errors.Is(closeErr, rootpublication.ErrResourceOwnership) || errors.Is(closeErr, primaryarena.ErrStale) {
+							t.Errorf("interrupted original producer retained failed physical cleanup: %v", closeErr)
+						}
 						if !errors.Is(closeErr, cutErr) && !errors.Is(closeErr, backenddb.ErrRecoveryRequired) {
 							t.Errorf("interrupted original producer teardown: %v", closeErr)
 						}
