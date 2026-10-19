@@ -259,6 +259,27 @@ func (b *nativeEngineBuild) materializeDomains(group nativeOrderedRootBuilder) e
 		b.failure = err
 		return err
 	}
+	if len(b.typed) != 0 {
+		// All synchronous materialization, codec Close, resource validation and
+		// root construction have ended. Only retained outputs and the original
+		// two handoff promises survive. Do not keep the operation peak charged
+		// until this captured engine's asynchronous last-reference cleanup: a
+		// following checkpoint needs the SAME sequential workspace again.
+		workspace, err := nativeTypedBuildWorkspaceCapacity()
+		if err != nil || workspace > b.allocation.floor {
+			b.failure = memtable.ErrCOWCapacity
+			return b.failure
+		}
+		for _, input := range b.typed {
+			input.work.input = nativeTypedMaterializeInput{}
+		}
+		floor := b.allocation.floor - workspace
+		if err = b.allocation.parent.ShrinkNativeBytes(workspace, floor); err != nil {
+			b.failure = err
+			return err
+		}
+		b.allocation.floor = floor
+	}
 	b.complete = true
 	return nil
 }

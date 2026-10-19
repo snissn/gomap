@@ -2,6 +2,37 @@ package memtable
 
 import "unsafe"
 
+// ShrinkNativeBytes returns an ended phase's credit from the SAME original
+// reservation. The caller must first drop every allocation/alias covered by
+// bytes. retainedBytes protects the remaining ledger and construction promises;
+// neither the remaining receipt nor any split child's ownership changes.
+// bytes is the exact credit included in the original aggregate reservation,
+// rather than a new independently rounded allocation. Like Resize's shrink,
+// this needs no admission and remains valid after budget Close.
+func (l *COWExternalLease) ShrinkNativeBytes(bytes, retainedBytes uint64) error {
+	if l == nil {
+		return ErrCOWClosed
+	}
+	floor, ok := cowAdd(retainedBytes, cowAllocation(uint64(unsafe.Sizeof(COWExternalLease{}))))
+	if !ok {
+		return ErrCOWCapacity
+	}
+	b := l.budget
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if l.closed {
+		return ErrCOWClosed
+	}
+	if !cowFits(l.charge, floor, bytes) {
+		return ErrCOWCapacity
+	}
+	l.charge -= bytes
+	b.stats.TotalBytes -= bytes
+	b.stats.ReservedBytes -= bytes
+	b.stats.ExternalBytes -= bytes
+	return nil
+}
+
 // SplitNativeBytes transfers already admitted bytes from an original native
 // build reservation to an independent child receipt. It performs no new byte
 // admission, even after budget Close. The parent must remain live and retain

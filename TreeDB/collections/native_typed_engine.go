@@ -99,7 +99,8 @@ type nativeTypedBuildWork struct {
 }
 
 // prepareTyped adopts every original partial before observing its error. The
-// same parent retains shared workspace and pointer arrays until final finish.
+// same parent retains shared workspace through materialization; pointer arrays
+// and retained outputs remain covered until final finish.
 func (b *nativeEngineBuild) prepareTyped(e *nativeEngineVersion, collections int, basis *backenddb.Snapshot, capture *backenddb.StableResourceCaptureLease, group *backenddb.RootPublicationBuildGroup) error {
 	if collections == 0 {
 		return nil
