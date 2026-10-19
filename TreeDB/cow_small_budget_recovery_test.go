@@ -3,7 +3,6 @@ package treedb
 import (
 	"errors"
 	"fmt"
-	"strconv"
 	"testing"
 	"unsafe"
 
@@ -11,8 +10,8 @@ import (
 )
 
 // A valid small caller limit must admit the actual original queue and journal
-// arrays, drain a full queue outside publication gates, refuse new work under
-// producer pressure before assignment, and drain using reserved maintenance.
+// arrays, coalesce raw coverage, refuse new work under producer pressure before
+// assignment, and seal the accepted endpoint using reserved maintenance.
 func TestCOWPublicSmallBudgetAcceptedPrefixDrainsAndReopens(t *testing.T) {
 	for _, profile := range cowPublicContractProfiles {
 		t.Run(string(profile), func(t *testing.T) {
@@ -24,6 +23,10 @@ func TestCOWPublicSmallBudgetAcceptedPrefixDrainsAndReopens(t *testing.T) {
 				o.DisableBackgroundPrune = true
 				o.BackgroundCheckpointInterval = -1
 			})
+			prefix, initial, err := database.backend.PrivateCOWAcceptedPrefix(database.txnOwner)
+			if err != nil {
+				t.Fatal(err)
+			}
 			var last string
 			for accepted := 0; accepted < 512; accepted++ {
 				last = fmt.Sprint(accepted)
@@ -31,9 +34,12 @@ func TestCOWPublicSmallBudgetAcceptedPrefixDrainsAndReopens(t *testing.T) {
 					t.Fatalf("bounded queue did not drain at write %d: %v", accepted, err)
 				}
 			}
-			runs, err := strconv.ParseUint(database.Stats()["treedb.cache.checkpoint.runs"], 10, 64)
-			if err != nil || runs == 0 {
-				t.Fatalf("full queue did not checkpoint outside publication gates: runs=%d err=%v", runs, err)
+			accepted := prefix.LogicalFrontiers()
+			if accepted.V != initial.V+512 || accepted.S != initial.S {
+				t.Fatalf("raw coverage did not coalesce before checkpoint: initial=%+v accepted=%+v", initial, accepted)
+			}
+			if profile != ProfileNoWALFast && accepted.C != initial.C+512 {
+				t.Fatalf("raw command coverage=%d want %d", accepted.C, initial.C+512)
 			}
 			cache := database.cached
 			stats := cache.COWMemoryStats()
@@ -53,8 +59,14 @@ func TestCOWPublicSmallBudgetAcceptedPrefixDrainsAndReopens(t *testing.T) {
 			if database.backend.CommandWALNextLSN() != next {
 				t.Fatal("capacity refusal assigned a canonical command")
 			}
+			if refused := prefix.LogicalFrontiers(); refused != accepted {
+				t.Fatalf("capacity refusal changed accepted frontiers: before=%+v after=%+v", accepted, refused)
+			}
 			if err := database.Checkpoint(); err != nil {
 				t.Fatalf("reserved maintenance could not drain under producer pressure: %v", err)
+			}
+			if sealed := prefix.LogicalFrontiers(); sealed.S.LogicalSequence != accepted.V || sealed.S.CanonicalLSN != accepted.C {
+				t.Fatalf("reserved maintenance did not seal accepted endpoint: accepted=%+v sealed=%+v", accepted, sealed)
 			}
 			pressure.Close()
 			if got, err := database.Get([]byte("bounded")); err != nil || string(got) != last {

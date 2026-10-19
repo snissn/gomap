@@ -30,7 +30,7 @@ func TestDurabilityProfilePublicEntrypointInventory(t *testing.T) {
 		"InitConditionalTxn", "InitConditionalTxnWithSnapshot", "Iterator", "LeafGenerationGC",
 		"LeafGenerationPack", "LeafGenerationPackFromPlan", "LeafGenerationPackRunOnce",
 		"LeafGenerationPlan", "MaintenancePhase", "NewBatch", "NewBatchWithSize",
-		"NewConditionalTxn", "NewConditionalTxnWithSnapshot", "NewMVCCAdmission", "PreflightMVCCPrune", "Print", "ResolvedProfile",
+		"NativeSemanticBackend", "NewConditionalTxn", "NewConditionalTxnWithSnapshot", "NewMVCCAdmission", "PreflightMVCCPrune", "Print", "ResolvedProfile",
 		"ReverseIterator", "SeekGE", "SeekGEVersionRange", "Set", "SetMaintenancePhase", "SetPointWithMVCCInput", "SetNativeSemanticPublication", "SetSync", "Stats", "SupportsMVCCReadCut",
 		"Update", "UpdateSync", "VacuumIndexOnline", "VacuumOnlineStats", "ValueLogGC", "ValueLogRewriteOnline",
 	}
@@ -62,6 +62,9 @@ func TestDurabilityProfilePublicEntrypointInventory(t *testing.T) {
 		profileInventoryRequireBody(t, publicBodies, "(*DB).SeekGEVersionRange", fragment)
 	}
 	nativeBodies := profileInventoryFunctionBodies(t, filepath.Join(treeDBDir, "native_semantic.go"))
+	for _, fragment := range []string{"db.captureReadOwners()", "backend.ActivateNativeSemanticOwner()"} {
+		profileInventoryRequireBody(t, nativeBodies, "(*DB).NativeSemanticBackend", fragment)
+	}
 	for _, name := range []string{"CaptureNativeSemanticState", "SetNativeSemanticPublication"} {
 		profileInventoryRequireBody(t, nativeBodies, "(*DB)."+name, "db.captureReadOwners()")
 		profileInventoryRequireBody(t, nativeBodies, "(*DB)."+name, "cached.COWMode()")

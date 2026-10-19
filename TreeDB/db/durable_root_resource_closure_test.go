@@ -572,10 +572,7 @@ func TestCaptureDurableRootDestructiveMutationUsesFullFallback3928(t *testing.T)
 	if work.AppendOnlyFastPath != 0 || work.DestructiveFallbacks != 1 || work.FullClosureValidations != 1 || work.RemovedObligations != 1 || work.SourceObligationsInspected == 0 {
 		t.Fatalf("destructive work=%+v want measured full fallback", work)
 	}
-	descriptors := mustStableResourceDescriptors(t, candidate)
-	if len(descriptors) != 1 || !slices.Equal(descriptors[0].LogicalObligations(), []rootpublication.StableLogicalObligation{keep}) {
-		t.Fatalf("destructive closure=%+v want retained obligation only", descriptors)
-	}
+	assertDurableRootClosureObligations3928(t, candidate, []rootpublication.StableLogicalObligation{keep})
 }
 
 func TestCaptureDurableRootMixedProducerFallsBackAndValidates3928(t *testing.T) {
@@ -603,10 +600,7 @@ func TestCaptureDurableRootMixedProducerFallsBackAndValidates3928(t *testing.T) 
 	if work.AppendOnlyFastPath != 0 || work.AppendOnlyFallbacks != 1 || work.FullClosureValidations != 1 {
 		t.Fatalf("mixed producer work=%+v want fail-closed generic fallback", work)
 	}
-	descriptors := mustStableResourceDescriptors(t, candidate)
-	if len(descriptors) != 1 || !slices.Equal(descriptors[0].LogicalObligations(), []rootpublication.StableLogicalObligation{baseObligation, announced, unannounced}) {
-		t.Fatalf("mixed producer closure=%+v want exact validated union", descriptors)
-	}
+	assertDurableRootClosureObligations3928(t, candidate, []rootpublication.StableLogicalObligation{baseObligation, announced, unannounced})
 }
 
 func TestCaptureDurableRootAppendMutationOmittedRemovalFallsBack3928(t *testing.T) {
@@ -632,10 +626,7 @@ func TestCaptureDurableRootAppendMutationOmittedRemovalFallsBack3928(t *testing.
 		t.Fatal(err)
 	}
 	defer candidate.Release()
-	descriptors := mustStableResourceDescriptors(t, candidate)
-	if len(descriptors) != 1 || !slices.Equal(descriptors[0].LogicalObligations(), []rootpublication.StableLogicalObligation{keep, added}) {
-		t.Fatalf("incomplete append mutation closure=%+v want exact fallback result", descriptors)
-	}
+	assertDurableRootClosureObligations3928(t, candidate, []rootpublication.StableLogicalObligation{keep, added})
 	work := timing.FinalizeCandidateResourceWork
 	if work.AppendOnlyFastPath != 0 || work.AppendOnlyFallbacks != 1 || work.FullClosureValidations != 1 {
 		t.Fatalf("incomplete append mutation work=%+v want exact validated fallback", work)
@@ -660,12 +651,35 @@ func TestCaptureDurableRootEmptyMutationCannotRetainStaleObligation3928(t *testi
 		t.Fatal(err)
 	}
 	defer candidate.Release()
-	descriptors := mustStableResourceDescriptors(t, candidate)
-	if len(descriptors) != 1 || !slices.Equal(descriptors[0].LogicalObligations(), []rootpublication.StableLogicalObligation{keep}) {
-		t.Fatalf("empty mutation closure=%+v want stale obligation filtered", descriptors)
-	}
+	assertDurableRootClosureObligations3928(t, candidate, []rootpublication.StableLogicalObligation{keep})
 	work := timing.FinalizeCandidateResourceWork
 	if work.AppendOnlyFastPath != 0 || work.AppendOnlyFallbacks != 1 || work.FullClosureValidations != 1 {
 		t.Fatalf("empty incomplete mutation work=%+v want exact validated fallback", work)
+	}
+}
+
+func assertDurableRootClosureObligations3928(t *testing.T, set *rootpublication.StableResourceSet, want []rootpublication.StableLogicalObligation) {
+	t.Helper()
+	diagnostics, err := set.AcquirePhysicalDiagnostics()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := diagnostics.CloseWithError(); err != nil {
+			t.Fatal(err)
+		}
+	}()
+	if physical := diagnostics.Physical(); len(physical) != 1 {
+		t.Fatalf("closure physical resources=%d want 1", len(physical))
+	}
+	var got []rootpublication.StableLogicalObligation
+	if err := diagnostics.WalkLogicalObligations(func(_ rootpublication.StableResourcePhysicalDescriptor, obligation rootpublication.StableLogicalObligation) error {
+		got = append(got, obligation)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("closure obligations=%+v want %+v", got, want)
 	}
 }

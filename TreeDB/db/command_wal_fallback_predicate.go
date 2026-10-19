@@ -1,6 +1,9 @@
 package db
 
-import "context"
+import (
+	"context"
+	"fmt"
+)
 
 // CommandWALCheckpointFallbackNeedsRefresh samples the real selectable-root
 // convergence predicate against the caller's exact complete-cut basis. This
@@ -32,7 +35,7 @@ func (db *DB) CommandWALCheckpointFallbackNeedsRefresh(basis StateToken) (bool, 
 	state := db.state.Load()
 	current, live := stateTokenFromState(state)
 	if !live || current != basis {
-		return false, ErrRootPublicationBasisMismatch
+		return false, fmt.Errorf("%w: fallback basis=%+v current=%+v", ErrRootPublicationBasisMismatch, basis, current)
 	}
 	if db.durableRoot.slot > 1 {
 		return false, ErrRootPublicationBasisMismatch

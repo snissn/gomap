@@ -196,7 +196,10 @@ func newPreparedRootCandidateWithExtensions(spec CandidateSpec, extensions exten
 		transferred = true
 		return &original.dataCandidate, nil
 	}
-	return &candidate, nil
+	// Only the generic route needs a separate candidate allocation. Selected
+	// DATA and PRIMARY candidates already live in their original transaction.
+	result := candidate
+	return &result, nil
 }
 
 func validateCandidateDurableRoot(spec CandidateSpec, transaction *DurableRootTransaction) error {

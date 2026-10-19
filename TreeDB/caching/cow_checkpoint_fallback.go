@@ -2,6 +2,7 @@ package caching
 
 import (
 	"context"
+	"fmt"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
@@ -54,7 +55,7 @@ func (db *DB) refreshCOWCheckpointFallback() (retErr error) {
 	}
 	frontiers := c.prefix.LogicalFrontiers()
 	if cut.logicalSeq != frontiers.V || cut.visibleCommandLSN != frontiers.C || cut.basis.logicalSeq != frontiers.S.LogicalSequence || cut.logicalSeq < frontiers.S.LogicalSequence || cut.visibleCommandLSN < frontiers.S.CanonicalLSN {
-		return backenddb.ErrRootPublicationBasisMismatch
+		return fmt.Errorf("%w: fallback cut logical=%d canonical=%d basis=%d frontiers=%+v", backenddb.ErrRootPublicationBasisMismatch, cut.logicalSeq, cut.visibleCommandLSN, cut.basis.logicalSeq, frontiers)
 	}
 	if !needed {
 		return nil
