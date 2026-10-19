@@ -4407,6 +4407,9 @@ func (c *Collection) CreateIndex(def IndexDefinition) (*CollectionMeta, error) {
 		return nil, errCollectionNil
 	}
 	if c.nativeJSON != nil {
+		if c.manager.isClosing() {
+			return nil, backenddb.ErrClosed
+		}
 		return c.nativeJSON.mutateIndexes(c.meta.Name, &def, nil, false)
 	}
 	if c.db == nil {
@@ -4798,6 +4801,9 @@ func (c *Collection) dropIndexes(names map[string]struct{}, all bool) (*Collecti
 		return nil, errCollectionNil
 	}
 	if c.nativeJSON != nil {
+		if c.manager.isClosing() {
+			return nil, backenddb.ErrClosed
+		}
 		return c.nativeJSON.mutateIndexes(c.meta.Name, nil, names, all)
 	}
 	if c.db == nil {
