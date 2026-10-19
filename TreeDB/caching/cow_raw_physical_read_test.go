@@ -11,6 +11,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+	"github.com/snissn/gomap/TreeDB/tree"
 )
 
 // Real logged leaves exercise raw ZSTD compatibility as well as shared-basis
@@ -89,6 +90,20 @@ func TestCOWRawBasisWorkspaceLifetime(t *testing.T) {
 		t.Fatalf("successor admission refusal: %v", err)
 	}
 	pressure.Close()
+	if got, err := a.Get([]byte("a000")); err != nil || !bytes.Equal(got, want) {
+		t.Fatalf("initial physical leaf: %d %v", len(got), err)
+	}
+	basis.readMu.Lock()
+	compressedLeaf := false
+	for _, codec := range basis.reader.codecs {
+		if codec != nil && codec.codec == valuelog.BlockCodecZSTD && codec.id == 0 {
+			compressedLeaf = true
+		}
+	}
+	basis.readMu.Unlock()
+	if !compressedLeaf {
+		t.Fatal("fixture did not read a real dictionary-free ZSTD leaf before pointer decoding")
+	}
 	check := func(s *Snapshot) {
 		t.Helper()
 		got, err := s.Get([]byte("a000"))
@@ -107,16 +122,28 @@ func TestCOWRawBasisWorkspaceLifetime(t *testing.T) {
 	}
 	check(a)
 	check(b)
-	workspace, point, receipt := basis.reader, basis.reader.point, basis.reader.lease
-	compressed := false
-	for _, codec := range workspace.codecs {
-		if codec != nil && codec.codec == valuelog.BlockCodecZSTD && codec.id == 0 {
-			compressed = true
+	// Both actual leaf and value records require ZSTD. A second generic decoder
+	// envelope cannot fit the default producer tranche; both reads must share
+	// the original basis codec without changing the caller's file resolver.
+	entry, err := a.GetEntryExact([]byte("p"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, _, err := basis.snapshot.PinnedValueLogFile(entry.ValuePtr.FileID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shape, err := valuelog.InspectCOWRecord(file, entry.ValuePtr, db.cow.readLimits())
+	if err != nil || !shape.Compressed || shape.DictID != 0 || shape.Codec != valuelog.BlockCodecZSTD {
+		t.Fatalf("real pointer record shape: %+v %v", shape, err)
+	}
+	file = nil
+	for _, snapshot := range []*Snapshot{a, b} {
+		if len(snapshot.cowReader.codecs) != 0 {
+			t.Fatal("caller duplicated the basis-owned dictionary-free decoder")
 		}
 	}
-	if !compressed {
-		t.Fatal("fixture did not read a real dictionary-free ZSTD leaf")
-	}
+	workspace, point, receipt := basis.reader, basis.reader.point, basis.reader.lease
 	token, ok := basis.snapshot.StateToken()
 	if !ok {
 		t.Fatal("missing basis token")
@@ -162,6 +189,27 @@ func TestCOWRawBasisWorkspaceLifetime(t *testing.T) {
 	if b.cowReader == nil || b.cowReader.point != nil {
 		t.Fatal("raw point/successor duplicated physical traversal scratch in caller cut")
 	}
+	// This pointer is not in the retained disk Snapshot. Reusing its decoder
+	// must still resolve the file and visibility through the newer caller cut.
+	pendingValue := bytes.Repeat([]byte("pending-pointer-value"), 128)
+	if err := db.Set([]byte("q"), pendingValue); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := db.acquireCOWSnapshotWithError()
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotPending, readErr := pending.Get([]byte("q"))
+	if readErr != nil || !bytes.Equal(gotPending, pendingValue) {
+		t.Errorf("pending pointer original resolver: %d %v", len(gotPending), readErr)
+	}
+	if _, err := b.Get([]byte("q")); !errors.Is(err, tree.ErrKeyNotFound) {
+		t.Errorf("old cut observed pending pointer: %v", err)
+	}
+	if err := pending.Close(); err != nil {
+		t.Fatal(err)
+	}
+	pending, gotPending = nil, nil
 	if err := db.Set([]byte("a000"), []byte("new")); err != nil {
 		t.Fatal(err)
 	}

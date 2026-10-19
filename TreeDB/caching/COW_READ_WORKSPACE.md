@@ -9,9 +9,13 @@ The caller holds its read lifecycle and `cowReadMu`, then takes `basis.readMu`.
 Inspection uses the caller's original limits and the basis Snapshot's pinned
 file. Inline point values are copied into the caller's admitted output before
 unlocking. Successor keys and inline values are copied into owned results there.
-Winning pointer scalars are decoded after unlocking through the original caller
-workspace. Dictionary shapes retry the physical lookup through that original
-workspace, preserving its definition/resource ownership. Native root reads keep
+Winning pointer scalars resolve their file and record shape through the original
+caller cut. Compressed dictionary-free values then reuse the same basis decoder
+as physical leaves: the file, pointer and shape are borrowed only for that read,
+and the decoded value is copied into caller-admitted output before unlocking.
+Uncompressed and dictionary values retain their original caller workspace path.
+Dictionary leaves retry the physical lookup through that original workspace,
+preserving its definition/resource ownership. Native root reads keep
 their existing narrower codec policy independently of raw reads.
 
 The existing original budget admits workspace, traversal scratch and decoder

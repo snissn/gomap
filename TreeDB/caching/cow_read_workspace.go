@@ -352,7 +352,33 @@ func (w *cowReadWorkspace) read(ptr page.ValuePtr, leaf bool, dst []byte) ([]byt
 	if w.basis != nil && shape.Compressed && (shape.DictID != 0 || (shape.Codec != valuelog.BlockCodecSnappy && shape.Codec != valuelog.BlockCodecLZ4)) {
 		return nil, valuelog.ErrCOWReadUnsupported
 	}
+	if !leaf && shape.Compressed && shape.DictID == 0 && w.snapshot != nil {
+		return w.readSharedValue(f, ptr, shape)
+	}
 	return w.readInspected(f, ptr, shape, leaf, dst)
+}
+
+// The caller's admitted read owns f and the inspected pointer; neither escapes
+// this call. Only dictionary-free codec/input/raw backing belongs to the basis.
+// Copy into the original caller workspace before releasing shared scratch.
+func (w *cowReadWorkspace) readSharedValue(f *os.File, ptr page.ValuePtr, shape valuelog.COWRecordShape) ([]byte, error) {
+	basis := w.snapshot.cowCut.basis
+	basis.readMu.Lock()
+	defer basis.readMu.Unlock()
+	shared, err := basis.physicalWorkspaceLocked(w.budget, w.limits)
+	if err != nil {
+		return nil, err
+	}
+	value, err := shared.readInspected(f, ptr, shape, false, nil)
+	if err != nil {
+		return nil, err
+	}
+	if err = w.grow(0, uint64(len(value))); err != nil {
+		return nil, err
+	}
+	out := w.output[:len(value)]
+	copy(out, value)
+	return out, nil
 }
 
 // readInspected shares the maintained admission/codec/CRC path. The inspector
