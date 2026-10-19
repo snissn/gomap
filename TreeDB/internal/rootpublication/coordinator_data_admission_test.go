@@ -4,10 +4,136 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 )
+
+func TestDATAAbsentClosureRetainsOriginalOwnerAndMixedPublication(t *testing.T) {
+	for _, physicalIndex := range []int{-1, 0, 1} {
+		name := "all_absent"
+		if physicalIndex == 0 {
+			name = "physical_then_absent"
+		} else if physicalIndex == 1 {
+			name = "absent_then_physical"
+		}
+		t.Run(name, func(t *testing.T) {
+			var owner retainedalloc.Owner
+			owner.Initialize(0)
+			lineage := durableLineage(73)
+			fixtures := []*durableRootTransactionFixture{
+				newDurableRootTransactionFixtureWithMetadata(t, lineage, 2, false, &owner),
+				newDurableRootTransactionFixtureWithMetadata(t, lineage, 3, false, &owner),
+			}
+			for _, fixture := range fixtures {
+				// The fixture's empty descriptor has no external edges. Keep the
+				// original admitted DATA terminal while modeling an absent closure.
+				if err := fixture.resources.releaseFrom(ResourceOwnerCandidate); err != nil {
+					t.Fatal(err)
+				}
+				fixture.resources, fixture.candidate.extensions.resourceSet = nil, nil
+			}
+			registry := NewIdentityPinRegistry()
+			defer registry.Close()
+			if physicalIndex >= 0 {
+				file := writeStableResourceFixture(t, t.TempDir(), "owned.bin", "payload")
+				identity, err := StableIdentityFromFile(file)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err = registry.Observe(identity); err != nil {
+					t.Fatal(err)
+				}
+				defer registry.Unobserve(identity)
+				token, err := NewStableResourceToken(StableResourceSpec{MetadataOwner: &owner, PinRegistry: registry, Kind: ResourceIndex, LogicalLane: "db/index", ResourceID: "owned.bin", DiagnosticPath: "owned.bin", Generation: 1, File: file, Frontier: DurableFrontier{Bytes: 7}, Reachability: ReachabilityIndexFile})
+				if err != nil {
+					t.Fatal(err)
+				}
+				builder, err := NewStableResourceSetBuilderWithMetadata(&owner)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err = builder.Add(token); err != nil {
+					t.Fatal(err)
+				}
+				resources, err := builder.Freeze()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err = resources.transfer(ResourceOwnerBuilder, ResourceOwnerCandidate); err != nil {
+					t.Fatal(err)
+				}
+				fixtures[physicalIndex].resources = resources
+				fixtures[physicalIndex].candidate.extensions.resourceSet = resources
+			}
+			if _, err := physicalDurabilityUnion([]*PreparedRootCandidate{fixtures[0].candidate, fixtures[0].candidate}); !errors.Is(err, ErrDurableRootLineage) {
+				t.Fatalf("absent closure bypassed lineage: %v", err)
+			}
+			calls := 0
+			c, err := New(Options{MetadataOwner: &owner, Clock: NewFakeClock(time.Unix(1, 0)), Publisher: PublisherFunc(func(_ context.Context, candidate *PreparedRootCandidate) PublishResult {
+				calls++
+				members := candidate.durableRootGroup().members
+				if len(members) != 2 || members[0] != fixtures[0].tx || members[1] != fixtures[1].tx {
+					return PublishResult{Outcome: PublishAmbiguous, Err: errors.New("lost ordered DATA members")}
+				}
+				resources := candidate.Resources()
+				if (resources == nil) != (physicalIndex < 0) || (resources != nil && (resources.MetadataOwner() != &owner || resources.Len() != 1)) {
+					return PublishResult{Outcome: PublishAmbiguous, Err: errors.New("lost exact mixed physical closure")}
+				}
+				return PublishResult{Outcome: PublishSucceeded}
+			})})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if physicalIndex < 0 {
+				var foreign retainedalloc.Owner
+				foreign.Initialize(0)
+				other := newDurableRootTransactionFixtureWithMetadata(t, lineage, 2, false, &foreign)
+				if err = other.resources.releaseFrom(ResourceOwnerCandidate); err != nil {
+					t.Fatal(err)
+				}
+				other.candidate.extensions.resourceSet = nil
+				if err = c.Enqueue(context.Background(), other.candidate); !errors.Is(err, ErrResourceOwnership) || other.tx.Owner() != ResourceOwnerCandidate || other.activates.Load() != 0 {
+					t.Fatalf("foreign absent closure changed custody: %v", err)
+				}
+				if err = other.candidate.Abandon(); err != nil || foreign.Bytes() != 0 {
+					t.Fatalf("foreign terminal cleanup: %v bytes=%d", err, foreign.Bytes())
+				}
+			}
+			for _, fixture := range fixtures {
+				if err = c.Enqueue(context.Background(), fixture.candidate); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err = c.WaitThrough(context.Background(), 3); err != nil {
+				t.Fatal(err)
+			}
+			if calls != 1 || fixtures[0].consumes.Load() != 1 || fixtures[1].consumes.Load() != 1 || fixtures[0].tx.Owner() != ResourceOwnerReleased || fixtures[1].tx.Owner() != ResourceOwnerReleased || registry.Stats().ActivePins != 0 {
+				t.Fatal("original DATA members or physical pins did not finish once")
+			}
+			if err = c.Stop(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			handoff, err := c.TakeRecoveryHandoff()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = handoff.ReleaseWithError(); err != nil {
+				t.Fatal(err)
+			}
+			completion, err := c.ReleasePhysicalMetadata()
+			if err != nil {
+				t.Fatal(err)
+			}
+			c, handoff, fixtures = nil, nil, nil
+			completion.Complete()
+			if owner.Bytes() != 0 {
+				t.Fatalf("original owner retained %d bytes", owner.Bytes())
+			}
+		})
+	}
+}
 
 func TestDATAOriginalAdmissionRefusesBeforeTransferAndRefundsTerminal(t *testing.T) {
 	var owner retainedalloc.Owner

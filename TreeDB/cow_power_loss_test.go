@@ -156,6 +156,7 @@ func TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts(t *testing.
 		for _, point := range points {
 			t.Run(fmt.Sprintf("%s/%s", profile, point), func(t *testing.T) {
 				opts := treedb.OptionsFor(profile, t.TempDir())
+				opts.IndexPrimaryDirectory = true // Meta/seal interruption cuts target index.db.primary.
 				opts.MemtableMode = "cow_btree"
 				opts.MemtableShards = 2
 				opts.DisableSideStores = true

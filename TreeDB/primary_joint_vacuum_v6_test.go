@@ -15,6 +15,7 @@ import (
 
 func TestPrimaryJointVacuumV6DefaultOuterLeafMaterializationReaderAndCut(t *testing.T) {
 	opts := OptionsFor(ProfileNoWALFast, t.TempDir())
+	opts.IndexPrimaryDirectory = true
 	if !opts.IndexOuterLeavesInValueLog {
 		t.Fatal("default outer-leaf route lost")
 	}
@@ -101,6 +102,9 @@ func TestPrimaryJointVacuumV6DefaultOuterLeafMaterializationReaderAndCut(t *test
 		t.Fatal(e)
 	}
 	defer cut.Close()
+	if cut.PrimarySizeBytes() == 0 {
+		t.Fatal("missing captured PRIMARY extent")
+	}
 	for i := 0; i < 4; i++ {
 		if e = d.SetSync([]byte(fmt.Sprintf("after-joint-%d", i)), value); e != nil {
 			t.Fatal(e)

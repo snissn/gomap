@@ -248,10 +248,17 @@ func (c *Coordinator) enqueueLocked(candidate *PreparedRootCandidate, supersede 
 	if candidate == nil {
 		return enqueueDecision{}, fmt.Errorf("%w: nil candidate", ErrInvalidCandidate)
 	}
-	// Selected publication has one original metadata owner, including an empty
-	// physical closure. Refuse missing/foreign sets before any union allocation.
-	if c.metadataOwner != nil && candidate.resourceSet().MetadataOwner() != c.metadataOwner {
-		return enqueueDecision{}, ErrResourceOwnership
+	// A nonnil closure always carries its original metadata owner, including
+	// an empty directory lease. An absent DATA closure instead keeps that owner
+	// in the SAME admitted transaction terminal; it needs no empty descriptor.
+	if c.metadataOwner != nil {
+		if set := candidate.resourceSet(); set != nil {
+			if set.MetadataOwner() != c.metadataOwner {
+				return enqueueDecision{}, ErrResourceOwnership
+			}
+		} else if transaction := candidate.DurableRoot(); transaction == nil || transaction.isConstructedPrimaryV6() || transaction.metadataOwnerV1() != c.metadataOwner {
+			return enqueueDecision{}, ErrResourceOwnership
+		}
 	}
 	if candidate.frontier.commitSeq <= c.visible.commitSeq ||
 		(c.visible.commitSeq != 0 && !candidate.frontier.Dominates(c.visible)) {

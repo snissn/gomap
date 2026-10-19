@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"runtime"
 	"testing"
 )
 
@@ -32,7 +33,17 @@ func TestRetainedViewMaintenanceRefreshAndClose(t *testing.T) {
 			if err := database.Checkpoint(); err != nil {
 				t.Fatal(err)
 			}
-			if err := database.VacuumIndexOnline(context.Background()); err != nil {
+			before, ok := database.backend.StateToken()
+			if !ok {
+				t.Fatal("missing pre-vacuum state token")
+			}
+			err = database.VacuumIndexOnline(context.Background())
+			if runtime.GOOS == "windows" {
+				after, valid := database.backend.StateToken()
+				if !errors.Is(err, errVacuumUnsupported) || !valid || after != before {
+					t.Fatalf("unsupported retained-view maintenance changed state: %v", err)
+				}
+			} else if err != nil {
 				t.Fatalf("retained-view maintenance: %v", err)
 			}
 			if got, err := old.Get([]byte("key")); err != nil || string(got) != "opening" {
@@ -98,10 +109,22 @@ func TestMinimumCapacityCheckpointMakesProgress(t *testing.T) {
 				t.Fatal(err)
 			}
 			inventory("first checkpoint")
-			if err := database.VacuumIndexOnline(context.Background()); err != nil {
-				t.Fatal(err)
+			before, ok := database.backend.StateToken()
+			if !ok {
+				t.Fatal("missing pre-vacuum state token")
 			}
-			inventory("vacuum refreshed")
+			err = database.VacuumIndexOnline(context.Background())
+			if runtime.GOOS == "windows" {
+				after, valid := database.backend.StateToken()
+				if !errors.Is(err, errVacuumUnsupported) || !valid || after != before {
+					t.Fatalf("unsupported minimum-capacity vacuum changed state: %v", err)
+				}
+				inventory("vacuum refused without publication")
+			} else if err != nil {
+				t.Fatal(err)
+			} else {
+				inventory("vacuum refreshed")
+			}
 			if got, err := old.Get([]byte("key")); err != nil || string(got) != "opening" {
 				t.Fatalf("minimum-capacity old view=%q error=%v", got, err)
 			}

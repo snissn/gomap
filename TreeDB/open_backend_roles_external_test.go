@@ -52,6 +52,7 @@ func TestBackendFactoryRolesLegacyLifecycle(t *testing.T) {
 		for _, factory := range factories {
 			t.Run(fmt.Sprintf("%s/%s", profile, factory.name), func(t *testing.T) {
 				opts := backendRoleOptions(t, profile)
+				opts.IndexPrimaryDirectory = true // This lifecycle asserts PRIMARY publication.
 				backend, cleanup, stats, err := factory.open(opts)
 				if err != nil {
 					t.Fatal(err)

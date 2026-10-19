@@ -1032,7 +1032,11 @@ func (db *DB) captureDurableRootResourcesFromBaseWithRefCountsV1(idx *indexGen, 
 	if metadata == nil {
 		metadata = additional.MetadataOwner()
 	}
-	if metadata != nil {
+	// Absence of external resources needs no descriptor owner. In particular,
+	// importing nil would manufacture an admitted empty closure on every DATA
+	// write. Every nonnil input, including an empty directory lease, still goes
+	// through the original import and release boundaries.
+	if metadata != nil && base != nil {
 		imported, importErr := rootpublication.ImportStableResourceSetMetadata(metadata, base)
 		if importErr != nil {
 			return nil, fmt.Errorf("admit current root metadata: %w", importErr)
@@ -1041,7 +1045,9 @@ func (db *DB) captureDurableRootResourcesFromBaseWithRefCountsV1(idx *indexGen, 
 		defer func(original *rootpublication.StableResourceSet) {
 			retErr = errors.Join(retErr, db.retainResourceCleanupError(original.ReleaseWithError()))
 		}(base)
-		imported, importErr = rootpublication.ImportStableResourceSetMetadata(metadata, additional)
+	}
+	if metadata != nil && additional != nil {
+		imported, importErr := rootpublication.ImportStableResourceSetMetadata(metadata, additional)
 		if importErr != nil {
 			return nil, fmt.Errorf("admit additional root metadata: %w", importErr)
 		}
@@ -1051,7 +1057,9 @@ func (db *DB) captureDurableRootResourcesFromBaseWithRefCountsV1(idx *indexGen, 
 		}(additional)
 	}
 	var builder *rootpublication.StableResourceSetBuilder
-	if metadata != nil {
+	// PRIMARY construction binds an explicit resource set. Ordinary DATA keeps
+	// its original admitted transaction terminal even with no external closure.
+	if metadata != nil && idx != nil && idx.primary != nil {
 		var buildErr error
 		builder, buildErr = rootpublication.NewStableResourceSetBuilderWithMetadata(metadata)
 		if buildErr != nil {
@@ -1079,7 +1087,15 @@ func (db *DB) captureDurableRootResourcesFromBaseWithRefCountsV1(idx *indexGen, 
 			resources = admitted
 		}
 		if builder == nil {
-			builder = rootpublication.NewStableResourceSetBuilder()
+			if metadata != nil {
+				var err error
+				builder, err = rootpublication.NewStableResourceSetBuilderWithMetadata(metadata)
+				if err != nil {
+					return errors.Join(err, db.releaseCapturedRootResources(resources))
+				}
+			} else {
+				builder = rootpublication.NewStableResourceSetBuilder()
+			}
 		}
 		if err := builder.Merge(resources); err != nil {
 			return errors.Join(err, db.releaseCapturedRootResources(resources))
@@ -1253,7 +1269,14 @@ func (db *DB) captureDurableRootResourcesFromBaseWithRefCountsV1(idx *indexGen, 
 	closureStart := time.Now()
 	if appendOnlyMutation && additional != nil {
 		if builder == nil {
-			builder = rootpublication.NewStableResourceSetBuilder()
+			if metadata != nil {
+				builder, err = rootpublication.NewStableResourceSetBuilderWithMetadata(metadata)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				builder = rootpublication.NewStableResourceSetBuilder()
+			}
 		}
 		appendWork, appendErr := builder.MergeAppendOnlyLogicalObligations(additional, mutation)
 		if timing != nil {

@@ -20,7 +20,9 @@ func TestCOWPublicRetentionRefusalDrainAndResume(t *testing.T) {
 	for _, profile := range cowPublicContractProfiles {
 		t.Run(string(profile), func(t *testing.T) {
 			limits := DefaultCOWMemtableLimits()
-			limits.MaxViews, limits.MaxGenerations = 8, 6
+			// Two held two-shard cuts, the current shards, and their parked
+			// successors all retain actual generation slots before refusal.
+			limits.MaxViews, limits.MaxGenerations = 8, 8
 			limits.MaxSources, limits.MaxResources = 6, 32
 			limits.MaxGenerationBytes = 1 << 20
 			database, opts, blocked := cowPublicContractOpen(t, profile, func(opts *Options) {
@@ -83,8 +85,8 @@ func TestCOWPublicRetentionRefusalDrainAndResume(t *testing.T) {
 				}
 				if stage == 0 && profile == ProfileNoWALFast {
 					originalPrimary, originalRegistry = captureMetadataOwners()
-					if originalPrimary == nil || originalRegistry == nil {
-						t.Fatal("selected producer has no original owner pair")
+					if originalRegistry == nil || (originalPrimary != nil) != opts.IndexPrimaryDirectory {
+						t.Fatalf("selected producer metadata owners: PRIMARY selected=%t primary=%p registry=%p", opts.IndexPrimaryDirectory, originalPrimary, originalRegistry)
 					}
 				}
 				for i, key := range keys {
@@ -94,8 +96,8 @@ func TestCOWPublicRetentionRefusalDrainAndResume(t *testing.T) {
 					}
 				}
 			}
-			if got := cache.COWMemoryStats().Generations; got != 6 {
-				t.Fatalf("two whole predecessor cuts plus current generations=%d, want6", got)
+			if got := cache.COWMemoryStats().Generations; got != 8 {
+				t.Fatalf("two whole predecessor cuts plus current and parked successor generations=%d, want8", got)
 			}
 			var refusedKey, refusedValue []byte
 			var before map[string]string
@@ -190,15 +192,20 @@ func TestCOWPublicRetentionRefusalDrainAndResume(t *testing.T) {
 			closed := cache.COWMemoryStats()
 			zero := closed
 			zero.PeakBytes = 0
+			var primaryBytes uint64
+			primaryClosed := false
+			if originalPrimary != nil {
+				primaryBytes, primaryClosed = originalPrimary.Bytes(), originalPrimary.PhysicalClosed()
+			}
 			if zero != (memtable.COWStats{}) {
 				if profile == ProfileNoWALFast {
 					registry := database.backend.ValueLogIdentityPinRegistry()
-					t.Fatalf("closed integration retained charges: %+v; original primary Bytes=%d PhysicalClosed=%t; original registry Bytes=%d PhysicalClosed=%t Stats=%+v CachedStableDirectoryLinks=%d CleanupError=%v", closed, originalPrimary.Bytes(), originalPrimary.PhysicalClosed(), originalRegistry.Bytes(), originalRegistry.PhysicalClosed(), registry.Stats(), registry.CachedStableDirectoryLinks(), registry.CleanupError())
+					t.Fatalf("closed integration retained charges: %+v; original primary present=%t Bytes=%d PhysicalClosed=%t; original registry Bytes=%d PhysicalClosed=%t Stats=%+v CachedStableDirectoryLinks=%d CleanupError=%v", closed, originalPrimary != nil, primaryBytes, primaryClosed, originalRegistry.Bytes(), originalRegistry.PhysicalClosed(), registry.Stats(), registry.CachedStableDirectoryLinks(), registry.CleanupError())
 				}
 				t.Fatalf("closed integration retained charges: %+v", closed)
 			}
 			if profile == ProfileNoWALFast {
-				t.Logf("COW_TERMINAL_ORIGINAL_OWNERS primary Bytes=%d PhysicalClosed=%t; registry Bytes=%d PhysicalClosed=%t", originalPrimary.Bytes(), originalPrimary.PhysicalClosed(), originalRegistry.Bytes(), originalRegistry.PhysicalClosed())
+				t.Logf("COW_TERMINAL_ORIGINAL_OWNERS primary present=%t Bytes=%d PhysicalClosed=%t; registry Bytes=%d PhysicalClosed=%t", originalPrimary != nil, primaryBytes, primaryClosed, originalRegistry.Bytes(), originalRegistry.PhysicalClosed())
 			}
 			reopened, err := Open(opts)
 			if err != nil {

@@ -10,16 +10,40 @@ import (
 // caller releases this private view before original members finish. Generic
 // diagnostic inputs retain their borrowed view. Neither has logical authority.
 func physicalDurabilityUnion(candidates []*PreparedRootCandidate) (*StableResourceSet, error) {
-	if len(candidates) != 0 && candidates[0].resourceSet().MetadataOwner() != nil {
-		var previous *DurableRootTransaction
-		for _, candidate := range candidates {
-			var err error
-			previous, err = validatePhysicalDurabilityMember(previous, candidate)
-			if err != nil {
-				return nil, err
+	if len(candidates) == 0 {
+		return nil, ErrDurableRootLineage
+	}
+	var previous *DurableRootTransaction
+	var metadata *retainedalloc.Owner
+	hasResources, hasGenericResources := false, false
+	for _, candidate := range candidates {
+		var err error
+		previous, err = validatePhysicalDurabilityMember(previous, candidate)
+		if err != nil {
+			return nil, err
+		}
+		if set := candidate.resourceSet(); set != nil {
+			hasResources = true
+			if owner := set.MetadataOwner(); owner != nil {
+				if metadata != nil && metadata != owner {
+					return nil, ErrResourceOwnership
+				}
+				metadata = owner
+			} else {
+				hasGenericResources = true
 			}
 		}
-		return buildOwnedPhysicalUnion(candidates[0].resourceSet().MetadataOwner(), func(visit func(*StableResourceSet) error) error {
+	}
+	// Every member still participates in lineage validation. With no external
+	// resources there are no pins or directory aliases to union or release.
+	if !hasResources {
+		return nil, nil
+	}
+	if metadata != nil {
+		if hasGenericResources {
+			return nil, ErrResourceOwnership
+		}
+		return buildOwnedPhysicalUnion(metadata, func(visit func(*StableResourceSet) error) error {
 			for _, candidate := range candidates {
 				if err := visit(candidate.resourceSet()); err != nil {
 					return err
