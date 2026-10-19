@@ -80,6 +80,11 @@ func (root *resourceReleaseFrameV6) token(t *StableResourceToken, expected Resou
 func (root *resourceReleaseFrameV6) stepToken(f *resourceReleaseFrameV6, t *StableResourceToken) (bool, error) {
 	switch f.phase {
 	case 0:
+		if t.importedSource != nil {
+			// These aliases borrow the original producer rope. End them before
+			// its last edge can release/refund the producer and namespace.
+			t.importedSource, t.namespace = nil, nil
+		}
 		if t.physicalBacking != nil {
 			if ready, e := root.backing(t.physicalBacking); !ready || e != nil {
 				return false, e
