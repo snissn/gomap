@@ -481,6 +481,25 @@ context. The active target is the user-command WAL: command frames ordered by
 cleanup records, and golden encodings must be maintained here and mapped to
 tests in `TreeDB/docs/spec/verification.md` as each milestone lands.
 
+The experimental native JSON transaction route also accepts command kind 2
+(`CompositeMutation`), system scope, payload format 17 (`CompositeMutationV1`),
+inside the existing command frame. The payload starts with little-endian
+`uint16` version 1 and member count. Each member has little-endian kind and
+payload-format `uint16` fields, an incarnation `uint64`, payload-length `uint32`,
+and that many payload bytes. There are at most 128 members; payload plus the
+base command-frame header must fit 768 KiB. Existing outer frame limits still
+apply. Members have no independent LSN, frame extensions or publication.
+
+The currently active subset permits at most one raw `RawKVBatchV1` member
+containing inline Set operations, and untyped JSON `CollectionInsertBatchByIDV1`
+members for supported unindexed collections. Raw incarnation is zero; collection
+incarnation is the persisted nonzero logical catalog identity. The wider payload
+codec does not activate typed, update/delete, external-RID, nested or other
+unsupported members. Whole payload validation precedes member application.
+Foreground binds the final raw revision bytes into preadmitted outer capacity
+before append, preserving native member bytes. See `recovery.md` for aggregate
+replay. This pre-alpha activation does not add a compatibility migration.
+
 The operator restorable file set, live backup barrier, and restore validation
 procedure are defined in `TreeDB/docs/spec/backup-restore.md`. A live
 filesystem-level copy without that barrier is unsupported once command-WAL
@@ -1321,6 +1340,31 @@ supported, the parent directory. TreeDB is pre-alpha, so later binaries may
 reject older metadata versions instead of migrating them.
 
 ## 3.2 Collection Document Payloads
+
+### Native catalog incarnation records (construction)
+
+The native immutable catalog implementation under construction reserves these
+ordinary system-tree keys:
+
+- `collections/native/v1/next-incarnation`: next unused logical collection ID.
+- `collections/native/v1/incarnation/<collection-name>`: the live name's ID.
+
+Both values are exactly 16 bytes: ASCII `NCI1` at offsets 0–3, a kind byte
+at offset 4 (`0` for an incarnation, `1` for the next counter), three zero
+reserved bytes, and a nonzero big-endian `uint64` at offsets 8–15. Unknown
+versions, wrong kinds, nonzero reserved bytes, zero IDs and truncated values
+are invalid. These IDs are independent of physical root page IDs and WAL LSNs.
+
+Creation consumes the current counter and advances it in the same complete
+catalog publication as the metadata and name record. Rename moves the name
+record without changing its ID. Drop removes the name record without reducing
+the counter; recreating the same name gets a fresh ID. A counter equal to the
+maximum `uint64` represents exhaustion and refuses further creation before
+admission. Existing catalogs without identity records require an explicit
+opening decision; a reader must not invent IDs from physical page IDs.
+
+These records currently have private build/reopen controls. Public collection
+producer activation and native catalog bootstrap remain incomplete.
 
 ### 3.2.1 BSON-ordered scalar secondary-index keys (v2)
 

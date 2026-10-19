@@ -1493,7 +1493,7 @@ func (db *DB) finalizeRawKVEntryScanWithoutCommandWAL(prepare func() error, fina
 		return err
 	}
 	defer db.endSemanticBackendOperation(tracked)
-	return db.finalizeRawKVEntryScanForOwnedCachedPublication(prepare, finalize, scanEntries, opHint)
+	return db.finalizeRawKVEntryScanForOwnedCachedPublication(prepare, finalize, scanEntries, opHint, nil, false)
 }
 
 // FinalizePrivateCOWPublication retains the original raw cache owner in NoWAL
@@ -1509,19 +1509,19 @@ func (db *DB) FinalizePrivateCOWPublication(owner *transactionowner.Owner, prepa
 		return err
 	}
 	defer db.endSemanticBackendOperation(tracked)
-	return db.finalizeRawKVEntryScanForOwnedCachedPublication(prepare, finalize, scanEntries, opHint)
+	return db.finalizeRawKVEntryScanForOwnedCachedPublication(prepare, finalize, scanEntries, opHint, nil, false)
 }
 
 // FinalizeNativeRawUnderGuard shares the original raw/teardown staging owner;
 // reacquiring teardown while Close queues would deadlock its existing reader.
-func (db *DB) FinalizeNativeRawUnderGuard(guard *CommandWALStagingGuardV1, prepare func() error, finalize RawKVCommandWALFinalize, scanEntries func(func(batchpkg.Entry) error) error, opHint int) error {
+func (db *DB) FinalizeNativeRawUnderGuard(guard *CommandWALStagingGuardV1, outer *CommandWALIntent, prepare func() error, finalize RawKVCommandWALFinalize, scanEntries func(func(batchpkg.Entry) error) error, opHint int) error {
 	if err := guard.ValidateDBV1(db); err != nil {
 		return err
 	}
-	return db.finalizeRawKVEntryScanForOwnedCachedPublication(prepare, finalize, scanEntries, opHint)
+	return db.finalizeRawKVEntryScanForOwnedCachedPublication(prepare, finalize, scanEntries, opHint, outer, false)
 }
 
-func (db *DB) finalizeRawKVEntryScanForOwnedCachedPublication(prepare func() error, finalize RawKVCommandWALFinalize, scanEntries func(func(batchpkg.Entry) error) error, opHint int) error {
+func (db *DB) finalizeRawKVEntryScanForOwnedCachedPublication(prepare func() error, finalize RawKVCommandWALFinalize, scanEntries func(func(batchpkg.Entry) error) error, opHint int, outer *CommandWALIntent, inlineOnly bool) error {
 	if db.closing.Load() {
 		return ErrClosed
 	}
@@ -1543,6 +1543,31 @@ func (db *DB) finalizeRawKVEntryScanForOwnedCachedPublication(prepare func() err
 	intent.payload, err = commitlog.EncodeRawKVBatchPayloadPlanned(intent.rawKVPlan, intent.rawKVScan)
 	if err != nil {
 		return err
+	}
+	if inlineOnly || outer != nil && outer.inner.kind == commitlog.CommandKindCompositeMutation {
+		if err := commitlog.ScanRawKVBatchPayloadWithRevision(intent.payload, func(op commitlog.RawKVOp, _, _ []byte, _ uint64) error {
+			if op != commitlog.RawKVOpSet {
+				return ErrNativeSemanticUnsupported
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+	}
+	if outer != nil && outer.inner.kind == commitlog.CommandKindCompositeMutation && opHint > 0 {
+		if outer.inner.lsn != 0 || outer.inner.fromReplay || outer.inner.scope != commitlog.CommandScopeSystem || outer.inner.payloadFormat != commitlog.PayloadFormatCompositeMutationV1 {
+			return ErrCommandWALRejected
+		}
+		bound, err := commitlog.BindCompositeRawPayload(outer.inner.payload, intent.payload)
+		if err != nil {
+			return err
+		}
+		outer.inner.payload = bound
+		revision, err := maxEntryRevisionFromCommandWALPayload(commitlog.CommandKindRawKVBatch, commitlog.CommandScopeRawKV, commitlog.PayloadFormatRawKVBatchV1, intent.payload)
+		if err != nil {
+			return err
+		}
+		outer.inner.maxEntryRevision = revision
 	}
 	// WAL-off cached publication has no journal dependency custody. Its exact
 	// producer RID planner and finalizer remain authoritative; the finalizer
@@ -3000,6 +3025,59 @@ func applyRawKVCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map
 	}
 	b := db.NewBatch().(*Batch)
 	defer func() { _ = b.Close() }()
+	if err := db.stageRawKVReplayBatch(b, env, ops, ridMap, inlineAppender, ensureReplayRIDMap, ensureReplayLogSupport); err != nil {
+		return err
+	}
+	maxEntryRevision := db.assignBatchEntryRevisions(b.batch)
+	return b.writeWithCommandWALIntent(true, &commandWALBatchIntent{
+		lsn:          env.LSN,
+		coveredRange: [1]CommandWALLSNRange{{First: env.LSN, Last: env.LSN}},
+	}, maxEntryRevision)
+}
+
+// ValidateCommandWALReplayOperationV1 authenticates callback-scoped startup
+// replay using its real assigned LSN and DB-minted token. It confers no raw or
+// teardown ownership; replay publications use their ordinary unheld-raw paths.
+func (db *DB) ValidateCommandWALReplayOperationV1(intent *CommandWALIntent) error {
+	if db == nil {
+		return ErrClosed
+	}
+	if intent == nil || intent.replayDB != db || !intent.inner.fromReplay || intent.inner.lsn == 0 || intent.inner.staged {
+		return ErrCommandWALRejected
+	}
+	return db.checkCommandWALReplayIntentActive(&intent.inner)
+}
+
+// AppendPreparedRawKVUnderGuard borrows an already-drained caller-owned guard.
+// It never drains or releases that guard: the caller retains it through logical
+// installation (or terminal poison). Callbacks are trusted engine preparation.
+func (db *DB) AppendPreparedRawKVUnderGuard(guard *CommandWALStagingGuardV1, prepare func() error, finalize RawKVCommandWALFinalize, scan func(func(batchpkg.Entry) error) error, hint int, mode RawKVCommandWALAppendMode) (uint64, error) {
+	if guard == nil {
+		return 0, ErrCommandWALRejected
+	}
+	lsn, _, err := db.appendRawKVCommandWALOrderedEntryScanWithHintPreparedFinalized(prepare, finalize, scan, hint, mode, false, guard)
+	return lsn, err
+}
+
+// FinalizeNativePrivateCOWPublication retains the same original NoWAL owner and
+// rejects unsupported raw resource classes before the whole-cut installation.
+func (db *DB) FinalizeNativePrivateCOWPublication(owner *transactionowner.Owner, prepare func() error, finalize RawKVCommandWALFinalize, scan func(func(batchpkg.Entry) error) error, hint int) error {
+	if db == nil || owner == nil || owner != db.privateCOWOwner {
+		return ErrNativeSemanticUnsupported
+	}
+	db.teardownMu.RLock()
+	defer db.teardownMu.RUnlock()
+	tracked, err := db.beginSemanticBackendOperation(owner, false)
+	if err != nil {
+		return err
+	}
+	defer db.endSemanticBackendOperation(tracked)
+	return db.finalizeRawKVEntryScanForOwnedCachedPublication(prepare, finalize, scan, hint, nil, true)
+}
+
+// stageRawKVReplayBatch is the original raw replay materializer. It stages only;
+// the caller owns the single outer publication and original replay identity.
+func (db *DB) stageRawKVReplayBatch(b *Batch, env commitlog.CommandEnvelope, ops []commitlog.RawKVOperation, ridMap map[uint64]page.ValuePtr, inlineAppender *replayInlineAppender, ensureReplayRIDMap commandWALReplayRIDMapFunc, ensureReplayLogSupport commandWALReplayLogSupportFunc) error {
 	var materializedThisFrame map[uint64][]byte
 	for i := range ops {
 		entry := ops[i]
@@ -3131,33 +3209,5 @@ func applyRawKVCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map
 			return err
 		}
 	}
-	maxEntryRevision := db.assignBatchEntryRevisions(b.batch)
-	return b.writeWithCommandWALIntent(true, &commandWALBatchIntent{
-		lsn:          env.LSN,
-		coveredRange: [1]CommandWALLSNRange{{First: env.LSN, Last: env.LSN}},
-	}, maxEntryRevision)
-}
-
-// ValidateCommandWALReplayOperationV1 authenticates callback-scoped startup
-// replay using its real assigned LSN and DB-minted token. It confers no raw or
-// teardown ownership; replay publications use their ordinary unheld-raw paths.
-func (db *DB) ValidateCommandWALReplayOperationV1(intent *CommandWALIntent) error {
-	if db == nil {
-		return ErrClosed
-	}
-	if intent == nil || intent.replayDB != db || !intent.inner.fromReplay || intent.inner.lsn == 0 || intent.inner.staged {
-		return ErrCommandWALRejected
-	}
-	return db.checkCommandWALReplayIntentActive(&intent.inner)
-}
-
-// AppendPreparedRawKVUnderGuard borrows an already-drained caller-owned guard.
-// It never drains or releases that guard: the caller retains it through logical
-// installation (or terminal poison). Callbacks are trusted engine preparation.
-func (db *DB) AppendPreparedRawKVUnderGuard(guard *CommandWALStagingGuardV1, prepare func() error, finalize RawKVCommandWALFinalize, scan func(func(batchpkg.Entry) error) error, hint int, mode RawKVCommandWALAppendMode) (uint64, error) {
-	if guard == nil {
-		return 0, ErrCommandWALRejected
-	}
-	lsn, _, err := db.appendRawKVCommandWALOrderedEntryScanWithHintPreparedFinalized(prepare, finalize, scan, hint, mode, false, guard)
-	return lsn, err
+	return nil
 }

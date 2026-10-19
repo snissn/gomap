@@ -1,6 +1,7 @@
 package caching
 
 import (
+	"github.com/snissn/gomap/TreeDB/batch"
 	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -108,4 +109,11 @@ func (tx *nativeConditionalTxn) Close() error {
 	core = nil
 	lease.Close()
 	return err
+}
+
+func (tx *nativeConditionalTxn) NativeRawEntries() []batch.Entry {
+	if tx == nil || tx.ConditionalTxn == nil || tx.closed {
+		return nil
+	}
+	return tx.batch.EntriesForTxn()
 }

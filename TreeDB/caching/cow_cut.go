@@ -11,6 +11,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -18,6 +19,8 @@ import (
 // cowBackendBasis is shared by successor cuts. A handoff captures one new
 // backend snapshot before publication; readers never independently capture it.
 type cowBackendBasis struct {
+	readMu          sync.Mutex // serializes physical workspace reuse, never publication gates
+	reader          *cowReadWorkspace
 	logicalSeq      uint64
 	refs            atomic.Int64
 	snapshot        *backenddb.Snapshot
@@ -31,10 +34,34 @@ type cowBackendBasis struct {
 	originalCustody *rootpublication.OriginalCleanupCustody
 }
 
+// physicalWorkspaceLocked borrows only the immutable backend snapshot. Each
+// caller sets its original inspection limits under readMu; codecs are shared,
+// but visibility, dictionaries and pointer values remain on the caller's cut.
+func (b *cowBackendBasis) physicalWorkspaceLocked(budget *memtable.COWBudget, limits valuelog.COWReadLimits) (*cowReadWorkspace, error) {
+	if b.reader == nil {
+		w, err := admitCOWReadWorkspace(budget, limits)
+		if err != nil {
+			return nil, err
+		}
+		w.basis = b.snapshot
+		b.reader = w
+	}
+	b.reader.limits = limits
+	return b.reader, nil
+}
+
 func (b *cowBackendBasis) retain() { b.refs.Add(1) }
 func (b *cowBackendBasis) release() error {
 	if b == nil || b.refs.Add(-1) != 0 {
 		return nil
+	}
+	b.readMu.Lock()
+	reader := b.reader
+	b.reader = nil
+	b.readMu.Unlock()
+	if reader != nil {
+		reader.close()
+		reader = nil
 	}
 	b.completionMu.Lock()
 	snapshot, priorErr := b.snapshot, b.cleanupErr

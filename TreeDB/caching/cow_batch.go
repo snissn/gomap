@@ -388,7 +388,18 @@ func (b *Batch) writeCOWPublication(syncWrite bool, unlock func()) error {
 		if !ok {
 			err = fmt.Errorf("COW cache requires canonical backend finalization")
 		} else {
-			err = finalizer.FinalizePrivateCOWPublication(b.db.cow.txnOwner, b.PrepareExternalCommandWALPublication, b.finalizeCOWPublication, b.Replay, len(b.entries))
+			if b.cowState.native != nil && b.cowState.native.plan.RequireInlineCompositeRaw {
+				nativeFinalizer, ok := b.db.backend.(interface {
+					FinalizeNativePrivateCOWPublication(*transactionowner.Owner, func() error, backenddb.RawKVCommandWALFinalize, func(func(batch.Entry) error) error, int) error
+				})
+				if !ok {
+					err = ErrCOWUnsupported
+				} else {
+					err = nativeFinalizer.FinalizeNativePrivateCOWPublication(b.db.cow.txnOwner, b.PrepareExternalCommandWALPublication, b.finalizeCOWPublication, b.Replay, len(b.entries))
+				}
+			} else {
+				err = finalizer.FinalizePrivateCOWPublication(b.db.cow.txnOwner, b.PrepareExternalCommandWALPublication, b.finalizeCOWPublication, b.Replay, len(b.entries))
+			}
 		}
 	}
 	if err != nil && b.cowState.receipt.Assigned && b.cowState.native != nil {

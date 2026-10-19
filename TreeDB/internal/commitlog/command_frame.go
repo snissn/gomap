@@ -2160,6 +2160,11 @@ func validateCommandEnvelopeIdentity(env CommandEnvelope) error {
 		return fmt.Errorf("%w: zero lsn", ErrCorrupt)
 	}
 	switch env.Kind {
+	case CommandKindCompositeMutation:
+		if env.Scope != CommandScopeSystem || env.PayloadFormat != PayloadFormatCompositeMutationV1 {
+			return ErrCorrupt
+		}
+
 	case CommandKindRawKVBatch:
 		if env.Scope != CommandScopeRawKV ||
 			(env.PayloadFormat != PayloadFormatRawKVBatchV1 && env.PayloadFormat != PayloadFormatRawKVBatchV2) {
@@ -2216,6 +2221,9 @@ func validateCommandEnvelopeIdentity(env CommandEnvelope) error {
 
 func validateCommandEnvelopePayload(env CommandEnvelope) error {
 	switch env.Kind {
+	case CommandKindCompositeMutation:
+		return ValidateSelectedCompositeMutation(env.Payload)
+
 	case CommandKindRawKVBatch:
 		return validateRawKVBatchPayloadForFormat(env.PayloadFormat, env.Payload)
 	case CommandKindCollectionInsertBatchByID:

@@ -163,6 +163,13 @@ type COWExternalLease struct {
 }
 
 func (b *COWBudget) AcquireExternal(bytes uint64) (*COWExternalLease, error) {
+	return b.acquireExternal(bytes, false)
+}
+
+// nativeSource is used only by the original prewrite native generation cell.
+// Slot and metadata admission are one original budget operation; the cell,
+// rather than the external allocation receipt, releases the slot at last edge.
+func (b *COWBudget) acquireExternal(bytes uint64, nativeSource bool) (*COWExternalLease, error) {
 	charge, ok := cowAdd(bytes, cowAllocation(uint64(unsafe.Sizeof(COWExternalLease{}))))
 	if !ok {
 		return nil, ErrCOWCapacity
@@ -172,13 +179,16 @@ func (b *COWBudget) AcquireExternal(bytes uint64) (*COWExternalLease, error) {
 	if b.closed {
 		return nil, ErrCOWClosed
 	}
-	if b.stats.ExternalLeases == int(^uint(0)>>1) || !cowFits(b.limits.MaxInFlightBytes, b.stats.ReservedBytes, charge) ||
+	if (nativeSource && b.stats.Sources >= b.limits.MaxSources) || b.stats.ExternalLeases == int(^uint(0)>>1) || !cowFits(b.limits.MaxInFlightBytes, b.stats.ReservedBytes, charge) ||
 		!b.retirementFitsLocked(charge) || !b.addLocked(charge) {
 		return nil, ErrCOWCapacity
 	}
 	b.stats.ReservedBytes += charge
 	b.stats.ExternalBytes += charge
 	b.stats.ExternalLeases++
+	if nativeSource {
+		b.stats.Sources++
+	}
 	return &COWExternalLease{budget: b, charge: charge}, nil
 }
 
@@ -295,11 +305,13 @@ type cowResourceOwner struct{ release func() }
 type cowGeneration struct {
 	budget           *COWBudget
 	refs             int
+	activeWriters    int
 	history, pending uint64
 	// Fixed empty-source construction can use the one reserved tranche. All
 	// later mutation history remains charged to budget, never this lease.
 	reservedCharge    uint64
 	constructionLease *COWExternalLease
+	nativeSource      *COWNativeSourceReservation // opt-in original native cohort
 	frozen, retired   bool
 	rawSourceReserved bool // cache first-dirty admission; independent of native source cells
 	drainClaimed      bool
@@ -344,7 +356,7 @@ func newCOWGenerationWithConstruction(b *COWBudget, base uint64, maintenance *CO
 		b.stats.HistoryBytes += base
 	}
 	b.mu.Unlock()
-	return &cowGeneration{budget: b, refs: 1, history: base, reservedCharge: reserved, constructionLease: lease,
+	return &cowGeneration{budget: b, refs: 1, activeWriters: 1, history: base, reservedCharge: reserved, constructionLease: lease,
 		ids: make([]COWResourceID, 0, b.limits.MaxResources), owners: make([]cowResourceOwner, 0, b.limits.MaxResources)}, nil
 }
 
@@ -382,6 +394,8 @@ func (g *cowGeneration) drain() {
 	history, frozen, retired := g.history-g.reservedCharge, g.frozen || g.rawSourceReserved, g.retired
 	constructionLease := g.constructionLease
 	g.constructionLease = nil
+	nativeSource := g.nativeSource
+	g.nativeSource = nil
 	// All original callback and array aliases end before their containing
 	// generation charge. The original budget serializes the terminal claim.
 	g.owners, g.ids, g.history = nil, nil, 0
@@ -397,6 +411,11 @@ func (g *cowGeneration) drain() {
 	}
 	b.releaseControlLocked()
 	b.mu.Unlock()
+	if nativeSource != nil {
+		lease := nativeSource.detachGeneration()
+		nativeSource = nil
+		lease.Close()
+	}
 	constructionLease.Close()
 	b.releaseMaintenanceReservation()
 }

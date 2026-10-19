@@ -472,6 +472,21 @@ replay must observe either the old root plus old `AppliedLSN`, or the new root
 plus advanced `AppliedLSN`; it must not observe command effects without the
 matching `AppliedLSN` or `AppliedLSN` without command effects.
 
+The experimental native JSON composite route validates the entire selected
+`CompositeMutationV1` payload before preparing members. It resolves each
+collection's persisted incarnation and supported metadata from the original
+startup Snapshot, and rejects unsupported members before publication. Its
+registration requests `NeedsReplayLogSupport`; the existing recovery loop owns
+the replay appender and leaf-page log, including their restoration and cleanup.
+The handler preserves collection storage policy and builds raw, collection and
+system effects within one existing `RootPublicationBuildGroup`. The final batch
+retains the original DB-minted active replay intent/token and publishes all
+effects with the one applied LSN. It does not create a recovery COW engine or
+invoke independently publishing singleton handlers. The actual child-exit
+control is `TestNativeJSONPublicRawTwoCollectionsAtomicTxn`; codec binding and
+unsupported-member refusal are covered by
+`TestSelectedCompositeBindsFinalRawRevisionWithoutChangingNativeMembers`.
+
 `RawKVBatchV2` adds `SetMaterializedRID(RID, value)`. Recovery reuses an
 existing RID only when its decoded value bytes match exactly. If the RID is
 absent, recovery appends `value` under that exact RID and advances the allocator

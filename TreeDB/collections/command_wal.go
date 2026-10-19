@@ -2,6 +2,7 @@ package collections
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -22,13 +23,14 @@ func init() {
 // on a package side-effect import before opening a command_wal_v2 directory.
 func RegisterCommandWALReplayHandlers() {
 	registerCommandWALReplayHandlersOnce.Do(func() {
-		backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCollectionInsertBatchByID, replayCollectionInsertBatchByIDCommandWAL)
+		backenddb.RegisterCommandWALReplayHandlerWithOptions(commitlog.CommandKindCompositeMutation, replayNativeJSONComposite, backenddb.CommandWALReplayHandlerOptions{NeedsReplayLogSupport: true, NativePrepare: prepareNativeJSONCompositeMarker})
+		backenddb.RegisterCommandWALReplayHandlerWithOptions(commitlog.CommandKindCollectionInsertBatchByID, replayCollectionInsertBatchByIDCommandWAL, backenddb.CommandWALReplayHandlerOptions{NativePrepare: prepareNativeJSONInsertCommand})
 		backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCollectionDeleteBatchByID, replayCollectionDeleteBatchByIDCommandWAL)
 		backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCollectionUpdateBatchByID, replayCollectionUpdateBatchByIDCommandWAL)
 		backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCollectionReplaceSourceByID, replayCollectionReplaceSourceByIDCommandWAL)
 		backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCollectionRebuildVectorIndex, replayCollectionRebuildVectorIndexCommandWAL)
 		backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCollectionPersistPartitionLive, replayCollectionPersistPartitionLiveCommandWAL)
-		backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCatalogCreateCollection, replayCatalogCreateCollectionCommandWAL)
+		backenddb.RegisterCommandWALReplayHandlerWithOptions(commitlog.CommandKindCatalogCreateCollection, replayCatalogCreateCollectionCommandWAL, backenddb.CommandWALReplayHandlerOptions{NeedsReplayLogSupport: true, NativePrepare: prepareNativeJSONCreateCommand})
 		backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCollectionSplitVectorInsertV1, replaySplitVectorInsertCommandWALV1)
 		backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCollectionVectorPrepareV1, replayVectorPrepareCommandWALV1)
 	})
@@ -366,7 +368,10 @@ func collectionDocumentsFromBatchUpdateDocuments(changed []preparedBatchUpdate, 
 	return docs
 }
 
-func replayCollectionInsertBatchByIDCommandWAL(db *backenddb.DB, env commitlog.CommandEnvelope) error {
+func replayCollectionInsertBatchByIDCommandWAL(db *backenddb.DB, env commitlog.CommandEnvelope) (replayErr error) {
+	manager := newCommandWALReplayCollectionManager(db)
+	defer func() { replayErr = errors.Join(replayErr, manager.Close()) }()
+
 	if env.PayloadFormat == commitlog.PayloadFormatCollectionTypedBatchByIDV1 {
 		payload, err := commitlog.DecodeCollectionTypedBatchPayload(env.Payload)
 		if err != nil {
@@ -376,7 +381,7 @@ func replayCollectionInsertBatchByIDCommandWAL(db *backenddb.DB, env commitlog.C
 		if err != nil {
 			return err
 		}
-		collection, err := newCommandWALReplayCollectionManager(db).openCollectionWithCommandWALIntent(payload.Collection, intent)
+		collection, err := manager.openCollectionWithCommandWALIntent(payload.Collection, intent)
 		if err != nil {
 			return err
 		}
@@ -413,7 +418,6 @@ func replayCollectionInsertBatchByIDCommandWAL(db *backenddb.DB, env commitlog.C
 	if err != nil {
 		return err
 	}
-	manager := newCommandWALReplayCollectionManager(db)
 	collection, err := manager.openCollectionWithCommandWALIntent(payload.Collection, intent)
 	if err != nil {
 		return err
@@ -431,7 +435,10 @@ func replayCollectionInsertBatchByIDCommandWAL(db *backenddb.DB, env commitlog.C
 	return collection.reconcileVectorPartitionLiveReplay(ids)
 }
 
-func replayCollectionDeleteBatchByIDCommandWAL(db *backenddb.DB, env commitlog.CommandEnvelope) error {
+func replayCollectionDeleteBatchByIDCommandWAL(db *backenddb.DB, env commitlog.CommandEnvelope) (replayErr error) {
+	manager := newCommandWALReplayCollectionManager(db)
+	defer func() { replayErr = errors.Join(replayErr, manager.Close()) }()
+
 	payload, err := commitlog.DecodeCollectionDeleteBatchByIDPayload(env.Payload)
 	if err != nil {
 		return err
@@ -443,7 +450,6 @@ func replayCollectionDeleteBatchByIDCommandWAL(db *backenddb.DB, env commitlog.C
 	if err != nil {
 		return err
 	}
-	manager := newCommandWALReplayCollectionManager(db)
 	collection, err := manager.openCollectionWithCommandWALIntent(payload.Collection, intent)
 	if err != nil {
 		return err
@@ -455,7 +461,10 @@ func replayCollectionDeleteBatchByIDCommandWAL(db *backenddb.DB, env commitlog.C
 	return collection.reconcileVectorPartitionLiveReplay(payload.IDs)
 }
 
-func replayCollectionReplaceSourceByIDCommandWAL(db *backenddb.DB, env commitlog.CommandEnvelope) error {
+func replayCollectionReplaceSourceByIDCommandWAL(db *backenddb.DB, env commitlog.CommandEnvelope) (replayErr error) {
+	manager := newCommandWALReplayCollectionManager(db)
+	defer func() { replayErr = errors.Join(replayErr, manager.Close()) }()
+
 	if env.PayloadFormat == commitlog.PayloadFormatCollectionSourceImportV2 {
 		return replayCollectionSourceImportV2(db, env)
 	}
@@ -468,7 +477,7 @@ func replayCollectionReplaceSourceByIDCommandWAL(db *backenddb.DB, env commitlog
 		if err != nil {
 			return err
 		}
-		collection, err := newCommandWALReplayCollectionManager(db).openCollectionWithCommandWALIntent(payload.Inserted.Collection, intent)
+		collection, err := manager.openCollectionWithCommandWALIntent(payload.Inserted.Collection, intent)
 		if err != nil {
 			return err
 		}
@@ -496,7 +505,7 @@ func replayCollectionReplaceSourceByIDCommandWAL(db *backenddb.DB, env commitlog
 	if err != nil {
 		return err
 	}
-	collection, err := newCommandWALReplayCollectionManager(db).openCollectionWithCommandWALIntent(payload.Collection, intent)
+	collection, err := manager.openCollectionWithCommandWALIntent(payload.Collection, intent)
 	if err != nil {
 		return err
 	}
@@ -519,7 +528,10 @@ func replayCollectionReplaceSourceByIDCommandWAL(db *backenddb.DB, env commitlog
 	return collection.reconcileVectorPartitionLiveReplay(changedIDs)
 }
 
-func replayCollectionUpdateBatchByIDCommandWAL(db *backenddb.DB, env commitlog.CommandEnvelope) error {
+func replayCollectionUpdateBatchByIDCommandWAL(db *backenddb.DB, env commitlog.CommandEnvelope) (replayErr error) {
+	manager := newCommandWALReplayCollectionManager(db)
+	defer func() { replayErr = errors.Join(replayErr, manager.Close()) }()
+
 	if env.PayloadFormat == commitlog.PayloadFormatCollectionTypedMetadataByIDV1 {
 		payload, err := commitlog.DecodeCollectionTypedMetadataPayload(env.Payload)
 		if err != nil {
@@ -530,7 +542,7 @@ func replayCollectionUpdateBatchByIDCommandWAL(db *backenddb.DB, env commitlog.C
 		if err != nil {
 			return err
 		}
-		collection, err := newCommandWALReplayCollectionManager(db).openCollectionWithCommandWALIntent(payload.Collection, intent)
+		collection, err := manager.openCollectionWithCommandWALIntent(payload.Collection, intent)
 		if err != nil {
 			return err
 		}
@@ -550,7 +562,7 @@ func replayCollectionUpdateBatchByIDCommandWAL(db *backenddb.DB, env commitlog.C
 		if err != nil {
 			return err
 		}
-		collection, err := newCommandWALReplayCollectionManager(db).openCollectionWithCommandWALIntent(payload.Collection, intent)
+		collection, err := manager.openCollectionWithCommandWALIntent(payload.Collection, intent)
 		if err != nil {
 			return err
 		}
@@ -582,7 +594,6 @@ func replayCollectionUpdateBatchByIDCommandWAL(db *backenddb.DB, env commitlog.C
 	if err != nil {
 		return err
 	}
-	manager := newCommandWALReplayCollectionManager(db)
 	collection, err := manager.openCollectionWithCommandWALIntent(payload.Collection, intent)
 	if err != nil {
 		return err
@@ -613,7 +624,10 @@ func replayCollectionUpdateBatchByIDCommandWAL(db *backenddb.DB, env commitlog.C
 	return collection.reconcileVectorPartitionLiveReplay(ids)
 }
 
-func replayCollectionRebuildVectorIndexCommandWAL(db *backenddb.DB, env commitlog.CommandEnvelope) error {
+func replayCollectionRebuildVectorIndexCommandWAL(db *backenddb.DB, env commitlog.CommandEnvelope) (replayErr error) {
+	manager := newCommandWALReplayCollectionManager(db)
+	defer func() { replayErr = errors.Join(replayErr, manager.Close()) }()
+
 	payload, err := commitlog.DecodeCollectionRebuildVectorIndexPayload(env.Payload)
 	if err != nil {
 		return err
@@ -622,7 +636,6 @@ func replayCollectionRebuildVectorIndexCommandWAL(db *backenddb.DB, env commitlo
 	if err != nil {
 		return err
 	}
-	manager := newCommandWALReplayCollectionManager(db)
 	collection, err := manager.openCollectionWithCommandWALIntent(payload.Collection, intent)
 	if err != nil {
 		return err
@@ -631,7 +644,10 @@ func replayCollectionRebuildVectorIndexCommandWAL(db *backenddb.DB, env commitlo
 	return err
 }
 
-func replayCollectionPersistPartitionLiveCommandWAL(db *backenddb.DB, env commitlog.CommandEnvelope) error {
+func replayCollectionPersistPartitionLiveCommandWAL(db *backenddb.DB, env commitlog.CommandEnvelope) (replayErr error) {
+	manager := newCommandWALReplayCollectionManager(db)
+	defer func() { replayErr = errors.Join(replayErr, manager.Close()) }()
+
 	payload, err := commitlog.DecodeCollectionRebuildVectorIndexPayload(env.Payload)
 	if err != nil {
 		return err
@@ -640,7 +656,6 @@ func replayCollectionPersistPartitionLiveCommandWAL(db *backenddb.DB, env commit
 	if err != nil {
 		return err
 	}
-	manager := newCommandWALReplayCollectionManager(db)
 	collection, err := manager.openCollectionWithCommandWALIntent(payload.Collection, intent)
 	if err != nil {
 		return err
@@ -652,7 +667,10 @@ func replayCollectionPersistPartitionLiveCommandWAL(db *backenddb.DB, env commit
 	return collection.ensureVectorPartitionLiveBindingV1(context.Background(), manifest, intent)
 }
 
-func replayCatalogCreateCollectionCommandWAL(db *backenddb.DB, env commitlog.CommandEnvelope) error {
+func replayCatalogCreateCollectionCommandWAL(db *backenddb.DB, env commitlog.CommandEnvelope) (replayErr error) {
+	manager := newCommandWALReplayCollectionManager(db)
+	defer func() { replayErr = errors.Join(replayErr, manager.Close()) }()
+
 	payload, err := commitlog.DecodeCatalogCreateCollectionPayload(env.Payload)
 	if err != nil {
 		return err
@@ -668,7 +686,7 @@ func replayCatalogCreateCollectionCommandWAL(db *backenddb.DB, env commitlog.Com
 	if err != nil {
 		return err
 	}
-	_, err = newCommandWALReplayCollectionManager(db).createCollectionWithCommandWALIntent(meta, intent)
+	_, err = manager.createCollectionWithCommandWALIntent(meta, intent)
 	return err
 }
 

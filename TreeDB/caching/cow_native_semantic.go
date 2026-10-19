@@ -360,7 +360,7 @@ func (db *DB) writeNativePublication(b *Batch, native *backenddb.NativePreparedP
 			return err
 		}
 		guard := b.COWAppendGuard()
-		if err := backend.FinalizeNativeRawUnderGuard(guard, b.PrepareExternalCommandWALPublication, b.finalizeCOWPublication, b.Replay, len(b.entries)); err != nil {
+		if err := backend.FinalizeNativeRawUnderGuard(guard, intent, b.PrepareExternalCommandWALPublication, b.finalizeCOWPublication, b.Replay, len(b.entries)); err != nil {
 			return err
 		}
 		if err := b.cowState.accepted.BindPreassignedCustody(b.cowState.native); err != nil {
