@@ -74,7 +74,7 @@ func (set *StableResourceSet) walkLogicalObligationsLocked(visit func(StableReso
 			if item == nil {
 				return nil
 			}
-			if _, removed := item.entry.logicalObligations.removed[stableLogicalObligationKey(obligation)]; removed {
+			if _, removed := item.entry.logicalObligations.removedValue(obligation); removed {
 				return nil
 			}
 			item.seen++
@@ -86,7 +86,7 @@ func (set *StableResourceSet) walkLogicalObligationsLocked(visit func(StableReso
 	for _, item := range entries {
 		var walkErr error
 		item.entry.logicalObligations.rangeDeltaValues(func(obligation StableLogicalObligation) bool {
-			if _, removed := item.entry.logicalObligations.removed[stableLogicalObligationKey(obligation)]; removed {
+			if _, removed := item.entry.logicalObligations.removedValue(obligation); removed {
 				return true
 			}
 			item.seen++
@@ -199,7 +199,7 @@ func (d *ResourceDiagnostics) WalkLogicalObligations(visit func(StableResourcePh
 					return nil
 				}
 				item := &group[index]
-				if _, removed := item.entry.logicalObligations.removed[stableLogicalObligationKey(obligation)]; removed {
+				if _, removed := item.entry.logicalObligations.removedValue(obligation); removed {
 					return nil
 				}
 				item.seen++
@@ -214,7 +214,7 @@ func (d *ResourceDiagnostics) WalkLogicalObligations(visit func(StableResourcePh
 		item := &records[i]
 		var walkErr error
 		item.entry.logicalObligations.rangeDeltaValues(func(obligation StableLogicalObligation) bool {
-			if _, removed := item.entry.logicalObligations.removed[stableLogicalObligationKey(obligation)]; removed {
+			if _, removed := item.entry.logicalObligations.removedValue(obligation); removed {
 				return true
 			}
 			item.seen++

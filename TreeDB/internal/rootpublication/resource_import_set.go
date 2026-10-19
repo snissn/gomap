@@ -136,7 +136,7 @@ func walkImportedEntry(directory *resourceImportDirectory, entry *stableResource
 	view := entry.logicalObligations
 	seen := 0
 	emit := func(o StableLogicalObligation) error {
-		if _, removed := view.removed[stableLogicalObligationKey(o)]; removed {
+		if _, removed := view.removedValue(o); removed {
 			return nil
 		}
 		if err := validateStableLogicalObligation(o, o.Reachability); err != nil {

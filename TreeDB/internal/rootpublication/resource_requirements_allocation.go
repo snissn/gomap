@@ -156,11 +156,29 @@ func cloneSelectedResourceFilteredWithPhysicalSelection(source *StableResourceSe
 	}
 	found := make([]bool, len(removed))
 	defer func() { clear(found); found = nil; removalScratch.drop(); removalScratch.refund() }()
+	var removalPlan ownedDirectoryRemovalPlanV2
+	if removed != nil {
+		removalPlan, err = prepareOwnedDirectoryRemovalPlanV2(borrow.backing, removed, excluded, found, &work)
+		if err != nil {
+			return nil, work, err
+		}
+		defer removalPlan.close()
+	}
 	builder, err := NewStableResourceSetBuilderWithMetadata(owner)
 	if err != nil {
 		return nil, work, err
 	}
-	defer func() { retErr = errors.Join(retErr, builder.AbandonWithError()) }()
+	defer func() {
+		if builder != nil {
+			if cleanup := builder.AbandonWithError(); cleanup != nil {
+				if binding := SelectOriginalCleanupPrior(cleanup, retErr); binding.Valid() && binding.TryLink(retErr) {
+					retErr = cleanup
+				} else {
+					retErr = errors.Join(retErr, cleanup)
+				}
+			}
+		}
+	}()
 	var buildErr error
 	for _, cell := range borrow.backing.cells {
 		rangeStableResourceLogicalIndex(cell.view.logical, func(entry *stableResourceEntry) bool {
@@ -194,6 +212,23 @@ func cloneSelectedResourceFilteredWithPhysicalSelection(source *StableResourceSe
 					return true
 				}
 				physicalFound[selectedIndex] = true
+			}
+			if removed != nil && entry.outgoing != nil && entry.logicalObligations.directory != nil {
+				records := removalPlan.forEntry(entry)
+				backing, e := cloneOwnedDirectoryRemovingEntryV2(entry, records, &work)
+				if e != nil {
+					buildErr = e
+					return false
+				}
+				if backing == nil {
+					return true
+				}
+				token := backing.entries[0].token
+				if e = builder.addPreparedAdmittedEntry(backing); e != nil {
+					buildErr = errors.Join(e, token.ReleaseWithError())
+					return false
+				}
+				return true
 			}
 			if entry.outgoing == nil || entry.logicalObligations.directory != nil {
 				buildErr = ErrResourceOwnership
@@ -301,11 +336,17 @@ func cloneSelectedResourceFilteredWithPhysicalSelection(source *StableResourceSe
 			return nil, work, ErrUnresolvedResource
 		}
 	}
+	if builder.kindViews == nil && removalPlan.directory != nil {
+		result, err := newStableResourceSetWithEmptyDirectory(owner, removalPlan.directory)
+		return result, work, err
+	}
+	builderWork := builder.ClosureWorkSnapshot()
 	result, err := builder.Freeze()
 	if err != nil {
 		return nil, work, err
 	}
-	work.Add(builder.ClosureWorkSnapshot())
+	builder = nil // Freeze refunds the original builder header.
+	work.Add(builderWork)
 	work.FreezeOperations++
 	return result, work, nil
 }

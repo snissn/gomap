@@ -439,6 +439,9 @@ func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6) (boo
 		switch f.phase {
 		case 0:
 			if entry.outgoing != nil {
+				// The outgoing edge owns this backing. End the entry's
+				// borrowed alias before its last child can refund it.
+				entry.logicalObligations.ownedRemoved = nil
 				if ok, e := root.child(entry.outgoing.allocation, entry.outgoing); !ok || e != nil {
 					return false, e
 				}
@@ -518,6 +521,14 @@ func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6) (boo
 			}
 			f.phase = 5
 		case 5:
+			if n.removed != nil {
+				if ok, e := root.child(n.removed.allocation, n.removed); !ok || e != nil {
+					return false, e
+				}
+				n.removed = nil
+			}
+			f.phase = 6
+		case 6:
 			clear(n.directoryKey)
 			n.directoryKey = nil
 			n.cache.mu.Lock()
@@ -531,7 +542,7 @@ func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6) (boo
 				n.cache.value = nil
 			}
 			n.cache.mu.Unlock()
-			f.phase = 6
+			f.phase = 7
 		default:
 			f.value = nil
 		}

@@ -50,6 +50,7 @@ type stableLogicalObligationView struct {
 	directory    *DependencyDirectoryV2
 	owner        []byte
 	removed      map[stableLogicalObligationIndex]StableLogicalObligation
+	ownedRemoved *resourceObligationBacking
 }
 
 func (view stableLogicalObligationView) commitment(field ReachabilityField) stableLogicalObligationCommitment {
@@ -488,6 +489,15 @@ func (view stableLogicalObligationView) rangeDeltaValues(visit func(StableLogica
 	if visit == nil {
 		return
 	}
+	if view.ownedRemoved != nil {
+		original := visit
+		visit = func(o StableLogicalObligation) bool {
+			if _, removed := view.removedValue(o); removed {
+				return true
+			}
+			return original(o)
+		}
+	}
 	if view.index != nil && view.index.allocation != nil {
 		rangeOwnedResourceObligations(view.index, visit)
 		return
@@ -787,11 +797,11 @@ func mergeStableLogicalObligations(target *stableLogicalObligationView, incoming
 			base, incoming = incoming, base
 		}
 		if incoming.directory != nil {
-			if incoming.directory != base.directory || !bytes.Equal(incoming.owner, base.owner) || len(incoming.removed) != len(base.removed) {
+			if incoming.directory != base.directory || !bytes.Equal(incoming.owner, base.owner) || incoming.removalCount() != base.removalCount() {
 				return ErrResourceConflict
 			}
-			for key, value := range incoming.removed {
-				if base.removed[key] != value {
+			for value := range incoming.removalValues() {
+				if previous, ok := base.removedValue(value); !ok || previous != value {
 					return ErrResourceConflict
 				}
 			}
@@ -4776,7 +4786,7 @@ func stableResourceEntryDurablePrefix(prior, entry *stableResourceEntry) (uint64
 
 func stableResourceEntryCoversPublication(prior, entry *stableResourceEntry) bool {
 	if prior != nil && (prior.logicalObligations.directory != nil || entry.logicalObligations.directory != nil) {
-		if prior.logicalObligations.directory != entry.logicalObligations.directory || prior.logicalObligations.tail != entry.logicalObligations.tail || len(prior.logicalObligations.removed) != 0 || len(entry.logicalObligations.removed) != 0 {
+		if prior.logicalObligations.directory != entry.logicalObligations.directory || prior.logicalObligations.tail != entry.logicalObligations.tail || prior.logicalObligations.removalCount() != 0 || entry.logicalObligations.removalCount() != 0 {
 			return false
 		}
 	}

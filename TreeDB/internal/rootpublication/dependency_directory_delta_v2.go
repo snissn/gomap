@@ -75,7 +75,7 @@ func WalkDependencyDirectoryChangesV2(source *StableResourceSet, base *Dependenc
 			err = fmt.Errorf("%w: logical directory is not the visible predecessor", ErrResourceConflict)
 			return false
 		}
-		for _, obligation := range entry.logicalObligations.removed {
+		for obligation := range entry.logicalObligations.removalValues() {
 			if base == nil {
 				err = ErrResourceConflict
 				return false
