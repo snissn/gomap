@@ -246,10 +246,10 @@ func (token *StableResourceToken) releaseMetadata() error {
 }
 func (token *StableResourceToken) cloneOwnedPinnedDirectory(lane, id, path string, frontier DurableFrontier, field ReachabilityField, values []StableLogicalObligation, directory *DependencyDirectoryV2, onRelease func()) (*StableResourceToken, error) {
 	if token != nil && token.importedSource != nil {
-		if onRelease != nil || directory != nil {
+		if onRelease != nil {
 			return nil, ErrResourceOwnership
 		}
-		return newImportedResourceToken(token.metadata.owner, token.importedSource, token.physicalBacking.sourceRoot, lane, id, path, frontier, field, values)
+		return newImportedResourceToken(token.metadata.owner, token.importedSource, token.physicalBacking.sourceRoot, lane, id, path, frontier, field, values, directory)
 	}
 	if onRelease != nil || token.metadata == nil || token.physicalBacking == nil || token.released.Load() {
 		return nil, ErrResourceOwnership

@@ -290,7 +290,7 @@ func importStableResourceSetMetadata(owner *retainedalloc.Owner, source *StableR
 			defer backing.release()
 			// Preserve every actual field, including zero-obligation fields, in the
 			// imported entry. The private token carries the original primary field.
-			token, e := newImportedResourceToken(owner, activeEntryToken(*entry), cell.view.root, entry.logicalLane, entry.resourceID, entry.diagnosticPath, entry.frontier, entry.token.reachability, backing.values)
+			token, e := newImportedResourceToken(owner, activeEntryToken(*entry), cell.view.root, entry.logicalLane, entry.resourceID, entry.diagnosticPath, entry.frontier, entry.token.reachability, backing.values, nil)
 			if e != nil {
 				importErr = e
 				return false
