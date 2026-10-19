@@ -44,8 +44,15 @@ func nativeJSONInsertPlanner(meta CollectionMeta) (insertBatchPlanner, error) {
 // each row has at most one value per index. The input-sized allowance covers
 // JSON decoder nodes and coexisting growable encode/secondary/state arenas;
 // fixed per-row headers cover planner items, unique probes and state refs.
-// The original stage receipt keeps this conservative allowance until commit.
+// Existing whole-plan callers retain this allowance. Ordered native staging
+// uses it only for reusable validation scratch; final output omits decoder debt.
 func nativeJSONIndexedPlanCharge(meta CollectionMeta, ids, documents [][]byte) (uint64, error) {
+	return nativeJSONIndexedCharge(meta, ids, documents, true, true)
+}
+
+// The final plan keeps encoded states/keys/entries, but never the decoder's
+// temporary object graph. Fixed runtime/plan descriptors are admitted once.
+func nativeJSONIndexedCharge(meta CollectionMeta, ids, documents [][]byte, headers, decoder bool) (uint64, error) {
 	if len(meta.Indexes) == 0 {
 		return 0, nil
 	}
@@ -66,7 +73,7 @@ func nativeJSONIndexedPlanCharge(meta CollectionMeta, ids, documents [][]byte) (
 	}
 	perIndex := uint64(unsafe.Sizeof(indexDefinition{})) + uint64(unsafe.Sizeof(indexRuntime{})) + uint64(unsafe.Sizeof(directBufferedSecondaryRootPlan{})) + uint64(unsafe.Sizeof(directBufferedUniqueValueRootPlan{})) + uint64(unsafe.Sizeof(collectionUniqueProbeRun{})) + uint64(unsafe.Sizeof(CollectionSecondaryRunStats{}))
 	n, ok := mul(uint64(len(meta.Indexes)), perIndex)
-	if !ok || !add(n) {
+	if !ok || (headers && !add(n)) {
 		return 0, memtable.ErrCOWCapacity
 	}
 	for i, doc := range documents {
@@ -76,9 +83,11 @@ func nativeJSONIndexedPlanCharge(meta CollectionMeta, ids, documents [][]byte) (
 		if !ok || !add(n) {
 			return 0, memtable.ErrCOWCapacity
 		}
-		n, ok = mul(uint64(len(doc)), 128)
-		if !ok || !add(n) {
-			return 0, memtable.ErrCOWCapacity
+		if decoder {
+			n, ok = mul(uint64(len(doc)), 128)
+			if !ok || !add(n) {
+				return 0, memtable.ErrCOWCapacity
+			}
 		}
 		headers := uint64(unsafe.Sizeof(uniqueProbeCandidate{})) + uint64(unsafe.Sizeof(directBufferedSecondaryRootEntry{})) + uint64(unsafe.Sizeof(directBufferedRootEntry{})) + 8*uint64(unsafe.Sizeof([]byte{}))
 		n, ok = mul(uint64(len(meta.Indexes)), headers)

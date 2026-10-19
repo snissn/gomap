@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
@@ -67,7 +67,7 @@ func (c *Collection) nativeDeleteBatch(ids [][]byte) (count int, resultErr error
 // The existing immutable primary/secondary builders are reused here. Index-state
 // uses exactly the same per-item encoder as the physical planner. Tombstones
 // represent the empty final document; no second mutable collection engine runs.
-func buildNativeCRUDFinalPlan(name string, opts collectionOptions, runtimes []indexRuntime, changed []preparedBatchUpdate) (*directBufferedInsertPlan, error) {
+func buildNativeCRUDFinalPlan(name string, opts collectionOptions, runtimes []indexRuntime, changed []preparedBatchUpdate, stateEntries, roots int) (*directBufferedInsertPlan, error) {
 	primary := buildDirectBufferedPrimaryRootEntries(changed, nil)
 	for i := range primary {
 		if changed[i].document == nil {
@@ -79,7 +79,12 @@ func buildNativeCRUDFinalPlan(name string, opts collectionOptions, runtimes []in
 	if err != nil {
 		return nil, err
 	}
-	plan := &directBufferedInsertPlan{primaryRootName: collectionPrimaryRootName(name), indexStateRootName: collectionIndexStateRootName(name), primaryEntries: primary, secondaryRootPlans: secondary}
+	plan := &directBufferedInsertPlan{
+		primaryRootName: collectionPrimaryRootName(name), indexStateRootName: collectionIndexStateRootName(name),
+		primaryEntries: primary, secondaryRootPlans: secondary,
+		indexStateEntries: make([]directBufferedRootEntry, 0, stateEntries),
+		rootNames:         make([]string, 0, roots), policies: make([]backenddb.OrderedRootStoragePolicy, 0, roots),
+	}
 	plan.rootNames = append(plan.rootNames, plan.primaryRootName)
 	plan.policies = append(plan.policies, opts.dataStoragePolicy)
 	if len(runtimes) > 0 && persistIndexStateForOptions(opts) {
@@ -102,13 +107,11 @@ func buildNativeCRUDFinalPlan(name string, opts collectionOptions, runtimes []in
 		plan.rootNames = append(plan.rootNames, run.rootName)
 		plan.policies = append(plan.policies, runtimes[run.runtimeIdx].def.storagePolicy)
 	}
-	sort.Slice(plan.primaryEntries, func(i, j int) bool { return bytes.Compare(plan.primaryEntries[i].key, plan.primaryEntries[j].key) < 0 })
-	sort.Slice(plan.indexStateEntries, func(i, j int) bool {
-		return bytes.Compare(plan.indexStateEntries[i].key, plan.indexStateEntries[j].key) < 0
-	})
+	slices.SortFunc(plan.primaryEntries, func(a, b directBufferedRootEntry) int { return bytes.Compare(a.key, b.key) })
+	slices.SortFunc(plan.indexStateEntries, func(a, b directBufferedRootEntry) int { return bytes.Compare(a.key, b.key) })
 	for i := range plan.secondaryRootPlans {
 		rows := plan.secondaryRootPlans[i].entries
-		sort.Slice(rows, func(i, j int) bool { return bytes.Compare(rows[i].key, rows[j].key) < 0 })
+		slices.SortFunc(rows, func(a, b directBufferedSecondaryRootEntry) int { return bytes.Compare(a.key, b.key) })
 	}
 	return plan, nil
 }

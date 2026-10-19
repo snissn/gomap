@@ -272,3 +272,32 @@ Then the named public proof can advance to Update/Delete, whose shared maintaine
 old/new effect extraction is also unfinished. Schema operations, assigned Raft and
 typed asset custody remain obligations of the full #5142 packet. This source-only
 extraction is not public activation or qualification evidence.
+
+## Ordered staging admission checkpoint
+
+Ordered scalar JSON staging separates retained rows and canonical command members
+from synchronous index validation. Each binding reuses the maintained
+`indexEncodeArena` under one original high-water COW lease; replacement admits
+old and new buffers together before detaching the old arena. The existing full
+indexed-plan formula still covers decoder fallback, including nested JSON paths.
+Validation never retains extracted states. Final old/new states use one separate
+pre-sized arena: its encoded-byte, unescape, state-header and value-reference
+capacities are admitted once before allocation from scalar bounds on the old and
+new documents. After encoding establishes actual lengths, one census admits the
+maintained primary ID copies, secondary key/entry buffers, index-state output,
+plan/root/policy backing, and unique-conflict maps before those builders run.
+Root arrays are pre-sized; sorting reuses their backing. Unique replacement maps
+retain their conservative control/growth allowance for the old values actually
+removed. No temporary decoder object graph is retained per row; its original
+high-water receipt remains separate. Final backing stays on the original stage
+receipt through synchronous publication and is refunded after all transaction
+aliases detach. Callback inputs and normalized output copies remain
+transaction-owned and admitted.
+
+Fixed publication/read/inspection controls are charged once per command member,
+not for every document copy. Canonical member lengths and possible sort-header
+backing are admitted immediately before encoding. No frame, visibility, unique
+constraint, callback, or replay policy changes. The touched-row ordering
+representation is unchanged. Default-budget 2048-row admission and growth-refusal
+atomicity controls are source-only until the coordinator executes them; this is
+not a throughput or full-node acceptance claim.
