@@ -25,13 +25,19 @@ cached-leaf-log constructors do not provide this native capability.
 
 ## Public operations and eligibility
 
-The ordinary collection manager supports eligible JSON `CreateCollection` and
+The ordinary collection manager supports eligible JSON and BSON `CreateCollection` and
 `OpenCollection`. Native collection handles route ordinary insert, batch insert,
 update and delete, point `Get`/`GetInto`, and full-document captured fetches through
 the common native engine. Scalar secondary and unique indexes support the native
-ordered JSON mutation path; supported scalar types are string, bool, int64 and
-double. Compound and multikey indexes, array index values, text/vector index
-creation and non-JSON document formats remain outside this route.
+ordered document mutation path; supported scalar types are string, bool, int64 and
+double. BSON additionally supports the maintained scalar BSONOrderedV2 encoding,
+including distinct missing/null and canonical numeric equality. Raw BSON bytes
+remain authoritative; replacement preserves the original BSON `_id`. Default and
+explicit BSON fetches return owned BSON; an explicit request format must match
+the captured collection, and JSON projection remains unavailable for BSON.
+Compound and multikey indexes, array index values, text/vector index creation,
+template formats and BSONSet remain outside this route. Scalar index DDL remains
+JSON-only.
 
 Scalar JSON index reads support `FindByIndexRange`, `ScanIndexRange`,
 `FindDocumentsByIndexRange` and `ScanBorrowedDocumentsByIndexRange`. Ascending
@@ -61,7 +67,7 @@ existing operation-local physical codec; captured TCIM sections are inspected on
 per asset, rather than once per column. Existing 32 MiB maintenance and 64 MiB
 in-flight limits remain in force; wider schemas do not receive extra credit.
 
-Raw, eligible scalar-indexed JSON and cross-collection JSON target durable WAL,
+Raw, eligible scalar-indexed JSON/BSON and cross-collection document transactions target durable WAL,
 relaxed WAL and production NoWAL profiles. Typed writes and transactions binding
 typed collections require `ProfileCommandWALDurable`; relaxed WAL and NoWAL
 refuse before mutation admission. Existing eligible NoWAL typed-read configurations
@@ -90,7 +96,7 @@ the immutable directory count to report truncation. A nil engine first requires
 the existing full physical-catalog import, outside that names-traversal bound.
 
 These are explicit eligibility limits of the provisional implementation. Broad
-producer migration remains required beyond the ordinary JSON deterministic apply slice: typed/BSON/derived assigned and Raft producers,
+producer migration remains required beyond the ordinary JSON/BSON deterministic apply slice: typed/derived assigned and Raft producers,
 import/source controls, additional typed layouts, standalone schema/drop/rename, non-scalar index DDL and derived-index lifecycle still
 need their complete public-path integration. Staged transactional DDL and
 approximate vector/hybrid or asynchronous text predicates in writing transactions
@@ -225,9 +231,9 @@ encoding and released after synchronous publication drops its borrowed aliases.
 This is a bounded operation allowance, not a claim that Go's existing global
 JSON encoder cache disappears at receipt release.
 
-## Deterministic JSON apply
+## Deterministic document apply
 
-The deterministic collection apply producer routes eligible JSON catalog create,
+The deterministic collection apply producer routes eligible JSON/BSON catalog create,
 by-ID insert, replace and delete through the same native conditional/catalog
 preparation and original canonical publisher. Frames retain their existing
 singleton kinds and payload formats. Dependency validation precedes assignment;
@@ -239,7 +245,7 @@ This producer requests the original admitted exact seal receipt. It completes
 physical coverage before computing/storing the deterministic result and progress,
 while the request's sync flag retains its command-WAL durability meaning. The
 legacy append seam cannot preassign native intents; custom legacy append seams
-refuse on this route. Unsupported typed, BSON and colocated-vector deterministic
+refuse on this route. Unsupported typed, BSONSet and colocated-vector deterministic
 mutations remain refused before assignment.
 
 External deterministic preflight uses the same identity-free native row staging
@@ -248,7 +254,8 @@ partial plans. It does not reserve the plan or assign a WAL identity, install a
 logical successor, seal, or persist apply progress/results. Empty and unchanged
 mutations validate without creating a no-effect successor. Native create
 preflight uses the same metadata eligibility as apply, including its ordinary
-JSON-only role. Apply captures again and revalidates its original catalog/data
+JSON/BSON role. Request document format must match the captured collection before
+staging. Apply captures again and revalidates its original catalog/data
 dependencies under the publication gate; a successful advisory check is not a
 promise that a later conflicting apply will succeed. Legacy preflight remains on
 its existing admitted wrapper.
@@ -269,3 +276,12 @@ and callbacks run outside the read mutex while the original capture remains
 retained. JSON materialization copies bytes without a legacy resolver. Logical
 vector receipt queries prove absence only for a current captured non-column
 schema; native typed roles continue to refuse those unsupported receipt APIs.
+
+BSON activation reuses the existing BSON validator, scalar encoders, canonical
+member formats and physical builders; it adds no on-disk format. Startup replay
+validates every intermediate BSON image under its captured schema before reducing
+ordered effects, including images later overwritten or deleted. BSONOrderedV2
+key admission includes the exact escaped ID suffix and maintained numeric digit
+limit; temporary query codec backing remains with the original captured read
+through encoding, traversal and owned ID copyout. Existing JSON charges and key
+bytes are unchanged.

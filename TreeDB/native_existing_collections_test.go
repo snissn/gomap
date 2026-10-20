@@ -82,8 +82,8 @@ func TestNativeExistingCollectionPublicLifecycle(t *testing.T) {
 			if _, e := collection.CreateIndex(collections.IndexDefinition{Name: "blocked"}); e == nil {
 				t.Fatal("unsupported index accepted")
 			}
-			if _, e := manager.CreateCollection(&collections.CollectionMeta{Name: "blocked", Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}}); e == nil {
-				t.Fatal("unsupported typed collection accepted")
+			if _, e := manager.CreateCollection(&collections.CollectionMeta{Name: "blocked", Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatTemplateV1}}); e == nil {
+				t.Fatal("unsupported document format accepted")
 			}
 			if backend.CommandWALNextLSN() != assignedBefore {
 				t.Fatal("unsupported operation assigned WAL")

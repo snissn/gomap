@@ -69,18 +69,14 @@ func (r *NativeJSONRead) scanIndexRange(name string, opts IndexRangeOptions, doc
 		if bound.Unbounded {
 			continue
 		}
-		amount := uint64(32)
-		if value, ok := bound.Value.(string); ok {
-			if uint64(len(value)) > (^uint64(0)-amount)/2 {
-				return false, true, memtable.ErrCOWCapacity
-			}
-			amount += 2 * uint64(len(value))
+		amount, err := nativeIndexQueryCharge(index, bound.Value)
+		if err != nil {
+			return false, true, err
 		}
-		amount = memtable.COWAllocationCharge(amount)
-		if amount > (^uint64(0)-charge)/3 {
+		if amount > ^uint64(0)-charge {
 			return false, true, memtable.ErrCOWCapacity
 		}
-		charge += 3 * amount
+		charge += amount
 	}
 	lease, err := r.capture.NativeAllocator().AdmitNativeBytes(charge)
 	if err != nil {

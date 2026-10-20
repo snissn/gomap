@@ -10,6 +10,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 // Domain numbers are derived only from the captured schema, exactly like the
@@ -118,6 +119,42 @@ func nativeJSONIndexedCharge(meta CollectionMeta, ids, documents [][]byte, heade
 	return total, nil
 }
 
+// Query encoding uses the same scalar limits as document extraction. BSON V2
+// additionally decodes its self-delimiting component while extracting IDs; keep
+// the original parser working allowance alive through that last borrowed key.
+func nativeIndexQueryCharge(index IndexDefinition, value any) (uint64, error) {
+	bytesNeeded := uint64(32)
+	var scratch uint64
+	if index.ValueType == IndexValueBSONOrderedV2 {
+		if raw, ok := value.(bson.RawValue); ok {
+			capacity, err := nativeJSONEncodedCapacity(len(raw.Value), []IndexDefinition{index})
+			if err != nil {
+				return 0, err
+			}
+			bytesNeeded = max(bytesNeeded, uint64(capacity))
+			// The maintained exact numeric codec caps decimal digits. Its big.Int
+			// normalization and canonical decode need that bound even for an
+			// eight-byte float. The original decoder allowance is applied to
+			// the larger of raw payload and that maintained digit limit.
+			source := max(uint64(len(raw.Value)), uint64(bsonIndexKeyNumericV2MaxDigits))
+			if source > ^uint64(0)/128 {
+				return 0, memtable.ErrCOWCapacity
+			}
+			scratch = memtable.COWAllocationCharge(source * 128)
+		}
+	} else if text, ok := value.(string); ok {
+		if uint64(len(text)) > (^uint64(0)-bytesNeeded)/2 {
+			return 0, memtable.ErrCOWCapacity
+		}
+		bytesNeeded += uint64(len(text)) * 2
+	}
+	bytesNeeded = memtable.COWAllocationCharge(bytesNeeded)
+	if bytesNeeded > (^uint64(0)-scratch)/3 {
+		return 0, memtable.ErrCOWCapacity
+	}
+	return 3*bytesNeeded + scratch, nil
+}
+
 // seekLive visits only one exact domain and borrows caller-admitted scratch.
 // It skips newer tombstones without exposing an older shadowed entry.
 func nativeJSONSeekLive(read *nativeDomainRead, probe *NativeJSONRead, start, end []byte, cursor []byte) (node.LeafEntry, bool, error) {
@@ -177,14 +214,15 @@ func (r *NativeJSONRead) visitIndexValueIDs(name string, value any, visit func([
 	}
 	// Public query buffers are caller-scoped; admit original temporary backing
 	// before encoding and release it after all key/cursor aliases end.
-	bytesNeeded := uint64(32)
-	if text, ok := value.(string); ok {
-		if uint64(len(text)) > (^uint64(0)-32)/2 {
-			return memtable.ErrCOWCapacity
-		}
-		bytesNeeded += uint64(len(text)) * 2
+	queryCharge, err := nativeIndexQueryCharge(index, value)
+	if err != nil {
+		return err
 	}
-	lease, err := r.capture.NativeAllocator().AdmitNativeBytes(3*memtable.COWAllocationCharge(bytesNeeded) + memtable.COWAllocationCharge(page.PageSize+1))
+	cursorCharge := memtable.COWAllocationCharge(page.PageSize + 1)
+	if queryCharge > ^uint64(0)-cursorCharge {
+		return memtable.ErrCOWCapacity
+	}
+	lease, err := r.capture.NativeAllocator().AdmitNativeBytes(queryCharge + cursorCharge)
 	if err != nil {
 		return err
 	}

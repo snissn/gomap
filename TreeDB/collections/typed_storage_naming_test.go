@@ -339,9 +339,9 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/collections/column_asset_dependency_directory_v2_rewrite_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 4},
 	{path: "TreeDB/collections/column_manifest_dependency_directory_v2_repeat_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 4},
 	{path: "TreeDB/collections/native_existing_column_build_failure_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 6, occurrences: 8},
-	// Deterministic JSON apply and advisory create preflight check the retained
+	// Deterministic document apply and advisory preflight check the retained
 	// schema field to refuse typed roles before original canonical assignment.
-	{path: "TreeDB/collections/native_command_wal_apply.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 3},
+	{path: "TreeDB/collections/native_command_wal_apply.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 4},
 	{path: "TreeDB/collections/native_json_composite_replay.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 3},
 	{path: "TreeDB/collections/native_json_indexes.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	{path: "TreeDB/collections/native_json_insert.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},

@@ -29,7 +29,7 @@ func decodeNativeIndexMutation(payload []byte) (commitlog.CatalogIndexMutationPa
 	if err != nil {
 		return p, before, after, err
 	}
-	if before.Name != p.Collection || after.Name != p.Collection || before.Options.ColumnStore != nil || after.Options.ColumnStore != nil {
+	if before.Name != p.Collection || after.Name != p.Collection || before.Options.ColumnStore != nil || after.Options.ColumnStore != nil || normalizedDocumentFormat(before.Options.DocumentFormat) != DocumentFormatJSON || normalizedDocumentFormat(after.Options.DocumentFormat) != DocumentFormatJSON {
 		return p, before, after, backenddb.ErrNativeSemanticUnsupported
 	}
 	before, err = nativeJSONMeta(before)

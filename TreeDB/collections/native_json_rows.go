@@ -87,14 +87,14 @@ func nativeJSONFinalRows(name string, meta CollectionMeta, rows *nativeJSONRows,
 	}
 	// One maintained arena owns every retained old/new state. Its capacities
 	// cover at most one scalar per index: escaped strings <=2*document bytes,
-	// numeric encodings <=9 bytes, and one state/reference header per scalar.
+	// bounded numeric V2 expansion, and one state/reference header per scalar.
 	var bytesCap, stateCount, maxDocument int
 	for _, row := range rows.rows {
 		for _, doc := range [][]byte{row.opening, row.current} {
 			if doc == nil {
 				continue
 			}
-			capacity, err := nativeJSONEncodedCapacity(len(doc), len(runtimes))
+			capacity, err := nativeJSONEncodedCapacity(len(doc), meta.Indexes)
 			if err != nil || capacity > int(^uint(0)>>1)-bytesCap || len(runtimes) > int(^uint(0)>>1)-stateCount {
 				return nil, nil, nil, memtable.ErrCOWCapacity
 			}
@@ -199,13 +199,27 @@ func (t *NativeJSONTxn) admitRowDocument(g *nativeJSONTxnBinding, id, doc []byte
 }
 
 // Native schemas fence arrays/multikey/compound values. Each encoded scalar
-// therefore fits <=2*document bytes (NUL escaping) plus 16 bytes for tags/numbers.
-func nativeJSONEncodedCapacity(document, indexes int) (int, error) {
+// therefore has bounded string escaping or the maintained V2 numeric digit cap.
+func nativeJSONEncodedCapacity(document int, indexes []IndexDefinition) (int, error) {
 	limit := int(^uint(0) >> 1)
-	if document > (limit-16)/2 || indexes < 0 || (indexes > 0 && 2*document+16 > limit/indexes) {
+	if document < 0 || document > (limit-16)/2 {
 		return 0, memtable.ErrCOWCapacity
 	}
-	return (2*document + 16) * indexes, nil
+	var total int
+	for _, index := range indexes {
+		capacity := 2*document + 16
+		if index.ValueType == IndexValueBSONOrderedV2 {
+			// V2 numbers have a marker, numeric tag/class, two-byte exponent,
+			// packed decimal digits and a terminator. Exact float expansion can
+			// exceed its eight-byte source; use the maintained codec's digit cap.
+			capacity = max(capacity, 6+(bsonIndexKeyNumericV2MaxDigits+1)/2)
+		}
+		if capacity > limit-total {
+			return 0, memtable.ErrCOWCapacity
+		}
+		total += capacity
+	}
+	return total, nil
 }
 
 // One original transaction-local scratch receipt owns the maintained arena and
@@ -220,7 +234,7 @@ func (t *NativeJSONTxn) prepareValidation(g *nativeJSONTxnBinding, doc []byte) e
 	if err != nil {
 		return err
 	}
-	capacity, err := nativeJSONEncodedCapacity(len(doc), len(g.probe.meta.Indexes))
+	capacity, err := nativeJSONEncodedCapacity(len(doc), g.probe.meta.Indexes)
 	if err != nil {
 		return err
 	}
@@ -525,6 +539,9 @@ func (t *NativeJSONTxn) UpdateBatchInto(name string, items []UpdateBatchItem) (r
 		}
 		if len(document) == 0 {
 			return nil, updateBatchItemError(i, errors.New("changed replacement document cannot be empty"))
+		}
+		if err := validateBSONReplacementPreservesID(row.current, document, planner.options); err != nil {
+			return nil, updateBatchItemError(i, err)
 		}
 		if err = t.admitRowDocument(g, row.id, document); err != nil {
 			return nil, err

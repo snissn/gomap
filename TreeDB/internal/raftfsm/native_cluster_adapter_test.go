@@ -300,7 +300,7 @@ func TestNativeClusterAdapterPreflightLifecycle(t *testing.T) {
 	checkRows()
 	checkHeld()
 	// Unsupported metadata cannot be admitted merely because its name is absent.
-	unsupported := deterministicCreateCollectionEntryWithOptions(t, "bson", "native-cluster:unsupported", testCreateCollectionMetaOptions{documentFormat: uint64(nativewire.DocumentFormatBSON)})
+	unsupported := deterministicCreateCollectionEntryWithOptions(t, "template", "native-cluster:unsupported", testCreateCollectionMetaOptions{documentFormat: uint64(nativewire.DocumentFormatTemplateV1)})
 	decoded, err := raftentry.DecodeCommandEntryV1(unsupported, raftentry.DecodeOptions{})
 	if err != nil {
 		t.Fatal(err)

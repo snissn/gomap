@@ -85,7 +85,16 @@ func (v *CollectionReadView) fetchNativeDocuments(ids [][]byte, opts DocumentFet
 	if v.closed || v.nativeRead == nil {
 		return DocumentFetchResponse{}, backenddb.ErrClosed
 	}
-	if len(opts.IncludePaths)+len(opts.ExcludePaths) != 0 || (opts.Format != "" && opts.Format != DocumentFormatJSON) {
+	// Reuse the public stored-format contract before returning owned raw bytes.
+	// Projection remains outside the native document capability.
+	if _, err := normalizeDocumentFetchProjection(v.nativeRead.meta, DocumentFetchOptions{Format: opts.Format}); err != nil {
+		return DocumentFetchResponse{}, err
+	}
+	if len(opts.IncludePaths)+len(opts.ExcludePaths) != 0 {
+		if normalizedDocumentFormat(v.nativeRead.meta.Options.DocumentFormat) == DocumentFormatBSON {
+			_, err := normalizeDocumentFetchProjection(v.nativeRead.meta, opts)
+			return DocumentFetchResponse{}, err
+		}
 		return DocumentFetchResponse{}, backenddb.ErrNativeSemanticUnsupported
 	}
 	out := DocumentFetchResponse{Results: make([]DocumentFetchResult, len(ids))}

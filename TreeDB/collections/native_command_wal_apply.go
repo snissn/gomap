@@ -40,7 +40,7 @@ func (m *CollectionManager) ApplyNativeCommandWALCreate(meta CollectionMeta, syn
 	return result, err
 }
 
-// ApplyNativeCommandWALMutation lowers only the existing ordinary JSON by-ID
+// ApplyNativeCommandWALMutation lowers only the existing ordinary document by-ID
 // commands. The original conditional transaction owns all reads, scalar index
 // effects and OCC dependencies; its publisher assigns the still-unassigned frame.
 func (m *CollectionManager) ApplyNativeCommandWALMutation(name string, format DocumentFormat, kind commitlog.CommandKind, ids, documents [][]byte, sync bool, observe func(uint64) error) (result NativeCommandWALApplyResult, resultErr error) {
@@ -101,7 +101,7 @@ func (m *CollectionManager) PreflightNativeCommandWALCreate(meta CollectionMeta)
 	if !m.UsesNativeCommandWALApply() || m.isClosing() {
 		return backenddb.ErrClosed
 	}
-	// The deterministic adapter remains ordinary JSON even where the public
+	// The deterministic adapter remains ordinary documents even where the public
 	// manager supports a broader typed role.
 	if meta.Options.ColumnStore != nil {
 		return backenddb.ErrNativeSemanticUnsupported
@@ -146,15 +146,32 @@ func (m *CollectionManager) beginNativeCommandWALMutation(name string, format Do
 	if kind != commitlog.CommandKindCollectionInsertBatchByID && kind != commitlog.CommandKindCollectionUpdateBatchByID && kind != commitlog.CommandKindCollectionDeleteBatchByID {
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
-	if kind != commitlog.CommandKindCollectionDeleteBatchByID && (len(ids) != len(documents) || normalizedDocumentFormat(format) != DocumentFormatJSON) {
+	if kind != commitlog.CommandKindCollectionDeleteBatchByID && len(ids) != len(documents) {
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
-	return m.nativeJSON.Begin(name)
+	tx, err := m.nativeJSON.Begin(name)
+	if err != nil {
+		return nil, err
+	}
+	g := tx.binding(name)
+	if g == nil || g.probe.meta.Options.ColumnStore != nil {
+		return nil, errors.Join(backenddb.ErrNativeSemanticUnsupported, tx.Close())
+	}
+	if kind != commitlog.CommandKindCollectionDeleteBatchByID {
+		requested, err := normalizeDocumentFormat(format)
+		if err != nil {
+			return nil, errors.Join(err, tx.Close())
+		}
+		if requested != normalizedDocumentFormat(g.probe.meta.Options.DocumentFormat) {
+			return nil, errors.Join(backenddb.ErrNativeSemanticUnsupported, tx.Close())
+		}
+	}
+	return tx, nil
 }
 
 func (tx *NativeJSONTxn) stageNativeCommandWALMutation(name string, kind commitlog.CommandKind, ids, documents [][]byte) (result NativeCommandWALApplyResult, docs []commitlog.CollectionDocument, err error) {
 	g := tx.binding(name)
-	if g == nil || g.probe.meta.Options.ColumnStore != nil || normalizedDocumentFormat(g.probe.meta.Options.DocumentFormat) != DocumentFormatJSON {
+	if g == nil || g.probe.meta.Options.ColumnStore != nil {
 		return result, docs, backenddb.ErrNativeSemanticUnsupported
 	}
 	// Admission precedes the adapter's header arrays and synchronous callbacks.

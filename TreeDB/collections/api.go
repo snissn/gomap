@@ -18077,12 +18077,24 @@ func buildDirectBufferedSecondaryRootPlans(collectionName string, runtimes []ind
 				continue
 			}
 			for _, encoded := range item.oldState.valuesAt(runtimeIdx) {
-				keyBytes := len(encoded) + len(item.documentID)
+				keyBytes, err := indexEntryKeySizeForValueType(runtime.def.valueType, encoded, item.documentID)
+				if err != nil {
+					return nil, 0, err
+				}
+				if keyBytes > int(^uint(0)>>1)-runStats.KeyBytes {
+					return nil, 0, errors.New("collections: index key backing too large")
+				}
 				runStats.Deletes++
 				runStats.KeyBytes += keyBytes
 			}
 			for _, encoded := range item.newState.valuesAt(runtimeIdx) {
-				keyBytes := len(encoded) + len(item.documentID)
+				keyBytes, err := indexEntryKeySizeForValueType(runtime.def.valueType, encoded, item.documentID)
+				if err != nil {
+					return nil, 0, err
+				}
+				if keyBytes > int(^uint(0)>>1)-runStats.KeyBytes {
+					return nil, 0, errors.New("collections: index key backing too large")
+				}
 				runStats.Sets++
 				runStats.KeyBytes += keyBytes
 			}
