@@ -57,6 +57,13 @@ func TestVacuumSystemLeafPolicyWarmWriteAndRecovery(t *testing.T) {
 				d.SetLeafPageLog(log)
 			}
 			openDB()
+			// SYSTEM and the collection roots below use pager leaves. Keep a real
+			// USER DATA root in the log so both recovery slots must retain the
+			// original exact outer-leaf manifest as well as SYSTEM ValuePtrs.
+			writeLeafGenerationKeys(t, d, "user-data", 256, 'u')
+			if len(collectLeafRefIDsFromRoot(t, d, d.State().RootPageID)) == 0 {
+				t.Fatal("USER seed did not activate DATA log leaves")
+			}
 			// Publish the small target before a multi-page collection whose catalog
 			// key sorts first. Vacuum therefore rebuilds the padding collection first
 			// and cannot reuse the target's lower source page for its destination.
@@ -121,14 +128,18 @@ func TestVacuumSystemLeafPolicyWarmWriteAndRecovery(t *testing.T) {
 			}
 			// Both original recovery slots must hold a multi-page pager SYSTEM
 			// tree, while pointer-backed descriptor values retain vlog authority.
-			for slot, record := range d.durableRoot.slotRecord {
-				if record.CommitSeq <= 1 {
-					t.Fatalf("seed slot %d is not a durable application system tree: %+v", slot, record)
+			func() {
+				d.durablePublishMu.Lock()
+				defer d.durablePublishMu.Unlock()
+				for slot, record := range d.durableRoot.slotRecord {
+					if record.CommitSeq <= 1 {
+						t.Fatalf("seed slot %d is not a durable application system tree: %+v", slot, record)
+					}
+					if len(vacuumSystemPagerPointers(t, d, record.SystemRootPageID)) == 0 {
+						t.Fatalf("seed slot %d did not activate pointer-backed SYSTEM values", slot)
+					}
 				}
-				if len(vacuumSystemPagerPointers(t, d, record.SystemRootPageID)) == 0 {
-					t.Fatalf("seed slot %d did not activate pointer-backed SYSTEM values", slot)
-				}
-			}
+			}()
 			vacuumSystemManifestFiles(t, d, true)
 			vacuumOnline := func() bool {
 				t.Helper()
@@ -213,6 +224,16 @@ func TestVacuumSystemLeafPolicyWarmWriteAndRecovery(t *testing.T) {
 					t.Fatal("missing snapshot")
 				}
 				defer snap.Close()
+				if len(collectLeafRefIDsFromRoot(t, d, snap.state.RootPageID)) == 0 {
+					t.Fatal("USER root lost DATA log-leaf activation")
+				}
+				for i := 0; i < 256; i++ {
+					key := []byte(fmt.Sprintf("user-data-%04d", i))
+					got, err := snap.Get(key)
+					if err != nil || string(got) != "uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu" {
+						t.Fatalf("USER key=%q value=%q err=%v", key, got, err)
+					}
+				}
 				for i := 0; i < 2048; i++ {
 					want := fmt.Sprintf("value-%04d", i)
 					if updated && i == 1024 {
@@ -275,14 +296,21 @@ func TestVacuumSystemLeafPolicyWarmWriteAndRecovery(t *testing.T) {
 // Check the actual immutable manifest tokens, not the compatibility view.
 func vacuumSystemManifestFiles(t *testing.T, d *DB, allSlots bool) {
 	t.Helper()
+	// Keep each record and its original resource owner paired while borrowing
+	// tokens; publication swaps the slot and releases the previous set here.
+	d.durablePublishMu.Lock()
+	defer d.durablePublishMu.Unlock()
 	for slot, record := range d.durableRoot.slotRecord {
 		if record.CommitSeq == 0 || (!allSlots && uint64(slot) != d.durableRoot.slot) {
 			continue
 		}
 		pointers := vacuumSystemPagerPointers(t, d, record.SystemRootPageID)
 		var manifest *leafGenerationManifest
-		err := d.durableRoot.slotResources[slot].WithScopedTokens(func(tokens []*rootpublication.StableResourceToken) error {
+		var tokenContext []string
+		resources := d.durableRoot.slotResources[slot]
+		err := resources.WithScopedTokens(func(tokens []*rootpublication.StableResourceToken) error {
 			for _, token := range tokens {
+				tokenContext = append(tokenContext, fmt.Sprintf("%s/%s/generation=%d", token.Kind(), token.ResourceID(), token.Generation()))
 				if token.Kind() == rootpublication.ResourceValueLog && token.Reachability() == rootpublication.ReachabilityValueLogPointer {
 					for id := range pointers {
 						if token.ResourceID() == fmt.Sprint(id) {
@@ -296,10 +324,20 @@ func vacuumSystemManifestFiles(t *testing.T, d *DB, allSlots bool) {
 			return err
 		})
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("slot %d scoped manifest read: owner=%v tokens=%v: %v", slot, resources.Owner(), tokenContext, err)
 		}
 		if manifest == nil {
-			t.Fatalf("slot %d has no exact manifest: selected=%d record=%+v resources=%+v manifest_mode=%v vacuum=%+v", slot, d.durableRoot.slot, record, mustStableResourceDescriptors(t, d.durableRoot.slotResources[slot]), d.leafGenerationManifestStore.mode, d.VacuumOnlineStats())
+			t.Fatalf("slot %d has no exact manifest: selected=%d record=%+v owner=%v tokens=%v manifest_mode=%v", slot, d.durableRoot.slot, record, resources.Owner(), tokenContext, d.leafGenerationManifestStore.mode)
+		}
+		userLeaves := collectLeafRefIDsFromRoot(t, d, record.UserRootPageID)
+		if len(userLeaves) == 0 {
+			t.Fatalf("slot %d has no USER DATA log leaves", slot)
+		}
+		for ptr := range userLeaves {
+			id := page.ValueLogSegmentID(ptr.FileID)
+			if !manifest.hasNonDeletedFileID(id) {
+				t.Fatalf("slot %d manifest %d omits USER DATA leaf file %d", slot, manifest.ManifestRevision, id)
+			}
 		}
 		if len(pointers) != 0 {
 			t.Fatalf("slot %d omits original SYSTEM value-pointer dependencies: %v", slot, pointers)
