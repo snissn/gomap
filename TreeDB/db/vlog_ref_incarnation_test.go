@@ -222,11 +222,24 @@ func TestValueLogRefCountOwnerSurvivesDATAVacuum(t *testing.T) {
 	// scavenger deliberately waits five seconds. Do not replace that policy
 	// with a direct Arena.Close or a scalar owner-state inference.
 	deadline := time.Now().Add(15 * time.Second)
-	for !original.closeCompleted && time.Now().Before(deadline) {
+	for {
+		original.wrapperMu.Lock()
+		completed, physicalCompleted := original.closeCompleted, original.physicalCompleted
+		var closeErr error
+		if completed {
+			closeErr = original.closeErr
+		}
+		original.wrapperMu.Unlock()
+		if completed {
+			if !physicalCompleted || closeErr != nil {
+				t.Fatalf("genuine old DATA physical close failed: physicalCompleted=%t err=%v", physicalCompleted, closeErr)
+			}
+			break
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatalf("genuine old DATA physical close not reached: refs=%d minPinned=%d", original.refs.Load(), original.registry.MinPinnedSeq())
+		}
 		time.Sleep(20 * time.Millisecond)
-	}
-	if !original.closeCompleted {
-		t.Fatalf("genuine old DATA physical close not reached: refs=%d minPinned=%d", original.refs.Load(), original.registry.MinPinnedSeq())
 	}
 	tracker := d.valueLogRefTracker
 	tracker.mu.Lock()
