@@ -323,6 +323,9 @@ func (p *nativeJSONLogicalGroup) FinalizeNativePublication(ctx backenddb.Command
 			if d == nil || d.appliedLSN != 0 || d.memberOrdinal != staged.memberOrdinal {
 				return backenddb.NativeFinalizedPublication{}, backenddb.ErrNativeSemanticUnsupported
 			}
+			if p.participants != nil && (int(staged.memberOrdinal) >= len(p.participants) || p.participants[staged.memberOrdinal].AssignedLSN() == 0 || p.participants[staged.memberOrdinal].AssignedLSN() > ctx.AppliedCommandLSN) {
+				return backenddb.NativeFinalizedPublication{}, backenddb.ErrNativeSemanticUnsupported
+			}
 			d = d.previous
 		}
 	}
@@ -336,6 +339,10 @@ func (p *nativeJSONLogicalGroup) FinalizeNativePublication(ctx backenddb.Command
 		d := primary.typed
 		for staged := g.typed; staged != nil; staged = staged.previous {
 			d.appliedLSN = ctx.AppliedCommandLSN
+			if p.participants != nil {
+				d.appliedLSN = p.participants[staged.memberOrdinal].AssignedLSN()
+				d.memberOrdinal = 0 // each participant has its own singleton frame
+			}
 			if p.raw {
 				d.memberOrdinal++
 			}

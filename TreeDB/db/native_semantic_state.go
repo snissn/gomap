@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
@@ -289,6 +290,26 @@ func (db *DB) ValidateNativeCommandIntent(owner *transactionowner.Owner, intent 
 	}
 	if intent == nil || intent.AssignedLSN() != 0 {
 		return ErrCommandWALRejected
+	}
+	if participants := intent.inner.durablePrefixGroup; len(participants) != 0 {
+		if len(participants) < 2 || len(participants) > commitlog.MaxCompositeMutationMembersV1 || db.resolvedProfile != ProfileCommandWALDurable || intent.inner.fromReplay ||
+			intent.inner.kind != 0 || len(intent.inner.payload) != 0 {
+			return ErrCommandWALRejected
+		}
+		for i, participant := range participants {
+			if participant == nil || len(participant.inner.durablePrefixGroup) != 0 || participant.inner.fromReplay {
+				return ErrCommandWALRejected
+			}
+			for _, prior := range participants[:i] {
+				if prior == participant {
+					return ErrCommandWALRejected
+				}
+			}
+			if err := db.ValidateNativeCommandIntent(owner, participant); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 	registration, ok := lookupCommandWALReplayHandler(intent.inner.kind)
 	if !ok || registration.nativePrepare == nil {

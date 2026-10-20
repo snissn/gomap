@@ -111,6 +111,7 @@ type acceptedEntry struct {
 	reserved, ordered, maintenance bool
 	descriptor                     AcceptedDescriptor
 	receipt                        AcceptedReceipt
+	firstCanonicalLSN              uint64
 	seal                           PhysicalSealReceipt
 	handedOff, boundary            bool
 	retiring, released             bool
@@ -252,6 +253,13 @@ func (ticket AcceptedTicket) BindPreassignedCustody(custody AcceptedCustody) err
 // RecordAssigned records the actual canonical append result in canonical
 // sequencer order. A nonzero identity is irreversible, even with append error.
 func (ticket AcceptedTicket) RecordAssigned(lsn uint64, appendErr error, stable bool) error {
+	return ticket.RecordAssignedRange(lsn, lsn, appendErr, stable)
+}
+
+// RecordAssignedRange records one actual contiguous append behind the SAME
+// original ticket. Only the original append guard supplies a grouped range;
+// no participant becomes logically installed before the whole-cut swap.
+func (ticket AcceptedTicket) RecordAssignedRange(first, last uint64, appendErr error, stable bool) error {
 	if ticket.owner == nil {
 		return ErrAcceptedReceipt
 	}
@@ -259,12 +267,13 @@ func (ticket AcceptedTicket) RecordAssigned(lsn uint64, appendErr error, stable 
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	_, e := ticket.entryLocked()
-	if e == nil || e.receipt.Assigned || e.receipt.Installed {
+	if e == nil || e.receipt.Assigned || e.receipt.Installed || (first == 0) != (last == 0) || first > last {
 		return ErrAcceptedReceipt
 	}
-	e.receipt.CanonicalLSN, e.receipt.Assigned, e.receipt.Uncertain = lsn, lsn != 0, lsn != 0 && appendErr != nil
-	e.receipt.WALCompleted, e.receipt.WALStable = lsn != 0 && appendErr == nil, lsn != 0 && appendErr == nil && stable
-	if lsn != 0 {
+	e.firstCanonicalLSN = first
+	e.receipt.CanonicalLSN, e.receipt.Assigned, e.receipt.Uncertain = last, last != 0, last != 0 && appendErr != nil
+	e.receipt.WALCompleted, e.receipt.WALStable = last != 0 && appendErr == nil, last != 0 && appendErr == nil && stable
+	if last != 0 {
 		p.orderEntryLocked(ticket.slot, e)
 	}
 	if e.receipt.Uncertain {
@@ -312,7 +321,7 @@ func (ticket AcceptedTicket) BeginInstall(descriptor AcceptedDescriptor) (Accept
 		p.mu.Unlock()
 		return AcceptedInstall{}, err
 	}
-	invalid := p.closed || e == nil || e.receipt.Installed || (descriptor.Sequence != p.frontiers.V+1 && !((descriptor.RootNeutral || e.maintenance) && descriptor.Sequence == p.frontiers.V)) || e.receipt.Uncertain || (e.receipt.CanonicalLSN != 0 && e.receipt.CanonicalLSN != p.frontiers.C+1) || (len(descriptor.Projections) != 0 && descriptor.Custody == nil) || (e.descriptor.Custody != nil && e.descriptor.Custody != descriptor.Custody)
+	invalid := p.closed || e == nil || e.receipt.Installed || (descriptor.Sequence != p.frontiers.V+1 && !((descriptor.RootNeutral || e.maintenance) && descriptor.Sequence == p.frontiers.V)) || e.receipt.Uncertain || (e.receipt.CanonicalLSN != 0 && (e.firstCanonicalLSN != p.frontiers.C+1 || e.firstCanonicalLSN > e.receipt.CanonicalLSN)) || (len(descriptor.Projections) != 0 && descriptor.Custody == nil) || (e.descriptor.Custody != nil && e.descriptor.Custody != descriptor.Custody)
 	if invalid {
 		err := error(ErrAcceptedReceipt)
 		if p.closed {

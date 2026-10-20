@@ -367,8 +367,9 @@ func (db *DB) writeNativePublication(b *Batch, native *backenddb.NativePreparedP
 		if err := b.cowState.accepted.BindPreassignedCustody(b.cowState.native); err != nil {
 			return err
 		}
-		lsn, appendErr := guard.Append(intent, sync)
-		receiptErr := b.RecordCOWAppend(owner, lsn, appendErr, sync)
+		assigned, appendErr := guard.AppendWithAssignedRange(intent, sync)
+		lsn := assigned.Last
+		receiptErr := b.recordCOWAppendRange(owner, assigned, appendErr, sync)
 		if appendErr != nil {
 			return appendErr
 		}

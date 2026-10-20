@@ -2248,9 +2248,16 @@ func (db *DB) appendCommandWALDurablePrefixGroup(group *CommandWALIntent) (uint6
 		db.poisonCommandWALAfterPostAppendFailure(&group.inner)
 	}
 	for _, participant := range group.inner.durablePrefixGroup {
+		// Children borrow precisely the live wrapper's original owner for this
+		// synchronous append; no owner escapes into a participant receipt.
+		participant.inner.privateCOWOwner = group.inner.privateCOWOwner
 		lsn, err := db.appendCommandWALIntent(&participant.inner, false)
+		participant.inner.privateCOWOwner = nil
 		if err != nil {
-			if assigned := participant.AssignedLSN(); assigned > last {
+			if assigned := participant.AssignedLSN(); assigned != 0 {
+				if first == 0 {
+					first = assigned
+				}
 				last = assigned
 			}
 			markAssigned()
@@ -2266,8 +2273,28 @@ func (db *DB) appendCommandWALDurablePrefixGroup(group *CommandWALIntent) (uint6
 		}
 		last = lsn
 	}
-	barrierLSN, err := db.appendCommandWALDurablePrefixBarrier()
+	var barrierLSN uint64
+	var err error
+	if group.inner.privateCOWOwner != nil {
+		// The barrier belongs to this SAME private group's accepted ticket.
+		// Ordinary/legacy barriers retain their existing root-neutral ticket.
+		barrier := commandWALBatchIntent{
+			privateCOWOwner: group.inner.privateCOWOwner,
+			kind:            commitlog.CommandKindDurablePrefixBarrier, scope: commitlog.CommandScopeSystem,
+			payloadFormat: commitlog.PayloadFormatDurablePrefixBarrierV1,
+			statsPath:     commandWALAppendStatsBarrier, statsPathSet: true,
+		}
+		barrierLSN, err = db.appendCommandWALIntent(&barrier, true)
+		if barrier.lsn != 0 {
+			barrierLSN = barrier.lsn
+		}
+	} else {
+		barrierLSN, err = db.appendCommandWALDurablePrefixBarrier()
+	}
 	if err != nil {
+		if barrierLSN != 0 {
+			last = barrierLSN
+		}
 		markAssigned()
 		return last, err
 	}

@@ -455,22 +455,34 @@ func (guard *CommandWALStagingGuardV1) ClaimAppendOwnershipV1(db *DB) error {
 
 // Append assigns this guard to the actual staged intent before any borrowing.
 func (guard *CommandWALStagingGuardV1) Append(intent *CommandWALIntent, sync bool) (uint64, error) {
+	assigned, err := guard.AppendWithAssignedRange(intent, sync)
+	return assigned.Last, err
+}
+
+// AppendWithAssignedRange returns only identities actually assigned by this
+// original guard. The group appender proves adjacency as each frame is written;
+// an append error preserves its irreversible prefix without installing it.
+func (guard *CommandWALStagingGuardV1) AppendWithAssignedRange(intent *CommandWALIntent, sync bool) (CommandWALLSNRange, error) {
 	if guard == nil || guard.ownership == nil {
-		return 0, ErrClosed
+		return CommandWALLSNRange{}, ErrClosed
 	}
 	held := guard.ownership
 	held.mu.Lock()
 	defer held.mu.Unlock()
 	if !held.active || held.db == nil || held.intent != nil || intent == nil || intent.AssignedLSN() != 0 {
-		return 0, ErrCommandWALRejected
+		return CommandWALLSNRange{}, ErrCommandWALRejected
 	}
 	intent.inner.privateCOWOwner = held.privateOwner
 	defer func() { intent.inner.privateCOWOwner = nil }()
 	lsn, err := held.db.AppendStagedCommandWALIntent(intent, sync)
+	assigned := CommandWALLSNRange{First: lsn, Last: lsn}
+	if len(intent.inner.durablePrefixGroup) != 0 {
+		assigned = intent.inner.coveredRange[0]
+	}
 	if err == nil && lsn != 0 {
 		held.intent = intent
 	}
-	return lsn, err
+	return assigned, err
 }
 
 // Release expires all capture borrowers at Finalize/Abort, then relinquishes

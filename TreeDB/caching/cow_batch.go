@@ -573,6 +573,12 @@ type COWPublicationReceipt struct {
 }
 
 func (b *Batch) RecordCOWAppend(owner *transactionowner.Owner, lsn uint64, appendErr error, synced bool) error {
+	return b.recordCOWAppendRange(owner, backenddb.CommandWALLSNRange{First: lsn, Last: lsn}, appendErr, synced)
+}
+
+// assigned is borrowed only from the original guard's actual append result.
+func (b *Batch) recordCOWAppendRange(owner *transactionowner.Owner, assigned backenddb.CommandWALLSNRange, appendErr error, synced bool) error {
+	lsn := assigned.Last
 	if b == nil || b.db == nil || b.db.cow == nil || owner == nil || owner != b.db.cow.txnOwner || !b.cowState.inPublication {
 		return ErrCOWUnsupported
 	}
@@ -582,7 +588,7 @@ func (b *Batch) RecordCOWAppend(owner *transactionowner.Owner, lsn uint64, appen
 	b.cowState.receipt.WALCompleted = lsn != 0 && appendErr == nil
 	b.cowState.receipt.WALStable = lsn != 0 && appendErr == nil && synced
 	if b.cowState.accepted.Valid() {
-		return b.cowState.accepted.RecordAssigned(lsn, appendErr, synced)
+		return b.cowState.accepted.RecordAssignedRange(assigned.First, assigned.Last, appendErr, synced)
 	}
 	return nil
 }

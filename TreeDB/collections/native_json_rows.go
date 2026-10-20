@@ -762,7 +762,7 @@ func (t *NativeJSONTxn) DeleteBatchFrom(name string, ids [][]byte) (count int, r
 	return len(removed), t.appendNativeMember(g, commitlog.CommandKindCollectionDeleteBatchByID, commitlog.PayloadFormatCollectionDeleteBatchByIDV1, payload)
 }
 
-func (t *NativeJSONTxn) finalizeNativeRows() error {
+func (t *NativeJSONTxn) finalizeNativeRows(graphSingleton bool) error {
 	for i := range t.bindings {
 		g := &t.bindings[i]
 		if g.typed != nil {
@@ -834,7 +834,9 @@ func (t *NativeJSONTxn) finalizeNativeRows() error {
 			return err
 		}
 	}
-	if len(t.members) == 0 {
+	// Graph rebuild finalizes a catalog effect and a typed recipe without CRUD
+	// members. Ordinary empty transactions still have no publishable mutation.
+	if len(t.members) == 0 && !graphSingleton {
 		return fmt.Errorf("%w: no staged row mutations", backenddb.ErrNativeSemanticUnsupported)
 	}
 	return nil

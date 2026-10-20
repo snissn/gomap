@@ -340,6 +340,7 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/native_column_update_batch_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 6, occurrences: 7},
 	{path: "TreeDB/native_full_retained_public_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 5},
 	{path: "TreeDB/native_full_update_batch_public_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 5},
+	{path: "TreeDB/native_full_store_rewrite_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 7, occurrences: 8},
 	{path: "TreeDB/native_prepared_insert_three_aggregate_lifecycle_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 7, occurrences: 8},
 	// Native typed maintenance uses the retained public compaction/configuration
 	// names; its bridge, cancellation and public fixtures retain API compatibility.

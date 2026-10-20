@@ -147,7 +147,7 @@ func (tx *NativeJSONTxn) validateNativeCommandWALMutation() error {
 		// creates their canonical no-effect member and immutable successor.
 		return nil
 	}
-	return tx.finalizeNativeRows()
+	return tx.finalizeNativeRows(false)
 }
 
 func (m *CollectionManager) beginNativeCommandWALMutation(name string, format DocumentFormat, kind commitlog.CommandKind, ids, documents [][]byte) (*NativeJSONTxn, error) {
