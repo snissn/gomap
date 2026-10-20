@@ -56,6 +56,20 @@ var bsonSetBatchDocumentIDHashSeed = maphash.MakeSeed()
 // updates append their deterministic command frame before returning, and
 // Flush/Close later publishes the covered roots.
 func (c *Collection) UpdateBSONSet(documentID []byte, fields []BSONSetField) (bool, bool, error) {
+	if c != nil && c.nativeJSON != nil {
+		results, _, err := c.nativeUpdateBatchMode(nil, updateBatchModeAny, []BSONSetUpdateBatchItem{{DocumentID: documentID, Fields: fields}})
+		if err != nil {
+			var item *UpdateBatchItemError
+			if errors.As(err, &item) && item.Index == 0 {
+				err = item.Err
+			}
+			return false, false, err
+		}
+		if len(results) != 1 {
+			return false, false, fmt.Errorf("collections: BSON $set result count %d for single update", len(results))
+		}
+		return results[0].Matched, results[0].Modified, nil
+	}
 	if err := validateCollectionUpdateDocumentInput(c, documentID); err != nil {
 		return false, false, err
 	}
@@ -141,6 +155,12 @@ func (c *Collection) updateBSONSetDirect(documentID []byte, spec bsonSetUpdate) 
 // value changes in the planning snapshot. This is the BSON-set equivalent of
 // UpdateBatchIfNoSecondaryUniqueIndexChanges.
 func (c *Collection) UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges(items []BSONSetUpdateBatchItem) ([]UpdateBatchResult, bool, error) {
+	if c != nil && c.nativeJSON != nil {
+		if items == nil {
+			items = []BSONSetUpdateBatchItem{}
+		}
+		return c.nativeUpdateBatchMode(nil, updateBatchModeNoSecondaryUniqueIndexChanges, items)
+	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
 	admissionState := c.lockCollectionCommandWALAdmission()

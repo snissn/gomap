@@ -155,7 +155,26 @@ func replayNativeIndexMutation(db *backenddb.DB, env commitlog.CommandEnvelope) 
 				return e
 			}
 		}
-		plan, _, _, err := nativeJSONFinalRows(p.Collection, after, &rows, noAdmission, nil)
+		var resolver templateV1Resolver
+		if normalizedDocumentFormat(after.Options.DocumentFormat) == DocumentFormatTemplateV1 {
+			if _, err = snapshot.GetAtRoot(token.SystemRootPageID, []byte(systemCollectionRootOverlayKey(collectionTemplateRootName(p.Collection)))); err == nil {
+				return backenddb.ErrNativeSemanticUnsupported
+			} else if !errors.Is(err, tree.ErrKeyNotFound) {
+				return err
+			}
+			templateRoot := uint64(0)
+			encoded, err = snapshot.GetAtRoot(token.SystemRootPageID, []byte(systemCollectionRootKey(collectionTemplateRootName(p.Collection))))
+			if err == nil {
+				templateRoot, err = decodeRootID(encoded)
+			} else if errors.Is(err, tree.ErrKeyNotFound) {
+				err = nil
+			}
+			if err != nil {
+				return err
+			}
+			resolver = &templateV1SnapshotResolver{snap: snapshot, rootID: templateRoot}
+		}
+		plan, _, _, err := nativeJSONFinalRowsResolved(p.Collection, after, &rows, noAdmission, nil, updateBatchModeAny, resolver)
 		if err != nil {
 			return err
 		}

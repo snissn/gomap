@@ -334,6 +334,7 @@ func (db *DB) writeNativePublication(b *Batch, native *backenddb.NativePreparedP
 		}
 		return result, err
 	}
+	defer func() { native.ObserveAssigned = nil }()
 	if !db.externalCommandWAL {
 		return result, ErrCOWUnsupported
 	}
@@ -376,6 +377,12 @@ func (db *DB) writeNativePublication(b *Batch, native *backenddb.NativePreparedP
 		}
 		if lsn == 0 {
 			return backenddb.ErrCommandWALRejected
+		}
+		if observe := native.ObserveAssigned; observe != nil {
+			native.ObserveAssigned = nil
+			if err := observe(lsn); err != nil {
+				return err // SAME original assigned ticket retains/poisons custody.
+			}
 		}
 		if native.Finalizer != nil {
 			finalized, err := backend.FinalizeNativeUnderGuard(guard, intent, native)

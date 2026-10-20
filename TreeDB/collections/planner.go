@@ -2706,6 +2706,31 @@ func appendIndexEntryKey(dst, encodedValue, documentID []byte) ([]byte, []byte, 
 	return dst, dst[start:len(dst):len(dst)], nil
 }
 
+// indexEntryKeySizeForValueType prices the exact maintained key image before
+// allocation, including the V2 escaped document-ID suffix.
+func indexEntryKeySizeForValueType(valueType IndexValueType, encodedValue, documentID []byte) (int, error) {
+	limit := int(^uint(0) >> 1)
+	idBytes := len(documentID)
+	if valueType == IndexValueBSONOrderedV2 {
+		for _, b := range documentID {
+			if b == 0 {
+				if idBytes == limit {
+					return 0, errBSONIndexKeyV2TooLarge
+				}
+				idBytes++
+			}
+		}
+		if idBytes > bsonIndexKeyComponentV2MaxBytes-3 {
+			return 0, errBSONIndexKeyV2TooLarge
+		}
+		idBytes += 3 // marker and the two-byte terminator
+	}
+	if len(encodedValue) > limit-idBytes {
+		return 0, errors.New("collections: index key too large")
+	}
+	return len(encodedValue) + idBytes, nil
+}
+
 // appendIndexEntryKeyForValueType keeps legacy typed-v1 roots byte-for-byte
 // stable while making BSON v2 roots use their mandatory, self-delimiting ID
 // suffix. Callers must select this from index metadata, never from key bytes.

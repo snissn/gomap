@@ -111,7 +111,12 @@ func (f *FSM) CaptureRaftSnapshotV1() (result raftcluster.RaftSnapshotV1, captur
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := f.db.Checkpoint(); err != nil {
+		if f.nativeCollections {
+			// Complete the original semantic prefix before capturing its physical cut.
+			if err := f.db.SyncNativeSemanticPrefix(); err != nil {
+				return err
+			}
+		} else if err := f.db.Checkpoint(); err != nil {
 			return err
 		}
 		record, ok, err := f.lastAppliedProgressRecord()

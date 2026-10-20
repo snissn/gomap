@@ -312,7 +312,22 @@ func (m *NativeJSONManager) mutateIndexes(name string, create *IndexDefinition, 
 				scratchPeak = n
 				return nil
 			}
-			plan, _, _, err = nativeJSONFinalRows(name, meta, &rows, admit, scratch)
+			var resolver templateV1Resolver
+			if normalizedDocumentFormat(meta.Options.DocumentFormat) == DocumentFormatTemplateV1 {
+				// Only template backfill needs this exact-capture resolver. Admit
+				// its header and closure (entry, read pointer, admission function)
+				// before constructing them; JSON/BSON retain their original path.
+				environment := uint64(unsafe.Sizeof(struct {
+					entry uintptr
+					read  *NativeJSONRead
+					admit func(uint64) error
+				}{}))
+				if err = admit(memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeTemplateResolver{}))) + memtable.COWAllocationCharge(environment)); err != nil {
+					return nil, err
+				}
+				resolver = read.templateResolver(admit)
+			}
+			plan, _, _, err = nativeJSONFinalRowsResolved(name, meta, &rows, admit, scratch, updateBatchModeAny, resolver)
 			if err != nil {
 				return nil, err
 			}

@@ -25,13 +25,62 @@ cached-leaf-log constructors do not provide this native capability.
 
 ## Public operations and eligibility
 
-The ordinary collection manager supports eligible JSON `CreateCollection` and
+The ordinary collection manager supports eligible JSON, BSON and template-v1 `CreateCollection` and
 `OpenCollection`. Native collection handles route ordinary insert, batch insert,
 update and delete, point `Get`/`GetInto`, and full-document captured fetches through
 the common native engine. Scalar secondary and unique indexes support the native
-ordered JSON mutation path; supported scalar types are string, bool, int64 and
-double. Compound and multikey indexes, array index values, text/vector index
-creation and non-JSON document formats remain outside this route.
+ordered document mutation path; supported scalar types are string, bool, int64 and
+double. BSON additionally supports the maintained scalar BSONOrderedV2 encoding,
+including distinct missing/null and canonical numeric equality. Raw BSON bytes
+remain authoritative; replacement preserves the original BSON `_id`. Default and
+explicit BSON fetches return owned BSON; an explicit request format must match
+the captured collection, and JSON projection remains unavailable for BSON.
+Scalar multikey indexes and the existing `AllowArrayValuesInIndex` option use
+that same planner: arrays are encoded as sorted distinct value sets, preserving
+the format's existing missing/null and dotted-path semantics. Final unique
+ownership is checked across the whole transaction, including value handoffs.
+Compound indexes and text/vector index creation remain outside this route. Eligible BSON collections also support top-level `UpdateBSONSet` and
+`UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges`, using the maintained BSON
+transformer and canonical full replacement documents. `_id`, dotted or invalid
+field names and malformed raw values retain their existing refusal contracts.
+The transformer borrows input fields only during the synchronous operation;
+retained documents and canonical frames own their output.
+
+The existing conditional `UpdateBatchIfNoSecondaryUniqueIndexes` and
+`UpdateBatchIfNoSecondaryUniqueIndexChanges` routes share the same captured
+metadata and old/new scalar encoder. A schema-based decline does not invoke
+callbacks. A unique-value-change decline returns zero-valued results and
+`batched=false`, without assigning a canonical identity or publishing private
+changes. BSONOrderedV2 compares its encoded numeric value, so changing the BSON
+integer width alone does not imply a unique-value change.
+
+Template-v1 uses the maintained TD1I/TD1H preparation and compact TD1D primary
+representation. New template records, hash bindings and next-ID updates share the
+same immutable transaction and domain 2 as the document/index effects. Canonical
+members retain their original input envelopes, including intermediate members
+whose documents are later deleted. Persisted template hash/next-ID reads have
+ordinary OCC dependencies. The public scoped encoder learns numeric IDs only
+after successful publication and remains bound to the original backend and
+collection. Its compact stored inputs cannot cross that scope. A stored-document
+JSON materializer retains its exact native capture and resolves template records
+from that same cut, including pending records; returned JSON is caller-owned.
+Its temporary parser/object backing is admitted by the original read allocator
+and released after owned copyout. Scalar index DDL reuses the same captured
+resolver and original complete-cut backfill. No template cache or on-disk format
+is added. Specialized deterministic/assigned and prepared template producers
+remain outside this ordinary family.
+
+Scalar JSON index reads support `FindByIndexRange`, `ScanIndexRange`,
+`FindDocumentsByIndexRange` and `ScanBorrowedDocumentsByIndexRange`. Ascending
+scans seek directly to the maintained scalar bounds and merge pending,
+captured and persisted winners from one immutable cut. Document reads resolve
+primary values from that same cut. Limits report truncation only when an
+additional live match exists; a callback stop is not truncation. Multikey scans
+emit each document once at its first matching encoded value, and limits count
+unique documents. Their operation-local deduplication backing is admitted before
+growth under the original finite read budget and is released when traversal ends.
+Missing indexes are empty scans. Document ranges require a positive limit, and
+borrowed-document callbacks retain their existing no-retention/no-reentry contract.
 
 Eligible typed collections also route `InsertTypedBatchWithStats`,
 `ReplaceTypedBatch`, `UpsertTypedBatch`, `ReplaceTypedSourceByID` and `DeleteBatch`
@@ -52,7 +101,7 @@ existing operation-local physical codec; captured TCIM sections are inspected on
 per asset, rather than once per column. Existing 32 MiB maintenance and 64 MiB
 in-flight limits remain in force; wider schemas do not receive extra credit.
 
-Raw, eligible scalar-indexed JSON and cross-collection JSON target durable WAL,
+Raw, eligible scalar-indexed JSON/BSON and cross-collection document transactions target durable WAL,
 relaxed WAL and production NoWAL profiles. Typed writes and transactions binding
 typed collections require `ProfileCommandWALDurable`; relaxed WAL and NoWAL
 refuse before mutation admission. Existing eligible NoWAL typed-read configurations
@@ -81,7 +130,7 @@ the immutable directory count to report truncation. A nil engine first requires
 the existing full physical-catalog import, outside that names-traversal bound.
 
 These are explicit eligibility limits of the provisional implementation. Broad
-producer migration remains required: assigned/apply and Raft producers,
+producer migration remains required beyond the ordinary JSON/BSON deterministic apply slice: typed/derived assigned and Raft producers,
 import/source controls, additional typed layouts, standalone schema/drop/rename, non-scalar index DDL and derived-index lifecycle still
 need their complete public-path integration. Staged transactional DDL and
 approximate vector/hybrid or asynchronous text predicates in writing transactions
@@ -187,12 +236,13 @@ gates pass. This document does not retire that path or claim a performance gain.
 
 ## Standalone scalar index DDL
 
-Activated ordinary JSON handles support `CreateIndex`, `DropIndex`,
+Activated ordinary JSON and BSON handles support `CreateIndex`, `DropIndex`,
 `DropIndexes` and `DropAllIndexes` through one immutable catalog transition.
 Creation backfills the complete captured primary cut, including pending rows,
 using the maintained scalar encoder and uniqueness checks. A duplicate unique
-backfill refuses before canonical assignment. Typed, text, vector, compound and
-multikey index DDL remain outside this capability.
+backfill refuses before canonical assignment. Scalar multikey backfill reuses the
+same complete-cut extraction and normalized value sets. Typed, text, vector and
+compound index DDL remain outside this capability.
 
 Every transition writes the existing catalog-name conflict effect. Native
 transactions depend on that name even when the collection is only read to derive
@@ -211,7 +261,66 @@ collection remains kind 200. Startup validates the prior schema/incarnation and
 performs the same backfill or name-based removal in the original single replay
 build group.
 The command contains no predicted LSN, physical roots or new schema epoch.
-Temporary schema/JSON construction backing is admitted before normalization and
+Temporary schema/document construction backing is admitted before normalization and
 encoding and released after synchronous publication drops its borrowed aliases.
 This is a bounded operation allowance, not a claim that Go's existing global
 JSON encoder cache disappears at receipt release.
+
+## Deterministic document apply
+
+The deterministic collection apply producer routes eligible JSON/BSON catalog create,
+by-ID insert, replace, delete and top-level BSONSet through the same native
+conditional/catalog preparation and original canonical publisher. BSONSet stages
+the maintained transformer and emits the existing full-replacement update member;
+it does not introduce a patch frame or a new replay parser. Frames retain their
+existing singleton kinds and payload formats. Dependency validation precedes assignment;
+replace counts matched rows separately from byte-changing rows, and delete frames
+retain all requested IDs. A same-metadata create or empty mutation still appends
+its canonical frame and advances one logical successor.
+
+This producer requests the original admitted exact seal receipt. It completes
+physical coverage before computing/storing the deterministic result and progress,
+while the request's sync flag retains its command-WAL durability meaning. The
+legacy append seam cannot preassign native intents; custom legacy append seams
+refuse on this route. Unsupported typed and colocated-vector deterministic
+mutations remain refused before assignment. Legacy preassigned-intent BSONSet
+preparation/apply APIs remain unsupported on native handles: the live adapter
+must stage before assignment through the original publisher.
+
+External deterministic preflight uses the same identity-free native row staging
+and final unique-owner validation, then closes its captured transaction and all
+partial plans. It does not reserve the plan or assign a WAL identity, install a
+logical successor, seal, or persist apply progress/results. Empty and unchanged
+mutations validate without creating a no-effect successor. Native create
+preflight uses the same metadata eligibility as apply, including its ordinary
+JSON/BSON role. Request document format must match the captured collection before
+staging. Apply captures again and revalidates its original catalog/data
+dependencies under the publication gate; a successful advisory check is not a
+promise that a later conflicting apply will succeed. Legacy preflight remains on
+its existing admitted wrapper.
+
+The request-local post-append fault observer runs synchronously after append and
+receipt recording, before native finalization/visibility. It must be nonblocking
+and must not reenter the database or acquire locks. Its failure uses the existing
+assigned-failure custody and poisons the original publication owner; it creates
+no result or progress record. Startup replay recovers the original canonical
+frame, without fabricating a deterministic apply result. Ordinary writers have
+no observer.
+
+Public primary ID/document scans retain one complete native capture, merge its
+pending/captured/physical primary sources with the maintained successor seek,
+and resolve document pointers through that same capture. Limits count live rows;
+truncation requires an additional live row. Callback buffers are caller-owned,
+and callbacks run outside the read mutex while the original capture remains
+retained. JSON materialization copies bytes without a legacy resolver. Logical
+vector receipt queries prove absence only for a current captured non-column
+schema; native typed roles continue to refuse those unsupported receipt APIs.
+
+BSON activation reuses the existing BSON validator, scalar encoders, canonical
+member formats and physical builders; it adds no on-disk format. Startup replay
+validates every intermediate BSON image under its captured schema before reducing
+ordered effects, including images later overwritten or deleted. BSONOrderedV2
+key admission includes the exact escaped ID suffix and maintained numeric digit
+limit; temporary query codec backing remains with the original captured read
+through encoding, traversal and owned ID copyout. Existing JSON charges and key
+bytes are unchanged.

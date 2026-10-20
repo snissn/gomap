@@ -25,6 +25,16 @@ func TestManagedHistoryMeasurement(t *testing.T) {
 	if out == "" {
 		t.Skip("opt-in measurement; requires exclusive heavy-job slot")
 	}
+	depth := 16
+	if text := os.Getenv("TREEDB_HISTORY_MEASURE_DEPTH"); text != "" {
+		var err error
+		depth, err = strconv.Atoi(text)
+		if err != nil || (depth != 16 && depth != 64 && depth != 256) {
+			t.Fatal("TREEDB_HISTORY_MEASURE_DEPTH must be 16, 64 or 256")
+		}
+	}
+	const keyCount, valueBytes = 32, 256
+	const discardFloor, oldReadTimestamp = 12, 8
 	profile := treedb.Profile(os.Getenv("TREEDB_HISTORY_MEASURE_PROFILE"))
 	pointers, err := strconv.ParseBool(os.Getenv("TREEDB_HISTORY_MEASURE_POINTERS"))
 	if err != nil {
@@ -54,6 +64,14 @@ func TestManagedHistoryMeasurement(t *testing.T) {
 			_ = db.Close()
 		}
 	}()
+	nativeBackend, err := db.NativeSemanticBackend()
+	if err != nil {
+		t.Fatalf("public COW native backend: %v", err)
+	}
+	memtableMode := db.Stats()["treedb.cache.memtable_mode"]
+	if db.ResolvedProfile() != profile || memtableMode != "cow_btree" || !nativeBackend.HasNativeSemanticBridge() {
+		t.Fatalf("measurement route: profile=%s memtable=%s native=%t", db.ResolvedProfile(), memtableMode, nativeBackend.HasNativeSemanticBridge())
+	}
 	store := New(db)
 	mode := CommitRelaxed
 	if profile == treedb.ProfileCommandWALDurable {
@@ -73,15 +91,22 @@ func TestManagedHistoryMeasurement(t *testing.T) {
 		AllocatedDirectoryBytesAvailable        bool
 	}
 	packet := struct {
-		Profile        treedb.Profile
-		Pointers       bool
-		GoVersion      string
-		Phases         []phase
-		Retained       []retained
-		PruneSupported bool
-		PruneError     string
-		PruneStats     PruneStats
-	}{Profile: profile, Pointers: pointers, GoVersion: runtime.Version()}
+		Profile                            treedb.Profile
+		Pointers                           bool
+		GoVersion                          string
+		ResolvedProfile                    treedb.Profile
+		MemtableMode                       string
+		NativeSemanticBackend              bool
+		KeyCount, HistoryDepth, ValueBytes int
+		DiscardFloor                       uint64
+		Phases                             []phase
+		Retained                           []retained
+		PruneSupported                     bool
+		PruneError                         string
+		PruneStats                         PruneStats
+	}{Profile: profile, Pointers: pointers, GoVersion: runtime.Version(),
+		ResolvedProfile: db.ResolvedProfile(), MemtableMode: memtableMode, NativeSemanticBackend: true,
+		KeyCount: keyCount, HistoryDepth: depth, ValueBytes: valueBytes, DiscardFloor: discardFloor}
 	measure := func(name string, ops int, f func() error) error {
 		var before, after runtime.MemStats
 		runtime.ReadMemStats(&before)
@@ -119,13 +144,20 @@ func TestManagedHistoryMeasurement(t *testing.T) {
 		}
 		packet.Retained = append(packet.Retained, r)
 	}
-	keys := make([][]byte, 32)
+	keys := make([][]byte, keyCount)
 	for i := range keys {
 		keys[i] = []byte(fmt.Sprintf("k%02d", i))
 	}
-	value := bytes.Repeat([]byte("v"), 256)
+	value := bytes.Repeat([]byte("v"), valueBytes)
 	// Arrival order differs from application timestamp without duplicate writes.
-	order := []uint64{16, 1, 9, 2, 10, 3, 11, 4, 12, 5, 13, 6, 14, 7, 15, 8}
+	// The default cell retains its original exact order and workload dimensions.
+	blockOrder := [...]uint64{16, 1, 9, 2, 10, 3, 11, 4, 12, 5, 13, 6, 14, 7, 15, 8}
+	order := make([]uint64, 0, depth)
+	for base := 0; base < depth; base += len(blockOrder) {
+		for _, ts := range blockOrder {
+			order = append(order, uint64(base)+ts)
+		}
+	}
 	mutations := make([]Mutation, len(keys))
 	for i, key := range keys {
 		mutations[i] = Mutation{Key: key, Value: value}
@@ -140,9 +172,9 @@ func TestManagedHistoryMeasurement(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err = measure("GetAt", len(keys)*16, func() error {
+	if err = measure("GetAt", len(keys)*depth, func() error {
 		for _, key := range keys {
-			for ts := uint64(1); ts <= 16; ts++ {
+			for ts := uint64(1); ts <= uint64(depth); ts++ {
 				got, e := store.GetAt(key, ts)
 				if e != nil {
 					return e
@@ -156,12 +188,12 @@ func TestManagedHistoryMeasurement(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	old, err := store.IterateVersions(VersionIteratorOptions{ReadTimestamp: 8})
+	old, err := store.IterateVersions(VersionIteratorOptions{ReadTimestamp: oldReadTimestamp})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer old.Close()
-	if err = measure("AdvanceDiscardFloor_ACK", 1, func() error { return store.AdvanceDiscardFloor(12, mode) }); err != nil {
+	if err = measure("AdvanceDiscardFloor_ACK", 1, func() error { return store.AdvanceDiscardFloor(discardFloor, mode) }); err != nil {
 		t.Fatal(err)
 	}
 	err = measure("PruneVersions_ACK", 1, func() error {
@@ -175,6 +207,11 @@ func TestManagedHistoryMeasurement(t *testing.T) {
 			t.Fatal(err)
 		}
 		packet.PruneError = err.Error()
+	} else {
+		stats := packet.PruneStats
+		if stats.Visited != uint64(keyCount*depth) || stats.Pruned != keyCount*(discardFloor-1) || stats.Retained != uint64(keyCount*(depth-discardFloor+1)) || stats.Skipped != uint64(keyCount*(depth-discardFloor)) {
+			t.Fatalf("history depth=%d prune counters=%+v", depth, stats)
+		}
 	}
 	// A separate drain exposes asynchronous work excluded from foreground ACK.
 	if err = measure("Checkpoint_pinned_cut", 1, db.Checkpoint); err != nil {
@@ -189,7 +226,7 @@ func TestManagedHistoryMeasurement(t *testing.T) {
 	if err = old.Error(); err != nil {
 		t.Fatal(err)
 	}
-	if oldCount != 32*8 {
+	if oldCount != keyCount*oldReadTimestamp {
 		t.Fatalf("retained old cut versions=%d", oldCount)
 	}
 	if err = old.Close(); err != nil {

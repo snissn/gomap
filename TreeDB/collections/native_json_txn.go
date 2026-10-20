@@ -7,6 +7,7 @@ import (
 	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/commandwalapply"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/txnhistory"
@@ -31,6 +32,11 @@ type nativeJSONTxnBinding struct {
 	validation       indexEncodeArena
 	validationLease  *memtable.COWExternalLease
 	validationCharge uint64
+	templates        templateV1Resolver
+	templateRecords  []templateV1Record
+	templateLearned  []templateV1LearnedTemplate
+	allowStored      bool
+	learnTemplates   bool
 }
 type NativeJSONTxn struct {
 	mu           sync.Mutex
@@ -311,7 +317,13 @@ func (p *nativeJSONLogicalGroup) PrepareNativePublication(latest backenddb.Nativ
 		changes[count] = nativeJSONPrimaryChange{collection: c, entries: g.plan.mutations, additional: g.plan.additional, primaryPolicy: g.plan.primaryPolicy, typed: g.plan.typed}
 		count++
 	}
-	next, err := prepareNativeJSONPrimaries(base, changes[:count])
+	var next *nativeEngineVersion
+	var err error
+	if count == 0 {
+		next, err = prepareNativeCommandWALNoop(base)
+	} else {
+		next, err = prepareNativeJSONPrimaries(base, changes[:count])
+	}
 	if err != nil {
 		return backenddb.NativeFinalizedPublication{State: next}, err
 	}
@@ -376,9 +388,21 @@ func (t *NativeJSONTxn) SetRaw(key, value []byte) (err error) {
 
 func (t *NativeJSONTxn) Commit() error { return t.commit(false) }
 
-// The prepared API alone requests physical completion. Both modes retain the
-// same opening, logical effects, canonical command and original custody.
-func (t *NativeJSONTxn) commit(sealed bool) (resultErr error) {
+// Prepared insertion and deterministic apply request physical completion. All
+// modes retain the same opening, logical effects and original custody.
+func (t *NativeJSONTxn) commit(sealed bool) error { return t.commitNativeApply(sealed, nil) }
+
+// An apply request keeps the original lowered singleton frame even for a
+// no-effect command. It borrows this synchronous transaction, never a publisher.
+type nativeCommandWALApplyCommit struct {
+	frame          commandwalapply.LoweredFrame
+	sync           bool
+	observe        func(uint64) error
+	result         backenddb.NativePublicationResult
+	alreadyApplied bool
+}
+
+func (t *NativeJSONTxn) commitNativeApply(sealed bool, apply *nativeCommandWALApplyCommit) (resultErr error) {
 	if t == nil {
 		return backenddb.ErrClosed
 	}
@@ -416,7 +440,7 @@ func (t *NativeJSONTxn) commit(sealed bool) (resultErr error) {
 			totalEffects += len(g.effects)
 		}
 	}
-	if count == 0 {
+	if count == 0 && apply == nil {
 		return backenddb.ErrNativeSemanticUnsupported
 	}
 	rawEntries := t.core.NativeRawEntries()
@@ -521,6 +545,10 @@ func (t *NativeJSONTxn) commit(sealed bool) (resultErr error) {
 			break
 		}
 	}
+	if apply != nil {
+		kind, scope, format, payload = apply.frame.Kind, apply.frame.Scope, apply.frame.PayloadFormat, apply.frame.Payload
+		native.ObserveAssigned = apply.observe
+	}
 	intent, err := t.db.NewTrustedCommandWALIntent(kind, scope, format, payload)
 	if err != nil {
 		t.custody = nil
@@ -543,8 +571,16 @@ func (t *NativeJSONTxn) commit(sealed bool) (resultErr error) {
 		}
 	}
 	members, rawEntries = nil, nil
-	result, err := t.core.CommitNative(native, intent, false)
-	if sealed && err != nil && result.LogicalInstalled {
+	sync := false
+	if apply != nil {
+		sync = apply.sync
+	}
+	result, err := t.core.CommitNative(native, intent, sync)
+	if apply != nil {
+		apply.result = result
+	}
+
+	if sealed && apply == nil && err != nil && result.LogicalInstalled {
 		err = commitAmbiguousError("PreparedInsertBatch sealed completion", err)
 	}
 	t.custody = nil

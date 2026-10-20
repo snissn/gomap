@@ -70,6 +70,9 @@ func splitInsertCollectionPrefixV1(collection string) string {
 // semantics in apply and snapshot convergence. Physical root IDs are excluded.
 // At most 64 fixed identities are read; unsupported identity churn fails closed.
 func (c *Collection) VectorPartitionSplitInsertLogicalStateV1(ctx context.Context) ([][]byte, error) {
+	if c != nil && c.nativeJSON != nil {
+		return nil, c.nativeNoColumnLogicalState(ctx)
+	}
 	if c == nil || c.db == nil || c.db.IsClosing() {
 		return nil, backenddb.ErrClosed
 	}

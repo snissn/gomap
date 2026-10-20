@@ -487,6 +487,9 @@ func (c *Collection) VerifyVectorPartitionColocatedMutationLogicalStateV1(ctx co
 
 func (c *Collection) colocatedVectorMutationLogicalStateV1(ctx context.Context, verify bool) ([][]byte, commitlog.ColocatedVectorMutationOutcomeV1, error) {
 	var latest commitlog.ColocatedVectorMutationOutcomeV1
+	if c != nil && c.nativeJSON != nil {
+		return nil, latest, c.nativeNoColumnLogicalState(ctx)
+	}
 	if c == nil || c.db == nil {
 		return nil, latest, backenddb.ErrClosed
 	}

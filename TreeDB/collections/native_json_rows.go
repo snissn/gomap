@@ -66,6 +66,13 @@ func (p *nativeJSONRows) touch(id []byte, read func([]byte) ([]byte, error), adm
 // nativeJSONFinalRows is the maintained pure old/new-effect boundary. It is
 // independent of command kind: inserts have no old state, deletes no new state.
 func nativeJSONFinalRows(name string, meta CollectionMeta, rows *nativeJSONRows, admit func(uint64) error, prepareScratch func([]byte) error) (*directBufferedInsertPlan, []preparedBatchUpdate, []indexRuntime, error) {
+	return nativeJSONFinalRowsWithMode(name, meta, rows, admit, prepareScratch, updateBatchModeAny)
+}
+
+func nativeJSONFinalRowsWithMode(name string, meta CollectionMeta, rows *nativeJSONRows, admit func(uint64) error, prepareScratch func([]byte) error, mode updateBatchMode) (*directBufferedInsertPlan, []preparedBatchUpdate, []indexRuntime, error) {
+	return nativeJSONFinalRowsResolved(name, meta, rows, admit, prepareScratch, mode, nil)
+}
+func nativeJSONFinalRowsResolved(name string, meta CollectionMeta, rows *nativeJSONRows, admit func(uint64) error, prepareScratch func([]byte) error, mode updateBatchMode, resolver templateV1Resolver) (*directBufferedInsertPlan, []preparedBatchUpdate, []indexRuntime, error) {
 	// Runtime descriptors are allocated before per-row parsing; admit them first.
 	headerCharge, err := nativeJSONIndexedPlanCharge(meta, nil, nil)
 	if err != nil {
@@ -78,6 +85,7 @@ func nativeJSONFinalRows(name string, meta CollectionMeta, rows *nativeJSONRows,
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	planner.options.templateResolver = resolver
 	runtimes, err := planner.indexRuntimes()
 	if err != nil {
 		return nil, nil, nil, err
@@ -85,28 +93,38 @@ func nativeJSONFinalRows(name string, meta CollectionMeta, rows *nativeJSONRows,
 	if err = admitNativeInsertArray(len(rows.rows), uint64(unsafe.Sizeof(preparedBatchUpdate{})), admit); err != nil {
 		return nil, nil, nil, err
 	}
-	// One maintained arena owns every retained old/new state. Its capacities
-	// cover at most one scalar per index: escaped strings <=2*document bytes,
-	// numeric encodings <=9 bytes, and one state/reference header per scalar.
+	// One maintained arena owns every retained old/new state. Multi-value
+	// extraction keeps its own normalized reference slices; reserve those
+	// retained slices before the original parser allocates them.
 	var bytesCap, stateCount, maxDocument int
 	for _, row := range rows.rows {
 		for _, doc := range [][]byte{row.opening, row.current} {
 			if doc == nil {
 				continue
 			}
-			capacity, err := nativeJSONEncodedCapacity(len(doc), len(runtimes))
+			capacity, err := nativeJSONDocumentEncodedCapacity(doc, meta.Indexes, meta.Options.AllowArrayValuesInIndex)
 			if err != nil || capacity > int(^uint(0)>>1)-bytesCap || len(runtimes) > int(^uint(0)>>1)-stateCount {
 				return nil, nil, nil, memtable.ErrCOWCapacity
 			}
 			bytesCap += capacity
 			stateCount += len(runtimes)
+			for _, index := range meta.Indexes {
+				if index.MultiKey || meta.Options.AllowArrayValuesInIndex {
+					// Every array value occupies at least one source byte.
+					// The maintained parser allocates a reference for every
+					// input element before sorting/deduplicating it.
+					if err = admitNativeInsertArray(len(doc), uint64(unsafe.Sizeof([]byte{})), admit); err != nil {
+						return nil, nil, nil, err
+					}
+				}
+			}
 			if len(runtimes) != 0 {
 				maxDocument = max(maxDocument, len(doc))
 			}
 		}
 	}
-	// Admit each actual backing once. Scalar-only native schemas bound every
-	// encoded image before parsing; decoder scratch has its separate high-water
+	// Admit each actual backing once. Source-sized scalar/value bounds cover
+	// encoded images before parsing; decoder scratch has its separate high-water
 	// receipt. The final arena never grows while old/new states borrow it.
 	for _, allocation := range []struct {
 		count int
@@ -149,6 +167,13 @@ func nativeJSONFinalRows(name string, meta CollectionMeta, rows *nativeJSONRows,
 			}
 		}
 		changed = append(changed, item)
+	}
+	if mode == updateBatchModeNoSecondaryUniqueIndexChanges {
+		if updateBatchChangesSecondaryUniqueIndex(runtimes, changed) {
+			return nil, nil, nil, errUpdateBatchChangesSecondaryUniqueIndex
+		}
+		// Conditional eligibility is decided before final uniqueness or publication.
+		return nil, changed, runtimes, nil
 	}
 	charge, stateEntries, roots, err := nativeJSONFinalPlanCharge(name, planner.options, runtimes, changed)
 	if err != nil {
@@ -198,14 +223,77 @@ func (t *NativeJSONTxn) admitRowDocument(g *nativeJSONTxnBinding, id, doc []byte
 	return t.admitStage(g, 2*ids+document)
 }
 
-// Native schemas fence arrays/multikey/compound values. Each encoded scalar
-// therefore fits <=2*document bytes (NUL escaping) plus 16 bytes for tags/numbers.
-func nativeJSONEncodedCapacity(document, indexes int) (int, error) {
+// Scalar queries and scalar-only schemas use bounded string escaping or the
+// maintained V2 numeric digit cap. Array documents add their per-value bound below.
+func nativeJSONEncodedCapacity(document int, indexes []IndexDefinition) (int, error) {
 	limit := int(^uint(0) >> 1)
-	if document > (limit-16)/2 || indexes < 0 || (indexes > 0 && 2*document+16 > limit/indexes) {
+	if document < 0 || document > (limit-16)/2 {
 		return 0, memtable.ErrCOWCapacity
 	}
-	return (2*document + 16) * indexes, nil
+	var total int
+	for _, index := range indexes {
+		capacity := 2*document + 16
+		if index.ValueType == IndexValueBSONOrderedV2 {
+			// V2 numbers have a marker, numeric tag/class, two-byte exponent,
+			// packed decimal digits and a terminator. Exact float expansion can
+			// exceed its eight-byte source; use the maintained codec's digit cap.
+			capacity = max(capacity, 6+(bsonIndexKeyNumericV2MaxDigits+1)/2)
+		}
+		if capacity > limit-total {
+			return 0, memtable.ErrCOWCapacity
+		}
+		total += capacity
+	}
+	return total, nil
+}
+
+// nativeJSONDocumentEncodedCapacity extends the original scalar bound only
+// for array-capable schemas. At most len(document) values can be present per
+// indexed path. Each fixed scalar/tag/terminator fits 16 bytes; escaped source
+// strings fit twice their source. BSON V2 additionally has the maintained exact
+// numeric digit cap: each numeric element has its BSON type byte somewhere in
+// the source. Counting every such byte (including false positives inside values)
+// is a conservative allocation-free bound, not an alternate document parser.
+// Repeated/dotted indexed paths each receive their independent full allowance.
+func nativeJSONDocumentEncodedCapacity(document []byte, indexes []IndexDefinition, allowArrays bool) (int, error) {
+	limit := int(^uint(0) >> 1)
+	var total, numericBytes int
+	for _, index := range indexes {
+		if index.ValueType != IndexValueBSONOrderedV2 || (!index.MultiKey && !allowArrays) {
+			continue
+		}
+		for _, b := range document {
+			switch b {
+			case 0x01, 0x10, 0x12, 0x13:
+				numericBytes++
+			} // double, int32, int64, decimal128
+		}
+		break
+	}
+	for _, index := range indexes {
+		capacity, err := nativeJSONEncodedCapacity(len(document), []IndexDefinition{index})
+		if err != nil {
+			return 0, err
+		}
+		if index.MultiKey || allowArrays {
+			if len(document) > (limit-capacity)/16 {
+				return 0, memtable.ErrCOWCapacity
+			}
+			capacity += len(document) * 16
+			if index.ValueType == IndexValueBSONOrderedV2 {
+				const numeric = 6 + (bsonIndexKeyNumericV2MaxDigits+1)/2
+				if numericBytes > (limit-capacity)/numeric {
+					return 0, memtable.ErrCOWCapacity
+				}
+				capacity += numericBytes * numeric
+			}
+		}
+		if capacity > limit-total {
+			return 0, memtable.ErrCOWCapacity
+		}
+		total += capacity
+	}
+	return total, nil
 }
 
 // One original transaction-local scratch receipt owns the maintained arena and
@@ -220,7 +308,7 @@ func (t *NativeJSONTxn) prepareValidation(g *nativeJSONTxnBinding, doc []byte) e
 	if err != nil {
 		return err
 	}
-	capacity, err := nativeJSONEncodedCapacity(len(doc), len(g.probe.meta.Indexes))
+	capacity, err := nativeJSONDocumentEncodedCapacity(doc, g.probe.meta.Indexes, g.probe.meta.Options.AllowArrayValuesInIndex)
 	if err != nil {
 		return err
 	}
@@ -411,7 +499,8 @@ func (t *NativeJSONTxn) stageNativeInsert(g *nativeJSONTxnBinding, ids, document
 	if err != nil {
 		return err
 	}
-	normalized, _, _, _, err := prepareInsertDocuments(documents, planner.options)
+	normalized, options, err := t.prepareTemplateDocuments(g, documents, planner.options)
+	planner.options = options
 	if err != nil {
 		return err
 	}
@@ -440,7 +529,11 @@ func (t *NativeJSONTxn) stageNativeInsert(g *nativeJSONTxnBinding, ids, document
 			return ErrDocumentExists
 		}
 		row.current = bytes.Clone(item.document)
-		docs[i] = commitlog.CollectionDocument{ID: row.id, Document: row.current}
+		canonical := row.current
+		if normalizedDocumentFormat(planner.options.documentFormat) == DocumentFormatTemplateV1 {
+			canonical = documents[orderedItemIndex(order, i)]
+		}
+		docs[i] = commitlog.CollectionDocument{ID: row.id, Document: canonical}
 	}
 	if err = t.admitMemberPayload(g, docs, nil); err != nil {
 		return err
@@ -503,6 +596,16 @@ func (t *NativeJSONTxn) UpdateBatchInto(name string, items []UpdateBatchItem) (r
 	if err != nil {
 		return nil, err
 	}
+	templateBatch := normalizedDocumentFormat(planner.options.documentFormat) == DocumentFormatTemplateV1
+	var changedIndices []int
+	if templateBatch {
+		for _, size := range [2]uint64{uint64(unsafe.Sizeof(int(0))), uint64(unsafe.Sizeof([]byte{}))} {
+			if err = admitNativeInsertArray(len(items), size, func(n uint64) error { return t.admitStage(g, n) }); err != nil {
+				return nil, err
+			}
+		}
+		changedIndices = make([]int, 0, len(items))
+	}
 	for i, item := range owned {
 		row, err := t.touchNativeRow(g, item.DocumentID)
 		if err != nil {
@@ -526,10 +629,23 @@ func (t *NativeJSONTxn) UpdateBatchInto(name string, items []UpdateBatchItem) (r
 		if len(document) == 0 {
 			return nil, updateBatchItemError(i, errors.New("changed replacement document cannot be empty"))
 		}
+		if err := validateBSONReplacementPreservesID(row.current, document, planner.options); err != nil {
+			return nil, updateBatchItemError(i, err)
+		}
 		if err = t.admitRowDocument(g, row.id, document); err != nil {
 			return nil, err
 		}
-		normalized, _, _, _, err := prepareInsertDocuments([][]byte{bytes.Clone(document)}, planner.options)
+		// Copy callback-owned bytes before invoking another callback. Template
+		// envelopes must be prepared together: a TD1H replacement may precede
+		// its defining TD1I envelope later in this same UpdateBatch member.
+		ownedDocument := bytes.Clone(document)
+		if templateBatch {
+			docs = append(docs, commitlog.CollectionDocument{ID: row.id, Document: ownedDocument})
+			changedIndices = append(changedIndices, i)
+			continue
+		}
+		normalized, options, err := t.prepareTemplateDocuments(g, [][]byte{ownedDocument}, planner.options)
+		planner.options = options
 		if err != nil {
 			return nil, updateBatchItemError(i, err)
 		}
@@ -542,6 +658,32 @@ func (t *NativeJSONTxn) UpdateBatchInto(name string, items []UpdateBatchItem) (r
 	}
 	if len(docs) == 0 {
 		return result, nil
+	}
+	if templateBatch {
+		// The input header backing was admitted with the item indices above;
+		// the original envelope copies stay owned through canonical encoding.
+		inputs := make([][]byte, len(docs))
+		for i := range docs {
+			inputs[i] = docs[i].Document
+		}
+		normalized, options, err := t.prepareTemplateDocuments(g, inputs, planner.options)
+		if err != nil {
+			return nil, fmt.Errorf("collections: update batch replacement prepare: %w", err)
+		}
+		planner.options = options
+		for i, document := range normalized {
+			if err = t.validateDocument(g, document, runtimes, planner.options); err != nil {
+				return nil, updateBatchItemError(changedIndices[i], err)
+			}
+			// Later touches may grow or shift the sorted row slice. Only the
+			// separately owned ID survives that movement, never a saved row pointer.
+			row := g.rows.find(docs[i].ID)
+			if row == nil {
+				return nil, backenddb.ErrNativeSemanticUnsupported
+			}
+			row.current = document
+			result[changedIndices[i]].Modified = true
+		}
 	}
 	if err = t.admitMemberPayload(g, docs, nil); err != nil {
 		return nil, err
@@ -627,13 +769,28 @@ func (t *NativeJSONTxn) finalizeNativeRows() error {
 			continue
 		}
 		admit := func(n uint64) error { return t.admitStage(g, n) }
-		direct, changed, runtimes, err := nativeJSONFinalRows(g.name, g.probe.meta, &g.rows, admit, func(doc []byte) error { return t.prepareValidation(g, doc) })
+		var opts collectionOptions
+		if normalizedDocumentFormat(g.probe.meta.Options.DocumentFormat) == DocumentFormatTemplateV1 {
+			var err error
+			opts, err = collectionPlannerOptions(g.probe.meta)
+			if err != nil {
+				return err
+			}
+			opts, err = t.templateOptions(g, opts)
+			if err != nil {
+				return err
+			}
+		}
+		direct, changed, runtimes, err := nativeJSONFinalRowsResolved(g.name, g.probe.meta, &g.rows, admit, func(doc []byte) error { return t.prepareValidation(g, doc) }, updateBatchModeAny, g.templates)
 		if err != nil {
 			return err
 		}
+		if err = nativeTemplatePlanEntries(direct, g.name, g.templateRecords, opts, admit); err != nil {
+			return err
+		}
 		// Reserve the maintained nested unique-owner maps and copied string keys
-		// before construction. Scalar schemas contribute at most one old value per
-		// row/index; charge each actual value independently, including map headers
+		// before construction. Charge every actual old value independently, including
+		// multikey values, map headers
 		// and small-map backing. The final-plan inventory already owns its arenas.
 		uniqueCharge := memtable.COWAllocationCharge(256)
 		for runtimeIdx, runtime := range runtimes {
