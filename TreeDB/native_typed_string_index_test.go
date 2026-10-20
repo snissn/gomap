@@ -91,16 +91,19 @@ func TestNativeTypedStringIndexesLifecycle(t *testing.T) {
 	}
 	checkHeld := func() {
 		t.Helper()
-		for _, row := range []nativeTypedOpsRow{a, b} {
-			got, err := held.Get([]byte(row.id))
-			if err != nil {
-				t.Fatal(err)
-			}
-			checkNativeTypedOpsDocument(t, "string", got, row)
-			got[0] = '!'
+		got, err := held.FetchDocumentsByID([][]byte{[]byte("a"), []byte("b"), []byte("c")}, collections.DocumentFetchOptions{})
+		if err != nil || len(got.Results) != 3 {
+			t.Fatalf("held typed indexed view: results=%d err=%v", len(got.Results), err)
 		}
-		if got, err := held.Get([]byte("c")); err != nil || got != nil {
-			t.Fatalf("held cut contains later row: %s err=%v", got, err)
+		for i, row := range []nativeTypedOpsRow{a, b} {
+			if !got.Results[i].Found {
+				t.Fatalf("held row %s missing", row.id)
+			}
+			checkNativeTypedOpsDocument(t, "string", got.Results[i].Document, row)
+			got.Results[i].Document[0] = '!'
+		}
+		if got.Results[2].Found {
+			t.Fatal("held cut contains later row c")
 		}
 	}
 	// Admission must validate the final unique owners, allowing an atomic swap.
