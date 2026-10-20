@@ -22,13 +22,14 @@ type cowBatchState struct {
 	guard                        *backenddb.CommandWALStagingGuardV1
 	txn                          *ConditionalTxn
 	lease                        *memtable.COWExternalLease
-	storage                      *cowBatchStorage
+	storageBytes                 uint64
 	err                          error
 	prepared                     *cowBatchPreparation
 	producer                     *cowFrameCapture
 	predictionGroups             [][]memtable.COWMutation
 	predictionStorage            []memtable.COWMutation
 	inPublication, trustedAppend bool
+	guardReserved                bool
 }
 
 // One admitted allocation owns the public batch and its COW-only state. Both
@@ -36,13 +37,6 @@ type cowBatchState struct {
 type cowBatchOwner struct {
 	batch Batch
 	state cowBatchState
-}
-
-// A batch owns every admitted backing, including discarded growth arrays,
-// until Reset drops its references. These leases never enter legacy pools.
-type cowBatchStorage struct {
-	lease *memtable.COWExternalLease
-	next  *cowBatchStorage
 }
 
 // Shared immutable refusal carrier: constructing a refused batch allocates no
@@ -59,16 +53,24 @@ func (db *DB) AcquireCOWAllocation(bytes uint64) (*memtable.COWExternalLease, er
 	return db.cow.budget.AcquireExternal(bytes)
 }
 
-func (db *DB) newCOWBatch(hint int) *Batch {
+// The immutable constructor reservation is derivable without keeping a second
+// byte count beside storageBytes. The guard itself can be absent or released.
+func cowBatchBaseBytes(guardReserved bool) uint64 {
 	charge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowBatchOwner{})))
-	if db.externalCommandWAL && db.cow.txnOwner != nil {
+	if guardReserved {
 		charge += memtable.COWAllocationCharge(backenddb.CommandWALStagingGuardAllocationBytesV1())
 	}
+	return charge
+}
+
+func (db *DB) newCOWBatch(hint int) *Batch {
+	guardReserved := db.externalCommandWAL && db.cow.txnOwner != nil
+	charge := cowBatchBaseBytes(guardReserved)
 	lease, err := db.cow.budget.AcquireExternal(charge)
 	if err != nil {
 		return &cowDeniedBatch
 	}
-	owner := &cowBatchOwner{batch: Batch{db: db, streamBypassOff: true}, state: cowBatchState{lease: lease}}
+	owner := &cowBatchOwner{batch: Batch{db: db, streamBypassOff: true}, state: cowBatchState{lease: lease, guardReserved: guardReserved}}
 	b := &owner.batch
 	b.cowState = &owner.state
 	b.cowReserve(hint)
@@ -79,15 +81,21 @@ func (b *Batch) cowAdmitStorage(bytes uint64) error {
 	if b.cowState.err != nil {
 		return b.cowState.err
 	}
-	ownerCharge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowBatchStorage{})))
-	if bytes > ^uint64(0)-ownerCharge {
+	// The existing batch lease owns all backing growth, including discarded
+	// arrays whose immutable aliases can survive until transaction completion.
+	// Admit before allocation; replacing a backing never refunds its charge.
+	if bytes > ^uint64(0)-b.cowState.storageBytes {
 		return memtable.ErrCOWCapacity
 	}
-	lease, err := b.db.cow.budget.AcquireExternal(bytes + ownerCharge)
-	if err != nil {
+	storageBytes := b.cowState.storageBytes + bytes
+	baseBytes := cowBatchBaseBytes(b.cowState.guardReserved)
+	if storageBytes > ^uint64(0)-baseBytes {
+		return memtable.ErrCOWCapacity
+	}
+	if err := b.cowState.lease.Resize(baseBytes + storageBytes); err != nil {
 		return err
 	}
-	b.cowState.storage = &cowBatchStorage{lease: lease, next: b.cowState.storage}
+	b.cowState.storageBytes = storageBytes
 	return nil
 }
 
@@ -200,13 +208,18 @@ func (b *Batch) cowReset() {
 	b.entryRevision = page.LegacyEntryRevision
 	b.cowState.err = nil
 	if b.cowState.txn != nil {
+		// Read dependencies can still alias discarded copyArena backing.
+		// ConditionalTxn.finish clears them before closing this batch.
 		return
 	}
-	for b.cowState.storage != nil {
-		owner := b.cowState.storage
-		b.cowState.storage = owner.next
-		owner.next = nil
-		owner.lease.Close()
+	if b.cowState.storageBytes != 0 {
+		// Shrink follows alias cleanup and is allowed after budget Close.
+		// A failed resize must not forget charge that is still outstanding.
+		if err := b.cowState.lease.Resize(cowBatchBaseBytes(b.cowState.guardReserved)); err != nil {
+			b.cowState.err = err
+			return
+		}
+		b.cowState.storageBytes = 0
 	}
 }
 

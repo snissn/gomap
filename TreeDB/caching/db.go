@@ -34675,14 +34675,18 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 				return db.foregroundIteratorError(err)
 			}
 			if !ok || diskIter == nil {
-				out := merging.Iterator(&emptyIterator{start: start, end: end})
-				return decorate(out, 0), nil
+				if iteratorDebug {
+					db.observeIteratorShape(0, 0)
+				}
+				return db.newForegroundEmptyIterator(start, end, iteratorDebug, 0), nil
 			}
 			return decorate(diskIter, 1), nil
 		}
 		if backendRangeKnown && !overlapsQuery(start, end, backendRange) {
-			out := merging.Iterator(&emptyIterator{start: start, end: end})
-			return decorate(out, 0), nil
+			if iteratorDebug {
+				db.observeIteratorShape(0, 0)
+			}
+			return db.newForegroundEmptyIterator(start, end, iteratorDebug, 0), nil
 		}
 		if start == nil && end == nil && backendRangeKnown && backendRange.valid {
 			diskIter, err := db.backend.Iterator(nil, nil)
@@ -34825,8 +34829,10 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 	}
 
 	if len(sources) == 0 {
-		out := merging.Iterator(&emptyIterator{start: start, end: end})
-		return decorateIterator(out, 0), nil
+		if iteratorDebug {
+			db.observeIteratorShape(queueLen, 0)
+		}
+		return db.newForegroundEmptyIterator(start, end, iteratorDebug, queueLen), nil
 	}
 
 	if len(sources) == 1 {
@@ -34880,6 +34886,23 @@ type foregroundTrackedIterator struct {
 	db        *DB
 	closeOnce sync.Once
 	closeErr  error
+}
+
+// Both interior pointers retain one owner. The existing tracked iterator keeps
+// the original foreground lease until Close, even though the result is empty.
+type foregroundEmptyIteratorOwner struct {
+	empty   emptyIterator
+	tracked foregroundTrackedIterator
+}
+
+// The caller already holds the foreground lease; no memtable source is live.
+func (db *DB) newForegroundEmptyIterator(start, end []byte, debug bool, queueLen int) merging.Iterator {
+	owner := &foregroundEmptyIteratorOwner{empty: emptyIterator{start: start, end: end}, tracked: foregroundTrackedIterator{db: db}}
+	owner.tracked.Iterator = &owner.empty
+	if debug {
+		owner.tracked.Iterator = &debugIterator{Iterator: &owner.empty, queueLen: queueLen, sourcesUsed: 0}
+	}
+	return &owner.tracked
 }
 
 func (it *foregroundTrackedIterator) Close() error {
@@ -35123,14 +35146,12 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 				return db.foregroundIteratorError(err)
 			}
 			if !ok || diskIter == nil {
-				out := merging.Iterator(&emptyIterator{start: start, end: end})
-				return decorate(out, 0), nil
+				return db.newForegroundEmptyIterator(start, end, iteratorDebugEnabled.Load(), 0), nil
 			}
 			return decorate(diskIter, 1), nil
 		}
 		if backendRangeKnown && !overlapsQuery(start, end, backendRange) {
-			out := merging.Iterator(&emptyIterator{start: start, end: end})
-			return decorate(out, 0), nil
+			return db.newForegroundEmptyIterator(start, end, iteratorDebugEnabled.Load(), 0), nil
 		}
 		if start == nil && end == nil && backendRangeKnown && backendRange.valid {
 			diskIter, err := db.backend.ReverseIterator(nil, nil)
@@ -35256,8 +35277,7 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 	}
 
 	if len(sources) == 0 {
-		out := merging.Iterator(&emptyIterator{start: start, end: end})
-		return decorateIterator(out, 0), nil
+		return db.newForegroundEmptyIterator(start, end, iteratorDebugEnabled.Load(), queueLen), nil
 	}
 
 	if len(sources) == 1 {
