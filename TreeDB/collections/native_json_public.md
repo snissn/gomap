@@ -105,9 +105,9 @@ Supported layouts are:
   and reconstruction. Nested scalar paths and aggregate assets use the existing
   bounded prepared schema: one to five Int64/String columns, at most three
   Count/GroupHourCount/Min specs, three predicates per spec, four values per
-  predicate and 8 KiB aggregate configuration. Aggregate query routing remains
-  separate from this storage support. The existing single finite Float32Vector
-  ColumnPart semantic-stream-v1 layout remains eligible.
+  predicate and 8 KiB aggregate configuration. Physical query eligibility is
+  described separately below. The existing single finite Float32Vector ColumnPart
+  semantic-stream-v1 layout remains eligible.
 - One or more top-level nonnullable String RowAsset and/or finite Float32Vector ColumnPart
   columns with noncolumn JSON retained payload. Each row supplies every declared
   column through the maintained typed projection or ordinary JSON input. Pending
@@ -163,6 +163,30 @@ existing operation-local physical codec; captured TCIM sections are inspected on
 per asset, rather than once per column. Existing 32 MiB maintenance and 64 MiB
 in-flight limits remain in force; wider schemas do not receive extra credit.
 
+Eligible typed collections route the existing serial `RunColumnPhysicalQuery`
+and `PrepareColumnPhysicalQuery` APIs through the captured native catalog and its
+recovery-authoritative physical manifest. These are physical-asset queries, not
+transaction reads of pending typed deltas. The maintained request/schema/reducer
+checks still determine supported shapes: one-shot queries retain the existing
+latest-visible mutation routes, while aggregate-metadata queries require an
+insert-only manifest. Prepared queries also require an insert-only manifest and
+a supported direct reducer. This route does not add parallel queries, arbitrary
+expressions or new typed layouts.
+
+Native `PrepareColumnPhysicalQuery` executes that reducer once before returning.
+It admits temporary decoder/reducer backing through the original finite read
+allocator, then releases decoded assets, caches and reducer scratch after copying
+an independent compact answer. The prepared runner retains its original capture
+and asset lifecycle pin until `Close`, so later writes/checkpoints do not change
+its answer. Preparation includes the scan/reduction work; `PrepareDiagnostics`
+reports that work. Repeated `Run` copies the saved group headers into reusable
+runner-owned storage and returns independent diagnostics without rescanning or
+reducing assets. Callers may modify those returned headers without changing the
+saved answer, but must copy groups they need beyond the next `Run` or `Close`.
+Runners require external synchronization for `Run` and `Close`. Always close a
+prepared runner before its manager/database; one-shot queries instead return
+owned results and release their capture before returning.
+
 Raw, eligible scalar-indexed JSON/BSON and cross-collection document transactions target durable WAL,
 relaxed WAL and production NoWAL profiles. Typed writes and transactions binding
 typed collections require `ProfileCommandWALDurable`; relaxed WAL and NoWAL
@@ -211,9 +235,13 @@ Use `manager.Begin("a", "b")`, then `InsertBatchInto`, `UpdateBatchInto`,
 `DeleteBatchFrom` and `GetFrom` for bound collections. Single-collection callers
 can use `InsertBatch`, `UpdateBatch`, `DeleteBatch` and `Get`. `GetRaw`/`SetRaw`
 use the original conditional batch; the selected composite frontend accepts one
-inline raw point Set. `UpdateBatchInto` is the scalar JSON path; typed
-replacement operations use the existing typed Collection methods. Ordered typed
-stages can span several bound collections in the same transaction, including
+inline raw point Set. `UpdateBatchInto` also dispatches bound eligible typed
+collections to the same callback path as ordinary `UpdateBatch`: noncolumn JSON
+or unindexed Full JSON, with the declared layouts and durable-WAL requirement
+above. Semantic-stream callback updates refuse before invoking callbacks; this
+dispatch does not broaden direct typed APIs or Full source-replacement/delete
+support. Ordered typed stages can span several bound collections in the same
+transaction, including
 insert/delete/reinsert of one key. They share the original physical build workspace
 sequentially and install one complete resource closure. Existing member/payload
 and original memory limits apply.
