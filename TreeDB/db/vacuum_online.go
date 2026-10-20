@@ -2345,7 +2345,9 @@ func (b *vacuumInternalTreeBuilder) addParentChild(lvl int, key []byte, childID 
 		return err
 	}
 	parent := b.levels[lvl+1]
-	if parent.startKey == nil {
+	// An empty first separator clones to nil, so node occupancy determines
+	// whether startKey has already been captured.
+	if parent.builder.Count() == 0 {
 		parent.startKey = append([]byte(nil), key...)
 	}
 	err := parent.builder.AddInternalChild(key, childID)
@@ -2354,7 +2356,7 @@ func (b *vacuumInternalTreeBuilder) addParentChild(lvl int, key []byte, childID 
 			return err
 		}
 		parent = b.levels[lvl+1]
-		if parent.startKey == nil {
+		if parent.builder.Count() == 0 {
 			parent.startKey = append([]byte(nil), key...)
 		}
 		err = parent.builder.AddInternalChild(key, childID)
@@ -2392,7 +2394,7 @@ func (b *vacuumInternalTreeBuilder) flush(lvl int) error {
 
 func (b *vacuumInternalTreeBuilder) append(key []byte, childRef page.ChildRef) error {
 	lb := b.levels[0]
-	if lb.startKey == nil {
+	if lb.builder.Count() == 0 {
 		lb.startKey = append([]byte(nil), key...)
 	}
 	err := lb.builder.AddInternalChildRef(key, childRef)
@@ -2401,7 +2403,7 @@ func (b *vacuumInternalTreeBuilder) append(key []byte, childRef page.ChildRef) e
 			return err
 		}
 		lb = b.levels[0]
-		if lb.startKey == nil {
+		if lb.builder.Count() == 0 {
 			lb.startKey = append([]byte(nil), key...)
 		}
 		err = lb.builder.AddInternalChildRef(key, childRef)
