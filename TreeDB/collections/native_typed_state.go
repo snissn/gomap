@@ -122,9 +122,10 @@ func nativeTypedMeta(meta CollectionMeta) bool {
 		return false
 	}
 	encoding := columnRetainedPayloadEffectiveEncoding(cfg)
-	// Preserve the existing semantic-stream slice. Multiple declared columns
-	// use the maintained typed projection's non-null JSON carrier contract.
-	if encoding != ColumnRetainedPayloadEncodingJSON && (encoding != ColumnRetainedPayloadEncodingSemanticStreamV1 || len(cfg.Columns) != 1) {
+	// The maintained declared-row parser, residual transform and physical
+	// materializer operate over the complete scalar schema. Semantic-stream
+	// residuals can therefore share either existing scalar storage owner.
+	if encoding != ColumnRetainedPayloadEncodingJSON && encoding != ColumnRetainedPayloadEncodingSemanticStreamV1 {
 		return false
 	}
 	for _, col := range cfg.Columns {
@@ -144,8 +145,15 @@ func nativeTypedMeta(meta CollectionMeta) bool {
 			if col.Nullable || !((col.ValueType == ColumnStoreValueString && col.Owner == TypedStorageOwnerRowAsset) || (col.ValueType == ColumnStoreValueFloat32Vector && col.Owner == TypedStorageOwnerColumnPart)) {
 				return false
 			}
-		} else if col.Owner != TypedStorageOwnerColumnPart {
-			return false
+		} else {
+			if col.Owner != TypedStorageOwnerColumnPart && col.Owner != TypedStorageOwnerRowAsset {
+				return false
+			}
+			// Keep the original single-vector semantic-stream lane. This scalar
+			// producer migration does not widen vector layouts or their owners.
+			if col.ValueType == ColumnStoreValueFloat32Vector && (len(cfg.Columns) != 1 || col.Owner != TypedStorageOwnerColumnPart) {
+				return false
+			}
 		}
 	}
 	// The maintained direct typed producer indexes only declared, non-null

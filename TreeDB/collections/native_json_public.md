@@ -93,13 +93,17 @@ growth under the original finite read budget and is released when traversal ends
 Missing indexes are empty scans. Document ranges require a positive limit, and
 borrowed-document callbacks retain their existing no-retention/no-reentry contract.
 
-Eligible typed collections also route `InsertTypedBatchWithStats`,
-`ReplaceTypedBatch`, `UpsertTypedBatch`, `ReplaceTypedSourceByID` and `DeleteBatch`
-through the same transaction and immutable typed projection. Current eligibility
-requires top-level declared columns without aggregate metadata:
+Eligible typed collections use the same transaction and immutable typed projection.
+Ordinary JSON insertion supports the layouts below; `InsertTypedBatchWithStats`,
+`ReplaceTypedBatch`, `UpsertTypedBatch` and `ReplaceTypedSourceByID` retain their
+JSON retained-payload requirement. `DeleteBatch` supports either retained carrier.
+Current eligibility requires top-level declared columns without aggregate metadata:
 
-- One Int64, String or finite Float32Vector ColumnPart with noncolumn
-  semantic-stream-v1 retained payload.
+- One or more top-level Int64/String columns owned by RowAsset or ColumnPart,
+  with noncolumn semantic-stream-v1 retained payload. Declared values and
+  residual fields use the maintained schema-wide parser, owner-specific assets
+  and reconstruction. The existing single finite Float32Vector ColumnPart
+  semantic-stream-v1 layout remains eligible.
 - One or more nonnullable String RowAsset and/or finite Float32Vector ColumnPart
   columns with noncolumn JSON retained payload. Each row supplies every declared
   column through the maintained typed projection or ordinary JSON input. Pending
@@ -133,7 +137,9 @@ do not imply typed-write support. A value log remains persistent value storage
 when WAL is disabled.
 
 `Collection.PrepareInsertBatchOwned(...).Commit()` supports the eligible no-index
-Int64/String ColumnPart semantic-stream layout in the durable WAL profile. Prepare
+Int64/String RowAsset/ColumnPart semantic-stream layouts in the durable WAL profile.
+The existing scalar-column and input limits still bound preparation; aggregates
+and nested declared paths remain outside native eligibility. Prepare
 stages the original transaction's identity-free typed projection and canonical
 input copies; it advances no publication frontier. Conflicts against its opening
 may fail preparation early. Commit consumes the token once and revalidates its
