@@ -43,15 +43,6 @@ func (p *Pager) WritePublicationRecordViewWithWork(pageID uint64, data []byte, w
 }
 
 func (p *Pager) writeViewWithWork(pageID uint64, data []byte, publication bool, work *iterator.OrdinalScanWork) ([]byte, bool, error) {
-	if isPrimaryBankID(pageID) {
-		if ok, e := pagerReserve(work, 1, 64); !ok || e != nil {
-			return nil, false, e
-		}
-		if companion := p.primaryBanks.Load(); companion != nil {
-			return companion.writeViewWithWork(pageID-page.PrimaryBankNamespace, data, publication, work)
-		}
-		return nil, false, ErrPageOutOfBounds
-	}
 	if p.readOnly {
 		return nil, false, ErrReadOnly
 	}
@@ -140,28 +131,8 @@ func (p *Pager) writeAdjacentViewsWithWork(first uint64, left, right []byte, dur
 	return span[:page.PageSize], span[page.PageSize:], true, nil
 }
 
-// WritePrimaryCapsuleViewWithWork installs one complete three-page fixed slot
-// under the same verified-word, mapping, dirty membership and stable file fence
-// used by ordinary immutable publication. The two slots need not be adjacent
-// to their component banks. A failed fence preserves dirty state for retry.
-func (p *Pager) WritePrimaryCapsuleViewWithWork(first uint64, image []byte, work *iterator.OrdinalScanWork) ([]byte, bool, error) {
-	if len(image) != 3*page.PageSize || (first != 2 && first != 5) {
-		return nil, false, ErrPageOutOfBounds
-	}
-	return p.writeOwnedSpanWithWork(first, [][]byte{image[:page.PageSize], image[page.PageSize : 2*page.PageSize], image[2*page.PageSize:]}, true, true, 0, 3*page.PageSize, nil, work)
-}
-
+// writeOwnedSpanWithWork preserves the original DATA mapping and dirty fence.
 func (p *Pager) writeOwnedSpanWithWork(first uint64, images [][]byte, durable, publication bool, sealOffset, sealLength int64, beforeFence func() error, work *iterator.OrdinalScanWork) ([]byte, bool, error) {
-	if isPrimaryBankID(first) {
-		if ok, e := pagerReserve(work, 1, 64); !ok || e != nil {
-			return nil, false, e
-		}
-		companion := p.primaryBanks.Load()
-		if companion == nil {
-			return nil, false, ErrPageOutOfBounds
-		}
-		return companion.writeOwnedSpanWithWork(first-page.PrimaryBankNamespace, images, durable, publication, sealOffset, sealLength, beforeFence, work)
-	}
 	if p.readOnly {
 		return nil, false, ErrReadOnly
 	}
@@ -279,13 +250,4 @@ func (p *Pager) writeOwnedSpanWithWork(first uint64, images [][]byte, durable, p
 		}
 	}
 	return destination, true, nil
-}
-
-// WritePrimaryCapsuleWithFenceV6 uses the same physical core and admits the
-// publisher's final cancellation/fault guard after install, before durability.
-func (p *Pager) WritePrimaryCapsuleWithFenceV6(first uint64, image []byte, beforeFence func() error, w *iterator.OrdinalScanWork) ([]byte, bool, error) {
-	if len(image) != 3*page.PageSize || (first != 2 && first != 5) {
-		return nil, false, ErrPageOutOfBounds
-	}
-	return p.writeOwnedSpanWithWork(first, [][]byte{image[:page.PageSize], image[page.PageSize : 2*page.PageSize], image[2*page.PageSize:]}, true, true, 0, 3*page.PageSize, beforeFence, w)
 }

@@ -30,7 +30,6 @@ type cowBackendBasis struct {
 	completionMu    sync.Mutex
 	completed       bool
 	cleanupErr      error
-	primaryMetadata bool
 	originalCustody *rootpublication.OriginalCleanupCustody
 }
 
@@ -287,21 +286,7 @@ func newCOWCache(provider backendSnapshotProvider, shards int, limits memtable.C
 		budget.Close()
 		return nil, err
 	}
-	if err = snapshot.ActivatePrimaryMetadataProducer(); err != nil {
-		for _, table := range cut.shards {
-			r := table.root.Release()
-			r.Drain()
-		}
-		for _, w := range c.writers {
-			r := w.Close()
-			r.Drain()
-		}
-		err = joinCOWCleanupError(err, cut.basis.release())
-		cutLease.Close()
-		cacheLease.Close()
-		budget.Close()
-		return nil, err
-	}
+
 	cut.buildDomains()
 	c.activeCuts.Store(1)
 	c.cut = cut
@@ -313,7 +298,7 @@ func cowBasisCharge(sizes backenddb.SnapshotAllocationSizes) uint64 {
 }
 
 func cowSnapshotRetentionCharge(sizes backenddb.SnapshotAllocationSizes) uint64 {
-	return memtable.COWAllocationCharge(sizes.Wrapper) + memtable.COWAllocationCharge(sizes.PrimaryRoot) + memtable.COWAllocationCharge(sizes.PinSet) +
+	return memtable.COWAllocationCharge(sizes.Wrapper) + memtable.COWAllocationCharge(sizes.PinSet) +
 		memtable.COWAllocationCharge(sizes.Refs) + memtable.COWAllocationCharge(sizes.IDs) +
 		uint64(sizes.PinRefCount)*memtable.COWAllocationCharge(sizes.PinRef) +
 		memtable.COWAllocationCharge(sizes.ValueLog.Wrapper) + memtable.COWAllocationCharge(sizes.ValueLog.MapEnvelope) +
@@ -824,24 +809,4 @@ func cowRecordSize(record memtable.COWRecord) int64 {
 		size += len(record.Value)
 	}
 	return int64(size)
-}
-
-// admitCOWSnapshotRetention is shared by startup, handoff and dictionary readers.
-// One producer owner/budget binding accounts the arena once, while each capture
-// owns an enrollment. New producer growth must be admitted by every binding.
-func admitCOWSnapshotRetention(budget *memtable.COWBudget, bytes uint64, s backenddb.SnapshotAllocationSizes) (*memtable.COWExternalLease, *retainedalloc.Enrollment, error) {
-	var metadata *retainedalloc.Enrollment
-	var err error
-	if s.PrimaryMetadata != nil {
-		metadata, err = retainedalloc.EnrollPair(s.PrimaryMetadata, s.RegistryMetadata, budget)
-		if err != nil {
-			return nil, nil, err
-		}
-	}
-	lease, err := budget.AcquireExternal(bytes)
-	if err != nil {
-		metadata.Close()
-		return nil, nil, err
-	}
-	return lease, metadata, nil
 }

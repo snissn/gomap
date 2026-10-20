@@ -28,7 +28,7 @@ func TestValueLogRefCacheReadPreadmitsExactFileAndBuffer(t *testing.T) {
 			d, path := originalCacheReadTracker(t)
 			tracker := d.valueLogRefTracker
 			owner := tracker.metadata
-			budget := &primaryScratchBudget{capacity: ^uint64(0)}
+			budget := &retainedScratchBudget{capacity: ^uint64(0)}
 			enrollment, err := owner.Enroll(budget)
 			if err != nil {
 				t.Fatal(err)

@@ -23,14 +23,8 @@ type failingStableDictionaryStore struct {
 }
 
 func TestStableValueLogAppendMergesReusedDictionaryClosure(t *testing.T) {
-	testStableValueLogAppendMergesReusedDictionaryClosure(t, false)
-}
-func TestStableValueLogAppendSelectedMetadataMergesLegacyDictionaryClosure(t *testing.T) {
-	testStableValueLogAppendMergesReusedDictionaryClosure(t, true)
-}
-func testStableValueLogAppendMergesReusedDictionaryClosure(t *testing.T, selected bool) {
 	dir := t.TempDir()
-	backend, err := backenddb.Open(backenddb.Options{Dir: dir, IndexOuterLeavesInValueLog: true, IndexPrimaryDirectory: selected})
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir, IndexOuterLeavesInValueLog: true})
 	if err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
@@ -83,7 +77,7 @@ func testStableValueLogAppendMergesReusedDictionaryClosure(t *testing.T, selecte
 		t.Fatalf("stable append ptrs=%v resources=%v", ptrs, resources)
 	}
 	defer resources.Release()
-	if selected && resources.MetadataOwner() != backend.StableResourceMetadataOwner() {
+	if resources.MetadataOwner() != backend.StableResourceMetadataOwner() {
 		t.Fatal("selected append did not retain the real producer admission owner")
 	}
 

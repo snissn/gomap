@@ -287,7 +287,7 @@ func TestCaptureStableIndexFileResourceSyncThroughSurvivesDBClose(t *testing.T) 
 		}
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
-			database, err := Open(Options{Dir: dir, IndexPrimaryDirectory: owned})
+			database, err := Open(Options{Dir: dir})
 			if err != nil {
 				t.Fatal(err)
 			}

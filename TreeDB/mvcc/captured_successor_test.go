@@ -32,13 +32,6 @@ func populatedTreeProof(s treedb.Snapshot) (depth, leaves int, err error) {
 		}
 		n := node.NewNodeView(data)
 		switch n.Type() {
-		case page.PageTypePrimaryDirectory:
-			dir, e := node.DecodePrimaryDirectory(data)
-			if e != nil {
-				return e
-			}
-			base, _ := dir.Base()
-			return walk(base.Ref, d)
 		case page.PageTypeLeaf:
 			leaves++
 			return nil
@@ -174,14 +167,7 @@ func populatedBoundaryKey(s treedb.Snapshot) ([]byte, error) {
 			return nil, e
 		}
 		n := node.NewNodeView(data)
-		if n.Type() == page.PageTypePrimaryDirectory {
-			d, e := node.DecodePrimaryDirectory(data)
-			if e != nil {
-				return nil, e
-			}
-			base, _ := d.Base()
-			return visit(base.Ref)
-		}
+
 		if n.Type() != page.PageTypeInternal {
 			return nil, nil
 		}

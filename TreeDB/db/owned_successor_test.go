@@ -94,7 +94,7 @@ func TestOwnedBackendSuccessorCapturedRootLeafPointerAndReuse(t *testing.T) {
 }
 
 func TestOwnedBackendSuccessorPrimaryAndConcurrentCaptures(t *testing.T) {
-	d, err := Open(Options{Dir: t.TempDir(), IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+	d, err := Open(Options{Dir: t.TempDir(), Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +116,7 @@ func TestOwnedBackendSuccessorPrimaryAndConcurrentCaptures(t *testing.T) {
 			for range 50 {
 				entry, found, err := d.SeekGEOwnedAtRoot(root, []byte("key"), []byte("kez"))
 				if err != nil || !found || string(entry.Key) != "key" || string(entry.Value) != "stable" {
-					t.Errorf("captured PRIMARY: %q %q %t %v", entry.Key, entry.Value, found, err)
+					t.Errorf("captured DATA: %q %q %t %v", entry.Key, entry.Value, found, err)
 					return
 				}
 				entry.Key[0], entry.Value[0] = 'X', 'X'

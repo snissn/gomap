@@ -100,7 +100,7 @@ func TestHistoricalStaleBuildV1ArchiveExactLineageAndNoCurrentCoverage(t *testin
 		if bytes.Contains(active, []byte(historicalID)) || bytes.Contains(active, []byte(historicalCut)) {
 			t.Fatalf("historical witness claims current coverage in %s", name)
 		}
-		for _, successor := range []string{"stale-build-base-saved-primary-v5", "stale-build-base-primary-capsule-v6"} {
+		for _, successor := range []string{"stale-build-base-data-current"} {
 			if !bytes.Contains(active, []byte(successor)) {
 				t.Fatalf("%s lost independent successor %s", name, successor)
 			}

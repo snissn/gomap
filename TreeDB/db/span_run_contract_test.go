@@ -250,7 +250,7 @@ func TestFlushSpanRunChunkSplitFixtureEntryChunksSplitTargetLeaf(t *testing.T) {
 }
 
 func TestPrimaryAbsenceFlushSpanChunksPreserveLogicalCoverage(t *testing.T) {
-	d, err := Open(Options{Dir: t.TempDir(), IndexPrimaryDirectory: true})
+	d, err := Open(Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}

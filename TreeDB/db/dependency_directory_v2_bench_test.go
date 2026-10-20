@@ -37,7 +37,7 @@ func BenchmarkDependencyDirectoryV2OwnedDeltaPublication(b *testing.B) {
 			}()
 			idx, registry := database.idx.Load(), database.StableResourceIdentityPinRegistry()
 			owner := registry.MetadataOwner()
-			if idx == nil || idx.primary != nil || idx.metadata != owner || !database.dependencyDirectoryRequiredFeature || database.durableRoot.record.Directory.RootPageID == 0 {
+			if idx == nil || idx.metadata != owner || !database.dependencyDirectoryRequiredFeature || database.durableRoot.record.Directory.RootPageID == 0 {
 				b.Fatal("not the enabled V2/default DATA original-owner route")
 			}
 			budget, err := memtable.NewCOWBudget(memtable.DefaultCOWLimits())

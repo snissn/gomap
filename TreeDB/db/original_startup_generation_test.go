@@ -73,16 +73,22 @@ func TestOriginalReadOnlyStartupCleanupPhysicalRefusalRetainsLock(t *testing.T) 
 			if err = seed.Close(); err != nil {
 				t.Fatal(err)
 			}
+			// Refuse actual DATA recovery after the original generation is
+			// constructed, then fault its physical cleanup in both lock modes.
+			corruptIndexPageByte(t, dir, 0)
+			corruptIndexPageByte(t, dir, 1)
 			var original *indexGen
+			closeCalls := 0
 			old := testDBCloseHook
 			testDBCloseHook = func(d *DB) {
+				closeCalls++
 				original = d.idx.Load()
 				if err := original.pager.WithStableResourceFile(func(f *os.File) error { return f.Close() }); err != nil {
 					t.Errorf("physical fault: %v", err)
 				}
 			}
 			defer func() { testDBCloseHook = old }()
-			opts := Options{Dir: dir, ReadOnly: true, CommandWAL: true, IndexPrimaryDirectory: true, DisableBackgroundPrune: true}
+			opts := Options{Dir: dir, ReadOnly: true, CommandWAL: true, DisableBackgroundPrune: true}
 			var d *DB
 			if noLock {
 				lock, lockErr := lockfile.Acquire(filepath.Join(dir, "LOCK"))
@@ -93,8 +99,8 @@ func TestOriginalReadOnlyStartupCleanupPhysicalRefusalRetainsLock(t *testing.T) 
 			} else {
 				d, err = Open(opts)
 			}
-			if d != nil || !errors.Is(err, os.ErrClosed) {
-				t.Fatalf("lost actual read-only startup physical cleanup refusal: %v", err)
+			if d != nil || !errors.Is(err, ErrNoRecoverableMeta) || !errors.Is(err, os.ErrClosed) || closeCalls != 1 {
+				t.Fatalf("lost actual read-only startup recovery/physical cleanup refusal: closes=%d err=%v", closeCalls, err)
 			}
 			var receipt *OpenRecoveryCleanupError
 			if !errors.As(err, &receipt) || receipt.generation != original || original.startupDB == nil ||
@@ -119,7 +125,7 @@ func TestOriginalReadOnlyStartupCleanupPhysicalRefusalRetainsLock(t *testing.T) 
 				}
 			}()
 			charged := original.metadata.Bytes()
-			if receipt.Close() != receipt.Unwrap() || original.close() != &original.closeFailure || original.metadata.Bytes() != charged {
+			if receipt.Close() != receipt.Unwrap() || original.close() != &original.closeFailure || original.metadata.Bytes() != charged || closeCalls != 1 {
 				t.Fatal("repeat retried or refunded refused cleanup")
 			}
 		})

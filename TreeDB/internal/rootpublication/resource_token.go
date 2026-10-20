@@ -1631,7 +1631,7 @@ func namespaceProofDiagnosticPath(path string, owned bool) string {
 	return b.String()
 }
 
-// NewOwnedStableNamespaceCreationProof admits added PRIMARY proof storage in
+// NewOwnedStableNamespaceCreationProof admits added producer proof storage in
 // its existing arena owner. A nonnil proof returned with an error retains exact
 // failed-cleanup handles and must remain in the caller's existing custody field.
 func NewOwnedStableNamespaceCreationProof(parent, child *os.File, name string, metadata *retainedalloc.Owner) (*StableNamespaceCreationProof, error) {

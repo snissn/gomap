@@ -3,7 +3,6 @@ package db_test
 import (
 	"errors"
 	"fmt"
-	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,48 +22,19 @@ import (
 )
 
 const (
-	staleBuildBaseCutID        = "cut/public-stale-build-base-retry-saved-primary-v5/after-meta-sync/000"
-	staleBuildBaseVariantID    = "cut/public-stale-build-base-retry-saved-primary-v5/after-meta-sync/000/variant/full-writeback"
-	staleBuildBaseSeed         = uint64(13546396532373078556)
-	staleBuildCapsuleCutID     = "cut/public-stale-build-base-retry-capsule-v6/after-index-data-sync/000"
-	staleBuildCapsuleVariantID = staleBuildCapsuleCutID + "/variant/full-writeback"
-	staleBuildCapsuleSeed      = uint64(13362006158980588834)
+	staleBuildDataCutID     = "cut/public-stale-build-base-retry-data-current/after-meta-sync/000"
+	staleBuildDataVariantID = staleBuildDataCutID + "/variant/full-writeback"
+	staleBuildDataSeed      = uint64(15748367916217096863)
 )
 
-// TestPowerLossCertificationStaleBuildBaseSavedPrimaryV5PublicReopen retains the #3865
-// counterexample at a real publication rendezvous. Its only hook installer is
-// compiled into the db test binary; production builds expose no mutable hook
-// API. A successor finishes against an old base, the predecessor becomes
-// durable, the stale successor is rejected, and a distinguishable retry is
-// reopened through public treedb.Open.
-func TestPowerLossCertificationStaleBuildBaseSavedPrimaryV5PublicReopen(t *testing.T) {
-	runStaleBuildBasePublicReopen(t, false)
-}
-
-func TestPowerLossCertificationStaleBuildBasePrimaryCapsulePublicReopenV6(t *testing.T) {
-	runStaleBuildBasePublicReopen(t, true)
-}
-
-func runStaleBuildBasePublicReopen(t *testing.T, capsule bool) {
+// TestPowerLossCertificationStaleBuildBaseDATAPublicReopen binds a fresh DATA
+// producer to the original stale-base publication rendezvous. The private test
+// hooks force a completed successor build to lose its basis before acceptance;
+// only its distinguishable retry may survive checkpoint and public crash reopen.
+// This is a new witness, separate from the archived historical DATA V1 evidence.
+func TestPowerLossCertificationStaleBuildBaseDATAPublicReopen(t *testing.T) {
 	dir := t.TempDir()
 	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, dir)
-	if capsule {
-		opts.IndexPrimaryDirectory = true
-	}
-	if !capsule {
-		// Construct the separately versioned saved V5 format. The original DATA V1
-		// witness and generation8 evidence are archived with zero current coverage.
-		// Public Open admits this real preexisting V5 arena and uses DATA META.
-		dbpkg.CreateSavedPrimaryFormatV5ForTest(t, dir, dbpkg.Options{
-			ResolvedProfile:            dbpkg.ProfileNoWALFast,
-			IndexOuterLeavesInValueLog: opts.IndexOuterLeavesInValueLog,
-			LeafPrefixCompression:      opts.LeafPrefixCompression,
-			IndexColumnarLeaves:        opts.IndexColumnarLeaves,
-			IndexPackedValuePtr:        opts.IndexPackedValuePtr,
-			IndexInternalBaseDelta:     opts.IndexInternalBaseDelta,
-			IndexAdaptiveLeafEncoding:  opts.IndexAdaptiveLeafEncoding,
-		})
-	}
 	opts.DisableSideStores = true
 	opts.DisableBackgroundPrune = true
 	opts.BackgroundCheckpointInterval = -1
@@ -78,16 +48,8 @@ func runStaleBuildBasePublicReopen(t *testing.T, capsule bool) {
 			_ = closeBackend()
 		}
 	}()
-	header, err := os.ReadFile(filepath.Join(dir, "index.db.primary"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	wantMagic := "TDPRBANK"
-	if capsule {
-		wantMagic = "TDPRCAPB"
-	}
-	if len(header) < page.PageSize || string(header[16:24]) != wantMagic || !page.VerifyChecksumNonMutating(header[:page.PageSize]) {
-		t.Fatal("public producer format differs from bound witness")
+	if _, err := os.Stat(filepath.Join(dir, "index.db.primary")); !os.IsNotExist(err) {
+		t.Fatalf("DATA producer created retired PRIMARY namespace: %v", err)
 	}
 	if err := backend.SetSync([]byte("stale-build/public-baseline"), []byte("stable")); err != nil {
 		t.Fatal(err)
@@ -97,11 +59,8 @@ func runStaleBuildBasePublicReopen(t *testing.T, capsule bool) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	requireStaleBuildSelector(t, capsule)
+	requireStaleBuildSelector(t)
 	metaSyncs := 0
-	var capsuleIdentity rootpublication.StableIdentity
-	var sealedCapsule rootpublication.PrimaryCapsuleViewV6
-	capsuleSealed := false
 	frozen := false
 	checkpointArmed := false
 	var observeMu sync.Mutex
@@ -114,52 +73,7 @@ func runStaleBuildBasePublicReopen(t *testing.T, capsule bool) {
 		if err := model.Observe(dir, event); err != nil {
 			return err
 		}
-		if checkpointArmed && capsule && event.Point == durabilitycut.AfterPublicationSealWrite && filepath.Base(event.Path) == "index.db.primary" {
-			if event.StablePath == nil || event.Length != rootpublication.PrimaryCapsuleSizeV6 || (event.Offset != 2*page.PageSize && event.Offset != 5*page.PageSize) {
-				return errors.New("retry capsule seal lacks exact original slot")
-			}
-			image := make([]byte, rootpublication.PrimaryCapsuleSizeV6)
-			if _, err := event.StablePath.ReadAt(image, event.Offset); err != nil {
-				return err
-			}
-			var uuid [16]byte
-			copy(uuid[:], image[32:48])
-			view, err := rootpublication.DecodePrimaryCapsuleV6(image, uint64((event.Offset/page.PageSize-2)/3), uuid)
-			if err != nil {
-				return err
-			}
-			if view.Current().Record.CommitSeq != 4 || view.Parent().Record.CommitSeq != 3 {
-				return errors.New("retry capsule seal has wrong current/parent horizon")
-			}
-			capsuleIdentity, err = rootpublication.StableIdentityFromFile(event.StablePath)
-			if err != nil {
-				return err
-			}
-			sealedCapsule = view
-			capsuleSealed = true
-			if os.Getenv(powerlossoracle.EnvEvidenceDir) != "" {
-				if os.Getenv(powerlossoracle.EnvEvidenceReplayWindow) != staleBuildCapsuleVariantID {
-					return errors.New("capsule evidence requires its exact seal replay window")
-				}
-				if err := model.BeginReplayWindow(staleBuildCapsuleVariantID); err != nil {
-					return err
-				}
-			}
-		}
-		terminal := !capsule && event.Point == durabilitycut.AfterMetaSync
-		if checkpointArmed && capsule && capsuleSealed && event.Point == durabilitycut.AfterIndexDataSync && filepath.Base(event.Path) == "index.db.primary" {
-			if event.StablePath == nil {
-				return errors.New("capsule fence lacks original handle")
-			}
-			identity, err := rootpublication.StableIdentityFromFile(event.StablePath)
-			if err != nil {
-				return err
-			}
-			if !rootpublication.SamePhysicalIdentity(identity, capsuleIdentity) {
-				return errors.New("capsule fence changed original identity")
-			}
-			terminal = true
-		}
+		terminal := event.Point == durabilitycut.AfterMetaSync
 		if checkpointArmed && terminal {
 			metaSyncs++
 			frozen = true
@@ -277,17 +191,11 @@ func runStaleBuildBasePublicReopen(t *testing.T, capsule bool) {
 	closed = true
 	terminalMetaSyncs := 0
 	for _, event := range model.Trace() {
-		if (!capsule && strings.HasPrefix(event, "cut:after-meta-sync:")) || (capsule && strings.HasPrefix(event, "cut:after-index-data-sync:")) {
+		if strings.HasPrefix(event, "cut:after-meta-sync:") {
 			terminalMetaSyncs++
 		}
 	}
-	if capsule {
-		trace := model.Trace()
-		if !capsuleSealed || metaSyncs != 1 || len(trace) == 0 || trace[len(trace)-1] != "cut:after-index-data-sync:index" {
-			t.Fatalf("capsule terminal trace lacks exact completed original fence: %v", trace)
-		}
-	}
-	if !capsule && terminalMetaSyncs != 1 {
+	if terminalMetaSyncs != 1 {
 		t.Fatalf("terminal retry trace contains %d after-meta-sync events, want one", terminalMetaSyncs)
 	}
 
@@ -299,11 +207,7 @@ func runStaleBuildBasePublicReopen(t *testing.T, capsule bool) {
 	if result.Rejected || recovered == nil {
 		t.Fatalf("public Open rejected stale-build stable image: %v", result.Err)
 	}
-	if capsule {
-		assertStaleBuildCapsuleRecoveryStats(t, result, sealedCapsule)
-	} else {
-		assertStaleBuildRecoveryStats(t, result)
-	}
+	assertStaleBuildRecoveryStats(t, result)
 	value, err := recovered.Get([]byte("stale-build/public-baseline"))
 	if err != nil || string(value) != "stable" {
 		t.Fatalf("recovered public baseline=%q err=%v want stable", value, err)
@@ -320,6 +224,10 @@ func assertStaleBuildRecoveryStats(t *testing.T, result powerlossreopen.Result) 
 	if result.CommitSeq != 4 || result.AppliedLSN != 0 {
 		t.Fatalf("recovered horizon=(commit=%d applied_lsn=%d), want (commit=4 applied_lsn=0)", result.CommitSeq, result.AppliedLSN)
 	}
+	// Fresh DATA starts at commit 1 with freelist generation 2 (the initial
+	// generation 1 is the allocator's input). Baseline SetSync, predecessor,
+	// and accepted retry each advance both once; rejected work and Checkpoint
+	// do not publish another generation. This differs from saved PRIMARY V5.
 	want := []struct {
 		key   string
 		value string
@@ -331,7 +239,7 @@ func assertStaleBuildRecoveryStats(t *testing.T, result powerlossreopen.Result) 
 		{key: "treedb.durable_root.commit_seq", value: "4"},
 		{key: "treedb.durable_root.slot0.commit_seq", value: "3"},
 		{key: "treedb.durable_root.slot1.commit_seq", value: "4"},
-		{key: "treedb.durable_root.freelist.generation", value: "4"},
+		{key: "treedb.durable_root.freelist.generation", value: "5"},
 		{key: "treedb.durable_root.manifest.entries", value: "1"},
 		{key: "treedb.durable_root.durable_seq", value: "4"},
 	}
@@ -422,7 +330,7 @@ func assertStableStaleBuildSystemValues(t *testing.T, model *powerlossoracle.Mod
 	}
 }
 
-func requireStaleBuildSelector(t *testing.T, capsule bool) {
+func requireStaleBuildSelector(t *testing.T) {
 	t.Helper()
 	selector, err := powerlossoracle.ReplaySelectorFromEnv()
 	if err != nil {
@@ -431,73 +339,35 @@ func requireStaleBuildSelector(t *testing.T, capsule bool) {
 	if selector == (powerlossoracle.ReplaySelector{}) {
 		return
 	}
-	if err := validateStaleBuildSelector(selector, capsule); err != nil {
+	if err := validateStaleBuildSelector(selector); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func validateStaleBuildSelector(selector powerlossoracle.ReplaySelector, capsule bool) error {
-	cutID, variantID, seed := staleBuildBaseCutID, staleBuildBaseVariantID, staleBuildBaseSeed
-	if capsule {
-		cutID, variantID, seed = staleBuildCapsuleCutID, staleBuildCapsuleVariantID, staleBuildCapsuleSeed
-	}
-	if selector.CutID != cutID || selector.VariantID != variantID || selector.Seed != seed {
-		return fmt.Errorf("replay selector=(%q,%q,%d) want=(%q,%q,%d)", selector.CutID, selector.VariantID, selector.Seed, cutID, variantID, seed)
+func validateStaleBuildSelector(selector powerlossoracle.ReplaySelector) error {
+	if selector.CutID != staleBuildDataCutID || selector.VariantID != staleBuildDataVariantID || selector.Seed != staleBuildDataSeed {
+		return fmt.Errorf("replay selector=(%q,%q,%d) want=(%q,%q,%d)", selector.CutID, selector.VariantID, selector.Seed, staleBuildDataCutID, staleBuildDataVariantID, staleBuildDataSeed)
 	}
 	return nil
 }
 
-func TestStaleBuildCurrentSelectorsRejectHistoricalAndCrossFormat(t *testing.T) {
-	v5 := powerlossoracle.ReplaySelector{CutID: staleBuildBaseCutID, VariantID: staleBuildBaseVariantID, Seed: staleBuildBaseSeed}
-	v6 := powerlossoracle.ReplaySelector{CutID: staleBuildCapsuleCutID, VariantID: staleBuildCapsuleVariantID, Seed: staleBuildCapsuleSeed}
-	historical := powerlossoracle.ReplaySelector{CutID: "cut/public-stale-build-base-retry-stable-image/after-meta-sync/000", VariantID: "cut/public-stale-build-base-retry-stable-image/after-meta-sync/000/variant/full-writeback", Seed: 12505447533306515078}
-	for _, capsule := range []bool{false, true} {
-		correct, wrong := v5, v6
-		if capsule {
-			correct, wrong = v6, v5
-		}
-		if err := validateStaleBuildSelector(correct, capsule); err != nil {
-			t.Fatal(err)
-		}
-		seedMismatch := correct
-		seedMismatch.Seed++
-		variantMismatch := correct
-		variantMismatch.VariantID = wrong.VariantID
-		for _, refused := range []powerlossoracle.ReplaySelector{historical, wrong, seedMismatch, variantMismatch} {
-			if err := validateStaleBuildSelector(refused, capsule); err == nil {
-				t.Fatalf("format capsule=%v accepted foreign selector %+v", capsule, refused)
-			}
-		}
+func TestStaleBuildDATASelectorRejectsHistoricalAndRetiredFormats(t *testing.T) {
+	correct := powerlossoracle.ReplaySelector{CutID: staleBuildDataCutID, VariantID: staleBuildDataVariantID, Seed: staleBuildDataSeed}
+	if err := validateStaleBuildSelector(correct); err != nil {
+		t.Fatal(err)
 	}
-}
-
-func assertStaleBuildCapsuleRecoveryStats(t *testing.T, result powerlossreopen.Result, sealed rootpublication.PrimaryCapsuleViewV6) {
-	t.Helper()
-	if result.CommitSeq != 4 || result.AppliedLSN != 0 {
-		t.Fatalf("capsule recovered horizon=(%d,%d), want (4,0)", result.CommitSeq, result.AppliedLSN)
-	}
-	current, parent := sealed.Current().Record, sealed.Parent().Record
-	if current.CommitSeq != 4 || parent.CommitSeq != 3 {
-		t.Fatal("unbound capsule current/parent")
-	}
-	want := map[string]string{
-		"treedb.profile.resolved":                 "no_wal_fast",
-		"treedb.applied_command_lsn":              "0",
-		"treedb.command_wal.durable_wal_lsn":      "0",
-		"treedb.durable_root.selected_slot":       "1",
-		"treedb.durable_root.commit_seq":          "4",
-		"treedb.durable_root.slot0.commit_seq":    "3",
-		"treedb.durable_root.slot1.commit_seq":    "4",
-		"treedb.durable_root.freelist.generation": "4",
-		"treedb.durable_root.manifest.entries":    "1",
-		"treedb.durable_root.durable_seq":         "4",
-	}
-	if sealed.Slot() != 1 || current.Freelist.GenerationID != 4 || parent.Freelist.GenerationID != 3 || current.Manifest.EntryCount != 1 || current.DurableSeq != 4 || parent.DurableSeq != 3 {
-		t.Fatal("sealed capsule selection/generation/parent differs from versioned horizon")
-	}
-	for key, value := range want {
-		if got, ok := result.Stats[key]; !ok || got != value {
-			t.Fatalf("capsule recovery stats[%q]=%q present=%v want=%q", key, got, ok, value)
+	seedMismatch := correct
+	seedMismatch.Seed++
+	variantMismatch := correct
+	variantMismatch.VariantID += "/foreign"
+	for _, refused := range []powerlossoracle.ReplaySelector{
+		{CutID: "cut/public-stale-build-base-retry-stable-image/after-meta-sync/000", VariantID: "cut/public-stale-build-base-retry-stable-image/after-meta-sync/000/variant/full-writeback", Seed: 12505447533306515078},
+		{CutID: "cut/public-stale-build-base-retry-saved-primary-v5/after-meta-sync/000", VariantID: "cut/public-stale-build-base-retry-saved-primary-v5/after-meta-sync/000/variant/full-writeback", Seed: 13546396532373078556},
+		{CutID: "cut/public-stale-build-base-retry-capsule-v6/after-index-data-sync/000", VariantID: "cut/public-stale-build-base-retry-capsule-v6/after-index-data-sync/000/variant/full-writeback", Seed: 13362006158980588834},
+		seedMismatch, variantMismatch,
+	} {
+		if err := validateStaleBuildSelector(refused); err == nil {
+			t.Fatalf("DATA accepted foreign selector %+v", refused)
 		}
 	}
 }

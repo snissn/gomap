@@ -107,7 +107,6 @@ func (p *Pager) closePhysical() (bool, error) {
 			p.prefetched.Store(nil)
 			p.dirtyChunks = dirtyChunkBits{revision: p.dirtyChunks.revision + 1}
 			p.fallback = nil
-			p.primaryBanks.Store(nil)
 			p.mu.Unlock()
 			s.view = nil
 			s.phase = 4

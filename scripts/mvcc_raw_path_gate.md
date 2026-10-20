@@ -16,7 +16,41 @@ Run `python3 -B .github/scripts/test_mvcc_raw_path_equivalence.py` for the
 no-Go digest, retention and exit-status controls. CI uploads the gate output
 directory, including these exact binaries, with its existing artifact step.
 
-## Public PRIMARY runtime attribution
+## Public durable replacement cost and runtime attribution
+
+`scripts/mvcc_primary_cost_gate.py` always rebuilds the exact workflow-supplied
+base and head with one maintained fixture,
+`TreeDB/mvcc/durable_replacement_cost_test.go`. It does not substitute a historical
+control for the ordinary base/head comparison. The 128 timed `CommitAt(100, ...,
+CommitDurable)` replacements, seed commits, `ProfileNoWALFast`, disabled side
+stores/background checkpoint, pointer threshold 4096 and timer boundaries retain
+the original public PRIMARY workload. Setup, lifecycle verification and database
+close remain outside timing; the independent raw-path gate is unchanged.
+
+Each arm's actual source selects one explicit compiled setup: the maintained
+PRIMARY attachment implementation enables `IndexPrimaryDirectory`, whereas the
+DATA retirement validator selects DATA without referring to the retired option.
+Missing, ambiguous or unrecognized source capabilities fail closed, with no
+runtime route retry. `bindings.json` records each capability path/hash and each
+generated arm fixture hash. Both arms run public lifecycle controls before any
+timed samples, and every sample proves its actual public snapshot root namespace,
+PRIMARY-file presence/absence, resolved profile, mode and disabled redo log.
+The DATA lifecycle additionally decodes both recovery slots and their exact
+parent records, checks both slots advance, and verifies values and authority
+after close/reopen without PRIMARY files. All source/fixture identities are
+checked again after measurement.
+
+Thus PRIMARY/DATA retirement and future DATA/DATA comparisons use the same public
+write/durability contract and strict cost limits. `generation_advances/op` remains
+raw telemetry: DATA generation advancement is an architectural difference,
+not a PRIMARY activation failure. Every PRIMARY lifecycle retains its original
+zero-generation replacement assertion; timed candidate PRIMARY samples also
+require zero advancement. Both arm activation gates are mandatory. Historical
+PRIMARY controls such as `7385e231632ef30189b12c20df12a9f4705c9f50` provide
+diagnostic provenance only; they do not replace the supplied accepted main base
+or establish an architecture verdict. Both measured binaries must be rebuilt
+under the recorded common toolchain; saved binaries from another toolchain do
+not constitute this comparison.
 
 The separate `scripts/mvcc_primary_cost_gate.py` comparison retains every raw
 sample, median, gate and `measurement_pass`. Raw timing remains limited to +5%
@@ -25,8 +59,8 @@ and bytes acceptance may report `EQUIVALENT_NON_ATTRIBUTABLE` only for identical
 independently bound runtime and input identities. A different executable, loader,
 library or input retains the original strict timing and bytes gates, with no
 numerical allowance. This attribution does not turn a raw failure into a measured
-PASS or establish a speedup. Allocation count, candidate PRIMARY activation, the
-public lifecycle control, quiet-host checks, ordered complete samples and all
+PASS or establish a speedup. Allocation count, source-bound route activation, both
+public lifecycle controls, quiet-host checks, ordered complete samples and all
 source/input/binary drift checks remain mandatory even for identical runtimes.
 
 Before and after measurement, `runtime-inputs-before.json` and

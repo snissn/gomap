@@ -109,42 +109,30 @@ index generation, value-log files and dictionary definitions used by reads.
 Acquisition pins the existing complete cut under `cutMu`. It neither rotates
 mutable shards nor scans, copies or sorts historical records.
 
-When the backend basis uses PRIMARY, `SnapshotAllocationSizes.PrimaryRoot`
-reports the immutable root wrapper retained by that capture. Raw wrapper,
-pin-set and value-log capacities are rounded separately by the shared
-`cowSnapshotRetentionCharge`, used by startup, handoff and dictionary readers.
-`PrimaryMetadata` and `RegistryMetadata` are different: they identify the
-already-rounded producer-maintained owners of the physical arena and the
-distinct DB physical-identity/namespace registry. They are not scalar sizes to
-add to the wrapper charge. Startup, backend handoff and dictionary capture use
-one fixed arena-plus-registry pair enrolled against the SAME COW budget before
-capture effects. Partial pair refusal unwinds both handles. The same owner and
-budget share one governing lease; distinct budgets each govern that owner's
-actual closure.
+Raw snapshot wrapper, pin-set and value-log capacities are rounded separately
+by `cowSnapshotRetentionCharge`, shared by startup, handoff and dictionary reads.
+`RegistryMetadata` identifies the existing producer-maintained DATA physical
+identity registry. Backend basis admission enrolls that original owner before
+capture and releases it through the same Snapshot cleanup completion.
 Producer growth reserves full replacement capacity before allocation, including
 old/new overlap, and refunds only storage whose actual ownership has ended.
 The existing COW limits remain the governing limits.
 
-A successful capture adopts its pair enrollment into the exact Snapshot.
-Refusal leaves both handles with the admitting caller for unwind. Actual COW
-startup/activation separately attaches producer custody before persistent
-effects; releasing a borrower cannot detach that producer governor. A temporary
-dictionary capture borrows already producer-owned storage and detaches its
-temporary governor after actual successful cleanup, allowing its budget to
-close without preventing later valid backend writes. New storage caused by
-borrowing must be admitted and transferred to an actual producer, disposed, or
-retained as cleanup debt.
+A temporary capture keeps its original admission until actual snapshot cleanup.
+Cleanup failure retains the original debt and governing charge. The retired
+PRIMARY pair/producer enrollment API is absent; DATA uses its existing registry
+and original consumer completion rather than constructing a new physical owner.
 
 Snapshot Close invalidates the public wrapper; a nil Close result alone does
 not prove physical cleanup while admitted readers or finalization remain.
-The SAME original finalizer completes registry, value-log, PRIMARY and exact
+The SAME original finalizer completes registry, value-log and exact
 ordinary release-queue cleanup, scrubs the wrapper's actual aliases, and then
 publishes its once-only completion outcome before detaching temporary custody.
 A failed cleanup retains the exact original debt and governing charge; consumed
 physical references are never replayed. Independent adapter disposal refunds
 only its own detached metadata, not the original physical action.
 Retired generations remain governed through their last real reader and cleanup.
-Physical arena Close rejects further growth but keeps admitted runtime,
+Physical owner Close rejects further growth but keeps admitted runtime,
 transaction, promotion-image and callback tails until their existing owners
 clear those aliases. Cleanup may shrink a closed budget. No capture-time graph
 walk, separate publication registry or blanket generation exemption is implied.
@@ -157,16 +145,14 @@ roots and frozen sources shadow older sources and backend entries. Physical
 deletion markers suppress older entries; MVCC logical tombstones remain normal
 encoded values interpreted by the MVCC layer.
 
-The empty-backend shortcut is a proof about the captured root. It accepts an
-empty leaf directly, or a canonical PRIMARY directory with no components whose
-digest-validated base is an empty leaf. Nonempty/internal bases and any component
-(including an inline absence) retain the same-cut merge path; physical validation
-errors propagate. It never consults a newer published root to infer emptiness.
+The empty-backend shortcut proves that the captured DATA root is an empty leaf.
+Nonempty or internal roots retain the same-cut merge path; physical validation
+errors propagate. It never consults a newer root to infer emptiness.
 
 For a nonempty captured backend, one-successor selection uses fixed admitted
 ancestor, key and leaf scratch on that same immutable cut. It compares one
 metadata candidate from each eligible source and materializes only the winning
-value-log pointer. PRIMARY base/component digests retain ordinary read validation.
+value-log pointer. DATA reads retain ordinary page integrity validation.
 A physical tombstone or unsupported source returns to the existing complete
 same-cut merge so suppression and advancement remain correct. The returned key
 and value are owned copies; this changes neither publication nor durability
@@ -496,47 +482,13 @@ ends. Generic and recovery-loaded manifests keep their existing diagnostic
 getter lifetime; the recovery resolver refuses selected borrowed metadata when
 constructing independent long-lived resource tokens.
 
-### Selected immutable resource metadata
+### Immutable resource metadata
 
-Selected PRIMARY publication admits new token descriptors, namespace/handle
-backing, immutable resource entries, persistent obligation indexes, proof/rope
-nodes, manifests and constructor scratch before allocating them. Each distinct
-physical edge retains its original registry/operation/deletion authority.
-Importing a pre-existing generic provider admits independent selected metadata
-before its first visible clone; it does not relabel that provider's physical
-owner or copy an opaque callback as a completion certificate.
-
-The persistent obligation index is the canonical selected history. Same-identity
-coalescing retains exact existing nodes and adds admitted changed paths rather
-than cloning the whole history. Selected borrowing scopes cover actual decode,
-serialization and callback use. Long-lived selected diagnostics require their
-own admitted owner and explicit Close; raw selected getters refuse. Detached
-legacy telemetry copies only scalar values and canonical built-in kind names,
-retaining no selected strings or tokens. Generic diagnostics keep their existing
-post-release contract.
-
-Private manifest construction admits contiguous page images, one reusable
-canonical encoder page, bank-ref backing and child-first traversal frames. Full
-replacement backing is admitted during overlap. Pre-Open dependency leases use
-intrusive links in the existing index owner, and failed private bank cleanup
-remains in the SAME arena owner's preadmitted failure custody. These ordinary
-helpers and their synchronous cleanup are not bounded native prune evidence.
-
-The [ordinary PRIMARY allocation inventory](../design/ordinary-primary-allocation-5111.md)
-records the actual constructor/capacity/caller and last-alias boundaries. Public
-set wrapper disposal refunds its own admitted allocation while an active scope
-retains immutable descriptor and original physical closure. Same-identity
-coalescing updates the canonical selected index without mutating an older shared
-rope's frontier. Temporary captures and real producer enrollment are distinct.
-
-Snapshots retaining PRIMARY roots also retain the existing physical arena owner.
-Their original last-read finalizer drops the bank edge, settles original cleanup
-and releases that physical owner before detaching the paired governor. DB.Close
-cannot dispose the mapping needed by this finalizer. Cleanup failure retains the
-exact Snapshot at that owner; private one-shot reads cannot reuse a failed owner.
-This extends physical cleanup custody without adding a Snapshot read-after-close
-promise.
-
+DATA publication preserves original resource identity, registry admission and
+physical cleanup authority. Immutable resource sets, dependency directories,
+namespace descriptors and terminal receipts keep their existing ownership.
+Historical PRIMARY-specific allocation and arena witnesses are source-bound in
+[retirement provenance](primary-retirement.md), and do not certify DATA behavior.
 
 A successor backend basis preadmits its existing wrapper, retained VLog/leaf
 capacities, pin vector and original cleanup custody before capture effects.
@@ -551,7 +503,7 @@ without extending an already scrubbed Snapshot payload's lifetime.
 
 Bounded capture performs external admission before taking the existing state
 read lock. It then revalidates the exact view under rootReuseMu followed by
-db.mu, before reader registration or PRIMARY references. Same-root topology
+db.mu, before reader registration and physical references. Same-root topology
 refresh during admission refuses this capture; retry uses the successor view.
 The captured VLog Set is acquired after fallible reference admission while the
 state lock excludes replacement, and the lock is released before leaf setup.

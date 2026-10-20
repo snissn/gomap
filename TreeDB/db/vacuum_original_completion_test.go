@@ -1,10 +1,7 @@
 package db
 
 import (
-	"bytes"
-	"context"
 	"errors"
-	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -14,8 +11,6 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
-	"github.com/snissn/gomap/TreeDB/page"
-	"github.com/snissn/gomap/TreeDB/pager"
 )
 
 func TestOfflineVacuumOriginalSourceCloseRefusalRetainsLock(t *testing.T) {
@@ -40,7 +35,7 @@ func TestOfflineVacuumOriginalSourceCloseRefusalRetainsLock(t *testing.T) {
 			return
 		}
 		original = d.idx.Load()
-		if original == nil || original.primary != nil {
+		if original == nil {
 			t.Fatalf("fixture missed ordinary DATA source: %p", original)
 		}
 		sourceBorrows = original.wrapperBorrowCountV6()
@@ -158,7 +153,6 @@ func TestOfflineReplacementOriginalPagerCompletion(t *testing.T) {
 				if err = lock.Close(); err != nil {
 					t.Fatal(err)
 				}
-
 			} else {
 				var receipt *OpenRecoveryCleanupError
 				if errors.As(first, &receipt) || replacement.metadataCharge != 0 || replacement.startupDB != nil || replacement.startupCustody != nil || replacement.pager != nil {
@@ -173,281 +167,6 @@ func TestOfflineReplacementOriginalPagerCompletion(t *testing.T) {
 					t.Fatalf("successful original completion left charge: %d", completionOwner.Bytes())
 				}
 				if err = lock.Close(); err != nil {
-					t.Fatal(err)
-				}
-			}
-		})
-	}
-}
-
-// Real proof builds append through the same leaf writer after both selected
-// slot trees have already been captured. Every resulting reference must enter
-// the final manifest before its record/capsule is sealed.
-func TestVacuumPrimaryProofOuterLeafSegmentsSealAfterAllRoots(t *testing.T) {
-	dir := t.TempDir()
-	opts := Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed,
-		DisableBackgroundPrune: true, ChunkSize: 64 << 10, KeepRecent: 1, PreferAppendAlloc: true, IndexOuterLeavesInValueLog: true}
-	d, err := Open(opts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	log, err := NewStandaloneLeafPageLog(dir, StandaloneLeafPageLogOptions{MaxSegmentBytes: 512, Compression: ValueLogCompressionOff})
-	if err != nil {
-		t.Fatal(err)
-	}
-	d.SetLeafPageLog(log)
-	defer func() {
-		if d != nil {
-			if e := d.Close(); e != nil {
-				t.Error(e)
-			}
-		}
-		if e := log.Close(); e != nil {
-			t.Error(e)
-		}
-	}()
-	for gen := 1; gen <= 4; gen++ {
-		batch := d.NewBatch()
-		for i := 0; i < 384; i++ {
-			if err = batch.Set([]byte(fmt.Sprintf("key/%06d", i)), bytes.Repeat([]byte{byte(gen)}, 96)); err != nil {
-				t.Fatal(err)
-			}
-		}
-		if err = batch.WriteSync(); err != nil {
-			t.Fatal(err)
-		}
-		if err = batch.Close(); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if d.idx.Load().primary == nil || !d.idx.Load().primary.CapsuleFormatV6() {
-		t.Fatal("fixture missed actual V6 producer")
-	}
-	if primaryOnlinePlatformRefusal(t, d, context.Background()) {
-		if err = d.Close(); err != nil {
-			t.Fatal(err)
-		}
-		return
-	}
-	beforeProof := map[uint32]bool{}
-	d.vacuumPagerSyncHook = func(phase vacuumPagerSyncPhase) {
-		if phase != vacuumPagerSyncFinal {
-			return
-		}
-		files, e := listLeafGenerationBootstrapFiles(LeafLogDirPath(dir))
-		if e != nil {
-			t.Fatal(e)
-		}
-		for _, f := range files {
-			beforeProof[f.rawFileID] = true
-		}
-	}
-	if err = d.VacuumIndexOnline(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	d.vacuumPagerSyncHook = nil
-	if len(beforeProof) == 0 {
-		t.Fatal("fixture missed actual selected-slot leaf output")
-	}
-	manifest := map[uint32]bool{}
-	for _, gen := range d.leafGenerationManifest.Generations {
-		for _, id := range gen.FileIDs {
-			manifest[id] = true
-		}
-	}
-	basis := d.recoverableDurableBasisLocked()
-	snap := d.AcquireSnapshot()
-	if snap == nil {
-		t.Fatal("capture")
-	}
-	lateProofRefs := 0
-	for i, rootID := range basis.primaryReadRoots {
-		if rootID == 0 {
-			t.Fatalf("missing actual slot/proof %d", i)
-		}
-		refs := collectLeafRefIDsFromRoot(t, d, rootID)
-		if len(refs) == 0 {
-			t.Fatalf("slot/proof %d lost actual outer-leaf dispatch", i)
-		}
-		for ptr := range refs {
-			if !manifest[ptr.FileID] {
-				t.Fatalf("slot/proof %d segment %d absent from final manifest", i, ptr.FileID)
-			}
-			if i >= 2 && !beforeProof[ptr.FileID] {
-				lateProofRefs++
-			}
-		}
-		got, e := snap.GetAtRoot(rootID, []byte("key/000000"))
-		if e != nil || len(got) != 96 {
-			t.Fatalf("slot/proof %d unreadable: %v", i, e)
-		}
-	}
-	if err = snap.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if lateProofRefs == 0 {
-		t.Fatal("fixture did not create real late proof leaf segments")
-	}
-	latest := d.durableRoot.slot
-	if err = d.Close(); err != nil {
-		t.Fatal(err)
-	}
-	d = nil
-	if err = log.Close(); err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(dir, primaryIndexFileName)
-	f, err := os.OpenFile(path, os.O_RDWR, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	image := make([]byte, 3*page.PageSize)
-	offset := int64(2+latest*3) * page.PageSize
-	if _, err = f.ReadAt(image, offset); err != nil {
-		t.Fatal(err)
-	}
-	bad := append([]byte(nil), image...)
-	bad[48] ^= 1
-	if _, err = f.WriteAt(bad, offset); err != nil {
-		t.Fatal(err)
-	}
-	if err = f.Sync(); err != nil {
-		t.Fatal(err)
-	}
-	if err = f.Close(); err != nil {
-		t.Fatal(err)
-	}
-	ro := opts
-	ro.ReadOnly = true
-	fallback, err := Open(ro)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, err := fallback.Get([]byte("key/000000"))
-	if err != nil || !bytes.Equal(got, bytes.Repeat([]byte{3}, 96)) {
-		t.Fatalf("independent fallback leaf closure: %v", err)
-	}
-	if err = fallback.Close(); err != nil {
-		t.Fatal(err)
-	}
-	f, err = os.OpenFile(path, os.O_RDWR, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = f.WriteAt(image, offset); err != nil {
-		t.Fatal(err)
-	}
-	if err = f.Sync(); err != nil {
-		t.Fatal(err)
-	}
-	if err = f.Close(); err != nil {
-		t.Fatal(err)
-	}
-	reopened, err := Open(opts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, err = reopened.Get([]byte("key/000000"))
-	if err != nil || !bytes.Equal(got, bytes.Repeat([]byte{4}, 96)) {
-		t.Fatalf("latest leaf closure: %v", err)
-	}
-	if err = reopened.Close(); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// Canonical rebinding consumes only the old proof. The admitted exact parents
-// stay in their original DATA generation and PRIMARY owner until terminal Close.
-func TestPrimaryJointNamespaceRebindKeepsOriginalParents(t *testing.T) {
-	for _, fault := range []bool{false, true} {
-		t.Run(map[bool]string{false: "consumed-proof", true: "physical-parent-refusal"}[fault], func(t *testing.T) {
-			var dir string
-			if fault {
-				var child bool
-				dir, child = permanentFailureFixtureProcess(t)
-				if !child {
-					return
-				}
-			} else {
-				dir = t.TempDir()
-			}
-			d, err := Open(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err = d.SetSync([]byte("key"), []byte("value")); err != nil {
-				t.Fatal(err)
-			}
-			g := d.idx.Load()
-			if g.primaryOwner == nil {
-				t.Fatal("fixture missed original PRIMARY owner")
-			}
-			for _, item := range []struct {
-				name string
-				p    *pager.Pager
-			}{{indexFileName, g.pager}, {primaryIndexFileName, g.primary.Pager()}} {
-				tok, e := g.stablePagerNamespaceToken(dir, item.name, item.p)
-				if e != nil {
-					t.Fatal(e)
-				}
-				if e = tok.ReleaseWithError(); e != nil {
-					t.Fatal(e)
-				}
-			}
-			dataParent, primaryParent := g.stableNamespaceParent, g.primaryOwner.namespaceParent
-			dataCharge, primaryCharge := g.stableNamespaceParentCharge, g.primaryOwner.namespaceParentCharge
-			if dataParent == nil || primaryParent == nil || dataCharge == 0 || primaryCharge == 0 {
-				t.Fatal("original admitted parent birth missing")
-			}
-			var originalParentError error
-			if fault {
-				if err = dataParent.Close(); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if fault {
-				_, originalParentError = rootpublication.StableNamespaceParentGeneration(dataParent)
-				if originalParentError == nil {
-					t.Fatal("closed original parent remained usable")
-				}
-				if cause := errors.Unwrap(originalParentError); cause != nil {
-					originalParentError = cause
-				}
-			}
-			originalLock := d.lock
-			first := g.rebindPrimaryJointNamespaceV6(dir)
-			if g.stableNamespaceParent != dataParent || g.primaryOwner.namespaceParent != primaryParent ||
-				g.stableNamespaceParentCharge != dataCharge || g.primaryOwner.namespaceParentCharge != primaryCharge {
-				t.Fatal("canonical rebind replaced/refunded original admitted parents")
-			}
-			if fault {
-				if !errors.Is(first, originalParentError) {
-					t.Fatalf("original parent refusal lost: %v", first)
-				}
-				d.retainOriginalCleanupError(first)
-				before := g.metadata.Bytes()
-				if again := g.rebindPrimaryJointNamespaceV6(dir); again != first || g.metadata.Bytes() != before {
-					t.Fatalf("failed rebinding replayed or refunded: %v", again)
-				}
-				// Genuine terminal cleanup still observes the failed original parent.
-				if err = d.Close(); !errors.Is(err, first) {
-					t.Fatalf("terminal custody lost: %v", err)
-				}
-				// Explicit process shutdown after original error/custody/no-refund assertions.
-				// Do not replay the failed parent primitive or complete its metadata receipt.
-				_ = g.pager.Close()
-				_ = g.primary.Pager().Close()
-				if err = primaryParent.Close(); err != nil {
-					t.Fatal(err)
-				}
-				if err = originalLock.Close(); err != nil {
-					t.Fatal(err)
-				}
-			} else {
-				if first != nil {
-					t.Fatal(first)
-				}
-				if err = d.Close(); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -486,7 +205,7 @@ func TestOfflineVacuumSetupRefusalRetainsOriginalSourceLock(t *testing.T) {
 	old := testDBCloseHook
 	testDBCloseHook = func(d *DB) {
 		original = d.idx.Load()
-		if original == nil || !d.readOnly || original.primary != nil {
+		if original == nil || !d.readOnly {
 			t.Fatalf("missed actual ordinary read-only source: %p", original)
 		}
 		attempts++
@@ -692,7 +411,7 @@ func TestOfflineRewriteNoSegmentsOriginalSourceCompletion(t *testing.T) {
 			previous := testDBCloseHook
 			testDBCloseHook = func(d *DB) {
 				original = d.idx.Load()
-				if original == nil || !d.readOnly || original.primary != nil {
+				if original == nil || !d.readOnly {
 					t.Fatal("fixture missed original ordinary DATA source")
 				}
 				owner = original.metadata
@@ -750,7 +469,6 @@ func TestOfflineRewriteNoSegmentsOriginalSourceCompletion(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-
 		})
 	}
 }
@@ -758,138 +476,3 @@ func TestOfflineRewriteNoSegmentsOriginalSourceCompletion(t *testing.T) {
 // The actual V6 caller closes its source before COMMIT, while its admitted
 // operation parent remains live through disposition. A later physical refusal
 // must keep the same source receipt/LOCK; ordinary semantic errors still drain.
-func TestOfflineSourceLateNamespaceRefusalRetainsOriginalLock(t *testing.T) {
-	for _, fault := range []bool{false, true} {
-		t.Run(map[bool]string{false: "semantic-refusal", true: "late-parent-refusal"}[fault], func(t *testing.T) {
-			dir := t.TempDir()
-			opts := Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true}
-			seed, err := Open(opts)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err = seed.SetSync([]byte("key"), []byte("value")); err != nil {
-				t.Fatal(err)
-			}
-			if err = seed.Close(); err != nil {
-				t.Fatal(err)
-			}
-			lock, err := lockfile.Acquire(filepath.Join(dir, "LOCK"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			opts.ReadOnly = true
-			d, err := openReadOnlyNoLockWithRegistryV6(opts, rootpublication.NewIdentityPinRegistry(), lock)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if primaryOfflineScopePlatformRefusal(t, d) {
-				if err = d.Close(); err != nil {
-					t.Fatal(err)
-				}
-				if err = lock.Close(); err != nil {
-					t.Fatal(err)
-				}
-				next, e := lockfile.Acquire(filepath.Join(dir, "LOCK"))
-				if e != nil {
-					t.Fatal(e)
-				}
-				if e = next.Close(); e != nil {
-					t.Fatal(e)
-				}
-				return
-			}
-			source := d.idx.Load()
-			source.retainOfflineSourceV1(d, lock)
-			originalMetadata := source.primary.MetadataOwner()
-			beforeScope := originalMetadata.Bytes()
-			scope, err := d.captureOfflinePrimaryScopeV6()
-			if err != nil {
-				t.Fatal(err)
-			}
-			parent := scope.stableNamespaceParent
-			scopeOwner, scopeCharge := scope.stableNamespaceMetadata, scope.stableNamespaceParentCharge
-			// The successful receipt includes the original private registry as
-			// well as its parent/control storage. Capture only this admission.
-			scopeAdmission := originalMetadata.Bytes() - beforeScope
-			if scopeOwner != originalMetadata || scopeAdmission <= scopeCharge || parent == nil || scopeCharge == 0 || source.metadataCharge == 0 {
-				t.Fatal("actual admitted source/namespace operands missing")
-			}
-			// This is the real source physical completion before the outer
-			// namespace callback, rather than a fabricated cached nil result.
-			if err = d.Close(); err != nil {
-				t.Fatal(err)
-			}
-			if d.idx.Load() != nil {
-				t.Fatal("original source discovery did not drain")
-			}
-			if fault {
-				if err = parent.Close(); err != nil {
-					t.Fatal(err)
-				}
-			}
-			metadata, charge, cleanup := scope.releaseOfflineNamespaceScopeV6()
-			operation := errors.New("ordinary semantic operation refusal")
-			if !fault {
-				if cleanup != nil || metadata != scopeOwner || charge != scopeAdmission {
-					t.Fatalf("successful original scope disposal: %v charge=%d", cleanup, charge)
-				}
-				scope, parent = nil, nil
-				metadata.RemovePending(charge)
-			} else {
-				if !errors.Is(cleanup, os.ErrClosed) || metadata != nil || charge != 0 ||
-					scope.stableNamespaceParent != parent || scope.stableNamespaceParentCharge != scopeCharge {
-					t.Fatalf("actual late namespace refusal lost operand/debt: %v", cleanup)
-				}
-				operation = errors.Join(operation, cleanup)
-			}
-			metadata, charge, first := source.finishOfflineSourceV1(operation)
-			if !fault {
-				var fatal *OpenRecoveryCleanupError
-				if !errors.Is(first, operation) || errors.As(first, &fatal) || recoveryCleanupOwnsLockV6(first, lock) {
-					t.Fatalf("semantic refusal falsely retained fatal source custody: %v", first)
-				}
-				source, d = nil, nil
-				if metadata != nil && charge != 0 {
-					metadata.RemovePending(charge)
-				}
-				if err = lock.Close(); err != nil {
-					t.Fatal(err)
-				}
-				next, err := lockfile.Acquire(filepath.Join(dir, "LOCK"))
-				if err != nil {
-					t.Fatal(err)
-				}
-				if err = next.Close(); err != nil {
-					t.Fatal(err)
-				}
-				return
-			}
-			var fatal *OpenRecoveryCleanupError
-			if metadata != nil || charge != 0 || !errors.Is(first, os.ErrClosed) ||
-				!errors.As(first, &fatal) || fatal.generation != source ||
-				source.startupDB != d || source.startupLock != lock ||
-				source.metadataCharge == 0 || !recoveryCleanupOwnsLockV6(first, lock) {
-				t.Fatalf("late physical refusal lost original source/LOCK custody: %v", first)
-			}
-			retained := scopeOwner.Bytes()
-			againOwner, againCharge, again := scope.releaseOfflineNamespaceScopeV6()
-			sourceOwner, sourceCharge, sourceAgain := source.finishOfflineSourceV1(nil)
-			if againOwner != nil || againCharge != 0 || sourceOwner != nil || sourceCharge != 0 ||
-				sourceAgain != first || !errors.Is(again, os.ErrClosed) || scopeOwner.Bytes() != retained ||
-				scope.stableNamespaceParent != parent || scope.stableNamespaceParentCharge != scopeCharge {
-				t.Fatal("repeated completion replayed/refunded actual late refusal")
-			}
-			next, lockErr := lockfile.Acquire(filepath.Join(dir, "LOCK"))
-			if next != nil {
-				_ = next.Close()
-			}
-			if !errors.Is(lockErr, lockfile.ErrLocked) {
-				t.Fatalf("late namespace refusal released LOCK: %v", lockErr)
-			}
-			// All sticky failure and retained LOCK assertions precede process shutdown.
-			if err = lock.Close(); err != nil {
-				t.Fatal(err)
-			}
-		})
-	}
-}

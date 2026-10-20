@@ -132,7 +132,7 @@ func newPreparedRootCandidateWithExtensions(spec CandidateSpec, extensions exten
 			return nil, fmt.Errorf("%w: %v", ErrInvalidCandidate, err)
 		}
 	}
-	var dataTerminal *primaryTerminalCompletionV6
+	var dataTerminal *durableRootTerminalCompletionV6
 	var added uint64
 	if spec.DurableRoot != nil {
 		dataTerminal = spec.DurableRoot.terminalMetadataV6
@@ -175,7 +175,7 @@ func newPreparedRootCandidateWithExtensions(spec CandidateSpec, extensions exten
 			}
 			return nil, fmt.Errorf("%w: transfer durable-root transaction: %w", ErrInvalidCandidate, err)
 		}
-		if !spec.DurableRoot.isConstructedPrimaryV6() && dataTerminal == nil {
+		if dataTerminal == nil {
 			extensions.durableRootRecord = newDurableRootGroupExtension(spec.DurableRoot)
 		}
 	}
@@ -184,9 +184,7 @@ func newPreparedRootCandidateWithExtensions(spec CandidateSpec, extensions exten
 		totalPages: spec.TotalPages, dependencyBytes: spec.DependencyBytes,
 		indexBytes: spec.IndexBytes, obligations: obligations, extensions: extensions, durableValidated: spec.DurableRoot != nil,
 	}
-	if spec.DurableRoot != nil && spec.DurableRoot.isConstructedPrimaryV6() {
-		return spec.DurableRoot.adoptPrimaryCandidateV6(candidate), nil
-	}
+
 	if dataTerminal != nil {
 		original := spec.DurableRoot
 		original.dataMember[0] = original
@@ -197,7 +195,7 @@ func newPreparedRootCandidateWithExtensions(spec CandidateSpec, extensions exten
 		return &original.dataCandidate, nil
 	}
 	// Only the generic route needs a separate candidate allocation. Selected
-	// DATA and PRIMARY candidates already live in their original transaction.
+	// DATA candidates already live in their original transaction.
 	result := candidate
 	return &result, nil
 }
@@ -206,15 +204,7 @@ func validateCandidateDurableRoot(spec CandidateSpec, transaction *DurableRootTr
 	if transaction.Owner() != ResourceOwnerBuilder || transaction.Sequence() != spec.Frontier.commitSeq {
 		return ErrDurableRootOwnership
 	}
-	if primary := transaction.PreparedPrimary(); primary != nil {
-		if err := primary.validateSequence(spec.Frontier.commitSeq); err != nil {
-			return err
-		}
-		if spec.FreelistHeadID != 0 || spec.TotalPages != primary.generation.HighWater() || spec.Frontier != primary.frontier {
-			return errors.New("candidate frontier does not match exact primary authority")
-		}
-		return nil
-	}
+
 	prepared := transaction.PreparedCOW()
 	if prepared == nil || prepared.Candidate() == nil || prepared.Candidate().Generation() == nil {
 		return errors.New("candidate has no exact COW generation")
@@ -289,7 +279,7 @@ func (c *PreparedRootCandidate) Resources() *StableResourceSet { return c.resour
 // COW transaction is aborted before resource pins are released. It is
 // idempotent and cannot release coordinator-owned ownership.
 func (c *PreparedRootCandidate) Abandon() error {
-	// PRIMARY embeds this descriptor in its original transaction. Terminal
+	// The original DATA transaction embeds this descriptor in its original transaction. Terminal
 	// Abort scrubs that containing storage, including its resource-set alias.
 	// Keep the SAME set until its independent candidate edge is consumed.
 	set := c.resourceSet()
@@ -357,7 +347,7 @@ func coalesceCandidates(candidates []*PreparedRootCandidate) (*PreparedRootCandi
 	return &coalesced, nil
 }
 
-// The selected original DATA/PRIMARY owners admit all descriptor/member
+// The original DATA owners admit all descriptor/member
 // capacity once before this call. The ordinary builder owns physical tokens.
 func coalesceAdmittedCandidates(candidates []*PreparedRootCandidate) (*PreparedRootCandidate, error) {
 	if len(candidates) == 1 {

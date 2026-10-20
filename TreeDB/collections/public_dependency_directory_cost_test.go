@@ -12,7 +12,6 @@ import (
 	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
-	"github.com/snissn/gomap/TreeDB/page"
 )
 
 // Opt-in, one fresh process per arm. This is a public producer route-cost
@@ -226,7 +225,9 @@ func TestPublicColumnDependencyDirectoryIncrementalCost(t *testing.T) {
 			t.Fatalf("V2 did not publish nonempty directory: %v", stats)
 		}
 		token, ok := d.StateToken()
-		if !ok || token.RootPageID&page.PrimaryBankNamespace != 0 {
+		// Bit 62 is the reserved historical PRIMARY bank namespace. DATA roots
+		// must remain ordinary page IDs after representation retirement.
+		if !ok || token.RootPageID&(uint64(1)<<62) != 0 {
 			t.Fatalf("not DATA: %+v ok=%t", token, ok)
 		}
 		refs := columnManifestAssetRefsForCollectionM12A(t, d, col)

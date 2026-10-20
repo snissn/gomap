@@ -40,11 +40,11 @@ type DurableRootPayload struct {
 // callback. PreparedCOW is immutable until Consume, Abort, or Fail transfers
 // its allocator ownership according to the callback contract.
 type DurableRootCallbackInput struct {
-	Lineage         DurableRootLineageID
-	Sequence        uint64
-	Payload         DurableRootPayload
-	PreparedCOW     *freelist.PreparedCOWCandidateV1
-	PreparedPrimary *PreparedPrimaryRootV5
+	Lineage     DurableRootLineageID
+	Sequence    uint64
+	Payload     DurableRootPayload
+	PreparedCOW *freelist.PreparedCOWCandidateV1
+
 	// PublicationProjection is the immutable DB descriptor owned by this member.
 	// It supplies no second lifecycle or callback authority.
 	PublicationProjection any
@@ -62,19 +62,19 @@ type DurableRootCallbackInput struct {
 // close/recovery after ambiguous publish or shutdown. Lifecycle callbacks must
 // not perform stable publication I/O.
 type DurableRootTransactionSpec struct {
-	// PrimaryMetadataBytesV6 transfers already admitted DB projection/callback
+	// MetadataBytesV6 transfers already admitted DB projection/callback
 	// storage to this SAME constructor; ordinary Finish/Abort refunds it.
-	PrimaryMetadataBytesV6 uint64
+	MetadataBytesV6 uint64
 	// Selected DATA uses the SAME original metadata owner and terminal node.
 	TerminalMetadataOwnerV6 *retainedalloc.Owner
 	Lineage                 DurableRootLineageID
 	Sequence                uint64
 	Payload                 DurableRootPayload
 	PreparedCOW             *freelist.PreparedCOWCandidateV1
-	PreparedPrimary         *PreparedPrimaryRootV5
-	Activate                func(DurableRootCallbackInput) error
-	Consume                 func(DurableRootCallbackInput) error
-	Abort                   func(DurableRootCallbackInput) error
+
+	Activate func(DurableRootCallbackInput) error
+	Consume  func(DurableRootCallbackInput) error
+	Abort    func(DurableRootCallbackInput) error
 	// AbortComplete consumes callback payload only after BOTH original physical
 	// callback cleanup and constructor root cleanup have actually succeeded.
 	AbortComplete         func(DurableRootCallbackInput) error
@@ -90,7 +90,6 @@ const (
 	durableRootConsumed
 	durableRootFinishing
 	durableRootFailed
-	durableRootConstructingV6
 )
 
 // DurableRootTransaction is a move-only ownership wrapper. Construction owns
@@ -111,14 +110,14 @@ type DurableRootTransaction struct {
 	owner                  ResourceOwnerState
 	phase                  durableRootTransactionPhase
 	finishBusy             bool
-	constructionV6         *primaryTransactionConstructionV6
-	terminalMetadataV6     *primaryTerminalCompletionV6
-	dataCandidate          PreparedRootCandidate
-	dataMember             [1]*DurableRootTransaction
-	failedCleanupMu        sync.Mutex
-	failedCleanupOwner     any
-	failedCleanupNext      *DurableRootTransaction
-	failedCleanupReceipt   durableRootCleanupFailureV6
+
+	terminalMetadataV6   *durableRootTerminalCompletionV6
+	dataCandidate        PreparedRootCandidate
+	dataMember           [1]*DurableRootTransaction
+	failedCleanupMu      sync.Mutex
+	failedCleanupOwner   any
+	failedCleanupNext    *DurableRootTransaction
+	failedCleanupReceipt durableRootCleanupFailureV6
 }
 
 // This failure edge is embedded in the SAME admitted original transaction.
@@ -199,29 +198,29 @@ func (transaction *DurableRootTransaction) RetainFailedCleanupV6(owner any, next
 }
 
 func NewDurableRootTransaction(spec DurableRootTransactionSpec) (*DurableRootTransaction, error) {
-	if spec.Lineage == (DurableRootLineageID{}) || spec.Sequence == 0 || (spec.PreparedCOW == nil && spec.PreparedPrimary == nil) ||
+	if spec.Lineage == (DurableRootLineageID{}) || spec.Sequence == 0 || spec.PreparedCOW == nil ||
 		spec.Abort == nil || spec.Fail == nil || (spec.Activate == nil || spec.Consume == nil) {
 		return nil, fmt.Errorf("%w: incomplete durable-root transaction", ErrInvalidCandidate)
 	}
 	if err := validateDurableRootTransactionSpec(spec); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidCandidate, err)
 	}
-	var terminal *primaryTerminalCompletionV6
+	var terminal *durableRootTerminalCompletionV6
 	if spec.TerminalMetadataOwnerV6 != nil {
-		charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(DurableRootTransaction{}))) + retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(primaryTerminalCompletionV6{})))
-		if spec.PrimaryMetadataBytesV6 > ^uint64(0)-charge {
+		charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(DurableRootTransaction{}))) + retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(durableRootTerminalCompletionV6{})))
+		if spec.MetadataBytesV6 > ^uint64(0)-charge {
 			return nil, retainedalloc.ErrCapacity
 		}
 		if err := spec.TerminalMetadataOwnerV6.AddPending(charge); err != nil {
 			return nil, err
 		}
-		terminal = &primaryTerminalCompletionV6{owner: spec.TerminalMetadataOwnerV6, charge: charge + spec.PrimaryMetadataBytesV6}
+		terminal = &durableRootTerminalCompletionV6{owner: spec.TerminalMetadataOwnerV6, charge: charge + spec.MetadataBytesV6}
 	}
 	return &DurableRootTransaction{
 		terminalMetadataV6: terminal,
 		input: DurableRootCallbackInput{
 			Lineage: spec.Lineage, Sequence: spec.Sequence, Payload: spec.Payload,
-			PreparedCOW: spec.PreparedCOW, PreparedPrimary: spec.PreparedPrimary, PublicationProjection: spec.PublicationProjection,
+			PreparedCOW: spec.PreparedCOW, PublicationProjection: spec.PublicationProjection,
 		},
 		activate: spec.Activate, consume: spec.Consume, abort: spec.Abort, abortComplete: spec.AbortComplete, fail: spec.Fail,
 		owner: ResourceOwnerBuilder, phase: durableRootPrepared,
@@ -229,12 +228,6 @@ func NewDurableRootTransaction(spec DurableRootTransactionSpec) (*DurableRootTra
 }
 
 func validateDurableRootTransactionSpec(spec DurableRootTransactionSpec) error {
-	if spec.PreparedPrimary != nil {
-		if spec.PreparedCOW != nil || !durableRootPayloadIsZero(spec.Payload) {
-			return errors.New("primary transaction cannot carry V1 COW or payload authority")
-		}
-		return spec.PreparedPrimary.validateSequence(spec.Sequence)
-	}
 	prepared := spec.PreparedCOW
 	candidate := prepared.Candidate()
 	if candidate == nil || candidate.Generation() == nil || prepared.CandidateID() == (freelist.CandidateIDV1{}) {
@@ -307,52 +300,11 @@ func (transaction *DurableRootTransaction) PreparedCOW() *freelist.PreparedCOWCa
 	return transaction.input.PreparedCOW
 }
 
-func (transaction *DurableRootTransaction) PreparedPrimary() *PreparedPrimaryRootV5 {
-	if transaction == nil {
-		return nil
-	}
-	return transaction.input.PreparedPrimary
-}
-
 // Abort releases a transaction that has not yet been moved into a candidate.
 // Once candidate construction succeeds, use PreparedRootCandidate.Abandon if
 // Enqueue is not accepted.
 func (transaction *DurableRootTransaction) Abort() error {
 	return transaction.abortFrom(ResourceOwnerBuilder)
-}
-
-// AbortPrivatePrimaryConstructionV6 disposes only this transaction's original
-// unbound construction. BindPrimaryVisibilityV6 changes the existing phase
-// after acquiring the state edge and detaching constructor discovery. That
-// transfer is authoritative even when later candidate/publication work fails.
-// No group may abort the transaction after that boundary.
-func (transaction *DurableRootTransaction) AbortPrivatePrimaryConstructionV6() error {
-	if transaction == nil {
-		return nil
-	}
-	var terminal primaryConstructionReleaseState
-	err := func() error {
-		transaction.mu.Lock()
-		defer transaction.mu.Unlock()
-		if transaction.physicalCleanupError != nil {
-			return transaction.physicalCleanupError
-		}
-		if transaction.phase != durableRootConstructingV6 {
-			return nil
-		}
-		if transaction.constructionV6 == nil || transaction.ownerLockedV6() != ResourceOwnerBuilder {
-			return ErrDurableRootOwnership
-		}
-		return transaction.abortConstructionLockedV6(&terminal)
-	}()
-	transaction = nil
-	if err != nil {
-		return err
-	}
-	if terminal.owner != nil {
-		terminal.owner.RemovePending(terminal.charge)
-	}
-	return nil
 }
 
 func (transaction *DurableRootTransaction) transfer(from, to ResourceOwnerState) error {
@@ -361,15 +313,7 @@ func (transaction *DurableRootTransaction) transfer(from, to ResourceOwnerState)
 	}
 	transaction.mu.Lock()
 	defer transaction.mu.Unlock()
-	if transaction.constructionV6 != nil && transaction.constructionV6.resources != nil {
-		setOwner := transaction.constructionV6.resources.Owner()
-		if transaction.finishBusy || transaction.phase == durableRootConsumed || transaction.owner != from ||
-			(setOwner != to && !(setOwner == ResourceOwnerReleased && (transaction.phase == durableRootFinishing || transaction.physicalCleanupError != nil))) {
-			return ErrDurableRootOwnership
-		}
-		transaction.owner = to
-		return nil
-	}
+
 	if transaction.ownerLockedV6() != from || (transaction.phase == durableRootConsumed || transaction.phase == durableRootFinishing) || transaction.ownerLockedV6() == ResourceOwnerReleased {
 		return ErrDurableRootOwnership
 	}
@@ -381,7 +325,7 @@ func (transaction *DurableRootTransaction) abortFromWithResources(owner Resource
 	if transaction == nil {
 		return StableResourceTokenReleaseCompletionV6{}, nil
 	}
-	var terminal primaryConstructionReleaseState
+	var terminal metadataReleaseStateV6
 	err := func() error {
 		transaction.mu.Lock()
 		defer transaction.mu.Unlock()
@@ -391,18 +335,14 @@ func (transaction *DurableRootTransaction) abortFromWithResources(owner Resource
 		if transaction.ownerLockedV6() == ResourceOwnerReleased {
 			return nil
 		}
-		if transaction.ownerLockedV6() != owner || (transaction.phase != durableRootPrepared && transaction.phase != durableRootConstructingV6) {
+		if transaction.ownerLockedV6() != owner || transaction.phase != durableRootPrepared {
 			return ErrDurableRootOwnership
 		}
-		if transaction.phase == durableRootConstructingV6 {
-			return transaction.abortConstructionLockedV6(&terminal)
-		}
+
 		if err := transaction.abort(transaction.input); err != nil {
 			return transaction.recordPhysicalCleanupFailureLocked(fmt.Errorf("abort durable-root visible state: %w", err))
 		}
-		if transaction.isConstructedPrimaryV6() {
-			return transaction.abortConstructionLockedV6(&terminal)
-		}
+
 		if resources != nil {
 			if err := resources.releaseFrom(owner); err != nil {
 				return transaction.recordPhysicalCleanupFailureLocked(err)
@@ -420,7 +360,7 @@ func (transaction *DurableRootTransaction) abortFromWithResources(owner Resource
 			transaction.terminalMetadataV6 = nil
 			transaction.input = DurableRootCallbackInput{Lineage: transaction.input.Lineage, Sequence: transaction.input.Sequence}
 			transaction.activate, transaction.consume, transaction.abort, transaction.abortComplete, transaction.fail = nil, nil, nil, nil, nil
-			_, terminal = popPrimaryTerminalCompletionV6(node)
+			_, terminal = popRootTerminalCompletionV6(node)
 		}
 		return nil
 	}()
@@ -443,9 +383,6 @@ func (transaction *DurableRootTransaction) recordPhysicalCleanupFailureLocked(er
 		transaction.physicalCleanupError = &transaction.physicalCleanupReceipt
 		if transaction.terminalMetadataV6 != nil {
 			transaction.terminalMetadataV6.owner.CleanupFailed()
-		}
-		if transaction.constructionV6 != nil {
-			transaction.constructionV6.arena.MetadataOwner().CleanupFailed()
 		}
 	}
 	return transaction.physicalCleanupError
@@ -476,16 +413,14 @@ func (transaction *DurableRootTransaction) consumeFromCoordinator() error {
 	if transaction.ownerLockedV6() != ResourceOwnerCoordinator || transaction.phase != durableRootActivated {
 		return ErrDurableRootOwnership
 	}
-	{
-		if err := transaction.consume(transaction.input); err != nil {
-			return err
-		}
-		if transaction.isConstructedPrimaryV6() || transaction.terminalMetadataV6 != nil {
-			transaction.phase = durableRootFinishing
-		} else {
-			transaction.phase = durableRootConsumed
-			transaction.releaseOwnerLockedV6()
-		}
+	if err := transaction.consume(transaction.input); err != nil {
+		return err
+	}
+	if transaction.terminalMetadataV6 != nil {
+		transaction.phase = durableRootFinishing
+	} else {
+		transaction.phase = durableRootConsumed
+		transaction.releaseOwnerLockedV6()
 	}
 	return nil
 }
@@ -527,12 +462,10 @@ func (transaction *DurableRootTransaction) prepareFromRecovery() error {
 	if transaction.ownerLockedV6() != ResourceOwnerRecovery {
 		return ErrDurableRootOwnership
 	}
-	if transaction.constructionV6 != nil {
-		return transaction.preparePrimaryRecoveryLockedV6()
-	}
+
 	return nil
 }
-func (transaction *DurableRootTransaction) releaseFromRecovery() (*primaryTerminalCompletionV6, error) {
+func (transaction *DurableRootTransaction) releaseFromRecovery() (*durableRootTerminalCompletionV6, error) {
 	if transaction == nil {
 		return nil, nil
 	}
@@ -541,9 +474,7 @@ func (transaction *DurableRootTransaction) releaseFromRecovery() (*primaryTermin
 	if transaction.physicalCleanupError != nil {
 		return nil, transaction.physicalCleanupError
 	}
-	if transaction.constructionV6 != nil {
-		return transaction.releasePrimaryRecoveryLockedV6()
-	}
+
 	if transaction.ownerLockedV6() == ResourceOwnerRecovery {
 		transaction.input = DurableRootCallbackInput{Lineage: transaction.input.Lineage, Sequence: transaction.input.Sequence}
 		transaction.activate, transaction.consume, transaction.abort, transaction.abortComplete, transaction.fail = nil, nil, nil, nil, nil

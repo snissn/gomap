@@ -18,9 +18,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/freelist"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
-	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/mvccadmission"
-	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -30,7 +28,6 @@ import (
 // owns queued logical candidates and their resource closures. This runtime
 // owns only the independently cloned visible closure and publisher-time seals
 // needed to turn an ordered visible prefix into one recovery-selectable root.
-var testHookPrimaryDataCertificateV6 func(string, *rootPublicationRuntimeV1, *rootpublication.PreparedPrimaryRootV5)
 
 type rootPublicationRuntimeV1 struct {
 	db      *DB
@@ -54,24 +51,20 @@ type rootPublicationRuntimeV1 struct {
 	seals              []*rootPublicationSealV1
 	activeSeal         *rootPublicationSealV1
 	poison             error
-	// Borrowed immutable proof; only a successfully installed current root supplies
-	// its allowance. Detach before terminal withdrawal of that root.
-	primaryDataCertificateV6 *rootpublication.PrimaryDataCertificateV6
 }
 
 // rootPublicationVisibleMemberV1 contains only precomputed, non-fallible
 // activation state. It is installed by the transaction Activate callback
 // before the coordinator advances its visible frontier.
 type rootPublicationVisibleMemberV1 struct {
-	transaction              *rootpublication.DurableRootTransaction
-	primary                  *rootpublication.PreparedPrimaryRootV5
-	primaryRecordTransferred bool
-	sequence                 uint64
-	next                     page.MetaPageBody
-	prepared                 *freelist.PreparedCOWCandidateV1
-	resources                *rootpublication.StableResourceSet
-	install                  *rootPublicationVisibleInstallV1
-	preparedLimits           *PreparedRootPublicationLimits
+	transaction *rootpublication.DurableRootTransaction
+
+	sequence       uint64
+	next           page.MetaPageBody
+	prepared       *freelist.PreparedCOWCandidateV1
+	resources      *rootpublication.StableResourceSet
+	install        *rootPublicationVisibleInstallV1
+	preparedLimits *PreparedRootPublicationLimits
 }
 
 // rootPublicationVisibleInstallV1 owns all state that could otherwise make
@@ -79,12 +72,12 @@ type rootPublicationVisibleMemberV1 struct {
 // visibility boundary. Preparation resolves the value-log set and leaf view;
 // activate performs only bounded in-memory swaps and bookkeeping.
 type rootPublicationVisibleInstallV1 struct {
-	metadata         *retainedalloc.Owner
-	abortAttempted   bool
-	abortFailure     originalDBCleanupFailure
-	metadataCharge   uint64
-	visibleHead      int
-	primaryRoot      *primaryStateRootV5
+	metadata       *retainedalloc.Owner
+	abortAttempted bool
+	abortFailure   originalDBCleanupFailure
+	metadataCharge uint64
+	visibleHead    int
+
 	preparedState    *DBState
 	preparedView     *snapshotView
 	negativeCoverage *negativeRootCoverage
@@ -130,22 +123,22 @@ type rootPublicationSealV1 struct {
 	disposalFailure originalDBCleanupFailure
 	metadata        *retainedalloc.Owner
 	metadataCharge  uint64
-	primary         *primaryPublicationSealV5
-	latestSequence  uint64
-	groupLength     int
-	idx             *indexGen
-	base            rootPublicationSealBaseV1
-	next            page.MetaPageBody
-	resources       *rootpublication.StableResourceSet
-	manifest        *rootpublication.DependencyManifestV1
-	prepared        *freelist.PreparedCOWCandidateV1
-	prefix          []*freelist.PreparedCOWCandidateV1
-	token           *rootpublication.StableResourceToken
-	record          rootpublication.DurableRootRecordV1
-	meta            page.DurableMetaV1
-	target          uint64
-	materialized    bool
-	released        bool
+
+	latestSequence uint64
+	groupLength    int
+	idx            *indexGen
+	base           rootPublicationSealBaseV1
+	next           page.MetaPageBody
+	resources      *rootpublication.StableResourceSet
+	manifest       *rootpublication.DependencyManifestV1
+	prepared       *freelist.PreparedCOWCandidateV1
+	prefix         []*freelist.PreparedCOWCandidateV1
+	token          *rootpublication.StableResourceToken
+	record         rootpublication.DurableRootRecordV1
+	meta           page.DurableMetaV1
+	target         uint64
+	materialized   bool
+	released       bool
 }
 
 // publicRootPublicationErrorV1 preserves coordinator diagnostics while making
@@ -315,9 +308,6 @@ func newRootPublicationRuntimeV1(db *DB, idx *indexGen, durable durableRootRunti
 }
 
 func newRootPublicationRuntimeModeV1(db *DB, idx *indexGen, durable durableRootRuntimeV1, visible page.MetaPageBody, startup bool) (*rootPublicationRuntimeV1, error) {
-	if idx != nil && idx.primary != nil && idx.primary.CapsuleFormatV6() {
-		idx.zipper.SetPrimaryConstructorV6(rootpublication.NewPrimaryConstructionTransactionV6)
-	}
 	if db == nil || idx == nil || durable.record.CommitSeq == 0 {
 		return nil, errors.New("missing root-publication durable base")
 	}
@@ -328,9 +318,7 @@ func newRootPublicationRuntimeModeV1(db *DB, idx *indexGen, durable durableRootR
 		return nil, fmt.Errorf("clone initial visible root resources: %w", err)
 	}
 	metadata := db.valueLogIdentityPins.MetadataOwner()
-	if idx.primary != nil {
-		metadata = idx.primary.MetadataOwner()
-	}
+
 	metadataCharge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(rootPublicationRuntimeV1{})))
 	if err = metadata.AddPending(metadataCharge); err != nil {
 		return nil, errors.Join(err, baseResources.ReleaseWithError())
@@ -361,21 +349,8 @@ func newRootPublicationRuntimeModeV1(db *DB, idx *indexGen, durable durableRootR
 		return nil, errors.Join(err, runtime.release())
 	}
 	runtime.coordinator = coordinator
-	if idx.primary != nil && idx.primary.CapsuleFormatV6() {
-		idx.zipper.SetPrimaryConstructionFailureV6(runtime)
-	}
-	return runtime, nil
-}
 
-// The existing runtime bridges failed physical custody to DB admission. The
-// SAME primary owner remains the sole owner of the original failed transaction.
-func (runtime *rootPublicationRuntimeV1) RetainPrimaryConstructionFailureV6(original primaryarena.ReadRootConstructionV6, cause error) error {
-	if runtime == nil || runtime.idx == nil || runtime.idx.primaryOwner == nil {
-		return errors.Join(cause, rootpublication.ErrResourceOwnership)
-	}
-	retained := runtime.idx.primaryOwner.RetainPrimaryConstructionFailureV6(original, cause)
-	runtime.db.publicationPoisoned.Store(true)
-	return errors.Join(retained, ErrRecoveryRequired)
+	return runtime, nil
 }
 
 func stopRootPublicationRuntimeV1(runtime *rootPublicationRuntimeV1) (*rootpublication.RecoveryResourceHandoff, error) {
@@ -422,9 +397,7 @@ func (db *DB) prepareRootPublicationVisibleInstallV1(
 	opts finalizeCommitOptions,
 ) (_ *rootPublicationVisibleInstallV1, retErr error) {
 	metadata := db.valueLogIdentityPins.MetadataOwner()
-	if idx.primary != nil {
-		metadata = idx.primary.MetadataOwner()
-	}
+
 	metadataCharge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(rootPublicationVisibleInstallV1{})))
 	if err := metadata.AddPending(metadataCharge); err != nil {
 		return nil, err
@@ -530,7 +503,6 @@ func (install *rootPublicationVisibleInstallV1) prepareState() *DBState {
 	}
 	db := install.db
 	state := &DBState{
-		primaryRoot:       install.primaryRoot,
 		CommitSeq:         install.next.CommitSeq,
 		RootPageID:        install.next.UserRootPageID,
 		SystemRootPageID:  install.next.SystemRootPageID,
@@ -713,50 +685,43 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 	if liveGeneration == nil {
 		return nil, false, errors.New("missing actual DATA generation")
 	}
-	profile := runtime.idx.allocator.COWPrepareProfileV1()
-	// Only inherited BeginCandidate metadata bookkeeping may stay deferred.
-	// Actual allocator edits and explicit output retirement/allocation obligations
-	// always take the original COW producer path.
-	dataChanged := runtime.idx.primary == nil || len(retired) != 0 || !profile.Valid ||
-		profile.RequiresGeneration || profile.AllocatedPages != 0 || profile.AbandonedAppendExtents != 0
-	if dataChanged {
-		capability, err := runtime.db.durableRootReuseCapabilityV1(runtime.db.durableRoot)
-		if err != nil {
-			return nil, false, err
-		}
-		if liveGeneration == nil || liveGeneration.GenerationID() == ^uint64(0) {
-			return nil, false, errors.New("missing live COW generation for visible root")
-		}
-		generationID := liveGeneration.GenerationID() + 1
-		retirements := make([]freelist.COWRetirementV1, 0, 1)
-		if len(retired) != 0 {
-			retirements = append(retirements, freelist.COWRetirementV1{
-				PageIDs: retired, LastReachableCommitSeq: next.CommitSeq - 1,
-			})
-		}
-		cowPrepareStart := time.Now()
-		var cowLimits *freelist.COWPrepareLimitsV1
-		if limits != nil {
-			cowLimits = &limits.FreelistCOW
-		}
-		prepared, err = runtime.idx.allocator.PrepareCOWCandidateRetiringWithLimitsV1(
-			generationID,
-			next.CommitSeq,
-			rootPublicationLogicalCandidateIDV1(runtime.lineage, generationID, next),
-			capability,
-			retirements,
-			0,
-			freelist.NewCandidatePageSinkV1(),
-			cowLimits,
-		)
-		if timing != nil {
-			timing.FinalizeCandidateCOWPrepare += time.Since(cowPrepareStart)
-		}
-		if err != nil {
-			return nil, false, fmt.Errorf("prepare visible root COW generation: %w", err)
-		}
 
+	capability, err := runtime.db.durableRootReuseCapabilityV1(runtime.db.durableRoot)
+	if err != nil {
+		return nil, false, err
 	}
+	if liveGeneration == nil || liveGeneration.GenerationID() == ^uint64(0) {
+		return nil, false, errors.New("missing live COW generation for visible root")
+	}
+	generationID := liveGeneration.GenerationID() + 1
+	retirements := make([]freelist.COWRetirementV1, 0, 1)
+	if len(retired) != 0 {
+		retirements = append(retirements, freelist.COWRetirementV1{
+			PageIDs: retired, LastReachableCommitSeq: next.CommitSeq - 1,
+		})
+	}
+	cowPrepareStart := time.Now()
+	var cowLimits *freelist.COWPrepareLimitsV1
+	if limits != nil {
+		cowLimits = &limits.FreelistCOW
+	}
+	prepared, err = runtime.idx.allocator.PrepareCOWCandidateRetiringWithLimitsV1(
+		generationID,
+		next.CommitSeq,
+		rootPublicationLogicalCandidateIDV1(runtime.lineage, generationID, next),
+		capability,
+		retirements,
+		0,
+		freelist.NewCandidatePageSinkV1(),
+		cowLimits,
+	)
+	if timing != nil {
+		timing.FinalizeCandidateCOWPrepare += time.Since(cowPrepareStart)
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("prepare visible root COW generation: %w", err)
+	}
+
 	preparedOwned := true
 	defer func() {
 		if preparedOwned && prepared != nil {
@@ -793,62 +758,9 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 	install.next = next
 	install.post.commitSeq = next.CommitSeq
 	install.post.vlogRefIndexID = install.idx.id
-	var primary *rootpublication.PreparedPrimaryRootV5
 	var transaction *rootpublication.DurableRootTransaction
-	if runtime.idx.primary != nil {
-		var bundle primaryarena.PublicationBundle
-		var certificate *primaryarena.ReadRootCertificateV6
-		var ok bool
-		var e error
-		if runtime.idx.primary.CapsuleFormatV6() {
-			work := &iterator.OrdinalScanWork{RecordLimit: ^uint64(0), ByteLimit: ^uint64(0)}
-			owner, ready, err := runtime.idx.primary.ReadRootConstructionOwnerV6(next.UserRootPageID, work)
-			if !ready || err != nil {
-				return nil, false, err
-			}
-			var valid bool
-			transaction, valid = owner.(*rootpublication.DurableRootTransaction)
-			if !valid {
-				return nil, false, rootpublication.ErrDurableRootOwnership
-			}
-			cert := transaction.PrimaryConstructionCertificateV6()
-			if cert == nil {
-				return nil, false, rootpublication.ErrDurableRootOwnership
-			}
-			certificate = cert
-			bundle.Directory = cert.Reference()
-			runtime.mu.Lock()
-			previous := runtime.primaryDataCertificateV6
-			runtime.mu.Unlock()
-			primary, ok, e = rootpublication.NewPreparedPrimaryReadRootCertificateV6(cert, generation, prepared, rootPublicationFrontierV1(next), runtime.idx.pager, previous, nil)
-		} else {
-			bundle, ok, e = runtime.idx.primary.TakePublicationBundle(next.UserRootPageID, nil)
-			if !ok || e != nil {
-				return nil, false, e
-			}
-			primary, ok, e = prepareSelectedPrimaryRoot(runtime.idx.primary, bundle, generation, prepared, rootPublicationFrontierV1(next), runtime.idx.pager, nil)
-		}
-		if !ok || e != nil {
-			if transaction == nil {
-				_, directoryErr := runtime.idx.primary.Drop(bundle.Directory, nil)
-				_, recordErr := runtime.idx.primary.Drop(bundle.Record, nil)
-				e = errors.Join(e, directoryErr, recordErr)
-			}
-			// The original capsule constructor still owns its exact edge.
-			// Its creating group/copy caller disposes it; never raw-Drop it.
-			return nil, false, e
-		}
-		if runtime.idx.primary.CapsuleFormatV6() {
-			if testHookPrimaryDataCertificateV6 != nil {
-				testHookPrimaryDataCertificateV6("prepared", runtime, primary)
-			}
-			if e = runtime.idx.primary.AdmitRootMetadata(bundle.Directory, retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(primaryStateRootV5{})))); e != nil {
-				return nil, false, e
-			}
-		}
-		install.primaryRoot = &primaryStateRootV5{arena: runtime.idx.primary, ref: bundle.Directory, dataCommit: generation.CommitSeq(), certificate: certificate}
-	}
-	memberMetadata := primaryVisibleMetadataV6()
+
+	memberMetadata := visibleRootMetadataV6()
 	if e := runtime.metadata.AddPending(memberMetadata); e != nil {
 		return nil, false, e
 	}
@@ -859,7 +771,7 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 		}
 	}()
 	member := &rootPublicationVisibleMemberV1{
-		sequence: next.CommitSeq, next: next, prepared: prepared, primary: primary,
+		sequence: next.CommitSeq, next: next, prepared: prepared,
 		resources: visibleResources, install: install, preparedLimits: limits,
 	}
 
@@ -871,14 +783,12 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 	}
 
 	transactionCOW := prepared
-	if primary != nil {
-		transactionCOW = nil
-	}
+
 	transactionSpec := rootpublication.DurableRootTransactionSpec{
-		PrimaryMetadataBytesV6: memberMetadata + install.metadataCharge,
-		Lineage:                runtime.lineage, Sequence: next.CommitSeq, PreparedCOW: transactionCOW, PreparedPrimary: primary, PublicationProjection: member,
+		MetadataBytesV6: memberMetadata + install.metadataCharge,
+		Lineage:         runtime.lineage, Sequence: next.CommitSeq, PreparedCOW: transactionCOW, PublicationProjection: member,
 		Activate: func(input rootpublication.DurableRootCallbackInput) error {
-			if input.PreparedCOW != transactionCOW || input.PreparedPrimary != member.primary || input.Sequence != member.sequence {
+			if input.PreparedCOW != transactionCOW || input.Sequence != member.sequence {
 				return rootpublication.ErrDurableRootOwnership
 			}
 			if limits != nil {
@@ -900,9 +810,7 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 			runtime.mu.Lock()
 			// The SAME transaction has installed its current root and allowance.
 			// Refused preparation/activation must never replace this borrowed cache.
-			if member.primary != nil && member.primary.ReadCertificateV6() != nil {
-				runtime.primaryDataCertificateV6 = member.primary.DataCertificateV6()
-			}
+
 			previousResources := runtime.visibleResources
 			runtime.visibleResources = member.resources
 			runtime.visibleMembers = append(runtime.visibleMembers, member)
@@ -914,39 +822,20 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 			return nil
 		},
 		Consume: func(input rootpublication.DurableRootCallbackInput) error {
-			if input.PreparedCOW != transactionCOW || input.PreparedPrimary != member.primary || input.Sequence != member.sequence {
+			if input.PreparedCOW != transactionCOW || input.Sequence != member.sequence {
 				return rootpublication.ErrDurableRootOwnership
 			}
 			runtime.mu.Lock()
 			runtime.removeVisibleMember(member.sequence)
-			if member.primary != nil && member.primary.Bundle().Record != (primaryarena.Ref{}) && !member.primaryRecordTransferred {
-				_, e := runtime.idx.primary.Drop(member.primary.Bundle().Record, nil)
-				if e != nil {
-					runtime.mu.Unlock()
-					return e
-				}
-			}
+
 			runtime.mu.Unlock()
 			return nil
 		},
 		Abort: func(input rootpublication.DurableRootCallbackInput) error {
-			if input.PreparedCOW != transactionCOW || input.PreparedPrimary != member.primary || input.Sequence != member.sequence {
+			if input.PreparedCOW != transactionCOW || input.Sequence != member.sequence {
 				return rootpublication.ErrDurableRootOwnership
 			}
-			if member.primary != nil {
-				var e error
-				if member.primary.Bundle().Record != (primaryarena.Ref{}) {
-					_, e = runtime.idx.primary.Drop(member.primary.Bundle().Record, nil)
-				}
-				if e != nil {
-					return e
-				}
-				if !member.install.activated {
-					if _, e = runtime.idx.primary.Drop(member.primary.Bundle().Directory, nil); e != nil {
-						return e
-					}
-				}
-			}
+
 			if member.prepared != nil {
 				if err := runtime.idx.allocator.AbortCOWCandidateV1(member.prepared); err != nil {
 					return err
@@ -955,7 +844,7 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 			return nil
 		},
 		AbortComplete: func(input rootpublication.DurableRootCallbackInput) error {
-			if input.PreparedCOW != transactionCOW || input.PreparedPrimary != member.primary || input.Sequence != member.sequence {
+			if input.PreparedCOW != transactionCOW || input.Sequence != member.sequence {
 				return rootpublication.ErrDurableRootOwnership
 			}
 			// Observe the SAME transaction's final physical abort, including its
@@ -972,7 +861,7 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 			return nil
 		},
 		Fail: func(input rootpublication.DurableRootCallbackInput, cause error) error {
-			if input.PreparedCOW != transactionCOW || input.PreparedPrimary != member.primary || input.Sequence != member.sequence {
+			if input.PreparedCOW != transactionCOW || input.Sequence != member.sequence {
 				return rootpublication.ErrDurableRootOwnership
 			}
 			if member.prepared != nil {
@@ -981,23 +870,15 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 			return nil
 		},
 	}
-	if transaction != nil {
-		work := &iterator.OrdinalScanWork{RecordLimit: ^uint64(0), ByteLimit: ^uint64(0)}
-		ready, e := transaction.BindPrimaryVisibilityV6(transactionSpec, resources, work)
-		if !ready || e != nil {
-			return nil, false, errors.Join(e, rootpublication.ErrDurableRootOwnership)
-		}
-		memberMetadataOwned = false
-		install.metadataCharge = 0
-	} else {
-		transactionSpec.TerminalMetadataOwnerV6 = install.metadata
-		transaction, err = rootpublication.NewDurableRootTransaction(transactionSpec)
-		if err != nil {
-			return nil, false, err
-		}
-		memberMetadataOwned = false
-		install.metadataCharge = 0 // SAME transaction terminal owns the admitted member/header.
+
+	transactionSpec.TerminalMetadataOwnerV6 = install.metadata
+	transaction, err = rootpublication.NewDurableRootTransaction(transactionSpec)
+	if err != nil {
+		return nil, false, err
 	}
+	memberMetadataOwned = false
+	install.metadataCharge = 0 // SAME transaction terminal owns the admitted member/header.
+
 	member.transaction = transaction
 	preparedOwned = false
 	visibleResourcesOwned = false
@@ -1013,9 +894,7 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 	if err != nil {
 		if abortErr := transaction.Abort(); abortErr != nil {
 			runtime.db.publicationPoisoned.Store(true)
-			if runtime.idx.primaryOwner != nil {
-				abortErr = runtime.idx.primaryOwner.retainFailedTransactionV6(transaction, abortErr)
-			}
+
 			return nil, true, errors.Join(err, abortErr, ErrRecoveryRequired)
 		}
 		return nil, false, err
@@ -1028,42 +907,6 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 // predecessors and producer-synced content cannot substitute for that authority.
 func (db *DB) rootPublicationDependencyBytesV1(resources *rootpublication.StableResourceSet) (uint64, error) {
 	return resources.BytesNotCoveredBy(db.durableRoot.slotResources[db.durableRoot.slot])
-}
-
-// queuedPrimaryConstructionV6 holds the original zipper's retained outputs.
-// It is born only for a PRIMARY publication, never for ordinary DATA-only work.
-type queuedPrimaryConstructionV6 struct {
-	root     primaryarena.ReadRootConstructionV6
-	abortErr error
-	legacy   uint64
-}
-
-func (c *queuedPrimaryConstructionV6) release(db *DB, idx *indexGen) error {
-	defer func() {
-		if c.legacy != 0 {
-			bundle, ready, _ := idx.primary.TakePublicationBundle(c.legacy, nil)
-			if ready {
-				_, _ = idx.primary.Drop(bundle.Directory, nil)
-				_, _ = idx.primary.Drop(bundle.Record, nil)
-			}
-		}
-	}()
-	if c.root == nil {
-		return nil
-	}
-	if c.abortErr == nil {
-		c.abortErr = c.root.Abort()
-	}
-	if c.abortErr == nil {
-		return nil
-	}
-	// The first actual abort owns any incomplete physical debt. Never retry it
-	// or discard its exact original transaction on a construction failure.
-	if original, ok := c.root.(*rootpublication.DurableRootTransaction); ok {
-		c.abortErr = idx.primaryOwner.retainFailedTransactionV6(original, c.abortErr)
-	}
-	db.publicationPoisoned.Store(true)
-	return errors.Join(c.abortErr, ErrRecoveryRequired)
 }
 
 // finalizeQueuedRootPublicationV1 transfers one fully built logical root from
@@ -1094,52 +937,7 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 	if runtime == nil || runtime.coordinator == nil || builder == nil || idx == nil || releaseDurablePublish == nil {
 		return post, prePublishErr(errors.New("incomplete queued root-publication handoff"))
 	}
-	// Each publication owns an independently complete PRIMARY construction.
-	// System-only changes copy the immutable directory; bulk/manual DATA
-	// builders enter the same construction boundary as zipper mutations.
-	var copied *queuedPrimaryConstructionV6
-	if idx.primary != nil {
-		// Output pointers are retained by the original zipper only when PRIMARY
-		// construction is active. DATA-only publication needs no heap outputs.
-		copied = &queuedPrimaryConstructionV6{}
-		defer func() { retErr = errors.Join(retErr, copied.release(db, idx)) }()
-		var id uint64
-		var err error
-		z := idx.zipper.CloneWithAllocator(idx.allocator)
-		z.SetPrimaryConstructionOutputV6(&copied.root, &copied.abortErr)
-		switch {
-		case next.UserRootPageID == db.meta.UserRootPageID:
-			id, err = z.CopyPrimaryRoot(next.UserRootPageID)
-		case !primaryarena.IsPage(next.UserRootPageID):
-			id, err = z.BuildPrimaryRoot(next.UserRootPageID, next.CommitSeq)
-		case idx.primary.CapsuleFormatV6():
-			// The zipper already produced this exact private construction. Retain
-			// its original abort edge through fallible preparation, before Bind
-			// transfers disposal to the candidate. Copy/Build fill the same cell.
-			work := &iterator.OrdinalScanWork{RecordLimit: ^uint64(0), ByteLimit: ^uint64(0)}
-			var ready bool
-			copied.root, ready, err = idx.primary.ReadRootConstructionOwnerV6(next.UserRootPageID, work)
-			if original, ok := copied.root.(*rootpublication.DurableRootTransaction); !ready || !ok || original == nil {
-				err = errors.Join(err, rootpublication.ErrDurableRootOwnership)
-			}
-		}
-		if err != nil {
-			return post, prePublishErr(err)
-		}
-		if id != 0 {
-			next.UserRootPageID, newUserRootID = id, id
-			if copied.root == nil {
-				copied.legacy = id
-			}
-		}
-		dataRetired := retired[:0]
-		for _, id := range retired {
-			if !primaryarena.IsPage(id) {
-				dataRetired = append(dataRetired, id)
-			}
-		}
-		retired = dataRetired
-	}
+
 	visibleBaseCloneStart := time.Now()
 	maxVisibleResources := -1
 	if opts.preparedLimits != nil {
@@ -1243,9 +1041,6 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 		dependencyBytes, 0, &candidateTiming, opts.preparedLimits,
 	)
 	if transferred {
-		if copied != nil {
-			copied.root, copied.legacy = nil, 0
-		}
 		resourcesOwned = false
 		installOwned = false
 	}
@@ -1259,9 +1054,6 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 				retErr = errors.Join(retErr, opts.abortSnapshotReceipt())
 			}
 			if abandonErr := candidate.Abandon(); abandonErr != nil {
-				if idx.primaryOwner != nil {
-					abandonErr = idx.primaryOwner.retainFailedTransactionV6(candidate.DurableRoot(), abandonErr)
-				}
 				db.publicationPoisoned.Store(true)
 				retErr = errors.Join(retErr, abandonErr, ErrRecoveryRequired)
 			}
@@ -1321,9 +1113,6 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 			enqueueErr = errors.Join(enqueueErr, opts.abortSnapshotReceipt())
 		}
 		if abandonErr := candidate.Abandon(); abandonErr != nil {
-			if idx.primaryOwner != nil {
-				abandonErr = idx.primaryOwner.retainFailedTransactionV6(candidate.DurableRoot(), abandonErr)
-			}
 			enqueueErr = errors.Join(enqueueErr, abandonErr, ErrRecoveryRequired)
 			db.publicationPoisoned.Store(true)
 		}
@@ -1451,13 +1240,7 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 	if seal := runtime.activeSeal; seal != nil && seal.latestSequence == latest.Sequence() && seal.groupLength == group.Len() {
 		return nil
 	}
-	if runtime.idx.primary != nil {
-		member := runtime.visibleMember(latest.Sequence())
-		if member == nil || member.primary != latest.PreparedPrimary() {
-			return rootpublication.ErrDurableRootOwnership
-		}
-		return runtime.preparePrimarySealV5(ctx, candidate, member)
-	}
+
 	member := runtime.visibleMember(latest.Sequence())
 	if member == nil || member.prepared != latest.PreparedCOW() || member.next.CommitSeq != latest.Sequence() {
 		return fmt.Errorf("%w: visible member %d is not activated", rootpublication.ErrDurableRootLineage, latest.Sequence())
@@ -1675,10 +1458,10 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 	}()
 	prefix := append([]*freelist.PreparedCOWCandidateV1(nil), runtime.debt...)
 	prefix = append(prefix, prepared)
-	if err := growPrimaryRuntimeSlice(runtime, &runtime.debt, len(runtime.debt)+1); err != nil {
+	if err := growRootPublicationSlice(runtime, &runtime.debt, len(runtime.debt)+1); err != nil {
 		return err
 	}
-	if err := growPrimaryRuntimeSlice(runtime, &runtime.seals, len(runtime.seals)+1); err != nil {
+	if err := growRootPublicationSlice(runtime, &runtime.seals, len(runtime.seals)+1); err != nil {
 		return err
 	}
 	if err := runtime.idx.allocator.ActivateCOWCandidateV1(prepared); err != nil {
@@ -1706,9 +1489,6 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 }
 
 func (runtime *rootPublicationRuntimeV1) materializeSeal(seal *rootPublicationSealV1) error {
-	if seal != nil && seal.primary != nil {
-		return runtime.materializePrimarySealV5(seal)
-	}
 	if seal == nil || seal.idx == nil || seal.prepared == nil {
 		return errors.New("missing root-publication seal")
 	}
@@ -1785,19 +1565,6 @@ func (runtime *rootPublicationRuntimeV1) preparedSealFor(candidate *rootpublicat
 	return seal, nil
 }
 
-// emitPrimaryAuthorityCutV6 labels the authority role on the actual three-page
-// PRIMARY slot. The pinned identity is the SAME physical publication operand.
-func (runtime *rootPublicationRuntimeV1) emitPrimaryAuthorityCutV6(seal *rootPublicationSealV1, point durabilitycut.Point) error {
-	if !durabilitycut.Enabled() {
-		return nil
-	}
-	return seal.primary.token.WithPinnedFile(func(file *os.File) error {
-		return durabilitycut.EmitStableRange(point, durabilitycut.ResourceMeta, runtime.db.dir,
-			filepath.Join(runtime.db.dir, primaryIndexFileName), file,
-			int64(2+seal.target*3)*int64(page.PageSize), 3*int64(page.PageSize))
-	})
-}
-
 // Publish performs only stable I/O and the post-I/O allocator/durable-state
 // transition. No DB write, commit, root-build, or preparation lock is held
 // across executeDurableRootStorageTransactionV1.
@@ -1812,52 +1579,12 @@ func (runtime *rootPublicationRuntimeV1) Publish(ctx context.Context, candidate 
 	db := runtime.db
 	metaPath := filepath.Join(db.dir, indexFileName)
 	var installAuthority func() (bool, error)
-	if seal.primary != nil && seal.primary.promotion != nil {
-		installAuthority = func() (bool, error) {
-			if e := runtime.emitPrimaryAuthorityCutV6(seal, durabilitycut.BeforeMetaWrite); e != nil {
-				return false, e
-			}
-			if db.testFailWriteMeta.Load() {
-				return false, errTestWriteMetaFailpoint
-			}
-			if e := ctx.Err(); e != nil {
-				return false, e
-			}
-			// Installation begins here. Every later failure is ambiguous.
-			_, _, e := seal.idx.primary.Pager().WritePrimaryCapsuleWithFenceV6(2+seal.target*3, seal.primary.promotion.Image, func() error {
-				if e := runtime.emitPrimaryAuthorityCutV6(seal, durabilitycut.AfterMetaWrite); e != nil {
-					return e
-				}
-				if e := runtime.emitPrimaryAuthorityCutV6(seal, durabilitycut.BeforeMetaSync); e != nil {
-					return e
-				}
-				if db.testFailSyncMeta.Load() {
-					return errTestSyncMetaFailpoint
-				}
-				return ctx.Err()
-			}, nil)
-			if e != nil {
-				return true, e
-			}
-			if e := runtime.emitPrimaryAuthorityCutV6(seal, durabilitycut.AfterMetaSync); e != nil {
-				return true, e
-			}
-			return true, nil
-		}
-	}
+
 	mutated, err := executeDurableRootStorageTransactionV1(durableRootStorageTransactionV1{
 		installAuthority: installAuthority,
 		resources:        seal.resources,
 		materialize:      func() error { return runtime.materializeSeal(seal) },
 		syncIndex: func() error {
-			if seal.primary != nil {
-				if e := seal.primary.token.SyncThrough(); e != nil {
-					return e
-				}
-				if e := seal.primary.token.Namespace().Stabilize(); e != nil {
-					return e
-				}
-			}
 			return seal.token.SyncThrough()
 		},
 		sink:   durablePagerSinkV1{pager: seal.idx.pager},
@@ -1901,9 +1628,6 @@ func (runtime *rootPublicationRuntimeV1) Publish(ctx context.Context, candidate 
 }
 
 func (runtime *rootPublicationRuntimeV1) commitPublishedSeal(seal *rootPublicationSealV1) (uint64, error) {
-	if seal.primary != nil {
-		return runtime.commitPrimarySealV5(seal)
-	}
 	db := runtime.db
 	db.durablePublishMu.Lock()
 	db.rootReuseMu.Lock()
@@ -2049,7 +1773,7 @@ func (runtime *rootPublicationRuntimeV1) release() error {
 	runtime.disposalAttempted = true
 	runtime.mu.Lock()
 	// Withdraw borrowed aliases before releasing any supplying root/resource.
-	runtime.primaryDataCertificateV6 = nil
+
 	seals, visibleResources := runtime.seals, runtime.visibleResources
 	runtime.mu.Unlock()
 	var first error
@@ -2090,7 +1814,7 @@ func (runtime *rootPublicationRuntimeV1) release() error {
 	runtime.visibleHead = 0
 	clear(runtime.debt)
 	runtime.debt = nil
-	runtime.primaryDataCertificateV6 = nil
+
 	runtime.coordinator = nil
 	runtime.mu.Unlock()
 	owner, charge := runtime.metadata, runtime.metadataCharge
