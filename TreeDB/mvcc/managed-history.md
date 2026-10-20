@@ -21,9 +21,10 @@ through the ordinary API after reopening.
 Captured cuts own original memtable, backend and persistent value-log resources.
 Their ordinary Close path releases those original resources and preserves the
 first physical cleanup failure and its original custody. Closing the DB does
-not wait synchronously for user-held cuts. Physical deletion still requires
-unreachability; neither the logical discard floor nor segment age authorizes
-removing live persistent value-log data.
+not wait synchronously for user-held cuts. Shutdown refuses new storage reads
+through those cuts with `ErrClosed`; their cleanup custody remains until Close.
+Physical deletion still requires unreachability; neither the logical discard
+floor nor segment age authorizes removing live persistent value-log data.
 
 Shared namespace, pager and retained-metadata cleanup uses the ordinary original
 owner paths. These paths close physical handles and detach borrowed aliases
@@ -49,3 +50,37 @@ heap observations are not a continuously sampled peak. Run three fresh process
 repetitions per profile/layout with an exclusive measurement slot and preserve
 all raw samples. An unsupported baseline prune is reported as unsupported and
 cannot support a speedup claim.
+
+`TestManagedHistoryNativeDeferredCloseCustody` exercises the public Store and
+native two-collection/raw composite on all three production profiles. It proves
+actual persisted pointer versions, reads the held history after floor/prune and
+checkpoint while the DB is open, then keeps that cut across DB shutdown. Late
+iterator operations refuse `ErrClosed`. Releasing the original iterator must
+clear the original producer and maintenance budgets (except historical peak
+counters), plus original identity/namespace pins, before reopen verifies the
+persisted floor, value anchors, removed tombstone anchor, above-floor tombstone,
+native rows and raw value. The diagnostic capture is closed before the workload;
+only its existing allocator capabilities are retained for observations. The test
+makes no full-budget-zero claim while the DB is open and no performance claim.
+
+## Q32 supersession and source provenance
+
+P4 retires the five tagged `native_prune*_test.go` fixtures and their three
+capture drivers: `scripts/mvcc_native_prune.py`,
+`scripts/native_prune_foreground.py` and `scripts/native_prune_memory.py`.
+Their last source before retirement is
+[`d594d6fb08917881e0651c2181f68385482587ab`](https://github.com/snissn/gomap/tree/d594d6fb08917881e0651c2181f68385482587ab).
+The last callers were those drivers and the active command sections in the
+unified-bench and benchprof READMEs; production Store uses ordinary admitted
+bounded delete batches. The removed fixtures require retired `PruneCursor`,
+work records/bytes, private preparation/cancel state or native observer APIs.
+They cannot measure the maintained ordinary algorithm by changing an API call.
+
+Historical raw artifacts, NO-GO evidence and exact-source lineage are preserved.
+Use the validator from each packet's original Git revision with its recorded
+source/runtime/toolchain bindings. The final tooling source above is a recovery
+pointer, not a claim that its retired runtime dependencies compile. Q32 metrics,
+private-output/cancellation assertions and prior qualification refusals keep
+their historical meanings. The existing managed-history correctness controls,
+benchmarks and `TestManagedHistoryMeasurement` are unchanged; new retained
+qualification still needs its own reviewed exact-source protocol and evidence.

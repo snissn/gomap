@@ -1182,206 +1182,43 @@ go tool pprof -top -alloc_space /tmp/cached_owned.test /tmp/cached_owned_allocs.
 
 ### Native fixed-quantum MVCC package harness
 
-`BenchmarkNativePruneFixedQ` in `TreeDB/mvcc/native_prune_bench_test.go` is an
-optional package benchmark (`mvcc_native_prune,treedb_test` tags), separate from
-unified-bench. Untagged builds do not compile it. Explicit tagged builds on a
-runtime without the bounded pruning API fail compilation; there is no fallback.
+The Q32 native-prune capture path is retired by #5143. The five tagged
+`TreeDB/mvcc/native_prune*_test.go` fixtures and the three drivers
+`scripts/mvcc_native_prune.py`, `scripts/native_prune_foreground.py` and
+`scripts/native_prune_memory.py` were last present together at
+[`d594d6fb08917881e0651c2181f68385482587ab`](https://github.com/snissn/gomap/tree/d594d6fb08917881e0651c2181f68385482587ab).
+They depend on the removed `PruneCursor`, work-pricing fields and private native
+preparation/cancellation observers; ordinary `PruneVersions` is not a substitute
+for those algorithm-specific measurements.
 
-The stdlib-only `scripts/mvcc_native_prune.py` freezes expected source identities,
-captures one fresh process per subcase, and validates `packet.json` schema 1.
-Use separate, immutable runtime and harness checkouts; output must be outside
-both. Full capture requires clean committed sources and Go 1.26.4 with CGO.
-Review the expected identity file before capture. Expensive capture requires
-landed reviewed tooling and a separately qualified exact runtime.
+Existing raw packets, failed/NO-GO results, source identities and schemas remain
+historical evidence. Reproduce their validation using each packet's original
+Git source revision and recorded runtime, harness and toolchain identities;
+the final source above preserves the removed tooling but does not make its
+retired runtime API buildable. Do not relabel Q32 counters or qualification
+refusals as ordinary-prune evidence.
 
-```sh
-export GOWORK=off GOTOOLCHAIN=local CGO_ENABLED=1 GOFLAGS=-p=2
-unset GOROOT
-python3 scripts/mvcc_native_prune.py self-test
-python3 scripts/mvcc_native_prune.py freeze --runtime "$RUNTIME" \
-  --harness "$HARNESS" --go "$GO" --scope full --out "$EXPECTED"
-python3 scripts/mvcc_native_prune.py capture --runtime "$RUNTIME" \
-  --harness "$HARNESS" --go "$GO" --expected "$EXPECTED" --out "$OUT"
-python3 scripts/mvcc_native_prune.py validate "$OUT/packet.json" --expected "$EXPECTED"
-```
-
-The capture uses a Go source overlay to compile the harness against the exact
-runtime without editing it. `--scope smoke` freezes only an 8-version ascending
-case. An extracted frozen runtime requires `--runtime-commit BASE_COMMIT
---archive SOURCE_TAR_GZ` on freeze and capture; these record the declared snapshot
-base and archive SHA256, with a null actual runtime commit. Smoke validates
-instrumentation only, never the original matrix or runtime qualification.
-
-Schema 1 stores before/after runtime source SHA256 maps, exact actual runtime and
-harness commits (null for uncommitted snapshot smoke), harness file hashes,
-archive identity where applicable, Go version/environment, fixed options, build
-status, and one result per case. The full serial matrix preserves original
-shuffled (`(i*2053)%history+1`) and ascending 512/1024 inline histories under
-`command_wal_durable`, plus pointer-backed queued pairwise producers with 1024
-obsolete versions and 512/4096 future versions under `command_wal_durable` and
-`no_wal_fast`. All prune calls use CommitDurable, Q32/1MiB and BatchSize1.
-The ordinary call cap is history*16, record cap history*512 and doubling cap 3x;
-queued call caps are 24,576/81,920. No existing fixture or raw-path gate changes.
-
-Each result records actual calls, Records/Bytes, Visited, SetupRecords,
-CleanupRecords, Deletes/Batches, maximum per-Q records/bytes/time, setup, cold
-open, complete-pass time, first-ACK Close/Open time, final cursor close and DB
-Close time, Go allocation bytes/counts, completion and exact logical/physical
-remaining-value oracles. Queued passes immediately Close/Open at the first real
-ACK; that recovery interval is included in PassNS and separately recorded.
-SetupNS includes cold open; allocation deltas cover the whole combined process
-only during the timed pass, including background work and recovery. Final Close
-is separate. Concurrency is not selected by this serial harness.
-
-Missing/duplicate cases, wrong fixtures/options/toolchain, source drift,
-unclassified errors, missing oracles/completion, invalid counters and original
-caps fail validation. Failed logs/packets are retained, and existing output
-paths are never replaced. Each case has its raw Go benchmark log and JSON row;
-commands, build log and test binary are retained for inspection.
-
-`--profiles` adds `case-N.cpu.pprof`, `case-N.allocs.pprof`,
-`case-N.mutex.pprof` and `case-N.block.pprof`. These ordinary Go package profiles
-cover the process including setup/oracles/Close, unlike the timed pass allocation
-delta. Analyze them with `go tool pprof`, using `sample_index=alloc_space` or
-`alloc_objects` for allocation profiles. They are **not benchprof inputs** and
-have no `benchprof_results.json` contract; unified-bench/benchprof parsers are
-unchanged.
-
-The explicit mandatory runtime gaps are `storage_sync_count`,
-`fence_wait_max_ns`, `fence_hold_max_ns`, `owned_retained_bytes` and
-`owned_peak_bytes`. Schema 1 emits only `tooling_only`; `validate --qualify`
-always refuses while these actual owner-boundary measurements are unavailable.
-It does not accept zeros, outer-call latency, profiles or process heap as
-substitutes. A valid tooling packet makes no performance or qualification claim.
+Current public correctness coverage and the existing Store measurement are
+[documented with managed history](../../TreeDB/mvcc/managed-history.md).
+`TestManagedHistoryNativeDeferredCloseCustody` adds original-owner release after
+DB shutdown; it does not qualify throughput, peak retention or Q32 behavior.
+The maintained [retained COW and managed-history diagnostics](#standalone-retained-cow-and-managed-history-diagnostics-5141-5143)
+keep their existing timing and evidence boundaries. Their standalone artifacts
+remain separate from benchprof inputs.
 
 ### Native prune memory lifecycle harness
 
-`scripts/native_prune_memory.py` runs `TestNativePruneMemoryLifecycle` with
-`treedb_test,mvcc_native_memory` tags in a fresh process per case. The full
-matrix pairs N/2N histories, prune/no-prune/cancel and pinned/unpinned readers.
-It uses real Q32/1MiB public RELAXED pruning, persistent-pointer survivors and
-physical deletion, old-reader, custody, cancellation and reopen checks.
-
-```sh
-python3 scripts/native_prune_memory.py --go "$GO" --n 512 --out "$OUT"
-python3 scripts/native_prune_memory.py --out "$OUT" --validate
-python3 scripts/native_prune_memory.py --out "$OUT" --self-test
-```
-
-Output must be a new directory. `--smoke --n 64 --race` runs four diagnostic
-cases: pinned prune at N/2N plus pinned cancellation and no-prune control.
-Linux `/proc` supplies RSS; validation binds source, resolved Go executable/
-version, tagged binary, build command/environment, each case invocation, raw
-logs and results. Inherited memory controls are cleared; CGO=1, GOWORK=off,
-GOTOOLCHAIN=local and GOFLAGS=-p=2 are recorded. Go memory controls
-`GOGC`, `GOMEMLIMIT` and `GODEBUG` are cleared. Timed-out cases retain partial
-raw output, process errors and rejected receipts. The validator rejects missing actual
-partial-output/retirement witnesses, inconsistent native counters, source
-changes, checksum drift and incomplete or duplicate smoke/full matrices. Self-tests mutate copies of real successful
-packets and never count as lifecycle measurements.
-
-Forced-GC heap cuts and sampled RSS describe the whole process. Logical
-retirement payload and a held-buffer size are partial ownership witnesses;
-exclusive cursor/tree retained and peak bytes remain unmeasured. Allocation
-scopes separate fixture, maintenance and later Close/reopen/oracle work;
-they include observer and verification traffic. These packets are standalone
-artifacts, have no benchprof input contract and do not qualify schema 1's
-native runtime gate. Expensive collection requires reviewed landed tooling
-and an externally recorded exact product/harness source freeze.
-
-Memory v3 retains four fixed-size scalar peak witnesses for overall/source
-retirement cells, preparation window and native frames, including the observing
-call and custody phase. Every witness is checked against all reported memory
-and descriptor bounds. InputCount can witness a window before a private build
-exists; private counts require real build custody. Zero maxima claim no call or
-owner. Missing witnesses remain historical and fail current validation.
-Receipt and derived-summary scope labels must equal the canonical capture
-labels, so editing both cannot change aggregate measurements into exclusive
-owner claims. Self-tests refresh result checksums and derived summaries together
-to exercise case-level refusals. Work-record/byte maxima are budget checks;
-they are not attained-maximum memory witnesses. These fixed scalar observations
-still contribute to aggregate memory and do not measure exclusive native heap.
-Partial-output cuts require real allocated output and nonzero source retirement.
-Memory integers must fit the producer's uint64, uint8 Phase or nonnegative
-64-bit Go int, as appropriate; zero witnesses retain their exact empty shape.
-Custody bounds and record-count scaling are evaluated separately from this
-presence witness.
-The sampled maintenance RSS peak is checked against the eligible named cuts
-and one constant-size periodic maximum witness (RSS and observing call).
-Periodic samples run every 128 maintenance calls; the recorded sample count
-must match that schedule, and missing periodic Linux RSS fails closed.
-The maximum includes terminal maintenance and custody cleanup cuts, even after
-native ownership is released. It remains aggregate process RSS. Memory schema v3
-retains `RSSPeriodicPeak.ProcessHWM` from the same `/proc/self/status` observation
-as its peak RSS and checks only that paired RSS does not exceed paired HWM.
-An empty witness has exactly zero Call/RSS/ProcessHWM. Linux RSS and VmHWM are
-approximate independent snapshots: ordered HWMs need not be monotone, and a
-later/final HWM is not an upper bound for earlier RSS. Historical v2 packets
-keep their original schema, validator and source identity; missing paired
-witnesses fail current validation. Pair consistency and hashes cannot
-authenticate a coordinated rewrite of an entire packet.
-Validation also recomputes `summary.json` from the validated case results and
-receipt labels, refusing missing, malformed, changed or contradictory summaries.
-
-Earlier v2 results without these periodic witness fields remain historical and
-fail the current validator; missing samples are never reconstructed.
+This Q32-only capture path is retired. See the source-bound supersession
+record in the native fixed-quantum section above. Historical packets retain
+their original validators, metrics and limitations; no current capture command
+or ordinary-prune equivalent is provided.
 
 ## Native prune foreground causal pilot
 
-Foreground overlap counters retain approximate caller-boundary samples of public-call envelopes.
-Entry markers publish before peer sampling; return sampling precedes marker clearing.
-These sampled envelopes do not establish continuous public-call overlap.
-Options, payload construction, first-writer notification and result/latency bookkeeping
-sit outside marked calls; each flag clears immediately after the return-boundary
-observation. ACK/completion attribution keeps its first post-PruneVersions activity
-load. Sampling can miss overlap and has unavoidable scheduling uncertainty between
-adjacent caller instructions; it does not prove simultaneous internal critical-section
-execution. The parser requires the complete typed 76-field producer schema, complete
-histogram objects, representable counters, operation/work/phase/stop accounting (after-stop ACKs require drain calls) and
-feasible histogram bounds. Coupled hostile fixtures refresh result checksums and
-reach the schema/accounting boundary without changing retained measurements.
-
-
-Foreground receipts retain `capture_out`, the original absolute capture directory.
-Validation checks archived files in the current `--out` directory against their
-hashes and checks recorded build/run paths against `capture_out`, so moving a
-completed packet preserves validation. Missing, relative or inconsistent capture
-paths fail closed. Original source bindings remain required.
-
-`scripts/native_prune_foreground.py` runs eight fresh-process N64/128 cases:
-Q32/1MiB RELAXED prune with finite burst, growing output or fixed-cardinality
-churn, plus zero-work burst references. Real reads continue after writes stop; each case records a completed read
-started after the final write, including early prune completion.
-The bounded start cut requires actual allocated partial private output. The
-pilot retains physical, writer, old-reader, pointer and reopen checks.
-
-```sh
-python3 scripts/native_prune_foreground.py --go "$GO" --race --out "$OUT"
-python3 scripts/native_prune_foreground.py --out "$OUT" --validate
-python3 scripts/native_prune_foreground.py --out "$OUT" --self-test
-```
-
-Use a new output directory. Schema `gomap-native-foreground-v2` binds source,
-resolved Go executable/version, binary, build command/environment and each
-case's command, raw log and result. The driver forces continuing readers and
-rejects control/forced-error runs, malformed counters, duplicate/missing cases,
-nonzero exits, failures and checksum/source/binary drift. The forced budget
-error test verifies worker join and real cleanup under race; it is a diagnostic,
-not a matrix measurement. Build controls are CGO=1, GOWORK=off,
-GOTOOLCHAIN=local and GOFLAGS=-p=2; inherited GOMAXPROCS is recorded.
-
-Fixed latency buckets cover actual public-call intervals including lock wait;
-ACK active/stop classification is sampled at return. These are causal pilot
-observations, not retained tail-latency qualification. Zero-work references
-fence foreground and have a different start cut. Optional tags need the M7
-native interfaces; ordinary main builds exclude these tests. Neither pilot
-packet is a benchprof input. Reviewed tooling landing and exact product source
-freeze precede expensive qualification collection.
-
-Foreground ACK and completion attribution samples writer activity immediately
-at the public prune return, before counter bookkeeping. The reader and prune loop
-start after the writer announces it has started; overlap is established by the
-sampled call-envelope witnesses. Writer duration begins inside its goroutine.
+This Q32-only capture path is retired. See the source-bound supersession
+record in the native fixed-quantum section above. Historical packets retain
+their original validators, metrics and limitations; no current capture command
+or ordinary-prune equivalent is provided.
 
 ## Current source-population audit microbenchmarks
 
@@ -1445,61 +1282,12 @@ for exact collection policies, commands and limitations. The
 [earlier integration packet](../../TreeDB/docs/benchmarks/cow-c2-integration-5046/report.md)
 retains its historical source identity.
 
-### Native prune experiment environment and writer stop boundary
-
-The native memory and foreground drivers construct a minimal environment and
-record the exact non-null map passed to version, build and case processes. They
-fix `GOENV=off`, `CGO_ENABLED=1`, `GOFLAGS=-p=2`, `GOWORK=off` and
-`GOTOOLCHAIN=local`, record `HOME`, and use the resolved Go directory followed by
-the platform's default system tool path. Default caches remain under recorded
-`HOME`; inherited experiment, compiler, loader and GC overrides are excluded.
-An explicitly supplied `GOMAXPROCS` must be a canonical positive decimal and is
-recorded; when absent, the runtime uses its host-dependent default. Cases add
-only the recorded test controls. Unknown, null or inconsistent environment keys
-fail closed; older receipts with the former subset environment need their original
-validator and cannot be treated as evidence captured by the revised driver.
-
-Every foreground mode ends public writer activity at its final `CommitAt`
-return, including cap, duration and error stops, before latency/counter cleanup.
-Duration expiry is observed at public returns, preserving the existing approximate
-duration policy. The same return time binds latency and current H2
-`WriterDurationNS`, the elapsed writer duration at the observed terminal return.
-The pending H3 retained extension (#5043) additionally records
-`retained.WriterStopNS`, measured from `measurementStart`. `writerDone` remains
-the later conservative worker completion and post-writer read fence. These
-sampled phase witnesses do not qualify performance or prove continuous overlap.
+### Standalone R1 capture and lifecycle boundaries
 
 The dedicated [R1 collection capture](../collection_workload_bench/README.md#r1-complete-local-row-comparison)
 uses `scripts/r1_collection_capture.sh` and the `gomap-r1-row-v1` packet. It reports
 public full-row and prepared-view boundaries with matched SQLite durability;
 these dedicated artifacts are not `-profile-dir` or benchprof inputs.
-
-Native capture build provenance uses two separate maps. `source-bindings.json`
-is the offline Go/module/policy/driver preflight map. The drivers also require
-`gomap-in-repo-build-inputs-v2`: exact-tool/environment/tag/race `go list -deps
--test -json` commands, raw metadata, and the resolved in-repo input hashes before
-and after build and after collection. This includes ordinary/test/external-test
-Go sources, cgo/native/assembly/SWIG/system-object fields, and main/test/external-test
-embedded assets. Local module replacements outside the source root refuse.
-
-Validation rehashes archived compiled files before any metadata subprocess, then
-checks the current resolved graph for additions, removals or rerouting. H3's
-invalid expected-source admission still makes no output or subprocess calls;
-compiled-graph failures after admission retain the normal failed receipt. These
-maps bind Go-enumerated repository inputs, not external module/toolchain/system
-files or arbitrary compiler includes outside Go's package metadata. Original
-receipts with only the offline map remain unchanged and require their archived
-validator; they do not prove this newer compiled-input boundary. Runtime result
-schemas and earlier measured results retain their original source identities.
-
-Compiled-input contract v2 separately hashes each query’s JSON stdout in
-`<query>.stdout` / `stdout_sha256`, while preserving the full combined
-stdout/stderr diagnostic log and its `raw_sha256`. Offline validation parses
-only the bound stdout; successful dependency-download diagnostics do not become
-JSON metadata. Archive self-tests retain every required query command, stdout,
-raw log, and input inventory. Historical compiled-input v1 packets require their
-archived validator and are not migrated or relabeled as v2 evidence. Runtime
-RESULT schemas and previously recorded measurements are unchanged.
 
 The standalone `BenchmarkR1Lifecycle5060` uses `scripts/r1_lifecycle_capture.sh`
 with the supported-profile `gomap-r1-lifecycle-packet-v3` format, raw calibration/final process logs
@@ -1538,81 +1326,12 @@ and finite maintenance costs. Cross-route equivalence and duration-unbounded
 physical capacity remain unqualified. See the
 [lifecycle spec](../../TreeDB/docs/spec/r1-row-lifecycle.md).
 
-
 ### Opt-in retained foreground duration/fence capture
 
-Issue #5036 extends this same standalone driver with
-`--retained`; the default schema-v2 causal pilot and its eight cases remain
-unchanged. Retained schema `gomap-native-foreground-retained-v1` requires
-`treedb_test,mvcc_native_foreground,mvcc_native_prune`. The native observer
-package and interfaces are currently an explicit unmerged M7 runtime
-dependency: ordinary builds exclude the fixtures, the disabled bridge preserves
-the v2 tag combination, and requesting retained mode without the observer tag
-fails clearly. A candidate overlay smoke demonstrates tooling construction;
-it does not qualify clean main or a candidate with outstanding product failures.
-
-```sh
-# Small construction smoke; deliberately insufficient for qualification.
-python3 scripts/native_prune_foreground.py --go "$GO" --retained --smoke \
-  --n 64 --repetitions 1 --out "$OUT"
-python3 scripts/native_prune_foreground.py --out "$OUT" --validate
-python3 scripts/native_prune_foreground.py --out "$OUT" --self-test
-
-# Only after reviewed tooling/runtime land and the exact runtime manifest is
-# independently accepted: fixed Q32/1MiB, N/2N, growth/churn, fresh process/run.
-python3 scripts/native_prune_foreground.py --go "$GO" --retained --n 512 \
-  --repetitions 3 --runtime-status integrated-reviewed \
-  --expected-source "$EXPECTED_SOURCE_BINDINGS" --qualify --out "$QUAL_OUT"
-```
-
-The runtime-status declaration and expected source digest bind the reviewed
-runtime supplied by the caller; they are not an independent review attestation.
-`--validate` checks capture integrity; `--qualify` additionally applies the
-predeclared coverage/noise policy. Race captures establish correctness only.
-The native schema-1 qualification refusals remain unchanged; this separate
-capture does not populate exclusive `owned_retained_bytes`/`owned_peak_bytes`
-or certify the five native schema-1 gaps.
-
-Five raw-duration buffers have fixed capacity 65,536 uint64 values each:
-2,621,440 bytes of payload allocated before collection, plus fixed headers.
-Only scalar timing data is retained, with no source/DB pointer registry.
-Each worker owns its recorder. Overflow rejects capture integrity; no sampling
-or silent truncation occurs. Recorder writes happen after the public-operation
-end timestamp and affect scheduling; observer atomics/clock calls inside
-instrumented operations are included in observed latency. The fixed buffers
-remain resident during measurement and are part of the instrumented workload,
-not an exclusive native-owner heap measurement.
-
-Durations use Go monotonic `time.Now` intervals in nanoseconds. Read phases
-are defined by whether `writerDone` has closed at operation start; quantum
-phases sample the writer-active flag at entry; all writes belong to the active
-phase. Cross-boundary operations retain their start classification. Setup
-quanta and their total duration are excluded explicitly. Workers join before
-the first cumulative per-site observer snapshot. Cleanup duration runs from
-that join through cursor/old-reader release, correctness scans, checkpoint,
-reopen/pointer proof and final DB close; the second snapshot is then taken.
-The collector begins once after quiescent private-output setup and never
-resets during activity. Snapshots retain cumulative physical attempt/failure
-counts and all nine fence-site counts/maxima. Maxima are checked against the
-per-site maximum, never summed or subtracted into phase maxima. Nested holds
-may include waiting/I/O; physical attempts are not universal kernel syscall
-counts, and dedicated Finish-lock coverage remains limited by existing hooks.
-
-Per-run p95/p99 use nearest-rank `ceil(p*count)` over actual durations.
-Qualification requires at least 1,000 samples in each of ReadActive,
-ReadDrain and WriteActive in every run, at least three fresh repetitions per
-N/2N growth/churn cell, nonrace captures, and max/min <=1.25 for each phase's
-p95 and p99 across repetitions. Quantum distributions are descriptive and
-still require exact phase/count/duration accounting. Missing drain coverage,
-overflow, source/binary drift, missing sites/tags, false counts/maxima, failed
-children/oracles, or excessive spread fail closed. A tiny smoke cannot relax
-this policy. All failure artifacts are retained. The original immediate
-writer-activity sample at public prune return, partial-output start, overlap,
-finite writer/continuing-reader, survivor/pointer/old-reader and reopen
-oracles remain in force. The unbounded v2 reference has unmatched starting
-custody and stays descriptive. The driver verifies testing-owned temporary
-DB disposal only after the child releases all consumers and exits. These
-JSON/log packets are not benchprof inputs.
+This Q32-only capture path is retired. See the source-bound supersession
+record in the native fixed-quantum section above. Historical packets retain
+their original validators, metrics and limitations; no current capture command
+or ordinary-prune equivalent is provided.
 
 ### Standalone external MVCC COW read admission fixture
 
