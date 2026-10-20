@@ -596,6 +596,18 @@ func (t *NativeJSONTxn) UpdateBatchInto(name string, items []UpdateBatchItem) (r
 	if err != nil {
 		return nil, err
 	}
+	templateBatch := normalizedDocumentFormat(planner.options.documentFormat) == DocumentFormatTemplateV1
+	var changedRows []*nativeJSONRow
+	var changedIndices []int
+	if templateBatch {
+		for _, size := range [3]uint64{uint64(unsafe.Sizeof((*nativeJSONRow)(nil))), uint64(unsafe.Sizeof(int(0))), uint64(unsafe.Sizeof([]byte{}))} {
+			if err = admitNativeInsertArray(len(items), size, func(n uint64) error { return t.admitStage(g, n) }); err != nil {
+				return nil, err
+			}
+		}
+		changedRows = make([]*nativeJSONRow, 0, len(items))
+		changedIndices = make([]int, 0, len(items))
+	}
 	for i, item := range owned {
 		row, err := t.touchNativeRow(g, item.DocumentID)
 		if err != nil {
@@ -625,7 +637,17 @@ func (t *NativeJSONTxn) UpdateBatchInto(name string, items []UpdateBatchItem) (r
 		if err = t.admitRowDocument(g, row.id, document); err != nil {
 			return nil, err
 		}
-		normalized, options, err := t.prepareTemplateDocuments(g, [][]byte{bytes.Clone(document)}, planner.options)
+		// Copy callback-owned bytes before invoking another callback. Template
+		// envelopes must be prepared together: a TD1H replacement may precede
+		// its defining TD1I envelope later in this same UpdateBatch member.
+		ownedDocument := bytes.Clone(document)
+		if templateBatch {
+			docs = append(docs, commitlog.CollectionDocument{ID: row.id, Document: ownedDocument})
+			changedRows = append(changedRows, row)
+			changedIndices = append(changedIndices, i)
+			continue
+		}
+		normalized, options, err := t.prepareTemplateDocuments(g, [][]byte{ownedDocument}, planner.options)
 		planner.options = options
 		if err != nil {
 			return nil, updateBatchItemError(i, err)
@@ -635,14 +657,30 @@ func (t *NativeJSONTxn) UpdateBatchInto(name string, items []UpdateBatchItem) (r
 		}
 		row.current = normalized[0]
 		result[i].Modified = true
-		canonical := row.current
-		if normalizedDocumentFormat(planner.options.documentFormat) == DocumentFormatTemplateV1 {
-			canonical = document
-		}
-		docs = append(docs, commitlog.CollectionDocument{ID: row.id, Document: canonical})
+		docs = append(docs, commitlog.CollectionDocument{ID: row.id, Document: row.current})
 	}
 	if len(docs) == 0 {
 		return result, nil
+	}
+	if templateBatch {
+		// The input header backing was admitted with changedRows/indices above;
+		// the original envelope copies stay owned through canonical encoding.
+		inputs := make([][]byte, len(docs))
+		for i := range docs {
+			inputs[i] = docs[i].Document
+		}
+		normalized, options, err := t.prepareTemplateDocuments(g, inputs, planner.options)
+		if err != nil {
+			return nil, fmt.Errorf("collections: update batch replacement prepare: %w", err)
+		}
+		planner.options = options
+		for i, document := range normalized {
+			if err = t.validateDocument(g, document, runtimes, planner.options); err != nil {
+				return nil, updateBatchItemError(changedIndices[i], err)
+			}
+			changedRows[i].current = document
+			result[changedIndices[i]].Modified = true
+		}
 	}
 	if err = t.admitMemberPayload(g, docs, nil); err != nil {
 		return nil, err

@@ -122,7 +122,7 @@ func checkNativeTemplateFinal(t *testing.T, database *DB, col *collections.Colle
 	for id, want := range map[string]string{
 		"a": `{"email":"ub","city":"sea","new":{"tag":"shape"}}`,
 		"b": `{"email":"ua","city":"hnl","tags":["x","x","y"]}`,
-		"c": `{"email":"uc","city":"sea"}`,
+		"c": `{"email":"uc","city":"sea","new":{"tag":"other"}}`,
 	} {
 		got, err := col.Get([]byte(id))
 		if err != nil {
@@ -229,10 +229,40 @@ func runNativeTemplateV1(t *testing.T, profile Profile, dir string, crash bool) 
 		t.Fatal(err)
 	}
 	defer tx.Close()
-	finalA := nativeTemplateDoc(t, `{"email":"ub","city":"sea","new":{"tag":"shape"}}`)
-	if _, err = tx.UpdateBatch([]collections.UpdateBatchItem{{DocumentID: []byte("a"), Update: func([]byte) ([]byte, bool, error) { return finalA, true, nil }}}); err != nil {
+	// Both callbacks reuse one caller buffer. The first replacement is TD1H,
+	// while the later callback supplies its defining TD1I envelope. Foreground
+	// and real unapplied replay must both prepare the complete member before
+	// resolving either document, and canonical bytes must survive buffer reuse.
+	var replacements collections.TemplateV1Encoder
+	definition, err := replacements.EncodeDocument([]string{"email", "city", "new"}, []any{"uc", "sea", map[string]any{"tag": "other"}})
+	if err != nil {
 		t.Fatal(err)
 	}
+	hashOnly, err := replacements.EncodeDocument([]string{"email", "city", "new"}, []any{"ub", "sea", map[string]any{"tag": "shape"}})
+	if err != nil || !bytes.HasPrefix(hashOnly, []byte("TD1H")) || !bytes.HasPrefix(definition, []byte("TD1I")) {
+		t.Fatalf("replacement envelopes hash=%q definition=%q err=%v", hashOnly[:min(4, len(hashOnly))], definition[:min(4, len(definition))], err)
+	}
+	reusable := make([]byte, max(len(hashOnly), len(definition)))
+	replacement := func(encoded []byte) func([]byte) ([]byte, bool, error) {
+		return func(current []byte) ([]byte, bool, error) {
+			if !bytes.HasPrefix(current, []byte("TD1D")) {
+				t.Fatalf("replacement current is not stored template: %q", current[:min(4, len(current))])
+			}
+			copy(reusable, encoded)
+			return reusable[:len(encoded)], true, nil
+		}
+	}
+	updates, err := tx.UpdateBatch([]collections.UpdateBatchItem{
+		{DocumentID: []byte("a"), Update: replacement(hashOnly)},
+		{DocumentID: []byte("c"), Update: replacement(definition)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(updates, []collections.UpdateBatchResult{{Matched: true, Modified: true}, {Matched: true, Modified: true}}) {
+		t.Fatalf("template update results=%+v", updates)
+	}
+	clear(reusable)
 	if n, err := tx.DeleteBatch([][]byte{[]byte("b")}); err != nil || n != 1 {
 		t.Fatalf("delete=%d %v", n, err)
 	}
