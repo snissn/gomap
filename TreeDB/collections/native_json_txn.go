@@ -277,6 +277,10 @@ type nativeJSONLogicalInsert struct {
 	primaryPolicy backenddb.OrderedRootStoragePolicy
 	custody       *nativeMutationCustody
 	typed         *nativeTypedDelta
+	// expectedCollection is borrowed from the original retained transaction cut.
+	// A full carrier replacement cannot be rebased over a changed source/domain.
+	expectedCollection *nativeCollectionState
+	partitionLive      bool
 }
 
 type nativeJSONLogicalGroup struct {
@@ -314,6 +318,9 @@ func (p *nativeJSONLogicalGroup) PrepareNativePublication(latest backenddb.Nativ
 		c, ok := base.collections.Get(g.incarnation)
 		named, nok := base.names.Get(g.name)
 		if !ok || !nok || named.incarnation != g.incarnation {
+			return backenddb.NativeFinalizedPublication{}, backenddb.ErrConcurrentModification
+		}
+		if g.plan.expectedCollection != nil && c != g.plan.expectedCollection {
 			return backenddb.NativeFinalizedPublication{}, backenddb.ErrConcurrentModification
 		}
 		changes[count] = nativeJSONPrimaryChange{collection: c, entries: g.plan.mutations, additional: g.plan.additional, primaryPolicy: g.plan.primaryPolicy, typed: g.plan.typed}
@@ -435,10 +442,11 @@ func (t *NativeJSONTxn) commitNativePlan(sealed bool, apply *nativeCommandWALApp
 	if t.failure != nil {
 		return t.failure
 	}
-	// Only the original singleton103 graph apply may have a typed recipe and
-	// catalog effect without any CRUD members.
+	// Only checked singleton103 graph or singleton105 complete-carrier applies
+	// may publish a catalog effect without any CRUD members.
 	graphSingleton := apply != nil && apply.frame.Kind == commitlog.CommandKindCollectionRebuildVectorIndex && !typedGroup && t.count == 1 && !t.rawStaged && len(t.members) == 0 && nativeTypedGraphOnly(t.bindings[0].typed)
-	if err := t.finalizeNativeRows(graphSingleton); err != nil {
+	partitionSingleton := apply != nil && apply.frame.Kind == commitlog.CommandKindCollectionPersistPartitionLive && !typedGroup && t.count == 1 && !t.rawStaged && len(t.members) == 0 && t.bindings[0].typed == nil && t.bindings[0].plan != nil && t.bindings[0].plan.partitionLive
+	if err := t.finalizeNativeRows(graphSingleton || partitionSingleton); err != nil {
 		return err
 	}
 	count, totalEffects := 0, 0
@@ -518,7 +526,7 @@ func (t *NativeJSONTxn) commitNativePlan(sealed bool, apply *nativeCommandWALApp
 		memberCount++
 	}
 	kind, scope, format, payload := members[0].Kind, commitlog.CommandScopeCollection, members[0].PayloadFormat, members[0].Payload
-	if graphSingleton {
+	if graphSingleton || partitionSingleton {
 		kind, scope, format, payload = apply.frame.Kind, apply.frame.Scope, apply.frame.PayloadFormat, apply.frame.Payload
 	}
 	typedMember := false
@@ -527,7 +535,7 @@ func (t *NativeJSONTxn) commitNativePlan(sealed bool, apply *nativeCommandWALApp
 	}
 	// The fixed zero-row graph recipe carries its original singleton103 frame;
 	// it has no fabricated CRUD member or composite transport representation.
-	if !typedGroup && (memberCount > 1 || typedMember) && !graphSingleton {
+	if !typedGroup && (memberCount > 1 || typedMember) && !(graphSingleton || partitionSingleton) {
 		kind, scope, format = commitlog.CommandKindCompositeMutation, commitlog.CommandScopeSystem, commitlog.PayloadFormatCompositeMutationV1
 		var err error
 		planned, planErr := commitlog.PlanCompositeMutationPayload(members[:memberCount])

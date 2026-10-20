@@ -799,6 +799,14 @@ func TestVectorIndexSnapshotRejectsDifferentDocumentGeneration(t *testing.T) {
 	if err != nil || matched {
 		t.Fatalf("different generation matched=%v err=%v", matched, err)
 	}
+	meta.SourceDocumentGeneration = generation
+	for _, version := range []int{0, 2, vectorIndexNativeSourceCoverageVersion, vectorIndexNativeSourceCoverageVersion + 1} {
+		meta.SourceDocumentGenerationVersion = version
+		matched, err = vectorIndexSnapshotMatchesDocumentRoots(meta, catalog, snap)
+		if err != nil || matched {
+			t.Fatalf("wrong or unknown coverage mode %d matched=%v err=%v", version, matched, err)
+		}
+	}
 }
 
 func TestCollectionVectorIndexNativeRootMissingFallsBack(t *testing.T) {

@@ -325,6 +325,45 @@ candidate ceiling is 80 MiB: enough for the declared one-million-row base floor
 plus the maximum live-node and stable-ID preflight floors without weakening any
 per-request accounting.
 
+## Native imported-source carrier coverage
+
+The native immutable-source producer retains the original singleton
+`PersistPartitionLive` command (kind 105), authority manifest, carrier records,
+and durable acknowledgement boundary. It does not enable later native ordinary
+document mutations or general ANN serving. Its complete carrier-domain image
+is installed by the existing native publisher; startup replay uses the original
+105 frame and physical replay publication.
+
+The existing carrier metadata field `source_document_generation_version` tags
+the coverage authority explicitly:
+
+- **3** retains the original physical collection document-mutation generation
+  stored under `collections/document-generation/<collection>`.
+- **4** is reserved for an eligible native imported-source `cdir2` cohort. Both
+  `source_document_generation` and the live carrier's `coverage` equal the
+  actual validated source-header generation. The persisted live source tuple
+  (generation, checksum, schema hash, row count) must also equal the complete
+  current source identity. Header CRC, collection binding, and active/recovery
+  manifest validation remain mandatory on the original captured snapshot.
+
+Unknown tags, the wrong tag for the actual collection, or any tuple/coverage
+mismatch fail closed. Version 4 is not a WAL LSN, physical root/epoch, or
+logical publication sequence. Source append advances the authenticated header;
+graph rebuild, carrier publication, unrelated writes, and checkpoint do not
+change its document cohort. Native ordinary insert/update/delete remain refused
+for this source-only schema, and the existing physical scanner refuses source
+directory compaction. A carrier for an earlier source tuple cannot certify an
+appended cohort. Runtime reuse additionally requires the exact actual native
+capture sequence and the state token from that same capture; those scalar
+coordinates grant no independent storage access.
+
+The JSON record shape, source-directory encoding and command frame do not
+change. Version 4 changes the interpretation of existing carrier metadata.
+TreeDB remains pre-alpha: older readers may refuse these carriers; rebuild
+rather than interpreting their generation as legacy version 3. Native current
+reads, save/load, pin validation and physical 105 replay use the same tagged
+coverage authority. No missing legacy generation key is synthesized.
+
 ## Historical evidence ownership
 
 Issue #3999 is historical scoped HNSW evidence, not the current owner of the broad all-partition exactness gate. Its closed result may describe measured partition-local HNSW recall and remaining limitations, but it does not convert HNSW into an exact oracle or waive an exact-union failure. #4013 owns this V1 contract and its classification/admission wording; performance qualification remains outside this issue (including #4015 and the production lanes).

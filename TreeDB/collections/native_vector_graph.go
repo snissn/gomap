@@ -69,25 +69,13 @@ func nativeVectorGraphHeader(meta CollectionMeta, snap *backenddb.Snapshot, root
 // constructor promise additionally covers coexisting HNSW maps, up to 33 layers
 // of 2*M adjacency, all row/ref/ID/output views and both input/decode images.
 func nativeVectorGraphCapacity(meta CollectionMeta, snap *backenddb.Snapshot, root uint64, rootDir string, def VectorIndexDefinition, h columnSourceDirectoryHeaderV2, admit func(uint64) error) (uint64, error) {
-	// Original graph/state config normalization and asset encoders can retain
-	// several derived schema/name views alongside both final handoff schemas.
-	metadata, err := nativeSchemaBackingCharge(reflect.ValueOf(&meta), 0)
+	total, err := nativeVectorGraphSourceCapacity(meta, snap, root, rootDir, def, h, admit)
 	if err != nil {
 		return 0, err
 	}
-	total, err := nativeTypedCheckedMul(metadata, 16)
+	perRow, err := nativeTypedCheckedMul(uint64(max(def.M, defaultVectorIndexM)), 33*2*128)
 	if err != nil {
 		return 0, err
-	}
-	perRow := uint64(64 * 1024)
-	for _, term := range [][2]uint64{{uint64(def.Dimensions), 128}, {uint64(max(def.M, defaultVectorIndexM)), 33 * 2 * 128}} {
-		n, e := nativeTypedCheckedMul(term[0], term[1])
-		if e != nil {
-			return 0, e
-		}
-		if e = nativeTypedCheckedAdd(&perRow, n); e != nil {
-			return 0, e
-		}
 	}
 	// Each declared quantizer retains its original code/alpha payload, decoded
 	// views and per-row calibration candidates alongside the graph emission.
@@ -104,6 +92,45 @@ func nativeVectorGraphCapacity(meta CollectionMeta, snap *backenddb.Snapshot, ro
 	}
 	if e = nativeTypedCheckedAdd(&perRow, quantized); e != nil {
 		return 0, e
+	}
+	n, err := nativeTypedCheckedMul(h.Rows, perRow)
+	if err != nil {
+		return 0, err
+	}
+	if err = nativeTypedCheckedAdd(&total, n); err != nil {
+		return 0, err
+	}
+	// Fresh construction retains both original TVIS decode slots; a source
+	// reader constructs no replacement graph or state envelope.
+	if err = nativeTypedCheckedAdd(&total, 2*nativeSourceRequirementStateCapacityV2(columnVectorIndexStateMaxDecodedBytes)); err != nil {
+		return 0, err
+	}
+	return total, nil
+}
+
+// nativeVectorGraphSourceCapacity admits the original captured source reader.
+// Constructor-only adjacency, quantizer output and fresh TVIS slots are added
+// by nativeVectorGraphCapacity above, never by a partition preparation read.
+func nativeVectorGraphSourceCapacity(meta CollectionMeta, snap *backenddb.Snapshot, root uint64, rootDir string, def VectorIndexDefinition, h columnSourceDirectoryHeaderV2, admit func(uint64) error) (uint64, error) {
+	// Original graph/state config normalization and asset encoders can retain
+	// several derived schema/name views alongside both final handoff schemas.
+	metadata, err := nativeSchemaBackingCharge(reflect.ValueOf(&meta), 0)
+	if err != nil {
+		return 0, err
+	}
+	total, err := nativeTypedCheckedMul(metadata, 16)
+	if err != nil {
+		return 0, err
+	}
+	perRow := uint64(64 * 1024)
+	for _, term := range [][2]uint64{{uint64(def.Dimensions), 128}} {
+		n, e := nativeTypedCheckedMul(term[0], term[1])
+		if e != nil {
+			return 0, e
+		}
+		if e = nativeTypedCheckedAdd(&perRow, n); e != nil {
+			return 0, e
+		}
 	}
 	n, e := nativeTypedCheckedMul(h.Rows, perRow)
 	if e != nil {
@@ -160,14 +187,6 @@ func nativeVectorGraphCapacity(meta CollectionMeta, snap *backenddb.Snapshot, ro
 		it.Next()
 	}
 	if e = it.Error(); e != nil {
-		return 0, e
-	}
-	// The fresh graph suffix can contain a compressed TVIS image up to the
-	// original decoded limit even when no prior graph exists. Admit both
-	// independent requirement-decoder slots BEFORE assignment, in this same
-	// source-derived constructor promise. Captured old-state slots stay charged
-	// separately; no typed-row codec is reachable from this graph-only branch.
-	if e = nativeTypedCheckedAdd(&total, 2*nativeSourceRequirementStateCapacityV2(columnVectorIndexStateMaxDecodedBytes)); e != nil {
 		return 0, e
 	}
 	// IDs are not bounded by vector dimensions or encoded compressed asset size.
@@ -330,6 +349,11 @@ func (c *Collection) nativeVectorGraphStatus(name string) (out VectorIndexStatus
 		return out, err
 	}
 	defer func() { resultErr = errors.Join(resultErr, r.Close()) }()
+	return c.nativeVectorGraphStatusAtRead(r, name)
+}
+
+func (c *Collection) nativeVectorGraphStatusAtRead(r *NativeJSONRead, name string) (VectorIndexStatus, error) {
+	var out VectorIndexStatus
 	def, ok := findVectorIndex(r.meta.VectorIndexes, name)
 	if !ok {
 		return out, ErrIndexNotFound

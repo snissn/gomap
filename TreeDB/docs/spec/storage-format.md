@@ -49,6 +49,18 @@ asset rebuild; there is no mixed-format migration path.
 Generation publication, reader pins and reachable asset/value-log retention
 are unchanged. See [the router contract](vector-partition-v1-contract.md).
 
+## Imported-source partition-live coverage tag
+
+The existing carrier JSON field `source_document_generation_version` uses tag 3
+for the physical document-mutation generation and tag 4 only for an eligible
+immutable imported-source `cdir2` live carrier. Tag 4 binds the actual validated
+source-header generation and the complete generation/checksum/schema/row-count
+identity; unknown or mismatched tags fail closed. The JSON shape, source bytes
+and original kind-105 command frame are unchanged. This pre-alpha metadata
+interpretation may require rebuilding for older readers. See the
+[native carrier coverage contract](vector-partition-v1-contract.md#native-imported-source-carrier-coverage)
+for save/load, replay and runtime invalidation rules.
+
 ## `cosine_normalized_f32_v1` vector asset
 
 The pre-alpha format for the opt-in normalized cosine representation is

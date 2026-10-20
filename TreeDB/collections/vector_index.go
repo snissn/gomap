@@ -464,18 +464,20 @@ type VectorIndex struct {
 	searchViewAcknowledgedMutationSeq uint64
 	searchViewAcknowledgedGeneration  uint64
 
-	persistedEpoch         uint64
-	fullSnapshotBaseEpoch  uint64
-	persistedBytesDisk     int64
-	persistedSnapshotDirty bool
-	nativePersistent       bool
-	partitionLiveOnly      bool
-	dirtyMeta              bool
-	dirtyNodes             map[int]struct{}
-	dirtyDocs              map[string]struct{}
-	lastRebuildDuration    time.Duration
-	liveANNFullRebuilds    uint64
-	insertQuantScratch     []int8
+	nativePartitionSequence uint64
+	nativePartitionCutValid bool
+	persistedEpoch          uint64
+	fullSnapshotBaseEpoch   uint64
+	persistedBytesDisk      int64
+	persistedSnapshotDirty  bool
+	nativePersistent        bool
+	partitionLiveOnly       bool
+	dirtyMeta               bool
+	dirtyNodes              map[int]struct{}
+	dirtyDocs               map[string]struct{}
+	lastRebuildDuration     time.Duration
+	liveANNFullRebuilds     uint64
+	insertQuantScratch      []int8
 	// constructionTrace is an offline-only nullable sink installed by the
 	// partition-pack diagnostic builder. Normal collection indexes never set it.
 	constructionTrace        *vectorIndexConstructionTraceV1
@@ -1146,10 +1148,8 @@ func (c *Collection) currentVectorIndexDocumentStateWithWriteDomainLockState(wri
 }
 
 func vectorIndexDocumentGeneration(snap *backenddb.Snapshot, catalog *collectionCatalog) (uint64, error) {
-	if snap == nil || catalog == nil {
-		return 0, errCollectionNotFound
-	}
-	return vectorIndexDocumentGenerationForCollection(snap, catalog.meta.Name)
+	coverage, err := vectorIndexCoverageAtSnapshot(snap, catalog)
+	return coverage.generation, err
 }
 
 func vectorIndexDocumentGenerationForCollection(snap *backenddb.Snapshot, collection string) (uint64, error) {
@@ -1180,6 +1180,13 @@ func (c *Collection) currentVectorIndexDocumentGenerationForAdmission() (uint64,
 		c.writeDomain.mu.RLock()
 		collection = c.writeDomain.meta.Name
 		c.writeDomain.mu.RUnlock()
+	}
+	if nativeSourceImportMetaV2(c.meta) {
+		catalog, err := c.catalogForSnapshot(snap)
+		if err != nil {
+			return 0, err
+		}
+		return vectorIndexDocumentGeneration(snap, catalog)
 	}
 	return vectorIndexDocumentGenerationForCollection(snap, collection)
 }
@@ -1355,6 +1362,21 @@ func (c *Collection) registerAdHocVectorIndexCurrentCatalogWithAdmissionLocked(i
 }
 
 func (c *Collection) registerVectorIndexCurrentCatalog(index *VectorIndex) {
+	if c.nativeJSON != nil && index.isPartitionLiveCarrier() {
+		if coord := c.partitionLiveCoordinatorV1(); coord != nil {
+			def, ok := findVectorIndex(c.meta.VectorIndexes, index.name)
+			if ok && def.Strategy == VectorIndexStrategyColumnGraph && index.validateNativeSnapshotDefinition(def) == "" {
+				index.collection = c
+				index.recordPersistentDefinition(def)
+				if index.searchView.Load() == nil && index.hasValidSourceDocumentRoots() {
+					index.publishSearchView()
+				}
+				coord.registerPartitionLiveCarrier(index)
+				return
+			}
+		}
+		return
+	}
 	def, declaredNative := findVectorIndex(c.meta.VectorIndexes, index.name)
 	sharedNative := declaredNative && vectorIndexDefinitionUsesPersistentRuntime(def, index) && c.writeDomain != nil
 	coord := c.collectionSchemaCoordinator()
@@ -1461,7 +1483,7 @@ func (c *Collection) UnregisterVectorIndex(name string) {
 	if c == nil {
 		return
 	}
-	coord := c.collectionSchemaCoordinator()
+	coord := c.partitionLiveCoordinatorV1()
 	if coord != nil {
 		coord.partitionLivePublishMu.Lock()
 		defer coord.partitionLivePublishMu.Unlock()
@@ -1562,7 +1584,7 @@ func (c *Collection) hasRegisteredVectorIndex(name string) bool {
 }
 
 func (c *Collection) lockNativeVectorIndexLoad() func() {
-	if coord := c.collectionSchemaCoordinator(); coord != nil {
+	if coord := c.partitionLiveCoordinatorV1(); coord != nil {
 		coord.nativeVectorIndexLoadMu.Lock()
 		return coord.nativeVectorIndexLoadMu.Unlock
 	}
@@ -1576,7 +1598,7 @@ func (c *Collection) lockNativeVectorIndexLoad() func() {
 
 func (idx *VectorIndex) nativePublicationLock() *sync.RWMutex {
 	if idx != nil && idx.isPartitionLiveCarrier() && idx.collection != nil {
-		if coord := idx.collection.collectionSchemaCoordinator(); coord != nil {
+		if coord := idx.collection.partitionLiveCoordinatorV1(); coord != nil {
 			return &coord.partitionLivePublishMu
 		}
 	}
@@ -2089,6 +2111,11 @@ func (c *Collection) lockVectorIndexMutation() func() {
 }
 
 func (c *Collection) nativeVectorAdmissionMutex() *sync.RWMutex {
+	if c != nil && c.nativeJSON != nil {
+		if coord := c.partitionLiveCoordinatorV1(); coord != nil {
+			return &coord.nativeVectorAdmissionMu
+		}
+	}
 	if c == nil || c.writeDomain == nil {
 		return nil
 	}
@@ -3655,7 +3682,7 @@ func (idx *VectorIndex) levelForDocumentID(documentID []byte) int {
 func (idx *VectorIndex) markGraphChangedLocked() {
 	idx.mutationSeq++
 	idx.searchViewCurrent.Store(false)
-	if idx.persistedEpoch != 0 {
+	if idx.persistedEpoch != 0 || idx.nativePartitionCutValid {
 		idx.persistedSnapshotDirty = true
 	}
 }

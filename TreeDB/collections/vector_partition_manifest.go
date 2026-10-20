@@ -90,7 +90,7 @@ func VectorPartitionNamespacePersistenceSupportedForTestingV1() bool {
 }
 
 func (c *Collection) withVectorPartitionStorageMutationV1(operation string, fn func() error) error {
-	return WithVectorPartitionStorageBarrierV1(c.db.Dir(), func() error {
+	return WithVectorPartitionStorageBarrierV1(c.vectorPartitionStorageDBV1().Dir(), func() error {
 		vectorPartitionBarrierBeforeMutationHookForTest.RLock()
 		hook := vectorPartitionBarrierBeforeMutationHookForTest.fn
 		vectorPartitionBarrierBeforeMutationHookForTest.RUnlock()
@@ -3670,7 +3670,7 @@ func (c *Collection) publishVectorPartitionManifestModeV1(m VectorPartitionManif
 	if len(owners) != 0 {
 		owner = owners[0]
 	}
-	if c == nil || c.db == nil {
+	if c == nil || c.vectorPartitionStorageDBV1() == nil {
 		if resources != nil {
 			resources.Release()
 		}
@@ -3694,7 +3694,7 @@ func (c *Collection) publishVectorPartitionManifestModeV1(m VectorPartitionManif
 	if _, err := VectorPartitionLocalGraphVariantIdentityV1(expectedGraphVariant); err != nil {
 		return err
 	}
-	if err := c.db.CheckStorageMaintenanceReady(); err != nil {
+	if err := c.vectorPartitionStorageDBV1().CheckStorageMaintenanceReady(); err != nil {
 		return err
 	}
 	applyMutation := func(fn func() error) error {
@@ -3772,10 +3772,10 @@ func (c *Collection) publishVectorPartitionManifestModeV1(m VectorPartitionManif
 		if m.State == "ready" {
 			assets = append(assets, m.RouterAsset)
 		}
-		if err := verifyVectorPartitionAssetsV1(c.db.ColumnAssetRootDir(), namespace, assets); err != nil {
+		if err := verifyVectorPartitionAssetsV1(c.vectorPartitionStorageDBV1().ColumnAssetRootDir(), namespace, assets); err != nil {
 			return err
 		}
-		s, e := OpenVectorPartitionStoreV1(c.db.Dir())
+		s, e := OpenVectorPartitionStoreV1(c.vectorPartitionStorageDBV1().Dir())
 		if e != nil {
 			return e
 		}
@@ -3786,7 +3786,7 @@ func (c *Collection) publishVectorPartitionManifestModeV1(m VectorPartitionManif
 			mutationErr = s.stageVectorPartitionManifestLifecycleV1(m)
 		}
 		if activate && m.State == "ready" {
-			syncVectorPartitionActiveAuthorityFromStoreV1(c.db.Dir(), s, c.name, m.IndexName)
+			syncVectorPartitionActiveAuthorityFromStoreV1(c.vectorPartitionStorageDBV1().Dir(), s, c.name, m.IndexName)
 		}
 		return mutationErr
 	})
@@ -3833,8 +3833,21 @@ func (c *Collection) VectorPartitionSourceIdentityV1(indexName string) (VectorPa
 	if c == nil {
 		return VectorPartitionSourceIdentityV1{}, errCollectionNil
 	}
+	if c.nativeJSON != nil {
+		return c.nativeVectorPartitionSourceIdentityV1(indexName)
+	}
 	if c.db == nil {
 		return VectorPartitionSourceIdentityV1{}, errCollectionDBNil
+	}
+	if nativeSourceImportMetaV2(c.meta) {
+		// Startup replay has a physical collection, but its imported source is
+		// still cdir2. Validate that actual catalog/root under one owned snapshot.
+		snap := c.db.AcquireSnapshot()
+		if snap == nil {
+			return VectorPartitionSourceIdentityV1{}, backenddb.ErrClosed
+		}
+		identity, err := c.vectorPartitionSourceIdentityAtSnapshotV1(indexName, snap)
+		return identity, errors.Join(err, snap.Close())
 	}
 	status, err := c.VectorIndexStatus(indexName)
 	if err != nil {
@@ -3858,6 +3871,40 @@ func (c *Collection) vectorPartitionSourceIdentityAtSnapshotV1(indexName string,
 	if c == nil {
 		return VectorPartitionSourceIdentityV1{}, errCollectionNil
 	}
+	if snap == nil {
+		return VectorPartitionSourceIdentityV1{}, backenddb.ErrClosed
+	}
+	if nativeSourceImportMetaV2(c.meta) {
+		catalog, err := c.catalogForSnapshot(snap)
+		if err != nil {
+			return VectorPartitionSourceIdentityV1{}, err
+		}
+		if catalog == nil {
+			return VectorPartitionSourceIdentityV1{}, errCollectionNotFound
+		}
+		def, ok := findVectorIndex(catalog.meta.VectorIndexes, indexName)
+		if !ok {
+			return VectorPartitionSourceIdentityV1{}, ErrIndexNotFound
+		}
+		root := catalog.rootID(collectionColumnManifestRootName(c.name))
+		h, err := nativeVectorGraphHeader(catalog.meta, snap, root)
+		if err != nil {
+			return VectorPartitionSourceIdentityV1{}, err
+		}
+		records, err := nativeVectorGraphRecords(snap, root)
+		if err != nil {
+			return VectorPartitionSourceIdentityV1{}, err
+		}
+		status, err := columnGraphVectorIndexStatusForRecords(c.vectorPartitionStorageDBV1().ColumnAssetRootDir(), c.name, catalog.meta.Options.ColumnStore, def, records, binary.BigEndian.Uint64(h.Digest[:8]), true)
+		if err != nil {
+			return VectorPartitionSourceIdentityV1{}, err
+		}
+		if !status.Loaded {
+			return VectorPartitionSourceIdentityV1{}, ErrVectorPartitionSearchUnavailable
+		}
+		return VectorPartitionSourceIdentityV1{Generation: h.Generation, Checksum: catalog.meta.Options.ColumnStore.ActiveManifest.Checksum, SchemaHash: catalog.meta.Options.ColumnStore.SchemaHash, RowCount: h.Rows}, nil
+	}
+
 	if c.db == nil {
 		return VectorPartitionSourceIdentityV1{}, errCollectionDBNil
 	}

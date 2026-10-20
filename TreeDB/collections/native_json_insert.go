@@ -79,6 +79,8 @@ type nativeJSONDomainChange struct {
 	name    string
 	policy  backenddb.OrderedRootStoragePolicy
 	entries []memtable.COWMutation
+	// fullReplacement supplies the complete domain image, with no inherited sources.
+	fullReplacement bool
 }
 
 type nativeJSONPrimaryChange struct {
@@ -139,9 +141,11 @@ func prepareNativeJSONPrimaries(base *nativeEngineVersion, changes []nativeJSONP
 		}
 		for i := 0; i < domainCount; i++ {
 			name, policy, rows := "primary", change.primaryPolicy, entries
+			fullReplacement := false
 			if i > 0 {
 				delta := change.additional[i-1]
 				name, policy, rows = delta.name, delta.policy, delta.entries
+				fullReplacement = delta.fullReplacement
 			}
 			old, _ := c.domains.Get(name)
 			root := uint64(0)
@@ -156,6 +160,9 @@ func prepareNativeJSONPrimaries(base *nativeEngineVersion, changes []nativeJSONP
 			interpretation := uint64(1)
 			if old != nil {
 				interpretation = old.interpretation
+			}
+			if fullReplacement {
+				old, root = nil, 0
 			}
 			domain, err := prepareNativeDomainUpdate(old, name, root, interpretation, policy, rows, base.allocator)
 			if domain != nil {

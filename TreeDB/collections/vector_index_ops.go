@@ -307,7 +307,7 @@ func (c *Collection) registeredVectorIndex(name string) *VectorIndex {
 	if c == nil {
 		return nil
 	}
-	if coord := c.collectionSchemaCoordinator(); coord != nil {
+	if coord := c.partitionLiveCoordinatorV1(); coord != nil {
 		if carrier := coord.partitionLiveCarrier(name); carrier != nil {
 			return carrier
 		}
@@ -329,7 +329,7 @@ func (c *Collection) registeredVectorPartitionLiveCarriersV1() []*VectorIndex {
 	if c == nil {
 		return nil
 	}
-	coord := c.collectionSchemaCoordinator()
+	coord := c.partitionLiveCoordinatorV1()
 	if coord == nil {
 		return nil
 	}

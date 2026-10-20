@@ -355,6 +355,21 @@ checkpointed-seed transport mechanism, rather than claiming an unapplied success
 import (successful calls require a physical seal). Existing format-14/cdir2/SIS2
 bytes and default memory limits are unchanged.
 
+Native imported-source handles also prepare the existing V1 partition/router
+assets and bind them through `EnsureVectorPartitionLiveBindingV1`. Binding uses
+the original durable kind-105 command and complete carrier-domain replacement;
+the source remains immutable. Carrier metadata explicitly uses coverage version
+4: its positive coverage is the actual authenticated cdir2 header generation,
+with the complete generation/checksum/schema/row-count tuple checked on load.
+Legacy version 3 keeps its physical document-generation meaning; unknown or
+mismatched tags refuse. Capture sequence and state token separately invalidate
+runtime reuse across publication or checkpoint. This pre-alpha carrier metadata
+change may require rebuilding for older readers; it adds no command or source
+codec. Later native live document mutations and general ANN serving remain
+outside this producer. See
+[`vector-partition-v1-contract.md`](../docs/spec/vector-partition-v1-contract.md#native-imported-source-carrier-coverage)
+for the exact authority and replay contract.
+
 ## Development verification and remaining qualification
 
 Maintained public controls cover raw/cross-collection JSON, indexed ordered
