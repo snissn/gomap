@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/leafrefscan"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -21,9 +22,6 @@ func TestVacuumSystemLeafPolicyWarmWriteAndRecovery(t *testing.T) {
 	}
 	for _, mode := range []string{"online", "offline", string(vacuumFailAfterNewSync), string(vacuumFailAfterReady), string(vacuumFailAfterRenameOld), string(vacuumFailAfterRenameNew)} {
 		t.Run(mode, func(t *testing.T) {
-			if mode == "online" && runtime.GOOS == "windows" {
-				t.Skip("online vacuum unsupported on windows")
-			}
 			opts := Options{Dir: t.TempDir(), ChunkSize: 64 << 10, IndexOuterLeavesInValueLog: true}
 			var d *DB
 			var log LeafPageLogCloser
@@ -121,45 +119,52 @@ func TestVacuumSystemLeafPolicyWarmWriteAndRecovery(t *testing.T) {
 			if err := d.Checkpoint(); err != nil {
 				t.Fatal(err)
 			}
-			if n := len(collectLeafRefIDsFromRoot(t, d, d.State().SystemRootPageID)); n < 2 {
-				t.Fatalf("system leaf refs=%d want multiple", n)
-			}
-			if all, err := vacuumTreeAllLeafRefsIfComplete(d.Pager(), d.State().SystemRootPageID); err != nil || !all {
-				t.Fatalf("initial system leaf policy: all=%v err=%v", all, err)
-			}
-			seedLeafFiles := make(map[uint32]bool)
-			for ptr := range collectLeafRefIDsFromRoot(t, d, d.State().SystemRootPageID) {
-				seedLeafFiles[ptr.FileID] = true
-			}
+			// Both original recovery slots must hold a multi-page pager SYSTEM
+			// tree, while pointer-backed descriptor values retain vlog authority.
 			for slot, record := range d.durableRoot.slotRecord {
-				if record.CommitSeq <= 1 || len(collectLeafRefIDsFromRoot(t, d, record.SystemRootPageID)) < 2 {
+				if record.CommitSeq <= 1 {
 					t.Fatalf("seed slot %d is not a durable application system tree: %+v", slot, record)
 				}
+				if len(vacuumSystemPagerPointers(t, d, record.SystemRootPageID)) == 0 {
+					t.Fatalf("seed slot %d did not activate pointer-backed SYSTEM values", slot)
+				}
 			}
-			// Seed both recovery slots through the production vacuum path. Its
-			// appends stay in the already registered current leaf segment.
-			if err := d.VacuumIndexOnline(context.Background()); err != nil {
-				t.Fatal(err)
+			vacuumSystemManifestFiles(t, d, true)
+			vacuumOnline := func() bool {
+				t.Helper()
+				before, index := d.state.Load(), d.idx.Load()
+				err := d.VacuumIndexOnline(context.Background())
+				if runtime.GOOS == "windows" {
+					if !errors.Is(err, ErrVacuumUnsupported) || d.state.Load() != before || d.idx.Load() != index {
+						t.Fatalf("unsupported online vacuum changed state or returned %v", err)
+					}
+					return false
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if d.idx.Load() == index {
+					t.Fatal("vacuum did not replace pager generation")
+				}
+				return true
 			}
+			seedReplaced := vacuumOnline()
 			seedSnap := d.AcquireSnapshot()
 			seedDescriptor, err := seedSnap.GetAtRoot(seedSnap.state.SystemRootPageID, []byte(vacuumTestCollectionRootKey))
+			seedDescriptor = append([]byte(nil), seedDescriptor...)
 			_ = seedSnap.Close()
 			if err != nil || len(seedDescriptor) != 8 {
 				t.Fatalf("vacuum seed descriptor=%x err=%v", seedDescriptor, err)
 			}
-			if got := binary.BigEndian.Uint64(seedDescriptor); got == seedCollectionRoot {
+			if got := binary.BigEndian.Uint64(seedDescriptor); seedReplaced && got == seedCollectionRoot {
 				t.Fatalf("seed vacuum did not relocate collection root %d", got)
-			}
-			for ptr := range collectLeafRefIDsFromRoot(t, d, d.State().SystemRootPageID) {
-				if !seedLeafFiles[ptr.FileID] {
-					t.Fatal("seed vacuum unexpectedly rotated the leaf segment")
-				}
 			}
 			vacuumSystemManifestFiles(t, d, true)
 			// Force the subject online vacuum to relocate a collection too,
-			// before reopening rotates the leaf writer to a fresh file.
+			// before reopening the original source and its exact dependencies.
 			snap := d.AcquireSnapshot()
 			descriptor, err := snap.GetAtRoot(snap.state.SystemRootPageID, []byte(vacuumTestCollectionRootKey))
+			descriptor = append([]byte(nil), descriptor...)
 			_ = snap.Close()
 			if err != nil || len(descriptor) != 8 {
 				t.Fatalf("seed descriptor=%x err=%v", descriptor, err)
@@ -170,17 +175,12 @@ func TestVacuumSystemLeafPolicyWarmWriteAndRecovery(t *testing.T) {
 				return
 			}
 			openDB()
-			seedFiles := vacuumSystemManifestFiles(t, d, false)
+			vacuumSystemManifestFiles(t, d, false)
+			subjectReplaced := false
 			if mode == "online" {
 				// The base interface does not require optional segment reporting.
 				d.SetLeafPageLog(&countingLeafPageLog{inner: log})
-				before := d.Pager()
-				if err := d.VacuumIndexOnline(context.Background()); err != nil {
-					t.Fatal(err)
-				}
-				if d.Pager() == before {
-					t.Fatal("vacuum did not replace pager")
-				}
+				subjectReplaced = vacuumOnline()
 				d.SetLeafPageLog(log)
 			} else {
 				closeDB()
@@ -200,27 +200,13 @@ func TestVacuumSystemLeafPolicyWarmWriteAndRecovery(t *testing.T) {
 					t.Fatalf("failpoint=%s error=%v", fp, err)
 				}
 				openDB()
+				subjectReplaced = mode == "offline" || mode == string(vacuumFailAfterRenameOld) || mode == string(vacuumFailAfterRenameNew)
 			}
-			if n := len(collectLeafRefIDsFromRoot(t, d, d.State().SystemRootPageID)); n < 2 {
-				t.Fatalf("recovered system leaf refs=%d want multiple", n)
-			}
+			vacuumSystemPagerPointers(t, d, d.State().SystemRootPageID)
 			vacuumSystemManifestFiles(t, d, mode == "online")
-			if mode == "online" || mode == "offline" || mode == string(vacuumFailAfterRenameOld) || mode == string(vacuumFailAfterRenameNew) {
-				newFile := false
-				for ptr := range collectLeafRefIDsFromRoot(t, d, d.State().SystemRootPageID) {
-					if _, old := seedFiles[page.ValueLogSegmentID(ptr.FileID)]; !old {
-						newFile = true
-					}
-				}
-				if !newFile {
-					t.Fatal("subject vacuum did not create a new system leaf segment")
-				}
-			}
 			verify := func(updated bool) string {
 				t.Helper()
-				if all, err := vacuumTreeAllLeafRefsIfComplete(d.Pager(), d.State().SystemRootPageID); err != nil || !all {
-					t.Fatalf("system leaf policy: all=%v err=%v", all, err)
-				}
+				vacuumSystemPagerPointers(t, d, d.State().SystemRootPageID)
 				verifyVacuumCollectionRootDescriptor(t, d, vacuumTestCollectionRootKey)
 				snap := d.AcquireSnapshot()
 				if snap == nil {
@@ -244,11 +230,20 @@ func TestVacuumSystemLeafPolicyWarmWriteAndRecovery(t *testing.T) {
 				return string(descriptor)
 			}
 			descriptorText := verify(false)
-			if mode == "online" || mode == "offline" || mode == string(vacuumFailAfterRenameOld) || mode == string(vacuumFailAfterRenameNew) {
+			if subjectReplaced {
 				if got := binary.BigEndian.Uint64([]byte(descriptorText)); got == subjectCollectionRoot {
 					t.Fatalf("subject vacuum did not relocate collection root %d", got)
 				}
 			}
+			held := d.AcquireSnapshot()
+			if held == nil {
+				t.Fatal("missing held pre-update snapshot")
+			}
+			defer func() {
+				if held != nil {
+					_ = held.Close()
+				}
+			}()
 			kvs := append(systemRangeKVs(2048, map[int]string{1024: "updated"}), vacuumTestCollectionRootKey, descriptorText)
 			before := d.systemRootPublishStatsSnapshot()
 			if _, err := d.PublishSystemRootIterator(mustFrozenSystemMemtable(t, kvs...).NewIterator(nil, nil)); err != nil {
@@ -259,6 +254,14 @@ func TestVacuumSystemLeafPolicyWarmWriteAndRecovery(t *testing.T) {
 				t.Fatalf("warm publication before=%+v after=%+v", before, after)
 			}
 			verify(true)
+			old, err := held.GetAtRoot(held.state.SystemRootPageID, []byte("sys/1024"))
+			if err != nil || string(old) != "value-1024" {
+				t.Fatalf("held pre-update value=%q err=%v", old, err)
+			}
+			if err := held.Close(); err != nil {
+				t.Fatal(err)
+			}
+			held = nil
 			closeDB()
 			if t.Failed() {
 				return
@@ -270,15 +273,24 @@ func TestVacuumSystemLeafPolicyWarmWriteAndRecovery(t *testing.T) {
 }
 
 // Check the actual immutable manifest tokens, not the compatibility view.
-func vacuumSystemManifestFiles(t *testing.T, d *DB, allSlots bool) map[uint32]struct{} {
+func vacuumSystemManifestFiles(t *testing.T, d *DB, allSlots bool) {
 	t.Helper()
-	files := make(map[uint32]struct{})
 	for slot, record := range d.durableRoot.slotRecord {
 		if record.CommitSeq == 0 || (!allSlots && uint64(slot) != d.durableRoot.slot) {
 			continue
 		}
+		pointers := vacuumSystemPagerPointers(t, d, record.SystemRootPageID)
 		var manifest *leafGenerationManifest
 		err := d.durableRoot.slotResources[slot].WithScopedTokens(func(tokens []*rootpublication.StableResourceToken) error {
+			for _, token := range tokens {
+				if token.Kind() == rootpublication.ResourceValueLog && token.Reachability() == rootpublication.ReachabilityValueLogPointer {
+					for id := range pointers {
+						if token.ResourceID() == fmt.Sprint(id) {
+							delete(pointers, id)
+						}
+					}
+				}
+			}
 			var err error
 			manifest, _, err = loadSelectedDurableLeafGenerationManifestTokens(tokens)
 			return err
@@ -289,19 +301,40 @@ func vacuumSystemManifestFiles(t *testing.T, d *DB, allSlots bool) map[uint32]st
 		if manifest == nil {
 			t.Fatalf("slot %d has no exact manifest: selected=%d record=%+v resources=%+v manifest_mode=%v vacuum=%+v", slot, d.durableRoot.slot, record, mustStableResourceDescriptors(t, d.durableRoot.slotResources[slot]), d.leafGenerationManifestStore.mode, d.VacuumOnlineStats())
 		}
-		for ptr := range collectLeafRefIDsFromRoot(t, d, record.SystemRootPageID) {
-			id := page.ValueLogSegmentID(ptr.FileID)
-			if !manifest.hasNonDeletedFileID(id) {
-				t.Fatalf("slot %d manifest %d omits system leaf file %d", slot, manifest.ManifestRevision, id)
+		if len(pointers) != 0 {
+			t.Fatalf("slot %d omits original SYSTEM value-pointer dependencies: %v", slot, pointers)
+		}
+	}
+}
+
+// Pager child closure is independent of persistent pointer values in its leaves.
+func vacuumSystemPagerPointers(t *testing.T, d *DB, rootID uint64) map[uint32]struct{} {
+	t.Helper()
+	files := make(map[uint32]struct{})
+	leaves := 0
+	err := leafrefscan.Walk(context.Background(), rootID, d.Pager().Get, func(id uint64, n node.Node) error {
+		if !n.VerifyChecksum() {
+			return fmt.Errorf("SYSTEM page %d checksum mismatch", id)
+		}
+		if n.Type() != page.PageTypeLeaf {
+			return nil
+		}
+		leaves++
+		for i := uint16(0); i < n.Count(); i++ {
+			_, _, ptr, flags, err := n.GetLeafEntryView(i)
+			if err != nil {
+				return err
+			}
+			if flags&node.FlagPointer != 0 {
+				files[page.ValueLogSegmentID(ptr.FileID)] = struct{}{}
 			}
 		}
-		if uint64(slot) == d.durableRoot.slot {
-			for _, gen := range manifest.Generations {
-				for _, id := range gen.FileIDs {
-					files[id] = struct{}{}
-				}
-			}
-		}
+		return nil
+	}, func(ptr page.LeafLogPtr) error {
+		return fmt.Errorf("SYSTEM child points into leaf log: %+v", ptr)
+	})
+	if err != nil || leaves < 2 {
+		t.Fatalf("SYSTEM pager closure leaves=%d want multiple: %v", leaves, err)
 	}
 	return files
 }

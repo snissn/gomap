@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -214,8 +215,14 @@ func TestSystemPagerLeavesComposeWithLogDATAAndMaintenance(t *testing.T) {
 	if err := database.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
-	if err := database.VacuumIndexOnline(context.Background()); err != nil {
-		t.Fatal(err)
+	beforeVacuum, beforeIndex := database.state.Load(), database.idx.Load()
+	vacuumErr := database.VacuumIndexOnline(context.Background())
+	if runtime.GOOS == "windows" {
+		if !errors.Is(vacuumErr, ErrVacuumUnsupported) || database.state.Load() != beforeVacuum || database.idx.Load() != beforeIndex {
+			t.Fatalf("unsupported online vacuum changed state or returned %v", vacuumErr)
+		}
+	} else if vacuumErr != nil {
+		t.Fatal(vacuumErr)
 	}
 	check("online-vacuum")
 	publish("after-online")
