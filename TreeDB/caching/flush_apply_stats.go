@@ -551,7 +551,7 @@ func (db *DB) foregroundAssistYieldToActiveFlush(backlog, stopBytes int64) bool 
 }
 
 func (db *DB) appendCacheLeafLogLaneStats(stats map[string]string) {
-	if db == nil || stats == nil || !db.indexOuterLeavesInValueLog {
+	if db == nil || stats == nil || !db.leafPageLogEnabled() {
 		return
 	}
 	lanes := db.leafLogAppendLanesSnapshot()

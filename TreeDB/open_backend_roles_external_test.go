@@ -115,7 +115,7 @@ func TestBackendFactoryRolesLegacyLifecycle(t *testing.T) {
 					t.Fatal(err)
 				}
 				cfg, ok, err := backenddb.LoadFormatConfig(filepath.Join(opts.Dir, "maindb"))
-				if err != nil || !ok || !cfg.IndexOuterLeavesInValueLog {
+				if err != nil || !ok || cfg.IndexOuterLeavesInValueLog != opts.IndexOuterLeavesInValueLog {
 					t.Fatalf("outer-leaf physical policy=%+v,%v,%v", cfg, ok, err)
 				}
 				snapshot := backend.AcquireSnapshot()

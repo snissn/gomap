@@ -229,14 +229,157 @@ func (g *nativeDocumentGraph) distance(query []float32, id int) (float32, error)
 // No allocation is indexed by graph high-water. Original candidate ordering
 // and cosine evaluator are shared with the maintained HNSW implementation.
 func (g *nativeDocumentGraph) searchLayer(query []float32, entry, ef, layer int) ([]vectorIndexCandidate, error) {
-	return g.searchLayerMode(query, entry, ef, layer, false)
+	return g.searchLayerMode(query, entry, ef, ef, layer, false)
+}
+
+// currentSearchExplorationLimit keeps the requested live-result limit separate
+// from one bounded layer-0 fanout of stale routing waypoints per live candidate.
+// The summary was checked against the actual graph by its original certificate.
+func (g *nativeDocumentGraph) currentSearchExplorationLimit(limit int) int {
+	explorationLimit := limit
+	nodes := int(g.meta.NativeDocument.Nodes)
+	stale := int(g.meta.NativeDocument.Nodes - g.meta.NativeDocument.Live)
+	if stale > 0 && explorationLimit < nodes {
+		degree := maxInt(1, g.config.maxNeighborsForLayer(0))
+		maxExtra := math.MaxInt
+		if degree > 1 && limit <= math.MaxInt/(degree-1) {
+			maxExtra = limit * (degree - 1)
+		}
+		explorationLimit += minInt(stale, minInt(maxExtra, nodes-explorationLimit))
+	}
+	return explorationLimit
+}
+
+// currentSearchCandidates uses the maintained current-search budget across
+// upper and layer-0 traversal. Construction keeps its original greedy route.
+func (g *nativeDocumentGraph) currentSearchCandidates(query []float32, ef int) ([]vectorIndexCandidate, error) {
+	entry := g.meta.Entry
+	if g.meta.NativeDocument.Nodes == g.meta.NativeDocument.Live {
+		for layer := g.meta.MaxLevel; layer > 0; layer-- {
+			var err error
+			entry, err = g.greedy(query, entry, layer)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return g.searchLayerMode(query, entry, ef, ef, 0, true)
+	}
+	explorationLimit := g.currentSearchExplorationLimit(ef)
+	upperLimit := maxInt(0, explorationLimit-ef-1)
+	upperExplored := 0
+	for layer := g.meta.MaxLevel; layer > 0 && upperExplored < upperLimit; layer-- {
+		var err error
+		entry, err = g.greedyCurrentBounded(query, entry, layer, upperLimit, &upperExplored)
+		if err != nil {
+			return nil, err
+		}
+	}
+	remaining := explorationLimit - upperExplored
+	var seeds []vectorIndexCandidate
+	if remaining >= 4 && entry != g.meta.Entry {
+		original, err := g.readNode(g.meta.Entry)
+		if err != nil {
+			return nil, err
+		}
+		selected, err := g.readNode(entry)
+		if err != nil {
+			return nil, err
+		}
+		if !original.value.deleted && selected.value.deleted {
+			// Retain the original live entry's bounded one-hop route when a
+			// closer tombstone wins the upper descent. Reserve an expansion slot.
+			neighbors := original.value.neighbors[0]
+			count := minInt(len(neighbors), remaining-3)
+			if err := nativeDocumentGraphCharge(g.admit, uint64(count+2)*uint64(unsafe.Sizeof(vectorIndexCandidate{}))); err != nil {
+				return nil, err
+			}
+			seeds = make([]vectorIndexCandidate, 0, count+2)
+			add := func(id int) error {
+				for _, seed := range seeds {
+					if seed.nodeID == id {
+						return nil
+					}
+				}
+				d, err := g.distance(query, id)
+				if err != nil {
+					return err
+				}
+				seeds = append(seeds, vectorIndexCandidate{nodeID: id, distance: d})
+				return nil
+			}
+			if err := add(entry); err != nil {
+				return nil, err
+			}
+			if err := add(g.meta.Entry); err != nil {
+				return nil, err
+			}
+			for _, neighbor := range neighbors[:count] {
+				if err := add(int(neighbor.nodeID)); err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
+	return g.searchLayerSeedsMode(query, entry, seeds, ef, remaining, 0, true)
+}
+
+func (g *nativeDocumentGraph) greedyCurrentBounded(query []float32, entry, layer, limit int, scored *int) (int, error) {
+	score := func(id int) (float32, error) {
+		if err := nativeDocumentGraphCharge(g.admit, 128); err != nil {
+			return 0, err
+		}
+		d, err := g.distance(query, id)
+		if err != nil {
+			return 0, err
+		}
+		(*scored)++
+		return d, nil
+	}
+	bestDistance, err := score(entry)
+	if err != nil {
+		return 0, err
+	}
+	for changed := true; changed; {
+		changed = false
+		n, err := g.readNode(entry)
+		if err != nil {
+			return 0, err
+		}
+		if n.value.level < layer {
+			return 0, fmt.Errorf("collections: native graph edge reaches absent layer")
+		}
+		for _, edge := range n.value.neighbors[layer] {
+			if *scored >= limit {
+				return entry, nil
+			}
+			id := int(edge.nodeID)
+			distance, err := score(id)
+			if err != nil {
+				return 0, err
+			}
+			if g.nodes[id].value.level < layer {
+				return 0, fmt.Errorf("collections: native graph neighbor level mismatch")
+			}
+			if distance < bestDistance {
+				entry, bestDistance, changed = id, distance, true
+			}
+		}
+	}
+	return entry, nil
 }
 
 // Public current queries retain live results separately from routing candidates.
 // Tombstones still participate in navigation and construction.
-func (g *nativeDocumentGraph) searchLayerMode(query []float32, entry, ef, layer int, currentOnly bool) ([]vectorIndexCandidate, error) {
+func (g *nativeDocumentGraph) searchLayerMode(query []float32, entry, ef, explorationLimit, layer int, currentOnly bool) ([]vectorIndexCandidate, error) {
+	return g.searchLayerSeedsMode(query, entry, nil, ef, explorationLimit, layer, currentOnly)
+}
+
+func (g *nativeDocumentGraph) searchLayerSeedsMode(query []float32, entry int, seeds []vectorIndexCandidate, ef, explorationLimit, layer int, currentOnly bool) ([]vectorIndexCandidate, error) {
 	if ef < 1 {
 		ef = 1
+	}
+	if explorationLimit < ef {
+		explorationLimit = ef
 	}
 	if err := nativeDocumentGraphCharge(g.admit, 256); err != nil {
 		return nil, err
@@ -256,7 +399,7 @@ func (g *nativeDocumentGraph) searchLayerMode(query []float32, entry, ef, layer 
 		visited[id] = struct{}{}
 		c := vectorIndexCandidate{nodeID: id, distance: distance}
 		queue.push(c)
-		best.pushBounded(c, ef)
+		best.pushBounded(c, explorationLimit)
 		if currentOnly {
 			n, err := g.readNode(id)
 			if err != nil {
@@ -268,16 +411,29 @@ func (g *nativeDocumentGraph) searchLayerMode(query []float32, entry, ef, layer 
 		}
 		return nil
 	}
-	distance, err := g.distance(query, entry)
-	if err != nil {
-		return nil, err
+	explored := 0
+	if len(seeds) == 0 {
+		distance, err := g.distance(query, entry)
+		if err != nil {
+			return nil, err
+		}
+		if err := push(entry, distance); err != nil {
+			return nil, err
+		}
+		explored = 1
+	} else {
+		for _, seed := range seeds {
+			if err := push(seed.nodeID, seed.distance); err != nil {
+				return nil, err
+			}
+			explored++
+		}
 	}
-	if err = push(entry, distance); err != nil {
-		return nil, err
-	}
+	boundedStale := currentOnly && g.meta.NativeDocument.Nodes > g.meta.NativeDocument.Live
+search:
 	for len(queue) != 0 {
 		c := queue.pop()
-		if len(best) >= ef && vectorIndexCandidateLess(best[0], c) {
+		if len(best) >= explorationLimit && vectorIndexCandidateLess(best[0], c) {
 			break
 		}
 		n, err := g.readNode(c.nodeID)
@@ -292,11 +448,15 @@ func (g *nativeDocumentGraph) searchLayerMode(query []float32, entry, ef, layer 
 			if _, ok := visited[id]; ok {
 				continue
 			}
+			if boundedStale && explored >= explorationLimit {
+				break search
+			}
 			// Mark even rejected candidates once; no repeated exponential traversal.
-			if err = nativeDocumentGraphCharge(g.admit, 128); err != nil {
+			if err := nativeDocumentGraphCharge(g.admit, 128); err != nil {
 				return nil, err
 			}
 			visited[id] = struct{}{}
+			explored++
 			target, err := g.readNode(id)
 			if err != nil {
 				return nil, err
@@ -308,7 +468,7 @@ func (g *nativeDocumentGraph) searchLayerMode(query []float32, entry, ef, layer 
 			if err != nil {
 				return nil, err
 			}
-			if len(best) < ef || vectorIndexCandidateLess(vectorIndexCandidate{nodeID: id, distance: d}, best[0]) {
+			if len(best) < explorationLimit || vectorIndexCandidateLess(vectorIndexCandidate{nodeID: id, distance: d}, best[0]) {
 				if err = push(id, d); err != nil {
 					return nil, err
 				}
@@ -318,7 +478,7 @@ func (g *nativeDocumentGraph) searchLayerMode(query []float32, entry, ef, layer 
 	if currentOnly {
 		best = liveBest
 	}
-	if err = nativeDocumentGraphCharge(g.admit, uint64(len(best))*uint64(unsafe.Sizeof(vectorIndexCandidate{}))); err != nil {
+	if err := nativeDocumentGraphCharge(g.admit, uint64(len(best))*uint64(unsafe.Sizeof(vectorIndexCandidate{}))); err != nil {
 		return nil, err
 	}
 	out := append([]vectorIndexCandidate(nil), best...)
@@ -376,6 +536,36 @@ func (g *nativeDocumentGraph) selectNeighbors(candidates []vectorIndexCandidate,
 			out = append(out, vectorIndexNeighbor{nodeID: uint32(c.nodeID), distance: c.distance})
 			if len(out) == limit {
 				break
+			}
+		}
+	}
+	// The maintained construction path fills unused degree from its original
+	// candidate pool. Prefer live backfill, then retain deleted routing waypoints
+	// rather than severing them during either insertion or reciprocal pruning.
+	for _, deleted := range []bool{false, true} {
+		for _, c := range candidates {
+			if len(out) == limit {
+				return out, nil
+			}
+			if c.nodeID == exclude {
+				continue
+			}
+			n, err := g.readNode(c.nodeID)
+			if err != nil {
+				return nil, err
+			}
+			if n.value.deleted != deleted {
+				continue
+			}
+			found := false
+			for _, selected := range out {
+				if int(selected.nodeID) == c.nodeID {
+					found = true
+					break
+				}
+			}
+			if !found {
+				out = append(out, vectorIndexNeighbor{nodeID: uint32(c.nodeID), distance: c.distance})
 			}
 		}
 	}

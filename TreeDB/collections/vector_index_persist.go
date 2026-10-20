@@ -94,7 +94,7 @@ func (idx *VectorIndex) SaveNativeSnapshot() (VectorIndexLoadStatus, error) {
 	if c.nativeDocumentVectors() {
 		return idx.saveNativeDocumentVector()
 	}
-	if c.meta.nativeDocumentCoverageVersion != 0 {
+	if c.metadataForIngress().nativeDocumentCoverageVersion != 0 {
 		return status, backenddb.ErrNativeSemanticUnsupported
 	}
 	if c.db == nil {

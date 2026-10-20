@@ -81,7 +81,7 @@ func (c *Collection) RebuildVectorIndex(name string) (VectorIndexStatus, error) 
 	if c.nativeDocumentVectors() {
 		return c.rebuildNativeDocumentVector(name)
 	}
-	if c != nil && c.meta.nativeDocumentCoverageVersion != 0 {
+	if c != nil && c.metadataForIngress().nativeDocumentCoverageVersion != 0 {
 		return VectorIndexStatus{}, backenddb.ErrNativeSemanticUnsupported
 	}
 	if c != nil && c.nativeJSON != nil {

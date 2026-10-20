@@ -2914,6 +2914,13 @@ func (db *DB) splitValueLogEnabled() bool {
 	return true
 }
 
+// Leaf-page append services are also needed by ordered collection roots when
+// USER index leaves stay in the pager. Keep service custody independent of the
+// USER placement option, including for existing directly constructed test DBs.
+func (db *DB) leafPageLogEnabled() bool {
+	return db != nil && (db.leafPageLogServices || db.indexOuterLeavesInValueLog)
+}
+
 // ReserveValueLogRIDs reserves a contiguous RID range from the cached-mode
 // shared allocator and returns the starting RID.
 func (db *DB) ReserveValueLogRIDs(count int) (uint64, error) {
@@ -3323,7 +3330,7 @@ func (db *DB) valueLogLaneByID(laneID int) *lane {
 	if laneID < len(db.lanes) {
 		return &db.lanes[laneID]
 	}
-	if laneID == leafLogLaneID && db.indexOuterLeavesInValueLog {
+	if laneID == leafLogLaneID && db.leafPageLogEnabled() {
 		return &db.leafLog
 	}
 	return nil
@@ -3337,7 +3344,7 @@ func (db *DB) valueLogLaneForFileID(fileID uint32) *lane {
 	if l := db.nativeRootValueLogAppendLaneForFileID(laneID, seq); l != nil {
 		return l
 	}
-	if laneID != leafLogLaneID || !db.indexOuterLeavesInValueLog {
+	if laneID != leafLogLaneID || !db.leafPageLogEnabled() {
 		return db.valueLogLaneByID(int(laneID))
 	}
 	if view := db.leafLogAppendLanesView.Load(); view != nil {
@@ -3370,7 +3377,7 @@ func (db *DB) leafLogAppendLaneMatchesSeq(l *lane, seq uint32) bool {
 }
 
 func (db *DB) leafLogAppendLaneAtIndex(idx int) (*lane, bool) {
-	if db == nil || !db.indexOuterLeavesInValueLog || idx < 0 {
+	if db == nil || !db.leafPageLogEnabled() || idx < 0 {
 		return nil, false
 	}
 	db.leafLogAppendMu.RLock()
@@ -3388,7 +3395,7 @@ func (db *DB) leafLogAppendLaneAtIndex(idx int) (*lane, bool) {
 }
 
 func (db *DB) isLeafLogAppendLane(l *lane) bool {
-	if db == nil || !db.indexOuterLeavesInValueLog || l == nil || l.id != leafLogLaneID {
+	if db == nil || !db.leafPageLogEnabled() || l == nil || l.id != leafLogLaneID {
 		return false
 	}
 	if l == &db.leafLog {
@@ -3405,7 +3412,7 @@ func (db *DB) isLeafLogAppendLane(l *lane) bool {
 }
 
 func (db *DB) leafLogAppendCompressionSelector() *vlogCompressionSelector {
-	if db == nil || !db.indexOuterLeavesInValueLog {
+	if db == nil || !db.leafPageLogEnabled() {
 		return nil
 	}
 	return db.newValueLogCompressionSelector()
@@ -3428,7 +3435,7 @@ func (db *DB) newValueLogCompressionSelector() *vlogCompressionSelector {
 }
 
 func (db *DB) initLeafLogAppendState(maxLeafVlogSeq int) {
-	if db == nil || !db.indexOuterLeavesInValueLog {
+	if db == nil || !db.leafPageLogEnabled() {
 		return
 	}
 	db.leafLogAppendMu.Lock()
@@ -3439,7 +3446,7 @@ func (db *DB) initLeafLogAppendState(maxLeafVlogSeq int) {
 }
 
 func (db *DB) publishLeafLogAppendLanesLocked() {
-	if db == nil || !db.indexOuterLeavesInValueLog || len(db.leafLogAppendLanes) == 0 {
+	if db == nil || !db.leafPageLogEnabled() || len(db.leafLogAppendLanes) == 0 {
 		return
 	}
 	view := append([]*lane(nil), db.leafLogAppendLanes...)
@@ -3447,7 +3454,7 @@ func (db *DB) publishLeafLogAppendLanesLocked() {
 }
 
 func (db *DB) leafLogAppendLanesSnapshot() []*lane {
-	if db == nil || !db.indexOuterLeavesInValueLog {
+	if db == nil || !db.leafPageLogEnabled() {
 		return nil
 	}
 	db.leafLogAppendMu.RLock()
@@ -3459,7 +3466,7 @@ func (db *DB) leafLogAppendLanesSnapshot() []*lane {
 }
 
 func (db *DB) leafLogAppendLaneForWorkerIndex(workerIndex int) *lane {
-	if db == nil || !db.indexOuterLeavesInValueLog {
+	if db == nil || !db.leafPageLogEnabled() {
 		return nil
 	}
 	if workerIndex <= 0 {
@@ -3489,7 +3496,7 @@ func (db *DB) leafLogAppendLaneForWorkerIndex(workerIndex int) *lane {
 }
 
 func (db *DB) advanceLeafLogAppendSeqAtLeast(seq int) {
-	if db == nil || !db.indexOuterLeavesInValueLog || seq <= 0 {
+	if db == nil || !db.leafPageLogEnabled() || seq <= 0 {
 		return
 	}
 	need := uint32(seq)
@@ -3505,7 +3512,7 @@ func (db *DB) advanceLeafLogAppendSeqAtLeast(seq int) {
 }
 
 func (db *DB) advanceCompactStorageLeafPageLogSeqAtLeast(seq uint32) error {
-	if db == nil || !db.indexOuterLeavesInValueLog || seq == 0 {
+	if db == nil || !db.leafPageLogEnabled() || seq == 0 {
 		return nil
 	}
 	observedMaxSeq := int(seq)
@@ -3524,7 +3531,7 @@ func (db *DB) nextLeafLogAppendSeq() (int, error) {
 }
 
 func (db *DB) reserveLeafLogAppendSequence(floor uint32) (uint32, error) {
-	if db == nil || !db.indexOuterLeavesInValueLog {
+	if db == nil || !db.leafPageLogEnabled() {
 		return 0, errWALUnavailable
 	}
 	for {
@@ -3644,7 +3651,7 @@ func (db *DB) currentValueLogPaths() []string {
 		}
 		l.vlogMu.Unlock()
 	}
-	if db.indexOuterLeavesInValueLog && db.splitValueLogEnabled() {
+	if db.leafPageLogEnabled() && db.splitValueLogEnabled() {
 		for _, l := range db.leafLogAppendLanesSnapshot() {
 			if l == nil {
 				continue
@@ -5420,7 +5427,7 @@ func (db *DB) valueLogRetainedStatsDetailed() valueLogRetainedGenerationStats {
 			}
 			l.vlogMu.Unlock()
 		}
-		if db.indexOuterLeavesInValueLog {
+		if db.leafPageLogEnabled() {
 			for _, l := range db.leafLogAppendLanesSnapshot() {
 				if l == nil {
 					continue
@@ -5542,7 +5549,7 @@ func mergeUniqueNonEmptyStrings(pathSets ...[]string) []string {
 }
 
 func (db *DB) isLeafValueLogPath(path string) bool {
-	if db == nil || !db.indexOuterLeavesInValueLog || db.leafLogDir == "" || path == "" {
+	if db == nil || !db.leafPageLogEnabled() || db.leafLogDir == "" || path == "" {
 		return false
 	}
 	return filepath.Clean(filepath.Dir(path)) == filepath.Clean(db.leafLogDir)
@@ -5552,7 +5559,7 @@ func (db *DB) valueOnlyLogPaths(paths []string) []string {
 	if len(paths) == 0 {
 		return nil
 	}
-	if db == nil || !db.indexOuterLeavesInValueLog {
+	if db == nil || !db.leafPageLogEnabled() {
 		return append([]string(nil), paths...)
 	}
 	out := make([]string, 0, len(paths))
@@ -5805,7 +5812,7 @@ func (db *DB) BeginValueLogMaintenanceFence(ctx context.Context) (func(), error)
 		}
 		l.vlogMu.Unlock()
 	}
-	if db.indexOuterLeavesInValueLog {
+	if db.leafPageLogEnabled() {
 		for _, l := range db.leafLogAppendLanesSnapshot() {
 			if l == nil {
 				continue
@@ -6647,7 +6654,7 @@ func (db *DB) allowValueLogPointers() bool {
 				bytes += l.vlogLiveBytes.Load()
 			}
 		}
-		if db.indexOuterLeavesInValueLog {
+		if db.leafPageLogEnabled() {
 			for _, l := range db.leafLogAppendLanesSnapshot() {
 				if l != nil && l.vlogPath != "" && l.vlogPath == l.vlogRetainedPath {
 					bytes += l.vlogLiveBytes.Load()
@@ -8155,7 +8162,7 @@ func (db *DB) reconcileSplitValueLogWritersAfterBackendMaintenanceAdmitted(admit
 			return err
 		}
 	}
-	if db.indexOuterLeavesInValueLog {
+	if db.leafPageLogEnabled() {
 		observedMaxSeq := maxSeqByLane[leafLogLaneID]
 		db.advanceLeafLogAppendSeqAtLeast(observedMaxSeq)
 		for _, l := range db.leafLogAppendLanesSnapshot() {
@@ -9211,6 +9218,7 @@ type DB struct {
 	splitValueLog              bool
 	memtableValueLogPointers   bool
 	indexOuterLeavesInValueLog bool
+	leafPageLogServices        bool
 
 	inlineThreshold                int
 	valueLogThreshold              int
@@ -12737,7 +12745,18 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		}()
 	}
 	segments, _ := listNonEmptySplitLogSegments(walDir, valueLogDir, leafLogDir)
-	reserveLeafLogLane := opts.IndexOuterLeavesInValueLog
+	leafPageLogSetter, hasLeafPageLogSetter := backend.(interface {
+		SetLeafPageLog(backenddb.LeafPageLog)
+	})
+	_, hasValueLogAppenderSetter := backend.(interface {
+		SetValueLogAppender(backenddb.ValueLogAppender)
+	})
+	// Ordered collection roots can request value-log leaves independently of
+	// USER placement whenever this open installs the cached value appender.
+	reserveLeafLogLane := opts.IndexOuterLeavesInValueLog || (hasLeafPageLogSetter && hasValueLogAppenderSetter)
+	if opts.IndexOuterLeavesInValueLog && !hasLeafPageLogSetter {
+		return nil, errors.New("cachingdb: backend does not support value-log leaf pages")
+	}
 	// Cached value-log RIDs remain globally unique across reopen/rewrite cycles.
 	// Scan every non-empty segment: exact-RID command-WAL recovery may append an
 	// older missing RID into a newer segment, so the physical tail is no longer
@@ -12791,7 +12810,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	laneCount := journalLaneDefaults.Effective
 	laneCountDefaulted := journalLaneDefaults.Defaulted
 	if reserveLeafLogLane && laneCount > leafLogLaneID {
-		return nil, fmt.Errorf("cachingdb: IndexOuterLeavesInValueLog reserves lane %d; JournalLanes must be <= %d", leafLogLaneID, leafLogLaneID)
+		return nil, fmt.Errorf("cachingdb: leaf-page log services reserve lane %d; JournalLanes must be <= %d", leafLogLaneID, leafLogLaneID)
 	}
 	// Hot/warm/cold generation reserves lanes 1 and 2 for non-hot classes when
 	// available. When the lane count is caller-provided (e.g., tests pinning
@@ -12804,7 +12823,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		laneCount = maxLaneID + 1
 	}
 	if reserveLeafLogLane && laneCount > leafLogLaneID {
-		return nil, fmt.Errorf("cachingdb: IndexOuterLeavesInValueLog reserves lane %d; recovered WAL/value lanes require rebuild before reopen", leafLogLaneID)
+		return nil, fmt.Errorf("cachingdb: leaf-page log services reserve lane %d; recovered WAL/value lanes require rebuild before reopen", leafLogLaneID)
 	}
 
 	inlineThreshold := page.DefaultInlineThreshold
@@ -12983,7 +13002,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	}
 	reader.SetDisableReadChecksum(opts.DisableReadChecksum)
 	reader.SetCurrentWritableMmapEnabled(opts.ValueLogCurrentWritableMmap)
-	reader.SetMultiCurrentWritableLane(valuelog.ReservedLeafLogLaneID, opts.IndexOuterLeavesInValueLog)
+	reader.SetMultiCurrentWritableLane(valuelog.ReservedLeafLogLaneID, reserveLeafLogLane)
 	valueLogReader := reader
 	debugFlushPointers := envBool(envDebugFlushPointers)
 	debugFlushTiming := envBool(envDebugFlushTiming)
@@ -13266,6 +13285,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		valueLogRewriteMinSegmentAge:               valueLogRewriteMinSegmentAge,
 		memtableValueLogPointers:                   true,
 		indexOuterLeavesInValueLog:                 opts.IndexOuterLeavesInValueLog,
+		leafPageLogServices:                        reserveLeafLogLane,
 		valueLogReader:                             valueLogReader,
 		valueLogIdentityPins:                       valueLogIdentityPins,
 		valueLogRetain:                             retained,
@@ -13317,7 +13337,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 
 	db.cow = cowOwner
 	db.storeMemtableMode(mode)
-	if opts.IndexOuterLeavesInValueLog {
+	if reserveLeafLogLane {
 		db.leafLog.id = leafLogLaneID
 		db.leafLog.vlogSeq = maxLeafVlogSeq
 		db.leafLog.vlogGenerationClass = vlogGenerationClassHot
@@ -13353,17 +13373,6 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	nowNS := time.Now().UnixNano()
 	db.materializationLastDrainUnixNano.Store(nowNS)
 	db.publishWatermarkLastUnixNano = nowNS
-
-	var outerLeafPageLogSetter interface {
-		SetLeafPageLog(backenddb.LeafPageLog)
-	}
-	if opts.IndexOuterLeavesInValueLog {
-		setter, ok := backend.(interface{ SetLeafPageLog(backenddb.LeafPageLog) })
-		if !ok {
-			return nil, errors.New("cachingdb: backend does not support value-log leaf pages")
-		}
-		outerLeafPageLogSetter = setter
-	}
 
 	// Open journal/commit log segments eagerly, but leave value-log segment
 	// writers lazy. Opening every value-log lane here creates many zero-byte
@@ -13455,13 +13464,18 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		for _, l := range db.nativeRootValueLogAppendAuxLanesSnapshot() {
 			db.startVlogWriter(l)
 		}
-		if opts.IndexOuterLeavesInValueLog {
+		if reserveLeafLogLane {
 			db.startVlogWriter(&db.leafLog)
 		}
 	}
 
-	if outerLeafPageLogSetter != nil {
-		outerLeafPageLogSetter.SetLeafPageLog(newCachingLeafPageLog(db, &db.leafLog))
+	if reserveLeafLogLane {
+		if setter, ok := backend.(interface {
+			SetMultiCurrentWritableValueLogLane(lane uint32, enabled bool)
+		}); ok {
+			setter.SetMultiCurrentWritableValueLogLane(valuelog.ReservedLeafLogLaneID, true)
+		}
+		leafPageLogSetter.SetLeafPageLog(newCachingLeafPageLog(db, &db.leafLog))
 	}
 	if setter, ok := backend.(interface {
 		SetValueLogAppender(backenddb.ValueLogAppender)
@@ -26709,7 +26723,7 @@ func (db *DB) Close() error {
 			errs = append(errs, err)
 		}
 	}
-	if db.indexOuterLeavesInValueLog {
+	if db.leafPageLogEnabled() {
 		for _, l := range db.leafLogAppendLanesSnapshot() {
 			if err := db.closeLeafValueLogLane(l); err != nil {
 				errs = append(errs, err)
@@ -29295,7 +29309,7 @@ func (db *DB) untrackValueLogSegmentLocked(path string) {
 	if !ok {
 		return
 	}
-	if laneID == leafLogLaneID && db.indexOuterLeavesInValueLog {
+	if laneID == leafLogLaneID && db.leafPageLogEnabled() {
 		for _, l := range db.leafLogAppendLanesSnapshot() {
 			if db.untrackValueLogSegmentFromLane(l, path) {
 				return

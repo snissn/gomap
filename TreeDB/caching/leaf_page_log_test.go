@@ -193,6 +193,97 @@ func (b *capturingLeafLogBackend) SetLeafPageLog(log backenddb.LeafPageLog) {
 	}
 }
 
+// Mirror the actual backend capabilities: ordered roots select leaf-log storage
+// when the cached value appender is installed, independently of USER placement.
+func (b *capturingLeafLogBackend) SetValueLogAppender(appender backenddb.ValueLogAppender) {
+	if setter, ok := b.BackendDB.(interface {
+		SetValueLogAppender(backenddb.ValueLogAppender)
+	}); ok {
+		setter.SetValueLogAppender(appender)
+	}
+}
+
+func (b *capturingLeafLogBackend) SetMultiCurrentWritableValueLogLane(lane uint32, enabled bool) {
+	if setter, ok := b.BackendDB.(interface {
+		SetMultiCurrentWritableValueLogLane(uint32, bool)
+	}); ok {
+		setter.SetMultiCurrentWritableValueLogLane(lane, enabled)
+	}
+}
+
+func TestCachingLeafPageLogServicesWithPagerUserLeaves(t *testing.T) {
+	dir := t.TempDir()
+	open := func() (*DB, *capturingLeafLogBackend, func()) {
+		t.Helper()
+		backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+		if err != nil {
+			t.Fatal(err)
+		}
+		captured := &capturingLeafLogBackend{BackendDB: backend}
+		db, err := Open(dir, captured, Options{FlushApplyConcurrency: 2})
+		if err != nil {
+			_ = captured.Close()
+			t.Fatal(err)
+		}
+		closeDB := sync.OnceFunc(func() {
+			if err := db.Close(); err != nil {
+				t.Error(err)
+			}
+		})
+		t.Cleanup(closeDB)
+		if db.indexOuterLeavesInValueLog || !db.leafPageLogEnabled() || captured.leafLog == nil {
+			t.Fatal("pager USER placement must retain independent leaf-page services")
+		}
+		return db, captured, closeDB
+	}
+	db, captured, closeDB := open()
+	provider, ok := captured.leafLog.(backenddb.LeafPageLogLaneProvider)
+	if !ok {
+		t.Fatal("installed leaf-page provider has no append lanes")
+	}
+	appender, ok := provider.LeafPageLogLane(1)
+	if !ok {
+		t.Fatal("second leaf append lane unavailable")
+	}
+	want := testLeafPageBytes("collection-leaf-with-pager-user-root")
+	ptr, err := appender.AppendLeafPage(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := captured.leafLog.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	fileID := ptr.ValuePtr().FileID
+	active := db.valueLogLaneForFileID(fileID)
+	if active == nil || !db.isLeafValueLogPath(active.vlogPath) {
+		t.Fatal("leaf append lost its reserved lane/path custody")
+	}
+	if paths := db.valueOnlyLogPaths([]string{active.vlogPath}); len(paths) != 0 {
+		t.Fatalf("leaf service segment entered ordinary value GC paths: %v", paths)
+	}
+	closeDB()
+	for _, l := range db.leafLogAppendLanesSnapshot() {
+		if l != nil && l.vlog != nil {
+			t.Fatal("leaf service writer survived cached Close")
+		}
+	}
+	reopened, installed, _ := open()
+	got, err := reopened.ReadValueLogRecord(ptr.ValuePtr())
+	if err != nil || !bytes.Equal(got, want) {
+		t.Fatalf("reopened leaf payload=%q error=%v", got, err)
+	}
+	next, err := installed.leafLog.AppendLeafPage(testLeafPageBytes("next-incarnation"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next.ValuePtr().FileID == fileID {
+		t.Fatal("reopen reused a prior leaf service segment identity")
+	}
+	if reopened.valueLogLaneForFileID(fileID) != nil {
+		t.Fatal("closed prior incarnation matched a current append writer")
+	}
+}
+
 func openCachingLeafPageLogLaneTestDB(t *testing.T) (*DB, *capturingLeafLogBackend, string) {
 	t.Helper()
 	dir := t.TempDir()

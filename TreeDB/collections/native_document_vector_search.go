@@ -304,13 +304,6 @@ func (s *VectorIndexSearcher) searchNativeDocumentInto(opts VectorIndexSearcherS
 			return admit(n)
 		}
 	}
-	entry := g.meta.Entry
-	for layer := g.meta.MaxLevel; layer > 0; layer-- {
-		entry, err = g.greedy(opts.Query, entry, layer)
-		if err != nil {
-			return response, err
-		}
-	}
 	ef := opts.EfSearch
 	if ef == 0 {
 		ef = g.config.efSearch
@@ -321,7 +314,7 @@ func (s *VectorIndexSearcher) searchNativeDocumentInto(opts VectorIndexSearcherS
 	if ef < candidateLimit {
 		ef = candidateLimit
 	}
-	candidates, err := g.searchLayerMode(opts.Query, entry, ef, 0, true)
+	candidates, err := g.currentSearchCandidates(opts.Query, ef)
 	if err != nil {
 		return response, err
 	}
@@ -381,6 +374,9 @@ func (s *VectorIndexSearcher) searchNativeDocumentInto(opts VectorIndexSearcherS
 			if err != nil {
 				return response, err
 			}
+			response.Stats.DocumentsFetched++
+			response.Stats.DocumentBytes += uint64(len(hit.Document))
+			response.Stats.DocumentOutputBytes += uint64(len(hit.Document))
 		}
 		response.Results[at] = hit
 		at, offset = at+1, end

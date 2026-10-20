@@ -277,6 +277,7 @@ func TestCOWPublicEmptyCheckpointLeafRegistrationProgress(t *testing.T) {
 		t.Run(string(profile), func(t *testing.T) {
 			database, opts, _ := cowPublicContractOpen(t, profile, func(opts *Options) {
 				// This fixture tracks one exact rotated leaf segment.
+				opts.IndexOuterLeavesInValueLog = true
 				opts.FlushAdmissionPolicy = backenddb.FlushAdmissionPolicyExplicit
 				opts.FlushApplyConcurrency = 1
 			})

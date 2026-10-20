@@ -329,6 +329,188 @@ def acquire_quiet_window(output: Path, *, clock=None, sleep=None, observer_facto
     raise RuntimeError("host quiet preflight acquisition exhausted; no timed samples started")
 
 
+def failed_timing_trace_inputs(root: Path, output: Path) -> tuple[dict, dict]:
+    """Refuse diagnostics unless the original, complete gate failed only timing."""
+    load = lambda name: json.loads((output / name).read_text())
+    bindings, summary, rows = load("bindings.json"), load("summary.json"), load("samples.json")
+    if (bindings["samples"] != SAMPLES or bindings["iterations"] != ITERATIONS
+            or bindings["cpu"] != 0 or bindings["gomaxprocs"] != 1
+            or bindings["max_paired_regression_percent"] != TIME_LIMIT_PERCENT):
+        raise ValueError("diagnostic requires original eight-pair/128x/CPU0/GOMAXPROCS1 contract")
+    for arm in ("baseline", "candidate"):
+        if not re.fullmatch(r"[0-9a-f]{40}", bindings[arm]) or summary[arm] != bindings[arm]:
+            raise ValueError("diagnostic source identities do not match the failed gate")
+    authorities = {arm: record["authority"] for arm, record in bindings["source_authorities"].items()}
+    before, after = load("runtime-inputs-before.json"), load("runtime-inputs-after.json")
+    expected = qualify_runtime(evaluate(rows, authorities), before, after, quiet=summary["quiet"])
+    if any(summary.get(key) != value for key, value in expected.items()):
+        raise ValueError("retained summary differs from the complete original evidence")
+    if (summary["accepted"] or summary["timing_disposition"] != "FAIL" or not summary["quiet"]
+            or summary["gates"] != dict.fromkeys(summary["gates"], True) | {"timing": False}
+            or summary["source_authorities"] != bindings["source_authorities"]):
+        raise ValueError("diagnostic requires a quiet timing-only FAIL with activation/bytes/objects PASS")
+    if (digest(root / HARNESS) != bindings["harness_sha256"]
+            or digest(Path(__file__)) != bindings["runner_sha256"]
+            or source_authority(root) != bindings["source_authorities"]["candidate"]):
+        raise ValueError("current fixture, runner or candidate authority drift")
+    observation = load("measured-processes.json")
+    if observation["busy"] or observation["cpu_threshold_percent"] != QUIET_LIMIT_PERCENT:
+        raise ValueError("original measured process observation is not quiet")
+    commands = load("commands.json")
+    argv = ["taskset", "-c", "0", "<measured-binary>", "-test.run=^$",
+            "-test.bench=^" + BENCHMARK + "$", "-test.benchtime=128x", "-test.count=1",
+            "-test.benchmem", "-test.timeout=90s"]
+    for arm in ("baseline", "candidate"):
+        binary, fixture = bindings["binaries"][arm], bindings["arm_harnesses"][arm]
+        if (binary["path"] != arm + "-primary.test" or binary["source_sha"] != bindings[arm]
+                or fixture["path"] != arm + "-durable_replacement_cost_test.go"
+                or digest(output / binary["path"]) != binary["sha256"]
+                or (output / binary["path"]).stat().st_size != binary["bytes"]
+                or digest(output / fixture["path"]) != fixture["sha256"]
+                or before[arm]["executable"] != {"sha256": binary["sha256"], "bytes": binary["bytes"]}
+                or before[arm]["inputs"]["harness_sha256"] != fixture["sha256"]
+                or before[arm]["inputs"]["runner_sha256"] != bindings["runner_sha256"]
+                or before[arm]["inputs"]["cwd"] != str(root)
+                or before[arm]["inputs"]["argv"] != argv):
+            raise ValueError("retained binary/fixture/runtime input mismatch")
+        label = arm + "-public-lifecycle"
+        matches = [record for record in commands if record["label"] == label]
+        text = (output / (label + ".txt")).read_text()
+        parse_authority(text, authorities[arm])
+        if (len(matches) != 1 or matches[0]["exit"] != 0
+                or matches[0]["output_sha256"] != digest(output / (label + ".txt"))
+                or f"--- PASS: {LIFECYCLE} " not in text or "--- SKIP:" in text
+                or f"MVCC_COST_LIFECYCLE authority={authorities[arm]}" not in text
+                or (authorities[arm] == "DATA" and text.count("MVCC_COST_DATA_SLOT ") != 6)):
+            raise ValueError("original full public lifecycle evidence is incomplete")
+    for row in rows:
+        label = f"pair-{row['pair']+1}-{row['revision']}"
+        matches = [record for record in commands if record["label"] == label]
+        text = (output / (label + ".txt")).read_text()
+        if (len(matches) != 1 or matches[0]["exit"] != 0
+                or matches[0]["output_sha256"] != digest(output / (label + ".txt"))
+                or parse_sample(text) != row["metrics"]
+                or parse_authority(text, authorities[row["revision"]]) != row["authority"]):
+            raise ValueError("original sample receipts are incomplete or changed")
+    return bindings, before
+
+
+def trace_failed_timing(root: Path, output: Path) -> int:
+    """One post-failure syscall diagnostic, never a gate retry or acceptance input."""
+    directory = output / "sync-trace"
+    directory.mkdir()  # Never overwrite or repeat an existing diagnostic attempt.
+    deadline = time.monotonic() + 180
+    environment = dict(os.environ, GOWORK="off", GOMAXPROCS="1", TMPDIR=str(output / "tmp"))
+    result = {"status": "DIAGNOSTIC_NOT_APPLICABLE", "arms": {"baseline": "UNRUN", "candidate": "UNRUN"},
+              "scope": "whole process including calibration/setup/Close; not exact timed-loop attribution",
+              "acceptance": "original strict result unchanged; diagnostic timing is not acceptance",
+              "commands": [], "environment_sha256": hashlib.sha256(
+                  json.dumps(environment, sort_keys=True).encode()).hexdigest()}
+
+    def save():
+        (directory / "result.json").write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
+
+    def command(label, argv, timeout=90, check=True):
+        started = time.monotonic()
+        path = directory / (label + ".txt")
+        with path.open("wb") as stream:
+            if time.monotonic() >= deadline:
+                raise RuntimeError("post-failure diagnostic 180s budget exhausted; no next process launched")
+            process = subprocess.Popen([str(x) for x in argv], cwd=root, env=environment,
+                stdout=stream, stderr=subprocess.STDOUT, start_new_session=True)
+            try:
+                status = process.wait(timeout=max(0.001, min(timeout, deadline - time.monotonic())))
+            except BaseException:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                process.wait()
+                raise
+            finally:
+                result["commands"].append({"label": label, "argv": [str(x) for x in argv],
+                    "exit": process.returncode, "child_reaped": True, "elapsed_s": time.monotonic() - started,
+                    "output_sha256": digest(path)})
+                save()
+        if check and status:
+            raise RuntimeError(f"{label} failed with exit {status}")
+        return path.read_text()
+
+    try:
+        bindings, original_runtime = failed_timing_trace_inputs(root, output)
+        result.update(status="DIAGNOSTIC_STOP", baseline=bindings["baseline"], candidate=bindings["candidate"],
+                      bindings_sha256=digest(output / "bindings.json"),
+                      original_evidence_sha256={name: digest(output / name) for name in (
+                          "summary.json", "samples.json", "commands.json", "measured-processes.json",
+                          "runtime-inputs-before.json", "runtime-inputs-after.json")},
+                      original_environment_sha256={arm: original_runtime[arm]["inputs"]["environment_sha256"]
+                                                   for arm in ("baseline", "candidate")},
+                      runtime_knobs={key: environment.get(key) for key in (
+                          "GOGC", "GOMEMLIMIT", "GOMAXPROCS", "GOWORK", "TMPDIR", "LD_LIBRARY_PATH", "LD_PRELOAD", "LD_AUDIT")},
+                      environment_scope="new CI step; full environment hash may differ from strict step; ELF/loader must match")
+        if command("source-head", ["git", "rev-parse", "HEAD"]).strip() != bindings["candidate"]:
+            raise ValueError("candidate checkout differs from measured source")
+        command("source-clean", ["bash", root / "scripts/mvcc_candidate_checkout_guard.sh", root, bindings["candidate"]])
+        # Installation is AFTER all strict samples and cannot influence their result.
+        strace = shutil.which("strace")
+        if not strace:
+            try:
+                command("strace-setup", ["timeout", "--kill-after=5s", "120s", "bash", "-c",
+                    "sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends strace || "
+                    "{ sudo -n apt-get update && sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends strace; }"],
+                    timeout=125, check=False)
+            except (OSError, subprocess.SubprocessError) as error:
+                result.update(status="DIAGNOSTIC_UNAVAILABLE", error=f"bounded strace setup failed: {error}")
+                return 0
+            strace = shutil.which("strace")
+        if not strace:
+            result.update(status="DIAGNOSTIC_UNAVAILABLE", error="strace unavailable after bounded setup")
+            return 0
+        result["strace"] = file_identity(Path(strace))
+        command("strace-version", [strace, "--version"], timeout=5)
+        for arm in ("baseline", "candidate"):
+            binary = output / bindings["binaries"][arm]["path"]
+            current = runtime_binding(binary, command, arm + "-runtime-before", environment)
+            if current != {key: value for key, value in original_runtime[arm].items() if key != "inputs"}:
+                raise ValueError("ELF/loader runtime drift since the strict samples")
+            trace = directory / (arm + ".strace")
+            result["arms"][arm] = "RUNNING"
+            save()
+            text = command(arm + "-traced-128", ["taskset", "-c", "0", strace, "-f", "-ttt", "-T", "-yy", "-s", "96",
+                "-e", "trace=fsync,fdatasync,pwritev2,pwrite64,msync,openat,close,ftruncate", "-o", trace,
+                binary] + original_runtime[arm]["inputs"]["argv"][4:])
+            metrics = parse_sample(text)
+            parse_authority(text, bindings["source_authorities"][arm]["authority"])
+            if runtime_binding(binary, command, arm + "-runtime-after", environment) != current:
+                raise ValueError("ELF/loader runtime drift during trace")
+            counts = {}
+            for line in trace.read_text().splitlines():
+                match = re.search(r"(?:\b(fsync|fdatasync|pwritev2|pwrite64|msync|openat|close|ftruncate)\(|<\.\.\. (\w+) resumed>).* = (-?\d+).* <([\d.]+)>$", line)
+                if match:
+                    key = match[1] or match[2]
+                    record = counts.setdefault(key, {"completed": 0, "seconds": 0.0, "errors": 0})
+                    record["completed"] += 1
+                    record["seconds"] += float(match[4])
+                    record["errors"] += int(match[3]) < 0
+            result["arms"][arm] = {"status": "COMPLETE", "metrics": metrics, "trace_sha256": digest(trace),
+                "syscalls": counts, "unfinished_lines": trace.read_text().count("<unfinished ...>"),
+                "fd_paths": "retained verbatim by strace -yy; split calls may lack a path on their resumed line"}
+        command("source-clean-after", ["bash", root / "scripts/mvcc_candidate_checkout_guard.sh", root, bindings["candidate"]])
+        if any(digest(output / name) != sha for name, sha in result["original_evidence_sha256"].items()):
+            raise ValueError("original strict evidence changed during diagnostics")
+        result["status"] = "DIAGNOSTIC_COMPLETE"
+        return 0
+    except (OSError, ValueError, KeyError, RuntimeError, subprocess.SubprocessError) as error:
+        result["error"] = str(error)
+        for arm, state in result["arms"].items():
+            if state == "RUNNING":
+                trace = directory / (arm + ".strace")
+                result["arms"][arm] = {"status": "FAILED", "trace_sha256": digest(trace) if trace.exists() else None}
+        return 1 if result["status"] == "DIAGNOSTIC_STOP" else 0
+    finally:
+        save()
+
+
 def run_gate(root: Path, output: Path, baseline: str, candidate: str) -> int:
     if not re.fullmatch(r"[0-9a-f]{40}", baseline) or not re.fullmatch(r"[0-9a-f]{40}", candidate):
         raise ValueError("full immutable source SHAs are required")

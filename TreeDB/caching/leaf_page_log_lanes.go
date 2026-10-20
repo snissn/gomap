@@ -31,7 +31,7 @@ var _ backenddb.LeafPageLogCompactStorageHandoff = (*cachingLeafPageLogGroup)(ni
 var _ backenddb.LeafPageLogSequenceReserver = (*cachingLeafPageLogGroup)(nil)
 
 func (g *cachingLeafPageLogGroup) laneForWorkerIndex(workerIndex int) (*lane, bool) {
-	if g == nil || g.db == nil || !g.db.indexOuterLeavesInValueLog {
+	if g == nil || g.db == nil || !g.db.leafPageLogEnabled() {
 		return nil, false
 	}
 	l := g.db.leafLogAppendLaneForWorkerIndex(workerIndex)
@@ -149,7 +149,7 @@ func (g *cachingLeafPageLogGroup) PreparedLeafPageAppends() bool { return true }
 func (g *cachingLeafPageLogGroup) PreparedLeafPageBatchAppends() bool { return true }
 
 func (g *cachingLeafPageLogGroup) CreatedLeafPageLogSegmentsSnapshot() ([]backenddb.LeafPageLogSegment, error) {
-	if g == nil || g.db == nil || !g.db.indexOuterLeavesInValueLog {
+	if g == nil || g.db == nil || !g.db.leafPageLogEnabled() {
 		return nil, nil
 	}
 	segments := make([]backenddb.LeafPageLogSegment, 0, 4)
@@ -178,7 +178,7 @@ func (g *cachingLeafPageLogGroup) CreatedLeafPageLogSegmentsSnapshot() ([]backen
 }
 
 func (g *cachingLeafPageLogGroup) CurrentLeafPageLogSegmentsSnapshot() ([]backenddb.LeafPageLogSegment, error) {
-	if g == nil || g.db == nil || !g.db.indexOuterLeavesInValueLog {
+	if g == nil || g.db == nil || !g.db.leafPageLogEnabled() {
 		return nil, nil
 	}
 	segments := make([]backenddb.LeafPageLogSegment, 0, 4)
@@ -245,7 +245,7 @@ func (g *cachingLeafPageLogGroup) ProtectedLeafGenerationRootIDPairSnapshot() ([
 }
 
 func (g *cachingLeafPageLogGroup) MarkLeafPageLogSegmentsRegistered(segments []backenddb.LeafPageLogSegment) {
-	if g == nil || g.db == nil || len(segments) == 0 || !g.db.indexOuterLeavesInValueLog {
+	if g == nil || g.db == nil || len(segments) == 0 || !g.db.leafPageLogEnabled() {
 		return
 	}
 	for _, l := range g.db.leafLogAppendLanesSnapshot() {
@@ -283,7 +283,7 @@ func (g *cachingLeafPageLogGroup) Close() error {
 }
 
 func (g *cachingLeafPageLogGroup) forEachLane(fn func(*cachingLeafPageLog) error) error {
-	if g == nil || g.db == nil || fn == nil || !g.db.indexOuterLeavesInValueLog {
+	if g == nil || g.db == nil || fn == nil || !g.db.leafPageLogEnabled() {
 		return nil
 	}
 	var errs []error

@@ -12,7 +12,7 @@
     "M0 observation is manual diagnostic-only on a separately fixed product; no forecast starts it or replaces failed M0 acceptance.",
     "Bounded maintenance comparison is a manually granted diagnostic on fixed baseline/candidate products; no forecast starts it or establishes cost, M0 or native acceptance."
   ],
-  "discovery_source_sha256": "75966ad8d501a09c85da91811ea24729e2ea8589272455d1f1af8c63d8d7612b",
+  "discovery_source_sha256": "84f9aaac494c08db39dd9b9a3145a00ef126830221446fcc5fde0b387cf4b789",
   "dynamic_consumers": [
     {
       "behavior": "AST/WalkDir discovery and go test subprocess producer witnesses; all TreeDB test/race members retained",
@@ -2363,7 +2363,7 @@
         },
         "workflow_dispatch": null
       },
-      "git_blob": "5aa0a40bfaf5cb0708071524313edab3fdf02251",
+      "git_blob": "f6f094b0e5636656996e1c1eb38cde8cd28397f2",
       "jobs": {
         "mvcc-raw-path-gate": {
           "checkout": [
@@ -2430,7 +2430,7 @@
             },
             {
               "command_sha256": "0bdc21ac966cc2f9fc3b6e1b89ef224e60886e3738ff00f891941f92823278cf",
-              "entrypoint": ".github/workflows/treedb-tests.yml:182",
+              "entrypoint": ".github/workflows/treedb-tests.yml:183",
               "env": {
                 "BASE_SHA": "${{ steps.scope.outputs.base_sha }}",
                 "HEAD_SHA": "${{ steps.scope.outputs.head_sha }}",
@@ -2441,8 +2441,18 @@
               "name": "Compare public durable replacement cost"
             },
             {
+              "command_sha256": "e57eea2516ddbd1235695c0d840aa8dc97d969bb24457745a84e92cb91e01300",
+              "entrypoint": ".github/workflows/treedb-tests.yml:195",
+              "env": {
+                "PYTHONDONTWRITEBYTECODE": "1"
+              },
+              "if": "${{ !cancelled() && steps.public_cost.outcome == 'failure' }}",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Trace a complete public replacement timing failure"
+            },
+            {
               "command_sha256": "db474e8e1b4321b9e8fe001c9185f2312b63975b2f0a3d8a71852e4155c9e1f6",
-              "entrypoint": ".github/workflows/treedb-tests.yml:190",
+              "entrypoint": ".github/workflows/treedb-tests.yml:208",
               "if": "always() && steps.paths.outputs.run == 'true'",
               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
               "name": "Add benchmark summary"
@@ -2463,7 +2473,7 @@
           "commands": [
             {
               "command_sha256": "e4555e237d48e5423850ceb677994ca50fa2ec16e178b290035db7aba17aaa2b",
-              "entrypoint": ".github/workflows/treedb-tests.yml:846",
+              "entrypoint": ".github/workflows/treedb-tests.yml:864",
               "env": {
                 "PYTHONDONTWRITEBYTECODE": "1"
               },
@@ -2472,19 +2482,19 @@
             },
             {
               "command_sha256": "6eaad4139a493d7bf43ab4bd35c9d00282f730a10997d1bccf49d0a97f9d90c0",
-              "entrypoint": ".github/workflows/treedb-tests.yml:849",
+              "entrypoint": ".github/workflows/treedb-tests.yml:867",
               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
               "name": "ValueLog dict compressibility bench"
             },
             {
               "command_sha256": "942302e855fb3d4155b52dde350d890ce819563b134fe7fa29256bfd6ecf46a5",
-              "entrypoint": ".github/workflows/treedb-tests.yml:855",
+              "entrypoint": ".github/workflows/treedb-tests.yml:873",
               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
               "name": "Perf baseline checker (gate)"
             },
             {
-              "command_sha256": "4be9c5ace88c3806a1a4f3c23163f6c7c6d6e2ac7bde8fdbf057de060bef4d58",
-              "entrypoint": ".github/workflows/treedb-tests.yml:862",
+              "command_sha256": "d0f8758cd616ac042ae0e2bb0381a139cf545789a98c77a1bf1a328ffdcd0887",
+              "entrypoint": ".github/workflows/treedb-tests.yml:880",
               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
               "name": "Incompressible auto-vs-off gate"
             }
@@ -2502,14 +2512,14 @@
           "commands": [
             {
               "command_sha256": "bb77ab3e1acfbac4ac4e619b9476b1301bd3b59d345fc1b13323c961fd0af791",
-              "entrypoint": ".github/workflows/treedb-tests.yml:706",
+              "entrypoint": ".github/workflows/treedb-tests.yml:724",
               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
               "name": "Test Race",
               "working-directory": "TreeDB"
             },
             {
               "command_sha256": "308ebfc392637dfb982616681c455cac662de070c78e54b03ef8504f62a7eaa1",
-              "entrypoint": ".github/workflows/treedb-tests.yml:810",
+              "entrypoint": ".github/workflows/treedb-tests.yml:828",
               "if": "always()",
               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
               "name": "Summarize race timing",
@@ -2578,7 +2588,7 @@
           "commands": [
             {
               "command_sha256": "94cec6a27c199f6be25e2f67ae861299c3e51aebb121b041779a412b88e6a4b4",
-              "entrypoint": ".github/workflows/treedb-tests.yml:1171",
+              "entrypoint": ".github/workflows/treedb-tests.yml:1192",
               "env": {
                 "MVCC_RESULT": "${{ needs.mvcc-raw-path-gate.result }}",
                 "PERF_RESULT": "${{ needs.perf.result }}",
@@ -2604,37 +2614,37 @@
           "commands": [
             {
               "command_sha256": "d8e37e4db37f01eee33a78accc677a9dcbd5b04d9c14af7db221501d4bbf9f35",
-              "entrypoint": ".github/workflows/treedb-tests.yml:1039",
+              "entrypoint": ".github/workflows/treedb-tests.yml:1060",
               "invocation": "GOWORK=off go test ./.github/scripts/snapshot_iterator_bench",
               "name": "Test snapshot iterator benchmark parser"
             },
             {
               "command_sha256": "e729b689a28684cf4adc80555c9f84f8fd9b4e1d15f3fc5ad97d2aaad7aba0e2",
-              "entrypoint": ".github/workflows/treedb-tests.yml:1042",
+              "entrypoint": ".github/workflows/treedb-tests.yml:1063",
               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
               "name": "Capture exact-head runner metadata"
             },
             {
               "command_sha256": "67ead8deae8d9c80846d59790461183529103209012ca6e27a84c2643b32c0b3",
-              "entrypoint": ".github/workflows/treedb-tests.yml:1054",
+              "entrypoint": ".github/workflows/treedb-tests.yml:1075",
               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
               "name": "Build one exact-head snapshot iterator benchmark binary"
             },
             {
               "command_sha256": "f065dc4fb2daa8163f14cf2f340191d2a14c76bd7ffdb4e3b2394968471b27fc",
-              "entrypoint": ".github/workflows/treedb-tests.yml:1059",
+              "entrypoint": ".github/workflows/treedb-tests.yml:1080",
               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
               "name": "Collect CPU-pinned balanced same-binary snapshot iterator pairs"
             },
             {
               "command_sha256": "8faad3a561efcb191870169c8792b3d459979ad0aee5df2e0272a6ad5160b407",
-              "entrypoint": ".github/workflows/treedb-tests.yml:1068",
+              "entrypoint": ".github/workflows/treedb-tests.yml:1089",
               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
               "name": "Check snapshot iterator performance gate"
             },
             {
               "command_sha256": "07d55751ba6cf7e3709ec6586d057beda36481c55a5c39baddaa52d2f3629b10",
-              "entrypoint": ".github/workflows/treedb-tests.yml:1084",
+              "entrypoint": ".github/workflows/treedb-tests.yml:1105",
               "if": "always()",
               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
               "name": "Publish snapshot iterator summary"
@@ -2653,7 +2663,7 @@
           "commands": [
             {
               "command_sha256": "83ac39828b95694200ca74a153ef2a506b19b7df4935cb726ea1056b455c2114",
-              "entrypoint": ".github/workflows/treedb-tests.yml:411",
+              "entrypoint": ".github/workflows/treedb-tests.yml:429",
               "env": {
                 "GOMAXPROCS": 2,
                 "GOMEMLIMIT": "4GiB"
@@ -2664,7 +2674,7 @@
             },
             {
               "command_sha256": "99406da07371361a32a3fbe57ef401766c1703a468748b40d1acfde6cbba9f04",
-              "entrypoint": ".github/workflows/treedb-tests.yml:634",
+              "entrypoint": ".github/workflows/treedb-tests.yml:652",
               "if": "always()",
               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
               "name": "Summarize test timings",
@@ -2857,7 +2867,7 @@
           "commands": [
             {
               "command_sha256": "3142d426a361acee2e9a0098f3c8c8037cd45c52a43a4f6c93ec1c9bbc2ff0a1",
-              "entrypoint": ".github/workflows/treedb-tests.yml:246",
+              "entrypoint": ".github/workflows/treedb-tests.yml:264",
               "env": {
                 "PYTHONDONTWRITEBYTECODE": "1"
               },
@@ -2867,7 +2877,7 @@
             },
             {
               "command_sha256": "3d4b424f6fcd11f530525ddea9a46aeaffec7c883b6c04b6baf7df36bf47800b",
-              "entrypoint": ".github/workflows/treedb-tests.yml:257",
+              "entrypoint": ".github/workflows/treedb-tests.yml:275",
               "invocation": "go vet ./...",
               "name": "Vet",
               "working-directory": "TreeDB"
@@ -2895,7 +2905,7 @@
           "runs_on": "${{ matrix.os }}"
         }
       },
-      "sha256": "39555a0f30f2c9ced3da7463350c5f32e873adf786b00971463d8bfed30e80ee"
+      "sha256": "c6f1a1df40c26d8bbddb499bbd1da45b21d4178103dc8095a1d473980475c9d5"
     },
     "treedb-vacuum-m0-observation.yml": {
       "coverage": "existing execution only; triggers/path filters are unchanged",

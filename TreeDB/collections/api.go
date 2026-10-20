@@ -4448,7 +4448,7 @@ func (c *Collection) CreateIndex(def IndexDefinition) (*CollectionMeta, error) {
 		}
 		return c.nativeJSON.mutateIndexes(c.meta.Name, &def, nil, false)
 	}
-	if c.meta.nativeDocumentCoverageVersion != 0 {
+	if c.metadataForIngress().nativeDocumentCoverageVersion != 0 {
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
 	if c.db == nil {
@@ -4620,7 +4620,7 @@ func (c *Collection) CreateVectorIndex(def VectorIndexDefinition) (*CollectionMe
 	if c == nil {
 		return nil, errCollectionNil
 	}
-	if c.meta.nativeDocumentCoverageVersion != 0 {
+	if c.metadataForIngress().nativeDocumentCoverageVersion != 0 {
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
 	if c.db == nil {
@@ -4723,7 +4723,7 @@ func (c *Collection) DropVectorIndex(name string) (*CollectionMeta, error) {
 	if c == nil {
 		return nil, errCollectionNil
 	}
-	if c.meta.nativeDocumentCoverageVersion != 0 {
+	if c.metadataForIngress().nativeDocumentCoverageVersion != 0 {
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
 	if c.db == nil {
@@ -4852,7 +4852,7 @@ func (c *Collection) dropIndexes(names map[string]struct{}, all bool) (*Collecti
 		}
 		return c.nativeJSON.mutateIndexes(c.meta.Name, nil, names, all)
 	}
-	if c.meta.nativeDocumentCoverageVersion != 0 {
+	if c.metadataForIngress().nativeDocumentCoverageVersion != 0 {
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
 	if c.db == nil {
@@ -15308,7 +15308,7 @@ func (c *Collection) updateBatchOwnedItemsWithCommandWALIntent(items []updateBat
 }
 
 func (c *Collection) ensureWriteDomainOpen() error {
-	if c != nil && c.nativeJSON == nil && c.meta.nativeDocumentCoverageVersion != 0 {
+	if c != nil && c.nativeJSON == nil && c.metadataForIngress().nativeDocumentCoverageVersion != 0 {
 		return backenddb.ErrNativeSemanticUnsupported
 	}
 	if c == nil || c.db == nil {

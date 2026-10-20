@@ -16,6 +16,9 @@ func TestDictDB_DoesNotInheritOuterLeavesInValueLog(t *testing.T) {
 	dir := t.TempDir()
 
 	opts := OptionsFor(ProfileFast, dir)
+	// Keep the main DB's external-leaf policy active so side-store isolation is
+	// exercised even though fresh NoWAL databases now default to pager leaves.
+	opts.IndexOuterLeavesInValueLog = true
 	EnableValueLogDictCompression(&opts)
 	opts.ValueLog.Compression = ValueLogCompressionDict
 

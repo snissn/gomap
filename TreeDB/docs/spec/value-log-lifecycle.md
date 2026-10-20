@@ -13,6 +13,13 @@ TreeDB value-log pointers are durable storage references.
 A pointer remains valid while its segment is reachable from any live index state.
 Segments must not be deleted based only on age.
 
+Cached leaf-page append services are independent of USER index-leaf placement.
+When the backend accepts both cached value and leaf-page appenders, cached open
+provides the reserved leaf-log lanes even with pager-backed USER leaves: ordered
+collection roots may still require value-log leaves. Those lanes retain the same
+sequence, registration, rotation, GC protection and close/reopen custody as when
+USER leaves use the value log; enabling the service does not change USER placement.
+
 Retirement is idempotent while the original manager still tracks a zombie
 segment. Such a segment is excluded from current discovery but remains linked
 and readable while an older snapshot holds its Set. It must not be reported as

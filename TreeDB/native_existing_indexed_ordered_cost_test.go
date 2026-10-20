@@ -85,6 +85,8 @@ func runNativeIndexedOrderedRows(t *testing.T, n int, order string) {
 	rawKey, rawValue := []byte("ordered-cost/raw"), []byte("committed")
 	dir := t.TempDir()
 	opts := indexedSliceOptions(ProfileNoWALFast, dir)
+	// Preserve this opt-in diagnostic's original external-leaf workload.
+	opts.IndexOuterLeavesInValueLog = true
 	if opts.IndexPrimaryDirectory || opts.CommandWAL || !opts.IndexOuterLeavesInValueLog {
 		t.Fatalf("unexpected DATA/NoWAL physical options: %+v", opts)
 	}
