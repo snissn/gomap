@@ -45,7 +45,7 @@ func TestNoWALBatchWriteSyncSealsBeforeReturn(t *testing.T) {
 			}
 			var mu sync.Mutex
 			var snapshot *powerlossoracle.Model
-			restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+			restore := sync.OnceFunc(durabilitycut.Install(func(event durabilitycut.Event) error {
 				mu.Lock()
 				defer mu.Unlock()
 				if err := model.Observe(opts.Dir, event); err != nil {
@@ -55,7 +55,7 @@ func TestNoWALBatchWriteSyncSealsBeforeReturn(t *testing.T) {
 					snapshot = model.Clone()
 				}
 				return nil
-			})
+			}))
 			defer restore()
 			ordinary := database.NewBatchWithSize(1)
 			if err := ordinary.Set([]byte("a/ordinary"), []byte("pending")); err != nil {
