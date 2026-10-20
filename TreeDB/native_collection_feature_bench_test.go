@@ -28,6 +28,9 @@ func BenchmarkNativeCollectionFeatureBatchCheckpoint(b *testing.B) {
 			})
 		}
 	}
+	b.Run("template-v1/scalar", func(b *testing.B) {
+		benchmarkNativeCollectionFeatureBatchCheckpoint(b, collections.DocumentFormatTemplateV1, false)
+	})
 }
 
 func benchmarkNativeCollectionFeatureBatchCheckpoint(b *testing.B, format collections.DocumentFormat, multikey bool) {
@@ -37,9 +40,13 @@ func benchmarkNativeCollectionFeatureBatchCheckpoint(b *testing.B, format collec
 		ids[i] = []byte(fmt.Sprintf("u%03d", i))
 	}
 	var documents [2][][]byte
+	var expectedJSON [2][][]byte
 	var replacements [2][]collections.UpdateBatchItem
 	for phase := range documents {
 		documents[phase] = make([][]byte, batchSize)
+		if format == collections.DocumentFormatTemplateV1 {
+			expectedJSON[phase] = make([][]byte, batchSize)
+		}
 		replacements[phase] = make([]collections.UpdateBatchItem, batchSize)
 		for i := range ids {
 			tag := fmt.Sprintf("phase%d", phase)
@@ -66,6 +73,18 @@ func benchmarkNativeCollectionFeatureBatchCheckpoint(b *testing.B, format collec
 			if err != nil {
 				b.Fatal(err)
 			}
+			if format == collections.DocumentFormatTemplateV1 {
+				// Independent expected JSON comes from the caller fixture, never
+				// from decoding the stored document or its template catalog.
+				expectedJSON[phase][i], err = json.Marshal(map[string]any{"tags": input.Tags, "aliases": input.Aliases})
+				if err != nil {
+					b.Fatal(err)
+				}
+				encoded, err = collections.EncodeTemplateV1DocumentJSON(encoded)
+				if err != nil || !bytes.HasPrefix(encoded, []byte("TD1I")) {
+					b.Fatalf("template input envelope=%x: %v", encoded, err)
+				}
+			}
 			documents[phase][i] = encoded
 			replacements[phase][i] = collections.UpdateBatchItem{
 				DocumentID: ids[i], Update: func([]byte) ([]byte, bool, error) { return encoded, true, nil },
@@ -80,8 +99,14 @@ func benchmarkNativeCollectionFeatureBatchCheckpoint(b *testing.B, format collec
 		b.Fatal(err)
 	}
 	var manager *collections.CollectionManager
+	var materializer *collections.StoredDocumentJSONMaterializer
 	b.Cleanup(func() {
 		b.StopTimer()
+		if materializer != nil {
+			if err := materializer.Close(); err != nil {
+				b.Error(err)
+			}
+		}
 		if manager != nil {
 			if err := manager.Close(); err != nil {
 				b.Error(err)
@@ -179,10 +204,27 @@ func benchmarkNativeCollectionFeatureBatchCheckpoint(b *testing.B, format collec
 			}
 		}
 	}
+	if format == collections.DocumentFormatTemplateV1 {
+		materializer, err = collection.NewStoredDocumentJSONMaterializer()
+		if err != nil {
+			b.Fatal(err)
+		}
+		if materializer.DocumentFormat() != format {
+			b.Fatalf("materializer format=%s want=%s", materializer.DocumentFormat(), format)
+		}
+	}
 	for i, id := range ids {
 		got, err := collection.Get(id)
-		if err != nil || !bytes.Equal(got, documents[phase][i]) {
-			b.Fatalf("final document %q=%x want=%x: %v", id, got, documents[phase][i], err)
+		want := documents[phase][i]
+		if materializer != nil && err == nil {
+			if !bytes.HasPrefix(got, []byte("TD1D")) {
+				b.Fatalf("final stored template %q=%x", id, got)
+			}
+			got, err = materializer.StoredDocumentJSON(got)
+			want = expectedJSON[phase][i]
+		}
+		if err != nil || !bytes.Equal(got, want) {
+			b.Fatalf("final document %q=%x want=%x: %v", id, got, want, err)
 		}
 		alias := fmt.Sprintf("phase%d-u%03d", phase, i)
 		checkOwners("aliases", alias, ids[i:i+1])
@@ -196,6 +238,13 @@ func benchmarkNativeCollectionFeatureBatchCheckpoint(b *testing.B, format collec
 	checkOwners("tags", fmt.Sprintf("phase%d", 1-phase), nil)
 	if multikey {
 		checkOwners("tags", "shared", ids)
+	}
+	if materializer != nil {
+		err := materializer.Close()
+		materializer = nil
+		if err != nil {
+			b.Fatal(err)
+		}
 	}
 	b.Logf("profile=%s memtable=%s native=%t format=%s multikey=%t batch=%d logical=%d->%d nextLSN=%d",
 		stats["treedb.profile.resolved"], stats["treedb.cache.memtable_mode"], handle.HasNativeSemanticBridge(), format, multikey, batchSize, before, after, handle.CommandWALNextLSN())
