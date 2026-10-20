@@ -81,6 +81,21 @@ func TestCOWPhysicalLeafCacheActivationAndCapturedCuts(t *testing.T) {
 				if got, err := db.Get([]byte("a000")); err != nil || !bytes.Equal(got, want) {
 					t.Fatalf("public first physical read: %q %v", got, err)
 				}
+				if compressed {
+					db.cow.physicalMu.Lock()
+					decodedSnappy := false
+					if reader := db.cow.physicalReader; reader != nil {
+						for _, codec := range reader.codecs {
+							if codec != nil && codec.id == 0 && codec.codec == valuelog.BlockCodecSnappy {
+								decodedSnappy = true
+							}
+						}
+					}
+					db.cow.physicalMu.Unlock()
+					if !decodedSnappy {
+						t.Fatal("compressed fixture did not perform original full Snappy decode")
+					}
+				}
 				check := func(s *Snapshot, expected []byte) {
 					t.Helper()
 					got, err := s.Get([]byte("a000"))
