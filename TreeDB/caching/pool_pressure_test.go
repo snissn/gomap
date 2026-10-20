@@ -19,6 +19,35 @@ func resetPoolPressureStateForTest() {
 	poolPressureLastLeaseTrimUnixNano.Store(0)
 }
 
+func TestPoolPressureRealMemStatsReaderAllocation(t *testing.T) {
+	poolPressureTestMu.Lock()
+	defer poolPressureTestMu.Unlock()
+	savedReadMemStats := poolPressureReadMemStats
+	defer func() { poolPressureReadMemStats = savedReadMemStats }()
+
+	// Exercise the real production default first. This same control detects the
+	// old indirect reader's allocation without replacing it with a fake reader.
+	sampledAt := time.Unix(1, 0)
+	var snap poolPressureSnapshot
+	sample := func() { snap = samplePoolPressureSnapshot(sampledAt) }
+	realAllocs := testing.AllocsPerRun(16, sample)
+	if snap.heapSysBytes == 0 || snap.totalSysBytes == 0 {
+		t.Fatal("real reader did not return runtime memory statistics")
+	}
+	if realAllocs != 0 {
+		t.Fatalf("real reader allocs/sample=%g want 0", realAllocs)
+	}
+
+	// Retain the old mechanism as a positive control using that same real reader.
+	// This is only the snapshot read: publication boxing and RSS remain separate.
+	poolPressureReadMemStats = runtime.ReadMemStats
+	hookedAllocs := testing.AllocsPerRun(16, sample)
+	if hookedAllocs < 1 {
+		t.Fatalf("indirect real-reader control allocs/sample=%g want >=1", hookedAllocs)
+	}
+	t.Logf("real reader allocs/sample=%g; indirect real-reader control=%g", realAllocs, hookedAllocs)
+}
+
 func TestEntrySliceBudgetScalesWithMemoryPressure(t *testing.T) {
 	poolPressureTestMu.Lock()
 	defer poolPressureTestMu.Unlock()

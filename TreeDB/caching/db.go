@@ -242,7 +242,10 @@ var appendOnlyMemNewAllocWithQueueTotal atomic.Uint64
 var appendOnlyMemNewAllocQueueBytesSum atomic.Uint64
 
 var poolPressureNow = time.Now
-var poolPressureReadMemStats = runtime.ReadMemStats
+
+// poolPressureReadMemStats is an optional test override. Keep the production
+// reader direct so its MemStats storage does not escape through a function value.
+var poolPressureReadMemStats func(*runtime.MemStats)
 var poolPressureMemoryLimit = func() int64 {
 	return debug.SetMemoryLimit(-1)
 }
@@ -687,9 +690,25 @@ func poolPressureUsedBytes(ms runtime.MemStats, heapIdleUnreleased uint64) uint6
 	return used
 }
 
-func samplePoolPressureSnapshot(sampledAt time.Time) poolPressureSnapshot {
+func readPoolPressureMemStats() runtime.MemStats {
+	if hook := poolPressureReadMemStats; hook != nil {
+		return readPoolPressureMemStatsHook(hook)
+	}
 	var ms runtime.MemStats
-	poolPressureReadMemStats(&ms)
+	runtime.ReadMemStats(&ms)
+	return ms
+}
+
+func readPoolPressureMemStatsHook(hook func(*runtime.MemStats)) runtime.MemStats {
+	// A test hook may retain this address. Its storage must remain separate from
+	// the production reader's local even when the helpers are inlined.
+	var ms runtime.MemStats
+	hook(&ms)
+	return ms
+}
+
+func samplePoolPressureSnapshot(sampledAt time.Time) poolPressureSnapshot {
+	ms := readPoolPressureMemStats()
 	heapIdleUnreleased := uint64(0)
 	if ms.HeapIdle > ms.HeapReleased {
 		heapIdleUnreleased = ms.HeapIdle - ms.HeapReleased
