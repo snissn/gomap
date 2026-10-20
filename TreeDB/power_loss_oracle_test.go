@@ -162,6 +162,9 @@ type observedPowerLossCommandFrame struct {
 
 func powerLossOptions(dir string) treedb.Options {
 	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, dir)
+	// Frozen crash witnesses include external USER leaf dependencies. Pin their
+	// original placement independently of fresh-database profile defaults.
+	opts.IndexOuterLeavesInValueLog = true
 	opts.ChunkSize = 64 * 1024
 	opts.DisableSideStores = true
 	opts.DisableBackgroundPrune = true

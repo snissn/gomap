@@ -48,6 +48,9 @@ func certificationOptions(t *testing.T) (string, treedb.Options) {
 	t.Helper()
 	profileName, profile := certificationProfileFromEnv(t)
 	opts := treedb.OptionsFor(profile, t.TempDir())
+	// Frozen crash witnesses include external USER leaf dependencies. Pin their
+	// original placement independently of fresh-database profile defaults.
+	opts.IndexOuterLeavesInValueLog = true
 	opts.DisableSideStores = true
 	opts.DisableBackgroundPrune = true
 	opts.BackgroundCheckpointInterval = -1

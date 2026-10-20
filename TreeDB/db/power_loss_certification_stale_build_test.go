@@ -35,6 +35,9 @@ const (
 func TestPowerLossCertificationStaleBuildBaseDATAPublicReopen(t *testing.T) {
 	dir := t.TempDir()
 	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, dir)
+	// This frozen witness includes an external USER leaf dependency. Keep its
+	// placement explicit rather than inheriting the fresh-database default.
+	opts.IndexOuterLeavesInValueLog = true
 	opts.DisableSideStores = true
 	opts.DisableBackgroundPrune = true
 	opts.BackgroundCheckpointInterval = -1
