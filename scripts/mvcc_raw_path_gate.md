@@ -61,3 +61,49 @@ threshold change; the earlier #5152 bytes-only evidence remains preserved.
 
 Run `python3 -B .github/scripts/test_mvcc_primary_cost_gate.py` for the no-Go
 measurement, attribution, actual ELF resolution and drift/refusal controls.
+
+## Bounded PRIMARY quiet-window acquisition (#5185)
+
+After the unchanged candidate public lifecycle and before any timed PRIMARY
+sample, the runner acquires the **first** qualifying five-second process-CPU
+window within a fixed 60-second setup allowance. Each window uses the existing
+`ProcessObservation`: a process at **2% CPU or above** is busy, with the original
+0.25-second sampling, ancestry/descendant handling and exited-process accounting.
+There are no new process or kernel-thread exclusions. A failed window starts
+another observation only when at least five seconds remain; there is no separate
+cooldown or unconditional delay. An incomplete window, or one completing after
+the deadline, cannot qualify. Synchronous process inspection/artifact writes can
+return after the deadline; a final post-write clock check prevents this from
+authorizing timing or another window. A late write records `exhausted` and the
+quiet window's rejected authorization in one final receipt write; that failure
+receipt does not restart acquisition or recursively check/rewrite itself.
+Exhaustion is a setup refusal with zero timed samples, not a measured gate result.
+
+`preflight-acquisition.json` records the cap, unchanged predicate, ordered window
+results, observation filenames and explicit `acquired`/`exhausted` disposition.
+Every busy window remains retained: the first raw observation is
+`preflight-processes.jsonl`, subsequent files are numbered, and the acquisition
+receipt contains every complete classifier result. `preflight.json` preserves
+the original final-window schema; the acquisition receipt distinguishes a
+qualifying final window from exhaustion. Already-quiet setup starts timing after
+its first complete window. No public lifecycle or timed sample is repeated to
+obtain acceptance. Once timing begins, all eight alternating pairs of 128 durable
+replacements, measured process observations, +5% paired-time/no-byte-or-object-growth
+rules, source/runtime bindings and drift checks remain unchanged.
+
+This is an explicit **setup acquisition protocol change**, not a measured
+performance improvement or a scientific inference. It requires source/protocol
+review and ordinary harness qualification before retained collection under the
+updated runner; expensive retained collection uses a reviewed, landed harness
+and frozen product/runner/harness/runtime identities. Old single-window refusals,
+failed acquisition windows and measured failures remain source-bound evidence;
+none is retroactively accepted, and a passing refresh does not identify or repair
+the cause of prior external CPU activity. In particular, the #5168 head
+`9a44fd73cbffb9e89c62f7e12bd7539eec66c2a8` job `118762421078`
+refusal retains zero PRIMARY samples and no paired measurement verdict.
+
+The existing no-Go Python command above also exercises busy-then-quiet,
+already-quiet, deadline/exhaustion and original measured-acceptance controls.
+The exhaustion integration controls stub setup commands and prove the measured
+observer and benchmark are never launched, including when either final artifact
+write crosses the cap after a quiet observation; they run no Go/build/benchmark.
