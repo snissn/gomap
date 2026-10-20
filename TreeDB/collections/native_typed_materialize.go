@@ -332,7 +332,19 @@ func nativeTypedBuildWorkspaceCapacity(meta CollectionMeta) (uint64, error) {
 	return workspace, nil
 }
 
-func nativeTypedOperationWorkspaceCapacity(meta CollectionMeta, compaction bool) (uint64, error) {
+// The graph-only branch returns before the row/TCIM/semantic encoders. Its
+// constructor and replacement-state decoder bounds live in d.buildCapacity.
+func nativeTypedGraphOnly(d *nativeTypedDelta) bool {
+	return d != nil && d.previous == nil && d.data != nil && d.data.graph != nil && len(d.rows)+len(d.retained)+len(d.deleted) == 0
+}
+
+func nativeTypedOperationWorkspaceCapacity(meta CollectionMeta, compaction, graphOnly bool) (uint64, error) {
+	if graphOnly {
+		if compaction {
+			return 0, backenddb.ErrNativeSemanticUnsupported
+		}
+		return 0, nil
+	}
 	workspace, err := nativeTypedBuildWorkspaceCapacity(meta)
 	if err != nil || !compaction {
 		return workspace, err
@@ -410,6 +422,9 @@ func nativeTypedMaterializationCapacity(meta CollectionMeta, deltas []*nativeTyp
 		if err = nativeTypedCheckedAdd(&source, n); err != nil {
 			return 0, err
 		}
+	}
+	if len(deltas) == 1 && nativeTypedGraphOnly(deltas[0]) {
+		return nativeTypedCollectionRetainedCapacity(meta, source)
 	}
 	return nativeTypedCollectionBuildCapacity(meta, source)
 }
@@ -503,7 +518,7 @@ func prepareNativeTypedMaterializationCore(input nativeTypedMaterializeInput) (w
 		if e != nil {
 			return nil, e
 		}
-		workspace, e := nativeTypedOperationWorkspaceCapacity(input.meta, true)
+		workspace, e := nativeTypedOperationWorkspaceCapacity(input.meta, true, false)
 		if e != nil {
 			return nil, e
 		}
@@ -517,7 +532,7 @@ func prepareNativeTypedMaterializationCore(input nativeTypedMaterializeInput) (w
 	if input.allocator != nil {
 		owned = amount
 		if input.sharedWorkspace != 0 {
-			fixed, e := nativeTypedOperationWorkspaceCapacity(input.meta, input.compaction != nil)
+			fixed, e := nativeTypedOperationWorkspaceCapacity(input.meta, input.compaction != nil, len(input.deltas) == 1 && nativeTypedGraphOnly(input.deltas[0]))
 			if e != nil || input.sharedWorkspace != fixed || owned < fixed {
 				return nil, backenddb.ErrNativeSemanticUnsupported
 			}

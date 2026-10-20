@@ -28,7 +28,7 @@ func nativeTypedBuildCapacityForCompaction(e *nativeEngineVersion, basis *backen
 			err = backenddb.ErrNativeSemanticUnsupported
 			return false
 		}
-		localWorkspace, workspaceErr := nativeTypedOperationWorkspaceCapacity(*c.schema.meta, id == target)
+		localWorkspace, workspaceErr := nativeTypedOperationWorkspaceCapacity(*c.schema.meta, id == target, nativeTypedGraphOnly(primary.typed))
 		if workspaceErr != nil {
 			err = workspaceErr
 			return false
@@ -109,6 +109,7 @@ func nativeTypedBuildCapacityForCompaction(e *nativeEngineVersion, basis *backen
 }
 
 type nativeTypedBuildWork struct {
+	workspace  uint64 // Captured operation peak; work.input is cleared after materialization.
 	compaction bool
 	collection uint64
 	work       *nativeTypedMaterialization
@@ -163,13 +164,13 @@ func (b *nativeEngineBuild) prepareTypedForCompaction(e *nativeEngineVersion, co
 		if id == target {
 			compaction, capturedCollection = operation, c
 		}
-		sharedWorkspace, err := nativeTypedOperationWorkspaceCapacity(*c.schema.meta, compaction != nil)
+		sharedWorkspace, err := nativeTypedOperationWorkspaceCapacity(*c.schema.meta, compaction != nil, nativeTypedGraphOnly(primary.typed))
 		if err != nil {
 			b.failure = err
 			return false
 		}
 		work, err := prepareNativeTypedMaterialization(nativeTypedMaterializeInput{compaction: compaction, capturedCollection: capturedCollection, meta: *c.schema.meta, baseManifestRoot: root, deltas: deltas, snapshot: basis, capture: capture, allocator: &b.allocation, group: group, sharedWorkspace: sharedWorkspace})
-		b.typed = append(b.typed, nativeTypedBuildWork{compaction: compaction != nil, collection: c.incarnation, work: work})
+		b.typed = append(b.typed, nativeTypedBuildWork{workspace: sharedWorkspace, compaction: compaction != nil, collection: c.incarnation, work: work})
 		b.failure = err
 		return err == nil
 	})

@@ -161,6 +161,14 @@ func nativeVectorGraphCapacity(meta CollectionMeta, snap *backenddb.Snapshot, ro
 	if e = it.Error(); e != nil {
 		return 0, e
 	}
+	// The fresh graph suffix can contain a compressed TVIS image up to the
+	// original decoded limit even when no prior graph exists. Admit both
+	// independent requirement-decoder slots BEFORE assignment, in this same
+	// source-derived constructor promise. Captured old-state slots stay charged
+	// separately; no typed-row codec is reachable from this graph-only branch.
+	if e = nativeTypedCheckedAdd(&total, 2*nativeSourceRequirementStateCapacityV2(columnVectorIndexStateMaxDecodedBytes)); e != nil {
+		return 0, e
+	}
 	// IDs are not bounded by vector dimensions or encoded compressed asset size.
 	token, ok := snap.StateToken()
 	if !ok {

@@ -318,12 +318,7 @@ func (b *nativeEngineBuild) materializeDomains(group nativeOrderedRootBuilder, n
 		// following checkpoint needs the SAME sequential workspace again.
 		var workspace uint64
 		for _, input := range b.typed {
-			local, err := nativeTypedOperationWorkspaceCapacity(input.work.meta, input.compaction)
-			if err != nil {
-				b.failure = err
-				return err
-			}
-			workspace = max(workspace, local)
+			workspace = max(workspace, input.workspace)
 		}
 		if workspace > b.allocation.floor {
 			b.failure = memtable.ErrCOWCapacity

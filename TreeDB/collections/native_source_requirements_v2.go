@@ -19,6 +19,17 @@ import (
 // Walk and Lookup can nest, so each owns a complete independent slot. These
 // slots are included in the original materialization receipt before assets.
 func nativeSourceRequirementCapacityV2() uint64 {
+	return nativeSourceRequirementCapacityForStateV2(columnVectorIndexStateMaxDecodedBytes)
+}
+
+func nativeSourceRequirementStateCapacityV2(decoded uint64) uint64 {
+	if decoded == 0 {
+		return 0
+	}
+	return memtable.COWAllocationCharge(columnVectorIndexStateMaxInlineRecordBytes) + 3*memtable.COWAllocationCharge(decoded) + memtable.COWAllocationCharge((decoded/120)*uint64(unsafe.Sizeof(columnVectorIndexStateAssetSnapshot{}))) + memtable.COWAllocationCharge((decoded/120)*128)
+}
+
+func nativeSourceRequirementCapacityForStateV2(decoded uint64) uint64 {
 	leaf := memtable.COWAllocationCharge(2<<20) + memtable.COWAllocationCharge(valuelog.MaxFrameK*page.PageSize)
 	sizes, _ := valuelog.COWBlockDecoderRetentionSizes(valuelog.BlockCodecLZ4, valuelog.MaxFrameK*page.PageSize, 2<<20)
 	leaf += memtable.COWAllocationCharge(sizes.OwnerWrapper)
@@ -33,7 +44,7 @@ func nativeSourceRequirementCapacityV2() uint64 {
 	// asset headers; names/IDs and validation keys copy bytes from that image.
 	// Duplicate-map buckets and growth have a separate 128-byte allowance per
 	// decoded asset; concatenated validation keys are in the image copies.
-	state := memtable.COWAllocationCharge(columnVectorIndexStateMaxInlineRecordBytes) + 3*memtable.COWAllocationCharge(columnVectorIndexStateMaxDecodedBytes) + memtable.COWAllocationCharge(uint64(columnVectorIndexStateMaxDecodedBytes/120)*uint64(unsafe.Sizeof(columnVectorIndexStateAssetSnapshot{}))) + memtable.COWAllocationCharge(uint64(columnVectorIndexStateMaxDecodedBytes/120)*128)
+	state := nativeSourceRequirementStateCapacityV2(decoded)
 	return memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeSourceRequirementStreamV2{}))) + 2*(leaf+record+state) + 16*(scopes+headers)
 }
 
@@ -276,9 +287,46 @@ func (s *nativeSourceRequirementStreamV2) Lookup(query rootpublication.StableLog
 	return
 }
 
+// Source appends do not create TVIS records. Only the largest captured state
+// can be decoded in each independent Walk/Lookup slot. Inspect its original
+// codec envelope before admission, without decoding it or copying its assets.
+// A graph producer separately admits BOTH maximum replacement-state slots.
+func nativeSourceRequirementBasisCapacityV2(snapshot *backenddb.Snapshot, root uint64) (uint64, error) {
+	if root == 0 {
+		return nativeSourceRequirementCapacityForStateV2(0), nil
+	}
+	if snapshot == nil {
+		return 0, backenddb.ErrNativeSemanticUnsupported
+	}
+	it, err := snapshot.IteratorAtRoot(root, columnVectorIndexStateRecordPrefixBytes, prefixEnd(columnVectorIndexStateRecordPrefixBytes))
+	if err != nil {
+		return 0, err
+	}
+	defer it.Close()
+	var decoded uint64
+	for it.Valid() {
+		if !it.IsDeleted() {
+			raw, _, flags := it.UnsafeEntry()
+			if flags&node.FlagPointer != 0 || len(raw) > columnVectorIndexStateMaxInlineRecordBytes || len(it.UnsafeKey()) > page.PageSize {
+				return 0, backenddb.ErrNativeSemanticUnsupported
+			}
+			n, _, err := columnVectorIndexStateRecordDecodedLength(raw)
+			if err != nil {
+				return 0, err
+			}
+			decoded = max(decoded, uint64(n))
+		}
+		it.Next()
+	}
+	if err := it.Error(); err != nil {
+		return 0, err
+	}
+	return nativeSourceRequirementCapacityForStateV2(decoded), nil
+}
+
 func nativeTypedBasisCapacity(meta CollectionMeta, snapshot *backenddb.Snapshot, root uint64) (uint64, error) {
 	if nativeSourceImportMetaV2(meta) {
-		return nativeSourceRequirementCapacityV2(), nil
+		return nativeSourceRequirementBasisCapacityV2(snapshot, root)
 	}
 	return nativeTypedManifestCapacity(snapshot, root)
 }
