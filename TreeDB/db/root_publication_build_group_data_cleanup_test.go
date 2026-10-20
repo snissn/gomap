@@ -48,7 +48,7 @@ func TestRootPublicationDATAGroupFailedResourceReleaseRetainsOriginal(t *testing
 	original, operations, baseline := newRootCaptureCloseRefusal(t, database, path)
 	group.nativeResources = original
 	owner := database.valueLogIdentityPins.MetadataOwner()
-	pending := owner.Bytes()
+	file, charge := operations.file, operations.charge
 	prior := errors.New("earlier build cleanup failure")
 	database.retainOriginalCleanupError(prior)
 	err = group.Close()
@@ -61,7 +61,7 @@ func TestRootPublicationDATAGroupFailedResourceReleaseRetainsOriginal(t *testing
 	if group.nativeResources != original || !group.registered || group.idx == nil || group.tracker == nil || len(group.tracker.Pages()) != len(pages) {
 		t.Fatal("failed original closure, registry pin or DATA tracker was released")
 	}
-	if owner.Bytes() < pending || owner.Bytes() <= baseline || operations.file == nil {
+	if owner.Bytes() <= baseline || operations.file != file || charge == 0 || operations.charge != charge {
 		t.Fatal("failed original physical payload or retained charge was refunded")
 	}
 	if !errors.Is(database.backgroundError(), err) || !errors.Is(database.backgroundError(), prior) {
