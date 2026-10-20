@@ -4385,7 +4385,7 @@ reserved child budget, observe the original distinct PRIMARY/registry owners,
 and separately prove real maintenance publication can progress while producer
 headroom is exhausted. These controls do not activate unconverted collections.
 
-### Explicit no-WAL cached batch bypass (#5189)
+### Explicit WAL-off cached batch sync (#5189)
 
 - `TestNoWALBatchWriteSyncSealsBeforeReturn`: both USER leaf placements, ordinary
   relaxed batch control, completed meta-sync witness, sealed visible root, forced
