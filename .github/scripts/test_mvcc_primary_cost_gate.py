@@ -87,39 +87,97 @@ class PrimaryCostGateTests(unittest.TestCase):
             binding["inputs"] = {"harness_sha256": "harness", "runner_sha256": "runner",
                                  "environment_sha256": "environment", "cwd": str(root), "argv": ["fixed benchmark"]}
             before = {"baseline": binding, "candidate": copy.deepcopy(binding)}
-            result = gate.qualify_bytes(raw, before, copy.deepcopy(before), quiet=True)
+            result = gate.qualify_runtime(raw, before, copy.deepcopy(before), quiet=True)
             self.assertFalse(result["gates"]["bytes"])
             self.assertFalse(result["measurement_pass"])
             self.assertTrue(result["accepted"])
             self.assertEqual(result["bytes_disposition"], "EQUIVALENT_NON_ATTRIBUTABLE")
             changed = copy.deepcopy(before)
             changed["candidate"]["executable"]["sha256"] = "different"
-            self.assertFalse(gate.qualify_bytes(raw, changed, copy.deepcopy(changed), quiet=True)["accepted"])
-            for metric in ("timing", "allocations", "candidate_primary_activation"):
+            self.assertFalse(gate.qualify_runtime(raw, changed, copy.deepcopy(changed), quiet=True)["accepted"])
+            for metric in ("allocations", "candidate_primary_activation"):
                 failing = copy.deepcopy(raw)
                 failing["gates"][metric] = False
-                self.assertFalse(gate.qualify_bytes(failing, before, before, quiet=True)["accepted"])
-            self.assertFalse(gate.qualify_bytes(raw, before, before, quiet=False)["accepted"])
+                self.assertFalse(gate.qualify_runtime(failing, before, before, quiet=True)["accepted"])
+            self.assertFalse(gate.qualify_runtime(raw, before, before, quiet=False)["accepted"])
             for field in ("harness_sha256", "runner_sha256", "environment_sha256", "cwd", "argv"):
                 mismatch = copy.deepcopy(before)
                 mismatch["candidate"]["inputs"][field] = "different"
-                self.assertFalse(gate.qualify_bytes(raw, mismatch, mismatch, quiet=True)["accepted"])
+                self.assertFalse(gate.qualify_runtime(raw, mismatch, mismatch, quiet=True)["accepted"])
             for missing in ({}, {"baseline": binding}, {"baseline": {}, "candidate": {}}):
                 with self.assertRaisesRegex(RuntimeError, "missing"):
-                    gate.qualify_bytes(raw, missing, missing, quiet=True)
+                    gate.qualify_runtime(raw, missing, missing, quiet=True)
             reordered = copy.deepcopy(before)
             reordered["baseline"]["libraries"].reverse()
             reordered["candidate"]["libraries"].reverse()
             with self.assertRaisesRegex(RuntimeError, "drift"):
-                gate.qualify_bytes(raw, before, reordered, quiet=True)
+                gate.qualify_runtime(raw, before, reordered, quiet=True)
             libc.write_bytes(b"changed libc")
             after = {"baseline": gate.runtime_binding(binary, command, "after", {}),
                      "candidate": gate.runtime_binding(binary, command, "after", {})}
             with self.assertRaisesRegex(RuntimeError, "drift"):
-                gate.qualify_bytes(raw, before, after, quiet=True)
+                gate.qualify_runtime(raw, before, after, quiet=True)
             libc.unlink()
             with self.assertRaises((OSError, ValueError)):
                 gate.runtime_binding(binary, command, "missing", {})
+
+    def test_retained_ab2_timing_failure_requires_complete_runtime_equivalence(self):
+        # Job118411039651: retain the exact eight pairs, not a tolerance around 5%.
+        pairs = [(3090995, 5053100), (5029492, 4709566), (4698419, 5128241),
+                 (4629356, 4917921), (5050966, 4805452), (4839474, 5046748),
+                 (4666022, 5040831), (4941016, 4856478)]
+        rows = self.rows()
+        for row in rows:
+            row["metrics"] = {"ns/op": pairs[row["pair"]][row["revision"] == "candidate"],
+                              "B/op": 222247, "allocs/op": 378, "generation_advances/op": 0}
+        raw = gate.evaluate(rows)
+        retained = copy.deepcopy(raw)
+        self.assertAlmostEqual(raw["median_paired_delta_percent"], 5.258179271710761)
+        self.assertFalse(raw["gates"]["timing"])
+        self.assertFalse(raw["measurement_pass"])
+        self.assertTrue(all(value for name, value in raw["gates"].items() if name != "timing"))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binary, loader, libc = [root / name for name in ("binary", "loader", "libc.so.6")]
+            for path in (binary, loader, libc):
+                path.write_bytes(path.name.encode())
+            def command(label, argv):
+                return (f"[Requesting program interpreter: {loader}]" if argv[0] == "readelf"
+                        else f"libc.so.6 => {libc} (0x456)\n{loader} (0x789)\n")
+            binding = gate.runtime_binding(binary, command, "before", {})
+            binding["inputs"] = {"harness_sha256": "harness", "runner_sha256": "runner",
+                                 "environment_sha256": "environment", "cwd": str(root), "argv": ["fixed benchmark"]}
+            before = {"baseline": binding, "candidate": copy.deepcopy(binding)}
+            result = gate.qualify_runtime(raw, before, copy.deepcopy(before), quiet=True)
+            self.assertTrue(result["accepted"])
+            self.assertEqual(result["timing_disposition"], "EQUIVALENT_NON_ATTRIBUTABLE")
+            self.assertEqual(result["bytes_disposition"], "PASS")
+            self.assertEqual(raw, retained)
+            self.assertFalse(result["gates"]["timing"])
+            self.assertFalse(result["measurement_pass"])
+            paths = [("executable", "sha256"), ("interpreter", "sha256"), ("libraries", 0, "sha256")]
+            paths += [("inputs", field) for field in binding["inputs"]]
+            for path in paths:
+                changed = copy.deepcopy(before)
+                target = changed["candidate"]
+                for key in path[:-1]:
+                    target = target[key]
+                target[path[-1]] = "different"
+                with self.subTest(changed=path):
+                    refused = gate.qualify_runtime(raw, changed, copy.deepcopy(changed), quiet=True)
+                    self.assertFalse(refused["accepted"])
+                    self.assertFalse(refused["acceptance_gates"]["timing"])
+                    self.assertEqual(refused["timing_disposition"], "FAIL")
+                with self.assertRaisesRegex(RuntimeError, "drift"):
+                    gate.qualify_runtime(raw, before, changed, quiet=True)
+            for metric in ("allocations", "candidate_primary_activation"):
+                failing = copy.deepcopy(raw)
+                failing["gates"][metric] = False
+                self.assertFalse(gate.qualify_runtime(failing, before, before, quiet=True)["accepted"])
+            self.assertFalse(gate.qualify_runtime(raw, before, before, quiet=False)["accepted"])
+            for invalid in ({}, {"baseline": binding}, {"baseline": {}, "candidate": {}}):
+                with self.assertRaisesRegex(RuntimeError, "missing"):
+                    gate.qualify_runtime(raw, invalid, invalid, quiet=True)
 
     def test_runtime_resolution_refuses_unresolved_or_unsupported_inputs(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -148,7 +206,7 @@ class PrimaryCostGateTests(unittest.TestCase):
             before = {"baseline": binding, "candidate": copy.deepcopy(binding)}
             raw = gate.evaluate(self.rows())
             raw["gates"]["bytes"], raw["measurement_pass"] = False, False
-            result = gate.qualify_bytes(raw, before, copy.deepcopy(before), quiet=True)
+            result = gate.qualify_runtime(raw, before, copy.deepcopy(before), quiet=True)
             self.assertEqual(result["bytes_disposition"], "EQUIVALENT_NON_ATTRIBUTABLE")
             self.assertFalse(result["measurement_pass"])
             self.assertTrue(result["accepted"])

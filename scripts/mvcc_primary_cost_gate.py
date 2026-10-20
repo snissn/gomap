@@ -82,8 +82,8 @@ def runtime_binding(binary: Path, command, label: str, environment: dict) -> dic
             "libraries": list(libraries.values())}
 
 
-def qualify_bytes(result: dict, before: dict, after: dict, *, quiet: bool) -> dict:
-    """Keep raw measurements; only qualify bytes using independently bound inputs."""
+def qualify_runtime(result: dict, before: dict, after: dict, *, quiet: bool) -> dict:
+    """Keep raw measurements; qualify timing/bytes only for the same bound runtime."""
     if set(before) != {"baseline", "candidate"} or before != after:
         raise RuntimeError("measured runtime/input drift or missing bindings")
     for binding in before.values():
@@ -96,11 +96,14 @@ def qualify_bytes(result: dict, before: dict, after: dict, *, quiet: bool) -> di
                 or set(binding.get("inputs", {})) != {"harness_sha256", "runner_sha256", "environment_sha256", "cwd", "argv"}):
             raise RuntimeError("missing measured runtime/input bindings")
     equivalent = before["baseline"] == before["candidate"]
-    raw_bytes_pass = result["gates"]["bytes"]
-    acceptance = dict(result["gates"], bytes=raw_bytes_pass or equivalent)
-    return dict(result, quiet=quiet, runtime_input_equivalent=equivalent,
-                bytes_disposition=("PASS" if raw_bytes_pass else
-                                   "EQUIVALENT_NON_ATTRIBUTABLE" if equivalent else "FAIL"),
+    acceptance = dict(result["gates"])
+    dispositions = {}
+    for metric in ("timing", "bytes"):
+        raw_pass = result["gates"][metric]
+        acceptance[metric] = raw_pass or equivalent
+        dispositions[metric + "_disposition"] = ("PASS" if raw_pass else
+            "EQUIVALENT_NON_ATTRIBUTABLE" if equivalent else "FAIL")
+    return dict(result, quiet=quiet, runtime_input_equivalent=equivalent, **dispositions,
                 acceptance_gates=acceptance, accepted=all(acceptance.values()) and quiet)
 
 
@@ -355,7 +358,7 @@ def run_gate(root: Path, output: Path, baseline: str, candidate: str) -> int:
         if digest(root / HARNESS) != digest(harness):
             raise RuntimeError("benchmark input drift")
         inputs_after = bind_inputs("after")
-        result = qualify_bytes(evaluate(rows), inputs_before, inputs_after, quiet=not busy)
+        result = qualify_runtime(evaluate(rows), inputs_before, inputs_after, quiet=not busy)
         result.update(baseline=baseline, candidate=candidate)
         save("summary.json", result)
         (output / "summary.md").write_text(
@@ -365,7 +368,7 @@ def run_gate(root: Path, output: Path, baseline: str, candidate: str) -> int:
             "- Eight alternating AB/BA pairs; 128 durable public replacements per sample.\n"
             f"- Median paired time delta: {result['median_paired_delta_percent']:+.3f}% (limit +5%).\n"
             f"- Raw gates: `{json.dumps(result['gates'], sort_keys=True)}`; measurement pass: {result['measurement_pass']}; quiet: {not busy}.\n"
-            f"- Bytes acceptance: `{result['bytes_disposition']}`; bound runtime/input equivalent: {result['runtime_input_equivalent']}.\n"
+            f"- Timing acceptance: `{result['timing_disposition']}`; bytes acceptance: `{result['bytes_disposition']}`; bound runtime/input equivalent: {result['runtime_input_equivalent']}.\n"
             "- Scope: this public replacement workload; not final graph qualification.\n")
         return 0 if result["accepted"] else 1
     except Exception as error:
