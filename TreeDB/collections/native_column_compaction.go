@@ -173,9 +173,6 @@ func cloneNativeCompactionRefs(refs []ColumnAssetRef) []ColumnAssetRef {
 
 func (w *nativeTypedMaterialization) materializeCompaction(context columnPhysicalAssetBuildContext) error {
 	operation := w.input.compaction
-	if err := operation.ctx.Err(); err != nil {
-		return err
-	}
 	cfg := *w.meta.Options.ColumnStore
 	// An already insert-only physical prefix needs no rewrite. Pending commands
 	// have been materialized in this same group before this decision.
@@ -261,5 +258,5 @@ func (w *nativeTypedMaterialization) materializeCompaction(context columnPhysica
 	stats.AggregateMetadataPublished = columnStoreCompactionAggregateMetadataAssets(prepared.Assets)
 	stats.PublishedRefs = cloneNativeCompactionRefs(columnStoreCompactionPreparedRefs(prepared.Assets))
 	stats.SupersededRefs = cloneNativeCompactionRefs(superseded)
-	return operation.ctx.Err()
+	return nil
 }

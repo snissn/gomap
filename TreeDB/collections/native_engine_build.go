@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -104,6 +105,11 @@ func prepareNativeEngineBuildForCompaction(captured *nativeEngineVersion, basis 
 	if err = nativeTypedCheckedAdd(&floor, typedFloor); err != nil {
 		return nil, err
 	}
+	if operation != nil {
+		if err := operation.ctx.Err(); err != nil {
+			return nil, backenddb.NativeSemanticBuildRetryableRefusal{Cause: err}
+		}
+	}
 	lease, err := captured.maintenance.AdmitNativeBytes(bytes)
 	if err != nil {
 		err = fmt.Errorf("collections: native build reservation bytes=%d floor=%d typed_bytes=%d typed_floor=%d: %w", bytes, floor, typedBytes, typedFloor, err)
@@ -111,6 +117,14 @@ func prepareNativeEngineBuildForCompaction(captured *nativeEngineVersion, basis 
 			return nil, backenddb.NativeSemanticBuildRetryableRefusal{Cause: err}
 		}
 		return nil, err
+	}
+	if operation != nil {
+		if err := operation.ctx.Err(); err != nil {
+			// The reservation is still private: no original build or output
+			// exists, so cancellation can refund it without a partial failure.
+			lease.Close()
+			return nil, backenddb.NativeSemanticBuildRetryableRefusal{Cause: err}
+		}
 	}
 	refund := new(cowbtree.OwnedMapRefund)
 	refund.Init(lease)
@@ -121,6 +135,12 @@ func prepareNativeEngineBuildForCompaction(captured *nativeEngineVersion, basis 
 		refund:     refund,
 	}
 	captured.build = b
+	if operation != nil {
+		// From adoption onward the original ledger must finish or retain its
+		// genuine construction failure. Caller cancellation cannot abandon it,
+		// including during the scanner that precedes replacement assets.
+		operation.ctx = context.WithoutCancel(operation.ctx)
+	}
 	admit := func(n uint64) (cowbtree.OwnedMapLease, error) { return b.allocation.AdmitNativeBytes(n) }
 	if nativeCatalogHasPending(captured.catalog) {
 		source := captured.catalog

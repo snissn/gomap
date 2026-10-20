@@ -109,6 +109,13 @@ func (db *DB) checkpointCOWColumnCompaction(ctx context.Context, automatic bool,
 	if err != nil {
 		return err
 	}
+	if operation != nil {
+		// An adopted compaction has completed its original build and handoff.
+		// Finish this same checkpoint's durability and retirement boundary even
+		// if its caller canceled during construction. Ordinary checkpoints keep
+		// their existing cancellation semantics.
+		ctx = context.WithoutCancel(ctx)
+	}
 	if err = ctx.Err(); err != nil {
 		return err
 	}
