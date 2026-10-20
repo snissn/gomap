@@ -2,14 +2,17 @@ package treedb
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"reflect"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/collections"
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/workstats"
 )
 
@@ -473,5 +476,137 @@ func TestNativeExistingTemplateV1EncoderScope(t *testing.T) {
 				t.Fatalf("scope registry: %+v", stats)
 			}
 		}()
+	}
+}
+
+// External hash-keyed replacements and stored local-ID documents have different
+// byte representations even when their JSON agrees. The first existing row
+// therefore remains a canonical dictionary carrier through ordinary WAL replay.
+func TestNativeTemplateApplyUnchangedFirstCanonicalReplay(t *testing.T) {
+	t.Setenv("TREEDB_DISABLE_VLOG_GENERATION_LOOP", "1")
+	const selector = "TestNativeTemplateApplyUnchangedFirstCanonicalReplay"
+	const first = `{"city":"hnl"}`
+	const later = `{"city":"sea","revision":2}`
+	dir := os.Getenv("GOMAP_TEMPLATE_UNCHANGED_DIR")
+	child := dir != ""
+	if !child {
+		dir = t.TempDir()
+		cmd := exec.Command(os.Args[0], "-test.run=^"+selector+"$", "-test.v")
+		cmd.Env = append(os.Environ(), "GOMAP_TEMPLATE_UNCHANGED_DIR="+dir)
+		output, err := cmd.CombinedOutput()
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) || exit.ExitCode() != 97 || !bytes.Contains(output, []byte("UNCHANGED TEMPLATE APPENDED")) || bytes.Contains(output, []byte("DATA RACE")) {
+			t.Fatalf("unapplied child: %v\n%s", err, output)
+		}
+	}
+	before := workstats.Read().Replay
+	database, err := Open(indexedSliceOptions(ProfileCommandWALDurable, dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manager *collections.CollectionManager
+	t.Cleanup(func() {
+		if manager != nil {
+			_ = manager.Close()
+		}
+		if database != nil {
+			_ = database.Close()
+		}
+	})
+	handle, err := database.NativeSemanticBackend()
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager = collections.NewCollectionManager(handle)
+	if child {
+		if _, err = manager.CreateCollection(&collections.CollectionMeta{Name: "unchanged_first", Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatTemplateV1}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	col, err := manager.OpenCollection("unchanged_first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if child {
+		if _, err = col.InsertBatch([][]byte{[]byte("a"), []byte("b")}, [][]byte{nativeTemplateDoc(t, first), nativeTemplateDoc(t, first)}); err != nil {
+			t.Fatal(err)
+		}
+		if err = database.Checkpoint(); err != nil {
+			t.Fatal(err)
+		}
+		if applied := indexedCRUDAppliedLSN(t, handle); applied != 2 {
+			t.Fatalf("seed applied=%d", applied)
+		}
+		// Convert only the exported envelope's root distinction to external TD1D.
+		// Both definitions and root bytes come from the maintained public encoder.
+		external := func(source string) []byte {
+			document := nativeTemplateDoc(t, source)
+			count, n := binary.Uvarint(document[4:])
+			if !bytes.HasPrefix(document, []byte("TD1I")) || n <= 0 {
+				t.Fatal("missing encoder envelope")
+			}
+			offset := 4 + n
+			for range count {
+				offset += 32
+				size, n := binary.Uvarint(document[offset:])
+				if n <= 0 {
+					t.Fatal("missing definition size")
+				}
+				offset += n + int(size)
+			}
+			if !bytes.HasPrefix(document[offset:], []byte("TD1H")) {
+				t.Fatal("missing encoder hash root")
+			}
+			copy(document[offset:offset+4], "TD1D")
+			return document
+		}
+		unchanged, changed := external(first), external(later)
+		if stored, err := col.Get([]byte("a")); err != nil || !bytes.HasPrefix(stored, []byte("TD1D")) {
+			t.Fatalf("stored holder=%x %v", stored, err)
+		}
+		_, err = manager.ApplyNativeCommandWALMutation("unchanged_first", collections.DocumentFormatTemplateV1, commitlog.CommandKindCollectionUpdateBatchByID, [][]byte{[]byte("a"), []byte("b")}, [][]byte{unchanged, changed}, true, func(lsn uint64) error {
+			if lsn != 3 {
+				fmt.Fprintf(os.Stderr, "unexpected template LSN=%d\n", lsn)
+				os.Exit(98)
+			}
+			fmt.Fprintln(os.Stderr, "UNCHANGED TEMPLATE APPENDED")
+			os.Exit(97)
+			return nil
+		})
+		t.Fatalf("append observer returned: %v", err)
+	}
+	after := workstats.Read().Replay
+	if after.FramesApplied-before.FramesApplied != 1 || after.FrameErrors != before.FrameErrors {
+		t.Fatalf("one canonical frame replay: %+v -> %+v", before, after)
+	}
+	if applied := indexedCRUDAppliedLSN(t, handle); applied != 3 || handle.CommandWALNextLSN() != 4 {
+		t.Fatalf("applied=%d next=%d", applied, handle.CommandWALNextLSN())
+	}
+	materializer, err := col.NewStoredDocumentJSONMaterializer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, want := range []string{first, later} {
+		stored, err := col.Get([][]byte{[]byte("a"), []byte("b")}[i])
+		if err != nil {
+			t.Fatal(err)
+		}
+		checkNativeTemplateJSON(t, materializer, stored, want)
+	}
+	if err = materializer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	cache, registry := database.cached, handle.ValueLogIdentityPinRegistry()
+	if err = manager.Close(); err != nil {
+		t.Fatal(err)
+	}
+	manager = nil
+	if err = database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	database = nil
+	requirePublicCOWFinalZero(t, cache)
+	if stats := registry.Stats(); stats.ActivePins != 0 || stats.ActiveIdentities != 0 {
+		t.Fatalf("registry=%+v", stats)
 	}
 }

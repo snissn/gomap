@@ -40,6 +40,11 @@ func (c *Collection) findNativeCompoundIndexRange(name string, opts CompoundInde
 	// Account the domain name before constructing it; metadata itself remains
 	// borrowed from the exact captured schema under this read scope.
 	charge := memtable.COWAllocationCharge(page.PageSize+1) + memtable.COWAllocationCharge(page.PageSize) + memtable.COWAllocationCharge(uint64(len(name))+6)
+	dedupe := shouldDedupeIndexDocumentIDs(index, r.meta.Options)
+	if dedupe {
+		// Same original map control and per-entry growth policy as scalar reads.
+		charge += memtable.COWAllocationCharge(256)
+	}
 	scalar := index
 	scalar.Components = nil
 	addBound := func(value any) error {
@@ -143,6 +148,14 @@ func (c *Collection) findNativeCompoundIndexRange(name string, opts CompoundInde
 			}
 			// Own the source key before another seek can reuse physical scratch.
 			// Also admit the maintained logical-prefix copy and escaped-ID decoder.
+			if dedupe && opts.StableDocumentIDTies {
+				// The maintained stable scanner owns its seen map. Admit its conservative
+				// bucket/growth and string allowance before it sees this source key.
+				// The key bounds the decoded ID length, including escaped IDs.
+				if err = admit(768 + uint64(len(entry.Key))); err != nil {
+					return nil, false, false, err
+				}
+			}
 			if err = admit(3 * uint64(len(entry.Key))); err != nil {
 				return nil, false, false, err
 			}
@@ -181,8 +194,12 @@ func (c *Collection) findNativeCompoundIndexRange(name string, opts CompoundInde
 				return original(left, right)
 			}
 		}
-		truncated, err = scanCollectionIndexIDsStable(next, index.ValueType, opts.Limit, scanMergedCollectionIndexIDOptions{StableDocumentIDTies: true, DocumentIDLess: less, LogicalIndexKey: BSONIndexKeyStableSortPrefixV2, MaxStableTieBytes: opts.MaxRetainedIDBytes, admitTemporary: admit}, emit)
+		truncated, err = scanCollectionIndexIDsStable(next, index.ValueType, opts.Limit, scanMergedCollectionIndexIDOptions{StableDocumentIDTies: true, DedupeDocumentID: dedupe, DocumentIDLess: less, LogicalIndexKey: BSONIndexKeyStableSortPrefixV2, MaxStableTieBytes: opts.MaxRetainedIDBytes, admitTemporary: admit}, emit)
 	} else {
+		var seen map[string]struct{}
+		if dedupe {
+			seen = make(map[string]struct{})
+		}
 		for {
 			key, ok, capped, nextErr := next()
 			if nextErr != nil {
@@ -196,7 +213,7 @@ func (c *Collection) findNativeCompoundIndexRange(name string, opts CompoundInde
 			if !ok {
 				break
 			}
-			if len(ids) >= opts.Limit {
+			if !dedupe && len(ids) >= opts.Limit {
 				truncated = true
 				break
 			}
@@ -204,6 +221,23 @@ func (c *Collection) findNativeCompoundIndexRange(name string, opts CompoundInde
 			if decodeErr != nil {
 				err = decodeErr
 				break
+			}
+			if dedupe {
+				if _, duplicate := seen[string(id)]; duplicate {
+					continue
+				}
+			}
+			// Only a distinct lookahead ID can certify truncation. It needs no map
+			// entry and must not consume retained-ID capacity.
+			if dedupe && len(ids) >= opts.Limit {
+				truncated = true
+				break
+			}
+			if dedupe {
+				if err = admit(768 + uint64(len(id))); err != nil {
+					break
+				}
+				seen[string(id)] = struct{}{}
 			}
 			if err = admit(uint64(len(id))); err != nil {
 				break

@@ -403,3 +403,109 @@ func checkNativeBSONCompoundFinal(t *testing.T, database *DB, collection *collec
 		t.Fatalf("aggregate raw=%q: %v", got, err)
 	}
 }
+
+// A scalar BSON multikey index still uses the compound range API. Each ID must
+// count once even when its matching values span several logical tie groups.
+func TestNativeBSONMultikeyCompoundRangeUniqueIDs(t *testing.T) {
+	t.Setenv("TREEDB_DISABLE_VLOG_GENERATION_LOOP", "1")
+	opts := indexedSliceOptions(ProfileCommandWALDurable, t.TempDir())
+	database, err := Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manager *collections.CollectionManager
+	t.Cleanup(func() {
+		if manager != nil {
+			_ = manager.Close()
+		}
+		if database != nil {
+			_ = database.Close()
+		}
+	})
+	handle, err := database.NativeSemanticBackend()
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager = collections.NewCollectionManager(handle)
+	_, err = manager.CreateCollection(&collections.CollectionMeta{Name: "multikey_ranges", Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}, Indexes: []collections.IndexDefinition{{Name: "tags", Field: "tags", ValueType: collections.IndexValueBSONOrderedV2, MultiKey: true}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	col, err := manager.OpenCollection("multikey_ranges")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := [][]byte{[]byte("a"), []byte("b"), []byte("c")}
+	docs := make([][]byte, len(ids))
+	for i, tags := range []bson.A{{int32(1), int32(2), int32(4)}, {int32(1), int32(3), int32(5)}, {int32(2), int32(6)}} {
+		docs[i] = nativeBSONDocument(t, bson.D{{Key: "_id", Value: string(ids[i])}, {Key: "tags", Value: tags}})
+	}
+	if _, err = col.InsertBatch(ids, docs); err != nil {
+		t.Fatal(err)
+	}
+	check := func() {
+		t.Helper()
+		for _, stable := range []bool{false, true} {
+			for _, desc := range []bool{false, true} {
+				want := []string{"a", "b", "c"}
+				if desc {
+					want = []string{"c", "b", "a"}
+				}
+				for _, limit := range []int{2, 3, 10} {
+					query := collections.CompoundIndexRangeOptions{Limit: limit, Desc: desc, StableDocumentIDTies: stable}
+					checkNativeBSONCompoundRange(t, col, "tags", query, limit < 3, want[:min(limit, 3)]...)
+				}
+				query := collections.CompoundIndexRangeOptions{Limit: 10, Desc: desc, StableDocumentIDTies: stable, MaxRetainedIDBytes: 1}
+				got, truncated, err := col.FindByCompoundIndexRange("tags", query)
+				if err != nil || !truncated || len(got) != 0 {
+					t.Fatalf("retained cap stable=%v desc=%v: ids=%q truncated=%v err=%v", stable, desc, got, truncated, err)
+				}
+			}
+		}
+	}
+	check() // Genuine pending secondary roots.
+	if err = database.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	check() // Exact physical roots.
+	cache, registry := database.cached, handle.ValueLogIdentityPinRegistry()
+	if err = manager.Close(); err != nil {
+		t.Fatal(err)
+	}
+	manager = nil
+	if err = database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	database = nil
+	requirePublicCOWFinalZero(t, cache)
+	if stats := registry.Stats(); stats.ActivePins != 0 || stats.ActiveIdentities != 0 {
+		t.Fatalf("registry=%+v", stats)
+	}
+	database, err = Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle, err = database.NativeSemanticBackend()
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager = collections.NewCollectionManager(handle)
+	col, err = manager.OpenCollection("multikey_ranges")
+	if err != nil {
+		t.Fatal(err)
+	}
+	check()
+	cache, registry = database.cached, handle.ValueLogIdentityPinRegistry()
+	if err = manager.Close(); err != nil {
+		t.Fatal(err)
+	}
+	manager = nil
+	if err = database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	database = nil
+	requirePublicCOWFinalZero(t, cache)
+	if stats := registry.Stats(); stats.ActivePins != 0 || stats.ActiveIdentities != 0 {
+		t.Fatalf("reopened registry=%+v", stats)
+	}
+}

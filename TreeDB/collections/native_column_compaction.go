@@ -32,6 +32,9 @@ func (c *Collection) nativeColumnStoreCompact(ctx context.Context, options Colum
 	if c.manager.isClosing() {
 		return ColumnStoreCompactStats{}, backenddb.ErrClosed
 	}
+	if !nativeTypedMeta(c.meta) {
+		return ColumnStoreCompactStats{}, backenddb.ErrNativeSemanticUnsupported
+	}
 	operation := &nativeColumnCompaction{collection: c, ctx: ctx, options: options}
 	err := c.nativeJSON.db.CompactNativeColumnStore(ctx, operation)
 	if err != nil {

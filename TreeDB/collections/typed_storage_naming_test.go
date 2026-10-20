@@ -331,6 +331,16 @@ type typedStorageLegacyNameAllowlistEntry struct {
 }
 
 var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
+	// Native typed maintenance uses the retained public compaction/configuration
+	// names; its bridge, cancellation and public fixtures retain API compatibility.
+	{path: "TreeDB/native_prepared_insert_two_column_lifecycle_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 5},
+	{path: "TreeDB/native_column_compaction_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 12, occurrences: 15},
+	{path: "TreeDB/native_column_compaction_refusal_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 3},
+	{path: "TreeDB/db/native_semantic_state.go", classification: typedStorageLegacyCompatibility, matchingLines: 10, occurrences: 13},
+	{path: "TreeDB/collections/native_column_compaction_cancel_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 6, occurrences: 9},
+	{path: "TreeDB/collections/native_column_compaction.go", classification: typedStorageLegacyCompatibility, matchingLines: 17, occurrences: 20},
+	{path: "TreeDB/caching/cow_flush.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 4},
+	{path: "TreeDB/caching/cow_checkpoint.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 3},
 	// Native typed construction, reads and replay consume the retained public
 	// schema API. Dependency and recovery fixtures use that same configuration.
 	// Multi-column accounting and reconstruction iterate that schema and reuse
@@ -358,7 +368,7 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	// their values share the maintained typed encoder, not another row owner.
 	{path: "TreeDB/collections/native_typed_index.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 3},
 	{path: "TreeDB/collections/native_typed_read.go", classification: typedStorageLegacyCompatibility, matchingLines: 5, occurrences: 5},
-	{path: "TreeDB/collections/native_typed_state.go", classification: typedStorageLegacyCompatibility, matchingLines: 5, occurrences: 7},
+	{path: "TreeDB/collections/native_typed_state.go", classification: typedStorageLegacyCompatibility, matchingLines: 6, occurrences: 8},
 	{path: "TreeDB/collections/native_typed_txn.go", classification: typedStorageLegacyCompatibility, matchingLines: 12, occurrences: 13},
 	{path: "TreeDB/collections/public_dependency_directory_cost_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 2},
 	{path: "TreeDB/native_existing_column_pending_replay_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 7, occurrences: 11},
@@ -643,7 +653,7 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/collections/column_vector_graph_brq_quantized_asset_test.go", classification: typedStorageLegacyDerived, matchingLines: 1, occurrences: 1},
 	{path: "TreeDB/collections/column_vector_graph_quantized_bench_test.go", classification: typedStorageLegacyDerived, matchingLines: 3, occurrences: 6},
 	{path: "TreeDB/collections/column_store.go", classification: typedStorageLegacyCompatibility, matchingLines: 141, occurrences: 246},
-	{path: "TreeDB/collections/column_store_compaction.go", classification: typedStorageLegacyCompatibility, matchingLines: 39, occurrences: 46},
+	{path: "TreeDB/collections/column_store_compaction.go", classification: typedStorageLegacyCompatibility, matchingLines: 40, occurrences: 47},
 	{path: "TreeDB/collections/column_store_compaction_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 78, occurrences: 90},
 	{path: "TreeDB/collections/column_store_compatibility_api_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 7, occurrences: 9},
 	{path: "TreeDB/collections/column_store_physical_accounting.go", classification: typedStorageLegacyCompatibility, matchingLines: 228, occurrences: 260},

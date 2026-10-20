@@ -1447,8 +1447,8 @@ Coverage:
   record; ordered reverse seek bypasses the remaining retained tail. These
   counters measure neither all surviving history nor filesystem reclamation.
 - `TestManagedHistoryPruneSkipsRetainedTail` holds eligible work fixed at 32 keys,
-  floor12 and 352 deletes/11 batches while depth grows from16 to64. It requires
-  416 inspected,64 retained,32 skipped records in both cases through the actual
+  floor 12 and 352 deletes/11 batches while depth grows from 16 to 64. It requires
+  416 inspected, 64 retained, 32 skipped records in both cases through the actual
   public native COW/backend route. Persisted pointers, binary/prefix/empty keys,
   out-of-order arrival, all reopened survivors and a retained tombstone, old-cut
   reads through checkpoint, shutdown custody and original-owner release remain
