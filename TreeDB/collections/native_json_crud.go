@@ -121,6 +121,55 @@ func (c *Collection) nativeDeleteBatch(ids [][]byte) (count int, resultErr error
 	return count, nil
 }
 
+// Conditional single deletes use the same opening row and point dependency as
+// the existing batch reducer. The callback gets an admitted private copy; its
+// decision never becomes a canonical callback or runs during logical reprepare.
+func (c *Collection) nativeDeleteDocumentIf(id []byte, predicate func([]byte) (bool, error)) (deleted bool, resultErr error) {
+	if c.manager.isClosing() {
+		return false, backenddb.ErrClosed
+	}
+	tx, err := c.nativeJSON.Begin(c.name)
+	if err != nil {
+		return false, err
+	}
+	defer func() { resultErr = errors.Join(resultErr, tx.Close()) }()
+	accepted, err := func() (bool, error) {
+		tx.mu.Lock()
+		defer tx.mu.Unlock()
+		g := tx.binding(c.name)
+		// Typed reconstruction has a separate admitted row source. Preserve
+		// its existing refusal rather than pass a residual to the predicate.
+		if g.probe.meta.Options.ColumnStore != nil {
+			return false, backenddb.ErrNativeSemanticUnsupported
+		}
+		if err := tx.admitRowControls(g, 1); err != nil {
+			return false, err
+		}
+		if err := tx.admitRowDocument(g, id, nil); err != nil {
+			return false, err
+		}
+		row, err := tx.touchNativeRow(g, id)
+		if err != nil || row.current == nil {
+			return false, err
+		}
+		if err = tx.admitRowDocument(g, row.id, row.current); err != nil {
+			return false, err
+		}
+		return predicate(bytes.Clone(row.current))
+	}()
+	if err != nil || !accepted {
+		return false, err
+	}
+	count, err := tx.DeleteBatch([][]byte{id})
+	if err != nil || count == 0 {
+		return false, err
+	}
+	if err = tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // The existing immutable primary/secondary builders are reused here. Index-state
 // uses exactly the same per-item encoder as the physical planner. Tombstones
 // represent the empty final document; no second mutable collection engine runs.

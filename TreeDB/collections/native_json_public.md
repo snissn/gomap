@@ -7,6 +7,34 @@ of [P3](https://github.com/snissn/gomap/issues/5142). The
 records the current candidate, source-bound results and remaining work. Scoped
 public tests do not establish complete-engine qualification or merge readiness.
 
+## Ordinary document vectors
+
+Eligible ordinary JSON/BSON native collections may declare float32 cosine
+`native_runtime` HNSW indexes at Create under `command_wal_durable`. Insert,
+UpdateBatch, BSONSet and Delete use the same final-row transaction planner to
+update documents, scalar indexes, graph records and versioned source coverage
+atomically. Other vector encodings, metrics, imported-source mutations, template
+vectors, quantized/normalized representations and vector schema DDL retain
+their existing eligibility or refusal contracts. This adds no implicit schema
+conversion for legacy collections.
+
+Ordinary VectorIndex search reads the current native cut. An explicit
+VectorIndexSearcher owns one captured cut until idempotent Close, including
+held document fetches; close it before closing the database. No unclosable
+VectorIndex retains an old graph capture. Sparse traversal decodes visited
+records with original scratch admission. A cold imported graph is validated
+once per exact immutable descriptor; checkpoint/handoff preserves a certificate
+only when the complete logical graph is unchanged. Entry deletion may stream
+node records to elect a replacement without retaining a high-water-sized array.
+
+Explicit Build/Load validates the graph and reports statistics for that captured
+operation; VectorIndexStatus returns current validated summary statistics with
+errors. Explicit Save/Rebuild performs a complete owned rebuild through original
+kind 103. Ordinary mutations stage touched graph records rather than rebuilding
+or serializing the entire graph. Checkpoint and original command replay preserve
+the same versioned source counter, independent of physical commit sequence. See
+[storage format](../docs/spec/storage-format.md#native-ordinary-document-vector-coverage).
+
 ## Opening and lifetime
 
 Open the public database with `Options.MemtableMode = "cow_btree"`, obtain
@@ -42,7 +70,7 @@ ownership is checked across the whole transaction, including value handoffs.
 BSONOrderedV2 compound scalar indexes reuse the same tuple encoder, old/new
 planner and final unique ownership checks. Components may use dotted paths and
 ascending or descending directions; arrays remain rejected for compound keys.
-Text/vector index creation remains outside this route. Eligible BSON collections also support top-level `UpdateBSONSet` and
+Text index creation and vector schema DDL remain outside this route. Eligible BSON collections also support top-level `UpdateBSONSet` and
 `UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges`, using the maintained BSON
 transformer and canonical full replacement documents. `_id`, dotted or invalid
 field names and malformed raw values retain their existing refusal contracts.
@@ -499,3 +527,8 @@ truncation. Stable ties still require at most one unfixed component. Query
 key/group/result backing is admitted before copying or growing, and temporary
 aliases end before refund. Only independently owned result IDs escape. Default
 resource limits and the tuple/command formats are unchanged.
+
+For ordinary document-backed v5 graphs, `VectorIndex.Stats()` describes the
+checked graph when that handle was built or loaded. Searches through that handle
+use the current cut; use `Collection.VectorIndexStatus` for current graph status.
+Only a closable `VectorIndexSearcher` retains a graph/document cut.

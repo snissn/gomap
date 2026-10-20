@@ -63,6 +63,52 @@ interpretation may require rebuilding for older readers. See the
 [native carrier coverage contract](vector-partition-v1-contract.md#native-imported-source-carrier-coverage)
 for save/load, replay and runtime invalidation rules.
 
+## Native ordinary-document vector coverage
+
+Collection metadata version 8 adds `native_document_coverage_version: 5`
+only for eligible ordinary JSON/BSON collections with declared float32 cosine
+`native_runtime` HNSW indexes. Unmarked metadata retains version 7 and its
+original bytes; versions 5/6/7 cannot carry this marker. Version 8 requires the
+recognized marker and eligible declaration. Older binaries reject version 8;
+rebuild directories when changing between incompatible pre-alpha binaries.
+
+Coverage tag 5 in the existing graph `meta` JSON binds the actual collection
+incarnation and the big-endian uint64 counter at
+`collections/native/v1/document-generation/<20-digit-incarnation>`. Fresh
+creation writes explicit zero with the catalog/incarnation. Missing counters
+are errors. This is independent of physical CommitSeq (tag 3) and imported
+source-header coverage (tag 4); neither interpretation changes.
+
+Marked native document coverage v5 stores node document IDs in `document_id_bytes`
+using the original JSON byte-slice (base64) representation. Its legacy
+`document_id` field must be empty. Arbitrary nonempty byte IDs round-trip without
+UTF-8 replacement; v3/v4 node strings retain their original meaning. Earlier
+pre-alpha v5 nodes without this byte field fail closed and require rebuilding.
+
+For each canonical CRUD frame, the counter advances by the number of distinct
+IDs whose final normalized stored image or existence differs from the opening
+image. Composite members are reduced before counting. A-to-B-to-A in one frame
+contributes zero, while two separate frames contribute twice. Missing deletes
+and unchanged stored documents contribute zero. A changed nonvector field
+still advances coverage. Overflow refuses before append. Original CRUD replay
+uses the same reduction and updates primary/scalar roots, graph records and
+counter atomically. Kind 103 rebuilds and physical maintenance preserve the
+counter. Actual incarnation, not a collection name or LSN, scopes its key.
+
+The existing graph root/record codec and original names-only kind-103 frame
+remain. Graph `meta.native_document` stores exact incarnation, one-past-last
+node ordinal (`nodes`, empty zero), live count, edge count and vector/ID bytes.
+Incremental writes serialize only touched node/edge/tomb/document-map records
+and metadata. Explicit Build/Load/recovery validates the complete graph; the
+original immutable domain can memoize validation only for its exact
+incarnation/schema/counter tuple. Generic domain writers do not inherit that
+proof. Per-read CRC and touched-record validation remain required.
+
+Legacy public create, CRUD and schema mutation cannot mint or consume this
+authority. Only selected native creation or backend-validated original replay
+can create marked metadata. Unknown tags, transplanted public metadata and
+unsupported shapes fail closed.
+
 ## `cosine_normalized_f32_v1` vector asset
 
 The pre-alpha format for the opt-in normalized cosine representation is
@@ -3005,7 +3051,8 @@ metadata fails closed before advancing `AppliedCommandLSN`.
 
 Collection vector-index declarations are stored in the canonical collection
 metadata JSON under top-level `vector_indexes`. The current collection metadata
-JSON version is `7`. Version 5 introduced persisted `scalar_u8_calibration`,
+JSON version is `7` for unmarked collections and `8` for the explicitly
+marked native document-vector contract above. Version 5 introduced persisted `scalar_u8_calibration`,
 version 6 introduced compound-index components, and version 7 adds
 `vector_indexes[].representation`, including `cosine_normalized_f32_v1`.
 Quantized score-plane

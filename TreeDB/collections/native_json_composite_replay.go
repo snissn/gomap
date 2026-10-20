@@ -32,6 +32,10 @@ func replayNativeJSONComposite(db *backenddb.DB, env commitlog.CommandEnvelope) 
 	if err := commitlog.ValidateSelectedCompositeMutation(env.Payload); err != nil {
 		return err
 	}
+	return replayNativeJSONDocumentFrame(db, env, true)
+}
+
+func replayNativeJSONDocumentFrame(db *backenddb.DB, env commitlog.CommandEnvelope, composite bool) (resultErr error) {
 	intent, err := db.NewCommandWALReplayIntent(env)
 	if err != nil {
 		return err
@@ -95,7 +99,13 @@ func replayNativeJSONComposite(db *backenddb.DB, env commitlog.CommandEnvelope) 
 		return decodeRootID(encoded)
 	}
 	var memberOrdinal uint32
-	err = commitlog.ScanCompositeMutationPayload(env.Payload, func(member commitlog.CompositeMutationMember) error {
+	scan := func(visit func(commitlog.CompositeMutationMember) error) error {
+		if composite {
+			return commitlog.ScanCompositeMutationPayload(env.Payload, visit)
+		}
+		return visit(commitlog.CompositeMutationMember{Kind: env.Kind, PayloadFormat: env.PayloadFormat, Payload: env.Payload})
+	}
+	err = scan(func(member commitlog.CompositeMutationMember) error {
 		ordinal := memberOrdinal
 		memberOrdinal++
 		if member.Kind == commitlog.CommandKindRawKVBatch {
@@ -188,7 +198,7 @@ func replayNativeJSONComposite(db *backenddb.DB, env commitlog.CommandEnvelope) 
 				return err
 			}
 			id, err := nativeCatalogIdentityValue(identity, false)
-			if err != nil || id != member.Incarnation {
+			if err != nil || composite && id != member.Incarnation {
 				return errNativeCatalogIdentity
 			}
 			root, err := rootFor(collectionPrimaryRootName(name))
@@ -213,7 +223,7 @@ func replayNativeJSONComposite(db *backenddb.DB, env commitlog.CommandEnvelope) 
 			}
 			target = &collectionRows{name: name, incarnation: id, meta: meta, root: root, planner: planner, runtimes: runtimes}
 			collections = append(collections, target)
-		} else if target.incarnation != member.Incarnation {
+		} else if composite && target.incarnation != member.Incarnation {
 			return errNativeCatalogIdentity
 		}
 		original := func(id []byte) ([]byte, error) {
@@ -394,6 +404,7 @@ func replayNativeJSONComposite(db *backenddb.DB, env commitlog.CommandEnvelope) 
 	if err != nil {
 		return err
 	}
+	var catalogEffects []memtable.COWMutation
 	for _, target := range collections {
 		typed := nativeTypedMeta(target.meta)
 		if typed && len(target.meta.Indexes) == 0 {
@@ -506,6 +517,14 @@ func replayNativeJSONComposite(db *backenddb.DB, env commitlog.CommandEnvelope) 
 		if err != nil {
 			return err
 		}
+		if target.meta.nativeDocumentCoverageVersion == nativeDocumentVectorCoverageVersion {
+			graphs, counter, e := nativeDocumentGraphReplayRows(target.meta, target.incarnation, &target.rows, snapshot, token.SystemRootPageID, rootFor)
+			if e != nil {
+				return e
+			}
+			additional = append(additional, graphs...)
+			catalogEffects = append(catalogEffects, counter...)
+		}
 		for i := 0; i <= len(additional); i++ {
 			if typed && i == 0 {
 				continue // Original typed materializer alone owns physical primary locators.
@@ -554,6 +573,11 @@ func replayNativeJSONComposite(db *backenddb.DB, env commitlog.CommandEnvelope) 
 	defer func() { resultErr = errors.Join(resultErr, group.Close()) }()
 	system := batch.New(nil, int(^uint(0)>>1))
 	defer system.Close()
+	for _, entry := range catalogEffects {
+		if err = system.Set(entry.Key, entry.Value); err != nil {
+			return err
+		}
+	}
 	for _, input := range ordered {
 		root, err := group.BuildNativeOrderedRoot(backenddb.OrderedRootDeltaBatchPublishInput{BaseRoot: input.root, StoragePolicy: input.policy, Delta: input.delta})
 		if err != nil {
@@ -638,7 +662,12 @@ func replayNativeJSONComposite(db *backenddb.DB, env commitlog.CommandEnvelope) 
 	if err = group.BuildNativeSystemDelta(system); err != nil {
 		return err
 	}
-	if err = physical.AttachCompositeReplayGroup(intent, group); err != nil {
+	if composite {
+		err = physical.AttachCompositeReplayGroup(intent, group)
+	} else {
+		err = physical.AttachDocumentMutationReplayGroup(intent, group)
+	}
+	if err != nil {
 		return err
 	}
 	return physical.WriteSync()

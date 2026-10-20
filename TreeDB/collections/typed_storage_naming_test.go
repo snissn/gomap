@@ -331,6 +331,12 @@ type typedStorageLegacyNameAllowlistEntry struct {
 }
 
 var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
+	// Native document-vector eligibility and its invalid-shape fixture inspect
+	// the retained public typed configuration; conditional CRUD preserves the
+	// separate typed-document callback route through that compatibility field.
+	{path: "TreeDB/collections/native_document_vector_coverage.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
+	{path: "TreeDB/collections/native_document_vector_metadata_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 2},
+	{path: "TreeDB/collections/native_json_crud.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	// Full retention, ordinary typed UPDATE and captured physical queries reuse
 	// the retained public schema/scan APIs; their fixtures preserve those names.
 	{path: "TreeDB/collections/native_column_physical_query.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},

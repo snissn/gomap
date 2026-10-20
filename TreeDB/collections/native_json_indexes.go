@@ -42,12 +42,13 @@ func nativeJSONDomainNumber(meta CollectionMeta, name string) uint64 {
 			return nativeJSONSecondaryDomainNumber(meta, i)
 		}
 	}
-	// Source-only ColumnGraph declarations retain their original empty root
-	// descriptors. They are catalog identities, not live ANN publication.
-	if nativeSourceImportMetaV2(meta) {
+	// Both admitted vector families derive descriptor identity from the exact
+	// captured declaration. Source-only ColumnGraph and marked ordinary HNSW
+	// retain their respective typed and ordinary scalar-domain namespaces.
+	if nativeSourceImportMetaV2(meta) || meta.nativeDocumentCoverageVersion == nativeDocumentVectorCoverageVersion && nativeDocumentVectorShape(meta) {
 		for i, index := range meta.VectorIndexes {
 			if name == "vector-index/"+index.Name {
-				return uint64(len(meta.Indexes)+i) + 7
+				return nativeJSONSecondaryDomainNumber(meta, len(meta.Indexes)+i)
 			}
 		}
 	}

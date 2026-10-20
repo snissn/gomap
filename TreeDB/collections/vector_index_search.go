@@ -8,6 +8,7 @@ import (
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/workstats"
 )
 
@@ -981,20 +982,23 @@ func (b *VectorIndexSearchBuffer) normalizeCosineNormalizedF32V1Query(query []fl
 // typed-column assets. Close and reopen the searcher after writes/rebuilds when
 // callers need the newest column_graph generation.
 type VectorIndexSearcher struct {
-	collection   *Collection
-	indexName    string
-	strategy     VectorIndexStrategy
-	path         VectorIndexSearchPath
-	status       VectorIndexStatus
-	snapshot     *backenddb.Snapshot
-	catalog      *collectionCatalog
-	reader       *columnVectorGraphPhysicalRowReader
-	documentView *CollectionReadView
-	lifecyclePin *ColumnAssetLifecyclePinSet
-	scratch      columnVectorGraphNativeSearchScratch
-	readerLast   columnPhysicalRowReaderStats
-	routeStats   vectorIndexSearchRouteStats
-	closed       bool
+	nativeDocument      *NativeJSONRead
+	nativeDocumentLease *memtable.COWExternalLease
+	nativeDocumentBound bool
+	collection          *Collection
+	indexName           string
+	strategy            VectorIndexStrategy
+	path                VectorIndexSearchPath
+	status              VectorIndexStatus
+	snapshot            *backenddb.Snapshot
+	catalog             *collectionCatalog
+	reader              *columnVectorGraphPhysicalRowReader
+	documentView        *CollectionReadView
+	lifecyclePin        *ColumnAssetLifecyclePinSet
+	scratch             columnVectorGraphNativeSearchScratch
+	readerLast          columnPhysicalRowReaderStats
+	routeStats          vectorIndexSearchRouteStats
+	closed              bool
 }
 
 type vectorIndexSearchRouteStats struct {
@@ -1175,6 +1179,9 @@ func (r vectorIndexSearchRouteStats) apply(stats *VectorIndexSearchStats) {
 // filtering here; otherwise the legacy native-runtime buffered-only contract
 // remains fail closed rather than forwarding to an unfiltered one-shot route.
 func (c *Collection) SearchVectorIndex(opts VectorIndexSearchOptions) (VectorIndexSearchResponse, error) {
+	if c.nativeDocumentVectors() {
+		return c.searchNativeDocumentVectorUsing(opts, nil)
+	}
 	if c.typedGraphServingPolicy() != nil {
 		var buffer VectorIndexSearchBuffer
 		response, view, err := c.searchTypedGraphServing(opts, &buffer, false)
@@ -1372,6 +1379,9 @@ func (c *Collection) SearchVectorIndexWithBuffer(opts VectorIndexSearchOptions, 
 }
 
 func (c *Collection) searchVectorIndexWithBuffer(opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer, coverageLocked bool) (VectorIndexSearchResponse, error) {
+	if c.nativeDocumentVectors() {
+		return c.searchNativeDocumentVector(opts, buffer)
+	}
 	if c.typedGraphServingPolicy() != nil {
 		response, view, err := c.searchTypedGraphServing(opts, buffer, false)
 		if err != nil {
@@ -2091,6 +2101,10 @@ func (c *Collection) OpenVectorIndexSearcher(opts VectorIndexSearcherOptions) (*
 }
 
 func (c *Collection) openVectorIndexSearcher(opts VectorIndexSearcherOptions) (*VectorIndexSearcher, VectorIndexSearchResponse, error) {
+	if c.nativeDocumentVectors() {
+		searcher, err := c.openNativeDocumentVectorSearcher(opts)
+		return searcher, VectorIndexSearchResponse{}, err
+	}
 	var response VectorIndexSearchResponse
 	if err := ValidateIndexName(opts.IndexName); err != nil {
 		return nil, response, err
@@ -2237,6 +2251,9 @@ func failClosedColumnGraphReaderOpenStatus(def VectorIndexDefinition, status Vec
 // Search runs one vector-index query against the searcher's bound snapshot.
 // Returned result IDs and documents are copied into response-owned buffers.
 func (s *VectorIndexSearcher) Search(opts VectorIndexSearcherSearchOptions) (VectorIndexSearchResponse, error) {
+	if s != nil && s.nativeDocumentBound {
+		return s.searchNativeDocument(opts)
+	}
 	var response VectorIndexSearchResponse
 	if s == nil || s.reader == nil || s.collection == nil {
 		return response, errors.New("collections: nil vector index searcher")
@@ -2389,6 +2406,9 @@ func (s *VectorIndexSearcher) Search(opts VectorIndexSearcherSearchOptions) (Vec
 // Results. Search metadata and any telemetry collected before the error may
 // still be present in the returned response.
 func (s *VectorIndexSearcher) SearchWithBuffer(opts VectorIndexSearcherSearchOptions, buffer *VectorIndexSearchBuffer) (VectorIndexSearchResponse, error) {
+	if s != nil && s.nativeDocumentBound {
+		return s.searchNativeDocumentWithBuffer(opts, buffer)
+	}
 	if buffer == nil {
 		return VectorIndexSearchResponse{}, errors.New("collections: nil vector index search buffer")
 	}
@@ -2701,6 +2721,17 @@ func multiplyVectorIndexSearchByteTotal(n, count, limit int, label string) (int,
 // Close releases the searcher's document view, physical reader, snapshot, and
 // whole typed-asset closure lease. It is idempotent, not concurrency-safe.
 func (s *VectorIndexSearcher) Close() error {
+	if s != nil && s.nativeDocument != nil {
+		s.closed = true
+		scope, lease := s.nativeDocument, s.nativeDocumentLease
+		s.nativeDocument, s.nativeDocumentLease = nil, nil
+		s.status = VectorIndexStatus{}
+		err := scope.Close()
+		if lease != nil {
+			lease.Close()
+		}
+		return err
+	}
 	if s == nil || s.closed {
 		return nil
 	}

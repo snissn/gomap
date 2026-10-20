@@ -274,6 +274,9 @@ func (r *NativeJSONRead) readValue(ptr page.ValuePtr, admitOutput func(uint64) e
 }
 
 func (r *NativeJSONRead) readLeaf(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
+	if physical, ok := r.capture.(backenddb.NativePhysicalLeafReader); ok {
+		return physical.NativeLeafPage(ptr, dst)
+	}
 	return readNativeSnapshotLeaf(r.capture.Snapshot(), r.capture.NativeAllocator(), ptr, dst)
 }
 

@@ -89,6 +89,11 @@ func TestVectorPrepareReplayOwnershipActualFrameV1(t *testing.T) {
 		t.Fatal("expired borrower ran cleanup")
 	}
 	borrowed.Release()
+	batch := d.NewBatch().(*Batch)
+	defer batch.Close()
+	if err := batch.AttachDocumentMutationReplayGroup(intent, nil); err == nil {
+		t.Fatal("live intent attached singleton replay group")
+	}
 	if err := d.ValidateCommandWALReplayOperationV1(intent); err == nil {
 		t.Fatal("ordinary intent admitted as startup replay")
 	}
@@ -120,6 +125,11 @@ func TestVectorPrepareReplayOwnershipActualFrameV1(t *testing.T) {
 		if err != nil {
 			return err
 		}
+		replayBatch := active.NewBatch().(*Batch)
+		defer replayBatch.Close()
+		if err := replayBatch.AttachDocumentMutationReplayGroup(retained, nil); err == nil {
+			t.Fatal("actual raw-KV replay token attached CRUD group")
+		}
 		if err := active.ValidateCommandWALReplayOperationV1(retained); err != nil {
 			return err
 		}
@@ -146,6 +156,9 @@ func TestVectorPrepareReplayOwnershipActualFrameV1(t *testing.T) {
 	}})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if err := batch.AttachDocumentMutationReplayGroup(retained, nil); err == nil {
+		t.Fatal("expired token attached CRUD replay group")
 	}
 	if err := d.ValidateCommandWALReplayOperationV1(retained); err == nil {
 		t.Fatal("callback exit left capability live")

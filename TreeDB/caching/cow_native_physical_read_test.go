@@ -3,6 +3,7 @@ package caching
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 // Distinct captures share one exact basis, not a retained current Collection
@@ -356,6 +358,235 @@ func TestCOWNativeValueWorkspaceAdmissionAndLifetime(t *testing.T) {
 	}
 	receipt = nil
 	if stats := budget.Stats(); stats.TotalBytes != 0 || stats.Sources != 0 || stats.Views != 0 {
+		t.Fatal("final original ownership", stats)
+	}
+}
+
+// Real captures and transactions reuse only original physical scratch. The
+// returned page belongs to caller dst, including after a different retained
+// basis is installed and the producer closes.
+func TestCOWNativeLeafWorkspaceAdmissionAndLifetime(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir, Durability: backenddb.DurabilityWALOffRelaxed, DisableBackgroundPrune: true, IndexOuterLeavesInValueLog: true, LeafPageReadCacheEntries: -1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := transactionowner.New()
+	if err := backend.BindPrivateCOWOwner(owner); err != nil {
+		t.Fatal(err)
+	}
+	db, err := Open(dir, backend, Options{
+		TransactionOwner: owner, DisableWAL: true, AllowUnsafe: true,
+		MemtableMode: "cow_btree", FlushThreshold: 1 << 30,
+		IndexOuterLeavesInValueLog: true, ValueLogPointerThreshold: 256,
+		ValueLogCompression: uint8(vlogCompressionBlock), ValueLogBlockCodec: 0,
+	})
+	if err != nil {
+		if closeErr := backend.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if !db.closing.Load() {
+			if err := db.Close(); err != nil {
+				t.Error(err)
+			}
+		}
+	})
+	if err := backend.BindNativeSemanticBridge(owner, db); err != nil {
+		t.Fatal(err)
+	}
+	want := bytes.Repeat([]byte("captured-inline-leaf"), 8)
+	for i := 0; i < 64; i++ {
+		if err := db.Set([]byte(fmt.Sprintf("a%03d", i)), want); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.ActivateNativeSemanticOwner(); err != nil {
+		t.Fatal(err)
+	}
+	a, err := backend.CaptureNativeSemanticState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	b, err := backend.CaptureNativeSemanticState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	tx, err := backend.BeginNativeConditionalTxn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Close()
+	basis, budget := a.(*NativeSemanticCapture).cut.basis, db.cow.budget
+	if b.(*NativeSemanticCapture).cut.basis != basis || tx.(*nativeConditionalTxn).snap.cowCut.basis != basis || a.Snapshot() != basis.snapshot {
+		t.Fatal("scopes do not share the exact original basis")
+	}
+	capturePtr := func(snapshot *backenddb.Snapshot) page.LeafLogPtr {
+		t.Helper()
+		var keyScratch, leafScratch [page.PageSize]byte
+		var ptr page.LeafLogPtr
+		stop := errors.New("capture actual leaf")
+		_, err := snapshot.GetEntryExactWithFixedScratch([]byte("a000"), keyScratch[:], leafScratch[:], func(p page.LeafLogPtr, _ []byte) ([]byte, error) { ptr = p; return nil, stop })
+		if !errors.Is(err, stop) || ptr.FileID == 0 {
+			t.Fatalf("real leaf: %+v %v", ptr, err)
+		}
+		return ptr
+	}
+	ptr := capturePtr(a.Snapshot())
+	f, _, err := a.Snapshot().PinnedValueLogFile(ptr.ValueLogFileID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	limit := budget.Limits().MaxInFlightBytes
+	shape, err := valuelog.InspectCOWLeafRecord(f, ptr.ValuePtr(), valuelog.COWReadLimits{MaxRecordBytes: limit, MaxRawBytes: limit, MaxValueBytes: limit})
+	if err != nil || !shape.Compressed || shape.Codec != valuelog.BlockCodecSnappy {
+		t.Fatalf("actual compressed leaf: %+v %v", shape, err)
+	}
+	before := budget.Stats()
+	overhead := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
+	pressure, err := budget.AcquireExternal(limit - before.ReservedBytes - overhead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pressure.Close()
+	f = nil // no inspected handle alias survives its owning capture
+	var dst [page.PageSize]byte
+	if _, err := a.(backenddb.NativePhysicalLeafReader).NativeLeafPage(ptr, dst[:]); !errors.Is(err, memtable.ErrCOWCapacity) || basis.reader != nil {
+		t.Fatalf("original workspace admission refusal: reader=%p %v", basis.reader, err)
+	}
+	pressure.Close()
+	check := func(snapshot *backenddb.Snapshot, reader backenddb.NativePhysicalLeafReader, expected []byte) {
+		t.Helper()
+		var keyScratch, leafScratch [page.PageSize]byte
+		entry, err := snapshot.GetEntryExactWithFixedScratch([]byte("a000"), keyScratch[:], leafScratch[:], reader.NativeLeafPage)
+		if err != nil || !bytes.Equal(entry.Value, expected) {
+			t.Fatalf("captured leaf point: %q %v", entry.Value, err)
+		}
+		entry.Value[0] ^= 1
+	}
+	check(a.Snapshot(), a.(backenddb.NativePhysicalLeafReader), want)
+	check(tx.Snapshot(), tx.(backenddb.NativePhysicalLeafReader), want)
+	workspace := db.cow.physicalReader
+	if workspace == nil || len(workspace.codecs) != 1 || workspace.codecs[0].codec != valuelog.BlockCodecSnappy || workspace.snapshot != nil || workspace.basis != nil {
+		t.Fatal("no original shared block decoder")
+	}
+	codec, receipt := workspace.codecs[0], workspace.lease
+	pageA, err := a.(backenddb.NativePhysicalLeafReader).NativeLeafPage(ptr, dst[:])
+	if err != nil || len(pageA) != page.PageSize || &pageA[0] != &dst[0] {
+		t.Fatalf("caller page backing: %v", err)
+	}
+	var other [page.PageSize]byte
+	pageB, err := b.(backenddb.NativePhysicalLeafReader).NativeLeafPage(ptr, other[:])
+	if err != nil || !bytes.Equal(pageA, pageB) {
+		t.Fatalf("distinct page dst: %v", err)
+	}
+	pageB[0] ^= 1
+	if pageA[0] == pageB[0] {
+		t.Fatal("leaf page aliases shared/caller backing")
+	}
+	pageA, pageB = nil, nil
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 8; i++ {
+			check(tx.Snapshot(), tx.(backenddb.NativePhysicalLeafReader), want)
+		}
+	}()
+	for i := 0; i < 8; i++ {
+		check(b.Snapshot(), b.(backenddb.NativePhysicalLeafReader), want)
+	}
+	wg.Wait()
+	if err := a.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Set([]byte("a000"), []byte("new")); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	if db.cow.cut.basis == basis {
+		t.Fatal("checkpoint kept original physical basis")
+	}
+	current, err := backend.CaptureNativeSemanticState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer current.Close()
+	check(current.Snapshot(), current.(backenddb.NativePhysicalLeafReader), []byte("new"))
+	check(b.Snapshot(), b.(backenddb.NativePhysicalLeafReader), want)
+	check(tx.Snapshot(), tx.(backenddb.NativePhysicalLeafReader), want)
+	if db.cow.physicalReader != workspace || workspace.codecs[0] != codec {
+		t.Fatal("physical handoff replaced original decoder")
+	}
+	currentPtr := capturePtr(current.Snapshot())
+	if _, err := current.(backenddb.NativePhysicalLeafReader).NativeLeafPage(currentPtr, nil); !errors.Is(err, valuelog.ErrCOWReadCapacity) {
+		t.Fatalf("unadmitted page destination: %v", err)
+	}
+	if err := tx.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.(backenddb.NativePhysicalLeafReader).NativeLeafPage(ptr, dst[:]); !errors.Is(err, backenddb.ErrClosed) {
+		t.Fatalf("closed capture: %v", err)
+	}
+	if _, err := tx.(backenddb.NativePhysicalLeafReader).NativeLeafPage(ptr, dst[:]); !errors.Is(err, backenddb.ErrConditionalTxnClosed) {
+		t.Fatalf("closed transaction: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// DB.Close closes the index pager. As with the value-pointer control above,
+	// exercise the actual retained leaf/file authority directly, using pointers
+	// selected and validated by the captured trees before producer teardown.
+	checkHeldLeaf := func(reader backenddb.NativePhysicalLeafReader, ptr page.LeafLogPtr, expected []byte) {
+		t.Helper()
+		var leaf [page.PageSize]byte
+		data, err := reader.NativeLeafPage(ptr, leaf[:])
+		if err != nil {
+			t.Fatal("held leaf after producer close", err)
+		}
+		view := node.NewNodeView(data)
+		ordinal, found, err := view.SearchLeaf([]byte("a000"))
+		if err != nil || !found {
+			t.Fatalf("held leaf key: found=%v %v", found, err)
+		}
+		entry, err := view.GetLeafEntry(ordinal)
+		if err != nil || !bytes.Equal(entry.Key, []byte("a000")) || !bytes.Equal(entry.Value, expected) {
+			t.Fatalf("held leaf value: %q %v", entry.Value, err)
+		}
+		entry.Value[0] ^= 1
+	}
+	checkHeldLeaf(b.(backenddb.NativePhysicalLeafReader), ptr, want)
+	checkHeldLeaf(current.(backenddb.NativePhysicalLeafReader), currentPtr, []byte("new"))
+	basis, workspace, codec = nil, nil, nil
+	if err := b.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := current.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// As in the value-reader control above, the original cleanup-only worker
+	// owns the final closed-cache refund after the last retained cut leaves.
+	deadline := time.Now().Add(5 * time.Second)
+	for budget.Stats().TotalBytes != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("original cleanup-only worker did not refund last cache edge", budget.Stats())
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if !errors.Is(receipt.Resize(1), memtable.ErrCOWClosed) {
+		t.Fatal("last held cut did not refund shared decoder workspace")
+	}
+	receipt = nil
+	if stats := budget.Stats(); stats.TotalBytes != 0 || stats.Sources != 0 {
 		t.Fatal("final original ownership", stats)
 	}
 }

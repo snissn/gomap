@@ -395,7 +395,8 @@ type VectorIndexRecall struct {
 // TreeDB-managed collection root; ad hoc indexes can still be rebuilt from
 // primary collection rows.
 type VectorIndex struct {
-	collection *Collection
+	nativeDocumentStats *VectorIndexStats
+	collection          *Collection
 
 	name                string
 	nativeRootName      string
@@ -1002,6 +1003,10 @@ func (c *Collection) buildVectorIndexPrepared(opts VectorIndexOptions, register,
 // The loader inherits notification's native graph mutation owner. Both its
 // preflush and scanner must keep that owner through exact publication repair.
 func (c *Collection) buildVectorIndexPreparedWithMutationState(opts VectorIndexOptions, register, flushBuffered, liveANNFullRebuild, admissionLocked, vectorMutationLocked bool) (*VectorIndex, error) {
+	if c.nativeDocumentVectors() {
+		idx, _, err := c.loadNativeDocumentVector(opts)
+		return idx, err
+	}
 	if c == nil {
 		return nil, errCollectionNil
 	}
@@ -4116,6 +4121,32 @@ func (idx *VectorIndex) pruneLayerNeighborsWithFrozenPrefixScratchObservedLocked
 // graph search underfills and DisableExactFallback is false, it falls back to
 // the exact scan API.
 func (idx *VectorIndex) Search(query []float32, opts VectorIndexSearchOptions) ([]VectorSearchResult, VectorIndexTrace, error) {
+	if idx != nil && idx.collection.nativeDocumentVectors() {
+		trace := VectorIndexTrace{Strategy: "ann_graph"}
+		if opts.TopK <= 0 {
+			return nil, trace, errors.New("collections: vector search TopK must be positive")
+		}
+		opts.IndexName, opts.Query = idx.name, query
+		if opts.EfSearch <= 0 {
+			opts.EfSearch = idx.efSearch
+		}
+		trace.EfSearch = opts.EfSearch
+		if opts.FetchMultiplier <= 0 {
+			opts.FetchMultiplier = defaultVectorIndexFetchMultiple
+		}
+		trace.FetchMultiplier = opts.FetchMultiplier
+		response, err := idx.collection.searchNativeDocumentVectorUsing(opts, nil)
+		if err != nil {
+			return nil, trace, err
+		}
+		out := make([]VectorSearchResult, len(response.Results))
+		for i, hit := range response.Results {
+			out[i] = VectorSearchResult{DocumentID: hit.ID, Distance: float32(1 - hit.Score), Document: hit.Document}
+		}
+		trace.ReturnedCount = len(out)
+		return out, trace, nil
+	}
+
 	trace := VectorIndexTrace{Strategy: "ann_graph"}
 	if idx == nil {
 		return nil, trace, errors.New("collections: vector index is nil")
@@ -6902,6 +6933,9 @@ func (idx *VectorIndex) Stats() VectorIndexStats {
 	}
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
+	if idx.nativeDocumentStats != nil {
+		return *idx.nativeDocumentStats
+	}
 	deltaNodes, deltaDocs, maxLevel := 0, 0, idx.maxLevel
 	if idx.liveDelta != nil {
 		deltaNodes = len(idx.liveDelta.nodes)

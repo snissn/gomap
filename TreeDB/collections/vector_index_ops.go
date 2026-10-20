@@ -61,6 +61,9 @@ type ColumnGraphBuildTiming struct {
 // VectorIndexStatus returns persisted-root and runtime status for a declared
 // vector index.
 func (c *Collection) VectorIndexStatus(name string) (VectorIndexStatus, error) {
+	if c.nativeDocumentVectors() {
+		return c.nativeDocumentVectorStatus(name)
+	}
 	status, err := c.vectorIndexStatus(name, true)
 	if err != nil {
 		return status, err
@@ -75,6 +78,12 @@ func (c *Collection) VectorIndexStatus(name string) (VectorIndexStatus, error) {
 // to drain earlier commands without a checkpoint lock inversion. An intervening
 // collection change rejects the rebuild before append; unrelated writes do not.
 func (c *Collection) RebuildVectorIndex(name string) (VectorIndexStatus, error) {
+	if c.nativeDocumentVectors() {
+		return c.rebuildNativeDocumentVector(name)
+	}
+	if c != nil && c.meta.nativeDocumentCoverageVersion != 0 {
+		return VectorIndexStatus{}, backenddb.ErrNativeSemanticUnsupported
+	}
 	if c != nil && c.nativeJSON != nil {
 		return c.nativeRebuildVectorGraph(name)
 	}

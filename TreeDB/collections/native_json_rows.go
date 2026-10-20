@@ -833,6 +833,9 @@ func (t *NativeJSONTxn) finalizeNativeRows(singletonDomainPublication bool) erro
 		if err != nil {
 			return err
 		}
+		if err = t.finalizeNativeDocumentVectors(g); err != nil {
+			return err
+		}
 	}
 	// Only checked singleton103 graph and singleton105 complete carrier plans
 	// may publish without CRUD. Ordinary empty transactions still refuse.

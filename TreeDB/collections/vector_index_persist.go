@@ -91,6 +91,12 @@ func (idx *VectorIndex) SaveNativeSnapshot() (VectorIndexLoadStatus, error) {
 	if c == nil {
 		return status, errCollectionNil
 	}
+	if c.nativeDocumentVectors() {
+		return idx.saveNativeDocumentVector()
+	}
+	if c.meta.nativeDocumentCoverageVersion != 0 {
+		return status, backenddb.ErrNativeSemanticUnsupported
+	}
 	if c.db == nil {
 		return status, errCollectionDBNil
 	}
@@ -193,6 +199,9 @@ func (idx *VectorIndex) saveNativeSnapshotPreparedWithCommandWALIntentAndPublica
 		return status, errCollectionNotFound
 	}
 	c.meta = catalog.meta
+	if catalog.meta.nativeDocumentCoverageVersion != 0 {
+		return status, backenddb.ErrNativeSemanticUnsupported
+	}
 	def, ok := findVectorIndex(catalog.meta.VectorIndexes, idx.name)
 	if !ok || !vectorIndexDefinitionUsesPersistentRuntime(def, idx) {
 		return status, fmt.Errorf("%w: %q", errVectorIndexNotDeclared, idx.name)
@@ -453,6 +462,12 @@ func (idx *VectorIndex) saveNativeDeltaSnapshotWithCommandWALIntent(replay *back
 	if c == nil {
 		return status, errCollectionNil
 	}
+	if c.nativeDocumentVectors() {
+		if replay != nil {
+			return status, backenddb.ErrNativeSemanticUnsupported
+		}
+		return idx.saveNativeDocumentVector()
+	}
 	if c.nativeJSON != nil {
 		unlock := c.lockNativeVectorAdmissionWrite()
 		defer unlock()
@@ -475,6 +490,12 @@ func (idx *VectorIndex) saveNativeDeltaSnapshotWithAdmissionHeldAndCommandWALInt
 	return idx.saveNativeDeltaSnapshotWithAdmissionHeldAndCommandWALIntentAndOwner(replay, nil)
 }
 func (idx *VectorIndex) saveNativeDeltaSnapshotWithAdmissionHeldAndCommandWALIntentAndOwner(replay *backenddb.CommandWALIntent, owner *CommandWALAdmittedCollection) (VectorIndexLoadStatus, error) {
+	if idx != nil && idx.collection.nativeDocumentVectors() {
+		if replay != nil || owner != nil {
+			return VectorIndexLoadStatus{}, backenddb.ErrNativeSemanticUnsupported
+		}
+		return idx.saveNativeDocumentVector()
+	}
 	if idx != nil && idx.collection != nil && idx.collection.nativeJSON != nil {
 		return idx.saveNativePartitionLiveSnapshot(replay, owner)
 	}
@@ -777,6 +798,9 @@ func (c *Collection) LoadVectorIndexSnapshot(opts VectorIndexOptions) (*VectorIn
 // collection root. Missing or invalid graph roots return a non-loaded status so
 // callers can safely fall back to exact search.
 func (c *Collection) LoadNativeVectorIndexSnapshot(opts VectorIndexOptions) (*VectorIndex, VectorIndexLoadStatus, error) {
+	if c.nativeDocumentVectors() {
+		return c.loadNativeDocumentVector(opts)
+	}
 	if c != nil && c.nativeJSON != nil {
 		return c.loadNativePartitionLiveSnapshot(opts)
 	}
@@ -1138,10 +1162,13 @@ type vectorIndexPersistMeta struct {
 	MaxLevel            int                 `json:"max_level"`
 	// Version 3 is the physical document-mutation generation; version 4 is
 	// authenticated cdir2 source coverage for an imported-source live carrier.
-	SourceDocumentGenerationVersion int                                 `json:"source_document_generation_version"`
-	SourceDocumentGeneration        uint64                              `json:"source_document_generation"`
-	PartitionLive                   *vectorIndexPartitionLivePersistV1  `json:"partition_live,omitempty"`
-	Preparation                     *VectorPartitionPrepareCompletionV1 `json:"preparation,omitempty"`
+	SourceDocumentGenerationVersion int    `json:"source_document_generation_version"`
+	SourceDocumentGeneration        uint64 `json:"source_document_generation"`
+	// V5 is explicit native document coverage. The incarnation and exact
+	// totals are validated with the original node/edge/doc records.
+	NativeDocument *nativeDocumentGraphSummary         `json:"native_document,omitempty"`
+	PartitionLive  *vectorIndexPartitionLivePersistV1  `json:"partition_live,omitempty"`
+	Preparation    *VectorPartitionPrepareCompletionV1 `json:"preparation,omitempty"`
 }
 
 type vectorIndexPersistNode struct {

@@ -2,6 +2,7 @@ package collections
 
 import (
 	"errors"
+	"reflect"
 	"sort"
 	"sync"
 
@@ -37,7 +38,7 @@ func nativeJSONMeta(meta CollectionMeta) (CollectionMeta, error) {
 		return CollectionMeta{}, err
 	}
 	format := normalizedDocumentFormat(normalized.Options.DocumentFormat)
-	if (len(normalized.VectorIndexes) != 0 && !nativeSourceImportMetaV2(normalized)) || len(normalized.TextIndexes) != 0 || (normalized.Options.ColumnStore != nil && (normalized.Options.AllowArrayValuesInIndex || !nativeTypedMeta(normalized))) || (format != DocumentFormatJSON && format != DocumentFormatBSON && format != DocumentFormatTemplateV1) {
+	if (len(normalized.VectorIndexes) != 0 && !nativeSourceImportMetaV2(normalized) && normalized.nativeDocumentCoverageVersion != nativeDocumentVectorCoverageVersion) || len(normalized.TextIndexes) != 0 || (normalized.Options.ColumnStore != nil && (normalized.Options.AllowArrayValuesInIndex || !nativeTypedMeta(normalized))) || (format != DocumentFormatJSON && format != DocumentFormatBSON && format != DocumentFormatTemplateV1) {
 		return CollectionMeta{}, backenddb.ErrNativeSemanticUnsupported
 	}
 	for _, index := range normalized.Indexes {
@@ -69,6 +70,18 @@ func (m *NativeJSONManager) CreateCollection(meta CollectionMeta) (*CollectionMe
 func (m *NativeJSONManager) createCollection(meta CollectionMeta, apply *nativeCommandWALApplyCommit) (created *CollectionMeta, resultErr error) {
 	if m == nil || m.db == nil {
 		return nil, backenddb.ErrClosed
+	}
+	// Public metadata copies carry no creation authority. Only this producer
+	// selects the native marker; deterministic apply preserves recorded metadata.
+	if apply == nil && meta.nativeDocumentCoverageVersion != 0 {
+		return nil, backenddb.ErrNativeSemanticUnsupported
+	}
+	meta, err := normalizeCollectionMeta(meta)
+	if err != nil {
+		return nil, err
+	}
+	if nativeDocumentVectorShape(meta) {
+		meta.nativeDocumentCoverageVersion = nativeDocumentVectorCoverageVersion
 	}
 	if err := nativeTypedProfile(m.db, meta); err != nil {
 		return nil, err
@@ -176,6 +189,16 @@ func prepareNativeJSONCreate(base *nativeEngineVersion, meta CollectionMeta) (pu
 	if base == nil || base.inventory != nil {
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
+	if old, exists := base.names.Get(meta.Name); exists {
+		if !collectionMetaValuesEqual(*old.schema.meta, meta) {
+			return nil, backenddb.ErrNativeSemanticUnsupported
+		}
+		next, err := prepareNativeCommandWALNoop(base)
+		if err != nil {
+			return nil, err
+		}
+		return &backenddb.NativePreparedPublication{Basis: base, State: next}, nil
+	}
 	scratch, err := newNativeEnginePreparation(base, 1, 0, base.allocator)
 	if err != nil {
 		return nil, err
@@ -210,12 +233,27 @@ func prepareNativeJSONCreate(base *nativeEngineVersion, meta CollectionMeta) (pu
 	}
 	p.schema, p.domains, p.pendingDomains = nil, nil, nil
 	p.ownedCollections = append(p.ownedCollections, collection)
+	tempCharge, err := nativeSchemaBackingCharge(reflect.ValueOf(meta), 0)
+	if err != nil {
+		return nil, err
+	}
+	if err = nativeTypedCheckedAdd(&tempCharge, uint64(len(meta.Name))*16+8192); err != nil {
+		return nil, err
+	}
+	temp, err := base.allocator.AdmitNativeBytes(tempCharge)
+	if err != nil {
+		return nil, err
+	}
+	defer temp.Close()
 	encoded, err := encodeCollectionMeta(meta)
 	if err != nil {
 		return nil, err
 	}
 	updates, err := nativeCreateIdentityUpdates(meta.Name, base.nextIncarnation)
 	if err != nil {
+		return nil, err
+	}
+	if err = addNativeDocumentGenerationCreateUpdate(meta, base.nextIncarnation, updates); err != nil {
 		return nil, err
 	}
 	updates[systemCollectionMetaKey(meta.Name)] = encoded

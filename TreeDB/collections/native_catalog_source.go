@@ -108,7 +108,7 @@ func nativeCatalogProjectionCapacity(captured *nativeEngineVersion) (uint64, err
 		if decode > decodePeak {
 			decodePeak = decode
 		}
-		encoded, err := nativeIndexJSONBound(reflect.ValueOf(collectionMetaDisk{Version: collectionMetaVersion, Name: meta.Name, Options: meta.Options, Indexes: meta.Indexes, VectorIndexes: meta.VectorIndexes, TextIndexes: meta.TextIndexes}), 0)
+		encoded, err := nativeIndexJSONBound(reflect.ValueOf(collectionMetaDiskValue(*meta)), 0)
 		if err != nil || encoded > ^uint64(0)/2 {
 			failure = memtable.ErrCOWCapacity
 			if err != nil {

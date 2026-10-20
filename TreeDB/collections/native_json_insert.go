@@ -81,14 +81,16 @@ type nativeJSONDomainChange struct {
 	entries []memtable.COWMutation
 	// fullReplacement supplies the complete domain image, with no inherited sources.
 	fullReplacement bool
+	documentGraph   nativeDocumentGraphAuthority
 }
 
 type nativeJSONPrimaryChange struct {
-	collection    *nativeCollectionState
-	entries       []memtable.COWMutation
-	primaryPolicy backenddb.OrderedRootStoragePolicy
-	additional    []nativeJSONDomainChange
-	typed         *nativeTypedDelta
+	collection     *nativeCollectionState
+	entries        []memtable.COWMutation
+	primaryPolicy  backenddb.OrderedRootStoragePolicy
+	additional     []nativeJSONDomainChange
+	typed          *nativeTypedDelta
+	catalogEffects []memtable.COWMutation
 }
 
 func prepareNativeJSONPrimary(base *nativeEngineVersion, c *nativeCollectionState, entries []memtable.COWMutation) (*nativeEngineVersion, error) {
@@ -104,6 +106,12 @@ func prepareNativeJSONPrimaries(base *nativeEngineVersion, changes []nativeJSONP
 			return nil, memtable.ErrCOWCapacity
 		}
 		domainCount += len(change.additional)
+		if len(change.catalogEffects) != 0 {
+			if domainCount > int(^uint(0)>>1)-2 {
+				return nil, memtable.ErrCOWCapacity
+			}
+			domainCount += 2
+		}
 	}
 	next, err := newNativeEnginePreparation(base, len(changes), domainCount, base.allocator)
 	if err != nil {
@@ -115,6 +123,26 @@ func prepareNativeJSONPrimaries(base *nativeEngineVersion, changes []nativeJSONP
 	if base.catalog != nil {
 		(nativeDomainLifetime{}).Retain(base.catalog)
 		next.catalog = base.catalog
+	}
+	for _, change := range changes {
+		if len(change.catalogEffects) == 0 {
+			continue
+		}
+		catalog, updateErr := prepareNativeCatalogUpdate(next.catalog, change.catalogEffects, base.allocator)
+		if catalog != nil {
+			p.ownedDomains = append(p.ownedDomains, catalog)
+		}
+		if updateErr != nil {
+			return next, updateErr
+		}
+		// Keep the previous original catalog edge in the preadmitted private
+		// work until that work retires; no early release can lose custody.
+		if next.catalog != nil {
+			p.ownedDomains = append(p.ownedDomains, next.catalog)
+		}
+
+		(nativeDomainLifetime{}).Retain(catalog)
+		next.catalog = catalog
 	}
 	p.names, err = cowbtree.NewOwnedMapBuilder(base.names, len(changes), nativeCollectionLifetime{}, admit)
 	if err != nil {
@@ -170,6 +198,15 @@ func prepareNativeJSONPrimaries(base *nativeEngineVersion, changes []nativeJSONP
 			}
 			if err != nil {
 				return next, err
+			}
+			if i > 0 && change.additional[i-1].documentGraph.checked {
+				proof := change.additional[i-1].documentGraph
+				if err = domain.documentGraph.bind(proof.incarnation, proof.generation, proof.schema); err != nil {
+					return next, err
+				}
+				if err = domain.documentGraph.certify(proof.incarnation, proof.generation, proof.schema); err != nil {
+					return next, err
+				}
 			}
 			if i == 0 && change.typed != nil {
 				// Clone only private headers: their original vector receipts remain
@@ -246,7 +283,7 @@ func prepareNativeJSONInsertCommand(_ *backenddb.DB, env commitlog.CommandEnvelo
 	if !ok {
 		return nil, tree.ErrKeyNotFound
 	}
-	if len(c.schema.meta.Indexes) != 0 || c.schema.meta.Options.ColumnStore != nil || normalizedDocumentFormat(c.schema.meta.Options.DocumentFormat) == DocumentFormatTemplateV1 {
+	if c.schema.meta.nativeDocumentCoverageVersion != 0 || len(c.schema.meta.Indexes) != 0 || c.schema.meta.Options.ColumnStore != nil || normalizedDocumentFormat(c.schema.meta.Options.DocumentFormat) == DocumentFormatTemplateV1 {
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
 	if _, err = nativeJSONMeta(*c.schema.meta); err != nil {
