@@ -6,6 +6,10 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -15,15 +19,19 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/nativewire"
+	"github.com/snissn/gomap/TreeDB/internal/raftapply"
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
+	"github.com/snissn/gomap/TreeDB/internal/workstats"
 )
 
 // The real FSM must lower hash-keyed template packets through the public native
 // owner. Advisory preflight must never reserve its local or distributed identity.
 func TestNativeTemplateClusterAdapterPreflightLifecycle(t *testing.T) {
+	runNativeTemplateClusterAdapter(t, filepath.Join(t.TempDir(), "db"), false)
+}
+func runNativeTemplateClusterAdapter(t *testing.T, dir string, crash bool) {
 	t.Setenv("TREEDB_DISABLE_VLOG_GENERATION_LOOP", "1")
-	dir := filepath.Join(t.TempDir(), "db")
 	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, dir)
 	opts.MemtableMode = "cow_btree"
 	opts.FlushThreshold = 1 << 30
@@ -180,7 +188,27 @@ func TestNativeTemplateClusterAdapterPreflightLifecycle(t *testing.T) {
 		return result
 	}
 
-	create := deterministicCreateCollectionEntryWithOptions(t, "templates", "native-template:create", testCreateCollectionMetaOptions{documentFormat: uint64(nativewire.DocumentFormatTemplateV1)})
+	payload := testCreateCollectionMetaPayload("templates", testCreateCollectionMetaOptions{documentFormat: uint64(nativewire.DocumentFormatTemplateV1)})
+	payload = binary.AppendUvarint(payload[:len(payload)-1], 1)
+	payload = appendTestString(payload, "city")
+	payload = appendTestString(payload, "city")
+	payload = binary.AppendUvarint(payload, 1) // string
+	payload = append(payload, 1, 0)            // unique, scalar
+	payload = binary.AppendUvarint(payload, 0)
+	sections := []nativewire.Section{
+		{ID: nativewire.SectionCommandHeader, Bytes: nativewire.AppendCommandHeader(nil, nativewire.CommandHeader{ID: nativewire.CommandCreateCollection, Version: 1})},
+		{ID: nativewire.SectionIdempotencyKey, Bytes: []byte("native-template:create")},
+		{ID: nativewire.SectionCollectionMeta, Bytes: payload},
+		{ID: nativewire.SectionExpectedCatalogVersion, Bytes: binary.AppendUvarint(nil, testCatalogVersionStart)},
+	}
+	command, err := nativewire.MustV1Registry().ValidateRequestSections(sections)
+	if err != nil {
+		t.Fatal(err)
+	}
+	create, err := nativewire.AppendDeterministicEntry(nil, command)
+	if err != nil {
+		t.Fatal(err)
+	}
 	apply(1, create, 1)
 	collection, err := manager.OpenCollection("templates")
 	if err != nil {
@@ -205,12 +233,12 @@ func TestNativeTemplateClusterAdapterPreflightLifecycle(t *testing.T) {
 			}
 		}
 	})
-	checkDocument := func(stored []byte, want string) {
+	checkDocument := func(reader *collections.StoredDocumentJSONMaterializer, stored []byte, want string) {
 		t.Helper()
 		if !bytes.HasPrefix(stored, []byte("TD1D")) {
 			t.Fatalf("stored template=%x", stored)
 		}
-		actual, err := materializer.StoredDocumentJSON(stored)
+		actual, err := reader.StoredDocumentJSON(stored)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -225,7 +253,7 @@ func TestNativeTemplateClusterAdapterPreflightLifecycle(t *testing.T) {
 		if err != nil || len(response.Results) != 2 || !response.Results[0].Found || response.Results[1].Found {
 			t.Fatalf("held=%+v err=%v", response, err)
 		}
-		checkDocument(response.Results[0].Document, `{"city":"hnl"}`)
+		checkDocument(materializer, response.Results[0].Document, `{"city":"hnl"}`)
 		response.Results[0].Document[0] ^= 1
 	}
 	checkHeld()
@@ -237,16 +265,83 @@ func TestNativeTemplateClusterAdapterPreflightLifecycle(t *testing.T) {
 	// definition installed by the preceding command, never a collection-local ID.
 	reuse := deterministicInsertBatchEntry(t, "templates", "native-template:reuse", nativewire.DocumentFormatTemplateV1,
 		[][]byte{[]byte("u2")}, [][]byte{secondDoc})
-	reuseResult := apply(3, reuse, 1)
+	apply(3, reuse, 1)
+	// Unknown hashes and malformed values with a known persisted hash must
+	// refuse before acquiring either local WAL or distributed apply identity.
+	unknown := bytes.Clone(secondDoc)
+	clear(unknown[4:36])
+	preflight(deterministicInsertBatchEntry(t, "templates", "native-template:unknown", nativewire.DocumentFormatTemplateV1,
+		[][]byte{[]byte("bad")}, [][]byte{unknown}), true)
+	malformed := bytes.Clone(secondDoc[:36])
+	preflight(deterministicInsertBatchEntry(t, "templates", "native-template:malformed", nativewire.DocumentFormatTemplateV1,
+		[][]byte{[]byte("bad")}, [][]byte{malformed}), true)
+	// Hash references precede a new dictionary carried by an absent final row.
+	// Matched rows still need that definition in their original canonical frame.
+	replacementRecord, u1 := nativeClusterTemplatePacket(t, `{"city":"sea","revision":1}`)
+	_, u2 := nativeClusterTemplatePacket(t, `{"city":"hnl","revision":1}`)
+	_, absent := nativeClusterTemplatePacket(t, `{"city":"unused","revision":1}`)
+	inlineAbsent := append([]byte("TD1I"), 1)
+	digest := sha256.Sum256(replacementRecord)
+	inlineAbsent = append(inlineAbsent, digest[:]...)
+	inlineAbsent = binary.AppendUvarint(inlineAbsent, uint64(len(replacementRecord)))
+	inlineAbsent = append(inlineAbsent, replacementRecord...)
+	inlineAbsent = append(inlineAbsent, absent...)
+	replace := deterministicMutationEntry(t, nativewire.CommandReplaceBatch, "templates", "native-template:handoff", nativewire.DocumentFormatTemplateV1,
+		[][]byte{[]byte("u1"), []byte("u2"), []byte("zz-missing")}, [][]byte{u1, u2, inlineAbsent}, []nativewire.Section{
+			{ID: nativewire.SectionReplacementMode, Bytes: binary.AppendUvarint(nil, 1)},
+		})
+	if crash {
+		// The original durable native append invokes this existing observer before
+		// installation/seal/result/progress. It may not reenter or lock the DB.
+		if err := database.Checkpoint(); err != nil {
+			t.Fatal(err)
+		}
+		if basis := backend.State().AppliedCommandLSN; basis != 3 {
+			t.Fatalf("basis=%d", basis)
+		}
+		preflight(replace, false)
+		committed := CommittedEntryFromClusterV1(clusterCommittedCommand(2, 4, replace))
+		meta, err := fsm.applyMetadata(committed, raftentry.ApplyEntryID{Term: 2, Index: 4})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = raftapply.ApplyCommittedEntryV1(fsm.db, committed.Bytes, meta, raftapply.Options{
+			DecodeLimits: fsm.decodeLimits, ProgressStore: fsm.progress, ResultStore: fsm.results,
+			FaultInjector: nativeTemplateExitAfterAppend{},
+		})
+		t.Fatalf("unapplied observer did not exit: %v", err)
+	}
+	if result := apply(4, replace, 2); result.MatchedCount != 2 {
+		t.Fatalf("matched=%d", result.MatchedCount)
+	}
+	for _, query := range []struct{ city, id string }{{"sea", "u1"}, {"hnl", "u2"}} {
+		got, err := collection.FindByIndexValue("city", query.city)
+		if err != nil || len(got) != 1 || string(got[0]) != query.id {
+			t.Fatalf("unique owner=%q err=%v", got, err)
+		}
+	}
+	deletion := deterministicDeleteBatchEntry(t, "templates", "native-template:delete", [][]byte{[]byte("u2")})
+	deleteResult := apply(5, deletion, 1)
 	checkCurrent := func() {
 		t.Helper()
-		for _, row := range []struct{ id, json string }{{"u1", `{"city":"hnl"}`}, {"u2", `{"city":"sea"}`}} {
+		current, err := collection.NewStoredDocumentJSONMaterializer()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer current.Close()
+		for _, row := range []struct{ id, json string }{{"u1", `{"city":"sea","revision":1}`}} {
 			stored, err := collection.Get([]byte(row.id))
 			if err != nil {
 				t.Fatal(err)
 			}
-			checkDocument(stored, row.json)
+			checkDocument(current, stored, row.json)
 			stored[0] ^= 1
+		}
+		if stored, err := collection.Get([]byte("u2")); err != nil || stored != nil {
+			t.Fatalf("deleted=%x err=%v", stored, err)
+		}
+		if owners, err := collection.FindByIndexValue("city", "hnl"); err != nil || len(owners) != 0 {
+			t.Fatalf("deleted owner=%q err=%v", owners, err)
 		}
 	}
 	checkCurrent()
@@ -271,17 +366,17 @@ func TestNativeTemplateClusterAdapterPreflightLifecycle(t *testing.T) {
 	}
 	checkCurrent()
 	next, seq := backend.CommandWALNextLSN(), sequence()
-	retry, err := fsm.ApplyCommittedCommandEntryV1(context.Background(), clusterCommittedCommand(2, 3, reuse))
+	retry, err := fsm.ApplyCommittedCommandEntryV1(context.Background(), clusterCommittedCommand(2, 5, deletion))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if retry != reuseResult {
-		t.Fatalf("durable retry=%+v want %+v", retry, reuseResult)
+	if retry != deleteResult {
+		t.Fatalf("durable retry=%+v want %+v", retry, deleteResult)
 	}
 	if backend.CommandWALNextLSN() != next || sequence() != seq {
 		t.Fatal("durable retry assigned another native identity")
 	}
-	assertLastApplied(t, fsm, raftentry.ApplyEntryID{Term: 2, Index: 3})
+	assertLastApplied(t, fsm, raftentry.ApplyEntryID{Term: 2, Index: 5})
 	if err := materializer.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -332,4 +427,136 @@ func nativeClusterTemplatePacket(t *testing.T, document string) ([]byte, []byte)
 	wire := bytes.Clone(root)
 	copy(wire[:4], "TD1D")
 	return record, wire
+}
+
+// This is the maintained apply fault seam, with the same non-reentrant observer
+// contract as production. SyncLocalCommandWAL=true already synced the real frame.
+type nativeTemplateExitAfterAppend struct{}
+
+func (nativeTemplateExitAfterAppend) InjectApplyFault(point raftapply.FaultPointV1, ctx raftapply.ApplyFaultContextV1) error {
+	if point == raftapply.FaultAfterLocalWALAppendBeforeVisibleV1 {
+		if ctx.AppliedCommandLSN != 3 || ctx.EntryID != (raftentry.ApplyEntryID{Term: 2, Index: 4}) {
+			fmt.Fprintf(os.Stderr, "unexpected template append LSN=%d\n", ctx.AppliedCommandLSN)
+			os.Exit(98)
+		}
+		fmt.Fprintln(os.Stdout, "TEMPLATE APPLY UNAPPLIED basis=3 entry=2/4")
+		os.Exit(97)
+	}
+	return nil
+}
+
+func TestNativeTemplateClusterAdapterUnappliedReplay(t *testing.T) {
+	t.Setenv("TREEDB_DISABLE_VLOG_GENERATION_LOOP", "1")
+	if dir := os.Getenv("GOMAP_TEMPLATE_APPLY_CHILD_DIR"); dir != "" {
+		runNativeTemplateClusterAdapter(t, dir, true)
+		return
+	}
+	dir := filepath.Join(t.TempDir(), "db")
+	cmd := exec.Command(os.Args[0], "-test.run=^TestNativeTemplateClusterAdapterUnappliedReplay$", "-test.v")
+	cmd.Env = append(os.Environ(), "GOMAP_TEMPLATE_APPLY_CHILD_DIR="+dir)
+	output, err := cmd.CombinedOutput()
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 97 || !bytes.Contains(output, []byte("TEMPLATE APPLY UNAPPLIED basis=3 entry=2/4")) || bytes.Contains(output, []byte("DATA RACE")) {
+		t.Fatalf("child: %v\n%s", err, output)
+	}
+	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, dir)
+	opts.MemtableMode = "cow_btree"
+	opts.FlushThreshold = 1 << 30
+	opts.BackgroundCheckpointInterval = -1
+	opts.BackgroundCheckpointIdleDuration = -1
+	opts.MaxWALBytes = -1
+	before := workstats.Read().Replay
+	database, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if database != nil {
+			_ = database.Close()
+		}
+	})
+	after := workstats.Read().Replay
+	if after.FramesApplied-before.FramesApplied != 1 || after.FrameErrors != before.FrameErrors {
+		t.Fatalf("replay: %+v -> %+v", before, after)
+	}
+	backend, err := database.NativeSemanticBackend()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if backend.State().AppliedCommandLSN != 4 {
+		t.Fatalf("replayed applied=%d", backend.State().AppliedCommandLSN)
+	}
+	capture, err := backend.CaptureNativeSemanticState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	budget, ok := capture.NativeAllocator().(interface{ Stats() memtable.COWStats })
+	if !ok {
+		t.Fatal("original allocator stats unavailable")
+	}
+	if err = capture.Close(); err != nil {
+		t.Fatal(err)
+	}
+	registry := backend.ValueLogIdentityPinRegistry()
+	manager := collections.NewCollectionManager(backend)
+	t.Cleanup(func() {
+		if manager != nil {
+			_ = manager.Close()
+		}
+	})
+	collection, err := manager.OpenCollection("templates")
+	if err != nil {
+		t.Fatal(err)
+	}
+	materializer, err := collection.NewStoredDocumentJSONMaterializer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if materializer != nil {
+			_ = materializer.Close()
+		}
+	})
+	for _, row := range []struct{ id, city string }{{"u1", "sea"}, {"u2", "hnl"}} {
+		stored, err := collection.Get([]byte(row.id))
+		if err != nil {
+			t.Fatal(err)
+		}
+		actual, err := materializer.StoredDocumentJSON(stored)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var decoded struct {
+			City     string `json:"city"`
+			Revision int    `json:"revision"`
+		}
+		if err = json.Unmarshal(actual, &decoded); err != nil || decoded.City != row.city || decoded.Revision != 1 {
+			t.Fatalf("replayed %s=%s err=%v", row.id, actual, err)
+		}
+		owners, err := collection.FindByIndexValue("city", row.city)
+		if err != nil || len(owners) != 1 || string(owners[0]) != row.id {
+			t.Fatalf("replayed owner=%q err=%v", owners, err)
+		}
+	}
+	if absent, err := collection.Get([]byte("zz-missing")); err != nil || absent != nil {
+		t.Fatalf("absent=%x err=%v", absent, err)
+	}
+	if err = materializer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	materializer = nil
+	if err = manager.Close(); err != nil {
+		t.Fatal(err)
+	}
+	manager = nil
+	if err = database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	database = nil
+	if s := budget.Stats(); s.TotalBytes != 0 || s.Sources != 0 || s.ExternalLeases != 0 || s.Views != 0 || s.Generations != 0 {
+		t.Fatalf("original final COW resources=%+v", s)
+	}
+	if s := registry.Stats(); s.ActivePins != 0 || s.ActiveIdentities != 0 {
+		t.Fatalf("original final registry=%+v", s)
+	}
 }

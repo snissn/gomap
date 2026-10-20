@@ -51,8 +51,8 @@ func (h *Harness) applyNativeCollectionMutationV1(entry raftentry.CommandEntryV1
 		return raftentry.ApplyResultV1{}, codedError(raftentry.ErrorUnsupportedFeatureV1, "raftapply: native deterministic mutation is not ordinary document insert/replace/delete/BSON-set")
 	}
 	if kind != commitlog.CommandKindCollectionDeleteBatchByID {
-		if mutation.documentFormat != collections.DocumentFormatJSON && mutation.documentFormat != collections.DocumentFormatBSON {
-			return raftentry.ApplyResultV1{}, codedError(raftentry.ErrorUnsupportedFeatureV1, "raftapply: native deterministic mutation requires JSON or BSON")
+		if mutation.documentFormat != collections.DocumentFormatJSON && mutation.documentFormat != collections.DocumentFormatBSON && mutation.documentFormat != collections.DocumentFormatTemplateV1 {
+			return raftentry.ApplyResultV1{}, codedError(raftentry.ErrorUnsupportedFeatureV1, "raftapply: native deterministic mutation requires JSON, BSON or template-v1")
 		}
 		if err := validateMutationDocumentsV1(mutation.documentFormat, mutation.documents); err != nil {
 			return raftentry.ApplyResultV1{}, err
@@ -60,7 +60,7 @@ func (h *Harness) applyNativeCollectionMutationV1(entry raftentry.CommandEntryV1
 	}
 	result, err := h.replayCollectionManager().ApplyNativeCommandWALMutation(mutation.collection, mutation.documentFormat, kind, mutation.ids, mutation.documents, meta.SyncLocalCommandWAL, func(uint64) error {
 		return h.injectFault(FaultAfterLocalWALAppendBeforeVisibleV1, meta.EntryID, entry.Digest)
-	})
+	}, mutation.templateRecords)
 	return h.nativeCollectionApplyResult(entry, meta, result, err, false)
 }
 
