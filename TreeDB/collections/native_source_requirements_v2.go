@@ -18,10 +18,6 @@ import (
 // The original bounded leaf parser permits 2MiB stored/255-page raw frames.
 // Walk and Lookup can nest, so each owns a complete independent slot. These
 // slots are included in the original materialization receipt before assets.
-func nativeSourceRequirementCapacityV2() uint64 {
-	return nativeSourceRequirementCapacityForStateV2(columnVectorIndexStateMaxDecodedBytes)
-}
-
 func nativeSourceRequirementStateCapacityV2(decoded uint64) uint64 {
 	if decoded == 0 {
 		return 0

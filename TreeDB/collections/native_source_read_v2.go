@@ -122,7 +122,15 @@ func (c *Collection) openNativeSourceReaderV2(expected VectorPartitionSourceSnap
 	}
 	// Binding/progress/header are bounded original inline records. Sixteen
 	// original decode/copy/control envelopes plus the finite catalog/root names.
-	charge := nativeSourceRequirementCapacityV2() + 16*(memtable.COWAllocationCharge(maxSourceImportBindingBytesV2)+memtable.COWAllocationCharge(columnSourceDirectoryHeaderBytesV2)+preparedSemanticStreamMapEntryReserveBytes)
+	manifest, ok := read.collection.domains.Get("column/manifest")
+	if !ok {
+		return nil, backenddb.ErrNativeSemanticUnsupported
+	}
+	charge, e := nativeSourceRequirementBasisCapacityV2(read.capture.Snapshot(), manifest.baseRoot)
+	if e != nil {
+		return nil, e
+	}
+	charge += 16 * (memtable.COWAllocationCharge(maxSourceImportBindingBytesV2) + memtable.COWAllocationCharge(columnSourceDirectoryHeaderBytesV2) + preparedSemanticStreamMapEntryReserveBytes)
 	charge += memtable.COWAllocationCharge(uint64(unsafe.Sizeof(VectorPartitionSourceReaderV2{}))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(collectionCatalog{})))
 	read.collection.domains.Scan(func(name string, _ *nativeDomainState) bool {
 		charge += preparedSemanticStreamMapEntryReserveBytes + memtable.COWAllocationCharge(uint64(len(read.meta.Name)+len(name)+1))

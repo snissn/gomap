@@ -249,7 +249,11 @@ func (c *Collection) nativeRebuildVectorGraph(name string) (out VectorIndexStatu
 	if err != nil {
 		return out, err
 	}
-	if err = tx.admitStage(g, nativeSourceRequirementCapacityV2()); err != nil {
+	stage, err := nativeSourceRequirementBasisCapacityV2(snap, manifest.baseRoot)
+	if err != nil {
+		return out, err
+	}
+	if err = tx.admitStage(g, stage); err != nil {
 		return out, fmt.Errorf("collections: native graph initial stage: %w", err)
 	}
 	capacity, err := nativeVectorGraphCapacity(g.probe.meta, snap, manifest.baseRoot, tx.db.ColumnAssetRootDir(), def, h, func(n uint64) error { return tx.admitStage(g, n) })
@@ -400,7 +404,11 @@ func nativeVectorGraphRecordCapacity(snap *backenddb.Snapshot, root uint64) (uin
 	if err = it.Error(); err != nil {
 		return 0, err
 	}
-	if err = nativeTypedCheckedAdd(&total, nativeSourceRequirementCapacityV2()); err != nil {
+	basis, err := nativeSourceRequirementBasisCapacityV2(snap, root)
+	if err != nil {
+		return 0, err
+	}
+	if err = nativeTypedCheckedAdd(&total, basis); err != nil {
 		return 0, err
 	}
 	return total, nil
