@@ -12,7 +12,7 @@
     "M0 observation is manual diagnostic-only on a separately fixed product; no forecast starts it or replaces failed M0 acceptance.",
     "Bounded maintenance comparison is a manually granted diagnostic on fixed baseline/candidate products; no forecast starts it or establishes cost, M0 or native acceptance."
   ],
-  "discovery_source_sha256": "699aaf4470765c0a03e89fcd86c5c4946823f768b692e36442f7dc395b1e03a5",
+  "discovery_source_sha256": "0cecb1a5b6f2f2032e7f076b613faa38558c4cf65695047a886c7c3f238025ec",
   "dynamic_consumers": [
     {
       "behavior": "AST/WalkDir discovery and go test subprocess producer witnesses; all TreeDB test/race members retained",

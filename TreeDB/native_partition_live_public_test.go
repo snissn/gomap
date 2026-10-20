@@ -23,6 +23,9 @@ import (
 // the ordinary native factory; the binding must retain its original kind105.
 // Neither a fabricated manifest nor a graph-rebuild command substitutes for it.
 func TestNativePartitionLivePublicBindingLifecycle(t *testing.T) {
+	if !collections.VectorPartitionNamespacePersistenceSupportedV1() {
+		t.Skip("vector partition namespace persistence unsupported")
+	}
 	const childEnv = "GOMAP_NATIVE_PARTITION_LIVE_DIR"
 	const generationEnv = "GOMAP_NATIVE_PARTITION_LIVE_GENERATION"
 	const acceptedMarker = "PARTITION LIVE original105 accepted and physically unapplied"
