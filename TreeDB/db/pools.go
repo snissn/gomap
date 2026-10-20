@@ -120,8 +120,6 @@ func (p *SnapshotPool) putRead(s *Snapshot, oneShot bool) {
 		}
 		// The private one-shot pool never caches an alternate-root reader,
 		// historical rebind, or iterator. Its entries keep these fields empty.
-		s.primaryRebindRoot = primaryStateRootV5{}
-		s.primaryRebindErr = nil
 	}
 	s.db = nil
 	s.idx = nil
@@ -184,7 +182,6 @@ func (m *indexGhostManager) closeOriginalGeneration(gen *indexGen) (*retainedall
 	metadata, charge, err := gen.closeWithCompletionV6()
 	if err != nil {
 		m.db.retainOriginalCleanupError(gen.originalCloseFailure(err))
-		m.db.quiesceFailedRetiredGeneration(gen)
 	}
 	gen = nil
 	return metadata, charge

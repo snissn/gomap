@@ -30,14 +30,14 @@ func rebindSnapshotDependencyTree(ctx context.Context, dir, sideRoot string, p *
 
 func rebindSnapshotDependencyTreeWithMetadata(ctx context.Context, dir, sideRoot string, p *pager.Pager, tr *tree.Tree, count uint64, inExtent func(uint64) bool, metadata *retainedalloc.Owner) error {
 	var it iterator.UnsafeIterator
-	var scratch *primaryDependencyRebindPageV2
+	var scratch *dependencyRebindPageV2
 	if metadata != nil {
-		charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(primaryDependencyRebindPageV2{}))) + retainedalloc.AllocationCharge(tree.OwnedPointerProjectionAllocationSize())
+		charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(dependencyRebindPageV2{}))) + retainedalloc.AllocationCharge(tree.OwnedPointerProjectionAllocationSize())
 		if err := metadata.AddPending(charge); err != nil {
 			return err
 		}
-		scratch = new(primaryDependencyRebindPageV2)
-		defer func() { *scratch = primaryDependencyRebindPageV2{}; metadata.RemovePending(charge) }()
+		scratch = new(dependencyRebindPageV2)
+		defer func() { *scratch = dependencyRebindPageV2{}; metadata.RemovePending(charge) }()
 		it = tr.OwnedPointerProjectionIterator(nil, nil, nil)
 	} else {
 		it = tr.Iterator(nil, nil)
@@ -109,7 +109,7 @@ func rebindSnapshotDependencyTreeWithMetadata(ctx context.Context, dir, sideRoot
 	return it.Error()
 }
 
-type primaryDependencyRebindPageV2 struct{ key, image [page.PageSize]byte }
+type dependencyRebindPageV2 struct{ key, image [page.PageSize]byte }
 
 func installReboundDependencyLeafV2(p *pager.Pager, location *tree.Iterator, key, encoded []byte, inExtent func(uint64) bool, destination []byte) error {
 	id, ok := location.CurrentIndexLeafPageID()

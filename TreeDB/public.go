@@ -829,10 +829,26 @@ func openResolvedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
 	applyEnvMaintenanceOverrides(&opts)
 	forceTemplateCompressionOff(&opts)
 
+	// An interrupted flat store may retain PRIMARY files without index.db.
+	// Check the caller's namespace before layout inference can select maindb/.
+	if err := db.ValidateDATAIndexOpen(opts.Dir, opts.IndexPrimaryDirectory); err != nil {
+		return nil, err
+	}
 	layout, err := resolveOpenDirLayout(opts.Dir, opts.DisableSideStores)
 	if err != nil {
 		return nil, err
 	}
+	if err := db.ValidateDATAIndexOpen(layout.mainDir, opts.IndexPrimaryDirectory); err != nil {
+		return nil, err
+	}
+	if !layout.disableSideStores {
+		for _, dir := range []string{layout.dictdbDir, layout.templatedbDir} {
+			if err := db.ValidateDATAIndexOpen(dir, false); err != nil {
+				return nil, err
+			}
+		}
+	}
+
 	rootDir := layout.rootDir
 	maindbDir := layout.mainDir
 	dictdbDir := layout.dictdbDir
@@ -2949,9 +2965,22 @@ func VacuumIndexOffline(opts Options) error {
 	if err := resolveOpenProfileOptions(&opts); err != nil {
 		return err
 	}
+	if err := db.ValidateDATAIndexOpen(opts.Dir, opts.IndexPrimaryDirectory); err != nil {
+		return err
+	}
 	layout, err := resolveOpenDirLayout(opts.Dir, opts.DisableSideStores)
 	if err != nil {
 		return err
+	}
+	if err := db.ValidateDATAIndexOpen(layout.mainDir, opts.IndexPrimaryDirectory); err != nil {
+		return err
+	}
+	if !layout.disableSideStores {
+		for _, dir := range []string{layout.dictdbDir, layout.templatedbDir} {
+			if err := db.ValidateDATAIndexOpen(dir, false); err != nil {
+				return err
+			}
+		}
 	}
 	opts.Dir = layout.mainDir
 	opts.DisableSideStores = layout.disableSideStores

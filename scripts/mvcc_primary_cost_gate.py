@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Measure the same public PRIMARY replacement on exact base/head binaries."""
+"""Measure the same public durable replacement on exact base/head binaries."""
 
 from __future__ import annotations
 
@@ -20,15 +20,53 @@ import tempfile
 import time
 
 
-BENCHMARK = "BenchmarkCommitAtPrimaryOnlyAfterDataGeneration"
-HARNESS = "TreeDB/mvcc/primary_generation_routing_v6_test.go"
-LIFECYCLE = "TestCommitAtPrimaryOnlyRetainsActualDataGeneration"
+BENCHMARK = "BenchmarkCommitAtDurableReplacementAfterDataGeneration"
+HARNESS = "TreeDB/mvcc/durable_replacement_cost_test.go"
+LIFECYCLE = "TestCommitAtDurableReplacementLifecycle"
+ROLE_DECLARATION = 'const durableReplacementAuthority = "DATA"'
+PRIMARY_SETUP = "// MVCC_COST_PRIMARY_SETUP"
+CAPABILITIES = {
+    "PRIMARY": ("TreeDB/db/durable_primary_runtime_v5.go", "func (db *DB) attachPrimaryArenaV5("),
+    "DATA": ("TreeDB/db/retired_primary_format.go", "func ValidateDATAIndexOpen("),
+}
 SAMPLES = 8
 ITERATIONS = 128
 TIME_LIMIT_PERCENT = 5.0
 QUIET_LIMIT_PERCENT = 2.0
 ROW = re.compile(r"^" + BENCHMARK + r"(?:-\d+)?\s+(\d+)\s+(.*)$")
 METRICS = {"ns/op", "B/op", "allocs/op", "generation_advances/op"}
+
+
+def source_authority(root: Path) -> dict:
+    """Select an explicit setup from actual implementation; never retry another route."""
+    found = []
+    for authority, (relative, declaration) in CAPABILITIES.items():
+        path = root / relative
+        if path.exists():
+            if declaration not in path.read_text():
+                raise ValueError(f"unrecognized {authority} source capability: {relative}")
+            found.append({"authority": authority, "path": relative, "sha256": digest(path)})
+    if len(found) != 1:
+        raise ValueError("exactly one recognized PRIMARY or DATA source capability is required")
+    return found[0]
+
+
+def render_harness(template: str, authority: str) -> str:
+    if template.count(ROLE_DECLARATION) != 1 or template.count(PRIMARY_SETUP) != 1:
+        raise ValueError("maintained cost fixture requires one role and one setup marker")
+    if authority not in CAPABILITIES:
+        raise ValueError("unsupported source authority")
+    if authority == "PRIMARY":
+        return template.replace(ROLE_DECLARATION, 'const durableReplacementAuthority = "PRIMARY"').replace(
+            PRIMARY_SETUP, "opts.IndexPrimaryDirectory = true // Explicit PRIMARY control.")
+    return template
+
+
+def parse_authority(text: str, expected: str) -> str:
+    observed = re.findall(r"(?m)^\s*(?:\S+\.go:\d+:\s+)?MVCC_COST_AUTHORITY authority=(PRIMARY|DATA) root=\d+ commit=\d+ profile=\S+ mode=\S+ redo=off$", text)
+    if expected not in CAPABILITIES or not observed or any(role != expected for role in observed):
+        raise ValueError("missing or mismatched actual public authority evidence")
+    return expected
 
 
 def digest(path: Path) -> str:
@@ -110,7 +148,7 @@ def qualify_runtime(result: dict, before: dict, after: dict, *, quiet: bool) -> 
 def parse_sample(text: str) -> dict[str, float]:
     rows = [m for line in text.splitlines() if (m := ROW.match(line.strip()))]
     if len(rows) != 1 or int(rows[0][1]) != ITERATIONS:
-        raise ValueError("exactly one 128-iteration PRIMARY sample is required")
+        raise ValueError("exactly one 128-iteration durable replacement sample is required")
     parts = rows[0][2].split()
     if len(parts) % 2:
         raise ValueError("malformed benchmark metrics")
@@ -129,7 +167,9 @@ def parse_sample(text: str) -> dict[str, float]:
     return result
 
 
-def evaluate(rows: list[dict]) -> dict:
+def evaluate(rows: list[dict], authorities: dict[str, str]) -> dict:
+    if set(authorities) != {"baseline", "candidate"} or any(role not in CAPABILITIES for role in authorities.values()):
+        raise ValueError("both source-bound arm authorities are required")
     expected = [(pair, revision) for pair in range(SAMPLES)
                 for revision in (("baseline", "candidate") if pair % 2 == 0
                                  else ("candidate", "baseline"))]
@@ -147,8 +187,12 @@ def evaluate(rows: list[dict]) -> dict:
     gates = {"timing": delta <= TIME_LIMIT_PERCENT,
              "bytes": head["B/op"] <= base["B/op"],
              "allocations": head["allocs/op"] <= base["allocs/op"],
-             "candidate_primary_activation": all(r["generation_advances/op"] == 0
-                                                 for r in by_revision["candidate"])}
+             "baseline_route_activation": all(r.get("authority") == authorities["baseline"]
+                                               for r in rows if r["revision"] == "baseline"),
+             "candidate_route_activation": all(r.get("authority") == authorities["candidate"]
+                                                for r in rows if r["revision"] == "candidate")
+                and (authorities["candidate"] != "PRIMARY" or all(
+                    r["generation_advances/op"] == 0 for r in by_revision["candidate"]))}
     return {"medians": medians, "paired_deltas_percent": paired,
             "median_paired_delta_percent": delta, "gates": gates,
             "measurement_pass": all(gates.values())}
@@ -290,22 +334,27 @@ def run_gate(root: Path, output: Path, baseline: str, candidate: str) -> int:
     try:
         command("baseline-worktree", ["git", "worktree", "add", "--detach", base_root, baseline])
         worktree_added = True
-        harness = output / "primary_generation_routing_v6_test.go"
-        harness.write_bytes((root / HARNESS).read_bytes())
-        overlay = output / "baseline-overlay.json"
-        save(overlay.name, {"Replace": {str(base_root / HARNESS): str(harness)}})
+        template = output / "durable_replacement_cost_test.go"
+        template.write_bytes((root / HARNESS).read_bytes())
+        source_bindings = {}
+        harnesses = {}
         binaries = {}
         for revision, source in (("baseline", base_root), ("candidate", root)):
+            source_bindings[revision] = source_authority(source)
+            harness = output / (revision + "-durable_replacement_cost_test.go")
+            harness.write_text(render_harness(template.read_text(), source_bindings[revision]["authority"]))
+            harnesses[revision] = {"path": harness.name, "sha256": digest(harness)}
+            overlay = output / (revision + "-overlay.json")
+            save(overlay.name, {"Replace": {str(source / HARNESS): str(harness)}})
             binary = output / (revision + "-primary.test")
-            argv = ["go", "test", "-c", "-p=1", "-tags=treedb_test", "-trimpath", "-buildvcs=false"]
-            if revision == "baseline":
-                argv += ["-overlay", overlay]
+            argv = ["go", "test", "-c", "-p=1", "-tags=treedb_test", "-trimpath", "-buildvcs=false", "-overlay", overlay]
             command("build-" + revision, argv + ["-o", binary, "./TreeDB/mvcc"], source, timeout=600)
             binaries[revision] = {"sha256": digest(binary), "bytes": binary.stat().st_size,
                                   "source_sha": baseline if revision == "baseline" else candidate,
                                   "path": binary.name}
         save("bindings.json", {"baseline": baseline, "candidate": candidate,
-             "harness_sha256": digest(harness), "runner_sha256": digest(Path(__file__)),
+             "harness_sha256": digest(template), "arm_harnesses": harnesses,
+             "source_authorities": source_bindings, "runner_sha256": digest(Path(__file__)),
              "samples": SAMPLES, "iterations": ITERATIONS, "cpu": 0, "gomaxprocs": 1,
              "max_paired_regression_percent": TIME_LIMIT_PERCENT,
              "bytes_and_allocations": "no median growth", "binaries": binaries})
@@ -317,7 +366,7 @@ def run_gate(root: Path, output: Path, baseline: str, candidate: str) -> int:
             for revision, record in binaries.items():
                 binding = runtime_binding(output / record["path"], command, phase + "-" + revision, environment)
                 binding["inputs"] = {
-                    "harness_sha256": digest(harness), "runner_sha256": digest(Path(__file__)),
+                    "harness_sha256": digest(output / harnesses[revision]["path"]), "runner_sha256": digest(Path(__file__)),
                     "environment_sha256": hashlib.sha256(json.dumps(environment, sort_keys=True).encode()).hexdigest(),
                     "cwd": str(root), "argv": ["taskset", "-c", "0", "<measured-binary>"] + benchmark_argv,
                 }
@@ -326,10 +375,15 @@ def run_gate(root: Path, output: Path, baseline: str, candidate: str) -> int:
             return bindings
 
         inputs_before = bind_inputs("before")
-        lifecycle = command("candidate-public-lifecycle", ["taskset", "-c", "0", output / "candidate-primary.test",
-                "-test.run=^" + LIFECYCLE + "$", "-test.count=1", "-test.timeout=90s", "-test.v"])
-        if f"--- PASS: {LIFECYCLE} " not in lifecycle or "--- SKIP:" in lifecycle:
-            raise RuntimeError("actual candidate public lifecycle control did not pass")
+        authorities = {revision: record["authority"] for revision, record in source_bindings.items()}
+        for revision, record in binaries.items():
+            lifecycle = command(revision + "-public-lifecycle", ["taskset", "-c", "0", output / record["path"],
+                    "-test.run=^" + LIFECYCLE + "$", "-test.count=1", "-test.timeout=90s", "-test.v"])
+            parse_authority(lifecycle, authorities[revision])
+            if (f"--- PASS: {LIFECYCLE} " not in lifecycle or "--- SKIP:" in lifecycle
+                    or f"MVCC_COST_LIFECYCLE authority={authorities[revision]}" not in lifecycle
+                    or (authorities[revision] == "DATA" and lifecycle.count("MVCC_COST_DATA_SLOT ") != 6)):
+                raise RuntimeError(f"actual {revision} public lifecycle control did not pass")
         preflight = ProcessObservation(output / "preflight-processes.jsonl")
         while time.monotonic() - preflight.started < 5:
             time.sleep(0.25)
@@ -344,7 +398,8 @@ def run_gate(root: Path, output: Path, baseline: str, candidate: str) -> int:
             for revision in order:
                 text = command(f"pair-{pair+1}-{revision}", ["taskset", "-c", "0",
                      output / binaries[revision]["path"]] + benchmark_argv)
-                rows.append({"pair": pair, "revision": revision, "metrics": parse_sample(text)})
+                rows.append({"pair": pair, "revision": revision, "metrics": parse_sample(text),
+                             "authority": parse_authority(text, authorities[revision])})
                 save("samples.json", rows)
         observed = observation.finish()
         observation = None
@@ -355,16 +410,22 @@ def run_gate(root: Path, output: Path, baseline: str, candidate: str) -> int:
         for record in binaries.values():
             if digest(output / record["path"]) != record["sha256"]:
                 raise RuntimeError("measured binary drift")
-        if digest(root / HARNESS) != digest(harness):
+        if digest(root / HARNESS) != digest(template):
             raise RuntimeError("benchmark input drift")
+        for revision, source in (("baseline", base_root), ("candidate", root)):
+            if (source_authority(source) != source_bindings[revision]
+                    or digest(output / harnesses[revision]["path"]) != harnesses[revision]["sha256"]):
+                raise RuntimeError("source authority or arm fixture drift")
         inputs_after = bind_inputs("after")
-        result = qualify_runtime(evaluate(rows), inputs_before, inputs_after, quiet=not busy)
-        result.update(baseline=baseline, candidate=candidate)
+        result = qualify_runtime(evaluate(rows, authorities), inputs_before, inputs_after, quiet=not busy)
+        result.update(baseline=baseline, candidate=candidate, source_authorities=source_bindings,
+                      generation_advances="raw telemetry; DATA advancement is not a PRIMARY activation failure")
         save("summary.json", result)
         (output / "summary.md").write_text(
-            "## Public PRIMARY replacement cost\n\n"
+            "## Public durable replacement cost\n\n"
             f"- Verdict: {'PASS' if result['accepted'] else 'FAIL'}\n"
             f"- Exact base/head: `{baseline}` / `{candidate}`\n"
+            f"- Source-bound public authority: `{authorities['baseline']}` / `{authorities['candidate']}`; both lifecycle controls passed.\n"
             "- Eight alternating AB/BA pairs; 128 durable public replacements per sample.\n"
             f"- Median paired time delta: {result['median_paired_delta_percent']:+.3f}% (limit +5%).\n"
             f"- Raw gates: `{json.dumps(result['gates'], sort_keys=True)}`; measurement pass: {result['measurement_pass']}; quiet: {not busy}.\n"

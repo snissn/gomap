@@ -40,7 +40,7 @@ func TestOriginalDATAOnlySnapshotLateManagerFailureRetainedByDB(t *testing.T) {
 			}
 			setValueLogPointer(t, d, []byte("original-key"), ptr)
 			s := d.AcquireSnapshot()
-			if s == nil || s.primaryOwner != nil || s.vlogManager == nil || s.state.ValueLogSet == nil {
+			if s == nil || s.vlogManager == nil || s.state.ValueLogSet == nil {
 				t.Fatal("fixture did not capture original DATA-only value-log snapshot")
 			}
 			vm := s.vlogManager
@@ -177,7 +177,7 @@ func TestOriginalGenerationPublishedFailureConcurrentInspection(t *testing.T) {
 	}
 	setValueLogPointer(t, d, []byte("original-key"), ptr)
 	s := d.AcquireSnapshot()
-	if s == nil || s.primaryOwner != nil {
+	if s == nil {
 		t.Fatal("missing actual DATA-only Snapshot")
 	}
 	g := s.idx

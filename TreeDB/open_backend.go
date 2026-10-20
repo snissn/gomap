@@ -14,10 +14,26 @@ func OpenBackend(opts Options) (*db.DB, func() error, error) {
 	if err := resolveOpenProfileOptions(&opts); err != nil {
 		return nil, nil, err
 	}
+	// An interrupted flat store may retain PRIMARY files without index.db.
+	// Check the caller's namespace before layout inference can select maindb/.
+	if err := db.ValidateDATAIndexOpen(opts.Dir, opts.IndexPrimaryDirectory); err != nil {
+		return nil, nil, err
+	}
 	layout, err := resolveOpenDirLayout(opts.Dir, opts.DisableSideStores)
 	if err != nil {
 		return nil, nil, err
 	}
+	if err := db.ValidateDATAIndexOpen(layout.mainDir, opts.IndexPrimaryDirectory); err != nil {
+		return nil, nil, err
+	}
+	if !layout.disableSideStores {
+		for _, dir := range []string{layout.dictdbDir, layout.templatedbDir} {
+			if err := db.ValidateDATAIndexOpen(dir, false); err != nil {
+				return nil, nil, err
+			}
+		}
+	}
+
 	opts.DisableSideStores = layout.disableSideStores
 
 	// Apply persisted storage/runtime knobs so direct maintenance opens agree

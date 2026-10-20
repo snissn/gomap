@@ -19,7 +19,7 @@ func TestMaintenanceDrainUsesOriginalRetiredGeneration(t *testing.T) {
 	}
 	for _, failClose := range []bool{false, true} {
 		t.Run(fmt.Sprint(failClose), func(t *testing.T) {
-			database, err := Open(Options{Dir: t.TempDir(), IndexPrimaryDirectory: true, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+			database, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -54,7 +54,7 @@ func TestMaintenanceDrainUsesOriginalRetiredGeneration(t *testing.T) {
 				t.Fatal(err)
 			}
 			if failClose {
-				if err := original.primary.Pager().WithStableResourceFile(func(f *os.File) error { return f.Close() }); err != nil {
+				if err := original.pager.WithStableResourceFile(func(f *os.File) error { return f.Close() }); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -81,7 +81,7 @@ func TestAcceptedSnapshotReceiptRefusalAbortsOriginalCandidate(t *testing.T) {
 	refused := errors.New("test: receipt refused")
 	for _, adoption := range []bool{false, true} {
 		t.Run(fmt.Sprint(adoption), func(t *testing.T) {
-			database, err := Open(Options{Dir: t.TempDir(), IndexPrimaryDirectory: true, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+			database, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -93,10 +93,7 @@ func TestAcceptedSnapshotReceiptRefusalAbortsOriginalCandidate(t *testing.T) {
 				t.Fatal(err)
 			}
 			var receipt *Snapshot
-			var originalSet *rootpublication.StableResourceSet
 			if err := group.PrepareAcceptedSnapshot(func(SnapshotAllocationSizes) error {
-				original := group.primaryCurrent.(*rootpublication.DurableRootTransaction)
-				originalSet = original.PublicationCandidateV6().Resources()
 				if !adoption {
 					return refused
 				}
@@ -121,11 +118,12 @@ func TestAcceptedSnapshotReceiptRefusalAbortsOriginalCandidate(t *testing.T) {
 			if !errors.Is(err, refused) || errors.Is(err, rootpublication.ErrDurableRootOwnership) {
 				t.Fatalf("refusal cleanup: %v", err)
 			}
-			if group.Accepted() || group.primaryCurrent != nil || group.primaryNext != nil || database.idx.Load().primaryOwner.failedTransactions != nil || database.idx.Load().primaryOwner.failedBuildGroups != nil {
+			if group.Accepted() || group.registered || len(group.tracker.Pages()) != 0 {
 				t.Fatal("private original ownership retained after successful abort")
 			}
-			if originalSet == nil || originalSet.Owner() != rootpublication.ResourceOwnerReleased {
-				t.Fatal("original candidate set was lost during containing constructor scrub")
+
+			if got, err := database.Get([]byte("private")); err != nil || len(got) != 0 {
+				t.Fatalf("refused private DATA key visible: %q %v", got, err)
 			}
 			if err := group.Close(); err != nil {
 				t.Fatalf("repeat group Close: %v", err)
@@ -198,90 +196,88 @@ func TestCheckpointRejectsPublishedSemanticSystemRoot(t *testing.T) {
 }
 
 func TestAcceptedSnapshotReceiptRetainsCandidateTuple(t *testing.T) {
-	for _, primary := range []bool{false, true} {
-		t.Run(fmt.Sprint(primary), func(t *testing.T) {
-			database, err := Open(Options{Dir: t.TempDir(), IndexPrimaryDirectory: primary, DisableBackgroundPrune: true, NegativeLookupFilterBytes: 1024})
-			if err != nil {
-				t.Fatal(err)
+	t.Run("DATA", func(t *testing.T) {
+		database, err := Open(Options{Dir: t.TempDir(), DisableBackgroundPrune: true, NegativeLookupFilterBytes: 1024})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer database.Close()
+		basis, err := database.AcquireSnapshotWithAllocationAdmission(func(SnapshotAllocationSizes) error { return nil })
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer basis.Close()
+		group, err := database.BeginRootPublicationBuildGroupFromSnapshot(basis)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer group.Close()
+		var receipt *Snapshot
+		defer func() {
+			if receipt != nil {
+				_ = receipt.Close()
 			}
-			defer database.Close()
-			basis, err := database.AcquireSnapshotWithAllocationAdmission(func(SnapshotAllocationSizes) error { return nil })
-			if err != nil {
-				t.Fatal(err)
+		}()
+		if err := group.PrepareAcceptedSnapshot(func(SnapshotAllocationSizes) error { return nil }, func(s *Snapshot) error { receipt = s; return nil }, func() error {
+			if receipt != nil {
+				return receipt.Close()
 			}
-			defer basis.Close()
-			group, err := database.BeginRootPublicationBuildGroupFromSnapshot(basis)
-			if err != nil {
-				t.Fatal(err)
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		batch := database.NewPhysicalBatch().(*Batch)
+		defer batch.Close()
+		if err := batch.Set([]byte("key"), []byte("accepted")); err != nil {
+			t.Fatal(err)
+		}
+		if err := batch.SetRootPublicationBuildGroup(group, true); err != nil {
+			t.Fatal(err)
+		}
+		var prepared bool
+		database.testDurableRootCandidatePreparedHook = func() {
+			prepared = true
+			if receipt == nil || receipt.state == database.state.Load() {
+				t.Error("receipt was not constructed from private candidate")
 			}
-			defer group.Close()
-			var receipt *Snapshot
-			defer func() {
-				if receipt != nil {
-					_ = receipt.Close()
-				}
-			}()
-			if err := group.PrepareAcceptedSnapshot(func(SnapshotAllocationSizes) error { return nil }, func(s *Snapshot) error { receipt = s; return nil }, func() error {
-				if receipt != nil {
-					return receipt.Close()
-				}
-				return nil
-			}); err != nil {
-				t.Fatal(err)
+			if receipt != nil && receipt.systemRootPublishEpoch != database.snapshotPublicationEpoch(receipt.idx, receipt.state) {
+				t.Error("candidate receipt has wrong predicted epoch")
 			}
-			batch := database.NewPhysicalBatch().(*Batch)
-			defer batch.Close()
-			if err := batch.Set([]byte("key"), []byte("accepted")); err != nil {
-				t.Fatal(err)
-			}
-			if err := batch.SetRootPublicationBuildGroup(group, true); err != nil {
-				t.Fatal(err)
-			}
-			var prepared bool
-			database.testDurableRootCandidatePreparedHook = func() {
-				prepared = true
-				if receipt == nil || receipt.state == database.state.Load() {
-					t.Error("receipt was not constructed from private candidate")
-				}
-				if receipt != nil && receipt.systemRootPublishEpoch != database.snapshotPublicationEpoch(receipt.idx, receipt.state) {
-					t.Error("candidate receipt has wrong predicted epoch")
-				}
-			}
-			if err := batch.WriteSync(); err != nil {
-				t.Fatal(err)
-			}
-			database.testDurableRootCandidatePreparedHook = nil
-			if !prepared || !group.Accepted() || group.AcceptedSnapshot() != receipt {
-				t.Fatal("missing exact accepted generation")
-			}
-			visible := database.snapshotViewRO.Load()
-			if visible.negativeFilter == nil {
-				t.Fatal("candidate dropped qualified negative filter")
-			}
-			if got := reflect.ValueOf(&receipt.tree).Elem().FieldByName("negativeFilter").Pointer(); got != reflect.ValueOf(visible.negativeFilter).Pointer() {
-				t.Fatal("receipt filter differs from accepted tuple")
-			}
-			if receipt.state != visible.state || receipt.idx != visible.idx || receipt.systemRootPublishEpoch != visible.systemRootPublishEpoch {
-				t.Fatal("receipt tuple differs from accepted visible tuple")
-			}
-			token, ok := receipt.StateToken()
-			if !ok {
-				t.Fatal("missing receipt token")
-			}
-			if err := group.Close(); err != nil {
-				t.Fatal(err)
-			}
-			if err := database.Set([]byte("key"), []byte("later")); err != nil {
-				t.Fatal(err)
-			}
-			if got, err := receipt.Get([]byte("key")); err != nil || string(got) != "accepted" {
-				t.Fatalf("receipt recaptured later state: %q %v", got, err)
-			}
-			if got, ok := receipt.StateToken(); !ok || got != token {
-				t.Fatal("receipt generation changed")
-			}
-		})
-	}
+		}
+		if err := batch.WriteSync(); err != nil {
+			t.Fatal(err)
+		}
+		database.testDurableRootCandidatePreparedHook = nil
+		if !prepared || !group.Accepted() || group.AcceptedSnapshot() != receipt {
+			t.Fatal("missing exact accepted generation")
+		}
+		visible := database.snapshotViewRO.Load()
+		if visible.negativeFilter == nil {
+			t.Fatal("candidate dropped qualified negative filter")
+		}
+		if got := reflect.ValueOf(&receipt.tree).Elem().FieldByName("negativeFilter").Pointer(); got != reflect.ValueOf(visible.negativeFilter).Pointer() {
+			t.Fatal("receipt filter differs from accepted tuple")
+		}
+		if receipt.state != visible.state || receipt.idx != visible.idx || receipt.systemRootPublishEpoch != visible.systemRootPublishEpoch {
+			t.Fatal("receipt tuple differs from accepted visible tuple")
+		}
+		token, ok := receipt.StateToken()
+		if !ok {
+			t.Fatal("missing receipt token")
+		}
+		if err := group.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := database.Set([]byte("key"), []byte("later")); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := receipt.Get([]byte("key")); err != nil || string(got) != "accepted" {
+			t.Fatalf("receipt recaptured later state: %q %v", got, err)
+		}
+		if got, ok := receipt.StateToken(); !ok || got != token {
+			t.Fatal("receipt generation changed")
+		}
+	})
 }
 
 func TestCloseBorrowsAdmittedTeardownGuard(t *testing.T) {

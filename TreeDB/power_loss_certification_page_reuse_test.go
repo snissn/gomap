@@ -75,9 +75,8 @@ func TestPowerLossCertificationRecoverablePageReusePublicReopen(t *testing.T) {
 		if err := model.Observe(dir, event); err != nil {
 			return err
 		}
-		// PRIMARY V6 syncs both the DATA dependency and PRIMARY closure. Arm
-		// only after the first post-horizon publication, and cut the actual
-		// DATA operand whose reused pages this witness observes.
+		// Arm after the first post-horizon publication and cut the actual
+		// DATA file whose reused pages this witness observes.
 		if !armed || event.Point != durabilitycut.BeforeIndexDataSync || filepath.Base(event.Path) != "index.db" {
 			return nil
 		}

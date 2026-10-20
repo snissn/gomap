@@ -95,7 +95,6 @@ func (db *DB) releaseIndex(gen *indexGen) {
 	}
 	if err != nil {
 		db.retainOriginalCleanupError(gen.originalCloseFailure(err))
-		db.quiesceFailedRetiredGeneration(gen)
 	}
 	gen = nil
 	if charge != 0 {
@@ -144,28 +143,10 @@ func (db *DB) maybeReleaseRetiredIndex(gen *indexGen) {
 	}
 	if err != nil {
 		db.retainOriginalCleanupError(gen.originalCloseFailure(err))
-		db.quiesceFailedRetiredGeneration(gen)
 	}
 	gen = nil
 	if charge != 0 {
 		metadata.RemovePending(charge)
-	}
-}
-
-// Quiescence is separate from physical disposal. A retired failed generation
-// cannot regain write admission; a PRIMARY still shared by the actual current
-// generation remains eligible and is quiesced only at terminal DB withdrawal.
-func (db *DB) quiesceFailedRetiredGeneration(gen *indexGen) {
-	if gen == nil || gen.primary == nil {
-		return
-	}
-	db.idxMu.Lock()
-	current := db.idx.Load()
-	eligible := current == gen || (current != nil && current.primary == gen.primary)
-	physicalPager := gen.primary.Pager()
-	db.idxMu.Unlock()
-	if !eligible {
-		physicalPager.QuiesceBackgroundGrowth()
 	}
 }
 
@@ -183,7 +164,7 @@ func (db *DB) closeAllIndexes() error {
 	for i, g := range gens {
 		// Current publication is already nil and writers have drained. Stop
 		// growth without consuming any physical owner or failed debt.
-		db.quiesceFailedRetiredGeneration(g)
+
 		metadata, charge, err := g.closeWithCompletionV6()
 		if err != nil {
 			db.retainOriginalCleanupError(g.originalCloseFailure(err))

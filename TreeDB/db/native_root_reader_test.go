@@ -214,52 +214,6 @@ func TestNativeRootReaderRevisionTombstoneAndCloseOverlap(t *testing.T) {
 	}
 }
 
-func TestNativeRootReaderCapturedPrimaryDirectory(t *testing.T) {
-	d, err := Open(Options{Dir: t.TempDir(), IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer d.Close()
-	if err := d.Set([]byte("a"), []byte("old")); err != nil {
-		t.Fatal(err)
-	}
-	if err := d.Set([]byte("gone"), []byte("prior")); err != nil {
-		t.Fatal(err)
-	}
-	if err := d.Delete([]byte("gone")); err != nil {
-		t.Fatal(err)
-	}
-	if entry, found := primaryDBDirectory(t, d).Search([]byte("gone")); !found || !entry.InlineAbsence() {
-		t.Fatal("fixture lacks PRIMARY inline absence")
-	}
-	s := d.AcquireSnapshot()
-	defer s.Close()
-	r, err := s.NativeReaderAtRoot(s.state.RootPageID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := d.Set([]byte("a"), []byte("new")); err != nil {
-		t.Fatal(err)
-	}
-	if err := d.Set([]byte("gone"), []byte("restored")); err != nil {
-		t.Fatal(err)
-	}
-	var key, leaf [page.PageSize]byte
-	var scratch tree.OwnedSuccessorScratch
-	entry, err := r.GetEntryExactWithFixedScratch([]byte("a"), key[:], leaf[:], nil)
-	if err != nil || string(entry.Value) != "old" {
-		t.Fatal("captured PRIMARY", entry, err)
-	}
-	entry, ok, err := r.SeekGEEntryWithFixedScratch([]byte("gone"), nil, key[:], leaf[:], &scratch, nil)
-	if err != nil || !ok || entry.Flags&node.FlagTombstone == 0 {
-		t.Fatal("captured inline absence", entry, ok, err)
-	}
-	if len(s.rootTrees) != 0 {
-		t.Fatal("PRIMARY reader entered root cache")
-	}
-	r = SnapshotRootReader{}
-}
-
 func TestNativeRootReaderExternalLeavesRequireCapturedResolver(t *testing.T) {
 	dir := t.TempDir()
 	d := openOrderedRootSpanNativeTestDB(t, dir, true, 0)

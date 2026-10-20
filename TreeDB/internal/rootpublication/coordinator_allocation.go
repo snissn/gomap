@@ -123,9 +123,7 @@ func (t *DurableRootTransaction) metadataOwnerV1() *retainedalloc.Owner {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.constructionV6 != nil {
-		return t.constructionV6.arena.MetadataOwner()
-	}
+
 	if t.terminalMetadataV6 != nil {
 		return t.terminalMetadataV6.owner
 	}

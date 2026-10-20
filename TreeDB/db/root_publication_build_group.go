@@ -8,16 +8,10 @@ import (
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
-	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/zipper"
 )
-
-type privatePrimaryConstructionV6 interface {
-	primaryarena.ReadRootConstructionV6
-	AbortPrivatePrimaryConstructionV6() error
-}
 
 // RootPublicationBuildGroup stages a logical cached apply across bounded
 // backend batches. Intermediate batches build private COW roots only. The final
@@ -52,14 +46,10 @@ type RootPublicationBuildGroup struct {
 
 	// Only original factory outputs enter these two custody cells. baseRoot is
 	// borrowed and never enters them. A failed disposal preserves both originals.
-	primaryCurrent         primaryarena.ReadRootConstructionV6
-	primaryNext            primaryarena.ReadRootConstructionV6
-	primaryNextAbortErr    error
-	primaryCurrentAbortErr error
-	cleanupErr             error
-	primaryFailedNext      *RootPublicationBuildGroup
-	primaryFailure         primaryCleanupFailureV5
-	dataCleanupFailure     originalDBCleanupFailure
+
+	cleanupErr error
+
+	dataCleanupFailure originalDBCleanupFailure
 
 	baseRoot    uint64
 	currentRoot uint64
@@ -327,7 +317,7 @@ func (group *RootPublicationBuildGroup) applyBatchLocked(b *Batch) error {
 		applyOpts.ReadOnlyPrepare = prepareBuf.opts
 	}
 	z := group.idx.zipper.CloneWithAllocator(group.tracker)
-	z.SetPrimaryConstructionOutputV6(&group.primaryNext, &group.primaryNextAbortErr)
+
 	var (
 		newRoot   uint64
 		retired   []uint64
@@ -378,16 +368,7 @@ func (group *RootPublicationBuildGroup) applyBatchLocked(b *Batch) error {
 	// The successor has sealed its real closure, including genuine edges to
 	// surviving predecessor components. Only now can its private predecessor
 	// relinquish the original construction edge.
-	if group.primaryNext != nil {
-		if group.primaryNext.PrimaryConstructionReferenceV6().PageID != newRoot {
-			return rootpublication.ErrDurableRootOwnership
-		}
-		if err := group.disposePrimaryLocked(&group.primaryCurrent); err != nil {
-			group.primaryCurrentAbortErr = err
-			return err
-		}
-		group.primaryCurrent, group.primaryNext = group.primaryNext, nil
-	}
+
 	group.currentRoot = newRoot
 	group.retired = append(group.retired, retired...)
 	mergeOrderedRootPublishMetrics(&group.metrics, metrics)
@@ -562,20 +543,6 @@ func (group *RootPublicationBuildGroup) writeBatch(b *Batch, syncWrite bool, max
 // disposePrimaryLocked uses the original transaction's phase as the transfer
 // receipt. A Bind/Detach-owned candidate is untouched; failed Abort keeps this
 // exact constructor and all remaining physical custody in the original cell.
-func (group *RootPublicationBuildGroup) disposePrimaryLocked(owner *primaryarena.ReadRootConstructionV6) error {
-	if *owner == nil {
-		return nil
-	}
-	original, ok := (*owner).(privatePrimaryConstructionV6)
-	if !ok {
-		return rootpublication.ErrDurableRootOwnership
-	}
-	if err := original.AbortPrivatePrimaryConstructionV6(); err != nil {
-		return err
-	}
-	*owner = nil
-	return nil
-}
 
 func (group *RootPublicationBuildGroup) cleanupLocked(abandon bool) error {
 	if group != nil {
@@ -590,33 +557,6 @@ func (group *RootPublicationBuildGroup) cleanupLocked(abandon bool) error {
 		return nil
 	}
 	if group.closed {
-		return group.cleanupErr
-	}
-	var primaryErr error
-	if group.primaryCurrentAbortErr != nil {
-		// A sealed successor still owns genuine edges into this failed predecessor.
-		// Preserve both original cells after the FIRST refusal; neither cleanup
-		// action may be retried or refunded by Close.
-		primaryErr = group.primaryCurrentAbortErr
-	} else if group.primaryNextAbortErr != nil {
-		primaryErr = group.primaryNextAbortErr
-	} else {
-		primaryErr = group.disposePrimaryLocked(&group.primaryNext)
-	}
-	if primaryErr == nil {
-		primaryErr = group.disposePrimaryLocked(&group.primaryCurrent)
-	}
-	if primaryErr != nil {
-		group.failed = true
-		group.closed = true
-		// The same physical owner retains the exact group, DATA tracker, pins,
-		// and failed original constructors before caller serialization is released.
-		group.cleanupErr = group.retainFailureLocked(primaryErr)
-		if group.capturedBasis != nil {
-			group.capturedBasis.endRead()
-			group.capturedBasis = nil
-		}
-		group.releaseBuildLocksLocked()
 		return group.cleanupErr
 	}
 	if group.nativeResources != nil {
@@ -681,27 +621,13 @@ func (group *RootPublicationBuildGroup) releaseBuildLocksLocked() {
 // neither refunds unresolved charge nor introduces another cleanup lifecycle.
 func (group *RootPublicationBuildGroup) retainFailureLocked(err error) error {
 	group.db.publicationPoisoned.Store(true)
-	owner := group.idx.primaryOwner
-	if owner == nil {
-		// DATA groups retain their original closure, tracker and pins on the
-		// existing DB failure graph. There is no PRIMARY physical owner here.
-		group.dataCleanupFailure.retainCause(0, err)
-		group.dataCleanupFailure.retainCause(1, rootpublication.ErrResourceOwnership)
-		group.db.retainOriginalCleanupError(&group.dataCleanupFailure)
-		if group.idx.metadata != nil {
-			group.idx.metadata.CleanupFailed()
-		}
-		return &group.dataCleanupFailure
+	group.dataCleanupFailure.retainCause(0, err)
+	group.dataCleanupFailure.retainCause(1, rootpublication.ErrResourceOwnership)
+	group.db.retainOriginalCleanupError(&group.dataCleanupFailure)
+	if group.idx.metadata != nil {
+		group.idx.metadata.CleanupFailed()
 	}
-	group.primaryFailure.causes = [3]error{err, rootpublication.ErrResourceOwnership}
-	owner.mu.Lock()
-	defer owner.mu.Unlock()
-	group.primaryFailedNext = owner.failedBuildGroups
-	owner.failedBuildGroups = group
-	group.primaryFailure.causes[2] = owner.cleanupErr
-	owner.cleanupErr = &group.primaryFailure
-	owner.arena.MetadataOwner().CleanupFailed()
-	return &group.primaryFailure
+	return &group.dataCleanupFailure
 }
 
 // Accepted reports the existing publication receipt independently of write or

@@ -62,7 +62,7 @@ func NewGrowth(targetPages uint64, w *iterator.OrdinalScanWork) (*Growth, bool, 
 func NewGrowthForPager(p *Pager, target uint64, w *iterator.OrdinalScanWork) (*Growth, bool, error) {
 	var owner *retainedalloc.Owner
 	if p != nil {
-		owner = p.immutableReadRoots.retention
+		// DATA pager growth has no separate immutable-root metadata owner.
 	}
 	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(Growth{})))
 	if owner != nil {

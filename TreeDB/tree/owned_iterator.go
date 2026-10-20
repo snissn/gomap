@@ -15,8 +15,6 @@ var ErrOwnedIteratorLeafReader = errors.New("tree: bounded external-leaf reader 
 // Root depth and reconstructed keys are checked before exceeding these arrays.
 type ownedProjectionStorage struct {
 	iterator    Iterator
-	primary     primaryIterator
-	deltaLeaf   [page.PageSize]byte
 	stack       [maxTraversalDepth]CursorItem
 	nodeKey     [page.PageSize]byte
 	combinedKey [page.PageSize]byte
@@ -58,13 +56,7 @@ func (t *Tree) ownedPointerProjectionIterator(start, end []byte, readLeaf func(p
 	it.leafState.keyScratch = storage.combinedKey[:0]
 	it.leafState.fixedScratch = true
 	it.resetStack()
-	if p, err := t.initPrimaryIterator(&storage.primary, it, start, end, IteratorOptions{Mode: IteratorModePointerProjection, IncludeTombstones: true}, reverse, readLeaf, storage.deltaLeaf[:], true); p != nil || err != nil {
-		if err != nil {
-			it.err = err
-			return it
-		}
-		return p
-	}
+
 	if reverse {
 		it.Seek(nil)
 	} else {
@@ -74,31 +66,13 @@ func (t *Tree) ownedPointerProjectionIterator(start, end []byte, readLeaf func(p
 }
 
 // OwnedUserRootEmpty proves emptiness from this exact captured tree root
-// without iterator or key scratch allocation. A PRIMARY directory is empty only
-// when it has no components and its digest-validated base is an empty leaf.
-// External roots and nonempty/internal bases conservatively return false.
+// without iterator or key scratch allocation. External roots and nonempty or
+// internal roots conservatively return false.
 func (t *Tree) OwnedUserRootEmpty() (bool, error) {
 	var n node.Node
 	verify := t.pager != nil && t.pager.VerifyOnRead()
 	if err := t.loadNodeViewWithLoadKindInto(&n, t.rootPageID, verify, false); err != nil {
 		return false, err
-	}
-	if n.Type() != page.PageTypePrimaryDirectory {
-		return n.Type() == page.PageTypeLeaf && n.Count() == 0, nil
-	}
-	directory, err := node.DecodePrimaryDirectory(n.Data())
-	if err != nil {
-		return false, err
-	}
-	if directory.Count() != 0 {
-		return false, nil
-	}
-	base, _ := directory.Base()
-	if err := t.loadChildRefViewInto(&n, base.Ref, true, false); err != nil {
-		return false, err
-	}
-	if !node.VerifyPrimaryOperand(base, n.Data()) || (n.Type() != page.PageTypeLeaf && n.Type() != page.PageTypeInternal) {
-		return false, node.ErrPrimaryDirectory
 	}
 	return n.Type() == page.PageTypeLeaf && n.Count() == 0, nil
 }

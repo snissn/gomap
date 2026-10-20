@@ -1,7 +1,6 @@
 package tree
 
 import (
-	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"sync"
@@ -10,7 +9,6 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/cowbtree"
 	"github.com/snissn/gomap/TreeDB/internal/crc"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
-	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -47,46 +45,43 @@ const (
 
 var (
 	ErrProjectionReader  = errors.New("tree: phased exact-backend projection reader required")
-	ErrProjectionOwner   = errors.New("tree: exact retained projection root/certificate required")
+	ErrProjectionOwner   = errors.New("tree: exact retained projection DATA root required")
 	ErrProjectionPending = errors.New("tree: projection operation pending")
 	ErrProjectionClosed  = errors.New("tree: projection closed")
 	ErrProjectionDepth   = errors.New("tree: projection traversal depth exceeded")
 )
 
 // ChargedProjection borrows the caller's ALREADY retained exact Tree/root edge
-// and optional SAME PRIMARY certificate. It acquires no unpriced arena/pager
+// and its original DATA owner. It acquires no unpriced pager
 // owner and discovers no transaction. Keep that edge, bounds, seek key and frame
 // reader alive/immutable until CloseStep completes. Then the original owner may
 // reclaim through its existing lifecycle; CloseStep is not physical Finish.
 // The entire fixed storage must be admitted by the existing enclosing owner
 // before calling the constructor, just like OwnedPointerProjectionIterator.
 type ChargedProjection struct {
-	mu                                                                                   sync.Mutex
-	tree                                                                                 Tree
-	certificate                                                                          *primaryarena.ReadRootCertificateV6
-	reader                                                                               ProjectionFrameReader
-	base                                                                                 projectionBase
-	pages                                                                                [maxTraversalDepth][page.PageSize]byte
-	deltaPage                                                                            [page.PageSize]byte
-	turnKey                                                                              [node.ProjectionKeyCapacity]byte
-	turnSource, skipKey                                                                  []byte
-	turnCopied                                                                           int
-	skipCurrent                                                                          bool
-	baseKey, deltaKey                                                                    [node.ProjectionKeyCapacity]byte
-	deltaDecoder                                                                         node.ProjectionDecoder
-	comparison                                                                           node.ProjectionComparison
-	directory                                                                            node.PrimaryDirectoryView
-	entry                                                                                node.PrimaryDirectoryEntry
-	record                                                                               node.LeafEntry
-	start, end, key                                                                      []byte
-	op                                                                                   ProjectionOperation
-	phase                                                                                uint8
-	position, lo, hi, pivot, closeIndex                                                  int
-	primary, reverse, equal, selectedDelta, valid, pending, closing, closed, frameActive bool
-	positioned                                                                           bool
-	advanceBase, advanceDelta                                                            bool
-	frameNode                                                                            node.Node
-	err                                                                                  error
+	mu     sync.Mutex
+	tree   Tree
+	reader ProjectionFrameReader
+	base   projectionBase
+	pages  [maxTraversalDepth][page.PageSize]byte
+
+	turnKey             [node.ProjectionKeyCapacity]byte
+	turnSource, skipKey []byte
+	turnCopied          int
+	skipCurrent         bool
+	baseKey             [node.ProjectionKeyCapacity]byte
+
+	comparison                               node.ProjectionComparison
+	record                                   node.LeafEntry
+	start, end, key                          []byte
+	op                                       ProjectionOperation
+	phase                                    uint8
+	closeIndex                               int
+	reverse, valid, pending, closing, closed bool
+	positioned                               bool
+	advanceBase                              bool
+
+	err error
 }
 
 // ChargedProjectionAllocationSize is the single fixed allocation's raw size.
@@ -97,10 +92,10 @@ func ChargedProjectionRetainedCharge() uint64 {
 	return retainedalloc.AllocationCharge(ChargedProjectionAllocationSize())
 }
 
-// NewChargedProjection is UNPOSITIONED. It does no DecodeDirectory, Seek,
+// NewChargedProjection is UNPOSITIONED. It does no Seek,
 // pager access, frame callback, bound comparison or root scan. Unsupported
 // callbacks refuse before invocation. No production activation occurs here.
-func (t *Tree) NewChargedProjection(cert *primaryarena.ReadRootCertificateV6, start, end []byte, reader any, w *iterator.OrdinalScanWork) (*ChargedProjection, error) {
+func (t *Tree) NewChargedProjection(start, end []byte, reader any, w *iterator.OrdinalScanWork) (*ChargedProjection, error) {
 	r, ok := reader.(ProjectionFrameReader)
 	if !ok || r == nil {
 		return nil, ErrProjectionReader
@@ -111,17 +106,15 @@ func (t *Tree) NewChargedProjection(cert *primaryarena.ReadRootCertificateV6, st
 	if w == nil || !w.Reserve(1, ChargedProjectionRetainedCharge()+uint64(unsafe.Sizeof(Tree{}))) {
 		return nil, cowbtree.ErrWork
 	}
-	if cert != nil && (cert.Arena() == nil || cert.Reference().PageID != t.rootPageID || len(cert.Image()) != page.PageSize) {
-		return nil, ErrProjectionOwner
-	}
-	c := &ChargedProjection{tree: *t, certificate: cert, reader: r, start: start, end: end, primary: cert != nil}
+
+	c := &ChargedProjection{tree: *t, reader: r, start: start, end: end}
 	c.base.reader = r
 	c.base.pages = &c.pages
 	c.base.keyScratch = c.baseKey[:]
 	c.base.source = &c.tree
-	if cert == nil {
-		c.base.root = page.PageChildRef(t.rootPageID)
-	}
+
+	c.base.root = page.PageChildRef(t.rootPageID)
+
 	return c, nil
 }
 
@@ -206,44 +199,13 @@ func (c *ChargedProjection) Step(w *iterator.OrdinalScanWork) (bool, error) {
 func (c *ChargedProjection) step(w *iterator.OrdinalScanWork) (bool, error) {
 	for {
 		switch c.phase {
-		case 0: // fresh integrity on precisely the constructor-owned image
-			if c.primary && c.directory.Count() == 0 && c.base.root == (page.ChildRef{}) {
-				if !w.Reserve(1, page.PageSize+64) {
-					return false, nil
-				}
-				if !page.VerifyChecksumNonMutating(c.certificate.Image()) {
-					return false, node.ErrPrimaryDirectory
-				}
-				c.phase = 1
-			} else {
-				c.phase = 3
-			}
-		case 1:
-			if !w.Reserve(1, page.PageSize+64) {
-				return false, nil
-			}
-			if sha256.Sum256(c.certificate.Image()) != c.certificate.Digest() {
-				return false, node.ErrPrimaryDirectory
-			}
-			c.phase = 2
-		case 2:
-			if !w.Reserve(1, uint64(unsafe.Sizeof(node.PrimaryOperand{}))+uint64(unsafe.Sizeof(node.PrimaryDirectoryView{}))) {
-				return false, nil
-			}
-			c.directory = c.certificate.Directory()
-			op, _ := c.directory.Base()
-			c.base.root = op.Ref
-			c.base.digest = op.Digest
+		case 0:
 			c.phase = 3
 		case 3:
 			if !w.Reserve(1, 64) {
 				return false, nil
 			}
 			c.advanceBase = c.op == ProjectionNext || c.op == ProjectionPrev
-			c.advanceDelta = c.advanceBase && c.selectedDelta
-			if c.advanceBase && c.selectedDelta && !c.equal {
-				c.advanceBase = false
-			}
 			c.phase = 4
 		case 4:
 			if c.advanceBase || (c.op != ProjectionNext && c.op != ProjectionPrev) {
@@ -253,230 +215,23 @@ func (c *ChargedProjection) step(w *iterator.OrdinalScanWork) (bool, error) {
 				}
 				c.phase = 5
 			} else {
-				c.phase = 6
+				c.phase = 12
 			}
 		case 5:
 			done, err := c.base.step(w)
 			if err != nil || !done {
 				return false, err
 			}
-			c.phase = 6
-		case 6:
-			if !c.primary {
-				c.phase = 12
-				continue
-			}
-			if c.op == ProjectionNext || c.op == ProjectionPrev {
-				if c.advanceDelta {
-					if !w.Reserve(1, 8) {
-						return false, nil
-					}
-					if c.reverse {
-						c.position--
-					} else {
-						c.position++
-					}
-				}
-				c.phase = 11
-			} else if c.op == ProjectionFirst || c.op == ProjectionLast {
-				if !w.Reserve(1, 8) {
-					return false, nil
-				}
-				c.position = 0
-				if c.reverse {
-					c.position = c.directory.Count() - 1
-				}
-				c.phase = 11
-			} else {
-				if !w.Reserve(1, 24) {
-					return false, nil
-				}
-				c.lo = 0
-				c.hi = c.directory.Count()
-				c.phase = 7
-			}
-		case 7:
-			if c.lo == c.hi {
-				if !w.Reserve(1, 8) {
-					return false, nil
-				}
-				c.position = c.lo
-				if c.reverse {
-					c.position--
-				}
-				c.phase = 11
-				continue
-			}
-			if !w.Reserve(1, uint64(unsafe.Sizeof(node.PrimaryDirectoryEntry{}))+64) {
-				return false, nil
-			}
-			c.pivot = c.lo + (c.hi-c.lo)/2
-			var err error
-			c.entry, err = c.directory.Entry(c.pivot)
-			if err != nil {
-				return false, err
-			}
-			c.phase = 8
-		case 8:
-			if !c.comparison.Begin(c.entry.Key, c.key, w) {
-				return false, nil
-			}
-			c.phase = 9
-		case 9:
-			cmp, done := c.comparison.Step(w)
-			if !done {
-				return false, nil
-			}
-			if !w.Reserve(1, 16) {
-				return false, nil
-			}
-			if cmp < 0 || (c.reverse && cmp == 0) {
-				c.lo = c.pivot + 1
-			} else {
-				c.hi = c.pivot
-			}
-			c.phase = 7
-		case 11:
-			if c.position >= 0 && c.position < c.directory.Count() {
-				if !w.Reserve(1, uint64(unsafe.Sizeof(node.PrimaryDirectoryEntry{}))+64) {
-					return false, nil
-				}
-				var err error
-				c.entry, err = c.directory.Entry(c.position)
-				if err != nil {
-					return false, err
-				}
-			}
 			c.phase = 12
 		case 12:
 			if !w.Reserve(1, 32) {
 				return false, nil
 			}
-			hasDelta := c.primary && c.position >= 0 && c.position < c.directory.Count()
-			c.equal = false
-			c.selectedDelta = hasDelta
-			if !hasDelta && !c.base.valid {
+			if !c.base.valid {
 				c.phase = 30
 				continue
 			}
-			if hasDelta && c.base.valid {
-				c.phase = 13
-			} else if hasDelta {
-				c.phase = 16
-			} else {
-				c.phase = 24
-			}
-		case 13:
-			if !c.comparison.Begin(c.entry.Key, c.base.record.Key, w) {
-				return false, nil
-			}
-			c.phase = 14
-		case 14:
-			cmp, done := c.comparison.Step(w)
-			if !done {
-				return false, nil
-			}
-			if !w.Reserve(1, 16) {
-				return false, nil
-			}
-			c.equal = cmp == 0
-			c.selectedDelta = cmp <= 0
-			if c.reverse {
-				c.selectedDelta = cmp >= 0
-			}
-			if c.selectedDelta {
-				c.phase = 16
-			} else {
-				c.phase = 24
-			}
-		case 16:
-			if c.entry.InlineAbsence() {
-				if !w.Reserve(1, uint64(unsafe.Sizeof(node.LeafEntry{}))) {
-					return false, nil
-				}
-				c.record = node.LeafEntry{Key: c.entry.Key, Flags: node.FlagTombstone, Revision: c.entry.Revision}
-				c.phase = 25
-			} else {
-				c.phase = 17
-			}
-		case 17:
-			if !w.Reserve(1, uint64(unsafe.Sizeof(page.ChildRef{}))+32) {
-				return false, nil
-			}
-			if c.entry.Operand.Ref.Kind != page.ChildRefPage || c.entry.Operand.Ref.Page < 2 || c.entry.Operand.Ref.Log != (page.LogRecordRef{}) {
-				return false, node.ErrPrimaryDirectory
-			}
-			c.phase = 33
-		case 33:
-			ready, err := c.reader.BeginProjectionFrame(c.entry.Operand.Ref, c.deltaPage[:], w)
-			if err != nil || !ready {
-				return false, err
-			}
-			c.frameActive = true
-			c.phase = 18
-		case 18:
-			image, done, err := c.reader.StepProjectionFrame(w)
-			if err != nil || !done {
-				return false, err
-			}
-			if len(image) != page.PageSize || &image[0] != &c.deltaPage[0] {
-				return false, ErrProjectionReader
-			}
-			c.frameActive = false
-			c.phase = 19
-		case 19:
-			if !w.Reserve(1, page.PageSize+uint64(unsafe.Sizeof(node.Node{}))) {
-				return false, nil
-			}
-			if !page.VerifyChecksumNonMutating(c.deltaPage[:]) {
-				return false, node.ErrPrimaryDirectory
-			}
-			c.frameNode = node.NewNodeView(c.deltaPage[:])
-			if c.frameNode.Type() != page.PageTypeLeaf || c.frameNode.Count() != 1 || (c.entry.Operand.Ref.Kind == page.ChildRefPage && page.DecodeHeader(c.deltaPage[:]).PageID != c.entry.Operand.Ref.Page) {
-				return false, node.ErrPrimaryDirectory
-			}
-			c.phase = 20
-		case 20:
-			if !w.Reserve(1, page.PageSize+32) {
-				return false, nil
-			}
-			if sha256.Sum256(c.deltaPage[:]) != c.entry.Operand.Digest {
-				return false, node.ErrPrimaryDirectory
-			}
-			c.phase = 21
-		case 21:
-			ready, err := c.deltaDecoder.Begin(c.frameNode, 0, c.deltaKey[:], w)
-			if err != nil || !ready {
-				return false, err
-			}
-			c.phase = 22
-		case 22:
-			done, err := c.deltaDecoder.Step(w)
-			if err != nil || !done {
-				return false, err
-			}
-			if !w.Reserve(1, uint64(unsafe.Sizeof(node.LeafEntry{}))) {
-				return false, nil
-			}
-			c.record, _ = c.deltaDecoder.Result()
-			if c.record.Revision != c.entry.Revision || (c.entry.Kind == node.PrimaryAbsence) != (c.record.Flags&node.FlagTombstone != 0) {
-				return false, node.ErrPrimaryDirectory
-			}
-			c.phase = 23
-		case 23:
-			if !c.comparison.Begin(c.record.Key, c.entry.Key, w) {
-				return false, nil
-			}
-			c.phase = 31
-		case 31:
-			cmp, done := c.comparison.Step(w)
-			if !done {
-				return false, nil
-			}
-			if cmp != 0 {
-				return false, node.ErrPrimaryDirectory
-			}
-			c.phase = 25
+			c.phase = 24
 		case 24:
 			if !w.Reserve(1, uint64(unsafe.Sizeof(node.LeafEntry{}))) {
 				return false, nil
@@ -631,7 +386,7 @@ func (c *ChargedProjection) Record(w *iterator.OrdinalScanWork) (node.LeafEntry,
 }
 
 // CloseStep cancels the phased backend operation, drops decoder/stack references
-// through charged phases, then ends this consumer's borrow. It invokes no arena
+// through charged phases, then ends this consumer's borrow. It invokes no storage-owner
 // Drop, resource callback, file unlink or reclamation/refund. The original root
 // owner keeps custody and may finish its separately charged cleanup afterward.
 func (c *ChargedProjection) CloseStep(w *iterator.OrdinalScanWork) (bool, error) {
@@ -656,16 +411,14 @@ func (c *ChargedProjection) CloseStep(w *iterator.OrdinalScanWork) (bool, error)
 		c.base.stack[c.closeIndex] = CursorItem{}
 		c.closeIndex++
 	}
-	for c.closeIndex < maxTraversalDepth+4 {
+	for c.closeIndex < maxTraversalDepth+3 {
 		var done bool
 		switch c.closeIndex - maxTraversalDepth {
 		case 0:
 			done = c.base.decoder.Cancel(w)
 		case 1:
-			done = c.deltaDecoder.Cancel(w)
-		case 2:
 			done = c.base.comparison.Cancel(w)
-		case 3:
+		case 2:
 			done = c.comparison.Cancel(w)
 		}
 		if !done {
@@ -674,23 +427,21 @@ func (c *ChargedProjection) CloseStep(w *iterator.OrdinalScanWork) (bool, error)
 		c.closeIndex++
 	}
 
-	if c.closeIndex == maxTraversalDepth+4 {
-		if !w.Reserve(1, uint64(unsafe.Sizeof(node.LeafEntry{}))*2+uint64(unsafe.Sizeof(node.PrimaryDirectoryEntry{}))+uint64(unsafe.Sizeof(node.PrimaryDirectoryView{}))+uint64(unsafe.Sizeof(node.Node{}))+256) {
+	if c.closeIndex == maxTraversalDepth+3 {
+		if !w.Reserve(1, uint64(unsafe.Sizeof(node.LeafEntry{}))*2+256) {
 			return false, nil
 		}
-		c.directory = node.PrimaryDirectoryView{}
-		c.entry = node.PrimaryDirectoryEntry{}
+
 		c.record = node.LeafEntry{}
-		c.frameNode = node.Node{}
 		c.start, c.end, c.key = nil, nil, nil
 		c.turnSource, c.skipKey = nil, nil
 		c.base.image, c.base.key = nil, nil
 		c.base.record = node.LeafEntry{}
 		c.closeIndex++
 	}
-	if c.closeIndex == maxTraversalDepth+5 {
+	if c.closeIndex == maxTraversalDepth+4 {
 		// A completed reader can retain aliases too. Cancel exactly once after
-		// consumer views are gone, while the original certificate owner lives.
+		// consumer views are gone, while the original DATA owner lives.
 		done, err := c.reader.CancelProjectionFrame(w)
 		if err != nil || !done {
 			return false, err
@@ -701,10 +452,10 @@ func (c *ChargedProjection) CloseStep(w *iterator.OrdinalScanWork) (bool, error)
 		return false, nil
 	}
 	c.tree = Tree{}
-	c.certificate = nil
+
 	c.reader, c.base.reader = nil, nil
 	c.base.source = nil
-	c.frameActive, c.base.frameActive = false, false
+	c.base.frameActive = false
 
 	c.base.closed = true
 	c.closed = true
@@ -862,14 +613,7 @@ func (b *projectionBase) step(w *iterator.OrdinalScanWork) (bool, error) {
 			b.image = nil
 			b.phase = 4
 		case 4:
-			if b.depth == 1 && b.digest != ([32]byte{}) {
-				if !w.Reserve(1, page.PageSize+32) {
-					return false, nil
-				}
-				if sha256.Sum256(b.pages[0][:]) != b.digest {
-					return false, node.ErrPrimaryDirectory
-				}
-			}
+
 			b.phase = 5
 		case 5:
 			top := &b.stack[b.depth-1]

@@ -292,7 +292,6 @@ type Tree struct {
 	rootPageID          uint64
 	pageLimit           uint64
 	pageNamespace       uint64
-	primaryLocal        bool
 }
 
 func New(p *pager.Pager, sr SlabReader, root uint64) *Tree {
@@ -348,23 +347,6 @@ func NewWithPageLimit(p *pager.Pager, sr SlabReader, root, totalPages uint64) *T
 	return t
 }
 
-// NewWithPrimaryBankExtent admits only pages in one exact immutable primary
-// namespace. Dependency trees cannot escape into the DATA allocator namespace.
-func NewWithPrimaryBankExtent(p *pager.Pager, root, extent uint64) *Tree {
-	t := New(p, nil, root)
-	t.pageLimit = page.PrimaryBankNamespace + extent
-	t.pageNamespace = page.PrimaryBankNamespace
-	return t
-}
-
-// NewWithLocalPrimaryBankExtent reads namespaced dependency pages directly
-// from an independently retained companion pager, without a DATA generation.
-func NewWithLocalPrimaryBankExtent(p *pager.Pager, root, extent uint64) *Tree {
-	t := NewWithPrimaryBankExtent(p, root, extent)
-	t.primaryLocal = true
-	return t
-}
-
 // Reset re-initializes the tree with new parameters for reuse.
 func (t *Tree) Reset(p *pager.Pager, sr SlabReader, root uint64) {
 	if sr == nil {
@@ -375,7 +357,6 @@ func (t *Tree) Reset(p *pager.Pager, sr SlabReader, root uint64) {
 	t.pager = p
 	t.pageLimit = 0
 	t.pageNamespace = 0
-	t.primaryLocal = false
 	t.slabReader = sr
 	if app, ok := sr.(slabUnsafeAppender); ok {
 		t.slabAppender = app
@@ -576,9 +557,7 @@ func (t *Tree) loadNodeViewWithLoadKindInto(dst *node.Node, pageID uint64, verif
 	}
 	// Use Get (mmap) instead of ReadPage (Copy).
 	mappingID := pageID
-	if t.primaryLocal {
-		mappingID -= page.PrimaryBankNamespace
-	}
+
 	data, err := t.pager.Get(mappingID)
 	if err != nil {
 		return err
@@ -638,20 +617,6 @@ func (t *Tree) getEntry(key, keyScratch, leafScratch []byte, readLeaf func(page.
 		}
 
 		switch n.Type() {
-		case page.PageTypePrimaryDirectory:
-			if depth != 0 {
-				return node.LeafEntry{}, node.ErrPrimaryDirectory
-			}
-			var err error
-			var inline node.PrimaryDirectoryEntry
-			currRef, inline, err = t.selectPrimaryOperand(n.Data(), key, readLeaf, leafScratch, bounded)
-			if inline.InlineAbsence() {
-				return node.LeafEntry{Key: inline.Key, Flags: node.FlagTombstone, Revision: inline.Revision}, nil
-			}
-			if err != nil {
-				return node.LeafEntry{}, err
-			}
-			continue
 		case page.PageTypeInternal:
 			if depth == 0 {
 				if low, high, ok, err := n.InternalFenceBounds(); err != nil {
@@ -845,20 +810,6 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 		}
 
 		switch n.Type() {
-		case page.PageTypePrimaryDirectory:
-			if depth != 0 {
-				return nil, page.ValuePtr{}, 0, 0, false, node.ErrPrimaryDirectory
-			}
-			var err error
-			var inline node.PrimaryDirectoryEntry
-			currRef, inline, err = t.selectPrimaryOperand(n.Data(), key, nil, nil, false)
-			if inline.InlineAbsence() {
-				return nil, page.ValuePtr{}, node.FlagTombstone, inline.Revision, false, nil
-			}
-			if err != nil {
-				return nil, page.ValuePtr{}, 0, 0, false, err
-			}
-			continue
 		case page.PageTypeInternal:
 			if depth == 0 {
 				if low, high, ok, err := n.InternalFenceBounds(); err != nil {
@@ -1448,20 +1399,6 @@ func (t *Tree) findLeafRefForGetMany(key []byte, verifyAlways bool) (page.ChildR
 			return page.ChildRef{}, false, err
 		}
 		switch n.Type() {
-		case page.PageTypePrimaryDirectory:
-			if depth != 0 {
-				return page.ChildRef{}, false, node.ErrPrimaryDirectory
-			}
-			var err error
-			var inline node.PrimaryDirectoryEntry
-			currRef, inline, err = t.selectPrimaryOperand(n.Data(), key, nil, nil, false)
-			if inline.InlineAbsence() {
-				return page.ChildRef{}, false, ErrKeyNotFound
-			}
-			if err != nil {
-				return page.ChildRef{}, false, err
-			}
-			continue
 		case page.PageTypeInternal:
 			if depth == 0 {
 				if low, high, ok, err := n.InternalFenceBounds(); err != nil {

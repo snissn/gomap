@@ -15,7 +15,6 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/powerlossoracle"
 	"github.com/snissn/gomap/TreeDB/internal/powerlossreopen"
-	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
@@ -160,7 +159,7 @@ func TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts(t *testing.
 			t.Run(fmt.Sprintf("%s/%s", profile, point), func(t *testing.T) {
 				cutErr := fmt.Errorf("modeled COW interruption at %s", point)
 				opts := treedb.OptionsFor(profile, t.TempDir())
-				opts.IndexPrimaryDirectory = true // Meta/seal interruption cuts target index.db.primary.
+
 				opts.MemtableMode = "cow_btree"
 				opts.MemtableShards = 2
 				opts.DisableSideStores = true
@@ -179,14 +178,14 @@ func TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts(t *testing.
 				defer func() {
 					if closeErr := db.Close(); closeErr != nil {
 						t.Logf("interrupted original producer Close: %v", closeErr)
-						t.Logf("original cleanup stale=%v ownership=%v handoff=%v capacity=%v closed=%v",
-							errors.Is(closeErr, primaryarena.ErrStale), errors.Is(closeErr, rootpublication.ErrResourceOwnership),
+						t.Logf("original cleanup ownership=%v handoff=%v capacity=%v closed=%v",
+							errors.Is(closeErr, rootpublication.ErrResourceOwnership),
 							errors.Is(closeErr, rootpublication.ErrRecoveryHandoffUnavailable), errors.Is(closeErr, backenddb.ErrSnapshotCapacity), errors.Is(closeErr, os.ErrClosed))
 						var pathErr *os.PathError
 						if errors.As(closeErr, &pathErr) {
 							t.Logf("original cleanup operation=%s path=%s error=%v", pathErr.Op, pathErr.Path, pathErr.Err)
 						}
-						if errors.Is(closeErr, rootpublication.ErrResourceOwnership) || errors.Is(closeErr, primaryarena.ErrStale) {
+						if errors.Is(closeErr, rootpublication.ErrResourceOwnership) {
 							t.Errorf("interrupted original producer retained failed physical cleanup: %v", closeErr)
 						}
 						if !errors.Is(closeErr, cutErr) && !errors.Is(closeErr, backenddb.ErrRecoveryRequired) {
@@ -219,12 +218,12 @@ func TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts(t *testing.
 				case durabilitycut.BeforePublicationSealWrite, durabilitycut.AfterPublicationSealWrite:
 					wantResource = durabilitycut.ResourceSeal
 				}
-				targetPrimary := filepath.Clean(filepath.Join(opts.Dir, "index.db.primary"))
+				targetIndex := filepath.Clean(filepath.Join(opts.Dir, "index.db"))
 				matchesCut := func(event durabilitycut.Event) bool {
 					if !cowEventBelongsToDB(opts.Dir, event) || event.Point != point || event.Resource != wantResource {
 						return false
 					}
-					return (wantResource != durabilitycut.ResourceMeta && wantResource != durabilitycut.ResourceSeal) || filepath.Clean(event.Path) == targetPrimary
+					return (wantResource != durabilitycut.ResourceMeta && wantResource != durabilitycut.ResourceSeal) || filepath.Clean(event.Path) == targetIndex
 				}
 				var capturedPoint durabilitycut.Point
 				var resource durabilitycut.Resource

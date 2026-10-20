@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Failure controls for the fixed PRIMARY cost measurement contract."""
+"""Failure controls for the source-bound public replacement cost contract."""
 
 import copy
 import importlib.util
@@ -19,26 +19,87 @@ spec.loader.exec_module(gate)
 
 
 class PrimaryCostGateTests(unittest.TestCase):
+    authorities = {"baseline": "PRIMARY", "candidate": "DATA"}
+
     def sample(self, ns=100, size=200, allocs=3, generations=0):
         return f"{gate.BENCHMARK} 128 {ns} ns/op {generations} generation_advances/op {size} B/op {allocs} allocs/op\nPASS\n"
 
     def rows(self):
         return [{"pair": pair, "revision": revision,
-                 "metrics": gate.parse_sample(self.sample(generations=2 if revision == "baseline" else 0))}
+                 "metrics": gate.parse_sample(self.sample(generations=2 if revision == "baseline" else 0)),
+                 "authority": self.authorities[revision]}
                 for pair in range(8) for revision in (("baseline", "candidate") if pair % 2 == 0 else ("candidate", "baseline"))]
 
-    def test_retains_baseline_generation_churn_and_requires_candidate_activation(self):
+    def test_retains_generation_telemetry_and_requires_source_bound_activation(self):
         rows = self.rows()
-        self.assertTrue(gate.evaluate(rows)["measurement_pass"])
+        self.assertTrue(gate.evaluate(rows, self.authorities)["measurement_pass"])
         rows[1]["metrics"]["generation_advances/op"] = 1
-        self.assertFalse(gate.evaluate(rows)["gates"]["candidate_primary_activation"])
+        self.assertTrue(gate.evaluate(rows, self.authorities)["measurement_pass"])
+        for revision in ("baseline", "candidate"):
+            invalid = copy.deepcopy(rows)
+            next(row for row in invalid if row["revision"] == revision)["authority"] = "wrong"
+            self.assertFalse(gate.evaluate(invalid, self.authorities)["gates"][revision + "_route_activation"])
+        primary = dict(self.authorities, candidate="PRIMARY")
+        for row in rows:
+            row["authority"] = "PRIMARY"
+        self.assertFalse(gate.evaluate(rows, primary)["gates"]["candidate_route_activation"])
+        rows[1]["metrics"]["generation_advances/op"] = 0
+        self.assertTrue(gate.evaluate(rows, primary)["measurement_pass"])
+        data = {"baseline": "DATA", "candidate": "DATA"}
+        for row in rows:
+            row["authority"] = "DATA"
+            row["metrics"]["generation_advances/op"] = 1
+        self.assertTrue(gate.evaluate(rows, data)["measurement_pass"])
+        for invalid in ({}, {"baseline": "DATA"}, dict(data, candidate="unknown")):
+            with self.assertRaises(ValueError):
+                gate.evaluate(rows, invalid)
+
+    def test_authority_requires_actual_logged_role(self):
+        line = "    durable_replacement_cost_test.go:75: MVCC_COST_AUTHORITY authority=DATA root=42 commit=9 profile=no_wal_fast mode=cow_btree redo=off\n"
+        self.assertEqual(gate.parse_authority(line + line, "DATA"), "DATA")
+        for invalid in ("", line.replace("DATA", "PRIMARY"), line + line.replace("DATA", "PRIMARY"),
+                        line.replace("redo=off", "redo=on")):
+            with self.assertRaises(ValueError):
+                gate.parse_authority(invalid, "DATA")
+
+    def test_setup_is_bound_to_one_recognized_source_capability(self):
+        template = (path.parents[1] / gate.HARNESS).read_text()
+        self.assertEqual(gate.render_harness(template, "DATA"), template)
+        primary = gate.render_harness(template, "PRIMARY")
+        self.assertIn('const durableReplacementAuthority = "PRIMARY"', primary)
+        self.assertIn("opts.IndexPrimaryDirectory = true", primary)
+        self.assertNotIn("opts.IndexPrimaryDirectory = true", template)
+        for invalid in (template.replace(gate.PRIMARY_SETUP, ""), template + gate.ROLE_DECLARATION):
+            with self.assertRaises(ValueError):
+                gate.render_harness(invalid, "DATA")
+        with self.assertRaises(ValueError):
+            gate.render_harness(template, "unknown")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with self.assertRaises(ValueError):
+                gate.source_authority(root)
+            for authority in ("PRIMARY", "DATA"):
+                relative, declaration = gate.CAPABILITIES[authority]
+                source = root / relative
+                source.parent.mkdir(parents=True, exist_ok=True)
+                source.write_text(declaration)
+                record = gate.source_authority(root)
+                self.assertEqual(record, {"authority": authority, "path": relative, "sha256": gate.digest(source)})
+                source.write_text("unrecognized source")
+                with self.assertRaises(ValueError):
+                    gate.source_authority(root)
+                source.unlink()
+            for relative, declaration in gate.CAPABILITIES.values():
+                (root / relative).write_text(declaration)
+            with self.assertRaises(ValueError):
+                gate.source_authority(root)
 
     def test_refuses_incomplete_duplicate_or_reordered_evidence(self):
         rows = self.rows()
         for invalid in (rows[:-1], rows + rows[:1], list(reversed(rows)), rows[:1] + rows):
             with self.subTest(invalid=invalid):
                 with self.assertRaises(ValueError):
-                    gate.evaluate(invalid)
+                    gate.evaluate(invalid, self.authorities)
 
     def test_timing_and_allocation_regressions_fail_independently(self):
         for metric, value, name in (("ns/op", 106, "timing"), ("B/op", 201, "bytes"), ("allocs/op", 4, "allocations")):
@@ -46,7 +107,7 @@ class PrimaryCostGateTests(unittest.TestCase):
             for row in rows:
                 if row["revision"] == "candidate":
                     row["metrics"][metric] = value
-            result = gate.evaluate(rows)
+            result = gate.evaluate(rows, self.authorities)
             self.assertFalse(result["measurement_pass"])
             self.assertFalse(result["gates"][name])
 
@@ -66,14 +127,14 @@ class PrimaryCostGateTests(unittest.TestCase):
         for row in rows:
             baseline = 100 + row["pair"] * 100
             row["metrics"]["ns/op"] = baseline * (1.02 if row["revision"] == "candidate" else 1)
-        self.assertAlmostEqual(gate.evaluate(rows)["median_paired_delta_percent"], 2)
+        self.assertAlmostEqual(gate.evaluate(rows, self.authorities)["median_paired_delta_percent"], 2)
 
     def test_equivalent_bytes_qualification_retains_raw_failure(self):
         rows = self.rows()
         for row in rows:
             if row["revision"] == "candidate":
                 row["metrics"]["B/op"] += 0.5
-        raw = gate.evaluate(rows)
+        raw = gate.evaluate(rows, self.authorities)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             binary, loader, libc = [root / name for name in ("binary", "loader", "libc.so.6")]
@@ -95,7 +156,7 @@ class PrimaryCostGateTests(unittest.TestCase):
             changed = copy.deepcopy(before)
             changed["candidate"]["executable"]["sha256"] = "different"
             self.assertFalse(gate.qualify_runtime(raw, changed, copy.deepcopy(changed), quiet=True)["accepted"])
-            for metric in ("allocations", "candidate_primary_activation"):
+            for metric in ("allocations", "baseline_route_activation", "candidate_route_activation"):
                 failing = copy.deepcopy(raw)
                 failing["gates"][metric] = False
                 self.assertFalse(gate.qualify_runtime(failing, before, before, quiet=True)["accepted"])
@@ -130,7 +191,7 @@ class PrimaryCostGateTests(unittest.TestCase):
         for row in rows:
             row["metrics"] = {"ns/op": pairs[row["pair"]][row["revision"] == "candidate"],
                               "B/op": 222247, "allocs/op": 378, "generation_advances/op": 0}
-        raw = gate.evaluate(rows)
+        raw = gate.evaluate(rows, self.authorities)
         retained = copy.deepcopy(raw)
         self.assertAlmostEqual(raw["median_paired_delta_percent"], 5.258179271710761)
         self.assertFalse(raw["gates"]["timing"])
@@ -170,7 +231,7 @@ class PrimaryCostGateTests(unittest.TestCase):
                     self.assertEqual(refused["timing_disposition"], "FAIL")
                 with self.assertRaisesRegex(RuntimeError, "drift"):
                     gate.qualify_runtime(raw, before, changed, quiet=True)
-            for metric in ("allocations", "candidate_primary_activation"):
+            for metric in ("allocations", "baseline_route_activation", "candidate_route_activation"):
                 failing = copy.deepcopy(raw)
                 failing["gates"][metric] = False
                 self.assertFalse(gate.qualify_runtime(failing, before, before, quiet=True)["accepted"])
@@ -204,7 +265,7 @@ class PrimaryCostGateTests(unittest.TestCase):
             binding["inputs"] = {"harness_sha256": "harness", "runner_sha256": "runner",
                                  "environment_sha256": "environment", "cwd": str(binary.parent), "argv": []}
             before = {"baseline": binding, "candidate": copy.deepcopy(binding)}
-            raw = gate.evaluate(self.rows())
+            raw = gate.evaluate(self.rows(), self.authorities)
             raw["gates"]["bytes"], raw["measurement_pass"] = False, False
             result = gate.qualify_runtime(raw, before, copy.deepcopy(before), quiet=True)
             self.assertEqual(result["bytes_disposition"], "EQUIVALENT_NON_ATTRIBUTABLE")

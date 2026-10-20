@@ -21,7 +21,7 @@ var publicationGuardCustodyCertificates = map[string]string{
 	"errors.joinError": "49915178189d923b36d5d74dbcd3c6122074c406a25e114f5db931c413dca2ab",
 	"fmt.wrapError":    "007335e22e8290a1a5ba1a46cdd63424ec5cfe897b6e225fd5f50b2bcdaefd7f",
 	"fmt.wrapErrors":   "a93ac802b168486e18a7bb3c9bdc93cdc604e99d80e8770dedde943cb4cb3500",
-	publicationGuardPackagePath + ".OpenRecoveryCleanupError":                        "75396e4ed360373e40fc1df13a9739ecbc8c796cf43f13dff2dc131be0210454",
+	publicationGuardPackagePath + ".OpenRecoveryCleanupError":                        "48e86020459a9a211401aba364c2d2c59f2c9f5f0216565a8c77b3e5a50c8811",
 	publicationGuardPackagePath + ".originalDBCleanupFailure":                        "571d19897cd55a2a3d45e486055c123c9c502ff5d58a61b04a0c29b96cbadbf3",
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication.originalReleaseFailure": "cab30749ed7a96f9e341d31a2414b3af218f260342493943f9007c21a6643656",
 	"github.com/snissn/gomap/TreeDB/pager.ReadOnlyCleanupError":                      "0811e41f33d48d2f1fe1399067766aef0ece8e0201d2b7c9cce6760f62334fc2",
@@ -43,7 +43,7 @@ var publicationGuardCustodyAuxiliaryFunctions = map[string]string{
 // error links, or the already bound mutex/error-header capability. These bodies
 // also undergo normal callback analysis. Writes preserve original custody.
 var publicationGuardCustodyOpaqueFields = map[string][]string{
-	publicationGuardPackagePath + ".OpenRecoveryCleanupError":                        {"proof", "generation"},
+	publicationGuardPackagePath + ".OpenRecoveryCleanupError":                        {"generation"},
 	publicationGuardPackagePath + ".originalDBCleanupFailure":                        {"payload"},
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication.originalReleaseFailure": {"original"},
 	"github.com/snissn/gomap/TreeDB/pager.ReadOnlyCleanupError":                      {"pager"},
@@ -51,7 +51,7 @@ var publicationGuardCustodyOpaqueFields = map[string][]string{
 	"github.com/snissn/gomap/TreeDB/internal/valuelog.FileCleanupFailure":            {"file"},
 }
 var publicationGuardCustodyReadObservers = map[string]string{
-	publicationGuardPackagePath + ".recoveryCleanupOwnsLockV6":                                                "dadf806e18009e52f07c55c3a9d9845503e5e8d051545d99215e20fc64ba0426",
+	publicationGuardPackagePath + ".recoveryCleanupOwnsLockV6":                                                "8e54b5415f09a9ca0fc4cfdef6d3694e7425b0bd0ece9ee235c41a1a1d4a8401",
 	"github.com/snissn/gomap/TreeDB/internal/valuelog.(*ManagerCleanupFailure).OriginalCleanupPriorAvailable": "6ecaad691e41edd27f7d10de41f4853b6677accd0c9c8e9fd506f689286c506d",
 	"github.com/snissn/gomap/TreeDB/internal/valuelog.(*ManagerCleanupFailure).OriginalCleanupPriorBinding":   "17bab6fb55bfa9d9c359e84e609ead6070e562d43d372a91aca4014486afe013",
 	"github.com/snissn/gomap/TreeDB/internal/valuelog.(*ManagerCleanupFailure).TryLinkPriorCleanupError":      "ed2bba824e08fbdae65959bfa42c5978743c191307223ca46890fc6c4b3dbbfc",

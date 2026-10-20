@@ -11,7 +11,6 @@ import (
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
-	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -57,7 +56,7 @@ func TestCOWPublicDATASelectionLayeredPublication(t *testing.T) {
 				if !ok {
 					t.Fatal("backend basis missing")
 				}
-				if primaryarena.IsPage(basis.RootPageID) {
+				if basis.RootPageID&(uint64(1)<<62) != 0 {
 					t.Fatal("main backend omitted DATA selection")
 				}
 				if _, err := os.Stat(filepath.Join(opts.Dir, "maindb", "index.db.primary")); !os.IsNotExist(err) {
@@ -66,7 +65,7 @@ func TestCOWPublicDATASelectionLayeredPublication(t *testing.T) {
 				if database.dictdb == nil {
 					t.Fatal("default dictionary side store absent")
 				}
-				if state := database.dictdb.State(); primaryarena.IsPage(state.RootPageID) {
+				if state := database.dictdb.State(); state.RootPageID&(uint64(1)<<62) != 0 {
 					t.Fatal("automatic main PRIMARY selection leaked into dictdb")
 				}
 				if _, err := os.Stat(filepath.Join(opts.Dir, "dictdb", "index.db.primary")); !os.IsNotExist(err) {
@@ -148,7 +147,7 @@ func TestCOWPublicDATASelectionLayeredPublication(t *testing.T) {
 					t.Fatal(err)
 				}
 				successor, ok := database.backend.StateToken()
-				if !ok || successor.CommitSeq <= basis.CommitSeq || primaryarena.IsPage(successor.RootPageID) {
+				if !ok || successor.CommitSeq <= basis.CommitSeq || (successor.RootPageID&(uint64(1)<<62) != 0) {
 					t.Fatalf("physical successor %v", successor)
 				}
 				if token := publicPhysicalBasis(t, dirty); token != basis {
@@ -262,7 +261,7 @@ func TestCOWPublicDATASelectionLayeredPublication(t *testing.T) {
 					t.Fatal("ordinary reopen", err)
 				}
 				defer reopened.Close()
-				if primaryarena.IsPage(reopened.backend.State().RootPageID) {
+				if reopened.backend.State().RootPageID&(uint64(1)<<62) != 0 {
 					t.Fatal("reopen lost DATA authority")
 				}
 				if got, err := reopened.Get([]byte("b")); err != nil || !bytes.Equal(got, value) {
@@ -275,55 +274,6 @@ func TestCOWPublicDATASelectionLayeredPublication(t *testing.T) {
 					t.Fatal("ordinary reopened Close", err)
 				}
 			})
-		}
-	}
-}
-
-func TestCOWPublicDATASelectionAndExplicitPRIMARY(t *testing.T) {
-	for _, profile := range []Profile{ProfileCommandWALDurable, ProfileCommandWALRelaxed, ProfileNoWALFast} {
-		for _, mode := range []string{"append_only", "btree", "cow_btree"} {
-			for _, explicit := range []bool{false, true} {
-				t.Run(fmt.Sprintf("%s/%s/explicit=%v", profile, mode, explicit), func(t *testing.T) {
-					opts := OptionsFor(profile, t.TempDir())
-					opts.MemtableMode = mode
-					opts.MemtableShards = 2
-					opts.IndexPrimaryDirectory = explicit
-					opts.DisableSideStores = true
-					opts.DisableBackgroundPrune = true
-					database, err := Open(opts)
-					if err != nil {
-						t.Fatal(err)
-					}
-					defer database.Close()
-					if primaryarena.IsPage(database.backend.State().RootPageID) != explicit {
-						t.Fatalf("physical selection: explicit=%v root=%d", explicit, database.backend.State().RootPageID)
-					}
-					if err := database.SetSync([]byte("selected"), []byte("preserved")); err != nil {
-						t.Fatal(err)
-					}
-					if err := database.Checkpoint(); err != nil {
-						t.Fatal(err)
-					}
-					if err := database.Close(); err != nil {
-						t.Fatal(err)
-					}
-					opts.IndexPrimaryDirectory = false // Persisted format, not the option, selects reopen.
-					reopened, err := Open(opts)
-					if err != nil {
-						t.Fatal(err)
-					}
-					defer reopened.Close()
-					if primaryarena.IsPage(reopened.backend.State().RootPageID) != explicit {
-						t.Fatal("reopen changed physical representation")
-					}
-					if got, err := reopened.Get([]byte("selected")); err != nil || string(got) != "preserved" {
-						t.Fatalf("reopen: %q %v", got, err)
-					}
-					if err := reopened.Close(); err != nil {
-						t.Fatal(err)
-					}
-				})
-			}
 		}
 	}
 }
@@ -354,7 +304,7 @@ func TestCOWPublicDATASelectionReopensExistingDATA(t *testing.T) {
 				t.Fatal("COW reopen of existing DATA", err)
 			}
 			defer candidate.Close()
-			if primaryarena.IsPage(candidate.backend.State().RootPageID) {
+			if candidate.backend.State().RootPageID&(uint64(1)<<62) != 0 {
 				t.Fatal("existing DATA reopened as PRIMARY")
 			}
 			if got, err := candidate.Get([]byte("legacy-data")); err != nil || string(got) != "preserved" {
@@ -404,7 +354,7 @@ func TestCOWPublicDATAEmptyCheckpointPreservesSuccessorBasis(t *testing.T) {
 					t.Fatal("empty checkpoint", err)
 				}
 				successor, ok := database.backend.StateToken()
-				if !ok || primaryarena.IsPage(successor.RootPageID) {
+				if !ok || (successor.RootPageID&(uint64(1)<<62) != 0) {
 					t.Fatal("missing actual DATA successor")
 				}
 				fresh := database.AcquireSnapshot()

@@ -15,24 +15,12 @@ import (
 // indexID is only an in-process discriminator; it is never persisted or used to
 // accept a cache from another DB lifetime. No pager or generation alias is kept.
 type valueLogRefIncarnation struct {
-	indexID     uint64
-	data        rootpublication.StableIdentity
-	primary     rootpublication.StableIdentity
-	primaryUUID [16]byte
-}
-
-func (i valueLogRefIncarnation) valid() bool {
-	if !rootpublication.SamePhysicalIdentity(i.data, i.data) {
-		return false
-	}
-	if i.primaryUUID == ([16]byte{}) {
-		return i.primary == (rootpublication.StableIdentity{})
-	}
-	return rootpublication.SamePhysicalIdentity(i.primary, i.primary)
+	indexID uint64
+	data    rootpublication.StableIdentity
 }
 
 func (i valueLogRefIncarnation) samePhysical(other valueLogRefIncarnation) bool {
-	return i.data == other.data && i.primary == other.primary && i.primaryUUID == other.primaryUUID
+	return i.data == other.data
 }
 
 func captureValueLogRefIncarnation(idx *indexGen) (valueLogRefIncarnation, error) {
@@ -49,17 +37,7 @@ func captureValueLogRefIncarnation(idx *indexGen) (valueLogRefIncarnation, error
 	if err != nil {
 		return valueLogRefIncarnation{}, err
 	}
-	if idx.primary != nil {
-		i.primaryUUID = idx.primary.UUID()
-		err = idx.primary.Pager().WithStableResourceFile(func(f *os.File) error {
-			var e error
-			i.primary, e = rootpublication.StableIdentityFromFile(f)
-			return e
-		})
-		if err != nil {
-			return valueLogRefIncarnation{}, err
-		}
-	}
+
 	if !i.valid() {
 		return valueLogRefIncarnation{}, errors.New("invalid value-log ref physical incarnation")
 	}
@@ -149,9 +127,7 @@ const valueLogRefIncarnationDiskSize = 4 + 2*48 + 16
 
 func appendValueLogRefIncarnation(buf []byte, i valueLogRefIncarnation) []byte {
 	var image [valueLogRefIncarnationDiskSize]byte
-	if i.primaryUUID != ([16]byte{}) {
-		binary.LittleEndian.PutUint32(image[:4], 1)
-	}
+
 	put := func(dst []byte, id rootpublication.StableIdentity) {
 		copy(dst[:16], id.Platform)
 		binary.LittleEndian.PutUint64(dst[16:24], id.VolumeID)
@@ -159,8 +135,6 @@ func appendValueLogRefIncarnation(buf []byte, i valueLogRefIncarnation) []byte {
 		binary.LittleEndian.PutUint64(dst[40:48], id.Generation)
 	}
 	put(image[4:52], i.data)
-	put(image[52:100], i.primary)
-	copy(image[100:], i.primaryUUID[:])
 	return append(buf, image[:]...)
 }
 
@@ -191,13 +165,12 @@ func decodeValueLogRefIncarnation(image []byte) (valueLogRefIncarnation, error) 
 	if !ok {
 		return i, errValueLogRefCorrupt
 	}
-	i.primary, ok = get(image[52:100])
-	if !ok {
-		return i, errValueLogRefCorrupt
+	for _, reserved := range image[52:] {
+		if reserved != 0 {
+			return i, errValueLogRefCorrupt
+		}
 	}
-	copy(i.primaryUUID[:], image[100:])
-	form := binary.LittleEndian.Uint32(image[:4])
-	if form > 1 || (form == 0) != (i.primaryUUID == ([16]byte{})) || !i.valid() {
+	if binary.LittleEndian.Uint32(image[:4]) != 0 || !i.valid() {
 		return valueLogRefIncarnation{}, errValueLogRefCorrupt
 	}
 	return i, nil
@@ -221,4 +194,8 @@ func (t *valueLogRefTracker) advanceIncarnation(nextSeq, oldGeneration uint64, n
 	t.dirty = true
 	t.revision++
 	return nil
+}
+
+func (i valueLogRefIncarnation) valid() bool {
+	return rootpublication.SamePhysicalIdentity(i.data, i.data)
 }

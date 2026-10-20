@@ -9,7 +9,6 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/freelist"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
-	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
@@ -28,12 +27,9 @@ type indexGen struct {
 	metadata       *retainedalloc.Owner
 	metadataCharge uint64
 
-	primary               *primaryarena.Arena
-	primaryRecoveryLeases *primaryDependencyLeaseV5
-	primaryOwner          *primaryArenaOwnerV5
-	pager                 *pager.Pager
-	allocator             *freelist.Allocator
-	zipper                *zipper.Zipper
+	pager     *pager.Pager
+	allocator *freelist.Allocator
+	zipper    *zipper.Zipper
 
 	registry  *lifecycle.ReaderRegistry
 	graveyard *lifecycle.Graveyard
@@ -51,20 +47,17 @@ type indexGen struct {
 	closeOnce sync.Once
 	closeErr  error
 
-	// Failed joint COMMIT construction retains exact custody until owner teardown.
+	// Failed replacement construction retains exact custody until owner teardown.
 	unpublishedSelection *durableRootSelectionV1
-	unpublishedPrimary   *primaryDurableRuntimeV5
 
-	offlineNamespaceScope       bool
-	offlineScopeRetained        bool
-	offlineScopeControlCharge   uint64
-	offlineScopePhysicalOwner   *primaryArenaOwnerV5
+	offlineNamespaceScope bool
+
 	stableNamespaceMu           sync.Mutex
 	stableNamespaceParent       *os.File
 	stableNamespaceProof        *rootpublication.StableNamespaceCreationProof
 	stableNamespaceMetadata     *retainedalloc.Owner
 	stableNamespaceParentCharge uint64
-	stableNamespaceFailure      primaryCleanupFailureV5
+	stableNamespaceFailure      physicalCleanupFailureV6
 	closeFailure                originalDBCleanupFailure
 	failedNext                  *indexGen
 
@@ -82,7 +75,7 @@ type indexGen struct {
 }
 
 // newIndexGen is the unowned diagnostic constructor. Production generation
-// birth uses newIndexGenWithMetadata or the original offline PRIMARY owner.
+// Birth uses the original DATA registry for retained wrapper admission.
 func newIndexGen(id uint64, p *pager.Pager, alloc *freelist.Allocator, z *zipper.Zipper) *indexGen {
 	return newIndexGenWithRegistry(id, p, alloc, z, lifecycle.NewReaderRegistry())
 }
@@ -102,7 +95,7 @@ func newIndexGenWithRegistry(id uint64, p *pager.Pager, alloc *freelist.Allocato
 }
 
 // The original DB registry governs the complete generation wrapper before
-// its creation, independently from the physical PRIMARY owner.
+// its creation and original physical cleanup.
 func newIndexGenWithMetadata(id uint64, p *pager.Pager, alloc *freelist.Allocator, z *zipper.Zipper, metadata *retainedalloc.Owner) (*indexGen, error) {
 	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(indexGen{})))
 	if err := metadata.AddPending(charge); err != nil {
@@ -135,7 +128,6 @@ func (g *indexGen) release() int32 {
 }
 
 func (g *indexGen) close() error {
-	var primaryOwnerCompletion primaryRuntimeDisposalCompletionV6
 	g.closeOnce.Do(func() {
 		defer func() {
 			g.wrapperMu.Lock()
@@ -157,13 +149,7 @@ func (g *indexGen) close() error {
 			g.wrapperBorrows.Or(indexWrapperTerminalV6)
 			g.wrapperMu.Unlock()
 		}()
-		g.clearPrimaryRecoveryLeasesV5()
-		if g.unpublishedPrimary != nil {
-			if g.closeErr = releasePrimaryRuntimeV5(g.primary, g.unpublishedPrimary); g.closeErr != nil {
-				return
-			}
-			g.unpublishedPrimary = nil
-		}
+
 		if g.unpublishedSelection != nil {
 			for _, r := range g.unpublishedSelection.SlotResources {
 				r.Release()
@@ -209,36 +195,9 @@ func (g *indexGen) close() error {
 			}
 			g.stableNamespaceMu.Unlock()
 		}
-		if g.primary != nil {
-			if g.primaryOwner == nil {
-				g.closeErr = errors.Join(g.closeErr, g.primary.Close())
-				return
-			}
-			if g.closeErr != nil {
-				// Preserve this generation's EXISTING owner edge. The same
-				// physical owner retains exact failed DATA/proof/parent custody;
-				// closing DB discovery lists cannot orphan it or refund its debt.
-				g.primaryOwner.retainFailedDataGeneration(g)
-				g.primary.MetadataOwner().CleanupFailed()
-			} else {
-				consumed, debt, completion, err := g.primaryOwner.releaseOriginalWithOutcome()
-				g.closeErr = err
-				if !consumed || debt {
-					g.primaryOwner.retainFailedDataGeneration(g)
-				} else {
-					g.primaryOwner, g.primary = nil, nil
-					if g.zipper != nil {
-						g.zipper.SetPrimaryArena(nil)
-						g.zipper.SetPrimaryConstructionFailureV6(nil)
-					}
-					primaryOwnerCompletion = completion
-				}
-			}
-		}
 	})
 	err := g.closeErr
 	g = nil
-	primaryOwnerCompletion.complete()
 	return err
 }
 
@@ -359,7 +318,6 @@ func (g *indexGen) detachGenerationMetadataLockedV6() (*retainedalloc.Owner, uin
 	charge += g.registry.DetachMetadataCharge()
 	g.pager, g.allocator, g.zipper = nil, nil, nil
 	g.registry, g.graveyard = nil, nil
-	g.primary, g.primaryOwner = nil, nil
 	g.metadata, g.metadataCharge = nil, 0
 	return metadata, charge
 }

@@ -12,9 +12,7 @@ func TestPublicDATAOnlyPublicationUsesAbsentClosure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d.idx.Load().primary != nil {
-		t.Fatal("fixture must use the public DATA-only path")
-	}
+
 	for i := 0; i < 4; i++ {
 		if err = d.SetSync([]byte(fmt.Sprintf("key-%d", i)), []byte("inline-value")); err != nil {
 			t.Fatal(err)

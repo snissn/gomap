@@ -27,17 +27,10 @@ TreeDB's value log is the only value storage path for values.
   - inline value bytes, or
   - a fixed-size `ValuePtr` reference into the value log.
 - Uses copy-on-write page rewrites and dual complete root selectors for durability.
-- Fresh `no_wal_fast` stores select a top-level exact-key immutable delta
-  directory over a materialized DATA B-tree base, with fixed complete A/B
-  capsules in `index.db.primary`. Other fresh profiles retain DATA dual-meta
-  selection. See [selected capsule format](storage-format.md#30-selected-primary-capsules-v6-construction).
-- Capsule readers own immutable copied directory bytes and actual component
-  references. Recovery, physical export and Snapshot restore use the same
-  complete capsule authority. Vacuum commits an identity-bound private
-  DATA/PRIMARY pair under writer exclusion, retains old Snapshot owners and
-  refuses namespace cutover with independently retained physical cuts.
-  Joint recovery runs under LOCK before legacy cleanup. Native whole-cost,
-  semantic materialization progress and performance remain unqualified.
+- All profiles use DATA B-tree roots in `index.db`; the two complete durable
+  meta selectors independently validate exact dependencies and parent proofs.
+- PRIMARY companions, capsules and paired swaps are retired and require a
+  fresh DATA rebuild. See [format refusal](storage-format.md#data-storage-and-retired-primary-formats).
 
 ### 2.2 Value Log
 
@@ -98,7 +91,6 @@ Default root layout:
 
 - `<root>/maindb/`
   - `index.db`
-  - `index.db.primary` (selected PRIMARY format)
   - `LOCK`
   - `wal/`
     - `commit-l<lane>-<seq>.log`
@@ -181,30 +173,12 @@ same-Request materialization progress are still construction obligations.
 
 ### Ordinary transaction ownership from logical construction
 
-For selected V6 writes, the existing DurableRootTransaction is created by the
-ordinary zipper before its immutable logical directory and components are
-constructed. The arena bank retains that transaction as constructor
-discoverability. The visible member, candidate and later promotion refer to the
-same transaction; they do not each allocate a new control owner. After binding,
-the existing resource set's owner cell controls handoff. Independent physical
-root references are still necessary: the constructor holds one reference through
-Finish, visible state holds its own, and durable current/parent closures acquire
-their actual references at promotion.
-
-Relaxed visibility does not select a durable slot or parent. Each logical root
-remains independently immutable while later relaxed writes replace visible
-state. Fresh promotion binds the actual current parent and alternate fixed slot,
-encodes the complete three-page capsule, and retains its two closures in the
-same transaction. The existing DATA and PRIMARY dependency syncs precede capsule
-installation; the final PRIMARY fence remains separate. Durable report runs the
-same transaction's ordinary Finish, detaches constructor discoverability,
-releases the actual resource set and drops the constructor edge. Old readers
-retain their independently owned immutable roots after that detach.
-
-Ordinary Finish remains synchronous and uses ordinary resource callbacks.
-The selected experiment does not connect the native private producer or its
-typed Accepted retirement cursor. Native admission, complete accounting and a
-protected semantic-floor/materialization adapter remain unqualified.
+DATA publication retains the original DurableRootTransaction, prepared COW
+candidate, immutable resource closure and admitted terminal completion. Relaxed
+visibility does not select a durable slot. Durable publication fences DATA and
+external dependencies before sealing the alternate meta slot and reporting the
+same transaction's outcome. Original snapshots and resource descriptors retain
+their own existing cleanup custody until their actual last consumers finish.
 
 ### Ordinary publication views and producer input
 

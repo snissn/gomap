@@ -43,6 +43,9 @@ var syncDirFn = func(dir string) (err error) {
 // It prevents Open from accidentally creating an empty new DB when a previous
 // vacuum crashed after moving index.db aside.
 func recoverIndexSwap(dir string) error {
+	if err := ValidateDATAIndexOpen(dir, false); err != nil {
+		return err
+	}
 	registry := rootpublication.NewIdentityPinRegistry()
 	defer registry.Close()
 	return recoverIndexSwapWithRegistryV6(dir, registry, nil)
@@ -52,8 +55,7 @@ func recoverIndexSwapWithRegistryV6(dir string, registry *rootpublication.Identi
 	if dir == "" {
 		return fmt.Errorf("recover index swap: empty dir")
 	}
-
-	if handled, err := recoverPrimaryJointSwapWithRegistryV6(dir, false, registry, lock); handled || err != nil {
+	if err := ValidateDATAIndexOpen(dir, false); err != nil {
 		return err
 	}
 
@@ -85,13 +87,8 @@ func recoverIndexSwapWithRegistryV6(dir string, registry *rootpublication.Identi
 			}
 			namespaceChanged = namespaceChanged || removed
 		}
-		// No joint decision exists: the old canonical pair still owns publication.
-		// A pre-COMMIT private companion is never an eligible root.
-		removedPrimary, err := removePersistentFileBestEffortResult(dir, filepath.Join(dir, primaryNewFileName), durabilitycut.ResourceIndex)
-		if err != nil {
-			return err
-		}
-		namespaceChanged = namespaceChanged || removedPrimary
+		// The existing index remains canonical; an uncommitted staging file
+		// is never an eligible replacement.
 		if readyExists {
 			removed, err := removePersistentFileBestEffortResult(dir, readyPath, durabilitycut.ResourceIndex)
 			if err != nil {

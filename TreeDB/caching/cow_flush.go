@@ -85,12 +85,7 @@ func (db *DB) installCOWBasis(basis *cowBackendBasis, covered *cowReadCut) (*cow
 	if err != nil {
 		return nil, err
 	}
-	if err = basis.snapshot.ActivatePrimaryMetadataProducer(); err != nil {
-		refund := c.releasePrivateCOWBasisInstall(next)
-		next = nil
-		refund.Close()
-		return nil, err
-	}
+
 	old, _, err := db.installPreparedCOWBasis(basis, covered, next)
 	if err != nil {
 		refund := c.releasePrivateCOWBasisInstall(next)
@@ -461,10 +456,7 @@ func (db *DB) flushCOWFrozenCutWithColumnCompaction(syncFlush bool, publish *che
 			h.basis, e = admitCOWBackendBasis(c.maintenance, s)
 			return e
 		}, func(snapshot *backenddb.Snapshot) error {
-			if e := h.basis.adoptSnapshot(snapshot); e != nil {
-				return e
-			}
-			return snapshot.ActivatePrimaryMetadataProducer()
+			return h.basis.adoptSnapshot(snapshot)
 		}, func() error {
 			basis := h.basis
 			h.basis = nil

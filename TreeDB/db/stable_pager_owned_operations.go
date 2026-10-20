@@ -27,19 +27,18 @@ type stablePagerOwnedOperations struct {
 	pager             *pager.Pager
 	syncPath          string
 	counter           *atomic.Int64
-	owner             *primaryArenaOwnerV5
-	metadata          *retainedalloc.Owner
-	originalCustody   *rootpublication.OriginalCleanupCustody
-	charge            uint64
-	failure           primaryCleanupFailureV5
-	failedNext        *stablePagerOwnedOperations
+
+	metadata        *retainedalloc.Owner
+	originalCustody *rootpublication.OriginalCleanupCustody
+	charge          uint64
+	failure         physicalCleanupFailureV6
 }
 
 func newStablePagerOwnedOperations(snapshot *Snapshot, p *pager.Pager, metadata *retainedalloc.Owner, syncPath string) (*stablePagerOwnedOperations, error) {
 	if snapshot == nil || snapshot.idx == nil || snapshot.db == nil || metadata == nil {
 		return nil, rootpublication.ErrResourceOwnership
 	}
-	owner := snapshot.idx.primaryOwner
+
 	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(stablePagerOwnedOperations{}))) + retainedalloc.AllocationCharge(uint64(len(syncPath)))
 	if err := metadata.AddPending(charge); err != nil {
 		return nil, err
@@ -49,17 +48,8 @@ func newStablePagerOwnedOperations(snapshot *Snapshot, p *pager.Pager, metadata 
 		metadata.RemovePending(charge)
 		return nil, err
 	}
-	if owner != nil {
-		if ok, err := owner.retain(nil); !ok || err != nil {
-			custody.Complete(nil, nil)
-			metadata.RemovePending(charge)
-			if err == nil {
-				err = rootpublication.ErrResourceOwnership
-			}
-			return nil, err
-		}
-	}
-	operations := &stablePagerOwnedOperations{snapshot: snapshot, pager: p, syncPath: strings.Clone(syncPath), counter: snapshot.stableIndexCaptureCounter, owner: owner, metadata: metadata, originalCustody: custody, charge: charge}
+
+	operations := &stablePagerOwnedOperations{snapshot: snapshot, pager: p, syncPath: strings.Clone(syncPath), counter: snapshot.stableIndexCaptureCounter, metadata: metadata, originalCustody: custody, charge: charge}
 	operations.refs.Store(1)
 	return operations, nil
 }
@@ -165,33 +155,14 @@ func (operations *stablePagerOwnedOperations) snapshotFinalized(err error) error
 }
 
 func (operations *stablePagerOwnedOperations) disposeAfterSnapshotCompletion() error {
-	owner, metadata, charge := operations.owner, operations.MetadataOwner(), operations.charge
+	metadata, charge := operations.MetadataOwner(), operations.charge
 	operations.pager = nil
 	operations.syncPath = ""
 	if operations.failure.causes[0] != nil {
-		if owner != nil {
-			owner.retainFailedPagerOperations(operations)
-		}
 		operations.originalCustody.Complete(operations, &operations.failure)
 		metadata.CleanupFailed()
 		return &operations.failure
 	}
-	consumed, debt, err := true, false, error(nil)
-	var ownerCompletion primaryRuntimeDisposalCompletionV6
-	if owner != nil {
-		consumed, debt, ownerCompletion, err = owner.releaseOriginalWithOutcome()
-	}
-	if !consumed || debt {
-		operations.failure.causes[0] = err
-		if owner != nil {
-			owner.retainFailedPagerOperations(operations)
-		}
-		operations.originalCustody.Complete(operations, &operations.failure)
-		metadata.CleanupFailed()
-		return &operations.failure
-	}
-	operations.owner = nil
-	owner = nil
 	operations.originalCustody.Complete(nil, nil)
 	operations.originalCustody = nil
 	operations.disposalConsumed.Store(true)
@@ -199,14 +170,5 @@ func (operations *stablePagerOwnedOperations) disposeAfterSnapshotCompletion() e
 	operations.charge = 0
 	operations = nil
 	metadata.RemovePending(charge)
-	ownerCompletion.complete()
-	return err
-}
-func (owner *primaryArenaOwnerV5) retainFailedPagerOperations(operations *stablePagerOwnedOperations) {
-	owner.mu.Lock()
-	defer owner.mu.Unlock()
-	operations.failedNext = owner.failedPagerOperations
-	owner.failedPagerOperations = operations
-	operations.failure.causes[2] = owner.cleanupErr
-	owner.cleanupErr = &operations.failure
+	return nil
 }

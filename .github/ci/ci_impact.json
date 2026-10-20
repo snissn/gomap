@@ -12,7 +12,7 @@
     "M0 observation is manual diagnostic-only on a separately fixed product; no forecast starts it or replaces failed M0 acceptance.",
     "Bounded maintenance comparison is a manually granted diagnostic on fixed baseline/candidate products; no forecast starts it or establishes cost, M0 or native acceptance."
   ],
-  "discovery_source_sha256": "724db05683b0a3610970b1cea4c00533b12f949524edfd74eafdd13baff880c0",
+  "discovery_source_sha256": "946e22256e6b0a3d3238b663d44cf6fffc2b2fde4e93d2cf4f599ca28f77f672",
   "dynamic_consumers": [
     {
       "behavior": "AST/WalkDir discovery and go test subprocess producer witnesses; all TreeDB test/race members retained",
@@ -2363,7 +2363,7 @@
         },
         "workflow_dispatch": null
       },
-      "git_blob": "60f6ef22bd96898cb2b3279f19ea2e69e2f1d53e",
+      "git_blob": "5aa0a40bfaf5cb0708071524313edab3fdf02251",
       "jobs": {
         "mvcc-raw-path-gate": {
           "checkout": [
@@ -2438,7 +2438,7 @@
               },
               "if": "${{ !cancelled() && steps.paths.outputs.run == 'true' && steps.gate_self_checks.outcome == 'success' }}",
               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
-              "name": "Compare public PRIMARY replacement cost"
+              "name": "Compare public durable replacement cost"
             },
             {
               "command_sha256": "db474e8e1b4321b9e8fe001c9185f2312b63975b2f0a3d8a71852e4155c9e1f6",
@@ -2895,7 +2895,7 @@
           "runs_on": "${{ matrix.os }}"
         }
       },
-      "sha256": "4ed1f63ea4cc80e1aa3037e8e3981e828aaccf0e40dee1d33fcb90cbf015e0ce"
+      "sha256": "39555a0f30f2c9ced3da7463350c5f32e873adf786b00971463d8bfed30e80ee"
     },
     "treedb-vacuum-m0-observation.yml": {
       "coverage": "existing execution only; triggers/path filters are unchanged",

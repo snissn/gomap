@@ -5,8 +5,6 @@ import (
 	"errors"
 	"runtime"
 	"testing"
-
-	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
 )
 
 func TestCompactIndexPrepareFailureRollsBackOldTreeRetirements(t *testing.T) {
@@ -87,7 +85,7 @@ func TestCompactIndexPrepareFailureRollsBackOldTreeRetirements(t *testing.T) {
 }
 
 func TestPrimaryCompactIndexMaterializationAndRollback(t *testing.T) {
-	opts := Options{Dir: t.TempDir(), IndexPrimaryDirectory: true, DisableBackgroundPrune: true}
+	opts := Options{Dir: t.TempDir(), DisableBackgroundPrune: true}
 	d, err := Open(opts)
 	if err != nil {
 		t.Fatal(err)
@@ -115,8 +113,8 @@ func TestPrimaryCompactIndexMaterializationAndRollback(t *testing.T) {
 	if err = d.CompactIndex(); err != nil {
 		t.Fatal(err)
 	}
-	if d.State().CommitSeq != before.CommitSeq+1 || !primaryarena.IsPage(d.State().RootPageID) {
-		t.Fatal("compact did not publish one selected PRIMARY root")
+	if d.State().CommitSeq != before.CommitSeq+1 {
+		t.Fatal("compact did not publish one DATA root")
 	}
 	if err = d.SetSync([]byte{3}, []byte("new")); err != nil {
 		t.Fatal(err)

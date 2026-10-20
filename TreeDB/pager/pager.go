@@ -80,13 +80,11 @@ type Pager struct {
 	memoryOnly      bool
 	// pageIDBase gives private overlay pagers a disjoint logical ID namespace.
 	// IDs below the base are read through fallback and are never writable here.
-	pageIDBase         uint64
-	fallback           *Pager
-	primaryBanks       atomic.Pointer[Pager]
-	metadataReadMu     sync.RWMutex
-	immutableReadRoots primaryReadRootTableV6 // Single accountable address/custody index.
-	verified           atomic.Pointer[verifiedBitset]
-	verifyOnRead       atomic.Bool
+	pageIDBase     uint64
+	fallback       *Pager
+	metadataReadMu sync.RWMutex
+	verified       atomic.Pointer[verifiedBitset]
+	verifyOnRead   atomic.Bool
 
 	growMu       sync.Mutex
 	growStopOnce sync.Once
@@ -526,9 +524,6 @@ func (p *Pager) ensurePrefetchCapacityLocked(numChunks int) {
 // but Pager methods usually hold lock).
 // Currently Pager.Get holds RLock.
 func (p *Pager) IsVerified(pageID uint64) bool {
-	if p.immutableReadRoots.retention != nil {
-		return p.isVerifiedRetained(pageID)
-	}
 	return p.isVerifiedPage(pageID)
 }
 
@@ -539,16 +534,6 @@ func (p *Pager) isVerifiedRetained(pageID uint64) bool {
 }
 
 func (p *Pager) isVerifiedPage(pageID uint64) bool {
-	if isPrimaryBankID(pageID) {
-		if companion := p.primaryBanks.Load(); companion != nil {
-			return companion.IsVerified(pageID - page.PrimaryBankNamespace)
-		}
-	}
-	if pageID >= PrimaryReadRootLocalBaseV6 && pageID < page.PrimaryBankNamespace {
-		_, ok := p.primaryReadRootImageV6(pageID)
-		return ok
-	}
-
 	localID, local := p.localPageID(pageID)
 	if !local {
 		return p.fallback != nil && p.fallback.IsVerified(pageID)
@@ -576,23 +561,10 @@ func (p *Pager) VerifyOnRead() bool {
 // SetVerifyOnRead enables or disables checksum verification on every read.
 func (p *Pager) SetVerifyOnRead(always bool) {
 	p.verifyOnRead.Store(always)
-	if companion := p.primaryBanks.Load(); companion != nil {
-		companion.SetVerifyOnRead(always)
-	}
 }
 
 // MarkVerified marks a page as verified.
 func (p *Pager) MarkVerified(pageID uint64) {
-	if isPrimaryBankID(pageID) {
-		if companion := p.primaryBanks.Load(); companion != nil {
-			companion.MarkVerified(pageID - page.PrimaryBankNamespace)
-			return
-		}
-	}
-	if pageID >= PrimaryReadRootLocalBaseV6 && pageID < page.PrimaryBankNamespace {
-		return
-	}
-
 	localID, local := p.localPageID(pageID)
 	if !local {
 		if p.fallback != nil {
@@ -601,14 +573,7 @@ func (p *Pager) MarkVerified(pageID uint64) {
 		return
 	}
 	pageID = localID
-	if p.immutableReadRoots.retention != nil {
-		p.metadataReadMu.RLock()
-		defer p.metadataReadMu.RUnlock()
-		vb := p.verified.Load()
-		if vb == nil || pageID/verifiedChunkPages >= uint64(len(vb.chunks)) {
-			return
-		}
-	}
+
 	for {
 		vb := p.verified.Load()
 		if vb == nil {
@@ -642,16 +607,6 @@ func (p *Pager) MarkVerified(pageID uint64) {
 
 // MarkUnverified marks a page as unverified (dirty/reused).
 func (p *Pager) MarkUnverified(pageID uint64) {
-	if isPrimaryBankID(pageID) {
-		if companion := p.primaryBanks.Load(); companion != nil {
-			companion.MarkUnverified(pageID - page.PrimaryBankNamespace)
-			return
-		}
-	}
-	if pageID >= PrimaryReadRootLocalBaseV6 && pageID < page.PrimaryBankNamespace {
-		return
-	}
-
 	localID, local := p.localPageID(pageID)
 	if !local {
 		return
@@ -797,11 +752,6 @@ func (p *Pager) allocLocked(count int) (uint64, error) {
 
 // GetForWrite returns the byte slice for the given page ID and marks the chunk dirty.
 func (p *Pager) GetForWrite(pageID uint64) ([]byte, error) {
-	if isPrimaryBankID(pageID) {
-		if companion := p.primaryBanks.Load(); companion != nil {
-			return companion.GetForWrite(pageID - page.PrimaryBankNamespace)
-		}
-	}
 	if p.readOnly {
 		return nil, ErrReadOnly
 	}
@@ -836,7 +786,7 @@ func (p *Pager) GetForWrite(pageID uint64) ([]byte, error) {
 // CAUTION: The returned slice points directly to mmapped memory.
 // Do not hold references to it after closing the pager.
 func (p *Pager) Get(pageID uint64) ([]byte, error) {
-	if pageID < PrimaryReadRootLocalBaseV6 && pageID >= p.pageIDBase && p.immutableReadRoots.retention == nil {
+	if pageID >= p.pageIDBase {
 		return p.getLocalMapping(pageID, pageID-p.pageIDBase)
 	}
 	data, _, err := p.GetWithWork(pageID, nil)
@@ -854,27 +804,6 @@ func (p *Pager) GetWithWork(pageID uint64, work *iterator.OrdinalScanWork) ([]by
 }
 
 func (p *Pager) getWithWork(pageID uint64, work *iterator.OrdinalScanWork) ([]byte, bool, error) {
-	if isPrimaryBankID(pageID) {
-		if companion := p.primaryBanks.Load(); companion != nil {
-			return companion.GetWithWork(pageID-page.PrimaryBankNamespace, work)
-		}
-		// A speculative overlay borrows read authority from its retained source
-		// pager. It has no bank write or allocation authority of its own.
-		if p.fallback != nil {
-			return p.fallback.GetWithWork(pageID, work)
-		}
-		return nil, false, ErrPageOutOfBounds
-	}
-	if pageID >= PrimaryReadRootLocalBaseV6 && pageID < page.PrimaryBankNamespace {
-		if ok, err := pagerReserve(work, 1, 64); !ok || err != nil {
-			return nil, ok, err
-		}
-		value, ok := p.primaryReadRootImageV6(pageID)
-		if !ok {
-			return nil, false, ErrPageOutOfBounds
-		}
-		return value, true, nil
-	}
 	localID, local := p.localPageID(pageID)
 	if !local {
 		if p.fallback != nil {
@@ -899,10 +828,6 @@ func (p *Pager) getWithWork(pageID uint64, work *iterator.OrdinalScanWork) ([]by
 	// If chunkIdx=9, OK.
 	// So order in Reader doesn't strictly matter as long as bounds check uses the loaded chunks len.
 
-	if p.immutableReadRoots.retention != nil {
-		p.metadataReadMu.RLock()
-		defer p.metadataReadMu.RUnlock()
-	}
 	data, err := p.getLocalMapping(pageID, localID)
 	return data, err == nil, err
 }
@@ -936,12 +861,6 @@ func (p *Pager) getLocalMapping(pageID, localID uint64) ([]byte, error) {
 // PrefetchPage issues a best-effort prefetch hint for the chunk containing
 // pageID. It is safe for concurrent use.
 func (p *Pager) PrefetchPage(pageID uint64) {
-	if isPrimaryBankID(pageID) {
-		if companion := p.primaryBanks.Load(); companion != nil {
-			companion.PrefetchPage(pageID - page.PrimaryBankNamespace)
-			return
-		}
-	}
 	localID, local := p.localPageID(pageID)
 	if !local {
 		if p.fallback != nil {
@@ -952,10 +871,7 @@ func (p *Pager) PrefetchPage(pageID uint64) {
 	if !p.prefetchOnRead {
 		return
 	}
-	if p.immutableReadRoots.retention != nil {
-		p.metadataReadMu.RLock()
-		defer p.metadataReadMu.RUnlock()
-	}
+
 	limit := p.numPages.Load()
 	if pageID >= limit {
 		return
@@ -1439,34 +1355,4 @@ func pagerCallerMinimum(w *iterator.OrdinalScanWork, r, b, cr, cb uint64) error 
 		return &iterator.OrdinalUnitTooLarge{Records: r, Bytes: b}
 	}
 	return nil
-}
-
-func isPrimaryBankID(id uint64) bool {
-	return id >= page.PrimaryBankNamespace && id < 2*page.PrimaryBankNamespace
-}
-
-// AttachPrimaryBankPager installs the immutable physical routing owner once.
-// The containing index generation owns both pager lifetimes. Attachment does
-// not alter DATA extent, allocation or durability; resource fences cover the
-// two exact physical files separately.
-func (p *Pager) AttachPrimaryBankPager(companion *Pager) error {
-	if p == nil || companion == nil || p == companion || p.memoryOnly || companion.memoryOnly || companion.pageIDBase != 0 {
-		return errors.New("pager: invalid primary bank attachment")
-	}
-	if !p.primaryBanks.CompareAndSwap(nil, companion) {
-		return errors.New("pager: primary bank owner already attached")
-	}
-	companion.SetVerifyOnRead(p.VerifyOnRead())
-	return nil
-}
-
-// PrimaryBankPageCount reports only the attached companion's physical extent.
-func (p *Pager) PrimaryBankPageCount() uint64 {
-	if p == nil {
-		return 0
-	}
-	if bank := p.primaryBanks.Load(); bank != nil {
-		return bank.PageCount()
-	}
-	return 0
 }

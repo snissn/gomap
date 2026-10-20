@@ -22,7 +22,6 @@ import (
 	"github.com/snissn/gomap/TreeDB/freelist"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/leafrefscan"
-	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
@@ -223,7 +222,6 @@ func (sink durablePagerSinkV1) WriteCandidatePageV1(pageID uint64, view freelist
 }
 
 type durableRootRuntimeV1 struct {
-	primary       *primaryDurableRuntimeV5
 	meta          page.DurableMetaV1
 	record        rootpublication.DurableRootRecordV1
 	manifest      *rootpublication.DependencyManifestV1
@@ -362,13 +360,7 @@ func (db *DB) durableRootReuseCapabilityV1(current durableRootRuntimeV1) (freeli
 	if err != nil {
 		return freelist.ReuseCapability{}, err
 	}
-	if current.primary != nil {
-		for _, seq := range current.primary.dataFloor {
-			if seq != 0 && seq < oldest {
-				oldest = seq
-			}
-		}
-	}
+
 	return freelist.NewReuseCapability(oldest, db.MinPinnedSnapshotCommitSeq(), 0)
 }
 
@@ -805,14 +797,11 @@ func (db *DB) captureDurableValueLogResourcesV1(idx *indexGen, next page.MetaPag
 
 func (db *DB) captureDurableValueLogResourcesWithLimitsV1(idx *indexGen, next page.MetaPageBody, delta *valueLogRefDelta, exactPackedFileIDs map[uint32]struct{}, valueLogPublicationLocked bool, scanned *candidateValueLogRefCountsV1, limits *PreparedRootPublicationLimits) (*rootpublication.StableResourceSet, error) {
 	metadata := db.valueLogIdentityPins.MetadataOwner()
-	if idx != nil && idx.primary != nil {
-		metadata = idx.primary.MetadataOwner()
-	}
+
 	return db.captureDurableValueLogResourcesWithMetadataV1(idx, next, delta, exactPackedFileIDs, valueLogPublicationLocked, scanned, limits, metadata)
 }
 
 func (db *DB) captureDurableValueLogResourcesWithMetadataV1(idx *indexGen, next page.MetaPageBody, delta *valueLogRefDelta, exactPackedFileIDs map[uint32]struct{}, valueLogPublicationLocked bool, scanned *candidateValueLogRefCountsV1, limits *PreparedRootPublicationLimits, metadata *retainedalloc.Owner) (*rootpublication.StableResourceSet, error) {
-
 	if db.valueLogManager == nil {
 		return nil, nil
 	}
@@ -1021,9 +1010,7 @@ func (db *DB) captureDurableRootResourcesFromBaseWithRefCountsV1(idx *indexGen, 
 		}(additional)
 	}
 	metadata := db.valueLogIdentityPins.MetadataOwner()
-	if idx != nil && idx.primary != nil {
-		metadata = idx.primary.MetadataOwner()
-	}
+
 	// DATA publication inherits its preceding selected closure's actual owner.
 	// Select before constructing the builder or fresh physical descriptors.
 	if metadata == nil {
@@ -1059,13 +1046,7 @@ func (db *DB) captureDurableRootResourcesFromBaseWithRefCountsV1(idx *indexGen, 
 	var builder *rootpublication.StableResourceSetBuilder
 	// PRIMARY construction binds an explicit resource set. Ordinary DATA keeps
 	// its original admitted transaction terminal even with no external closure.
-	if metadata != nil && idx != nil && idx.primary != nil {
-		var buildErr error
-		builder, buildErr = rootpublication.NewStableResourceSetBuilderWithMetadata(metadata)
-		if buildErr != nil {
-			return nil, buildErr
-		}
-	}
+
 	abandon := true
 	defer func() {
 		if abandon {
@@ -3248,43 +3229,22 @@ func (db *DB) releaseDurableRootResourcesV1() error {
 		return nil
 	}
 	db.durablePublishMu.Lock()
-	primary := db.durableRoot.primary
 	resources := db.durableRoot.slotResources
 	pending := db.durableRoot.pending
 	ambiguous := db.durableRoot.ambiguous
-	if primary != nil {
-		// The actual terminal DBState owns one current root edge. Runtime.current
-		// is only a projection alias and may lag foreground publications.
-		primary.current = nil
-		if state := db.state.Load(); state != nil {
-			primary.current = state.primaryRoot
-		}
-		primary.slotResources = resources
-	}
+
 	db.durablePublishMu.Unlock()
-	if primary != nil {
-		var arena *primaryarena.Arena
-		if idx := db.idx.Load(); idx != nil {
-			arena = idx.primary
-		}
-		if err := db.releaseOriginalPrimaryRuntimeV5(arena, primary); err != nil {
-			return err // SAME descriptor still reachable in original DB discovery.
+
+	for slot, set := range resources {
+		if err := set.ReleaseWithError(); err != nil {
+			db.retainOriginalCleanupError(err)
+			return err // Original slot remains on the DB on refusal.
 		}
 		db.durablePublishMu.Lock()
-		db.durableRoot.primary = nil
-		db.durableRoot.slotResources = [2]*rootpublication.StableResourceSet{}
+		db.durableRoot.slotResources[slot] = nil
 		db.durablePublishMu.Unlock()
-	} else {
-		for slot, set := range resources {
-			if err := set.ReleaseWithError(); err != nil {
-				db.retainOriginalCleanupError(err)
-				return err // Original slot remains on the DB on refusal.
-			}
-			db.durablePublishMu.Lock()
-			db.durableRoot.slotResources[slot] = nil
-			db.durablePublishMu.Unlock()
-		}
 	}
+
 	var cleanupErr error
 	if err := pending.release(); err != nil {
 		cleanupErr = err

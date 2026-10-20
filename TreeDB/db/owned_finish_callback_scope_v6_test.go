@@ -38,8 +38,8 @@ func TestOwnedFinishFirstCallbackCloseRefusesBeforeHooksV6(t *testing.T) {
 	}
 }
 
-func TestOwnedFinishConcurrentCleanupAllowsActualPrimaryPublicationV6(t *testing.T) {
-	db, err := Open(Options{Dir: t.TempDir(), IndexPrimaryDirectory: true, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+func TestOwnedFinishConcurrentCleanupAllowsActualDATAPublicationV6(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +59,7 @@ func TestOwnedFinishConcurrentCleanupAllowsActualPrimaryPublicationV6(t *testing
 	}
 	defer func() { close(release); <-done }()
 	before := db.State().CommitSeq
-	if err := db.SetSync([]byte("real-primary"), []byte("while-cleanup-held")); err != nil {
+	if err := db.SetSync([]byte("real-data"), []byte("while-cleanup-held")); err != nil {
 		t.Fatal(err)
 	}
 	if db.State().CommitSeq <= before {
