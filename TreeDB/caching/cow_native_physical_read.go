@@ -60,6 +60,36 @@ func (tx *nativeConditionalTxn) NativeEntryAtRoot(root uint64, key []byte, copyV
 	return tx.snap.cowCut.basis.nativeEntryAtRoot(tx.db.cow, root, key, copyValue)
 }
 
+// nativeLeafPage uses the SAME basis traversal lock and cache decoder owner as
+// nativeEntryAtRoot. ReadCOWLeafPage and verified cache hits copy into caller dst
+// before these locks end; no shared scratch or file authority escapes.
+func (b *cowBackendBasis) nativeLeafPage(cache *cowCache, ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
+	b.readMu.Lock()
+	defer b.readMu.Unlock()
+	limit := cache.budget.Limits().MaxInFlightBytes
+	if _, err := b.physicalWorkspaceLocked(cache.budget, valuelog.COWReadLimits{MaxRecordBytes: limit, MaxRawBytes: limit, MaxValueBytes: limit}); err != nil {
+		return nil, err
+	}
+	return b.readPhysicalLeafLocked(cache, ptr, dst, true)
+}
+
+func (c *NativeSemanticCapture) NativeLeafPage(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
+	if c == nil || c.cut == nil || c.cache == nil {
+		return nil, backenddb.ErrClosed
+	}
+	return c.cut.basis.nativeLeafPage(c.cache, ptr, dst)
+}
+
+func (tx *nativeConditionalTxn) NativeLeafPage(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
+	if tx == nil || tx.ConditionalTxn == nil {
+		return nil, backenddb.ErrConditionalTxnClosed
+	}
+	if err := tx.ensureOpen(); err != nil {
+		return nil, err
+	}
+	return tx.snap.cowCut.basis.nativeLeafPage(tx.db.cow, ptr, dst)
+}
+
 // nativeValueAtPointer borrows the exact retained basis file and the original
 // cache's dictionary-free decoder. No basis/file/caller scope is retained by
 // scratch. Copy-out and retained-output admission finish under physicalMu.

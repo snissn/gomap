@@ -328,6 +328,18 @@ type NativePhysicalReader interface {
 	NativeEntryAtRoot(root uint64, key []byte, copyValue bool) (node.LeafEntry, error)
 }
 
+// NativePhysicalLeafReader decodes an outer leaf through the capture's exact
+// retained basis and original admitted physical workspace. dst must contain
+// caller-admitted page storage. Successful output aliases only dst, never shared
+// decoder/cache backing; it remains valid after later calls until the caller
+// reuses dst. The enclosing scope retains this capture and excludes its Close
+// during the call. Record inspection and native codec policy apply on every
+// read; a cache hit requires original full-record checksum verification bound
+// to the exact pinned file identity.
+type NativePhysicalLeafReader interface {
+	NativeLeafPage(ptr page.LeafLogPtr, dst []byte) ([]byte, error)
+}
+
 // NativePhysicalValueReader decodes an already captured pointer using that
 // capture's exact retained basis and registered files. It returns exact-length,
 // independent output before releasing shared scratch. Compressed dictionaries
