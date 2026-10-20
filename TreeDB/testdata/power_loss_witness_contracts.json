@@ -115,7 +115,7 @@
       "expected_typed_error": "none",
       "state": {
         "root_meta_generation": "selected_slot=1 commit_seq=6 slot0=5 slot1=6",
-        "freelist_generation": "generation=12",
+        "freelist_generation": "generation=7",
         "external_resource_ids_frontiers": "stable_image_tree_artifact=stable_image_tree.json manifest_entries=2",
         "namespace_generations": "stable_image_tree_artifact=stable_image_tree.json",
         "wal_lineage": "profile=no_wal_fast applied_lsn=0",
@@ -201,7 +201,7 @@
       "expected_typed_error": "none",
       "state": {
         "root_meta_generation": "selected_slot=0 commit_seq=3 slot0=3 slot1=2",
-        "freelist_generation": "generation=6",
+        "freelist_generation": "generation=5",
         "external_resource_ids_frontiers": "stable_image_tree_artifact=stable_image_tree.json manifest_entries=1",
         "namespace_generations": "stable_image_tree_artifact=stable_image_tree.json",
         "wal_lineage": "profile=no_wal_fast applied_lsn=0",
@@ -243,7 +243,7 @@
       "expected_typed_error": "none",
       "state": {
         "root_meta_generation": "selected_slot=1 commit_seq=2 slot0=1 slot1=2",
-        "freelist_generation": "generation=4",
+        "freelist_generation": "generation=3",
         "external_resource_ids_frontiers": "stable_image_tree_artifact=stable_image_tree.json manifest_entries=1",
         "namespace_generations": "stable_image_tree_artifact=stable_image_tree.json",
         "wal_lineage": "profile=no_wal_fast applied_lsn=0",
@@ -285,7 +285,7 @@
       "expected_typed_error": "none",
       "state": {
         "root_meta_generation": "selected_slot=1 commit_seq=2 slot0=1 slot1=2",
-        "freelist_generation": "generation=4",
+        "freelist_generation": "generation=3",
         "external_resource_ids_frontiers": "stable_image_tree_artifact=stable_image_tree.json manifest_entries=1",
         "namespace_generations": "stable_image_tree_artifact=stable_image_tree.json",
         "wal_lineage": "profile=no_wal_fast applied_lsn=0",
@@ -683,7 +683,7 @@
       "expected_typed_error": "none",
       "state": {
         "root_meta_generation": "selected_slot=1 commit_seq=2 slot0=1 slot1=2",
-        "freelist_generation": "generation=4",
+        "freelist_generation": "generation=3",
         "external_resource_ids_frontiers": "stable_image_tree_artifact=stable_image_tree.json manifest_entries=1",
         "namespace_generations": "stable_image_tree_artifact=stable_image_tree.json",
         "wal_lineage": "profile=no_wal_fast applied_lsn=0",
@@ -728,7 +728,7 @@
       "expected_typed_error": "none",
       "state": {
         "root_meta_generation": "selected_slot=1 commit_seq=2 slot0=1 slot1=2",
-        "freelist_generation": "generation=4",
+        "freelist_generation": "generation=3",
         "external_resource_ids_frontiers": "stable_image_tree_artifact=stable_image_tree.json manifest_entries=1",
         "namespace_generations": "stable_image_tree_artifact=stable_image_tree.json",
         "wal_lineage": "profile=no_wal_fast applied_lsn=0",
@@ -861,7 +861,7 @@
       "expected_typed_error": "none",
       "state": {
         "root_meta_generation": "selected_slot=0 commit_seq=3 slot0=3 slot1=2",
-        "freelist_generation": "generation=6",
+        "freelist_generation": "generation=5",
         "external_resource_ids_frontiers": "stable_image_tree_artifact=stable_image_tree.json manifest_entries=1",
         "namespace_generations": "stable_image_tree_artifact=stable_image_tree.json",
         "wal_lineage": "profile=no_wal_fast applied_lsn=0",
@@ -1249,7 +1249,7 @@
       "expected_typed_error": "none",
       "state": {
         "root_meta_generation": "selected_slot=1 commit_seq=4 slot0=3 slot1=4",
-        "freelist_generation": "generation=8",
+        "freelist_generation": "generation=7",
         "external_resource_ids_frontiers": "stable_image_tree_artifact=stable_image_tree.json manifest_entries=1",
         "namespace_generations": "stable_image_tree_artifact=stable_image_tree.json",
         "wal_lineage": "profile=no_wal_fast applied_lsn=0",

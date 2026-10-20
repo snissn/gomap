@@ -228,9 +228,10 @@ func assertStaleBuildRecoveryStats(t *testing.T, result powerlossreopen.Result) 
 		t.Fatalf("recovered horizon=(commit=%d applied_lsn=%d), want (commit=4 applied_lsn=0)", result.CommitSeq, result.AppliedLSN)
 	}
 	// Commit sequence and allocator generation are separate authorities. Fresh
-	// DATA starts at commit 1 / generation 2. Each individually sealed write
-	// prepares a visible generation and then a seal generation: baseline
-	// SetSync is commit 2 / generation 4, predecessor is 3 / 6, retry is 4 / 8.
+	// DATA starts at commit 1 / generation 2. Baseline SetSync combines its
+	// visible and seal publication at commit 2 / generation 3. The ordered
+	// predecessor and retry each prepare visible and seal generations:
+	// predecessor is commit 3 / generation 5, retry is commit 4 / generation 7.
 	// Rejected work has no acceptance; Checkpoint waits for the accepted prefix
 	// rather than adding a logical commit. The two recovery slots remain
 	// commits 3 and 4, with immediate parents 2 and 3 respectively.
@@ -246,7 +247,7 @@ func assertStaleBuildRecoveryStats(t *testing.T, result powerlossreopen.Result) 
 		{key: "treedb.durable_root.commit_seq", value: "4"},
 		{key: "treedb.durable_root.slot0.commit_seq", value: "3"},
 		{key: "treedb.durable_root.slot1.commit_seq", value: "4"},
-		{key: "treedb.durable_root.freelist.generation", value: "8"},
+		{key: "treedb.durable_root.freelist.generation", value: "7"},
 		{key: "treedb.durable_root.manifest.entries", value: "1"},
 		{key: "treedb.durable_root.durable_seq", value: "4"},
 	}
