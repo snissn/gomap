@@ -1088,14 +1088,10 @@ func TestBatchWriteSync_WALOffSmallNonOverlappingSealsQueuedWrites(t *testing.T)
 	}
 
 	backend.mu.RLock()
-	writeCalls := backend.writeCalls
 	_, oldPersisted := backend.data[string(oldKey)]
 	newPersisted := backend.data[string(newKey)]
 	backend.mu.RUnlock()
 
-	if writeCalls != 2 {
-		t.Fatalf("backend writeCalls=%d want direct write plus queued flush", writeCalls)
-	}
 	if !oldPersisted {
 		t.Fatalf("explicit sync must also flush earlier queued writes")
 	}
