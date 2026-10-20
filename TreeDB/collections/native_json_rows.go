@@ -89,28 +89,38 @@ func nativeJSONFinalRowsWithMode(name string, meta CollectionMeta, rows *nativeJ
 	if err = admitNativeInsertArray(len(rows.rows), uint64(unsafe.Sizeof(preparedBatchUpdate{})), admit); err != nil {
 		return nil, nil, nil, err
 	}
-	// One maintained arena owns every retained old/new state. Its capacities
-	// cover at most one scalar per index: escaped strings <=2*document bytes,
-	// bounded numeric V2 expansion, and one state/reference header per scalar.
+	// One maintained arena owns every retained old/new state. Multi-value
+	// extraction keeps its own normalized reference slices; reserve those
+	// retained slices before the original parser allocates them.
 	var bytesCap, stateCount, maxDocument int
 	for _, row := range rows.rows {
 		for _, doc := range [][]byte{row.opening, row.current} {
 			if doc == nil {
 				continue
 			}
-			capacity, err := nativeJSONEncodedCapacity(len(doc), meta.Indexes)
+			capacity, err := nativeJSONDocumentEncodedCapacity(doc, meta.Indexes, meta.Options.AllowArrayValuesInIndex)
 			if err != nil || capacity > int(^uint(0)>>1)-bytesCap || len(runtimes) > int(^uint(0)>>1)-stateCount {
 				return nil, nil, nil, memtable.ErrCOWCapacity
 			}
 			bytesCap += capacity
 			stateCount += len(runtimes)
+			for _, index := range meta.Indexes {
+				if index.MultiKey || meta.Options.AllowArrayValuesInIndex {
+					// Every array value occupies at least one source byte.
+					// The maintained parser allocates a reference for every
+					// input element before sorting/deduplicating it.
+					if err = admitNativeInsertArray(len(doc), uint64(unsafe.Sizeof([]byte{})), admit); err != nil {
+						return nil, nil, nil, err
+					}
+				}
+			}
 			if len(runtimes) != 0 {
 				maxDocument = max(maxDocument, len(doc))
 			}
 		}
 	}
-	// Admit each actual backing once. Scalar-only native schemas bound every
-	// encoded image before parsing; decoder scratch has its separate high-water
+	// Admit each actual backing once. Source-sized scalar/value bounds cover
+	// encoded images before parsing; decoder scratch has its separate high-water
 	// receipt. The final arena never grows while old/new states borrow it.
 	for _, allocation := range []struct {
 		count int
@@ -209,8 +219,8 @@ func (t *NativeJSONTxn) admitRowDocument(g *nativeJSONTxnBinding, id, doc []byte
 	return t.admitStage(g, 2*ids+document)
 }
 
-// Native schemas fence arrays/multikey/compound values. Each encoded scalar
-// therefore has bounded string escaping or the maintained V2 numeric digit cap.
+// Scalar queries and scalar-only schemas use bounded string escaping or the
+// maintained V2 numeric digit cap. Array documents add their per-value bound below.
 func nativeJSONEncodedCapacity(document int, indexes []IndexDefinition) (int, error) {
 	limit := int(^uint(0) >> 1)
 	if document < 0 || document > (limit-16)/2 {
@@ -233,6 +243,55 @@ func nativeJSONEncodedCapacity(document int, indexes []IndexDefinition) (int, er
 	return total, nil
 }
 
+// nativeJSONDocumentEncodedCapacity extends the original scalar bound only
+// for array-capable schemas. At most len(document) values can be present per
+// indexed path. Each fixed scalar/tag/terminator fits 16 bytes; escaped source
+// strings fit twice their source. BSON V2 additionally has the maintained exact
+// numeric digit cap: each numeric element has its BSON type byte somewhere in
+// the source. Counting every such byte (including false positives inside values)
+// is a conservative allocation-free bound, not an alternate document parser.
+// Repeated/dotted indexed paths each receive their independent full allowance.
+func nativeJSONDocumentEncodedCapacity(document []byte, indexes []IndexDefinition, allowArrays bool) (int, error) {
+	limit := int(^uint(0) >> 1)
+	var total, numericBytes int
+	for _, index := range indexes {
+		if index.ValueType != IndexValueBSONOrderedV2 || (!index.MultiKey && !allowArrays) {
+			continue
+		}
+		for _, b := range document {
+			switch b {
+			case 0x01, 0x10, 0x12, 0x13:
+				numericBytes++
+			} // double, int32, int64, decimal128
+		}
+		break
+	}
+	for _, index := range indexes {
+		capacity, err := nativeJSONEncodedCapacity(len(document), []IndexDefinition{index})
+		if err != nil {
+			return 0, err
+		}
+		if index.MultiKey || allowArrays {
+			if len(document) > (limit-capacity)/16 {
+				return 0, memtable.ErrCOWCapacity
+			}
+			capacity += len(document) * 16
+			if index.ValueType == IndexValueBSONOrderedV2 {
+				const numeric = 6 + (bsonIndexKeyNumericV2MaxDigits+1)/2
+				if numericBytes > (limit-capacity)/numeric {
+					return 0, memtable.ErrCOWCapacity
+				}
+				capacity += numericBytes * numeric
+			}
+		}
+		if capacity > limit-total {
+			return 0, memtable.ErrCOWCapacity
+		}
+		total += capacity
+	}
+	return total, nil
+}
+
 // One original transaction-local scratch receipt owns the maintained arena and
 // the decoder fallback envelope. Only its maximum document demand is retained.
 // No encoded validation state escapes this scope; final states use a different,
@@ -245,7 +304,7 @@ func (t *NativeJSONTxn) prepareValidation(g *nativeJSONTxnBinding, doc []byte) e
 	if err != nil {
 		return err
 	}
-	capacity, err := nativeJSONEncodedCapacity(len(doc), g.probe.meta.Indexes)
+	capacity, err := nativeJSONDocumentEncodedCapacity(doc, g.probe.meta.Indexes, g.probe.meta.Options.AllowArrayValuesInIndex)
 	if err != nil {
 		return err
 	}
@@ -660,8 +719,8 @@ func (t *NativeJSONTxn) finalizeNativeRows() error {
 			return err
 		}
 		// Reserve the maintained nested unique-owner maps and copied string keys
-		// before construction. Scalar schemas contribute at most one old value per
-		// row/index; charge each actual value independently, including map headers
+		// before construction. Charge every actual old value independently, including
+		// multikey values, map headers
 		// and small-map backing. The final-plan inventory already owns its arenas.
 		uniqueCharge := memtable.COWAllocationCharge(256)
 		for runtimeIdx, runtime := range runtimes {

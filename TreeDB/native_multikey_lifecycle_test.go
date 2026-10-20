@@ -3,6 +3,7 @@ package treedb
 import (
 	"bytes"
 	"errors"
+	"math"
 	"os"
 	"os/exec"
 	"reflect"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/internal/workstats"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 // One maintained planner must preserve effective array sets through pending
@@ -65,6 +67,7 @@ func TestNativeExistingMultikeyUnappliedReplay(t *testing.T) {
 					t.Fatal(err)
 				}
 				checkNativeMultikeyFinal(t, collection, format)
+				checkNativeMultikeyRaw(t, database)
 				if applied := indexedCRUDAppliedLSN(t, handle); applied != 7 {
 					t.Fatalf("replay applied=%d want7", applied)
 				}
@@ -237,6 +240,7 @@ func runNativeMultikeyLifecycle(t *testing.T, profile Profile, format collection
 		t.Fatal(err)
 	}
 	checkNativeMultikeyFinal(t, collection, format)
+	checkNativeMultikeyRaw(t, database)
 	checkOld := func() {
 		t.Helper()
 		response, err := old.FetchDocumentsByID([][]byte{[]byte("a"), []byte("c")}, collections.DocumentFetchOptions{})
@@ -260,6 +264,7 @@ func runNativeMultikeyLifecycle(t *testing.T, profile Profile, format collection
 		t.Fatal(err)
 	}
 	checkNativeMultikeyFinal(t, collection, format)
+	checkNativeMultikeyRaw(t, database)
 	checkOld()
 	if err = old.Close(); err != nil {
 		t.Fatal(err)
@@ -292,6 +297,7 @@ func runNativeMultikeyLifecycle(t *testing.T, profile Profile, format collection
 		t.Fatal(err)
 	}
 	checkNativeMultikeyFinal(t, collection, format)
+	checkNativeMultikeyRaw(t, database)
 	cache, registry = database.cached, handle.ValueLogIdentityPinRegistry()
 	if err = manager.Close(); err != nil {
 		t.Fatal(err)
@@ -372,5 +378,108 @@ func checkNativeMultikeyFinal(t *testing.T, collection *collections.Collection, 
 			}
 		}
 		check(ids, truncated, err)
+	}
+}
+
+// The legacy array option and BSON dotted arrays share the same extraction
+// route. Exact numeric expansion can be much larger than raw BSON doubles.
+func TestNativeExistingMultikeyArrayOptionAndNumericExpansion(t *testing.T) {
+	t.Setenv("TREEDB_DISABLE_VLOG_GENERATION_LOOP", "1")
+	for _, format := range []collections.DocumentFormat{collections.DocumentFormatJSON, collections.DocumentFormatBSON} {
+		t.Run(string(format), func(t *testing.T) {
+			database, err := Open(indexedSliceOptions(ProfileCommandWALDurable, t.TempDir()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = database.Close() })
+			handle, err := database.NativeSemanticBackend()
+			if err != nil {
+				t.Fatal(err)
+			}
+			manager := collections.NewCollectionManager(handle)
+			t.Cleanup(func() { _ = manager.Close() })
+			valueType := collections.IndexValueInt64
+			var document []byte
+			var query any = int64(1)
+			indexes := []collections.IndexDefinition{{Name: "values", Field: "values", ValueType: valueType}}
+			if format == collections.DocumentFormatJSON {
+				// Repeated values normalize to one key; both distinct matches
+				// still produce one result document and no false truncation.
+				document = []byte(`{"values":[1,1,2,null]}`)
+			} else {
+				indexes[0].ValueType = collections.IndexValueBSONOrderedV2
+				indexes = append(indexes, collections.IndexDefinition{Name: "nested", Field: "groups.children.values", ValueType: collections.IndexValueBSONOrderedV2, MultiKey: true})
+				values := make(bson.A, 64)
+				for i := range values {
+					values[i] = math.SmallestNonzeroFloat64
+				}
+				values = append(values, int32(1), int64(1), nil)
+				document = nativeBSONDocument(t, bson.D{
+					{Key: "values", Value: values},
+					{Key: "groups", Value: bson.A{
+						bson.D{{Key: "children", Value: bson.A{bson.D{{Key: "values", Value: bson.A{int32(1), int64(1)}}}}}},
+						bson.D{{Key: "children", Value: bson.A{bson.D{{Key: "values", Value: bson.A{int64(2)}}}}}},
+					}},
+				})
+				query = nativeBSONQuery(t, math.SmallestNonzeroFloat64)
+			}
+			if _, err = manager.CreateCollection(&collections.CollectionMeta{Name: "option", Options: collections.CollectionOptions{DocumentFormat: format, AllowArrayValuesInIndex: true}, Indexes: indexes}); err != nil {
+				t.Fatal(err)
+			}
+			collection, err := manager.OpenCollection("option")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = collection.InsertBatch([][]byte{[]byte("only")}, [][]byte{document}); err != nil {
+				t.Fatal(err)
+			}
+			check := func() {
+				t.Helper()
+				ids, err := collection.FindByIndexValue("values", query)
+				if err != nil || !reflect.DeepEqual(ids, [][]byte{[]byte("only")}) {
+					t.Fatalf("array option equality=%q %v", ids, err)
+				}
+				if format == collections.DocumentFormatBSON {
+					for _, value := range []any{int32(1), int64(1), int64(2)} {
+						ids, err = collection.FindByIndexValue("nested", nativeBSONQuery(t, value))
+						if err != nil || !reflect.DeepEqual(ids, [][]byte{[]byte("only")}) {
+							t.Fatalf("dotted array equality=%q %v", ids, err)
+						}
+					}
+				}
+				ids, truncated, err := collection.FindByIndexRange("values", collections.IndexRangeOptions{Lower: collections.IndexRangeBound{Unbounded: true}, Upper: collections.IndexRangeBound{Unbounded: true}, Limit: 1})
+				if err != nil || truncated || !reflect.DeepEqual(ids, [][]byte{[]byte("only")}) {
+					t.Fatalf("distinct limit=%q %v %v", ids, truncated, err)
+				}
+			}
+			check()
+			next := handle.CommandWALNextLSN()
+			invalid := nativeMultikeyDocument(t, format, `{"values":[{"unsupported":"object"}]}`)
+			if _, err = collection.InsertBatch([][]byte{[]byte("invalid")}, [][]byte{invalid}); err == nil || handle.CommandWALNextLSN() != next {
+				t.Fatalf("invalid array assigned identity: %v", err)
+			}
+			if err = database.Checkpoint(); err != nil {
+				t.Fatal(err)
+			}
+			check()
+			cache, registry := database.cached, handle.ValueLogIdentityPinRegistry()
+			if err = manager.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err = database.Close(); err != nil {
+				t.Fatal(err)
+			}
+			requirePublicCOWFinalZero(t, cache)
+			if stats := registry.Stats(); stats.ActivePins != 0 || stats.ActiveIdentities != 0 {
+				t.Fatalf("array option registry: %+v", stats)
+			}
+		})
+	}
+}
+
+func checkNativeMultikeyRaw(t *testing.T, database *DB) {
+	t.Helper()
+	if got, err := database.Get([]byte("multikey/raw")); err != nil || !bytes.Equal(got, []byte("one cut")) {
+		t.Fatalf("same aggregate raw=%q %v", got, err)
 	}
 }

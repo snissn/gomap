@@ -35,6 +35,12 @@ pack, vacuum, or offline rewrite; see [value-log lifecycle](value-log-lifecycle.
 
 For explicitly activated native collection handles, eligible BSON collections
 share the ordinary scalar index DDL and deterministic document producer paths.
+Scalar multikey JSON/BSON indexes use the maintained array/dotted-path extractor
+and sorted distinct encoded values, with final whole-transaction unique ownership.
+Range APIs return each document at its first matching encoded value; limits and
+truncation count distinct live documents. Operation-local deduplication and
+per-value encoding/extraction backing are admitted before allocation under the
+original native budget. Compound/template/typed-array eligibility is unchanged.
 `UpdateBSONSet` retains top-level field validation and `_id` preservation; its
 canonical command contains the resulting full BSON replacement, using the
 existing update payload format. Conditional callback and BSON-set batches decline

@@ -37,11 +37,11 @@ func nativeJSONMeta(meta CollectionMeta) (CollectionMeta, error) {
 		return CollectionMeta{}, err
 	}
 	format := normalizedDocumentFormat(normalized.Options.DocumentFormat)
-	if len(normalized.VectorIndexes)+len(normalized.TextIndexes) != 0 || (normalized.Options.ColumnStore != nil && !nativeTypedMeta(normalized)) || normalized.Options.AllowArrayValuesInIndex || (format != DocumentFormatJSON && format != DocumentFormatBSON) {
+	if len(normalized.VectorIndexes)+len(normalized.TextIndexes) != 0 || (normalized.Options.ColumnStore != nil && (normalized.Options.AllowArrayValuesInIndex || !nativeTypedMeta(normalized))) || (format != DocumentFormatJSON && format != DocumentFormatBSON) {
 		return CollectionMeta{}, backenddb.ErrNativeSemanticUnsupported
 	}
 	for _, index := range normalized.Indexes {
-		if index.MultiKey || len(index.Components) != 0 || (index.ValueType != IndexValueString && index.ValueType != IndexValueBool && index.ValueType != IndexValueInt64 && index.ValueType != IndexValueDouble && !(format == DocumentFormatBSON && index.ValueType == IndexValueBSONOrderedV2)) {
+		if len(index.Components) != 0 || (index.ValueType != IndexValueString && index.ValueType != IndexValueBool && index.ValueType != IndexValueInt64 && index.ValueType != IndexValueDouble && !(format == DocumentFormatBSON && index.ValueType == IndexValueBSONOrderedV2)) {
 			return CollectionMeta{}, backenddb.ErrNativeSemanticUnsupported
 		}
 	}

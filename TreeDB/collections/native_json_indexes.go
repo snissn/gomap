@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"strings"
 	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -52,9 +53,10 @@ func nativeJSONInsertPlanner(meta CollectionMeta) (insertBatchPlanner, error) {
 	return insertBatchPlanner{collection: meta.Name, primaryRoot: collectionPrimaryRootName(meta.Name), templateRoot: collectionTemplateRootName(meta.Name), indexStateRoot: collectionIndexStateRootName(meta.Name), indexes: plannerIndexes(meta.Indexes), directBufferedRuns: true, options: options}, nil
 }
 
-// Reserve all additional scalar-plan scratch before the maintained planner
-// parses or encodes indexed documents. MultiKey/compound schemas are fenced;
-// each row has at most one value per index. The input-sized allowance covers
+// Reserve original planner scratch before parsing/encoding. Array-capable
+// schemas additionally admit every source-bounded value reference and encoded
+// image, including per-element BSON V2 numeric expansion. Compound schemas
+// remain fenced. The input-sized allowance covers
 // JSON decoder nodes and coexisting growable encode/secondary/state arenas;
 // fixed per-row headers cover planner items, unique probes and state refs.
 // Existing whole-plan callers retain this allowance. Ordered native staging
@@ -90,6 +92,40 @@ func nativeJSONIndexedCharge(meta CollectionMeta, ids, documents [][]byte, heade
 		return 0, memtable.ErrCOWCapacity
 	}
 	for i, doc := range documents {
+		for _, index := range meta.Indexes {
+			if !index.MultiKey && !meta.Options.AllowArrayValuesInIndex {
+				continue
+			}
+			capacity, err := nativeJSONDocumentEncodedCapacity(doc, []IndexDefinition{index}, meta.Options.AllowArrayValuesInIndex)
+			if err != nil {
+				return 0, err
+			}
+			// The encoder may coexist with its growing predecessor. Extraction
+			// additionally owns normalized encoded refs and BSON path/value refs.
+			if !add(uint64(capacity)) || !add(uint64(capacity)) {
+				return 0, memtable.ErrCOWCapacity
+			}
+			// Every value consumes source bytes. At each dotted path level,
+			// BSON Values and descendant flattening can each keep old+new
+			// growable RawValue backings. Ancestor output slices remain live
+			// during descent, so include the complete path depth. The encoded
+			// reference slice has its own separately admitted growth pair.
+			if normalizedDocumentFormat(meta.Options.DocumentFormat) == DocumentFormatBSON {
+				depth := uint64(strings.Count(index.Field, ".")) + 1
+				refs, ok := mul(uint64(len(doc)), depth)
+				if !ok {
+					return 0, memtable.ErrCOWCapacity
+				}
+				refs, ok = mul(refs, 4*uint64(unsafe.Sizeof(bson.RawValue{})))
+				if !ok || !add(refs) {
+					return 0, memtable.ErrCOWCapacity
+				}
+			}
+			refs, ok := mul(uint64(len(doc)), 2*uint64(unsafe.Sizeof([]byte{})))
+			if !ok || !add(refs) {
+				return 0, memtable.ErrCOWCapacity
+			}
+		}
 		// Encoding strings can double escaped bytes; each of the value, secondary,
 		// unique and index-state arenas may coexist with its growing predecessor.
 		n, ok = mul(uint64(len(doc))+uint64(len(ids[i]))+uint64(len(meta.Name))+64, 16*uint64(len(meta.Indexes)))
@@ -97,7 +133,17 @@ func nativeJSONIndexedCharge(meta CollectionMeta, ids, documents [][]byte, heade
 			return 0, memtable.ErrCOWCapacity
 		}
 		if decoder {
-			n, ok = mul(uint64(len(doc)), 128)
+			source := uint64(len(doc))
+			for _, index := range meta.Indexes {
+				if index.ValueType == IndexValueBSONOrderedV2 && (index.MultiKey || meta.Options.AllowArrayValuesInIndex) {
+					// Values encode sequentially. One exact numeric expansion
+					// may reach the same digit cap as the scalar query codec,
+					// even when its raw BSON source is only eight bytes.
+					source = max(source, uint64(bsonIndexKeyNumericV2MaxDigits))
+					break
+				}
+			}
+			n, ok = mul(source, 128)
 			if !ok || !add(n) {
 				return 0, memtable.ErrCOWCapacity
 			}

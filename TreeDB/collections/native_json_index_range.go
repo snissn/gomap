@@ -65,6 +65,19 @@ func (r *NativeJSONRead) scanIndexRange(name string, opts IndexRangeOptions, doc
 	// encoder's growing backing and the independent bound, as on equality reads.
 	// Admit before encoding.
 	charge := memtable.COWAllocationCharge(page.PageSize+1) + memtable.COWAllocationCharge(uint64(len(name))+6)
+	if index.ValueType == IndexValueBSONOrderedV2 {
+		// Escaped NUL IDs use the maintained decoder's temporary owned
+		// suffix, independently of the seek cursor and the caller's copy.
+		charge += memtable.COWAllocationCharge(page.PageSize)
+	}
+	dedupe := shouldDedupeIndexDocumentIDs(index, r.meta.Options)
+	if dedupe {
+		// Original map policy: control backing first, then a conservative
+		// bucket/growth allowance plus owned string per distinct emitted ID.
+		// Each growth is charged before allocation; the original finite
+		// operation budget also bounds an unbounded-result public scan.
+		charge += memtable.COWAllocationCharge(256)
+	}
 	for _, bound := range [2]IndexRangeBound{opts.Lower, opts.Upper} {
 		if bound.Unbounded {
 			continue
@@ -82,7 +95,11 @@ func (r *NativeJSONRead) scanIndexRange(name string, opts IndexRangeOptions, doc
 	if err != nil {
 		return false, true, err
 	}
+	var seen map[string]struct{}
 	operation := func() (bool, error) {
+		if dedupe {
+			seen = make(map[string]struct{})
+		}
 		start, end, empty, err := indexRangeScanBounds(index.ValueType, opts)
 		if err != nil || empty {
 			return false, err
@@ -108,16 +125,33 @@ func (r *NativeJSONRead) scanIndexRange(name string, opts IndexRangeOptions, doc
 			if err != nil || !found {
 				return false, err
 			}
+			if len(entry.Key) >= len(cursor) {
+				return false, memtable.ErrCOWCapacity
+			}
 			id, err := indexKeyDocumentID(valueType, entry.Key)
 			if err != nil {
 				return false, err
 			}
-			if len(entry.Key) >= len(cursor) {
-				return false, memtable.ErrCOWCapacity
-			}
 			n := copy(cursor, entry.Key)
 			cursor[n] = 0
 			start = cursor[:n+1]
+			if dedupe {
+				if _, exists := seen[string(id)]; exists {
+					continue
+				}
+				// Lookahead certifies truncation but need not retain a new key.
+				if opts.Limit == 0 || emitted < opts.Limit {
+					delta := memtable.COWAllocationCharge(768) + memtable.COWAllocationCharge(uint64(len(id)))
+					if delta > ^uint64(0)-charge {
+						return false, memtable.ErrCOWCapacity
+					}
+					if err := lease.Resize(charge + delta); err != nil {
+						return false, err
+					}
+					charge += delta
+					seen[string(id)] = struct{}{}
+				}
+			}
 			// End every borrowed secondary alias before primary lookup or user
 			// code can reuse physical scratch. The visitor pins this SAME cut.
 			id = bytes.Clone(id)
@@ -159,6 +193,7 @@ func (r *NativeJSONRead) scanIndexRange(name string, opts IndexRangeOptions, doc
 	}
 	truncated, err = operation()
 	operation = nil
+	seen = nil
 	lease.Close()
 	return truncated, true, err
 }

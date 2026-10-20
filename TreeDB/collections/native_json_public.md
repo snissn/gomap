@@ -35,9 +35,12 @@ including distinct missing/null and canonical numeric equality. Raw BSON bytes
 remain authoritative; replacement preserves the original BSON `_id`. Default and
 explicit BSON fetches return owned BSON; an explicit request format must match
 the captured collection, and JSON projection remains unavailable for BSON.
-Compound and multikey indexes, array index values, text/vector index creation
-and template formats remain outside this route. Eligible BSON collections also
-support top-level `UpdateBSONSet` and
+Scalar multikey indexes and the existing `AllowArrayValuesInIndex` option use
+that same planner: arrays are encoded as sorted distinct value sets, preserving
+the format's existing missing/null and dotted-path semantics. Final unique
+ownership is checked across the whole transaction, including value handoffs.
+Compound indexes, text/vector index creation and template formats remain outside
+this route. Eligible BSON collections also support top-level `UpdateBSONSet` and
 `UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges`, using the maintained BSON
 transformer and canonical full replacement documents. `_id`, dotted or invalid
 field names and malformed raw values retain their existing refusal contracts.
@@ -57,9 +60,12 @@ Scalar JSON index reads support `FindByIndexRange`, `ScanIndexRange`,
 scans seek directly to the maintained scalar bounds and merge pending,
 captured and persisted winners from one immutable cut. Document reads resolve
 primary values from that same cut. Limits report truncation only when an
-additional live match exists; a callback stop is not truncation. Missing indexes
-are empty scans. Document ranges require a positive limit, and borrowed-document
-callbacks retain their existing no-retention/no-reentry contract.
+additional live match exists; a callback stop is not truncation. Multikey scans
+emit each document once at its first matching encoded value, and limits count
+unique documents. Their operation-local deduplication backing is admitted before
+growth under the original finite read budget and is released when traversal ends.
+Missing indexes are empty scans. Document ranges require a positive limit, and
+borrowed-document callbacks retain their existing no-retention/no-reentry contract.
 
 Eligible typed collections also route `InsertTypedBatchWithStats`,
 `ReplaceTypedBatch`, `UpsertTypedBatch`, `ReplaceTypedSourceByID` and `DeleteBatch`
@@ -219,8 +225,9 @@ Activated ordinary JSON and BSON handles support `CreateIndex`, `DropIndex`,
 `DropIndexes` and `DropAllIndexes` through one immutable catalog transition.
 Creation backfills the complete captured primary cut, including pending rows,
 using the maintained scalar encoder and uniqueness checks. A duplicate unique
-backfill refuses before canonical assignment. Typed, text, vector, compound and
-multikey index DDL remain outside this capability.
+backfill refuses before canonical assignment. Scalar multikey backfill reuses the
+same complete-cut extraction and normalized value sets. Typed, text, vector and
+compound index DDL remain outside this capability.
 
 Every transition writes the existing catalog-name conflict effect. Native
 transactions depend on that name even when the collection is only read to derive
