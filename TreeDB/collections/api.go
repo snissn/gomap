@@ -22727,10 +22727,11 @@ func (c *Collection) NewStoredDocumentJSONMaterializer() (*StoredDocumentJSONMat
 		if err != nil {
 			return nil, err
 		}
-		if format != DocumentFormatJSON {
+		if format != DocumentFormatJSON && format != DocumentFormatBSON {
 			return nil, backenddb.ErrNativeSemanticUnsupported
 		}
-		// JSON materialization is an owned copy and needs no retained resolver.
+		// JSON copies and canonical BSON conversion use only the captured
+		// document format; neither needs a retained template resolver.
 		return &StoredDocumentJSONMaterializer{documentFormat: format}, nil
 	}
 	if c == nil {
