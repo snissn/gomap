@@ -60,7 +60,7 @@ func (e *nativeEngineVersion) PrepareColumnStoreCompaction(request backenddb.Nat
 	if err != nil {
 		return err
 	}
-	return build.materializeDomains(group)
+	return build.materializeDomains(group, e.names)
 }
 
 func (operation *nativeColumnCompaction) CompleteColumnStoreCompaction(systemRoot uint64) {
