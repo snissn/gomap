@@ -3,6 +3,10 @@
 
 import importlib.util
 import os
+import copy
+import tempfile
+import subprocess
+import shutil
 from pathlib import Path
 import unittest
 
@@ -63,6 +67,85 @@ class PrimaryCostGateTests(unittest.TestCase):
             baseline = 100 + row["pair"] * 100
             row["metrics"]["ns/op"] = baseline * (1.02 if row["revision"] == "candidate" else 1)
         self.assertAlmostEqual(gate.evaluate(rows)["median_paired_delta_percent"], 2)
+
+    def test_equivalent_bytes_qualification_retains_raw_failure(self):
+        rows = self.rows()
+        for row in rows:
+            if row["revision"] == "candidate":
+                row["metrics"]["B/op"] += 0.5
+        raw = gate.evaluate(rows)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binary, loader, libc = [root / name for name in ("binary", "loader", "libc.so.6")]
+            for path in (binary, loader, libc):
+                path.write_bytes(path.name.encode())
+            def command(label, argv):
+                if argv[0] == "readelf":
+                    return f"[Requesting program interpreter: {loader}]"
+                return f"linux-vdso.so.1 (0x123)\nlibc.so.6 => {libc} (0x456)\n{loader} (0x789)\n"
+            binding = gate.runtime_binding(binary, command, "before", {})
+            binding["inputs"] = {"harness_sha256": "harness", "runner_sha256": "runner",
+                                 "environment_sha256": "environment", "cwd": str(root), "argv": ["fixed benchmark"]}
+            before = {"baseline": binding, "candidate": copy.deepcopy(binding)}
+            result = gate.qualify_bytes(raw, before, copy.deepcopy(before), quiet=True)
+            self.assertFalse(result["gates"]["bytes"])
+            self.assertFalse(result["measurement_pass"])
+            self.assertTrue(result["accepted"])
+            self.assertEqual(result["bytes_disposition"], "EQUIVALENT_NON_ATTRIBUTABLE")
+            changed = copy.deepcopy(before)
+            changed["candidate"]["executable"]["sha256"] = "different"
+            self.assertFalse(gate.qualify_bytes(raw, changed, copy.deepcopy(changed), quiet=True)["accepted"])
+            for metric in ("timing", "allocations", "candidate_primary_activation"):
+                failing = copy.deepcopy(raw)
+                failing["gates"][metric] = False
+                self.assertFalse(gate.qualify_bytes(failing, before, before, quiet=True)["accepted"])
+            self.assertFalse(gate.qualify_bytes(raw, before, before, quiet=False)["accepted"])
+            for field in ("harness_sha256", "runner_sha256", "environment_sha256", "cwd", "argv"):
+                mismatch = copy.deepcopy(before)
+                mismatch["candidate"]["inputs"][field] = "different"
+                self.assertFalse(gate.qualify_bytes(raw, mismatch, mismatch, quiet=True)["accepted"])
+            for missing in ({}, {"baseline": binding}, {"baseline": {}, "candidate": {}}):
+                with self.assertRaisesRegex(RuntimeError, "missing"):
+                    gate.qualify_bytes(raw, missing, missing, quiet=True)
+            libc.write_bytes(b"changed libc")
+            after = {"baseline": gate.runtime_binding(binary, command, "after", {}),
+                     "candidate": gate.runtime_binding(binary, command, "after", {})}
+            with self.assertRaisesRegex(RuntimeError, "drift"):
+                gate.qualify_bytes(raw, before, after, quiet=True)
+            libc.unlink()
+            with self.assertRaises((OSError, ValueError)):
+                gate.runtime_binding(binary, command, "missing", {})
+
+    def test_runtime_resolution_refuses_unresolved_or_unsupported_inputs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            binary = Path(directory) / "binary"
+            binary.write_bytes(b"executable")
+            for text in ("", "no interpreter", "[Requesting program interpreter: /missing]"):
+                with self.subTest(text=text), self.assertRaises((ValueError, OSError)):
+                    gate.runtime_binding(binary, lambda *args: text, "invalid", {})
+
+    @unittest.skipUnless(shutil.which("readelf") and Path("/bin/true").exists(), "Linux ELF tools required")
+    def test_resolves_actual_loader_libraries_and_file_contents(self):
+        def command(label, argv):
+            return subprocess.check_output([str(item) for item in argv], text=True)
+        binding = gate.runtime_binding(Path("/bin/true"), command, "real", {})
+        self.assertEqual(binding["executable"]["sha256"], gate.digest(Path("/bin/true")))
+        self.assertIn(binding["interpreter"], binding["libraries"])
+        for library in binding["libraries"]:
+            self.assertEqual(library, gate.file_identity(Path(library["path"])))
+        with self.assertRaisesRegex(ValueError, "LD_AUDIT"):
+            gate.runtime_binding(Path("/bin/true"), command, "audit", {"LD_AUDIT": "unknown.so"})
+
+    def test_loader_listing_rejects_missing_libraries_and_unbound_interpreter(self):
+        with tempfile.TemporaryDirectory() as directory:
+            binary, loader = [Path(directory) / name for name in ("binary", "loader")]
+            binary.write_bytes(b"executable")
+            loader.write_bytes(b"loader")
+            for listing in ("libc.so.6 => not found", "", f"/missing (0x123)", "linux-vdso.so.1 (0x123)"):
+                def command(label, argv):
+                    return f"[Requesting program interpreter: {loader}]" if argv[0] == "readelf" else listing
+                with self.subTest(listing=listing), self.assertRaises((ValueError, OSError)):
+                    gate.runtime_binding(binary, command, "invalid", {})
 
     def test_process_cpu_survives_exit_and_pid_reuse(self):
         watch = gate.ProcessObservation.__new__(gate.ProcessObservation)
