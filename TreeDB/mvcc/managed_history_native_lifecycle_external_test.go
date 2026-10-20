@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"sort"
 	"testing"
 	"time"
 
@@ -13,6 +14,228 @@ import (
 	"github.com/snissn/gomap/TreeDB/mvcc"
 	"github.com/snissn/gomap/TreeDB/node"
 )
+
+// Fixed eligible history must not make pruning inspect a growing retained tail.
+// The original cut still owns the pruned pointer values through checkpoint and
+// shutdown; the new view must retain every above-floor version after reopen.
+func TestManagedHistoryPruneSkipsRetainedTail(t *testing.T) {
+	for _, depth := range []int{16, 64} {
+		t.Run(fmt.Sprintf("depth%d", depth), func(t *testing.T) {
+			opts := treedb.OptionsFor(treedb.ProfileNoWALFast, t.TempDir())
+			opts.MemtableMode, opts.MemtableShards = "cow_btree", 4
+			opts.FlushThreshold = 1 << 30
+			opts.DisableSideStores = true
+			opts.BackgroundCheckpointInterval, opts.BackgroundCheckpointIdleDuration = -1, -1
+			opts.MaxWALBytes = -1
+			opts.ValueLog.PointerThreshold = 1
+			opts.ValueLog.Compression = treedb.ValueLogCompressionOff
+			opts.ValueLog.CompressionAutotune = treedb.AutotuneOptions{Mode: treedb.AutotuneOff}
+			database, err := treedb.Open(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if database != nil {
+					if err := database.Close(); err != nil {
+						t.Error(err)
+					}
+				}
+			})
+			handle, err := database.NativeSemanticBackend()
+			if err != nil || !handle.HasNativeSemanticBridge() || database.ResolvedProfile() != treedb.ProfileNoWALFast || database.Stats()["treedb.cache.memtable_mode"] != "cow_btree" {
+				t.Fatalf("native COW route: %v", err)
+			}
+			registry := handle.ValueLogIdentityPinRegistry()
+			capture, err := database.CaptureNativeSemanticState()
+			if err != nil {
+				t.Fatal(err)
+			}
+			parent, parentOK := capture.NativeAllocator().(*memtable.COWBudget)
+			maintenance, maintenanceOK := capture.NativeMaintenanceAllocator().(*memtable.COWBudget)
+			if err := capture.Close(); err != nil {
+				t.Fatal(err)
+			}
+			capture = nil // Observe the original capabilities without holding a cut.
+			if !parentOK || !maintenanceOK || parent == maintenance {
+				t.Fatal("missing distinct original producer and maintenance budgets")
+			}
+			keys := [][]byte{{}, {0}, {0, 0}, {0, 0xff}, {1}, {0xff}}
+			for i := len(keys); i < 32; i++ {
+				keys = append(keys, []byte(fmt.Sprintf("k%02d", i)))
+			}
+			sort.Slice(keys, func(i, j int) bool { return bytes.Compare(keys[i], keys[j]) < 0 })
+			value := func(key []byte, ts uint64) []byte {
+				return bytes.Repeat([]byte(fmt.Sprintf("history-%x@%d/", key, ts)), 32)
+			}
+			store := mvcc.New(database)
+			// Timestamp arrival is deliberately unrelated to physical order.
+			for offset := 0; offset < depth; offset += 16 {
+				for _, ts := range []uint64{16, 1, 9, 2, 10, 3, 11, 4, 12, 5, 13, 6, 14, 7, 15, 8} {
+					ts += uint64(offset)
+					mutations := make([]mvcc.Mutation, len(keys))
+					for i, key := range keys {
+						mutations[i] = mvcc.Mutation{Key: key, Value: value(key, ts)}
+						if i == 0 && ts == 14 {
+							mutations[i] = mvcc.Mutation{Key: key, Delete: true}
+						}
+					}
+					if err := store.CommitAt(ts, mutations, mvcc.CommitRelaxed); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if err := database.Checkpoint(); err != nil {
+				t.Fatal(err)
+			}
+			// Public exact-entry metadata proves that an old payload is persisted
+			// as a pointer without duplicating the reserved MVCC key encoding.
+			func() {
+				proof := database.AcquireSnapshot()
+				if proof == nil {
+					t.Fatal("nil pointer-proof snapshot")
+				}
+				defer func() {
+					if err := proof.Close(); err != nil {
+						t.Error(err)
+					}
+				}()
+				it, err := proof.Iterator(nil, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer func() {
+					if err := it.Close(); err != nil {
+						t.Error(err)
+					}
+				}()
+				found := false
+				for ; it.Valid(); it.Next() {
+					if !bytes.HasSuffix(it.ValueCopy(nil), value(keys[0], 1)) {
+						continue
+					}
+					entry, err := proof.GetEntryExact(it.KeyCopy(nil))
+					if err != nil || entry.Flags&node.FlagPointer == 0 || entry.ValuePtr.FileID == 0 {
+						t.Fatalf("old pointer=%+v: %v", entry, err)
+					}
+					found = true
+				}
+				if err := it.Error(); err != nil || !found {
+					t.Fatalf("old pointer found=%t: %v", found, err)
+				}
+			}()
+			// Overlay the first above-floor version in COW so the prune cut
+			// includes both immutable COW roots and the published backend basis.
+			overlay := make([]mvcc.Mutation, len(keys))
+			for i, key := range keys {
+				overlay[i] = mvcc.Mutation{Key: key, Value: value(key, 13)}
+			}
+			if err := store.CommitAt(13, overlay, mvcc.CommitRelaxed); err != nil {
+				t.Fatal(err)
+			}
+			old, err := store.IterateVersions(mvcc.VersionIteratorOptions{ReadTimestamp: 8})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if err := old.Close(); err != nil {
+					t.Error(err)
+				}
+			})
+			if err := store.AdvanceDiscardFloor(12, mvcc.CommitRelaxed); err != nil {
+				t.Fatal(err)
+			}
+			stats, err := store.PruneVersions(mvcc.PruneOptions{BatchSize: 32, Mode: mvcc.CommitRelaxed})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := database.Checkpoint(); err != nil {
+				t.Fatal(err)
+			}
+			for _, key := range keys {
+				for ts := uint64(8); ts > 0; ts-- {
+					got := old.Entry()
+					if !old.Valid() || !bytes.Equal(got.Key, key) || got.Timestamp != ts || got.State != mvcc.Present || !bytes.Equal(got.Value, value(key, ts)) {
+						t.Fatalf("held %x@%d=%+v: %v", key, ts, got, old.Error())
+					}
+					old.Next()
+				}
+			}
+			if old.Valid() || old.Error() != nil {
+				t.Fatalf("held history tail: %v", old.Error())
+			}
+			old.Seek(keys[0], 8)
+			if !old.Valid() || old.Error() != nil {
+				t.Fatalf("held history rewind: %v", old.Error())
+			}
+			if err := database.Close(); err != nil {
+				t.Fatal(err)
+			}
+			database = nil
+			if parent.Stats().TotalBytes == 0 || maintenance.Stats().TotalBytes == 0 || registry.Stats().ActivePins == 0 {
+				t.Fatal("shutdown lost original held-cut custody")
+			}
+			if err := old.Close(); err != nil {
+				t.Fatal(err)
+			}
+			deadline := time.Now().Add(5 * time.Second)
+			for {
+				p, m, pins := parent.Stats(), maintenance.Stats(), registry.Stats()
+				p.PeakBytes, m.PeakBytes = 0, 0
+				if err := registry.CleanupError(); err != nil {
+					t.Fatal(err)
+				}
+				if p == (memtable.COWStats{}) && m == (memtable.COWStats{}) && pins.ActivePins == 0 && pins.ActiveIdentities == 0 && pins.ActiveStableNamespaceLinks == 0 {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("original custody did not drain: parent=%+v maintenance=%+v registry=%+v", p, m, pins)
+				}
+				time.Sleep(time.Millisecond)
+			}
+			database, err = treedb.Open(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			store = mvcc.New(database)
+			if floor, err := store.DiscardFloor(); err != nil || floor != 12 {
+				t.Fatalf("reopened floor=%d: %v", floor, err)
+			}
+			if _, err := store.GetAt(keys[0], 12); !errors.Is(err, mvcc.ErrReadBeforeDiscardFloor) {
+				t.Fatalf("reopened discarded read: %v", err)
+			}
+			survivors, err := store.IterateVersions(mvcc.VersionIteratorOptions{ReadTimestamp: uint64(depth)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if err := survivors.Close(); err != nil {
+					t.Error(err)
+				}
+			}()
+			for i, key := range keys {
+				for ts := uint64(depth); ts >= 12; ts-- {
+					got := survivors.Entry()
+					wantState := mvcc.Present
+					if i == 0 && ts == 14 {
+						wantState = mvcc.Tombstone
+					}
+					if !survivors.Valid() || !bytes.Equal(got.Key, key) || got.Timestamp != ts || got.State != wantState || (wantState == mvcc.Present && !bytes.Equal(got.Value, value(key, ts))) {
+						t.Fatalf("reopened survivor %x@%d=%+v: %v", key, ts, got, survivors.Error())
+					}
+					survivors.Next()
+				}
+			}
+			if survivors.Valid() || survivors.Error() != nil {
+				t.Fatalf("reopened survivor tail: %v", survivors.Error())
+			}
+			// Check the algorithmic bound after all public correctness and
+			// original-owner release checks, including on the expected RED.
+			if stats.Visited != 416 || stats.Retained != 64 || stats.Skipped != 32 || stats.Pruned != 352 || stats.Batches != 11 {
+				t.Fatalf("inspected prune work must be independent of retained depth: %+v", stats)
+			}
+		})
+	}
+}
 
 // Storage operations use the exported Store, native composite and DB APIs.
 // Existing allocator capabilities observe the SAME original owners through
