@@ -869,7 +869,6 @@ func (db *DB) publishLeafGenerationState(refreshValueLogSet bool) error {
 	}
 
 	newState := &DBState{
-		primaryRoot:       oldState.primaryRoot,
 		CommitSeq:         oldState.CommitSeq,
 		RootPageID:        oldState.RootPageID,
 		SystemRootPageID:  oldState.SystemRootPageID,

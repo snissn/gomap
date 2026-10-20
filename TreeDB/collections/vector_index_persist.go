@@ -91,6 +91,12 @@ func (idx *VectorIndex) SaveNativeSnapshot() (VectorIndexLoadStatus, error) {
 	if c == nil {
 		return status, errCollectionNil
 	}
+	if c.nativeDocumentVectors() {
+		return idx.saveNativeDocumentVector()
+	}
+	if c.meta.nativeDocumentCoverageVersion != 0 {
+		return status, backenddb.ErrNativeSemanticUnsupported
+	}
 	if c.db == nil {
 		return status, errCollectionDBNil
 	}
@@ -193,6 +199,9 @@ func (idx *VectorIndex) saveNativeSnapshotPreparedWithCommandWALIntentAndPublica
 		return status, errCollectionNotFound
 	}
 	c.meta = catalog.meta
+	if catalog.meta.nativeDocumentCoverageVersion != 0 {
+		return status, backenddb.ErrNativeSemanticUnsupported
+	}
 	def, ok := findVectorIndex(catalog.meta.VectorIndexes, idx.name)
 	if !ok || !vectorIndexDefinitionUsesPersistentRuntime(def, idx) {
 		return status, fmt.Errorf("%w: %q", errVectorIndexNotDeclared, idx.name)
@@ -453,6 +462,18 @@ func (idx *VectorIndex) saveNativeDeltaSnapshotWithCommandWALIntent(replay *back
 	if c == nil {
 		return status, errCollectionNil
 	}
+	if c.nativeDocumentVectors() {
+		if replay != nil {
+			return status, backenddb.ErrNativeSemanticUnsupported
+		}
+		return idx.saveNativeDocumentVector()
+	}
+	if c.nativeJSON != nil {
+		unlock := c.lockNativeVectorAdmissionWrite()
+		defer unlock()
+		return idx.saveNativePartitionLiveSnapshot(replay, nil)
+	}
+
 	if c.db == nil {
 		return status, errCollectionDBNil
 	}
@@ -469,6 +490,16 @@ func (idx *VectorIndex) saveNativeDeltaSnapshotWithAdmissionHeldAndCommandWALInt
 	return idx.saveNativeDeltaSnapshotWithAdmissionHeldAndCommandWALIntentAndOwner(replay, nil)
 }
 func (idx *VectorIndex) saveNativeDeltaSnapshotWithAdmissionHeldAndCommandWALIntentAndOwner(replay *backenddb.CommandWALIntent, owner *CommandWALAdmittedCollection) (VectorIndexLoadStatus, error) {
+	if idx != nil && idx.collection.nativeDocumentVectors() {
+		if replay != nil || owner != nil {
+			return VectorIndexLoadStatus{}, backenddb.ErrNativeSemanticUnsupported
+		}
+		return idx.saveNativeDocumentVector()
+	}
+	if idx != nil && idx.collection != nil && idx.collection.nativeJSON != nil {
+		return idx.saveNativePartitionLiveSnapshot(replay, owner)
+	}
+
 	status := VectorIndexLoadStatus{}
 	c := idx.collection
 	if owner == nil {
@@ -767,6 +798,13 @@ func (c *Collection) LoadVectorIndexSnapshot(opts VectorIndexOptions) (*VectorIn
 // collection root. Missing or invalid graph roots return a non-loaded status so
 // callers can safely fall back to exact search.
 func (c *Collection) LoadNativeVectorIndexSnapshot(opts VectorIndexOptions) (*VectorIndex, VectorIndexLoadStatus, error) {
+	if c.nativeDocumentVectors() {
+		return c.loadNativeDocumentVector(opts)
+	}
+	if c != nil && c.nativeJSON != nil {
+		return c.loadNativePartitionLiveSnapshot(opts)
+	}
+
 	status := VectorIndexLoadStatus{}
 	if c == nil {
 		return nil, status, errCollectionNil
@@ -860,14 +898,14 @@ func (c *Collection) LoadNativeVectorIndexSnapshot(opts VectorIndexOptions) (*Ve
 }
 
 func vectorIndexSnapshotMatchesDocumentRoots(meta vectorIndexPersistMeta, catalog *collectionCatalog, snap *backenddb.Snapshot) (bool, error) {
-	if catalog == nil || meta.SourceDocumentGenerationVersion != vectorIndexDocumentGenerationVersion {
+	if catalog == nil {
 		return false, nil
 	}
-	generation, err := vectorIndexDocumentGeneration(snap, catalog)
+	coverage, err := vectorIndexCoverageAtSnapshot(snap, catalog)
 	if err != nil {
 		return false, err
 	}
-	return meta.SourceDocumentGeneration == generation, nil
+	return coverage.matches(meta), nil
 }
 
 func (c *Collection) loadLegacyVectorIndexSnapshot(opts VectorIndexOptions) (*VectorIndex, VectorIndexLoadStatus, error) {
@@ -1111,21 +1149,26 @@ type vectorIndexPersistSnapshot struct {
 }
 
 type vectorIndexPersistMeta struct {
-	Name                            string                              `json:"name"`
-	Field                           string                              `json:"field"`
-	Metric                          VectorMetric                        `json:"metric"`
-	Encoding                        VectorIndexEncoding                 `json:"encoding"`
-	Dimensions                      int                                 `json:"dimensions"`
-	M                               int                                 `json:"m"`
-	EfConstruction                  int                                 `json:"ef_construction"`
-	EfSearch                        int                                 `json:"ef_search"`
-	RebuildDeletedRatio             float64                             `json:"rebuild_deleted_ratio"`
-	Entry                           int                                 `json:"entry"`
-	MaxLevel                        int                                 `json:"max_level"`
-	SourceDocumentGenerationVersion int                                 `json:"source_document_generation_version"`
-	SourceDocumentGeneration        uint64                              `json:"source_document_generation"`
-	PartitionLive                   *vectorIndexPartitionLivePersistV1  `json:"partition_live,omitempty"`
-	Preparation                     *VectorPartitionPrepareCompletionV1 `json:"preparation,omitempty"`
+	Name                string              `json:"name"`
+	Field               string              `json:"field"`
+	Metric              VectorMetric        `json:"metric"`
+	Encoding            VectorIndexEncoding `json:"encoding"`
+	Dimensions          int                 `json:"dimensions"`
+	M                   int                 `json:"m"`
+	EfConstruction      int                 `json:"ef_construction"`
+	EfSearch            int                 `json:"ef_search"`
+	RebuildDeletedRatio float64             `json:"rebuild_deleted_ratio"`
+	Entry               int                 `json:"entry"`
+	MaxLevel            int                 `json:"max_level"`
+	// Version 3 is the physical document-mutation generation; version 4 is
+	// authenticated cdir2 source coverage for an imported-source live carrier.
+	SourceDocumentGenerationVersion int    `json:"source_document_generation_version"`
+	SourceDocumentGeneration        uint64 `json:"source_document_generation"`
+	// V5 is explicit native document coverage. The incarnation and exact
+	// totals are validated with the original node/edge/doc records.
+	NativeDocument *nativeDocumentGraphSummary         `json:"native_document,omitempty"`
+	PartitionLive  *vectorIndexPartitionLivePersistV1  `json:"partition_live,omitempty"`
+	Preparation    *VectorPartitionPrepareCompletionV1 `json:"preparation,omitempty"`
 }
 
 type vectorIndexPersistNode struct {
@@ -1171,7 +1214,7 @@ func (idx *VectorIndex) persistSnapshot() (vectorIndexPersistSnapshot, uint64) {
 			RebuildDeletedRatio:             idx.rebuildDeletedRatio,
 			Entry:                           idx.entry,
 			MaxLevel:                        idx.maxLevel,
-			SourceDocumentGenerationVersion: vectorIndexDocumentGenerationVersion,
+			SourceDocumentGenerationVersion: idx.persistCoverageVersionLocked(),
 			SourceDocumentGeneration:        idx.sourceDocumentGeneration,
 			PartitionLive:                   liveMeta,
 			Preparation:                     idx.partitionPreparation,
@@ -1499,7 +1542,7 @@ func (idx *VectorIndex) persistMetaLocked() vectorIndexPersistMeta {
 		RebuildDeletedRatio:             idx.rebuildDeletedRatio,
 		Entry:                           idx.entry,
 		MaxLevel:                        idx.maxLevel,
-		SourceDocumentGenerationVersion: vectorIndexDocumentGenerationVersion,
+		SourceDocumentGenerationVersion: idx.persistCoverageVersionLocked(),
 		SourceDocumentGeneration:        idx.sourceDocumentGeneration,
 		PartitionLive:                   idx.partitionLiveMetaPersistLockedV2(),
 		Preparation:                     idx.partitionPreparation,
@@ -1527,6 +1570,30 @@ func readVectorIndexNativeSnapshot(snap *backenddb.Snapshot, catalog *collection
 	if !ok {
 		return snapshot, 0, vectorIndexFallbackMissingGraphRootEntry, nil
 	}
+	it, err := collectionIteratorAtCatalogRoot(snap, catalog, rootName, nil, nil, false)
+	if err != nil {
+		return snapshot, bytesDisk, "", err
+	}
+	if it == nil {
+		return snapshot, bytesDisk, vectorIndexFallbackMissingGraphRoot, nil
+	}
+	defer func() { _ = it.Close() }()
+	return readVectorIndexNativeSnapshotRecords(rawMeta, func() ([]byte, []byte, bool, error) {
+		if !it.Valid() {
+			return nil, nil, false, it.Error()
+		}
+		key, value := it.KeyCopy(nil), it.ValueCopy(nil)
+		if err := it.Error(); err != nil {
+			return nil, nil, false, err
+		}
+		it.Next()
+		return key, value, true, nil
+	})
+}
+
+func readVectorIndexNativeSnapshotRecords(rawMeta []byte, next func() ([]byte, []byte, bool, error)) (vectorIndexPersistSnapshot, int64, string, error) {
+	var snapshot vectorIndexPersistSnapshot
+	var bytesDisk int64
 	bytesDisk += int64(len(rawMeta))
 	if err := json.Unmarshal(rawMeta, &snapshot.Meta); err != nil {
 		return snapshot, bytesDisk, vectorIndexFallbackInvalidGraphRootEntry, nil
@@ -1548,22 +1615,15 @@ func readVectorIndexNativeSnapshot(snap *backenddb.Snapshot, catalog *collection
 		}
 	}
 	liveDomains := make(map[uint32]*liveDomainReadV2, len(activeDomainEpochs))
-	it, err := collectionIteratorAtCatalogRoot(snap, catalog, rootName, nil, nil, false)
-	if err != nil {
-		return snapshot, bytesDisk, "", err
-	}
-	if it == nil {
-		return snapshot, bytesDisk, vectorIndexFallbackMissingGraphRoot, nil
-	}
-	defer func() { _ = it.Close() }()
-	for it.Valid() {
-		key := it.KeyCopy(nil)
-		value := it.ValueCopy(nil)
-		if err := it.Error(); err != nil {
+	for {
+		key, value, ok, err := next()
+		if err != nil {
 			return snapshot, bytesDisk, "", err
 		}
+		if !ok {
+			break
+		}
 		if bytes.Equal(key, []byte(vectorIndexNativeKeyMeta)) {
-			it.Next()
 			continue
 		}
 		bytesDisk += int64(len(value))
@@ -1621,10 +1681,6 @@ func readVectorIndexNativeSnapshot(snap *backenddb.Snapshot, catalog *collection
 				return snapshot, bytesDisk, reason, nil
 			}
 		}
-		it.Next()
-	}
-	if err := it.Error(); err != nil {
-		return snapshot, bytesDisk, "", err
 	}
 	if reason := finalizeVectorIndexNativeSnapshotRecordsV2(&snapshot, nodes, maxNodeID); reason != "" {
 		return snapshot, bytesDisk, reason, nil
@@ -1830,6 +1886,10 @@ func (idx *VectorIndex) needsNativeAutoPersist() bool {
 	}
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
+	if idx.collection != nil && idx.collection.nativeJSON != nil {
+		return idx.dirtyMeta || idx.persistedSnapshotDirty
+	}
+
 	return idx.dirtyMeta || (idx.mutationSeq != 0 && (idx.persistedEpoch == 0 || idx.persistedSnapshotDirty))
 }
 

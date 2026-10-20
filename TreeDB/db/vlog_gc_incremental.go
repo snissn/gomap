@@ -28,7 +28,7 @@ const (
 	valueLogRefCountsFileName = "vlog_ref_counts.meta"
 	// valueLogRefCountsVersion is the on-disk version for vlog_ref_counts.meta.
 	//
-	// Version 6 binds counts to the exact captured DATA/PRIMARY incarnation.
+	// Version 6 binds counts to the exact captured DATA incarnation.
 	// Version 5 tracks value_vlog references reachable from the user tree,
 	// system tree, and collection root trees. leaf_vlog reachability is owned by
 	// leaf-generation GC and intentionally excluded here. Older metadata is
@@ -815,16 +815,11 @@ func (db *DB) shouldCollectValueLogRefDelta(baseSeq uint64) bool {
 	return db.valueLogRefTracker != nil && db.canTrackValueLogRefs(baseSeq)
 }
 
-// buildValueLogRefDeltaForApply consumes the producer's borrowed receipt before
-// the caller releases either the source root or output construction. Logical
-// removals remain unchanged; only the proven unchanged raw-leaf base may reuse
-// the already admitted physical dependency closure.
+// buildValueLogRefDeltaForApply consumes the original DATA apply inventory
+// before the caller releases its source root. Candidate projection remains
+// required whenever the original DATA delta cannot prove exact dependencies.
 func (db *DB) buildValueLogRefDeltaForApply(idx *indexGen, rootID, newRoot, baseSeq uint64, entries []batchpkg.Entry, ranges []batchpkg.DeleteRange, result *zipper.ApplyResult) (*valueLogRefDelta, error) {
-	delta, err := db.buildValueLogRefDelta(idx.pager, rootID, baseSeq, entries, ranges, &result.OldPointerRefs, result.OldEntriesRemoved, result.OldPointerRefsCollected)
-	if err == nil && delta != nil && idx.zipper.PreservesMaterializedBaseV6(result, rootID, newRoot) {
-		delta.requiresCandidateProjection = false
-	}
-	return delta, err
+	return db.buildValueLogRefDelta(idx.pager, rootID, baseSeq, entries, ranges, &result.OldPointerRefs, result.OldEntriesRemoved, result.OldPointerRefsCollected)
 }
 
 func (db *DB) buildValueLogRefDelta(p *pager.Pager, rootID uint64, baseSeq uint64, entries []batchpkg.Entry, ranges []batchpkg.DeleteRange, oldPointerRefs *zipper.PointerRefCounts, oldEntriesRemoved uint64, oldPointerRefsCollected bool) (*valueLogRefDelta, error) {

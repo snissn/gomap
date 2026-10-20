@@ -64,7 +64,7 @@ func TestOriginalRegistryDataDirectoryGrowthRefusalRollsBackLease(t *testing.T) 
 	}()
 	idx := database.idx.Load()
 	identityRegistry := database.StableResourceIdentityPinRegistry()
-	if idx == nil || idx.primary != nil || idx.metadata == nil || idx.metadata != identityRegistry.MetadataOwner() || !database.dependencyDirectoryRequiredFeature {
+	if idx == nil || idx.metadata == nil || idx.metadata != identityRegistry.MetadataOwner() || !database.dependencyDirectoryRequiredFeature {
 		t.Fatal("not the actual V2 DATA original-owner route")
 	}
 	originalRegistry, owner := idx.registry, idx.metadata

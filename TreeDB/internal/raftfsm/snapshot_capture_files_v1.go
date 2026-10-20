@@ -15,13 +15,12 @@ import (
 )
 
 type snapshotCapturedFileV1 struct {
-	name    string
-	mode    os.FileMode
-	size    int64
-	file    *os.File
-	index   *backenddb.PhysicalSnapshotCutV1
-	prefix  *raftapply.DurableSnapshotPrefixV1
-	primary bool
+	name   string
+	mode   os.FileMode
+	size   int64
+	file   *os.File
+	index  *backenddb.PhysicalSnapshotCutV1
+	prefix *raftapply.DurableSnapshotPrefixV1
 }
 
 type snapshotCapturedFilesV1 struct {
@@ -105,13 +104,9 @@ func (c *snapshotCapturedFilesV1) captureStorage(ctx context.Context, prefix, ro
 	if err := c.add(snapshotCapturedFileV1{name: prefix + "/index.db", mode: 0600, size: index.SizeBytes(), index: index}); err != nil {
 		return err
 	}
-	if size := index.PrimarySizeBytes(); size != 0 {
-		if err := c.add(snapshotCapturedFileV1{name: prefix + "/index.db.primary", mode: 0600, size: size, index: index, primary: true}); err != nil {
-			return err
-		}
-	}
+
 	for _, name := range raftSnapshotMainDBEntriesV1 {
-		if name == "index.db" || name == "index.db.primary" {
+		if name == "index.db" {
 			continue
 		}
 		path := filepath.Join(root, name)
@@ -160,7 +155,6 @@ func (c *snapshotCapturedFilesV1) captureStorage(ctx context.Context, prefix, ro
 			if err != nil || !os.SameFile(info, got) {
 				return fmt.Errorf("raftfsm: snapshot file changed %q: %v", path, err)
 			}
-
 		}
 	}
 	current, err := os.Lstat(root)
@@ -281,9 +275,6 @@ func (e snapshotCapturedFileV1) writeTo(ctx context.Context, dst io.Writer) erro
 		raftSnapshotBeforeCopyForTest(ctx)
 	}
 	if e.index != nil {
-		if e.primary {
-			return e.index.WritePrimaryToContext(ctx, dst)
-		}
 		return e.index.WriteToContext(ctx, dst)
 	}
 	if e.prefix != nil {

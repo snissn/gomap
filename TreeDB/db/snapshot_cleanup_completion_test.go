@@ -13,11 +13,12 @@ import (
 )
 
 type snapshotCleanupReceipt struct {
-	mu       sync.Mutex
-	calls    int
-	err      error
-	snapshot *Snapshot
-	scrubbed bool
+	mu         sync.Mutex
+	calls      int
+	err        error
+	snapshot   *Snapshot
+	scrubbed   bool
+	enrollment *retainedalloc.Enrollment
 }
 
 func (r *snapshotCleanupReceipt) SnapshotCleanupCompleted(err error) {
@@ -25,10 +26,11 @@ func (r *snapshotCleanupReceipt) SnapshotCleanupCompleted(err error) {
 	defer r.mu.Unlock()
 	r.calls++
 	r.err = err
+	r.enrollment.CloseAfterCleanup(err)
 	r.scrubbed = r.snapshot.treePager == nil && r.snapshot.idx == nil && r.snapshot.state == nil
 }
 func TestSnapshotCleanupCompletionSharesOriginalFinalReader(t *testing.T) {
-	d, err := Open(Options{Dir: t.TempDir(), IndexPrimaryDirectory: true})
+	d, err := Open(Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,65 +113,81 @@ func TestSnapshotCleanupCompletionJoinsRunningAndCompletedOriginal(t *testing.T)
 	}
 }
 func TestSnapshotCleanupCompletionReportsActualPagerLastPhysicalError(t *testing.T) {
-	d, err := Open(Options{Dir: t.TempDir(), IndexPrimaryDirectory: true})
+	d, err := Open(Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
 	s := d.AcquireStableSnapshot()
-	if s == nil || s.primaryRoot == nil {
-		t.Fatal("actual PRIMARY capture")
+	if s == nil {
+		t.Fatal("actual DATA capture")
 	}
-	physicalPager := s.primaryRoot.arena.Pager()
+	generation := s.idx
+	physicalPager := generation.pager
+	generationMetadata, generationCharge := generation.metadata, generation.metadataCharge
+	generationRegistry := generation.registry
+	registry := d.StableResourceIdentityPinRegistry()
 	budget, err := memtable.NewCOWBudget(memtable.DefaultCOWLimits())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer budget.Close()
-	enrollment, err := retainedalloc.EnrollPair(s.primaryRoot.arena.MetadataOwner(), d.StableResourceIdentityPinRegistry().MetadataOwner(), budget)
+	enrollment, err := registry.MetadataOwner().Enroll(budget)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = s.AdoptPrimaryMetadataEnrollment(enrollment); err != nil {
-		t.Fatal(err)
-	}
+
 	token, err := s.captureOwnedStableIndexFileResource()
 	if err != nil {
 		t.Fatal(err)
 	}
-	operations := s.stablePagerCompletion
-	r := &snapshotCleanupReceipt{snapshot: s}
+	r := &snapshotCleanupReceipt{snapshot: s, enrollment: enrollment}
 	if err = s.AdoptSnapshotCleanupCompletion(r); err != nil {
 		t.Fatal(err)
 	}
-	if err = d.Close(); err != nil {
-		t.Fatal(err)
-	}
+	// The original DATA pager closes during DB.Close, while the Snapshot and
+	// duplicated token retain their own wrapper/descriptor lifetimes. Fault the
+	// pager before that close and require its original generation receipt.
 	if err = physicalPager.WithStableResourceFile(func(f *os.File) error { return f.Close() }); err != nil {
 		t.Fatal(err)
+	}
+	if err = d.Close(); !errors.Is(err, os.ErrClosed) || !errors.Is(err, &generation.closeFailure) {
+		t.Fatalf("backend lost original DATA pager failure: %v", err)
 	}
 	token.Release()
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.calls != 1 || r.err == nil || !r.scrubbed {
-		t.Fatalf("actual pager final action not observed once after scrub: calls=%d err=%v scrubbed=%v", r.calls, r.err, r.scrubbed)
+	var original *originalDBCleanupFailure
+	if r.calls != 1 || !errors.Is(r.err, os.ErrClosed) || !errors.As(r.err, &original) || original != &generation.closeFailure || !r.scrubbed {
+		t.Fatalf("original DATA pager failure not observed once after scrub: calls=%d err=%v scrubbed=%v", r.calls, r.err, r.scrubbed)
 	}
-	if got := budget.Stats(); got.ExternalLeases < 2 || got.ExternalBytes == 0 {
+	if got := budget.Stats(); got.ExternalLeases < 1 || got.ExternalBytes == 0 {
 		t.Fatal("actual pager error arrived after Snapshot governor refund")
 	}
-	if operations.owner == nil || operations.originalCustody == nil || operations.charge == 0 {
-		t.Fatal("failed original pager operations refunded")
+	// The descriptor's independent callback can finish successfully before
+	// Snapshot completion joins the generation's original physical error.
+	// Its failed generation, registry and governor remain the debt owners.
+	if generation.metadata != generationMetadata || generationCharge == 0 || generation.metadataCharge != generationCharge || generation.registry != generationRegistry || generation.failedSnapshots != s || generation.wrapperBorrowCountV6() != 1 {
+		t.Fatal("failed original DATA generation lost its Snapshot, registry or admitted charge")
 	}
+	if generationMetadata != registry.MetadataOwner() || generation.closeFailure.payload != generation {
+		t.Fatal("physical failure escaped its original registry owner or generation receipt")
+	}
+	retainedBytes := generationMetadata.Bytes()
+	retainedBudget := budget.Stats()
 	if err = s.Close(); err != nil {
 		t.Fatal(err)
 	}
 	token.Release()
-	if r.calls != 1 {
-		t.Fatal("actual physical failure replayed completion")
+	if err = generation.close(); err != &generation.closeFailure {
+		t.Fatalf("repeat generation close changed original physical receipt: %v", err)
+	}
+	if r.calls != 1 || generationMetadata.Bytes() != retainedBytes || budget.Stats().ExternalBytes != retainedBudget.ExternalBytes || budget.Stats().ExternalLeases != retainedBudget.ExternalLeases || generation.metadataCharge != generationCharge || generation.failedSnapshots != s {
+		t.Fatal("repeated physical failure observation replayed completion or refunded original debt")
 	}
 }
 
 func TestSnapshotCleanupCompletionDoesNotWaitForIndependentPagerDescriptors(t *testing.T) {
-	d, err := Open(Options{Dir: t.TempDir(), IndexPrimaryDirectory: true})
+	d, err := Open(Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +211,7 @@ func TestSnapshotCleanupCompletionDoesNotWaitForIndependentPagerDescriptors(t *t
 	completed := r.calls == 1 && r.err == nil && r.scrubbed
 	r.mu.Unlock()
 	operations.completionMu.Lock()
-	detached := operations.snapshot == nil && operations.snapshotCompleted && operations.owner != nil && operations.charge > 0
+	detached := operations.snapshot == nil && operations.snapshotCompleted && operations.metadata != nil && operations.charge > 0
 	operations.completionMu.Unlock()
 	if !completed || !detached {
 		t.Fatal("Snapshot-owned payload conflated with surviving physical descriptor")
@@ -203,7 +221,7 @@ func TestSnapshotCleanupCompletionDoesNotWaitForIndependentPagerDescriptors(t *t
 	}
 	token.Release()
 	operations.completionMu.Lock()
-	disposed := operations.owner == nil && operations.charge == 0
+	disposed := operations.charge == 0
 	operations.completionMu.Unlock()
 	if !disposed {
 		t.Fatal("independent final descriptor did not complete original physical disposal")

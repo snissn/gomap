@@ -8,10 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/leafrefscan"
-	"github.com/snissn/gomap/TreeDB/internal/memtable"
-	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -139,127 +136,6 @@ func TestCurrentStateValueLogConsumersRetainExactSet(t *testing.T) {
 			}
 			if _, err = outer.Get([]byte("key/000")); err != nil {
 				t.Fatal("independent older scan lost its own Set", err)
-			}
-		})
-	}
-}
-
-func TestTopologyPublicationPreservesPrimaryRootLifetime(t *testing.T) {
-	for _, route := range []string{"audit", "leaf-same", "leaf-refresh"} {
-		t.Run(route, func(t *testing.T) {
-			d, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer d.Close()
-			if err = d.SetSync([]byte("key"), []byte("value")); err != nil {
-				t.Fatal(err)
-			}
-			before := d.state.Load()
-			root := before.primaryRoot
-			if root == nil {
-				t.Fatal("missing actual PRIMARY root")
-			}
-			arena := root.arena
-			switch route {
-			case "audit":
-				appendPointersInNewSegment(t, d.dir, 0, 1, 700001, 1, func(int) []byte { return []byte("registered") })
-				if err = d.valueLogManager.Refresh(); err != nil {
-					t.Fatal(err)
-				}
-				err = d.publishCompactStorageValueLogSet(d.valueLogManager.CurrentSetNoRefresh())
-			case "leaf-same":
-				err = d.publishLeafGenerationState(false)
-			case "leaf-refresh":
-				err = d.publishLeafGenerationState(true)
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			if d.state.Load() == before || d.state.Load().primaryRoot != root {
-				t.Fatal("topology copy lost or replaced SAME current-root edge")
-			}
-			snap, err := d.AcquireSnapshotWithAllocationAdmission(func(s SnapshotAllocationSizes) error {
-				if s.PrimaryMetadata != arena.MetadataOwner() || s.PrimaryRoot == 0 {
-					t.Fatal("capture omitted original PRIMARY admission")
-				}
-				return nil
-			})
-			if err != nil || snap == nil {
-				t.Fatal(err)
-			}
-			budget, e := memtable.NewCOWBudget(memtable.DefaultCOWLimits())
-			if e != nil {
-				t.Fatal(e)
-			}
-			defer budget.Close()
-			enrollment, e := retainedalloc.EnrollPair(arena.MetadataOwner(), d.valueLogIdentityPins.MetadataOwner(), budget)
-			if e != nil {
-				t.Fatal(e)
-			}
-			if e = snap.AdoptPrimaryMetadataEnrollment(enrollment); e != nil {
-				t.Fatal(e)
-			}
-			if budget.Stats().ExternalBytes == 0 {
-				t.Fatal("actual PRIMARY enrollment has no charge")
-			}
-			if snap.primaryRoot == nil || snap.primaryRoot.ref != root.ref {
-				t.Fatal("snapshot did not acquire original current root")
-			}
-			it, err := snap.Iterator(nil, nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			for i := 0; i < 6; i++ {
-				if err = d.SetSync([]byte(fmt.Sprintf("advance/%d", i)), []byte("v")); err != nil {
-					t.Fatal(err)
-				}
-			}
-			w := &iterator.OrdinalScanWork{RecordLimit: 1000, ByteLimit: 1 << 24}
-			if _, ready, err := arena.BorrowReadRootCertificateV6(root.ref, w); err != nil || !ready {
-				t.Fatal("live iterator lost original root after slot/parent advancement", err)
-			}
-			if !it.Valid() || string(it.Value()) != "value" {
-				t.Fatalf("retained iterator unreadable: valid=%v key=%q value=%q err=%v", it.Valid(), it.Key(), it.Value(), it.Error())
-			}
-			if err = snap.Close(); err != nil {
-				t.Fatal(err)
-			}
-			if it.Valid() || !errors.Is(it.Error(), ErrClosed) {
-				t.Fatal("Snapshot.Close did not invalidate public iterator")
-			}
-			w = &iterator.OrdinalScanWork{RecordLimit: 1000, ByteLimit: 1 << 24}
-			if _, ready, e := arena.BorrowReadRootCertificateV6(root.ref, w); e != nil || !ready {
-				t.Fatal("invalidated retained iterator lost original ownership before actual Close", e)
-			}
-			if budget.Stats().ExternalBytes == 0 {
-				t.Fatal("invalidated iterator refunded live PRIMARY enrollment")
-			}
-			if err = it.Close(); err != nil {
-				t.Fatal(err)
-			}
-			for {
-				ready, progress, e := arena.ReleaseStep(nil)
-				if e != nil {
-					t.Fatal(e)
-				}
-				if ready && !progress {
-					break
-				}
-			}
-			w = &iterator.OrdinalScanWork{RecordLimit: 1000, ByteLimit: 1 << 24}
-			if _, ready, e := arena.BorrowReadRootCertificateV6(root.ref, w); ready || e == nil {
-				t.Fatal("superseded original root did not drain")
-			}
-			if err = d.Close(); err != nil {
-				t.Fatal(err)
-			}
-			if budget.Stats().ExternalBytes != 0 || budget.Stats().ExternalLeases != 0 {
-				t.Fatalf("final governor did not drain: %+v", budget.Stats())
-			}
-			if arena.MetadataOwner().Bytes() != 0 {
-				t.Fatalf("final original PRIMARY owner retained %d bytes", arena.MetadataOwner().Bytes())
 			}
 		})
 	}

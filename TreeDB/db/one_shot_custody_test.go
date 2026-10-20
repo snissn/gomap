@@ -42,7 +42,7 @@ func TestOneShotReadCustodyMatchesCapturedResources(t *testing.T) {
 	checkUnused := func() {
 		t.Helper()
 		snap := &r.snapshot
-		if len(snap.rootTrees) != 0 || snap.rootTreeFirst[0].root != 0 || !reflect.ValueOf(snap.rootTreeFirst[0].tree).IsZero() || snap.primaryRebindRoot != (primaryStateRootV5{}) || snap.primaryRebindErr != nil || len(snap.iterators) != 0 {
+		if len(snap.rootTrees) != 0 || snap.rootTreeFirst[0].root != 0 || !reflect.ValueOf(snap.rootTreeFirst[0].tree).IsZero() || len(snap.iterators) != 0 {
 			t.Fatal("private one-shot used exported root/iterator state")
 		}
 	}

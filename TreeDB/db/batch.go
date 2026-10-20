@@ -17,6 +17,7 @@ type Batch struct {
 	batch                              *batch.Batch
 	physicalOnly                       bool
 	logicalMVCCInput                   bool
+	checkpointRootPublicationIntent    bool
 	commandWALPublishIntent            *commandWALBatchIntent
 	flushApplySpanNativeFallbackReason FlushSpanRunFallbackReason
 	rootPublicationBuildGroup          *RootPublicationBuildGroup
@@ -82,6 +83,16 @@ func (b *Batch) SetFlushApplySpanNativeFallback(reason FlushSpanRunFallbackReaso
 		return
 	}
 	b.flushApplySpanNativeFallbackReason = reason
+}
+
+// SetCheckpointRootPublicationIntent marks one captured, ungrouped cached
+// checkpoint emission. It preserves Write's asynchronous contract; the cache
+// still owns its later Checkpoint wait. This internal hint grants no authority
+// to bypass the backend's original admission and exact durable-base checks.
+func (b *Batch) SetCheckpointRootPublicationIntent() {
+	if b != nil && b.batch != nil {
+		b.checkpointRootPublicationIntent = true
+	}
 }
 
 // SetRootPublicationBuildGroup attaches one batch of a logical chunked cached
@@ -586,7 +597,7 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent, maxEnt
 	}
 	var post finalizeCommitPost
 	if intent == nil {
-		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{skipPrePublishFlush: true, skipConditionalRootConflict: true, maxEntryRevision: maxEntryRevision, closeTeardownPinned: true, expectedBaseCommitSeq: baseSeq, hasExpectedBaseCommitSeq: true, releaseRootSerialization: releaseRootSerialization, recordVacuumMutation: recordVacuumMutation, conditionalMutation: conditionalMutation, negativeCoverage: negativeCoverage})
+		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{checkpointRootPublicationIntent: b.checkpointRootPublicationIntent, skipPrePublishFlush: true, skipConditionalRootConflict: true, maxEntryRevision: maxEntryRevision, closeTeardownPinned: true, expectedBaseCommitSeq: baseSeq, hasExpectedBaseCommitSeq: true, releaseRootSerialization: releaseRootSerialization, recordVacuumMutation: recordVacuumMutation, conditionalMutation: conditionalMutation, negativeCoverage: negativeCoverage})
 	} else {
 		if _, err = b.db.appendRawKVCommandWALIntent(intent, sync); err != nil {
 			b.db.releasePendingValueLogAppendFileIDsFromBatch(b.batch)
@@ -811,7 +822,7 @@ func (b *Batch) writeSerializedAttempt(sync bool, intent *commandWALBatchIntent,
 	guardedPublishStart := time.Now()
 	var post finalizeCommitPost
 	if intent == nil {
-		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{skipPrePublishFlush: true, skipConditionalRootConflict: true, maxEntryRevision: maxEntryRevision, durablePublishLocked: true, durablePublishRelease: releaseDurablePublish, rootPublicationBuilder: builder, closeTeardownPinned: true, expectedBaseCommitSeq: baseSeq, hasExpectedBaseCommitSeq: true, releaseRootSerialization: releaseRootSerialization, recordVacuumMutation: recordVacuumMutation, conditionalMutation: conditionalMutation, negativeCoverage: negativeCoverage})
+		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{checkpointRootPublicationIntent: b.checkpointRootPublicationIntent, skipPrePublishFlush: true, skipConditionalRootConflict: true, maxEntryRevision: maxEntryRevision, durablePublishLocked: true, durablePublishRelease: releaseDurablePublish, rootPublicationBuilder: builder, closeTeardownPinned: true, expectedBaseCommitSeq: baseSeq, hasExpectedBaseCommitSeq: true, releaseRootSerialization: releaseRootSerialization, recordVacuumMutation: recordVacuumMutation, conditionalMutation: conditionalMutation, negativeCoverage: negativeCoverage})
 	} else {
 		// writeMu is released by the deferred unlock above even if the command
 		// journal append fails and poisons this open handle.
@@ -905,6 +916,7 @@ func (b *Batch) Close() error {
 		err := b.batch.Close()
 		b.batch = nil
 		b.logicalMVCCInput = false
+		b.checkpointRootPublicationIntent = false
 		b.commandWALPublishIntent = nil
 
 		b.flushApplySpanNativeFallbackReason = FlushSpanRunFallbackUnknown
@@ -914,6 +926,7 @@ func (b *Batch) Close() error {
 	}
 	b.batch = nil
 	b.logicalMVCCInput = false
+	b.checkpointRootPublicationIntent = false
 	b.commandWALPublishIntent = nil
 
 	b.flushApplySpanNativeFallbackReason = FlushSpanRunFallbackUnknown
@@ -929,6 +942,7 @@ func (b *Batch) Reset() {
 	}
 	b.batch.Reset()
 	b.logicalMVCCInput = false
+	b.checkpointRootPublicationIntent = false
 	b.commandWALPublishIntent = nil
 
 	b.flushApplySpanNativeFallbackReason = FlushSpanRunFallbackUnknown

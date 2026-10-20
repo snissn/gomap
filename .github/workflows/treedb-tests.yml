@@ -173,7 +173,7 @@ jobs:
           fi
           ./scripts/mvcc_raw_path_gate.sh
 
-      - name: Compare public PRIMARY replacement cost
+      - name: Compare public durable replacement cost
         if: ${{ !cancelled() && steps.paths.outputs.run == 'true' && steps.gate_self_checks.outcome == 'success' }}
         env:
           BASE_SHA: ${{ steps.scope.outputs.base_sha }}

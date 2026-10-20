@@ -52,13 +52,10 @@ type durableRootSelectionV1 struct {
 	SlotMetas   [2]page.DurableMetaV1
 	SlotRecords [2]rootpublication.DurableRootRecordV1
 	resources   *rootpublication.StableResourceSet
-	Primary     rootpublication.PrimaryProjectionV5
-	SlotPrimary [2]rootpublication.PrimaryProjectionV5
+
 	// Parent records are fixed one-hop frontier evidence, never lookup ancestry.
-	ParentRecords         [2]rootpublication.DurablePrimaryRootRecordV5
-	primaryPhysicalDigest [2][32]byte
-	parentPhysicalDigest  [2][32]byte
-	ParentResources       [2]*rootpublication.StableResourceSet
+
+	ParentResources [2]*rootpublication.StableResourceSet
 }
 
 type durableManifestValidatorV1 func(*rootpublication.DependencyManifestV1) (*rootpublication.StableResourceSet, error)
@@ -129,9 +126,7 @@ func selectDurableRootCandidateSetV1(candidates []durableMetaCandidateV1, reason
 	var slotResources, parentResources [2]*rootpublication.StableResourceSet
 	var slotMetas [2]page.DurableMetaV1
 	var slotRecords [2]rootpublication.DurableRootRecordV1
-	var slotPrimary [2]rootpublication.PrimaryProjectionV5
-	var parentRecords [2]rootpublication.DurablePrimaryRootRecordV5
-	var primaryPhysicalDigest, parentPhysicalDigest [2][32]byte
+
 	seenGenerations := make(map[uint64]uint64, len(candidates))
 	for _, candidate := range candidates {
 		if conflictingGenerations[candidate.meta.CommitSeq] {
@@ -158,10 +153,7 @@ func selectDurableRootCandidateSetV1(candidates []durableMetaCandidateV1, reason
 			parentResources[candidate.slot] = selected.ParentResources[candidate.slot]
 			slotMetas[candidate.slot] = selected.Meta
 			slotRecords[candidate.slot] = selected.Record
-			slotPrimary[candidate.slot] = selected.Primary
-			parentRecords[candidate.slot] = selected.ParentRecords[candidate.slot]
-			primaryPhysicalDigest[candidate.slot] = selected.primaryPhysicalDigest[candidate.slot]
-			parentPhysicalDigest[candidate.slot] = selected.parentPhysicalDigest[candidate.slot]
+
 			selected.resources = nil
 			if chosen == nil {
 				copy := selected
@@ -188,10 +180,7 @@ func selectDurableRootCandidateSetV1(candidates []durableMetaCandidateV1, reason
 		chosen.ParentResources = parentResources
 		chosen.SlotMetas = slotMetas
 		chosen.SlotRecords = slotRecords
-		chosen.SlotPrimary = slotPrimary
-		chosen.ParentRecords = parentRecords
-		chosen.primaryPhysicalDigest = primaryPhysicalDigest
-		chosen.parentPhysicalDigest = parentPhysicalDigest
+
 		return *chosen, nil
 	}
 	for _, resources := range slotResources {
@@ -357,40 +346,6 @@ func validateDurableRootPageV1(source freelist.PageSource, pageID, totalPages ui
 	}
 	switch node.NewNode(image).Type() {
 	case page.PageTypeLeaf, page.PageTypeInternal:
-		return nil
-	case page.PageTypePrimaryDirectory:
-		directory, err := node.DecodePrimaryDirectory(image)
-		if err != nil {
-			return err
-		}
-		base, _ := directory.Base()
-		if base.Ref.Kind != page.ChildRefPage || base.Ref.Page >= totalPages {
-			return node.ErrPrimaryDirectory
-		}
-		baseImage, err := source.ReadPage(base.Ref.Page)
-		if err != nil {
-			return err
-		}
-		baseNode := node.NewNode(baseImage)
-		if !node.VerifyPrimaryOperand(base, baseImage) || page.DecodeHeader(baseImage).PageID != base.Ref.Page || (baseNode.Type() != page.PageTypeLeaf && baseNode.Type() != page.PageTypeInternal) {
-			return node.ErrPrimaryDirectory
-		}
-		for i := 0; i < directory.Count(); i++ {
-			entry, _ := directory.Entry(i)
-			if entry.InlineAbsence() {
-				continue
-			}
-			if entry.Operand.Ref.Kind != page.ChildRefPage || entry.Operand.Ref.Page >= totalPages {
-				return node.ErrPrimaryDirectory
-			}
-			component, err := source.ReadPage(entry.Operand.Ref.Page)
-			if err != nil {
-				return err
-			}
-			if err = node.ValidatePrimaryComponent(entry, component); err != nil {
-				return err
-			}
-		}
 		return nil
 	default:
 		return errors.New("invalid root page type")

@@ -128,26 +128,11 @@ type fragmentationPageDomain uint8
 
 const (
 	fragmentationDATA fragmentationPageDomain = iota
-	fragmentationPRIMARY
-	fragmentationReadRoot
 )
 
 func fragmentationPhysicalDomain(p *pager.Pager, id uint64) (fragmentationPageDomain, uint64, error) {
 	if p == nil {
 		return 0, 0, fmt.Errorf("fragmentation: missing physical pager")
-	}
-	if id >= page.PrimaryBankNamespace && id < 2*page.PrimaryBankNamespace {
-		local := id - page.PrimaryBankNamespace
-		if local >= pager.PrimaryReadRootLocalBaseV6 {
-			return fragmentationReadRoot, local, nil
-		}
-		if local < p.PrimaryBankPageCount() {
-			return fragmentationPRIMARY, local, nil
-		}
-		return 0, 0, fmt.Errorf("fragmentation: PRIMARY page %d outside physical extent", local)
-	}
-	if id >= pager.PrimaryReadRootLocalBaseV6 {
-		return 0, 0, fmt.Errorf("fragmentation: page %d outside DATA domain", id)
 	}
 	if id < p.PageCount() {
 		return fragmentationDATA, id, nil
@@ -369,8 +354,6 @@ func (db *DB) FragmentationReport() (map[string]string, error) {
 	var internalPages uint64
 	var minID uint64
 	var maxID uint64
-	var primaryPages fragmentationPhysicalCensus
-	var readRoots uint64
 
 	var leafFillSum float64
 	var internalFillSum float64
@@ -379,18 +362,11 @@ func (db *DB) FragmentationReport() (map[string]string, error) {
 
 	emitFragmentationProbeEvent(FragmentationProbeEventFullUserTreeWalk)
 	err := tr.WalkPages(func(pageID uint64, n node.Node) error {
-		domain, local, err := fragmentationPhysicalDomain(idx.pager, pageID)
+		_, _, err := fragmentationPhysicalDomain(idx.pager, pageID)
 		if err != nil {
 			return err
 		}
-		switch domain {
-		case fragmentationPRIMARY:
-			primaryPages.add(local)
-			return nil
-		case fragmentationReadRoot:
-			readRoots++
-			return nil
-		}
+
 		if pages == 0 {
 			minID = pageID
 			maxID = pageID
@@ -406,9 +382,7 @@ func (db *DB) FragmentationReport() (map[string]string, error) {
 
 		// The directory has its own canonical heap; native node FreeSpace only
 		// interprets materialized leaf/internal layouts.
-		if n.Type() == page.PageTypePrimaryDirectory {
-			return nil
-		}
+
 		fill := float64(page.PageSize-n.FreeSpace()) / float64(page.PageSize)
 		fillPPM := uint32(fill * 1_000_000)
 		switch n.Type() {
@@ -429,7 +403,7 @@ func (db *DB) FragmentationReport() (map[string]string, error) {
 
 	out := make(map[string]string, 16)
 	out["treedb.pages.total"] = fmt.Sprintf("%d", totalPages)
-	out["treedb.primary.pages.total"] = fmt.Sprintf("%d", idx.pager.PrimaryBankPageCount())
+
 	// Rounded file length is observed through each actual original pager handle,
 	// separately from allocated page bounds and selected reachable-page census.
 	observeFileBytes := func(p *pager.Pager, key string) error {
@@ -445,18 +419,7 @@ func (db *DB) FragmentationReport() (map[string]string, error) {
 	if err := observeFileBytes(idx.pager, "treedb.index.file.bytes"); err != nil {
 		return nil, err
 	}
-	if idx.primary != nil {
-		if err := observeFileBytes(idx.primary.Pager(), "treedb.primary.file.bytes"); err != nil {
-			return nil, err
-		}
-	} else {
-		out["treedb.primary.file.bytes"] = "0"
-	}
 
-	out["treedb.user.primary.read_roots"] = fmt.Sprintf("%d", readRoots)
-	if err := primaryPages.into(out, "treedb.user.primary"); err != nil {
-		return nil, err
-	}
 	out["treedb.user.pages"] = fmt.Sprintf("%d", pages)
 	out["treedb.user.pages.leaf"] = fmt.Sprintf("%d", leafPages)
 	out["treedb.user.pages.internal"] = fmt.Sprintf("%d", internalPages)
@@ -543,8 +506,6 @@ type collectionRootFragmentation struct {
 	minPageID        uint64
 	maxPageID        uint64
 	hasPagerBackedID bool
-	primaryPages     fragmentationPhysicalCensus
-	readRoots        uint64
 }
 
 func collectionRootFragmentationStats(idx *indexGen, state *DBState) (collectionRootFragmentation, error) {
@@ -587,18 +548,11 @@ func collectionRootFragmentationStatsWithContext(ctx context.Context, idx *index
 				return nil
 			}
 			out.uniquePageIDs[pageID] = struct{}{}
-			domain, local, err := fragmentationPhysicalDomain(idx.pager, pageID)
+			_, _, err := fragmentationPhysicalDomain(idx.pager, pageID)
 			if err != nil {
 				return err
 			}
-			switch domain {
-			case fragmentationPRIMARY:
-				out.primaryPages.add(local)
-				return nil
-			case fragmentationReadRoot:
-				out.readRoots++
-				return nil
-			}
+
 			out.pages++
 			if !out.hasPagerBackedID {
 				out.minPageID = pageID
@@ -627,10 +581,6 @@ func collectionRootFragmentationStatsWithContext(ctx context.Context, idx *index
 }
 
 func (c collectionRootFragmentation) into(out map[string]string) error {
-	out["treedb.collection_roots.primary.read_roots"] = fmt.Sprintf("%d", c.readRoots)
-	if err := c.primaryPages.into(out, "treedb.collection_roots.primary"); err != nil {
-		return err
-	}
 	out["treedb.collection_roots.count"] = fmt.Sprintf("%d", c.roots)
 	out["treedb.collection_roots.leafref_roots"] = fmt.Sprintf("%d", c.leafRefRoots)
 	out["treedb.collection_roots.pager_roots"] = fmt.Sprintf("%d", c.pagerRoots)

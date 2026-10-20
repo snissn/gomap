@@ -49,17 +49,25 @@ func (r ReservationRecordV1) Entries() []ReservationExtentV1 {
 	return append([]ReservationExtentV1(nil), r.Extents...)
 }
 
+func compareReservationExtents(a, b ReservationExtentV1) int {
+	if a.StartPageID != b.StartPageID {
+		return cmp.Compare(a.StartPageID, b.StartPageID)
+	}
+	if a.Kind != b.Kind {
+		return cmp.Compare(a.Kind, b.Kind)
+	}
+	return cmp.Compare(a.LastReachableCommitSeq, b.LastReachableCommitSeq)
+}
+
 func normalizeExtents(extents []ReservationExtentV1) ([]ReservationExtentV1, error) {
-	out := append([]ReservationExtentV1(nil), extents...)
-	slices.SortFunc(out, func(a, b ReservationExtentV1) int {
-		if a.StartPageID != b.StartPageID {
-			return cmp.Compare(a.StartPageID, b.StartPageID)
-		}
-		if a.Kind != b.Kind {
-			return cmp.Compare(a.Kind, b.Kind)
-		}
-		return cmp.Compare(a.LastReachableCommitSeq, b.LastReachableCommitSeq)
-	})
+	return normalizeOwnedExtents(append([]ReservationExtentV1(nil), extents...))
+}
+
+// normalizeOwnedExtents consumes a private construction buffer. Callers must not
+// pass transaction inputs, an immutable record, or any other borrowed slice.
+// General callers retain normalizeExtents' defensive copy above.
+func normalizeOwnedExtents(out []ReservationExtentV1) ([]ReservationExtentV1, error) {
+	slices.SortFunc(out, compareReservationExtents)
 	merged := out[:0]
 	for _, extent := range out {
 		if extent.StartPageID < 2 || extent.Count == 0 || extent.Kind < ReservationReusedData || extent.Kind > ReservationAbandonedAppend {

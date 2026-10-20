@@ -138,7 +138,7 @@ func (coord *collectionSchemaCoordinator) registerPartitionLiveCarrier(carrier *
 	coord.partitionLiveCarriers[carrier.name] = carrier
 	registerReplayFinalizer := !coord.partitionLiveReplayFinalizerRegistered
 	coord.partitionLiveMu.Unlock()
-	if registerReplayFinalizer && carrier.collection != nil && carrier.collection.db != nil && carrier.collection.db.RegisterCommandWALReplayFinalizer(coord.persistPartitionLiveReplayCarriers) {
+	if registerReplayFinalizer && carrier.collection != nil && carrier.collection.vectorPartitionStorageDBV1() != nil && carrier.collection.vectorPartitionStorageDBV1().RegisterCommandWALReplayFinalizer(coord.persistPartitionLiveReplayCarriers) {
 		coord.partitionLiveMu.Lock()
 		coord.partitionLiveReplayFinalizerRegistered = true
 		coord.partitionLiveMu.Unlock()
@@ -480,6 +480,12 @@ func (c *Collection) lockAdHocVectorAdmissionRead() func() {
 }
 
 func (c *Collection) lockNativeVectorAdmissionWrite() func() {
+	if c != nil && c.nativeJSON != nil {
+		if coord := c.partitionLiveCoordinatorV1(); coord != nil {
+			coord.nativeVectorAdmissionMu.Lock()
+			return coord.nativeVectorAdmissionMu.Unlock
+		}
+	}
 	admissionMu := c.nativeVectorAdmissionMutex()
 	if admissionMu == nil {
 		return func() {}

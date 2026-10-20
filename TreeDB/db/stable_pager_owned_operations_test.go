@@ -17,7 +17,7 @@ import (
 )
 
 func TestOwnedPagerOperationWaitsForActualSnapshotFinalization(t *testing.T) {
-	db, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+	db, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +37,7 @@ func TestOwnedPagerOperationWaitsForActualSnapshotFinalization(t *testing.T) {
 	if got := db.stableIndexCaptures.Load(); got != 1 {
 		t.Fatalf("capture released before last actual reader: count=%d", got)
 	}
-	if snapshot.primaryRoot == nil || snapshot.readState.Load() != snapshotReadClosedBit+1 {
+	if snapshot.readState.Load() != snapshotReadClosedBit+1 {
 		t.Fatal("retained Snapshot state lost")
 	}
 	snapshot.endRead()
@@ -47,9 +47,7 @@ func TestOwnedPagerOperationWaitsForActualSnapshotFinalization(t *testing.T) {
 	if got := db.stableIndexCaptures.Load(); got != 0 {
 		t.Fatalf("completed capture retained count=%d", got)
 	}
-	if db.idx.Load().primaryOwner.failedPagerOperations != nil {
-		t.Fatal("completed capture falsely retained debt")
-	}
+
 	next := db.AcquireStableSnapshot()
 	defer next.Close()
 	token.Release()
@@ -59,7 +57,7 @@ func TestOwnedPagerOperationWaitsForActualSnapshotFinalization(t *testing.T) {
 }
 
 func TestOwnedPagerOperationJoinsOriginalRunningFinalizer(t *testing.T) {
-	db, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+	db, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +80,7 @@ func TestOwnedPagerOperationJoinsOriginalRunningFinalizer(t *testing.T) {
 		}
 	}
 	operations.completionMu.Lock()
-	retained := operations.snapshot == snapshot && !operations.snapshotCompleted && operations.charge > 0 && operations.owner != nil
+	retained := operations.snapshot == snapshot && !operations.snapshotCompleted && operations.charge > 0 && operations.metadata != nil
 	operations.completionMu.Unlock()
 	if !retained || db.stableIndexCaptures.Load() != 1 {
 		t.Fatal("claimed finalizer was treated as completed cleanup")
@@ -95,7 +93,7 @@ func TestOwnedPagerOperationJoinsOriginalRunningFinalizer(t *testing.T) {
 	close(proceed)
 	<-done
 	operations.completionMu.Lock()
-	disposed := operations.snapshot == nil && operations.snapshotCompleted && operations.owner == nil && operations.charge == 0
+	disposed := operations.snapshot == nil && operations.snapshotCompleted && operations.charge == 0
 	operations.completionMu.Unlock()
 	if !disposed || db.stableIndexCaptures.Load() != 0 {
 		t.Fatal("actual completion did not settle original capture once")
@@ -103,7 +101,7 @@ func TestOwnedPagerOperationJoinsOriginalRunningFinalizer(t *testing.T) {
 }
 
 func TestOwnedPagerOperationFinalReaderAndExportedHandleRace(t *testing.T) {
-	db, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+	db, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +128,7 @@ func TestOwnedPagerOperationFinalReaderAndExportedHandleRace(t *testing.T) {
 			t.Fatal("former completion closed new capture")
 		}
 		operations.completionMu.Lock()
-		disposed := operations.snapshot == nil && operations.owner == nil && operations.charge == 0
+		disposed := operations.snapshot == nil && operations.charge == 0
 		operations.completionMu.Unlock()
 		if !disposed {
 			t.Fatal("completed read retained former callback state")
@@ -147,18 +145,17 @@ func TestOwnedPagerOperationPostConsumptionVLogFailureRetainsGovernor(t *testing
 	if !child {
 		return
 	}
-	d, err := Open(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+	d, err := Open(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	snapshot := d.AcquireStableSnapshot()
-	if snapshot == nil || snapshot.primaryRoot == nil {
+	if snapshot == nil {
 		t.Fatal("real primary capture")
 	}
 	faultForPostConsumptionVLogTest := errors.New("post-unlink parent sync failure")
-	physicalPager := snapshot.primaryRoot.arena.Pager()
+	physicalPager := snapshot.idx.pager
 	originalIndex, originalLock := d.idx.Load(), d.lock
-	originalOwner := originalIndex.primaryOwner
 	t.Cleanup(func() {
 		// The failure intentionally retains the exact owner and its admitted
 		// charge. After all consumers/assertions finish, explicit fixture-only
@@ -171,9 +168,7 @@ func TestOwnedPagerOperationPostConsumptionVLogFailureRetainsGovernor(t *testing
 		if originalIndex.stableNamespaceParent != nil {
 			_ = originalIndex.stableNamespaceParent.Close()
 		}
-		if originalOwner.namespaceParent != nil {
-			_ = originalOwner.namespaceParent.Close()
-		}
+
 		if originalLock != nil {
 			_ = originalLock.Close()
 		}
@@ -230,18 +225,19 @@ func TestOwnedPagerOperationPostConsumptionVLogFailureRetainsGovernor(t *testing
 		t.Fatal(err)
 	}
 	defer budget.Close()
-	enrollment, err := retainedalloc.EnrollPair(snapshot.primaryRoot.arena.MetadataOwner(), d.valueLogIdentityPins.MetadataOwner(), budget)
+	enrollment, err := d.valueLogIdentityPins.MetadataOwner().Enroll(budget)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = snapshot.AdoptPrimaryMetadataEnrollment(enrollment); err != nil {
-		t.Fatal(err)
-	}
+
 	token, err := snapshot.captureOwnedStableIndexFileResource()
 	if err != nil {
 		t.Fatal(err)
 	}
 	operations := snapshot.stablePagerCompletion
+	if err := snapshot.AdoptSnapshotCleanupCompletion(&snapshotCleanupReceipt{snapshot: snapshot, enrollment: enrollment}); err != nil {
+		t.Fatal(err)
+	}
 	token.Release()
 	if calls != 1 || set.RefCount.Load() != 0 || file.RefCount.Load() != 0 {
 		t.Fatalf("original edges not consumed exactly once: calls=%d set=%d file=%d", calls, set.RefCount.Load(), file.RefCount.Load())
@@ -250,9 +246,9 @@ func TestOwnedPagerOperationPostConsumptionVLogFailureRetainsGovernor(t *testing
 		t.Fatal("not actual post-unlink error", err)
 	}
 	operations.completionMu.Lock()
-	retained := operations.snapshot == snapshot && operations.snapshotCompleted && operations.owner != nil && operations.charge > 0 && errors.Is(operations.failure.causes[0], fault)
+	retained := operations.snapshot == snapshot && operations.snapshotCompleted && operations.metadata != nil && operations.charge > 0 && errors.Is(operations.failure.causes[0], fault)
 	operations.completionMu.Unlock()
-	if !retained || d.idx.Load().primaryOwner.failedPagerOperations != operations {
+	if !retained || operations.originalCustody == nil {
 		t.Fatal("exact completed-reference debt lost")
 	}
 	if budget.Stats().ExternalBytes == 0 {
@@ -268,7 +264,7 @@ func TestOwnedPagerOperationPostConsumptionVLogFailureRetainsGovernor(t *testing
 	if calls != 1 || set.RefCount.Load() != 0 || file.RefCount.Load() != 0 {
 		t.Fatal("consumed original references replayed")
 	}
-	if !errors.Is(d.idx.Load().primaryOwner.cleanupErr, fault) {
+	if !errors.Is(d.backgroundError(), fault) {
 		t.Fatal("Close error authority lost original failure")
 	}
 }
@@ -281,9 +277,7 @@ func TestOwnedPagerLegacyChildUsesSuppliedOwnerUntilActualCompletion(t *testing.
 		t.Fatal(err)
 	}
 	defer d.Close()
-	if d.idx.Load().primaryOwner != nil {
-		t.Fatal("fixture unexpectedly selected PRIMARY")
-	}
+
 	var metadata retainedalloc.Owner
 	metadata.Initialize(0)
 	baseline := metadata.Bytes()
@@ -329,7 +323,7 @@ func TestOwnedPagerLegacyChildPostConsumptionFailureKeepsOriginalRegistry(t *tes
 		t.Fatal(err)
 	}
 	snapshot := d.AcquireStableSnapshot()
-	if snapshot == nil || snapshot.idx.primaryOwner != nil {
+	if snapshot == nil {
 		t.Fatal("real primary capture")
 	}
 	faultForPostConsumptionVLogTest := errors.New("post-unlink parent sync failure")
@@ -405,6 +399,7 @@ func TestOwnedPagerLegacyChildPostConsumptionFailureKeepsOriginalRegistry(t *tes
 		t.Fatal(err)
 	}
 	operations := snapshot.stablePagerCompletion
+	defer enrollment.Close()
 	token.Release()
 	if calls != 1 || set.RefCount.Load() != 0 || file.RefCount.Load() != 0 {
 		t.Fatalf("original edges not consumed exactly once: calls=%d set=%d file=%d", calls, set.RefCount.Load(), file.RefCount.Load())
@@ -413,7 +408,7 @@ func TestOwnedPagerLegacyChildPostConsumptionFailureKeepsOriginalRegistry(t *tes
 		t.Fatal("not actual post-unlink error", err)
 	}
 	operations.completionMu.Lock()
-	retained := operations.snapshot == snapshot && operations.snapshotCompleted && operations.owner == nil && operations.metadata == &metadata && operations.originalCustody != nil && operations.charge > 0 && errors.Is(operations.failure.causes[0], fault)
+	retained := operations.snapshot == snapshot && operations.snapshotCompleted && operations.metadata == &metadata && operations.originalCustody != nil && operations.charge > 0 && errors.Is(operations.failure.causes[0], fault)
 	operations.completionMu.Unlock()
 	if !retained || !errors.Is(d.StableResourceIdentityPinRegistry().CleanupError(), fault) {
 		t.Fatal("exact completed-reference debt lost")

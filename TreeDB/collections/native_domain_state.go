@@ -24,8 +24,12 @@ type nativeDomainState struct {
 	typed          *nativeTypedDelta
 	captured       *nativePendingSources
 	privateSource  *nativePendingSource // partial rollover edge; never published
-	refund         *cowbtree.OwnedMapRefund
-	finished       bool
+	// A certificate belongs to these exact immutable graph sources. Generic
+	// constructors leave it unverified; only the checked document graph producer
+	// or a complete validation may certify the already-bound tuple.
+	documentGraph nativeDocumentGraphCertificate
+	refund        *cowbtree.OwnedMapRefund
+	finished      bool
 }
 
 // newNativeDomainState consumes pending only on success. Its descriptor/name
@@ -89,6 +93,7 @@ func (nativeDomainLifetime) Release(d *nativeDomainState) (cowbtree.OwnedMapComp
 	typed = nil
 	done.Append(d.privateSource.release())
 	d.privateSource = nil
+	d.documentGraph.clear()
 	captured = nil
 	refund := d.refund
 	d.refund = nil

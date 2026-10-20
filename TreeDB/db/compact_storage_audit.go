@@ -329,7 +329,6 @@ func (db *DB) publishCompactStorageValueLogSet(valueLogSet *valuelog.Set) error 
 		return db.valueLogManager.Release(valueLogSet)
 	}
 	newState := &DBState{
-		primaryRoot:                oldState.primaryRoot,
 		CommitSeq:                  oldState.CommitSeq,
 		RootPageID:                 oldState.RootPageID,
 		SystemRootPageID:           oldState.SystemRootPageID,

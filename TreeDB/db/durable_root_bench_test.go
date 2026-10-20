@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
-	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -78,14 +77,13 @@ func BenchmarkSelectDurableRootV1(b *testing.B) {
 // the synchronous root transaction. The two cases are identical key/value
 // workloads; only the inline threshold changes whether the root manifest owns
 // an external value-log dependency.
-func BenchmarkPublishDurableRootV1(b *testing.B) { benchmarkPublishDurableRootV1(b, false) }
+func BenchmarkPublishDurableRootV1(b *testing.B) { benchmarkPublishDurableRootV1(b) }
 
 // The opt-in case measures the same complete SetSync/WriteSync operations and
-// stable-call observers, with setup outside the timer and real PRIMARY output.
+// stable-call observers, with setup outside the timer and real DATA output.
 // It does not assign a new performance threshold or native qualification.
-func BenchmarkPublishPrimaryDurableRootV1(b *testing.B) { benchmarkPublishDurableRootV1(b, true) }
 
-func benchmarkPublishDurableRootV1(b *testing.B, primary bool) {
+func benchmarkPublishDurableRootV1(b *testing.B) {
 	for _, fixture := range []struct {
 		name          string
 		valueLog      bool
@@ -102,8 +100,8 @@ func benchmarkPublishDurableRootV1(b *testing.B, primary bool) {
 				pointers = appendPointersInNewSegmentBench(b, dir, 0, 1, 1, b.N, func(int) []byte { return value })
 			}
 			database, err := Open(Options{
-				Dir:                    dir,
-				IndexPrimaryDirectory:  primary,
+				Dir: dir,
+
 				DisableBackgroundPrune: true,
 				ValueLog: ValueLogOptions{
 					PointerThreshold: fixture.inlineCutover,
@@ -164,16 +162,7 @@ func benchmarkPublishDurableRootV1(b *testing.B, primary bool) {
 					recoverableSlots++
 				}
 			}
-			if primary {
-				idx := database.idx.Load()
-				if idx.primary == nil || !primaryarena.IsPage(database.State().RootPageID) {
-					b.Fatal("PRIMARY benchmark did not select PRIMARY root")
-				}
-				b.ReportMetric(float64(idx.primary.MetadataOwner().Bytes()), "primary-retained-bytes")
-				b.ReportMetric(float64(database.valueLogIdentityPins.MetadataOwner().Bytes()), "registry-retained-bytes")
-				b.ReportMetric(float64(idx.primary.Pager().PageCount()*page.PageSize), "primary-extent-bytes")
-				b.ReportMetric(float64(idx.pager.PageCount()*page.PageSize), "data-extent-bytes")
-			}
+
 			operations := float64(b.N)
 			b.ReportMetric(float64(b.Elapsed().Nanoseconds())/operations, "publish-ns/op")
 			b.ReportMetric(float64(record.Manifest.EntryCount), "manifest-entries")
@@ -365,15 +354,15 @@ func benchmarkDurableRootManifestV1(tb testing.TB, resourceCount int) *rootpubli
 	return manifest
 }
 
-// BenchmarkPrimaryBorrowedValueLogCohort measures actual selected kind adoption
+// BenchmarkDATABorrowedValueLogCohort measures actual selected kind adoption
 // and scoped borrowing at the publication bridge. Fixture creation is excluded;
 // each timed operation captures, imports/clones the selected source kind, reads
 // one original value and releases its original Snapshot and selected wrapper.
 // After timing, overwrite/Vacuum/GC expose held versus drained physical cost.
-func BenchmarkPrimaryBorrowedValueLogCohort(b *testing.B) {
+func BenchmarkDATABorrowedValueLogCohort(b *testing.B) {
 	for _, files := range []int{8, 16} {
 		b.Run(fmt.Sprintf("files=%d", files), func(b *testing.B) {
-			fixture := newPrimaryBorrowedCohort(b, files)
+			fixture := newDATABorrowedCohort(b, files)
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
@@ -392,6 +381,7 @@ func BenchmarkPrimaryBorrowedValueLogCohort(b *testing.B) {
 				if err != nil {
 					b.Fatal(err)
 				}
+				loan.enrollment.Close()
 				loan.wrapper.Close()
 				if fixture.budget.Stats().ExternalBytes != 0 {
 					b.Fatal("completed borrow retained temporary governor")
@@ -406,7 +396,7 @@ func BenchmarkPrimaryBorrowedValueLogCohort(b *testing.B) {
 	}
 }
 
-type primaryBorrowedCohortFixture struct {
+type dataBorrowedCohortFixture struct {
 	db       *DB
 	budget   *memtable.COWBudget
 	keys     [][]byte
@@ -414,16 +404,17 @@ type primaryBorrowedCohortFixture struct {
 	files    int
 	pointers map[uint32]page.ValuePtr
 }
-type primaryBorrowedCohortLoan struct {
-	snapshot  *Snapshot
-	resources *rootpublication.StableResourceSet
-	wrapper   *memtable.COWExternalLease
+type dataBorrowedCohortLoan struct {
+	snapshot   *Snapshot
+	resources  *rootpublication.StableResourceSet
+	wrapper    *memtable.COWExternalLease
+	enrollment *retainedalloc.Enrollment
 }
 
-func newPrimaryBorrowedCohort(tb testing.TB, files int) *primaryBorrowedCohortFixture {
+func newDATABorrowedCohort(tb testing.TB, files int) *dataBorrowedCohortFixture {
 	tb.Helper()
 	dir := tb.TempDir()
-	d, err := Open(Options{Dir: dir, IndexPrimaryDirectory: true, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+	d, err := Open(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 	if err != nil {
 		tb.Fatal(err)
 	}
@@ -431,7 +422,7 @@ func newPrimaryBorrowedCohort(tb testing.TB, files int) *primaryBorrowedCohortFi
 	if err != nil {
 		tb.Fatal(err)
 	}
-	f := &primaryBorrowedCohortFixture{db: d, budget: budget, files: files, value: bytes.Repeat([]byte("cohort"), 128), keys: make([][]byte, files), pointers: make(map[uint32]page.ValuePtr, files)}
+	f := &dataBorrowedCohortFixture{db: d, budget: budget, files: files, value: bytes.Repeat([]byte("cohort"), 128), keys: make([][]byte, files), pointers: make(map[uint32]page.ValuePtr, files)}
 	tb.Cleanup(func() {
 		if err := d.Close(); err != nil {
 			tb.Error(err)
@@ -457,18 +448,16 @@ func newPrimaryBorrowedCohort(tb testing.TB, files int) *primaryBorrowedCohortFi
 	if err := pending.WriteSync(); err != nil {
 		tb.Fatal(err)
 	}
-	if !primaryarena.IsPage(d.State().RootPageID) {
-		tb.Fatal("cohort fixture did not select PRIMARY")
-	}
+
 	return f
 }
-func (f *primaryBorrowedCohortFixture) capture(tb testing.TB) primaryBorrowedCohortLoan {
+func (f *dataBorrowedCohortFixture) capture(tb testing.TB) dataBorrowedCohortLoan {
 	tb.Helper()
 	var enrollment *retainedalloc.Enrollment
 	var wrapper *memtable.COWExternalLease
 	snapshot, err := f.db.AcquireSnapshotWithAllocationAdmission(func(sizes SnapshotAllocationSizes) error {
 		var e error
-		enrollment, e = retainedalloc.EnrollPair(sizes.PrimaryMetadata, sizes.RegistryMetadata, f.budget)
+		enrollment, e = sizes.RegistryMetadata.Enroll(f.budget)
 		if e != nil {
 			return e
 		}
@@ -480,9 +469,7 @@ func (f *primaryBorrowedCohortFixture) capture(tb testing.TB) primaryBorrowedCoh
 		wrapper.Close()
 		tb.Fatal(err)
 	}
-	if err := snapshot.AdoptPrimaryMetadataEnrollment(enrollment); err != nil {
-		tb.Fatal(err)
-	}
+
 	// The live ordinary publication has already adopted each original provider's
 	// descriptor/operation callback. Select its actual source-kind backing, not a
 	// synthetic token or a generic Snapshot-only retention proxy.
@@ -498,13 +485,12 @@ func (f *primaryBorrowedCohortFixture) capture(tb testing.TB) primaryBorrowedCoh
 	if resources.Len() != f.files {
 		tb.Fatalf("cohort selected resources=%d want%d", resources.Len(), f.files)
 	}
-	return primaryBorrowedCohortLoan{snapshot: snapshot, resources: resources, wrapper: wrapper}
+	return dataBorrowedCohortLoan{snapshot: snapshot, resources: resources, wrapper: wrapper, enrollment: enrollment}
 }
-func (f *primaryBorrowedCohortFixture) retention(tb testing.TB) map[string]int64 {
+func (f *dataBorrowedCohortFixture) retention(tb testing.TB) map[string]int64 {
 	tb.Helper()
 	loan := f.capture(tb)
 	old := loan.snapshot.idx
-	oldArena := old.primary
 	cost := make(map[string]int64)
 	var paths []string
 	originalFiles := make(map[*rootpublication.StableResourceToken]os.FileInfo, f.files)
@@ -554,11 +540,22 @@ func (f *primaryBorrowedCohortFixture) retention(tb testing.TB) map[string]int64
 		if err := f.db.SetSync([]byte("cohort/advance-b"), []byte("b")); err != nil {
 			return err
 		}
-		if err := f.db.VacuumIndexOnline(context.Background()); err != nil {
-			return err
-		}
-		if f.db.idx.Load() == old {
-			return fmt.Errorf("cohort vacuum did not replace actual DATA generation")
+		beforeVacuum := f.db.state.Load()
+		vacuumErr := f.db.VacuumIndexOnline(context.Background())
+		if runtime.GOOS == "windows" {
+			// The maintained platform refusal precedes replacement capture. Keep
+			// exercising original cohort custody without claiming a retired DATA.
+			if !errors.Is(vacuumErr, ErrVacuumUnsupported) || f.db.idx.Load() != old || f.db.state.Load() != beforeVacuum {
+				return fmt.Errorf("cohort unsupported vacuum changed DATA or returned %v", vacuumErr)
+			}
+			cost["vacuum-unsupported"] = 1
+		} else {
+			if vacuumErr != nil {
+				return vacuumErr
+			}
+			if f.db.idx.Load() == old {
+				return fmt.Errorf("cohort vacuum did not replace actual DATA generation")
+			}
 		}
 		record := func(file *os.File, unit string) error {
 			info, err := file.Stat()
@@ -567,12 +564,12 @@ func (f *primaryBorrowedCohortFixture) retention(tb testing.TB) map[string]int64
 			}
 			return err
 		}
-		if err := old.pager.WithStableResourceFile(func(file *os.File) error { return record(file, "held-old-data-bytes") }); err != nil {
-			return err
+		if runtime.GOOS != "windows" {
+			if err := old.pager.WithStableResourceFile(func(file *os.File) error { return record(file, "held-old-data-bytes") }); err != nil {
+				return err
+			}
 		}
-		if err := oldArena.Pager().WithStableResourceFile(func(file *os.File) error { return record(file, "held-old-primary-bytes") }); err != nil {
-			return err
-		}
+
 		cost["held-governor-bytes"] = int64(f.budget.Stats().ExternalBytes)
 		if value, err := loan.snapshot.Get(f.keys[0]); err != nil || !bytes.Equal(value, f.value) {
 			return fmt.Errorf("held old cohort read: %w", err)
@@ -583,9 +580,7 @@ func (f *primaryBorrowedCohortFixture) retention(tb testing.TB) map[string]int64
 		if err := loan.snapshot.Close(); err != nil {
 			return err
 		}
-		if oldArena.MetadataOwner().PhysicalClosed() {
-			return fmt.Errorf("Close stole active cohort reader mapping")
-		}
+
 		gc, err := f.db.ValueLogGC(context.Background(), ValueLogGCOptions{})
 		if err != nil {
 			return err
@@ -601,7 +596,7 @@ func (f *primaryBorrowedCohortFixture) retention(tb testing.TB) map[string]int64
 		cost["last-reader-cleanup-ns"] = time.Since(start).Nanoseconds()
 		// The descriptor scope is still a real governor/physical callback edge.
 		cost["scope-after-reader-governor-bytes"] = int64(f.budget.Stats().ExternalBytes)
-		if loan.snapshot.primaryOwner != nil || loan.snapshot.treePager != nil {
+		if loan.snapshot.treePager != nil {
 			return fmt.Errorf("original reader cleanup did not complete")
 		}
 		gc, err = f.db.ValueLogGC(context.Background(), ValueLogGCOptions{})
@@ -619,10 +614,11 @@ func (f *primaryBorrowedCohortFixture) retention(tb testing.TB) map[string]int64
 	if err != nil {
 		tb.Fatal(err)
 	}
+	loan.enrollment.Close()
 	loan.wrapper.Close()
-	// Scope completion releases private descriptor aliases. The retired arena
-	// remains governed through its existing generation ghost lifetime; no age
-	// is forced and this residual is measured rather than treated as a leak.
+	// Scope completion releases private descriptor aliases. After a successful
+	// replacement, the retired arena remains governed through its existing
+	// generation ghost lifetime; no age is forced and residuals are measured.
 	cost["scope-complete-governor-bytes"] = int64(f.budget.Stats().ExternalBytes)
 	gc, err := f.db.ValueLogGC(context.Background(), ValueLogGCOptions{})
 	if err != nil {
@@ -644,6 +640,7 @@ func (f *primaryBorrowedCohortFixture) retention(tb testing.TB) map[string]int64
 		tb.Fatal(err)
 	}
 	loan.resources.Release()
+	loan.enrollment.Close()
 	loan.wrapper.Close()
 	// Actual DB teardown drains the existing ghost manager and closes original
 	// physical owners. This terminal action, not public Snapshot.Close return,
@@ -652,8 +649,8 @@ func (f *primaryBorrowedCohortFixture) retention(tb testing.TB) map[string]int64
 		tb.Fatal(err)
 	}
 	cost["closed-governor-bytes"] = int64(f.budget.Stats().ExternalBytes)
-	if !oldArena.MetadataOwner().PhysicalClosed() || oldArena.MetadataOwner().Bytes() != 0 || cost["closed-governor-bytes"] != 0 || f.budget.Stats().ExternalLeases != 0 {
-		tb.Fatalf("actual cohort teardown retained original custody: closed=%v metadata=%d cost=%v", oldArena.MetadataOwner().PhysicalClosed(), oldArena.MetadataOwner().Bytes(), cost)
+	if cost["closed-governor-bytes"] != 0 || f.budget.Stats().ExternalLeases != 0 {
+		tb.Fatalf("actual cohort teardown retained original custody: cost=%v", cost)
 	}
 	if err := f.db.Close(); err != nil || f.budget.Stats().ExternalBytes != 0 {
 		tb.Fatalf("repeated actual cleanup changed terminal outcome: %v", err)
@@ -666,7 +663,7 @@ func (f *primaryBorrowedCohortFixture) retention(tb testing.TB) map[string]int64
 // An unlinked pinned inode is valid physical custody; a surviving name must
 // still identify that same original file. CRC-verified payload reads, rather
 // than Stat alone, prove the retained handle remains usable.
-func (f *primaryBorrowedCohortFixture) verifyOriginalCohortToken(token *rootpublication.StableResourceToken, original os.FileInfo) error {
+func (f *dataBorrowedCohortFixture) verifyOriginalCohortToken(token *rootpublication.StableResourceToken, original os.FileInfo) error {
 	fileID, err := strconv.ParseUint(token.ResourceID(), 10, 32)
 	if err != nil {
 		return err
@@ -695,50 +692,40 @@ func (f *primaryBorrowedCohortFixture) verifyOriginalCohortToken(token *rootpubl
 	})
 }
 
-func TestPrimaryBorrowedValueLogCohortUsesSelectedBridgeAndOriginalCleanup(t *testing.T) {
+func TestDATABorrowedValueLogCohortUsesOriginalCleanup(t *testing.T) {
 	for _, files := range []int{2, 8, 16} {
 		t.Run(fmt.Sprintf("files=%d", files), func(t *testing.T) {
-			f := newPrimaryBorrowedCohort(t, files)
-			if runtime.GOOS == "windows" {
-				loan := f.capture(t)
-				defer loan.wrapper.Close()
-				defer loan.resources.Release()
-				defer loan.snapshot.Close()
-				if !primaryOnlinePlatformRefusal(t, f.db, context.Background()) {
-					t.Fatal("missing platform refusal")
-				}
-				if value, e := loan.snapshot.Get(f.keys[0]); e != nil || !bytes.Equal(value, f.value) {
-					t.Fatalf("platform refusal lost borrowed cohort: %v", e)
-				}
-				if e := loan.snapshot.Close(); e != nil {
-					t.Fatal(e)
-				}
-				loan.resources.Release()
-				loan.wrapper.Close()
-				if e := f.db.Close(); e != nil {
-					t.Fatal(e)
-				}
-				if f.budget.Stats().ExternalBytes != 0 || f.budget.Stats().ExternalLeases != 0 {
-					t.Fatal("platform refusal retained cohort custody")
-				}
-				return
-			}
+			f := newDATABorrowedCohort(t, files)
 
 			cost := f.retention(t)
-			if cost["held-cohort-files"] != int64(files) || cost["held-cohort-bytes"] == 0 || cost["held-old-data-bytes"] == 0 || cost["held-old-primary-bytes"] == 0 {
+			if cost["held-cohort-files"] != int64(files) || cost["held-cohort-bytes"] == 0 {
 				t.Fatal("cohort did not observe original physical owners", cost)
+			}
+			if runtime.GOOS == "windows" {
+				if cost["vacuum-unsupported"] != 1 || cost["held-old-data-bytes"] != 0 {
+					t.Fatal("unsupported vacuum reported retired DATA custody", cost)
+				}
+			} else if cost["held-old-data-bytes"] == 0 {
+				t.Fatal("cohort did not observe original retired DATA owner", cost)
 			}
 			t.Logf("actual retained/residual cohort: %v", cost)
 		})
 	}
 }
 
-func TestPrimaryBorrowedCohortRebuildFailureReleasesPrivateManifests(t *testing.T) {
-	f := newPrimaryBorrowedCohort(t, 2)
+func TestDATABorrowedCohortRebuildFailureReleasesPrivateManifests(t *testing.T) {
+	f := newDATABorrowedCohort(t, 2)
 	loan := f.capture(t)
-	oldArena := loan.snapshot.idx.primary
 	want := errors.New("reject rebuilt runtime before cutover")
-	f.db.vacuumReplacementRuntimeHook = func(*rootPublicationRuntimeV1) error { return want }
+	wantRefusal := want
+	if runtime.GOOS == "windows" {
+		wantRefusal = ErrVacuumUnsupported
+	}
+	hookCalled := false
+	f.db.vacuumReplacementRuntimeHook = func(*rootPublicationRuntimeV1) error {
+		hookCalled = true
+		return want
+	}
 	err := loan.resources.WithScopedTokens(func(tokens []*rootpublication.StableResourceToken) error {
 		loan.resources.Release()
 		originalFiles := make(map[*rootpublication.StableResourceToken]os.FileInfo, len(tokens))
@@ -751,10 +738,16 @@ func TestPrimaryBorrowedCohortRebuildFailureReleasesPrivateManifests(t *testing.
 				return err
 			}
 		}
-		if !primaryOnlinePlatformRefusal(t, f.db, context.Background()) {
-			if err := f.db.VacuumIndexOnline(context.Background()); !errors.Is(err, want) {
-				return fmt.Errorf("rebuild refusal=%v want %v", err, want)
-			}
+
+		beforeVacuum, originalGen := f.db.state.Load(), f.db.idx.Load()
+		if err := f.db.VacuumIndexOnline(context.Background()); !errors.Is(err, wantRefusal) {
+			return fmt.Errorf("rebuild refusal=%v want %v", err, wantRefusal)
+		}
+		if hookCalled != (runtime.GOOS != "windows") {
+			return fmt.Errorf("replacement runtime hook called=%t on %s", hookCalled, runtime.GOOS)
+		}
+		if runtime.GOOS == "windows" && (f.db.state.Load() != beforeVacuum || f.db.idx.Load() != originalGen) {
+			return errors.New("unsupported vacuum changed original DATA publication")
 		}
 
 		if value, err := loan.snapshot.Get(f.keys[0]); err != nil || !bytes.Equal(value, f.value) {
@@ -769,9 +762,7 @@ func TestPrimaryBorrowedCohortRebuildFailureReleasesPrivateManifests(t *testing.
 		if err := f.db.Close(); err != nil {
 			return err
 		}
-		if oldArena.MetadataOwner().PhysicalClosed() {
-			return errors.New("failed rebuild teardown stole active original reader")
-		}
+
 		for _, token := range tokens {
 			if err := token.WithPinnedFile(func(file *os.File) error { _, err := file.Stat(); return err }); err != nil {
 				return err
@@ -795,15 +786,17 @@ func TestPrimaryBorrowedCohortRebuildFailureReleasesPrivateManifests(t *testing.
 				t.Logf("original cleanup cause[%d]=%T %v", i, cause, cause)
 			}
 		}
-		t.Fatalf("refused rebuild cleanup: ownership=%t stale=%t closed=%t: %v", errors.Is(err, rootpublication.ErrResourceOwnership), errors.Is(err, primaryarena.ErrStale), errors.Is(err, os.ErrClosed), err)
+		t.Fatalf("refused rebuild cleanup: ownership=%t closed=%t: %v", errors.Is(err, rootpublication.ErrResourceOwnership), errors.Is(err, os.ErrClosed), err)
 	}
+	loan.enrollment.Close()
 	loan.wrapper.Close()
-	if !oldArena.MetadataOwner().PhysicalClosed() || oldArena.MetadataOwner().Bytes() != 0 || f.budget.Stats().ExternalBytes != 0 || f.budget.Stats().ExternalLeases != 0 {
-		t.Fatalf("refused rebuild retained completed private manifests: metadata=%d stats=%+v", oldArena.MetadataOwner().Bytes(), f.budget.Stats())
+	if f.budget.Stats().ExternalBytes != 0 || f.budget.Stats().ExternalLeases != 0 {
+		t.Fatalf("refused rebuild retained completed private manifests: stats=%+v", f.budget.Stats())
 	}
 	if err := loan.snapshot.Close(); err != nil {
 		t.Fatal(err)
 	}
 	loan.resources.Release()
+	loan.enrollment.Close()
 	loan.wrapper.Close()
 }

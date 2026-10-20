@@ -1,9 +1,7 @@
 package db
 
 import (
-	"bytes"
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"github.com/snissn/gomap/TreeDB/internal/mvccadmission"
@@ -47,6 +45,7 @@ func (mutation conditionalCommitMutation) record(db *DB, commitSeq uint64) {
 }
 
 type finalizeCommitOptions struct {
+	checkpointRootPublicationIntent bool // captured cached checkpoint emission; not a sync/ACK override
 	// privateCOWEquivalentRewriteOwner is borrowed only by the maintained online
 	// pointer rewrite. It authorizes an ordinary physical candidate, never a
 	// canonical append, accepted cut, logical install, or frontier advancement.
@@ -274,45 +273,6 @@ func commandWALCheckpointFallbackNeedsRefresh(appliedLSN uint64, selected, fallb
 // operands under durablePublishMu. V6 gives each complete directory a distinct
 // fixed-slot address; only that address and its checksum are physical labels.
 // Every other directory byte, the arena identity and system authority must match.
-func (db *DB) commandWALCheckpointRootsEqualLocked(selected, fallback rootpublication.DurableRootRecordV1) bool {
-	if selected.SystemRootPageID != fallback.SystemRootPageID {
-		return false
-	}
-	primary := db.durableRoot.primary
-	if primary == nil || db.idx.Load() == nil || db.idx.Load().primary == nil || !db.idx.Load().primary.CapsuleFormatV6() {
-		return selected.UserRootPageID == fallback.UserRootPageID
-	}
-	slot := db.durableRoot.slot
-	if slot > 1 {
-		return false
-	}
-	current, previous := primary.capsuleViews[slot], primary.capsuleViews[slot^1]
-	if current.Slot() != slot || previous.Slot() != slot^1 || current.Current().Record != selected || previous.Current().Record != fallback || len(current.Image()) != rootpublication.PrimaryCapsuleSizeV6 || len(previous.Image()) != rootpublication.PrimaryCapsuleSizeV6 || len(primary.capsuleImages[slot]) != rootpublication.PrimaryCapsuleSizeV6 || len(primary.capsuleImages[slot^1]) != rootpublication.PrimaryCapsuleSizeV6 {
-		return false
-	}
-	if !bytes.Equal(primary.capsuleImages[slot], current.Image()) || !bytes.Equal(primary.capsuleImages[slot^1], previous.Image()) {
-		return false
-	}
-	cp, fp := current.Current().Primary, previous.Current().Primary
-	if cp.ArenaUUID != db.idx.Load().primary.UUID() || cp.ArenaUUID != fp.ArenaUUID || cp.SystemDigest == ([32]byte{}) || cp.SystemDigest != fp.SystemDigest {
-		return false
-	}
-	a, b := current.Directory(), previous.Directory()
-	if len(a) != page.PageSize || len(b) != page.PageSize || page.DecodeHeader(a).PageID != selected.UserRootPageID || page.DecodeHeader(b).PageID != fallback.UserRootPageID || !page.VerifyChecksumNonMutating(a) || !page.VerifyChecksumNonMutating(b) || sha256.Sum256(a) != cp.DirectoryDigest || sha256.Sum256(b) != fp.DirectoryDigest {
-		return false
-	}
-	// [0,8) is PageID; [8,12) is checksum. Retain flags/count [12,16)
-	// and the entire canonical directory, including all reserved/padding bytes.
-	return bytes.Equal(a[12:], b[12:])
-}
-
-func (db *DB) commandWALCheckpointFallbackNeedsRefreshLocked(appliedLSN uint64, selected, fallback rootpublication.DurableRootRecordV1) bool {
-	idx := db.idx.Load()
-	if idx == nil || idx.primary == nil || !idx.primary.CapsuleFormatV6() {
-		return commandWALCheckpointFallbackNeedsRefresh(appliedLSN, selected, fallback)
-	}
-	return appliedLSN != 0 && selected.AppliedCommandLSN == appliedLSN && (fallback.AppliedCommandLSN != selected.AppliedCommandLSN || !db.commandWALCheckpointRootsEqualLocked(selected, fallback))
-}
 
 // RefreshCommandWALCheckpointFallback republishes the current durable root when
 // the recovery fallback slot names older command coverage or different roots.
@@ -1006,4 +966,11 @@ func closeCommandWALCleanupDecisions(decisions []commandWALSegmentCleanupDecisio
 			decisions[i].file = nil
 		}
 	}
+}
+
+func (db *DB) commandWALCheckpointRootsEqualLocked(selected, fallback rootpublication.DurableRootRecordV1) bool {
+	return selected.UserRootPageID == fallback.UserRootPageID && selected.SystemRootPageID == fallback.SystemRootPageID
+}
+func (db *DB) commandWALCheckpointFallbackNeedsRefreshLocked(appliedLSN uint64, selected, fallback rootpublication.DurableRootRecordV1) bool {
+	return commandWALCheckpointFallbackNeedsRefresh(appliedLSN, selected, fallback)
 }

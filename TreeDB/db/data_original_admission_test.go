@@ -41,7 +41,7 @@ func testDATAActualPublicationUsesOriginalEnrolledOwner(t *testing.T, directory 
 	}()
 	idx, runtime := d.idx.Load(), d.rootPublication
 	owner := d.StableResourceIdentityPinRegistry().MetadataOwner()
-	if idx == nil || idx.primary != nil || runtime == nil || runtime.metadata != owner || d.StableResourceMetadataOwner() != owner {
+	if idx == nil || runtime == nil || runtime.metadata != owner || d.StableResourceMetadataOwner() != owner {
 		t.Fatal("not actual DATA route with original registry owner")
 	}
 	budget, err := memtable.NewCOWBudget(memtable.DefaultCOWLimits())
@@ -108,7 +108,7 @@ func testDATAActualPublicationUsesOriginalEnrolledOwner(t *testing.T, directory 
 		t.Fatal("held original builder did not preserve three accepted DATA members")
 	}
 	for _, member := range runtime.visibleMembers[runtime.visibleHead:] {
-		if member.primary != nil || member.transaction == nil || member.transaction.Owner() != rootpublication.ResourceOwnerCoordinator || member.install.metadata != owner {
+		if member.transaction == nil || member.transaction.Owner() != rootpublication.ResourceOwnerCoordinator || member.install.metadata != owner {
 			runtime.mu.Unlock()
 			t.Fatal("accepted DATA member/terminal lost same owner")
 		}

@@ -19,7 +19,7 @@ func TestOriginalRegistrySnapshotGrowthRefusalRollsBackCapture(t *testing.T) {
 	}()
 	idx := d.idx.Load()
 	metadata := idx.metadata
-	budget := &primaryScratchBudget{capacity: math.MaxUint64}
+	budget := &retainedScratchBudget{capacity: math.MaxUint64}
 	enrollment, err := metadata.Enroll(budget)
 	if err != nil {
 		t.Fatal(err)

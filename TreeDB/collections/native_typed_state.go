@@ -200,7 +200,7 @@ func nativeTypedMeta(meta CollectionMeta) bool {
 }
 
 func nativeTypedProfile(database *backenddb.DB, meta CollectionMeta) error {
-	if meta.Options.ColumnStore != nil && (database == nil || database.ResolvedProfile() != backenddb.ProfileCommandWALDurable) {
+	if (meta.Options.ColumnStore != nil || meta.nativeDocumentCoverageVersion != 0) && (database == nil || database.ResolvedProfile() != backenddb.ProfileCommandWALDurable) {
 		return backenddb.ErrNativeSemanticUnsupported
 	}
 	return nil

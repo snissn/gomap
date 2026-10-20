@@ -12,6 +12,27 @@ import (
 	"github.com/snissn/gomap/TreeDB/pager"
 )
 
+// OpenRecoveryCleanupError owns the original recovery payload and namespace
+// LOCK after an actual cleanup refusal. Callers must preserve this fatal receipt
+// until process shutdown; wrapping it preserves ownership. Close observes the
+// immutable first failure and never retries cleanup or refunds retained debt.
+// There is no finalizer, background retry, or separate physical authority.
+type OpenRecoveryCleanupError struct {
+	cause      error
+	generation *indexGen
+}
+
+func (e *OpenRecoveryCleanupError) Error() string {
+	return "treedb: fatal Open physical cleanup: " + e.cause.Error()
+}
+func (e *OpenRecoveryCleanupError) Unwrap() error { return e.cause }
+func (e *OpenRecoveryCleanupError) Close() error  { return e.cause }
+func recoveryCleanupOwnsLockV6(err error, lock *lockfile.Lock) bool {
+	var receipt *OpenRecoveryCleanupError
+	return errors.As(err, &receipt) &&
+		receipt.generation != nil && receipt.generation.startupLock == lock
+}
+
 // The existing generation is born before Pager/Manager creation. Its original
 // registry guard survives registry.Close until actual startup completion. The
 // fatal error is the external ownership edge after Open returns nil,error.

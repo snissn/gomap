@@ -69,7 +69,7 @@ func (c *Collection) ActiveVectorPartitionManifestForLiveRecoveryWithContextV1(c
 }
 
 func (c *Collection) activeVectorPartitionManifestForLiveRecoveryV1(ctx context.Context, index string) (VectorPartitionManifestV1, error) {
-	if c == nil || c.db == nil {
+	if c == nil || c.vectorPartitionStorageDBV1() == nil {
 		return VectorPartitionManifestV1{}, errors.New("collections: closed collection")
 	}
 	if ctx == nil {
@@ -79,7 +79,7 @@ func (c *Collection) activeVectorPartitionManifestForLiveRecoveryV1(ctx context.
 		return VectorPartitionManifestV1{}, err
 	}
 	var manifest VectorPartitionManifestV1
-	err := WithVectorPartitionStorageBarrierV1(c.db.Dir(), func() error {
+	err := WithVectorPartitionStorageBarrierV1(c.vectorPartitionStorageDBV1().Dir(), func() error {
 		unlock := c.lockMutation()
 		defer unlock.Unlock()
 		var err error
@@ -94,7 +94,7 @@ func (c *Collection) activeVectorPartitionManifestForLiveRecoveryV1(ctx context.
 // acquiring storage here would invert the public storage -> mutation order.
 func (c *Collection) activeVectorPartitionManifestMutationLockedV1(ctx context.Context, index string) (VectorPartitionManifestV1, error) {
 	var manifest VectorPartitionManifestV1
-	store, err := OpenExistingVectorPartitionStoreV1(c.db.Dir())
+	store, err := OpenExistingVectorPartitionStoreV1(c.vectorPartitionStorageDBV1().Dir())
 	if err != nil {
 		return manifest, err
 	}
@@ -119,7 +119,7 @@ func (c *Collection) activeVectorPartitionManifestMutationLockedV1(ctx context.C
 // readiness seam: the returned bytes are exact-generation local evidence only,
 // never cluster activation authority.
 func (c *Collection) PreparedVectorPartitionManifestWithContextV1(ctx context.Context, index string, generation uint64) (VectorPartitionManifestV1, error) {
-	if c == nil || c.db == nil {
+	if c == nil || c.vectorPartitionStorageDBV1() == nil {
 		return VectorPartitionManifestV1{}, errors.New("collections: closed collection")
 	}
 	if ctx == nil {
@@ -129,7 +129,7 @@ func (c *Collection) PreparedVectorPartitionManifestWithContextV1(ctx context.Co
 		return VectorPartitionManifestV1{}, err
 	}
 	var manifest VectorPartitionManifestV1
-	err := WithVectorPartitionStorageBarrierV1(c.db.Dir(), func() error {
+	err := WithVectorPartitionStorageBarrierV1(c.vectorPartitionStorageDBV1().Dir(), func() error {
 		var innerErr error
 		manifest, innerErr = c.PreparedVectorPartitionManifestUnderStorageBarrierWithContextV1(ctx, index, generation)
 		return innerErr
@@ -151,7 +151,7 @@ func (c *Collection) PreparedVectorPartitionManifestUnderStorageBarrierWithConte
 // Only replicated live opens may replace current immutable-source equality with
 // exact durable carrier coverage. Ordinary/M7 prepared reads remain strict.
 func (c *Collection) preparedVectorPartitionManifestUnderStorageBarrierV1(ctx context.Context, index string, generation uint64, allowReplicatedLive bool) (VectorPartitionManifestV1, error) {
-	if c == nil || c.db == nil {
+	if c == nil || c.vectorPartitionStorageDBV1() == nil {
 		return VectorPartitionManifestV1{}, errors.New("collections: closed collection")
 	}
 	if ctx == nil {
@@ -167,7 +167,7 @@ func (c *Collection) preparedVectorPartitionManifestUnderStorageBarrierV1(ctx co
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		store, err := OpenExistingVectorPartitionStoreV1(c.db.Dir())
+		store, err := OpenExistingVectorPartitionStoreV1(c.vectorPartitionStorageDBV1().Dir())
 		if err != nil {
 			return err
 		}
@@ -183,7 +183,17 @@ func (c *Collection) preparedVectorPartitionManifestUnderStorageBarrierV1(ctx co
 		if err != nil {
 			return err
 		}
-		snap := c.db.AcquireSnapshot()
+		if c.nativeJSON != nil {
+			source, err := c.nativeVectorPartitionSourceIdentityV1(index)
+			if err != nil {
+				return err
+			}
+			if source != vectorPartitionLiveSourceV1(manifest) {
+				return ErrVectorIndexPartitionLiveMismatchV1
+			}
+			return ctx.Err()
+		}
+		snap := c.vectorPartitionStorageDBV1().AcquireSnapshot()
 		if snap == nil {
 			return errors.New("collections: vector partition source snapshot unavailable")
 		}

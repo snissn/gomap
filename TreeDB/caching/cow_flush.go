@@ -85,12 +85,7 @@ func (db *DB) installCOWBasis(basis *cowBackendBasis, covered *cowReadCut) (*cow
 	if err != nil {
 		return nil, err
 	}
-	if err = basis.snapshot.ActivatePrimaryMetadataProducer(); err != nil {
-		refund := c.releasePrivateCOWBasisInstall(next)
-		next = nil
-		refund.Close()
-		return nil, err
-	}
+
 	old, _, err := db.installPreparedCOWBasis(basis, covered, next)
 	if err != nil {
 		refund := c.releasePrivateCOWBasisInstall(next)
@@ -461,10 +456,7 @@ func (db *DB) flushCOWFrozenCutWithColumnCompaction(syncFlush bool, publish *che
 			h.basis, e = admitCOWBackendBasis(c.maintenance, s)
 			return e
 		}, func(snapshot *backenddb.Snapshot) error {
-			if e := h.basis.adoptSnapshot(snapshot); e != nil {
-				return e
-			}
-			return snapshot.ActivatePrimaryMetadataProducer()
+			return h.basis.adoptSnapshot(snapshot)
 		}, func() error {
 			basis := h.basis
 			h.basis = nil
@@ -524,7 +516,7 @@ func (db *DB) flushCOWFrozenCutWithColumnCompaction(syncFlush bool, publish *che
 					break
 				}
 				last := i == n-1 && !it.Valid()
-				if err = db.writeCanonicalFlushRunOpsChunk(ops, syncFlush, publish, group, last, flushCollectionBackground); err != nil {
+				if err = db.writeCanonicalFlushRunOpsChunk(ops, syncFlush, publish, group, last, flushCollectionBackground, false); err != nil {
 					break
 				}
 				ops = ops[:0]
@@ -540,7 +532,7 @@ func (db *DB) flushCOWFrozenCutWithColumnCompaction(syncFlush bool, publish *che
 	}
 
 	if n == 0 && err == nil {
-		err = db.writeCanonicalFlushRunOpsChunk(nil, syncFlush, publish, group, true, flushCollectionBackground)
+		err = db.writeCanonicalFlushRunOpsChunk(nil, syncFlush, publish, group, true, flushCollectionBackground, false)
 	}
 	err = errors.Join(err, group.Close())
 	// End local coverage accesses before completeCOWHandoff can refund this

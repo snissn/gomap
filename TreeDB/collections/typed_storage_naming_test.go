@@ -331,6 +331,12 @@ type typedStorageLegacyNameAllowlistEntry struct {
 }
 
 var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
+	// Native document-vector eligibility and its invalid-shape fixture inspect
+	// the retained public typed configuration; conditional CRUD preserves the
+	// separate typed-document callback route through that compatibility field.
+	{path: "TreeDB/collections/native_document_vector_coverage.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
+	{path: "TreeDB/collections/native_document_vector_metadata_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 2},
+	{path: "TreeDB/collections/native_json_crud.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	// Full retention, ordinary typed UPDATE and captured physical queries reuse
 	// the retained public schema/scan APIs; their fixtures preserve those names.
 	{path: "TreeDB/collections/native_column_physical_query.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
@@ -385,6 +391,10 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/native_vector_graph_rebuild_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 5, occurrences: 6},
 	{path: "TreeDB/collections/native_source_directory_v2.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
 	{path: "TreeDB/collections/native_source_import_v2.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 5},
+	// Imported-source coverage and V1 preparation consume the retained public
+	// collection configuration API.
+	{path: "TreeDB/collections/native_partition_live_coverage.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
+	{path: "TreeDB/collections/native_partition_live_source.go", classification: typedStorageLegacyCompatibility, matchingLines: 5, occurrences: 6},
 	{path: "TreeDB/native_vector_source_import_v2_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 5, occurrences: 6},
 	{path: "TreeDB/collections/native_typed_materialize.go", classification: typedStorageLegacyCompatibility, matchingLines: 27, occurrences: 29},
 	// Native typed scalar indexes consume the retained declared-column API;
@@ -785,7 +795,7 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/power_loss_certification_resources_helpers_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 9, occurrences: 11},
 	{path: "TreeDB/production_authority_matrix_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 5, occurrences: 6},
 	{path: "TreeDB/collections/text_catalog.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
-	{path: "TreeDB/collections/vector_partition_manifest.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
+	{path: "TreeDB/collections/vector_partition_manifest.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 5},
 	{path: "TreeDB/collections/vector_partition_manifest_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 4},
 	{path: "TreeDB/collections/vector_partition_router_v1.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
 	{path: "TreeDB/collections/vector_partition_router_v1_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},

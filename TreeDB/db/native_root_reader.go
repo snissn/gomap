@@ -21,7 +21,7 @@ func (s *Snapshot) NativeReaderAtRoot(rootID uint64) (SnapshotRootReader, error)
 	}
 	r := SnapshotRootReader{owner: s, ok: true}
 	if s.state != nil && rootID == s.state.RootPageID {
-		// Preserve PRIMARY page namespace and captured bounds as well as root ID.
+		// Preserve the exact captured DATA reader and bounds as well as root ID.
 		r.tree = s.tree
 	} else {
 		r.tree.Reset(s.idx.pager, &s.reader, rootID)

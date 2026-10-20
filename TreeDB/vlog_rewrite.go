@@ -30,9 +30,22 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 	if err := resolveOpenProfileOptions(&opts); err != nil {
 		return ValueLogRewriteStats{}, err
 	}
+	if err := treedbdb.ValidateDATAIndexOpen(opts.Dir, opts.IndexPrimaryDirectory); err != nil {
+		return ValueLogRewriteStats{}, err
+	}
 	layout, err := resolveOpenDirLayout(opts.Dir, opts.DisableSideStores)
 	if err != nil {
 		return ValueLogRewriteStats{}, err
+	}
+	if err := treedbdb.ValidateDATAIndexOpen(layout.mainDir, opts.IndexPrimaryDirectory); err != nil {
+		return ValueLogRewriteStats{}, err
+	}
+	if !layout.disableSideStores {
+		for _, dir := range []string{layout.dictdbDir, layout.templatedbDir} {
+			if err := treedbdb.ValidateDATAIndexOpen(dir, false); err != nil {
+				return ValueLogRewriteStats{}, err
+			}
+		}
 	}
 	opts.Dir = layout.mainDir
 	opts.DisableSideStores = layout.disableSideStores

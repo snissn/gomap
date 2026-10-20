@@ -230,6 +230,41 @@ func importNativeJSONCollection(base *nativeEngineVersion, meta CollectionMeta, 
 		if domainErr != nil {
 			return next, domainErr
 		}
+		if meta.nativeDocumentCoverageVersion == nativeDocumentVectorCoverageVersion && strings.HasPrefix(name, "vector-index/") {
+			def, ok := findVectorIndex(meta.VectorIndexes, strings.TrimPrefix(name, "vector-index/"))
+			if !ok {
+				return next, backenddb.ErrNativeSemanticUnsupported
+			}
+			// Schema serialization and counter-key scratch are temporary import
+			// backing, admitted before construction and released before return.
+			schemaCharge := uint64(len(def.Name)+len(def.Field))*16 + 4096
+			temp, e := base.allocator.AdmitNativeBytes(memtable.COWAllocationCharge(schemaCharge))
+			if e != nil {
+				return next, e
+			}
+			defer temp.Close()
+			key, e := nativeDocumentGenerationKey(id)
+			if e != nil {
+				return next, e
+			}
+			raw, e := get(key)
+			if e != nil {
+				return next, e
+			}
+			generation, e := decodeRootID(raw)
+			if e != nil {
+				return next, e
+			}
+			// Bind only the exact private imported descriptor; cold validation is still
+			// required before this tuple can grant a checked incremental successor.
+			fingerprint, e := nativeDocumentGraphSchema(def)
+			if e != nil {
+				return next, e
+			}
+			if e = domain.documentGraph.bind(id, generation, fingerprint); e != nil {
+				return next, e
+			}
+		}
 		if err = p.domainBuilder.Set(name, domain); err != nil {
 			return next, err
 		}

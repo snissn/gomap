@@ -324,6 +324,11 @@ func prepareNativeEngineBasisRefresh(base *nativeEngineVersion, before, after *b
 			domain.typed = d.typed
 			d.captured.retain()
 			domain.captured = d.captured
+			// The checked root rebase retains the same complete pending and
+			// captured graph, not a generic same-name domain replacement.
+			if err = domain.documentGraph.preserve(&d.documentGraph); err != nil {
+				return false
+			}
 			if err = p.domainBuilder.Set(name, domain); err != nil {
 				return false
 			}

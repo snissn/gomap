@@ -89,6 +89,13 @@ This is not a full free-extent search, physical shrink, or a replacement
 for vacuum when fragmentation or oversized requests require it. Recovery and
 snapshot eligibility are unchanged.
 
+Freelist retirement pruning applies the sealed reuse capability to a local
+256-bit mask and mutates each eligible state chunk once. Promotion preserves
+that chunk's free-plus-retired population and compressed-tree topology, allowing
+traversal through persistent or exclusively owned private state without a global
+promotion list. Reader, recovery and history horizons, charged mutation work,
+rollback aliases and emitted generation bytes retain their original meaning.
+
 - Candidate enqueue, durable-meta rotation, system-root publication, index
   replacement, or publication-resource debt changes invalidate the capability.
 - An invalid capability returns `ErrRecoverableRootSetStale`; destructive paths

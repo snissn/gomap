@@ -423,19 +423,7 @@ func (generation *indexGen) stablePagerNamespaceTokenCore(dir, name string, p *p
 		parent, proof := &generation.stableNamespaceParent, &generation.stableNamespaceProof
 		metadata := generation.stableNamespaceMetadata
 		parentCharge := &generation.stableNamespaceParentCharge
-		if generation.primaryOwner != nil {
-			metadata = generation.primaryOwner.arena.MetadataOwner()
-			parentCharge = &generation.stableNamespaceParentCharge
-		}
-		if name == primaryIndexFileName || name == primaryNewFileName {
-			if generation.primaryOwner == nil {
-				return rootpublication.ErrResourceOwnership
-			}
-			mutex = &generation.primaryOwner.namespaceMu
-			parent, proof = &generation.primaryOwner.namespaceParent, &generation.primaryOwner.namespaceProof
-			metadata = generation.primaryOwner.arena.MetadataOwner()
-			parentCharge = &generation.primaryOwner.namespaceParentCharge
-		}
+
 		mutex.Lock()
 		defer mutex.Unlock()
 		if mutex == &generation.stableNamespaceMu && metadata != nil {
@@ -548,13 +536,7 @@ func (generation *indexGen) borrowStablePagerNamespaceToken(dir, name string, p 
 	err = p.WithStableResourceFile(func(file *os.File) error {
 		mutex := &generation.stableNamespaceMu
 		parent, proof := &generation.stableNamespaceParent, &generation.stableNamespaceProof
-		if name == primaryIndexFileName || name == primaryNewFileName {
-			if generation.primaryOwner == nil {
-				return rootpublication.ErrResourceOwnership
-			}
-			mutex = &generation.primaryOwner.namespaceMu
-			parent, proof = &generation.primaryOwner.namespaceParent, &generation.primaryOwner.namespaceProof
-		}
+
 		mutex.Lock()
 		defer mutex.Unlock()
 		if *proof == nil {
@@ -654,12 +636,7 @@ func (snapshot *Snapshot) newStablePagerResourceToken(spec rootpublication.Stabl
 		return nil, fmt.Errorf("%w: stable index generation unavailable", rootpublication.ErrUnresolvedResource)
 	}
 	p := snapshot.idx.pager
-	if name == primaryIndexFileName || name == primaryNewFileName {
-		if snapshot.idx.primary == nil {
-			return nil, rootpublication.ErrUnresolvedResource
-		}
-		p = snapshot.idx.primary.Pager()
-	}
+
 	var ownedOperations *stablePagerOwnedOperations
 	if spec.MetadataOwner != nil {
 		if spec.OnRelease != nil || spec.FlushThrough != nil || spec.SyncThrough != nil || spec.OwnedOperations != nil {
@@ -685,7 +662,7 @@ func (snapshot *Snapshot) newStablePagerResourceToken(spec rootpublication.Stabl
 	}
 	var namespace *rootpublication.StableNamespaceToken
 	var err error
-	if spec.MetadataOwner == nil || (snapshot.idx.primary != nil && spec.MetadataOwner == snapshot.idx.primary.MetadataOwner()) {
+	if spec.MetadataOwner == nil {
 		namespace, err = snapshot.idx.stablePagerNamespaceToken(snapshot.db.dir, name, p)
 	} else {
 		namespace, err = snapshot.idx.borrowStablePagerNamespaceToken(database.dir, name, p, spec.MetadataOwner, database.StableResourceIdentityPinRegistry())
@@ -814,9 +791,7 @@ func (snapshot *Snapshot) captureOwnedStableIndexFileResource() (*rootpublicatio
 	}
 	defer snapshot.endRead()
 	metadata := snapshot.db.valueLogIdentityPins.MetadataOwner()
-	if snapshot.idx != nil && snapshot.idx.primary != nil {
-		metadata = snapshot.idx.primary.MetadataOwner()
-	}
+
 	return snapshot.NewStableIndexResourceToken(rootpublication.StableResourceSpec{
 		MetadataOwner: metadata,
 		Kind:          rootpublication.ResourceIndex,
@@ -940,18 +915,4 @@ func (lease *StableResourceCaptureLease) ValidateCommandWALStagingCaptureDBV1(db
 		return ErrClosed
 	}
 	return lease.ValidateCommandWALStagingCaptureV1(db, lease.borrowedIntent)
-}
-
-func (snapshot *Snapshot) captureStablePrimaryIndexResource() (*rootpublication.StableResourceToken, error) {
-	if snapshot == nil {
-		return nil, ErrClosed
-	}
-	if err := snapshot.beginRead(); err != nil {
-		return nil, err
-	}
-	defer snapshot.endRead()
-	if snapshot.idx == nil || snapshot.idx.primary == nil {
-		return nil, rootpublication.ErrResourceOwnership
-	}
-	return snapshot.newStablePagerResourceToken(rootpublication.StableResourceSpec{MetadataOwner: snapshot.idx.primary.MetadataOwner(), Kind: rootpublication.ResourceIndex, LogicalLane: "db/primary", ResourceID: primaryIndexFileName, Digest: sha256.Sum256([]byte("treedb/primary-bank/v1")), Reachability: rootpublication.ReachabilityIndexFile}, NewStableDBResourceToken, primaryIndexFileName)
 }

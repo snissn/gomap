@@ -247,6 +247,11 @@ func prepareNativeDomainHandoff(current *nativeDomainState, result *nativeBuiltD
 	if err != nil {
 		return domain, scratch, err
 	}
+	// The original builder and suffix proof preserve the complete logical
+	// image; only its physical representation changes at this handoff.
+	if err = domain.documentGraph.preserve(&current.documentGraph); err != nil {
+		return domain, scratch, err
+	}
 	domain.typed, err = cloneNativeTypedSuffix(current.typed, result.typedBoundary, admit)
 	if err != nil {
 		return domain, scratch, err

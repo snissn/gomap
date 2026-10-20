@@ -79,7 +79,7 @@ func TestCollectionPublicationPathsConvergeOnCoherentSnapshotPublication(t *test
 			publicationGuardPackageFuncID("openReadOnly"),
 			publicationGuardPackageFuncID("openReadOnlyNoLockWithRegistryV6"),
 			publicationGuardPackageFuncID("openWithLock"),
-			publicationGuardDBMethodID("vacuumIndexOnlineRebuildV1"),
+			publicationGuardDBMethodID("vacuumIndexOnlineRebuildWithCompletionV6"),
 		},
 		"snapshotViewRO.Store": {
 			publicationGuardDBMethodID("clearSnapshotView"),
@@ -93,7 +93,7 @@ func TestCollectionPublicationPathsConvergeOnCoherentSnapshotPublication(t *test
 			publicationGuardDBMethodID("publishCompactStorageValueLogSet"),
 			publicationGuardDBMethodID("publishLeafGenerationState"),
 			publicationGuardDBMethodID("publishValueLogSetNoRefresh"),
-			publicationGuardDBMethodID("vacuumIndexOnlineRebuildV1"),
+			publicationGuardDBMethodID("vacuumIndexOnlineRebuildWithCompletionV6"),
 			publicationGuardMethodID("rootPublicationVisibleInstallV1", "activate"),
 		},
 		"state.CompareAndSwap": {publicationGuardDBMethodID("ensureCommandWALRecoverySnapshotView")},
@@ -169,7 +169,7 @@ func TestCollectionPublicationPathsConvergeOnCoherentSnapshotPublication(t *test
 		publicationGuardDBMethodID("publishCompactStorageValueLogSet"):          false,
 		publicationGuardDBMethodID("publishLeafGenerationState"):                false,
 		publicationGuardDBMethodID("publishValueLogSetNoRefresh"):               false,
-		publicationGuardDBMethodID("vacuumIndexOnlineRebuildV1"):                false,
+		publicationGuardDBMethodID("vacuumIndexOnlineRebuildWithCompletionV6"):  false,
 		publicationGuardMethodID("rootPublicationVisibleInstallV1", "activate"): true,
 	}
 	var wantPublishCallers []string
