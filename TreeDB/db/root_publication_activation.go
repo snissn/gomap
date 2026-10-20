@@ -659,7 +659,7 @@ func (runtime *rootPublicationRuntimeV1) canPrepareSingleGeneration(builder *roo
 	if !syncWrite || db.commandWAL || opts.acceptedPrefixCut != nil || opts.preparedLimits != nil ||
 		opts.commandWALPublish || opts.commandWALSeal != nil || len(opts.commandWALSealGroup) != 0 ||
 		opts.privateCOWEquivalentRewriteOwner != nil || opts.prepareSnapshotReceipt != nil ||
-		opts.skipConditionalRootConflict || opts.syncMetaPageOnly || db.vacuumCutoverInProgress.Load() {
+		opts.syncMetaPageOnly || db.vacuumCutoverInProgress.Load() {
 		return false
 	}
 	base := db.durableRoot
