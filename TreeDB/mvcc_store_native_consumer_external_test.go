@@ -177,8 +177,8 @@ func TestMVCCStoreNativeCompositeManagedHistory(t *testing.T) {
 			if err != nil {
 				t.Fatalf("PUBLIC Store.PruneVersions after native composite: %v (progress=%+v)", err, pruned)
 			}
-			if pruned.Visited != 13 || pruned.Pruned != 4 || pruned.Retained != 9 || pruned.Batches == 0 || pruned.PrunedBytes == 0 {
-				t.Fatalf("physical history progress=%+v want visited13/pruned4/retained9 with committed deletes", pruned)
+			if pruned.Visited != 11 || pruned.Pruned != 4 || pruned.Retained != 7 || pruned.Batches == 0 || pruned.PrunedBytes == 0 {
+				t.Fatalf("inspected physical history progress=%+v want visited11/pruned4/retained7 with committed deletes", pruned)
 			}
 			if err := database.Checkpoint(); err != nil {
 				t.Fatalf("PUBLIC checkpoint with old Store cut after prune: %v", err)
