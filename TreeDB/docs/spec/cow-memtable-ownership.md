@@ -70,6 +70,16 @@ Persistent cuts may keep this small lease until final cut drain; cancelled cuts
 keep it until their outside-lock cleanup finishes. Do not charge the same caller
 allocation again in `ExtraBytes` or transfer its ownership to generation history.
 
+COW batch backing growth uses `Resize` on the batch's original external lease,
+admitting each rounded backing capacity before allocation without a separate
+lease or tracking node per growth. Discarded growth arrays stay charged until
+`Reset` drops all aliases. Transaction read dependencies can retain old batch
+copy arenas across a write's reset, so their cumulative backing charge remains
+until transaction finish clears those dependencies and closes the batch.
+Prepared cuts, producer captures and accepted native custody keep their own
+independent leases and cleanup boundaries. Shrink follows actual alias cleanup
+and remains permitted after budget Close; growth does not.
+
 External lease bytes/count appear in `ExternalBytes`/`ExternalLeases`, and its
 full lifetime contributes to `TotalBytes` and `ReservedBytes`. This deliberately
 treats persistent wrappers as in-flight until released, so they share the finite

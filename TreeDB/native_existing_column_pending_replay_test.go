@@ -192,6 +192,8 @@ func nativeColumnPendingMeta(fixture nativeColumnPendingCase) *collections.Colle
 func runNativeColumnPending(t *testing.T, dir string, crash bool, fixture nativeColumnPendingCase) {
 	t.Helper()
 	opts := indexedSliceOptions(ProfileCommandWALDurable, dir)
+	// Keep the unapplied replay basis until this fixture explicitly checkpoints.
+	opts.ValueLog.Generational.Policy = ValueLogGenerationOff
 	database, err := Open(opts)
 	if err != nil {
 		t.Fatal(err)
