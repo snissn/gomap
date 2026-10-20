@@ -3567,7 +3567,14 @@ boundary, and free/retired summaries with SHA-256. The reservation chain binds
 a 128-bit candidate identity and canonical extents for reused data pages,
 appended data pages, target metadata pages, and replaced metadata pending
 retirement. Its SHA-256 covers every ordered chain page, including page IDs and
-successor links. Every decoder validates the pager ID/type/CRC, magic/version,
+successor links. Materialization constructs these extents in a private buffer:
+allocation IDs are deduplicated only within their original data category, while
+cross-category and abandoned-range overlaps still fail validation. Only that
+private buffer may be normalized in place and transferred to its immutable
+record; general normalization retains a defensive copy. Compaction must not
+retain excess construction capacity in the immutable record. This construction
+choice does not change reservation bytes, digest, sizing, or ledger ownership.
+Every decoder validates the pager ID/type/CRC, magic/version,
 canonical zero tail, chain order and cardinality, sorted entries, acyclic page
 graph, bounds below high-water, summary counts, and semantic digest.
 

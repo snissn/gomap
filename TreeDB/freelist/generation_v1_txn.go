@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 
 	"github.com/snissn/gomap/TreeDB/page"
@@ -705,13 +706,6 @@ func emitStatePages(n *stateNode, _ int, generationID uint64, next *uint64, sink
 	return sink.write(n.pageID, b)
 }
 
-func appendIDExtents(extents []ReservationExtentV1, ids []uint64, kind ReservationKindV1, seq uint64) []ReservationExtentV1 {
-	for _, id := range sortedUnique(ids) {
-		extents = append(extents, ReservationExtentV1{StartPageID: id, Count: 1, Kind: kind, LastReachableCommitSeq: seq})
-	}
-	return extents
-}
-
 func appendReservationRange(extents []ReservationExtentV1, start, count uint64, kind ReservationKindV1, seq uint64) []ReservationExtentV1 {
 	for count > 0 {
 		chunk := min(count, uint64(^uint32(0)))
@@ -736,24 +730,35 @@ func countUnmaterializedStatePages(n *stateNode, _ int) uint64 {
 }
 
 func (t *FreelistTxn) reservationExtents() ([]ReservationExtentV1, error) {
-	var reused, appended []uint64
+	entries := len(t.allocated) + len(t.abandonedAppends) + len(t.replacedMetadata)
+	if entries == 0 {
+		return nil, nil
+	}
+	// This buffer belongs only to this materialization (including a private
+	// metadata-reuse sizing attempt). Leave room for its required target extent.
+	extents := make([]ReservationExtentV1, 0, entries+1)
 	for _, allocation := range t.allocated {
+		kind := ReservationAppendedData
 		if allocation.kind == ReservationReusedData {
-			reused = append(reused, allocation.id)
-		} else {
-			appended = append(appended, allocation.id)
+			kind = ReservationReusedData
+		}
+		extents = append(extents, ReservationExtentV1{StartPageID: allocation.id, Count: 1, Kind: kind})
+	}
+	// The old per-category sortedUnique calls deduplicated allocations only.
+	// Do that before adding abandoned ranges or replaced metadata: duplicates
+	// and overlaps involving those inputs must still fail normalization.
+	slices.SortFunc(extents, compareReservationExtents)
+	unique := extents[:0]
+	for _, extent := range extents {
+		if len(unique) == 0 || unique[len(unique)-1] != extent {
+			unique = append(unique, extent)
 		}
 	}
-	var extents []ReservationExtentV1
-	extents = appendIDExtents(extents, reused, ReservationReusedData, 0)
-	extents = appendIDExtents(extents, appended, ReservationAppendedData, 0)
-	extents = append(extents, t.abandonedAppends...)
-	replaced := make([]uint64, 0, len(t.replacedMetadata))
+	extents = append(unique, t.abandonedAppends...)
 	for id := range t.replacedMetadata {
-		replaced = append(replaced, id)
+		extents = append(extents, ReservationExtentV1{StartPageID: id, Count: 1, Kind: ReservationPendingMetadataRetirement, LastReachableCommitSeq: t.base.commitSeq})
 	}
-	extents = appendIDExtents(extents, replaced, ReservationPendingMetadataRetirement, t.base.commitSeq)
-	return normalizeExtents(extents)
+	return normalizeOwnedExtents(extents)
 }
 
 func (t *FreelistTxn) MaterializeCandidate(generationID, commitSeq uint64, candidateID CandidateIDV1, sink AppendPageSink) (*FreelistCandidateV1, error) {
@@ -867,9 +872,15 @@ func (t *FreelistTxn) MaterializeCandidate(generationID, commitSeq uint64, candi
 			break
 		}
 	}
-	extents, err = normalizeExtents(extents)
+	extents, err = normalizeOwnedExtents(extents)
 	if err != nil {
 		return nil, err
+	}
+	// Compaction can leave a large construction buffer behind a small record.
+	// Transfer it directly only when fully occupied; otherwise retain just the
+	// canonical entries, as the former final normalizeExtents copy did.
+	if cap(extents) != len(extents) {
+		extents = append([]ReservationExtentV1(nil), extents...)
 	}
 	record := ReservationRecordV1{CandidateID: candidateID, GenerationID: generationID, BaseID: t.base.generationID, BaseDigest: t.base.ref.Digest, Extents: extents}
 	recordPages, record, err := encodeNormalizedReservationPages(reservationID, record)

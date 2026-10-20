@@ -167,6 +167,7 @@ func TestFreelistTxn_AppendFallbackSkipsAnotherCandidatesMetadataTail(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
+	assertLegacyReservationRecordForTest(t, second, secondCandidate)
 	for _, id := range secondCandidate.DirtyPageIDs() {
 		for _, firstID := range firstMetadata {
 			if id == firstID {
@@ -465,6 +466,7 @@ func TestFreelistTxn_PartialSinkFailureBurnsTailUntilRetryPublishesAbandonment(t
 	if err != nil {
 		t.Fatalf("retry reused a burned metadata page: %v", err)
 	}
+	assertLegacyReservationRecordForTest(t, retryTxn, retry)
 	foundAbandoned := false
 	for _, extent := range retry.ReservationRecord().Entries() {
 		if extent.Kind == ReservationAbandonedAppend && extent.StartPageID == base.HighWater() && uint64(extent.Count) == burnedCount {
