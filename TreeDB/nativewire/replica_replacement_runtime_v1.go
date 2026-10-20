@@ -12,6 +12,7 @@ import (
 	"time"
 
 	hraft "github.com/hashicorp/raft"
+	treedb "github.com/snissn/gomap/TreeDB"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/raftapply"
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
@@ -25,20 +26,34 @@ func (r *FixedPeerTCPRuntimeV1) localDataV1(group raftcluster.GroupID) *fixedPee
 	return r.data[group]
 }
 
-func (r *FixedPeerTCPRuntimeV1) openDataGroupV1(cfg raftcluster.Config, transport hraft.Transport, raftConfig *hraft.Config, bootstrap bool, admission *peerNodeAdmissionV1, receiver *replacementReceiverOwnerV1) (*fixedPeerDataV1, error) {
-	d := &fixedPeerDataV1{transport: transport, replacementReceiver: receiver}
+func (r *FixedPeerTCPRuntimeV1) openDataGroupV1(cfg raftcluster.Config, nativeCollections bool, transport hraft.Transport, raftConfig *hraft.Config, bootstrap bool, admission *peerNodeAdmissionV1, receiver *replacementReceiverOwnerV1) (*fixedPeerDataV1, error) {
+	d := &fixedPeerDataV1{transport: transport, replacementReceiver: receiver, nativeCollections: nativeCollections}
 	providerReady := make(chan struct{})
 	defer close(providerReady)
 
 	var err error
-	d.db, err = backenddb.Open(backenddb.Options{Dir: cfg.Dir, CommandWAL: true, CommandWALStatsScan: true})
+	opts := backenddb.Options{Dir: cfg.Dir, CommandWAL: true, CommandWALStatsScan: true}
+	if nativeCollections {
+		opts = treedb.OptionsFor(treedb.ProfileCommandWALDurable, cfg.Dir)
+		opts.DisableSideStores = true
+		opts.MemtableMode = "cow_btree"
+		opts.CommandWALStatsScan = true
+		d.nativeDatabase, err = treedb.Open(opts)
+		if err == nil {
+			d.db, err = d.nativeDatabase.NativeSemanticBackend()
+		}
+	} else {
+		d.db, err = backenddb.Open(opts)
+	}
 	if err != nil {
 		return d, err
 	}
-	d.fsm, err = raftfsm.Open(raftfsm.Options{DB: d.db, Cluster: cfg, StoreOptions: raftapply.DurableApplyStoreOptions{AllowInitialIndexGap: true}})
+	d.fsm, err = raftfsm.Open(raftfsm.Options{DB: d.db, NativeDatabase: d.nativeDatabase, Cluster: cfg, SnapshotRestoreDBOptions: opts, StoreOptions: raftapply.DurableApplyStoreOptions{AllowInitialIndexGap: true}})
 	if err != nil {
 		return d, err
 	}
+	// Open adopts the one public owner only on success. The backend is borrowed.
+	d.nativeDatabase = nil
 	if receiver != nil {
 		receiver.mu.Lock()
 		seed, phase := receiver.record.Seed, receiver.record.Phase
@@ -268,7 +283,7 @@ func (r *FixedPeerTCPRuntimeV1) prepareReplacementV1(ctx context.Context, comman
 	if admission != nil {
 		raftConfig.MaxAppendEntries = 1
 	}
-	d, err := r.openDataGroupV1(cfg, providerTransport, raftConfig, false, admission, receiver)
+	d, err := r.openDataGroupV1(cfg, group.NativeCollections, providerTransport, raftConfig, false, admission, receiver)
 	keepReceiver = true
 	if err != nil {
 		d.startErr = err

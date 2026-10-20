@@ -24,6 +24,7 @@ import (
 	"time"
 
 	hraft "github.com/hashicorp/raft"
+	treedb "github.com/snissn/gomap/TreeDB"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
@@ -56,10 +57,13 @@ type FixedPeerTCPNodeV1 struct {
 	Address string
 }
 type FixedPeerTCPGroupV1 struct {
-	ID            raftcluster.GroupID
-	Peers         []raftcluster.Peer
-	BootstrapNode raftcluster.NodeID
-	Features      raftcluster.FeatureSet
+	// NativeCollections selects the public COW native collection owner for this data group.
+	// Omitted false preserves the existing backend-only role and config identity.
+	NativeCollections bool `json:",omitempty"`
+	ID                raftcluster.GroupID
+	Peers             []raftcluster.Peer
+	BootstrapNode     raftcluster.NodeID
+	Features          raftcluster.FeatureSet
 }
 
 // Every process supplies the same Nodes/Catalog/Groups/timeouts and its own
@@ -122,6 +126,8 @@ type fixedPeerDataV1 struct {
 	prejoin             *replacementPrejoinTransportV1
 	transport           hraft.Transport
 	db                  *backenddb.DB
+	nativeCollections   bool
+	nativeDatabase      *treedb.DB // Owned here only until successful FSM.Open.
 	fsm                 *raftfsm.FSM
 	provider            *raftcluster.HashicorpRaftProvider
 }
@@ -253,6 +259,9 @@ func validateFixedPeerConfigV1(c FixedPeerTCPConfigV1) (FixedPeerTCPConfigV1, st
 			return invalid("duplicate group or invalid member count")
 		}
 		groupIDs[g.ID] = true
+		if g.NativeCollections && (i == 0 || c.Vector != nil || c.VectorInitialization != nil) {
+			return invalid("native collections require a non-vector data group")
+		}
 		bootstrap := false
 		for _, p := range g.Peers {
 			if !nodes[p.ID] || !addressOK(p.Address) {
@@ -575,7 +584,7 @@ func openFixedPeerTCPRuntimeV1(config FixedPeerTCPConfigV1, listeners map[string
 			}
 			continue
 		}
-		d, e := r.openDataGroupV1(cfg, providerTransport, raftConfig, bootstrap, admission, nil)
+		d, e := r.openDataGroupV1(cfg, g.NativeCollections, providerTransport, raftConfig, bootstrap, admission, nil)
 		r.data[g.ID] = d
 		if e != nil {
 			return fail(e)
@@ -753,7 +762,9 @@ func (r *FixedPeerTCPRuntimeV1) Close() error {
 			if d.fsm != nil {
 				errs = append(errs, d.fsm.Close())
 			}
-			if d.db != nil {
+			if d.nativeDatabase != nil {
+				errs = append(errs, d.nativeDatabase.Close())
+			} else if !d.nativeCollections && d.db != nil {
 				errs = append(errs, d.db.Close())
 			}
 		}
@@ -770,6 +781,9 @@ func (r *FixedPeerTCPRuntimeV1) Close() error {
 	for _, d := range r.data {
 		if d.fsm != nil {
 			cleanup = append(cleanup, d.fsm.Close())
+		}
+		if d.nativeDatabase != nil {
+			cleanup = append(cleanup, d.nativeDatabase.Close())
 		}
 		cleanup = append(cleanup, d.replacementCleanupErrorV1())
 	}
