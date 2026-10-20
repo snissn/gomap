@@ -160,7 +160,10 @@ func buildNativeCRUDFinalPlan(name string, opts collectionOptions, runtimes []in
 	slices.SortFunc(plan.indexStateEntries, func(a, b directBufferedRootEntry) int { return bytes.Compare(a.key, b.key) })
 	for i := range plan.secondaryRootPlans {
 		rows := plan.secondaryRootPlans[i].entries
-		slices.SortFunc(rows, func(a, b directBufferedSecondaryRootEntry) int { return bytes.Compare(a.key, b.key) })
+		// The maintained builder emits deletes before sets. Overlapping old/new
+		// multikey memberships therefore have equal keys whose final set must
+		// remain last when the native writer applies the sorted mutations.
+		slices.SortStableFunc(rows, func(a, b directBufferedSecondaryRootEntry) int { return bytes.Compare(a.key, b.key) })
 	}
 	return plan, nil
 }
