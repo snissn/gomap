@@ -24,6 +24,15 @@ The value log is persistent storage, including when the command WAL is disabled.
 | `command_wal_durable` ordinary writes | Durable command frame plus dependency closure precede acknowledgement, with normal executor apply for visibility. | Recovery replays the durable command prefix; later checkpoint may reclaim only root-covered command ranges. |
 | `bench_unsafe` | Explicit benchmark-only ceiling; may skip read CRC and use writable-current-segment mmap. | Not a production authoritative-data profile. Its benchmark numbers are not production-fast measurements. |
 
+Direct cached batch bypass follows the same explicit boundary. It serializes
+backend `Write` and conditional bookkeeping, releases cache flush/write leases,
+then invokes the existing WAL-free checkpoint before returning from `WriteSync`.
+This includes earlier queued writes and registered collection drains. It must not
+invoke backend `WriteSync` under those leases because a registered publisher may
+need to re-enter the cache. Ordinary `Write` retains its relaxed acknowledgement.
+The retained backend-stream caller shares this boundary; automatic streaming
+selectors currently disable both backend-stream and deferred-value-log bypass.
+
 Source paths:
 
 - [Public methods and checkpoint](../../public.go): `SetSync`, `DeleteSync`,

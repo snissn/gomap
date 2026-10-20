@@ -1039,7 +1039,7 @@ func TestCachingDB_FlushAllCombinesMemtables(t *testing.T) {
 	}
 }
 
-func TestBatchWriteSync_WALOffSmallNonOverlappingBypassesQueuedFlush(t *testing.T) {
+func TestBatchWriteSync_WALOffSmallNonOverlappingSealsQueuedWrites(t *testing.T) {
 	dir := t.TempDir()
 	backend := NewMockBackend()
 
@@ -1093,17 +1093,17 @@ func TestBatchWriteSync_WALOffSmallNonOverlappingBypassesQueuedFlush(t *testing.
 	newPersisted := backend.data[string(newKey)]
 	backend.mu.RUnlock()
 
-	if writeCalls != 1 {
-		t.Fatalf("backend writeCalls=%d want 1", writeCalls)
+	if writeCalls != 2 {
+		t.Fatalf("backend writeCalls=%d want direct write plus queued flush", writeCalls)
 	}
-	if oldPersisted {
-		t.Fatalf("queued key should not have been flushed by unrelated bypassed sync batch")
+	if !oldPersisted {
+		t.Fatalf("explicit sync must also flush earlier queued writes")
 	}
 	if string(newPersisted) != string(newVal) {
 		t.Fatalf("backend new value=%q want %q", newPersisted, newVal)
 	}
-	if got := len(db.queue); got != queueLenBefore {
-		t.Fatalf("queue len after=%d want %d", got, queueLenBefore)
+	if got := len(db.queue); got != 0 {
+		t.Fatalf("queue len after sync=%d want 0", got)
 	}
 
 	gotOld, err := db.Get(oldKey)
@@ -1243,7 +1243,7 @@ func TestPrepareBypassValueLogOps_RewritesLargeValuesToPointers(t *testing.T) {
 	}
 }
 
-func TestBatchWriteSync_WALOffLargeNonOverlappingBypassesAsPointers(t *testing.T) {
+func TestBatchWrite_WALOffLargeNonOverlappingBypassesAsPointers(t *testing.T) {
 	dir := t.TempDir()
 	backend := NewMockBackend()
 	backend.setOpsInlineValueLimit = 1024
@@ -1252,7 +1252,7 @@ func TestBatchWriteSync_WALOffLargeNonOverlappingBypassesAsPointers(t *testing.T
 		DisableWAL:     true,
 		RelaxedSync:    true,
 		AllowUnsafe:    true,
-		FlushThreshold: 1 << 20,
+		FlushThreshold: 1,
 	})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -1284,9 +1284,9 @@ func TestBatchWriteSync_WALOffLargeNonOverlappingBypassesAsPointers(t *testing.T
 		_ = b.Close()
 		t.Fatalf("Set: %v", err)
 	}
-	if err := b.WriteSync(); err != nil {
+	if err := b.Write(); err != nil {
 		_ = b.Close()
-		t.Fatalf("WriteSync: %v", err)
+		t.Fatalf("Write: %v", err)
 	}
 	if err := b.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -1302,7 +1302,7 @@ func TestBatchWriteSync_WALOffLargeNonOverlappingBypassesAsPointers(t *testing.T
 		t.Fatalf("backend writeCalls=%d want 1", writeCalls)
 	}
 	if oldPersisted {
-		t.Fatalf("queued key should not have been flushed by large bypassed sync batch")
+		t.Fatalf("ordinary bypass must not flush an unrelated queued key")
 	}
 	if len(lastOps) != 1 {
 		t.Fatalf("lastOps len=%d want 1", len(lastOps))
