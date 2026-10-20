@@ -1700,7 +1700,10 @@ func (runtime *rootPublicationRuntimeV1) materializeSeal(seal *rootPublicationSe
 		}
 	}
 	recordPageID := auxiliary[len(auxiliary)-1]
-	recordImage, recordDigest, err := seal.record.EncodePage(recordPageID)
+	// Pager.Write copies synchronously; this publication does not retain an
+	// encoded image after the write returns.
+	var recordImage [page.PageSize]byte
+	recordDigest, err := seal.record.EncodePageInto(recordPageID, recordImage[:])
 	if err != nil {
 		return err
 	}
@@ -1712,7 +1715,7 @@ func (runtime *rootPublicationRuntimeV1) materializeSeal(seal *rootPublicationSe
 	if err := durabilitycut.EmitRange(durabilitycut.BeforePublicationSealWrite, durabilitycut.ResourceSeal, runtime.db.dir, indexPath, recordOffset, int64(page.PageSize)); err != nil {
 		return err
 	}
-	if err := seal.idx.pager.Write(recordPageID, recordImage); err != nil {
+	if err := seal.idx.pager.Write(recordPageID, recordImage[:]); err != nil {
 		return fmt.Errorf("write root-publication record: %w", err)
 	}
 	if err := durabilitycut.EmitRange(durabilitycut.AfterPublicationSealWrite, durabilitycut.ResourceSeal, runtime.db.dir, indexPath, recordOffset, int64(page.PageSize)); err != nil {

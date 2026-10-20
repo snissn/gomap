@@ -2047,10 +2047,7 @@ func (db *DB) materializeDurableRootCandidateV1(candidate *durableRootPublishCan
 		}
 	}
 	recordPageID := auxiliary[len(auxiliary)-1]
-	// Pager.Write copies synchronously; this publication does not retain an
-	// encoded image after the write returns.
-	var recordImage [page.PageSize]byte
-	recordDigest, err := candidate.record.EncodePageInto(recordPageID, recordImage[:])
+	recordImage, recordDigest, err := candidate.record.EncodePage(recordPageID)
 	if err != nil {
 		return err
 	}
@@ -2062,7 +2059,7 @@ func (db *DB) materializeDurableRootCandidateV1(candidate *durableRootPublishCan
 	if err := durabilitycut.EmitRange(durabilitycut.BeforePublicationSealWrite, durabilitycut.ResourceSeal, db.dir, indexPath, recordOffset, int64(page.PageSize)); err != nil {
 		return err
 	}
-	if err := candidate.idx.pager.Write(recordPageID, recordImage[:]); err != nil {
+	if err := candidate.idx.pager.Write(recordPageID, recordImage); err != nil {
 		return fmt.Errorf("write durable root record: %w", err)
 	}
 	if err := durabilitycut.EmitRange(durabilitycut.AfterPublicationSealWrite, durabilitycut.ResourceSeal, db.dir, indexPath, recordOffset, int64(page.PageSize)); err != nil {
