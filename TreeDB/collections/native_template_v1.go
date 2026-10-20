@@ -118,7 +118,17 @@ func (r *NativeJSONRead) templateValue(key []byte, admit func(uint64) error) ([]
 		return nil, err
 	}
 	defer func() { r.domain = saved }()
-	entry, _, err := r.lookupEntry(key, false)
+	entry, resolved, err := r.domain.memoryEntry(key)
+	if !resolved {
+		// The shared metadata-only point reader intentionally omits inline
+		// values. Borrow this scope's admitted page scratch instead, then admit
+		// and copy the actual value below before another read can reuse it.
+		scratch, scratchErr := r.physicalScratch()
+		if scratchErr != nil {
+			return nil, scratchErr
+		}
+		entry, err = r.domain.baseEntry(key, scratch, r.readLeaf)
+	}
 	if err != nil {
 		return nil, err
 	}
