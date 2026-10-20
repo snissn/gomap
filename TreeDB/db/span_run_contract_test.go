@@ -249,7 +249,7 @@ func TestFlushSpanRunChunkSplitFixtureEntryChunksSplitTargetLeaf(t *testing.T) {
 	}
 }
 
-func TestPrimaryAbsenceFlushSpanChunksPreserveLogicalCoverage(t *testing.T) {
+func TestDATAAbsentKeysFlushSpanChunksPreserveCoverage(t *testing.T) {
 	d, err := Open(Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
@@ -266,24 +266,32 @@ func TestPrimaryAbsenceFlushSpanChunksPreserveLogicalCoverage(t *testing.T) {
 		}
 	}
 	ops := []batch.Entry{{Key: []byte("a"), Type: batch.OpPut, Value: []byte("one")}, {Key: []byte("b"), Type: batch.OpPut, Value: []byte("two")}, {Key: []byte("c"), Type: batch.OpPut, Value: []byte("three")}, {Key: []byte("d"), Type: batch.OpPut, Value: []byte("four")}, {Key: []byte("e"), Type: batch.OpPut, Value: []byte("five")}}
-	for _, only := range []bool{false, true} {
+	for _, onlyAbsent := range []bool{false, true} {
 		selected := ops
-		physical := 2
-		if only {
+		if onlyAbsent {
 			selected = []batch.Entry{ops[0], ops[2], ops[4]}
-			physical = 0
 		}
+		// DATA's one physical leaf covers insertion positions as well as
+		// existing keys. Absent keys must retain exact physical coverage.
 		req := FlushSpanRunPlanRequest{SourceMemtables: 2, SourcePointOps: len(selected), PlannedPointOps: len(selected), PointOps: selected}
-		if _, err := d.PlanFlushSpanRun(req); err == nil {
-			t.Fatal("exact physical metadata accepted logical absence")
+		meta, err := d.PlanFlushSpanRun(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(meta.TargetLeafSpans) != 1 || meta.TargetLeafSpans[0].PointOpStart != 0 || meta.TargetLeafSpans[0].PointOpEnd != len(selected) || meta.TargetLeafSpans[0].OpCount != len(selected) {
+			t.Fatalf("DATA insertion positions lost physical coverage: %+v", meta)
+		}
+		wantBytes := 0
+		for _, op := range selected {
+			wantBytes += flushSpanRunEntryByteCount(op)
 		}
 		for _, capOps := range []int{1, 2, 3} {
 			plan, err := d.PlanFlushSpanRunChunks(req, capOps)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if plan.TargetLeafSpans != physical || plan.SingleOpSpans != physical || plan.SpanOps != physical || plan.SplitSummary.TargetLeafSpans != physical {
-				t.Fatalf("false physical summary %+v", plan)
+			if plan.TargetLeafSpans != 1 || plan.SingleOpSpans != 0 || plan.SpanOps != len(selected) || plan.SpanBytes != wantBytes || plan.SplitSummary.TargetLeafSpans != 1 {
+				t.Fatalf("false DATA physical summary %+v", plan)
 			}
 			cursor, totalBytes := 0, 0
 			for _, chunk := range plan.BackendChunks {
@@ -300,18 +308,20 @@ func TestPrimaryAbsenceFlushSpanChunksPreserveLogicalCoverage(t *testing.T) {
 				totalBytes += chunk.ByteCount
 				cursor = chunk.PointOpEnd
 			}
-			wantBytes := 0
-			for _, op := range selected {
-				wantBytes += flushSpanRunEntryByteCount(op)
-			}
 			if cursor != len(selected) || totalBytes != wantBytes {
 				t.Fatal("lost logical work/bytes", plan)
 			}
-			if only && (plan.SpanBytes != 0 || plan.SplitSummary.MaxChunksPerTargetLeaf != 0) {
-				t.Fatal("absence claimed leaf bytes/splits", plan)
+			wantChunks := (len(selected) + capOps - 1) / capOps
+			wantSplit := 0
+			if wantChunks > 1 {
+				wantSplit = 1
+			}
+			if plan.SplitSummary.MaxChunksPerTargetLeaf != wantChunks || plan.SplitSummary.TargetLeavesSplitAcrossChunks != wantSplit {
+				t.Fatalf("DATA leaf split accounting: %+v", plan.SplitSummary)
 			}
 		}
 	}
+
 	for _, position := range []int{-1, 1, 5} {
 		builder := newReadOnlyFlushSpanRunChunkBuilder(ops, 2)
 		builder.AddLogicalAbsencePoint(position)

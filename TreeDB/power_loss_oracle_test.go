@@ -726,9 +726,11 @@ func TestPowerLossOracleCounterexampleNewMetaMissingClosure(t *testing.T) {
 		slashed := filepath.ToSlash(path)
 		kind := powerlossoracle.ResourceKind("")
 		switch {
-		case slashed == "index.db":
-			// DATA pages remain a dependency of the complete new generation.
-			kind = powerlossoracle.ResourceIndex
+		case slashed == filepath.ToSlash(relIndex):
+			// DATA pages are already represented once by indexChanged above.
+			// The full file diff also contains target meta bytes; adding it here
+			// would restore an omitted dependency or a torn target meta.
+			continue
 		case strings.Contains(slashed, "value_vlog/") && dependencyPaths[slashed]:
 			kind = powerlossoracle.ResourceValueLog
 		case strings.Contains(slashed, "leaf_vlog/") && dependencyPaths[slashed]:

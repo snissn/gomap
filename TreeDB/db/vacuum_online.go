@@ -501,7 +501,17 @@ func (db *DB) vacuumIndexOnlineLegacyV1(ctx context.Context, lockMaintenance boo
 	return db.vacuumIndexOnlineRebuildV1(ctx, lockMaintenance, capability, nil, nil, time.Time{}, nil)
 }
 
-func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bool, capability legacyOnlineVacuumCapabilityV1, recoverableRoots *RecoverableRootSet, seed *VacuumOnlineStats, attemptStarted time.Time, result *VacuumOnlineStats) (retErr error) {
+func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bool, capability legacyOnlineVacuumCapabilityV1, recoverableRoots *RecoverableRootSet, seed *VacuumOnlineStats, attemptStarted time.Time, result *VacuumOnlineStats) error {
+	var replacementCompletion metadataDisposalCompletionV6
+	err := db.vacuumIndexOnlineRebuildWithCompletionV6(ctx, lockMaintenance, capability, recoverableRoots, seed, attemptStarted, result, &replacementCompletion)
+	// The rebuild's local generation, Pager, allocator, selection and runtime
+	// aliases, including every deferred cleanup callback, have now ended. Only
+	// the original successful containing-completion receipt crosses this scope.
+	replacementCompletion.complete()
+	return err
+}
+
+func (db *DB) vacuumIndexOnlineRebuildWithCompletionV6(ctx context.Context, lockMaintenance bool, capability legacyOnlineVacuumCapabilityV1, recoverableRoots *RecoverableRootSet, seed *VacuumOnlineStats, attemptStarted time.Time, result *VacuumOnlineStats, replacementCompletion *metadataDisposalCompletionV6) (retErr error) {
 	if capability == nil && (recoverableRoots == nil || recoverableRoots.db != db || recoverableRoots.released.Load()) {
 		return errors.Join(ErrVacuumUnsupported, ErrVacuumRecoverableRootSetRequired)
 	}
@@ -588,11 +598,17 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 	newCreated := os.IsNotExist(newStatErr)
 	newPager, err := pager.Open(newPath, db.chunkSize)
 	if err != nil {
-		return errors.Join(err, replacementGen.close())
+		var cleanupErr error
+		replacementCompletion.owner, replacementCompletion.charge, cleanupErr = replacementGen.closeWithCompletionV6()
+		if cleanupErr != nil {
+			db.retainOriginalCleanupError(replacementGen.originalCloseFailure(cleanupErr))
+		}
+		return errors.Join(err, cleanupErr)
 	}
 	replacementGen.pager = newPager
 	if err := observeCreatedPersistentFile(db.dir, newPath, durabilitycut.ResourceIndex, newCreated); err != nil {
-		cleanupErr := replacementGen.close()
+		var cleanupErr error
+		replacementCompletion.owner, replacementCompletion.charge, cleanupErr = replacementGen.closeWithCompletionV6()
 		if cleanupErr != nil {
 			db.retainOriginalCleanupError(replacementGen.originalCloseFailure(cleanupErr))
 		}
@@ -648,7 +664,8 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 			replacementCleanupErr = errors.Join(replacementCleanupErr, err)
 			return err // The retained original failure still owns its operands.
 		}
-		err := replacementGen.close()
+		var err error
+		replacementCompletion.owner, replacementCompletion.charge, err = replacementGen.closeWithCompletionV6()
 		if err != nil && replacementCleanupErr == nil {
 			replacementCleanupErr = err
 			db.retainOriginalCleanupError(replacementGen.originalCloseFailure(err))

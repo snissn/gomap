@@ -40,5 +40,10 @@ func ValidateDATAIndexOpen(dir string, primaryRequested bool) error {
 	if readErr != nil && readErr != io.EOF && readErr != io.ErrUnexpectedEOF {
 		return readErr
 	}
+	// Only the complete marker emitted by DATA vacuum authorizes recovery or
+	// cleanup. A truncated or unknown marker cannot authorize namespace changes.
+	if n != len("ready\n") || string(magic[:n]) != "ready\n" {
+		return fmt.Errorf("%w: malformed DATA vacuum ready marker", ErrRecoveryRequired)
+	}
 	return closeErr
 }

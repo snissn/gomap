@@ -132,7 +132,7 @@ func TestBackendFactoryRolesLegacyLifecycle(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					if got := page.PageType(page.DecodeHeader(root).Flags); got != page.PageTypeLeaf && got != page.PageTypeInternal {
+					if got := node.NewNodeView(root).Type(); got != page.PageTypeLeaf && got != page.PageTypeInternal {
 						t.Fatalf("actual DATA root has invalid type: %v", got)
 					}
 				}
