@@ -2681,9 +2681,7 @@ func columnAssetVerifiedChecksumKeyForRef(rootDir string, ref ColumnAssetRef, fi
 
 type columnPhysicalAssetReadCache struct {
 	// operationLocal backing is dropped before its original operation receipt closes.
-	operationLocal bool
-	// Original synchronous native read scope observes errors from existing cache defers.
-	closeError             func(error)
+	operationLocal         bool
 	namespace              string
 	rootDir                string
 	segmentDir             string
@@ -2695,7 +2693,6 @@ type columnPhysicalAssetReadCache struct {
 	scratch                []byte
 	returnViews            bool
 	forceReadAtFallback    bool
-	serialPartDecode       bool // Native scopes admit one synchronous codec envelope.
 	lastView               bool
 	verifiedRowIndexRef    ColumnAssetRef
 	verifiedRowIndexKey    columnAssetVerifiedChecksumKey
@@ -2914,9 +2911,6 @@ func (c *columnPhysicalAssetReadCache) close() error {
 			c.fileCloses++
 		}
 		delete(c.files, fileID)
-	}
-	if closeErr != nil && c.closeError != nil {
-		c.closeError(closeErr)
 	}
 	return closeErr
 }

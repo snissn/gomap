@@ -239,7 +239,6 @@ type columnPhysicalScanSnapshotView struct {
 	AssetNamespace        string
 	ManifestCatalogBytes  int64
 	snapshot              *backenddb.Snapshot
-	nativePhysical        *nativeColumnPhysicalQuery
 }
 
 func columnPhysicalScanSnapshotViewAssetRefs(view columnPhysicalScanSnapshotView) []ColumnAssetRef {
@@ -540,7 +539,7 @@ func (c *Collection) scanColumnPhysicalRowsInSnapshotView(
 	}
 	readCache := req.ReadCache
 	if readCache == nil {
-		localReadCache, err := newColumnPhysicalAssetReadCacheForView(view, req.ReadIntegrity)
+		localReadCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(view.ColumnAssetRootDir, view.AssetNamespace, req.ReadIntegrity)
 		if err != nil {
 			return diag, err
 		}

@@ -1339,12 +1339,7 @@ func nativeTypedReadCapacity(meta CollectionMeta, snapshot *backenddb.Snapshot, 
 // inspect the maintained TCIM directory under preadmitted operation scratch.
 // The original verified asset read and manifest parser remain authoritative.
 // No parsed image, file, dictionary or cache escapes this preflight.
-type nativeTypedFamilyReadShape struct {
-	decodedBytes    uint64
-	dictionarySlots uint64
-}
-
-func nativeTypedFamilyReadCapacity(meta CollectionMeta, snapshot *backenddb.Snapshot, root uint64, rootDir string, shape *nativeTypedFamilyReadShape, admit func(uint64) error) (extra, typedJSON uint64, err error) {
+func nativeTypedFamilyReadCapacity(meta CollectionMeta, snapshot *backenddb.Snapshot, root uint64, rootDir string, admit func(uint64) error) (extra, typedJSON uint64, err error) {
 	if !nativeTypedMeta(meta) {
 		return 0, 0, backenddb.ErrNativeSemanticUnsupported
 	}
@@ -1465,24 +1460,8 @@ func nativeTypedFamilyReadCapacity(meta CollectionMeta, snapshot *backenddb.Snap
 					if e = nativeTypedCheckedAdd(&decoded, n); e != nil {
 						return 0, 0, e
 					}
-					if shape != nil {
-						if e = nativeTypedCheckedAdd(&shape.decodedBytes, n); e != nil {
-							return 0, 0, e
-						}
-					}
 					if section.Kind == typedcolumn.ColumnPartImageSectionDictionaries {
 						typedStringBytes = max(typedStringBytes, n)
-						if shape != nil {
-							// Original decoders require 12 bytes per raw entry and
-							// 4 per dense entry; outer dictionary headers need 8.
-							minimum := uint64(12)
-							if section.Encoding == typedcolumn.EncodingDictionaryDense {
-								minimum = 4
-							}
-							if e = nativeTypedCheckedAdd(&shape.dictionarySlots, n/minimum+n/8); e != nil {
-								return 0, 0, e
-							}
-						}
 					}
 				}
 				// Dictionary keys/codes/reverse maps and reconstructed values borrow

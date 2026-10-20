@@ -274,22 +274,21 @@ type ColumnPhysicalQueryResult struct {
 // synchronize Run and Close. Result groups returned by Run alias runner-owned
 // storage and are valid only until the next Run or Close.
 type ColumnPhysicalQueryRunner struct {
-	collection     *Collection
-	view           columnPhysicalScanSnapshotView
-	closeView      func()
-	req            ColumnPhysicalQueryRequest
-	exec           *columnPhysicalQueryExecutor
-	readCache      columnPhysicalAssetReadCache
-	dictCount      *columnDictionaryCodeGroupCountRunner
-	dictDistinct   *columnDictionaryCodeGroupCountDistinctRunner
-	int64Hour      *columnInt64ValueHourCountRunner
-	dictInt64      *columnDictionaryInt64GroupRunner
-	dictHour       *columnDictionaryHourCountRunner
-	typedColumn    *columnTypedColumnPhysicalQueryRunner
-	metadata       *columnAggregateMetadataRunner
-	lifecyclePin   *ColumnAssetLifecyclePinSet
-	closed         bool
-	nativePhysical *nativeColumnPhysicalQuery
+	collection   *Collection
+	view         columnPhysicalScanSnapshotView
+	closeView    func()
+	req          ColumnPhysicalQueryRequest
+	exec         *columnPhysicalQueryExecutor
+	readCache    columnPhysicalAssetReadCache
+	dictCount    *columnDictionaryCodeGroupCountRunner
+	dictDistinct *columnDictionaryCodeGroupCountDistinctRunner
+	int64Hour    *columnInt64ValueHourCountRunner
+	dictInt64    *columnDictionaryInt64GroupRunner
+	dictHour     *columnDictionaryHourCountRunner
+	typedColumn  *columnTypedColumnPhysicalQueryRunner
+	metadata     *columnAggregateMetadataRunner
+	lifecyclePin *ColumnAssetLifecyclePinSet
+	closed       bool
 }
 
 var errColumnPhysicalScanCancelled = errors.New("collections: physical column scan cancelled")
@@ -367,9 +366,6 @@ func validateColumnPhysicalTopKRequest(req ColumnPhysicalQueryRequest) error {
 // typed-column reducers; unsupported mutation-bearing shapes fail closed or use
 // the legacy typed-row visibility overlay only where explicitly routed.
 func (c *Collection) RunColumnPhysicalQuery(req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, error) {
-	if c != nil && c.nativeJSON != nil {
-		return c.runNativeColumnPhysicalQuery(req)
-	}
 	if err := validateColumnPhysicalQueryRequest(req); err != nil {
 		return ColumnPhysicalQueryResult{}, err
 	}
@@ -419,7 +415,7 @@ func (c *Collection) RunColumnPhysicalQuery(req ColumnPhysicalQueryRequest) (Col
 		if columnPhysicalQueryHasPredicates(req) {
 			return ColumnPhysicalQueryResult{}, fmt.Errorf("%w: physical predicates require insert-only manifest", ErrColumnQueryPlanUnsupported)
 		}
-		return c.runColumnPhysicalQueryWithVisibilityInView(view, req)
+		return c.runColumnPhysicalQueryWithVisibility(view.Config, req)
 	}
 	if req.AggregateMetadataName != "" {
 		return c.runColumnPhysicalQueryAggregateMetadataInSnapshotView(view, req)
@@ -432,9 +428,6 @@ func (c *Collection) RunColumnPhysicalQuery(req ColumnPhysicalQueryRequest) (Col
 // until Close and fail-closes for mutation-bearing manifests or unsupported
 // query shapes rather than silently changing semantics.
 func (c *Collection) PrepareColumnPhysicalQuery(req ColumnPhysicalQueryRequest) (*ColumnPhysicalQueryRunner, error) {
-	if c != nil && c.nativeJSON != nil {
-		return c.prepareNativeColumnPhysicalQuery(req)
-	}
 	if err := validateColumnPhysicalQueryRequest(req); err != nil {
 		return nil, err
 	}
@@ -445,12 +438,6 @@ func (c *Collection) PrepareColumnPhysicalQuery(req ColumnPhysicalQueryRequest) 
 		}
 		return nil, err
 	}
-	return c.prepareColumnPhysicalQueryInView(view, closeView, req)
-}
-
-// The view and its closing authority are supplied together. Native callers
-// retain their original capture instead of acquiring a second backend snapshot.
-func (c *Collection) prepareColumnPhysicalQueryInView(view columnPhysicalScanSnapshotView, closeView func(), req ColumnPhysicalQueryRequest) (*ColumnPhysicalQueryRunner, error) {
 	release := true
 	defer func() {
 		if release && closeView != nil {
@@ -460,7 +447,7 @@ func (c *Collection) prepareColumnPhysicalQueryInView(view columnPhysicalScanSna
 	if view.MutationParts > 0 {
 		return nil, fmt.Errorf("%w: prepared physical column query requires insert-only manifest until typed-column asset lifecycle/pinning is available", ErrColumnQueryPlanUnsupported)
 	}
-	readCache, err := newColumnPhysicalAssetReadCacheForView(view, req.ColumnAssetReadIntegrity)
+	readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(view.ColumnAssetRootDir, view.AssetNamespace, req.ColumnAssetReadIntegrity)
 	if err != nil {
 		return nil, err
 	}
@@ -565,7 +552,7 @@ func (c *Collection) prepareColumnPhysicalQueryInView(view columnPhysicalScanSna
 	if err != nil {
 		return nil, errors.Join(err, readCache.close())
 	}
-	if view.snapshot != nil && view.nativePhysical == nil {
+	if view.snapshot != nil {
 		view.snapshot.DetachForegroundRead()
 		view.snapshot = nil
 	}
@@ -607,20 +594,6 @@ func (r *ColumnPhysicalQueryRunner) Close() error {
 		r.closeView()
 		r.closeView = nil
 	}
-	if r.nativePhysical != nil {
-		scope := r.nativePhysical
-		r.nativePhysical = nil
-		r.typedColumn.close()
-		r.collection = nil
-		r.view = columnPhysicalScanSnapshotView{}
-		r.req = ColumnPhysicalQueryRequest{}
-		r.exec, r.dictCount, r.dictDistinct = nil, nil, nil
-		r.int64Hour, r.dictInt64, r.dictHour = nil, nil, nil
-		r.typedColumn, r.metadata = nil, nil
-		r.readCache = columnPhysicalAssetReadCache{}
-		r = nil
-		return errors.Join(closeErr, scope.close())
-	}
 	return closeErr
 }
 
@@ -643,13 +616,6 @@ func (r *ColumnPhysicalQueryRunner) PrepareDiagnostics() ColumnPhysicalQueryDiag
 func (r *ColumnPhysicalQueryRunner) Run() (ColumnPhysicalQueryResult, error) {
 	if r == nil || r.closed {
 		return ColumnPhysicalQueryResult{}, errors.New("collections: prepared physical column query runner is closed")
-	}
-	if r.nativePhysical != nil {
-		codec, err := r.nativePhysical.admitCodec()
-		if err != nil {
-			return ColumnPhysicalQueryResult{}, err
-		}
-		defer codec.Close()
 	}
 	endForegroundRead := noCollectionForegroundReadEnd
 	if r.collection != nil && r.collection.db != nil {
@@ -726,7 +692,7 @@ func (c *Collection) runColumnPhysicalQueryAggregateMetadataInSnapshotView(view 
 	if len(refs) == 0 {
 		return ColumnPhysicalQueryResult{}, fmt.Errorf("%w: aggregate metadata %q has no physical asset refs", ErrColumnQueryPlanUnsupported, aggregate.Name)
 	}
-	readCache, err := newColumnPhysicalAssetReadCacheForView(view, req.ColumnAssetReadIntegrity)
+	readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(view.ColumnAssetRootDir, view.AssetNamespace, req.ColumnAssetReadIntegrity)
 	if err != nil {
 		return ColumnPhysicalQueryResult{}, err
 	}
@@ -826,7 +792,7 @@ func (c *Collection) scanColumnPhysicalQueryDirectInSnapshotView(
 	refRemainder int,
 	shouldCancel func() bool,
 ) (columnPhysicalScanDiagnostics, error) {
-	readCache, err := newColumnPhysicalAssetReadCacheForView(view, exec.readIntegrity)
+	readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(view.ColumnAssetRootDir, view.AssetNamespace, exec.readIntegrity)
 	if err != nil {
 		return view.Diagnostics, err
 	}
@@ -1123,7 +1089,7 @@ func (c *Collection) runColumnPhysicalQueryInSnapshotView(view columnPhysicalSca
 	if result, ok, err := c.runColumnPhysicalQueryDirectInSnapshotView(view, req, 0, 0, nil); ok {
 		if err != nil {
 			if errors.Is(err, errColumnPhysicalQueryNeedsVisibility) {
-				return c.runColumnPhysicalQueryWithVisibilityInView(view, req)
+				return c.runColumnPhysicalQueryWithVisibility(view.Config, req)
 			}
 			return result, err
 		}
@@ -1162,7 +1128,7 @@ func (c *Collection) runColumnPhysicalQueryDictionaryCodesInSnapshotView(view co
 		(req.Kind != ColumnPhysicalQueryGroupCount && req.Kind != ColumnPhysicalQueryGroupCountDistinct && req.Kind != ColumnPhysicalQueryGroupCountAndDistinct) {
 		return ColumnPhysicalQueryResult{}, false, nil
 	}
-	readCache, err := newColumnPhysicalAssetReadCacheForView(view, req.ColumnAssetReadIntegrity)
+	readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(view.ColumnAssetRootDir, view.AssetNamespace, req.ColumnAssetReadIntegrity)
 	if err != nil {
 		return ColumnPhysicalQueryResult{}, true, err
 	}
@@ -1222,7 +1188,7 @@ func (c *Collection) runColumnPhysicalQueryInt64ValuesInSnapshotView(view column
 	if columnPhysicalQueryHasPredicates(req) {
 		return ColumnPhysicalQueryResult{}, true, fmt.Errorf("%w: hour-count physical predicates require a fused grouped-hour reducer", ErrColumnQueryPlanUnsupported)
 	}
-	readCache, err := newColumnPhysicalAssetReadCacheForView(view, req.ColumnAssetReadIntegrity)
+	readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(view.ColumnAssetRootDir, view.AssetNamespace, req.ColumnAssetReadIntegrity)
 	if err != nil {
 		return ColumnPhysicalQueryResult{}, true, err
 	}
@@ -1247,7 +1213,7 @@ func (c *Collection) runColumnPhysicalQueryDictionaryInt64InSnapshotView(view co
 		!columnDictionaryInt64GroupQueryKind(req.Kind) || req.GroupColumn == "" || req.ValueColumn == "" {
 		return ColumnPhysicalQueryResult{}, false, nil
 	}
-	readCache, err := newColumnPhysicalAssetReadCacheForView(view, req.ColumnAssetReadIntegrity)
+	readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(view.ColumnAssetRootDir, view.AssetNamespace, req.ColumnAssetReadIntegrity)
 	if err != nil {
 		return ColumnPhysicalQueryResult{}, true, err
 	}
@@ -1290,7 +1256,7 @@ func (c *Collection) runColumnPhysicalQueryDictionaryHourInSnapshotView(view col
 	if req.AggregateMetadataName != "" || view.MutationParts != 0 || req.Kind != ColumnPhysicalQueryGroupHourCount || req.GroupColumn == "" || req.ValueColumn == "" {
 		return ColumnPhysicalQueryResult{}, false, nil
 	}
-	readCache, err := newColumnPhysicalAssetReadCacheForView(view, req.ColumnAssetReadIntegrity)
+	readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(view.ColumnAssetRootDir, view.AssetNamespace, req.ColumnAssetReadIntegrity)
 	if err != nil {
 		return ColumnPhysicalQueryResult{}, true, err
 	}
@@ -1324,10 +1290,6 @@ func (c *Collection) runColumnPhysicalQueryWithVisibility(cfg ColumnStoreConfig,
 	visibilityStart := time.Now()
 	visible, err := c.scanColumnPhysicalVisibleRowsWithReadIntegrity(exec.projected, req.ColumnAssetReadIntegrity)
 	visibilityNanos := time.Since(visibilityStart).Nanoseconds()
-	return reduceColumnPhysicalVisibleRows(exec, req, visible, err, visibilityNanos)
-}
-
-func reduceColumnPhysicalVisibleRows(exec *columnPhysicalQueryExecutor, req ColumnPhysicalQueryRequest, visible columnPhysicalVisibilityResult, err error, visibilityNanos int64) (ColumnPhysicalQueryResult, error) {
 	result := ColumnPhysicalQueryResult{
 		Diagnostics: columnPhysicalQueryDiagnosticsFromScan(visible.Diagnostics),
 	}

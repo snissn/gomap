@@ -3,7 +3,6 @@ package collections
 import (
 	"bytes"
 	"context"
-	"errors"
 	"sort"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -262,14 +261,11 @@ func (c *Collection) latestColumnPhysicalVisibleRowAtSnapshot(
 	return latest, diag, found, err
 }
 
-func (c *Collection) resolveColumnMetadataRows(ctx context.Context, snap *backenddb.Snapshot, catalog *collectionCatalog, cfg ColumnStoreConfig, projected []string, readIntegrity ColumnAssetReadIntegrity, rows []columnPhysicalVisibleRow) (resultErr error) {
+func (c *Collection) resolveColumnMetadataRows(ctx context.Context, snap *backenddb.Snapshot, catalog *collectionCatalog, cfg ColumnStoreConfig, projected []string, readIntegrity ColumnAssetReadIntegrity, rows []columnPhysicalVisibleRow) error {
 	var view *CollectionReadView
 	defer func() {
 		if view != nil {
-			closeErr := view.Close()
-			if c.nativeOperationLocalReads {
-				resultErr = errors.Join(resultErr, closeErr)
-			}
+			_ = view.Close()
 		}
 	}()
 	var scratch columnPhysicalRowReaderScratch
@@ -286,12 +282,6 @@ func (c *Collection) resolveColumnMetadataRows(ctx context.Context, snap *backen
 			view = newCollectionReadViewAtSnapshot(c, snap, catalog, false, "")
 			if err := view.ensureAssetReadCaches(cfg, readIntegrity); err != nil {
 				return err
-			}
-			if c.nativeOperationLocalReads {
-				// These secondary reconstruction caches borrow the same native
-				// query receipt. Keep their buffers local and avoid mmap custody.
-				view.rowAssetReadCache.forceReadAtFallback = true
-				view.typedColumnAssetReadCache.forceReadAtFallback = true
 			}
 		}
 		physical, err := view.materializerColumnSnapshotView(cfg)

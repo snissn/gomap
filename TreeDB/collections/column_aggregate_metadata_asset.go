@@ -159,69 +159,7 @@ func columnAggregateMetadataEncodedSize(asset columnAggregateMetadataAsset) int 
 	return size
 }
 
-// The original metadata decoder remains authoritative. These finite byte/count
-// bounds must precede its slices, including malformed count-only asset headers.
-func columnAggregateMetadataCountsFit(raw []byte) error {
-	cur := manifestCursor{raw: raw}
-	if cur.u32() != columnAggregateMetadataAssetMagic {
-		return nil // preserve the original decoder's magic diagnostic
-	}
-	version := cur.u16()
-	if version == 0 || version > columnAggregateMetadataAssetVersion {
-		return nil // preserve the original decoder's version diagnostic
-	}
-	cur.stringBytes()
-	cur.stringBytes()
-	cur.u64()
-	cur.u64()
-	cur.u64()
-	cur.u64()
-	cur.stringBytes()
-	cur.stringBytes()
-	cur.stringBytes()
-	if version >= 2 {
-		count := cur.u64()
-		// Each predicate has two length prefixes and a value-count word.
-		if cur.err != nil {
-			return cur.err
-		}
-		if count > uint64((len(raw)-cur.pos)/24) {
-			return errors.New("collections: aggregate metadata predicate count exceeds asset bytes")
-		}
-		for i := uint64(0); i < count; i++ {
-			cur.stringBytes()
-			cur.stringBytes()
-			values := cur.u64()
-			if cur.err != nil {
-				return cur.err
-			}
-			if values == 0 || values > columnPhysicalQueryMaxPredicateValues || values > uint64((len(raw)-cur.pos)/8) {
-				return errors.New("collections: aggregate metadata value count exceeds asset bytes")
-			}
-			for j := uint64(0); j < values; j++ {
-				cur.stringBytes()
-			}
-		}
-	}
-	cur.u64() // rows: semantic checks belong to the original decoder
-	entries := cur.u64()
-	if cur.err != nil {
-		return cur.err
-	}
-	width := 32 // string prefix plus count/min/max
-	if version >= 4 {
-		width += 8
-	}
-	if entries > uint64((len(raw)-cur.pos)/width) {
-		return errors.New("collections: aggregate metadata entry count exceeds asset bytes")
-	}
-	return nil
-}
-
 func decodeColumnAggregateMetadataAsset(raw []byte, ref ColumnAssetRef, cfg ColumnStoreConfig, collection, name string) (columnAggregateMetadataAsset, error) {
-	if err := columnAggregateMetadataCountsFit(raw); err != nil {
-		return columnAggregateMetadataAsset{}, err
-	}
 	cur := manifestCursor{raw: raw}
 	if magic := cur.u32(); magic != columnAggregateMetadataAssetMagic {
 		return columnAggregateMetadataAsset{}, fmt.Errorf("collections: bad aggregate metadata asset magic=0x%08x", magic)

@@ -271,11 +271,6 @@ func decodeColumnDictionaryCodesAssetPayload(raw []byte, ref ColumnAssetRef, cfg
 	if columnIndex > uint64(maxCollectionInt) || cardinality > uint64(maxCollectionInt) || rowCount > uint64(maxCollectionInt) {
 		return columnDictionaryCodesAsset{}, columnDictionaryCodesAssetPayload{}, errors.New("collections: dictionary codes asset dimensions overflow int")
 	}
-	// Every dictionary string has an eight-byte length prefix. Bound the
-	// declared count before allocating headers, even for malformed assets.
-	if cardinality > uint64((len(raw)-cur.pos)/8) {
-		return columnDictionaryCodesAsset{}, columnDictionaryCodesAssetPayload{}, errors.New("collections: dictionary codes asset cardinality exceeds payload bytes")
-	}
 	if rowCount > uint64((len(raw)-cur.pos)/columnDictionaryCodesPayloadElemBytes) {
 		return columnDictionaryCodesAsset{}, columnDictionaryCodesAssetPayload{}, errors.New("collections: dictionary codes asset row count exceeds payload bytes")
 	}
@@ -360,11 +355,6 @@ func decodeColumnDictionaryCodesAssetHeader(raw []byte, ref ColumnAssetRef, cfg 
 	}
 	if columnIndex > uint64(maxCollectionInt) || cardinality > uint64(maxCollectionInt) || rowCount > uint64(maxCollectionInt) {
 		return manifestCursor{}, 0, 0, errors.New("collections: dictionary codes asset dimensions overflow int")
-	}
-	// Every dictionary string has an eight-byte length prefix. Bound the
-	// declared count before allocating headers, even for malformed assets.
-	if cardinality > uint64((len(raw)-cur.pos)/8) {
-		return manifestCursor{}, 0, 0, errors.New("collections: dictionary codes asset cardinality exceeds payload bytes")
 	}
 	if rowCount > uint64((len(raw)-cur.pos)/columnDictionaryCodesPayloadElemBytes) {
 		return manifestCursor{}, 0, 0, errors.New("collections: dictionary codes asset row count exceeds payload bytes")

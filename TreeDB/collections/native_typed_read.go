@@ -100,55 +100,6 @@ func (r *NativeJSONRead) reconstructPendingTyped(row *columnDeclaredRow, residua
 	return reconstructColumnJSONDocument(*r.meta.Options.ColumnStore, residual, row.Values)
 }
 
-// The original captured domains are the only physical root authority. Callers
-// admit this construction before allocating the catalog, map or qualified names.
-func (r *NativeJSONRead) nativeTypedReadViewCharge() (uint64, error) {
-	total := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(collectionCatalog{}))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(Collection{})))
-	var resultErr error
-	r.collection.domains.Scan(func(name string, _ *nativeDomainState) bool {
-		n := uint64(len(r.meta.Name))
-		if resultErr = nativeTypedCheckedAdd(&n, 1); resultErr == nil {
-			resultErr = nativeTypedCheckedAdd(&n, uint64(len(name)))
-		}
-		if resultErr == nil {
-			resultErr = nativeTypedCheckedAdd(&total, memtable.COWAllocationCharge(n))
-		}
-		if resultErr == nil {
-			resultErr = nativeTypedCheckedAdd(&total, preparedSemanticStreamMapEntryReserveBytes)
-		}
-		return resultErr == nil
-	})
-	if resultErr != nil {
-		return 0, resultErr
-	}
-	indexes, err := nativeJSONIndexedPlanCharge(r.meta, nil, nil)
-	if err != nil {
-		return 0, err
-	}
-	if err = nativeTypedCheckedAdd(&total, indexes); err != nil {
-		return 0, err
-	}
-	// newCollectionCatalog independently qualifies its four well-known roots.
-	names := uint64(len(r.meta.Name))
-	if err := nativeTypedCheckedAdd(&names, 32); err != nil {
-		return 0, err
-	}
-	names, err = nativeTypedCheckedMul(memtable.COWAllocationCharge(names), 4)
-	if err != nil {
-		return 0, err
-	}
-	if err = nativeTypedCheckedAdd(&total, names); err != nil {
-		return 0, err
-	}
-	return total, nil
-}
-
-func (r *NativeJSONRead) nativeTypedReadCollection() *Collection {
-	roots := make(map[string]uint64)
-	r.collection.domains.Scan(func(name string, d *nativeDomainState) bool { roots[r.meta.Name+"/"+name] = d.baseRoot; return true })
-	return &Collection{db: r.database, meta: r.meta, name: r.meta.Name, catalog: newCollectionCatalog(r.meta, roots), nativeOperationLocalReads: true}
-}
-
 // reconstructTyped borrows only the original complete-cut catalog and basis.
 // All decoder/vector/cache backing is operation-local and released after its
 // final aliases. The final independent JSON result belongs to the API caller.
@@ -167,10 +118,13 @@ func (r *NativeJSONRead) reconstructTyped(id, value []byte) (result []byte, resu
 	if err != nil {
 		return nil, err
 	}
-	charge, err := r.nativeTypedReadViewCharge()
-	if err != nil {
-		return nil, err
-	}
+	// At most four root entries use the maintained per-entry quota. Catalog wrapper,
+	// Collection wrapper and independently qualified root strings are distinct.
+	charge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(collectionCatalog{}))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(Collection{}))) + 4*preparedSemanticStreamMapEntryReserveBytes
+	r.collection.domains.Scan(func(name string, _ *nativeDomainState) bool {
+		charge += memtable.COWAllocationCharge(uint64(len(r.meta.Name) + 1 + len(name)))
+		return true
+	})
 	lease, err := r.capture.NativeAllocator().AdmitNativeBytes(charge)
 	if err != nil {
 		return nil, err
@@ -178,7 +132,7 @@ func (r *NativeJSONRead) reconstructTyped(id, value []byte) (result []byte, resu
 	// Inspect compressed string dictionary lengths under this original read
 	// receipt before decoder/output allocation. Preflight owns no retained cache
 	// or file alias, and releases its scratch before semantic decoding starts.
-	extra, typedJSON, err := nativeTypedFamilyReadCapacity(r.meta, r.capture.Snapshot(), manifest.baseRoot, r.database.ColumnAssetRootDir(), nil, func(n uint64) error {
+	extra, typedJSON, err := nativeTypedFamilyReadCapacity(r.meta, r.capture.Snapshot(), manifest.baseRoot, r.database.ColumnAssetRootDir(), func(n uint64) error {
 		if e := nativeTypedCheckedAdd(&n, charge); e != nil {
 			return e
 		}
@@ -205,7 +159,7 @@ func (r *NativeJSONRead) reconstructTyped(id, value []byte) (result []byte, resu
 		lease.Close()
 		return nil, err
 	}
-	var wrapper *Collection
+	var roots map[string]uint64
 	var catalog *collectionCatalog
 	var residual, block, blockKey []byte
 	var entry node.LeafEntry
@@ -217,8 +171,8 @@ func (r *NativeJSONRead) reconstructTyped(id, value []byte) (result []byte, resu
 		entry = node.LeafEntry{}
 		domain = nativeDomainRead{}
 		scratch = nil
+		roots = nil
 		catalog = nil
-		wrapper = nil
 		residual = nil
 		value = nil
 		if decoderLease != nil {
@@ -236,8 +190,9 @@ func (r *NativeJSONRead) reconstructTyped(id, value []byte) (result []byte, resu
 		jsonLease.Close()
 		lease.Close()
 	}()
-	wrapper = r.nativeTypedReadCollection()
-	catalog = wrapper.catalog
+	roots = make(map[string]uint64, 4)
+	r.collection.domains.Scan(func(name string, d *nativeDomainState) bool { roots[r.meta.Name+"/"+name] = d.baseRoot; return true })
+	catalog = newCollectionCatalog(r.meta, roots)
 	residual = value
 	var row uint64
 	var locator bool
@@ -404,7 +359,17 @@ func (r *NativeJSONRead) typedRowEqual(id, retained []byte, wanted []columnDecla
 	if err != nil {
 		return false, false, err
 	}
-	header, err := r.nativeTypedReadViewCharge()
+	header := uint64(8 * preparedSemanticStreamMapEntryReserveBytes)
+	r.collection.domains.Scan(func(name string, _ *nativeDomainState) bool {
+		n := uint64(len(r.meta.Name))
+		if err = nativeTypedCheckedAdd(&n, 1); err == nil {
+			err = nativeTypedCheckedAdd(&n, uint64(len(name)))
+		}
+		if err == nil {
+			err = nativeTypedCheckedAdd(&header, memtable.COWAllocationCharge(n))
+		}
+		return err == nil
+	})
 	if err != nil {
 		return false, false, err
 	}
@@ -415,7 +380,7 @@ func (r *NativeJSONRead) typedRowEqual(id, retained []byte, wanted []columnDecla
 	if err != nil {
 		return false, false, err
 	}
-	var wrapper *Collection
+	var roots map[string]uint64
 	var catalog *collectionCatalog
 	var view *CollectionReadView
 	defer func() {
@@ -423,11 +388,11 @@ func (r *NativeJSONRead) typedRowEqual(id, retained []byte, wanted []columnDecla
 			resultErr = errors.Join(resultErr, view.Close())
 		}
 		view = nil
-		wrapper = nil
 		catalog = nil
+		roots = nil
 		lease.Close()
 	}()
-	extra, _, err := nativeTypedFamilyReadCapacity(r.meta, r.capture.Snapshot(), manifest.baseRoot, r.database.ColumnAssetRootDir(), nil, func(n uint64) error {
+	extra, _, err := nativeTypedFamilyReadCapacity(r.meta, r.capture.Snapshot(), manifest.baseRoot, r.database.ColumnAssetRootDir(), func(n uint64) error {
 		if e := nativeTypedCheckedAdd(&n, header); e != nil {
 			return e
 		}
@@ -442,9 +407,10 @@ func (r *NativeJSONRead) typedRowEqual(id, retained []byte, wanted []columnDecla
 	if err = lease.Resize(physical); err != nil {
 		return false, false, err
 	}
-	wrapper = r.nativeTypedReadCollection()
-	catalog = wrapper.catalog
-	view = newCollectionReadViewAtSnapshot(wrapper, r.capture.Snapshot(), catalog, false, "")
+	roots = make(map[string]uint64, 4)
+	r.collection.domains.Scan(func(name string, d *nativeDomainState) bool { roots[r.meta.Name+"/"+name] = d.baseRoot; return true })
+	catalog = newCollectionCatalog(r.meta, roots)
+	view = newCollectionReadViewAtSnapshot(&Collection{db: r.database, nativeOperationLocalReads: true}, r.capture.Snapshot(), catalog, false, "")
 	equal, err = view.typedReplacementValuesEqual(id, wanted)
 	return true, equal, err
 }
