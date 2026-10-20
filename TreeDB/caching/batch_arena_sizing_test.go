@@ -9,10 +9,10 @@ import (
 )
 
 func TestBatchArenaCopy_IgnoresEntrySliceCapacityForFirstChunk(t *testing.T) {
-	b := &Batch{
+	b := &Batch{ordinaryBatchState: &ordinaryBatchState{
+		copyArenaCap: batchCopyArenaUnsizedInit},
 		// Simulate a large pooled entry backing array from prior workload phase.
-		entries:      make([]batch.Entry, 0, 8192),
-		copyArenaCap: batchCopyArenaUnsizedInit,
+		entries: make([]batch.Entry, 0, 8192),
 	}
 
 	_ = b.arenaCopy(136)
@@ -89,9 +89,9 @@ func TestBatchCopyArenaHint_NewBatchWithSizeCanRaiseInit(t *testing.T) {
 
 func TestBatchCopyArenaHint_UsesTotalCopiedBytes(t *testing.T) {
 	var db DB
-	b := &Batch{
-		db:           &db,
-		copyArenaCap: batchCopyArenaMinChunk,
+	b := &Batch{ordinaryBatchState: &ordinaryBatchState{
+		copyArenaCap: batchCopyArenaMinChunk},
+		db: &db,
 	}
 
 	// Force multiple chunk switches so len(copyArena) at the end is much smaller
@@ -109,9 +109,9 @@ func TestBatchCopyArenaHint_UsesTotalCopiedBytes(t *testing.T) {
 
 func TestBatchArenaInFlightBytesTracksBatchChunkLifecycle(t *testing.T) {
 	var db DB
-	b := &Batch{
-		db:           &db,
-		copyArenaCap: batchCopyArenaMinChunk,
+	b := &Batch{ordinaryBatchState: &ordinaryBatchState{
+		copyArenaCap: batchCopyArenaMinChunk},
+		db: &db,
 	}
 
 	before := batchArenaInFlightBytes.Load()
@@ -159,9 +159,9 @@ func TestBatchReset_RefreshesCopyArenaCapFromDecayedHint(t *testing.T) {
 		t.Fatalf("expected decayed cap < stale cap, stale=%d decayed=%d", staleCap, decayedCap)
 	}
 
-	b := &Batch{
-		db:           &db,
-		copyArenaCap: staleCap,
+	b := &Batch{ordinaryBatchState: &ordinaryBatchState{
+		copyArenaCap: staleCap},
+		db: &db,
 	}
 	b.Reset()
 
@@ -222,7 +222,7 @@ func TestBatchArenaCopy_GrowthClampsUnderCriticalPressureButAllowsLargeWrites(t 
 	poolPressureReadMemStats = func(ms *runtime.MemStats) { *ms = fake }
 	poolPressureMemoryLimit = func() int64 { return -1 }
 
-	b := &Batch{copyArenaCap: batchCopyArenaInitMax}
+	b := &Batch{ordinaryBatchState: &ordinaryBatchState{copyArenaCap: batchCopyArenaInitMax}}
 	_ = b.arenaCopy(batchCopyArenaMinChunk)
 	if got := cap(b.copyArena); got > batchCopyArenaCriticalPressureMaxChunk {
 		t.Fatalf("critical-pressure chunk cap=%d want <=%d", got, batchCopyArenaCriticalPressureMaxChunk)

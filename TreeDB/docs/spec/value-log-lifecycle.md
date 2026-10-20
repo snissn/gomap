@@ -13,6 +13,12 @@ TreeDB value-log pointers are durable storage references.
 A pointer remains valid while its segment is reachable from any live index state.
 Segments must not be deleted based only on age.
 
+Retirement is idempotent while the original manager still tracks a zombie
+segment. Such a segment is excluded from current discovery but remains linked
+and readable while an older snapshot holds its Set. It must not be reported as
+an absent segment to cached cleanup through another manager. A genuinely absent
+manager entry retains the missing-segment result used for orphan cleanup.
+
 ### 1.1 Decode scratch reuse
 
 The shared compressed-frame decoder limits output to the admitted raw frame

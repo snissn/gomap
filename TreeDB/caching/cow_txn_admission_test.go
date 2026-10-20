@@ -1,6 +1,7 @@
 package caching
 
 import (
+	"bytes"
 	"errors"
 	"testing"
 	"unsafe"
@@ -199,6 +200,88 @@ func TestCOWTxnPartialInitRefusalReleasesBatchAdmission(t *testing.T) {
 		if after.TotalBytes != before.TotalBytes || after.ReservedBytes != before.ReservedBytes || after.ExternalLeases != before.ExternalLeases || after.Views != before.Views {
 			t.Fatalf("partial init%d retained admission: before=%+v after=%+v", n, before, after)
 		}
+	}
+}
+
+func TestCOWTxnReadArenaAdmissionSurvivesWriteResetUntilFinish(t *testing.T) {
+	db, _ := nativeBridgeFixture(t, false)
+	owner := db.cow.txnOwner
+	if err := db.cow.ensureTxnJournal(); err != nil {
+		t.Fatal(err)
+	}
+	// Establish the lazy publication machinery before measuring private storage.
+	if err := db.Set([]byte("seed"), []byte("value")); err != nil {
+		t.Fatal(err)
+	}
+	var tx ConditionalTxn
+	keys := make([][]byte, 64)
+	observedReset := false
+	var backingBytes uint64
+	var batchLease *memtable.COWExternalLease
+	write := func(b *Batch, sync bool) error {
+		if sync {
+			t.Fatal("unexpected sync boundary")
+		}
+		if err := b.Write(); err != nil {
+			return err
+		}
+		observedReset = true
+		if len(b.entries) != 0 || b.copyArena != nil || b.cowState.txn != &tx {
+			t.Fatal("write did not reset storage while retaining the original transaction")
+		}
+		if b.cowState.lease != batchLease || b.cowState.storageBytes < backingBytes {
+			t.Fatal("write reset refunded live dependency arena admission")
+		}
+		for i, key := range keys {
+			idx, found := tx.readIndex[string(key)]
+			if !bytes.Equal(tx.reads[i].key, key) || !found || idx != i {
+				t.Fatalf("write reset lost read dependency %d", i)
+			}
+		}
+		return nil
+	}
+	if err := db.InitOwnedCOWTxn(&tx, owner, write); err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Close()
+	b := tx.batch
+	batchLease = b.cowState.lease
+	for i := range keys {
+		key := bytes.Repeat([]byte{byte(i)}, 513)
+		keys[i] = bytes.Clone(key)
+		if value, err := tx.Get(key); err != nil || value != nil {
+			t.Fatalf("missing read %d: value=%q err=%v", i, value, err)
+		}
+		key[0] ^= 0xff
+	}
+	if len(tx.reads) != len(keys) || tx.readIndex == nil {
+		t.Fatal("fixture did not create retained arena and read-index aliases")
+	}
+	if err := tx.Set([]byte("result"), []byte("published")); err != nil {
+		t.Fatal(err)
+	}
+	backingBytes = b.cowState.storageBytes
+	if backingBytes <= uint64(cap(b.copyArena)) {
+		t.Fatal("fixture did not retain discarded arena backing")
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if !observedReset || tx.batch != nil || tx.reads != nil || tx.readIndex != nil || b.cowState.txn != nil || !b.closed || b.cowState.storageBytes != 0 {
+		t.Fatal("finish did not end the original batch and dependency aliases")
+	}
+	finished := db.cow.budget.Stats()
+	if err := batchLease.Resize(cowBatchBaseBytes(b.cowState.guardReserved)); !errors.Is(err, memtable.ErrCOWClosed) {
+		t.Fatalf("finish kept the batch lease live: %v", err)
+	}
+	if err := tx.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if after := db.cow.budget.Stats(); after.TotalBytes != finished.TotalBytes || after.ReservedBytes != finished.ReservedBytes || after.ExternalBytes != finished.ExternalBytes || after.ExternalLeases != finished.ExternalLeases {
+		t.Fatalf("repeated finish refunded storage twice: before=%+v after=%+v", finished, after)
+	}
+	if value, err := db.Get([]byte("result")); err != nil || string(value) != "published" {
+		t.Fatalf("finish lost published value: %q %v", value, err)
 	}
 }
 

@@ -2875,6 +2875,20 @@ func (m *Manager) MarkZombie(id uint32) error {
 	return nil
 }
 
+// IsTrackedZombie reports retirement already admitted by this Manager. A
+// zombie is absent from current Sets but can still belong to an older pinned
+// Set; absence from current discovery must not authorize another manager to
+// remove that original file.
+func (m *Manager) IsTrackedZombie(id uint32) bool {
+	if m == nil {
+		return false
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	file := m.files[id]
+	return file != nil && file.IsZombie.Load()
+}
+
 // MarkZombieIfTracked marks id zombie when the manager still tracks it,
 // including files that were already marked zombie by a previous cleanup pass.
 func (m *Manager) MarkZombieIfTracked(id uint32) (tracked bool, newlyMarked bool, err error) {

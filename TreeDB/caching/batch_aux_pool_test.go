@@ -41,15 +41,15 @@ func TestAppendUniqueMemtableDeduplicates(t *testing.T) {
 
 func TestBatchCloseReleasesAuxiliaryIndexSlices(t *testing.T) {
 	db := &DB{}
-	b := &Batch{
+	b := &Batch{ordinaryBatchState: &ordinaryBatchState{
+		shardEntries: [][]batch.Entry{make([]batch.Entry, 0, 2)},
+		shardIdxSets: [][]int{make([]int, 0, 2)}},
 		db:           db,
 		entries:      db.getBatchEntries(4),
 		shardIdxs:    make([]int, 2, 4),
 		eligibleIdxs: make([]int, 1, 4),
 		shardAdds:    make([]int64, 2, 4),
 		shardCnts:    make([]int, 2, 4),
-		shardEntries: [][]batch.Entry{make([]batch.Entry, 0, 2)},
-		shardIdxSets: [][]int{make([]int, 0, 2)},
 	}
 
 	if err := b.Close(); err != nil {

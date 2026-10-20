@@ -576,11 +576,11 @@ func TestBatchArenaTailCompaction_PacksAliasedSlicesAndDropsTailChunk(t *testing
 	value := tail[6:16:16]
 
 	db := &DB{}
-	b := &Batch{
-		db:              db,
-		entries:         []batch.Entry{{Type: batch.OpPut, Key: key, Value: value, IsPtr: true, ValuePtr: page.ValuePtr{Offset: 123, Length: 10}}},
-		copyArena:       tail,
-		copyArenaChunks: [][]byte{tail[:0]},
+	b := &Batch{ordinaryBatchState: &ordinaryBatchState{
+		copyArenaChunks: [][]byte{tail[:0]}},
+		db:        db,
+		entries:   []batch.Entry{{Type: batch.OpPut, Key: key, Value: value, IsPtr: true, ValuePtr: page.ValuePtr{Offset: 123, Length: 10}}},
+		copyArena: tail,
 	}
 	oldKeyPtr := uintptr(unsafe.Pointer(unsafe.SliceData(b.entries[0].Key)))
 	oldValPtr := uintptr(unsafe.Pointer(unsafe.SliceData(b.entries[0].Value)))
@@ -639,11 +639,11 @@ func TestBatchArenaTailCompaction_PacksAliasedTailWithoutDeferredViews(t *testin
 	value := tail[6:16:16]
 
 	db := &DB{}
-	b := &Batch{
-		db:              db,
-		entries:         []batch.Entry{{Type: batch.OpPut, Key: key, Value: value}},
-		copyArena:       tail,
-		copyArenaChunks: [][]byte{tail[:0]},
+	b := &Batch{ordinaryBatchState: &ordinaryBatchState{
+		copyArenaChunks: [][]byte{tail[:0]}},
+		db:        db,
+		entries:   []batch.Entry{{Type: batch.OpPut, Key: key, Value: value}},
+		copyArena: tail,
 	}
 	oldKeyPtr := uintptr(unsafe.Pointer(unsafe.SliceData(b.entries[0].Key)))
 	oldValPtr := uintptr(unsafe.Pointer(unsafe.SliceData(b.entries[0].Value)))
@@ -701,11 +701,11 @@ func TestBatchArenaTailCompaction_PacksManyAliasesIntoOneBacking(t *testing.T) {
 	}
 
 	db := &DB{}
-	b := &Batch{
-		db:              db,
-		entries:         entries,
-		copyArena:       tail,
-		copyArenaChunks: [][]byte{tail[:0]},
+	b := &Batch{ordinaryBatchState: &ordinaryBatchState{
+		copyArenaChunks: [][]byte{tail[:0]}},
+		db:        db,
+		entries:   entries,
+		copyArena: tail,
 	}
 	oldKeyPtr := uintptr(unsafe.Pointer(unsafe.SliceData(b.entries[0].Key)))
 	oldValPtr := uintptr(unsafe.Pointer(unsafe.SliceData(b.entries[0].Value)))
@@ -752,11 +752,11 @@ func TestBatchArenaTailCompaction_SkipsNearFullTail(t *testing.T) {
 	value := tail[6:16:16]
 
 	db := &DB{}
-	b := &Batch{
-		db:              db,
-		entries:         []batch.Entry{{Type: batch.OpPut, Key: key, Value: value}},
-		copyArena:       tail,
-		copyArenaChunks: [][]byte{tail[:0]},
+	b := &Batch{ordinaryBatchState: &ordinaryBatchState{
+		copyArenaChunks: [][]byte{tail[:0]}},
+		db:        db,
+		entries:   []batch.Entry{{Type: batch.OpPut, Key: key, Value: value}},
+		copyArena: tail,
 	}
 	oldKeyPtr := uintptr(unsafe.Pointer(unsafe.SliceData(b.entries[0].Key)))
 	oldValPtr := uintptr(unsafe.Pointer(unsafe.SliceData(b.entries[0].Value)))
@@ -801,11 +801,11 @@ func TestBatchArenaTailCompaction_CompactsNearFullTailWhenDeferredViewsPinned(t 
 
 	db := &DB{}
 	db.memtableViewTelemetry.deferredViewsCurrent.Store(1)
-	b := &Batch{
-		db:              db,
-		entries:         []batch.Entry{{Type: batch.OpPut, Key: key, Value: value}},
-		copyArena:       tail,
-		copyArenaChunks: [][]byte{tail[:0]},
+	b := &Batch{ordinaryBatchState: &ordinaryBatchState{
+		copyArenaChunks: [][]byte{tail[:0]}},
+		db:        db,
+		entries:   []batch.Entry{{Type: batch.OpPut, Key: key, Value: value}},
+		copyArena: tail,
 	}
 	oldKeyPtr := uintptr(unsafe.Pointer(unsafe.SliceData(b.entries[0].Key)))
 	oldValPtr := uintptr(unsafe.Pointer(unsafe.SliceData(b.entries[0].Value)))
