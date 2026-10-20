@@ -820,3 +820,49 @@ full lifecycle debt, resolved stats and checked final owner-zero/reopen oracles.
 Default test runs skip it; execution requires the packet's exact-source root
 grant and fixed environment selectors. No profiling, calibration, repeats,
 baseline comparison or Dgraph throughput claim is part of this diagnostic.
+
+### Standalone native collection batch and checkpoint cost
+
+`TreeDB/BenchmarkNativeCollectionFeatureBatchCheckpoint` measures ordinary
+`UpdateBatch` replacements of 32 documents followed by public `Checkpoint()`
+under `ProfileNoWALFast`, the native semantic backend and `cow_btree`. Ordinary
+NoWAL mutation ACK is volatile; the timed checkpoint completes the explicit
+storage boundary. Each collection has one nonunique and one unique string
+index. Cells are `json/scalar`, `json/multikey`, `bson/scalar`,
+`bson/multikey`, and `template-v1/scalar`. Multikey inputs repeat one of two
+effective values to exercise deduplication. Input encoding, setup, final document
+and index checks, and original-owner cleanup are outside the timer.
+
+Build with the repository's declared Go toolchain, then start a fresh process for
+each selected cell. This example collects one short diagnostic sample per cell:
+
+```sh
+BENCH_ART=$(mktemp -d /mnt/fast4tb/gomap-native-feature-cost-XXXXXX)
+mkdir -p "$BENCH_ART/tmp"
+GOWORK=off TMPDIR="$BENCH_ART/tmp" go test -c -p=1 \
+  -o "$BENCH_ART/native-feature.test" ./TreeDB
+for cell in json/scalar json/multikey bson/scalar bson/multikey template-v1/scalar; do
+  format=${cell%/*}
+  shape=${cell#*/}
+  env -u GOFLAGS -u GOMEMLIMIT -u GODEBUG -u GOEXPERIMENT -u GOTRACEBACK \
+    GOMAXPROCS=2 GOGC=100 TMPDIR="$BENCH_ART/tmp" \
+    "$BENCH_ART/native-feature.test" -test.run='^$' \
+    -test.bench="^BenchmarkNativeCollectionFeatureBatchCheckpoint$/^${format}$/^${shape}$" \
+    -test.benchtime=4x -test.count=1 -test.benchmem -test.timeout=180s -test.v \
+    > "$BENCH_ART/${format}-${shape}.txt" 2>&1 || exit 1
+done
+```
+
+Each raw text artifact must contain one measured row with `N=4`, terminal PASS,
+and the activation/publication log. Metrics are ns/op, B/op and allocs/op per
+32-document batch, plus batch/s, docs/s and docs/batch. Go may also run an
+untabulated calibration fixture. Cleanup checks require the original COW owner to
+drain completely. Template checks compare captured materialization against
+independent caller JSON. These are standalone Go benchmark logs, not benchprof
+or unified-bench profile-dir inputs; parser schemas and filenames are unchanged.
+
+For comparisons, freeze source, harness, binary and environment identities and
+the paired process order before collection; retain every raw sample. Only
+`json/scalar` has an equivalent pre-feature native baseline. Other cells report
+candidate feature costs. Four iterations are developmental diagnostics, not full
+scaling qualification or Dgraph throughput acceptance.
