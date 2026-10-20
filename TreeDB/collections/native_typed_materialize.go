@@ -26,13 +26,15 @@ import (
 // group. This helper neither captures a newer catalog nor publishes a root.
 // The enclosing original build adopts the returned work before checking err.
 type nativeTypedMaterializeInput struct {
-	meta             CollectionMeta
-	baseManifestRoot uint64
-	deltas           []*nativeTypedDelta // oldest first, actual assigned identities
-	snapshot         *backenddb.Snapshot
-	capture          *backenddb.StableResourceCaptureLease
-	allocator        backenddb.NativeSemanticAllocator
-	group            *backenddb.RootPublicationBuildGroup
+	compaction         *nativeColumnCompaction
+	capturedCollection *nativeCollectionState
+	meta               CollectionMeta
+	baseManifestRoot   uint64
+	deltas             []*nativeTypedDelta // oldest first, actual assigned identities
+	snapshot           *backenddb.Snapshot
+	capture            *backenddb.StableResourceCaptureLease
+	allocator          backenddb.NativeSemanticAllocator
+	group              *backenddb.RootPublicationBuildGroup
 	// Fixed operation credit stays in the SAME live build parent's floor.
 	// Collections run sequentially; only their retained terms split to children.
 	sharedWorkspace uint64
@@ -43,6 +45,7 @@ type nativeTypedMaterializedRoot struct {
 }
 
 type nativeTypedMaterialization struct {
+	compactionRows    []columnDeclaredRow
 	input             nativeTypedMaterializeInput
 	roots             []nativeTypedMaterializedRoot
 	meta              CollectionMeta
@@ -407,7 +410,7 @@ func prepareNativeTypedReplayMaterialization(input nativeTypedMaterializeInput) 
 }
 
 func prepareNativeTypedMaterializationCore(input nativeTypedMaterializeInput) (work *nativeTypedMaterialization, resultErr error) {
-	if input.snapshot == nil || input.capture == nil || input.group == nil || len(input.deltas) == 0 {
+	if input.snapshot == nil || input.capture == nil || input.group == nil || (len(input.deltas) == 0 && input.compaction == nil) {
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
 	amount, err := nativeTypedMaterializationCapacity(input.meta, input.deltas)
@@ -421,9 +424,20 @@ func prepareNativeTypedMaterializationCore(input nativeTypedMaterializeInput) (w
 	if err = nativeTypedCheckedAdd(&amount, basis); err != nil {
 		return nil, err
 	}
+	if input.compaction != nil {
+		read, e := nativeTypedReadCapacity(input.meta, input.snapshot, input.baseManifestRoot)
+		if e != nil {
+			return nil, e
+		}
+		if e = nativeTypedCheckedAdd(&amount, read); e != nil {
+			return nil, e
+		}
+	}
+	var lease *memtable.COWExternalLease
+	var owned uint64
 	var refund *cowbtree.OwnedMapRefund
 	if input.allocator != nil {
-		owned := amount
+		owned = amount
 		if input.sharedWorkspace != 0 {
 			fixed, e := nativeTypedBuildWorkspaceCapacity()
 			if e != nil || input.sharedWorkspace != fixed || owned < fixed {
@@ -431,7 +445,8 @@ func prepareNativeTypedMaterializationCore(input nativeTypedMaterializeInput) (w
 			}
 			owned -= fixed
 		}
-		lease, admitErr := input.allocator.AdmitNativeBytes(owned)
+		var admitErr error
+		lease, admitErr = input.allocator.AdmitNativeBytes(owned)
 		if admitErr != nil {
 			return nil, admitErr
 		}
@@ -463,6 +478,14 @@ func prepareNativeTypedMaterializationCore(input nativeTypedMaterializeInput) (w
 		if i == 1 {
 			continue
 		}
+		if input.compaction != nil {
+			domain, exists := input.capturedCollection.domains.Get(w.roots[i].name)
+			if !exists {
+				return w, backenddb.ErrNativeSemanticUnsupported
+			}
+			w.roots[i].root = domain.baseRoot
+			continue
+		}
 		raw, e := input.snapshot.GetAtRoot(token.SystemRootPageID, []byte(systemCollectionRootPrefix+input.meta.Name+"/"+w.roots[i].name))
 		if errors.Is(e, tree.ErrKeyNotFound) {
 			continue
@@ -483,6 +506,25 @@ func prepareNativeTypedMaterializationCore(input nativeTypedMaterializeInput) (w
 		}
 	}
 	w.resourceBuilder = rootpublication.NewStableResourceSetBuilder()
+	if input.compaction != nil {
+		if lease == nil {
+			return w, backenddb.ErrNativeSemanticUnsupported
+		}
+		err = w.prepareCompactionRows(func(n uint64) error {
+			next := owned
+			if e := nativeTypedCheckedAdd(&next, n); e != nil {
+				return e
+			}
+			if e := lease.Resize(next); e != nil {
+				return e
+			}
+			owned = next
+			return nativeTypedCheckedAdd(&w.capacity, n)
+		})
+		if err != nil {
+			return w, err
+		}
+	}
 	return w, nil
 }
 
@@ -610,15 +652,20 @@ func (w *nativeTypedMaterialization) materialize() (resultErr error) {
 	defer func() {
 		w.codec.Close()
 		w.input = nativeTypedMaterializeInput{}
+		w.compactionRows = nil
 		if resultErr != nil {
 			w.failure = resultErr
 		} else {
 			w.complete = true
 		}
 	}()
-	mutations, err := selectNativeTypedMaterializeMutations(w.input.deltas)
-	if err != nil {
-		return err
+	var mutations []nativeTypedMaterializeMutation
+	var err error
+	if len(w.input.deltas) != 0 {
+		mutations, err = selectNativeTypedMaterializeMutations(w.input.deltas)
+		if err != nil {
+			return err
+		}
 	}
 	rootDir, registry, err := w.input.group.NativeColumnAssetBuildContext()
 	if err != nil {
@@ -635,6 +682,11 @@ func (w *nativeTypedMaterialization) materialize() (resultErr error) {
 			return err
 		}
 		start = end
+	}
+	if w.input.compaction != nil {
+		if err = w.materializeCompaction(context); err != nil {
+			return err
+		}
 	}
 	w.resources, err = w.resourceBuilder.Freeze()
 	if err != nil {
@@ -919,6 +971,7 @@ func (w *nativeTypedMaterialization) release() (cowbtree.OwnedMapCompletion, err
 	var err error
 	w.codec.Close()
 	w.input = nativeTypedMaterializeInput{}
+	w.compactionRows = nil
 	if w.resourceBuilder != nil {
 		err = w.resourceBuilder.AbandonWithError()
 		if err != nil {

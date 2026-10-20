@@ -17,7 +17,10 @@ import (
 // The returned bytes must be reserved before physical acceptance, separately
 // from the original build ledger floor. Each child includes its independent
 // lease header. No child points back to that ledger or another EngineVersion.
-func nativeHandoffCapacity(captured *nativeEngineVersion) (bytes uint64, collections, domains int, err error) {
+func nativeHandoffCapacity(captured *nativeEngineVersion) (uint64, int, int, error) {
+	return nativeHandoffCapacityForCompaction(captured, 0)
+}
+func nativeHandoffCapacityForCompaction(captured *nativeEngineVersion, target uint64) (bytes uint64, collections, domains int, err error) {
 	if captured == nil || captured.pending == nil || captured.allocator == nil {
 		return 0, 0, 0, backenddb.ErrNativeSemanticUnsupported
 	}
@@ -61,8 +64,12 @@ func nativeHandoffCapacity(captured *nativeEngineVersion) (bytes uint64, collect
 		bytes += uint64(maxSources) * (position + header)
 		return true
 	}
-	captured.pending.Scan(func(_ uint64, c *nativeCollectionState) bool {
-		touched := c.pending.Len()
+	scanNativeBuildCollections(captured, target, func(id uint64, c *nativeCollectionState) bool {
+		domainSet := c.pending
+		if id == target {
+			domainSet = c.domains
+		}
+		touched := domainSet.Len()
 		if touched == 0 {
 			return true
 		}
@@ -71,7 +78,7 @@ func nativeHandoffCapacity(captured *nativeEngineVersion) (bytes uint64, collect
 			return false
 		}
 		collections++
-		typedCharge, e := nativeTypedHandoffCharge(c, maxSources)
+		typedCharge, e := nativeTypedHandoffChargeForCompaction(c, maxSources, id == target)
 		if e != nil {
 			err = e
 			return false
@@ -88,7 +95,7 @@ func nativeHandoffCapacity(captured *nativeEngineVersion) (bytes uint64, collect
 		if !add(charge) || !add(charge) || !add(nativeCollectionStateCharge()) {
 			return false
 		}
-		c.pending.Scan(func(name string, _ *nativeDomainState) bool { return addDomain(name) })
+		domainSet.Scan(func(name string, _ *nativeDomainState) bool { return addDomain(name) })
 		return err == nil
 	})
 	if err != nil {

@@ -14,10 +14,13 @@ import (
 // nativeTypedBuildCapacity inventories every captured typed prefix. Source,
 // manifest and output custody sum across collections; one fixed operation peak
 // stays in the original parent's floor because materialization is sequential.
-func nativeTypedBuildCapacity(e *nativeEngineVersion, basis *backenddb.Snapshot) (charge, floor uint64, collections, count int, err error) {
-	e.pending.Scan(func(_ uint64, c *nativeCollectionState) bool {
+func nativeTypedBuildCapacity(e *nativeEngineVersion, basis *backenddb.Snapshot) (uint64, uint64, int, int, error) {
+	return nativeTypedBuildCapacityForCompaction(e, basis, 0)
+}
+func nativeTypedBuildCapacityForCompaction(e *nativeEngineVersion, basis *backenddb.Snapshot, target uint64) (charge, floor uint64, collections, count int, err error) {
+	scanNativeBuildCollections(e, target, func(id uint64, c *nativeCollectionState) bool {
 		primary, ok := c.domains.Get("primary")
-		if !ok || primary.typed == nil {
+		if !ok || (primary.typed == nil && id != target) {
 			return true
 		}
 		if basis == nil {
@@ -52,6 +55,16 @@ func nativeTypedBuildCapacity(e *nativeEngineVersion, basis *backenddb.Snapshot)
 		if e != nil {
 			err = e
 			return false
+		}
+		if id == target {
+			read, readErr := nativeTypedReadCapacity(*c.schema.meta, basis, root)
+			if readErr != nil {
+				err = readErr
+				return false
+			}
+			if err = nativeTypedCheckedAdd(&owned, read); err != nil {
+				return false
+			}
 		}
 		if err = nativeTypedCheckedAdd(&owned, base); err != nil {
 			return false
@@ -94,6 +107,7 @@ func nativeTypedBuildCapacity(e *nativeEngineVersion, basis *backenddb.Snapshot)
 }
 
 type nativeTypedBuildWork struct {
+	compaction bool
 	collection uint64
 	work       *nativeTypedMaterialization
 }
@@ -102,6 +116,14 @@ type nativeTypedBuildWork struct {
 // same parent retains shared workspace through materialization; pointer arrays
 // and retained outputs remain covered until final finish.
 func (b *nativeEngineBuild) prepareTyped(e *nativeEngineVersion, collections int, basis *backenddb.Snapshot, capture *backenddb.StableResourceCaptureLease, group *backenddb.RootPublicationBuildGroup) error {
+	return b.prepareTypedForCompaction(e, collections, basis, capture, group, nil)
+}
+func (b *nativeEngineBuild) prepareTypedForCompaction(e *nativeEngineVersion, collections int, basis *backenddb.Snapshot, capture *backenddb.StableResourceCaptureLease, group *backenddb.RootPublicationBuildGroup, operation *nativeColumnCompaction) error {
+	var target uint64
+	if operation != nil {
+		target = operation.target
+	}
+
 	if collections == 0 {
 		return nil
 	}
@@ -120,9 +142,9 @@ func (b *nativeEngineBuild) prepareTyped(e *nativeEngineVersion, collections int
 			}
 		}
 	}()
-	e.pending.Scan(func(_ uint64, c *nativeCollectionState) bool {
+	scanNativeBuildCollections(e, target, func(id uint64, c *nativeCollectionState) bool {
 		primary, ok := c.domains.Get("primary")
-		if !ok || primary.typed == nil {
+		if !ok || (primary.typed == nil && id != target) {
 			return true
 		}
 		count := 0
@@ -139,8 +161,13 @@ func (b *nativeEngineBuild) prepareTyped(e *nativeEngineVersion, collections int
 		if manifest, ok := c.domains.Get("column/manifest"); ok {
 			root = manifest.baseRoot
 		}
-		work, err := prepareNativeTypedMaterialization(nativeTypedMaterializeInput{meta: *c.schema.meta, baseManifestRoot: root, deltas: deltas, snapshot: basis, capture: capture, allocator: &b.allocation, group: group, sharedWorkspace: workspace})
-		b.typed = append(b.typed, nativeTypedBuildWork{collection: c.incarnation, work: work})
+		var compaction *nativeColumnCompaction
+		var capturedCollection *nativeCollectionState
+		if id == target {
+			compaction, capturedCollection = operation, c
+		}
+		work, err := prepareNativeTypedMaterialization(nativeTypedMaterializeInput{compaction: compaction, capturedCollection: capturedCollection, meta: *c.schema.meta, baseManifestRoot: root, deltas: deltas, snapshot: basis, capture: capture, allocator: &b.allocation, group: group, sharedWorkspace: workspace})
+		b.typed = append(b.typed, nativeTypedBuildWork{compaction: compaction != nil, collection: c.incarnation, work: work})
 		b.failure = err
 		return err == nil
 	})
@@ -207,10 +234,25 @@ func (b *nativeEngineBuild) materializeTyped(group *backenddb.RootPublicationBui
 		if err != nil {
 			return err
 		}
-		if err = b.typedResources.Merge(work.resources); err != nil {
-			return err
+		if input.compaction {
+			// Pending assets may have been superseded inside this SAME group. The
+			// candidate producer must contain only the final scoped obligations. Keep
+			// the original unfiltered producer in its original work until release.
+			selected, selectErr := rootpublication.CloneStableResourceSetForLogicalObligations(work.resources, work.requirements)
+			if selectErr != nil {
+				return selectErr
+			}
+			b.typedClosure = selected // original ledger adopts before fallible merge
+			if err = b.typedResources.Merge(selected); err != nil {
+				return err
+			}
+			b.typedClosure = nil
+		} else {
+			if err = b.typedResources.Merge(work.resources); err != nil {
+				return err
+			}
+			work.resources = nil
 		}
-		work.resources = nil
 		b.typedRequirements = requirements
 		encoded, err := encodeCollectionMeta(work.meta)
 		if err != nil {
@@ -241,8 +283,11 @@ func (b *nativeEngineBuild) materializeTyped(group *backenddb.RootPublicationBui
 // Native schema replacements and newer typed header suffixes are part of BOTH
 // handoff promises, not an allocation discovered after physical acceptance.
 func nativeTypedHandoffCharge(c *nativeCollectionState, maxSources int) (uint64, error) {
+	return nativeTypedHandoffChargeForCompaction(c, maxSources, false)
+}
+func nativeTypedHandoffChargeForCompaction(c *nativeCollectionState, maxSources int, physicalOnly bool) (uint64, error) {
 	primary, ok := c.domains.Get("primary")
-	if !ok || primary.typed == nil {
+	if !ok || (primary.typed == nil && !physicalOnly) {
 		return 0, nil
 	}
 	schema, err := nativeSchemaBackingCharge(reflect.ValueOf(c.schema.meta), 0)

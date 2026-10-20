@@ -19,6 +19,9 @@ type nativeBuiltDomain struct {
 	// empty proves the captured descriptor had no pending physical source.
 	// Its unchanged root cannot consume any newer source in latest.
 	empty bool
+	// physicalOnly is explicit maintenance of an exact captured base; it
+	// consumes no source when the captured domain has no pending boundary.
+	physicalOnly bool
 	// Build-only qualified key/value storage belongs to the original admitted
 	// result array. Handoff never samples a current collection name.
 	rootKey   string
@@ -44,7 +47,7 @@ func prepareNativeEngineHandoffWithCatalog(latest *nativeEngineVersion, built []
 	groups := 0
 	for i := range built {
 		if built[i].collection == 0 || built[i].interpretation == 0 || built[i].name == "" ||
-			(built[i].empty && (built[i].boundary != nil || built[i].root != built[i].oldBaseRoot)) ||
+			(built[i].empty && (built[i].boundary != nil || (!built[i].physicalOnly && built[i].root != built[i].oldBaseRoot))) ||
 			(!built[i].empty && built[i].boundary == nil) {
 			return nil, backenddb.ErrNativeSemanticUnsupported
 		}

@@ -327,7 +327,11 @@ func (db *DB) flushCOWFrozenCut(syncFlush bool, publish *checkpointCommandWALPub
 }
 
 // forceIdle is private to the exact-basis, fully sealed fallback predicate path.
-func (db *DB) flushCOWFrozenCutForFallback(syncFlush bool, publish *checkpointCommandWALPublish, cut *cowReadCut, forceIdle bool) (retErr error) {
+func (db *DB) flushCOWFrozenCutForFallback(syncFlush bool, publish *checkpointCommandWALPublish, cut *cowReadCut, forceIdle bool) error {
+	return db.flushCOWFrozenCutWithColumnCompaction(syncFlush, publish, cut, forceIdle, nil)
+}
+
+func (db *DB) flushCOWFrozenCutWithColumnCompaction(syncFlush bool, publish *checkpointCommandWALPublish, cut *cowReadCut, forceIdle bool, operation backenddb.NativeColumnStoreCompaction) (retErr error) {
 	c := db.cow
 	// The caller receives completion only. Coverage is always reconstructed
 	// from this immutable cut and its exact captured disk basis below.
@@ -471,7 +475,16 @@ func (db *DB) flushCOWFrozenCutForFallback(syncFlush bool, publish *checkpointCo
 		return errors.Join(err, group.Close())
 	}
 	if captured := cut.frozenSemanticRootSet; captured != nil {
-		if err = captured.PrepareBuild(group, cut.basis.snapshot, h.guard); err != nil {
+		if operation != nil {
+			if state, ok := captured.(backenddb.NativeColumnStoreCompactionState); ok {
+				err = state.PrepareColumnStoreCompaction(operation, group, cut.basis.snapshot, h.guard)
+			} else {
+				err = backenddb.NativeSemanticBuildRetryableRefusal{Cause: backenddb.ErrNativeSemanticUnsupported}
+			}
+		} else {
+			err = captured.PrepareBuild(group, cut.basis.snapshot, h.guard)
+		}
+		if err != nil {
 			var refusal backenddb.NativeSemanticBuildRetryableRefusal
 			if !errors.As(err, &refusal) {
 				// Logical acceptance predates this physical build. A partial native
@@ -482,6 +495,9 @@ func (db *DB) flushCOWFrozenCutForFallback(syncFlush bool, publish *checkpointCo
 			}
 			return errors.Join(err, group.Close())
 		}
+	}
+	if cut.frozenSemanticRootSet == nil && operation != nil {
+		return errors.Join(backenddb.ErrNativeSemanticUnsupported, group.Close())
 	}
 	ops := make([]batch.Entry, 0, chunkCap)
 	// Sources apply oldest to newest within the same private build group. This
@@ -534,6 +550,13 @@ func (db *DB) flushCOWFrozenCutForFallback(syncFlush bool, publish *checkpointCo
 		completed.consumed = localPublish.consumed
 	}
 	if group.Accepted() {
+		if operation != nil {
+			// PrepareAcceptedSnapshot already adopted this exact accepted generation
+			// into h.basis. Copy only its scalar receipt before handoff may release it;
+			// accepted-plus-error follows the SAME original custody path below.
+			token, _ := group.AcceptedSnapshot().StateToken()
+			operation.CompleteColumnStoreCompaction(token.SystemRootPageID)
+		}
 		h.accepted, h.seal = true, group.AcceptedSealReceipt()
 		c.handoff = h
 		handoffOwned, h = false, nil

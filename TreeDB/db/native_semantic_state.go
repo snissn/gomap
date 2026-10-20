@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"errors"
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
@@ -195,9 +196,23 @@ type NativePublicationResult struct {
 	Seal                                                                     rootpublication.PhysicalSealReceipt
 }
 
+// NativeColumnStoreCompaction carries only an operation's scalar completion.
+// It grants its caller no access to captured state or physical build authority.
+type NativeColumnStoreCompaction interface {
+	CompleteColumnStoreCompaction(systemRoot uint64)
+}
+
+// NativeColumnStoreCompactionState is an optional operation of the fixed
+// ORIGINAL captured engine state. Like PrepareBuild it uses only that state's
+// own ledger and the original group's synchronous borrowed capabilities.
+type NativeColumnStoreCompactionState interface {
+	PrepareColumnStoreCompaction(NativeColumnStoreCompaction, *RootPublicationBuildGroup, *Snapshot, *StableResourceCaptureLease) error
+}
+
 // NativeSemanticBridge is fixed once at Open to the backend's SAME private COW
 // owner. It introduces neither a participant registry nor a publication lane.
 type NativeSemanticBridge interface {
+	CompactNativeColumnStore(context.Context, NativeColumnStoreCompaction) error
 	Checkpoint() error
 	CaptureNativeCut() (NativeSemanticCapture, error)
 	BeginNativeConditionalTxn() (NativeConditionalTxn, error)
@@ -227,6 +242,24 @@ func (db *DB) SyncNativeSemanticPrefix() error {
 		return err
 	}
 	return db.nativeSemanticBridge.Checkpoint()
+}
+
+// CompactNativeColumnStore uses the original checkpoint owner and covered
+// handoff. No command identity is allocated for physical maintenance.
+func (db *DB) CompactNativeColumnStore(ctx context.Context, operation NativeColumnStoreCompaction) error {
+	if db == nil {
+		return ErrClosed
+	}
+	if err := db.CheckStorageMaintenanceReady(); err != nil {
+		return err
+	}
+	if operation == nil || !db.nativeSemanticActive.Load() || !db.HasNativeSemanticBridge() {
+		return ErrNativeSemanticUnsupported
+	}
+	if err := db.ActivateNativeSemanticOwner(); err != nil {
+		return err
+	}
+	return db.nativeSemanticBridge.CompactNativeColumnStore(ctx, operation)
 }
 
 func (db *DB) CaptureNativeSemanticState() (NativeSemanticCapture, error) {
