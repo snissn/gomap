@@ -7,9 +7,12 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
+	"runtime/pprof"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
@@ -565,6 +568,20 @@ func TestVectorPartitionSourceImportDependencyEncodingReopenV2(t *testing.T) {
 }
 
 func TestVectorPartitionSourceImportDependencyEncodingCoalescedV2(t *testing.T) {
+	// The Windows job can expire before its final named-test chunk's 30-minute
+	// Go timeout. Preserve a diagnostic stack without changing either budget or
+	// interrupting the original durable workload.
+	dumped := make(chan struct{})
+	timer := time.AfterFunc(10*time.Minute, func() {
+		defer close(dumped)
+		fmt.Fprintln(os.Stderr, "coalesced source import still running after 10m; all goroutine stacks:")
+		_ = pprof.Lookup("goroutine").WriteTo(os.Stderr, 2)
+	})
+	defer func() {
+		if !timer.Stop() {
+			<-dumped
+		}
+	}()
 	testVectorPartitionSourceImportDependencyEncodingV2(t, "coalesced")
 }
 
@@ -572,8 +589,13 @@ func testVectorPartitionSourceImportDependencyEncodingV2(t *testing.T, mode stri
 	t.Helper()
 	type work struct{ bytes, pages uint64 }
 	measure := func(prior int) work {
+		t.Logf("source import mode=%s prior=%d phase=open", mode, prior)
 		dir, d, c := openSourceImportDirectoryCollectionV2(t)
-		defer func() { d.Close() }()
+		defer func() {
+			t.Logf("source import mode=%s prior=%d phase=close", mode, prior)
+			d.Close()
+			t.Logf("source import mode=%s prior=%d phase=closed", mode, prior)
+		}()
 		imports := 1
 		if mode == "coalesced" {
 			imports = 2
@@ -588,8 +610,12 @@ func testVectorPartitionSourceImportDependencyEncodingV2(t *testing.T, mode stri
 			}
 		}
 		for i := 0; i < prior; i++ {
+			if i%256 == 0 {
+				t.Logf("source import mode=%s prior=%d phase=history completed=%d", mode, prior, i)
+			}
 			put(i)
 		}
+		t.Logf("source import mode=%s prior=%d phase=history-checkpoint", mode, prior)
 		if err := d.Checkpoint(); err != nil {
 			t.Fatal(err)
 		}
@@ -619,13 +645,16 @@ func testVectorPartitionSourceImportDependencyEncodingV2(t *testing.T, mode stri
 			return work{parse("treedb.durable_root.directory_build.changed_record_bytes"), parse("treedb.durable_root.directory_build.pages_written")}
 		}
 		before := read()
+		t.Logf("source import mode=%s prior=%d phase=measured-imports count=%d before=%+v", mode, prior, imports, before)
 		for i := 0; i < imports; i++ {
 			put(prior + i)
 		}
+		t.Logf("source import mode=%s prior=%d phase=measured-checkpoint", mode, prior)
 		if err := d.Checkpoint(); err != nil {
 			t.Fatal(err)
 		}
 		after := read()
+		t.Logf("source import mode=%s prior=%d phase=measured-complete after=%+v", mode, prior, after)
 		if after.bytes <= before.bytes || after.pages <= before.pages {
 			t.Fatalf("public imports did not charge actual changed records and pages: before=%+v after=%+v", before, after)
 		}

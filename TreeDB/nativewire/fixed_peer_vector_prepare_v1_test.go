@@ -36,6 +36,71 @@ func TestFixedPeerVectorInitializationRealRaftPrepareServingSnapshotTailV1(t *te
 	runFixedPeerVectorPrepareRealRaftV1(t, false, false, false, 3, false)
 }
 
+// Readiness retries only a pure routed read. The first controlled reply has no
+// authority; the next attempt must reach the original real-Raft runtimes.
+func TestFixedPeerVectorPrepareRouteReadinessRealRaftV1(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	configs, _, client := fixedPeerReadyV1(t, ctx, []string{"docs"})
+	controlled := *client
+	controlledHTTP := *client.http
+	base, ok := client.http.Transport.(*http.Transport)
+	if !ok {
+		t.Fatal("readiness control requires the runtime-owned HTTP transport")
+	}
+	var routeCalls, delegatedRoutes, submits int
+	controlledHTTP.Transport = splitInsertRoundTripperV1{Transport: base, roundTrip: func(request *http.Request) (*http.Response, error) {
+		switch request.URL.Path {
+		case "/v1/submit":
+			submits++
+		case "/v1/route":
+			routeCalls++
+			if routeCalls == 1 {
+				if err := request.Body.Close(); err != nil {
+					return nil, err
+				}
+				raw, err := json.Marshal(fixedPeerReplyV1{
+					NodeID: raftcluster.NodeID(request.Header.Get("X-TreeDB-Node")), ConfigDigest: request.Header.Get("X-TreeDB-Config"),
+					Error: raftcluster.ErrHashicorpRaftUnavailable.Error(), ErrorCode: fixedPeerErrorCodeV1(raftcluster.ErrHashicorpRaftUnavailable),
+				})
+				if err != nil {
+					return nil, err
+				}
+				return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(bytes.NewReader(raw)), ContentLength: int64(len(raw))}, nil
+			}
+			delegatedRoutes++
+		}
+		return base.RoundTrip(request)
+	}}
+	controlled.http = &controlledHTTP
+	request := ClusterRouteRequest{Database: "default", Catalog: "default", Collection: "docs", Shape: ClusterRouteShapeCollection}
+	route := fixedPeerWaitPrepareRouteV1(t, ctx, &controlled, configs[0].NodeID, request)
+	if routeCalls < 2 || delegatedRoutes == 0 || submits != 0 || route.GroupID != "group-b" || route.CatalogMetaEpoch != 1 || route.CatalogMetaDigest == "" {
+		t.Fatalf("readiness did not cross unavailable to an actual read-only route: calls=%d delegated=%d submits=%d route=%+v", routeCalls, delegatedRoutes, submits, route)
+	}
+}
+
+// Seed application and leader hints do not establish catalog quorum-read
+// readiness. This is the existing Route-wait pattern used before intentional
+// quorum refusal in fixed_peer_tcp_runtime_v1_test.go; it never submits Prepare.
+func fixedPeerWaitPrepareRouteV1(t *testing.T, ctx context.Context, client *FixedPeerTCPClientV1, node raftcluster.NodeID, request ClusterRouteRequest) ClusterRouteTarget {
+	t.Helper()
+	var route ClusterRouteTarget
+	var lastErr error
+	attempts := 0
+	defer func() {
+		if t.Failed() {
+			t.Logf("prepare route readiness attempts=%d last_error=%v", attempts, lastErr)
+		}
+	}()
+	fixedPeerWaitV1(t, ctx, func() bool {
+		attempts++
+		route, lastErr = client.Route(ctx, node, request)
+		return lastErr == nil
+	})
+	return route
+}
+
 // This recovery witness acknowledges a live overlay before the physical Raft
 // snapshot, then retains the ordinary tail/retry/close/reopen assertions below.
 func TestFixedPeerVectorInitializationLiveOverlaySnapshotTailRecoveryV1(t *testing.T) {
@@ -552,6 +617,10 @@ func runFixedPeerVectorPrepareRealRaftV1(t *testing.T, loseResult, nonphysical, 
 	// real public workflow must refuse before its first rebuild/prepare append,
 	// rather than panic later while applying an already committed command.
 	if runtime.GOOS != "linux" {
+		// Prove the same pure catalog route used by Prepare is ready before
+		// capturing the immutable baseline. Later leadership loss still fails
+		// the single Prepare below; readiness is not a lasting authority lease.
+		fixedPeerWaitPrepareRouteV1(t, ctx, client, configs[0].NodeID, request)
 		before := make([]FixedPeerTCPStatusV1, len(nodes))
 		beforeRoots := make([]backenddb.StateToken, len(nodes))
 		beforeWAL := make([]uint64, len(nodes))
@@ -574,8 +643,23 @@ func runFixedPeerVectorPrepareRealRaftV1(t *testing.T, loseResult, nonphysical, 
 				t.Fatalf("unexpected partition namespace before refusal: %v", err)
 			}
 		}
-		if _, err := client.PrepareVectorInitializationV1(ctx, configs[0].NodeID, "reject-unsupported-publication-before-append"); err == nil || !strings.Contains(err.Error(), collections.ErrVectorPartitionNamespacePersistenceUnsupportedV1.Error()) {
-			t.Fatalf("unsupported partition publication refusal=%v", err)
+		// Retain the outer failing RPC phase without changing replies or
+		// retrying a mutation. Route and Submit each perform catalog fences;
+		// this diagnostic does not claim which inner fence emitted an error.
+		prepareClient := *client
+		prepareHTTP := *client.http
+		base, ok := client.http.Transport.(*http.Transport)
+		if !ok {
+			t.Fatal("prepare phase diagnostic requires the runtime-owned HTTP transport")
+		}
+		lastPrepareRPC := "not sent"
+		prepareHTTP.Transport = splitInsertRoundTripperV1{Transport: base, roundTrip: func(request *http.Request) (*http.Response, error) {
+			lastPrepareRPC = request.URL.Path
+			return base.RoundTrip(request)
+		}}
+		prepareClient.http = &prepareHTTP
+		if _, err := prepareClient.PrepareVectorInitializationV1(ctx, configs[0].NodeID, "reject-unsupported-publication-before-append"); err == nil || !strings.Contains(err.Error(), collections.ErrVectorPartitionNamespacePersistenceUnsupportedV1.Error()) {
+			t.Fatalf("unsupported partition publication refusal=%v last_outer_rpc=%s", err, lastPrepareRPC)
 		}
 		for i, node := range nodes {
 			after, err := node.Status(ctx)
