@@ -395,6 +395,11 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/collections/native_typed_read.go", classification: typedStorageLegacyCompatibility, matchingLines: 6, occurrences: 6},
 	{path: "TreeDB/collections/native_typed_state.go", classification: typedStorageLegacyCompatibility, matchingLines: 6, occurrences: 8},
 	{path: "TreeDB/collections/native_typed_txn.go", classification: typedStorageLegacyCompatibility, matchingLines: 14, occurrences: 15},
+	// Grouped native typed updates and their controls use the retained public
+	// physical schema; no alternate collection representation is introduced.
+	{path: "TreeDB/collections/native_typed_upsert_group.go", classification: typedStorageLegacyCompatibility, matchingLines: 7, occurrences: 7},
+	{path: "TreeDB/collections/native_typed_upsert_group_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 5},
+	{path: "TreeDB/native_typed_upsert_group_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 5},
 	{path: "TreeDB/collections/public_dependency_directory_cost_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 2},
 	{path: "TreeDB/native_existing_column_pending_replay_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 7, occurrences: 11},
 	{path: "TreeDB/native_existing_typed_multicolumn_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 5},
