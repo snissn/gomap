@@ -256,7 +256,7 @@ func replayNativeJSONComposite(db *backenddb.DB, env commitlog.CommandEnvelope) 
 				}
 				rows, residual = prepared.declaredRows, retained
 			} else if len(docs) != 0 {
-				if member.Kind != commitlog.CommandKindCollectionInsertBatchByID {
+				if member.Kind != commitlog.CommandKindCollectionInsertBatchByID && member.Kind != commitlog.CommandKindCollectionUpdateBatchByID {
 					return backenddb.ErrNativeSemanticUnsupported
 				}
 				declared := make([]columnWriteDocument, len(docs))
@@ -264,16 +264,9 @@ func replayNativeJSONComposite(db *backenddb.DB, env commitlog.CommandEnvelope) 
 					declared[i] = columnWriteDocument{ID: doc.ID, Document: doc.Document}
 				}
 				var err error
-				rows, err = extractColumnDeclaredRowsFromJSONDocuments(*target.meta.Options.ColumnStore, declared)
+				rows, residual, err = nativeTypedDocumentRows(target.meta, declared)
 				if err != nil {
 					return err
-				}
-				residual = make([][]byte, len(docs))
-				for i, doc := range docs {
-					residual[i], err = columnRetainedPayloadJSONFromJSONDocument(*target.meta.Options.ColumnStore, doc.Document)
-					if err != nil {
-						return err
-					}
 				}
 			}
 			exists := func(id []byte) (bool, error) {

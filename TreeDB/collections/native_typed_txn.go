@@ -33,7 +33,19 @@ func (g *nativeJSONTxnBinding) typedRowEqual(id, retained []byte, wanted []colum
 // stageNativeTypedInsert uses the maintained declared-value parser and residual
 // transform. The original independent receipt transfers with the immutable
 // delta before any transaction stage receipt can be refunded.
-func (t *NativeJSONTxn) stageNativeTypedInsert(g *nativeJSONTxnBinding, ids, documents [][]byte) (resultErr error) {
+func (t *NativeJSONTxn) stageNativeTypedInsert(g *nativeJSONTxnBinding, ids, documents [][]byte) error {
+	return t.stageNativeTypedDocuments(g, ids, documents, commitlog.CommandKindCollectionInsertBatchByID)
+}
+
+// Both document producers use the same original parser, retained policy and
+// independent delta receipt. Update callers have already read/matched each ID.
+func (t *NativeJSONTxn) stageNativeTypedDocuments(g *nativeJSONTxnBinding, ids, documents [][]byte, kind commitlog.CommandKind) (resultErr error) {
+	operation := ColumnPublishOperationInsert
+	if kind == commitlog.CommandKindCollectionUpdateBatchByID {
+		operation = ColumnPublishOperationUpdate
+	} else if kind != commitlog.CommandKindCollectionInsertBatchByID {
+		return backenddb.ErrNativeSemanticUnsupported
+	}
 	if len(ids) == 0 || len(ids) != len(documents) {
 		return backenddb.ErrNativeSemanticUnsupported
 	}
@@ -72,26 +84,21 @@ func (t *NativeJSONTxn) stageNativeTypedInsert(g *nativeJSONTxnBinding, ids, doc
 		if len(id) == 0 {
 			return backenddb.ErrNativeSemanticUnsupported
 		}
-		if err = t.trackRead(g, id); err != nil {
-			return err
-		}
-		if found, _, e := g.typedRowEqual(id, nil, nil); e != nil {
-			return e
-		} else if found {
-			return ErrDocumentExists
+		if kind == commitlog.CommandKindCollectionInsertBatchByID {
+			if err = t.trackRead(g, id); err != nil {
+				return err
+			}
+			if found, _, e := g.typedRowEqual(id, nil, nil); e != nil {
+				return e
+			} else if found {
+				return ErrDocumentExists
+			}
 		}
 		docs[i] = columnWriteDocument{ID: id, Document: documents[i]}
 	}
-	rows, err = extractColumnDeclaredRowsFromJSONDocuments(*g.probe.meta.Options.ColumnStore, docs)
+	rows, residual, err = nativeTypedDocumentRows(g.probe.meta, docs)
 	if err != nil {
 		return err
-	}
-	residual = make([][]byte, len(documents))
-	for i, doc := range documents {
-		residual[i], err = columnRetainedPayloadJSONFromJSONDocument(*g.probe.meta.Options.ColumnStore, doc)
-		if err != nil {
-			return err
-		}
 	}
 	sort.Sort(nativeTypedRowsOrder{rows: rows, retained: residual})
 	for i := 1; i < len(rows); i++ {
@@ -120,7 +127,7 @@ func (t *NativeJSONTxn) stageNativeTypedInsert(g *nativeJSONTxnBinding, ids, doc
 	if err = nativeTypedValidateIndexRows(g.probe.meta, rows, func(n uint64) error { return t.admitStage(g, n) }); err != nil {
 		return err
 	}
-	if err = t.adoptNativeTyped(g, rows, residual, nil, ColumnPublishOperationInsert, capacity, lease); err != nil {
+	if err = t.adoptNativeTyped(g, rows, residual, nil, operation, capacity, lease); err != nil {
 		return err
 	}
 	lease = nil
@@ -135,15 +142,40 @@ func (t *NativeJSONTxn) stageNativeTypedInsert(g *nativeJSONTxnBinding, ids, doc
 	if err = t.admitMemberPayload(g, canonical, nil); err != nil {
 		return err
 	}
-	payload, err := commitlog.EncodeCollectionInsertBatchByIDPayload(g.name, canonical)
+	format := commitlog.PayloadFormatCollectionInsertBatchByIDV1
+	var payload []byte
+	if kind == commitlog.CommandKindCollectionUpdateBatchByID {
+		format = commitlog.PayloadFormatCollectionUpdateBatchByIDV1
+		payload, err = commitlog.EncodeCollectionUpdateBatchByIDPayload(g.name, canonical)
+	} else {
+		payload, err = commitlog.EncodeCollectionInsertBatchByIDPayload(g.name, canonical)
+	}
 	if err != nil {
 		return err
 	}
-	if err = t.appendNativeMember(g, commitlog.CommandKindCollectionInsertBatchByID, commitlog.PayloadFormatCollectionInsertBatchByIDV1, payload); err != nil {
+	if err = t.appendNativeMember(g, kind, format, payload); err != nil {
 		return err
 	}
 	g.typed.memberOrdinal = uint32(len(t.members) - 1)
 	return nil
+}
+
+// The ordinary document producers and callback replacement validation share
+// the maintained declared parser and retained-policy transform. Callers admit
+// all parser scratch and returned backing before entering this allocation scope.
+func nativeTypedDocumentRows(meta CollectionMeta, docs []columnWriteDocument) ([]columnDeclaredRow, [][]byte, error) {
+	rows, err := extractColumnDeclaredRowsFromJSONDocuments(*meta.Options.ColumnStore, docs)
+	if err != nil {
+		return nil, nil, err
+	}
+	residual := make([][]byte, len(docs))
+	for i, doc := range docs {
+		residual[i], err = columnRetainedPayloadJSONFromJSONDocument(*meta.Options.ColumnStore, doc.Document)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	return rows, residual, nil
 }
 
 func (t *NativeJSONTxn) adoptNativeTyped(g *nativeJSONTxnBinding, rows []columnDeclaredRow, residual, deleted [][]byte, operation ColumnPublishOperation, capacity uint64, lease *memtable.COWExternalLease) error {
@@ -163,30 +195,24 @@ func (t *NativeJSONTxn) adoptNativeTyped(g *nativeJSONTxnBinding, rows []columnD
 	return nil
 }
 
-func (t *NativeJSONTxn) finalizeNativeTyped(g *nativeJSONTxnBinding) error {
+// Reduce the same private member chain for final publication and conditional
+// unique-index eligibility. Only original keys are borrowed into this header run.
+func (t *NativeJSONTxn) nativeTypedFinalMutations(g *nativeJSONTxnBinding) ([]memtable.COWMutation, error) {
 	d := g.typed
 	var count uint64
 	for member := d; member != nil; member = member.previous {
 		if err := nativeTypedCheckedAdd(&count, uint64(len(member.rows))+uint64(len(member.deleted))); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	for _, item := range []uint64{uint64(unsafe.Sizeof(memtable.COWMutation{})), uint64(unsafe.Sizeof(txnhistory.Effect{}))} {
-		charge, err := nativeTypedCheckedMul(count, item)
-		if err != nil {
-			return err
-		}
-		if err = t.admitStage(g, memtable.COWAllocationCharge(charge)); err != nil {
-			return err
-		}
+	charge, err := nativeTypedCheckedMul(count, uint64(unsafe.Sizeof(memtable.COWMutation{})))
+	if err != nil {
+		return nil, err
 	}
-	for _, charge := range []uint64{uint64(unsafe.Sizeof(nativeJSONLogicalInsert{})), 3 * uint64(unsafe.Sizeof(nativeJSONDomainChange{}))} {
-		if err := t.admitStage(g, memtable.COWAllocationCharge(charge)); err != nil {
-			return err
-		}
+	if err = t.admitStage(g, memtable.COWAllocationCharge(charge)); err != nil {
+		return nil, err
 	}
 	mutations := make([]memtable.COWMutation, 0, count)
-	effects := make([]txnhistory.Effect, 0, count)
 	for member := d; member != nil; member = member.previous {
 		for _, id := range member.deleted {
 			mutations = append(mutations, memtable.COWMutation{Key: id})
@@ -210,7 +236,24 @@ func (t *NativeJSONTxn) finalizeNativeTyped(g *nativeJSONTxnBinding) error {
 		kept++
 	}
 	clear(mutations[kept:])
-	mutations = mutations[:kept]
+	return mutations[:kept], nil
+}
+
+func (t *NativeJSONTxn) finalizeNativeTyped(g *nativeJSONTxnBinding) error {
+	d := g.typed
+	mutations, err := t.nativeTypedFinalMutations(g)
+	if err != nil {
+		return err
+	}
+	if err = admitNativeInsertArray(len(mutations), uint64(unsafe.Sizeof(txnhistory.Effect{})), func(n uint64) error { return t.admitStage(g, n) }); err != nil {
+		return err
+	}
+	for _, charge := range []uint64{uint64(unsafe.Sizeof(nativeJSONLogicalInsert{})), 3 * uint64(unsafe.Sizeof(nativeJSONDomainChange{}))} {
+		if err := t.admitStage(g, memtable.COWAllocationCharge(charge)); err != nil {
+			return err
+		}
+	}
+	effects := make([]txnhistory.Effect, 0, len(mutations))
 	for _, mutation := range mutations {
 		effects = append(effects, txnhistory.Effect{Namespace: g.namespace(), Kind: txnhistory.PointEffect, Key: mutation.Key})
 	}
@@ -374,7 +417,7 @@ func (c *Collection) nativeReplaceTypedSource(deleted, ids, retained [][]byte, c
 // backing and exact residuals use the same independent delta receipt; projection
 // maps, conversion controls and the temporary column input use original work.
 func nativeTypedBatchStageCapacity(meta CollectionMeta, ids, retained [][]byte, columns []TypedColumnBatch, deleted [][]byte) (owned, work uint64, err error) {
-	if !nativeTypedMeta(meta) || len(ids) != len(retained) {
+	if !nativeTypedMeta(meta) || meta.Options.ColumnStore.RetainedPayload != ColumnRetainedPayloadNonColumn || len(ids) != len(retained) {
 		return 0, 0, backenddb.ErrNativeSemanticUnsupported
 	}
 	owned, work, err = nativeTypedStageCapacity(meta, ids, retained)
@@ -439,7 +482,7 @@ func nativeTypedBatchStageCapacity(meta CollectionMeta, ids, retained [][]byte, 
 }
 
 func (t *NativeJSONTxn) stageNativeTypedBatch(g *nativeJSONTxnBinding, ids, retained [][]byte, columns []TypedColumnBatch, deleteIDs [][]byte, kind commitlog.CommandKind, upsert bool) (results []UpdateBatchResult, matched int, resultErr error) {
-	if !nativeTypedMeta(g.probe.meta) {
+	if !nativeTypedMeta(g.probe.meta) || g.probe.meta.Options.ColumnStore.RetainedPayload != ColumnRetainedPayloadNonColumn {
 		return nil, 0, backenddb.ErrNativeSemanticUnsupported
 	}
 	if err := nativeTypedProfile(t.db, g.probe.meta); err != nil {

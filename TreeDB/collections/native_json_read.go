@@ -150,7 +150,8 @@ func (r *NativeJSONRead) Get(id []byte) ([]byte, error) {
 	if r.capture == nil || r.failure != nil || r.closing {
 		return nil, backenddb.ErrClosed
 	}
-	if nativeTypedMeta(r.meta) && r.domain.domain != nil {
+	typed := nativeTypedMeta(r.meta)
+	if typed && r.domain.domain != nil {
 		if row, residual, ok := r.domain.domain.typed.find(id); ok {
 			return r.reconstructPendingTyped(row, residual)
 		}
@@ -165,14 +166,20 @@ func (r *NativeJSONRead) Get(id []byte) ([]byte, error) {
 	if entry.Flags&node.FlagTombstone != 0 {
 		return nil, tree.ErrKeyNotFound
 	}
+	// Full retains the original whole JSON in primary storage. Preserve the
+	// ordinary owned pointer/inline output path without touching typed assets.
+	reconstruct := typed && r.meta.Options.ColumnStore.RetainedPayload != ColumnRetainedPayloadFull
 	if entry.Flags&node.FlagPointer != 0 {
 		value, err := r.readValue(entry.ValuePtr, nil)
 		if err != nil {
 			return nil, err
 		}
-		return r.reconstructTyped(id, value)
+		if reconstruct {
+			return r.reconstructTyped(id, value)
+		}
+		return value, nil
 	}
-	if nativeTypedMeta(r.meta) {
+	if reconstruct {
 		return r.reconstructTyped(id, entry.Value)
 	}
 	if owned {

@@ -23,10 +23,12 @@ type nativeIndexMutation struct {
 	name                        string
 	incarnation, interpretation uint64
 	bootstrap                   *nativeEngineVersion
+	before                      CollectionMeta
 	meta                        CollectionMeta
 	domains                     []nativeJSONDomainChange
 	catalog                     []memtable.COWMutation
 	custody                     *nativeMutationCustody
+	admit                       func(uint64) error
 }
 
 func (p *nativeIndexMutation) PrepareNativePublication(latest backenddb.NativeSemanticState, exact *backenddb.Snapshot) (backenddb.NativeFinalizedPublication, error) {
@@ -42,6 +44,31 @@ func (p *nativeIndexMutation) PrepareNativePublication(latest backenddb.NativeSe
 	if !found || old.incarnation != p.incarnation {
 		return backenddb.NativeFinalizedPublication{}, backenddb.ErrConcurrentModification
 	}
+	meta := p.meta
+	if meta.Options.ColumnStore != nil {
+		if !nativeIndexLogicalMetaEqual(*old.schema.meta, p.before) {
+			return backenddb.NativeFinalizedPublication{}, backenddb.ErrConcurrentModification
+		}
+		// Physical typed publication can advance while this logical drop is
+		// prepared. Keep its exact current manifest/configuration and change
+		// only index declarations; never restore the capture's older manifest.
+		meta = *old.schema.meta
+		meta.Indexes = p.meta.Indexes
+		meta = normalizeCollectionIndexedBufferOptions(meta)
+		if err := nativeIndexSchemaScratch(meta, nil, p.admit); err != nil {
+			return backenddb.NativeFinalizedPublication{}, err
+		}
+		encoded, err := encodeNormalizedCollectionMeta(meta)
+		if err != nil {
+			return backenddb.NativeFinalizedPublication{}, err
+		}
+		for i := range p.catalog {
+			if string(p.catalog[i].Key) == systemCollectionMetaKey(p.name) {
+				p.catalog[i].Value = encoded
+			}
+		}
+		p.meta = meta
+	}
 	counter, err := nativeCatalogIdentityRecord(base.nextIncarnation, true)
 	if err != nil {
 		return backenddb.NativeFinalizedPublication{}, err
@@ -51,13 +78,40 @@ func (p *nativeIndexMutation) PrepareNativePublication(latest backenddb.NativeSe
 			copy(p.catalog[i].Value, counter[:])
 		}
 	}
-	next, err := prepareNativeIndexMutation(base, old, p.meta, p.domains, p.catalog, p.interpretation)
+	next, err := prepareNativeIndexMutation(base, old, meta, p.domains, p.catalog, p.interpretation)
 	if err == nil {
 		c, _ := next.collections.Get(p.incarnation)
 		(nativeCollectionLifetime{}).Retain(c)
 		p.custody.adoptCollection(c)
 	}
 	return backenddb.NativeFinalizedPublication{State: next}, err
+}
+
+// These four fields are the physical outputs of columnPublishUpdatedMeta,
+// not schema. All remaining collection/column settings and index definitions
+// still compare exactly, including retained representation and schema hash.
+// Inputs are normalized at native capture/create or canonical metadata decode;
+// comparison must not allocate normalization scratch inside a handoff promise.
+func nativeIndexLogicalMetaEqual(current, before CollectionMeta) bool {
+	if current.Options.ColumnStore == nil || before.Options.ColumnStore == nil {
+		return collectionMetaValuesEqual(current, before)
+	}
+	cfg := *current.Options.ColumnStore
+	prior := before.Options.ColumnStore
+	nativeTypedCopyPhysicalMetadata(&cfg, prior)
+	current.Options.ColumnStore = &cfg
+	return collectionMetaValuesEqual(current, before)
+}
+
+// nativeTypedCopyPhysicalMetadata copies only the maintained physical build
+// outputs. Both arguments borrow live schema data; destination must be a private
+// caller-owned config copy. It allocates nothing and retains no aliases beyond
+// those already owned by the caller's original schema/capture lifetime.
+func nativeTypedCopyPhysicalMetadata(destination, physical *ColumnStoreConfig) {
+	destination.ActiveManifest = physical.ActiveManifest
+	destination.RecoveryAuthoritativeManifest = physical.RecoveryAuthoritativeManifest
+	destination.RecoveryAuthoritativeAppliedCommandLSN = physical.RecoveryAuthoritativeAppliedCommandLSN
+	destination.PhysicalMutationParts = physical.PhysicalMutationParts
 }
 
 func nativeIndexDomain(name string) bool {
@@ -185,7 +239,7 @@ func (m *NativeJSONManager) mutateIndexes(name string, create *IndexDefinition, 
 		return nil, err
 	}
 	defer func() { resultErr = errors.Join(resultErr, read.Close()) }()
-	if read.meta.Options.ColumnStore != nil {
+	if read.meta.Options.ColumnStore != nil && (create != nil || !nativeTypedMeta(read.meta)) {
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
 	base, _ := read.capture.State().(*nativeEngineVersion)
@@ -254,6 +308,9 @@ func (m *NativeJSONManager) mutateIndexes(name string, create *IndexDefinition, 
 			return nil, err
 		}
 		pureDrop := nativeIndexSubsetRemoval(read.meta.Indexes, meta.Indexes)
+		if read.meta.Options.ColumnStore != nil && !pureDrop {
+			return nil, backenddb.ErrNativeSemanticUnsupported
+		}
 		if !pureDrop {
 			if err = admit(uint64(page.PageSize)); err != nil {
 				return nil, err
@@ -397,7 +454,7 @@ func (m *NativeJSONManager) mutateIndexes(name string, create *IndexDefinition, 
 		if err != nil {
 			return nil, err
 		}
-		logical = &nativeIndexMutation{name: name, incarnation: read.collection.incarnation, interpretation: read.capture.LogicalSequence() + 1, bootstrap: base, meta: meta, domains: domains, catalog: catalog, custody: custody}
+		logical = &nativeIndexMutation{name: name, incarnation: read.collection.incarnation, interpretation: read.capture.LogicalSequence() + 1, bootstrap: base, before: read.meta, meta: meta, domains: domains, catalog: catalog, custody: custody, admit: admit}
 		changed := []txnhistory.Effect{{Namespace: txnhistory.Namespace{Kind: txnhistory.CatalogNamespace}, Kind: txnhistory.PointEffect, Key: []byte(name)}}
 		dependencies := []txnhistory.Dependency{changed[0], {Namespace: txnhistory.Namespace{Kind: txnhistory.CollectionNamespace, Collection: read.collection.incarnation, Domain: 1, Interpretation: 1}, Kind: txnhistory.RangeEffect}}
 		publication := &backenddb.NativePreparedPublication{Basis: read.capture.State(), StartSequence: read.capture.LogicalSequence(), Reprepare: logical, Custody: custody, Effects: changed, Dependencies: dependencies}
@@ -412,7 +469,7 @@ func (m *NativeJSONManager) mutateIndexes(name string, create *IndexDefinition, 
 		if err != nil {
 			return nil, err
 		}
-		return meta.copy(), nil
+		return logical.meta.copy(), nil
 	}()
 }
 

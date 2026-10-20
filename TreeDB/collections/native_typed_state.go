@@ -12,7 +12,8 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
 
-// nativeTypedDelta retains only declared vectors and the noncolumn residual.
+// nativeTypedDelta retains declared values and their original retained JSON or
+// semantic-stream carrier, including the complete document for Full.
 // previous is an original immutable state edge, not a second visibility owner.
 // appliedLSN and memberOrdinal are bound once, before the private successor is
 // installed; checkpoint progress never supplies a command's physical identity.
@@ -118,18 +119,28 @@ func nativeTypedDeltaHeaderCharge() uint64 {
 
 func nativeTypedMeta(meta CollectionMeta) bool {
 	cfg := meta.Options.ColumnStore
-	if cfg == nil || !cfg.Enabled || len(cfg.Columns) == 0 || len(cfg.AggregateMetadata) != 0 || cfg.RetainedPayload != ColumnRetainedPayloadNonColumn {
+	if cfg == nil || !cfg.Enabled || len(cfg.Columns) == 0 || (cfg.RetainedPayload != ColumnRetainedPayloadNonColumn && cfg.RetainedPayload != ColumnRetainedPayloadFull) {
 		return false
 	}
 	encoding := columnRetainedPayloadEffectiveEncoding(cfg)
-	// The maintained declared-row parser, residual transform and physical
-	// materializer operate over the complete scalar schema. Semantic-stream
-	// residuals can therefore share either existing scalar storage owner.
+	full := cfg.RetainedPayload == ColumnRetainedPayloadFull
+	if full && (encoding != ColumnRetainedPayloadEncodingJSON || normalizedDocumentFormat(meta.Options.DocumentFormat) != DocumentFormatJSON) {
+		return false
+	}
+	// Preserve the maintained scalar semantic-stream owners and multi-column
+	// producer while admitting Full only through its complete JSON carrier.
 	if encoding != ColumnRetainedPayloadEncodingJSON && encoding != ColumnRetainedPayloadEncodingSemanticStreamV1 {
 		return false
 	}
+	// Nested scalar parsing and aggregate asset fanout share the maintained
+	// prepared producer's existing structural limits. Other eligible layouts
+	// keep their original top-level/no-aggregate contract.
+	boundedScalars := encoding == ColumnRetainedPayloadEncodingSemanticStreamV1 && preparedInsertBoundedScalarColumns(cfg.Columns)
+	if len(cfg.AggregateMetadata) != 0 && (!boundedScalars || !preparedInsertBoundedAggregateMetadata(*cfg)) {
+		return false
+	}
 	for _, col := range cfg.Columns {
-		if col.Path == "" || strings.Contains(col.Path, ".") {
+		if col.Path == "" || (strings.Contains(col.Path, ".") && !boundedScalars) {
 			return false
 		}
 		switch col.ValueType {
@@ -141,7 +152,14 @@ func nativeTypedMeta(meta CollectionMeta) bool {
 		default:
 			return false
 		}
-		if encoding == ColumnRetainedPayloadEncodingJSON {
+		if full {
+			// Ordinary Full inserts parse the declared values from the complete
+			// document, retaining both through the existing typed publication.
+			// Direct typed batches keep their separate NonColumn-only gate.
+			if col.Nullable || (col.Owner != TypedStorageOwnerRowAsset && col.Owner != TypedStorageOwnerColumnPart) {
+				return false
+			}
+		} else if encoding == ColumnRetainedPayloadEncodingJSON {
 			if col.Nullable || !((col.ValueType == ColumnStoreValueString && col.Owner == TypedStorageOwnerRowAsset) || (col.ValueType == ColumnStoreValueFloat32Vector && col.Owner == TypedStorageOwnerColumnPart)) {
 				return false
 			}
@@ -158,6 +176,9 @@ func nativeTypedMeta(meta CollectionMeta) bool {
 	}
 	// The maintained direct typed producer indexes only declared, non-null
 	// String RowAsset values carried alongside non-column JSON residuals.
+	if full && len(meta.Indexes) != 0 {
+		return false
+	}
 	for _, index := range meta.Indexes {
 		if normalizedDocumentFormat(meta.Options.DocumentFormat) != DocumentFormatJSON || encoding != ColumnRetainedPayloadEncodingJSON || index.ValueType != IndexValueString || index.MultiKey || len(index.Components) != 0 || typedStringColumnIndex(cfg.Columns, index.Field) < 0 {
 			return false

@@ -571,8 +571,11 @@ func (t *NativeJSONTxn) UpdateBatchInto(name string, items []UpdateBatchItem) (r
 		}
 	}()
 	g := t.binding(name)
-	if g == nil || g.probe.meta.Options.ColumnStore != nil {
+	if g == nil {
 		return nil, backenddb.ErrNativeSemanticUnsupported
+	}
+	if g.probe.meta.Options.ColumnStore != nil {
+		return t.stageNativeTypedUpdate(g, items)
 	}
 	if len(items) == 0 {
 		return nil, nil

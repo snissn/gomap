@@ -343,26 +343,34 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	// schema field to refuse typed roles before original canonical assignment.
 	{path: "TreeDB/collections/native_command_wal_apply.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 4},
 	{path: "TreeDB/collections/native_bson_set.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
+	// Catalog flush projects the retained typed configuration from its exact
+	// captured schema, preserving accepted physical manifest outputs.
+	{path: "TreeDB/collections/native_catalog_source.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	{path: "TreeDB/collections/native_json_composite_replay.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 3},
 	{path: "TreeDB/collections/native_json_indexes.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	{path: "TreeDB/collections/native_json_insert.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	{path: "TreeDB/collections/native_json_public.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	{path: "TreeDB/collections/native_json_rows.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
 	{path: "TreeDB/collections/native_json_txn.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
-	// Scalar index DDL checks the retained schema field to refuse typed layouts
-	// consistently in foreground preparation and canonical replay.
-	{path: "TreeDB/collections/native_index_ddl.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
-	{path: "TreeDB/collections/native_index_ddl_replay.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 2},
+	// Scalar index DROP consumes the retained schema field, preserving physical
+	// manifest progress while changing only eligible typed index declarations.
+	// Declared-column CREATE remains refused in foreground and replay.
+	{path: "TreeDB/collections/native_index_ddl.go", classification: typedStorageLegacyCompatibility, matchingLines: 8, occurrences: 9},
+	{path: "TreeDB/collections/native_index_ddl_replay.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 4},
 	{path: "TreeDB/collections/native_typed_materialize.go", classification: typedStorageLegacyCompatibility, matchingLines: 23, occurrences: 24},
 	// Native typed scalar indexes consume the retained declared-column API;
 	// their values share the maintained typed encoder, not another row owner.
 	{path: "TreeDB/collections/native_typed_index.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 3},
+	// The captured-build DROP control uses the retained public typed schema.
+	{path: "TreeDB/collections/native_typed_index_drop_handoff_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 5},
 	{path: "TreeDB/collections/native_typed_read.go", classification: typedStorageLegacyCompatibility, matchingLines: 5, occurrences: 5},
 	{path: "TreeDB/collections/native_typed_state.go", classification: typedStorageLegacyCompatibility, matchingLines: 5, occurrences: 7},
 	{path: "TreeDB/collections/native_typed_txn.go", classification: typedStorageLegacyCompatibility, matchingLines: 12, occurrences: 13},
 	{path: "TreeDB/collections/public_dependency_directory_cost_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 2},
 	{path: "TreeDB/native_existing_column_pending_replay_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 7, occurrences: 11},
 	{path: "TreeDB/native_existing_typed_multicolumn_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 5},
+	// Typed DROP replay checks the original public physical configuration.
+	{path: "TreeDB/native_typed_index_drop_replay_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	// The R1 user guide names the retained public logical compaction API.
 	{path: "TreeDB/docs/guides/typed-row-store.md", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	// R1 logical folding measures the retained public compaction API.

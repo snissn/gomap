@@ -57,14 +57,19 @@ func nativeTypedDecodeIndexState(raw []byte, runtimes []indexRuntime, encoder *i
 		return nil, nil
 	}
 	invalid := func() (orderedDocumentIndexState, error) { return nil, backenddb.ErrNativeSemanticUnsupported }
-	if len(raw) < 3 || raw[0] != documentIndexStateVersion || int(binary.BigEndian.Uint16(raw[1:])) != len(runtimes) {
+	if len(raw) < 3 || raw[0] != documentIndexStateVersion {
+		return invalid()
+	}
+	count := int(binary.BigEndian.Uint16(raw[1:]))
+	if count < len(runtimes) {
 		return invalid()
 	}
 	if err := admit(memtable.COWAllocationCharge(256)); err != nil {
 		return nil, err
 	}
 	pos := 3
-	for range runtimes {
+	var previousName []byte
+	for range count {
 		if len(raw)-pos < 2 {
 			return invalid()
 		}
@@ -73,6 +78,13 @@ func nativeTypedDecodeIndexState(raw []byte, runtimes []indexRuntime, encoder *i
 		if n == 0 || len(raw)-pos < n+2 {
 			return invalid()
 		}
+		name := raw[pos : pos+n]
+		// The maintained encoder emits sorted distinct names. Validate every
+		// record, including names left behind by a backfill-free index drop.
+		if previousName != nil && bytes.Compare(previousName, name) >= 0 {
+			return invalid()
+		}
+		previousName = name
 		nameBytes := n
 		pos += n
 		if binary.BigEndian.Uint16(raw[pos:]) != 1 {
@@ -103,7 +115,7 @@ func nativeTypedDecodeIndexState(raw []byte, runtimes []indexRuntime, encoder *i
 	if err != nil {
 		return nil, err
 	}
-	if len(decoded) != len(runtimes) {
+	if len(decoded) != count {
 		return invalid()
 	}
 	state := encoder.appendState(len(runtimes))
@@ -196,6 +208,10 @@ func nativeTypedIndexEncodedCapacity(meta CollectionMeta, row columnDeclaredRow)
 // Old values come from the exact opening index-state root; new values use the
 // maintained typedIndexState encoder and ordinary final-batch uniqueness rule.
 func nativeTypedIndexFinalPlan(meta CollectionMeta, mutations []memtable.COWMutation, head *nativeTypedDelta, readOld func([]byte) ([]byte, error), admit func(uint64) error) (*directBufferedInsertPlan, []preparedBatchUpdate, []indexRuntime, error) {
+	return nativeTypedIndexFinalPlanMode(meta, mutations, head, readOld, admit, updateBatchModeAny)
+}
+
+func nativeTypedIndexFinalPlanMode(meta CollectionMeta, mutations []memtable.COWMutation, head *nativeTypedDelta, readOld func([]byte) ([]byte, error), admit func(uint64) error, mode updateBatchMode) (*directBufferedInsertPlan, []preparedBatchUpdate, []indexRuntime, error) {
 	header, err := nativeJSONIndexedPlanCharge(meta, nil, nil)
 	if err != nil {
 		return nil, nil, nil, err
@@ -265,6 +281,13 @@ func nativeTypedIndexFinalPlan(meta CollectionMeta, mutations []memtable.COWMuta
 		}
 		markBatchUpdateIndexEffects(&item, runtimes, &stats)
 		changed = append(changed, item)
+	}
+	if mode == updateBatchModeNoSecondaryUniqueIndexChanges {
+		if updateBatchChangesSecondaryUniqueIndex(runtimes, changed) {
+			return nil, nil, nil, errUpdateBatchChangesSecondaryUniqueIndex
+		}
+		// Eligibility precedes final uniqueness and any physical plan construction.
+		return nil, changed, runtimes, nil
 	}
 	charge, stateEntries, roots, err := nativeJSONFinalPlanCharge(meta.Name, planner.options, runtimes, changed)
 	if err != nil {

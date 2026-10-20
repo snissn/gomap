@@ -8,6 +8,7 @@ import (
 	"os"
 	"reflect"
 	"slices"
+	"strings"
 	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/batch"
@@ -108,6 +109,18 @@ func nativeTypedDeltaBuildCapacity(meta CollectionMeta, rows []columnDeclaredRow
 			}
 		}
 	}
+	// Each aggregate entry consumes at least one source row. Repeated group
+	// strings can be encoded once per spec and granule even when declared
+	// backing is interned; reuse the maintained prepared publisher's source
+	// total and six-copy encoding/coexistence bound.
+	_, groups := preparedInsertRepeatedStringBytes(*meta.Options.ColumnStore, rows)
+	groupBytes, err := nativeTypedCheckedMul(uint64(groups), 6)
+	if err != nil {
+		return 0, err
+	}
+	if err = nativeTypedCheckedAdd(&total, memtable.COWAllocationCharge(groupBytes)); err != nil {
+		return 0, err
+	}
 	manifest, err := nativeTypedManifestAppendCapacity(meta)
 	if err != nil {
 		return 0, err
@@ -190,11 +203,11 @@ func nativeTypedValueCapacity(col ColumnStoreColumn, value columnDeclaredValue) 
 	}
 }
 
-// This route has no aggregate metadata: its maintained builder adds
-// exactly a row part, a TCIM part and the replacement manifest header. Sixteen
-// simultaneous record/closure/mutation views each reserve four original 1 KiB
-// quota units for headers/maps and separately include all captured metadata
-// string backing. This does not assume a maximum namespace or schema name.
+// The original builder emits row/TCIM images, scalar row-owner sidecars,
+// one asset per aggregate spec, a header and one owned output-segment marker.
+// Sixteen simultaneous record/closure/mutation views each reserve four original
+// 1 KiB quota units for headers/maps plus captured schema/string backing.
+// The original single-output builder keeps all these assets in one segment.
 func nativeTypedManifestAppendCapacity(meta CollectionMeta) (uint64, error) {
 	backing, err := nativeSchemaBackingCharge(reflect.ValueOf(&meta), 0)
 	if err != nil {
@@ -203,7 +216,23 @@ func nativeTypedManifestAppendCapacity(meta CollectionMeta) (uint64, error) {
 	if err = nativeTypedCheckedAdd(&backing, 4*preparedSemanticStreamMapEntryReserveBytes); err != nil {
 		return 0, err
 	}
-	return nativeTypedCheckedMul(backing, 16*3)
+	cfg := meta.Options.ColumnStore
+	records := uint64(4) // header, row image, TCIM, output-segment marker
+	if err = nativeTypedCheckedAdd(&records, uint64(len(cfg.AggregateMetadata))); err != nil {
+		return 0, err
+	}
+	for _, col := range cfg.Columns {
+		if col.Owner == TypedStorageOwnerRowAsset && (col.ValueType == ColumnStoreValueInt64 || col.ValueType == ColumnStoreValueString && col.Dictionary) {
+			if err = nativeTypedCheckedAdd(&records, 1); err != nil {
+				return 0, err
+			}
+		}
+	}
+	copies, err := nativeTypedCheckedMul(records, 16)
+	if err != nil {
+		return 0, err
+	}
+	return nativeTypedCheckedMul(backing, copies)
 }
 
 // Retained source bytes bound structural entries independently of their encoded
@@ -1022,10 +1051,11 @@ func (w *nativeTypedMaterialization) release() (cowbtree.OwnedMapCompletion, err
 	return refund.Completion(), err
 }
 
-// Stage uses the maintained top-level RawMessage residual transform. Its
-// temporary map never expands nested values to interface trees: each object
-// member needs at least four source bytes, and one 1 KiB quota unit covers a
-// Swiss-map group entry, key/header and simultaneous old/replacement group.
+// Top-level stage uses the maintained RawMessage transform: each member needs
+// at least four source bytes. Nested declared paths use the original UseNumber
+// interface extractor and residual walker; admit a full quota unit per source
+// byte for their object/array/scalar/header/stack and old/replacement backing.
+// These temporary trees are serial per document and never become a delta owner.
 // The JSON encoder can escape each source byte to six output bytes; four
 // such source-sized buffers cover old/new marshal state and the owned copy.
 // Constructor scratch is admitted separately from the actual stripped residual
@@ -1035,6 +1065,20 @@ func nativeTypedStageCapacity(meta CollectionMeta, ids, docs [][]byte) (retained
 		return 0, 0, backenddb.ErrNativeSemanticUnsupported
 	}
 	columns := meta.Options.ColumnStore.Columns
+	var nested bool
+	var pathScratch uint64
+	for _, col := range columns {
+		nested = nested || strings.Contains(col.Path, ".")
+		// lookup/delete split paths independently. Bound one descriptor per
+		// path byte, including missing nullable ancestors in a tiny document.
+		n, e := nativeTypedCheckedMul(uint64(len(col.Path)+1), uint64(unsafe.Sizeof("")))
+		if e != nil {
+			return 0, 0, e
+		}
+		if e = nativeTypedCheckedAdd(&pathScratch, memtable.COWAllocationCharge(n)); e != nil {
+			return 0, 0, e
+		}
+	}
 	for _, n := range []uint64{uint64(unsafe.Sizeof(nativeTypedRows{})), uint64(unsafe.Sizeof(cowbtree.OwnedMapRefund{}))} {
 		if err = nativeTypedCheckedAdd(&retained, memtable.COWAllocationCharge(n)); err != nil {
 			return
@@ -1118,6 +1162,15 @@ func nativeTypedStageCapacity(meta CollectionMeta, ids, docs [][]byte) (retained
 			return
 		}
 		maps = memtable.COWAllocationCharge(maps)
+		if nested {
+			maps, err = nativeTypedJSONReadCharge(uint64(len(doc)))
+			if err != nil {
+				return
+			}
+			if err = nativeTypedCheckedAdd(&maps, pathScratch); err != nil {
+				return
+			}
+		}
 		if err = nativeTypedCheckedAdd(&maps, scratchHeaders); err != nil {
 			return
 		}

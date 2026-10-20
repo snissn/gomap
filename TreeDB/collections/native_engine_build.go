@@ -104,6 +104,19 @@ func prepareNativeEngineBuildForCompaction(captured *nativeEngineVersion, basis 
 	if err = nativeTypedCheckedAdd(&floor, typedFloor); err != nil {
 		return nil, err
 	}
+	// Catalog-only flushes can follow typed physical handoff. Reserve exact
+	// captured-schema projection before installing any ledger or allocating
+	// replacement metadata images in the original bounded catalog batch.
+	catalogBytes, err := nativeCatalogProjectionCapacity(captured)
+	if err != nil {
+		return nil, err
+	}
+	if err = nativeTypedCheckedAdd(&bytes, catalogBytes); err != nil {
+		return nil, err
+	}
+	if err = nativeTypedCheckedAdd(&floor, catalogBytes); err != nil {
+		return nil, err
+	}
 	lease, err := captured.maintenance.AdmitNativeBytes(bytes)
 	if err != nil {
 		err = fmt.Errorf("collections: native build reservation bytes=%d floor=%d typed_bytes=%d typed_floor=%d: %w", bytes, floor, typedBytes, typedFloor, err)
@@ -221,7 +234,7 @@ func nativeEngineBuildCapacity(domains, maxSources int, handoff uint64) (total, 
 	return total + handoff, floor, nil
 }
 
-func (b *nativeEngineBuild) materializeDomains(group nativeOrderedRootBuilder) error {
+func (b *nativeEngineBuild) materializeDomains(group nativeOrderedRootBuilder, names *cowbtree.OwnedMap[string, *nativeCollectionState]) error {
 	if b.failure != nil {
 		return b.failure
 	}
@@ -245,7 +258,7 @@ func (b *nativeEngineBuild) materializeDomains(group nativeOrderedRootBuilder) e
 		}
 	}
 	if b.catalog != nil {
-		if _, err := b.catalog.materialize(group); err != nil {
+		if _, err := b.catalog.materializeWithCatalog(group, names); err != nil {
 			b.failure = err
 			return err
 		}

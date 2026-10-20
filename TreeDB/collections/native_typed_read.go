@@ -12,9 +12,10 @@ import (
 	"github.com/snissn/gomap/TreeDB/tree"
 )
 
-// The maintained top-level RawMessage reconstruction owns no retained codec or
-// cache. One quota unit per input byte bounds map entries/control/growth even
-// for the shortest valid member; encoded strings need at most six bytes/input.
+// The maintained reconstruction owns no retained codec or cache. One quota
+// unit per input byte covers the original UseNumber object/array/scalar tree,
+// decoder/encoder stacks and simultaneous old/replacement backing, including
+// nested residuals. Encoded strings need at most six bytes per source byte.
 func nativeTypedJSONReadCharge(bytes uint64) (uint64, error) {
 	if bytes == ^uint64(0) {
 		return 0, memtable.ErrCOWCapacity
@@ -34,8 +35,9 @@ func nativeTypedJSONReadCharge(bytes uint64) (uint64, error) {
 }
 
 // A declared string/vector adds one object member, not one map entry per
-// value byte. Keep the original residual/map bound and separately cover typed
-// JSON output, escaping and old/replacement marshal backing.
+// value byte. Path bytes bound every split descriptor and newly inserted nested
+// ancestor/map, even if that path was absent from the residual. Keep that tree
+// bound separate from typed JSON escaping and old/replacement marshal backing.
 func nativeTypedReconstructionCharge(meta CollectionMeta, residual, typedJSON uint64) (uint64, error) {
 	var scalarJSON uint64
 	for _, col := range meta.Options.ColumnStore.Columns {
@@ -66,6 +68,12 @@ func nativeTypedReconstructionCharge(meta CollectionMeta, residual, typedJSON ui
 func (r *NativeJSONRead) reconstructPendingTyped(row *columnDeclaredRow, residual []byte) (result []byte, resultErr error) {
 	if row == nil {
 		return nil, tree.ErrKeyNotFound
+	}
+	if r.meta.Options.ColumnStore.RetainedPayload == ColumnRetainedPayloadFull {
+		// The original delta already owns the complete document. Like the
+		// maintained physical Full reader, output never reconstructs declared
+		// fields or borrows their asset backing. This copy belongs to the caller.
+		return bytes.Clone(residual), nil
 	}
 	if len(row.Values) != len(r.meta.Options.ColumnStore.Columns) {
 		return nil, backenddb.ErrNativeSemanticUnsupported

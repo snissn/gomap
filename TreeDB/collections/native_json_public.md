@@ -97,18 +97,45 @@ Eligible typed collections use the same transaction and immutable typed projecti
 Ordinary JSON insertion supports the layouts below; `InsertTypedBatchWithStats`,
 `ReplaceTypedBatch`, `UpsertTypedBatch` and `ReplaceTypedSourceByID` retain their
 JSON retained-payload requirement. `DeleteBatch` supports either retained carrier.
-Current eligibility requires top-level declared columns without aggregate metadata:
+Supported layouts are:
 
-- One or more top-level Int64/String columns owned by RowAsset or ColumnPart,
+- One or more Int64/String columns owned by RowAsset or ColumnPart,
   with noncolumn semantic-stream-v1 retained payload. Declared values and
   residual fields use the maintained schema-wide parser, owner-specific assets
-  and reconstruction. The existing single finite Float32Vector ColumnPart
-  semantic-stream-v1 layout remains eligible.
-- One or more nonnullable String RowAsset and/or finite Float32Vector ColumnPart
+  and reconstruction. Nested scalar paths and aggregate assets use the existing
+  bounded prepared schema: one to five Int64/String columns, at most three
+  Count/GroupHourCount/Min specs, three predicates per spec, four values per
+  predicate and 8 KiB aggregate configuration. Aggregate query routing remains
+  separate from this storage support. The existing single finite Float32Vector
+  ColumnPart semantic-stream-v1 layout remains eligible.
+- One or more top-level nonnullable String RowAsset and/or finite Float32Vector ColumnPart
   columns with noncolumn JSON retained payload. Each row supplies every declared
   column through the maintained typed projection or ordinary JSON input. Pending
   reads and physical reconstruction use the same complete schema; canonical typed
   frames retain every column in schema-name order.
+
+Ordinary `InsertBatch` also accepts Full-retained JSON collections with top-level,
+nonnullable Int64, String or finite Float32Vector columns owned by RowAsset or
+ColumnPart, without aggregate metadata. The original declared-value parser and
+physical publisher still produce the declared assets, while the same immutable
+delta retains the complete JSON document. Pending and checkpointed Full reads
+return independent copies of that document without reconstructing from declared
+assets, matching the maintained Full compatibility policy. Startup replay uses
+the original ordinary insert documents and the same retained-payload transform.
+This does not extend direct typed-batch APIs beyond noncolumn JSON. Indexed
+Full collections remain unsupported by this native slice; their migration and
+Full maintenance qualification remain open.
+
+Ordinary `UpdateBatch` supports eligible noncolumn JSON and Full JSON layouts.
+Callbacks receive independent complete documents from the transaction's original
+opening cut and private typed chain. Each changed replacement is copied and
+validated before another callback runs, then enters the same declared parser,
+retained transform and immutable delta installer as ordinary insertion. Canonical
+UPDATE members retain complete replacements; replay never invokes callbacks.
+The existing final typed-index plan preserves atomic unique-value handoff and
+conditional unique-index-change checks. Semantic-stream callback updates still
+refuse before callback execution. Full direct typed, source-replacement and delete
+operations remain outside this slice.
 
 Noncolumn JSON typed collections may predeclare ordinary scalar string and
 unique indexes on their declared nonnullable String RowAsset fields. They use
@@ -119,9 +146,16 @@ both memberships; a conflict refuses before canonical assignment. Typed physical
 asset domains retain their original identities, while typed secondary namespaces
 start after those reserved domains; ordinary JSON/BSON namespaces are unchanged.
 Checkpoint and startup aggregate replay use the same final index plan and original
-physical build group. No residual full-document copy is introduced. Typed scalar
-index DDL remains unsupported, as do typed compound, multikey, text and vector
-indexes on this route. Typed writes remain durable-WAL-only.
+physical build group. No residual full-document copy is introduced. Predeclared
+typed scalar indexes support `DropIndex`, `DropIndexes` and `DropAllIndexes`.
+Removal retains surviving name-keyed index/state domains and pending sources;
+the final drop removes index state too. It does not scan or reconstruct typed
+rows. Later writes filter the fully validated old index-state record to the
+remaining names. Held cuts retain their original declarations and memberships.
+`CreateIndex` on declared NonColumn fields retains its existing rejection;
+this capability does not add backfill for omitted declared payloads. Typed
+compound, multikey, text and vector indexes remain unsupported on this route.
+Typed writes remain durable-WAL-only.
 
 Column-dependent source, value, payload and reconstruction backing is admitted
 before allocation by the original transaction/read/build owner. Columns share the
@@ -138,8 +172,13 @@ when WAL is disabled.
 
 `Collection.PrepareInsertBatchOwned(...).Commit()` supports the eligible no-index
 Int64/String RowAsset/ColumnPart semantic-stream layouts in the durable WAL profile.
-The existing scalar-column and input limits still bound preparation; aggregates
-and nested declared paths remain outside native eligibility. Prepare
+The existing scalar-column and input limits still bound preparation, including
+the bounded nested/aggregate schema above, 16K rows and 128 KiB per document.
+Nested/aggregate preparation validates full input with the maintained semantic
+constructor before stripping declared fields, preserving its original depth,
+descriptor, key/path, interning and emission limits. Its temporary encoded carrier
+is discarded before staging; this duplicate work remains a performance and
+simplification concern. Prepare
 stages the original transaction's identity-free typed projection and canonical
 input copies; it advances no publication frontier. Conflicts against its opening
 may fail preparation early. Commit consumes the token once and revalidates its
@@ -291,6 +330,11 @@ Catalog index mutation uses command kind 201 and payload format 17; create
 collection remains kind 200. Startup validates the prior schema/incarnation and
 performs the same backfill or name-based removal in the original single replay
 build group.
+Typed drops use that same command and backfill-free removal. Only index
+declarations change: foreground finalization and startup replay preserve the
+current typed manifest, recovery-authoritative LSN and physical part count.
+Those physical construction outputs may advance independently of schema;
+all other column settings still compare exactly.
 The command contains no predicted LSN, physical roots or new schema epoch.
 Temporary schema/document construction backing is admitted before normalization and
 encoding and released after synchronous publication drops its borrowed aliases.

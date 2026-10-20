@@ -3,6 +3,7 @@ package collections
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -10,8 +11,9 @@ import (
 )
 
 // Native preparation keeps the existing transaction's single opening and typed
-// projection. It does not construct legacy semantic blocks, a second typed
-// batch, assets or a publication identity.
+// projection. Nested/aggregate prepared input also passes the maintained full
+// semantic constructor before declared fields are stripped, preserving its
+// original input limits. That temporary carrier creates no publication identity.
 func (c *Collection) prepareNativeInsertBatchOwned(ids, documents [][]byte, maxOwnedBytes int64) (prepared *PreparedInsertBatch, resultErr error) {
 	if c.manager.isClosing() {
 		return nil, backenddb.ErrClosed
@@ -62,6 +64,28 @@ func (c *Collection) prepareNativeInsertBatchOwned(ids, documents [][]byte, maxO
 	if owned > maxOwnedBytes || reserve > maxOwnedBytes-owned {
 		return nil, fmt.Errorf("%w: native prepared bytes %d plus commit reserve %d exceed %d", ErrPreparedInsertResourceLimit, owned, reserve, maxOwnedBytes)
 	}
+	fullInput := len(meta.Options.ColumnStore.AggregateMetadata) != 0
+	for _, col := range meta.Options.ColumnStore.Columns {
+		fullInput = fullInput || strings.Contains(col.Path, ".")
+	}
+	if fullInput {
+		// Reuse the already bounded request's materializer/parser envelope
+		// under the original allocator. Validation must see declared subtrees
+		// before the native residual transform can remove them. The separate
+		// publisher allowance is not parser credit or an allocator admission.
+		capacity := reserve - preparedInsertPublisherReserveBytes()
+		lease, err := tx.core.NativeAllocator().AdmitNativeBytes(uint64(capacity))
+		if err != nil {
+			return nil, err
+		}
+		err = nativePreparedInsertValidateFullInput(*meta.Options.ColumnStore, ids, documents, capacity)
+		// The helper has dropped every temporary carrier/declared-row alias
+		// before this original receipt is refunded or staging begins.
+		lease.Close()
+		if err != nil {
+			return nil, err
+		}
+	}
 	if err := tx.InsertBatch(ids, documents); err != nil {
 		return nil, err
 	}
@@ -75,6 +99,19 @@ func (c *Collection) prepareNativeInsertBatchOwned(ids, documents [][]byte, maxO
 		return nil, err
 	}
 	return &PreparedInsertBatch{collection: c, nativeTxn: tx, ids: resultIDs, ownedBytes: owned, commitReserve: reserve}, nil
+}
+
+// Keep the maintained prepared cursor's depth, descriptor, key/path, interning
+// and emission quotas, including for declared fields absent from the residual.
+// Encoding this discarded carrier is duplicate work; factoring the maintained
+// collector before encoding remains a performance/simplification opportunity.
+func nativePreparedInsertValidateFullInput(cfg ColumnStoreConfig, ids, documents [][]byte, capacity int64) error {
+	prepared, err := prepareColumnRetainedSemanticStreamV1StorageDocumentsWithIDsConstruction(cfg, ids, documents, capacity, true)
+	if prepared.semanticStreamBlocks != nil {
+		prepared.semanticStreamBlocks.(*memtable.AppendOnly).ReleaseDropEntries()
+	}
+	prepared = columnRetainedPayloadStorageDocuments{}
+	return err
 }
 
 // The request envelope reuses the native parser/materializer capacity formulas.
@@ -119,6 +156,23 @@ func nativePreparedInsertBudget(meta CollectionMeta, ids, documents [][]byte) (o
 			}
 			if e = nativeTypedCheckedAdd(&row, memtable.COWAllocationCharge(backing)); e != nil {
 				return 0, 0, e
+			}
+			// Mirror the actual declared-row aggregate group-string bound
+			// before parsing. Each matching spec can repeat this column's
+			// whole source-sized string once per row/granule.
+			if col.ValueType == ColumnStoreValueString {
+				for _, aggregate := range meta.Options.ColumnStore.AggregateMetadata {
+					if aggregate.GroupColumn != col.Name {
+						continue
+					}
+					group, e := nativeTypedCheckedMul(uint64(len(doc)), 6)
+					if e != nil {
+						return 0, 0, e
+					}
+					if e = nativeTypedCheckedAdd(&row, memtable.COWAllocationCharge(group)); e != nil {
+						return 0, 0, e
+					}
+				}
 			}
 		}
 		if e = nativeTypedCheckedAdd(&source, row); e != nil {

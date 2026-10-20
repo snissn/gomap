@@ -26099,6 +26099,13 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 		seen[textIndexes[i].Name] = struct{}{}
 	}
 	meta.TextIndexes = textIndexes
+	return normalizeCollectionIndexedBufferOptions(meta), nil
+}
+
+// normalizeCollectionIndexedBufferOptions derives the original indexed write
+// policy from the current declarations without allocating or changing schema.
+// Native DROP uses the same policy after replacing a private index slice.
+func normalizeCollectionIndexedBufferOptions(meta CollectionMeta) CollectionMeta {
 	if meta.Options.DisableIndexedWriteMemtables {
 		meta.Options.BufferedIndexedWrites = false
 		meta.Options.BufferedIndexedWriteMaxDocuments = 0
@@ -26139,7 +26146,7 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 		meta.Options.BufferedIndexedAsyncFlush = false
 		meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits = 0
 	}
-	return meta, nil
+	return meta
 }
 
 func validateVectorIndexRepresentationSchema(meta CollectionMeta) error {

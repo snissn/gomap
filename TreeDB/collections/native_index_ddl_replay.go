@@ -29,7 +29,7 @@ func decodeNativeIndexMutation(payload []byte) (commitlog.CatalogIndexMutationPa
 	if err != nil {
 		return p, before, after, err
 	}
-	if before.Name != p.Collection || after.Name != p.Collection || before.Options.ColumnStore != nil || after.Options.ColumnStore != nil {
+	if before.Name != p.Collection || after.Name != p.Collection {
 		return p, before, after, backenddb.ErrNativeSemanticUnsupported
 	}
 	before, err = nativeJSONMeta(before)
@@ -47,6 +47,9 @@ func decodeNativeIndexMutation(payload []byte) (commitlog.CatalogIndexMutationPa
 		return p, before, after, err
 	}
 	if !sameCollectionMeta(same, after) {
+		return p, before, after, backenddb.ErrNativeSemanticUnsupported
+	}
+	if before.Options.ColumnStore != nil && !nativeIndexSubsetRemoval(before.Indexes, after.Indexes) {
 		return p, before, after, backenddb.ErrNativeSemanticUnsupported
 	}
 	return p, before, after, nil
@@ -83,7 +86,7 @@ func replayNativeIndexMutation(db *backenddb.DB, env commitlog.CommandEnvelope) 
 	if err != nil {
 		return err
 	}
-	if !sameCollectionMeta(actual, before) {
+	if !nativeIndexLogicalMetaEqual(actual, before) {
 		return backenddb.ErrConcurrentModification
 	}
 	encoded, err = snapshot.GetAtRoot(token.SystemRootPageID, []byte(nativeCatalogIncarnationPrefix+p.Collection))
@@ -107,6 +110,17 @@ func replayNativeIndexMutation(db *backenddb.DB, env commitlog.CommandEnvelope) 
 	}
 	noAdmission := func(uint64) error { return nil }
 	pureDrop := nativeIndexSubsetRemoval(before.Indexes, after.Indexes)
+	metadata := p.Metadata
+	if before.Options.ColumnStore != nil {
+		// Earlier canonical typed members may have materialized more physical
+		// history during startup than was sealed when this frame was appended.
+		// The command changes declarations only; retain that original history.
+		after.Options.ColumnStore = actual.Options.ColumnStore
+		metadata, err = encodeNormalizedCollectionMeta(after)
+		if err != nil {
+			return err
+		}
+	}
 	var domains []nativeJSONDomainChange
 	if !pureDrop {
 		root := uint64(0)
@@ -184,7 +198,7 @@ func replayNativeIndexMutation(db *backenddb.DB, env commitlog.CommandEnvelope) 
 			return err
 		}
 	}
-	effects, err := nativeIndexCatalogEffects(before, after, p.Metadata, p.Incarnation, counter, noAdmission)
+	effects, err := nativeIndexCatalogEffects(before, after, metadata, p.Incarnation, counter, noAdmission)
 	if err != nil {
 		return err
 	}
