@@ -13418,7 +13418,6 @@ func TestCollectionManagerCloseForBackendDrainsQueuedUpdates(t *testing.T) {
 			}
 			foreignDocument := mustBSONCollectionDocument(t, bson.D{{Key: "_id", Value: "f1"}, {Key: "city", Value: "hnl"}, {Key: "score", Value: int32(0)}})
 			var foreign *Collection
-			var foreignDrainDuringClose atomic.Bool
 			if tc.commandWAL {
 				if _, err := mgr.CreateCollection(&CollectionMeta{Name: "foreign", Options: CollectionOptions{DocumentFormat: DocumentFormatBSON}}); err != nil {
 					t.Fatalf("create foreign collection: %v", err)
@@ -13437,14 +13436,27 @@ func TestCollectionManagerCloseForBackendDrainsQueuedUpdates(t *testing.T) {
 				if applied, next := d.State().AppliedCommandLSN, d.CommandWALNextLSN(); applied != beforeLSN || next != beforeLSN+2 {
 					t.Fatalf("foreign insert coverage=%d/%d want pending %d/%d", applied, next, beforeLSN, beforeLSN+2)
 				}
-				hook := func(domain *collectionWriteDomain) {
-					if domain == foreign.writeDomain && col.writeDomain.closingWrites.Load() {
-						foreignDrainDuringClose.Store(true)
-					}
-				}
-				mgr.testCommandWALRawDomainDrainHook.Store(&hook)
-				t.Cleanup(func() { mgr.testCommandWALRawDomainDrainHook.Store(nil) })
 				wantLSN += 3 // The pending foreign insert and both queued updates.
+			}
+			assertForeignPending := func(phase string) {
+				t.Helper()
+				if foreign == nil {
+					return
+				}
+				foreign.writeDomain.mu.RLock()
+				first, last := foreign.writeDomain.pendingCommandWALFirst, foreign.writeDomain.pendingCommandWALLast
+				foreign.writeDomain.mu.RUnlock()
+				coord := foreign.writeDomain.commandWALCoordinator.Load()
+				if coord == nil || coord != mgr.commandWALCoordinator || coord != col.writeDomain.commandWALCoordinator.Load() {
+					t.Fatalf("%s: foreign and queued users do not share original coordinator", phase)
+				}
+				coord.mu.Lock()
+				owner := coord.owner
+				coord.mu.Unlock()
+				applied, next := d.State().AppliedCommandLSN, d.CommandWALNextLSN()
+				if first != beforeLSN+1 || last != beforeLSN+1 || owner != foreign.writeDomain || applied != beforeLSN || next != beforeLSN+2 {
+					t.Fatalf("%s: foreign pending=%d/%d owner=%p applied=%d next=%d want %d/%d owner=%p applied=%d next=%d", phase, first, last, owner, applied, next, beforeLSN+1, beforeLSN+1, foreign.writeDomain, beforeLSN, beforeLSN+2)
+				}
 			}
 			combiner := col.updateCombiner()
 			if combiner == nil || combiner.hasShardWorkers() != tc.laneWorker {
@@ -13497,6 +13509,7 @@ func TestCollectionManagerCloseForBackendDrainsQueuedUpdates(t *testing.T) {
 					runtime.Gosched()
 				}
 			}
+			assertForeignPending("accepted callback and second queued request before close")
 			closeDone := make(chan error, 1)
 			go func() { closeDone <- mgr.closeForBackend() }()
 			deadline = time.After(10 * time.Second)
@@ -13516,6 +13529,9 @@ func TestCollectionManagerCloseForBackendDrainsQueuedUpdates(t *testing.T) {
 			if d.IsClosing() {
 				t.Fatal("backend closed before manager finished draining")
 			}
+			// stopUpdateCombiners waits for this held callback before FlushAll.
+			// Its queued append must drain this exact foreign prefix first.
+			assertForeignPending("domain closing with accepted callback held")
 			if _, _, err := col.UpdateBSONSet([]byte("u1"), fields); !errors.Is(err, backenddb.ErrClosed) {
 				t.Fatalf("late BSON ingress err=%v want ErrClosed", err)
 			}
@@ -13565,9 +13581,6 @@ func TestCollectionManagerCloseForBackendDrainsQueuedUpdates(t *testing.T) {
 			}
 			assertDocument(col)
 			if tc.commandWAL {
-				if !foreignDrainDuringClose.Load() {
-					t.Fatal("queued command-WAL execution did not drain foreign work during domain close")
-				}
 				if d.State().AppliedCommandLSN != wantLSN || d.CommandWALNextLSN() != wantLSN+1 {
 					t.Fatalf("final WAL coverage=%d/%d want %d/%d", d.State().AppliedCommandLSN, d.CommandWALNextLSN(), wantLSN, wantLSN+1)
 				}
