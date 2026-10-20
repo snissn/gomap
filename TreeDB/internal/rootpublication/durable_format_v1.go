@@ -915,6 +915,19 @@ func (record DurableRootRecordV1) validate(pageID uint64) error {
 	return nil
 }
 
+// PageDigest validates the record and computes the canonical page digest for
+// preparation, without producing a checksummed page image. The zeroed local
+// page keeps checksum and embedded-digest bytes canonical. Materialization must
+// still use EncodePage to produce the independent, checksummed output.
+func (record DurableRootRecordV1) PageDigest(pageID uint64) ([32]byte, error) {
+	if err := record.validate(pageID); err != nil {
+		return [32]byte{}, err
+	}
+	var canonical [page.PageSize]byte
+	encodeDurableRootRecordFieldsV1(canonical[:], pageID, record)
+	return sha256.Sum256(canonical[:]), nil
+}
+
 func (record DurableRootRecordV1) EncodePage(pageID uint64) ([]byte, [32]byte, error) {
 	if err := record.validate(pageID); err != nil {
 		return nil, [32]byte{}, err

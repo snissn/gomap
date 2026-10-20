@@ -249,8 +249,7 @@ func validateDurableRootTransactionSpec(spec DurableRootTransactionSpec) error {
 	if err := spec.Payload.Meta.Encode(metaImage); err != nil {
 		return err
 	}
-	var recordScratch [page.PageSize]byte
-	digest, err := spec.Payload.Record.EncodePageInto(spec.Payload.Meta.RootRecordPageID, recordScratch[:])
+	digest, err := spec.Payload.Record.PageDigest(spec.Payload.Meta.RootRecordPageID)
 	if err != nil {
 		return err
 	}

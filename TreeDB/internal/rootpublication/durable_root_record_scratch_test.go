@@ -60,6 +60,11 @@ func TestDurableRootRecordEncodePageIntoMatchesFormerCodec(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			before := tc.record
+			preparedDigest, err := tc.record.PageDigest(33)
+			if err != nil || preparedDigest != wantDigest || tc.record != before {
+				t.Fatalf("preparation digest differs from former codec or changed record: %v", err)
+			}
 			backing := bytes.Repeat([]byte{0xa5}, page.PageSize+2)
 			dst := backing[1 : len(backing)-1]
 			digest, err := tc.record.EncodePageInto(33, dst)
@@ -111,6 +116,13 @@ func TestDurableRootRecordEncodePageIntoRefusalPreservesDestination(t *testing.T
 			if !errors.Is(err, ErrDurableRootRecordFormat) || digest != [32]byte{} || !bytes.Equal(dst, before) {
 				t.Fatalf("refusal mutated destination/digest or changed error: %v", err)
 			}
+			if tc.name == "page-id" || tc.name == "record" {
+				recordBefore := tc.record
+				digest, err = tc.record.PageDigest(tc.pageID)
+				if !errors.Is(err, ErrDurableRootRecordFormat) || digest != [32]byte{} || tc.record != recordBefore {
+					t.Fatalf("preparation refusal changed record/digest or error: %v", err)
+				}
+			}
 		})
 	}
 }
@@ -159,5 +171,26 @@ func TestDurableRootRecordScratchCorruptionStillRejected(t *testing.T) {
 				t.Fatal("failed decode mutated borrowed image")
 			}
 		})
+	}
+}
+
+// Exercise the actual preparation entry, including its validator and field
+// encoder. The independent allocating codec remains the byte/digest oracle.
+func TestDurableRootRecordPageDigestDoesNotAllocate(t *testing.T) {
+	record := rootRecordScratchFixture()
+	_, want, err := formerRootRecordEncodingForTest(record, 33)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got [32]byte
+	var digestErr error
+	allocs := testing.AllocsPerRun(1000, func() {
+		got, digestErr = record.PageDigest(33)
+	})
+	if digestErr != nil || got != want {
+		t.Fatalf("preparation digest=%x err=%v want=%x", got, digestErr, want)
+	}
+	if allocs != 0 {
+		t.Fatalf("preparation digest allocs/run=%v want=0", allocs)
 	}
 }

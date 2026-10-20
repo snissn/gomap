@@ -939,9 +939,12 @@ advancing `DurableSeq` by exactly one.
 
 ### 3.2 Durable-root record V1
 
-Construction may encode into private caller-owned preparation scratch and retain
-only the expected digest. Canonical hashing reads the whole page while substituting
-zeros for the checksum and embedded digest; it never mutates borrowed input.
+Preparation validates the record and uses the shared field encoder to construct
+one zeroed local canonical page, retaining only its SHA-256 digest. This digest-only
+path does not compute a checksum for the discarded page: checksum and embedded
+digest bytes are already zero, as required by canonical hashing. Checksummed page
+encoding and decoding still hash the whole page while substituting zeros for those
+fields, without mutating borrowed input.
 Materialization still creates an independent page image and copies it through the
 locked pager write before the existing index/meta durability barriers. Preparation
 scratch is not retained by a seal, candidate, or dependency owner. These construction
