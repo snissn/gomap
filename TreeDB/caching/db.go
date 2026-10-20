@@ -38473,15 +38473,21 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 		}
 		shardAdds[idx] += add
 	}
-	var retainMainMemStack [batchMemtableRetainStackCap]memtable.Table
-	retainMainMems := retainMainMemStack[:0]
-	if b.db.cow == nil && shardCount > len(retainMainMemStack) {
-		retainMainMems = make([]memtable.Table, 0, shardCount)
-	}
-	var retainStableViewValueMemStack [batchMemtableRetainStackCap]memtable.Table
-	retainStableViewValueMems = retainStableViewValueMemStack[:0]
-	if b.db.cow == nil && shardCount > len(retainStableViewValueMemStack) {
-		retainStableViewValueMems = make([]memtable.Table, 0, shardCount)
+	var retainMainMems []memtable.Table
+	if b.db.cow == nil {
+		// These arrays escape through ordinary memtable retention. COW
+		// publication owns its immutable payloads separately and returns before
+		// that retention path, so it must not allocate the ordinary scratch.
+		var retainMainMemStack [batchMemtableRetainStackCap]memtable.Table
+		retainMainMems = retainMainMemStack[:0]
+		if shardCount > len(retainMainMemStack) {
+			retainMainMems = make([]memtable.Table, 0, shardCount)
+		}
+		var retainStableViewValueMemStack [batchMemtableRetainStackCap]memtable.Table
+		retainStableViewValueMems = retainStableViewValueMemStack[:0]
+		if shardCount > len(retainStableViewValueMemStack) {
+			retainStableViewValueMems = make([]memtable.Table, 0, shardCount)
+		}
 	}
 	for i, add := range shardAdds {
 		if b.db.cow != nil {
