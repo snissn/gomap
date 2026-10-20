@@ -16,6 +16,9 @@ import (
 // and template-v1 state. This is a default-budget engine progress guard, not a
 // timing, process-kill, maintenance-GC or complete-Q qualification.
 func TestNativeMixedEngineLifecycle(t *testing.T) {
+	// Isolate the strict logical-Commit physical-prefix oracle from the
+	// independent periodic maintenance publisher; explicit checkpoints remain.
+	t.Setenv("TREEDB_DISABLE_VLOG_GENERATION_LOOP", "1")
 	opts := indexedSliceOptions(ProfileCommandWALDurable, t.TempDir())
 	database, err := Open(opts)
 	if err != nil {
