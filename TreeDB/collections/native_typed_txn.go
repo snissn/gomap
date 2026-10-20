@@ -3,6 +3,7 @@ package collections
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"sort"
 	"unsafe"
 
@@ -510,12 +511,12 @@ func (t *NativeJSONTxn) stageNativeTypedBatch(g *nativeJSONTxnBinding, ids, reta
 	}
 	lease, err := t.core.NativeAllocator().AdmitNativeBytes(owned)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, fmt.Errorf("collections: native typed batch owned bytes=%d: %w", owned, err)
 	}
 	work, err := t.core.NativeAllocator().AdmitNativeBytes(scratch)
 	if err != nil {
 		lease.Close()
-		return nil, 0, err
+		return nil, 0, fmt.Errorf("collections: native typed batch scratch bytes=%d: %w", scratch, err)
 	}
 	var p *trustedFloat32Projection
 	var documents []columnWriteDocument

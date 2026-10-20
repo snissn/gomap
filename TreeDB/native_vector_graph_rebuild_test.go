@@ -138,7 +138,8 @@ func TestNativeVectorGraphRebuildLifecycleAndTransport(t *testing.T) {
 
 	firstIDs, firstResidual, firstColumns := rows("b", "a")
 	if progress, err := col.ImportVectorPartitionSourceChunkV2(ownership, input, firstIDs, firstResidual, firstColumns); err != nil || progress.ImportedChunks != 1 || progress.Complete {
-		t.Fatalf("first actual source import: %+v err=%v", progress, err)
+		s := database.Stats()
+		t.Fatalf("first actual source import: %+v err=%v maintenance=%s/%s cow=%+v", progress, err, s["treedb.cache.cow.maintenance_used_bytes"], s["treedb.cache.cow.maintenance_capacity_bytes"], database.cached.COWMemoryStats())
 	}
 	last := input
 	last.ChunkIndex, last.DocumentRevisions = 1, []uint64{700}

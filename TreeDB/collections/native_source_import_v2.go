@@ -152,7 +152,7 @@ func (c *Collection) nativeImportVectorPartitionSourceChunkV2(ownership sourcepa
 	}
 	tx, err := c.nativeJSON.Begin(c.name)
 	if err != nil {
-		return out, err
+		return out, fmt.Errorf("collections: native source begin: %w", err)
 	}
 	defer func() { resultErr = errors.Join(resultErr, tx.Close()) }()
 	g := &tx.bindings[0]
@@ -182,7 +182,7 @@ func (c *Collection) nativeImportVectorPartitionSourceChunkV2(ownership sourcepa
 	}
 	lease, err := tx.core.NativeAllocator().AdmitNativeBytes(owned)
 	if err != nil {
-		return out, err
+		return out, fmt.Errorf("collections: native source owned bytes=%d: %w", owned, err)
 	}
 	defer func() {
 		if lease != nil {
@@ -190,7 +190,7 @@ func (c *Collection) nativeImportVectorPartitionSourceChunkV2(ownership sourcepa
 		}
 	}()
 	if err = tx.admitStage(g, scratch); err != nil {
-		return out, err
+		return out, fmt.Errorf("collections: native source stage bytes=%d: %w", scratch, err)
 	}
 	// ValidateImportIDs owns one temporary int per ID and sorts it in place.
 	// Its scratch ends before projection/canonical construction; the admitted
@@ -262,7 +262,7 @@ func (c *Collection) nativeImportVectorPartitionSourceChunkV2(ownership sourcepa
 	}
 	g.allowSourceImport = true
 	if _, _, err = tx.stageNativeTypedBatch(g, ids, retained, columns, nil, commitlog.CommandKindCollectionInsertBatchByID, false); err != nil {
-		return out, err
+		return out, fmt.Errorf("collections: native source typed stage: %w", err)
 	}
 	refund := new(cowbtree.OwnedMapRefund)
 	refund.Init(lease)
@@ -279,6 +279,7 @@ func (c *Collection) nativeImportVectorPartitionSourceChunkV2(ownership sourcepa
 	}
 	apply := nativeCommandWALApplyCommit{frame: commandwalapply.LoweredFrame{Kind: commitlog.CommandKindCollectionReplaceSourceByID, Scope: commitlog.CommandScopeCollection, PayloadFormat: commitlog.PayloadFormatCollectionSourceImportV2, Payload: payload}, sync: true}
 	if err = tx.commitNativeApply(true, &apply); err != nil {
+		err = fmt.Errorf("collections: native source commit logical_installed=%t consumed=%t: %w", apply.result.LogicalInstalled, apply.result.Consumed, err)
 		if apply.result.LogicalInstalled {
 			err = commitAmbiguousError("source import sealed completion", err)
 		}
