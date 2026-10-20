@@ -100,7 +100,7 @@ class ImpactContract(unittest.TestCase):
         receipt = self.plan(self.event())
         self.assertTrue(receipt['forecast_qualified'], receipt['fallback'])
         self.assertFalse(receipt['omission_authority'])
-        self.assertEqual(len([m for m in receipt['members'] if m['workflow'] == 'treedb-tests.yml']), 33)
+        self.assertEqual(len([m for m in receipt['members'] if m['workflow'] == 'treedb-tests.yml']), 37)
         for m in receipt['members']:
             if (m['workflow'] == 'treedb-tests.yml' and m['job'] in ('test', 'race', 'required')) or m['workflow'] == 'root-tests.yml':
                 self.assertEqual(m['decision'], 'would_run', m)
@@ -238,7 +238,7 @@ class ImpactContract(unittest.TestCase):
         self.base = self.commit()
         receipt = self.plan(self.event())
         self.assertFull(receipt, 'bootstrap-no-accepted-policy')
-        self.assertEqual(len(receipt['members']), 59)
+        self.assertEqual(len(receipt['members']), 63)
         self.assertTrue(any(m['workflow'] == 'treedb-tests.yml' and m['job'] == 'vet'
                             for m in receipt['members']))
         policy['workflows']['treedb-tests.yml']['jobs'] = {}
@@ -263,14 +263,14 @@ class ImpactContract(unittest.TestCase):
                 mutate(policy)
                 with self.assertRaises(ci_impact.ContractError):
                     ci_impact.check_policy(policy)
-        # Accepted-base corruption is a full reporting receipt, never 58 members.
+        # Accepted-base corruption must still report the complete member universe.
         policy = copy.deepcopy(original)
         policy['members'].pop(target)
         self.write(ci_impact.POLICY, json.dumps(policy))
         self.base = self.commit()
         receipt = self.plan(self.event())
         self.assertFull(receipt, 'bootstrap-no-accepted-policy')
-        self.assertEqual(len(receipt['members']), 59)
+        self.assertEqual(len(receipt['members']), 63)
 
     def test_matrix_invalid_forms_and_label_collisions_fail_closed(self):
         original = json.loads((self.repo / ci_impact.POLICY).read_text())
@@ -433,11 +433,11 @@ class SourceInventoryContract(unittest.TestCase):
         files = [p for p in (ROOT / '.github/workflows').iterdir() if p.suffix in ('.yml', '.yaml')]
         self.assertEqual({p.name for p in files}, set(policy['workflows']))
         self.assertEqual(len(files), 17)
-        self.assertEqual(len(policy['members']), 59)
+        self.assertEqual(len(policy['members']), 63)
         for p in files:
             self.assertEqual(ci_impact.digest(p.read_bytes()), policy['workflows'][p.name]['sha256'], p)
         tree_members = [m for m in policy['members'] if m['workflow'] == 'treedb-tests.yml']
-        self.assertEqual(len(tree_members), 33)
+        self.assertEqual(len(tree_members), 37)
         tests = [m for m in tree_members if m['job'] == 'test']
         source = (ROOT / '.github/workflows/treedb-tests.yml').read_text()
         import re
