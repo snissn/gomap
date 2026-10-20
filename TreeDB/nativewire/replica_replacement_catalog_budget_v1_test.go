@@ -32,11 +32,20 @@ func TestReplacementCatalogPublishDelayedResponseV1(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			configs := replacementPublicInstallTestConfigsV1(t, tc.complete)
+			responseBudget := 2 * time.Second
+			if tc.complete {
+				responseBudget = 12 * time.Second
+			}
 			ca := newPeerCAFixtureV1(t)
 			now := time.Now()
 			runtimes := make([]*FixedPeerTCPRuntimeV1, len(configs))
 			for i := range configs {
-				// Hold election geometry equal; only the fixture RPC budget varies.
+				if configs[i].RequestTimeout != responseBudget {
+					t.Fatalf("fixture RPC budget = %v, want %v", configs[i].RequestTimeout, responseBudget)
+				}
+				// Give the real commit an independent budget in every case; only
+				// the probing client's reply budget follows the fixture policy.
+				configs[i].RequestTimeout = 12 * time.Second
 				configs[i].RaftTimeout = time.Second
 				configs[i].ClusterID = "replacement-catalog-budget"
 				configs[i].Credentials = ca.issue(t, configs[i].ClusterID, string(configs[i].NodeID), now.Add(-time.Hour), now.Add(time.Hour))
@@ -56,6 +65,7 @@ func TestReplacementCatalogPublishDelayedResponseV1(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer client.Close()
+			client.http.Timeout = responseBudget
 			ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
 			defer cancel()
 			leader := fixedPeerWaitCatalogLeaderV1(t, ctx, runtimes)
@@ -83,7 +93,14 @@ func TestReplacementCatalogPublishDelayedResponseV1(t *testing.T) {
 					return base.RoundTrip(request)
 				}
 				publishes.Add(1)
-				response, err := base.RoundTrip(request)
+				// Preserve the send trace, but let this one real request reach its
+				// committed reply even if the tested reply/caller deadline expires.
+				commitCtx, cancelCommit := context.WithTimeout(context.WithoutCancel(request.Context()), 12*time.Second)
+				defer cancelCommit()
+				commitRequest := request.Clone(commitCtx)
+				// http.Client also installs legacy cancellation for wrapper transports.
+				commitRequest.Cancel = nil
+				response, err := base.RoundTrip(commitRequest)
 				if err != nil {
 					return response, err
 				}
@@ -99,7 +116,9 @@ func TestReplacementCatalogPublishDelayedResponseV1(t *testing.T) {
 					return nil, fmt.Errorf("publish did not commit before response gate: %+v", reply)
 				}
 				committed.Store(true)
-				// Keep the real reply past the old RPC budget. No mutation is replayed.
+				// Hold the genuine reply against the original request context. Its
+				// deadline may already have expired during commit on a loaded runner.
+				// No mutation is replayed.
 				timer := time.NewTimer(tc.hold)
 				defer timer.Stop()
 				select {
