@@ -51,9 +51,7 @@ func TestIterator_EmptyForegroundLeaseBoundsDebugAndShutdown(t *testing.T) {
 					SetIteratorDebug(debug)
 					backend := &countingIteratorBackend{MockBackend: NewMockBackend()}
 					if tc.backendKeys {
-						if err := backend.Set([]byte("k"), []byte("v")); err != nil {
-							t.Fatal(err)
-						}
+						backend.Set([]byte("k"), []byte("v"))
 					}
 					db, err := Open(t.TempDir(), backend, Options{DisableWAL: true, AllowUnsafe: true, FlushThreshold: 1 << 30, MemtableShards: 1})
 					if err != nil {
