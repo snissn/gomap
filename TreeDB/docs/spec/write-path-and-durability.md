@@ -878,5 +878,5 @@ A request-local, nonblocking/no-reentry post-append observer can report an error
 after the original accepted receipt is recorded and before visibility. The
 original assigned-failure path retains sparse custody, poisons publication and
 requires recovery; result/progress are not persisted. Existing canonical replay
-recovers the frame. This adds no WAL format, owner, startup replay route or
-assignment authority.
+recovers the frame. The WAL format, owner, startup replay route and assignment
+authority remain unchanged.
