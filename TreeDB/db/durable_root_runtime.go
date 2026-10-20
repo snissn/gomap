@@ -2047,7 +2047,10 @@ func (db *DB) materializeDurableRootCandidateV1(candidate *durableRootPublishCan
 		}
 	}
 	recordPageID := auxiliary[len(auxiliary)-1]
-	recordImage, recordDigest, err := candidate.record.EncodePage(recordPageID)
+	// Pager.Write copies synchronously; this publication does not retain an
+	// encoded image after the write returns.
+	var recordImage [page.PageSize]byte
+	recordDigest, err := candidate.record.EncodePageInto(recordPageID, recordImage[:])
 	if err != nil {
 		return err
 	}
@@ -2059,7 +2062,7 @@ func (db *DB) materializeDurableRootCandidateV1(candidate *durableRootPublishCan
 	if err := durabilitycut.EmitRange(durabilitycut.BeforePublicationSealWrite, durabilitycut.ResourceSeal, db.dir, indexPath, recordOffset, int64(page.PageSize)); err != nil {
 		return err
 	}
-	if err := candidate.idx.pager.Write(recordPageID, recordImage); err != nil {
+	if err := candidate.idx.pager.Write(recordPageID, recordImage[:]); err != nil {
 		return fmt.Errorf("write durable root record: %w", err)
 	}
 	if err := durabilitycut.EmitRange(durabilitycut.AfterPublicationSealWrite, durabilitycut.ResourceSeal, db.dir, indexPath, recordOffset, int64(page.PageSize)); err != nil {
@@ -2622,14 +2625,33 @@ func writeDurableMetaSlotV1(sink freelist.AppendPageSink, slot uint64, meta page
 	if sink == nil || slot > 1 {
 		return page.ErrDurableMetaFormat
 	}
+	if concrete, ok := sink.(durablePagerSinkV1); ok {
+		// Keep caller scratch out of the generic sink contract: an arbitrary
+		// AppendPageSink may retain its image, whereas Pager.Write copies it.
+		var image [page.PageSize]byte
+		if err := encodeDurableMetaSlotV1(image[:], slot, meta); err != nil {
+			return err
+		}
+		if concrete.pager == nil {
+			return errors.New("missing durable pager")
+		}
+		return concrete.pager.Write(slot, image[:])
+	}
 	image := make([]byte, page.PageSize)
+	if err := encodeDurableMetaSlotV1(image, slot, meta); err != nil {
+		return err
+	}
+	return sink.WritePage(slot, image)
+}
+
+func encodeDurableMetaSlotV1(image []byte, slot uint64, meta page.DurableMetaV1) error {
 	if err := meta.Encode(image[page.PageHeaderSize:]); err != nil {
 		return err
 	}
 	header := page.PageHeader{PageID: slot, Flags: uint16(page.PageTypeMeta)}
 	header.Encode(image)
 	page.UpdateChecksum(image)
-	return sink.WritePage(slot, image)
+	return nil
 }
 
 // writeRebuiltDurableRootV1 installs the first durable-root generation for an

@@ -1,6 +1,7 @@
 package db
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/pager"
 )
 
 type recordingDurableRootSinkV1 struct {
@@ -19,6 +21,89 @@ type recordingDurableRootSinkV1 struct {
 func (sink recordingDurableRootSinkV1) WritePage(uint64, []byte) error {
 	*sink.events = append(*sink.events, "meta-write")
 	return nil
+}
+
+type retainingDurableMetaSinkV1 struct {
+	image []byte
+	err   error
+	calls int
+}
+
+func (sink *retainingDurableMetaSinkV1) WritePage(_ uint64, image []byte) error {
+	sink.image = image
+	sink.calls++
+	return sink.err
+}
+
+func TestDurableMetaPagerWritePreservesImagesAndSinkContract(t *testing.T) {
+	p, err := pager.Open(filepath.Join(t.TempDir(), "index.db"), 64<<10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	if err := p.Truncate(2); err != nil {
+		t.Fatal(err)
+	}
+	first := testDurableMetaV1(t)
+	var digest [32]byte
+	digest[0] = 2
+	second, err := page.NewDurableMetaV1(2, 2, 3, digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retained := &retainingDurableMetaSinkV1{}
+	if err := writeDurableMetaSlotV1(retained, MetaPage0ID, first); err != nil {
+		t.Fatal(err)
+	}
+	firstImage := retained.image // The generic sink deliberately retains without copying.
+	for slot, meta := range []page.DurableMetaV1{first, second} {
+		if err := writeDurableMetaSlotV1(durablePagerSinkV1{pager: p}, uint64(slot), meta); err != nil {
+			t.Fatal(err)
+		}
+		image, err := p.ReadPage(uint64(slot))
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := page.DecodeDurableMetaV1(image[page.PageHeaderSize:])
+		if err != nil || got != meta || !page.VerifyChecksumNonMutating(image) || page.DecodeHeader(image).PageID != uint64(slot) {
+			t.Fatalf("slot %d encoded image: meta=%+v err=%v", slot, got, err)
+		}
+		if slot == 0 && !bytes.Equal(image, firstImage) {
+			t.Fatal("pager and generic sink produced different canonical images")
+		}
+	}
+	if err := writeDurableMetaSlotV1(retained, MetaPage1ID, second); err != nil {
+		t.Fatal(err)
+	}
+	got, err := page.DecodeDurableMetaV1(firstImage[page.PageHeaderSize:])
+	if err != nil || got != first || !page.VerifyChecksumNonMutating(firstImage) {
+		t.Fatal("later writes changed the generic sink's retained first image")
+	}
+	before, err := p.ReadPage(MetaPage0ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeDurableMetaSlotV1(durablePagerSinkV1{pager: p}, MetaPage0ID, page.DurableMetaV1{}); !errors.Is(err, page.ErrDurableMetaFormat) {
+		t.Fatalf("invalid meta error=%v", err)
+	}
+	after, err := p.ReadPage(MetaPage0ID)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("invalid meta changed the pager image")
+	}
+	wantErr := errors.New("original generic sink write failure")
+	retained.err = wantErr
+	if err := writeDurableMetaSlotV1(retained, MetaPage0ID, first); !errors.Is(err, wantErr) {
+		t.Fatalf("generic sink error=%v want=%v", err, wantErr)
+	}
+	if err := writeDurableMetaSlotV1(retained, MetaPage0ID, page.DurableMetaV1{}); !errors.Is(err, page.ErrDurableMetaFormat) || retained.calls != 3 {
+		t.Fatalf("invalid meta reached sink: error=%v calls=%d", err, retained.calls)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeDurableMetaSlotV1(durablePagerSinkV1{pager: p}, MetaPage0ID, first); !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("closed pager error=%v want=%v", err, os.ErrClosed)
+	}
 }
 
 func testDurableMetaV1(t testing.TB) page.DurableMetaV1 {
