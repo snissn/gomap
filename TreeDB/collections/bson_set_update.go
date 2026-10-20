@@ -109,7 +109,7 @@ func (c *Collection) validateBSONSetDocumentFormat() error {
 	return nil
 }
 
-func (c *Collection) updateBSONSetDirect(documentID []byte, spec bsonSetUpdate) (bool, bool, error) {
+func (c *Collection) updateBSONSetDirect(documentID []byte, spec bsonSetUpdate, admissions ...*collectionCommandWALAdmission) (bool, bool, error) {
 	if err := c.validateBSONSetDocumentFormat(); err != nil {
 		return false, false, err
 	}
@@ -122,20 +122,33 @@ func (c *Collection) updateBSONSetDirect(documentID []byte, spec bsonSetUpdate) 
 		hasBSONSet: true,
 	}
 	items := itemStorage[:]
+	admission := collectionCommandWALAdmissionArgument(admissions)
+	runBatch := func(mode updateBatchMode) ([]UpdateBatchResult, bool, error) {
+		results, batched, err := c.updateBatchOwnedItems(items, mode, admission)
+		if admission != nil {
+			// An existing admission owns notification/finalization; the owned
+			// batch helper only performs these for an admission it acquires.
+			if err == nil && batched {
+				err = c.notifyAdmittedUpdateResults(items, results)
+			}
+			err = c.invalidateVectorIndexCoverageOnAcceptedMutation(err)
+		}
+		return results, batched, err
+	}
 	mode := updateBatchModeNoSecondaryUniqueIndexChanges
-	results, batched, err := c.updateBatchOwnedItems(items, mode)
+	results, batched, err := runBatch(mode)
 	if c.commandWALActive(nil) && err == nil && !batched {
 		// updateBatchOwnedItems reports batched=false for this mode only after a
 		// planning-time secondary/unique-index rejection, before staging or
 		// publishing any write. Retrying in ordinary command-WAL mode therefore
 		// cannot double-apply the update.
-		results, batched, err = c.updateBatchOwnedItems(items, updateBatchModeAny)
+		results, batched, err = runBatch(updateBatchModeAny)
 	}
 	if !batched && err == nil {
 		if c.commandWALActive(nil) {
 			return false, false, errors.New("collections: command WAL BSON $set fallback unexpectedly unbatched")
 		}
-		return c.updateDirectBSONSet(documentID, spec)
+		return c.updateDirectBSONSet(documentID, spec, admission)
 	}
 	if err != nil {
 		var itemErr *UpdateBatchItemError

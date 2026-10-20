@@ -13352,7 +13352,7 @@ func TestCollectionManagerCloseForBackendDrainsCombinerBeforeFlush(t *testing.T)
 	}
 	result := <-done
 	if result.err != nil || !result.matched || !result.modified {
-		t.Fatalf("combined result=%+v want matched modified nil err", result)
+		t.Fatalf("combined result=%+v err=%v want matched modified nil err", result, result.err)
 	}
 	got, err := col.Get([]byte("u1"))
 	if err != nil {
@@ -13360,6 +13360,357 @@ func TestCollectionManagerCloseForBackendDrainsCombinerBeforeFlush(t *testing.T)
 	}
 	if !bytes.Contains(got, []byte(`"score":9`)) {
 		t.Fatalf("u1 document=%s want score 9", got)
+	}
+}
+
+// Hold an accepted callback across the domain's close signal. The legacy lane
+// must still stage its prepared plan, and a public command-WAL BSON update
+// already waiting in the same queue must still append/stage before close flushes.
+func TestCollectionManagerCloseForBackendDrainsQueuedUpdates(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		profile    treedb.Profile
+		laneWorker bool
+		commandWAL bool
+	}{
+		{name: "legacy-prepared-lane", profile: treedb.ProfileNoWALFast, laneWorker: true},
+		{name: "command-wal-bson", profile: treedb.ProfileCommandWALRelaxed, commandWAL: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			opts := treedb.OptionsFor(tc.profile, t.TempDir())
+			d, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
+			if err != nil {
+				t.Fatalf("open db: %v", err)
+			}
+			closeDB := collectionMaintenanceCloseOnce(cleanup)
+			t.Cleanup(func() { _ = closeDB() })
+			if got := d.CommandWALEnabled(); got != tc.commandWAL {
+				t.Fatalf("command WAL=%v want %v", got, tc.commandWAL)
+			}
+			mgr := NewCollectionManager(d)
+			if tc.laneWorker {
+				mgr.SetUpdateCombineShardsForProfiling(4)
+				mgr.SetUpdateCombineLaneWorkersForProfiling(true)
+			}
+			if _, err := mgr.CreateCollection(&CollectionMeta{
+				Name: "users",
+				Options: CollectionOptions{
+					DocumentFormat:                   DocumentFormatBSON,
+					BufferedIndexedWrites:            true,
+					BufferedIndexedWriteMaxDocuments: 1 << 20,
+					BufferedIndexedWriteMaxRootRuns:  1 << 20,
+				},
+				Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
+			}); err != nil {
+				t.Fatalf("create collection: %v", err)
+			}
+			col, err := mgr.OpenCollection("users")
+			if err != nil {
+				t.Fatalf("open collection: %v", err)
+			}
+			initial := mustBSONCollectionDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "city", Value: "hnl"}, {Key: "score", Value: int32(0)}})
+			replacement := mustBSONCollectionDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "city", Value: "sea"}, {Key: "score", Value: int32(1)}})
+			if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{initial}); err != nil {
+				t.Fatalf("insert: %v", err)
+			}
+			if err := col.Flush(); err != nil {
+				t.Fatalf("flush initial insert: %v", err)
+			}
+			foreignDocument := mustBSONCollectionDocument(t, bson.D{{Key: "_id", Value: "f1"}, {Key: "city", Value: "hnl"}, {Key: "score", Value: int32(0)}})
+			var foreign *Collection
+			var foreignDrainDuringClose atomic.Bool
+			if tc.commandWAL {
+				if _, err := mgr.CreateCollection(&CollectionMeta{Name: "foreign", Options: CollectionOptions{DocumentFormat: DocumentFormatBSON}}); err != nil {
+					t.Fatalf("create foreign collection: %v", err)
+				}
+				foreign, err = mgr.OpenCollection("foreign")
+				if err != nil {
+					t.Fatalf("open foreign collection: %v", err)
+				}
+			}
+			beforeLSN := d.State().AppliedCommandLSN
+			wantLSN := beforeLSN
+			if foreign != nil {
+				if _, err := foreign.Insert([]byte("f1"), foreignDocument); err != nil {
+					t.Fatalf("stage foreign insert: %v", err)
+				}
+				if applied, next := d.State().AppliedCommandLSN, d.CommandWALNextLSN(); applied != beforeLSN || next != beforeLSN+2 {
+					t.Fatalf("foreign insert coverage=%d/%d want pending %d/%d", applied, next, beforeLSN, beforeLSN+2)
+				}
+				hook := func(domain *collectionWriteDomain) {
+					if domain == foreign.writeDomain && col.writeDomain.closingWrites.Load() {
+						foreignDrainDuringClose.Store(true)
+					}
+				}
+				mgr.testCommandWALRawDomainDrainHook.Store(&hook)
+				t.Cleanup(func() { mgr.testCommandWALRawDomainDrainHook.Store(nil) })
+				wantLSN += 3 // The pending foreign insert and both queued updates.
+			}
+			combiner := col.updateCombiner()
+			if combiner == nil || combiner.hasShardWorkers() != tc.laneWorker {
+				t.Fatalf("combiner=%v want lane workers=%v", combiner, tc.laneWorker)
+			}
+
+			entered := make(chan struct{})
+			release := make(chan struct{})
+			var enteredOnce, releaseOnce sync.Once
+			var callbacks atomic.Int32
+			t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+			firstDone := make(chan collectionUpdateCombineResult, 1)
+			if !combiner.enqueue(newCollectionUpdateCombineRequest(col, []byte("u1"), func([]byte) ([]byte, bool, error) {
+				callbacks.Add(1)
+				enteredOnce.Do(func() { close(entered) })
+				<-release
+				return replacement, true, nil
+			}, bsonSetUpdate{}, false, firstDone)) {
+				t.Fatal("enqueue first update")
+			}
+			select {
+			case <-entered:
+			case <-time.After(10 * time.Second):
+				t.Fatal("queued callback did not start")
+			}
+
+			secondDone := make(chan collectionUpdateCombineResult, 1)
+			fields := []BSONSetField{{Key: "score", Value: mustBSONRawValue(t, int32(9))}}
+			go func() {
+				matched, modified, err := col.UpdateBSONSet([]byte("u1"), fields)
+				secondDone <- collectionUpdateCombineResult{matched: matched, modified: modified, err: err}
+			}()
+			// The same ID selects the held worker's lane, so this public update
+			// cannot be dequeued before the first callback is released.
+			deadline := time.After(10 * time.Second)
+			for {
+				queued := len(combiner.requests)
+				for _, requests := range combiner.shardedRequests {
+					queued += len(requests)
+				}
+				if queued != 0 {
+					break
+				}
+				select {
+				case result := <-secondDone:
+					t.Fatalf("second update bypassed held queue: %+v err=%v", result, result.err)
+				case <-deadline:
+					t.Fatal("public BSON update did not enter held queue")
+				default:
+					runtime.Gosched()
+				}
+			}
+			closeDone := make(chan error, 1)
+			go func() { closeDone <- mgr.closeForBackend() }()
+			deadline = time.After(10 * time.Second)
+			for !col.writeDomain.closingWrites.Load() {
+				select {
+				case <-deadline:
+					t.Fatal("manager close did not reach domain drain")
+				default:
+					runtime.Gosched()
+				}
+			}
+			select {
+			case err := <-closeDone:
+				t.Fatalf("manager close passed held queued callback: %v", err)
+			default:
+			}
+			if d.IsClosing() {
+				t.Fatal("backend closed before manager finished draining")
+			}
+			if _, _, err := col.UpdateBSONSet([]byte("u1"), fields); !errors.Is(err, backenddb.ErrClosed) {
+				t.Fatalf("late BSON ingress err=%v want ErrClosed", err)
+			}
+			if _, _, err := col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
+				t.Error("late update invoked callback")
+				return nil, false, nil
+			}); !errors.Is(err, backenddb.ErrClosed) {
+				t.Fatalf("late callback ingress err=%v want ErrClosed", err)
+			}
+			releaseOnce.Do(func() { close(release) })
+			for i, done := range []<-chan collectionUpdateCombineResult{firstDone, secondDone} {
+				select {
+				case result := <-done:
+					if result.err != nil || !result.matched || !result.modified {
+						t.Fatalf("queued update %d result=%+v err=%v want matched modified nil err", i, result, result.err)
+					}
+				case <-time.After(10 * time.Second):
+					t.Fatalf("queued update %d did not complete", i)
+				}
+			}
+			select {
+			case err := <-closeDone:
+				if err != nil {
+					t.Fatalf("manager close: %v", err)
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("manager close did not finish after queued updates")
+			}
+			if tc.laneWorker && callbacks.Load() != 1 {
+				t.Fatalf("legacy prepared callback ran %d times, want one staged plan", callbacks.Load())
+			}
+			if _, _, err := combiner.update(col, []byte("u1"), nil, bsonSetUpdate{fields: fields}, true); !errors.Is(err, backenddb.ErrClosed) {
+				t.Fatalf("stopped combiner fallback err=%v want ErrClosed", err)
+			}
+			assertDocument := func(col *Collection) {
+				t.Helper()
+				doc, err := col.Get([]byte("u1"))
+				if err != nil {
+					t.Fatalf("get updated document: %v", err)
+				}
+				if got := bson.Raw(doc).Lookup("city").StringValue(); got != "sea" {
+					t.Fatalf("city=%q want sea", got)
+				}
+				if got := bson.Raw(doc).Lookup("score").Int32(); got != 9 {
+					t.Fatalf("score=%d want 9", got)
+				}
+			}
+			assertDocument(col)
+			if tc.commandWAL {
+				if !foreignDrainDuringClose.Load() {
+					t.Fatal("queued command-WAL execution did not drain foreign work during domain close")
+				}
+				if d.State().AppliedCommandLSN != wantLSN || d.CommandWALNextLSN() != wantLSN+1 {
+					t.Fatalf("final WAL coverage=%d/%d want %d/%d", d.State().AppliedCommandLSN, d.CommandWALNextLSN(), wantLSN, wantLSN+1)
+				}
+				if doc, err := foreign.Get([]byte("f1")); err != nil || !bytes.Equal(doc, foreignDocument) {
+					t.Fatalf("foreign document=%x err=%v want %x", doc, err, foreignDocument)
+				}
+			}
+			if err := closeDB(); err != nil {
+				t.Fatalf("close backend and services: %v", err)
+			}
+			reopened, reopenedCleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
+			if err != nil {
+				t.Fatalf("reopen: %v", err)
+			}
+			reopenedManager := NewCollectionManager(reopened)
+			reopenedCol, err := reopenedManager.OpenCollection("users")
+			if err != nil {
+				_ = reopenedCleanup()
+				t.Fatalf("open reopened collection: %v", err)
+			}
+			defer func() { _ = reopenedCleanup() }()
+			assertDocument(reopenedCol)
+			if tc.commandWAL {
+				if applied, next := reopened.State().AppliedCommandLSN, reopened.CommandWALNextLSN(); applied != wantLSN || next != wantLSN+1 {
+					t.Fatalf("reopened WAL coverage=%d/%d want %d/%d", applied, next, wantLSN, wantLSN+1)
+				}
+				reopenedForeign, err := reopenedManager.OpenCollection("foreign")
+				if err != nil {
+					t.Fatalf("open reopened foreign collection: %v", err)
+				}
+				if doc, err := reopenedForeign.Get([]byte("f1")); err != nil || !bytes.Equal(doc, foreignDocument) {
+					t.Fatalf("reopened foreign document=%x err=%v want %x", doc, err, foreignDocument)
+				}
+			}
+			if err := reopenedCleanup(); err != nil {
+				t.Fatalf("close reopened backend and manager: %v", err)
+			}
+		})
+	}
+}
+
+// Exercise the raw-to-mutation contention handoff itself. The public queued
+// drain test above establishes queue authority; this test forces the later
+// reacquisition branch and checks that ordinary callers still refuse close.
+func TestCollectionCommandWALMutationHandoffRevalidatesQueuedAdmission(t *testing.T) {
+	for _, mode := range []string{"queued", "ordinary", "no-admission"} {
+		t.Run(mode, func(t *testing.T) {
+			d, cleanup, err := treedb.OpenBackendWithCachedLeafLog(treedb.OptionsFor(treedb.ProfileCommandWALRelaxed, t.TempDir()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			closeDB := collectionMaintenanceCloseOnce(cleanup)
+			t.Cleanup(func() { _ = closeDB() })
+			mgr := NewCollectionManager(d)
+			if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+				t.Fatal(err)
+			}
+			col, err := mgr.OpenCollection("users")
+			if err != nil {
+				t.Fatal(err)
+			}
+			intent, err := col.newCollectionUpdateCommandWALIntent(nil, nil)
+			if err != nil || intent == nil {
+				t.Fatalf("unassigned update intent=%v err=%v", intent, err)
+			}
+			beforeApplied, beforeNext := d.State().AppliedCommandLSN, d.CommandWALNextLSN()
+			var admission *collectionCommandWALAdmission
+			if mode != "no-admission" {
+				var state collectionCommandWALAdmission
+				if mode == "queued" {
+					state = col.lockQueuedUpdateCommandWALAdmission()
+				} else {
+					state = col.lockCollectionCommandWALAdmission()
+				}
+				admission = &state
+			}
+			heldMutation := col.lockMutation()
+			var releaseMutation sync.Once
+			t.Cleanup(func() { releaseMutation.Do(heldMutation.Unlock) })
+			unlockRaw := d.LockCommandWALStaging()
+			var releaseRaw sync.Once
+			t.Cleanup(func() { releaseRaw.Do(unlockRaw) })
+			releasedRaw := make(chan struct{})
+			type handoffResult struct {
+				err           error
+				callback      bool
+				rawStillOwned bool
+			}
+			done := make(chan handoffResult, 1)
+			go func() {
+				defer admission.unlock()
+				// Observe the original lease release, not elapsed time or a
+				// second lock contender whose scheduling could hide the branch.
+				raw := func() {
+					releaseRaw.Do(unlockRaw)
+					close(releasedRaw)
+				}
+				result := handoffResult{}
+				if mode == "no-admission" {
+					var mutation collectionMutationUnlock
+					mutation, result.err = col.lockMutationForCommandWALStaging(&raw, intent)
+					if result.err == nil {
+						result.callback = true
+						mutation.Unlock()
+					}
+				} else {
+					result.err = col.withMutationLockForCommandWALStagingAdmission(&raw, intent, admission, func() error {
+						result.callback = true
+						return nil
+					})
+				}
+				result.rawStillOwned = raw != nil
+				if raw != nil {
+					raw()
+				}
+				done <- result
+			}()
+			select {
+			case <-releasedRaw:
+			case <-time.After(10 * time.Second):
+				t.Fatal("contended handoff did not release raw staging before waiting for mutation")
+			}
+			// Mutation remains held until after the actual handoff released raw,
+			// so reacquisition must observe domain close before any assignment.
+			col.writeDomain.closingWrites.Store(true)
+			t.Cleanup(func() { col.writeDomain.closingWrites.Store(false) })
+			releaseMutation.Do(heldMutation.Unlock)
+			select {
+			case result := <-done:
+				if mode == "queued" {
+					if result.err != nil || !result.callback || !result.rawStillOwned {
+						t.Fatalf("queued handoff=%+v err=%v want callback with owned raw staging", result, result.err)
+					}
+				} else if !errors.Is(result.err, backenddb.ErrClosed) || result.callback || result.rawStillOwned {
+					t.Fatalf("ordinary handoff=%+v err=%v want ErrClosed with released leases", result, result.err)
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("handoff did not finish after mutation release")
+			}
+			if intent.AssignedLSN() != 0 || d.State().AppliedCommandLSN != beforeApplied || d.CommandWALNextLSN() != beforeNext {
+				t.Fatalf("handoff assigned WAL: intent=%d applied=%d next=%d want 0/%d/%d", intent.AssignedLSN(), d.State().AppliedCommandLSN, d.CommandWALNextLSN(), beforeApplied, beforeNext)
+			}
+		})
 	}
 }
 
