@@ -222,9 +222,6 @@ func TestFixedPeerTCPNativeCollectionsSnapshotLifecycleV1(t *testing.T) {
 				t.Fatal(err)
 			}
 			assertDocument(got, final)
-			if err := db.SyncNativeSemanticPrefix(); err != nil {
-				t.Fatal(err)
-			}
 			if err := r.Close(); err != nil {
 				t.Fatal(err)
 			}
