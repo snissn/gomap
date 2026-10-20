@@ -2133,7 +2133,7 @@ func prepareColumnVectorGraphRebuildManifestWithAuthorityTimed(collection string
 		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
 	}
 
-	prepared, graph, state, hasCanonical, err := prepareColumnVectorGraphRebuildAssets(collection, cfg, def, manifest.Generation, baseChecksum, manifestForLSN.AppliedCommandLSN, recordsForLSN, rows, assetRootDir, authority, typedSource, timing, capture)
+	prepared, graph, state, hasCanonical, err := prepareColumnVectorGraphRebuildAssets(collection, cfg, def, manifest.Generation, baseChecksum, manifest.AppliedCommandLSN, recordsForLSN, rows, assetRootDir, authority, typedSource, timing, capture)
 	if err != nil {
 		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
 	}
@@ -2206,8 +2206,10 @@ func prepareColumnVectorGraphRebuildManifestWithAuthorityTimed(collection string
 
 // prepareColumnVectorGraphRebuildAssets is the original HNSW/TVIS asset emitter.
 // Base checksum is supplied by the caller's authenticated manifest format. It
-// never changes source identity, creates a header, or publishes a root.
-func prepareColumnVectorGraphRebuildAssets(collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, generation, baseChecksum, appliedCommandLSN uint64, recordsForLSN []columnManifestRecord, rows []columnVectorGraphAssetRow, assetRootDir string, authority *columnVectorGraphStableResourceAccumulator, typedSource *columnVectorGraphTypedColumnVectorSource, timing *ColumnGraphBuildTiming, capture bool) (columnVectorGraphPreparedPhysicalAsset, columnVectorGraphManifestSnapshot, columnVectorIndexStateSnapshot, bool, error) {
+// never changes source identity, creates a header, or publishes a root. Source
+// row refs retain sourceAppliedCommandLSN even when the publication header and
+// base checksum advance to the rebuild command's assigned LSN.
+func prepareColumnVectorGraphRebuildAssets(collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, generation, baseChecksum, sourceAppliedCommandLSN uint64, recordsForLSN []columnManifestRecord, rows []columnVectorGraphAssetRow, assetRootDir string, authority *columnVectorGraphStableResourceAccumulator, typedSource *columnVectorGraphTypedColumnVectorSource, timing *ColumnGraphBuildTiming, capture bool) (columnVectorGraphPreparedPhysicalAsset, columnVectorGraphManifestSnapshot, columnVectorIndexStateSnapshot, bool, error) {
 	graphCfg, err := columnVectorGraphPhysicalColumnStoreConfig(collection, cfg, def)
 	if err != nil {
 		return columnVectorGraphPreparedPhysicalAsset{}, columnVectorGraphManifestSnapshot{}, columnVectorIndexStateSnapshot{}, false, err
@@ -2219,7 +2221,7 @@ func prepareColumnVectorGraphRebuildAssets(collection string, cfg ColumnStoreCon
 			return columnVectorGraphPreparedPhysicalAsset{}, columnVectorGraphManifestSnapshot{}, columnVectorIndexStateSnapshot{}, false, fmt.Errorf("collections: column_graph rebuild for %q requires base float32_vector typed-column owner for field %q; rebuild collection metadata before rebuilding the vector index", def.Name, def.Field)
 		}
 	}
-	canonicalVectorAsset, err := columnVectorGraphCanonicalNormalizedVectorStateAsset(def, cfg, columnManifestSnapshot{Generation: generation, AppliedCommandLSN: appliedCommandLSN}, recordsForLSN, rows)
+	canonicalVectorAsset, err := columnVectorGraphCanonicalNormalizedVectorStateAsset(def, cfg, columnManifestSnapshot{Generation: generation, AppliedCommandLSN: sourceAppliedCommandLSN}, recordsForLSN, rows)
 	if err != nil {
 		return columnVectorGraphPreparedPhysicalAsset{}, columnVectorGraphManifestSnapshot{}, columnVectorIndexStateSnapshot{}, false, err
 	}
