@@ -952,11 +952,21 @@ func appendCanonicalFlushRunChunkToBackendBatch(backendBatch batch.Interface, op
 	return nil
 }
 
-func (db *DB) writeCanonicalFlushRunOpsChunk(ops []batch.Entry, syncFlush bool, commandPublish *checkpointCommandWALPublish, publicationGroup *backenddb.RootPublicationBuildGroup, last bool, mode flushCollectionMode) error {
+func (db *DB) writeCanonicalFlushRunOpsChunk(ops []batch.Entry, syncFlush bool, commandPublish *checkpointCommandWALPublish, publicationGroup *backenddb.RootPublicationBuildGroup, last bool, mode flushCollectionMode, singleChunk bool) error {
 	if db == nil || (len(ops) == 0 && (publicationGroup == nil || !last)) {
 		return nil
 	}
 	backendBatch := db.newBackendBatchWithSize(len(ops))
+	// The captured emission mode carries checkpoint intent independently of
+	// syncFlush: relaxed NoWAL checkpoints still close durability afterwards.
+	// This is only a preparation hint; grouped and ordinary async work keep
+	// their original route, and the backend repeats all idle/base checks.
+	if mode == flushCollectionCheckpoint && singleChunk && last && publicationGroup == nil &&
+		db.cow == nil && db.disableJournal && !db.externalCommandWAL && commandPublish == nil {
+		if receiver, ok := backendBatch.(interface{ SetCheckpointRootPublicationIntent() }); ok {
+			receiver.SetCheckpointRootPublicationIntent()
+		}
+	}
 	attachesCommandPublish := last && commandPublish != nil && commandPublish.appliedLSN != 0 && !commandPublish.consumed
 	spanNativeFallbackReason := flushPointChunkSpanNativeFallbackReasonForCollectionMode(mode, commandPublish, attachesCommandPublish)
 	setBackendBatchSpanNativeFallback(backendBatch, spanNativeFallbackReason)
@@ -1039,7 +1049,7 @@ func (db *DB) writeCanonicalFlushRunChunks(run *canonicalFlushRun, chunks []back
 				break
 			}
 		}
-		if err := db.writeCanonicalFlushRunOpsChunk(run.pointOps[chunk.PointOpStart:chunk.PointOpEnd], syncFlush, commandPublish, publicationGroup, last, mode); err != nil {
+		if err := db.writeCanonicalFlushRunOpsChunk(run.pointOps[chunk.PointOpStart:chunk.PointOpEnd], syncFlush, commandPublish, publicationGroup, last, mode, nonEmptyChunks == 1); err != nil {
 			return emitted, err
 		}
 		emitted++
@@ -1134,7 +1144,7 @@ func (db *DB) flushCanonicalPointUnitsStableIteratorStreamed(syncFlush bool, lan
 		if err := flushValueLogIfNeeded(); err != nil {
 			return fmt.Errorf("vlog: %w", err)
 		}
-		err = db.writeCanonicalFlushRunOpsChunk(ops, syncFlush, commandPublish, publicationGroup, last, mode)
+		err = db.writeCanonicalFlushRunOpsChunk(ops, syncFlush, commandPublish, publicationGroup, last, mode, sourcePointOps <= chunkEntriesCap)
 		if err != nil {
 			return err
 		}
@@ -1292,7 +1302,7 @@ func (db *DB) flushCanonicalPointUnitsStreamed(syncFlush bool, laneID int, comma
 		if err := flushValueLogIfNeeded(); err != nil {
 			return fmt.Errorf("vlog: %w", err)
 		}
-		err = db.writeCanonicalFlushRunOpsChunk(ops, syncFlush, commandPublish, publicationGroup, last, mode)
+		err = db.writeCanonicalFlushRunOpsChunk(ops, syncFlush, commandPublish, publicationGroup, last, mode, build.sourcePointOps <= chunkEntriesCap)
 		if err != nil {
 			return err
 		}

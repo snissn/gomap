@@ -516,7 +516,7 @@ func (db *DB) flushCOWFrozenCutWithColumnCompaction(syncFlush bool, publish *che
 					break
 				}
 				last := i == n-1 && !it.Valid()
-				if err = db.writeCanonicalFlushRunOpsChunk(ops, syncFlush, publish, group, last, flushCollectionBackground); err != nil {
+				if err = db.writeCanonicalFlushRunOpsChunk(ops, syncFlush, publish, group, last, flushCollectionBackground, false); err != nil {
 					break
 				}
 				ops = ops[:0]
@@ -532,7 +532,7 @@ func (db *DB) flushCOWFrozenCutWithColumnCompaction(syncFlush bool, publish *che
 	}
 
 	if n == 0 && err == nil {
-		err = db.writeCanonicalFlushRunOpsChunk(nil, syncFlush, publish, group, true, flushCollectionBackground)
+		err = db.writeCanonicalFlushRunOpsChunk(nil, syncFlush, publish, group, true, flushCollectionBackground, false)
 	}
 	err = errors.Join(err, group.Close())
 	// End local coverage accesses before completeCOWHandoff can refund this

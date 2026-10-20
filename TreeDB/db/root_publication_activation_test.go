@@ -1402,3 +1402,93 @@ func TestRootPublicationSingleGenerationLateBuilderAndRetry(t *testing.T) {
 		})
 	}
 }
+
+func TestRootPublicationCheckpointIntentPreservesAsyncWrite(t *testing.T) {
+	for _, route := range []string{"marked", "unmarked", "reset"} {
+		t.Run(route, func(t *testing.T) {
+			database, err := Open(Options{Dir: t.TempDir(), Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer database.Close()
+			if err := database.SetSync([]byte("seed"), []byte("before")); err != nil {
+				t.Fatal(err)
+			}
+			base := database.durableRoot.record
+			b := database.NewBatch().(*Batch)
+			defer b.Close()
+			if route != "unmarked" {
+				b.SetCheckpointRootPublicationIntent()
+			}
+			if route == "reset" {
+				b.Reset()
+				if b.checkpointRootPublicationIntent {
+					t.Fatal("Reset retained checkpoint intent")
+				}
+			}
+			if err := b.Set([]byte("next"), []byte("after")); err != nil {
+				t.Fatal(err)
+			}
+			tokens := make(chan *rootpublication.BuilderToken, 1)
+			database.testDurableRootCandidatePreparedHook = func() {
+				token, err := database.rootPublication.coordinator.AcquireBuilder(context.Background())
+				if err == nil {
+					tokens <- token
+				}
+			}
+			done := make(chan error, 1)
+			go func() { done <- b.Write() }()
+			var late *rootpublication.BuilderToken
+			select {
+			case late = <-tokens:
+			case <-time.After(5 * time.Second):
+				t.Fatal("asynchronous candidate did not prepare")
+			}
+			defer late.Release()
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("Write waited for durability while late builder prevented dispatch")
+			}
+			database.testDurableRootCandidatePreparedHook = nil
+			runtime := database.rootPublication
+			runtime.mu.Lock()
+			combined := runtime.activeSeal != nil
+			runtime.mu.Unlock()
+			if combined != (route == "marked") {
+				t.Fatalf("route %s combined=%t", route, combined)
+			}
+			if database.durableRoot.record.CommitSeq != base.CommitSeq {
+				t.Fatal("Write advanced durability despite held builder")
+			}
+			if got, err := database.Get([]byte("next")); err != nil || string(got) != "after" {
+				t.Fatalf("asynchronous visible value=%q err=%v", got, err)
+			}
+			late.Release()
+			if err := database.Checkpoint(); err != nil {
+				t.Fatal(err)
+			}
+			advance := uint64(2)
+			if route == "marked" {
+				advance = 1
+			}
+			if got := database.durableRoot.record.Freelist.GenerationID; got != base.Freelist.GenerationID+advance {
+				t.Fatalf("route %s generation=%d want %d", route, got, base.Freelist.GenerationID+advance)
+			}
+			b.SetCheckpointRootPublicationIntent()
+			if err := b.Close(); err != nil {
+				t.Fatal(err)
+			}
+			b.SetCheckpointRootPublicationIntent() // a closed batch cannot retain a new hint
+			if b.checkpointRootPublicationIntent {
+				t.Fatal("Close retained checkpoint intent")
+			}
+			if err := b.Close(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}

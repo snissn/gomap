@@ -656,7 +656,7 @@ func (install *rootPublicationVisibleInstallV1) completeOrderedPostActivation() 
 // later admission; original DB serialization excludes physical overtaking.
 func (runtime *rootPublicationRuntimeV1) canPrepareSingleGeneration(builder *rootpublication.BuilderToken, idx *indexGen, next page.MetaPageBody, syncWrite bool, opts finalizeCommitOptions) bool {
 	db := runtime.db
-	if !syncWrite || db.commandWAL || opts.acceptedPrefixCut != nil || opts.preparedLimits != nil ||
+	if (!syncWrite && !opts.checkpointRootPublicationIntent) || db.commandWAL || opts.acceptedPrefixCut != nil || opts.preparedLimits != nil ||
 		opts.commandWALPublish || opts.commandWALSeal != nil || len(opts.commandWALSealGroup) != 0 ||
 		opts.privateCOWEquivalentRewriteOwner != nil || opts.prepareSnapshotReceipt != nil ||
 		opts.syncMetaPageOnly || db.vacuumCutoverInProgress.Load() {

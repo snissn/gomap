@@ -45,6 +45,7 @@ func (mutation conditionalCommitMutation) record(db *DB, commitSeq uint64) {
 }
 
 type finalizeCommitOptions struct {
+	checkpointRootPublicationIntent bool // captured cached checkpoint emission; not a sync/ACK override
 	// privateCOWEquivalentRewriteOwner is borrowed only by the maintained online
 	// pointer rewrite. It authorizes an ordinary physical candidate, never a
 	// canonical append, accepted cut, logical install, or frontier advancement.
