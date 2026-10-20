@@ -702,6 +702,17 @@ func testDurableRootVisibleInstallFailureAbortsBeforeDurableMeta(t *testing.T, d
 		t.Fatal(err)
 	}
 
+	var aborts atomic.Int32
+	previousAbortHook := freelist.TestHookAbortCOWCandidateFailure
+	freelist.TestHookAbortCOWCandidateFailure = func() error { aborts.Add(1); return nil }
+	defer func() { freelist.TestHookAbortCOWCandidateFailure = previousAbortHook }()
+	baseCaptures := database.durableCandidateIndexCaptures.Load()
+	preparedCaptures := int64(-1)
+	database.testDurableRootCandidatePreparedHook = func() {
+		preparedCaptures = database.durableCandidateIndexCaptures.Load()
+	}
+	defer func() { database.testDurableRootCandidatePreparedHook = nil }()
+
 	database.testFailDurableRootVisibleInstall.Store(true)
 	err = database.SetSync([]byte("post-meta"), []byte("recover-on-open"))
 	database.testFailDurableRootVisibleInstall.Store(false)
@@ -714,6 +725,21 @@ func testDurableRootVisibleInstallFailureAbortsBeforeDurableMeta(t *testing.T, d
 	if database.publicationPoisoned.Load() {
 		t.Fatal("pre-meta visible-install failure poisoned the writable handle")
 	}
+	if aborts.Load() != 1 {
+		t.Fatalf("refused combined generation aborted %d times, want exactly 1", aborts.Load())
+	}
+	if preparedCaptures != baseCaptures+1 || database.durableCandidateIndexCaptures.Load() != baseCaptures {
+		t.Fatalf("stable index capture lifecycle=(base=%d prepared=%d after=%d), want one prepared token released on refusal", baseCaptures, preparedCaptures, database.durableCandidateIndexCaptures.Load())
+	}
+	runtime := database.rootPublication
+	runtime.mu.Lock()
+	debt, seals, active := len(runtime.debt), len(runtime.seals), runtime.activeSeal
+	runtime.mu.Unlock()
+	if debt != 0 || seals != 0 || active != nil {
+		t.Fatalf("refused handoff retained activated debt/seals=(%d,%d,%p)", debt, seals, active)
+	}
+	database.testDurableRootCandidatePreparedHook = nil
+
 	if database.durableRoot.record.CommitSeq != 1 || database.currentCommitSeq() != 1 {
 		t.Fatalf("durable/visible commits=(%d,%d), want unchanged (1,1)", database.durableRoot.record.CommitSeq, database.currentCommitSeq())
 	}

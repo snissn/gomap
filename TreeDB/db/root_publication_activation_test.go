@@ -1240,3 +1240,154 @@ func TestRootPublicationRuntimeRetainsFailedHandoffCause(t *testing.T) {
 		t.Fatal("original runtime failure no longer reachable from DB error")
 	}
 }
+
+// A late builder is admitted after the idle proof but cannot dispatch before
+// the original final token is handed off. The same early seal must survive
+// retry and become ordered prefix debt when a second root joins.
+func TestRootPublicationSingleGenerationLateBuilderAndRetry(t *testing.T) {
+	for _, retry := range []bool{false, true} {
+		t.Run(fmt.Sprintf("retry=%t", retry), func(t *testing.T) {
+			dir := t.TempDir()
+			database, err := Open(Options{Dir: dir, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { database.testFailWriteMeta.Store(false); _ = database.Close() }()
+			if err := database.SetSync([]byte("seed"), []byte("before")); err != nil {
+				t.Fatal(err)
+			}
+			base := database.durableRoot
+			held := database.AcquireSnapshot()
+			if held == nil {
+				t.Fatal("missing held base snapshot")
+			}
+			defer held.Close()
+			runtime := database.rootPublication
+			tokens := make(chan *rootpublication.BuilderToken, 1)
+			releaseFirst := make(chan struct{})
+			defer func() {
+				select {
+				case <-releaseFirst:
+				default:
+					close(releaseFirst)
+				}
+			}()
+			firstVisible := make(chan struct{}, 1)
+			database.testDurableRootCandidatePreparedHook = func() {
+				token, err := runtime.coordinator.AcquireBuilder(context.Background())
+				if err != nil {
+					return
+				}
+				tokens <- token
+				<-releaseFirst
+			}
+			database.testAfterDurableRootVisibleInstallHook = func() { firstVisible <- struct{}{} }
+			done := make(chan error, 1)
+			if retry {
+				database.testFailWriteMeta.Store(true)
+			}
+			go func() { done <- database.SetSync([]byte("first"), []byte("one")) }()
+			var late *rootpublication.BuilderToken
+			select {
+			case late = <-tokens:
+			case <-time.After(5 * time.Second):
+				t.Fatal("first combined candidate did not prepare")
+			}
+			defer late.Release()
+			stats := runtime.coordinator.Stats()
+			if stats.ActiveBuilders != 2 || stats.VisibleCommitSeq != base.record.CommitSeq || stats.DurableCommitSeq != base.record.CommitSeq {
+				t.Fatalf("late admission overtook original handoff: %+v", stats)
+			}
+			close(releaseFirst)
+			select {
+			case <-firstVisible:
+			case <-time.After(5 * time.Second):
+				t.Fatal("first combined candidate did not become visible")
+			}
+			runtime.mu.Lock()
+			early := runtime.activeSeal
+			if early == nil || len(runtime.debt) != 1 || early.prepared != runtime.debt[0] || len(early.prefix) != 1 {
+				runtime.mu.Unlock()
+				t.Fatal("first visible member does not own one combined generation")
+			}
+			auxiliary := append([]uint64(nil), early.prepared.AuxiliaryPageIDs()...)
+			runtime.mu.Unlock()
+			// Both original hooks have completed. Keep the late admission live to
+			// prevent dispatch until the ordinary second root is accepted.
+			database.testDurableRootCandidatePreparedHook = nil
+			database.testAfterDurableRootVisibleInstallHook = nil
+			if retry {
+				late.Release()
+				select {
+				case err := <-done:
+					if !errors.Is(err, errTestWriteMetaFailpoint) || errors.Is(err, ErrRecoveryRequired) {
+						t.Fatalf("combined pre-meta failure=%v", err)
+					}
+				case <-time.After(5 * time.Second):
+					t.Fatal("retryable combined publication did not return")
+				}
+				if database.durableRoot.record.CommitSeq != base.record.CommitSeq || early.released {
+					t.Fatal("pre-meta failure consumed the combined seal or advanced durability")
+				}
+			}
+			if err := database.Set([]byte("second"), []byte("two")); err != nil {
+				t.Fatal(err)
+			}
+			late.Release()
+			database.testFailWriteMeta.Store(false)
+			if err := database.Checkpoint(); err != nil {
+				t.Fatal(err)
+			}
+			if !retry {
+				select {
+				case err := <-done:
+					if err != nil {
+						t.Fatal(err)
+					}
+				case <-time.After(5 * time.Second):
+					t.Fatal("combined durable waiter did not complete")
+				}
+			}
+			if got := database.durableRoot.record.Freelist.GenerationID; got != base.record.Freelist.GenerationID+3 {
+				t.Fatalf("combined/logical/successor generation count=%d want %d", got, base.record.Freelist.GenerationID+3)
+			}
+			if database.durableRoot.record.ParentCommitSeq != base.record.CommitSeq || database.durableRoot.record.ParentRecordDigest != base.meta.RootRecordDigest || !early.released {
+				t.Fatal("coalesced successor lost the original slot parent or early seal custody")
+			}
+			if got, err := held.Get([]byte("first")); err != nil || got != nil {
+				t.Fatalf("held base observed later first root: %q %v", got, err)
+			}
+			if err := held.Close(); err != nil {
+				t.Fatal(err)
+			}
+			current := database.AcquireSnapshot()
+			if current == nil {
+				t.Fatal("missing published snapshot")
+			}
+			defer current.Close()
+			generation := database.idx.Load().allocator.COWGenerationV1()
+			for _, id := range auxiliary {
+				unused, err := generation.SnapshotPageUnusedV1(id, current.State().CommitSeq)
+				if err != nil || !unused {
+					t.Fatalf("superseded combined auxiliary %d was not retired: unused=%t err=%v", id, unused, err)
+				}
+			}
+			if err := current.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := database.Close(); err != nil {
+				t.Fatal(err)
+			}
+			reopened, err := Open(Options{Dir: dir, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer reopened.Close()
+			for key, want := range map[string]string{"seed": "before", "first": "one", "second": "two"} {
+				if got, err := reopened.Get([]byte(key)); err != nil || string(got) != want {
+					t.Fatalf("reopen %s: %q %v", key, got, err)
+				}
+			}
+		})
+	}
+}

@@ -1735,6 +1735,114 @@ func (db *DB) captureRebuiltIndexDurableResourcesWithPackedSelectionV1(p *pager.
 	return resources, work, nil
 }
 
+// prepareDurableRootGenerationV1 shares the existing single-generation DATA
+// construction with coordinated synchronous publication. It owns only the
+// allocator preparation until success; resources and index-token custody remain
+// with the caller's original owner. No visibility or stable I/O occurs here.
+func (db *DB) prepareDurableRootGenerationV1(
+	idx *indexGen, current durableRootRuntimeV1, next page.MetaPageBody,
+	retired []uint64, manifest *rootpublication.DependencyManifestV1,
+	directoryRef rootpublication.DependencyDirectoryRefV2, capability freelist.ReuseCapability,
+	out *rootPublicationSealV1, timing *CommandWALPublishTiming,
+) (err error) {
+	target := uint64(MetaPage0ID)
+	if current.slot == MetaPage0ID {
+		target = MetaPage1ID
+	}
+	var retirementStorage [3]freelist.COWRetirementV1
+	retirements, err := appendDurableRootSlotRetirementsV1(retirementStorage[:0], current.slotMeta[target], current.slotRecord[target], current.record)
+	if err != nil {
+		return err
+	}
+	auxiliaryCount := 1
+	if manifest != nil {
+		auxiliaryCount += int(manifest.PageCount())
+	}
+	var cowPrepareStart time.Time
+	if timing != nil {
+		cowPrepareStart = time.Now()
+	}
+	prepared, err := idx.allocator.PrepareCOWCandidateRetiringV1(
+		current.record.Freelist.GenerationID+1,
+		next.CommitSeq,
+		durableRootCandidateIDV1(current, next),
+		capability,
+		append(retirements, freelist.COWRetirementV1{PageIDs: retired, LastReachableCommitSeq: current.record.CommitSeq}),
+		auxiliaryCount,
+		freelist.NewCandidatePageSinkV1(),
+	)
+	if timing != nil {
+		timing.FinalizeCandidateCOWPrepare += time.Since(cowPrepareStart)
+	}
+	if err != nil {
+		return fmt.Errorf("prepare COW generation: %w", err)
+	}
+	preparedOwned := true
+	defer func() {
+		if !preparedOwned {
+			return
+		}
+		if abortErr := idx.allocator.AbortCOWCandidateV1(prepared); abortErr != nil {
+			cause := errors.Join(err, fmt.Errorf("abort incomplete COW generation: %w", abortErr), ErrRecoveryRequired)
+			db.publicationPoisoned.Store(true)
+			if failErr := idx.allocator.FailCOWCandidateV1(prepared, cause); failErr != nil {
+				cause = errors.Join(cause, fmt.Errorf("fail incomplete COW generation: %w", failErr))
+			}
+			err = cause
+		}
+	}()
+	if db.testFailDurableRootAfterCOWPrepare.Load() {
+		return errTestDurableRootAfterCOWPrepareFailpoint
+	}
+	generation := prepared.Candidate().Generation()
+	auxiliary := prepared.AuxiliaryPageIDs()
+	if generation == nil || len(auxiliary) != auxiliaryCount {
+		return errors.New("incomplete durable-root COW candidate")
+	}
+
+	next.TotalPages = generation.HighWater()
+	next.FreelistHeadID = 0
+	recordPageID := auxiliary[len(auxiliary)-1]
+	if current.record.DurableSeq == ^uint64(0) {
+		return errors.New("durable root publication sequence overflow")
+	}
+	durableSeq := current.record.DurableSeq + 1
+	if durableSeq > next.CommitSeq {
+		return errors.New("durable root publication sequence exceeds commit frontier")
+	}
+	var manifestRef rootpublication.DependencyManifestRefV1
+	if manifest != nil {
+		manifestRef, err = manifest.Reference(auxiliary[0])
+		if err != nil {
+			return err
+		}
+	}
+	record := rootpublication.DurableRootRecordV1{
+		CommitSeq: next.CommitSeq, DurableSeq: durableSeq,
+		UserRootPageID: next.UserRootPageID, SystemRootPageID: next.SystemRootPageID,
+		TotalPages: next.TotalPages, MaxEntryRevision: next.MaxEntryRevision,
+		AppliedCommandLSN: next.AppliedCommandLSN, LastCommitHeight: next.LastCommitHeight,
+		Freelist: generation.GenerationRef(), FreelistFreeCount: generation.FreeCount(), FreelistRetiredCount: generation.RetiredCount(),
+		Manifest:           manifestRef,
+		Directory:          directoryRef,
+		ParentRecordPageID: current.meta.RootRecordPageID, ParentCommitSeq: current.meta.CommitSeq,
+		ParentRecordDigest:   current.meta.RootRecordDigest,
+		MetaProjectionDigest: page.DurableMetaProjectionDigestV1(next.CommitSeq, durableSeq, recordPageID),
+	}
+	_, recordDigest, err := record.EncodePage(recordPageID)
+	if err != nil {
+		return err
+	}
+	meta, err := page.NewDurableMetaV1(next.CommitSeq, durableSeq, recordPageID, recordDigest)
+	if err != nil {
+		return err
+	}
+	out.idx, out.next, out.prepared = idx, next, prepared
+	out.record, out.meta, out.target = record, meta, target
+	preparedOwned = false
+	return nil
+}
+
 // prepareDurableRootCandidateV1 validates and freezes one exact publication
 // candidate without mutating either meta slot. COW pages are encoded into the
 // allocator-owned memory store here but are not copied into the index until
@@ -1809,91 +1917,25 @@ func (db *DB) prepareDurableRootCandidateV1(idx *indexGen, next page.MetaPageBod
 			err = errors.Join(err, token.ReleaseWithError())
 		}
 	}()
-	target := uint64(MetaPage0ID)
-	if current.slot == MetaPage0ID {
-		target = MetaPage1ID
-	}
-	var retirementStorage [3]freelist.COWRetirementV1
-	retirements, err := appendDurableRootSlotRetirementsV1(retirementStorage[:0], current.slotMeta[target], current.slotRecord[target], current.record)
-	if err != nil {
+	var assembled rootPublicationSealV1
+	if err := db.prepareDurableRootGenerationV1(idx, current, next, retired, manifest, directoryRef, capability, &assembled, nil); err != nil {
 		return nil, err
 	}
-	auxiliaryCount := 1
-	if manifest != nil {
-		auxiliaryCount += int(manifest.PageCount())
-	}
-	prepared, err := idx.allocator.PrepareCOWCandidateRetiringV1(
-		current.record.Freelist.GenerationID+1,
-		next.CommitSeq,
-		durableRootCandidateIDV1(current, next),
-		capability,
-		append(retirements, freelist.COWRetirementV1{PageIDs: retired, LastReachableCommitSeq: current.record.CommitSeq}),
-		auxiliaryCount,
-		freelist.NewCandidatePageSinkV1(),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("prepare COW generation: %w", err)
-	}
+	prepared := assembled.prepared
 	preparedOwned := true
 	defer func() {
-		if !preparedOwned {
-			return
-		}
-		if abortErr := idx.allocator.AbortCOWCandidateV1(prepared); abortErr != nil {
-			cause := errors.Join(err, fmt.Errorf("abort incomplete COW generation: %w", abortErr), ErrRecoveryRequired)
-			db.publicationPoisoned.Store(true)
-			if failErr := idx.allocator.FailCOWCandidateV1(prepared, cause); failErr != nil {
-				cause = errors.Join(cause, fmt.Errorf("fail incomplete COW generation: %w", failErr))
+		if preparedOwned {
+			if abortErr := idx.allocator.AbortCOWCandidateV1(prepared); abortErr != nil {
+				cause := errors.Join(err, fmt.Errorf("abort incomplete COW generation: %w", abortErr), ErrRecoveryRequired)
+				db.publicationPoisoned.Store(true)
+				if failErr := idx.allocator.FailCOWCandidateV1(prepared, cause); failErr != nil {
+					cause = errors.Join(cause, fmt.Errorf("fail incomplete COW generation: %w", failErr))
+				}
+				err = cause
 			}
-			err = cause
 		}
 	}()
-	if db.testFailDurableRootAfterCOWPrepare.Load() {
-		return nil, errTestDurableRootAfterCOWPrepareFailpoint
-	}
-	generation := prepared.Candidate().Generation()
-	auxiliary := prepared.AuxiliaryPageIDs()
-	if generation == nil || len(auxiliary) != auxiliaryCount {
-		return nil, errors.New("incomplete durable-root COW candidate")
-	}
-
-	next.TotalPages = generation.HighWater()
-	next.FreelistHeadID = 0
-	recordPageID := auxiliary[len(auxiliary)-1]
-	if current.record.DurableSeq == ^uint64(0) {
-		return nil, errors.New("durable root publication sequence overflow")
-	}
-	durableSeq := current.record.DurableSeq + 1
-	if durableSeq > next.CommitSeq {
-		return nil, errors.New("durable root publication sequence exceeds commit frontier")
-	}
-	var manifestRef rootpublication.DependencyManifestRefV1
-	if manifest != nil {
-		manifestRef, err = manifest.Reference(auxiliary[0])
-		if err != nil {
-			return nil, err
-		}
-	}
-	record := rootpublication.DurableRootRecordV1{
-		CommitSeq: next.CommitSeq, DurableSeq: durableSeq,
-		UserRootPageID: next.UserRootPageID, SystemRootPageID: next.SystemRootPageID,
-		TotalPages: next.TotalPages, MaxEntryRevision: next.MaxEntryRevision,
-		AppliedCommandLSN: next.AppliedCommandLSN, LastCommitHeight: next.LastCommitHeight,
-		Freelist: generation.GenerationRef(), FreelistFreeCount: generation.FreeCount(), FreelistRetiredCount: generation.RetiredCount(),
-		Manifest:           manifestRef,
-		Directory:          directoryRef,
-		ParentRecordPageID: current.meta.RootRecordPageID, ParentCommitSeq: current.meta.CommitSeq,
-		ParentRecordDigest:   current.meta.RootRecordDigest,
-		MetaProjectionDigest: page.DurableMetaProjectionDigestV1(next.CommitSeq, durableSeq, recordPageID),
-	}
-	_, recordDigest, err := record.EncodePage(recordPageID)
-	if err != nil {
-		return nil, err
-	}
-	meta, err := page.NewDurableMetaV1(next.CommitSeq, durableSeq, recordPageID, recordDigest)
-	if err != nil {
-		return nil, err
-	}
+	next = assembled.next
 	metadata := db.valueLogIdentityPins.MetadataOwner()
 	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(durableRootPublishCandidateV1{})))
 	if err = metadata.AddPending(charge); err != nil {
@@ -1902,7 +1944,7 @@ func (db *DB) prepareDurableRootCandidateV1(idx *indexGen, next page.MetaPageBod
 	candidate = &durableRootPublishCandidateV1{
 		metadata: metadata, metadataCharge: charge, generationBorrowed: true, db: db,
 		idx: idx, base: current, next: next, resources: resources, manifest: manifest,
-		prepared: prepared, capability: capability, token: token, record: record, meta: meta, target: target,
+		prepared: prepared, capability: capability, token: token, record: assembled.record, meta: assembled.meta, target: assembled.target,
 	}
 	candidate.disposalFailure.payload = candidate
 	idx.retainWrapperBorrow()

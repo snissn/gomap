@@ -169,6 +169,7 @@ func TestCommitAtDurableReplacementLifecycle(t *testing.T) {
 		beforeSlots = durableReplacementDATASlots(t, dir)
 	}
 	sequence := durableReplacementNumber(t, d, "treedb.durable_root.commit_seq")
+	previousGeneration := generation
 	for i := 0; i < 4; i++ {
 		commit(100, []Mutation{{Key: []byte("k031"), Value: []byte("after")}})
 		next := durableReplacementNumber(t, d, "treedb.durable_root.commit_seq")
@@ -179,6 +180,10 @@ func TestCommitAtDurableReplacementLifecycle(t *testing.T) {
 		if durableReplacementAuthority == "PRIMARY" && got != generation {
 			t.Fatal("bookkeeping-only PRIMARY replacement rebuilt DATA generation")
 		}
+		if durableReplacementAuthority == "DATA" && got != previousGeneration+1 {
+			t.Fatalf("synchronous replacement advanced %d generations, want exactly 1", got-previousGeneration)
+		}
+		previousGeneration = got
 		sequence = next
 	}
 	if durableReplacementAuthority == "DATA" {
