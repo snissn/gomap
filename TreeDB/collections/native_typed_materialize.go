@@ -283,6 +283,21 @@ func nativeTypedBuildWorkspaceCapacity() (uint64, error) {
 	return workspace, nil
 }
 
+func nativeTypedOperationWorkspaceCapacity(compaction bool) (uint64, error) {
+	workspace, err := nativeTypedBuildWorkspaceCapacity()
+	if err != nil || !compaction {
+		return workspace, err
+	}
+	decoder, err := nativeTypedDecoderFixedCapacity()
+	if err != nil {
+		return 0, err
+	}
+	// Compaction finishes all physical decoding and closes its operation-local
+	// read caches before materialize opens the builder codec. Only this fixed
+	// peak is shared; decoded rows and every source-derived term stay charged.
+	return max(workspace, decoder), nil
+}
+
 func nativeTypedCollectionBuildCapacity(meta CollectionMeta, sourceBytes uint64) (uint64, error) {
 	total, err := nativeTypedBuildWorkspaceCapacity()
 	if err != nil {
@@ -425,11 +440,22 @@ func prepareNativeTypedMaterializationCore(input nativeTypedMaterializeInput) (w
 		return nil, err
 	}
 	if input.compaction != nil {
-		read, e := nativeTypedReadCapacity(input.meta, input.snapshot, input.baseManifestRoot)
+		read, e := nativeTypedCompactionReadRetainedCapacity(input.meta, input.snapshot, input.baseManifestRoot)
 		if e != nil {
 			return nil, e
 		}
 		if e = nativeTypedCheckedAdd(&amount, read); e != nil {
+			return nil, e
+		}
+		build, e := nativeTypedBuildWorkspaceCapacity()
+		if e != nil {
+			return nil, e
+		}
+		workspace, e := nativeTypedOperationWorkspaceCapacity(true)
+		if e != nil {
+			return nil, e
+		}
+		if e = nativeTypedCheckedAdd(&amount, workspace-build); e != nil {
 			return nil, e
 		}
 	}
@@ -439,7 +465,7 @@ func prepareNativeTypedMaterializationCore(input nativeTypedMaterializeInput) (w
 	if input.allocator != nil {
 		owned = amount
 		if input.sharedWorkspace != 0 {
-			fixed, e := nativeTypedBuildWorkspaceCapacity()
+			fixed, e := nativeTypedOperationWorkspaceCapacity(input.compaction != nil)
 			if e != nil || input.sharedWorkspace != fixed || owned < fixed {
 				return nil, backenddb.ErrNativeSemanticUnsupported
 			}
@@ -1154,6 +1180,24 @@ func nativeTypedDecoderFixedCapacity() (uint64, error) {
 		}
 	}
 	return total, nil
+}
+
+// Keep the entire existing physical-read bound except its fixed decoder peak.
+// The original build parent's operation floor covers that peak through the read
+// phase; manifest, asset, decoded-row and variable-family backing can outlive it.
+func nativeTypedCompactionReadRetainedCapacity(meta CollectionMeta, snapshot *backenddb.Snapshot, root uint64) (uint64, error) {
+	read, err := nativeTypedReadCapacity(meta, snapshot, root)
+	if err != nil {
+		return 0, err
+	}
+	fixed, err := nativeTypedDecoderFixedCapacity()
+	if err != nil {
+		return 0, err
+	}
+	if read < fixed {
+		return 0, memtable.ErrCOWCapacity
+	}
+	return read - fixed, nil
 }
 
 // Physical scalar reconstruction is bounded from the exact captured manifest,

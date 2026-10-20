@@ -57,7 +57,7 @@ func nativeTypedBuildCapacityForCompaction(e *nativeEngineVersion, basis *backen
 			return false
 		}
 		if id == target {
-			read, readErr := nativeTypedReadCapacity(*c.schema.meta, basis, root)
+			read, readErr := nativeTypedCompactionReadRetainedCapacity(*c.schema.meta, basis, root)
 			if readErr != nil {
 				err = readErr
 				return false
@@ -87,7 +87,7 @@ func nativeTypedBuildCapacityForCompaction(e *nativeEngineVersion, basis *backen
 	if err != nil || collections == 0 {
 		return
 	}
-	workspace, workspaceErr := nativeTypedBuildWorkspaceCapacity()
+	workspace, workspaceErr := nativeTypedOperationWorkspaceCapacity(target != 0)
 	if workspaceErr != nil {
 		err = workspaceErr
 		return
@@ -163,10 +163,16 @@ func (b *nativeEngineBuild) prepareTypedForCompaction(e *nativeEngineVersion, co
 		}
 		var compaction *nativeColumnCompaction
 		var capturedCollection *nativeCollectionState
+		sharedWorkspace := workspace
 		if id == target {
 			compaction, capturedCollection = operation, c
+			sharedWorkspace, err = nativeTypedOperationWorkspaceCapacity(true)
+			if err != nil {
+				b.failure = err
+				return false
+			}
 		}
-		work, err := prepareNativeTypedMaterialization(nativeTypedMaterializeInput{compaction: compaction, capturedCollection: capturedCollection, meta: *c.schema.meta, baseManifestRoot: root, deltas: deltas, snapshot: basis, capture: capture, allocator: &b.allocation, group: group, sharedWorkspace: workspace})
+		work, err := prepareNativeTypedMaterialization(nativeTypedMaterializeInput{compaction: compaction, capturedCollection: capturedCollection, meta: *c.schema.meta, baseManifestRoot: root, deltas: deltas, snapshot: basis, capture: capture, allocator: &b.allocation, group: group, sharedWorkspace: sharedWorkspace})
 		b.typed = append(b.typed, nativeTypedBuildWork{compaction: compaction != nil, collection: c.incarnation, work: work})
 		b.failure = err
 		return err == nil
