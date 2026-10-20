@@ -1862,7 +1862,8 @@ func (db *DB) prepareDurableRootGenerationV1(
 		ParentRecordDigest:   current.meta.RootRecordDigest,
 		MetaProjectionDigest: page.DurableMetaProjectionDigestV1(next.CommitSeq, durableSeq, recordPageID),
 	}
-	_, recordDigest, err := record.EncodePage(recordPageID)
+	var recordScratch [page.PageSize]byte
+	recordDigest, err := record.EncodePageInto(recordPageID, recordScratch[:])
 	if err != nil {
 		return err
 	}

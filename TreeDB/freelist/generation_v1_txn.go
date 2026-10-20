@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"math/bits"
 	"slices"
 	"sort"
 
@@ -531,21 +532,44 @@ func capabilityThreshold(c ReuseCapability) uint64 {
 	return threshold
 }
 
-func collectPrunable(n *stateNode, depth int, cap ReuseCapability, out *[]retiredPage, visits *uint64) {
+// collectPrunable visits each eligible chunk once. Promotion preserves its
+// free+retired population, so mutateMany cannot insert/remove a chunk or split/
+// collapse a branch. Persistent copies leave the traversal root untouched;
+// private edits only replace pointers along the same topology. Thus recursive
+// traversal remains valid even when t.root changes during a child visit.
+func (t *FreelistTxn) collectPrunable(n *stateNode, cap ReuseCapability) {
 	if n == nil || n.retiredCount == 0 || n.minRetiredSeq == 0 || n.minRetiredSeq >= capabilityThreshold(cap) {
 		return
 	}
-	*visits++
+	t.stats.PageVisits++
 	if n.chunk != nil {
+		var promote [4]uint64
+		var count uint64
 		for offset, seq := range n.chunk.retired {
 			if seq != 0 && cap.permits(seq) {
-				*out = append(*out, retiredPage{n.chunk.chunkNo<<freelistChunkShift | uint64(offset), seq})
+				promote[offset/64] |= uint64(1) << (uint(offset) % 64)
+				count++
+				if lag := cap.oldestRecoverableCommitSeq - seq; lag > t.stats.ReuseLag {
+					t.stats.ReuseLag = lag
+				}
 			}
+		}
+		if count != 0 {
+			t.mutateMany(n.chunk.chunkNo, count, func(c *stateChunk) {
+				for word, mask := range promote {
+					c.free[word] |= mask
+					for mask != 0 {
+						offset := word*64 + bits.TrailingZeros64(mask)
+						c.retired[offset] = 0
+						mask &= mask - 1
+					}
+				}
+			})
 		}
 		return
 	}
 	for _, child := range n.child {
-		collectPrunable(child, depth+1, cap, out, visits)
+		t.collectPrunable(child, cap)
 	}
 }
 
@@ -556,41 +580,7 @@ func (t *FreelistTxn) PruneWithCapability(cap ReuseCapability) {
 	t.stats.OldestRecoverableCommitSeq = cap.oldestRecoverableCommitSeq
 	t.stats.MinPinnedSnapshotCommitSeq = cap.minPinnedSnapshotCommitSeq
 	t.stats.HistoryFloorCommitSeq = cap.historyFloorCommitSeq
-	var promote []retiredPage
-	collectPrunable(t.root, 0, cap, &promote, &t.stats.PageVisits)
-	for _, retired := range promote {
-		if lag := cap.oldestRecoverableCommitSeq - retired.lastReachableCommitSeq; lag > t.stats.ReuseLag {
-			t.stats.ReuseLag = lag
-		}
-	}
-	if len(promote) == 1 {
-		item := promote[0]
-		offset := item.id & (freelistChunkSize - 1)
-		t.mutate(item.id>>freelistChunkShift, func(c *stateChunk) {
-			c.retired[offset] = 0
-			c.setFree(offset, true)
-		})
-		return
-	}
-	sort.SliceStable(promote, func(i, j int) bool {
-		return promote[i].id>>freelistChunkShift < promote[j].id>>freelistChunkShift
-	})
-	for start := 0; start < len(promote); {
-		chunkNo := promote[start].id >> freelistChunkShift
-		end := start + 1
-		for end < len(promote) && promote[end].id>>freelistChunkShift == chunkNo {
-			end++
-		}
-		items := promote[start:end]
-		t.mutateMany(chunkNo, uint64(len(items)), func(c *stateChunk) {
-			for _, item := range items {
-				offset := item.id & (freelistChunkSize - 1)
-				c.retired[offset] = 0
-				c.setFree(offset, true)
-			}
-		})
-		start = end
-	}
+	t.collectPrunable(t.root, cap)
 }
 
 func (t *FreelistTxn) Prune(h RecoveryHorizon) { t.PruneWithCapability(h.capability()) }

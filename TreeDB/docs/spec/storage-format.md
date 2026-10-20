@@ -939,6 +939,14 @@ advancing `DurableSeq` by exactly one.
 
 ### 3.2 Durable-root record V1
 
+Construction may encode into private caller-owned preparation scratch and retain
+only the expected digest. Canonical hashing reads the whole page while substituting
+zeros for the checksum and embedded digest; it never mutates borrowed input.
+Materialization still creates an independent page image and copies it through the
+locked pager write before the existing index/meta durability barriers. Preparation
+scratch is not retained by a seal, candidate, or dependency owner. These construction
+choices do not change the persisted bytes or immutable candidate-page lifetimes.
+
 A durable-root record is one checksummed `0x0a` page. Bytes `16:384` are:
 
 | Page bytes | Encoding | Meaning |
