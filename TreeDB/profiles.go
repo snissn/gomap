@@ -333,10 +333,6 @@ func applyResolvedProfile(opts *Options, profile Profile, allowBenchUnsafe bool)
 		applyCommandWALRelaxedProfile(opts)
 	case ProfileNoWALFast:
 		applyNoWALFastProfile(opts)
-		// Fresh no-WAL databases keep USER leaves in the DATA pager. Preserve
-		// the shared helper's other encoding defaults and caller overrides
-		// applied after OptionsFor; persisted layouts still govern reopen.
-		opts.IndexOuterLeavesInValueLog = false
 	case ProfileBenchUnsafe:
 		applyBenchUnsafeProfile(opts)
 	}

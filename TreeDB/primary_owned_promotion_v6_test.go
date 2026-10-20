@@ -12,7 +12,7 @@ import (
 )
 
 // Explicit outer-leaf placement exercises persistent resource custody alongside
-// forced value pointers, independently of the fresh NoWAL pager-leaf default.
+// forced value pointers, independently of the profile's default leaf placement.
 func TestPrimaryOwnedPromotionV6DefaultMaterializationReaderAndCut(t *testing.T) {
 	opts := OptionsFor(ProfileNoWALFast, t.TempDir())
 	opts.IndexOuterLeavesInValueLog = true

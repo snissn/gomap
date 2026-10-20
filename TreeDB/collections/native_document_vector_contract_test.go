@@ -323,6 +323,38 @@ func TestNativeDocumentVectorDeletedRoutingRetainsLiveResults(t *testing.T) {
 				t.Fatalf("current answer=%+v: %v", current, err)
 			}
 			assertStats(current, 1, 1)
+			assertRefused := func(response VectorIndexSearchResponse, err error) {
+				t.Helper()
+				if !errors.Is(err, ErrVectorIndexSearchUnavailable) || len(response.Results) != 0 {
+					t.Fatalf("unsupported diagnostic mode returned results=%+v: %v", response, err)
+				}
+			}
+			for _, mode := range []VectorIndexSearchStatsMode{VectorIndexSearchStatsModeFullDiagnostics, VectorIndexSearchStatsModeWorkAccounting} {
+				heldOpts := opts
+				heldOpts.StatsMode = mode
+				assertRefused(held.Search(heldOpts))
+				assertRefused(held.SearchWithBuffer(heldOpts, &buffer))
+				collectionOpts := VectorIndexSearchOptions{IndexName: "embedding", Query: opts.Query, TopK: opts.TopK, EfSearch: opts.EfSearch, StatsMode: mode}
+				assertRefused(col.SearchVectorIndex(collectionOpts))
+				assertRefused(col.SearchVectorIndexWithBuffer(collectionOpts, &buffer))
+				if len(buffer.results) != 0 || len(buffer.idBytes) != 0 {
+					t.Fatalf("refused mode %q retained buffered results", mode)
+				}
+			}
+			for _, mode := range []VectorIndexSearchStatsMode{VectorIndexSearchStatsModeMinimal, VectorIndexSearchStatsModeProduction} {
+				heldOpts := opts
+				heldOpts.StatsMode = mode
+				old, err = held.Search(heldOpts)
+				if err != nil || len(old.Results) != 1 || string(old.Results[0].ID) != "a" {
+					t.Fatalf("held mode %q answer=%+v: %v", mode, old, err)
+				}
+				assertStats(old, 2, 0)
+				current, err = col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: "embedding", Query: opts.Query, TopK: opts.TopK, EfSearch: opts.EfSearch, StatsMode: mode}, &buffer)
+				if err != nil || len(current.Results) != 1 || string(current.Results[0].ID) != "b" {
+					t.Fatalf("current mode %q answer=%+v: %v", mode, current, err)
+				}
+				assertStats(current, 1, 1)
+			}
 			old, err = held.Search(VectorIndexSearcherSearchOptions{Query: opts.Query, TopK: 0})
 			if err != nil || len(old.Results) != 0 {
 				t.Fatalf("held zero-result search=%+v: %v", old, err)

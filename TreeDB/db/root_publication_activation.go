@@ -1768,7 +1768,7 @@ func (runtime *rootPublicationRuntimeV1) Publish(ctx context.Context, candidate 
 		meta:   seal.meta,
 		syncMeta: func() error {
 			return seal.token.WithPinnedFile(func(file *os.File) error {
-				return seal.idx.pager.SyncPagesWithStableFileBarrier(file, []uint64{seal.target})
+				return seal.idx.pager.SyncPagesWithStableFile(file, []uint64{seal.target})
 			})
 		},
 		dir: db.dir, indexPath: metaPath,

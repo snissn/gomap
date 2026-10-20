@@ -237,14 +237,14 @@ func TestOpen_NoWALFastUserLeafPlacementPersists(t *testing.T) {
 		override bool
 		outer    bool
 	}{
-		{name: "default"},
+		{name: "default", outer: true},
 		{name: "explicit_false", override: true},
 		{name: "explicit_true", override: true, outer: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			opts := OptionsFor(ProfileNoWALFast, dir)
-			if opts.IndexOuterLeavesInValueLog || opts.IndexInternalBaseDelta {
+			if !opts.IndexOuterLeavesInValueLog || opts.IndexInternalBaseDelta {
 				t.Fatalf("fresh no_wal_fast layout defaults: outer=%t base_delta=%t", opts.IndexOuterLeavesInValueLog, opts.IndexInternalBaseDelta)
 			}
 			if tc.override {
@@ -344,8 +344,8 @@ func TestApplyProfile_FastSetsPolicyBools(t *testing.T) {
 	if opts.ValueLog.ReadIntegrity != IntegrityVerify {
 		t.Fatalf("expected IntegrityVerify for fast alias, got %v", opts.ValueLog.ReadIntegrity)
 	}
-	if opts.IndexOuterLeavesInValueLog {
-		t.Fatalf("expected IndexOuterLeavesInValueLog=false for fast profile")
+	if !opts.IndexOuterLeavesInValueLog {
+		t.Fatalf("expected IndexOuterLeavesInValueLog=true for fast profile")
 	}
 	if opts.PreferAppendAlloc {
 		t.Fatalf("expected PreferAppendAlloc=false for fast profile")

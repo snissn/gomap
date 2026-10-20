@@ -63,7 +63,7 @@ func TestLeafGenerationPlan_FastProfileTracksLeafFileRollsAcrossCheckpoints(t *t
 func TestLeafGenerationPlan_FastProfileLeafTargetSeparatesFromHotTarget(t *testing.T) {
 	dir := t.TempDir()
 	opts := treedb.OptionsFor(treedb.ProfileFast, dir)
-	// Exercise leaf-segment rollover independently of the fresh pager default.
+	// Exercise leaf-segment rollover with an explicit external-leaf producer.
 	opts.IndexOuterLeavesInValueLog = true
 	opts.BackgroundCheckpointInterval = -1
 	opts.BackgroundCheckpointIdleDuration = -1

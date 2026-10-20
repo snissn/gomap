@@ -260,6 +260,14 @@ func (s *VectorIndexSearcher) searchNativeDocumentInto(opts VectorIndexSearcherS
 	if mode != columnVectorGraphNativeSearchQueryModeExact || documentFetchOptionsHasProjection(opts.DocumentFetchOptions) {
 		return response, backenddb.ErrNativeSemanticUnsupported
 	}
+	// Preserve the zero-value compatibility mode while refusing explicitly
+	// requested detailed counters that this native runtime does not implement.
+	if opts.StatsMode == VectorIndexSearchStatsModeFullDiagnostics {
+		return response, collectionVectorIndexWithBufferUnsupportedOptionError("StatsMode=full_diagnostics", "native_runtime full-diagnostics counters are not implemented; use production/minimal mode with CPU profiles")
+	}
+	if opts.StatsMode == VectorIndexSearchStatsModeWorkAccounting {
+		return response, collectionVectorIndexWithBufferUnsupportedOptionError("StatsMode=work_accounting", "native_runtime work-accounting counters are not implemented; use production/minimal mode with CPU profiles")
+	}
 	if _, err = columnVectorGraphNativeSearchStatsModeFromPublic(opts.StatsMode); err != nil {
 		return response, err
 	}

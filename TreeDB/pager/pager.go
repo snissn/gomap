@@ -1235,32 +1235,17 @@ func (p *Pager) SyncPages(pageIDs []uint64) error {
 
 // SyncPagesWithStableFile durably synchronizes the named mapped pages through
 // an exact retained handle for this pager's file. The handle is validated
-// against the live pager identity before any mapped-view or file barrier. It
+// against the live pager identity before any mapped-view or file barrier. This
+// is the scoped primitive used for the durability-critical meta-page cut: it
 // never reopens the diagnostic path and it fails closed on a rebound handle.
 func (p *Pager) SyncPagesWithStableFile(file *os.File, pageIDs []uint64) error {
 	_, err := p.SyncPagesWithStableFileWithWork(file, pageIDs, nil)
 	return err
 }
-
-// SyncPagesWithStableFileBarrier durably synchronizes already-dirtied mapped
-// pages through a full-file barrier on the exact retained handle, without
-// rewriting their bytes. It preserves the scoped-sync identity, bounds,
-// admission, platform mapped-range flush and dirty-membership behavior. The
-// named pages must belong to this pager; the file barrier may persist other
-// dirty pages as well. It does not replace an earlier prerequisite-data fence.
-func (p *Pager) SyncPagesWithStableFileBarrier(file *os.File, pageIDs []uint64) error {
-	_, err := p.syncPagesWithStableFile(file, pageIDs, nil, 0, 0, false)
-	return err
-}
-
 func (p *Pager) SyncPagesWithStableFileWithWork(file *os.File, pageIDs []uint64, w *iterator.OrdinalScanWork) (bool, error) {
 	return p.SyncPagesWithStableFileWithCallerControl(file, pageIDs, w, 0, 0)
 }
 func (p *Pager) SyncPagesWithStableFileWithCallerControl(file *os.File, pageIDs []uint64, w *iterator.OrdinalScanWork, callerRecords, callerBytes uint64) (bool, error) {
-	return p.syncPagesWithStableFile(file, pageIDs, w, callerRecords, callerBytes, true)
-}
-
-func (p *Pager) syncPagesWithStableFile(file *os.File, pageIDs []uint64, w *iterator.OrdinalScanWork, callerRecords, callerBytes uint64, allowRangeWrites bool) (bool, error) {
 	if p.readOnly {
 		return false, ErrReadOnly
 	}
@@ -1329,7 +1314,7 @@ func (p *Pager) syncPagesWithStableFile(file *os.File, pageIDs []uint64, w *iter
 		return false, err
 	}
 	handled := false
-	if allowRangeWrites && syncPageRangesWithinDurableFileSize(ranges, p.chunkSize, p.durableFileSize.Load()) {
+	if syncPageRangesWithinDurableFileSize(ranges, p.chunkSize, p.durableFileSize.Load()) {
 		handled, err = syncPageRangesFn(file, p.chunks, ranges, p.chunkSize)
 		if err != nil {
 			p.mu.RUnlock()
