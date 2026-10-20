@@ -85,6 +85,8 @@ type rootPublicationVisibleInstallV1 struct {
 	metadataCharge   uint64
 	visibleHead      int
 	primaryRoot      *primaryStateRootV5
+	preparedState    *DBState
+	preparedView     *snapshotView
 	negativeCoverage *negativeRootCoverage
 	db               *DB
 	idx              *indexGen
@@ -123,9 +125,6 @@ type rootPublicationSealBaseV1 struct {
 // the retry, Prepare creates a successor seal and retains this seal as ordered
 // allocator debt until the successor publishes.
 type rootPublicationSealV1 struct {
-	disposalPhase   uint8
-	disposalNative  bool
-	disposalIndex   int
 	disposalMu      sync.Mutex
 	disposalErr     error
 	disposalFailure originalDBCleanupFailure
@@ -258,7 +257,8 @@ func (runtime *rootPublicationRuntimeV1) cloneVisibleResourcesWithWorkMax(maxRes
 }
 
 func (seal *rootPublicationSealV1) release() error {
-	completion, _, err := continueRootPublicationSealReleaseV6(seal, nil, nil)
+	completion, _, err := releaseRootPublicationSealV6(seal)
+	seal = nil
 	completion.complete()
 	return err
 }
@@ -354,6 +354,8 @@ func newRootPublicationRuntimeModeV1(db *DB, idx *indexGen, durable durableRootR
 		OldestRecoverableCommitSeq: oldest,
 		DurableRootLineage:         runtime.lineage,
 		DurableRootSequence:        durable.record.CommitSeq,
+		AcceptedPrefixOwner:        db.acceptedPrefix.Load(),
+		MetadataOwner:              metadata,
 	})
 	if err != nil {
 		return nil, errors.Join(err, runtime.release())
@@ -382,6 +384,9 @@ func stopRootPublicationRuntimeV1(runtime *rootPublicationRuntimeV1) (*rootpubli
 	}
 	stopErr := runtime.coordinator.Stop(context.Background())
 	handoff, handoffErr := runtime.coordinator.TakeRecoveryHandoff()
+	if handoffErr != nil {
+		handoffErr = runtime.retainFailedRecoveryHandoff(handoffErr)
+	}
 	if stopErr != nil || handoffErr != nil {
 		return handoff, errors.Join(publicRootPublicationErrorV1(stopErr), publicRootPublicationErrorV1(handoffErr))
 	}
@@ -417,7 +422,7 @@ func (db *DB) prepareRootPublicationVisibleInstallV1(
 	opts finalizeCommitOptions,
 ) (_ *rootPublicationVisibleInstallV1, retErr error) {
 	metadata := db.valueLogIdentityPins.MetadataOwner()
-	if idx.primary != nil && idx.primary.CapsuleFormatV6() {
+	if idx.primary != nil {
 		metadata = idx.primary.MetadataOwner()
 	}
 	metadataCharge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(rootPublicationVisibleInstallV1{})))
@@ -516,6 +521,31 @@ func (install *rootPublicationVisibleInstallV1) abort() error {
 	return nil
 }
 
+// prepareState freezes the same candidate tuple used by activation and an
+// optional accepted-generation Snapshot. The build fence excludes another
+// publisher until activation; no current snapshot is sampled afterward.
+func (install *rootPublicationVisibleInstallV1) prepareState() *DBState {
+	if install.preparedState != nil {
+		return install.preparedState
+	}
+	db := install.db
+	state := &DBState{
+		primaryRoot:       install.primaryRoot,
+		CommitSeq:         install.next.CommitSeq,
+		RootPageID:        install.next.UserRootPageID,
+		SystemRootPageID:  install.next.SystemRootPageID,
+		AppliedCommandLSN: install.next.AppliedCommandLSN,
+		MaxEntryRevision:  page.EntryRevision(install.next.MaxEntryRevision),
+		ValueLogSet:       install.valueLogSet,
+		LeafGenerations:   install.leafGenerationView,
+	}
+	if install.leafGenerationView != nil {
+		state.LeafGenerationStateVersion = db.leafGenerationStateVersion + 1
+	}
+	install.preparedState = state
+	return state
+}
+
 func (install *rootPublicationVisibleInstallV1) activate(activateAllocator func() error) error {
 	if install == nil || install.db == nil || install.idx == nil || install.activated {
 		return errors.New("invalid root-publication visible install")
@@ -562,6 +592,11 @@ func (install *rootPublicationVisibleInstallV1) activate(activateAllocator func(
 			admission.Refuse()
 		}
 	}
+	if view := install.preparedView; view != nil && (view.idx != install.idx || view.state != install.preparedState || view.vlogManager != db.valueLogManager || view.systemRootPublishEpoch != db.snapshotPublicationEpoch(install.idx, install.preparedState)) {
+		admission.Abort()
+		db.mu.Unlock()
+		return ErrRootPublicationBasisMismatch
+	}
 	if err := activateAllocator(); err != nil {
 		admission.Abort()
 		db.mu.Unlock()
@@ -573,20 +608,11 @@ func (install *rootPublicationVisibleInstallV1) activate(activateAllocator func(
 	if install.installLeafManifest {
 		db.leafGenerationManifest = install.leafManifest
 	}
-	newState := &DBState{
-		primaryRoot:       install.primaryRoot,
-		CommitSeq:         install.next.CommitSeq,
-		RootPageID:        install.next.UserRootPageID,
-		SystemRootPageID:  install.next.SystemRootPageID,
-		AppliedCommandLSN: install.next.AppliedCommandLSN,
-		MaxEntryRevision:  page.EntryRevision(install.next.MaxEntryRevision),
-		ValueLogSet:       install.valueLogSet,
-		LeafGenerations:   install.leafGenerationView,
-	}
+	newState := install.prepareState()
 	if install.leafGenerationView != nil {
-		db.leafGenerationStateVersion++
-		newState.LeafGenerationStateVersion = db.leafGenerationStateVersion
+		db.leafGenerationStateVersion = newState.LeafGenerationStateVersion
 	}
+
 	db.state.Store(newState)
 	if install.commandWALPublish {
 		previousApplied := uint64(0)
@@ -595,7 +621,7 @@ func (install *rootPublicationVisibleInstallV1) activate(activateAllocator func(
 		}
 		db.observeCommandWALCovered(previousApplied, install.next.AppliedCommandLSN)
 	}
-	db.publishSnapshotView(install.idx, newState, db.valueLogManager, install.negativeCoverage)
+	db.publishSnapshotView(install.idx, newState, db.valueLogManager, install.preparedView, install.negativeCoverage)
 	admission.Commit()
 	db.mu.Unlock()
 	install.valueLogSet = nil
@@ -822,17 +848,14 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 		}
 		install.primaryRoot = &primaryStateRootV5{arena: runtime.idx.primary, ref: bundle.Directory, dataCommit: generation.CommitSeq(), certificate: certificate}
 	}
-	var memberMetadata uint64
-	if transaction != nil {
-		memberMetadata = primaryVisibleMetadataV6()
-		if e := runtime.idx.primary.MetadataOwner().AddPending(memberMetadata); e != nil {
-			return nil, false, e
-		}
+	memberMetadata := primaryVisibleMetadataV6()
+	if e := runtime.metadata.AddPending(memberMetadata); e != nil {
+		return nil, false, e
 	}
-	memberMetadataOwned := memberMetadata != 0
+	memberMetadataOwned := true
 	defer func() {
 		if memberMetadataOwned {
-			runtime.idx.primary.MetadataOwner().RemovePending(memberMetadata)
+			runtime.metadata.RemovePending(memberMetadata)
 		}
 	}()
 	member := &rootPublicationVisibleMemberV1{
@@ -972,7 +995,8 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 		if err != nil {
 			return nil, false, err
 		}
-		install.metadataCharge = 0 // SAME transaction terminal node owns the admitted header.
+		memberMetadataOwned = false
+		install.metadataCharge = 0 // SAME transaction terminal owns the admitted member/header.
 	}
 	member.transaction = transaction
 	preparedOwned = false
@@ -1231,6 +1255,9 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 	candidateOwned := true
 	defer func() {
 		if candidateOwned {
+			if opts.abortSnapshotReceipt != nil {
+				retErr = errors.Join(retErr, opts.abortSnapshotReceipt())
+			}
 			if abandonErr := candidate.Abandon(); abandonErr != nil {
 				if idx.primaryOwner != nil {
 					abandonErr = idx.primaryOwner.retainFailedTransactionV6(candidate.DurableRoot(), abandonErr)
@@ -1240,6 +1267,19 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 			}
 		}
 	}()
+
+	// Prepare the exact visible tuple before acceptance and the installation
+	// latch, including the filter and predicted system-root publication epoch.
+	state := install.prepareState()
+	db.mu.RLock()
+	install.preparedView = db.prepareSnapshotView(idx, state, db.valueLogManager, opts.negativeCoverage)
+	db.mu.RUnlock()
+
+	if opts.prepareSnapshotReceipt != nil {
+		if err := opts.prepareSnapshotReceipt(install); err != nil {
+			return post, prePublishErr(fmt.Errorf("prepare accepted snapshot receipt: %w", err))
+		}
+	}
 
 	if releaseRootSerialization := opts.releaseRootSerialization; releaseRootSerialization != nil {
 		releaseRootSerialization()
@@ -1265,12 +1305,21 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 	}
 
 	enqueueStart := time.Now()
-	receipt, enqueueErr := runtime.coordinator.EnqueueBuilt(candidate, builder)
+	var receipt *rootpublication.BuilderHandoffReceipt
+	var enqueueErr error
+	if opts.acceptedPrefixCut != nil {
+		receipt, enqueueErr = runtime.coordinator.EnqueueBuiltAcceptedCut(candidate, builder, *opts.acceptedPrefixCut)
+	} else {
+		receipt, enqueueErr = runtime.coordinator.EnqueueBuilt(candidate, builder)
+	}
 	if opts.publishTiming != nil {
 		opts.publishTiming.FinalizeEnqueueActivation += time.Since(enqueueStart)
 	}
 	if enqueueErr != nil {
 		enqueueErr = publicRootPublicationErrorV1(enqueueErr)
+		if opts.abortSnapshotReceipt != nil {
+			enqueueErr = errors.Join(enqueueErr, opts.abortSnapshotReceipt())
+		}
 		if abandonErr := candidate.Abandon(); abandonErr != nil {
 			if idx.primaryOwner != nil {
 				abandonErr = idx.primaryOwner.retainFailedTransactionV6(candidate.DurableRoot(), abandonErr)
@@ -1282,6 +1331,15 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 		return post, prePublishErr(enqueueErr)
 	}
 	candidateOwned = false
+	install.post.physicalSeal = receipt.SealReceipt()
+	if opts.commandWALSeal != nil {
+		opts.commandWALSeal.bind(install.post.physicalSeal)
+	}
+	for _, intent := range opts.commandWALSealGroup {
+		if intent != nil && intent.inner.sealedReceipt != nil {
+			intent.inner.sealedReceipt.bind(install.post.physicalSeal)
+		}
+	}
 	if opts.publishTiming != nil {
 		opts.publishTiming.FinalizeCandidateDependencyBytes += candidate.DependencyBytes()
 		opts.publishTiming.FinalizeCandidateOwnedBytes += candidate.OwnedBytes()
@@ -1304,6 +1362,14 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 	releaseBuildLocks()
 	if reportErr != nil {
 		db.reportError(reportErr)
+	}
+	// Explicit sealed APIs carry the SAME receipt out to their original owner.
+	// That owner must first unwind staging/collection/teardown and publication
+	// in-flight custody. Waiting here would retain those caller-owned gates even
+	// though this function released the backend build locks. Its later exact
+	// WaitThrough covers both hard admission and final physical sealing.
+	if opts.commandWALSeal != nil {
+		return post, nil
 	}
 	admissionStart := time.Now()
 	if err := runtime.coordinator.WaitForAdmission(context.Background(), receipt); err != nil {
@@ -1948,6 +2014,25 @@ func (runtime *rootPublicationRuntimeV1) failAmbiguousSeal(seal *rootPublication
 	}
 }
 
+// A refused handoff still owns the SAME coordinator's original recovery
+// arrays. Publish that runtime through its embedded physical-failure receipt
+// before any caller can withdraw discovery or attempt containing refund.
+func (runtime *rootPublicationRuntimeV1) retainFailedRecoveryHandoff(cause error) error {
+	runtime.disposalMu.Lock()
+	if !runtime.disposalAttempted {
+		runtime.disposalAttempted = true
+		runtime.disposalFailure.retainCause(0, cause)
+		runtime.disposalErr = &runtime.disposalFailure
+		if runtime.metadata != nil {
+			runtime.metadata.CleanupFailed()
+		}
+	}
+	err, db := runtime.disposalErr, runtime.db
+	runtime.disposalMu.Unlock()
+	db.retainOriginalCleanupError(err)
+	return err
+}
+
 // The coordinator is stopped before terminal disposal. Physical callbacks do
 // not call runtime.release; the private completion mutex serializes only this
 // original outcome, outside runtime.mu and the DB publication locks.
@@ -1977,6 +2062,10 @@ func (runtime *rootPublicationRuntimeV1) release() error {
 		if err := visibleResources.ReleaseWithError(); err != nil {
 			first = err
 		}
+	}
+	var publicationCompletion rootpublication.StableResourceTokenReleaseCompletionV6
+	if first == nil {
+		publicationCompletion, first = runtime.coordinator.ReleasePhysicalMetadata()
 	}
 	if first != nil {
 		runtime.disposalFailure.retainCause(0, first)
@@ -2018,6 +2107,7 @@ func (runtime *rootPublicationRuntimeV1) release() error {
 	idx = nil
 	runtime.disposalMu.Unlock()
 	runtime = nil
+	publicationCompletion.Complete()
 	if owner != nil {
 		owner.RemovePending(charge)
 	}

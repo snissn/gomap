@@ -604,7 +604,7 @@ func forceStalePublishedValueLogSetForReadRetryTest(t *testing.T, db *DB) {
 		ValueLogSet:      staleSet,
 	}
 	db.state.Store(stale)
-	db.publishSnapshotView(db.idx.Load(), stale, db.valueLogManager)
+	db.publishSnapshotView(db.idx.Load(), stale, db.valueLogManager, nil)
 	db.mu.Unlock()
 	if oldState.ValueLogSet != nil {
 		if err := db.valueLogManager.Release(oldState.ValueLogSet); err != nil {

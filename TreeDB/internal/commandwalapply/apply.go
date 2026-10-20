@@ -4,6 +4,7 @@ package commandwalapply
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"sync"
 
@@ -185,6 +186,9 @@ func Append(db *backenddb.DB, frame LoweredFrame, meta ApplyMetadata, opts Optio
 	}
 	applyAppendMu.Lock()
 	defer applyAppendMu.Unlock()
+	// An outstanding handle still owns raw staging. Refuse its uncovered frame
+	// before trying to acquire that same lease; Finalize/Abort must release it.
+	// This is only preflight: the actual guard checks continuity again below.
 	if err := checkContiguousAppendReady(db, appliedCommandLSN(db)); err != nil {
 		return Handle{}, Result{}, err
 	}
@@ -233,6 +237,9 @@ func prepareAppendIntent(db *backenddb.DB, frame LoweredFrame) (*backenddb.Comma
 	if intent == nil {
 		return nil, fmt.Errorf("%w: command wal apply intent unavailable", backenddb.ErrCommandWALUnsupported)
 	}
+	if err := intent.PrepareSealedReceipt(); err != nil {
+		return nil, err
+	}
 	return intent, nil
 }
 
@@ -272,14 +279,22 @@ func Finalize(db *backenddb.DB, handle Handle, _ ApplyMetadata, opts Options) (R
 	if handle.staging != nil {
 		defer handle.staging.Release()
 	}
-	if applied := appliedCommandLSN(db); applied >= handle.lsn {
-		return Result{
-			LSN:               handle.lsn,
-			Status:            StatusLocallyRootRecoverable,
-			AppliedCommandLSN: applied,
-		}, nil
+	seal := handle.intent.ExactSealedReceipt()
+	if !seal.Valid() {
+		if appliedCommandLSN(db) >= handle.lsn {
+			return Result{}, fmt.Errorf("%w: sampled applied prefix has no exact command seal", backenddb.ErrCommandWALRejected)
+		}
+		if err := db.PublishStagedCommandWALNoop(handle.intent, opts.Sync); err != nil {
+			return Result{}, err
+		}
+		seal = handle.intent.ExactSealedReceipt()
 	}
-	if err := db.PublishStagedCommandWALNoop(handle.intent, opts.Sync); err != nil {
+	// Drop original staging/materialization ownership BEFORE sealed waiting.
+	// Release is idempotent; the deferred guard covers all earlier failures.
+	if handle.staging != nil {
+		handle.staging.Release()
+	}
+	if err := seal.Wait(context.Background()); err != nil {
 		return Result{}, err
 	}
 	applied := appliedCommandLSN(db)
@@ -426,14 +441,35 @@ var applyAppendMu sync.Mutex
 // StagingGuard owns the actual DB-minted staging lease. The prepared callback
 // may transfer it once to Append; Options copies share claim and release state.
 type StagingGuard struct {
-	db      *backenddb.DB
-	mu      sync.Mutex
-	claimed bool
-	active  bool
-	intent  *backenddb.CommandWALIntent
-	once    sync.Once
-	unlock  func()
-	capture *backenddb.CommandWALStagingGuardV1
+	db              *backenddb.DB
+	mu              sync.Mutex
+	claimed         bool
+	active          bool
+	intent          *backenddb.CommandWALIntent
+	once            sync.Once
+	unlock          func()
+	capture         *backenddb.CommandWALStagingGuardV1
+	materialization MaterializationOwner
+}
+
+// MaterializationOwner is the original prepared executor's lock ownership.
+// ReleaseMaterialization is called once, after raw staging is released and
+// before an exact physical seal is awaited. It must invalidate borrowed views.
+type MaterializationOwner interface{ ReleaseMaterialization() }
+
+// BindMaterializationOwner binds the already admitted original owner before
+// Append can claim this guard. Copies of append options share this binding.
+func (g *StagingGuard) BindMaterializationOwner(owner MaterializationOwner) error {
+	if g == nil || owner == nil {
+		return backenddb.ErrCommandWALRejected
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if !g.active || g.claimed || g.materialization != nil {
+		return backenddb.ErrCommandWALRejected
+	}
+	g.materialization = owner
+	return nil
 }
 
 // NewStagingGuard adopts only a live, same-DB backend-minted staging guard.
@@ -478,12 +514,18 @@ func (g *StagingGuard) Release() {
 		g.active = false
 		intent := g.intent
 		unlock := g.unlock
+		db := g.db
+		materialization := g.materialization
+		g.intent, g.unlock, g.capture, g.materialization = nil, nil, nil, nil
 		g.mu.Unlock()
-		if intent != nil && appliedCommandLSN(g.db) < intent.AssignedLSN() {
-			g.db.MarkCommandWALIntentRecoveryRequired(intent)
+		if intent != nil && appliedCommandLSN(db) < intent.AssignedLSN() {
+			db.MarkCommandWALIntentRecoveryRequired(intent)
 		}
 		if unlock != nil {
 			unlock()
+		}
+		if materialization != nil {
+			materialization.ReleaseMaterialization()
 		}
 	})
 }

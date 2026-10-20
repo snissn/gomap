@@ -433,7 +433,11 @@ func (db *DB) tryCaptureRecoverableRootSet(stable *Snapshot) (capability *Recove
 			oldest = floor
 		}
 	}
-	oldestRegistryID, _ := stable.idx.registry.RegisterWithHint(oldest, -1)
+	oldestRegistryID, _, registerErr := stable.idx.registry.RegisterWithHint(oldest, -1)
+	if registerErr != nil {
+		db.rootReuseMu.RUnlock()
+		return nil, false, registerErr
+	}
 	systemRootEpoch := db.systemRootPublishEpoch.Load()
 	db.rootReuseMu.RUnlock()
 

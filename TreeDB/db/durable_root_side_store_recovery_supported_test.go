@@ -180,9 +180,16 @@ func TestRebindDurableRootSnapshotSideStoreNamespaceMatchesFreshAuthority(t *tes
 			publish(database, provider)
 			publish(database, provider)
 			for slot, resources := range database.durableRoot.slotResources {
-				for _, descriptor := range resources.PhysicalDescriptors() {
+				diagnostics, err := resources.AcquirePhysicalDiagnostics()
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, descriptor := range diagnostics.Physical() {
 					namespace, present := descriptor.Namespace()
 					t.Logf("slot=%d source identity=%+v lane=%q resource=%q path=%q digest=%x frontier=%+v reachability=%v namespace_present=%t namespace=%+v", slot, descriptor.Identity(), descriptor.LogicalLane(), descriptor.ResourceID(), descriptor.DiagnosticPath(), descriptor.Digest(), descriptor.Frontier(), descriptor.ReachabilityFields(), present, namespace)
+				}
+				if err := diagnostics.CloseWithError(); err != nil {
+					t.Fatal(err)
 				}
 			}
 			sourceCommits := database.durableRoot.slotCommit
@@ -223,7 +230,11 @@ func TestRebindDurableRootSnapshotSideStoreNamespaceMatchesFreshAuthority(t *tes
 			defer fresh.Release()
 			freshDescriptors := fresh.PhysicalDescriptors()
 			for slot, retained := range restored.durableRoot.slotResources {
-				retainedDescriptors := retained.PhysicalDescriptors()
+				diagnostics, err := retained.AcquirePhysicalDiagnostics()
+				if err != nil {
+					t.Fatal(err)
+				}
+				retainedDescriptors := diagnostics.Physical()
 				logDescriptors := func(label string, descriptors []rootpublication.StableResourcePhysicalDescriptor) {
 					for _, descriptor := range descriptors {
 						namespace, present := descriptor.Namespace()
@@ -251,12 +262,17 @@ func TestRebindDurableRootSnapshotSideStoreNamespaceMatchesFreshAuthority(t *tes
 				if err != nil {
 					t.Fatal(err)
 				}
-				additional, err := rootpublication.CloneStableResourceSetExcludingKinds(fresh)
+				additional, err := rootpublication.ImportStableResourceSetMetadata(retained.MetadataOwner(), fresh)
 				if err != nil {
 					inherited.Release()
 					t.Fatal(err)
 				}
-				builder := rootpublication.NewStableResourceSetBuilder(provider.logicalObligation().Reachability)
+				builder, err := rootpublication.NewStableResourceSetBuilderWithMetadata(retained.MetadataOwner(), provider.logicalObligation().Reachability)
+				if err != nil {
+					inherited.Release()
+					additional.Release()
+					t.Fatal(err)
+				}
 				err = builder.Merge(inherited)
 				if err == nil {
 					err = builder.Merge(additional)
@@ -266,6 +282,9 @@ func TestRebindDurableRootSnapshotSideStoreNamespaceMatchesFreshAuthority(t *tes
 				additional.Release()
 				if err != nil {
 					t.Errorf("slot=%d restored side-store cannot merge with fresh destination authority: %v", slot, err)
+				}
+				if err := diagnostics.CloseWithError(); err != nil {
+					t.Fatal(err)
 				}
 			}
 			if t.Failed() {

@@ -2685,7 +2685,7 @@ func TestSearchVectorIndexWithBufferOpenScopedAllocationContract2362(t *testing.
 	}
 
 	var sink int
-	bufferedAllocs := testing.AllocsPerRun(100, func() {
+	bufferedSearch := func() {
 		got, err := col.SearchVectorIndexWithBuffer(opts, &buffer)
 		if err != nil {
 			panic(err)
@@ -2697,8 +2697,8 @@ func TestSearchVectorIndexWithBufferOpenScopedAllocationContract2362(t *testing.
 			panic("SearchVectorIndexWithBuffer grew caller buffer after warmup")
 		}
 		sink += len(got.Results) + got.Results[0].Ordinal
-	})
-	ownedAllocs := testing.AllocsPerRun(100, func() {
+	}
+	ownedSearch := func() {
 		got, err := col.SearchVectorIndex(opts)
 		if err != nil {
 			panic(err)
@@ -2707,10 +2707,22 @@ func TestSearchVectorIndexWithBufferOpenScopedAllocationContract2362(t *testing.
 			panic("unexpected SearchVectorIndex result count")
 		}
 		sink += len(got.Results) + got.Results[0].Ordinal
-	})
+	}
+	// Exercise both public routes and warmed caller capacity under race too;
+	// only the process-global allocation measurement needs the isolated gate.
+	bufferedSearch()
+	ownedSearch()
 	if sink == 0 {
 		t.Fatal("allocation check did not consume results")
 	}
+	if collectionsRaceEnabled {
+		return
+	}
+	if !enterIsolatedVectorAllocationGate(t, "collection-buffered-open-scoped") {
+		return
+	}
+	bufferedAllocs := testing.AllocsPerRun(100, bufferedSearch)
+	ownedAllocs := testing.AllocsPerRun(100, ownedSearch)
 	if bufferedAllocs != 0 {
 		t.Fatalf("SearchVectorIndexWithBuffer warmed-cache allocs=%v want 0; response-owned SearchVectorIndex allocs=%v", bufferedAllocs, ownedAllocs)
 	}

@@ -357,21 +357,26 @@ func (s *Snapshot) cowSeekGEOneAdmitted(start, end []byte) (key, value []byte, f
 	}
 	s.cowReadMu.Lock()
 	defer s.cowReadMu.Unlock()
-	w, err := s.cowWorkspaceLocked()
+	best, err := s.cowPhysicalSuccessorLocked(start, end)
+	if err == errCOWPhysicalDictionary {
+		// Dictionary records retain the original caller-cut definition and decoder.
+		w, workspaceErr := s.cowWorkspaceLocked()
+		if workspaceErr != nil {
+			return nil, nil, false, true, workspaceErr
+		}
+		point, scratchErr := w.pointScratch()
+		if scratchErr != nil {
+			return nil, nil, false, true, scratchErr
+		}
+		disk, ok, seekErr := s.cowCut.basis.snapshot.SeekGEEntryWithFixedScratch(start, end, point.key[:], point.leaf[:], &point.successor, w.readLeaf)
+		if seekErr != nil {
+			return nil, nil, false, true, seekErr
+		}
+		best = s.cowOwnedPointSuccessor(disk, ok, start, end)
+		err = nil
+	}
 	if err != nil {
 		return nil, nil, false, true, err
-	}
-	point, err := w.pointScratch()
-	if err != nil {
-		return nil, nil, false, true, err
-	}
-	disk, ok, err := s.cowCut.basis.snapshot.SeekGEEntryWithFixedScratch(start, end, point.key[:], point.leaf[:], &point.successor, w.readLeaf)
-	if err != nil {
-		return nil, nil, false, true, err
-	}
-	best := pointSuccessorCandidate{key: disk.Key, value: disk.Value, ptr: disk.ValuePtr, flags: disk.Flags, revision: disk.Revision, priority: len(queue), found: ok}
-	for i := len(queue) - 1; i >= 0; i-- {
-		best = choosePointSuccessor(best, seekPointSuccessorTable(queue[i], start, end, nil, 0, len(queue)-1-i))
 	}
 	if !best.found {
 		return nil, nil, false, true, nil
@@ -379,13 +384,56 @@ func (s *Snapshot) cowSeekGEOneAdmitted(start, end []byte) (key, value []byte, f
 	if best.flags&node.FlagTombstone != 0 {
 		return nil, nil, false, false, nil
 	}
-	key = append([]byte(nil), best.key...)
-	borrowed := best.value
 	if best.flags&node.FlagPointer != 0 {
-		borrowed, err = w.read(best.ptr, false, nil)
-		if err != nil {
-			return nil, nil, false, true, err
+		w, workspaceErr := s.cowWorkspaceLocked()
+		if workspaceErr != nil {
+			return nil, nil, false, true, workspaceErr
 		}
+		borrowed, readErr := w.read(best.ptr, false, nil)
+		if readErr != nil {
+			return nil, nil, false, true, readErr
+		}
+		best.value = append([]byte(nil), borrowed...)
 	}
-	return key, append([]byte(nil), borrowed...), true, true, nil
+	return best.key, best.value, true, true, nil
+}
+
+// Both physical and dictionary-fallback traversal use the same cut-local
+// winner selection. Copy only the winner, before its physical scratch unlocks.
+func (s *Snapshot) cowOwnedPointSuccessor(disk node.LeafEntry, found bool, start, end []byte) pointSuccessorCandidate {
+	queue := s.rootIterator.immutables
+	best := pointSuccessorCandidate{key: disk.Key, value: disk.Value, ptr: disk.ValuePtr, flags: disk.Flags, revision: disk.Revision, priority: len(queue), found: found}
+	for i := len(queue) - 1; i >= 0; i-- {
+		best = choosePointSuccessor(best, seekPointSuccessorTable(queue[i], start, end, nil, 0, len(queue)-1-i))
+	}
+	if !best.found || best.flags&node.FlagTombstone != 0 {
+		best.key, best.value = nil, nil
+		return best
+	}
+	best.key = append([]byte(nil), best.key...)
+	if best.flags&node.FlagPointer == 0 {
+		best.value = append([]byte(nil), best.value...)
+	} else {
+		best.value = nil
+	}
+	return best
+}
+
+func (s *Snapshot) cowPhysicalSuccessorLocked(start, end []byte) (pointSuccessorCandidate, error) {
+	basis := s.cowCut.basis
+	basis.readMu.Lock()
+	defer basis.readMu.Unlock()
+	w, err := basis.physicalWorkspaceLocked(s.cowCache.budget, s.cowCache.readLimits())
+	if err != nil {
+		return pointSuccessorCandidate{}, err
+	}
+	point, err := w.pointScratch()
+	if err != nil {
+		return pointSuccessorCandidate{}, err
+	}
+	disk, found, err := basis.snapshot.SeekGEEntryWithFixedScratch(start, end, point.key[:], point.leaf[:], &point.successor, s.cowPhysicalLeafLocked)
+	if err != nil {
+		return pointSuccessorCandidate{}, err
+	}
+	return s.cowOwnedPointSuccessor(disk, found, start, end), nil
 }

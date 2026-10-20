@@ -12,6 +12,23 @@ cleaning, compacting, or rewriting the directory. Typed-column image,
 descriptor, manifest, and schema evolution follows the fail-closed policy in
 `typed-column-schema-evolution.md`.
 
+## DATA default and temporary explicit PRIMARY support
+
+Ordinary new stores select the existing DATA B-tree and dual durable-meta slots in
+`index.db`, including `no_wal_fast` and `cow_btree`. The physical seal uses the
+existing `DurableRootRecordV1`, dependency closure and freelist generation. COW
+cache visibility is separate from that durable authority. Pointer-backed values
+remain persistent value-log dependencies.
+
+The existing `IndexPrimaryDirectory=true` option temporarily retains its PRIMARY
+constructor for explicit callers. An existing `index.db.primary` arena selects
+its original recovery path even when the option is false, including read-only
+opens and joint DATA/PRIMARY swap recovery. There is no in-place conversion
+between DATA and PRIMARY: selecting PRIMARY on a nonempty DATA store still
+requires a rebuild. Final PRIMARY refusal and removal follow consumer migration;
+this intermediate delivery does not claim that retirement. Both representations
+retain their original dependency, two-root and immediate-parent validation.
+
 ## All-level vector-partition router identity
 
 The global all-level spherical router uses model format
@@ -464,6 +481,33 @@ context. The active target is the user-command WAL: command frames ordered by
 cleanup records, and golden encodings must be maintained here and mapped to
 tests in `TreeDB/docs/spec/verification.md` as each milestone lands.
 
+The experimental native JSON transaction route also accepts command kind 2
+(`CompositeMutation`), system scope, payload format 17 (`CompositeMutationV1`),
+inside the existing command frame. The payload starts with little-endian
+`uint16` version 1 and member count. Each member has little-endian kind and
+payload-format `uint16` fields, an incarnation `uint64`, payload-length `uint32`,
+and that many payload bytes. There are at most 128 members; payload plus the
+base command-frame header must fit 768 KiB. Existing outer frame limits still
+apply. Members have no independent LSN, frame extensions or publication.
+
+The currently active subset permits at most one raw `RawKVBatchV1` member
+containing inline Set operations, and untyped JSON insert, update and delete
+members for supported unindexed or scalar-indexed JSON collections. Repeated
+members for the same captured collection retain their original operation order.
+Raw incarnation is zero; collection incarnation is the persisted nonzero logical
+catalog identity. The wider payload codec does not activate typed, external-RID,
+nested or other unsupported composite members. Whole payload validation precedes
+member application. Indexed intermediate documents must satisfy the captured
+scalar schema even when a subsequent operation deletes them; uniqueness is
+checked against the final collection state.
+Foreground binds the final raw revision bytes into preadmitted outer capacity
+before append, preserving native member bytes. See `recovery.md` for aggregate
+replay. Singleton native JSON `UpdateBatch` and `DeleteBatch` use the existing
+`CollectionUpdateBatchByID` and `CollectionDeleteBatchByID` command kinds and
+payload formats. Update records contain accepted final documents, not application
+callbacks. Composite members reuse these payloads and retain one outer LSN and
+publication. This pre-alpha activation does not add a compatibility migration.
+
 The operator restorable file set, live backup barrier, and restore validation
 procedure are defined in `TreeDB/docs/spec/backup-restore.md`. A live
 filesystem-level copy without that barrier is unsupported once command-WAL
@@ -844,19 +888,14 @@ volatile ordinary-ACK and durable boundary contracts.
 This is a pre-alpha format cutover. A non-empty legacy meta body fails open with
 `ErrLegacyFormatRebuildRequired`; recovery does not reinterpret or migrate it.
 
-### 3.0 Selected PRIMARY capsules V6 (construction)
+### 3.0 Explicit PRIMARY capsules V6 (temporary support)
 
-Fresh `no_wal_fast` backend stores, and fresh stores explicitly selecting
-`IndexPrimaryDirectory`, use `index.db.primary`. Public command-WAL stores using
-`MemtableMode="cow_btree"` also select PRIMARY for the main backend after dictionary
-and template options are copied; automatic selection does not change side-store
-format policy. Its checked arena header is
-`TDPRCAPB`, version 6. Existing arena identity and version are checked on open;
-opening never relabels a V1 bank arena as a capsule arena. Other fresh profiles
-and modes retain the DATA-selector format below. Selecting PRIMARY on a non-empty
-DATA-selector store returns `ErrLegacyFormatRebuildRequired`; rebuild the pre-alpha
-store rather than interpreting its existing pages as PRIMARY capsules. The selected format is pre-alpha and
-its native bounded-publication qualification remains incomplete.
+Fresh stores explicitly selecting `IndexPrimaryDirectory` use `index.db.primary`;
+existing arenas retain their checked format. Ordinary NoWAL and COW options no
+longer implicitly select PRIMARY. Its checked arena header is `TDPRCAPB`, version
+6; opening never relabels an older arena. This temporary maintained route keeps
+its original constructor and recovery ownership pending final consumer migration
+and representation removal. Native bounded-publication qualification remains open.
 
 The PRIMARY file reserves local pages 0 through 7. Exactly two eligible fixed
 capsules occupy local pages `[2,5)` and `[5,8)`; allocator banks begin at 8.
@@ -1309,6 +1348,31 @@ supported, the parent directory. TreeDB is pre-alpha, so later binaries may
 reject older metadata versions instead of migrating them.
 
 ## 3.2 Collection Document Payloads
+
+### Native catalog incarnation records (construction)
+
+The native immutable catalog implementation under construction reserves these
+ordinary system-tree keys:
+
+- `collections/native/v1/next-incarnation`: next unused logical collection ID.
+- `collections/native/v1/incarnation/<collection-name>`: the live name's ID.
+
+Both values are exactly 16 bytes: ASCII `NCI1` at offsets 0–3, a kind byte
+at offset 4 (`0` for an incarnation, `1` for the next counter), three zero
+reserved bytes, and a nonzero big-endian `uint64` at offsets 8–15. Unknown
+versions, wrong kinds, nonzero reserved bytes, zero IDs and truncated values
+are invalid. These IDs are independent of physical root page IDs and WAL LSNs.
+
+Creation consumes the current counter and advances it in the same complete
+catalog publication as the metadata and name record. Rename moves the name
+record without changing its ID. Drop removes the name record without reducing
+the counter; recreating the same name gets a fresh ID. A counter equal to the
+maximum `uint64` represents exhaustion and refuses further creation before
+admission. Existing catalogs without identity records require an explicit
+opening decision; a reader must not invent IDs from physical page IDs.
+
+These records currently have private build/reopen controls. Public collection
+producer activation and native catalog bootstrap remain incomplete.
 
 ### 3.2.1 BSON-ordered scalar secondary-index keys (v2)
 
@@ -4237,3 +4301,10 @@ foreign physical pair miss and rebuild through the existing full scan.
 Process-local index-generation IDs are not persisted. A completed scan never
 receives identities captured from a later current generation. No atomic-file
 rename persistence assumption can make an old physical pair eligible.
+
+Native scalar JSON index DDL uses catalog command kind **201**, payload format
+**17**, payload version **1**. It records the collection incarnation and prior/next
+canonical metadata, with physical roots reconstructed by one original replay
+build group. Kind **200** retains its create-collection meaning; collection
+metadata and page formats are unchanged. See the native scalar index catalog
+transition in [user-command-wal.md](user-command-wal.md) for the exact payload.

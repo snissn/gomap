@@ -79,39 +79,14 @@ func (owner *primaryArenaOwnerV5) release(work *iterator.OrdinalScanWork) (bool,
 // physicalDebt distinguishes incomplete last physical cleanup from an earlier
 // sibling failure reported after this caller's successful nonlast release.
 func (owner *primaryArenaOwnerV5) releaseWithOutcome(work *iterator.OrdinalScanWork) (consumed, physicalDebt bool, err error) {
-	// A bounded caller must keep its original parent's external receipt. The
-	// scalar entry point never consumes an edge followed by unbounded cleanup.
 	if work != nil {
 		return false, false, ErrNativeMVCCSnapshotWork
 	}
-	if owner == nil {
-		return false, false, ErrSnapshotCapacity
-	}
-	owner.mu.Lock()
-	if owner.refs > 1 {
-		_, prior := consumePrimaryArenaEdgeLocked(owner)
-		owner.mu.Unlock()
-		return true, false, prior
-	}
-	owner.mu.Unlock()
-	return owner.releaseLastOrdinaryWithOutcome()
-}
-
-// Only a possible final edge constructs physical progress. Bind rechecks refs
-// under the same lock, so a concurrent retain cannot turn this into a last drop.
-func (owner *primaryArenaOwnerV5) releaseLastOrdinaryWithOutcome() (consumed, physicalDebt bool, err error) {
-	var receipt primaryArenaReleaseState
-	w := iterator.OrdinalScanWork{RecordLimit: ^uint64(0), ByteLimit: ^uint64(0)}
-	ready, err := bindPrimaryArenaRelease(&receipt, owner, false, &w)
-	if !ready || err != nil {
-		return false, false, err
-	}
-	for {
-		ready, debt, err := continuePrimaryArenaRelease(&receipt, nil, nil, nil, &w)
-		if err != nil || ready {
-			return true, debt, err
-		}
-	}
+	var completion primaryRuntimeDisposalCompletionV6
+	consumed, physicalDebt, completion, err = owner.releaseOriginalWithOutcome()
+	owner = nil
+	completion.complete()
+	return consumed, physicalDebt, err
 }
 
 // clearNamespaceV5 retires only the exact current proof and parent. Failed

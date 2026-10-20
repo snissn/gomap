@@ -3435,9 +3435,13 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 	baseUserRoot := db.meta.UserRootPageID
 	baseSystemRoot := db.meta.SystemRootPageID
 	baseSeq := db.meta.CommitSeq
-	regID := idx.registry.Register(baseSeq)
+	regID, registerErr := idx.registry.Register(baseSeq)
 	db.mu.RUnlock()
 	db.rootReuseMu.RUnlock()
+	if registerErr != nil {
+		db.writeMu.RUnlock()
+		return 0, nil, false, registerErr
+	}
 
 	writeReadLocked := true
 	defer func() {

@@ -14,6 +14,7 @@ import (
 func TestPrimaryNoWALFastOrdinaryHeldSnapshotReopen(t *testing.T) {
 	dir := t.TempDir()
 	opts := OptionsFor(ProfileNoWALFast, dir)
+	opts.IndexPrimaryDirectory = true
 	database, err := Open(opts)
 	if err != nil {
 		t.Fatal(err)
@@ -82,6 +83,7 @@ func TestPrimaryNoWALFastDependencyPointerHeldSnapshotReopen(t *testing.T) {
 		t.Fatal(e)
 	}
 	opts := OptionsFor(ProfileNoWALFast, dir)
+	opts.IndexPrimaryDirectory = true
 	opts.ValueLog.ForcePointers = true
 	opts.ValueLog.PointerThreshold = 1
 	database, e := Open(opts)
@@ -127,10 +129,11 @@ func TestPrimaryNoWALFastDependencyPointerHeldSnapshotReopen(t *testing.T) {
 	}
 }
 
-// This probes the unchanged public profile and its actual constructor-created
+// This probes the explicit PRIMARY profile and its actual constructor-created
 // Snapshot Set. Configured but absent scan directories do not count as parents.
 func TestPrimaryNoWALFastActualParentsAfterMaterializationV6(t *testing.T) {
 	opts := OptionsFor(ProfileNoWALFast, t.TempDir())
+	opts.IndexPrimaryDirectory = true
 	if !opts.IndexOuterLeavesInValueLog {
 		t.Fatal("profile lost actual outer-leaf producer")
 	}

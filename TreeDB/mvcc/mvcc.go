@@ -126,7 +126,8 @@ type Store struct {
 	// mu guards floor admission through commit acknowledgement and read-cut
 	// capture. Atomic-cut producers allow grouped writes to share admission;
 	// legacy successor producers require an exclusive grouped publication fence.
-	// Qualified legacy pruning holds it through deletion and lease cleanup.
+	// Qualified legacy pruning holds it through deletion and lease cleanup;
+	// atomic-cut pruning releases it once the original physical cut is retained.
 	mu           sync.RWMutex
 	discardFloor uint64
 	floorLoaded  bool

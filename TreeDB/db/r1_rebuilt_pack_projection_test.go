@@ -8,10 +8,43 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
+
+// Copy only the physical identity fields used by these assertions; diagnostic
+// descriptors themselves borrow backing until their admitted scope closes.
+type stableResourcePhysicalIdentityForTest struct {
+	Kind       rootpublication.ResourceKind
+	Generation uint64
+	identity   rootpublication.StableIdentity
+	path       string
+}
+
+func stableResourcePhysicalIdentitiesForTest(t *testing.T, set *rootpublication.StableResourceSet) []stableResourcePhysicalIdentityForTest {
+	t.Helper()
+	diagnostics, err := set.AcquirePhysicalDiagnostics()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := diagnostics.CloseWithError(); err != nil {
+			t.Fatal(err)
+		}
+	}()
+	var result []stableResourcePhysicalIdentityForTest
+	for _, entry := range diagnostics.Physical() {
+		identity := entry.Identity()
+		identity.Platform = strings.Clone(identity.Platform)
+		result = append(result, stableResourcePhysicalIdentityForTest{
+			Kind: entry.Kind, Generation: entry.Generation,
+			identity: identity, path: strings.Clone(entry.DiagnosticPath()),
+		})
+	}
+	return result
+}
 
 // Exercise the ordinary current-root vacuum path, including its healthy
 // exact-source projection gate, rather than calling the fallback scanner.
@@ -36,8 +69,8 @@ func TestR1RebuiltCurrentRootDropsUnreachablePackedDependency(t *testing.T) {
 		t.Fatal(err)
 	}
 	selected := database.durableRoot.slotResources[database.durableRoot.slot]
-	var pack rootpublication.StableResourcePhysicalDescriptor
-	for _, entry := range selected.PhysicalDescriptors() {
+	var pack stableResourcePhysicalIdentityForTest
+	for _, entry := range stableResourcePhysicalIdentitiesForTest(t, selected) {
 		if entry.Kind == rootpublication.ResourceOuterLeafPack {
 			pack = entry
 			break
@@ -46,7 +79,7 @@ func TestR1RebuiltCurrentRootDropsUnreachablePackedDependency(t *testing.T) {
 	if pack.Kind == "" {
 		t.Fatal("fixture did not publish an immutable packed dependency")
 	}
-	packPath := filepath.Join(dir, pack.DiagnosticPath())
+	packPath := filepath.Join(dir, pack.path)
 	if _, err := os.Stat(packPath); err != nil {
 		t.Fatal(err)
 	}
@@ -74,8 +107,8 @@ func TestR1RebuiltCurrentRootDropsUnreachablePackedDependency(t *testing.T) {
 		t.Fatal("packed current-root publication bypassed exact candidate scan")
 	}
 	contains := func(set *rootpublication.StableResourceSet) bool {
-		for _, entry := range set.PhysicalDescriptors() {
-			if entry.Kind == pack.Kind && entry.Identity() == pack.Identity() {
+		for _, entry := range stableResourcePhysicalIdentitiesForTest(t, set) {
+			if entry.Kind == pack.Kind && entry.identity == pack.identity {
 				return true
 			}
 		}
@@ -170,7 +203,7 @@ func TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority(t *testing.T) {
 		t.Fatal(err)
 	}
 	var generation uint64
-	for _, entry := range database.durableRoot.slotResources[database.durableRoot.slot].PhysicalDescriptors() {
+	for _, entry := range stableResourcePhysicalIdentitiesForTest(t, database.durableRoot.slotResources[database.durableRoot.slot]) {
 		if entry.Kind == rootpublication.ResourceOuterLeafPack {
 			generation = entry.Generation
 			break
@@ -181,9 +214,9 @@ func TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority(t *testing.T) {
 	}
 	t.Run("physical-alias", func(t *testing.T) {
 		var packPath string
-		for _, entry := range database.durableRoot.slotResources[database.durableRoot.slot].PhysicalDescriptors() {
+		for _, entry := range stableResourcePhysicalIdentitiesForTest(t, database.durableRoot.slotResources[database.durableRoot.slot]) {
 			if entry.Kind == rootpublication.ResourceOuterLeafPack && entry.Generation == generation {
-				packPath = filepath.Join(dir, entry.DiagnosticPath())
+				packPath = filepath.Join(dir, entry.path)
 			}
 		}
 		file, err := os.Open(packPath)

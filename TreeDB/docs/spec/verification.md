@@ -209,8 +209,18 @@ also checkpoint, rewrite and GC while the Store read cut remains pinned.
 from broad legacy successor-method presence and verifies floor exclusion through
 the admitted write. `TestC3ReadCutFailureAndClose` and
 `TestC3ReadCutCapacityRefusalHasNoFallback` preserve admission/storage/Close errors,
-release pinned ownership and resume after finite refusal. Unsupported prune
-checks preserve the existing floor and WAL/publication/capture counters.
+release pinned ownership and resume after finite refusal.
+
+`TestManagedHistoryFloorAdvancePreservesOpenCut` covers all three production
+profiles with inline/forced-pointer records, out-of-order timestamps, an old
+iterator through floor advancement/deletion/checkpoint, later writes above the
+floor, and reopen. `TestManagedHistoryTombstoneAnchorCrashOrder` terminates a
+process after floor persistence and each single-record durable deletion,
+verifies the anchor survives until hidden values are gone, and resumes pruning.
+`TestManagedHistoryPruneCapturedCutReleasesAdmission` pauses reverse iterator
+construction after capture and requires a foreground write ACK before release.
+These replace the former COW prune refusal witness; they do not establish a
+bounded duration for a whole pass or a Q32 primitive-work limit.
 
 `TestC3COWSuccessorFallbackCompletesBeforeQueuedDBClose` exercises physical
 tombstone and retained disk fallback with inline/pointer values. Its captured
@@ -4245,3 +4255,98 @@ P1 reverse/range and fallback gates: `TestPublicCOWTxnReverseOverlaySeekAndLifet
 `BenchmarkPublicCOWTxn` reports enabled point/range/reverse costs with old retained
 history and newer unrelated point chunks; it has no unsupported-baseline speedup
 comparator. See both benchmark READMEs for the exact fresh-process capture.
+
+## Native JSON collection boundary
+
+`TestNativeExistingIndexedJSONPublicLifecycle` uses the existing public
+CollectionManager/Collection API on the native COW owner in durable command WAL,
+relaxed command WAL and production NoWAL profiles. It covers scalar equality and
+unique indexes, batch unique-owner handoff, duplicate-final-owner refusal before
+LSN advance, delete/reuse, an old captured view, checkpoint/reopen and original
+resource drain. `TestNativeExistingIndexedJSONInsertCapturedReplay` separately
+covers indexed insertion and actual unapplied singleton/composite WAL suffixes;
+its NoWAL case uses an explicit checkpoint rather than claiming WAL recovery.
+`TestNativeExistingIndexedJSONCRUDSingletonReplay` separately verifies accepted
+final update documents and delete IDs in an actual two-frame unapplied WAL
+suffix, exact replay counters and surviving primary/equality values. Its NoWAL
+case likewise proves only the explicit checkpoint/reopen boundary.
+
+`TestNativeExistingIndexedJSONOrderedRowsAtomicReplay` exercises one captured
+transaction with scalar/unique updates, delete and same-ID reinsertion, staged
+reads and caller-owned output, a canceled temporary unique collision, and raw
+Set/Get. It checks final duplicate refusal before LSN advance, old-view isolation,
+one outer frame/LSN, exact primary/equality values and final resource drain.
+Durable and relaxed WAL children leave a real unapplied composite suffix;
+NoWAL covers the explicit checkpoint/reopen boundary. The backend startup control
+`TestNativeJSONCompositeReplayValidatesErasedDocuments` requires refusal of
+erased invalid indexed intermediates while preserving unindexed opaque bytes
+and valid canceled unique collisions.
+
+These controls cover the selected JSON subset. Typed/BSON/template, multikey and
+compound indexes, schema/rename/drop, prepared and assigned
+apply paths require their own supported executors and caller migration. Current
+unsupported operations must retain their preaccept refusal. A passing JSON
+lifecycle does not establish full collection migration or performance acceptance.
+
+## Complete COW prefix, original custody and sealed completion
+
+The lower native seam is independently testable while unmigrated collection
+producers retain their existing barriers. Passing these controls does not claim
+that every collection producer uses native immutable descriptors.
+
+The publication source guard supplements the typed writer inventory and catches
+its covered alias/escape regressions. It is not a sound analysis of arbitrary Go
+or proof of the same-prefix contract. Its callgraph check finds a path to the
+publisher; it does not prove call ordering, argument identity or publication on
+every successful path. Scalar field-address aliases require explicit review.
+Custody hashes bind the reviewed method/observer surface and detect drift; they
+do not prove that surface correct. Review the exact runtime's complete-basis
+comparison, accepted-cut binding, retained-generation handoff and published-state
+writes alongside the discriminating controls below. A checker PASS cannot replace
+that review, recovery/race evidence or public performance gates.
+
+| Obligation | Source-supported controls |
+|---|---|
+| Exact complete basis and accepted handoff | `TestCheckpointRejectsMixedSystemRoot`, `TestCheckpointRejectsPublishedSemanticSystemRoot`, `TestAcceptedSnapshotReceiptRetainsCandidateTuple`, `TestDelayedHandoffUsesAcceptedGeneration`, `TestCOWCheckpointRealAcceptedReportedErrorRetainsPrefixAndDoesNotReplay` |
+| Original native assignment custody and safe fence | `TestCOWNativeAssignedFailureRetainsOriginalAssetWithoutRawNeighbors`, `TestCOWNativeBridgeKeepsUnconvertedProducerFence`, `TestCOWNativeWALExactRequestRequiresOriginalAdmission` |
+| NoWAL visibility versus explicit seal; same bounded journal | `TestCOWNativeNoWALBridgeMinimalJournalAndExactSync`, public raw transaction namespace/history controls |
+| Untouched refusal versus terminal materialization | `TestCOWNativeBuildCapacityBeforeAndAfterOriginalAssetMutation` uses an actual partial file before its terminal capacity error |
+| Real destruction, notification and concurrent Close | `TestCOWPublicSemanticDestructorAndNotificationCloseGuard` includes actual original file close and failed directory unlink; `TestCloseBorrowsAdmittedTeardownGuard` checks borrowed teardown admission |
+| Maintenance headroom and retained physical views | `TestMinimumCapacityCheckpointMakesProgress`, `TestRetainedViewMaintenanceRefreshAndClose`, `TestMaintenanceDrainUsesOriginalRetiredGeneration`, `TestCOWPublicSelectedSourceRewriteKeepsOldCuts` |
+| Finite small-budget recovery and retained reuse | `TestCOWPublicSmallBudgetAcceptedPrefixDrainsAndReopens`, `TestCOWAcceptedPrefixRepeatedDrainReuse`, `TestCOWPublicRetainedHistoryFixture` use actual checkpoint/reopen or canonical appends, held pointer bytes and final original-owner accounting. The retained benchmark remains construction-only until reviewed. |
+
+Run the affected lower lifecycle suites and compile the complete TreeDB tree:
+
+```sh
+GOWORK=off go test ./TreeDB/... -run '^$' -count=1
+GOWORK=off go test ./TreeDB/internal/rootpublication ./TreeDB/caching ./TreeDB/db -count=1
+GOWORK=off go test ./TreeDB -run 'Test(COW|PublicCOW|MinimumCapacityCheckpointMakesProgress|RetainedViewMaintenanceRefreshAndClose)' -count=1
+```
+
+Prepared collection and deterministic apply controls also exercise real canonical
+frames, held physical seal workers, another writer and Close. Their accepted
+proof must be captured before original materialization release; result and
+progress become observable only after the exact request seal. Run the applicable
+`collections`, `internal/raftapply` and `internal/commandwalapply` tests and race
+controls when changing that boundary. Both recovery slots, parent/WAL lineage,
+corrupt-newest fallback, selected-source revisions and physical identity pins
+remain required affected backend coverage; an in-memory prefix test is not a
+replacement for them.
+
+`BenchmarkCOWPublicDirtyCost` is a bounded public before/after diagnostic. Bind
+baseline/candidate heads, unchanged harness blob, binaries, toolchain, profiles,
+fixed operation counts and host noise; use fresh alternating paired processes.
+Report ordinary ACK, capture/read/release and dirty Checkpoint separately, with
+bytes/objects, latency tails, admitted peak and actual final Close zero-debt
+observations. Fixture construction and final Close are excluded from benchmark
+timers. These measurements do not establish sustained throughput, full-drain
+latency or unsupported native-baseline speedups. Retained qualification requires
+the reviewed/landed harness and frozen product source.
+
+The semantic rollover controls cover distinct owned active/captured edges,
+private cancellation and partially prepared successors after Close, plus a real
+native-only logical prefix whose empty raw frontier still requires finite
+checkpoint capacity recovery. Maintenance lifetime controls pressure the actual
+reserved child budget, observe the original distinct PRIMARY/registry owners,
+and separately prove real maintenance publication can progress while producer
+headroom is exhausted. These controls do not activate unconverted collections.

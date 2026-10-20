@@ -1746,7 +1746,7 @@ func (c *Collection) cachedVectorIndexForState(name, rootName string, state back
 		catalog.pager == currentPager &&
 		state.SystemRootPageID != 0 &&
 		c.catalogSystemRoot == state.SystemRootPageID &&
-		(c.catalogCommitSeq == state.CommitSeq || c.canReuseCachedCatalogAcrossDataOnlyCommits(catalog))
+		c.catalogCommitSeq == state.CommitSeq
 	c.catalogMu.RUnlock()
 	if !current && catalog != nil && c.nativeVectorIndexMutationActive() && c.writeDomain != nil {
 		if c.writeDomain.mu.TryRLock() {

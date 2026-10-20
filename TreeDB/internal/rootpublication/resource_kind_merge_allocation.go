@@ -1,6 +1,7 @@
 package rootpublication
 
 import (
+	"errors"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"slices"
 	"strings"
@@ -40,17 +41,36 @@ func mergeOwnedResourceKindBackings(target, incoming *resourceKindBacking) (*res
 		compatible = !stableResourceViewsConflict(target, entry)
 		return compatible
 	})
-	if !compatible {
-		if next, handled, err := coalesceOwnedPhysicalHistory(target, incoming, owner); handled {
-			return next, err
+	directory := false
+	for _, cell := range target.cells {
+		directory = directory || cell.view.directory != nil
+	}
+	var incrementalHistory bool
+	if !compatible && !directory {
+		var err error
+		incrementalHistory, err = canCoalesceOwnedPhysicalHistory(target, incoming)
+		if err != nil {
+			return nil, err
 		}
-		return rebuildOwnedResourceKindCollision(target, incoming, owner)
+		if !incrementalHistory {
+			return rebuildOwnedResourceKindCollision(target, incoming, owner)
+		}
 	}
 	maxInt := int(^uint(0) >> 1)
 	if incoming.len() > maxInt-target.len() {
 		return nil, retainedalloc.ErrCapacity
 	}
 	capacity := target.len() + incoming.len()
+	if incrementalHistory {
+		// Existing collision-only merges allocated only the retained target's
+		// cells. Reserve additional cells solely for genuinely new kinds.
+		capacity = target.len()
+		for _, cell := range incoming.cells {
+			if _, exists := target.lookup(cell.kind); !exists {
+				capacity++
+			}
+		}
+	}
 	width := uint64(unsafe.Sizeof(resourceKindCell{}))
 	if uint64(capacity) > ^uint64(0)/width {
 		return nil, retainedalloc.ErrCapacity
@@ -121,7 +141,51 @@ func mergeOwnedResourceKindBackings(target, incoming *resourceKindBacking) (*res
 			next.cells = append(next.cells, cell)
 			continue
 		}
+		if incrementalHistory {
+			// A mixed kind retains the target's complete membership index. Only
+			// incoming entries extend it; untouched historical entries are never
+			// reconstructed merely because another incoming resource is new.
+			var updateErr error
+			rangeStableResourceLogicalIndex(cell.view.logical, func(child *stableResourceEntry) bool {
+				view := &next.cells[index].view
+				previous := findStableResourceLogical(view.logical, child.token.logicalKey())
+				if previous != nil {
+					updateErr = appendOwnedPhysicalHistoryToView(view, previous, child, owner)
+				} else {
+					updateErr = appendOwnedNewPhysicalEntryToView(view, child, owner)
+				}
+				return updateErr == nil
+			})
+			if updateErr != nil {
+				if cleanup := next.release(); cleanup != nil {
+					if binding := SelectOriginalCleanupPrior(cleanup, updateErr); binding.Valid() && binding.TryLink(updateErr) {
+						return nil, cleanup
+					}
+					return nil, errors.Join(updateErr, cleanup)
+				}
+				return nil, updateErr
+			}
+			continue
+		}
 		old := next.cells[index]
+		// Bind adds disjoint entries from the same retained directory. Their
+		// immutable indexes and summaries already have independent custody;
+		// append-only merging is reserved for incoming unbound deltas.
+		sameDirectory := compatible && old.view.directory != nil && old.view.directory == cell.view.directory
+		if directory && !sameDirectory {
+			// The admitted next descriptor owns every partial edge, including
+			// the SAME failed physical cleanup receipt on refusal.
+			if err := mergeOwnedDirectoryKindView(&next.cells[index].view, cell.view, owner); err != nil {
+				if cleanup := next.release(); cleanup != nil {
+					if binding := SelectOriginalCleanupPrior(cleanup, err); binding.Valid() && binding.TryLink(err) {
+						return nil, cleanup
+					}
+					return nil, errors.Join(err, cleanup)
+				}
+				return nil, err
+			}
+			continue
+		}
 		view, err := mergeOwnedResourceKindView(old.view, cell.view, owner)
 		if err != nil {
 			next.release()

@@ -26,8 +26,8 @@ field and satisfy the consistency checks. It is not a process RSS quota.
 | Field | Default | Ownership counted |
 | --- | --- | --- |
 | `MaxViews` | 1,024 | Active root views and cursors |
-| `MaxGenerations` | 64 | Writable, frozen and still-pinned generations |
-| `MaxSources` | 32 | Frozen sources through final retained-owner drain |
+| `MaxGenerations` | 64 | Writable, parked empty successors, frozen and still-pinned generations |
+| `MaxSources` | 32 | Dirty active raw generations and frozen sources through final retained-owner drain |
 | `MaxResources` | 256 | Distinct generation resource identities |
 | `MaxGenerationBytes` | 64 MiB | Cumulative generation allocation charge |
 | `MaxTotalBytes` | 512 MiB | Generation history and admitted external storage |
@@ -48,6 +48,22 @@ leases share total, in-flight and potential-retirement admission through their
 actual cleanup. One generation resource slot is used by its resolver; it is
 not an additional physical deletion authority.
 
+The original accepted-prefix queue is bounded by both the source/generation
+product and one sixteenth of `MaxInFlightBytes`, including its actual rounded
+arrays and lease. The lazy transaction journal likewise selects its finite
+ring from the actual namespace-aware control/backing sizes. These bounds leave
+producer capacity beside the separately reserved maintenance tranche; lowering
+a byte limit never assumes an older record layout. Full queue admission first
+checkpoints outside publication gates and retries; an unsuccessful drain or
+admission leaves the next command unassigned. Explicit checkpoints use the same
+preadmitted maintenance lane even when producer admission is exhausted.
+
+On reopen the opening complete cut starts at the same recovered canonical prefix
+as its original accepted coordinator and exact disk basis. An empty checkpoint
+or Close therefore preserves that recovered prefix instead of inventing a
+zero-LSN predecessor. Logical sequence numbering remains local to the opening
+engine lifetime.
+
 Refusal preserves existing views. An operation that cannot reserve its whole
 command fails before WAL append or visibility publication. It must not split
 an accepted command, silently switch cache modes or route through a backend
@@ -62,6 +78,28 @@ An oversized indivisible command refuses before producer or journal effects.
 Rollover rejoins write admission iteratively after unlocked retirement and
 signals the ordinary flush worker. It neither scans history nor hides a
 foreground checkpoint inside an accepted publication.
+
+Before a raw shard's first dirty acceptance, its original generation reserves a
+source slot and the cache constructs the actual empty rollover writer/root using
+the existing maintenance constructor. Both must succeed before canonical append
+or logical publication. The preparation owns partial provision until install;
+cancellation returns the source slot and drains the empty successor outside
+publication gates. Later writes to that same dirty generation reuse its provision.
+
+The cache owns one parked empty successor per dirty raw shard. Read cuts never
+retain that successor. Rollover adopts it without another generation allocation;
+a refused rollover leaves the exact parked ownership available for retry. The
+empty successor reserves no source until its own first dirty acceptance. Close
+drains unused parked ownership outside writer/cut gates. A dirty generation's
+source slot survives its last real view, root and writer edge even if it has not
+been frozen. Standalone memtable writers retain Freeze-time source admission.
+
+This moves fixed empty-writer, root and resolver construction to the first dirty
+write, and adds bounded original cache/preparation vectors. It does not claim a
+performance improvement or cover other maintenance-byte/native-build admission
+obligations. P3 native generation source cells remain their independent original
+owners in the same shared budget; raw provision must neither double charge nor
+refund those cells.
 
 ## One immutable read cut
 
@@ -238,7 +276,8 @@ path rather than activating the legacy streaming bypass.
 ## Prepare, canonicalize, finalize, publish
 
 The command sequencer covers all changed-shard preparation and complete-cut
-installation. All allocation/refusal points precede acceptance:
+installation. For ordinary raw writes, all allocation/refusal points precede
+acceptance:
 
 1. Admit staged operations, successor roots/cut and concrete resource owners.
    Public command-WAL batches admit their own wrapper and scan the inner owned
@@ -286,9 +325,11 @@ bounded canonical physical chunks oldest to newest, and uses one existing
 `RootPublicationBuildGroup` for one final backend publication. Intermediate
 chunk progress does not remove old-prefix precedence.
 
-After backend acceptance, handoff captures/adopts the successor basis and
-removes only the exact proved-covered prefix. Newer mutable roots and later
-frozen sources stay in the successor cut. Admission/capture refusal retains
+Before backend acceptance, the group admits the exact successor Snapshot and
+handoff/cleanup capacity. After acceptance, handoff adopts that retained receipt's
+basis, without acquiring a current Snapshot, and removes only the exact
+proved-covered prefix. Newer mutable roots and later frozen sources stay in the
+successor cut. Handoff admission refusal retains
 the accepted receipt and captured prefix; a permitted retry finishes handoff
 instead of reapplying the prefix. Backend acceptance remains an irreversible
 receipt even if later durability waiting or cleanup returns an error. The
@@ -324,6 +365,92 @@ adds no checkpoint or durable-root publication.
 Value-log segments remain persistent storage: deletion uses existing
 reachability/pin/scanner authorities, never segment age or a second COW GC
 tracker. Retired owner cleanup occurs outside writer/admission/cut locks.
+
+## Complete-prefix and native ownership seam
+
+The existing lower publication owner keeps one finite accepted FIFO for the DB.
+Each entry distinguishes canonical assignment or uncertainty, complete logical
+installation, WAL completion and the exact physical seal. V (visible logical
+sequence), C (visible command prefix), W (stable WAL prefix) and S (sealed root)
+are separate; a NoWAL publication has no fabricated command LSN or W advance.
+Installed ordinary raw-only publications share a coalesced FIFO coverage run.
+The run's descriptor and receipt name its exact endpoint; iteration is not one
+visit per raw command. No raw effects move into this queue: immutable COW roots
+still own them. Native custody, projection, exact-seal request, charged and
+root-neutral entries retain their original independent slots. Canonical V+1/C+1
+validation occurs before whole-cut installation and only then can its raw slot
+merge, so assigned failures cannot disappear into a run.
+
+Before releasing the original writer exclusion, rollover marks its current
+exact V/C endpoint in that same FIFO. Writes after cutover cannot extend this
+entry, including writes before the physical worker calls CaptureAcceptedCut.
+Capture accepts only a retained endpoint; it never derives an interior LSN from
+logical sequence distance. Active or handed-off entries cannot merge. Empty
+idle convergence captures the already sealed S boundary. No additional clock,
+ledger, background scheduler, or per-command allocation is introduced.
+
+A captured finite prefix T includes every accepted entry through its boundary,
+with sparse native domain projections against the same complete raw/system/catalog
+basis. One build group publishes that boundary. An uncovered legacy producer
+blocks the raw path before append; a partial native candidate cannot advance
+coverage.
+
+
+COW checkpoint and Close take canonical coverage only from the retained cut's
+`frozenCommandLSN` and its exact disk snapshot basis. The accepted queue must
+prove every assignment in that interval installed before the same BuildGroup
+publishes it. Public raw pending counters are notifications, not coverage; native
+and raw ordering does not change that rule, and no separate root-neutral batch
+completes COW coverage. The flush returns its actual coverage/completion status
+for cleanup, including native-only prefixes with zero raw entries.
+
+At the exclusive writer cutover, the COW cache rotates the active command WAL
+independently of public raw notifications. After value-log lane flush, it preserves
+the WAL flush/readiness boundary before building the exact captured prefix. Later
+suffix bytes may become durable without entering that root. Rotation or root
+publication never fabricates W; only the original canonical WAL owner records
+its completed stable prefix. Non-COW caches retain their public producer coverage
+provider and existing group-commit behavior.
+
+The fixed backend-to-cache native bridge uses the existing owner and command-WAL
+handler registration direction. Identity-free capability, dependency, footprint
+and admission checks run before canonical assignment. An internal admitted native
+finalizer may then construct actual-LSN assets privately. Any failure after
+assignment retains the original sparse partial-resource ledger and assigned
+identity, poisons continuation and installs no partial cut. Final installation
+under the cut latch does not allocate or execute a destructor. A stale equivalent
+physical basis requires preparation against the compatible latest basis before
+acceptance; it is not itself a logical transaction conflict. The same bounded
+transaction journal separates raw and semantic namespaces. These lower seams do
+not activate collection producers whose legacy barriers are still registered.
+
+Native build materialization of an already logically accepted plan is terminal
+on failure. Only `NativeSemanticBuildRetryableRefusal` proves an untouched
+preadmission refusal; an ordinary capacity error after original asset creation
+cannot restart or overwrite that work. Accepted disk publication retries only
+its exact handoff and never rebuilds or reapplies its prefix.
+
+Last semantic release detaches one preborn cleanup record in constant work and
+enqueues it before the last retained cut leaves the active-cut count. The
+existing flush worker performs actual destruction outside publication, build and
+cut gates; cleanup wakes preserve unrelated coalesced flush requests. Close stops
+admission and joins outside worker-needed gates. If user cuts survive Close, the
+same worker continues only cleanup until closed, initial Close cleanup complete,
+zero active cuts and no runnable/running cleanup are serialized together.
+Successful destruction returns an independent accounting receipt; original record
+and resource aliases end before that receipt refunds their containing allocation.
+Failure parks the same original Work, objects, error and charge, without replay.
+A tiny guard bound at Open rejects same-caller public/cache/backend Close from
+actual Finish, destruction and error-notification callbacks before side effects;
+unrelated Close waits normally. No additional scheduler is introduced.
+
+Explicit sealed requests release their publication/materialization in-flight
+count and original staging, collection and teardown progress gates before
+waiting on their own physical receipt. Deterministic apply computes its immutable
+accepted proof before releasing the owner and publishes result/progress only
+after that exact seal succeeds. Reusable vector captures keep their caller-owned
+pin while releasing the storage-progress barrier needed by the seal worker.
+NoWAL explicit boundaries retain the full captured drain.
 
 ## Verification and performance scope
 
@@ -431,3 +558,37 @@ basis cleanup retains the original basis independently.
 Public raw conditional transactions are supported under the ownership and bounded
 history rules in [raw-cow-transactions.md](raw-cow-transactions.md). Standalone
 caller-owned backend combinations remain fail-closed.
+
+Native physical rollover prepares an owned active successor through
+`NativeSemanticState.PrepareRollover` under the existing writer owner, before
+raw source freezing and cut installation. The whole cut adopts that edge and
+separately retains the original captured semantic state. Neither the logical
+sequence nor canonical identity changes. A nonnil error result also transfers
+one private edge; its preborn cleanup record already owns every partial
+allocation, and cancellation queues it outside publication and writer gates
+before dropping the opening retained cut. Native-only captured coverage may
+therefore drive the same finite capacity drain/retry as raw frozen tables.
+
+`NativeMaintenanceAllocator` exposes only the existing reserved maintenance
+budget capability. Native build ledgers and handoff metadata must reserve their
+finite capacity before physical acceptance, so producer exhaustion cannot force
+postaccept recapture or block the exact accepted handoff. Source generations and
+source-slot ownership remain on their original producer budget. Full native
+collection source representation and producer activation belong to the native
+collection packet; the legacy producer fence remains until that migration.
+
+Native two-phase transactions use `BeginNativeConditionalTxn` on the same fixed
+backend bridge. Its opening State, Snapshot and sequence borrow the original P1
+`ConditionalTxn` snapshot; commit uses that transaction's original batch and
+raw read/range dependencies. The caller cannot replace its opening sequence.
+The original owned `NativeLogicalPlan` contains immutable staged effects and
+prepares them against latest compatible semantic roots under the existing
+writer/publication gate, after checking all original raw and native read/write
+dependencies and history floor. This internal operation does not recapture,
+invoke replay preparation, reacquire teardown protection, wait or publish.
+Journal preparation and canonical append occur only after the complete private
+result passes its exact-basis invariant. A nonnil partial state returned with an
+error transfers one edge to existing off-gate cancellation; original custody is
+queued before the transaction's opening cut withdraws. Commit/Close terminate
+the original transaction once. Physical handoff alone is not a logical conflict;
+changed logical dependencies still refuse before assignment.

@@ -23,9 +23,11 @@ func admittedCoalescingFixture(t *testing.T, owner *retainedalloc.Owner, registr
 		t.Fatal(err)
 	}
 	var view stableResourceKindView
-	if err = appendOwnedResourceEntryToView(&view, backing, owner); err != nil {
+	leaf, err := appendOwnedResourceEntryToView(&view, backing, owner)
+	if err != nil {
 		t.Fatal(err)
 	}
+	leaf.entries = backing.entries[:1:1]
 	backing.release()
 	kinds, err := newResourceKindBacking(owner, []resourceKindCell{{kind: token.kind, view: view}})
 	if err != nil {
@@ -130,27 +132,60 @@ func TestOwnedResourceCoalescingRefusalKeepsBothInputs(t *testing.T) {
 	obligation.Reachability = ReachabilityIndexFile
 	first := admittedCoalescingFixture(t, &owner, registry, file, "a", DurableFrontier{Bytes: 4}, []StableLogicalObligation{obligation})
 	second := admittedCoalescingFixture(t, &owner, registry, file, "b", DurableFrontier{Bytes: 8}, []StableLogicalObligation{obligation})
+	held, err := CloneStableResourceSetExcludingKinds(first)
+	if err != nil {
+		t.Fatal(err)
+	}
 	builder := NewStableResourceSetBuilder()
 	defer builder.Abandon()
+	// Keep several non-colliding resources in the original parent. Their private
+	// replacement ropes make late allocation refusals reachable after cloning.
+	for i := 0; i < 8; i++ {
+		otherFile := writeStableResourceFixture(t, t.TempDir(), "other.bin", "12345678")
+		otherIdentity, err := StableIdentityFromFile(otherFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = registry.Observe(otherIdentity); err != nil {
+			t.Fatal(err)
+		}
+		defer registry.Unobserve(otherIdentity)
+		other := admittedCoalescingFixture(t, &owner, registry, otherFile, otherFile.Name(), DurableFrontier{Bytes: 8}, nil)
+		if err = builder.Merge(other); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err = builder.Merge(first); err != nil {
 		t.Fatal(err)
 	}
 	current, incoming := builder.kindViews, second.kindViews
-	before := owner.Bytes()
-	budget.cap = before
-	if err = builder.Merge(second); !errors.Is(err, retainedalloc.ErrCapacity) {
-		t.Fatalf("capacity refusal=%v", err)
+	before, pins := owner.Bytes(), registry.Stats().ActivePins
+	succeeded, refusals := false, 0
+	for allowance := uint64(0); allowance < 1<<20; allowance += 64 {
+		budget.cap = before + allowance
+		err = builder.Merge(second)
+		if err == nil {
+			succeeded = true
+			break
+		}
+		if !errors.Is(err, retainedalloc.ErrCapacity) {
+			t.Fatalf("capacity refusal at %d=%v", allowance, err)
+		}
+		refusals++
+		if builder.kindViews != current || second.kindViews != incoming || ResourceOwnerState(second.owner.Load()) != ResourceOwnerBuilder || owner.Bytes() != before || budget.bytes != before || registry.Stats().ActivePins != pins || held.Len() != 1 {
+			t.Fatalf("refusal consumed input or leaked candidate at %d: owner=%d budget=%d baseline=%d", allowance, owner.Bytes(), budget.bytes, before)
+		}
 	}
-	if builder.kindViews != current || second.kindViews != incoming || ResourceOwnerState(second.owner.Load()) != ResourceOwnerBuilder || owner.Bytes() != before || registry.Stats().ActivePins != 2 {
-		t.Fatal("refusal consumed input or leaked candidate")
-	}
-	budget.cap = 1 << 20
-	if err = builder.Merge(second); err != nil {
-		t.Fatal(err)
+	if !succeeded || refusals < 8 {
+		t.Fatalf("finite collision retry: success=%v refusals=%d", succeeded, refusals)
 	}
 	builder.Abandon()
 	first.Release()
 	second.Release()
+	if held.Len() != 1 || registry.Stats().ActivePins != 1 {
+		t.Fatal("collision disposal lost independent original parent")
+	}
+	held.Release()
 	if owner.Bytes() != baseline || registry.Stats().ActivePins != 0 {
 		t.Fatalf("retry leak: %d baseline%d", owner.Bytes(), baseline)
 	}
@@ -371,5 +406,137 @@ func TestOwnedCanonicalHistoryBatchAndInheritedFiltering(t *testing.T) {
 	incoming = nil
 	if owner.Bytes() != 0 || registry.Stats().ActivePins != 0 {
 		t.Fatalf("batch final metadata=%d pins=%d", owner.Bytes(), registry.Stats().ActivePins)
+	}
+}
+
+// A single new physical entry must not reconstruct the original complete
+// history or replace untouched physical pins. Quota refusals preserve both
+// operands, including a separately held original view, before a finite retry.
+func TestOwnedResourceMixedHistoryAndNewPhysicalPreservesOriginalCustody(t *testing.T) {
+	var owner retainedalloc.Owner
+	owner.Initialize(0)
+	budget := &registryBudget{cap: 4 << 20}
+	enrollment, err := owner.Enroll(budget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer enrollment.Close()
+	baseline := owner.Bytes()
+	registry := NewIdentityPinRegistry()
+	defer registry.Close()
+	file := func(name string) *os.File {
+		f := writeStableResourceFixture(t, t.TempDir(), name, "12345678")
+		identity, err := StableIdentityFromFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = registry.Observe(identity); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if err := registry.Unobserve(identity); err != nil {
+				t.Error(err)
+			}
+		})
+		return f
+	}
+	oldFile, untouchedFile, newFile := file("old"), file("untouched"), file("new")
+	obligation := func(id uint64) StableLogicalObligation {
+		o := appendMutationTestObligation(id)
+		o.Reachability = ReachabilityIndexFile
+		return o
+	}
+	values := make([]StableLogicalObligation, 64)
+	for i := range values {
+		values[i] = obligation(uint64(i + 1))
+	}
+	old := admittedCoalescingFixture(t, &owner, registry, oldFile, "old", DurableFrontier{Bytes: 4}, values)
+	untouched := admittedCoalescingFixture(t, &owner, registry, untouchedFile, "untouched", DurableFrontier{Bytes: 8}, []StableLogicalObligation{obligation(65)})
+	held, err := CloneStableResourceSetExcludingKinds(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldEntry := findStableResourceLogical(old.kindViews.get(ResourceIndex).logical, old.kindViews.get(ResourceIndex).logical.entry.token.logicalKey())
+	untouchedToken := untouched.kindViews.get(ResourceIndex).logical.entry.token
+	parent := NewStableResourceSetBuilder()
+	defer parent.Abandon()
+	if err = parent.Merge(old); err != nil {
+		t.Fatal(err)
+	}
+	if err = parent.Merge(untouched); err != nil {
+		t.Fatal(err)
+	}
+	delta := admittedCoalescingFixture(t, &owner, registry, oldFile, "old", DurableFrontier{Bytes: 8}, []StableLogicalObligation{values[0], obligation(66)})
+	fresh := admittedCoalescingFixture(t, &owner, registry, newFile, "new", DurableFrontier{Bytes: 8}, []StableLogicalObligation{obligation(67)})
+	incomingBuilder := NewStableResourceSetBuilder()
+	defer incomingBuilder.Abandon()
+	if err = incomingBuilder.Merge(delta); err != nil {
+		t.Fatal(err)
+	}
+	if err = incomingBuilder.Merge(fresh); err != nil {
+		t.Fatal(err)
+	}
+	incoming, err := incomingBuilder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, source := parent.kindViews, incoming.kindViews
+	before, pins := owner.Bytes(), registry.Stats().ActivePins
+	refusals, succeeded := 0, false
+	for allowance := uint64(0); allowance < 1<<20; allowance += 512 {
+		budget.cap = before + allowance
+		err = parent.Merge(incoming)
+		if err == nil {
+			succeeded = true
+			break
+		}
+		if !errors.Is(err, retainedalloc.ErrCapacity) {
+			t.Fatalf("mixed admission %d: %v", allowance, err)
+		}
+		refusals++
+		if parent.kindViews != original || incoming.kindViews != source || ResourceOwnerState(incoming.owner.Load()) != ResourceOwnerBuilder || owner.Bytes() != before || budget.bytes != before || registry.Stats().ActivePins != pins {
+			t.Fatalf("mixed refusal changed original inputs/custody at %d", allowance)
+		}
+	}
+	if !succeeded || refusals == 0 {
+		t.Fatalf("mixed retry success=%v refusals=%d", succeeded, refusals)
+	}
+	merged, err := parent.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	view := merged.kindViews.get(ResourceIndex)
+	current := findStableResourceLogical(view.logical, oldEntry.token.logicalKey())
+	kept := findStableResourceLogical(view.logical, untouchedToken.logicalKey())
+	if current == nil || current.token != oldEntry.token || current.frontier.Bytes != 8 || current.logicalObligations.count != 65 || kept == nil || kept.token != untouchedToken || view.count != 3 || view.logicalMembershipCount != 67 || view.logicalObligationCount != 67 {
+		t.Fatal("mixed merge rebuilt old pins or lost exact aggregate coverage")
+	}
+	if held.kindViews.get(ResourceIndex).logical.entry != oldEntry || oldEntry.logicalObligations.count != 64 || oldEntry.frontier.Bytes != 4 {
+		t.Fatal("mixed merge changed held original history")
+	}
+	if _, found := findStableLogicalObligationIndex(current.outgoing.index, obligation(66), nil); !found {
+		t.Fatal("new obligation absent from original physical history")
+	}
+	if _, found := findStableLogicalObligationIndex(oldEntry.outgoing.index, obligation(66), nil); found {
+		t.Fatal("new obligation leaked into held history")
+	}
+	// End every borrowed entry alias before the real original edges are dropped.
+	oldEntry, current, kept, untouchedToken = nil, nil, nil, nil
+	view = stableResourceKindView{}
+	original, source = nil, nil
+	merged.Release()
+	incoming.Release()
+	old.Release()
+	untouched.Release()
+	delta.Release()
+	fresh.Release()
+	parent.Abandon()
+	incomingBuilder.Abandon()
+	if held.Len() != 1 || registry.Stats().ActivePins != 1 {
+		t.Fatal("mixed cleanup lost independently held original pin")
+	}
+	held.Release()
+	if owner.Bytes() != baseline || budget.bytes != baseline || registry.Stats().ActivePins != 0 {
+		t.Fatalf("mixed final drain owner=%d budget=%d baseline=%d pins=%d", owner.Bytes(), budget.bytes, baseline, registry.Stats().ActivePins)
 	}
 }

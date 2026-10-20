@@ -6,6 +6,30 @@ import (
 	"math"
 )
 
+// DrainRetiredIndexGenerations reuses the original ghost queue before a bounded
+// maintenance constructor needs its capacity. The admitted caller supplies its
+// teardown lease and holds no writer, root-reuse or publication-build lock.
+// Live reader floors still exclude retirement; no age delay is needed for an
+// already unreachable generation when making explicit maintenance progress.
+func (db *DB) DrainRetiredIndexGenerations(lease *StableResourceCaptureLease) error {
+	if err := lease.ValidateDBV1(db); err != nil {
+		return err
+	}
+	if err := db.publicationPoisonedError(); err != nil {
+		return err
+	}
+	if db.ghostManager != nil {
+		db.ghostManager.scavenge(0)
+	}
+	// The original scavenge route retains actual disposal failures in bgErr.
+	// Observe that exact graph before allowing another publication.
+	if err := db.backgroundError(); err != nil {
+		db.publicationPoisoned.Store(true)
+		return errors.Join(err, ErrRecoveryRequired)
+	}
+	return nil
+}
+
 func (db *DB) nextIndexID() uint64 {
 	db.idxMu.Lock()
 	defer db.idxMu.Unlock()

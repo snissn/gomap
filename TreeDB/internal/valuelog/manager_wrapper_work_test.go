@@ -1,12 +1,10 @@
 package valuelog
 
 import (
-	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"testing"
-	"unsafe"
 )
 
 func TestManagerWrapperActualContainingBorrowDefersCloseRefund(t *testing.T) {
@@ -30,7 +28,55 @@ func TestManagerWrapperActualContainingBorrowDefersCloseRefund(t *testing.T) {
 		t.Fatal("original actual last containing borrower did not refund")
 	}
 }
-func TestManagerWrapperBoundedOriginalManyGovernorsAndFutureProducer(t *testing.T) {
+
+func TestManagerContainingRefundAfterOriginalUnlock(t *testing.T) {
+	for _, held := range []bool{false, true} {
+		t.Run(map[bool]string{false: "Close", true: "LastWrapper"}[held], func(t *testing.T) {
+			registry := rootpublication.NewIdentityPinRegistry()
+			m, err := NewManagerWithStableResourcePinRegistry(t.TempDir(), registry)
+			if err != nil {
+				t.Fatal(err)
+			}
+			budget, err := memtable.NewCOWBudget(memtable.DefaultCOWLimits())
+			if err != nil {
+				t.Fatal(err)
+			}
+			observed, locked := false, false
+			capture, err := registry.MetadataOwner().Enroll(&containingUnlockBudget{actual: budget, observe: func() {
+				if m.producerMetadata != nil {
+					return
+				}
+				observed = true
+				if !m.mu.TryLock() {
+					locked = true
+				} else {
+					m.mu.Unlock()
+				}
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if held && !m.RetainSnapshotWrapper() {
+				t.Fatal("missing original wrapper borrow")
+			}
+			if err = m.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if held {
+				if observed {
+					t.Fatal("containing refund preceded last wrapper release")
+				}
+				m.ReleaseSnapshotWrapper()
+			}
+			if !observed || locked {
+				t.Fatalf("containing refund before original unlock: observed=%t locked=%t", observed, locked)
+			}
+			capture.Close()
+			budget.Close()
+		})
+	}
+}
+func TestManagerWrapperOriginalManyGovernors(t *testing.T) {
 	registry := rootpublication.NewIdentityPinRegistry()
 	owner := registry.MetadataOwner()
 	m, err := NewManagerWithStableResourcePinRegistry(t.TempDir(), registry)
@@ -38,7 +84,7 @@ func TestManagerWrapperBoundedOriginalManyGovernorsAndFutureProducer(t *testing.
 		t.Fatal(err)
 	}
 	budgets := make([]*memtable.COWBudget, 80)
-	captures := make([]*retainedalloc.Enrollment, 80)
+	captures := make([]*retainedalloc.Enrollment, len(budgets))
 	for i := range budgets {
 		budgets[i], err = memtable.NewCOWBudget(memtable.DefaultCOWLimits())
 		if err != nil {
@@ -49,66 +95,24 @@ func TestManagerWrapperBoundedOriginalManyGovernorsAndFutureProducer(t *testing.
 			t.Fatal(err)
 		}
 	}
-	receiptBudget, err := memtable.NewCOWBudget(memtable.DefaultCOWLimits())
-	if err != nil {
-		t.Fatal(err)
-	}
-	receiptAdmission, err := receiptBudget.AcquireExternal(memtable.COWAllocationCharge(uint64(unsafe.Sizeof(ManagerWrapperReleaseWork{}))))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var receipt ManagerWrapperReleaseWork
 	if !m.RetainSnapshotWrapper() {
 		t.Fatal("missing original borrower")
 	}
 	if err = m.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if ready, err := receipt.BindSnapshotWrapper(m, &iterator.OrdinalScanWork{}); ready || err != nil || m.wrapperBorrows.Load() != 1 {
-		t.Fatal("zero work captured disposal", err)
+	if m.producerCharge == 0 {
+		t.Fatal("refunded before original borrower release")
 	}
-	bind := iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20}
-	if ready, err := receipt.BindSnapshotWrapper(m, &bind); !ready || err != nil {
-		t.Fatal("bind original receipt", err)
+	m.ReleaseSnapshotWrapper()
+	if m.producerCharge != 0 {
+		t.Fatal("retained disposed Manager")
 	}
-	turns := 0
-	for {
-		w := iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20}
-		ready, err := receipt.ReleaseWork(&w)
-		if err != nil || w.Records > 32 || w.Bytes > 1<<20 {
-			t.Fatal("original finite quantum", err)
-		}
-		if ready {
-			break
-		}
-		turns++
-		if turns > 100 {
-			t.Fatal("permanent original lease refusal")
-		}
-		if err = m.Close(); err != nil {
-			t.Fatal(err)
-		}
-		// The SAME registry producer may grow after a bounded refund returns.
-		if err = owner.AddPending(16); err != nil {
-			t.Fatal(err)
-		}
-		future := make([]byte, 16)
-		_ = future
-	}
-	if turns < 2 || m.producerCharge != 0 || receipt.manager != nil {
-		t.Fatal("original many-budget disposal was unbounded or retained disposed Manager")
-	}
-	owner.RemovePending(uint64(turns) * 16)
 	for i, e := range captures {
 		e.Close()
 		budgets[i].Close()
 		if budgets[i].Stats().TotalBytes != 0 {
 			t.Fatal("capture governor leaked")
 		}
-	}
-	receiptAdmission.Close()
-	receiptBudget.Close()
-	if receiptBudget.Stats().TotalBytes != 0 {
-		t.Fatal("actual completed external receipt admission leaked")
 	}
 }

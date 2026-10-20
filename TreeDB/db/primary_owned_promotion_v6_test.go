@@ -13,7 +13,7 @@ import (
 )
 
 func TestPrimaryOwnedPromotionV6ConstructorSurvivesVisibilityAndPromotion(t *testing.T) {
-	db, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+	db, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +101,7 @@ func TestPrimaryOwnedPromotionV6ConstructorSurvivesVisibilityAndPromotion(t *tes
 // Retained and streamed/discarded non-exact routing spans must use identical
 // bounds. Both still perform the same real recursive touched-node census.
 func TestPrimaryOwnedPromotionV6RoutingEmission(t *testing.T) {
-	db, e := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+	db, e := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -156,7 +156,7 @@ func TestPrimaryOwnedPromotionV6RoutingEmission(t *testing.T) {
 // A relaxed reader owns its immutable logical closure. Later coalesced durable
 // publication must retain dependency banks through the slot's separate closure.
 func TestPrimaryOwnedPromotionV6DoesNotGrowAdmittedReaderClosure(t *testing.T) {
-	db, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, ValueLog: ValueLogOptions{PointerThreshold: 1}, DisableBackgroundPrune: true})
+	db, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, ValueLog: ValueLogOptions{PointerThreshold: 1}, DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatal(err)
 	}

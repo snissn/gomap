@@ -51,7 +51,7 @@ func TestC3COWSuccessorFallbackCompletesBeforeQueuedDBClose(t *testing.T) {
 					threshold = 1
 				}
 				db, err := Open(dir, backend, Options{
-					DisableWAL: true, AllowUnsafe: true, FlushThreshold: 1 << 30,
+					DisableWAL: true, AllowUnsafe: true, MemtableMode: "cow_btree", FlushThreshold: 1 << 30,
 					MemtableShards: 2, ValueLogPointerThreshold: threshold,
 					ValueLogCompression: uint8(vlogCompressionOff),
 				})
@@ -60,13 +60,7 @@ func TestC3COWSuccessorFallbackCompletesBeforeQueuedDBClose(t *testing.T) {
 					_ = os.RemoveAll(dir)
 					t.Fatal(err)
 				}
-				c, err := newCOWCache(backend, 2, memtable.DefaultCOWLimits())
-				if err != nil {
-					_ = db.Close()
-					_ = os.RemoveAll(dir)
-					t.Fatal(err)
-				}
-				db.cow = c
+				c := db.cow
 				var snapshot *Snapshot
 				entered, resume := make(chan struct{}), make(chan struct{})
 				readDone, closeDone := make(chan struct{}), make(chan struct{})
@@ -205,9 +199,17 @@ func TestC3COWSuccessorFallbackCompletesBeforeQueuedDBClose(t *testing.T) {
 					t.Fatal(err)
 				}
 				snapshot = nil
-				stats := c.budget.Stats()
-				if c.activeCuts.Load() != 0 || stats.ReservedBytes != 0 {
-					t.Fatalf("Close retained cuts=%d bytes=%d", c.activeCuts.Load(), stats.ReservedBytes)
+				// The final user cut wakes the same cleanup-only worker. Its
+				// containing control remains charged until that terminal pass.
+				deadline = time.Now().Add(5 * time.Second)
+				for c.budget.Stats().ReservedBytes != 0 {
+					if time.Now().After(deadline) {
+						t.Fatalf("cleanup worker retained cuts=%d bytes=%d", c.activeCuts.Load(), c.budget.Stats().ReservedBytes)
+					}
+					runtime.Gosched()
+				}
+				if c.activeCuts.Load() != 0 {
+					t.Fatalf("Close retained cuts=%d", c.activeCuts.Load())
 				}
 			})
 		}

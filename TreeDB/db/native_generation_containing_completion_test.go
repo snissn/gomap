@@ -61,10 +61,21 @@ func TestNativeGenerationContainingCompletionAfterOriginalClose(t *testing.T) {
 		} else {
 			g.wrapperMu.Unlock()
 		}
-		discoverable = db.idx.Load() != nil || len(db.idxAll) != 0
+		discoverable = db.idx.Load() != nil || len(db.idxAll) != 0 || g.registry != nil
 	}})
 	if err != nil {
 		t.Fatal(err)
+	}
+	// Exercise retained fallback capacity under the SAME original owner.
+	var pins [20]int64
+	for i := range pins {
+		pins[i], err = g.registry.Register(uint64(i + 1))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, id := range pins {
+		g.registry.Unregister(id)
 	}
 	before := owner.Bytes()
 	if err = db.closeAllIndexes(); err != nil {

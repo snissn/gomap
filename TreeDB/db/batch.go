@@ -292,6 +292,9 @@ func (b *Batch) write(sync bool) error {
 	if b == nil || b.db == nil {
 		return fmt.Errorf("missing db")
 	}
+	if b.db.nativeSemanticActive.Load() && b.rootPublicationBuildGroup == nil {
+		return ErrNativeSemanticUnsupported
+	}
 	if b.db.readOnly {
 		return ErrReadOnly
 	}
@@ -389,9 +392,13 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent, maxEnt
 	baseSeq := b.db.meta.CommitSeq
 	// Register this writer as a "reader" of the base state to prevent the
 	// pruner from reclaiming pages we are about to read during z.Apply.
-	regID := idx.registry.Register(baseSeq)
+	regID, registerErr := idx.registry.Register(baseSeq)
 	b.db.mu.RUnlock()
 	b.db.rootReuseMu.RUnlock()
+	if registerErr != nil {
+		b.db.writeMu.RUnlock()
+		return false, registerErr
+	}
 
 	defer idx.registry.Unregister(regID)
 	if hook := b.db.testAfterOptimisticBaseCaptureHook; hook != nil {
@@ -707,9 +714,12 @@ func (b *Batch) writeSerializedAttempt(sync bool, intent *commandWALBatchIntent,
 	b.db.mu.RLock()
 	rootID := b.db.meta.UserRootPageID
 	baseSeq := b.db.meta.CommitSeq
-	regID := idx.registry.Register(baseSeq)
+	regID, registerErr := idx.registry.Register(baseSeq)
 	b.db.mu.RUnlock()
 	b.db.rootReuseMu.RUnlock()
+	if registerErr != nil {
+		return registerErr
+	}
 
 	defer idx.registry.Unregister(regID)
 	if conditional != nil {

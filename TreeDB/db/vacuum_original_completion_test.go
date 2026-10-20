@@ -185,7 +185,7 @@ func TestOfflineReplacementOriginalPagerCompletion(t *testing.T) {
 // the final manifest before its record/capsule is sealed.
 func TestVacuumPrimaryProofOuterLeafSegmentsSealAfterAllRoots(t *testing.T) {
 	dir := t.TempDir()
-	opts := Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed,
+	opts := Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed,
 		DisableBackgroundPrune: true, ChunkSize: 64 << 10, KeepRecent: 1, PreferAppendAlloc: true, IndexOuterLeavesInValueLog: true}
 	d, err := Open(opts)
 	if err != nil {
@@ -371,7 +371,7 @@ func TestPrimaryJointNamespaceRebindKeepsOriginalParents(t *testing.T) {
 			} else {
 				dir = t.TempDir()
 			}
-			d, err := Open(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+			d, err := Open(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -762,7 +762,7 @@ func TestOfflineSourceLateNamespaceRefusalRetainsOriginalLock(t *testing.T) {
 	for _, fault := range []bool{false, true} {
 		t.Run(map[bool]string{false: "semantic-refusal", true: "late-parent-refusal"}[fault], func(t *testing.T) {
 			dir := t.TempDir()
-			opts := Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true}
+			opts := Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true}
 			seed, err := Open(opts)
 			if err != nil {
 				t.Fatal(err)
@@ -800,13 +800,18 @@ func TestOfflineSourceLateNamespaceRefusalRetainsOriginalLock(t *testing.T) {
 			}
 			source := d.idx.Load()
 			source.retainOfflineSourceV1(d, lock)
+			originalMetadata := source.primary.MetadataOwner()
+			beforeScope := originalMetadata.Bytes()
 			scope, err := d.captureOfflinePrimaryScopeV6()
 			if err != nil {
 				t.Fatal(err)
 			}
 			parent := scope.stableNamespaceParent
 			scopeOwner, scopeCharge := scope.stableNamespaceMetadata, scope.stableNamespaceParentCharge
-			if parent == nil || scopeCharge == 0 || source.metadataCharge == 0 {
+			// The successful receipt includes the original private registry as
+			// well as its parent/control storage. Capture only this admission.
+			scopeAdmission := originalMetadata.Bytes() - beforeScope
+			if scopeOwner != originalMetadata || scopeAdmission <= scopeCharge || parent == nil || scopeCharge == 0 || source.metadataCharge == 0 {
 				t.Fatal("actual admitted source/namespace operands missing")
 			}
 			// This is the real source physical completion before the outer
@@ -825,7 +830,7 @@ func TestOfflineSourceLateNamespaceRefusalRetainsOriginalLock(t *testing.T) {
 			metadata, charge, cleanup := scope.releaseOfflineNamespaceScopeV6()
 			operation := errors.New("ordinary semantic operation refusal")
 			if !fault {
-				if cleanup != nil || metadata != scopeOwner || charge != scopeCharge {
+				if cleanup != nil || metadata != scopeOwner || charge != scopeAdmission {
 					t.Fatalf("successful original scope disposal: %v charge=%d", cleanup, charge)
 				}
 				scope, parent = nil, nil

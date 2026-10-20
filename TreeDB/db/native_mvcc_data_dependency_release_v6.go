@@ -4,7 +4,6 @@ import (
 	"sync"
 	"unsafe"
 
-	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
@@ -24,8 +23,6 @@ type dataDependencyLeaseV6 struct {
 	failure    originalDBCleanupFailure
 }
 
-func (lease *dataDependencyLeaseV6) SupportsBoundedDependencyDirectoryReleaseV6() bool { return false }
-
 func (db *DB) pinDataDependencyDirectoryV6(idx *indexGen, sequence uint64, ref rootpublication.DependencyDirectoryRefV2, totalPages uint64) (*rootpublication.DependencyDirectoryV2, error) {
 	metadata := idx.metadata
 	var charge uint64
@@ -40,10 +37,16 @@ func (db *DB) pinDataDependencyDirectoryV6(idx *indexGen, sequence uint64, ref r
 	lease := &dataDependencyLeaseV6{db: db, generation: idx, metadata: metadata, charge: charge}
 	lease.failure.payload = lease
 	idx.retainWrapperBorrow()
-	lease.registryID = idx.registry.Register(sequence)
-	directory, err := rootpublication.NewOwnedWorkDependencyDirectoryV6(idx.pager, ref, totalPages, metadata, lease)
+	// This edge keeps directory pages and their generation reusable only after
+	// release; it does not itself expose an old logical asset view to a reader.
+	var err error
+	lease.registryID, err = idx.registry.RegisterPageRetention(sequence)
+	var directory *rootpublication.DependencyDirectoryV2
+	if err == nil {
+		directory, err = rootpublication.NewOwnedTypedDependencyDirectoryV6(idx.pager, ref, totalPages, metadata, lease)
+	}
 	if err != nil {
-		consumed, _, completion, cleanup := lease.ReleaseDependencyDirectoryWorkV6(nil)
+		consumed, completion, cleanup := lease.ReleaseDependencyDirectoryV6()
 		if !consumed {
 			lease.failure.retainCause(0, err)
 			lease.failure.retainCause(1, cleanup)
@@ -60,17 +63,12 @@ func (db *DB) pinDataDependencyDirectoryV6(idx *indexGen, sequence uint64, ref r
 	return directory, nil
 }
 
-func (lease *dataDependencyLeaseV6) ReleaseDependencyDirectoryWorkV6(work *iterator.OrdinalScanWork) (consumed, ready bool, completion rootpublication.DependencyDirectoryReleaseCompletionV6, err error) {
-	// No native caller may transfer this legacy DATA route before its registry
-	// and last physical generation release are work-bearing.
-	if work != nil {
-		return false, true, completion, retainedalloc.ErrWorkRequired
-	}
+func (lease *dataDependencyLeaseV6) ReleaseDependencyDirectoryV6() (consumed bool, completion rootpublication.DependencyDirectoryReleaseCompletionV6, err error) {
 	lease.mu.Lock()
 	if lease.closed {
 		err = lease.err
 		lease.mu.Unlock()
-		return err == nil, true, completion, err
+		return err == nil, completion, err
 	}
 	idx, db := lease.generation, lease.db
 	idx.registry.Unregister(lease.registryID)
@@ -88,7 +86,7 @@ func (lease *dataDependencyLeaseV6) ReleaseDependencyDirectoryWorkV6(work *itera
 		err = lease.err
 		lease.closed = true
 		lease.mu.Unlock()
-		return false, true, completion, err
+		return false, completion, err
 	}
 	if generationCharge != 0 && generationMetadata != lease.metadata {
 		panic("DATA directory changed original generation metadata owner")
@@ -100,5 +98,5 @@ func (lease *dataDependencyLeaseV6) ReleaseDependencyDirectoryWorkV6(work *itera
 	lease.failure.payload = nil
 	lease.closed = true
 	lease.mu.Unlock()
-	return true, true, completion, nil
+	return true, completion, nil
 }

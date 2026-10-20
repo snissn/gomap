@@ -224,16 +224,23 @@ func TestConditionalTxnUnsupportedPublicOwnerIsImmutableAndBareAPIUnchanged(t *t
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := tx.Close(); err != nil {
-				t.Fatal(err)
-			}
+			defer tx.Close()
 		}
+		// This maintained internal recorder requires the publication gate, just
+		// like its real direct/batch callers. Keep the bare consumer enrolled.
+		db.writeMu.RLock()
 		db.conditionalRecordCommittedEntries([]batch.Entry{{Key: []byte("key")}}, nil)
+		db.writeMu.RUnlock()
 		if db.conditionalSeq.Load() != 1 {
 			t.Fatal("logical clock depended on transaction activity")
 		}
 		if (db.conditionalOracle.history == nil) != private {
 			t.Fatal("unused history or missing supported history")
+		}
+		if tx != nil {
+			if err := tx.Close(); err != nil {
+				t.Fatal(err)
+			}
 		}
 		if err := db.Close(); err != nil {
 			t.Fatal(err)

@@ -717,7 +717,10 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 	}
 	if indexVacuumCompleted {
 		if err := db.runCompactStoragePhase(&stats, "checkpoint-after-index-vacuum", func() error {
-			return db.checkpoint(maintenanceLocked)
+			if err := db.checkpoint(maintenanceLocked); err != nil {
+				return err
+			}
+			return db.refreshDurableRootFallback()
 		}); err != nil {
 			return stats, err
 		}
@@ -796,7 +799,10 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 			phase.Status = CompactStoragePhaseStatusSucceeded
 			stats.IndexVacuum = db.vacuumOnlineStatsSnapshot()
 			if err := db.runCompactStoragePhase(&stats, "checkpoint-after-index-vacuum-settle", func() error {
-				return db.checkpoint(maintenanceLocked)
+				if err := db.checkpoint(maintenanceLocked); err != nil {
+					return err
+				}
+				return db.refreshDurableRootFallback()
 			}); err != nil {
 				return stats, err
 			}

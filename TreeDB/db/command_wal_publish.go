@@ -17,6 +17,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -46,7 +47,17 @@ func (mutation conditionalCommitMutation) record(db *DB, commitSeq uint64) {
 }
 
 type finalizeCommitOptions struct {
-	negativeCoverage            *negativeRootCoverage
+	// privateCOWEquivalentRewriteOwner is borrowed only by the maintained online
+	// pointer rewrite. It authorizes an ordinary physical candidate, never a
+	// canonical append, accepted cut, logical install, or frontier advancement.
+	privateCOWEquivalentRewriteOwner *transactionowner.Owner
+	commandWALSeal                   *commandWALSealReceipt
+	commandWALSealGroup              []*CommandWALIntent
+	negativeCoverage                 *negativeRootCoverage
+	// prepareSnapshotReceipt runs with candidate/teardown custody and rootReuseMu
+	abortSnapshotReceipt func() error
+	// before EnqueueBuilt. Failure is preaccept; original cleanup remains owned.
+	prepareSnapshotReceipt      func(*rootPublicationVisibleInstallV1) error
 	preparedLimits              *PreparedRootPublicationLimits
 	commandWALPublish           bool
 	appliedCommandLSN           uint64
@@ -64,6 +75,7 @@ type finalizeCommitOptions struct {
 	// caller-owned durable publication lock. The finalizer consumes its final
 	// handle atomically with the visible candidate handoff.
 	rootPublicationBuilder *rootpublication.BuilderToken
+	acceptedPrefixCut      *rootpublication.AcceptedCut
 	// closeTeardownPinned proves the caller acquired teardownMu for reading
 	// before Close could revoke write admission and will retain that lease
 	// through commit post-work. It permits an already-admitted publication to
@@ -312,12 +324,28 @@ func (db *DB) RefreshCommandWALCheckpointFallback() error {
 	if db == nil || !db.commandWAL {
 		return nil
 	}
+	return db.refreshDurableRootFallback()
+}
+
+// Maintenance may also converge an unjournaled fallback after rebuilding the
+// index. Both slots then retain the already-durable current closure; independent
+// readers and prepared members keep their own old resources pinned through GC.
+func (db *DB) refreshDurableRootFallback() error {
+	if db == nil {
+		return ErrClosed
+	}
 	// Keep the predicate and same-LSN publication in the raw-publish domain.
 	// The public cached owner holds its operation gate as well, but backend
 	// command-WAL publishers do not use that gate. Holding this existing
 	// backend serialization prevents an intervening command frame from making
 	// the sampled AppliedCommandLSN stale before the fallback is refreshed.
 	unlockCommandWALPublish := db.lockCommandWALRawPublishWithTeardown()
+	if !db.commandWAL {
+		// The command-WAL guard is a no-op in this profile. The inner current-
+		// root publisher still requires original teardown custody.
+		db.teardownMu.RLock()
+		unlockCommandWALPublish = db.teardownMu.RUnlock
+	}
 	defer unlockCommandWALPublish()
 	// Vacuum replaces the publication runtime while holding writeMu and db.mu.
 	// Keep its cutover out through the matching durable-slot sample.
@@ -346,6 +374,10 @@ func (db *DB) RefreshCommandWALCheckpointFallback() error {
 	fallback := db.durableRoot.slotRecord[db.durableRoot.slot^1]
 	state := db.state.Load()
 	needsRefresh := state != nil && db.commandWALCheckpointFallbackNeedsRefreshLocked(state.AppliedCommandLSN, selected, fallback)
+	if !db.commandWAL {
+		needsRefresh = state != nil && selected.AppliedCommandLSN == state.AppliedCommandLSN &&
+			(fallback.AppliedCommandLSN != selected.AppliedCommandLSN || !db.commandWALCheckpointRootsEqualLocked(selected, fallback))
+	}
 	db.durablePublishMu.Unlock()
 	db.writeMu.RUnlock()
 	if !needsRefresh {

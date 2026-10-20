@@ -17,6 +17,7 @@ import (
 func TestCommitAtPrimaryOnlyRetainsActualDataGeneration(t *testing.T) {
 	dir := t.TempDir()
 	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, dir)
+	opts.IndexPrimaryDirectory = true // This gate measures the explicit PRIMARY route.
 	opts.DisableSideStores = true
 	opts.BackgroundCheckpointInterval = -1
 	opts.ValueLog.PointerThreshold = 4096
@@ -116,6 +117,7 @@ func TestCommitAtPrimaryOnlyRetainsActualDataGeneration(t *testing.T) {
 // report generation advances; the baseline may churn and must remain runnable.
 func BenchmarkCommitAtPrimaryOnlyAfterDataGeneration(b *testing.B) {
 	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, b.TempDir())
+	opts.IndexPrimaryDirectory = true // This gate measures the explicit PRIMARY route.
 	opts.DisableSideStores = true
 	opts.BackgroundCheckpointInterval = -1
 	opts.ValueLog.PointerThreshold = 4096

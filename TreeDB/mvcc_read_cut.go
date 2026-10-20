@@ -35,15 +35,10 @@ func (db *DB) AcquireMVCCReadCut() (MVCCReadSnapshot, error) {
 	return cut, nil
 }
 
-// PreflightMVCCPrune refuses unsupported COW pruning before floor or WAL
-// effects. Passing this legacy preflight does not establish bounded work.
+// PreflightMVCCPrune checks public lifecycle admission before any floor or
+// delete effects. COW pruning uses its original retained cut and ordinary
+// admitted batches; legacy producers retain their established Store fence.
 func (db *DB) PreflightMVCCPrune() error {
-	cached, _, err := db.captureReadOwners()
-	if err != nil {
-		return err
-	}
-	if cached != nil && cached.COWMode() {
-		return caching.ErrCOWUnsupported
-	}
-	return nil
+	_, _, err := db.captureReadOwners()
+	return err
 }

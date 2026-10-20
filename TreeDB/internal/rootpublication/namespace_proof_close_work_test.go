@@ -1,18 +1,15 @@
 package rootpublication
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"testing"
-	"unsafe"
 
-	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 )
 
-func TestNamespaceProofCloseWorkActualHandlesManyCapturesAndFutureAdd(t *testing.T) {
+func TestNamespaceProofReleaseActualHandlesManyCapturesAndFutureAdd(t *testing.T) {
 	dir := t.TempDir()
 	parent, err := os.Open(dir)
 	if err != nil {
@@ -42,58 +39,22 @@ func TestNamespaceProofCloseWorkActualHandlesManyCapturesAndFutureAdd(t *testing
 			t.Fatal(err)
 		}
 	}
-	receiptBudget, err := memtable.NewCOWBudget(memtable.DefaultCOWLimits())
-	if err != nil {
+
+	if err = owner.AddPending(16); err != nil {
 		t.Fatal(err)
 	}
-	admission, err := receiptBudget.AcquireExternal(memtable.COWAllocationCharge(uint64(unsafe.Sizeof(NamespaceProofReleaseWork{}))))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var receipt NamespaceProofReleaseWork
-	if ready, err := receipt.Bind(proof, &iterator.OrdinalScanWork{}); ready || err != nil || proof.released.Load() {
-		t.Fatal("zero bind changed owner", err)
-	}
-	bind := iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20}
-	if ready, err := receipt.Bind(proof, &bind); !ready || err != nil {
-		t.Fatal(err)
-	}
-	// This is the actual parent-alias transfer before containing refund.
 	held := proof
+	if err = proof.ReleaseWithError(); err != nil {
+		t.Fatal(err)
+	}
 	proof = nil
-	if ready, err := receipt.ContinueWork(&iterator.OrdinalScanWork{}); ready || err != nil || held.released.Load() {
-		t.Fatal("zero close changed handle", err)
-	}
-	if !errors.Is(held.ReleaseWithError(), retainedalloc.ErrWorkRequired) {
-		t.Fatal("ordinary driver stole native receipt")
-	}
-	turns := 0
-	for {
-		w := iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20}
-		ready, err := receipt.ContinueWork(&w)
-		if err != nil || w.Records > 32 || w.Bytes > 1<<20 {
-			t.Fatal("actual cleanup quantum", err)
-		}
-		if ready {
-			break
-		}
-		turns++
-		if turns > 100 {
-			t.Fatal("permanent refusal")
-		}
-		if err = owner.AddPending(16); err != nil {
-			t.Fatal(err)
-		}
-		future := make([]byte, 16)
-		_ = future
-	}
-	if turns < 2 || receipt.proof != nil || held.parent != nil || held.persistence != nil || held.metadata != nil {
+	if held.parent != nil || held.persistence != nil || held.metadata != nil || !held.released.Load() {
 		t.Fatal("actual disposal/aliases incomplete")
 	}
-	if err = held.ReleaseWithError(); !errors.Is(err, retainedalloc.ErrWorkRequired) {
-		t.Fatal(err)
+	if err = held.ReleaseWithError(); err != nil {
+		t.Fatal("terminal replay", err)
 	}
-	owner.RemovePending(uint64(turns) * 16)
+	owner.RemovePending(16)
 	for i, e := range captures {
 		e.Close()
 		budgets[i].Close()
@@ -101,10 +62,10 @@ func TestNamespaceProofCloseWorkActualHandlesManyCapturesAndFutureAdd(t *testing
 			t.Fatal("capture admission leaked")
 		}
 	}
-	owner.Close()
-	admission.Close()
-	receiptBudget.Close()
-	if receiptBudget.Stats().TotalBytes != 0 || owner.Bytes() != 0 {
-		t.Fatal("actual completed receipts retained admission")
+	if err := owner.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if owner.Bytes() != 0 {
+		t.Fatal("completed proof retained admission")
 	}
 }

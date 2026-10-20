@@ -17,7 +17,7 @@ import (
 )
 
 func TestOwnedPagerOperationWaitsForActualSnapshotFinalization(t *testing.T) {
-	db, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+	db, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +59,7 @@ func TestOwnedPagerOperationWaitsForActualSnapshotFinalization(t *testing.T) {
 }
 
 func TestOwnedPagerOperationJoinsOriginalRunningFinalizer(t *testing.T) {
-	db, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+	db, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +103,7 @@ func TestOwnedPagerOperationJoinsOriginalRunningFinalizer(t *testing.T) {
 }
 
 func TestOwnedPagerOperationFinalReaderAndExportedHandleRace(t *testing.T) {
-	db, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+	db, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +147,7 @@ func TestOwnedPagerOperationPostConsumptionVLogFailureRetainsGovernor(t *testing
 	if !child {
 		return
 	}
-	d, err := Open(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+	d, err := Open(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,6 +158,7 @@ func TestOwnedPagerOperationPostConsumptionVLogFailureRetainsGovernor(t *testing
 	faultForPostConsumptionVLogTest := errors.New("post-unlink parent sync failure")
 	physicalPager := snapshot.primaryRoot.arena.Pager()
 	originalIndex, originalLock := d.idx.Load(), d.lock
+	originalOwner := originalIndex.primaryOwner
 	t.Cleanup(func() {
 		// The failure intentionally retains the exact owner and its admitted
 		// charge. After all consumers/assertions finish, explicit fixture-only
@@ -170,8 +171,8 @@ func TestOwnedPagerOperationPostConsumptionVLogFailureRetainsGovernor(t *testing
 		if originalIndex.stableNamespaceParent != nil {
 			_ = originalIndex.stableNamespaceParent.Close()
 		}
-		if originalIndex.primaryOwner.namespaceParent != nil {
-			_ = originalIndex.primaryOwner.namespaceParent.Close()
+		if originalOwner.namespaceParent != nil {
+			_ = originalOwner.namespaceParent.Close()
 		}
 		if originalLock != nil {
 			_ = originalLock.Close()

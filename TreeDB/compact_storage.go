@@ -184,7 +184,7 @@ func (db *DB) CompactStorage(ctx context.Context, opts CompactStorageOptions) (C
 		err = db.runCachedBackendMaintenance(run)
 	}
 	if err != nil {
-		return out, err
+		return CompactStorageStats(stats), err
 	}
 	finishValueLogFence()
 	fenceActive = false

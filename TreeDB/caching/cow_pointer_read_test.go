@@ -25,9 +25,7 @@ func (b *cowRefusingBasisBackend) AcquireSnapshotWithAllocationAdmission(admit f
 	return b.DB.AcquireSnapshotWithAllocationAdmission(admit)
 }
 
-// Until Open enables the mode, this fixture installs the private COW owner into
-// a fully initialized cached DB. All point writes still use the ordinary batch
-// placement and canonical publication entry point.
+// Open the production COW owner, including its original cleanup worker binding.
 func cowPointerFixture(t *testing.T) *DB {
 	t.Helper()
 	dir := t.TempDir()
@@ -36,7 +34,7 @@ func cowPointerFixture(t *testing.T) *DB {
 		t.Fatal(err)
 	}
 	db, err := Open(dir, backend, Options{
-		DisableWAL: true, AllowUnsafe: true, FlushThreshold: 1 << 30,
+		DisableWAL: true, AllowUnsafe: true, MemtableMode: "cow_btree", FlushThreshold: 1 << 30,
 		MemtableShards: 2, ValueLogPointerThreshold: 1,
 		ValueLogCompression: uint8(vlogCompressionOff),
 	})
@@ -44,12 +42,6 @@ func cowPointerFixture(t *testing.T) *DB {
 		_ = backend.Close()
 		t.Fatal(err)
 	}
-	c, err := newCOWCache(backend, 2, memtable.DefaultCOWLimits())
-	if err != nil {
-		_ = db.Close()
-		t.Fatal(err)
-	}
-	db.cow = c
 	t.Cleanup(func() {
 		if !db.closing.Load() {
 			_ = db.Close()
@@ -157,7 +149,7 @@ func TestCOWPointerCheckpointCapturedBasisAndTombstones(t *testing.T) {
 	}
 }
 
-func TestCOWCheckpointAcceptedPrefixHandoffRefusalDrainRetry(t *testing.T) {
+func TestCOWCheckpointExactPreacceptedReceiptIgnoresCurrentCaptureRefusal(t *testing.T) {
 	db := cowPointerFixture(t)
 	backend := &cowRefusingBasisBackend{DB: db.backend.(*backenddb.DB)}
 	db.backend = backend
@@ -165,12 +157,11 @@ func TestCOWCheckpointAcceptedPrefixHandoffRefusalDrainRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	backend.refuse = true
-	if err := db.Checkpoint(); err != memtable.ErrCOWCapacity {
-		t.Fatalf("handoff refusal=%v", err)
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("exact receipt depended on current capture: %v", err)
 	}
-	h := db.cow.handoff
-	if h == nil || !h.accepted || len(db.cow.cut.frozen) == 0 || db.cow.cut.basis != h.cut.basis {
-		t.Fatal("refusal dropped accepted prefix or changed basis")
+	if db.cow.handoff != nil || len(db.cow.cut.frozen) != 0 {
+		t.Fatal("exact accepted receipt did not hand off")
 	}
 	if got, err := backend.Get([]byte("a")); err != nil || string(got) != "prefix" {
 		t.Fatalf("accepted backend=%q err=%v", got, err)

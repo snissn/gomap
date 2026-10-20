@@ -63,4 +63,5 @@ func (l *cowViewReleaseLease) Close() {
 	b.stats.TotalBytes -= charge
 	b.releaseControlLocked()
 	b.mu.Unlock()
+	b.releaseMaintenanceReservation()
 }

@@ -56,7 +56,7 @@ func (backing *resourcePinnedBacking) release() error {
 		return nil
 	}
 	var holder resourceReleaseFrameV6
-	if ready, err := holder.backing(backing, nil); !ready || err != nil {
+	if ready, err := holder.backing(backing); !ready || err != nil {
 		return err
 	}
 	if holder.current == nil {
@@ -65,7 +65,7 @@ func (backing *resourcePinnedBacking) release() error {
 	root := holder.current
 	root.parent = nil
 	root.current = root
-	completion, _, err := root.continueWork(nil)
+	completion, _, err := root.releaseGraph()
 	if err != nil {
 		return err
 	}
@@ -227,7 +227,7 @@ func (token *StableResourceToken) releaseMetadata() error {
 		return nil
 	}
 	var holder resourceReleaseFrameV6
-	if ready, err := holder.tokenMetadata(token, nil); !ready || err != nil {
+	if ready, err := holder.tokenMetadata(token); !ready || err != nil {
 		return err
 	}
 	if holder.current == nil {
@@ -236,7 +236,7 @@ func (token *StableResourceToken) releaseMetadata() error {
 	root := holder.current
 	root.parent = nil
 	root.current = root
-	completion, _, err := root.continueWork(nil)
+	completion, _, err := root.releaseGraph()
 	if err != nil {
 		return err
 	}
@@ -246,10 +246,10 @@ func (token *StableResourceToken) releaseMetadata() error {
 }
 func (token *StableResourceToken) cloneOwnedPinnedDirectory(lane, id, path string, frontier DurableFrontier, field ReachabilityField, values []StableLogicalObligation, directory *DependencyDirectoryV2, onRelease func()) (*StableResourceToken, error) {
 	if token != nil && token.importedSource != nil {
-		if onRelease != nil || directory != nil {
+		if onRelease != nil {
 			return nil, ErrResourceOwnership
 		}
-		return newImportedResourceToken(token.metadata.owner, token.importedSource, token.physicalBacking.sourceRoot, lane, id, path, frontier, field, values)
+		return newImportedResourceToken(token.metadata.owner, token.importedSource, token.physicalBacking.sourceRoot, lane, id, path, frontier, field, values, directory)
 	}
 	if onRelease != nil || token.metadata == nil || token.physicalBacking == nil || token.released.Load() {
 		return nil, ErrResourceOwnership
@@ -279,7 +279,11 @@ func (token *StableResourceToken) cloneOwnedPinnedDirectory(lane, id, path strin
 	if err != nil {
 		return nil, err
 	}
-	obligations, err := newResourceObligationBacking(owner, values, field)
+	// A selected physical entry can retain obligations from several fields.
+	// field is its representative reachability, not a restriction on the union;
+	// validate each retained obligation against its own exact field. Producer
+	// construction still validates against spec.Reachability above.
+	obligations, err := newResourceObligationBacking(owner, values, "")
 	if err != nil {
 		allocation.drop()
 		allocation.refund()
@@ -307,7 +311,7 @@ func (token *StableResourceToken) cloneOwnedPinnedDirectory(lane, id, path strin
 	}
 	var identityPin *IdentityPin
 	if spec.PinRegistry != nil {
-		identityPin, err = spec.PinRegistry.Pin(token.identity)
+		identityPin, err = token.identityPin.clone()
 		if err != nil {
 			if directory != nil {
 				directory.Release()

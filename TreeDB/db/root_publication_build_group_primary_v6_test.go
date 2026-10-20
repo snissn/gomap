@@ -46,7 +46,7 @@ func groupPrimaryWriteV6(t *testing.T, db *DB, g *RootPublicationBuildGroup, n i
 // These are the original production transactions returned by the ordinary
 // zipper, not independently constructed stand-ins or scalar accounting probes.
 func TestRootPublicationBuildGroupPrimaryV6SupersessionAndHandoff(t *testing.T) {
-	db, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+	db, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +111,7 @@ func TestRootPublicationBuildGroupPrimaryV6SupersessionAndHandoff(t *testing.T) 
 }
 
 func TestRootPublicationBuildGroupPrimaryV6AbandonKeepsBorrowedReader(t *testing.T) {
-	db, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+	db, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +147,7 @@ func TestRootPublicationBuildGroupPrimaryV6AbandonKeepsBorrowedReader(t *testing
 // A surviving bank reader owns its immutable root and component closure; it
 // must not retain the released mutable transaction descriptor after Abort.
 func TestPrimaryConstructionV6AbortDetachesRetainedReader(t *testing.T) {
-	db, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+	db, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +182,7 @@ func TestPrimaryConstructionV6AbortDetachesRetainedReader(t *testing.T) {
 // Abort refusal. The failed transaction and DATA tracker stay on the SAME
 // original physical owner, while Close releases serialization and teardown.
 func TestRootPublicationBuildGroupPrimaryV6FailedAbortRetainsOriginalDebt(t *testing.T) {
-	db, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+	db, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -268,7 +268,7 @@ func TestRootPublicationBuildGroupPrimaryV6FailedAbortRetainsOriginalDebt(t *tes
 // A failing successor cannot dispose its still-needed predecessor or DATA
 // closure. Both custody cells contain the SAME original production objects.
 func TestRootPublicationBuildGroupPrimaryV6FailedNextKeepsPredecessor(t *testing.T) {
-	db, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+	db, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -346,7 +346,7 @@ func TestRootPublicationBuildGroupPrimaryV6FailedNextKeepsPredecessor(t *testing
 // Close must preserve that FIRST refusal and both constructors, without trying
 // either cleanup action again or refunding the group's unresolved closure.
 func TestRootPublicationBuildGroupPrimaryV6SupersessionRefusalKeepsBoth(t *testing.T) {
-	database, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+	database, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatal(err)
 	}

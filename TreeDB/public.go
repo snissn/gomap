@@ -162,6 +162,7 @@ type UpdateFunc = db.UpdateFunc
 
 // DB is the public TreeDB handle (cached mode by default; read-only opens skip caching).
 type DB struct {
+	ownedCloseGuard                      *db.OwnedCallbackCloseGuard
 	txnOwner                             *transactionowner.Owner
 	cached                               *caching.DB
 	backend                              *db.DB
@@ -780,6 +781,13 @@ func Open(opts Options) (*DB, error) {
 }
 
 func openResolved(opts Options) (*DB, error) {
+	return openResolvedWithCacheRole(opts, false)
+}
+
+// backendOnly leaves logical publication with the returned backend. Physical
+// profile/format options are resolved unchanged before selecting cache services.
+// This choice is made only at Open; a live cache never changes its owner role.
+func openResolvedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
 	if opts.MemtableMode == "cow_btree" {
 		if opts.ReadOnly {
 			return nil, caching.ErrCOWUnsupported
@@ -1095,13 +1103,8 @@ func openResolved(opts Options) (*DB, error) {
 		}
 		return nil, fmt.Errorf("treedb: snapshot side store %q has no owner", name)
 	}
-	// Foreground COW writes publish the prepared cache cut under command-WAL
-	// authority. Its physical checkpoint uses the existing PRIMARY constructor
-	// and promotion. Select only the main backend after side-store options have
-	// been copied; those independent stores retain their existing format policy.
-	if opts.CommandWAL && opts.MemtableMode == "cow_btree" {
-		opts.IndexPrimaryDirectory = true
-	}
+	// COW foreground authority and physical DATA sealing remain distinct. The
+	// existing DATA publisher is shared by cached and ordinary backend callers.
 	opts.Dir = maindbDir
 	backend, err := db.Open(opts)
 	if err != nil {
@@ -1115,7 +1118,7 @@ func openResolved(opts Options) (*DB, error) {
 	}
 
 	if opts.ReadOnly {
-		return &DB{backend: backend, dictdb: dictBackend, templateDB: templateDB, writePath: writePath, notifyError: opts.NotifyError, resolvedProfile: Profile(opts.ResolvedProfile), deprecatedProfileAlias: Profile(opts.DeprecatedProfileAlias), durabilityMode: computeDurabilityMode(opts), valueLogReadIntegrity: valueLogReadIntegrityLabel(opts), dir: rootDir}, nil
+		return &DB{ownedCloseGuard: backend.OwnedCallbackCloseGuard(), backend: backend, dictdb: dictBackend, templateDB: templateDB, writePath: writePath, notifyError: opts.NotifyError, resolvedProfile: Profile(opts.ResolvedProfile), deprecatedProfileAlias: Profile(opts.DeprecatedProfileAlias), durabilityMode: computeDurabilityMode(opts), valueLogReadIntegrity: valueLogReadIntegrityLabel(opts), dir: rootDir}, nil
 	}
 
 	normalizeBackpressureDefaults(&opts)
@@ -1132,8 +1135,15 @@ func openResolved(opts Options) (*DB, error) {
 		valueLogMaxSegmentBytes = int64(^uint32(0)) - 4
 	}
 
+	cacheMode := opts.MemtableMode
+	if backendOnly && cacheMode == "cow_btree" {
+		// Backend-root producers publish directly. Reuse the ordinary cache's
+		// leaf/value-log services without binding a second logical authority.
+		// Keep the requested physical and durability options intact for DATA.
+		cacheMode = "btree"
+	}
 	txnOwner := transactionowner.New()
-	if opts.MemtableMode == "cow_btree" {
+	if cacheMode == "cow_btree" {
 		if err := backend.BindPrivateCOWOwner(txnOwner); err != nil {
 			_ = backend.Close()
 			if dictBackend != nil {
@@ -1147,7 +1157,7 @@ func openResolved(opts Options) (*DB, error) {
 	}
 	cached, err := caching.Open(opts.Dir, backend, caching.Options{
 		FlushThreshold:                             opts.FlushThreshold,
-		MemtableMode:                               opts.MemtableMode,
+		MemtableMode:                               cacheMode,
 		COWMemtableLimits:                          opts.COWMemtableLimits,
 		TransactionOwner:                           txnOwner,
 		MemtableShards:                             opts.MemtableShards,
@@ -1247,9 +1257,23 @@ func openResolved(opts Options) (*DB, error) {
 		return nil, err
 	}
 
+	if cacheMode == "cow_btree" {
+		if err := backend.BindNativeSemanticBridge(txnOwner, cached); err != nil {
+			_ = cached.Close()
+			_ = backend.Close()
+			if dictBackend != nil {
+				_ = dictBackend.Close()
+			}
+			if templateDB != nil {
+				_ = templateDB.Close()
+			}
+			return nil, err
+		}
+	}
+
 	cached.SetDictStore(dictStore)
 	cached.SetTemplateStore(templateStore)
-	out := &DB{txnOwner: txnOwner, cached: cached, backend: backend, dictdb: dictBackend, templateDB: templateDB, writePath: writePath, commandWALCached: opts.CommandWAL, publicBatchWriteSyncPhaseEnabled: opts.CommandWAL && opts.PublicBatchWriteSyncPhaseStats, notifyError: opts.NotifyError, resolvedProfile: Profile(opts.ResolvedProfile), deprecatedProfileAlias: Profile(opts.DeprecatedProfileAlias), durabilityMode: computeDurabilityMode(opts), valueLogReadIntegrity: valueLogReadIntegrityLabel(opts), dir: rootDir}
+	out := &DB{ownedCloseGuard: backend.OwnedCallbackCloseGuard(), txnOwner: txnOwner, cached: cached, backend: backend, dictdb: dictBackend, templateDB: templateDB, writePath: writePath, commandWALCached: opts.CommandWAL, publicBatchWriteSyncPhaseEnabled: opts.CommandWAL && opts.PublicBatchWriteSyncPhaseStats, notifyError: opts.NotifyError, resolvedProfile: Profile(opts.ResolvedProfile), deprecatedProfileAlias: Profile(opts.DeprecatedProfileAlias), durabilityMode: computeDurabilityMode(opts), valueLogReadIntegrity: valueLogReadIntegrityLabel(opts), dir: rootDir}
 	if out.commandWALCached {
 		// ponytail: reuse the existing bounded logical-payload budget. Larger
 		// point values use the batch's compact persistent-value references.
@@ -1847,6 +1871,9 @@ func (db *DB) closeMaintenance() error {
 func (db *DB) Close() error {
 	if db == nil {
 		return nil
+	}
+	if err := db.ownedCloseGuard.CheckClose(); err != nil {
+		return err
 	}
 	db.bgVac.deferredVectorBuildClosed.Store(true)
 	db.bgVac.Stop()
@@ -2738,15 +2765,7 @@ func (db *DB) checkpointCachedForPublicCommandWAL() error {
 		return err
 	}
 	if db.commandWALCached && db.backend != nil {
-		var refreshErr error
-		if db.cached.COWMode() {
-			// Even an empty checkpoint can advance the backend's physical root.
-			// Drain admitted writers before taking the command-WAL gate, then
-			// install that successor basis before admitting another C1 publication.
-			refreshErr = db.runCachedBackendMaintenance(db.refreshPublicCommandWALCheckpointFallback)
-		} else {
-			refreshErr = db.refreshPublicCommandWALCheckpointFallback()
-		}
+		refreshErr := db.refreshPublicCommandWALCheckpointFallback()
 		if refreshErr != nil {
 			return refreshErr
 		}

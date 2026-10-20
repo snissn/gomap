@@ -12,7 +12,7 @@ import (
 
 // The applying FSM owns all semantic positions; clients supply only the
 // frozen source tuple and fixed single-group layout.
-func (h *Harness) preflightVectorPrepareV1(entry raftentry.CommandEntryV1, meta ApplyMetadataV1) (commitlog.VectorPrepareV1, *collections.Collection, error) {
+func (h *Harness) decodeVectorPrepareV1(entry raftentry.CommandEntryV1, meta ApplyMetadataV1) (commitlog.VectorPrepareV1, *collections.Collection, error) {
 	guard, err := decodeExpectedCatalogVersionV1(entry.Target.ExpectedCatalogVersion)
 	if err != nil {
 		return commitlog.VectorPrepareV1{}, nil, err
@@ -42,6 +42,14 @@ func (h *Harness) preflightVectorPrepareV1(entry raftentry.CommandEntryV1, meta 
 	if err != nil {
 		return v, nil, codeCollectionApplyError(err)
 	}
+	return v, c, nil
+}
+
+func (h *Harness) preflightVectorPrepareV1(entry raftentry.CommandEntryV1, meta ApplyMetadataV1) (commitlog.VectorPrepareV1, *collections.Collection, error) {
+	v, c, err := h.decodeVectorPrepareV1(entry, meta)
+	if err != nil {
+		return v, nil, err
+	}
 	if err := h.withVectorPrepareOwnerV1(c, v, func(*collections.CommandWALAdmittedCollection) error { return nil }); err != nil {
 		return v, nil, codeCollectionApplyError(err)
 	}
@@ -49,7 +57,10 @@ func (h *Harness) preflightVectorPrepareV1(entry raftentry.CommandEntryV1, meta 
 }
 
 func (h *Harness) applyVectorPrepareV1(entry raftentry.CommandEntryV1, meta ApplyMetadataV1) (raftentry.ApplyResultV1, error) {
-	v, c, err := h.preflightVectorPrepareV1(entry, meta)
+	// The prepared executor validates the source under the actual mutation
+	// locks before Append. A separate prepared preflight here would retire the
+	// FSM's borrowed storage owner before that executor can use it.
+	v, c, err := h.decodeVectorPrepareV1(entry, meta)
 	if err != nil {
 		return raftentry.ApplyResultV1{}, err
 	}

@@ -33,6 +33,40 @@ func fixedPeerReadWindowsReplyV1(path string) ([]byte, error) {
 	return io.ReadAll(file)
 }
 
+func fixedPeerReadRuntimeOpenV1(path string) ([]byte, error) {
+	return fixedPeerReadWindowsReplyV1(path)
+}
+
+func TestFixedPeerWindowsRuntimeOpenReadSharesRenameHandleV1(t *testing.T) {
+	config := FixedPeerTCPConfigV1{NodeID: "owner-1", DataRoot: "selected-config"}
+	path := filepath.Join(t.TempDir(), "node-config.json")
+	want, err := fixedPeerRuntimeOpenIdentityV1(os.Getpid(), config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fixedPeerWriteRuntimeOpenV1(path, config); err != nil {
+		t.Fatal(err)
+	}
+	path += ".open"
+	pathp, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle, err := windows.CreateFile(pathp, windows.DELETE,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
+		nil, windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer windows.CloseHandle(handle)
+	if _, err := os.ReadFile(path); !errors.Is(err, windows.ERROR_SHARING_VIOLATION) {
+		t.Fatalf("old runtime-open reader did not reject held DELETE handle: %v", err)
+	}
+	if err := fixedPeerWaitRuntimeOpenV1(t.Context(), path, want, fixedPeerReadRuntimeOpenV1); err != nil {
+		t.Fatalf("runtime-open acknowledgement with held DELETE handle: %v", err)
+	}
+}
+
 func TestFixedPeerWindowsReplyReadSharesRenameHandleV1(t *testing.T) {
 	stage := &fixedPeerWindowsStageV1{path: filepath.Join(t.TempDir(), "config.json")}
 	// Both allocation and activation use this same reader. Hold the rename's

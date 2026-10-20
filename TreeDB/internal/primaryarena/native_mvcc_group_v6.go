@@ -120,20 +120,16 @@ func (a *Arena) sealConstructedCurrentAbsenceV6(destination, current Ref, entry 
 	return dst.readCertificate, true, nil
 }
 
-// DropNativeMVCCConstructionToReleaseQueueV6 retires this SAME constructor's
-// alias and root edge onto its own embedded, preborn physical queue. Ordinary
-// writer progress cannot drain descendants from this native-owned queue.
-// This transition does not refund the transaction or report physical Finish.
-func (a *Arena) DropNativeMVCCConstructionToReleaseQueueV6(ref Ref, owner ReadRootConstructionV6, queue *ReleaseQueue, w *iterator.OrdinalScanWork) (bool, error) {
+// DropReadRootConstructionToReleaseQueueV6 consumes the exact original
+// constructor discovery alias and root edge together on its embedded ordinary
+// queue. This synchronous ownership transition has no work-credit governor.
+func (a *Arena) DropReadRootConstructionToReleaseQueueV6(ref Ref, owner ReadRootConstructionV6, queue *ReleaseQueue) error {
 	bytes := 2*uint64(unsafe.Sizeof(bank{})) + 2*uint64(unsafe.Sizeof(ReleaseQueue{}))
-	if !reserve(w, 2, bytes) {
-		return false, nil
-	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	b := a.valid(ref)
 	if b == nil || b.refs == 0 || owner == nil || queue == nil || queue.owner != a || (b.construction != nil && b.construction != owner) {
-		return false, ErrStale
+		return ErrStale
 	}
 	b.refs--
 	b.construction = nil
@@ -142,5 +138,5 @@ func (a *Arena) DropNativeMVCCConstructionToReleaseQueueV6(ref Ref, owner ReadRo
 	}
 	a.counters.RootDrops++
 	a.counters.Bytes += bytes
-	return true, nil
+	return nil
 }

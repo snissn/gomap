@@ -190,6 +190,7 @@ func (c Compression) String() string {
 }
 
 type Config struct {
+	BuildCodec  *BuildCodec
 	Encoding    Encoding
 	Compression Compression
 }
@@ -276,7 +277,7 @@ func (b *GranuleBuilder) BuildInt64(values []int64) (EncodedGranule, error) {
 		return EncodedGranule{}, err
 	}
 	b.raw = raw
-	selection, err := admitCompressionInto(b.compressed[:0], raw, b.cfg.Encoding, b.cfg.Compression)
+	selection, err := admitCompressionIntoWithCodec(b.compressed[:0], raw, b.cfg.Encoding, b.cfg.Compression, b.cfg.BuildCodec)
 	if err != nil {
 		return EncodedGranule{}, err
 	}
