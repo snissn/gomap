@@ -701,7 +701,7 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/collections/column_vector_graph_adjacency_direct_source.go", classification: typedStorageLegacyDerived, matchingLines: 5, occurrences: 5},
 	{path: "TreeDB/collections/column_vector_graph_adjacency_direct_source_test.go", classification: typedStorageLegacyDerived, matchingLines: 1, occurrences: 1},
 	{path: "TreeDB/collections/column_vector_graph_adjacency_state_source.go", classification: typedStorageLegacyDerived, matchingLines: 8, occurrences: 8},
-	{path: "TreeDB/collections/column_vector_graph_manifest.go", classification: typedStorageLegacyDerived, matchingLines: 28, occurrences: 33},
+	{path: "TreeDB/collections/column_vector_graph_manifest.go", classification: typedStorageLegacyDerived, matchingLines: 29, occurrences: 34},
 	{path: "TreeDB/collections/column_vector_graph_manifest_test.go", classification: typedStorageLegacyDerived, matchingLines: 60, occurrences: 79},
 	{path: "TreeDB/collections/column_vector_graph_row_reader.go", classification: typedStorageLegacyDerived, matchingLines: 13, occurrences: 14},
 	{path: "TreeDB/collections/column_vector_graph_row_reader_test.go", classification: typedStorageLegacyDerived, matchingLines: 16, occurrences: 17},

@@ -882,6 +882,10 @@ func (c *Collection) columnGraphVectorIndexStatusAtSnapshot(name string, snap *b
 
 // Both manifest formats share the original graph/TVIS and physical asset validator.
 func columnGraphVectorIndexStatusForRecords(rootDir, collection string, cfg *ColumnStoreConfig, def VectorIndexDefinition, records []columnManifestRecord, baseChecksum uint64, baseChecksumOK bool) (VectorIndexStatus, error) {
+	return columnGraphVectorIndexStatusForRecordsWithAdmission(rootDir, collection, cfg, def, records, baseChecksum, baseChecksumOK, nil)
+}
+
+func columnGraphVectorIndexStatusForRecordsWithAdmission(rootDir, collection string, cfg *ColumnStoreConfig, def VectorIndexDefinition, records []columnManifestRecord, baseChecksum uint64, baseChecksumOK bool, beforeAssets func(columnVectorIndexStateSnapshot) error) (VectorIndexStatus, error) {
 	status := VectorIndexStatus{Name: def.Name, Strategy: def.Strategy}
 	graphRecord, ok := findColumnVectorGraphManifestRecord(records, def.Name)
 	if !ok {
@@ -917,6 +921,11 @@ func columnGraphVectorIndexStatusForRecords(rootDir, collection string, cfg *Col
 				status.Reason = VectorIndexReasonColumnGraphAssetMismatch
 				status.RebuildNeeded = true
 				return status, nil
+			}
+			if beforeAssets != nil {
+				if err := beforeAssets(state); err != nil {
+					return status, err
+				}
 			}
 			if err := validateColumnVectorIndexStateAssetsForStatus(rootDir, collection, *cfg, def, state, graph); err != nil {
 				status.State = VectorIndexStateColumnGraphUnavailable

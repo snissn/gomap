@@ -352,29 +352,46 @@ func (c *Collection) nativeVectorGraphStatus(name string) (out VectorIndexStatus
 	if err != nil {
 		return out, err
 	}
+	metadata, err := nativeSchemaBackingCharge(reflect.ValueOf(&r.meta), 0)
+	if err != nil {
+		return out, err
+	}
+	metadata, err = nativeTypedCheckedMul(metadata, 16)
+	if err != nil {
+		return out, err
+	}
+	if err = nativeTypedCheckedAdd(&charge, metadata); err != nil {
+		return out, err
+	}
 	lease, err := r.capture.NativeAllocator().AdmitNativeBytes(charge)
 	if err != nil {
 		return out, err
 	}
 	defer lease.Close()
-	// The maintained status validator opens inv-norm assets and can use heap
-	// fallback. Admit the same captured source/asset/decoded-row bound before
-	// its original decoder allocates, independently of record compression.
-	capacity, err := nativeVectorGraphCapacity(r.meta, r.capture.Snapshot(), manifest.baseRoot, r.database.ColumnAssetRootDir(), def, h, func(n uint64) error { return lease.Resize(max(charge, n)) })
-	if err != nil {
-		return out, err
-	}
-	if err = nativeTypedCheckedAdd(&charge, capacity); err != nil {
-		return out, err
-	}
-	if err = lease.Resize(charge); err != nil {
-		return out, err
-	}
 	records, err := nativeVectorGraphRecords(r.capture.Snapshot(), manifest.baseRoot)
 	if err != nil {
 		return out, err
 	}
-	return columnGraphVectorIndexStatusForRecords(r.database.ColumnAssetRootDir(), r.meta.Name, r.meta.Options.ColumnStore, def, records, binary.BigEndian.Uint64(h.Digest[:8]), true)
+	// Status never constructs HNSW or a replacement TVIS. Its original decoder
+	// first checks the captured state identity; stale graphs open no assets.
+	// Only a matching state reaches asset validation and the inv-norm reader.
+	// The latter requires uncompressed float32 sections, so sixteen copies of
+	// actual asset bytes cover input, parsed views and heap/decode fallbacks.
+	return columnGraphVectorIndexStatusForRecordsWithAdmission(r.database.ColumnAssetRootDir(), r.meta.Name, r.meta.Options.ColumnStore, def, records, binary.BigEndian.Uint64(h.Digest[:8]), true, func(state columnVectorIndexStateSnapshot) error {
+		for _, asset := range state.Assets {
+			if asset.Ref.Length <= 0 {
+				return backenddb.ErrNativeSemanticUnsupported
+			}
+			n, err := nativeTypedCheckedMul(uint64(asset.Ref.Length), 16)
+			if err != nil {
+				return err
+			}
+			if err = nativeTypedCheckedAdd(&charge, n); err != nil {
+				return err
+			}
+		}
+		return lease.Resize(charge)
+	})
 }
 
 func nativeVectorGraphRecordCapacity(snap *backenddb.Snapshot, root uint64) (uint64, error) {
