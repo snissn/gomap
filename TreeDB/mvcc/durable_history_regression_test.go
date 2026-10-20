@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
+	"runtime"
 	"sort"
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/mvcckey"
 	"github.com/snissn/gomap/TreeDB/mvcc"
 )
@@ -218,8 +221,26 @@ func TestPublicHistoryVacuumAndSubsequentFlush(t *testing.T) {
 		heldWant[key] = entry
 	}
 	verify("vacuum/before")
-	if err := db.VacuumIndexOnline(context.Background()); err != nil {
-		t.Fatal(err)
+	vacuumErr := db.VacuumIndexOnline(context.Background())
+	if runtime.GOOS == "windows" {
+		// Windows must refuse the actual maintenance call without publishing a
+		// new cut. Keep exercising the remaining portable flush/reopen trace.
+		if !errors.Is(vacuumErr, backenddb.ErrVacuumUnsupported) {
+			t.Fatalf("online vacuum platform refusal: %v", vacuumErr)
+		}
+		current, err := db.AcquireMVCCReadCut()
+		if err != nil {
+			t.Fatal(err)
+		}
+		unchanged := *current.State() == *held.State()
+		if err := current.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if !unchanged {
+			t.Fatal("unsupported online vacuum published state")
+		}
+	} else if vacuumErr != nil {
+		t.Fatal(vacuumErr)
 	}
 	verify("vacuum/after")
 	physicalHistory("held/after-vacuum", held, heldWant)

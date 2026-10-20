@@ -114,14 +114,19 @@ func TestOwnedStreamedRequirementsExactUnionAndRefusal(t *testing.T) {
 }
 
 func TestStableLogicalObligationEmptyRequirementsIndexAllocations(t *testing.T) {
+	work := StableResourceClosureWork{SourceEntriesInspected: 3, RequirementObligationsInspected: 5, FinalRequirementProofFastPath: 7}
 	check := func() {
 		index, err := indexStableLogicalObligationRequirements(StableLogicalObligationRequirements{})
 		if err != nil || len(index.scoped) != 0 || len(index.global) != 0 || len(index.namespaces) != 0 || len(index.desired) != 0 {
 			t.Fatalf("empty index=%+v err=%v", index, err)
 		}
+		actual, err := validateSelectedResourceRequirements(nil, StableLogicalObligationRequirements{}, work)
+		if err != nil || actual != work {
+			t.Fatalf("empty selected requirements changed work: actual=%+v want=%+v err=%v", actual, work, err)
+		}
 	}
 	if allocs := testing.AllocsPerRun(100, check); allocs != 0 {
-		t.Fatalf("empty requirements allocated unused index maps: %v allocations", allocs)
+		t.Fatalf("empty requirements allocated unused validation state: %v allocations", allocs)
 	}
 	// Empty fields are not permission to ignore unscoped obligations.
 	if _, err := indexStableLogicalObligationRequirements(StableLogicalObligationRequirements{Obligations: []StableLogicalObligation{appendMutationTestObligation(1)}}); !errors.Is(err, ErrUnresolvedResource) {

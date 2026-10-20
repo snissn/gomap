@@ -35,7 +35,20 @@ func (c *cowCache) prepareRollover() (*cowRollover, error) {
 			count++
 		}
 	}
-	if count == 0 && old.logicalSeq == old.frozenLogicalSeq {
+	// Fix the exact root endpoint while the original writer exclusion holds.
+	// A WAL barrier may have installed a root-neutral suffix after the last
+	// mutation. The original queue proves that suffix before the strict mark;
+	// later barriers remain outside this finite captured endpoint. A refusal
+	// below can leave a conservative mark, just like failed rollover preparation.
+	endpoint := rootpublication.SealedPrefix{LogicalSequence: old.logicalSeq, CanonicalLSN: old.visibleCommandLSN}
+	if c.prefix != nil {
+		var err error
+		endpoint, err = c.prefix.MarkAcceptedRootNeutralBoundary(endpoint)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if count == 0 && old.logicalSeq == old.frozenLogicalSeq && old.frozenCommandLSN == endpoint.CanonicalLSN {
 		return nil, nil
 	}
 	n := len(c.writers)
@@ -79,16 +92,7 @@ func (c *cowCache) prepareRollover() (*cowRollover, error) {
 			}
 		}
 	}
-	// This exact V/C pair belongs to the roots being frozen, including native-
-	// only cuts. Mark it before the original writer exclusion can resume writes;
-	// the later physical builder must not infer an interior coalesced endpoint.
-	if c.prefix != nil {
-		if err := c.prefix.MarkAcceptedBoundary(rootpublication.SealedPrefix{LogicalSequence: old.logicalSeq, CanonicalLSN: old.visibleCommandLSN}); err != nil {
-			return p, err
-		}
-	}
-
-	next := &cowReadCut{visibleCommandLSN: old.visibleCommandLSN, logicalSeq: old.logicalSeq, frozenLogicalSeq: old.logicalSeq, frozenCommandLSN: old.visibleCommandLSN, frozenSemanticRootSet: old.semanticRootSet, semanticRootSet: p.semantic, refs: 1, cache: c, lease: p.cutLease, basis: old.basis, shards: make([]cowTable, n), frozen: make([]cowTable, len(old.frozen), len(old.frozen)+count)}
+	next := &cowReadCut{visibleCommandLSN: endpoint.CanonicalLSN, logicalSeq: old.logicalSeq, frozenLogicalSeq: old.logicalSeq, frozenCommandLSN: endpoint.CanonicalLSN, frozenSemanticRootSet: old.semanticRootSet, semanticRootSet: p.semantic, refs: 1, cache: c, lease: p.cutLease, basis: old.basis, shards: make([]cowTable, n), frozen: make([]cowTable, len(old.frozen), len(old.frozen)+count)}
 	next.basis.retain()
 	p.semantic = nil // next adopts the returned active successor exactly once
 	if next.frozenSemanticRootSet != nil {

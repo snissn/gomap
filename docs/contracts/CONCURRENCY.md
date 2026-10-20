@@ -62,6 +62,10 @@ Handoff obtains backend state without cache writer locks, then takes writer
 ownership and `cutMu` only to swap the complete successor. Maintenance callback
 and basis refresh share the flush fence. Cleanup runs outside writer/admission/
 publication locks; it may perform existing physical-owner release work.
+During frontier capture, an already-assigned root-neutral WAL barrier may be
+joined through the accepted FIFO condition while writer exclusion remains held.
+Its installer needs neither cache writer lock; the join rechecks the original
+poison and Close state and cannot include a later root-changing publication.
 
 Snapshot/iterator owners preserve exact old reads while the DB remains open.
 DB Close refuses new reads and drains admitted reads before teardown. Finite

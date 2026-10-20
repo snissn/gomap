@@ -969,7 +969,12 @@ func TestPublicCOWTxnPhysicalSuccessorPreservesSequence(t *testing.T) {
 }
 
 func TestPublicCOWTxnGroupCommitSharesSyncAfterInstall(t *testing.T) {
-	db, _, blocked := cowPublicContractOpen(t, ProfileCommandWALDurable)
+	db, opts, blocked := cowPublicContractOpen(t, ProfileCommandWALDurable)
+	held := db.AcquireSnapshot()
+	if held == nil {
+		t.Fatal("opening snapshot unavailable")
+	}
+	defer held.Close()
 	db.commandWALGroupCommit.delay = time.Second
 	db.commandWALGroupCommit.maxCommits = 2
 	db.commandWALGroupCommit.maxBytes = 1 << 30
@@ -1020,6 +1025,57 @@ func TestPublicCOWTxnGroupCommitSharesSyncAfterInstall(t *testing.T) {
 	case n := <-groups:
 		t.Fatalf("redundant group sync: %d", n)
 	default:
+	}
+	// The final accepted command is the group's durable barrier. Checkpoint
+	// must cover that identity without requiring a later mutation to advance
+	// the cache's cut, and without changing an already-held logical view.
+	accepted := publicStatUint64(t, db, "treedb.command_wal.live_accepted_max_lsn")
+	logical := publicStatUint64(t, db, "treedb.cache.cow.txn.logical_seq")
+	if accepted != 3 || logical != 2 {
+		t.Fatalf("group endpoint accepted=%d logical=%d, want 3/2", accepted, logical)
+	}
+	for key, want := range map[string]string{"a": "one", "b": "two"} {
+		if got, err := db.Get([]byte(key)); err != nil || string(got) != want {
+			t.Fatalf("current %s=%q: %v", key, got, err)
+		}
+		cowPublicContractSnapshotValue(t, held, key, nil, false)
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint immediately after group ACK: %v", err)
+	}
+	if got := publicStatUint64(t, db, "treedb.applied_command_lsn"); got != accepted {
+		t.Fatalf("checkpoint applied=%d want accepted=%d", got, accepted)
+	}
+	if got := publicStatUint64(t, db, "treedb.cache.cow.txn.logical_seq"); got != logical {
+		t.Fatalf("checkpoint logical=%d want=%d", got, logical)
+	}
+	for _, key := range []string{"a", "b"} {
+		cowPublicContractSnapshotValue(t, held, key, nil, false)
+	}
+	if err := held.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	for key, want := range map[string]string{"a": "one", "b": "two"} {
+		if got, err := reopened.Get([]byte(key)); err != nil || string(got) != want {
+			t.Fatalf("reopened %s=%q: %v", key, got, err)
+		}
+	}
+	if got := publicStatUint64(t, reopened, "treedb.applied_command_lsn"); got != accepted {
+		t.Fatalf("reopened applied=%d want=%d", got, accepted)
 	}
 }
 

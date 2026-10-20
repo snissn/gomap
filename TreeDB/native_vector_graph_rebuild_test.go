@@ -16,6 +16,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/sourcepartition"
 	"github.com/snissn/gomap/TreeDB/internal/vectorpartition"
 	"github.com/snissn/gomap/TreeDB/internal/workstats"
@@ -211,7 +212,7 @@ func TestNativeVectorGraphRebuildLifecycleAndTransport(t *testing.T) {
 	if err := os.CopyFS(replayDir, os.DirFS(dir)); err != nil {
 		t.Fatal(err)
 	}
-	rebindNativeGraphSeed(t, replayDir, opts.DisableSideStores)
+	replaySeedReady := rebindNativeGraphSeed(t, replayDir, opts.DisableSideStores)
 	openDB(opts)
 	col, err = manager.OpenCollection("source")
 	if err != nil {
@@ -338,58 +339,63 @@ func TestNativeVectorGraphRebuildLifecycleAndTransport(t *testing.T) {
 	checkCurrentSource()
 	closeDB()
 
-	replayOpts := indexedSliceOptions(ProfileCommandWALDurable, replayDir)
-	layout, err := resolveOpenDirLayout(replayDir, replayOpts.DisableSideStores)
-	if err != nil {
-		t.Fatal(err)
+	// Namespace rebind governs only copied-seed transport. The original source
+	// still exercises the complete producer, held-cut, append and reopen lifecycle.
+	replayOpts := opts
+	if replaySeedReady {
+		replayOpts = indexedSliceOptions(ProfileCommandWALDurable, replayDir)
+		layout, err := resolveOpenDirLayout(replayDir, replayOpts.DisableSideStores)
+		if err != nil {
+			t.Fatal(err)
+		}
+		walDir := backenddb.WALDirPath(layout.mainDir)
+		if err := os.MkdirAll(walDir, 0755); err != nil {
+			t.Fatal(err)
+		}
+		writer, err := commitlog.NewWriter(filepath.Join(walDir, commitlog.CommandSegmentName(0, 1)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Every field, including extensions/references, is copied from the actual
+		// successful producer using the original command-frame codec below.
+		appendErr := writer.AppendCommand(frame)
+		if appendErr == nil {
+			appendErr = writer.Sync()
+		}
+		if err := errors.Join(appendErr, writer.Close()); err != nil {
+			t.Fatal(err)
+		}
+		beforeReplay = workstats.Read().Replay
+		openDB(replayOpts)
+		if after := workstats.Read().Replay; after.FramesApplied-beforeReplay.FramesApplied != 1 || after.FrameErrors != beforeReplay.FrameErrors {
+			t.Fatal("actual graph envelope replay did not apply exactly once")
+		}
+		col, err = manager.OpenCollection("source")
+		if err != nil {
+			t.Fatal(err)
+		}
+		gotStatus, err = col.VectorIndexStatus(input.IndexName)
+		if err != nil {
+			t.Fatal(err)
+		}
+		checkGraph(gotStatus)
+		checkDocuments()
+		checkCurrentSource()
+		if handle.CommandWALNextLSN() != beforeNext+1 {
+			t.Fatal("transport altered assigned graph LSN")
+		}
+		if err := database.Checkpoint(); err != nil {
+			t.Fatal(err)
+		}
+		if indexedCRUDAppliedLSN(t, handle) != beforeNext {
+			t.Fatal("transport checkpoint missed actual graph command")
+		}
+		closeDB()
 	}
-	walDir := backenddb.WALDirPath(layout.mainDir)
-	if err := os.MkdirAll(walDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	writer, err := commitlog.NewWriter(filepath.Join(walDir, commitlog.CommandSegmentName(0, 1)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Every field, including extensions/references, is copied from the actual
-	// successful producer using the original command-frame codec below.
-	appendErr := writer.AppendCommand(frame)
-	if appendErr == nil {
-		appendErr = writer.Sync()
-	}
-	if err := errors.Join(appendErr, writer.Close()); err != nil {
-		t.Fatal(err)
-	}
-	beforeReplay = workstats.Read().Replay
-	openDB(replayOpts)
-	if after := workstats.Read().Replay; after.FramesApplied-beforeReplay.FramesApplied != 1 || after.FrameErrors != beforeReplay.FrameErrors {
-		t.Fatal("actual graph envelope replay did not apply exactly once")
-	}
-	col, err = manager.OpenCollection("source")
-	if err != nil {
-		t.Fatal(err)
-	}
-	gotStatus, err = col.VectorIndexStatus(input.IndexName)
-	if err != nil {
-		t.Fatal(err)
-	}
-	checkGraph(gotStatus)
-	checkDocuments()
-	checkCurrentSource()
-	if handle.CommandWALNextLSN() != beforeNext+1 {
-		t.Fatal("transport altered assigned graph LSN")
-	}
-	if err := database.Checkpoint(); err != nil {
-		t.Fatal(err)
-	}
-	if indexedCRUDAppliedLSN(t, handle) != beforeNext {
-		t.Fatal("transport checkpoint missed actual graph command")
-	}
-	closeDB()
 	beforeReplay = workstats.Read().Replay
 	openDB(replayOpts)
 	if after := workstats.Read().Replay; after.FramesApplied != beforeReplay.FramesApplied || after.FrameErrors != beforeReplay.FrameErrors {
-		t.Fatal("checkpointed transported graph replayed twice")
+		t.Fatal("checkpointed graph replayed twice")
 	}
 	col, err = manager.OpenCollection("source")
 	if err != nil {
@@ -403,7 +409,7 @@ func TestNativeVectorGraphRebuildLifecycleAndTransport(t *testing.T) {
 	checkDocuments()
 	checkCurrentSource()
 	// Append through the same public source producer after the real graph has
-	// survived transport and reopen. Its final closure must retain and decode
+	// survived checkpoint/reopen (and transport when supported). Retain and decode
 	// both graph/TVIS records while the new source generation stales the graph.
 	held, err = col.OpenCollectionReadView()
 	if err != nil {
@@ -483,11 +489,22 @@ func TestNativeVectorGraphRebuildLifecycleAndTransport(t *testing.T) {
 }
 
 // Match the maintained source-import fixture's original snapshot-restore path.
-func rebindNativeGraphSeed(t *testing.T, dir string, disableSideStores bool) {
+func rebindNativeGraphSeed(t *testing.T, dir string, disableSideStores bool) bool {
 	t.Helper()
 	layout, err := resolveOpenDirLayout(dir, disableSideStores)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		before := nativeGraphAssetContents(t, dir)
+		err := backenddb.RebindDurableRootSnapshotLayoutV1(layout.mainDir, "")
+		if !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
+			t.Fatalf("snapshot rebind platform refusal: %v", err)
+		}
+		if !reflect.DeepEqual(nativeGraphAssetContents(t, dir), before) {
+			t.Fatal("unsupported snapshot rebind changed the copied seed files")
+		}
+		return false
 	}
 	for _, side := range []string{layout.dictdbDir, layout.templatedbDir} {
 		if side == "" {
@@ -509,6 +526,7 @@ func rebindNativeGraphSeed(t *testing.T, dir string, disableSideStores bool) {
 	if err := backenddb.RebindDurableRootSnapshotLayoutV1(layout.mainDir, sideRoot); err != nil {
 		t.Fatal(err)
 	}
+	return true
 }
 
 func nativeGraphAssetContents(t *testing.T, dir string) map[string][sha256.Size]byte {

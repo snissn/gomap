@@ -393,6 +393,10 @@ func (c *Coordinator) MarkAcceptedBoundary(through SealedPrefix) error {
 	p := &c.accepted
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	return p.markAcceptedBoundaryLocked(through)
+}
+
+func (p *acceptedPrefixState) markAcceptedBoundaryLocked(through SealedPrefix) error {
 	if p.poison != nil {
 		return p.poison
 	}
@@ -415,6 +419,64 @@ func (c *Coordinator) MarkAcceptedBoundary(through SealedPrefix) error {
 	}
 	e.boundary = true
 	return nil
+}
+
+// MarkAcceptedRootNeutralBoundary closes only an actual installed root-neutral
+// suffix after the supplied exact root endpoint. The caller holds the original
+// COW writer exclusion: ordinary assignments cannot be waiting behind it. The
+// independent WAL barrier producer can finish assignment/installation without
+// that exclusion, so its in-flight tail may be joined on the original condition.
+// Proof and the unchanged strict boundary check share one accepted latch.
+func (c *Coordinator) MarkAcceptedRootNeutralBoundary(through SealedPrefix) (SealedPrefix, error) {
+	c = c.AcceptedPrefixOwner()
+	if c == nil {
+		return SealedPrefix{}, ErrAcceptedReceipt
+	}
+	p := &c.accepted
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for {
+		if p.poison != nil {
+			return SealedPrefix{}, p.poison
+		}
+		if p.closed {
+			return SealedPrefix{}, ErrClosed
+		}
+		if through.LogicalSequence != p.frontiers.V || through.CanonicalLSN > p.frontiers.C || through.CanonicalLSN < p.frontiers.S.CanonicalLSN {
+			return SealedPrefix{}, ErrAcceptedReceipt
+		}
+		endpoint, anchored, pending := through, through == p.frontiers.S, false
+		for i := 0; i < p.count; i++ {
+			e := &p.entries[p.order[(p.head+i)%len(p.order)]]
+			r, d := &e.receipt, &e.descriptor
+			if !anchored {
+				if r.Installed && !r.Uncertain && r.LogicalSequence == through.LogicalSequence && r.CanonicalLSN == through.CanonicalLSN {
+					anchored = true
+					continue
+				}
+				if r.CanonicalLSN > through.CanonicalLSN {
+					return SealedPrefix{}, ErrAcceptedReceipt
+				}
+				continue
+			}
+			if !r.Installed && !r.Uncertain {
+				pending = true
+				break
+			}
+			if r.Uncertain || !r.Assigned || r.LogicalSequence != through.LogicalSequence || !d.RootNeutral || len(d.Projections) != 0 || d.Custody != nil || d.SealTarget != nil || d.AdmittedBytes != 0 || d.CleanupBytes != 0 || endpoint.CanonicalLSN == ^uint64(0) || e.firstCanonicalLSN != endpoint.CanonicalLSN+1 || r.CanonicalLSN < e.firstCanonicalLSN {
+				return SealedPrefix{}, ErrAcceptedReceipt
+			}
+			endpoint.CanonicalLSN = r.CanonicalLSN
+		}
+		if !anchored {
+			return SealedPrefix{}, ErrAcceptedReceipt
+		}
+		if pending {
+			p.changed.Wait()
+			continue
+		}
+		return endpoint, p.markAcceptedBoundaryLocked(endpoint)
+	}
 }
 
 // Abort is a deferred safeguard for a native publication that did not reach

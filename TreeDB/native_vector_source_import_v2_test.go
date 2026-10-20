@@ -16,6 +16,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/sourcepartition"
 	"github.com/snissn/gomap/TreeDB/internal/vectorpartition"
 	"github.com/snissn/gomap/TreeDB/internal/workstats"
@@ -34,6 +35,9 @@ func TestNativeVectorPartitionSourceImportTransportReplayV2(t *testing.T) {
 	t.Setenv("TREEDB_DISABLE_VLOG_GENERATION_LOOP", "1")
 	source, replay := t.TempDir(), t.TempDir()
 	runNativeVectorSourceImportV2(t, source, replay, false)
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		return // The producer completed after asserting the copied-seed refusal.
+	}
 	runNativeVectorSourceImportV2(t, replay, "", true)
 }
 
@@ -110,29 +114,10 @@ func runNativeVectorSourceImportV2(t *testing.T, dir, replayDir string, replayed
 		}
 		// Restore copied physical identities through the maintained snapshot
 		// restore path; ordinary Open intentionally rejects stale source identities.
-		layout, err := resolveOpenDirLayout(replayDir, opts.DisableSideStores)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, side := range []string{layout.dictdbDir, layout.templatedbDir} {
-			if side == "" {
-				continue
-			}
-			if _, err := os.Stat(filepath.Join(side, "index.db")); os.IsNotExist(err) {
-				continue
-			} else if err != nil {
-				t.Fatal(err)
-			}
-			if err := backenddb.RebindDurableRootSnapshotLayoutV1(side, ""); err != nil {
-				t.Fatal(err)
-			}
-		}
-		sideRoot := ""
-		if !layout.disableSideStores {
-			sideRoot = layout.rootDir
-		}
-		if err := backenddb.RebindDurableRootSnapshotLayoutV1(layout.mainDir, sideRoot); err != nil {
-			t.Fatal(err)
+		if !rebindNativeGraphSeed(t, replayDir, opts.DisableSideStores) {
+			// Continue the complete portable producer/checkpoint/reopen checks,
+			// but do not append transport frames onto an unrebound copied seed.
+			replayDir = ""
 		}
 		database, err = Open(opts)
 		if err != nil {

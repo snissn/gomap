@@ -503,10 +503,7 @@ func validateSelectedResourceRequirements(source *StableResourceSet, r StableLog
 		}
 	}
 	if len(r.Streams) != 0 {
-		err := walkRequirementValues(r, &work, func(o StableLogicalObligation) error {
-			return uniqueSelectedRequirementOwner(diagnostics.borrow.backing, &scope, o, &work)
-		})
-		return work, err
+		return validateSelectedStreamRequirementValues(diagnostics.borrow.backing, &scope, r, work)
 	}
 	for _, o := range r.Obligations {
 		if !seen[requirementDesired(r, o)] {
@@ -514,4 +511,13 @@ func validateSelectedResourceRequirements(source *StableResourceSet, r StableLog
 		}
 	}
 	return work, nil
+}
+
+// The interface walk's callback can escape. Keep its work copy separate so
+// ordinary requirements do not allocate a heap work record, even when empty.
+func validateSelectedStreamRequirementValues(views *resourceKindBacking, scope *ownedDirectoryCodecScopeV2, r StableLogicalObligationRequirements, work StableResourceClosureWork) (StableResourceClosureWork, error) {
+	err := walkRequirementValues(r, &work, func(o StableLogicalObligation) error {
+		return uniqueSelectedRequirementOwner(views, scope, o, &work)
+	})
+	return work, err
 }
