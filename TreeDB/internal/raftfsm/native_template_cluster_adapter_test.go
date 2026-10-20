@@ -214,7 +214,14 @@ func runNativeTemplateClusterAdapter(t *testing.T, dir string, crash bool) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	firstRecord, firstDoc := nativeClusterTemplatePacket(t, `{"city":"hnl"}`)
+	const firstJSON = `{"city":"hnl","values":[null,false,true,1.25,{"nested":"value"}],"big":9007199254740993}`
+	firstRecord, _ := nativeClusterTemplatePacket(t, firstJSON)
+	// The current exported self-contained TD1I carries TD1H and all nested
+	// definitions. Subsequent hash-only input must reuse that exact dictionary.
+	firstDoc, err := collections.EncodeTemplateV1DocumentJSON([]byte(firstJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
 	insert := deterministicMutationEntry(t, nativewire.CommandInsertBatch, "templates", "native-template:first", nativewire.DocumentFormatTemplateV1,
 		[][]byte{[]byte("u1")}, [][]byte{firstDoc}, []nativewire.Section{{ID: nativewire.SectionTemplateRecords, Bytes: nativewire.AppendByteVector(nil, firstRecord)}})
 	apply(2, insert, 1)
@@ -253,11 +260,15 @@ func runNativeTemplateClusterAdapter(t *testing.T, dir string, crash bool) {
 		if err != nil || len(response.Results) != 2 || !response.Results[0].Found || response.Results[1].Found {
 			t.Fatalf("held=%+v err=%v", response, err)
 		}
-		checkDocument(materializer, response.Results[0].Document, `{"city":"hnl"}`)
+		checkDocument(materializer, response.Results[0].Document, firstJSON)
+		actual, err := materializer.StoredDocumentJSON(response.Results[0].Document)
+		if err != nil || !bytes.Contains(actual, []byte("9007199254740993")) {
+			t.Fatalf("held lexical JSON number=%s err=%v", actual, err)
+		}
 		response.Results[0].Document[0] ^= 1
 	}
 	checkHeld()
-	secondRecord, secondDoc := nativeClusterTemplatePacket(t, `{"city":"sea"}`)
+	secondRecord, secondDoc := nativeClusterTemplatePacket(t, `{"city":"sea","values":[null,false,true,1.25,{"nested":"value"}],"big":9007199254740993}`)
 	if !bytes.Equal(secondRecord, firstRecord) {
 		t.Fatal("fixture must reuse the original template hash")
 	}
@@ -275,6 +286,13 @@ func runNativeTemplateClusterAdapter(t *testing.T, dir string, crash bool) {
 	malformed := bytes.Clone(secondDoc[:36])
 	preflight(deterministicInsertBatchEntry(t, "templates", "native-template:malformed", nativewire.DocumentFormatTemplateV1,
 		[][]byte{[]byte("bad")}, [][]byte{malformed}), true)
+	// Wire validation admits the length-delimited number structurally; the
+	// original captured preparer must reject its invalid lexical bytes before
+	// any local/distributed identity or durable result/progress is acquired.
+	invalidRecord, invalidNumber := nativeClusterTemplatePacket(t, `{"city":"invalid","revision":1}`)
+	invalidNumber[len(invalidNumber)-1] = 'x'
+	preflight(deterministicMutationEntry(t, nativewire.CommandInsertBatch, "templates", "native-template:invalid-number", nativewire.DocumentFormatTemplateV1,
+		[][]byte{[]byte("bad")}, [][]byte{invalidNumber}, []nativewire.Section{{ID: nativewire.SectionTemplateRecords, Bytes: nativewire.AppendByteVector(nil, invalidRecord)}}), true)
 	// Hash references precede a new dictionary carried by an absent final row.
 	// Matched rows still need that definition in their original canonical frame.
 	replacementRecord, u1 := nativeClusterTemplatePacket(t, `{"city":"sea","revision":1}`)
@@ -397,36 +415,56 @@ func nativeClusterTemplatePacket(t *testing.T, document string) ([]byte, []byte)
 		t.Fatalf("encoder input=%x", input)
 	}
 	count, n := binary.Uvarint(input[4:])
-	if n <= 0 || count != 1 {
-		t.Fatalf("fixture needs one template definition: count=%d bytes=%d", count, n)
+	if n <= 0 || count == 0 || count > uint64(len(input)) {
+		t.Fatalf("invalid template definitions: count=%d bytes=%d", count, n)
 	}
 	cursor := 4 + n
-	if len(input)-cursor < sha256.Size {
-		t.Fatal("missing input hash")
-	}
-	hash := input[cursor : cursor+sha256.Size]
-	cursor += sha256.Size
-	size, n := binary.Uvarint(input[cursor:])
-	if n <= 0 {
-		t.Fatal("missing record length")
-	}
-	cursor += n
-	if size > uint64(len(input)-cursor) {
-		t.Fatal("truncated record")
-	}
-	record := bytes.Clone(input[cursor : cursor+int(size)])
-	cursor += int(size)
-	digest := sha256.Sum256(record)
-	if !bytes.Equal(hash, digest[:]) || !bytes.HasPrefix(record, []byte("TD1T")) {
-		t.Fatal("noncanonical template record")
+	recordsStart := cursor
+	for i := uint64(0); i < count; i++ {
+		if len(input)-cursor < sha256.Size {
+			t.Fatal("missing input hash")
+		}
+		hash := input[cursor : cursor+sha256.Size]
+		cursor += sha256.Size
+		size, n := binary.Uvarint(input[cursor:])
+		if n <= 0 {
+			t.Fatal("missing record length")
+		}
+		cursor += n
+		if size > uint64(len(input)-cursor) {
+			t.Fatal("truncated record")
+		}
+		record := input[cursor : cursor+int(size)]
+		cursor += int(size)
+		digest := sha256.Sum256(record)
+		if !bytes.Equal(hash, digest[:]) || !bytes.HasPrefix(record, []byte("TD1T")) {
+			t.Fatal("noncanonical template record")
+		}
 	}
 	root := input[cursor:]
-	if len(root) < 4+sha256.Size || !bytes.HasPrefix(root, []byte("TD1H")) || !bytes.Equal(root[4:4+sha256.Size], hash) {
+	if len(root) < 4+sha256.Size || !bytes.HasPrefix(root, []byte("TD1H")) {
 		t.Fatalf("unexpected encoder root=%x", root)
+	}
+	// The encoder sorts definitions by hash. Locate the authoritative root
+	// record by the root's hash, never by its position among nested definitions.
+	var rootRecord []byte
+	cursor = recordsStart
+	for i := uint64(0); i < count; i++ {
+		hash := input[cursor : cursor+sha256.Size]
+		cursor += sha256.Size
+		size, n := binary.Uvarint(input[cursor:])
+		cursor += n
+		if bytes.Equal(hash, root[4:4+sha256.Size]) {
+			rootRecord = bytes.Clone(input[cursor : cursor+int(size)])
+		}
+		cursor += int(size)
+	}
+	if rootRecord == nil {
+		t.Fatal("missing root definition")
 	}
 	wire := bytes.Clone(root)
 	copy(wire[:4], "TD1D")
-	return record, wire
+	return rootRecord, wire
 }
 
 // This is the maintained apply fault seam, with the same non-reentrant observer

@@ -321,7 +321,9 @@ cluster identity. This does not implement membership changes or replacement.
 For a native collection group, deterministic template-v1 Create and ordinary
 InsertBatch/ReplaceBatch/DeleteBatch use the same captured native transaction as
 JSON/BSON. The existing wire's TD1D hash references, TD1I embedded records and
-TemplateRecords sidecar lower into the ordinary TD1I/TD1H batch preparer; local
+TemplateRecords sidecar lower into the ordinary TD1I/TD1H batch preparer. Current
+exported TD1I input retains its TD1H root and original value tags, including
+lossless JSON-number text; the canonical validator uses that same grammar. Local
 compact template IDs are assigned by that original owner. Batch definitions may
 follow a reference or belong to a missing replacement. Matched canonical members
 retain their needed definitions for local WAL startup replay. For inserts and

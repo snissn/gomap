@@ -5,8 +5,11 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/collections"
 )
 
 func TestDeterministicEntryGoldenAndTransportIndependence(t *testing.T) {
@@ -1384,6 +1387,56 @@ func TestDeterministicEntryRejectsBatchVectorArityMismatch(t *testing.T) {
 	}
 }
 
+// Exercise the public encoder rather than a second test-only value grammar.
+func TestDeterministicEntryAcceptsCurrentTemplateEncoder(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		encode func() ([]byte, error)
+	}{
+		{"json", func() ([]byte, error) {
+			return collections.EncodeTemplateV1DocumentJSON([]byte(`{"a":[null,false,true,1.25,{"nested":"value"}],"big":9007199254740993,"decimal":0.100000000000000005}`))
+		}},
+		{"values", func() ([]byte, error) {
+			return collections.EncodeTemplateV1Document([]string{"a", "b"}, []any{float64(1.25), []any{nil, false, true, "value", json.Number("1e+100"), map[string]any{"nested": "value"}}})
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			doc, err := tc.encode()
+			if err != nil {
+				t.Fatal(err)
+			}
+			sections := insertBatchDeterministicSections()
+			for i := range sections {
+				switch sections[i].ID {
+				case SectionDocumentFormat:
+					sections[i].Bytes = []byte{byte(DocumentFormatTemplateV1)}
+				case SectionDocuments:
+					sections[i].Bytes = AppendByteVector(nil, doc)
+				}
+			}
+			// An explicit empty sidecar exercises the same canonical template validator
+			// used by real sidecar clients; the TD1I carries its own definitions.
+			sections = append(sections, Section{ID: SectionTemplateRecords, Bytes: AppendByteVector(nil)})
+			cmd, err := MustV1Registry().ValidateRequestSections(sections)
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw, err := AppendDeterministicEntry(nil, cmd)
+			if err != nil {
+				t.Fatal(err)
+			}
+			decoded, err := DecodeDeterministicEntry(raw, Limits{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, ok := deterministicSectionPayload(decoded.Sections, SectionDocuments)
+			if !ok || !bytes.Equal(got, AppendByteVector(nil, doc)) {
+				t.Fatal("canonical entry changed public template bytes")
+			}
+		})
+	}
+}
+
 func TestDecodeDeterministicEntryRejectsUnappliableTemplateRecords(t *testing.T) {
 	record := deterministicTemplateRecord("email")
 	for _, tc := range []struct {
@@ -1417,6 +1470,13 @@ func TestDecodeDeterministicEntryRejectsUnappliableTemplateRecords(t *testing.T)
 			format: DocumentFormatTemplateV1,
 			record: record,
 			doc:    deterministicTemplateStoredDocumentForRecord(record, []byte{99}),
+			code:   ErrMalformedFrame,
+		},
+		{
+			name:   "truncated_json_number",
+			format: DocumentFormatTemplateV1,
+			record: record,
+			doc:    deterministicTemplateStoredDocumentForRecord(record, []byte{deterministicTemplateV1KindJSONNumber, 2, '1'}),
 			code:   ErrMalformedFrame,
 		},
 		{
