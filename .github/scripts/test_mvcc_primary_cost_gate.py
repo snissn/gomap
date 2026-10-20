@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Failure controls for the fixed PRIMARY cost measurement contract."""
 
+import copy
 import importlib.util
 import os
-import copy
-import tempfile
-import subprocess
 import shutil
+import subprocess
+import tempfile
 from pathlib import Path
 import unittest
 
@@ -107,6 +107,11 @@ class PrimaryCostGateTests(unittest.TestCase):
             for missing in ({}, {"baseline": binding}, {"baseline": {}, "candidate": {}}):
                 with self.assertRaisesRegex(RuntimeError, "missing"):
                     gate.qualify_bytes(raw, missing, missing, quiet=True)
+            reordered = copy.deepcopy(before)
+            reordered["baseline"]["libraries"].reverse()
+            reordered["candidate"]["libraries"].reverse()
+            with self.assertRaisesRegex(RuntimeError, "drift"):
+                gate.qualify_bytes(raw, before, reordered, quiet=True)
             libc.write_bytes(b"changed libc")
             after = {"baseline": gate.runtime_binding(binary, command, "after", {}),
                      "candidate": gate.runtime_binding(binary, command, "after", {})}

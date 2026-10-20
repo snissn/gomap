@@ -31,7 +31,7 @@ Before and after measurement, `runtime-inputs-before.json` and
 `runtime-inputs-after.json` bind independently hashed actual executable contents
 and sizes, the ELF interpreter, and every filesystem library resolved by that
 interpreter's `--list` under the measurement environment. Resolved loader/library
-paths, SHA-256 and sizes must remain identical. The kernel VDSO has no filesystem
+paths, SHA-256, sizes and loader enumeration order must remain identical. The kernel VDSO has no filesystem
 input and is excluded. Missing/unresolved inputs or drift fail closed; `LD_AUDIT`
 is unsupported because loader enumeration does not establish its complete inputs.
 This Linux gate requires `readelf` and the executable's dynamic loader.

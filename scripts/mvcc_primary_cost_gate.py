@@ -39,7 +39,6 @@ def digest(path: Path) -> str:
     return result.hexdigest()
 
 
-
 def file_identity(path: Path) -> dict:
     resolved = path.resolve(strict=True)
     if not stat.S_ISREG(resolved.stat().st_mode):
@@ -72,7 +71,7 @@ def runtime_binding(binary: Path, command, label: str, environment: dict) -> dic
     executable = file_identity(binary)
     executable.pop("path")  # The two measured copies intentionally have different names.
     return {"executable": executable, "interpreter": interpreter,
-            "libraries": [libraries[path] for path in sorted(libraries)]}
+            "libraries": list(libraries.values())}
 
 
 def qualify_bytes(result: dict, before: dict, after: dict, *, quiet: bool) -> dict:
