@@ -12754,9 +12754,6 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	// Ordered collection roots can request value-log leaves independently of
 	// USER placement whenever this open installs the cached value appender.
 	reserveLeafLogLane := opts.IndexOuterLeavesInValueLog || (hasLeafPageLogSetter && hasValueLogAppenderSetter)
-	if opts.IndexOuterLeavesInValueLog && !hasLeafPageLogSetter {
-		return nil, errors.New("cachingdb: backend does not support value-log leaf pages")
-	}
 	// Cached value-log RIDs remain globally unique across reopen/rewrite cycles.
 	// Scan every non-empty segment: exact-RID command-WAL recovery may append an
 	// older missing RID into a newer segment, so the physical tail is no longer
@@ -12810,6 +12807,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	laneCount := journalLaneDefaults.Effective
 	laneCountDefaulted := journalLaneDefaults.Defaulted
 	if reserveLeafLogLane && laneCount > leafLogLaneID {
+		if opts.IndexOuterLeavesInValueLog {
+			return nil, fmt.Errorf("cachingdb: IndexOuterLeavesInValueLog reserves lane %d; JournalLanes must be <= %d", leafLogLaneID, leafLogLaneID)
+		}
 		return nil, fmt.Errorf("cachingdb: leaf-page log services reserve lane %d; JournalLanes must be <= %d", leafLogLaneID, leafLogLaneID)
 	}
 	// Hot/warm/cold generation reserves lanes 1 and 2 for non-hot classes when
@@ -12823,7 +12823,14 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		laneCount = maxLaneID + 1
 	}
 	if reserveLeafLogLane && laneCount > leafLogLaneID {
+		if opts.IndexOuterLeavesInValueLog {
+			return nil, fmt.Errorf("cachingdb: IndexOuterLeavesInValueLog reserves lane %d; recovered WAL/value lanes require rebuild before reopen", leafLogLaneID)
+		}
 		return nil, fmt.Errorf("cachingdb: leaf-page log services reserve lane %d; recovered WAL/value lanes require rebuild before reopen", leafLogLaneID)
+	}
+
+	if opts.IndexOuterLeavesInValueLog && !hasLeafPageLogSetter {
+		return nil, errors.New("cachingdb: backend does not support value-log leaf pages")
 	}
 
 	inlineThreshold := page.DefaultInlineThreshold
