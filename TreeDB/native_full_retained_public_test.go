@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	slashpath "path"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -313,10 +314,11 @@ func nativeFullRetainedTypedAsset(t *testing.T, handle *backenddb.DB) (string, i
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if path == "" || filepath.IsAbs(path) || filepath.Clean(path) != path || strings.HasPrefix(path, "..") {
+	// Resource diagnostics use slash-separated canonical paths on every OS.
+	if path == "" || filepath.IsAbs(path) || slashpath.Clean(path) != path || strings.HasPrefix(path, "..") {
 		t.Fatalf("Full root has no canonical typed part: path=%q offset=%d", path, offset)
 	}
-	return filepath.Join(handle.Dir(), path), offset
+	return filepath.Join(handle.Dir(), filepath.FromSlash(path)), offset
 }
 
 func TestNativeFullRetainedUnappliedInsertReplay(t *testing.T) {

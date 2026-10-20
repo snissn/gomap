@@ -276,7 +276,8 @@ func TestNativeMixedEngineLifecycle(t *testing.T) {
 	var lastRaw []byte
 	for generation := 1; generation <= commits; generation++ {
 		key := (generation - 1) % len(ids)
-		next, sequence := handle.CommandWALNextLSN(), database.Stats()["treedb.cache.cow.txn.logical_seq"]
+		before := database.Stats()
+		next, sequence := handle.CommandWALNextLSN(), before["treedb.cache.cow.txn.logical_seq"]
 		physical := indexedCRUDAppliedLSN(t, handle)
 		tx, err := native.Begin("labels", "vectors", "docs", "bson_arrays", "templates")
 		if err != nil {
@@ -319,8 +320,14 @@ func TestNativeMixedEngineLifecycle(t *testing.T) {
 		}
 		accepted++
 		requireNativeTypedOpsAdvance(t, database, handle, next, sequence)
-		if indexedCRUDAppliedLSN(t, handle) != physical {
-			t.Fatal("logical commit unexpectedly installed physical effects")
+		if applied := indexedCRUDAppliedLSN(t, handle); applied != physical {
+			after := database.Stats()
+			t.Fatalf("logical commit unexpectedly installed physical effects: generation%d accepted%d checkpoints%d physical=%d->%d assigned=%d next=%d checkpoint_runs=%s->%s rollovers=%s->%s handoffs=%s->%s logical_seq=%s->%s",
+				generation, accepted, checkpoints, physical, applied, next, handle.CommandWALNextLSN(),
+				before["treedb.cache.checkpoint.runs"], after["treedb.cache.checkpoint.runs"],
+				before["treedb.cache.cow.rollovers_total"], after["treedb.cache.cow.rollovers_total"],
+				before["treedb.cache.cow.handoffs_total"], after["treedb.cache.cow.handoffs_total"],
+				sequence, after["treedb.cache.cow.txn.logical_seq"])
 		}
 		for i := range fixtures {
 			expected[i][key] = source(i, key, generation)
