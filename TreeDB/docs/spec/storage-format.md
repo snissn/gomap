@@ -885,6 +885,11 @@ collection buffers before capturing the root. This changes no format bytes or
 versions; see [the production and benchmark profile audit](no-wal-fast-audit.md) for the
 volatile ordinary-ACK and durable boundary contracts.
 
+Cached batch `WriteSync` must finish this sealed-root boundary for both USER
+leaf placements, including a direct backend bypass. Backend admission alone
+is insufficient. Earlier queued writes and persistent pointer payloads are
+covered before acknowledgement; ordinary `Write` remains relaxed.
+
 This is a pre-alpha format cutover. A non-empty legacy meta body fails open with
 `ErrLegacyFormatRebuildRequired`; recovery does not reinterpret or migrate it.
 
