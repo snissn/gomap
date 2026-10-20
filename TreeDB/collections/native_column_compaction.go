@@ -32,6 +32,9 @@ func (c *Collection) nativeColumnStoreCompact(ctx context.Context, options Colum
 	if c.manager.isClosing() {
 		return ColumnStoreCompactStats{}, backenddb.ErrClosed
 	}
+	if !nativeTypedMeta(c.meta) {
+		return ColumnStoreCompactStats{}, backenddb.ErrNativeSemanticUnsupported
+	}
 	operation := &nativeColumnCompaction{collection: c, ctx: ctx, options: options}
 	err := c.nativeJSON.db.CompactNativeColumnStore(ctx, operation)
 	if err != nil {
@@ -99,7 +102,7 @@ func (w *nativeTypedMaterialization) prepareCompactionRows(admit func(uint64) er
 		return err
 	}
 	rootDir := operation.collection.nativeJSON.db.ColumnAssetRootDir()
-	extra, _, err := nativeTypedFamilyReadCapacity(w.meta, w.input.snapshot, w.input.baseManifestRoot, rootDir, admit)
+	extra, _, err := nativeTypedFamilyReadCapacity(w.meta, w.input.snapshot, w.input.baseManifestRoot, rootDir, nil, admit)
 	if err != nil {
 		return err
 	}

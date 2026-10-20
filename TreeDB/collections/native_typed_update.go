@@ -185,7 +185,7 @@ func (t *NativeJSONTxn) nativeTypedUpdateDocument(g *nativeJSONTxnBinding, id []
 	if !ok {
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
-	_, typedJSON, err := nativeTypedFamilyReadCapacity(r.meta, r.capture.Snapshot(), manifest.baseRoot, r.database.ColumnAssetRootDir(), func(n uint64) error { return t.admitStage(g, n) })
+	_, typedJSON, err := nativeTypedFamilyReadCapacity(r.meta, r.capture.Snapshot(), manifest.baseRoot, r.database.ColumnAssetRootDir(), nil, func(n uint64) error { return t.admitStage(g, n) })
 	if err != nil {
 		return nil, err
 	}
