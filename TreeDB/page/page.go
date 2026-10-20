@@ -156,6 +156,19 @@ func UpdateChecksum(data []byte) uint32 {
 	return sum
 }
 
+// UpdateChecksumSoftware has the same image and checksum semantics as
+// UpdateChecksum, using a non-retaining software CRC for small caller-owned
+// publication scratch. Ordinary page encoders retain the accelerated route.
+func UpdateChecksumSoftware(data []byte) uint32 {
+	if len(data) < PageHeaderSize {
+		return 0
+	}
+	clear(data[8:12])
+	sum := crc.ChecksumSoftware(data)
+	binary.LittleEndian.PutUint32(data[8:12], sum)
+	return sum
+}
+
 // VerifyChecksumNonMutating verifies that the page checksum matches the data,
 // assuming checksum bytes 8-11 (data[8:12]) are zero for the calculation.
 // It avoids modifying the underlying buffer.

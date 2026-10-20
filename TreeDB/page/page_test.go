@@ -1,6 +1,7 @@
 package page
 
 import (
+	"bytes"
 	"encoding/binary"
 	"testing"
 	"unsafe"
@@ -186,6 +187,28 @@ func TestUpdateChecksum(t *testing.T) {
 	}
 	if !VerifyChecksumNonMutating(data) {
 		t.Fatalf("checksum should verify after UpdateChecksum")
+	}
+}
+
+func TestUpdateChecksumSoftwareMatchesAccelerated(t *testing.T) {
+	for _, size := range []int{0, 8, PageHeaderSize - 1, PageHeaderSize, 63, 128, PageSize} {
+		backing := make([]byte, size+2)
+		for i := range backing {
+			backing[i] = byte(i*31 + 17)
+		}
+		left, right := backing[0], backing[len(backing)-1]
+		image := backing[1 : len(backing)-1]
+		want := append([]byte(nil), image...)
+		wantSum := UpdateChecksum(want)
+		if got := UpdateChecksumSoftware(image); got != wantSum || !bytes.Equal(image, want) {
+			t.Fatalf("size %d: checksum/image differs: got %08x want %08x", size, got, wantSum)
+		}
+		if backing[0] != left || backing[len(backing)-1] != right {
+			t.Fatalf("size %d: checksum overwrote adjacent bytes", size)
+		}
+		if size >= PageHeaderSize && !VerifyChecksumNonMutating(image) {
+			t.Fatalf("size %d: software checksum rejected by ordinary verifier", size)
+		}
 	}
 }
 

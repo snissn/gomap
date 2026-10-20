@@ -2629,9 +2629,10 @@ func writeDurableMetaSlotV1(sink freelist.AppendPageSink, slot uint64, meta page
 		// Keep caller scratch out of the generic sink contract: an arbitrary
 		// AppendPageSink may retain its image, whereas Pager.Write copies it.
 		var image [page.PageSize]byte
-		if err := encodeDurableMetaSlotV1(image[:], slot, meta); err != nil {
+		if err := encodeDurableMetaFieldsV1(image[:], slot, meta); err != nil {
 			return err
 		}
+		page.UpdateChecksumSoftware(image[:])
 		if concrete.pager == nil {
 			return errors.New("missing durable pager")
 		}
@@ -2645,12 +2646,19 @@ func writeDurableMetaSlotV1(sink freelist.AppendPageSink, slot uint64, meta page
 }
 
 func encodeDurableMetaSlotV1(image []byte, slot uint64, meta page.DurableMetaV1) error {
+	if err := encodeDurableMetaFieldsV1(image, slot, meta); err != nil {
+		return err
+	}
+	page.UpdateChecksum(image)
+	return nil
+}
+
+func encodeDurableMetaFieldsV1(image []byte, slot uint64, meta page.DurableMetaV1) error {
 	if err := meta.Encode(image[page.PageHeaderSize:]); err != nil {
 		return err
 	}
 	header := page.PageHeader{PageID: slot, Flags: uint16(page.PageTypeMeta)}
 	header.Encode(image)
-	page.UpdateChecksum(image)
 	return nil
 }
 

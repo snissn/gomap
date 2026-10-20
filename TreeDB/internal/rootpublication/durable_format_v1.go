@@ -947,15 +947,22 @@ func (record DurableRootRecordV1) EncodePageInto(pageID uint64, image []byte) ([
 		return [32]byte{}, err
 	}
 	clear(image)
-	return encodeDurableRootRecordPageV1(image, pageID, record), nil
+	digest := encodeDurableRootRecordBodyV1(image, pageID, record)
+	page.UpdateChecksumSoftware(image)
+	return digest, nil
 }
 
 // image is a zeroed, exact-size page whose record has already been validated.
 func encodeDurableRootRecordPageV1(image []byte, pageID uint64, record DurableRootRecordV1) [32]byte {
+	digest := encodeDurableRootRecordBodyV1(image, pageID, record)
+	page.UpdateChecksum(image)
+	return digest
+}
+
+func encodeDurableRootRecordBodyV1(image []byte, pageID uint64, record DurableRootRecordV1) [32]byte {
 	encodeDurableRootRecordFieldsV1(image, pageID, record)
 	digest := durableRootRecordDigestV1(image)
 	copy(image[312:344], digest[:])
-	page.UpdateChecksum(image)
 	return digest
 }
 
