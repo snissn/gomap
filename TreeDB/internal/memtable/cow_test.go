@@ -415,7 +415,7 @@ func TestCOWDependencyLayoutContract(t *testing.T) {
 		t.Fatal("immutable values unexpectedly invoke dependency copying")
 	}
 	for i := 0; i < 4096; i++ {
-		m.Set(fmt.Sprintf("%08d", i), cowValue{value: "owned"})
+		m.Set(fmt.Sprintf("%08d", i), cowEncodeValue(COWMutation{Value: []byte("owned")}))
 	}
 	for i := 0; i < 2048; i++ {
 		m.Delete(fmt.Sprintf("%08d", i))
@@ -452,8 +452,10 @@ func TestCOWDependencyReserveWitness(t *testing.T) {
 		for _, kind := range []string{"insert", "replace", "delete"} {
 			t.Run(fmt.Sprintf("%d/%s", n, kind), func(t *testing.T) {
 				m := btree.NewMap[string, cowValue](32)
+				oldValue := cowEncodeValue(COWMutation{Value: []byte("old")})
+				newValue := cowEncodeValue(COWMutation{Value: []byte("new")})
 				for i := 0; i < n; i++ {
-					m.Set(fmt.Sprintf("%08d", i), cowValue{value: "old"})
+					m.Set(fmt.Sprintf("%08d", i), oldValue)
 				}
 				old := m.Copy()
 				height := cowMaximumHeight(n + 1)
@@ -467,9 +469,9 @@ func TestCOWDependencyReserveWitness(t *testing.T) {
 				private := m.Copy()
 				switch kind {
 				case "insert":
-					private.Set("99999999", cowValue{value: "new"})
+					private.Set("99999999", newValue)
 				case "replace":
-					private.Set("00000000", cowValue{value: "new"})
+					private.Set("00000000", newValue)
 				case "delete":
 					private.Delete("00000000")
 				}
@@ -940,8 +942,9 @@ func TestCOWCursorGeometricStackWitness(t *testing.T) {
 		// Only this immutable iterator fixture uses degree2 to reach heights
 		// cheaply. Production COW construction remains fixed at degree32.
 		m := btree.NewMap[string, cowValue](2)
+		emptyValue := cowEncodeValue(COWMutation{})
 		for i := 0; i < count; i++ {
-			m.Set(fmt.Sprintf("%08d", i), cowValue{})
+			m.Set(fmt.Sprintf("%08d", i), emptyValue)
 		}
 		root := &COWRoot{tree: m, generation: w.generation, refs: 1}
 		w.generation.retain()
@@ -1212,7 +1215,7 @@ func TestCOWLargeKeyAdmissionAndReadAllocations(t *testing.T) {
 	if actual > p.Charge().Total() || actual >= uint64(len(key))/2 {
 		t.Fatal("replacement allocated an uncharged temporary key")
 	}
-	if p.Charge().Payload != cowAllocation(3) {
+	if p.Charge().Payload != cowAllocation(cowValueMetadataBytes+3) {
 		t.Fatal("replacement key copied into payload charge")
 	}
 	next := p.Publish()

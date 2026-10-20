@@ -39,7 +39,10 @@ Scalar multikey indexes and the existing `AllowArrayValuesInIndex` option use
 that same planner: arrays are encoded as sorted distinct value sets, preserving
 the format's existing missing/null and dotted-path semantics. Final unique
 ownership is checked across the whole transaction, including value handoffs.
-Compound indexes and text/vector index creation remain outside this route. Eligible BSON collections also support top-level `UpdateBSONSet` and
+BSONOrderedV2 compound scalar indexes reuse the same tuple encoder, old/new
+planner and final unique ownership checks. Components may use dotted paths and
+ascending or descending directions; arrays remain rejected for compound keys.
+Text/vector index creation remains outside this route. Eligible BSON collections also support top-level `UpdateBSONSet` and
 `UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges`, using the maintained BSON
 transformer and canonical full replacement documents. `_id`, dotted or invalid
 field names and malformed raw values retain their existing refusal contracts.
@@ -67,7 +70,15 @@ from that same cut, including pending records; returned JSON is caller-owned.
 Its temporary parser/object backing is admitted by the original read allocator
 and released after owned copyout. Scalar index DDL reuses the same captured
 resolver and original complete-cut backfill. No template cache or on-disk format
-is added. Specialized deterministic/assigned and prepared template producers
+is added. The deterministic native FSM adapter also accepts canonical hash-keyed
+TD1D requests with TD1I embedded definitions or a TemplateRecords sidecar. Its
+original native stage admits the envelope/header/parser backing, translates root
+hash references to TD1H inputs, and reuses this same batch resolver and finalizer.
+Definitions carried by absent replacements remain available to matched rows,
+including hash references preceding their definitions; accepted canonical members
+own the definitions required for startup replay. Preflight releases its captured
+plan without reserving a local WAL or distributed apply identity. External packets
+never authorize collection-local numeric template IDs. Prepared template producers
 remain outside this ordinary family.
 
 Scalar JSON index reads support `FindByIndexRange`, `ScanIndexRange`,
@@ -82,24 +93,99 @@ growth under the original finite read budget and is released when traversal ends
 Missing indexes are empty scans. Document ranges require a positive limit, and
 borrowed-document callbacks retain their existing no-retention/no-reentry contract.
 
-Eligible typed collections also route `InsertTypedBatchWithStats`,
-`ReplaceTypedBatch`, `UpsertTypedBatch`, `ReplaceTypedSourceByID` and `DeleteBatch`
-through the same transaction and immutable typed projection. Current eligibility
-requires top-level declared columns without secondary indexes or aggregate metadata:
+Eligible typed collections use the same transaction and immutable typed projection.
+Ordinary JSON insertion supports the layouts below; `InsertTypedBatchWithStats`,
+`ReplaceTypedBatch`, `UpsertTypedBatch` and `ReplaceTypedSourceByID` retain their
+JSON retained-payload requirement. `DeleteBatch` supports either retained carrier.
+Supported layouts are:
 
-- One Int64, String or finite Float32Vector ColumnPart with noncolumn
-  semantic-stream-v1 retained payload.
-- One or more nonnullable String RowAsset and/or finite Float32Vector ColumnPart
+- One or more Int64/String columns owned by RowAsset or ColumnPart,
+  with noncolumn semantic-stream-v1 retained payload. Declared values and
+  residual fields use the maintained schema-wide parser, owner-specific assets
+  and reconstruction. Nested scalar paths and aggregate assets use the existing
+  bounded prepared schema: one to five Int64/String columns, at most three
+  Count/GroupHourCount/Min specs, three predicates per spec, four values per
+  predicate and 8 KiB aggregate configuration. Physical query eligibility is
+  described separately below. The existing single finite Float32Vector ColumnPart
+  semantic-stream-v1 layout remains eligible.
+- One or more top-level nonnullable String RowAsset and/or finite Float32Vector ColumnPart
   columns with noncolumn JSON retained payload. Each row supplies every declared
   column through the maintained typed projection or ordinary JSON input. Pending
   reads and physical reconstruction use the same complete schema; canonical typed
   frames retain every column in schema-name order.
+
+Ordinary `InsertBatch` also accepts Full-retained JSON collections with top-level,
+nonnullable Int64, String or finite Float32Vector columns owned by RowAsset or
+ColumnPart, without aggregate metadata. The original declared-value parser and
+physical publisher still produce the declared assets, while the same immutable
+delta retains the complete JSON document. Pending and checkpointed Full reads
+return independent copies of that document without reconstructing from declared
+assets, matching the maintained Full compatibility policy. Startup replay uses
+the original ordinary insert documents and the same retained-payload transform.
+This does not extend direct typed-batch APIs beyond noncolumn JSON. Indexed
+Full collections remain unsupported by this native slice; their migration and
+Full maintenance qualification remain open.
+
+Ordinary `UpdateBatch` supports eligible noncolumn JSON and Full JSON layouts.
+Callbacks receive independent complete documents from the transaction's original
+opening cut and private typed chain. Each changed replacement is copied and
+validated before another callback runs, then enters the same declared parser,
+retained transform and immutable delta installer as ordinary insertion. Canonical
+UPDATE members retain complete replacements; replay never invokes callbacks.
+The existing final typed-index plan preserves atomic unique-value handoff and
+conditional unique-index-change checks. Semantic-stream callback updates still
+refuse before callback execution. Full direct typed, source-replacement and delete
+operations remain outside this slice.
+
+Noncolumn JSON typed collections may predeclare ordinary scalar string and
+unique indexes on their declared nonnullable String RowAsset fields. They use
+the maintained typed scalar encoder, final-batch unique ownership checks and
+the same immutable index-state/secondary domains as ordinary document writes.
+Atomic replacement can hand a unique value to another final row. Deletion removes
+both memberships; a conflict refuses before canonical assignment. Typed physical
+asset domains retain their original identities, while typed secondary namespaces
+start after those reserved domains; ordinary JSON/BSON namespaces are unchanged.
+Checkpoint and startup aggregate replay use the same final index plan and original
+physical build group. No residual full-document copy is introduced. Predeclared
+typed scalar indexes support `DropIndex`, `DropIndexes` and `DropAllIndexes`.
+Removal retains surviving name-keyed index/state domains and pending sources;
+the final drop removes index state too. It does not scan or reconstruct typed
+rows. Later writes filter the fully validated old index-state record to the
+remaining names. Held cuts retain their original declarations and memberships.
+`CreateIndex` on declared NonColumn fields retains its existing rejection;
+this capability does not add backfill for omitted declared payloads. Typed
+compound, multikey, text and vector indexes remain unsupported on this route.
+Typed writes remain durable-WAL-only.
 
 Column-dependent source, value, payload and reconstruction backing is admitted
 before allocation by the original transaction/read/build owner. Columns share the
 existing operation-local physical codec; captured TCIM sections are inspected once
 per asset, rather than once per column. Existing 32 MiB maintenance and 64 MiB
 in-flight limits remain in force; wider schemas do not receive extra credit.
+
+Eligible typed collections route the existing serial `RunColumnPhysicalQuery`
+and `PrepareColumnPhysicalQuery` APIs through the captured native catalog and its
+recovery-authoritative physical manifest. These are physical-asset queries, not
+transaction reads of pending typed deltas. The maintained request/schema/reducer
+checks still determine supported shapes: one-shot queries retain the existing
+latest-visible mutation routes, while aggregate-metadata queries require an
+insert-only manifest. Prepared queries also require an insert-only manifest and
+a supported direct reducer. This route does not add parallel queries, arbitrary
+expressions or new typed layouts.
+
+Native `PrepareColumnPhysicalQuery` executes that reducer once before returning.
+It admits temporary decoder/reducer backing through the original finite read
+allocator, then releases decoded assets, caches and reducer scratch after copying
+an independent compact answer. The prepared runner retains its original capture
+and asset lifecycle pin until `Close`, so later writes/checkpoints do not change
+its answer. Preparation includes the scan/reduction work; `PrepareDiagnostics`
+reports that work. Repeated `Run` copies the saved group headers into reusable
+runner-owned storage and returns independent diagnostics without rescanning or
+reducing assets. Callers may modify those returned headers without changing the
+saved answer, but must copy groups they need beyond the next `Run` or `Close`.
+Runners require external synchronization for `Run` and `Close`. Always close a
+prepared runner before its manager/database; one-shot queries instead return
+owned results and release their capture before returning.
 
 Raw, eligible scalar-indexed JSON/BSON and cross-collection document transactions target durable WAL,
 relaxed WAL and production NoWAL profiles. Typed writes and transactions binding
@@ -109,9 +195,16 @@ do not imply typed-write support. A value log remains persistent value storage
 when WAL is disabled.
 
 `Collection.PrepareInsertBatchOwned(...).Commit()` supports the eligible no-index
-Int64/String ColumnPart semantic-stream layout in the durable WAL profile. Prepare
-stages the original transaction's identity-free typed projection and canonical
-input copies; it advances no publication frontier. Conflicts against its opening
+Int64/String RowAsset/ColumnPart semantic-stream layouts in the durable WAL profile.
+The existing scalar-column and input limits still bound preparation, including
+the bounded nested/aggregate schema above, 16K rows and 128 KiB per document.
+Nested/aggregate preparation validates full input with the maintained semantic
+collector before stripping declared fields, preserving its original depth,
+descriptor, key/path, interning, emission and preparation-budget limits. It drops
+temporary collection scratch before staging without encoding a discarded carrier.
+The original full constructor and Commit materializer still encode their required
+retained blocks. Prepare stages the original transaction's identity-free typed
+projection and canonical input copies; it advances no publication frontier. Conflicts against its opening
 may fail preparation early. Commit consumes the token once and revalidates its
 captured dependencies against the latest compatible complete state before effects,
 and uses its original admitted exact physical seal receipt. It returns after
@@ -142,9 +235,13 @@ Use `manager.Begin("a", "b")`, then `InsertBatchInto`, `UpdateBatchInto`,
 `DeleteBatchFrom` and `GetFrom` for bound collections. Single-collection callers
 can use `InsertBatch`, `UpdateBatch`, `DeleteBatch` and `Get`. `GetRaw`/`SetRaw`
 use the original conditional batch; the selected composite frontend accepts one
-inline raw point Set. `UpdateBatchInto` is the scalar JSON path; typed
-replacement operations use the existing typed Collection methods. Ordered typed
-stages can span several bound collections in the same transaction, including
+inline raw point Set. `UpdateBatchInto` also dispatches bound eligible typed
+collections to the same callback path as ordinary `UpdateBatch`: noncolumn JSON
+or unindexed Full JSON, with the declared layouts and durable-WAL requirement
+above. Semantic-stream callback updates refuse before invoking callbacks; this
+dispatch does not broaden direct typed APIs or Full source-replacement/delete
+support. Ordered typed stages can span several bound collections in the same
+transaction, including
 insert/delete/reinsert of one key. They share the original physical build workspace
 sequentially and install one complete resource closure. Existing member/payload
 and original memory limits apply.
@@ -194,7 +291,11 @@ For canonical-inline typed effects, accepted logical state owns the immutable
 row/retained backing. Captured-prefix physical construction later materializes
 maintained row, column, manifest and locator assets off the publication gate.
 Original memory receipts cover retained and operation-local backing before
-allocation. Successful materialization returns the ended operation workspace
+allocation. Sequential typed construction reserves the largest workspace required
+by the captured schemas: JSON and Full retained carriers omit the semantic-stream
+encoder envelope, while semantic-stream, typed codec and compaction read bounds
+remain applicable to their original paths. Source and complete retained-manifest
+charges still sum across collections. Successful materialization returns the ended operation workspace
 credit after codecs close and borrowed inputs are dropped. Retained outputs and
 handoff promises remain charged; failed builds retain their original custody.
 The original build group receives the complete resource/requirement
@@ -215,6 +316,44 @@ before/after snapshots and original owner. It preserves logical provenance,
 held views and pending effects. This capability is separate from a single-use
 captured-prefix handoff and does not grant generic backend aliases publication
 authority.
+
+## Immutable vector source import V2
+
+Durable native handles support the existing source-only ColumnGraph declaration
+with typed String RowAsset / Float32Vector ColumnPart and noncolumn JSON payload.
+`ImportVectorPartitionSourceChunkV2` and its statistics variant retain the original
+format-14 frame, row ordinals, source-map binding, receipts, retry checks and sealed
+completion. Each call uses the same canonical publisher and waits for its original
+physical seal. Ordinary mutations of this source-only collection remain refused;
+this does not enable live ANN queries or vector-index DDL.
+
+`RebuildVectorIndex` supports the ordinary float32 ColumnGraph producer on a
+sealed captured cdir2 source, using the original HNSW/TVIS asset encoders and
+command-103 frame. It refuses a pending target typed prefix before assignment;
+the original catalog dependency/effect binds source completion against concurrent
+imports. Construction uses real physical row references, preserves source
+directory identity and readability, and completes through the same captured
+build group and physical seal. Current status uses the original graph/state
+validators. Startup replay applies the original assigned 103 intent to that same
+physical constructor. The `cosine_normalized_f32_v1` fused base rewrite remains
+unimplemented on native handles and is refused before assignment; this producer
+does not claim that representation or live ANN query support.
+
+Physical construction appends the original cdir2 records and SIS2 completion in
+the same captured build group. Its exact durable closure uses the original
+selected metadata owner and verifier: a replayable stream reads the captured
+manifest and the bounded fresh suffix, with independent admitted walk and point
+scratch. Mixed complete requirements keep the original exact fallback; no retained
+history array or namespace-disjointness assumption is introduced. The original
+complete manifest decoder remains available for other producers.
+
+Source readers retain one native capture. Binding, source pages, proofs, typed
+row reconstruction and directory identity all come from that cut; returned chunks
+and documents are owned. Opening an incomplete source or changing its binding is
+still an error. The public replay control uses the maintained actual-frame and
+checkpointed-seed transport mechanism, rather than claiming an unapplied successful
+import (successful calls require a physical seal). Existing format-14/cdir2/SIS2
+bytes and default memory limits are unchanged.
 
 ## Development verification and remaining qualification
 
@@ -241,8 +380,10 @@ Activated ordinary JSON and BSON handles support `CreateIndex`, `DropIndex`,
 Creation backfills the complete captured primary cut, including pending rows,
 using the maintained scalar encoder and uniqueness checks. A duplicate unique
 backfill refuses before canonical assignment. Scalar multikey backfill reuses the
-same complete-cut extraction and normalized value sets. Typed, text, vector and
-compound index DDL remain outside this capability.
+same complete-cut extraction and normalized value sets. BSON compound scalar
+backfill uses the same captured-cut tuple extraction. Typed index creation and
+text/vector index DDL remain outside this capability; eligible typed scalar drops
+are described below.
 
 Every transition writes the existing catalog-name conflict effect. Native
 transactions depend on that name even when the collection is only read to derive
@@ -260,6 +401,11 @@ Catalog index mutation uses command kind 201 and payload format 17; create
 collection remains kind 200. Startup validates the prior schema/incarnation and
 performs the same backfill or name-based removal in the original single replay
 build group.
+Typed drops use that same command and backfill-free removal. Only index
+declarations change: foreground finalization and startup replay preserve the
+current typed manifest, recovery-authoritative LSN and physical part count.
+Those physical construction outputs may advance independently of schema;
+all other column settings still compare exactly.
 The command contains no predicted LSN, physical roots or new schema epoch.
 Temporary schema/document construction backing is admitted before normalization and
 encoding and released after synchronous publication drops its borrowed aliases.
@@ -324,3 +470,17 @@ key admission includes the exact escaped ID suffix and maintained numeric digit
 limit; temporary query codec backing remains with the original captured read
 through encoding, traversal and owned ID copyout. Existing JSON charges and key
 bytes are unchanged.
+
+## Captured compound ranges
+
+`FindByCompoundIndexRange` reads one captured native schema and index domain.
+Forward and reverse scans seek one bounded candidate per original pending,
+captured and DATA source; equal keys retain newest-source precedence including
+tombstones. Reverse reads use caller-admitted fixed predecessor scratch, not a
+materialized interval. Every source probe debits `MaxInspected` before work.
+The maintained bounds and complete logical tie-group sorter preserve missing/null
+normalization, canonical numeric equivalence, ID ordering and fail-closed
+truncation. Stable ties still require at most one unfixed component. Query
+key/group/result backing is admitted before copying or growing, and temporary
+aliases end before refund. Only independently owned result IDs escape. Default
+resource limits and the tuple/command formats are unchanged.

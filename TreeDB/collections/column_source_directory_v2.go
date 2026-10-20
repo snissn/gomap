@@ -44,6 +44,9 @@ type columnSourceDirectoryAppendV2 struct {
 	publication   *sourceImportPublicationV2
 	collection    *Collection
 	baseRoot      uint64
+	snapshot      *backenddb.Snapshot     // borrowed only by a synchronous native build/fallback
+	indexes       []VectorIndexDefinition // original captured catalog
+	fresh         []columnManifestRecord  // bounded already-admitted earlier native deltas
 	activeSegment *columnManifestSegmentOwnership
 }
 
@@ -146,11 +149,23 @@ func columnSourceDirectoryKeyV2(prefix string, ordinal uint64, fragment uint64) 
 }
 
 func (c *Collection) prepareColumnSourceDirectoryAppendV2(input columnWritePublishInput, root uint64) (*columnSourceDirectoryAppendV2, error) {
+	if root == 0 {
+		return prepareColumnSourceDirectoryAppendAtSnapshotV2(c, input, root, nil)
+	}
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return nil, backenddb.ErrClosed
+	}
+	defer snap.Close()
+	return prepareColumnSourceDirectoryAppendAtSnapshotV2(c, input, root, snap)
+}
+
+func prepareColumnSourceDirectoryAppendAtSnapshotV2(c *Collection, input columnWritePublishInput, root uint64, snap *backenddb.Snapshot) (*columnSourceDirectoryAppendV2, error) {
 	p := input.sourceImportV2
 	if p == nil || len(p.leafBytes) == 0 || len(p.leafBytes) > vectorpartition.MaxSourceChunkBytesV2 {
 		return nil, errors.New("collections: missing bounded immutable source leaf")
 	}
-	d := &columnSourceDirectoryAppendV2{publication: p, collection: c, baseRoot: root}
+	d := &columnSourceDirectoryAppendV2{publication: p, collection: c, baseRoot: root, indexes: input.meta.VectorIndexes}
 	cfg := input.meta.Options.ColumnStore
 	if root == 0 {
 		if cfg.ActiveManifest != nil {
@@ -161,11 +176,9 @@ func (c *Collection) prepareColumnSourceDirectoryAppendV2(input columnWritePubli
 	if cfg.ActiveManifest == nil || cfg.ActiveManifest.Format != columnSourceDirectoryFormatV2 || cfg.ActiveManifest.Version != 2 {
 		return nil, errors.New("collections: source import refuses mixed legacy column manifest")
 	}
-	snap := c.db.AcquireSnapshot()
 	if snap == nil {
 		return nil, backenddb.ErrClosed
 	}
-	defer snap.Close()
 	if p.stats != nil {
 		p.stats.DirectoryRecordsRead += 3
 	}
@@ -334,6 +347,26 @@ func sourceDirectoryDurablePublicationV2(delta ColumnManifestRootDelta, namespac
 	if err != nil {
 		return rootpublication.StableLogicalObligationRequirements{}, mutation, nil, work, err
 	}
+	// Native construction already owns the exact captured basis and a bounded
+	// fresh suffix. Its original fallback uses the same per-record decoder and
+	// selected exact verifier without materializing retained historical records.
+	if d := delta.sourceDirectoryV2; d.snapshot != nil {
+		suffix := make([]columnManifestRecord, 0, len(d.fresh)+len(delta.Records))
+		suffix = append(suffix, d.fresh...)
+		for _, r := range delta.Records {
+			if stableColumnManifestDurableRequirementRecord(r.key) {
+				suffix = append(suffix, r)
+			}
+		}
+		requirements, e := nativeSourceManifestRequirementsV2(d.snapshot, d.baseRoot, delta.Identity.Generation, namespace, suffix, d.indexes...)
+		if e != nil {
+			return rootpublication.StableLogicalObligationRequirements{}, mutation, nil, work, e
+		}
+		fallback := func() (rootpublication.StableLogicalObligationRequirements, rootpublication.StableResourceClosureWork, error) {
+			return requirements, rootpublication.StableResourceClosureWork{}, nil
+		}
+		return rootpublication.StableLogicalObligationRequirements{}, mutation, fallback, work, nil
+	}
 	// Preserve the exact safety fallback. Qualification must expose any use:
 	// its full retained scan is not a bounded per-import implementation.
 	fallback := func() (rootpublication.StableLogicalObligationRequirements, rootpublication.StableResourceClosureWork, error) {
@@ -421,7 +454,7 @@ func (c *Collection) sourceDirectoryVisibleRowAtSnapshotV2(snap *backenddb.Snaps
 		return zero, diag, false, err
 	}
 	view := columnPhysicalScanSnapshotView{CollectionName: catalog.meta.Name, Catalog: catalog, Config: columnStoreRowAssetConfig(cfg), FullConfig: cfg, ColumnStoreEnabled: true, AssetRefs: []columnManifestAssetRefForScan{part}, ColumnAssetRootDir: c.db.ColumnAssetRootDir(), AssetNamespace: cfg.AssetManager.Namespace}
-	reader, err := newColumnPhysicalRowReaderFromSnapshotView(view, columnPhysicalRowReaderOptions{ProjectedColumns: projected, RequireInsertOnly: true, MaxDecodedBlocks: 1})
+	reader, err := newColumnPhysicalRowReaderFromSnapshotView(view, columnPhysicalRowReaderOptions{ProjectedColumns: projected, RequireInsertOnly: true, MaxDecodedBlocks: 1, operationLocal: c.nativeOperationLocalReads})
 	if err != nil {
 		return zero, diag, false, err
 	}

@@ -253,6 +253,10 @@ func parseTemplateV1InsertDocument(raw []byte, allowStored bool) (templateV1Pars
 }
 
 func parseTemplateV1InsertEnvelope(raw []byte) (templateV1ParsedInsertDocument, error) {
+	return parseTemplateV1InsertEnvelopeWithRootMagic(raw, templateV1InsertDocumentMagic)
+}
+
+func parseTemplateV1InsertEnvelopeWithRootMagic(raw []byte, rootMagic string) (templateV1ParsedInsertDocument, error) {
 	pos := 0
 	if !consumeMagic(raw, &pos, templateV1InputMagic) {
 		return templateV1ParsedInsertDocument{}, errors.New("collections: template-v1 insert requires template input envelope")
@@ -293,7 +297,10 @@ func parseTemplateV1InsertEnvelope(raw []byte) (templateV1ParsedInsertDocument, 
 		records = append(records, record)
 	}
 	hashDocument := raw[pos:]
-	if !hasTemplateV1Magic(hashDocument, templateV1InsertDocumentMagic) {
+	// External hash input also accepts the current public encoder's TD1H root.
+	// Ordinary input still requires TD1H; numeric stored TD1D never enters here.
+	if !hasTemplateV1Magic(hashDocument, rootMagic) &&
+		!(rootMagic == templateV1StoredMagic && hasTemplateV1Magic(hashDocument, templateV1InsertDocumentMagic)) {
 		return templateV1ParsedInsertDocument{}, errors.New("collections: malformed template-v1 insert document")
 	}
 	if len(hashDocument) < len(templateV1InsertDocumentMagic)+32 {

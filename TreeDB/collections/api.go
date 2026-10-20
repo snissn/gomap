@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 	"unicode/utf8"
+	"unsafe"
 
 	"github.com/cespare/xxhash/v2"
 	"github.com/snissn/gomap/TreeDB/batch"
@@ -14925,12 +14926,15 @@ func validateCollectionUpdateDocumentInput(c *Collection, documentID []byte) err
 	return nil
 }
 
-func (c *Collection) updateDirect(documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error)) (bool, bool, error) {
-	unlockSchema := c.lockCollectionSchemaRead()
-	defer unlockSchema()
-	admissionState := c.lockCollectionCommandWALAdmission()
-	admission := &admissionState
-	defer admission.unlock()
+func (c *Collection) updateDirect(documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error), admissions ...*collectionCommandWALAdmission) (bool, bool, error) {
+	admission := collectionCommandWALAdmissionArgument(admissions)
+	if admission == nil {
+		unlockSchema := c.lockCollectionSchemaRead()
+		defer unlockSchema()
+		admissionState := c.lockCollectionCommandWALAdmission()
+		admission = &admissionState
+		defer admission.unlock()
+	}
 	unlockMutation := c.lockMutation()
 	mutationLocked := true
 	defer func() {
@@ -14963,12 +14967,15 @@ func (c *Collection) updateDirect(documentID []byte, update func(current []byte)
 	return false, false, collectionMutationRetryExhausted(lastErr)
 }
 
-func (c *Collection) updateDirectBSONSet(documentID []byte, spec bsonSetUpdate) (bool, bool, error) {
-	unlockSchema := c.lockCollectionSchemaRead()
-	defer unlockSchema()
-	admissionState := c.lockCollectionCommandWALAdmission()
-	admission := &admissionState
-	defer admission.unlock()
+func (c *Collection) updateDirectBSONSet(documentID []byte, spec bsonSetUpdate, admissions ...*collectionCommandWALAdmission) (bool, bool, error) {
+	admission := collectionCommandWALAdmissionArgument(admissions)
+	if admission == nil {
+		unlockSchema := c.lockCollectionSchemaRead()
+		defer unlockSchema()
+		admissionState := c.lockCollectionCommandWALAdmission()
+		admission = &admissionState
+		defer admission.unlock()
+	}
 	unlockMutation := c.lockMutation()
 	mutationLocked := true
 	defer func() {
@@ -16173,10 +16180,10 @@ func (combiner *collectionUpdateCombiner) prepareBatchWithScratch(batch []collec
 	collection := ownedBatch[0].collection
 	unlockSchema := collection.lockCollectionSchemaRead()
 	defer unlockSchema()
-	admissionState := collection.lockCollectionCommandWALAdmission()
+	admissionState := collection.lockQueuedUpdateCommandWALAdmission()
 	admission := &admissionState
 	defer admission.unlock()
-	if err := collection.ensureWriteDomainOpen(); err != nil {
+	if err := admission.ensureWriteDomainOpen(); err != nil {
 		prepared.err = err
 		return prepared
 	}
@@ -16276,9 +16283,9 @@ func (combiner *collectionUpdateCombiner) stagePreparedBatches(prepared []collec
 	unlockSchema := func() {}
 	if err == nil {
 		unlockSchema = collection.lockCollectionSchemaRead()
-		admissionState := collection.lockCollectionCommandWALAdmission()
+		admissionState := collection.lockQueuedUpdateCommandWALAdmission()
 		admission = &admissionState
-		err = collection.ensureWriteDomainOpen()
+		err = admission.ensureWriteDomainOpen()
 	}
 	releaseAdmission := func() { admission.unlock(); unlockSchema(); unlockSchema = func() {} }
 	defer releaseAdmission()
@@ -16360,11 +16367,11 @@ func (combiner *collectionUpdateCombiner) stageSingleDirectPreparedBatch(prepare
 	collection := prepared.batch[0].collection
 
 	unlockSchema := collection.lockCollectionSchemaRead()
-	admissionState := collection.lockCollectionCommandWALAdmission()
+	admissionState := collection.lockQueuedUpdateCommandWALAdmission()
 	admission := &admissionState
 	releaseAdmission := func() { admission.unlock(); unlockSchema(); unlockSchema = func() {} }
 	defer releaseAdmission()
-	if err := collection.ensureWriteDomainOpen(); err != nil {
+	if err := admission.ensureWriteDomainOpen(); err != nil {
 		releaseAdmission()
 		combiner.completePreparedBatchWithError(prepared, err)
 		return
@@ -17048,12 +17055,12 @@ func (combiner *collectionUpdateCombiner) runBatchWithScratch(batch []collection
 
 	collection := batch[0].collection
 	unlockSchema := collection.lockCollectionSchemaRead()
-	admissionState := collection.lockCollectionCommandWALAdmission()
+	admissionState := collection.lockQueuedUpdateCommandWALAdmission()
 	admission := &admissionState
 	releaseAdmission := func() { admission.unlock(); unlockSchema(); unlockSchema = func() {} }
 	defer releaseAdmission()
 	results, batched, err := func() ([]UpdateBatchResult, bool, error) {
-		if err := collection.ensureWriteDomainOpen(); err != nil {
+		if err := admission.ensureWriteDomainOpen(); err != nil {
 			return nil, false, err
 		}
 		results, batched, err := collection.updateBatchOwnedItems(items, updateBatchModeNoSecondaryUniqueIndexChanges, admission)
@@ -17128,11 +17135,21 @@ func runUpdateCombineDirect(req collectionUpdateCombineRequest) collectionUpdate
 	if err := validateCollectionUpdateCombineRequest(req); err != nil {
 		return collectionUpdateCombineResult{err: err}
 	}
+	// Every caller owns a request already removed from a combiner queue. Keep
+	// that execution scope through direct fallback and any foreign WAL drain.
+	unlockSchema := req.collection.lockCollectionSchemaRead()
+	defer unlockSchema()
+	admissionState := req.collection.lockQueuedUpdateCommandWALAdmission()
+	admission := &admissionState
+	defer admission.unlock()
+	if err := admission.ensureWriteDomainOpen(); err != nil {
+		return collectionUpdateCombineResult{err: err}
+	}
 	if req.hasBSONSet {
-		matched, modified, err := req.collection.updateBSONSetDirect((&req).documentIDBytes(), req.bsonSet)
+		matched, modified, err := req.collection.updateBSONSetDirect((&req).documentIDBytes(), req.bsonSet, admission)
 		return collectionUpdateCombineResult{matched: matched, modified: modified, err: err}
 	}
-	matched, modified, err := req.collection.updateDirect((&req).documentIDBytes(), req.update)
+	matched, modified, err := req.collection.updateDirect((&req).documentIDBytes(), req.update, admission)
 	return collectionUpdateCombineResult{matched: matched, modified: modified, err: err}
 }
 
@@ -23330,6 +23347,9 @@ func (c *Collection) FindByCompoundIndexRange(indexName string, opts CompoundInd
 	if opts.Inspected != nil {
 		*opts.Inspected = 0
 	}
+	if c.nativeJSON != nil {
+		return c.findNativeCompoundIndexRange(indexName, opts)
+	}
 	if err := c.flushBufferedNoIndex(); err != nil {
 		return nil, false, err
 	}
@@ -24211,6 +24231,9 @@ type scanMergedCollectionIndexIDOptions struct {
 	// LogicalIndexKey extracts the encoded logical index value from an entry.
 	// It is required only for StableDocumentIDTies.
 	LogicalIndexKey func([]byte) ([]byte, error)
+	// admitTemporary is only the synchronous original read-budget admission
+	// seam. Native scans admit before copies/growth; legacy callers stay nil.
+	admitTemporary func(uint64) error
 }
 
 const (
@@ -24494,6 +24517,19 @@ func scanMergedCollectionIndexIDsStable(bufferedIt, persistedIt iterator.UnsafeI
 		}
 	}
 
+	return scanCollectionIndexIDsStable(nextLiveKey, valueType, maxResults, opts, fn)
+}
+
+// Both original iterator merges and captured native predecessor/successor reads
+// share this complete-group ordering. The source owns its work/borrow boundary.
+func scanCollectionIndexIDsStable(nextLiveKey func() ([]byte, bool, bool, error), valueType IndexValueType, maxResults int, opts scanMergedCollectionIndexIDOptions, fn func([]byte) (bool, error)) (bool, error) {
+	admit := func(n uint64) error {
+		if opts.admitTemporary != nil {
+			return opts.admitTemporary(n)
+		}
+		return nil
+	}
+
 	var seen map[string]struct{}
 	if opts.DedupeDocumentID {
 		seen = make(map[string]struct{})
@@ -24527,7 +24563,17 @@ func scanMergedCollectionIndexIDsStable(bufferedIt, persistedIt iterator.UnsafeI
 		if less == nil {
 			less = func(left, right []byte) bool { return bytes.Compare(left, right) < 0 }
 		}
-		sort.Slice(groupIDs, func(i, j int) bool { return less(groupIDs[i], groupIDs[j]) })
+		// Generic sorting avoids reflection-owned temporary backing in the
+		// admitted native scope; ordering is the same maintained comparator.
+		slices.SortFunc(groupIDs, func(left, right []byte) int {
+			if less(left, right) {
+				return -1
+			}
+			if less(right, left) {
+				return 1
+			}
+			return 0
+		})
 		remaining := len(groupIDs)
 		truncated := false
 		if maxResults > 0 && remaining > maxResults-emitted {
@@ -24582,6 +24628,9 @@ func scanMergedCollectionIndexIDsStable(bufferedIt, persistedIt iterator.UnsafeI
 			if keyBytes < len(logicalKey) || !canRetain(keyBytes) {
 				return true, nil
 			}
+			if err := admit(uint64(len(logicalKey))); err != nil {
+				return false, err
+			}
 			groupKey = bytes.Clone(logicalKey)
 			groupBytes += keyBytes
 		}
@@ -24612,6 +24661,21 @@ func scanMergedCollectionIndexIDsStable(bufferedIt, persistedIt iterator.UnsafeI
 		entryBytes := len(id) + stableDocumentIDTieEntryOverhead
 		if entryBytes < len(id) || !canRetain(entryBytes) {
 			return true, nil
+		}
+		if err := admit(uint64(len(id))); err != nil {
+			return false, err
+		}
+		if opts.admitTemporary != nil && len(groupIDs) == cap(groupIDs) {
+			capacity := max(1, 2*cap(groupIDs))
+			if capacity < 0 || uint64(capacity) > ^uint64(0)/uint64(unsafe.Sizeof([]byte{})) {
+				return false, memtable.ErrCOWCapacity
+			}
+			if err := admit(uint64(capacity) * uint64(unsafe.Sizeof([]byte{}))); err != nil {
+				return false, err
+			}
+			next := make([][]byte, len(groupIDs), capacity)
+			copy(next, groupIDs)
+			groupIDs = next
 		}
 		groupIDs = append(groupIDs, bytes.Clone(id))
 		groupBytes += entryBytes
@@ -26051,6 +26115,13 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 		seen[textIndexes[i].Name] = struct{}{}
 	}
 	meta.TextIndexes = textIndexes
+	return normalizeCollectionIndexedBufferOptions(meta), nil
+}
+
+// normalizeCollectionIndexedBufferOptions derives the original indexed write
+// policy from the current declarations without allocating or changing schema.
+// Native DROP uses the same policy after replacing a private index slice.
+func normalizeCollectionIndexedBufferOptions(meta CollectionMeta) CollectionMeta {
 	if meta.Options.DisableIndexedWriteMemtables {
 		meta.Options.BufferedIndexedWrites = false
 		meta.Options.BufferedIndexedWriteMaxDocuments = 0
@@ -26091,7 +26162,7 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 		meta.Options.BufferedIndexedAsyncFlush = false
 		meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits = 0
 	}
-	return meta, nil
+	return meta
 }
 
 func validateVectorIndexRepresentationSchema(meta CollectionMeta) error {

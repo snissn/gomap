@@ -14,7 +14,18 @@ import (
 // The COW frontier is the bounded cut vector itself. The existing admission
 // flags, command cutover hook, physical publication authority and durability
 // hooks keep their ordering; legacy mutable rotation/queue copies are absent.
-func (db *DB) checkpointCOWContext(ctx context.Context, automatic bool) (retErr error) {
+func (db *DB) checkpointCOWContext(ctx context.Context, automatic bool) error {
+	return db.checkpointCOWColumnCompaction(ctx, automatic, nil)
+}
+
+func (db *DB) CompactNativeColumnStore(ctx context.Context, operation backenddb.NativeColumnStoreCompaction) error {
+	if operation == nil {
+		return backenddb.ErrNativeSemanticUnsupported
+	}
+	return db.checkpointCOWColumnCompaction(ctx, false, operation)
+}
+
+func (db *DB) checkpointCOWColumnCompaction(ctx context.Context, automatic bool, operation backenddb.NativeColumnStoreCompaction) (retErr error) {
 	start := time.Now()
 	defer func() {
 		dur := uint64(time.Since(start))
@@ -93,10 +104,17 @@ func (db *DB) checkpointCOWContext(ctx context.Context, automatic bool) (retErr 
 	if err = ctx.Err(); err != nil {
 		return err
 	}
-	err = db.flushCOWFrozenCut(true, &publish, frontier)
+	err = db.flushCOWFrozenCutWithColumnCompaction(true, &publish, frontier, operation != nil, operation)
 	frontier = nil
 	if err != nil {
 		return err
+	}
+	if operation != nil {
+		// An adopted compaction has completed its original build and handoff.
+		// Finish this same checkpoint's durability and retirement boundary even
+		// if its caller canceled during construction. Ordinary checkpoints keep
+		// their existing cancellation semantics.
+		ctx = context.WithoutCancel(ctx)
 	}
 	if err = ctx.Err(); err != nil {
 		return err

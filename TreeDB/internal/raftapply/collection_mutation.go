@@ -28,6 +28,7 @@ type collectionMutationV1 struct {
 	documentFormat   collections.DocumentFormat
 	trustedValidBSON bool
 	ids              [][]byte
+	templateRecords  []byte
 	documents        [][]byte
 	bsonSetItems     []collections.BSONSetUpdateBatchItem
 	bsonSetMatched   int
@@ -252,9 +253,6 @@ func lowerCollectionMutationV1(entry raftentry.CommandEntryV1, limits nativewire
 		if err != nil {
 			return collectionMutationV1{}, err
 		}
-		if format == collections.DocumentFormatTemplateV1 {
-			return collectionMutationV1{}, codedError(raftentry.ErrorUnsupportedFeatureV1, "raftapply: template-v1 mutation lowering is not accepted by R3a v1")
-		}
 		ids, err := lowerByteVectorSectionV1(entry, nativewire.SectionDocumentIDs, limits, "document_ids")
 		if err != nil {
 			return collectionMutationV1{}, err
@@ -278,6 +276,15 @@ func lowerCollectionMutationV1(entry raftentry.CommandEntryV1, limits nativewire
 		mutation.trustedValidBSON = format == collections.DocumentFormatBSON
 		mutation.ids = ids
 		mutation.documents = documents
+		if format == collections.DocumentFormatTemplateV1 {
+			for _, section := range entry.Decoded.Sections {
+				if section.ID == nativewire.SectionTemplateRecords {
+					// Borrow the already validated section until original native stage admission.
+					mutation.templateRecords = section.Bytes
+					break
+				}
+			}
+		}
 	case nativewire.CommandUpdateBSONSet:
 		ids, err := lowerByteVectorSectionV1(entry, nativewire.SectionDocumentIDs, limits, "document_ids")
 		if err != nil {
@@ -367,7 +374,7 @@ func (h *Harness) preflightCollectionMutationWithOptionsV1(mutation *collectionM
 		default:
 			return nil, codedError(raftentry.ErrorUnsupportedFeatureV1, "raftapply: native deterministic mutation is not ordinary JSON insert/replace/delete")
 		}
-		if err := manager.PreflightNativeCommandWALMutation(mutation.collection, mutation.documentFormat, kind, mutation.ids, mutation.documents); err != nil {
+		if err := manager.PreflightNativeCommandWALMutation(mutation.collection, mutation.documentFormat, kind, mutation.ids, mutation.documents, mutation.templateRecords); err != nil {
 			return nil, codeCollectionApplyError(err)
 		}
 		return collection, nil
@@ -389,6 +396,9 @@ type collectionMutationPreparationV1 interface {
 }
 
 func (h *Harness) preflightOpenedCollectionMutationV1(mutation *collectionMutationV1, prepareFrameDocuments bool, collection collectionMutationPreparationV1) error {
+	if mutation.documentFormat == collections.DocumentFormatTemplateV1 {
+		return codedError(raftentry.ErrorUnsupportedFeatureV1, "raftapply: template-v1 mutation requires original native preparation")
+	}
 	if err := validateCollectionMutationFormatV1(mutation, collection.Meta().Options.DocumentFormat); err != nil {
 		return err
 	}

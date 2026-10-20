@@ -382,7 +382,17 @@ validation occurs before whole-cut installation and only then can its raw slot
 merge, so assigned failures cannot disappear into a run.
 
 Before releasing the original writer exclusion, rollover marks its current
-exact V/C endpoint in that same FIFO. Writes after cutover cannot extend this
+exact V/C endpoint in that same FIFO. A grouped durable ACK can append a bare
+root-neutral command after that cut's last root-changing mutation. Rollover
+closes this suffix only from the cut's actual retained endpoint (or sealed S),
+through contiguous installed root-neutral entries with unchanged V and no
+projection, custody, seal target or resource charge. Proof and the original
+strict boundary mark share the accepted FIFO mutex. An assigned barrier still
+installing is joined through the original condition, with poison and Close
+checks; its installer does not need the held cache writer exclusion. The proved
+command endpoint becomes the successor's visible and frozen C, including when
+only the barrier changed. No command coverage is inferred from V distance.
+Writes after cutover cannot extend this
 entry, including writes before the physical worker calls CaptureAcceptedCut.
 Capture accepts only a retained endpoint; it never derives an interior LSN from
 logical sequence distance. Active or handed-off entries cannot merge. Empty

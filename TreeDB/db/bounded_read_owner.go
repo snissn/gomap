@@ -54,6 +54,59 @@ func (s *Snapshot) PinnedValueLogFile(fileID uint32) (*os.File, rootpublication.
 	return f.File, identity, nil
 }
 
+// CopyVerifiedCachedLeafPage copies a hit from this captured snapshot's existing
+// decoded cache into caller-admitted page storage. The caller must first inspect
+// the record through PinnedValueLogFile and apply its shape/codec/limit policy.
+// The exact inspected handle and registered identity must still belong to this
+// snapshot. Misses, unverified records, disabled caches and insufficient scratch
+// return no hit; this operation never allocates or admits a cache entry. The
+// original tree caller remains responsible for page validation after copying.
+func (s *Snapshot) CopyVerifiedCachedLeafPage(ptr page.LeafLogPtr, inspected *os.File, identity rootpublication.StableIdentity, dst []byte) ([]byte, bool, error) {
+	if err := s.beginRead(); err != nil {
+		return nil, false, err
+	}
+	defer s.endRead()
+	if err := s.checkInspectedLeafFile(ptr, inspected, identity); err != nil {
+		return nil, false, err
+	}
+	if cap(dst) < page.PageSize {
+		return nil, false, nil
+	}
+	data, _, _, hit := s.reader.leafPageCache.getToWithRecordPolicy(ptr, dst[:0:page.PageSize], true)
+	return data, hit, nil
+}
+
+// MarkCachedLeafRecordVerified follows a successful full CRC-verified decode
+// through this snapshot's exact inspected file. It can upgrade only an existing
+// byte-identical decoded page; misses never allocate or populate the cache.
+func (s *Snapshot) MarkCachedLeafRecordVerified(ptr page.LeafLogPtr, inspected *os.File, identity rootpublication.StableIdentity, verifiedPage []byte) error {
+	if err := s.beginRead(); err != nil {
+		return err
+	}
+	defer s.endRead()
+	if err := s.checkInspectedLeafFile(ptr, inspected, identity); err != nil {
+		return err
+	}
+	s.reader.leafPageCache.markRecordChecksumVerified(ptr, verifiedPage)
+	return nil
+}
+
+// The caller holds beginRead, so the captured Set and reader cannot detach.
+func (s *Snapshot) checkInspectedLeafFile(ptr page.LeafLogPtr, inspected *os.File, identity rootpublication.StableIdentity) error {
+	if s.state == nil || s.state.ValueLogSet == nil {
+		return rootpublication.ErrUnresolvedResource
+	}
+	f := s.state.ValueLogSet.Files[ptr.ValueLogFileID()]
+	if f == nil || f.File == nil {
+		return rootpublication.ErrUnresolvedResource
+	}
+	registered, ok := f.RegisteredStableIdentity()
+	if !ok || f.File != inspected || registered != identity {
+		return rootpublication.ErrResourceConflict
+	}
+	return nil
+}
+
 // PinValueLogReadFiles fills caller-admitted storage without discovering a new
 // Set or allocating a second registry. Pin's concrete wrapper size belongs to
 // each reservation. The exact registered File identity gates cross-manager

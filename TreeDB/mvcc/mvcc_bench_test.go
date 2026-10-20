@@ -601,7 +601,7 @@ func BenchmarkPruneVersions(b *testing.B) {
 					b.Fatal(err)
 				}
 				wantPruned := uint64(benchmark.keys * discardedPerKey)
-				wantRetained := uint64(benchmark.keys * (depth - benchmark.floor + 1))
+				wantRetained := uint64(benchmark.keys * 2) // anchor plus first above-floor record
 				if stats.Pruned != wantPruned || stats.Retained != wantRetained {
 					b.Fatalf("stats=%+v want pruned=%d retained=%d", stats, wantPruned, wantRetained)
 				}
@@ -619,8 +619,8 @@ func BenchmarkPruneVersions(b *testing.B) {
 				b.StartTimer()
 			}
 			b.ReportMetric(float64(total.Pruned)/b.Elapsed().Seconds(), "pruned_versions/s")
-			b.ReportMetric(float64(total.Retained)/float64(max(b.N, 1)), "retained_versions/op")
-			b.ReportMetric(float64(total.RetainedBytes)/float64(max(b.N, 1)), "retained_physical_bytes/op")
+			b.ReportMetric(float64(total.Retained)/float64(max(b.N, 1)), "inspected_retained_versions/op")
+			b.ReportMetric(float64(total.RetainedBytes)/float64(max(b.N, 1)), "inspected_retained_physical_bytes/op")
 			b.ReportMetric(float64(total.PrunedBytes)/float64(max(total.Pruned, 1)), "physical_bytes/pruned_version")
 			b.ReportMetric(float64(total.DeleteWriteBytes)/float64(max(total.PrunedBytes, 1)), "delete_write_amplification")
 		})

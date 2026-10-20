@@ -8,6 +8,7 @@ import (
 	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 )
 
 // These hooks are package-test observation points for group formation and the
@@ -32,6 +33,7 @@ type typedUpsertGroupRequest struct {
 	retained   [][]byte
 	projection *trustedFloat32Projection
 	intent     *backenddb.CommandWALIntent
+	native     *nativeTypedUpsertRequest
 	ownedBytes int64
 	leader     bool
 	done       chan typedUpsertGroupResult
@@ -48,6 +50,9 @@ type typedUpsertGroupResult struct {
 // path. handled=false means no command LSN was assigned and the caller must
 // run UpsertTypedBatchWithStats through its existing exclusive admission path.
 func (c *Collection) TryUpsertTypedBatchGroup(ids, retained [][]byte, columns []TypedColumnBatch) (updated int, handled bool, stats CollectionInsertStats, err error) {
+	if c != nil && c.nativeJSON != nil {
+		return c.nativeTryUpsertTypedBatchGroup(ids, retained, columns)
+	}
 	if c == nil || c.db == nil {
 		return 0, true, stats, errCollectionNil
 	}
@@ -131,20 +136,28 @@ func (c *Collection) TryUpsertTypedBatchGroup(ids, retained [][]byte, columns []
 	admission.unlock()
 	unlockSchema()
 	unlockSchema = func() {}
+	return queueTypedUpsertGroup(coord, request, c.writeDomain, maxDocs, maxBytes)
+}
+
+// Both frontends share the original bounded coordinator, seal and acknowledgment
+// protocol. Native requests carry their captured schema instead of a facade.
+func queueTypedUpsertGroup(coord *collectionCommandWALCoordinator, request *typedUpsertGroupRequest, domain *collectionWriteDomain, maxDocs int, maxBytes int64) (int, bool, CollectionInsertStats, error) {
+	var stats CollectionInsertStats
 	coord.mu.Lock()
 	group := coord.typedUpsertGroup
 	if group == nil {
-		group = &typedUpsertGroup{domain: c.writeDomain, ids: make(map[string]struct{}, len(ids)), maxDocs: maxDocs, maxBytes: maxBytes}
+		group = &typedUpsertGroup{domain: domain, ids: make(map[string]struct{}, len(request.ids)), maxDocs: maxDocs, maxBytes: maxBytes}
 		if !group.add(request) {
 			coord.mu.Unlock()
 			return 0, false, stats, nil
 		}
 		request.leader = true
 		coord.typedUpsertGroup = group
-	} else if group.domain != c.writeDomain || !group.add(request) {
+	} else if group.domain != domain || !group.add(request) {
 		coord.mu.Unlock()
 		return 0, false, stats, nil
 	}
+	coord.condLocked().Broadcast()
 	coord.mu.Unlock()
 
 	if request.leader {
@@ -165,9 +178,13 @@ func (c *Collection) TryUpsertTypedBatchGroup(ids, retained [][]byte, columns []
 		if cond := coord.condLocked(); cond != nil {
 			cond.Broadcast()
 		}
+		// No queued backing may outlive a native caller's independent receipt.
+		group.requests, group.ids = nil, nil
 		coord.mu.Unlock()
-		for i, queued := range requests {
-			queued.done <- results[i]
+		for i := range requests {
+			done := requests[i].done
+			requests[i] = nil
+			done <- results[i]
 		}
 	}
 	result := <-request.done
@@ -179,8 +196,18 @@ func (group *typedUpsertGroup) canAdd(request *typedUpsertGroupRequest) bool {
 		len(request.ids) > group.maxDocs-group.documents || request.ownedBytes > group.maxBytes-group.bytes {
 		return false
 	}
-	if len(group.requests) != 0 && !group.requests[0].collection.SameCachedCatalog(request.collection) {
+	if request.native != nil && len(group.requests) >= commitlog.MaxCompositeMutationMembersV1 {
 		return false
+	}
+	if len(group.requests) != 0 {
+		first := group.requests[0]
+		if first.native != nil || request.native != nil {
+			if !nativeTypedUpsertCompatible(first, request) {
+				return false
+			}
+		} else if !first.collection.SameCachedCatalog(request.collection) {
+			return false
+		}
 	}
 	for _, id := range request.ids {
 		if _, exists := group.ids[string(id)]; exists {
@@ -206,6 +233,9 @@ func (group *typedUpsertGroup) add(request *typedUpsertGroupRequest) bool {
 func (group *typedUpsertGroup) execute(requests []*typedUpsertGroupRequest) []typedUpsertGroupResult {
 	if len(requests) == 0 {
 		return nil
+	}
+	if requests[0].native != nil {
+		return group.executeNative(requests)
 	}
 	c := requests[0].collection
 	unlockSchema := c.lockCollectionSchemaRead()

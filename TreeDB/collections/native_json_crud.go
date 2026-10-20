@@ -71,7 +71,15 @@ func (c *Collection) nativeUpdateBatchMode(items []UpdateBatchItem, mode updateB
 	}
 	if mode == updateBatchModeNoSecondaryUniqueIndexChanges && collectionMetaHasSecondaryUniqueIndex(g.probe.meta) && len(tx.members) != 0 {
 		tx.mu.Lock()
-		_, _, _, err = nativeJSONFinalRowsResolved(g.name, g.probe.meta, &g.rows, func(n uint64) error { return tx.admitStage(g, n) }, func(doc []byte) error { return tx.prepareValidation(g, doc) }, mode, g.templates)
+		if g.typed != nil {
+			var mutations []memtable.COWMutation
+			mutations, err = tx.nativeTypedFinalMutations(g)
+			if err == nil {
+				_, _, _, err = nativeTypedIndexFinalPlanMode(g.probe.meta, mutations, g.typed, func(id []byte) ([]byte, error) { return tx.typedOpeningIndexState(g, id) }, func(n uint64) error { return tx.admitStage(g, n) }, mode)
+			}
+		} else {
+			_, _, _, err = nativeJSONFinalRowsResolved(g.name, g.probe.meta, &g.rows, func(n uint64) error { return tx.admitStage(g, n) }, func(doc []byte) error { return tx.prepareValidation(g, doc) }, mode, g.templates)
+		}
 		tx.mu.Unlock()
 		if errors.Is(err, errUpdateBatchChangesSecondaryUniqueIndex) {
 			clear(results)
@@ -189,7 +197,7 @@ func (t *NativeJSONTxn) checkNativeUpdateUnique(g *nativeJSONTxnBinding, runtime
 				}
 				end := prefixEnd(prefix)
 				ns := g.namespace()
-				ns.Domain = uint64(runtimeIdx) + 4
+				ns.Domain = nativeJSONSecondaryDomainNumber(g.probe.meta, runtimeIdx)
 				if err = t.trackDependency(ns, txnhistory.RangeEffect, prefix, end); err != nil {
 					return err
 				}

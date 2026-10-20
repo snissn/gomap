@@ -102,11 +102,16 @@ func (c *COWTraversal) Record(work *COWTraversalWork) (COWRecord, bool, error) {
 	if !c.cursor.Ready() {
 		return COWRecord{}, false, nil
 	}
-	if work == nil || !work.Reserve(1, uint64(unsafe.Sizeof(COWRecord{}))+2*uint64(unsafe.Sizeof(cowValue{}))+2*uint64(unsafe.Sizeof(""))) {
+	// Include the fixed metadata read before decoding the packed value, in
+	// addition to the stored headers and unchanged public output record.
+	if work == nil || !work.Reserve(1, uint64(unsafe.Sizeof(COWRecord{}))+2*uint64(unsafe.Sizeof(cowValue("")))+2*uint64(unsafe.Sizeof(""))+cowValueMetadataBytes) {
 		return COWRecord{}, false, btree.ErrWork
 	}
 	key, v, valid := c.cursor.Current()
-	return COWRecord{Key: key, Value: v.value, Ptr: v.ptr, Flags: v.flags, Revision: v.revision}, valid, nil
+	if !valid {
+		return COWRecord{}, false, nil
+	}
+	return v.record(key), true, nil
 }
 
 // CloseStep returns a once-owned retirement only when charged stack cleanup and

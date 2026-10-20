@@ -511,8 +511,10 @@ func (c *Collection) lockCommandWALStagingAfterForeignDrain() (func(), error) {
 // leases, takes mutation in the ordinary order, then reacquires staging with
 // close/poison and coordinator checks. A newly foreign owner requires replanning
 // rather than draining under mutation. The caller must revalidate its plan
-// before append; an assigned intent is never eligible for this handoff.
-func (c *Collection) lockMutationForCommandWALStaging(unlockRaw *func(), intent *backenddb.CommandWALIntent) (collectionMutationUnlock, error) {
+// before append; an assigned intent is never eligible for this handoff. Only
+// an existing queued-worker admission may finish through domain close; callers
+// without that admission retain the ordinary ingress guard on reacquisition.
+func (c *Collection) lockMutationForCommandWALStaging(unlockRaw *func(), intent *backenddb.CommandWALIntent, admissions ...*collectionCommandWALAdmission) (collectionMutationUnlock, error) {
 	if unlockRaw == nil || *unlockRaw == nil {
 		return c.lockMutation(), nil
 	}
@@ -526,7 +528,12 @@ func (c *Collection) lockMutationForCommandWALStaging(unlockRaw *func(), intent 
 	*unlockRaw = nil
 	unlockMutation := c.lockMutation()
 	*unlockRaw = c.db.LockCommandWALStaging()
-	err := c.ensureWriteDomainOpen()
+	var err error
+	if admission := collectionCommandWALAdmissionArgument(admissions); admission != nil {
+		err = admission.ensureWriteDomainOpen()
+	} else {
+		err = c.ensureWriteDomainOpen()
+	}
 	if err == nil {
 		err = c.db.CheckCommandWALPublishReady()
 	}

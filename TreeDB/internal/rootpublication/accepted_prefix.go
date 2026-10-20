@@ -111,6 +111,7 @@ type acceptedEntry struct {
 	reserved, ordered, maintenance bool
 	descriptor                     AcceptedDescriptor
 	receipt                        AcceptedReceipt
+	firstCanonicalLSN              uint64
 	seal                           PhysicalSealReceipt
 	handedOff, boundary            bool
 	retiring, released             bool
@@ -252,6 +253,13 @@ func (ticket AcceptedTicket) BindPreassignedCustody(custody AcceptedCustody) err
 // RecordAssigned records the actual canonical append result in canonical
 // sequencer order. A nonzero identity is irreversible, even with append error.
 func (ticket AcceptedTicket) RecordAssigned(lsn uint64, appendErr error, stable bool) error {
+	return ticket.RecordAssignedRange(lsn, lsn, appendErr, stable)
+}
+
+// RecordAssignedRange records one actual contiguous append behind the SAME
+// original ticket. Only the original append guard supplies a grouped range;
+// no participant becomes logically installed before the whole-cut swap.
+func (ticket AcceptedTicket) RecordAssignedRange(first, last uint64, appendErr error, stable bool) error {
 	if ticket.owner == nil {
 		return ErrAcceptedReceipt
 	}
@@ -259,12 +267,13 @@ func (ticket AcceptedTicket) RecordAssigned(lsn uint64, appendErr error, stable 
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	_, e := ticket.entryLocked()
-	if e == nil || e.receipt.Assigned || e.receipt.Installed {
+	if e == nil || e.receipt.Assigned || e.receipt.Installed || (first == 0) != (last == 0) || first > last {
 		return ErrAcceptedReceipt
 	}
-	e.receipt.CanonicalLSN, e.receipt.Assigned, e.receipt.Uncertain = lsn, lsn != 0, lsn != 0 && appendErr != nil
-	e.receipt.WALCompleted, e.receipt.WALStable = lsn != 0 && appendErr == nil, lsn != 0 && appendErr == nil && stable
-	if lsn != 0 {
+	e.firstCanonicalLSN = first
+	e.receipt.CanonicalLSN, e.receipt.Assigned, e.receipt.Uncertain = last, last != 0, last != 0 && appendErr != nil
+	e.receipt.WALCompleted, e.receipt.WALStable = last != 0 && appendErr == nil, last != 0 && appendErr == nil && stable
+	if last != 0 {
 		p.orderEntryLocked(ticket.slot, e)
 	}
 	if e.receipt.Uncertain {
@@ -312,7 +321,7 @@ func (ticket AcceptedTicket) BeginInstall(descriptor AcceptedDescriptor) (Accept
 		p.mu.Unlock()
 		return AcceptedInstall{}, err
 	}
-	invalid := p.closed || e == nil || e.receipt.Installed || (descriptor.Sequence != p.frontiers.V+1 && !((descriptor.RootNeutral || e.maintenance) && descriptor.Sequence == p.frontiers.V)) || e.receipt.Uncertain || (e.receipt.CanonicalLSN != 0 && e.receipt.CanonicalLSN != p.frontiers.C+1) || (len(descriptor.Projections) != 0 && descriptor.Custody == nil) || (e.descriptor.Custody != nil && e.descriptor.Custody != descriptor.Custody)
+	invalid := p.closed || e == nil || e.receipt.Installed || (descriptor.Sequence != p.frontiers.V+1 && !((descriptor.RootNeutral || e.maintenance) && descriptor.Sequence == p.frontiers.V)) || e.receipt.Uncertain || (e.receipt.CanonicalLSN != 0 && (e.firstCanonicalLSN != p.frontiers.C+1 || e.firstCanonicalLSN > e.receipt.CanonicalLSN)) || (len(descriptor.Projections) != 0 && descriptor.Custody == nil) || (e.descriptor.Custody != nil && e.descriptor.Custody != descriptor.Custody)
 	if invalid {
 		err := error(ErrAcceptedReceipt)
 		if p.closed {
@@ -384,6 +393,10 @@ func (c *Coordinator) MarkAcceptedBoundary(through SealedPrefix) error {
 	p := &c.accepted
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	return p.markAcceptedBoundaryLocked(through)
+}
+
+func (p *acceptedPrefixState) markAcceptedBoundaryLocked(through SealedPrefix) error {
 	if p.poison != nil {
 		return p.poison
 	}
@@ -406,6 +419,64 @@ func (c *Coordinator) MarkAcceptedBoundary(through SealedPrefix) error {
 	}
 	e.boundary = true
 	return nil
+}
+
+// MarkAcceptedRootNeutralBoundary closes only an actual installed root-neutral
+// suffix after the supplied exact root endpoint. The caller holds the original
+// COW writer exclusion: ordinary assignments cannot be waiting behind it. The
+// independent WAL barrier producer can finish assignment/installation without
+// that exclusion, so its in-flight tail may be joined on the original condition.
+// Proof and the unchanged strict boundary check share one accepted latch.
+func (c *Coordinator) MarkAcceptedRootNeutralBoundary(through SealedPrefix) (SealedPrefix, error) {
+	c = c.AcceptedPrefixOwner()
+	if c == nil {
+		return SealedPrefix{}, ErrAcceptedReceipt
+	}
+	p := &c.accepted
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for {
+		if p.poison != nil {
+			return SealedPrefix{}, p.poison
+		}
+		if p.closed {
+			return SealedPrefix{}, ErrClosed
+		}
+		if through.LogicalSequence != p.frontiers.V || through.CanonicalLSN > p.frontiers.C || through.CanonicalLSN < p.frontiers.S.CanonicalLSN {
+			return SealedPrefix{}, ErrAcceptedReceipt
+		}
+		endpoint, anchored, pending := through, through == p.frontiers.S, false
+		for i := 0; i < p.count; i++ {
+			e := &p.entries[p.order[(p.head+i)%len(p.order)]]
+			r, d := &e.receipt, &e.descriptor
+			if !anchored {
+				if r.Installed && !r.Uncertain && r.LogicalSequence == through.LogicalSequence && r.CanonicalLSN == through.CanonicalLSN {
+					anchored = true
+					continue
+				}
+				if r.CanonicalLSN > through.CanonicalLSN {
+					return SealedPrefix{}, ErrAcceptedReceipt
+				}
+				continue
+			}
+			if !r.Installed && !r.Uncertain {
+				pending = true
+				break
+			}
+			if r.Uncertain || !r.Assigned || r.LogicalSequence != through.LogicalSequence || !d.RootNeutral || len(d.Projections) != 0 || d.Custody != nil || d.SealTarget != nil || d.AdmittedBytes != 0 || d.CleanupBytes != 0 || endpoint.CanonicalLSN == ^uint64(0) || e.firstCanonicalLSN != endpoint.CanonicalLSN+1 || r.CanonicalLSN < e.firstCanonicalLSN {
+				return SealedPrefix{}, ErrAcceptedReceipt
+			}
+			endpoint.CanonicalLSN = r.CanonicalLSN
+		}
+		if !anchored {
+			return SealedPrefix{}, ErrAcceptedReceipt
+		}
+		if pending {
+			p.changed.Wait()
+			continue
+		}
+		return endpoint, p.markAcceptedBoundaryLocked(endpoint)
+	}
 }
 
 // Abort is a deferred safeguard for a native publication that did not reach

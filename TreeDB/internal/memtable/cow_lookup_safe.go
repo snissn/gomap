@@ -56,3 +56,20 @@ func cowDeleteKey(tree *btree.Map[string, cowValue], key []byte) {
 		tree.Delete(owned)
 	}
 }
+
+func cowLookupLT(tree *btree.Map[string, cowValue], end []byte) (string, cowValue, bool) {
+	lo, hi := 0, tree.Len()
+	if end == nil {
+		return tree.GetAt(hi - 1)
+	}
+	for lo < hi {
+		mid := lo + (hi-lo)/2
+		key, _, _ := tree.GetAt(mid)
+		if cowKeyCompare(key, end) < 0 {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	return tree.GetAt(lo - 1)
+}

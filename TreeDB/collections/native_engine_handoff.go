@@ -19,6 +19,9 @@ type nativeBuiltDomain struct {
 	// empty proves the captured descriptor had no pending physical source.
 	// Its unchanged root cannot consume any newer source in latest.
 	empty bool
+	// physicalOnly is explicit maintenance of an exact captured base; it
+	// consumes no source when the captured domain has no pending boundary.
+	physicalOnly bool
 	// Build-only qualified key/value storage belongs to the original admitted
 	// result array. Handoff never samples a current collection name.
 	rootKey   string
@@ -44,7 +47,7 @@ func prepareNativeEngineHandoffWithCatalog(latest *nativeEngineVersion, built []
 	groups := 0
 	for i := range built {
 		if built[i].collection == 0 || built[i].interpretation == 0 || built[i].name == "" ||
-			(built[i].empty && (built[i].boundary != nil || built[i].root != built[i].oldBaseRoot)) ||
+			(built[i].empty && (built[i].boundary != nil || (!built[i].physicalOnly && built[i].root != built[i].oldBaseRoot))) ||
 			(!built[i].empty && built[i].boundary == nil) {
 			return nil, backenddb.ErrNativeSemanticUnsupported
 		}
@@ -163,10 +166,40 @@ func prepareNativeEngineHandoffWithCatalog(latest *nativeEngineVersion, built []
 		p.pendingDomains = p.pendingDomainBuilder.Seal()
 		p.pendingDomainBuilder = nil
 		if built[start].typedMeta != nil {
-			p.schema, err = newNativeSchemaState(built[start].typedMeta, admit)
+			physical := built[start].typedMeta
+			logical := c.schema.meta
+			if !nativeIndexLogicalMetaEqual(*logical, *physical) {
+				// The collection lookup already fixed the incarnation. A later
+				// logical cut may only have removed an ordered subset of these
+				// exact declarations; every other nonphysical field must match.
+				compatible := *physical
+				compatible.Indexes = logical.Indexes
+				compatible = normalizeCollectionIndexedBufferOptions(compatible)
+				if !nativeIndexSubsetRemoval(physical.Indexes, logical.Indexes) ||
+					!nativeIndexLogicalMetaEqual(*logical, compatible) {
+					return next, backenddb.ErrRootPublicationBasisMismatch
+				}
+			}
+			// Admit and deep-copy the captured schema exactly as promised for
+			// both handoff successors. Compact only this private owned copy:
+			// after the proof above it is the latest logical configuration with
+			// exactly the build's four physical metadata outputs. No borrowed
+			// latest-schema aliases or additional scratch backing escape here.
+			p.schema, err = newNativeSchemaState(physical, admit)
 			if err != nil {
 				return next, err
 			}
+			owned := p.schema.meta.Indexes
+			n := 0
+			for i := range owned {
+				if n < len(logical.Indexes) && owned[i].Name == logical.Indexes[n].Name {
+					owned[n] = owned[i]
+					n++
+				}
+			}
+			clear(owned[n:])
+			p.schema.meta.Indexes = owned[:n]
+			*p.schema.meta = normalizeCollectionIndexedBufferOptions(*p.schema.meta)
 		} else {
 			c.schema.retain()
 			p.schema = c.schema

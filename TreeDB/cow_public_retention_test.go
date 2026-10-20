@@ -203,9 +203,15 @@ func TestCOWPublicRetentionRefusalDrainAndResume(t *testing.T) {
 			}
 			pinned = nil
 			drained := cache.COWMemoryStats()
-			if drained.Generations >= plateau.Generations || drained.TotalBytes >= plateau.TotalBytes {
+			// Check the generations and bytes retained by these predecessors.
+			// ReservedBytes also includes independent original-owner capacity;
+			// resizing that capacity does not imply a predecessor stayed pinned.
+			if drained.Generations >= plateau.Generations || drained.Views != 0 || drained.Sources != 0 ||
+				drained.HistoryBytes != 0 || drained.RetiredBytes != 0 {
 				t.Fatalf("predecessor release did not drain: plateau%+v drained%+v", plateau, drained)
 			}
+			cowPublicRetentionBound(t, drained, limits)
+			t.Logf("predecessor release: plateau%+v drained%+v", plateau, drained)
 			if err := cowPublicContractComplete(t, blocked, "post-drain checkpoint", database.Checkpoint); err != nil {
 				t.Fatal(err)
 			}

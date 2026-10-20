@@ -23,19 +23,23 @@ const (
 	deterministicSectionScratchCapacity = sectionSeenInlineCapacity
 	maxDeterministicEntrySections       = defaultMaxSections
 
-	deterministicCollectionRefTagName     = 1
-	deterministicCollectionRefTagHandle   = 2
-	deterministicReplacementExisting      = 1
-	deterministicTemplateV1InputMagic     = "TD1I"
-	deterministicTemplateV1StoredMagic    = "TD1D"
-	deterministicTemplateV1RecordMagic    = "TD1T"
-	deterministicTemplateV1KindNull       = byte(0)
-	deterministicTemplateV1KindFalse      = byte(1)
-	deterministicTemplateV1KindTrue       = byte(2)
-	deterministicTemplateV1KindFloat64    = byte(3)
-	deterministicTemplateV1KindString     = byte(4)
-	deterministicTemplateV1KindObject     = byte(5)
-	deterministicTemplateV1KindArray      = byte(6)
+	deterministicCollectionRefTagName   = 1
+	deterministicCollectionRefTagHandle = 2
+	deterministicReplacementExisting    = 1
+	deterministicTemplateV1InputMagic   = "TD1I"
+	deterministicTemplateV1StoredMagic  = "TD1D"
+	deterministicTemplateV1InsertMagic  = "TD1H"
+	deterministicTemplateV1RecordMagic  = "TD1T"
+	// Match the maintained collections encoder, including its original magic-prefixed
+	// iota block. These values are not a separate wire-only template grammar.
+	deterministicTemplateV1KindNull       = byte(4)
+	deterministicTemplateV1KindFalse      = byte(5)
+	deterministicTemplateV1KindTrue       = byte(6)
+	deterministicTemplateV1KindFloat64    = byte(7)
+	deterministicTemplateV1KindString     = byte(8)
+	deterministicTemplateV1KindObject     = byte(9)
+	deterministicTemplateV1KindArray      = byte(10)
+	deterministicTemplateV1KindJSONNumber = byte(11)
 	deterministicTemplateV1MaxArray       = 1 << 20
 	deterministicTemplateV1MaxTemplates   = 1 << 16
 	deterministicTemplateV1MaxDepth       = 64
@@ -744,8 +748,9 @@ func validateDeterministicTemplateDocument(raw []byte, templates deterministicTe
 			embeddedTemplates = append(embeddedTemplates, deterministicTemplate{id: id, fieldCount: fieldCount})
 		}
 	}
-	if !consumeDeterministicTemplateMagic(raw, &pos, deterministicTemplateV1StoredMagic) {
-		return protocolError(ErrMalformedFrame, "malformed template-v1 stored document")
+	if !consumeDeterministicTemplateMagic(raw, &pos, deterministicTemplateV1InsertMagic) &&
+		!consumeDeterministicTemplateMagic(raw, &pos, deterministicTemplateV1StoredMagic) {
+		return protocolError(ErrMalformedFrame, "malformed template-v1 hash document")
 	}
 	return validateDeterministicTemplateStoredDocument(raw, &pos, embeddedTemplates, true)
 }
@@ -846,7 +851,9 @@ func skipDeterministicTemplateValue(raw []byte, pos *int, templates deterministi
 		}
 		*pos += 8
 		return nil
-	case deterministicTemplateV1KindString:
+	// JSON-number text retains its exact lexical bytes. Like unresolved hashes,
+	// lexical validity is checked by the original admitted collection preparer.
+	case deterministicTemplateV1KindString, deterministicTemplateV1KindJSONNumber:
 		n, err := readDeterministicTemplateUvarint(raw, pos, "template string length")
 		if err != nil {
 			return err

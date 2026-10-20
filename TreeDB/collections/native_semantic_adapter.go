@@ -32,7 +32,7 @@ func (e *nativeEngineVersion) PrepareBuild(group *backenddb.RootPublicationBuild
 		}
 		return fmt.Errorf("collections: native build prepare: %w", err)
 	}
-	if err = build.materializeDomains(group); err != nil {
+	if err = build.materializeDomains(group, e.names); err != nil {
 		return fmt.Errorf("collections: native build materialize: %w", err)
 	}
 	return nil

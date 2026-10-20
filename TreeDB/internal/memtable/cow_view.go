@@ -264,7 +264,7 @@ func (c *COWCursor) Record() (COWRecord, bool, error) {
 		return COWRecord{}, false, nil
 	}
 	v := c.iter.Value()
-	return COWRecord{Key: c.iter.Key(), Value: v.value, Ptr: v.ptr, Flags: v.flags, Revision: v.revision}, true, nil
+	return v.record(c.iter.Key()), true, nil
 }
 func (c *COWCursor) Close() {
 	c.mu.Lock()

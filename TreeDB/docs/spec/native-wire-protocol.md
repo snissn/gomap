@@ -495,6 +495,16 @@ For template-v1 collections, the protocol MUST support both:
 - a batch-level template-record section that lets clients send each template
   record once per batch.
 
+Template values use the maintained collection encoder's tags: null `4`, false
+`5`, true `6`, float64 `7`, string `8`, object `9`, array `10`, and lexical JSON
+number `11`. The earlier wire validator's synthetic `0..6` table did not match
+that encoder and never supported the collection mutation apply route. Current
+self-contained `TD1I` input contains a hash-addressed `TD1H` root; the external
+hash-addressed `TD1D` form remains supported with embedded or batch records.
+Neither form trusts collection-local numeric template IDs. Length-delimited
+JSON-number text keeps its exact bytes; lexical validity and unresolved hashes
+are checked by the original captured collection preparer before acceptance.
+
 The batch-level template section is preferred for native clients because it
 matches the collection root model: template records, primary documents,
 index-state, and secondary-index postings are one logical collection mutation

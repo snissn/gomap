@@ -328,9 +328,9 @@ func runNativeClusterAdapterPreflightLifecycle(t *testing.T, format nativewire.D
 	}
 	checkRows()
 	checkHeld()
-	// Unsupported metadata cannot be admitted merely because its name is absent.
-	unsupported := deterministicCreateCollectionEntryWithOptions(t, "template", "native-cluster:unsupported", testCreateCollectionMetaOptions{documentFormat: uint64(nativewire.DocumentFormatTemplateV1)})
-	decoded, err := raftentry.DecodeCommandEntryV1(unsupported, raftentry.DecodeOptions{})
+	// Template Create preflight is supported but remains identity-free.
+	templateCreate := deterministicCreateCollectionEntryWithOptions(t, "template", "native-cluster:template-preflight", testCreateCollectionMetaOptions{documentFormat: uint64(nativewire.DocumentFormatTemplateV1)})
+	decoded, err := raftentry.DecodeCommandEntryV1(templateCreate, raftentry.DecodeOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -340,18 +340,18 @@ func runNativeClusterAdapterPreflightLifecycle(t *testing.T, format nativewire.D
 		t.Fatal("missing original state token")
 	}
 	_, err = fsm.PreflightCommandEntryV1(context.Background(), raftcluster.CommandEntryPreflightRequestV1{
-		GroupID: fsm.cluster.GroupID, NodeID: fsm.cluster.NodeID, EntryBytes: unsupported, DecodedEntry: decoded,
+		GroupID: fsm.cluster.GroupID, NodeID: fsm.cluster.NodeID, EntryBytes: templateCreate, DecodedEntry: decoded,
 		CurrentCatalogVersion: testCatalogVersionStart, HasCurrentCatalogVersion: true, SyncLocalCommandWAL: true,
 	})
-	if !errors.Is(err, backenddb.ErrNativeSemanticUnsupported) {
-		t.Fatalf("unsupported native create preflight=%v", err)
+	if err != nil {
+		t.Fatalf("template native create preflight=%v", err)
 	}
 	after, ok := backend.StateToken()
 	if backend.CommandWALNextLSN() != next || sequence() != seq || !ok || after != state {
-		t.Fatal("unsupported create claimed native state")
+		t.Fatal("template preflight claimed native state")
 	}
 	if _, err := manager.OpenCollection("template"); !errors.Is(err, collections.ErrCollectionNotFound) {
-		t.Fatalf("unsupported create became visible: %v", err)
+		t.Fatalf("template preflight became visible: %v", err)
 	}
 	lastIndex := uint64(4)
 	retryEntry, retryResult := deletion, deleteResult

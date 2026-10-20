@@ -12,7 +12,8 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
 
-// nativeTypedDelta retains only declared vectors and the noncolumn residual.
+// nativeTypedDelta retains declared values and their original retained JSON or
+// semantic-stream carrier, including the complete document for Full.
 // previous is an original immutable state edge, not a second visibility owner.
 // appliedLSN and memberOrdinal are bound once, before the private successor is
 // installed; checkpoint progress never supplies a command's physical identity.
@@ -33,6 +34,8 @@ type nativeTypedDelta struct {
 // Vector backing has its own original receipt, so dropping a captured prefix
 // need not retain consumed ancestors merely to preserve a newer row slice.
 type nativeTypedRows struct {
+	graph    *nativeVectorGraphRecipe
+	source   *nativeSourceImportDeltaV2
 	refs     atomic.Int64
 	rows     []columnDeclaredRow
 	retained [][]byte
@@ -60,9 +63,19 @@ func (r *nativeTypedRows) release() cowbtree.OwnedMapCompletion {
 	clear(r.retained)
 	clear(r.deleted)
 	r.rows, r.retained, r.deleted = nil, nil, nil
+	var sourceDone cowbtree.OwnedMapCompletion
+	if r.graph != nil {
+		sourceDone.Append(r.graph.release())
+		r.graph = nil
+	}
+	if r.source != nil {
+		sourceDone.Append(r.source.release())
+		r.source = nil
+	}
 	refund := r.refund
 	r.refund = nil
-	return refund.Completion()
+	sourceDone.Append(refund.Completion())
+	return sourceDone
 }
 
 func (d *nativeTypedDelta) retain() {
@@ -118,17 +131,28 @@ func nativeTypedDeltaHeaderCharge() uint64 {
 
 func nativeTypedMeta(meta CollectionMeta) bool {
 	cfg := meta.Options.ColumnStore
-	if cfg == nil || !cfg.Enabled || len(meta.Indexes) != 0 || len(cfg.Columns) == 0 || len(cfg.AggregateMetadata) != 0 || cfg.RetainedPayload != ColumnRetainedPayloadNonColumn {
+	if cfg == nil || !cfg.Enabled || len(cfg.Columns) == 0 || (cfg.RetainedPayload != ColumnRetainedPayloadNonColumn && cfg.RetainedPayload != ColumnRetainedPayloadFull) {
 		return false
 	}
 	encoding := columnRetainedPayloadEffectiveEncoding(cfg)
-	// Preserve the existing semantic-stream slice. Multiple declared columns
-	// use the maintained typed projection's non-null JSON carrier contract.
-	if encoding != ColumnRetainedPayloadEncodingJSON && (encoding != ColumnRetainedPayloadEncodingSemanticStreamV1 || len(cfg.Columns) != 1) {
+	full := cfg.RetainedPayload == ColumnRetainedPayloadFull
+	if full && (encoding != ColumnRetainedPayloadEncodingJSON || normalizedDocumentFormat(meta.Options.DocumentFormat) != DocumentFormatJSON) {
+		return false
+	}
+	// Preserve the maintained scalar semantic-stream owners and multi-column
+	// producer while admitting Full only through its complete JSON carrier.
+	if encoding != ColumnRetainedPayloadEncodingJSON && encoding != ColumnRetainedPayloadEncodingSemanticStreamV1 {
+		return false
+	}
+	// Nested scalar parsing and aggregate asset fanout share the maintained
+	// prepared producer's existing structural limits. Other eligible layouts
+	// keep their original top-level/no-aggregate contract.
+	boundedScalars := encoding == ColumnRetainedPayloadEncodingSemanticStreamV1 && preparedInsertBoundedScalarColumns(cfg.Columns)
+	if len(cfg.AggregateMetadata) != 0 && (!boundedScalars || !preparedInsertBoundedAggregateMetadata(*cfg)) {
 		return false
 	}
 	for _, col := range cfg.Columns {
-		if col.Path == "" || strings.Contains(col.Path, ".") {
+		if col.Path == "" || (strings.Contains(col.Path, ".") && !boundedScalars) {
 			return false
 		}
 		switch col.ValueType {
@@ -140,11 +164,35 @@ func nativeTypedMeta(meta CollectionMeta) bool {
 		default:
 			return false
 		}
-		if encoding == ColumnRetainedPayloadEncodingJSON {
+		if full {
+			// Ordinary Full inserts parse the declared values from the complete
+			// document, retaining both through the existing typed publication.
+			// Direct typed batches keep their separate NonColumn-only gate.
+			if col.Nullable || (col.Owner != TypedStorageOwnerRowAsset && col.Owner != TypedStorageOwnerColumnPart) {
+				return false
+			}
+		} else if encoding == ColumnRetainedPayloadEncodingJSON {
 			if col.Nullable || !((col.ValueType == ColumnStoreValueString && col.Owner == TypedStorageOwnerRowAsset) || (col.ValueType == ColumnStoreValueFloat32Vector && col.Owner == TypedStorageOwnerColumnPart)) {
 				return false
 			}
-		} else if col.Owner != TypedStorageOwnerColumnPart {
+		} else {
+			if col.Owner != TypedStorageOwnerColumnPart && col.Owner != TypedStorageOwnerRowAsset {
+				return false
+			}
+			// Keep the original single-vector semantic-stream lane. This scalar
+			// producer migration does not widen vector layouts or their owners.
+			if col.ValueType == ColumnStoreValueFloat32Vector && (len(cfg.Columns) != 1 || col.Owner != TypedStorageOwnerColumnPart) {
+				return false
+			}
+		}
+	}
+	// The maintained direct typed producer indexes only declared, non-null
+	// String RowAsset values carried alongside non-column JSON residuals.
+	if full && len(meta.Indexes) != 0 {
+		return false
+	}
+	for _, index := range meta.Indexes {
+		if normalizedDocumentFormat(meta.Options.DocumentFormat) != DocumentFormatJSON || encoding != ColumnRetainedPayloadEncodingJSON || index.ValueType != IndexValueString || index.MultiKey || len(index.Components) != 0 || typedStringColumnIndex(cfg.Columns, index.Field) < 0 {
 			return false
 		}
 	}

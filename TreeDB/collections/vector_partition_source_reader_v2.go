@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/sourcepartition"
 	"github.com/snissn/gomap/TreeDB/internal/vectorpartition"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -23,6 +25,8 @@ type VectorPartitionSourceReaderV2 struct {
 	mu          sync.RWMutex
 	snap        *backenddb.Snapshot
 	ownSnapshot bool
+	nativeRead  *NativeJSONRead
+	nativeLease *memtable.COWExternalLease
 	root        uint64
 	prefix      string
 	expected    vectorpartition.SourceSnapshotV2
@@ -78,7 +82,12 @@ func (r *VectorPartitionSourceReaderV2) Commitment() VectorPartitionSourceCommit
 // ValidateOwnerV2 checks the persisted import binding against the exact map
 // and selected owner. A completed checksum alone does not establish ownership.
 func (r *VectorPartitionSourceReaderV2) ValidateOwnerV2(ownership sourcepartition.ResolvedSourceShardMapV2, group string) error {
-	if r == nil || group == "" || r.owner.GroupID != group || r.expected.SourceMapEpoch != ownership.Epoch() || fmt.Sprintf("%x", r.expected.SourceMapDigest) != ownership.Digest() {
+	if r == nil {
+		return sourcepartition.ErrInvalidSourceShardMapV2
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if group == "" || r.owner.GroupID != group || r.expected.SourceMapEpoch != ownership.Epoch() || fmt.Sprintf("%x", r.expected.SourceMapDigest) != ownership.Digest() {
 		return sourcepartition.ErrInvalidSourceShardMapV2
 	}
 	ref := ownership.Collection()
@@ -98,6 +107,9 @@ type VectorPartitionSourceChunkReadV2 struct {
 // OpenVectorPartitionSourceSnapshotV2 performs a bounded set of point lookups,
 // verifies completed durable import progress, and retains no global row map.
 func (c *Collection) OpenVectorPartitionSourceSnapshotV2(expected VectorPartitionSourceSnapshotV2, indexName string) (*VectorPartitionSourceReaderV2, error) {
+	if c != nil && c.nativeJSON != nil {
+		return c.openNativeSourceReaderV2(expected, indexName)
+	}
 	if c == nil || c.db == nil {
 		return nil, errCollectionDBNil
 	}
@@ -117,6 +129,10 @@ func (c *Collection) OpenVectorPartitionSourceSnapshotV2(expected VectorPartitio
 // source descriptors. Each temporary reader borrows that snapshot; closing it
 // does not release the session's root or accumulate per-shard reader handles.
 func (c *Collection) openVectorPartitionSourceSnapshotAtSnapshotV2(expected VectorPartitionSourceSnapshotV2, indexName string, snap *backenddb.Snapshot) (*VectorPartitionSourceReaderV2, error) {
+	return c.openVectorPartitionSourceCatalogV2(expected, indexName, snap, nil)
+}
+
+func (c *Collection) openVectorPartitionSourceCatalogV2(expected VectorPartitionSourceSnapshotV2, indexName string, snap *backenddb.Snapshot, catalog *collectionCatalog) (*VectorPartitionSourceReaderV2, error) {
 	sealed, err := vectorpartition.SealSourceSnapshotV2(expected, expected.MerkleRoot)
 	if err != nil || expected.Digest == ([sha256.Size]byte{}) || sealed != expected {
 		return nil, errors.New("collections: unsealed expected source snapshot")
@@ -125,9 +141,11 @@ func (c *Collection) openVectorPartitionSourceSnapshotAtSnapshotV2(expected Vect
 		return nil, backenddb.ErrClosed
 	}
 	fail := func(err error) (*VectorPartitionSourceReaderV2, error) { return nil, err }
-	catalog, err := c.catalogForSnapshot(snap)
-	if err != nil {
-		return fail(err)
+	if catalog == nil {
+		catalog, err = c.catalogForSnapshot(snap)
+		if err != nil {
+			return fail(err)
+		}
 	}
 	if catalog == nil || catalog.meta.Options.ColumnStore == nil {
 		return fail(errCollectionNotFound)
@@ -213,6 +231,16 @@ func (r *VectorPartitionSourceReaderV2) Close() error {
 	}
 	snap := r.snap
 	r.snap = nil
+	native, lease := r.nativeRead, r.nativeLease
+	r.nativeRead, r.nativeLease = nil, nil
+	r.prefix = ""
+	r.expected = VectorPartitionSourceSnapshotV2{}
+	r.owner = sourcepartition.SourceShardV2{}
+	if native != nil {
+		err := native.Close()
+		lease.Close()
+		return err
+	}
 	if r.ownSnapshot {
 		return snap.Close()
 	}
@@ -229,12 +257,32 @@ func (r *VectorPartitionSourceReaderV2) ReadChunk(index uint64) (VectorPartition
 	if r.snap == nil {
 		return out, backenddb.ErrClosed
 	}
+	// The original captured native reader owns one scratch pair. Serialize its
+	// synchronous use; Close takes the same outer reader lock first.
+	if r.nativeRead != nil {
+		r.nativeRead.mu.Lock()
+		defer r.nativeRead.mu.Unlock()
+	}
 	if index >= r.expected.ChunkCount() {
 		return out, errors.New("collections: source chunk outside snapshot")
 	}
 	read := func(key []byte) ([]byte, error) {
 		out.MetadataReads++
-		entry, err := r.snap.GetEntryAtRoot(r.root, key)
+		var entry node.LeafEntry
+		var err error
+		if r.nativeRead != nil {
+			scratch, e := r.nativeRead.physicalScratch()
+			if e != nil {
+				return nil, e
+			}
+			reader, e := r.snap.NativeReaderAtRoot(r.root)
+			if e != nil {
+				return nil, e
+			}
+			entry, err = reader.GetEntryExactWithFixedScratch(key, scratch.key[:], scratch.leaf[:], r.nativeRead.readLeaf)
+		} else {
+			entry, err = r.snap.GetEntryAtRoot(r.root, key)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -253,6 +301,26 @@ func (r *VectorPartitionSourceReaderV2) ReadChunk(index uint64) (VectorPartition
 	size := binary.BigEndian.Uint64(metadata)
 	if size == 0 || size > vectorpartition.MaxSourceChunkBytesV2 {
 		return VectorPartitionSourceChunkReadV2{}, errors.New("collections: source chunk byte bound")
+	}
+	var chunkLease *memtable.COWExternalLease
+	if r.nativeRead != nil {
+		charge, e := nativeTypedCheckedMul(size, 16)
+		if e != nil {
+			return out, e
+		}
+		rows := min(uint64(r.expected.RowsPerChunk), r.expected.RowCount)
+		headers, e := nativeTypedCheckedMul(rows, uint64(unsafe.Sizeof(vectorpartition.SourceRowV2{}))+uint64(unsafe.Sizeof(vectorpartition.SourceOrdinalOriginV2{})))
+		if e != nil {
+			return out, e
+		}
+		if e = nativeTypedCheckedAdd(&charge, headers+64*sha256.Size); e != nil {
+			return out, e
+		}
+		chunkLease, e = r.nativeRead.capture.NativeAllocator().AdmitNativeBytes(charge)
+		if e != nil {
+			return out, e
+		}
+		defer chunkLease.Close()
 	}
 	var leaf [sha256.Size]byte
 	copy(leaf[:], metadata[8:])

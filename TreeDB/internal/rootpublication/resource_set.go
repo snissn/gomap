@@ -2926,6 +2926,10 @@ type StableLogicalObligationRequirements struct {
 	ScopedFields     []ReachabilityField
 	ScopedNamespaces []StableLogicalObligationNamespaceScope
 	Obligations      []StableLogicalObligation
+	// Streams borrow immutable producer requirements through synchronous root
+	// finalization. Their headers and independent walk/lookup scratch belong to
+	// the original admitted producer; they never retain a newly captured root.
+	Streams []StableLogicalObligationRequirementStream
 	// commitments is derived at the normalization boundary and remains an
 	// immutable-by-convention proof of the complete per-field requirement set.
 	// It is intentionally package-private so callers cannot forge fast-path
@@ -2999,6 +3003,9 @@ func ValidateStableLogicalObligationMutationFinalRequirements(mutation StableLog
 // scanned nor copied. A false result is an authorization decline, not malformed
 // state: callers must retain the exact full filter/validation fallback.
 func CertifyStableLogicalObligationMutationFinalRequirements(source *StableResourceSet, mutation StableLogicalObligationMutation, requirements StableLogicalObligationRequirements, excluded ...ResourceKind) (bool, error) {
+	if len(requirements.Streams) != 0 {
+		return false, nil // Streamed requirements retain exact full verification.
+	}
 	if source.hasSelectedMetadata() {
 		return certifySelectedMutation(source, mutation, requirements, excluded)
 	}
@@ -3297,6 +3304,11 @@ func stableResourceSetLogicalObligationCommitments(source *StableResourceSet, fi
 // NormalizeStableLogicalObligationRequirements validates, de-duplicates, and
 // deterministically sorts one exact logical-reference closure.
 func NormalizeStableLogicalObligationRequirements(requirements StableLogicalObligationRequirements) (StableLogicalObligationRequirements, error) {
+	for _, stream := range requirements.Streams {
+		if stream == nil {
+			return StableLogicalObligationRequirements{}, ErrResourceOwnership
+		}
+	}
 	fields := append([]ReachabilityField(nil), requirements.ScopedFields...)
 	sort.Slice(fields, func(i, j int) bool { return fields[i] < fields[j] })
 	uniqueFields := fields[:0]
@@ -3325,7 +3337,7 @@ func NormalizeStableLogicalObligationRequirements(requirements StableLogicalObli
 		}
 	}
 	if len(uniqueFields) == 0 && len(uniqueNamespaces) == 0 {
-		if len(requirements.Obligations) != 0 {
+		if len(requirements.Obligations) != 0 || len(requirements.Streams) != 0 {
 			return StableLogicalObligationRequirements{}, fmt.Errorf("%w: logical obligations have no scoped fields", ErrUnresolvedResource)
 		}
 		return StableLogicalObligationRequirements{}, nil
@@ -3367,13 +3379,14 @@ func NormalizeStableLogicalObligationRequirements(requirements StableLogicalObli
 		normalized = append(normalized, obligations...)
 	}
 	var commitments map[ReachabilityField]stableLogicalObligationCommitment
-	if len(uniqueNamespaces) == 0 {
+	if len(uniqueNamespaces) == 0 && len(requirements.Streams) == 0 {
 		commitments = stableLogicalObligationRequirementCommitments(uniqueFields, normalized)
 	}
 	return StableLogicalObligationRequirements{
 		ScopedFields:     append([]ReachabilityField(nil), uniqueFields...),
 		ScopedNamespaces: uniqueNamespaces,
 		Obligations:      append([]StableLogicalObligation(nil), normalized...),
+		Streams:          requirements.Streams,
 		commitments:      commitments,
 	}, nil
 }
@@ -3385,6 +3398,7 @@ func MergeStableLogicalObligationRequirements(left, right StableLogicalObligatio
 		ScopedFields:     append(append([]ReachabilityField(nil), left.ScopedFields...), right.ScopedFields...),
 		ScopedNamespaces: append(append([]StableLogicalObligationNamespaceScope(nil), left.ScopedNamespaces...), right.ScopedNamespaces...),
 		Obligations:      append(append([]StableLogicalObligation(nil), left.Obligations...), right.Obligations...),
+		Streams:          append(append([]StableLogicalObligationRequirementStream(nil), left.Streams...), right.Streams...),
 	})
 }
 
@@ -3404,6 +3418,9 @@ func (index stableLogicalObligationRequirementIndex) containsScope(obligation St
 }
 
 func indexStableLogicalObligationRequirements(requirements StableLogicalObligationRequirements) (stableLogicalObligationRequirementIndex, error) {
+	if len(requirements.Streams) != 0 {
+		return stableLogicalObligationRequirementIndex{}, ErrResourceOwnership
+	}
 	normalized, err := NormalizeStableLogicalObligationRequirements(requirements)
 	if err != nil {
 		return stableLogicalObligationRequirementIndex{}, err
@@ -3851,6 +3868,9 @@ func CloneStableResourceSetForLogicalObligations(source *StableResourceSet, requ
 // CloneStableResourceSetForLogicalObligations. Its counters describe only this
 // closure derivation and are returned on both success and failure.
 func CloneStableResourceSetForLogicalObligationsWithWork(source *StableResourceSet, requirements StableLogicalObligationRequirements, excluded ...ResourceKind) (*StableResourceSet, StableResourceClosureWork, error) {
+	if len(requirements.Streams) != 0 && source != nil && !source.hasSelectedMetadata() {
+		return nil, StableResourceClosureWork{}, ErrResourceOwnership
+	}
 	if source != nil && source.physicalOnly {
 		return nil, StableResourceClosureWork{}, ErrResourceOwnership
 	}
@@ -3858,7 +3878,7 @@ func CloneStableResourceSetForLogicalObligationsWithWork(source *StableResourceS
 	if source == nil {
 		return nil, work, nil
 	}
-	if len(requirements.ScopedFields) == 0 && len(requirements.ScopedNamespaces) == 0 && len(requirements.Obligations) == 0 {
+	if len(requirements.ScopedFields) == 0 && len(requirements.ScopedNamespaces) == 0 && len(requirements.Obligations) == 0 && len(requirements.Streams) == 0 {
 		cloned, shared, err := cloneStableResourceSetKindView(source, excluded...)
 		if err != nil {
 			return nil, work, err
@@ -4183,6 +4203,9 @@ func ValidateStableResourceSetLogicalObligations(resources *StableResourceSet, r
 // mixed-producer fallbacks where scanning the complete exact closure is
 // intentional and must remain visible in performance evidence.
 func ValidateStableResourceSetLogicalObligationsWithWork(resources *StableResourceSet, requirements StableLogicalObligationRequirements) (StableResourceClosureWork, error) {
+	if len(requirements.Streams) != 0 && !resources.hasSelectedMetadata() {
+		return StableResourceClosureWork{}, ErrResourceOwnership
+	}
 	if resources != nil && resources.physicalOnly {
 		return StableResourceClosureWork{}, ErrResourceOwnership
 	}

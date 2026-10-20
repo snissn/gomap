@@ -1,8 +1,10 @@
 package db
 
 import (
+	"context"
 	"errors"
 	"github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
@@ -195,9 +197,23 @@ type NativePublicationResult struct {
 	Seal                                                                     rootpublication.PhysicalSealReceipt
 }
 
+// NativeColumnStoreCompaction carries only an operation's scalar completion.
+// It grants its caller no access to captured state or physical build authority.
+type NativeColumnStoreCompaction interface {
+	CompleteColumnStoreCompaction(systemRoot uint64)
+}
+
+// NativeColumnStoreCompactionState is an optional operation of the fixed
+// ORIGINAL captured engine state. Like PrepareBuild it uses only that state's
+// own ledger and the original group's synchronous borrowed capabilities.
+type NativeColumnStoreCompactionState interface {
+	PrepareColumnStoreCompaction(NativeColumnStoreCompaction, *RootPublicationBuildGroup, *Snapshot, *StableResourceCaptureLease) error
+}
+
 // NativeSemanticBridge is fixed once at Open to the backend's SAME private COW
 // owner. It introduces neither a participant registry nor a publication lane.
 type NativeSemanticBridge interface {
+	CompactNativeColumnStore(context.Context, NativeColumnStoreCompaction) error
 	Checkpoint() error
 	CaptureNativeCut() (NativeSemanticCapture, error)
 	BeginNativeConditionalTxn() (NativeConditionalTxn, error)
@@ -229,6 +245,24 @@ func (db *DB) SyncNativeSemanticPrefix() error {
 	return db.nativeSemanticBridge.Checkpoint()
 }
 
+// CompactNativeColumnStore uses the original checkpoint owner and covered
+// handoff. No command identity is allocated for physical maintenance.
+func (db *DB) CompactNativeColumnStore(ctx context.Context, operation NativeColumnStoreCompaction) error {
+	if db == nil {
+		return ErrClosed
+	}
+	if err := db.CheckStorageMaintenanceReady(); err != nil {
+		return err
+	}
+	if operation == nil || !db.nativeSemanticActive.Load() || !db.HasNativeSemanticBridge() {
+		return ErrNativeSemanticUnsupported
+	}
+	if err := db.ActivateNativeSemanticOwner(); err != nil {
+		return err
+	}
+	return db.nativeSemanticBridge.CompactNativeColumnStore(ctx, operation)
+}
+
 func (db *DB) CaptureNativeSemanticState() (NativeSemanticCapture, error) {
 	if !db.HasNativeSemanticBridge() {
 		return nil, ErrNativeSemanticUnsupported
@@ -256,6 +290,26 @@ func (db *DB) ValidateNativeCommandIntent(owner *transactionowner.Owner, intent 
 	}
 	if intent == nil || intent.AssignedLSN() != 0 {
 		return ErrCommandWALRejected
+	}
+	if participants := intent.inner.durablePrefixGroup; len(participants) != 0 {
+		if len(participants) < 2 || len(participants) > commitlog.MaxCompositeMutationMembersV1 || db.resolvedProfile != ProfileCommandWALDurable || intent.inner.fromReplay ||
+			intent.inner.kind != 0 || len(intent.inner.payload) != 0 {
+			return ErrCommandWALRejected
+		}
+		for i, participant := range participants {
+			if participant == nil || len(participant.inner.durablePrefixGroup) != 0 || participant.inner.fromReplay {
+				return ErrCommandWALRejected
+			}
+			for _, prior := range participants[:i] {
+				if prior == participant {
+					return ErrCommandWALRejected
+				}
+			}
+			if err := db.ValidateNativeCommandIntent(owner, participant); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 	registration, ok := lookupCommandWALReplayHandler(intent.inner.kind)
 	if !ok || registration.nativePrepare == nil {

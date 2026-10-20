@@ -43,6 +43,41 @@ ceiling. The focused contract requires three deterministic fixture builds, at
 least 50% reclaimable index pages, at least 40% offline index shrink, and
 reopen digest parity.
 
+## Public status scheduling revision (#4519)
+
+`BenchmarkPL06ExternalVacuumCollectionForegroundChurn` is an admitted-paused
+vacuum status fixture. Its test-only bridge uses the existing
+`testHookVacuumAfterBaseSnapshot` witness after the production entry has captured
+recoverable roots, rebuilt the older root, and started its real mutation recorder
+with a base snapshot. It pauses that SAME admitted vacuum while four workers
+perform the unchanged 40 operations each (80 point writes and 80 range deletes,
+with the original one-millisecond worker interval), then resumes the SAME call.
+The production tail replay, root revalidation/recapture, cutover and durability
+path remain active. There is no second vacuum, manufactured success, or production
+API change. An early refusal/failure still executes and drains all foreground
+work, with the original unsupported/error accounting and an exposure miss.
+
+Positive foreground overlap now means exposure to an admitted, paused vacuum.
+It does **not** demonstrate foreground performance during a simultaneously
+advancing rebuild. Public `ns/op`, foreground percentiles and allocation metrics
+include this changed coordination and typed-result logging; they are not
+comparable to historical uncoordinated PL06 timings and do not certify production
+maintenance performance. Historic captures retain their original interpretation
+and failed results. The legacy benchmark, timing boundary, three 10% CV gates,
+fixed work, ten interleaved sample pairs, workflow timeout, and classifier's
+at-least-one-success rule remain unchanged.
+
+The package-global witness is installed before the vacuum goroutine starts and
+restored to its prior value only after that call is joined. The fixture releases
+the pause after workers drain or its context is canceled. Hook-using fixtures must
+run serially. Every public result logs its concrete error type/text and separate
+matches for concurrent mutation, stale root set and stale WAL cleanup proof.
+
+This is an incremental scheduling/observability repair under #4519. It does not
+complete that issue's broader runner topology, controlled CV, or five hosted
+invocation requirements. Correctness/race checks and new hosted evidence remain
+required for the revised fixture; an old uncoordinated capture cannot validate it.
+
 ## Ownership
 
 | Current callsite or assertion group | Owner | Required successor behavior |

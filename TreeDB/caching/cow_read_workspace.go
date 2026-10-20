@@ -473,7 +473,7 @@ func (s *Snapshot) cowPhysicalLeafLocked(ptr page.LeafLogPtr, dst []byte) ([]byt
 // after that mutex; the cache scratch never takes a basis lock in return.
 func (b *cowBackendBasis) readPhysicalLeafLocked(c *cowCache, ptr page.LeafLogPtr, dst []byte, native bool) ([]byte, error) {
 	w := b.reader
-	f, _, err := b.snapshot.PinnedValueLogFile(ptr.ValuePtr().FileID)
+	f, identity, err := b.snapshot.PinnedValueLogFile(ptr.ValuePtr().FileID)
 	if err != nil {
 		return nil, err
 	}
@@ -487,16 +487,29 @@ func (b *cowBackendBasis) readPhysicalLeafLocked(c *cowCache, ptr page.LeafLogPt
 	if native && shape.Compressed && (shape.DictID != 0 || (shape.Codec != valuelog.BlockCodecSnappy && shape.Codec != valuelog.BlockCodecLZ4)) {
 		return nil, valuelog.ErrCOWReadUnsupported
 	}
+	if data, hit, err := b.snapshot.CopyVerifiedCachedLeafPage(ptr, f, identity, dst); err != nil || hit {
+		return data, err
+	}
+	var data []byte
 	if shape.Compressed {
 		c.physicalMu.Lock()
-		defer c.physicalMu.Unlock()
-		shared, err := c.physicalWorkspaceLocked(w.limits)
-		if err != nil {
-			return nil, err
+		shared, workspaceErr := c.physicalWorkspaceLocked(w.limits)
+		if workspaceErr != nil {
+			c.physicalMu.Unlock()
+			return nil, workspaceErr
 		}
-		return shared.readInspected(f, ptr.ValuePtr(), shape, true, dst)
+		data, err = shared.readInspected(f, ptr.ValuePtr(), shape, true, dst)
+		c.physicalMu.Unlock()
+	} else {
+		data, err = w.readInspected(f, ptr.ValuePtr(), shape, true, dst)
 	}
-	return w.readInspected(f, ptr.ValuePtr(), shape, true, dst)
+	if err != nil {
+		return nil, err
+	}
+	if err = b.snapshot.MarkCachedLeafRecordVerified(ptr, f, identity, data); err != nil {
+		return nil, err
+	}
+	return data, nil
 }
 
 // Physical entries borrow page scratch. Copy an inline value into the original

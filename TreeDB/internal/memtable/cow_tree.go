@@ -30,13 +30,6 @@ type COWRecord struct {
 	Flags      byte
 }
 
-type cowValue struct {
-	value    string
-	ptr      page.ValuePtr
-	revision page.EntryRevision
-	flags    byte
-}
-
 type cowPairLayout struct {
 	value cowValue
 	key   string
@@ -317,11 +310,15 @@ func (w *COWWriter) estimate(entries []COWMutation, opts COWPrepareOptions) (COW
 			}
 		}
 		if !e.Remove {
+			valueSize, ok := cowValueSize(len(e.Value))
+			if !ok {
+				return c, ErrCOWCapacity
+			}
 			keyCharge := uint64(0)
 			if !replacement {
 				keyCharge = cowAllocation(uint64(len(e.Key)))
 			}
-			if !add(&c.Payload, keyCharge) || !add(&c.Payload, cowAllocation(uint64(len(e.Value)))) {
+			if !add(&c.Payload, keyCharge) || !add(&c.Payload, cowAllocation(uint64(valueSize))) {
 				return c, ErrCOWCapacity
 			}
 		}
@@ -464,7 +461,7 @@ func (w *COWWriter) Prepare(entries []COWMutation, opts COWPrepareOptions) (*COW
 		if !exists {
 			ownedKey = string(e.Key)
 		}
-		p.private.Set(ownedKey, cowValue{value: string(e.Value), ptr: e.Ptr, flags: e.Flags, revision: e.Revision})
+		p.private.Set(ownedKey, cowEncodeValue(e))
 	}
 	p.root = &COWRoot{tree: p.private.ImmutableCopy(), generation: g}
 	w.pending = p
@@ -845,7 +842,7 @@ func (r *COWRoot) Get(key []byte) (COWRecord, bool) {
 // enclosing source while scanning. Returning false stops the scan immediately.
 func (r *COWRoot) ScanOwned(iter func(COWRecord) bool) {
 	r.tree.Scan(func(key string, value cowValue) bool {
-		return iter(COWRecord{Key: key, Value: value.value, Ptr: value.ptr, Revision: value.revision, Flags: value.flags})
+		return iter(value.record(key))
 	})
 }
 
@@ -858,5 +855,15 @@ func (r *COWRoot) SeekGE(start, end []byte) (COWRecord, bool) {
 	if !found || (end != nil && cowKeyCompare(key, end) >= 0) {
 		return COWRecord{}, false
 	}
-	return COWRecord{Key: key, Value: v.value, Ptr: v.ptr, Revision: v.revision, Flags: v.flags}, true
+	return v.record(key), true
+}
+
+// SeekLT is the borrowed strict predecessor in [start,end); nil end means last.
+// It has the same original source lifetime and allocation contract as SeekGE.
+func (r *COWRoot) SeekLT(start, end []byte) (COWRecord, bool) {
+	key, v, found := cowLookupLT(r.tree, end)
+	if !found || (start != nil && cowKeyCompare(key, start) < 0) {
+		return COWRecord{}, false
+	}
+	return v.record(key), true
 }

@@ -8,6 +8,7 @@ import (
 	"os"
 	"reflect"
 	"slices"
+	"strings"
 	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/batch"
@@ -26,16 +27,18 @@ import (
 // group. This helper neither captures a newer catalog nor publishes a root.
 // The enclosing original build adopts the returned work before checking err.
 type nativeTypedMaterializeInput struct {
-	meta             CollectionMeta
-	baseManifestRoot uint64
-	deltas           []*nativeTypedDelta // oldest first, actual assigned identities
-	snapshot         *backenddb.Snapshot
-	capture          *backenddb.StableResourceCaptureLease
-	allocator        backenddb.NativeSemanticAllocator
-	group            *backenddb.RootPublicationBuildGroup
+	compaction         *nativeColumnCompaction
+	capturedCollection *nativeCollectionState
+	meta               CollectionMeta
+	baseManifestRoot   uint64
+	deltas             []*nativeTypedDelta // oldest first, actual assigned identities
+	snapshot           *backenddb.Snapshot
+	capture            *backenddb.StableResourceCaptureLease
+	allocator          backenddb.NativeSemanticAllocator
+	group              *backenddb.RootPublicationBuildGroup
 	// Fixed operation credit stays in the SAME live build parent's floor.
 	// Collections run sequentially; only their retained terms split to children.
-	sharedWorkspace uint64
+	sharedWorkspace uint64 // This work's applicable peak, borrowed from the cohort maximum.
 }
 type nativeTypedMaterializedRoot struct {
 	name string
@@ -43,11 +46,18 @@ type nativeTypedMaterializedRoot struct {
 }
 
 type nativeTypedMaterialization struct {
+	compactionRows    []columnDeclaredRow
 	input             nativeTypedMaterializeInput
 	roots             []nativeTypedMaterializedRoot
 	meta              CollectionMeta
 	resources         *rootpublication.StableResourceSet
 	requirements      rootpublication.StableLogicalObligationRequirements
+	appendMutation    rootpublication.StableLogicalObligationMutation
+	requirementWork   rootpublication.StableResourceClosureWork
+	fallback          func() (rootpublication.StableLogicalObligationRequirements, rootpublication.StableResourceClosureWork, error)
+	sourceDirectory   *columnSourceDirectoryAppendV2
+	graphAuthority    *columnVectorGraphStableResourceAccumulator
+	graphSource       *columnVectorGraphTypedColumnVectorSource
 	resourceBuilder   *rootpublication.StableResourceSetBuilder
 	records           []columnManifestRecord
 	codec             typedcolumn.BuildCodec
@@ -104,6 +114,18 @@ func nativeTypedDeltaBuildCapacity(meta CollectionMeta, rows []columnDeclaredRow
 				return 0, err
 			}
 		}
+	}
+	// Each aggregate entry consumes at least one source row. Repeated group
+	// strings can be encoded once per spec and granule even when declared
+	// backing is interned; reuse the maintained prepared publisher's source
+	// total and six-copy encoding/coexistence bound.
+	_, groups := preparedInsertRepeatedStringBytes(*meta.Options.ColumnStore, rows)
+	groupBytes, err := nativeTypedCheckedMul(uint64(groups), 6)
+	if err != nil {
+		return 0, err
+	}
+	if err = nativeTypedCheckedAdd(&total, memtable.COWAllocationCharge(groupBytes)); err != nil {
+		return 0, err
 	}
 	manifest, err := nativeTypedManifestAppendCapacity(meta)
 	if err != nil {
@@ -187,11 +209,12 @@ func nativeTypedValueCapacity(col ColumnStoreColumn, value columnDeclaredValue) 
 	}
 }
 
-// This route has no aggregate metadata: its maintained builder adds
-// exactly a row part, a TCIM part and the replacement manifest header. Sixteen
-// simultaneous record/closure/mutation views each reserve four original 1 KiB
-// quota units for headers/maps and separately include all captured metadata
-// string backing. This does not assume a maximum namespace or schema name.
+// The original builder emits a row image, a TCIM image only for ColumnPart
+// owners, scalar row-owner sidecars, one asset per aggregate spec, a header
+// and one owned output-segment marker.
+// Sixteen simultaneous record/closure/mutation views each reserve four original
+// 1 KiB quota units for headers/maps plus captured schema/string backing.
+// The original single-output builder keeps all these assets in one segment.
 func nativeTypedManifestAppendCapacity(meta CollectionMeta) (uint64, error) {
 	backing, err := nativeSchemaBackingCharge(reflect.ValueOf(&meta), 0)
 	if err != nil {
@@ -200,7 +223,28 @@ func nativeTypedManifestAppendCapacity(meta CollectionMeta) (uint64, error) {
 	if err = nativeTypedCheckedAdd(&backing, 4*preparedSemanticStreamMapEntryReserveBytes); err != nil {
 		return 0, err
 	}
-	return nativeTypedCheckedMul(backing, 16*3)
+	cfg := meta.Options.ColumnStore
+	records := uint64(3) // header, row image, output-segment marker
+	if columnStoreHasTypedColumnPartOwners(*cfg) {
+		if err = nativeTypedCheckedAdd(&records, 1); err != nil {
+			return 0, err
+		}
+	}
+	if err = nativeTypedCheckedAdd(&records, uint64(len(cfg.AggregateMetadata))); err != nil {
+		return 0, err
+	}
+	for _, col := range cfg.Columns {
+		if col.Owner == TypedStorageOwnerRowAsset && (col.ValueType == ColumnStoreValueInt64 || col.ValueType == ColumnStoreValueString && col.Dictionary) {
+			if err = nativeTypedCheckedAdd(&records, 1); err != nil {
+				return 0, err
+			}
+		}
+	}
+	copies, err := nativeTypedCheckedMul(records, 16)
+	if err != nil {
+		return 0, err
+	}
+	return nativeTypedCheckedMul(backing, copies)
 }
 
 // Retained source bytes bound structural entries independently of their encoded
@@ -249,7 +293,10 @@ func nativeTypedDeltaRowBuildCapacity(meta CollectionMeta, idBytes, retainedByte
 	return total, nil
 }
 
-func nativeTypedBuildWorkspaceCapacity() (uint64, error) {
+func nativeTypedBuildWorkspaceCapacity(meta CollectionMeta) (uint64, error) {
+	if !nativeTypedMeta(meta) {
+		return 0, backenddb.ErrNativeSemanticUnsupported
+	}
 	// The retained builder's source-derived fixed cursor/raw/output/encoder
 	// proof already includes its 8 MiB codec allowance. Native scratch starts
 	// empty, so the unrelated maximum pooled raw buffer is absent.
@@ -263,7 +310,12 @@ func nativeTypedBuildWorkspaceCapacity() (uint64, error) {
 	// certification validates stored metadata and hashes without decompressing
 	// ZSTD sections. Only the benchmark granule override constructs a ZSTD
 	// decoder during building; reads retain their independent decoder bound.
-	workspace := max(semantic, typed, uint64(8<<20))
+	// JSON and Full retained carriers never enter the semantic-stream encoder.
+	// Keep the original codec proof only when this captured schema can use it.
+	workspace := max(typed, uint64(8<<20))
+	if columnStoreRetainedPayloadUsesSemanticStreamV1(meta.Options.ColumnStore) {
+		workspace = max(workspace, semantic)
+	}
 	if raw, ok := os.LookupEnv(typedColumnBenchmarkCompressionEnv); ok {
 		compression, set, err := parseTypedColumnBenchmarkCompression(raw)
 		if err != nil {
@@ -280,8 +332,35 @@ func nativeTypedBuildWorkspaceCapacity() (uint64, error) {
 	return workspace, nil
 }
 
+// The graph-only branch returns before the row/TCIM/semantic encoders. Its
+// constructor and replacement-state decoder bounds live in d.buildCapacity.
+func nativeTypedGraphOnly(d *nativeTypedDelta) bool {
+	return d != nil && d.previous == nil && d.data != nil && d.data.graph != nil && len(d.rows)+len(d.retained)+len(d.deleted) == 0
+}
+
+func nativeTypedOperationWorkspaceCapacity(meta CollectionMeta, compaction, graphOnly bool) (uint64, error) {
+	if graphOnly {
+		if compaction {
+			return 0, backenddb.ErrNativeSemanticUnsupported
+		}
+		return 0, nil
+	}
+	workspace, err := nativeTypedBuildWorkspaceCapacity(meta)
+	if err != nil || !compaction {
+		return workspace, err
+	}
+	decoder, err := nativeTypedDecoderFixedCapacity()
+	if err != nil {
+		return 0, err
+	}
+	// Compaction finishes all physical decoding and closes its operation-local
+	// read caches before materialize opens the builder codec. Only this fixed
+	// peak is shared; decoded rows and every source-derived term stay charged.
+	return max(workspace, decoder), nil
+}
+
 func nativeTypedCollectionBuildCapacity(meta CollectionMeta, sourceBytes uint64) (uint64, error) {
-	total, err := nativeTypedBuildWorkspaceCapacity()
+	total, err := nativeTypedBuildWorkspaceCapacity(meta)
 	if err != nil {
 		return 0, err
 	}
@@ -334,12 +413,18 @@ func nativeTypedMaterializationCapacity(meta CollectionMeta, deltas []*nativeTyp
 			return 0, backenddb.ErrNativeSemanticUnsupported
 		}
 		n, err := nativeTypedMutationBuildCapacity(meta, d.rows, d.retained, d.deleted)
+		if d.data != nil && d.data.graph != nil {
+			n, err = d.buildCapacity, nil
+		}
 		if err != nil {
 			return 0, err
 		}
 		if err = nativeTypedCheckedAdd(&source, n); err != nil {
 			return 0, err
 		}
+	}
+	if len(deltas) == 1 && nativeTypedGraphOnly(deltas[0]) {
+		return nativeTypedCollectionRetainedCapacity(meta, source)
 	}
 	return nativeTypedCollectionBuildCapacity(meta, source)
 }
@@ -407,31 +492,54 @@ func prepareNativeTypedReplayMaterialization(input nativeTypedMaterializeInput) 
 }
 
 func prepareNativeTypedMaterializationCore(input nativeTypedMaterializeInput) (work *nativeTypedMaterialization, resultErr error) {
-	if input.snapshot == nil || input.capture == nil || input.group == nil || len(input.deltas) == 0 {
+	if input.snapshot == nil || input.capture == nil || input.group == nil || (len(input.deltas) == 0 && input.compaction == nil) {
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
 	amount, err := nativeTypedMaterializationCapacity(input.meta, input.deltas)
 	if err != nil {
 		return nil, err
 	}
-	basis, err := nativeTypedManifestCapacity(input.snapshot, input.baseManifestRoot)
+	basis, err := nativeTypedBasisCapacity(input.meta, input.snapshot, input.baseManifestRoot)
 	if err != nil {
 		return nil, err
 	}
 	if err = nativeTypedCheckedAdd(&amount, basis); err != nil {
 		return nil, err
 	}
+	if input.compaction != nil {
+		read, e := nativeTypedCompactionReadRetainedCapacity(input.meta, input.snapshot, input.baseManifestRoot)
+		if e != nil {
+			return nil, e
+		}
+		if e = nativeTypedCheckedAdd(&amount, read); e != nil {
+			return nil, e
+		}
+		build, e := nativeTypedBuildWorkspaceCapacity(input.meta)
+		if e != nil {
+			return nil, e
+		}
+		workspace, e := nativeTypedOperationWorkspaceCapacity(input.meta, true, false)
+		if e != nil {
+			return nil, e
+		}
+		if e = nativeTypedCheckedAdd(&amount, workspace-build); e != nil {
+			return nil, e
+		}
+	}
+	var lease *memtable.COWExternalLease
+	var owned uint64
 	var refund *cowbtree.OwnedMapRefund
 	if input.allocator != nil {
-		owned := amount
+		owned = amount
 		if input.sharedWorkspace != 0 {
-			fixed, e := nativeTypedBuildWorkspaceCapacity()
+			fixed, e := nativeTypedOperationWorkspaceCapacity(input.meta, input.compaction != nil, len(input.deltas) == 1 && nativeTypedGraphOnly(input.deltas[0]))
 			if e != nil || input.sharedWorkspace != fixed || owned < fixed {
 				return nil, backenddb.ErrNativeSemanticUnsupported
 			}
 			owned -= fixed
 		}
-		lease, admitErr := input.allocator.AdmitNativeBytes(owned)
+		var admitErr error
+		lease, admitErr = input.allocator.AdmitNativeBytes(owned)
 		if admitErr != nil {
 			return nil, admitErr
 		}
@@ -463,6 +571,14 @@ func prepareNativeTypedMaterializationCore(input nativeTypedMaterializeInput) (w
 		if i == 1 {
 			continue
 		}
+		if input.compaction != nil {
+			domain, exists := input.capturedCollection.domains.Get(w.roots[i].name)
+			if !exists {
+				return w, backenddb.ErrNativeSemanticUnsupported
+			}
+			w.roots[i].root = domain.baseRoot
+			continue
+		}
 		raw, e := input.snapshot.GetAtRoot(token.SystemRootPageID, []byte(systemCollectionRootPrefix+input.meta.Name+"/"+w.roots[i].name))
 		if errors.Is(e, tree.ErrKeyNotFound) {
 			continue
@@ -476,13 +592,32 @@ func prepareNativeTypedMaterializationCore(input nativeTypedMaterializeInput) (w
 		}
 		w.roots[i].root = root
 	}
-	if input.baseManifestRoot != 0 {
+	if input.baseManifestRoot != 0 && !nativeSourceImportMetaV2(input.meta) {
 		w.records, err = loadColumnManifestRecordsFromRoot(input.snapshot, input.baseManifestRoot)
 		if err != nil {
 			return w, err
 		}
 	}
 	w.resourceBuilder = rootpublication.NewStableResourceSetBuilder()
+	if input.compaction != nil {
+		if lease == nil {
+			return w, backenddb.ErrNativeSemanticUnsupported
+		}
+		err = w.prepareCompactionRows(func(n uint64) error {
+			next := owned
+			if e := nativeTypedCheckedAdd(&next, n); e != nil {
+				return e
+			}
+			if e := lease.Resize(next); e != nil {
+				return e
+			}
+			owned = next
+			return nativeTypedCheckedAdd(&w.capacity, n)
+		})
+		if err != nil {
+			return w, err
+		}
+	}
 	return w, nil
 }
 
@@ -610,15 +745,28 @@ func (w *nativeTypedMaterialization) materialize() (resultErr error) {
 	defer func() {
 		w.codec.Close()
 		w.input = nativeTypedMaterializeInput{}
+		w.compactionRows = nil
 		if resultErr != nil {
 			w.failure = resultErr
 		} else {
 			w.complete = true
 		}
 	}()
-	mutations, err := selectNativeTypedMaterializeMutations(w.input.deltas)
-	if err != nil {
-		return err
+	for _, d := range w.input.deltas {
+		if d != nil && d.data != nil && d.data.graph != nil {
+			if w.input.compaction != nil || len(w.input.deltas) != 1 || len(d.rows)+len(d.retained)+len(d.deleted) != 0 {
+				return backenddb.ErrNativeSemanticUnsupported
+			}
+			return w.materializeVectorGraph(d)
+		}
+	}
+	var mutations []nativeTypedMaterializeMutation
+	var err error
+	if len(w.input.deltas) != 0 {
+		mutations, err = selectNativeTypedMaterializeMutations(w.input.deltas)
+		if err != nil {
+			return err
+		}
 	}
 	rootDir, registry, err := w.input.group.NativeColumnAssetBuildContext()
 	if err != nil {
@@ -635,6 +783,11 @@ func (w *nativeTypedMaterialization) materialize() (resultErr error) {
 			return err
 		}
 		start = end
+	}
+	if w.input.compaction != nil {
+		if err = w.materializeCompaction(context); err != nil {
+			return err
+		}
 	}
 	w.resources, err = w.resourceBuilder.Freeze()
 	if err != nil {
@@ -711,7 +864,30 @@ func (w *nativeTypedMaterialization) materializeDelta(context columnPhysicalAsse
 			input.sourceDeleteDocuments = deleted
 		}
 	}
-	plan, err := BuildColumnPublishPlan(ColumnPublishPlanInput{Collection: w.meta.Name, ColumnStore: &cfg, ColumnStoreNormalized: true, ActiveVectorIndexesKnown: true, Operation: input.operation, CurrentManifest: cfg.ActiveManifest, CurrentManifestRecords: w.records, AppliedCommandLSN: d.appliedLSN, BaseManifestRootID: w.roots[1].root, Hooks: ColumnPublishPlanHooks{
+	var source *columnSourceDirectoryAppendV2
+	if d.data != nil && d.data.source != nil {
+		publication := d.data.source.publication // private once-bound seal and diagnostics
+		input.sourceImportV2 = &publication
+		if w.sourceDirectory == nil {
+			var e error
+			source, e = prepareColumnSourceDirectoryAppendAtSnapshotV2(nil, input, w.input.baseManifestRoot, w.input.snapshot)
+			if e != nil {
+				return e
+			}
+		} else {
+			source = &columnSourceDirectoryAppendV2{indexes: w.meta.VectorIndexes, previous: w.sourceDirectory.previous, activeSegment: w.sourceDirectory.activeSegment, publication: &publication, baseRoot: w.input.baseManifestRoot, snapshot: w.input.snapshot}
+		}
+		source.snapshot = w.input.snapshot
+		source.fresh = w.records
+		w.sourceDirectory = source
+	}
+	records := w.records
+	if source != nil {
+		// cdir2 appends only this delta; retained requirements use the captured
+		// root plus the separately owned fresh suffix, never a complete array.
+		records = nil
+	}
+	plan, err := BuildColumnPublishPlan(ColumnPublishPlanInput{Collection: w.meta.Name, ColumnStore: &cfg, ColumnStoreNormalized: true, ActiveVectorIndexesKnown: true, Operation: input.operation, CurrentManifest: cfg.ActiveManifest, CurrentManifestRecords: records, sourceDirectoryV2: source, AppliedCommandLSN: d.appliedLSN, BaseManifestRootID: w.roots[1].root, Hooks: ColumnPublishPlanHooks{
 		PrepareAssets: func(hook ColumnPublishAssetPrepareInput) (ColumnPublishPreparedAssets, error) {
 			prepared, e := context.prepareAssets(input, hook)
 			if e != nil {
@@ -791,6 +967,13 @@ func (w *nativeTypedMaterialization) materializeDelta(context columnPhysicalAsse
 		return err
 	}
 	w.meta = updated
+	if source != nil {
+		// Every source receipt belongs to the same original private system root.
+		if err = w.buildSourceImportSystemDelta(source.publication); err != nil {
+			return err
+		}
+		return w.finishSourceDirectoryDelta(plan, source)
+	}
 	w.records = plan.RootDelta.Records
 	// The latest manifest requirements are the COMPLETE collection closure,
 	// including preceding accepted members and the exact retained physical base.
@@ -919,6 +1102,24 @@ func (w *nativeTypedMaterialization) release() (cowbtree.OwnedMapCompletion, err
 	var err error
 	w.codec.Close()
 	w.input = nativeTypedMaterializeInput{}
+	w.compactionRows = nil
+	w.fallback = nil
+	w.sourceDirectory = nil
+	w.appendMutation = rootpublication.StableLogicalObligationMutation{}
+	if w.graphSource != nil {
+		if err = w.graphSource.Close(); err != nil {
+			return cowbtree.OwnedMapCompletion{}, err
+		}
+		w.graphSource = nil
+	}
+	if w.graphAuthority != nil && w.graphAuthority.builder != nil {
+		err = w.graphAuthority.builder.AbandonWithError()
+		if err != nil {
+			return cowbtree.OwnedMapCompletion{}, err
+		}
+		w.graphAuthority.builder = nil
+	}
+	w.graphAuthority = nil
 	if w.resourceBuilder != nil {
 		err = w.resourceBuilder.AbandonWithError()
 		if err != nil {
@@ -943,10 +1144,11 @@ func (w *nativeTypedMaterialization) release() (cowbtree.OwnedMapCompletion, err
 	return refund.Completion(), err
 }
 
-// Stage uses the maintained top-level RawMessage residual transform. Its
-// temporary map never expands nested values to interface trees: each object
-// member needs at least four source bytes, and one 1 KiB quota unit covers a
-// Swiss-map group entry, key/header and simultaneous old/replacement group.
+// Top-level stage uses the maintained RawMessage transform: each member needs
+// at least four source bytes. Nested declared paths use the original UseNumber
+// interface extractor and residual walker; admit a full quota unit per source
+// byte for their object/array/scalar/header/stack and old/replacement backing.
+// These temporary trees are serial per document and never become a delta owner.
 // The JSON encoder can escape each source byte to six output bytes; four
 // such source-sized buffers cover old/new marshal state and the owned copy.
 // Constructor scratch is admitted separately from the actual stripped residual
@@ -956,6 +1158,20 @@ func nativeTypedStageCapacity(meta CollectionMeta, ids, docs [][]byte) (retained
 		return 0, 0, backenddb.ErrNativeSemanticUnsupported
 	}
 	columns := meta.Options.ColumnStore.Columns
+	var nested bool
+	var pathScratch uint64
+	for _, col := range columns {
+		nested = nested || strings.Contains(col.Path, ".")
+		// lookup/delete split paths independently. Bound one descriptor per
+		// path byte, including missing nullable ancestors in a tiny document.
+		n, e := nativeTypedCheckedMul(uint64(len(col.Path)+1), uint64(unsafe.Sizeof("")))
+		if e != nil {
+			return 0, 0, e
+		}
+		if e = nativeTypedCheckedAdd(&pathScratch, memtable.COWAllocationCharge(n)); e != nil {
+			return 0, 0, e
+		}
+	}
 	for _, n := range []uint64{uint64(unsafe.Sizeof(nativeTypedRows{})), uint64(unsafe.Sizeof(cowbtree.OwnedMapRefund{}))} {
 		if err = nativeTypedCheckedAdd(&retained, memtable.COWAllocationCharge(n)); err != nil {
 			return
@@ -1039,6 +1255,15 @@ func nativeTypedStageCapacity(meta CollectionMeta, ids, docs [][]byte) (retained
 			return
 		}
 		maps = memtable.COWAllocationCharge(maps)
+		if nested {
+			maps, err = nativeTypedJSONReadCharge(uint64(len(doc)))
+			if err != nil {
+				return
+			}
+			if err = nativeTypedCheckedAdd(&maps, pathScratch); err != nil {
+				return
+			}
+		}
 		if err = nativeTypedCheckedAdd(&maps, scratchHeaders); err != nil {
 			return
 		}
@@ -1103,11 +1328,29 @@ func nativeTypedDecoderFixedCapacity() (uint64, error) {
 	return total, nil
 }
 
+// Keep the entire existing physical-read bound except its fixed decoder peak.
+// The original build parent's operation floor covers that peak through the read
+// phase; manifest, asset, decoded-row and variable-family backing can outlive it.
+func nativeTypedCompactionReadRetainedCapacity(meta CollectionMeta, snapshot *backenddb.Snapshot, root uint64) (uint64, error) {
+	read, err := nativeTypedReadCapacity(meta, snapshot, root)
+	if err != nil {
+		return 0, err
+	}
+	fixed, err := nativeTypedDecoderFixedCapacity()
+	if err != nil {
+		return 0, err
+	}
+	if read < fixed {
+		return 0, memtable.ErrCOWCapacity
+	}
+	return read - fixed, nil
+}
+
 // Physical scalar reconstruction is bounded from the exact captured manifest,
 // before opening assets. Semantic-stream residual decoding is separately
 // admitted from its own stored wrapper's checked raw length by the read owner.
-func nativeTypedReadCapacity(meta CollectionMeta, snapshot *backenddb.Snapshot, root uint64) (uint64, error) {
-	total, err := nativeTypedManifestCapacity(snapshot, root)
+func nativeTypedReadCapacity(meta CollectionMeta, snapshot *backenddb.Snapshot, root uint64, selected ...columnManifestRecord) (uint64, error) {
+	total, err := nativeTypedReadManifestCapacity(snapshot, root, selected)
 	if err != nil {
 		return 0, err
 	}
@@ -1121,67 +1364,60 @@ func nativeTypedReadCapacity(meta CollectionMeta, snapshot *backenddb.Snapshot, 
 	if root == 0 {
 		return total, nil
 	}
-	it, err := snapshot.IteratorAtRoot(root, columnManifestPartRecordPrefixBytes, nil)
-	if err != nil {
-		return 0, err
-	}
-	defer it.Close()
-	for it.Valid() && bytes.HasPrefix(it.UnsafeKey(), columnManifestPartRecordPrefixBytes) {
-		if !it.IsDeleted() {
-			raw, _, flags := it.UnsafeEntry()
-			if flags&node.FlagPointer != 0 {
-				return 0, backenddb.ErrNativeSemanticUnsupported
-			}
-			// Fixed cursor only: no strings, records, maps or asset handles are
-			// constructed before admission. Maintained decoding validates the
-			// complete record later; this preflight only extracts finite sizes.
-			cur := manifestCursor{raw: raw}
-			if cur.u32() != columnManifestPartMagic {
-				return 0, backenddb.ErrNativeSemanticUnsupported
-			}
-			version := cur.u16()
-			if version < columnManifestRecordVersionV2 || !isSupportedColumnManifestRecordVersion(version) {
-				return 0, backenddb.ErrNativeSemanticUnsupported
-			}
-			cur.stringBytes() // kind
-			cur.stringBytes() // namespace
-			cur.u64()         // generation
-			cur.u64()         // part ID
-			cur.u64()         // file ID
-			cur.u64()         // offset
-			length := cur.u64()
-			cur.u64() // checksum
-			rows := cur.u64()
-			if cur.err != nil {
-				return 0, cur.err
-			}
-			// The maintained scalar preparation proof is per schema cell; the
-			// locator/descriptor term remains per row. Asset section raw lengths
-			// are additionally preflighted below for variable-width families.
-			cells, e := nativeTypedCheckedMul(uint64(len(meta.Options.ColumnStore.Columns)), 4224)
-			if e != nil {
-				return 0, e
-			}
-			if e = nativeTypedCheckedAdd(&cells, 1024); e != nil {
-				return 0, e
-			}
-			rowBytes, e := nativeTypedCheckedMul(rows, cells)
-			if e != nil {
-				return 0, e
-			}
-			assetBytes, e := nativeTypedCheckedMul(length, 8)
-			if e != nil {
-				return 0, e
-			}
-			for _, n := range []uint64{rowBytes, assetBytes, preparedSemanticStreamMapEntryReserveBytes} {
-				if e = nativeTypedCheckedAdd(&total, memtable.COWAllocationCharge(n)); e != nil {
-					return 0, e
-				}
+	err = walkNativeTypedReadRecords(snapshot, root, selected, func(raw []byte, flags byte) error {
+		if flags&node.FlagPointer != 0 {
+			return backenddb.ErrNativeSemanticUnsupported
+		}
+		// Fixed cursor only: no strings, records, maps or asset handles are
+		// constructed before admission. Maintained decoding validates the
+		// complete record later; this preflight only extracts finite sizes.
+		cur := manifestCursor{raw: raw}
+		if cur.u32() != columnManifestPartMagic {
+			return backenddb.ErrNativeSemanticUnsupported
+		}
+		version := cur.u16()
+		if version < columnManifestRecordVersionV2 || !isSupportedColumnManifestRecordVersion(version) {
+			return backenddb.ErrNativeSemanticUnsupported
+		}
+		cur.stringBytes() // kind
+		cur.stringBytes() // namespace
+		cur.u64()         // generation
+		cur.u64()         // part ID
+		cur.u64()         // file ID
+		cur.u64()         // offset
+		length := cur.u64()
+		cur.u64() // checksum
+		rows := cur.u64()
+		if cur.err != nil {
+			return cur.err
+		}
+		// The maintained scalar preparation proof is per schema cell; the
+		// locator/descriptor term remains per row. Asset section raw lengths
+		// are additionally preflighted below for variable-width families.
+		cells, e := nativeTypedCheckedMul(uint64(len(meta.Options.ColumnStore.Columns)), 4224)
+		if e != nil {
+			return e
+		}
+		if e = nativeTypedCheckedAdd(&cells, 1024); e != nil {
+			return e
+		}
+		rowBytes, e := nativeTypedCheckedMul(rows, cells)
+		if e != nil {
+			return e
+		}
+		assetBytes, e := nativeTypedCheckedMul(length, 8)
+		if e != nil {
+			return e
+		}
+		for _, n := range []uint64{rowBytes, assetBytes, preparedSemanticStreamMapEntryReserveBytes} {
+			if e = nativeTypedCheckedAdd(&total, memtable.COWAllocationCharge(n)); e != nil {
+				return e
 			}
 		}
-		it.Next()
-	}
-	return total, it.Error()
+		return nil
+
+	})
+	return total, err
 }
 
 // Extend the same physical-read receipt for the two variable-width families.
@@ -1189,7 +1425,12 @@ func nativeTypedReadCapacity(meta CollectionMeta, snapshot *backenddb.Snapshot, 
 // inspect the maintained TCIM directory under preadmitted operation scratch.
 // The original verified asset read and manifest parser remain authoritative.
 // No parsed image, file, dictionary or cache escapes this preflight.
-func nativeTypedFamilyReadCapacity(meta CollectionMeta, snapshot *backenddb.Snapshot, root uint64, rootDir string, admit func(uint64) error) (extra, typedJSON uint64, err error) {
+type nativeTypedFamilyReadShape struct {
+	decodedBytes    uint64
+	dictionarySlots uint64
+}
+
+func nativeTypedFamilyReadCapacity(meta CollectionMeta, snapshot *backenddb.Snapshot, root uint64, rootDir string, shape *nativeTypedFamilyReadShape, admit func(uint64) error, selected ...columnManifestRecord) (extra, typedJSON uint64, err error) {
 	if !nativeTypedMeta(meta) {
 		return 0, 0, backenddb.ErrNativeSemanticUnsupported
 	}
@@ -1225,7 +1466,7 @@ func nativeTypedFamilyReadCapacity(meta CollectionMeta, snapshot *backenddb.Snap
 	if !needsAssets || root == 0 {
 		return
 	}
-	metadata, err := nativeTypedManifestCapacity(snapshot, root)
+	metadata, err := nativeTypedReadManifestCapacity(snapshot, root, selected)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -1252,86 +1493,93 @@ func nativeTypedFamilyReadCapacity(meta CollectionMeta, snapshot *backenddb.Snap
 		return 0, 0, err
 	}
 	var rowStringBytes, typedStringBytes uint64
-	it, err := snapshot.IteratorAtRoot(root, columnManifestPartRecordPrefixBytes, nil)
-	if err != nil {
-		return 0, 0, err
-	}
-	defer it.Close()
-	for it.Valid() && bytes.HasPrefix(it.UnsafeKey(), columnManifestPartRecordPrefixBytes) {
-		if !it.IsDeleted() {
-			raw, _, flags := it.UnsafeEntry()
-			if flags&node.FlagPointer != 0 {
-				return 0, 0, backenddb.ErrNativeSemanticUnsupported
-			}
-			part, e := decodeColumnManifestPartRecord(raw)
-			if e != nil {
-				return 0, 0, e
-			}
-			if rowStrings != 0 && part.AssetRef.Kind == ColumnAssetKindTCS1PartImage {
-				// The maintained row image stores strings as uncompressed length-
-				// prefixed bytes. Its exact captured length bounds one declared
-				// output before the reader allocates or decodes that row image.
-				if part.AssetRef.Length < 0 {
-					return 0, 0, backenddb.ErrNativeSemanticUnsupported
-				}
-				rowStringBytes = max(rowStringBytes, uint64(part.AssetRef.Length))
-			}
-			if part.AssetRef.Kind == ColumnAssetKindTCS1TypedColumnPart {
-				if part.AssetRef.Length < 0 {
-					return 0, 0, backenddb.ErrNativeSemanticUnsupported
-				}
-				// The directory has at least 76 serialized bytes per section.
-				// Sixteen source copies cover image/section headers, cloned names,
-				// validation sorting and original file/path wrappers before parsing.
-				scratch, e := nativeTypedCheckedMul(uint64(part.AssetRef.Length), 16)
-				if e != nil {
-					return 0, 0, e
-				}
-				if e = nativeTypedCheckedAdd(&scratch, metadata); e != nil {
-					return 0, 0, e
-				}
-				if e = admit(scratch); e != nil {
-					return 0, 0, e
-				}
-				asset, e := readColumnPhysicalAssetFromManager(rootDir, part.AssetRef)
-				if e != nil {
-					return 0, 0, e
-				}
-				image, e := typedcolumn.ParseColumnPartImageManifest(asset, len(asset))
-				if e != nil {
-					return 0, 0, e
-				}
-				if image.PartID != part.AssetRef.PartID || image.Rows != part.Rows {
-					return 0, 0, backenddb.ErrNativeSemanticUnsupported
-				}
-				var decoded uint64
-				for _, section := range image.Sections {
-					n := uint64(max(section.RawBytes, section.Length))
-					if e = nativeTypedCheckedAdd(&decoded, n); e != nil {
-						return 0, 0, e
-					}
-					if section.Kind == typedcolumn.ColumnPartImageSectionDictionaries {
-						typedStringBytes = max(typedStringBytes, n)
-					}
-				}
-				// Dictionary keys/codes/reverse maps and reconstructed values borrow
-				// or clone decoded sections. Twelve copies include decoder history,
-				// output and old/replacement backing; row-map quotas are separate.
-				decoded, e = nativeTypedCheckedMul(decoded, 12)
-				if e != nil {
-					return 0, 0, e
-				}
-				if e = nativeTypedCheckedAdd(&extra, memtable.COWAllocationCharge(decoded)); e != nil {
-					return 0, 0, e
-				}
-				// The next asset may resize this operation's scratch receipt.
-				image = typedcolumn.ColumnPartImage{}
-				asset = nil
-			}
+	err = walkNativeTypedReadRecords(snapshot, root, selected, func(raw []byte, flags byte) error {
+		if flags&node.FlagPointer != 0 {
+			return backenddb.ErrNativeSemanticUnsupported
 		}
-		it.Next()
-	}
-	if err = it.Error(); err != nil {
+		part, e := decodeColumnManifestPartRecord(raw)
+		if e != nil {
+			return e
+		}
+		if rowStrings != 0 && part.AssetRef.Kind == ColumnAssetKindTCS1PartImage {
+			// The maintained row image stores strings as uncompressed length-
+			// prefixed bytes. Its exact captured length bounds one declared
+			// output before the reader allocates or decodes that row image.
+			if part.AssetRef.Length < 0 {
+				return backenddb.ErrNativeSemanticUnsupported
+			}
+			rowStringBytes = max(rowStringBytes, uint64(part.AssetRef.Length))
+		}
+		if part.AssetRef.Kind == ColumnAssetKindTCS1TypedColumnPart {
+			if part.AssetRef.Length < 0 {
+				return backenddb.ErrNativeSemanticUnsupported
+			}
+			// The directory has at least 76 serialized bytes per section.
+			// Sixteen source copies cover image/section headers, cloned names,
+			// validation sorting and original file/path wrappers before parsing.
+			scratch, e := nativeTypedCheckedMul(uint64(part.AssetRef.Length), 16)
+			if e != nil {
+				return e
+			}
+			if e = nativeTypedCheckedAdd(&scratch, metadata); e != nil {
+				return e
+			}
+			if e = admit(scratch); e != nil {
+				return e
+			}
+			asset, e := readColumnPhysicalAssetFromManager(rootDir, part.AssetRef)
+			if e != nil {
+				return e
+			}
+			image, e := typedcolumn.ParseColumnPartImageManifest(asset, len(asset))
+			if e != nil {
+				return e
+			}
+			if image.PartID != part.AssetRef.PartID || image.Rows != part.Rows {
+				return backenddb.ErrNativeSemanticUnsupported
+			}
+			var decoded uint64
+			for _, section := range image.Sections {
+				n := uint64(max(section.RawBytes, section.Length))
+				if e = nativeTypedCheckedAdd(&decoded, n); e != nil {
+					return e
+				}
+				if shape != nil {
+					if e = nativeTypedCheckedAdd(&shape.decodedBytes, n); e != nil {
+						return e
+					}
+				}
+				if section.Kind == typedcolumn.ColumnPartImageSectionDictionaries {
+					typedStringBytes = max(typedStringBytes, n)
+					if shape != nil {
+						minimum := uint64(12)
+						if section.Encoding == typedcolumn.EncodingDictionaryDense {
+							minimum = 4
+						}
+						if e = nativeTypedCheckedAdd(&shape.dictionarySlots, n/minimum+n/8); e != nil {
+							return e
+						}
+					}
+				}
+			}
+			// Dictionary keys/codes/reverse maps and reconstructed values borrow
+			// or clone decoded sections. Twelve copies include decoder history,
+			// output and old/replacement backing; row-map quotas are separate.
+			decoded, e = nativeTypedCheckedMul(decoded, 12)
+			if e != nil {
+				return e
+			}
+			if e = nativeTypedCheckedAdd(&extra, memtable.COWAllocationCharge(decoded)); e != nil {
+				return e
+			}
+			// The next asset may resize this operation's scratch receipt.
+			image = typedcolumn.ColumnPartImage{}
+			asset = nil
+		}
+		return nil
+
+	})
+	if err != nil {
 		return 0, 0, err
 	}
 	// Each string can use at most the complete row image or dictionary section.

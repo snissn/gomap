@@ -880,3 +880,14 @@ original assigned-failure path retains sparse custody, poisons publication and
 requires recovery; result/progress are not persisted. Existing canonical replay
 recovers the frame. The WAL format, owner, startup replay route and assignment
 authority remain unchanged.
+
+### Native immutable source import
+
+The native source-only vector import keeps the existing format-14 canonical
+command and cdir2/SIS2 completion. A successful call waits for the original
+physical seal. Its captured build group may describe the exact retained asset
+closure using synchronous replayable requirement streams plus bounded fresh
+records; verification still uses the original selected metadata owner, complete
+namespace requirements and original error custody. Stream readers are borrowed
+only through finalization and dropped before the captured read is released.
+No live ANN authority or new storage format is implied.

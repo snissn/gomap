@@ -239,10 +239,13 @@ func nativeJSONEncodedCapacity(document int, indexes []IndexDefinition) (int, er
 			// exceed its eight-byte source; use the maintained codec's digit cap.
 			capacity = max(capacity, 6+(bsonIndexKeyNumericV2MaxDigits+1)/2)
 		}
-		if capacity > limit-total {
+		// Each compound component owns an encoded image in the SAME tuple.
+		// Repeated paths still encode independently; numeric caps apply to each.
+		components := max(1, len(index.Components))
+		if capacity > (limit-total)/components {
 			return 0, memtable.ErrCOWCapacity
 		}
-		total += capacity
+		total += capacity * components
 	}
 	return total, nil
 }
@@ -568,8 +571,11 @@ func (t *NativeJSONTxn) UpdateBatchInto(name string, items []UpdateBatchItem) (r
 		}
 	}()
 	g := t.binding(name)
-	if g == nil || g.probe.meta.Options.ColumnStore != nil {
+	if g == nil {
 		return nil, backenddb.ErrNativeSemanticUnsupported
+	}
+	if g.probe.meta.Options.ColumnStore != nil {
+		return t.stageNativeTypedUpdate(g, items)
 	}
 	if len(items) == 0 {
 		return nil, nil
@@ -756,7 +762,7 @@ func (t *NativeJSONTxn) DeleteBatchFrom(name string, ids [][]byte) (count int, r
 	return len(removed), t.appendNativeMember(g, commitlog.CommandKindCollectionDeleteBatchByID, commitlog.PayloadFormatCollectionDeleteBatchByIDV1, payload)
 }
 
-func (t *NativeJSONTxn) finalizeNativeRows() error {
+func (t *NativeJSONTxn) finalizeNativeRows(graphSingleton bool) error {
 	for i := range t.bindings {
 		g := &t.bindings[i]
 		if g.typed != nil {
@@ -828,7 +834,9 @@ func (t *NativeJSONTxn) finalizeNativeRows() error {
 			return err
 		}
 	}
-	if len(t.members) == 0 {
+	// Graph rebuild finalizes a catalog effect and a typed recipe without CRUD
+	// members. Ordinary empty transactions still have no publishable mutation.
+	if len(t.members) == 0 && !graphSingleton {
 		return fmt.Errorf("%w: no staged row mutations", backenddb.ErrNativeSemanticUnsupported)
 	}
 	return nil

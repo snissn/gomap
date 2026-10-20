@@ -38266,9 +38266,35 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 			}
 		}()
 
+		pressureJoined := false
 		for {
 			b.db.cow.writerMu.Lock()
-			rollover, err := b.cowGenerationRollover()
+			rollover, pressure, err := b.cowGenerationRollover()
+			if pressure {
+				b.db.cow.writerMu.Unlock()
+				unlockWriteMu()
+				if b.cowState.guard != nil {
+					b.cowState.guard.Release()
+					b.cowState.guard = nil
+				}
+				if pressureJoined {
+					return memtable.ErrCOWCapacity
+				}
+				// The command still owns only staged input and an unassigned
+				// accepted ticket. Join the same original covered-prefix handoff
+				// outside ALL foreground gates; it needs writerMu to install.
+				// Retained readers may prevent reclamation: retry admission once,
+				// never the producer, revision assignment, WAL append or publish.
+				pressureJoined = true
+				if err := b.db.Checkpoint(); err != nil {
+					return err
+				}
+				if err := b.db.beginDirectWrite(); err != nil {
+					return err
+				}
+				unlockWriteMu = b.db.writeMu.RUnlock
+				continue
+			}
 			if err != nil || rollover != nil {
 				if err == nil {
 					rollover.install()
@@ -38447,15 +38473,21 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 		}
 		shardAdds[idx] += add
 	}
-	var retainMainMemStack [batchMemtableRetainStackCap]memtable.Table
-	retainMainMems := retainMainMemStack[:0]
-	if b.db.cow == nil && shardCount > len(retainMainMemStack) {
-		retainMainMems = make([]memtable.Table, 0, shardCount)
-	}
-	var retainStableViewValueMemStack [batchMemtableRetainStackCap]memtable.Table
-	retainStableViewValueMems = retainStableViewValueMemStack[:0]
-	if b.db.cow == nil && shardCount > len(retainStableViewValueMemStack) {
-		retainStableViewValueMems = make([]memtable.Table, 0, shardCount)
+	var retainMainMems []memtable.Table
+	if b.db.cow == nil {
+		// These arrays escape through ordinary memtable retention. COW
+		// publication owns its immutable payloads separately and returns before
+		// that retention path, so it must not allocate the ordinary scratch.
+		var retainMainMemStack [batchMemtableRetainStackCap]memtable.Table
+		retainMainMems = retainMainMemStack[:0]
+		if shardCount > len(retainMainMemStack) {
+			retainMainMems = make([]memtable.Table, 0, shardCount)
+		}
+		var retainStableViewValueMemStack [batchMemtableRetainStackCap]memtable.Table
+		retainStableViewValueMems = retainStableViewValueMemStack[:0]
+		if shardCount > len(retainStableViewValueMemStack) {
+			retainStableViewValueMems = make([]memtable.Table, 0, shardCount)
+		}
 	}
 	for i, add := range shardAdds {
 		if b.db.cow != nil {

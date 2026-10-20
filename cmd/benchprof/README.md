@@ -744,6 +744,16 @@ the operation timer. NoWAL ordinary ACK is volatile; a later explicit checkpoint
 does not change that timed contract. `TestCOWPublicRetainedHistoryFixture`
 checks these values and original-owner drain without qualifying performance.
 
+The standalone package benchmark `BenchmarkPruneVersions` in `TreeDB/mvcc`
+reports `inspected_retained_versions/op` and
+`inspected_retained_physical_bytes/op`. These count the inspected value anchor
+and first above-floor record per logical key; ordered reverse seek bypasses the
+remaining retained tail. They replace the earlier full-scan
+`retained_versions/op` and `retained_physical_bytes/op` labels. Historical raw
+results retain their original source and meaning. These Go benchmark metrics
+and optional profiles are standalone outputs, **not benchprof inputs** or
+unified-bench profile-dir artifacts; producer filenames and parsers are unchanged.
+
 `TestManagedHistoryMeasurement` in `TreeDB/mvcc` is a separate opt-in,
 one-cell public Store diagnostic. Supply a fresh database directory and JSON
 output path, a production profile, and a boolean pointer layout:
@@ -866,3 +876,19 @@ the paired process order before collection; retain every raw sample. Only
 `json/scalar` has an equivalent pre-feature native baseline. Other cells report
 candidate feature costs. Four iterations are developmental diagnostics, not full
 scaling qualification or Dgraph throughput acceptance.
+
+### Standalone vacuum M0 status capture
+
+`RUN_DIR=/mnt/fast4tb/<task>/vacuum-m0 scripts/treedb_vacuum_m0_capture.sh`
+collects the package benchmarks
+`BenchmarkVacuumIndexOnlineCollectionForegroundChurn/bytes_64x` and
+`BenchmarkPL06ExternalVacuumCollectionForegroundChurn/bytes_64x` in ten fresh,
+interleaved sample pairs. It emits `fixture.json`, `results.json`, `summary.md`
+and `raw/{legacy,public}-*.txt`; these are standalone Go benchmark artifacts,
+not benchprof profile inputs. The public PL06 rows are an admitted-paused vacuum
+status fixture: unchanged foreground mutations enter the real recorder before
+the same vacuum resumes. Their revised timings do not measure a simultaneously
+advancing rebuild and are not comparable to historical uncoordinated PL06 rows.
+Legacy timing/CV and all public classification gates remain unchanged. See
+[the M0 contract](../../TreeDB/docs/performance/index-vacuum-m0.md) for boundaries
+and the incremental #4519 scope.

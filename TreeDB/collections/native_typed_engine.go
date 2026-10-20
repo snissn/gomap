@@ -2,6 +2,7 @@ package collections
 
 import (
 	"encoding/binary"
+	"fmt"
 	"reflect"
 	"unsafe"
 
@@ -12,18 +13,28 @@ import (
 )
 
 // nativeTypedBuildCapacity inventories every captured typed prefix. Source,
-// manifest and output custody sum across collections; one fixed operation peak
-// stays in the original parent's floor because materialization is sequential.
-func nativeTypedBuildCapacity(e *nativeEngineVersion, basis *backenddb.Snapshot) (charge, floor uint64, collections, count int, err error) {
-	e.pending.Scan(func(_ uint64, c *nativeCollectionState) bool {
+// manifest and output custody sum across collections. The largest applicable
+// operation peak stays in the original parent because materialization is sequential.
+func nativeTypedBuildCapacity(e *nativeEngineVersion, basis *backenddb.Snapshot) (uint64, uint64, int, int, error) {
+	return nativeTypedBuildCapacityForCompaction(e, basis, 0)
+}
+func nativeTypedBuildCapacityForCompaction(e *nativeEngineVersion, basis *backenddb.Snapshot, target uint64) (charge, floor uint64, collections, count int, err error) {
+	var workspace uint64
+	scanNativeBuildCollections(e, target, func(id uint64, c *nativeCollectionState) bool {
 		primary, ok := c.domains.Get("primary")
-		if !ok || primary.typed == nil {
+		if !ok || (primary.typed == nil && id != target) {
 			return true
 		}
 		if basis == nil {
 			err = backenddb.ErrNativeSemanticUnsupported
 			return false
 		}
+		localWorkspace, workspaceErr := nativeTypedOperationWorkspaceCapacity(*c.schema.meta, id == target, nativeTypedGraphOnly(primary.typed))
+		if workspaceErr != nil {
+			err = workspaceErr
+			return false
+		}
+		workspace = max(workspace, localWorkspace)
 		collections++
 		var source uint64
 		members := 0
@@ -48,10 +59,20 @@ func nativeTypedBuildCapacity(e *nativeEngineVersion, basis *backenddb.Snapshot)
 		if manifest != nil {
 			root = manifest.baseRoot
 		}
-		base, e := nativeTypedManifestCapacity(basis, root)
+		base, e := nativeTypedBasisCapacity(*c.schema.meta, basis, root)
 		if e != nil {
 			err = e
 			return false
+		}
+		if id == target {
+			read, readErr := nativeTypedCompactionReadRetainedCapacity(*c.schema.meta, basis, root)
+			if readErr != nil {
+				err = readErr
+				return false
+			}
+			if err = nativeTypedCheckedAdd(&owned, read); err != nil {
+				return false
+			}
 		}
 		if err = nativeTypedCheckedAdd(&owned, base); err != nil {
 			return false
@@ -74,11 +95,6 @@ func nativeTypedBuildCapacity(e *nativeEngineVersion, basis *backenddb.Snapshot)
 	if err != nil || collections == 0 {
 		return
 	}
-	workspace, workspaceErr := nativeTypedBuildWorkspaceCapacity()
-	if workspaceErr != nil {
-		err = workspaceErr
-		return
-	}
 	works, worksErr := nativeTypedCheckedMul(uint64(collections), uint64(unsafe.Sizeof(nativeTypedBuildWork{})))
 	if worksErr != nil {
 		err = worksErr
@@ -94,6 +110,8 @@ func nativeTypedBuildCapacity(e *nativeEngineVersion, basis *backenddb.Snapshot)
 }
 
 type nativeTypedBuildWork struct {
+	workspace  uint64 // Captured operation peak; work.input is cleared after materialization.
+	compaction bool
 	collection uint64
 	work       *nativeTypedMaterialization
 }
@@ -102,13 +120,16 @@ type nativeTypedBuildWork struct {
 // same parent retains shared workspace through materialization; pointer arrays
 // and retained outputs remain covered until final finish.
 func (b *nativeEngineBuild) prepareTyped(e *nativeEngineVersion, collections int, basis *backenddb.Snapshot, capture *backenddb.StableResourceCaptureLease, group *backenddb.RootPublicationBuildGroup) error {
+	return b.prepareTypedForCompaction(e, collections, basis, capture, group, nil)
+}
+func (b *nativeEngineBuild) prepareTypedForCompaction(e *nativeEngineVersion, collections int, basis *backenddb.Snapshot, capture *backenddb.StableResourceCaptureLease, group *backenddb.RootPublicationBuildGroup, operation *nativeColumnCompaction) error {
+	var target uint64
+	if operation != nil {
+		target = operation.target
+	}
+
 	if collections == 0 {
 		return nil
-	}
-	workspace, err := nativeTypedBuildWorkspaceCapacity()
-	if err != nil {
-		b.failure = err
-		return err
 	}
 	b.typed = make([]nativeTypedBuildWork, 0, collections)
 	defer func() {
@@ -120,9 +141,9 @@ func (b *nativeEngineBuild) prepareTyped(e *nativeEngineVersion, collections int
 			}
 		}
 	}()
-	e.pending.Scan(func(_ uint64, c *nativeCollectionState) bool {
+	scanNativeBuildCollections(e, target, func(id uint64, c *nativeCollectionState) bool {
 		primary, ok := c.domains.Get("primary")
-		if !ok || primary.typed == nil {
+		if !ok || (primary.typed == nil && id != target) {
 			return true
 		}
 		count := 0
@@ -139,8 +160,18 @@ func (b *nativeEngineBuild) prepareTyped(e *nativeEngineVersion, collections int
 		if manifest, ok := c.domains.Get("column/manifest"); ok {
 			root = manifest.baseRoot
 		}
-		work, err := prepareNativeTypedMaterialization(nativeTypedMaterializeInput{meta: *c.schema.meta, baseManifestRoot: root, deltas: deltas, snapshot: basis, capture: capture, allocator: &b.allocation, group: group, sharedWorkspace: workspace})
-		b.typed = append(b.typed, nativeTypedBuildWork{collection: c.incarnation, work: work})
+		var compaction *nativeColumnCompaction
+		var capturedCollection *nativeCollectionState
+		if id == target {
+			compaction, capturedCollection = operation, c
+		}
+		sharedWorkspace, err := nativeTypedOperationWorkspaceCapacity(*c.schema.meta, compaction != nil, nativeTypedGraphOnly(primary.typed))
+		if err != nil {
+			b.failure = err
+			return false
+		}
+		work, err := prepareNativeTypedMaterialization(nativeTypedMaterializeInput{compaction: compaction, capturedCollection: capturedCollection, meta: *c.schema.meta, baseManifestRoot: root, deltas: deltas, snapshot: basis, capture: capture, allocator: &b.allocation, group: group, sharedWorkspace: sharedWorkspace})
+		b.typed = append(b.typed, nativeTypedBuildWork{workspace: sharedWorkspace, compaction: compaction != nil, collection: c.incarnation, work: work})
 		b.failure = err
 		return err == nil
 	})
@@ -156,13 +187,37 @@ func (b *nativeEngineBuild) hasTypedCollection(id uint64) bool {
 	return false
 }
 
+// Only these roots are produced by the maintained physical typed builder.
+// Scalar index/state roots use the original ordinary domain builder.
+func nativeTypedPhysicalDomain(name string) bool {
+	switch name {
+	case "primary", "column/manifest", "column/row-locator", "retained/semantic-stream-v1":
+		return true
+	}
+	return false
+}
+
 func (b *nativeEngineBuild) materializeTyped(group *backenddb.RootPublicationBuildGroup) error {
 	if len(b.typed) == 0 {
 		return nil
 	}
+	// The original group borrows the final requirements synchronously. Once
+	// transferred (or failed), the retained build must not keep captured readers
+	// alive past group cleanup. Resource custody remains in its original cells.
+	defer func() {
+		b.typedRequirements = rootpublication.StableLogicalObligationRequirements{}
+		for _, input := range b.typed {
+			input.work.requirements = rootpublication.StableLogicalObligationRequirements{}
+			input.work.fallback = nil
+			input.work.sourceDirectory = nil
+		}
+	}()
 	// Keep aggregate custody in the SAME accepted ledger before any merge or
 	// later collection can fail. Transfer only the final complete closure.
 	b.typedResources = rootpublication.NewStableResourceSetBuilder()
+	var appendMutation rootpublication.StableLogicalObligationMutation
+	var requirementWork rootpublication.StableResourceClosureWork
+	hasAppend := false
 	for _, input := range b.typed {
 		work := input.work
 		if err := work.materialize(); err != nil {
@@ -171,6 +226,13 @@ func (b *nativeEngineBuild) materializeTyped(group *backenddb.RootPublicationBui
 		for i := range b.built {
 			result := &b.built[i]
 			if result.collection != input.collection {
+				continue
+			}
+			// The original handoff reads metadata from the first sorted domain;
+			// secondary indexes can sort before primary. Every result carries
+			// the same immutable physical metadata, including ordinary indexes.
+			result.typedMeta = &work.meta
+			if !nativeTypedPhysicalDomain(result.name) {
 				continue
 			}
 			found := false
@@ -184,18 +246,42 @@ func (b *nativeEngineBuild) materializeTyped(group *backenddb.RootPublicationBui
 			if !found {
 				return backenddb.ErrNativeSemanticUnsupported
 			}
-			result.typedMeta = &work.meta
 			binary.BigEndian.PutUint64(result.rootValue[:], result.root)
 		}
 		requirements, err := rootpublication.MergeStableLogicalObligationRequirements(b.typedRequirements, work.requirements)
 		if err != nil {
 			return err
 		}
-		if err = b.typedResources.Merge(work.resources); err != nil {
-			return err
+		if input.compaction {
+			// Pending assets may have been superseded inside this SAME group. The
+			// candidate producer must contain only the final scoped obligations. Keep
+			// the original unfiltered producer in its original work until release.
+			selected, selectErr := rootpublication.CloneStableResourceSetForLogicalObligations(work.resources, work.requirements)
+			if selectErr != nil {
+				return selectErr
+			}
+			b.typedClosure = selected // original ledger adopts before fallible merge
+			if selected != nil {
+				if err = b.typedResources.Merge(selected); err != nil {
+					return err
+				}
+			}
+			b.typedClosure = nil
+		} else {
+			if err = b.typedResources.Merge(work.resources); err != nil {
+				return err
+			}
+			work.resources = nil
 		}
-		work.resources = nil
 		b.typedRequirements = requirements
+		if work.fallback != nil {
+			appendMutation, err = rootpublication.MergeStableLogicalObligationMutations(appendMutation, work.appendMutation)
+			if err != nil {
+				return err
+			}
+			requirementWork.Add(work.requirementWork)
+			hasAppend = true
+		}
 		encoded, err := encodeCollectionMeta(work.meta)
 		if err != nil {
 			return err
@@ -215,7 +301,15 @@ func (b *nativeEngineBuild) materializeTyped(group *backenddb.RootPublicationBui
 	}
 	b.typedResources = nil
 	b.typedClosure = resources
-	if err = group.SetNativeDurableResources(resources, b.typedRequirements); err != nil {
+	if hasAppend {
+		requirements := b.typedRequirements
+		err = group.SetNativeDurableResourceAppend(resources, requirements, appendMutation, requirementWork, func() (rootpublication.StableLogicalObligationRequirements, rootpublication.StableResourceClosureWork, error) {
+			return requirements, rootpublication.StableResourceClosureWork{}, nil
+		})
+	} else {
+		err = group.SetNativeDurableResources(resources, b.typedRequirements)
+	}
+	if err != nil {
 		return err
 	}
 	b.typedClosure = nil // exact complete closure now belongs to original group
@@ -225,8 +319,11 @@ func (b *nativeEngineBuild) materializeTyped(group *backenddb.RootPublicationBui
 // Native schema replacements and newer typed header suffixes are part of BOTH
 // handoff promises, not an allocation discovered after physical acceptance.
 func nativeTypedHandoffCharge(c *nativeCollectionState, maxSources int) (uint64, error) {
+	return nativeTypedHandoffChargeForCompaction(c, maxSources, false)
+}
+func nativeTypedHandoffChargeForCompaction(c *nativeCollectionState, maxSources int, physicalOnly bool) (uint64, error) {
 	primary, ok := c.domains.Get("primary")
-	if !ok || primary.typed == nil {
+	if !ok || (primary.typed == nil && !physicalOnly) {
 		return 0, nil
 	}
 	schema, err := nativeSchemaBackingCharge(reflect.ValueOf(c.schema.meta), 0)
@@ -275,7 +372,7 @@ func nativeTypedEnsureConstructible(e *nativeEngineVersion, basis *backenddb.Sna
 	}
 	limits := e.maintenance.Limits()
 	if total > limits.MaxInFlightBytes || total > limits.MaxTotalBytes {
-		return memtable.ErrCOWCapacity
+		return fmt.Errorf("collections: native typed construction total=%d typed=%d keys=%d domains=%d in_flight_limit=%d total_limit=%d: %w", total, typed, keys, domains, limits.MaxInFlightBytes, limits.MaxTotalBytes, memtable.ErrCOWCapacity)
 	}
 	return nil
 }

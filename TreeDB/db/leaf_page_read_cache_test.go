@@ -1597,3 +1597,59 @@ func TestLeafPageReadCacheNilStatsAreStableZeros(t *testing.T) {
 		t.Fatalf("nil cache stats=%+v, want zero values", stats)
 	}
 }
+
+// COW reuses only existing slots after a full verified decode. The decoded
+// bytes bind the upgrade, so stale or corrupted cached bytes cannot gain trust.
+func TestLeafPageReadCacheVerifiedRecordUpgradeExistingOnly(t *testing.T) {
+	cache := newLeafPageReadCache(1)
+	ptr := page.LeafLogPtr{FileID: 7, Offset: 128}
+	other := page.LeafLogPtr{FileID: 7, Offset: 256}
+	leaf := bytes.Repeat([]byte{0x42}, page.PageSize)
+	dst := make([]byte, 0, page.PageSize)
+	cache.markRecordChecksumVerified(ptr, leaf)
+	if stats := cache.stats(); stats.Entries != 0 || stats.Stores != 0 {
+		t.Fatalf("upgrade populated absent entry: %+v", stats)
+	}
+	cache.storeWrite(ptr, leaf)
+	if _, _, _, hit := cache.getToWithRecordPolicy(ptr, dst, true); hit {
+		t.Fatal("write-origin entry accepted without record verification")
+	}
+	mismatch := append([]byte(nil), leaf...)
+	mismatch[0] ^= 1
+	cache.markRecordChecksumVerified(ptr, mismatch)
+	if _, _, _, hit := cache.getToWithRecordPolicy(ptr, dst, true); hit {
+		t.Fatal("byte mismatch upgraded entry")
+	}
+	cache.disabled.Store(true)
+	cache.markRecordChecksumVerified(ptr, leaf)
+	cache.disabled.Store(false)
+	if _, _, _, hit := cache.getToWithRecordPolicy(ptr, dst, true); hit {
+		t.Fatal("maintenance-disabled upgrade changed record state")
+	}
+	cache.markRecordChecksumVerified(ptr, leaf)
+	got, usedDst, state, hit := cache.getToWithRecordPolicy(ptr, dst, true)
+	if !hit || !usedDst || !state.RecordChecksumVerified || state.PageChecksumVerified || !bytes.Equal(got, leaf) {
+		t.Fatalf("verified existing copy: hit=%t usedDst=%t state=%+v", hit, usedDst, state)
+	}
+	got[0] ^= 1
+	if _, _, _, hit := cache.getToWithRecordPolicy(ptr, dst[:0:0], true); hit {
+		t.Fatal("bounded copy accepted insufficient destination")
+	}
+	got, _, _, hit = cache.getToWithRecordPolicy(ptr, dst, true)
+	if !hit || !bytes.Equal(got, leaf) {
+		t.Fatal("caller mutation changed cache bytes")
+	}
+	cache.disabled.Store(true)
+	if _, _, _, hit := cache.getToWithRecordPolicy(ptr, dst, true); hit {
+		t.Fatal("maintenance-disabled verified entry hit")
+	}
+	cache.disabled.Store(false)
+	cache.storeWrite(other, mismatch)
+	cache.markRecordChecksumVerified(ptr, leaf)
+	if _, _, _, hit := cache.getToWithRecordPolicy(other, dst, true); hit {
+		t.Fatal("evicted pointer upgraded replacement slot")
+	}
+	if stats := cache.stats(); stats.Stores != 2 || stats.Entries != 1 || stats.RecordChecksumVerifiedStores != 0 {
+		t.Fatalf("upgrade changed admission/store accounting: %+v", stats)
+	}
+}

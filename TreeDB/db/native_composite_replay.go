@@ -37,6 +37,11 @@ func (b *Batch) AttachCatalogIndexReplayGroup(intent *CommandWALIntent, group *R
 	return b.attachNativeReplayGroup(intent, group, commitlog.CommandKindCatalogIndexMutation)
 }
 
+// AttachVectorGraphReplayGroup preserves the original assigned command103 authority.
+func (b *Batch) AttachVectorGraphReplayGroup(intent *CommandWALIntent, group *RootPublicationBuildGroup) error {
+	return b.attachNativeReplayGroup(intent, group, commitlog.CommandKindCollectionRebuildVectorIndex)
+}
+
 func (b *Batch) attachNativeReplayGroup(intent *CommandWALIntent, group *RootPublicationBuildGroup, kind commitlog.CommandKind) error {
 	if b == nil || b.db == nil {
 		return ErrClosed

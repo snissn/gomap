@@ -92,6 +92,12 @@ func nativeDomainBuildCharge(maxSources int) (uint64, error) {
 // Each synchronous group call receives at most nativeBuildBatchEntries rows.
 // The descriptor edge covers every borrowed byte until Reset/Close scrubs it.
 func (b *nativeDomainBuild) materialize(group nativeOrderedRootBuilder) (uint64, error) {
+	return b.materializeWithCatalog(group, nil)
+}
+
+// names is borrowed synchronously from the same captured engine that owns this
+// build. It is never stored on the ledger or used for ordinary row domains.
+func (b *nativeDomainBuild) materializeWithCatalog(group nativeOrderedRootBuilder, names *cowbtree.OwnedMap[string, *nativeCollectionState]) (uint64, error) {
 	if b.failure != nil {
 		return 0, b.failure
 	}
@@ -112,10 +118,10 @@ func (b *nativeDomainBuild) materialize(group nativeOrderedRootBuilder) (uint64,
 		b.roots = append(b.roots, positions.source.root)
 	}
 	for i := len(b.roots) - 1; i >= 0 && b.failure == nil; i-- {
-		b.buildSource(group, b.roots[i])
+		b.buildSource(group, b.roots[i], names)
 	}
 	if b.failure == nil && b.source.pending != nil {
-		b.buildSource(group, b.source.pending)
+		b.buildSource(group, b.source.pending, names)
 	}
 	clear(b.roots)
 	b.roots = b.roots[:0]
@@ -129,7 +135,7 @@ func (b *nativeDomainBuild) materialize(group nativeOrderedRootBuilder) (uint64,
 	return b.root, nil
 }
 
-func (b *nativeDomainBuild) buildSource(group nativeOrderedRootBuilder, root *memtable.COWRoot) {
+func (b *nativeDomainBuild) buildSource(group nativeOrderedRootBuilder, root *memtable.COWRoot, names *cowbtree.OwnedMap[string, *nativeCollectionState]) {
 	root.ScanOwned(func(row memtable.COWRecord) bool {
 		key := nativeBorrowedStringBytes(row.Key)
 		switch {
@@ -157,7 +163,16 @@ func (b *nativeDomainBuild) buildSource(group nativeOrderedRootBuilder, root *me
 			b.delta.AppendPointerViewNoTouchTrustedSortedWithRevision(key, row.Ptr, row.Revision)
 			b.delta.NoteTouchedValueLogFileID(row.Ptr.FileID)
 		default:
-			b.failure = b.delta.AppendViewTrustedSortedUniqueWithRevision(key, nativeBorrowedStringBytes(row.Value), row.Revision)
+			value := nativeBorrowedStringBytes(row.Value)
+			if b.catalog && names != nil {
+				if meta := nativeCatalogProjectionMeta(names, row); meta != nil {
+					value, b.failure = nativeCatalogProjectedValue(meta, row)
+					if b.failure != nil {
+						return false
+					}
+				}
+			}
+			b.failure = b.delta.AppendViewTrustedSortedUniqueWithRevision(key, value, row.Revision)
 		}
 		if b.failure == nil && b.delta.Len() == nativeBuildBatchEntries {
 			b.flush(group)

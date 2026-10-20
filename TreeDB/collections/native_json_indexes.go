@@ -39,10 +39,27 @@ func nativeJSONDomainNumber(meta CollectionMeta, name string) uint64 {
 	}
 	for i, index := range meta.Indexes {
 		if name == "index/"+index.Name {
-			return uint64(i) + 4
+			return nativeJSONSecondaryDomainNumber(meta, i)
+		}
+	}
+	// Source-only ColumnGraph declarations retain their original empty root
+	// descriptors. They are catalog identities, not live ANN publication.
+	if nativeSourceImportMetaV2(meta) {
+		for i, index := range meta.VectorIndexes {
+			if name == "vector-index/"+index.Name {
+				return uint64(len(meta.Indexes)+i) + 7
+			}
 		}
 	}
 	return 0
+}
+
+// Typed physical domains retain 4..6; ordinary JSON/BSON numbering is unchanged.
+func nativeJSONSecondaryDomainNumber(meta CollectionMeta, index int) uint64 {
+	if nativeTypedMeta(meta) {
+		return uint64(index) + 7
+	}
+	return uint64(index) + 4
 }
 
 func nativeJSONInsertPlanner(meta CollectionMeta) (insertBatchPlanner, error) {
@@ -55,8 +72,8 @@ func nativeJSONInsertPlanner(meta CollectionMeta) (insertBatchPlanner, error) {
 
 // Reserve original planner scratch before parsing/encoding. Array-capable
 // schemas additionally admit every source-bounded value reference and encoded
-// image, including per-element BSON V2 numeric expansion. Compound schemas
-// remain fenced. The input-sized allowance covers
+// image, including per-element BSON V2 numeric expansion. Compound scalar components
+// use independent source/path and encoding allowances. The input-sized allowance covers
 // JSON decoder nodes and coexisting growable encode/secondary/state arenas;
 // fixed per-row headers cover planner items, unique probes and state refs.
 // Existing whole-plan callers retain this allowance. Ordered native staging
@@ -93,7 +110,7 @@ func nativeJSONIndexedCharge(meta CollectionMeta, ids, documents [][]byte, heade
 	}
 	for i, doc := range documents {
 		for _, index := range meta.Indexes {
-			if !index.MultiKey && !meta.Options.AllowArrayValuesInIndex {
+			if len(index.Components) == 0 && !index.MultiKey && !meta.Options.AllowArrayValuesInIndex {
 				continue
 			}
 			capacity, err := nativeJSONDocumentEncodedCapacity(doc, []IndexDefinition{index}, meta.Options.AllowArrayValuesInIndex)
@@ -111,8 +128,21 @@ func nativeJSONIndexedCharge(meta CollectionMeta, ids, documents [][]byte, heade
 			// during descent, so include the complete path depth. The encoded
 			// reference slice has its own separately admitted growth pair.
 			if normalizedDocumentFormat(meta.Options.DocumentFormat) == DocumentFormatBSON {
-				depth := uint64(strings.Count(index.Field, ".")) + 1
-				refs, ok := mul(uint64(len(doc)), depth)
+				// Compound extraction rejects arrays AFTER the maintained path
+				// extractor has allocated its transient ancestor/value slices.
+				// Charge every component, even repeated dotted paths.
+				paths := uint64(strings.Count(index.Field, ".")) + 1
+				if len(index.Components) > 0 {
+					paths = 0
+					for _, component := range index.Components {
+						depth := uint64(strings.Count(component.Field, ".")) + 1
+						if depth > ^uint64(0)-paths {
+							return 0, memtable.ErrCOWCapacity
+						}
+						paths += depth
+					}
+				}
+				refs, ok := mul(uint64(len(doc)), paths)
 				if !ok {
 					return 0, memtable.ErrCOWCapacity
 				}
@@ -135,7 +165,7 @@ func nativeJSONIndexedCharge(meta CollectionMeta, ids, documents [][]byte, heade
 		if decoder {
 			source := uint64(len(doc))
 			for _, index := range meta.Indexes {
-				if index.ValueType == IndexValueBSONOrderedV2 && (index.MultiKey || meta.Options.AllowArrayValuesInIndex) {
+				if index.ValueType == IndexValueBSONOrderedV2 && (len(index.Components) > 0 || index.MultiKey || meta.Options.AllowArrayValuesInIndex) {
 					// Values encode sequentially. One exact numeric expansion
 					// may reach the same digit cap as the scalar query codec,
 					// even when its raw BSON source is only eight bytes.
@@ -160,6 +190,16 @@ func nativeJSONIndexedCharge(meta CollectionMeta, ids, documents [][]byte, heade
 	for _, index := range meta.Indexes {
 		if !add(uint64(len(index.Name)+len(index.Field)+len(meta.Name)) * 8) {
 			return 0, memtable.ErrCOWCapacity
+		}
+		// plannerIndexes and indexRuntimes own component descriptors, path
+		// slice headers and split string headers before any document parse.
+		for _, component := range index.Components {
+			depth := uint64(strings.Count(component.Field, ".")) + 1
+			size := 2*uint64(unsafe.Sizeof(IndexComponent{})) + 2*uint64(unsafe.Sizeof([]string{}))
+			path, ok := mul(depth, 2*uint64(unsafe.Sizeof("")))
+			if !ok || path > ^uint64(0)-size || !add(size+path) || !add(uint64(len(component.Field))*8) {
+				return 0, memtable.ErrCOWCapacity
+			}
 		}
 	}
 	return total, nil

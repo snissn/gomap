@@ -315,3 +315,21 @@ validation. The owner still uses the existing catalog-validated routed
 submitter, production Raft commit evidence and recoverable FSM apply. Exact
 fixed configuration remains mandatory on reopen, including an optional stable
 cluster identity. This does not implement membership changes or replacement.
+
+## Native template document apply
+
+For a native collection group, deterministic template-v1 Create and ordinary
+InsertBatch/ReplaceBatch/DeleteBatch use the same captured native transaction as
+JSON/BSON. The existing wire's TD1D hash references, TD1I embedded records and
+TemplateRecords sidecar lower into the ordinary TD1I/TD1H batch preparer. Current
+exported TD1I input retains its TD1H root and original value tags, including
+lossless JSON-number text; the canonical validator uses that same grammar. Local
+compact template IDs are assigned by that original owner. Batch definitions may
+follow a reference or belong to a missing replacement. Matched canonical members
+retain their needed definitions for local WAL startup replay. For inserts and
+matched replacements, unknown hashes or malformed resolved values refuse before
+append. A structurally valid all-missing replacement retains ordinary accepted
+no-effect semantics. Advisory preflight reserves no
+LSN, logical successor, physical state or durable FSM apply progress; committed
+apply still requires its original exact physical seal and durable result/progress.
+Legacy collection mutation dispatch does not acquire this native capability.

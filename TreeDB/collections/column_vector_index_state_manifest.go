@@ -188,37 +188,42 @@ func encodeColumnVectorIndexStateRecordV2(snapshot columnVectorIndexStateSnapsho
 	return b.Bytes()
 }
 
-func decodeColumnVectorIndexStateRecord(raw []byte) (columnVectorIndexStateSnapshot, error) {
+// columnVectorIndexStateRecordDecodedLength checks the original outer codec
+// envelope without allocating its decoded image or asset headers. Admission and
+// the decoder share this preflight; full state validation stays in the decoder.
+func columnVectorIndexStateRecordDecodedLength(raw []byte) (int, []byte, error) {
 	cur := manifestCursor{raw: raw}
 	if magic := cur.u32(); magic != columnVectorIndexStateMagic {
-		return columnVectorIndexStateSnapshot{}, fmt.Errorf("collections: bad vector-index state magic=0x%08x", magic)
+		return 0, nil, fmt.Errorf("collections: bad vector-index state magic=0x%08x", magic)
 	}
-	version := cur.u16()
-	if version == columnVectorIndexStateVersion {
-		decodedBytes := cur.u64()
-		if err := cur.err; err != nil {
-			return columnVectorIndexStateSnapshot{}, err
-		}
-		if decodedBytes > columnVectorIndexStateMaxDecodedBytes {
-			return columnVectorIndexStateSnapshot{}, fmt.Errorf(
-				"collections: compressed vector-index state decoded bytes=%d exceed limit=%d",
-				decodedBytes,
-				columnVectorIndexStateMaxDecodedBytes,
-			)
-		}
-		compressed := raw[cur.pos:]
-		snappyDecodedBytes, err := snappy.DecodedLen(compressed)
-		if err != nil {
-			return columnVectorIndexStateSnapshot{}, fmt.Errorf("collections: decode compressed vector-index state length: %w", err)
-		}
-		if uint64(snappyDecodedBytes) != decodedBytes {
-			return columnVectorIndexStateSnapshot{}, fmt.Errorf(
-				"collections: compressed vector-index state decoded length=%d want %d",
-				snappyDecodedBytes,
-				decodedBytes,
-			)
-		}
-		decoded, err := snappy.Decode(make([]byte, 0, snappyDecodedBytes), compressed)
+	if cur.u16() != columnVectorIndexStateVersion {
+		return len(raw), nil, nil
+	}
+	decodedBytes := cur.u64()
+	if err := cur.err; err != nil {
+		return 0, nil, err
+	}
+	if decodedBytes > columnVectorIndexStateMaxDecodedBytes {
+		return 0, nil, fmt.Errorf("collections: compressed vector-index state decoded bytes=%d exceed limit=%d", decodedBytes, columnVectorIndexStateMaxDecodedBytes)
+	}
+	compressed := raw[cur.pos:]
+	n, err := snappy.DecodedLen(compressed)
+	if err != nil {
+		return 0, nil, fmt.Errorf("collections: decode compressed vector-index state length: %w", err)
+	}
+	if uint64(n) != decodedBytes {
+		return 0, nil, fmt.Errorf("collections: compressed vector-index state decoded length=%d want %d", n, decodedBytes)
+	}
+	return n, compressed, nil
+}
+
+func decodeColumnVectorIndexStateRecord(raw []byte) (columnVectorIndexStateSnapshot, error) {
+	n, compressed, err := columnVectorIndexStateRecordDecodedLength(raw)
+	if err != nil {
+		return columnVectorIndexStateSnapshot{}, err
+	}
+	if compressed != nil {
+		decoded, err := snappy.Decode(make([]byte, 0, n), compressed)
 		if err != nil {
 			return columnVectorIndexStateSnapshot{}, fmt.Errorf("collections: decode compressed vector-index state: %w", err)
 		}

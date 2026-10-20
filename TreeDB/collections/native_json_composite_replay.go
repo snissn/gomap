@@ -256,7 +256,7 @@ func replayNativeJSONComposite(db *backenddb.DB, env commitlog.CommandEnvelope) 
 				}
 				rows, residual = prepared.declaredRows, retained
 			} else if len(docs) != 0 {
-				if member.Kind != commitlog.CommandKindCollectionInsertBatchByID {
+				if member.Kind != commitlog.CommandKindCollectionInsertBatchByID && member.Kind != commitlog.CommandKindCollectionUpdateBatchByID {
 					return backenddb.ErrNativeSemanticUnsupported
 				}
 				declared := make([]columnWriteDocument, len(docs))
@@ -264,16 +264,9 @@ func replayNativeJSONComposite(db *backenddb.DB, env commitlog.CommandEnvelope) 
 					declared[i] = columnWriteDocument{ID: doc.ID, Document: doc.Document}
 				}
 				var err error
-				rows, err = extractColumnDeclaredRowsFromJSONDocuments(*target.meta.Options.ColumnStore, declared)
+				rows, residual, err = nativeTypedDocumentRows(target.meta, declared)
 				if err != nil {
 					return err
-				}
-				residual = make([][]byte, len(docs))
-				for i, doc := range docs {
-					residual[i], err = columnRetainedPayloadJSONFromJSONDocument(*target.meta.Options.ColumnStore, doc.Document)
-					if err != nil {
-						return err
-					}
 				}
 			}
 			exists := func(id []byte) (bool, error) {
@@ -322,6 +315,9 @@ func replayNativeJSONComposite(db *backenddb.DB, env commitlog.CommandEnvelope) 
 				return nil
 			} // maintained empty Replace frame
 			if err = nativeTypedValidateResidual(target.meta, rows, residual); err != nil {
+				return err
+			}
+			if err = nativeTypedValidateIndexRows(target.meta, rows, noAdmission); err != nil {
 				return err
 			}
 			amount, err := nativeTypedMutationBuildCapacity(target.meta, rows, residual, ids)
@@ -399,15 +395,64 @@ func replayNativeJSONComposite(db *backenddb.DB, env commitlog.CommandEnvelope) 
 		return err
 	}
 	for _, target := range collections {
-		if nativeTypedMeta(target.meta) {
+		typed := nativeTypedMeta(target.meta)
+		if typed && len(target.meta.Indexes) == 0 {
 			continue
 		}
-		plan, changed, runtimes, err := nativeJSONFinalRowsResolved(target.name, target.meta, &target.rows, noAdmission, nil, updateBatchModeAny, target.planner.options.templateResolver)
+		var plan *directBufferedInsertPlan
+		var changed []preparedBatchUpdate
+		var runtimes []indexRuntime
+		if typed {
+			// These are private startup headers, ordered by original canonical
+			// member. Link only the original inputs to reuse final-state reduction.
+			var head *nativeTypedDelta
+			var mutations []memtable.COWMutation
+			for _, delta := range target.typed {
+				delta.previous = head
+				head = delta
+				for _, row := range delta.rows {
+					mutations = append(mutations, memtable.COWMutation{Key: row.ID})
+				}
+				for _, id := range delta.deleted {
+					mutations = append(mutations, memtable.COWMutation{Key: id})
+				}
+			}
+			sort.Slice(mutations, func(i, j int) bool { return bytes.Compare(mutations[i].Key, mutations[j].Key) < 0 })
+			n := 0
+			for _, mutation := range mutations {
+				if n != 0 && bytes.Equal(mutations[n-1].Key, mutation.Key) {
+					continue
+				}
+				mutations[n] = mutation
+				n++
+			}
+			clear(mutations[n:])
+			mutations = mutations[:n]
+			stateRoot, e := rootFor(collectionIndexStateRootName(target.name))
+			if e != nil {
+				return e
+			}
+			readOld := func(id []byte) ([]byte, error) {
+				if stateRoot == 0 {
+					return nil, nil
+				}
+				raw, e := snapshot.GetAtRoot(stateRoot, id)
+				if errors.Is(e, tree.ErrKeyNotFound) {
+					return nil, nil
+				}
+				return raw, e
+			}
+			plan, changed, runtimes, err = nativeTypedIndexFinalPlan(target.meta, mutations, head, readOld, noAdmission)
+		} else {
+			plan, changed, runtimes, err = nativeJSONFinalRowsResolved(target.name, target.meta, &target.rows, noAdmission, nil, updateBatchModeAny, target.planner.options.templateResolver)
+		}
 		if err != nil {
 			return err
 		}
-		if err = nativeTemplatePlanEntries(plan, target.name, target.templateRecords, target.planner.options, noAdmission); err != nil {
-			return err
+		if !typed {
+			if err = nativeTemplatePlanEntries(plan, target.name, target.templateRecords, target.planner.options, noAdmission); err != nil {
+				return err
+			}
 		}
 		replacements := batchUniqueReplacementOwners(runtimes, changed)
 		for runtimeIdx, runtime := range runtimes {
@@ -457,11 +502,14 @@ func replayNativeJSONComposite(db *backenddb.DB, env commitlog.CommandEnvelope) 
 			}
 		}
 		primary := make([]memtable.COWMutation, len(plan.primaryEntries))
-		additional, _, err := extractNativeInsertEffects(target.name, target.incarnation, plan, primary, noAdmission)
+		additional, _, err := extractNativeInsertEffects(target.name, target.incarnation, plan, primary, noAdmission, target.meta)
 		if err != nil {
 			return err
 		}
 		for i := 0; i <= len(additional); i++ {
+			if typed && i == 0 {
+				continue // Original typed materializer alone owns physical primary locators.
+			}
 			qualified, entries := collectionPrimaryRootName(target.name), primary
 			policy := nativeInsertRootPolicy(plan, qualified)
 			if i > 0 {

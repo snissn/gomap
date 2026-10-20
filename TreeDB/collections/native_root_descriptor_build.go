@@ -8,9 +8,16 @@ import (
 // Qualified key bytes are copied once from the captured schema. They and their
 // result-array value cells belong to the original build floor before any root
 // materializes. No current catalog/name or physical CommitSeq is sampled.
-func nativeEngineRootDescriptorKeyCharge(captured *nativeEngineVersion) (total uint64, err error) {
-	captured.pending.Scan(func(_ uint64, c *nativeCollectionState) bool {
-		c.pending.Scan(func(name string, _ *nativeDomainState) bool {
+func nativeEngineRootDescriptorKeyCharge(captured *nativeEngineVersion) (uint64, error) {
+	return nativeEngineRootDescriptorKeyChargeForCompaction(captured, 0)
+}
+func nativeEngineRootDescriptorKeyChargeForCompaction(captured *nativeEngineVersion, target uint64) (total uint64, err error) {
+	scanNativeBuildCollections(captured, target, func(id uint64, c *nativeCollectionState) bool {
+		domainSet := c.pending
+		if id == target {
+			domainSet = c.domains
+		}
+		domainSet.Scan(func(name string, _ *nativeDomainState) bool {
 			maxInt := int(^uint(0) >> 1)
 			if len(c.schema.meta.Name) > maxInt-len(systemCollectionRootPrefix)-1 || len(name) > maxInt-len(systemCollectionRootPrefix)-1-len(c.schema.meta.Name) {
 				err = memtable.ErrCOWCapacity

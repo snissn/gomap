@@ -46,8 +46,13 @@ func requirementDesired(r StableLogicalObligationRequirements, o StableLogicalOb
 	return -1
 }
 func validateBorrowedRequirements(r StableLogicalObligationRequirements) error {
-	if len(r.ScopedFields)+len(r.ScopedNamespaces) == 0 && len(r.Obligations) != 0 {
+	if len(r.ScopedFields)+len(r.ScopedNamespaces) == 0 && len(r.Obligations)+len(r.Streams) != 0 {
 		return ErrUnresolvedResource
+	}
+	for _, stream := range r.Streams {
+		if stream == nil {
+			return ErrResourceOwnership
+		}
 	}
 	for _, field := range r.ScopedFields {
 		if field == "" {
@@ -275,7 +280,14 @@ func cloneSelectedResourceFilteredWithPhysicalSelection(source *StableResourceSe
 						}
 					}
 				} else {
-					drop = requirementContainsScope(r, o) && requirementDesired(r, o) < 0
+					if requirementContainsScope(r, o) {
+						var keep bool
+						keep, buildErr = requirementHasValue(r, o)
+						if buildErr != nil {
+							return false
+						}
+						drop = !keep
+					}
 				}
 				if drop {
 					work.DroppedObligations++
@@ -368,11 +380,12 @@ func cloneSelectedResourceFilteredWithPhysicalSelection(source *StableResourceSe
 	return result, work, nil
 }
 
-// Validation admits exact desired-membership scratch once. Every actual input
+// Validation admits exact ordinary desired-membership scratch once. Streamed
+// requirements instead replay exact point membership in both directions. Every actual input
 // obligation is inspected; duplicate actual references are rejected exactly,
 // including references owned by different physical resources. The maintained
 // admitted diagnostic streams complete directory history with only physical
-// and desired-membership scratch, never detached or flattened logical values.
+// and bounded producer scratch, never detached or flattened retained values.
 func validateSelectedResourceRequirements(source *StableResourceSet, r StableLogicalObligationRequirements, work StableResourceClosureWork) (_ StableResourceClosureWork, retErr error) {
 	if err := validateBorrowedRequirements(r); err != nil {
 		return work, err
@@ -421,7 +434,11 @@ func validateSelectedResourceRequirements(source *StableResourceSet, r StableLog
 	if err := diagnosticChargeAdd(&charge, uint64(count), uint64(unsafe.Sizeof(fieldCheck{}))); err != nil {
 		return work, err
 	}
-	if err := diagnosticChargeAdd(&charge, uint64(len(r.Obligations)), 1); err != nil {
+	desiredCount := len(r.Obligations)
+	if len(r.Streams) != 0 {
+		desiredCount = 0
+	}
+	if err := diagnosticChargeAdd(&charge, uint64(desiredCount), 1); err != nil {
 		return work, err
 	}
 	allocation, err := newResourceAllocation(diagnostics.allocation.owner, charge)
@@ -429,7 +446,9 @@ func validateSelectedResourceRequirements(source *StableResourceSet, r StableLog
 		return work, err
 	}
 	fields := make([]fieldCheck, 0, count)
-	seen := make([]bool, len(r.Obligations))
+	seen := make([]bool, desiredCount)
+	scope := ownedDirectoryCodecScopeV2{owner: diagnostics.allocation.owner}
+	defer scope.close()
 	defer func() {
 		clear(fields)
 		fields = nil
@@ -459,6 +478,16 @@ func validateSelectedResourceRequirements(source *StableResourceSet, r StableLog
 		if !requirementContainsScope(r, o) {
 			return nil
 		}
+		if len(r.Streams) != 0 {
+			present, err := requirementHasValue(r, o)
+			if err != nil {
+				return err
+			}
+			if !present {
+				return ErrResourceConflict
+			}
+			return uniqueSelectedRequirementOwner(diagnostics.borrow.backing, &scope, o, &work)
+		}
 		index := requirementDesired(r, o)
 		if index < 0 || seen[index] {
 			return ErrResourceConflict
@@ -473,10 +502,22 @@ func validateSelectedResourceRequirements(source *StableResourceSet, r StableLog
 			return work, ErrUnresolvedResource
 		}
 	}
+	if len(r.Streams) != 0 {
+		return validateSelectedStreamRequirementValues(diagnostics.borrow.backing, &scope, r, work)
+	}
 	for _, o := range r.Obligations {
 		if !seen[requirementDesired(r, o)] {
 			return work, ErrUnresolvedResource
 		}
 	}
 	return work, nil
+}
+
+// The interface walk's callback can escape. Keep its work copy separate so
+// ordinary requirements do not allocate a heap work record, even when empty.
+func validateSelectedStreamRequirementValues(views *resourceKindBacking, scope *ownedDirectoryCodecScopeV2, r StableLogicalObligationRequirements, work StableResourceClosureWork) (StableResourceClosureWork, error) {
+	err := walkRequirementValues(r, &work, func(o StableLogicalObligation) error {
+		return uniqueSelectedRequirementOwner(views, scope, o, &work)
+	})
+	return work, err
 }

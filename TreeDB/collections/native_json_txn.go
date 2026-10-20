@@ -21,22 +21,23 @@ import (
 // Get observes that opening plus its own ordered staged row operations. Commit never reruns the
 // body; only the original immutable mutations are composed after validation.
 type nativeJSONTxnBinding struct {
-	name             string
-	incarnation      uint64
-	probe            NativeJSONRead
-	plan             *nativeJSONLogicalInsert
-	typed            *nativeTypedDelta
-	effects          []txnhistory.Effect
-	rows             nativeJSONRows
-	stageCharge      uint64
-	validation       indexEncodeArena
-	validationLease  *memtable.COWExternalLease
-	validationCharge uint64
-	templates        templateV1Resolver
-	templateRecords  []templateV1Record
-	templateLearned  []templateV1LearnedTemplate
-	allowStored      bool
-	learnTemplates   bool
+	name              string
+	incarnation       uint64
+	probe             NativeJSONRead
+	plan              *nativeJSONLogicalInsert
+	typed             *nativeTypedDelta
+	effects           []txnhistory.Effect
+	rows              nativeJSONRows
+	stageCharge       uint64
+	validation        indexEncodeArena
+	validationLease   *memtable.COWExternalLease
+	validationCharge  uint64
+	templates         templateV1Resolver
+	templateRecords   []templateV1Record
+	templateLearned   []templateV1LearnedTemplate
+	allowSourceImport bool
+	allowStored       bool
+	learnTemplates    bool
 }
 type NativeJSONTxn struct {
 	mu           sync.Mutex
@@ -279,13 +280,14 @@ type nativeJSONLogicalInsert struct {
 }
 
 type nativeJSONLogicalGroup struct {
-	bindings  []nativeJSONTxnBinding
-	changes   []nativeJSONPrimaryChange
-	count     int
-	bootstrap *nativeEngineVersion
-	custody   *nativeMutationCustody
-	prepared  *nativeEngineVersion
-	raw       bool
+	bindings     []nativeJSONTxnBinding
+	changes      []nativeJSONPrimaryChange
+	count        int
+	bootstrap    *nativeEngineVersion
+	custody      *nativeMutationCustody
+	prepared     *nativeEngineVersion
+	raw          bool
+	participants []*backenddb.CommandWALIntent
 }
 
 func (p *nativeJSONLogicalGroup) PrepareNativePublication(latest backenddb.NativeSemanticState, exact *backenddb.Snapshot) (backenddb.NativeFinalizedPublication, error) {
@@ -402,7 +404,11 @@ type nativeCommandWALApplyCommit struct {
 	alreadyApplied bool
 }
 
-func (t *NativeJSONTxn) commitNativeApply(sealed bool, apply *nativeCommandWALApplyCommit) (resultErr error) {
+func (t *NativeJSONTxn) commitNativeApply(sealed bool, apply *nativeCommandWALApplyCommit) error {
+	return t.commitNativePlan(sealed, apply, false)
+}
+
+func (t *NativeJSONTxn) commitNativePlan(sealed bool, apply *nativeCommandWALApplyCommit, typedGroup bool) (resultErr error) {
 	if t == nil {
 		return backenddb.ErrClosed
 	}
@@ -429,7 +435,10 @@ func (t *NativeJSONTxn) commitNativeApply(sealed bool, apply *nativeCommandWALAp
 	if t.failure != nil {
 		return t.failure
 	}
-	if err := t.finalizeNativeRows(); err != nil {
+	// Only the original singleton103 graph apply may have a typed recipe and
+	// catalog effect without any CRUD members.
+	graphSingleton := apply != nil && apply.frame.Kind == commitlog.CommandKindCollectionRebuildVectorIndex && !typedGroup && t.count == 1 && !t.rawStaged && len(t.members) == 0 && nativeTypedGraphOnly(t.bindings[0].typed)
+	if err := t.finalizeNativeRows(graphSingleton); err != nil {
 		return err
 	}
 	count, totalEffects := 0, 0
@@ -509,11 +518,16 @@ func (t *NativeJSONTxn) commitNativeApply(sealed bool, apply *nativeCommandWALAp
 		memberCount++
 	}
 	kind, scope, format, payload := members[0].Kind, commitlog.CommandScopeCollection, members[0].PayloadFormat, members[0].Payload
+	if graphSingleton {
+		kind, scope, format, payload = apply.frame.Kind, apply.frame.Scope, apply.frame.PayloadFormat, apply.frame.Payload
+	}
 	typedMember := false
 	for i := 0; i < t.count; i++ {
 		typedMember = typedMember || nativeTypedMeta(t.bindings[i].probe.meta)
 	}
-	if memberCount > 1 || typedMember {
+	// The fixed zero-row graph recipe carries its original singleton103 frame;
+	// it has no fabricated CRUD member or composite transport representation.
+	if !typedGroup && (memberCount > 1 || typedMember) && !graphSingleton {
 		kind, scope, format = commitlog.CommandKindCompositeMutation, commitlog.CommandScopeSystem, commitlog.PayloadFormatCompositeMutationV1
 		var err error
 		planned, planErr := commitlog.PlanCompositeMutationPayload(members[:memberCount])
@@ -549,7 +563,13 @@ func (t *NativeJSONTxn) commitNativeApply(sealed bool, apply *nativeCommandWALAp
 		kind, scope, format, payload = apply.frame.Kind, apply.frame.Scope, apply.frame.PayloadFormat, apply.frame.Payload
 		native.ObserveAssigned = apply.observe
 	}
-	intent, err := t.db.NewTrustedCommandWALIntent(kind, scope, format, payload)
+	var intent *backenddb.CommandWALIntent
+	var err error
+	if typedGroup {
+		intent, plan.participants, err = t.nativeTypedUpsertIntents(members[:memberCount], admit)
+	} else {
+		intent, err = t.db.NewTrustedCommandWALIntent(kind, scope, format, payload)
+	}
 	if err != nil {
 		t.custody = nil
 		return errors.Join(err, cancelPrivateNativePublication(native))
@@ -575,7 +595,13 @@ func (t *NativeJSONTxn) commitNativeApply(sealed bool, apply *nativeCommandWALAp
 	if apply != nil {
 		sync = apply.sync
 	}
+	if typedGroup {
+		sync = true
+	}
 	result, err := t.core.CommitNative(native, intent, sync)
+	// The assigned binding borrows these synchronous request intents only.
+	// No failed sparse custody may retain them after the input receipt ends.
+	plan.participants = nil
 	if apply != nil {
 		apply.result = result
 	}

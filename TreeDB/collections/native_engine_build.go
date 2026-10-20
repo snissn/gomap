@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -63,6 +64,14 @@ func prepareNativeEngineBuild(captured *nativeEngineVersion) (*nativeEngineBuild
 	return prepareNativeEngineBuildAt(captured, nil, nil, nil)
 }
 func prepareNativeEngineBuildAt(captured *nativeEngineVersion, basis *backenddb.Snapshot, capture *backenddb.StableResourceCaptureLease, group *backenddb.RootPublicationBuildGroup) (*nativeEngineBuild, error) {
+	return prepareNativeEngineBuildForCompaction(captured, basis, capture, group, nil)
+}
+func prepareNativeEngineBuildForCompaction(captured *nativeEngineVersion, basis *backenddb.Snapshot, capture *backenddb.StableResourceCaptureLease, group *backenddb.RootPublicationBuildGroup, operation *nativeColumnCompaction) (*nativeEngineBuild, error) {
+	var target uint64
+	if operation != nil {
+		target = operation.target
+	}
+
 	if captured == nil || captured.maintenance == nil || captured.allocator == nil {
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
@@ -72,7 +81,7 @@ func prepareNativeEngineBuildAt(captured *nativeEngineVersion, basis *backenddb.
 		}
 		return captured.build, backenddb.ErrNativeSemanticUnsupported
 	}
-	promise, collections, domains, err := nativeHandoffCapacity(captured)
+	promise, collections, domains, err := nativeHandoffCapacityForCompaction(captured, target)
 	if err != nil {
 		return nil, err
 	}
@@ -80,12 +89,12 @@ func prepareNativeEngineBuildAt(captured *nativeEngineVersion, basis *backenddb.
 	if err != nil {
 		return nil, err
 	}
-	keys, err := nativeEngineRootDescriptorKeyCharge(captured)
+	keys, err := nativeEngineRootDescriptorKeyChargeForCompaction(captured, target)
 	if err != nil || keys > ^uint64(0)-bytes {
 		return nil, memtable.ErrCOWCapacity
 	}
 	bytes, floor = bytes+keys, floor+keys
-	typedBytes, typedFloor, typedCollections, _, err := nativeTypedBuildCapacity(captured, basis)
+	typedBytes, typedFloor, typedCollections, _, err := nativeTypedBuildCapacityForCompaction(captured, basis, target)
 	if err != nil {
 		return nil, err
 	}
@@ -96,6 +105,24 @@ func prepareNativeEngineBuildAt(captured *nativeEngineVersion, basis *backenddb.
 	if err = nativeTypedCheckedAdd(&floor, typedFloor); err != nil {
 		return nil, err
 	}
+	// Catalog-only flushes can follow typed physical handoff. Reserve exact
+	// captured-schema projection before installing any ledger or allocating
+	// replacement metadata images in the original bounded catalog batch.
+	catalogBytes, err := nativeCatalogProjectionCapacity(captured)
+	if err != nil {
+		return nil, err
+	}
+	if err = nativeTypedCheckedAdd(&bytes, catalogBytes); err != nil {
+		return nil, err
+	}
+	if err = nativeTypedCheckedAdd(&floor, catalogBytes); err != nil {
+		return nil, err
+	}
+	if operation != nil {
+		if err := operation.ctx.Err(); err != nil {
+			return nil, backenddb.NativeSemanticBuildRetryableRefusal{Cause: err}
+		}
+	}
 	lease, err := captured.maintenance.AdmitNativeBytes(bytes)
 	if err != nil {
 		err = fmt.Errorf("collections: native build reservation bytes=%d floor=%d typed_bytes=%d typed_floor=%d: %w", bytes, floor, typedBytes, typedFloor, err)
@@ -103,6 +130,14 @@ func prepareNativeEngineBuildAt(captured *nativeEngineVersion, basis *backenddb.
 			return nil, backenddb.NativeSemanticBuildRetryableRefusal{Cause: err}
 		}
 		return nil, err
+	}
+	if operation != nil {
+		if err := operation.ctx.Err(); err != nil {
+			// The reservation is still private: no original build or output
+			// exists, so cancellation can refund it without a partial failure.
+			lease.Close()
+			return nil, backenddb.NativeSemanticBuildRetryableRefusal{Cause: err}
+		}
 	}
 	refund := new(cowbtree.OwnedMapRefund)
 	refund.Init(lease)
@@ -113,6 +148,12 @@ func prepareNativeEngineBuildAt(captured *nativeEngineVersion, basis *backenddb.
 		refund:     refund,
 	}
 	captured.build = b
+	if operation != nil {
+		// From adoption onward the original ledger must finish or retain its
+		// genuine construction failure. Caller cancellation cannot abandon it,
+		// including during the scanner that precedes replacement assets.
+		operation.ctx = context.WithoutCancel(operation.ctx)
+	}
 	admit := func(n uint64) (cowbtree.OwnedMapLease, error) { return b.allocation.AdmitNativeBytes(n) }
 	if nativeCatalogHasPending(captured.catalog) {
 		source := captured.catalog
@@ -132,12 +173,16 @@ func prepareNativeEngineBuildAt(captured *nativeEngineVersion, basis *backenddb.
 		}
 		b.catalogBuilt = nativeBuiltDomain{name: nativeCatalogDomainName, interpretation: 1, boundary: boundary}
 	}
-	captured.pending.Scan(func(id uint64, c *nativeCollectionState) bool {
+	scanNativeBuildCollections(captured, target, func(id uint64, c *nativeCollectionState) bool {
 		if c.incarnation != id {
 			b.failure = backenddb.ErrNativeSemanticUnsupported
 			return false
 		}
-		c.pending.Scan(func(name string, d *nativeDomainState) bool {
+		domainSet := c.pending
+		if id == target {
+			domainSet = c.domains
+		}
+		domainSet.Scan(func(name string, d *nativeDomainState) bool {
 			if len(b.domains) == cap(b.domains) || name != d.name {
 				b.failure = backenddb.ErrNativeSemanticUnsupported
 				return false
@@ -157,7 +202,7 @@ func prepareNativeEngineBuildAt(captured *nativeEngineVersion, basis *backenddb.
 			b.built = append(b.built, nativeBuiltDomain{
 				collection: id, interpretation: d.interpretation, name: d.name,
 				oldBaseRoot: d.baseRoot, root: d.baseRoot, boundary: boundary, typedBoundary: d.typed,
-				empty:   boundary == nil,
+				empty: boundary == nil, physicalOnly: id == target && nativeTypedPhysicalDomain(name),
 				rootKey: systemCollectionRootPrefix + c.schema.meta.Name + "/" + name,
 			})
 			return true
@@ -165,7 +210,7 @@ func prepareNativeEngineBuildAt(captured *nativeEngineVersion, basis *backenddb.
 		return b.failure == nil
 	})
 	if b.failure == nil {
-		err = b.prepareTyped(captured, typedCollections, basis, capture, group)
+		err = b.prepareTypedForCompaction(captured, typedCollections, basis, capture, group, operation)
 		if err != nil {
 			return b, err
 		}
@@ -209,7 +254,7 @@ func nativeEngineBuildCapacity(domains, maxSources int, handoff uint64) (total, 
 	return total + handoff, floor, nil
 }
 
-func (b *nativeEngineBuild) materializeDomains(group nativeOrderedRootBuilder) error {
+func (b *nativeEngineBuild) materializeDomains(group nativeOrderedRootBuilder, names *cowbtree.OwnedMap[string, *nativeCollectionState]) error {
 	if b.failure != nil {
 		return b.failure
 	}
@@ -233,13 +278,13 @@ func (b *nativeEngineBuild) materializeDomains(group nativeOrderedRootBuilder) e
 		}
 	}
 	if b.catalog != nil {
-		if _, err := b.catalog.materialize(group); err != nil {
+		if _, err := b.catalog.materializeWithCatalog(group, names); err != nil {
 			b.failure = err
 			return err
 		}
 	}
 	for i, work := range b.domains {
-		if b.hasTypedCollection(b.built[i].collection) {
+		if b.hasTypedCollection(b.built[i].collection) && nativeTypedPhysicalDomain(b.built[i].name) {
 			continue
 		}
 		root, err := work.materialize(group)
@@ -271,8 +316,11 @@ func (b *nativeEngineBuild) materializeDomains(group nativeOrderedRootBuilder) e
 		// two handoff promises survive. Do not keep the operation peak charged
 		// until this captured engine's asynchronous last-reference cleanup: a
 		// following checkpoint needs the SAME sequential workspace again.
-		workspace, err := nativeTypedBuildWorkspaceCapacity()
-		if err != nil || workspace > b.allocation.floor {
+		var workspace uint64
+		for _, input := range b.typed {
+			workspace = max(workspace, input.workspace)
+		}
+		if workspace > b.allocation.floor {
 			b.failure = memtable.ErrCOWCapacity
 			return b.failure
 		}
@@ -280,7 +328,7 @@ func (b *nativeEngineBuild) materializeDomains(group nativeOrderedRootBuilder) e
 			input.work.input = nativeTypedMaterializeInput{}
 		}
 		floor := b.allocation.floor - workspace
-		if err = b.allocation.parent.ShrinkNativeBytes(workspace, floor); err != nil {
+		if err := b.allocation.parent.ShrinkNativeBytes(workspace, floor); err != nil {
 			b.failure = err
 			return err
 		}

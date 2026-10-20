@@ -98,6 +98,9 @@ func (c *Collection) ColumnStoreCompact(ctx context.Context, opts ColumnStoreCom
 	if c == nil {
 		return stats, errCollectionNil
 	}
+	if c.nativeJSON != nil {
+		return c.nativeColumnStoreCompact(ctx, opts)
+	}
 	if c.db == nil {
 		return stats, errCollectionDBNil
 	}
@@ -413,6 +416,7 @@ func (c *Collection) materializeColumnStoreCompactionRows(ctx context.Context, s
 	if err != nil {
 		return nil, visible.Diagnostics, err
 	}
+	readCache.operationLocal = c.nativeOperationLocalReads
 	defer func() { _ = readCache.close() }()
 	typedCache := typedColumnPartReconstructionCache{ReadCache: &readCache}
 	rows := make([]columnDeclaredRow, 0, len(visible.Rows))

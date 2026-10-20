@@ -929,6 +929,12 @@ func validateColumnVectorGraphEmptyTypedSource(snap *backenddb.Snapshot, catalog
 // manifest validation at its caller and falls back only for shapes the typed
 // lifecycle explicitly does not support; bad or mismatched assets fail closed.
 func (c *Collection) columnVectorGraphRowsFromTypedColumnCatalogSnapshot(snap *backenddb.Snapshot, catalog *collectionCatalog, cfg ColumnStoreConfig, records []columnManifestRecord, manifest columnManifestSnapshot, def VectorIndexDefinition) ([]columnVectorGraphAssetRow, *columnVectorGraphTypedColumnVectorSource, bool, error) {
+	return columnVectorGraphRowsFromTypedColumnSnapshot(c, c.db.ColumnAssetRootDir(), snap, catalog, cfg, records, manifest, def)
+}
+
+// The native captured builder supplies the original asset directory directly;
+// only legacy callers may use the historical no-locator fallback.
+func columnVectorGraphRowsFromTypedColumnSnapshot(c *Collection, rootDir string, snap *backenddb.Snapshot, catalog *collectionCatalog, cfg ColumnStoreConfig, records []columnManifestRecord, manifest columnManifestSnapshot, def VectorIndexDefinition) ([]columnVectorGraphAssetRow, *columnVectorGraphTypedColumnVectorSource, bool, error) {
 	if snap == nil {
 		return nil, nil, false, backenddb.ErrClosed
 	}
@@ -973,6 +979,9 @@ func (c *Collection) columnVectorGraphRowsFromTypedColumnCatalogSnapshot(snap *b
 	useLocator := catalog.rootID(locatorRoot) != 0
 	var physicalLocations map[string]columnVectorGraphTypedColumnPhysicalLocation
 	if !useLocator {
+		if c == nil {
+			return nil, nil, false, errors.New("collections: captured graph rebuild requires row locator")
+		}
 		if mutationParts != 0 {
 			return nil, nil, false, errors.New("collections: column_graph typed rebuild requires latest row locator for mutated physical refs")
 		}
@@ -1054,7 +1063,7 @@ func (c *Collection) columnVectorGraphRowsFromTypedColumnCatalogSnapshot(snap *b
 				return nil, nil, false, fmt.Errorf("collections: column_graph rebuild missing typed_column_part generation=%d", location.generation)
 			}
 			var loadErr error
-			part, _, loadErr = c.loadColumnVectorGraphTypedColumnVectorPart(catalog.meta.Name, cfg, typedRef, physicalRowsByGeneration[location.generation], field, adapterColumn, source.manager)
+			part, _, loadErr = loadColumnVectorGraphTypedColumnVectorPartAtRoot(rootDir, catalog.meta.Name, cfg, typedRef, physicalRowsByGeneration[location.generation], field, adapterColumn, source.manager, nil)
 			if loadErr != nil {
 				return nil, nil, false, loadErr
 			}
@@ -2123,142 +2132,12 @@ func prepareColumnVectorGraphRebuildManifestWithAuthorityTimed(collection string
 	if err != nil {
 		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
 	}
-	graphCfg, err := columnVectorGraphPhysicalColumnStoreConfig(collection, cfg, def)
+
+	prepared, graph, state, hasCanonical, err := prepareColumnVectorGraphRebuildAssets(collection, cfg, def, manifest.Generation, baseChecksum, manifest.AppliedCommandLSN, recordsForLSN, rows, assetRootDir, authority, typedSource, timing, capture)
 	if err != nil {
 		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
 	}
-	if len(rows) > 0 {
-		if _, _, typedVectorOwner, ownerErr := columnVectorGraphTypedColumnVectorField(cfg, def.Field, def.Dimensions); ownerErr != nil {
-			return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, ownerErr
-		} else if !typedVectorOwner {
-			return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, fmt.Errorf("collections: column_graph rebuild for %q requires base float32_vector typed-column owner for field %q; rebuild collection metadata before rebuilding the vector index", def.Name, def.Field)
-		}
-	}
-	canonicalVectorAsset, err := columnVectorGraphCanonicalNormalizedVectorStateAsset(def, cfg, manifest, recordsForLSN, rows)
-	if err != nil {
-		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
-	}
-	partID := nextColumnVectorGraphPartID(recordsForLSN, graphCfg.AssetManager.Namespace)
-	prepared := columnVectorGraphPreparedPhysicalAsset{
-		AssetRootDir: assetRootDir,
-		Config:       graphCfg,
-		RowCount:     len(rows),
-	}
-	invNormPartID := partID
 	stageStarted := time.Now()
-	preparedInvNorm := columnVectorGraphPreparedInvNormStateAsset{}
-	if !vectorIndexUsesCosineNormalizedF32V1(def) {
-		preparedInvNorm, err = prepareColumnVectorGraphInvNormStateAssetWithStableAuthority(assetRootDir, collection, cfg, def, manifest.Generation, invNormPartID, rows, authority)
-	}
-	if timing != nil {
-		timing.InvNormPreparation = collectionObservedElapsedSince(stageStarted)
-	}
-	if err != nil {
-		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
-	}
-	graph := columnVectorGraphManifestSnapshot{
-		IndexName:              def.Name,
-		Field:                  def.Field,
-		Metric:                 def.Metric,
-		Encoding:               def.Encoding,
-		Dimensions:             def.Dimensions,
-		M:                      def.M,
-		EfConstruction:         def.EfConstruction,
-		EfSearch:               def.EfSearch,
-		BaseManifestGeneration: manifest.Generation,
-		BaseManifestChecksum:   baseChecksum,
-		BaseSchemaHash:         cfg.SchemaHash,
-		GraphSchemaHash:        graphCfg.SchemaHash,
-		RowCount:               prepared.RowCount,
-	}
-	statePartID := invNormPartID
-	if preparedInvNorm.Present {
-		statePartID = nextColumnVectorGraphPartIDAfter(statePartID, preparedInvNorm.Ref.PartID)
-	}
-	// Captured typed bases use the existing pack's metadata providers. The
-	// capture decision comes from collection metadata before asset preparation,
-	// independently of serving options or candidate budget admission.
-	var stateAdjacencyAssets []columnVectorIndexStatePreparedAdjacencyAsset
-	if timing != nil {
-		timing.AdjacencyStatePreparation = 0
-	}
-	if !capture {
-		stageStarted = time.Now()
-		stateAdjacencyAssets, err = prepareColumnVectorIndexStateAdjacencyAssetsWithStableAuthority(assetRootDir, collection, cfg, def, manifest.Generation, statePartID, rows, authority)
-		if timing != nil {
-			timing.AdjacencyStatePreparation = collectionObservedElapsedSince(stageStarted)
-		}
-		if err != nil {
-			return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
-		}
-	}
-	rowRefPartID := statePartID
-	if len(stateAdjacencyAssets) > 0 {
-		rowRefPartID = nextColumnVectorGraphPartIDAfter(rowRefPartID, stateAdjacencyAssets[len(stateAdjacencyAssets)-1].Ref.PartID)
-	}
-	stageStarted = time.Now()
-	preparedRowRefs, err := prepareColumnVectorGraphRowRefStateAssetsWithStableAuthority(assetRootDir, collection, cfg, def, manifest.Generation, rowRefPartID, rows, authority, capture)
-	if timing != nil {
-		timing.RowRefPreparation = collectionObservedElapsedSince(stageStarted)
-	}
-	if err != nil {
-		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
-	}
-	documentIDPartID := rowRefPartID
-	if len(preparedRowRefs) > 0 {
-		documentIDPartID = nextColumnVectorGraphPartIDAfter(documentIDPartID, preparedRowRefs[len(preparedRowRefs)-1].Ref.PartID)
-	}
-	var preparedDocumentIDs columnVectorGraphPreparedDocumentIDStateAsset
-	if timing != nil {
-		timing.DocumentIDPreparation = 0
-	}
-	if !capture {
-		stageStarted = time.Now()
-		preparedDocumentIDs, err = prepareColumnVectorGraphDocumentIDStateAssetWithStableAuthority(assetRootDir, collection, cfg, def, manifest.Generation, documentIDPartID, rows, authority)
-		if timing != nil {
-			timing.DocumentIDPreparation = collectionObservedElapsedSince(stageStarted)
-		}
-		if err != nil {
-			return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
-		}
-	}
-	quantizedPartID := documentIDPartID
-	if preparedDocumentIDs.Present {
-		quantizedPartID = nextColumnVectorGraphPartIDAfter(quantizedPartID, preparedDocumentIDs.Ref.PartID)
-	}
-	stageStarted = time.Now()
-	preparedQuantizedAssets, err := prepareColumnVectorGraphQuantizedAssetsWithStableAuthority(assetRootDir, collection, cfg, def, graph, manifest.Generation, quantizedPartID, rows, authority)
-	if err != nil {
-		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
-	}
-	if timing != nil && len(preparedQuantizedAssets) > 0 {
-		timing.QuantizedPreparation = collectionObservedElapsedSince(stageStarted)
-	}
-	searchPackPartID := quantizedPartID
-	if len(preparedQuantizedAssets) > 0 {
-		searchPackPartID = nextColumnVectorGraphPartIDAfter(searchPackPartID, preparedQuantizedAssets[len(preparedQuantizedAssets)-1].Ref.PartID)
-	}
-	stageStarted = time.Now()
-	var canonicalVectorRef *ColumnAssetRef
-	if canonicalVectorAsset != nil {
-		canonicalVectorRef = &canonicalVectorAsset.Ref
-	}
-	preparedSearchPack, err := writeColumnHNSWSearchPackAssetWithStableAuthorityAndCanonicalVectors(assetRootDir, cfg, def, graph, manifest.Generation, searchPackPartID, rows, authority, canonicalVectorRef)
-	if err != nil {
-		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
-	}
-	if typedSource != nil {
-		if err := typedSource.Close(); err != nil {
-			return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
-		}
-	}
-	if err := validateColumnHNSWSearchPackPreparedAsset(assetRootDir, preparedSearchPack, graph, def); err != nil {
-		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
-	}
-	if timing != nil {
-		timing.SearchPackPreparation = collectionObservedElapsedSince(stageStarted)
-	}
-	stageStarted = time.Now()
 	raw, err := encodeColumnVectorGraphManifestRecord(graph)
 	if err != nil {
 		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
@@ -2267,26 +2146,6 @@ func prepareColumnVectorGraphRebuildManifestWithAuthorityTimed(collection string
 	nextRecords, err := replaceColumnVectorGraphManifestRecord(recordsForLSN, manifest.Generation, record)
 	if err != nil {
 		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
-	}
-	state := columnVectorIndexStateSnapshotFromGraph(graph)
-	state.AdjacencyLayerCount = len(stateAdjacencyAssets)
-	if capture {
-		state.AdjacencyLayerCount = preparedSearchPack.AdjacencyLayerCount
-	}
-	state.Assets = columnVectorIndexStateAdjacencyAssetsFromPrepared(stateAdjacencyAssets)
-	if canonicalVectorAsset != nil {
-		state.Assets = append(state.Assets, *canonicalVectorAsset)
-	}
-	if invNormAsset, ok := columnVectorGraphInvNormStateAssetSnapshot(preparedInvNorm); ok {
-		state.Assets = append(state.Assets, invNormAsset)
-	}
-	state.Assets = append(state.Assets, columnVectorGraphRowRefStateAssetSnapshots(preparedRowRefs)...)
-	if documentIDAsset, ok := columnVectorGraphDocumentIDStateAssetSnapshot(preparedDocumentIDs); ok {
-		state.Assets = append(state.Assets, documentIDAsset)
-	}
-	state.Assets = append(state.Assets, columnVectorGraphQuantizedAssetSnapshotsFromPrepared(preparedQuantizedAssets)...)
-	if searchPackAsset, ok := columnHNSWSearchPackStateAssetSnapshot(preparedSearchPack); ok {
-		state.Assets = append(state.Assets, searchPackAsset)
 	}
 	stateRaw, err := encodeColumnVectorIndexStateRecord(state)
 	if err != nil {
@@ -2316,7 +2175,7 @@ func prepareColumnVectorGraphRebuildManifestWithAuthorityTimed(collection string
 	normalizeColumnManifestIdentityDefaults(&identity)
 	if authority != nil {
 		producerAssets := state.Assets
-		if canonicalVectorAsset != nil {
+		if hasCanonical {
 			producerAssets = make([]columnVectorIndexStateAssetSnapshot, 0, len(state.Assets)-1)
 			for _, asset := range state.Assets {
 				if asset.Role != columnVectorIndexStateAssetRoleNormalizedVectors {
@@ -2343,6 +2202,171 @@ func prepareColumnVectorGraphRebuildManifestWithAuthorityTimed(collection string
 		timing.ManifestFinalization = collectionObservedElapsedSince(stageStarted)
 	}
 	return prepared, nextRecords, identity, nil
+}
+
+// prepareColumnVectorGraphRebuildAssets is the original HNSW/TVIS asset emitter.
+// Base checksum is supplied by the caller's authenticated manifest format. It
+// never changes source identity, creates a header, or publishes a root. Source
+// row refs retain sourceAppliedCommandLSN even when the publication header and
+// base checksum advance to the rebuild command's assigned LSN.
+func prepareColumnVectorGraphRebuildAssets(collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, generation, baseChecksum, sourceAppliedCommandLSN uint64, recordsForLSN []columnManifestRecord, rows []columnVectorGraphAssetRow, assetRootDir string, authority *columnVectorGraphStableResourceAccumulator, typedSource *columnVectorGraphTypedColumnVectorSource, timing *ColumnGraphBuildTiming, capture bool) (columnVectorGraphPreparedPhysicalAsset, columnVectorGraphManifestSnapshot, columnVectorIndexStateSnapshot, bool, error) {
+	graphCfg, err := columnVectorGraphPhysicalColumnStoreConfig(collection, cfg, def)
+	if err != nil {
+		return columnVectorGraphPreparedPhysicalAsset{}, columnVectorGraphManifestSnapshot{}, columnVectorIndexStateSnapshot{}, false, err
+	}
+	if len(rows) > 0 {
+		if _, _, typedVectorOwner, ownerErr := columnVectorGraphTypedColumnVectorField(cfg, def.Field, def.Dimensions); ownerErr != nil {
+			return columnVectorGraphPreparedPhysicalAsset{}, columnVectorGraphManifestSnapshot{}, columnVectorIndexStateSnapshot{}, false, ownerErr
+		} else if !typedVectorOwner {
+			return columnVectorGraphPreparedPhysicalAsset{}, columnVectorGraphManifestSnapshot{}, columnVectorIndexStateSnapshot{}, false, fmt.Errorf("collections: column_graph rebuild for %q requires base float32_vector typed-column owner for field %q; rebuild collection metadata before rebuilding the vector index", def.Name, def.Field)
+		}
+	}
+	canonicalVectorAsset, err := columnVectorGraphCanonicalNormalizedVectorStateAsset(def, cfg, columnManifestSnapshot{Generation: generation, AppliedCommandLSN: sourceAppliedCommandLSN}, recordsForLSN, rows)
+	if err != nil {
+		return columnVectorGraphPreparedPhysicalAsset{}, columnVectorGraphManifestSnapshot{}, columnVectorIndexStateSnapshot{}, false, err
+	}
+	partID := nextColumnVectorGraphPartID(recordsForLSN, graphCfg.AssetManager.Namespace)
+	prepared := columnVectorGraphPreparedPhysicalAsset{
+		AssetRootDir: assetRootDir,
+		Config:       graphCfg,
+		RowCount:     len(rows),
+	}
+	invNormPartID := partID
+	stageStarted := time.Now()
+	preparedInvNorm := columnVectorGraphPreparedInvNormStateAsset{}
+	if !vectorIndexUsesCosineNormalizedF32V1(def) {
+		preparedInvNorm, err = prepareColumnVectorGraphInvNormStateAssetWithStableAuthority(assetRootDir, collection, cfg, def, generation, invNormPartID, rows, authority)
+	}
+	if timing != nil {
+		timing.InvNormPreparation = collectionObservedElapsedSince(stageStarted)
+	}
+	if err != nil {
+		return columnVectorGraphPreparedPhysicalAsset{}, columnVectorGraphManifestSnapshot{}, columnVectorIndexStateSnapshot{}, false, err
+	}
+	graph := columnVectorGraphManifestSnapshot{
+		IndexName:              def.Name,
+		Field:                  def.Field,
+		Metric:                 def.Metric,
+		Encoding:               def.Encoding,
+		Dimensions:             def.Dimensions,
+		M:                      def.M,
+		EfConstruction:         def.EfConstruction,
+		EfSearch:               def.EfSearch,
+		BaseManifestGeneration: generation,
+		BaseManifestChecksum:   baseChecksum,
+		BaseSchemaHash:         cfg.SchemaHash,
+		GraphSchemaHash:        graphCfg.SchemaHash,
+		RowCount:               prepared.RowCount,
+	}
+	statePartID := invNormPartID
+	if preparedInvNorm.Present {
+		statePartID = nextColumnVectorGraphPartIDAfter(statePartID, preparedInvNorm.Ref.PartID)
+	}
+	// Captured typed bases use the existing pack's metadata providers. The
+	// capture decision comes from collection metadata before asset preparation,
+	// independently of serving options or candidate budget admission.
+	var stateAdjacencyAssets []columnVectorIndexStatePreparedAdjacencyAsset
+	if timing != nil {
+		timing.AdjacencyStatePreparation = 0
+	}
+	if !capture {
+		stageStarted = time.Now()
+		stateAdjacencyAssets, err = prepareColumnVectorIndexStateAdjacencyAssetsWithStableAuthority(assetRootDir, collection, cfg, def, generation, statePartID, rows, authority)
+		if timing != nil {
+			timing.AdjacencyStatePreparation = collectionObservedElapsedSince(stageStarted)
+		}
+		if err != nil {
+			return columnVectorGraphPreparedPhysicalAsset{}, columnVectorGraphManifestSnapshot{}, columnVectorIndexStateSnapshot{}, false, err
+		}
+	}
+	rowRefPartID := statePartID
+	if len(stateAdjacencyAssets) > 0 {
+		rowRefPartID = nextColumnVectorGraphPartIDAfter(rowRefPartID, stateAdjacencyAssets[len(stateAdjacencyAssets)-1].Ref.PartID)
+	}
+	stageStarted = time.Now()
+	preparedRowRefs, err := prepareColumnVectorGraphRowRefStateAssetsWithStableAuthority(assetRootDir, collection, cfg, def, generation, rowRefPartID, rows, authority, capture)
+	if timing != nil {
+		timing.RowRefPreparation = collectionObservedElapsedSince(stageStarted)
+	}
+	if err != nil {
+		return columnVectorGraphPreparedPhysicalAsset{}, columnVectorGraphManifestSnapshot{}, columnVectorIndexStateSnapshot{}, false, err
+	}
+	documentIDPartID := rowRefPartID
+	if len(preparedRowRefs) > 0 {
+		documentIDPartID = nextColumnVectorGraphPartIDAfter(documentIDPartID, preparedRowRefs[len(preparedRowRefs)-1].Ref.PartID)
+	}
+	var preparedDocumentIDs columnVectorGraphPreparedDocumentIDStateAsset
+	if timing != nil {
+		timing.DocumentIDPreparation = 0
+	}
+	if !capture {
+		stageStarted = time.Now()
+		preparedDocumentIDs, err = prepareColumnVectorGraphDocumentIDStateAssetWithStableAuthority(assetRootDir, collection, cfg, def, generation, documentIDPartID, rows, authority)
+		if timing != nil {
+			timing.DocumentIDPreparation = collectionObservedElapsedSince(stageStarted)
+		}
+		if err != nil {
+			return columnVectorGraphPreparedPhysicalAsset{}, columnVectorGraphManifestSnapshot{}, columnVectorIndexStateSnapshot{}, false, err
+		}
+	}
+	quantizedPartID := documentIDPartID
+	if preparedDocumentIDs.Present {
+		quantizedPartID = nextColumnVectorGraphPartIDAfter(quantizedPartID, preparedDocumentIDs.Ref.PartID)
+	}
+	stageStarted = time.Now()
+	preparedQuantizedAssets, err := prepareColumnVectorGraphQuantizedAssetsWithStableAuthority(assetRootDir, collection, cfg, def, graph, generation, quantizedPartID, rows, authority)
+	if err != nil {
+		return columnVectorGraphPreparedPhysicalAsset{}, columnVectorGraphManifestSnapshot{}, columnVectorIndexStateSnapshot{}, false, err
+	}
+	if timing != nil && len(preparedQuantizedAssets) > 0 {
+		timing.QuantizedPreparation = collectionObservedElapsedSince(stageStarted)
+	}
+	searchPackPartID := quantizedPartID
+	if len(preparedQuantizedAssets) > 0 {
+		searchPackPartID = nextColumnVectorGraphPartIDAfter(searchPackPartID, preparedQuantizedAssets[len(preparedQuantizedAssets)-1].Ref.PartID)
+	}
+	stageStarted = time.Now()
+	var canonicalVectorRef *ColumnAssetRef
+	if canonicalVectorAsset != nil {
+		canonicalVectorRef = &canonicalVectorAsset.Ref
+	}
+	preparedSearchPack, err := writeColumnHNSWSearchPackAssetWithStableAuthorityAndCanonicalVectors(assetRootDir, cfg, def, graph, generation, searchPackPartID, rows, authority, canonicalVectorRef)
+	if err != nil {
+		return columnVectorGraphPreparedPhysicalAsset{}, columnVectorGraphManifestSnapshot{}, columnVectorIndexStateSnapshot{}, false, err
+	}
+	if typedSource != nil {
+		if err := typedSource.Close(); err != nil {
+			return columnVectorGraphPreparedPhysicalAsset{}, columnVectorGraphManifestSnapshot{}, columnVectorIndexStateSnapshot{}, false, err
+		}
+	}
+	if err := validateColumnHNSWSearchPackPreparedAsset(assetRootDir, preparedSearchPack, graph, def); err != nil {
+		return columnVectorGraphPreparedPhysicalAsset{}, columnVectorGraphManifestSnapshot{}, columnVectorIndexStateSnapshot{}, false, err
+	}
+	if timing != nil {
+		timing.SearchPackPreparation = collectionObservedElapsedSince(stageStarted)
+	}
+	stageStarted = time.Now()
+	state := columnVectorIndexStateSnapshotFromGraph(graph)
+	state.AdjacencyLayerCount = len(stateAdjacencyAssets)
+	if capture {
+		state.AdjacencyLayerCount = preparedSearchPack.AdjacencyLayerCount
+	}
+	state.Assets = columnVectorIndexStateAdjacencyAssetsFromPrepared(stateAdjacencyAssets)
+	if canonicalVectorAsset != nil {
+		state.Assets = append(state.Assets, *canonicalVectorAsset)
+	}
+	if invNormAsset, ok := columnVectorGraphInvNormStateAssetSnapshot(preparedInvNorm); ok {
+		state.Assets = append(state.Assets, invNormAsset)
+	}
+	state.Assets = append(state.Assets, columnVectorGraphRowRefStateAssetSnapshots(preparedRowRefs)...)
+	if documentIDAsset, ok := columnVectorGraphDocumentIDStateAssetSnapshot(preparedDocumentIDs); ok {
+		state.Assets = append(state.Assets, documentIDAsset)
+	}
+	state.Assets = append(state.Assets, columnVectorGraphQuantizedAssetSnapshotsFromPrepared(preparedQuantizedAssets)...)
+	if searchPackAsset, ok := columnHNSWSearchPackStateAssetSnapshot(preparedSearchPack); ok {
+		state.Assets = append(state.Assets, searchPackAsset)
+	}
+	return prepared, graph, state, canonicalVectorAsset != nil, nil
 }
 
 func columnVectorGraphCanonicalNormalizedVectorStateAsset(def VectorIndexDefinition, cfg ColumnStoreConfig, manifest columnManifestSnapshot, records []columnManifestRecord, rows []columnVectorGraphAssetRow) (*columnVectorIndexStateAssetSnapshot, error) {

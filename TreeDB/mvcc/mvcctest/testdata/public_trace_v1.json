@@ -28,7 +28,7 @@
     "ff@20:present:7477656e7479"
   ],
   "discard_floor": 30,
-  "prune": {"visited": 7, "skipped": 3, "retained": 6, "pruned": 1},
+  "prune": {"visited": 6, "skipped": 2, "retained": 5, "pruned": 1},
   "reads_after_prune": [
     {"key_hex": "610062", "read_timestamp": 31, "state": "present", "version": 30, "value_hex": "746869727479"},
     {"key_hex": "610062", "read_timestamp": 40, "state": "tombstone", "version": 40, "value_hex": ""},

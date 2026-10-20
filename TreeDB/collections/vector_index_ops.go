@@ -75,6 +75,9 @@ func (c *Collection) VectorIndexStatus(name string) (VectorIndexStatus, error) {
 // to drain earlier commands without a checkpoint lock inversion. An intervening
 // collection change rejects the rebuild before append; unrelated writes do not.
 func (c *Collection) RebuildVectorIndex(name string) (VectorIndexStatus, error) {
+	if c != nil && c.nativeJSON != nil {
+		return c.nativeRebuildVectorGraph(name)
+	}
 	if policy := c.typedGraphServingPolicy(); policy != nil {
 		if err := c.FoldColumnGraphServing(context.Background(), name); err != nil {
 			return VectorIndexStatus{}, err
@@ -186,6 +189,9 @@ func (c *Collection) declaredVectorIndexDefinitionPrepared(name string) (VectorI
 func (c *Collection) vectorIndexStatus(name string, inspectNativeRoot bool) (VectorIndexStatus, error) {
 	if c == nil {
 		return VectorIndexStatus{}, errCollectionNil
+	}
+	if c.nativeJSON != nil {
+		return c.nativeVectorGraphStatus(name)
 	}
 	if c.db == nil {
 		return VectorIndexStatus{}, errCollectionDBNil
