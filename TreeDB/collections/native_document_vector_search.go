@@ -284,6 +284,7 @@ func (s *VectorIndexSearcher) searchNativeDocumentInto(opts VectorIndexSearcherS
 		return response, fmt.Errorf("collections: zero vector query")
 	}
 	response.Stats.SearchRouteNativeRuntime = 1
+	response.Stats.CandidateRows = g.meta.NativeDocument.Live
 	if opts.TopK == 0 || g.meta.Entry < 0 {
 		return response, nil
 	}
@@ -420,6 +421,7 @@ func (c *Collection) searchNativeDocumentVectorUsing(opts VectorIndexSearchOptio
 			return response, err
 		}
 	}
+	defer markCollectionVectorIndexOneShotOpenSetup(&response.Stats)
 	searcher, err := c.openNativeDocumentVectorSearcher(VectorIndexSearcherOptions{IndexName: opts.IndexName, MaxDecodedBlocks: opts.MaxDecodedBlocks})
 	if err != nil {
 		return response, err

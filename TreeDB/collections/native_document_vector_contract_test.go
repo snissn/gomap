@@ -306,15 +306,33 @@ func TestNativeDocumentVectorDeletedRoutingRetainsLiveResults(t *testing.T) {
 				t.Fatalf("delete A=%v: %v", deleted, err)
 			}
 			opts := VectorIndexSearcherSearchOptions{Query: []float32{1, 0}, TopK: 1, EfSearch: 1}
+			assertStats := func(response VectorIndexSearchResponse, rows, opens uint64) {
+				t.Helper()
+				if response.Stats.CandidateRows != rows || response.Stats.SearchRouteNativeRuntime != 1 || response.Stats.OpenSearcherCalls != opens || response.Stats.OpenSetupInTimedLoop != opens {
+					t.Fatalf("captured domain/setup stats=%+v, want%d live rows/%d opens", response.Stats, rows, opens)
+				}
+			}
 			old, err := held.Search(opts)
 			if err != nil || len(old.Results) != 1 || string(old.Results[0].ID) != "a" {
 				t.Fatalf("held answer=%+v: %v", old, err)
 			}
+			assertStats(old, 2, 0)
 			var buffer VectorIndexSearchBuffer
 			current, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: "embedding", Query: opts.Query, TopK: opts.TopK, EfSearch: opts.EfSearch}, &buffer)
 			if err != nil || len(current.Results) != 1 || string(current.Results[0].ID) != "b" {
 				t.Fatalf("current answer=%+v: %v", current, err)
 			}
+			assertStats(current, 1, 1)
+			old, err = held.Search(VectorIndexSearcherSearchOptions{Query: opts.Query, TopK: 0})
+			if err != nil || len(old.Results) != 0 {
+				t.Fatalf("held zero-result search=%+v: %v", old, err)
+			}
+			assertStats(old, 2, 0)
+			current, err = col.SearchVectorIndex(VectorIndexSearchOptions{IndexName: "embedding", Query: opts.Query, TopK: 0})
+			if err != nil || len(current.Results) != 0 {
+				t.Fatalf("current zero-result search=%+v: %v", current, err)
+			}
+			assertStats(current, 1, 1)
 			if err := held.Close(); err != nil {
 				t.Fatal(err)
 			}

@@ -94,14 +94,17 @@ func TestNativeDocumentVectorBinaryIDLifecycle(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer held.Close()
-			check := func(searcher *VectorIndexSearcher, want []byte, doc []byte) {
+			check := func(searcher *VectorIndexSearcher, want []byte, doc []byte, liveRows uint64) {
 				t.Helper()
 				response, err := searcher.Search(VectorIndexSearcherSearchOptions{Query: []float32{1, 0}, TopK: 1, IncludeDocuments: true})
 				if err != nil || len(response.Results) != 1 || !bytes.Equal(response.Results[0].ID, want) || !bytes.Equal(response.Results[0].Document, doc) {
 					t.Fatalf("lossless held/current result=%+v err=%v wantID=%x", response, err, want)
 				}
+				if response.Stats.CandidateRows != liveRows || response.Stats.OpenSearcherCalls != 0 || response.Stats.OpenSetupInTimedLoop != 0 {
+					t.Fatalf("held/reopened domain/setup stats=%+v, want%d live rows/no per-search open", response.Stats, liveRows)
+				}
 			}
-			check(held, id, seed)
+			check(held, id, seed, 2)
 			if _, _, err := col.Update(id, func(raw []byte) ([]byte, bool, error) {
 				if !bytes.Equal(raw, seed) {
 					t.Fatalf("binary callback read %x", raw)
@@ -110,14 +113,14 @@ func TestNativeDocumentVectorBinaryIDLifecycle(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
-			check(held, id, seed)
+			check(held, id, seed, 2)
 			if deleted, err := col.DeleteDocument(other); err != nil || !deleted {
 				t.Fatalf("binary neighbor delete=%v err=%v", deleted, err)
 			}
 			if err := database.Checkpoint(); err != nil {
 				t.Fatal(err)
 			}
-			check(held, id, seed)
+			check(held, id, seed, 2)
 			if err := held.Close(); err != nil {
 				t.Fatal(err)
 			}
@@ -141,7 +144,7 @@ func TestNativeDocumentVectorBinaryIDLifecycle(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			check(current, id, updated)
+			check(current, id, updated, 1)
 			// A capture of an empty native runtime imports a PRIVATE engine. A
 			// second capture may therefore own a distinct descriptor for the same
 			// physical graph. Check the descriptor actually validated by this
