@@ -458,7 +458,7 @@ func (c *Collection) runColumnPhysicalQueryTypedColumnPartInSnapshotView(view co
 	if view.MutationParts != 0 {
 		return runColumnPhysicalQueryTypedColumnPartLatestVisibleInSnapshotView(view, req, plan, start)
 	}
-	readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(view.ColumnAssetRootDir, view.AssetNamespace, req.ColumnAssetReadIntegrity)
+	readCache, err := newColumnPhysicalAssetReadCacheForView(view, req.ColumnAssetReadIntegrity)
 	if err != nil {
 		result := ColumnPhysicalQueryResult{}
 		result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
@@ -489,7 +489,7 @@ func runColumnPhysicalQueryTypedColumnPartMutationUnsupported(view columnPhysica
 	annotateColumnPhysicalQueryResult(&result, ColumnPhysicalQueryStorageSourceTypedColumnPartSection, ColumnPhysicalQueryFallbackMutationVisibilityUnsupported)
 	predicateDiagnostics := newColumnPhysicalQueryPredicateDiagnosticPlan(req)
 	applyColumnPhysicalQueryPredicateDiagnostics(&result.Diagnostics, predicateDiagnostics, 0, 0)
-	readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(view.ColumnAssetRootDir, view.AssetNamespace, req.ColumnAssetReadIntegrity)
+	readCache, err := newColumnPhysicalAssetReadCacheForView(view, req.ColumnAssetReadIntegrity)
 	if err != nil {
 		result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
 		return result, true, err
@@ -529,7 +529,7 @@ func runColumnPhysicalQueryTypedColumnPartLatestVisibleInSnapshotView(view colum
 	if !columnTypedColumnPhysicalQueryUseDenseLatestVisible(plan, req) && columnPhysicalQueryHasPredicates(req) && !columnTypedColumnPhysicalQueryUseSortedLatestVisible(plan, req) {
 		return runColumnPhysicalQueryTypedColumnPartMutationUnsupported(view, req, start)
 	}
-	readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(view.ColumnAssetRootDir, view.AssetNamespace, req.ColumnAssetReadIntegrity)
+	readCache, err := newColumnPhysicalAssetReadCacheForView(view, req.ColumnAssetReadIntegrity)
 	if err != nil {
 		result := ColumnPhysicalQueryResult{}
 		result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
@@ -890,7 +890,7 @@ func decodeColumnTypedColumnPhysicalQueryRunnerPart(view columnPhysicalScanSnaps
 }
 
 func columnTypedColumnPhysicalQueryUseParallelPartDecode(plan columnTypedColumnPhysicalQueryPlan, req ColumnPhysicalQueryRequest, readCache *columnPhysicalAssetReadCache, partCount int, includePhysicalRows bool, allowDenseGroupCountDistinct bool, prepareDenseInt64SpanGlobalCodes bool, prepareDenseGroupCountDistinctGlobalCodes bool, prepareDenseGroupCountDistinctGlobalRanks bool) bool {
-	if partCount < 2 || readCache == nil || readCache.resourceManager != nil {
+	if partCount < 2 || readCache == nil || readCache.resourceManager != nil || readCache.serialPartDecode {
 		return false
 	}
 	if includePhysicalRows || prepareDenseInt64SpanGlobalCodes || prepareDenseGroupCountDistinctGlobalCodes {
@@ -934,6 +934,8 @@ func decodeColumnTypedColumnPhysicalQueryRunnerPartsParallel(view columnPhysical
 		if err != nil {
 			return nil, 0, 0, err
 		}
+		workerCache.operationLocal = readCache.operationLocal
+		workerCache.closeError = readCache.closeError
 		workerCache.returnViews = false
 		workerCache.forceReadAtFallback = readCache.forceReadAtFallback
 		workerCache.trustCachedVerifyFileIdentity = readCache.trustCachedVerifyFileIdentity

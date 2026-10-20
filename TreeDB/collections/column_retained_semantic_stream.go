@@ -688,9 +688,9 @@ func prepareColumnRetainedSemanticStreamV1StorageDocumentsWithIDsBudget(cfg Colu
 	return prepareColumnRetainedSemanticStreamV1StorageDocumentsWithIDsConstruction(cfg, ids, documents, maxOwnedBytes, false)
 }
 
-// Captured native construction uses the identical format and encoder policy,
-// but owns scratch locally and runs blocks serially under one original receipt.
-func prepareColumnRetainedSemanticStreamV1StorageDocumentsWithIDsConstruction(cfg ColumnStoreConfig, ids, documents [][]byte, maxOwnedBytes int64, localScratch bool) (columnRetainedPayloadStorageDocuments, error) {
+// Partition the original preparation credit before either collection or encoding.
+// Local native construction owns each block serially under one receipt.
+func columnRetainedSemanticStreamV1BlockBudgets(ids, documents [][]byte, maxOwnedBytes int64, localScratch bool) ([]int64, error) {
 	var blockBudgets []int64
 	if maxOwnedBytes > 0 {
 		blockCount := (len(documents) + columnRetainedSemanticStreamV1BlockRows - 1) / columnRetainedSemanticStreamV1BlockRows
@@ -699,7 +699,7 @@ func prepareColumnRetainedSemanticStreamV1StorageDocumentsWithIDsConstruction(cf
 		// block worker starts. The input itself is charged by the caller.
 		remaining := maxOwnedBytes - preparedInsertInputBytes(ids, documents) - int64(len(documents))*preparedSemanticStreamBatchHeaderBytesPerRow - preparedSemanticStreamBatchReserveBytes
 		if remaining <= 0 {
-			return columnRetainedPayloadStorageDocuments{}, fmt.Errorf("%w: insufficient semantic preparation budget", ErrPreparedInsertResourceLimit)
+			return nil, fmt.Errorf("%w: insufficient semantic preparation budget", ErrPreparedInsertResourceLimit)
 		}
 		for blockIdx := range blockBudgets {
 			// Workers may run concurrently, so partition the available credit
@@ -710,13 +710,23 @@ func prepareColumnRetainedSemanticStreamV1StorageDocumentsWithIDsConstruction(cf
 				budget = remaining
 			}
 			if budget <= 0 {
-				return columnRetainedPayloadStorageDocuments{}, fmt.Errorf("%w: no credit for retained block %d", ErrPreparedInsertResourceLimit, blockIdx)
+				return nil, fmt.Errorf("%w: no credit for retained block %d", ErrPreparedInsertResourceLimit, blockIdx)
 			}
 			blockBudgets[blockIdx] = budget
 			if !localScratch {
 				remaining -= budget
 			}
 		}
+	}
+	return blockBudgets, nil
+}
+
+// Captured native construction uses the identical format and encoder policy,
+// but owns scratch locally and runs blocks serially under one original receipt.
+func prepareColumnRetainedSemanticStreamV1StorageDocumentsWithIDsConstruction(cfg ColumnStoreConfig, ids, documents [][]byte, maxOwnedBytes int64, localScratch bool) (columnRetainedPayloadStorageDocuments, error) {
+	blockBudgets, err := columnRetainedSemanticStreamV1BlockBudgets(ids, documents, maxOwnedBytes, localScratch)
+	if err != nil {
+		return columnRetainedPayloadStorageDocuments{}, err
 	}
 	out := columnRetainedPayloadStorageDocuments{
 		documents: make([][]byte, len(documents)),
@@ -946,6 +956,67 @@ func prepareColumnRetainedSemanticStreamV1StorageBlockWithIDsConstruction(
 	declaredPathTrie *columnRetainedSemanticStreamV1DeclaredPathTrie,
 	useSemanticParserDeclaredRows bool, blockBudget int64, localScratch bool,
 ) (columnRetainedSemanticStreamV1PreparedBlock, error) {
+	prepared, streams, checkedRawHint, err := collectColumnRetainedSemanticStreamV1StorageBlockWithIDsConstruction(
+		cfg, ids, documents, start, end, rootPlan, useRootFastPath,
+		retainedSkipTrie, declaredPathTrie, useSemanticParserDeclaredRows, blockBudget, localScratch,
+	)
+	if err != nil {
+		return columnRetainedSemanticStreamV1PreparedBlock{}, err
+	}
+	rows := prepared.rows
+	encoderStart := time.Now()
+	storedBlockEncoder, err := newColumnRetainedSemanticStreamV1StoredBlockEncoderConstruction(localScratch)
+	if err != nil {
+		return columnRetainedSemanticStreamV1PreparedBlock{}, err
+	}
+	if blockBudget > 0 {
+		// Reuse a pooled buffer only when its capacity fits this block's
+		// checked hint. Prepared raw output can take ownership of that backing;
+		// an unrelated larger pooled buffer must not inflate its charge.
+		if cap(storedBlockEncoder.rawBlockScratch) > checkedRawHint+columnRetainedSemanticStreamV1RawBlockScratchGrowthSlack(checkedRawHint) {
+			putColumnRetainedSemanticStreamV1RawBlockScratch(storedBlockEncoder.rawBlockScratch)
+			storedBlockEncoder.rawBlockScratch = nil
+		}
+		storedBlockEncoder.outputBudget = blockBudget
+	}
+	prepared.metrics.BlockEncoderSetup = time.Since(encoderStart)
+	defer storedBlockEncoder.close()
+	block, rawEncode, storedEncode, err := encodeColumnRetainedSemanticStreamV1BlockFromStreamsWithEncoderMeasured(rows, streams, storedBlockEncoder)
+	if err != nil {
+		return columnRetainedSemanticStreamV1PreparedBlock{}, err
+	}
+	prepared.metrics.BlockRawEncode = rawEncode
+	prepared.metrics.BlockStoredEncode = storedEncode
+	finalizeStart := time.Now()
+	sum := sha256.Sum256(block)
+	blockKey := append([]byte(nil), sum[:]...)
+	locatorArena := make([]byte, 0, columnRetainedSemanticStreamV1LocatorBlockArenaCapacity(rows))
+	locators := make([][]byte, rows)
+	for row := 0; row < rows; row++ {
+		locatorStart := len(locatorArena)
+		locatorArena = appendColumnRetainedSemanticStreamV1Locator(locatorArena, blockKey, uint64(row))
+		locators[row] = locatorArena[locatorStart:len(locatorArena):len(locatorArena)]
+	}
+	prepared.metrics.BlockFinalize = time.Since(finalizeStart)
+	prepared.blockKey = blockKey
+	prepared.block = block
+	prepared.locators = locators
+	if blockBudget > 0 && preparedSemanticStreamBlockBackingBytes(prepared) > blockBudget-preparedSemanticStreamEncoderReserveBytes {
+		return columnRetainedSemanticStreamV1PreparedBlock{}, fmt.Errorf("%w: retained block %d exceeds output budget", ErrPreparedInsertResourceLimit, start)
+	}
+	return prepared, nil
+}
+
+// Collect through the original parser, declared extraction, emission quotas and
+// raw-size guard. Callers either encode this collected block or discard it before
+// releasing the same receipt; collection never constructs an encoded carrier.
+func collectColumnRetainedSemanticStreamV1StorageBlockWithIDsConstruction(
+	cfg ColumnStoreConfig, ids, documents [][]byte, start, end int,
+	rootPlan columnRetainedSemanticStreamV1RootFastPathPlan, useRootFastPath bool,
+	retainedSkipTrie *columnRetainedSemanticStreamV1RetainedSkipTrie,
+	declaredPathTrie *columnRetainedSemanticStreamV1DeclaredPathTrie,
+	useSemanticParserDeclaredRows bool, blockBudget int64, localScratch bool,
+) (columnRetainedSemanticStreamV1PreparedBlock, *columnRetainedSemanticStreamStreams, int, error) {
 	rows := end - start
 	var quota *preparedSemanticStreamBlockQuota
 	if blockBudget > 0 {
@@ -954,7 +1025,7 @@ func prepareColumnRetainedSemanticStreamV1StorageBlockWithIDsConstruction(
 			fixed -= columnRetainedSemanticStreamV1RawBlockScratchMaxRetainedBytes
 		}
 		if fixed > blockBudget {
-			return columnRetainedSemanticStreamV1PreparedBlock{}, fmt.Errorf("%w: retained block fixed reserve %d exceeds credit %d", ErrPreparedInsertResourceLimit, fixed, blockBudget)
+			return columnRetainedSemanticStreamV1PreparedBlock{}, nil, 0, fmt.Errorf("%w: retained block fixed reserve %d exceeds credit %d", ErrPreparedInsertResourceLimit, fixed, blockBudget)
 		}
 		quota = &preparedSemanticStreamBlockQuota{limit: blockBudget - fixed}
 	}
@@ -1002,7 +1073,7 @@ func prepareColumnRetainedSemanticStreamV1StorageBlockWithIDsConstruction(
 			}
 			values, err := collectColumnRetainedSemanticStreamV1RootFastPathDocument(cfg, rootPlan, documents[i], uint64(row), streamEntryCapacity, streams, pathInterner, declaredValuesDest, declaredStringInterner)
 			if err != nil {
-				return columnRetainedSemanticStreamV1PreparedBlock{}, fmt.Errorf("collections: semantic-stream-v1 retained row %d: %w", row, err)
+				return columnRetainedSemanticStreamV1PreparedBlock{}, nil, 0, fmt.Errorf("collections: semantic-stream-v1 retained row %d: %w", row, err)
 			}
 			if rootPlan.declaredRowsReady {
 				idStart := len(declaredRowIDBytes)
@@ -1030,7 +1101,7 @@ func prepareColumnRetainedSemanticStreamV1StorageBlockWithIDsConstruction(
 		values, err := collectColumnRetainedSemanticStreamV1JSONCursorDocument(cfg, retainedSkipTrie, documents[i], uint64(row), streamEntryCapacity, streams, pathInterner, declaredPathTrie, declaredValuesDest, declaredStringInterner, jsonCursor)
 		if errors.Is(err, errColumnRetainedSemanticStreamV1JSONCursorDepth) || errors.Is(err, errColumnRetainedSemanticStreamV1JSONCursorScratch) {
 			if blockBudget > 0 {
-				return columnRetainedSemanticStreamV1PreparedBlock{}, fmt.Errorf("%w: retained JSON cursor row %d exceeds prepared structural limit: %v", ErrPreparedInsertResourceLimit, row, err)
+				return columnRetainedSemanticStreamV1PreparedBlock{}, nil, 0, fmt.Errorf("%w: retained JSON cursor row %d exceeds prepared structural limit: %v", ErrPreparedInsertResourceLimit, row, err)
 			}
 			// Bounded cursor parse errors occur before retained emission, so this
 			// fallback cannot leave a partial stream behind. Preserve existing
@@ -1038,7 +1109,7 @@ func prepareColumnRetainedSemanticStreamV1StorageBlockWithIDsConstruction(
 			values, err = collectColumnRetainedSemanticStreamV1RetainedJSONParserDocument(cfg, retainedSkipTrie, documents[i], uint64(row), streamEntryCapacity, streams, pathInterner, declaredPathTrie, declaredValuesDest, declaredStringInterner)
 		}
 		if err != nil {
-			return columnRetainedSemanticStreamV1PreparedBlock{}, fmt.Errorf("collections: semantic-stream-v1 retained row %d: %w", row, err)
+			return columnRetainedSemanticStreamV1PreparedBlock{}, nil, 0, fmt.Errorf("collections: semantic-stream-v1 retained row %d: %w", row, err)
 		}
 		if useSemanticParserDeclaredRows {
 			idStart := len(declaredRowIDBytes)
@@ -1061,57 +1132,16 @@ func prepareColumnRetainedSemanticStreamV1StorageBlockWithIDsConstruction(
 		// The encoder may coexist with raw, compressed, and copied output.
 		checkedRawHint = columnRetainedSemanticStreamV1RawBlockSizeHint(rows, keys, streams)
 		if int64(checkedRawHint) > (blockBudget-preparedSemanticStreamEncoderReserveBytes)/3 {
-			return columnRetainedSemanticStreamV1PreparedBlock{}, fmt.Errorf("%w: retained block %d exceeds raw encoding budget", ErrPreparedInsertResourceLimit, start)
+			return columnRetainedSemanticStreamV1PreparedBlock{}, nil, 0, fmt.Errorf("%w: retained block %d exceeds raw encoding budget", ErrPreparedInsertResourceLimit, start)
 		}
 	}
-	encoderStart := time.Now()
-	storedBlockEncoder, err := newColumnRetainedSemanticStreamV1StoredBlockEncoderConstruction(localScratch)
-	if err != nil {
-		return columnRetainedSemanticStreamV1PreparedBlock{}, err
-	}
-	if blockBudget > 0 {
-		// Reuse a pooled buffer only when its capacity fits this block's
-		// checked hint. Prepared raw output can take ownership of that backing;
-		// an unrelated larger pooled buffer must not inflate its charge.
-		if cap(storedBlockEncoder.rawBlockScratch) > checkedRawHint+columnRetainedSemanticStreamV1RawBlockScratchGrowthSlack(checkedRawHint) {
-			putColumnRetainedSemanticStreamV1RawBlockScratch(storedBlockEncoder.rawBlockScratch)
-			storedBlockEncoder.rawBlockScratch = nil
-		}
-		storedBlockEncoder.outputBudget = blockBudget
-	}
-	metrics.BlockEncoderSetup = time.Since(encoderStart)
-	defer storedBlockEncoder.close()
-	block, rawEncode, storedEncode, err := encodeColumnRetainedSemanticStreamV1BlockFromStreamsWithEncoderMeasured(rows, streams, storedBlockEncoder)
-	if err != nil {
-		return columnRetainedSemanticStreamV1PreparedBlock{}, err
-	}
-	metrics.BlockRawEncode = rawEncode
-	metrics.BlockStoredEncode = storedEncode
-	finalizeStart := time.Now()
-	sum := sha256.Sum256(block)
-	blockKey := append([]byte(nil), sum[:]...)
-	locatorArena := make([]byte, 0, columnRetainedSemanticStreamV1LocatorBlockArenaCapacity(rows))
-	locators := make([][]byte, rows)
-	for row := 0; row < rows; row++ {
-		locatorStart := len(locatorArena)
-		locatorArena = appendColumnRetainedSemanticStreamV1Locator(locatorArena, blockKey, uint64(row))
-		locators[row] = locatorArena[locatorStart:len(locatorArena):len(locatorArena)]
-	}
-	metrics.BlockFinalize = time.Since(finalizeStart)
-	prepared := columnRetainedSemanticStreamV1PreparedBlock{
+	return columnRetainedSemanticStreamV1PreparedBlock{
 		start:                      start,
 		rows:                       rows,
-		blockKey:                   blockKey,
-		block:                      block,
-		locators:                   locators,
 		declared:                   declaredRows,
 		declaredStringBackingBytes: declaredStringInterner.ownedStringBytes(),
 		metrics:                    metrics,
-	}
-	if blockBudget > 0 && preparedSemanticStreamBlockBackingBytes(prepared) > blockBudget-preparedSemanticStreamEncoderReserveBytes {
-		return columnRetainedSemanticStreamV1PreparedBlock{}, fmt.Errorf("%w: retained block %d exceeds output budget", ErrPreparedInsertResourceLimit, start)
-	}
-	return prepared, nil
+	}, streams, checkedRawHint, nil
 }
 
 func preparedSemanticStreamBlockBackingBytes(block columnRetainedSemanticStreamV1PreparedBlock) int64 {

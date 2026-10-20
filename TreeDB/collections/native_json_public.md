@@ -175,12 +175,12 @@ Int64/String RowAsset/ColumnPart semantic-stream layouts in the durable WAL prof
 The existing scalar-column and input limits still bound preparation, including
 the bounded nested/aggregate schema above, 16K rows and 128 KiB per document.
 Nested/aggregate preparation validates full input with the maintained semantic
-constructor before stripping declared fields, preserving its original depth,
-descriptor, key/path, interning and emission limits. Its temporary encoded carrier
-is discarded before staging; this duplicate work remains a performance and
-simplification concern. Prepare
-stages the original transaction's identity-free typed projection and canonical
-input copies; it advances no publication frontier. Conflicts against its opening
+collector before stripping declared fields, preserving its original depth,
+descriptor, key/path, interning, emission and preparation-budget limits. It drops
+temporary collection scratch before staging without encoding a discarded carrier.
+The original full constructor and Commit materializer still encode their required
+retained blocks. Prepare stages the original transaction's identity-free typed
+projection and canonical input copies; it advances no publication frontier. Conflicts against its opening
 may fail preparation early. Commit consumes the token once and revalidates its
 captured dependencies against the latest compatible complete state before effects,
 and uses its original admitted exact physical seal receipt. It returns after

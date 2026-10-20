@@ -258,7 +258,7 @@ func (m *CollectionManager) closeCollectionTypedColumnOneShotCaches() {
 }
 
 func (c *Collection) runColumnPhysicalQueryTypedColumnOneShotInSnapshotView(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, bool, error) {
-	if !columnTypedColumnOneShotCacheRequestCandidate(req) || !columnTypedColumnPhysicalQueryTouchesTypedColumnPart(view.FullConfig, req) {
+	if view.nativePhysical != nil || !columnTypedColumnOneShotCacheRequestCandidate(req) || !columnTypedColumnPhysicalQueryTouchesTypedColumnPart(view.FullConfig, req) {
 		return ColumnPhysicalQueryResult{}, false, nil
 	}
 	start := time.Now()

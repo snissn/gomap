@@ -12,8 +12,8 @@ import (
 
 // Native preparation keeps the existing transaction's single opening and typed
 // projection. Nested/aggregate prepared input also passes the maintained full
-// semantic constructor before declared fields are stripped, preserving its
-// original input limits. That temporary carrier creates no publication identity.
+// semantic collector before declared fields are stripped, preserving its
+// original input limits without constructing a discarded encoded carrier.
 func (c *Collection) prepareNativeInsertBatchOwned(ids, documents [][]byte, maxOwnedBytes int64) (prepared *PreparedInsertBatch, resultErr error) {
 	if c.manager.isClosing() {
 		return nil, backenddb.ErrClosed
@@ -79,7 +79,7 @@ func (c *Collection) prepareNativeInsertBatchOwned(ids, documents [][]byte, maxO
 			return nil, err
 		}
 		err = nativePreparedInsertValidateFullInput(*meta.Options.ColumnStore, ids, documents, capacity)
-		// The helper has dropped every temporary carrier/declared-row alias
+		// The helper has dropped every temporary stream/declared-row alias
 		// before this original receipt is refunded or staging begins.
 		lease.Close()
 		if err != nil {
@@ -103,15 +103,40 @@ func (c *Collection) prepareNativeInsertBatchOwned(ids, documents [][]byte, maxO
 
 // Keep the maintained prepared cursor's depth, descriptor, key/path, interning
 // and emission quotas, including for declared fields absent from the residual.
-// Encoding this discarded carrier is duplicate work; factoring the maintained
-// collector before encoding remains a performance/simplification opportunity.
+// Its original fixed reserve and raw-size guard also cover the encoder/output
+// checks that follow collection in full construction; no output is retained here.
+// With local scratch, raw capacity and the pinned zstd maximum fit the fixed
+// reserve. Declared string backing is debited from the remaining block quota,
+// so final backing also fits fixed-reserve-minus-encoder plus quota.used.
 func nativePreparedInsertValidateFullInput(cfg ColumnStoreConfig, ids, documents [][]byte, capacity int64) error {
-	prepared, err := prepareColumnRetainedSemanticStreamV1StorageDocumentsWithIDsConstruction(cfg, ids, documents, capacity, true)
-	if prepared.semanticStreamBlocks != nil {
-		prepared.semanticStreamBlocks.(*memtable.AppendOnly).ReleaseDropEntries()
+	blockBudgets, err := columnRetainedSemanticStreamV1BlockBudgets(ids, documents, capacity, true)
+	if err != nil {
+		return err
 	}
-	prepared = columnRetainedPayloadStorageDocuments{}
-	return err
+	if len(documents) == 0 {
+		return nil
+	}
+	declaredPathTrie, boundedDeclaredRows := columnRetainedSemanticStreamV1DeclaredPathTrieForConfig(cfg, ids, len(documents))
+	if !boundedDeclaredRows {
+		return fmt.Errorf("%w: prepared declared rows require the bounded semantic cursor", ErrPreparedInsertIneligible)
+	}
+	if blockBudgets == nil {
+		return fmt.Errorf("%w: full-input validation requires bounded semantic credit", ErrPreparedInsertResourceLimit)
+	}
+	retainedSkipTrie := columnRetainedSemanticStreamV1RetainedSkipTrieForConfig(cfg)
+	for blockIdx, budget := range blockBudgets {
+		start := blockIdx * columnRetainedSemanticStreamV1BlockRows
+		end := min(start+columnRetainedSemanticStreamV1BlockRows, len(documents))
+		// Bounded preparation always disables the recursive root fast path.
+		// Each block's temporary aliases end before the next block is collected.
+		if _, _, _, err := collectColumnRetainedSemanticStreamV1StorageBlockWithIDsConstruction(
+			cfg, ids, documents, start, end, columnRetainedSemanticStreamV1RootFastPathPlan{}, false,
+			retainedSkipTrie, declaredPathTrie, true, budget, true,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // The request envelope reuses the native parser/materializer capacity formulas.
