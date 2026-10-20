@@ -209,7 +209,7 @@ func TestManagedHistoryMeasurement(t *testing.T) {
 		packet.PruneError = err.Error()
 	} else {
 		stats := packet.PruneStats
-		if stats.Visited != uint64(keyCount*depth) || stats.Pruned != keyCount*(discardFloor-1) || stats.Retained != uint64(keyCount*(depth-discardFloor+1)) || stats.Skipped != uint64(keyCount*(depth-discardFloor)) {
+		if stats.Visited != keyCount*(discardFloor+1) || stats.Pruned != keyCount*(discardFloor-1) || stats.Retained != 2*keyCount || stats.Skipped != keyCount || stats.Batches != 11 {
 			t.Fatalf("history depth=%d prune counters=%+v", depth, stats)
 		}
 	}

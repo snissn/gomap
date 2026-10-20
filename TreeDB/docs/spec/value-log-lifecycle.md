@@ -293,12 +293,17 @@ roots remain retention roots. Value-log GC/rewrite may reclaim payload segments
 later only through the reachability rules in this document.
 
 The MVCC prune scan is snapshot-bound; ordinary delete publications have a
-bounded batch size, while a complete pass may visit the whole history. COW uses
+bounded batch size. For each logical key a pass inspects its at/below-floor
+history and first above-floor record, then seeks past the remaining retained
+tail on the same cut. Bypassed records remain reachable and are not audited for
+corruption by that prune pass. COW uses
 its original complete retained cut and ordinary delete batches. A live pre-prune
 snapshot continues to protect and resolve its old value pointers after both
 floor advancement and logical deletion. Physical GC still needs every live and
 recovery closure to release its references. Prune byte accounting reports
-logical physical-record bytes, not immediately reclaimed segment bytes.
+inspected physical-record bytes and committed deletion bytes; retained-byte
+counters exclude the bypassed tail and do not measure immediately reclaimed
+segment bytes or the complete surviving history.
 
 ## 3. Reachability Source of Truth
 

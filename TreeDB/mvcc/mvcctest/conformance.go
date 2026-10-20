@@ -113,6 +113,8 @@ func runGolden(t *testing.T, open OpenFunc) {
 	if err != nil {
 		t.Fatalf("PruneVersions: %v", err)
 	}
+	// The trace checks inspected-record accounting, including only the first
+	// above-floor version per key; the complete survivor oracle is unchanged.
 	if stats.Visited != trace.Prune.Visited || stats.Skipped != trace.Prune.Skipped ||
 		stats.Retained != trace.Prune.Retained || stats.Pruned != trace.Prune.Pruned {
 		t.Fatalf("prune stats=%+v want=%+v", stats, trace.Prune)

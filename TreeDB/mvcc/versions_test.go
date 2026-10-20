@@ -15,6 +15,7 @@ import (
 	"time"
 
 	treedb "github.com/snissn/gomap/TreeDB"
+	"github.com/snissn/gomap/TreeDB/internal/mvcckey"
 )
 
 func collectVersions(t testing.TB, it *VersionIterator) []Version {
@@ -317,6 +318,62 @@ func TestDiscardFloorValueReadErrorIsRetryableStorageError(t *testing.T) {
 	}
 }
 
+func TestPruneRetainedTailInspectionBoundary(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		timestamp uint64
+		lowerKey  bool
+		wantError bool
+	}{
+		{name: "eligible value", timestamp: 1, wantError: true},
+		{name: "first above-floor value", timestamp: 3, wantError: true},
+		{name: "bypassed retained value", timestamp: 4},
+		{name: "malformed exact lower key", lowerKey: true, wantError: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			db := openTestDB(t, t.TempDir(), treedb.DurabilityDurable)
+			defer db.Close()
+			store := New(db)
+			commitHistory(t, store, "k", MutationAt{1, []byte("v"), false}, MutationAt{2, []byte("v"), false}, MutationAt{3, []byte("v"), false}, MutationAt{4, []byte("v"), false})
+			physical, err := mvcckey.Encode([]byte("k"), test.timestamp)
+			record := []byte{0xff}
+			if test.lowerKey {
+				physical, err = mvcckey.AppendKeyVersionsLower(nil, []byte("k"))
+				record = []byte{recordValueV1, 'v'}
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Set(physical, record); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.AdvanceDiscardFloor(2, CommitDurable); err != nil {
+				t.Fatal(err)
+			}
+			stats, err := store.PruneVersions(PruneOptions{BatchSize: 1, Mode: CommitDurable})
+			if test.wantError {
+				if !errors.Is(err, ErrMalformedRecord) {
+					t.Fatalf("prune=%+v error=%v want ErrMalformedRecord", stats, err)
+				}
+				return
+			}
+			// The skipped record remains physically present and malformed; a
+			// pruning pass does not certify uninspected retained payloads.
+			if err != nil || stats.Visited != 3 || stats.Retained != 2 || stats.Skipped != 1 || stats.Pruned != 1 || stats.Batches != 1 {
+				t.Fatalf("prune=%+v: %v", stats, err)
+			}
+			recordBytes := uint64(len(physical) + 2) // encoded key plus valid "v" envelope
+			if stats.RetainedBytes != 2*recordBytes || stats.PrunedBytes != recordBytes {
+				t.Fatalf("inspected physical byte accounting=%+v want retained=%d pruned=%d", stats, 2*recordBytes, recordBytes)
+			}
+			requireResult(t, store, []byte("k"), 3, Present, 3, []byte("v"))
+			if _, err := store.GetAt([]byte("k"), 4); !errors.Is(err, ErrMalformedRecord) {
+				t.Fatalf("bypassed malformed retained record error=%v", err)
+			}
+		})
+	}
+}
+
 func TestVersionValueReadErrorsRemainStorageErrors(t *testing.T) {
 	t.Run("version iterator", func(t *testing.T) {
 		db := openTestDB(t, t.TempDir(), treedb.DurabilityDurable)
@@ -339,18 +396,20 @@ func TestVersionValueReadErrorsRemainStorageErrors(t *testing.T) {
 		}
 	})
 
-	t.Run("prune", func(t *testing.T) {
-		db := openTestDB(t, t.TempDir(), treedb.DurabilityDurable)
-		defer db.Close()
-		injected := errors.New("prune value read failure")
-		store := newStore(&snapshotValueErrorDB{DB: db, err: injected})
-		commitHistory(t, store, "k", MutationAt{10, []byte("old"), false}, MutationAt{20, []byte("new"), false})
-		if err := store.AdvanceDiscardFloor(15, CommitDurable); err != nil {
-			t.Fatalf("AdvanceDiscardFloor: %v", err)
-		}
-		_, err := store.PruneVersions(PruneOptions{BatchSize: 1, Mode: CommitDurable})
-		assertStorageValueError(t, err, injected, "read prune iterator value")
-	})
+	for _, floor := range []uint64{5, 15} {
+		t.Run(fmt.Sprintf("prune floor%d", floor), func(t *testing.T) {
+			db := openTestDB(t, t.TempDir(), treedb.DurabilityDurable)
+			defer db.Close()
+			injected := errors.New("prune value read failure")
+			store := newStore(&snapshotValueErrorDB{DB: db, err: injected})
+			commitHistory(t, store, "k", MutationAt{10, []byte("old"), false}, MutationAt{20, []byte("new"), false})
+			if err := store.AdvanceDiscardFloor(floor, CommitDurable); err != nil {
+				t.Fatalf("AdvanceDiscardFloor: %v", err)
+			}
+			_, err := store.PruneVersions(PruneOptions{BatchSize: 1, Mode: CommitDurable})
+			assertStorageValueError(t, err, injected, "read prune iterator value")
+		})
+	}
 }
 
 func assertStorageValueError(t testing.TB, err, injected error, operation string) {
@@ -586,7 +645,7 @@ func TestPruneAfterSnapshotCapture_BatchOnlyDoesNotBlockForegroundOperations(t *
 	if pruned.err != nil {
 		t.Fatalf("PruneVersions: %v", pruned.err)
 	}
-	if pruned.stats.Visited != 8 || pruned.stats.Skipped != 3 || pruned.stats.Retained != 4 || pruned.stats.Pruned != 4 {
+	if pruned.stats.Visited != 6 || pruned.stats.Skipped != 1 || pruned.stats.Retained != 2 || pruned.stats.Pruned != 4 {
 		t.Fatalf("prune stats=%+v", pruned.stats)
 	}
 	select {

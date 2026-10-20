@@ -426,12 +426,14 @@ type PruneOptions struct {
 	Mode      CommitMode
 }
 
-// PruneStats accounts for the snapshot scanned and successfully committed
-// deletes. On success, Visited equals Retained plus Pruned. Skipped is the
-// subset of Retained whose timestamps are above the discard floor; it is not a
-// disjoint outcome counter. On error, staged but uncommitted deletes can make
-// the success relationship incomplete. RetainedBytes is the physical key/value
-// bytes observed and kept; PrunedBytes is the physical key+value record bytes
+// PruneStats accounts for records inspected in the captured snapshot and
+// successfully committed deletes. Above-floor tails are bypassed after their
+// first record; uninspected records are excluded from all counters. On success,
+// Visited equals Retained plus Pruned. Skipped is the subset of Retained whose
+// timestamps are above the discard floor; it is not a disjoint outcome counter.
+// On error, staged but uncommitted deletes can make the success relationship
+// incomplete. RetainedBytes is the physical key/value bytes inspected and kept,
+// not the total remaining history size; PrunedBytes is the record bytes
 // deleted (TreeDB tombstones add their own implementation-specific write
 // amplification). DeleteWriteBytes is the sum of TreeDB's delete-batch
 // byte-size estimates.
@@ -446,6 +448,9 @@ type PruneStats struct {
 // bounded reverse scan. For each key it retains every version above the floor
 // plus the newest value at/below it. A newest-at-floor tombstone is removed only
 // after every older version has been deleted, preventing value resurrection.
+// It validates and accounts for every at/below-floor record and the first
+// above-floor record per key, then seeks past that key's remaining retained
+// tail. Bypassed records are neither counted nor checked for corruption.
 // Durable mode re-syncs the floor before the first delete, so interruption and
 // restart are idempotent and cannot recover pruned data without its floor.
 func (s *Store) PruneVersions(options PruneOptions) (stats PruneStats, err error) {
@@ -524,6 +529,7 @@ func (s *Store) PruneVersions(options PruneOptions) (stats PruneStats, err error
 	}
 	var currentLogical []byte
 	var logicalBuf []byte
+	var seekBuf []byte
 	var anchor candidate
 	haveLogical, haveAnchor := false, false
 	var batch treedb.Batch
@@ -625,7 +631,15 @@ func (s *Store) PruneVersions(options PruneOptions) (stats PruneStats, err error
 			stats.Skipped++
 			stats.Retained++
 			stats.RetainedBytes += recordBytes
-			raw.Next()
+			// Reverse iteration has reached the oldest above-floor version.
+			// Every remaining version of this exact logical key is retained.
+			// Use owned scratch: Seek may invalidate physical and record views.
+			var seekErr error
+			seekBuf, seekErr = mvcckey.AppendKeyVersionsLower(seekBuf[:0], logical)
+			if seekErr != nil {
+				return stats, fmt.Errorf("%w: %w", ErrMalformedRecord, seekErr)
+			}
+			raw.Seek(seekBuf)
 			continue
 		}
 		if haveAnchor {

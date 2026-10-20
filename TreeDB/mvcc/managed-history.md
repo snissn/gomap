@@ -18,6 +18,31 @@ that a crash between batches cannot resurrect an older value. Durable prune
 persists the floor before its first deletion. Interrupted pruning can resume
 through the ordinary API after reopening.
 
+The reverse scan inspects each at/below-floor record and validates the key,
+value read and envelope of the first above-floor record. It then uses the same
+captured iterator's ordered reverse `Seek` to the encoded lower bound for that
+exact logical key, bypassing the remaining above-floor tail. Every bypassed
+version remains retained. Empty keys, binary bytes and logical prefix neighbors
+use the existing escaped-key encoding; the seek captures no replacement cut.
+
+`PruneStats` counts inspected records and committed deletes. `Retained` and
+`RetainedBytes` cover the value anchor and first above-floor record that were
+inspected and kept; they do not measure all surviving history. `Skipped` is the
+above-floor subset of inspected `Retained`. On success,
+`Visited = Retained + Pruned`. Errors encountered in eligible records, the first
+above-floor record, seek traversal or cleanup still fail the pass. A bypassed
+tail's keys and payloads are not audited for corruption by pruning; their normal
+read validation remains in effect.
+
+This changes observational behavior from the earlier complete reverse scan,
+which counted every surviving record and could detect corruption throughout
+above-floor tails. It does not change the survivor set, floor admission,
+oldest-first tombstone deletion, durability or held-cut ownership. The public
+conformance trace keeps its schema, read/version results and pruned count; its
+inspected `visited/skipped/retained` expectations change from `7/3/6` to `6/2/5`.
+Consumers of earlier whole-snapshot counters must use the source revision that
+produced them rather than interpret them as the new inspected subset.
+
 Captured cuts own original memtable, backend and persistent value-log resources.
 Their ordinary Close path releases those original resources and preserves the
 first physical cleanup failure and its original custody. Closing the DB does
@@ -54,21 +79,36 @@ cannot support a speedup claim.
 `TREEDB_HISTORY_MEASURE_DEPTH` optionally selects 16, 64 or 256 versions per
 key; omitted means the original depth-16 cell and its original timestamp arrival
 order. Each cell keeps 32 keys, 256-byte values and floor 12. Successful pruning
-must visit `32*depth` records, delete 352, retain `32*(depth-11)` and count
-`32*(depth-12)` above-floor versions. The old read at timestamp 8 still returns
+must inspect 416 records, delete 352 in 11 batches, and count 64 inspected retained
+records, including 32 above-floor records, at every selectable depth. The physical
+survivor set still contains `32*(depth-11)` versions. The old read at timestamp 8 returns
 256 versions. The packet records these workload dimensions, the resolved
 profile and activation of the public COW native backend. This extends the same
 fresh-process Store measurement; it does not use the backend-only legacy
 benchmark or introduce another capture driver.
 
-Holding the deleted count fixed while increasing retained history exposes the
-cost of the current complete reverse scan, including value reads above the
-floor. Compare matching depths, profiles and pointer layouts with identical
-measurement source, ACK/drain boundaries and raw samples. Boundary retained
+Holding the deleted count fixed while increasing retained history tests the
+cost of ordered tail seeking against the earlier complete scan. Historical
+depth16/64 packets keep their original full-scan counters: respectively 512/2048
+visited, 160/1696 retained and 128/1664 above-floor records, with 352 pruned in
+each. Preserve those packets and their exact source bindings. Compare matching
+depths, profiles and pointer layouts with equivalent measurement source,
+ACK/drain boundaries and raw samples; the candidate's changed counter oracle
+is not itself a performance result. Boundary retained
 heap and directory bytes remain observations, not a sustained retention or
-continuously sampled peak qualification. No skip-value optimization or durable
-resume cursor is justified by source complexity alone; corruption behavior and
-physical-byte accounting remain part of the ordinary algorithm.
+continuously sampled peak qualification. Ordered seeking retains existing
+admission and fixed-scratch source iterators; it adds no cursor, cache or count
+authority. Prune byte counters describe inspected physical records, while heap
+and directory observations continue to cover the actual retained engine state.
+
+`TestManagedHistoryPruneSkipsRetainedTail` fixes 32 keys and floor 12 at depths
+16 and 64, using the public native COW owner with a published pointer basis and
+an active COW overlay. It checks the inspected bound plus binary/empty/prefix
+keys, out-of-order arrival, every reopened value anchor and retained version,
+an above-floor tombstone, all old-cut values across checkpoint, shutdown custody
+and final original-budget/identity release. `TestPruneRetainedTailInspectionBoundary`
+checks eligible and first-boundary malformed records, errors at the exact seek
+lower bound, inspected byte counts, and the explicit uninspected-tail behavior.
 
 `TestManagedHistoryNativeDeferredCloseCustody` exercises the public Store and
 native two-collection/raw composite on all three production profiles. It proves
@@ -101,6 +141,7 @@ Use the validator from each packet's original Git revision with its recorded
 source/runtime/toolchain bindings. The final tooling source above is a recovery
 pointer, not a claim that its retired runtime dependencies compile. Q32 metrics,
 private-output/cancellation assertions and prior qualification refusals keep
-their historical meanings. The existing managed-history correctness controls,
-benchmarks and `TestManagedHistoryMeasurement` are unchanged; new retained
+their historical meanings. The managed-history correctness controls, benchmarks
+and `TestManagedHistoryMeasurement` use the ordinary maintained route; the later
+ordered-tail change above updates their inspected accounting. New retained
 qualification still needs its own reviewed exact-source protocol and evidence.

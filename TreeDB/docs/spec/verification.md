@@ -1441,9 +1441,26 @@ Coverage:
   cover 3/16, 7/16, and 11/16. The matrix reports useful/skipped rates,
   bytes/op, allocs/op,
   prune throughput, physical bytes per pruned version, delete-batch write
-  amplification, and retained physical bytes/versions per operation. Retained
-  bytes are physical records still reachable in the pinned prune snapshot, not
-  immediate filesystem reclamation.
+  amplification, and inspected retained physical bytes/versions per operation
+  (`inspected_retained_physical_bytes/op`, `inspected_retained_versions/op`).
+  Retained counters include the inspected value anchor and first above-floor
+  record; ordered reverse seek bypasses the remaining retained tail. These
+  counters measure neither all surviving history nor filesystem reclamation.
+- `TestManagedHistoryPruneSkipsRetainedTail` holds eligible work fixed at 32 keys,
+  floor12 and 352 deletes/11 batches while depth grows from16 to64. It requires
+  416 inspected,64 retained,32 skipped records in both cases through the actual
+  public native COW/backend route. Persisted pointers, binary/prefix/empty keys,
+  out-of-order arrival, all reopened survivors and a retained tombstone, old-cut
+  reads through checkpoint, shutdown custody and original-owner release remain
+  correctness gates. The separate opt-in measurement reports actual public phase
+  cost and memory; counter reduction alone does not establish a speedup.
+- `TestPruneRetainedTailInspectionBoundary` checks that malformed eligible values,
+  the first above-floor value and a malformed exact-lower key still fail closed.
+  It verifies inspected-byte accounting and that an uninspected malformed tail
+  remains stored and fails on a subsequent direct read. The existing storage
+  error test covers first reads both below and above the floor. This explicitly
+  narrows prune's corruption coverage from the prior full-history scan, without
+  changing ordinary read validation or the complete survivor oracle.
 
 `BenchmarkVersionIterationExactKey` is the bounded M0 diagnostic for the
 public all-version posting-read path, activated through `ExactKey` after M1:
