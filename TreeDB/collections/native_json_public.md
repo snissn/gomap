@@ -25,7 +25,7 @@ cached-leaf-log constructors do not provide this native capability.
 
 ## Public operations and eligibility
 
-The ordinary collection manager supports eligible JSON and BSON `CreateCollection` and
+The ordinary collection manager supports eligible JSON, BSON and template-v1 `CreateCollection` and
 `OpenCollection`. Native collection handles route ordinary insert, batch insert,
 update and delete, point `Get`/`GetInto`, and full-document captured fetches through
 the common native engine. Scalar secondary and unique indexes support the native
@@ -39,8 +39,7 @@ Scalar multikey indexes and the existing `AllowArrayValuesInIndex` option use
 that same planner: arrays are encoded as sorted distinct value sets, preserving
 the format's existing missing/null and dotted-path semantics. Final unique
 ownership is checked across the whole transaction, including value handoffs.
-Compound indexes, text/vector index creation and template formats remain outside
-this route. Eligible BSON collections also support top-level `UpdateBSONSet` and
+Compound indexes and text/vector index creation remain outside this route. Eligible BSON collections also support top-level `UpdateBSONSet` and
 `UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges`, using the maintained BSON
 transformer and canonical full replacement documents. `_id`, dotted or invalid
 field names and malformed raw values retain their existing refusal contracts.
@@ -54,6 +53,22 @@ callbacks. A unique-value-change decline returns zero-valued results and
 `batched=false`, without assigning a canonical identity or publishing private
 changes. BSONOrderedV2 compares its encoded numeric value, so changing the BSON
 integer width alone does not imply a unique-value change.
+
+Template-v1 uses the maintained TD1I/TD1H preparation and compact TD1D primary
+representation. New template records, hash bindings and next-ID updates share the
+same immutable transaction and domain 2 as the document/index effects. Canonical
+members retain their original input envelopes, including intermediate members
+whose documents are later deleted. Persisted template hash/next-ID reads have
+ordinary OCC dependencies. The public scoped encoder learns numeric IDs only
+after successful publication and remains bound to the original backend and
+collection. Its compact stored inputs cannot cross that scope. A stored-document
+JSON materializer retains its exact native capture and resolves template records
+from that same cut, including pending records; returned JSON is caller-owned.
+Its temporary parser/object backing is admitted by the original read allocator
+and released after owned copyout. Scalar index DDL reuses the same captured
+resolver and original complete-cut backfill. No template cache or on-disk format
+is added. Specialized deterministic/assigned and prepared template producers
+remain outside this ordinary family.
 
 Scalar JSON index reads support `FindByIndexRange`, `ScanIndexRange`,
 `FindDocumentsByIndexRange` and `ScanBorrowedDocumentsByIndexRange`. Ascending

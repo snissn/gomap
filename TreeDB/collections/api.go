@@ -532,6 +532,7 @@ type collectionRootOverlayCompactionResult struct {
 // StoredDocumentJSONMaterializer reuses any resources needed to materialize
 // stored collection documents as JSON.
 type StoredDocumentJSONMaterializer struct {
+	nativeRead          *NativeJSONRead
 	documentFormat      DocumentFormat
 	templateResolver    templateV1Resolver
 	closeFn             func() error
@@ -546,6 +547,8 @@ func (m *StoredDocumentJSONMaterializer) Close() error {
 	closeFn := m.closeFn
 	m.closeFn = nil
 	m.beginForegroundRead = nil
+	m.nativeRead = nil
+	m.templateResolver = nil
 	return closeFn()
 }
 
@@ -562,6 +565,9 @@ func (m *StoredDocumentJSONMaterializer) DocumentFormat() DocumentFormat {
 func (m *StoredDocumentJSONMaterializer) StoredDocumentJSON(document []byte) ([]byte, error) {
 	if m == nil {
 		return nil, errCollectionNil
+	}
+	if m.nativeRead != nil {
+		return m.nativeRead.templateJSON(document)
 	}
 	endForegroundRead := noCollectionForegroundReadEnd
 	if m.beginForegroundRead != nil {
@@ -11826,6 +11832,9 @@ func (c *Collection) InsertBatchWithTemplateV1Encoder(ids, documents [][]byte, e
 	if encoder == nil {
 		return nil, errors.New("collections: template-v1 encoder cannot be nil")
 	}
+	if c != nil && c.nativeJSON != nil {
+		return c.nativeInsertTemplateBatch(ids, documents, encoder)
+	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
 	admissionState := c.lockCollectionCommandWALAdmission()
@@ -12073,8 +12082,11 @@ func (c *Collection) insertBatchWithCommandWALIntent(ids, documents [][]byte, tr
 
 func (c *Collection) insertBatchWithCommandWALIntentSchemaLocked(ids, documents [][]byte, trustedValidBSON bool, templateEncoder *TemplateV1Encoder, commandWALIntent *backenddb.CommandWALIntent, execOpts insertBatchExecutionOptions) (resultIDs [][]byte, resultErr error) {
 	if c != nil && c.nativeJSON != nil {
-		if trustedValidBSON || templateEncoder != nil || commandWALIntent != nil || execOpts.trustedFloat32Projection != nil || execOpts.prepared != nil || execOpts.splitInsert != nil || execOpts.insertStats != nil {
+		if trustedValidBSON || commandWALIntent != nil || execOpts.trustedFloat32Projection != nil || execOpts.prepared != nil || execOpts.splitInsert != nil || execOpts.insertStats != nil {
 			return nil, backenddb.ErrNativeSemanticUnsupported
+		}
+		if templateEncoder != nil {
+			return c.nativeInsertTemplateBatch(ids, documents, templateEncoder)
 		}
 		return c.nativeInsertBatch(ids, documents)
 	}
@@ -22723,6 +22735,9 @@ func (c *Collection) NewStoredDocumentJSONMaterializer() (*StoredDocumentJSONMat
 			return nil, err
 		}
 		format := normalizedDocumentFormat(read.meta.Options.DocumentFormat)
+		if format == DocumentFormatTemplateV1 {
+			return &StoredDocumentJSONMaterializer{documentFormat: format, nativeRead: read, closeFn: read.Close}, nil
+		}
 		err = read.Close()
 		if err != nil {
 			return nil, err

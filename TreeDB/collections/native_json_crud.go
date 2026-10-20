@@ -71,7 +71,7 @@ func (c *Collection) nativeUpdateBatchMode(items []UpdateBatchItem, mode updateB
 	}
 	if mode == updateBatchModeNoSecondaryUniqueIndexChanges && collectionMetaHasSecondaryUniqueIndex(g.probe.meta) && len(tx.members) != 0 {
 		tx.mu.Lock()
-		_, _, _, err = nativeJSONFinalRowsWithMode(g.name, g.probe.meta, &g.rows, func(n uint64) error { return tx.admitStage(g, n) }, func(doc []byte) error { return tx.prepareValidation(g, doc) }, mode)
+		_, _, _, err = nativeJSONFinalRowsResolved(g.name, g.probe.meta, &g.rows, func(n uint64) error { return tx.admitStage(g, n) }, func(doc []byte) error { return tx.prepareValidation(g, doc) }, mode, g.templates)
 		tx.mu.Unlock()
 		if errors.Is(err, errUpdateBatchChangesSecondaryUniqueIndex) {
 			clear(results)

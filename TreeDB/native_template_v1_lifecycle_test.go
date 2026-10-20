@@ -57,7 +57,7 @@ func TestNativeExistingTemplateV1UnappliedReplay(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			checkNativeTemplateFinal(t, col)
+			checkNativeTemplateFinal(t, database, col)
 			if applied := indexedCRUDAppliedLSN(t, handle); applied != 5 {
 				t.Fatalf("applied=%d", applied)
 			}
@@ -104,8 +104,16 @@ func checkNativeTemplateJSON(t *testing.T, materializer *collections.StoredDocum
 		t.Fatalf("document=%s want%s", actual, want)
 	}
 }
-func checkNativeTemplateFinal(t *testing.T, col *collections.Collection) {
+func checkNativeTemplateFinal(t *testing.T, database *DB, col *collections.Collection) {
 	t.Helper()
+	raw, err := database.Get([]byte("template/raw"))
+	if err != nil || string(raw) != "one cut" {
+		t.Fatalf("raw aggregate=%q %v", raw, err)
+	}
+	raw[0] ^= 1
+	if again, err := database.Get([]byte("template/raw")); err != nil || string(again) != "one cut" {
+		t.Fatalf("owned raw=%q %v", again, err)
+	}
 	m, err := col.NewStoredDocumentJSONMaterializer()
 	if err != nil {
 		t.Fatal(err)
@@ -164,8 +172,17 @@ func runNativeTemplateV1(t *testing.T, profile Profile, dir string, crash bool) 
 		t.Fatal(err)
 	}
 	encoder := &collections.TemplateV1Encoder{}
-	seedA := nativeTemplateDoc(t, `{"email":"ua","city":"hnl"}`)
-	seedB := nativeTemplateDoc(t, `{"email":"ub","city":"nyc"}`)
+	// Canonical ID order deliberately puts a hash-only document before the
+	// same member's full envelope. Maintained batch preparation resolves both.
+	seedEncoder := &collections.TemplateV1Encoder{}
+	seedB, err := seedEncoder.EncodeDocument([]string{"email", "city"}, []any{"ub", "nyc"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedA, err := seedEncoder.EncodeDocument([]string{"email", "city"}, []any{"ua", "hnl"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err = col.InsertBatchWithTemplateV1Encoder([][]byte{[]byte("a"), []byte("b")}, [][]byte{seedA, seedB}, encoder); err != nil {
 		t.Fatal(err)
 	}
@@ -219,7 +236,24 @@ func runNativeTemplateV1(t *testing.T, profile Profile, dir string, crash bool) 
 	if n, err := tx.DeleteBatch([][]byte{[]byte("b")}); err != nil || n != 1 {
 		t.Fatalf("delete=%d %v", n, err)
 	}
-	if err = tx.InsertBatch([][]byte{[]byte("b")}, [][]byte{nativeTemplateDoc(t, `{"email":"ua","city":"hnl","tags":["x","x","y"]}`)}); err != nil {
+	// The first carrier of this shape disappears. The following TD1H member
+	// still needs its staged records in foreground and original envelope replay.
+	var staged collections.TemplateV1Encoder
+	transient, err := staged.EncodeDocument([]string{"city", "email", "tags"}, []any{"sea", "temporary", []any{"x"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.InsertBatch([][]byte{[]byte("transient")}, [][]byte{transient}); err != nil {
+		t.Fatal(err)
+	}
+	if count, err := tx.DeleteBatch([][]byte{[]byte("transient")}); err != nil || count != 1 {
+		t.Fatalf("cancel template carrier=%d %v", count, err)
+	}
+	withoutRecords, err := staged.EncodeDocument([]string{"city", "email", "tags"}, []any{"hnl", "ua", []any{"x", "x", "y"}})
+	if err != nil || !bytes.HasPrefix(withoutRecords, []byte("TD1H")) {
+		t.Fatalf("hash-only staged input=%q %v", withoutRecords, err)
+	}
+	if err = tx.InsertBatch([][]byte{[]byte("b")}, [][]byte{withoutRecords}); err != nil {
 		t.Fatal(err)
 	}
 	if err = tx.SetRaw([]byte("template/raw"), []byte("one cut")); err != nil {
@@ -243,7 +277,7 @@ func runNativeTemplateV1(t *testing.T, profile Profile, dir string, crash bool) 
 	if _, err = col.CreateIndex(collections.IndexDefinition{Name: "city_backfill", Field: "city", ValueType: collections.IndexValueString}); err != nil {
 		t.Fatal(err)
 	}
-	checkNativeTemplateFinal(t, col)
+	checkNativeTemplateFinal(t, database, col)
 	next = handle.CommandWALNextLSN()
 	bad, err := native.Begin("templates")
 	if err != nil {
@@ -252,6 +286,13 @@ func runNativeTemplateV1(t *testing.T, profile Profile, dir string, crash bool) 
 	err = bad.InsertBatch([][]byte{[]byte("bad")}, [][]byte{[]byte("TD1I\x01")})
 	if err == nil {
 		t.Fatal("malformed template accepted")
+	}
+	// A later delete cannot erase the malformed member or make it publishable.
+	if _, err = bad.DeleteBatch([][]byte{[]byte("bad")}); err == nil {
+		t.Fatal("malformed intermediate was erased by delete")
+	}
+	if err = bad.Commit(); err == nil {
+		t.Fatal("malformed intermediate committed")
 	}
 	if err = bad.Close(); err != nil {
 		t.Fatal(err)
@@ -288,7 +329,7 @@ func runNativeTemplateV1(t *testing.T, profile Profile, dir string, crash bool) 
 	if err = database.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
-	checkNativeTemplateFinal(t, col)
+	checkNativeTemplateFinal(t, database, col)
 	checkOld()
 	if err = old.Close(); err != nil {
 		t.Fatal(err)
@@ -324,7 +365,7 @@ func runNativeTemplateV1(t *testing.T, profile Profile, dir string, crash bool) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	checkNativeTemplateFinal(t, col)
+	checkNativeTemplateFinal(t, database, col)
 	cache, registry = database.cached, handle.ValueLogIdentityPinRegistry()
 	if err = manager.Close(); err != nil {
 		t.Fatal(err)
@@ -337,5 +378,71 @@ func runNativeTemplateV1(t *testing.T, profile Profile, dir string, crash bool) 
 	requirePublicCOWFinalZero(t, cache)
 	if s := registry.Stats(); s.ActivePins != 0 || s.ActiveIdentities != 0 {
 		t.Fatalf("reopened registry: %+v", s)
+	}
+}
+
+func TestNativeExistingTemplateV1EncoderScope(t *testing.T) {
+	t.Setenv("TREEDB_DISABLE_VLOG_GENERATION_LOOP", "1")
+	var learned collections.TemplateV1Encoder
+	for databaseIndex := 0; databaseIndex < 2; databaseIndex++ {
+		func() {
+			database, err := Open(indexedSliceOptions(ProfileCommandWALDurable, t.TempDir()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			handle, err := database.NativeSemanticBackend()
+			if err != nil {
+				t.Fatal(err)
+			}
+			manager := collections.NewCollectionManager(handle)
+			defer func() { _ = manager.Close(); _ = database.Close() }()
+			for _, name := range []string{"templates", "other"} {
+				if _, err = manager.CreateCollection(&collections.CollectionMeta{Name: name, Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatTemplateV1}}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			col, err := manager.OpenCollection("templates")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if databaseIndex == 0 {
+				if _, err = col.InsertBatchWithTemplateV1Encoder([][]byte{[]byte("seed")}, [][]byte{nativeTemplateDoc(t, `{"city":"sea"}`)}, &learned); err != nil {
+					t.Fatal(err)
+				}
+			}
+			compact, err := learned.EncodeDocument([]string{"city"}, []any{"hnl"})
+			if err != nil || !bytes.HasPrefix(compact, []byte("TD1D")) {
+				t.Fatalf("learned compact=%q %v", compact, err)
+			}
+			name := "other"
+			if databaseIndex == 1 {
+				name = "templates" // same name, different original backend owner
+			}
+			target, err := manager.OpenCollection(name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			next := handle.CommandWALNextLSN()
+			if _, err = target.InsertBatchWithTemplateV1Encoder([][]byte{[]byte("refused")}, [][]byte{compact}, &learned); err == nil {
+				t.Fatal("foreign encoder scope accepted")
+			}
+			if handle.CommandWALNextLSN() != next {
+				t.Fatal("scope refusal acquired identity")
+			}
+			if value, err := target.Get([]byte("refused")); err != nil || value != nil {
+				t.Fatalf("scope refusal visible=%q %v", value, err)
+			}
+			cache, registry := database.cached, handle.ValueLogIdentityPinRegistry()
+			if err = manager.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err = database.Close(); err != nil {
+				t.Fatal(err)
+			}
+			requirePublicCOWFinalZero(t, cache)
+			if stats := registry.Stats(); stats.ActivePins != 0 || stats.ActiveIdentities != 0 {
+				t.Fatalf("scope registry: %+v", stats)
+			}
+		}()
 	}
 }

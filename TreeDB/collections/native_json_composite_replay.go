@@ -67,14 +67,15 @@ func replayNativeJSONComposite(db *backenddb.DB, env commitlog.CommandEnvelope) 
 	var raw []byte
 	read := func(key string) ([]byte, error) { return snapshot.GetAtRoot(token.SystemRootPageID, []byte(key)) }
 	type collectionRows struct {
-		name        string
-		incarnation uint64
-		meta        CollectionMeta
-		root        uint64
-		rows        nativeJSONRows
-		planner     insertBatchPlanner
-		runtimes    []indexRuntime
-		typed       []*nativeTypedDelta
+		name            string
+		incarnation     uint64
+		meta            CollectionMeta
+		root            uint64
+		rows            nativeJSONRows
+		planner         insertBatchPlanner
+		runtimes        []indexRuntime
+		typed           []*nativeTypedDelta
+		templateRecords []templateV1Record
 	}
 	var collections []*collectionRows
 	noAdmission := func(uint64) error { return nil }
@@ -202,6 +203,14 @@ func replayNativeJSONComposite(db *backenddb.DB, env commitlog.CommandEnvelope) 
 			if err != nil {
 				return err
 			}
+			if normalizedDocumentFormat(meta.Options.DocumentFormat) == DocumentFormatTemplateV1 {
+				templateRoot, err := rootFor(collectionTemplateRootName(name))
+				if err != nil {
+					return err
+				}
+				planner.options.templateResolver = &templateV1SnapshotResolver{snap: snapshot, rootID: templateRoot}
+				planner.options.allowTemplateV1Stored = true // canonical inputs were scoped/validated before append
+			}
 			target = &collectionRows{name: name, incarnation: id, meta: meta, root: root, planner: planner, runtimes: runtimes}
 			collections = append(collections, target)
 		} else if target.incarnation != member.Incarnation {
@@ -325,15 +334,37 @@ func replayNativeJSONComposite(db *backenddb.DB, env commitlog.CommandEnvelope) 
 		if typed != nil {
 			return backenddb.ErrNativeSemanticUnsupported
 		}
-		for _, doc := range docs {
+		var templateDocuments [][]byte
+		if normalizedDocumentFormat(target.planner.options.documentFormat) == DocumentFormatTemplateV1 {
+			// The original batch parser discovers ALL envelope records before
+			// resolving hash-only documents. Canonical ID order may place a hash
+			// reference before the document carrying its envelope in this member.
+			inputs := make([][]byte, len(docs))
+			for i := range docs {
+				inputs[i] = docs[i].Document
+			}
+			prepared, records, _, resolver, err := prepareInsertDocuments(inputs, target.planner.options)
+			if err != nil {
+				return err
+			}
+			templateDocuments = prepared
+			target.planner.options.templateResolver = resolver
+			target.templateRecords = append(target.templateRecords, records...)
+		}
+		for docIdx, doc := range docs {
 			// Validate every canonical intermediate before reducing it. A later
 			// delete must not erase a captured scalar-schema error. Use exactly
 			// the foreground preparation/extraction contract: unindexed JSON
 			// preserves opaque bytes, indexed JSON requires valid scalar input,
 			// and BSON always requires a valid original BSON image.
-			normalized, _, _, _, err := prepareInsertDocuments([][]byte{doc.Document}, target.planner.options)
-			if err != nil {
-				return err
+			var normalized [][]byte
+			if templateDocuments != nil {
+				normalized = templateDocuments[docIdx : docIdx+1]
+			} else {
+				normalized, _, _, _, err = prepareInsertDocuments([][]byte{doc.Document}, target.planner.options)
+				if err != nil {
+					return err
+				}
 			}
 			if _, err = orderedIndexStateForDocumentWithArena(normalized[0], target.runtimes, target.planner.options, nil); err != nil {
 				return err
@@ -371,8 +402,11 @@ func replayNativeJSONComposite(db *backenddb.DB, env commitlog.CommandEnvelope) 
 		if nativeTypedMeta(target.meta) {
 			continue
 		}
-		plan, changed, runtimes, err := nativeJSONFinalRows(target.name, target.meta, &target.rows, noAdmission, nil)
+		plan, changed, runtimes, err := nativeJSONFinalRowsResolved(target.name, target.meta, &target.rows, noAdmission, nil, updateBatchModeAny, target.planner.options.templateResolver)
 		if err != nil {
+			return err
+		}
+		if err = nativeTemplatePlanEntries(plan, target.name, target.templateRecords, target.planner.options, noAdmission); err != nil {
 			return err
 		}
 		replacements := batchUniqueReplacementOwners(runtimes, changed)

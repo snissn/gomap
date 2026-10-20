@@ -312,7 +312,7 @@ func (m *NativeJSONManager) mutateIndexes(name string, create *IndexDefinition, 
 				scratchPeak = n
 				return nil
 			}
-			plan, _, _, err = nativeJSONFinalRows(name, meta, &rows, admit, scratch)
+			plan, _, _, err = nativeJSONFinalRowsResolved(name, meta, &rows, admit, scratch, updateBatchModeAny, read.templateResolver(admit))
 			if err != nil {
 				return nil, err
 			}

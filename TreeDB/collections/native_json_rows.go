@@ -70,6 +70,9 @@ func nativeJSONFinalRows(name string, meta CollectionMeta, rows *nativeJSONRows,
 }
 
 func nativeJSONFinalRowsWithMode(name string, meta CollectionMeta, rows *nativeJSONRows, admit func(uint64) error, prepareScratch func([]byte) error, mode updateBatchMode) (*directBufferedInsertPlan, []preparedBatchUpdate, []indexRuntime, error) {
+	return nativeJSONFinalRowsResolved(name, meta, rows, admit, prepareScratch, mode, nil)
+}
+func nativeJSONFinalRowsResolved(name string, meta CollectionMeta, rows *nativeJSONRows, admit func(uint64) error, prepareScratch func([]byte) error, mode updateBatchMode, resolver templateV1Resolver) (*directBufferedInsertPlan, []preparedBatchUpdate, []indexRuntime, error) {
 	// Runtime descriptors are allocated before per-row parsing; admit them first.
 	headerCharge, err := nativeJSONIndexedPlanCharge(meta, nil, nil)
 	if err != nil {
@@ -82,6 +85,7 @@ func nativeJSONFinalRowsWithMode(name string, meta CollectionMeta, rows *nativeJ
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	planner.options.templateResolver = resolver
 	runtimes, err := planner.indexRuntimes()
 	if err != nil {
 		return nil, nil, nil, err
@@ -495,7 +499,8 @@ func (t *NativeJSONTxn) stageNativeInsert(g *nativeJSONTxnBinding, ids, document
 	if err != nil {
 		return err
 	}
-	normalized, _, _, _, err := prepareInsertDocuments(documents, planner.options)
+	normalized, options, err := t.prepareTemplateDocuments(g, documents, planner.options)
+	planner.options = options
 	if err != nil {
 		return err
 	}
@@ -524,7 +529,11 @@ func (t *NativeJSONTxn) stageNativeInsert(g *nativeJSONTxnBinding, ids, document
 			return ErrDocumentExists
 		}
 		row.current = bytes.Clone(item.document)
-		docs[i] = commitlog.CollectionDocument{ID: row.id, Document: row.current}
+		canonical := row.current
+		if normalizedDocumentFormat(planner.options.documentFormat) == DocumentFormatTemplateV1 {
+			canonical = documents[orderedItemIndex(order, i)]
+		}
+		docs[i] = commitlog.CollectionDocument{ID: row.id, Document: canonical}
 	}
 	if err = t.admitMemberPayload(g, docs, nil); err != nil {
 		return err
@@ -616,7 +625,8 @@ func (t *NativeJSONTxn) UpdateBatchInto(name string, items []UpdateBatchItem) (r
 		if err = t.admitRowDocument(g, row.id, document); err != nil {
 			return nil, err
 		}
-		normalized, _, _, _, err := prepareInsertDocuments([][]byte{bytes.Clone(document)}, planner.options)
+		normalized, options, err := t.prepareTemplateDocuments(g, [][]byte{bytes.Clone(document)}, planner.options)
+		planner.options = options
 		if err != nil {
 			return nil, updateBatchItemError(i, err)
 		}
@@ -625,7 +635,11 @@ func (t *NativeJSONTxn) UpdateBatchInto(name string, items []UpdateBatchItem) (r
 		}
 		row.current = normalized[0]
 		result[i].Modified = true
-		docs = append(docs, commitlog.CollectionDocument{ID: row.id, Document: row.current})
+		canonical := row.current
+		if normalizedDocumentFormat(planner.options.documentFormat) == DocumentFormatTemplateV1 {
+			canonical = document
+		}
+		docs = append(docs, commitlog.CollectionDocument{ID: row.id, Document: canonical})
 	}
 	if len(docs) == 0 {
 		return result, nil
@@ -714,8 +728,23 @@ func (t *NativeJSONTxn) finalizeNativeRows() error {
 			continue
 		}
 		admit := func(n uint64) error { return t.admitStage(g, n) }
-		direct, changed, runtimes, err := nativeJSONFinalRows(g.name, g.probe.meta, &g.rows, admit, func(doc []byte) error { return t.prepareValidation(g, doc) })
+		var opts collectionOptions
+		if normalizedDocumentFormat(g.probe.meta.Options.DocumentFormat) == DocumentFormatTemplateV1 {
+			var err error
+			opts, err = collectionPlannerOptions(g.probe.meta)
+			if err != nil {
+				return err
+			}
+			opts, err = t.templateOptions(g, opts)
+			if err != nil {
+				return err
+			}
+		}
+		direct, changed, runtimes, err := nativeJSONFinalRowsResolved(g.name, g.probe.meta, &g.rows, admit, func(doc []byte) error { return t.prepareValidation(g, doc) }, updateBatchModeAny, g.templates)
 		if err != nil {
+			return err
+		}
+		if err = nativeTemplatePlanEntries(direct, g.name, g.templateRecords, opts, admit); err != nil {
 			return err
 		}
 		// Reserve the maintained nested unique-owner maps and copied string keys

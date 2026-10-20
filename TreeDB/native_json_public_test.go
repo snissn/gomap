@@ -44,7 +44,7 @@ func TestNativeJSONPublicCreateActivation(t *testing.T) {
 		t.Fatal(err)
 	}
 	refused := collections.NewCollectionManager(database.backend)
-	if _, err := refused.CreateCollection(&collections.CollectionMeta{Name: "legacy", Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatTemplateV1}}); !errors.Is(err, backenddb.ErrNativeSemanticUnsupported) {
+	if _, err := refused.CreateCollection(&collections.CollectionMeta{Name: "legacy", Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}, Indexes: []collections.IndexDefinition{{Name: "compound", ValueType: collections.IndexValueBSONOrderedV2, Components: []collections.IndexComponent{{Field: "x", Direction: collections.IndexDirectionAscending}, {Field: "y", Direction: collections.IndexDirectionAscending}}}}}); !errors.Is(err, backenddb.ErrNativeSemanticUnsupported) {
 		t.Fatalf("legacy admission: %v", err)
 	}
 	if metas, truncated, err := refused.ListCollectionsBounded(1); err != nil || len(metas) != 0 || truncated {

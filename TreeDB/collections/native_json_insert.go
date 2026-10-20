@@ -239,7 +239,7 @@ func prepareNativeJSONInsertCommand(_ *backenddb.DB, env commitlog.CommandEnvelo
 	if !ok {
 		return nil, tree.ErrKeyNotFound
 	}
-	if len(c.schema.meta.Indexes) != 0 || c.schema.meta.Options.ColumnStore != nil {
+	if len(c.schema.meta.Indexes) != 0 || c.schema.meta.Options.ColumnStore != nil || normalizedDocumentFormat(c.schema.meta.Options.DocumentFormat) == DocumentFormatTemplateV1 {
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
 	if _, err = nativeJSONMeta(*c.schema.meta); err != nil {

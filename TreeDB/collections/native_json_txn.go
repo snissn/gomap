@@ -32,6 +32,11 @@ type nativeJSONTxnBinding struct {
 	validation       indexEncodeArena
 	validationLease  *memtable.COWExternalLease
 	validationCharge uint64
+	templates        templateV1Resolver
+	templateRecords  []templateV1Record
+	templateLearned  []templateV1LearnedTemplate
+	allowStored      bool
+	learnTemplates   bool
 }
 type NativeJSONTxn struct {
 	mu           sync.Mutex

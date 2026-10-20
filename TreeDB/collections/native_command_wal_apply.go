@@ -28,7 +28,7 @@ func (m *CollectionManager) ApplyNativeCommandWALCreate(meta CollectionMeta, syn
 	if !m.UsesNativeCommandWALApply() || m.isClosing() {
 		return result, backenddb.ErrClosed
 	}
-	if meta.Options.ColumnStore != nil {
+	if meta.Options.ColumnStore != nil || normalizedDocumentFormat(meta.Options.DocumentFormat) == DocumentFormatTemplateV1 {
 		return result, backenddb.ErrNativeSemanticUnsupported
 	}
 	apply := nativeCommandWALApplyCommit{sync: sync, observe: observe}
@@ -107,8 +107,9 @@ func (m *CollectionManager) PreflightNativeCommandWALCreate(meta CollectionMeta)
 		return backenddb.ErrClosed
 	}
 	// The deterministic adapter remains ordinary documents even where the public
-	// manager supports a broader typed role.
-	if meta.Options.ColumnStore != nil {
+	// manager supports broader typed and template roles. Template envelopes and
+	// scoped compact IDs are not this external producer's document format.
+	if meta.Options.ColumnStore != nil || normalizedDocumentFormat(meta.Options.DocumentFormat) == DocumentFormatTemplateV1 {
 		return backenddb.ErrNativeSemanticUnsupported
 	}
 	_, err := nativeJSONMeta(meta)
