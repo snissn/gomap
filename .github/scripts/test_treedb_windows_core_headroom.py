@@ -120,7 +120,7 @@ def weighted_shards(
 class TreeDBWeightedManifestTest(unittest.TestCase):
     def test_race_rag_pin_preserves_fallback_and_matches_workflow_selector(self) -> None:
         filename = "treedb_race_weighted_shards.tsv"
-        race = read_weights(filename, 3, {"package", "root", "caching", "db", "nativewire"})
+        race = read_weights(filename, 7, {"package", "root", "caching", "db", "nativewire"})
         rag = "github.com/snissn/gomap/TreeDB/cmd/treedb_rag_benchmark"
         self.assertEqual(race.get(("package", rag)), (0, True))
         before = {key: pin for key, pin in race.items() if key != ("package", rag)}
@@ -155,13 +155,13 @@ class TreeDBWeightedManifestTest(unittest.TestCase):
                     for weights_file, pins in (
                         (before_file, before), (CI_DIR / filename, race)
                     ):
-                        model = weighted_shards(items, "package", 3, pins)
+                        model = weighted_shards(items, "package", 7, pins)
                         actual = []
-                        for shard in range(3):
+                        for shard in range(7):
                             subprocess.run(
                                 [
                                     "bash", "-c", script, "race-selector", "package",
-                                    str(shard), "3", str(weights_file), str(all_file),
+                                    str(shard), "7", str(weights_file), str(all_file),
                                     str(shard_file),
                                 ],
                                 check=True, capture_output=True, text=True, timeout=5,
@@ -194,7 +194,7 @@ class TreeDBWeightedManifestTest(unittest.TestCase):
             ),
             (
                 "treedb_race_weighted_shards.tsv",
-                3,
+                7,
                 {"package", "root", "caching", "db", "nativewire"},
             ),
             ("treedb_unix_weighted_shards.tsv", 3, {"package"}),
@@ -218,7 +218,7 @@ class TreeDBWeightedManifestTest(unittest.TestCase):
         )
         race = read_weights(
             "treedb_race_weighted_shards.tsv",
-            3,
+            7,
             {"package", "root", "caching", "db", "nativewire"},
         )
         rag_benchmark = "github.com/snissn/gomap/TreeDB/cmd/treedb_rag_benchmark"
@@ -378,7 +378,7 @@ class TreeDBUnixHeadroomTest(unittest.TestCase):
 
 
 class TreeDBLinuxRaceHeadroomTest(unittest.TestCase):
-    def test_three_weighted_core_shards_and_dedicated_collections_shard_are_bounded(self) -> None:
+    def test_seven_weighted_core_shards_and_dedicated_collections_shard_are_bounded(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
         race_job = workflow_job(workflow, "race")
         matrix = re.findall(
@@ -387,12 +387,8 @@ class TreeDBLinuxRaceHeadroomTest(unittest.TestCase):
         )
         self.assertEqual(
             matrix,
-            [
-                ("1", "core", "0", "3"),
-                ("2", "core", "1", "3"),
-                ("3", "core", "2", "3"),
-                ("4", "collections", "0", "1"),
-            ],
+            [(str(index + 1), "core", str(index), "7") for index in range(7)]
+            + [("8", "collections", "0", "1")],
         )
         self.assertIn("treedb_race_weighted_shards.tsv", race_job)
         self.assertIn("grep -v '^github.com/snissn/gomap/TreeDB/collections$'", race_job)
@@ -429,38 +425,60 @@ class TreeDBLinuxRaceHeadroomTest(unittest.TestCase):
             race_job,
         )
 
-    def test_actual_race_selector_covers_nativewire_tests_and_new_seed_cases_once(self) -> None:
+    def test_actual_race_selector_covers_all_domains_and_new_items_once(self) -> None:
         race_job = workflow_job(WORKFLOW.read_text(encoding="utf-8"), "race")
         selector = re.search(
             r"(?ms)^          weighted_shard_file\(\) \{\n.*?^          \}\n",
             race_job,
         )
         self.assertIsNotNone(selector)
-        names = [
-            name
-            for path in sorted((REPO_ROOT / "TreeDB" / "nativewire").glob("*_test.go"))
-            for name in re.findall(r"(?m)^func ((?:Test|Example|Fuzz)\w*)\(", path.read_text())
-            if name != "TestMain"
-        ] + ["TestNewFallback", "ExampleNewFallback", "FuzzNewFallback"]
-        self.assertEqual(len(names), len(set(names)))
         weights = CI_DIR / "treedb_race_weighted_shards.tsv"
+        pins = read_weights(
+            weights.name, 7, {"package", "root", "caching", "db", "nativewire"}
+        )
+        domains = {
+            "package": sorted({
+                "github.com/snissn/gomap/" + path.parent.relative_to(REPO_ROOT).as_posix()
+                for path in (REPO_ROOT / "TreeDB").rglob("*.go")
+                if not {"testdata", "_artifacts"}.intersection(path.relative_to(REPO_ROOT).parts)
+                and path.parent not in {
+                    REPO_ROOT / "TreeDB" / subdir
+                    for subdir in ("", "caching", "collections", "db", "nativewire")
+                }
+            })
+        }
+        for kind, directory in (
+            ("root", ""), ("caching", "caching"), ("db", "db"), ("nativewire", "nativewire")
+        ):
+            domains[kind] = sorted({
+                name
+                for path in (REPO_ROOT / "TreeDB" / directory).glob("*_test.go")
+                for name in re.findall(r"(?m)^func ((?:Test|Example|Fuzz)\w*)\(", path.read_text())
+                if name not in {"TestMain", "TestVacuumRaceMissingKey"}
+            })
         with tempfile.TemporaryDirectory() as directory:
             all_file = Path(directory) / "all"
-            all_file.write_text("\n".join(names) + "\n")
-            shards = []
-            for index in range(3):
-                output = Path(directory) / str(index)
-                subprocess.run(
-                    ["bash", "--noprofile", "--norc", "-ceu", textwrap.dedent(selector.group()) +
-                     'weighted_shard_file nativewire "$1" 3 "$2" "$3" "$4"',
-                     "selector", str(index), str(weights), str(all_file), str(output)],
-                    check=True,
-                    env={key: value for key, value in os.environ.items() if key != "BASH_ENV"},
-                )
-                shards.append(output.read_text().splitlines())
-        self.assertEqual(sorted(name for shard in shards for name in shard), sorted(names))
-        self.assertIn("TestVectorPartitionLiveSelectedLifecycleV1", shards[0])
-        self.assertIn("TestMultiOwnerTCPAcceptedModelScaledCorrectnessV1", shards[2])
+            for kind, names in domains.items():
+                with self.subTest(kind=kind):
+                    names += [f"NewFallback{index}" for index in range(14)]
+                    all_file.write_text("\n".join(names) + "\n")
+                    shards = []
+                    for index in range(7):
+                        output = Path(directory) / str(index)
+                        subprocess.run(
+                            ["bash", "--noprofile", "--norc", "-ceu", textwrap.dedent(selector.group()) +
+                             'weighted_shard_file "$1" "$2" 7 "$3" "$4" "$5"',
+                             "selector", kind, str(index), str(weights), str(all_file), str(output)],
+                            check=True, timeout=5,
+                            env={key: value for key, value in os.environ.items() if key != "BASH_ENV"},
+                        )
+                        shards.append(output.read_text().splitlines())
+                    self.assertEqual(Counter(name for shard in shards for name in shard), Counter(names))
+                    self.assertEqual(shards, weighted_shards(names, kind, 7, pins))
+                    self.assertTrue(all(shards), "each added core shard must receive work")
+                    if kind == "nativewire":
+                        self.assertIn("TestVectorPartitionLiveSelectedLifecycleV1", shards[0])
+                        self.assertIn("TestMultiOwnerTCPAcceptedModelScaledCorrectnessV1", shards[2])
 
 
 if __name__ == "__main__":

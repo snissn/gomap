@@ -3,6 +3,7 @@ package rootpublication
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -44,19 +45,12 @@ func TestAcceptedPrefixFiniteCutExactSealAndRetirement(t *testing.T) {
 		t.Fatal(err)
 	}
 	entered, release := make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	defer unblock()
 	var calls atomic.Int32
 	custody := &prefixOriginalCustody{release: func() error {
 		calls.Add(1)
-		if !c.accepted.mu.TryLock() {
-			t.Error("original release under logical owner")
-		} else {
-			c.accepted.mu.Unlock()
-		}
-		if !c.mu.TryLock() {
-			t.Error("original release under physical owner")
-		} else {
-			c.mu.Unlock()
-		}
 		close(entered)
 		<-release
 		return nil
@@ -144,6 +138,26 @@ func TestAcceptedPrefixFiniteCutExactSealAndRetirement(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
 	}
+	// Transient coordinator contention does not prove the release caller holds
+	// a lock. Both locks must make progress while this SAME release is paused.
+	checked, checkDone := make(chan struct{}, 2), make(chan struct{})
+	go func() {
+		defer close(checkDone)
+		c.accepted.mu.Lock()
+		c.accepted.mu.Unlock()
+		checked <- struct{}{}
+		c.mu.Lock()
+		c.mu.Unlock()
+		checked <- struct{}{}
+	}()
+	defer func() { unblock(); <-checkDone }()
+	for _, owner := range []string{"logical", "physical"} {
+		select {
+		case <-checked:
+		case <-ctx.Done():
+			t.Fatalf("original release under %s owner: lock did not progress: %v", owner, ctx.Err())
+		}
+	}
 	captured := make(chan AcceptedCut, 1)
 	captureErr := make(chan error, 1)
 	go func() {
@@ -161,7 +175,7 @@ func TestAcceptedPrefixFiniteCutExactSealAndRetirement(t *testing.T) {
 		t.Fatal(e)
 	case <-time.After(10 * time.Millisecond):
 	}
-	close(release)
+	unblock()
 	select {
 	case err = <-sealed:
 		if err != nil {

@@ -8,11 +8,12 @@ on the advisory job, and no execution condition reads a forecast.
 
 The reviewed manifest is `.github/ci/ci_impact.json`; the single authority contract
 is `.github/scripts/ci_impact.py plan` / `validate`. It inventories all 17 source
-workflows, 59 original members, entry command source locations/digests, module and
+workflows, 63 original members, entry command source locations/digests, module and
 checkout contexts, platforms, race variants, and explicit dynamic consumers.
-TreeDB contributes 33 original members: 32 execution members and its required
-aggregate. The independent advisory job makes 34 physical TreeDB jobs. Forecast
-members describe the original coverage universe; they do not claim that
+TreeDB contributes 37 original members: 36 execution members and its required
+aggregate. Linux race coverage uses seven weighted core shards plus one dedicated
+collections/vacuum shard. The independent advisory job makes 38 physical TreeDB
+jobs. Forecast members describe the original coverage universe; they do not claim that
 push-only, path-filtered, or manual workflows run on every PR.
 
 ## Identity and trust
