@@ -687,13 +687,14 @@ func TestCandidateReferenceScanPreservesCountAdmissionRefusal(t *testing.T) {
 	}
 	defer closeNoErr(t, snap)
 	owner := db.valueLogIdentityPins.MetadataOwner()
-	before := owner.Bytes()
-	budget := &refCountsBudget{cap: before}
+	budget := &refCountsBudget{cap: ^uint64(0)}
 	enrollment, err := owner.Enroll(budget)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer enrollment.Close()
+	before := owner.Bytes()
+	budget.cap = before
 	var captured candidateValueLogRefCountsV1
 	if _, err := db.scanCandidateExternalReferencesWithCountsV1(snap, &captured); !errors.Is(err, retainedalloc.ErrCapacity) {
 		t.Fatalf("count admission error=%v want capacity refusal", err)
