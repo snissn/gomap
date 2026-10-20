@@ -652,7 +652,9 @@ func TestCandidateReferenceScanStillRejectsMalformedDescriptorAndReleasesPrelimi
 	privateState := *originalState
 	privateState.SystemRootPageID = malformedRoot
 	snap.state = &privateState
-	defer func() { snap.state = originalState }()
+	// The scanner refreshes the private view's owned ValueLogSet. Restore only
+	// the injected root ID, keeping its current set/reader custody for Close.
+	defer func() { snap.state.SystemRootPageID = originalState.SystemRootPageID }()
 	owner := db.valueLogIdentityPins.MetadataOwner()
 	before := owner.Bytes()
 	var captured candidateValueLogRefCountsV1
