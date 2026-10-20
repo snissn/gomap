@@ -58,3 +58,13 @@ func (r *SnapshotRootReader) OwnedRootEmpty() (bool, error) {
 	defer r.owner.endRead()
 	return r.tree.OwnedUserRootEmpty()
 }
+
+// SeekLTEntryWithFixedScratch is the DATA predecessor counterpart of SeekGE.
+// Results borrow this exact snapshot and the same exclusively admitted scratch.
+func (r *SnapshotRootReader) SeekLTEntryWithFixedScratch(start, end, keyScratch, leafScratch []byte, scratch *tree.OwnedSuccessorScratch, readLeaf func(page.LeafLogPtr, []byte) ([]byte, error)) (node.LeafEntry, bool, error) {
+	if err := r.beginRead(); err != nil {
+		return node.LeafEntry{}, false, err
+	}
+	defer r.owner.endRead()
+	return r.tree.SeekLTWithFixedScratch(start, end, keyScratch, leafScratch, scratch, readLeaf)
+}

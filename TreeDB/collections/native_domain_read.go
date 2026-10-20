@@ -87,6 +87,12 @@ func (r *nativeDomainRead) getEntry(key []byte, scratch *nativeDomainReadScratch
 // final effect, including a tombstone. It creates no cursor, source array,
 // key copy or catalog walk. The base read runs last because it borrows scratch.
 func (r *nativeDomainRead) seekGE(start, end []byte, scratch *nativeDomainReadScratch, readLeaf func(page.LeafLogPtr, []byte) ([]byte, error)) (node.LeafEntry, bool, error) {
+	return r.seek(start, end, scratch, readLeaf, false, nil)
+}
+
+// seek uses one admitted predecessor/successor probe per original source.
+// inspect runs BEFORE each probe, including empty and shadowed sources.
+func (r *nativeDomainRead) seek(start, end []byte, scratch *nativeDomainReadScratch, readLeaf func(page.LeafLogPtr, []byte) ([]byte, error), reverse bool, inspect func() error) (node.LeafEntry, bool, error) {
 	if r == nil || r.domain == nil || scratch == nil {
 		return node.LeafEntry{}, false, backenddb.ErrNativeSemanticUnsupported
 	}
@@ -95,24 +101,52 @@ func (r *nativeDomainRead) seekGE(start, end []byte, scratch *nativeDomainReadSc
 	}
 	var best node.LeafEntry
 	found := false
-	if r.domain.pending != nil {
-		if row, ok := r.domain.pending.SeekGE(start, end); ok {
+	probe := func(root *memtable.COWRoot) error {
+		if inspect != nil {
+			if err := inspect(); err != nil {
+				return err
+			}
+		}
+		var row memtable.COWRecord
+		var ok bool
+		if reverse {
+			row, ok = root.SeekLT(start, end)
+		} else {
+			row, ok = root.SeekGE(start, end)
+		}
+		if ok && (!found || (!reverse && bytes.Compare(nativeBorrowedStringBytes(row.Key), best.Key) < 0) || (reverse && bytes.Compare(nativeBorrowedStringBytes(row.Key), best.Key) > 0)) {
 			best, found = nativeDomainRecordEntry(row), true
+		}
+		return nil
+	}
+	if r.domain.pending != nil {
+		if err := probe(r.domain.pending); err != nil {
+			return node.LeafEntry{}, false, err
 		}
 	}
 	for source := r.domain.captured; source != nil; source = source.older {
-		if row, ok := source.source.root.SeekGE(start, end); ok {
-			if !found || bytes.Compare(nativeBorrowedStringBytes(row.Key), best.Key) < 0 {
-				best, found = nativeDomainRecordEntry(row), true
-			}
+		if err := probe(source.source.root); err != nil {
+			return node.LeafEntry{}, false, err
 		}
 	}
 	if r.hasBase {
-		entry, ok, err := r.base.SeekGEEntryWithFixedScratch(start, end, scratch.key[:], scratch.leaf[:], &scratch.successor, readLeaf)
+		if inspect != nil {
+			if err := inspect(); err != nil {
+				return node.LeafEntry{}, false, err
+			}
+		}
+		var entry node.LeafEntry
+		var ok bool
+		var err error
+		if reverse {
+			entry, ok, err = r.base.SeekLTEntryWithFixedScratch(start, end, scratch.key[:], scratch.leaf[:], &scratch.successor, readLeaf)
+		} else {
+			entry, ok, err = r.base.SeekGEEntryWithFixedScratch(start, end, scratch.key[:], scratch.leaf[:], &scratch.successor, readLeaf)
+		}
 		if err != nil {
 			return node.LeafEntry{}, false, err
 		}
-		if ok && (!found || bytes.Compare(entry.Key, best.Key) < 0) {
+		if ok && (!found || (!reverse && bytes.Compare(entry.Key, best.Key) < 0) || (reverse && bytes.Compare(entry.Key, best.Key) > 0)) {
 			best, found = entry, true
 		}
 	}

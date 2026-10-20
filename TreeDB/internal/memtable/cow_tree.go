@@ -860,3 +860,13 @@ func (r *COWRoot) SeekGE(start, end []byte) (COWRecord, bool) {
 	}
 	return COWRecord{Key: key, Value: v.value, Ptr: v.ptr, Revision: v.revision, Flags: v.flags}, true
 }
+
+// SeekLT is the borrowed strict predecessor in [start,end); nil end means last.
+// It has the same original source lifetime and allocation contract as SeekGE.
+func (r *COWRoot) SeekLT(start, end []byte) (COWRecord, bool) {
+	key, v, found := cowLookupLT(r.tree, end)
+	if !found || (start != nil && cowKeyCompare(key, start) < 0) {
+		return COWRecord{}, false
+	}
+	return COWRecord{Key: key, Value: v.value, Ptr: v.ptr, Revision: v.revision, Flags: v.flags}, true
+}
