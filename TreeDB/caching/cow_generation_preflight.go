@@ -11,7 +11,9 @@ import (
 // shared budget remains the final admission authority. Pointer placement is
 // predicted by the same existing eligibility policy; revisions change no sizes.
 // The exact final resource charge remains admitted in canonical preparation.
-func (b *Batch) cowGenerationRollover() (*cowRollover, error) {
+// pressure requests one unlocked checkpoint join before any producer runs;
+// it is not a reservation and cannot authorize later canonical preparation.
+func (b *Batch) cowGenerationRollover() (_ *cowRollover, pressure bool, _ error) {
 	c := b.db.cow
 	clear(b.shardCnts)
 	for _, entry := range b.entries {
@@ -38,17 +40,25 @@ func (b *Batch) cowGenerationRollover() (*cowRollover, error) {
 	}
 	max := c.budget.Limits().MaxGenerationBytes
 	rotate := false
+	var total uint64
 	for i, group := range groups {
 		if len(group) == 0 {
 			continue
 		}
 		charge, err := c.writers[i].Estimate(group, memtable.COWPrepareOptions{})
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
+		// Canonical preparation holds every shard's reservation until the
+		// complete cut is ready. Testing one shard's generation misses shared
+		// parent retirement/total pressure from the retained frozen prefix.
+		if charge.Total() > ^uint64(0)-total {
+			return nil, false, memtable.ErrCOWCapacity
+		}
+		total += charge.Total()
 		history := charge.History()
 		if c.generationBase > max || history > max-c.generationBase {
-			return nil, memtable.ErrCOWCapacity
+			return nil, false, memtable.ErrCOWCapacity
 		}
 		// Leave a quarter of the finite generation for exact producer resource
 		// metadata. Oversized single commands still receive full C1 admission;
@@ -59,8 +69,23 @@ func (b *Batch) cowGenerationRollover() (*cowRollover, error) {
 			rotate = true
 		}
 	}
-	if !rotate && b.db.mutableBytes.Load() <= b.db.mutableFlushThreshold() {
-		return nil, nil
+	limits, stats := c.budget.Limits(), c.budget.Stats()
+	// Match retirementFitsLocked's History+Reserved+Deferred arithmetic without
+	// overflowing. Producer resource identities are not known yet; their exact
+	// admission remains with the original canonical prepare, never this trigger.
+	remaining := limits.MaxRetiredBytes
+	for _, n := range [...]uint64{stats.HistoryBytes, stats.ReservedBytes, stats.DeferredBytes, total} {
+		if n > remaining {
+			return nil, true, nil
+		}
+		remaining -= n
 	}
-	return c.prepareRollover()
+	if stats.TotalBytes > limits.MaxTotalBytes || total > limits.MaxTotalBytes-stats.TotalBytes {
+		return nil, true, nil
+	}
+	if !rotate && b.db.mutableBytes.Load() <= b.db.mutableFlushThreshold() {
+		return nil, false, nil
+	}
+	rollover, err := c.prepareRollover()
+	return rollover, false, err
 }

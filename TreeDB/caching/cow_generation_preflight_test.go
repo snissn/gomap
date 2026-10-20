@@ -3,6 +3,7 @@ package caching
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -10,7 +11,183 @@ import (
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/node"
 )
+
+func TestCOWAggregatePressureJoinsCheckpointBeforeProducer(t *testing.T) {
+	for _, held := range []bool{false, true} {
+		t.Run(fmt.Sprintf("held=%t", held), func(t *testing.T) {
+			dir := t.TempDir()
+			backendDir := filepath.Join(dir, "backend")
+			backend, err := backenddb.Open(backenddb.Options{Dir: backendDir, DisableBackgroundPrune: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			// A finite local control exposes parent pressure with little data.
+			// The original Dgraph control retains its unchanged default 512MiB.
+			limits := memtable.DefaultCOWLimits()
+			limits.MaxTotalBytes, limits.MaxRetiredBytes = 64<<20, 64<<20
+			limits.MaxGenerationBytes = 8 << 20
+			db, err := Open(dir, backend, Options{DisableWAL: true, AllowUnsafe: true, MemtableMode: "cow_btree", MemtableShards: 4, COWMemtableLimits: limits, FlushThreshold: 1 << 30, ValueLogPointerThreshold: 1 << 30, ValueLogCompression: uint8(vlogCompressionOff)})
+			if err != nil {
+				_ = backend.Close()
+				t.Fatal(err)
+			}
+			defer db.Close()
+			// Hold the existing flush fence while arranging a real frozen prefix;
+			// every row below enters through the ordinary public raw batch path.
+			db.flushMu.Lock()
+			locked := true
+			defer func() {
+				if locked {
+					db.flushMu.Unlock()
+				}
+			}()
+			var keys [][]byte
+			counts := make([]int, 4)
+			const entries = 64
+			for candidate := 0; len(keys) < entries && candidate < 1000; candidate++ {
+				key := []byte(fmt.Sprintf("pressure-%04d", candidate))
+				shard := db.shardIndex(key)
+				if counts[shard] < entries/4 {
+					counts[shard]++
+					keys = append(keys, key)
+				}
+			}
+			if len(keys) != entries {
+				t.Fatal("failed to construct fixed all-shard raw group")
+			}
+			value := bytes.Repeat([]byte("a"), 1024)
+			for round := 0; round < 4; round++ {
+				b := db.NewBatchWithSize(entries)
+				for _, key := range keys {
+					if err := b.Set(key, value); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err := b.Write(); err != nil {
+					t.Fatal(err)
+				}
+				if err := b.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := db.rolloverCOWForFlush(); err != nil {
+				t.Fatal(err)
+			}
+			var old *Snapshot
+			if held {
+				old, err = db.acquireCOWSnapshotWithError()
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer func() {
+					if old != nil {
+						_ = old.Close()
+					}
+				}()
+			}
+			b := db.NewBatchWithSize(entries)
+			defer b.Close()
+			value[0] = 'z'
+			for _, key := range keys {
+				if err := b.Set(key, value); err != nil {
+					t.Fatal(err)
+				}
+			}
+			stats := db.COWMemoryStats()
+			overhead := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
+			const headroom = 128 << 10
+			// Each shard fits this remaining headroom in isolation. Their
+			// simultaneous canonical reservations do not: this is aggregate
+			// pressure, not an oversized single-shard command or generation.
+			groups := make([][]memtable.COWMutation, len(counts))
+			for _, key := range keys {
+				i := db.shardIndex(key)
+				groups[i] = append(groups[i], memtable.COWMutation{Key: key, Value: value, Flags: node.FlagInline})
+			}
+			var total uint64
+			for i, group := range groups {
+				charge, err := db.cow.writers[i].Estimate(group, memtable.COWPrepareOptions{})
+				if err != nil || charge.Total() >= headroom {
+					t.Fatalf("invalid single-shard pressure setup: charge=%+v err=%v", charge, err)
+				}
+				total += charge.Total()
+			}
+			if total <= headroom {
+				t.Fatalf("all-shard estimate %d does not exceed headroom %d", total, headroom)
+			}
+			if stats.TotalBytes+overhead+headroom >= limits.MaxTotalBytes {
+				t.Fatalf("invalid pressure setup: %+v", stats)
+			}
+			pressure, err := db.cow.budget.AcquireExternal(limits.MaxTotalBytes - stats.TotalBytes - overhead - headroom)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer pressure.Close()
+			beforeSeq, beforeCheckpoints := db.cow.cut.logicalSeq, db.checkpointRuns.Load()
+			result := make(chan error, 1)
+			go func() { result <- b.Write() }()
+			// Admission must wait for the same existing flush owner, not return a
+			// canonical prepare refusal while holding the handoff's writer gate.
+			select {
+			case err := <-result:
+				t.Fatalf("write returned before pressure handoff could run: %v", err)
+			case <-time.After(100 * time.Millisecond):
+			}
+			db.flushMu.Unlock()
+			locked = false
+			select {
+			case err = <-result:
+			case <-time.After(10 * time.Second):
+				t.Fatal("unlocked checkpoint handoff did not finish")
+			}
+			if db.checkpointRuns.Load() != beforeCheckpoints+1 {
+				t.Fatal("aggregate pressure did not join exactly one checkpoint")
+			}
+			if held {
+				if !errors.Is(err, memtable.ErrCOWCapacity) || b.COWReceipt().Assigned || b.COWReceipt().LogicalInstalled || db.cow.cut.logicalSeq != beforeSeq {
+					t.Fatalf("nonreclaimable history changed acceptance: receipt=%+v seq=%d err=%v", b.COWReceipt(), db.cow.cut.logicalSeq, err)
+				}
+				if err := old.Close(); err != nil {
+					t.Fatal(err)
+				}
+				old = nil
+				// The caller can submit the still-unassigned staged batch after its
+				// own retained cut ends; no accepted command is internally replayed.
+				err = b.Write()
+			}
+			if err != nil || db.cow.cut.logicalSeq != beforeSeq+1 {
+				t.Fatalf("raw command completion seq=%d err=%v", db.cow.cut.logicalSeq, err)
+			}
+			pressure.Close()
+			if err := b.Close(); err != nil {
+				t.Fatal(err)
+			}
+			for _, key := range keys {
+				if got, err := db.Get(key); err != nil || !bytes.Equal(got, value) {
+					t.Fatalf("current %q=(%q,%v)", key, got, err)
+				}
+			}
+			if err := db.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if stats := db.COWMemoryStats(); stats.TotalBytes != 0 {
+				t.Fatalf("original parent not drained: %+v", stats)
+			}
+			reopened, err := backenddb.Open(backenddb.Options{Dir: backendDir})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer reopened.Close()
+			for _, key := range keys {
+				if got, err := reopened.Get(key); err != nil || !bytes.Equal(got, value) {
+					t.Fatalf("reopened %q=(%q,%v)", key, got, err)
+				}
+			}
+		})
+	}
+}
 
 func cowFiniteGenerationFixture(t *testing.T) *DB {
 	t.Helper()
