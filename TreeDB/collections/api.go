@@ -532,6 +532,7 @@ type collectionRootOverlayCompactionResult struct {
 // StoredDocumentJSONMaterializer reuses any resources needed to materialize
 // stored collection documents as JSON.
 type StoredDocumentJSONMaterializer struct {
+	nativeRead          *NativeJSONRead
 	documentFormat      DocumentFormat
 	templateResolver    templateV1Resolver
 	closeFn             func() error
@@ -546,6 +547,8 @@ func (m *StoredDocumentJSONMaterializer) Close() error {
 	closeFn := m.closeFn
 	m.closeFn = nil
 	m.beginForegroundRead = nil
+	m.nativeRead = nil
+	m.templateResolver = nil
 	return closeFn()
 }
 
@@ -562,6 +565,9 @@ func (m *StoredDocumentJSONMaterializer) DocumentFormat() DocumentFormat {
 func (m *StoredDocumentJSONMaterializer) StoredDocumentJSON(document []byte) ([]byte, error) {
 	if m == nil {
 		return nil, errCollectionNil
+	}
+	if m.nativeRead != nil {
+		return m.nativeRead.templateJSON(document)
 	}
 	endForegroundRead := noCollectionForegroundReadEnd
 	if m.beginForegroundRead != nil {
@@ -11826,6 +11832,9 @@ func (c *Collection) InsertBatchWithTemplateV1Encoder(ids, documents [][]byte, e
 	if encoder == nil {
 		return nil, errors.New("collections: template-v1 encoder cannot be nil")
 	}
+	if c != nil && c.nativeJSON != nil {
+		return c.nativeInsertTemplateBatch(ids, documents, encoder)
+	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
 	admissionState := c.lockCollectionCommandWALAdmission()
@@ -12073,8 +12082,11 @@ func (c *Collection) insertBatchWithCommandWALIntent(ids, documents [][]byte, tr
 
 func (c *Collection) insertBatchWithCommandWALIntentSchemaLocked(ids, documents [][]byte, trustedValidBSON bool, templateEncoder *TemplateV1Encoder, commandWALIntent *backenddb.CommandWALIntent, execOpts insertBatchExecutionOptions) (resultIDs [][]byte, resultErr error) {
 	if c != nil && c.nativeJSON != nil {
-		if trustedValidBSON || templateEncoder != nil || commandWALIntent != nil || execOpts.trustedFloat32Projection != nil || execOpts.prepared != nil || execOpts.splitInsert != nil || execOpts.insertStats != nil {
+		if trustedValidBSON || commandWALIntent != nil || execOpts.trustedFloat32Projection != nil || execOpts.prepared != nil || execOpts.splitInsert != nil || execOpts.insertStats != nil {
 			return nil, backenddb.ErrNativeSemanticUnsupported
+		}
+		if templateEncoder != nil {
+			return c.nativeInsertTemplateBatch(ids, documents, templateEncoder)
 		}
 		return c.nativeInsertBatch(ids, documents)
 	}
@@ -15017,6 +15029,9 @@ func (c *Collection) UpdateBatch(items []UpdateBatchItem) ([]UpdateBatchResult, 
 // present so callers can preserve ordered per-document update semantics. When
 // batched=false and err=nil, the returned results are zero-valued with len(items).
 func (c *Collection) UpdateBatchIfNoSecondaryUniqueIndexes(items []UpdateBatchItem) ([]UpdateBatchResult, bool, error) {
+	if c != nil && c.nativeJSON != nil {
+		return c.nativeUpdateBatchMode(items, updateBatchModeNoSecondaryUniqueIndexes, nil)
+	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
 	admissionState := c.lockCollectionCommandWALAdmission()
@@ -15036,6 +15051,9 @@ func (c *Collection) UpdateBatchIfNoSecondaryUniqueIndexes(items []UpdateBatchIt
 // for unique value mutations. When batched=false and err=nil, the returned
 // results are zero-valued with len(items).
 func (c *Collection) UpdateBatchIfNoSecondaryUniqueIndexChanges(items []UpdateBatchItem) ([]UpdateBatchResult, bool, error) {
+	if c != nil && c.nativeJSON != nil {
+		return c.nativeUpdateBatchMode(items, updateBatchModeNoSecondaryUniqueIndexChanges, nil)
+	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
 	admissionState := c.lockCollectionCommandWALAdmission()
@@ -18077,12 +18095,24 @@ func buildDirectBufferedSecondaryRootPlans(collectionName string, runtimes []ind
 				continue
 			}
 			for _, encoded := range item.oldState.valuesAt(runtimeIdx) {
-				keyBytes := len(encoded) + len(item.documentID)
+				keyBytes, err := indexEntryKeySizeForValueType(runtime.def.valueType, encoded, item.documentID)
+				if err != nil {
+					return nil, 0, err
+				}
+				if keyBytes > int(^uint(0)>>1)-runStats.KeyBytes {
+					return nil, 0, errors.New("collections: index key backing too large")
+				}
 				runStats.Deletes++
 				runStats.KeyBytes += keyBytes
 			}
 			for _, encoded := range item.newState.valuesAt(runtimeIdx) {
-				keyBytes := len(encoded) + len(item.documentID)
+				keyBytes, err := indexEntryKeySizeForValueType(runtime.def.valueType, encoded, item.documentID)
+				if err != nil {
+					return nil, 0, err
+				}
+				if keyBytes > int(^uint(0)>>1)-runStats.KeyBytes {
+					return nil, 0, errors.New("collections: index key backing too large")
+				}
 				runStats.Sets++
 				runStats.KeyBytes += keyBytes
 			}
@@ -22699,6 +22729,26 @@ func (c *Collection) Get(documentID []byte) ([]byte, error) {
 // should reuse one materializer so the backend snapshot and template resolver
 // are shared across the request.
 func (c *Collection) NewStoredDocumentJSONMaterializer() (*StoredDocumentJSONMaterializer, error) {
+	if c != nil && c.nativeJSON != nil {
+		read, err := c.nativeJSON.Capture(c.name)
+		if err != nil {
+			return nil, err
+		}
+		format := normalizedDocumentFormat(read.meta.Options.DocumentFormat)
+		if format == DocumentFormatTemplateV1 {
+			return &StoredDocumentJSONMaterializer{documentFormat: format, nativeRead: read, closeFn: read.Close}, nil
+		}
+		err = read.Close()
+		if err != nil {
+			return nil, err
+		}
+		if format != DocumentFormatJSON && format != DocumentFormatBSON {
+			return nil, backenddb.ErrNativeSemanticUnsupported
+		}
+		// JSON copies and canonical BSON conversion use only the captured
+		// document format; neither needs a retained template resolver.
+		return &StoredDocumentJSONMaterializer{documentFormat: format}, nil
+	}
 	if c == nil {
 		return nil, errCollectionNil
 	}
@@ -23480,6 +23530,11 @@ func (c *Collection) scanDocumentsByIndexRange(indexName string, opts IndexRange
 	if c == nil {
 		return false, false, errCollectionNil
 	}
+	if c.nativeJSON != nil {
+		return c.scanNativeIndexRange(indexName, opts, true, func(id, document []byte) (bool, error) {
+			return fn(BorrowedDocumentRecord{ID: id, Document: document})
+		})
+	}
 	if c.db == nil {
 		return false, false, errCollectionDBNil
 	}
@@ -23731,7 +23786,9 @@ func orderedBSONIndexRequiresCompoundRangeAPI(idx IndexDefinition) bool {
 
 func (c *Collection) scanIndexRange(indexName string, opts IndexRangeOptions, fn func(id []byte) (bool, error)) (bool, bool, error) {
 	if c != nil && c.nativeJSON != nil {
-		return false, false, backenddb.ErrNativeSemanticUnsupported
+		return c.scanNativeIndexRange(indexName, opts, false, func(id, _ []byte) (bool, error) {
+			return fn(id)
+		})
 	}
 	if c == nil {
 		return false, false, errCollectionNil
@@ -24682,6 +24739,12 @@ func (c *Collection) ScanDocuments(maxDocuments int) ([]DocumentRecord, bool, er
 // the collection is exhausted, or fn returns false. Unlike ScanDocumentsFunc,
 // it does not materialize or reconstruct document payloads.
 func (c *Collection) ScanDocumentIDsFunc(maxDocuments int, fn func([]byte) (bool, error)) (bool, error) {
+	if c != nil && c.nativeJSON != nil {
+		if fn == nil {
+			return false, errors.New("collections: scan callback is nil")
+		}
+		return c.nativeScanDocuments(nil, maxDocuments, false, func(record DocumentRecord) (bool, error) { return fn(record.ID) })
+	}
 	if c == nil {
 		return false, errCollectionNil
 	}
@@ -24837,6 +24900,9 @@ func (c *Collection) scanDocumentsFunc(afterID []byte, maxDocuments int, fn func
 }
 
 func (c *Collection) scanDocumentsFuncWithVectorMutationState(afterID []byte, maxDocuments int, fn func(DocumentRecord) (bool, error), admissionLocked, vectorMutationLocked bool) (bool, error) {
+	if c != nil && c.nativeJSON != nil {
+		return c.nativeScanDocuments(afterID, maxDocuments, true, fn)
+	}
 	if c == nil {
 		return false, errCollectionNil
 	}

@@ -13,6 +13,9 @@ import (
 // raw barrier. Both public frontends use the same NativeJSONTxn preparation.
 func (m *CollectionManager) openNativeCollection(name string) (collection *Collection, resultErr error) {
 	read, err := m.nativeJSON.Capture(name)
+	if errors.Is(err, tree.ErrKeyNotFound) {
+		return nil, errors.Join(ErrCollectionNotFound, err)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -82,7 +85,16 @@ func (v *CollectionReadView) fetchNativeDocuments(ids [][]byte, opts DocumentFet
 	if v.closed || v.nativeRead == nil {
 		return DocumentFetchResponse{}, backenddb.ErrClosed
 	}
-	if len(opts.IncludePaths)+len(opts.ExcludePaths) != 0 || (opts.Format != "" && opts.Format != DocumentFormatJSON) {
+	// Reuse the public stored-format contract before returning owned raw bytes.
+	// Projection remains outside the native document capability.
+	if _, err := normalizeDocumentFetchProjection(v.nativeRead.meta, DocumentFetchOptions{Format: opts.Format}); err != nil {
+		return DocumentFetchResponse{}, err
+	}
+	if len(opts.IncludePaths)+len(opts.ExcludePaths) != 0 {
+		if normalizedDocumentFormat(v.nativeRead.meta.Options.DocumentFormat) == DocumentFormatBSON {
+			_, err := normalizeDocumentFetchProjection(v.nativeRead.meta, opts)
+			return DocumentFetchResponse{}, err
+		}
 		return DocumentFetchResponse{}, backenddb.ErrNativeSemanticUnsupported
 	}
 	out := DocumentFetchResponse{Results: make([]DocumentFetchResult, len(ids))}
@@ -109,4 +121,47 @@ func (v *CollectionReadView) fetchNativeDocuments(ids [][]byte, opts DocumentFet
 		out.Stats.OutputBytes += uint64(len(value))
 	}
 	return out, nil
+}
+
+// The existing public encoder uses the SAME private native transaction. Learned
+// IDs become caller state only after original publication succeeds.
+func (c *Collection) nativeInsertTemplateBatch(ids, documents [][]byte, encoder *TemplateV1Encoder) (result [][]byte, resultErr error) {
+	if c.manager.isClosing() {
+		return nil, backenddb.ErrClosed
+	}
+	tx, err := c.nativeJSON.Begin(c.name)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { resultErr = errors.Join(resultErr, tx.Close()) }()
+	g := tx.binding(c.name)
+	if normalizedDocumentFormat(g.probe.meta.Options.DocumentFormat) != DocumentFormatTemplateV1 {
+		return nil, errors.New("collections: InsertBatchWithTemplateV1Encoder requires a template-v1 collection")
+	}
+	if encoder.learnedTemplateV1ScopeMismatch(c) {
+		return nil, errors.New("collections: template-v1 encoder is bound to a different collection")
+	}
+	if len(ids) != len(documents) {
+		return nil, backenddb.ErrNativeSemanticUnsupported
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	g.allowStored = encoder.allowsTemplateV1StoredDocuments(c)
+	g.learnTemplates = true
+	if err = tx.InsertBatch(ids, documents); err != nil {
+		return nil, err
+	}
+	result, err = cloneBatchDocumentIDs(ids)
+	if err != nil {
+		return nil, err
+	}
+	// Commit detaches and refunds the stage. Keep only caller-owned scalar
+	// hash/ID pairs for teaching the encoder after publication succeeds.
+	learned := append([]templateV1LearnedTemplate(nil), g.templateLearned...)
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
+	encoder.learnTemplateV1Templates(c, learned)
+	return result, nil
 }

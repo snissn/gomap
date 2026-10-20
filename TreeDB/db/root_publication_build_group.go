@@ -56,6 +56,7 @@ type RootPublicationBuildGroup struct {
 	cleanupErr             error
 	primaryFailedNext      *RootPublicationBuildGroup
 	primaryFailure         primaryCleanupFailureV5
+	dataCleanupFailure     originalDBCleanupFailure
 
 	baseRoot    uint64
 	currentRoot uint64
@@ -121,6 +122,7 @@ func (db *DB) beginRootPublicationBuildGroup(basis *Snapshot, lease *StableResou
 		return nil, ErrClosed
 	}
 	group := &RootPublicationBuildGroup{db: db, captureLease: lease}
+	group.dataCleanupFailure.payload = group
 	if lease == nil {
 		db.teardownMu.RLock()
 		group.teardownLocked = true
@@ -591,7 +593,7 @@ func (group *RootPublicationBuildGroup) cleanupLocked(abandon bool) error {
 		group.closed = true
 		// The same physical owner retains the exact group, DATA tracker, pins,
 		// and failed original constructors before caller serialization is released.
-		group.cleanupErr = group.retainPrimaryFailureLocked(primaryErr)
+		group.cleanupErr = group.retainFailureLocked(primaryErr)
 		if group.capturedBasis != nil {
 			group.capturedBasis.endRead()
 			group.capturedBasis = nil
@@ -605,7 +607,7 @@ func (group *RootPublicationBuildGroup) cleanupLocked(abandon bool) error {
 			// existing terminal build-failure custody, never retry destruction.
 			group.failed = true
 			group.closed = true
-			group.cleanupErr = group.retainPrimaryFailureLocked(err)
+			group.cleanupErr = group.retainFailureLocked(err)
 			if group.capturedBasis != nil {
 				group.capturedBasis.endRead()
 				group.capturedBasis = nil
@@ -659,10 +661,21 @@ func (group *RootPublicationBuildGroup) releaseBuildLocksLocked() {
 
 // Failure custody extends the existing original physical-owner chain. It
 // neither refunds unresolved charge nor introduces another cleanup lifecycle.
-func (group *RootPublicationBuildGroup) retainPrimaryFailureLocked(err error) error {
+func (group *RootPublicationBuildGroup) retainFailureLocked(err error) error {
 	group.db.publicationPoisoned.Store(true)
-	group.primaryFailure.causes = [3]error{err, rootpublication.ErrResourceOwnership}
 	owner := group.idx.primaryOwner
+	if owner == nil {
+		// DATA groups retain their original closure, tracker and pins on the
+		// existing DB failure graph. There is no PRIMARY physical owner here.
+		group.dataCleanupFailure.retainCause(0, err)
+		group.dataCleanupFailure.retainCause(1, rootpublication.ErrResourceOwnership)
+		group.db.retainOriginalCleanupError(&group.dataCleanupFailure)
+		if group.idx.metadata != nil {
+			group.idx.metadata.CleanupFailed()
+		}
+		return &group.dataCleanupFailure
+	}
+	group.primaryFailure.causes = [3]error{err, rootpublication.ErrResourceOwnership}
 	owner.mu.Lock()
 	defer owner.mu.Unlock()
 	group.primaryFailedNext = owner.failedBuildGroups

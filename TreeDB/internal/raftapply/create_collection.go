@@ -44,6 +44,9 @@ func (h *Harness) applyCreateCollectionV1(entry raftentry.CommandEntryV1, meta A
 	if alreadyExisting {
 		checkPublishCatalogVersion = nil
 	}
+	if manager := h.replayCollectionManager(); manager != nil && manager.UsesNativeCommandWALApply() {
+		return h.applyNativeCreateCollectionV1(entry, meta, collectionMeta)
+	}
 	frame, err := commandwalapply.CatalogCreateCollectionFrame(payload)
 	if err != nil {
 		return raftentry.ApplyResultV1{}, codedError(raftentry.ErrorMalformedEntryV1, "raftapply: lower catalog create collection: %v", err)
@@ -174,6 +177,11 @@ func (h *Harness) preflightCreateCollectionV1(meta collections.CollectionMeta, p
 	manager := h.replayCollectionManager()
 	if manager == nil {
 		return false, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: nil collection manager cannot preflight create collection")
+	}
+	if manager.UsesNativeCommandWALApply() {
+		if err := manager.PreflightNativeCommandWALCreate(meta); err != nil {
+			return false, codeCollectionApplyError(err)
+		}
 	}
 	existing, err := manager.OpenCollection(meta.Name)
 	if errors.Is(err, collections.ErrCollectionNotFound) {

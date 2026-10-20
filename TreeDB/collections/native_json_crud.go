@@ -15,29 +15,78 @@ import (
 
 // Existing Collection methods own one original ConditionalTxn. The callback
 // scope completes before CommitNative: logical reprepare never invokes a body.
-func (c *Collection) nativeUpdateBatch(items []UpdateBatchItem) (results []UpdateBatchResult, resultErr error) {
+func (c *Collection) nativeUpdateBatch(items []UpdateBatchItem) ([]UpdateBatchResult, error) {
+	results, _, err := c.nativeUpdateBatchMode(items, updateBatchModeAny, nil)
+	return results, err
+}
+
+// A conditional decline closes the original private transaction without claiming
+// an identity. The same captured metadata and encoded old/new scalar states are
+// used by ordinary callbacks and structured BSON updates.
+func (c *Collection) nativeUpdateBatchMode(items []UpdateBatchItem, mode updateBatchMode, bsonItems []BSONSetUpdateBatchItem) (results []UpdateBatchResult, complete bool, resultErr error) {
 	if c.manager.isClosing() {
-		return nil, backenddb.ErrClosed
+		return nil, false, backenddb.ErrClosed
 	}
-	if len(items) == 0 {
-		return nil, nil
+	// Preserve the ordinary empty-batch fast path. Structured batches still
+	// validate the captured BSON role, including when the input is empty.
+	if bsonItems == nil && len(items) == 0 {
+		return nil, true, nil
 	}
 	tx, err := c.nativeJSON.Begin(c.name)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer func() { resultErr = errors.Join(resultErr, tx.Close()) }()
+	count := len(items)
+	if bsonItems != nil {
+		count = len(bsonItems)
+	}
+	g := tx.binding(c.name)
+	if bsonItems != nil {
+		items, err = tx.prepareNativeBSONSetItems(c.name, bsonItems)
+		if err != nil {
+			return nil, false, err
+		}
+	}
+	if len(items) == 0 {
+		return nil, true, nil
+	}
+	if mode == updateBatchModeNoSecondaryUniqueIndexes && collectionMetaHasSecondaryUniqueIndex(g.probe.meta) {
+		if err = tx.admitRowControls(g, count); err != nil {
+			return nil, false, err
+		}
+		for _, item := range items {
+			if err = tx.admitRowDocument(g, item.DocumentID, nil); err != nil {
+				return nil, false, err
+			}
+		}
+		if _, err = prepareUpdateBatchItems(items); err != nil {
+			return nil, false, err
+		}
+		return make([]UpdateBatchResult, count), false, nil
+	}
 	results, err = tx.UpdateBatch(items)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	if len(tx.members) == 0 {
-		return results, nil
+	if mode == updateBatchModeNoSecondaryUniqueIndexChanges && collectionMetaHasSecondaryUniqueIndex(g.probe.meta) && len(tx.members) != 0 {
+		tx.mu.Lock()
+		_, _, _, err = nativeJSONFinalRowsResolved(g.name, g.probe.meta, &g.rows, func(n uint64) error { return tx.admitStage(g, n) }, func(doc []byte) error { return tx.prepareValidation(g, doc) }, mode, g.templates)
+		tx.mu.Unlock()
+		if errors.Is(err, errUpdateBatchChangesSecondaryUniqueIndex) {
+			clear(results)
+			return results, false, nil
+		}
+		if err != nil {
+			return nil, false, err
+		}
 	}
-	if err = tx.Commit(); err != nil {
-		return nil, err
+	if len(tx.members) != 0 {
+		if err = tx.Commit(); err != nil {
+			return nil, false, err
+		}
 	}
-	return results, nil
+	return results, true, nil
 }
 func (c *Collection) nativeDeleteBatch(ids [][]byte) (count int, resultErr error) {
 	if c.manager.isClosing() {
@@ -111,7 +160,10 @@ func buildNativeCRUDFinalPlan(name string, opts collectionOptions, runtimes []in
 	slices.SortFunc(plan.indexStateEntries, func(a, b directBufferedRootEntry) int { return bytes.Compare(a.key, b.key) })
 	for i := range plan.secondaryRootPlans {
 		rows := plan.secondaryRootPlans[i].entries
-		slices.SortFunc(rows, func(a, b directBufferedSecondaryRootEntry) int { return bytes.Compare(a.key, b.key) })
+		// The maintained builder emits deletes before sets. Overlapping old/new
+		// multikey memberships therefore have equal keys whose final set must
+		// remain last when the native writer applies the sorted mutations.
+		slices.SortStableFunc(rows, func(a, b directBufferedSecondaryRootEntry) int { return bytes.Compare(a.key, b.key) })
 	}
 	return plan, nil
 }

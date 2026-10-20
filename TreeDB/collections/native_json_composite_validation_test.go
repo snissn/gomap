@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/workstats"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 // Exercise the registered startup replay executor with a real persisted schema
@@ -18,22 +20,47 @@ func TestNativeJSONCompositeReplayValidatesErasedDocuments(t *testing.T) {
 		for _, variant := range []struct {
 			name, document, wantError string
 			indexed                   bool
+			bsonFormat                bool
 		}{
-			{"unindexed-opaque-cancellation", `{"email":`, "", false},
-			{"indexed-invalid-json", `{"email":`, "invalid JSON", true},
-			{"indexed-invalid-scalar", `{"email":17}`, "must be string", true},
+			{"unindexed-opaque-cancellation", `{"email":`, "", false, false},
+			{"indexed-invalid-json", `{"email":`, "invalid JSON", true, false},
+			{"indexed-invalid-scalar", `{"email":17}`, "must be string", true, false},
 			// This temporarily collides with u1, but the subsequent delete removes
 			// that intermediate owner. Uniqueness is deliberately final-state only.
-			{"indexed-valid-cancellation", `{"email":"a@example.com"}`, "", true},
+			{"indexed-valid-cancellation", `{"email":"a@example.com"}`, "", true, false},
+			{"unindexed-invalid-bson", "", "invalid BSON", false, true},
+			{"indexed-invalid-bson", "", "invalid BSON", true, true},
+			{"bson-indexed-invalid-scalar", "", "must be string", true, true},
+			{"bson-indexed-valid-cancellation", "", "", true, true},
 		} {
 			t.Run(operation+"/"+variant.name, func(t *testing.T) {
 				meta := CollectionMeta{Name: "users", Options: CollectionOptions{DocumentFormat: DocumentFormatJSON}}
 				if variant.indexed {
 					meta.Indexes = []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true}}
 				}
+				seed := [][]byte{[]byte(`{"email":"a@example.com"}`), []byte(`{"email":"b@example.com"}`)}
+				document := []byte(variant.document)
+				if variant.bsonFormat {
+					meta.Options.DocumentFormat = DocumentFormatBSON
+					encode := func(value any) []byte {
+						t.Helper()
+						out, err := bson.Marshal(bson.D{{Key: "email", Value: value}})
+						if err != nil {
+							t.Fatal(err)
+						}
+						return out
+					}
+					seed = [][]byte{encode("a@example.com"), encode("b@example.com")}
+					document = encode("a@example.com")
+					if strings.Contains(variant.name, "invalid-bson") {
+						document = document[:len(document)-1]
+					}
+					if strings.Contains(variant.name, "invalid-scalar") {
+						document = encode(int32(17))
+					}
+				}
 				dir := prepareCollectionCommandWALDir(t, meta, collectionCommandWALSetupInsert{
-					ids:  [][]byte{[]byte("u1"), []byte("u2")},
-					docs: [][]byte{[]byte(`{"email":"a@example.com"}`), []byte(`{"email":"b@example.com"}`)},
+					ids: [][]byte{[]byte("u1"), []byte("u2")}, docs: seed,
 				})
 				// Read the identity actually published by CreateCollection; no test
 				// identity, native state or replay token is fabricated.
@@ -68,7 +95,7 @@ func TestNativeJSONCompositeReplayValidatesErasedDocuments(t *testing.T) {
 
 				id := []byte("u3")
 				kind, format := commitlog.CommandKindCollectionInsertBatchByID, commitlog.PayloadFormatCollectionInsertBatchByIDV1
-				docs := []commitlog.CollectionDocument{{ID: id, Document: []byte(variant.document)}}
+				docs := []commitlog.CollectionDocument{{ID: id, Document: document}}
 				payload, err := commitlog.EncodeCollectionInsertBatchByIDPayload(meta.Name, docs)
 				if operation == "update" {
 					id = []byte("u2")
@@ -148,7 +175,13 @@ func TestNativeJSONCompositeReplayValidatesErasedDocuments(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				assertCollectionDocument(t, col, "u1", `{"email":"a@example.com"}`)
+				if variant.bsonFormat {
+					if got, err := col.Get([]byte("u1")); err != nil || !bytes.Equal(got, seed[0]) {
+						t.Fatalf("original row changed: got=%x err=%v", got, err)
+					}
+				} else {
+					assertCollectionDocument(t, col, "u1", `{"email":"a@example.com"}`)
+				}
 				if got, err := col.Get(id); err != nil || got != nil {
 					t.Fatalf("canceled row=%s err=%v", got, err)
 				}

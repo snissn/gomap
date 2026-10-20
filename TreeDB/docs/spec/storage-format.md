@@ -4308,3 +4308,8 @@ canonical metadata, with physical roots reconstructed by one original replay
 build group. Kind **200** retains its create-collection meaning; collection
 metadata and page formats are unchanged. See the native scalar index catalog
 transition in [user-command-wal.md](user-command-wal.md) for the exact payload.
+
+Native deterministic JSON apply reuses the existing catalog-create and by-ID
+insert/update/delete singleton command kinds and payload encodings. Native
+assignment and exact physical-seal completion introduce no on-disk format or
+sidecar; see [write-path-and-durability.md](write-path-and-durability.md#native-deterministic-collection-apply).

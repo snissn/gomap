@@ -261,7 +261,9 @@ func parseTemplateV1InsertEnvelope(raw []byte) (templateV1ParsedInsertDocument, 
 	if err != nil {
 		return templateV1ParsedInsertDocument{}, err
 	}
-	if templateCount > uint64(len(raw)) {
+	// A record requires its 32-byte hash, a length byte, TD1T and a field
+	// count byte. Reject impossible counts before allocating record headers.
+	if templateCount > uint64((len(raw)-pos)/38) {
 		return templateV1ParsedInsertDocument{}, errors.New("collections: malformed template-v1 template count")
 	}
 	records := make([]templateV1Record, 0, int(templateCount))
@@ -922,7 +924,11 @@ func templateV1EncoderScopeForCollection(collection *Collection) templateV1Encod
 	if collection == nil {
 		return templateV1EncoderScope{}
 	}
-	return templateV1EncoderScope{db: collection.db, collection: collection.meta.Name}
+	database := collection.db
+	if collection.nativeJSON != nil {
+		database = collection.nativeJSON.db
+	}
+	return templateV1EncoderScope{db: database, collection: collection.meta.Name}
 }
 
 func (e *TemplateV1Encoder) encodeStoredDocumentWithLearnedTemplates(root []byte, state *templateV1BuildState) ([]byte, bool, error) {

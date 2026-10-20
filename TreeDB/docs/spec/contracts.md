@@ -33,6 +33,36 @@ before overlapping Close disposes its original cache resources. WAL and on-disk
 formats remain unchanged. The authority is not shared with generic callbacks,
 pack, vacuum, or offline rewrite; see [value-log lifecycle](value-log-lifecycle.md).
 
+For explicitly activated native collection handles, eligible BSON collections
+share the ordinary scalar index DDL and deterministic document producer paths.
+Scalar multikey JSON/BSON indexes use the maintained array/dotted-path extractor
+and sorted distinct encoded values, with final whole-transaction unique ownership.
+Range APIs return each document at its first matching encoded value; limits and
+truncation count distinct live documents. Operation-local deduplication and
+per-value encoding/extraction backing are admitted before allocation under the
+original native budget. Compound/typed-array eligibility is unchanged.
+`UpdateBSONSet` retains top-level field validation and `_id` preservation; its
+canonical command contains the resulting full BSON replacement, using the
+existing update payload format. Conditional callback and BSON-set batches decline
+before canonical assignment when the captured schema has disallowed secondary
+unique indexes or the maintained old/new encoder detects a unique-value change.
+A decline returns zero-valued per-item results and `batched=false`; schema-based
+declines do not invoke update callbacks. A numeric BSON type change with the same
+BSONOrderedV2 key is not a unique-value change. Captured views retain their
+original schema and BSON bytes across ordinary updates and index DDL. See
+[`native_json_public.md`](../../collections/native_json_public.md) for the
+explicit activation, eligibility and lifetime boundary. No frame format or
+preassigned native publication authority is added.
+
+For eligible native template-v1 collections, ordinary document mutation and
+scalar index DDL share the maintained template record domain and compact primary
+representation. Successful encoder learning is scoped to the original database
+and collection. Captured JSON materializers resolve templates against their own
+retained cut; later template allocation cannot reinterpret a held document.
+Canonical replay validates every original member before final-row cancellation,
+and publishes template and document/index roots together. No frame or template
+format changes are introduced; specialized producer eligibility remains separate.
+
 ## 1. Key Model
 
 - Raw KV keys and values are byte strings.

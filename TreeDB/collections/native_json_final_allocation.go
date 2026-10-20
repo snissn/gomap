@@ -70,11 +70,15 @@ func nativeJSONFinalPlanCharge(name string, opts collectionOptions, runtimes []i
 			for _, values := range [2][][]byte{item.oldState.valuesAt(runtimeIdx), item.newState.valuesAt(runtimeIdx)} {
 				for _, value := range values {
 					limit := int(^uint(0) >> 1)
-					if entries == limit || len(value) > limit-len(item.documentID) || len(value)+len(item.documentID) > limit-keyBytes {
+					size, err := indexEntryKeySizeForValueType(runtime.def.valueType, value, item.documentID)
+					if err != nil {
+						return 0, 0, 0, err
+					}
+					if entries == limit || size > limit-keyBytes {
 						return capacity()
 					}
 					entries++
-					keyBytes += len(value) + len(item.documentID)
+					keyBytes += size
 				}
 			}
 		}

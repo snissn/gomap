@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
@@ -47,8 +48,11 @@ type CommittedEntryV1 struct {
 
 // Options configures one local single-group FSM instance.
 type Options struct {
-	DB      *backenddb.DB
-	Cluster raftcluster.Config
+	DB *backenddb.DB
+	// NativeDatabase transfers the original public owner on successful Open only.
+	// DB must be its borrowed native backend; the owner also governs restore.
+	NativeDatabase *treedb.DB
+	Cluster        raftcluster.Config
 
 	DecodeLimits          nativewire.Limits
 	StoreOptions          raftapply.DurableApplyStoreOptions
@@ -76,8 +80,10 @@ type FSM struct {
 	snapshotOwner                raftcluster.RaftSnapshotV1
 	snapshotWorkRelease          func()
 
-	db          *backenddb.DB
-	metadataDir string
+	db                *backenddb.DB
+	nativeDatabase    *treedb.DB
+	nativeCollections bool
+	metadataDir       string
 
 	decodeLimits nativewire.Limits
 	storeOptions raftapply.DurableApplyStoreOptions
@@ -129,6 +135,15 @@ func Open(opts Options) (*FSM, error) {
 	if opts.DB == nil {
 		return nil, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "nil DB")
 	}
+	if opts.NativeDatabase != nil {
+		backend, err := opts.NativeDatabase.NativeSemanticBackend()
+		if err != nil {
+			return nil, err
+		}
+		if backend != opts.DB || !opts.Cluster.DisableSideStores || !opts.SnapshotRestoreDBOptions.DisableSideStores || opts.SnapshotRestoreDBOptions.MemtableMode != "cow_btree" {
+			return nil, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "native public owner/backend or flat group layout mismatch")
+		}
+	}
 	limits, err := opts.SnapshotCaptureLimits.normalized()
 	if err != nil {
 		return nil, err
@@ -174,6 +189,9 @@ func Open(opts Options) (*FSM, error) {
 	keepNamespace = true
 	return &FSM{
 		snapshotNamespace:     namespace,
+		nativeDatabase:        opts.NativeDatabase,
+		nativeCollections:     opts.NativeDatabase != nil,
+		ownsDB:                opts.NativeDatabase != nil,
 		snapshotCaptureLimits: limits, db: opts.DB,
 		metadataDir:  metadataDir,
 		decodeLimits: opts.DecodeLimits,
@@ -210,12 +228,20 @@ func (f *FSM) Close() error {
 		if f.results != nil {
 			errs = append(errs, f.results.Close())
 		}
-		if f.ownsDB && f.db != nil {
+		if !f.nativeCollections && f.ownsDB && f.db != nil {
 			errs = append(errs, f.db.Close())
 		}
 		if f.sideDBs != nil {
 			errs = append(errs, f.sideDBs())
 			f.sideDBs = nil
+		}
+	}
+	// A refused public-owner close remains retryable through this same FSM.
+	if f.nativeDatabase != nil {
+		err := f.nativeDatabase.Close()
+		errs = append(errs, err)
+		if err == nil {
+			f.nativeDatabase = nil
 		}
 	}
 	f.mu.Unlock()

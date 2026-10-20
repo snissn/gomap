@@ -9,6 +9,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 func TestNativeExistingJSONIndexDDLRejectsClosedManager(t *testing.T) {
@@ -79,6 +80,25 @@ func TestNativeExistingJSONIndexDDLRejectsClosedManager(t *testing.T) {
 // primary root. Catalog changes also conflict with every earlier schema binding,
 // including read-only bindings of a transaction that writes another collection.
 func TestNativeExistingJSONIndexDDLLifecycle(t *testing.T) {
+	runNativeExistingIndexDDLLifecycle(t, collections.DocumentFormatJSON)
+}
+func TestNativeExistingBSONIndexDDLLifecycle(t *testing.T) {
+	runNativeExistingIndexDDLLifecycle(t, collections.DocumentFormatBSON)
+}
+
+func nativeIndexDDLDocument(t *testing.T, format collections.DocumentFormat, source string) []byte {
+	t.Helper()
+	if format == collections.DocumentFormatJSON {
+		return []byte(source)
+	}
+	var value bson.D
+	if err := bson.UnmarshalExtJSON([]byte(source), false, &value); err != nil {
+		t.Fatal(err)
+	}
+	return nativeBSONDocument(t, value)
+}
+
+func runNativeExistingIndexDDLLifecycle(t *testing.T, format collections.DocumentFormat) {
 	for _, profile := range []Profile{ProfileCommandWALDurable, ProfileCommandWALRelaxed, ProfileNoWALFast} {
 		t.Run(string(profile), func(t *testing.T) {
 			opts := indexedSliceOptions(profile, t.TempDir())
@@ -102,7 +122,7 @@ func TestNativeExistingJSONIndexDDLLifecycle(t *testing.T) {
 				}
 			})
 			for _, name := range []string{"users", "audit"} {
-				if _, err := manager.CreateCollection(&collections.CollectionMeta{Name: name}); err != nil {
+				if _, err := manager.CreateCollection(&collections.CollectionMeta{Name: name, Options: collections.CollectionOptions{DocumentFormat: format}}); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -132,11 +152,11 @@ func TestNativeExistingJSONIndexDDLLifecycle(t *testing.T) {
 					}
 				}
 			}
-			original := []byte(`{"email":"a@example.com","city":"hnl"}`)
+			original := nativeIndexDDLDocument(t, format, `{"email":"a@example.com","city":"hnl"}`)
 			want := map[string][]byte{
 				"u1": original,
-				"u2": []byte(`{"email":"b@example.com","city":"sea"}`),
-				"u3": []byte(`{"email":"c@example.com","city":"hnl"}`),
+				"u2": nativeIndexDDLDocument(t, format, `{"email":"b@example.com","city":"sea"}`),
+				"u3": nativeIndexDDLDocument(t, format, `{"email":"c@example.com","city":"hnl"}`),
 			}
 			if _, err := users.InsertBatch([][]byte{[]byte("u1"), []byte("u2")}, [][]byte{want["u1"], want["u2"]}); err != nil {
 				t.Fatal(err)
@@ -197,18 +217,18 @@ func TestNativeExistingJSONIndexDDLLifecycle(t *testing.T) {
 			if ids, err := users.FindByIndexValue("unique_city", "hnl"); err != nil || ids != nil {
 				t.Fatalf("failed unique index lookup IDs=%q err=%v, want nil/nil", ids, err)
 			}
-			want["u1"] = []byte(`{"email":"a@example.com","city":"bos"}`)
+			want["u1"] = nativeIndexDDLDocument(t, format, `{"email":"a@example.com","city":"bos"}`)
 			if _, err := users.UpdateBatch([]collections.UpdateBatchItem{{DocumentID: []byte("u1"), Update: func([]byte) ([]byte, bool, error) { return want["u1"], true, nil }}}); err != nil {
 				t.Fatal(err)
 			}
-			want["u4"] = []byte(`{"email":"d@example.com","city":"hnl"}`)
+			want["u4"] = nativeIndexDDLDocument(t, format, `{"email":"d@example.com","city":"hnl"}`)
 			if _, err := users.InsertBatch([][]byte{[]byte("u4")}, [][]byte{want["u4"]}); err != nil {
 				t.Fatal(err)
 			}
 			checkIndex("city", "hnl", "u3", "u4")
 			checkIndex("city", "bos", "u1")
 			lsn, sequence = handle.CommandWALNextLSN(), database.Stats()["treedb.cache.cow.txn.logical_seq"]
-			if _, err := users.InsertBatch([][]byte{[]byte("duplicate")}, [][]byte{[]byte(`{"email":"a@example.com","city":"other"}`)}); !errors.Is(err, collections.ErrUniqueIndexConflict) {
+			if _, err := users.InsertBatch([][]byte{[]byte("duplicate")}, [][]byte{nativeIndexDDLDocument(t, format, `{"email":"a@example.com","city":"other"}`)}); !errors.Is(err, collections.ErrUniqueIndexConflict) {
 				t.Fatalf("unique ordinary write: %v", err)
 			}
 			assertUnchanged(lsn, sequence)
@@ -230,7 +250,7 @@ func TestNativeExistingJSONIndexDDLLifecycle(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { _ = stale.Close() })
-			if err := stale.InsertBatch([][]byte{[]byte("stale")}, [][]byte{[]byte(`{"email":"stale@example.com","city":"hnl"}`)}); err != nil {
+			if err := stale.InsertBatch([][]byte{[]byte("stale")}, [][]byte{nativeIndexDDLDocument(t, format, `{"email":"stale@example.com","city":"hnl"}`)}); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := users.DropIndex("city"); err != nil {
@@ -295,7 +315,7 @@ func TestNativeExistingJSONIndexDDLLifecycle(t *testing.T) {
 					t.Fatalf("DropAllIndexes %s IDs=%q err=%v, want nil/nil", name, ids, err)
 				}
 			}
-			want["u5"] = []byte(`{"email":"e@example.com","city":"sea"}`)
+			want["u5"] = nativeIndexDDLDocument(t, format, `{"email":"e@example.com","city":"sea"}`)
 			if _, err := users.InsertBatch([][]byte{[]byte("u5")}, [][]byte{want["u5"]}); err != nil {
 				t.Fatal(err)
 			}

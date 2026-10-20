@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"reflect"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/collections"
@@ -11,7 +12,9 @@ import (
 )
 
 // Reuse a finite hot set through real accepted successors and disk handoffs.
-// This is a default-budget engine progress guard, not a timing or GC benchmark.
+// The same accepted group spans raw, JSON, typed string/vector, BSON multikey
+// and template-v1 state. This is a default-budget engine progress guard, not a
+// timing, process-kill, maintenance-GC or complete-Q qualification.
 func TestNativeMixedEngineLifecycle(t *testing.T) {
 	opts := indexedSliceOptions(ProfileCommandWALDurable, t.TempDir())
 	database, err := Open(opts)
@@ -38,26 +41,60 @@ func TestNativeMixedEngineLifecycle(t *testing.T) {
 			}
 		}
 	})
-	fixtures := nativeTypedMultiCases()
+	fixtures := append(nativeTypedMultiCases(),
+		nativeTypedMultiCase{name: "bson_arrays", family: "bson_multikey"},
+		nativeTypedMultiCase{name: "templates", family: "template_v1"},
+	)
 	ids := [][]byte{[]byte("hot0"), []byte("hot1")}
 	// Each generation is constructed from original scalar values, independently
 	// of pending reconstruction, physical storage and caller-returned documents.
-	document := func(collection, key, generation int) []byte {
+	source := func(collection, key, generation int) []byte {
 		id := string(ids[key])
 		switch fixtures[collection].family {
 		case "string":
 			return []byte(fmt.Sprintf(`{"id":%q,"label":%q,"payload":%q}`, id, fmt.Sprintf("round %d \"quoted\" \\ label", generation), fmt.Sprintf("row%d/gen%d", key, generation)))
+		case "bson_multikey":
+			return []byte(fmt.Sprintf(`{"id":%q,"tags":[%q,%q],"aliases":[%q,%q],"payload":%q}`, id,
+				fmt.Sprintf("tag%d", generation), fmt.Sprintf("tag%d", generation),
+				fmt.Sprintf("owner%d/gen%d", key, generation), fmt.Sprintf("owner%d/gen%d", key, generation), fmt.Sprintf("row%d/gen%d", key, generation)))
+		case "template_v1":
+			return []byte(fmt.Sprintf(`{"id":%q,"owner":%q,"n":%d,"payload":%q}`, id, fmt.Sprintf("owner%d/gen%d", key, generation), generation, fmt.Sprintf("row%d/gen%d", key, generation)))
 		case "float32_vector":
 			return []byte(fmt.Sprintf(`{"id":%q,"embedding":[%d,%d,0.5],"payload":%q}`, id, generation+1, -generation-2, fmt.Sprintf("row%d/gen%d", key, generation)))
 		default:
 			return []byte(fmt.Sprintf(`{"id":%q,"n":%d,"payload":%q}`, id, generation, fmt.Sprintf("row%d/gen%d", key, generation)))
 		}
 	}
-	var original, expected [3][2][]byte
+	document := func(collection, key, generation int) []byte {
+		value := source(collection, key, generation)
+		switch fixtures[collection].family {
+		case "bson_multikey":
+			return nativeIndexDDLDocument(t, collections.DocumentFormatBSON, string(value))
+		case "template_v1":
+			return nativeTemplateDoc(t, string(value))
+		default:
+			return value
+		}
+	}
+	original := make([][2][]byte, len(fixtures))
+	expected := make([][2][]byte, len(fixtures))
+	var expectedGeneration [2]int
 	cols := make([]*collections.Collection, len(fixtures))
 	for i, fixture := range fixtures {
 		meta := &collections.CollectionMeta{Name: fixture.name}
-		if fixture.family != "" {
+		switch fixture.family {
+		case "bson_multikey":
+			meta.Options.DocumentFormat = collections.DocumentFormatBSON
+			meta.Indexes = []collections.IndexDefinition{
+				{Name: "tags", Field: "tags", ValueType: collections.IndexValueString, MultiKey: true},
+				{Name: "aliases", Field: "aliases", ValueType: collections.IndexValueString, MultiKey: true, Unique: true},
+			}
+		case "template_v1":
+			meta.Options.DocumentFormat = collections.DocumentFormatTemplateV1
+			meta.Indexes = []collections.IndexDefinition{
+				{Name: "owner", Field: "owner", ValueType: collections.IndexValueString, Unique: true},
+			}
+		case "string", "float32_vector":
 			config := nativeColumnPendingCaseFor(t, fixture.family)
 			config.typedSeed = &collections.TypedColumnBatch{} // Maintained JSON residual layout.
 			if fixture.family == "string" {
@@ -74,10 +111,10 @@ func TestNativeMixedEngineLifecycle(t *testing.T) {
 			t.Fatal(err)
 		}
 		for k := range ids {
-			original[i][k] = document(i, k, 0)
+			original[i][k] = source(i, k, 0)
 			expected[i][k] = original[i][k]
 		}
-		if _, err := cols[i].InsertBatch(ids, original[i][:]); err != nil {
+		if _, err := cols[i].InsertBatch(ids, [][]byte{document(i, 0, 0), document(i, 1, 0)}); err != nil {
 			t.Fatalf("seed %s: %v", fixture.name, err)
 		}
 		if err := database.Checkpoint(); err != nil {
@@ -96,6 +133,14 @@ func TestNativeMixedEngineLifecycle(t *testing.T) {
 		t.Fatal("setup did not establish the actual complete physical basis")
 	}
 	held := make([]*collections.CollectionReadView, len(cols))
+	var oldTemplate *collections.StoredDocumentJSONMaterializer
+	t.Cleanup(func() {
+		if oldTemplate != nil {
+			if err := oldTemplate.Close(); err != nil {
+				t.Error(err)
+			}
+		}
+	})
 	t.Cleanup(func() {
 		for _, view := range held {
 			if view != nil {
@@ -109,6 +154,67 @@ func TestNativeMixedEngineLifecycle(t *testing.T) {
 		held[i], err = col.OpenCollectionReadView()
 		if err != nil {
 			t.Fatal(err)
+		}
+	}
+	oldTemplate, err = cols[len(cols)-1].NewStoredDocumentJSONMaterializer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Keep the original template resolver alongside the old document view.
+	// Current and staged documents use the ordinary current materializer; all
+	// generations deliberately preserve the seeded shape, without guessing IDs.
+	checkDocument := func(i int, col *collections.Collection, stored, want []byte, old bool) {
+		t.Helper()
+		var materialized []byte
+		var err error
+		switch fixtures[i].family {
+		case "template_v1":
+			if !bytes.HasPrefix(stored, []byte("TD1D")) {
+				t.Fatalf("template stored document prefix=%q", stored[:min(4, len(stored))])
+			}
+			if old {
+				materialized, err = oldTemplate.StoredDocumentJSON(stored)
+			} else {
+				materialized, err = col.StoredDocumentJSON(stored)
+			}
+		case "bson_multikey":
+			materialized, err = col.StoredDocumentJSON(stored)
+		default:
+			materialized = stored
+		}
+		if err != nil {
+			t.Fatalf("materialize %s: %v", fixtures[i].name, err)
+		}
+		requireNativeColumnJSON(t, materialized, want)
+	}
+	checkIndexOwners := func(i int, query func(string, any) ([][]byte, error), generations [2]int) {
+		t.Helper()
+		index := "owner"
+		if fixtures[i].family == "bson_multikey" {
+			index = "aliases"
+		}
+		for k, generation := range generations {
+			if got, err := query(index, fmt.Sprintf("owner%d/gen%d", k, generation)); err != nil || !reflect.DeepEqual(got, [][]byte{ids[k]}) {
+				t.Fatalf("%s %s owner%d/gen%d=%q: %v", fixtures[i].name, index, k, generation, got, err)
+			}
+			if generation != 0 {
+				if got, err := query(index, fmt.Sprintf("owner%d/gen0", k)); err != nil || len(got) != 0 {
+					t.Fatalf("%s retained obsolete current owner%d/gen0=%q: %v", fixtures[i].name, k, got, err)
+				}
+			}
+		}
+		if fixtures[i].family == "bson_multikey" {
+			for _, generation := range generations {
+				var want [][]byte
+				for k, current := range generations {
+					if current == generation {
+						want = append(want, ids[k])
+					}
+				}
+				if got, err := query("tags", fmt.Sprintf("tag%d", generation)); err != nil || !reflect.DeepEqual(got, want) {
+					t.Fatalf("BSON effective array tag%d=%q want%q: %v", generation, got, want, err)
+				}
+			}
 		}
 	}
 	checkHeld := func() {
@@ -125,8 +231,18 @@ func TestNativeMixedEngineLifecycle(t *testing.T) {
 				if !result.Found {
 					t.Fatalf("held %s/%s disappeared", fixtures[i].name, ids[k])
 				}
-				requireNativeColumnJSON(t, result.Document, original[i][k])
+				checkDocument(i, cols[i], result.Document, original[i][k], true)
 				result.Document[0] = '!'
+			}
+			if fixtures[i].family == "bson_multikey" || fixtures[i].family == "template_v1" {
+				checkIndexOwners(i, func(index string, value any) ([][]byte, error) {
+					var found [][]byte
+					err := view.VisitIndexValueIDs(index, value, func(id []byte) error {
+						found = append(found, bytes.Clone(id))
+						return nil
+					})
+					return found, err
+				}, [2]int{})
 			}
 		}
 	}
@@ -138,8 +254,11 @@ func TestNativeMixedEngineLifecycle(t *testing.T) {
 				if err != nil {
 					t.Fatalf("current %s/%s: %v", fixture.name, id, err)
 				}
-				requireNativeColumnJSON(t, got, expected[i][k])
+				checkDocument(i, cols[i], got, expected[i][k], false)
 				got[0] = '!'
+			}
+			if fixture.family == "bson_multikey" || fixture.family == "template_v1" {
+				checkIndexOwners(i, cols[i].FindByIndexValue, expectedGeneration)
 			}
 		}
 		if got, err := database.Get(rawKey); err != nil || !bytes.Equal(got, raw) {
@@ -159,7 +278,7 @@ func TestNativeMixedEngineLifecycle(t *testing.T) {
 		key := (generation - 1) % len(ids)
 		next, sequence := handle.CommandWALNextLSN(), database.Stats()["treedb.cache.cow.txn.logical_seq"]
 		physical := indexedCRUDAppliedLSN(t, handle)
-		tx, err := native.Begin("labels", "vectors", "docs")
+		tx, err := native.Begin("labels", "vectors", "docs", "bson_arrays", "templates")
 		if err != nil {
 			t.Fatalf("Begin generation%d accepted%d: %v", generation, accepted, err)
 		}
@@ -185,7 +304,7 @@ func TestNativeMixedEngineLifecycle(t *testing.T) {
 					if err != nil {
 						return err
 					}
-					requireNativeColumnJSON(t, got, want)
+					checkDocument(i, cols[i], got, source(i, key, generation), false)
 					got[0] = '!'
 				}
 			}
@@ -204,8 +323,9 @@ func TestNativeMixedEngineLifecycle(t *testing.T) {
 			t.Fatal("logical commit unexpectedly installed physical effects")
 		}
 		for i := range fixtures {
-			expected[i][key] = document(i, key, generation)
+			expected[i][key] = source(i, key, generation)
 		}
+		expectedGeneration[key] = generation
 		checkCurrent(lastRaw)
 		checkHeld()
 		if generation%cohort == 0 {
@@ -228,6 +348,10 @@ func TestNativeMixedEngineLifecycle(t *testing.T) {
 			checkHeld()
 		}
 		if generation == releaseAfter {
+			if err := oldTemplate.Close(); err != nil {
+				t.Fatal(err)
+			}
+			oldTemplate = nil
 			for i, view := range held {
 				if err := view.Close(); err != nil {
 					t.Fatal(err)
@@ -239,7 +363,7 @@ func TestNativeMixedEngineLifecycle(t *testing.T) {
 	if accepted != commits || checkpoints != commits/cohort || handle.CommandWALNextLSN() != startLSN+commits {
 		t.Fatalf("bounded engine progress accepted%d checkpoints%d next%d", accepted, checkpoints, handle.CommandWALNextLSN())
 	}
-	t.Logf("accepted=%d checkpoint_generations=%d held_through=%d continued_after_release=%d", accepted, checkpoints, releaseAfter, accepted-releaseAfter)
+	t.Logf("accepted_groups=%d collections_per_group=%d raw_writes_per_group=1 checkpoint_generations=%d held_through=%d continued_after_release=%d", accepted, len(fixtures), checkpoints, releaseAfter, accepted-releaseAfter)
 	if err := manager.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -274,7 +398,10 @@ func TestNativeMixedEngineLifecycle(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			requireNativeColumnJSON(t, got, expected[i][k])
+			checkDocument(i, col, got, expected[i][k], false)
+		}
+		if fixture.family == "bson_multikey" || fixture.family == "template_v1" {
+			checkIndexOwners(i, col.FindByIndexValue, expectedGeneration)
 		}
 	}
 	if got, err := reopened.Get(rawKey); err != nil || !bytes.Equal(got, lastRaw) {

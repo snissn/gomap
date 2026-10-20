@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/raftapply"
@@ -333,7 +334,14 @@ func (f *FSM) closeForRaftSnapshotRestoreV1() error {
 		errs = append(errs, f.results.Close())
 		f.results = nil
 	}
-	if f.db != nil {
+	if f.nativeDatabase != nil {
+		// A refused close retains the original owner and blocks file replacement.
+		if err := f.nativeDatabase.Close(); err != nil {
+			return errors.Join(errors.Join(errs...), err)
+		}
+		f.nativeDatabase = nil
+		f.db = nil
+	} else if f.db != nil {
 		errs = append(errs, f.db.Close())
 		f.db = nil
 	}
@@ -352,26 +360,46 @@ func (f *FSM) reopenAfterRaftSnapshotRestoreV1() error {
 	if err != nil {
 		return err
 	}
-	db, err := backenddb.Open(opts)
+	var db *backenddb.DB
+	var nativeDatabase *treedb.DB
+	if f.nativeCollections {
+		nativeDatabase, err = treedb.Open(opts)
+		if err == nil {
+			db, err = nativeDatabase.NativeSemanticBackend()
+		}
+	} else {
+		db, err = backenddb.Open(opts)
+	}
+	// Cleanup follows the same concrete owner on every unadopted reopen failure.
+	closeDB := func() error {
+		if nativeDatabase != nil {
+			err := nativeDatabase.Close()
+			if err != nil {
+				f.nativeDatabase, f.db, f.ownsDB = nativeDatabase, db, true
+			}
+			return err
+		}
+		if db != nil {
+			return db.Close()
+		}
+		return nil
+	}
 	if err != nil {
-		_ = sideDBs()
-		return err
+		return errors.Join(err, closeDB(), sideDBs())
 	}
 	progress, err := raftapply.OpenDurableApplyProgressStore(f.metadataDir, f.storeOptions)
 	if err != nil {
-		_ = errors.Join(db.Close(), sideDBs())
-		return err
+		return errors.Join(err, closeDB(), sideDBs())
 	}
 	results, err := raftapply.OpenDurableApplyResultStore(f.metadataDir, f.storeOptions)
 	if err != nil {
-		_ = errors.Join(progress.Close(), db.Close(), sideDBs())
-		return err
+		return errors.Join(err, progress.Close(), closeDB(), sideDBs())
 	}
 	if err := validateProgressCoverage(db, progress, results); err != nil {
-		_ = errors.Join(progress.Close(), results.Close(), db.Close(), sideDBs())
-		return err
+		return errors.Join(err, progress.Close(), results.Close(), closeDB(), sideDBs())
 	}
 	f.db = db
+	f.nativeDatabase = nativeDatabase
 	f.progress = progress
 	f.results = results
 	f.sideDBs = sideDBs
