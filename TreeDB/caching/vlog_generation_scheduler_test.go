@@ -1063,6 +1063,10 @@ func testDeferredVectorBuildVlogMaintenanceAdministrativeDebt(t *testing.T, conf
 		valueLogGenerationPolicy: uint8(backenddb.ValueLogGenerationHotWarmCold),
 		closeCh:                  make(chan struct{}),
 	}
+	t.Cleanup(func() {
+		db.closing.Store(true)
+		db.wg.Wait()
+	})
 	db.checkpointCond = sync.NewCond(&db.checkpointMu)
 	if configure != nil {
 		configure(db)
