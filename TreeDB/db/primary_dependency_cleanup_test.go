@@ -2,7 +2,7 @@ package db
 
 import (
 	"errors"
-	"github.com/snissn/gomap/TreeDB/internal/iterator"
+
 	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
@@ -11,7 +11,7 @@ import (
 )
 
 func TestPrimaryDependencyFailedLeaseRemainsOnActualOwner(t *testing.T) {
-	db, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+	db, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +48,7 @@ func TestPrimaryDependencyFailedLeaseRemainsOnActualOwner(t *testing.T) {
 		t.Fatal(e)
 	}
 	sibling := &primaryDependencyLeaseV5{owner: owner, metadataCharge: charge}
-	directory, e := rootpublication.NewOwnedWorkLocalPrimaryDependencyDirectoryV6(owner.arena.Pager(), rootpublication.DependencyDirectoryRefV2{RootPageID: primaryarena.Namespace + 2}, owner.arena.Pager().PageCount(), metadata, sibling)
+	directory, e := rootpublication.NewOwnedTypedLocalPrimaryDependencyDirectoryV6(owner.arena.Pager(), rootpublication.DependencyDirectoryRefV2{RootPageID: primaryarena.Namespace + 2}, owner.arena.Pager().PageCount(), metadata, sibling)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -56,47 +56,11 @@ func TestPrimaryDependencyFailedLeaseRemainsOnActualOwner(t *testing.T) {
 	// Keep the original producer's scalar observations before the external
 	// completion refunds its containing allocation. The directory and caller
 	// detach their actual provider aliases before that terminal continuation.
-	var directoryRelease rootpublication.DependencyDirectoryReleaseWork
-	work := iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20}
-	if !owner.arena.Pager().SupportsBoundedPhysicalClose() {
-		beforeRefs, beforeCharge := owner.refs, metadata.Bytes()
-		if ready, e := directoryRelease.Bind(directory, &work); ready || !errors.Is(e, retainedalloc.ErrWorkRequired) {
-			t.Fatalf("unsupported bounded directory release: ready=%v err=%v", ready, e)
-		}
-		if owner.refs != beforeRefs || metadata.Bytes() != beforeCharge || sibling.closed || sibling.releasePhase != 0 || sibling.owner != owner || sibling.metadataCharge != charge || owner.failedDependencies != lease || lease.failedNext != nil {
-			t.Fatal("unsupported bind consumed original directory/producer custody")
-		}
-		// Use the SAME directory's ordinary completion after the unchanged
-		// bounded refusal; it still reports the actual earlier sibling error.
-		consumed, cleanup := directory.ReleaseOutcome()
-		if !consumed || !errors.Is(cleanup, rootpublication.ErrResourceOwnership) || metadata.Bytes() != retained || owner.failedDependencies != lease || lease.failedNext != nil {
-			t.Fatalf("ordinary completion after bounded refusal: consumed=%v err=%v", consumed, cleanup)
-		}
-		directory, sibling = nil, nil
-	} else {
-		if ready, err := directoryRelease.Bind(directory, &work); !ready || err != nil {
-			t.Fatal("directory release bind", ready, err)
-		}
-		directory = nil
-		consumed, ready, cleanup := directoryRelease.ContinueWork(&work)
-		if consumed || ready || cleanup != nil || !sibling.closed {
-			t.Fatal("producer did not return before containing refund", consumed, ready, cleanup)
-		}
-		if !sibling.ownerReleaseConsumed || sibling.owner != nil || sibling.metadataCharge != 0 || sibling.failed || owner.failedDependencies != lease || lease.failedNext != nil {
-			t.Fatal("earlier error misclassified consumed sibling ownership")
-		}
-		sibling = nil
-		for !ready {
-			work = iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20}
-			consumed, ready, cleanup = directoryRelease.ContinueWork(&work)
-			if cleanup != nil && !ready {
-				t.Fatal(cleanup)
-			}
-		}
-		if !consumed || !errors.Is(cleanup, rootpublication.ErrResourceOwnership) || metadata.Bytes() != retained {
-			t.Fatal("earlier error misclassified consumed sibling ownership")
-		}
+	consumed, cleanup := directory.ReleaseOutcome()
+	if !consumed || !errors.Is(cleanup, rootpublication.ErrResourceOwnership) || metadata.Bytes() != retained || owner.failedDependencies != lease || lease.failedNext != nil {
+		t.Fatalf("ordinary sibling completion: consumed=%v err=%v", consumed, cleanup)
 	}
+	directory, sibling = nil, nil
 
 	// Constructor refusal must not return an error embedded in a lease whose
 	// own physical edge and admitted allocation were successfully disposed.

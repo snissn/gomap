@@ -69,12 +69,14 @@ func OpenBackend(opts Options) (*db.DB, func() error, error) {
 	return backend, cleanup, nil
 }
 
-// OpenBackendWithCachedLeafLog opens TreeDB through the cached layer and returns
-// the underlying backend. This is for native-root callers that need backend root
-// APIs while also requiring cached-layer wiring such as the leaf-page value log
-// used by IndexOuterLeavesInValueLog.
+// OpenBackendWithCachedLeafLog opens a backend-root lifecycle with cached leaf-
+// and value-log services, including IndexOuterLeavesInValueLog. The backend owns
+// logical publication. Requested physical/profile policy is preserved, but a
+// requested cow_btree cache uses ordinary btree services without a COW journal
+// or native semantic bridge. Native callers use Open and NativeSemanticBackend.
+// Cleanup closes the original services and side stores; it must be retained.
 func OpenBackendWithCachedLeafLog(opts Options) (*db.DB, func() error, error) {
-	database, err := Open(opts)
+	database, err := openBackendWithCachedServices(opts)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -98,7 +100,7 @@ func OpenBackendWithCachedLeafLogStats(opts Options) (*db.DB, func() error, func
 // OpenBackendWithCachedLeafLogStatsAndDeferredVectorBuildMaintenance adds the
 // narrow deferred-build maintenance control used by the document service.
 func OpenBackendWithCachedLeafLogStatsAndDeferredVectorBuildMaintenance(opts Options) (*db.DB, func() error, func() map[string]string, *DeferredVectorBuildMaintenance, error) {
-	database, err := Open(opts)
+	database, err := openBackendWithCachedServices(opts)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
@@ -107,4 +109,13 @@ func OpenBackendWithCachedLeafLogStatsAndDeferredVectorBuildMaintenance(opts Opt
 		return nil, nil, nil, nil, db.ErrClosed
 	}
 	return database.backend, database.Close, database.Stats, &DeferredVectorBuildMaintenance{db: database}, nil
+}
+
+// Resolve public policy before choosing the backend-only cache lifecycle. In
+// particular, do not rewrite MemtableMode before physical options are applied.
+func openBackendWithCachedServices(opts Options) (*DB, error) {
+	if err := resolveOpenProfileOptions(&opts); err != nil {
+		return nil, err
+	}
+	return openResolvedWithCacheRole(opts, true)
 }

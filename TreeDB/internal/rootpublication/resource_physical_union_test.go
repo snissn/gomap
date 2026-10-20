@@ -4,12 +4,16 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"math"
+	"os"
 	"path/filepath"
 	"sort"
 	"testing"
 	"time"
+	"unsafe"
 
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
@@ -427,5 +431,170 @@ func TestPhysicalReachabilityUnionFailedDirectoryRetainCleansOwnedLeases(t *test
 	}
 	if clone, err := CloneStableResourceSetExcludingKinds(sources[1]); clone != nil || !errors.Is(err, ErrResourceOwnership) {
 		t.Fatalf("saturated empty clone: %v", err)
+	}
+}
+
+// Counting must fit only its admitted borrowed backing, even when there is no
+// room to clone tokens, frontiers or an owned publication union.
+func TestOwnedPhysicalDurabilityCountBorrowedAdmissionAndCustody(t *testing.T) {
+	var owner retainedalloc.Owner
+	owner.Initialize(0)
+	budget := &registryBudget{cap: 64 << 20}
+	enrollment, err := owner.Enroll(budget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer enrollment.Close()
+	registry := NewIdentityPinRegistry()
+	defer registry.Close()
+	file := writeStableResourceFixture(t, t.TempDir(), "count.bin", "12345678")
+	identity, err := StableIdentityFromFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Observe(identity); err != nil {
+		t.Fatal(err)
+	}
+	defer registry.Unobserve(identity)
+	var sets []*StableResourceSet
+	for i := 0; i < 32; i++ {
+		frontier := NewRIDFrontier([]uint64{1, uint64(i + 2)})
+		frontier.Bytes = 8
+		sets = append(sets, admittedCoalescingFixture(t, &owner, registry, file, fmt.Sprint(i), frontier, nil))
+	}
+	before, pins := owner.Bytes(), registry.Stats().ActivePins
+	budget.cap = before
+	if count, err := physicalDurabilityCount(sets); count != 0 || !errors.Is(err, retainedalloc.ErrCapacity) {
+		t.Fatalf("unadmitted count=%d error=%v", count, err)
+	}
+	if owner.Bytes() != before || registry.Stats().ActivePins != pins {
+		t.Fatal("refusal changed original metadata or pins")
+	}
+	budget.cap = before + retainedalloc.AllocationCharge(uint64(len(sets))*uint64(unsafe.Sizeof(stableResourceEntry{})))
+	if count, err := physicalDurabilityCount(sets); count != 1 || err != nil {
+		t.Fatalf("borrowed count=%d error=%v", count, err)
+	}
+	if owner.Bytes() != before || registry.Stats().ActivePins != pins {
+		t.Fatal("count retained metadata or changed original pins")
+	}
+	for i, set := range sets {
+		set.rangeEntries(func(entry *stableResourceEntry) bool {
+			if set.Owner() != ResourceOwnerBuilder || entry.frontier.RIDCount != 2 || entry.frontier.RIDs()[1] != uint64(i+2) {
+				t.Fatal("count changed original owner/frontier")
+			}
+			return true
+		})
+		if err := set.ReleaseWithError(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	enrollment.Close()
+	if owner.Bytes() != 0 || budget.bytes != 0 || registry.Stats().ActivePins != 0 {
+		t.Fatalf("final custody bytes=%d budget=%d pins=%d", owner.Bytes(), budget.bytes, registry.Stats().ActivePins)
+	}
+}
+
+func TestOwnedPhysicalDurabilityCountCompatibility(t *testing.T) {
+	for _, mode := range []string{"aliases", "immutable-generations", "mutable-kinds", "logical-remap", "mutable-digest", "immutable-digest", "stability", "frontier", "foreign-owner", "released", "transferred"} {
+		t.Run(mode, func(t *testing.T) {
+			var owner, foreign retainedalloc.Owner
+			owner.Initialize(0)
+			foreign.Initialize(0)
+			registry := NewIdentityPinRegistry()
+			defer registry.Close()
+			file := writeStableResourceFixture(t, t.TempDir(), "first.bin", "12345678")
+			other := file
+			if mode == "logical-remap" {
+				other = writeStableResourceFixture(t, t.TempDir(), "second.bin", "12345678")
+			}
+			for _, f := range []*os.File{file, other} {
+				identity, err := StableIdentityFromFile(f)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := registry.Observe(identity); err != nil {
+					t.Fatal(err)
+				}
+				defer registry.Unobserve(identity)
+			}
+			var sets []*StableResourceSet
+			for i, f := range []*os.File{file, other} {
+				spec := StableResourceSpec{MetadataOwner: &owner, PinRegistry: registry, Kind: ResourceIndex, LogicalLane: fmt.Sprint(i), ResourceID: "index.db", Generation: 1, File: f, DiagnosticPath: "index.db", Frontier: DurableFrontier{Bytes: uint64(i + 1)}, Reachability: ReachabilityIndexFile}
+				if mode == "logical-remap" {
+					spec.LogicalLane = "same"
+				}
+				if mode == "immutable-generations" || mode == "immutable-digest" || (mode == "stability" && i == 1) {
+					spec.Kind, spec.Reachability = ResourceOuterLeafPack, ReachabilityOuterLeafPackedPointer
+					spec.Generation = uint64(i + 1)
+				}
+				if mode == "mutable-kinds" && i == 1 {
+					spec.Kind, spec.Reachability = ResourceValueLog, ReachabilityValueLogPointer
+				}
+				if (mode == "mutable-digest" || mode == "immutable-digest") && i == 1 {
+					spec.Digest = [32]byte{1}
+				}
+				if mode == "foreign-owner" && i == 1 {
+					spec.MetadataOwner = &foreign
+				}
+				token, err := NewStableResourceToken(spec)
+				if err != nil {
+					t.Fatal(err)
+				}
+				builder, err := NewStableResourceSetBuilderWithMetadata(spec.MetadataOwner)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := builder.Add(token); err != nil {
+					t.Fatal(err)
+				}
+				set, err := builder.Freeze()
+				if err != nil {
+					t.Fatal(err)
+				}
+				sets = append(sets, set)
+			}
+			defer func() {
+				for _, set := range sets {
+					if err := set.ReleaseWithError(); err != nil {
+						t.Error(err)
+					}
+				}
+				if owner.Bytes() != 0 || foreign.Bytes() != 0 || registry.Stats().ActivePins != 0 {
+					t.Errorf("final custody bytes=%d/%d pins=%d", owner.Bytes(), foreign.Bytes(), registry.Stats().ActivePins)
+				}
+			}()
+			want, wantErr := 1, error(nil)
+			switch mode {
+			case "immutable-generations", "mutable-kinds":
+				want = 2
+			case "aliases":
+			case "foreign-owner":
+				want, wantErr = 0, ErrResourceOwnership
+			case "released":
+				if err := sets[1].ReleaseWithError(); err != nil {
+					t.Fatal(err)
+				}
+				want, wantErr = 0, ErrResourceOwnership
+			case "transferred":
+				if err := sets[1].transfer(ResourceOwnerBuilder, ResourceOwnerTransferred); err != nil {
+					t.Fatal(err)
+				}
+				defer sets[1].owner.Store(uint32(ResourceOwnerBuilder)) // Restore only test teardown custody.
+				want, wantErr = 0, ErrResourceOwnership
+			default:
+				want, wantErr = 0, ErrResourceConflict
+			}
+			if mode == "frontier" {
+				sets[1].rangeEntries(func(entry *stableResourceEntry) bool { entry.frontier.RIDCount = 1; return true })
+			}
+			before, pins := owner.Bytes(), registry.Stats().ActivePins
+			count, err := physicalDurabilityCount(sets)
+			if count != want || !errors.Is(err, wantErr) {
+				t.Fatalf("count=%d error=%v want=%d/%v", count, err, want, wantErr)
+			}
+			if owner.Bytes() != before || registry.Stats().ActivePins != pins {
+				t.Fatal("count/refusal changed original custody")
+			}
+		})
 	}
 }

@@ -62,6 +62,56 @@ func TestOriginalManagerHeldSetDefersPhysicalCloseAndRefund(t *testing.T) {
 	}
 }
 
+func TestOriginalManagerLargeHeldSetReleasesEveryFile(t *testing.T) {
+	dir := t.TempDir()
+	const count = 40
+	for i := 1; i <= count; i++ {
+		id := page.ValueLogFileID(uint32(i))
+		w, err := NewWriter(SegmentPath(dir, id), id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = w.Append(0, nil, uint64(i), []byte("held physical payload")); err != nil {
+			t.Fatal(err)
+		}
+		if err = w.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	registry := rootpublication.NewIdentityPinRegistry()
+	m, err := NewManagerWithStableResourcePinRegistry(dir, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	set := m.CurrentSetNoRefresh()
+	if len(set.Files) != count {
+		t.Fatalf("captured %d files, want %d", len(set.Files), count)
+	}
+	files := make([]*File, 0, count)
+	for _, f := range set.Files {
+		files = append(files, f)
+	}
+	if err = m.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range files {
+		if f.closed.Load() || f.producerCharge == 0 {
+			t.Fatal("Close consumed a held original File")
+		}
+	}
+	if err = m.Release(set); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range files {
+		if !f.closed.Load() || f.producerCharge != 0 || f.File != nil {
+			t.Fatalf("held File %d survived actual last Set release", f.ID)
+		}
+	}
+	if set.Files != nil || m.producerCharge != 0 || m.fileAliases.Load() != 0 || m.wrapperBorrows.Load() != 0 {
+		t.Fatal("actual last large Set release retained disposed aliases or charges")
+	}
+}
+
 func TestOriginalManagerActualLastSetCloseFailureIsSticky(t *testing.T) {
 	m, f, registry := originalTerminalFixture(t)
 	set := m.CurrentSetNoRefresh()

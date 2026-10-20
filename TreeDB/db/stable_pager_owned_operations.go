@@ -177,8 +177,9 @@ func (operations *stablePagerOwnedOperations) disposeAfterSnapshotCompletion() e
 		return &operations.failure
 	}
 	consumed, debt, err := true, false, error(nil)
+	var ownerCompletion primaryRuntimeDisposalCompletionV6
 	if owner != nil {
-		consumed, debt, err = owner.releaseWithOutcome(nil)
+		consumed, debt, ownerCompletion, err = owner.releaseOriginalWithOutcome()
 	}
 	if !consumed || debt {
 		operations.failure.causes[0] = err
@@ -189,13 +190,16 @@ func (operations *stablePagerOwnedOperations) disposeAfterSnapshotCompletion() e
 		metadata.CleanupFailed()
 		return &operations.failure
 	}
+	operations.owner = nil
+	owner = nil
 	operations.originalCustody.Complete(nil, nil)
 	operations.originalCustody = nil
-	operations.owner = nil
 	operations.disposalConsumed.Store(true)
 	operations.metadata = nil
 	operations.charge = 0
+	operations = nil
 	metadata.RemovePending(charge)
+	ownerCompletion.complete()
 	return err
 }
 func (owner *primaryArenaOwnerV5) retainFailedPagerOperations(operations *stablePagerOwnedOperations) {

@@ -277,7 +277,7 @@ func (c *Collection) openTypedGraphReadOwnerWithContext(ctx context.Context, lim
 		}
 		coord.typedPublicationDebtMu.Unlock()
 		snap.MarkForegroundRead()
-		catalog := c.cachedCatalogForSnapshot(snap, false)
+		catalog := c.cachedCatalogForSnapshot(snap)
 		if catalog == nil || catalog.typedGraphBase == nil || len(catalog.typedGraphBase.roots) == 0 || len(catalog.meta.VectorIndexes) != 1 || !typedGraphBaseSchemaMatches(catalog.typedGraphBase.meta, catalog.meta) {
 			// Capture already holds the storage barrier. The general catalog
 			// loader can wait on writeDomain.mu, so a local miss must go

@@ -38,6 +38,9 @@ func (c *Collection) UpsertTypedBatchWithStats(ids, retained [][]byte, columns [
 }
 
 func (c *Collection) replaceTypedSourceByID(deleteIDs, insertIDs, retained [][]byte, columns []TypedColumnBatch, upsert bool, insertStats *CollectionInsertStats) (int, error) {
+	if c != nil && c.nativeJSON != nil {
+		return c.nativeReplaceTypedSource(deleteIDs, insertIDs, retained, columns, upsert, insertStats)
+	}
 	if c == nil || c.db == nil {
 		return 0, errCollectionNil
 	}

@@ -2,7 +2,9 @@ package valuelog
 
 import (
 	"errors"
-	"github.com/snissn/gomap/TreeDB/internal/iterator"
+
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"os"
 )
 
@@ -44,6 +46,9 @@ func (e *ManagerCleanupFailure) OriginalCleanupPriorAvailable() bool {
 	e.manager.mu.Lock()
 	defer e.manager.mu.Unlock()
 	return e.prior == nil
+}
+func (e *ManagerCleanupFailure) OriginalCleanupPriorBinding() rootpublication.OriginalCleanupPriorBinding {
+	return rootpublication.BindOriginalCleanupPriorRW(&e.manager.mu, &e.prior)
 }
 func (e *ManagerCleanupFailure) TryLinkPriorCleanupError(prior error) bool {
 	e.manager.mu.Lock()
@@ -92,13 +97,45 @@ func (f *File) closeSuppliedRetirementParentLocked(parent *os.File) error {
 }
 
 func (m *Manager) finishTerminalFile(f *File) error {
-	w := iterator.OrdinalScanWork{RecordLimit: ^uint64(0), ByteLimit: ^uint64(0)}
-	for {
-		ready, err := m.finishNativeMVCCTerminalStep(f, false, &w)
-		if ready || err != nil {
-			return err
+	if m == nil || f == nil {
+		return rootpublication.ErrResourceOwnership
+	}
+	f.terminalMu.Lock()
+	defer f.terminalMu.Unlock()
+	if f.terminalAttempted {
+		return f.terminalErr
+	}
+	m.mu.Lock()
+	if m.files[f.ID] != f || f.RefCount.Load() != 0 {
+		m.mu.Unlock()
+		return nil
+	}
+	f.terminalAttempted = true
+	err := m.unobserveStableFileLocked(f)
+	m.mu.Unlock()
+	err = errors.Join(err, f.Close(), f.closeOriginalRetirementParent())
+	m.mu.Lock()
+	if err != nil {
+		f.terminalErr = err
+		m.retainOriginalFileFailureLocked(f)
+	} else if m.files[f.ID] == f {
+		delete(m.files, f.ID)
+		f.producerDetached.Store(true)
+		if f.IsZombie.Load() {
+			m.retiredCount--
 		}
 	}
+	var owner *retainedalloc.Owner
+	var charge uint64
+	if !m.closeRunning {
+		owner, charge = m.detachTerminalMetadataLocked()
+	}
+	err = m.closeErr
+	m.mu.Unlock()
+	if owner != nil {
+		owner.RemovePending(charge)
+	}
+	return err
 }
 
 func (m *Manager) retainOriginalFileFailureLocked(f *File) {
@@ -133,16 +170,25 @@ func (e *ManagerCleanupFailure) Is(target error) bool {
 // Physical success plus removal of the original last discovery/Set edges is
 // required before the producer's containing wrapper contribution is refunded.
 func (f *File) refundProducerMetadata() {
+	owner, charge := f.detachProducerMetadata()
+	// The receipt is independent of the containing File. Physical aliases and
+	// both original locks have cleared before its final contribution shrinks.
+	if owner != nil {
+		owner.RemovePending(charge)
+	}
+}
+
+func (f *File) detachProducerMetadata() (*retainedalloc.Owner, uint64) {
 	f.closeMu.Lock()
 	defer f.closeMu.Unlock()
 	if !f.producerDetached.Load() || f.terminalWalk.Load() || f.closeErr != nil || f.terminalParentErr != nil || f.constructionParentErrors[0] != nil || f.constructionParentErrors[1] != nil || f.RefCount.Load() != 0 || f.producerDeleteGuards.Load() != 0 || f.remapRequested.Load() {
-		return
+		return nil, 0
 	}
 	// An admitted destructive caller owns deleteMu until its exact-parent
 	// borrow and namespace action finish. Never tear down its physical aliases
 	// while Evict/terminal Close is joining the same original File.
 	if !f.deleteMu.TryLock() {
-		return
+		return nil, 0
 	}
 	defer f.deleteMu.Unlock()
 	owner, charge := f.producerMetadata, f.producerCharge
@@ -156,19 +202,18 @@ func (f *File) refundProducerMetadata() {
 	// original operations; they never authorize a replacement physical object.
 	f.dictLookup, f.templateLookup, f.templateDefCache = nil, nil, nil
 	f.groupedFrameCacheBudget = nil
-	if owner != nil {
-		owner.RemovePending(charge)
-	}
+	return owner, charge
 }
-func (m *Manager) refundTerminalMetadataLocked() {
-	if m.wrapperNativeCleanup || !m.closing || m.closeRunning || len(m.files) != 0 || m.closeErr != nil || m.wrapperBorrows.Load() != 0 || m.fileAliases.Load() != 0 {
-		return
+
+// Detach only while holding the containing lock. The independent receipt must
+// be refunded after its original caller has unlocked and stopped naming m.
+func (m *Manager) detachTerminalMetadataLocked() (*retainedalloc.Owner, uint64) {
+	if !m.closing || m.closeRunning || len(m.files) != 0 || m.closeErr != nil || m.wrapperBorrows.Load() != 0 || m.fileAliases.Load() != 0 {
+		return nil, 0
 	}
 	owner, charge := m.producerMetadata, m.producerCharge
 	m.clearTerminalAliasesLocked()
-	if owner != nil {
-		owner.RemovePending(charge)
-	}
+	return owner, charge
 }
 
 // Successful authorized unlink remains a disposition even when original

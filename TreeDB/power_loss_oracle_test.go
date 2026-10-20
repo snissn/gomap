@@ -539,6 +539,7 @@ func TestPowerLossOracleCounterexampleNewMetaMissingClosure(t *testing.T) {
 	requirePowerLossProfile(t, "no_wal_fast")
 	dir := t.TempDir()
 	opts := powerLossOptions(dir)
+	opts.IndexPrimaryDirectory = true
 	opts.ValueLog.PointerThreshold = 1
 	opts.ValueLog.ForcePointers = true
 	opts.IndexOuterLeavesInValueLog = true
@@ -1358,6 +1359,7 @@ func TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot(t *testing.T) 
 	requirePowerLossProfile(t, "no_wal_fast")
 	dir := t.TempDir()
 	opts := powerLossOptions(dir)
+	opts.IndexPrimaryDirectory = true
 	opts.FlushBackendMaxEntries = 4
 	db, err := treedb.Open(opts)
 	if err != nil {

@@ -1,15 +1,13 @@
 package rootpublication
 
 import (
-	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
-	"unsafe"
 )
 
 // resourceReleaseFrameV6 lives in the original admitted allocation. Only its
 // actual last edge may install this intrusive traversal state. The root frame
 // retains the current child and the child links its original ancestors, so a
-// yield or first error retains the original graph without a disposal registry.
+// first physical error retains the original graph without a disposal registry.
 type resourceReleaseFrameV6 struct {
 	value           any
 	parent, current *resourceReleaseFrameV6
@@ -23,11 +21,7 @@ type resourceReleaseFrameV6 struct {
 	deferToParent   bool
 	// running is guarded by the originating Set mutex. It claims the
 	// existing release actor while external providers run without that mutex.
-	running         bool
-	directory       *DependencyDirectoryReleaseWork
-	directoryTarget *DependencyDirectoryV2
-	scratchOwner    *retainedalloc.Owner
-	scratchCharge   uint64
+	running bool
 }
 
 type resourceGraphReleaseCompletionV6 struct {
@@ -43,22 +37,15 @@ func (c *resourceGraphReleaseCompletionV6) complete() {
 	}
 }
 
-func resourceGraphReserveV6(w *iterator.OrdinalScanWork, r, b uint64) bool {
-	return w == nil || w.Reserve(r, b)
-}
-
 // startResourceGraphReleaseV6 consumes exactly one existing allocation edge.
 // A nonlast edge finishes immediately. The root frame itself is the retained
 // continuation for a last edge; callers must keep that original operand.
-func startResourceGraphReleaseV6(a *resourceAllocation, value any, w *iterator.OrdinalScanWork) (*resourceReleaseFrameV6, bool, error) {
+func startResourceGraphReleaseV6(a *resourceAllocation, value any) (*resourceReleaseFrameV6, bool, error) {
 	if a == nil {
 		return nil, true, nil
 	}
 	if err := a.cleanupResult(); err != nil {
 		return nil, false, err
-	}
-	if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(*a))) {
-		return nil, false, nil
 	}
 	if !a.drop() {
 		return nil, true, nil
@@ -72,11 +59,11 @@ func startResourceGraphReleaseV6(a *resourceAllocation, value any, w *iterator.O
 // child transfers this existing child edge into the same original last-owner
 // traversal. The parent clears its child alias only after this admission. A
 // last child remains reachable through root.current until all its stages end.
-func (root *resourceReleaseFrameV6) child(a *resourceAllocation, value any, w *iterator.OrdinalScanWork) (bool, error) {
+func (root *resourceReleaseFrameV6) child(a *resourceAllocation, value any) (bool, error) {
 	if a == nil {
 		return true, nil
 	}
-	f, ready, err := startResourceGraphReleaseV6(a, value, w)
+	f, ready, err := startResourceGraphReleaseV6(a, value)
 	if !ready || err != nil {
 		return false, err
 	}
@@ -87,7 +74,7 @@ func (root *resourceReleaseFrameV6) child(a *resourceAllocation, value any, w *i
 	return true, nil
 }
 
-func (root *resourceReleaseFrameV6) continueWork(w *iterator.OrdinalScanWork) (resourceGraphReleaseCompletionV6, bool, error) {
+func (root *resourceReleaseFrameV6) releaseGraph() (resourceGraphReleaseCompletionV6, bool, error) {
 	var empty resourceGraphReleaseCompletionV6
 	fail := func(err error) (resourceGraphReleaseCompletionV6, bool, error) {
 		root.err = err
@@ -127,10 +114,10 @@ func (root *resourceReleaseFrameV6) continueWork(w *iterator.OrdinalScanWork) (r
 				return fail(err)
 			}
 		}
-		// A previous call can finish the physical stage but refuse its final
-		// frame-detachment admission. Resume that detachment, not a nil value.
+		// Physical cleanup and original child traversal finish before this frame
+		// detaches its last aliases and releases containing accounting.
 		if f.value != nil {
-			ready, err := root.stepMetadata(f, w)
+			ready, err := root.stepMetadata(f)
 			if err != nil {
 				return fail(err)
 			}
@@ -144,9 +131,6 @@ func (root *resourceReleaseFrameV6) continueWork(w *iterator.OrdinalScanWork) (r
 		}
 		a := f.allocation
 		parent := f.parent
-		if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(*f))) {
-			return empty, false, nil
-		}
 		owner, charge := f.owner, f.charge
 		if a != nil {
 			owner, charge = a.owner, a.charge
@@ -156,12 +140,6 @@ func (root *resourceReleaseFrameV6) continueWork(w *iterator.OrdinalScanWork) (r
 		f.parent, f.allocation = nil, nil
 		root.current = parent
 		if parent == nil {
-			if root.scratchOwner != nil {
-				scratchOwner, scratchCharge := root.scratchOwner, root.scratchCharge
-				root.directory, root.directoryTarget = nil, nil
-				root.scratchOwner, root.scratchCharge = nil, 0
-				scratchOwner.RemovePending(scratchCharge)
-			}
 			return resourceGraphReleaseCompletionV6{owner, charge}, true, nil
 		}
 		// The parent alias was detached when this child was entered. Only the
@@ -180,23 +158,20 @@ func (root *resourceReleaseFrameV6) continueWork(w *iterator.OrdinalScanWork) (r
 	return empty, true, nil
 }
 
-func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *iterator.OrdinalScanWork) (bool, error) {
+func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6) (bool, error) {
 	if f.value == nil {
 		return true, nil
 	}
-	// Each stage admits its frame/parent writes independently of the child
-	// decrement. A child refusal leaves the stage and original alias unchanged.
-	if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(*f))) {
-		return false, nil
-	}
+	// Each stage transfers only its existing child edge. Failed cleanup leaves
+	// the exact failed child reachable through the intrusive frame.
 	switch n := f.value.(type) {
 	case *StableResourceSet:
-		return root.stepSet(f, n, w)
+		return root.stepSet(f, n)
 	case *stableResourceLogicalIndexNode:
 		switch f.phase {
 		case 0:
 			if n.left != nil {
-				if ok, e := root.child(n.left.allocation, n.left, w); !ok || e != nil {
+				if ok, e := root.child(n.left.allocation, n.left); !ok || e != nil {
 					return false, e
 				}
 				n.left = nil
@@ -204,7 +179,7 @@ func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *i
 			f.phase = 1
 		case 1:
 			if n.right != nil {
-				if ok, e := root.child(n.right.allocation, n.right, w); !ok || e != nil {
+				if ok, e := root.child(n.right.allocation, n.right); !ok || e != nil {
 					return false, e
 				}
 				n.right = nil
@@ -212,16 +187,13 @@ func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *i
 			f.phase = 2
 		case 2:
 			if n.entry != nil && n.entry.backing != nil {
-				if ok, e := root.child(n.entry.backing.allocation, n.entry.backing, w); !ok || e != nil {
+				if ok, e := root.child(n.entry.backing.allocation, n.entry.backing); !ok || e != nil {
 					return false, e
 				}
 			}
 			n.entry = nil
 			f.phase = 3
 		default:
-			if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(*n))) {
-				return false, nil
-			}
 			n.key = stableLogicalResourceKey{}
 			f.value = nil
 		}
@@ -231,7 +203,7 @@ func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *i
 			if f.index < len(n.entries) {
 				e := n.entries[f.index]
 				if e != nil && e.backing != nil {
-					if ok, err := root.child(e.backing.allocation, e.backing, w); !ok || err != nil {
+					if ok, err := root.child(e.backing.allocation, e.backing); !ok || err != nil {
 						return false, err
 					}
 				}
@@ -243,7 +215,7 @@ func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *i
 			}
 		case 1:
 			if n.left != nil {
-				if ok, e := root.child(n.left.allocation, n.left, w); !ok || e != nil {
+				if ok, e := root.child(n.left.allocation, n.left); !ok || e != nil {
 					return false, e
 				}
 				n.left = nil
@@ -251,16 +223,13 @@ func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *i
 			f.phase = 2
 		case 2:
 			if n.right != nil {
-				if ok, e := root.child(n.right.allocation, n.right, w); !ok || e != nil {
+				if ok, e := root.child(n.right.allocation, n.right); !ok || e != nil {
 					return false, e
 				}
 				n.right = nil
 			}
 			f.phase = 3
 		default:
-			if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(*n))) {
-				return false, nil
-			}
 			n.key = stablePhysicalIdentityKey{}
 			f.value = nil
 		}
@@ -268,7 +237,7 @@ func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *i
 		switch f.phase {
 		case 0:
 			if n.left != nil {
-				if ok, e := root.child(n.left.allocation, n.left, w); !ok || e != nil {
+				if ok, e := root.child(n.left.allocation, n.left); !ok || e != nil {
 					return false, e
 				}
 				n.left = nil
@@ -276,7 +245,7 @@ func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *i
 			f.phase = 1
 		case 1:
 			if n.right != nil {
-				if ok, e := root.child(n.right.allocation, n.right, w); !ok || e != nil {
+				if ok, e := root.child(n.right.allocation, n.right); !ok || e != nil {
 					return false, e
 				}
 				n.right = nil
@@ -284,16 +253,13 @@ func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *i
 			f.phase = 2
 		case 2:
 			if n.backing != nil {
-				if ok, e := root.child(n.backing.allocation, n.backing, w); !ok || e != nil {
+				if ok, e := root.child(n.backing.allocation, n.backing); !ok || e != nil {
 					return false, e
 				}
 				n.backing = nil
 			}
 			f.phase = 3
 		default:
-			if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(*n))) {
-				return false, nil
-			}
 			n.key = stableLogicalObligationIndex{}
 			n.obligation = StableLogicalObligation{}
 			f.value = nil
@@ -308,7 +274,7 @@ func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *i
 		switch f.phase {
 		case 0:
 			if cell.view.logical != nil {
-				if ok, e := root.child(cell.view.logical.allocation, cell.view.logical, w); !ok || e != nil {
+				if ok, e := root.child(cell.view.logical.allocation, cell.view.logical); !ok || e != nil {
 					return false, e
 				}
 				cell.view.logical = nil
@@ -316,7 +282,7 @@ func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *i
 			f.phase = 1
 		case 1:
 			if cell.view.physical != nil {
-				if ok, e := root.child(cell.view.physical.allocation, cell.view.physical, w); !ok || e != nil {
+				if ok, e := root.child(cell.view.physical.allocation, cell.view.physical); !ok || e != nil {
 					return false, e
 				}
 				cell.view.physical = nil
@@ -324,7 +290,7 @@ func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *i
 			f.phase = 2
 		case 2:
 			if cell.view.logicalMembership != nil {
-				if ok, e := root.child(cell.view.logicalMembership.allocation, cell.view.logicalMembership, w); !ok || e != nil {
+				if ok, e := root.child(cell.view.logicalMembership.allocation, cell.view.logicalMembership); !ok || e != nil {
 					return false, e
 				}
 				cell.view.logicalMembership = nil
@@ -332,7 +298,7 @@ func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *i
 			f.phase = 3
 		case 3:
 			if cell.view.fields != nil {
-				if ok, e := root.child(cell.view.fields.allocation, cell.view.fields, w); !ok || e != nil {
+				if ok, e := root.child(cell.view.fields.allocation, cell.view.fields); !ok || e != nil {
 					return false, e
 				}
 				cell.view.fields = nil
@@ -340,7 +306,7 @@ func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *i
 			f.phase = 4
 		case 4:
 			if cell.view.root != nil {
-				if ok, e := root.rope(cell.view.root, w); !ok || e != nil {
+				if ok, e := root.rope(cell.view.root); !ok || e != nil {
 					return false, e
 				}
 				cell.view.root = nil
@@ -348,7 +314,7 @@ func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *i
 			f.phase = 5
 		case 5:
 			if cell.directoryOwned {
-				if ok, e := root.releaseDirectory(cell.view.directory, w); !ok || e != nil {
+				if ok, e := root.releaseDirectory(cell.view.directory); !ok || e != nil {
 					return false, e
 				}
 				cell.directoryOwned = false
@@ -356,9 +322,6 @@ func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *i
 			}
 			f.phase = 6
 		default:
-			if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(*cell))) {
-				return false, nil
-			}
 			*cell = resourceKindCell{}
 			f.index++
 			f.phase = 0
@@ -367,7 +330,7 @@ func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *i
 		switch f.phase {
 		case 0:
 			if n.left != nil {
-				if ok, e := root.rope(n.left, w); !ok || e != nil {
+				if ok, e := root.rope(n.left); !ok || e != nil {
 					return false, e
 				}
 				n.left = nil
@@ -375,7 +338,7 @@ func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *i
 			f.phase = 1
 		case 1:
 			if n.right != nil {
-				if ok, e := root.rope(n.right, w); !ok || e != nil {
+				if ok, e := root.rope(n.right); !ok || e != nil {
 					return false, e
 				}
 				n.right = nil
@@ -383,7 +346,7 @@ func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *i
 			f.phase = 2
 		case 2:
 			if f.index < len(n.entries) {
-				if ok, e := root.token(n.entries[f.index].token, ResourceOwnerShared, w); !ok || e != nil {
+				if ok, e := root.token(n.entries[f.index].token, ResourceOwnerShared); !ok || e != nil {
 					return false, e
 				}
 				f.index++
@@ -393,7 +356,7 @@ func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *i
 		case 3:
 			if n.metadata.backing != nil {
 				backing := n.metadata.backing
-				if ok, e := root.child(backing.allocation, backing, w); !ok || e != nil {
+				if ok, e := root.child(backing.allocation, backing); !ok || e != nil {
 					return false, e
 				}
 				n.metadata.backing = nil
@@ -401,9 +364,6 @@ func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *i
 			}
 			f.phase = 4
 		default:
-			if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(*n))+2*uint64(unsafe.Sizeof(*n.metadata))) {
-				return false, nil
-			}
 			n.left, n.right, n.entries = nil, nil, nil
 			n.metadata.owner, n.metadata.charge = nil, 0
 			n.metadata = nil
@@ -414,7 +374,7 @@ func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *i
 		switch f.phase {
 		case 0:
 			if n.sourceRoot != nil {
-				if ok, e := root.rope(n.sourceRoot, w); !ok || e != nil {
+				if ok, e := root.rope(n.sourceRoot); !ok || e != nil {
 					return false, e
 				}
 				n.sourceRoot = nil
@@ -422,9 +382,6 @@ func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *i
 			}
 			f.phase = 1
 		default:
-			if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(*n))+128) {
-				return false, nil
-			}
 			if n.file != nil {
 				if e := n.file.Close(); e != nil {
 					return false, e
@@ -434,52 +391,34 @@ func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *i
 			f.value = nil
 		}
 	case *StableResourceToken:
-		return root.stepToken(f, n, w)
+		return root.stepToken(f, n)
 	case *resourceTokenMetadataReleaseV6:
 		t := n.token
 		switch f.phase {
 		case 0:
 			if t.ownedOperations != nil {
-				if w == nil {
-					consumed, e := t.ownedOperations.Release()
-					if consumed {
-						t.ownedOperations = nil
-					}
-					if e != nil {
-						return false, e
-					}
-					if !consumed {
-						return false, ErrResourceOwnership
-					}
-				} else {
-					ops, ok := t.ownedOperations.(StableResourceOwnedOperationsWithWorkV6)
-					if !ok {
-						return false, retainedalloc.ErrWorkRequired
-					}
-					owner, charge, ready, e := ops.ReleaseWithWorkV6(&t.releaseWork.operationsConsumed, w)
-					if !ready || e != nil {
-						return false, e
-					}
+				consumed, e := t.ownedOperations.Release()
+				if consumed {
 					t.ownedOperations = nil
-					if owner != nil {
-						owner.RemovePending(charge)
-					}
+				}
+				if e != nil {
+					return false, e
+				}
+				if !consumed {
+					return false, ErrResourceOwnership
 				}
 			}
 			f.phase = 1
 		case 1:
 			if t.obligationBacking != nil {
 				b := t.obligationBacking
-				if ok, e := root.child(b.allocation, b, w); !ok || e != nil {
+				if ok, e := root.child(b.allocation, b); !ok || e != nil {
 					return false, e
 				}
 				t.obligationBacking = nil
 			}
 			f.phase = 2
 		default:
-			if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(*t))) {
-				return false, nil
-			}
 			t.importedSource, t.importedFields = nil, nil
 			t.kind, t.logicalLane, t.resourceID, t.diagnosticPath, t.reachability = "", "", "", "", ""
 			t.identity = StableIdentity{}
@@ -500,7 +439,10 @@ func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *i
 		switch f.phase {
 		case 0:
 			if entry.outgoing != nil {
-				if ok, e := root.child(entry.outgoing.allocation, entry.outgoing, w); !ok || e != nil {
+				// The outgoing edge owns this backing. End the entry's
+				// borrowed alias before its last child can refund it.
+				entry.logicalObligations.ownedRemoved = nil
+				if ok, e := root.child(entry.outgoing.allocation, entry.outgoing); !ok || e != nil {
 					return false, e
 				}
 				entry.outgoing = nil
@@ -508,7 +450,7 @@ func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *i
 			f.phase = 1
 		case 1:
 			if entry.tokenMetadataOwned {
-				if ok, e := root.tokenMetadata(entry.token, w); !ok || e != nil {
+				if ok, e := root.tokenMetadata(entry.token); !ok || e != nil {
 					return false, e
 				}
 				entry.tokenMetadataOwned = false
@@ -516,9 +458,6 @@ func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *i
 			}
 			f.phase = 2
 		default:
-			if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(*entry))) {
-				return false, nil
-			}
 			*entry = stableResourceEntry{}
 			f.index++
 			f.phase = 0
@@ -528,9 +467,6 @@ func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *i
 		case 0:
 			if n.frontier != nil {
 				if !f.claimed {
-					if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(*n.frontier))) {
-						return false, nil
-					}
 					if !n.frontier.drop() {
 						n.frontier = nil
 						n.frontierValue = DurableFrontier{}
@@ -540,9 +476,6 @@ func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *i
 					f.claimed = true
 				}
 				if r := n.frontierValue.exactRIDs; r != nil && f.offset < cap(r.values) {
-					if !resourceGraphReserveV6(w, 1, 16) {
-						return false, nil
-					}
 					r.values[:cap(r.values)][f.offset] = 0
 					f.offset++
 					break
@@ -557,7 +490,7 @@ func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *i
 			f.phase = 1
 		case 1:
 			if n.index != nil {
-				if ok, e := root.child(n.index.allocation, n.index, w); !ok || e != nil {
+				if ok, e := root.child(n.index.allocation, n.index); !ok || e != nil {
 					return false, e
 				}
 				n.index = nil
@@ -565,7 +498,7 @@ func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *i
 			f.phase = 2
 		case 2:
 			if n.obligations != nil {
-				if ok, e := root.child(n.obligations.allocation, n.obligations, w); !ok || e != nil {
+				if ok, e := root.child(n.obligations.allocation, n.obligations); !ok || e != nil {
 					return false, e
 				}
 				n.obligations = nil
@@ -573,7 +506,7 @@ func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *i
 			f.phase = 3
 		case 3:
 			if n.directory != nil {
-				if ok, e := root.releaseDirectory(n.directory, w); !ok || e != nil {
+				if ok, e := root.releaseDirectory(n.directory); !ok || e != nil {
 					return false, e
 				}
 				n.directory = nil
@@ -581,17 +514,27 @@ func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *i
 			f.phase = 4
 		case 4:
 			if n.fields != nil {
-				if ok, e := root.child(n.fields.allocation, n.fields, w); !ok || e != nil {
+				if ok, e := root.child(n.fields.allocation, n.fields); !ok || e != nil {
 					return false, e
 				}
 				n.fields = nil
 			}
 			f.phase = 5
 		case 5:
+			if n.removed != nil {
+				if ok, e := root.child(n.removed.allocation, n.removed); !ok || e != nil {
+					return false, e
+				}
+				n.removed = nil
+			}
+			f.phase = 6
+		case 6:
+			clear(n.directoryKey)
+			n.directoryKey = nil
 			n.cache.mu.Lock()
 			value := n.cache.value
 			if value != nil {
-				ok, e := root.child(value.allocation, value, w)
+				ok, e := root.child(value.allocation, value)
 				if !ok || e != nil {
 					n.cache.mu.Unlock()
 					return false, e
@@ -599,7 +542,7 @@ func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *i
 				n.cache.value = nil
 			}
 			n.cache.mu.Unlock()
-			f.phase = 6
+			f.phase = 7
 		default:
 			f.value = nil
 		}
@@ -609,7 +552,7 @@ func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *i
 			if f.index < len(n.entries) {
 				entry := n.entries[f.index]
 				if entry != nil && entry.allocation != nil {
-					if ok, err := root.child(entry.allocation, entry, w); !ok || err != nil {
+					if ok, err := root.child(entry.allocation, entry); !ok || err != nil {
 						return false, err
 					}
 				}
@@ -621,9 +564,6 @@ func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *i
 			}
 		case 1:
 			if f.index < cap(n.entries) {
-				if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof((*dependencyManifestEncodedEntryV1)(nil)))) {
-					return false, nil
-				}
 				n.entries[:cap(n.entries)][f.index] = nil
 				f.index++
 			} else {
@@ -633,9 +573,6 @@ func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *i
 			}
 		case 2:
 			if f.index < cap(n.loadedEntries) {
-				if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(dependencyManifestEncodedEntryV1{}))) {
-					return false, nil
-				}
 				n.loadedEntries[:cap(n.loadedEntries)][f.index] = dependencyManifestEncodedEntryV1{}
 				f.index++
 			} else {
@@ -646,9 +583,6 @@ func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *i
 		case 3:
 			if f.offset < cap(n.payload) {
 				end := min(cap(n.payload), f.offset+4096)
-				if !resourceGraphReserveV6(w, 1, uint64(end-f.offset)) {
-					return false, nil
-				}
 				clear(n.payload[:cap(n.payload)][f.offset:end])
 				f.offset = end
 			} else {
@@ -663,9 +597,6 @@ func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *i
 		case 0:
 			if f.offset < len(n.encoded) {
 				end := min(len(n.encoded), f.offset+4096)
-				if !resourceGraphReserveV6(w, 1, uint64(end-f.offset)) {
-					return false, nil
-				}
 				clear(n.encoded[f.offset:end])
 				f.offset = end
 			} else {
@@ -675,9 +606,6 @@ func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *i
 			}
 		case 1:
 			if f.offset < len(n.entry.Reachability) {
-				if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(ReachabilityField("")))) {
-					return false, nil
-				}
 				n.entry.Reachability[f.offset] = ""
 				f.offset++
 			} else {
@@ -687,9 +615,6 @@ func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *i
 			}
 		case 2:
 			if f.offset < len(n.entry.LogicalObligations) {
-				if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(StableLogicalObligation{}))) {
-					return false, nil
-				}
 				n.entry.LogicalObligations[f.offset] = StableLogicalObligation{}
 				f.offset++
 			} else {
@@ -699,9 +624,6 @@ func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *i
 			}
 		case 3:
 			if r := n.entry.Frontier.exactRIDs; r != nil && f.offset < len(r.values) {
-				if !resourceGraphReserveV6(w, 1, 16) {
-					return false, nil
-				}
 				r.values[f.offset] = 0
 				f.offset++
 			} else {
@@ -713,30 +635,18 @@ func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *i
 	case *resourceObligationBacking:
 		values := n.values[:cap(n.values)]
 		if f.index < len(values) {
-			if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(StableLogicalObligation{}))) {
-				return false, nil
-			}
 			values[f.index] = StableLogicalObligation{}
 			f.index++
 		} else {
-			if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(*n))) {
-				return false, nil
-			}
 			n.values = nil
 			f.value = nil
 		}
 	case *resourceFieldBacking:
 		cells := n.cells[:cap(n.cells)]
 		if f.index < len(cells) {
-			if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(resourceFieldCell{}))) {
-				return false, nil
-			}
 			cells[f.index] = resourceFieldCell{}
 			f.index++
 		} else {
-			if !resourceGraphReserveV6(w, 1, 2*uint64(unsafe.Sizeof(*n))) {
-				return false, nil
-			}
 			n.cells = nil
 			f.value = nil
 		}
@@ -747,17 +657,17 @@ func (root *resourceReleaseFrameV6) stepMetadata(f *resourceReleaseFrameV6, w *i
 }
 
 // Ordinary synchronous producers drain precisely the same metadata stages.
-// They retain their historical error-return API; bounded parents keep the
-// original frame between calls and detach their containing alias before refund.
+// The original frame retains failures; callers detach their containing aliases
+// before consuming the independent accounting completion.
 func releaseResourceMetadataV6(a *resourceAllocation, value any) error {
-	root, ready, err := startResourceGraphReleaseV6(a, value, nil)
+	root, ready, err := startResourceGraphReleaseV6(a, value)
 	if err != nil || !ready {
 		return err
 	}
 	if root == nil {
 		return nil
 	}
-	completion, _, err := root.continueWork(nil)
+	completion, _, err := root.releaseGraph()
 	if err != nil {
 		return err
 	}
@@ -765,70 +675,22 @@ func releaseResourceMetadataV6(a *resourceAllocation, value any) error {
 	return nil
 }
 
-// releaseDirectory uses the exact existing provider/last-edge protocol. One
-// admitted scratch continuation is reused by this serial original traversal.
-func (root *resourceReleaseFrameV6) releaseDirectory(d *DependencyDirectoryV2, w *iterator.OrdinalScanWork) (bool, error) {
-	if w == nil {
-		consumed, err := d.ReleaseOutcome()
-		if !consumed && err == nil {
-			err = ErrResourceOwnership
-		}
-		return consumed, err
+// releaseDirectory uses the original producer and last-edge protocol.
+func (root *resourceReleaseFrameV6) releaseDirectory(d *DependencyDirectoryV2) (bool, error) {
+	consumed, err := d.ReleaseOutcome()
+	if !consumed && err == nil {
+		err = ErrResourceOwnership
 	}
-	if root.directory == nil {
-		owner := root.owner
-		if root.allocation != nil {
-			owner = root.allocation.owner
-		}
-		charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(DependencyDirectoryReleaseWork{})))
-		if !w.Reserve(1, charge) {
-			return false, nil
-		}
-		if err := owner.AddPending(charge); err != nil {
-			return false, err
-		}
-		root.directory = &DependencyDirectoryReleaseWork{}
-		root.scratchOwner, root.scratchCharge = owner, charge
-	}
-	if root.directoryTarget == nil {
-		ready, err := root.directory.bind(d, w)
-		if !ready || err != nil {
-			return false, err
-		}
-		root.directoryTarget = d
-	}
-	if root.directoryTarget != d {
-		return false, ErrResourceOwnership
-	}
-	consumed, ready, err := root.directory.continueWork(w)
-	if !ready || err != nil {
-		return false, err
-	}
-	if !consumed {
-		return false, ErrResourceOwnership
-	}
-	root.directoryTarget = nil
-	*root.directory = DependencyDirectoryReleaseWork{}
-	return true, nil
+	return consumed, err
 }
 
 type resourceTokenMetadataReleaseV6 struct{ token *StableResourceToken }
 
-func (root *resourceReleaseFrameV6) tokenMetadata(t *StableResourceToken, w *iterator.OrdinalScanWork) (bool, error) {
+func (root *resourceReleaseFrameV6) tokenMetadata(t *StableResourceToken) (bool, error) {
 	if t == nil || t.metadata == nil {
 		return true, nil
 	}
-	if w != nil && t.ownedOperations != nil {
-		ops, ok := t.ownedOperations.(StableResourceOwnedOperationsWithWorkV6)
-		if !ok {
-			return false, retainedalloc.ErrWorkRequired
-		}
-		ready, err := ops.SupportsReleaseWithWorkV6(w)
-		if !ready || err != nil {
-			return false, err
-		}
-	}
-	f, ready, err := startResourceGraphReleaseV6(t.metadata, &t.releaseWork.metadata, w)
+	f, ready, err := startResourceGraphReleaseV6(t.metadata, &t.releaseWork.metadata)
 	if !ready || err != nil {
 		return false, err
 	}

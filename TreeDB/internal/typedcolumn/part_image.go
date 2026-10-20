@@ -62,6 +62,9 @@ const (
 )
 
 type ColumnPartImageOptions struct {
+	// BuildCodec is borrowed for this operation only. Its owner closes it after
+	// encoding; neither the image nor its format retains the codec.
+	BuildCodec          *BuildCodec
 	Dictionaries        map[string]map[string]int64
 	LayoutLogicalTypes  map[string]string
 	DictionaryOrder     map[string]bool
@@ -1220,7 +1223,7 @@ func (b *columnPartImageBuilder) appendChunkedSection(section ColumnPartImageSec
 }
 
 func (b *columnPartImageBuilder) appendSectionWithOptionalCompression(section ColumnPartImageSection, data []byte, compression Compression) error {
-	selected, err := selectImageSectionPayload(section, data, compression)
+	selected, err := selectImageSectionPayloadWithCodec(section, data, compression, b.opts.BuildCodec)
 	if err != nil {
 		return err
 	}
@@ -1247,6 +1250,10 @@ func (b *columnPartImageBuilder) sectionCompression(kind ColumnPartImageSectionK
 }
 
 func selectImageSectionPayload(section ColumnPartImageSection, data []byte, compression Compression) (columnPartImageSectionData, error) {
+	return selectImageSectionPayloadWithCodec(section, data, compression, nil)
+}
+
+func selectImageSectionPayloadWithCodec(section ColumnPartImageSection, data []byte, compression Compression, codec *BuildCodec) (columnPartImageSectionData, error) {
 	if !canCompressImageSection(section, len(data), compression) {
 		section.Length = len(data)
 		if section.RawBytes == 0 && (section.Compression == CompressionNone || section.Kind != ColumnPartImageSectionColumnData) {
@@ -1254,7 +1261,7 @@ func selectImageSectionPayload(section ColumnPartImageSection, data []byte, comp
 		}
 		return columnPartImageSectionData{section: section, data: data}, nil
 	}
-	selection, err := admitCompressionInto(nil, data, 0, compression)
+	selection, err := admitCompressionIntoWithCodec(nil, data, 0, compression, codec)
 	if err != nil {
 		return columnPartImageSectionData{}, fmt.Errorf("typedcolumn: compress section %s/%s: %w", section.Kind, section.Name, err)
 	}

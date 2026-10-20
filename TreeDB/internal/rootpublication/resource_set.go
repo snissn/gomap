@@ -50,6 +50,7 @@ type stableLogicalObligationView struct {
 	directory    *DependencyDirectoryV2
 	owner        []byte
 	removed      map[stableLogicalObligationIndex]StableLogicalObligation
+	ownedRemoved *resourceObligationBacking
 }
 
 func (view stableLogicalObligationView) commitment(field ReachabilityField) stableLogicalObligationCommitment {
@@ -488,6 +489,15 @@ func (view stableLogicalObligationView) rangeDeltaValues(visit func(StableLogica
 	if visit == nil {
 		return
 	}
+	if view.ownedRemoved != nil {
+		original := visit
+		visit = func(o StableLogicalObligation) bool {
+			if _, removed := view.removedValue(o); removed {
+				return true
+			}
+			return original(o)
+		}
+	}
 	if view.index != nil && view.index.allocation != nil {
 		rangeOwnedResourceObligations(view.index, visit)
 		return
@@ -787,11 +797,11 @@ func mergeStableLogicalObligations(target *stableLogicalObligationView, incoming
 			base, incoming = incoming, base
 		}
 		if incoming.directory != nil {
-			if incoming.directory != base.directory || !bytes.Equal(incoming.owner, base.owner) || len(incoming.removed) != len(base.removed) {
+			if incoming.directory != base.directory || !bytes.Equal(incoming.owner, base.owner) || incoming.removalCount() != base.removalCount() {
 				return ErrResourceConflict
 			}
-			for key, value := range incoming.removed {
-				if base.removed[key] != value {
+			for value := range incoming.removalValues() {
+				if previous, ok := base.removedValue(value); !ok || previous != value {
 					return ErrResourceConflict
 				}
 			}
@@ -1808,6 +1818,85 @@ func (builder *StableResourceSetBuilder) MergeAppendOnlyLogicalObligations(child
 		child.mu.Unlock()
 		builder.mu.Unlock()
 		return directWork, err
+	}
+	if builder.selected || child.selected || (builder.kindViews != nil && builder.kindViews.allocation != nil) {
+		owner := child.metadata
+		if !child.selected {
+			owner = nil
+		}
+		if owner == nil || (builder.metadata != nil && builder.metadata.owner != owner.owner) || (builder.kindViews != nil && (builder.kindViews.allocation == nil || builder.kindViews.allocation.owner != owner.owner)) {
+			child.mu.Unlock()
+			builder.mu.Unlock()
+			return directWork, ErrResourceOwnership
+		}
+		var admissionErr error
+		rangeStableResourceKindViews(child.kindViews, func(entry *stableResourceEntry) bool {
+			var previous *stableResourceEntry
+			if view, ok := builder.kindViews.lookup(entry.token.kind); ok {
+				previous = findStableResourceLogical(view.logical, entry.token.logicalKey())
+				if previous != nil && !previous.token.samePhysicalIdentity(entry.token) {
+					admissionErr = ErrResourceConflict
+					return false
+				}
+			}
+			// Flat owned inputs keep the established canonical-representative
+			// coalescing route. Directory-backed owners require the stable tuple
+			// above because their persisted owner key must remain immutable.
+			if previous == nil {
+				for _, cell := range viewsCells(builder.kindViews) {
+					for _, candidate := range findStableResourcePhysical(cell.view.physical, entry.token.physicalIdentityKey()) {
+						if candidate.logicalObligations.directory != nil {
+							continue
+						}
+						coalesce, err := stableResourcesCoalesce(candidate.token, entry.token)
+						if err != nil {
+							admissionErr = err
+							return false
+						}
+						if coalesce {
+							previous = candidate
+						}
+					}
+				}
+			}
+			admitted, complete, err := selectedViewsAdmit(builder.kindViews, entry, previous, nil, &directWork)
+			admissionErr = err
+			if err == nil && (!admitted || !complete) {
+				admissionErr = ErrResourceConflict
+			}
+			return admissionErr == nil
+		})
+		var merged *resourceKindBacking
+		if admissionErr == nil {
+			merged, admissionErr = mergeOwnedResourceKindBackings(builder.kindViews, child.kindViews)
+		}
+		if admissionErr != nil {
+			child.mu.Unlock()
+			builder.mu.Unlock()
+			return directWork, admissionErr
+		}
+		if !child.owner.CompareAndSwap(uint32(ResourceOwnerBuilder), uint32(ResourceOwnerTransferred)) {
+			child.mu.Unlock()
+			builder.mu.Unlock()
+			abandonOwnedResourceKindMerge(merged)
+			return directWork, ErrResourceOwnership
+		}
+		oldTarget, oldChild := builder.kindViews, child.kindViews
+		builder.kindViews = merged
+		child.kindViews, child.entries = nil, nil
+		wrapperAllocation := child.metadata
+		child.metadata = nil
+		child.mu.Unlock()
+		child = nil
+		builder.mu.Unlock()
+		completeOwnedResourceKindMerge(oldTarget, oldChild, merged)
+		// The original independent receipt refunds only after the final
+		// containing-header access and all child aliases have ended.
+		if wrapperAllocation.drop() {
+			wrapperAllocation.refund()
+		}
+		directWork.AppendOnlyFastPath = 1
+		return directWork, nil
 	}
 	merged, distinct, mergeErr := mergeDistinctStableResourceKindViews(builder.kindViews, child.kindViews, &directWork)
 	if mergeErr != nil {
@@ -4315,7 +4404,7 @@ func (set *StableResourceSet) releaseFrom(owner ResourceOwnerState) error {
 // contribution ends at this SAME Set edge consumption, not before root disposal.
 func (set *StableResourceSet) releaseFromWithActivePins(owner ResourceOwnerState, counts map[ResourceKind]uint64) (err error) {
 	if set != nil && set.selected && set.metadata != nil {
-		completion, _, err := set.releaseSelectedGraphV6(owner, counts, nil)
+		completion, _, err := set.releaseSelectedGraphV6(owner, counts)
 		if err != nil {
 			// Public ordinary release preserves the original containing receipt.
 			// Recovery must distinguish physical cleanup refusal from corrupt
@@ -4776,7 +4865,7 @@ func stableResourceEntryDurablePrefix(prior, entry *stableResourceEntry) (uint64
 
 func stableResourceEntryCoversPublication(prior, entry *stableResourceEntry) bool {
 	if prior != nil && (prior.logicalObligations.directory != nil || entry.logicalObligations.directory != nil) {
-		if prior.logicalObligations.directory != entry.logicalObligations.directory || prior.logicalObligations.tail != entry.logicalObligations.tail || len(prior.logicalObligations.removed) != 0 || len(entry.logicalObligations.removed) != 0 {
+		if prior.logicalObligations.directory != entry.logicalObligations.directory || prior.logicalObligations.tail != entry.logicalObligations.tail || prior.logicalObligations.removalCount() != 0 || entry.logicalObligations.removalCount() != 0 {
 			return false
 		}
 	}

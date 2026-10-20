@@ -601,6 +601,12 @@ func TestTypedColumnTransplantNoProductionPublication(t *testing.T) {
 	collectionsDir := filepath.Join(repoRoot, "TreeDB", "collections")
 	allowedImports := map[string]struct{}{
 		filepath.Clean(filepath.Join(collectionsDir, "typed_column_adapter.go")): {},
+		// #5139 reuses the existing BuildCodec in the maintained typed-column
+		// publisher and its captured-prefix materializer. These exact seams
+		// retain the existing asset manager and root publication authority.
+		filepath.Clean(filepath.Join(collectionsDir, "typed_column_publication.go")): {},
+		filepath.Clean(filepath.Join(collectionsDir, "column_publish_write.go")):     {},
+		filepath.Clean(filepath.Join(collectionsDir, "native_typed_materialize.go")): {},
 		// #1929 keeps primitive scalar adapter build/read helpers in a narrow
 		// typed-column adapter extension rather than publishing a generic data plane.
 		filepath.Clean(filepath.Join(collectionsDir, "typed_column_scalar_primitive.go")): {},

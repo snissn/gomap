@@ -5619,60 +5619,71 @@ func (db *DB) ReclaimObservedValueLogSources(ctx context.Context, ids []uint32) 
 	if err := db.Checkpoint(); err != nil {
 		return stats, err
 	}
-	finishFence, err := db.BeginValueLogMaintenanceFence(ctx)
-	if err != nil {
-		return stats, err
-	}
-	defer finishFence()
-	if refresher, ok := db.backend.(valueLogSetRefresher); ok {
-		if err := refresher.RefreshValueLogSet(); err != nil {
-			return stats, err
-		}
-	}
-	reclaimIDs, err := db.revalidateUnreferencedObservedValueLogSources(ctx, gcer, observed)
-	if err != nil {
-		return stats, err
-	}
-	reclaimSeen := make(map[uint32]struct{}, len(reclaimIDs))
-	for _, id := range reclaimIDs {
-		reclaimSeen[id] = struct{}{}
-	}
-	pruneStats, _ := db.runRetainedValueLogPruneInline(true, reclaimSeen)
-	pruneReclaimedSegments := pruneStats.ObservedSourceRemovedSegments + pruneStats.ObservedSourceZombieMarkedSegments
-	pruneReclaimedBytes := pruneStats.ObservedSourceRemovedBytes + pruneStats.ObservedSourceZombieMarkedBytes
-	if pruneReclaimedSegments > 0 {
-		stats.SegmentsDeleted += pruneReclaimedSegments
-		stats.ObservedSourceSegmentsDeleted += pruneReclaimedSegments
-	}
-	if pruneReclaimedBytes > 0 {
-		stats.BytesDeleted += pruneReclaimedBytes
-		stats.ObservedSourceBytesDeleted += pruneReclaimedBytes
-	}
-
-	if hasValueLogGC && len(reclaimIDs) > 0 {
-		opts := db.valueLogGCOptionsForObservedSources(false, reclaimSeen)
-		opts.ObservedSourceFileIDs = reclaimIDs
-		opts.ObservedSourceAssumeUnreferenced = true
-		opts.ObservedSourceReclaimActive = true
-		gcStats, err := gcer.ValueLogGC(ctx, opts)
+	run := func() error {
+		finishFence, err := db.BeginValueLogMaintenanceFence(ctx)
 		if err != nil {
-			return stats, err
+			return err
 		}
-		gcStats.SegmentsDeleted += stats.SegmentsDeleted
-		gcStats.BytesDeleted += stats.BytesDeleted
-		gcStats.ObservedSourceSegmentsDeleted += stats.ObservedSourceSegmentsDeleted
-		gcStats.ObservedSourceBytesDeleted += stats.ObservedSourceBytesDeleted
-		stats = gcStats
-	}
-	if stats.ObservedSourceSegmentsDeleted > 0 {
-		db.cleanupMissingObservedValueLogRetains(seen)
-	}
-	if hasLeafGenerationGC {
-		if _, err := leafGcer.LeafGenerationGC(ctx, db.leafGenerationGCOptions()); err != nil {
-			return stats, err
+		defer finishFence()
+		if refresher, ok := db.backend.(valueLogSetRefresher); ok {
+			if err := refresher.RefreshValueLogSet(); err != nil {
+				return err
+			}
 		}
+		reclaimIDs, err := db.revalidateUnreferencedObservedValueLogSources(ctx, gcer, observed)
+		if err != nil {
+			return err
+		}
+		reclaimSeen := make(map[uint32]struct{}, len(reclaimIDs))
+		for _, id := range reclaimIDs {
+			reclaimSeen[id] = struct{}{}
+		}
+		pruneStats, _ := db.runRetainedValueLogPruneInline(true, reclaimSeen)
+		pruneReclaimedSegments := pruneStats.ObservedSourceRemovedSegments + pruneStats.ObservedSourceZombieMarkedSegments
+		pruneReclaimedBytes := pruneStats.ObservedSourceRemovedBytes + pruneStats.ObservedSourceZombieMarkedBytes
+		if pruneReclaimedSegments > 0 {
+			stats.SegmentsDeleted += pruneReclaimedSegments
+			stats.ObservedSourceSegmentsDeleted += pruneReclaimedSegments
+		}
+		if pruneReclaimedBytes > 0 {
+			stats.BytesDeleted += pruneReclaimedBytes
+			stats.ObservedSourceBytesDeleted += pruneReclaimedBytes
+		}
+
+		if hasValueLogGC && len(reclaimIDs) > 0 {
+			opts := db.valueLogGCOptionsForObservedSources(false, reclaimSeen)
+			opts.ObservedSourceFileIDs = reclaimIDs
+			opts.ObservedSourceAssumeUnreferenced = true
+			opts.ObservedSourceReclaimActive = true
+			gcStats, err := gcer.ValueLogGC(ctx, opts)
+			if err != nil {
+				return err
+			}
+			gcStats.SegmentsDeleted += stats.SegmentsDeleted
+			gcStats.BytesDeleted += stats.BytesDeleted
+			gcStats.ObservedSourceSegmentsDeleted += stats.ObservedSourceSegmentsDeleted
+			gcStats.ObservedSourceBytesDeleted += stats.ObservedSourceBytesDeleted
+			stats = gcStats
+		}
+		if stats.ObservedSourceSegmentsDeleted > 0 {
+			db.cleanupMissingObservedValueLogRetains(seen)
+		}
+		if hasLeafGenerationGC {
+			if _, err := leafGcer.LeafGenerationGC(ctx, db.leafGenerationGCOptions()); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
-	return stats, nil
+	if db.cow != nil {
+		// GC can advance the leaf-generation view without a root commit. Keep
+		// that change and its equivalent COW basis refresh under the same
+		// maintenance fence before admitting successor writes.
+		err = db.runWithBackendMaintenanceOptions(backendMaintenanceOptions{skipCheckpoint: true}, run)
+	} else {
+		err = run()
+	}
+	return stats, err
 }
 
 func (db *DB) revalidateUnreferencedObservedValueLogSources(ctx context.Context, gcer backendValueLogGCer, observed []uint32) ([]uint32, error) {
@@ -7980,9 +7991,13 @@ func (db *DB) checkpointForBackendMaintenance() error {
 }
 
 type backendMaintenanceOptions struct {
+	// completeAdmittedCOW belongs only to the named owner-qualified rewrite.
+	// Once admitted under flushMu, Close waits for reconciliation and refresh.
+	completeAdmittedCOW   bool
 	skipCheckpoint        bool
 	skipRetainedPruneWait bool
 	afterCOWRefresh       func() error
+	cowCheckpointFallback bool
 }
 
 func (db *DB) runWithBackendMaintenance(fn func() error) error {
@@ -7999,6 +8014,10 @@ func (db *DB) runWithBackendMaintenanceOptions(opts backendMaintenanceOptions, f
 	db.checkpointMu.Lock()
 	for db.checkpointing.Load() || db.maintenanceActive.Load() {
 		db.checkpointCond.Wait()
+	}
+	if opts.completeAdmittedCOW && db.closing.Load() {
+		db.checkpointMu.Unlock()
+		return errDBClosing
 	}
 	// Publish the maintenance-active flag while checkpointMu is held so Checkpoint
 	// and background maintenance serialize through the same mutex/cond state.
@@ -8018,12 +8037,18 @@ func (db *DB) runWithBackendMaintenanceOptions(opts backendMaintenanceOptions, f
 	if db.cow != nil {
 		db.flushMu.Lock()
 		defer db.flushMu.Unlock()
+		if opts.completeAdmittedCOW && db.closing.Load() {
+			return errDBClosing
+		}
 		// maintenanceActive denies new admission; drain writers that crossed the
 		// flag before permitting backend root changes, even for skipCheckpoint.
 		db.writeMu.Lock()
 		db.writeMu.Unlock()
 		if err := db.completeCOWHandoff(); err != nil {
 			return err
+		}
+		if opts.cowCheckpointFallback {
+			return db.refreshCOWCheckpointFallback()
 		}
 		db.cow.refreshRequired.Store(true)
 	}
@@ -8037,10 +8062,10 @@ func (db *DB) runWithBackendMaintenanceOptions(opts backendMaintenanceOptions, f
 	if fn != nil {
 		fnErr = fn()
 	}
-	if db.closing.Load() {
+	if db.closing.Load() && !opts.completeAdmittedCOW {
 		return fnErr
 	}
-	reconcileErr := db.reconcileSplitValueLogWritersAfterBackendMaintenance()
+	reconcileErr := db.reconcileSplitValueLogWritersAfterBackendMaintenanceAdmitted(opts.completeAdmittedCOW)
 	if db.cow != nil {
 		if err := db.finishCOWBackendMaintenance(errors.Join(fnErr, reconcileErr)); err != nil {
 			return err
@@ -8069,7 +8094,13 @@ func (db *DB) ReconcileAfterBackendMaintenance() error {
 }
 
 func (db *DB) reconcileSplitValueLogWritersAfterBackendMaintenance() error {
-	if db == nil || db.closing.Load() {
+	return db.reconcileSplitValueLogWritersAfterBackendMaintenanceAdmitted(false)
+}
+
+// admittedCompletion is valid only while the original maintenance flushMu lease
+// keeps Close from disposing readers, append lanes, or the captured basis.
+func (db *DB) reconcileSplitValueLogWritersAfterBackendMaintenanceAdmitted(admittedCompletion bool) error {
+	if db == nil || (db.closing.Load() && !admittedCompletion) {
 		return nil
 	}
 	if db.valueLogReader != nil {
@@ -8971,11 +9002,9 @@ func (s *foregroundReaderState) end() uint32 {
 }
 
 type DB struct {
-	cow *cowCache
-	// One original cache-lifetime governor for native legacy captures. COW
-	// uses cow.budget. Every original metadata owner enrolls on this same budget.
-	nativeMVCCBudget             *memtable.COWBudget // guarded by mu
-	nativeMVCCLimits             memtable.COWLimits
+	flushRequested               atomic.Bool
+	ownedCloseGuard              *backenddb.OwnedCallbackCloseGuard
+	cow                          *cowCache
 	writeWaitForCheckpointActive atomic.Int64
 
 	mu          sync.RWMutex
@@ -9330,6 +9359,7 @@ type DB struct {
 	rangeSpanSpansFlushed                             atomic.Uint64
 	rangeSpanFlushBatches                             atomic.Uint64
 	memtableAdaptive                                  bool
+	memtableMVCCOrdered                               atomic.Bool // monotone actual qualified-read demand, not authority
 	memtableAdaptiveObserve                           atomic.Bool
 	memtableAdaptiveBTreeMinIters                     uint64
 	memtableAdaptiveBTreeMinItersSet                  bool
@@ -11969,6 +11999,7 @@ const (
 	adaptiveDecisionBTreeBlockedMinIters
 	adaptiveDecisionAppendSequential
 	adaptiveDecisionHashMixed
+	adaptiveDecisionMVCCOrdered
 )
 
 func adaptiveDecisionReasonString(v uint32) string {
@@ -11983,6 +12014,8 @@ func adaptiveDecisionReasonString(v uint32) string {
 		return "append_sequential"
 	case adaptiveDecisionHashMixed:
 		return "hash_mixed"
+	case adaptiveDecisionMVCCOrdered:
+		return "mvcc_ordered"
 	default:
 		return "unknown"
 	}
@@ -12396,6 +12429,18 @@ func (db *DB) chooseAdaptiveMemtableModeLocked() memtable.Mode {
 	iters := db.memtableStats.iterators.Load()
 	rangeIters := db.memtableStats.rangeIters.Load()
 
+	rangeIterPct := 0.0
+	if iters > 0 {
+		rangeIterPct = float64(rangeIters) / float64(iters)
+	}
+	// A real canonical Store successor read supplies an ordered workload hint
+	// without inventing iterator observations. Keep future mutable generations
+	// ordered even when subsequent traffic is write-heavy.
+	if db.memtableMVCCOrdered.Load() {
+		db.noteAdaptiveMemtableDecision(memtable.ModeBTree, adaptiveDecisionMVCCOrdered, writes, seqWrites, overwriteWrites, iters, rangeIters, rangeIterPct)
+		return memtable.ModeBTree
+	}
+
 	// Default to configured mode if not enough data
 	if writes < adaptiveMinWrites {
 		mode := db.currentMemtableMode()
@@ -12405,10 +12450,6 @@ func (db *DB) chooseAdaptiveMemtableModeLocked() memtable.Mode {
 
 	seqWritePct := float64(seqWrites) / float64(writes)
 	overwriteWritePct := float64(overwriteWrites) / float64(writes)
-	rangeIterPct := 0.0
-	if iters > 0 {
-		rangeIterPct = float64(rangeIters) / float64(iters)
-	}
 
 	btreeBlockedByMinIters := false
 	// 1) Range-heavy read paths benefit most from BTree order stability.
@@ -12445,7 +12486,7 @@ func (db *DB) updateAdaptiveObservationLocked() {
 	observe := db.memtableAdaptive
 	// Early rotations may finish byte warmup before a measured decision. Keep
 	// a measured append-only stop even when range deletion resets live counters.
-	if observe && !db.memtableWarmupActive && db.currentMemtableMode() == memtable.ModeAppendOnly &&
+	if observe && !db.memtableMVCCOrdered.Load() && !db.memtableWarmupActive && db.currentMemtableMode() == memtable.ModeAppendOnly &&
 		(!db.memtableAdaptiveObserve.Load() || db.memtableAdaptiveDecisionWrites.Load() >= adaptiveMinWrites) {
 		observe = false
 	}
@@ -12519,13 +12560,6 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		modeStr = strings.TrimPrefix(modeStr, "adaptive:")
 	}
 	cowMode := modeStr == "cow_btree"
-	nativeMVCCLimits := opts.COWMemtableLimits
-	if nativeMVCCLimits == (memtable.COWLimits{}) {
-		nativeMVCCLimits = memtable.DefaultCOWLimits()
-	}
-	if err := nativeMVCCLimits.Validate(); err != nil {
-		return nil, err
-	}
 	var cowLimits memtable.COWLimits
 	if cowMode {
 		var e error
@@ -12881,6 +12915,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 				cowOwner.close()
 			}
 		}()
+		if err := cowOwner.bindAcceptedPrefix(provider); err != nil {
+			return nil, err
+		}
 	}
 	var indexer *memtable.HashSortedIndexer
 	if !cowMode {
@@ -13129,6 +13166,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		lanes[2].vlogGenerationClass = vlogGenerationClassCold
 	}
 	db := &DB{
+		ownedCloseGuard:                            nil,
 		dir:                                        walDir,
 		valueLogDir:                                valueLogDir,
 		leafLogDir:                                 leafLogDir,
@@ -13252,8 +13290,13 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		lanes:                                      lanes,
 		flushLaneMu:                                make([]sync.Mutex, len(lanes)),
 	}
+	if guarded, ok := backend.(interface {
+		OwnedCallbackCloseGuard() *backenddb.OwnedCallbackCloseGuard
+	}); ok {
+		db.ownedCloseGuard = guarded.OwnedCallbackCloseGuard()
+	}
+
 	db.cow = cowOwner
-	db.nativeMVCCLimits = nativeMVCCLimits
 	db.storeMemtableMode(mode)
 	if opts.IndexOuterLeavesInValueLog {
 		db.leafLog.id = leafLogLaneID
@@ -13445,6 +13488,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 
 	// Start background flusher
 	db.wg.Add(1)
+	if db.cow != nil {
+		db.cow.flushWake = db.flushCh
+	}
 	go db.flushLoop()
 	db.startVlogGenerationLoop()
 	db.startVlogShapeLoop()
@@ -13582,7 +13628,7 @@ func (db *DB) retainOriginalCleanupError(err error) {
 			return
 		}
 		containsPrior := errors.Is(err, prior)
-		var original rootpublication.OriginalCleanupPriorBinder
+		var original rootpublication.OriginalCleanupPriorBinding
 		if !containsPrior {
 			original = rootpublication.SelectOriginalCleanupPrior(err, prior)
 		}
@@ -13591,7 +13637,7 @@ func (db *DB) retainOriginalCleanupError(err error) {
 			db.bgErrMu.Unlock()
 			continue
 		}
-		if containsPrior || (original != nil && original.TryLinkPriorCleanupError(prior)) {
+		if containsPrior || original.TryLink(prior) {
 			db.bgErr, db.bgErrRevision = err, revision+1
 			db.bgErrMu.Unlock()
 			return
@@ -13599,7 +13645,7 @@ func (db *DB) retainOriginalCleanupError(err error) {
 		db.bgErrMu.Unlock()
 		// Existing ordinary errors keep first-error semantics. Actual cleanup
 		// receipts provide the preborn edge needed to retain original custody.
-		if original == nil {
+		if !original.Valid() {
 			return
 		}
 	}
@@ -26458,6 +26504,9 @@ func (db *DB) flushSomeBlocking(sync bool, maxMemtables int, maxDuration time.Du
 }
 
 func (db *DB) Close() error {
+	if err := db.ownedCloseGuard.CheckClose(); err != nil {
+		return err
+	}
 	defer func() {
 		db.conditionalOracle.mu.Lock()
 		defer db.conditionalOracle.mu.Unlock()
@@ -26466,7 +26515,6 @@ func (db *DB) Close() error {
 			db.conditionalOracle.history = nil
 		}
 	}()
-	defer db.closeNativeMVCCBudgetV6()
 	// Keep actual producer governors live through the final backend checkpoint,
 	// arena/registry disposal and dictionary cleanup. Failed cleanup retains debt.
 	if db.cow != nil {
@@ -28533,6 +28581,7 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 	if !db.disableJournal {
 		if db.canReuseWALSegments() {
 			if triggerFlush {
+				db.flushRequested.Store(true)
 				select {
 				case db.flushCh <- struct{}{}:
 				default:
@@ -28548,6 +28597,7 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 	}
 
 	if triggerFlush {
+		db.flushRequested.Store(true)
 		select {
 		case db.flushCh <- struct{}{}:
 		default:
@@ -28734,6 +28784,7 @@ func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) erro
 	}
 
 	if triggerFlush {
+		db.flushRequested.Store(true)
 		select {
 		case db.flushCh <- struct{}{}:
 		default:
@@ -29277,18 +29328,34 @@ func (db *DB) untrackValueLogSegmentFromLane(l *lane, path string) bool {
 }
 
 func (db *DB) flushLoop() {
-	defer db.wg.Done()
-
+	// Close joins eligible work, not user-held cuts. The SAME goroutine remains
+	// cleanup-only until the final retained cut transfers its preborn work.
+	joined := false
+	defer func() {
+		if !joined {
+			db.wg.Done()
+		}
+	}()
 	for {
 		select {
 		case <-db.closeCh:
-			// Flush all remaining with sync on close.
 			db.flushAll(true)
-			return
+			db.drainSemanticCleanup()
+			db.wg.Done()
+			joined = true
+			for {
+				db.drainSemanticCleanup()
+				if db.semanticCleanupTerminal() {
+					return
+				}
+				<-db.flushCh
+			}
 		case <-db.flushCh:
-			// Background flush is async when WAL is enabled. Without a WAL, we
-			// upgrade to a synced flush unless RelaxedSync is set.
-			db.flushAll(false)
+			db.drainSemanticCleanup()
+			// Coalesced real requests survive cleanup-only wake consumption.
+			if db.flushRequested.Swap(false) {
+				db.flushAll(false)
+			}
 		}
 	}
 }
@@ -34414,6 +34481,7 @@ func (db *DB) Stats() map[string]string {
 
 // TriggerFlush schedules a background flush pass (best-effort).
 func (db *DB) TriggerFlush() {
+	db.flushRequested.Store(true)
 	select {
 	case db.flushCh <- struct{}{}:
 	default:
@@ -38147,6 +38215,19 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 		}
 	}
 
+	if b.db.cow != nil {
+		if err := b.admitCOWAccepted(); err != nil {
+			return err
+		}
+		defer func() {
+			if b.cowState.accepted.Valid() && !b.cowState.receipt.Assigned {
+				if err := b.cowState.accepted.CancelAccepted(); err != nil {
+					b.db.reportError(err)
+				}
+				b.cowState.accepted = rootpublication.AcceptedTicket{}
+			}
+		}()
+	}
 	if err := b.db.beginDirectWrite(); err != nil {
 		return err
 	}
@@ -38155,7 +38236,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 
 func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 	if b.db.cow != nil {
-		if len(b.entries) == 0 {
+		if len(b.entries) == 0 && b.cowState.native == nil {
 			// Empty writes publish no cut. A WAL-off explicit sync still covers
 			// preceding writes; release admission before its checkpoint barrier.
 			var covered uint64
@@ -38195,10 +38276,14 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 				}
 				b.db.cow.writerMu.Unlock()
 				unlockWriteMu()
-				rollover.drain()
+				if cleanupErr := rollover.drain(); cleanupErr != nil {
+					b.db.reportError(cleanupErr)
+					return joinCOWCleanupError(err, cleanupErr)
+				}
 				if err != nil {
 					return err
 				}
+				b.db.flushRequested.Store(true)
 				select {
 				case b.db.flushCh <- struct{}{}:
 				default:

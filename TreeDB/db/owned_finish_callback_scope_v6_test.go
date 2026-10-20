@@ -2,7 +2,6 @@ package db
 
 import (
 	"errors"
-	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"testing"
 )
 
@@ -17,10 +16,8 @@ func TestOwnedFinishFirstCallbackCloseRefusesBeforeHooksV6(t *testing.T) {
 	if r == nil {
 		t.Fatal("missing actual publisher")
 	}
-	w := &iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20}
-	entered, e := r.EnterOwnedFinishCallbackV6(w)
-	if e != nil || !entered {
-		t.Fatalf("scope %v %v", entered, e)
+	if e = r.EnterOwnedFinishCallbackV6(); e != nil {
+		t.Fatal(e)
 	}
 	// This is FIRST Close: no terminal owner or user-hook drain has started.
 	if e = db.Close(); !errors.Is(e, errPublicationCallbackCloseV6) {
@@ -33,10 +30,42 @@ func TestOwnedFinishFirstCallbackCloseRefusesBeforeHooksV6(t *testing.T) {
 	if e = db.SetSync([]byte("live"), []byte("value")); e != nil {
 		t.Fatal(e)
 	}
-	if db.ownedFinishCallerV6 != 0 {
+	if db.ownedFinishGuardV6.caller.Load() != 0 {
 		t.Fatal("callback marker retained")
 	}
 	if e = db.Close(); e != nil {
 		t.Fatal(e)
+	}
+}
+
+func TestOwnedFinishConcurrentCleanupAllowsActualPrimaryPublicationV6(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir(), IndexPrimaryDirectory: true, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	entered, release, done := make(chan error, 1), make(chan struct{}), make(chan struct{})
+	go func() {
+		err := db.ownedFinishGuardV6.EnterCleanup()
+		entered <- err
+		if err == nil {
+			<-release
+			db.ownedFinishGuardV6.LeaveCleanup()
+		}
+		close(done)
+	}()
+	if err := <-entered; err != nil {
+		t.Fatal(err)
+	}
+	defer func() { close(release); <-done }()
+	before := db.State().CommitSeq
+	if err := db.SetSync([]byte("real-primary"), []byte("while-cleanup-held")); err != nil {
+		t.Fatal(err)
+	}
+	if db.State().CommitSeq <= before {
+		t.Fatal("actual publication did not advance")
+	}
+	if db.ownedFinishGuardV6.cleanup.Load() == 0 || db.ownedFinishGuardV6.caller.Load() != 0 {
+		t.Fatal("independent callback lane marker lost")
 	}
 }

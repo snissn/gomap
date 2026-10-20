@@ -45,11 +45,20 @@ func (db *DB) runCommandWALReplayFinalizers() error {
 // its normal high-level executor and must publish the supplied frame LSN.
 type CommandWALReplayHandler func(db *DB, env commitlog.CommandEnvelope) error
 
+// CommandWALNativePrepare shares the existing command-kind registration with
+// replay. It prepares immutable effects against the supplied retained complete
+// cut; it cannot append, publish, advance coverage or acquire live collections.
+// Assignment-dependent native finalization uses the caller's admitted normal
+// command append/finalizer after this preassignment preparation.
+type CommandWALNativePrepare func(db *DB, env commitlog.CommandEnvelope, basis NativeSemanticState, snapshot *Snapshot, lease *StableResourceCaptureLease) (*NativePreparedPublication, error)
+
 type CommandWALReplayHandlerOptions struct {
+	NativePrepare         CommandWALNativePrepare
 	NeedsReplayLogSupport bool
 }
 
 type commandWALReplayHandlerRegistration struct {
+	nativePrepare         CommandWALNativePrepare
 	handler               CommandWALReplayHandler
 	needsReplayLogSupport bool
 }
@@ -71,6 +80,7 @@ func RegisterCommandWALReplayHandlerWithOptions(kind commitlog.CommandKind, hand
 	}
 	registration := commandWALReplayHandlerRegistration{
 		handler:               handler,
+		nativePrepare:         opts.NativePrepare,
 		needsReplayLogSupport: opts.NeedsReplayLogSupport,
 	}
 	if _, loaded := commandWALReplayHandlers.LoadOrStore(kind, registration); loaded {
@@ -85,4 +95,21 @@ func lookupCommandWALReplayHandler(kind commitlog.CommandKind) (commandWALReplay
 	}
 	typed, ok := handler.(commandWALReplayHandlerRegistration)
 	return typed, ok
+}
+
+// PrepareCommandWALNativeEffects invokes only the registered native preparation
+// seam. Unmigrated kinds refuse before assignment instead of publishing partial
+// children or treating a replay handler as a composite effects planner.
+func (db *DB) PrepareCommandWALNativeEffects(env commitlog.CommandEnvelope, basis NativeSemanticState, snapshot *Snapshot, lease *StableResourceCaptureLease) (*NativePreparedPublication, error) {
+	registration, ok := lookupCommandWALReplayHandler(env.Kind)
+	if !ok || registration.nativePrepare == nil {
+		return nil, ErrNativeSemanticUnsupported
+	}
+	if snapshot == nil || lease == nil {
+		return nil, ErrRootPublicationBasisMismatch
+	}
+	if err := lease.ValidateDBV1(db); err != nil {
+		return nil, err
+	}
+	return registration.nativePrepare(db, env, basis, snapshot, lease)
 }

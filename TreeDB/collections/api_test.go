@@ -548,10 +548,9 @@ func TestCollectionValueLogRewriteOffline_RoundTripWithCompressedSecondaryIndexe
 		before = images()
 	}
 	rewriteStats, err := treedb.ValueLogRewriteOffline(opts)
-	if before != nil {
-		if !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
-			t.Fatalf("unsupported offline rewrite: %v", err)
-		}
+	// Only PRIMARY capsule replacement needs the complete stable namespace
+	// contract. The pager-root representation can still rewrite successfully.
+	if before != nil && errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
 		if !reflect.DeepEqual(before, images()) {
 			t.Fatal("unsupported offline rewrite changed persistent inputs")
 		}
@@ -10123,7 +10122,7 @@ func TestCollectionCachedCatalogRefreshesAfterCrossHandleWrite(t *testing.T) {
 	}
 }
 
-func TestCollectionCachedCatalogUsesSystemRoot(t *testing.T) {
+func TestCollectionCachedCatalogUsesExactSnapshotBasis(t *testing.T) {
 	opts := treedb.OptionsFor(treedb.ProfileCommandWALRelaxed, t.TempDir())
 	d, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
 	if err != nil {
@@ -10173,7 +10172,7 @@ func TestCollectionCachedCatalogUsesSystemRoot(t *testing.T) {
 	col.catalogMu.Lock()
 	col.catalog = catalog
 	col.catalogSystemRoot = snapshotSystemRoot(snap)
-	col.catalogCommitSeq = snapshotCommitSeq(snap) + 1
+	col.catalogCommitSeq = snapshotCommitSeq(snap)
 	col.catalogMu.Unlock()
 
 	refreshed, err := col.catalogForSnapshot(snap)
@@ -10181,10 +10180,18 @@ func TestCollectionCachedCatalogUsesSystemRoot(t *testing.T) {
 		t.Fatalf("catalogForSnapshot: %v", err)
 	}
 	if refreshed != catalog {
-		t.Fatal("catalog cache missed despite unchanged system root")
+		t.Fatal("catalog cache missed despite exact snapshot basis")
 	}
 	if got, want := refreshed.rootID(rootName), catalog.rootID(rootName); got != want {
 		t.Fatalf("refreshed root=%d want %d", got, want)
+	}
+	// A page ID can be reused by a later commit. The same system root alone
+	// must never make a catalog from another commit eligible for reuse.
+	col.catalogMu.Lock()
+	col.catalogCommitSeq = snapshotCommitSeq(snap) + 1
+	col.catalogMu.Unlock()
+	if col.cachedCatalogForSnapshot(snap) != nil {
+		t.Fatal("catalog cache reused a different commit at the same system root")
 	}
 }
 

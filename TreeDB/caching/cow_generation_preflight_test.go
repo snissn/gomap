@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
@@ -74,19 +75,24 @@ func TestCOWPredictedRotationRefusesBeforeAppendAndResumesAfterDrain(t *testing.
 		t.Fatal(err)
 	}
 	c := db.cow
-	// Fill admission with real independent writer owners. The history scalar
-	// only triggers rollover; the C1 authority must refuse successor admission.
-	var extras []*memtable.COWWriter
-	for {
-		w, err := memtable.NewCOWWriter(c.budget)
-		if err != nil {
-			break
-		}
-		extras = append(extras, w)
+	// The first dirty write already owns its promised empty successor and
+	// source slot. Exhaust actual rollover scratch admission instead; the
+	// history scalar only triggers rollover, never authorizes allocation.
+	stats := c.maintenance.Stats()
+	remaining := c.maintenance.Limits().MaxTotalBytes - stats.TotalBytes
+	leaseCharge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
+	if remaining < leaseCharge {
+		t.Fatal("fixture has no maintenance admission to exhaust")
 	}
+	extra, err := c.maintenance.AcquireExternal(remaining - leaseCharge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer extra.Close()
 	c.writerMu.Lock()
 	c.cut.shards[0].history = c.budget.Limits().MaxGenerationBytes
 	before := c.cut
+	beforeSources := c.budget.Stats().Sources
 	c.writerMu.Unlock()
 	db.externalCommandWAL = true
 	b := db.NewBatchWithSize(1)
@@ -95,17 +101,14 @@ func TestCOWPredictedRotationRefusesBeforeAppendAndResumesAfterDrain(t *testing.
 		t.Fatal(err)
 	}
 	appended := false
-	err := b.WriteAfterCommandWALAppendWithPreparedRevision(false, func() error { appended = true; return errors.New("unexpected append") })
+	err = b.WriteAfterCommandWALAppendWithPreparedRevision(false, func() error { appended = true; return errors.New("unexpected append") })
 	if !errors.Is(err, memtable.ErrCOWCapacity) || appended {
 		t.Fatalf("refusal=%v appended=%v", err, appended)
 	}
-	if c.cut != before || c.budget.Stats().Sources != 0 {
+	if c.cut != before || c.budget.Stats().Sources != beforeSources {
 		t.Fatal("refused rotation changed cut or froze source")
 	}
-	for _, w := range extras {
-		r := w.Close()
-		r.Drain()
-	}
+	extra.Close()
 	db.externalCommandWAL = false
 	if err := b.Write(); err != nil {
 		t.Fatal(err)

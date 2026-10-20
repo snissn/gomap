@@ -25,6 +25,14 @@ captured prepared-view lifetime are specified in
 [r1-row-reads.md](r1-row-reads.md). The benchmark contract retains the historical
 residual-only range rejection as starting-source evidence.
 
+Online value-log rewrite in an activated COW database uses a named,
+owner-qualified physical maintenance path. The public operation retains its
+checkpoint/protection/RID contract; a direct backend alias remains refused.
+Admitted rewrite completion, including partial-work error reconciliation, joins
+before overlapping Close disposes its original cache resources. WAL and on-disk
+formats remain unchanged. The authority is not shared with generic callbacks,
+pack, vacuum, or offline rewrite; see [value-log lifecycle](value-log-lifecycle.md).
+
 ## 1. Key Model
 
 - Raw KV keys and values are byte strings.
@@ -211,22 +219,21 @@ Retained-version iteration and discard/pruning extend that opt-in owner:
   older versions. When that anchor is a tombstone, the tombstone is deleted
   only after all older versions, so a crash cannot expose an older value;
   allowed reads then observe absence until a newer value exists.
-- In eligible legacy producers, pruning is a reverse scan plus bounded delete
-  batches. Batch size alone does not bound the entire pass. COW pruning refuses
-  before floor/WAL effects pending its separate maintenance qualification. Durable mode
-  re-syncs the floor before its first delete; interrupted runs are safe and
-  idempotent. TreeDB snapshots acquired before floor advancement keep their
-  pinned physical view until close.
+- Pruning uses a reverse scan plus ordinary bounded delete batches. Batch size
+  bounds one publication, not the entire pass. Durable mode re-syncs the floor
+  before its first delete; interrupted runs are safe and idempotent. TreeDB
+  snapshots acquired before floor advancement keep their pinned physical view
+  until close.
 - Floor advancement and pruning are serialized by one owner-local maintenance
-  lock. With the qualified successor capability, pruning holds the Store
-  floor lock exclusively through its scan, physical delete batches (including
-  durable acknowledgement), and iterator/snapshot cleanup. Foreground reads,
-  commits and snapshot acquisition wait; snapshots already pinned remain
-  readable. This full-prune foreground fence is a correctness-driven ceiling,
-  pending measurement before any narrower capture protocol. Adapters without
-  the capability retain the earlier release after floor/snapshot capture and
-  allow foreground operations during pruning. The maintenance lock prevents
-  the captured floor from advancing underneath either prune path.
+  lock. COW pruning captures the original complete read cut under Store floor
+  admission and releases foreground admission before constructing its iterator
+  or deleting records. Every selected version is at/below the captured floor;
+  concurrent allowed writes are strictly above it and cannot replace selected
+  physical keys. Existing old cuts retain their original sources and pointers.
+  Legacy successor producers combine retained tables with a later backend
+  snapshot and keep their established exclusive Store fence through deletion
+  and cleanup. Batch-only adapters retain release after floor/snapshot capture.
+  The maintenance lock prevents floor advancement underneath either prune path.
 - Successful prune accounting satisfies `Visited = Retained + Pruned`.
   `Skipped` is the subset of `Retained` with timestamps above the captured
   floor, not a disjoint outcome counter. Partial-error statistics report only
@@ -357,10 +364,9 @@ teardown. Snapshot/iterator Close remains safe after DB Close, but subsequent
 storage reads return a closed error. `GetManyView` callbacks run outside
 read/writer/publication locks with admitted temporary value ownership; empty
 input still observes closed-handle checks. Store floor admission remains required;
-qualified COW groups and reads use the capture protocol above. COW `PruneVersions` remains unsupported. Pruning eligibility refuses
-before floor loading/re-sync, snapshot acquisition, physical deletes or WAL
-effects, including when a persisted floor already exists. This refusal does not
-qualify bounded maintenance, replay or the full C3/C4 lifecycle gates.
+qualified COW groups, reads and managed-history pruning use the capture protocol
+above. External timestamps remain explicit opt-in history; ordinary transactions
+use complete engine views and do not acquire application timestamp semantics.
 
 ### 2.6 Target versioned entry reads
 
@@ -471,7 +477,13 @@ read/precondition validation.
   transaction lock as the production design.
 - Recent committed write fingerprints are retained only while active
   transactions can conflict with them. They are in-memory conflict-detection
-  state, not persistent tombstones.
+  state, not persistent tombstones. The adaptive cache still advances its
+  logical publication sequence when no conditional transaction is active,
+  without copying those publications into conflict history. Transaction
+  enrollment and opening snapshot capture exclude publication through the same
+  write gate; an existing consumer keeps full bounded history (including ABA
+  conflicts and expiry). Inactive writes do not reset the retained history or
+  its coverage floor. COW uses its separate accepted-prefix journal.
 - Range reads and `DeleteRange` must either participate in documented range
   guards or fail closed with a stable unsupported/conflict error. They must not
   silently under-detect conflicts.
@@ -684,6 +696,19 @@ rejected before LSN assignment unless the caller explicitly submits smaller
 independent batches; implicit atomic splitting requires a future `CommandGroup`
 protocol.
 
+Collection catalog reads:
+
+`CollectionManager.ListCollections` and `ListCollectionsBounded` return metadata
+in collection-name order. Native managers read one complete captured logical
+catalog, including pending collection creation and index DDL, and return owned
+metadata copies. A positive native limit bounds the captured names inspected and
+copied; the immutable directory's exact count determines truncation without
+scanning additional schemas. Zero and negative limits are unbounded. The legacy
+physical-catalog route retains its existing inspection budget, including deleted
+entries. A native cut without an engine first uses the existing complete physical
+catalog import; the listing limit does not bound that bootstrap construction.
+Listing assigns no command identity or logical publication.
+
 Collection metadata mutators:
 
 `Collection.UpdateTypedMetadataByID` changes explicit existing IDs only, skipping
@@ -741,13 +766,17 @@ Mongo gateway:
   acknowledgements use the ordinary boundary of the configured durability
   profile. In particular, `command_wal_relaxed` and `no_wal_fast` do not gain a
   stronger promise from an ordinary acknowledgement.
-- A successful standalone `j: true` acknowledgement first drains collection
-  publishing, then completes `SyncCommandWALAppliedPrefix` when command WAL is
-  enabled or `DB.Checkpoint` when it is disabled. The command-WAL boundary
-  orders persistent value-log dependencies, syncs a relaxed suffix, and
-  publishes its durable-prefix barrier as a root-neutral contiguous applied
-  command; an already-durable prefix is reused without another barrier or
-  file sync. Because existing multi-item and DDL handlers can return a command
+- A successful standalone `j: true` acknowledgement completes
+  `CollectionManager.SyncForStandaloneWriteConcern`. A native manager uses its
+  existing cache owner's checkpoint to seal and synchronize the complete
+  captured raw/collection prefix, including persistent value-log dependencies,
+  and reports a physical sync on every successful call. A legacy manager first
+  drains collection publishing, then completes `SyncCommandWALAppliedPrefix`
+  when command WAL is enabled or `DB.Checkpoint` when it is disabled. The legacy
+  command-WAL boundary syncs a relaxed suffix and publishes its durable-prefix
+  barrier as a root-neutral contiguous applied command; an already-durable
+  prefix is reused without another barrier or file sync. Because existing
+  multi-item and DDL handlers can return a command
   error after a partial mutation, an accepted `j: true` request closes this
   boundary even when the handler response is `ok: 0`; the original command
   error is preserved. This is a local crash/reopen boundary only; it does not

@@ -60,8 +60,6 @@ type Owner struct {
 	closed                             bool
 	closeWork                          ownerCloseWork
 	retired, cleanupFailed             bool
-	enrolling                          uint64
-	enrollment                         *EnrollmentWork
 }
 
 // Initialize freezes the actual constructor baseline before any enrollment.
@@ -101,15 +99,6 @@ func (o *Owner) resizeLocked(bytes uint64, grow bool) error {
 		}
 		target -= bytes
 	}
-	active := o.enrollment
-	pendingTarget := uint64(0)
-	if active != nil && active.pending != nil {
-		pendingTarget = active.pendingAdmitted
-		if err := active.pending.Resize(target); err != nil {
-			return err
-		}
-		active.pendingAdmitted = target
-	}
 	for b := o.head; b != nil; b = b.next {
 		b.rollback = b.admitted
 		if err := b.lease.Resize(target); err != nil {
@@ -120,12 +109,6 @@ func (o *Owner) resizeLocked(bytes uint64, grow bool) error {
 					panic("retained allocation rollback refused")
 				}
 				prior.admitted = prior.rollback
-			}
-			if active != nil && active.pending != nil {
-				if rollback := active.pending.Resize(pendingTarget); rollback != nil {
-					panic("pending retained allocation rollback refused")
-				}
-				active.pendingAdmitted = pendingTarget
 			}
 			return err
 		}
@@ -148,9 +131,9 @@ func (o *Owner) AddPending(bytes uint64) error {
 	return nil
 }
 func (o *Owner) RemovePending(bytes uint64) {
-	var work RemovalWork
+	var work removalState
 	for {
-		done, err := o.removeUnserialized(bytes, true, false, &work, nil)
+		done, err := o.removeUnserialized(bytes, true, &work)
 		if err != nil {
 			panic("pending metadata release refused")
 		}
@@ -180,7 +163,7 @@ func (o *Owner) releaseClosedBindingsLocked() {
 		}
 		o.controls -= delta
 	}
-	if o.head == nil && o.enrolling == 0 && o.enrollment == nil {
+	if o.head == nil {
 		o.bytes = 0
 		o.baseline = 0
 	}
@@ -188,9 +171,9 @@ func (o *Owner) releaseClosedBindingsLocked() {
 
 // Remove follows actual storage/edge cleanup, never speculative disposal.
 func (o *Owner) Remove(bytes uint64) {
-	var work RemovalWork
+	var work removalState
 	for {
-		done, err := o.removeUnserialized(bytes, false, false, &work, nil)
+		done, err := o.removeUnserialized(bytes, false, &work)
 		if err != nil {
 			panic("retained allocation accounting underflow")
 		}
@@ -237,16 +220,7 @@ func (o *Owner) Enroll(budget Budget) (*Enrollment, error) {
 	if found == nil {
 		var lease Lease
 		var err error
-		active := o.enrollment
-		if active != nil && active.budget == budget && active.pending != nil {
-			// Promote the SAME preborn constructor; ordinary capture never
-			// waits for another native Step or duplicates its governor.
-			lease = active.pending
-			active.pending = nil
-			active.pendingAdmitted = 0
-		} else {
-			lease, err = budget.AcquireRetention(o.bytes)
-		}
+		lease, err = budget.AcquireRetention(o.bytes)
 		if err != nil {
 			if rollback := o.resizeLocked(delta, false); rollback != nil {
 				panic("retained enrollment rollback refused")
@@ -262,10 +236,6 @@ func (o *Owner) Enroll(budget Budget) (*Enrollment, error) {
 	if found.refs == math.MaxUint64 {
 		panic("retained enrollment reference overflow")
 	}
-	if active := o.enrollment; active != nil && active.budget == budget && active.found == nil {
-		found.cleanupRefs++
-		active.found = found
-	}
 	o.controls += delta
 	found.refs++
 	return &Enrollment{owner: o, binding: found}, nil
@@ -274,13 +244,10 @@ func (o *Owner) Enroll(budget Budget) (*Enrollment, error) {
 // Close follows the capture's real storage cleanup. It drops this exact
 // enrollment and releases the governing lease only at its last shared capture.
 func (e *Enrollment) Close() {
-	var state EnrollmentReleaseWork
+	var state enrollmentReleaseState
 	for {
-		done, err := e.closePairUnserialized(false, nil, &state)
+		done, err := e.closePairUnserialized(&state)
 		if err != nil {
-			if err == ErrWorkRequired {
-				return
-			}
 			panic("retained enrollment release refused")
 		}
 		if done {
@@ -294,7 +261,7 @@ func (e *Enrollment) Close() {
 // last release; closed owners never admit more producer growth.
 func (o *Owner) Close() error {
 	for {
-		done, err := o.closeStep(false, nil)
+		done, err := o.closeStep()
 		if err != nil || done {
 			return err
 		}

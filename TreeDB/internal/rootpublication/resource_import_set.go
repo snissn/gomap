@@ -136,7 +136,9 @@ func walkImportedEntry(directory *resourceImportDirectory, entry *stableResource
 	view := entry.logicalObligations
 	seen := 0
 	emit := func(o StableLogicalObligation) error {
-		if _, removed := view.removed[stableLogicalObligationKey(o)]; removed {
+		// Owned removal proof masks the exact inherited payload. A live
+		// pending replacement has different integrity and must survive import.
+		if _, removed := view.removedValue(o); removed {
 			return nil
 		}
 		if err := validateStableLogicalObligation(o, o.Reachability); err != nil {
@@ -288,7 +290,7 @@ func importStableResourceSetMetadata(owner *retainedalloc.Owner, source *StableR
 			defer backing.release()
 			// Preserve every actual field, including zero-obligation fields, in the
 			// imported entry. The private token carries the original primary field.
-			token, e := newImportedResourceToken(owner, activeEntryToken(*entry), cell.view.root, entry.logicalLane, entry.resourceID, entry.diagnosticPath, entry.frontier, entry.token.reachability, backing.values)
+			token, e := newImportedResourceToken(owner, activeEntryToken(*entry), cell.view.root, entry.logicalLane, entry.resourceID, entry.diagnosticPath, entry.frontier, entry.token.reachability, backing.values, nil)
 			if e != nil {
 				importErr = e
 				return false

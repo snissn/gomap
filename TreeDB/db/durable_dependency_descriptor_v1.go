@@ -24,10 +24,10 @@ func validateDurableDependencyDescriptorV1(dir string, parent, file *os.File, en
 	name := filepath.Base(path)
 	if entry.Namespace != nil {
 		if entry.Namespace.NewName != name || entry.Namespace.ParentIdentity.Generation == 0 {
-			return rootpublication.ErrResourceConflict
+			return fmt.Errorf("%w: dependency kind=%q path=%q namespace basename or parent generation", rootpublication.ErrResourceConflict, entry.Kind, entry.DiagnosticPath)
 		}
 		if err = rootpublication.ValidateRecoveredStableNamespaceDescriptorV1(rootpublication.StableNamespaceSpec{Parent: parent, LinkedResource: file, ParentGeneration: entry.Namespace.ParentIdentity.Generation, Operation: entry.Namespace.Operation, OldName: entry.Namespace.OldName, NewName: entry.Namespace.NewName, DiagnosticPath: entry.Namespace.DiagnosticPath}, entry.Namespace.ParentIdentity); err != nil {
-			return err
+			return fmt.Errorf("dependency kind=%q path=%q namespace: %w", entry.Kind, entry.DiagnosticPath, err)
 		}
 	} else {
 		// Original flat raw-log manifests carry identity/frontier without a
@@ -51,7 +51,7 @@ func validateDurableDependencyContentDescriptorV1(dir string, file *os.File, ent
 		return fmt.Errorf("%w: incomplete durable dependency descriptor", rootpublication.ErrUnresolvedResource)
 	}
 	if err := rootpublication.ValidateRecoveredResourceDescriptorV1(entry); err != nil {
-		return err
+		return fmt.Errorf("dependency kind=%q path=%q logical descriptor: %w", entry.Kind, entry.DiagnosticPath, err)
 	}
 	if namespace := entry.Namespace; namespace != nil {
 		path, err := durableDependencyPathForKindV1(dir, "", entry.Kind, entry.DiagnosticPath)
@@ -59,7 +59,7 @@ func validateDurableDependencyContentDescriptorV1(dir string, file *os.File, ent
 			return err
 		}
 		if namespace.NewName != filepath.Base(path) {
-			return rootpublication.ErrResourceConflict
+			return fmt.Errorf("%w: dependency kind=%q path=%q content namespace basename", rootpublication.ErrResourceConflict, entry.Kind, entry.DiagnosticPath)
 		}
 		if err := rootpublication.ValidateRecoveredStableNamespaceMetadataV1(rootpublication.StableNamespaceSpec{ParentGeneration: namespace.ParentIdentity.Generation, Operation: namespace.Operation, OldName: namespace.OldName, NewName: namespace.NewName, DiagnosticPath: namespace.DiagnosticPath}); err != nil {
 			return err
@@ -70,7 +70,7 @@ func validateDurableDependencyContentDescriptorV1(dir string, file *os.File, ent
 		return err
 	}
 	if !rootpublication.SamePhysicalIdentity(identity, entry.Identity) {
-		return rootpublication.ErrResourceConflict
+		return fmt.Errorf("%w: dependency kind=%q path=%q physical identity", rootpublication.ErrResourceConflict, entry.Kind, entry.DiagnosticPath)
 	}
 	info, err := file.Stat()
 	if err != nil {
@@ -82,7 +82,7 @@ func validateDurableDependencyContentDescriptorV1(dir string, file *os.File, ent
 	for _, field := range entry.Reachability {
 		policy, ok := rootpublication.StableResourcePolicyFor(field)
 		if !ok || !policy.Registerable || policy.Kind != entry.Kind {
-			return rootpublication.ErrResourceConflict
+			return fmt.Errorf("%w: dependency kind=%q path=%q reachability=%q policy", rootpublication.ErrResourceConflict, entry.Kind, entry.DiagnosticPath, field)
 		}
 	}
 	switch entry.Kind {

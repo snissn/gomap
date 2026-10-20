@@ -18,7 +18,7 @@ import (
 // recoverable-set recapture does. Those pages may still be the shared base of
 // accepted outputs, so retiring the old build must not make them allocatable.
 func TestVacuumSharedBaseRetainsVersionsAcrossRecapture(t *testing.T) {
-	d, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true, PreferAppendAlloc: true})
+	d, err := Open(Options{Dir: t.TempDir(), IndexPrimaryDirectory: true, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true, PreferAppendAlloc: true})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -2,6 +2,17 @@
 
 This document defines startup recovery behavior.
 
+Ordinary new public and backend stores select the existing DATA recovery
+implementation. Explicit `IndexPrimaryDirectory` and persisted PRIMARY arenas
+temporarily retain the original PRIMARY attach/recovery and joint-swap paths;
+final format refusal follows consumer migration. Supported public read-only
+opens use the uncached `btree` role on either persisted representation; public
+`ReadOnly+cow_btree` remains unsupported. Successful recovery independently
+validates both slots, exact dependencies and required parent records. DATA
+command-WAL startup and PRIMARY capsule startup initialize the same publication
+coordinator and exact recovered snapshot before replay, synchronously until
+post-replay readiness. Native multi-root replay uses that original owner.
+
 Typed `column_graph` public serving admission is process-local: after ordinary
 replay/open, explicitly call `EnsureColumnGraphServing` with positive limits.
 Queries do not bootstrap/reconcile manifests. A failed ensure stays fail closed
@@ -55,7 +66,13 @@ reopen, durable roots and Applied-LSN coverage determine replay/cleanup; an
 in-memory receipt or visible cut does not prove durability. `no_wal_fast` recovery
 continues to select a complete sealed root, and recent relaxed writes can be
 absent. Value-log and dictionary assets referenced by the selected recovery
-state remain persistent dependencies.
+state remain persistent dependencies. Both selectable recovery slots and their
+required immediate parents remain live even when their logical roots coincide.
+WAL retirement uses the minimum selectable-root applied frontier together with
+stable-prefix, lineage and physical-identity proofs; neither a visible maximum
+nor a successful physical seal manufactures stable WAL coverage. Equivalent
+pointer rewrite preserves the winning current revision and exact retained file
+identity while old views retain their original read authority.
 
 Qualification must select COW through actual public Open. Process-crash tests
 and modeled stable-image/power-loss cuts are separate evidence classes; ordinary
@@ -81,6 +98,14 @@ checkpointed `AppliedLSN`, validates V2 frames and required external refs,
 repairs only the discardable suffix above the durable frontier, replays complete
 commands with `LSN > AppliedLSN` through the deterministic command executor,
 then checkpoints the recovered `AppliedLSN` before cleaning covered WAL.
+
+A failed replay operation and failed physical teardown are distinct outcomes.
+Open returns the operation error after verified clean teardown and releases its
+original startup LOCK. Capture, handoff, physical-release, hook or incomplete
+teardown refusals retain the original startup receipt and LOCK. A refused
+coordinator handoff keeps the same runtime, exact resource arrays and containing
+charge reachable; observing its error never retries release. Public Close still
+returns both operational and cleanup errors.
 
 The command-frame V2 scanner, durable-frontier classifier, and physical suffix
 repair are the production `command_wal_v2` open path. Production append and
@@ -141,7 +166,10 @@ recovery-required error unless the caller explicitly requests a stale read-only
 mode. Silent stale read-only open is incompatible with durable-at-ack command
 semantics.
 
-## Selected PRIMARY capsule recovery
+## Temporarily supported explicit PRIMARY capsule recovery
+
+The existing explicit option and persisted arena use this maintained recovery
+path. Ordinary new stores default to DATA; final PRIMARY removal remains pending.
 
 For a checked V6 `index.db.primary` arena, Open decodes exactly the two fixed
 complete three-page capsules. It independently validates each current root
@@ -443,6 +471,45 @@ advance `AppliedLSN` in the same backend durability boundary. A restart during
 replay must observe either the old root plus old `AppliedLSN`, or the new root
 plus advanced `AppliedLSN`; it must not observe command effects without the
 matching `AppliedLSN` or `AppliedLSN` without command effects.
+
+The experimental native JSON composite route validates the entire selected
+`CompositeMutationV1` payload before preparing members. It resolves each
+collection's persisted incarnation and supported metadata from the original
+startup Snapshot, and rejects unsupported members before publication. Its
+registration requests `NeedsReplayLogSupport`; the existing recovery loop owns
+the replay appender and leaf-page log, including their restoration and cleanup.
+The handler preserves collection storage policy and builds raw, collection and
+system effects within one existing `RootPublicationBuildGroup`. The final batch
+retains the original DB-minted active replay intent/token and publishes all
+effects with the one applied LSN. It does not create a recovery COW engine or
+invoke independently publishing singleton handlers. The actual child-exit
+control is `TestNativeJSONPublicRawTwoCollectionsAtomicTxn`; codec binding and
+unsupported-member refusal are covered by
+`TestSelectedCompositeBindsFinalRawRevisionWithoutChangingNativeMembers`.
+
+Repeated JSON insert, update and delete members are reduced in their canonical
+order against the collection's captured opening rows. Each intermediate uses
+the same document preparation and scalar extraction as foreground staging,
+before it replaces the staged row. A later delete cannot hide an invalid
+indexed document. Unindexed JSON retains the maintained opaque-byte contract;
+replay does not impose a stricter parser. Secondary and unique effects are
+computed once from opening to final rows, so valid temporary unique collisions
+may disappear before the final uniqueness check. Each physical root is built
+once under the original startup Snapshot and build group, with one outer applied
+LSN. `TestNativeJSONCompositeReplayValidatesErasedDocuments` covers intermediate
+validation and accepted cancellations; `TestNativeExistingIndexedJSONOrderedRowsAtomicReplay`
+covers staged reads, ordered CRUD, raw effects and an actual unapplied composite
+suffix. Update callbacks execute only during foreground staging.
+
+Native JSON singleton insert, update and delete registrations also request the
+ordinary replay log support, including the leaf logger required by inherited
+ordered-root storage policy. Foreground update/delete preparation uses its
+original transaction's captured immutable plan. The fixed registration marker
+only admits that command kind; direct registered or assigned native preparation
+still refuses when no supported executor exists. Startup singleton replay uses
+the ordinary deterministic executor and its canonical accepted final documents
+or explicit IDs. It never reruns an update callback. Checkpoint/reopen coverage
+and replay of an actual unapplied WAL suffix are distinct verification cases.
 
 `RawKVBatchV2` adds `SetMaterializedRID(RID, value)`. Recovery reuses an
 existing RID only when its decoded value bytes match exactly. If the RID is
@@ -817,6 +884,9 @@ explicit recovery investigation.
 
 ## Joint DATA/PRIMARY capsule vacuum recovery
 
+This existing protocol remains active for the temporary explicit/persisted
+PRIMARY route. It does not change the ordinary new-store DATA default.
+
 V6 vacuum fences the complete private pair, current/parent dependencies and
 staging names before a checksummed `TDJCOM06` COMMIT in `index.db.new.ready`.
 The decision binds retained directory, both physical identities, PRIMARY UUID
@@ -859,3 +929,21 @@ successor that names it as parent. Commit sequences may jump between durable
 seals; the boundary is the successor's recorded commit, not the old commit plus
 one. The strict reuse boundary must preserve both selectable slots and their
 immediate parent records until the replacement seal is durable.
+
+
+V2 dependency-directory recovery and binding use the selected generation's
+original metadata owner (the DATA identity registry or retained PRIMARY arena).
+Actual publication refuses foreign or unowned resource sets before directory
+construction. Unowned utility callers retain the generic diagnostic contract.
+Physical-entry censuses, decoder scratch, retained directory keys, field
+summaries, and changed-record batch capacity are admitted before allocation.
+Logical records remain synchronous immutable borrows; changed keys still use
+the existing COW zipper and both selectable roots retain their original leases.
+
+Ordinary owned V2 binding validates only the selected physical directory records
+and retains the original entry's immutable field commitments and logical count.
+Recovery reconstructs those summaries by streaming the persisted logical records.
+Cross-owner duplicate validation sorts an admitted array of borrowed delta-only
+identities; it does not flatten retained logical history. Privately admitted
+directory batches are disposed without pooling before their original charge is
+refunded.

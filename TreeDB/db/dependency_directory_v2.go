@@ -3,7 +3,9 @@ package db
 import (
 	"errors"
 	"fmt"
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"os"
+	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
@@ -21,9 +23,25 @@ func (db *DB) prepareDependencyDirectoryV2(idx *indexGen, sequence uint64, baseR
 	if db == nil || idx == nil || idx != db.idx.Load() || sequence == 0 {
 		return nil, nil, errors.New("invalid dependency directory index generation")
 	}
+	metadata := idx.metadata
+	if idx.primary != nil {
+		metadata = idx.primary.MetadataOwner()
+	}
+	// Actual generation producers must supply the selected original owner.
+	// The utility's generic path is reserved for unowned diagnostics.
+	if metadata == nil || (resources != nil && resources.MetadataOwner() != metadata) || (baseResources != nil && baseResources.MetadataOwner() != metadata) {
+		return nil, nil, rootpublication.ErrResourceOwnership
+	}
 	if resources == nil {
 		var err error
-		resources, err = rootpublication.NewStableResourceSetBuilder().Freeze()
+		builder, buildErr := rootpublication.NewStableResourceSetBuilderWithMetadata(metadata)
+		if buildErr != nil {
+			return nil, nil, buildErr
+		}
+		resources, err = builder.Freeze()
+		if err != nil {
+			builder.Abandon()
+		}
 		if err != nil {
 			return nil, nil, err
 		}
@@ -37,18 +55,65 @@ func (db *DB) prepareDependencyDirectoryV2(idx *indexGen, sequence uint64, baseR
 	if base != nil {
 		root = base.Reference().RootPageID
 	}
-	delta := batch.New(nil, page.PageSize)
-	defer delta.Close()
+	var delta *batch.Batch
+	var encodedBacking []byte
+	var entries, payload uint64
+	_, _, err = rootpublication.WalkDependencyDirectoryChangesV2(resources, base, func(key, value []byte, _ bool) error {
+		if entries == uint64(int(^uint(0)>>1)) || uint64(len(key)) > ^uint64(0)-payload || uint64(len(value)) > ^uint64(0)-payload-uint64(len(key)) {
+			return retainedalloc.ErrCapacity
+		}
+		entries++
+		payload += uint64(len(key)) + uint64(len(value))
+		return nil
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	width := uint64(unsafe.Sizeof(batch.Entry{}))
+	header := uint64(unsafe.Sizeof(batch.Batch{}))
+	if payload > uint64(int(^uint(0)>>1)) || entries > (^uint64(0)-header)/width || payload > ^uint64(0)-header-entries*width {
+		return nil, nil, retainedalloc.ErrCapacity
+	}
+	charge := retainedalloc.AllocationCharge(header)
+	entryCharge := retainedalloc.AllocationCharge(entries * width)
+	payloadCharge := retainedalloc.AllocationCharge(payload)
+	if entryCharge > ^uint64(0)-charge || payloadCharge > ^uint64(0)-charge-entryCharge {
+		return nil, nil, retainedalloc.ErrCapacity
+	}
+	charge += entryCharge + payloadCharge
+	if err = metadata.AddPending(charge); err != nil {
+		return nil, nil, err
+	}
+	encodedBacking = make([]byte, int(payload))
+	delta = batch.NewBoundedRetainingLargeEntries(nil, page.PageSize, int(entries))
+	defer func() {
+		delta.CloseWithoutPooling()
+		delta = nil
+		clear(encodedBacking)
+		encodedBacking = nil
+		metadata.RemovePending(charge)
+	}()
+	var encodedOffset int
 	// Count persisted changed keys/values (including deletion keys), not
 	// comparison encodings or binding checks of unchanged physical records.
 	var encodedBytes, encodedRecords uint64
 	physical, logical, err := rootpublication.WalkDependencyDirectoryChangesV2(resources, base, func(key, value []byte, deleted bool) error {
 		encodedBytes += uint64(len(key) + len(value))
 		encodedRecords++
-		if deleted {
-			return delta.Delete(key)
+		if len(key) > len(encodedBacking)-encodedOffset || len(value) > len(encodedBacking)-encodedOffset-len(key) || delta.Len() >= delta.EntriesCap() {
+			return retainedalloc.ErrCapacity
 		}
-		return delta.Set(key, value)
+		keyEnd := encodedOffset + len(key)
+		valueEnd := keyEnd + len(value)
+		copy(encodedBacking[encodedOffset:keyEnd], key)
+		copy(encodedBacking[keyEnd:valueEnd], value)
+		key = encodedBacking[encodedOffset:keyEnd:keyEnd]
+		value = encodedBacking[keyEnd:valueEnd:valueEnd]
+		encodedOffset = valueEnd
+		if deleted {
+			return delta.DeleteView(key)
+		}
+		return delta.SetView(key, value)
 	})
 	if err != nil {
 		return nil, nil, err
@@ -116,7 +181,7 @@ func (db *DB) dependencyDirectoryValidatorV2(idx *indexGen) durableDirectoryVali
 	return func(record rootpublication.DurableRootRecordV1) (*rootpublication.StableResourceSet, error) {
 		directory, err := db.pinDependencyDirectoryV2(idx, record.CommitSeq, record.Directory, record.TotalPages)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("pin durable dependency directory: %w", err)
 		}
 		defer directory.Release()
 		return db.recoverDependencyDirectoryResourcesV2(directory)
@@ -137,9 +202,14 @@ func (db *DB) pinDependencyDirectoryV2(idx *indexGen, sequence uint64, ref rootp
 	return db.pinDataDependencyDirectoryV6(idx, sequence, ref, totalPages)
 }
 
-func (db *DB) recoverDependencyDirectoryResourcesV2(directory *rootpublication.DependencyDirectoryV2) (*rootpublication.StableResourceSet, error) {
+func (db *DB) recoverDependencyDirectoryResourcesV2(directory *rootpublication.DependencyDirectoryV2) (_ *rootpublication.StableResourceSet, retErr error) {
+	defer func() {
+		if retErr != nil {
+			retErr = fmt.Errorf("dependency directory recovery: %w", retErr)
+		}
+	}()
 	return rootpublication.RecoverDependencyDirectoryV2(directory, func(entry rootpublication.DependencyManifestEntryV1) (*rootpublication.StableResourceSet, error) {
-		return db.validateDurableDependencyEntriesV1([]rootpublication.DependencyManifestEntryV1{entry}, true)
+		return db.validateDurableDependencyEntriesWithMetadataV1([]rootpublication.DependencyManifestEntryV1{entry}, true, directory.MetadataOwner())
 	}, func(file *os.File, entry rootpublication.DependencyManifestEntryV1, obligation rootpublication.StableLogicalObligation) error {
 		switch entry.Kind {
 		case rootpublication.ResourceColumnAsset, rootpublication.ResourceTypedColumnAsset, rootpublication.ResourceVectorGraphPack:
@@ -149,7 +219,7 @@ func (db *DB) recoverDependencyDirectoryResourcesV2(directory *rootpublication.D
 			// Directory decoding already checks exact owner/frontier/field.
 			return nil
 		default:
-			return rootpublication.ErrResourceConflict
+			return fmt.Errorf("%w: directory recovered logical kind=%q path=%q", rootpublication.ErrResourceConflict, entry.Kind, entry.DiagnosticPath)
 		}
 	})
 }

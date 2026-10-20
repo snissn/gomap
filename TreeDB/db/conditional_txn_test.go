@@ -641,7 +641,10 @@ func buildConditionalTxnManualRoot(t *testing.T, d *DB, key, value string) uint6
 	d.mu.RLock()
 	rootID := d.meta.UserRootPageID
 	baseSeq := d.meta.CommitSeq
-	regID := idx.registry.Register(baseSeq)
+	regID, registerErr := idx.registry.Register(baseSeq)
+	if registerErr != nil {
+		t.Fatal(registerErr)
+	}
 	d.mu.RUnlock()
 	defer idx.registry.Unregister(regID)
 

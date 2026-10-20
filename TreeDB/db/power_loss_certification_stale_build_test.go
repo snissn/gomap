@@ -48,6 +48,9 @@ func TestPowerLossCertificationStaleBuildBasePrimaryCapsulePublicReopenV6(t *tes
 func runStaleBuildBasePublicReopen(t *testing.T, capsule bool) {
 	dir := t.TempDir()
 	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, dir)
+	if capsule {
+		opts.IndexPrimaryDirectory = true
+	}
 	if !capsule {
 		// Construct the separately versioned saved V5 format. The original DATA V1
 		// witness and generation8 evidence are archived with zero current coverage.

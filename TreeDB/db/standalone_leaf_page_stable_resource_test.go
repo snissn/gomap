@@ -51,7 +51,16 @@ func TestStandaloneStableLeafRewriteIgnoresTemplateMagicInRawPage(t *testing.T) 
 		t.Fatal("stable raw leaf append returned nil resources")
 	}
 	defer resources.Release()
-	for _, descriptor := range mustStableResourceDescriptors(t, resources) {
+	diagnostics, err := resources.AcquirePhysicalDiagnostics()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := diagnostics.CloseWithError(); err != nil {
+			t.Error(err)
+		}
+	}()
+	for _, descriptor := range diagnostics.Physical() {
 		for _, field := range descriptor.ReachabilityFields() {
 			if field == rootpublication.ReachabilityTemplateGeneration {
 				t.Fatal("raw leaf page acquired template authority")
@@ -112,7 +121,16 @@ func TestStandaloneStableLeafRewriteMergesTemplateClosure(t *testing.T) {
 	}
 	defer resources.Release()
 	var hasTemplate, hasOuterLeaf bool
-	for _, descriptor := range mustStableResourceDescriptors(t, resources) {
+	diagnostics, err := resources.AcquirePhysicalDiagnostics()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := diagnostics.CloseWithError(); err != nil {
+			t.Error(err)
+		}
+	}()
+	for _, descriptor := range diagnostics.Physical() {
 		for _, field := range descriptor.ReachabilityFields() {
 			switch field {
 			case rootpublication.ReachabilityTemplateGeneration:
@@ -222,18 +240,30 @@ func TestStandaloneStableLeafRewriteBatchUnionsTemplateGenerations(t *testing.T)
 	}
 	templateDescriptors := 0
 	templateIDs := make(map[uint64]bool, len(pages))
-	for _, descriptor := range mustStableResourceDescriptors(t, resources) {
+	diagnostics, err := resources.AcquirePhysicalDiagnostics()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := diagnostics.CloseWithError(); err != nil {
+			t.Error(err)
+		}
+	}()
+	for _, descriptor := range diagnostics.Physical() {
 		for _, field := range descriptor.ReachabilityFields() {
 			if field != rootpublication.ReachabilityTemplateGeneration {
 				continue
 			}
 			templateDescriptors++
-			for _, obligation := range descriptor.LogicalObligations() {
-				if obligation.Reachability == rootpublication.ReachabilityTemplateGeneration {
-					templateIDs[obligation.Generation] = true
-				}
-			}
 		}
+	}
+	if err := resources.WalkLogicalObligations(func(_ rootpublication.StableResourcePhysicalDescriptor, obligation rootpublication.StableLogicalObligation) error {
+		if obligation.Reachability == rootpublication.ReachabilityTemplateGeneration {
+			templateIDs[obligation.Generation] = true
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 	if templateDescriptors != 1 {
 		t.Fatalf("coalesced template descriptors=%d want 1", templateDescriptors)
@@ -319,7 +349,16 @@ func TestStandaloneStableLeafRewriteIgnoresRawTemplateShapedPayload(t *testing.T
 				if got := provider.captureCalls.Load(); got != 0 {
 					t.Fatalf("raw page template capture calls=%d want 0", got)
 				}
-				for _, descriptor := range mustStableResourceDescriptors(t, resources) {
+				diagnostics, err := resources.AcquirePhysicalDiagnostics()
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer func() {
+					if err := diagnostics.CloseWithError(); err != nil {
+						t.Error(err)
+					}
+				}()
+				for _, descriptor := range diagnostics.Physical() {
 					for _, field := range descriptor.ReachabilityFields() {
 						if field == rootpublication.ReachabilityTemplateGeneration {
 							t.Fatalf("raw unencoded page returned template authority: %+v", descriptor)
@@ -502,7 +541,16 @@ func TestStandaloneStableLeafRewriteMergesDictionaryAndTemplateClosure(t *testin
 	}
 	defer resources.Release()
 	fields := make(map[rootpublication.ReachabilityField]bool)
-	for _, descriptor := range mustStableResourceDescriptors(t, resources) {
+	diagnostics, err := resources.AcquirePhysicalDiagnostics()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := diagnostics.CloseWithError(); err != nil {
+			t.Error(err)
+		}
+	}()
+	for _, descriptor := range diagnostics.Physical() {
 		for _, field := range descriptor.ReachabilityFields() {
 			fields[field] = true
 		}
@@ -575,7 +623,16 @@ func TestStandaloneStableLeafRewriteCapturesOnlyEmittedDictionaryAuthority(t *te
 				t.Fatalf("dictionary capture calls=%d want 0 for emitted dictID 0", got)
 			}
 			var hasDictionary, hasTemplate bool
-			for _, descriptor := range mustStableResourceDescriptors(t, resources) {
+			diagnostics, err := resources.AcquirePhysicalDiagnostics()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if err := diagnostics.CloseWithError(); err != nil {
+					t.Error(err)
+				}
+			}()
+			for _, descriptor := range diagnostics.Physical() {
 				for _, field := range descriptor.ReachabilityFields() {
 					hasDictionary = hasDictionary || field == rootpublication.ReachabilityDictionaryGeneration
 					hasTemplate = hasTemplate || field == rootpublication.ReachabilityTemplateGeneration
@@ -629,7 +686,16 @@ func TestStandaloneStableLeafRewriteBatchCapturesOnlyEmittedDictionaryAuthority(
 		t.Fatalf("dictionary capture calls=%d want 0 for emitted dictID 0", got)
 	}
 	var hasDictionary, hasTemplate bool
-	for _, descriptor := range mustStableResourceDescriptors(t, resources) {
+	diagnostics, err := resources.AcquirePhysicalDiagnostics()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := diagnostics.CloseWithError(); err != nil {
+			t.Error(err)
+		}
+	}()
+	for _, descriptor := range diagnostics.Physical() {
 		for _, field := range descriptor.ReachabilityFields() {
 			hasDictionary = hasDictionary || field == rootpublication.ReachabilityDictionaryGeneration
 			hasTemplate = hasTemplate || field == rootpublication.ReachabilityTemplateGeneration
@@ -692,7 +758,16 @@ func TestStandaloneStableLeafRewriteLateBindsAndMergesDictionaryClosure(t *testi
 	}
 	defer resources.Release()
 	var hasDictionary, hasOuterLeaf bool
-	for _, descriptor := range mustStableResourceDescriptors(t, resources) {
+	diagnostics, err := resources.AcquirePhysicalDiagnostics()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := diagnostics.CloseWithError(); err != nil {
+			t.Error(err)
+		}
+	}()
+	for _, descriptor := range diagnostics.Physical() {
 		for _, field := range descriptor.ReachabilityFields() {
 			switch field {
 			case rootpublication.ReachabilityDictionaryGeneration:
@@ -800,16 +875,33 @@ func BenchmarkStandaloneLeafPageStableBatchAuthority(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
-		descriptors += uint64(len(mustStableResourceDescriptors(b, resources)))
-		for _, descriptor := range mustStableResourceDescriptors(b, resources) {
-			obligations += uint64(len(descriptor.LogicalObligations()))
+		diagnostics, err := resources.AcquirePhysicalDiagnostics()
+		if err != nil {
+			b.Fatal(err)
 		}
-		for _, stats := range resources.Stats(time.Now()) {
+		descriptors += uint64(len(diagnostics.Physical()))
+		if err := diagnostics.CloseWithError(); err != nil {
+			b.Fatal(err)
+		}
+		if err := resources.WalkLogicalObligations(func(_ rootpublication.StableResourcePhysicalDescriptor, _ rootpublication.StableLogicalObligation) error {
+			obligations++
+			return nil
+		}); err != nil {
+			b.Fatal(err)
+		}
+		statsDiagnostics, err := resources.AcquireStats(time.Now())
+		if err != nil {
+			b.Fatal(err)
+		}
+		for _, stats := range statsDiagnostics.Stats() {
 			contentSyncs += stats.Syncs
 			namespaceSyncs += stats.NamespaceSyncs
 			if stats.PinHighWater > pinHighWater {
 				pinHighWater = stats.PinHighWater
 			}
+		}
+		if err := statsDiagnostics.CloseWithError(); err != nil {
+			b.Fatal(err)
 		}
 		resources.Release()
 	}
@@ -871,35 +963,61 @@ func TestStandaloneLeafPageLogStableBatchCapturesExactRotatedSegments(t *testing
 	if len(referenced) < 2 {
 		t.Fatalf("referenced segments=%d want rotation", len(referenced))
 	}
-	descriptors := mustStableResourceDescriptors(t, resources)
+	diagnostics, err := resources.AcquirePhysicalDiagnostics()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := diagnostics.CloseWithError(); err != nil {
+			t.Error(err)
+		}
+	}()
+	descriptors := diagnostics.Physical()
+	identities := make([]rootpublication.StableIdentity, 0, len(descriptors))
+	namespaceTokens := 0
 	if len(descriptors) != len(referenced) {
 		t.Fatalf("descriptors=%d referenced=%d", len(descriptors), len(referenced))
 	}
 	for _, descriptor := range descriptors {
-		if descriptor.Kind() != rootpublication.ResourceOuterLeafLog {
-			t.Fatalf("kind=%q", descriptor.Kind())
+		if descriptor.Kind != rootpublication.ResourceOuterLeafLog {
+			t.Fatalf("kind=%q", descriptor.Kind)
 		}
-		if _, ok := referenced[descriptor.Generation()]; !ok {
-			t.Fatalf("captured unrelated generation=%d", descriptor.Generation())
+		if _, ok := referenced[descriptor.Generation]; !ok {
+			t.Fatalf("captured unrelated generation=%d", descriptor.Generation)
 		}
-		delete(referenced, descriptor.Generation())
-		if _, err := db.valueLogIdentityPins.BeginDelete(descriptor.Identity()); !errors.Is(err, rootpublication.ErrResourcePinned) {
-			t.Fatalf("delete captured generation %d error=%v want ErrResourcePinned", descriptor.Generation(), err)
+		delete(referenced, descriptor.Generation)
+		identities = append(identities, descriptor.Identity())
+		if _, ok := descriptor.Namespace(); ok {
+			namespaceTokens++
 		}
 	}
 	if len(referenced) != 0 {
 		t.Fatalf("missing referenced generations: %v", referenced)
 	}
-	namespaceTokens := 0
-	for _, token := range resources.Tokens() {
-		if token.Namespace() != nil {
-			namespaceTokens++
+	descriptorCount := len(descriptors)
+	if namespaceTokens != descriptorCount {
+		t.Fatalf("namespace tokens=%d descriptors=%d", namespaceTokens, descriptorCount)
+	}
+	if err := diagnostics.CloseWithError(); err != nil {
+		t.Fatal(err)
+	}
+	descriptors = nil
+	// The producer resources alone must retain the physical deletion pins.
+	for _, identity := range identities {
+		if _, err := db.valueLogIdentityPins.BeginDelete(identity); !errors.Is(err, rootpublication.ErrResourcePinned) {
+			t.Fatalf("delete captured identity %v error=%v want ErrResourcePinned", identity, err)
 		}
 	}
-	if namespaceTokens != len(descriptors) {
-		t.Fatalf("namespace tokens=%d descriptors=%d", namespaceTokens, len(descriptors))
+	statsDiagnostics, err := resources.AcquireStats(time.Now())
+	if err != nil {
+		t.Fatal(err)
 	}
-	stats := resources.Stats(time.Now())
+	defer func() {
+		if err := statsDiagnostics.CloseWithError(); err != nil {
+			t.Error(err)
+		}
+	}()
+	stats := statsDiagnostics.Stats()
 	if len(stats) != 1 || stats[0].NamespaceSyncs != uint64(namespaceTokens) {
 		t.Fatalf("resource stats=%+v", stats)
 	}

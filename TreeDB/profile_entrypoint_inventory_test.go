@@ -22,17 +22,17 @@ func TestDurabilityProfilePublicEntrypointInventory(t *testing.T) {
 	treeDBDir := profileInventoryTreeDBDir(t)
 	methods := profileInventoryMethods(t, treeDBDir, "treedb", "DB")
 	want := []string{
-		"AcquireMVCCReadCut", "AcquireSnapshot", "Checkpoint", "Close", "CompactIndex", "CompactStorage",
+		"AcquireMVCCReadCut", "AcquireSnapshot", "CaptureNativeSemanticState", "Checkpoint", "Close", "CompactIndex", "CompactStorage",
 		"CompactStorageLeafPageLogOwnerClassification", "CompactStoragePlan", "Delete",
 		"DeleteRange", "DeleteSync", "DurabilityMode", "FragmentationReport", "Get",
 		"GetAppend", "GetMany", "GetManyParallelPlan", "GetManyView", "GetUnsafe",
 		"GetVersioned", "GetVersionedAppend", "Has", "HasMany", "HasPrefixes",
 		"InitConditionalTxn", "InitConditionalTxnWithSnapshot", "Iterator", "LeafGenerationGC",
 		"LeafGenerationPack", "LeafGenerationPackFromPlan", "LeafGenerationPackRunOnce",
-		"LeafGenerationPlan", "MaintenancePhase", "NativeMVCCBudgetV6", "NewBatch", "NewBatchWithSize",
-		"NewConditionalTxn", "NewConditionalTxnWithSnapshot", "NewMVCCAdmission", "PreflightMVCCPrune", "Print", "ResolvedProfile",
-		"ReverseIterator", "SeekGE", "SeekGEVersionRange", "Set", "SetMaintenancePhase", "SetPointWithMVCCInput", "SetSync", "Stats", "SupportsMVCCReadCut",
-		"StepNativeMVCCCaptureV6", "StepNativeMVCCOwnedCaptureV6", "Update", "UpdateSync", "VacuumIndexOnline", "VacuumOnlineStats", "ValueLogGC", "ValueLogRewriteOnline",
+		"LeafGenerationPlan", "MaintenancePhase", "NewBatch", "NewBatchWithSize",
+		"NativeSemanticBackend", "NewConditionalTxn", "NewConditionalTxnWithSnapshot", "NewMVCCAdmission", "PreflightMVCCPrune", "Print", "ResolvedProfile",
+		"ReverseIterator", "SeekGE", "SeekGEVersionRange", "Set", "SetMaintenancePhase", "SetPointWithMVCCInput", "SetNativeSemanticPublication", "SetSync", "Stats", "SupportsMVCCReadCut",
+		"Update", "UpdateSync", "VacuumIndexOnline", "VacuumOnlineStats", "ValueLogGC", "ValueLogRewriteOnline",
 	}
 	slices.Sort(want)
 	if !slices.Equal(methods, want) {
@@ -61,26 +61,32 @@ func TestDurabilityProfilePublicEntrypointInventory(t *testing.T) {
 	for _, fragment := range []string{"db.captureReadOwners()", "cached.SeekGEVersionRange(start, end)", "return seekGEBackend(backend, start, end)"} {
 		profileInventoryRequireBody(t, publicBodies, "(*DB).SeekGEVersionRange", fragment)
 	}
+	nativeBodies := profileInventoryFunctionBodies(t, filepath.Join(treeDBDir, "native_semantic.go"))
+	for _, fragment := range []string{"db.captureReadOwners()", "backend.ActivateNativeSemanticOwner()"} {
+		profileInventoryRequireBody(t, nativeBodies, "(*DB).NativeSemanticBackend", fragment)
+	}
+	for _, name := range []string{"CaptureNativeSemanticState", "SetNativeSemanticPublication"} {
+		profileInventoryRequireBody(t, nativeBodies, "(*DB)."+name, "db.captureReadOwners()")
+		profileInventoryRequireBody(t, nativeBodies, "(*DB)."+name, "cached.COWMode()")
+	}
 	readCutBodies := profileInventoryFunctionBodies(t, filepath.Join(treeDBDir, "mvcc_read_cut.go"))
 	for _, name := range []string{"SupportsMVCCReadCut", "AcquireMVCCReadCut", "PreflightMVCCPrune"} {
 		profileInventoryRequireBody(t, readCutBodies, "(*DB)."+name, "db.captureReadOwners()")
-		profileInventoryRequireBody(t, readCutBodies, "(*DB)."+name, "cached.COWMode()")
-	}
-	profileInventoryRequireBody(t, readCutBodies, "(*DB).AcquireMVCCReadCut", "cached.AcquireMVCCReadCut()")
-	nativeBodies := profileInventoryFunctionBodies(t, filepath.Join(treeDBDir, "native_mvcc_prune.go"))
-	for _, name := range []string{"NativeMVCCBudgetV6", "StepNativeMVCCCaptureV6", "StepNativeMVCCOwnedCaptureV6"} {
-		for _, fragment := range []string{"db.lifecycleMu.RLock()", "defer db.lifecycleMu.RUnlock()", "db.cached == nil || db.backend == nil", "db.cached." + name + "("} {
-			profileInventoryRequireBody(t, nativeBodies, "(*DB)."+name, fragment)
+		if name != "PreflightMVCCPrune" {
+			profileInventoryRequireBody(t, readCutBodies, "(*DB)."+name, "cached.COWMode()")
 		}
 	}
+	profileInventoryRequireBody(t, readCutBodies, "(*DB).AcquireMVCCReadCut", "cached.AcquireMVCCReadCut()")
 	profileInventoryRequireBody(t, publicBodies, "Open", "resolveOpenProfileOptions")
 	profileInventoryRequireBody(t, publicBodies, "VacuumIndexOffline", "resolveOpenProfileOptions")
 	vlogRewriteBodies := profileInventoryFunctionBodies(t, filepath.Join(treeDBDir, "vlog_rewrite.go"))
 	profileInventoryRequireBody(t, vlogRewriteBodies, "ValueLogRewriteOffline", "resolveOpenProfileOptions")
 	profileInventoryRequireBody(t, backendOpenBodies, "OpenBackend", "resolveOpenProfileOptions")
-	profileInventoryRequireBody(t, backendOpenBodies, "OpenBackendWithCachedLeafLog", "Open(opts)")
+	profileInventoryRequireBody(t, backendOpenBodies, "OpenBackendWithCachedLeafLog", "openBackendWithCachedServices(opts)")
 	profileInventoryRequireBody(t, backendOpenBodies, "OpenBackendWithCachedLeafLogStats", "OpenBackendWithCachedLeafLogStatsAndDeferredVectorBuildMaintenance(opts)")
-	profileInventoryRequireBody(t, backendOpenBodies, "OpenBackendWithCachedLeafLogStatsAndDeferredVectorBuildMaintenance", "Open(opts)")
+	profileInventoryRequireBody(t, backendOpenBodies, "OpenBackendWithCachedLeafLogStatsAndDeferredVectorBuildMaintenance", "openBackendWithCachedServices(opts)")
+	profileInventoryRequireBody(t, backendOpenBodies, "openBackendWithCachedServices", "resolveOpenProfileOptions(&opts)")
+	profileInventoryRequireBody(t, backendOpenBodies, "openBackendWithCachedServices", "openResolvedWithCacheRole(opts, true)")
 	profileInventoryRequireBody(t, profileBodies, "OptionsFor", "ApplyProfile")
 	profileInventoryRequireBody(t, profileBodies, "OptionsForBenchmark", "ApplyBenchmarkProfile")
 	for _, name := range []string{"ApplyProfile", "ApplyBenchmarkProfile"} {

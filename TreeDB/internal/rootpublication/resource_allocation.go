@@ -124,6 +124,9 @@ func (f *originalReleaseFailure) OriginalCleanupPriorAvailable() bool {
 	defer f.mu.Unlock()
 	return f.causes[1] == nil
 }
+func (f *originalReleaseFailure) OriginalCleanupPriorBinding() OriginalCleanupPriorBinding {
+	return BindOriginalCleanupPrior(&f.mu, &f.causes[1])
+}
 func (f *originalReleaseFailure) TryLinkPriorCleanupError(prior error) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()

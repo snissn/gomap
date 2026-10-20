@@ -9,7 +9,7 @@ import (
 )
 
 func TestPrimaryPromotionSharesImmutableLogicalRootV6(t *testing.T) {
-	opts := Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true}
+	opts := Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true}
 	d, err := Open(opts)
 	if err != nil {
 		t.Fatal(err)
@@ -38,7 +38,7 @@ func TestPrimaryPromotionSharesImmutableLogicalRootV6(t *testing.T) {
 // Both physical capsule slots keep independent dependency edges, while old
 // logical readers retain exactly the closure admitted when acquired.
 func TestPrimarySlotCustodyBothSlotsOverwriteAndReopenV6(t *testing.T) {
-	opts := Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true}
+	opts := Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true}
 	d, err := Open(opts)
 	if err != nil {
 		t.Fatal(err)
@@ -138,7 +138,7 @@ func TestPrimarySlotCustodyBothSlotsOverwriteAndReopenV6(t *testing.T) {
 }
 
 func TestPrimaryPromotionCustodyRefusalHasNoPartialAcquireV6(t *testing.T) {
-	d, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+	d, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatal(err)
 	}

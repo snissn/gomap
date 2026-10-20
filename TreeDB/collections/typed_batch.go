@@ -125,6 +125,9 @@ func newTrustedTypedProjection(meta CollectionMeta, ids, retained [][]byte, colu
 // subject to its existing explicit rebuild and insert-only base restrictions.
 // Registered ad-hoc vector runtimes are not supported by this typed admission.
 func (c *Collection) InsertTypedBatchWithStats(ids, retained [][]byte, columns []TypedColumnBatch) ([][]byte, CollectionInsertStats, error) {
+	if c != nil && c.nativeJSON != nil {
+		return c.nativeInsertTypedBatch(ids, retained, columns)
+	}
 	if c == nil || c.db == nil {
 		return nil, CollectionInsertStats{}, errCollectionNil
 	}
@@ -193,6 +196,10 @@ func (v *CollectionReadView) typedReplacementValuesEqual(id []byte, wanted []col
 	if err != nil {
 		return false, err
 	}
+	return typedDeclaredValuesEqual(values, wanted)
+}
+
+func typedDeclaredValuesEqual(values, wanted []columnDeclaredValue) (bool, error) {
 	if len(values) != len(wanted) {
 		return false, errors.New("collections: typed replacement old column count mismatch")
 	}
@@ -227,6 +234,9 @@ func (v *CollectionReadView) typedReplacementValuesEqual(id []byte, wanted []col
 // all replacements are atomic.
 // A commit-ambiguous error can mean the durable mutation was accepted.
 func (c *Collection) ReplaceTypedBatch(ids, retained [][]byte, columns []TypedColumnBatch) ([]UpdateBatchResult, error) {
+	if c != nil && c.nativeJSON != nil {
+		return c.nativeReplaceTypedBatch(ids, retained, columns)
+	}
 	if c == nil || c.db == nil {
 		return nil, errCollectionNil
 	}

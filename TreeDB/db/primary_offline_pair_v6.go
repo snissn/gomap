@@ -12,6 +12,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/lifecycle"
 	"github.com/snissn/gomap/TreeDB/pager"
 	"github.com/snissn/gomap/TreeDB/zipper"
 )
@@ -40,7 +41,12 @@ func (db *DB) captureOfflinePrimaryScopeV6() (idx *indexGen, err error) {
 	if err = metadata.AddPending(charge); err != nil {
 		return nil, err
 	}
-	idx = newIndexGen(db.nextIndexID(), nil, nil, nil)
+	registry, registryErr := lifecycle.NewReaderRegistryWithMetadata(metadata)
+	if registryErr != nil {
+		metadata.RemovePending(charge)
+		return nil, registryErr
+	}
+	idx = newIndexGenWithRegistry(db.nextIndexID(), nil, nil, nil, registry)
 	idx.offlineNamespaceScope = true
 	idx.offlineScopeControlCharge = controlCharge
 	idx.offlineScopePhysicalOwner = source.primaryOwner
@@ -123,6 +129,7 @@ func (idx *indexGen) releaseOfflineNamespaceScopeV6() (*retainedalloc.Owner, uin
 		idx.stableNamespaceMu.Unlock()
 		return metadata, charge, errors.Join(physicalErr, ErrRecoveryRequired)
 	}
+	charge += idx.registry.DetachMetadataCharge()
 	idx.stableNamespaceMetadata = nil
 	idx.offlineScopeControlCharge = 0
 	idx.offlineScopePhysicalOwner = nil

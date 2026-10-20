@@ -39,6 +39,9 @@ func (e *WriterCleanupFailure) OriginalCleanupPriorAvailable() bool {
 	defer e.writer.closeMu.Unlock()
 	return e.prior == nil
 }
+func (e *WriterCleanupFailure) OriginalCleanupPriorBinding() rootpublication.OriginalCleanupPriorBinding {
+	return rootpublication.BindOriginalCleanupPrior(&e.writer.closeMu, &e.prior)
+}
 func (e *WriterCleanupFailure) TryLinkPriorCleanupError(prior error) bool {
 	e.writer.closeMu.Lock()
 	defer e.writer.closeMu.Unlock()
@@ -238,6 +241,9 @@ func (e *StableRotationCleanupFailure) OriginalCleanupPriorAvailable() bool {
 	e.rotation.releaseMu.Lock()
 	defer e.rotation.releaseMu.Unlock()
 	return e.prior == nil
+}
+func (e *StableRotationCleanupFailure) OriginalCleanupPriorBinding() rootpublication.OriginalCleanupPriorBinding {
+	return rootpublication.BindOriginalCleanupPrior(&e.rotation.releaseMu, &e.prior)
 }
 func (e *StableRotationCleanupFailure) TryLinkPriorCleanupError(prior error) bool {
 	e.rotation.releaseMu.Lock()

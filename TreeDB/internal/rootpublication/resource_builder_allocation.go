@@ -68,8 +68,26 @@ func (builder *StableResourceSetBuilder) addAdmittedToken(token *StableResourceT
 		builder.mu.Unlock()
 		return err
 	}
+	return builder.addPreparedAdmittedEntryLocked(token, backing)
+}
+
+// Consumes the private backing on every exit; a refused claim leaves the
+// caller Token-owned. Only the original successful claim attaches its leaf.
+func (builder *StableResourceSetBuilder) addPreparedAdmittedEntry(backing *resourceEntryBacking) error {
+	builder.mu.Lock()
+	token := backing.entries[0].token
+	if builder.closed || builder.abandoned || builder.metadata == nil || token.metadata == nil || token.metadata.owner != builder.metadata.owner || ResourceOwnerState(token.owner.Load()) != ResourceOwnerToken {
+		builder.mu.Unlock()
+		backing.release()
+		return ErrResourceOwnership
+	}
+	return builder.addPreparedAdmittedEntryLocked(token, backing)
+}
+
+func (builder *StableResourceSetBuilder) addPreparedAdmittedEntryLocked(token *StableResourceToken, backing *resourceEntryBacking) error {
+	owner := builder.metadata.owner
 	var view stableResourceKindView
-	err = appendOwnedResourceEntryToView(&view, backing, owner)
+	leaf, err := appendOwnedResourceEntryToView(&view, backing, owner)
 	backing.release()
 	if err != nil {
 		builder.mu.Unlock()
@@ -99,6 +117,10 @@ func (builder *StableResourceSetBuilder) addAdmittedToken(token *StableResourceT
 		incoming.release()
 		return err
 	}
+	// The singleton leaf is still private, including when next shares it.
+	// All fallible preparation and the original Token claim precede attaching
+	// the physical release edge. Metadata aliases were retained throughout.
+	leaf.entries = leaf.metadata.backing.entries[:1:1]
 	old := builder.kindViews
 	builder.kindViews = next
 	builder.mu.Unlock()

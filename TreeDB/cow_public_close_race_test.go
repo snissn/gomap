@@ -193,8 +193,20 @@ func TestCOWPublicViewCallbackCanCloseDatabase(t *testing.T) {
 			case <-time.After(10 * time.Second):
 				t.Fatal("callback Close blocked by public read lock")
 			}
-			if s := cache.COWMemoryStats(); s.TotalBytes != 0 || s.Views != 0 || s.ExternalLeases != 0 {
-				t.Fatalf("callback owner did not drain: %+v", s)
+			// The callback held the final cut across Close. Its release wakes the
+			// original cleanup-only flush worker, whose terminal control refund
+			// follows that release. Join that actual terminal state, not Close's
+			// earlier user-cut-independent completion boundary.
+			deadline := time.Now().Add(5 * time.Second)
+			for {
+				s := cache.COWMemoryStats()
+				if s.TotalBytes == 0 && s.Views == 0 && s.ExternalLeases == 0 {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("callback owner did not drain: %+v", s)
+				}
+				time.Sleep(time.Millisecond)
 			}
 		})
 	}

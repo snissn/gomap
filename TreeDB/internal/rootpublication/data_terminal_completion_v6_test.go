@@ -120,7 +120,11 @@ func newSelectedDataTerminalFixture(t *testing.T, owner *retainedalloc.Owner, ab
 		t.Fatal(err)
 	}
 	if len(absent) == 0 || !absent[0] {
-		fixture.resources, err = NewStableResourceSetBuilder().Freeze()
+		builder, err := NewStableResourceSetBuilderWithMetadata(owner)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fixture.resources, err = builder.Freeze()
 		if err != nil {
 			t.Fatal(err)
 		}

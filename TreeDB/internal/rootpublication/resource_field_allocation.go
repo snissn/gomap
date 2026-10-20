@@ -368,3 +368,26 @@ func newImportedEntryFieldBacking(owner *retainedalloc.Owner, token *StableResou
 	slices.SortFunc(out.cells, compareResourceFieldCells)
 	return out, nil
 }
+
+// Physical directory fields are borrowed from admitted decoder scratch. Their
+// independently retained cells/strings are admitted before allocation.
+func newDirectoryEntryFieldBacking(owner *retainedalloc.Owner, fields []ReachabilityField) (*resourceFieldBacking, error) {
+	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(resourceFieldBacking{})))
+	if err := diagnosticChargeAdd(&charge, uint64(len(fields)), uint64(unsafe.Sizeof(resourceFieldCell{}))); err != nil {
+		return nil, err
+	}
+	for _, field := range fields {
+		if err := diagnosticChargeAdd(&charge, uint64(len(field)), 1); err != nil {
+			return nil, err
+		}
+	}
+	allocation, err := newResourceAllocation(owner, charge)
+	if err != nil {
+		return nil, err
+	}
+	out := &resourceFieldBacking{allocation: allocation, cells: make([]resourceFieldCell, len(fields))}
+	for i, field := range fields {
+		out.cells[i] = resourceFieldCell{field: ReachabilityField(strings.Clone(string(field))), reachable: true}
+	}
+	return out, nil
+}

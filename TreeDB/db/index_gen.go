@@ -81,13 +81,19 @@ type indexGen struct {
 	startupReceipt          OpenRecoveryCleanupError
 }
 
+// newIndexGen is the unowned diagnostic constructor. Production generation
+// birth uses newIndexGenWithMetadata or the original offline PRIMARY owner.
 func newIndexGen(id uint64, p *pager.Pager, alloc *freelist.Allocator, z *zipper.Zipper) *indexGen {
+	return newIndexGenWithRegistry(id, p, alloc, z, lifecycle.NewReaderRegistry())
+}
+
+func newIndexGenWithRegistry(id uint64, p *pager.Pager, alloc *freelist.Allocator, z *zipper.Zipper, registry *lifecycle.ReaderRegistry) *indexGen {
 	g := &indexGen{
 		id:        id,
 		pager:     p,
 		allocator: alloc,
 		zipper:    z,
-		registry:  lifecycle.NewReaderRegistry(),
+		registry:  registry,
 		graveyard: lifecycle.NewGraveyard(),
 	}
 	g.closeFailure.payload = g
@@ -102,7 +108,12 @@ func newIndexGenWithMetadata(id uint64, p *pager.Pager, alloc *freelist.Allocato
 	if err := metadata.AddPending(charge); err != nil {
 		return nil, err
 	}
-	g := newIndexGen(id, p, alloc, z)
+	registry, err := lifecycle.NewReaderRegistryWithMetadata(metadata)
+	if err != nil {
+		metadata.RemovePending(charge)
+		return nil, err
+	}
+	g := newIndexGenWithRegistry(id, p, alloc, z, registry)
 	g.metadata, g.metadataCharge = metadata, charge
 	return g, nil
 }
@@ -124,6 +135,7 @@ func (g *indexGen) release() int32 {
 }
 
 func (g *indexGen) close() error {
+	var primaryOwnerCompletion primaryRuntimeDisposalCompletionV6
 	g.closeOnce.Do(func() {
 		defer func() {
 			g.wrapperMu.Lock()
@@ -209,15 +221,25 @@ func (g *indexGen) close() error {
 				g.primaryOwner.retainFailedDataGeneration(g)
 				g.primary.MetadataOwner().CleanupFailed()
 			} else {
-				_, debt, err := g.primaryOwner.releaseWithOutcome(nil)
+				consumed, debt, completion, err := g.primaryOwner.releaseOriginalWithOutcome()
 				g.closeErr = err
-				if debt {
+				if !consumed || debt {
 					g.primaryOwner.retainFailedDataGeneration(g)
+				} else {
+					g.primaryOwner, g.primary = nil, nil
+					if g.zipper != nil {
+						g.zipper.SetPrimaryArena(nil)
+						g.zipper.SetPrimaryConstructionFailureV6(nil)
+					}
+					primaryOwnerCompletion = completion
 				}
 			}
 		}
 	})
-	return g.closeErr
+	err := g.closeErr
+	g = nil
+	primaryOwnerCompletion.complete()
+	return err
 }
 
 // The terminal bit and borrow count share one atomic handoff. A release
@@ -334,6 +356,7 @@ func (g *indexGen) detachGenerationMetadataLockedV6() (*retainedalloc.Owner, uin
 		return nil, 0
 	}
 	metadata, charge := g.metadata, g.metadataCharge
+	charge += g.registry.DetachMetadataCharge()
 	g.pager, g.allocator, g.zipper = nil, nil, nil
 	g.registry, g.graveyard = nil, nil
 	g.primary, g.primaryOwner = nil, nil

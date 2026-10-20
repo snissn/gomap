@@ -90,6 +90,9 @@ func fixedPeerChildListenersV1() (map[string]net.Listener, error) {
 func fixedPeerSubprocessAllocatorV1(t testing.TB) func(raftcluster.NodeID) string {
 	return fixedPeerTestAllocatorV1(t, nil)
 }
+func fixedPeerReadRuntimeOpenV1(path string) ([]byte, error) {
+	return os.ReadFile(path)
+}
 func fixedPeerClaimStagedTestProcessV1(testing.TB, FixedPeerTCPConfigV1) *fixedPeerTestProcessV1 {
 	return nil
 }

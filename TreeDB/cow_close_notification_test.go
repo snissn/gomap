@@ -79,11 +79,31 @@ func TestCOWCloseErrorNotificationCanReadClosedDatabase(t *testing.T) {
 				t.Fatal(err)
 			}
 			cache := database.cached
-			stats := cache.COWMemoryStats()
-			overhead := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
-			pressure, err = cache.AcquireCOWAllocation(memtable.DefaultCOWLimits().MaxInFlightBytes - stats.ReservedBytes - overhead)
+			capture, err := database.CaptureNativeSemanticState()
 			if err != nil {
 				t.Fatal(err)
+			}
+			// Producer exhaustion cannot consume the preadmitted maintenance
+			// tranche. Refuse the actual final checkpoint by filling that SAME
+			// child, then end the temporary capture before starting Close.
+			maintenance := capture.NativeMaintenanceAllocator().(*memtable.COWBudget)
+			if err := capture.Close(); err != nil {
+				t.Fatal(err)
+			}
+			stats, limits := maintenance.Stats(), maintenance.Limits()
+			overhead := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
+			available := min(limits.MaxInFlightBytes-stats.ReservedBytes, limits.MaxTotalBytes-stats.TotalBytes,
+				limits.MaxRetiredBytes-stats.HistoryBytes-stats.ReservedBytes-stats.DeferredBytes)
+			if available <= overhead {
+				t.Fatal("maintenance fixture has no admission headroom")
+			}
+			pressure, err = maintenance.AcquireExternal(available - overhead)
+			if err != nil {
+				t.Fatal(err)
+			}
+			after := maintenance.Stats()
+			if after.ReservedBytes != limits.MaxInFlightBytes && after.TotalBytes != limits.MaxTotalBytes && after.HistoryBytes+after.ReservedBytes+after.DeferredBytes != limits.MaxRetiredBytes {
+				t.Fatalf("pressure missed the original finite boundary: %+v", after)
 			}
 			// Bound the whole storage operation separately; its expiry cannot
 			// be classified as a callback lock failure without entry evidence.

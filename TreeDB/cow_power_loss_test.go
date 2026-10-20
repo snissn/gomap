@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -14,6 +15,8 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/powerlossoracle"
 	"github.com/snissn/gomap/TreeDB/internal/powerlossreopen"
+	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
 // This test materializes only bytes and names observed at completed production
@@ -155,7 +158,9 @@ func TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts(t *testing.
 	for _, profile := range []treedb.Profile{treedb.ProfileCommandWALDurable, treedb.ProfileCommandWALRelaxed, treedb.ProfileNoWALFast} {
 		for _, point := range points {
 			t.Run(fmt.Sprintf("%s/%s", profile, point), func(t *testing.T) {
+				cutErr := fmt.Errorf("modeled COW interruption at %s", point)
 				opts := treedb.OptionsFor(profile, t.TempDir())
+				opts.IndexPrimaryDirectory = true // Meta/seal interruption cuts target index.db.primary.
 				opts.MemtableMode = "cow_btree"
 				opts.MemtableShards = 2
 				opts.DisableSideStores = true
@@ -171,7 +176,24 @@ func TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts(t *testing.
 				if err != nil {
 					t.Fatal(err)
 				}
-				defer db.Close()
+				defer func() {
+					if closeErr := db.Close(); closeErr != nil {
+						t.Logf("interrupted original producer Close: %v", closeErr)
+						t.Logf("original cleanup stale=%v ownership=%v handoff=%v capacity=%v closed=%v",
+							errors.Is(closeErr, primaryarena.ErrStale), errors.Is(closeErr, rootpublication.ErrResourceOwnership),
+							errors.Is(closeErr, rootpublication.ErrRecoveryHandoffUnavailable), errors.Is(closeErr, backenddb.ErrSnapshotCapacity), errors.Is(closeErr, os.ErrClosed))
+						var pathErr *os.PathError
+						if errors.As(closeErr, &pathErr) {
+							t.Logf("original cleanup operation=%s path=%s error=%v", pathErr.Op, pathErr.Path, pathErr.Err)
+						}
+						if errors.Is(closeErr, rootpublication.ErrResourceOwnership) || errors.Is(closeErr, primaryarena.ErrStale) {
+							t.Errorf("interrupted original producer retained failed physical cleanup: %v", closeErr)
+						}
+						if !errors.Is(closeErr, cutErr) && !errors.Is(closeErr, backenddb.ErrRecoveryRequired) {
+							t.Errorf("interrupted original producer teardown: %v", closeErr)
+						}
+					}
+				}()
 				if err = db.SetSync([]byte("seed"), []byte("baseline")); err != nil {
 					t.Fatal(err)
 				}
@@ -183,7 +205,6 @@ func TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts(t *testing.
 					t.Fatal(err)
 				}
 				var cut *powerlossoracle.Model
-				cutErr := fmt.Errorf("modeled COW interruption at %s", point)
 				wantResource := durabilitycut.ResourceMeta
 				switch point {
 				case durabilitycut.BeforeDependencyFileSync, durabilitycut.AfterDependencyFileSync:

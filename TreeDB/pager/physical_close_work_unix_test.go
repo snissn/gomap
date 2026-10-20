@@ -5,13 +5,14 @@ package pager
 import (
 	"errors"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"os"
 	"path/filepath"
 	"testing"
 	"unsafe"
 )
 
-func TestPhysicalCloseWorkFirstUnmapFailureCustody(t *testing.T) {
+func TestPhysicalCloseOwnedFirstUnmapFailureCustody(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "index.db")
 	f, e := os.Create(path)
 	if e != nil {
@@ -23,7 +24,17 @@ func TestPhysicalCloseWorkFirstUnmapFailureCustody(t *testing.T) {
 	if e = f.Close(); e != nil {
 		t.Fatal(e)
 	}
-	p, e := OpenReadOnly(path, 2<<20)
+	var owner retainedalloc.Owner
+	owner.Initialize(0)
+	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(Pager{})))
+	if e = owner.AddPending(charge); e != nil {
+		t.Fatal(e)
+	}
+	f, e = os.OpenFile(path, os.O_RDWR, 0)
+	if e != nil {
+		t.Fatal(e)
+	}
+	p, e := OpenOwnedFileWithMetadata(f, path, 2<<20, OpenOptions{}, &owner, charge)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -37,9 +48,8 @@ func TestPhysicalCloseWorkFirstUnmapFailureCustody(t *testing.T) {
 		_ = physical(unsafe.Pointer(unsafe.SliceData(p.mappings[0].data)), p.mappings[0].extent)
 		_ = handle.Close()
 	}()
-	w := &iterator.OrdinalScanWork{RecordLimit: 42, ByteLimit: 1 << 20}
-	if ready, e := p.CloseWork(w); ready || !errors.Is(e, failure) {
-		t.Fatalf("first outcome: %v %v", ready, e)
+	if e := p.Close(); !errors.Is(e, failure) {
+		t.Fatalf("first outcome: %v", e)
 	}
 	if p.mappings[0].offset != 0 || p.chunks[0] == nil || p.file != handle {
 		t.Fatal("failed mapping lost custody")
@@ -48,9 +58,12 @@ func TestPhysicalCloseWorkFirstUnmapFailureCustody(t *testing.T) {
 		t.Fatal("file closed after failed unmap", e)
 	}
 	for i := 0; i < 3; i++ {
-		if ready, e := p.CloseWork(&iterator.OrdinalScanWork{RecordLimit: 42, ByteLimit: 1 << 20}); ready || !errors.Is(e, failure) {
+		if e := p.Close(); !errors.Is(e, failure) {
 			t.Fatal("failure changed", e)
 		}
+	}
+	if owner.Bytes() < charge || p.ownedFileMetadata != &owner {
+		t.Fatal("failed physical owner refunded")
 	}
 	if calls != 1 {
 		t.Fatal("uncertain physical unmap replayed", calls)

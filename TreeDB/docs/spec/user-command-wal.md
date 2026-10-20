@@ -1332,3 +1332,26 @@ outcome and collection-wide 65,536 / 32 MiB admission bound are specified in
 `vector-partition-raft-v1.md`. Conditional payload goldens are
 `internal/commitlog/testdata/colocated_{replace,delete}_v2_payload.hex`; encoder
 and decoder source is `internal/commitlog/command_colocated_vector_mutation_v1.go`.
+
+### Native scalar index catalog transition (kind 201)
+
+`CatalogIndexMutation` has catalog scope and payload format 17. Its v1 payload
+is LE `u16 version=1`, `u64 collection incarnation`, three `u32` lengths
+(collection name, prior canonical metadata, next canonical metadata), then the
+three byte strings in that order. All lengths and the incarnation are nonzero;
+the lengths must consume the payload exactly. Prior/next metadata must name the
+same ordinary JSON collection and differ only in scalar index declarations and
+the maintained normalization defaults implied by those declarations. This does
+not change kind 200's create-only meaning or the existing metadata format.
+
+One accepted transition publishes metadata and index roots atomically. Creation
+backfills the complete primary cut. Pure drops retain surviving name-keyed index
+domains and index-state, remove only dropped descriptors, and remove index-state
+when the last index drops; they do not scan documents or rebuild surviving roots.
+The original catalog-name dependency fences stale schema plans, including
+read-derived writers and ABA; a primary range dependency fences rows changed
+during backfill and is conservatively retained for drops. Recovery validates the
+original incarnation/prior schema and uses the existing callback-scoped replay
+identity and one build group for the same rebuild-or-remove transition, without
+appending a child command. Typed DDL and unsupported index interpretations refuse
+before assignment.

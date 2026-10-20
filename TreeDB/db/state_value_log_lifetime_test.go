@@ -147,7 +147,7 @@ func TestCurrentStateValueLogConsumersRetainExactSet(t *testing.T) {
 func TestTopologyPublicationPreservesPrimaryRootLifetime(t *testing.T) {
 	for _, route := range []string{"audit", "leaf-same", "leaf-refresh"} {
 		t.Run(route, func(t *testing.T) {
-			d, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+			d, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 			if err != nil {
 				t.Fatal(err)
 			}

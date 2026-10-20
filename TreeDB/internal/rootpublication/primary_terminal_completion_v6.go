@@ -1,7 +1,6 @@
 package rootpublication
 
 import (
-	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"time"
 )
@@ -36,6 +35,7 @@ func completePrimaryTerminalsV6(head **primaryTerminalCompletionV6) {
 
 type primaryPublicationCompletionV6 struct {
 	head                        *primaryTerminalCompletionV6
+	scratch                     StableResourceTokenReleaseCompletionV6
 	frontier                    Frontier
 	lineage                     DurableRootLineageID
 	sequence, oldest, groupSize uint64
@@ -49,7 +49,9 @@ func (c *Coordinator) removeCompletedPendingPrefixV6(n int, bytes uint64) {
 	if n == 0 {
 		return
 	}
-	c.pending = append([]pendingEntry(nil), c.pending[n:]...)
+	copy(c.pending, c.pending[n:])
+	clear(c.pending[len(c.pending)-n:])
+	c.pending = c.pending[:len(c.pending)-n]
 	if bytes <= c.pendingBytes {
 		c.pendingBytes -= bytes
 	} else {
@@ -74,13 +76,6 @@ func (c *Coordinator) completePublicationLockedV6(done primaryPublicationComplet
 	c.notifyLocked()
 }
 
-func bindPrimaryTerminalWorkV6(n *primaryTerminalCompletionV6, removal *retainedalloc.RemovalWork, w *iterator.OrdinalScanWork) (bool, error) {
-	if n == nil || removal == nil || w == nil {
-		return false, ErrDurableRootOwnership
-	}
-	return removal.BindPendingWork(n.owner, n.charge, w)
-}
-
 // The original DATA constructor shares the same outside-callback terminal
 // receipt and ACK barrier as PRIMARY. Physical Set release has already completed.
 func (t *DurableRootTransaction) finishOrdinaryDataMetadataV6() (*primaryTerminalCompletionV6, error) {
@@ -100,6 +95,8 @@ func (t *DurableRootTransaction) finishOrdinaryDataMetadataV6() (*primaryTermina
 	}
 	node := t.terminalMetadataV6
 	t.terminalMetadataV6 = nil
+	t.dataCandidate = PreparedRootCandidate{}
+	t.dataMember = [1]*DurableRootTransaction{}
 	t.input = DurableRootCallbackInput{Lineage: t.input.Lineage, Sequence: t.input.Sequence}
 	t.activate, t.consume, t.abort, t.abortComplete, t.fail = nil, nil, nil, nil, nil
 	t.releaseOwnerLockedV6()

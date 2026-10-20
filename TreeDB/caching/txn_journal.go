@@ -1,6 +1,8 @@
 package caching
 
 import (
+	"unsafe"
+
 	"errors"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
@@ -20,7 +22,14 @@ func (c *cowCache) ensureTxnJournal() error {
 		return nil
 	}
 	n := 4096
-	for n > 8 && uint64(n)*256 > c.budget.Limits().MaxInFlightBytes/16 {
+	controlCharge := func(n int) uint64 {
+		charge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
+		for _, size := range txnhistory.ControlAllocationSizes(n) {
+			charge += memtable.COWAllocationCharge(size)
+		}
+		return charge
+	}
+	for n > 8 && controlCharge(n) > c.budget.Limits().MaxInFlightBytes/16 {
 		n /= 2
 	}
 	var err error

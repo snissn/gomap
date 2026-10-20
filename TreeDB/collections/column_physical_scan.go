@@ -543,6 +543,7 @@ func (c *Collection) scanColumnPhysicalRowsInSnapshotView(
 		if err != nil {
 			return diag, err
 		}
+		localReadCache.operationLocal = c.nativeOperationLocalReads
 		readCache = &localReadCache
 		defer func() { _ = readCache.close() }()
 	} else if columnAssetReadIntegrityLabel(req.ReadIntegrity) != columnAssetReadIntegrityLabel(readCache.readIntegrity) {

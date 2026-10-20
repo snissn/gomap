@@ -7,6 +7,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/batch"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -14,19 +15,20 @@ import (
 // cowBatchState exists only for explicitly admitted COW batches. Keeping its
 // ownership and prediction fields separate preserves ordinary batch allocations.
 type cowBatchState struct {
-	holdBegan         time.Time
-	receipt           COWPublicationReceipt
-	inPublication     bool
-	guard             *backenddb.CommandWALStagingGuardV1
-	txn               *ConditionalTxn
-	trustedAppend     bool
-	lease             *memtable.COWExternalLease
-	storage           *cowBatchStorage
-	err               error
-	prepared          *cowBatchPreparation
-	producer          *cowFrameCapture
-	predictionGroups  [][]memtable.COWMutation
-	predictionStorage []memtable.COWMutation
+	native                       *cowNativeOwner
+	holdBegan                    time.Time
+	receipt                      COWPublicationReceipt
+	accepted                     rootpublication.AcceptedTicket
+	guard                        *backenddb.CommandWALStagingGuardV1
+	txn                          *ConditionalTxn
+	lease                        *memtable.COWExternalLease
+	storage                      *cowBatchStorage
+	err                          error
+	prepared                     *cowBatchPreparation
+	producer                     *cowFrameCapture
+	predictionGroups             [][]memtable.COWMutation
+	predictionStorage            []memtable.COWMutation
+	inPublication, trustedAppend bool
 }
 
 // One admitted allocation owns the public batch and its COW-only state. Both
@@ -181,6 +183,7 @@ func (b *Batch) cowReset() {
 	if b == &cowDeniedBatch {
 		return
 	}
+	b.releaseNativePublication()
 	b.entries = nil
 	b.copyArena = nil
 	b.shardAdds = nil

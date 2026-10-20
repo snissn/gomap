@@ -1,8 +1,10 @@
 package cowbench
 
 import (
+	"errors"
 	treedb "github.com/snissn/gomap/TreeDB"
 	cowhelpers "github.com/snissn/gomap/TreeDB/internal/cowbench"
+	"github.com/snissn/gomap/TreeDB/internal/mvcckey"
 	mvcc "github.com/snissn/gomap/TreeDB/mvcc"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -105,6 +107,24 @@ func TestCOWPublicPhysicalProbeClosesOnRefusal(t *testing.T) {
 		}
 		if missing {
 			groups[0].Mutations[0].Key = []byte("missing")
+			// The physical basis retains shared reader scratch after snapshot Close.
+			// Warm the same missing read before measuring snapshot-local custody.
+			physical, err := mvcckey.Encode(groups[0].Mutations[0].Key, groups[0].Timestamp)
+			if err != nil {
+				_ = db.Close()
+				t.Fatal(err)
+			}
+			snapshot := db.AcquireSnapshot()
+			if snapshot == nil {
+				_ = db.Close()
+				t.Fatal("warm snapshot missing")
+			}
+			_, readErr := snapshot.GetEntryExact(physical)
+			closeErr := snapshot.Close()
+			if !errors.Is(readErr, treedb.ErrKeyNotFound) || closeErr != nil {
+				_ = db.Close()
+				t.Fatalf("warm missing read: read=%v close=%v", readErr, closeErr)
+			}
 		}
 		before := db.Stats()
 		_, _, err = cowC3ValueLayout(db, groups, true, true)
