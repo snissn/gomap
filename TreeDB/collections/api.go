@@ -14926,12 +14926,15 @@ func validateCollectionUpdateDocumentInput(c *Collection, documentID []byte) err
 	return nil
 }
 
-func (c *Collection) updateDirect(documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error)) (bool, bool, error) {
-	unlockSchema := c.lockCollectionSchemaRead()
-	defer unlockSchema()
-	admissionState := c.lockCollectionCommandWALAdmission()
-	admission := &admissionState
-	defer admission.unlock()
+func (c *Collection) updateDirect(documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error), admissions ...*collectionCommandWALAdmission) (bool, bool, error) {
+	admission := collectionCommandWALAdmissionArgument(admissions)
+	if admission == nil {
+		unlockSchema := c.lockCollectionSchemaRead()
+		defer unlockSchema()
+		admissionState := c.lockCollectionCommandWALAdmission()
+		admission = &admissionState
+		defer admission.unlock()
+	}
 	unlockMutation := c.lockMutation()
 	mutationLocked := true
 	defer func() {
@@ -14964,12 +14967,15 @@ func (c *Collection) updateDirect(documentID []byte, update func(current []byte)
 	return false, false, collectionMutationRetryExhausted(lastErr)
 }
 
-func (c *Collection) updateDirectBSONSet(documentID []byte, spec bsonSetUpdate) (bool, bool, error) {
-	unlockSchema := c.lockCollectionSchemaRead()
-	defer unlockSchema()
-	admissionState := c.lockCollectionCommandWALAdmission()
-	admission := &admissionState
-	defer admission.unlock()
+func (c *Collection) updateDirectBSONSet(documentID []byte, spec bsonSetUpdate, admissions ...*collectionCommandWALAdmission) (bool, bool, error) {
+	admission := collectionCommandWALAdmissionArgument(admissions)
+	if admission == nil {
+		unlockSchema := c.lockCollectionSchemaRead()
+		defer unlockSchema()
+		admissionState := c.lockCollectionCommandWALAdmission()
+		admission = &admissionState
+		defer admission.unlock()
+	}
 	unlockMutation := c.lockMutation()
 	mutationLocked := true
 	defer func() {
@@ -16174,10 +16180,10 @@ func (combiner *collectionUpdateCombiner) prepareBatchWithScratch(batch []collec
 	collection := ownedBatch[0].collection
 	unlockSchema := collection.lockCollectionSchemaRead()
 	defer unlockSchema()
-	admissionState := collection.lockCollectionCommandWALAdmission()
+	admissionState := collection.lockQueuedUpdateCommandWALAdmission()
 	admission := &admissionState
 	defer admission.unlock()
-	if err := collection.ensureWriteDomainOpen(); err != nil {
+	if err := admission.ensureWriteDomainOpen(); err != nil {
 		prepared.err = err
 		return prepared
 	}
@@ -16277,9 +16283,9 @@ func (combiner *collectionUpdateCombiner) stagePreparedBatches(prepared []collec
 	unlockSchema := func() {}
 	if err == nil {
 		unlockSchema = collection.lockCollectionSchemaRead()
-		admissionState := collection.lockCollectionCommandWALAdmission()
+		admissionState := collection.lockQueuedUpdateCommandWALAdmission()
 		admission = &admissionState
-		err = collection.ensureWriteDomainOpen()
+		err = admission.ensureWriteDomainOpen()
 	}
 	releaseAdmission := func() { admission.unlock(); unlockSchema(); unlockSchema = func() {} }
 	defer releaseAdmission()
@@ -16361,11 +16367,11 @@ func (combiner *collectionUpdateCombiner) stageSingleDirectPreparedBatch(prepare
 	collection := prepared.batch[0].collection
 
 	unlockSchema := collection.lockCollectionSchemaRead()
-	admissionState := collection.lockCollectionCommandWALAdmission()
+	admissionState := collection.lockQueuedUpdateCommandWALAdmission()
 	admission := &admissionState
 	releaseAdmission := func() { admission.unlock(); unlockSchema(); unlockSchema = func() {} }
 	defer releaseAdmission()
-	if err := collection.ensureWriteDomainOpen(); err != nil {
+	if err := admission.ensureWriteDomainOpen(); err != nil {
 		releaseAdmission()
 		combiner.completePreparedBatchWithError(prepared, err)
 		return
@@ -17049,12 +17055,12 @@ func (combiner *collectionUpdateCombiner) runBatchWithScratch(batch []collection
 
 	collection := batch[0].collection
 	unlockSchema := collection.lockCollectionSchemaRead()
-	admissionState := collection.lockCollectionCommandWALAdmission()
+	admissionState := collection.lockQueuedUpdateCommandWALAdmission()
 	admission := &admissionState
 	releaseAdmission := func() { admission.unlock(); unlockSchema(); unlockSchema = func() {} }
 	defer releaseAdmission()
 	results, batched, err := func() ([]UpdateBatchResult, bool, error) {
-		if err := collection.ensureWriteDomainOpen(); err != nil {
+		if err := admission.ensureWriteDomainOpen(); err != nil {
 			return nil, false, err
 		}
 		results, batched, err := collection.updateBatchOwnedItems(items, updateBatchModeNoSecondaryUniqueIndexChanges, admission)
@@ -17129,11 +17135,21 @@ func runUpdateCombineDirect(req collectionUpdateCombineRequest) collectionUpdate
 	if err := validateCollectionUpdateCombineRequest(req); err != nil {
 		return collectionUpdateCombineResult{err: err}
 	}
+	// Every caller owns a request already removed from a combiner queue. Keep
+	// that execution scope through direct fallback and any foreign WAL drain.
+	unlockSchema := req.collection.lockCollectionSchemaRead()
+	defer unlockSchema()
+	admissionState := req.collection.lockQueuedUpdateCommandWALAdmission()
+	admission := &admissionState
+	defer admission.unlock()
+	if err := admission.ensureWriteDomainOpen(); err != nil {
+		return collectionUpdateCombineResult{err: err}
+	}
 	if req.hasBSONSet {
-		matched, modified, err := req.collection.updateBSONSetDirect((&req).documentIDBytes(), req.bsonSet)
+		matched, modified, err := req.collection.updateBSONSetDirect((&req).documentIDBytes(), req.bsonSet, admission)
 		return collectionUpdateCombineResult{matched: matched, modified: modified, err: err}
 	}
-	matched, modified, err := req.collection.updateDirect((&req).documentIDBytes(), req.update)
+	matched, modified, err := req.collection.updateDirect((&req).documentIDBytes(), req.update, admission)
 	return collectionUpdateCombineResult{matched: matched, modified: modified, err: err}
 }
 

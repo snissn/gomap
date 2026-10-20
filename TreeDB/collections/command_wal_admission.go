@@ -17,6 +17,7 @@ type collectionCommandWALAdmission struct {
 	release        func()
 	acquire        func() func()
 	prepared       bool
+	queuedUpdate   bool
 	mutation       *collectionMutationUnlock
 	mutationLocked *bool
 }
@@ -25,6 +26,25 @@ type collectionCommandWALAdmission struct {
 // to retain a custom reacquire function.
 func (c *Collection) lockCollectionCommandWALAdmission() collectionCommandWALAdmission {
 	return collectionCommandWALAdmission{collection: c, release: c.lockVectorIndexCoverageMutation()}
+}
+
+// Only combiner workers call this after consuming successfully enqueued work.
+// Closing a write domain refuses new ingress, but its queued work must finish
+// before the manager flushes and the backend begins closing.
+func (c *Collection) lockQueuedUpdateCommandWALAdmission() collectionCommandWALAdmission {
+	admission := c.lockCollectionCommandWALAdmission()
+	admission.queuedUpdate = true
+	return admission
+}
+
+func (a *collectionCommandWALAdmission) ensureWriteDomainOpen() error {
+	if a.queuedUpdate && a.collection != nil && a.collection.db != nil {
+		if a.collection.db.IsClosing() {
+			return backenddb.ErrClosed
+		}
+		return nil
+	}
+	return a.collection.ensureWriteDomainOpen()
 }
 
 func (a *collectionCommandWALAdmission) unlock() {
@@ -63,7 +83,7 @@ func (a *collectionCommandWALAdmission) drainBeforeAssignment(intent *backenddb.
 	if err != nil {
 		return err
 	}
-	if err := a.collection.ensureWriteDomainOpen(); err != nil {
+	if err := a.ensureWriteDomainOpen(); err != nil {
 		return err
 	}
 	if err := a.collection.db.CheckCommandWALPublishReady(); err != nil {
@@ -181,7 +201,7 @@ func (a *collectionCommandWALAdmission) restoreMutation(mutation *collectionMuta
 }
 
 func (c *Collection) withMutationLockForCommandWALStagingAdmission(raw *func(), intent *backenddb.CommandWALIntent, a *collectionCommandWALAdmission, fn func() error) error {
-	mutation, err := c.lockMutationForCommandWALStaging(raw, intent)
+	mutation, err := c.lockMutationForCommandWALStaging(raw, intent, a)
 	if err != nil {
 		return err
 	}
