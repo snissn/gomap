@@ -324,8 +324,10 @@ JSON/BSON. The existing wire's TD1D hash references, TD1I embedded records and
 TemplateRecords sidecar lower into the ordinary TD1I/TD1H batch preparer; local
 compact template IDs are assigned by that original owner. Batch definitions may
 follow a reference or belong to a missing replacement. Matched canonical members
-retain their needed definitions for local WAL startup replay. Unknown hashes or
-malformed resolved values refuse before append. Advisory preflight reserves no
+retain their needed definitions for local WAL startup replay. For inserts and
+matched replacements, unknown hashes or malformed resolved values refuse before
+append. A structurally valid all-missing replacement retains ordinary accepted
+no-effect semantics. Advisory preflight reserves no
 LSN, logical successor, physical state or durable FSM apply progress; committed
 apply still requires its original exact physical seal and durable result/progress.
 Legacy collection mutation dispatch does not acquire this native capability.
