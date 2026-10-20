@@ -15,6 +15,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/tree"
 )
 
 func TestCommitPublicationAcceptedClassifiesOnlyPostAcceptanceErrors(t *testing.T) {
@@ -1330,7 +1331,17 @@ func TestRootPublicationSingleGenerationLateBuilderAndRetry(t *testing.T) {
 					t.Fatal("pre-meta failure consumed the combined seal or advanced durability")
 				}
 			}
-			if err := database.Set([]byte("second"), []byte("two")); err != nil {
+			// A public batch can publish while the first SetSync still owns the
+			// commit combiner and waits for the deliberately held builder.
+			second := database.NewBatch()
+			defer second.Close()
+			if err := second.Set([]byte("second"), []byte("two")); err != nil {
+				t.Fatal(err)
+			}
+			if err := second.Write(); err != nil {
+				t.Fatal(err)
+			}
+			if err := second.Close(); err != nil {
 				t.Fatal(err)
 			}
 			late.Release()
@@ -1354,7 +1365,7 @@ func TestRootPublicationSingleGenerationLateBuilderAndRetry(t *testing.T) {
 			if database.durableRoot.record.ParentCommitSeq != base.record.CommitSeq || database.durableRoot.record.ParentRecordDigest != base.meta.RootRecordDigest || !early.released {
 				t.Fatal("coalesced successor lost the original slot parent or early seal custody")
 			}
-			if got, err := held.Get([]byte("first")); err != nil || got != nil {
+			if got, err := held.Get([]byte("first")); !errors.Is(err, tree.ErrKeyNotFound) || got != nil {
 				t.Fatalf("held base observed later first root: %q %v", got, err)
 			}
 			if err := held.Close(); err != nil {
