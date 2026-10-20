@@ -1655,7 +1655,7 @@ func (c *Collection) NewPreparedVectorPartitionGenerationReplicatedLiveSearchOpe
 		return nil, fmt.Errorf("%w: replicated durable live carrier: status=%+v err=%v", ErrVectorPartitionSearchUnavailable, loadStatus, loadErr)
 	}
 	var plan *VectorPartitionGenerationSearchOpenPlanV1
-	err = WithVectorPartitionStorageBarrierV1(c.db.Dir(), func() error {
+	err = WithVectorPartitionStorageBarrierV1(c.vectorPartitionStorageDBV1().Dir(), func() error {
 		prepared, err := c.preparedVectorPartitionManifestUnderStorageBarrierV1(ctx, manifest.IndexName, manifest.Generation, true)
 		if err != nil {
 			return fmt.Errorf("%w: replicated prepared manifest: %v", ErrVectorPartitionSearchUnavailable, err)
@@ -1719,11 +1719,11 @@ func (p *VectorPartitionGenerationSearchOpenPlanV1) partitionAssets(partition ui
 	return p.assetGroups[partition]
 }
 
-func vectorPartitionMembershipDigestV1(reader *columnVectorGraphPhysicalRowReader, generation uint64, partition uint32, members []vectorPartitionMembershipSourceV1) ([sha256.Size]byte, error) {
+func vectorPartitionMembershipDigestV1(reader interface{ documentIDForOrdinal(int) ([]byte, bool) }, generation uint64, partition uint32, members []vectorPartitionMembershipSourceV1) ([sha256.Size]byte, error) {
 	return vectorPartitionMembershipDigestWithContextV1(context.Background(), reader, generation, partition, members)
 }
 
-func vectorPartitionMembershipDigestWithContextV1(ctx context.Context, reader *columnVectorGraphPhysicalRowReader, generation uint64, partition uint32, members []vectorPartitionMembershipSourceV1) ([sha256.Size]byte, error) {
+func vectorPartitionMembershipDigestWithContextV1(ctx context.Context, reader interface{ documentIDForOrdinal(int) ([]byte, bool) }, generation uint64, partition uint32, members []vectorPartitionMembershipSourceV1) ([sha256.Size]byte, error) {
 	var zero [sha256.Size]byte
 	if ctx == nil {
 		ctx = context.Background()
@@ -1835,7 +1835,7 @@ func (c *Collection) validateVectorPartitionAssetMembershipBindingsForGraphVaria
 	if !ok {
 		return ErrVectorPartitionSearchUnavailable
 	}
-	reader, err := c.openColumnVectorGraphPhysicalRowReader(manifest.IndexName, columnVectorGraphPhysicalRowReaderOptions{})
+	reader, err := c.openVectorPartitionRowSourceV1(manifest.IndexName)
 	if err != nil {
 		return fmt.Errorf("%w: membership source reader: %v", ErrVectorPartitionSearchUnavailable, err)
 	}
@@ -1894,7 +1894,7 @@ func (c *Collection) validateVectorPartitionAssetMembershipBindingsForGraphVaria
 			}
 			continue
 		}
-		raw, err := readColumnPhysicalAssetFromManager(c.db.ColumnAssetRootDir(), asset.Ref)
+		raw, err := readColumnPhysicalAssetFromManager(c.vectorPartitionStorageDBV1().ColumnAssetRootDir(), asset.Ref)
 		if err != nil {
 			return fmt.Errorf("%w: native membership asset partition=%d: %v", ErrVectorPartitionSearchUnavailable, asset.PartitionID, err)
 		}
@@ -2579,7 +2579,7 @@ func (c *Collection) materializeVectorPartitionLocalSearchAssetsVariantV1(index 
 		return nil, nil, err
 	}
 	generation := manifest.Generation
-	if c == nil || c.db == nil || generation == 0 || len(inputs) == 0 || maxAssetBytes <= 0 || maxAssetBytes > vectorPartitionSearchAssetMaxBytesV1 {
+	if c == nil || c.vectorPartitionStorageDBV1() == nil || generation == 0 || len(inputs) == 0 || maxAssetBytes <= 0 || maxAssetBytes > vectorPartitionSearchAssetMaxBytesV1 {
 		return nil, nil, ErrVectorPartitionSearchUnavailable
 	}
 	if _, err := VectorPartitionLocalGraphVariantIdentityV1(variant); err != nil {
@@ -2614,15 +2614,15 @@ func (c *Collection) materializeVectorPartitionLocalSearchAssetsVariantV1(index 
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w: %v", ErrVectorPartitionSearchUnavailable, err)
 	}
-	_, sourceGraph, _, err := c.columnVectorGraphPhysicalRowReaderSnapshotView(index)
-	if err != nil || sourceGraph.BaseManifestGeneration != manifest.SourceGeneration || sourceGraph.BaseManifestChecksum != manifest.SourceChecksum || sourceGraph.BaseSchemaHash != manifest.SourceSchemaHash || uint64(sourceGraph.RowCount) != manifest.SourceRowCount {
-		return nil, nil, fmt.Errorf("%w: stale authoritative source", ErrVectorPartitionSearchUnavailable)
-	}
-	reader, err := c.openColumnVectorGraphPhysicalRowReader(index, columnVectorGraphPhysicalRowReaderOptions{})
+	reader, err := c.openVectorPartitionRowSourceV1(index)
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w: source reader: %v", ErrVectorPartitionSearchUnavailable, err)
 	}
 	defer reader.Close()
+	if reader.partitionSourceIdentityV1() != vectorPartitionLiveSourceV1(manifest) {
+		return nil, nil, fmt.Errorf("%w: stale authoritative source", ErrVectorPartitionSearchUnavailable)
+	}
+
 	seenParts := make(map[uint32]struct{}, len(inputs))
 	inputsByPartition := make(map[uint32]VectorPartitionSearchAssetV1, len(inputs))
 	for _, in := range inputs {
@@ -2767,27 +2767,12 @@ func (c *Collection) materializeVectorPartitionLocalSearchAssetsVariantV1(index 
 		rows := make([]columnVectorGraphAssetRow, len(sourceRows))
 		scratch := &columnPhysicalRowReaderScratch{}
 		for j, source := range sourceRows {
-			r, fetchErr := reader.FetchRow(source.ordinal, scratch)
-			if fetchErr != nil {
-				r = columnVectorGraphPhysicalRow{}
+			r, err := reader.partitionSourceRowV1(source.ordinal, scratch)
+			if err != nil {
+				return nil, nil, err
 			}
-			if len(r.Vector) != def.Dimensions {
-				r.Vector, _, _, _ = reader.typedVectorForOrdinal(source.ordinal)
-			}
-			if len(r.Vector) != def.Dimensions {
-				return nil, nil, fmt.Errorf("%w: authoritative typed row", ErrVectorPartitionSearchUnavailable)
-			}
-			ref, refOK := reader.rowRefForOrdinal(source.ordinal)
-			if !refOK {
-				if fetchErr != nil || r.RowIndex < 0 {
-					return nil, nil, fmt.Errorf("%w: authoritative source row ref", ErrVectorPartitionSearchUnavailable)
-				}
-				ref = DocumentRowRef{Generation: manifest.SourceGeneration, PartID: 1, RowIndex: r.RowIndex, AppliedCommandLSN: 1}
-			}
+			ref := r.BaseRowRef
 			ref.DocumentID = append([]byte(nil), source.id...)
-			if invNorm, _, _, ok := reader.invNormForOrdinal(source.ordinal); ok {
-				r.InvNorm = invNorm
-			}
 			rows[j] = columnVectorGraphAssetRow{ID: append([]byte(nil), source.id...), Vector: append([]float32(nil), r.Vector...), InvNorm: r.InvNorm, BaseRowRef: ref}
 		}
 		var trace *vectorIndexConstructionTraceV1
@@ -2896,7 +2881,7 @@ func (c *Collection) materializeVectorPartitionLocalSearchAssetsVariantV1(index 
 	if len(owned) != 0 && owned[0].owner != nil {
 		lease, releaseCapture, err = owned[0].owner.vectorPrepareCaptureLeaseV1()
 	} else {
-		lease, err = c.db.AcquireStableResourceCaptureLease()
+		lease, err = c.vectorPartitionStorageDBV1().AcquireStableResourceCaptureLease()
 		if lease != nil {
 			releaseCapture = lease.Release
 		}
@@ -2908,9 +2893,9 @@ func (c *Collection) materializeVectorPartitionLocalSearchAssetsVariantV1(index 
 	var refs []ColumnAssetRef
 	var resources *rootpublication.StableResourceSet
 	if len(owned) != 0 && owned[0].fresh {
-		refs, resources, err = appendFreshColumnPhysicalAssetsWithStableResources(c.db.ColumnAssetRootDir(), *cfg, items, c.db.StableResourceIdentityPinRegistry(), lease)
+		refs, resources, err = appendFreshColumnPhysicalAssetsWithStableResources(c.vectorPartitionStorageDBV1().ColumnAssetRootDir(), *cfg, items, c.vectorPartitionStorageDBV1().StableResourceIdentityPinRegistry(), lease)
 	} else {
-		refs, resources, err = AppendColumnPhysicalAssetsWithStableResources(c.db.ColumnAssetRootDir(), *cfg, fileID, items, c.db.StableResourceIdentityPinRegistry(), lease)
+		refs, resources, err = AppendColumnPhysicalAssetsWithStableResources(c.vectorPartitionStorageDBV1().ColumnAssetRootDir(), *cfg, fileID, items, c.vectorPartitionStorageDBV1().StableResourceIdentityPinRegistry(), lease)
 	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("retained variant append packs: %w", err)

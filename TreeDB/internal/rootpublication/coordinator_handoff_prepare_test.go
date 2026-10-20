@@ -37,6 +37,165 @@ func candidateWithEmptyResourceSet(t testing.TB, seq, bytes uint64) (*PreparedRo
 	return prepared, set
 }
 
+func TestCanPrepareSingleDurableGenerationRetainsFinalBuilder(t *testing.T) {
+	base := NewFrontier(5, 50, 100, 5, 5)
+	coordinator, err := New(Options{
+		InitialDurableFrontier: base,
+		Publisher: PublisherFunc(func(context.Context, *PreparedRootCandidate) PublishResult {
+			return PublishResult{Outcome: PublishSucceeded}
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stopClean(t, coordinator)
+	token, err := coordinator.AcquireBuilder(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer token.Release()
+	if !coordinator.CanPrepareSingleDurableGeneration(token, base) ||
+		!coordinator.CanPrepareSingleDurableGeneration(token, base) {
+		t.Fatal("idle final builder must remain eligible across repeated observations")
+	}
+	for _, mismatch := range []Frontier{
+		NewFrontier(6, 50, 100, 5, 5),
+		NewFrontier(5, 51, 100, 5, 5),
+		NewFrontier(5, 50, 101, 5, 5),
+		NewFrontier(5, 50, 100, 6, 5),
+		NewFrontier(5, 50, 100, 5, 6),
+	} {
+		if coordinator.CanPrepareSingleDurableGeneration(token, mismatch) {
+			t.Fatalf("accepted different durable tuple: %+v", mismatch)
+		}
+	}
+	var foreign Coordinator
+	if foreign.CanPrepareSingleDurableGeneration(token, base) ||
+		coordinator.CanPrepareSingleDurableGeneration(nil, base) ||
+		coordinator.CanPrepareSingleDurableGeneration(&BuilderToken{}, base) {
+		t.Fatal("foreign or absent builder accepted")
+	}
+	nested, err := token.Nested()
+	if err != nil {
+		t.Fatalf("observation consumed final builder: %v", err)
+	}
+	defer nested.Release()
+	if coordinator.CanPrepareSingleDurableGeneration(token, base) ||
+		coordinator.CanPrepareSingleDurableGeneration(nested, base) {
+		t.Fatal("non-final nested builder accepted")
+	}
+	nested.Release()
+	other, err := coordinator.AcquireBuilder(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Release()
+	if coordinator.CanPrepareSingleDurableGeneration(token, base) {
+		other.Release()
+		t.Fatal("second live builder accepted")
+	}
+	other.Release()
+	if _, err := coordinator.EnqueueBuilt(nil, token); !errors.Is(err, ErrInvalidCandidate) {
+		t.Fatalf("ordinary rejected handoff: %v", err)
+	}
+	if !coordinator.CanPrepareSingleDurableGeneration(token, base) {
+		t.Fatal("rejected handoff consumed or advanced the idle base")
+	}
+	if stats := coordinator.Stats(); stats.ActiveBuilders != 1 || stats.PendingCommits != 0 ||
+		stats.VisibleCommitSeq != 5 || stats.DurableCommitSeq != 5 || stats.PublishCalls != 0 {
+		t.Fatalf("observation changed publication state: %+v", stats)
+	}
+	prepared, resources := candidateWithEmptyResourceSet(t, 6, 1)
+	defer prepared.AbandonResources()
+	receipt, err := coordinator.EnqueueBuilt(prepared, token)
+	if err != nil {
+		t.Fatalf("original final handoff after observation: %v", err)
+	}
+	if coordinator.CanPrepareSingleDurableGeneration(token, base) {
+		t.Fatal("consumed builder accepted")
+	}
+	if err := coordinator.WaitForAdmission(context.Background(), receipt); err != nil {
+		t.Fatal(err)
+	}
+	if err := coordinator.Drain(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if resources.Owner() != ResourceOwnerReleased || coordinator.Stats().ActiveBuilders != 0 ||
+		coordinator.Stats().DurableCommitSeq != 6 {
+		t.Fatalf("original handoff did not complete: owner=%v stats=%+v", resources.Owner(), coordinator.Stats())
+	}
+}
+
+func TestCanPrepareSingleDurableGenerationRejectsUnfinishedPublication(t *testing.T) {
+	base := NewFrontier(5, 50, 100, 5, 5)
+	for _, test := range []struct {
+		name       string
+		unfinished func(*Coordinator)
+	}{
+		{"pending", func(c *Coordinator) { c.pending = []pendingEntry{{}} }},
+		{"pending-bytes", func(c *Coordinator) { c.pendingBytes = 1 }},
+		{"publishing", func(c *Coordinator) { c.publishing = true }},
+		{"preparing", func(c *Coordinator) { c.preparing = true }},
+		{"dispatch-cleanup", func(c *Coordinator) { c.activeDispatch = 1 }},
+		{"active-attempt", func(c *Coordinator) { c.activeAttempt = PublishAttempt{id: 1, groupSize: 1} }},
+		// recordRetryableLocked intentionally retains only groupSize, not id.
+		{"retry-without-id", func(c *Coordinator) { c.retryAttempt = PublishAttempt{groupSize: 1} }},
+		{"report-cleanup", func(c *Coordinator) { c.reportingAttempt = true }},
+		{"visible-ahead", func(c *Coordinator) { c.visible = NewFrontier(6, 60, 120, 6, 6) }},
+		{"durable-different-root", func(c *Coordinator) { c.durable = NewFrontier(5, 51, 100, 5, 5) }},
+		{"poison", func(c *Coordinator) { c.poison = ErrRecoveryRequired }},
+		{"stopping", func(c *Coordinator) { c.stopping = true }},
+		{"stopped", func(c *Coordinator) { c.stopped = true }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			// No scheduler is started: model an exact locked intermediate state
+			// without letting a worker consume or complete that state for us.
+			coordinator := &Coordinator{ctx: context.Background(), changed: make(chan struct{}), visible: base, durable: base}
+			token, err := coordinator.AcquireBuilder(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer token.Release()
+			if !coordinator.CanPrepareSingleDurableGeneration(token, base) {
+				t.Fatal("invalid idle control")
+			}
+			test.unfinished(coordinator)
+			if coordinator.CanPrepareSingleDurableGeneration(token, base) {
+				t.Fatal("unfinished publication accepted as idle durable base")
+			}
+		})
+	}
+}
+
+func TestCanPrepareSingleDurableGenerationExcludesLogicalPrefixOwner(t *testing.T) {
+	base := NewFrontier(5, 50, 100, 5, 5)
+	for _, inherited := range []bool{false, true} {
+		coordinator := &Coordinator{ctx: context.Background(), changed: make(chan struct{}), visible: base, durable: base}
+		owner := coordinator
+		if inherited {
+			owner = &Coordinator{}
+			coordinator.acceptedOwner = owner
+		}
+		token, err := coordinator.AcquireBuilder(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !coordinator.CanPrepareSingleDurableGeneration(token, base) {
+			token.Release()
+			t.Fatal("unconfigured owner refused")
+		}
+		if err := owner.ConfigureAcceptedPrefix(2, LogicalFrontiers{}); err != nil {
+			token.Release()
+			t.Fatal(err)
+		}
+		if coordinator.CanPrepareSingleDurableGeneration(token, base) {
+			token.Release()
+			t.Fatalf("configured empty logical queue accepted (inherited=%t)", inherited)
+		}
+		token.Release()
+	}
+}
+
 func TestEnqueueBuiltRejectsForeignReleasedAndNestedLeasesBeforeCandidateMutation(t *testing.T) {
 	newCoordinator := func(t testing.TB) *Coordinator {
 		t.Helper()

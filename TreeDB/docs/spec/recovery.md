@@ -2,16 +2,16 @@
 
 This document defines startup recovery behavior.
 
-Ordinary new public and backend stores select the existing DATA recovery
-implementation. Explicit `IndexPrimaryDirectory` and persisted PRIMARY arenas
-temporarily retain the original PRIMARY attach/recovery and joint-swap paths;
-final format refusal follows consumer migration. Supported public read-only
-opens use the uncached `btree` role on either persisted representation; public
-`ReadOnly+cow_btree` remains unsupported. Successful recovery independently
-validates both slots, exact dependencies and required parent records. DATA
-command-WAL startup and PRIMARY capsule startup initialize the same publication
-coordinator and exact recovered snapshot before replay, synchronously until
-post-replay readiness. Native multi-root replay uses that original owner.
+Public and backend stores select the DATA recovery implementation. Explicit
+`IndexPrimaryDirectory` requests, persisted PRIMARY companions, and committed
+joint DATA/PRIMARY swaps refuse with `ErrLegacyFormatRebuildRequired` before
+recovery writes or namespace cleanup. Callers must rebuild those pre-alpha
+stores. Supported public read-only opens use the uncached `btree` role;
+`ReadOnly+cow_btree` remains unsupported. DATA recovery independently validates
+both eligible slots, exact dependencies, and required immediate-parent records.
+Command-WAL startup initializes the original publication coordinator and exact
+recovered snapshot before replay, synchronously until post-replay readiness.
+Native multi-root replay uses that original owner.
 
 Typed `column_graph` public serving admission is process-local: after ordinary
 replay/open, explicitly call `EnsureColumnGraphServing` with positive limits.
@@ -166,48 +166,14 @@ recovery-required error unless the caller explicitly requests a stale read-only
 mode. Silent stale read-only open is incompatible with durable-at-ack command
 semantics.
 
-## Temporarily supported explicit PRIMARY capsule recovery
+## Retired PRIMARY startup refusal
 
-The existing explicit option and persisted arena use this maintained recovery
-path. Ordinary new stores default to DATA; final PRIMARY removal remains pending.
-
-For a checked V6 `index.db.primary` arena, Open decodes exactly the two fixed
-complete three-page capsules. It independently validates each current root
-and its embedded one-hop parent: complete capsule/directory integrity, actual
-DATA allocator and system/base generation, physical component closure, exact
-external-file identities and persistent value-log dependencies. Selection
-uses descending valid commit order; corruption of the newest capsule selects
-the valid older slot, with that older slot's own view and applied frontier.
-If both eligible slots are invalid, Open fails. An embedded parent or older
-bank record is never promoted into an additional recovery candidate.
-DATA META pages supply no fallback authority in this selected format.
-
-Command-WAL replay preserves this selected physical authority. Open constructs
-the same PRIMARY publication runtime and coordinator before replay, with the
-ordinary scheduler dormant. Replay drives the existing Prepare/Publish/Report
-engine synchronously through the original constructor and capsule publication.
-The accepted command LSN, dependency closure and applied frontier remain one
-publication; startup must not write a DATA-format seal using PRIMARY addresses.
-
-The coordinator enters ordinary scheduling only after replay completes and the
-selected visible snapshot, reachability tracker and command-WAL appender are
-ready. An unfinished, failed or pending startup attempt blocks that transition.
-Replay finalizers then use the ordinary publication path. DATA-only recovery
-continues to initialize its publication runtime after recovery.
-
-Arena bank recovery runs once at Open from the actual eligible slot and parent
-closures. Open then constructs genuinely owned copied read roots. Live slot
-reuse cannot change an old Snapshot or captured recoverable-root read operand.
-Read-only opens validate without repairing slots. Restore rebinds both
-independent capsules and all current/parent dependencies in unpublished
-copies before namespace installation; plain filesystem copying does not
-rebind external identities.
-
-An uncertain live capsule install keeps prior reader/slot custody and refuses
-subsequent writes with `ErrRecoveryRequired` until normal reopen. Deferred
-physical cuts retain independent file/namespace ownership and captured fixed
-images through slot reuse and DB.Close. Public Snapshot reads after owning
-DB.Close remain outside the normal Snapshot lifetime contract.
+The preflight gate checks PRIMARY companions and the `TDJCOM06` decision marker
+before writable or read-only startup, offline maintenance, and snapshot rebind.
+It preserves the original file inventory, identities and contents. The explicit
+retired option also refuses before creating a directory. Historical capsule,
+paired-vacuum and stale-build witnesses are retained in source history and the
+saved format artifact described in [retirement provenance](primary-retirement.md).
 
 ## 2. Backend Index Recovery
 
@@ -882,35 +848,6 @@ interpret leftover private `manifest.gc.*.tmp` evidence as an unreferenced
 revision to delete. Further revision maintenance refuses that evidence pending
 explicit recovery investigation.
 
-## Joint DATA/PRIMARY capsule vacuum recovery
-
-This existing protocol remains active for the temporary explicit/persisted
-PRIMARY route. It does not change the ordinary new-store DATA default.
-
-V6 vacuum fences the complete private pair, current/parent dependencies and
-staging names before a checksummed `TDJCOM06` COMMIT in `index.db.new.ready`.
-The decision binds retained directory, both physical identities, PRIMARY UUID
-and actual DATA generation. It selects those files, not historical records.
-
-Under LOCK, writable Open and offline vacuum inspect COMMIT before legacy
-cleanup and writable pager Open. Resolve each committed file at its exact
-canonical or staging name, validate at least one of the two complete eligible
-capsules and parent closure, replace DATA then PRIMARY, and sync the parent
-after each replacement. Recovery interruption is idempotent. Durably delete
-the decision before admitting writers. Read-only refuses repair.
-
-Invalid/truncated structured markers, unknown magic/version, bad checksums
-or missing identities preserve all operands and return `ErrRecoveryRequired`.
-They never enter legacy `.new`/`.bak` cleanup. Legacy accepts its actual exact
-`ready\n` payload. Single-slot corruption preserves the exact other slot's
-eligibility; embedded parents remain one-hop proofs.
-
-Post-COMMIT errors poison mutation and retain unpublished root/dependency
-custody with the exact generation through teardown. Reopen rolls forward
-the committed pair. Process-exit cutpoint tests do not constitute device or
-power-loss persistence qualification.
-
-
 ## Compressed allocator format gate
 
 The active allocator uses physical generation/index/chunk version 2 and the
@@ -932,7 +869,7 @@ immediate parent records until the replacement seal is durable.
 
 
 V2 dependency-directory recovery and binding use the selected generation's
-original metadata owner (the DATA identity registry or retained PRIMARY arena).
+original metadata owner (the DATA identity registry).
 Actual publication refuses foreign or unowned resource sets before directory
 construction. Unowned utility callers retain the generic diagnostic contract.
 Physical-entry censuses, decoder scratch, retained directory keys, field

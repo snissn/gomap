@@ -117,15 +117,12 @@ func (c *cowCache) admitDictionaryRead(s dictdb.DictionaryReadAllocationSizes) (
 		memtable.COWAllocationCharge(s.Definition) + memtable.COWAllocationCharge(s.Payload) + memtable.COWAllocationCharge(s.Pin) +
 		memtable.COWAllocationCharge(3*uint64(unsafe.Sizeof(uintptr(0)))) +
 		cowSnapshotRetentionCharge(s.Snapshot)
-	lease, metadata, err := admitCOWSnapshotRetention(c.budget, bytes, s.Snapshot)
+	lease, err := c.budget.AcquireExternal(bytes)
 	if err != nil {
 		return nil, err
 	}
-	if metadata != nil && s.CaptureMetadata != nil {
-		*s.CaptureMetadata = metadata
-		metadata = nil // provider transfers this exact enrollment to Snapshot
-	}
-	return func() { metadata.Close(); lease.Close() }, nil
+
+	return lease.Close, nil
 }
 
 func prepareCOWEmptyRoot(w *memtable.COWWriter, budget *memtable.COWBudget) (*memtable.COWRoot, *cowGenerationResources, error) {

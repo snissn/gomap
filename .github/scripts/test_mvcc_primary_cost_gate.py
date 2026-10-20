@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Failure controls for the fixed PRIMARY cost measurement contract."""
+"""Failure controls for the source-bound public replacement cost contract."""
 
 import copy
 import importlib.util
@@ -21,26 +21,221 @@ spec.loader.exec_module(gate)
 
 
 class PrimaryCostGateTests(unittest.TestCase):
+    authorities = {"baseline": "PRIMARY", "candidate": "DATA"}
+
     def sample(self, ns=100, size=200, allocs=3, generations=0):
         return f"{gate.BENCHMARK} 128 {ns} ns/op {generations} generation_advances/op {size} B/op {allocs} allocs/op\nPASS\n"
 
     def rows(self):
         return [{"pair": pair, "revision": revision,
-                 "metrics": gate.parse_sample(self.sample(generations=2 if revision == "baseline" else 0))}
+                 "metrics": gate.parse_sample(self.sample(generations=2 if revision == "baseline" else 0)),
+                 "authority": self.authorities[revision]}
                 for pair in range(8) for revision in (("baseline", "candidate") if pair % 2 == 0 else ("candidate", "baseline"))]
 
-    def test_retains_baseline_generation_churn_and_requires_candidate_activation(self):
+    def trace_fixture(self, directory):
+        root, output = Path(directory) / "source", Path(directory) / "primary"
+        output.mkdir()
+        (output / "tmp").mkdir()
+        harness = root / gate.HARNESS
+        harness.parent.mkdir(parents=True)
+        harness.write_text((path.parents[1] / gate.HARNESS).read_text())
+        capability = root / gate.CAPABILITIES["DATA"][0]
+        capability.parent.mkdir(parents=True)
+        capability.write_text(gate.CAPABILITIES["DATA"][1])
         rows = self.rows()
-        self.assertTrue(gate.evaluate(rows)["measurement_pass"])
+        for row in rows:
+            if row["revision"] == "candidate":
+                row["metrics"]["ns/op"] = 200
+        bindings = {"baseline": "a" * 40, "candidate": "b" * 40, "samples": 8, "iterations": 128,
+                    "cpu": 0, "gomaxprocs": 1, "max_paired_regression_percent": 5,
+                    "harness_sha256": gate.digest(harness), "runner_sha256": gate.digest(path),
+                    "source_authorities": {"baseline": {"authority": "PRIMARY"},
+                                           "candidate": gate.source_authority(root)},
+                    "binaries": {}, "arm_harnesses": {}}
+        commands, runtime = [], {}
+        def retain(label, text):
+            log = output / (label + ".txt")
+            log.write_text(text)
+            commands.append({"label": label, "exit": 0, "output_sha256": gate.digest(log)})
+        for arm, authority in self.authorities.items():
+            binary = output / (arm + "-primary.test")
+            binary.write_bytes(arm.encode())
+            fixture = output / (arm + "-durable_replacement_cost_test.go")
+            fixture.write_text(gate.render_harness(harness.read_text(), authority))
+            bindings["binaries"][arm] = {"path": binary.name, "sha256": gate.digest(binary),
+                "bytes": binary.stat().st_size, "source_sha": bindings[arm]}
+            bindings["arm_harnesses"][arm] = {"path": fixture.name, "sha256": gate.digest(fixture)}
+            runtime[arm] = {"linkage": "static", "interpreter": None, "libraries": [],
+                "executable": {"sha256": gate.digest(binary), "bytes": binary.stat().st_size},
+                "inputs": {"harness_sha256": gate.digest(fixture), "runner_sha256": gate.digest(path),
+                    "environment_sha256": "old-step", "cwd": str(root), "argv": ["taskset", "-c", "0", "<measured-binary>",
+                        "-test.run=^$", "-test.bench=^" + gate.BENCHMARK + "$", "-test.benchtime=128x",
+                        "-test.count=1", "-test.benchmem", "-test.timeout=90s"]}}
+            retain(arm + "-public-lifecycle", self.trace_authority(authority)
+                + f"MVCC_COST_LIFECYCLE authority={authority}\n"
+                + ("MVCC_COST_DATA_SLOT fixture=actual\n" * 6 if authority == "DATA" else "")
+                + f"--- PASS: {gate.LIFECYCLE} (0.01s)\nPASS\n")
+        for row in rows:
+            metric = row["metrics"]
+            retain(f"pair-{row['pair']+1}-{row['revision']}", self.trace_authority(row["authority"])
+                + self.sample(ns=metric["ns/op"], generations=metric["generation_advances/op"]))
+        summary = gate.qualify_runtime(gate.evaluate(rows, self.authorities), runtime, runtime, quiet=True)
+        summary.update(baseline=bindings["baseline"], candidate=bindings["candidate"],
+                       source_authorities=bindings["source_authorities"])
+        for name, value in (("bindings", bindings), ("summary", summary), ("samples", rows),
+                            ("commands", commands), ("measured-processes", {"busy": [], "cpu_threshold_percent": 2.0}),
+                            ("runtime-inputs-before", runtime), ("runtime-inputs-after", runtime)):
+            (output / (name + ".json")).write_text(json.dumps(value))
+        return root, output, runtime
+
+    def trace_authority(self, authority):
+        return f"MVCC_COST_AUTHORITY authority={authority} root=42 commit=9 profile=no_wal_fast mode=cow_btree redo=off\n"
+
+    def test_failed_timing_trace_requires_complete_original_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root, output, _ = self.trace_fixture(directory)
+            gate.failed_timing_trace_inputs(root, output)
+            for name, change in (
+                    ("samples.json", lambda value: value[:-1]),
+                    ("samples.json", lambda value: list(reversed(value))),
+                    ("summary.json", lambda value: dict(value, quiet=False)),
+                    ("summary.json", lambda value: dict(value, timing_disposition="PASS")),
+                    ("runtime-inputs-after.json", lambda value: {}),
+                    ("measured-processes.json", lambda value: dict(value, busy=[{"pid": 123}])),
+                    ("commands.json", lambda value: [record for record in value if record["label"] != "candidate-public-lifecycle"])):
+                original = (output / name).read_text()
+                (output / name).write_text(json.dumps(change(json.loads(original))))
+                with self.subTest(name=name), self.assertRaises((ValueError, RuntimeError)):
+                    gate.failed_timing_trace_inputs(root, output)
+                (output / name).write_text(original)
+            (output / "candidate-primary.test").write_bytes(b"changed")
+            with mock.patch.object(gate.subprocess, "Popen") as launch:
+                self.assertEqual(gate.trace_failed_timing(root, output), 0)
+                launch.assert_not_called()
+            self.assertEqual(json.loads((output / "sync-trace/result.json").read_text())["status"], "DIAGNOSTIC_NOT_APPLICABLE")
+
+    def test_failed_timing_trace_once_per_arm_or_first_failure_stops(self):
+        for failure in (None, "strace-unavailable", "baseline-trace", "runtime-drift", "budget-exhausted"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
+                root, output, runtime = self.trace_fixture(directory)
+                strace = Path(directory) / "strace"
+                strace.write_bytes(b"test-only strace")
+                commands, clock = [], [0.0]
+                sample, authority = self.sample, self.trace_authority
+                class Process:
+                    returncode = 0
+                    def __init__(self, argv, **kwargs):
+                        commands.append(argv)
+                        text = ""
+                        if argv[0] == "git":
+                            text = "b" * 40 + "\n"
+                        if argv[0] == "timeout":
+                            self.returncode = 1
+                        if "-test.bench=^" + gate.BENCHMARK + "$" in argv:
+                            arm = "baseline" if "baseline-primary.test" in " ".join(argv) else "candidate"
+                            if failure == "baseline-trace":
+                                self.returncode = 1
+                            text = authority("PRIMARY" if arm == "baseline" else "DATA") + sample()
+                            Path(argv[argv.index("-o") + 1]).write_text(
+                                "123 1.0 fdatasync(4</tmp/index.db>) = 0 <0.001000>\n")
+                        kwargs["stdout"].write(text.encode())
+                    def wait(self, timeout):
+                        return self.returncode
+                def bind(binary, *args):
+                    if failure == "budget-exhausted":
+                        clock[0] = 181.0
+                    arm = "baseline" if binary.name.startswith("baseline") else "candidate"
+                    result = {key: value for key, value in runtime[arm].items() if key != "inputs"}
+                    return dict(result, executable={}) if failure == "runtime-drift" else result
+                with mock.patch.object(gate.subprocess, "Popen", Process), \
+                        mock.patch.object(gate.time, "monotonic", side_effect=lambda: clock[0]), \
+                        mock.patch.object(gate.shutil, "which", return_value=None if failure == "strace-unavailable" else str(strace)), \
+                        mock.patch.object(gate, "runtime_binding", side_effect=bind):
+                    status = gate.trace_failed_timing(root, output)
+                result = json.loads((output / "sync-trace/result.json").read_text())
+                traced = [argv for argv in commands if "-test.benchtime=128x" in argv]
+                self.assertEqual(len(traced), 2 if failure is None else 1 if failure == "baseline-trace" else 0)
+                if failure is None:
+                    self.assertEqual(status, 0)
+                    self.assertEqual(result["status"], "DIAGNOSTIC_COMPLETE")
+                    self.assertEqual(result["arms"]["baseline"]["syscalls"]["fdatasync"]["completed"], 1)
+                else:
+                    self.assertEqual(result["status"], "DIAGNOSTIC_UNAVAILABLE" if failure == "strace-unavailable" else "DIAGNOSTIC_STOP")
+                    self.assertEqual(result["arms"]["candidate"], "UNRUN")
+                # Reentry cannot repeat either traced process or overwrite original evidence.
+                with self.assertRaises(FileExistsError):
+                    gate.trace_failed_timing(root, output)
+
+    def test_retains_generation_telemetry_and_requires_source_bound_activation(self):
+        rows = self.rows()
+        self.assertTrue(gate.evaluate(rows, self.authorities)["measurement_pass"])
         rows[1]["metrics"]["generation_advances/op"] = 1
-        self.assertFalse(gate.evaluate(rows)["gates"]["candidate_primary_activation"])
+        self.assertTrue(gate.evaluate(rows, self.authorities)["measurement_pass"])
+        for revision in ("baseline", "candidate"):
+            invalid = copy.deepcopy(rows)
+            next(row for row in invalid if row["revision"] == revision)["authority"] = "wrong"
+            self.assertFalse(gate.evaluate(invalid, self.authorities)["gates"][revision + "_route_activation"])
+        primary = dict(self.authorities, candidate="PRIMARY")
+        for row in rows:
+            row["authority"] = "PRIMARY"
+        self.assertFalse(gate.evaluate(rows, primary)["gates"]["candidate_route_activation"])
+        rows[1]["metrics"]["generation_advances/op"] = 0
+        self.assertTrue(gate.evaluate(rows, primary)["measurement_pass"])
+        data = {"baseline": "DATA", "candidate": "DATA"}
+        for row in rows:
+            row["authority"] = "DATA"
+            row["metrics"]["generation_advances/op"] = 1
+        self.assertTrue(gate.evaluate(rows, data)["measurement_pass"])
+        for invalid in ({}, {"baseline": "DATA"}, dict(data, candidate="unknown")):
+            with self.assertRaises(ValueError):
+                gate.evaluate(rows, invalid)
+
+    def test_authority_requires_actual_logged_role(self):
+        line = "    durable_replacement_cost_test.go:75: MVCC_COST_AUTHORITY authority=DATA root=42 commit=9 profile=no_wal_fast mode=cow_btree redo=off\n"
+        self.assertEqual(gate.parse_authority(line + line, "DATA"), "DATA")
+        for invalid in ("", line.replace("DATA", "PRIMARY"), line + line.replace("DATA", "PRIMARY"),
+                        line.replace("redo=off", "redo=on")):
+            with self.assertRaises(ValueError):
+                gate.parse_authority(invalid, "DATA")
+
+    def test_setup_is_bound_to_one_recognized_source_capability(self):
+        template = (path.parents[1] / gate.HARNESS).read_text()
+        self.assertEqual(gate.render_harness(template, "DATA"), template)
+        primary = gate.render_harness(template, "PRIMARY")
+        self.assertIn('const durableReplacementAuthority = "PRIMARY"', primary)
+        self.assertIn("opts.IndexPrimaryDirectory = true", primary)
+        self.assertNotIn("opts.IndexPrimaryDirectory = true", template)
+        for invalid in (template.replace(gate.PRIMARY_SETUP, ""), template + gate.ROLE_DECLARATION):
+            with self.assertRaises(ValueError):
+                gate.render_harness(invalid, "DATA")
+        with self.assertRaises(ValueError):
+            gate.render_harness(template, "unknown")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with self.assertRaises(ValueError):
+                gate.source_authority(root)
+            for authority in ("PRIMARY", "DATA"):
+                relative, declaration = gate.CAPABILITIES[authority]
+                source = root / relative
+                source.parent.mkdir(parents=True, exist_ok=True)
+                source.write_text(declaration)
+                record = gate.source_authority(root)
+                self.assertEqual(record, {"authority": authority, "path": relative, "sha256": gate.digest(source)})
+                source.write_text("unrecognized source")
+                with self.assertRaises(ValueError):
+                    gate.source_authority(root)
+                source.unlink()
+            for relative, declaration in gate.CAPABILITIES.values():
+                (root / relative).write_text(declaration)
+            with self.assertRaises(ValueError):
+                gate.source_authority(root)
 
     def test_refuses_incomplete_duplicate_or_reordered_evidence(self):
         rows = self.rows()
         for invalid in (rows[:-1], rows + rows[:1], list(reversed(rows)), rows[:1] + rows):
             with self.subTest(invalid=invalid):
                 with self.assertRaises(ValueError):
-                    gate.evaluate(invalid)
+                    gate.evaluate(invalid, self.authorities)
 
     def test_timing_and_allocation_regressions_fail_independently(self):
         for metric, value, name in (("ns/op", 106, "timing"), ("B/op", 201, "bytes"), ("allocs/op", 4, "allocations")):
@@ -48,7 +243,7 @@ class PrimaryCostGateTests(unittest.TestCase):
             for row in rows:
                 if row["revision"] == "candidate":
                     row["metrics"][metric] = value
-            result = gate.evaluate(rows)
+            result = gate.evaluate(rows, self.authorities)
             self.assertFalse(result["measurement_pass"])
             self.assertFalse(result["gates"][name])
 
@@ -68,14 +263,14 @@ class PrimaryCostGateTests(unittest.TestCase):
         for row in rows:
             baseline = 100 + row["pair"] * 100
             row["metrics"]["ns/op"] = baseline * (1.02 if row["revision"] == "candidate" else 1)
-        self.assertAlmostEqual(gate.evaluate(rows)["median_paired_delta_percent"], 2)
+        self.assertAlmostEqual(gate.evaluate(rows, self.authorities)["median_paired_delta_percent"], 2)
 
     def test_equivalent_bytes_qualification_retains_raw_failure(self):
         rows = self.rows()
         for row in rows:
             if row["revision"] == "candidate":
                 row["metrics"]["B/op"] += 0.5
-        raw = gate.evaluate(rows)
+        raw = gate.evaluate(rows, self.authorities)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             binary, loader, libc = [root / name for name in ("binary", "loader", "libc.so.6")]
@@ -97,7 +292,7 @@ class PrimaryCostGateTests(unittest.TestCase):
             changed = copy.deepcopy(before)
             changed["candidate"]["executable"]["sha256"] = "different"
             self.assertFalse(gate.qualify_runtime(raw, changed, copy.deepcopy(changed), quiet=True)["accepted"])
-            for metric in ("allocations", "candidate_primary_activation"):
+            for metric in ("allocations", "baseline_route_activation", "candidate_route_activation"):
                 failing = copy.deepcopy(raw)
                 failing["gates"][metric] = False
                 self.assertFalse(gate.qualify_runtime(failing, before, before, quiet=True)["accepted"])
@@ -132,7 +327,7 @@ class PrimaryCostGateTests(unittest.TestCase):
         for row in rows:
             row["metrics"] = {"ns/op": pairs[row["pair"]][row["revision"] == "candidate"],
                               "B/op": 222247, "allocs/op": 378, "generation_advances/op": 0}
-        raw = gate.evaluate(rows)
+        raw = gate.evaluate(rows, self.authorities)
         retained = copy.deepcopy(raw)
         self.assertAlmostEqual(raw["median_paired_delta_percent"], 5.258179271710761)
         self.assertFalse(raw["gates"]["timing"])
@@ -172,7 +367,7 @@ class PrimaryCostGateTests(unittest.TestCase):
                     self.assertEqual(refused["timing_disposition"], "FAIL")
                 with self.assertRaisesRegex(RuntimeError, "drift"):
                     gate.qualify_runtime(raw, before, changed, quiet=True)
-            for metric in ("allocations", "candidate_primary_activation"):
+            for metric in ("allocations", "baseline_route_activation", "candidate_route_activation"):
                 failing = copy.deepcopy(raw)
                 failing["gates"][metric] = False
                 self.assertFalse(gate.qualify_runtime(failing, before, before, quiet=True)["accepted"])
@@ -206,7 +401,7 @@ class PrimaryCostGateTests(unittest.TestCase):
             binding["inputs"] = {"harness_sha256": "harness", "runner_sha256": "runner",
                                  "environment_sha256": "environment", "cwd": str(binary.parent), "argv": []}
             before = {"baseline": binding, "candidate": copy.deepcopy(binding)}
-            raw = gate.evaluate(self.rows())
+            raw = gate.evaluate(self.rows(), self.authorities)
             raw["gates"]["bytes"], raw["measurement_pass"] = False, False
             result = gate.qualify_runtime(raw, before, copy.deepcopy(before), quiet=True)
             self.assertEqual(result["bytes_disposition"], "EQUIVALENT_NON_ATTRIBUTABLE")
@@ -403,10 +598,20 @@ class QuietAcquisitionTests(unittest.TestCase):
         class SetupProcess:
             def __init__(self, argv, **kwargs):
                 commands.append(argv)
+                if argv[1:3] == ["worktree", "add"]:
+                    source = Path(argv[-2]) / gate.CAPABILITIES["PRIMARY"][0]
+                    source.parent.mkdir(parents=True, exist_ok=True)
+                    source.write_text(gate.CAPABILITIES["PRIMARY"][1])
                 if "-o" in argv:
                     Path(argv[argv.index("-o") + 1]).write_bytes(b"bound setup binary")
                 if any(arg.startswith("-test.run=^" + gate.LIFECYCLE) for arg in argv):
-                    kwargs["stdout"].write(("--- PASS: " + gate.LIFECYCLE + " (0.00s)\nPASS\n").encode())
+                    authority = "PRIMARY" if Path(argv[3]).name.startswith("baseline-") else "DATA"
+                    evidence = (f"MVCC_COST_AUTHORITY authority={authority} root=7 commit=5 "
+                                "profile=no_wal_fast mode=append_only redo=off\n"
+                                f"MVCC_COST_LIFECYCLE authority={authority}\n")
+                    if authority == "DATA":
+                        evidence += "MVCC_COST_DATA_SLOT fixture=setup\n" * 6
+                    kwargs["stdout"].write((evidence + "--- PASS: " + gate.LIFECYCLE + " (0.00s)\nPASS\n").encode())
 
             def wait(self, timeout):
                 return 0
@@ -415,7 +620,10 @@ class QuietAcquisitionTests(unittest.TestCase):
             root, output = Path(directory) / "source", Path(directory) / "output"
             harness = root / gate.HARNESS
             harness.parent.mkdir(parents=True)
-            harness.write_text("original unchanged harness")
+            harness.write_text((path.parents[1] / gate.HARNESS).read_text())
+            capability = root / gate.CAPABILITIES["DATA"][0]
+            capability.parent.mkdir(parents=True, exist_ok=True)
+            capability.write_text(gate.CAPABILITIES["DATA"][1])
             with mock.patch.object(gate.subprocess, "Popen", SetupProcess), \
                     mock.patch.object(gate, "runtime_binding", return_value={}), \
                     mock.patch.object(gate, "ProcessObservation", factory), \

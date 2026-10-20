@@ -23,7 +23,6 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/keyupdate"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
-	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
@@ -58,7 +57,6 @@ func normalizeFlushApplyConcurrency(workers int) int {
 }
 
 type DBState struct {
-	primaryRoot                *primaryStateRootV5
 	CommitSeq                  uint64
 	RootPageID                 uint64
 	SystemRootPageID           uint64
@@ -1341,8 +1339,8 @@ type Options struct {
 	IndexPackedValuePtr bool
 	// IndexInternalBaseDelta enables the experimental internal-node base-delta encoding.
 	IndexInternalBaseDelta bool
-	// IndexPrimaryDirectory explicitly selects the pre-alpha complete base-and-delta PRIMARY.
-	// Fresh stores default to DATA; existing PRIMARY arenas retain their original format.
+	// IndexPrimaryDirectory is retired. A true value refuses Open and requires a DATA rebuild.
+	// Persisted PRIMARY companions also refuse Open without mutation.
 	IndexPrimaryDirectory bool
 
 	// IndexOuterLeavesInValueLog stores B+Tree leaf pages (the pages containing
@@ -1588,17 +1586,8 @@ type Options struct {
 // the pointer and any later method call remains invalid even after subsequent
 // snapshots are acquired.
 type Snapshot struct {
-	// A failed historical rebind retains both exact original root operands.
-	primaryRebindRoot      primaryStateRootV5
-	primaryRebindErr       error
-	primaryRoot            *primaryStateRootV5
-	primaryOwner           *primaryArenaOwnerV5
-	primaryFailedNext      *Snapshot
 	generationFailedNext   *Snapshot
 	indexWrapperBorrowed   bool
-	primaryFailure         primaryCleanupFailureV5
-	primaryMetadata        *retainedalloc.Enrollment
-	primaryRelease         primaryarena.ReleaseQueue
 	db                     *DB
 	idx                    *indexGen
 	state                  *DBState
@@ -1725,20 +1714,14 @@ func (db *DB) acquireSnapshotWithValueLogPublicationLockHeld() *Snapshot {
 
 // SnapshotAllocationSizes reports raw allocation capacities. Round each field
 // independently; PinRef is the raw size of one existing retained counter.
-// PrimaryMetadata and RegistryMetadata identify already-rounded shared owners.
-// They enroll/adopt as one fixed pair against the SAME governing budget; neither
-// may be added as a scalar allocation charge. Producer custody and temporary
-// capture borrowing retain their distinct actual cleanup lifetimes.
+// RegistryMetadata identifies the already-rounded physical identity authority.
+// Its enrollment retains the same governing budget through actual cleanup.
 type SnapshotAllocationSizes struct {
-	Wrapper, PrimaryRoot, PinSet, Refs, IDs, PinRef uint64
-	PinRefCount                                     int
-	ValueLog                                        valuelog.SetRetentionSizes
-	// PrimaryMetadata is the actual shared producer owner. The admission caller
-	// must enroll its governing budget and keep the returned handle through the
-	// snapshot's real cleanup. It is not an uncharged metadata exemption.
-	PrimaryMetadata *retainedalloc.Owner
+	Wrapper, PinSet, Refs, IDs, PinRef uint64
+	PinRefCount                        int
+	ValueLog                           valuelog.SetRetentionSizes
 	// RegistryMetadata is the distinct physical identity/namespace authority
-	// owner. PRIMARY capture must enroll both in the same governing budget.
+	// owner. Capture keeps its enrollment through actual cleanup.
 	RegistryMetadata *retainedalloc.Owner
 	// IdentityRegistry is the SAME original cleanup authority, never a new registry.
 	IdentityRegistry *rootpublication.IdentityPinRegistry
@@ -1852,7 +1835,7 @@ func (db *DB) captureSnapshotForReadWithValueLogPublicationLockHeld(snap *Snapsh
 			return false
 		}
 		var registerErr error
-		registryID, snap.registryShardHint, registerErr = idx.registry.RegisterWithHint(state.primaryRetentionCommitV5(), snap.registryShardHint)
+		registryID, snap.registryShardHint, registerErr = idx.registry.RegisterWithHint(state.CommitSeq, snap.registryShardHint)
 		if registerErr != nil {
 			if vlogNeedsPin && vm != nil {
 				_ = vm.Release(vlogSet)
@@ -1860,17 +1843,7 @@ func (db *DB) captureSnapshotForReadWithValueLogPublicationLockHeld(snap *Snapsh
 			return false
 		}
 	}
-	if state.primaryRoot != nil {
-		if e := snap.acquirePrimaryRoot(idx, state.primaryRoot); e != nil {
-			if registryID != 0 {
-				idx.registry.Unregister(registryID)
-			}
-			if vlogNeedsPin && vm != nil {
-				_ = vm.Release(vlogSet)
-			}
-			return false
-		}
-	}
+
 	if state.LeafGenerations != nil {
 		snap.leafGenerationIDs = state.LeafGenerations.GenerationOrder
 		if state.LeafGenerations.PinSet != nil {
@@ -1998,10 +1971,7 @@ func (db *DB) captureSnapshotViewBoundedLocked(snap *Snapshot, admit func(Snapsh
 		sizes := SnapshotAllocationSizes{Wrapper: uint64(unsafe.Sizeof(Snapshot{}))}
 		sizes.RegistryMetadata = db.valueLogIdentityPins.MetadataOwner()
 		sizes.IdentityRegistry = db.valueLogIdentityPins
-		if state.primaryRoot != nil {
-			sizes.PrimaryRoot = uint64(unsafe.Sizeof(primaryStateRootV5{}))
-			sizes.PrimaryMetadata = state.primaryRoot.arena.MetadataOwner()
-		}
+
 		if state.LeafGenerations != nil && state.LeafGenerations.PinSet != nil {
 			sizes.PinSet = uint64(unsafe.Sizeof(leafGenerationPinSet{}))
 			sizes.Refs = uint64(cap(state.LeafGenerations.PinSet.refs)) * uint64(unsafe.Sizeof((*leafGenerationPinRef)(nil)))
@@ -2054,10 +2024,10 @@ func (db *DB) captureSnapshotViewBoundedLocked(snap *Snapshot, admit func(Snapsh
 		}
 
 		if bounded {
-			registryID, snap.registryShardHint = idx.registry.RegisterFastWithHint(state.primaryRetentionCommitV5(), snap.registryShardHint)
+			registryID, snap.registryShardHint = idx.registry.RegisterFastWithHint(state.CommitSeq, snap.registryShardHint)
 		} else {
 			var registerErr error
-			registryID, snap.registryShardHint, registerErr = idx.registry.RegisterWithHint(state.primaryRetentionCommitV5(), snap.registryShardHint)
+			registryID, snap.registryShardHint, registerErr = idx.registry.RegisterWithHint(state.CommitSeq, snap.registryShardHint)
 			if registerErr != nil {
 				db.mu.RUnlock()
 				return nil, registerErr
@@ -2082,17 +2052,9 @@ func (db *DB) captureSnapshotViewBoundedLocked(snap *Snapshot, admit func(Snapsh
 			}
 		}()
 	}
-	if state.primaryRoot != nil {
-		if e := snap.acquirePrimaryRoot(idx, state.primaryRoot); e != nil {
-			if registryID != 0 {
-				idx.registry.Unregister(registryID)
-			}
-			db.mu.RUnlock()
-			return nil, e
-		}
-	}
+
 	// Existing state and root-reuse read locks retain this exact view.
-	// Acquire VLog only after fallible reader-floor and PRIMARY admission;
+	// Acquire VLog only after fallible reader-floor admission;
 	// refusal has no last-file cleanup to discard or retry. From here onward
 	// capture performs only the already-admitted original reference setup.
 	if vlogNeedsPin {
@@ -2319,35 +2281,6 @@ func (s *Snapshot) finalizeCloseRead(oneShot bool) error {
 		s.iteratorMu.Unlock()
 	}
 	var err error
-	primaryCleanupErr := s.primaryRebindErr
-	if s.primaryRoot != nil && primaryCleanupErr == nil {
-		arena := s.primaryRoot.arena
-		if s.primaryMetadata == nil {
-			_, primaryCleanupErr = arena.Drop(s.primaryRoot.ref, nil)
-		} else {
-			_, primaryCleanupErr = arena.DropToReleaseQueue(s.primaryRoot.ref, &s.primaryRelease, nil)
-			if primaryCleanupErr == nil {
-				for {
-					ready, progress, e := arena.ReleaseQueueStep(&s.primaryRelease, nil)
-					if e != nil || !ready {
-						primaryCleanupErr = errors.Join(e, rootpublication.ErrResourceOwnership)
-						break
-					}
-					if !progress {
-						break
-					}
-				}
-			}
-			if primaryCleanupErr != nil {
-				primaryCleanupErr = errors.Join(primaryCleanupErr, arena.PreserveOrdinaryReleaseQueue(&s.primaryRelease))
-			}
-		}
-		err = errors.Join(err, primaryCleanupErr)
-		if primaryCleanupErr == nil {
-			s.primaryRoot = nil
-		}
-	}
-	err = errors.Join(err, primaryCleanupErr)
 	if s.vlogPinned && s.state != nil && s.state.ValueLogSet != nil && s.vlogManager != nil {
 		if relErr := s.vlogManager.Release(s.state.ValueLogSet); relErr != nil {
 			err = errors.Join(err, relErr)
@@ -2381,29 +2314,6 @@ func (s *Snapshot) finalizeCloseRead(oneShot bool) error {
 	if endForegroundRead != nil {
 		endForegroundRead()
 	}
-	var primaryOwnerCompletion primaryRuntimeDisposalCompletionV6
-	if owner := s.primaryOwner; owner != nil {
-		if err != nil {
-			// Failed original cleanup keeps this existing physical edge and exact
-			// Snapshot payload on the same owner; a Close request is not disposal.
-			owner.retainFailedSnapshot(s, err)
-		} else {
-			consumed, debt, completion, releaseErr := owner.releaseOriginalWithOutcome()
-			if consumed && !debt {
-				s.primaryOwner = nil
-				primaryOwnerCompletion = completion
-			}
-			err = releaseErr
-			if !consumed || debt {
-				owner.retainFailedSnapshot(s, releaseErr)
-			}
-		}
-	}
-	// The original pager callback can perform the actual last physical action.
-	// Keep this SAME enrollment live through that outcome and alias scrub.
-	metadata := s.primaryMetadata
-	s.primaryMetadata = nil
-	s.primaryRelease = primaryarena.ReleaseQueue{}
 	// Success includes actual exported-handle scrub, not just claiming the
 	// finalizer. Failed cleanup retains the exact wrapper with its debt owner.
 	if err == nil && s.db != nil {
@@ -2417,7 +2327,6 @@ func (s *Snapshot) finalizeCloseRead(oneShot bool) error {
 		s.vlogWrapperBorrowed = false
 		originalManager.ReleaseSnapshotWrapper()
 	}
-	metadata.CloseAfterCleanup(err)
 	if indexBorrowed {
 		generationMetadata, generationCharge, generationErr := originalIndex.releaseWrapperBorrowCompletionV6(s, err)
 		if generationErr != nil && originalDB != nil {
@@ -2445,12 +2354,14 @@ func (s *Snapshot) finalizeCloseRead(oneShot bool) error {
 		completion.SnapshotCleanupCompleted(err)
 	}
 	s = nil
-	primaryOwnerCompletion.complete()
 	return err
 }
 
 // Open opens the database.
 func Open(opts Options) (*DB, error) {
+	if err := ValidateDATAIndexOpen(opts.Dir, opts.IndexPrimaryDirectory); err != nil {
+		return nil, err
+	}
 	if opts.NegativeLookupFilterBytes < 0 || opts.NegativeLookupFilterBytes > 64<<20 || (opts.NegativeLookupFilterBytes > 0 && opts.NegativeLookupFilterBytes < 8) {
 		return nil, errors.New("negative lookup filter budget must be zero or 8 bytes through 64 MiB")
 	}
@@ -2714,6 +2625,9 @@ func resolveInlineThresholdAndAdaptive(opts Options) (*adaptive.Controller, int)
 }
 
 func openWithLock(opts Options, lock *lockfile.Lock) (result *DB, retErr error) {
+	if err := ValidateDATAIndexOpen(opts.Dir, opts.IndexPrimaryDirectory); err != nil {
+		return nil, err
+	}
 	valueLogIdentityPins := rootpublication.NewIdentityPinRegistry()
 	registryTransferred := false
 	defer func() {
@@ -2891,10 +2805,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (result *DB, retErr error) 
 	gen.zipper.SetIndexColumnarLeaves(opts.IndexColumnarLeaves)
 	gen.zipper.SetIndexPackedValuePtr(opts.IndexPackedValuePtr)
 	gen.zipper.SetIndexInternalBaseDelta(opts.IndexInternalBaseDelta)
-	gen.zipper.SetPrimaryDirectory(opts.IndexPrimaryDirectory)
-	if err := db.attachPrimaryArenaV5(gen, opts); err != nil {
-		return nil, err
-	}
+
 	gen.zipper.SetOuterLeavesInValueLog(opts.IndexOuterLeavesInValueLog)
 	db.leafPageReadCache = newLeafPageReadCacheWithWriteAdmission(configuredLeafPageReadCacheEntries(opts.LeafPageReadCacheEntries), opts.LeafPageReadCacheWriteAdmission)
 	gen.zipper.SetLeafPageReader(db.leafPageReader(vm))
@@ -2909,7 +2820,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (result *DB, retErr error) 
 	// Typed replay can build several roots in one original publication group.
 	// DATA WAL replay and original PRIMARY capsules use the same coordinator
 	// and exact captured frontier, synchronously until readiness.
-	if opts.CommandWAL || (gen.primary != nil && gen.primary.CapsuleFormatV6()) {
+	if opts.CommandWAL {
 		if opts.IndexOuterLeavesInValueLog {
 			manifest, selectedExact, err := db.loadSelectedDurableLeafGenerationManifest()
 			if err == nil && !selectedExact {
@@ -3133,7 +3044,6 @@ func openWithLock(opts Options, lock *lockfile.Lock) (result *DB, retErr error) 
 // The existing state owner releases its prior Set only after the new view is visible.
 func (db *DB) initializeRecoveredSnapshotV1(gen *indexGen, vm *valuelog.Manager) {
 	initialState := &DBState{
-		primaryRoot:                db.primaryCurrentRootV5(),
 		CommitSeq:                  db.meta.CommitSeq,
 		RootPageID:                 db.meta.UserRootPageID,
 		SystemRootPageID:           db.meta.SystemRootPageID,
@@ -3672,16 +3582,7 @@ func (db *DB) closeAfterHooks() (outcome, cleanup error) {
 	if remaining := db.snapshotAcquireInFlight(); remaining > 0 {
 		cleanupFailed(fmt.Errorf("db: Close timed out waiting for %d in-flight read-only snapshot acquisitions to complete", remaining))
 	}
-	if rootRuntime != nil {
-		// Current/slot/parent roots still carry the cached proof allowance here.
-		// Terminal root withdrawal must not leave a runtime alias after refund.
-		rootRuntime.mu.Lock()
-		rootRuntime.primaryDataCertificateV6 = nil
-		rootRuntime.mu.Unlock()
-		if testHookPrimaryDataCertificateV6 != nil {
-			testHookPrimaryDataCertificateV6("terminal-detached", rootRuntime, nil)
-		}
-	}
+
 	if err := db.releaseDurableRootResourcesV1(); err != nil {
 		cleanupFailed(err)
 	}
@@ -3722,6 +3623,7 @@ func (db *DB) closeAfterHooks() (outcome, cleanup error) {
 	// Pending candidate handles and allocator transactions stay pinned through
 	// resource and index shutdown. Only now may the live-runtime clones and the
 	// coordinator's exact recovery handoff be released.
+
 	if rootRuntime != nil {
 		if err := rootRuntime.release(); err != nil {
 			cleanupFailed(err)
@@ -3930,15 +3832,10 @@ func (db *DB) recover() error {
 		if db.readOnly {
 			return errors.New("read-only open requires an existing index with meta pages")
 		}
-		if idx.primary != nil {
-			return db.initializeDurablePrimaryV5(idx)
-		}
+
 		return db.initializeDurableRootV1(idx)
 	}
 
-	if idx.primary != nil {
-		return db.recoverDurablePrimaryV5(idx)
-	}
 	selected, err := selectDurableRootWithMetadataV1(p, p.PageCount(), db.valueLogIdentityPins.MetadataOwner(), db.validateDurableDependencyManifestV1, db.dependencyDirectoryValidatorV2(idx))
 	if err != nil {
 		return err
@@ -3986,7 +3883,7 @@ func (db *DB) rootPageValid(p *pager.Pager, pageID uint64) bool {
 		}
 	}
 	switch n.Type() {
-	case page.PageTypeLeaf, page.PageTypeInternal, page.PageTypePrimaryDirectory:
+	case page.PageTypeLeaf, page.PageTypeInternal:
 		return true
 	default:
 		return false
@@ -4118,6 +4015,7 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 			return post, prePublishErr(fmt.Errorf("acquire root-publication builder: %w", publicRootPublicationErrorV1(err)))
 		}
 	}
+
 	if builder != nil {
 		defer builder.Release()
 	}
@@ -4263,6 +4161,7 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 			}
 		}
 	}
+
 	if rootRuntime != nil {
 		return db.finalizeQueuedRootPublicationV1(
 			rootRuntime, builder, idx, nextMeta, oldUserRootID, newRootID,
@@ -4474,12 +4373,6 @@ func (db *DB) finalizeCommitPostWork(post finalizeCommitPost) {
 	}
 
 	if post.oldState != nil {
-		if post.oldState.primaryRoot != nil {
-			_, e := post.oldState.primaryRoot.arena.Drop(post.oldState.primaryRoot.ref, nil)
-			if e != nil {
-				db.reportError(e)
-			}
-		}
 		_ = db.valueLogManager.Release(post.oldState.ValueLogSet)
 	}
 	if post.persistLeafGenerationManifest || post.persistLeafGenerationIndexesOnly || post.drainLeafGenerationPending || len(post.clearLeafGenerationPendingFileIDs) > 0 {
@@ -4623,6 +4516,7 @@ func (db *DB) finalizeCommitReleasingRootSerialization(
 		}
 		defer builder.Release()
 	}
+
 	durablePublishLocked := false
 	releaseDurablePublish := func() {
 		if durablePublishLocked {
@@ -5469,7 +5363,6 @@ func (db *DB) RefreshValueLogSet() error {
 	}
 
 	newState := &DBState{
-		primaryRoot:                oldState.primaryRoot,
 		CommitSeq:                  oldState.CommitSeq,
 		RootPageID:                 oldState.RootPageID,
 		SystemRootPageID:           oldState.SystemRootPageID,
@@ -5520,7 +5413,6 @@ func (db *DB) publishValueLogSetNoRefresh() error {
 	}
 
 	newState := &DBState{
-		primaryRoot:                oldState.primaryRoot,
 		CommitSeq:                  oldState.CommitSeq,
 		RootPageID:                 oldState.RootPageID,
 		SystemRootPageID:           oldState.SystemRootPageID,

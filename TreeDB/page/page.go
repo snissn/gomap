@@ -54,8 +54,6 @@ const (
 	PageTypeFreelistReservation PageType = 0x08
 	PageTypeDependencyManifest  PageType = 0x09
 	PageTypeDurableRootRecord   PageType = 0x0a
-	PageTypePrimaryDirectory    PageType = 0x0b
-	PageTypePrimaryCapsule      PageType = 0x0c
 )
 
 // PageHeader represents the 16-byte header of a page.
@@ -154,6 +152,19 @@ func UpdateChecksum(data []byte) uint32 {
 	data[10] = 0
 	data[11] = 0
 	sum := crc.Checksum(data)
+	binary.LittleEndian.PutUint32(data[8:12], sum)
+	return sum
+}
+
+// UpdateChecksumSoftware has the same image and checksum semantics as
+// UpdateChecksum, using a non-retaining software CRC for small caller-owned
+// publication scratch. Ordinary page encoders retain the accelerated route.
+func UpdateChecksumSoftware(data []byte) uint32 {
+	if len(data) < PageHeaderSize {
+		return 0
+	}
+	clear(data[8:12])
+	sum := crc.ChecksumSoftware(data)
 	binary.LittleEndian.PutUint32(data[8:12], sum)
 	return sum
 }
@@ -275,7 +286,5 @@ func UnsafeCastHeader(data []byte) *PageHeader {
 	return (*PageHeader)(unsafe.Pointer(&data[0]))
 }
 
-// PrimaryBankNamespace separates complete immutable primary banks from DATA
-// page IDs. The physical bank file uses the low local page ID; native page
-// headers and directory operands retain this exact logical namespace.
-const PrimaryBankNamespace uint64 = 1 << 62
+// Page type tags 0x0b and 0x0c and bit 62 are retired PRIMARY format values.
+// These values remain reserved and must never be reused.

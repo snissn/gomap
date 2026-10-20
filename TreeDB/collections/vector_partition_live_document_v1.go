@@ -56,7 +56,7 @@ func (c *Collection) proveVectorPartitionLiveDocumentAtSnapshotV1(ctx context.Co
 	if catalog == nil {
 		return zero, ErrVectorIndexPartitionLiveUnavailableV1
 	}
-	generation, err := vectorIndexDocumentGenerationForCollection(snap, c.collectionName())
+	generation, err := vectorIndexDocumentGeneration(snap, catalog)
 	if err != nil {
 		return zero, err
 	}

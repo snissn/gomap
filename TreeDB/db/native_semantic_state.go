@@ -188,6 +188,33 @@ type NativeSemanticCapture interface {
 	Close() error
 }
 
+// NativeSemanticPhysicalImport is an internal producer's complete, read-only
+// interpretation of one actual physical catalog. Sealed evidence binds the exact
+// receiver, original Snapshot scalar identity, logical coverage and SAME allocator;
+// it grants no
+// new source, command, resource projection or publication. A prepared mutation,
+// partial import or state carrying pending work must never satisfy this proof.
+type NativeSemanticPhysicalImport interface {
+	NativeSemanticState
+	NativeSemanticImportEvidence() transactionowner.NativeImportEvidence
+}
+
+// NativeSemanticImportBasis copies every field of the actual scalar snapshot
+// token into the internal evidence boundary without retaining a Snapshot.
+func NativeSemanticImportBasis(token StateToken) [6]uint64 {
+	return [6]uint64{token.CommitSeq, token.RootPageID, token.SystemRootPageID, token.AppliedCommandLSN, uint64(token.MaxEntryRevision), token.LeafGenerationStateVersion}
+}
+
+// NativeSemanticImportCapture optionally retains a complete physical import in
+// the SAME original cut owner. Success replaces the immutable cut without
+// changing any raw root, basis or frontier, and retargets only this capture to
+// that equivalent cut. The state is borrowed: the caller always releases its
+// private reference. False leaves both capture and import unchanged (including
+// when a newer cut won). No application callback or command authority is added.
+type NativeSemanticImportCapture interface {
+	AdoptNativeSemanticImport(NativeSemanticPhysicalImport) (bool, error)
+}
+
 // NativePublicationResult distinguishes transfer, canonical assignment, logical
 // installation, WAL completion and exact physical sealing. Consumed transfers
 // the original descriptor custody even when a later assigned phase fails.

@@ -9,6 +9,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 	"maps"
 	"os"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -17,105 +18,97 @@ import (
 // A same-sequence cache from a different real physical index pair must miss.
 // Both counts were persisted by ordinary production publication, not fabricated.
 func TestValueLogRefCacheRejectsOtherPhysicalIncarnation(t *testing.T) {
-	for _, primary := range []bool{false, true} {
-		name := "DATA"
-		if primary {
-			name = "PRIMARY"
+	t.Run("DATA", func(t *testing.T) {
+		dirs := []string{t.TempDir(), t.TempDir()}
+		dbs := make([]*DB, 2)
+		for i, dir := range dirs {
+			d, err := Open(Options{Dir: dir, DisableBackgroundPrune: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			dbs[i] = d
+			ptrs := appendPointersInNewSegment(t, dir, 0, uint32(i+1), uint64(1000+i*1000), 1, func(int) []byte { return []byte("persistent-pointer") })
+			batch := d.NewBatch().(*Batch)
+			if err = batch.SetPointer([]byte("key"), ptrs[0]); err != nil {
+				t.Fatal(err)
+			}
+			if err = batch.Write(); err != nil {
+				t.Fatal(err)
+			}
+			if err = batch.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err = d.persistValueLogRefTracker(); err != nil {
+				t.Fatal(err)
+			}
 		}
-		t.Run(name, func(t *testing.T) {
-			dirs := []string{t.TempDir(), t.TempDir()}
-			dbs := make([]*DB, 2)
-			for i, dir := range dirs {
-				d, err := Open(Options{Dir: dir, IndexPrimaryDirectory: primary, DisableBackgroundPrune: true})
-				if err != nil {
-					t.Fatal(err)
-				}
-				dbs[i] = d
-				ptrs := appendPointersInNewSegment(t, dir, 0, uint32(i+1), uint64(1000+i*1000), 1, func(int) []byte { return []byte("persistent-pointer") })
-				batch := d.NewBatch().(*Batch)
-				if err = batch.SetPointer([]byte("key"), ptrs[0]); err != nil {
-					t.Fatal(err)
-				}
-				if err = batch.Write(); err != nil {
-					t.Fatal(err)
-				}
-				if err = batch.Close(); err != nil {
-					t.Fatal(err)
-				}
-				if err = d.persistValueLogRefTracker(); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if dbs[0].currentCommitSeq() != dbs[1].currentCommitSeq() {
-				t.Fatal("fixture sequences differ")
-			}
-			var ids [2]rootpublication.StableIdentity
-			for i, d := range dbs {
-				if err := d.idx.Load().pager.WithStableResourceFile(func(f *os.File) error {
-					var err error
-					ids[i], err = rootpublication.StableIdentityFromFile(f)
-					return err
-				}); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if rootpublication.SamePhysicalIdentity(ids[0], ids[1]) {
-				t.Fatal("fixture physical DATA identities match")
-			}
-			if primary && dbs[0].idx.Load().primary.UUID() == dbs[1].idx.Load().primary.UUID() {
-				t.Fatal("fixture UUIDs match")
-			}
-			oldCache, err := os.ReadFile(dbs[0].valueLogRefCountsPath())
-			if err != nil {
+		if dbs[0].currentCommitSeq() != dbs[1].currentCommitSeq() {
+			t.Fatal("fixture sequences differ")
+		}
+		var ids [2]rootpublication.StableIdentity
+		for i, d := range dbs {
+			if err := d.idx.Load().pager.WithStableResourceFile(func(f *os.File) error {
+				var err error
+				ids[i], err = rootpublication.StableIdentityFromFile(f)
+				return err
+			}); err != nil {
 				t.Fatal(err)
 			}
-			seq := dbs[1].currentCommitSeq()
-			dbs[1].valueLogRefTracker.mu.RLock()
-			want := dbs[1].valueLogRefTracker.counts.toMap()
-			dbs[1].valueLogRefTracker.mu.RUnlock()
-			for _, d := range dbs {
-				if err = d.Close(); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if err = os.WriteFile(dirs[1]+"/"+valueLogRefCountsFileName, oldCache, 0644); err != nil {
+		}
+		if rootpublication.SamePhysicalIdentity(ids[0], ids[1]) {
+			t.Fatal("fixture physical DATA identities match")
+		}
+
+		oldCache, err := os.ReadFile(dbs[0].valueLogRefCountsPath())
+		if err != nil {
+			t.Fatal(err)
+		}
+		seq := dbs[1].currentCommitSeq()
+		dbs[1].valueLogRefTracker.mu.RLock()
+		want := dbs[1].valueLogRefTracker.counts.toMap()
+		dbs[1].valueLogRefTracker.mu.RUnlock()
+		for _, d := range dbs {
+			if err = d.Close(); err != nil {
 				t.Fatal(err)
 			}
-			var scans int
-			restore := registerScanValueLogRefCountsHook(func() { scans++ })
-			defer restore()
-			reopened, err := Open(Options{Dir: dirs[1], IndexPrimaryDirectory: primary, DisableBackgroundPrune: true})
-			if err != nil {
-				t.Fatal(err)
+		}
+		if err = os.WriteFile(dirs[1]+"/"+valueLogRefCountsFileName, oldCache, 0644); err != nil {
+			t.Fatal(err)
+		}
+		var scans int
+		restore := registerScanValueLogRefCountsHook(func() { scans++ })
+		defer restore()
+		reopened, err := Open(Options{Dir: dirs[1], DisableBackgroundPrune: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			if err := reopened.Close(); err != nil {
+				t.Error(err)
 			}
-			defer func() {
-				if err := reopened.Close(); err != nil {
-					t.Error(err)
-				}
-			}()
-			if scans == 0 {
-				t.Fatalf("same-sequence foreign cache accepted without original scan: seq=%d DATA=%+v versus %+v", seq, ids[0], ids[1])
-			}
-			reopened.valueLogRefTracker.mu.RLock()
-			defer reopened.valueLogRefTracker.mu.RUnlock()
-			got := reopened.valueLogRefTracker.counts.toMap()
-			if len(got) != len(want) {
+		}()
+		if scans == 0 {
+			t.Fatalf("same-sequence foreign cache accepted without original scan: seq=%d DATA=%+v versus %+v", seq, ids[0], ids[1])
+		}
+		reopened.valueLogRefTracker.mu.RLock()
+		defer reopened.valueLogRefTracker.mu.RUnlock()
+		got := reopened.valueLogRefTracker.counts.toMap()
+		if len(got) != len(want) {
+			t.Fatalf("rebuilt counts=%v want %v", got, want)
+		}
+		for id, n := range want {
+			if got[id] != n {
 				t.Fatalf("rebuilt counts=%v want %v", got, want)
 			}
-			for id, n := range want {
-				if got[id] != n {
-					t.Fatalf("rebuilt counts=%v want %v", got, want)
-				}
-			}
-		})
-	}
+		}
+	})
 }
 
 func TestValueLogRefTrackerSameSequencePhysicalReplacement(t *testing.T) {
 	var databases [2]*DB
 	var incarnations [2]valueLogRefIncarnation
 	for n := range databases {
-		d, err := Open(Options{Dir: t.TempDir(), IndexPrimaryDirectory: true, DisableBackgroundPrune: true})
+		d, err := Open(Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -165,7 +158,7 @@ func TestValueLogRefTrackerSameSequencePhysicalReplacement(t *testing.T) {
 }
 
 func TestValueLogRefCacheFormatBindsPhysicalPair(t *testing.T) {
-	d, err := Open(Options{Dir: t.TempDir(), IndexPrimaryDirectory: true, DisableBackgroundPrune: true})
+	d, err := Open(Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,9 +198,12 @@ func TestValueLogRefCacheFormatBindsPhysicalPair(t *testing.T) {
 
 // DB-lifetime derived counts must survive the physical incarnation that
 // originally populated them. Growth and a genuine closure scan use the same
-// registry owner after the original PRIMARY generation has actually closed.
-func TestValueLogRefCountOwnerSurvivesPrimaryVacuum(t *testing.T) {
-	d, err := Open(Options{Dir: t.TempDir(), CommandWAL: true, IndexPrimaryDirectory: true, DisableBackgroundPrune: true})
+// registry owner after the original DATA generation has actually closed.
+func TestValueLogRefCountOwnerSurvivesDATAVacuum(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum unsupported on windows")
+	}
+	d, err := Open(Options{Dir: t.TempDir(), CommandWAL: true, DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,14 +214,8 @@ func TestValueLogRefCountOwnerSurvivesPrimaryVacuum(t *testing.T) {
 	if err = d.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
-	if primaryOnlinePlatformRefusal(t, d, context.Background()) {
-		if err = d.Close(); err != nil {
-			t.Fatal(err)
-		}
-		return
-	}
+
 	original := d.idx.Load()
-	originalMetadata := original.primary.MetadataOwner()
 	if err = d.VacuumIndexOnline(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -236,11 +226,24 @@ func TestValueLogRefCountOwnerSurvivesPrimaryVacuum(t *testing.T) {
 	// scavenger deliberately waits five seconds. Do not replace that policy
 	// with a direct Arena.Close or a scalar owner-state inference.
 	deadline := time.Now().Add(15 * time.Second)
-	for !originalMetadata.PhysicalClosed() && time.Now().Before(deadline) {
+	for {
+		original.wrapperMu.Lock()
+		completed, physicalCompleted := original.closeCompleted, original.physicalCompleted
+		var closeErr error
+		if completed {
+			closeErr = original.closeErr
+		}
+		original.wrapperMu.Unlock()
+		if completed {
+			if !physicalCompleted || closeErr != nil {
+				t.Fatalf("genuine old DATA physical close failed: physicalCompleted=%t err=%v", physicalCompleted, closeErr)
+			}
+			break
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatalf("genuine old DATA physical close not reached: refs=%d minPinned=%d", original.refs.Load(), original.registry.MinPinnedSeq())
+		}
 		time.Sleep(20 * time.Millisecond)
-	}
-	if !originalMetadata.PhysicalClosed() {
-		t.Fatalf("genuine old PRIMARY physical close not reached: refs=%d minPinned=%d", original.refs.Load(), original.registry.MinPinnedSeq())
 	}
 	tracker := d.valueLogRefTracker
 	tracker.mu.Lock()
@@ -281,7 +284,10 @@ func TestValueLogRefCountOwnerSurvivesPrimaryVacuum(t *testing.T) {
 // A failed last Close must keep the exact generation externally rooted in the
 // DB's original error receipt, alongside a later independent terminal failure.
 func TestGhostGenerationActualCloseFailureRetainsOriginalDBReceipt(t *testing.T) {
-	d, err := Open(Options{Dir: t.TempDir(), CommandWAL: true, IndexPrimaryDirectory: true, DisableBackgroundPrune: true})
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum unsupported on windows")
+	}
+	d, err := Open(Options{Dir: t.TempDir(), CommandWAL: true, DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,12 +298,7 @@ func TestGhostGenerationActualCloseFailureRetainsOriginalDBReceipt(t *testing.T)
 	if err = d.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
-	if primaryOnlinePlatformRefusal(t, d, context.Background()) {
-		if err = d.Close(); err != nil {
-			t.Fatal(err)
-		}
-		return
-	}
+
 	original := d.idx.Load()
 	if err = d.VacuumIndexOnline(context.Background()); err != nil {
 		t.Fatal(err)
@@ -330,7 +331,7 @@ func TestGhostGenerationActualCloseFailureRetainsOriginalDBReceipt(t *testing.T)
 	if discovered {
 		t.Fatal("fixture did not leave both original discovery lists")
 	}
-	if original.metadata == nil || original.metadataCharge == 0 || original.primaryOwner == nil {
+	if original.metadata == nil || original.metadataCharge == 0 {
 		t.Fatal("failed containing generation or physical owner was refunded")
 	}
 	// Concurrent repeat quiescence joins the same stopped worker; it neither
@@ -338,7 +339,7 @@ func TestGhostGenerationActualCloseFailureRetainsOriginalDBReceipt(t *testing.T)
 	var stopped sync.WaitGroup
 	for i := 0; i < 4; i++ {
 		stopped.Add(1)
-		go func() { defer stopped.Done(); original.primary.Pager().QuiesceBackgroundGrowth() }()
+		go func() { defer stopped.Done(); original.pager.QuiesceBackgroundGrowth() }()
 	}
 	stopped.Wait()
 	charged := original.metadata.Bytes()

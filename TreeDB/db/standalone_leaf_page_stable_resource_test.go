@@ -1078,7 +1078,7 @@ func TestStandaloneLeafPageLogLateRegistryBindFailsStableOnly(t *testing.T) {
 
 func TestSelectedStandaloneLeafCaptureAdmissionAndLegacyImport(t *testing.T) {
 	dir := t.TempDir()
-	database, err := Open(Options{Dir: dir, IndexPrimaryDirectory: true, IndexOuterLeavesInValueLog: true})
+	database, err := Open(Options{Dir: dir, IndexOuterLeavesInValueLog: true})
 	if err != nil {
 		t.Fatal(err)
 	}

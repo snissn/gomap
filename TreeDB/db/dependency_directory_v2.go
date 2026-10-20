@@ -10,7 +10,6 @@ import (
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
-	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/zipper"
@@ -24,9 +23,7 @@ func (db *DB) prepareDependencyDirectoryV2(idx *indexGen, sequence uint64, baseR
 		return nil, nil, errors.New("invalid dependency directory index generation")
 	}
 	metadata := idx.metadata
-	if idx.primary != nil {
-		metadata = idx.primary.MetadataOwner()
-	}
+
 	// Actual generation producers must supply the selected original owner.
 	// The utility's generic path is reserved for unowned diagnostics.
 	if metadata == nil || (resources != nil && resources.MetadataOwner() != metadata) || (baseResources != nil && baseResources.MetadataOwner() != metadata) {
@@ -119,24 +116,7 @@ func (db *DB) prepareDependencyDirectoryV2(idx *indexGen, sequence uint64, baseR
 		return nil, nil, err
 	}
 	var alloc zipper.PageAllocator = idx.allocator
-	var bankAlloc *primaryDependencyAllocatorV5
-	if idx.primary != nil {
-		bankAlloc, err = newPrimaryDependencyAllocatorV5(idx)
-		if err != nil {
-			return nil, nil, err
-		}
-		defer func() {
-			cleanup := bankAlloc.release()
-			if cleanup != nil {
-				if result != nil {
-					result.Release()
-					result = nil
-				}
-				err = errors.Join(err, cleanup)
-			}
-		}()
-		alloc = bankAlloc
-	}
+
 	var retired []uint64
 	var metrics adaptive.Metrics
 	var pagesWritten uint64
@@ -157,12 +137,7 @@ func (db *DB) prepareDependencyDirectoryV2(idx *indexGen, sequence uint64, baseR
 	if err != nil {
 		return nil, nil, fmt.Errorf("apply dependency directory: %w", err)
 	}
-	if bankAlloc != nil {
-		if err = bankAlloc.seal(root); err != nil {
-			return nil, nil, err
-		}
-		retired = nil
-	}
+
 	directory, err := db.pinDependencyDirectoryV2(idx, sequence, rootpublication.DependencyDirectoryRefV2{
 		RootPageID: root, PhysicalCount: physical, LogicalCount: logical,
 	}, idx.pager.PageCount())
@@ -196,9 +171,7 @@ func (db *DB) pinDependencyDirectoryV2(idx *indexGen, sequence uint64, ref rootp
 	if db == nil || idx == nil || idx.pager == nil || sequence == 0 {
 		return nil, rootpublication.ErrResourceOwnership
 	}
-	if idx.primary != nil && primaryarena.IsPage(ref.RootPageID) {
-		return db.pinPrimaryDependencyV5(idx, ref, idx.primary.Pager().PageCount())
-	}
+
 	return db.pinDataDependencyDirectoryV6(idx, sequence, ref, totalPages)
 }
 
@@ -222,15 +195,4 @@ func (db *DB) recoverDependencyDirectoryResourcesV2(directory *rootpublication.D
 			return fmt.Errorf("%w: directory recovered logical kind=%q path=%q", rootpublication.ErrResourceConflict, entry.Kind, entry.DiagnosticPath)
 		}
 	})
-}
-
-func (db *DB) primaryDependencyDirectoryValidatorV5(idx *indexGen) durablePrimaryDirectoryValidatorV5 {
-	return func(record rootpublication.DurablePrimaryRootRecordV5) (*rootpublication.StableResourceSet, error) {
-		directory, e := db.pinPrimaryDependencyV5(idx, record.Record.Directory, record.Primary.ArenaHighWater)
-		if e != nil {
-			return nil, e
-		}
-		defer directory.Release()
-		return db.recoverDependencyDirectoryResourcesV2(directory)
-	}
 }

@@ -80,15 +80,13 @@ func TestMinimumCapacityCheckpointMakesProgress(t *testing.T) {
 			inventory := func(phase string) {
 				inspection := errors.New("test: inventory only")
 				_, err := database.backend.AcquireSnapshotWithAllocationAdmission(func(s backenddb.SnapshotAllocationSizes) error {
-					var primary, registry uint64
-					if s.PrimaryMetadata != nil {
-						primary = s.PrimaryMetadata.Bytes()
-					}
+					var registry uint64
+
 					if s.RegistryMetadata != nil {
 						registry = s.RegistryMetadata.Bytes()
 					}
 					stats := database.Stats()
-					t.Logf("%s: maintenance=%s primary_owner=%d registry_owner=%d snapshot_wrapper=%d vlog=%+v sources=%s generations=%s cuts=%s", phase, stats["treedb.cache.cow.maintenance_used_bytes"], primary, registry, s.Wrapper, s.ValueLog, stats["treedb.cache.cow.sources"], stats["treedb.cache.cow.generations"], stats["treedb.cache.cow.active_cuts"])
+					t.Logf("%s: maintenance=%s registry_owner=%d snapshot_wrapper=%d vlog=%+v sources=%s generations=%s cuts=%s", phase, stats["treedb.cache.cow.maintenance_used_bytes"], registry, s.Wrapper, s.ValueLog, stats["treedb.cache.cow.sources"], stats["treedb.cache.cow.generations"], stats["treedb.cache.cow.active_cuts"])
 					return inspection
 				})
 				if !errors.Is(err, inspection) {

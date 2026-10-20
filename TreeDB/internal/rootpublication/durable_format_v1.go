@@ -915,16 +915,55 @@ func (record DurableRootRecordV1) validate(pageID uint64) error {
 	return nil
 }
 
+// PageDigest validates the record and computes the canonical page digest for
+// preparation, without producing a checksummed page image. The zeroed local
+// page keeps checksum and embedded-digest bytes canonical. Materialization must
+// still use EncodePage to produce the independent, checksummed output.
+func (record DurableRootRecordV1) PageDigest(pageID uint64) ([32]byte, error) {
+	if err := record.validate(pageID); err != nil {
+		return [32]byte{}, err
+	}
+	var canonical [page.PageSize]byte
+	encodeDurableRootRecordFieldsV1(canonical[:], pageID, record)
+	return sha256.Sum256(canonical[:]), nil
+}
+
 func (record DurableRootRecordV1) EncodePage(pageID uint64) ([]byte, [32]byte, error) {
 	if err := record.validate(pageID); err != nil {
 		return nil, [32]byte{}, err
 	}
 	image := make([]byte, page.PageSize)
+	return image, encodeDurableRootRecordPageV1(image, pageID, record), nil
+}
+
+// EncodePageInto encodes into caller-owned storage without retaining it. Refusal
+// leaves the destination unchanged. Successful encoding clears reserved bytes and
+// the tail, so previously populated scratch produces the same canonical page.
+func (record DurableRootRecordV1) EncodePageInto(pageID uint64, image []byte) ([32]byte, error) {
+	if len(image) != page.PageSize {
+		return [32]byte{}, ErrDurableRootRecordFormat
+	}
+	if err := record.validate(pageID); err != nil {
+		return [32]byte{}, err
+	}
+	clear(image)
+	digest := encodeDurableRootRecordBodyV1(image, pageID, record)
+	page.UpdateChecksumSoftware(image)
+	return digest, nil
+}
+
+// image is a zeroed, exact-size page whose record has already been validated.
+func encodeDurableRootRecordPageV1(image []byte, pageID uint64, record DurableRootRecordV1) [32]byte {
+	digest := encodeDurableRootRecordBodyV1(image, pageID, record)
+	page.UpdateChecksum(image)
+	return digest
+}
+
+func encodeDurableRootRecordBodyV1(image []byte, pageID uint64, record DurableRootRecordV1) [32]byte {
 	encodeDurableRootRecordFieldsV1(image, pageID, record)
 	digest := durableRootRecordDigestV1(image)
 	copy(image[312:344], digest[:])
-	page.UpdateChecksum(image)
-	return image, digest, nil
+	return digest
 }
 
 func DecodeDurableRootRecordV1(image []byte, pageID uint64, expectedDigest [32]byte) (DurableRootRecordV1, error) {
@@ -987,10 +1026,18 @@ func DecodeDurableRootRecordV1(image []byte, pageID uint64, expectedDigest [32]b
 }
 
 func durableRootRecordDigestV1(image []byte) [32]byte {
-	canonical := append([]byte(nil), image...)
-	clear(canonical[8:12])
-	clear(canonical[312:344])
-	return sha256.Sum256(canonical)
+	// Hash the complete page without modifying borrowed input or allocating a
+	// canonical page copy. Only the checksum and embedded digest are excluded.
+	h := sha256.New()
+	var zeros [32]byte
+	_, _ = h.Write(image[:8])
+	_, _ = h.Write(zeros[:4])
+	_, _ = h.Write(image[12:312])
+	_, _ = h.Write(zeros[:])
+	_, _ = h.Write(image[344:])
+	var digest [32]byte
+	h.Sum(digest[:0])
+	return digest
 }
 
 // Shared field serialization preserves the strict V1 validator and byte format.

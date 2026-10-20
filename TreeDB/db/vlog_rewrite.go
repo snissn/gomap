@@ -3218,6 +3218,9 @@ func ValueLogRewriteOffline(opts Options) (stats ValueLogRewriteStats, retErr er
 	if opts.Dir == "" {
 		return stats, errors.New("db dir required")
 	}
+	if err := ValidateDATAIndexOpen(opts.Dir, opts.IndexPrimaryDirectory); err != nil {
+		return stats, err
+	}
 	if opts.ValueLog.TemplateMode != template.TemplateOff {
 		return stats, fmt.Errorf("%w: offline template rewrite requires dependency-closed rewritten-root publication (#3679)", rootpublication.ErrUnresolvedResource)
 	}
@@ -3287,25 +3290,6 @@ func ValueLogRewriteOffline(opts Options) (stats ValueLogRewriteStats, retErr er
 			metadata.RemovePending(charge)
 		}
 	}()
-
-	capsuleRewrite := d.idx.Load() != nil && d.idx.Load().primary != nil && d.idx.Load().primary.CapsuleFormatV6()
-	var offlineScope *indexGen
-	var offlineParent *os.File
-	if capsuleRewrite {
-		offlineScope, err = d.captureOfflinePrimaryScopeV6()
-		if err != nil {
-			return stats, err
-		}
-		offlineParent = offlineScope.stableNamespaceParent
-		defer func() {
-			metadata, charge, cleanupErr := offlineScope.releaseOfflineNamespaceScopeV6()
-			offlineScope, offlineParent = nil, nil
-			retErr = errors.Join(retErr, cleanupErr)
-			if metadata != nil && charge != 0 {
-				metadata.RemovePending(charge)
-			}
-		}()
-	}
 
 	state := d.State()
 	if state == nil {
@@ -3406,58 +3390,32 @@ func ValueLogRewriteOffline(opts Options) (stats ValueLogRewriteStats, retErr er
 	bakPath := filepath.Join(opts.Dir, indexBakFileName)
 	readyPath := filepath.Join(opts.Dir, indexReadyFileName)
 
-	var pair *indexGen
 	var newPager *pager.Pager
-	if capsuleRewrite {
-		pair, err = d.newOfflinePrimaryPairV6(offlineScope, opts.ChunkSize)
-		if err != nil {
-			return stats, err
-		}
-		newPager = pair.pager
-	} else {
-		if err := removePersistentFileBestEffort(opts.Dir, newPath, durabilitycut.ResourceIndex); err != nil {
-			return stats, err
-		}
-		if err := removePersistentFileBestEffort(opts.Dir, readyPath, durabilitycut.ResourceIndex); err != nil {
-			return stats, err
-		}
 
-		_, newStatErr := os.Stat(newPath)
-		newCreated := os.IsNotExist(newStatErr)
-		newPager, err = pager.Open(newPath, opts.ChunkSize)
-		if err != nil {
-			return stats, err
-		}
-		if err := observeCreatedPersistentFile(opts.Dir, newPath, durabilitycut.ResourceIndex, newCreated); err != nil {
-			_ = newPager.Close()
-			return stats, err
-		}
-		if _, err := newPager.Alloc(2); err != nil {
-			_ = newPager.Close()
-			return stats, err
-		}
+	if err := removePersistentFileBestEffort(opts.Dir, newPath, durabilitycut.ResourceIndex); err != nil {
+		return stats, err
+	}
+	if err := removePersistentFileBestEffort(opts.Dir, readyPath, durabilitycut.ResourceIndex); err != nil {
+		return stats, err
+	}
 
+	_, newStatErr := os.Stat(newPath)
+	newCreated := os.IsNotExist(newStatErr)
+	newPager, err = pager.Open(newPath, opts.ChunkSize)
+	if err != nil {
+		return stats, err
+	}
+	if err := observeCreatedPersistentFile(opts.Dir, newPath, durabilitycut.ResourceIndex, newCreated); err != nil {
+		_ = newPager.Close()
+		return stats, err
+	}
+	if _, err := newPager.Alloc(2); err != nil {
+		_ = newPager.Close()
+		return stats, err
 	}
 
 	closeReplacement := func() error {
-		if pair != nil {
-			return pair.close()
-		}
 		return newPager.Close()
-	}
-	offlineFinishOwnsCleanup := false
-	if pair != nil {
-		staging, identityErr := primaryJointDecisionForV6(offlineParent, pair, durableRootSelectionV1{})
-		if identityErr != nil {
-			return stats, errors.Join(identityErr, pair.close())
-		}
-		defer func() {
-			closeErr := pair.close()
-			retErr = errors.Join(retErr, closeErr)
-			if !offlineFinishOwnsCleanup && closeErr == nil {
-				retErr = errors.Join(retErr, cleanupOfflinePrimaryStageV6(opts.Dir, offlineParent, indexNewFileName, staging.Data), cleanupOfflinePrimaryStageV6(opts.Dir, offlineParent, primaryNewFileName, staging.Primary))
-			}
-		}()
 	}
 
 	alloc := &pagerAllocator{p: newPager}
@@ -3490,10 +3448,8 @@ func ValueLogRewriteOffline(opts Options) (stats ValueLogRewriteStats, retErr er
 		}
 		if !rewriter.Valid() {
 			if err := rewriter.Error(); err != nil {
-				closeErr := rewriter.Close()
-				if capsuleRewrite {
-					err = errors.Join(err, closeErr)
-				}
+				_ = rewriter.Close()
+
 				return 0, err
 			}
 		}
@@ -3507,10 +3463,8 @@ func ValueLogRewriteOffline(opts Options) (stats ValueLogRewriteStats, retErr er
 			buildOpts.LeafPageLog = writer
 		}
 		newRoot, err := bulk.BuildWithOptions(rewriter, alloc, newPager, buildOpts)
-		closeErr := rewriter.Close()
-		if capsuleRewrite {
-			err = errors.Join(err, closeErr)
-		}
+		_ = rewriter.Close()
+
 		if err != nil {
 			return 0, err
 		}
@@ -3556,91 +3510,6 @@ func ValueLogRewriteOffline(opts Options) (stats ValueLogRewriteStats, retErr er
 			}
 		}
 		return buildTree(root, useLeafLog)
-	}
-
-	if source := d.idx.Load(); source != nil && source.primary != nil && source.primary.CapsuleFormatV6() {
-		roots, captureErr := d.CaptureRecoverableRootSetForInspection(context.Background())
-		if captureErr != nil {
-			_ = closeReplacement()
-			return stats, captureErr
-		}
-		defer func() { retErr = errors.Join(retErr, d.retainResourceCleanupError(roots.ReleaseWithError())) }()
-
-		produce := func(root RecoverableRoot) (rebuilt rebuiltDurableRootV1, err error) {
-			snapshot := roots.AcquireSnapshotForRoot(root)
-			if snapshot == nil {
-				return rebuiltDurableRootV1{}, ErrRecoverableRootSetStale
-			}
-			defer func() {
-				if closeErr := snapshot.Close(); closeErr != nil {
-					original := rebuilt.resources
-					rebuilt = rebuiltDurableRootV1{}
-					err = errors.Join(err, closeErr, d.releaseCapturedRootResources(original))
-					d.retainOriginalCleanupError(closeErr)
-				}
-			}()
-			descriptors, e := vacuumCollectCollectionRootDescriptors(snapshot.idx.pager, &snapshot.reader, root.SystemRootPageID)
-			if e != nil {
-				return rebuiltDurableRootV1{}, e
-			}
-			replacements, e := valueLogRewriteCollectionRootsFromDescriptors(descriptors, buildCollectionTree)
-			if e != nil {
-				return rebuiltDurableRootV1{}, e
-			}
-			var system iteratorWithEntry = tree.New(snapshot.idx.pager, &snapshot.reader, root.SystemRootPageID).IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
-			if len(replacements) != 0 {
-				system = &vacuumSystemRootRewriteIterator{base: system, replacements: replacements}
-			}
-			systemRoot, e := buildTreeFromIterator(system, rewriteUsesLeafLog)
-			if e != nil {
-				return rebuiltDurableRootV1{}, e
-			}
-			userRoot, e := buildTreeFromIterator(snapshot.tree.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection}), rewriteUsesLeafLog)
-			if e != nil {
-				return rebuiltDurableRootV1{}, e
-			}
-			meta := page.MetaPageBody{CommitSeq: root.CommitSeq, UserRootPageID: userRoot, SystemRootPageID: systemRoot, TotalPages: newPager.PageCount(), AppliedCommandLSN: root.AppliedCommandLSN, MaxEntryRevision: root.MaxEntryRevision}
-			if e = writer.Sync(); e != nil {
-				return rebuiltDurableRootV1{}, e
-			}
-			registered, e := captureOfflineRewriteDurableResourcesV1(d, writer)
-			if e != nil {
-				return rebuiltDurableRootV1{}, e
-			}
-			if e = d.releaseCapturedRootResources(registered); e != nil {
-				return rebuiltDurableRootV1{}, e
-			}
-			sourceResources, _, _, _ := roots.resourcesForRootExact(root)
-			resources, e := d.captureRebuiltIndexDurableResourcesFromV1(newPager, meta, sourceResources)
-			return rebuiltDurableRootV1{meta: meta, resources: resources}, e
-		}
-		offlineFinishOwnsCleanup = true
-		err = d.finishOfflinePrimaryPairV6(offlineParent, pair, roots, produce, true, func() error {
-			writerCleanupAttempted = true
-			closeErr := writer.Close()
-			d.retainOriginalCleanupError(closeErr)
-			if acquiredValueLogSet != nil {
-				original := acquiredValueLogSet
-				acquiredValueLogSet = nil
-				cleanupErr := acquiredValueLogManager.Release(original)
-				d.retainOriginalCleanupError(cleanupErr)
-				closeErr = errors.Join(closeErr, cleanupErr)
-			}
-			return closeErr
-		})
-		if err != nil {
-			return stats, err
-		}
-		// All selected/alternate/proof pointers now name the committed pair's
-		// new segments. Only this completed decision authorizes old deletion.
-		if err = removeOldValueLogSegments(segments); err != nil {
-			return stats, err
-		}
-		if err = updateValueLogHealthAfterRewrite(opts.Dir, oldValueIDs, nil); err != nil && opts.NotifyError != nil {
-			opts.NotifyError(fmt.Errorf("value-log health update after rewrite: %w", err))
-		}
-		stats.SegmentsAfter, stats.BytesAfter, err = valueLogSegmentStats(opts.Dir)
-		return stats, err
 	}
 
 	collectionRootReplacements, err := valueLogRewriteCollectionRootsFromDescriptors(collectionRootDescriptors, buildCollectionTree)

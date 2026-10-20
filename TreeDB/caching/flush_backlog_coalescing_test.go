@@ -811,3 +811,55 @@ func TestFlushBacklogCoalescingAgeGate(t *testing.T) {
 		t.Fatalf("queue age skip=%d want >0", got)
 	}
 }
+
+type checkpointIntentBackend struct {
+	*MockBackend
+	hints int
+}
+
+func (b *checkpointIntentBackend) NewBatch() batch.Interface {
+	return &checkpointIntentBatch{MockBatch: b.MockBackend.NewBatch().(*MockBatch), owner: b}
+}
+
+type checkpointIntentBatch struct {
+	*MockBatch
+	owner *checkpointIntentBackend
+}
+
+func (b *checkpointIntentBatch) SetCheckpointRootPublicationIntent() { b.owner.hints++ }
+
+func TestCheckpointEmissionIntentKeepsOriginalWriteMode(t *testing.T) {
+	for _, route := range []string{"checkpoint", "background", "multichunk", "group", "command", "journal", "cow"} {
+		t.Run(route, func(t *testing.T) {
+			backend := &checkpointIntentBackend{MockBackend: NewMockBackend()}
+			cached := &DB{backend: backend, disableJournal: true}
+			mode, single := flushCollectionCheckpoint, true
+			var group *backenddb.RootPublicationBuildGroup
+			switch route {
+			case "background":
+				mode = flushCollectionBackground
+			case "multichunk":
+				single = false
+			case "group":
+				group = &backenddb.RootPublicationBuildGroup{}
+			case "command":
+				cached.externalCommandWAL = true
+			case "journal":
+				cached.disableJournal = false
+			case "cow":
+				cached.cow = &cowCache{}
+			}
+			ops := []batch.Entry{{Key: []byte("key"), Value: []byte("value")}}
+			if err := cached.writeCanonicalFlushRunOpsChunk(ops, false, nil, group, true, mode, single); err != nil {
+				t.Fatal(err)
+			}
+			want := 0
+			if route == "checkpoint" {
+				want = 1
+			}
+			if backend.hints != want || backend.writeCalls != 1 || backend.writeSyncs != 0 {
+				t.Fatalf("route %s hints=%d want %d; Write calls=%d WriteSync calls=%d", route, backend.hints, want, backend.writeCalls, backend.writeSyncs)
+			}
+		})
+	}
+}

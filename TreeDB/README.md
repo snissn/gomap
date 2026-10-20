@@ -182,6 +182,14 @@ lookup routing to a single leaf page (no leaf scanning).
 Leaf pages may still contain inline values or `ValuePtr` entries using the
 existing placement rules.
 
+Fresh `ProfileNoWALFast`, command-WAL, and benchmark-unsafe databases default to
+USER leaf pages in the persistent value log (`IndexOuterLeavesInValueLog=true`).
+To choose either placement for a fresh database, set the option after
+`OptionsFor`. Existing databases reopen with their persisted placement; a
+conflicting format environment override is rejected.
+This option does not change large-value storage: payload pointers still refer to
+the persistent value log and remain readable after checkpoint and reopen.
+
 ## Collection Vector Search
 
 Collections can store caller-generated float32 embeddings in JSON document

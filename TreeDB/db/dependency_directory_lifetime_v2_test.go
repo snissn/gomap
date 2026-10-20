@@ -19,7 +19,7 @@ func TestDependencyDirectoryV2OldReaderSlotsAndSharedSubtreeReclamation(t *testi
 	defer database.Close()
 	idx := database.idx.Load()
 	registry := database.StableResourceIdentityPinRegistry()
-	if idx == nil || idx.primary != nil || idx.metadata == nil || idx.metadata != registry.MetadataOwner() {
+	if idx == nil || idx.metadata == nil || idx.metadata != registry.MetadataOwner() {
 		t.Fatal("not original DATA metadata owner")
 	}
 	file, err := os.CreateTemp(t.TempDir(), "directory-owner")

@@ -40,7 +40,7 @@ type compactLeafLogPayloadScratchPtrRef struct {
 }
 
 func newCachingLeafPageLog(db *DB, l *lane) backenddb.LeafPageLog {
-	if db != nil && db.indexOuterLeavesInValueLog && l == &db.leafLog {
+	if db != nil && db.leafPageLogEnabled() && l == &db.leafLog {
 		return &cachingLeafPageLogGroup{db: db}
 	}
 	return &cachingLeafPageLog{db: db, lane: l}

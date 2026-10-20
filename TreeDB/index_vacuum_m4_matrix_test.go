@@ -18,6 +18,7 @@ import (
 	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 const indexVacuumM4MatrixArtifactVersion = 1
@@ -495,9 +496,13 @@ func openIndexVacuumM4Fixture(t *testing.T, opts Options, fixture indexVacuumM4F
 	{
 		// Seed real retired DATA bases for every layout, including outer leaves.
 		// An outer-leaf rebuild retires only its DATA internal pages, so a fixed
-		// three rebuilds does not overcome the fixed metadata floor. Stop on
-		// measured reclaimable debt, with a hard bound on fixture construction.
-		// The >=50% debt precondition and >=40% shrink gate stay the same.
+		// three rebuilds does not overcome the fixed metadata floor. Require
+		// both >=50% logical debt and physical headroom for chunk-rounded live
+		// pages plus one chunk for replacement metadata and the two slot advances
+		// below. Logical 44/22 pages alone can shrink only 3 physical chunks to
+		// 2 (33%), so it cannot establish this fixture's unchanged 40% gate.
+		// Construction remains bounded; the lane still proves actual shrink.
+		physicalHeadroom := false
 		for rebuild := 0; rebuild < 64; rebuild++ {
 			before, err := database.backend.IndexVacuumTriggerReport()
 			if err != nil {
@@ -519,9 +524,22 @@ func openIndexVacuumM4Fixture(t *testing.T, opts Options, fixture indexVacuumM4F
 				t.Fatalf("fixture rebuild did not create a fresh DATA generation: generation=%s->%s pages=%d->%d parse=%v/%v", beforeGeneration, afterGeneration, before.TotalPages, after.TotalPages, beforeErr, afterErr)
 			}
 			t.Logf("fixture DATA rebuild=%d commit=%d->%d generation=%s->%s pages=%d->%d reclaimable=%d->%d ratio_ppm=%d->%d", rebuild+1, before.CommitSeq, after.CommitSeq, beforeGeneration, afterGeneration, before.TotalPages, after.TotalPages, before.FreelistReclaimablePages, after.FreelistReclaimablePages, before.FreelistReclaimableRatioPPM, after.FreelistReclaimableRatioPPM)
-			if rebuild >= 2 && after.FreelistReclaimableValid && after.FreelistReclaimableRatioPPM >= 500_000 {
+			if after.FreelistReclaimablePages > after.TotalPages {
+				t.Fatalf("fixture reclaimable pages exceed total: %+v", after)
+			}
+			liveBytes := (after.TotalPages - after.FreelistReclaimablePages) * page.PageSize
+			chunkBytes := uint64(opts.ChunkSize)
+			liveRoundedBytes := ((liveBytes + chunkBytes - 1) / chunkBytes) * chunkBytes
+			replacementAllowanceBytes := liveRoundedBytes + chunkBytes
+			physicalBytes := uint64(publicVacuumIndexBytes(t, opts.Dir))
+			physicalHeadroom = replacementAllowanceBytes*100 <= physicalBytes*60
+			t.Logf("fixture physical headroom: index_bytes=%d live_rounded_bytes=%d replacement_allowance_bytes=%d ready=%v", physicalBytes, liveRoundedBytes, replacementAllowanceBytes, physicalHeadroom)
+			if rebuild >= 2 && after.FreelistReclaimableValid && after.FreelistReclaimableRatioPPM >= 500_000 && physicalHeadroom {
 				break
 			}
+		}
+		if !physicalHeadroom {
+			t.Fatal("fixture did not establish physical chunk headroom within 64 DATA rebuilds")
 		}
 		for generation := 0; generation < 2; generation++ {
 			if err := database.SetSync([]byte("m4/0000"), bytes.Repeat([]byte{byte(240 + generation)}, fixture.valueSize)); err != nil {

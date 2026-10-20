@@ -32,7 +32,7 @@ func TestDependencyDirectoryV2RepeatedPointerPublicationSameSegment(t *testing.T
 		}
 	}()
 	owner := d.StableResourceMetadataOwner()
-	if idx := d.idx.Load(); idx == nil || idx.primary != nil || owner == nil || d.rootPublication.metadata != owner || d.StableResourceIdentityPinRegistry().MetadataOwner() != owner {
+	if idx := d.idx.Load(); idx == nil || owner == nil || d.rootPublication.metadata != owner || d.StableResourceIdentityPinRegistry().MetadataOwner() != owner {
 		t.Fatal("not the original-owner DATA publication route")
 	}
 	budget, err := memtable.NewCOWBudget(memtable.DefaultCOWLimits())

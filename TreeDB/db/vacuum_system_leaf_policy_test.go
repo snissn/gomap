@@ -21,9 +21,6 @@ func TestVacuumSystemLeafPolicyWarmWriteAndRecovery(t *testing.T) {
 	}
 	for _, mode := range []string{"online", "offline", string(vacuumFailAfterNewSync), string(vacuumFailAfterReady), string(vacuumFailAfterRenameOld), string(vacuumFailAfterRenameNew)} {
 		t.Run(mode, func(t *testing.T) {
-			if mode == "online" && runtime.GOOS == "windows" {
-				t.Skip("online vacuum unsupported on windows")
-			}
 			opts := Options{Dir: t.TempDir(), ChunkSize: 64 << 10, IndexOuterLeavesInValueLog: true}
 			var d *DB
 			var log LeafPageLogCloser
@@ -131,23 +128,44 @@ func TestVacuumSystemLeafPolicyWarmWriteAndRecovery(t *testing.T) {
 			for ptr := range collectLeafRefIDsFromRoot(t, d, d.State().SystemRootPageID) {
 				seedLeafFiles[ptr.FileID] = true
 			}
-			for slot, record := range d.durableRoot.slotRecord {
-				if record.CommitSeq <= 1 || len(collectLeafRefIDsFromRoot(t, d, record.SystemRootPageID)) < 2 {
-					t.Fatalf("seed slot %d is not a durable application system tree: %+v", slot, record)
+			func() {
+				d.durablePublishMu.Lock()
+				defer d.durablePublishMu.Unlock()
+				for slot, record := range d.durableRoot.slotRecord {
+					if record.CommitSeq <= 1 || len(collectLeafRefIDsFromRoot(t, d, record.SystemRootPageID)) < 2 {
+						t.Fatalf("seed slot %d is not a durable application system tree: %+v", slot, record)
+					}
 				}
-			}
+			}()
 			// Seed both recovery slots through the production vacuum path. Its
 			// appends stay in the already registered current leaf segment.
-			if err := d.VacuumIndexOnline(context.Background()); err != nil {
-				t.Fatal(err)
+			vacuumOnline := func() bool {
+				t.Helper()
+				before, index := d.state.Load(), d.idx.Load()
+				err := d.VacuumIndexOnline(context.Background())
+				if runtime.GOOS == "windows" {
+					if !errors.Is(err, ErrVacuumUnsupported) || d.state.Load() != before || d.idx.Load() != index {
+						t.Fatalf("unsupported online vacuum changed state or returned %v", err)
+					}
+					return false
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if d.idx.Load() == index {
+					t.Fatal("vacuum did not replace pager generation")
+				}
+				return true
 			}
+			seedReplaced := vacuumOnline()
 			seedSnap := d.AcquireSnapshot()
 			seedDescriptor, err := seedSnap.GetAtRoot(seedSnap.state.SystemRootPageID, []byte(vacuumTestCollectionRootKey))
+			seedDescriptor = append([]byte(nil), seedDescriptor...)
 			_ = seedSnap.Close()
 			if err != nil || len(seedDescriptor) != 8 {
 				t.Fatalf("vacuum seed descriptor=%x err=%v", seedDescriptor, err)
 			}
-			if got := binary.BigEndian.Uint64(seedDescriptor); got == seedCollectionRoot {
+			if got := binary.BigEndian.Uint64(seedDescriptor); seedReplaced && got == seedCollectionRoot {
 				t.Fatalf("seed vacuum did not relocate collection root %d", got)
 			}
 			for ptr := range collectLeafRefIDsFromRoot(t, d, d.State().SystemRootPageID) {
@@ -160,6 +178,7 @@ func TestVacuumSystemLeafPolicyWarmWriteAndRecovery(t *testing.T) {
 			// before reopening rotates the leaf writer to a fresh file.
 			snap := d.AcquireSnapshot()
 			descriptor, err := snap.GetAtRoot(snap.state.SystemRootPageID, []byte(vacuumTestCollectionRootKey))
+			descriptor = append([]byte(nil), descriptor...)
 			_ = snap.Close()
 			if err != nil || len(descriptor) != 8 {
 				t.Fatalf("seed descriptor=%x err=%v", descriptor, err)
@@ -171,16 +190,11 @@ func TestVacuumSystemLeafPolicyWarmWriteAndRecovery(t *testing.T) {
 			}
 			openDB()
 			seedFiles := vacuumSystemManifestFiles(t, d, false)
+			subjectReplaced := false
 			if mode == "online" {
 				// The base interface does not require optional segment reporting.
 				d.SetLeafPageLog(&countingLeafPageLog{inner: log})
-				before := d.Pager()
-				if err := d.VacuumIndexOnline(context.Background()); err != nil {
-					t.Fatal(err)
-				}
-				if d.Pager() == before {
-					t.Fatal("vacuum did not replace pager")
-				}
+				subjectReplaced = vacuumOnline()
 				d.SetLeafPageLog(log)
 			} else {
 				closeDB()
@@ -200,12 +214,13 @@ func TestVacuumSystemLeafPolicyWarmWriteAndRecovery(t *testing.T) {
 					t.Fatalf("failpoint=%s error=%v", fp, err)
 				}
 				openDB()
+				subjectReplaced = mode == "offline" || mode == string(vacuumFailAfterRenameOld) || mode == string(vacuumFailAfterRenameNew)
 			}
 			if n := len(collectLeafRefIDsFromRoot(t, d, d.State().SystemRootPageID)); n < 2 {
 				t.Fatalf("recovered system leaf refs=%d want multiple", n)
 			}
 			vacuumSystemManifestFiles(t, d, mode == "online")
-			if mode == "online" || mode == "offline" || mode == string(vacuumFailAfterRenameOld) || mode == string(vacuumFailAfterRenameNew) {
+			if subjectReplaced {
 				newFile := false
 				for ptr := range collectLeafRefIDsFromRoot(t, d, d.State().SystemRootPageID) {
 					if _, old := seedFiles[page.ValueLogSegmentID(ptr.FileID)]; !old {
@@ -244,11 +259,20 @@ func TestVacuumSystemLeafPolicyWarmWriteAndRecovery(t *testing.T) {
 				return string(descriptor)
 			}
 			descriptorText := verify(false)
-			if mode == "online" || mode == "offline" || mode == string(vacuumFailAfterRenameOld) || mode == string(vacuumFailAfterRenameNew) {
+			if subjectReplaced {
 				if got := binary.BigEndian.Uint64([]byte(descriptorText)); got == subjectCollectionRoot {
 					t.Fatalf("subject vacuum did not relocate collection root %d", got)
 				}
 			}
+			held := d.AcquireSnapshot()
+			if held == nil {
+				t.Fatal("missing held pre-update snapshot")
+			}
+			defer func() {
+				if held != nil {
+					_ = held.Close()
+				}
+			}()
 			kvs := append(systemRangeKVs(2048, map[int]string{1024: "updated"}), vacuumTestCollectionRootKey, descriptorText)
 			before := d.systemRootPublishStatsSnapshot()
 			if _, err := d.PublishSystemRootIterator(mustFrozenSystemMemtable(t, kvs...).NewIterator(nil, nil)); err != nil {
@@ -259,6 +283,14 @@ func TestVacuumSystemLeafPolicyWarmWriteAndRecovery(t *testing.T) {
 				t.Fatalf("warm publication before=%+v after=%+v", before, after)
 			}
 			verify(true)
+			old, err := held.GetAtRoot(held.state.SystemRootPageID, []byte("sys/1024"))
+			if err != nil || string(old) != "value-1024" {
+				t.Fatalf("held pre-update value=%q err=%v", old, err)
+			}
+			if err := held.Close(); err != nil {
+				t.Fatal(err)
+			}
+			held = nil
 			closeDB()
 			if t.Failed() {
 				return
@@ -272,22 +304,29 @@ func TestVacuumSystemLeafPolicyWarmWriteAndRecovery(t *testing.T) {
 // Check the actual immutable manifest tokens, not the compatibility view.
 func vacuumSystemManifestFiles(t *testing.T, d *DB, allSlots bool) map[uint32]struct{} {
 	t.Helper()
+	d.durablePublishMu.Lock()
+	defer d.durablePublishMu.Unlock()
 	files := make(map[uint32]struct{})
 	for slot, record := range d.durableRoot.slotRecord {
 		if record.CommitSeq == 0 || (!allSlots && uint64(slot) != d.durableRoot.slot) {
 			continue
 		}
 		var manifest *leafGenerationManifest
-		err := d.durableRoot.slotResources[slot].WithScopedTokens(func(tokens []*rootpublication.StableResourceToken) error {
+		var tokenContext []string
+		resources := d.durableRoot.slotResources[slot]
+		err := resources.WithScopedTokens(func(tokens []*rootpublication.StableResourceToken) error {
+			for _, token := range tokens {
+				tokenContext = append(tokenContext, fmt.Sprintf("%s/%s/generation=%d", token.Kind(), token.ResourceID(), token.Generation()))
+			}
 			var err error
 			manifest, _, err = loadSelectedDurableLeafGenerationManifestTokens(tokens)
 			return err
 		})
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("slot %d scoped manifest read: owner=%v tokens=%v: %v", slot, resources.Owner(), tokenContext, err)
 		}
 		if manifest == nil {
-			t.Fatalf("slot %d has no exact manifest: selected=%d record=%+v resources=%+v manifest_mode=%v vacuum=%+v", slot, d.durableRoot.slot, record, mustStableResourceDescriptors(t, d.durableRoot.slotResources[slot]), d.leafGenerationManifestStore.mode, d.VacuumOnlineStats())
+			t.Fatalf("slot %d has no exact manifest: selected=%d record=%+v owner=%v tokens=%v manifest_mode=%v", slot, d.durableRoot.slot, record, resources.Owner(), tokenContext, d.leafGenerationManifestStore.mode)
 		}
 		for ptr := range collectLeafRefIDsFromRoot(t, d, record.SystemRootPageID) {
 			id := page.ValueLogSegmentID(ptr.FileID)

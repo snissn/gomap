@@ -764,6 +764,14 @@ func TestStandaloneJournalWriteConcernForcedPointerCrashReopen(t *testing.T) {
 			t.Fatalf("journal response: %s", response)
 		}
 		assertOK(t, response)
+		// Mongo can return ok:1 together with a failed durability boundary. Do
+		// not turn that uncertain outcome into an acknowledged crash witness.
+		if !bson.Raw(response).Lookup("writeConcernError").IsZero() {
+			t.Fatalf("journal durability response: %s", response)
+		}
+		if stats := server.StandaloneWriteConcernStats(); stats.JournalAcknowledgements != 1 || stats.SyncFailures != 0 {
+			t.Fatalf("journal durability stats: %+v", stats)
+		}
 		os.Exit(0)
 	}
 

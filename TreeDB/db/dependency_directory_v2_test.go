@@ -118,7 +118,7 @@ func TestDependencyDirectoryV2COWRemovalKeepsOldRoot(t *testing.T) {
 	defer database.Close()
 	idx := database.idx.Load()
 	registry := database.StableResourceIdentityPinRegistry()
-	if idx == nil || idx.primary != nil || idx.metadata == nil || idx.metadata != registry.MetadataOwner() {
+	if idx == nil || idx.metadata == nil || idx.metadata != registry.MetadataOwner() {
 		t.Fatal("not original DATA metadata owner")
 	}
 	file, err := os.CreateTemp(t.TempDir(), "selector-*")
@@ -223,7 +223,7 @@ func TestDependencyDirectoryV2InitialEmptyAndNoop(t *testing.T) {
 	}
 	defer database.Close()
 	idx := database.idx.Load()
-	if idx == nil || idx.primary != nil || idx.metadata == nil || idx.metadata != database.StableResourceIdentityPinRegistry().MetadataOwner() {
+	if idx == nil || idx.metadata == nil || idx.metadata != database.StableResourceIdentityPinRegistry().MetadataOwner() {
 		t.Fatal("not original DATA metadata owner")
 	}
 	builder, err := rootpublication.NewStableResourceSetBuilderWithMetadata(idx.metadata)

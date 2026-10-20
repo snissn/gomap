@@ -96,10 +96,6 @@ type ApplyResult struct {
 	// that did not collect apply-fed reference evidence.
 	OldPointerRefsCollected bool
 
-	// unchangedPrimaryBase is apply-local evidence from the actual sealed
-	// constructor. It owns no edge and expires with that constructor.
-	unchangedPrimaryBase unchangedPrimaryBaseEvidence
-
 	// ReadOnlyPrepare is populated only when ApplyOptions.PrepareReadOnly is
 	// true or opt-in parallel apply needs the M1 span plan for gating. It is
 	// planning metadata only; it owns no pager or leaf-log output.
@@ -319,18 +315,13 @@ type ReadOnlyPrepareResult struct {
 	LeafSpans []ReadOnlyLeafSpan
 	Metrics   adaptive.Metrics
 
-	keyArena                []byte
-	discardLeafSpans        bool
-	leafSpanCallback        func(ReadOnlyLeafSpan)
-	countTouchedOldEntries  bool
-	maxTouchedDepth         uint32
-	maxTouchedPages         uint64
-	maxTouchedOldEntries    uint64
-	primaryRouting          bool
-	primaryRouteLow         []byte
-	primaryRouteHigh        []byte
-	primaryAbsencePositions [node.PrimaryDirectoryMaxEntries]int
-	primaryAbsenceCount     int
+	keyArena               []byte
+	discardLeafSpans       bool
+	leafSpanCallback       func(ReadOnlyLeafSpan)
+	countTouchedOldEntries bool
+	maxTouchedDepth        uint32
+	maxTouchedPages        uint64
+	maxTouchedOldEntries   uint64
 }
 
 // PurePointOutputPageUpperBound returns a conservative count of pages a
@@ -590,21 +581,14 @@ func (r ReadOnlyPrepareResult) ValidateLeafSpans() error {
 	if r.PointOps+r.DeleteRanges > 0 && r.Ops != r.PointOps+r.DeleteRanges {
 		return fmt.Errorf("zipper: read-only prepare has ops=%d but point/range counts=%d/%d", r.Ops, r.PointOps, r.DeleteRanges)
 	}
-	if r.primaryAbsenceCount < 0 || r.primaryAbsenceCount > len(r.primaryAbsencePositions) {
-		return fmt.Errorf("zipper: invalid PRIMARY absence count %d", r.primaryAbsenceCount)
-	}
-	if r.primaryAbsenceCount > 0 {
-		if err := r.validatePrimaryAbsenceCoverage(); err != nil {
-			return err
-		}
-	}
+
 	if r.Ops == 0 {
 		if len(r.LeafSpans) != 0 {
 			return fmt.Errorf("zipper: read-only prepare has %d spans for zero ops", len(r.LeafSpans))
 		}
 		return nil
 	}
-	if len(r.LeafSpans) == 0 && r.primaryAbsenceCount == 0 {
+	if len(r.LeafSpans) == 0 {
 		return fmt.Errorf("zipper: read-only prepare has %d ops but no leaf spans", r.Ops)
 	}
 	if r.ColdBuild && len(r.LeafSpans) != 1 {
@@ -686,7 +670,7 @@ func (r ReadOnlyPrepareResult) ValidateLeafSpans() error {
 				if prevPointEnd >= 0 {
 					expectedStart = prevPointEnd
 				}
-				if r.primaryAbsenceCount == 0 && span.PointOpStart != expectedStart {
+				if span.PointOpStart != expectedStart {
 					return readOnlyPrepareSpanError(i, "point index range [%d,%d) starts at %d, want %d under omitted op-key planning", span.PointOpStart, span.PointOpEnd, span.PointOpStart, expectedStart)
 				}
 				prevPointEnd = span.PointOpEnd
@@ -723,11 +707,11 @@ func (r ReadOnlyPrepareResult) ValidateLeafSpans() error {
 			prevHigh = span.HighKey
 		}
 	}
-	if r.primaryAbsenceCount == 0 && omitOpKeys && totalPointOps > 0 && prevPointEnd != r.PointOps {
+	if omitOpKeys && totalPointOps > 0 && prevPointEnd != r.PointOps {
 		return fmt.Errorf("zipper: read-only omitted op-key leaf spans end at point op %d, want %d", prevPointEnd, r.PointOps)
 	}
 	if r.PointOps > 0 {
-		if totalPointOps+r.primaryAbsenceCount != r.PointOps {
+		if totalPointOps != r.PointOps {
 			return fmt.Errorf("zipper: read-only leaf spans cover %d point ops, want %d", totalPointOps, r.PointOps)
 		}
 	} else if r.DeleteRanges == 0 && totalSpanOps != r.Ops {
@@ -735,43 +719,6 @@ func (r ReadOnlyPrepareResult) ValidateLeafSpans() error {
 	}
 	if r.DeleteRanges > 0 && totalSpanOps < r.DeleteRanges {
 		return fmt.Errorf("zipper: read-only leaf spans cover %d span ops, fewer than %d delete ranges", totalSpanOps, r.DeleteRanges)
-	}
-	return nil
-}
-
-// Merge decoded logical absence positions with real physical intervals. This
-// exception is confined to non-exact PRIMARY point planning; generic plans keep
-// their original validation contract, including hand-built keyed spans.
-func (r ReadOnlyPrepareResult) validatePrimaryAbsenceCoverage() error {
-	if r.RootID == 0 || r.ColdBuild || r.ExactLeafSpans || r.DeleteRanges != 0 {
-		return fmt.Errorf("zipper: PRIMARY absence evidence requires a non-cold, non-exact point root")
-	}
-	positions := r.primaryAbsencePositions[:r.primaryAbsenceCount]
-	for i, position := range positions {
-		if position < 0 || position >= r.PointOps || i > 0 && position <= positions[i-1] {
-			return fmt.Errorf("zipper: invalid PRIMARY absence position %d at %d", position, i)
-		}
-	}
-	cursor, absence := 0, 0
-	consume := func() {
-		for absence < len(positions) && positions[absence] == cursor {
-			absence++
-			cursor++
-		}
-	}
-	for i, span := range r.LeafSpans {
-		consume()
-		if span.PointOpCount <= 0 || span.DeleteRangeCount != 0 || span.PointOpStart != cursor || span.PointOpEnd <= cursor || span.PointOpEnd > r.PointOps || span.PointOpEnd-cursor != span.PointOpCount {
-			return readOnlyPrepareSpanError(i, "does not extend PRIMARY point coverage at %d", cursor)
-		}
-		if absence < len(positions) && positions[absence] < span.PointOpEnd {
-			return readOnlyPrepareSpanError(i, "overlaps PRIMARY absence point %d", positions[absence])
-		}
-		cursor = span.PointOpEnd
-	}
-	consume()
-	if cursor != r.PointOps || absence != len(positions) {
-		return fmt.Errorf("zipper: incomplete PRIMARY point coverage through %d, want %d", cursor, r.PointOps)
 	}
 	return nil
 }
@@ -873,17 +820,6 @@ func (r *ReadOnlyPrepareResult) ensureInitialCapacity(ops []batch.Entry, ranges 
 func (r *ReadOnlyPrepareResult) addLeafSpan(ref page.ChildRef, low, high []byte, ops []batch.Entry, opBase int, ranges []batch.DeleteRange, rangeBase int) {
 	if len(ops) == 0 && len(ranges) == 0 {
 		return
-	}
-	// A directory route is a logical exact-key census, not physical span
-	// ownership. Clip at emission so retained and streamed views agree while
-	// preserving every recursive read and touched-entry count.
-	if r.primaryRouting {
-		if low == nil || bytes.Compare(low, r.primaryRouteLow) < 0 {
-			low = r.primaryRouteLow
-		}
-		if r.primaryRouteHigh != nil && (high == nil || bytes.Compare(high, r.primaryRouteHigh) > 0) {
-			high = r.primaryRouteHigh
-		}
 	}
 	span := ReadOnlyLeafSpan{
 		Ref:              ref,
@@ -1044,20 +980,7 @@ func (z *Zipper) ApplyWithOptions(rootID uint64, b *batch.Batch, opts ApplyOptio
 	var prepared ReadOnlyPrepareResult
 	var preparedNs uint64
 	result := ApplyResult{}
-	if rootID != 0 {
-		image, err := z.pager.Get(rootID)
-		if err != nil {
-			return result, err
-		}
-		if z.primaryDirectory || node.NewNode(image).Type() == page.PageTypePrimaryDirectory {
-			// Ordinary span rewrites operate on a materialized tree. They may not
-			// reinterpret a directory as an internal-node layout.
-			opts.SpanNativeApply = false
-			if opts.ParallelApplyConcurrency > 1 {
-				opts.ParallelApplyConcurrency = 1
-			}
-		}
-	}
+
 	prepareRequested := opts.PrepareReadOnly || opts.ParallelApplyConcurrency > 1 || opts.SpanNativeApply
 	if prepareRequested {
 		result.ReadOnlyPrepareRequested = true
@@ -1124,14 +1047,12 @@ func (z *Zipper) ApplyWithOptions(rootID uint64, b *batch.Batch, opts ApplyOptio
 	// These operands have the same synchronous apply lifetime. Keep the
 	// producer receipt in the existing collection control, not a separate owner.
 	var collection struct {
-		pointers      PointerRefCounts
-		removed       uint64
-		unchangedBase unchangedPrimaryBaseEvidence
+		pointers PointerRefCounts
+		removed  uint64
 	}
 	if opts.CollectOldPointerRefs {
 		applyCfg.oldPointerRefs = &collection.pointers
 		applyCfg.oldEntriesRemoved = &collection.removed
-		applyCfg.unchangedPrimaryBase = &collection.unchangedBase
 	}
 	if opts.ParallelApplyConcurrency > 1 && prepared.DeleteRanges == 0 {
 		workers := resolveParallelApplyWorkers(opts, prepared.LeafSpanSummary())
@@ -1150,7 +1071,6 @@ func (z *Zipper) ApplyWithOptions(rootID uint64, b *batch.Batch, opts ApplyOptio
 		result.OldPointerRefs = collection.pointers
 		result.OldEntriesRemoved = collection.removed
 		result.OldPointerRefsCollected = true
-		result.unchangedPrimaryBase = collection.unchangedBase
 	}
 	result.ReadOnlyPrepare = prepared
 	result.ReadOnlyPrepareNs = preparedNs
@@ -1266,70 +1186,6 @@ func (z *Zipper) prepareReadOnlyRecursive(ref page.ChildRef, ops []batch.Entry, 
 	}
 
 	switch oldNode.Type() {
-	case page.PageTypePrimaryDirectory:
-		if depth != 1 {
-			return node.ErrPrimaryDirectory
-		}
-		directory, err := node.DecodePrimaryDirectory(oldNode.Data())
-		if err != nil {
-			return err
-		}
-		result.Metrics.PrimaryDirectoryPagesRead++
-		base, _ := directory.Base()
-		if _, err = z.loadPrimaryOperand(base, nil, &result.Metrics, scratch); err != nil {
-			return err
-		}
-		// Directory cells are routing operands, not ordinary whole-leaf spans.
-		// This census cannot authorize the materialized-tree span executor.
-		result.ExactLeafSpans = false
-		if result.countTouchedOldEntries {
-			if result.maxTouchedOldEntries != 0 && uint64(directory.Count()) > result.maxTouchedOldEntries-result.TouchedOldLeafEntries-result.TouchedOldInternalChildren {
-				return ErrReadOnlyPrepareProfileLimit
-			}
-			result.TouchedOldInternalChildren += uint64(directory.Count())
-		}
-		if len(ranges) > 0 {
-			return z.prepareReadOnlyRecursive(base.Ref, ops, opBase, ranges, rangeBase, low, high, result, scratch, depth+1, absencePoint)
-		}
-		for i, op := range ops {
-			selected := base.Ref
-			entry, found := directory.Search(op.Key)
-			if found {
-				// The decoded absence cell participates in the directory census,
-				// but has no old physical leaf or span to visit.
-				if entry.InlineAbsence() {
-					if result.primaryAbsenceCount >= len(result.primaryAbsencePositions) {
-						return node.ErrPrimaryDirectory
-					}
-					position := opBase + i
-					result.primaryAbsencePositions[result.primaryAbsenceCount] = position
-					result.primaryAbsenceCount++
-					if absencePoint != nil {
-						absencePoint(position)
-					}
-					continue
-				}
-				if _, err = z.loadPrimaryOperand(entry.Operand, &entry, &result.Metrics, scratch); err != nil {
-					return err
-				}
-				selected = entry.Operand.Ref
-			}
-			var next []byte
-			if i+1 < len(ops) {
-				next = ops[i+1].Key
-			} else {
-				next = high
-			}
-			result.primaryRouting = true
-			result.primaryRouteLow, result.primaryRouteHigh = op.Key, next
-			err = z.prepareReadOnlyRecursive(selected, ops[i:i+1], opBase+i, nil, rangeBase, op.Key, next, result, scratch, depth+1, absencePoint)
-			result.primaryRouting = false
-			result.primaryRouteLow, result.primaryRouteHigh = nil, nil
-			if err != nil {
-				return err
-			}
-		}
-		return nil
 	case page.PageTypeLeaf, 0:
 		if result.countTouchedOldEntries {
 			if result.TouchedOldLeafPages == math.MaxUint64 {

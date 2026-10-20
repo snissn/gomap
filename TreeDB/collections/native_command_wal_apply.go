@@ -28,7 +28,7 @@ func (m *CollectionManager) ApplyNativeCommandWALCreate(meta CollectionMeta, syn
 	if !m.UsesNativeCommandWALApply() || m.isClosing() {
 		return result, backenddb.ErrClosed
 	}
-	if meta.Options.ColumnStore != nil {
+	if meta.Options.ColumnStore != nil || meta.nativeDocumentCoverageVersion != 0 {
 		return result, backenddb.ErrNativeSemanticUnsupported
 	}
 	apply := nativeCommandWALApplyCommit{sync: sync, observe: observe}

@@ -5,6 +5,14 @@ See `docs/API_STABILITY.md` for what is intended to be stable for downstream use
 
 ## Unreleased
 
+- TreeDB retires the PRIMARY index representation. Explicit
+  `IndexPrimaryDirectory` requests, persisted PRIMARY companion namespaces, and
+  committed joint DATA/PRIMARY swap decisions now return
+  `ErrLegacyFormatRebuildRequired` before recovery writes or namespace cleanup.
+  Ordinary new directories use DATA durable roots, including NoWAL and COW
+  cache modes. Rebuild incompatible pre-alpha directories; no migration or
+  cross-version compatibility guarantee is provided.
+
 - TreeDB partition routing v3 now treats domains as virtual containers and
   emits genuine top-level bucket centroids under one global all-level spherical
   kRt budget, with fanout 64 and minimum cluster size 250 defaults. Search still

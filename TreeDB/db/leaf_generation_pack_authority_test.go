@@ -955,7 +955,7 @@ func TestLeafGenerationPackRecoveryCallbackAdmissionAndCompletion(t *testing.T) 
 			}
 			before, originalCharge := owner.Bytes(), authority.metadataCharge
 			if refuse {
-				budget := &primaryScratchBudget{capacity: ^uint64(0)}
+				budget := &retainedScratchBudget{capacity: ^uint64(0)}
 				enrollment, enrollErr := owner.Enroll(budget)
 				if enrollErr != nil {
 					t.Fatal(enrollErr)

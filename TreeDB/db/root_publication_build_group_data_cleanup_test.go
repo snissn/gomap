@@ -13,9 +13,7 @@ import (
 // pin when physical cleanup refuses. A PRIMARY arena is never constructed.
 func TestRootPublicationDATAGroupFailedResourceReleaseRetainsOriginal(t *testing.T) {
 	database, path := openDurableRootClosureDB3928(t)
-	if database.idx.Load().primary != nil {
-		t.Fatal("fixture requires the actual DATA route")
-	}
+
 	if err := database.SetSync([]byte("borrowed"), []byte("base")); err != nil {
 		t.Fatal(err)
 	}

@@ -30,7 +30,7 @@ func RegisterCommandWALReplayHandlers() {
 		backenddb.RegisterCommandWALReplayHandlerWithOptions(commitlog.CommandKindCollectionUpdateBatchByID, replayCollectionUpdateBatchByIDCommandWAL, backenddb.CommandWALReplayHandlerOptions{NeedsReplayLogSupport: true, NativePrepare: prepareNativeJSONTxnPlanMarker})
 		backenddb.RegisterCommandWALReplayHandlerWithOptions(commitlog.CommandKindCollectionReplaceSourceByID, replayCollectionReplaceSourceByIDCommandWAL, backenddb.CommandWALReplayHandlerOptions{NeedsReplayLogSupport: true, NativePrepare: prepareNativeJSONTxnPlanMarker})
 		backenddb.RegisterCommandWALReplayHandlerWithOptions(commitlog.CommandKindCollectionRebuildVectorIndex, replayCollectionRebuildVectorIndexCommandWAL, backenddb.CommandWALReplayHandlerOptions{NeedsReplayLogSupport: true, NativePrepare: prepareNativeJSONTxnPlanMarker})
-		backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCollectionPersistPartitionLive, replayCollectionPersistPartitionLiveCommandWAL)
+		backenddb.RegisterCommandWALReplayHandlerWithOptions(commitlog.CommandKindCollectionPersistPartitionLive, replayCollectionPersistPartitionLiveCommandWAL, backenddb.CommandWALReplayHandlerOptions{NeedsReplayLogSupport: true, NativePrepare: prepareNativeJSONTxnPlanMarker})
 		backenddb.RegisterCommandWALReplayHandlerWithOptions(commitlog.CommandKindCatalogIndexMutation, replayNativeIndexMutation, backenddb.CommandWALReplayHandlerOptions{NeedsReplayLogSupport: true, NativePrepare: prepareNativeJSONTxnPlanMarker})
 		backenddb.RegisterCommandWALReplayHandlerWithOptions(commitlog.CommandKindCatalogCreateCollection, replayCatalogCreateCollectionCommandWAL, backenddb.CommandWALReplayHandlerOptions{NeedsReplayLogSupport: true, NativePrepare: prepareNativeJSONCreateCommand})
 		backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCollectionSplitVectorInsertV1, replaySplitVectorInsertCommandWALV1)
@@ -424,6 +424,9 @@ func replayCollectionInsertBatchByIDCommandWAL(db *backenddb.DB, env commitlog.C
 	if err != nil {
 		return err
 	}
+	if collection.meta.nativeDocumentCoverageVersion == nativeDocumentVectorCoverageVersion {
+		return replayNativeJSONDocumentFrame(db, env, false)
+	}
 	ids := make([][]byte, len(payload.Documents))
 	docs := make([][]byte, len(payload.Documents))
 	for i := range payload.Documents {
@@ -455,6 +458,9 @@ func replayCollectionDeleteBatchByIDCommandWAL(db *backenddb.DB, env commitlog.C
 	collection, err := manager.openCollectionWithCommandWALIntent(payload.Collection, intent)
 	if err != nil {
 		return err
+	}
+	if collection.meta.nativeDocumentCoverageVersion == nativeDocumentVectorCoverageVersion {
+		return replayNativeJSONDocumentFrame(db, env, false)
 	}
 	_, err = collection.deleteBatchWithCommandWALIntent(payload.IDs, intent)
 	if err != nil {
@@ -510,6 +516,9 @@ func replayCollectionReplaceSourceByIDCommandWAL(db *backenddb.DB, env commitlog
 	collection, err := manager.openCollectionWithCommandWALIntent(payload.Collection, intent)
 	if err != nil {
 		return err
+	}
+	if collection.meta.nativeDocumentCoverageVersion == nativeDocumentVectorCoverageVersion {
+		return replayNativeJSONDocumentFrame(db, env, false)
 	}
 	ids := make([][]byte, len(payload.Documents))
 	documents := make([][]byte, len(payload.Documents))
@@ -600,6 +609,9 @@ func replayCollectionUpdateBatchByIDCommandWAL(db *backenddb.DB, env commitlog.C
 	if err != nil {
 		return err
 	}
+	if collection.meta.nativeDocumentCoverageVersion == nativeDocumentVectorCoverageVersion {
+		return replayNativeJSONDocumentFrame(db, env, false)
+	}
 	items := make([]updateBatchItem, len(payload.Documents))
 	for i := range payload.Documents {
 		doc := payload.Documents[i]
@@ -641,6 +653,9 @@ func replayCollectionRebuildVectorIndexCommandWAL(db *backenddb.DB, env commitlo
 	collection, err := manager.openCollectionWithCommandWALIntent(payload.Collection, intent)
 	if err != nil {
 		return err
+	}
+	if collection.meta.nativeDocumentCoverageVersion == nativeDocumentVectorCoverageVersion {
+		return replayNativeDocumentVectorGraph(db, intent, collection.meta, payload.IndexName)
 	}
 	if nativeSourceImportMetaV2(collection.meta) && collection.meta.Options.ColumnStore.ActiveManifest != nil {
 		return replayNativeVectorGraph(db, env, intent, collection.meta, payload.IndexName)
@@ -691,7 +706,7 @@ func replayCatalogCreateCollectionCommandWAL(db *backenddb.DB, env commitlog.Com
 	if err != nil {
 		return err
 	}
-	_, err = manager.createCollectionWithCommandWALIntent(meta, intent)
+	_, err = manager.createCollectionWithReplayCommandWALIntent(meta, intent)
 	return err
 }
 

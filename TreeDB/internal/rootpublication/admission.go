@@ -81,6 +81,47 @@ func (c *Coordinator) AcquireBuilder(ctx context.Context) (*BuilderToken, error)
 	}
 }
 
+// CanPrepareSingleDurableGeneration checks the exact idle durable base while
+// the caller retains its final builder token and the engine's physical handoff
+// serialization. It does not grant a replacement owner or reserve another gate.
+// The live builder prevents dispatch; physical serialization must remain held
+// through EnqueueBuilt. This excludes configured logical-prefix owners, even
+// when their accepted queue is empty. Prefix configuration must be complete
+// before producer exposure. Callers must not hold their activation/runtime latch.
+func (c *Coordinator) CanPrepareSingleDurableGeneration(token *BuilderToken, expected Frontier) bool {
+	if c == nil || token == nil || token.handle == nil {
+		return false
+	}
+	handle := token.handle
+	handle.mu.Lock()
+	defer handle.mu.Unlock()
+	if handle.released || handle.lease == nil {
+		return false
+	}
+	lease := handle.lease
+	lease.mu.Lock()
+	defer lease.mu.Unlock()
+	if lease.released || lease.coordinator != c || lease.refs != 1 {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.terminalErrorLocked() != nil || c.ctx.Err() != nil || c.activeBuilders != 1 ||
+		len(c.pending) != 0 || c.pendingBytes != 0 || c.publishing || c.preparing ||
+		c.activeDispatch != 0 || c.activeAttempt.id != 0 || c.activeAttempt.candidate != nil ||
+		c.activeAttempt.groupSize != 0 || c.retryAttempt.id != 0 ||
+		c.retryAttempt.candidate != nil || c.retryAttempt.groupSize != 0 ||
+		c.reportingAttempt || c.visible != expected || c.durable != expected {
+		return false
+	}
+	// Accepted logical work has a different authority and retains its existing
+	// finite-prefix publication path, even when the physical frontier is idle.
+	p := &c.AcceptedPrefixOwner().accepted
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.entries) == 0 && p.poison == nil && !p.closed && !p.closing
+}
+
 // EnqueueBuilt atomically moves a prepared candidate into pending publication
 // and consumes the final builder lease. The handle -> lease -> coordinator lock
 // order matches Nested and Release. Validation or activation failure preserves

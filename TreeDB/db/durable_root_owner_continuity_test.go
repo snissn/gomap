@@ -42,9 +42,6 @@ func TestCaptureDurableRootUsesSelectedPredecessorOwner(t *testing.T) {
 		t.Fatal("control must capture a real persistent value-log dependency")
 	}
 
-	if database.idx.Load().primary != nil {
-		t.Fatal("control requires the original DATA route")
-	}
 	original := durableRootClosureSet3928(t, path, durableRootClosureObligation3928(1))
 	owner := database.valueLogIdentityPins.MetadataOwner()
 	base, err := rootpublication.ImportStableResourceSetMetadata(owner, original)

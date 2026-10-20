@@ -535,7 +535,7 @@ func nativeIndexSchemaScratch(meta CollectionMeta, create *IndexDefinition, admi
 	if err != nil {
 		return err
 	}
-	encoded, err := nativeIndexJSONBound(reflect.ValueOf(collectionMetaDisk{Version: collectionMetaVersion, Name: meta.Name, Options: meta.Options, Indexes: meta.Indexes, VectorIndexes: meta.VectorIndexes, TextIndexes: meta.TextIndexes}), 0)
+	encoded, err := nativeIndexJSONBound(reflect.ValueOf(collectionMetaDiskValue(meta)), 0)
 	if err != nil {
 		return err
 	}

@@ -1609,6 +1609,19 @@ func (idx *VectorIndex) vectorPartitionLiveBindingCurrentV1(manifest VectorParti
 }
 
 func (c *Collection) vectorPartitionLiveWarmBindingCurrentV1(manifest VectorPartitionManifestV1) bool {
+	if c != nil && c.nativeJSON != nil {
+		idx := c.registeredVectorIndex(manifest.IndexName)
+		if idx == nil || !idx.vectorPartitionLiveBindingCurrentV1(manifest) {
+			return false
+		}
+		r, err := c.nativeJSON.Capture(c.name)
+		if err != nil {
+			return false
+		}
+		defer r.Close()
+		return idx.nativePartitionCutMatches(r)
+	}
+
 	if c == nil || c.db == nil {
 		return false
 	}
@@ -1624,11 +1637,14 @@ func (c *Collection) vectorPartitionLiveCoordinatorBindingPinnedV1(manifest Vect
 	if c == nil {
 		return false
 	}
-	coord := c.collectionSchemaCoordinator()
+	coord := c.partitionLiveCoordinatorV1()
 	if coord == nil {
 		return false
 	}
 	idx := c.registeredVectorIndex(manifest.IndexName)
+	if c.nativeJSON != nil && !c.vectorPartitionLiveWarmIndexCurrentV1(manifest.IndexName) {
+		return false
+	}
 	key, ok := idx.vectorPartitionLiveSearchPinKeyV1(manifest)
 	return ok && coord.hasPartitionLiveSearchPin(key)
 }
@@ -1637,7 +1653,7 @@ func (c *Collection) validateVectorPartitionLiveCoordinatorPinnedAuthorityV1(ind
 	if c == nil {
 		return ErrVectorIndexPartitionLiveUnavailableV1
 	}
-	coord := c.collectionSchemaCoordinator()
+	coord := c.partitionLiveCoordinatorV1()
 	if coord == nil {
 		return ErrVectorIndexPartitionLiveMismatchV1
 	}
@@ -1684,6 +1700,9 @@ func (idx *VectorIndex) vectorPartitionLiveSearchPinKeyV1(manifest VectorPartiti
 }
 
 func (c *Collection) validateCurrentVectorPartitionLiveBindingV1(ctx context.Context, manifest VectorPartitionManifestV1) error {
+	if c != nil && c.nativeJSON != nil && !c.vectorPartitionLiveWarmIndexCurrentV1(manifest.IndexName) {
+		return ErrVectorIndexPartitionLiveMismatchV1
+	}
 	currentGeneration, currentState, err := c.vectorPartitionLiveCurrentDocumentStateV1(ctx)
 	if err != nil {
 		return err
@@ -1701,6 +1720,11 @@ func (c *Collection) vectorPartitionLiveCurrentDocumentStateV1(ctx context.Conte
 	if err := ctx.Err(); err != nil {
 		return 0, backenddb.StateToken{}, err
 	}
+	if c != nil && c.nativeJSON != nil {
+		_, gen, state, err := c.nativePartitionCurrentStateV1("")
+		return gen, state, err
+	}
+
 	if c == nil || c.db == nil {
 		return 0, backenddb.StateToken{}, ErrVectorIndexPartitionLiveUnavailableV1
 	}
@@ -1709,7 +1733,11 @@ func (c *Collection) vectorPartitionLiveCurrentDocumentStateV1(ctx context.Conte
 		return 0, backenddb.StateToken{}, backenddb.ErrClosed
 	}
 	defer func() { _ = snap.Close() }()
-	documentGeneration, err := vectorIndexDocumentGenerationForCollection(snap, c.name)
+	catalog, err := c.catalogForSnapshot(snap)
+	if err != nil {
+		return 0, backenddb.StateToken{}, err
+	}
+	documentGeneration, err := vectorIndexDocumentGeneration(snap, catalog)
 	if err != nil {
 		return 0, backenddb.StateToken{}, err
 	}
@@ -1724,6 +1752,13 @@ func (c *Collection) vectorPartitionLiveCurrentDocumentStateV1(ctx context.Conte
 // runtime. It never scans collection rows or invokes an automatic graph
 // rebuild; missing, stale, or corrupt coverage is reported to the caller.
 func (c *Collection) loadVectorPartitionLiveIndexForServingV1(def VectorIndexDefinition) (*VectorIndex, VectorIndexLoadStatus, error) {
+	if c.nativeJSON != nil {
+		if c.vectorPartitionLiveWarmIndexCurrentV1(def.Name) {
+			return c.registeredVectorIndex(def.Name), VectorIndexLoadStatus{Loaded: true}, nil
+		}
+		return c.loadNativePartitionLiveSnapshot(vectorIndexOptionsFromDefinition(def))
+	}
+
 	if idx := c.registeredVectorIndex(def.Name); idx != nil {
 		if idx.validateNativeSnapshotDefinition(def) != "" || !idx.hasValidSourceDocumentRoots() {
 			return nil, VectorIndexLoadStatus{ExactFallbackReason: vectorIndexFallbackStaleDocumentRoot}, ErrVectorIndexPartitionLiveMismatchV1
@@ -1794,6 +1829,10 @@ func (c *Collection) vectorPartitionLiveCurrentStateV1(ctx context.Context, inde
 	if err := ctx.Err(); err != nil {
 		return VectorPartitionSourceIdentityV1{}, 0, backenddb.StateToken{}, err
 	}
+	if c != nil && c.nativeJSON != nil {
+		return c.nativePartitionCurrentStateV1(index)
+	}
+
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
 		return VectorPartitionSourceIdentityV1{}, 0, backenddb.StateToken{}, backenddb.ErrClosed
@@ -1803,7 +1842,11 @@ func (c *Collection) vectorPartitionLiveCurrentStateV1(ctx context.Context, inde
 	if err != nil {
 		return VectorPartitionSourceIdentityV1{}, 0, backenddb.StateToken{}, err
 	}
-	documentGeneration, err := vectorIndexDocumentGenerationForCollection(snap, c.name)
+	catalog, err := c.catalogForSnapshot(snap)
+	if err != nil {
+		return VectorPartitionSourceIdentityV1{}, 0, backenddb.StateToken{}, err
+	}
+	documentGeneration, err := vectorIndexDocumentGeneration(snap, catalog)
 	if err != nil {
 		return VectorPartitionSourceIdentityV1{}, 0, backenddb.StateToken{}, err
 	}
@@ -1853,31 +1896,45 @@ func (c *Collection) ensureVectorPartitionLiveBindingV1(ctx context.Context, man
 			unlockMutation := c.lockMutation()
 			defer unlockMutation.Unlock()
 		}
-		if idx := c.registeredVectorIndex(manifest.IndexName); idx != nil && idx.vectorPartitionLiveBindingCurrentV1(manifest) {
+		if idx := c.registeredVectorIndex(manifest.IndexName); idx != nil && idx.vectorPartitionLiveBindingCurrentV1(manifest) && (c.nativeJSON == nil || c.vectorPartitionLiveWarmIndexCurrentV1(manifest.IndexName)) {
 			if err := c.validateCurrentVectorPartitionLiveBindingV1(ctx, manifest); err != nil {
 				return nil, false, err
 			}
 			return idx, replay != nil, nil
 		}
 
-		snap := c.db.AcquireSnapshot()
-		if snap == nil {
-			return nil, false, backenddb.ErrClosed
+		var def VectorIndexDefinition
+		var ok bool
+		if c.nativeJSON != nil {
+			r, e := c.nativeJSON.Capture(c.name)
+			if e != nil {
+				return nil, false, e
+			}
+			def, ok = findVectorIndex(r.meta.VectorIndexes, manifest.IndexName)
+			if e = r.Close(); e != nil {
+				return nil, false, e
+			}
+		} else {
+			snap := c.db.AcquireSnapshot()
+			if snap == nil {
+				return nil, false, backenddb.ErrClosed
+			}
+			catalog, err := c.catalogForSnapshot(snap)
+			if err != nil {
+				_ = snap.Close()
+				return nil, false, err
+			}
+			if catalog == nil {
+				_ = snap.Close()
+				return nil, false, errCollectionNotFound
+			}
+			def, ok = findVectorIndex(catalog.meta.VectorIndexes, manifest.IndexName)
+			closeErr := snap.Close()
+			if closeErr != nil {
+				return nil, false, closeErr
+			}
 		}
-		catalog, err := c.catalogForSnapshot(snap)
-		if err != nil {
-			_ = snap.Close()
-			return nil, false, err
-		}
-		if catalog == nil {
-			_ = snap.Close()
-			return nil, false, errCollectionNotFound
-		}
-		def, ok := findVectorIndex(catalog.meta.VectorIndexes, manifest.IndexName)
-		closeErr := snap.Close()
-		if closeErr != nil {
-			return nil, false, closeErr
-		}
+
 		if !ok || VectorIndexDefinitionDigestV1(def) != manifest.IndexDefinitionDigest {
 			return nil, false, ErrVectorIndexPartitionLiveMismatchV1
 		}
@@ -1943,7 +2000,7 @@ func (c *Collection) ensureVectorPartitionLiveBindingV1(ctx context.Context, man
 		if err != nil {
 			return nil, false, err
 		}
-		coord := c.collectionSchemaCoordinator()
+		coord := c.partitionLiveCoordinatorV1()
 		if coord == nil {
 			return nil, false, ErrVectorIndexPartitionLiveUnavailableV1
 		}
@@ -1990,6 +2047,18 @@ func (c *Collection) ensureVectorPartitionLiveBindingV1(ctx context.Context, man
 		}
 		unlockLoad = c.lockNativeVectorIndexLoad()
 		defer unlockLoad()
+		if c.nativeJSON != nil {
+			current, st, e := c.loadNativePartitionLiveSnapshot(VectorIndexOptions{Name: idx.name})
+			if e != nil {
+				return e
+			}
+			if current == nil || !st.Loaded || !current.vectorPartitionLiveBindingCurrentV1(manifest) {
+				return ErrVectorIndexPartitionLiveUnavailableV1
+			}
+			rollbackRegistration = false
+			return nil
+		}
+
 		rootID, err := c.currentNativeVectorIndexRootID(manifest.IndexName)
 		if err != nil {
 			return err
@@ -2057,6 +2126,9 @@ func (c *Collection) AcquireVectorPartitionLiveSearchPinV1(manifest VectorPartit
 	if c == nil {
 		return nil, ErrVectorIndexPartitionLiveUnavailableV1
 	}
+	if c.nativeJSON != nil && !c.vectorPartitionLiveWarmIndexCurrentV1(manifest.IndexName) {
+		return nil, ErrVectorIndexPartitionLiveMismatchV1
+	}
 	idx := c.registeredVectorIndex(manifest.IndexName)
 	if idx == nil {
 		return nil, ErrVectorIndexPartitionLiveUnavailableV1
@@ -2073,7 +2145,7 @@ func (c *Collection) AcquireVectorPartitionLiveCoordinatorSearchPinV1(manifest V
 	if c == nil {
 		return nil, ErrVectorIndexPartitionLiveUnavailableV1
 	}
-	coord := c.collectionSchemaCoordinator()
+	coord := c.partitionLiveCoordinatorV1()
 	if coord == nil {
 		return nil, ErrVectorIndexPartitionLiveUnavailableV1
 	}

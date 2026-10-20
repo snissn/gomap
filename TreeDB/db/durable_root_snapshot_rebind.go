@@ -40,6 +40,9 @@ func RebindDurableRootSnapshotLayoutV1(dir, sideRoot string) error {
 // chunks, dependency records and index page operations. It mutates only a private
 // sibling and preserves the original staged extent after closing its mappings.
 func RebindDurableRootSnapshotLayoutWithContextV1(ctx context.Context, dir, sideRoot string) error {
+	if err := ValidateDATAIndexOpen(dir, false); err != nil {
+		return err
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -51,11 +54,6 @@ func RebindDurableRootSnapshotLayoutWithContextV1(ctx context.Context, dir, side
 	}
 	if !rootpublication.StableRelativeNamespaceSupported() {
 		return fmt.Errorf("%w: durable-root snapshot rebind requires durable rename and removal namespaces", rootpublication.ErrNamespacePersistenceUnsupported)
-	}
-	if _, err := os.Stat(filepath.Join(dir, primaryIndexFileName)); err == nil {
-		return rebindDurablePrimarySnapshotLayoutV5(ctx, dir, sideRoot)
-	} else if !os.IsNotExist(err) {
-		return err
 	}
 	indexPath := filepath.Join(dir, indexFileName)
 	source, err := os.Open(indexPath)

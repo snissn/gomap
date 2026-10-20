@@ -52,7 +52,7 @@ func TestBackendFactoryRolesLegacyLifecycle(t *testing.T) {
 		for _, factory := range factories {
 			t.Run(fmt.Sprintf("%s/%s", profile, factory.name), func(t *testing.T) {
 				opts := backendRoleOptions(t, profile)
-				opts.IndexPrimaryDirectory = true // This lifecycle asserts PRIMARY publication.
+
 				backend, cleanup, stats, err := factory.open(opts)
 				if err != nil {
 					t.Fatal(err)
@@ -115,7 +115,7 @@ func TestBackendFactoryRolesLegacyLifecycle(t *testing.T) {
 					t.Fatal(err)
 				}
 				cfg, ok, err := backenddb.LoadFormatConfig(filepath.Join(opts.Dir, "maindb"))
-				if err != nil || !ok || !cfg.IndexOuterLeavesInValueLog {
+				if err != nil || !ok || cfg.IndexOuterLeavesInValueLog != opts.IndexOuterLeavesInValueLog {
 					t.Fatalf("outer-leaf physical policy=%+v,%v,%v", cfg, ok, err)
 				}
 				snapshot := backend.AcquireSnapshot()
@@ -132,8 +132,9 @@ func TestBackendFactoryRolesLegacyLifecycle(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					if got := page.PageType(page.DecodeHeader(root).Flags); got != page.PageTypePrimaryDirectory {
-						t.Fatalf("original durable COW PRIMARY policy changed: %v", got)
+					rootNode := node.NewNodeView(root)
+					if got := rootNode.Type(); got != page.PageTypeLeaf && got != page.PageTypeInternal {
+						t.Fatalf("actual DATA root has invalid type: %v", got)
 					}
 				}
 				snapshot.Close()

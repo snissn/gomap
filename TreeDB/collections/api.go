@@ -1288,20 +1288,23 @@ type QuantizedVectorIndexDefinition struct {
 }
 
 type CollectionMeta struct {
-	Name          string                  `json:"name"`
-	Options       CollectionOptions       `json:"options,omitempty"`
-	Indexes       []IndexDefinition       `json:"indexes,omitempty"`
-	VectorIndexes []VectorIndexDefinition `json:"vector_indexes,omitempty"`
-	TextIndexes   []TextIndexDefinition   `json:"text_indexes,omitempty"`
+	// Only the native producer selects this authority; opaque public copies retain it.
+	nativeDocumentCoverageVersion int
+	Name                          string                  `json:"name"`
+	Options                       CollectionOptions       `json:"options,omitempty"`
+	Indexes                       []IndexDefinition       `json:"indexes,omitempty"`
+	VectorIndexes                 []VectorIndexDefinition `json:"vector_indexes,omitempty"`
+	TextIndexes                   []TextIndexDefinition   `json:"text_indexes,omitempty"`
 }
 
 type collectionMetaDisk struct {
-	Version       int                     `json:"version"`
-	Name          string                  `json:"name"`
-	Options       CollectionOptions       `json:"options,omitempty"`
-	Indexes       []IndexDefinition       `json:"indexes,omitempty"`
-	VectorIndexes []VectorIndexDefinition `json:"vector_indexes,omitempty"`
-	TextIndexes   []TextIndexDefinition   `json:"text_indexes,omitempty"`
+	NativeDocumentCoverageVersion int                     `json:"native_document_coverage_version,omitempty"`
+	Version                       int                     `json:"version"`
+	Name                          string                  `json:"name"`
+	Options                       CollectionOptions       `json:"options,omitempty"`
+	Indexes                       []IndexDefinition       `json:"indexes,omitempty"`
+	VectorIndexes                 []VectorIndexDefinition `json:"vector_indexes,omitempty"`
+	TextIndexes                   []TextIndexDefinition   `json:"text_indexes,omitempty"`
 }
 
 type collectionCatalog struct {
@@ -3774,7 +3777,30 @@ func (m *CollectionManager) createCollectionWithCommandWALIntent(normalized Coll
 	return created, err
 }
 
+func (m *CollectionManager) createCollectionWithReplayCommandWALIntent(normalized CollectionMeta, commandWALIntent *backenddb.CommandWALIntent) (*CollectionMeta, error) {
+	if m == nil || m.db == nil {
+		return nil, errCollectionDBNil
+	}
+	if err := m.db.ValidateCommandWALReplayOperationV1(commandWALIntent); err != nil {
+		return nil, err
+	}
+	created, _, err := m.createCollectionWithPreparedCommandWALIntentAuthority(normalized, commandWALIntent, nil, nil, true)
+	return created, err
+}
+
 func (m *CollectionManager) createCollectionWithPreparedCommandWALIntent(normalized CollectionMeta, commandWALIntent *backenddb.CommandWALIntent, prepareCommandWALIntent func() (*backenddb.CommandWALIntent, error), extraPreflight backenddb.OrderedRootGroupPreflight) (*CollectionMeta, bool, error) {
+	return m.createCollectionWithPreparedCommandWALIntentAuthority(normalized, commandWALIntent, prepareCommandWALIntent, extraPreflight, false)
+}
+
+// validatedOriginalIntent is selected only after validating the active original
+// intent token, never inferred from an assigned LSN or a public prepare callback.
+func (m *CollectionManager) createCollectionWithPreparedCommandWALIntentAuthority(normalized CollectionMeta, commandWALIntent *backenddb.CommandWALIntent, prepareCommandWALIntent func() (*backenddb.CommandWALIntent, error), extraPreflight backenddb.OrderedRootGroupPreflight, validatedOriginalIntent bool) (*CollectionMeta, bool, error) {
+	if normalized.nativeDocumentCoverageVersion != 0 && !validatedOriginalIntent {
+		return nil, false, backenddb.ErrNativeSemanticUnsupported
+	}
+	if err := validateNativeDocumentCoverageMeta(normalized); err != nil {
+		return nil, false, err
+	}
 	coveredCommandWALIntent := commandWALIntent != nil && commandWALIntent.AssignedLSN() != 0
 	coveredCommandWALIntent = coveredCommandWALIntent || prepareCommandWALIntent != nil
 	if !coveredCommandWALIntent {
@@ -3884,6 +3910,9 @@ func (m *CollectionManager) createCollectionWithPreparedCommandWALIntent(normali
 		updates := createCollectionSystemUpdates(normalized.Name, encoded, plan.rootNames, rootIDs)
 		for key, value := range identityUpdates {
 			updates[key] = value
+		}
+		if err := addNativeDocumentGenerationCreateUpdate(normalized, nextIdentity, updates); err != nil {
+			return nil, err
 		}
 		return updates, nil
 	}
@@ -4419,6 +4448,9 @@ func (c *Collection) CreateIndex(def IndexDefinition) (*CollectionMeta, error) {
 		}
 		return c.nativeJSON.mutateIndexes(c.meta.Name, &def, nil, false)
 	}
+	if c.metadataForIngress().nativeDocumentCoverageVersion != 0 {
+		return nil, backenddb.ErrNativeSemanticUnsupported
+	}
 	if c.db == nil {
 		return nil, errCollectionDBNil
 	}
@@ -4588,6 +4620,9 @@ func (c *Collection) CreateVectorIndex(def VectorIndexDefinition) (*CollectionMe
 	if c == nil {
 		return nil, errCollectionNil
 	}
+	if c.metadataForIngress().nativeDocumentCoverageVersion != 0 {
+		return nil, backenddb.ErrNativeSemanticUnsupported
+	}
 	if c.db == nil {
 		return nil, errCollectionDBNil
 	}
@@ -4688,6 +4723,9 @@ func (c *Collection) DropVectorIndex(name string) (*CollectionMeta, error) {
 	if c == nil {
 		return nil, errCollectionNil
 	}
+	if c.metadataForIngress().nativeDocumentCoverageVersion != 0 {
+		return nil, backenddb.ErrNativeSemanticUnsupported
+	}
 	if c.db == nil {
 		return nil, errCollectionDBNil
 	}
@@ -4743,11 +4781,12 @@ func (c *Collection) DropVectorIndex(name string) (*CollectionMeta, error) {
 		return nil, ErrIndexNotFound
 	}
 	newMeta, err := normalizeCollectionMeta(CollectionMeta{
-		Name:          baseMeta.Name,
-		Options:       baseMeta.Options,
-		Indexes:       baseMeta.Indexes,
-		VectorIndexes: nextIndexes,
-		TextIndexes:   baseMeta.TextIndexes,
+		nativeDocumentCoverageVersion: baseMeta.nativeDocumentCoverageVersion,
+		Name:                          baseMeta.Name,
+		Options:                       baseMeta.Options,
+		Indexes:                       baseMeta.Indexes,
+		VectorIndexes:                 nextIndexes,
+		TextIndexes:                   baseMeta.TextIndexes,
 	})
 	if err != nil {
 		return nil, err
@@ -4813,6 +4852,9 @@ func (c *Collection) dropIndexes(names map[string]struct{}, all bool) (*Collecti
 		}
 		return c.nativeJSON.mutateIndexes(c.meta.Name, nil, names, all)
 	}
+	if c.metadataForIngress().nativeDocumentCoverageVersion != 0 {
+		return nil, backenddb.ErrNativeSemanticUnsupported
+	}
 	if c.db == nil {
 		return nil, errCollectionDBNil
 	}
@@ -4875,11 +4917,12 @@ func (c *Collection) dropIndexes(names map[string]struct{}, all bool) (*Collecti
 	}
 
 	newMeta, err := normalizeCollectionMeta(CollectionMeta{
-		Name:          baseMeta.Name,
-		Options:       baseMeta.Options,
-		Indexes:       nextIndexes,
-		VectorIndexes: baseMeta.VectorIndexes,
-		TextIndexes:   baseMeta.TextIndexes,
+		nativeDocumentCoverageVersion: baseMeta.nativeDocumentCoverageVersion,
+		Name:                          baseMeta.Name,
+		Options:                       baseMeta.Options,
+		Indexes:                       nextIndexes,
+		VectorIndexes:                 baseMeta.VectorIndexes,
+		TextIndexes:                   baseMeta.TextIndexes,
 	})
 	if err != nil {
 		return nil, err
@@ -14008,6 +14051,16 @@ func (c *Collection) DeleteDocumentIf(documentID []byte, predicate func(current 
 }
 
 func (c *Collection) deleteDocumentIf(documentID []byte, predicate func(current []byte) (bool, error)) (bool, error) {
+	if c != nil && c.nativeJSON != nil {
+		if len(documentID) == 0 {
+			return false, errors.New("collections: document id cannot be empty")
+		}
+		if predicate != nil {
+			return c.nativeDeleteDocumentIf(documentID, predicate)
+		}
+		count, err := c.nativeDeleteBatch([][]byte{documentID})
+		return count != 0, err
+	}
 	if c == nil {
 		return false, errCollectionNil
 	}
@@ -14849,6 +14902,22 @@ func (c *Collection) Replace(documentID, document []byte) (bool, error) {
 // idempotent or protected by an application-level guard or durable idempotency
 // key.
 func (c *Collection) Update(documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error)) (bool, bool, error) {
+	if c != nil && c.nativeJSON != nil {
+		if len(documentID) == 0 {
+			return false, false, errors.New("collections: document id cannot be empty")
+		}
+		if update == nil {
+			return false, false, errors.New("collections: update function is nil")
+		}
+		results, err := c.nativeUpdateBatch([]UpdateBatchItem{{DocumentID: documentID, Update: update}})
+		if err != nil {
+			return false, false, err
+		}
+		if len(results) != 1 {
+			return false, false, fmt.Errorf("collections: update result count %d for single native update", len(results))
+		}
+		return results[0].Matched, results[0].Modified, nil
+	}
 	if err := validateCollectionUpdateInput(c, documentID, update); err != nil {
 		return false, false, err
 	}
@@ -15239,6 +15308,9 @@ func (c *Collection) updateBatchOwnedItemsWithCommandWALIntent(items []updateBat
 }
 
 func (c *Collection) ensureWriteDomainOpen() error {
+	if c != nil && c.nativeJSON == nil && c.metadataForIngress().nativeDocumentCoverageVersion != 0 {
+		return backenddb.ErrNativeSemanticUnsupported
+	}
 	if c == nil || c.db == nil {
 		return nil
 	}
@@ -22286,6 +22358,11 @@ func (c *Collection) buildRootOverlayDescriptorSystemDeltaIteratorForMeta(meta C
 }
 
 func (c *Collection) addDocumentMutationGenerationUpdate(updates map[string][]byte, meta CollectionMeta, rootNames []string) error {
+	// Native document coverage must use its canonical final-row reducer.
+	// Never relabel the physical CommitSeq generation as v5 authority.
+	if meta.nativeDocumentCoverageVersion != 0 {
+		return backenddb.ErrNativeSemanticUnsupported
+	}
 	primaryRootName := collectionPrimaryRootName(meta.Name)
 	for _, rootName := range rootNames {
 		if rootName != primaryRootName {
@@ -25926,14 +26003,10 @@ func encodeCollectionMeta(meta CollectionMeta) ([]byte, error) {
 // encodeNormalizedCollectionMeta requires meta to already be normalized by
 // normalizeCollectionMeta so disk metadata preserves canonical defaults/order.
 func encodeNormalizedCollectionMeta(meta CollectionMeta) ([]byte, error) {
-	return json.Marshal(collectionMetaDisk{
-		Version:       collectionMetaVersion,
-		Name:          meta.Name,
-		Options:       meta.Options,
-		Indexes:       meta.Indexes,
-		VectorIndexes: meta.VectorIndexes,
-		TextIndexes:   meta.TextIndexes,
-	})
+	if err := validateNativeDocumentCoverageMeta(meta); err != nil {
+		return nil, err
+	}
+	return json.Marshal(collectionMetaDiskValue(meta))
 }
 
 func decodeCollectionMeta(raw []byte) (CollectionMeta, error) {
@@ -25941,8 +26014,12 @@ func decodeCollectionMeta(raw []byte) (CollectionMeta, error) {
 	if err := json.Unmarshal(raw, &disk); err != nil {
 		return CollectionMeta{}, err
 	}
-	if disk.Version != collectionMetaVersionV5 && disk.Version != collectionMetaVersionV6 && disk.Version != collectionMetaVersion {
+	if disk.Version != collectionMetaVersionV5 && disk.Version != collectionMetaVersionV6 && disk.Version != collectionMetaVersion && disk.Version != collectionMetaVersionNativeDocument {
 		return CollectionMeta{}, fmt.Errorf("collections: unsupported collection metadata version %d", disk.Version)
+	}
+	if (disk.Version == collectionMetaVersionNativeDocument) != (disk.NativeDocumentCoverageVersion == nativeDocumentVectorCoverageVersion) ||
+		(disk.Version != collectionMetaVersionNativeDocument && disk.NativeDocumentCoverageVersion != 0) {
+		return CollectionMeta{}, backenddb.ErrNativeSemanticUnsupported
 	}
 	if disk.Version == collectionMetaVersionV5 {
 		for _, index := range disk.Indexes {
@@ -25951,7 +26028,7 @@ func decodeCollectionMeta(raw []byte) (CollectionMeta, error) {
 			}
 		}
 	}
-	if disk.Version != collectionMetaVersion {
+	if disk.Version != collectionMetaVersion && disk.Version != collectionMetaVersionNativeDocument {
 		for _, index := range disk.VectorIndexes {
 			if index.Representation != "" {
 				return CollectionMeta{}, fmt.Errorf("collections: metadata version %d cannot define vector representation %q", disk.Version, index.Representation)
@@ -25959,11 +26036,12 @@ func decodeCollectionMeta(raw []byte) (CollectionMeta, error) {
 		}
 	}
 	meta := CollectionMeta{
-		Name:          disk.Name,
-		Options:       disk.Options,
-		Indexes:       disk.Indexes,
-		VectorIndexes: disk.VectorIndexes,
-		TextIndexes:   disk.TextIndexes,
+		nativeDocumentCoverageVersion: disk.NativeDocumentCoverageVersion,
+		Name:                          disk.Name,
+		Options:                       disk.Options,
+		Indexes:                       disk.Indexes,
+		VectorIndexes:                 disk.VectorIndexes,
+		TextIndexes:                   disk.TextIndexes,
 	}
 	// Metadata written before the text-index version field may omit `version`
 	// while still owning v1 roots. Preserve those existing on-disk indexes as v1;
@@ -26115,6 +26193,9 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 		seen[textIndexes[i].Name] = struct{}{}
 	}
 	meta.TextIndexes = textIndexes
+	if err := validateNativeDocumentCoverageMeta(meta); err != nil {
+		return CollectionMeta{}, err
+	}
 	return normalizeCollectionIndexedBufferOptions(meta), nil
 }
 
@@ -26409,11 +26490,12 @@ func findQuantizedVectorIndex(def VectorIndexDefinition, name string) (Quantized
 
 func (m CollectionMeta) copy() *CollectionMeta {
 	return &CollectionMeta{
-		Name:          m.Name,
-		Options:       copyCollectionOptions(m.Options),
-		Indexes:       copyIndexDefinitions(m.Indexes),
-		VectorIndexes: copyVectorIndexDefinitions(m.VectorIndexes),
-		TextIndexes:   copyTextIndexDefinitions(m.TextIndexes),
+		nativeDocumentCoverageVersion: m.nativeDocumentCoverageVersion,
+		Name:                          m.Name,
+		Options:                       copyCollectionOptions(m.Options),
+		Indexes:                       copyIndexDefinitions(m.Indexes),
+		VectorIndexes:                 copyVectorIndexDefinitions(m.VectorIndexes),
+		TextIndexes:                   copyTextIndexDefinitions(m.TextIndexes),
 	}
 }
 
@@ -26502,6 +26584,7 @@ func normalizedCollectionMetaDiff(expected, actual CollectionMeta) string {
 
 func collectionMetaValuesEqual(a, b CollectionMeta) bool {
 	if a.Name != b.Name ||
+		a.nativeDocumentCoverageVersion != b.nativeDocumentCoverageVersion ||
 		!collectionOptionsEqual(a.Options, b.Options) ||
 		len(a.Indexes) != len(b.Indexes) ||
 		len(a.VectorIndexes) != len(b.VectorIndexes) ||
@@ -26591,11 +26674,12 @@ func addVectorIndexToCollectionMeta(meta CollectionMeta, def VectorIndexDefiniti
 		return CollectionMeta{}, VectorIndexDefinition{}, fmt.Errorf("collections: duplicate index %q", def.Name)
 	}
 	candidate := CollectionMeta{
-		Name:          meta.Name,
-		Options:       meta.Options,
-		Indexes:       copyIndexDefinitions(meta.Indexes),
-		VectorIndexes: append(append([]VectorIndexDefinition(nil), meta.VectorIndexes...), def),
-		TextIndexes:   copyTextIndexDefinitions(meta.TextIndexes),
+		nativeDocumentCoverageVersion: meta.nativeDocumentCoverageVersion,
+		Name:                          meta.Name,
+		Options:                       meta.Options,
+		Indexes:                       copyIndexDefinitions(meta.Indexes),
+		VectorIndexes:                 append(append([]VectorIndexDefinition(nil), meta.VectorIndexes...), def),
+		TextIndexes:                   copyTextIndexDefinitions(meta.TextIndexes),
 	}
 	normalized, err := normalizeCollectionMeta(candidate)
 	if err != nil {
@@ -26622,11 +26706,12 @@ func addIndexToCollectionMeta(meta CollectionMeta, def IndexDefinition) (Collect
 		return CollectionMeta{}, IndexDefinition{}, fmt.Errorf("collections: duplicate index %q", def.Name)
 	}
 	candidate := CollectionMeta{
-		Name:          meta.Name,
-		Options:       meta.Options,
-		Indexes:       append(copyIndexDefinitions(meta.Indexes), def),
-		VectorIndexes: append([]VectorIndexDefinition(nil), meta.VectorIndexes...),
-		TextIndexes:   copyTextIndexDefinitions(meta.TextIndexes),
+		nativeDocumentCoverageVersion: meta.nativeDocumentCoverageVersion,
+		Name:                          meta.Name,
+		Options:                       meta.Options,
+		Indexes:                       append(copyIndexDefinitions(meta.Indexes), def),
+		VectorIndexes:                 append([]VectorIndexDefinition(nil), meta.VectorIndexes...),
+		TextIndexes:                   copyTextIndexDefinitions(meta.TextIndexes),
 	}
 	normalized, err := normalizeCollectionMeta(candidate)
 	if err != nil {

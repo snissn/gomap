@@ -75,6 +75,8 @@ func TestCompactStorageFullPacksLeafGenerationDebtOffline(t *testing.T) {
 	requireLeafGenerationPackPromotionSupport(t)
 	dir := t.TempDir()
 	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, dir)
+	// This producer must create real leaf-log debt, regardless of fresh defaults.
+	opts.IndexOuterLeavesInValueLog = true
 	opts.BackgroundCheckpointInterval = -1
 	opts.BackgroundCheckpointIdleDuration = -1
 	opts.BackgroundIndexVacuumInterval = -1

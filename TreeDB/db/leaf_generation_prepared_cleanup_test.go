@@ -120,7 +120,7 @@ func TestOriginalPreparedClosureHeaderRefusesBeforeProducerEffects(t *testing.T)
 			}
 			defer d.Close()
 			owner := d.valueLogIdentityPins.MetadataOwner()
-			budget := &primaryScratchBudget{capacity: ^uint64(0)}
+			budget := &retainedScratchBudget{capacity: ^uint64(0)}
 			enrollment, err := owner.Enroll(budget)
 			if err != nil {
 				t.Fatal(err)
@@ -253,7 +253,7 @@ func TestOriginalPreparedManifestAbandonAdmissionRefusesBeforeRestore(t *testing
 		t.Fatal(err)
 	}
 	owner := closure.metadata
-	budget := &primaryScratchBudget{capacity: ^uint64(0)}
+	budget := &retainedScratchBudget{capacity: ^uint64(0)}
 	enrollment, err := owner.Enroll(budget)
 	if err != nil {
 		t.Fatal(err)

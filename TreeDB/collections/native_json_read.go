@@ -67,6 +67,21 @@ func (m *NativeJSONManager) Capture(name string) (result *NativeJSONRead, result
 			return nil, err
 		}
 		base = r.privateEngine
+		if reuse, ok := capture.(backenddb.NativeSemanticImportCapture); ok {
+			adopted, err := reuse.AdoptNativeSemanticImport(base)
+			if err != nil {
+				return nil, err
+			}
+			if adopted {
+				// The equivalent captured cut now owns this SAME descriptor. Its
+				// graph certificates remain unverified until normal cold checking.
+				record := r.privateEngine.Release()
+				r.privateEngine = nil
+				if err := finishPrivateNative(record); err != nil {
+					return nil, err
+				}
+			}
+		}
 	}
 
 	c, ok := base.names.Get(name)

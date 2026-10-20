@@ -892,3 +892,112 @@ advancing rebuild and are not comparable to historical uncoordinated PL06 rows.
 Legacy timing/CV and all public classification gates remain unchanged. See
 [the M0 contract](../../TreeDB/docs/performance/index-vacuum-m0.md) for boundaries
 and the incremental #4519 scope.
+
+### Standalone native document/vector public cost
+
+`TreeDB/native_document_vector_bench_test.go` provides
+`BenchmarkNativeDocumentVectorReopenedSearch`: eight cells, JSON/BSON × N32/N128
+× `SearchCurrent`/`SearchHeld`. Each cell seeds through the actual native factory,
+checkpoints, closes and reopens before measuring read-only operations. Current
+search calls `Collection.SearchVectorIndexWithBuffer`; held search calls a
+closable `VectorIndexSearcher.SearchWithBuffer`. This native factory/schema selects metadata8/coverage5; the durable CommandWAL
+profile and native-runtime result path are checked. The fixture
+explicitly disables value-log generation rotation; its other settings come from
+`indexedSliceOptions`, rather than an unspecified all-default configuration.
+
+Run from the repository root with `GOROOT` set to an installed Go 1.26.9 toolchain.
+This builds once and launches one fresh process for each exact cell; the default
+GC is retained. Build scratch, test cache, databases and output stay under fast4tb.
+
+```sh
+OUT=$(mktemp -d /mnt/fast4tb/gomap-native-document-vector-XXXXXX)
+mkdir -p "$OUT/tmp" "$OUT/gocache"
+export GOROOT GOTOOLCHAIN=local GOWORK=off GOMAXPROCS=2
+export TMPDIR="$OUT/tmp" GOCACHE="$OUT/gocache"
+unset GOFLAGS GOEXPERIMENT GOGC GOMEMLIMIT GODEBUG GOTRACEBACK
+"${GOROOT:?set GOROOT to Go 1.26.9}/bin/go" version > "$OUT/toolchain.txt"
+grep -q ' go1.26.9 ' "$OUT/toolchain.txt" || exit 1
+timeout --kill-after=10s 600s "$GOROOT/bin/go" test -c -p=1 \
+  -o "$OUT/native-document-vector.test" ./TreeDB > "$OUT/build.txt" 2>&1 || exit 1
+BENCHMARK=${BENCHMARK:-BenchmarkNativeDocumentVectorReopenedSearch}
+OPERATIONS=${OPERATIONS:-'SearchCurrent SearchHeld'}
+printf 'benchmark\tns/op\tops/s\tB/op\tallocs/op\n' > "$OUT/metrics.tsv"
+for format in json bson; do
+  for size in 32 128; do
+    for operation in $OPERATIONS; do
+      raw="$OUT/${BENCHMARK}-${format}-N${size}-${operation}.txt"
+      timeout --kill-after=10s 190s "$OUT/native-document-vector.test" \
+        -test.run='^$' -test.bench="^${BENCHMARK}$/^${format}$/^N${size}$/^${operation}$" \
+        -test.benchtime=8x -test.count=1 -test.benchmem -test.timeout=180s -test.v \
+        > "$raw" 2>&1 || exit 1
+      awk '/^Benchmark.*[[:space:]][0-9]+[[:space:]]/ {
+        n++; if ($2 != 8) exit 1
+        for (i=3;i<=NF;i++) {
+          if ($i=="ns/op") ns=$(i-1)
+          if ($i=="B/op") bytes=$(i-1)
+          if ($i=="allocs/op") objects=$(i-1)
+        }
+        if (ns<=0 || bytes=="" || objects=="") exit 1
+        printf "%s\t%s\t%.3f\t%s\t%s\n",$1,ns,1e9/ns,bytes,objects
+      } END {if(n!=1) exit 1}' "$raw" >> "$OUT/metrics.tsv" || exit 1
+      grep -qx PASS "$raw" || exit 1
+      if grep -q -- '--- SKIP:' "$raw"; then exit 1; fi
+    done
+  done
+done
+```
+
+Raw `.txt` files retain Go's ns/op, B/op, allocs/op, `seed_docs` and
+`cow_retained_delta_B`; `metrics.tsv` adds the derived rate `ops/s = 1e9 / ns/op`.
+Initial open/import/certification, held-searcher open, output-buffer warmup and
+Close are outside timing. Each timed search includes path/result validation:
+TopK1, EfSearch16, minimal stats and exact `doc-0000`. Reads must leave next/applied
+command frontiers unchanged; final Close must drain all original COW resources
+and identity pins. Reopen itself and the first cold search are not timed.
+
+The same file's `BenchmarkNativeDocumentVectorPublic` has twenty cells. To run it
+with the same fresh-process command, set `BENCHMARK=BenchmarkNativeDocumentVectorPublic`
+and `OPERATIONS='Insert Update Delete SearchCurrent SearchHeld'` before the block.
+Its searches use the checkpointed live cohort without reopening. Each CRUD
+iteration gets a fresh seeded cohort; only the public mutation, including durable
+ACK, is timed. Document encoding, setup, exact one-frame/value checks and cleanup
+are outside timing. CRUD reports `cow_retained_delta_B/op`; search reports the
+whole timed-loop retained delta. These are new-feature diagnostics: the old native
+factory rejected this schema, and two small sizes/eight iterations do not establish
+scaling, a speedup against an unsupported baseline or full performance acceptance.
+Retain source/tree, fixture, binary, module/toolchain and environment identities
+with every raw row, including adverse results. These standalone logs and optional
+Go testing profiles are not benchprof inputs; unified-bench/benchprof schemas and
+profile filenames are unchanged.
+
+### Current DATA names for retirement benchmarks
+
+The current DATA-only implementation replaces the historical PRIMARY symbols
+above: `BenchmarkDATABorrowedValueLogCohort/files=8` and `/files=16` retain the
+bounded capture/import/read/release timing and post-timer physical/governor
+observations. `BenchmarkPublishDurableRootV1` remains the publication benchmark;
+`BenchmarkPublishPrimaryDurableRootV1` is retired. A standalone cohort capture is:
+
+```sh
+GOWORK=off GOMAXPROCS=2 TMPDIR="$OUT/tmp" go test -p=1 ./TreeDB/db -run '^$' \
+  -bench '^BenchmarkDATABorrowedValueLogCohort$/^files=8$' \
+  -benchtime=128x -count=1 -benchmem -timeout=180s > "$OUT/data-cohort.txt" 2>&1
+```
+
+`BenchmarkCommitAtDurableReplacementAfterDataGeneration` replaces
+`BenchmarkCommitAtPrimaryOnlyAfterDataGeneration` in the `treedb_test` fixture.
+Its maintained paired runner supplies the same fixture to both source roles:
+
+```sh
+python3 scripts/mvcc_primary_cost_gate.py --root "$PWD" \
+  --baseline "$BASE" --candidate "$HEAD" --output "$OUT/durable-replacement"
+```
+
+Set `BASE` and `HEAD` to the reviewed exact source commits. The runner owns builds,
+public lifecycle checks, fresh processes and all eight alternating fixed128
+pairs. It retains raw ns/op, B/op, allocs/op, role/generation observations,
+`bindings.json`, `samples.json`, `summary.json` and the strict gate result. See
+[the replacement contract](../../scripts/mvcc_raw_path_gate.md#public-durable-replacement-cost-and-runtime-attribution)
+for timer boundaries, artifact bindings and unchanged acceptance rules; derive
+ops/s from ns/op without changing that gate. Cohort text and replacement-gate
+artifacts are standalone captures, not benchprof inputs.

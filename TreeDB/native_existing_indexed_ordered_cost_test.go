@@ -14,7 +14,6 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
-	"github.com/snissn/gomap/TreeDB/page"
 )
 
 type orderedCostMeasure struct {
@@ -86,6 +85,8 @@ func runNativeIndexedOrderedRows(t *testing.T, n int, order string) {
 	rawKey, rawValue := []byte("ordered-cost/raw"), []byte("committed")
 	dir := t.TempDir()
 	opts := indexedSliceOptions(ProfileNoWALFast, dir)
+	// Preserve this opt-in diagnostic's original external-leaf workload.
+	opts.IndexOuterLeavesInValueLog = true
 	if opts.IndexPrimaryDirectory || opts.CommandWAL || !opts.IndexOuterLeavesInValueLog {
 		t.Fatalf("unexpected DATA/NoWAL physical options: %+v", opts)
 	}
@@ -320,7 +321,7 @@ func orderedCostStats(t *testing.T, database *DB, handle *backenddb.DB, dir stri
 	if err := snapshot.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if !valid || token.RootPageID < 2 || token.RootPageID >= page.PrimaryBankNamespace {
+	if !valid || token.RootPageID < 2 || token.RootPageID >= (uint64(1)<<62) {
 		t.Fatalf("not DATA: %+v", token)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "maindb", "index.db")); err != nil {

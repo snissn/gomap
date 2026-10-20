@@ -11,12 +11,13 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 
 	tree "github.com/snissn/gomap/TreeDB"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
-	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -89,7 +90,7 @@ func directDATAReadSlots(t *testing.T, dir string) [2]directDATASlot {
 		if err != nil {
 			t.Fatalf("DATA record slot %d: %v", i, err)
 		}
-		if record.CommitSeq != meta.CommitSeq || record.UserRootPageID < 2 || record.UserRootPageID >= record.TotalPages || primaryarena.IsPage(record.UserRootPageID) {
+		if record.CommitSeq != meta.CommitSeq || record.UserRootPageID < 2 || record.UserRootPageID >= record.TotalPages {
 			t.Fatalf("not a bound DATA root: meta=%+v record=%+v", meta, record)
 		}
 		if record.ParentRecordPageID != 0 {
@@ -373,16 +374,16 @@ func directDATAFixtureHashes(t *testing.T, dir string) map[string]directDATAFixt
 		if err != nil {
 			return err
 		}
-		if entry.IsDir() {
-			return nil
-		}
 		info, err := entry.Info()
 		if err != nil {
 			return err
 		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
+		var data []byte
+		if !entry.IsDir() {
+			data, err = os.ReadFile(path)
+			if err != nil {
+				return err
+			}
 		}
 		rel, err := filepath.Rel(dir, path)
 		if err != nil {
@@ -397,79 +398,210 @@ func directDATAFixtureHashes(t *testing.T, dir string) map[string]directDATAFixt
 	return files
 }
 
-// Temporary P2 delivery preserves the existing explicit/persisted PRIMARY role.
-// Final format refusal and removal remain P5 work; default DATA proofs stay above.
-func TestDATAFactoriesPreserveExplicitAndPersistedPRIMARY(t *testing.T) {
-	type store interface {
-		SetSync([]byte, []byte) error
-		Get([]byte) ([]byte, error)
-		Checkpoint() error
-	}
+// Retired formats refuse before any public factory mutates the original namespace.
+func TestDirectDATAPersistedPRIMARYRequiresRebuild(t *testing.T) {
 	factories := []struct {
 		name string
-		open func(tree.Options) (store, func() error, error)
+		open func(tree.Options) (bool, func() error, error)
 	}{
-		{"Open", func(opts tree.Options) (store, func() error, error) {
+		{"Open", func(opts tree.Options) (bool, func() error, error) {
 			d, err := tree.Open(opts)
-			if err != nil {
-				return nil, nil, err
+			if d != nil {
+				return true, d.Close, err
 			}
-			return d, d.Close, nil
+			return false, nil, err
 		}},
-		{"OpenBackend", func(opts tree.Options) (store, func() error, error) {
+		{"OpenBackend", func(opts tree.Options) (bool, func() error, error) {
 			d, close, err := tree.OpenBackend(opts)
-			return d, close, err
+			return d != nil, close, err
 		}},
-		{"OpenBackendWithCachedLeafLog", func(opts tree.Options) (store, func() error, error) {
+		{"OpenBackendWithCachedLeafLog", func(opts tree.Options) (bool, func() error, error) {
 			d, close, err := tree.OpenBackendWithCachedLeafLog(opts)
-			return d, close, err
+			return d != nil, close, err
 		}},
 	}
 	for _, factory := range factories {
-		for _, readOnly := range []bool{false, true} {
-			t.Run(fmt.Sprintf("%s/readOnly=%v", factory.name, readOnly), func(t *testing.T) {
-				opts := directDATAOptions(t.TempDir())
-				opts.IndexPrimaryDirectory = true
-				database, close, err := factory.open(opts)
-				if err != nil {
-					t.Fatal("explicit PRIMARY", err)
-				}
-				t.Cleanup(func() {
-					if close != nil {
-						if err := close(); err != nil {
-							t.Error(err)
-						}
-					}
-				})
-				want := []byte("preserved-inline")
-				if err := database.SetSync([]byte("selected"), want); err != nil {
-					t.Fatal(err)
-				}
-				if err := database.Checkpoint(); err != nil {
-					t.Fatal(err)
-				}
-				if _, err := os.Stat(filepath.Join(opts.Dir, "maindb", "index.db.primary")); err != nil {
-					t.Fatal("actual PRIMARY arena", err)
-				}
-				if err := close(); err != nil {
-					t.Fatal(err)
-				}
-				close = nil
-				opts.IndexPrimaryDirectory = false
+		t.Run(factory.name, func(t *testing.T) {
+			dir := directDATAFixtureDir(t, "original-primary")
+			directDATAExtractPRIMARYFixture(t, dir)
+			before := directDATAFixtureHashes(t, dir)
+			for _, readOnly := range []bool{false, true} {
+				opts := directDATAOptions(dir)
 				if readOnly {
 					opts = directDATAReadOnlyOptions(opts)
 				}
-				database, close, err = factory.open(opts)
-				if err != nil {
-					t.Fatal("persisted PRIMARY", err)
+				opened, close, err := factory.open(opts)
+				if close != nil {
+					_ = close()
 				}
-				if got, err := database.Get([]byte("selected")); err != nil || !bytes.Equal(got, want) {
-					t.Fatalf("persisted value: len=%d err=%v", len(got), err)
+				if opened || close != nil || !errors.Is(err, backenddb.ErrLegacyFormatRebuildRequired) || !strings.Contains(strings.ToLower(err.Error()), "rebuild") {
+					t.Fatalf("persisted PRIMARY readOnly=%v: close=%v err=%v", readOnly, close != nil, err)
 				}
-				if err := close(); err != nil {
-					t.Fatal(err)
+				after := directDATAFixtureHashes(t, dir)
+				if len(after) != len(before) {
+					t.Fatalf("refusal changed inventory readOnly=%v", readOnly)
 				}
-				close = nil
+				for name, original := range before {
+					current, ok := after[name]
+					if !ok || current.fingerprint != original.fingerprint || !os.SameFile(original.identity, current.identity) {
+						t.Fatalf("refusal changed identity/content of %s readOnly=%v", name, readOnly)
+					}
+				}
+			}
+			for _, name := range []string{"index.db.primary", "index.db.primary.new", "index.db.new.ready"} {
+				t.Run("interrupted-flat-"+name, func(t *testing.T) {
+					flatDir := t.TempDir()
+					payload := []byte("preserve interrupted PRIMARY companion")
+					if name == "index.db.new.ready" {
+						payload = []byte("TDJCOM06interrupted committed pair")
+					}
+					if err := os.WriteFile(filepath.Join(flatDir, name), payload, 0600); err != nil {
+						t.Fatal(err)
+					}
+					before := directDATAFixtureHashes(t, flatDir)
+					originalDir, err := os.Stat(flatDir)
+					if err != nil {
+						t.Fatal(err)
+					}
+					for _, readOnly := range []bool{false, true} {
+						opts := directDATAOptions(flatDir)
+						if readOnly {
+							opts = directDATAReadOnlyOptions(opts)
+						}
+						opened, close, err := factory.open(opts)
+						if close != nil {
+							_ = close()
+						}
+						if opened || close != nil || !errors.Is(err, backenddb.ErrLegacyFormatRebuildRequired) || !strings.Contains(strings.ToLower(err.Error()), "rebuild") {
+							t.Fatalf("interrupted flat %s readOnly=%v: handle=%v close=%v err=%v", name, readOnly, opened, close != nil, err)
+						}
+						after := directDATAFixtureHashes(t, flatDir)
+						entries, err := os.ReadDir(flatDir)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if len(entries) != 1 || entries[0].Name() != name || len(after) != len(before) {
+							t.Fatalf("interrupted flat refusal changed namespace: %v", entries)
+						}
+						for path, original := range before {
+							current, ok := after[path]
+							if !ok || current.fingerprint != original.fingerprint || !os.SameFile(original.identity, current.identity) {
+								t.Fatalf("interrupted flat refusal changed identity/content of %s", path)
+							}
+						}
+						currentDir, err := os.Stat(flatDir)
+						if err != nil || !os.SameFile(originalDir, currentDir) {
+							t.Fatalf("interrupted flat refusal changed directory identity: %v", err)
+						}
+						if _, err := os.Stat(filepath.Join(flatDir, "maindb")); !os.IsNotExist(err) {
+							t.Fatalf("interrupted flat refusal created maindb: %v", err)
+						}
+					}
+				})
+			}
+
+			for _, readOnly := range []bool{false, true} {
+				retiredDir := filepath.Join(t.TempDir(), "uncreated")
+				opts := directDATAOptions(retiredDir)
+				opts.IndexPrimaryDirectory = true
+				if readOnly {
+					opts = directDATAReadOnlyOptions(opts)
+				}
+				opened, close, err := factory.open(opts)
+				if close != nil {
+					_ = close()
+				}
+				if opened || close != nil || !errors.Is(err, backenddb.ErrLegacyFormatRebuildRequired) {
+					t.Fatalf("explicit PRIMARY readOnly=%v: close=%v err=%v", readOnly, close != nil, err)
+				}
+				if _, err := os.Stat(retiredDir); !os.IsNotExist(err) {
+					t.Fatalf("retired request created directory readOnly=%v: %v", readOnly, err)
+				}
+			}
+		})
+	}
+}
+
+// Offline entry points must refuse before opening side stores, creating LOCK, or
+// recovering an interrupted replacement namespace. The archived case retains
+// the complete original files; interrupted cases exercise both cleanup and
+// rename branches of the original swap helper.
+func TestDirectDATAOfflineMaintenanceRefusesRetiredPRIMARY(t *testing.T) {
+	operations := []struct {
+		name   string
+		public bool
+		run    func(tree.Options) error
+	}{
+		{"VacuumIndexOffline", true, tree.VacuumIndexOffline},
+		{"ValueLogRewriteOffline", true, func(opts tree.Options) error {
+			_, err := tree.ValueLogRewriteOffline(opts)
+			return err
+		}},
+		{"BackendVacuumIndexOffline", false, backenddb.VacuumIndexOffline},
+		{"BackendValueLogRewriteOffline", false, func(opts tree.Options) error {
+			_, err := backenddb.ValueLogRewriteOffline(opts)
+			return err
+		}},
+	}
+	for _, operation := range operations {
+		for _, state := range []string{"archive", "staged-with-index", "staged-without-index", "joint-with-index", "joint-without-index", "joint-root"} {
+			t.Run(operation.name+"/"+state, func(t *testing.T) {
+				root := t.TempDir()
+				dir := root
+				if state == "archive" {
+					directDATAExtractPRIMARYFixture(t, root)
+					dir = filepath.Join(root, "maindb")
+				} else {
+					if state == "joint-root" {
+						dir = filepath.Join(root, "maindb")
+						if err := os.Mkdir(dir, 0700); err != nil {
+							t.Fatal(err)
+						}
+					}
+					files := map[string][]byte{"index.db.new": []byte("preserve replacement DATA")}
+					if strings.HasPrefix(state, "staged-") {
+						files["index.db.primary.new"] = []byte("preserve replacement PRIMARY")
+					} else {
+						// An interrupted original joint COMMIT write can leave only
+						// its identifying prefix. It must never become a DATA ready bit.
+						files["index.db.new.ready"] = []byte("TDJCOM06")
+					}
+					if strings.HasSuffix(state, "with-index") {
+						files["index.db"] = []byte("preserve canonical DATA")
+					}
+					for name, data := range files {
+						if err := os.WriteFile(filepath.Join(dir, name), data, 0600); err != nil {
+							t.Fatal(err)
+						}
+					}
+					if _, err := os.Stat(filepath.Join(dir, "LOCK")); !os.IsNotExist(err) {
+						t.Fatalf("fixture unexpectedly has LOCK: %v", err)
+					}
+				}
+				before := directDATAFixtureHashes(t, root)
+				opts := directDATAOptions(dir)
+				if operation.public {
+					opts.Dir = root
+				}
+				err := operation.run(opts)
+				if !errors.Is(err, backenddb.ErrLegacyFormatRebuildRequired) || !strings.Contains(strings.ToLower(err.Error()), "rebuild") {
+					t.Fatalf("offline retired format error=%v, want rebuild refusal", err)
+				}
+				after := directDATAFixtureHashes(t, root)
+				if len(after) != len(before) {
+					t.Fatalf("offline refusal changed namespace: before=%d after=%d", len(before), len(after))
+				}
+				for name, original := range before {
+					current, ok := after[name]
+					if !ok || current.fingerprint != original.fingerprint || !os.SameFile(original.identity, current.identity) {
+						t.Fatalf("offline refusal changed original identity/content: %s", name)
+					}
+				}
+				if state != "archive" {
+					if _, err := os.Stat(filepath.Join(dir, "LOCK")); !os.IsNotExist(err) {
+						t.Fatalf("offline refusal created LOCK: %v", err)
+					}
+				}
 			})
 		}
 	}

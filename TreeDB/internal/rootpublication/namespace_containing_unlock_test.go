@@ -1,9 +1,7 @@
 package rootpublication
 
 import (
-	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
-	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"os"
 	"path/filepath"
@@ -77,45 +75,6 @@ func TestNamespaceContainingRefundAfterOriginalCallUnlock(t *testing.T) {
 		t.Fatal(e)
 	}
 	if e = proof.ReleaseWithError(); e != nil {
-		t.Fatal(e)
-	}
-	if !observed || locked {
-		t.Fatalf("actual containing Resize before original caller unlock: observed=%t locked=%t", observed, locked)
-	}
-	capture.Close()
-	budget.Close()
-}
-func TestPrimaryConstructionContainingRefundAfterOriginalCallUnlock(t *testing.T) {
-	a, e := primaryarena.OpenCapsule(filepath.Join(t.TempDir(), "primary"))
-	if e != nil {
-		t.Fatal(e)
-	}
-	defer a.Close()
-	original, ready, e := NewPrimaryConstructionTransactionV6(a, &iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20})
-	if !ready || e != nil {
-		t.Fatal(e)
-	}
-	txn := original.(*DurableRootTransaction)
-	budget, e := memtable.NewCOWBudget(memtable.DefaultCOWLimits())
-	if e != nil {
-		t.Fatal(e)
-	}
-	observed, locked := false, false
-	wrapper := &containingUnlockBudget{actual: budget, observe: func() {
-		if txn.constructionV6 == nil {
-			observed = true
-			if !txn.mu.TryLock() {
-				locked = true
-			} else {
-				txn.mu.Unlock()
-			}
-		}
-	}}
-	capture, e := a.MetadataOwner().Enroll(wrapper)
-	if e != nil {
-		t.Fatal(e)
-	}
-	if e = txn.Abort(); e != nil {
 		t.Fatal(e)
 	}
 	if !observed || locked {

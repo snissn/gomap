@@ -1,12 +1,19 @@
 package treedb
 
 import (
+	"bytes"
 	"errors"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 func TestOptionsFor_ProfileSetsDir(t *testing.T) {
@@ -224,6 +231,109 @@ func TestOpen_BenchUnsafeManifestCannotBecomeProductionDefault(t *testing.T) {
 	}
 }
 
+func TestOpen_NoWALFastUserLeafPlacementPersists(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		override bool
+		outer    bool
+	}{
+		{name: "default", outer: true},
+		{name: "explicit_false", override: true},
+		{name: "explicit_true", override: true, outer: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			opts := OptionsFor(ProfileNoWALFast, dir)
+			if !opts.IndexOuterLeavesInValueLog || opts.IndexInternalBaseDelta {
+				t.Fatalf("fresh no_wal_fast layout defaults: outer=%t base_delta=%t", opts.IndexOuterLeavesInValueLog, opts.IndexInternalBaseDelta)
+			}
+			if tc.override {
+				opts.IndexOuterLeavesInValueLog = tc.outer
+			}
+			opts.DisableSideStores = true
+			opts.ValueLog.PointerThreshold = 1
+			database, err := Open(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if database != nil {
+					_ = database.Close()
+				}
+			}()
+			key := []byte("large/persistent")
+			value := bytes.Repeat([]byte("persistent value log payload"), 1024)
+			if err := database.SetSync(key, value); err != nil {
+				t.Fatal(err)
+			}
+			if err := database.Checkpoint(); err != nil {
+				t.Fatal(err)
+			}
+			// USER leaf placement does not move large payloads out of the
+			// persistent value log. Inspect the original captured entry.
+			snapshot := database.backend.AcquireSnapshot()
+			if snapshot == nil {
+				t.Fatal("missing original snapshot")
+			}
+			entry, entryErr := snapshot.GetEntry(key)
+			closeErr := snapshot.Close()
+			if entryErr != nil || closeErr != nil || entry.Flags&node.FlagPointer == 0 || !page.IsValueLogFileID(entry.ValuePtr.FileID) {
+				t.Fatalf("persistent payload pointer: entry=%+v get=%v close=%v", entry, entryErr, closeErr)
+			}
+			if err := database.Close(); err != nil {
+				t.Fatal(err)
+			}
+			database = nil
+			// Both profile-less reopen and fresh profile options must honor the
+			// persisted true/false layout rather than replacing it with defaults.
+			for _, explicitProfile := range []bool{false, true} {
+				reopenOpts := Options{Dir: dir, DisableSideStores: true}
+				if explicitProfile {
+					reopenOpts = OptionsFor(ProfileNoWALFast, dir)
+					reopenOpts.DisableSideStores = true
+					reopenOpts.IndexOuterLeavesInValueLog = !tc.outer
+				}
+				database, err = Open(reopenOpts)
+				if err != nil {
+					t.Fatalf("reopen explicit_profile=%t: %v", explicitProfile, err)
+				}
+				cfg, ok, err := backenddb.LoadFormatConfig(dir)
+				if err != nil || !ok || cfg.IndexOuterLeavesInValueLog != tc.outer || cfg.IndexInternalBaseDelta {
+					t.Fatalf("persisted layout: cfg=%+v present=%t err=%v", cfg, ok, err)
+				}
+				got, err := database.Get(key)
+				if err != nil || !bytes.Equal(got, value) || database.ResolvedProfile() != ProfileNoWALFast {
+					t.Fatalf("reopen payload/profile: bytes=%d profile=%q err=%v", len(got), database.ResolvedProfile(), err)
+				}
+				if err := database.Close(); err != nil {
+					t.Fatal(err)
+				}
+				database = nil
+			}
+			formatPath := filepath.Join(dir, "format.json")
+			before, err := os.ReadFile(formatPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv(envIndexOuterLeavesInValueLog, strconv.FormatBool(!tc.outer))
+			for _, readOnly := range []bool{false, true} {
+				refused, err := Open(Options{Dir: dir, DisableSideStores: true, ReadOnly: readOnly})
+				if refused != nil {
+					_ = refused.Close()
+					t.Fatal("conflicting placement environment returned a handle")
+				}
+				if err == nil || !strings.Contains(err.Error(), envIndexOuterLeavesInValueLog) || !strings.Contains(err.Error(), "format.json") {
+					t.Fatalf("conflicting placement environment read_only=%t: %v", readOnly, err)
+				}
+			}
+			after, err := os.ReadFile(formatPath)
+			if err != nil || !bytes.Equal(before, after) {
+				t.Fatalf("refused reopen changed persisted format: %v", err)
+			}
+		})
+	}
+}
+
 func TestApplyProfile_FastSetsPolicyBools(t *testing.T) {
 	var opts Options
 	ApplyProfile(&opts, ProfileFast)
@@ -274,7 +384,7 @@ func TestApplyProfile_FastSetsPolicyBools(t *testing.T) {
 		t.Fatalf("expected IndexPackedValuePtr=true for fast profile")
 	}
 	if opts.IndexInternalBaseDelta {
-		t.Fatalf("expected IndexInternalBaseDelta=false for fast profile (incompatible with outer leaves in value log)")
+		t.Fatalf("expected IndexInternalBaseDelta=false to retain the fast profile encoding policy")
 	}
 	if opts.PagerSyncConcurrency != 4 {
 		t.Fatalf("expected PagerSyncConcurrency=4 for fast profile, got %d", opts.PagerSyncConcurrency)
@@ -590,6 +700,9 @@ func TestApplyProfile_BenchDisablesBackgroundDefaults(t *testing.T) {
 	}
 	if !opts.IndexPackedValuePtr {
 		t.Fatalf("expected IndexPackedValuePtr=true for bench profile")
+	}
+	if !opts.IndexOuterLeavesInValueLog {
+		t.Fatal("expected IndexOuterLeavesInValueLog=true for unchanged bench profile")
 	}
 	if opts.IndexInternalBaseDelta {
 		t.Fatalf("expected IndexInternalBaseDelta=false for bench profile (incompatible with outer leaves in value log)")

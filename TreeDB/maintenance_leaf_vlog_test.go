@@ -3,7 +3,6 @@ package treedb_test
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -30,7 +29,7 @@ func mainIndexPath(rootDir string) string {
 }
 
 // mainMaterializedMeta describes the durable sequence and its DATA base, not
-// the logical PRIMARY directory ID. Maintenance assertions inspect that base.
+// a retired companion representation. Maintenance assertions inspect that base.
 type mainMaterializedMeta struct {
 	CommitSeq      uint64
 	UserRootPageID uint64
@@ -44,55 +43,6 @@ func readMainMeta(t *testing.T, rootDir string) mainMaterializedMeta {
 		t.Fatalf("open pager: %v", err)
 	}
 	defer func() { _ = p.Close() }()
-
-	primaryPath := indexPath + ".primary"
-	if _, statErr := os.Stat(primaryPath); statErr == nil {
-		primary, openErr := pager.OpenReadOnly(primaryPath, 256*1024)
-		if openErr != nil {
-			t.Fatal(openErr)
-		}
-		defer primary.Close()
-		header, headerErr := primary.Get(0)
-		if headerErr != nil || !page.VerifyChecksumNonMutating(header) || string(header[16:24]) != "TDPRCAPB" {
-			t.Fatalf("invalid PRIMARY capsule header: %v", headerErr)
-		}
-		var uuid [16]byte
-		copy(uuid[:], header[32:48])
-		var selected mainMaterializedMeta
-		for slot := uint64(0); slot < 2; slot++ {
-			image := make([]byte, rootpublication.PrimaryCapsuleSizeV6)
-			complete := true
-			for n := uint64(0); n < 3; n++ {
-				part, readErr := primary.Get(2 + slot*3 + n)
-				if readErr != nil {
-					complete = false
-					break
-				}
-				copy(image[n*page.PageSize:], part)
-			}
-			if !complete {
-				continue
-			}
-			view, decodeErr := rootpublication.DecodePrimaryCapsuleV6(image, slot, uuid)
-			if decodeErr != nil {
-				continue
-			}
-			current := view.Current()
-			base, readErr := p.Get(current.Primary.BaseRootPageID)
-			if readErr != nil || !page.VerifyChecksumNonMutating(base) || sha256.Sum256(base) != current.Primary.BaseDigest {
-				t.Fatalf("capsule slot %d DATA base integrity: %v", slot, readErr)
-			}
-			if current.Record.CommitSeq > selected.CommitSeq {
-				selected = mainMaterializedMeta{CommitSeq: current.Record.CommitSeq, UserRootPageID: current.Primary.BaseRootPageID}
-			}
-		}
-		if selected.CommitSeq == 0 {
-			t.Fatalf("no valid durable PRIMARY capsule in %s", primaryPath)
-		}
-		return selected
-	} else if !os.IsNotExist(statErr) {
-		t.Fatal(statErr)
-	}
 
 	readMetaAt := func(id uint64) (page.DurableMetaV1, bool) {
 		data, err := p.Get(id)
@@ -503,9 +453,8 @@ func TestValueLogRewriteOffline_LeafPagesInValueLog_PreservesLeafRefRoot_WhenVal
 		t.Fatalf("open: %v", err)
 	}
 
-	// Exceed the PRIMARY directory's 49 classes so this fixture actually
-	// materializes a DATA base with leaf-log children. A 16-row fixture stays
-	// wholly in PRIMARY and cannot test rewriting DATA leaf-page records.
+	// Populate a split DATA tree so this fixture rewrites real leaf-log
+	// child records as well as inline values.
 	const keyCount = 64
 	for i := 0; i < keyCount; i++ {
 		key := []byte(fmt.Sprintf("rew-inline-%03d", i))

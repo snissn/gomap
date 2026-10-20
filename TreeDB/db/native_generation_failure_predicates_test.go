@@ -34,7 +34,7 @@ func TestNativeGenerationPublishedFailurePredicates(t *testing.T) {
 	}
 	setValueLogPointer(t, d, []byte("original-key"), ptr)
 	s := d.AcquireSnapshot()
-	if s == nil || s.primaryOwner != nil {
+	if s == nil {
 		t.Fatal("missing actual DATA-only Snapshot")
 	}
 	g := s.idx

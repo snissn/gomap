@@ -4091,6 +4091,12 @@ all49 native truths remain fresh qualification obligations.
 See command README for allocation ownership and planned operational bounds;
 source controls alone establish no sustained service result.
 
+The following PRIMARY construction sections are historical source-bound witness
+notes. Their representation-only tests and benchmark were retired; they are not
+active DATA verification or current acceptance gates. See
+[retirement provenance](primary-retirement.md). Maintained DATA public lifecycle,
+recovery and cleanup-failure tests continue to execute.
+
 ### Selected PRIMARY capsule construction witnesses
 
 `TestPrimaryCapsuleOrdinaryAuthorityAndExactFallbackV6` proves actual unchanged
@@ -4381,7 +4387,7 @@ The semantic rollover controls cover distinct owned active/captured edges,
 private cancellation and partially prepared successors after Close, plus a real
 native-only logical prefix whose empty raw frontier still requires finite
 checkpoint capacity recovery. Maintenance lifetime controls pressure the actual
-reserved child budget, observe the original distinct PRIMARY/registry owners,
+reserved child budget, observe the original DATA registry owner,
 and separately prove real maintenance publication can progress while producer
 headroom is exhausted. These controls do not activate unconverted collections.
 

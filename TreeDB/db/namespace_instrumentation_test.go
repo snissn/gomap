@@ -2,6 +2,7 @@ package db
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -67,8 +68,8 @@ func TestRecoverIndexSwapEmitsNamespaceMutations(t *testing.T) {
 	if err := os.WriteFile(newPath, []byte("new"), 0o600); err != nil {
 		t.Fatalf("WriteFile(new): %v", err)
 	}
-	// The actual legacy vacuum producer writes this exact marker. Every other
-	// spelling must be authenticated as a joint DATA/PRIMARY decision.
+	// DATA vacuum writes this exact marker; other spellings cannot authorize
+	// namespace mutations.
 	if err := os.WriteFile(readyPath, []byte("ready\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile(ready): %v", err)
 	}
@@ -114,34 +115,43 @@ func TestRecoverIndexSwapEmitsNamespaceMutations(t *testing.T) {
 	}
 }
 
-func TestRecoverIndexSwapRejectsMalformedJointMarkerBeforeNamespaceMutation(t *testing.T) {
-	dir := t.TempDir()
-	newPath := filepath.Join(dir, indexNewFileName)
-	readyPath := filepath.Join(dir, indexReadyFileName)
-	if err := os.WriteFile(newPath, []byte("new"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(readyPath, []byte("ready"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	mutations := 0
-	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
-		if event.Namespace != "" {
-			mutations++
-		}
-		return nil
-	})
-	defer restore()
-	if err := recoverIndexSwap(dir); !errors.Is(err, ErrRecoveryRequired) {
-		t.Fatalf("malformed joint marker error=%v, want recovery required", err)
-	}
-	if mutations != 0 {
-		t.Fatalf("malformed marker authorized %d namespace mutations", mutations)
-	}
-	for path, want := range map[string]string{newPath: "new", readyPath: "ready"} {
-		got, err := os.ReadFile(path)
-		if err != nil || string(got) != want {
-			t.Fatalf("refused marker changed %s: %q %v", path, got, err)
+func TestRecoverIndexSwapRejectsMalformedReadyMarkerBeforeNamespaceMutation(t *testing.T) {
+	for _, marker := range []string{"ready", "", "ready\njunk", "unknown"} {
+		for _, existingIndex := range []bool{false, true} {
+			t.Run(fmt.Sprintf("marker=%q/existing=%t", marker, existingIndex), func(t *testing.T) {
+				dir := t.TempDir()
+				newPath := filepath.Join(dir, indexNewFileName)
+				readyPath := filepath.Join(dir, indexReadyFileName)
+				wantFiles := map[string]string{newPath: "new", readyPath: marker}
+				if existingIndex {
+					wantFiles[filepath.Join(dir, indexFileName)] = "old"
+				}
+				for path, content := range wantFiles {
+					if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				mutations := 0
+				restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+					if event.Namespace != "" {
+						mutations++
+					}
+					return nil
+				})
+				defer restore()
+				if err := recoverIndexSwap(dir); !errors.Is(err, ErrRecoveryRequired) {
+					t.Fatalf("malformed ready marker error=%v, want recovery required", err)
+				}
+				if mutations != 0 {
+					t.Fatalf("malformed marker authorized %d namespace mutations", mutations)
+				}
+				for path, want := range wantFiles {
+					got, err := os.ReadFile(path)
+					if err != nil || string(got) != want {
+						t.Fatalf("refused marker changed %s: %q %v", path, got, err)
+					}
+				}
+			})
 		}
 	}
 }

@@ -11,13 +11,11 @@ import (
 	"testing"
 )
 
-// The ordinary route keeps the unchanged default outer-leaf profile. Pointer
-// forcing exposes persistent resource custody; it does not select the format.
+// Explicit outer-leaf placement exercises persistent resource custody alongside
+// forced value pointers, independently of the profile's default leaf placement.
 func TestPrimaryOwnedPromotionV6DefaultMaterializationReaderAndCut(t *testing.T) {
 	opts := OptionsFor(ProfileNoWALFast, t.TempDir())
-	if !opts.IndexOuterLeavesInValueLog {
-		t.Fatal("default outer-leaf producer lost")
-	}
+	opts.IndexOuterLeavesInValueLog = true
 	opts.ValueLog.ForcePointers = true
 	opts.ValueLog.PointerThreshold = 1
 	database, e := Open(opts)
@@ -76,7 +74,7 @@ func TestPrimaryOwnedPromotionV6DefaultMaterializationReaderAndCut(t *testing.T)
 	// Persistent value and outer-leaf files must both be real registered files;
 	// the existing parent probe separately checks exact physical parent identity.
 	if len(parents) < 2 {
-		t.Fatal("default materialization did not retain real files")
+		t.Fatal("outer-leaf materialization did not retain real files")
 	}
 	snapshot.Close()
 	if e = database.Close(); e != nil {

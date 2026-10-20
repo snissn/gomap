@@ -30,21 +30,7 @@ type dependencyDirectoryRelease struct {
 	err             error
 }
 
-func NewOwnedTypedLocalPrimaryDependencyDirectoryV6(p *pager.Pager, ref DependencyDirectoryRefV2, extent uint64, metadata *retainedalloc.Owner, release DependencyDirectoryReleaseProviderV6) (*DependencyDirectoryV2, error) {
-	if release == nil {
-		return nil, ErrResourceOwnership
-	}
-	// Retain the original canonical geometry and allocation admission.
-	directory, err := NewOwnedLocalPrimaryDependencyDirectoryV5(p, ref, extent, metadata, unusedTypedDirectoryRelease)
-	if err != nil {
-		return nil, err
-	}
-	directory.ownedRelease = nil
-	directory.ownedReleaseProvider = release
-	return directory, nil
-}
-
-// DATA and PRIMARY use the same canonical constructor and independent receipt.
+// DATA uses the canonical constructor and independent receipt.
 func NewOwnedTypedDependencyDirectoryV6(p *pager.Pager, ref DependencyDirectoryRefV2, extent uint64, metadata *retainedalloc.Owner, provider DependencyDirectoryReleaseProviderV6) (*DependencyDirectoryV2, error) {
 	if provider == nil {
 		return nil, ErrResourceOwnership

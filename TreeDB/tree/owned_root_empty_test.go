@@ -1,7 +1,6 @@
 package tree
 
 import (
-	"crypto/sha256"
 	"path/filepath"
 	"testing"
 
@@ -10,8 +9,8 @@ import (
 	"github.com/snissn/gomap/TreeDB/pager"
 )
 
-func TestOwnedUserRootEmptyCapturedPrimary(t *testing.T) {
-	for _, name := range []string{"plain_empty", "primary_empty", "nonempty_base", "internal_base", "put", "absence", "directory_corrupt", "base_digest", "missing_base"} {
+func TestOwnedUserRootEmptyCapturedDATA(t *testing.T) {
+	for _, name := range []string{"plain_empty", "nonempty_base", "internal_base"} {
 		t.Run(name, func(t *testing.T) {
 			p, err := pager.Open(filepath.Join(t.TempDir(), "index.db"), 65536)
 			if err != nil {
@@ -48,43 +47,13 @@ func TestOwnedUserRootEmptyCapturedPrimary(t *testing.T) {
 			if name == "internal_base" {
 				kind = page.PageTypeInternal
 			}
-			baseID, baseImage := makeBase(kind, name == "nonempty_base")
+			baseID, _ := makeBase(kind, name == "nonempty_base")
 			rootID := baseID
-			if name != "plain_empty" {
-				rootID, err = p.Alloc(1)
-				if err != nil {
-					t.Fatal(err)
-				}
-				image, err := p.GetForWrite(rootID)
-				if err != nil {
-					t.Fatal(err)
-				}
-				base := node.PrimaryOperand{Ref: page.PageChildRef(baseID), Digest: sha256.Sum256(baseImage)}
-				var entries []node.PrimaryDirectoryEntry
-				if name == "put" {
-					id, component := makeBase(page.PageTypeLeaf, true)
-					entries = []node.PrimaryDirectoryEntry{{Key: []byte("a"), Revision: 1, Kind: node.PrimaryPut, Operand: node.PrimaryOperand{Ref: page.PageChildRef(id), Digest: sha256.Sum256(component)}}}
-				}
-				if name == "absence" {
-					entries = []node.PrimaryDirectoryEntry{{Key: []byte("a"), Revision: 1, Kind: node.PrimaryAbsence}}
-				}
-				if name == "base_digest" {
-					base.Digest[0] ^= 1
-				}
-				if name == "missing_base" {
-					base.Ref = page.PageChildRef(999999)
-				}
-				if err := node.EncodePrimaryDirectory(image, rootID, 1, base, entries); err != nil {
-					t.Fatal(err)
-				}
-				if name == "directory_corrupt" {
-					image[len(image)-1] ^= 1
-				}
-			}
+
 			captured := New(p, nil, rootID)
 			empty, err := captured.OwnedUserRootEmpty()
-			wantError := name == "directory_corrupt" || name == "base_digest" || name == "missing_base"
-			wantEmpty := name == "plain_empty" || name == "primary_empty"
+			wantError := false
+			wantEmpty := name == "plain_empty"
 			if (err != nil) != wantError || empty != wantEmpty {
 				t.Fatalf("empty=%v err=%v; want empty=%v error=%v", empty, err, wantEmpty, wantError)
 			}

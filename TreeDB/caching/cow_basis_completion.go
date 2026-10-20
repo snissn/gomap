@@ -10,29 +10,28 @@ import (
 // Admission creates the SAME basis and its original failure edge before the
 // backend capture acquires any physical references. No replacement debt owner.
 func admitCOWBackendBasis(budget *memtable.COWBudget, s backenddb.SnapshotAllocationSizes) (*cowBackendBasis, error) {
-	lease, metadata, err := admitCOWSnapshotRetention(budget, cowBasisCharge(s), s)
+	lease, err := budget.AcquireExternal(cowBasisCharge(s))
 	if err != nil {
 		return nil, err
 	}
 	if s.IdentityRegistry == nil || s.RegistryMetadata != s.IdentityRegistry.MetadataOwner() {
-		metadata.Close()
 		lease.Close()
 		return nil, rootpublication.ErrResourceOwnership
 	}
-	if s.PrimaryMetadata == nil {
-		metadata, err = s.RegistryMetadata.Enroll(budget)
-		if err != nil {
-			lease.Close()
-			return nil, err
-		}
+
+	metadata, err := s.RegistryMetadata.Enroll(budget)
+	if err != nil {
+		lease.Close()
+		return nil, err
 	}
+
 	custody, err := rootpublication.NewOriginalCleanupCustody(s.IdentityRegistry, s.RegistryMetadata)
 	if err != nil {
 		metadata.Close()
 		lease.Close()
 		return nil, err
 	}
-	b := &cowBackendBasis{primaryMetadata: s.PrimaryMetadata != nil, lease: lease, metadata: metadata, originalCustody: custody, pins: make([]*rootpublication.IdentityPin, s.ValueLog.FileCount)}
+	b := &cowBackendBasis{lease: lease, metadata: metadata, originalCustody: custody, pins: make([]*rootpublication.IdentityPin, s.ValueLog.FileCount)}
 	b.refs.Store(1)
 	return b, nil
 }
@@ -63,13 +62,7 @@ func (b *cowBackendBasis) adoptSnapshot(s *backenddb.Snapshot) error {
 		}
 		return backenddb.ErrClosed
 	}
-	if b.primaryMetadata {
-		if err := s.AdoptPrimaryMetadataEnrollment(b.metadata); err != nil {
-			b.completionMu.Unlock()
-			return err
-		}
-		b.metadata = nil // actual Snapshot last-read finalizer owns this SAME enrollment
-	}
+
 	pins := b.pins
 	b.completionMu.Unlock()
 	return s.PinValueLogReadFiles(pins)

@@ -152,8 +152,7 @@ var retainedPowerLossCounterexamples = []string{
 	"relaxed-command-frame-before-rid",
 	"chunked-sync-intermediate-root",
 	"older-meta-live-page-reused",
-	"stale-build-base-saved-primary-v5",
-	"stale-build-base-primary-capsule-v6",
+	"stale-build-base-data-current",
 }
 
 type observedPowerLossCommandFrame struct {
@@ -163,6 +162,9 @@ type observedPowerLossCommandFrame struct {
 
 func powerLossOptions(dir string) treedb.Options {
 	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, dir)
+	// Frozen crash witnesses include external USER leaf dependencies. Pin their
+	// original placement independently of fresh-database profile defaults.
+	opts.IndexOuterLeavesInValueLog = true
 	opts.ChunkSize = 64 * 1024
 	opts.DisableSideStores = true
 	opts.DisableBackgroundPrune = true
@@ -539,7 +541,7 @@ func TestPowerLossOracleCounterexampleNewMetaMissingClosure(t *testing.T) {
 	requirePowerLossProfile(t, "no_wal_fast")
 	dir := t.TempDir()
 	opts := powerLossOptions(dir)
-	opts.IndexPrimaryDirectory = true
+
 	opts.ValueLog.PointerThreshold = 1
 	opts.ValueLog.ForcePointers = true
 	opts.IndexOuterLeavesInValueLog = true
@@ -567,7 +569,7 @@ func TestPowerLossOracleCounterexampleNewMetaMissingClosure(t *testing.T) {
 	var observeMu sync.Mutex
 	observing := true
 	cutCaptured := false
-	targetPrimary := filepath.Clean(filepath.Join(dir, "index.db.primary"))
+	targetIndex := filepath.Clean(filepath.Join(dir, "index.db"))
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
 		if !cowEventBelongsToDB(dir, event) {
 			return nil
@@ -577,7 +579,7 @@ func TestPowerLossOracleCounterexampleNewMetaMissingClosure(t *testing.T) {
 		if !observing {
 			return nil
 		}
-		targetMeta := event.Point == durabilitycut.AfterMetaWrite && event.Resource == durabilitycut.ResourceMeta && filepath.Clean(event.Path) == targetPrimary
+		targetMeta := event.Point == durabilitycut.AfterMetaWrite && event.Resource == durabilitycut.ResourceMeta && filepath.Clean(event.Path) == targetIndex
 		if cutCaptured {
 			// Keep the first image and its dependency set immutable. A later
 			// attempt at the same interrupted boundary gets the original cause.
@@ -639,7 +641,7 @@ func TestPowerLossOracleCounterexampleNewMetaMissingClosure(t *testing.T) {
 	err = db.Checkpoint()
 	deactivate()
 	capturedExactCut := cutCaptured && snapshot != nil && actualSnapshot != nil &&
-		meta.Point == durabilitycut.AfterMetaWrite && meta.Resource == durabilitycut.ResourceMeta && filepath.Clean(meta.Path) == targetPrimary
+		meta.Point == durabilitycut.AfterMetaWrite && meta.Resource == durabilitycut.ResourceMeta && filepath.Clean(meta.Path) == targetIndex
 	// The original asynchronous publisher can return cutErr and poison the
 	// handle before this checkpoint enters public admission. That admission
 	// returns the typed recovery sentinel instead of replaying the cause.
@@ -694,9 +696,8 @@ func TestPowerLossOracleCounterexampleNewMetaMissingClosure(t *testing.T) {
 	if len(metaChanged) == 0 || len(indexChanged) == 0 {
 		t.Fatalf("adversarial replay model did not separate meta and index changes: meta=%v index=%v", metaChanged, indexChanged)
 	}
-	// This witness selectively withholds actual data dependencies. V6 embeds
-	// its authoritative generation metadata in PRIMARY; the compatibility alias
-	// and unused manifest revisions are not leaf-record dependencies. Keep their
+	// This witness selectively withholds actual data dependencies. The compatibility
+	// alias and unused manifest revisions are not leaf-record dependencies. Keep their
 	// already-synced bodies rather than manufacturing an empty JSON alias when a
 	// namespace variant promotes all siblings in leaf_vlog.
 	for _, path := range snapshot.VolatilePaths() {
@@ -728,10 +729,11 @@ func TestPowerLossOracleCounterexampleNewMetaMissingClosure(t *testing.T) {
 		slashed := filepath.ToSlash(path)
 		kind := powerlossoracle.ResourceKind("")
 		switch {
-		case slashed == "index.db":
-			// V6 authority is in PRIMARY; its DATA pages remain a separate
-			// dependency of the complete new generation.
-			kind = powerlossoracle.ResourceIndex
+		case slashed == filepath.ToSlash(relIndex):
+			// DATA pages are already represented once by indexChanged above.
+			// The full file diff also contains target meta bytes; adding it here
+			// would restore an omitted dependency or a torn target meta.
+			continue
 		case strings.Contains(slashed, "value_vlog/") && dependencyPaths[slashed]:
 			kind = powerlossoracle.ResourceValueLog
 		case strings.Contains(slashed, "leaf_vlog/") && dependencyPaths[slashed]:
@@ -1156,7 +1158,7 @@ func powerLossLedgerGeneratedVariants(t *testing.T) map[string][]powerlossoracle
 			},
 		},
 		{
-			ID:               "public-stale-build-base-retry-saved-primary-v5",
+			ID:               "public-stale-build-base-retry-data-current",
 			Point:            powerlossoracle.AfterMetaSync,
 			Occurrence:       0,
 			Model:            model,
@@ -1166,15 +1168,6 @@ func powerLossLedgerGeneratedVariants(t *testing.T) map[string][]powerlossoracle
 				powerlossoracle.VariantSyncedOnly:    powerlossoracle.ExpectedOldRoot,
 				powerlossoracle.VariantFullWriteback: powerlossoracle.ExpectedNewRoot,
 			},
-		},
-		{
-			ID:               "public-stale-build-base-retry-capsule-v6",
-			Point:            powerlossoracle.AfterIndexDataSync,
-			Occurrence:       0,
-			Model:            model,
-			Dependencies:     []powerlossoracle.DirtyResource{{Kind: powerlossoracle.ResourceIndex, ID: "stale-build-base-retry-capsule", Path: "maindb/index.db"}},
-			RequiredFamilies: []powerlossoracle.VariantFamily{powerlossoracle.VariantFullWriteback},
-			ExpectedByFamily: map[powerlossoracle.VariantFamily]powerlossoracle.ExpectedResult{powerlossoracle.VariantSyncedOnly: powerlossoracle.ExpectedOldRoot, powerlossoracle.VariantFullWriteback: powerlossoracle.ExpectedNewRoot},
 		},
 	}
 	generated := make(map[string][]powerlossoracle.Variant, len(specs))
@@ -1359,7 +1352,7 @@ func TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot(t *testing.T) 
 	requirePowerLossProfile(t, "no_wal_fast")
 	dir := t.TempDir()
 	opts := powerLossOptions(dir)
-	opts.IndexPrimaryDirectory = true
+
 	opts.FlushBackendMaxEntries = 4
 	db, err := treedb.Open(opts)
 	if err != nil {
@@ -1388,7 +1381,7 @@ func TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot(t *testing.T) 
 	var observeMu sync.Mutex
 	observing := true
 	cutReturned := false
-	targetPrimary := filepath.Clean(filepath.Join(dir, "index.db.primary"))
+	targetIndex := filepath.Clean(filepath.Join(dir, "index.db"))
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
 		if !cowEventBelongsToDB(dir, event) {
 			return nil
@@ -1398,7 +1391,7 @@ func TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot(t *testing.T) 
 		if !observing {
 			return nil
 		}
-		targetMeta := event.Point == durabilitycut.AfterMetaWrite && event.Resource == durabilitycut.ResourceMeta && filepath.Clean(event.Path) == targetPrimary
+		targetMeta := event.Point == durabilitycut.AfterMetaWrite && event.Resource == durabilitycut.ResourceMeta && filepath.Clean(event.Path) == targetIndex
 		if cutReturned {
 			if targetMeta {
 				return cutErr
@@ -1430,7 +1423,7 @@ func TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot(t *testing.T) 
 	// The SAME actual post-meta interruption may reach the checkpoint through
 	// its poisoned admission gate after the asynchronous publisher records it.
 	capturedExactCut := cutReturned && snapshot != nil && meta.Point == durabilitycut.AfterMetaWrite &&
-		meta.Resource == durabilitycut.ResourceMeta && filepath.Clean(meta.Path) == targetPrimary
+		meta.Resource == durabilitycut.ResourceMeta && filepath.Clean(meta.Path) == targetIndex
 	observedMetaPoison := capturedExactCut && errors.Is(err, backenddb.ErrRecoveryRequired)
 	if !capturedExactCut || (!errors.Is(err, cutErr) && !observedMetaPoison) {
 		t.Fatalf("actual chunk checkpoint cut err=%v", err)

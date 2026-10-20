@@ -37,19 +37,19 @@ func TestCOWPublicRetentionRefusalDrainAndResume(t *testing.T) {
 				opts.DisableBackgroundPrune = true
 			})
 			cache := database.cached
-			var originalPrimary, originalRegistry *retainedalloc.Owner
+			var originalRegistry *retainedalloc.Owner
 			captureRefusal := errors.New("test-local metadata owner capture refusal")
-			captureMetadataOwners := func() (*retainedalloc.Owner, *retainedalloc.Owner) {
+			captureMetadataOwners := func() *retainedalloc.Owner {
 				t.Helper()
-				var primary, registry *retainedalloc.Owner
+				var registry *retainedalloc.Owner
 				snapshot, err := database.backend.AcquireSnapshotWithAllocationAdmission(func(sizes backenddb.SnapshotAllocationSizes) error {
-					primary, registry = sizes.PrimaryMetadata, sizes.RegistryMetadata
+					registry = sizes.RegistryMetadata
 					return captureRefusal
 				})
 				if snapshot != nil || err != captureRefusal {
 					t.Fatalf("owner-only refusal snapshot=%p err=%v", snapshot, err)
 				}
-				return primary, registry
+				return registry
 			}
 
 			keys := [][]byte{[]byte("a"), []byte("d")}
@@ -85,9 +85,9 @@ func TestCOWPublicRetentionRefusalDrainAndResume(t *testing.T) {
 					t.Fatal(err)
 				}
 				if stage == 0 && profile == ProfileNoWALFast {
-					originalPrimary, originalRegistry = captureMetadataOwners()
-					if originalRegistry == nil || (originalPrimary != nil) != opts.IndexPrimaryDirectory {
-						t.Fatalf("selected producer metadata owners: PRIMARY selected=%t primary=%p registry=%p", opts.IndexPrimaryDirectory, originalPrimary, originalRegistry)
+					originalRegistry = captureMetadataOwners()
+					if originalRegistry == nil {
+						t.Fatal("DATA identity registry owner missing")
 					}
 				}
 				for i, key := range keys {
@@ -226,9 +226,9 @@ func TestCOWPublicRetentionRefusalDrainAndResume(t *testing.T) {
 			resumed := cache.COWMemoryStats()
 			cowPublicRetentionBound(t, resumed, limits)
 			if profile == ProfileNoWALFast {
-				primary, registry := captureMetadataOwners()
-				if primary != originalPrimary || registry != originalRegistry {
-					t.Fatal("original producer owner pair changed before Close")
+				registry := captureMetadataOwners()
+				if registry != originalRegistry {
+					t.Fatal("original DATA registry owner changed before Close")
 				}
 			}
 			if err := cowPublicContractComplete(t, blocked, "public close after drain", database.Close); err != nil {
@@ -237,20 +237,16 @@ func TestCOWPublicRetentionRefusalDrainAndResume(t *testing.T) {
 			closed := cache.COWMemoryStats()
 			zero := closed
 			zero.PeakBytes = 0
-			var primaryBytes uint64
-			primaryClosed := false
-			if originalPrimary != nil {
-				primaryBytes, primaryClosed = originalPrimary.Bytes(), originalPrimary.PhysicalClosed()
-			}
+
 			if zero != (memtable.COWStats{}) {
 				if profile == ProfileNoWALFast {
 					registry := database.backend.ValueLogIdentityPinRegistry()
-					t.Fatalf("closed integration retained charges: %+v; original primary present=%t Bytes=%d PhysicalClosed=%t; original registry Bytes=%d PhysicalClosed=%t Stats=%+v CachedStableDirectoryLinks=%d CleanupError=%v", closed, originalPrimary != nil, primaryBytes, primaryClosed, originalRegistry.Bytes(), originalRegistry.PhysicalClosed(), registry.Stats(), registry.CachedStableDirectoryLinks(), registry.CleanupError())
+					t.Fatalf("closed integration retained charges: %+v; original registry Bytes=%d PhysicalClosed=%t Stats=%+v CachedStableDirectoryLinks=%d CleanupError=%v", closed, originalRegistry.Bytes(), originalRegistry.PhysicalClosed(), registry.Stats(), registry.CachedStableDirectoryLinks(), registry.CleanupError())
 				}
 				t.Fatalf("closed integration retained charges: %+v", closed)
 			}
 			if profile == ProfileNoWALFast {
-				t.Logf("COW_TERMINAL_ORIGINAL_OWNERS primary present=%t Bytes=%d PhysicalClosed=%t; registry Bytes=%d PhysicalClosed=%t", originalPrimary != nil, primaryBytes, primaryClosed, originalRegistry.Bytes(), originalRegistry.PhysicalClosed())
+				t.Logf("COW_TERMINAL_ORIGINAL_OWNERS registry Bytes=%d PhysicalClosed=%t", originalRegistry.Bytes(), originalRegistry.PhysicalClosed())
 			}
 			reopened, err := Open(opts)
 			if err != nil {

@@ -237,7 +237,7 @@ func (c *Collection) buildAndPublishVectorPartitionRouterForGraphVariantV1(ctx c
 		}
 		return status, err
 	}
-	if c == nil || c.db == nil {
+	if c == nil || c.vectorPartitionStorageDBV1() == nil {
 		return fail(errors.New("collections: closed collection"))
 	}
 	if ctx == nil {
@@ -253,7 +253,7 @@ func (c *Collection) buildAndPublishVectorPartitionRouterForGraphVariantV1(ctx c
 	if err := building.Validate(DefaultVectorPartitionManifestLimits()); err != nil {
 		return fail(err)
 	}
-	store, err := OpenExistingVectorPartitionStoreV1(c.db.Dir())
+	store, err := OpenExistingVectorPartitionStoreV1(c.vectorPartitionStorageDBV1().Dir())
 	if err != nil {
 		return fail(err)
 	}
@@ -406,7 +406,7 @@ func (c *Collection) buildAndPublishVectorPartitionRouterForGraphVariantV1(ctx c
 	if owner != nil {
 		lease, releaseCapture, err = owner.vectorPrepareCaptureLeaseV1()
 	} else {
-		lease, err = c.db.AcquireStableResourceCaptureLease()
+		lease, err = c.vectorPartitionStorageDBV1().AcquireStableResourceCaptureLease()
 		if lease != nil {
 			releaseCapture = lease.Release
 		}
@@ -423,12 +423,12 @@ func (c *Collection) buildAndPublishVectorPartitionRouterForGraphVariantV1(ctx c
 		}
 	}
 	refs, routerResources, err := appendAssets(
-		c.db.ColumnAssetRootDir(), *cfg, opts.AssetFileID,
+		c.vectorPartitionStorageDBV1().ColumnAssetRootDir(), *cfg, opts.AssetFileID,
 		[]StableColumnPhysicalAssetAppend{{
 			Payload: raw, Kind: ColumnAssetKindTCS1HNSWSearchPack,
 			Generation: building.Generation, PartID: opts.AssetPartID,
 		}},
-		c.db.StableResourceIdentityPinRegistry(), lease,
+		c.vectorPartitionStorageDBV1().StableResourceIdentityPinRegistry(), lease,
 	)
 	status.AppendNanos = elapsedNanosVPR(appendStarted)
 	if err != nil {
@@ -446,7 +446,7 @@ func (c *Collection) buildAndPublishVectorPartitionRouterForGraphVariantV1(ctx c
 		}
 	}()
 	existingResources, err := captureVectorPartitionRouterExistingAssetsV1(
-		c.db.ColumnAssetRootDir(), building.Assets, c.db.StableResourceIdentityPinRegistry(),
+		c.vectorPartitionStorageDBV1().ColumnAssetRootDir(), building.Assets, c.vectorPartitionStorageDBV1().StableResourceIdentityPinRegistry(),
 	)
 	if err != nil {
 		return fail(err)
@@ -539,34 +539,31 @@ func (c *Collection) readVectorPartitionRouterSourceRowsBoundedV1(index string, 
 	if err != nil {
 		return identity, nil, err
 	}
-	reader, err := c.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+	reader, err := c.openVectorPartitionRowSourceV1(def.Name)
 	if err != nil {
 		return identity, nil, err
 	}
 	defer func() {
 		resultErr = errors.Join(resultErr, reader.Close())
 	}()
-	if reader.typedVectorSource == nil {
+	typed, idsAvailable := reader.partitionSourceAvailabilityV1()
+	if !typed {
 		return identity, nil, errors.New("collections: authoritative vector partition router typed vector source is unavailable")
 	}
-	if reader.documentIDSource == nil {
+	if !idsAvailable {
 		return identity, nil, errors.New("collections: authoritative vector partition router document-ID source is unavailable")
 	}
-	if reader.graph.RowCount < 1 || uint64(reader.graph.RowCount) > maxRows {
-		return identity, nil, fmt.Errorf("collections: authoritative vector partition router rows=%d outside supported bound", reader.graph.RowCount)
+	identity = reader.partitionSourceIdentityV1()
+	if identity.RowCount < 1 || identity.RowCount > maxRows || identity.RowCount > uint64(math.MaxInt) {
+		return identity, nil, fmt.Errorf("collections: authoritative vector partition router rows=%d outside supported bound", identity.RowCount)
 	}
-	identity = VectorPartitionSourceIdentityV1{
-		Generation: reader.graph.BaseManifestGeneration,
-		Checksum:   reader.graph.BaseManifestChecksum,
-		SchemaHash: reader.graph.BaseSchemaHash,
-		RowCount:   uint64(reader.graph.RowCount),
-	}
-	vectorBytes := uint64(reader.graph.RowCount) * uint64(def.Dimensions) * 4
+	rowCount := int(identity.RowCount)
+	vectorBytes := uint64(rowCount) * uint64(def.Dimensions) * 4
 	inputBytes := vectorBytes
 	if inputBytes > maxBytes {
 		return identity, nil, errors.New("collections: vector prepare source bytes exceed input admission")
 	}
-	for ordinal := 0; ordinal < reader.graph.RowCount; ordinal++ {
+	for ordinal := 0; ordinal < rowCount; ordinal++ {
 		id, ok := reader.documentIDForOrdinal(ordinal)
 		if !ok || len(id) == 0 || len(id) > maxIDBytes {
 			return identity, nil, errors.New("collections: vector prepare document ID exceeds input admission")
@@ -576,15 +573,15 @@ func (c *Collection) readVectorPartitionRouterSourceRowsBoundedV1(index string, 
 		}
 		inputBytes += uint64(len(id))
 	}
-	if def.Dimensions < 1 || reader.graph.RowCount > math.MaxInt/def.Dimensions || inputBytes-vectorBytes > uint64(math.MaxInt) {
+	if def.Dimensions < 1 || rowCount > math.MaxInt/def.Dimensions || inputBytes-vectorBytes > uint64(math.MaxInt) {
 		return identity, nil, errors.New("collections: source allocation size overflows")
 	}
-	rows := make([]VectorPartitionRouterSourceRowV1, reader.graph.RowCount)
-	vectors := make([]float32, reader.graph.RowCount*def.Dimensions)
+	rows := make([]VectorPartitionRouterSourceRowV1, rowCount)
+	vectors := make([]float32, rowCount*def.Dimensions)
 	ids := make([]byte, int(inputBytes-vectorBytes))
 	idOffset := 0
 	for ordinal := range rows {
-		values, _, _, ok := reader.typedVectorSource.vectorForOrdinal(ordinal)
+		values, ok := reader.partitionSourceVectorV1(ordinal)
 		if !ok || len(values) != def.Dimensions {
 			return VectorPartitionSourceIdentityV1{}, nil, fmt.Errorf("collections: authoritative vector partition router source ordinal %d is unavailable", ordinal)
 		}
@@ -657,20 +654,17 @@ func validateVectorPartitionRouterInputV1(manifest VectorPartitionManifestV1, pa
 }
 
 func (c *Collection) authoritativeVectorPartitionRouterInputV1(manifest VectorPartitionManifestV1, def VectorIndexDefinition, partitions []internalrouter.RouterPartitionV1) (_ []internalrouter.RouterPartitionV1, resultErr error) {
-	reader, err := c.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+	reader, err := c.openVectorPartitionRowSourceV1(def.Name)
 	if err != nil {
 		return nil, fmt.Errorf("collections: open authoritative vector partition router source: %w", err)
 	}
 	defer func() {
 		resultErr = errors.Join(resultErr, reader.Close())
 	}()
-	if reader.graph.BaseManifestGeneration != manifest.SourceGeneration ||
-		reader.graph.BaseManifestChecksum != manifest.SourceChecksum ||
-		reader.graph.BaseSchemaHash != manifest.SourceSchemaHash ||
-		uint64(reader.graph.RowCount) != manifest.SourceRowCount {
+	if reader.partitionSourceIdentityV1() != vectorPartitionLiveSourceV1(manifest) {
 		return nil, errors.New("collections: authoritative vector partition router source identity mismatch")
 	}
-	if reader.typedVectorSource == nil {
+	if typed, _ := reader.partitionSourceAvailabilityV1(); !typed {
 		return nil, errors.New("collections: authoritative vector partition router typed vector source is unavailable")
 	}
 	authoritative := make([]internalrouter.RouterPartitionV1, len(partitions))
@@ -681,7 +675,7 @@ func (c *Collection) authoritativeVectorPartitionRouterInputV1(manifest VectorPa
 			if vector.Ordinal > math.MaxInt {
 				return nil, fmt.Errorf("collections: vector partition router ordinal %d overflows source reader", vector.Ordinal)
 			}
-			source, _, _, ok := reader.typedVectorSource.vectorForOrdinal(int(vector.Ordinal))
+			source, ok := reader.partitionSourceVectorV1(int(vector.Ordinal))
 			if !ok || len(source) != def.Dimensions {
 				return nil, fmt.Errorf("collections: authoritative vector partition router source ordinal %d is unavailable", vector.Ordinal)
 			}
@@ -1146,15 +1140,15 @@ func (c *Collection) openVectorPartitionRouterWithContextV1(
 		status.FailureReason = err.Error()
 		return nil, status, err
 	}
-	if c == nil || c.db == nil || load == nil {
+	if c == nil || c.vectorPartitionStorageDBV1() == nil || load == nil {
 		status.FailureReason = "collections: closed collection"
 		return nil, status, errors.New(status.FailureReason)
 	}
-	err := WithVectorPartitionStorageBarrierWithContextV1(ctx, c.db.Dir(), func() error {
+	err := WithVectorPartitionStorageBarrierWithContextV1(ctx, c.vectorPartitionStorageDBV1().Dir(), func() error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		store, err := OpenExistingVectorPartitionStoreV1(c.db.Dir())
+		store, err := OpenExistingVectorPartitionStoreV1(c.vectorPartitionStorageDBV1().Dir())
 		if err != nil {
 			return err
 		}
@@ -1190,7 +1184,7 @@ func (c *Collection) openVectorPartitionRouterWithContextV1(
 		if err := ctx.Err(); err != nil {
 			return closeVectorPartitionRouterViewAfterOpenErrorV1(opened.view, err)
 		}
-		key := vectorPartitionReaderPinKeyV1(c.db.Dir(), c.name, index, manifest.Generation)
+		key := vectorPartitionReaderPinKeyV1(c.vectorPartitionStorageDBV1().Dir(), c.name, index, manifest.Generation)
 		if key == "" {
 			return closeVectorPartitionRouterViewAfterOpenErrorV1(opened.view, errors.New("collections: invalid vector partition router pin root"))
 		}
@@ -1249,7 +1243,7 @@ func (c *Collection) openVectorPartitionRouterManifestWithContextV1(ctx context.
 		Ref:              manifest.RouterAsset.Ref,
 		AssetBytes:       int64(manifest.RouterAsset.Bytes),
 	}
-	path, err := columnAssetSegmentPath(c.db.ColumnAssetRootDir(), asset.Ref)
+	path, err := columnAssetSegmentPath(c.vectorPartitionStorageDBV1().ColumnAssetRootDir(), asset.Ref)
 	if err != nil {
 		return nil, err
 	}
@@ -1266,7 +1260,7 @@ func (c *Collection) openVectorPartitionRouterManifestWithContextV1(ctx context.
 		mappedresource.AcquireOptions{
 			Reason: "vector partition router prepared view", ValidationMode: mappedresource.ValidationVerify,
 			PreferMapped: true, AllowHeapCopy: true,
-			ResourceRoot: c.db.ColumnAssetRootDir(), ResourcePath: path,
+			ResourceRoot: c.vectorPartitionStorageDBV1().ColumnAssetRootDir(), ResourcePath: path,
 		},
 	)
 	if err != nil {

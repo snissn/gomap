@@ -23,6 +23,9 @@ func TestChecksumIEEEKnownVectors(t *testing.T) {
 			if got := Checksum(tc.data); got != tc.want {
 				t.Fatalf("Checksum(%q)=0x%08x want 0x%08x", tc.data, got, tc.want)
 			}
+			if got := ChecksumSoftware(tc.data); got != tc.want {
+				t.Fatalf("ChecksumSoftware(%q)=0x%08x want 0x%08x", tc.data, got, tc.want)
+			}
 			if got := ChecksumParts(tc.data); got != tc.want {
 				t.Fatalf("ChecksumParts(%q)=0x%08x want 0x%08x", tc.data, got, tc.want)
 			}
@@ -45,6 +48,10 @@ func TestChecksumIEEERandomizedCompatibility(t *testing.T) {
 			t.Fatalf("rng.Read(%d): %v", n, err)
 		}
 		want := stdcrc32.ChecksumIEEE(data)
+		before := bytes.Clone(data)
+		if got := ChecksumSoftware(data); got != want || !bytes.Equal(data, before) {
+			t.Fatalf("ChecksumSoftware len=%d got=0x%08x want stdlib=0x%08x or changed input", n, got, want)
+		}
 		if got := Checksum(data); got != want {
 			t.Fatalf("Checksum len=%d got=0x%08x want stdlib=0x%08x", n, got, want)
 		}
@@ -91,6 +98,9 @@ func TestUpdateAndChecksumPartsStreamingCompatibility(t *testing.T) {
 		}
 		if gotParts := ChecksumParts(parts...); gotParts != wantUpdate {
 			t.Fatalf("ChecksumParts chunks=%v got=0x%08x want stdlib=0x%08x", chunks, gotParts, wantUpdate)
+		}
+		if gotWhole := ChecksumSoftware(bytes.Join(parts, nil)); gotWhole != wantUpdate {
+			t.Fatalf("ChecksumSoftware joined chunks=%v got=0x%08x want streaming=0x%08x", chunks, gotWhole, wantUpdate)
 		}
 		if gotWhole := Checksum(bytes.Join(parts, nil)); gotWhole != wantUpdate {
 			t.Fatalf("Checksum joined chunks=%v got=0x%08x want stdlib=0x%08x", chunks, gotWhole, wantUpdate)

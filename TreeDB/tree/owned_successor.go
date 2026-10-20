@@ -55,67 +55,7 @@ func (t *Tree) SeekGEWithFixedScratch(start, end, keyScratch, leafScratch []byte
 		return node.LeafEntry{}, false, err
 	}
 	rootRef := page.PageChildRef(t.rootPageID)
-	var directory node.PrimaryDirectoryView
-	primary := root.Type() == page.PageTypePrimaryDirectory
-	if primary {
-		var err error
-		directory, err = node.DecodePrimaryDirectory(root.Data())
-		if err != nil {
-			return node.LeafEntry{}, false, err
-		}
-		// The same complete base/digest validation used by ordinary PRIMARY reads.
-		base, _ := directory.Base()
-		var n node.Node
-		if err = t.loadReadRefInto(&n, base.Ref, true, keyScratch, leafScratch, readLeaf, true); err != nil {
-			return node.LeafEntry{}, false, err
-		}
-		if !node.VerifyPrimaryOperand(base, n.Data()) || (n.Type() != page.PageTypeInternal && n.Type() != page.PageTypeLeaf) {
-			return node.LeafEntry{}, false, node.ErrPrimaryDirectory
-		}
-		rootRef = base.Ref
-	}
-	best, found, err := t.seekBaseGE(rootRef, start, end, keyScratch, leafScratch, scratch, readLeaf)
-	if err != nil || !primary {
-		return best, found, err
-	}
-	// Directory order and equal-key precedence are the maintained PRIMARY merge
-	// rule. Only the winning component is materialized and validated.
-	lo, hi := 0, directory.Count()
-	for lo < hi {
-		mid := lo + (hi-lo)/2
-		e, er := directory.Entry(mid)
-		if er != nil {
-			return node.LeafEntry{}, false, er
-		}
-		if start != nil && compareTreeKey(e.Key, start) < 0 {
-			lo = mid + 1
-		} else {
-			hi = mid
-		}
-	}
-	if lo >= directory.Count() {
-		return best, found, nil
-	}
-	delta, err := directory.Entry(lo)
-	if err != nil {
-		return node.LeafEntry{}, false, err
-	}
-	if end != nil && compareTreeKey(delta.Key, end) >= 0 || found && compareTreeKey(delta.Key, best.Key) > 0 {
-		return best, found, nil
-	}
-	if delta.InlineAbsence() {
-		return node.LeafEntry{Key: delta.Key, Flags: node.FlagTombstone, Revision: delta.Revision}, true, nil
-	}
-	ref, _, err := t.selectPrimaryOperand(root.Data(), delta.Key, readLeaf, leafScratch, true)
-	if err != nil {
-		return node.LeafEntry{}, false, err
-	}
-	var n node.Node
-	if err = t.loadReadRefInto(&n, ref, true, keyScratch, leafScratch, readLeaf, true); err != nil {
-		return node.LeafEntry{}, false, err
-	}
-	k, v, p, f, r, err := n.GetLeafEntryViewWithRevision(0)
-	return node.LeafEntry{Key: k, Value: v, ValuePtr: p, Flags: f, Revision: r}, err == nil, err
+	return t.seekBaseGE(rootRef, start, end, keyScratch, leafScratch, scratch, readLeaf)
 }
 
 func (t *Tree) seekBaseGE(ref page.ChildRef, start, end, keyScratch, leafScratch []byte, scratch *OwnedSuccessorScratch, readLeaf func(page.LeafLogPtr, []byte) ([]byte, error)) (node.LeafEntry, bool, error) {

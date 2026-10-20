@@ -58,3 +58,20 @@ func (b *Batch) attachNativeReplayGroup(intent *CommandWALIntent, group *RootPub
 	b.commandWALPublishIntent = &intent.inner
 	return nil
 }
+
+// AttachDocumentMutationReplayGroup accepts only the original active singleton
+// CRUD replay authority. It cannot attach a caller-created or assigned intent.
+func (b *Batch) AttachDocumentMutationReplayGroup(intent *CommandWALIntent, group *RootPublicationBuildGroup) error {
+	if b == nil || b.db == nil {
+		return ErrClosed
+	}
+	if err := b.db.ValidateCommandWALReplayOperationV1(intent); err != nil {
+		return err
+	}
+	switch intent.inner.kind {
+	case commitlog.CommandKindCollectionInsertBatchByID, commitlog.CommandKindCollectionUpdateBatchByID, commitlog.CommandKindCollectionDeleteBatchByID, commitlog.CommandKindCollectionReplaceSourceByID:
+		return b.attachNativeReplayGroup(intent, group, intent.inner.kind)
+	default:
+		return ErrCommandWALRejected
+	}
+}

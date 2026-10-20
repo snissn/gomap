@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -43,6 +42,9 @@ func VacuumIndexOffline(opts Options) error {
 func vacuumIndexOffline(opts Options, fail vacuumFailpoint) (retErr error) {
 	if opts.Dir == "" {
 		return errors.New("db dir required")
+	}
+	if err := ValidateDATAIndexOpen(opts.Dir, opts.IndexPrimaryDirectory); err != nil {
+		return err
 	}
 	if err := applyFormatConfigForMaintenanceWithOptions(&opts, true); err != nil {
 		return err
@@ -92,24 +94,6 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) (retErr error) {
 		}
 	}()
 
-	var offlineScope *indexGen
-	var offlineParent *os.File
-	if gen := d.idx.Load(); gen != nil && gen.primary != nil && gen.primary.CapsuleFormatV6() {
-		offlineScope, err = d.captureOfflinePrimaryScopeV6()
-		if err != nil {
-			return err
-		}
-		offlineParent = offlineScope.stableNamespaceParent
-		defer func() {
-			metadata, charge, cleanupErr := offlineScope.releaseOfflineNamespaceScopeV6()
-			offlineScope, offlineParent = nil, nil
-			retErr = errors.Join(retErr, cleanupErr)
-			if metadata != nil && charge != 0 {
-				metadata.RemovePending(charge)
-			}
-		}()
-	}
-
 	var maintenanceLeafLog LeafPageLogCloser
 	if opts.IndexOuterLeavesInValueLog {
 		maintenanceLeafLog, err = NewStandaloneLeafPageLog(opts.Dir, StandaloneLeafPageLogOptions{
@@ -124,31 +108,6 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) (retErr error) {
 		defer func() {
 			retErr = errors.Join(retErr, maintenanceLeafLog.Close())
 		}()
-	}
-
-	if gen := d.idx.Load(); gen != nil && gen.primary != nil && gen.primary.CapsuleFormatV6() {
-		roots, e := d.CaptureRecoverableRootSetForInspection(context.Background())
-		if e != nil {
-			return e
-		}
-		defer func() { retErr = errors.Join(retErr, roots.ReleaseWithError()) }()
-		pair, e := d.newOfflinePrimaryPairV6(offlineScope, opts.ChunkSize)
-		if e != nil {
-			return e
-		}
-		newPager := pair.pager
-		produce := func(root RecoverableRoot) (rebuiltDurableRootV1, error) {
-			rebuilt, _, e := d.rebuildRecoverableRootWithPublicationLockV1(context.Background(), roots, root, newPager, pair.allocator, false)
-			return rebuilt, e
-		}
-		e = d.finishOfflinePrimaryPairV6(offlineParent, pair, roots, produce, false, func() error {
-			if maintenanceLeafLog != nil {
-				return maintenanceLeafLog.Close()
-			}
-			return nil
-		})
-		pair, newPager, produce = nil, nil, nil
-		return e
 	}
 
 	replacement, err := newStartupIndexGeneration(d, lock)
@@ -454,23 +413,6 @@ func vacuumTreeHasLeafLogRefs(p *pager.Pager, rootID uint64) (bool, error) {
 		}
 		n := node.NewNode(data)
 		switch n.Type() {
-		case page.PageTypePrimaryDirectory:
-			directory, err := node.DecodePrimaryDirectory(data)
-			if err != nil {
-				return false, err
-			}
-			base, _ := directory.Base()
-			found, err := walk(base.Ref.Page)
-			if err != nil || found {
-				return found, err
-			}
-			for i := 0; i < directory.Count(); i++ {
-				entry, _ := directory.Entry(i)
-				if entry.Operand.Ref.Kind == page.ChildRefLeafLog {
-					return true, nil
-				}
-			}
-			return false, nil
 		case page.PageTypeInternal:
 			count := n.Count()
 			for i := uint16(0); i < count; i++ {

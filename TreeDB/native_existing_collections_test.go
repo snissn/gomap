@@ -58,7 +58,7 @@ func TestNativeExistingCollectionPublicLifecycle(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			// Unmigrated producers refuse before callbacks, metadata or WAL effects.
+			// Missing-row no-ops and invalid metadata must not publish or assign WAL.
 			assignedBefore := backend.CommandWALNextLSN()
 			opening, e := backend.CaptureNativeSemanticState()
 			if e != nil {
@@ -70,31 +70,31 @@ func TestNativeExistingCollectionPublicLifecycle(t *testing.T) {
 			}
 
 			called := false
-			if _, _, e := collection.Update([]byte("a"), func(current []byte) ([]byte, bool, error) {
+			if matched, modified, e := collection.Update([]byte("a"), func(current []byte) ([]byte, bool, error) {
 				called = true
 				return []byte(`{"changed":true}`), true, nil
-			}); e == nil || called {
-				t.Fatalf("unsupported update: callback=%v error=%v", called, e)
+			}); e != nil || matched || modified || called {
+				t.Fatalf("missing update: matched=%v modified=%v callback=%v error=%v", matched, modified, called, e)
 			}
-			if e := collection.Delete([]byte("a")); e == nil {
-				t.Fatal("unsupported delete accepted")
+			if deleted, e := collection.DeleteDocument([]byte("a")); e != nil || deleted {
+				t.Fatalf("missing delete: deleted=%v error=%v", deleted, e)
 			}
 			if _, e := collection.CreateIndex(collections.IndexDefinition{Name: "blocked"}); e == nil {
-				t.Fatal("unsupported index accepted")
+				t.Fatal("index without a field accepted")
 			}
 			// Scalar compound indexes are supported; text metadata remains ineligible.
 			if _, e := manager.CreateCollection(&collections.CollectionMeta{Name: "blocked", Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}, Indexes: []collections.IndexDefinition{{Name: "compound", ValueType: collections.IndexValueBSONOrderedV2, Components: []collections.IndexComponent{{Field: "x", Direction: collections.IndexDirectionAscending}, {Field: "y", Direction: collections.IndexDirectionAscending}}}}, TextIndexes: []collections.TextIndexDefinition{{Name: "lexical", Version: collections.TextIndexVersionV1, Analyzer: collections.TextAnalyzerSimple, Fields: []collections.TextIndexField{{Field: "body"}}}}}); !errors.Is(e, backenddb.ErrNativeSemanticUnsupported) {
 				t.Fatalf("unsupported text metadata admission: %v", e)
 			}
 			if backend.CommandWALNextLSN() != assignedBefore {
-				t.Fatal("unsupported operation assigned WAL")
+				t.Fatal("no-op or invalid operation assigned WAL")
 			}
 			afterRefusal, e := backend.CaptureNativeSemanticState()
 			if e != nil {
 				t.Fatal(e)
 			}
 			if afterRefusal.State() != beforeState || afterRefusal.LogicalSequence() != beforeSequence {
-				t.Fatal("unsupported operation changed native state")
+				t.Fatal("no-op or invalid operation changed native state")
 			}
 			if e = afterRefusal.Close(); e != nil {
 				t.Fatal(e)
@@ -141,6 +141,22 @@ func TestNativeExistingCollectionPublicLifecycle(t *testing.T) {
 			}
 			if _, err = collection.InsertBatch(ids, docs); err == nil {
 				t.Fatal("duplicate accepted")
+			}
+			// A present row invokes the callback. Declining a replacement remains a
+			// no-op, preserving the original Create + InsertBatch crash/replay trace.
+			noOpLSN := backend.CommandWALNextLSN()
+			called = false
+			if matched, modified, e := collection.Update([]byte("a"), func(current []byte) ([]byte, bool, error) {
+				called = true
+				if !bytes.Equal(current, docs[1]) {
+					t.Fatalf("update callback input: %q", current)
+				}
+				return current, false, nil
+			}); e != nil || !matched || modified || !called {
+				t.Fatalf("present no-op update: matched=%v modified=%v callback=%v error=%v", matched, modified, called, e)
+			}
+			if backend.CommandWALNextLSN() != noOpLSN {
+				t.Fatal("declined update assigned WAL")
 			}
 			if child != "" {
 				snap := backend.AcquireSnapshot()

@@ -103,7 +103,7 @@ func (c *Collection) vectorPartitionLiveReplaySpecsV1(input columnWritePublishIn
 		_ = snap.Close()
 		return nil, ErrConcurrentMutation
 	}
-	baseCoverage, err := vectorIndexDocumentGenerationForCollection(snap, input.meta.Name)
+	baseCoverage, err := vectorIndexDocumentGeneration(snap, input.catalog)
 	_ = snap.Close()
 	if err != nil {
 		return nil, err
