@@ -29,17 +29,24 @@ func TestReplacementPublicInstallSurvivesCallerDeadlineV1(t *testing.T) {
 	testReplacementPublicInstallV1(t, true, false)
 }
 
-func testReplacementPublicInstallV1(t *testing.T, stallInstall, promote bool, completion ...bool) {
-	complete := len(completion) != 0 && completion[0]
+func replacementPublicInstallTestConfigsV1(t testing.TB, complete bool) []FixedPeerTCPConfigV1 {
+	t.Helper()
 	configs := fixedPeerTestConfigsV1(t)
 	if complete {
 		// HashiCorp bounds leadership transfer by ElectionTimeout, independently
 		// of the request context. Retirement tests correctness on loaded/race
-		// runners, not a 300ms election/transfer latency target.
+		// runners, not a 300ms election/transfer or 2s durable RPC latency target.
 		for i := range configs {
+			configs[i].RequestTimeout = fixedPeerPositiveCompletionRequestTimeoutV1
 			configs[i].RaftTimeout = time.Second
 		}
 	}
+	return configs
+}
+
+func testReplacementPublicInstallV1(t *testing.T, stallInstall, promote bool, completion ...bool) {
+	complete := len(completion) != 0 && completion[0]
+	configs := replacementPublicInstallTestConfigsV1(t, complete)
 	used := map[string]bool{}
 	for _, node := range configs[0].Nodes {
 		used[node.Address] = true
