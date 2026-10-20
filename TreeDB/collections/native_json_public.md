@@ -339,8 +339,9 @@ Creation backfills the complete captured primary cut, including pending rows,
 using the maintained scalar encoder and uniqueness checks. A duplicate unique
 backfill refuses before canonical assignment. Scalar multikey backfill reuses the
 same complete-cut extraction and normalized value sets. BSON compound scalar
-backfill uses the same captured-cut tuple extraction. Typed, text and vector
-index DDL remain outside this capability.
+backfill uses the same captured-cut tuple extraction. Typed index creation and
+text/vector index DDL remain outside this capability; eligible typed scalar drops
+are described below.
 
 Every transition writes the existing catalog-name conflict effect. Native
 transactions depend on that name even when the collection is only read to derive
