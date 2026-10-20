@@ -39,6 +39,13 @@ func (group *RootPublicationBuildGroup) buildNativeOrderedRootLocked(input Order
 	if err != nil {
 		return 0, err
 	}
+	return group.buildNativeOrderedRootWithOptionsLocked(input, opts)
+}
+
+func (group *RootPublicationBuildGroup) buildNativeOrderedRootWithOptionsLocked(input OrderedRootDeltaBatchPublishInput, opts orderedRootPublishOptions) (uint64, error) {
+	if group == nil || group.db == nil || group.closed || group.failed || !group.writeLocked || !group.durablePublishLocked || group.tracker == nil || input.Delta == nil {
+		return 0, errors.New("invalid captured native root build")
+	}
 	// Native roots use the existing ordered-root DATA builder. PRIMARY private
 	// construction belongs only to the group's raw user-root path.
 	root, retired, metrics, result, err := group.db.publishOrderedRootDeltaBatchWithAllocatorResult(group.idx, input.BaseRoot, input.Delta, opts, group.tracker, group.tracker, input.IncludeDeletedOnColdBuild, group.db.shouldCollectValueLogRefDelta(group.baseSeq))
@@ -46,7 +53,7 @@ func (group *RootPublicationBuildGroup) buildNativeOrderedRootLocked(input Order
 		group.failed = true
 		return 0, err
 	}
-	delta, err := group.db.buildAppliedOrderedRootDeltaBatchValueLogRefDelta(group.idx, group.baseSeq, input, orderedRootDeltaBatchGroupApplyResult{rootID: root, retired: retired, metrics: metrics, applyResult: result})
+	delta, err := group.db.buildAppliedOrderedRootDeltaBatchValueLogRefDeltaWithOptions(group.idx, group.baseSeq, input, orderedRootDeltaBatchGroupApplyResult{rootID: root, retired: retired, metrics: metrics, applyResult: result}, opts)
 	if err != nil {
 		group.failed = true
 		return 0, err
@@ -65,7 +72,10 @@ func (group *RootPublicationBuildGroup) buildNativeOrderedRootLocked(input Order
 func (group *RootPublicationBuildGroup) BuildNativeSystemDelta(delta *batchpkg.Batch) error {
 	group.mu.Lock()
 	defer group.mu.Unlock()
-	root, err := group.buildNativeOrderedRootLocked(OrderedRootDeltaBatchPublishInput{BaseRoot: group.systemRoot, Delta: delta})
+	if group.db == nil {
+		return errors.New("invalid captured native system build")
+	}
+	root, err := group.buildNativeOrderedRootWithOptionsLocked(OrderedRootDeltaBatchPublishInput{BaseRoot: group.systemRoot, Delta: delta}, systemRootOrderedPublishOptions(group.db))
 	if err == nil {
 		group.systemRoot = root
 	}

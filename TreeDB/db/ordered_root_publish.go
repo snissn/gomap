@@ -503,7 +503,7 @@ func selectOrderedRootWarmPublishPlan(hasExistingEntries bool, deltaOps int, max
 }
 
 func (db *DB) orderedRootPublishOptionsForPolicy(policy OrderedRootStoragePolicy) (orderedRootPublishOptions, error) {
-	opts := systemRootOrderedPublishOptions(db)
+	opts := orderedRootDefaultPublishOptions(db)
 	switch policy {
 	case OrderedRootStorageDefault:
 		return opts, nil
@@ -1621,6 +1621,12 @@ func (db *DB) buildAppliedOrderedRootDeltaBatchValueLogRefDelta(idx *indexGen, b
 	if err != nil {
 		return nil, err
 	}
+	return db.buildAppliedOrderedRootDeltaBatchValueLogRefDeltaWithOptions(idx, baseSeq, input, result, rootOpts)
+}
+
+// Output and dependency accounting use the same resolved storage policy.
+func (db *DB) buildAppliedOrderedRootDeltaBatchValueLogRefDeltaWithOptions(idx *indexGen, baseSeq uint64, input OrderedRootDeltaBatchPublishInput, result orderedRootDeltaBatchGroupApplyResult, rootOpts orderedRootPublishOptions) (*valueLogRefDelta, error) {
+	var err error
 	var refDelta *valueLogRefDelta
 	switch {
 	case input.BaseRoot == 0:
@@ -2218,7 +2224,7 @@ func (db *DB) PublishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 	baseSeq := db.meta.CommitSeq
 	db.mu.RUnlock()
 
-	opts := systemRootOrderedPublishOptions(db)
+	opts := orderedRootDefaultPublishOptions(db)
 	// baseRoot is supplied by the caller and can outlive a previous root
 	// publication's write lock. Append-only allocation keeps this build from
 	// reusing any page that the caller's tree still references.
@@ -3573,10 +3579,10 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 				releaseValueLogRefDelta(refDelta)
 			}
 		}
-		systemRefDelta, refErr := db.buildAppliedOrderedRootDeltaBatchValueLogRefDelta(idx, baseSeq, OrderedRootDeltaBatchPublishInput{
+		systemRefDelta, refErr := db.buildAppliedOrderedRootDeltaBatchValueLogRefDeltaWithOptions(idx, baseSeq, OrderedRootDeltaBatchPublishInput{
 			BaseRoot: systemBaseRoot,
 			Delta:    systemDelta,
-		}, orderedRootDeltaBatchGroupApplyResult{applyResult: systemApplyResult})
+		}, orderedRootDeltaBatchGroupApplyResult{applyResult: systemApplyResult}, systemOpts)
 		if refErr != nil {
 			_ = systemDelta.Close()
 			return 0, nil, false, fmt.Errorf("treedb: ordered root optimistic system ref delta base=%d: %w", systemBaseRoot, refErr)

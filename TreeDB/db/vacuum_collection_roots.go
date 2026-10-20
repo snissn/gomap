@@ -848,14 +848,8 @@ func vacuumCollectLeafRefChildrenIfComplete(p *pager.Pager, rootID uint64) ([]va
 }
 
 func (db *DB) vacuumBuildSystemRoot(oldPager *pager.Pager, reader tree.SlabReader, systemRootID uint64, alloc vacuumAllocator, newPager *pager.Pager, opts bulk.BuildOptions, replacements []vacuumCollectionRootReplacement) (uint64, bool, error) {
-	appendOuterLeaves := db != nil && db.indexOuterLeavesInValueLog
+	// SYSTEM is pager-only independently of user DATA policy.
 	opts.LeafPageLog = nil
-	if appendOuterLeaves {
-		if db.leafPageLog == nil {
-			return 0, false, errors.New("vacuum: leaf page log not configured")
-		}
-		opts.LeafPageLog = db.leafPageLog
-	}
 	sysIter := tree.New(oldPager, reader, systemRootID).IteratorWithOptions(nil, nil, tree.IteratorOptions{
 		Mode: tree.IteratorModePointerProjection,
 	})
@@ -867,17 +861,11 @@ func (db *DB) vacuumBuildSystemRoot(oldPager *pager.Pager, reader tree.SlabReade
 	}
 	sysRoot, err := bulk.BuildWithOptions(sysIter, alloc, newPager, opts)
 	err = errors.Join(err, sysIter.Close())
-	if err != nil || !appendOuterLeaves {
-		return sysRoot, false, err
-	}
-	if err := db.vacuumFinishOuterLeafBuild(newPager, sysRoot); err != nil {
-		return 0, false, err
-	}
-	return sysRoot, true, nil
+	return sysRoot, false, err
 }
 
 // Complete the original outer-leaf producer before capturing a rebuilt root.
-// Both user and system materialization use this same flush/registration edge.
+// User DATA materialization uses this flush/registration edge; SYSTEM is pager-only.
 func (db *DB) vacuumFinishOuterLeafBuild(newPager *pager.Pager, root uint64) error {
 	if err := db.leafPageLog.Flush(); err != nil {
 		return err

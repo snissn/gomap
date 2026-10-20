@@ -2453,6 +2453,10 @@ func Open(opts Options) (*DB, error) {
 	if err != nil {
 		return nil, err
 	}
+	systemPagerFeature, err := validateSystemPagerLeavesGateV1(opts.Dir)
+	if err != nil {
+		return nil, err
+	}
 	warnInsecureDir(opts.Dir, opts.NotifyError)
 	if err := ensureNoLegacyMixedWALValueSegments(opts.Dir); err != nil {
 		return nil, err
@@ -2470,9 +2474,13 @@ func Open(opts Options) (*DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !patriciaFeature {
+	if !patriciaFeature || !systemPagerFeature {
 		// Recheck under the store lock before persisting a fresh-store marker.
 		if _, gateErr := validateFreelistTopologyGateV2(opts.Dir); gateErr != nil {
+			_ = lock.Close()
+			return nil, gateErr
+		}
+		if _, gateErr := validateSystemPagerLeavesGateV1(opts.Dir); gateErr != nil {
 			_ = lock.Close()
 			return nil, gateErr
 		}

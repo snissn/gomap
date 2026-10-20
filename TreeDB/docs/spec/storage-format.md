@@ -31,6 +31,28 @@ Saved PRIMARY format witnesses remain in `TreeDB/testdata` and source history;
 see [retirement provenance](primary-retirement.md). Ordinary DATA recovery still
 independently validates both eligible roots and each root's own parent closure.
 
+## Pager-only SYSTEM trees (required feature)
+
+Fresh stores persist `system_pager_leaves_v1` in `format.json` before creating
+`index.db`. Every SYSTEM tree child is a pager page, including descriptor
+updates, native materialization, vacuum, and value-log rewrite. User and
+collection DATA trees retain their independently resolved leaf-log policy.
+Collection root IDs stored in SYSTEM **values** do not become SYSTEM child
+references; pointer values remain persistent value-log dependencies.
+
+Unmarked nonempty `index.db`, `index.db.new`, or `index.db.bak` directories fail
+with `ErrLegacyFormatRebuildRequired` before recovery or cleanup, including
+read-only and `IgnoreFormatConfig` opens. The marker cannot be added to an
+existing index or removed by `SaveFormatConfig`. Rebuild an incompatible
+pre-alpha directory; there is no converter. Older binaries reject the unknown
+required feature. DATA META, two recovery slots, exact parent/dependency
+closures, retained snapshots, and durability-profile ACK rules are unchanged.
+
+This policy trades leaf-log appends/fences for ordinary pager COW writes on
+SYSTEM trees. A 4096-byte pager leaf is about 4.92 times an observed 833-byte
+small encoded log leaf; this is a physical-space tradeoff, not a cost-gate or
+throughput acceptance claim.
+
 ## All-level vector-partition router identity
 
 The global all-level spherical router uses model format

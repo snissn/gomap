@@ -22,6 +22,7 @@ const (
 	RequiredFeatureCommandWALV2          = "command_wal_v2"
 	RequiredFeatureDependencyDirectoryV2 = "dependency_directory_v2"
 	RequiredFeatureFreelistPatriciaV2    = "freelist_patricia_v2"
+	RequiredFeatureSystemPagerLeavesV1   = "system_pager_leaves_v1"
 	// RequiredFeatureCommandWALV1 is retained as a source-compatibility alias
 	// during the pre-alpha cutover. Newly persisted configs always require V2.
 	RequiredFeatureCommandWALV1       = RequiredFeatureCommandWALV2
@@ -84,6 +85,16 @@ func (cfg FormatConfig) RequiresFreelistPatriciaV2() bool {
 	return false
 }
 
+// RequiresSystemPagerLeavesV1 identifies the fresh-store SYSTEM tree contract.
+func (cfg FormatConfig) RequiresSystemPagerLeavesV1() bool {
+	for _, feature := range cfg.RequiredFeatures {
+		if normalizeFormatConfigMode(feature) == RequiredFeatureSystemPagerLeavesV1 {
+			return true
+		}
+	}
+	return false
+}
+
 func formatConfigPath(dir string) string {
 	if dir == "" {
 		return ""
@@ -120,6 +131,7 @@ func formatConfigFromOptions(opts Options) FormatConfig {
 	}
 	cfg.Version = formatConfigRequiredFeaturesVersion
 	cfg.RequiredFeatures = appendRequiredFormatFeature(cfg.RequiredFeatures, RequiredFeatureFreelistPatriciaV2)
+	cfg.RequiredFeatures = appendRequiredFormatFeature(cfg.RequiredFeatures, RequiredFeatureSystemPagerLeavesV1)
 	if opts.CommandWAL {
 		cfg.Version = formatConfigRequiredFeaturesVersion
 		cfg.RequiredFeatures = appendRequiredFormatFeature(cfg.RequiredFeatures, RequiredFeatureCommandWALV1)
@@ -420,7 +432,7 @@ func requiredFormatFeatureEnabled(dir, wanted string) (bool, error) {
 // dependency directory is a new-store opt-in and cannot be removed once saved.
 // This replaces the configuration; callers updating an existing store must load
 // its config first and preserve required features. In particular, the persisted
-// freelist_patricia_v2 physical-format requirement cannot be removed.
+// freelist_patricia_v2 and system_pager_leaves_v1 requirements cannot be removed.
 func SaveFormatConfig(dir string, cfg FormatConfig) error {
 	existing, ok, err := LoadFormatConfig(dir)
 	if err != nil {
@@ -474,6 +486,17 @@ func SaveFormatConfig(dir string, cfg FormatConfig) error {
 			}
 		} else if !os.IsNotExist(statErr) {
 			return statErr
+		}
+	}
+	if ok && existing.RequiresSystemPagerLeavesV1() && !cfg.RequiresSystemPagerLeavesV1() {
+		return fmt.Errorf("%w: cannot remove system_pager_leaves_v1", ErrLegacyFormatRebuildRequired)
+	}
+	if cfg.RequiresSystemPagerLeavesV1() && (!ok || !existing.RequiresSystemPagerLeavesV1()) {
+		if _, err := validateSystemPagerLeavesGateV1(dir); err != nil {
+			return err
+		}
+		if err := ValidateCommandWALActivationClean(dir); err != nil {
+			return err
 		}
 	}
 	return writeFormatConfig(dir, cfg)
@@ -533,6 +556,15 @@ func saveFreshFreelistFormatConfig(opts Options) error {
 	}
 	if _, gateErr := validateFreelistTopologyGateV2(opts.Dir); gateErr != nil {
 		return gateErr
+	}
+	systemPagerFeature, gateErr := validateSystemPagerLeavesGateV1(opts.Dir)
+	if gateErr != nil {
+		return gateErr
+	}
+	if !systemPagerFeature {
+		if activationErr := ValidateCommandWALActivationClean(opts.Dir); activationErr != nil {
+			return activationErr
+		}
 	}
 	raw, readErr := os.ReadFile(formatConfigPath(opts.Dir))
 	if readErr != nil {
@@ -711,7 +743,7 @@ func validateRequiredFormatFeatures(features []string) error {
 		}
 		seen[feature] = struct{}{}
 		switch feature {
-		case RequiredFeatureCommandWALV1, RequiredFeatureDependencyDirectoryV2, RequiredFeatureFreelistPatriciaV2:
+		case RequiredFeatureCommandWALV1, RequiredFeatureDependencyDirectoryV2, RequiredFeatureFreelistPatriciaV2, RequiredFeatureSystemPagerLeavesV1:
 			// Current command WAL and incremental dependency directory.
 		case legacyRequiredFeatureCommandWALV1:
 			return fmt.Errorf("%w: %s", commitlog.ErrCommandWALV1RebuildRequired, raw)
@@ -738,6 +770,28 @@ func validateFreelistTopologyGateV2(dir string) (bool, error) {
 	}
 	if info.Size() != 0 {
 		return false, fmt.Errorf("%w: freelist_patricia_v2 marker missing on nonempty index; rebuild required", ErrLegacyFormatRebuildRequired)
+	}
+	return false, nil
+}
+
+// validateSystemPagerLeavesGateV1 runs before swap recovery or cleanup. An
+// interrupted namespace is still an old store; no marker may retrofit its trees.
+func validateSystemPagerLeavesGateV1(dir string) (bool, error) {
+	enabled, err := requiredFormatFeatureEnabled(dir, RequiredFeatureSystemPagerLeavesV1)
+	if err != nil || enabled {
+		return enabled, err
+	}
+	for _, name := range []string{indexFileName, indexNewFileName, indexBakFileName} {
+		info, err := os.Stat(filepath.Join(dir, name))
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return false, err
+		}
+		if info.Size() != 0 {
+			return false, fmt.Errorf("%w: system_pager_leaves_v1 marker missing on nonempty %s; rebuild required", ErrLegacyFormatRebuildRequired, name)
+		}
 	}
 	return false, nil
 }

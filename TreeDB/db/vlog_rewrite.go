@@ -3526,7 +3526,7 @@ func ValueLogRewriteOffline(opts Options) (stats ValueLogRewriteStats, retErr er
 			replacements: collectionRootReplacements,
 		}
 	}
-	sysRoot, err := buildTreeFromIterator(sysIter, opts.IndexOuterLeavesInValueLog)
+	sysRoot, err := buildTreeFromIterator(sysIter, false)
 	if err != nil {
 		_ = closeReplacement()
 		return stats, err
