@@ -37982,30 +37982,42 @@ func (b *Batch) writeBackendBatchSerialized(backendBatch batch.Interface, sync b
 	if b == nil || b.db == nil || backendBatch == nil {
 		return backenddb.ErrClosed
 	}
-	b.db.flushMu.Lock()
-	if err := b.db.beginDirectWriteWithFlushMuHeld(); err != nil {
-		b.db.flushMu.Unlock()
+	err := func() error {
+		b.db.flushMu.Lock()
+		if err := b.db.beginDirectWriteWithFlushMuHeld(); err != nil {
+			b.db.flushMu.Unlock()
+			return err
+		}
+		defer b.db.flushMu.Unlock()
+		defer b.db.writeMu.RUnlock()
+
+		if recordBeforePublish != nil {
+			recordBeforePublish()
+		}
+		var err error
+		if producer, ok := backendBatch.(interface{ MergeMVCCInputSummary(mvccadmission.Summary) }); ok {
+			producer.MergeMVCCInputSummary(b.mvccSummary)
+		}
+		// WAL-off sync is completed by the unlocked checkpoint below. Calling
+		// backend WriteSync here could drain registered collection publishers
+		// recursively while we still hold the cache flush/write leases.
+		if sync && !b.db.relaxedSync && !b.db.disableJournal {
+			err = backendBatch.WriteSync()
+		} else {
+			err = backendBatch.Write()
+		}
+		if err == nil && recordCommitted != nil {
+			recordCommitted()
+		}
+		return err
+	}()
+	if err != nil {
 		return err
 	}
-	defer b.db.flushMu.Unlock()
-	defer b.db.writeMu.RUnlock()
-
-	if recordBeforePublish != nil {
-		recordBeforePublish()
-	}
-	var err error
-	if producer, ok := backendBatch.(interface{ MergeMVCCInputSummary(mvccadmission.Summary) }); ok {
-		producer.MergeMVCCInputSummary(b.mvccSummary)
-	}
-	if sync && !b.db.relaxedSync {
-		err = backendBatch.WriteSync()
-	} else {
-		err = backendBatch.Write()
-	}
-	if err == nil && recordCommitted != nil {
-		recordCommitted()
-	}
-	return err
+	// Direct publication alone is not a WAL-off durable acknowledgement. Use
+	// the same explicit boundary as regular cached writes, after releasing both
+	// leases so checkpoint and registered collection drains can make progress.
+	return b.db.syncBarrierAfterWrite(sync)
 }
 
 func (b *Batch) writeRangeBatch(sync bool) error {
@@ -38258,18 +38270,18 @@ func (b *Batch) tryWriteWALOffStreamBypass(sync bool) (bool, error) {
 
 	err = b.writeBackendBatchSerialized(backendBatch, sync, func() {
 		b.db.conditionalRecordCommittedEntries(ops, nil)
-	}, nil)
+	}, func() {
+		b.db.mu.Lock()
+		b.db.backendRange.add(b.firstKey)
+		b.db.backendRange.add(b.lastKey)
+		b.db.mu.Unlock()
+	})
 	if cerr := backendBatch.Close(); cerr != nil && err == nil {
 		err = cerr
 	}
 	if err != nil {
 		return false, err
 	}
-
-	b.db.mu.Lock()
-	b.db.backendRange.add(b.firstKey)
-	b.db.backendRange.add(b.lastKey)
-	b.db.mu.Unlock()
 
 	if b.size > 0 {
 		b.db.noteWrite()
@@ -39880,19 +39892,19 @@ func (b *Batch) writeBypass(sync bool) (err error) {
 
 	err = b.writeBackendBatchSerialized(backendBatch, sync, func() {
 		b.db.conditionalRecordCommittedEntries(ops, nil)
-	}, nil)
+	}, func() {
+		b.db.mu.Lock()
+		if batchRange.valid {
+			b.db.backendRange.add(batchRange.min)
+			b.db.backendRange.add(batchRange.max)
+		}
+		b.db.mu.Unlock()
+	})
 
 	if err != nil {
 		return err
 	}
 	backendBatch = nil
-
-	b.db.mu.Lock()
-	if batchRange.valid {
-		b.db.backendRange.add(batchRange.min)
-		b.db.backendRange.add(batchRange.max)
-	}
-	b.db.mu.Unlock()
 
 	if b.size > 0 {
 		b.db.noteWrite()
