@@ -12,6 +12,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -539,11 +540,22 @@ func (f *dataBorrowedCohortFixture) retention(tb testing.TB) map[string]int64 {
 		if err := f.db.SetSync([]byte("cohort/advance-b"), []byte("b")); err != nil {
 			return err
 		}
-		if err := f.db.VacuumIndexOnline(context.Background()); err != nil {
-			return err
-		}
-		if f.db.idx.Load() == old {
-			return fmt.Errorf("cohort vacuum did not replace actual DATA generation")
+		beforeVacuum := f.db.state.Load()
+		vacuumErr := f.db.VacuumIndexOnline(context.Background())
+		if runtime.GOOS == "windows" {
+			// The maintained platform refusal precedes replacement capture. Keep
+			// exercising original cohort custody without claiming a retired DATA.
+			if !errors.Is(vacuumErr, ErrVacuumUnsupported) || f.db.idx.Load() != old || f.db.state.Load() != beforeVacuum {
+				return fmt.Errorf("cohort unsupported vacuum changed DATA or returned %v", vacuumErr)
+			}
+			cost["vacuum-unsupported"] = 1
+		} else {
+			if vacuumErr != nil {
+				return vacuumErr
+			}
+			if f.db.idx.Load() == old {
+				return fmt.Errorf("cohort vacuum did not replace actual DATA generation")
+			}
 		}
 		record := func(file *os.File, unit string) error {
 			info, err := file.Stat()
@@ -552,8 +564,10 @@ func (f *dataBorrowedCohortFixture) retention(tb testing.TB) map[string]int64 {
 			}
 			return err
 		}
-		if err := old.pager.WithStableResourceFile(func(file *os.File) error { return record(file, "held-old-data-bytes") }); err != nil {
-			return err
+		if runtime.GOOS != "windows" {
+			if err := old.pager.WithStableResourceFile(func(file *os.File) error { return record(file, "held-old-data-bytes") }); err != nil {
+				return err
+			}
 		}
 
 		cost["held-governor-bytes"] = int64(f.budget.Stats().ExternalBytes)
@@ -602,9 +616,9 @@ func (f *dataBorrowedCohortFixture) retention(tb testing.TB) map[string]int64 {
 	}
 	loan.enrollment.Close()
 	loan.wrapper.Close()
-	// Scope completion releases private descriptor aliases. The retired arena
-	// remains governed through its existing generation ghost lifetime; no age
-	// is forced and this residual is measured rather than treated as a leak.
+	// Scope completion releases private descriptor aliases. After a successful
+	// replacement, the retired arena remains governed through its existing
+	// generation ghost lifetime; no age is forced and residuals are measured.
 	cost["scope-complete-governor-bytes"] = int64(f.budget.Stats().ExternalBytes)
 	gc, err := f.db.ValueLogGC(context.Background(), ValueLogGCOptions{})
 	if err != nil {
@@ -684,8 +698,15 @@ func TestDATABorrowedValueLogCohortUsesOriginalCleanup(t *testing.T) {
 			f := newDATABorrowedCohort(t, files)
 
 			cost := f.retention(t)
-			if cost["held-cohort-files"] != int64(files) || cost["held-cohort-bytes"] == 0 || cost["held-old-data-bytes"] == 0 {
+			if cost["held-cohort-files"] != int64(files) || cost["held-cohort-bytes"] == 0 {
 				t.Fatal("cohort did not observe original physical owners", cost)
+			}
+			if runtime.GOOS == "windows" {
+				if cost["vacuum-unsupported"] != 1 || cost["held-old-data-bytes"] != 0 {
+					t.Fatal("unsupported vacuum reported retired DATA custody", cost)
+				}
+			} else if cost["held-old-data-bytes"] == 0 {
+				t.Fatal("cohort did not observe original retired DATA owner", cost)
 			}
 			t.Logf("actual retained/residual cohort: %v", cost)
 		})
@@ -696,7 +717,15 @@ func TestDATABorrowedCohortRebuildFailureReleasesPrivateManifests(t *testing.T) 
 	f := newDATABorrowedCohort(t, 2)
 	loan := f.capture(t)
 	want := errors.New("reject rebuilt runtime before cutover")
-	f.db.vacuumReplacementRuntimeHook = func(*rootPublicationRuntimeV1) error { return want }
+	wantRefusal := want
+	if runtime.GOOS == "windows" {
+		wantRefusal = ErrVacuumUnsupported
+	}
+	hookCalled := false
+	f.db.vacuumReplacementRuntimeHook = func(*rootPublicationRuntimeV1) error {
+		hookCalled = true
+		return want
+	}
 	err := loan.resources.WithScopedTokens(func(tokens []*rootpublication.StableResourceToken) error {
 		loan.resources.Release()
 		originalFiles := make(map[*rootpublication.StableResourceToken]os.FileInfo, len(tokens))
@@ -710,8 +739,15 @@ func TestDATABorrowedCohortRebuildFailureReleasesPrivateManifests(t *testing.T) 
 			}
 		}
 
-		if err := f.db.VacuumIndexOnline(context.Background()); !errors.Is(err, want) {
-			return fmt.Errorf("rebuild refusal=%v want %v", err, want)
+		beforeVacuum, originalGen := f.db.state.Load(), f.db.idx.Load()
+		if err := f.db.VacuumIndexOnline(context.Background()); !errors.Is(err, wantRefusal) {
+			return fmt.Errorf("rebuild refusal=%v want %v", err, wantRefusal)
+		}
+		if hookCalled != (runtime.GOOS != "windows") {
+			return fmt.Errorf("replacement runtime hook called=%t on %s", hookCalled, runtime.GOOS)
+		}
+		if runtime.GOOS == "windows" && (f.db.state.Load() != beforeVacuum || f.db.idx.Load() != originalGen) {
+			return errors.New("unsupported vacuum changed original DATA publication")
 		}
 
 		if value, err := loan.snapshot.Get(f.keys[0]); err != nil || !bytes.Equal(value, f.value) {
