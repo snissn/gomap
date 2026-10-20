@@ -123,15 +123,40 @@ func TestSystemPagerLeavesFreshMarkerCannotBeRemoved(t *testing.T) {
 func TestSystemPagerLeavesComposeWithLogDATAAndMaintenance(t *testing.T) {
 	dir := t.TempDir()
 	opts := Options{Dir: dir, IndexOuterLeavesInValueLog: true, DisableBackgroundPrune: true}
-	database, err := Open(opts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
+	var database *DB
+	var leafLog LeafPageLogCloser
+	closeDB := func() {
+		t.Helper()
 		if database != nil {
-			_ = database.Close()
+			if err := database.Close(); err != nil {
+				t.Errorf("close DB: %v", err)
+			}
+			database = nil
 		}
-	}()
+		// The direct backend does not own the installed standalone writer.
+		// Its original owner closes it only after the DB releases its cut.
+		if leafLog != nil {
+			if err := leafLog.Close(); err != nil {
+				t.Errorf("close leaf log: %v", err)
+			}
+			leafLog = nil
+		}
+	}
+	defer closeDB()
+	openDB := func() {
+		t.Helper()
+		var err error
+		database, err = Open(opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		leafLog, err = NewStandaloneLeafPageLog(dir, StandaloneLeafPageLogOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		database.SetLeafPageLog(leafLog)
+	}
+	openDB()
 	b := database.NewBatch()
 	for i := 0; i < 512; i++ {
 		if err := b.Set([]byte(fmt.Sprintf("user/%04d", i)), []byte("persistent user value")); err != nil {
@@ -234,30 +259,24 @@ func TestSystemPagerLeavesComposeWithLogDATAAndMaintenance(t *testing.T) {
 		t.Fatal(err)
 	}
 	held = nil
-	if err := database.Close(); err != nil {
-		t.Fatal(err)
+	closeDB()
+	if t.Failed() {
+		return
 	}
-	database = nil
 	if err := VacuumIndexOffline(opts); err != nil {
 		t.Fatal(err)
 	}
-	database, err = Open(opts)
-	if err != nil {
-		t.Fatal(err)
-	}
+	openDB()
 	check("offline-reopen")
 	publish("after-offline")
 	if err := database.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
-	if err := database.Close(); err != nil {
-		t.Fatal(err)
+	closeDB()
+	if t.Failed() {
+		return
 	}
-	database = nil
-	database, err = Open(opts)
-	if err != nil {
-		t.Fatal(err)
-	}
+	openDB()
 	check("final-reopen")
 	snap := database.AcquireSnapshot()
 	if snap == nil {
