@@ -33,7 +33,11 @@ func TestCOWAggregatePressureJoinsCheckpointBeforeProducer(t *testing.T) {
 				_ = backend.Close()
 				t.Fatal(err)
 			}
-			defer db.Close()
+			defer func() {
+				if !db.closing.Load() {
+					_ = db.Close()
+				}
+			}()
 			// Hold the existing flush fence while arranging a real frozen prefix;
 			// every row below enters through the ordinary public raw batch path.
 			db.flushMu.Lock()
