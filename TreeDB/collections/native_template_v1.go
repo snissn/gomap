@@ -2,10 +2,12 @@ package collections
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/txnhistory"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -305,4 +307,156 @@ func (r *NativeJSONRead) templateJSON(document []byte) (out []byte, resultErr er
 	}, admit: admit}
 	defer func() { wrapped = nil; lease.Close() }()
 	return templateV1StoredDocumentJSON(document, wrapped)
+}
+
+// External deterministic TD1D references contain a canonical 32-byte hash,
+// unlike stored TD1D references containing a collection-local numeric ID. Lower
+// only that envelope distinction, under the original transaction's admission;
+// the ordinary batch preparer still resolves, validates and assigns every ID.
+func (t *NativeJSONTxn) lowerNativeTemplateDocuments(g *nativeJSONTxnBinding, kind commitlog.CommandKind, ids, documents, sidecarSections [][]byte) ([][]byte, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	admit := func(n uint64) error { return t.admitStage(g, n) }
+	limit := int(^uint(0) >> 1)
+	// The outer adapter borrows the validated wire section. Decode only after
+	// admitting its header backing here; canonical output later owns all bytes.
+	if len(sidecarSections) > 1 {
+		return nil, errors.New("collections: multiple template record sections")
+	}
+	var sidecar [][]byte
+	if len(sidecarSections) == 1 && len(sidecarSections[0]) != 0 {
+		raw := sidecarSections[0]
+		count, n := binary.Uvarint(raw)
+		if n <= 0 || count > uint64(len(raw)) || count > uint64(limit) {
+			return nil, errors.New("collections: malformed template record section")
+		}
+		if err := admitNativeInsertArray(int(count), uint64(unsafe.Sizeof([]byte{})), admit); err != nil {
+			return nil, err
+		}
+		// The deterministic validator already checked this byte-vector. Borrow
+		// its TD1T payloads without a wire-package dependency (that package itself
+		// imports collections), and without copying before original admission.
+		lengths := n
+		payload := n
+		for i := uint64(0); i < count; i++ {
+			if _, err := readTemplateV1Uvarint(raw, &payload); err != nil {
+				return nil, err
+			}
+		}
+		sidecar = make([][]byte, int(count))
+		for i := range sidecar {
+			size, err := readTemplateV1Uvarint(raw, &lengths)
+			if err != nil || size > uint64(len(raw)-payload) {
+				return nil, errors.New("collections: malformed template record section")
+			}
+			sidecar[i] = raw[payload : payload+int(size)]
+			payload += int(size)
+		}
+		if payload != len(raw) {
+			return nil, errors.New("collections: trailing template record section bytes")
+		}
+	}
+	recordCapacity := len(sidecar)
+	for _, document := range documents {
+		// Every embedded definition consumes at least hash+length+TD1T+count.
+		if len(document)/38 > limit-recordCapacity {
+			return nil, memtable.ErrCOWCapacity
+		}
+		recordCapacity += len(document) / 38
+		amount, err := nativeTemplateParseCharge(len(document))
+		if err != nil {
+			return nil, err
+		}
+		if err = admit(amount); err != nil {
+			return nil, err
+		}
+	}
+	for _, record := range sidecar {
+		amount, err := nativeTemplateParseCharge(len(record))
+		if err != nil {
+			return nil, err
+		}
+		if err = admit(amount); err != nil {
+			return nil, err
+		}
+	}
+	if err := admitNativeInsertArray(recordCapacity, uint64(unsafe.Sizeof(templateV1Record{})), admit); err != nil {
+		return nil, err
+	}
+	if err := admitNativeInsertArray(len(documents), uint64(unsafe.Sizeof([]byte{})), admit); err != nil {
+		return nil, err
+	}
+	records := make([]templateV1Record, 0, recordCapacity)
+	for _, raw := range sidecar {
+		record, err := parseTemplateV1Record(raw)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+	}
+	lowered := make([][]byte, len(documents))
+	for i, document := range documents {
+		offset := 0
+		if !hasTemplateV1Magic(document, templateV1StoredMagic) {
+			parsed, err := parseTemplateV1InsertEnvelopeWithRootMagic(document, templateV1StoredMagic)
+			if err != nil {
+				return nil, err
+			}
+			offset = parsed.hashDocumentOffset
+			records = append(records, parsed.records...)
+		}
+		root := document[offset:]
+		if len(root) < len(templateV1StoredMagic)+32 {
+			return nil, errors.New("collections: malformed external template-v1 hash reference")
+		}
+		if err := admit(memtable.COWAllocationCharge(uint64(len(root)))); err != nil {
+			return nil, err
+		}
+		lowered[i] = bytes.Clone(root)
+		copy(lowered[i][:len(templateV1InsertDocumentMagic)], templateV1InsertDocumentMagic)
+	}
+	holder := 0
+	if kind == commitlog.CommandKindCollectionUpdateBatchByID {
+		holder = -1
+		for i, id := range ids {
+			row, err := t.touchNativeRow(g, id)
+			if err != nil {
+				return nil, err
+			}
+			if holder < 0 && row.current != nil {
+				holder = i
+			}
+		}
+	}
+	if len(records) != 0 && holder >= 0 && holder < len(lowered) {
+		// Definitions may have appeared on an absent replacement. Place them once
+		// on a matched input so both original preparation and its canonical replay
+		// retain the complete batch dictionary regardless of request/ID ordering.
+		size := uint64(len(templateV1InputMagic) + binary.MaxVarintLen64 + len(lowered[holder]))
+		for _, record := range records {
+			extra := uint64(32+binary.MaxVarintLen64) + uint64(len(record.raw))
+			if extra > ^uint64(0)-size {
+				return nil, memtable.ErrCOWCapacity
+			}
+			size += extra
+		}
+		if size > uint64(limit) {
+			return nil, memtable.ErrCOWCapacity
+		}
+		if err := admit(memtable.COWAllocationCharge(size)); err != nil {
+			return nil, err
+		}
+		// Reserve the entire upper bound at once: the general encoder's small
+		// initial capacity may grow while the old output is still live.
+		out := make([]byte, 0, int(size))
+		out = append(out, templateV1InputMagic...)
+		out = appendTemplateV1Uvarint(out, uint64(len(records)))
+		for _, record := range records {
+			out = append(out, record.hash[:]...)
+			out = appendTemplateV1Uvarint(out, uint64(len(record.raw)))
+			out = append(out, record.raw...)
+		}
+		lowered[holder] = append(out, lowered[holder]...)
+	}
+	return lowered, nil
 }

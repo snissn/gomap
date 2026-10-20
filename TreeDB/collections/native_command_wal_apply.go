@@ -28,7 +28,7 @@ func (m *CollectionManager) ApplyNativeCommandWALCreate(meta CollectionMeta, syn
 	if !m.UsesNativeCommandWALApply() || m.isClosing() {
 		return result, backenddb.ErrClosed
 	}
-	if meta.Options.ColumnStore != nil || normalizedDocumentFormat(meta.Options.DocumentFormat) == DocumentFormatTemplateV1 {
+	if meta.Options.ColumnStore != nil {
 		return result, backenddb.ErrNativeSemanticUnsupported
 	}
 	apply := nativeCommandWALApplyCommit{sync: sync, observe: observe}
@@ -43,14 +43,16 @@ func (m *CollectionManager) ApplyNativeCommandWALCreate(meta CollectionMeta, syn
 // ApplyNativeCommandWALMutation lowers only the existing ordinary document by-ID
 // commands. The original conditional transaction owns all reads, scalar index
 // effects and OCC dependencies; its publisher assigns the still-unassigned frame.
-func (m *CollectionManager) ApplyNativeCommandWALMutation(name string, format DocumentFormat, kind commitlog.CommandKind, ids, documents [][]byte, sync bool, observe func(uint64) error) (result NativeCommandWALApplyResult, resultErr error) {
+// templateRecords is an optional single encoded SectionTemplateRecords byte-vector,
+// borrowed synchronously until the original stage admits and owns its lowering.
+func (m *CollectionManager) ApplyNativeCommandWALMutation(name string, format DocumentFormat, kind commitlog.CommandKind, ids, documents [][]byte, sync bool, observe func(uint64) error, templateRecords ...[]byte) (result NativeCommandWALApplyResult, resultErr error) {
 	tx, err := m.beginNativeCommandWALMutation(name, format, kind, ids, documents)
 	if err != nil {
 		return result, err
 	}
 	defer func() { resultErr = errors.Join(resultErr, tx.Close()) }()
 	var docs []commitlog.CollectionDocument
-	result, docs, err = tx.stageNativeCommandWALMutation(name, kind, ids, documents)
+	result, docs, err = tx.stageNativeCommandWALMutation(name, kind, ids, documents, templateRecords...)
 	if err != nil {
 		return result, err
 	}
@@ -106,10 +108,9 @@ func (m *CollectionManager) PreflightNativeCommandWALCreate(meta CollectionMeta)
 	if !m.UsesNativeCommandWALApply() || m.isClosing() {
 		return backenddb.ErrClosed
 	}
-	// The deterministic adapter remains ordinary documents even where the public
-	// manager supports broader typed and template roles. Template envelopes and
-	// scoped compact IDs are not this external producer's document format.
-	if meta.Options.ColumnStore != nil || normalizedDocumentFormat(meta.Options.DocumentFormat) == DocumentFormatTemplateV1 {
+	// Typed columns remain a different producer. Template requests use canonical
+	// hash-keyed envelopes, never a caller-selected collection-local compact ID.
+	if meta.Options.ColumnStore != nil {
 		return backenddb.ErrNativeSemanticUnsupported
 	}
 	_, err := nativeJSONMeta(meta)
@@ -120,13 +121,13 @@ func (m *CollectionManager) PreflightNativeCommandWALCreate(meta CollectionMeta)
 // same captured rows and final unique owners as apply, then closes every partial
 // plan. It neither reserves that cut nor appends, installs, seals, or calls the
 // post-append observer. Apply must capture and validate again under its owner.
-func (m *CollectionManager) PreflightNativeCommandWALMutation(name string, format DocumentFormat, kind commitlog.CommandKind, ids, documents [][]byte) (resultErr error) {
+func (m *CollectionManager) PreflightNativeCommandWALMutation(name string, format DocumentFormat, kind commitlog.CommandKind, ids, documents [][]byte, templateRecords ...[]byte) (resultErr error) {
 	tx, err := m.beginNativeCommandWALMutation(name, format, kind, ids, documents)
 	if err != nil {
 		return err
 	}
 	defer func() { resultErr = errors.Join(resultErr, tx.Close()) }()
-	if _, _, err = tx.stageNativeCommandWALMutation(name, kind, ids, documents); err != nil {
+	if _, _, err = tx.stageNativeCommandWALMutation(name, kind, ids, documents, templateRecords...); err != nil {
 		return err
 	}
 	return tx.validateNativeCommandWALMutation()
@@ -179,7 +180,7 @@ func (m *CollectionManager) beginNativeCommandWALMutation(name string, format Do
 	return tx, nil
 }
 
-func (tx *NativeJSONTxn) stageNativeCommandWALMutation(name string, kind commitlog.CommandKind, ids, documents [][]byte) (result NativeCommandWALApplyResult, docs []commitlog.CollectionDocument, err error) {
+func (tx *NativeJSONTxn) stageNativeCommandWALMutation(name string, kind commitlog.CommandKind, ids, documents [][]byte, templateRecords ...[]byte) (result NativeCommandWALApplyResult, docs []commitlog.CollectionDocument, err error) {
 	g := tx.binding(name)
 	if g == nil || g.probe.meta.Options.ColumnStore != nil {
 		return result, docs, backenddb.ErrNativeSemanticUnsupported
@@ -188,6 +189,14 @@ func (tx *NativeJSONTxn) stageNativeCommandWALMutation(name string, kind commitl
 	// The ordinary row staging separately admits its own retained copies.
 	if err = tx.admitRowControls(g, len(ids)); err != nil {
 		return result, docs, err
+	}
+	if normalizedDocumentFormat(g.probe.meta.Options.DocumentFormat) == DocumentFormatTemplateV1 && kind != commitlog.CommandKindCollectionDeleteBatchByID {
+		documents, err = tx.lowerNativeTemplateDocuments(g, kind, ids, documents, templateRecords)
+		if err != nil {
+			return result, docs, err
+		}
+	} else if len(templateRecords) > 1 || (len(templateRecords) == 1 && len(templateRecords[0]) != 0) {
+		return result, docs, backenddb.ErrNativeSemanticUnsupported
 	}
 	docs = make([]commitlog.CollectionDocument, 0, len(documents))
 	switch kind {

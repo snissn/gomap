@@ -70,7 +70,15 @@ from that same cut, including pending records; returned JSON is caller-owned.
 Its temporary parser/object backing is admitted by the original read allocator
 and released after owned copyout. Scalar index DDL reuses the same captured
 resolver and original complete-cut backfill. No template cache or on-disk format
-is added. Specialized deterministic/assigned and prepared template producers
+is added. The deterministic native FSM adapter also accepts canonical hash-keyed
+TD1D requests with TD1I embedded definitions or a TemplateRecords sidecar. Its
+original native stage admits the envelope/header/parser backing, translates root
+hash references to TD1H inputs, and reuses this same batch resolver and finalizer.
+Definitions carried by absent replacements remain available to matched rows,
+including hash references preceding their definitions; accepted canonical members
+own the definitions required for startup replay. Preflight releases its captured
+plan without reserving a local WAL or distributed apply identity. External packets
+never authorize collection-local numeric template IDs. Prepared template producers
 remain outside this ordinary family.
 
 Scalar JSON index reads support `FindByIndexRange`, `ScanIndexRange`,
