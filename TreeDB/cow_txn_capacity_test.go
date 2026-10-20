@@ -112,6 +112,9 @@ func TestPublicCOWTxnConcurrentAdapterRefusalsKeepSharedCarriersImmutable(t *tes
 	for n := range transactions {
 		db, _, _ := cowPublicContractOpen(t, ProfileCommandWALDurable, func(o *Options) {
 			o.COWMemtableLimits = limits
+			// Keep the baseline cut's custody fixed while refusals release their
+			// transaction pins; periodic GC can replace that cut independently.
+			o.ValueLog.Generational.Policy = ValueLogGenerationOff
 			o.DisableBackgroundPrune = true
 			o.BackgroundCheckpointInterval = -1
 			o.BackgroundCheckpointIdleDuration = -1
