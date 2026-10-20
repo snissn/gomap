@@ -41,7 +41,7 @@ func nativeJSONMeta(meta CollectionMeta) (CollectionMeta, error) {
 		return CollectionMeta{}, backenddb.ErrNativeSemanticUnsupported
 	}
 	for _, index := range normalized.Indexes {
-		if len(index.Components) != 0 || (index.ValueType != IndexValueString && index.ValueType != IndexValueBool && index.ValueType != IndexValueInt64 && index.ValueType != IndexValueDouble && !(format == DocumentFormatBSON && index.ValueType == IndexValueBSONOrderedV2)) {
+		if (len(index.Components) != 0 && (format != DocumentFormatBSON || index.ValueType != IndexValueBSONOrderedV2 || index.MultiKey)) || (index.ValueType != IndexValueString && index.ValueType != IndexValueBool && index.ValueType != IndexValueInt64 && index.ValueType != IndexValueDouble && !(format == DocumentFormatBSON && index.ValueType == IndexValueBSONOrderedV2)) {
 			return CollectionMeta{}, backenddb.ErrNativeSemanticUnsupported
 		}
 	}

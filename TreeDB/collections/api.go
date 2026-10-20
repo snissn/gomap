@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 	"unicode/utf8"
+	"unsafe"
 
 	"github.com/cespare/xxhash/v2"
 	"github.com/snissn/gomap/TreeDB/batch"
@@ -23330,6 +23331,9 @@ func (c *Collection) FindByCompoundIndexRange(indexName string, opts CompoundInd
 	if opts.Inspected != nil {
 		*opts.Inspected = 0
 	}
+	if c.nativeJSON != nil {
+		return c.findNativeCompoundIndexRange(indexName, opts)
+	}
 	if err := c.flushBufferedNoIndex(); err != nil {
 		return nil, false, err
 	}
@@ -24211,6 +24215,9 @@ type scanMergedCollectionIndexIDOptions struct {
 	// LogicalIndexKey extracts the encoded logical index value from an entry.
 	// It is required only for StableDocumentIDTies.
 	LogicalIndexKey func([]byte) ([]byte, error)
+	// admitTemporary is only the synchronous original read-budget admission
+	// seam. Native scans admit before copies/growth; legacy callers stay nil.
+	admitTemporary func(uint64) error
 }
 
 const (
@@ -24494,6 +24501,19 @@ func scanMergedCollectionIndexIDsStable(bufferedIt, persistedIt iterator.UnsafeI
 		}
 	}
 
+	return scanCollectionIndexIDsStable(nextLiveKey, valueType, maxResults, opts, fn)
+}
+
+// Both original iterator merges and captured native predecessor/successor reads
+// share this complete-group ordering. The source owns its work/borrow boundary.
+func scanCollectionIndexIDsStable(nextLiveKey func() ([]byte, bool, bool, error), valueType IndexValueType, maxResults int, opts scanMergedCollectionIndexIDOptions, fn func([]byte) (bool, error)) (bool, error) {
+	admit := func(n uint64) error {
+		if opts.admitTemporary != nil {
+			return opts.admitTemporary(n)
+		}
+		return nil
+	}
+
 	var seen map[string]struct{}
 	if opts.DedupeDocumentID {
 		seen = make(map[string]struct{})
@@ -24527,7 +24547,17 @@ func scanMergedCollectionIndexIDsStable(bufferedIt, persistedIt iterator.UnsafeI
 		if less == nil {
 			less = func(left, right []byte) bool { return bytes.Compare(left, right) < 0 }
 		}
-		sort.Slice(groupIDs, func(i, j int) bool { return less(groupIDs[i], groupIDs[j]) })
+		// Generic sorting avoids reflection-owned temporary backing in the
+		// admitted native scope; ordering is the same maintained comparator.
+		slices.SortFunc(groupIDs, func(left, right []byte) int {
+			if less(left, right) {
+				return -1
+			}
+			if less(right, left) {
+				return 1
+			}
+			return 0
+		})
 		remaining := len(groupIDs)
 		truncated := false
 		if maxResults > 0 && remaining > maxResults-emitted {
@@ -24582,6 +24612,9 @@ func scanMergedCollectionIndexIDsStable(bufferedIt, persistedIt iterator.UnsafeI
 			if keyBytes < len(logicalKey) || !canRetain(keyBytes) {
 				return true, nil
 			}
+			if err := admit(uint64(len(logicalKey))); err != nil {
+				return false, err
+			}
 			groupKey = bytes.Clone(logicalKey)
 			groupBytes += keyBytes
 		}
@@ -24612,6 +24645,21 @@ func scanMergedCollectionIndexIDsStable(bufferedIt, persistedIt iterator.UnsafeI
 		entryBytes := len(id) + stableDocumentIDTieEntryOverhead
 		if entryBytes < len(id) || !canRetain(entryBytes) {
 			return true, nil
+		}
+		if err := admit(uint64(len(id))); err != nil {
+			return false, err
+		}
+		if opts.admitTemporary != nil && len(groupIDs) == cap(groupIDs) {
+			capacity := max(1, 2*cap(groupIDs))
+			if capacity < 0 || uint64(capacity) > ^uint64(0)/uint64(unsafe.Sizeof([]byte{})) {
+				return false, memtable.ErrCOWCapacity
+			}
+			if err := admit(uint64(capacity) * uint64(unsafe.Sizeof([]byte{}))); err != nil {
+				return false, err
+			}
+			next := make([][]byte, len(groupIDs), capacity)
+			copy(next, groupIDs)
+			groupIDs = next
 		}
 		groupIDs = append(groupIDs, bytes.Clone(id))
 		groupBytes += entryBytes

@@ -35,3 +35,20 @@ func cowIteratorSeek(_ *btree.Map[string, cowValue], iter *btree.MapIter[string,
 func cowDeleteKey(tree *btree.Map[string, cowValue], key []byte) {
 	tree.Delete(bytesToStringNoCopy(key))
 }
+
+// cowLookupLT borrows the immutable map and returns its strict predecessor.
+func cowLookupLT(tree *btree.Map[string, cowValue], end []byte) (key string, value cowValue, found bool) {
+	visit := func(k string, v cowValue) bool {
+		if end != nil && cowKeyCompare(k, end) >= 0 {
+			return true
+		}
+		key, value, found = k, v, true
+		return false
+	}
+	if end == nil {
+		tree.Reverse(visit)
+	} else {
+		tree.Descend(bytesToStringNoCopy(end), visit)
+	}
+	return
+}

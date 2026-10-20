@@ -39,7 +39,10 @@ Scalar multikey indexes and the existing `AllowArrayValuesInIndex` option use
 that same planner: arrays are encoded as sorted distinct value sets, preserving
 the format's existing missing/null and dotted-path semantics. Final unique
 ownership is checked across the whole transaction, including value handoffs.
-Compound indexes and text/vector index creation remain outside this route. Eligible BSON collections also support top-level `UpdateBSONSet` and
+BSONOrderedV2 compound scalar indexes reuse the same tuple encoder, old/new
+planner and final unique ownership checks. Components may use dotted paths and
+ascending or descending directions; arrays remain rejected for compound keys.
+Text/vector index creation remains outside this route. Eligible BSON collections also support top-level `UpdateBSONSet` and
 `UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges`, using the maintained BSON
 transformer and canonical full replacement documents. `_id`, dotted or invalid
 field names and malformed raw values retain their existing refusal contracts.
@@ -241,8 +244,9 @@ Activated ordinary JSON and BSON handles support `CreateIndex`, `DropIndex`,
 Creation backfills the complete captured primary cut, including pending rows,
 using the maintained scalar encoder and uniqueness checks. A duplicate unique
 backfill refuses before canonical assignment. Scalar multikey backfill reuses the
-same complete-cut extraction and normalized value sets. Typed, text, vector and
-compound index DDL remain outside this capability.
+same complete-cut extraction and normalized value sets. BSON compound scalar
+backfill uses the same captured-cut tuple extraction. Typed, text and vector
+index DDL remain outside this capability.
 
 Every transition writes the existing catalog-name conflict effect. Native
 transactions depend on that name even when the collection is only read to derive
@@ -324,3 +328,17 @@ key admission includes the exact escaped ID suffix and maintained numeric digit
 limit; temporary query codec backing remains with the original captured read
 through encoding, traversal and owned ID copyout. Existing JSON charges and key
 bytes are unchanged.
+
+## Captured compound ranges
+
+`FindByCompoundIndexRange` reads one captured native schema and index domain.
+Forward and reverse scans seek one bounded candidate per original pending,
+captured and DATA source; equal keys retain newest-source precedence including
+tombstones. Reverse reads use caller-admitted fixed predecessor scratch, not a
+materialized interval. Every source probe debits `MaxInspected` before work.
+The maintained bounds and complete logical tie-group sorter preserve missing/null
+normalization, canonical numeric equivalence, ID ordering and fail-closed
+truncation. Stable ties still require at most one unfixed component. Query
+key/group/result backing is admitted before copying or growing, and temporary
+aliases end before refund. Only independently owned result IDs escape. Default
+resource limits and the tuple/command formats are unchanged.

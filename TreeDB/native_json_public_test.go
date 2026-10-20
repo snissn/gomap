@@ -44,8 +44,10 @@ func TestNativeJSONPublicCreateActivation(t *testing.T) {
 		t.Fatal(err)
 	}
 	refused := collections.NewCollectionManager(database.backend)
-	if _, err := refused.CreateCollection(&collections.CollectionMeta{Name: "legacy", Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}, Indexes: []collections.IndexDefinition{{Name: "compound", ValueType: collections.IndexValueBSONOrderedV2, Components: []collections.IndexComponent{{Field: "x", Direction: collections.IndexDirectionAscending}, {Field: "y", Direction: collections.IndexDirectionAscending}}}}}); !errors.Is(err, backenddb.ErrNativeSemanticUnsupported) {
-		t.Fatalf("legacy admission: %v", err)
+	// Scalar compound indexes are supported; valid text metadata still refuses
+	// native admission without creating a catalog entry or a legacy producer.
+	if _, err := refused.CreateCollection(&collections.CollectionMeta{Name: "legacy", Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}, Indexes: []collections.IndexDefinition{{Name: "compound", ValueType: collections.IndexValueBSONOrderedV2, Components: []collections.IndexComponent{{Field: "x", Direction: collections.IndexDirectionAscending}, {Field: "y", Direction: collections.IndexDirectionAscending}}}}, TextIndexes: []collections.TextIndexDefinition{{Name: "lexical", Version: collections.TextIndexVersionV1, Analyzer: collections.TextAnalyzerSimple, Fields: []collections.TextIndexField{{Field: "body"}}}}}); !errors.Is(err, backenddb.ErrNativeSemanticUnsupported) {
+		t.Fatalf("unsupported text metadata admission: %v", err)
 	}
 	if metas, truncated, err := refused.ListCollectionsBounded(1); err != nil || len(metas) != 0 || truncated {
 		t.Fatalf("empty native list=%+v truncated=%v err=%v", metas, truncated, err)

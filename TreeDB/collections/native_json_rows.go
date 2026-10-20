@@ -239,10 +239,13 @@ func nativeJSONEncodedCapacity(document int, indexes []IndexDefinition) (int, er
 			// exceed its eight-byte source; use the maintained codec's digit cap.
 			capacity = max(capacity, 6+(bsonIndexKeyNumericV2MaxDigits+1)/2)
 		}
-		if capacity > limit-total {
+		// Each compound component owns an encoded image in the SAME tuple.
+		// Repeated paths still encode independently; numeric caps apply to each.
+		components := max(1, len(index.Components))
+		if capacity > (limit-total)/components {
 			return 0, memtable.ErrCOWCapacity
 		}
-		total += capacity
+		total += capacity * components
 	}
 	return total, nil
 }
