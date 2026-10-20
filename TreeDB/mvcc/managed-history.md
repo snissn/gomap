@@ -55,9 +55,10 @@ cannot support a speedup claim.
 native two-collection/raw composite on all three production profiles. It proves
 actual persisted pointer versions, reads the held history after floor/prune and
 checkpoint while the DB is open, then keeps that cut across DB shutdown. Late
-iterator operations refuse `ErrClosed`. Releasing the original iterator must
-clear the original producer and maintenance budgets (except historical peak
-counters), plus original identity/namespace pins, before reopen verifies the
+iterator operations refuse `ErrClosed`. Releasing the original iterator queues
+cleanup on the existing worker. The test waits up to five seconds for the
+original producer and maintenance budgets (except historical peak counters),
+plus original identity/namespace pins, to clear before reopen verifies the
 persisted floor, value anchors, removed tombstone anchor, above-floor tombstone,
 native rows and raw value. The diagnostic capture is closed before the workload;
 only its existing allocator capabilities are retained for observations. The test

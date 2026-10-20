@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
@@ -202,15 +203,23 @@ func TestManagedHistoryNativeDeferredCloseCustody(t *testing.T) {
 			if err := old.Close(); err != nil {
 				t.Fatal(err)
 			}
-			for name, budget := range map[string]*memtable.COWBudget{"parent": parent, "maintenance": maintenance} {
-				remaining := budget.Stats()
-				remaining.PeakBytes = 0
-				if remaining != (memtable.COWStats{}) {
-					t.Fatalf("original %s budget after final cut release=%+v", name, remaining)
+			// The final cut queues original semantic cleanup for the existing
+			// worker. Close relinquishes custody before that worker refunds it.
+			deadline := time.Now().Add(5 * time.Second)
+			for {
+				remainingParent, remainingMaintenance := parent.Stats(), maintenance.Stats()
+				remainingParent.PeakBytes, remainingMaintenance.PeakBytes = 0, 0
+				pins := registry.Stats()
+				if err := registry.CleanupError(); err != nil {
+					t.Fatalf("original cleanup failed: %v; parent=%+v maintenance=%+v registry=%+v", err, remainingParent, remainingMaintenance, pins)
 				}
-			}
-			if pins := registry.Stats(); pins.ActivePins != 0 || pins.ActiveIdentities != 0 || pins.ActiveStableNamespaceLinks != 0 || registry.CleanupError() != nil {
-				t.Fatalf("original registry after final cut release=%+v cleanup=%v", pins, registry.CleanupError())
+				if remainingParent == (memtable.COWStats{}) && remainingMaintenance == (memtable.COWStats{}) && pins.ActivePins == 0 && pins.ActiveIdentities == 0 && pins.ActiveStableNamespaceLinks == 0 {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("original owners did not drain after final cut release: parent=%+v maintenance=%+v registry=%+v", remainingParent, remainingMaintenance, pins)
+				}
+				time.Sleep(time.Millisecond)
 			}
 			t.Logf("after final iterator Close: parent=%+v maintenance=%+v registry=%+v", parent.Stats(), maintenance.Stats(), registry.Stats())
 			database, err = treedb.Open(opts)
