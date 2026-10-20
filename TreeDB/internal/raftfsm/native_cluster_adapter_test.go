@@ -1,6 +1,7 @@
 package raftfsm
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -16,11 +17,33 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/nativewire"
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 // Exercise the actual cluster adapter's decoded preflight and committed apply
 // against the ordinary public COW owner, rather than a legacy DB or a mock FSM.
 func TestNativeClusterAdapterPreflightLifecycle(t *testing.T) {
+	runNativeClusterAdapterPreflightLifecycle(t, nativewire.DocumentFormatJSON)
+}
+func TestNativeBSONClusterAdapterPreflightLifecycle(t *testing.T) {
+	runNativeClusterAdapterPreflightLifecycle(t, nativewire.DocumentFormatBSON)
+}
+func runNativeClusterAdapterPreflightLifecycle(t *testing.T, format nativewire.DocumentFormat) {
+	document := func(source string) []byte {
+		if format == nativewire.DocumentFormatJSON {
+			return []byte(source)
+		}
+		var value bson.D
+		if err := bson.UnmarshalExtJSON([]byte(source), false, &value); err != nil {
+			t.Fatal(err)
+		}
+		out, err := bson.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+
 	t.Setenv("TREEDB_DISABLE_VLOG_GENERATION_LOOP", "1")
 	dir := filepath.Join(t.TempDir(), "db")
 	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, dir)
@@ -180,7 +203,7 @@ func TestNativeClusterAdapterPreflightLifecycle(t *testing.T) {
 	}
 	// The maintained v1 metadata format: append one unique scalar index to the
 	// existing zero-index payload. No new command or catalog encoding is used.
-	payload := testCreateCollectionMetaPayload("users", testCreateCollectionMetaOptions{documentFormat: uint64(nativewire.DocumentFormatJSON)})
+	payload := testCreateCollectionMetaPayload("users", testCreateCollectionMetaOptions{documentFormat: uint64(format)})
 	payload = binary.AppendUvarint(payload[:len(payload)-1], 1)
 	payload = appendTestString(payload, "city")
 	payload = appendTestString(payload, "city")
@@ -207,8 +230,8 @@ func TestNativeClusterAdapterPreflightLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	ids := [][]byte{[]byte("u1"), []byte("u2")}
-	originals := [][]byte{[]byte(`{"id":"u1","city":"hnl"}`), []byte(`{"id":"u2","city":"sea"}`)}
-	insert := deterministicInsertBatchEntry(t, "users", "native-cluster:insert", nativewire.DocumentFormatJSON, ids, originals)
+	originals := [][]byte{document(`{"id":"u1","city":"hnl"}`), document(`{"id":"u2","city":"sea"}`)}
+	insert := deterministicInsertBatchEntry(t, "users", "native-cluster:insert", format, ids, originals)
 	apply(2, insert, 2)
 	held, err = collection.OpenCollectionReadView()
 	if err != nil {
@@ -216,6 +239,12 @@ func TestNativeClusterAdapterPreflightLifecycle(t *testing.T) {
 	}
 	assertDocument := func(got, want []byte) {
 		t.Helper()
+		if format == nativewire.DocumentFormatBSON {
+			if !bytes.Equal(got, want) {
+				t.Fatalf("BSON document=%x want %x", got, want)
+			}
+			return
+		}
 		var actual, expected any
 		if json.Unmarshal(got, &actual) != nil || json.Unmarshal(want, &expected) != nil || !reflect.DeepEqual(actual, expected) {
 			t.Fatalf("document=%s want %s", got, want)
@@ -239,17 +268,17 @@ func TestNativeClusterAdapterPreflightLifecycle(t *testing.T) {
 	// An existing primary ID, a new unique owner collision, and an indexed
 	// replacement collision must refuse without local or FSM identity. Duplicate
 	// IDs within one request are rejected earlier by the canonical encoder.
-	preflight(deterministicInsertBatchEntry(t, "users", "native-cluster:existing-primary", nativewire.DocumentFormatJSON,
-		[][]byte{[]byte("u1")}, [][]byte{[]byte(`{"id":"u1","city":"sfo"}`)}), true)
-	preflight(deterministicInsertBatchEntry(t, "users", "native-cluster:unique", nativewire.DocumentFormatJSON,
-		[][]byte{[]byte("u3")}, [][]byte{[]byte(`{"id":"u3","city":"hnl"}`)}), true)
-	preflight(deterministicReplaceBatchEntry(t, "users", "native-cluster:bad-replace", nativewire.DocumentFormatJSON,
-		[][]byte{[]byte("u1")}, [][]byte{[]byte(`{"id":"u1","city":"sea"}`)}), true)
+	preflight(deterministicInsertBatchEntry(t, "users", "native-cluster:existing-primary", format,
+		[][]byte{[]byte("u1")}, [][]byte{document(`{"id":"u1","city":"sfo"}`)}), true)
+	preflight(deterministicInsertBatchEntry(t, "users", "native-cluster:unique", format,
+		[][]byte{[]byte("u3")}, [][]byte{document(`{"id":"u3","city":"hnl"}`)}), true)
+	preflight(deterministicReplaceBatchEntry(t, "users", "native-cluster:bad-replace", format,
+		[][]byte{[]byte("u1")}, [][]byte{document(`{"id":"u1","city":"sea"}`)}), true)
 	// Advisory validation also accepts a genuine no-op without installing it.
-	preflight(deterministicReplaceBatchEntry(t, "users", "native-cluster:noop", nativewire.DocumentFormatJSON,
-		[][]byte{[]byte("u1"), []byte("missing")}, [][]byte{originals[0], []byte(`{"id":"missing","city":"x"}`)}), false)
-	swapped := [][]byte{[]byte(`{"id":"u1","city":"sea"}`), []byte(`{"id":"u2","city":"hnl"}`)}
-	replace := deterministicReplaceBatchEntry(t, "users", "native-cluster:handoff", nativewire.DocumentFormatJSON, ids, swapped)
+	preflight(deterministicReplaceBatchEntry(t, "users", "native-cluster:noop", format,
+		[][]byte{[]byte("u1"), []byte("missing")}, [][]byte{originals[0], document(`{"id":"missing","city":"x"}`)}), false)
+	swapped := [][]byte{document(`{"id":"u1","city":"sea"}`), document(`{"id":"u2","city":"hnl"}`)}
+	replace := deterministicReplaceBatchEntry(t, "users", "native-cluster:handoff", format, ids, swapped)
 	preflight(replace, false)
 	for i, id := range ids {
 		got, err := collection.Get(id)
@@ -321,10 +350,75 @@ func TestNativeClusterAdapterPreflightLifecycle(t *testing.T) {
 	if backend.CommandWALNextLSN() != next || sequence() != seq || !ok || after != state {
 		t.Fatal("unsupported create claimed native state")
 	}
-	if _, err := manager.OpenCollection("bson"); !errors.Is(err, collections.ErrCollectionNotFound) {
+	if _, err := manager.OpenCollection("template"); !errors.Is(err, collections.ErrCollectionNotFound) {
 		t.Fatalf("unsupported create became visible: %v", err)
 	}
-	assertLastApplied(t, fsm, raftentry.ApplyEntryID{Term: 2, Index: 4})
+	lastIndex := uint64(4)
+	retryEntry, retryResult := deletion, deleteResult
+	if format == nativewire.DocumentFormatBSON {
+		fields := []nativewire.Section{
+			{ID: nativewire.SectionCommandHeader, Bytes: nativewire.AppendCommandHeader(nil, nativewire.CommandHeader{ID: nativewire.CommandUpdateBSONSet, Version: 1})},
+			{ID: nativewire.SectionIdempotencyKey, Bytes: []byte("native-cluster:bson-set")},
+			{ID: nativewire.SectionCollectionRef, Bytes: deterministicTestCollectionNameRef("users")},
+			{ID: nativewire.SectionDocumentIDs, Bytes: nativewire.AppendByteVector(nil, []byte("u1"))},
+			{ID: nativewire.SectionUpdateFieldNames, Bytes: nativewire.AppendByteVector(nil, []byte("city"))},
+			{ID: nativewire.SectionUpdateFieldValues, Bytes: nativewire.AppendByteVector(nil, append([]byte{byte(bson.TypeString)}, bson.Raw(swapped[0]).Lookup("city").Value...))},
+			{ID: nativewire.SectionExpectedCatalogVersion, Bytes: binary.AppendUvarint(nil, testCatalogVersionStart)},
+		}
+		cmd, err := nativewire.MustV1Registry().ValidateRequestSections(fields)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := nativewire.AppendDeterministicEntry(nil, cmd)
+		if err != nil {
+			t.Fatal(err)
+		}
+		noop := apply(5, raw, 0)
+		if noop.MatchedCount != 1 {
+			t.Fatalf("BSONSet no-op matched=%d", noop.MatchedCount)
+		}
+		// Modify a surviving indexed row, then observe the same exact persisted result.
+		fields[1].Bytes = []byte("native-cluster:bson-set-change")
+		value, err := bson.Marshal(bson.D{{Key: "v", Value: "bos"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		fields[5].Bytes = nativewire.AppendByteVector(nil, append([]byte{byte(bson.TypeString)}, bson.Raw(value).Lookup("v").Value...))
+		cmd, err = nativewire.MustV1Registry().ValidateRequestSections(fields)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err = nativewire.AppendDeterministicEntry(nil, cmd)
+		if err != nil {
+			t.Fatal(err)
+		}
+		changed := apply(6, raw, 1)
+		if changed.MatchedCount != 1 {
+			t.Fatalf("BSONSet changed matched=%d", changed.MatchedCount)
+		}
+		swapped[0] = document(`{"id":"u1","city":"bos"}`)
+		checkRows()
+		checkHeld()
+		if ids, err := collection.FindByIndexValue("city", "bos"); err != nil || len(ids) != 1 || string(ids[0]) != "u1" {
+			t.Fatalf("BSONSet index=%q err=%v", ids, err)
+		}
+		fields[1].Bytes = []byte("native-cluster:bson-set-missing")
+		fields[3].Bytes = nativewire.AppendByteVector(nil, []byte("missing"))
+		cmd, err = nativewire.MustV1Registry().ValidateRequestSections(fields)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err = nativewire.AppendDeterministicEntry(nil, cmd)
+		if err != nil {
+			t.Fatal(err)
+		}
+		missing := apply(7, raw, 0)
+		if missing.MatchedCount != 0 {
+			t.Fatalf("missing BSONSet matched=%d", missing.MatchedCount)
+		}
+		lastIndex, retryEntry, retryResult = 7, raw, missing
+	}
+	assertLastApplied(t, fsm, raftentry.ApplyEntryID{Term: 2, Index: lastIndex})
 	closeOriginal()
 	openOriginal()
 	collection, err = manager.OpenCollection("users")
@@ -332,13 +426,13 @@ func TestNativeClusterAdapterPreflightLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkRows()
-	assertLastApplied(t, fsm, raftentry.ApplyEntryID{Term: 2, Index: 4})
+	assertLastApplied(t, fsm, raftentry.ApplyEntryID{Term: 2, Index: lastIndex})
 	next, seq = backend.CommandWALNextLSN(), sequence()
-	if p := preflight(deletion, false); !p.KnownIdempotencyReplay {
+	if p := preflight(retryEntry, false); !p.KnownIdempotencyReplay {
 		t.Fatal("durable retry was not recognized during preflight")
 	}
-	duplicate, err := fsm.ApplyCommittedCommandEntryV1(context.Background(), clusterCommittedCommand(2, 4, deletion))
-	if err != nil || duplicate != deleteResult || backend.CommandWALNextLSN() != next || sequence() != seq {
+	duplicate, err := fsm.ApplyCommittedCommandEntryV1(context.Background(), clusterCommittedCommand(2, lastIndex, retryEntry))
+	if err != nil || duplicate != retryResult || backend.CommandWALNextLSN() != next || sequence() != seq {
 		t.Fatalf("durable retry=%+v err=%v next=%d/%d", duplicate, err, backend.CommandWALNextLSN(), next)
 	}
 	closeOriginal()
