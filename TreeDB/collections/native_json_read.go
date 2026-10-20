@@ -281,11 +281,22 @@ func (r *NativeJSONRead) readLeaf(ptr page.LeafLogPtr, dst []byte) ([]byte, erro
 // this synchronous read. Maintenance descriptor reads reuse the same decoder,
 // admission and integrity policy without constructing another capture authority.
 func readNativeSnapshotLeaf(snapshot *backenddb.Snapshot, allocator backenddb.NativeSemanticAllocator, ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
+	return readNativeSnapshotLeafWithAdmission(snapshot, allocator.Limits().MaxInFlightBytes, func(charge uint64) (func(), error) {
+		lease, err := allocator.AdmitNativeBytes(charge)
+		if err != nil {
+			return nil, err
+		}
+		return lease.Close, nil
+	}, ptr, dst)
+}
+
+// Internal synchronous admission may spend a containing preadmitted build
+// workspace. It cannot reenter application code or outlive this read.
+func readNativeSnapshotLeafWithAdmission(snapshot *backenddb.Snapshot, limit uint64, admit func(uint64) (func(), error), ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
 	f, _, err := snapshot.PinnedValueLogFile(ptr.ValuePtr().FileID)
 	if err != nil {
 		return nil, err
 	}
-	limit := allocator.Limits().MaxInFlightBytes
 	shape, err := valuelog.InspectCOWLeafRecord(f, ptr.ValuePtr(), valuelog.COWReadLimits{MaxRecordBytes: limit, MaxRawBytes: limit, MaxValueBytes: limit})
 	if err != nil {
 		return nil, err
@@ -308,7 +319,7 @@ func readNativeSnapshotLeaf(snapshot *backenddb.Snapshot, allocator backenddb.Na
 		}
 		charge += part
 	}
-	lease, err := allocator.AdmitNativeBytes(charge)
+	finish, err := admit(charge)
 	if err != nil {
 		return nil, err
 	}
@@ -322,7 +333,7 @@ func readNativeSnapshotLeaf(snapshot *backenddb.Snapshot, allocator backenddb.Na
 		}
 		decode = nil
 		input, raw = nil, nil
-		lease.Close()
+		finish()
 	}()
 	if shape.Compressed {
 		decoder, err = valuelog.NewCOWBlockDecoder(shape.Codec, shape.RawBytes, shape.PayloadBytes(), func(actual valuelog.COWDecoderAllocationSizes) error {

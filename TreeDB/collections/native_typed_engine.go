@@ -58,7 +58,7 @@ func nativeTypedBuildCapacityForCompaction(e *nativeEngineVersion, basis *backen
 		if manifest != nil {
 			root = manifest.baseRoot
 		}
-		base, e := nativeTypedManifestCapacity(basis, root)
+		base, e := nativeTypedBasisCapacity(*c.schema.meta, basis, root)
 		if e != nil {
 			err = e
 			return false
@@ -199,9 +199,23 @@ func (b *nativeEngineBuild) materializeTyped(group *backenddb.RootPublicationBui
 	if len(b.typed) == 0 {
 		return nil
 	}
+	// The original group borrows the final requirements synchronously. Once
+	// transferred (or failed), the retained build must not keep captured readers
+	// alive past group cleanup. Resource custody remains in its original cells.
+	defer func() {
+		b.typedRequirements = rootpublication.StableLogicalObligationRequirements{}
+		for _, input := range b.typed {
+			input.work.requirements = rootpublication.StableLogicalObligationRequirements{}
+			input.work.fallback = nil
+			input.work.sourceDirectory = nil
+		}
+	}()
 	// Keep aggregate custody in the SAME accepted ledger before any merge or
 	// later collection can fail. Transfer only the final complete closure.
 	b.typedResources = rootpublication.NewStableResourceSetBuilder()
+	var appendMutation rootpublication.StableLogicalObligationMutation
+	var requirementWork rootpublication.StableResourceClosureWork
+	hasAppend := false
 	for _, input := range b.typed {
 		work := input.work
 		if err := work.materialize(); err != nil {
@@ -258,6 +272,14 @@ func (b *nativeEngineBuild) materializeTyped(group *backenddb.RootPublicationBui
 			work.resources = nil
 		}
 		b.typedRequirements = requirements
+		if work.fallback != nil {
+			appendMutation, err = rootpublication.MergeStableLogicalObligationMutations(appendMutation, work.appendMutation)
+			if err != nil {
+				return err
+			}
+			requirementWork.Add(work.requirementWork)
+			hasAppend = true
+		}
 		encoded, err := encodeCollectionMeta(work.meta)
 		if err != nil {
 			return err
@@ -277,7 +299,15 @@ func (b *nativeEngineBuild) materializeTyped(group *backenddb.RootPublicationBui
 	}
 	b.typedResources = nil
 	b.typedClosure = resources
-	if err = group.SetNativeDurableResources(resources, b.typedRequirements); err != nil {
+	if hasAppend {
+		requirements := b.typedRequirements
+		err = group.SetNativeDurableResourceAppend(resources, requirements, appendMutation, requirementWork, func() (rootpublication.StableLogicalObligationRequirements, rootpublication.StableResourceClosureWork, error) {
+			return requirements, rootpublication.StableResourceClosureWork{}, nil
+		})
+	} else {
+		err = group.SetNativeDurableResources(resources, b.typedRequirements)
+	}
+	if err != nil {
 		return err
 	}
 	b.typedClosure = nil // exact complete closure now belongs to original group

@@ -50,12 +50,20 @@ func validateBorrowedMutationFinal(m StableLogicalObligationMutation, r StableLo
 		}
 	}
 	for _, o := range m.Added {
-		if !requirementContainsScope(r, o) || requirementDesired(r, o) < 0 {
+		present, err := requirementHasValue(r, o)
+		if err != nil {
+			return err
+		}
+		if !requirementContainsScope(r, o) || !present {
 			return ErrUnresolvedResource
 		}
 	}
 	for _, o := range m.Removed {
-		if !requirementContainsScope(r, o) || requirementDesired(r, o) >= 0 {
+		present, err := requirementHasValue(r, o)
+		if err != nil {
+			return err
+		}
+		if !requirementContainsScope(r, o) || present {
 			return ErrResourceConflict
 		}
 	}

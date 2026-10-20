@@ -40,14 +40,15 @@ func prepareOwnedDirectoryRequirementsV2(source *StableResourceSet, views *resou
 	}
 	// Kind and physical selection precede even the unwanted-record admission.
 	// These synchronous values remain owned by the original diagnostics/borrow.
-	unwanted := func(physical StableResourcePhysicalDescriptor, o StableLogicalObligation) bool {
-		if resourceKindExcluded(physical.Kind, excluded) || !requirementContainsScope(r, o) || requirementDesired(r, o) >= 0 {
-			return false
+	unwanted := func(physical StableResourcePhysicalDescriptor, o StableLogicalObligation) (bool, error) {
+		if resourceKindExcluded(physical.Kind, excluded) || !requirementContainsScope(r, o) {
+			return false, nil
 		}
 		if physical.Kind == selectedKind && !slices.Contains(selected, physical.identity) {
-			return false
+			return false, nil
 		}
-		return true
+		keep, err := requirementHasValue(r, o)
+		return !keep, err
 	}
 	entryFor := func(physical StableResourcePhysicalDescriptor) *stableResourceEntry {
 		view, ok := views.lookup(physical.Kind)
@@ -59,8 +60,9 @@ func prepareOwnedDirectoryRequirementsV2(source *StableResourceSet, views *resou
 	count, charge := 0, uint64(0)
 	if err := diagnostics.WalkLogicalObligations(func(physical StableResourcePhysicalDescriptor, o StableLogicalObligation) error {
 		work.SourceObligationsInspected++
-		if !unwanted(physical, o) {
-			return nil
+		drop, err := unwanted(physical, o)
+		if err != nil || !drop {
+			return err
 		}
 		entry := entryFor(physical)
 		if entry == nil || entry.outgoing == nil || entry.outgoing.allocation.owner != owner {
@@ -92,8 +94,9 @@ func prepareOwnedDirectoryRequirementsV2(source *StableResourceSet, views *resou
 	plan.values = make([]ownedDirectoryDeltaIdentityV2, 0, count)
 	if err := diagnostics.WalkLogicalObligations(func(physical StableResourcePhysicalDescriptor, o StableLogicalObligation) error {
 		work.SourceObligationsInspected++
-		if !unwanted(physical, o) {
-			return nil
+		drop, err := unwanted(physical, o)
+		if err != nil || !drop {
+			return err
 		}
 		entry := entryFor(physical)
 		if entry == nil || entry.outgoing == nil || entry.outgoing.allocation.owner != owner {

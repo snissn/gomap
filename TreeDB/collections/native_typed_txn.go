@@ -40,6 +40,9 @@ func (t *NativeJSONTxn) stageNativeTypedInsert(g *nativeJSONTxnBinding, ids, doc
 // Both document producers use the same original parser, retained policy and
 // independent delta receipt. Update callers have already read/matched each ID.
 func (t *NativeJSONTxn) stageNativeTypedDocuments(g *nativeJSONTxnBinding, ids, documents [][]byte, kind commitlog.CommandKind) (resultErr error) {
+	if len(g.probe.meta.VectorIndexes) != 0 {
+		return backenddb.ErrNativeSemanticUnsupported
+	}
 	operation := ColumnPublishOperationInsert
 	if kind == commitlog.CommandKindCollectionUpdateBatchByID {
 		operation = ColumnPublishOperationUpdate
@@ -283,6 +286,12 @@ func (t *NativeJSONTxn) finalizeNativeTyped(g *nativeJSONTxnBinding) error {
 		additional = append(additional, nativeJSONDomainChange{name: name, policy: policy, entries: mutations})
 	}
 	g.plan = &nativeJSONLogicalInsert{name: g.name, incarnation: g.incarnation, mutations: mutations, additional: additional, typed: d, custody: t.custody}
+	if g.allowSourceImport || (d != nil && d.data != nil && d.data.graph != nil) {
+		if err := t.admitStage(g, memtable.COWAllocationCharge(uint64(len(g.name)))+memtable.COWAllocationCharge(uint64(unsafe.Sizeof(txnhistory.Effect{})))); err != nil {
+			return err
+		}
+		effects = append(effects, txnhistory.Effect{Namespace: txnhistory.Namespace{Kind: txnhistory.CatalogNamespace}, Kind: txnhistory.PointEffect, Key: []byte(g.name)})
+	}
 	g.effects = effects
 	return nil
 }
@@ -482,6 +491,9 @@ func nativeTypedBatchStageCapacity(meta CollectionMeta, ids, retained [][]byte, 
 }
 
 func (t *NativeJSONTxn) stageNativeTypedBatch(g *nativeJSONTxnBinding, ids, retained [][]byte, columns []TypedColumnBatch, deleteIDs [][]byte, kind commitlog.CommandKind, upsert bool) (results []UpdateBatchResult, matched int, resultErr error) {
+	if len(g.probe.meta.VectorIndexes) != 0 && !g.allowSourceImport {
+		return nil, 0, backenddb.ErrNativeSemanticUnsupported
+	}
 	if !nativeTypedMeta(g.probe.meta) || g.probe.meta.Options.ColumnStore.RetainedPayload != ColumnRetainedPayloadNonColumn {
 		return nil, 0, backenddb.ErrNativeSemanticUnsupported
 	}

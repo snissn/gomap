@@ -317,6 +317,44 @@ held views and pending effects. This capability is separate from a single-use
 captured-prefix handoff and does not grant generic backend aliases publication
 authority.
 
+## Immutable vector source import V2
+
+Durable native handles support the existing source-only ColumnGraph declaration
+with typed String RowAsset / Float32Vector ColumnPart and noncolumn JSON payload.
+`ImportVectorPartitionSourceChunkV2` and its statistics variant retain the original
+format-14 frame, row ordinals, source-map binding, receipts, retry checks and sealed
+completion. Each call uses the same canonical publisher and waits for its original
+physical seal. Ordinary mutations of this source-only collection remain refused;
+this does not enable live ANN queries or vector-index DDL.
+
+`RebuildVectorIndex` supports the ordinary float32 ColumnGraph producer on a
+sealed captured cdir2 source, using the original HNSW/TVIS asset encoders and
+command-103 frame. It refuses a pending target typed prefix before assignment;
+the original catalog dependency/effect binds source completion against concurrent
+imports. Construction uses real physical row references, preserves source
+directory identity and readability, and completes through the same captured
+build group and physical seal. Current status uses the original graph/state
+validators. Startup replay applies the original assigned 103 intent to that same
+physical constructor. The `cosine_normalized_f32_v1` fused base rewrite remains
+unimplemented on native handles and is refused before assignment; this producer
+does not claim that representation or live ANN query support.
+
+Physical construction appends the original cdir2 records and SIS2 completion in
+the same captured build group. Its exact durable closure uses the original
+selected metadata owner and verifier: a replayable stream reads the captured
+manifest and the bounded fresh suffix, with independent admitted walk and point
+scratch. Mixed complete requirements keep the original exact fallback; no retained
+history array or namespace-disjointness assumption is introduced. The original
+complete manifest decoder remains available for other producers.
+
+Source readers retain one native capture. Binding, source pages, proofs, typed
+row reconstruction and directory identity all come from that cut; returned chunks
+and documents are owned. Opening an incomplete source or changing its binding is
+still an error. The public replay control uses the maintained actual-frame and
+checkpointed-seed transport mechanism, rather than claiming an unapplied successful
+import (successful calls require a physical seal). Existing format-14/cdir2/SIS2
+bytes and default memory limits are unchanged.
+
 ## Development verification and remaining qualification
 
 Maintained public controls cover raw/cross-collection JSON, indexed ordered

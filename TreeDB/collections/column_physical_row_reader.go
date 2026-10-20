@@ -21,6 +21,7 @@ var columnPhysicalNativeLittleEndian = func() bool {
 }()
 
 type columnPhysicalRowReaderOptions struct {
+	operationLocal    bool
 	ProjectedColumns  []string
 	MaxDecodedBlocks  int
 	RequireInsertOnly bool
@@ -175,6 +176,7 @@ func newColumnPhysicalRowReaderFromSnapshotViewWithClose(view columnPhysicalScan
 	if err != nil {
 		return nil, err
 	}
+	readCache.operationLocal = opts.operationLocal
 	reader := &columnPhysicalRowReader{
 		view:           view,
 		projection:     projection,

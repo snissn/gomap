@@ -34,6 +34,8 @@ type nativeTypedDelta struct {
 // Vector backing has its own original receipt, so dropping a captured prefix
 // need not retain consumed ancestors merely to preserve a newer row slice.
 type nativeTypedRows struct {
+	graph    *nativeVectorGraphRecipe
+	source   *nativeSourceImportDeltaV2
 	refs     atomic.Int64
 	rows     []columnDeclaredRow
 	retained [][]byte
@@ -61,9 +63,19 @@ func (r *nativeTypedRows) release() cowbtree.OwnedMapCompletion {
 	clear(r.retained)
 	clear(r.deleted)
 	r.rows, r.retained, r.deleted = nil, nil, nil
+	var sourceDone cowbtree.OwnedMapCompletion
+	if r.graph != nil {
+		sourceDone.Append(r.graph.release())
+		r.graph = nil
+	}
+	if r.source != nil {
+		sourceDone.Append(r.source.release())
+		r.source = nil
+	}
 	refund := r.refund
 	r.refund = nil
-	return refund.Completion()
+	sourceDone.Append(refund.Completion())
+	return sourceDone
 }
 
 func (d *nativeTypedDelta) retain() {

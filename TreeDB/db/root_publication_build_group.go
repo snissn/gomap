@@ -26,10 +26,13 @@ type privatePrimaryConstructionV6 interface {
 // This is an internal cross-package bridge for caching; callers outside TreeDB
 // internals must not depend on it as a stable API.
 type RootPublicationBuildGroup struct {
-	nativeResources    *rootpublication.StableResourceSet
-	nativeRequirements rootpublication.StableLogicalObligationRequirements
-	negativeCoverage   *negativeRootCoverage
-	mu                 sync.Mutex
+	nativeResources            *rootpublication.StableResourceSet
+	nativeRequirements         rootpublication.StableLogicalObligationRequirements
+	nativeAppend               rootpublication.StableLogicalObligationMutation
+	nativeRequirementWork      rootpublication.StableResourceClosureWork
+	nativeRequirementsFallback func() (rootpublication.StableLogicalObligationRequirements, rootpublication.StableResourceClosureWork, error)
+	negativeCoverage           *negativeRootCoverage
+	mu                         sync.Mutex
 
 	db                *DB
 	coordinator       *rootpublication.Coordinator
@@ -449,23 +452,26 @@ func (group *RootPublicationBuildGroup) finalizeLocked(b *Batch, syncWrite bool)
 		}
 	}
 	opts := finalizeCommitOptions{
-		negativeCoverage:            group.negativeCoverage,
-		durableResources:            group.nativeResources,
-		durableResourceRequirements: group.nativeRequirements,
-		prepareSnapshotReceipt:      group.prepareSnapshotReceiptLocked,
-		abortSnapshotReceipt:        group.snapshotCancel,
-		skipPrePublishFlush:         true,
-		skipConditionalRootConflict: true,
-		maxEntryRevision:            group.maxEntryRevision,
-		durablePublishLocked:        true,
-		durablePublishRelease:       group.releaseDurablePublishLocked,
-		rootPublicationBuilder:      group.builder,
-		closeTeardownPinned:         true,
-		expectedBaseCommitSeq:       group.baseSeq,
-		hasExpectedBaseCommitSeq:    true,
-		releaseRootSerialization:    func() {},
-		recordVacuumMutation:        recordVacuumMutation,
-		durableIndex:                group.idx,
+		negativeCoverage:                    group.negativeCoverage,
+		durableResources:                    group.nativeResources,
+		durableResourceRequirements:         group.nativeRequirements,
+		durableResourceAppendMutation:       group.nativeAppend,
+		durableResourceRequirementWork:      group.nativeRequirementWork,
+		durableResourceRequirementsFallback: group.nativeRequirementsFallback,
+		prepareSnapshotReceipt:              group.prepareSnapshotReceiptLocked,
+		abortSnapshotReceipt:                group.snapshotCancel,
+		skipPrePublishFlush:                 true,
+		skipConditionalRootConflict:         true,
+		maxEntryRevision:                    group.maxEntryRevision,
+		durablePublishLocked:                true,
+		durablePublishRelease:               group.releaseDurablePublishLocked,
+		rootPublicationBuilder:              group.builder,
+		closeTeardownPinned:                 true,
+		expectedBaseCommitSeq:               group.baseSeq,
+		hasExpectedBaseCommitSeq:            true,
+		releaseRootSerialization:            func() {},
+		recordVacuumMutation:                recordVacuumMutation,
+		durableIndex:                        group.idx,
 	}
 	if group.acceptedPrefixCut.Valid() {
 		opts.acceptedPrefixCut = &group.acceptedPrefixCut
@@ -490,9 +496,13 @@ func (group *RootPublicationBuildGroup) finalizeLocked(b *Batch, syncWrite bool)
 		commandOpts.acceptedPrefixCut = opts.acceptedPrefixCut
 		commandOpts.durableResources = opts.durableResources
 		commandOpts.durableResourceRequirements = opts.durableResourceRequirements
+		commandOpts.durableResourceAppendMutation = opts.durableResourceAppendMutation
+		commandOpts.durableResourceRequirementWork = opts.durableResourceRequirementWork
+		commandOpts.durableResourceRequirementsFallback = opts.durableResourceRequirementsFallback
 		opts = commandOpts
 	}
-	group.nativeResources = nil // finalize owns the original closure on every exit
+	group.nativeResources = nil            // finalize owns the original closure on every exit
+	group.nativeRequirementsFallback = nil // finalize borrows the original captured fallback only synchronously
 	post, err := db.finalizeCommitLockedWithOptions(
 		group.currentRoot, group.systemRoot, group.retired, syncWrite, group.metrics,
 		group.touchedValueLogSegmentSliceLocked(), db.indexOuterLeavesInValueLog,
@@ -568,6 +578,14 @@ func (group *RootPublicationBuildGroup) disposePrimaryLocked(owner *primaryarena
 }
 
 func (group *RootPublicationBuildGroup) cleanupLocked(abandon bool) error {
+	if group != nil {
+		// Requirement streams borrow the exact captured basis only through
+		// synchronous finalize. Drop all aliases before endRead on every exit.
+		group.nativeRequirementsFallback = nil
+		group.nativeRequirements = rootpublication.StableLogicalObligationRequirements{}
+		group.nativeAppend = rootpublication.StableLogicalObligationMutation{}
+		group.nativeRequirementWork = rootpublication.StableResourceClosureWork{}
+	}
 	if group == nil {
 		return nil
 	}

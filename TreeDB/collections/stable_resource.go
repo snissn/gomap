@@ -108,6 +108,20 @@ func stableColumnManifestDurableRequirementsWithWork(records []columnManifestRec
 	for _, field := range stableColumnDurableRequirementFields {
 		requirements.ScopedNamespaces = append(requirements.ScopedNamespaces, rootpublication.StableLogicalObligationNamespaceScope{Field: field, Namespace: expectedNamespace})
 	}
+	for _, record := range records {
+		if err := walkStableColumnManifestRequirementRecord(record, activeGeneration, expectedNamespace, work, func(value rootpublication.StableLogicalObligation) error {
+			requirements.Obligations = append(requirements.Obligations, value)
+			return nil
+		}); err != nil {
+			return rootpublication.StableLogicalObligationRequirements{}, err
+		}
+	}
+	return rootpublication.NormalizeStableLogicalObligationRequirements(requirements)
+}
+
+// walkStableColumnManifestRequirementRecord is the shared original decoder.
+// The slice wrapper and captured streaming source retain identical validation.
+func walkStableColumnManifestRequirementRecord(record columnManifestRecord, activeGeneration uint64, expectedNamespace string, work *rootpublication.StableResourceClosureWork, emit func(rootpublication.StableLogicalObligation) error) error {
 	appendRef := func(ref ColumnAssetRef, reachability rootpublication.ReachabilityField) error {
 		if ref.Namespace != expectedNamespace || ref.Generation == 0 || ref.Generation > activeGeneration {
 			return fmt.Errorf("collections: durable column ref namespace/generation %+v outside candidate manifest", ref)
@@ -115,7 +129,9 @@ func stableColumnManifestDurableRequirementsWithWork(records []columnManifestRec
 		if err := validateColumnAssetRefForPlan(ref); err != nil {
 			return err
 		}
-		requirements.Obligations = append(requirements.Obligations, stableColumnLogicalObligation(ref, reachability))
+		if err := emit(stableColumnLogicalObligation(ref, reachability)); err != nil {
+			return err
+		}
 		if work != nil {
 			work.FinalRequirementObligationsMaterialized++
 		}
@@ -131,77 +147,76 @@ func stableColumnManifestDurableRequirementsWithWork(records []columnManifestRec
 		}
 		return appendRef(ref, reachability)
 	}
-	for _, record := range records {
-		if work != nil && stableColumnManifestDurableRequirementRecord(record.key) {
-			work.FinalRequirementRecordsDecoded++
+
+	if work != nil && stableColumnManifestDurableRequirementRecord(record.key) {
+		work.FinalRequirementRecordsDecoded++
+	}
+	switch {
+	case bytes.HasPrefix(record.key, columnManifestPartRecordPrefixBytes):
+		part, err := decodeColumnManifestPartRecord(record.value)
+		if err != nil {
+			return err
 		}
-		switch {
-		case bytes.HasPrefix(record.key, columnManifestPartRecordPrefixBytes):
-			part, err := decodeColumnManifestPartRecord(record.value)
-			if err != nil {
-				return rootpublication.StableLogicalObligationRequirements{}, err
+		if err := appendClassified(part.AssetRef); err != nil {
+			return err
+		}
+	case bytes.HasPrefix(record.key, columnManifestAggregateMetadataRecordPrefixBytes):
+		asset, err := decodeColumnManifestAggregateMetadataRecord(record.key, record.value)
+		if err != nil {
+			return err
+		}
+		if err := appendClassified(asset.AssetRef); err != nil {
+			return err
+		}
+	case bytes.HasPrefix(record.key, columnManifestDictionaryCodesRecordPrefixBytes):
+		asset, err := decodeColumnManifestDictionaryCodesRecord(record.key, record.value)
+		if err != nil {
+			return err
+		}
+		if err := appendClassified(asset.AssetRef); err != nil {
+			return err
+		}
+	case bytes.HasPrefix(record.key, columnManifestInt64ValuesRecordPrefixBytes):
+		asset, err := decodeColumnManifestInt64ValuesRecord(record.key, record.value)
+		if err != nil {
+			return err
+		}
+		if err := appendClassified(asset.AssetRef); err != nil {
+			return err
+		}
+	case bytes.HasPrefix(record.key, columnManifestVectorGraphRecordPrefixBytes):
+		graph, err := decodeColumnVectorGraphManifestRecord(record.value)
+		if err != nil {
+			return err
+		}
+		refs, err := columnVectorGraphManifestAssetRefsForScan(graph, activeGeneration, expectedNamespace)
+		if err != nil {
+			return err
+		}
+		for _, ref := range refs {
+			if err := appendRef(ref, rootpublication.ReachabilityVectorGraphPack); err != nil {
+				return err
 			}
-			if err := appendClassified(part.AssetRef); err != nil {
-				return rootpublication.StableLogicalObligationRequirements{}, err
+		}
+	case bytes.HasPrefix(record.key, columnVectorIndexStateRecordPrefixBytes):
+		state, err := decodeColumnVectorIndexStateRecord(record.value)
+		if err != nil {
+			return err
+		}
+		if _, err := columnVectorIndexStateManifestAssetRefsForScan(state, activeGeneration, expectedNamespace); err != nil {
+			return err
+		}
+		for _, asset := range state.Assets {
+			reachability := rootpublication.ReachabilityVectorGraphPack
+			if asset.Role == columnVectorIndexStateAssetRoleNormalizedVectors {
+				reachability = rootpublication.ReachabilityTypedColumnMultipart
 			}
-		case bytes.HasPrefix(record.key, columnManifestAggregateMetadataRecordPrefixBytes):
-			asset, err := decodeColumnManifestAggregateMetadataRecord(record.key, record.value)
-			if err != nil {
-				return rootpublication.StableLogicalObligationRequirements{}, err
-			}
-			if err := appendClassified(asset.AssetRef); err != nil {
-				return rootpublication.StableLogicalObligationRequirements{}, err
-			}
-		case bytes.HasPrefix(record.key, columnManifestDictionaryCodesRecordPrefixBytes):
-			asset, err := decodeColumnManifestDictionaryCodesRecord(record.key, record.value)
-			if err != nil {
-				return rootpublication.StableLogicalObligationRequirements{}, err
-			}
-			if err := appendClassified(asset.AssetRef); err != nil {
-				return rootpublication.StableLogicalObligationRequirements{}, err
-			}
-		case bytes.HasPrefix(record.key, columnManifestInt64ValuesRecordPrefixBytes):
-			asset, err := decodeColumnManifestInt64ValuesRecord(record.key, record.value)
-			if err != nil {
-				return rootpublication.StableLogicalObligationRequirements{}, err
-			}
-			if err := appendClassified(asset.AssetRef); err != nil {
-				return rootpublication.StableLogicalObligationRequirements{}, err
-			}
-		case bytes.HasPrefix(record.key, columnManifestVectorGraphRecordPrefixBytes):
-			graph, err := decodeColumnVectorGraphManifestRecord(record.value)
-			if err != nil {
-				return rootpublication.StableLogicalObligationRequirements{}, err
-			}
-			refs, err := columnVectorGraphManifestAssetRefsForScan(graph, activeGeneration, expectedNamespace)
-			if err != nil {
-				return rootpublication.StableLogicalObligationRequirements{}, err
-			}
-			for _, ref := range refs {
-				if err := appendRef(ref, rootpublication.ReachabilityVectorGraphPack); err != nil {
-					return rootpublication.StableLogicalObligationRequirements{}, err
-				}
-			}
-		case bytes.HasPrefix(record.key, columnVectorIndexStateRecordPrefixBytes):
-			state, err := decodeColumnVectorIndexStateRecord(record.value)
-			if err != nil {
-				return rootpublication.StableLogicalObligationRequirements{}, err
-			}
-			if _, err := columnVectorIndexStateManifestAssetRefsForScan(state, activeGeneration, expectedNamespace); err != nil {
-				return rootpublication.StableLogicalObligationRequirements{}, err
-			}
-			for _, asset := range state.Assets {
-				reachability := rootpublication.ReachabilityVectorGraphPack
-				if asset.Role == columnVectorIndexStateAssetRoleNormalizedVectors {
-					reachability = rootpublication.ReachabilityTypedColumnMultipart
-				}
-				if err := appendRef(asset.Ref, reachability); err != nil {
-					return rootpublication.StableLogicalObligationRequirements{}, err
-				}
+			if err := appendRef(asset.Ref, reachability); err != nil {
+				return err
 			}
 		}
 	}
-	return rootpublication.NormalizeStableLogicalObligationRequirements(requirements)
+	return nil
 }
 
 func stableColumnManifestDurablePublication(current []columnManifestRecord, delta ColumnManifestRootDelta, activeGeneration uint64, expectedNamespace string) (rootpublication.StableLogicalObligationRequirements, rootpublication.StableLogicalObligationMutation, func() (rootpublication.StableLogicalObligationRequirements, rootpublication.StableResourceClosureWork, error), rootpublication.StableResourceClosureWork, error) {

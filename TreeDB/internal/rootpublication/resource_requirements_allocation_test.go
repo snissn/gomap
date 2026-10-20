@@ -8,6 +8,111 @@ import (
 	"testing"
 )
 
+type requirementStreamFixture struct {
+	values []StableLogicalObligation
+	err    error
+}
+
+func (s requirementStreamFixture) Walk(emit func(StableLogicalObligation) error) (StableResourceClosureWork, error) {
+	for _, value := range s.values {
+		if err := emit(value); err != nil {
+			return StableResourceClosureWork{}, err
+		}
+	}
+	return StableResourceClosureWork{}, s.err
+}
+
+func (s requirementStreamFixture) Lookup(key StableLogicalObligation) (StableLogicalObligation, bool, error) {
+	for _, value := range s.values {
+		if stableLogicalObligationKey(value) == stableLogicalObligationKey(key) {
+			return value, true, s.err
+		}
+	}
+	return StableLogicalObligation{}, false, s.err
+}
+
+func TestOwnedStreamedRequirementsExactUnionAndRefusal(t *testing.T) {
+	values := []StableLogicalObligation{appendMutationTestObligation(1), appendMutationTestObligation(2), appendMutationTestObligation(3)}
+	for i := range values {
+		values[i].Offset = 0
+	}
+	token := stableTokenFixture(t, t.TempDir(), "stream", 1, 20, ReachabilityColumnManifest, "stream", func(spec *StableResourceSpec) {
+		spec.Kind, spec.LogicalObligations = ResourceColumnAsset, values
+	})
+	b := NewStableResourceSetBuilder()
+	if err := b.Add(token); err != nil {
+		t.Fatal(err)
+	}
+	source, err := b.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Release()
+	var owner retainedalloc.Owner
+	owner.Initialize(0)
+	selected, err := ImportStableResourceSetMetadata(&owner, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseline := owner.Bytes()
+	r := StableLogicalObligationRequirements{
+		ScopedFields: []ReachabilityField{ReachabilityColumnManifest},
+		Obligations:  values[1:2],
+		Streams: []StableLogicalObligationRequirementStream{
+			requirementStreamFixture{values: []StableLogicalObligation{values[2], values[0], values[0]}},
+		},
+	}
+	r, err = MergeStableLogicalObligationRequirements(r, StableLogicalObligationRequirements{})
+	if err != nil || len(r.Streams) != 1 {
+		t.Fatalf("merge stream headers: %+v %v", r, err)
+	}
+	if err := ValidateStableResourceSetLogicalObligations(selected, r); err != nil {
+		t.Fatalf("unordered streamed + ordinary exact union: %v", err)
+	}
+	if err := ValidateStableResourceSetLogicalObligations(source, r); !errors.Is(err, ErrResourceOwnership) {
+		t.Fatalf("nonselected stream must refuse: %v", err)
+	}
+	// Filtering consumes the same point membership and keeps only desired values.
+	r.Obligations = nil
+	r.Streams = []StableLogicalObligationRequirementStream{requirementStreamFixture{values: values[:1]}}
+	filtered, err := CloneStableResourceSetForLogicalObligations(selected, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateStableResourceSetLogicalObligations(filtered, r); err != nil {
+		t.Fatalf("filtered stream closure: %v", err)
+	}
+	filtered.Release()
+	if err := ValidateStableResourceSetLogicalObligations(selected, r); !errors.Is(err, ErrResourceConflict) {
+		t.Fatalf("stale actual must refuse: %v", err)
+	}
+	missing := appendMutationTestObligation(4)
+	r.Streams = []StableLogicalObligationRequirementStream{requirementStreamFixture{values: append(append([]StableLogicalObligation(nil), values...), missing)}}
+	if err := ValidateStableResourceSetLogicalObligations(selected, r); !errors.Is(err, ErrUnresolvedResource) {
+		t.Fatalf("missing desired must refuse: %v", err)
+	}
+	conflict := values[0]
+	conflict.Checksum++
+	r.Obligations = []StableLogicalObligation{conflict}
+	r.Streams = []StableLogicalObligationRequirementStream{requirementStreamFixture{values: values}}
+	if err := ValidateStableResourceSetLogicalObligations(selected, r); !errors.Is(err, ErrResourceConflict) {
+		t.Fatalf("ordinary/stream integrity conflict: %v", err)
+	}
+	fault := errors.New("original stream read failure")
+	r.Obligations = nil
+	r.Streams = []StableLogicalObligationRequirementStream{requirementStreamFixture{values: values, err: fault}}
+	if _, err := CloneStableResourceSetForLogicalObligations(selected, r); !errors.Is(err, fault) {
+		t.Fatalf("filter must propagate source read failure: %v", err)
+	}
+	if owner.Bytes() != baseline {
+		t.Fatalf("stream scratch leaked: %d/%d", owner.Bytes(), baseline)
+	}
+	selected.Release()
+	if owner.Bytes() != 0 {
+		t.Fatalf("original selected owner retained %d", owner.Bytes())
+	}
+}
+
 func TestStableLogicalObligationEmptyRequirementsIndexAllocations(t *testing.T) {
 	check := func() {
 		index, err := indexStableLogicalObligationRequirements(StableLogicalObligationRequirements{})

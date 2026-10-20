@@ -86,6 +86,29 @@ func (group *RootPublicationBuildGroup) SetNativeDurableResources(resources *roo
 	return nil
 }
 
+// SetNativeDurableResourceAppend transfers the same native closure together
+// with collections' root-validated append proof. Its exact fallback borrows the
+// group's captured basis only until synchronous finalization/cleanup. Callers
+// preadmit the fallback cursor/decoder and bounded fresh records before any
+// assets or closure are adopted; retained desired history stays streamed.
+// Ordinary complete-closure callers retain SetNativeDurableResources.
+func (group *RootPublicationBuildGroup) SetNativeDurableResourceAppend(resources *rootpublication.StableResourceSet, requirements rootpublication.StableLogicalObligationRequirements, mutation rootpublication.StableLogicalObligationMutation, work rootpublication.StableResourceClosureWork, fallback func() (rootpublication.StableLogicalObligationRequirements, rootpublication.StableResourceClosureWork, error)) error {
+	if group == nil {
+		return rootpublication.ErrResourceOwnership
+	}
+	group.mu.Lock()
+	defer group.mu.Unlock()
+	if group.db == nil || group.closed || group.failed || group.nativeResources != nil || !group.writeLocked || !group.durablePublishLocked {
+		return rootpublication.ErrResourceOwnership
+	}
+	ctx := CommandWALPublishContext{durableResourceAppendMutation: &group.nativeAppend, durableResourceRequirementWork: &group.nativeRequirementWork, durableResourceRequirementsFallback: &group.nativeRequirementsFallback}
+	if err := ctx.RegisterDurableLogicalObligationAppendMutation(mutation, work, fallback); err != nil {
+		return err
+	}
+	group.nativeResources, group.nativeRequirements = resources, requirements
+	return nil
+}
+
 // NativeColumnAssetBuildContext borrows the original build group's physical
 // namespace and pin authority for synchronous captured typed materialization.
 // Neither capability may be retained in logical deltas or used to publish.

@@ -872,6 +872,17 @@ func (c *Collection) columnGraphVectorIndexStatusAtSnapshot(name string, snap *b
 		status.RebuildNeeded = true
 		return columnGraphVectorIndexStatusError(status, err)
 	}
+	baseChecksum, baseChecksumOK := uint64(0), false
+	if computed, err := columnVectorGraphBaseManifestChecksum(manifest, records, *cfg); err == nil {
+		baseChecksum = computed
+		baseChecksumOK = true
+	}
+	return columnGraphVectorIndexStatusForRecords(c.db.ColumnAssetRootDir(), catalog.meta.Name, cfg, def, records, baseChecksum, baseChecksumOK)
+}
+
+// Both manifest formats share the original graph/TVIS and physical asset validator.
+func columnGraphVectorIndexStatusForRecords(rootDir, collection string, cfg *ColumnStoreConfig, def VectorIndexDefinition, records []columnManifestRecord, baseChecksum uint64, baseChecksumOK bool) (VectorIndexStatus, error) {
+	status := VectorIndexStatus{Name: def.Name, Strategy: def.Strategy}
 	graphRecord, ok := findColumnVectorGraphManifestRecord(records, def.Name)
 	if !ok {
 		status.State = VectorIndexStateColumnGraphRebuildNeeded
@@ -885,11 +896,6 @@ func (c *Collection) columnGraphVectorIndexStatusAtSnapshot(name string, snap *b
 		status.Reason = VectorIndexReasonColumnGraphCorrupt
 		status.RebuildNeeded = true
 		return columnGraphVectorIndexStatusError(status, err)
-	}
-	baseChecksum, baseChecksumOK := uint64(0), false
-	if computed, err := columnVectorGraphBaseManifestChecksum(manifest, records, *cfg); err == nil {
-		baseChecksum = computed
-		baseChecksumOK = true
 	}
 	var loadedState *columnVectorIndexStateSnapshot
 	if stateRecord, ok := findColumnVectorIndexStateRecord(records, def.Name); ok {
@@ -912,13 +918,13 @@ func (c *Collection) columnGraphVectorIndexStatusAtSnapshot(name string, snap *b
 				status.RebuildNeeded = true
 				return status, nil
 			}
-			if err := validateColumnVectorIndexStateAssetsForStatus(c.db.ColumnAssetRootDir(), catalog.meta.Name, *cfg, def, state, graph); err != nil {
+			if err := validateColumnVectorIndexStateAssetsForStatus(rootDir, collection, *cfg, def, state, graph); err != nil {
 				status.State = VectorIndexStateColumnGraphUnavailable
 				status.Reason = VectorIndexReasonColumnGraphCorrupt
 				status.RebuildNeeded = true
 				return columnGraphVectorIndexStatusError(status, err)
 			}
-			if err := validateColumnVectorGraphInvNormStateAssetIfPresent(c.db.ColumnAssetRootDir(), catalog.meta.Name, *cfg, def, graph, state); err != nil {
+			if err := validateColumnVectorGraphInvNormStateAssetIfPresent(rootDir, collection, *cfg, def, graph, state); err != nil {
 				status.State = VectorIndexStateColumnGraphUnavailable
 				status.Reason = VectorIndexReasonColumnGraphCorrupt
 				status.RebuildNeeded = true
@@ -939,7 +945,7 @@ func (c *Collection) columnGraphVectorIndexStatusAtSnapshot(name string, snap *b
 	}
 	graphMatch := columnVectorGraphManifestMatchMismatch
 	if baseChecksumOK {
-		graphMatch = columnVectorGraphManifestMatchStatusWithBaseChecksum(catalog.meta.Name, graph, def, *cfg, baseChecksum)
+		graphMatch = columnVectorGraphManifestMatchStatusWithBaseChecksum(collection, graph, def, *cfg, baseChecksum)
 	}
 	switch graphMatch {
 	case columnVectorGraphManifestMatchLoaded:
@@ -955,7 +961,7 @@ func (c *Collection) columnGraphVectorIndexStatusAtSnapshot(name string, snap *b
 		return status, nil
 	}
 	if columnVectorGraphManifestHasPhysicalAsset(graph) {
-		if err := validateColumnVectorGraphAssetRefAvailable(c.db.ColumnAssetRootDir(), graph.AssetRef); err != nil {
+		if err := validateColumnVectorGraphAssetRefAvailable(rootDir, graph.AssetRef); err != nil {
 			status.State = VectorIndexStateColumnGraphUnavailable
 			status.Reason = VectorIndexReasonColumnGraphCorrupt
 			status.RebuildNeeded = true

@@ -21,22 +21,23 @@ import (
 // Get observes that opening plus its own ordered staged row operations. Commit never reruns the
 // body; only the original immutable mutations are composed after validation.
 type nativeJSONTxnBinding struct {
-	name             string
-	incarnation      uint64
-	probe            NativeJSONRead
-	plan             *nativeJSONLogicalInsert
-	typed            *nativeTypedDelta
-	effects          []txnhistory.Effect
-	rows             nativeJSONRows
-	stageCharge      uint64
-	validation       indexEncodeArena
-	validationLease  *memtable.COWExternalLease
-	validationCharge uint64
-	templates        templateV1Resolver
-	templateRecords  []templateV1Record
-	templateLearned  []templateV1LearnedTemplate
-	allowStored      bool
-	learnTemplates   bool
+	name              string
+	incarnation       uint64
+	probe             NativeJSONRead
+	plan              *nativeJSONLogicalInsert
+	typed             *nativeTypedDelta
+	effects           []txnhistory.Effect
+	rows              nativeJSONRows
+	stageCharge       uint64
+	validation        indexEncodeArena
+	validationLease   *memtable.COWExternalLease
+	validationCharge  uint64
+	templates         templateV1Resolver
+	templateRecords   []templateV1Record
+	templateLearned   []templateV1LearnedTemplate
+	allowSourceImport bool
+	allowStored       bool
+	learnTemplates    bool
 }
 type NativeJSONTxn struct {
 	mu           sync.Mutex
@@ -513,7 +514,10 @@ func (t *NativeJSONTxn) commitNativeApply(sealed bool, apply *nativeCommandWALAp
 	for i := 0; i < t.count; i++ {
 		typedMember = typedMember || nativeTypedMeta(t.bindings[i].probe.meta)
 	}
-	if memberCount > 1 || typedMember {
+	// The fixed zero-row graph recipe carries its original singleton103 frame;
+	// it has no fabricated CRUD member or composite transport representation.
+	graphSingleton := apply != nil && apply.frame.Kind == commitlog.CommandKindCollectionRebuildVectorIndex && t.count == 1 && !t.rawStaged && memberCount == 0 && t.bindings[0].typed != nil && t.bindings[0].typed.previous == nil && t.bindings[0].typed.data != nil && t.bindings[0].typed.data.graph != nil
+	if (memberCount > 1 || typedMember) && !graphSingleton {
 		kind, scope, format = commitlog.CommandKindCompositeMutation, commitlog.CommandScopeSystem, commitlog.PayloadFormatCompositeMutationV1
 		var err error
 		planned, planErr := commitlog.PlanCompositeMutationPayload(members[:memberCount])

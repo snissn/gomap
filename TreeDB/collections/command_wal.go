@@ -28,8 +28,8 @@ func RegisterCommandWALReplayHandlers() {
 		backenddb.RegisterCommandWALReplayHandlerWithOptions(commitlog.CommandKindCollectionInsertBatchByID, replayCollectionInsertBatchByIDCommandWAL, backenddb.CommandWALReplayHandlerOptions{NeedsReplayLogSupport: true, NativePrepare: prepareNativeJSONInsertCommand})
 		backenddb.RegisterCommandWALReplayHandlerWithOptions(commitlog.CommandKindCollectionDeleteBatchByID, replayCollectionDeleteBatchByIDCommandWAL, backenddb.CommandWALReplayHandlerOptions{NeedsReplayLogSupport: true, NativePrepare: prepareNativeJSONTxnPlanMarker})
 		backenddb.RegisterCommandWALReplayHandlerWithOptions(commitlog.CommandKindCollectionUpdateBatchByID, replayCollectionUpdateBatchByIDCommandWAL, backenddb.CommandWALReplayHandlerOptions{NeedsReplayLogSupport: true, NativePrepare: prepareNativeJSONTxnPlanMarker})
-		backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCollectionReplaceSourceByID, replayCollectionReplaceSourceByIDCommandWAL)
-		backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCollectionRebuildVectorIndex, replayCollectionRebuildVectorIndexCommandWAL)
+		backenddb.RegisterCommandWALReplayHandlerWithOptions(commitlog.CommandKindCollectionReplaceSourceByID, replayCollectionReplaceSourceByIDCommandWAL, backenddb.CommandWALReplayHandlerOptions{NeedsReplayLogSupport: true, NativePrepare: prepareNativeJSONTxnPlanMarker})
+		backenddb.RegisterCommandWALReplayHandlerWithOptions(commitlog.CommandKindCollectionRebuildVectorIndex, replayCollectionRebuildVectorIndexCommandWAL, backenddb.CommandWALReplayHandlerOptions{NeedsReplayLogSupport: true, NativePrepare: prepareNativeJSONTxnPlanMarker})
 		backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCollectionPersistPartitionLive, replayCollectionPersistPartitionLiveCommandWAL)
 		backenddb.RegisterCommandWALReplayHandlerWithOptions(commitlog.CommandKindCatalogIndexMutation, replayNativeIndexMutation, backenddb.CommandWALReplayHandlerOptions{NeedsReplayLogSupport: true, NativePrepare: prepareNativeJSONTxnPlanMarker})
 		backenddb.RegisterCommandWALReplayHandlerWithOptions(commitlog.CommandKindCatalogCreateCollection, replayCatalogCreateCollectionCommandWAL, backenddb.CommandWALReplayHandlerOptions{NeedsReplayLogSupport: true, NativePrepare: prepareNativeJSONCreateCommand})
@@ -468,7 +468,7 @@ func replayCollectionReplaceSourceByIDCommandWAL(db *backenddb.DB, env commitlog
 	defer func() { replayErr = errors.Join(replayErr, manager.Close()) }()
 
 	if env.PayloadFormat == commitlog.PayloadFormatCollectionSourceImportV2 {
-		return replayCollectionSourceImportV2(db, env)
+		return replayCollectionSourceImportV2(db, manager, env)
 	}
 	if env.PayloadFormat == commitlog.PayloadFormatCollectionTypedSourceByIDV1 {
 		payload, err := commitlog.DecodeCollectionTypedSourcePayload(env.Payload)
@@ -641,6 +641,9 @@ func replayCollectionRebuildVectorIndexCommandWAL(db *backenddb.DB, env commitlo
 	collection, err := manager.openCollectionWithCommandWALIntent(payload.Collection, intent)
 	if err != nil {
 		return err
+	}
+	if nativeSourceImportMetaV2(collection.meta) && collection.meta.Options.ColumnStore.ActiveManifest != nil {
+		return replayNativeVectorGraph(db, env, intent, collection.meta, payload.IndexName)
 	}
 	_, err = collection.rebuildVectorIndexWithCommandWALIntent(payload.IndexName, intent)
 	return err

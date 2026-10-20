@@ -163,16 +163,31 @@ func (r *NativeJSONRead) reconstructTyped(id, value []byte) (result []byte, resu
 	if !ok {
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
-	physical, err := nativeTypedReadCapacity(r.meta, r.capture.Snapshot(), manifest.baseRoot)
-	if err != nil {
-		return nil, err
-	}
+	var physical uint64
 	charge, err := r.nativeTypedReadViewCharge()
 	if err != nil {
 		return nil, err
 	}
 	lease, err := r.capture.NativeAllocator().AdmitNativeBytes(charge)
 	if err != nil {
+		return nil, err
+	}
+	var selected []columnManifestRecord
+	if nativeSourceImportMetaV2(r.meta) {
+		// Two inline records and their decode controls, BEFORE point copies.
+		reserve := 2 * 16 * (memtable.COWAllocationCharge(3000) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(columnManifestRecord{}))) + preparedSemanticStreamMapEntryReserveBytes)
+		if err = lease.Resize(charge + reserve); err == nil {
+			selected, err = r.sourceReadRecordsV2(id, manifest.baseRoot)
+		}
+		if err != nil {
+			lease.Close()
+			return nil, err
+		}
+		charge += reserve
+	}
+	physical, err = nativeTypedReadCapacity(r.meta, r.capture.Snapshot(), manifest.baseRoot, selected...)
+	if err != nil {
+		lease.Close()
 		return nil, err
 	}
 	// Inspect compressed string dictionary lengths under this original read
@@ -183,7 +198,7 @@ func (r *NativeJSONRead) reconstructTyped(id, value []byte) (result []byte, resu
 			return e
 		}
 		return lease.Resize(n)
-	})
+	}, selected...)
 	if err == nil {
 		err = lease.Resize(charge)
 	}
@@ -221,6 +236,7 @@ func (r *NativeJSONRead) reconstructTyped(id, value []byte) (result []byte, resu
 		wrapper = nil
 		residual = nil
 		value = nil
+		selected = nil
 		if decoderLease != nil {
 			decoderLease.Close()
 		}
