@@ -164,6 +164,15 @@ by `IgnoreFormatConfig`. Internal side-store and low-level test manifests may
 remain unbound version 2/3 files; they cannot open a version-4 main DB without an
 explicit matching profile.
 
+For a fresh main DB, `no_wal_fast` defaults USER outer leaves to the DATA pager
+(`index_outer_leaves_in_vlog=false`). The command-WAL and benchmark-unsafe
+profile defaults remain `true`. Both placements use the existing persisted
+format: loading `format.json` preserves its true/false choice on reopen, including
+when the selected profile's fresh default differs. A conflicting format
+environment override is rejected. Callers may override either placement after
+`OptionsFor` when creating a DB. This default change does not enable internal
+base-delta encoding or change persistent value-log payload storage.
+
 ## 1. Top-Level Storage Objects
 
 A TreeDB deployment uses:

@@ -737,7 +737,10 @@ durability/integrity bundles:
 - `ProfileCommandWALRelaxed`: ordinary acknowledgements are relaxed; explicit
   syncs wait for a durable dependency-complete command-WAL prefix.
 - `ProfileNoWALFast`: production no-WAL profile; ordinary acknowledgements are
-  relaxed and explicit syncs wait for a sealed complete root.
+  relaxed and explicit syncs wait for a sealed complete root. Fresh databases
+  default USER outer leaves to the DATA pager; callers can override this layout
+  after `OptionsFor`, and reopen retains the persisted choice. Large payloads
+  continue to use the persistent value log independently of USER leaf placement.
 - `ProfileBenchUnsafe`: benchmark/test-only ceiling with no durability promise
   and an explicit benchmark constructor/parser boundary.
 
