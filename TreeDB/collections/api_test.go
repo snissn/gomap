@@ -13388,10 +13388,6 @@ func TestCollectionManagerCloseForBackendDrainsQueuedUpdates(t *testing.T) {
 				t.Fatalf("command WAL=%v want %v", got, tc.commandWAL)
 			}
 			mgr := NewCollectionManager(d)
-			if tc.laneWorker {
-				mgr.SetUpdateCombineShardsForProfiling(4)
-				mgr.SetUpdateCombineLaneWorkersForProfiling(true)
-			}
 			if _, err := mgr.CreateCollection(&CollectionMeta{
 				Name: "users",
 				Options: CollectionOptions{
@@ -13415,6 +13411,10 @@ func TestCollectionManagerCloseForBackendDrainsQueuedUpdates(t *testing.T) {
 			}
 			if err := col.Flush(); err != nil {
 				t.Fatalf("flush initial insert: %v", err)
+			}
+			if tc.laneWorker {
+				mgr.SetUpdateCombineShardsForProfiling(4)
+				mgr.SetUpdateCombineLaneWorkersForProfiling(true)
 			}
 			foreignDocument := mustBSONCollectionDocument(t, bson.D{{Key: "_id", Value: "f1"}, {Key: "city", Value: "hnl"}, {Key: "score", Value: int32(0)}})
 			var foreign *Collection
