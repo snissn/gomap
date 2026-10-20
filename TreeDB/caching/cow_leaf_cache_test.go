@@ -160,7 +160,7 @@ func TestCOWPhysicalLeafCacheRequiresVerifiedRecordAndInspection(t *testing.T) {
 	if !errors.Is(err, stop) || ptr.FileID == 0 {
 		t.Fatalf("fixture did not traverse real logged leaf: %+v %v", ptr, err)
 	}
-	f, identity, err := basis.snapshot.PinnedValueLogFile(ptr.FileID)
+	f, identity, err := basis.snapshot.PinnedValueLogFile(ptr.ValueLogFileID())
 	if err != nil {
 		t.Fatal(err)
 	}

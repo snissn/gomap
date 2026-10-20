@@ -96,7 +96,7 @@ func (s *Snapshot) checkInspectedLeafFile(ptr page.LeafLogPtr, inspected *os.Fil
 	if s.state == nil || s.state.ValueLogSet == nil {
 		return rootpublication.ErrUnresolvedResource
 	}
-	f := s.state.ValueLogSet.Files[ptr.FileID]
+	f := s.state.ValueLogSet.Files[ptr.ValueLogFileID()]
 	if f == nil || f.File == nil {
 		return rootpublication.ErrUnresolvedResource
 	}
