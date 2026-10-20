@@ -13,6 +13,7 @@ import re
 import shutil
 import signal
 import statistics
+import stat
 import subprocess
 import sys
 import tempfile
@@ -32,8 +33,75 @@ METRICS = {"ns/op", "B/op", "allocs/op", "generation_advances/op"}
 
 def digest(path: Path) -> str:
     with path.open("rb") as stream:
-        result = hashlib.file_digest(stream, "sha256")
+        result = hashlib.sha256()
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            result.update(block)
     return result.hexdigest()
+
+
+def file_identity(path: Path) -> dict:
+    resolved = path.resolve(strict=True)
+    if not stat.S_ISREG(resolved.stat().st_mode):
+        raise ValueError(f"runtime input is not a regular file: {path}")
+    return {"path": str(resolved), "sha256": digest(resolved), "bytes": resolved.stat().st_size}
+
+
+def runtime_binding(binary: Path, command, label: str, environment: dict) -> dict:
+    """Resolve the ELF's actual loader inputs under the measurement environment."""
+    if environment.get("LD_AUDIT"):
+        raise ValueError("LD_AUDIT runtime inputs are not supported for identity binding")
+    headers = command(label + "-elf", ["readelf", "--program-headers", "--wide", binary])
+    interpreters = re.findall(r"\[Requesting program interpreter: (/[^\]\n]+)\]", headers)
+    executable = file_identity(binary)
+    executable.pop("path")  # The two measured copies intentionally have different names.
+    if not interpreters:
+        if (not re.search(r"(?m)^Elf file type is (?:EXEC|DYN)\b", headers)
+                or "Program Headers:" not in headers
+                or not re.search(r"(?m)^\s*LOAD\s+", headers)
+                or re.search(r"(?m)^\s*(?:INTERP|DYNAMIC)\s+", headers)):
+            raise ValueError("static ELF requires valid load headers without INTERP or DYNAMIC")
+        return {"linkage": "static", "executable": executable,
+                "interpreter": None, "libraries": []}
+    if len(interpreters) != 1:
+        raise ValueError("one dynamic ELF interpreter is required for runtime binding")
+    interpreter = file_identity(Path(interpreters[0]))
+    listing = command(label + "-loader", [interpreter["path"], "--list", binary])
+    libraries = {}
+    for line in listing.splitlines():
+        line = line.strip()
+        if re.fullmatch(r"linux-vdso\.so\.\d+ \(0x[0-9a-fA-F]+\)", line):
+            continue  # Kernel mapping, not a filesystem input.
+        match = re.fullmatch(r"(?:\S+ => )?(/.+?) \(0x[0-9a-fA-F]+\)", line)
+        if not match:
+            raise ValueError(f"unresolved or unsupported ELF runtime input: {line}")
+        identity = file_identity(Path(match[1]))
+        libraries[identity["path"]] = identity
+    if interpreter["path"] not in libraries:
+        raise ValueError("ELF loader listing did not bind its interpreter")
+    return {"linkage": "dynamic", "executable": executable, "interpreter": interpreter,
+            "libraries": list(libraries.values())}
+
+
+def qualify_bytes(result: dict, before: dict, after: dict, *, quiet: bool) -> dict:
+    """Keep raw measurements; only qualify bytes using independently bound inputs."""
+    if set(before) != {"baseline", "candidate"} or before != after:
+        raise RuntimeError("measured runtime/input drift or missing bindings")
+    for binding in before.values():
+        runtime_present = ((binding.get("linkage") == "static"
+                            and "interpreter" in binding and binding["interpreter"] is None
+                            and binding.get("libraries") == [])
+                           or (binding.get("linkage") == "dynamic"
+                               and binding.get("interpreter") and binding.get("libraries")))
+        if (not binding.get("executable") or not runtime_present
+                or set(binding.get("inputs", {})) != {"harness_sha256", "runner_sha256", "environment_sha256", "cwd", "argv"}):
+            raise RuntimeError("missing measured runtime/input bindings")
+    equivalent = before["baseline"] == before["candidate"]
+    raw_bytes_pass = result["gates"]["bytes"]
+    acceptance = dict(result["gates"], bytes=raw_bytes_pass or equivalent)
+    return dict(result, quiet=quiet, runtime_input_equivalent=equivalent,
+                bytes_disposition=("PASS" if raw_bytes_pass else
+                                   "EQUIVALENT_NON_ATTRIBUTABLE" if equivalent else "FAIL"),
+                acceptance_gates=acceptance, accepted=all(acceptance.values()) and quiet)
 
 
 def parse_sample(text: str) -> dict[str, float]:
@@ -238,6 +306,23 @@ def run_gate(root: Path, output: Path, baseline: str, candidate: str) -> int:
              "samples": SAMPLES, "iterations": ITERATIONS, "cpu": 0, "gomaxprocs": 1,
              "max_paired_regression_percent": TIME_LIMIT_PERCENT,
              "bytes_and_allocations": "no median growth", "binaries": binaries})
+        benchmark_argv = ["-test.run=^$", "-test.bench=^" + BENCHMARK + "$",
+                          "-test.benchtime=128x", "-test.count=1", "-test.benchmem", "-test.timeout=90s"]
+
+        def bind_inputs(phase):
+            bindings = {}
+            for revision, record in binaries.items():
+                binding = runtime_binding(output / record["path"], command, phase + "-" + revision, environment)
+                binding["inputs"] = {
+                    "harness_sha256": digest(harness), "runner_sha256": digest(Path(__file__)),
+                    "environment_sha256": hashlib.sha256(json.dumps(environment, sort_keys=True).encode()).hexdigest(),
+                    "cwd": str(root), "argv": ["taskset", "-c", "0", "<measured-binary>"] + benchmark_argv,
+                }
+                bindings[revision] = binding
+            save("runtime-inputs-" + phase + ".json", bindings)
+            return bindings
+
+        inputs_before = bind_inputs("before")
         lifecycle = command("candidate-public-lifecycle", ["taskset", "-c", "0", output / "candidate-primary.test",
                 "-test.run=^" + LIFECYCLE + "$", "-test.count=1", "-test.timeout=90s", "-test.v"])
         if f"--- PASS: {LIFECYCLE} " not in lifecycle or "--- SKIP:" in lifecycle:
@@ -255,8 +340,7 @@ def run_gate(root: Path, output: Path, baseline: str, candidate: str) -> int:
             order = ("baseline", "candidate") if pair % 2 == 0 else ("candidate", "baseline")
             for revision in order:
                 text = command(f"pair-{pair+1}-{revision}", ["taskset", "-c", "0",
-                     output / binaries[revision]["path"], "-test.run=^$", "-test.bench=^" + BENCHMARK + "$",
-                     "-test.benchtime=128x", "-test.count=1", "-test.benchmem", "-test.timeout=90s"])
+                     output / binaries[revision]["path"]] + benchmark_argv)
                 rows.append({"pair": pair, "revision": revision, "metrics": parse_sample(text)})
                 save("samples.json", rows)
         observed = observation.finish()
@@ -270,9 +354,9 @@ def run_gate(root: Path, output: Path, baseline: str, candidate: str) -> int:
                 raise RuntimeError("measured binary drift")
         if digest(root / HARNESS) != digest(harness):
             raise RuntimeError("benchmark input drift")
-        result = evaluate(rows)
-        result.update(baseline=baseline, candidate=candidate, quiet=not busy,
-                      accepted=result["measurement_pass"] and not busy)
+        inputs_after = bind_inputs("after")
+        result = qualify_bytes(evaluate(rows), inputs_before, inputs_after, quiet=not busy)
+        result.update(baseline=baseline, candidate=candidate)
         save("summary.json", result)
         (output / "summary.md").write_text(
             "## Public PRIMARY replacement cost\n\n"
@@ -280,7 +364,8 @@ def run_gate(root: Path, output: Path, baseline: str, candidate: str) -> int:
             f"- Exact base/head: `{baseline}` / `{candidate}`\n"
             "- Eight alternating AB/BA pairs; 128 durable public replacements per sample.\n"
             f"- Median paired time delta: {result['median_paired_delta_percent']:+.3f}% (limit +5%).\n"
-            f"- Gates: `{json.dumps(result['gates'], sort_keys=True)}`; quiet: {not busy}.\n"
+            f"- Raw gates: `{json.dumps(result['gates'], sort_keys=True)}`; measurement pass: {result['measurement_pass']}; quiet: {not busy}.\n"
+            f"- Bytes acceptance: `{result['bytes_disposition']}`; bound runtime/input equivalent: {result['runtime_input_equivalent']}.\n"
             "- Scope: this public replacement workload; not final graph qualification.\n")
         return 0 if result["accepted"] else 1
     except Exception as error:
