@@ -180,6 +180,17 @@ func (w *nativeTypedMaterialization) materializeCompaction(context columnPhysica
 	// An already insert-only physical prefix needs no rewrite. Pending commands
 	// have been materialized in this same group before this decision.
 	if cfg.PhysicalMutationParts == 0 {
+		// Preserve the unchanged manifest's exact obligations. The finalizer
+		// retains its original base handles; this work need not produce assets.
+		var generation uint64
+		if cfg.ActiveManifest != nil {
+			generation = cfg.ActiveManifest.Generation
+		}
+		requirements, err := stableColumnManifestDurableRequirements(w.records, generation, cfg.AssetManager.Namespace)
+		if err != nil {
+			return err
+		}
+		w.requirements = requirements
 		return nil
 	}
 	if cfg.ActiveManifest == nil || cfg.ActiveManifest.Generation == ^uint64(0) {

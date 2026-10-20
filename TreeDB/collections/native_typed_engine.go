@@ -249,8 +249,10 @@ func (b *nativeEngineBuild) materializeTyped(group *backenddb.RootPublicationBui
 				return selectErr
 			}
 			b.typedClosure = selected // original ledger adopts before fallible merge
-			if err = b.typedResources.Merge(selected); err != nil {
-				return err
+			if selected != nil {
+				if err = b.typedResources.Merge(selected); err != nil {
+					return err
+				}
 			}
 			b.typedClosure = nil
 		} else {
