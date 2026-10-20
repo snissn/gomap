@@ -35253,31 +35253,24 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 // NewBatch implementation for CachingDB
 // batchOp removed, using batch.Entry directly
 
+// Batch keeps shared staging and publication state compact. Ordinary-only
+// arena and streaming scratch belongs to the same ordinary constructor object;
+// admitted COW batches omit that tail entirely. A Batch must not be copied after
+// first use: its staging buffers and publication receipts have one owner.
 type Batch struct {
-	cowState                  *cowBatchState
-	mvccSummary               mvccadmission.Summary
-	db                        *DB
-	entries                   []batch.Entry
-	backend                   batch.Interface
-	backendConditionalEntries []batch.Entry
-	size                      int
-	copyArena                 []byte
-	copyArenaChunks           [][]byte
-	copyArenaCap              int
-	copyBytes                 int
-	ptrCopyArena              []byte
-	ptrCopyArenaChunks        [][]byte
-	ptrCopyBytes              int
-	arenaInFlightBytes        int64
-	ptrValueIdxs              []int
-	walBuf                    []logRecord
-	shardIdxs                 []int
-	eligibleIdxs              []int
-	shardAdds                 []int64
-	shardCnts                 []int
-	shardEntries              [][]batch.Entry
-	shardIdxSets              [][]int
-	maxEntries                int
+	*ordinaryBatchState
+	cowState     *cowBatchState
+	mvccSummary  mvccadmission.Summary
+	db           *DB
+	entries      []batch.Entry
+	backend      batch.Interface
+	size         int
+	copyArena    []byte
+	shardIdxs    []int
+	eligibleIdxs []int
+	shardAdds    []int64
+	shardCnts    []int
+	maxEntries   int
 
 	closed bool
 	// SetView/DeleteView keep caller-owned bytes until Write/Close, so memtables
@@ -35288,20 +35281,50 @@ type Batch struct {
 	streamEligible               bool
 	streamTried                  bool
 	streamBypassOff              bool
-	firstKey                     []byte
-	lastKey                      []byte
-	batchRange                   keyRange
 	hasDeleteRanges              bool
 	entryRevision                page.EntryRevision
 	commandWALAppend             func() error
 	commandWALPreparedRevision   bool
 	commandWALMaterializedRID    bool
-	valueCopyShard               *memShard
-	appendOnlyDirectValueCopier  func([]byte) []byte
 
-	commandWALCompactReplay     bool
+	commandWALCompactReplay bool
+}
+
+// ordinaryBatchState is coallocated with Batch by both ordinary constructors.
+// Its backing arrays retain their existing bounded pools and ownership rules.
+type ordinaryBatchState struct {
+	backendConditionalEntries   []batch.Entry
+	copyArenaChunks             [][]byte
+	copyArenaCap                int
+	copyBytes                   int
+	ptrCopyArena                []byte
+	ptrCopyArenaChunks          [][]byte
+	ptrCopyBytes                int
+	arenaInFlightBytes          int64
+	ptrValueIdxs                []int
+	walBuf                      []logRecord
+	shardEntries                [][]batch.Entry
+	shardIdxSets                [][]int
+	firstKey                    []byte
+	lastKey                     []byte
+	batchRange                  keyRange
+	valueCopyShard              *memShard
+	appendOnlyDirectValueCopier func([]byte) []byte
 	commandWALCompactRanges     []batch.DeleteRange
 	commandWALCompactPointStart int
+}
+
+type ordinaryBatchOwner struct {
+	batch Batch
+	state ordinaryBatchState
+}
+
+// Hand-built and zero batches predate the constructors. Materialize their
+// ordinary state only on use; constructor-created batches already own this tail.
+func (b *Batch) ensureOrdinaryState() {
+	if b.ordinaryBatchState == nil {
+		b.ordinaryBatchState = &ordinaryBatchState{}
+	}
 }
 
 func (db *DB) NewBatch() *Batch {
@@ -35314,13 +35337,12 @@ func (db *DB) NewBatch() *Batch {
 		capHint = db.batchEntriesCapHint(capHint)
 		shardGroupCap = len(db.mutableShards)
 	}
-	return &Batch{
-		db:             db,
-		entries:        db.getBatchEntries(capHint),
-		copyArenaCap:   db.batchCopyArenaInitCap(0),
-		shardEntries:   db.getBatchShardEntryGroups(shardGroupCap),
-		streamEligible: true,
+	owner := &ordinaryBatchOwner{
+		batch: Batch{db: db, entries: db.getBatchEntries(capHint), streamEligible: true},
+		state: ordinaryBatchState{copyArenaCap: db.batchCopyArenaInitCap(0), shardEntries: db.getBatchShardEntryGroups(shardGroupCap)},
 	}
+	owner.batch.ordinaryBatchState = &owner.state
+	return &owner.batch
 }
 
 func (db *DB) NewBatchWithSize(size int) *Batch {
@@ -35332,13 +35354,12 @@ func (db *DB) NewBatchWithSize(size int) *Batch {
 	if db != nil {
 		shardGroupCap = len(db.mutableShards)
 	}
-	return &Batch{
-		db:             db,
-		entries:        db.getBatchEntries(reserveHint),
-		copyArenaCap:   db.batchCopyArenaInitCap(reserveHint),
-		shardEntries:   db.getBatchShardEntryGroups(shardGroupCap),
-		streamEligible: true,
+	owner := &ordinaryBatchOwner{
+		batch: Batch{db: db, entries: db.getBatchEntries(reserveHint), streamEligible: true},
+		state: ordinaryBatchState{copyArenaCap: db.batchCopyArenaInitCap(reserveHint), shardEntries: db.getBatchShardEntryGroups(shardGroupCap)},
 	}
+	owner.batch.ordinaryBatchState = &owner.state
+	return &owner.batch
 }
 
 // Reserve ensures the batch has capacity for at least n staged entries.
@@ -35347,7 +35368,7 @@ func (b *Batch) Reserve(n int) {
 		b.cowReserve(n)
 		return
 	}
-	if b == nil || n <= cap(b.entries) {
+	if b == nil || b.closed || n <= cap(b.entries) {
 		return
 	}
 	next := make([]batch.Entry, len(b.entries), n)
@@ -36384,30 +36405,28 @@ func (b *Batch) Reset() {
 	if b.shardCnts != nil {
 		b.shardCnts = b.shardCnts[:0]
 	}
-	if b.shardEntries != nil {
-		b.shardEntries = b.shardEntries[:0]
-	}
-	if b.shardIdxSets != nil {
-		b.shardIdxSets = b.shardIdxSets[:0]
-	}
-	b.recycleCopyArenaChunks()
-	b.recyclePtrCopyArenaChunks()
-	if b.arenaInFlightBytes > 0 {
-		b.subArenaInFlightBytes(b.arenaInFlightBytes)
-	}
-	if b.db != nil {
-		b.copyArenaCap = b.db.batchCopyArenaInitCap(0)
+	if b.ordinaryBatchState != nil {
+		if b.shardEntries != nil {
+			b.shardEntries = b.shardEntries[:0]
+		}
+		if b.shardIdxSets != nil {
+			b.shardIdxSets = b.shardIdxSets[:0]
+		}
+		b.recycleCopyArenaChunks()
+		b.recyclePtrCopyArenaChunks()
+		if b.arenaInFlightBytes > 0 {
+			b.subArenaInFlightBytes(b.arenaInFlightBytes)
+		}
+		if b.db != nil {
+			b.copyArenaCap = b.db.batchCopyArenaInitCap(0)
+		}
 	}
 	b.size = 0
-	b.walBuf = b.walBuf[:0]
 	b.streamEligible = true
 	b.streamTried = false
 	b.streamBypassOff = false
 	b.hasViewOps = false
 	b.stableViewValueLeaseChunks = nil
-	b.firstKey = nil
-	b.lastKey = nil
-	b.batchRange = keyRange{}
 	b.resetBackendConditionalEntries()
 	b.hasDeleteRanges = false
 	b.entryRevision = page.LegacyEntryRevision
@@ -36415,13 +36434,18 @@ func (b *Batch) Reset() {
 	b.commandWALAppend = nil
 	b.commandWALPreparedRevision = false
 	b.commandWALMaterializedRID = false
-	b.valueCopyShard = nil
 	b.commandWALCompactReplay = false
-	b.commandWALCompactRanges = nil
-	b.commandWALCompactPointStart = 0
 
-	if b.ptrValueIdxs != nil {
-		b.ptrValueIdxs = b.ptrValueIdxs[:0]
+	if b.ordinaryBatchState != nil {
+		b.walBuf = b.walBuf[:0]
+		b.firstKey, b.lastKey = nil, nil
+		b.batchRange = keyRange{}
+		b.valueCopyShard = nil
+		b.commandWALCompactRanges = nil
+		b.commandWALCompactPointStart = 0
+		if b.ptrValueIdxs != nil {
+			b.ptrValueIdxs = b.ptrValueIdxs[:0]
+		}
 	}
 }
 
@@ -36456,7 +36480,7 @@ func (b *Batch) updateBatchEntryHint() {
 }
 
 func (b *Batch) drainCopyArenaChunks() [][]byte {
-	if b == nil {
+	if b == nil || b.ordinaryBatchState == nil {
 		return nil
 	}
 	if b.db != nil && cap(b.copyArena) > 0 {
@@ -36487,7 +36511,7 @@ func (b *Batch) recycleCopyArenaChunks() {
 }
 
 func (b *Batch) drainPtrCopyArenaChunks() [][]byte {
-	if b == nil {
+	if b == nil || b.ordinaryBatchState == nil {
 		return nil
 	}
 	if b.db != nil && cap(b.ptrCopyArena) > 0 {
@@ -36532,7 +36556,7 @@ func (b *Batch) releaseShardEntryGroups(groups [][]batch.Entry) {
 }
 
 func (b *Batch) updateBatchCopyHint() {
-	if b == nil || b.db == nil {
+	if b == nil || b.ordinaryBatchState == nil || b.db == nil {
 		return
 	}
 	if n := b.copyBytes; n > 0 {
@@ -36566,10 +36590,18 @@ func (b *Batch) subArenaInFlightBytes(n int64) {
 }
 
 func (b *Batch) arenaCopy(n int) []byte {
+	if n == 0 {
+		return nil
+	}
+	b.ensureOrdinaryState()
 	return b.arenaCopyInto(batchArenaKindMain, &b.copyArena, &b.copyArenaChunks, &b.copyBytes, n, b.copyArenaCap)
 }
 
 func (b *Batch) arenaCopyPtr(n int) []byte {
+	if n == 0 {
+		return nil
+	}
+	b.ensureOrdinaryState()
 	return b.arenaCopyInto(batchArenaKindPtr, &b.ptrCopyArena, &b.ptrCopyArenaChunks, &b.ptrCopyBytes, n, 0)
 }
 
@@ -36802,7 +36834,7 @@ func (b *Batch) releaseCompactedBatchArenaTail(kind batchArenaKind, chunks *[][]
 }
 
 func (b *Batch) compactUnderfilledMainArenaTail() {
-	if b == nil || len(b.entries) == 0 || cap(b.copyArena) == 0 || len(b.copyArenaChunks) == 0 {
+	if b == nil || b.ordinaryBatchState == nil || len(b.entries) == 0 || cap(b.copyArena) == 0 || len(b.copyArenaChunks) == 0 {
 		return
 	}
 	tail := b.copyArena
@@ -36818,7 +36850,7 @@ func (b *Batch) compactUnderfilledMainArenaTail() {
 }
 
 func (b *Batch) compactUnderfilledPtrArenaTail() {
-	if b == nil || len(b.entries) == 0 || cap(b.ptrCopyArena) == 0 || len(b.ptrCopyArenaChunks) == 0 {
+	if b == nil || b.ordinaryBatchState == nil || len(b.entries) == 0 || cap(b.ptrCopyArena) == 0 || len(b.ptrCopyArenaChunks) == 0 {
 		return
 	}
 	tail := b.ptrCopyArena
@@ -36846,7 +36878,7 @@ func (b *Batch) maybeCompactUnderfilledArenaTails() {
 }
 
 func (b *Batch) resetBackendConditionalEntries() {
-	if b == nil || b.backendConditionalEntries == nil {
+	if b == nil || b.ordinaryBatchState == nil || b.backendConditionalEntries == nil {
 		return
 	}
 	if cap(b.backendConditionalEntries) > batchEntriesPoolMaxRetain {
@@ -36862,6 +36894,7 @@ func (b *Batch) reserveBackendConditionalEntries(additional int) {
 	if b == nil || additional <= 0 {
 		return
 	}
+	b.ensureOrdinaryState()
 	needed := len(b.backendConditionalEntries) + additional
 	if cap(b.backendConditionalEntries) >= needed {
 		return
@@ -36970,6 +37003,7 @@ func (b *Batch) setWithMVCCInput(key, value []byte, revision page.EntryRevision,
 	if b.closed {
 		return ErrBatchClosed
 	}
+	b.ensureOrdinaryState()
 	key = normalizeRawKVPointKey(key)
 	value = normalizeRawKVValue(value)
 	if hotPathStatsEnabled {
@@ -37091,6 +37125,10 @@ func (b *Batch) setViewValidatedWithMVCCInput(key, value []byte, revision page.E
 	if b.cowState != nil {
 		return b.cowAddEntry(batch.Entry{Type: batch.OpPut, Key: key, Value: value, Revision: revision, MVCCInput: input}, false)
 	}
+	if b.closed {
+		return ErrBatchClosed
+	}
+	b.ensureOrdinaryState()
 	if hotPathStatsEnabled {
 		batchSetViewCallsTotal.Add(1)
 		batchSetViewBytesTotal.Add(uint64(len(key) + len(value)))
@@ -37167,6 +37205,7 @@ func (b *Batch) DeleteWithRevision(key []byte, revision page.EntryRevision) erro
 	if b.closed {
 		return ErrBatchClosed
 	}
+	b.ensureOrdinaryState()
 	key = normalizeRawKVPointKey(key)
 
 	keyCopy := b.cloneKey(key)
@@ -37233,6 +37272,7 @@ func (b *Batch) DeleteRange(start, end []byte) error {
 	if batch.IsDeleteRangeNoop(start, end) {
 		return nil
 	}
+	b.ensureOrdinaryState()
 	if b.db != nil {
 		b.db.deleteRangeBatchCalls.Add(1)
 	}
@@ -37290,6 +37330,10 @@ func (b *Batch) DeleteViewValidatedWithRevision(key []byte, revision page.EntryR
 	if b.cowState != nil {
 		return b.cowAddEntry(batch.Entry{Type: batch.OpDelete, Key: key, Revision: revision}, false)
 	}
+	if b.closed {
+		return ErrBatchClosed
+	}
+	b.ensureOrdinaryState()
 	if hotPathStatsEnabled {
 		batchDeleteViewCallsTotal.Add(1)
 		batchDeleteViewBytesTotal.Add(uint64(len(key)))
@@ -37356,6 +37400,7 @@ func (b *Batch) SetOps(ops []batch.Entry) error {
 	if b.closed {
 		return ErrBatchClosed
 	}
+	b.ensureOrdinaryState()
 	if b.backend != nil {
 		copied := make([]batch.Entry, 0, len(ops))
 		for _, op := range ops {
@@ -37840,6 +37885,8 @@ func (b *Batch) write(sync bool) error {
 		}
 		return b.writeRegular(sync)
 	}
+
+	b.ensureOrdinaryState()
 
 	if b.hasDeleteRanges {
 		return b.writeRangeBatch(sync)
@@ -38348,6 +38395,9 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 			b.cowState.producer = nil
 			capture.close()
 		}
+	} else {
+		// Command-WAL callers may enter here without going through write.
+		b.ensureOrdinaryState()
 	}
 	needRotate := false
 	needSyncBarrier := false
@@ -38506,7 +38556,10 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 		}
 	}
 	stableViewValueLeaseBytes = batchArenaChunksCapBytes(b.stableViewValueLeaseChunks)
-	prospectiveRetainBytes := batchArenaChunksCapBytes(b.copyArenaChunks) + batchArenaChunksCapBytes(b.ptrCopyArenaChunks) + stableViewValueLeaseBytes
+	prospectiveRetainBytes := stableViewValueLeaseBytes
+	if b.ordinaryBatchState != nil {
+		prospectiveRetainBytes += batchArenaChunksCapBytes(b.copyArenaChunks) + batchArenaChunksCapBytes(b.ptrCopyArenaChunks)
+	}
 	allowBatchArenaBorrow, preflightBlocked := shouldBorrowBatchArenaBytesForWriteWithHardCap(
 		prospectiveRetainBytes,
 		b.db.currentBatchArenaRetainedHardCapEffectiveBytes(),
@@ -39838,39 +39891,41 @@ func (b *Batch) Close() error {
 	if b.db != nil && b.shardCnts != nil {
 		b.db.putBatchIntSlice(b.shardCnts)
 	}
-	if b.db != nil && b.shardIdxSets != nil && cap(b.shardIdxSets) > 0 {
-		full := b.shardIdxSets[:cap(b.shardIdxSets)]
-		for i := range full {
-			if full[i] != nil {
-				b.db.putBatchIntSlice(full[i])
-				full[i] = nil
+	if b.ordinaryBatchState != nil {
+		if b.db != nil && b.shardIdxSets != nil && cap(b.shardIdxSets) > 0 {
+			full := b.shardIdxSets[:cap(b.shardIdxSets)]
+			for i := range full {
+				if full[i] != nil {
+					b.db.putBatchIntSlice(full[i])
+					full[i] = nil
+				}
 			}
 		}
+		if b.db != nil && b.shardEntries != nil {
+			b.releaseShardEntryGroups(b.shardEntries)
+		}
+		b.recycleCopyArenaChunks()
+		b.recyclePtrCopyArenaChunks()
 	}
-	if b.db != nil && b.shardEntries != nil {
-		b.releaseShardEntryGroups(b.shardEntries)
-	}
-	b.recycleCopyArenaChunks()
-	b.recyclePtrCopyArenaChunks()
 	b.entries = nil
-	b.walBuf = nil
 	b.shardIdxs = nil
 	b.eligibleIdxs = nil
 	b.shardAdds = nil
 	b.shardCnts = nil
-	b.shardEntries = nil
-	b.shardIdxSets = nil
-	b.firstKey = nil
-	b.lastKey = nil
 	b.entryRevision = page.LegacyEntryRevision
-	b.ptrValueIdxs = nil
 	b.stableViewValueLeaseChunks = nil
 
-	b.valueCopyShard = nil
-	b.appendOnlyDirectValueCopier = nil
+	if b.ordinaryBatchState != nil {
+		b.walBuf = nil
+		b.shardEntries, b.shardIdxSets = nil, nil
+		b.firstKey, b.lastKey = nil, nil
+		b.ptrValueIdxs = nil
+		b.valueCopyShard = nil
+		b.appendOnlyDirectValueCopier = nil
+		b.commandWALCompactRanges = nil
+		b.commandWALCompactPointStart = 0
+	}
 	b.commandWALCompactReplay = false
-	b.commandWALCompactRanges = nil
-	b.commandWALCompactPointStart = 0
 	b.commandWALMaterializedRID = false
 	return nil
 }

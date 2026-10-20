@@ -190,11 +190,8 @@ func (b *Batch) cowReset() {
 	b.shardCnts = nil
 	b.shardIdxs = nil
 	b.eligibleIdxs = nil
-	b.shardEntries = nil
-	b.shardIdxSets = nil
 	b.cowState.predictionGroups = nil
 	b.cowState.predictionStorage = nil
-	b.firstKey, b.lastKey = nil, nil
 	b.stableViewValueLeaseChunks = nil
 	b.size, b.maxEntries = 0, 0
 	b.hasViewOps, b.hasDeleteRanges = false, false
