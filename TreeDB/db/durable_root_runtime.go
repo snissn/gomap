@@ -648,11 +648,15 @@ func (db *DB) scanCandidateExternalReferencesWithCountsAndLimitsV1(snapshot *Sna
 		}
 		return db.rebindCandidateValueLogSetWithLimitsV1(snapshot, limits)
 	}
-	registerValuePointers := func(rootIDs []uint64) error {
-		result, err := db.maintenanceReachabilityScan(context.Background(), snapshot, maintenanceReachabilityScanOptions{
+	registerValuePointers := func(rootIDs []uint64, retained *valueLogRefCounts) error {
+		opts := maintenanceReachabilityScanOptions{
 			Collectors:      maintenanceReachabilityValueLogRefCounts,
 			ExplicitRootIDs: rootIDs,
-		})
+		}
+		if retained != nil {
+			opts.CountMetadata = db.valueLogIdentityPins.MetadataOwner()
+		}
+		result, err := db.maintenanceReachabilityScan(context.Background(), snapshot, opts)
 		if err != nil {
 			return err
 		}
@@ -663,12 +667,25 @@ func (db *DB) scanCandidateExternalReferencesWithCountsAndLimitsV1(snapshot *Sna
 		if err := db.requireDurableValueLogReferencesRegisteredV1(references); err != nil {
 			return err
 		}
-		return db.rebindCandidateValueLogSetWithLimitsV1(snapshot, limits)
+		if err := db.rebindCandidateValueLogSetWithLimitsV1(snapshot, limits); err != nil {
+			return err
+		}
+		if retained != nil {
+			*retained = result.countRecords.take()
+		}
+		return nil
 	}
 	// Raw outer-leaf pointers can be discovered without dereferencing their
 	// segments. Register those exact canonical files first so an unreported but
 	// valid producer segment remains readable during the full closure scan.
-	primaryRootIDs := []uint64{snapshot.state.RootPageID, snapshot.state.SystemRootPageID}
+	var primaryRootStorage [2]uint64
+	primaryRootIDs := primaryRootStorage[:0]
+	if snapshot.state.RootPageID != 0 {
+		primaryRootIDs = append(primaryRootIDs, snapshot.state.RootPageID)
+	}
+	if snapshot.state.SystemRootPageID != 0 && snapshot.state.SystemRootPageID != snapshot.state.RootPageID {
+		primaryRootIDs = append(primaryRootIDs, snapshot.state.SystemRootPageID)
+	}
 	if err := registerOuterLeaves(primaryRootIDs); err != nil {
 		return nil, err
 	}
@@ -676,30 +693,46 @@ func (db *DB) scanCandidateExternalReferencesWithCountsAndLimitsV1(snapshot *Sna
 	// without reading their records. This must precede descriptor decoding: a
 	// collection root descriptor can itself be pointer-backed by a canonical
 	// segment that an external producer has not registered with the manager.
-	if err := registerValuePointers(primaryRootIDs); err != nil {
+	var primaryCounts valueLogRefCounts
+	defer primaryCounts.close()
+	if err := registerValuePointers(primaryRootIDs, &primaryCounts); err != nil {
 		return nil, err
 	}
 	roots, _, err := maintenanceReachabilityRoots(context.Background(), snapshot, nil, nil, false, false)
 	if err != nil {
 		return nil, err
 	}
-	// System descriptors may expose collection/vector roots that have their own
-	// raw outer leaves. Register that second bounded frontier before projecting
-	// value pointers inside any of those leaves.
 	rootIDs := maintenanceRootIDs(roots)
-	if err := registerOuterLeaves(rootIDs); err != nil {
-		return nil, err
+	// The first projection already counted every root when descriptor discovery
+	// adds no new root ID. Both frontiers are nonzero and deduplicated, and both
+	// scans project all roots with the same multiplicity. Reuse only that exact
+	// candidate-local result; destructive transitions still undergo this scan.
+	sameFrontier := len(rootIDs) == len(primaryRootIDs)
+	for _, rootID := range rootIDs {
+		if rootID != snapshot.state.RootPageID && rootID != snapshot.state.SystemRootPageID {
+			sameFrontier = false
+		}
 	}
-	if err := registerValuePointers(rootIDs); err != nil {
-		return nil, err
-	}
-	owner := db.valueLogIdentityPins.MetadataOwner()
-	result, err := db.maintenanceReachabilityScan(context.Background(), snapshot, maintenanceReachabilityScanOptions{
-		Collectors:    maintenanceReachabilityValueLogRefCounts,
-		CountMetadata: owner,
-	})
-	if err != nil {
-		return nil, err
+	var result maintenanceReachabilityResult
+	if sameFrontier {
+		result.countRecords = primaryCounts.take()
+	} else {
+		primaryCounts.close()
+		// Descriptor roots may have their own raw outer leaves. Keep the original
+		// registration and final exact count scan for this expanded frontier.
+		if err := registerOuterLeaves(rootIDs); err != nil {
+			return nil, err
+		}
+		if err := registerValuePointers(rootIDs, nil); err != nil {
+			return nil, err
+		}
+		result, err = db.maintenanceReachabilityScan(context.Background(), snapshot, maintenanceReachabilityScanOptions{
+			Collectors:    maintenanceReachabilityValueLogRefCounts,
+			CountMetadata: db.valueLogIdentityPins.MetadataOwner(),
+		})
+		if err != nil {
+			return nil, err
+		}
 	}
 	defer result.countRecords.close()
 	for fileID := range result.valueLogReferencedSegments {

@@ -3,11 +3,16 @@ package db
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/leafrefscan"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
+	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -479,4 +484,219 @@ func BenchmarkMaintenanceReachability(b *testing.B) {
 			}
 		}
 	})
+}
+
+func TestCandidateReferenceScanRetainsExactCountsAcrossReplacementAndHeldSnapshot(t *testing.T) {
+	db, _ := openLeafGenerationGCTestDB(t)
+	ptr := appendPointersInNewSegment(t, db.dir, 0, 71, 710_000, 1, func(int) []byte {
+		return []byte("candidate-counted-value")
+	})[0]
+	b := db.NewBatch().(*Batch)
+	for _, key := range []string{"a", "b", "c"} {
+		if err := b.SetPointer([]byte(key), ptr); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := b.WriteSync(); err != nil {
+		t.Fatal(err)
+	}
+	closeNoErr(t, b)
+	held := db.AcquireSnapshot()
+	if held == nil {
+		t.Fatal("missing held snapshot")
+	}
+	defer closeNoErr(t, held)
+	if err := db.Set([]byte("a"), []byte("replacement-inline")); err != nil {
+		t.Fatal(err)
+	}
+	current := db.AcquireSnapshot()
+	if current == nil {
+		t.Fatal("missing replacement snapshot")
+	}
+	defer closeNoErr(t, current)
+	for _, tc := range []struct {
+		name string
+		snap *Snapshot
+		want uint64
+	}{{"held", held, 3}, {"replacement", current, 2}} {
+		t.Run(tc.name, func(t *testing.T) {
+			owner := db.valueLogIdentityPins.MetadataOwner()
+			before := owner.Bytes()
+			var captured candidateValueLogRefCountsV1
+			refs, err := db.scanCandidateExternalReferencesWithCountsV1(tc.snap, &captured)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer captured.counts.close()
+			if captured.idx != tc.snap.idx || captured.commitSeq != tc.snap.state.CommitSeq || captured.userRootID != tc.snap.state.RootPageID || captured.systemRootID != tc.snap.state.SystemRootPageID || captured.counts.metadata != owner {
+				t.Fatal("captured count ownership/identity differs from exact candidate")
+			}
+			if captured.counts.get(ptr.FileID) != tc.want {
+				t.Fatalf("captured count=%d want %d", captured.counts.get(ptr.FileID), tc.want)
+			}
+			if _, ok := refs[ptr.FileID]; !ok {
+				t.Fatal("missing reachable value segment")
+			}
+			full, err := db.maintenanceReachabilityScan(context.Background(), tc.snap, maintenanceReachabilityScanOptions{Collectors: maintenanceReachabilityValueLogRefCounts})
+			if err != nil || !reflect.DeepEqual(captured.counts.toMap(), full.valueLogRefCounts) {
+				t.Fatalf("candidate/full counts differ: captured=%v full=%v err=%v", captured.counts.toMap(), full.valueLogRefCounts, err)
+			}
+			captured.counts.close()
+			if owner.Bytes() != before {
+				t.Fatalf("count cleanup retained metadata: before=%d after=%d", before, owner.Bytes())
+			}
+		})
+	}
+}
+
+func TestCandidateReferenceScanExpandsPointerDescriptorFrontierAndDeduplicatesAliases(t *testing.T) {
+	db, _ := openLeafGenerationGCTestDB(t)
+	ptr := appendPointersInNewSegment(t, db.dir, 0, 72, 720_000, 1, func(int) []byte {
+		return []byte("collection-only-value")
+	})[0]
+	documents, err := memtable.NewWithCapacityMode(0, memtable.ModeHashSorted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	documents.SetEntry([]byte("doc/p"), nil, ptr, node.FlagPointer)
+	for i := 0; i < 256; i++ {
+		documents.Set([]byte(fmt.Sprintf("doc/%04d", i)), bytes.Repeat([]byte("v"), 32))
+	}
+	documents.Freeze()
+	var descriptor page.ValuePtr
+	_, rootIDs, err := db.PublishOrderedRootGroupWithSystemBuilder([]OrderedRootPublishInput{{
+		BaseRoot: 0, Iter: documents.NewIterator(nil, nil), StoragePolicy: OrderedRootStorageValueLogLeaves,
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		descriptor = appendCollectionRootDescriptorPointer(t, db.dir, rootIDs[0])
+		descriptors, err := memtable.NewWithCapacityMode(0, memtable.ModeHashSorted)
+		if err != nil {
+			return nil, err
+		}
+		descriptors.SetEntry([]byte(maintenanceTestCollectionRootKey), nil, descriptor, node.FlagPointer)
+		descriptors.SetEntry([]byte("collections/root/users/alias"), nil, descriptor, node.FlagPointer)
+		descriptors.Freeze()
+		return descriptors.NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("missing descriptor snapshot")
+	}
+	defer closeNoErr(t, snap)
+	roots, _, err := maintenanceReachabilityRoots(context.Background(), snap, nil, nil, true, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireMaintenanceRootCount(t, roots, maintenanceRootCollection, 1)
+	var captured candidateValueLogRefCountsV1
+	refs, err := db.scanCandidateExternalReferencesWithCountsV1(snap, &captured)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer captured.counts.close()
+	if captured.counts.get(ptr.FileID) != 1 || captured.counts.get(descriptor.FileID) != 2 {
+		t.Fatalf("expanded exact counts=%v want collection1 descriptor2", captured.counts.toMap())
+	}
+	for _, id := range []uint32{ptr.FileID, descriptor.FileID} {
+		if _, ok := refs[id]; !ok {
+			t.Fatalf("missing expanded resource %d", id)
+		}
+	}
+	outerLeaves := 0
+	if err := leafrefscan.WalkRoots(context.Background(), rootIDs, snap.idx.pager.Get, nil, func(ptr page.LeafLogPtr) error {
+		outerLeaves++
+		if _, ok := refs[ptr.ValueLogFileID()]; !ok {
+			t.Fatalf("missing collection outer-leaf segment %d", ptr.ValueLogFileID())
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if outerLeaves == 0 {
+		t.Fatal("fixture did not produce collection outer leaves")
+	}
+	full, err := db.maintenanceReachabilityScan(context.Background(), snap, maintenanceReachabilityScanOptions{Collectors: maintenanceReachabilityValueLogRefCounts})
+	if err != nil || !reflect.DeepEqual(captured.counts.toMap(), full.valueLogRefCounts) {
+		t.Fatalf("expanded/full counts differ: captured=%v full=%v err=%v", captured.counts.toMap(), full.valueLogRefCounts, err)
+	}
+}
+
+func TestCandidateReferenceScanStillRejectsMalformedDescriptorAndReleasesPreliminaryCounts(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeNoErr(t, db)
+	ptr := appendPointersInNewSegment(t, db.dir, 0, 73, 730_000, 1, func(int) []byte { return []byte("count-before-discovery") })[0]
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("pointer"), ptr); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.WriteSync(); err != nil {
+		t.Fatal(err)
+	}
+	closeNoErr(t, b)
+	malformedRoot, err := db.PublishOrderedRootIterator(0, mustFrozenRawMemtable(t, maintenanceTestCollectionRootKey, []byte("short")).NewIterator(nil, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("missing snapshot")
+	}
+	defer closeNoErr(t, snap)
+	originalState := snap.state
+	privateState := *originalState
+	privateState.SystemRootPageID = malformedRoot
+	snap.state = &privateState
+	defer func() { snap.state = originalState }()
+	owner := db.valueLogIdentityPins.MetadataOwner()
+	before := owner.Bytes()
+	var captured candidateValueLogRefCountsV1
+	if _, err := db.scanCandidateExternalReferencesWithCountsV1(snap, &captured); err == nil {
+		t.Fatal("malformed system descriptor bypassed mandatory discovery")
+	}
+	if captured.counts.slots != nil || owner.Bytes() != before {
+		t.Fatalf("failed discovery retained preliminary counts: before=%d after=%d", before, owner.Bytes())
+	}
+}
+
+func TestCandidateReferenceScanPreservesCountAdmissionRefusal(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeNoErr(t, db)
+	ptr := appendPointersInNewSegment(t, db.dir, 0, 74, 740_000, 1, func(int) []byte { return []byte("admitted-count") })[0]
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("pointer"), ptr); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.WriteSync(); err != nil {
+		t.Fatal(err)
+	}
+	closeNoErr(t, b)
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("missing snapshot")
+	}
+	defer closeNoErr(t, snap)
+	owner := db.valueLogIdentityPins.MetadataOwner()
+	before := owner.Bytes()
+	budget := &refCountsBudget{cap: before}
+	enrollment, err := owner.Enroll(budget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer enrollment.Close()
+	var captured candidateValueLogRefCountsV1
+	if _, err := db.scanCandidateExternalReferencesWithCountsV1(snap, &captured); !errors.Is(err, retainedalloc.ErrCapacity) {
+		t.Fatalf("count admission error=%v want capacity refusal", err)
+	}
+	if captured.counts.slots != nil || owner.Bytes() != before || budget.bytes != before {
+		t.Fatalf("refused scan retained count metadata: before=%d after=%d budget=%d", before, owner.Bytes(), budget.bytes)
+	}
 }
