@@ -325,6 +325,10 @@ func checkPreparedVectorCatalogRecoveryV1(t *testing.T, ctx context.Context, nod
 	}
 }
 
+// Positive completion fixtures permit bounded disk/scheduler pauses around
+// durable real-Raft RPCs. Intentional deadline controls keep their own clocks.
+const fixedPeerPositiveCompletionRequestTimeoutV1 = 12 * time.Second
+
 func runFixedPeerVectorPrepareRealRaftV1(t *testing.T, loseResult, nonphysical, pollRegression bool, replicas int, preSnapshotOverlay bool, servingChecks ...func(*testing.T, context.Context, []*FixedPeerTCPRuntimeV1)) {
 	var configs []FixedPeerTCPConfigV1
 	if replicas == 4 {
@@ -333,11 +337,13 @@ func runFixedPeerVectorPrepareRealRaftV1(t *testing.T, loseResult, nonphysical, 
 		// Leave room for shared CI disk/scheduler pauses without treating them
 		// as heartbeat loss; successful writes still require genuine commit/apply.
 		for i := range configs {
-			configs[i].RequestTimeout = 12 * time.Second
 			configs[i].RaftTimeout = time.Second
 		}
 	} else {
 		configs = initializationTestConfigsV1(t)
+	}
+	for i := range configs {
+		configs[i].RequestTimeout = fixedPeerPositiveCompletionRequestTimeoutV1
 	}
 	nodes := make([]*FixedPeerTCPRuntimeV1, len(configs))
 	open := func(round string) {

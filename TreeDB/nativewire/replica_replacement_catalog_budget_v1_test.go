@@ -45,7 +45,7 @@ func TestReplacementCatalogPublishDelayedResponseV1(t *testing.T) {
 				}
 				// Give the real commit an independent budget in every case; only
 				// the probing client's reply budget follows the fixture policy.
-				configs[i].RequestTimeout = 12 * time.Second
+				configs[i].RequestTimeout = fixedPeerPositiveCompletionRequestTimeoutV1
 				configs[i].RaftTimeout = time.Second
 				configs[i].ClusterID = "replacement-catalog-budget"
 				configs[i].Credentials = ca.issue(t, configs[i].ClusterID, string(configs[i].NodeID), now.Add(-time.Hour), now.Add(time.Hour))
@@ -95,7 +95,7 @@ func TestReplacementCatalogPublishDelayedResponseV1(t *testing.T) {
 				publishes.Add(1)
 				// Preserve the send trace, but let this one real request reach its
 				// committed reply even if the tested reply/caller deadline expires.
-				commitCtx, cancelCommit := context.WithTimeout(context.WithoutCancel(request.Context()), 12*time.Second)
+				commitCtx, cancelCommit := context.WithTimeout(context.WithoutCancel(request.Context()), fixedPeerPositiveCompletionRequestTimeoutV1)
 				defer cancelCommit()
 				commitRequest := request.Clone(commitCtx)
 				// http.Client also installs legacy cancellation for wrapper transports.

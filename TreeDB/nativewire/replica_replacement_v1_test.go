@@ -37,7 +37,7 @@ func replacementPublicInstallTestConfigsV1(t testing.TB, complete bool) []FixedP
 		// of the request context. Retirement tests correctness on loaded/race
 		// runners, not a 300ms election/transfer or 2s durable RPC latency target.
 		for i := range configs {
-			configs[i].RequestTimeout = 12 * time.Second
+			configs[i].RequestTimeout = fixedPeerPositiveCompletionRequestTimeoutV1
 			configs[i].RaftTimeout = time.Second
 		}
 	}
