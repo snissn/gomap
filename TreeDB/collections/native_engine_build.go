@@ -316,12 +316,16 @@ func (b *nativeEngineBuild) materializeDomains(group nativeOrderedRootBuilder, n
 		// two handoff promises survive. Do not keep the operation peak charged
 		// until this captured engine's asynchronous last-reference cleanup: a
 		// following checkpoint needs the SAME sequential workspace again.
-		compaction := false
+		var workspace uint64
 		for _, input := range b.typed {
-			compaction = compaction || input.compaction
+			local, err := nativeTypedOperationWorkspaceCapacity(input.work.meta, input.compaction)
+			if err != nil {
+				b.failure = err
+				return err
+			}
+			workspace = max(workspace, local)
 		}
-		workspace, err := nativeTypedOperationWorkspaceCapacity(compaction)
-		if err != nil || workspace > b.allocation.floor {
+		if workspace > b.allocation.floor {
 			b.failure = memtable.ErrCOWCapacity
 			return b.failure
 		}
@@ -329,7 +333,7 @@ func (b *nativeEngineBuild) materializeDomains(group nativeOrderedRootBuilder, n
 			input.work.input = nativeTypedMaterializeInput{}
 		}
 		floor := b.allocation.floor - workspace
-		if err = b.allocation.parent.ShrinkNativeBytes(workspace, floor); err != nil {
+		if err := b.allocation.parent.ShrinkNativeBytes(workspace, floor); err != nil {
 			b.failure = err
 			return err
 		}

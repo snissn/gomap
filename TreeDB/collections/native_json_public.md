@@ -291,7 +291,11 @@ For canonical-inline typed effects, accepted logical state owns the immutable
 row/retained backing. Captured-prefix physical construction later materializes
 maintained row, column, manifest and locator assets off the publication gate.
 Original memory receipts cover retained and operation-local backing before
-allocation. Successful materialization returns the ended operation workspace
+allocation. Sequential typed construction reserves the largest workspace required
+by the captured schemas: JSON and Full retained carriers omit the semantic-stream
+encoder envelope, while semantic-stream, typed codec and compaction read bounds
+remain applicable to their original paths. Source and complete retained-manifest
+charges still sum across collections. Successful materialization returns the ended operation workspace
 credit after codecs close and borrowed inputs are dropped. Retained outputs and
 handoff promises remain charged; failed builds retain their original custody.
 The original build group receives the complete resource/requirement

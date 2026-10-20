@@ -12,12 +12,13 @@ import (
 )
 
 // nativeTypedBuildCapacity inventories every captured typed prefix. Source,
-// manifest and output custody sum across collections; one fixed operation peak
-// stays in the original parent's floor because materialization is sequential.
+// manifest and output custody sum across collections. The largest applicable
+// operation peak stays in the original parent because materialization is sequential.
 func nativeTypedBuildCapacity(e *nativeEngineVersion, basis *backenddb.Snapshot) (uint64, uint64, int, int, error) {
 	return nativeTypedBuildCapacityForCompaction(e, basis, 0)
 }
 func nativeTypedBuildCapacityForCompaction(e *nativeEngineVersion, basis *backenddb.Snapshot, target uint64) (charge, floor uint64, collections, count int, err error) {
+	var workspace uint64
 	scanNativeBuildCollections(e, target, func(id uint64, c *nativeCollectionState) bool {
 		primary, ok := c.domains.Get("primary")
 		if !ok || (primary.typed == nil && id != target) {
@@ -27,6 +28,12 @@ func nativeTypedBuildCapacityForCompaction(e *nativeEngineVersion, basis *backen
 			err = backenddb.ErrNativeSemanticUnsupported
 			return false
 		}
+		localWorkspace, workspaceErr := nativeTypedOperationWorkspaceCapacity(*c.schema.meta, id == target)
+		if workspaceErr != nil {
+			err = workspaceErr
+			return false
+		}
+		workspace = max(workspace, localWorkspace)
 		collections++
 		var source uint64
 		members := 0
@@ -87,11 +94,6 @@ func nativeTypedBuildCapacityForCompaction(e *nativeEngineVersion, basis *backen
 	if err != nil || collections == 0 {
 		return
 	}
-	workspace, workspaceErr := nativeTypedOperationWorkspaceCapacity(target != 0)
-	if workspaceErr != nil {
-		err = workspaceErr
-		return
-	}
 	works, worksErr := nativeTypedCheckedMul(uint64(collections), uint64(unsafe.Sizeof(nativeTypedBuildWork{})))
 	if worksErr != nil {
 		err = worksErr
@@ -127,11 +129,6 @@ func (b *nativeEngineBuild) prepareTypedForCompaction(e *nativeEngineVersion, co
 	if collections == 0 {
 		return nil
 	}
-	workspace, err := nativeTypedBuildWorkspaceCapacity()
-	if err != nil {
-		b.failure = err
-		return err
-	}
 	b.typed = make([]nativeTypedBuildWork, 0, collections)
 	defer func() {
 		if b.failure != nil {
@@ -163,14 +160,13 @@ func (b *nativeEngineBuild) prepareTypedForCompaction(e *nativeEngineVersion, co
 		}
 		var compaction *nativeColumnCompaction
 		var capturedCollection *nativeCollectionState
-		sharedWorkspace := workspace
 		if id == target {
 			compaction, capturedCollection = operation, c
-			sharedWorkspace, err = nativeTypedOperationWorkspaceCapacity(true)
-			if err != nil {
-				b.failure = err
-				return false
-			}
+		}
+		sharedWorkspace, err := nativeTypedOperationWorkspaceCapacity(*c.schema.meta, compaction != nil)
+		if err != nil {
+			b.failure = err
+			return false
 		}
 		work, err := prepareNativeTypedMaterialization(nativeTypedMaterializeInput{compaction: compaction, capturedCollection: capturedCollection, meta: *c.schema.meta, baseManifestRoot: root, deltas: deltas, snapshot: basis, capture: capture, allocator: &b.allocation, group: group, sharedWorkspace: sharedWorkspace})
 		b.typed = append(b.typed, nativeTypedBuildWork{compaction: compaction != nil, collection: c.incarnation, work: work})

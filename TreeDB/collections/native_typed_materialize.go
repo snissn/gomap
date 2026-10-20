@@ -38,7 +38,7 @@ type nativeTypedMaterializeInput struct {
 	group              *backenddb.RootPublicationBuildGroup
 	// Fixed operation credit stays in the SAME live build parent's floor.
 	// Collections run sequentially; only their retained terms split to children.
-	sharedWorkspace uint64
+	sharedWorkspace uint64 // This work's applicable peak, borrowed from the cohort maximum.
 }
 type nativeTypedMaterializedRoot struct {
 	name string
@@ -287,7 +287,10 @@ func nativeTypedDeltaRowBuildCapacity(meta CollectionMeta, idBytes, retainedByte
 	return total, nil
 }
 
-func nativeTypedBuildWorkspaceCapacity() (uint64, error) {
+func nativeTypedBuildWorkspaceCapacity(meta CollectionMeta) (uint64, error) {
+	if !nativeTypedMeta(meta) {
+		return 0, backenddb.ErrNativeSemanticUnsupported
+	}
 	// The retained builder's source-derived fixed cursor/raw/output/encoder
 	// proof already includes its 8 MiB codec allowance. Native scratch starts
 	// empty, so the unrelated maximum pooled raw buffer is absent.
@@ -301,7 +304,12 @@ func nativeTypedBuildWorkspaceCapacity() (uint64, error) {
 	// certification validates stored metadata and hashes without decompressing
 	// ZSTD sections. Only the benchmark granule override constructs a ZSTD
 	// decoder during building; reads retain their independent decoder bound.
-	workspace := max(semantic, typed, uint64(8<<20))
+	// JSON and Full retained carriers never enter the semantic-stream encoder.
+	// Keep the original codec proof only when this captured schema can use it.
+	workspace := max(typed, uint64(8<<20))
+	if columnStoreRetainedPayloadUsesSemanticStreamV1(meta.Options.ColumnStore) {
+		workspace = max(workspace, semantic)
+	}
 	if raw, ok := os.LookupEnv(typedColumnBenchmarkCompressionEnv); ok {
 		compression, set, err := parseTypedColumnBenchmarkCompression(raw)
 		if err != nil {
@@ -318,8 +326,8 @@ func nativeTypedBuildWorkspaceCapacity() (uint64, error) {
 	return workspace, nil
 }
 
-func nativeTypedOperationWorkspaceCapacity(compaction bool) (uint64, error) {
-	workspace, err := nativeTypedBuildWorkspaceCapacity()
+func nativeTypedOperationWorkspaceCapacity(meta CollectionMeta, compaction bool) (uint64, error) {
+	workspace, err := nativeTypedBuildWorkspaceCapacity(meta)
 	if err != nil || !compaction {
 		return workspace, err
 	}
@@ -334,7 +342,7 @@ func nativeTypedOperationWorkspaceCapacity(compaction bool) (uint64, error) {
 }
 
 func nativeTypedCollectionBuildCapacity(meta CollectionMeta, sourceBytes uint64) (uint64, error) {
-	total, err := nativeTypedBuildWorkspaceCapacity()
+	total, err := nativeTypedBuildWorkspaceCapacity(meta)
 	if err != nil {
 		return 0, err
 	}
@@ -482,11 +490,11 @@ func prepareNativeTypedMaterializationCore(input nativeTypedMaterializeInput) (w
 		if e = nativeTypedCheckedAdd(&amount, read); e != nil {
 			return nil, e
 		}
-		build, e := nativeTypedBuildWorkspaceCapacity()
+		build, e := nativeTypedBuildWorkspaceCapacity(input.meta)
 		if e != nil {
 			return nil, e
 		}
-		workspace, e := nativeTypedOperationWorkspaceCapacity(true)
+		workspace, e := nativeTypedOperationWorkspaceCapacity(input.meta, true)
 		if e != nil {
 			return nil, e
 		}
@@ -500,7 +508,7 @@ func prepareNativeTypedMaterializationCore(input nativeTypedMaterializeInput) (w
 	if input.allocator != nil {
 		owned = amount
 		if input.sharedWorkspace != 0 {
-			fixed, e := nativeTypedOperationWorkspaceCapacity(input.compaction != nil)
+			fixed, e := nativeTypedOperationWorkspaceCapacity(input.meta, input.compaction != nil)
 			if e != nil || input.sharedWorkspace != fixed || owned < fixed {
 				return nil, backenddb.ErrNativeSemanticUnsupported
 			}
