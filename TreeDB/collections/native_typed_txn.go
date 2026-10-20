@@ -117,6 +117,9 @@ func (t *NativeJSONTxn) stageNativeTypedInsert(g *nativeJSONTxnBinding, ids, doc
 	if err = nativeTypedValidateResidual(g.probe.meta, rows, residual); err != nil {
 		return err
 	}
+	if err = nativeTypedValidateIndexRows(g.probe.meta, rows, func(n uint64) error { return t.admitStage(g, n) }); err != nil {
+		return err
+	}
 	if err = t.adoptNativeTyped(g, rows, residual, nil, ColumnPublishOperationInsert, capacity, lease); err != nil {
 		return err
 	}
@@ -211,7 +214,21 @@ func (t *NativeJSONTxn) finalizeNativeTyped(g *nativeJSONTxnBinding) error {
 	for _, mutation := range mutations {
 		effects = append(effects, txnhistory.Effect{Namespace: g.namespace(), Kind: txnhistory.PointEffect, Key: mutation.Key})
 	}
-	additional := make([]nativeJSONDomainChange, 0, 3)
+	var indexChanges []nativeJSONDomainChange
+	if len(g.probe.meta.Indexes) != 0 {
+		var err error
+		indexChanges, effects, err = t.finalizeNativeTypedIndexes(g, mutations)
+		if err != nil {
+			return err
+		}
+	}
+	if len(indexChanges) != 0 {
+		if err := admitNativeInsertArray(3+len(indexChanges), uint64(unsafe.Sizeof(nativeJSONDomainChange{})), func(n uint64) error { return t.admitStage(g, n) }); err != nil {
+			return err
+		}
+	}
+	additional := make([]nativeJSONDomainChange, 0, 3+len(indexChanges))
+	additional = append(additional, indexChanges...)
 	for _, name := range []string{"column/manifest", "column/row-locator", "retained/semantic-stream-v1"} {
 		if name == "retained/semantic-stream-v1" && !columnStoreRetainedPayloadUsesSemanticStreamV1(g.probe.meta.Options.ColumnStore) {
 			continue
@@ -598,6 +615,9 @@ func (t *NativeJSONTxn) stageNativeTypedBatch(g *nativeJSONTxnBinding, ids, reta
 		if err = nativeTypedValidateResidual(g.probe.meta, rows, residual); err != nil {
 			return nil, 0, err
 		}
+	}
+	if err = nativeTypedValidateIndexRows(g.probe.meta, rows, func(n uint64) error { return t.admitStage(g, n) }); err != nil {
+		return nil, 0, err
 	}
 	// Canonical typed/source buffers coexist with their typed descriptor arrays
 	// and source intermediate encodings; reserve their checked source envelope

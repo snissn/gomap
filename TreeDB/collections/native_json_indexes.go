@@ -39,10 +39,18 @@ func nativeJSONDomainNumber(meta CollectionMeta, name string) uint64 {
 	}
 	for i, index := range meta.Indexes {
 		if name == "index/"+index.Name {
-			return uint64(i) + 4
+			return nativeJSONSecondaryDomainNumber(meta, i)
 		}
 	}
 	return 0
+}
+
+// Typed physical domains retain 4..6; ordinary JSON/BSON numbering is unchanged.
+func nativeJSONSecondaryDomainNumber(meta CollectionMeta, index int) uint64 {
+	if nativeTypedMeta(meta) {
+		return uint64(index) + 7
+	}
+	return uint64(index) + 4
 }
 
 func nativeJSONInsertPlanner(meta CollectionMeta) (insertBatchPlanner, error) {

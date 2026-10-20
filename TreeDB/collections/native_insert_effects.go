@@ -17,7 +17,7 @@ import (
 //
 // Index eligibility remains fenced until captured probes, unique range absence
 // and singleton/composite replay consume these same complete root effects.
-func extractNativeInsertEffects(name string, incarnation uint64, plan *directBufferedInsertPlan, primary []memtable.COWMutation, admit func(uint64) error) ([]nativeJSONDomainChange, []txnhistory.Effect, error) {
+func extractNativeInsertEffects(name string, incarnation uint64, plan *directBufferedInsertPlan, primary []memtable.COWMutation, admit func(uint64) error, typedMeta ...CollectionMeta) ([]nativeJSONDomainChange, []txnhistory.Effect, error) {
 	if plan == nil || len(plan.rootNames) != len(plan.policies) || len(primary) != len(plan.primaryEntries) || admit == nil {
 		return nil, nil, backenddb.ErrNativeSemanticUnsupported
 	}
@@ -99,6 +99,12 @@ func extractNativeInsertEffects(name string, incarnation uint64, plan *directBuf
 	}
 	appendRows(plan.templateRootName, 2, plan.templateEntries)
 	appendRows(plan.indexStateRootName, 3, plan.indexStateEntries)
+	secondaryDomain := func(index int) uint64 {
+		if len(typedMeta) != 0 {
+			return nativeJSONSecondaryDomainNumber(typedMeta[0], index)
+		}
+		return uint64(index) + 4
+	}
 	for _, secondary := range plan.secondaryRootPlans {
 		if len(secondary.entries) == 0 {
 			continue
@@ -110,7 +116,7 @@ func extractNativeInsertEffects(name string, incarnation uint64, plan *directBuf
 				flags = node.FlagTombstone
 			}
 			delta.entries[i] = memtable.COWMutation{Key: row.key, Flags: flags}
-			effects = append(effects, txnhistory.Effect{Namespace: namespace(uint64(secondary.runtimeIdx) + 4), Kind: txnhistory.PointEffect, Key: row.key})
+			effects = append(effects, txnhistory.Effect{Namespace: namespace(secondaryDomain(secondary.runtimeIdx)), Kind: txnhistory.PointEffect, Key: row.key})
 		}
 		additional = append(additional, delta)
 	}

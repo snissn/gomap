@@ -3,16 +3,27 @@ package treedb
 import (
 	"bytes"
 	"errors"
+	"os"
+	"os/exec"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/collections"
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/internal/workstats"
 )
 
 // The maintained typed API supports scalar string indexes on declared String
 // RowAsset columns. Exercise that actual producer and its physical readback,
 // rather than placing a second full document in the residual JSON.
 func TestNativeTypedStringIndexesLifecycle(t *testing.T) {
-	opts := indexedSliceOptions(ProfileCommandWALDurable, t.TempDir())
+	dir := t.TempDir()
+	crashDir := os.Getenv("GOMAP_TYPED_INDEX_CRASH_DIR")
+	if crashDir != "" {
+		dir = crashDir
+		// Preserve this dedicated abrupt child's real unapplied physical basis.
+		t.Setenv("TREEDB_DISABLE_VLOG_GENERATION_LOOP", "1")
+	}
+	opts := indexedSliceOptions(ProfileCommandWALDurable, dir)
 	database, err := Open(opts)
 	if err != nil {
 		t.Fatal(err)
@@ -59,18 +70,7 @@ func TestNativeTypedStringIndexesLifecycle(t *testing.T) {
 	a, b, c := nativeTypedOpsRows("string")
 	check := func(rows []nativeTypedOpsRow, absent []string) {
 		t.Helper()
-		checkNativeTypedOpsCurrent(t, col, "string", rows, absent)
-		for _, row := range rows {
-			for _, index := range []string{"label_lookup", "label_unique"} {
-				for attempt := 0; attempt < 2; attempt++ {
-					ids, err := col.FindByIndex(index, row.text)
-					if err != nil || len(ids) != 1 || !bytes.Equal(ids[0], []byte(row.id)) {
-						t.Fatalf("%s/%q owners=%q want=%q err=%v", index, row.text, ids, row.id, err)
-					}
-					ids[0][0] = '!' // Returned IDs cannot alias retained index state.
-				}
-			}
-		}
+		checkNativeTypedStringIndexes(t, col, rows, absent)
 	}
 	next, seq := handle.CommandWALNextLSN(), database.Stats()["treedb.cache.cow.txn.logical_seq"]
 	ids, residual, columns := nativeTypedOpsInput("string", a, b)
@@ -119,6 +119,20 @@ func TestNativeTypedStringIndexesLifecycle(t *testing.T) {
 	ids[0][0], residual[0][0], columns[0].Strings[0] = '!', '!', "caller overwrote replacement"
 	check([]nativeTypedOpsRow{afterA, afterB}, []string{"c"})
 	checkHeld()
+	if crashDir != "" {
+		checkNativeTypedOpsFrame(t, opts, next, commitlog.CommandKindCollectionUpdateBatchByID, commitlog.PayloadFormatCollectionTypedBatchByIDV1, "string", []nativeTypedOpsRow{afterA, afterB}, nil)
+		if applied := indexedCRUDAppliedLSN(t, handle); applied != 2 || next != 3 || handle.CommandWALNextLSN() != 4 {
+			t.Fatalf("indexed child basis=%d assigned=%d next=%d", applied, next, handle.CommandWALNextLSN())
+		}
+		if err := handle.FlushCommandWAL(true); err != nil {
+			t.Fatal(err)
+		}
+		if applied := indexedCRUDAppliedLSN(t, handle); applied != 2 {
+			t.Fatalf("WAL flush advanced physical basis: %d", applied)
+		}
+		t.Log("TYPED INDEX UNAPPLIED basis=2 accepted=3")
+		os.Exit(97)
+	}
 	refuse := func(label string, operation func() error) {
 		t.Helper()
 		next, seq := handle.CommandWALNextLSN(), database.Stats()["treedb.cache.cow.txn.logical_seq"]
@@ -226,5 +240,79 @@ func TestNativeTypedStringIndexesLifecycle(t *testing.T) {
 	requirePublicCOWFinalZero(t, cache)
 	if stats := registry.Stats(); stats.ActivePins != 0 || stats.ActiveIdentities != 0 {
 		t.Fatalf("typed indexed reopen final registry: %+v", stats)
+	}
+}
+
+func checkNativeTypedStringIndexes(t *testing.T, col *collections.Collection, rows []nativeTypedOpsRow, absent []string) {
+	t.Helper()
+	checkNativeTypedOpsCurrent(t, col, "string", rows, absent)
+	for _, row := range rows {
+		for _, index := range []string{"label_lookup", "label_unique"} {
+			for attempt := 0; attempt < 2; attempt++ {
+				ids, err := col.FindByIndex(index, row.text)
+				if err != nil || len(ids) != 1 || !bytes.Equal(ids[0], []byte(row.id)) {
+					t.Fatalf("%s/%q owners=%q want=%q err=%v", index, row.text, ids, row.id, err)
+				}
+				ids[0][0] = '!' // Returned IDs cannot alias retained index state.
+			}
+		}
+	}
+}
+
+func TestNativeTypedStringIndexesUnappliedReplay(t *testing.T) {
+	dir := t.TempDir()
+	cmd := exec.Command(os.Args[0], "-test.run=^TestNativeTypedStringIndexesLifecycle$", "-test.v")
+	cmd.Env = append(os.Environ(), "GOMAP_TYPED_INDEX_CRASH_DIR="+dir)
+	output, err := cmd.CombinedOutput()
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 97 || !bytes.Contains(output, []byte("TYPED INDEX UNAPPLIED basis=2 accepted=3")) || bytes.Contains(output, []byte("DATA RACE")) {
+		t.Fatalf("indexed typed child: %v\n%s", err, output)
+	}
+	t.Logf("child:\n%s", output)
+	opts := indexedSliceOptions(ProfileCommandWALDurable, dir)
+	a, b, _ := nativeTypedOpsRows("string")
+	a.text, b.text = b.text, a.text
+	for reopen := 0; reopen < 2; reopen++ {
+		before := workstats.Read().Replay
+		database, err := Open(opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		after := workstats.Read().Replay
+		if after.FramesApplied-before.FramesApplied != uint64(1-reopen) || after.FrameErrors != before.FrameErrors {
+			_ = database.Close()
+			t.Fatalf("indexed typed replay=%d: %+v -> %+v", reopen, before, after)
+		}
+		handle, err := database.NativeSemanticBackend()
+		if err != nil {
+			_ = database.Close()
+			t.Fatal(err)
+		}
+		manager := collections.NewCollectionManager(handle)
+		col, err := manager.OpenCollection("events")
+		if err != nil {
+			_ = manager.Close()
+			_ = database.Close()
+			t.Fatal(err)
+		}
+		checkNativeTypedStringIndexes(t, col, []nativeTypedOpsRow{a, b}, []string{"c"})
+		if indexedCRUDAppliedLSN(t, handle) != 3 || handle.CommandWALNextLSN() != 4 {
+			t.Fatal("indexed replay omitted/duplicated canonical identity")
+		}
+		if err := database.Checkpoint(); err != nil {
+			t.Fatal(err)
+		}
+		checkNativeTypedStringIndexes(t, col, []nativeTypedOpsRow{a, b}, []string{"c"})
+		if err := manager.Close(); err != nil {
+			t.Fatal(err)
+		}
+		cache, registry := database.cached, handle.ValueLogIdentityPinRegistry()
+		if err := database.Close(); err != nil {
+			t.Fatal(err)
+		}
+		requirePublicCOWFinalZero(t, cache)
+		if stats := registry.Stats(); stats.ActivePins != 0 || stats.ActiveIdentities != 0 {
+			t.Fatalf("indexed replay final registry: %+v", stats)
+		}
 	}
 }

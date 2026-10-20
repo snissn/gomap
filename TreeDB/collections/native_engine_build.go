@@ -239,7 +239,7 @@ func (b *nativeEngineBuild) materializeDomains(group nativeOrderedRootBuilder) e
 		}
 	}
 	for i, work := range b.domains {
-		if b.hasTypedCollection(b.built[i].collection) {
+		if b.hasTypedCollection(b.built[i].collection) && nativeTypedPhysicalDomain(b.built[i].name) {
 			continue
 		}
 		root, err := work.materialize(group)

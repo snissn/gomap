@@ -118,7 +118,7 @@ func nativeTypedDeltaHeaderCharge() uint64 {
 
 func nativeTypedMeta(meta CollectionMeta) bool {
 	cfg := meta.Options.ColumnStore
-	if cfg == nil || !cfg.Enabled || len(meta.Indexes) != 0 || len(cfg.Columns) == 0 || len(cfg.AggregateMetadata) != 0 || cfg.RetainedPayload != ColumnRetainedPayloadNonColumn {
+	if cfg == nil || !cfg.Enabled || len(cfg.Columns) == 0 || len(cfg.AggregateMetadata) != 0 || cfg.RetainedPayload != ColumnRetainedPayloadNonColumn {
 		return false
 	}
 	encoding := columnRetainedPayloadEffectiveEncoding(cfg)
@@ -145,6 +145,13 @@ func nativeTypedMeta(meta CollectionMeta) bool {
 				return false
 			}
 		} else if col.Owner != TypedStorageOwnerColumnPart {
+			return false
+		}
+	}
+	// The maintained direct typed producer indexes only declared, non-null
+	// String RowAsset values carried alongside non-column JSON residuals.
+	for _, index := range meta.Indexes {
+		if normalizedDocumentFormat(meta.Options.DocumentFormat) != DocumentFormatJSON || encoding != ColumnRetainedPayloadEncodingJSON || index.ValueType != IndexValueString || index.MultiKey || len(index.Components) != 0 || typedStringColumnIndex(cfg.Columns, index.Field) < 0 {
 			return false
 		}
 	}

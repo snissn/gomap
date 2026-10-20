@@ -96,7 +96,7 @@ borrowed-document callbacks retain their existing no-retention/no-reentry contra
 Eligible typed collections also route `InsertTypedBatchWithStats`,
 `ReplaceTypedBatch`, `UpsertTypedBatch`, `ReplaceTypedSourceByID` and `DeleteBatch`
 through the same transaction and immutable typed projection. Current eligibility
-requires top-level declared columns without secondary indexes or aggregate metadata:
+requires top-level declared columns without aggregate metadata:
 
 - One Int64, String or finite Float32Vector ColumnPart with noncolumn
   semantic-stream-v1 retained payload.
@@ -105,6 +105,19 @@ requires top-level declared columns without secondary indexes or aggregate metad
   column through the maintained typed projection or ordinary JSON input. Pending
   reads and physical reconstruction use the same complete schema; canonical typed
   frames retain every column in schema-name order.
+
+Noncolumn JSON typed collections may predeclare ordinary scalar string and
+unique indexes on their declared nonnullable String RowAsset fields. They use
+the maintained typed scalar encoder, final-batch unique ownership checks and
+the same immutable index-state/secondary domains as ordinary document writes.
+Atomic replacement can hand a unique value to another final row. Deletion removes
+both memberships; a conflict refuses before canonical assignment. Typed physical
+asset domains retain their original identities, while typed secondary namespaces
+start after those reserved domains; ordinary JSON/BSON namespaces are unchanged.
+Checkpoint and startup aggregate replay use the same final index plan and original
+physical build group. No residual full-document copy is introduced. Typed scalar
+index DDL remains unsupported, as do typed compound, multikey, text and vector
+indexes on this route. Typed writes remain durable-WAL-only.
 
 Column-dependent source, value, payload and reconstruction backing is admitted
 before allocation by the original transaction/read/build owner. Columns share the

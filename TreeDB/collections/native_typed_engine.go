@@ -156,6 +156,16 @@ func (b *nativeEngineBuild) hasTypedCollection(id uint64) bool {
 	return false
 }
 
+// Only these roots are produced by the maintained physical typed builder.
+// Scalar index/state roots use the original ordinary domain builder.
+func nativeTypedPhysicalDomain(name string) bool {
+	switch name {
+	case "primary", "column/manifest", "column/row-locator", "retained/semantic-stream-v1":
+		return true
+	}
+	return false
+}
+
 func (b *nativeEngineBuild) materializeTyped(group *backenddb.RootPublicationBuildGroup) error {
 	if len(b.typed) == 0 {
 		return nil
@@ -173,6 +183,13 @@ func (b *nativeEngineBuild) materializeTyped(group *backenddb.RootPublicationBui
 			if result.collection != input.collection {
 				continue
 			}
+			// The original handoff reads metadata from the first sorted domain;
+			// secondary indexes can sort before primary. Every result carries
+			// the same immutable physical metadata, including ordinary indexes.
+			result.typedMeta = &work.meta
+			if !nativeTypedPhysicalDomain(result.name) {
+				continue
+			}
 			found := false
 			for _, root := range work.roots {
 				if root.name == result.name {
@@ -184,7 +201,6 @@ func (b *nativeEngineBuild) materializeTyped(group *backenddb.RootPublicationBui
 			if !found {
 				return backenddb.ErrNativeSemanticUnsupported
 			}
-			result.typedMeta = &work.meta
 			binary.BigEndian.PutUint64(result.rootValue[:], result.root)
 		}
 		requirements, err := rootpublication.MergeStableLogicalObligationRequirements(b.typedRequirements, work.requirements)

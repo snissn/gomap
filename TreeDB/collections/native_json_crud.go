@@ -189,7 +189,7 @@ func (t *NativeJSONTxn) checkNativeUpdateUnique(g *nativeJSONTxnBinding, runtime
 				}
 				end := prefixEnd(prefix)
 				ns := g.namespace()
-				ns.Domain = uint64(runtimeIdx) + 4
+				ns.Domain = nativeJSONSecondaryDomainNumber(g.probe.meta, runtimeIdx)
 				if err = t.trackDependency(ns, txnhistory.RangeEffect, prefix, end); err != nil {
 					return err
 				}
