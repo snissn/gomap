@@ -47,11 +47,11 @@ changes until the project reaches a stable post-pre-alpha phase.
 This repo is a dev project; formats may evolve rapidly.
 
 Ordinary new TreeDB directories use the existing DATA durable-root format,
-including NoWAL and COW cache modes. The existing explicit
-`IndexPrimaryDirectory` option and persisted `index.db.primary` directories
-temporarily retain their original construction/recovery paths. Final refusal
-and removal follow consumer migration; no in-place representation converter
-or stable cross-version format guarantee is introduced.
+including NoWAL and COW cache modes. Explicit `IndexPrimaryDirectory` requests,
+persisted PRIMARY companion namespaces, and committed joint DATA/PRIMARY swap
+decisions fail closed with `ErrLegacyFormatRebuildRequired` before recovery
+writes or namespace cleanup. Rebuild those pre-alpha DB directories; no in-place
+representation converter or cross-version compatibility guarantee is provided.
 
 Rules of thumb:
 - Do not expect on-disk format compatibility across commits unless explicitly stated.

@@ -4391,13 +4391,13 @@ reserved child budget, observe the original DATA registry owner,
 and separately prove real maintenance publication can progress while producer
 headroom is exhausted. These controls do not activate unconverted collections.
 
-### Explicit no-WAL cached batch bypass (#5189)
+### Explicit cached batch sync in `no_wal_fast` (#5189)
 
 - `TestNoWALBatchWriteSyncSealsBeforeReturn`: both USER leaf placements, ordinary
   relaxed batch control, completed meta-sync witness, sealed visible root, forced
   pointer payload, and stable-image public reopen before source DB close.
 - `TestBatchWALOffBypassSyncBoundaryAndReuse`: ordinary/explicit/reused batches,
-  strict and relaxed low-level WAL-off options, and the retained backend-stream
+  strict and relaxed low-level durability options, and the retained backend-stream
   state; explicit sync uses checkpoint rather than backend sync under cache leases.
 - `TestBatchWALOffBypassSyncPropagatesWriteAndBoundaryErrors`: no checkpoint after
   write failure, propagated checkpoint failure, and original caller cleanup states.
