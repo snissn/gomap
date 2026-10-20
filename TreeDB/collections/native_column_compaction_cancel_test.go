@@ -65,7 +65,7 @@ func TestNativeColumnStoreCompactCancellationBoundary(t *testing.T) {
 				t.Fatal(err)
 			}
 			ids := [][]byte{[]byte("a"), []byte("b")}
-			retained := [][]byte{[]byte(`{"payload":"seed-a"}`), []byte(`{"payload":"seed-b"}`)}
+			retained := [][]byte{[]byte(`{"id":"a","payload":"seed-a"}`), []byte(`{"id":"b","payload":"seed-b"}`)}
 			if _, _, err := col.InsertTypedBatchWithStats(ids, retained, []TypedColumnBatch{{Name: "label", Strings: []string{"alpha", "beta"}}}); err != nil {
 				t.Fatal(err)
 			}
@@ -76,11 +76,11 @@ func TestNativeColumnStoreCompactCancellationBoundary(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			checkDocument := func(got []byte, label, payload string) {
+			checkDocument := func(got []byte, id, label, payload string) {
 				t.Helper()
 				var decoded map[string]string
-				if err := json.Unmarshal(got, &decoded); err != nil || len(decoded) != 2 || decoded["label"] != label || decoded["payload"] != payload {
-					t.Fatalf("document=%s want label=%q payload=%q: %v", got, label, payload, err)
+				if err := json.Unmarshal(got, &decoded); err != nil || len(decoded) != 3 || decoded["id"] != id || decoded["label"] != label || decoded["payload"] != payload {
+					t.Fatalf("document=%s want id=%q label=%q payload=%q: %v", got, id, label, payload, err)
 				}
 			}
 			checkHeld := func() {
@@ -89,13 +89,13 @@ func TestNativeColumnStoreCompactCancellationBoundary(t *testing.T) {
 				if err != nil || len(got.Results) != 2 || !got.Results[0].Found || !got.Results[1].Found {
 					t.Fatalf("held seed rows=%+v: %v", got.Results, err)
 				}
-				checkDocument(got.Results[0].Document, "alpha", "seed-a")
-				checkDocument(got.Results[1].Document, "beta", "seed-b")
+				checkDocument(got.Results[0].Document, "a", "alpha", "seed-a")
+				checkDocument(got.Results[1].Document, "b", "beta", "seed-b")
 			}
 			checkHeld()
 			replace := func(id, label, payload string) {
 				t.Helper()
-				doc, err := json.Marshal(map[string]string{"payload": payload})
+				doc, err := json.Marshal(map[string]string{"id": id, "payload": payload})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -174,7 +174,7 @@ func TestNativeColumnStoreCompactCancellationBoundary(t *testing.T) {
 					if err != nil || len(got) == 0 {
 						t.Fatalf("Get %s=%s: %v", row.id, got, err)
 					}
-					checkDocument(got, row.label, row.payload)
+					checkDocument(got, row.id, row.label, row.payload)
 				}
 			}
 			checkCurrent()
