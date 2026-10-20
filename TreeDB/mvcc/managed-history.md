@@ -51,6 +51,25 @@ repetitions per profile/layout with an exclusive measurement slot and preserve
 all raw samples. An unsupported baseline prune is reported as unsupported and
 cannot support a speedup claim.
 
+`TREEDB_HISTORY_MEASURE_DEPTH` optionally selects 16, 64 or 256 versions per
+key; omitted means the original depth-16 cell and its original timestamp arrival
+order. Each cell keeps 32 keys, 256-byte values and floor 12. Successful pruning
+must visit `32*depth` records, delete 352, retain `32*(depth-11)` and count
+`32*(depth-12)` above-floor versions. The old read at timestamp 8 still returns
+256 versions. The packet records these workload dimensions, the resolved
+profile and activation of the public COW native backend. This extends the same
+fresh-process Store measurement; it does not use the backend-only legacy
+benchmark or introduce another capture driver.
+
+Holding the deleted count fixed while increasing retained history exposes the
+cost of the current complete reverse scan, including value reads above the
+floor. Compare matching depths, profiles and pointer layouts with identical
+measurement source, ACK/drain boundaries and raw samples. Boundary retained
+heap and directory bytes remain observations, not a sustained retention or
+continuously sampled peak qualification. No skip-value optimization or durable
+resume cursor is justified by source complexity alone; corruption behavior and
+physical-byte accounting remain part of the ordinary algorithm.
+
 `TestManagedHistoryNativeDeferredCloseCustody` exercises the public Store and
 native two-collection/raw composite on all three production profiles. It proves
 actual persisted pointer versions, reads the held history after floor/prune and
