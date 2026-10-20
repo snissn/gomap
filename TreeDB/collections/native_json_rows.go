@@ -597,15 +597,13 @@ func (t *NativeJSONTxn) UpdateBatchInto(name string, items []UpdateBatchItem) (r
 		return nil, err
 	}
 	templateBatch := normalizedDocumentFormat(planner.options.documentFormat) == DocumentFormatTemplateV1
-	var changedRows []*nativeJSONRow
 	var changedIndices []int
 	if templateBatch {
-		for _, size := range [3]uint64{uint64(unsafe.Sizeof((*nativeJSONRow)(nil))), uint64(unsafe.Sizeof(int(0))), uint64(unsafe.Sizeof([]byte{}))} {
+		for _, size := range [2]uint64{uint64(unsafe.Sizeof(int(0))), uint64(unsafe.Sizeof([]byte{}))} {
 			if err = admitNativeInsertArray(len(items), size, func(n uint64) error { return t.admitStage(g, n) }); err != nil {
 				return nil, err
 			}
 		}
-		changedRows = make([]*nativeJSONRow, 0, len(items))
 		changedIndices = make([]int, 0, len(items))
 	}
 	for i, item := range owned {
@@ -643,7 +641,6 @@ func (t *NativeJSONTxn) UpdateBatchInto(name string, items []UpdateBatchItem) (r
 		ownedDocument := bytes.Clone(document)
 		if templateBatch {
 			docs = append(docs, commitlog.CollectionDocument{ID: row.id, Document: ownedDocument})
-			changedRows = append(changedRows, row)
 			changedIndices = append(changedIndices, i)
 			continue
 		}
@@ -663,7 +660,7 @@ func (t *NativeJSONTxn) UpdateBatchInto(name string, items []UpdateBatchItem) (r
 		return result, nil
 	}
 	if templateBatch {
-		// The input header backing was admitted with changedRows/indices above;
+		// The input header backing was admitted with the item indices above;
 		// the original envelope copies stay owned through canonical encoding.
 		inputs := make([][]byte, len(docs))
 		for i := range docs {
@@ -678,7 +675,13 @@ func (t *NativeJSONTxn) UpdateBatchInto(name string, items []UpdateBatchItem) (r
 			if err = t.validateDocument(g, document, runtimes, planner.options); err != nil {
 				return nil, updateBatchItemError(changedIndices[i], err)
 			}
-			changedRows[i].current = document
+			// Later touches may grow or shift the sorted row slice. Only the
+			// separately owned ID survives that movement, never a saved row pointer.
+			row := g.rows.find(docs[i].ID)
+			if row == nil {
+				return nil, backenddb.ErrNativeSemanticUnsupported
+			}
+			row.current = document
 			result[changedIndices[i]].Modified = true
 		}
 	}
