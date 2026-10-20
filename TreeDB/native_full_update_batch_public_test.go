@@ -11,6 +11,7 @@ import (
 // retained-document policy. Exercise both the physical and pending input cuts.
 func TestNativeFullRetainedUpdateBatchPublicLifecycle(t *testing.T) {
 	opts := indexedSliceOptions(ProfileCommandWALDurable, t.TempDir())
+	opts.ValueLog.Generational.Policy = ValueLogGenerationOff
 	database, err := Open(opts)
 	if err != nil {
 		t.Fatal(err)
