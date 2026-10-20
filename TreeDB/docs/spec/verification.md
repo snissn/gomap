@@ -4384,3 +4384,17 @@ checkpoint capacity recovery. Maintenance lifetime controls pressure the actual
 reserved child budget, observe the original distinct PRIMARY/registry owners,
 and separately prove real maintenance publication can progress while producer
 headroom is exhausted. These controls do not activate unconverted collections.
+
+### Explicit cached batch sync in `no_wal_fast` (#5189)
+
+- `TestNoWALBatchWriteSyncSealsBeforeReturn`: both USER leaf placements, ordinary
+  relaxed batch control, completed meta-sync witness, sealed visible root, forced
+  pointer payload, and stable-image public reopen before source DB close.
+- `TestBatchWALOffBypassSyncBoundaryAndReuse`: ordinary/explicit/reused batches,
+  strict and relaxed low-level durability options, and the retained backend-stream
+  state; explicit sync uses checkpoint rather than backend sync under cache leases.
+- `TestBatchWALOffBypassSyncPropagatesWriteAndBoundaryErrors`: no checkpoint after
+  write failure, propagated checkpoint failure, and original caller cleanup states.
+- `TestBatchWriteSync_WALOffSmallNonOverlappingSealsQueuedWrites` covers earlier
+  queued writes; `TestBatchWrite_WALOffLargeNonOverlappingBypassesAsPointers`
+  preserves ordinary bypass non-overlap and pointer-operation assertions.

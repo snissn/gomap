@@ -57,6 +57,11 @@ directory-sync, durable command-WAL, or sealed-root boundaries.
 - A command-WAL `*Sync` does not require a full backend `Checkpoint()` per
   write. A no-WAL production `*Sync` does require a sealed backend root.
 
+For `no_wal_fast`, cached `Batch.WriteSync` covers the batch and earlier queued
+writes even when it bypasses the cache or stores USER leaves in the index. A
+successful backend write followed by a failed seal returns an error; the
+already-visible mutation remains readable, without a durable acknowledgement.
+
 ### Collections and auxiliary assets
 
 Supported collection/catalog mutations and their dictionary/template,
