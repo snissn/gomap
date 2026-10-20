@@ -373,6 +373,7 @@ func runNativeClusterAdapterPreflightLifecycle(t *testing.T, format nativewire.D
 		if err != nil {
 			t.Fatal(err)
 		}
+		preflight(raw, false)
 		noop := apply(5, raw, 0)
 		if noop.MatchedCount != 1 {
 			t.Fatalf("BSONSet no-op matched=%d", noop.MatchedCount)
@@ -392,6 +393,7 @@ func runNativeClusterAdapterPreflightLifecycle(t *testing.T, format nativewire.D
 		if err != nil {
 			t.Fatal(err)
 		}
+		preflight(raw, false)
 		changed := apply(6, raw, 1)
 		if changed.MatchedCount != 1 {
 			t.Fatalf("BSONSet changed matched=%d", changed.MatchedCount)
@@ -412,6 +414,7 @@ func runNativeClusterAdapterPreflightLifecycle(t *testing.T, format nativewire.D
 		if err != nil {
 			t.Fatal(err)
 		}
+		preflight(raw, false)
 		missing := apply(7, raw, 0)
 		if missing.MatchedCount != 0 {
 			t.Fatalf("missing BSONSet matched=%d", missing.MatchedCount)

@@ -185,7 +185,7 @@ func (m *NativeJSONManager) mutateIndexes(name string, create *IndexDefinition, 
 		return nil, err
 	}
 	defer func() { resultErr = errors.Join(resultErr, read.Close()) }()
-	if read.meta.Options.ColumnStore != nil || normalizedDocumentFormat(read.meta.Options.DocumentFormat) != DocumentFormatJSON {
+	if read.meta.Options.ColumnStore != nil {
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
 	base, _ := read.capture.State().(*nativeEngineVersion)

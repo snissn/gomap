@@ -15017,6 +15017,9 @@ func (c *Collection) UpdateBatch(items []UpdateBatchItem) ([]UpdateBatchResult, 
 // present so callers can preserve ordered per-document update semantics. When
 // batched=false and err=nil, the returned results are zero-valued with len(items).
 func (c *Collection) UpdateBatchIfNoSecondaryUniqueIndexes(items []UpdateBatchItem) ([]UpdateBatchResult, bool, error) {
+	if c != nil && c.nativeJSON != nil {
+		return c.nativeUpdateBatchMode(items, updateBatchModeNoSecondaryUniqueIndexes, nil)
+	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
 	admissionState := c.lockCollectionCommandWALAdmission()
@@ -15036,6 +15039,9 @@ func (c *Collection) UpdateBatchIfNoSecondaryUniqueIndexes(items []UpdateBatchIt
 // for unique value mutations. When batched=false and err=nil, the returned
 // results are zero-valued with len(items).
 func (c *Collection) UpdateBatchIfNoSecondaryUniqueIndexChanges(items []UpdateBatchItem) ([]UpdateBatchResult, bool, error) {
+	if c != nil && c.nativeJSON != nil {
+		return c.nativeUpdateBatchMode(items, updateBatchModeNoSecondaryUniqueIndexChanges, nil)
+	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
 	admissionState := c.lockCollectionCommandWALAdmission()

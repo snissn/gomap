@@ -35,9 +35,22 @@ including distinct missing/null and canonical numeric equality. Raw BSON bytes
 remain authoritative; replacement preserves the original BSON `_id`. Default and
 explicit BSON fetches return owned BSON; an explicit request format must match
 the captured collection, and JSON projection remains unavailable for BSON.
-Compound and multikey indexes, array index values, text/vector index creation,
-template formats and BSONSet remain outside this route. Scalar index DDL remains
-JSON-only.
+Compound and multikey indexes, array index values, text/vector index creation
+and template formats remain outside this route. Eligible BSON collections also
+support top-level `UpdateBSONSet` and
+`UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges`, using the maintained BSON
+transformer and canonical full replacement documents. `_id`, dotted or invalid
+field names and malformed raw values retain their existing refusal contracts.
+The transformer borrows input fields only during the synchronous operation;
+retained documents and canonical frames own their output.
+
+The existing conditional `UpdateBatchIfNoSecondaryUniqueIndexes` and
+`UpdateBatchIfNoSecondaryUniqueIndexChanges` routes share the same captured
+metadata and old/new scalar encoder. A schema-based decline does not invoke
+callbacks. A unique-value-change decline returns zero-valued results and
+`batched=false`, without assigning a canonical identity or publishing private
+changes. BSONOrderedV2 compares its encoded numeric value, so changing the BSON
+integer width alone does not imply a unique-value change.
 
 Scalar JSON index reads support `FindByIndexRange`, `ScanIndexRange`,
 `FindDocumentsByIndexRange` and `ScanBorrowedDocumentsByIndexRange`. Ascending
@@ -202,7 +215,7 @@ gates pass. This document does not retire that path or claim a performance gain.
 
 ## Standalone scalar index DDL
 
-Activated ordinary JSON handles support `CreateIndex`, `DropIndex`,
+Activated ordinary JSON and BSON handles support `CreateIndex`, `DropIndex`,
 `DropIndexes` and `DropAllIndexes` through one immutable catalog transition.
 Creation backfills the complete captured primary cut, including pending rows,
 using the maintained scalar encoder and uniqueness checks. A duplicate unique
@@ -226,7 +239,7 @@ collection remains kind 200. Startup validates the prior schema/incarnation and
 performs the same backfill or name-based removal in the original single replay
 build group.
 The command contains no predicted LSN, physical roots or new schema epoch.
-Temporary schema/JSON construction backing is admitted before normalization and
+Temporary schema/document construction backing is admitted before normalization and
 encoding and released after synchronous publication drops its borrowed aliases.
 This is a bounded operation allowance, not a claim that Go's existing global
 JSON encoder cache disappears at receipt release.
@@ -234,9 +247,11 @@ JSON encoder cache disappears at receipt release.
 ## Deterministic document apply
 
 The deterministic collection apply producer routes eligible JSON/BSON catalog create,
-by-ID insert, replace and delete through the same native conditional/catalog
-preparation and original canonical publisher. Frames retain their existing
-singleton kinds and payload formats. Dependency validation precedes assignment;
+by-ID insert, replace, delete and top-level BSONSet through the same native
+conditional/catalog preparation and original canonical publisher. BSONSet stages
+the maintained transformer and emits the existing full-replacement update member;
+it does not introduce a patch frame or a new replay parser. Frames retain their
+existing singleton kinds and payload formats. Dependency validation precedes assignment;
 replace counts matched rows separately from byte-changing rows, and delete frames
 retain all requested IDs. A same-metadata create or empty mutation still appends
 its canonical frame and advances one logical successor.
@@ -245,8 +260,10 @@ This producer requests the original admitted exact seal receipt. It completes
 physical coverage before computing/storing the deterministic result and progress,
 while the request's sync flag retains its command-WAL durability meaning. The
 legacy append seam cannot preassign native intents; custom legacy append seams
-refuse on this route. Unsupported typed, BSONSet and colocated-vector deterministic
-mutations remain refused before assignment.
+refuse on this route. Unsupported typed and colocated-vector deterministic
+mutations remain refused before assignment. Legacy preassigned-intent BSONSet
+preparation/apply APIs remain unsupported on native handles: the live adapter
+must stage before assignment through the original publisher.
 
 External deterministic preflight uses the same identity-free native row staging
 and final unique-owner validation, then closes its captured transaction and all

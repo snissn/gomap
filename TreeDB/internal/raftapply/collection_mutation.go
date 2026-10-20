@@ -350,6 +350,12 @@ func (h *Harness) preflightCollectionMutationWithOptionsV1(mutation *collectionM
 		if err := validateCollectionMutationFormatV1(mutation, collection.Meta().Options.DocumentFormat); err != nil {
 			return nil, err
 		}
+		if mutation.command == nativewire.CommandUpdateBSONSet {
+			if err := manager.PreflightNativeCommandWALBSONSet(mutation.collection, mutation.bsonSetItems); err != nil {
+				return nil, codeCollectionApplyError(err)
+			}
+			return collection, nil
+		}
 		var kind commitlog.CommandKind
 		switch mutation.command {
 		case nativewire.CommandInsertBatch:

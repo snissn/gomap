@@ -54,6 +54,11 @@ func (m *CollectionManager) ApplyNativeCommandWALMutation(name string, format Do
 	if err != nil {
 		return result, err
 	}
+	return tx.commitNativeCommandWALMutation(name, kind, ids, docs, result, sync, observe)
+}
+
+func (tx *NativeJSONTxn) commitNativeCommandWALMutation(name string, kind commitlog.CommandKind, ids [][]byte, docs []commitlog.CollectionDocument, result NativeCommandWALApplyResult, sync bool, observe func(uint64) error) (NativeCommandWALApplyResult, error) {
+	var err error
 	g := tx.binding(name)
 	var payload []byte
 	var payloadFormat commitlog.PayloadFormat
@@ -123,6 +128,10 @@ func (m *CollectionManager) PreflightNativeCommandWALMutation(name string, forma
 	if _, _, err = tx.stageNativeCommandWALMutation(name, kind, ids, documents); err != nil {
 		return err
 	}
+	return tx.validateNativeCommandWALMutation()
+}
+
+func (tx *NativeJSONTxn) validateNativeCommandWALMutation() error {
 	tx.mu.Lock()
 	defer tx.mu.Unlock()
 	if tx.core == nil {

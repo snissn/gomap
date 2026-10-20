@@ -66,6 +66,10 @@ func (p *nativeJSONRows) touch(id []byte, read func([]byte) ([]byte, error), adm
 // nativeJSONFinalRows is the maintained pure old/new-effect boundary. It is
 // independent of command kind: inserts have no old state, deletes no new state.
 func nativeJSONFinalRows(name string, meta CollectionMeta, rows *nativeJSONRows, admit func(uint64) error, prepareScratch func([]byte) error) (*directBufferedInsertPlan, []preparedBatchUpdate, []indexRuntime, error) {
+	return nativeJSONFinalRowsWithMode(name, meta, rows, admit, prepareScratch, updateBatchModeAny)
+}
+
+func nativeJSONFinalRowsWithMode(name string, meta CollectionMeta, rows *nativeJSONRows, admit func(uint64) error, prepareScratch func([]byte) error, mode updateBatchMode) (*directBufferedInsertPlan, []preparedBatchUpdate, []indexRuntime, error) {
 	// Runtime descriptors are allocated before per-row parsing; admit them first.
 	headerCharge, err := nativeJSONIndexedPlanCharge(meta, nil, nil)
 	if err != nil {
@@ -149,6 +153,13 @@ func nativeJSONFinalRows(name string, meta CollectionMeta, rows *nativeJSONRows,
 			}
 		}
 		changed = append(changed, item)
+	}
+	if mode == updateBatchModeNoSecondaryUniqueIndexChanges {
+		if updateBatchChangesSecondaryUniqueIndex(runtimes, changed) {
+			return nil, nil, nil, errUpdateBatchChangesSecondaryUniqueIndex
+		}
+		// Conditional eligibility is decided before final uniqueness or publication.
+		return nil, changed, runtimes, nil
 	}
 	charge, stateEntries, roots, err := nativeJSONFinalPlanCharge(name, planner.options, runtimes, changed)
 	if err != nil {
