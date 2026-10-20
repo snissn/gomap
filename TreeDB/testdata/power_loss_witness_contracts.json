@@ -1249,7 +1249,7 @@
       "expected_typed_error": "none",
       "state": {
         "root_meta_generation": "selected_slot=1 commit_seq=4 slot0=3 slot1=4",
-        "freelist_generation": "generation=5",
+        "freelist_generation": "generation=8",
         "external_resource_ids_frontiers": "stable_image_tree_artifact=stable_image_tree.json manifest_entries=1",
         "namespace_generations": "stable_image_tree_artifact=stable_image_tree.json",
         "wal_lineage": "profile=no_wal_fast applied_lsn=0",

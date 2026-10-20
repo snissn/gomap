@@ -224,10 +224,14 @@ func assertStaleBuildRecoveryStats(t *testing.T, result powerlossreopen.Result) 
 	if result.CommitSeq != 4 || result.AppliedLSN != 0 {
 		t.Fatalf("recovered horizon=(commit=%d applied_lsn=%d), want (commit=4 applied_lsn=0)", result.CommitSeq, result.AppliedLSN)
 	}
-	// Fresh DATA starts at commit 1 with freelist generation 2 (the initial
-	// generation 1 is the allocator's input). Baseline SetSync, predecessor,
-	// and accepted retry each advance both once; rejected work and Checkpoint
-	// do not publish another generation. This differs from saved PRIMARY V5.
+	// Commit sequence and allocator generation are separate authorities. Fresh
+	// DATA starts at commit 1 / generation 2. Each individually sealed write
+	// prepares a visible generation and then a seal generation: baseline
+	// SetSync is commit 2 / generation 4, predecessor is 3 / 6, retry is 4 / 8.
+	// Rejected work has no acceptance; Checkpoint waits for the accepted prefix
+	// rather than adding a logical commit. The two recovery slots remain
+	// commits 3 and 4, with immediate parents 2 and 3 respectively.
+	t.Logf("fresh DATA recovery stats: %+v", result.Stats)
 	want := []struct {
 		key   string
 		value string
@@ -239,7 +243,7 @@ func assertStaleBuildRecoveryStats(t *testing.T, result powerlossreopen.Result) 
 		{key: "treedb.durable_root.commit_seq", value: "4"},
 		{key: "treedb.durable_root.slot0.commit_seq", value: "3"},
 		{key: "treedb.durable_root.slot1.commit_seq", value: "4"},
-		{key: "treedb.durable_root.freelist.generation", value: "5"},
+		{key: "treedb.durable_root.freelist.generation", value: "8"},
 		{key: "treedb.durable_root.manifest.entries", value: "1"},
 		{key: "treedb.durable_root.durable_seq", value: "4"},
 	}
