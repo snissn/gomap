@@ -52,6 +52,16 @@ def runtime_binding(binary: Path, command, label: str, environment: dict) -> dic
         raise ValueError("LD_AUDIT runtime inputs are not supported for identity binding")
     headers = command(label + "-elf", ["readelf", "--program-headers", "--wide", binary])
     interpreters = re.findall(r"\[Requesting program interpreter: (/[^\]\n]+)\]", headers)
+    executable = file_identity(binary)
+    executable.pop("path")  # The two measured copies intentionally have different names.
+    if not interpreters:
+        if (not re.search(r"(?m)^Elf file type is (?:EXEC|DYN)\b", headers)
+                or "Program Headers:" not in headers
+                or not re.search(r"(?m)^\s*LOAD\s+", headers)
+                or re.search(r"(?m)^\s*(?:INTERP|DYNAMIC)\s+", headers)):
+            raise ValueError("static ELF requires valid load headers without INTERP or DYNAMIC")
+        return {"linkage": "static", "executable": executable,
+                "interpreter": None, "libraries": []}
     if len(interpreters) != 1:
         raise ValueError("one dynamic ELF interpreter is required for runtime binding")
     interpreter = file_identity(Path(interpreters[0]))
@@ -68,9 +78,7 @@ def runtime_binding(binary: Path, command, label: str, environment: dict) -> dic
         libraries[identity["path"]] = identity
     if interpreter["path"] not in libraries:
         raise ValueError("ELF loader listing did not bind its interpreter")
-    executable = file_identity(binary)
-    executable.pop("path")  # The two measured copies intentionally have different names.
-    return {"executable": executable, "interpreter": interpreter,
+    return {"linkage": "dynamic", "executable": executable, "interpreter": interpreter,
             "libraries": list(libraries.values())}
 
 
@@ -79,7 +87,12 @@ def qualify_bytes(result: dict, before: dict, after: dict, *, quiet: bool) -> di
     if set(before) != {"baseline", "candidate"} or before != after:
         raise RuntimeError("measured runtime/input drift or missing bindings")
     for binding in before.values():
-        if (not binding.get("executable") or not binding.get("interpreter") or not binding.get("libraries")
+        runtime_present = ((binding.get("linkage") == "static"
+                            and "interpreter" in binding and binding["interpreter"] is None
+                            and binding.get("libraries") == [])
+                           or (binding.get("linkage") == "dynamic"
+                               and binding.get("interpreter") and binding.get("libraries")))
+        if (not binding.get("executable") or not runtime_present
                 or set(binding.get("inputs", {})) != {"harness_sha256", "runner_sha256", "environment_sha256", "cwd", "argv"}):
             raise RuntimeError("missing measured runtime/input bindings")
     equivalent = before["baseline"] == before["candidate"]

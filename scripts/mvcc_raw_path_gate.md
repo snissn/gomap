@@ -34,7 +34,11 @@ interpreter's `--list` under the measurement environment. Resolved loader/librar
 paths, SHA-256, sizes and loader enumeration order must remain identical. The kernel VDSO has no filesystem
 input and is excluded. Missing/unresolved inputs or drift fail closed; `LD_AUDIT`
 is unsupported because loader enumeration does not establish its complete inputs.
-This Linux gate requires `readelf` and the executable's dynamic loader.
+Static ELF executables are bound explicitly with no interpreter or libraries only
+when valid ELF load headers contain neither INTERP nor DYNAMIC. Their runtime is
+contained in the hashed executable; all invocation/input bindings still apply.
+Malformed headers or a dynamic segment without an interpreter fail closed.
+This Linux gate requires `readelf` and, for dynamic executables, their loader.
 
 The binding also covers the fixed benchmark argv, effective environment digest
 (values are not published), working directory, harness and runner. The workload

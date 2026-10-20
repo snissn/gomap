@@ -129,6 +129,35 @@ class PrimaryCostGateTests(unittest.TestCase):
                 with self.subTest(text=text), self.assertRaises((ValueError, OSError)):
                     gate.runtime_binding(binary, lambda *args: text, "invalid", {})
 
+    def test_static_elf_binding_requires_complete_headers_without_dynamic_inputs(self):
+        headers = "Elf file type is EXEC (Executable file)\nProgram Headers:\n  LOAD 0x0 0x0\n"
+        with tempfile.TemporaryDirectory() as directory:
+            binary = Path(directory) / "static.test"
+            binary.write_bytes(b"static executable contents")
+            calls = []
+            def command(label, argv):
+                calls.append(argv)
+                return headers
+            binding = gate.runtime_binding(binary, command, "static", {})
+            self.assertEqual(len(calls), 1)  # No dynamic loader is invoked.
+            self.assertEqual(binding, {"linkage": "static", "executable": {
+                "sha256": gate.digest(binary), "bytes": binary.stat().st_size},
+                "interpreter": None, "libraries": []})
+            binding["inputs"] = {"harness_sha256": "harness", "runner_sha256": "runner",
+                                 "environment_sha256": "environment", "cwd": str(binary.parent), "argv": []}
+            before = {"baseline": binding, "candidate": copy.deepcopy(binding)}
+            raw = gate.evaluate(self.rows())
+            raw["gates"]["bytes"], raw["measurement_pass"] = False, False
+            result = gate.qualify_bytes(raw, before, copy.deepcopy(before), quiet=True)
+            self.assertEqual(result["bytes_disposition"], "EQUIVALENT_NON_ATTRIBUTABLE")
+            self.assertFalse(result["measurement_pass"])
+            self.assertTrue(result["accepted"])
+            for invalid in (headers + "  DYNAMIC 0x0 0x0\n", headers + "  INTERP 0x0 0x0\n",
+                            headers.replace("  LOAD", "  NOTE"), headers.replace("Program Headers:", ""),
+                            headers.replace("Elf file type is EXEC", "unknown file type")):
+                with self.subTest(headers=invalid), self.assertRaisesRegex(ValueError, "static ELF"):
+                    gate.runtime_binding(binary, lambda *args: invalid, "invalid", {})
+
     @unittest.skipUnless(shutil.which("readelf") and Path("/bin/true").exists(), "Linux ELF tools required")
     def test_resolves_actual_loader_libraries_and_file_contents(self):
         def command(label, argv):
