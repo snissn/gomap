@@ -9,6 +9,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 	"maps"
 	"os"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -199,6 +200,9 @@ func TestValueLogRefCacheFormatBindsPhysicalPair(t *testing.T) {
 // originally populated them. Growth and a genuine closure scan use the same
 // registry owner after the original DATA generation has actually closed.
 func TestValueLogRefCountOwnerSurvivesDATAVacuum(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum unsupported on windows")
+	}
 	d, err := Open(Options{Dir: t.TempDir(), CommandWAL: true, DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatal(err)
@@ -280,6 +284,9 @@ func TestValueLogRefCountOwnerSurvivesDATAVacuum(t *testing.T) {
 // A failed last Close must keep the exact generation externally rooted in the
 // DB's original error receipt, alongside a later independent terminal failure.
 func TestGhostGenerationActualCloseFailureRetainsOriginalDBReceipt(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum unsupported on windows")
+	}
 	d, err := Open(Options{Dir: t.TempDir(), CommandWAL: true, DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatal(err)

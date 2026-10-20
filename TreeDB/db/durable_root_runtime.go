@@ -2319,7 +2319,7 @@ func (db *DB) executeDurableRootCandidateV1(candidate *durableRootPublishCandida
 		meta:        candidate.meta,
 		syncMeta: func() error {
 			return candidate.token.WithPinnedFile(func(file *os.File) error {
-				return candidate.idx.pager.SyncPagesWithStableFile(file, []uint64{candidate.target})
+				return candidate.idx.pager.SyncPagesWithStableFileBarrier(file, []uint64{candidate.target})
 			})
 		},
 		dir:       db.dir,
