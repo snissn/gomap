@@ -876,3 +876,19 @@ the paired process order before collection; retain every raw sample. Only
 `json/scalar` has an equivalent pre-feature native baseline. Other cells report
 candidate feature costs. Four iterations are developmental diagnostics, not full
 scaling qualification or Dgraph throughput acceptance.
+
+### Standalone vacuum M0 status capture
+
+`RUN_DIR=/mnt/fast4tb/<task>/vacuum-m0 scripts/treedb_vacuum_m0_capture.sh`
+collects the package benchmarks
+`BenchmarkVacuumIndexOnlineCollectionForegroundChurn/bytes_64x` and
+`BenchmarkPL06ExternalVacuumCollectionForegroundChurn/bytes_64x` in ten fresh,
+interleaved sample pairs. It emits `fixture.json`, `results.json`, `summary.md`
+and `raw/{legacy,public}-*.txt`; these are standalone Go benchmark artifacts,
+not benchprof profile inputs. The public PL06 rows are an admitted-paused vacuum
+status fixture: unchanged foreground mutations enter the real recorder before
+the same vacuum resumes. Their revised timings do not measure a simultaneously
+advancing rebuild and are not comparable to historical uncoordinated PL06 rows.
+Legacy timing/CV and all public classification gates remain unchanged. See
+[the M0 contract](../../TreeDB/docs/performance/index-vacuum-m0.md) for boundaries
+and the incremental #4519 scope.

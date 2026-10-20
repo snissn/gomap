@@ -780,6 +780,11 @@ func TestPublicCOWTxnHigherLevelBarrierFailsEligibility(t *testing.T) {
 
 func TestPublicCOWTxnRegistrationFailurePoisonsBeforeQueuedWriter(t *testing.T) {
 	db, _, blocked := cowPublicContractOpen(t, ProfileCommandWALDurable)
+	prefix, _, err := db.backend.PrivateCOWAcceptedPrefix(db.txnOwner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opening := prefix.LogicalFrontiers()
 	tx := cowTxnOpen(t, db)
 	if err := tx.Set([]byte("accepted"), []byte("v")); err != nil {
 		t.Fatal(err)
@@ -806,8 +811,10 @@ func TestPublicCOWTxnRegistrationFailurePoisonsBeforeQueuedWriter(t *testing.T) 
 	queued := make(chan error, 1)
 	go func() { queued <- db.Set([]byte("later"), []byte("v")) }()
 	releaseOnce.Do(func() { close(release) })
+	var commitErr error
 	select {
 	case err := <-first:
+		commitErr = err
 		if err == nil {
 			t.Fatal("ticket exhaustion succeeded")
 		}
@@ -826,6 +833,18 @@ func TestPublicCOWTxnRegistrationFailurePoisonsBeforeQueuedWriter(t *testing.T) 
 	}
 	if got := db.backend.CommandWALNextLSN(); got != 2 {
 		t.Fatalf("later command appended: nextLSN=%d", got)
+	}
+	if err := prefix.AcceptedError(); !errors.Is(err, commitErr) {
+		t.Errorf("accepted prefix failure=%v; want original commit error %v", err, commitErr)
+	}
+	if got := prefix.LogicalFrontiers(); got != opening {
+		t.Errorf("failed registration advanced frontiers: got %+v, opening %+v", got, opening)
+	}
+	if err := cowPublicContractComplete(t, blocked, "checkpoint after failed registration", db.Checkpoint); !errors.Is(err, ErrRecoveryRequired) {
+		t.Errorf("checkpoint failure=%v; want ErrRecoveryRequired", err)
+	}
+	if err := cowPublicContractComplete(t, blocked, "close after failed registration", db.Close); !errors.Is(err, commitErr) {
+		t.Errorf("close failure=%v; want original commit error %v", err, commitErr)
 	}
 }
 

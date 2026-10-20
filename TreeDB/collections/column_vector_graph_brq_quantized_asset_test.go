@@ -285,6 +285,10 @@ func TestColumnGraphBRQQuantizedScorerMatchesOracle2481(t *testing.T) {
 		t.Fatalf("nil scratch err=%v want scratch required", err)
 	}
 
+	if !enterIsolatedVectorAllocationGate(t, "brq-quantized-scorer-oracle") {
+		return
+	}
+
 	_, err = scorer.scoreOrdinals(ordinals, scores[:0], &scratch, &columnVectorGraphNativeSearchStats{})
 	if err != nil {
 		t.Fatalf("warm scoreOrdinals: %v", err)

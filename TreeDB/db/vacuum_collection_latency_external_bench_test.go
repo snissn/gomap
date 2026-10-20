@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -30,7 +31,13 @@ func BenchmarkPL06ExternalVacuumCollectionForegroundChurn(b *testing.B) {
 			foreground := pl06PublicChurnResult{latencies: make([]time.Duration, 0, b.N*pl06PublicChurnOperationsPerVacuum)}
 			var unsupported, concurrentRetries, unexpected, exposureMisses uint64
 			for i := 0; i < b.N; i++ {
-				round, vacuumErr, exposureMiss := runPL06PublicFixedChurnRound(database, i)
+				round, vacuumErr, exposureMiss := runPL06PublicFixedChurnRound(context.Background(), database, i)
+				b.Logf("M0 diagnostic round=%d vacuum_error_type=%T vacuum_error=%q concurrent_mutation=%t root_set_stale=%t wal_cleanup_proof_stale=%t unsupported=%t root_set_required=%t", i, vacuumErr, fmt.Sprint(vacuumErr),
+					errors.Is(vacuumErr, dbpkg.ErrVacuumConcurrentMutation),
+					errors.Is(vacuumErr, dbpkg.ErrRecoverableRootSetStale),
+					errors.Is(vacuumErr, dbpkg.ErrDurableWALCleanupProofStale),
+					errors.Is(vacuumErr, dbpkg.ErrVacuumUnsupported),
+					errors.Is(vacuumErr, dbpkg.ErrVacuumRecoverableRootSetRequired))
 				foreground.latencies = append(foreground.latencies, round.latencies...)
 				foreground.points += round.points
 				foreground.ranges += round.ranges
@@ -103,7 +110,7 @@ func TestPL06PublicVacuumRetryClassification(t *testing.T) {
 	}
 }
 
-func openPL06PublicChurnBenchmarkDB(b *testing.B, valueSize int) *dbpkg.DB {
+func openPL06PublicChurnBenchmarkDB(b testing.TB, valueSize int) *dbpkg.DB {
 	b.Helper()
 	database, err := dbpkg.Open(dbpkg.Options{
 		Dir:       b.TempDir(),
@@ -167,17 +174,54 @@ type pl06PublicChurnWorkerResult struct {
 	err       error
 }
 
-func runPL06PublicFixedChurnRound(database *dbpkg.DB, round int) (pl06PublicChurnResult, error, bool) {
+// This is an admitted-paused vacuum status fixture. Foreground writes enter the
+// real recorder after its base snapshot, then the SAME vacuum resumes with its
+// original validation. These timings do not certify advancing rebuild latency.
+// The existing package-global hook requires serial fixture execution.
+func runPL06PublicFixedChurnRound(ctx context.Context, database *dbpkg.DB, round int) (pl06PublicChurnResult, error, bool) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	baseSnapshotReady := make(chan struct{})
+	continueVacuum := make(chan struct{})
+	released := false
+	releaseVacuum := func() {
+		if !released {
+			close(continueVacuum)
+			released = true
+		}
+	}
+	defer releaseVacuum()
+	restoreHook := dbpkg.SetVacuumAfterBaseSnapshotHookForTesting(func() {
+		close(baseSnapshotReady)
+		select {
+		case <-continueVacuum:
+		case <-ctx.Done():
+		}
+	})
+	defer restoreHook()
+
 	vacuumDone := make(chan error, 1)
-	vacuumStarted := make(chan struct{})
 	vacuumFinished := make(chan struct{})
 	go func() {
-		close(vacuumStarted)
-		vacuumErr := database.VacuumIndexOnline(context.Background())
+		vacuumErr := database.VacuumIndexOnline(ctx)
 		close(vacuumFinished)
 		vacuumDone <- vacuumErr
 	}()
-	<-vacuumStarted
+	var vacuumErr error
+	vacuumReturned := false
+	baseCaptured := false
+	select {
+	case <-baseSnapshotReady:
+		baseCaptured = true
+	case vacuumErr = <-vacuumDone:
+		// Refusals and failures before admission still execute the exact fixed
+		// foreground work below, with an explicit exposure miss.
+		vacuumReturned = true
+	case <-ctx.Done():
+		releaseVacuum()
+		vacuumErr = <-vacuumDone
+		vacuumReturned = true
+	}
 
 	start := make(chan struct{})
 	workerDone := make(chan pl06PublicChurnWorkerResult, pl06PublicChurnWorkers)
@@ -197,8 +241,11 @@ func runPL06PublicFixedChurnRound(database *dbpkg.DB, round int) (pl06PublicChur
 			result.err = current.err
 		}
 	}
-	vacuumErr := <-vacuumDone
-	return result, vacuumErr, result.overlap == 0
+	releaseVacuum()
+	if !vacuumReturned {
+		vacuumErr = <-vacuumDone
+	}
+	return result, vacuumErr, !baseCaptured || result.overlap == 0
 }
 
 func runPL06PublicFixedChurnWorker(database *dbpkg.DB, round, worker int, start, vacuumFinished <-chan struct{}, done chan<- pl06PublicChurnWorkerResult) {
@@ -256,4 +303,53 @@ func pl06PublicChurnPercentile(latencies []time.Duration, percentile int) time.D
 		index = len(sorted)
 	}
 	return sorted[index-1]
+}
+
+func TestPL06PublicVacuumAdmittedTailFixture(t *testing.T) {
+	database := openPL06PublicChurnBenchmarkDB(t, 1024)
+	defer func() { _ = database.Close() }()
+	result, vacuumErr, exposureMiss := runPL06PublicFixedChurnRound(context.Background(), database, 0)
+	if result.err != nil || len(result.latencies) != 160 || result.points != 80 || result.ranges != 80 {
+		t.Fatalf("fixed foreground work: samples=%d points=%d ranges=%d err=%v", len(result.latencies), result.points, result.ranges, result.err)
+	}
+	if runtime.GOOS == "windows" {
+		if !errors.Is(vacuumErr, dbpkg.ErrVacuumUnsupported) || !exposureMiss || result.overlap != 0 {
+			t.Fatalf("unsupported refusal: err=%v miss=%t overlap=%d", vacuumErr, exposureMiss, result.overlap)
+		}
+	} else if vacuumErr != nil || exposureMiss || result.overlap != 160 {
+		t.Fatalf("admitted tail: err=%v miss=%t overlap=%d", vacuumErr, exposureMiss, result.overlap)
+	}
+	for worker := 0; worker < pl06PublicChurnWorkers; worker++ {
+		for operation := 0; operation < pl06PublicChurnOperationsPerWorker; operation++ {
+			if (worker+operation)%2 != 0 {
+				continue
+			}
+			sequence := worker*pl06PublicChurnOperationsPerWorker + operation
+			key := []byte(fmt.Sprintf("foreground/point/%06d", sequence%256))
+			want := fmt.Sprintf("value/%06d", sequence)
+			got, err := database.Get(key)
+			if err != nil || string(got) != want {
+				t.Fatalf("replayed key %q=(%q,%v) want %q", key, got, err, want)
+			}
+		}
+	}
+}
+
+func TestPL06PublicVacuumCanceledBeforeBaseSnapshot(t *testing.T) {
+	database := openPL06PublicChurnBenchmarkDB(t, 1024)
+	defer func() { _ = database.Close() }()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	result, vacuumErr, exposureMiss := runPL06PublicFixedChurnRound(ctx, database, 0)
+	wantErr := context.Canceled
+	if runtime.GOOS == "windows" {
+		// The existing platform refusal precedes context admission.
+		wantErr = dbpkg.ErrVacuumUnsupported
+	}
+	if !errors.Is(vacuumErr, wantErr) || !exposureMiss || result.overlap != 0 {
+		t.Fatalf("canceled refusal: err=%v want=%v miss=%t overlap=%d", vacuumErr, wantErr, exposureMiss, result.overlap)
+	}
+	if result.err != nil || len(result.latencies) != 160 || result.points != 80 || result.ranges != 80 {
+		t.Fatalf("drained foreground work: samples=%d points=%d ranges=%d err=%v", len(result.latencies), result.points, result.ranges, result.err)
+	}
 }

@@ -421,6 +421,9 @@ func (b *Batch) writeCOWPublication(syncWrite bool, unlock func()) error {
 				poisoner.MarkCommandWALRecoveryRequired()
 			}
 			b.cowState.receipt.Uncertain = true
+			// This assigned tail cannot be cancelled or installed. Wake prefix
+			// waiters with the same terminal failure before releasing the writer.
+			b.db.cow.prefix.PoisonAccepted(err)
 		}
 		p := b.cancelCOWPublication()
 		unlock()
