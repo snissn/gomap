@@ -2,6 +2,7 @@ package collections
 
 import (
 	"encoding/binary"
+	"fmt"
 	"reflect"
 	"unsafe"
 
@@ -371,7 +372,7 @@ func nativeTypedEnsureConstructible(e *nativeEngineVersion, basis *backenddb.Sna
 	}
 	limits := e.maintenance.Limits()
 	if total > limits.MaxInFlightBytes || total > limits.MaxTotalBytes {
-		return memtable.ErrCOWCapacity
+		return fmt.Errorf("collections: native typed construction total=%d typed=%d keys=%d domains=%d in_flight_limit=%d total_limit=%d: %w", total, typed, keys, domains, limits.MaxInFlightBytes, limits.MaxTotalBytes, memtable.ErrCOWCapacity)
 	}
 	return nil
 }

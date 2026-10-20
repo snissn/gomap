@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"reflect"
 	"unsafe"
 
@@ -249,20 +250,20 @@ func (c *Collection) nativeRebuildVectorGraph(name string) (out VectorIndexStatu
 		return out, err
 	}
 	if err = tx.admitStage(g, nativeSourceRequirementCapacityV2()); err != nil {
-		return out, err
+		return out, fmt.Errorf("collections: native graph initial stage: %w", err)
 	}
 	capacity, err := nativeVectorGraphCapacity(g.probe.meta, snap, manifest.baseRoot, tx.db.ColumnAssetRootDir(), def, h, func(n uint64) error { return tx.admitStage(g, n) })
 	if err != nil {
-		return out, err
+		return out, fmt.Errorf("collections: native graph source preflight: %w", err)
 	}
 	owned := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeVectorGraphRecipe{}))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeTypedRows{}))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowbtree.OwnedMapRefund{})))
 	lease, err := tx.core.NativeAllocator().AdmitNativeBytes(owned)
 	if err != nil {
-		return out, err
+		return out, fmt.Errorf("collections: native graph retained recipe: %w", err)
 	}
 	if err = tx.adoptNativeTyped(g, nil, nil, nil, ColumnPublishOperationInsert, capacity, lease); err != nil {
 		lease.Close()
-		return out, err
+		return out, fmt.Errorf("collections: native graph adopt recipe: %w", err)
 	}
 	schema := g.probe.collection.schema
 	schema.retain()
@@ -287,7 +288,7 @@ func (c *Collection) nativeRebuildVectorGraph(name string) (out VectorIndexStatu
 		if apply.result.LogicalInstalled {
 			err = commitAmbiguousError("graph rebuild sealed completion", err)
 		}
-		return out, err
+		return out, fmt.Errorf("collections: native graph commit logical_installed=%t consumed=%t constructor_bytes=%d: %w", apply.result.LogicalInstalled, apply.result.Consumed, capacity, err)
 	}
 	return c.nativeVectorGraphStatus(name)
 }
