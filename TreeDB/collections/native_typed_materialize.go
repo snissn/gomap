@@ -203,8 +203,9 @@ func nativeTypedValueCapacity(col ColumnStoreColumn, value columnDeclaredValue) 
 	}
 }
 
-// The original builder emits row/TCIM images, scalar row-owner sidecars,
-// one asset per aggregate spec, a header and one owned output-segment marker.
+// The original builder emits a row image, a TCIM image only for ColumnPart
+// owners, scalar row-owner sidecars, one asset per aggregate spec, a header
+// and one owned output-segment marker.
 // Sixteen simultaneous record/closure/mutation views each reserve four original
 // 1 KiB quota units for headers/maps plus captured schema/string backing.
 // The original single-output builder keeps all these assets in one segment.
@@ -217,7 +218,12 @@ func nativeTypedManifestAppendCapacity(meta CollectionMeta) (uint64, error) {
 		return 0, err
 	}
 	cfg := meta.Options.ColumnStore
-	records := uint64(4) // header, row image, TCIM, output-segment marker
+	records := uint64(3) // header, row image, output-segment marker
+	if columnStoreHasTypedColumnPartOwners(*cfg) {
+		if err = nativeTypedCheckedAdd(&records, 1); err != nil {
+			return 0, err
+		}
+	}
 	if err = nativeTypedCheckedAdd(&records, uint64(len(cfg.AggregateMetadata))); err != nil {
 		return 0, err
 	}
