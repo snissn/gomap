@@ -744,10 +744,17 @@ func TestProductionAuthorityExecutableCompositeOmissionMatrix(t *testing.T) {
 		}
 
 		t.Run(witness.name, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			// Compilation and startup share the existing parent package budget;
+			// the child test execution keeps its separate five-minute allowance.
+			deadline := time.Now().Add(30 * time.Minute)
+			if parentDeadline, ok := t.Deadline(); ok {
+				// Leave time to reap the child and report its original output.
+				deadline = parentDeadline.Add(-500 * time.Millisecond)
+			}
+			ctx, cancel := context.WithDeadline(context.Background(), deadline)
 			defer cancel()
 			command := exec.CommandContext(ctx, "go", "test", witness.packagePath,
-				"-run", "^"+regexp.QuoteMeta(witness.testName)+"$", "-count=1", "-v")
+				"-run", "^"+regexp.QuoteMeta(witness.testName)+"$", "-count=1", "-v", "-timeout=5m")
 			command.Env = append(os.Environ(), "GOWORK=off")
 			output, err := command.CombinedOutput()
 			if ctx.Err() != nil {
