@@ -5554,6 +5554,12 @@ func (db *DB) MarkValueLogZombie(id uint32) error {
 		observedSourceMissingIsError:     true,
 	}, true)
 	if err != nil {
+		// Current Sets omit zombies even while an older Snapshot retains their
+		// original File. Preserve idempotent retirement instead of reporting an
+		// orphan to cached-mode cleanup through its separate Manager.
+		if errors.Is(err, valuelog.ErrFileNotFound) && db.valueLogManager.IsTrackedZombie(id) {
+			return nil
+		}
 		if errors.Is(err, ErrRecoverableRootSetStale) {
 			return errors.Join(
 				fmt.Errorf("%w: file_id=%d", ErrValueLogZombieDeferred, id),
