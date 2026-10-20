@@ -57,7 +57,12 @@ func TestIterator_EmptyForegroundLeaseBoundsDebugAndShutdown(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					defer db.Close()
+					dbClosed := false
+					defer func() {
+						if !dbClosed {
+							_ = db.Close()
+						}
+					}()
 					if tc.queued {
 						if err := db.Set([]byte("b"), []byte("cached")); err != nil {
 							t.Fatal(err)
@@ -124,6 +129,7 @@ func TestIterator_EmptyForegroundLeaseBoundsDebugAndShutdown(t *testing.T) {
 					if view.refs.Load() != refs || db.activeForegroundIterators.Load() != 1 {
 						t.Fatal("empty route retained a memtable view or released the foreground lease")
 					}
+					dbClosed = true
 					if err := db.Close(); err != nil {
 						t.Fatal(err)
 					}
