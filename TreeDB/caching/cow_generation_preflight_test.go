@@ -19,7 +19,7 @@ func TestCOWAggregatePressureJoinsCheckpointBeforeProducer(t *testing.T) {
 		t.Run(fmt.Sprintf("held=%t", held), func(t *testing.T) {
 			dir := t.TempDir()
 			backendDir := filepath.Join(dir, "backend")
-			backend, err := backenddb.Open(backenddb.Options{Dir: backendDir, DisableBackgroundPrune: true})
+			backend, err := backenddb.Open(backenddb.Options{Dir: backendDir, DisableBackgroundPrune: true, ValueLog: backenddb.ValueLogOptions{PointerThreshold: 1 << 30}})
 			if err != nil {
 				t.Fatal(err)
 			}
