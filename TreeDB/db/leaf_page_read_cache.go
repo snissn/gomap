@@ -1,6 +1,7 @@
 package db
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"runtime"
@@ -750,6 +751,12 @@ type leafPageReadCacheState struct {
 }
 
 func (c *leafPageReadCache) getToWithState(ptr page.LeafLogPtr, dst []byte) ([]byte, bool, leafPageReadCacheState, bool) {
+	return c.getToWithRecordPolicy(ptr, dst, false)
+}
+
+// A bounded COW read may only reuse bytes whose record CRC was checked. Unlike
+// ordinary tree reads it cannot accept write-origin or unchecked read entries.
+func (c *leafPageReadCache) getToWithRecordPolicy(ptr page.LeafLogPtr, dst []byte, requireVerified bool) ([]byte, bool, leafPageReadCacheState, bool) {
 	if c == nil || c.disabled.Load() || len(c.slots) == 0 || len(c.buckets) == 0 {
 		return nil, false, leafPageReadCacheState{}, false
 	}
@@ -765,6 +772,11 @@ func (c *leafPageReadCache) getToWithState(ptr page.LeafLogPtr, dst []byte) ([]b
 		if !slot.valid || slot.key != key {
 			slot.mu.RUnlock()
 			continue
+		}
+		if requireVerified && (c.disabled.Load() || !slot.recordChecksumVerified || cap(dst) < len(slot.data)) {
+			slot.mu.RUnlock()
+			c.misses.Add(1)
+			return nil, false, leafPageReadCacheState{}, false
 		}
 		state := leafPageReadCacheState{RecordChecksumVerified: slot.recordChecksumVerified, CacheEntryPresent: true, PageChecksumVerified: slot.pageChecksumVerified.Load()}
 		if cap(dst) >= len(slot.data) {
@@ -783,6 +795,32 @@ func (c *leafPageReadCache) getToWithState(ptr page.LeafLogPtr, dst []byte) ([]b
 	}
 	c.misses.Add(1)
 	return nil, false, leafPageReadCacheState{}, false
+}
+
+// markRecordChecksumVerified upgrades only an existing byte-identical entry
+// after the original reader has fully verified and decoded the same record.
+// A concurrent eviction/rewrite or maintenance bypass simply loses the upgrade.
+// No slot/backing is created, and page-checksum state remains independent.
+func (c *leafPageReadCache) markRecordChecksumVerified(ptr page.LeafLogPtr, verifiedPage []byte) {
+	if c == nil || c.disabled.Load() || len(c.slots) == 0 || len(c.buckets) == 0 || len(verifiedPage) != page.PageSize {
+		return
+	}
+	key := newLeafPageReadCacheKey(ptr)
+	keyFP := leafPageReadCacheKeyFingerprint(key)
+	start, end := c.bucketRange(c.bucketIndex(key))
+	for i := start; i < end; i++ {
+		slot := &c.slots[i]
+		if slot.keyFP.Load() != keyFP {
+			continue
+		}
+		slot.mu.Lock()
+		if slot.valid && slot.key == key && !c.disabled.Load() && bytes.Equal(slot.data, verifiedPage) {
+			slot.recordChecksumVerified = true
+			slot.mu.Unlock()
+			return
+		}
+		slot.mu.Unlock()
+	}
 }
 
 func (c *leafPageReadCache) getViewLocked(ptr page.LeafLogPtr) ([]byte, *leafPageReadCacheSlot, bool) {

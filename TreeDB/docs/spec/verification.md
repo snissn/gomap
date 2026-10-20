@@ -148,6 +148,23 @@ reports the safe-build rank-search cost and zero key-conversion allocations;
 
 ## Immutable COW cache qualification
 
+
+`TestCOWPhysicalLeafCacheActivationAndCapturedCuts` exercises actual COW public
+point and owned successor reads of real logged leaves, then the same captured
+native entry path. Enabled/disabled and raw/Snappy fixtures retain old/current
+owned outputs across checkpoint; existing cache counters prove hits without new
+read-side stores. `TestCOWPhysicalLeafCacheRequiresVerifiedRecordAndInspection`
+requires the first write-origin entry to undergo full record CRC verification,
+keeps failed verification untrusted, checks exact captured file/identity and
+scratch, and preserves record inspection even after a verified cache hit.
+`TestLeafPageReadCacheVerifiedRecordUpgradeExistingOnly` covers byte mismatch,
+maintenance disablement, eviction, caller isolation and no miss population.
+The existing raw/native workspace lifetime and pointer checkpoint/maintenance
+controls continue to cover decoder policy, original admission, retained bases,
+Close and cleanup. These controls do not replace original public mixed-workload
+performance or durable-version correctness qualification.
+
+
 The [COW publication contract](cow-cache-publication.md) requires evidence from
 actual public `MemtableMode="cow_btree"` dispatch in all three production
 profiles. Internal foundation/read-owner checks alone do not qualify the mode.
