@@ -744,6 +744,16 @@ the operation timer. NoWAL ordinary ACK is volatile; a later explicit checkpoint
 does not change that timed contract. `TestCOWPublicRetainedHistoryFixture`
 checks these values and original-owner drain without qualifying performance.
 
+The standalone package benchmark `BenchmarkPruneVersions` in `TreeDB/mvcc`
+reports `inspected_retained_versions/op` and
+`inspected_retained_physical_bytes/op`. These count the inspected value anchor
+and first above-floor record per logical key; ordered reverse seek bypasses the
+remaining retained tail. They replace the earlier full-scan
+`retained_versions/op` and `retained_physical_bytes/op` labels. Historical raw
+results retain their original source and meaning. These Go benchmark metrics
+and optional profiles are standalone outputs, **not benchprof inputs** or
+unified-bench profile-dir artifacts; producer filenames and parsers are unchanged.
+
 `TestManagedHistoryMeasurement` in `TreeDB/mvcc` is a separate opt-in,
 one-cell public Store diagnostic. Supply a fresh database directory and JSON
 output path, a production profile, and a boolean pointer layout:
