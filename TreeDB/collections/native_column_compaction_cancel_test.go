@@ -118,11 +118,9 @@ func TestNativeColumnStoreCompactCancellationBoundary(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			engine := read.capture.State().(*nativeEngineVersion)
 			type memoryStats interface{ Stats() memtable.COWStats }
-			budget := engine.allocator.(memoryStats)
-			maintenance := engine.maintenance.(memoryStats)
-			engine = nil
+			budget := read.capture.NativeAllocator().(memoryStats)
+			maintenance := read.capture.NativeMaintenanceAllocator().(memoryStats)
 			if err := read.Close(); err != nil {
 				t.Fatal(err)
 			}
@@ -221,9 +219,8 @@ func TestNativeColumnStoreCompactCancellationBoundary(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			engine = read.capture.State().(*nativeEngineVersion)
-			budget, maintenance = engine.allocator.(memoryStats), engine.maintenance.(memoryStats)
-			engine = nil
+			budget = read.capture.NativeAllocator().(memoryStats)
+			maintenance = read.capture.NativeMaintenanceAllocator().(memoryStats)
 			if err := read.Close(); err != nil {
 				t.Fatal(err)
 			}
