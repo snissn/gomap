@@ -628,24 +628,36 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 			retErr = errors.Join(retErr, db.releaseCapturedRootResources(resources))
 		}
 	}()
-	defer func() {
-		if replacementRuntime == nil {
-			return
+	// Refused private rebuilds must stop and consume their original handoff
+	// while the replacement's physical metadata owner still admits it. Closing
+	// the replacement pager first would make TakeRecoveryHandoff fail ErrClosed.
+	releaseReplacementRuntime := func() error {
+		runtime := replacementRuntime
+		if runtime == nil {
+			return nil
 		}
-		handoff, handoffErr := stopRootPublicationRuntimeV1(replacementRuntime)
+		replacementRuntime = nil
+		handoff, handoffErr := stopRootPublicationRuntimeV1(runtime)
+		var cleanupErr error
 		if handoffErr != nil {
 			db.publicationPoisoned.Store(true)
-			retErr = errors.Join(retErr, ErrRecoveryRequired, handoffErr)
+			cleanupErr = errors.Join(ErrRecoveryRequired, handoffErr)
 		}
-		retErr = errors.Join(retErr, replacementRuntime.release())
+		cleanupErr = errors.Join(cleanupErr, runtime.release())
 		if err := handoff.ReleaseWithError(); err != nil {
 			db.retainOriginalCleanupError(err)
-			retErr = errors.Join(retErr, ErrRecoveryRequired, err)
+			cleanupErr = errors.Join(cleanupErr, ErrRecoveryRequired, err)
 		}
-	}()
+		return cleanupErr
+	}
+	defer func() { retErr = errors.Join(retErr, releaseReplacementRuntime()) }()
 	var replacementCleanupErr error
 	defer func() { retErr = errors.Join(retErr, replacementCleanupErr) }()
 	closeNewPager := func() error {
+		if err := releaseReplacementRuntime(); err != nil {
+			replacementCleanupErr = errors.Join(replacementCleanupErr, err)
+			return err // The retained original failure still owns its operands.
+		}
 		err := replacementGen.close()
 		if err != nil && replacementCleanupErr == nil {
 			replacementCleanupErr = err
@@ -1370,7 +1382,7 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 				return err
 			}
 			if changed || systemLeavesAppended {
-				stagedLeafGenerationView = newLeafGenerationView(stagedLeafManifest)
+				stagedLeafGenerationView = db.leafGenerationViewForManifest(stagedLeafManifest)
 				leafGenerationChanged = true
 			}
 		}
@@ -1483,7 +1495,7 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 			if olderReplacement != nil {
 				olderReplacement.resources = preparedOlder
 			}
-			stagedLeafGenerationView = newLeafGenerationView(persistedManifest)
+			stagedLeafGenerationView = db.leafGenerationViewForManifest(persistedManifest)
 		}
 		if hook := db.vacuumPagerSyncHook; hook != nil {
 			hook(vacuumPagerSyncFinal)
@@ -1498,7 +1510,7 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 				var persistedPrimaryManifest *leafGenerationManifest
 				selected, replacementPrimary, finalSyncErr = db.writeRebuiltPrimaryRootsV5(ctx, replacementGen, recoverableRoots, *olderReplacement, rebuiltDurableRootV1{meta: nextMeta, resources: durableResources}, newPath, &persistedPrimaryManifest, sharedBase)
 				if persistedPrimaryManifest != nil {
-					stagedLeafGenerationView = newLeafGenerationView(persistedPrimaryManifest)
+					stagedLeafGenerationView = db.leafGenerationViewForManifest(persistedPrimaryManifest)
 					leafGenerationChanged = true
 				}
 			}
@@ -1522,7 +1534,7 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 		}
 		var selectionErr error
 		if replacementGen.primary == nil {
-			selected, selectionErr = selectDurableRootV1(newPager, newPager.PageCount(), db.validateDurableDependencyManifestV1, db.dependencyDirectoryValidatorV2(replacementGen))
+			selected, selectionErr = selectDurableRootWithMetadataV1(newPager, newPager.PageCount(), db.valueLogIdentityPins.MetadataOwner(), db.validateDurableDependencyManifestV1, db.dependencyDirectoryValidatorV2(replacementGen))
 		}
 		if selectionErr != nil {
 			unlockCutover(false)
@@ -1788,7 +1800,7 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 			db.valueLogRefTracker.invalidate()
 			valueLogRefTrackerErr = err
 		}
-		db.publishSnapshotView(newGen, newState, db.valueLogManager)
+		db.publishSnapshotView(newGen, newState, db.valueLogManager, nil)
 		db.rootPublication = replacementRuntime
 		replacementRuntime = nil
 		replacementPrimary = nil

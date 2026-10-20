@@ -34,20 +34,25 @@ type cowMaintenanceLifetimeBackend struct {
 	captures                                   atomic.Int64
 }
 
-func (b *cowMaintenanceLifetimeBackend) exhaustInFlight() {
+// Pressure targets the exact original admission owner. Producer occupancy must
+// not consume the reserved maintenance lane; refusal controls fill that child.
+func (b *cowMaintenanceLifetimeBackend) exhaustBudget(budget *memtable.COWBudget) {
 	b.t.Helper()
-	stats, limits := b.cache.cow.budget.Stats(), b.cache.cow.budget.Limits()
+	stats, limits := budget.Stats(), budget.Limits()
 	overhead := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
-	if stats.ReservedBytes+overhead >= limits.MaxInFlightBytes {
+	available := min(limits.MaxInFlightBytes-stats.ReservedBytes, limits.MaxTotalBytes-stats.TotalBytes,
+		limits.MaxRetiredBytes-stats.HistoryBytes-stats.ReservedBytes-stats.DeferredBytes)
+	if available <= overhead {
 		b.t.Fatal("fixture already has no admission headroom")
 	}
-	lease, err := b.cache.cow.budget.AcquireExternal(limits.MaxInFlightBytes - stats.ReservedBytes - overhead)
+	lease, err := budget.AcquireExternal(available - overhead)
 	if err != nil {
 		b.t.Fatalf("real external reservation: %v", err)
 	}
 	b.pressure = lease
-	if got := b.cache.cow.budget.Stats().ReservedBytes; got != limits.MaxInFlightBytes {
-		b.t.Fatalf("reserved=%d want finite limit%d", got, limits.MaxInFlightBytes)
+	after := budget.Stats()
+	if after.ReservedBytes != limits.MaxInFlightBytes && after.TotalBytes != limits.MaxTotalBytes && after.HistoryBytes+after.ReservedBytes+after.DeferredBytes != limits.MaxRetiredBytes {
+		b.t.Fatalf("reservation did not reach an actual finite boundary: %+v", after)
 	}
 }
 
@@ -58,7 +63,7 @@ func (b *cowMaintenanceLifetimeBackend) AcquireSnapshotWithAllocationAdmission(a
 	}
 	if err == nil && b.armed && b.installPressure && b.accepted.Load() > 0 {
 		b.armed = false
-		b.exhaustInFlight() // Snapshot admitted; the following cut admission must refuse.
+		b.exhaustBudget(b.cache.cow.maintenance) // Snapshot admitted; the following cut admission must refuse.
 	}
 	return snapshot, err
 }
@@ -96,7 +101,7 @@ func (b *cowMaintenanceLifetimeBackend) VacuumIndexOnline(ctx context.Context) e
 	b.accepted.Add(1)
 	if !b.installPressure {
 		b.armed = false
-		b.exhaustInFlight()
+		b.exhaustBudget(b.cache.cow.maintenance)
 	}
 	return errCOWMaintenanceAcceptedReport
 }
@@ -116,7 +121,7 @@ func (b *cowMaintenanceLifetimeBackend) compactIndexWithAcceptedReport() error {
 	b.accepted.Add(1)
 	if !b.installPressure {
 		b.armed = false
-		b.exhaustInFlight()
+		b.exhaustBudget(b.cache.cow.maintenance)
 	}
 	return errCOWMaintenanceAcceptedReport
 }
@@ -460,5 +465,53 @@ func TestCOWMaintenancePostRefreshSettlementKeepsFenceAndOldCut(t *testing.T) {
 				t.Fatal("old basis did not drain with its actual last cut")
 			}
 		})
+	}
+}
+
+func TestCOWMaintenanceReservedHeadroomSurvivesProducerExhaustion(t *testing.T) {
+	cached, backend := cowMaintenanceLifetimeFixture(t)
+	value := bytes.Repeat([]byte("retained-pointer/"), 512)
+	if err := cached.Set([]byte("a"), value); err != nil {
+		t.Fatal(err)
+	}
+	if err := cached.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	old, err := cached.acquireCOWSnapshotWithError()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer old.Close()
+	basis := cached.cow.cut.basis
+	before := backend.DB.Stats()
+	backend.exhaustBudget(cached.cow.budget)
+	// The actual backend publishes a new index generation. Snapshot retention
+	// and complete-cut installation must use the original reserved child even
+	// though no producer external admission remains.
+	if err = cached.RunBackendMaintenance(backend.DB.CompactIndex); err != nil {
+		t.Fatalf("maintenance under producer exhaustion: %v", err)
+	}
+	after := backend.DB.Stats()
+	if before["treedb.root_page"] == after["treedb.root_page"] || before["treedb.commit_seq"] == after["treedb.commit_seq"] || cached.cow.cut.basis == basis || cached.cow.refreshRequired.Load() {
+		t.Fatal("maintenance did not publish and install its actual successor")
+	}
+	backend.pressure.Close()
+	backend.pressure = nil
+	for _, snapshot := range []*Snapshot{old, cached.AcquireSnapshot()} {
+		if snapshot == nil {
+			t.Fatal("current view unavailable after maintenance")
+		}
+		got, readErr := snapshot.Get([]byte("a"))
+		if readErr != nil || !bytes.Equal(got, value) {
+			t.Fatalf("retained pointer after maintenance: len=%d err=%v", len(got), readErr)
+		}
+		if snapshot != old {
+			if err = snapshot.Close(); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err = cached.Set([]byte("resumed"), []byte("ok")); err != nil {
+		t.Fatal(err)
 	}
 }

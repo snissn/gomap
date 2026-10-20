@@ -31,6 +31,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -1537,13 +1538,52 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	return db.valueLogRewriteOnline(ctx, opts, true)
 }
 
-func (db *DB) valueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnlineOptions, lockMaintenance bool) (stats ValueLogRewriteStats, err error) {
+// ValueLogRewriteOnlineForPrivateCOW runs only the maintained equivalent pointer
+// rewrite under the cache's original maintenance fence. The owner is borrowed;
+// it grants no authority to application callbacks or other physical publishers.
+func (db *DB) ValueLogRewriteOnlineForPrivateCOW(owner *transactionowner.Owner, ctx context.Context, opts ValueLogRewriteOnlineOptions) (ValueLogRewriteStats, error) {
+	if db == nil || owner == nil || owner != db.privateCOWOwner {
+		return ValueLogRewriteStats{}, ErrNativeSemanticUnsupported
+	}
+	if err := db.CheckStorageMaintenanceReady(); err != nil {
+		return ValueLogRewriteStats{}, err
+	}
+	// Before activation the original unowned-operation counter prevents activation
+	// from crossing this entire operation, including its inter-batch gaps.
+	tracked := false
+	if !db.nativeSemanticActive.Load() {
+		var err error
+		tracked, err = db.beginSemanticBackendOperation(nil, false)
+		if err != nil {
+			return ValueLogRewriteStats{}, err
+		}
+	}
+	defer db.endSemanticBackendOperation(tracked)
+	return db.valueLogRewriteOnlineWithOwner(ctx, opts, true, owner)
+}
+
+func (db *DB) valueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnlineOptions, lockMaintenance bool) (ValueLogRewriteStats, error) {
+	return db.valueLogRewriteOnlineWithOwner(ctx, opts, lockMaintenance, nil)
+}
+
+func (db *DB) valueLogRewriteOnlineWithOwner(ctx context.Context, opts ValueLogRewriteOnlineOptions, lockMaintenance bool, owner *transactionowner.Owner) (stats ValueLogRewriteStats, err error) {
 	if db == nil {
 		return stats, fmt.Errorf("missing db")
 	}
 	if db.readOnly {
 		return stats, ErrReadOnly
 	}
+	if err := db.CheckStorageMaintenanceReady(); err != nil {
+		return stats, err
+	}
+	if owner != nil && owner != db.privateCOWOwner {
+		return stats, ErrNativeSemanticUnsupported
+	}
+	tracked, admissionErr := db.beginSemanticBackendOperation(owner, false)
+	if admissionErr != nil {
+		return stats, admissionErr
+	}
+	defer db.endSemanticBackendOperation(tracked)
 	if err := db.commandWALPoisonedError(); err != nil {
 		return stats, err
 	}
@@ -1555,6 +1595,9 @@ func (db *DB) valueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	if lockMaintenance {
 		db.maintenanceMu.Lock()
 		defer db.maintenanceMu.Unlock()
+	}
+	if owner != nil && owner != db.privateCOWOwner {
+		return stats, ErrNativeSemanticUnsupported
 	}
 	if err := db.CheckStorageMaintenanceReady(); err != nil {
 		return stats, err
@@ -1902,7 +1945,7 @@ func (db *DB) valueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		if registerErr != nil {
 			return registerErr
 		}
-		if err := db.applyRewriteSwapBatchToMaintenanceRoot(root, collectionState, swaps, opts.SyncEachBatch); err != nil {
+		if err := db.applyRewriteSwapBatchToMaintenanceRootWithOwner(root, collectionState, swaps, opts.SyncEachBatch, owner); err != nil {
 			return err
 		}
 		candidates = candidates[:0]
@@ -2454,11 +2497,15 @@ func cloneCollectionRootDescriptorAliases(aliases [][]byte) [][]byte {
 }
 
 func (db *DB) applyRewriteSwapBatch(swaps []rewriteSwap, sync bool) error {
+	return db.applyRewriteSwapBatchWithOwner(swaps, sync, nil)
+}
+
+func (db *DB) applyRewriteSwapBatchWithOwner(swaps []rewriteSwap, sync bool, owner *transactionowner.Owner) error {
 	if len(swaps) == 0 {
 		return nil
 	}
 	for attempt := 0; attempt < optimisticWriteMaxAttempts; attempt++ {
-		committed, err := db.applyRewriteSwapBatchOptimistic(swaps, sync)
+		committed, err := db.applyRewriteSwapBatchOptimisticWithOwner(swaps, sync, owner)
 		if err != nil {
 			return err
 		}
@@ -2466,23 +2513,31 @@ func (db *DB) applyRewriteSwapBatch(swaps []rewriteSwap, sync bool) error {
 			return nil
 		}
 	}
-	return db.applyRewriteSwapBatchSerialized(swaps, sync)
+	return db.applyRewriteSwapBatchSerializedWithOwner(swaps, sync, owner)
 }
 
 func (db *DB) applyRewriteSwapBatchToMaintenanceRoot(root maintenanceRoot, collectionState *collectionRewriteRootState, swaps []rewriteSwap, sync bool) error {
+	return db.applyRewriteSwapBatchToMaintenanceRootWithOwner(root, collectionState, swaps, sync, nil)
+}
+
+func (db *DB) applyRewriteSwapBatchToMaintenanceRootWithOwner(root maintenanceRoot, collectionState *collectionRewriteRootState, swaps []rewriteSwap, sync bool, owner *transactionowner.Owner) error {
 	switch root.kind {
 	case maintenanceRootUser:
-		return db.applyRewriteSwapBatch(swaps, sync)
+		return db.applyRewriteSwapBatchWithOwner(swaps, sync, owner)
 	case maintenanceRootSystem:
-		return db.applyRewriteSwapBatchToSystemRoot(swaps, sync)
+		return db.applyRewriteSwapBatchToSystemRootWithOwner(swaps, sync, owner)
 	case maintenanceRootCollection:
-		return db.applyRewriteSwapBatchToCollectionRoot(collectionState, swaps, sync)
+		return db.applyRewriteSwapBatchToCollectionRootWithOwner(collectionState, swaps, sync, owner)
 	default:
 		return fmt.Errorf("vlog-rewrite: unknown maintenance root kind %d", root.kind)
 	}
 }
 
 func (db *DB) applyRewriteSwapBatchToSystemRoot(swaps []rewriteSwap, sync bool) (retErr error) {
+	return db.applyRewriteSwapBatchToSystemRootWithOwner(swaps, sync, nil)
+}
+
+func (db *DB) applyRewriteSwapBatchToSystemRootWithOwner(swaps []rewriteSwap, sync bool, owner *transactionowner.Owner) (retErr error) {
 	if len(swaps) == 0 {
 		return nil
 	}
@@ -2532,7 +2587,7 @@ func (db *DB) applyRewriteSwapBatchToSystemRoot(swaps []rewriteSwap, sync bool) 
 	}()
 	post, err := db.finalizeCommitReleasingRootSerialization(
 		userRoot, newSystemRoot, retired, sync, metrics, touched,
-		systemOpts.outerLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{},
+		systemOpts.outerLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{privateCOWEquivalentRewriteOwner: owner},
 		baseSeq,
 		func() {
 			db.writeMu.Unlock()
@@ -2550,6 +2605,10 @@ func (db *DB) applyRewriteSwapBatchToSystemRoot(swaps []rewriteSwap, sync bool) 
 }
 
 func (db *DB) applyRewriteSwapBatchToCollectionRoot(target *collectionRewriteRootState, swaps []rewriteSwap, sync bool) (retErr error) {
+	return db.applyRewriteSwapBatchToCollectionRootWithOwner(target, swaps, sync, nil)
+}
+
+func (db *DB) applyRewriteSwapBatchToCollectionRootWithOwner(target *collectionRewriteRootState, swaps []rewriteSwap, sync bool, owner *transactionowner.Owner) (retErr error) {
 	if len(swaps) == 0 {
 		return nil
 	}
@@ -2632,7 +2691,7 @@ func (db *DB) applyRewriteSwapBatchToCollectionRoot(target *collectionRewriteRoo
 	if newCollectionRoot == collectionRoot {
 		post, err := db.finalizeCommitReleasingRootSerialization(
 			userRoot, systemRoot, retired, sync, metrics, touched,
-			rootOpts.outerLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{},
+			rootOpts.outerLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{privateCOWEquivalentRewriteOwner: owner},
 			baseSeq,
 			func() {
 				db.writeMu.Unlock()
@@ -2667,7 +2726,7 @@ func (db *DB) applyRewriteSwapBatchToCollectionRoot(target *collectionRewriteRoo
 	forceValueLogRefresh := rootOpts.outerLeavesInValueLog || systemOpts.outerLeavesInValueLog
 	post, err := db.finalizeCommitReleasingRootSerialization(
 		userRoot, newSystemRoot, retired, sync, metrics, touched,
-		forceValueLogRefresh, vlogRefDelta, nil, nil, finalizeCommitOptions{},
+		forceValueLogRefresh, vlogRefDelta, nil, nil, finalizeCommitOptions{privateCOWEquivalentRewriteOwner: owner},
 		baseSeq,
 		func() {
 			db.writeMu.Unlock()
@@ -2783,6 +2842,10 @@ func collectionRootDescriptorKeyMatches(got, primary []byte, aliases [][]byte) b
 }
 
 func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (committed bool, retErr error) {
+	return db.applyRewriteSwapBatchOptimisticWithOwner(swaps, sync, nil)
+}
+
+func (db *DB) applyRewriteSwapBatchOptimisticWithOwner(swaps []rewriteSwap, sync bool, owner *transactionowner.Owner) (committed bool, retErr error) {
 	db.writeMu.RLock()
 	writeReadLocked := true
 	idx := db.idx.Load()
@@ -2800,10 +2863,16 @@ func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (c
 	if state != nil {
 		vlogSet = state.ValueLogSet
 	}
-	db.acquireStateValueLogSetLocked(state)
-	regID := idx.registry.Register(baseSeq)
+	regID, registerErr := idx.registry.Register(baseSeq)
+	if registerErr == nil {
+		db.acquireStateValueLogSetLocked(state)
+	}
 	db.mu.RUnlock()
 	db.rootReuseMu.RUnlock()
+	if registerErr != nil {
+		db.writeMu.RUnlock()
+		return false, registerErr
+	}
 	defer idx.registry.Unregister(regID)
 	defer func() {
 		if writeReadLocked {
@@ -2887,9 +2956,10 @@ func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (c
 		newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments,
 		db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil,
 		finalizeCommitOptions{
-			skipPrePublishFlush:      true,
-			expectedBaseCommitSeq:    baseSeq,
-			hasExpectedBaseCommitSeq: true,
+			privateCOWEquivalentRewriteOwner: owner,
+			skipPrePublishFlush:              true,
+			expectedBaseCommitSeq:            baseSeq,
+			hasExpectedBaseCommitSeq:         true,
 			recordVacuumMutation: func() {
 				db.vacuum.RecordEntries(entries)
 			},
@@ -2921,6 +2991,10 @@ func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (c
 }
 
 func (db *DB) applyRewriteSwapBatchSerialized(swaps []rewriteSwap, sync bool) (retErr error) {
+	return db.applyRewriteSwapBatchSerializedWithOwner(swaps, sync, nil)
+}
+
+func (db *DB) applyRewriteSwapBatchSerializedWithOwner(swaps []rewriteSwap, sync bool, owner *transactionowner.Owner) (retErr error) {
 	db.writeMu.Lock()
 	writeLocked := true
 	defer func() {
@@ -2944,10 +3018,15 @@ func (db *DB) applyRewriteSwapBatchSerialized(swaps []rewriteSwap, sync bool) (r
 	if state != nil {
 		vlogSet = state.ValueLogSet
 	}
-	db.acquireStateValueLogSetLocked(state)
-	regID := idx.registry.Register(baseSeq)
+	regID, registerErr := idx.registry.Register(baseSeq)
+	if registerErr == nil {
+		db.acquireStateValueLogSetLocked(state)
+	}
 	db.mu.RUnlock()
 	db.rootReuseMu.RUnlock()
+	if registerErr != nil {
+		return registerErr
+	}
 	defer idx.registry.Unregister(regID)
 	defer func() { retErr = errors.Join(retErr, db.releaseStateValueLogSet(state)) }()
 	db.valueLogStateCaptured("rewrite-user-serialized", state)
@@ -2988,6 +3067,7 @@ func (db *DB) applyRewriteSwapBatchSerialized(swaps []rewriteSwap, sync bool) (r
 	post, err := db.finalizeCommitReleasingRootSerialization(
 		newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments,
 		db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{
+			privateCOWEquivalentRewriteOwner: owner,
 			recordVacuumMutation: func() {
 				db.vacuum.RecordEntries(entries)
 			},

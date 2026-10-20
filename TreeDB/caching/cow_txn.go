@@ -117,7 +117,7 @@ func (tx *ConditionalTxn) cowCommit(sync bool) (err error) {
 			err = closeErr
 		}
 	}()
-	if len(tx.batch.entries) == 0 {
+	if len(tx.batch.entries) == 0 && tx.batch.cowState.native == nil {
 		// Read-only views serialize at capture. Explicit sync retains its boundary.
 		if sync {
 			return tx.cow.write(tx.batch, true)

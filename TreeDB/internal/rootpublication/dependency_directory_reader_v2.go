@@ -29,11 +29,10 @@ type DependencyDirectoryV2 struct {
 	release         func()
 	// Selected PRIMARY construction owns these allocations independently of
 	// the physical token rope. Last Retain/Release also joins active reads.
-	metadata         *retainedalloc.Owner
-	metadataCharge   uint64
-	ownedRelease     func() (disposed bool, err error)
-	ownedReleaseWork DependencyDirectoryReleaseProviderV6
-	releaseNative    bool
+	metadata             *retainedalloc.Owner
+	metadataCharge       uint64
+	ownedRelease         func() (disposed bool, err error)
+	ownedReleaseProvider DependencyDirectoryReleaseProviderV6
 }
 
 func NewDependencyDirectoryV2(p *pager.Pager, ref DependencyDirectoryRefV2, totalPages uint64, release func()) (*DependencyDirectoryV2, error) {
@@ -51,7 +50,7 @@ func newDependencyDirectoryV2(p *pager.Pager, ref DependencyDirectoryRefV2, tota
 			return nil, err
 		}
 	}
-	directory := &DependencyDirectoryV2{ref: ref, tree: tree.NewWithPageLimit(p, nil, ref.RootPageID, totalPages), release: release, metadata: metadata, metadataCharge: charge, ownedReleaseWork: provider}
+	directory := &DependencyDirectoryV2{ref: ref, tree: tree.NewWithPageLimit(p, nil, ref.RootPageID, totalPages), release: release, metadata: metadata, metadataCharge: charge, ownedReleaseProvider: provider}
 	directory.refs.Store(1)
 	return directory, nil
 }
@@ -122,14 +121,14 @@ func (directory *DependencyDirectoryV2) Release() { _, _ = directory.ReleaseOutc
 // ReleaseOutcome reports this original edge's consumption separately from
 // earlier physical-owner errors. The last callback runs at most once.
 func (directory *DependencyDirectoryV2) ReleaseOutcome() (bool, error) {
-	var receipt DependencyDirectoryReleaseWork
-	ready, err := receipt.bind(directory, nil)
+	var receipt dependencyDirectoryRelease
+	ready, err := receipt.bind(directory)
 	if !ready || err != nil {
 		return false, err
 	}
 	directory = nil
 	for {
-		consumed, ready, err := receipt.continueWork(nil)
+		consumed, ready, err := receipt.release()
 		if ready || err != nil {
 			return consumed, err
 		}

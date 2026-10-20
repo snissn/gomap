@@ -29,7 +29,7 @@ func TestOwnedImportedTokenPreservesForeignOperationsAndLastCustody(t *testing.T
 	}
 	owner := new(retainedalloc.Owner)
 	owner.Initialize(0)
-	imported, err := newImportedResourceToken(owner, token, root, token.logicalLane, token.resourceID, token.diagnosticPath, token.frontier, token.reachability, token.logicalObligations)
+	imported, err := newImportedResourceToken(owner, token, root, token.logicalLane, token.resourceID, token.diagnosticPath, token.frontier, token.reachability, token.logicalObligations, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -27,10 +27,6 @@ type primaryDependencyLeaseV5 struct {
 	failedNext           *primaryDependencyLeaseV5
 	directory            *rootpublication.DependencyDirectoryV2
 	recoveryNext         *primaryDependencyLeaseV5
-	releaseWork          primaryArenaReleaseWork
-	releasePhase         uint8
-	releaseMetadata      *retainedalloc.Owner
-	releaseNative        bool
 }
 
 func (lease *primaryDependencyLeaseV5) activate() error {
@@ -63,32 +59,22 @@ func (lease *primaryDependencyLeaseV5) release() error {
 
 // disposed reports this lease's OWN cleanup, independently of prior sibling errors.
 func (lease *primaryDependencyLeaseV5) releaseOutcome() (disposed bool, err error) {
-	for {
-		consumed, ready, completion, err := lease.ReleaseDependencyDirectoryWorkV6(nil)
-		if !ready && err == nil {
-			continue
-		}
-		lease = nil
-		if consumed && completion.Charge != 0 {
-			completion.Metadata.RemovePending(completion.Charge)
-		}
-		return consumed, err
+	consumed, completion, err := lease.ReleaseDependencyDirectoryV6()
+	lease = nil
+	if consumed && completion.Charge != 0 {
+		completion.Metadata.RemovePending(completion.Charge)
 	}
+	return consumed, err
 }
 
 // Constructor failures retain both causes in their preadmitted lease storage.
 func (lease *primaryDependencyLeaseV5) constructorError(cause error) (error, rootpublication.DependencyDirectoryReleaseCompletionV6) {
-	for {
-		disposed, ready, completion, cleanup := lease.ReleaseDependencyDirectoryWorkV6(nil)
-		if !ready && cleanup == nil {
-			continue
-		}
-		if disposed || cleanup == nil {
-			return cause, completion
-		}
-		lease.constructorFailure.causes = [3]error{cause, cleanup}
-		return &lease.constructorFailure, completion
+	disposed, completion, cleanup := lease.ReleaseDependencyDirectoryV6()
+	if disposed || cleanup == nil {
+		return cause, completion
 	}
+	lease.constructorFailure.causes = [3]error{cause, cleanup}
+	return &lease.constructorFailure, completion
 }
 
 // Consume the producer method's completion only after the original caller's
@@ -124,7 +110,7 @@ func (db *DB) pinPrimaryDependencyV5(idx *indexGen, ref rootpublication.Dependen
 			return nil, disposePrimaryDependencyConstructorV6(&lease, e)
 		}
 	}
-	directory, e := rootpublication.NewOwnedWorkLocalPrimaryDependencyDirectoryV6(lease.owner.arena.Pager(), ref, extent, idx.primary.MetadataOwner(), lease)
+	directory, e := rootpublication.NewOwnedTypedLocalPrimaryDependencyDirectoryV6(lease.owner.arena.Pager(), ref, extent, idx.primary.MetadataOwner(), lease)
 	if e != nil {
 		return nil, disposePrimaryDependencyConstructorV6(&lease, e)
 	}

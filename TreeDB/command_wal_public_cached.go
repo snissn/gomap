@@ -365,7 +365,9 @@ func (tdb *DB) snapshotPublicCommandWALCheckpointCutover() {
 	last := tdb.commandWALLast.Load()
 	tdb.commandWALCheckpointCutoverLast.Store(last)
 	tdb.commandWALCheckpointCutoverErr = nil
-	if last == 0 {
+	// A COW cache rotates at its complete raw+semantic cut. These counters
+	// remain public raw notification bookkeeping, never COW coverage authority.
+	if last == 0 || (tdb.cached != nil && tdb.cached.COWMode()) {
 		return
 	}
 	if tdb.backend == nil {
@@ -434,12 +436,20 @@ func (tdb *DB) cleanupPublicCommandWALCheckpoint(sync bool) error {
 	if tdb == nil || !tdb.commandWALCached || tdb.backend == nil {
 		return nil
 	}
+	// Root coverage has already completed; retire public raw notices through
+	// that actual applied state even when this was a native-only checkpoint.
+	tdb.clearPublishedPublicCommandWALPending()
 	return tdb.backend.CleanupCommandWALCoveredSegmentsAtCheckpoint(sync)
 }
 
 func (tdb *DB) refreshPublicCommandWALCheckpointFallback() error {
 	if tdb == nil || !tdb.commandWALCached || tdb.backend == nil {
 		return nil
+	}
+	if tdb.cached != nil && tdb.cached.COWMode() {
+		// The cache admission/flush fence excludes its canonical owner. Do not
+		// hold the public operation gate while waiting for admitted writers.
+		return tdb.cached.RefreshCOWCommandWALCheckpointFallback()
 	}
 	tdb.commandWALPublicOperationGate.Lock()
 	defer tdb.commandWALPublicOperationGate.Unlock()

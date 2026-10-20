@@ -26,17 +26,26 @@ type privatePrimaryConstructionV6 interface {
 // This is an internal cross-package bridge for caching; callers outside TreeDB
 // internals must not depend on it as a stable API.
 type RootPublicationBuildGroup struct {
-	negativeCoverage *negativeRootCoverage
-	mu               sync.Mutex
+	nativeResources    *rootpublication.StableResourceSet
+	nativeRequirements rootpublication.StableLogicalObligationRequirements
+	negativeCoverage   *negativeRootCoverage
+	mu                 sync.Mutex
 
-	db            *DB
-	coordinator   *rootpublication.Coordinator
-	builder       *rootpublication.BuilderToken
-	idx           *indexGen
-	tracker       *allocTracker
-	registryID    int64
-	registered    bool
-	capturedBasis *Snapshot
+	db                *DB
+	coordinator       *rootpublication.Coordinator
+	builder           *rootpublication.BuilderToken
+	idx               *indexGen
+	tracker           *allocTracker
+	registryID        int64
+	registered        bool
+	capturedBasis     *Snapshot
+	captureLease      *StableResourceCaptureLease
+	snapshotAdmit     func(SnapshotAllocationSizes) error
+	snapshotAdopt     func(*Snapshot) error
+	snapshotCancel    func() error
+	snapshotReceipt   *Snapshot
+	physicalSeal      rootpublication.PhysicalSealReceipt
+	acceptedPrefixCut rootpublication.AcceptedCut
 
 	// Only original factory outputs enter these two custody cells. baseRoot is
 	// borrowed and never enters them. A failed disposal preserves both originals.
@@ -78,7 +87,7 @@ type rootPublicationBuildGroupVacuumMutation struct {
 // Every batch must attach the returned group, marking exactly one final batch.
 // Close is mandatory on every path and aborts an unfinished build.
 func (db *DB) BeginRootPublicationBuildGroup() (*RootPublicationBuildGroup, error) {
-	return db.beginRootPublicationBuildGroup(nil)
+	return db.beginRootPublicationBuildGroup(nil, nil)
 }
 
 var ErrRootPublicationBasisMismatch = errors.New("root publication captured basis mismatch")
@@ -86,24 +95,43 @@ var ErrRootPublicationBasisMismatch = errors.New("root publication captured basi
 // BeginRootPublicationBuildGroupFromSnapshot uses the captured user tree as
 // the build basis. The active snapshot pin excludes in-place changes and page
 // reuse, so identical index handle/root identity proves the same user tree.
-// Fresh system-only publication state is preserved. A changed user tree must
-// first complete an explicit coherent cache handoff; this method never rebases.
+// The semantic system root belongs to the same complete logical basis. A
+// changed root set requires an explicit coherent handoff; this never rebases.
 func (db *DB) BeginRootPublicationBuildGroupFromSnapshot(basis *Snapshot) (*RootPublicationBuildGroup, error) {
 	if basis == nil {
 		return nil, ErrRootPublicationBasisMismatch
 	}
-	return db.beginRootPublicationBuildGroup(basis)
+	return db.beginRootPublicationBuildGroup(basis, nil)
 }
 
-func (db *DB) beginRootPublicationBuildGroup(basis *Snapshot) (_ *RootPublicationBuildGroup, retErr error) {
+// BeginRootPublicationBuildGroupBorrowingLease uses the original admitted job's
+// teardown ownership. Borrowers neither reacquire nor release teardownMu.
+func (db *DB) BeginRootPublicationBuildGroupBorrowingLease(basis *Snapshot, lease *StableResourceCaptureLease) (*RootPublicationBuildGroup, error) {
+	if basis == nil || lease == nil {
+		return nil, ErrRootPublicationBasisMismatch
+	}
+	if err := lease.ValidateDBV1(db); err != nil {
+		return nil, err
+	}
+	return db.beginRootPublicationBuildGroup(basis, lease)
+}
+
+func (db *DB) beginRootPublicationBuildGroup(basis *Snapshot, lease *StableResourceCaptureLease) (_ *RootPublicationBuildGroup, retErr error) {
 	if db == nil {
 		return nil, ErrClosed
 	}
-	db.teardownMu.RLock()
-	group := &RootPublicationBuildGroup{db: db, teardownLocked: true}
+	group := &RootPublicationBuildGroup{db: db, captureLease: lease}
+	if lease == nil {
+		db.teardownMu.RLock()
+		group.teardownLocked = true
+	} else if err := lease.ValidateDBV1(db); err != nil {
+		return nil, err
+	}
 	if basis != nil {
 		if err := basis.beginRead(); err != nil {
-			db.teardownMu.RUnlock()
+			if group.teardownLocked {
+				db.teardownMu.RUnlock()
+			}
 			return nil, err
 		}
 		group.capturedBasis = basis
@@ -120,7 +148,7 @@ func (db *DB) beginRootPublicationBuildGroup(basis *Snapshot) (_ *RootPublicatio
 	if db.readOnly {
 		return nil, ErrReadOnly
 	}
-	if db.closing.Load() {
+	if lease == nil && db.closing.Load() {
 		return nil, ErrClosed
 	}
 	if err := db.publicationPoisonedError(); err != nil {
@@ -137,7 +165,17 @@ func (db *DB) beginRootPublicationBuildGroup(basis *Snapshot) (_ *RootPublicatio
 		}
 
 		db.writeMu.Lock()
-		if err := db.checkWriteAdmissionLocked(); err != nil {
+		var admissionErr error
+		if lease == nil {
+			admissionErr = db.checkWriteAdmissionLocked()
+		} else {
+			db.waitForVacuumCutoverWriteLocked()
+			admissionErr = lease.ValidateDBV1(db)
+			if admissionErr == nil {
+				admissionErr = db.publicationPoisonedError()
+			}
+		}
+		if err := admissionErr; err != nil {
 			db.writeMu.Unlock()
 			builder.Release()
 			return nil, err
@@ -170,7 +208,7 @@ func (db *DB) beginRootPublicationBuildGroup(basis *Snapshot) (_ *RootPublicatio
 	db.rootReuseMu.RLock()
 	db.mu.RLock()
 
-	if basis != nil && (basis.db != db || basis.idx != idx || basis.treeRoot != db.meta.UserRootPageID) {
+	if basis != nil && (basis.db != db || basis.idx != idx || basis.treeRoot != db.meta.UserRootPageID || basis.state == nil || basis.state.SystemRootPageID != db.meta.SystemRootPageID) {
 		db.mu.RUnlock()
 		db.rootReuseMu.RUnlock()
 		return nil, ErrRootPublicationBasisMismatch
@@ -180,7 +218,13 @@ func (db *DB) beginRootPublicationBuildGroup(basis *Snapshot) (_ *RootPublicatio
 	group.systemRoot = db.meta.SystemRootPageID
 	group.baseSeq = db.meta.CommitSeq
 	if basis == nil {
-		group.registryID = idx.registry.Register(group.baseSeq)
+		var registerErr error
+		group.registryID, registerErr = idx.registry.Register(group.baseSeq)
+		if registerErr != nil {
+			db.mu.RUnlock()
+			db.rootReuseMu.RUnlock()
+			return nil, registerErr
+		}
 	} else {
 		group.registryID, _ = idx.registry.RegisterFastWithHint(group.baseSeq, -1)
 		if group.registryID == 0 {
@@ -404,6 +448,10 @@ func (group *RootPublicationBuildGroup) finalizeLocked(b *Batch, syncWrite bool)
 	}
 	opts := finalizeCommitOptions{
 		negativeCoverage:            group.negativeCoverage,
+		durableResources:            group.nativeResources,
+		durableResourceRequirements: group.nativeRequirements,
+		prepareSnapshotReceipt:      group.prepareSnapshotReceiptLocked,
+		abortSnapshotReceipt:        group.snapshotCancel,
 		skipPrePublishFlush:         true,
 		skipConditionalRootConflict: true,
 		maxEntryRevision:            group.maxEntryRevision,
@@ -416,6 +464,9 @@ func (group *RootPublicationBuildGroup) finalizeLocked(b *Batch, syncWrite bool)
 		releaseRootSerialization:    func() {},
 		recordVacuumMutation:        recordVacuumMutation,
 		durableIndex:                group.idx,
+	}
+	if group.acceptedPrefixCut.Valid() {
+		opts.acceptedPrefixCut = &group.acceptedPrefixCut
 	}
 	if intent != nil {
 		commandOpts := commandWALFinalizeOptions(intent)
@@ -432,8 +483,14 @@ func (group *RootPublicationBuildGroup) finalizeLocked(b *Batch, syncWrite bool)
 		commandOpts.recordVacuumMutation = opts.recordVacuumMutation
 		commandOpts.durableIndex = opts.durableIndex
 		commandOpts.negativeCoverage = opts.negativeCoverage
+		commandOpts.prepareSnapshotReceipt = opts.prepareSnapshotReceipt
+		commandOpts.abortSnapshotReceipt = opts.abortSnapshotReceipt
+		commandOpts.acceptedPrefixCut = opts.acceptedPrefixCut
+		commandOpts.durableResources = opts.durableResources
+		commandOpts.durableResourceRequirements = opts.durableResourceRequirements
 		opts = commandOpts
 	}
+	group.nativeResources = nil // finalize owns the original closure on every exit
 	post, err := db.finalizeCommitLockedWithOptions(
 		group.currentRoot, group.systemRoot, group.retired, syncWrite, group.metrics,
 		group.touchedValueLogSegmentSliceLocked(), db.indexOuterLeavesInValueLog,
@@ -442,6 +499,9 @@ func (group *RootPublicationBuildGroup) finalizeLocked(b *Batch, syncWrite bool)
 	// finalizeCommitLockedWithOptions always consumes or releases its builder
 	// handle. Keep cleanup from treating the same token as live ownership.
 	group.builder = nil
+	if post.accepted {
+		group.physicalSeal = post.physicalSeal
+	}
 	if err != nil {
 		if commandAppended && !post.accepted {
 			db.poisonCommandWALAfterPostAppendFailure(intent)
@@ -539,6 +599,22 @@ func (group *RootPublicationBuildGroup) cleanupLocked(abandon bool) error {
 		group.releaseBuildLocksLocked()
 		return group.cleanupErr
 	}
+	if group.nativeResources != nil {
+		if err := group.nativeResources.ReleaseWithError(); err != nil {
+			// Retain the SAME group, original closure, tracker and charge on
+			// existing terminal build-failure custody, never retry destruction.
+			group.failed = true
+			group.closed = true
+			group.cleanupErr = group.retainPrimaryFailureLocked(err)
+			if group.capturedBasis != nil {
+				group.capturedBasis.endRead()
+				group.capturedBasis = nil
+			}
+			group.releaseBuildLocksLocked()
+			return group.cleanupErr
+		}
+		group.nativeResources = nil
+	}
 	if group.capturedBasis != nil {
 		group.capturedBasis.endRead()
 		group.capturedBasis = nil
@@ -617,4 +693,81 @@ func (group *RootPublicationBuildGroup) Close() error {
 	group.mu.Lock()
 	defer group.mu.Unlock()
 	return group.cleanupLocked(!group.accepted)
+}
+
+// PrepareAcceptedSnapshot binds admission and original finalizer custody before
+// the final batch can accept. adopt must retain even a Snapshot whose later
+// publication fails; its caller owns cancellation as well as accepted handoff.
+func (group *RootPublicationBuildGroup) PrepareAcceptedSnapshot(admit func(SnapshotAllocationSizes) error, adopt func(*Snapshot) error, cancel func() error) error {
+	if group == nil || admit == nil || adopt == nil || cancel == nil {
+		return ErrRootPublicationBasisMismatch
+	}
+	group.mu.Lock()
+	defer group.mu.Unlock()
+	if group.closed || group.accepted || group.snapshotAdmit != nil {
+		return ErrRootPublicationBasisMismatch
+	}
+	group.snapshotAdmit, group.snapshotAdopt, group.snapshotCancel = admit, adopt, cancel
+	return nil
+}
+
+func (group *RootPublicationBuildGroup) prepareSnapshotReceiptLocked(install *rootPublicationVisibleInstallV1) error {
+	if group.snapshotAdmit == nil {
+		return nil
+	}
+	if install == nil || install.idx != group.idx || group.snapshotReceipt != nil {
+		return ErrRootPublicationBasisMismatch
+	}
+	if install.preparedView == nil {
+		return ErrRootPublicationBasisMismatch
+	}
+	snapshot, err := group.db.captureSnapshotViewBoundedLocked(nil, group.snapshotAdmit, true, install.preparedView, false)
+	if err != nil {
+		return err
+	}
+	group.snapshotReceipt = snapshot
+	return group.snapshotAdopt(snapshot)
+}
+
+// AcceptedSnapshot identifies the exact pre-admitted generation. Ownership is
+// already with PrepareAcceptedSnapshot's adopter, including accepted-plus-error.
+func (group *RootPublicationBuildGroup) AcceptedSnapshot() *Snapshot {
+	if group == nil {
+		return nil
+	}
+	group.mu.Lock()
+	defer group.mu.Unlock()
+	if !group.accepted {
+		return nil
+	}
+	return group.snapshotReceipt
+}
+
+// AcceptedSealReceipt is the actual physical acceptance capability, retained
+// even when a later durability or cleanup step reports an error.
+func (group *RootPublicationBuildGroup) AcceptedSealReceipt() rootpublication.PhysicalSealReceipt {
+	if group == nil {
+		return rootpublication.PhysicalSealReceipt{}
+	}
+	group.mu.Lock()
+	defer group.mu.Unlock()
+	return group.physicalSeal
+}
+
+// BindAcceptedPrefixCut binds the exact caller-retained complete native root set
+// to this private physical build. All participating plans must be applied from
+// this cut before the final batch; the captured Snapshot already fixes the
+// complete physical user/semantic basis. Enqueue validates the same opaque cut
+// and its actual canonical frontier before making the candidate visible.
+func (group *RootPublicationBuildGroup) BindAcceptedPrefixCut(cut rootpublication.AcceptedCut) error {
+	if group == nil || !cut.Valid() {
+		return ErrRootPublicationBasisMismatch
+	}
+	group.mu.Lock()
+	defer group.mu.Unlock()
+	if group.closed || group.accepted || group.acceptedPrefixCut.Valid() || group.capturedBasis == nil {
+		return ErrRootPublicationBasisMismatch
+	}
+	group.acceptedPrefixCut = cut
+	return nil
 }

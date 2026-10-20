@@ -9,7 +9,7 @@ import (
 )
 
 func TestPrimarySharedTransactionV6ReusesExactDataCertificate(t *testing.T) {
-	opts := Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true}
+	opts := Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true}
 	db, err := Open(opts)
 	if err != nil {
 		t.Fatal(err)
@@ -50,7 +50,7 @@ func TestPrimarySharedTransactionV6ReusesExactDataCertificate(t *testing.T) {
 }
 
 func TestPrimarySharedTransactionV6FreshOwnedDirectoryRefusal(t *testing.T) {
-	opts := Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true}
+	opts := Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true}
 	db, err := Open(opts)
 	if err != nil {
 		t.Fatal(err)
@@ -103,7 +103,7 @@ func TestPrimarySharedTransactionV6FreshOwnedDirectoryRefusal(t *testing.T) {
 // The same actual visible member supplies the typed codec and later ordinary
 // durable publication. Refusal cannot modify destination or publication state.
 func TestPrimarySharedTransactionV6TypedCodecOwnedOperandAndRefusal(t *testing.T) {
-	db, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+	db, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +182,7 @@ func TestPrimarySharedTransactionV6TypedCodecOwnedOperandAndRefusal(t *testing.T
 // the same constructor transaction. Coalescing may own an independent group,
 // but an uncoalesced candidate cannot invent a second publication owner.
 func TestPrimarySharedTransactionV6SinglePublicationOwner(t *testing.T) {
-	db, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+	db, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatal(err)
 	}

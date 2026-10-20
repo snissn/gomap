@@ -8,6 +8,7 @@ import (
 	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
 )
 
 const (
@@ -358,11 +359,28 @@ func prepareTypedColumnPartBatchFromSource(cfg ColumnStoreConfig, partID uint64,
 	return prepareTypedColumnAdapterBatchFromSource(adapterOpts, rows)
 }
 
+func buildTypedColumnPartImageForDeclaredRowsWithCodec(cfg ColumnStoreConfig, generation, partID uint64, rows []columnDeclaredRow, codec *typedcolumn.BuildCodec) (typedColumnPartImageBuildResult, error) {
+	prepared, err := prepareTypedColumnPartBatchFromSource(cfg, partID, newTypedColumnDeclaredRowSource(cfg.Columns, rows))
+	if err != nil {
+		return typedColumnPartImageBuildResult{}, err
+	}
+	return buildTypedColumnPartImageFromPreparedBatchWithCodec(prepared, partID, codec)
+}
+
 func buildTypedColumnPartImageFromPreparedBatchWithResult(prepared *typedColumnAdapterPreparedBatch, partID uint64) (typedColumnPartImageBuildResult, error) {
+	return buildTypedColumnPartImageFromPreparedBatchWithCodec(prepared, partID, nil)
+}
+
+func buildTypedColumnPartImageFromPreparedBatchWithCodec(prepared *typedColumnAdapterPreparedBatch, partID uint64, codec *typedcolumn.BuildCodec) (typedColumnPartImageBuildResult, error) {
 	if prepared == nil {
 		return typedColumnPartImageBuildResult{}, nil
 	}
-	part, err := buildTypedColumnAdapterPartFromPreparedBatch(prepared, partID)
+	// The prepared vectors remain immutable. Only this borrowed construction
+	// header carries the operation-local codec into the maintained builder.
+	local := *prepared
+	local.Options = prepared.Options
+	local.Options.BuildCodec = codec
+	part, err := buildTypedColumnAdapterPartFromPreparedBatch(&local, partID)
 	if err != nil {
 		return typedColumnPartImageBuildResult{}, err
 	}
@@ -580,6 +598,7 @@ func (c *Collection) typedColumnPartValuesForVisibleRowAtSnapshotIntoWithCachePr
 			if err != nil {
 				return typedColumnPartVisibleValues{}, err
 			}
+			localReadCache.operationLocal = c.nativeOperationLocalReads
 			readCache = &localReadCache
 			closeReadCache = true
 		}

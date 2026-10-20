@@ -732,7 +732,7 @@ func (token *StableResourceToken) cloneSharedPinnedDirectory(logicalLane, resour
 	var identityPin *IdentityPin
 	if token.identityPin != nil {
 		var err error
-		identityPin, err = token.identityPin.registry.Pin(token.identity)
+		identityPin, err = token.identityPin.clone()
 		if err != nil {
 			return nil, fmt.Errorf("pin stable resource identity: %w", err)
 		}
@@ -1425,6 +1425,9 @@ func (batch *stableNamespaceBatchCleanup) OriginalCleanupPriorAvailable() bool {
 	defer batch.mu.Unlock()
 	return batch.prior == nil
 }
+func (batch *stableNamespaceBatchCleanup) OriginalCleanupPriorBinding() OriginalCleanupPriorBinding {
+	return BindOriginalCleanupPrior(&batch.mu, &batch.prior)
+}
 func (batch *stableNamespaceBatchCleanup) TryLinkPriorCleanupError(prior error) bool {
 	batch.mu.Lock()
 	defer batch.mu.Unlock()
@@ -1809,19 +1812,11 @@ func (proof *StableNamespaceCreationProof) ReleaseWithError() error {
 		return nil
 	}
 	proof.closeMu.Lock()
-	proof.mu.Lock()
-	if proof.closeWork.native {
-		proof.mu.Unlock()
-		proof.closeMu.Unlock()
-		return retainedalloc.ErrWorkRequired
-	}
-	proof.mu.Unlock()
 	var state namespaceProofReleaseState
 	state.proof = proof
-	// Nil policy drains the same original close core without an escaping local
-	// work counter. Only the retained native receipt admits bounded work.
+	// Drive original physical cleanup before detaching the containing receipt.
 	for state.proof != nil {
-		ready, err := state.continueWork(false, nil, nil)
+		ready, err := state.continueRelease()
 		if err != nil {
 			proof.closeMu.Unlock()
 			return err
@@ -1889,7 +1884,7 @@ func NewRecoveredStableNamespaceTokenWithMetadata(spec StableNamespaceSpec, expe
 		return nil, err
 	}
 	if token.parentIdentity.Generation != expectedParent.Generation || !SamePhysicalIdentity(token.parentIdentity, expectedParent) {
-		cause := ErrResourceConflict
+		cause := fmt.Errorf("%w: recovered owned namespace parent identity", ErrResourceConflict)
 		if cleanupErr := token.ReleaseWithError(); cleanupErr != nil {
 			token.cleanupFailure.add(cause)
 			return nil, &token.cleanupFailure
@@ -1917,7 +1912,7 @@ func ValidateRecoveredStableNamespaceDescriptorV1(spec StableNamespaceSpec, expe
 	}
 	identity.Generation = spec.ParentGeneration
 	if identity.Generation != expectedParent.Generation || !SamePhysicalIdentity(identity, expectedParent) {
-		return ErrResourceConflict
+		return fmt.Errorf("%w: recovered namespace parent identity", ErrResourceConflict)
 	}
 	return nil
 }

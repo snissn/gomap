@@ -2,6 +2,7 @@ package db
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -219,6 +220,14 @@ func TestOuterLeafReplacementManifestPreservesAppendOnlyBaseDependencyReuse(t *t
 		generation: 1, kind: rootpublication.ResourceOuterLeafManifest,
 		reachability: rootpublication.ReachabilityOuterLeafGeneration, frontier: 4096,
 	})
+	// The synthetic manifest joins the selected closure under its original
+	// metadata owner, just as production captures import producer resources.
+	defer oldManifest.Release()
+	oldManifest, err = rootpublication.ImportStableResourceSetMetadata(selectedClone.MetadataOwner(), oldManifest)
+	if err != nil {
+		selectedClone.Release()
+		t.Fatalf("admit old manifest: %v", err)
+	}
 	baseBuilder := rootpublication.NewStableResourceSetBuilder()
 	if err := baseBuilder.Merge(selectedClone); err != nil {
 		selectedClone.Release()
@@ -259,20 +268,33 @@ func TestOuterLeafReplacementManifestPreservesAppendOnlyBaseDependencyReuse(t *t
 	if scans != 0 {
 		t.Fatalf("append-only replacement manifest candidate scans=%d want 0", scans)
 	}
+	diagnostics, err := captured.AcquirePhysicalDiagnostics()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := diagnostics.CloseWithError(); err != nil {
+			t.Error(err)
+		}
+	}()
 	foundCurrentLeaf, foundNewManifest := false, false
-	for _, descriptor := range mustStableResourceDescriptors(t, captured) {
-		switch descriptor.Kind() {
+	for _, descriptor := range diagnostics.Physical() {
+		switch descriptor.Kind {
 		case rootpublication.ResourceOuterLeafLog:
-			foundCurrentLeaf = foundCurrentLeaf || descriptor.Generation() == uint64(leafLog.fileID)
+			foundCurrentLeaf = foundCurrentLeaf || descriptor.Generation == uint64(leafLog.fileID)
 		case rootpublication.ResourceOuterLeafManifest:
-			if descriptor.Generation() == 1 {
+			if descriptor.Generation == 1 {
 				t.Fatal("captured resources retained superseded outer-leaf manifest")
 			}
-			foundNewManifest = foundNewManifest || descriptor.Generation() == 2
+			foundNewManifest = foundNewManifest || descriptor.Generation == 2
 		}
 	}
 	if !foundCurrentLeaf || !foundNewManifest {
-		t.Fatalf("captured descriptors=%+v, want current raw leaf and replacement manifest", mustStableResourceDescriptors(t, captured))
+		t.Fatalf("captured descriptors=%+v, want current raw leaf and replacement manifest", diagnostics.Physical())
+	}
+
+	if err := diagnostics.CloseWithError(); err != nil {
+		t.Fatal(err)
 	}
 
 	plannerBase := stableContractResourceSet(t, stableContractDescriptor{
@@ -691,6 +713,9 @@ func TestRootPublicationBuildGroupCommandWALAcceptedWaitFailureDoesNotPoisonOpen
 	if !group.Accepted() {
 		t.Fatal("accepted build-group error lost its coverage receipt")
 	}
+	if !group.AcceptedSealReceipt().Valid() {
+		t.Fatal("accepted build-group wait error lost its physical seal receipt")
+	}
 	if closeErr := group.Close(); closeErr != nil || !group.Accepted() {
 		t.Fatalf("coverage receipt after close: accepted=%t err=%v", group.Accepted(), closeErr)
 	}
@@ -1030,11 +1055,20 @@ func TestOuterLeafOrdinaryAdditiveProducerInventory(t *testing.T) {
 				if len(leafLog.createdSegments) != 0 {
 					t.Fatal("registration did not consume created inventory")
 				}
-				descriptors := mustStableResourceDescriptors(t, database.durableRoot.slotResources[database.durableRoot.slot])
+				diagnostics, err := database.durableRoot.slotResources[database.durableRoot.slot].AcquirePhysicalDiagnostics()
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer func() {
+					if err := diagnostics.CloseWithError(); err != nil {
+						t.Error(err)
+					}
+				}()
+				descriptors := diagnostics.Physical()
 				for _, segment := range uniqueLeafPageLogSegmentsForTest(registered, leafLog.currentSegments) {
 					found := false
 					for _, descriptor := range descriptors {
-						if descriptor.Kind() == rootpublication.ResourceOuterLeafLog && descriptor.Generation() == uint64(segment.FileID) {
+						if descriptor.Kind == rootpublication.ResourceOuterLeafLog && descriptor.Generation == uint64(segment.FileID) {
 							info, err := os.Stat(segment.Path)
 							if err != nil {
 								t.Fatal(err)
@@ -1049,6 +1083,10 @@ func TestOuterLeafOrdinaryAdditiveProducerInventory(t *testing.T) {
 						t.Fatalf("published closure missing producer segment %d", segment.FileID)
 					}
 				}
+				if err := diagnostics.CloseWithError(); err != nil {
+					t.Fatal(err)
+				}
+				descriptors = nil
 				tracked := snapshotCandidateTracker(database)
 				if !tracked.valid || tracked.sequence != database.currentCommitSeq() || tracked.counts[values[0].FileID] != uint64((publication+1)*count) {
 					t.Fatalf("logical tracker=%+v", tracked)
@@ -1155,5 +1193,50 @@ func TestBuildValueLogRefDeltaProducerInventoryErrors(t *testing.T) {
 		if delta != nil || err != nil {
 			t.Fatalf("pager delta=%v error=%v", delta, err)
 		}
+	}
+}
+
+// This isolates the runtime's consumption of a handoff error. Actual original
+// allocator capture refusal is covered by the coordinator startup replay test;
+// this does not induce end-to-end handoff admission or ownership-transfer refusal.
+func TestRootPublicationRuntimeRetainsFailedHandoffCause(t *testing.T) {
+	database, err := Open(Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cause := errors.New("original recovery handoff refused")
+	t.Cleanup(func() {
+		if err := database.Close(); err != nil && !errors.Is(err, cause) {
+			t.Errorf("Close lost original handoff cause: %v", err)
+		}
+	})
+	runtime := database.rootPublication
+	if runtime == nil || runtime.coordinator == nil || runtime.idx == nil || runtime.metadata == nil || runtime.metadataCharge == 0 {
+		t.Fatal("Open did not create the original admitted runtime")
+	}
+	coordinator, index, owner := runtime.coordinator, runtime.idx, runtime.metadata
+	if err = coordinator.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	charge, bytes, borrows := runtime.metadataCharge, owner.Bytes(), index.wrapperBorrowCountV6()
+	first := runtime.retainFailedRecoveryHandoff(cause)
+	if first != &runtime.disposalFailure || !errors.Is(first, cause) || database.backgroundError() != first {
+		t.Fatal("original runtime failure receipt or DB error edge lost")
+	}
+	later := errors.New("later handoff observation")
+	if again := runtime.retainFailedRecoveryHandoff(later); again != first || errors.Is(again, later) {
+		t.Fatal("later observation replaced the original handoff refusal")
+	}
+	if err = runtime.release(); err != first {
+		t.Fatalf("release did not preserve original refusal: %v", err)
+	}
+	if database.rootPublication != runtime || runtime.disposalFailure.payload != runtime || runtime.db != database || runtime.coordinator != coordinator || runtime.idx != index || runtime.metadata != owner || !runtime.generationBorrowed {
+		t.Fatal("failed handoff lost original runtime/coordinator/index/owner aliases")
+	}
+	if runtime.metadataCharge != charge || owner.Bytes() != bytes || index.wrapperBorrowCountV6() != borrows {
+		t.Fatal("failed handoff refunded original containing charge or generation borrow")
+	}
+	if database.backgroundError() != first || !errors.Is(database.backgroundError(), cause) {
+		t.Fatal("original runtime failure no longer reachable from DB error")
 	}
 }

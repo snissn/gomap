@@ -57,6 +57,11 @@ type COWBudget struct {
 	limits COWLimits
 	stats  COWStats
 	closed bool
+	// Exactly one coarse physical-maintenance partition. Its original parent
+	// lease is retained through Close and the last child finalizer.
+	maintenance      *COWBudget
+	reservation      *COWExternalLease
+	maintenanceChild bool // immutable before publication; ordinary hot path skips partition cleanup
 }
 
 func NewCOWBudget(limits COWLimits) (*COWBudget, error) {
@@ -77,15 +82,69 @@ func (b *COWBudget) Limits() COWLimits { return b.limits }
 // leases remain valid; the budget wrapper is released after their last owner.
 func (b *COWBudget) Close() {
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	b.closed = true
+	maintenance := b.maintenance
 	b.releaseControlLocked()
+	b.mu.Unlock()
+	if maintenance != nil {
+		maintenance.Close()
+	}
+	b.releaseMaintenanceReservation()
 }
 func (b *COWBudget) releaseControlLocked() {
 	if b.closed && b.stats.Generations == 0 && b.stats.Views == 0 && b.stats.DeferredBytes == 0 && b.stats.ExternalLeases == 0 {
 		b.stats.TotalBytes -= b.stats.ControlBytes
 		b.stats.ControlBytes = 0
 	}
+}
+
+// ReserveMaintenance precharges one fixed physical-publication tranche. The
+// existing budget machinery bounds its child utilization; ordinary producers
+// retain only the parent and cannot consume this lane. No recursive partition
+// or second resource registry is permitted.
+func (b *COWBudget) ReserveMaintenance(bytes uint64) (*COWBudget, error) {
+	b.mu.Lock()
+	unavailable := b.closed || b.maintenance != nil || b.reservation != nil
+	b.mu.Unlock()
+	if unavailable || bytes == 0 {
+		return nil, ErrCOWCapacity
+	}
+	lease, err := b.AcquireExternal(bytes)
+	if err != nil {
+		return nil, err
+	}
+	limits := b.limits
+	limits.MaxTotalBytes, limits.MaxInFlightBytes, limits.MaxRetiredBytes = bytes, bytes, bytes
+	limits.MaxGenerationBytes = min(limits.MaxGenerationBytes, bytes)
+	child, err := NewCOWBudget(limits)
+	if err != nil {
+		lease.Close()
+		return nil, err
+	}
+	child.reservation = lease
+	child.maintenanceChild = true
+	b.mu.Lock()
+	if b.closed || b.maintenance != nil {
+		b.mu.Unlock()
+		child.Close()
+		return nil, ErrCOWClosed
+	}
+	b.maintenance = child
+	b.mu.Unlock()
+	return child, nil
+}
+
+func (b *COWBudget) releaseMaintenanceReservation() {
+	if !b.maintenanceChild {
+		return
+	}
+	b.mu.Lock()
+	var lease *COWExternalLease
+	if b.closed && b.stats.ControlBytes == 0 {
+		lease, b.reservation = b.reservation, nil
+	}
+	b.mu.Unlock()
+	lease.Close()
 }
 
 // COWAllocationCharge lets C2 charge concrete wrapper/backing capacities using
@@ -104,6 +163,13 @@ type COWExternalLease struct {
 }
 
 func (b *COWBudget) AcquireExternal(bytes uint64) (*COWExternalLease, error) {
+	return b.acquireExternal(bytes, false)
+}
+
+// nativeSource is used only by the original prewrite native generation cell.
+// Slot and metadata admission are one original budget operation; the cell,
+// rather than the external allocation receipt, releases the slot at last edge.
+func (b *COWBudget) acquireExternal(bytes uint64, nativeSource bool) (*COWExternalLease, error) {
 	charge, ok := cowAdd(bytes, cowAllocation(uint64(unsafe.Sizeof(COWExternalLease{}))))
 	if !ok {
 		return nil, ErrCOWCapacity
@@ -113,13 +179,16 @@ func (b *COWBudget) AcquireExternal(bytes uint64) (*COWExternalLease, error) {
 	if b.closed {
 		return nil, ErrCOWClosed
 	}
-	if b.stats.ExternalLeases == int(^uint(0)>>1) || !cowFits(b.limits.MaxInFlightBytes, b.stats.ReservedBytes, charge) ||
+	if (nativeSource && b.stats.Sources >= b.limits.MaxSources) || b.stats.ExternalLeases == int(^uint(0)>>1) || !cowFits(b.limits.MaxInFlightBytes, b.stats.ReservedBytes, charge) ||
 		!b.retirementFitsLocked(charge) || !b.addLocked(charge) {
 		return nil, ErrCOWCapacity
 	}
 	b.stats.ReservedBytes += charge
 	b.stats.ExternalBytes += charge
 	b.stats.ExternalLeases++
+	if nativeSource {
+		b.stats.Sources++
+	}
 	return &COWExternalLease{budget: b, charge: charge}, nil
 }
 
@@ -174,8 +243,8 @@ func (l *COWExternalLease) Close() {
 	}
 	b := l.budget
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	if l.closed {
+		b.mu.Unlock()
 		return
 	}
 	l.closed = true
@@ -184,6 +253,8 @@ func (l *COWExternalLease) Close() {
 	b.stats.ExternalBytes -= l.charge
 	b.stats.ExternalLeases--
 	b.releaseControlLocked()
+	b.mu.Unlock()
+	b.releaseMaintenanceReservation()
 }
 
 func cowFits(limit, used, n uint64) bool { return used <= limit && n <= limit-used }
@@ -234,28 +305,58 @@ type cowResourceOwner struct{ release func() }
 type cowGeneration struct {
 	budget           *COWBudget
 	refs             int
+	activeWriters    int
 	history, pending uint64
-	frozen, retired  bool
-	drainClaimed     bool
-	ids              []COWResourceID
-	owners           []cowResourceOwner
+	// Fixed empty-source construction can use the one reserved tranche. All
+	// later mutation history remains charged to budget, never this lease.
+	reservedCharge    uint64
+	constructionLease *COWExternalLease
+	nativeSource      *COWNativeSourceReservation // opt-in original native cohort
+	frozen, retired   bool
+	rawSourceReserved bool // cache first-dirty admission; independent of native source cells
+	drainClaimed      bool
+	ids               []COWResourceID
+	owners            []cowResourceOwner
 }
 
 // All generation fields are guarded by budget.mu. Fixed-capacity identity and
 // callback arrays avoid a per-record historical ledger and commit-time growth.
-func newCOWGeneration(b *COWBudget, base uint64) (*cowGeneration, error) {
+func newCOWGenerationWithConstruction(b *COWBudget, base uint64, maintenance *COWBudget) (*cowGeneration, error) {
+	var lease *COWExternalLease
+	if maintenance != nil {
+		b.mu.Lock()
+		valid := b.maintenance == maintenance && !b.closed
+		b.mu.Unlock()
+		if !valid {
+			return nil, ErrCOWCapacity
+		}
+		var err error
+		lease, err = maintenance.AcquireExternal(base)
+		if err != nil {
+			return nil, err
+		}
+	}
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	if b.closed {
+		b.mu.Unlock()
+		lease.Close()
 		return nil, ErrCOWClosed
 	}
 	if b.stats.Generations >= b.limits.MaxGenerations || base > b.limits.MaxGenerationBytes ||
-		!b.retirementFitsLocked(base) || !b.addLocked(base) {
+		(lease == nil && (!b.retirementFitsLocked(base) || !b.addLocked(base))) {
+		b.mu.Unlock()
+		lease.Close()
 		return nil, ErrCOWCapacity
 	}
 	b.stats.Generations++
-	b.stats.HistoryBytes += base
-	return &cowGeneration{budget: b, refs: 1, history: base,
+	reserved := uint64(0)
+	if lease != nil {
+		reserved = base
+	} else {
+		b.stats.HistoryBytes += base
+	}
+	b.mu.Unlock()
+	return &cowGeneration{budget: b, refs: 1, activeWriters: 1, history: base, reservedCharge: reserved, constructionLease: lease,
 		ids: make([]COWResourceID, 0, b.limits.MaxResources), owners: make([]cowResourceOwner, 0, b.limits.MaxResources)}, nil
 }
 
@@ -290,7 +391,11 @@ func (g *cowGeneration) drain() {
 	b.mu.Unlock()
 	cowReleaseOwners(g.owners)
 	b.mu.Lock()
-	history, frozen, retired := g.history, g.frozen, g.retired
+	history, frozen, retired := g.history-g.reservedCharge, g.frozen || g.rawSourceReserved, g.retired
+	constructionLease := g.constructionLease
+	g.constructionLease = nil
+	nativeSource := g.nativeSource
+	g.nativeSource = nil
 	// All original callback and array aliases end before their containing
 	// generation charge. The original budget serializes the terminal claim.
 	g.owners, g.ids, g.history = nil, nil, 0
@@ -306,6 +411,13 @@ func (g *cowGeneration) drain() {
 	}
 	b.releaseControlLocked()
 	b.mu.Unlock()
+	if nativeSource != nil {
+		lease := nativeSource.detachGeneration()
+		nativeSource = nil
+		lease.Close()
+	}
+	constructionLease.Close()
+	b.releaseMaintenanceReservation()
 }
 
 func cowReleaseOwners(owners []cowResourceOwner) {
@@ -317,4 +429,11 @@ func cowReleaseOwners(owners []cowResourceOwner) {
 		callback = nil
 		owners[i] = cowResourceOwner{}
 	}
+}
+
+// AdmitNativeBytes shares original admission and Close behavior with native
+// immutable state. bytes describes one original containing allocation/cohort;
+// independent returned lease outlives all of that owner's aliases.
+func (b *COWBudget) AdmitNativeBytes(bytes uint64) (*COWExternalLease, error) {
+	return b.AcquireExternal(COWAllocationCharge(bytes))
 }

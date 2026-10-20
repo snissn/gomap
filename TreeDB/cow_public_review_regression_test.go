@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/caching"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
@@ -274,14 +275,17 @@ func TestCOWPublicSelectedSourceRewriteKeepsOldCuts(t *testing.T) {
 func TestCOWPublicEmptyCheckpointLeafRegistrationProgress(t *testing.T) {
 	for _, profile := range cowPublicContractProfiles {
 		t.Run(string(profile), func(t *testing.T) {
-			database, opts, _ := cowPublicContractOpen(t, profile)
+			database, opts, _ := cowPublicContractOpen(t, profile, func(opts *Options) {
+				// This fixture tracks one exact rotated leaf segment.
+				opts.FlushAdmissionPolicy = backenddb.FlushAdmissionPolicyExplicit
+				opts.FlushApplyConcurrency = 1
+			})
 			value := bytes.Repeat([]byte("leaf-registration"), 64)
 			if err := database.Set([]byte("a"), value); err != nil {
 				t.Fatal(err)
 			}
-			// A tiny PRIMARY directory can stay inline and never open a lazy
-			// outer-leaf writer. Build genuine ordinary leaf output before asking
-			// the existing maintenance fence to rotate those actual lanes.
+			// Build genuine ordinary leaf output before asking the existing
+			// maintenance fence to rotate the selected single append lane.
 			for i := 0; i < 1024; i++ {
 				if err := database.Set([]byte(fmt.Sprintf("leaf-seed-%08d", i)), value); err != nil {
 					t.Fatal(err)

@@ -1072,7 +1072,7 @@ func (p *fixedPeerTestProcessV1) waitRuntimeOpen(t testing.TB, ctx context.Conte
 	}
 	want, err := fixedPeerRuntimeOpenIdentityV1(p.command.Process.Pid, config)
 	if err == nil && path != "" {
-		err = fixedPeerWaitRuntimeOpenV1(ctx, path+".open", want, os.ReadFile)
+		err = fixedPeerWaitRuntimeOpenV1(ctx, path+".open", want, fixedPeerReadRuntimeOpenV1)
 	} else if err == nil {
 		err = errors.New("child configuration path missing")
 	}

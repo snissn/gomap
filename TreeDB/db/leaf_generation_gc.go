@@ -885,7 +885,7 @@ func (db *DB) publishLeafGenerationState(refreshValueLogSet bool) error {
 		newState.LeafGenerationStateVersion = oldState.LeafGenerationStateVersion
 	}
 	db.state.Store(newState)
-	db.publishSnapshotView(db.idx.Load(), newState, db.valueLogManager)
+	db.publishSnapshotView(db.idx.Load(), newState, db.valueLogManager, nil)
 	if oldState.ValueLogSet != nil && db.valueLogManager != nil {
 		return db.valueLogManager.Release(oldState.ValueLogSet)
 	}

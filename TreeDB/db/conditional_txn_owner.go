@@ -1,6 +1,9 @@
 package db
 
-import "github.com/snissn/gomap/TreeDB/internal/transactionowner"
+import (
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
+)
 
 // BindPrivateCOWOwner retires the backend compatibility history before a public
 // wrapper exposes its privately owned cache. Logical mutations thereafter belong
@@ -24,7 +27,21 @@ func (db *DB) BindPrivateCOWOwner(owner *transactionowner.Owner) error {
 		db.conditionalOracle.history = nil
 	}
 	db.privateCOWOwner = owner
+	db.acceptedPrefix.Store(db.rootPublication.coordinator.AcceptedPrefixOwner())
 	return nil
+}
+
+// PrivateCOWAcceptedPrefix transports the existing DB publication authority to
+// its privately bound cache. The identity fence owns no queue or clock.
+func (db *DB) PrivateCOWAcceptedPrefix(owner *transactionowner.Owner) (*rootpublication.Coordinator, rootpublication.LogicalFrontiers, error) {
+	if db == nil || owner == nil || db.privateCOWOwner != owner || db.acceptedPrefix.Load() == nil {
+		return nil, rootpublication.LogicalFrontiers{}, ErrConditionalTxnUnsupported
+	}
+	state := db.state.Load()
+	if state == nil {
+		return nil, rootpublication.LogicalFrontiers{}, ErrClosed
+	}
+	return db.acceptedPrefix.Load(), rootpublication.LogicalFrontiers{C: state.AppliedCommandLSN, W: db.commandWALDurableLSN.Load(), S: rootpublication.SealedPrefix{CanonicalLSN: state.AppliedCommandLSN}}, nil
 }
 
 // PreflightPrivateCOWCommand qualifies the raw-only owner before cache admission.
@@ -41,8 +58,11 @@ func (db *DB) PreflightPrivateCOWCommand(owner *transactionowner.Owner) error {
 	if err := db.commandWALPoisonedError(); err != nil {
 		return err
 	}
+	if err := db.acceptedPrefix.Load().AcceptedError(); err != nil {
+		return err
+	}
 	db.commandWALRawBarrierMu.Lock()
-	ready := len(db.commandWALRawBarriers) == 0
+	ready := len(db.commandWALRawBarriers) == 0 && db.legacyCommandProducers == 0
 	db.commandWALRawBarrierMu.Unlock()
 	if !ready {
 		return ErrConditionalTxnUnsupported

@@ -2,6 +2,16 @@
 
 This document defines write semantics for TreeDB cached mode and backend mode.
 
+The named public online value-log rewrite uses the original COW maintenance
+owner when native semantics are active. Its ordinary physical publications
+preserve entry revisions and applied command LSN; they do not represent a new
+logical transaction or accepted-prefix cut. Older already-handed-off retirement
+may complete independently. The operation reconciles append lanes and refreshes
+the exact semantic basis under its existing flush fence before an overlapping
+Close can dispose those resources, even when rewrite reports a partial-work
+error. New admission after Close remains refused. This role does not authorize
+other backend maintenance callbacks. See [value-log lifecycle](value-log-lifecycle.md).
+
 Ordinary typed INSERTs may append to a manifest-owned column asset segment under
 the serialized command-publication context. Exact retained resource authority
 must match the existing file and parent before writing; every batch retains its
@@ -425,14 +435,47 @@ WAL custody is not transferred to cache readers. After append and release of
 the WAL barrier, one already-prepared cut is installed without allocation,
 rebase or root rebuilding. The `no_wal_fast` profile uses the same final metadata authority;
 explicit sync releases writer/admission ownership before sealed-root Checkpoint.
-Unsupported surfaces and capacity refusal stop before acceptance. Post-append
-ambiguity/poison/reopen rules are unchanged.
+Unsupported raw surfaces and raw capacity refusal stop before acceptance.
+Native composite preparation uses the same owner and final installer: its admitted
+internal finalizer may bind actual-LSN assets after assignment, and any failure
+there retains original assigned custody and poisons continuation without a partial
+install. Ordinary NoWAL native publication needs no canonical intent; typed
+actual-LSN finalization remains a WAL operation. Post-append ambiguity/poison/reopen
+rules are unchanged.
 
-For public command-WAL stores in this mode, the main physical backend uses the
-existing PRIMARY capsule constructor and promotion. Foreground acknowledgement
-installs the prepared C1 cut against its existing backend snapshot; it does not
-checkpoint PRIMARY on acknowledgement. Dictionary and template stores keep their
-independent format policy. A newly acquired cut after checkpoint binds the exact
+For eligible inline typed collection inserts, the complete canonical command
+contains the input needed to rebuild the column assets. Private preparation
+retains declared typed vectors and the noncolumn residual in the original native
+state. It assigns no provisional LSN or asset generation. The original command
+append assigns the actual LSN and aggregate member ordinal before one complete
+raw-and-collection cut becomes visible. This route initially supports durable
+command WAL, one top-level `int64` column owned by `typed_column_part`,
+semantic-stream-v1 noncolumn retention, and no secondary indexes. The initial
+route admits one typed insert member per transaction and one typed collection
+per finite checkpoint cut; a second typed collection is refused before append
+until that cut drains. Other layouts, operations, profiles and broader cohorts
+require their own eligibility and lifecycle qualification.
+
+Checkpoint materializes these typed sources through the captured prefix's
+original build group, snapshot, finite reservation and resource closure. Each
+source keeps its actual command identity; checkpoint progress cannot replace it.
+The physical build installs primary, manifest, row-locator and retained-stream
+roots together, preserving held cuts and any newer accepted suffix. Inline
+replay uses the same canonical aggregate without appending another command.
+External inputs absent from that aggregate still need preaccept resource closure.
+
+Failure before complete logical installation retains original assigned custody
+and exposes no member. A later accepted physical-build failure retains the
+already complete logical cut and the original failed build and output authority,
+fences further mutations, and installs no partial disk basis. It is terminal for
+that owner; a fresh owner recovers the canonical suffix. A failed build cannot
+be retried by replacing its ledger or refunding its original reservation.
+
+For ordinary new public command-WAL stores in this mode, the main physical backend
+uses the existing DATA root publication path. Foreground acknowledgement installs the
+prepared C1 cut against its existing backend snapshot; it does not checkpoint
+on acknowledgement. Dictionary and template stores have independent lifetimes
+and default to DATA unless explicitly selecting or reopening PRIMARY. A newly acquired cut after checkpoint binds the exact
 successor backend StateToken, while held cuts retain their original basis and values.
 
 Checkpoint flushes one captured prefix against its captured backend basis,
@@ -441,10 +484,14 @@ only the proved-covered prefix at handoff. It retains the acceptance receipt
 even if later waiting/cleanup reports an error. A permitted retry completes
 handoff rather than reapplying the accepted prefix. Existing Applied-LSN,
 dependency-prefix and sealed dual-meta boundaries govern durability and cleanup.
-For selected PRIMARY V6 capsules, fallback refresh uses the same root transaction
-and verifies identical complete directory operands across the two distinct fixed
-slot addresses; matching command coverage alone does not authorize cleanup.
+Explicit command-WAL checkpoint also converges the fallback DATA slot when
+needed. The two slots must bind matching complete roots and applied command
+coverage before cleanup; a matching LSN alone does not establish that proof.
 See [COW publication and lock ordering](cow-cache-publication.md).
+
+The temporary explicit/persisted PRIMARY route retains its original capsule
+constructor and promotion. Its fallback refresh compares complete directory
+operands across distinct fixed slot addresses; matching LSNs alone are insufficient.
 
 ## 4. Backend Commit Model
 
@@ -615,6 +662,14 @@ plus new `AppliedLSN`, never a split state. A future
 checkpoint-without-publication mode must report command WAL debt and retain all
 required WAL segments and external refs.
 
+In COW mode, explicit checkpoint also joins the original accepted-custody
+retirement through its captured logical/canonical endpoint. Physical durability
+can complete before that retirement advances the sealed logical frontier; the
+checkpoint joins both without extending coverage to post-cut writes. Idle
+fallback convergence joins the corresponding exact basis before comparing the
+frontiers. These joins preserve original cleanup failures and do not wait for
+the separate semantic cleanup worker.
+
 For a cached command-WAL checkpoint with no pending public frames, maintenance
 may republish the selected roots with the same `AppliedCommandLSN` only when
 the recovery-selectable fallback slot still has an older applied LSN. It writes
@@ -718,8 +773,10 @@ versions without backward-compatibility guarantees.
 
 The bounded vector prepare executor acquires its stable generation pin before
 raw admission. Its actual Append staging guard owns one teardown reader and
-the raw publication mutex through Finalize/Abort. Prepared callbacks retain and
-transfer that DB-minted guard in Append Options without reacquiring raw or the
+the raw publication mutex during materialization. Finalize/Abort invalidate the
+borrower and release the original materialization owner before any requested
+exact-seal wait. Prepared callbacks retain and transfer that DB-minted guard in
+Append Options without reacquiring raw or the
 global append mutex. Ordinary Append mints its typed guard after the existing
 public barriers drain, retaining the actual raw-admission release as well.
 DB-validated capture borrowers
@@ -738,7 +795,10 @@ The [production and benchmark profile audit](no-wal-fast-audit.md) records publi
 collection boundary coverage, persistent closure, both recoverable generations,
 benchmark profile mapping, and the allocation consequences of explicit drains.
 
-### Selected V6 ordinary constructor and promotion ownership
+### Temporary explicit PRIMARY V6 constructor
+
+The existing explicit/persisted PRIMARY path retains this constructor until
+consumer migration and final representation removal. Ordinary new stores use DATA.
 
 Selected V6 ordinary writes construct their independently immutable logical
 directory under the existing durable-root transaction. Relaxed visibility and
@@ -762,6 +822,8 @@ finishes the ordinary transaction synchronously; this ordinary callback path is
 not bounded native Accepted/Finish qualification.
 
 ## Capsule-format joint vacuum durability
+
+The temporary explicit/persisted PRIMARY path retains this joint protocol.
 
 Vacuum rebuilds private DATA/PRIMARY files, both eligible roots and their finite
 parent closures against one genuine DATA generation. Each actual external

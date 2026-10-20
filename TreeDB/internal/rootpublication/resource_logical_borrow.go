@@ -199,20 +199,36 @@ func (s *dependencyBorrowScratch) physical(key, value []byte) (DependencyManifes
 // constructors are reached. Exact canonical physical and logical records and
 // all counts are checked, including records unrelated to the selected entry.
 func (d *DependencyDirectoryV2) walkBorrowed(owner *retainedalloc.Owner, visit func([]byte, StableLogicalObligation) error) error {
-	return d.walkBorrowedRecords(owner, visit, nil)
+	return d.walkBorrowedRecords(owner, nil, visit, nil)
 }
 
 // ValidateWithMetadataV2 checks every canonical record with admitted fixed
 // scratch. check is a synchronous cancellation guard, not a retained callback.
 func (d *DependencyDirectoryV2) ValidateWithMetadataV2(owner *retainedalloc.Owner, check func() error) error {
-	return d.walkBorrowedRecords(owner, nil, check)
+	return d.walkBorrowedRecords(owner, nil, nil, check)
 }
 
-func (d *DependencyDirectoryV2) walkBorrowedRecords(owner *retainedalloc.Owner, visit func([]byte, StableLogicalObligation) error, check func() error) (retErr error) {
+func (d *DependencyDirectoryV2) walkBorrowedRecords(owner *retainedalloc.Owner, physicalVisit func([]byte, []byte, DependencyManifestEntryV1) error, visit func([]byte, StableLogicalObligation) error, check func() error) (retErr error) {
+	return d.walkBorrowedRecordsWithPhysical(owner, physicalVisit, func(key []byte, obligation StableLogicalObligation, _ DependencyManifestEntryV1) error {
+		if visit != nil {
+			return visit(key, obligation)
+		}
+		return nil
+	}, check)
+}
+
+// The stream keeps each logical record alive while one independent point slot
+// checks its physical owner. The physical descriptor borrows that slot/parser
+// only through visit; neither callback may retain these views.
+func (d *DependencyDirectoryV2) walkBorrowedRecordsWithPhysical(owner *retainedalloc.Owner, physicalVisit func([]byte, []byte, DependencyManifestEntryV1) error, visit func([]byte, StableLogicalObligation, DependencyManifestEntryV1) error, check func() error) (retErr error) {
 	if owner == nil || d == nil {
 		return ErrResourceOwnership
 	}
-	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(dependencyBorrowScratch{}))) + 2*retainedalloc.AllocationCharge(tree.OwnedPointerProjectionAllocationSize())
+	type scratch struct {
+		parser dependencyBorrowScratch
+		point  ownedDirectoryPointV2
+	}
+	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(scratch{}))) + retainedalloc.AllocationCharge(tree.OwnedPointerProjectionAllocationSize())
 	if err := owner.AddPending(charge); err != nil {
 		return err
 	}
@@ -227,11 +243,11 @@ func (d *DependencyDirectoryV2) walkBorrowedRecords(owner *retainedalloc.Owner, 
 		}
 		retErr = errors.Join(retErr, err)
 	}()
-	s := new(dependencyBorrowScratch)
-	defer func() { clear(s.fields[:]); s.membership.values = nil; s.namespace = DependencyManifestNamespaceV1{} }()
+	s := new(scratch)
+	previous := s.parser.previous[:0]
+	defer func() { previous = nil; *s = scratch{}; s = nil }()
 	it := d.tree.OwnedPointerProjectionIterator(nil, nil, nil)
-	defer it.Close()
-	previous := s.previous[:0]
+	defer func() { it.Close(); it = nil }()
 	var physical, logical uint64
 	for ; it.Valid(); it.Next() {
 		if check != nil {
@@ -241,7 +257,7 @@ func (d *DependencyDirectoryV2) walkBorrowedRecords(owner *retainedalloc.Owner, 
 		}
 		key := it.UnsafeKey()
 		value, _, flags := it.UnsafeEntry()
-		if len(key) == 0 || len(key) > len(s.previous) || flags&(node.FlagPointer|node.FlagTombstone) != 0 || (len(previous) > 0 && bytes.Compare(previous, key) >= 0) {
+		if len(key) == 0 || len(key) > len(s.parser.previous) || flags&(node.FlagPointer|node.FlagTombstone) != 0 || (len(previous) > 0 && bytes.Compare(previous, key) >= 0) {
 			return ErrDependencyManifestFormat
 		}
 		switch key[0] {
@@ -249,8 +265,14 @@ func (d *DependencyDirectoryV2) walkBorrowedRecords(owner *retainedalloc.Owner, 
 			if physical >= d.ref.PhysicalCount {
 				return ErrDependencyManifestFormat
 			}
-			if _, err := s.physical(key, value); err != nil {
+			entry, err := s.parser.physical(key, value)
+			if err != nil {
 				return err
+			}
+			if physicalVisit != nil {
+				if err := physicalVisit(key, value, entry); err != nil {
+					return err
+				}
 			}
 			physical++
 		case dependencyLogicalKeyV2:
@@ -261,40 +283,32 @@ func (d *DependencyDirectoryV2) walkBorrowedRecords(owner *retainedalloc.Owner, 
 			if err != nil {
 				return err
 			}
-			// Exact lookup uses its own already admitted iterator. It avoids GetAppend's
-			// allocating returned value and preserves a validated immutable tree owner.
-			target := d.tree.OwnedPointerProjectionIterator(ownerKey, nil, nil)
-			if !target.Valid() || !bytes.Equal(target.UnsafeKey(), ownerKey) {
-				err = target.Error()
-				target.Close()
+			// The stream's reconstructed key/value are independent of the point
+			// slot. Keep both borrowed records live until all validation returns.
+			found, err := d.lookupBorrowedRecordV2(&s.point, ownerKey, func(key, record []byte) error {
+				entry, err := s.parser.physical(key, record)
 				if err != nil {
 					return err
 				}
-				return ErrDependencyManifestFormat
-			}
-			record, _, f := target.UnsafeEntry()
-			if f&(node.FlagPointer|node.FlagTombstone) != 0 {
-				target.Close()
-				return ErrDependencyManifestFormat
-			}
-			entry, err := s.physical(ownerKey, record)
-			if err == nil {
-				err = dependencyLogicalOwnerV2(entry, o)
-			}
-			target.Close()
+				if err := dependencyLogicalOwnerV2(entry, o); err != nil {
+					return err
+				}
+				if visit != nil {
+					return visit(ownerKey, o, entry)
+				}
+				return nil
+			})
 			if err != nil {
 				return err
 			}
-			if visit != nil {
-				if err := visit(ownerKey, o); err != nil {
-					return err
-				}
+			if !found {
+				return ErrDependencyManifestFormat
 			}
 			logical++
 		default:
 			return ErrDependencyManifestFormat
 		}
-		previous = s.previous[:len(key)]
+		previous = s.parser.previous[:len(key)]
 		copy(previous, key)
 	}
 	if err := it.Error(); err != nil {

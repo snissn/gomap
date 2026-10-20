@@ -112,7 +112,7 @@ func WalkDependencyDirectoryRecordsV2(source *StableResourceSet, visit func(key,
 			if !retained {
 				return nil
 			}
-			if removed, exists := view.logical.removed[stableLogicalObligationKey(obligation)]; exists {
+			if removed, exists := view.logical.removedValue(obligation); exists {
 				if removed != obligation {
 					return ErrResourceConflict
 				}

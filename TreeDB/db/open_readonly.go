@@ -68,7 +68,7 @@ func openReadOnly(opts Options) (result *DB, retErr error) {
 		return nil, err
 	}
 
-	db := &DB{dir: opts.Dir, readOnly: true, valueLogIdentityPins: valueLogIdentityPins}
+	db := &DB{dir: opts.Dir, readOnly: true, valueLogIdentityPins: valueLogIdentityPins, ownedFinishGuardV6: &OwnedCallbackCloseGuard{}}
 	gen, err := newStartupIndexGeneration(db, lock)
 	if err != nil {
 		return nil, errors.Join(err, lock.Close())
@@ -223,7 +223,7 @@ func openReadOnly(opts Options) (result *DB, retErr error) {
 		LeafGenerationStateVersion: db.leafGenerationStateVersion,
 	}
 	db.state.Store(initialState)
-	db.publishSnapshotView(gen, initialState, vm)
+	db.publishSnapshotView(gen, initialState, vm, nil)
 
 	// No WAL replay, no background workers in read-only mode.
 	db.bootstrapNegativeFilter(opts.NegativeLookupFilterBytes)
@@ -269,7 +269,7 @@ func openReadOnlyNoLockWithRegistryV6(opts Options, valueLogIdentityPins *rootpu
 		return nil, err
 	}
 
-	db := &DB{dir: opts.Dir, readOnly: true, valueLogIdentityPins: valueLogIdentityPins}
+	db := &DB{dir: opts.Dir, readOnly: true, valueLogIdentityPins: valueLogIdentityPins, ownedFinishGuardV6: &OwnedCallbackCloseGuard{}}
 	gen, err := newStartupIndexGeneration(db, lock)
 	if err != nil {
 		return nil, err
@@ -423,7 +423,7 @@ func openReadOnlyNoLockWithRegistryV6(opts Options, valueLogIdentityPins *rootpu
 		LeafGenerationStateVersion: db.leafGenerationStateVersion,
 	}
 	db.state.Store(initialState)
-	db.publishSnapshotView(gen, initialState, vm)
+	db.publishSnapshotView(gen, initialState, vm, nil)
 
 	db.bootstrapNegativeFilter(opts.NegativeLookupFilterBytes)
 	return db, nil

@@ -793,8 +793,11 @@ func TestDgraphShapedProfilesRoundTrip(t *testing.T) {
 					{key: "treedb.cache.iterator.snapshot_rotations_total", value: 0},
 					{key: "treedb.cache.point_successor.calls_total", value: 2},
 					{key: "treedb.cache.point_successor.hits_total", value: 2},
-					{key: "treedb.cache.point_successor.sources_total", value: 2},
-					{key: "treedb.cache.point_successor.sources_max", value: 1},
+					// The first canonical read rotates the initial adaptive mutable:
+					// probe its empty replacement and retained value source. The
+					// tombstone read then hits the new mutable directly.
+					{key: "treedb.cache.point_successor.sources_total", value: 3},
+					{key: "treedb.cache.point_successor.sources_max", value: 2},
 					{key: "treedb.cache.point_successor.general_merge_iterators_total", value: 0},
 				} {
 					if got, ok := parseCounter(stats, want.key); !ok || got != want.value {

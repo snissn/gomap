@@ -41,6 +41,11 @@ func TestCOWPublicCompressedDictionaryAndPhysicalPinLifetime(t *testing.T) {
 				o.BackgroundCheckpointIdleDuration = -1
 				o.BackgroundIndexVacuumInterval = -1
 				o.MaxWALBytes = -1
+				// Three independently held compressed read workspaces retain their
+				// actual bounded zstd decoder envelopes alongside the preadmitted
+				// maintenance tranche. Keep this a finite explicit caller limit.
+				o.COWMemtableLimits = DefaultCOWMemtableLimits()
+				o.COWMemtableLimits.MaxInFlightBytes = 128 << 20
 				o.ValueLog.Compression = ValueLogCompressionDict
 				o.ValueLog.CompressionAutotune = AutotuneOptions{Mode: AutotuneOff}
 				o.ValueLog.DictAdaptiveRatio = -1

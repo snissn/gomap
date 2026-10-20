@@ -7,6 +7,8 @@ import (
 	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
+	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/tree"
 )
 
 // Iterator is the internal interface for iteration.
@@ -36,6 +38,11 @@ type SnapshotPool struct{}
 // pool. Exported Snapshot handles must never enter this pool.
 type oneShotRead struct {
 	snapshot Snapshot
+	// Fixed synchronous successor storage belongs to this existing private read
+	// owner. It contains no borrowed page, value-reader or tree aliases.
+	successor     tree.OwnedSuccessorScratch
+	successorKey  [page.PageSize]byte
+	successorLeaf [page.PageSize]byte
 }
 
 var oneShotReadPool = sync.Pool{New: func() any {
@@ -111,7 +118,7 @@ func (p *SnapshotPool) putRead(s *Snapshot, oneShot bool) {
 		if s.rootTreeFirst[0].root != 0 {
 			s.rootTreeFirst[0] = snapshotRootTree{}
 		}
-		// The private one-shot pool never exposes an alternate-root reader,
+		// The private one-shot pool never caches an alternate-root reader,
 		// historical rebind, or iterator. Its entries keep these fields empty.
 		s.primaryRebindRoot = primaryStateRootV5{}
 		s.primaryRebindErr = nil

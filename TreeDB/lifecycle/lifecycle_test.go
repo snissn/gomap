@@ -25,7 +25,7 @@ func TestLifecycle(t *testing.T) {
 	// Seq 10 < 5 is False.
 	// Should NOT extract.
 
-	rid := reg.Register(5)
+	rid := mustRegisterReader(t, reg, 5)
 	min := reg.MinPinnedSeq()
 	if min != 5 {
 		t.Errorf("Expected min 5, got %d", min)
@@ -38,7 +38,7 @@ func TestLifecycle(t *testing.T) {
 
 	// Case 2: Reader moves to Seq 15 (Unregister 5, Register 15)
 	reg.Unregister(rid)
-	rid = reg.Register(15)
+	rid = mustRegisterReader(t, reg, 15)
 
 	min = reg.MinPinnedSeq()
 	if min != 15 {
@@ -71,8 +71,8 @@ func TestLifecycle(t *testing.T) {
 
 func TestReaderRegistry_FastPathSingleSeq(t *testing.T) {
 	reg := NewReaderRegistry()
-	rid1 := reg.Register(42)
-	rid2 := reg.Register(42)
+	rid1 := mustRegisterReader(t, reg, 42)
+	rid2 := mustRegisterReader(t, reg, 42)
 
 	if !isFastHandle(rid1) || !isFastHandle(rid2) {
 		t.Fatalf("expected fast handles for shared sequence, got rid1=%d rid2=%d", rid1, rid2)
@@ -94,11 +94,11 @@ func TestReaderRegistry_FastPathSingleSeq(t *testing.T) {
 
 func TestReaderRegistry_FastAndSlowReadersMin(t *testing.T) {
 	reg := NewReaderRegistry()
-	fastID := reg.Register(10)
+	fastID := mustRegisterReader(t, reg, 10)
 	if !isFastHandle(fastID) {
 		t.Fatalf("expected fast handle, got slow handle %d", fastID)
 	}
-	slowID := reg.Register(9)
+	slowID := mustRegisterReader(t, reg, 9)
 
 	if min := reg.MinPinnedSeq(); min != 9 {
 		t.Fatalf("expected min 9 with slow reader present, got %d", min)
@@ -131,7 +131,7 @@ func TestReaderRegistry_FastPathConcurrentRegisterUnregister(t *testing.T) {
 		for i := 0; i < goroutines; i++ {
 			go func(i int) {
 				defer regWG.Done()
-				ids[i] = reg.Register(seq)
+				ids[i] = mustRegisterReader(t, reg, seq)
 			}(i)
 		}
 		regWG.Wait()
@@ -172,7 +172,7 @@ func TestReaderRegistry_ConcurrentFastAndSlowReaders(t *testing.T) {
 
 	reg := NewReaderRegistry()
 	for r := 0; r < rounds; r++ {
-		anchor := reg.Register(fastSeq)
+		anchor := mustRegisterReader(t, reg, fastSeq)
 		if !isFastHandle(anchor) {
 			t.Fatalf("round %d: anchor id=%d, expected fast handle", r, anchor)
 		}
@@ -185,13 +185,13 @@ func TestReaderRegistry_ConcurrentFastAndSlowReaders(t *testing.T) {
 		for i := 0; i < fastReaders; i++ {
 			go func(i int) {
 				defer regWG.Done()
-				fastIDs[i] = reg.Register(fastSeq)
+				fastIDs[i] = mustRegisterReader(t, reg, fastSeq)
 			}(i)
 		}
 		for i := 0; i < slowReaders; i++ {
 			go func(i int) {
 				defer regWG.Done()
-				slowIDs[i] = reg.Register(slowSeq)
+				slowIDs[i] = mustRegisterReader(t, reg, slowSeq)
 			}(i)
 		}
 		regWG.Wait()
@@ -244,7 +244,7 @@ func TestReaderRegistry_RegisterFastCountSaturationFallsBackToSlowHandle(t *test
 		reg.fastShards[i].count.Store(math.MaxInt32)
 	}
 
-	id := reg.Register(7)
+	id := mustRegisterReader(t, reg, 7)
 	if isFastHandle(id) {
 		t.Fatalf("expected slow-handle fallback at fast-count saturation")
 	}
@@ -308,7 +308,7 @@ func TestReaderRegistry_EmptyShardClaimSerializesWithMinScan(t *testing.T) {
 	reg.mu.Lock()
 	done := make(chan int64, 1)
 	go func() {
-		id, _ := reg.RegisterWithHint(newSeq, shard)
+		id, _ := mustRegisterReaderWithHint(t, reg, newSeq, shard)
 		done <- id
 	}()
 

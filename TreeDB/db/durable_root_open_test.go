@@ -314,25 +314,33 @@ func TestDurableRootManifestPinsValueLogIdentityAndFallsBackWhenNewestDependency
 	if err := batch.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if database.durableRoot.slot != MetaPage1ID || database.durableRoot.manifest == nil {
-		t.Fatalf("durable root slot/manifest=(%d,%v), want slot 1 and manifest", database.durableRoot.slot, database.durableRoot.manifest)
-	}
-	entries := database.durableRoot.manifest.Entries()
-	if len(entries) != 1 || entries[0].Kind != rootpublication.ResourceValueLog {
-		t.Fatalf("manifest entries=%+v, want one value-log dependency", entries)
-	}
-	if entries[0].Frontier.Bytes == 0 || entries[0].Identity.Generation != entries[0].Generation {
-		t.Fatalf("manifest value-log identity/frontier=%+v/%+v", entries[0].Identity, entries[0].Frontier)
+	if database.durableRoot.slot != MetaPage1ID || database.durableRoot.record.Manifest.EntryCount != 1 {
+		t.Fatalf("durable root slot/manifest=(%d,%+v), want slot 1 and one manifest dependency", database.durableRoot.slot, database.durableRoot.record.Manifest)
 	}
 	resources := database.durableRoot.slotResources[MetaPage1ID]
 	if resources == nil || resources.Len() != 1 {
 		t.Fatalf("slot 1 resource closure=%v len=%d, want one retained dependency", resources, resources.Len())
 	}
+	diagnostics, err := resources.AcquirePhysicalDiagnostics()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries := diagnostics.Physical()
+	if len(entries) != 1 || entries[0].Kind != rootpublication.ResourceValueLog {
+		t.Fatalf("manifest entries=%+v, want one value-log dependency", entries)
+	}
+	if entries[0].Frontier().Bytes == 0 || entries[0].Identity().Generation != entries[0].Generation {
+		t.Fatalf("manifest value-log identity/frontier=%+v/%+v", entries[0].Identity(), entries[0].Frontier())
+	}
+	dependencyPath := filepath.Join(dir, filepath.FromSlash(entries[0].DiagnosticPath()))
+	entries = nil
+	if err := diagnostics.CloseWithError(); err != nil {
+		t.Fatal(err)
+	}
 	registry := database.valueLogIdentityPins
 	if registry.ActivePins() == 0 {
 		t.Fatal("published durable slot did not retain its value-log identity pin")
 	}
-	dependencyPath := filepath.Join(dir, filepath.FromSlash(entries[0].DiagnosticPath))
 	if err := database.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -848,7 +856,20 @@ func TestCaptureRebuiltIndexDurableResourcesRetainsSelectedImmutableDependencies
 		builder.Abandon()
 		t.Fatal(err)
 	}
-	database.durableRoot.slotResources[database.durableRoot.slot] = selectedResources
+	admittedResources, err := rootpublication.ImportStableResourceSetMetadata(database.valueLogIdentityPins.MetadataOwner(), selectedResources)
+	if err != nil {
+		selectedResources.Release()
+		t.Fatal(err)
+	}
+	if err := selectedResources.ReleaseWithError(); err != nil {
+		admittedResources.Release()
+		t.Fatal(err)
+	}
+	if err := database.durableRoot.slotResources[database.durableRoot.slot].ReleaseWithError(); err != nil {
+		admittedResources.Release()
+		t.Fatal(err)
+	}
+	database.durableRoot.slotResources[database.durableRoot.slot] = admittedResources
 
 	idx := database.idx.Load()
 	captured, err := database.captureRebuiltIndexDurableResourcesV1(idx.pager, database.meta)
@@ -856,8 +877,16 @@ func TestCaptureRebuiltIndexDurableResourcesRetainsSelectedImmutableDependencies
 		t.Fatal(err)
 	}
 	defer captured.Release()
-	descriptors := mustStableResourceDescriptors(t, captured)
-	if len(descriptors) != 1 || descriptors[0].Kind() != rootpublication.ResourceOuterLeafManifest {
+	diagnostics, err := captured.AcquirePhysicalDiagnostics()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := diagnostics.CloseWithError(); err != nil {
+			t.Error(err)
+		}
+	}()
+	if descriptors := diagnostics.Physical(); len(descriptors) != 1 || descriptors[0].Kind != rootpublication.ResourceOuterLeafManifest {
 		t.Fatalf("rebuilt durable descriptors=%+v, want selected immutable manifest", descriptors)
 	}
 }

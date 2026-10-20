@@ -953,7 +953,7 @@ func appendCanonicalFlushRunChunkToBackendBatch(backendBatch batch.Interface, op
 }
 
 func (db *DB) writeCanonicalFlushRunOpsChunk(ops []batch.Entry, syncFlush bool, commandPublish *checkpointCommandWALPublish, publicationGroup *backenddb.RootPublicationBuildGroup, last bool, mode flushCollectionMode) error {
-	if db == nil || len(ops) == 0 {
+	if db == nil || (len(ops) == 0 && (publicationGroup == nil || !last)) {
 		return nil
 	}
 	backendBatch := db.newBackendBatchWithSize(len(ops))

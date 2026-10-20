@@ -75,8 +75,15 @@ private preparation and finite source-generation reservations. Explicit
 `MemtableMode="cow_btree"` integrates it with one coherent cached cut: fixed
 shard roots, bounded frozen sources and a retained backend snapshot basis.
 Capture pins that cut without rotating shards or scanning historical records.
-Preparation admits all changed roots and resource owners before command append;
-publication installs the complete cut once. See
+Raw preparation admits all changed roots and resource owners before command
+append; publication installs the complete cut once. One bounded DB-wide accepted
+prefix owns sparse participant projections and original cleanup custody. Logical
+visibility, visible command coverage, stable WAL coverage and sealed-root coverage
+are distinct frontiers. The lower native bridge pairs immutable semantic state
+with this same raw cut and exact disk Snapshot; it does not import collection
+implementations or discover participants through another registry. Unmigrated
+collection producers retain their exclusion barriers until their complete native
+route is installed. See
 [COW cached publication](cow-cache-publication.md) for public capabilities,
 limits, checkpoint handoff and refusal, and
 [immutable memtable ownership](cow-memtable-ownership.md) for the precise

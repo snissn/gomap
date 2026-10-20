@@ -13,6 +13,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
+	"github.com/snissn/gomap/TreeDB/internal/txnhistory"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -52,6 +53,13 @@ func (b *Batch) PrepareExternalCommandWALPublication() (err error) {
 	if c.cut.logicalSeq == ^uint64(0) {
 		return memtable.ErrCOWCapacity
 	}
+	if c.prefix != nil && !b.cowState.accepted.Valid() {
+		ticket, err := c.prefix.ReserveAccepted(false)
+		if err != nil {
+			return acceptedAdmissionError(err)
+		}
+		b.cowState.accepted = ticket
+	}
 	if err := c.ensureTxnJournal(); err != nil {
 		return err
 	}
@@ -62,15 +70,8 @@ func (b *Batch) PrepareExternalCommandWALPublication() (err error) {
 				c.updateTxnStats()
 			}
 		}()
-		mutation, err = c.journal.Prepare(b.entries, nil, false)
-		if err != nil {
-			return err
-		}
-		defer func() {
-			if mutation.Valid() {
-				mutation.Cancel()
-			}
-		}()
+		// Validate the ORIGINAL opening R union W and floor before any latest-root
+		// native construction. A physical basis change alone is not a conflict.
 		if b.cowState.txn != nil {
 			started := time.Now()
 			err = b.cowState.txn.validateCOWJournal()
@@ -82,6 +83,43 @@ func (b *Batch) PrepareExternalCommandWALPublication() (err error) {
 				return err
 			}
 		}
+		if owner := b.cowState.native; owner != nil {
+			plan := owner.plan
+			for _, dependencies := range [][]txnhistory.Dependency{plan.Dependencies, plan.Effects} {
+				changed, validateErr := c.journal.DependenciesChanged(plan.StartSequence, dependencies)
+				if validateErr != nil {
+					return validateErr
+				}
+				if changed {
+					return backenddb.ErrConcurrentModification
+				}
+			}
+			if plan.Reprepare != nil {
+				prepared, prepareErr := plan.Reprepare.PrepareNativePublication(c.cut.semanticRootSet, c.cut.basis.snapshot)
+				plan.State, plan.Projections = prepared.State, prepared.Projections
+				if prepareErr != nil {
+					return prepareErr
+				}
+				if plan.State == nil {
+					return ErrCOWUnsupported
+				}
+				plan.Basis = c.cut.semanticRootSet
+			}
+			if plan.Basis != c.cut.semanticRootSet {
+				return backenddb.ErrRootPublicationBasisMismatch
+			}
+			mutation, err = c.journal.PrepareEffects(b.entries, nil, false, plan.Effects)
+		} else {
+			mutation, err = c.journal.Prepare(b.entries, nil, false)
+		}
+		if err != nil {
+			return err
+		}
+		defer func() {
+			if mutation.Valid() {
+				mutation.Cancel()
+			}
+		}()
 	}
 	n := len(b.entries)
 	shards := len(c.writers)
@@ -203,7 +241,7 @@ func (b *Batch) PrepareExternalCommandWALPublication() (err error) {
 				memtable.COWAllocationCharge(2*uint64(unsafe.Sizeof(uintptr(0))))
 		}
 	}
-	p.cut, err = c.prepare(groups, opts)
+	p.cut, err = c.prepareNative(groups, opts, b.cowState.native)
 	if err == nil {
 		err = durabilitycut.EmitBasic(durabilitycut.AfterCOWPreparation, durabilitycut.ResourceAuxiliary, b.db.dir)
 	}
@@ -289,19 +327,43 @@ func (b *Batch) cancelCOWPublication() *cowBatchPreparation {
 	if p != nil && p.cut != nil {
 		p.cut.cancel()
 	}
+	if b.cowState.accepted.Valid() && !b.cowState.receipt.Assigned {
+		if err := b.cowState.accepted.CancelAccepted(); err != nil {
+			b.db.reportError(err)
+		}
+	}
+	b.cowState.accepted = rootpublication.AcceptedTicket{}
 	return p
 }
 
-func (p *cowBatchPreparation) drainCancelled() {
-	if p.cut != nil {
-		p.cut.drainCancelled()
+func (p *cowBatchPreparation) drainCancelled() error {
+	var cleanupErr error
+	if cut := p.cut; cut != nil {
+		p.cut = nil
+		refund, err := cut.drainCancelledWithCompletion()
+		cleanupErr = err
+		cut = nil
+		refund.Close()
 	}
 	for _, resource := range p.resources {
 		if !resource.attached {
 			resource.close()
 		}
 	}
-	p.scratch.Close()
+	refund := p.detachScratch()
+	p = nil
+	refund.Close()
+	return cleanupErr
+}
+
+// End every borrowed preparation alias before returning its original containing
+// allocation receipt. The caller performs the final refund after its last use.
+func (p *cowBatchPreparation) detachScratch() *memtable.COWExternalLease {
+	refund := p.scratch
+	p.cut, p.scratch = nil, nil
+	p.files, p.resources, p.dictionaries = nil, nil, nil
+	p.mutation = txnMutationOwner{}
+	return refund
 }
 
 func (b *Batch) writeCOWPublication(syncWrite bool, unlock func()) error {
@@ -309,7 +371,8 @@ func (b *Batch) writeCOWPublication(syncWrite bool, unlock func()) error {
 	var err error
 	if b.commandWALAppend != nil {
 		err = b.commandWALAppend()
-	} else {
+	} else if b.db.cow.txnOwner == nil {
+		// Standalone caches use ordinary admission; nil is never private authority.
 		finalizer, ok := b.db.backend.(interface {
 			FinalizeRawKVEntryScanForCachedPublication(func() error, backenddb.RawKVCommandWALFinalize, func(func(batch.Entry) error) error, int) error
 		})
@@ -318,6 +381,37 @@ func (b *Batch) writeCOWPublication(syncWrite bool, unlock func()) error {
 		} else {
 			err = finalizer.FinalizeRawKVEntryScanForCachedPublication(b.PrepareExternalCommandWALPublication, b.finalizeCOWPublication, b.Replay, len(b.entries))
 		}
+	} else {
+		finalizer, ok := b.db.backend.(interface {
+			FinalizePrivateCOWPublication(*transactionowner.Owner, func() error, backenddb.RawKVCommandWALFinalize, func(func(batch.Entry) error) error, int) error
+		})
+		if !ok {
+			err = fmt.Errorf("COW cache requires canonical backend finalization")
+		} else {
+			if b.cowState.native != nil && b.cowState.native.plan.RequireInlineCompositeRaw {
+				nativeFinalizer, ok := b.db.backend.(interface {
+					FinalizeNativePrivateCOWPublication(*transactionowner.Owner, func() error, backenddb.RawKVCommandWALFinalize, func(func(batch.Entry) error) error, int) error
+				})
+				if !ok {
+					err = ErrCOWUnsupported
+				} else {
+					err = nativeFinalizer.FinalizeNativePrivateCOWPublication(b.db.cow.txnOwner, b.PrepareExternalCommandWALPublication, b.finalizeCOWPublication, b.Replay, len(b.entries))
+				}
+			} else {
+				err = finalizer.FinalizePrivateCOWPublication(b.db.cow.txnOwner, b.PrepareExternalCommandWALPublication, b.finalizeCOWPublication, b.Replay, len(b.entries))
+			}
+		}
+	}
+	if err != nil && b.cowState.receipt.Assigned && b.cowState.native != nil {
+		if poisoner, ok := b.db.backend.(interface{ MarkCommandWALRecoveryRequired() }); ok {
+			poisoner.MarkCommandWALRecoveryRequired()
+		}
+		b.cowState.receipt.Uncertain = true
+		b.db.cow.prefix.PoisonAccepted(err)
+		p := b.cowState.prepared
+		owner, opening := b.parkAssignedNative(p, err)
+		unlock()
+		return b.drainAssignedNative(owner, opening, p, err)
 	}
 	if err != nil {
 		// Append identity survives an outer registration error. Mark poison
@@ -331,7 +425,7 @@ func (b *Batch) writeCOWPublication(syncWrite bool, unlock func()) error {
 		p := b.cancelCOWPublication()
 		unlock()
 		if p != nil {
-			p.drainCancelled()
+			err = joinCOWCleanupError(err, p.drainCancelled())
 		}
 		return err
 	}
@@ -343,16 +437,47 @@ func (b *Batch) writeCOWPublication(syncWrite bool, unlock func()) error {
 	// Accepted publication is nonfallible. This existing internal observation
 	// seam may pause tests, but an observer cannot revoke an accepted frame.
 	_ = durabilitycut.EmitBasic(durabilitycut.BeforeCOWCutSwap, durabilitycut.ResourceAuxiliary, b.db.dir)
+	p.cut.next.logicalSeq = b.db.cow.cut.logicalSeq + 1
 	if p.mutation.Valid() {
-		p.cut.next.logicalSeq = b.db.cow.cut.logicalSeq + 1
 		b.db.cow.journal.Install(p.mutation, p.cut.next.logicalSeq)
 		b.db.cow.updateTxnStats()
 		p.mutation = txnMutationOwner{}
 	}
 	p.cut.next.visibleCommandLSN = b.cowState.receipt.AssignedLSN
-	old := p.cut.publish()
+	native := b.cowState.native
+	var nativeOpening *cowReadCut
+	if native != nil {
+		nativeOpening = native.opening
+		native.opening = nil
+	}
+	old, publishErr := p.cut.publishAccepted(b.cowState.accepted)
+	if publishErr != nil {
+		if poisoner, ok := b.db.backend.(interface{ MarkCommandWALRecoveryRequired() }); ok {
+			poisoner.MarkCommandWALRecoveryRequired()
+		}
+		b.cowState.receipt.Uncertain = b.cowState.receipt.Assigned
+		if native != nil && b.cowState.receipt.Assigned {
+			native.opening = nativeOpening
+			b.db.cow.prefix.PoisonAccepted(publishErr)
+			owner, opening := b.parkAssignedNative(p, publishErr)
+			unlock()
+			return b.drainAssignedNative(owner, opening, p, publishErr)
+		}
+		if native != nil {
+			native.opening = nativeOpening
+		}
+		p.cut.cancel()
+		unlock()
+		return joinCOWCleanupError(publishErr, p.drainCancelled())
+	}
+	b.cowState.accepted = rootpublication.AcceptedTicket{}
 	b.cowState.receipt.LogicalInstalled = true
 	b.cowState.receipt.LogicalSeq = p.cut.next.logicalSeq
+	if native != nil {
+		// The cut owns State; the accepted queue owns sparse custody. No queue
+		// edge may retain the whole caller descriptor or captured EngineVersion.
+		b.cowState.native = nil
+	}
 	var mutableBytes int64
 	for _, shard := range p.cut.next.shards {
 		mutableBytes += shard.size
@@ -361,19 +486,28 @@ func (b *Batch) writeCOWPublication(syncWrite bool, unlock func()) error {
 	// Batch storage is no longer borrowed: C1 copied changed payloads before
 	// the append. Release admission and owner before retirement or checkpoint.
 	unlock()
+	if nativeOpening != nil {
+		err = joinCOWCleanupError(err, b.db.cow.releaseCut(nativeOpening))
+	}
 	for _, resource := range p.resources {
 		if resource.definition != nil {
 			resource.definition.ReleaseCapture()
 		}
 	}
 	if old != nil {
-		old.drain()
+		err = joinCOWCleanupError(err, old.drain())
 	}
-	p.scratch.Close()
+	refund := p.detachScratch()
+	p = nil
+	refund.Close()
 	b.db.noteWrite()
 	b.updateBatchEntryHint()
 	b.updateBatchCopyHint()
 	b.Reset()
+	if err != nil {
+		b.db.reportError(err)
+		return err
+	}
 	if checkpoint {
 		err := b.db.Checkpoint()
 		if err == nil {
@@ -447,6 +581,9 @@ func (b *Batch) RecordCOWAppend(owner *transactionowner.Owner, lsn uint64, appen
 	b.cowState.receipt.Uncertain = lsn != 0 && appendErr != nil
 	b.cowState.receipt.WALCompleted = lsn != 0 && appendErr == nil
 	b.cowState.receipt.WALStable = lsn != 0 && appendErr == nil && synced
+	if b.cowState.accepted.Valid() {
+		return b.cowState.accepted.RecordAssigned(lsn, appendErr, synced)
+	}
 	return nil
 }
 func (b *Batch) COWReceipt() COWPublicationReceipt {
@@ -476,13 +613,13 @@ func (b *Batch) AcquireCOWAppendGuard(owner *transactionowner.Owner) error {
 		return ErrCOWUnsupported
 	}
 	provider, ok := b.db.backend.(interface {
-		LockCommandWALStagingGuardV1() (*backenddb.CommandWALStagingGuardV1, error)
+		LockPrivateCOWStagingGuard(*transactionowner.Owner) (*backenddb.CommandWALStagingGuardV1, error)
 		PreflightPrivateCOWCommand(*transactionowner.Owner) error
 	})
 	if !ok {
 		return ErrCOWUnsupported
 	}
-	guard, err := provider.LockCommandWALStagingGuardV1()
+	guard, err := provider.LockPrivateCOWStagingGuard(owner)
 	if err != nil {
 		return err
 	}
@@ -491,5 +628,27 @@ func (b *Batch) AcquireCOWAppendGuard(owner *transactionowner.Owner) error {
 		return err
 	}
 	b.cowState.guard = guard
+	return nil
+}
+
+// admitCOWAccepted reserves the queue slot before any producer/publication gate.
+// A full finite prefix is sealed using the reserved maintenance lane, then the
+// original admission is retried once. Retained readers do not need to end.
+func (b *Batch) admitCOWAccepted() error {
+	c := b.db.cow
+	if c.prefix == nil || (len(b.entries) == 0 && b.cowState.native == nil) || b.cowState.accepted.Valid() {
+		return nil
+	}
+	ticket, err := c.prefix.ReserveAccepted(false)
+	if errors.Is(err, rootpublication.ErrAcceptedCapacity) {
+		if err = b.db.Checkpoint(); err != nil {
+			return err
+		}
+		ticket, err = c.prefix.ReserveAccepted(false)
+	}
+	if err != nil {
+		return acceptedAdmissionError(err)
+	}
+	b.cowState.accepted = ticket
 	return nil
 }

@@ -389,6 +389,11 @@ func TestPublicCOWTxnQualifiedBatchCallbackEscapeRejects(t *testing.T) {
 }
 func TestPublicCOWTxnLargeDependencyKeysOwnedAndReleased(t *testing.T) {
 	db, _, _ := cowPublicContractOpen(t, ProfileNoWALFast)
+	// Exclude the original lazy journal's fixed namespace-aware backing arrays
+	// from the private dependency arena delta; this is an actual publication.
+	if err := db.Set([]byte("journal-seed"), []byte("seed")); err != nil {
+		t.Fatal(err)
+	}
 	before := db.cached.COWMemoryStats()
 	tx := cowTxnOpen(t, db)
 	for n := 0; n < 64; n++ {

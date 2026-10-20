@@ -399,6 +399,11 @@ func persistIndexStateForDocumentFormat(format DocumentFormat) bool {
 }
 
 type CollectionManager struct {
+	nativeJSON                              *NativeJSONManager
+	initializationError                     error
+	legacyProducerRelease                   func()
+	managerCloseOnce                        sync.Once
+	managerCloseError                       error
 	db                                      *backenddb.DB
 	closeUnregister                         func()
 	closing                                 atomic.Bool
@@ -419,6 +424,9 @@ type collectionManagerOptions struct {
 }
 
 type Collection struct {
+	// nativeOperationLocalReads keeps admitted temporary read backing out of global pools.
+	nativeOperationLocalReads   bool
+	nativeJSON                  *NativeJSONManager
 	typedGraphReconcile         *typedGraphReconcileToken
 	db                          *backenddb.DB
 	manager                     *CollectionManager
@@ -1734,7 +1742,31 @@ func OpenCollectionForRaftSourceV1(database *backenddb.DB, name string) (*Collec
 func newCollectionManager(database *backenddb.DB, opts collectionManagerOptions) *CollectionManager {
 	manager := &CollectionManager{db: database}
 	if database != nil {
+		release, err := database.AdmitLegacyCommandProducer()
+		if errors.Is(err, backenddb.ErrNativeSemanticUnsupported) {
+			native, nativeErr := NewNativeJSONManager(database)
+			if nativeErr == nil {
+				manager.db = nil // no legacy write domain or producer can escape this role
+				manager.nativeJSON = native
+				if opts.registerBackendHooks {
+					manager.closeUnregister = database.RegisterCloseHookBefore(manager.closeForBackend)
+				}
+				return manager
+			}
+			err = nativeErr
+		}
+		if err != nil {
+			manager.initializationError = err
+			manager.db = nil
+			manager.closing.Store(true)
+			return manager
+		}
+		manager.legacyProducerRelease = release
 		if err := ensureColumnAssetLifecycleRegistryDB(database); err != nil {
+			manager.initializationError = err
+			manager.legacyProducerRelease()
+			manager.legacyProducerRelease = nil
+			manager.db = nil
 			manager.closing.Store(true)
 			return manager
 		}
@@ -1776,6 +1808,24 @@ func (m *CollectionManager) SetVectorIndexConstructionDecisionObserverEnabled(en
 }
 
 func (m *CollectionManager) closeForBackend() error {
+	if m == nil {
+		return nil
+	}
+	m.managerCloseOnce.Do(func() { m.managerCloseError = m.closeManagerOwned() })
+	return m.managerCloseError
+}
+
+func (m *CollectionManager) closeManagerOwned() error {
+	if m == nil {
+		return nil
+	}
+	defer func() {
+		if m.legacyProducerRelease != nil {
+			release := m.legacyProducerRelease
+			m.legacyProducerRelease = nil
+			release()
+		}
+	}()
 	m.closing.Store(true)
 	defer func() {
 		if m.commandWALRawUnregister != nil {
@@ -1792,6 +1842,9 @@ func (m *CollectionManager) closeForBackend() error {
 }
 
 func (m *CollectionManager) isClosing() bool {
+	if m.nativeJSON != nil {
+		return m.closing.Load() || m.nativeJSON.db.IsClosing()
+	}
 	return m.closing.Load() || m.db == nil || m.db.IsClosing()
 }
 
@@ -3411,9 +3464,25 @@ func (m *CollectionManager) holdIndexedAsyncFlushForSync(domains []*collectionWr
 // This is intentionally stronger than FlushAll, which is only a visibility
 // and draining boundary. physicalSync is false only when a command-WAL prefix
 // was already durable (or no command prefix exists); the WAL-free checkpoint
-// path always performs a physical sync boundary.
+// path always performs a physical sync boundary. Native managers use the SAME
+// cache owner's complete captured-prefix checkpoint and report physicalSync=true.
 func (m *CollectionManager) SyncForStandaloneWriteConcern() (physicalSync bool, err error) {
-	if m == nil || m.db == nil {
+	if m != nil && m.initializationError != nil {
+		return false, m.initializationError
+	}
+	if m == nil {
+		return false, backenddb.ErrClosed
+	}
+	if m.nativeJSON != nil {
+		if m.isClosing() {
+			return false, backenddb.ErrClosed
+		}
+		if err := m.nativeJSON.db.SyncNativeSemanticPrefix(); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	if m.db == nil {
 		return false, backenddb.ErrClosed
 	}
 	if err := m.FlushAll(); err != nil {
@@ -3600,6 +3669,18 @@ func (unlock collectionMutationUnlock) Unlock() {
 // process-crash recoverable under WAL-on modes and is not an fsync guarantee
 // unless composed with a sync-capable barrier.
 func (m *CollectionManager) CreateCollection(meta *CollectionMeta) (*CollectionMeta, error) {
+	if m != nil && m.nativeJSON != nil {
+		if m.isClosing() {
+			return nil, backenddb.ErrClosed
+		}
+		if meta == nil {
+			return nil, errors.New("collections: nil collection metadata")
+		}
+		return m.nativeJSON.CreateCollection(*meta)
+	}
+	if m != nil && m.initializationError != nil {
+		return nil, m.initializationError
+	}
 	if m == nil {
 		return nil, errCollectionManagerNil
 	}
@@ -3623,6 +3704,9 @@ func (m *CollectionManager) CreateCollection(meta *CollectionMeta) (*CollectionM
 // normal collection catalog executor while covering a command-WAL frame that
 // was already appended by a deterministic apply layer.
 func (m *CollectionManager) CreateCollectionWithCommandWALIntent(meta CollectionMeta, commandWALIntent *backenddb.CommandWALIntent) (*CollectionMeta, error) {
+	if m != nil && m.initializationError != nil {
+		return nil, m.initializationError
+	}
 	if m == nil {
 		return nil, errCollectionManagerNil
 	}
@@ -3659,6 +3743,9 @@ func (m *CollectionManager) CreateCollectionWithPreparedCommandWALIntentStatus(m
 // status-returning form of CreateCollectionWithPreparedCommandWALIntent with an
 // extra publish preflight composed after the existing-schema no-op check.
 func (m *CollectionManager) CreateCollectionWithPreparedCommandWALIntentStatusAndPreflight(meta CollectionMeta, prepareCommandWALIntent func() (*backenddb.CommandWALIntent, error), extraPreflight backenddb.OrderedRootGroupPreflight) (*CollectionMeta, bool, error) {
+	if m != nil && m.initializationError != nil {
+		return nil, false, m.initializationError
+	}
 	if m == nil {
 		return nil, false, errCollectionManagerNil
 	}
@@ -3768,11 +3855,44 @@ func (m *CollectionManager) createCollectionWithPreparedCommandWALIntent(normali
 	if hook := testBeforeCreateCollectionPublishHook.ptr.Load(); hook != nil && hook.fn != nil {
 		hook.fn(normalized)
 	}
-	buildSystemDelta := func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+	buildSystemUpdates := func(current *backenddb.Snapshot, rootIDs []uint64) (map[string][]byte, error) {
 		if len(rootIDs) != len(plan.rootNames) {
 			return nil, unexpectedOrderedRootCountError(normalized.Name, len(plan.rootNames), len(rootIDs))
 		}
-		return buildSystemDeltaIterator(createCollectionSystemUpdates(normalized.Name, encoded, plan.rootNames, rootIDs))
+		identityValue, identityPresent, err := getSystemValue(current, nativeCatalogNextIncarnationKey)
+		if err != nil {
+			return nil, err
+		}
+		nextIdentity := uint64(1)
+		if identityPresent {
+			nextIdentity, err = nativeCatalogIdentityValue(identityValue, true)
+			if err != nil {
+				return nil, err
+			}
+		}
+		identityUpdates, err := nativeCreateIdentityUpdates(normalized.Name, nextIdentity)
+		if err != nil {
+			return nil, err
+		}
+		updates := createCollectionSystemUpdates(normalized.Name, encoded, plan.rootNames, rootIDs)
+		for key, value := range identityUpdates {
+			updates[key] = value
+		}
+		return updates, nil
+	}
+	buildSystemDelta := func(rootIDs []uint64) (result iterator.UnsafeIterator, resultErr error) {
+		// The existing serialized system builder selects the counter. A prior
+		// schema snapshot cannot exclude simultaneous creates of other names.
+		current := m.db.AcquireSnapshot()
+		if current == nil {
+			return nil, backenddb.ErrClosed
+		}
+		defer func() { resultErr = errors.Join(resultErr, current.Close()) }()
+		updates, err := buildSystemUpdates(current, rootIDs)
+		if err != nil {
+			return nil, err
+		}
+		return buildSystemDeltaIterator(updates)
 	}
 	preflight := m.createCollectionExistingSchemaPreflight(normalized, extraPreflight)
 	if m.db.CommandWALEnabled() || commandWALIntent != nil || prepareCommandWALIntent != nil {
@@ -3802,12 +3922,12 @@ func (m *CollectionManager) createCollectionWithPreparedCommandWALIntent(normali
 		return normalized.copy(), false, nil
 	}
 	if len(ordered) == 0 {
-		_, _, err = m.db.PublishOrderedRootGroupWithSystemBuilder(nil, func([]uint64) (iterator.UnsafeIterator, error) {
+		_, _, err = m.db.PublishOrderedRootGroupWithSystemBuilder(nil, func([]uint64) (result iterator.UnsafeIterator, resultErr error) {
 			current := m.db.AcquireSnapshot()
 			if current == nil {
 				return nil, backenddb.ErrClosed
 			}
-			defer func() { _ = current.Close() }()
+			defer func() { resultErr = errors.Join(resultErr, current.Close()) }()
 			existing, err := loadCollectionCatalog(current, normalized.Name)
 			if err != nil {
 				return nil, err
@@ -3818,10 +3938,14 @@ func (m *CollectionManager) createCollectionWithPreparedCommandWALIntent(normali
 				}
 				return nil, errCreateCollectionNoopExistingSchema
 			}
-			return buildSystemTargetIterator(current, createCollectionSystemUpdates(normalized.Name, encoded, nil, nil))
+			updates, err := buildSystemUpdates(current, nil)
+			if err != nil {
+				return nil, err
+			}
+			return buildSystemTargetIterator(current, updates)
 		})
 	} else {
-		_, _, err = m.db.PublishOrderedRootDeltaGroupWithPreflightAndSystemDeltaBuilder(ordered, preflight, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		_, _, err = m.db.PublishOrderedRootDeltaGroupWithPreflightAndSystemDeltaBuilder(ordered, preflight, func(rootIDs []uint64) (result iterator.UnsafeIterator, resultErr error) {
 			if len(rootIDs) != len(plan.rootNames) {
 				return nil, unexpectedOrderedRootCountError(normalized.Name, len(plan.rootNames), len(rootIDs))
 			}
@@ -3829,8 +3953,12 @@ func (m *CollectionManager) createCollectionWithPreparedCommandWALIntent(normali
 			if current == nil {
 				return nil, backenddb.ErrClosed
 			}
-			defer func() { _ = current.Close() }()
-			return buildSystemTargetIterator(current, createCollectionSystemUpdates(normalized.Name, encoded, plan.rootNames, rootIDs))
+			defer func() { resultErr = errors.Join(resultErr, current.Close()) }()
+			updates, err := buildSystemUpdates(current, rootIDs)
+			if err != nil {
+				return nil, err
+			}
+			return buildSystemTargetIterator(current, updates)
 		})
 	}
 	if errors.Is(err, errCreateCollectionNoopExistingSchema) {
@@ -3929,6 +4057,18 @@ func (m *CollectionManager) OpenCollection(name string) (*Collection, error) {
 }
 
 func (m *CollectionManager) openCollectionWithCommandWALIntent(name string, commandWALIntent *backenddb.CommandWALIntent) (*Collection, error) {
+	if m != nil && m.nativeJSON != nil {
+		if m.isClosing() {
+			return nil, backenddb.ErrClosed
+		}
+		if commandWALIntent != nil {
+			return nil, backenddb.ErrNativeSemanticUnsupported
+		}
+		return m.openNativeCollection(name)
+	}
+	if m != nil && m.initializationError != nil {
+		return nil, m.initializationError
+	}
 	if m == nil {
 		return nil, errCollectionManagerNil
 	}
@@ -4091,8 +4231,17 @@ func (m *CollectionManager) ListCollections() ([]CollectionMeta, error) {
 // is positive. Deleted entries consume the same work budget, so callers can
 // fail closed without walking unbounded catalog history.
 func (m *CollectionManager) ListCollectionsBounded(maxCollections int) ([]CollectionMeta, bool, error) {
+	if m != nil && m.initializationError != nil {
+		return nil, false, m.initializationError
+	}
 	if m == nil {
 		return nil, false, errCollectionManagerNil
+	}
+	if m.nativeJSON != nil {
+		if m.isClosing() {
+			return nil, false, backenddb.ErrClosed
+		}
+		return m.nativeJSON.listCollectionsBounded(maxCollections)
 	}
 	if m.db == nil {
 		return nil, false, errCollectionDBNil
@@ -4188,43 +4337,63 @@ func (c *Collection) Meta() CollectionMeta {
 	if c == nil {
 		return CollectionMeta{}
 	}
+	if c.nativeJSON != nil {
+		return c.nativeMetaCopy()
+	}
 	return *c.meta.copy()
 }
 
 // MetaView returns the collection metadata without deep-copying slice fields.
 // The returned value is for read-only internal fast paths; callers must not
-// mutate Indexes, VectorIndexes, TextIndexes, or other referenced fields.
+// mutate Indexes, VectorIndexes, TextIndexes, or other referenced fields. Native
+// handles return an owned current-schema copy because they have no mutable facade.
 func (c *Collection) MetaView() CollectionMeta {
 	if c == nil {
 		return CollectionMeta{}
 	}
+	if c.nativeJSON != nil {
+		return c.nativeMetaCopy()
+	}
 	return c.meta
 }
 
+// Native handles have no mutable catalog facade. Both metadata APIs return an
+// independent copy before their fresh original capture closes; MetaView cannot
+// lend a schema slice whose owner has already retired. Their no-error API keeps
+// the opening owned-copy fallback when a new capture is unavailable.
+func (c *Collection) nativeMetaCopy() CollectionMeta {
+	read, err := c.nativeJSON.Capture(c.meta.Name)
+	if err != nil {
+		return *c.meta.copy()
+	}
+	meta := read.meta.copy()
+	_ = read.Close()
+	return *meta
+}
+
 // SameCachedCatalog reports whether both handles are cached against the same
-// collection catalog state. For commit-agnostic catalog shapes, the system root
-// is the catalog identity; data-only commits can advance CommitSeq without
-// changing collection metadata or root descriptors.
+// collection catalog state. DATA pages can be reused after their snapshots are
+// released, so matching system root page IDs also require the same commit.
 func (c *Collection) SameCachedCatalog(other *Collection) bool {
 	if c == nil || other == nil {
 		return false
 	}
-	cName, cSystemRoot, cCommitSeq, cCommitAgnostic := c.cachedCatalogIdentity()
-	otherName, otherSystemRoot, otherCommitSeq, otherCommitAgnostic := other.cachedCatalogIdentity()
+	cName, cSystemRoot, cCommitSeq := c.cachedCatalogIdentity()
+	otherName, otherSystemRoot, otherCommitSeq := other.cachedCatalogIdentity()
 	return cName != "" &&
 		cName == otherName &&
 		cSystemRoot != 0 &&
 		cSystemRoot == otherSystemRoot &&
-		(cCommitSeq == otherCommitSeq || (cCommitAgnostic && otherCommitAgnostic))
+		cCommitSeq == otherCommitSeq
 }
 
-func (c *Collection) cachedCatalogIdentity() (name string, systemRoot, commitSeq uint64, commitAgnostic bool) {
+func (c *Collection) cachedCatalogIdentity() (name string, systemRoot, commitSeq uint64) {
 	if c == nil {
-		return "", 0, 0, false
+		return "", 0, 0
 	}
 	c.catalogMu.RLock()
 	defer c.catalogMu.RUnlock()
-	return c.meta.Name, c.catalogSystemRoot, c.catalogCommitSeq, c.canReuseCachedCatalogAcrossDataOnlyCommits(c.catalog)
+	return c.meta.Name, c.catalogSystemRoot, c.catalogCommitSeq
 }
 
 // CreateIndex creates and backfills one secondary index as a schema barrier.
@@ -4236,6 +4405,12 @@ func (c *Collection) cachedCatalogIdentity() (name string, systemRoot, commitSeq
 func (c *Collection) CreateIndex(def IndexDefinition) (*CollectionMeta, error) {
 	if c == nil {
 		return nil, errCollectionNil
+	}
+	if c.nativeJSON != nil {
+		if c.manager.isClosing() {
+			return nil, backenddb.ErrClosed
+		}
+		return c.nativeJSON.mutateIndexes(c.meta.Name, &def, nil, false)
 	}
 	if c.db == nil {
 		return nil, errCollectionDBNil
@@ -4625,6 +4800,12 @@ func (c *Collection) dropIndexes(names map[string]struct{}, all bool) (*Collecti
 	if c == nil {
 		return nil, errCollectionNil
 	}
+	if c.nativeJSON != nil {
+		if c.manager.isClosing() {
+			return nil, backenddb.ErrClosed
+		}
+		return c.nativeJSON.mutateIndexes(c.meta.Name, nil, names, all)
+	}
 	if c.db == nil {
 		return nil, errCollectionDBNil
 	}
@@ -4725,6 +4906,13 @@ func (c *Collection) dropIndexes(names map[string]struct{}, all bool) (*Collecti
 // relaxed success remains process-local until Flush, FlushAll, Checkpoint, or
 // Close covers the write.
 func (c *Collection) Insert(id, document []byte) ([]byte, error) {
+	if c != nil && c.nativeJSON != nil {
+		ids, err := c.nativeInsertBatch([][]byte{id}, [][]byte{document})
+		if err != nil {
+			return nil, err
+		}
+		return ids[0], nil
+	}
 	if c == nil {
 		return nil, errCollectionNil
 	}
@@ -11561,6 +11749,9 @@ func (c *Collection) insertOneViaBatchWithCoverageLocked(id, document []byte, ad
 // batch recoverable as one mutation boundary. Ordinary pre-commit errors expose
 // no partial batch. Post-commit failures must be reported as commit-ambiguous.
 func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
+	if c != nil && c.nativeJSON != nil {
+		return c.nativeInsertBatch(ids, documents)
+	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
 	admissionState := c.lockCollectionCommandWALAdmission()
@@ -11881,6 +12072,12 @@ func (c *Collection) insertBatchWithCommandWALIntent(ids, documents [][]byte, tr
 }
 
 func (c *Collection) insertBatchWithCommandWALIntentSchemaLocked(ids, documents [][]byte, trustedValidBSON bool, templateEncoder *TemplateV1Encoder, commandWALIntent *backenddb.CommandWALIntent, execOpts insertBatchExecutionOptions) (resultIDs [][]byte, resultErr error) {
+	if c != nil && c.nativeJSON != nil {
+		if trustedValidBSON || templateEncoder != nil || commandWALIntent != nil || execOpts.trustedFloat32Projection != nil || execOpts.prepared != nil || execOpts.splitInsert != nil || execOpts.insertStats != nil {
+			return nil, backenddb.ErrNativeSemanticUnsupported
+		}
+		return c.nativeInsertBatch(ids, documents)
+	}
 	defer func() { resultErr = c.invalidateVectorIndexCoverageOnAcceptedMutation(resultErr) }()
 
 	if c == nil {
@@ -13860,6 +14057,9 @@ func (c *Collection) deleteDocumentIf(documentID []byte, predicate func(current 
 // delete batch recoverable as one mutation boundary. Pre-commit errors expose no
 // partial batch; post-commit failures must be commit-ambiguous.
 func (c *Collection) DeleteBatch(documentIDs [][]byte) (int, error) {
+	if c != nil && c.nativeJSON != nil {
+		return c.nativeDeleteBatch(documentIDs)
+	}
 	if c == nil {
 		return 0, errCollectionNil
 	}
@@ -14796,6 +14996,9 @@ func (c *Collection) updateDirectBSONSet(documentID []byte, spec bsonSetUpdate) 
 // pre-commit unless explicitly documented otherwise and must expose no partial
 // batch. Post-commit failures must be commit-ambiguous for the whole batch.
 func (c *Collection) UpdateBatch(items []UpdateBatchItem) ([]UpdateBatchResult, error) {
+	if c != nil && c.nativeJSON != nil {
+		return c.nativeUpdateBatch(items)
+	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
 	admissionState := c.lockCollectionCommandWALAdmission()
@@ -19617,71 +19820,9 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 			changed[i].primaryDocument = appendUpdateBatchPlanScratchDocument(scratch, retainedPrimaryDocuments[i])
 			changed[i].hasPrimaryDocument = true
 		}
-		if len(runtimes) > 0 {
-			if changed[i].knownAffectedIndexes && changed[i].affectedIndexRuntimeMask == 0 {
-				recordKnownUnaffectedIndexStats(runtimes, &stats)
-				continue
-			}
-			phaseStart = updateBatchStatsNow(detailedStats)
-			if p := plannerOptions.typedProjection; p != nil {
-				changed[i].newState, err = typedIndexState(p.typedRows[string(changed[i].documentID)], p.columns, runtimes, stateArena)
-			} else if changed[i].knownAffectedIndexes {
-				changed[i].newState, err = orderedIndexStateForKnownValidDocumentRuntimeMask(changed[i].document, runtimes, changed[i].affectedIndexRuntimeMask, plannerOptions, stateArena)
-			} else {
-				changed[i].newState, err = orderedIndexStateForDocumentWithArena(changed[i].document, runtimes, plannerOptions, stateArena)
-			}
-			phaseDuration := updateBatchStatsSince(detailedStats, phaseStart)
-			stats.IndexStateExtraction += phaseDuration
-			stats.NewIndexStateExtract += phaseDuration
-			if err != nil {
-				_ = snap.Close()
-				return nil, updateBatchItemError(changed[i].itemIndex, err)
-			}
-			var changedIndexes uint64
-			indexStateChanged := false
-			for runtimeIdx, runtime := range runtimes {
-				runtimeAffected := true
-				if changed[i].knownAffectedIndexes {
-					runtimeAffected = changed[i].affectedIndexRuntimeMask&(uint64(1)<<uint(runtimeIdx)) != 0
-				}
-				runtimeChanged := false
-				if runtimeAffected {
-					runtimeChanged = orderedDocumentIndexRuntimeChanged(changed[i].oldState, changed[i].newState, runtimeIdx)
-				}
-				maskBit, maskBitOK := updateIndexChangedMaskBit(runtimeIdx)
-				if !maskBitOK {
-					stats.MaskFallbacks++
-				}
-				if runtimeChanged {
-					indexStateChanged = true
-					if maskBitOK {
-						changedIndexes |= maskBit
-					}
-					stats.IndexValueChanges++
-					if runtime.def.unique {
-						stats.UniqueIndexChecks++
-					}
-					if runtimeIdx < stats.IndexStatsCount {
-						stats.IndexStats[runtimeIdx].Changed++
-						if runtime.def.unique {
-							stats.IndexStats[runtimeIdx].UniqueChecks++
-						}
-					}
-					continue
-				}
-				stats.IndexValueUnchanged++
-				if runtime.def.unique {
-					stats.UniqueIndexCheckSkips++
-				}
-				if runtimeIdx < stats.IndexStatsCount {
-					stats.IndexStats[runtimeIdx].Unchanged++
-					if runtime.def.unique {
-						stats.IndexStats[runtimeIdx].UniqueCheckSkips++
-					}
-				}
-			}
-			changed[i].changedIndexes = changedIndexes
-			changed[i].indexStateChanged = indexStateChanged
+		if err := prepareBatchUpdateIndexEffects(&changed[i], runtimes, plannerOptions, stateArena, &stats, detailedStats); err != nil {
+			_ = snap.Close()
+			return nil, updateBatchItemError(changed[i].itemIndex, err)
 		}
 	}
 	commandWALDocuments := collectionDocumentsFromPreparedBatchUpdates(changed)
@@ -19893,15 +20034,15 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 			if !item.indexStateChanged || stateTable == nil {
 				continue
 			}
-			if orderedDocumentIndexStateEmpty(item.newState) {
-				stateTable.DeleteSteal(bytes.Clone(item.documentID))
+			entry, err := batchUpdateIndexStateEntry(item, runtimes)
+			if err != nil {
+				_ = snap.Close()
+				return nil, err
+			}
+			if entry.flags&node.FlagTombstone != 0 {
+				stateTable.DeleteSteal(bytes.Clone(entry.key))
 			} else {
-				rawState, err := encodeRuntimeOrderedDocumentIndexState(item.newState, runtimes)
-				if err != nil {
-					_ = snap.Close()
-					return nil, err
-				}
-				stateTable.SetSteal(bytes.Clone(item.documentID), rawState)
+				stateTable.SetSteal(bytes.Clone(entry.key), entry.value)
 			}
 		}
 		if stateTable != nil && stateTable.Len() > 0 {
@@ -21226,9 +21367,9 @@ func (c *Collection) catalogForSnapshotWithWriteDomainLocked(snap *backenddb.Sna
 
 // cachedCatalogForSnapshot only reads the immutable handle-local entry. In
 // particular it never waits for writeDomain.mu or retains a snapshot. Typed
-// owner capture requires exact commits; the general catalog path may retain
-// its existing non-vector, command-WAL data-only-commit exception.
-func (c *Collection) cachedCatalogForSnapshot(snap *backenddb.Snapshot, allowDataOnlyCommits bool) *collectionCatalog {
+// owner capture and the general catalog path both require
+// the exact commit as well: recycled DATA page IDs cannot identify a catalog.
+func (c *Collection) cachedCatalogForSnapshot(snap *backenddb.Snapshot) *collectionCatalog {
 	if c == nil || snap == nil {
 		return nil
 	}
@@ -21239,7 +21380,7 @@ func (c *Collection) cachedCatalogForSnapshot(snap *backenddb.Snapshot, allowDat
 	cached := c.catalog
 	if cached != nil && cached.pager == snap.Pager() && systemRoot != 0 &&
 		c.catalogSystemRoot == systemRoot &&
-		(c.catalogCommitSeq == commitSeq || (allowDataOnlyCommits && c.canReuseCachedCatalogAcrossDataOnlyCommits(cached))) {
+		c.catalogCommitSeq == commitSeq {
 		return cached
 	}
 	return nil
@@ -21253,7 +21394,7 @@ func (c *Collection) catalogForSnapshotWithWriteDomainLockState(snap *backenddb.
 	systemRoot := snapshotSystemRoot(snap)
 	commitSeq := snapshotCommitSeq(snap)
 
-	if cached := c.cachedCatalogForSnapshot(snap, true); cached != nil {
+	if cached := c.cachedCatalogForSnapshot(snap); cached != nil {
 		return cached, nil
 	}
 
@@ -21287,14 +21428,6 @@ func (c *Collection) collectionName() string {
 		return c.name
 	}
 	return c.meta.Name
-}
-
-func (c *Collection) canReuseCachedCatalogAcrossDataOnlyCommits(catalog *collectionCatalog) bool {
-	return c != nil &&
-		c.db != nil &&
-		c.db.CommandWALEnabled() &&
-		catalog != nil &&
-		len(catalog.meta.VectorIndexes) == 0
 }
 
 func cachedWriteDomainCatalogForState(domain *collectionWriteDomain, systemRoot, commitSeq uint64) *collectionCatalog {
@@ -22506,7 +22639,7 @@ func rejectReplaceUniqueConflictsOrdered(snap *backenddb.Snapshot, catalog *coll
 					_ = it.Close()
 					return err
 				}
-				if !it.IsDeleted() && !bytes.Equal(ownerID, update.documentID) && !batchReplacements.allows(runtime.def.name, encoded, ownerID) {
+				if !it.IsDeleted() && batchUpdateUniqueOwnerConflicts(runtime.def.name, encoded, ownerID, update.documentID, batchReplacements) {
 					conflict = true
 					break
 				}
@@ -22650,6 +22783,9 @@ func (c *Collection) StoredDocumentJSON(document []byte) ([]byte, error) {
 // JSON payload. The returned slice is owned by the caller. Missing documents return
 // (dst[:0], false, nil).
 func (c *Collection) GetInto(documentID []byte, dst []byte) ([]byte, bool, error) {
+	if c != nil && c.nativeJSON != nil {
+		return c.nativeGetInto(documentID, dst)
+	}
 	if c == nil {
 		return dst[:0], false, errCollectionNil
 	}
@@ -23547,7 +23683,33 @@ func (c *Collection) ScanIndexRange(indexName string, opts IndexRangeOptions, fn
 	return truncated, err
 }
 
-func (c *Collection) findByIndexValue(indexName string, value any, maxResults int) ([][]byte, bool, error) {
+func (c *Collection) findByIndexValue(indexName string, value any, maxResults int) (result [][]byte, truncated bool, resultErr error) {
+	if c != nil && c.nativeJSON != nil {
+		if maxResults < 0 {
+			return nil, false, errors.New("collections: max index results cannot be negative")
+		}
+		read, err := c.nativeJSON.Capture(c.name)
+		if err != nil {
+			return nil, false, err
+		}
+		defer func() { resultErr = errors.Join(resultErr, read.Close()) }()
+		err = read.visitIndexValueIDs(indexName, value, func(id []byte) error {
+			if maxResults > 0 && len(result) == maxResults {
+				truncated = true
+				return errNativeIndexVisitComplete
+			}
+			result = append(result, bytes.Clone(id))
+			return nil
+		})
+		if errors.Is(err, errNativeIndexVisitComplete) {
+			err = nil
+		} else if errors.Is(err, ErrIndexNotFound) {
+			// Collection equality queries historically return no IDs for an
+			// unknown index; captured VisitIndexValueIDs reports the error.
+			return nil, false, nil
+		}
+		return result, truncated, err
+	}
 	if maxResults < 0 {
 		return nil, false, errors.New("collections: max index results cannot be negative")
 	}
@@ -23568,6 +23730,9 @@ func orderedBSONIndexRequiresCompoundRangeAPI(idx IndexDefinition) bool {
 }
 
 func (c *Collection) scanIndexRange(indexName string, opts IndexRangeOptions, fn func(id []byte) (bool, error)) (bool, bool, error) {
+	if c != nil && c.nativeJSON != nil {
+		return false, false, backenddb.ErrNativeSemanticUnsupported
+	}
 	if c == nil {
 		return false, false, errCollectionNil
 	}
@@ -26726,3 +26891,6 @@ func ValidateIndexPath(path string) error {
 	}
 	return nil
 }
+
+// Close releases a hook-free manager after its last deterministic operation.
+func (m *CollectionManager) Close() error { return m.closeForBackend() }

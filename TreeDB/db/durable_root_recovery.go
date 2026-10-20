@@ -6,6 +6,7 @@ import (
 	"sort"
 
 	"github.com/snissn/gomap/TreeDB/freelist"
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -73,8 +74,12 @@ type durableMetaCandidateV1 struct {
 // does not recurse through the B-tree or scan value-log contents: checksummed
 // COW pages and the deterministic manifest are the recovery inventory.
 func selectDurableRootV1(source freelist.PageSource, physicalPageCount uint64, validateManifest durableManifestValidatorV1, directoryValidators ...durableDirectoryValidatorV2) (durableRootSelectionV1, error) {
+	return selectDurableRootWithMetadataV1(source, physicalPageCount, nil, validateManifest, directoryValidators...)
+}
+
+func selectDurableRootWithMetadataV1(source freelist.PageSource, physicalPageCount uint64, owner *retainedalloc.Owner, validateManifest durableManifestValidatorV1, directoryValidators ...durableDirectoryValidatorV2) (durableRootSelectionV1, error) {
 	return selectDurableRootCandidates(source, func(candidate durableMetaCandidateV1) (durableRootSelectionV1, error) {
-		return validateDurableMetaCandidateV1(source, physicalPageCount, candidate, validateManifest, directoryValidators...)
+		return validateDurableMetaCandidateWithMetadataV1(source, physicalPageCount, candidate, owner, validateManifest, directoryValidators...)
 	})
 }
 
@@ -232,6 +237,10 @@ func readDurableMetaSlotV1(source freelist.PageSource, slot uint64) (page.Durabl
 }
 
 func validateDurableMetaCandidateV1(source freelist.PageSource, physicalPageCount uint64, candidate durableMetaCandidateV1, validateManifest durableManifestValidatorV1, directoryValidators ...durableDirectoryValidatorV2) (result durableRootSelectionV1, resultErr error) {
+	return validateDurableMetaCandidateWithMetadataV1(source, physicalPageCount, candidate, nil, validateManifest, directoryValidators...)
+}
+
+func validateDurableMetaCandidateWithMetadataV1(source freelist.PageSource, physicalPageCount uint64, candidate durableMetaCandidateV1, owner *retainedalloc.Owner, validateManifest durableManifestValidatorV1, directoryValidators ...durableDirectoryValidatorV2) (result durableRootSelectionV1, resultErr error) {
 	meta := candidate.meta
 	recordImage, err := source.ReadPage(meta.RootRecordPageID)
 	if err != nil {
@@ -265,9 +274,16 @@ func validateDurableMetaCandidateV1(source freelist.PageSource, physicalPageCoun
 		}
 		resources, err = directoryValidators[0](record)
 	} else {
-		manifest, err = rootpublication.LoadDependencyManifestV1(source, record.Manifest)
+		manifest, err = rootpublication.LoadDependencyManifestWithMetadataV1(source, record.Manifest, owner)
+		defer func() { manifest.ReleaseOwnedMetadataV1() }()
+		if err != nil {
+			err = fmt.Errorf("decode durable dependency manifest: %w", err)
+		}
 		if err == nil && validateManifest != nil {
 			resources, err = validateManifest(manifest)
+			if err != nil {
+				err = fmt.Errorf("admit durable dependency manifest: %w", err)
+			}
 		}
 	}
 	if err != nil {
@@ -290,7 +306,7 @@ func validateDurableMetaCandidateV1(source freelist.PageSource, physicalPageCoun
 		return durableRootSelectionV1{}, fmt.Errorf("system root page: %w", err)
 	}
 	accepted = true
-	return durableRootSelectionV1{Slot: candidate.slot, Meta: meta, Record: record, Freelist: generation, Manifest: manifest, resources: resources}, nil
+	return durableRootSelectionV1{Slot: candidate.slot, Meta: meta, Record: record, Freelist: generation, Manifest: manifest.DiagnosticProjectionV1(), resources: resources}, nil
 }
 
 // validateDurableRootLineageV1 performs the fixed-depth lineage check promised

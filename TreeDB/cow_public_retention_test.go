@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -20,7 +21,9 @@ func TestCOWPublicRetentionRefusalDrainAndResume(t *testing.T) {
 	for _, profile := range cowPublicContractProfiles {
 		t.Run(string(profile), func(t *testing.T) {
 			limits := DefaultCOWMemtableLimits()
-			limits.MaxViews, limits.MaxGenerations = 8, 6
+			// Two held two-shard cuts, the current shards, and their parked
+			// successors all retain actual generation slots before refusal.
+			limits.MaxViews, limits.MaxGenerations = 8, 8
 			limits.MaxSources, limits.MaxResources = 6, 32
 			limits.MaxGenerationBytes = 1 << 20
 			database, opts, blocked := cowPublicContractOpen(t, profile, func(opts *Options) {
@@ -83,8 +86,8 @@ func TestCOWPublicRetentionRefusalDrainAndResume(t *testing.T) {
 				}
 				if stage == 0 && profile == ProfileNoWALFast {
 					originalPrimary, originalRegistry = captureMetadataOwners()
-					if originalPrimary == nil || originalRegistry == nil {
-						t.Fatal("selected producer has no original owner pair")
+					if originalRegistry == nil || (originalPrimary != nil) != opts.IndexPrimaryDirectory {
+						t.Fatalf("selected producer metadata owners: PRIMARY selected=%t primary=%p registry=%p", opts.IndexPrimaryDirectory, originalPrimary, originalRegistry)
 					}
 				}
 				for i, key := range keys {
@@ -94,8 +97,20 @@ func TestCOWPublicRetentionRefusalDrainAndResume(t *testing.T) {
 					}
 				}
 			}
-			if got := cache.COWMemoryStats().Generations; got != 6 {
-				t.Fatalf("two whole predecessor cuts plus current generations=%d, want6", got)
+			// Retain the pressure generation itself so background handoff cannot
+			// free its slots before the plateau retries finish.
+			snapshot := database.AcquireSnapshot()
+			if snapshot == nil {
+				t.Fatal("current pressure cut capture refused")
+			}
+			pinned = append(pinned, snapshot)
+			for _, key := range keys {
+				if got, err := snapshot.Get(key); err != nil || !bytes.Equal(got, value(2)) {
+					t.Fatalf("pinned pressure cut key%q len%d err%v", key, len(got), err)
+				}
+			}
+			if got := cache.COWMemoryStats().Generations; got != 8 {
+				t.Fatalf("two whole predecessor cuts plus current and parked successor generations=%d, want8", got)
 			}
 			var refusedKey, refusedValue []byte
 			var before map[string]string
@@ -119,21 +134,41 @@ func TestCOWPublicRetentionRefusalDrainAndResume(t *testing.T) {
 			if refusedKey == nil || accepted == 0 {
 				t.Fatalf("expected progress then finite rollover refusal; accepted%d", accepted)
 			}
-			plateau := cache.COWMemoryStats()
-			cowPublicRetentionBound(t, plateau, limits)
 			after := database.Stats()
-			for _, key := range []string{"treedb.cache.cow.publications_total", "treedb.cache.cow.rollovers_total"} {
-				if before[key] == "" || before[key] != after[key] {
-					t.Fatalf("refusal changed %s: %q -> %q", key, before[key], after[key])
-				}
+			publicationKey := "treedb.cache.cow.publications_total"
+			if before[publicationKey] == "" || before[publicationKey] != after[publicationKey] {
+				t.Fatalf("refusal changed %s: %q -> %q", publicationKey, before[publicationKey], after[publicationKey])
 			}
+			// A successful maintenance rollover can rejoin point admission before
+			// the empty successor's first dirty preparation refuses. The rejoined
+			// shard is empty, so this Set can perform at most one such rollover.
+			rolloverKey := "treedb.cache.cow.rollovers_total"
+			beforeRollovers, err := strconv.ParseUint(before[rolloverKey], 10, 64)
+			if err != nil {
+				t.Fatal(err)
+			}
+			afterRollovers, err := strconv.ParseUint(after[rolloverKey], 10, 64)
+			if err != nil || afterRollovers < beforeRollovers || afterRollovers-beforeRollovers > 1 {
+				t.Fatalf("refusal maintenance rollovers: %q -> %q, err=%v", before[rolloverKey], after[rolloverKey], err)
+			}
+			retryCounters := []string{publicationKey, rolloverKey}
 			if profile != ProfileNoWALFast {
 				for _, key := range []string{"treedb.command_wal.max_lsn", "treedb.command_wal.bytes"} {
 					if before[key] == "" || before[key] != after[key] {
 						t.Fatalf("refusal appended WAL %s: %q -> %q", key, before[key], after[key])
 					}
+					retryCounters = append(retryCounters, key)
 				}
 			}
+			// The successful rollover before refusal may have scheduled a flush.
+			// Join that actual work before comparing retained charges; its cursor
+			// is a transient view and is not owned by a refused producer.
+			if err := cowPublicContractComplete(t, blocked, "join refusal rollover", cache.Drain); err != nil {
+				t.Fatal(err)
+			}
+			plateau := cache.COWMemoryStats()
+			cowPublicRetentionBound(t, plateau, limits)
+			after = database.Stats()
 			for attempt := 0; attempt < 8; attempt++ {
 				if err := database.Set(refusedKey, refusedValue); !errors.Is(err, memtable.ErrCOWCapacity) {
 					t.Fatalf("plateau retry%d: %v", attempt, err)
@@ -143,6 +178,12 @@ func TestCOWPublicRetentionRefusalDrainAndResume(t *testing.T) {
 				got.PeakBytes = plateau.PeakBytes
 				if got != plateau {
 					t.Fatalf("refusal retained new charges: before%+v after%+v", plateau, got)
+				}
+				retried := database.Stats()
+				for _, key := range retryCounters {
+					if after[key] != retried[key] {
+						t.Fatalf("plateau retry%d changed %s: %q -> %q", attempt, key, after[key], retried[key])
+					}
 				}
 			}
 			for i, key := range keys {
@@ -190,15 +231,20 @@ func TestCOWPublicRetentionRefusalDrainAndResume(t *testing.T) {
 			closed := cache.COWMemoryStats()
 			zero := closed
 			zero.PeakBytes = 0
+			var primaryBytes uint64
+			primaryClosed := false
+			if originalPrimary != nil {
+				primaryBytes, primaryClosed = originalPrimary.Bytes(), originalPrimary.PhysicalClosed()
+			}
 			if zero != (memtable.COWStats{}) {
 				if profile == ProfileNoWALFast {
 					registry := database.backend.ValueLogIdentityPinRegistry()
-					t.Fatalf("closed integration retained charges: %+v; original primary Bytes=%d PhysicalClosed=%t; original registry Bytes=%d PhysicalClosed=%t Stats=%+v CachedStableDirectoryLinks=%d CleanupError=%v", closed, originalPrimary.Bytes(), originalPrimary.PhysicalClosed(), originalRegistry.Bytes(), originalRegistry.PhysicalClosed(), registry.Stats(), registry.CachedStableDirectoryLinks(), registry.CleanupError())
+					t.Fatalf("closed integration retained charges: %+v; original primary present=%t Bytes=%d PhysicalClosed=%t; original registry Bytes=%d PhysicalClosed=%t Stats=%+v CachedStableDirectoryLinks=%d CleanupError=%v", closed, originalPrimary != nil, primaryBytes, primaryClosed, originalRegistry.Bytes(), originalRegistry.PhysicalClosed(), registry.Stats(), registry.CachedStableDirectoryLinks(), registry.CleanupError())
 				}
 				t.Fatalf("closed integration retained charges: %+v", closed)
 			}
 			if profile == ProfileNoWALFast {
-				t.Logf("COW_TERMINAL_ORIGINAL_OWNERS primary Bytes=%d PhysicalClosed=%t; registry Bytes=%d PhysicalClosed=%t", originalPrimary.Bytes(), originalPrimary.PhysicalClosed(), originalRegistry.Bytes(), originalRegistry.PhysicalClosed())
+				t.Logf("COW_TERMINAL_ORIGINAL_OWNERS primary present=%t Bytes=%d PhysicalClosed=%t; registry Bytes=%d PhysicalClosed=%t", originalPrimary != nil, primaryBytes, primaryClosed, originalRegistry.Bytes(), originalRegistry.PhysicalClosed())
 			}
 			reopened, err := Open(opts)
 			if err != nil {

@@ -50,8 +50,20 @@ func TestPublicCOWTxnRepeatedClosedScanReleasesTransientCapacity(t *testing.T) {
 
 func TestPublicCOWTxnBorrowedAdapterRefusalReleasesOriginalCustody(t *testing.T) {
 	limits := memtable.DefaultCOWLimits()
-	db, _, _ := cowPublicContractOpen(t, ProfileCommandWALDurable, func(o *Options) { o.COWMemtableLimits = limits })
+	db, _, _ := cowPublicContractOpen(t, ProfileCommandWALDurable, func(o *Options) {
+		o.COWMemtableLimits = limits
+		o.DisableBackgroundPrune = true
+		o.BackgroundCheckpointInterval = -1
+		o.BackgroundCheckpointIdleDuration = -1
+		o.BackgroundIndexVacuumInterval = -1
+		o.MaxWALBytes = -1
+	})
 	warm := cowTxnOpen(t, db)
+	// Warm the shared physical reader used by each transaction's missing read.
+	if _, err := warm.Get([]byte("dependency")); err != nil {
+		_ = warm.Close()
+		t.Fatal(err)
+	}
 	if err := warm.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +110,14 @@ func TestPublicCOWTxnConcurrentAdapterRefusalsKeepSharedCarriersImmutable(t *tes
 	transactions := make([]refusedTxn, count)
 	limits := memtable.DefaultCOWLimits()
 	for n := range transactions {
-		db, _, _ := cowPublicContractOpen(t, ProfileCommandWALDurable, func(o *Options) { o.COWMemtableLimits = limits })
+		db, _, _ := cowPublicContractOpen(t, ProfileCommandWALDurable, func(o *Options) {
+			o.COWMemtableLimits = limits
+			o.DisableBackgroundPrune = true
+			o.BackgroundCheckpointInterval = -1
+			o.BackgroundCheckpointIdleDuration = -1
+			o.BackgroundIndexVacuumInterval = -1
+			o.MaxWALBytes = -1
+		})
 		warm := cowTxnOpen(t, db)
 		if err := warm.Close(); err != nil {
 			t.Fatal(err)

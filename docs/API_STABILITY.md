@@ -46,6 +46,13 @@ changes until the project reaches a stable post-pre-alpha phase.
 
 This repo is a dev project; formats may evolve rapidly.
 
+Ordinary new TreeDB directories use the existing DATA durable-root format,
+including NoWAL and COW cache modes. The existing explicit
+`IndexPrimaryDirectory` option and persisted `index.db.primary` directories
+temporarily retain their original construction/recovery paths. Final refusal
+and removal follow consumer migration; no in-place representation converter
+or stable cross-version format guarantee is introduced.
+
 Rules of thumb:
 - Do not expect on-disk format compatibility across commits unless explicitly stated.
 - It is acceptable for new binaries to fail to open old DB directories (and vice versa).
@@ -59,16 +66,6 @@ Rules of thumb:
   Unscoped VCP1 encoding is unchanged; older binaries are not promised to open
   VCP2 or VCP3. Rebuild prepared local state rather than assuming cross-version
   compatibility.
-- Fresh TreeDB NoWALFast databases now use the complete DATA/PRIMARY format:
-  the immutable materialized DATA base is paired with index.db.primary, whose
-  two fixed V6 capsules independently embed current and one-hop parent metadata.
-  Backup/restore and physical snapshots must preserve the dependency-complete
-  pair. Old DATA-only databases are not silently converted; rebuild when
-  ErrLegacyFormatRebuildRequired reports an incompatible selected format.
-  Previously created explicit V5 PRIMARY databases remain recognized by their
-  actual header; older binaries are not promised to open either PRIMARY format.
-  Joint online vacuum uses a checksummed versioned COMMIT marker and exact pair
-  identities; ordinary recovery still chooses only the two eligible capsules.
 - If/when we stabilize formats, we’ll add:
   - an explicit version marker in metadata, and
   - a migration story (or a “rebuild required” guarantee).

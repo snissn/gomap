@@ -36,7 +36,7 @@ func TestPrimaryDataCertificateV6RefusalKeepsAcceptedCache(t *testing.T) {
 	for _, seeded := range []bool{false, true} {
 		for _, phase := range []string{"prepare", "activate"} {
 			t.Run(fmt.Sprintf("seeded=%t/%s", seeded, phase), func(t *testing.T) {
-				d, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+				d, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -124,7 +124,7 @@ func TestPrimaryDataCertificateV6RefusalKeepsAcceptedCache(t *testing.T) {
 }
 
 func TestPrimaryDataCertificateV6TerminalDetachesBeforeWithdrawal(t *testing.T) {
-	d, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+	d, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,7 +218,7 @@ func TestPrimaryJointRecoveryMarkerV6AdmissionRefusesBeforeProof(t *testing.T) {
 func TestPrimaryClosedIteratorDetachesOriginalRootV6(t *testing.T) {
 	for _, owned := range []bool{false, true} {
 		t.Run(fmt.Sprintf("owned=%t", owned), func(t *testing.T) {
-			d, e := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+			d, e := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, IndexPrimaryDirectory: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 			if e != nil {
 				t.Fatal(e)
 			}

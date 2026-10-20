@@ -13,8 +13,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"sort"
 	"time"
+	"unsafe"
 )
 
 const (
@@ -130,6 +132,30 @@ func newPreparedRootCandidateWithExtensions(spec CandidateSpec, extensions exten
 			return nil, fmt.Errorf("%w: %v", ErrInvalidCandidate, err)
 		}
 	}
+	var dataTerminal *primaryTerminalCompletionV6
+	var added uint64
+	if spec.DurableRoot != nil {
+		dataTerminal = spec.DurableRoot.terminalMetadataV6
+	}
+	if dataTerminal != nil {
+		if spec.ResourceSet != nil && spec.ResourceSet.MetadataOwner() != dataTerminal.owner {
+			return nil, ErrResourceOwnership
+		}
+		added = retainedalloc.AllocationCharge(uint64(len(spec.Obligations))*uint64(unsafe.Sizeof(ObligationID{}))) + retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(durableRootGroupExtension{})))
+		if added > ^uint64(0)-dataTerminal.charge {
+			return nil, retainedalloc.ErrCapacity
+		}
+		if err := dataTerminal.owner.AddPending(added); err != nil {
+			return nil, err
+		}
+	}
+	transferred := false
+	defer func() {
+		if dataTerminal != nil && !transferred {
+			dataTerminal.owner.RemovePending(added)
+		}
+	}()
+	obligations := normalizeObligations(spec.Obligations)
 	if spec.ResourceSet != nil {
 		if extensions.resourceSet != nil {
 			return nil, fmt.Errorf("%w: duplicate resource-set extension", ErrInvalidCandidate)
@@ -149,19 +175,31 @@ func newPreparedRootCandidateWithExtensions(spec CandidateSpec, extensions exten
 			}
 			return nil, fmt.Errorf("%w: transfer durable-root transaction: %w", ErrInvalidCandidate, err)
 		}
-		if !spec.DurableRoot.isConstructedPrimaryV6() {
+		if !spec.DurableRoot.isConstructedPrimaryV6() && dataTerminal == nil {
 			extensions.durableRootRecord = newDurableRootGroupExtension(spec.DurableRoot)
 		}
 	}
 	candidate := PreparedRootCandidate{
 		frontier: spec.Frontier, freelistHeadID: spec.FreelistHeadID,
 		totalPages: spec.TotalPages, dependencyBytes: spec.DependencyBytes,
-		indexBytes: spec.IndexBytes, obligations: normalizeObligations(spec.Obligations), extensions: extensions, durableValidated: spec.DurableRoot != nil,
+		indexBytes: spec.IndexBytes, obligations: obligations, extensions: extensions, durableValidated: spec.DurableRoot != nil,
 	}
 	if spec.DurableRoot != nil && spec.DurableRoot.isConstructedPrimaryV6() {
 		return spec.DurableRoot.adoptPrimaryCandidateV6(candidate), nil
 	}
-	return &candidate, nil
+	if dataTerminal != nil {
+		original := spec.DurableRoot
+		original.dataMember[0] = original
+		candidate.extensions.durableRootRecord = durableRootGroupExtension{members: original.dataMember[:]}
+		original.dataCandidate = candidate
+		dataTerminal.charge += added
+		transferred = true
+		return &original.dataCandidate, nil
+	}
+	// Only the generic route needs a separate candidate allocation. Selected
+	// DATA and PRIMARY candidates already live in their original transaction.
+	result := candidate
+	return &result, nil
 }
 
 func validateCandidateDurableRoot(spec CandidateSpec, transaction *DurableRootTransaction) error {
@@ -251,12 +289,22 @@ func (c *PreparedRootCandidate) Resources() *StableResourceSet { return c.resour
 // COW transaction is aborted before resource pins are released. It is
 // idempotent and cannot release coordinator-owned ownership.
 func (c *PreparedRootCandidate) Abandon() error {
+	// PRIMARY embeds this descriptor in its original transaction. Terminal
+	// Abort scrubs that containing storage, including its resource-set alias.
+	// Keep the SAME set until its independent candidate edge is consumed.
+	set := c.resourceSet()
+	if original := c.DurableRoot(); original != nil && c == &original.dataCandidate {
+		completion, err := original.abortFromWithResources(ResourceOwnerCandidate, set)
+		c, original, set = nil, nil, nil
+		completion.Complete()
+		return err
+	}
 	for _, transaction := range c.durableRootGroup().members {
 		if err := transaction.abortFrom(ResourceOwnerCandidate); err != nil {
 			return err
 		}
 	}
-	if set := c.resourceSet(); set != nil {
+	if set != nil {
 		return set.releaseFrom(ResourceOwnerCandidate)
 	}
 	return nil
@@ -309,6 +357,42 @@ func coalesceCandidates(candidates []*PreparedRootCandidate) (*PreparedRootCandi
 	return &coalesced, nil
 }
 
+// The selected original DATA/PRIMARY owners admit all descriptor/member
+// capacity once before this call. The ordinary builder owns physical tokens.
+func coalesceAdmittedCandidates(candidates []*PreparedRootCandidate) (*PreparedRootCandidate, error) {
+	if len(candidates) == 1 {
+		return candidates[0], nil
+	}
+	latest := candidates[len(candidates)-1]
+	coalesced := *latest
+	coalesced.dependencyBytes, coalesced.indexBytes = 0, 0
+	coalesced.extensions = extensionSlots{}
+	members, obligations := 0, 0
+	for _, candidate := range candidates {
+		members += len(candidate.durableRootGroup().members)
+		obligations += len(candidate.obligations)
+	}
+	group := durableRootGroupExtension{members: make([]*DurableRootTransaction, 0, members)}
+	coalesced.obligations = make([]ObligationID, 0, obligations)
+	for _, candidate := range candidates {
+		if candidate.extensions.cowFreelist != nil {
+			return nil, ErrInvalidCandidate
+		}
+		coalesced.dependencyBytes = saturatingAdd(coalesced.dependencyBytes, candidate.dependencyBytes)
+		coalesced.indexBytes = saturatingAdd(coalesced.indexBytes, candidate.indexBytes)
+		group.members = append(group.members, candidate.durableRootGroup().members...)
+		coalesced.obligations = append(coalesced.obligations, candidate.obligations...)
+	}
+	coalesced.extensions.durableRootRecord = group
+	physical, err := physicalDurabilityUnion(candidates)
+	if err != nil {
+		return nil, err
+	}
+	coalesced.extensions.resourceSet = physical
+	coalesced.obligations = normalizeObligationsInPlace(coalesced.obligations)
+	return &coalesced, nil
+}
+
 func unionResourceExtensions(extensions []immutableExtension) (immutableExtension, error) {
 	if len(extensions) == 0 {
 		return nil, nil
@@ -347,6 +431,10 @@ func unionExtensionValue(older, newer immutableExtension) (immutableExtension, e
 
 func normalizeObligations(obligations []ObligationID) []ObligationID {
 	normalized := append([]ObligationID(nil), obligations...)
+	return normalizeObligationsInPlace(normalized)
+}
+
+func normalizeObligationsInPlace(normalized []ObligationID) []ObligationID {
 	sort.Slice(normalized, func(i, j int) bool {
 		return bytes.Compare(normalized[i][:], normalized[j][:]) < 0
 	})

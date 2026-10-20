@@ -696,9 +696,14 @@ func (db *DB) conditionalRecordCommittedEntries(entries []batch.Entry, ranges []
 	if db == nil || (len(entries) == 0 && len(ranges) == 0) {
 		return
 	}
-	if db.conditionalTxnUnsupported {
-		// Keep logical publication counting independent of active transactions.
-		// This immutable configuration cannot open an oracle consumer at all.
+	// Every caller holds writeMu (shared or exclusive) through publication.
+	// Enrollment takes writeMu exclusively before incrementing the active count
+	// and capturing its sequence/snapshot. Thus an inactive publication finishes
+	// before a new consumer can open; no consumer can need its copied keys. A
+	// closing consumer decrements only after releasing its snapshot and batch.
+	// Keep the sequence advancing, and leave any retained history/floor intact.
+	// COW publications use their separate accepted journal, not this recorder.
+	if db.conditionalTxnUnsupported || db.conditionalActiveTxnCount.Load() == 0 {
 		db.conditionalSeq.Add(1)
 		return
 	}

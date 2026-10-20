@@ -10,6 +10,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/dictdb"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/node"
 )
 
@@ -291,6 +292,20 @@ func TestCOWDictionaryPrimaryTemporaryCaptureDetachesGovernor(t *testing.T) {
 	}
 }
 
+// Capture the exact original pair supplied to startup admission. The basis
+// transfers its enrollment into the SAME Snapshot finalizer during adoption.
+type cowProducerPairCapture struct {
+	*backenddb.DB
+	primary, registry *retainedalloc.Owner
+}
+
+func (p *cowProducerPairCapture) AcquireSnapshotWithAllocationAdmission(admit func(backenddb.SnapshotAllocationSizes) error) (*backenddb.Snapshot, error) {
+	return p.DB.AcquireSnapshotWithAllocationAdmission(func(s backenddb.SnapshotAllocationSizes) error {
+		p.primary, p.registry = s.PrimaryMetadata, s.RegistryMetadata
+		return admit(s)
+	})
+}
+
 // Startup attaches actual producer custody, unlike a dictionary borrow. The
 // last basis can end before the final backend checkpoint/physical teardown.
 func TestCOWPrimaryProducerSurvivesBasisUntilPhysicalDisposal(t *testing.T) {
@@ -299,14 +314,26 @@ func TestCOWPrimaryProducerSurvivesBasisUntilPhysicalDisposal(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer backend.Close()
-	c, err := newCOWCache(backend, 1, memtable.DefaultCOWLimits())
+	provider := &cowProducerPairCapture{DB: backend}
+	c, err := newCOWCache(provider, 1, memtable.DefaultCOWLimits())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer c.budget.Close()
-	c.closeWithBudget(false)
-	if c.budget.Stats().ExternalLeases != 2 || c.budget.Stats().ExternalBytes == 0 {
-		t.Fatalf("producer lost exact pair after last basis: %+v", c.budget.Stats())
+	primary, registry := provider.primary, provider.registry
+	if primary == nil || registry == nil || primary == registry || c.cut.basis.metadata != nil {
+		t.Fatal("startup did not transfer the original distinct pair into its Snapshot finalizer")
+	}
+	parent := c.budget.Stats()
+	if err = c.closeWithBudget(false); err != nil {
+		t.Fatal(err)
+	}
+	child, after := c.maintenance.Stats(), c.budget.Stats()
+	if primary.PhysicalClosed() || registry.PhysicalClosed() || child.ExternalLeases != 2 || child.ExternalBytes < primary.Bytes()+registry.Bytes() || child.ExternalBytes == 0 {
+		t.Fatalf("producer lost original pair after last basis: child=%+v", child)
+	}
+	if after.ExternalLeases != 1 || after.ExternalBytes == 0 || after.ExternalBytes > parent.ExternalBytes || after.ReservedBytes != after.ExternalBytes {
+		t.Fatalf("parent lost original maintenance reservation: before=%+v after=%+v", parent, after)
 	}
 	if err = backend.Set([]byte("final"), []byte("value")); err != nil {
 		t.Fatal(err)
@@ -317,7 +344,11 @@ func TestCOWPrimaryProducerSurvivesBasisUntilPhysicalDisposal(t *testing.T) {
 	if err = backend.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if c.budget.Stats().ExternalBytes != 0 || c.budget.Stats().ExternalLeases != 0 {
-		t.Fatalf("actual pair disposal retained governor: %+v", c.budget.Stats())
+	if !primary.PhysicalClosed() || !registry.PhysicalClosed() || c.maintenance.Stats().ExternalBytes != 0 || c.maintenance.Stats().ExternalLeases != 0 {
+		t.Fatalf("actual original pair disposal retained governor: %+v", c.maintenance.Stats())
+	}
+	c.budget.Close()
+	if c.budget.Stats().TotalBytes != 0 || c.maintenance.Stats().TotalBytes != 0 {
+		t.Fatalf("completed maintenance reservation retained charge: parent=%+v child=%+v", c.budget.Stats(), c.maintenance.Stats())
 	}
 }

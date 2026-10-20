@@ -141,7 +141,7 @@ func TestIndexVacuumM4ExpectedLaneError(t *testing.T) {
 		{name: "outer exhaustive owner", goos: "linux", fixture: outer, lane: exhaustive, err: ErrCompactStorageLeafPageLogOwnerUnsupported, want: true},
 		{name: "outer backend", fixture: outer, lane: backend, err: ErrNamespacePersistenceUnsupported},
 		{name: "inline full", fixture: inline, lane: full, err: ErrNamespacePersistenceUnsupported},
-		{name: "windows offline namespace", goos: "windows", fixture: inline, lane: indexVacuumM4Lane{name: "offline-vacuum"}, err: ErrNamespacePersistenceUnsupported, want: true},
+		{name: "windows offline namespace", goos: "windows", fixture: inline, lane: indexVacuumM4Lane{name: "offline-vacuum"}, err: ErrNamespacePersistenceUnsupported},
 		{name: "linux offline namespace", goos: "linux", fixture: inline, lane: indexVacuumM4Lane{name: "offline-vacuum"}, err: ErrNamespacePersistenceUnsupported},
 		{name: "untyped", fixture: outer, lane: full, err: errors.New("promotion failed")},
 	} {
@@ -162,7 +162,7 @@ func TestIndexVacuumM4PlatformSupportsLane(t *testing.T) {
 	}{
 		{name: "linux online", goos: "linux", lane: indexVacuumM4Lane{expectsOnlineSwap: true}, want: true},
 		{name: "windows online", goos: "windows", lane: indexVacuumM4Lane{expectsOnlineSwap: true}, want: false},
-		{name: "windows offline", goos: "windows", lane: indexVacuumM4Lane{name: "offline-vacuum"}, want: false},
+		{name: "windows offline", goos: "windows", lane: indexVacuumM4Lane{name: "offline-vacuum"}, want: true},
 		{name: "linux offline", goos: "linux", lane: indexVacuumM4Lane{name: "offline-vacuum"}, want: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -314,7 +314,7 @@ func runIndexVacuumM4MatrixCell(t *testing.T, fixture indexVacuumM4Fixture, lane
 	cell.Details["freelist_reclaimable_pages_before"] = strconv.FormatUint(report.FreelistReclaimablePages, 10)
 	cell.Details["freelist_reclaimable_ratio_ppm_before"] = strconv.FormatUint(report.FreelistReclaimableRatioPPM, 10)
 	cell.HighDebt = report.FreelistReclaimableValid && report.FreelistReclaimableRatioPPM >= 500_000
-	if !opts.IndexOuterLeavesInValueLog && !cell.HighDebt {
+	if !cell.HighDebt {
 		t.Fatalf("fixture failed to establish real DATA freelist debt: %+v", report)
 	}
 	// Every deterministic matrix fixture is seeded with reclaimable index debt.
@@ -492,13 +492,13 @@ func openIndexVacuumM4Fixture(t *testing.T, opts Options, fixture indexVacuumM4F
 			t.Fatalf("close generation=%d: %v", generation, err)
 		}
 	}
-	if !opts.IndexOuterLeavesInValueLog {
-		// Small PRIMARY-only updates can advance slot/parent horizons without
-		// materializing another DATA freelist generation. Seed actual retired
-		// DATA bases through three bounded rebuilds; one or two leave the inline
-		// fixture with zero reclaimable pages. Keep the resulting debt explicit
-		// so every maintenance lane must exercise its original production trigger.
-		for rebuild := 0; rebuild < 3; rebuild++ {
+	{
+		// Seed real retired DATA bases for every layout, including outer leaves.
+		// An outer-leaf rebuild retires only its DATA internal pages, so a fixed
+		// three rebuilds does not overcome the fixed metadata floor. Stop on
+		// measured reclaimable debt, with a hard bound on fixture construction.
+		// The >=50% debt precondition and >=40% shrink gate stay the same.
+		for rebuild := 0; rebuild < 64; rebuild++ {
 			before, err := database.backend.IndexVacuumTriggerReport()
 			if err != nil {
 				t.Fatalf("trigger report before fixture rebuild: %v", err)
@@ -519,6 +519,9 @@ func openIndexVacuumM4Fixture(t *testing.T, opts Options, fixture indexVacuumM4F
 				t.Fatalf("fixture rebuild did not create a fresh DATA generation: generation=%s->%s pages=%d->%d parse=%v/%v", beforeGeneration, afterGeneration, before.TotalPages, after.TotalPages, beforeErr, afterErr)
 			}
 			t.Logf("fixture DATA rebuild=%d commit=%d->%d generation=%s->%s pages=%d->%d reclaimable=%d->%d ratio_ppm=%d->%d", rebuild+1, before.CommitSeq, after.CommitSeq, beforeGeneration, afterGeneration, before.TotalPages, after.TotalPages, before.FreelistReclaimablePages, after.FreelistReclaimablePages, before.FreelistReclaimableRatioPPM, after.FreelistReclaimableRatioPPM)
+			if rebuild >= 2 && after.FreelistReclaimableValid && after.FreelistReclaimableRatioPPM >= 500_000 {
+				break
+			}
 		}
 		for generation := 0; generation < 2; generation++ {
 			if err := database.SetSync([]byte("m4/0000"), bytes.Repeat([]byte{byte(240 + generation)}, fixture.valueSize)); err != nil {
@@ -594,9 +597,6 @@ func runIndexVacuumM4Lane(t *testing.T, database *DB, opts Options, fixture inde
 			return "error", 0, true, err
 		}
 		err := VacuumIndexOffline(opts)
-		if runtime.GOOS == "windows" && errors.Is(err, ErrNamespacePersistenceUnsupported) {
-			return string(CompactStoragePhaseStatusUnsupported), 0, true, err
-		}
 		return "supported", 0, true, err
 	case "close-opt-in-vacuum":
 		t.Setenv(envCloseVacuumIndexOnline, "1")
@@ -634,7 +634,7 @@ func runIndexVacuumM4Lane(t *testing.T, database *DB, opts Options, fixture inde
 }
 
 func indexVacuumM4PlatformSupportsLane(goos string, lane indexVacuumM4Lane) bool {
-	return goos != "windows" || !lane.expectsOnlineSwap && lane.name != "offline-vacuum"
+	return goos != "windows" || !lane.expectsOnlineSwap
 }
 
 func indexVacuumM4UnsupportedLaneResultAccepted(supported, expectedErr bool, status string, err error) bool {
@@ -642,9 +642,6 @@ func indexVacuumM4UnsupportedLaneResultAccepted(supported, expectedErr bool, sta
 }
 
 func indexVacuumM4ExpectedLaneError(goos string, fixture indexVacuumM4Fixture, lane indexVacuumM4Lane, err error) bool {
-	if goos == "windows" && lane.name == "offline-vacuum" {
-		return errors.Is(err, ErrNamespacePersistenceUnsupported)
-	}
 	if fixture.name != "outer-leaf" {
 		return false
 	}

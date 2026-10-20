@@ -116,9 +116,6 @@ func (h *Harness) applyCollectionMutationV1(entry raftentry.CommandEntryV1, meta
 			switch mutation.command {
 			case nativewire.CommandInsertBatch:
 				if len(mutation.documents) == 0 {
-					if err := finalizeHandle(); err != nil {
-						return commandWALFinalizeRecoveryRequired(entry, err)
-					}
 					break
 				}
 				resultIDs, err := owner.InsertBatchWithCommandWALIntent(mutation.ids, mutation.documents, mutation.trustedValidBSON, intent)
@@ -149,11 +146,8 @@ func (h *Harness) applyCollectionMutationV1(entry raftentry.CommandEntryV1, meta
 			default:
 				return raftentry.ApplyResultV1{}, codedError(raftentry.ErrorUnsupportedCommandV1, "raftapply: unsupported mutation command %d", mutation.command)
 			}
-			if !handleFinalized {
-				if err := finalizeHandle(); err != nil {
-					return commandWALFinalizeRecoveryRequired(entry, err)
-				}
-			}
+			// Build the immutable accepted-state proof while the original owner
+			// still protects its exact roots. Finalize invalidates that owner.
 			if v := mutation.colocated; v != nil {
 				proof, err := owner.ProvePreparedVectorPartitionColocatedMutationV1(context.Background(), matched, affected)
 				if err != nil {
@@ -166,6 +160,9 @@ func (h *Harness) applyCollectionMutationV1(entry raftentry.CommandEntryV1, meta
 				if err := compareColocatedProofV1(proof, *v, outcome); err != nil {
 					return commandWALFinalizeRecoveryRequired(entry, err)
 				}
+			}
+			if err := finalizeHandle(); err != nil {
+				return commandWALFinalizeRecoveryRequired(entry, err)
 			}
 			return raftentry.ApplyResultV1{}, nil
 		}()

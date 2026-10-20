@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -13,7 +14,7 @@ import (
 // The COW frontier is the bounded cut vector itself. The existing admission
 // flags, command cutover hook, physical publication authority and durability
 // hooks keep their ordering; legacy mutable rotation/queue copies are absent.
-func (db *DB) checkpointCOWContext(ctx context.Context, automatic bool) error {
+func (db *DB) checkpointCOWContext(ctx context.Context, automatic bool) (retErr error) {
 	start := time.Now()
 	defer func() {
 		dur := uint64(time.Since(start))
@@ -61,24 +62,14 @@ func (db *DB) checkpointCOWContext(ctx context.Context, automatic bool) error {
 	if hook := db.testBeforeCheckpointFrontierCapture; hook != nil {
 		hook()
 	}
-	c := db.cow
-	c.writerMu.Lock()
-	rollover, err := c.prepareRollover()
-	if err == nil && rollover != nil {
-		rollover.install()
-		db.mutableBytes.Store(0)
-	}
-	c.writerMu.Unlock()
-	if err == nil && db.snapshotCommandWALCheckpointCutover() && db.externalCommandWAL {
-		db.checkpointPostFrontierAdmission.Store(true)
-	}
-	db.writeMu.Unlock()
+	var frontier *cowReadCut
+	err := db.rotateCOWCheckpointFrontier(ctx, true, &frontier)
+	defer func() { retErr = joinCOWCleanupError(retErr, db.cow.releaseCut(frontier)) }()
 	db.recordCheckpointCutover(time.Since(cutover))
 	db.checkpointMu.Lock()
 	db.checkpointWriteCutoverActive.Store(false)
 	db.checkpointCond.Broadcast()
 	db.checkpointMu.Unlock()
-	rollover.drain()
 	if err != nil {
 		return err
 	}
@@ -93,26 +84,19 @@ func (db *DB) checkpointCOWContext(ctx context.Context, automatic bool) error {
 	if err = db.checkpointFlushValueLogLanes(); err != nil {
 		return err
 	}
+	// Preserve the original captured endpoint before the flush consumes frontier.
+	through := rootpublication.SealedPrefix{LogicalSequence: frontier.frozenLogicalSeq, CanonicalLSN: frontier.frozenCommandLSN}
 	var publish checkpointCommandWALPublish
-	if hook := db.loadCommandWALCheckpointPublishHook(); hook != nil {
-		publish.appliedLSN, publish.ranges, err = hook(true)
-		if err != nil {
-			return err
-		}
-	}
 	if hook := db.testBeforeCheckpointFrontierDrain; hook != nil {
 		hook()
 	}
 	if err = ctx.Err(); err != nil {
 		return err
 	}
-	if err = db.flushCOWFrozen(true, &publish); err != nil {
+	err = db.flushCOWFrozenCut(true, &publish, frontier)
+	frontier = nil
+	if err != nil {
 		return err
-	}
-	if publish.appliedLSN != 0 && !publish.consumed {
-		if _, err = db.publishCommandWALCheckpointApplied(publish.appliedLSN, publish.ranges); err != nil {
-			return err
-		}
 	}
 	if err = ctx.Err(); err != nil {
 		return err
@@ -120,12 +104,82 @@ func (db *DB) checkpointCOWContext(ctx context.Context, automatic bool) error {
 	if err = db.backendCheckpointBoundary(automatic); err != nil {
 		return err
 	}
+	if !automatic && db.cow.prefix != nil {
+		// Physical WaitThrough wakes before the dispatcher finishes accepted
+		// custody retirement. Join that SAME captured endpoint, including an
+		// original release already running on the dispatcher. Keep flushMu so
+		// direct Close cannot detach/refund prefix during this wait; accepted
+		// custody only queues cleanup and needs none of the cache writer gates.
+		if err = db.cow.prefix.WaitAccepted(ctx, through); err != nil {
+			return err
+		}
+	}
 	if publish.appliedLSN != 0 || publish.consumed {
 		if err = db.cleanupCommandWALCheckpointBoundary(automatic, true); err != nil {
 			return err
 		}
 	}
 	return db.vacuumCOWCheckpointBasis(automatic)
+}
+
+// rotateCOWCheckpointFrontier consumes the caller's exclusive writeMu fence
+// and returns with it unlocked. The existing checkpoint/Close admission fence
+// excludes writers through the finite retry, while flushMu remains outer D.
+func (db *DB) rotateCOWCheckpointFrontier(ctx context.Context, postFrontier bool, captured **cowReadCut) error {
+	c := db.cow
+	for attempt := 0; ; attempt++ {
+		c.writerMu.Lock()
+		rollover, err := c.prepareRollover()
+		if err == nil && rollover != nil {
+			rollover.install()
+			db.mutableBytes.Store(0)
+		}
+		c.writerMu.Unlock()
+		// writeMu still excludes every same-owner append. Rotate the journal at
+		// this complete raw+semantic cut, independently of public raw notices.
+		// Rotation is a file fence; only the canonical WAL owner can advance W.
+		if err == nil && db.externalCommandWAL {
+			wal, ok := db.backend.(interface {
+				CommandWALActiveBytes() int64
+				RotateCommandWALActiveSegment(bool) error
+			})
+			if !ok {
+				err = ErrCOWUnsupported
+			} else if wal.CommandWALActiveBytes() > 0 {
+				err = wal.RotateCommandWALActiveSegment(true)
+			}
+		}
+		if err == nil && db.snapshotCommandWALCheckpointCutover() && db.externalCommandWAL && postFrontier {
+			db.checkpointPostFrontierAdmission.Store(true)
+		}
+		if err == nil && captured != nil {
+			*captured = c.retainCut()
+		}
+		db.writeMu.Unlock()
+		if cleanupErr := rollover.drain(); cleanupErr != nil {
+			db.reportError(cleanupErr)
+			return joinCOWCleanupError(err, cleanupErr)
+		}
+		// A complete captured prefix can contain native-only sources. Raw
+		// table count alone does not describe its reclaimable coverage.
+		if !errors.Is(err, memtable.ErrCOWCapacity) || attempt != 0 ||
+			(len(c.cut.frozen) == 0 && c.cut.frozenLogicalSeq <= c.cut.basis.logicalSeq) {
+			return err
+		}
+		// A full source frontier can be reclaimed before rotating the mutable
+		// suffix. This physical root keeps its old AppliedLSN: the command cut also
+		// covers mutable effects and is captured only after successful rotation.
+		// IO and retirement run outside both writeMu and the COW writer owner.
+		if err = db.checkpointFlushValueLogLanes(); err != nil {
+			return err
+		}
+		if err = db.flushCOWFrozen(true, nil); err != nil {
+			return err
+		}
+		if err = lockCheckpointWriteMutexContext(ctx, &db.writeMu); err != nil {
+			return err
+		}
+	}
 }
 
 // Checkpoint already owns flushMu. Close post-frontier admission and drain any
@@ -164,8 +218,11 @@ func (db *DB) rolloverCOWForFlush() error {
 	}
 	c.writerMu.Unlock()
 	db.writeMu.RUnlock()
-	p.drain()
-	return err
+	cleanupErr := p.drain()
+	if cleanupErr != nil {
+		db.reportError(cleanupErr)
+	}
+	return joinCOWCleanupError(err, cleanupErr)
 }
 
 func (db *DB) flushCOWBackground(syncFlush bool) bool {
@@ -188,19 +245,20 @@ func (db *DB) flushCOWBackground(syncFlush bool) bool {
 // teardown exclusion occur after that fence is released.
 func (db *DB) closeCOWFrontier() (closeErr error) {
 	c := db.cow
-	c.writerMu.Lock()
-	p, err := c.prepareRollover()
-	if err == nil && p != nil {
-		p.install()
-		db.mutableBytes.Store(0)
-	}
-	c.writerMu.Unlock()
-	if err == nil {
-		db.snapshotCommandWALCheckpointCutover()
-	}
+	var frontier *cowReadCut
+	defer func() {
+		closeErr = joinCOWCleanupError(closeErr, c.releaseCut(frontier))
+		closeErr = joinCOWCleanupError(closeErr, c.closeWithBudget(false))
+	}()
+	// Like checkpoint, finish the original accepted physical handoff before
+	// capturing another cut. Completion may retain its original failure; it
+	// must run outside writeMu while closing and flushMu exclude new writers.
 	db.writeMu.Unlock()
-	p.drain()
-	defer func() { closeErr = joinCOWCleanupError(closeErr, c.closeWithBudget(false)) }()
+	if err := db.completeCOWHandoff(); err != nil {
+		return err
+	}
+	db.writeMu.Lock()
+	err := db.rotateCOWCheckpointFrontier(context.Background(), false, &frontier)
 	if err != nil {
 		return err
 	}
@@ -208,19 +266,10 @@ func (db *DB) closeCOWFrontier() (closeErr error) {
 		return err
 	}
 	var publish checkpointCommandWALPublish
-	if hook := db.loadCommandWALCheckpointPublishHook(); hook != nil {
-		publish.appliedLSN, publish.ranges, err = hook(true)
-		if err != nil {
-			return err
-		}
-	}
-	if err = db.flushCOWFrozen(true, &publish); err != nil {
+	err = db.flushCOWFrozenCut(true, &publish, frontier)
+	frontier = nil
+	if err != nil {
 		return err
-	}
-	if publish.appliedLSN != 0 && !publish.consumed {
-		if _, err = db.publishCommandWALCheckpointApplied(publish.appliedLSN, publish.ranges); err != nil {
-			return err
-		}
 	}
 	if err = db.backendCheckpointBoundary(false); err != nil {
 		return err

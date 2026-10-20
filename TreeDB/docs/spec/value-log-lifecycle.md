@@ -292,9 +292,12 @@ The ordinary raw delete path updates index reachability; existing snapshot
 roots remain retention roots. Value-log GC/rewrite may reclaim payload segments
 later only through the reachability rules in this document.
 
-The MVCC prune scan is snapshot-bound and bounded by its iterator plus delete
-batch size. A live pre-prune snapshot continues to protect and resolve its old
-value pointers. The prune's visited/retained/pruned byte accounting describes
+The MVCC prune scan is snapshot-bound; ordinary delete publications have a
+bounded batch size, while a complete pass may visit the whole history. COW uses
+its original complete retained cut and ordinary delete batches. A live pre-prune
+snapshot continues to protect and resolve its old value pointers after both
+floor advancement and logical deletion. Physical GC still needs every live and
+recovery closure to release its references. Prune byte accounting reports
 logical physical-record bytes, not immediately reclaimed segment bytes.
 
 ## 3. Reachability Source of Truth
@@ -458,6 +461,14 @@ part of this capture.
 
 ## 4. GC Algorithm (`DB.ValueLogGC`)
 
+DATA dependency directories retain their pages and index generation in the same
+registry as readers. These page-only pins still restrict page reuse, pruning and
+generation retirement. They do not alone classify column-asset candidates as
+readable by an older snapshot. Snapshot and captured recoverable-root-set pins
+remain reader-capable until their original release. Column-asset deletion also
+retains its exact durable-root identity pins, fallback protection and deletion
+revalidation; a directory page pin is not a substitute for those resource edges.
+
 For each segment in current value-log set:
 
 1. determine referenced set (incremental counters when valid; otherwise full scan),
@@ -515,7 +526,14 @@ cuts preserve index/vlog/dictionary authority across checkpoint and equivalent
 backend maintenance. GC/rewrite/leaf packing serialize and refresh the backend
 basis through the existing flush fence; retired cleanup runs outside
 writer/admission/publication locks. A referenced or pinned persistent segment
-cannot be deleted because it is old. See
+cannot be deleted because it is old. Physical rewrite preserves the winning
+pointer revision and verifies the selected source identity before substitution;
+a logically equivalent root does not retire another view's physical owner.
+Native semantic cleanup transfers its original sparse resource owners to the
+existing cleanup worker. A failed physical close/unlink retains that same Work,
+resource and admitted charge; observing the failure or closing the DB cannot
+retry it or grant deletion permission. Successful containing refunds follow
+original alias detachment through independent completion receipts. See
 [COW resource and handoff ownership](cow-cache-publication.md).
 
 ## 6. Rewrite/Compaction
@@ -526,6 +544,25 @@ Online rewrite copies live pointer-backed values into fresh value-log segments
 and updates keys in bounded commit batches. Cached-mode callers must checkpoint
 first, protect cached value-log paths, and allocate rewrite RIDs from the shared
 cached allocator.
+
+In COW mode, the public wrapper routes this named operation through the cache's
+original maintenance fence and fixed private owner. Only the maintained pointer
+rewrite carries that borrowed owner into ordinary physical root publication.
+It cannot append commands, advance entry revisions or applied command LSN,
+create accepted-cut coverage, or seal an unhanded-off logical suffix. The five
+rewrite finalizer paths retain their original root/base checks, candidates,
+resource custody, durability receipts, and cleanup. A direct backend alias does
+not acquire this role after native activation. Pack, vacuum, offline rewrite,
+and arbitrary maintenance callbacks receive no permission from this route.
+
+An admitted named rewrite holds the original cache flush fence through writer
+reconciliation and exact semantic basis refresh, including when Close has
+revoked subsequent admission. Close waits for that fence before disposing cache
+readers or append lanes. An operation reporting an error after a physical batch
+may still have changed durable roots; reconciliation and refresh therefore run
+once before returning its original error. A failed refresh retains the existing
+recovery fence and original cleanup custody. Held snapshots retain their old
+physical roots and value-log owners throughout this replacement.
 
 ### 6.2 Online split leaf-generation pack (`DB.LeafGenerationPack`)
 
@@ -752,6 +789,12 @@ One bounded settle replacement runs when later GC/checkpoint phases create new
 policy debt. After a successful replacement, leaf pack/GC settles any debt from
 rewritten system leaves within the same run-wide `LeafPackMaxPasses` budget;
 completion is based on the subsequent audit.
+After each successful vacuum and its checkpoint, compaction converges the older
+durable slot onto the current root before settling GC. This uses the existing
+durable publication path, including for NoWAL, without appending a command frame
+or advancing command coverage. Held views and prepared publication members keep
+their independent resource pins. Ordinary checkpoint, rewrite, and GC retain
+their existing fallback roots; they do not perform this convergence.
 Transient stale/mutation races are `deferred`, Windows is `unsupported`, and
 permanent errors fail compaction. Deferred or unsupported required work keeps
 all completion flags false. `PolicyFullyCompacted` means selected planner debt

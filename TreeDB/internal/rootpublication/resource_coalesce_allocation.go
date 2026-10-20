@@ -1,6 +1,8 @@
 package rootpublication
 
 import (
+	"bytes"
+	"errors"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"slices"
 	"unsafe"
@@ -9,7 +11,7 @@ import (
 // This scratch owns only temporary entry edges. Each output token has its own
 // physical pin and each output summary has its own retained allocation edges.
 // Inputs remain immutable and independently releasable throughout construction.
-func rebuildOwnedResourceKindCollision(left, right *resourceKindBacking, owner *retainedalloc.Owner) (*resourceKindBacking, error) {
+func rebuildOwnedResourceKindCollision(left, right *resourceKindBacking, owner *retainedalloc.Owner) (_ *resourceKindBacking, retErr error) {
 	count := 0
 	for _, source := range [2]*resourceKindBacking{left, right} {
 		for _, cell := range source.cells {
@@ -19,7 +21,13 @@ func rebuildOwnedResourceKindCollision(left, right *resourceKindBacking, owner *
 			count += cell.view.count
 		}
 	}
-	width := uint64(unsafe.Sizeof((*resourceEntryBacking)(nil)))
+	// The existing admitted scratch retains the exact private leaf alongside
+	// its entry until the cloned Token's physical edge can transfer to it.
+	type privateEntry struct {
+		backing *resourceEntryBacking
+		leaf    *stableResourceEntryNode
+	}
+	width := uint64(unsafe.Sizeof(privateEntry{}))
 	if uint64(count) > ^uint64(0)/width {
 		return nil, retainedalloc.ErrCapacity
 	}
@@ -27,12 +35,31 @@ func rebuildOwnedResourceKindCollision(left, right *resourceKindBacking, owner *
 	if err != nil {
 		return nil, err
 	}
-	entries := make([]*resourceEntryBacking, 0, count)
+	entries := make([]privateEntry, 0, count)
+	// Each refused release already retains its SAME original allocation. Link
+	// that receipt before the scratch drops its alias; never replace custody
+	// with a wrapper or insert an already reachable receipt into its own chain.
+	keepFailure := func(receipt *originalReleaseFailure) {
+		if !errors.Is(retErr, receipt) {
+			receipt.LinkPriorCleanupError(retErr)
+			retErr = receipt
+		}
+	}
+	releaseEntry := func(backing *resourceEntryBacking) {
+		token := backing.entries[0].token
+		if ResourceOwnerState(token.owner.Load()) == ResourceOwnerToken {
+			if err := token.ReleaseWithError(); err != nil {
+				keepFailure(&token.cleanupFailure)
+			}
+		}
+		if err := backing.release(); err != nil {
+			keepFailure(&backing.allocation.failure)
+		}
+	}
 	defer func() {
 		for _, entry := range entries {
-			if entry != nil {
-				entry.entries[0].token.Release()
-				entry.release()
+			if entry.backing != nil {
+				releaseEntry(entry.backing)
 			}
 		}
 		clear(entries[:cap(entries)])
@@ -42,7 +69,8 @@ func rebuildOwnedResourceKindCollision(left, right *resourceKindBacking, owner *
 	var buildErr error
 	for _, source := range [2]*resourceKindBacking{left, right} {
 		rangeStableResourceKindViews(source, func(incoming *stableResourceEntry) bool {
-			for i, backing := range entries {
+			for i, private := range entries {
+				backing := private.backing
 				existing := &backing.entries[0]
 				if existing.token.kind == incoming.token.kind && existing.token.logicalKey() == incoming.token.logicalKey() && !existing.token.samePhysicalIdentity(incoming.token) {
 					buildErr = ErrResourceConflict
@@ -65,9 +93,12 @@ func rebuildOwnedResourceKindCollision(left, right *resourceKindBacking, owner *
 					buildErr = e
 					return false
 				}
-				entries[i] = replacement
-				existing.token.Release()
-				backing.release()
+				entries[i] = privateEntry{backing: replacement}
+				releaseEntry(backing)
+				if retErr != nil {
+					buildErr = retErr
+					return false
+				}
 				return true
 			}
 			backing, e := cloneOwnedResourceEntryUnion(incoming, nil, owner)
@@ -75,7 +106,7 @@ func rebuildOwnedResourceKindCollision(left, right *resourceKindBacking, owner *
 				buildErr = e
 				return false
 			}
-			entries = append(entries, backing)
+			entries = append(entries, privateEntry{backing: backing})
 			return true
 		})
 		if buildErr != nil {
@@ -92,6 +123,11 @@ func rebuildOwnedResourceKindCollision(left, right *resourceKindBacking, owner *
 	}
 	cells := make([]resourceKindCell, 0, kindCapacity)
 	defer func() {
+		// These are construction borrows of leaves owned by the views. End
+		// them before a failed build can dispose and refund those views.
+		for i := range entries {
+			entries[i].leaf = nil
+		}
 		for _, cell := range cells {
 			releaseStableResourceKindView(cell.view)
 		}
@@ -99,7 +135,8 @@ func rebuildOwnedResourceKindCollision(left, right *resourceKindBacking, owner *
 		cellsAllocation.drop()
 		cellsAllocation.refund()
 	}()
-	for _, backing := range entries {
+	for i := range entries {
+		backing := entries[i].backing
 		entry := &backing.entries[0]
 		index := -1
 		for i := range cells {
@@ -113,7 +150,8 @@ func rebuildOwnedResourceKindCollision(left, right *resourceKindBacking, owner *
 			index = len(cells) - 1
 		}
 		view := &cells[index].view
-		if err = appendOwnedResourceEntryToView(view, backing, owner); err != nil {
+		entries[i].leaf, err = appendOwnedResourceEntryToView(view, backing, owner)
+		if err != nil {
 			return nil, err
 		}
 	}
@@ -126,15 +164,26 @@ func rebuildOwnedResourceKindCollision(left, right *resourceKindBacking, owner *
 	for i := range cells {
 		cells[i].view = stableResourceKindView{}
 	}
-	for _, backing := range entries {
+	for _, private := range entries {
+		backing := private.backing
 		if err = backing.entries[0].token.claim(ResourceOwnerShared); err != nil {
-			result.release()
+			for i := range entries {
+				entries[i].leaf = nil
+			}
+			if cleanupErr := result.release(); cleanupErr != nil {
+				// Failed graph disposal retains this original descriptor and
+				// marks its admitted receipt before returning the child error.
+				result.allocation.failure.LinkPriorCleanupError(err)
+				return nil, &result.allocation.failure
+			}
 			return nil, err
 		}
+		private.leaf.entries = backing.entries[:1:1]
 	}
-	for i, backing := range entries {
+	for i := range entries {
+		backing := entries[i].backing
+		entries[i] = privateEntry{}
 		backing.release()
-		entries[i] = nil
 	}
 	return result, nil
 }
@@ -179,7 +228,10 @@ func cloneOwnedResourceEntryUnion(left, right *stableResourceEntry, owner *retai
 	}
 	backing, err := newOwnedResourceEntryHistory(left, right, cloned, owner)
 	if err != nil {
-		cloned.Release()
+		if cleanupErr := cloned.ReleaseWithError(); cleanupErr != nil {
+			cloned.cleanupFailure.LinkPriorCleanupError(err)
+			return nil, &cloned.cleanupFailure
+		}
 		return nil, err
 	}
 	return backing, nil
@@ -242,47 +294,67 @@ func ownedFrontierUnion(owner *retainedalloc.Owner, a, b DurableFrontier) (Durab
 	return out, allocation, nil
 }
 
-func appendOwnedResourceEntryToView(view *stableResourceKindView, backing *resourceEntryBacking, owner *retainedalloc.Owner) error {
+// Append retains metadata and a detached private leaf. Its caller must attach
+// the physical entry slice only after the Token's Shared claim succeeds.
+func appendOwnedResourceEntryToView(view *stableResourceKindView, backing *resourceEntryBacking, owner *retainedalloc.Owner) (*stableResourceEntryNode, error) {
 	entry := &backing.entries[0]
+	maxInt := int(^uint(0) >> 1)
+	if view.count < 0 || view.count == maxInt || view.logicalObligationCount < 0 || entry.logicalObligations.count < 0 || entry.logicalObligations.count > maxInt-view.logicalObligationCount || view.logicalMembershipCount < 0 {
+		return nil, retainedalloc.ErrCapacity
+	}
 	logical, err := insertOwnedResourceLogical(view.logical, entry, owner)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	releaseOwnedResourceLogical(view.logical)
 	view.logical = logical
 	physical, err := insertOwnedResourcePhysical(view.physical, entry, owner)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	releaseOwnedResourcePhysical(view.physical)
 	view.physical = physical
 	leaf, err := newOwnedStableResourceEntryLeaf(backing, 0, 1, owner)
 	if err != nil {
-		return err
+		return nil, err
 	}
+	leaf.entries = nil
 	root, err := concatOwnedAdmittedStableResourceEntryNodes(view.root, leaf, owner)
 	if err != nil {
 		leaf.release()
-		return err
+		return nil, err
 	}
 	view.root = root
 	fields, err := mergeResourceFieldBackings(owner, view.fields, entry.reachability)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	view.fields.release()
 	view.fields = fields
-	_, added, err := mergeOwnedResourceMembership(&view.logicalMembership, entry.outgoing.index, owner)
+	visited, added, err := mergeOwnedResourceMembership(&view.logicalMembership, entry.outgoing.index, owner)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	view.logicalMembershipCount += added
+	coverage := added
+	if entry.outgoing.directory != nil {
+		// The exact owned directory and field summary cover the live records
+		// not materialized in the pending index. Count that retained coverage,
+		// then add only pending records newly inserted into the aggregate.
+		if entry.logicalObligations.count < visited || entry.logicalObligations.count-visited > maxInt-added {
+			return nil, ErrUnresolvedResource
+		}
+		coverage += entry.logicalObligations.count - visited
+	}
+	if coverage > maxInt-view.logicalMembershipCount {
+		return nil, ErrUnresolvedResource
+	}
+	view.logicalMembershipCount += coverage
 	view.count++
 	view.logicalObligationCount += entry.logicalObligations.count
 	if view.directory == nil {
 		view.directory = entry.outgoing.directory
 	}
-	return nil
+	return leaf, nil
 }
 
 func subtractOwnedFieldCommitments(target, removed *resourceFieldBacking) error {
@@ -315,21 +387,80 @@ func subtractOwnedFieldCommitments(target, removed *resourceFieldBacking) error 
 // Only incoming operands are inspected and inserted; the old physical rope
 // and immutable history remain genuinely shared, rather than cloned.
 func newOwnedResourceEntryHistory(left, right *stableResourceEntry, token *StableResourceToken, owner *retainedalloc.Owner) (*resourceEntryBacking, error) {
+	scope := ownedDirectoryCodecScopeV2{owner: owner}
+	defer scope.close()
+	return newOwnedResourceEntryHistoryWithScope(left, right, token, owner, &scope)
+}
+
+func newOwnedResourceEntryHistoryWithScope(left, right *stableResourceEntry, token *StableResourceToken, owner *retainedalloc.Owner, scope *ownedDirectoryCodecScopeV2) (*resourceEntryBacking, error) {
+	if scope.owner != owner {
+		return nil, ErrResourceOwnership
+	}
 	backing, err := newResourceEntryBacking(owner, 1)
 	if err != nil {
 		return nil, err
 	}
-	fail := func(e error) (*resourceEntryBacking, error) { backing.release(); return nil, e }
+	fail := func(e error) (*resourceEntryBacking, error) {
+		if cleanup := backing.release(); cleanup != nil {
+			if binding := SelectOriginalCleanupPrior(cleanup, e); binding.Valid() && binding.TryLink(e) {
+				return nil, cleanup
+			}
+			return nil, errors.Join(e, cleanup)
+		}
+		return nil, e
+	}
 	entry := &backing.entries[0]
 	if err = entry.bindOwnedToken(token); err != nil {
 		return fail(err)
 	}
-	a, err := newResourceAllocation(owner, retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(resourceEntryOutgoing{}))))
+	a, err := newResourceAllocation(owner, retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(resourceEntryOutgoing{})))+retainedalloc.AllocationCharge(uint64(len(left.logicalObligations.owner))))
 	if err != nil {
 		return fail(err)
 	}
 	out := &resourceEntryOutgoing{allocation: a}
 	entry.outgoing = out
+	if left.logicalObligations.directory != nil {
+		if left.logicalObligations.directory.metadata != owner {
+			return fail(ErrResourceOwnership)
+		}
+		if err := left.logicalObligations.directory.Retain(); err != nil {
+			return fail(err)
+		}
+		out.directory = left.logicalObligations.directory
+		out.directoryKey = bytes.Clone(left.logicalObligations.owner)
+	}
+	if left.outgoing.removed != nil {
+		// Only prior delta removals are inspected; directory history is untouched.
+		unmask := false
+		if right != nil {
+			for _, o := range left.outgoing.removed.values {
+				if actual, found := findStableLogicalObligationIndex(right.outgoing.index, o, nil); found && actual == o {
+					unmask = true
+					break
+				}
+			}
+		}
+		if unmask {
+			out.removed, err = newResourceObligationBacking(owner, left.outgoing.removed.values, "")
+			if err != nil {
+				return fail(err)
+			}
+			kept := 0
+			for _, o := range out.removed.values {
+				if actual, found := findStableLogicalObligationIndex(right.outgoing.index, o, nil); !found || actual != o {
+					out.removed.values[kept] = o
+					kept++
+				}
+			}
+			clear(out.removed.values[kept:])
+			out.removed.values = out.removed.values[:kept]
+		} else {
+			if !left.outgoing.removed.retain() {
+				return fail(ErrResourceOwnership)
+			}
+			out.removed = left.outgoing.removed
+		}
+	}
 	if !left.outgoing.index.retainAllocation() {
 		return fail(ErrResourceOwnership)
 	}
@@ -366,19 +497,60 @@ func newOwnedResourceEntryHistory(left, right *stableResourceEntry, token *Stabl
 			insertErr = ErrUnresolvedResource
 			return false
 		}
-		next, e := insertOwnedResourceObligationIndex(out.index, n.backing, ordinal, owner)
+		actual, present, e := lookupOwnedEntryObligationWithScopeV2(left, n.obligation, nil, scope)
 		if e != nil {
 			insertErr = e
 			return false
 		}
-		if next != out.index {
+		if present {
+			if actual != n.obligation {
+				insertErr = ErrResourceConflict
+				return false
+			}
+			return insert(n.right)
+		}
+		// An identical re-add may unmask a persisted value without adding a
+		// second pending emission. A removed unsealed value has no base record
+		// and still needs its original live pending index edge.
+		restoredBase := false
+		if left.logicalObligations.directory != nil {
+			if _, removed := left.logicalObligations.removedValue(n.obligation); removed {
+				codec, e := scope.get()
+				if e != nil {
+					insertErr = e
+					return false
+				}
+				_, e = codec.lookupLogical(left.logicalObligations.directory, n.obligation, func(key []byte, actual StableLogicalObligation) error {
+					restoredBase = bytes.Equal(key, left.logicalObligations.owner) && actual == n.obligation
+					return nil
+				})
+				if e != nil {
+					insertErr = e
+					return false
+				}
+			}
+		}
+		next := out.index
+		if !restoredBase {
+			var e error
+			next, e = insertOwnedResourceObligationIndex(out.index, n.backing, ordinal, owner)
+			if e != nil {
+				insertErr = e
+				return false
+			}
+		}
+		if next != out.index || restoredBase {
 			if count == int(^uint(0)>>1) {
-				releaseOwnedResourceObligationIndex(next)
+				if next != out.index {
+					releaseOwnedResourceObligationIndex(next)
+				}
 				insertErr = retainedalloc.ErrCapacity
 				return false
 			}
-			releaseOwnedResourceObligationIndex(out.index)
-			out.index = next
+			if next != out.index {
+				releaseOwnedResourceObligationIndex(out.index)
+				out.index = next
+			}
 			count++
 			foundField := false
 			for i := range out.fields.cells {
@@ -398,6 +570,7 @@ func newOwnedResourceEntryHistory(left, right *stableResourceEntry, token *Stabl
 	if !insert(rightIndex) {
 		return fail(insertErr)
 	}
+
 	if token == left.token && right != nil {
 		entry.frontier, out.frontier, err = ownedFrontierUnion(owner, left.frontier, right.frontier)
 		if err != nil {
@@ -408,41 +581,50 @@ func newOwnedResourceEntryHistory(left, right *stableResourceEntry, token *Stabl
 		entry.frontier = token.frontier
 	}
 	entry.logicalLane, entry.resourceID, entry.diagnosticPath = token.logicalLane, token.resourceID, token.diagnosticPath
+	if out.directory != nil {
+		entry.logicalLane, entry.resourceID, entry.diagnosticPath = left.logicalLane, left.resourceID, left.diagnosticPath
+	}
 	entry.reachability = out.fields
-	entry.logicalObligations = stableLogicalObligationView{fieldSummary: out.fields, index: out.index, count: count}
+	entry.logicalObligations = stableLogicalObligationView{fieldSummary: out.fields, index: out.index, count: count, directory: out.directory, owner: out.directoryKey, ownedRemoved: out.removed}
 	entry.dependencyManifestV1 = &out.cache
 	return backing, nil
 }
 
-// Collision-only batches extend the existing complete index while retaining
-// the same physical root. Namespace representative changes, cross-kind aliases
-// and newly introduced physical resources retain the admitted general route.
-func coalesceOwnedPhysicalHistory(target, incoming *resourceKindBacking, owner *retainedalloc.Owner) (*resourceKindBacking, bool, error) {
+// Mixed batches may retain the original complete indexes while extending old
+// physical history and adding new resources. Classify every incoming operand
+// before constructing the private descriptor. Aliases requiring canonical
+// representative changes keep the existing exact reconstruction route.
+func canCoalesceOwnedPhysicalHistory(target, incoming *resourceKindBacking) (bool, error) {
 	handled := true
 	var validationErr error
 	rangeStableResourceKindViews(incoming, func(child *stableResourceEntry) bool {
 		current, ok := target.lookup(child.token.kind)
-		if !ok || current.directory != nil || child.logicalObligations.directory != nil {
+		if child.logicalObligations.directory != nil || ok && current.directory != nil {
 			handled = false
 			return false
 		}
-		old := findStableResourceLogical(current.logical, child.token.logicalKey())
-		if old == nil || old.outgoing == nil || child.outgoing == nil || !old.token.samePhysicalIdentity(child.token) {
-			handled = false
-			return false
+		var old *stableResourceEntry
+		if ok {
+			old = findStableResourceLogical(current.logical, child.token.logicalKey())
 		}
-		physical := findStableResourcePhysical(current.physical, old.token.physicalIdentityKey())
-		if len(physical) != 1 || physical[0] != old {
-			handled = false
-			return false
-		}
+		// A new logical entry must also be physically new across ALL kinds.
+		// Otherwise the general route chooses/validates its representative.
 		for _, c := range target.cells {
-			if c.kind != child.token.kind && len(findStableResourcePhysical(c.view.physical, old.token.physicalIdentityKey())) != 0 {
+			physical := findStableResourcePhysical(c.view.physical, child.token.physicalIdentityKey())
+			if len(physical) != 0 && (old == nil || c.kind != child.token.kind || len(physical) != 1 || physical[0] != old) {
 				handled = false
 				return false
 			}
 		}
-		if old.token.namespace == nil && child.token.namespace != nil {
+		if old == nil {
+			return true
+		}
+		if old.outgoing == nil || child.outgoing == nil || !old.token.samePhysicalIdentity(child.token) {
+			handled = false
+			return false
+		}
+		physical := findStableResourcePhysical(current.physical, old.token.physicalIdentityKey())
+		if len(physical) != 1 || physical[0] != old || old.token.namespace == nil && child.token.namespace != nil {
 			handled = false
 			return false
 		}
@@ -461,40 +643,67 @@ func coalesceOwnedPhysicalHistory(target, incoming *resourceKindBacking, owner *
 		}
 		return true
 	})
-	if !handled || validationErr != nil {
-		return nil, handled, validationErr
+	return handled, validationErr
+}
+
+// Only a genuinely new incoming resource needs an independent physical pin.
+// The original immutable input backing stays borrowed until construction ends;
+// the private leaf acquires release authority only after all its metadata is
+// admitted and the cloned token's original Shared claim succeeds.
+func appendOwnedNewPhysicalEntryToView(view *stableResourceKindView, child *stableResourceEntry, owner *retainedalloc.Owner) (retErr error) {
+	backing, err := cloneOwnedResourceEntryUnion(child, nil, owner)
+	if err != nil {
+		return err
 	}
-	next, e := copyResourceKindBacking(owner, target.cells, nil, nil, true)
-	if e != nil {
-		return nil, true, e
-	}
-	var updateErr error
-	rangeStableResourceKindViews(incoming, func(child *stableResourceEntry) bool {
-		for i := range next.cells {
-			if next.cells[i].kind != child.token.kind {
-				continue
+	defer func() {
+		keepFailure := func(receipt *originalReleaseFailure) {
+			if !errors.Is(retErr, receipt) {
+				receipt.LinkPriorCleanupError(retErr)
+				retErr = receipt
 			}
-			view := &next.cells[i].view
-			old := findStableResourceLogical(view.logical, child.token.logicalKey())
-			updateErr = appendOwnedPhysicalHistoryToView(view, old, child, owner)
-			return updateErr == nil
 		}
-		updateErr = ErrResourceConflict
-		return false
-	})
-	if updateErr != nil {
-		next.release()
-		return nil, true, updateErr
+		token := backing.entries[0].token
+		if ResourceOwnerState(token.owner.Load()) == ResourceOwnerToken {
+			if err := token.ReleaseWithError(); err != nil {
+				keepFailure(&token.cleanupFailure)
+			}
+		}
+		token = nil
+		if err := backing.release(); err != nil {
+			keepFailure(&backing.allocation.failure)
+		}
+	}()
+	leaf, err := appendOwnedResourceEntryToView(view, backing, owner)
+	if err != nil {
+		return err
 	}
-	return next, true, nil
+	if err := backing.entries[0].token.claim(ResourceOwnerShared); err != nil {
+		return err
+	}
+	leaf.entries = backing.entries[:1:1]
+	return nil
 }
 
 func appendOwnedPhysicalHistoryToView(view *stableResourceKindView, old, child *stableResourceEntry, owner *retainedalloc.Owner) error {
-	replacement, e := newOwnedResourceEntryHistory(old, child, old.token, owner)
+	scope := ownedDirectoryCodecScopeV2{owner: owner}
+	defer scope.close()
+	return appendOwnedPhysicalHistoryToViewWithScope(view, old, child, owner, &scope)
+}
+
+func appendOwnedPhysicalHistoryToViewWithScope(view *stableResourceKindView, old, child *stableResourceEntry, owner *retainedalloc.Owner, scope *ownedDirectoryCodecScopeV2) (retErr error) {
+	replacement, e := newOwnedResourceEntryHistoryWithScope(old, child, old.token, owner, scope)
 	if e != nil {
 		return e
 	}
-	defer replacement.release()
+	defer func() {
+		if cleanup := replacement.release(); cleanup != nil {
+			if binding := SelectOriginalCleanupPrior(cleanup, retErr); binding.Valid() && binding.TryLink(retErr) {
+				retErr = cleanup
+			} else {
+				retErr = errors.Join(retErr, cleanup)
+			}
+		}
+	}()
 	entry := &replacement.entries[0]
 	logical, e := insertOwnedResourceLogical(view.logical, entry, owner)
 	if e != nil {
@@ -508,14 +717,45 @@ func appendOwnedPhysicalHistoryToView(view *stableResourceKindView, old, child *
 	}
 	releaseOwnedResourcePhysical(view.physical)
 	view.physical = physical
-	_, added, e := mergeOwnedResourceMembership(&view.logicalMembership, child.outgoing.index, owner)
+	// Persisted duplicates are absent from the pending index. Do not count or
+	// emit them again merely because a producer repeats an existing member.
+	var merge func(*stableLogicalObligationIndexNode) error
+	merge = func(n *stableLogicalObligationIndexNode) error {
+		if n == nil {
+			return nil
+		}
+		if err := merge(n.left); err != nil {
+			return err
+		}
+		_, present, err := lookupOwnedEntryObligationWithScopeV2(old, n.obligation, nil, scope)
+		if err != nil {
+			return err
+		}
+		if !present {
+			i, found := slices.BinarySearchFunc(n.backing.values, n.obligation, compareResourceObligation)
+			if !found {
+				return ErrResourceOwnership
+			}
+			next, err := insertOwnedResourceObligationIndex(view.logicalMembership, n.backing, i, owner)
+			if err != nil {
+				return err
+			}
+			if next != view.logicalMembership {
+				releaseOwnedResourceObligationIndex(view.logicalMembership)
+				view.logicalMembership = next
+			}
+		}
+		return merge(n.right)
+	}
+	e = merge(child.outgoing.index)
 	if e != nil {
 		return e
 	}
-	if added > int(^uint(0)>>1)-view.logicalMembershipCount {
+	delta := entry.logicalObligations.count - old.logicalObligations.count
+	if delta < 0 || delta > int(^uint(0)>>1)-view.logicalMembershipCount {
 		return retainedalloc.ErrCapacity
 	}
-	view.logicalMembershipCount += added
+	view.logicalMembershipCount += delta
 	fields, e := mergeResourceFieldBackings(owner, view.fields, entry.reachability)
 	if e != nil {
 		return e
@@ -526,7 +766,6 @@ func appendOwnedPhysicalHistoryToView(view *stableResourceKindView, old, child *
 	}
 	view.fields.release()
 	view.fields = fields
-	delta := entry.logicalObligations.count - old.logicalObligations.count
 	if delta < 0 || delta > int(^uint(0)>>1)-view.logicalObligationCount {
 		return retainedalloc.ErrCapacity
 	}

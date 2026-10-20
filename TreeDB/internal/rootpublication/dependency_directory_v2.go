@@ -24,7 +24,11 @@ const (
 // replace physical identity values without renaming logical directory records.
 func DependencyPhysicalKeyV2(entry DependencyManifestEntryV1) []byte {
 	key := make([]byte, 1, 1+3*4+8+len(entry.Kind)+len(entry.LogicalLane)+len(entry.ResourceID))
-	key[0] = dependencyPhysicalKeyV2
+	return appendDependencyPhysicalKeyV2(key[:0], entry)
+}
+
+func appendDependencyPhysicalKeyV2(key []byte, entry DependencyManifestEntryV1) []byte {
+	key = append(key, dependencyPhysicalKeyV2)
 	key = appendStringV1(key, string(entry.Kind))
 	key = appendStringV1(key, entry.LogicalLane)
 	key = appendStringV1(key, entry.ResourceID)
@@ -37,7 +41,12 @@ func DependencyPhysicalKeyV2(entry DependencyManifestEntryV1) []byte {
 func DependencyLogicalKeyV2(obligation StableLogicalObligation) []byte {
 	identity := stableLogicalObligationKey(obligation)
 	key := make([]byte, 1, 1+4*4+5*8+len(identity.class)+len(identity.kind)+len(identity.namespace)+len(identity.reachability))
-	key[0] = dependencyLogicalKeyV2
+	return appendDependencyLogicalKeyV2(key[:0], obligation)
+}
+
+func appendDependencyLogicalKeyV2(key []byte, obligation StableLogicalObligation) []byte {
+	identity := stableLogicalObligationKey(obligation)
+	key = append(key, dependencyLogicalKeyV2)
 	key = appendStringV1(key, identity.class)
 	key = appendStringV1(key, identity.kind)
 	key = appendStringV1(key, identity.namespace)

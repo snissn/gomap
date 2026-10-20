@@ -6,6 +6,7 @@ import (
 	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/internal/commandwalbarrier"
+	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
 )
 
 type commandWALRawBarrier struct {
@@ -43,6 +44,11 @@ func (db *DB) RegisterCommandWALRawPublishBarrier(hook func() error) func() {
 		return func() {}
 	}
 	db.commandWALRawBarrierMu.Lock()
+	if db.nativeSemanticActive.Load() {
+		db.commandWALRawBarrierMu.Unlock()
+		db.closeHooksMu.Unlock()
+		return func() {}
+	}
 	db.commandWALRawBarrierNextID++
 	id := db.commandWALRawBarrierNextID
 	barrier := &commandWALRawBarrier{id: id, hook: hook, active: true}
@@ -254,6 +260,9 @@ func (db *DB) LockCommandWALPublish() func() {
 // drains registered staged-command barriers before the caller appends a frame.
 // The returned guard also pins teardown and must be released after raw publish.
 func (db *DB) LockCommandWALPublishWithBarriers() (func(), error) {
+	if db != nil && db.nativeSemanticActive.Load() {
+		return nil, ErrNativeSemanticUnsupported
+	}
 	if db == nil || !db.commandWAL {
 		return func() {}, nil
 	}
@@ -265,6 +274,10 @@ func (db *DB) LockCommandWALPublishWithBarriers() (func(), error) {
 		}
 		db.commandWALRawAdmissionMu.Lock()
 		db.commandWALRawPublishMu.Lock()
+		if db.nativeSemanticActive.Load() {
+			db.unlockCommandWALRawPublishWithAdmissionAndTeardown()
+			return nil, ErrNativeSemanticUnsupported
+		}
 		if db.closing.Load() {
 			db.unlockCommandWALRawPublishWithAdmissionAndTeardown()
 			return nil, ErrClosed
@@ -332,12 +345,13 @@ type CommandWALStagingGuardV1 struct {
 
 // Copies of the exported opaque handle share actual DB-minted ownership.
 type commandWALStagingOwnershipV1 struct {
-	unlock      func()
-	db          *DB
-	mu          sync.Mutex
-	active      bool
-	transferred bool
-	intent      *CommandWALIntent
+	unlock       func()
+	db           *DB
+	privateOwner *transactionowner.Owner
+	mu           sync.Mutex
+	active       bool
+	transferred  bool
+	intent       *CommandWALIntent
 }
 
 // One fresh aggregate preserves shared copied-handle identity without three
@@ -360,6 +374,18 @@ func CommandWALStagingGuardAllocationBytesV1() uint64 {
 }
 
 func (db *DB) LockCommandWALStagingGuardV1() (*CommandWALStagingGuardV1, error) {
+	return db.lockPrivateCOWStagingGuard(nil)
+}
+
+// LockPrivateCOWStagingGuard authenticates only the owner bound at Open. It
+// does not run legacy barriers, mint another owner, or grant physical authority.
+func (db *DB) LockPrivateCOWStagingGuard(owner *transactionowner.Owner) (*CommandWALStagingGuardV1, error) {
+	if db == nil || owner == nil || owner != db.privateCOWOwner {
+		return nil, ErrNativeSemanticUnsupported
+	}
+	return db.lockPrivateCOWStagingGuard(owner)
+}
+func (db *DB) lockPrivateCOWStagingGuard(owner *transactionowner.Owner) (*CommandWALStagingGuardV1, error) {
 	if db == nil || !db.commandWAL {
 		return nil, ErrCommandWALUnsupported
 	}
@@ -373,7 +399,13 @@ func (db *DB) LockCommandWALStagingGuardV1() (*CommandWALStagingGuardV1, error) 
 		db.unlockCommandWALRawPublishWithTeardown()
 		return nil, ErrClosed
 	}
-	return newCommandWALStagingGuardV1(db, nil), nil
+	if db.nativeSemanticActive.Load() && owner != db.privateCOWOwner {
+		db.unlockCommandWALRawPublishWithTeardown()
+		return nil, ErrNativeSemanticUnsupported
+	}
+	guard := newCommandWALStagingGuardV1(db, nil)
+	guard.ownership.privateOwner = owner
+	return guard, nil
 }
 
 // LockCommandWALStagingGuardWithBarriersV1 mints the same typed staging
@@ -399,7 +431,7 @@ func (guard *CommandWALStagingGuardV1) ValidateDBV1(db *DB) error {
 	held := guard.ownership
 	held.mu.Lock()
 	defer held.mu.Unlock()
-	if !held.active || db == nil || held.db != db {
+	if !held.active || db == nil || held.db != db || (db.nativeSemanticActive.Load() && held.privateOwner != db.privateCOWOwner) {
 		return ErrCommandWALRejected
 	}
 	return nil
@@ -432,6 +464,8 @@ func (guard *CommandWALStagingGuardV1) Append(intent *CommandWALIntent, sync boo
 	if !held.active || held.db == nil || held.intent != nil || intent == nil || intent.AssignedLSN() != 0 {
 		return 0, ErrCommandWALRejected
 	}
+	intent.inner.privateCOWOwner = held.privateOwner
+	defer func() { intent.inner.privateCOWOwner = nil }()
 	lsn, err := held.db.AppendStagedCommandWALIntent(intent, sync)
 	if err == nil && lsn != 0 {
 		held.intent = intent
@@ -483,4 +517,18 @@ func (guard *CommandWALStagingGuardV1) BorrowStableResourceCaptureLeaseV1(db *DB
 		return nil, err
 	}
 	return &StableResourceCaptureLease{db: db, borrowedGuard: guard, borrowedIntent: intent}, nil
+}
+
+// privateCOWOwnerFor returns only the identity of a live original guard.
+func (guard *CommandWALStagingGuardV1) privateCOWOwnerFor(db *DB) *transactionowner.Owner {
+	if guard == nil || guard.ownership == nil {
+		return nil
+	}
+	held := guard.ownership
+	held.mu.Lock()
+	defer held.mu.Unlock()
+	if !held.active || held.db != db {
+		return nil
+	}
+	return held.privateOwner
 }

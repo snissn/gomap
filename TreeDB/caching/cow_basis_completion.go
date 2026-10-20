@@ -77,8 +77,8 @@ func (b *cowBackendBasis) adoptSnapshot(s *backenddb.Snapshot) error {
 
 func (b *cowBackendBasis) SnapshotCleanupCompleted(err error) {
 	b.completionMu.Lock()
-	defer b.completionMu.Unlock()
 	if b.completed {
+		b.completionMu.Unlock()
 		return
 	}
 	b.completed = true
@@ -87,6 +87,7 @@ func (b *cowBackendBasis) SnapshotCleanupCompleted(err error) {
 		b.originalCustody.Complete(b, err)
 		b.metadata.CloseAfterCleanup(err)
 		b.metadata = nil
+		b.completionMu.Unlock()
 		return
 	}
 	for _, pin := range b.pins {
@@ -96,9 +97,15 @@ func (b *cowBackendBasis) SnapshotCleanupCompleted(err error) {
 	b.snapshot = nil
 	b.originalCustody.Complete(nil, nil)
 	b.originalCustody = nil
-	b.metadata.Close()
+	metadata := b.metadata
 	b.metadata = nil
-	b.lease.Close()
+	var refund *memtable.COWExternalLease
+	if b.refs.Load() == 0 {
+		refund, b.lease = b.lease, nil
+	}
+	b.completionMu.Unlock()
+	metadata.Close()
+	refund.Close()
 }
 
 // Preserve the original refusal identity when actual cleanup succeeds.

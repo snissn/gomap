@@ -24,6 +24,9 @@ func WalkDependencyDirectoryChangesV2(source *StableResourceSet, base *Dependenc
 	if owner := ResourceOwnerState(source.owner.Load()); owner == ResourceOwnerReleased || owner == ResourceOwnerTransferred {
 		return 0, 0, ErrResourceOwnership
 	}
+	if source.metadata != nil {
+		return walkOwnedDependencyDirectoryChangesV2(source, base, visit)
+	}
 	owners := make(map[string]struct{})
 	// The map contains only this publication's additions, not retained keys.
 	additions := make(map[string]struct{})
@@ -72,7 +75,7 @@ func WalkDependencyDirectoryChangesV2(source *StableResourceSet, base *Dependenc
 			err = fmt.Errorf("%w: logical directory is not the visible predecessor", ErrResourceConflict)
 			return false
 		}
-		for _, obligation := range entry.logicalObligations.removed {
+		for obligation := range entry.logicalObligations.removalValues() {
 			if base == nil {
 				err = ErrResourceConflict
 				return false
