@@ -143,7 +143,6 @@ func checkNativeTemplateFinal(t *testing.T, database *DB, col *collections.Colle
 	}
 }
 func runNativeTemplateV1(t *testing.T, profile Profile, dir string, crash bool) {
-	t.Helper()
 	opts := indexedSliceOptions(profile, dir)
 	database, err := Open(opts)
 	if err != nil {
