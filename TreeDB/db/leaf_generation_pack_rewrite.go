@@ -32,17 +32,11 @@ const leafRefRewriteInlineRemapCap = 8  // inline remap cache before promoting t
 const leafGenerationPackPrivatePageIDBase = uint64(1) << 63
 
 type leafGenerationPackStagingAllocator struct {
-	ctx   context.Context
 	pager *pager.Pager
 	pages []uint64
 }
 
 func (a *leafGenerationPackStagingAllocator) Alloc(uint64) (uint64, error) {
-	if a != nil && a.ctx != nil {
-		if err := a.ctx.Err(); err != nil {
-			return 0, err
-		}
-	}
 	if a == nil || a.pager == nil {
 		return 0, errors.New("leaf generation pack: missing staging pager")
 	}
@@ -69,7 +63,6 @@ func (a *leafGenerationPackStagingAllocator) Pages() []uint64 {
 // retires the unpublished pages rather than shrinking the pager behind the
 // allocator's logical high-water.
 type leafGenerationPackPublishAllocator struct {
-	ctx    context.Context
 	zipper *zipper.Zipper
 
 	pager           *pager.Pager
@@ -88,11 +81,6 @@ func newLeafGenerationPackPublishAllocator(idx *indexGen, retireCommitSeq uint64
 }
 
 func (a *leafGenerationPackPublishAllocator) Alloc(uint64) (uint64, error) {
-	if a != nil && a.ctx != nil {
-		if err := a.ctx.Err(); err != nil {
-			return 0, err
-		}
-	}
 	if a == nil || a.pager == nil || a.allocator == nil {
 		return 0, errors.New("leaf generation pack: missing publish allocator")
 	}
@@ -236,6 +224,17 @@ type leafRefRewriteCtx struct {
 	sourceLiveMovedByGeneration map[uint64]leafGenerationLiveTotals
 
 	readRefreshRetried bool
+}
+
+type leafRefRewritePageAppender struct {
+	ctx *leafRefRewriteCtx
+}
+
+func (a *leafRefRewritePageAppender) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error) {
+	if a == nil || a.ctx == nil {
+		return page.LeafLogPtr{}, errors.New("vlog-rewrite: missing leaf-ref rewrite appender state")
+	}
+	return a.ctx.appendLeafPage(leafPage)
 }
 
 type leafRefRewriteRunStats struct {
@@ -1002,8 +1001,9 @@ func (c *leafRefRewriteCtx) applySystemRootCollectionRootReplacements(rootID uin
 			return rootID, false, err
 		}
 	}
-	// The original staging/publish allocators observe cancellation before each
-	// pager allocation, including SYSTEM leaves (which never enter the leaf log).
+	// For this collections-only maintenance path, cancellation during Apply is
+	// observed by the leaf page appender before each rewritten outer leaf is
+	// persisted.
 	newRoot, retired, _, err := c.zipper.Apply(rootID, delta)
 	if err != nil {
 		return rootID, false, err
@@ -1274,7 +1274,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 			err = errors.Join(err, closeErr)
 		}
 	}()
-	tracker := &leafGenerationPackStagingAllocator{ctx: ctx, pager: stagingPager}
+	tracker := &leafGenerationPackStagingAllocator{pager: stagingPager}
 
 	var sourceGenerationIDs map[uint64]struct{}
 	if snap.state.LeafGenerations != nil && sourceChunks == nil {
@@ -1346,10 +1346,12 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	// PRIMARY directory is rewritten separately above its real operands; never
 	// wrap a materialized SYSTEM delta in the inherited user-root preference.
 
-	leafCtx.zipper.SetOuterLeavesInValueLog(false)
-	leafCtx.zipper.SetLeafPageLog(nil)
+	leafCtx.zipper.SetOuterLeavesInValueLog(db.indexOuterLeavesInValueLog)
 	leafCtx.zipper.SetLeafPageReader(leafCtx)
 	leafCtx.zipper.SetIndexInternalBaseDelta(db.indexInternalBaseDelta && !db.indexOuterLeavesInValueLog)
+	if db.indexOuterLeavesInValueLog {
+		leafCtx.zipper.SetLeafPageLog(&leafRefRewritePageAppender{ctx: leafCtx})
+	}
 	if runStats != nil {
 		defer func() {
 			runStats.InternalPagesVisited = leafCtx.internalVisited
@@ -1708,7 +1710,6 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	// allocation through meta publication.
 	relocateStarted := time.Now()
 	publishAlloc = newLeafGenerationPackPublishAllocator(idx, basis.commitSeq)
-	publishAlloc.ctx = ctx
 	remap := make(map[uint64]uint64, len(privatePages))
 	publishCollectionReplacements, err := rebaseLeafGenerationPackCollectionReplacements(stagingPager, collectionRootReplacements, publishAlloc, remap)
 	if err != nil {
@@ -1764,6 +1765,9 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 
 	collectionPublishStarted := time.Now()
 	if len(publishCollectionReplacements) > 0 {
+		if db.leafPageLog == nil {
+			return cleanupAndUnlock(errors.New("vlog-rewrite: collection root publication requires leaf page log"))
+		}
 		publishCtx := &leafRefRewriteCtx{
 			ctx:        ctx,
 			db:         db,
@@ -1773,15 +1777,20 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		}
 		publishCtx.zipper = idx.zipper.CloneWithPagerAllocator(idx.pager, publishAlloc)
 
-		publishCtx.zipper.SetOuterLeavesInValueLog(false)
-		publishCtx.zipper.SetLeafPageLog(nil)
+		publishCtx.zipper.SetOuterLeavesInValueLog(db.indexOuterLeavesInValueLog)
 		publishCtx.zipper.SetLeafPageReader(db.valueLogManager)
-		publishCtx.zipper.SetIndexInternalBaseDelta(db.indexInternalBaseDelta && !db.indexOuterLeavesInValueLog)
+		publishCtx.zipper.SetLeafPageLog(db.leafPageLog)
 		publishedSysRoot, _, err = publishCtx.applySystemRootCollectionRootReplacements(publishedSysRoot, publishCollectionReplacements)
 		if err != nil {
 			return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: publish collection descriptors: %w", err))
 		}
 		publishRetired = append(publishRetired, publishCtx.retired...)
+		// Expose the append frontier to exact resource capture without performing
+		// physical dependency I/O while publication locks are held. The candidate
+		// resource set owns the subsequent stable-file sync.
+		if err := db.leafPageLog.Flush(); err != nil {
+			return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: flush published collection descriptors: %w", err))
+		}
 	}
 	if runStats != nil {
 		runStats.ApplyStages.CollectionPublishTimeNanos += time.Since(collectionPublishStarted).Nanoseconds()

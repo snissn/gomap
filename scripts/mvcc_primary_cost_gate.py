@@ -33,6 +33,8 @@ SAMPLES = 8
 ITERATIONS = 128
 TIME_LIMIT_PERCENT = 5.0
 QUIET_LIMIT_PERCENT = 2.0
+QUIET_WINDOW_SECONDS = 5.0
+QUIET_ACQUISITION_SECONDS = 60.0
 ROW = re.compile(r"^" + BENCHMARK + r"(?:-\d+)?\s+(\d+)\s+(.*)$")
 METRICS = {"ns/op", "B/op", "allocs/op", "generation_advances/op"}
 
@@ -272,6 +274,61 @@ class ProcessObservation:
                 "limit": "processes entirely between observations may be missed"}
 
 
+
+def acquire_quiet_window(output: Path, *, clock=None, sleep=None, observer_factory=None) -> dict:
+    """Acquire the first original quiet window before any timed sample, or fail closed."""
+    clock = clock or time.monotonic
+    sleep = sleep or time.sleep
+    observer_factory = observer_factory or ProcessObservation
+    started = clock()
+    deadline = started + QUIET_ACQUISITION_SECONDS
+    acquisition = {"status": "acquiring", "setup_cap_s": QUIET_ACQUISITION_SECONDS,
+                   "window_s": QUIET_WINDOW_SECONDS, "cpu_threshold_percent": QUIET_LIMIT_PERCENT,
+                   "windows": []}
+
+    def save_acquisition():
+        acquisition["elapsed_s"] = clock() - started
+        (output / "preflight-acquisition.json").write_text(
+            json.dumps(acquisition, indent=2, sort_keys=True) + "\n")
+
+    save_acquisition()
+    # Do not shorten the original predicate to use an incomplete final window.
+    while deadline - clock() >= QUIET_WINDOW_SECONDS:
+        number = len(acquisition["windows"]) + 1
+        name = "preflight-processes.jsonl" if number == 1 else f"preflight-processes-{number:02d}.jsonl"
+        observer = observer_factory(output / name)
+        while clock() - observer.started < QUIET_WINDOW_SECONDS:
+            remaining = min(QUIET_WINDOW_SECONDS - (clock() - observer.started), deadline - clock())
+            if remaining <= 0:
+                break
+            sleep(min(0.25, remaining))
+            observer.observe()
+        result = observer.finish()
+        finished = clock()
+        complete = result["elapsed_s"] >= QUIET_WINDOW_SECONDS
+        within_cap = finished <= deadline
+        qualified = complete and within_cap and not result["busy"]
+        acquisition["windows"].append({"observation_file": name, "result": result,
+            "finished_after_s": finished - started, "complete": complete,
+            "within_cap": within_cap, "qualified": qualified})
+        # Keep the existing final-window schema for existing artifact consumers.
+        (output / "preflight.json").write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
+        if qualified:
+            acquisition["status"] = "acquired"
+        save_acquisition()
+        if qualified:
+            authorized = clock()
+            if authorized <= deadline:
+                return result
+            # Artifact writes are part of acquisition, even when observation was quiet.
+            acquisition["windows"][-1].update(qualified=False,
+                authorization_after_s=authorized - started, artifact_writes_within_cap=False)
+            break
+    acquisition["status"] = "exhausted"
+    save_acquisition()
+    raise RuntimeError("host quiet preflight acquisition exhausted; no timed samples started")
+
+
 def run_gate(root: Path, output: Path, baseline: str, candidate: str) -> int:
     if not re.fullmatch(r"[0-9a-f]{40}", baseline) or not re.fullmatch(r"[0-9a-f]{40}", candidate):
         raise ValueError("full immutable source SHAs are required")
@@ -357,6 +414,8 @@ def run_gate(root: Path, output: Path, baseline: str, candidate: str) -> int:
              "source_authorities": source_bindings, "runner_sha256": digest(Path(__file__)),
              "samples": SAMPLES, "iterations": ITERATIONS, "cpu": 0, "gomaxprocs": 1,
              "max_paired_regression_percent": TIME_LIMIT_PERCENT,
+             "quiet_preflight": {"window_s": QUIET_WINDOW_SECONDS, "setup_cap_s": QUIET_ACQUISITION_SECONDS,
+                                 "cpu_threshold_percent": QUIET_LIMIT_PERCENT},
              "bytes_and_allocations": "no median growth", "binaries": binaries})
         benchmark_argv = ["-test.run=^$", "-test.bench=^" + BENCHMARK + "$",
                           "-test.benchtime=128x", "-test.count=1", "-test.benchmem", "-test.timeout=90s"]
@@ -384,14 +443,7 @@ def run_gate(root: Path, output: Path, baseline: str, candidate: str) -> int:
                     or f"MVCC_COST_LIFECYCLE authority={authorities[revision]}" not in lifecycle
                     or (authorities[revision] == "DATA" and lifecycle.count("MVCC_COST_DATA_SLOT ") != 6)):
                 raise RuntimeError(f"actual {revision} public lifecycle control did not pass")
-        preflight = ProcessObservation(output / "preflight-processes.jsonl")
-        while time.monotonic() - preflight.started < 5:
-            time.sleep(0.25)
-            preflight.observe()
-        preflight_result = preflight.finish()
-        save("preflight.json", preflight_result)
-        if preflight_result["busy"]:
-            raise RuntimeError("host quiet preflight refused; no timed samples started")
+        acquire_quiet_window(output)
         observation = ProcessObservation(output / "measured-processes.jsonl")
         for pair in range(SAMPLES):
             order = ("baseline", "candidate") if pair % 2 == 0 else ("candidate", "baseline")

@@ -3,12 +3,14 @@
 
 import copy
 import importlib.util
+import json
 import os
 import shutil
 import subprocess
 import tempfile
 from pathlib import Path
 import unittest
+from unittest import mock
 
 path = Path(__file__).with_name("mvcc_primary_cost_gate.py")
 if not path.exists():
@@ -317,6 +319,203 @@ class PrimaryCostGateTests(unittest.TestCase):
         snapshot = {own: {"parent": own+1}, own+1: {"parent": 0},
                     own+2: {"parent": own}, own+3: {"parent": own+2}, own+4: {"parent": own+1}}
         self.assertEqual(gate.allowed_processes(snapshot), {own, own+1, own+2, own+3})
+
+
+class QuietAcquisitionTests(unittest.TestCase):
+    class Clock:
+        def __init__(self):
+            self.now = 0.0
+
+        def __call__(self):
+            return self.now
+
+        def sleep(self, seconds):
+            self.now += seconds
+
+    def observer_factory(self, clock, busy_windows, *, finish_cost=0):
+        created = []
+
+        class Observer:
+            def __init__(self, path):
+                self.path = path
+                self.started = clock()
+                self.busy = busy_windows[len(created)]
+                created.append(self)
+                self.observe()
+
+            def observe(self):
+                with self.path.open("a") as stream:
+                    stream.write(json.dumps({"elapsed_s": clock() - self.started}) + "\n")
+
+            def finish(self):
+                clock.sleep(finish_cost)
+                self.observe()
+                rows = [{"pid": 91, "start": "original", "command": "flush-8:0",
+                         "ticks": 16, "cpu_percent": 3.2}] if self.busy else []
+                return {"elapsed_s": clock() - self.started, "external_processes": rows,
+                        "busy": rows, "cpu_threshold_percent": gate.QUIET_LIMIT_PERCENT,
+                        "sampling_interval_s": 0.25}
+
+        return Observer, created
+
+    def acquire(self, directory, clock, factory):
+        return gate.acquire_quiet_window(Path(directory), clock=clock, sleep=clock.sleep,
+                                         observer_factory=factory)
+
+    def test_already_quiet_acquires_first_full_window_without_extra_delay(self):
+        clock = self.Clock()
+        factory, created = self.observer_factory(clock, [False])
+        with tempfile.TemporaryDirectory() as directory:
+            result = self.acquire(directory, clock, factory)
+            receipt = json.loads((Path(directory) / "preflight-acquisition.json").read_text())
+            self.assertEqual(receipt["status"], "acquired")
+            self.assertEqual(len(created), 1)
+            self.assertEqual(clock(), 5)
+            self.assertEqual(result, json.loads((Path(directory) / "preflight.json").read_text()))
+            self.assertTrue(receipt["windows"][0]["qualified"])
+
+    def test_busy_then_quiet_retains_failed_window_and_never_launches_early(self):
+        clock = self.Clock()
+        factory, created = self.observer_factory(clock, [True, False])
+        launched = []
+        with tempfile.TemporaryDirectory() as directory:
+            self.acquire(directory, clock, factory)
+            launched.append(clock())  # Caller may start timing only after acquisition returns.
+            receipt = json.loads((Path(directory) / "preflight-acquisition.json").read_text())
+            self.assertEqual(launched, [10])
+            self.assertEqual(len(created), 2)
+            self.assertEqual(receipt["status"], "acquired")
+            self.assertEqual([w["qualified"] for w in receipt["windows"]], [False, True])
+            self.assertEqual(receipt["windows"][0]["result"]["busy"][0]["pid"], 91)
+            self.assertEqual(receipt["windows"][1]["result"]["busy"], [])
+            for window in receipt["windows"]:
+                self.assertTrue((Path(directory) / window["observation_file"]).read_text())
+            self.assertEqual(json.loads((Path(directory) / "preflight.json").read_text()),
+                             receipt["windows"][1]["result"])
+
+    def test_exhaustion_retains_every_window_without_launch(self):
+        clock = self.Clock()
+        factory, created = self.observer_factory(clock, [True] * 12)
+        launched = []
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(RuntimeError, "exhausted; no timed samples"):
+                self.acquire(directory, clock, factory)
+                launched.append(clock())
+            self.assertEqual(launched, [])
+            self.assertEqual(clock(), 60)
+            self.assertEqual(len(created), 12)
+            receipt = json.loads((Path(directory) / "preflight-acquisition.json").read_text())
+            self.assertEqual(receipt["status"], "exhausted")
+            self.assertEqual(len(receipt["windows"]), 12)
+            self.assertTrue(all(w["result"]["busy"] and not w["qualified"]
+                                for w in receipt["windows"]))
+
+    def test_does_not_start_short_window_or_accept_completion_after_cap(self):
+        for cap, finish_cost, expected_windows, expected_elapsed in [(12, 0, 2, 10), (5, 1, 1, 6)]:
+            with self.subTest(cap=cap), tempfile.TemporaryDirectory() as directory:
+                clock = self.Clock()
+                factory, created = self.observer_factory(clock, [True] * 3 if cap == 12 else [False],
+                                                         finish_cost=finish_cost)
+                with mock.patch.object(gate, "QUIET_ACQUISITION_SECONDS", cap):
+                    with self.assertRaisesRegex(RuntimeError, "exhausted"):
+                        self.acquire(directory, clock, factory)
+                receipt = json.loads((Path(directory) / "preflight-acquisition.json").read_text())
+                self.assertEqual(len(created), expected_windows)
+                self.assertEqual(clock(), expected_elapsed)
+                self.assertFalse(any(w["qualified"] for w in receipt["windows"]))
+                if finish_cost:
+                    self.assertFalse(receipt["windows"][-1]["within_cap"])
+
+    def test_original_process_predicate_rejects_exact_two_percent(self):
+        for ticks, busy in [(9, False), (10, True), (16, True)]:
+            with self.subTest(ticks=ticks):
+                observer = gate.ProcessObservation.__new__(gate.ProcessObservation)
+                observer.started = 0
+                observer.totals = {(91, "original"): {"pid": 91, "start": "original",
+                    "command": "flush-8:0", "ticks": ticks}}
+                observer.observe = lambda: None
+                with mock.patch.object(gate.time, "monotonic", return_value=5), \
+                        mock.patch.object(gate.os, "sysconf", return_value=100):
+                    result = observer.finish()
+                self.assertEqual(bool(result["busy"]), busy)
+                self.assertEqual(result["cpu_threshold_percent"], 2.0)
+
+    def test_run_gate_exhaustion_never_starts_measured_observer_or_benchmark(self):
+        self.assert_run_gate_never_launches([True] * 12)
+
+    def test_run_gate_artifact_writes_crossing_cap_never_launch(self):
+        for name in ("preflight.json", "preflight-acquisition.json"):
+            with self.subTest(delayed_write=name):
+                self.assert_run_gate_never_launches([False], delayed_write=name)
+
+    def assert_run_gate_never_launches(self, busy_windows, *, delayed_write=None):
+        clock = self.Clock()
+        factory, created = self.observer_factory(clock, busy_windows)
+        commands = []
+        original_write = Path.write_text
+
+        def write_text(path, content, *args, **kwargs):
+            result = original_write(path, content, *args, **kwargs)
+            if path.name == delayed_write and (path.name == "preflight.json" or
+                                               json.loads(content)["status"] == "acquired"):
+                clock.sleep(gate.QUIET_ACQUISITION_SECONDS)
+            return result
+
+        class SetupProcess:
+            def __init__(self, argv, **kwargs):
+                commands.append(argv)
+                if argv[1:3] == ["worktree", "add"]:
+                    source = Path(argv[-2]) / gate.CAPABILITIES["PRIMARY"][0]
+                    source.parent.mkdir(parents=True, exist_ok=True)
+                    source.write_text(gate.CAPABILITIES["PRIMARY"][1])
+                if "-o" in argv:
+                    Path(argv[argv.index("-o") + 1]).write_bytes(b"bound setup binary")
+                if any(arg.startswith("-test.run=^" + gate.LIFECYCLE) for arg in argv):
+                    authority = "PRIMARY" if Path(argv[3]).name.startswith("baseline-") else "DATA"
+                    evidence = (f"MVCC_COST_AUTHORITY authority={authority} root=7 commit=5 "
+                                "profile=no_wal_fast mode=append_only redo=off\n"
+                                f"MVCC_COST_LIFECYCLE authority={authority}\n")
+                    if authority == "DATA":
+                        evidence += "MVCC_COST_DATA_SLOT fixture=setup\n" * 6
+                    kwargs["stdout"].write((evidence + "--- PASS: " + gate.LIFECYCLE + " (0.00s)\nPASS\n").encode())
+
+            def wait(self, timeout):
+                return 0
+
+        with tempfile.TemporaryDirectory() as directory:
+            root, output = Path(directory) / "source", Path(directory) / "output"
+            harness = root / gate.HARNESS
+            harness.parent.mkdir(parents=True)
+            harness.write_text((path.parents[1] / gate.HARNESS).read_text())
+            capability = root / gate.CAPABILITIES["DATA"][0]
+            capability.parent.mkdir(parents=True, exist_ok=True)
+            capability.write_text(gate.CAPABILITIES["DATA"][1])
+            with mock.patch.object(gate.subprocess, "Popen", SetupProcess), \
+                    mock.patch.object(gate, "runtime_binding", return_value={}), \
+                    mock.patch.object(gate, "ProcessObservation", factory), \
+                    mock.patch.object(gate.time, "monotonic", clock), \
+                    mock.patch.object(gate.time, "sleep", clock.sleep), \
+                    mock.patch.object(Path, "write_text", write_text):
+                with self.assertRaisesRegex(RuntimeError, "exhausted; no timed samples"):
+                    gate.run_gate(root, output, "a" * 40, "b" * 40)
+            self.assertEqual(len(created), len(busy_windows))  # No measured observer is constructed.
+            self.assertFalse((output / "measured-processes.jsonl").exists())
+            self.assertFalse((output / "samples.json").exists())
+            self.assertTrue(any(any(arg.startswith("-test.run=^" + gate.LIFECYCLE) for arg in argv)
+                                for argv in commands))
+            self.assertFalse(any(any(arg.startswith("-test.bench=") for arg in argv)
+                                 for argv in commands))
+            failure = json.loads((output / "failure.json").read_text())
+            self.assertEqual(failure["retained_samples"], 0)
+            self.assertFalse(failure["accepted"])
+            acquisition = json.loads((output / "preflight-acquisition.json").read_text())
+            self.assertEqual(acquisition["status"], "exhausted")
+            if delayed_write:
+                self.assertGreater(acquisition["elapsed_s"], gate.QUIET_ACQUISITION_SECONDS)
+                window = acquisition["windows"][-1]
+                self.assertFalse(window["result"]["busy"])
+                self.assertFalse(window["qualified"])
+                self.assertFalse(window["artifact_writes_within_cap"])
 
 
 if __name__ == "__main__":

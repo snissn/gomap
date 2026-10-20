@@ -36,7 +36,7 @@ func (db *DB) systemRootWarmMaxDeltaOps() int {
 	return defaultSystemRootWarmMaxDeltaOps
 }
 
-func orderedRootDefaultPublishOptions(db *DB) orderedRootPublishOptions {
+func systemRootOrderedPublishOptions(db *DB) orderedRootPublishOptions {
 	return orderedRootPublishOptions{
 		maxWarmDeltaOps:       db.systemRootWarmMaxDeltaOps(),
 		leafPrefixCompression: db.leafPrefixCompression,
@@ -46,15 +46,6 @@ func orderedRootDefaultPublishOptions(db *DB) orderedRootPublishOptions {
 		outerLeavesInValueLog: db.indexOuterLeavesInValueLog,
 		leafPageLog:           db.leafPageLog,
 	}
-}
-
-// SYSTEM leaves are pager pages from the first index onward. Collection DATA
-// roots stored in descriptor values retain their independent storage policy.
-func systemRootOrderedPublishOptions(db *DB) orderedRootPublishOptions {
-	opts := orderedRootDefaultPublishOptions(db)
-	opts.outerLeavesInValueLog = false
-	opts.leafPageLog = nil
-	return opts
 }
 
 // PublishSystemRootIterator builds and commits a new system root from an

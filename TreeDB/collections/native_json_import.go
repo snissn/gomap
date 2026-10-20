@@ -28,6 +28,7 @@ func importNativeJSONCatalog(capture backenddb.NativeSemanticCapture) (base *nat
 		return base, err
 	}
 	if token.SystemRootPageID == 0 {
+		base.physicalImport = nativeEngineImportBasis{state: token, sequence: capture.LogicalSequence(), complete: true}
 		return base, nil
 	}
 	// Two fixed merge workspaces and one successor key own all borrowed scan
@@ -182,6 +183,11 @@ func importNativeJSONCatalog(capture backenddb.NativeSemanticCapture) (base *nat
 		}
 		return nil
 	})
+	if err == nil {
+		// Only the complete import can offer representation reuse. Generic
+		// preparation never copies this proof into a logical successor.
+		base.physicalImport = nativeEngineImportBasis{state: token, sequence: capture.LogicalSequence(), complete: true}
+	}
 	return base, err
 }
 

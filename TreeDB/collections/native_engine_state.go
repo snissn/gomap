@@ -8,6 +8,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/cowbtree"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
 )
 
 // nativeEngineVersion owns the complete logical catalog. Header retention and
@@ -31,6 +32,22 @@ type nativeEngineVersion struct {
 	build           *nativeEngineBuild
 	cleanup         rootpublication.SemanticCleanup
 	refund          *nativeEngineRefund
+	// Set only by a complete physical import. No Snapshot/capture or storage
+	// owner is retained; the allocator already identifies the original DB owner.
+	physicalImport nativeEngineImportBasis
+}
+
+type nativeEngineImportBasis struct {
+	state    backenddb.StateToken
+	sequence uint64
+	complete bool
+}
+
+func (e *nativeEngineVersion) NativeSemanticImportEvidence() transactionowner.NativeImportEvidence {
+	if e == nil || !e.physicalImport.complete || e.allocator == nil || e.inventory != nil || e.build != nil || e.catalog != nil || e.pending == nil || e.pending.Len() != 0 {
+		return transactionowner.NativeImportEvidence{}
+	}
+	return transactionowner.NewNativeImportEvidence(e, e.allocator, backenddb.NativeSemanticImportBasis(e.physicalImport.state), e.physicalImport.sequence)
 }
 
 // This independently preborn original accounting receipt owns no engine,

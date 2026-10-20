@@ -12,7 +12,7 @@ const retiredPrimaryNewFileName = "index.db.primary.new"
 const retiredJointSwapMagic = "TDJCOM06"
 
 // ValidateDATAIndexOpen inspects the namespace before any recovery or side-store
-// writes. Retired PRIMARY and unmarked SYSTEM formats require rebuilding.
+// writes. Pre-alpha PRIMARY directories require rebuilding on DATA.
 func ValidateDATAIndexOpen(dir string, primaryRequested bool) error {
 	if primaryRequested {
 		return fmt.Errorf("%w: IndexPrimaryDirectory is retired; rebuild on DATA", ErrLegacyFormatRebuildRequired)
@@ -23,9 +23,6 @@ func ValidateDATAIndexOpen(dir string, primaryRequested bool) error {
 		} else if !os.IsNotExist(err) {
 			return err
 		}
-	}
-	if _, err := validateSystemPagerLeavesGateV1(dir); err != nil {
-		return err
 	}
 	f, err := os.Open(filepath.Join(dir, indexReadyFileName))
 	if os.IsNotExist(err) {

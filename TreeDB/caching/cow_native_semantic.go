@@ -68,6 +68,80 @@ func (c *NativeSemanticCapture) Close() error {
 	return err
 }
 
+// AdoptNativeSemanticImport reuses the original basis-install allocation and
+// immutable-cut swap. An imported catalog contains only physical scalar roots;
+// the cut alone keeps the Snapshot/resources alive, so no owner cycle is made.
+// This is not a logical publication: no logical write, accepted ticket, journal,
+// command identity or frontier is advanced. The caller owns its private state
+// reference on every return and serializes use/Close of this capture as usual.
+func (capture *NativeSemanticCapture) AdoptNativeSemanticImport(state backenddb.NativeSemanticPhysicalImport) (bool, error) {
+	if capture == nil || capture.cut == nil || capture.cache == nil {
+		return false, backenddb.ErrClosed
+	}
+	c, opening := capture.cache, capture.cut
+	token, tokenOK := opening.basis.snapshot.StateToken()
+	if state == nil || !tokenOK || !state.NativeSemanticImportEvidence().Matches(state, c.budget, backenddb.NativeSemanticImportBasis(token), opening.logicalSeq) {
+		return false, backenddb.ErrNativeSemanticUnsupported
+	}
+	c.writerMu.Lock()
+	c.cutMu.Lock()
+	closed := c.closed || c.readClosed.Load()
+	current := c.cut == opening
+	c.cutMu.Unlock()
+	if closed {
+		c.writerMu.Unlock()
+		return false, backenddb.ErrClosed
+	}
+	// Exact cut identity covers its actual raw roots, backend basis and all
+	// visible/frozen frontiers, not merely numerically matching sequences. A
+	// physical-only import cannot represent an unmaterialized raw/native suffix.
+	if !current || opening.semanticRootSet != nil || opening.frozenSemanticRootSet != nil || opening.logicalSeq != opening.basis.logicalSeq || len(opening.frozen) != 0 {
+		c.writerMu.Unlock()
+		return false, nil
+	}
+	for _, shard := range opening.shards {
+		if shard.size != 0 {
+			c.writerMu.Unlock()
+			return false, nil
+		}
+	}
+	next, err := c.prepareCOWBasisInstall()
+	if err != nil {
+		c.writerMu.Unlock()
+		return false, err
+	}
+	next.visibleCommandLSN, next.logicalSeq = opening.visibleCommandLSN, opening.logicalSeq
+	next.frozenCommandLSN, next.frozenLogicalSeq = opening.frozenCommandLSN, opening.frozenLogicalSeq
+	next.basis = opening.basis
+	next.basis.retain()
+	copy(next.shards, opening.shards)
+	for _, shard := range next.shards {
+		if !shard.root.Retain() {
+			panic("lost original physical-import raw root")
+		}
+	}
+	state.Retain()
+	next.semanticRootSet = state
+	next.buildDomains()
+	c.cutMu.Lock()
+	// writerMu excludes all existing root/basis replacements and Close. Two
+	// references move: the cache's current edge and this original capture.
+	next.refs++
+	c.cut = next
+	capture.cut = next
+	c.activeCuts.Add(1)
+	opening.refs -= 2
+	last := opening.refs == 0
+	c.cutMu.Unlock()
+	c.writerMu.Unlock()
+	if last {
+		return true, opening.drain()
+	}
+	return true, nil
+}
+
+var _ backenddb.NativeSemanticImportCapture = (*NativeSemanticCapture)(nil)
+
 // NativeSemanticState borrows the immutable state of this original snapshot.
 func (s *Snapshot) NativeSemanticState() backenddb.NativeSemanticState {
 	if s == nil || s.cowCut == nil {
