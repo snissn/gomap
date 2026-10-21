@@ -312,11 +312,11 @@ func TestCOWChangedSizeSingleAndDuplicateFinalRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer inline.Close()
-	one := []memtable.COWMutation{{Key: key}}
-	if got := cowChangedSize(old, inline.cowCut.shards[shard].root, one); got != 5 || inline.cowCut.shards[shard].size != 5 {
+	one := []memtable.COWMutation{{Key: key, Value: []byte("tiny"), Flags: node.FlagInline}}
+	if got := cowChangedSize(old, one); got != 5 || inline.cowCut.shards[shard].size != 5 {
 		t.Fatalf("pointer-to-inline size=%d", got)
 	}
-	if allocs := testing.AllocsPerRun(100, func() { _ = cowChangedSize(old, inline.cowCut.shards[shard].root, one) }); allocs != 0 {
+	if allocs := testing.AllocsPerRun(100, func() { _ = cowChangedSize(old, one) }); allocs != 0 {
 		t.Fatalf("single changed key allocated %g", allocs)
 	}
 	if err := db.Delete(key); err != nil {
@@ -345,8 +345,12 @@ func TestCOWChangedSizeSingleAndDuplicateFinalRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer final.Close()
-	duplicates := []memtable.COWMutation{{Key: key}, {Key: key}, {Key: key}}
-	if got := cowChangedSize(deleted.cowCut.shards[shard], final.cowCut.shards[shard].root, duplicates); got != 6 || final.cowCut.shards[shard].size != 6 {
+	duplicates := []memtable.COWMutation{
+		{Key: key, Value: []byte("first"), Flags: node.FlagInline},
+		{Key: key, Value: []byte("longer"), Flags: node.FlagInline},
+		{Key: key, Value: []byte("final"), Flags: node.FlagInline},
+	}
+	if got := cowChangedSize(deleted.cowCut.shards[shard], duplicates); got != 6 || final.cowCut.shards[shard].size != 6 {
 		t.Fatalf("duplicate final-record size=%d", got)
 	}
 	if value, err := final.Get(key); err != nil || string(value) != "final" {

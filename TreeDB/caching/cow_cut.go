@@ -552,7 +552,7 @@ func (c *cowCache) prepareNative(groups [][]memtable.COWMutation, opts []memtabl
 			}
 			next.shards[i].history += charge
 			next.shards[i].root = p.prepared[i].Root()
-			next.shards[i].size = cowChangedSize(old.shards[i], next.shards[i].root, groups[i])
+			next.shards[i].size = cowChangedSize(old.shards[i], groups[i])
 		} else if !next.shards[i].root.Retain() {
 			panic("lost owned COW root")
 		}
@@ -805,44 +805,54 @@ func (c *cowCache) closeWithBudget(closeBudget bool) error {
 }
 
 // cowChangedSize updates logical flush accounting from changed keys only.
-// Duplicate operations use the final staged record once, preserving last-write
-// wins without a capture-time census or cumulative history ledger.
-func cowChangedSize(old cowTable, next *memtable.COWRoot, group []memtable.COWMutation) int64 {
+// Prepare applies these canonical mutations in order without changing their
+// key/value sizes or flags. Use the final mutation directly instead of looking
+// its record up again in the private postimage. The old root remains the sole
+// source of the previous record's size.
+func cowChangedSize(old cowTable, group []memtable.COWMutation) int64 {
 	size := old.size
 	if len(group) == 1 {
-		key := group[0].Key
-		record, found := next.Get(key)
-		if !found {
-			panic("staged COW point disappeared")
-		}
-		if previous, found := old.root.Get(key); found {
-			size -= cowRecordSize(previous)
-		}
-		return size + cowRecordSize(record)
-	}
-	seen := make(map[string]struct{}, len(group))
-	for _, mutation := range group {
-		record, found := next.Get(mutation.Key)
-		if !found {
-			panic("staged COW point disappeared")
-		}
-		if _, duplicate := seen[record.Key]; duplicate {
-			continue
-		}
-		seen[record.Key] = struct{}{}
+		mutation := group[0]
 		if previous, found := old.root.Get(mutation.Key); found {
 			size -= cowRecordSize(previous)
 		}
-		size += cowRecordSize(record)
+		return size + cowMutationSize(mutation)
+	}
+	seen := make(map[string]struct{}, len(group))
+	for i := len(group) - 1; i >= 0; i-- {
+		mutation := group[i]
+		// The staged operands remain immutable and owned throughout Prepare.
+		// This local deduplication map borrows their keys only until return.
+		key := conditionalBytesString(mutation.Key)
+		if _, duplicate := seen[key]; duplicate {
+			continue
+		}
+		seen[key] = struct{}{}
+		if previous, found := old.root.Get(mutation.Key); found {
+			size -= cowRecordSize(previous)
+		}
+		size += cowMutationSize(mutation)
 	}
 	return size
 }
+
+func cowMutationSize(mutation memtable.COWMutation) int64 {
+	if mutation.Remove {
+		return 0
+	}
+	return cowPointSize(len(mutation.Key), len(mutation.Value), mutation.Flags)
+}
+
 func cowRecordSize(record memtable.COWRecord) int64 {
-	size := len(record.Key)
-	if record.Flags&node.FlagPointer != 0 {
-		size += page.ValuePtrSize + len(record.Value)
-	} else if record.Flags&node.FlagTombstone == 0 {
-		size += len(record.Value)
+	return cowPointSize(len(record.Key), len(record.Value), record.Flags)
+}
+
+func cowPointSize(keyBytes, valueBytes int, flags byte) int64 {
+	size := keyBytes
+	if flags&node.FlagPointer != 0 {
+		size += page.ValuePtrSize + valueBytes
+	} else if flags&node.FlagTombstone == 0 {
+		size += valueBytes
 	}
 	return int64(size)
 }
