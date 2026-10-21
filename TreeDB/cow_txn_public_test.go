@@ -791,9 +791,18 @@ func TestPublicCOWTxnRegistrationFailurePoisonsBeforeQueuedWriter(t *testing.T) 
 	}
 	db.commandWALGroupCommit.nextTicket = publicCommandWALFastRelaxedAppendedTicket - 1
 	paused, release := make(chan struct{}), make(chan struct{})
-	var once, releaseOnce sync.Once
+	queuedPaused, releaseQueued := make(chan struct{}), make(chan struct{})
+	var once, releaseOnce, queuedOnce, releaseQueuedOnce sync.Once
 	defer releaseOnce.Do(func() { close(release) })
+	defer releaseQueuedOnce.Do(func() { close(releaseQueued) })
 	restore := durabilitycut.Install(func(e durabilitycut.Event) error {
+		if e.Point == durabilitycut.BeforeCOWAdmission {
+			select {
+			case <-paused:
+				queuedOnce.Do(func() { close(queuedPaused); <-releaseQueued })
+			default:
+			}
+		}
 		if e.Resource == durabilitycut.ResourceCommandWAL && e.Point == durabilitycut.AfterDependencyAppend {
 			once.Do(func() { close(paused); <-release })
 		}
@@ -810,6 +819,17 @@ func TestPublicCOWTxnRegistrationFailurePoisonsBeforeQueuedWriter(t *testing.T) 
 	}
 	queued := make(chan error, 1)
 	go func() { queued <- db.Set([]byte("later"), []byte("v")) }()
+	// The public writer has started, but has not entered cache admission or
+	// reserved an accepted ticket. Resume it only after the failed command
+	// poisons the backend, selecting the recovery-required preflight path.
+	// Racing that preflight with prefix poisoning may instead return the
+	// original registration error without accepting or appending another frame.
+	select {
+	case <-queuedPaused:
+	case <-time.After(10 * time.Second):
+		blocked.Store(true)
+		t.Fatal("queued writer did not reach pre-admission pause")
+	}
 	releaseOnce.Do(func() { close(release) })
 	var commitErr error
 	select {
@@ -822,6 +842,7 @@ func TestPublicCOWTxnRegistrationFailurePoisonsBeforeQueuedWriter(t *testing.T) 
 		blocked.Store(true)
 		t.Fatal("first command stuck")
 	}
+	releaseQueuedOnce.Do(func() { close(releaseQueued) })
 	select {
 	case err := <-queued:
 		if !errors.Is(err, ErrRecoveryRequired) {
