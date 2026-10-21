@@ -103,6 +103,11 @@ def make_plan(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("--operations-scale must be finite and positive")
     if args.repeat < 1:
         raise ValueError("--repeat must be positive")
+    allocation_rate = getattr(args, "allocation_profile_rate", 0)
+    if type(allocation_rate) is not int or not 0 <= allocation_rate <= (1 << 63) - 1:
+        raise ValueError("--allocation-profile-rate must be a nonnegative signed integer")
+    if args.capture_profiles and allocation_rate:
+        raise ValueError("CPU and allocation profiling require separate plans")
     profiles = list(dict.fromkeys(args.profile or PROFILES))
     selected = set(args.case or [anchor[0] for anchor in ANCHORS])
     if selected - {anchor[0] for anchor in ANCHORS}:
@@ -133,8 +138,10 @@ def make_plan(args: argparse.Namespace) -> dict[str, Any]:
                         "pointer_threshold": args.pointer_threshold,
                         "retained_diagnostics": args.retained_diagnostics,
                     }
-                    if args.capture_profiles:
+                    if args.capture_profiles or allocation_rate:
                         config["profile_dir"] = "{CELL_DIR}/profiles"
+                    if allocation_rate:
+                        config["allocation_profile_rate"] = allocation_rate
                     cells.append({
                         "id": f"r{repeat:03d}-{profile}-{anchor}-{arm}",
                         "anchor": anchor, "repeat": repeat, "arm": arm,
@@ -146,7 +153,10 @@ def make_plan(args: argparse.Namespace) -> dict[str, Any]:
         "qualification": "not_qualified; bounded initial calibration, no acceptance thresholds",
         "minimum_final_pairs": 5,
         "repeat": args.repeat, "operations_scale": args.operations_scale,
-        "instrumented": args.capture_profiles,
+        "instrumented": bool(args.capture_profiles or allocation_rate),
+        "cpu_profiling": args.capture_profiles,
+        "allocation_profile_rate": allocation_rate,
+        "allocation_snapshots_force_gc": allocation_rate > 0,
         "retained_diagnostics": args.retained_diagnostics,
         "trace_contract": "Trace hashes exclude engine, profile, memtable_mode and paths; include useful workload configuration and actual operation/key/value bytes. Shared writers use monotone timestamps after seed.",
         "notes": [
@@ -205,11 +215,14 @@ def validate_plan(plan: Any) -> None:
             raise ValueError(f"seed exceeds uint64 in {identity}")
         for field, maximum in (("badger_memtable_size", (1 << 63) - 1),
                                ("badger_value_threshold", (1 << 63) - 1),
+                               ("allocation_profile_rate", (1 << 63) - 1),
                                ("operational_min_rotations", (1 << 64) - 1),
                                ("operational_min_payload_bytes", (1 << 64) - 1)):
             value = cfg.get(field, 0)
             if type(value) is not int or not 0 <= value <= maximum:
                 raise ValueError(f"invalid optional {field} in {identity}")
+        if cfg.get("allocation_profile_rate", 0) > 0 and (not isinstance(cfg.get("profile_dir"), str) or not cfg["profile_dir"]):
+            raise ValueError(f"allocation profiling requires profile_dir in {identity}")
         if not isinstance(cfg.get("dir"), str) or not cfg["dir"]:
             raise ValueError(f"missing database directory in {identity}")
         expected_hash = cell.get("config_template_sha256")
@@ -260,6 +273,35 @@ def reopened_route_matches(config: dict[str, Any], initial: dict[str, Any], reop
     ignored = {"memtable_mode"} if config.get("engine") == "treedb" and config.get("memtable_mode") == "adaptive" else set()
     return {key: value for key, value in initial.items() if key not in ignored} == {
         key: value for key, value in reopened.items() if key not in ignored}
+
+
+def phase_completion_errors(phase: dict[str, Any], successful: bool, config: dict[str, Any]) -> list[str]:
+    fields = {"planned_operations", "planned_mutations", "completed"}
+    present = fields.intersection(phase)
+    if not present:
+        return []  # Closed older artifacts predate explicit completion counters.
+    if present != fields:
+        return ["partial planned/completed phase fields"]
+    errors = []
+    for actual, planned in (("operations", "planned_operations"), ("mutations", "planned_mutations")):
+        if type(phase.get(actual)) is not int or type(phase[planned]) is not int or not 0 <= phase[actual] <= phase[planned]:
+            errors.append("invalid actual/planned " + actual)
+        elif successful and phase[actual] != phase[planned]:
+            errors.append("successful phase has incomplete " + actual)
+    if type(phase["completed"]) is not bool or (successful and phase["completed"] is not True):
+        errors.append("successful phase is not completed" if successful else "invalid completed flag")
+    if phase.get("name") == "foreground":
+        if phase["planned_operations"] != config.get("operations"):
+            errors.append("foreground planned_operations differs from config")
+        count = config.get("operations")
+        batch = config.get("batch_size")
+        if type(count) is int and type(batch) is int:
+            case = config.get("case")
+            expected = count * batch if case in {"commit", "lifecycle", "shared"} else (
+                (count // 10) * 4 + max(0, count % 10 - 6) if case == "mixed" else 0)
+            if phase["planned_mutations"] != expected:
+                errors.append("foreground planned_mutations differs from config trace")
+    return errors
 
 
 def result_errors(result: Any, config: dict[str, Any]) -> list[str]:
@@ -332,6 +374,7 @@ def result_errors(result: Any, config: dict[str, Any]) -> list[str]:
             if phase["name"] in names:
                 errors.append("duplicate phase name: " + phase["name"])
             names.add(phase["name"])
+            errors.extend(phase["name"] + ": " + error for error in phase_completion_errors(phase, result.get("success") is True, config))
             for key in ("nanoseconds", "operations", "mutations", "output_records", "allocated_bytes", "allocations", "num_gc", "heap_alloc", "heap_objects"):
                 if type(phase.get(key)) is not int or phase[key] < 0:
                     errors.append(f"invalid {phase['name']}.{key}")
@@ -484,11 +527,13 @@ def main() -> int:
     parser.add_argument("--pointer-threshold", type=int, default=256)
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--retained-diagnostics", action="store_true")
-    parser.add_argument("--capture-profiles", action="store_true", help="separate instrumented diagnostic plan")
+    profiling = parser.add_mutually_exclusive_group()
+    profiling.add_argument("--capture-profiles", action="store_true", help="separate CPU-profile diagnostic plan")
+    profiling.add_argument("--allocation-profile-rate", type=int, default=0, metavar="N", help="separate allocation diagnostic plan; positive bytes-per-sample rate, forced-GC snapshots")
     args = parser.parse_args()
     try:
         if args.plan:
-            generation_flags = {"--repeat", "--operations-scale", "--profile", "--case", "--value-bytes", "--flush-threshold", "--pointer-threshold", "--seed", "--retained-diagnostics", "--capture-profiles"}
+            generation_flags = {"--repeat", "--operations-scale", "--profile", "--case", "--value-bytes", "--flush-threshold", "--pointer-threshold", "--seed", "--retained-diagnostics", "--capture-profiles", "--allocation-profile-rate"}
             if any(token.split("=", 1)[0] in generation_flags for token in sys.argv[1:]):
                 raise ValueError("--plan preserves exact input; do not combine it with generation flags")
             plan = json.loads(args.plan.read_text(encoding="utf-8"))

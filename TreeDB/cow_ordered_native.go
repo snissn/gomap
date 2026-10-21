@@ -2,12 +2,9 @@ package treedb
 
 import (
 	"errors"
-	"fmt"
 
 	"github.com/snissn/gomap/TreeDB/caching"
-	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/mvccadmission"
-	"github.com/snissn/gomap/TreeDB/internal/mvcckey"
 )
 
 var errLogicalMVCCInput = errors.New("treedb: logical MVCC operands do not match admitted input")
@@ -44,98 +41,27 @@ func (db *DB) CommitLogicalMVCC(mutations []mvccadmission.LogicalMutation, input
 		return errLogicalMVCCInput
 	}
 
-	// The producer owns this temporary encoding, so admit its concrete backing
-	// before allocation. One arena holds every key and envelope unchanged until
-	// batch Close has cleared all input aliases. The ordinary batch separately
-	// admits and owns the bytes that cross its publication boundary.
-	encodedBytes := 0
-	const maxInt = int(^uint(0) >> 1)
-	for i := range mutations {
-		m := &mutations[i]
-		keyBytes, keyErr := mvcckey.EncodedLen(m.Key)
-		if keyErr != nil {
-			db.lifecycleMu.RUnlock()
-			return fmt.Errorf("logical MVCC operand %d: %w", i, keyErr)
-		}
-		valueBytes := 1
-		if !m.Delete {
-			if len(m.Value) == maxInt {
-				db.lifecycleMu.RUnlock()
-				return memtable.ErrCOWCapacity
-			}
-			valueBytes += len(m.Value)
-		}
-		if keyBytes > maxInt-encodedBytes || valueBytes > maxInt-encodedBytes-keyBytes {
-			db.lifecycleMu.RUnlock()
-			return memtable.ErrCOWCapacity
-		}
-		encodedBytes += keyBytes + valueBytes
+	// Encode into the native batch's own admitted arena. Its ordinary COW
+	// producer still prepares the complete private postimage before WAL append.
+	var b Batch = db.cached.NewBatchWithSize(len(mutations))
+	if db.commandWALCached {
+		b = newCommandWALPublicBatch(db, b, len(mutations))
 	}
-	lease, leaseErr := db.cached.AcquireCOWAllocation(memtable.COWAllocationCharge(uint64(encodedBytes)))
-	if leaseErr != nil {
-		db.lifecycleMu.RUnlock()
-		return leaseErr
-	}
-	var b Batch
-	if len(mutations) > 1 {
-		b = db.cached.NewBatchWithSize(len(mutations))
-		if db.commandWALCached {
-			b = newCommandWALPublicBatch(db, b, len(mutations))
-		}
-	}
-	// Batch Write takes its own public admission. As with ordinary COW point
-	// writes, release this read lock before entering that boundary.
+	// Write enters its original public admission; do not recursively retain
+	// this read lock while a queued Close may be waiting for that boundary.
 	db.lifecycleMu.RUnlock()
-	var encoded []byte
-	defer func() {
-		if b != nil {
-			err = errors.Join(err, b.Close())
-		}
-		encoded = nil
-		lease.Close()
-	}()
-	var qualified interface {
-		SetWithMVCCInput([]byte, []byte, mvccadmission.Input) error
+	defer func() { err = errors.Join(err, b.Close()) }()
+	if _, err := b.GetByteSize(); err != nil {
+		return err
 	}
-	if b != nil {
-		if _, err := b.GetByteSize(); err != nil {
-			return err
-		}
-		var ok bool
-		qualified, ok = b.(interface {
-			SetWithMVCCInput([]byte, []byte, mvccadmission.Input) error
-		})
-		if !ok {
-			return caching.ErrCOWUnsupported
-		}
+	producer, ok := b.(interface {
+		StageLogicalMVCC([]mvccadmission.LogicalMutation, mvccadmission.LogicalInput) (int, error)
+	})
+	if !ok {
+		return caching.ErrCOWUnsupported
 	}
-	encoded = make([]byte, 0, encodedBytes)
-	for i := range mutations {
-		m := &mutations[i]
-		keyStart := len(encoded)
-		encoded, err = mvcckey.Append(encoded, m.Key, m.Timestamp)
-		if err != nil {
-			return err
-		}
-		keyEnd := len(encoded)
-		if m.Delete {
-			encoded = append(encoded, 0x02)
-		} else {
-			encoded = append(encoded, 0x01)
-			encoded = append(encoded, m.Value...)
-		}
-		physical := encoded[keyStart:keyEnd:keyEnd]
-		record := encoded[keyEnd:len(encoded):len(encoded)]
-		physicalInput := input.BindPhysical(i, physical)
-		if !physicalInput.Present() {
-			return errLogicalMVCCInput
-		}
-		if b == nil {
-			return db.SetPointWithMVCCInput(physical, record, syncWrite, physicalInput)
-		}
-		if err := qualified.SetWithMVCCInput(physical, record, physicalInput); err != nil {
-			return err
-		}
+	if _, err := producer.StageLogicalMVCC(mutations, input); err != nil {
+		return err
 	}
 	if syncWrite {
 		return b.WriteSync()

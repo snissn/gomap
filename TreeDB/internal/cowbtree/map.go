@@ -3,7 +3,10 @@
 // license that can be found in the LICENSE file.
 package cowbtree
 
-import "sync/atomic"
+import (
+	"sync/atomic"
+	"unsafe"
+)
 
 type ordered interface {
 	~int | ~int8 | ~int16 | ~int32 | ~int64 |
@@ -45,15 +48,16 @@ type mapPair[K ordered, V any] struct {
 }
 
 type Map[K ordered, V any] struct {
-	isoid         uint64
-	root          *mapNode[K, V]
-	count         int
-	empty         mapPair[K, V]
-	min           int // min items
-	max           int // max items
-	copyValues    bool
-	isoCopyValues bool
-	sealed        bool
+	isoid            uint64
+	root             *mapNode[K, V]
+	count            int
+	empty            mapPair[K, V]
+	min              int // min items
+	max              int // max items
+	copyValues       bool
+	isoCopyValues    bool
+	sealed           bool
+	allocationCharge uint64 // node/backing allocations through this private header
 }
 
 func NewMap[K ordered, V any](degree int) *Map[K, V] {
@@ -81,9 +85,11 @@ func (tr *Map[K, V]) copyWithWork(n *mapNode[K, V], w Work) (*mapNode[K, V], boo
 		return nil, false
 	}
 	n2 := new(mapNode[K, V])
+	tr.recordAllocation(uint64(unsafe.Sizeof(*n2)))
 	n2.isoid = tr.isoid
 	n2.count = n.count
 	n2.items = make([]mapPair[K, V], len(n.items), cap(n.items))
+	tr.recordAllocation(uint64(cap(n2.items)) * uint64(unsafe.Sizeof(mapPair[K, V]{})))
 	copy(n2.items, n.items)
 	if tr.copyValues {
 		for i := 0; i < len(n2.items); i++ {
@@ -98,7 +104,9 @@ func (tr *Map[K, V]) copyWithWork(n *mapNode[K, V], w Work) (*mapNode[K, V], boo
 	}
 	if !n.leaf() {
 		n2.children = new([]*mapNode[K, V])
+		tr.recordAllocation(uint64(unsafe.Sizeof(*n2.children)))
 		*n2.children = make([]*mapNode[K, V], len(*n.children), tr.max+1)
+		tr.recordAllocation(uint64(cap(*n2.children)) * uint64(unsafe.Sizeof((*mapNode[K, V])(nil))))
 		copy(*n2.children, *n.children)
 	}
 	return n2, true
@@ -155,6 +163,7 @@ func (tr *Map[K, V]) ForkImmutable() *Map[K, V] {
 	copy := new(Map[K, V])
 	*copy = *tr
 	copy.isoid, copy.sealed = newIsoID(), false
+	copy.allocationCharge = 0
 	return copy
 }
 
@@ -164,6 +173,7 @@ func (tr *Map[K, V]) IsoCopy() *Map[K, V] {
 	}
 	tr2 := new(Map[K, V])
 	*tr2 = *tr
+	tr2.allocationCharge = 0
 	tr2.isoid = newIsoID()
 	tr.isoid = newIsoID()
 	return tr2
@@ -171,9 +181,11 @@ func (tr *Map[K, V]) IsoCopy() *Map[K, V] {
 
 func (tr *Map[K, V]) newNode(leaf bool) *mapNode[K, V] {
 	n := new(mapNode[K, V])
+	tr.recordAllocation(uint64(unsafe.Sizeof(*n)))
 	n.isoid = tr.isoid
 	if !leaf {
 		n.children = new([]*mapNode[K, V])
+		tr.recordAllocation(uint64(unsafe.Sizeof(*n.children)))
 	}
 	return n
 }
@@ -582,10 +594,16 @@ func (tr *Map[K, V]) nodeRebalance(n *mapNode[K, V], i int) {
 		// following items and child nodes to the left by one slot.
 
 		// merge (left,item,right)
+		oldCapacity := cap(left.items)
 		left.items = append(left.items, n.items[i])
+		tr.recordItemsGrowth(oldCapacity, left.items)
+		oldCapacity = cap(left.items)
 		left.items = append(left.items, right.items...)
+		tr.recordItemsGrowth(oldCapacity, left.items)
 		if !left.leaf() {
+			oldCapacity := cap(*left.children)
 			*left.children = append(*left.children, *right.children...)
+			tr.recordChildrenGrowth(oldCapacity, *left.children)
 		}
 		left.count += right.count + 1
 
@@ -604,7 +622,9 @@ func (tr *Map[K, V]) nodeRebalance(n *mapNode[K, V], i int) {
 		// Move the item of the parent node at index into the right-node first
 		// slot, and move the left-node last item into the previously moved
 		// parent item slot.
+		oldCapacity := cap(right.items)
 		right.items = append(right.items, tr.empty)
+		tr.recordItemsGrowth(oldCapacity, right.items)
 		copy(right.items[1:], right.items)
 		right.items[0] = n.items[i]
 		right.count++
@@ -615,7 +635,9 @@ func (tr *Map[K, V]) nodeRebalance(n *mapNode[K, V], i int) {
 
 		if !left.leaf() {
 			// move the left-node last child into the right-node first slot
+			oldCapacity := cap(*right.children)
 			*right.children = append(*right.children, nil)
+			tr.recordChildrenGrowth(oldCapacity, *right.children)
 			copy((*right.children)[1:], *right.children)
 			(*right.children)[0] = (*left.children)[len(*left.children)-1]
 			(*left.children)[len(*left.children)-1] = nil
@@ -627,7 +649,9 @@ func (tr *Map[K, V]) nodeRebalance(n *mapNode[K, V], i int) {
 		// move left <- right over one slot
 
 		// Same as above but the other direction
+		oldCapacity := cap(left.items)
 		left.items = append(left.items, n.items[i])
+		tr.recordItemsGrowth(oldCapacity, left.items)
 		left.count++
 		n.items[i] = right.items[0]
 		copy(right.items, right.items[1:])
@@ -636,7 +660,9 @@ func (tr *Map[K, V]) nodeRebalance(n *mapNode[K, V], i int) {
 		right.count--
 
 		if !left.leaf() {
+			oldCapacity := cap(*left.children)
 			*left.children = append(*left.children, (*right.children)[0])
+			tr.recordChildrenGrowth(oldCapacity, *left.children)
 			copy(*right.children, (*right.children)[1:])
 			(*right.children)[len(*right.children)-1] = nil
 			*right.children = (*right.children)[:len(*right.children)-1]
@@ -800,7 +826,9 @@ func (tr *Map[K, V]) Load(key K, value V) (V, bool) {
 		if n.leaf() {
 			if len(n.items) < tr.max {
 				if n.items[len(n.items)-1].key < item.key {
+					oldCapacity := cap(n.items)
 					n.items = append(n.items, item)
+					tr.recordItemsGrowth(oldCapacity, n.items)
 					tr.count++
 					return tr.empty.value, false
 				}

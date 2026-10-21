@@ -44,6 +44,7 @@ type config struct {
 	OperationalMinRotations    uint64 `json:"operational_min_rotations"`
 	OperationalMinPayloadBytes uint64 `json:"operational_min_payload_bytes"`
 	RetainedDiagnostics        bool   `json:"retained_diagnostics"`
+	AllocationProfileRate      int    `json:"allocation_profile_rate,omitempty"`
 	ProfileDir                 string `json:"profile_dir,omitempty"`
 }
 
@@ -55,8 +56,13 @@ type latency struct {
 	Samples int   `json:"samples"`
 }
 type phase struct {
+	endedAt                time.Time
 	Name                   string    `json:"name"`
 	Nanoseconds            int64     `json:"nanoseconds"`
+	PlannedOperations      int       `json:"planned_operations"`
+	PlannedMutations       int       `json:"planned_mutations"`
+	PlannedOutputRecords   int       `json:"planned_output_records"`
+	Completed              bool      `json:"completed"`
 	Operations             int       `json:"operations"`
 	Mutations              int       `json:"mutations"`
 	OutputRecords          int       `json:"output_records"`
@@ -101,28 +107,33 @@ type retained struct {
 	NumGC       uint32 `json:"num_gc"`
 }
 type packet struct {
-	SchemaVersion         string            `json:"schema_version"`
-	Success               bool              `json:"success"`
-	Error                 string            `json:"error,omitempty"`
-	Config                config            `json:"config"`
-	TraceSHA256           string            `json:"trace_sha256"`
-	Runtime               map[string]any    `json:"runtime"`
-	Route                 route             `json:"route"`
-	ReopenedRoute         route             `json:"reopened_route"`
-	Phases                []phase           `json:"phases"`
-	CycleNS               int64             `json:"cycle_ns"`
-	FilesBeforeClose      files             `json:"files_before_close"`
-	FilesAfterClose       files             `json:"files_after_close"`
-	StatsBefore           map[string]string `json:"stats_before"`
-	StatsAfter            map[string]string `json:"stats_after"`
-	ActivationStats       map[string]string `json:"activation_stats"`
-	StatsPersisted        map[string]string `json:"stats_persisted"`
-	StatsReleased         map[string]string `json:"stats_released"`
-	FilesBeforeForeground files             `json:"files_before_foreground"`
-	FilesAfterForeground  files             `json:"files_after_foreground"`
-	Retained              []retained        `json:"retained"`
-	Verification          map[string]any    `json:"verification"`
-	Notes                 []string          `json:"notes"`
+	SchemaVersion            string              `json:"schema_version"`
+	Success                  bool                `json:"success"`
+	Error                    string              `json:"error,omitempty"`
+	Config                   config              `json:"config"`
+	TraceSHA256              string              `json:"trace_sha256"`
+	Runtime                  map[string]any      `json:"runtime"`
+	Route                    route               `json:"route"`
+	ReopenedRoute            route               `json:"reopened_route"`
+	Phases                   []phase             `json:"phases"`
+	CycleNS                  int64               `json:"cycle_ns"`
+	FilesBeforeClose         files               `json:"files_before_close"`
+	FilesAfterClose          files               `json:"files_after_close"`
+	StatsBefore              map[string]string   `json:"stats_before"`
+	StatsAfter               map[string]string   `json:"stats_after"`
+	ActivationStats          map[string]string   `json:"activation_stats"`
+	StatsPersisted           map[string]string   `json:"stats_persisted"`
+	StatsReleased            map[string]string   `json:"stats_released"`
+	FilesBeforeForeground    files               `json:"files_before_foreground"`
+	FilesAfterForeground     files               `json:"files_after_foreground"`
+	Retained                 []retained          `json:"retained"`
+	AllocationProfiles       []allocationProfile `json:"allocation_profiles,omitempty"`
+	FailureStateStats        map[string]string   `json:"failure_state_stats,omitempty"`
+	FailureStateFiles        *files              `json:"failure_state_files,omitempty"`
+	FailureStateCaptureError string              `json:"failure_state_capture_error,omitempty"`
+	FailureStateDelayNS      int64               `json:"failure_state_delay_nanoseconds,omitempty"`
+	Verification             map[string]any      `json:"verification"`
+	Notes                    []string            `json:"notes"`
 }
 
 // No environment opt-in means no DB, benchmark, or measurement work. The runner
@@ -143,6 +154,11 @@ func TestOrderedMemNativeMeasurement(t *testing.T) {
 	}
 	if err := json.Unmarshal(data, &c); err != nil {
 		t.Fatal(err)
+	}
+	if c.AllocationProfileRate > 0 {
+		// One fresh process serves one cell. Set the sampler once before the
+		// fixture, open, and seed so cumulative profile weights use one rate.
+		runtime.MemProfileRate = c.AllocationProfileRate
 	}
 	p := &packet{SchemaVersion: "orderedmem-native-v1", Config: c, Runtime: runtimeIdentity(), Verification: make(map[string]any)}
 	err = runCell(c, p)
@@ -192,6 +208,9 @@ func (c config) validate() error {
 	if (c.OperationalMinRotations > 0 || c.OperationalMinPayloadBytes > 0) && (c.Case != "lifecycle" || c.BadgerMemtableSize <= 0 || c.BadgerValueThreshold <= 0) {
 		return errors.New("operational activation requires lifecycle plus explicit Badger memtable/value thresholds")
 	}
+	if c.AllocationProfileRate < 0 || (c.AllocationProfileRate > 0 && c.ProfileDir == "") {
+		return errors.New("allocation profile rate must be nonnegative and a positive rate requires profile_dir")
+	}
 	return nil
 }
 
@@ -228,8 +247,13 @@ func runCell(c config, p *packet) (retErr error) {
 		p.Notes = append(p.Notes, "Forced-GC retained diagnostics perturb this run; do not pool its timings with natural-GC qualification.")
 	}
 	if c.ProfileDir != "" {
-		p.Notes = append(p.Notes, "CPU profiling is diagnostic and perturbs this run; do not pool its timings with uninstrumented qualification.")
+		if c.AllocationProfileRate > 0 {
+			p.Notes = append(p.Notes, "Allocation/heap profiling is diagnostic and replaces CPU profiling in this cell. The explicitly configured sampling rate is set before fixture construction; two forced GCs outside each foreground boundary flush profile samples. Subtract before/after cumulative alloc_space/alloc_objects for attribution, keeping runtime sampling lag and background work in scope; snapshots are not RSS or a pure engine memory bound. Never pool these timings with natural-GC qualification.")
+		} else {
+			p.Notes = append(p.Notes, "CPU profiling is diagnostic and perturbs this run; do not pool its timings with uninstrumented qualification.")
+		}
 	}
+	p.Notes = append(p.Notes, "Phase operations/mutations count successfully completed work; planned_operations/planned_mutations retain the requested denominator. A failed batch contributes no completed mutations. Failed foreground state is inspected before held-cut/DB-close unwind, after CPU-profile stop if enabled, with capture delay recorded; background maintenance may advance before inspection.")
 	retain := func(name string) {
 		if !c.RetainedDiagnostics {
 			return
@@ -261,11 +285,13 @@ func runCell(c config, p *packet) (retErr error) {
 	for _, op := range f.seed {
 		seedMutations += len(op.mutations)
 	}
-	if err := measure(p, "seed", len(f.seed), seedMutations, func(_ *phase) error {
+	if err := measure(p, "seed", len(f.seed), seedMutations, func(ph *phase) error {
 		for i, op := range f.seed {
 			if err := e.Commit(op.timestamp, op.mutations); err != nil {
 				return fmt.Errorf("seed timestamp %d: %w", op.timestamp, err)
 			}
+			ph.Operations++
+			ph.Mutations += len(op.mutations)
 			if i == 0 {
 				// Check representation before periodic checkpoints or later
 				// flushing can drain this first small mutable generation.
@@ -316,8 +342,22 @@ func runCell(c config, p *packet) (retErr error) {
 		}
 	}
 	latencies := make([]int64, len(f.operations))
+	if c.AllocationProfileRate > 0 {
+		if err := captureAllocationProfiles(c, p, "before_foreground"); err != nil {
+			return err
+		}
+	}
 	var cpuFile *os.File
-	if c.ProfileDir != "" {
+	stopCPU := func() error {
+		if cpuFile == nil {
+			return nil
+		}
+		pprof.StopCPUProfile()
+		err := cpuFile.Close()
+		cpuFile = nil
+		return err
+	}
+	if c.ProfileDir != "" && c.AllocationProfileRate == 0 {
 		if err := os.MkdirAll(c.ProfileDir, 0o755); err != nil {
 			return err
 		}
@@ -330,26 +370,41 @@ func runCell(c config, p *packet) (retErr error) {
 			return err
 		}
 		defer func() {
-			if cpuFile != nil {
-				pprof.StopCPUProfile()
-				_ = cpuFile.Close()
-			}
+			retErr = errors.Join(retErr, stopCPU())
 		}()
 	}
-	if err := measure(p, "foreground", len(f.operations), mutations, func(phase *phase) error {
-		return execute(e, f.operations, c, phase, latencies)
-	}); err != nil {
+	foregroundErr := measure(p, "foreground", len(f.operations), mutations, func(ph *phase) error {
+		ph.PlannedOutputRecords = outputRecords
+		return execute(e, f.operations, c, ph, latencies)
+	})
+	foregroundEnd := p.Phases[len(p.Phases)-1].endedAt
+	profileErr := stopCPU()
+	if foregroundErr != nil {
+		// Preserve the original workload error and the engine state before any
+		// held cut or DB is closed. Profile stop is outside foreground timing.
+		p.FailureStateDelayNS = time.Since(foregroundEnd).Nanoseconds()
+		p.FailureStateStats = e.Stats()
+		stateFiles, inspectErr := directoryFiles(c.Dir)
+		p.FailureStateFiles = &stateFiles
+		if inspectErr != nil {
+			p.FailureStateCaptureError = inspectErr.Error()
+		}
+	}
+	if c.AllocationProfileRate > 0 {
+		profileErr = errors.Join(profileErr, captureAllocationProfiles(c, p, "after_foreground"))
+	}
+	// Only validated operations have a nonzero latency. Failed attempts are
+	// retained in the workload error and excluded from successful-work quantiles.
+	completedLatencies := latencies[:0]
+	for _, value := range latencies {
+		if value > 0 {
+			completedLatencies = append(completedLatencies, value)
+		}
+	}
+	p.Phases[len(p.Phases)-1].LatencyNS = quantiles(completedLatencies)
+	if err := errors.Join(foregroundErr, profileErr); err != nil {
 		return err
 	}
-	if cpuFile != nil {
-		pprof.StopCPUProfile()
-		if err := cpuFile.Close(); err != nil {
-			return err
-		}
-		cpuFile = nil
-	}
-	p.Phases[len(p.Phases)-1].LatencyNS = quantiles(latencies)
-	p.Phases[len(p.Phases)-1].OutputRecords = outputRecords
 	p.Verification["foreground_outputs"] = true
 	p.StatsAfter = e.Stats()
 	p.FilesAfterForeground, err = directoryFiles(c.Dir)
@@ -441,10 +496,15 @@ func measure(p *packet, name string, operations, mutations int, f func(*phase) e
 	var before, after runtime.MemStats
 	resourceBefore := processResources()
 	runtime.ReadMemStats(&before)
-	ph := phase{Name: name, Operations: operations, Mutations: mutations}
+	ph := phase{Name: name, PlannedOperations: operations, PlannedMutations: mutations}
 	start := time.Now()
 	err := f(&ph)
-	ph.Nanoseconds = time.Since(start).Nanoseconds()
+	ph.endedAt = time.Now()
+	ph.Nanoseconds = ph.endedAt.Sub(start).Nanoseconds()
+	ph.Completed = err == nil
+	if err == nil && name != "foreground" {
+		ph.Operations, ph.Mutations = operations, mutations
+	}
 	runtime.ReadMemStats(&after)
 	ph.Process = resourceDelta(resourceBefore, processResources())
 	ph.AllocatedBytes, ph.Allocations = after.TotalAlloc-before.TotalAlloc, after.Mallocs-before.Mallocs
@@ -457,7 +517,12 @@ func measure(p *packet, name string, operations, mutations int, f func(*phase) e
 }
 
 func execute(e publicEngine, ops []operation, c config, ph *phase, latencies []int64) error {
-	runOne := func(i int) error {
+	type progress struct{ operations, mutations, outputs int }
+	var completed progress
+	defer func() {
+		ph.Operations, ph.Mutations, ph.OutputRecords = completed.operations, completed.mutations, completed.outputs
+	}()
+	runOne := func(i int, done *progress) error {
 		op := &ops[i]
 		start := time.Now()
 		var err error
@@ -486,7 +551,15 @@ func execute(e publicEngine, ops []operation, c config, ph *phase, latencies []i
 		default:
 			err = fmt.Errorf("unknown operation %q", op.kind)
 		}
-		latencies[i] = time.Since(start).Nanoseconds()
+		if err == nil {
+			latencies[i] = max(1, time.Since(start).Nanoseconds())
+			done.operations++
+			done.mutations += len(op.mutations)
+			done.outputs += len(op.rows)
+			if op.kind == 'g' && op.expected.State == mvcc.Present {
+				done.outputs++
+			}
+		}
 		return err
 	}
 	if c.Case == "shared" {
@@ -494,12 +567,15 @@ func execute(e publicEngine, ops []operation, c config, ph *phase, latencies []i
 		// timestamp stream increases, while concurrent completion may reorder.
 		var wg sync.WaitGroup
 		errs := make(chan error, c.Workers)
+		workerProgress := make([]progress, c.Workers)
 		for worker := 0; worker < c.Workers; worker++ {
 			wg.Add(1)
 			go func(worker int) {
 				defer wg.Done()
+				var done progress
+				defer func() { workerProgress[worker] = done }()
 				for i := worker; i < len(ops); i += c.Workers {
-					if err := runOne(i); err != nil {
+					if err := runOne(i, &done); err != nil {
 						errs <- fmt.Errorf("worker%d operation%d: %w", worker, i, err)
 						return
 					}
@@ -507,13 +583,18 @@ func execute(e publicEngine, ops []operation, c config, ph *phase, latencies []i
 			}(worker)
 		}
 		wg.Wait()
+		for _, done := range workerProgress {
+			completed.operations += done.operations
+			completed.mutations += done.mutations
+			completed.outputs += done.outputs
+		}
 		close(errs)
 		for err := range errs {
 			return err
 		}
 	} else {
 		for i := range ops {
-			if err := runOne(i); err != nil {
+			if err := runOne(i, &completed); err != nil {
 				return fmt.Errorf("operation%d: %w", i, err)
 			}
 			if c.CheckpointEvery > 0 && (i+1)%c.CheckpointEvery == 0 {
@@ -583,7 +664,7 @@ func quantiles(values []int64) latency {
 
 func runtimeIdentity() map[string]any {
 	r := map[string]any{"go_version": runtime.Version(), "gomaxprocs": runtime.GOMAXPROCS(0),
-		"goos": runtime.GOOS, "goarch": runtime.GOARCH, "num_cpu": runtime.NumCPU()}
+		"goos": runtime.GOOS, "goarch": runtime.GOARCH, "num_cpu": runtime.NumCPU(), "mem_profile_rate": runtime.MemProfileRate}
 	if build, ok := debug.ReadBuildInfo(); ok {
 		r["build_info"] = build
 	}

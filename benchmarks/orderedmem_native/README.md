@@ -80,6 +80,14 @@ TreeDB uses public `Checkpoint`; public `Flush` is unavailable. Badger uses
 `Sync`, which is a persistence barrier but not the same sealed-root algorithm.
 Whole-cycle and phase results must both be inspected so deferred work is visible.
 
+Each phase saves its planned operation and mutation counts separately from
+successfully completed work. A refused batch contributes no completed mutations;
+other shared writers may still finish their own work. Failed foreground results
+retain successful-operation latency samples and capture engine stats and files
+before releasing held history or closing the database. The capture starts after
+CPU-profile stop, if enabled. Its delay from the elapsed foreground boundary is
+recorded; background maintenance can advance during that delay and inspection.
+
 The post-reopen oracle checks every expected retained key, timestamp, deletion
 state, and value. Logical ranges select the newest allowed version *before*
 filtering deletions. Point absence and tombstone are normalized to the public
@@ -109,6 +117,19 @@ CPU ratios need particular care. Directory sizes are logical file lengths, not p
 disk allocation. Profiling and forced-GC timings must not be pooled with normal
 qualification. `summarize.py` preserves all samples and reports medians/ranges of
 matched per-repeat ratios, with foreground and cycle boundaries separate.
+
+`--allocation-profile-rate N` enables a separate allocation diagnostic at an
+explicit positive sampling rate and excludes CPU capture. The sampler is set
+once before fixture construction. Two forced GCs outside each foreground
+boundary flush delayed memory-profile records, then cumulative `allocs` and
+in-use `heap` snapshots are saved before and after foreground. Subtract the
+before profile from the after profile for sampled allocation attribution.
+Background work, live fixture/oracle storage, sampling lag, and the profile
+capture machinery remain in scope; those cumulative differences are not exact
+foreground allocation counters or an engine memory bound. The foreground's
+`TotalAlloc` delta remains a separate counter. These forced-GC timings and heap
+states are diagnostic and must be compared only with the same diagnostic mode,
+separately from CPU captures and natural-GC qualification.
 
 For initial correctness smoke, generate a separate plan with one repeat and a
 small operation scale. That short smoke does not establish lifecycle rotation

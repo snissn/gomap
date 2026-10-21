@@ -60,8 +60,8 @@ func TestCOWOrderedLogicalFacadeRetainedPhysicalRecords(t *testing.T) {
 					t.Fatalf("one logical group received different native revisions: %d and %d", commonRevision, revision)
 				}
 			}
-			// The singleton route uses the original point producer, including its
-			// explicit sync ACK, while retaining the same typed input contract.
+			// The singleton uses the same native batch producer and explicit
+			// sync ACK while retaining its typed input contract.
 			single := []mvccadmission.LogicalMutation{{Key: []byte("single"), Value: []byte("point"), Timestamp: 31}}
 			if err := database.CommitLogicalMVCC(single, capability.LogicalInput(single, 0), true); err != nil {
 				t.Fatal(err)

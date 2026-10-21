@@ -38429,16 +38429,10 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 		}
 		b.cowState.holdBegan = time.Now()
 		b.db.cow.commitWaitNs.Add(uint64(time.Since(leaseWaitStart)))
-		capture, err := newCOWFrameCapture(b.db.cow.budget, len(b.entries))
-		if err != nil {
-			b.db.cow.writerMu.Unlock()
-			unlockWriteMu()
-			return err
-		}
-		b.cowState.producer = capture
 		b.cowState.inPublication = true
 		previousUnlock := unlockWriteMu
 		unlockWriteMu = func() {
+			capture := b.cowState.producer
 			b.cowState.inPublication = false
 			b.db.cow.commitHoldNs.Add(uint64(time.Since(b.cowState.holdBegan)))
 			b.db.cow.writerMu.Unlock()
@@ -38526,7 +38520,9 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 	} else {
 		shardCounts = shardCounts[:shardCount]
 	}
-	clear(shardCounts)
+	if b.db.cow == nil {
+		clear(shardCounts)
+	}
 	b.shardCnts = shardCounts
 
 	shardIdxs := b.shardIdxs
@@ -38569,9 +38565,12 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 				}
 			}
 		}
-		idx := b.db.shardIndex(op.Key)
-		shardIdxs[i] = idx
-		shardCounts[idx]++
+		idx := shardIdxs[i]
+		if b.db.cow == nil {
+			idx = b.db.shardIndex(op.Key)
+			shardIdxs[i] = idx
+			shardCounts[idx]++
+		}
 		add := int64(len(op.Key))
 		if op.Type == batch.OpPut {
 			add += int64(len(op.Value))
@@ -38720,6 +38719,17 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 			eligibleCount >= multiLaneValueLogMinRecords
 	}
 
+	// Inline publications need no producer observer or frame vector. Admit the
+	// exact eligible capacity only after the existing pointer policy selects it,
+	// before placement can expose a produced frame to canonical preparation.
+	if b.db.cow != nil && allowPointers && eligibleCount > 0 {
+		capture, err := newCOWFrameCapture(b.db.cow.budget, eligibleCount)
+		if err != nil {
+			unlockWriteMu()
+			return err
+		}
+		b.cowState.producer = capture
+	}
 	var (
 		lane *lane
 		rids []uint64

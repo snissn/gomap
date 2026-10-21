@@ -15,10 +15,6 @@ import (
 // it is not a reservation and cannot authorize later canonical preparation.
 func (b *Batch) cowGenerationRollover() (_ *cowRollover, pressure bool, _ error) {
 	c := b.db.cow
-	clear(b.shardCnts)
-	for _, entry := range b.entries {
-		b.shardCnts[b.db.shardIndex(entry.Key)]++
-	}
 	groups := b.cowState.predictionGroups
 	storage := b.cowState.predictionStorage
 	start := 0
@@ -28,7 +24,7 @@ func (b *Batch) cowGenerationRollover() (_ *cowRollover, pressure bool, _ error)
 	}
 	allowPointers := b.db.valueLogEnabled() && b.db.allowValueLogPointers() &&
 		(!b.db.disableJournal || b.db.memtableValueLogPointers)
-	for _, entry := range b.entries {
+	for index, entry := range b.entries {
 		m := memtable.COWMutation{Key: entry.Key, Value: entry.Value, Flags: node.FlagInline}
 		if entry.Type == batch.OpDelete {
 			m.Flags, m.Value = node.FlagTombstone, nil
@@ -40,7 +36,7 @@ func (b *Batch) cowGenerationRollover() (_ *cowRollover, pressure bool, _ error)
 				m.Flags, m.Value = node.FlagPointer, nil
 			}
 		}
-		i := b.db.shardIndex(entry.Key)
+		i := b.shardIdxs[index]
 		groups[i] = append(groups[i], m)
 	}
 	max := c.budget.Limits().MaxGenerationBytes

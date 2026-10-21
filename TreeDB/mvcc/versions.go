@@ -453,6 +453,11 @@ type PruneStats struct {
 // tail. Bypassed records are neither counted nor checked for corruption.
 // Durable mode re-syncs the floor before the first delete, so interruption and
 // restart are idempotent and cannot recover pruned data without its floor.
+// The optional native logical-history producer additionally drains to a durable
+// basis before capture and after delete-write attempts, including partial-error
+// prefixes. This charged checkpoint work prevents a completed prune from leaving
+// a deleted-version mask chain in the active overlays. Other producers retain
+// their existing boundaries. The selected delete acknowledgement mode is unchanged.
 func (s *Store) PruneVersions(options PruneOptions) (stats PruneStats, err error) {
 	if options.Mode != CommitRelaxed && options.Mode != CommitDurable {
 		return stats, ErrInvalidCommitMode
@@ -487,6 +492,24 @@ func (s *Store) PruneVersions(options PruneOptions) (stats PruneStats, err error
 			return stats, err
 		}
 	}
+	var complete func() error
+	if boundary, ok := s.db.(interface {
+		PrepareMVCCPrune() (func() error, error)
+	}); ok {
+		complete, err = boundary.PrepareMVCCPrune()
+		if err != nil {
+			s.mu.Unlock()
+			return stats, storageError("prepare prune boundary", err)
+		}
+	}
+	deleteWriteAttempted := false
+	// Register before source cleanup so completion runs after every borrowed
+	// alias and private batch has been released, while maintenance stays owned.
+	defer func() {
+		if complete != nil && deleteWriteAttempted {
+			err = errors.Join(err, storageError("complete prune boundary", complete()))
+		}
+	}()
 	var snapshot treedb.Snapshot
 	if s.readCuts != nil {
 		// Floor admission and physical capture are one cut. The original cut
@@ -548,6 +571,7 @@ func (s *Store) PruneVersions(options PruneOptions) (stats PruneStats, err error
 			return storageError("measure prune batch", sizeErr)
 		}
 		var writeErr error
+		deleteWriteAttempted = true
 		if options.Mode == CommitDurable {
 			writeErr = batch.WriteSync()
 		} else {

@@ -30,7 +30,7 @@ func TestDurabilityProfilePublicEntrypointInventory(t *testing.T) {
 		"InitConditionalTxn", "InitConditionalTxnWithSnapshot", "Iterator", "LeafGenerationGC",
 		"LeafGenerationPack", "LeafGenerationPackFromPlan", "LeafGenerationPackRunOnce",
 		"LeafGenerationPlan", "MaintenancePhase", "NewBatch", "NewBatchWithSize",
-		"NativeSemanticBackend", "NewConditionalTxn", "NewConditionalTxnWithSnapshot", "NewMVCCAdmission", "PreflightMVCCPrune", "Print", "ResolvedProfile",
+		"NativeSemanticBackend", "NewConditionalTxn", "NewConditionalTxnWithSnapshot", "NewMVCCAdmission", "PreflightMVCCPrune", "PrepareMVCCPrune", "Print", "ResolvedProfile",
 		"ReverseIterator", "SeekGE", "SeekGEVersionRange", "Set", "SetMaintenancePhase", "SetPointWithMVCCInput", "SetNativeSemanticPublication", "SetSync", "Stats", "SupportsLogicalMVCC", "SupportsMVCCReadCut",
 		"Update", "UpdateSync", "VacuumIndexOnline", "VacuumOnlineStats", "ValueLogGC", "ValueLogRewriteOnline",
 	}
@@ -42,7 +42,7 @@ func TestDurabilityProfilePublicEntrypointInventory(t *testing.T) {
 	batchMethods := profileInventoryMethods(t, treeDBDir, "treedb", "commandWALPublicBatch")
 	wantBatch := []string{
 		"Close", "Delete", "DeleteRange", "DeleteView", "DeleteViewWithReplayBytes",
-		"GetByteSize", "Replay", "Reset", "Set", "SetView", "SetViewWithReplayBytes", "SetWithMVCCInput",
+		"GetByteSize", "Replay", "Reset", "Set", "SetView", "SetViewWithReplayBytes", "SetWithMVCCInput", "StageLogicalMVCC",
 		"Write", "WriteSync",
 	}
 	slices.Sort(wantBatch)
@@ -77,17 +77,26 @@ func TestDurabilityProfilePublicEntrypointInventory(t *testing.T) {
 		}
 	}
 	profileInventoryRequireBody(t, readCutBodies, "(*DB).AcquireMVCCReadCut", "cached.AcquireMVCCReadCut()")
+	for _, fragment := range []string{"db.captureReadOwners()", "cached.SupportsLogicalMVCC()", "db.Checkpoint()"} {
+		profileInventoryRequireBody(t, readCutBodies, "(*DB).PrepareMVCCPrune", fragment)
+	}
 	logicalBodies := profileInventoryFunctionBodies(t, filepath.Join(treeDBDir, "cow_ordered_native.go"))
 	for _, fragment := range []string{"db.captureReadOwners()", "cached.SupportsLogicalMVCC()"} {
 		profileInventoryRequireBody(t, logicalBodies, "(*DB).SupportsLogicalMVCC", fragment)
 	}
 	for _, fragment := range []string{
 		"db.beginPublicOperation()", "db.cached.SupportsLogicalMVCC()", "input.Matches(mutations)",
-		"db.cached.AcquireCOWAllocation", "db.cached.NewBatchWithSize", "newCommandWALPublicBatch",
-		"input.BindPhysical(i, physical)", "db.SetPointWithMVCCInput(physical, record, syncWrite, physicalInput)",
-		"qualified.SetWithMVCCInput(physical, record, physicalInput)", "b.WriteSync()", "b.Write()", "b.Close()", "lease.Close()",
+		"db.cached.NewBatchWithSize", "newCommandWALPublicBatch", "b.GetByteSize()",
+		"producer.StageLogicalMVCC(mutations, input)", "b.WriteSync()", "b.Write()", "b.Close()",
 	} {
 		profileInventoryRequireBody(t, logicalBodies, "(*DB).CommitLogicalMVCC", fragment)
+	}
+	for _, fragment := range []string{"b.cowState.batchError", "b.isCOW()", "b.preparePayloadForAppend()", "producer.StageLogicalMVCC(mutations, input)"} {
+		profileInventoryRequireBody(t, batchBodies, "(*commandWALPublicBatch).StageLogicalMVCC", fragment)
+	}
+	logicalStageBodies := profileInventoryFunctionBodies(t, filepath.Join(treeDBDir, "caching", "cow_logical_input.go"))
+	for _, fragment := range []string{"input.Matches(mutations)", "b.cowReserve", "b.cowCopyStorage(total)", "input.BindPhysical(i, key)", "b.noteEntryAppend()"} {
+		profileInventoryRequireBody(t, logicalStageBodies, "(*Batch).StageLogicalMVCC", fragment)
 	}
 	profileInventoryRequireBody(t, publicBodies, "Open", "resolveOpenProfileOptions")
 	profileInventoryRequireBody(t, publicBodies, "VacuumIndexOffline", "resolveOpenProfileOptions")

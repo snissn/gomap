@@ -559,8 +559,51 @@ func (w *COWWriter) Prepare(entries []COWMutation, opts COWPrepareOptions) (*COW
 	if p.ordered != nil {
 		p.root.ordered = p.ordered.immutableCopy()
 	}
+	actualNodes := p.private.AllocationCharge()
+	if p.ordered != nil {
+		orderedNodes := p.ordered.nodeAllocationCharge()
+		if orderedNodes > ^uint64(0)-actualNodes {
+			actualNodes = ^uint64(0)
+		} else {
+			actualNodes += orderedNodes
+		}
+	}
+	if err := p.reconcileNodes(actualNodes); err != nil {
+		// No resource callback or published source edge exists yet. End every
+		// private postimage alias before returning the original reservation.
+		p.private, p.ordered, p.root, p.ids, p.owners, p.writer = nil, nil, nil, nil, nil, nil
+		b.mu.Lock()
+		g.pending -= total
+		b.stats.ReservedBytes -= total
+		b.stats.TotalBytes -= total
+		b.mu.Unlock()
+		return nil, err
+	}
 	w.pending = p
 	return p, nil
+}
+
+// reconcileNodes returns only an unspent part of the original proven node
+// reservation. The counter includes every actual copied/grown backing, even
+// ones discarded while preparing. Payload, wrappers and resource envelopes
+// retain their original charge. Caller holds the writer lock before publication.
+func (p *COWPrepared) reconcileNodes(actual uint64) error {
+	if actual > p.charge.Nodes {
+		return fmt.Errorf("COW node allocation charge %d exceeds reservation %d: %w", actual, p.charge.Nodes, ErrCOWCapacity)
+	}
+	unused := p.charge.Nodes - actual
+	if unused == 0 {
+		return nil
+	}
+	g := p.writer.generation
+	b := g.budget
+	b.mu.Lock()
+	g.pending -= unused
+	b.stats.ReservedBytes -= unused
+	b.stats.TotalBytes -= unused
+	p.charge.Nodes = actual
+	b.mu.Unlock()
+	return nil
 }
 
 func (w *COWWriter) HasResource(id COWResourceID) bool {

@@ -90,6 +90,51 @@ def reopened_route_matches(config: dict[str, Any], initial: dict[str, Any], reop
         key: value for key, value in reopened.items() if key not in ignored}
 
 
+def phase_completion_errors(phase: dict[str, Any], successful: bool, config: dict[str, Any]) -> list[str]:
+    fields = {"planned_operations", "planned_mutations", "completed"}
+    present = fields.intersection(phase)
+    if not present:
+        return []  # Closed older artifacts predate explicit completion counters.
+    if present != fields:
+        return ["partial planned/completed phase fields"]
+    errors = []
+    for actual, planned in (("operations", "planned_operations"), ("mutations", "planned_mutations")):
+        if type(phase.get(actual)) is not int or type(phase[planned]) is not int or not 0 <= phase[actual] <= phase[planned]:
+            errors.append("invalid actual/planned " + actual)
+        elif successful and phase[actual] != phase[planned]:
+            errors.append("successful phase has incomplete " + actual)
+    if type(phase["completed"]) is not bool or (successful and phase["completed"] is not True):
+        errors.append("successful phase is not completed" if successful else "invalid completed flag")
+    if phase.get("name") == "foreground":
+        if phase["planned_operations"] != config.get("operations"):
+            errors.append("foreground planned_operations differs from config")
+        count = config.get("operations")
+        batch = config.get("batch_size")
+        if type(count) is int and type(batch) is int:
+            case = config.get("case")
+            expected = count * batch if case in {"commit", "lifecycle", "shared"} else (
+                (count // 10) * 4 + max(0, count % 10 - 6) if case == "mixed" else 0)
+            if phase["planned_mutations"] != expected:
+                errors.append("foreground planned_mutations differs from config trace")
+    return errors
+
+
+def diagnostic_mode(config: dict[str, Any]) -> tuple[bool, int, bool]:
+    rate = config.get("allocation_profile_rate", 0)
+    return (bool(config.get("profile_dir")) and rate == 0, rate, config.get("retained_diagnostics", False))
+
+
+def diagnostic_metadata(mode: tuple[bool, int, bool]) -> dict[str, Any]:
+    return {"cpu_profiling": mode[0], "allocation_profile_rate": mode[1],
+            "allocation_snapshots_force_gc": mode[1] > 0, "retained_diagnostics": mode[2]}
+
+
+def diagnostic_label(mode: dict[str, Any]) -> str:
+    label = "alloc@" + str(mode["allocation_profile_rate"]) if mode["allocation_profile_rate"] else (
+        "cpu" if mode["cpu_profiling"] else "ordinary")
+    return label + ("+retained" if mode["retained_diagnostics"] else "")
+
+
 def validate_result(result: Any, row: dict[str, Any]) -> list[str]:
     errors = []
     if not isinstance(result, dict):
@@ -114,6 +159,7 @@ def validate_result(result: Any, row: dict[str, Any]) -> list[str]:
             if phase["name"] in seen:
                 errors.append("duplicate phase: " + phase["name"])
             seen.add(phase["name"])
+            errors.extend(phase["name"] + ": " + error for error in phase_completion_errors(phase, result.get("success") is True, row.get("config", {})))
             for key in METRICS:
                 if not number(phase.get(key)):
                     errors.append(f"invalid {phase['name']}.{key}")
@@ -125,11 +171,15 @@ def validate_result(result: Any, row: dict[str, Any]) -> list[str]:
     config = row.get("config", {})
     for field, maximum in (("badger_memtable_size", (1 << 63) - 1),
                            ("badger_value_threshold", (1 << 63) - 1),
+                           ("allocation_profile_rate", (1 << 63) - 1),
                            ("operational_min_rotations", (1 << 64) - 1),
                            ("operational_min_payload_bytes", (1 << 64) - 1)):
         value = config.get(field, 0)
         if type(value) is not int or not 0 <= value <= maximum:
             errors.append("invalid optional config field: " + field)
+    rate = config.get("allocation_profile_rate", 0)
+    if type(rate) is int and rate > 0 and (not isinstance(config.get("profile_dir"), str) or not config["profile_dir"]):
+        errors.append("allocation profiling requires profile_dir")
     for field in ("route", "reopened_route"):
         route = result.get(field)
         if not isinstance(route, dict):
@@ -173,7 +223,7 @@ def validate_result(result: Any, row: dict[str, Any]) -> list[str]:
 
 
 def workload(config: dict[str, Any]) -> dict[str, Any]:
-    excluded = {"engine", "profile", "memtable_mode", "dir", "profile_dir", "badger_memtable_size", "badger_value_threshold"}
+    excluded = {"engine", "profile", "memtable_mode", "dir", "profile_dir", "badger_memtable_size", "badger_value_threshold", "allocation_profile_rate"}
     return {key: value for key, value in config.items() if key not in excluded}
 
 
@@ -241,10 +291,12 @@ def summarize(root: Path) -> dict[str, Any]:
                 errors.append("missing/partial/invalid result retained: " + str(error))
         entry = {"id": identity, "anchor": cell["anchor"], "repeat": cell["repeat"], "arm": cell["arm"],
                  "profile": cell["config"]["profile"], "valid": not errors, "errors": errors,
+                 "diagnostic_mode": diagnostic_metadata(diagnostic_mode(cell["config"])),
                  "status": row.get("status") if row else "missing",
                  "result_path": row.get("result_path") if row else None}
         if isinstance(result, dict):
-            entry.update({key: result.get(key) for key in ("trace_sha256", "cycle_ns", "runtime", "route", "reopened_route", "verification", "activation_stats", "phases", "retained", "files_before_close", "files_after_close", "files_before_foreground", "files_after_foreground", "stats_before", "stats_after", "stats_persisted", "stats_released", "notes")})
+            entry.update({key: result.get(key) for key in ("trace_sha256", "cycle_ns", "runtime", "route", "reopened_route", "verification", "activation_stats", "phases", "retained", "files_before_close", "files_after_close", "files_before_foreground", "files_after_foreground", "stats_before", "stats_after", "stats_persisted", "stats_released", "allocation_profiles", "notes")})
+            entry.update({key: value for key, value in result.items() if key.startswith("failure_")})
         cells.append(entry)
         key = (cell["anchor"], cell["config"]["profile"], cell["repeat"])
         if cell["arm"] in groups[key]:
@@ -259,13 +311,19 @@ def summarize(root: Path) -> dict[str, Any]:
         for left, right in COMPARISONS:
             if left not in arms or right not in arms:
                 continue
-            bucket = buckets[(anchor, profile, left, right)]
+            mode = diagnostic_mode(arms[left]["config"])
+            bucket = buckets[(anchor, profile, mode, left, right)]
             left_id, right_id = arms[left]["id"], arms[right]["id"]
             absent = [identity for identity in (left_id, right_id) if identity not in valid]
             if absent:
                 bucket["excluded_pairs"].append({"repeat": repeat, "ids": [left_id, right_id], "reason": "invalid cells", "invalid_ids": absent})
                 continue
             (a, acfg), (b, bcfg) = valid[left_id], valid[right_id]
+            if diagnostic_mode(acfg) != diagnostic_mode(bcfg):
+                reason = "diagnostic modes differ; instrumented and ordinary cells cannot be paired"
+                bucket["excluded_pairs"].append({"repeat": repeat, "ids": [left_id, right_id], "reason": reason})
+                issues.append(f"{anchor}/{profile}/repeat={repeat}/{left}:{right}: {reason}")
+                continue
             if workload(acfg) != workload(bcfg) or a["trace_sha256"].lower() != b["trace_sha256"].lower():
                 reason = "workload config or trace SHA256 mismatch"
                 bucket["excluded_pairs"].append({"repeat": repeat, "ids": [left_id, right_id], "reason": reason})
@@ -307,9 +365,10 @@ def summarize(root: Path) -> dict[str, Any]:
                     if number(av) and number(bv):
                         bucket["phases"][name]["latency_ns." + metric].append((av, bv))
     comparisons = []
-    for (anchor, profile, left, right), bucket in sorted(buckets.items()):
+    for (anchor, profile, mode, left, right), bucket in sorted(buckets.items()):
         comparisons.append({
             "anchor": anchor, "profile": profile, "left": left, "right": right,
+            "diagnostic_mode": diagnostic_metadata(mode),
             "ratio_definition": "per matched repeat left elapsed / right elapsed, then median; >1 means right faster",
             "minimum_final_pairs": plan.get("minimum_final_pairs", 5),
             "meets_minimum_final_pairs": len(bucket["pair_ids"]) >= plan.get("minimum_final_pairs", 5),
@@ -323,7 +382,11 @@ def summarize(root: Path) -> dict[str, Any]:
         "run_completeness": "incomplete" if issues else "complete",
         "qualification": "not_qualified",
         "qualification_reason": "Initial bounded calibration and descriptive paired statistics; no acceptance thresholds or final qualification declared.",
-        "instrumented": plan.get("instrumented", False), "retained_diagnostics": plan.get("retained_diagnostics", False),
+        "instrumented": bool(plan.get("instrumented")) or any(bool(cell["config"].get("profile_dir")) for cell in plan["cells"]),
+        "retained_diagnostics": plan.get("retained_diagnostics", False),
+        "cpu_profiling": plan.get("cpu_profiling", bool(plan.get("instrumented")) and not plan.get("allocation_profile_rate", 0)),
+        "allocation_profile_rate": plan.get("allocation_profile_rate", 0),
+        "allocation_snapshots_force_gc": plan.get("allocation_snapshots_force_gc", plan.get("allocation_profile_rate", 0) > 0),
         "planned_cells": len(plan["cells"]), "valid_cells": len(valid), "issues": issues,
         "sources": manifest.get("sources"), "binaries": manifest.get("binaries"),
         "source_inventories": manifest.get("source_inventories"),
@@ -334,6 +397,7 @@ def summarize(root: Path) -> dict[str, Any]:
             "Cycle and per-phase results are separate; no ratio of separate medians is used.",
             "Allocation/GC/heap statistics describe their recorded phase boundaries; HeapAlloc is not retained live memory.",
             "Retained diagnostics are preserved per cell and are not mixed into ordinary phase totals.",
+            "CPU/allocation profiling and ordinary comparisons have separate diagnostic mode identities; allocation snapshots force GC and are diagnostic.",
             "Quantile comparisons are paired per-cell quantiles, not pooled operation-level percentiles.",
             "Process CPU/context-switch/I/O deltas include engine background work. I/O is paired only when both samples report io_available; kernel accounting does not prove durable-device traffic.",
             "Source SHA labels and optional file inventories record declared identities; they do not attest compiler inputs.",
@@ -345,6 +409,7 @@ def summarize(root: Path) -> dict[str, Any]:
 def markdown(summary: dict[str, Any]) -> str:
     lines = [f"Run: **{summary['run_completeness']}; not qualified**. {summary['valid_cells']}/{summary['planned_cells']} planned cells valid.", "", summary["qualification_reason"], ""]
     lines.append(f"Profiling enabled: {summary['instrumented']}; retained diagnostics enabled: {summary['retained_diagnostics']}. These diagnostic modes must not be pooled with ordinary timing.")
+    lines.append(f"CPU profiling: {summary['cpu_profiling']}; allocation sampling rate: {summary['allocation_profile_rate']}; allocation snapshots force GC: {summary['allocation_snapshots_force_gc']}.")
     for issue in summary["issues"]:
         lines.append("- " + issue)
     lines.extend(["", "Ratios are medians of matched per-repeat left/right elapsed ratios; greater than one means the right arm is faster. Observed ranges are sample ranges, not confidence intervals.", "", "| Anchor | Profile | Left / right | Boundary | Pairs | Median ratio | Observed ratio range | Right wins/ties/left wins |", "| --- | --- | --- | --- | ---: | ---: | --- | --- |"])
@@ -356,7 +421,8 @@ def markdown(summary: dict[str, Any]) -> str:
             ratios = stats["paired_left_over_right"]
             ratio = f"{ratios['median']:.6f}" if ratios else "n/a"
             observed = f"{ratios['min']:.6f}–{ratios['max']:.6f}" if ratios else "n/a"
-            lines.append(f"| {comparison['anchor']} | {comparison['profile']} | {comparison['left']} / {comparison['right']} | {boundary} | {stats['pairs']} | {ratio} | {observed} | {stats['right_wins']}/{stats['ties']}/{stats['left_wins']} |")
+            mode_label = diagnostic_label(comparison["diagnostic_mode"])
+            lines.append(f"| {comparison['anchor']} | {comparison['profile']} / {mode_label} | {comparison['left']} / {comparison['right']} | {boundary} | {stats['pairs']} | {ratio} | {observed} | {stats['right_wins']}/{stats['ties']}/{stats['left_wins']} |")
     lines.extend(["", "Per-phase allocation and GC medians below are absolute matched-sample values; ratios in the JSON are computed per pair first.", "", "| Anchor | Profile | Left / right | Phase | Bytes/op left → right | Allocations/op left → right | GC count left → right |", "| --- | --- | --- | --- | --- | --- | --- |"])
     def absolute_pair(stats: dict[str, Any] | None) -> str:
         if not stats or stats["left"] is None or stats["right"] is None:
@@ -364,7 +430,8 @@ def markdown(summary: dict[str, Any]) -> str:
         return f"{stats['left']['median']:.3f} → {stats['right']['median']:.3f}"
     for comparison in summary["comparisons"]:
         for name, metrics in comparison["phases"].items():
-            lines.append(f"| {comparison['anchor']} | {comparison['profile']} | {comparison['left']} / {comparison['right']} | {name} | {absolute_pair(metrics.get('allocated_bytes_per_operations'))} | {absolute_pair(metrics.get('allocations_per_operations'))} | {absolute_pair(metrics.get('num_gc'))} |")
+            mode_label = diagnostic_label(comparison["diagnostic_mode"])
+            lines.append(f"| {comparison['anchor']} | {comparison['profile']} / {mode_label} | {comparison['left']} / {comparison['right']} | {name} | {absolute_pair(metrics.get('allocated_bytes_per_operations'))} | {absolute_pair(metrics.get('allocations_per_operations'))} | {absolute_pair(metrics.get('num_gc'))} |")
     lines.extend(["", "Per-phase heap, counts, latency quantiles, raw values, failed cells and excluded pairs are retained in the JSON summary. Foreground and cycle must be assessed separately. Allocation/op uses each phase's own operations field; zero-operation phases have n/a.", ""])
     return "\n".join(lines)
 

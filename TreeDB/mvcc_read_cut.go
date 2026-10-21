@@ -42,3 +42,27 @@ func (db *DB) PreflightMVCCPrune() error {
 	_, _, err := db.captureReadOwners()
 	return err
 }
+
+// PrepareMVCCPrune establishes the durable basis for a qualified floor prune
+// on the optional logical-history data plane. Other producers retain their
+// existing pruning path and return no completion work. Checkpoint enters its
+// own public admission; no lifecycle read lock is held across either call.
+//
+// After any physical delete-write attempt, the caller must run complete after
+// closing its prune iterator and snapshot, including when the write returned
+// an error. Completion transfers any accepted delete prefix to the successor
+// basis; it does not certify that a failed write was accepted or erase its error.
+// Both boundaries incur the existing checkpoint cost and durability behavior.
+func (db *DB) PrepareMVCCPrune() (complete func() error, err error) {
+	cached, _, err := db.captureReadOwners()
+	if err != nil {
+		return nil, err
+	}
+	if cached == nil || !cached.SupportsLogicalMVCC() {
+		return nil, nil
+	}
+	if err := db.Checkpoint(); err != nil {
+		return nil, err
+	}
+	return db.Checkpoint, nil
+}

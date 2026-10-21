@@ -20,6 +20,10 @@ type cowOrderedTree struct {
 	versions   int
 	maxHistory int
 	sealed     bool
+	// Preparation-local receipt for numeric trees, including allocations made
+	// by trees discarded during erase/reinsert cycles. Published readers do
+	// not need or retain this accounting state.
+	historyNodeCharge uint64
 }
 
 type cowOrderedValue struct {
@@ -79,6 +83,28 @@ func (t *cowOrderedTree) fork() *cowOrderedTree {
 
 func (t *cowOrderedTree) immutableCopy() *cowOrderedTree {
 	return &cowOrderedTree{keys: t.keys.ImmutableCopy(), versions: t.versions, maxHistory: t.maxHistory, sealed: true}
+}
+
+// nodeAllocationCharge is the actual allocation receipt of this preparation,
+// not a reachable-size estimate. In particular, discarded arrays and numeric
+// trees still consumed part of its original admitted node reservation.
+func (t *cowOrderedTree) nodeAllocationCharge() uint64 {
+	if t == nil {
+		return 0
+	}
+	charge, ok := cowAdd(t.keys.AllocationCharge(), t.historyNodeCharge)
+	if !ok {
+		return ^uint64(0)
+	}
+	return charge
+}
+
+func (t *cowOrderedTree) addHistoryNodeCharge(charge uint64) {
+	if sum, ok := cowAdd(t.historyNodeCharge, charge); ok {
+		t.historyNodeCharge = sum
+	} else {
+		t.historyNodeCharge = ^uint64(0)
+	}
 }
 
 // cowOrderedRouting makes classification identical for admission, ordered
@@ -545,8 +571,15 @@ func (t *cowOrderedTree) applyFrom(basis *cowOrderedTree, entries []COWMutation)
 			dirty = append(dirty, h)
 		}
 		if e.Remove {
+			numeric := h.versions
 			if h.remove(ts) {
 				t.versions--
+			}
+			if numeric != nil && h.versions == nil {
+				// Removing the penultimate version drops the private map. Its
+				// allocation receipt must survive subsequent singleton writes
+				// or a new promotion of this same history.
+				t.addHistoryNodeCharge(numeric.AllocationCharge())
 			}
 		} else {
 			value := cowOrderedValue{key: string(e.Key), value: cowEncodeValue(e)}
@@ -567,6 +600,7 @@ func (t *cowOrderedTree) applyFrom(basis *cowOrderedTree, entries []COWMutation)
 	}
 	for _, h := range dirty {
 		if h.versions != nil {
+			t.addHistoryNodeCharge(h.versions.AllocationCharge())
 			h.versions = h.versions.ImmutableCopy()
 		}
 		h.private = false
@@ -647,6 +681,9 @@ func (t *cowOrderedTree) estimate(entries []COWMutation) (COWCharge, error) {
 			}
 		}
 	}
+	// Runs below skip raw entries, which cannot change an ordered history.
+	// Monotone routed prefixes therefore prove one run per history even when
+	// unqualified records interrupt that history's mutations.
 	grouped := ascending || descending
 	var primaryCopies, primaryGrowth uint64
 	allPrimaryReplace, anyRemove := true, false
@@ -657,11 +694,17 @@ func (t *cowOrderedTree) estimate(entries []COWMutation) (COWCharge, error) {
 		}
 		prefix, _, _ := cowOrderedPrefix(entries[i].Key)
 		j := i + 1
+		operations := 1
 		for j < len(entries) {
+			if !routing.routes(j) {
+				j++
+				continue
+			}
 			next, _, canonical := cowOrderedPrefix(entries[j].Key)
-			if !canonical || !bytes.Equal(prefix, next) || !routing.routes(j) {
+			if !canonical || !bytes.Equal(prefix, next) {
 				break
 			}
+			operations++
 			j++
 		}
 		h, exists := cowOrderedPrimaryGet(t.keys, prefix)
@@ -669,13 +712,15 @@ func (t *cowOrderedTree) estimate(entries []COWMutation) (COWCharge, error) {
 		if exists {
 			oldCount = h.count
 		}
-		operations := j - i
 		maximum := oldCount + operations
 		if !grouped {
 			maximum = oldCount + len(entries)
 		}
 		removes, allRemove, allReplace := false, true, exists
 		for k := i; k < j; k++ {
+			if !routing.routes(k) {
+				continue
+			}
 			e := entries[k]
 			removes = removes || e.Remove
 			allRemove = allRemove && e.Remove
@@ -733,6 +778,22 @@ func (t *cowOrderedTree) estimate(entries []COWMutation) (COWCharge, error) {
 					oldNodes = pathNodes
 				}
 				reserve = (oldNodes + 8*uint64(maximum/31+1)) * full
+				if grouped {
+					// Independently bound each mutation as the original raw COW
+					// estimator does, then take the tighter valid envelope. The
+					// bulk bound alone charges an entire history's growth for a
+					// single insert. Promoting an existing singleton executes two
+					// initial Loads; a fresh history's first operation needs none.
+					calls := uint64(operations)
+					if oldCount == 1 {
+						calls++
+					}
+					perCall := cowOrderedNodeReserve(height, false, false, maximum, historyPair)
+					// Compare before multiplying so the cap cannot overflow.
+					if calls <= reserve/perCall {
+						reserve = calls * perCall
+					}
+				}
 			} else {
 				reserve = uint64(operations) * cowOrderedNodeReserve(height, false, true, maximum, historyPair)
 			}

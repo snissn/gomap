@@ -791,6 +791,38 @@ func (b *commandWALPublicBatch) SetWithMVCCInput(key, value []byte, input mvccad
 	_, _, err := b.setViewWithMVCCInput(key, value, false, false, input)
 	return err
 }
+
+// StageLogicalMVCC preserves this wrapper's ingress and payload-bypass state
+// while the existing native batch owns the canonical encoded operands.
+func (b *commandWALPublicBatch) StageLogicalMVCC(mutations []mvccadmission.LogicalMutation, input mvccadmission.LogicalInput) (int, error) {
+	if b != nil && b.cowState != nil && b.cowState.batchError != nil {
+		return 0, b.cowState.batchError
+	}
+	if b == nil || b.inner == nil {
+		return 0, ErrClosed
+	}
+	if !b.isCOW() {
+		return 0, caching.ErrCOWUnsupported
+	}
+	b.preparePayloadForAppend()
+	producer, ok := b.inner.(interface {
+		StageLogicalMVCC([]mvccadmission.LogicalMutation, mvccadmission.LogicalInput) (int, error)
+	})
+	if !ok {
+		return 0, caching.ErrCOWUnsupported
+	}
+	bytes, err := producer.StageLogicalMVCC(mutations, input)
+	if err != nil || len(mutations) == 0 {
+		return bytes, err
+	}
+	b.payloadBypass = true
+	b.opCount += len(mutations)
+	b.setCalls += len(mutations)
+	b.setBytes += bytes
+	b.dirty = true
+	return bytes, nil
+}
+
 func (b *commandWALPublicBatch) setViewWithMVCCInput(key, value []byte, retainReplayViews, useInnerView bool, input mvccadmission.Input) (keyView, valueView []byte, err error) {
 	if b != nil && b.cowState != nil && b.cowState.batchError != nil {
 		return nil, nil, b.cowState.batchError
