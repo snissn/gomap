@@ -16,7 +16,7 @@ func TestCOWPublicCommandBatchOwnedStagingAndWrapperAdmission(t *testing.T) {
 			database, _, _ := cowPublicContractOpen(t, profile)
 			before := database.cached.COWMemoryStats()
 			command := database.NewBatch().(*commandWALPublicBatch)
-			if !command.isCOW() || command.cowState.lease == nil || !command.payloadBypass || command.payload.RetainedCap() != 0 {
+			if !command.isCOW() || command.cowState.lease == nil || !command.payloadBypass || command.commandWALPublicOrdinaryState != nil {
 				t.Fatal("COW wrapper constructed a second payload owner")
 			}
 			opened := database.cached.COWMemoryStats()
@@ -37,7 +37,7 @@ func TestCOWPublicCommandBatchOwnedStagingAndWrapperAdmission(t *testing.T) {
 				t.Fatal(err)
 			}
 			key[0], value[0] = 'X', 'X'
-			if command.payload.RetainedCap() != 0 {
+			if command.commandWALPublicOrdinaryState != nil {
 				t.Fatal("COW staging duplicated payload")
 			}
 			if err := command.Write(); err != nil {
