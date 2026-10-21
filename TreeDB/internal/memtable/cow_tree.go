@@ -538,7 +538,12 @@ func (w *COWWriter) Prepare(entries []COWMutation, opts COWPrepareOptions) (*COW
 	for index, e := range entries {
 		if routing.routes(index) {
 			// A newly qualified version replaces any prior raw incarnation.
-			cowDeleteKey(p.private, e.Key)
+			// Deleting a missing key can still copy its raw search path. Only
+			// real migration work is included in the original reservation; use
+			// the staged tree because earlier operations may insert this key.
+			if p.private.Len() != 0 && cowHasKey(p.private, e.Key) {
+				cowDeleteKey(p.private, e.Key)
+			}
 			continue
 		}
 		// Lookup returns an existing owned key; safe builds compare bytes
