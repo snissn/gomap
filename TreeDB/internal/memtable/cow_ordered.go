@@ -702,6 +702,9 @@ func (t *cowOrderedTree) estimate(entries []COWMutation) (COWCharge, error) {
 	// Runs below skip raw entries, which cannot change an ordered history.
 	// Monotone routed prefixes therefore prove one run per history even when
 	// unqualified records interrupt that history's mutations.
+	// The first pass validated every routed key. Stable input and unchanged
+	// routing let these loops borrow its prefix and decode its exact suffix
+	// without rescanning the escaped logical key.
 	grouped := ascending || descending
 	var primaryCopies, primaryGrowth uint64
 	allPrimaryReplace, anyRemove := true, false
@@ -710,7 +713,8 @@ func (t *cowOrderedTree) estimate(entries []COWMutation) (COWCharge, error) {
 			i++
 			continue
 		}
-		prefix, _, _ := cowOrderedPrefix(entries[i].Key)
+		key := entries[i].Key
+		prefix := key[:len(key)-mvcckey.TimestampSize]
 		j := i + 1
 		operations := 1
 		for j < len(entries) {
@@ -718,8 +722,9 @@ func (t *cowOrderedTree) estimate(entries []COWMutation) (COWCharge, error) {
 				j++
 				continue
 			}
-			next, _, canonical := cowOrderedPrefix(entries[j].Key)
-			if !canonical || !bytes.Equal(prefix, next) {
+			key := entries[j].Key
+			next := key[:len(key)-mvcckey.TimestampSize]
+			if !bytes.Equal(prefix, next) {
 				break
 			}
 			operations++
@@ -746,7 +751,7 @@ func (t *cowOrderedTree) estimate(entries []COWMutation) (COWCharge, error) {
 			if !e.Remove {
 				puts++
 			}
-			_, ts, _ := cowOrderedPrefix(e.Key)
+			ts := ^binary.BigEndian.Uint64(e.Key[len(e.Key)-mvcckey.TimestampSize:])
 			member := false
 			if exists {
 				_, member = h.exact(ts)
