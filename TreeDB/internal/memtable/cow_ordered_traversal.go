@@ -29,7 +29,7 @@ const (
 // caller's original work allowance, including suspended seeks and close.
 type cowOrderedTraversal struct {
 	primary                                                   btree.StringCursor[*cowOrderedHistory]
-	history                                                   btree.UintCursor[cowOrderedValue]
+	history                                                   btree.UintCursor[*cowOrderedValue]
 	h                                                         *cowOrderedHistory
 	value                                                     cowOrderedValue
 	key                                                       string
@@ -53,7 +53,7 @@ func cowOrderedTraversalBytes(t *cowOrderedTree) uint64 {
 	historyDepth := cowMaximumHeight(t.maxHistory)
 	return uint64(unsafe.Sizeof(cowOrderedTraversal{})) +
 		btree.StringCursorBytes[*cowOrderedHistory](primaryDepth) - uint64(unsafe.Sizeof(btree.StringCursor[*cowOrderedHistory]{})) +
-		btree.UintCursorBytes[cowOrderedValue](historyDepth) - uint64(unsafe.Sizeof(btree.UintCursor[cowOrderedValue]{}))
+		btree.UintCursorBytes[*cowOrderedValue](historyDepth) - uint64(unsafe.Sizeof(btree.UintCursor[*cowOrderedValue]{}))
 }
 
 func newCOWOrderedTraversal(t *cowOrderedTree, work *COWTraversalWork) (cowOrderedTraversal, bool) {
@@ -63,8 +63,8 @@ func newCOWOrderedTraversal(t *cowOrderedTree, work *COWTraversalWork) (cowOrder
 	primaryDepth := cowMaximumHeight(t.keys.Len())
 	historyDepth := cowMaximumHeight(t.maxHistory)
 	// Prove all constructor work fits before either stack is allocated.
-	ownBytes := uint64(unsafe.Sizeof(cowOrderedTraversal{})) - uint64(unsafe.Sizeof(btree.StringCursor[*cowOrderedHistory]{})) - uint64(unsafe.Sizeof(btree.UintCursor[cowOrderedValue]{}))
-	constructorBytes := ownBytes + btree.StringCursorBytes[*cowOrderedHistory](primaryDepth) + btree.UintCursorBytes[cowOrderedValue](historyDepth)
+	ownBytes := uint64(unsafe.Sizeof(cowOrderedTraversal{})) - uint64(unsafe.Sizeof(btree.StringCursor[*cowOrderedHistory]{})) - uint64(unsafe.Sizeof(btree.UintCursor[*cowOrderedValue]{}))
+	constructorBytes := ownBytes + btree.StringCursorBytes[*cowOrderedHistory](primaryDepth) + btree.UintCursorBytes[*cowOrderedValue](historyDepth)
 	if work.Records > work.RecordLimit || work.RecordLimit-work.Records < 3 || work.Bytes > work.ByteLimit || constructorBytes > work.ByteLimit-work.Bytes {
 		return cowOrderedTraversal{}, false
 	}
@@ -75,7 +75,7 @@ func newCOWOrderedTraversal(t *cowOrderedTree, work *COWTraversalWork) (cowOrder
 	if !ok {
 		panic("pre-admitted ordered primary cursor refused")
 	}
-	history, ok := btree.NewUintCursor[cowOrderedValue](nil, historyDepth, work)
+	history, ok := btree.NewUintCursor[*cowOrderedValue](nil, historyDepth, work)
 	if !ok {
 		panic("pre-admitted ordered history cursor refused")
 	}
@@ -293,12 +293,14 @@ func (c *cowOrderedTraversal) Step(work *COWTraversalWork) (bool, error) {
 			if !done || err != nil {
 				return done, err
 			}
-			if !work.Reserve(1, uint64(unsafe.Sizeof(cowOrderedValue{}))+8) {
+			// Current exports a timestamp and descriptor pointer, then this layer
+			// copies the immutable descriptor into its borrowed current value.
+			if !work.Reserve(1, 8+uint64(unsafe.Sizeof((*cowOrderedValue)(nil)))+uint64(unsafe.Sizeof(cowOrderedValue{}))) {
 				return false, nil
 			}
 			_, value, valid := c.history.Current()
 			if valid {
-				c.value, c.phase = value, cowOrderedPublish
+				c.value, c.phase = *value, cowOrderedPublish
 			} else {
 				c.advancePrimary()
 			}

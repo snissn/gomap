@@ -35,7 +35,7 @@ type cowOrderedValue struct {
 // shortcut for a multi-version history. private is set only on a newly allocated
 // preparation-owned object and cleared before publication.
 type cowOrderedHistory struct {
-	versions *btree.Map[uint64, cowOrderedValue]
+	versions *btree.Map[uint64, *cowOrderedValue]
 	maximum  uint64
 	latest   cowOrderedValue
 	count    int
@@ -47,7 +47,7 @@ type cowOrderedPairLayout struct {
 	key   string
 }
 type cowOrderedVersionPairLayout struct {
-	value cowOrderedValue
+	value *cowOrderedValue
 	key   uint64
 }
 
@@ -213,7 +213,11 @@ func (h *cowOrderedHistory) exact(ts uint64) (cowOrderedValue, bool) {
 	if h.versions == nil {
 		return cowOrderedValue{}, false
 	}
-	return h.versions.Get(ts)
+	value, found := h.versions.Get(ts)
+	if !found {
+		return cowOrderedValue{}, false
+	}
+	return *value, true
 }
 
 func (h *cowOrderedHistory) predecessor(ts uint64) (uint64, cowOrderedValue, bool) {
@@ -229,8 +233,8 @@ func (h *cowOrderedHistory) predecessor(ts uint64) (uint64, cowOrderedValue, boo
 	var actual uint64
 	var value cowOrderedValue
 	found := false
-	h.versions.Descend(ts, func(k uint64, v cowOrderedValue) bool {
-		actual, value, found = k, v, true
+	h.versions.Descend(ts, func(k uint64, v *cowOrderedValue) bool {
+		actual, value, found = k, *v, true
 		return false
 	})
 	return actual, value, found
@@ -246,8 +250,8 @@ func (h *cowOrderedHistory) successor(ts uint64) (uint64, cowOrderedValue, bool)
 	var actual uint64
 	var value cowOrderedValue
 	found := false
-	h.versions.Ascend(ts, func(k uint64, v cowOrderedValue) bool {
-		actual, value, found = k, v, true
+	h.versions.Ascend(ts, func(k uint64, v *cowOrderedValue) bool {
+		actual, value, found = k, *v, true
 		return false
 	})
 	return actual, value, found
@@ -259,7 +263,7 @@ func (h *cowOrderedHistory) lastPhysical() cowOrderedValue {
 		return h.latest
 	}
 	_, value, _ := h.versions.Min()
-	return value
+	return *value
 }
 
 // suffixLowerTimestamp converts an arbitrary physical bound to an inclusive
@@ -370,7 +374,7 @@ func (t *cowOrderedTree) scanOwned(iter func(COWRecord) bool) {
 			return iter(h.latest.value.record(h.latest.key))
 		}
 		keep := true
-		h.versions.Reverse(func(_ uint64, v cowOrderedValue) bool {
+		h.versions.Reverse(func(_ uint64, v *cowOrderedValue) bool {
 			keep = iter(v.value.record(v.key))
 			return keep
 		})
@@ -408,7 +412,7 @@ func (t *cowOrderedTree) scanRangeOwned(start, end []byte, iter func(COWRecord) 
 				visit(h.latest)
 			}
 		} else {
-			h.versions.Descend(^encoded, func(_ uint64, value cowOrderedValue) bool { return visit(value) })
+			h.versions.Descend(^encoded, func(_ uint64, value *cowOrderedValue) bool { return visit(*value) })
 		}
 		return false
 	})
@@ -425,7 +429,7 @@ func (t *cowOrderedTree) scanRangeOwned(start, end []byte, iter func(COWRecord) 
 		if h.versions == nil {
 			visit(h.latest)
 		} else {
-			h.versions.Reverse(func(_ uint64, value cowOrderedValue) bool { return visit(value) })
+			h.versions.Reverse(func(_ uint64, value *cowOrderedValue) bool { return visit(*value) })
 		}
 		return keep
 	})
@@ -478,6 +482,15 @@ func (h *cowOrderedHistory) fork() *cowOrderedHistory {
 	return &copy
 }
 
+// Numeric nodes copy only this immutable descriptor's pointer. The descriptor
+// and its generation-owned key/value aliases are never changed or recycled.
+// Keep allocation in this helper so singleton-only writes allocate no descriptor.
+func cowOrderedDescriptor(value cowOrderedValue) *cowOrderedValue {
+	copy := new(cowOrderedValue)
+	*copy = value
+	return copy
+}
+
 func (h *cowOrderedHistory) set(ts uint64, value cowOrderedValue) bool {
 	if h.count == 0 {
 		h.maximum, h.latest, h.count = ts, value, 1
@@ -488,13 +501,14 @@ func (h *cowOrderedHistory) set(ts uint64, value cowOrderedValue) bool {
 			h.latest = value
 			return true
 		}
-		h.versions = btree.NewMap[uint64, cowOrderedValue](btreeDefaultDegree)
+		h.versions = btree.NewMap[uint64, *cowOrderedValue](btreeDefaultDegree)
+		first, incoming := cowOrderedDescriptor(h.latest), cowOrderedDescriptor(value)
 		if ts > h.maximum {
-			h.versions.Load(h.maximum, h.latest)
-			h.versions.Load(ts, value)
+			h.versions.Load(h.maximum, first)
+			h.versions.Load(ts, incoming)
 		} else {
-			h.versions.Load(ts, value)
-			h.versions.Load(h.maximum, h.latest)
+			h.versions.Load(ts, incoming)
+			h.versions.Load(h.maximum, first)
 		}
 		h.count = 2
 		if ts > h.maximum {
@@ -503,10 +517,11 @@ func (h *cowOrderedHistory) set(ts uint64, value cowOrderedValue) bool {
 		return false
 	}
 	var replaced bool
+	descriptor := cowOrderedDescriptor(value)
 	if ts > h.maximum {
-		_, replaced = h.versions.Load(ts, value)
+		_, replaced = h.versions.Load(ts, descriptor)
 	} else {
-		_, replaced = h.versions.Set(ts, value)
+		_, replaced = h.versions.Set(ts, descriptor)
 	}
 	if !replaced {
 		h.count++
@@ -533,7 +548,8 @@ func (h *cowOrderedHistory) remove(ts uint64) bool {
 	}
 	h.count--
 	if ts == h.maximum {
-		h.maximum, h.latest, _ = h.versions.Max()
+		maximum, value, _ := h.versions.Max()
+		h.maximum, h.latest = maximum, *value
 	}
 	if h.count == 1 {
 		h.versions = nil
@@ -717,6 +733,7 @@ func (t *cowOrderedTree) estimate(entries []COWMutation) (COWCharge, error) {
 			maximum = oldCount + len(entries)
 		}
 		removes, allRemove, allReplace := false, true, exists
+		var puts uint64
 		for k := i; k < j; k++ {
 			if !routing.routes(k) {
 				continue
@@ -724,12 +741,34 @@ func (t *cowOrderedTree) estimate(entries []COWMutation) (COWCharge, error) {
 			e := entries[k]
 			removes = removes || e.Remove
 			allRemove = allRemove && e.Remove
+			if !e.Remove {
+				puts++
+			}
 			_, ts, _ := cowOrderedPrefix(e.Key)
 			member := false
 			if exists {
 				_, member = h.exact(ts)
 			}
 			allReplace = allReplace && member && !e.Remove
+		}
+		// An arbitrary PUT can promote an inline singleton, requiring the old
+		// first descriptor and its new descriptor. Erase/re-promotion or repeated
+		// noncontiguous runs retain that safe two-per-PUT envelope.
+		descriptors := 2 * puts
+		if grouped && !removes {
+			// Monotone prefixes prove one run for this history. A numeric history
+			// needs one per PUT. Fresh histories use their first PUT inline; the
+			// eventual two-descriptor promotion consumes at most the saved slot.
+			descriptors = puts
+			if oldCount == 0 && operations == 1 || oldCount == 1 && allReplace {
+				descriptors = 0
+			} else if oldCount == 1 {
+				descriptors++ // materialize the earlier inline first exactly once
+			}
+		}
+		descriptorBytes := cowAllocation(uint64(unsafe.Sizeof(cowOrderedValue{})))
+		if descriptors > ^uint64(0)/descriptorBytes || !add(&c.Wrappers, descriptors*descriptorBytes) {
+			return c, ErrCOWCapacity
 		}
 		anyRemove = anyRemove || removes
 		allPrimaryReplace = allPrimaryReplace && exists && !removes
@@ -797,7 +836,7 @@ func (t *cowOrderedTree) estimate(entries []COWMutation) (COWCharge, error) {
 			} else {
 				reserve = uint64(operations) * cowOrderedNodeReserve(height, false, true, maximum, historyPair)
 			}
-			if !add(&c.Nodes, reserve) || !add(&c.Wrappers, 2*uint64(headers)*cowAllocation(uint64(unsafe.Sizeof(btree.Map[uint64, cowOrderedValue]{})))) {
+			if !add(&c.Nodes, reserve) || !add(&c.Wrappers, 2*uint64(headers)*cowAllocation(uint64(unsafe.Sizeof(btree.Map[uint64, *cowOrderedValue]{})))) {
 				return c, ErrCOWCapacity
 			}
 		}
@@ -841,7 +880,7 @@ func (t *cowOrderedTree) estimate(entries []COWMutation) (COWCharge, error) {
 type cowOrderedCursor struct {
 	tree    *cowOrderedTree
 	primary btree.MapIter[string, *cowOrderedHistory]
-	history btree.MapIter[uint64, cowOrderedValue]
+	history btree.MapIter[uint64, *cowOrderedValue]
 	h       *cowOrderedHistory
 	value   cowOrderedValue
 	valid   bool
@@ -873,7 +912,7 @@ func (c *cowOrderedCursor) position(record COWRecord) bool {
 	ts := ^binary.BigEndian.Uint64([]byte(record.Key[len(record.Key)-mvcckey.TimestampSize:]))
 	c.valid = c.history.Seek(ts)
 	if c.valid {
-		c.value = c.history.Value()
+		c.value = *c.history.Value()
 	}
 	return c.valid
 }
@@ -933,7 +972,7 @@ func (c *cowOrderedCursor) seekLE(key []byte) bool {
 				return true
 			}
 		} else if c.history.Seek(^encoded) {
-			c.value = c.history.Value()
+			c.value = *c.history.Value()
 			return true
 		}
 	}
@@ -959,7 +998,7 @@ func (c *cowOrderedCursor) historyFloor(timestamp uint64) bool {
 		found = c.history.Prev()
 	}
 	if found {
-		c.value = c.history.Value()
+		c.value = *c.history.Value()
 	}
 	return found
 }
@@ -978,7 +1017,7 @@ func (c *cowOrderedCursor) enter(last bool) bool {
 		c.valid = c.history.Last()
 	}
 	if c.valid {
-		c.value = c.history.Value()
+		c.value = *c.history.Value()
 	}
 	return c.valid
 }
@@ -996,7 +1035,7 @@ func (c *cowOrderedCursor) next() bool {
 		return false
 	}
 	if c.h.versions != nil && c.history.Prev() {
-		c.value = c.history.Value()
+		c.value = *c.history.Value()
 		return true
 	}
 	c.valid = c.primary.Next()
@@ -1007,7 +1046,7 @@ func (c *cowOrderedCursor) prev() bool {
 		return false
 	}
 	if c.h.versions != nil && c.history.Next() {
-		c.value = c.history.Value()
+		c.value = *c.history.Value()
 		return true
 	}
 	c.valid = c.primary.Prev()
