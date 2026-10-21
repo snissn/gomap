@@ -2861,7 +2861,7 @@ func TestPublicCommandWALPendingClearPreservesNewerRange(t *testing.T) {
 func TestPublicCommandWALBatchResetFallbackKeepsWrapperUsable(t *testing.T) {
 	inner := &commandWALNoResetBatch{}
 	wrapped := &commandWALPublicBatch{inner: inner}
-	_ = wrapped.payload.ResetWithHint(0, 0)
+	wrapped.resetPayloadWithHint()
 	wrapped.dirty = true
 	wrapped.closed = true
 
