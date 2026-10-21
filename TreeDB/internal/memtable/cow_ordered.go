@@ -210,7 +210,9 @@ func (h *cowOrderedHistory) exact(ts uint64) (cowOrderedValue, bool) {
 	if ts == h.maximum && h.count > 0 {
 		return h.latest, true
 	}
-	if h.versions == nil {
+	// The immutable history's exact maximum also proves a newer timestamp
+	// absent. In particular, monotone appends need no numeric-tree search.
+	if ts > h.maximum || h.versions == nil {
 		return cowOrderedValue{}, false
 	}
 	value, found := h.versions.Get(ts)
@@ -570,7 +572,7 @@ func (t *cowOrderedTree) applyFrom(basis *cowOrderedTree, entries []COWMutation)
 		}
 		h, exists := cowOrderedPrimaryGet(t.keys, prefix)
 		member := false
-		if exists {
+		if e.Remove && exists {
 			_, member = h.exact(ts)
 		}
 		if !routing.routes(i) {
