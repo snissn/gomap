@@ -137,6 +137,7 @@ func drainCOWTables(tables []cowTable) {
 // cowCache serializes private preparation separately from the brief read latch.
 // writeMu admission and the existing command barrier remain outside this owner.
 type cowCache struct {
+	ordered bool
 	// Lock order is scope/caller -> basis.readMu -> physicalMu -> budget.mu.
 	// Pure decoder scratch never acquires a basis, scope or publication lock.
 	physicalMu                                                                                     sync.Mutex
@@ -179,7 +180,27 @@ type cowCache struct {
 // Backend wrapper capture uses a separate lease: a basis can outlive every
 // generation that existed when it was captured. Cache and cut allocations also
 // have independent lifetimes rather than attaching them to an arbitrary shard.
+func (c *cowCache) newWriter(maintenance bool) (*memtable.COWWriter, error) {
+	if maintenance {
+		if c.ordered {
+			return memtable.NewCOWOrderedWriterWithMaintenanceConstruction(c.budget, c.maintenance)
+		}
+		return memtable.NewCOWWriterWithMaintenanceConstruction(c.budget, c.maintenance)
+	}
+	if c.ordered {
+		return memtable.NewCOWOrderedWriter(c.budget)
+	}
+	return memtable.NewCOWWriter(c.budget)
+}
+
+// SupportsLogicalMVCC identifies the concrete, opt-in logical-history route.
+func (db *DB) SupportsLogicalMVCC() bool { return db != nil && db.cow != nil && db.cow.ordered }
+
 func newCOWCache(provider backendSnapshotProvider, shards int, limits memtable.COWLimits) (*cowCache, error) {
+	return newCOWCacheMode(provider, shards, limits, false)
+}
+
+func newCOWCacheMode(provider backendSnapshotProvider, shards int, limits memtable.COWLimits, ordered bool) (*cowCache, error) {
 	if provider == nil || shards < 1 {
 		return nil, fmt.Errorf("COW cache requires backend and fixed shards")
 	}
@@ -245,11 +266,11 @@ func newCOWCache(provider backendSnapshotProvider, shards int, limits memtable.C
 		}
 		return nil, joinCOWCleanupError(err, cleanupErr)
 	}
-	c := &cowCache{budget: budget, maintenance: maintenance, writers: make([]*memtable.COWWriter, shards), successors: make([]cowRawSuccessor, shards), lease: cacheLease, closeRetired: make([]memtable.COWRetirement, shards)}
+	c := &cowCache{ordered: ordered, budget: budget, maintenance: maintenance, writers: make([]*memtable.COWWriter, shards), successors: make([]cowRawSuccessor, shards), lease: cacheLease, closeRetired: make([]memtable.COWRetirement, shards)}
 	cut := &cowReadCut{refs: 1, shards: make([]cowTable, shards), basis: admitted, lease: cutLease, cache: c}
 	for i := range c.writers {
 		beforeHistory := budget.Stats().HistoryBytes
-		w, e := memtable.NewCOWWriter(budget)
+		w, e := c.newWriter(false)
 		if e != nil {
 			err = e
 			break
@@ -497,7 +518,7 @@ func (c *cowCache) prepareNative(groups [][]memtable.COWMutation, opts []memtabl
 			}
 			p.successors[i].sourceReserved = true
 			var err error
-			p.successors[i].writer, err = memtable.NewCOWWriterWithMaintenanceConstruction(c.budget, c.maintenance)
+			p.successors[i].writer, err = c.newWriter(true)
 			if err == nil {
 				p.successors[i].root, p.successors[i].resources, err = prepareCOWReservedEmptyRoot(p.successors[i].writer, c.maintenance)
 			}

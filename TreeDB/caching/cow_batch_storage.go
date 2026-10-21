@@ -7,6 +7,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/batch"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/mvccadmission"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -193,6 +194,7 @@ func (b *Batch) cowReset() {
 	}
 	b.releaseNativePublication()
 	b.entries = nil
+	b.mvccSummary = mvccadmission.Summary{}
 	b.copyArena = nil
 	b.shardAdds = nil
 	b.shardCnts = nil

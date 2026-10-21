@@ -22,7 +22,7 @@ func TestDurabilityProfilePublicEntrypointInventory(t *testing.T) {
 	treeDBDir := profileInventoryTreeDBDir(t)
 	methods := profileInventoryMethods(t, treeDBDir, "treedb", "DB")
 	want := []string{
-		"AcquireMVCCReadCut", "AcquireSnapshot", "CaptureNativeSemanticState", "Checkpoint", "Close", "CompactIndex", "CompactStorage",
+		"AcquireMVCCReadCut", "AcquireSnapshot", "CaptureNativeSemanticState", "Checkpoint", "Close", "CommitLogicalMVCC", "CompactIndex", "CompactStorage",
 		"CompactStorageLeafPageLogOwnerClassification", "CompactStoragePlan", "Delete",
 		"DeleteRange", "DeleteSync", "DurabilityMode", "FragmentationReport", "Get",
 		"GetAppend", "GetMany", "GetManyParallelPlan", "GetManyView", "GetUnsafe",
@@ -31,7 +31,7 @@ func TestDurabilityProfilePublicEntrypointInventory(t *testing.T) {
 		"LeafGenerationPack", "LeafGenerationPackFromPlan", "LeafGenerationPackRunOnce",
 		"LeafGenerationPlan", "MaintenancePhase", "NewBatch", "NewBatchWithSize",
 		"NativeSemanticBackend", "NewConditionalTxn", "NewConditionalTxnWithSnapshot", "NewMVCCAdmission", "PreflightMVCCPrune", "Print", "ResolvedProfile",
-		"ReverseIterator", "SeekGE", "SeekGEVersionRange", "Set", "SetMaintenancePhase", "SetPointWithMVCCInput", "SetNativeSemanticPublication", "SetSync", "Stats", "SupportsMVCCReadCut",
+		"ReverseIterator", "SeekGE", "SeekGEVersionRange", "Set", "SetMaintenancePhase", "SetPointWithMVCCInput", "SetNativeSemanticPublication", "SetSync", "Stats", "SupportsLogicalMVCC", "SupportsMVCCReadCut",
 		"Update", "UpdateSync", "VacuumIndexOnline", "VacuumOnlineStats", "ValueLogGC", "ValueLogRewriteOnline",
 	}
 	slices.Sort(want)
@@ -77,6 +77,18 @@ func TestDurabilityProfilePublicEntrypointInventory(t *testing.T) {
 		}
 	}
 	profileInventoryRequireBody(t, readCutBodies, "(*DB).AcquireMVCCReadCut", "cached.AcquireMVCCReadCut()")
+	logicalBodies := profileInventoryFunctionBodies(t, filepath.Join(treeDBDir, "cow_ordered_native.go"))
+	for _, fragment := range []string{"db.captureReadOwners()", "cached.SupportsLogicalMVCC()"} {
+		profileInventoryRequireBody(t, logicalBodies, "(*DB).SupportsLogicalMVCC", fragment)
+	}
+	for _, fragment := range []string{
+		"db.beginPublicOperation()", "db.cached.SupportsLogicalMVCC()", "input.Matches(mutations)",
+		"db.cached.AcquireCOWAllocation", "db.cached.NewBatchWithSize", "newCommandWALPublicBatch",
+		"input.BindPhysical(i, physical)", "db.SetPointWithMVCCInput(physical, record, syncWrite, physicalInput)",
+		"qualified.SetWithMVCCInput(physical, record, physicalInput)", "b.WriteSync()", "b.Write()", "b.Close()", "lease.Close()",
+	} {
+		profileInventoryRequireBody(t, logicalBodies, "(*DB).CommitLogicalMVCC", fragment)
+	}
 	profileInventoryRequireBody(t, publicBodies, "Open", "resolveOpenProfileOptions")
 	profileInventoryRequireBody(t, publicBodies, "VacuumIndexOffline", "resolveOpenProfileOptions")
 	vlogRewriteBodies := profileInventoryFunctionBodies(t, filepath.Join(treeDBDir, "vlog_rewrite.go"))

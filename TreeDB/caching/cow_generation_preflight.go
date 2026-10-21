@@ -32,8 +32,13 @@ func (b *Batch) cowGenerationRollover() (_ *cowRollover, pressure bool, _ error)
 		m := memtable.COWMutation{Key: entry.Key, Value: entry.Value, Flags: node.FlagInline}
 		if entry.Type == batch.OpDelete {
 			m.Flags, m.Value = node.FlagTombstone, nil
-		} else if allowPointers && b.db.shouldWriteViaValueLogForKeyValue(entry.Key, entry.Value) {
-			m.Flags, m.Value = node.FlagPointer, nil
+		} else {
+			if entry.Type == batch.OpPut {
+				m.Timestamp, m.MVCC = entry.MVCCInput.LogicalTimestamp(entry.Key)
+			}
+			if allowPointers && b.db.shouldWriteViaValueLogForKeyValue(entry.Key, entry.Value) {
+				m.Flags, m.Value = node.FlagPointer, nil
+			}
 		}
 		i := b.db.shardIndex(entry.Key)
 		groups[i] = append(groups[i], m)

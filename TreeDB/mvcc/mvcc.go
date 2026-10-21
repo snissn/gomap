@@ -215,6 +215,11 @@ func (s *Store) CommitGroupAt(groups []CommitGroup, mode CommitMode) error {
 	if total == 0 {
 		return nil
 	}
+	if s.admission != nil {
+		if writer, ok := s.db.(logicalMVCCWriter); ok && writer.SupportsLogicalMVCC() {
+			return s.commitLogicalGroups(writer, groups, total, mode)
+		}
+	}
 
 	staged := make([]stagedMutation, 0, total)
 	var seen map[string]struct{}

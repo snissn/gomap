@@ -175,6 +175,7 @@ func (b *Batch) PrepareExternalCommandWALPublication() (err error) {
 			m.Flags = node.FlagTombstone
 			m.Value = nil
 		case batch.OpPut:
+			m.Timestamp, m.MVCC = e.MVCCInput.LogicalTimestamp(e.Key)
 			m.Flags = node.FlagInline
 			if e.IsPtr {
 				m.Flags = node.FlagPointer
@@ -453,8 +454,15 @@ func (b *Batch) writeCOWPublication(syncWrite bool, unlock func()) error {
 		nativeOpening = native.opening
 		native.opening = nil
 	}
+	// Consume the producer's exact input under the SAME backend authority as
+	// ordinary cached writes. Canonical preparation and WAL I/O have finished;
+	// only accepted installation remains under this short authority cut.
+	admission := b.db.beginMVCCInputCut()
+	admission.ObserveSummary(b.mvccSummary)
 	old, publishErr := p.cut.publishAccepted(b.cowState.accepted)
 	if publishErr != nil {
+		// BeginInstall is the only error return and precedes any installation.
+		admission.Abort()
 		if poisoner, ok := b.db.backend.(interface{ MarkCommandWALRecoveryRequired() }); ok {
 			poisoner.MarkCommandWALRecoveryRequired()
 		}
@@ -473,6 +481,9 @@ func (b *Batch) writeCOWPublication(syncWrite bool, unlock func()) error {
 		unlock()
 		return joinCOWCleanupError(publishErr, p.drainCancelled())
 	}
+	// The logical cut is installed even if later cleanup/checkpoint reports an
+	// error. Its authority observation must not be rolled back in that case.
+	admission.Commit()
 	b.cowState.accepted = rootpublication.AcceptedTicket{}
 	b.cowState.receipt.LogicalInstalled = true
 	b.cowState.receipt.LogicalSeq = p.cut.next.logicalSeq

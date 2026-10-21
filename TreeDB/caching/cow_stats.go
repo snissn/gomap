@@ -51,12 +51,29 @@ func (db *DB) cowStatsInto(stats map[string]string) {
 	c.cutMu.Lock()
 	current, frozen := 0, 0
 	logicalSeq := uint64(0)
+	orderedKeys, orderedVersions := 0, 0
 	if c.cut != nil {
 		logicalSeq = c.cut.logicalSeq
 		current = len(c.cut.shards)
 		frozen = len(c.cut.frozen)
+		if c.ordered {
+			for _, table := range c.cut.shards {
+				keys, versions := table.root.OrderedCounts()
+				orderedKeys += keys
+				orderedVersions += versions
+			}
+			for _, table := range c.cut.frozen {
+				keys, versions := table.root.OrderedCounts()
+				orderedKeys += keys
+				orderedVersions += versions
+			}
+		}
 	}
 	c.cutMu.Unlock()
+	if c.ordered {
+		stats["treedb.cache.cow.ordered.logical_keys"] = strconv.Itoa(orderedKeys)
+		stats["treedb.cache.cow.ordered.physical_versions"] = strconv.Itoa(orderedVersions)
+	}
 	stats["treedb.cache.cow.txn.logical_seq"] = strconv.FormatUint(logicalSeq, 10)
 	stats["treedb.cache.cow.txn.barrier_active"] = strconv.FormatBool(c.journalBarrierActive.Load())
 	stats["treedb.cache.cow.current_roots"] = strconv.Itoa(current)

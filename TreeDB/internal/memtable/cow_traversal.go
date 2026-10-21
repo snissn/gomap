@@ -25,10 +25,22 @@ const (
 // metadata; pointed payload validation is deliberately the caller's obligation.
 // Each cursor serializes its requests; independent cursors can run concurrently.
 type COWTraversal struct {
-	mu      sync.Mutex
-	view    *COWView
-	cursor  btree.StringCursor[cowValue]
-	closing bool
+	mu                               sync.Mutex
+	view                             *COWView
+	cursor                           btree.StringCursor[cowValue]
+	ordered                          cowOrderedTraversal
+	hasOrdered                       bool
+	pending, valid, rawSelected      bool
+	runRaw, runOrdered               bool
+	op                               COWTraversalOperation
+	rawOp, orderedOp                 COWTraversalOperation
+	direction                        int
+	key                              string
+	rawKey, orderedKey               string
+	phase                            uint8
+	compareOffset                    int
+	rawRecord, orderedRecord, record COWRecord
+	closing                          bool
 }
 
 // NewTraversal opens an UNPOSITIONED cursor. No height walk or cold seek runs:
@@ -41,6 +53,18 @@ func (r *COWRoot) NewTraversal(work *COWTraversalWork, extraBytes uint64) (*COWT
 	}
 	depth := cowMaximumHeight(r.Len())
 	stackBytes := btree.StringCursorBytes[cowValue](depth) - uint64(unsafe.Sizeof(btree.StringCursor[cowValue]{}))
+	orderedBytes := uint64(0)
+	orderedAllocation := uint64(0)
+	coreRecords := uint64(1)
+	if r.ordered != nil {
+		orderedBytes = cowOrderedTraversalBytes(r.ordered)
+		orderedAllocation = orderedBytes - uint64(unsafe.Sizeof(cowOrderedTraversal{}))
+		coreRecords += 3
+	}
+	if ^uint64(0)-stackBytes < orderedAllocation {
+		return nil, ErrCOWCapacity
+	}
+	stackBytes += orderedAllocation
 	extra, ok := cowAdd(cowAllocation(uint64(unsafe.Sizeof(COWTraversal{}))), cowAllocation(stackBytes))
 	if !ok {
 		return nil, ErrCOWCapacity
@@ -50,8 +74,8 @@ func (r *COWRoot) NewTraversal(work *COWTraversalWork, extraBytes uint64) (*COWT
 		return nil, ErrCOWCapacity
 	}
 	// Check core work fit before creating a public owner or allocating its stack.
-	coreBytes := btree.StringCursorBytes[cowValue](depth)
-	if work.Records >= work.RecordLimit || work.Bytes > work.ByteLimit || coreBytes > work.ByteLimit-work.Bytes {
+	coreBytes := btree.StringCursorBytes[cowValue](depth) + orderedBytes
+	if work.Records > work.RecordLimit || coreRecords > work.RecordLimit-work.Records || work.Bytes > work.ByteLimit || coreBytes > work.ByteLimit-work.Bytes {
 		return nil, btree.ErrWork
 	}
 	v, err := r.Acquire(extra)
@@ -62,7 +86,15 @@ func (r *COWRoot) NewTraversal(work *COWTraversalWork, extraBytes uint64) (*COWT
 	if !initialized {
 		panic("pre-admitted immutable cursor initialization refused")
 	}
-	return &COWTraversal{view: v, cursor: core}, nil
+	c := &COWTraversal{view: v, cursor: core}
+	if r.ordered != nil {
+		c.ordered, initialized = newCOWOrderedTraversal(r.ordered, work)
+		if !initialized {
+			panic("pre-admitted ordered cursor initialization refused")
+		}
+		c.hasOrdered = true
+	}
+	return c, nil
 }
 
 // Begin borrows an immutable seek key; retain it until completion or CloseStep.
@@ -80,6 +112,37 @@ func (c *COWTraversal) Begin(op COWTraversalOperation, key string, work *COWTrav
 	if work == nil {
 		return btree.ErrWork
 	}
+	if c.hasOrdered {
+		if c.pending {
+			return btree.ErrPending
+		}
+		if !work.Reserve(1, uint64(unsafe.Sizeof(*c))) {
+			return btree.ErrWork
+		}
+		c.runRaw, c.runOrdered = true, true
+		c.rawOp, c.orderedOp, c.rawKey, c.orderedKey = op, op, key, key
+		if (op == btree.Next || op == btree.Prev) && c.valid {
+			direction := 1
+			if op == btree.Prev {
+				direction = -1
+			}
+			if c.direction == direction {
+				c.runRaw, c.runOrdered = c.rawSelected, !c.rawSelected
+			} else {
+				seek := btree.SeekGE
+				if direction < 0 {
+					seek = btree.SeekLE
+				}
+				if c.rawSelected {
+					c.orderedOp, c.orderedKey = seek, c.record.Key
+				} else {
+					c.rawOp, c.rawKey = seek, c.record.Key
+				}
+			}
+		}
+		c.op, c.key, c.pending, c.valid, c.phase = op, key, true, false, 1
+		return nil
+	}
 	return c.cursor.Begin(op, key, work)
 }
 func (c *COWTraversal) Step(work *COWTraversalWork) (bool, error) {
@@ -91,6 +154,9 @@ func (c *COWTraversal) Step(work *COWTraversalWork) (bool, error) {
 	if work == nil {
 		return false, btree.ErrWork
 	}
+	if c.hasOrdered {
+		return c.stepMerged(work)
+	}
 	return c.cursor.Step(work)
 }
 func (c *COWTraversal) Record(work *COWTraversalWork) (COWRecord, bool, error) {
@@ -98,6 +164,15 @@ func (c *COWTraversal) Record(work *COWTraversalWork) (COWRecord, bool, error) {
 	defer c.mu.Unlock()
 	if c.view == nil || c.closing {
 		return COWRecord{}, false, ErrCOWClosed
+	}
+	if c.hasOrdered {
+		if c.pending || !c.valid {
+			return COWRecord{}, false, nil
+		}
+		if work == nil || !work.Reserve(1, uint64(unsafe.Sizeof(COWRecord{}))) {
+			return COWRecord{}, false, btree.ErrWork
+		}
+		return c.record, true, nil
 	}
 	if !c.cursor.Ready() {
 		return COWRecord{}, false, nil
@@ -126,6 +201,9 @@ func (c *COWTraversal) CloseStep(work *COWTraversalWork) (bool, COWRetirement, e
 	}
 	if work == nil {
 		return false, COWRetirement{}, btree.ErrWork
+	}
+	if c.hasOrdered {
+		return c.closeMerged(work)
 	}
 	if !c.closing {
 		if err := c.cursor.Begin(btree.Close, "", work); err != nil {

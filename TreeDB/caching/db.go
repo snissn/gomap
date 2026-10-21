@@ -12578,7 +12578,8 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		adaptive = true
 		modeStr = strings.TrimPrefix(modeStr, "adaptive:")
 	}
-	cowMode := modeStr == "cow_btree"
+	cowOrdered := modeStr == "cow_ordered"
+	cowMode := modeStr == "cow_btree" || cowOrdered
 	var cowLimits memtable.COWLimits
 	if cowMode {
 		var e error
@@ -12922,7 +12923,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		if !ok {
 			return nil, ErrCOWUnsupported
 		}
-		cowOwner, err = newCOWCache(provider, shardCount, cowLimits)
+		cowOwner, err = newCOWCacheMode(provider, shardCount, cowLimits, cowOrdered)
 		if cowOwner != nil {
 			cowOwner.txnOwner = opts.TransactionOwner
 		}
@@ -13236,7 +13237,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		journalCompression:                         opts.JournalCompression,
 		disableJournal:                             disableJournal,
 		externalCommandWAL:                         opts.ExternalCommandWAL,
-		conditionalTxnUnsupported:                  opts.TransactionOwner != nil && opts.ExternalCommandWAL && opts.MemtableMode != "cow_btree",
+		conditionalTxnUnsupported:                  opts.TransactionOwner != nil && opts.ExternalCommandWAL && opts.MemtableMode != "cow_btree" && opts.MemtableMode != "cow_ordered",
 		disableValueLog:                            false,
 		splitValueLog:                              true,
 		relaxedSync:                                opts.RelaxedSync,
@@ -32450,6 +32451,9 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.memtable_mode"] = memtableMode.String()
 	if db.cow != nil {
 		stats["treedb.cache.memtable_mode"] = "cow_btree"
+		if db.cow.ordered {
+			stats["treedb.cache.memtable_mode"] = "cow_ordered"
+		}
 	}
 	if memtableAdaptive {
 		stats["treedb.cache.memtable_mode_config"] = "adaptive"
