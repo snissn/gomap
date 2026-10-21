@@ -532,7 +532,7 @@ func (w *COWWriter) Prepare(entries []COWMutation, opts COWPrepareOptions) (*COW
 		ids: make([]COWResourceID, 0, opts.ResourceSlots), owners: make([]cowResourceOwner, 0, opts.ResourceSlots), maxEntries: w.private.Len() + len(entries)}
 	if w.ordered != nil {
 		p.ordered = w.ordered.fork()
-		p.ordered.applyFrom(w.ordered, entries)
+		p.ordered.applyValidatedFrom(w.ordered, entries)
 	}
 	routing := w.ordered.routing(entries)
 	for index, e := range entries {

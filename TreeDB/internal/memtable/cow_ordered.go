@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"strings"
 	"unsafe"
 
 	btree "github.com/snissn/gomap/TreeDB/internal/cowbtree"
@@ -115,25 +116,32 @@ type cowOrderedRouting struct {
 	entries        []COWMutation
 	firstQualified int
 	sorted         bool
+	metadataReady  bool
 }
 
-func (t *cowOrderedTree) routing(entries []COWMutation) cowOrderedRouting {
-	p := cowOrderedRouting{basis: t, entries: entries, firstQualified: len(entries), sorted: true}
-	if t == nil {
-		return p
+func (t *cowOrderedTree) routing(entries []COWMutation) *cowOrderedRouting {
+	return &cowOrderedRouting{basis: t, entries: entries}
+}
+
+// Typed mutations and existing members need no duplicate metadata. Compute it
+// only when a raw miss can inherit qualification from an earlier group member.
+func (p *cowOrderedRouting) prepareMetadata() {
+	if p.metadataReady {
+		return
 	}
-	for i := range entries {
-		if entries[i].MVCC && p.firstQualified == len(entries) {
+	p.firstQualified, p.sorted = len(p.entries), true
+	for i := range p.entries {
+		if p.entries[i].MVCC && p.firstQualified == len(p.entries) {
 			p.firstQualified = i
 		}
-		if i > 0 && bytes.Compare(entries[i-1].Key, entries[i].Key) > 0 {
+		if i > 0 && bytes.Compare(p.entries[i-1].Key, p.entries[i].Key) > 0 {
 			p.sorted = false
 		}
 	}
-	return p
+	p.metadataReady = true
 }
 
-func (p cowOrderedRouting) routes(index int) bool {
+func (p *cowOrderedRouting) routes(index int) bool {
 	if p.basis == nil {
 		return false
 	}
@@ -141,6 +149,7 @@ func (p cowOrderedRouting) routes(index int) bool {
 	if e.MVCC || p.basis.contains(e.Key) {
 		return true
 	}
+	p.prepareMetadata()
 	if index <= p.firstQualified {
 		return false
 	}
@@ -493,6 +502,59 @@ func cowOrderedDescriptor(value cowOrderedValue) *cowOrderedValue {
 	return copy
 }
 
+// cowOrderedEncodingCharge chooses one immutable key/metadata/payload backing
+// only when its rounded charge does not exceed the original two allocations.
+// Rounding is not additive: small pointer values can be cheaper separately.
+// Both estimate and the post-admission encoder use this exact length decision.
+func cowOrderedEncodingCharge(keyBytes, payloadBytes int) (charge uint64, packed, ok bool) {
+	if keyBytes < 0 {
+		return 0, false, false
+	}
+	valueBytes, ok := cowValueSize(payloadBytes)
+	if !ok {
+		return 0, false, false
+	}
+	separate, ok := cowAdd(cowAllocation(uint64(keyBytes)), cowAllocation(uint64(valueBytes)))
+	if !ok {
+		return 0, false, false
+	}
+	// Packing is optional. A combined int overflow retains the separately
+	// allocated representation rather than rejecting an otherwise valid shape.
+	if keyBytes <= int(^uint(0)>>1)-valueBytes {
+		combined := cowAllocation(uint64(keyBytes + valueBytes))
+		if combined <= separate {
+			return combined, true, true
+		}
+	}
+	return separate, false, true
+}
+
+// cowEncodeOrderedValue runs only after the exact group estimate is admitted.
+// Builder.String and its substrings retain one immutable owned backing in both
+// default and safe builds; no staged input or mutable builder escapes.
+func cowEncodeOrderedValue(e COWMutation) cowOrderedValue {
+	_, packed, ok := cowOrderedEncodingCharge(len(e.Key), len(e.Value))
+	if !ok {
+		panic("COW ordered encoding was not validated")
+	}
+	if !packed {
+		return cowOrderedValue{key: string(e.Key), value: cowEncodeValue(e)}
+	}
+	var metadata [cowValueMetadataBytes]byte
+	binary.LittleEndian.PutUint64(metadata[0:8], e.Ptr.Offset)
+	binary.LittleEndian.PutUint32(metadata[8:12], e.Ptr.Length)
+	binary.LittleEndian.PutUint32(metadata[12:16], e.Ptr.FileID)
+	binary.LittleEndian.PutUint64(metadata[16:24], uint64(e.Revision))
+	metadata[24] = e.Flags
+	var owned strings.Builder
+	owned.Grow(len(e.Key) + cowValueMetadataBytes + len(e.Value))
+	owned.Write(e.Key)
+	owned.Write(metadata[:])
+	owned.Write(e.Value)
+	encoded := owned.String()
+	return cowOrderedValue{key: encoded[:len(e.Key)], value: cowValue(encoded[len(e.Key):])}
+}
+
 func (h *cowOrderedHistory) set(ts uint64, value cowOrderedValue) bool {
 	if h.count == 0 {
 		h.maximum, h.latest, h.count = ts, value, 1
@@ -563,53 +625,90 @@ func (h *cowOrderedHistory) remove(ts uint64) bool {
 // Each touched history gets one private fork for the entire atomic group.
 // Newly allocated numeric trees and postimages are sealed before returning.
 func (t *cowOrderedTree) applyFrom(basis *cowOrderedTree, entries []COWMutation) {
+	t.apply(basis, entries, false)
+}
+
+// applyValidatedFrom is used only after estimate has fully validated every
+// qualified key and Timestamp. Unqualified overrides retain canonical parsing.
+func (t *cowOrderedTree) applyValidatedFrom(basis *cowOrderedTree, entries []COWMutation) {
+	t.apply(basis, entries, true)
+}
+
+func (t *cowOrderedTree) apply(basis *cowOrderedTree, entries []COWMutation, validated bool) {
 	routing := basis.routing(entries)
 	dirty := make([]*cowOrderedHistory, 0, len(entries))
 	for i, e := range entries {
-		prefix, ts, canonical := cowOrderedPrefix(e.Key)
+		var prefix []byte
+		var ts uint64
+		canonical := true
+		if validated && e.MVCC {
+			prefix, ts = e.Key[:len(e.Key)-mvcckey.TimestampSize], e.Timestamp
+		} else {
+			prefix, ts, canonical = cowOrderedPrefix(e.Key)
+		}
 		if !canonical {
 			continue // estimate rejects explicitly qualified malformed input
-		}
-		h, exists := cowOrderedPrimaryGet(t.keys, prefix)
-		member := false
-		if e.Remove && exists {
-			_, member = h.exact(ts)
 		}
 		if !routing.routes(i) {
 			continue
 		}
-		if e.Remove && !member {
+		if !e.Remove {
+			value := cowEncodeOrderedValue(e)
+			// Isolate the primary path before changing its history. Updating an
+			// existing logical key needs one descent, with no insertion splits
+			// and no second lookup of the same prefix. The callback never mutates
+			// the primary map; UpdateExisting installs its returned complete pair.
+			_, exists := t.keys.UpdateExisting(value.key[:len(prefix)], func(_ string, h *cowOrderedHistory) (string, *cowOrderedHistory) {
+				if !h.private {
+					h = h.fork()
+					dirty = append(dirty, h)
+				}
+				if !h.set(ts, value) {
+					t.versions++
+				}
+				if h.count > t.maxHistory {
+					t.maxHistory = h.count
+				}
+				return h.latest.key[:len(prefix)], h
+			})
+			if !exists {
+				h := &cowOrderedHistory{private: true}
+				dirty = append(dirty, h)
+				h.set(ts, value)
+				t.versions++
+				t.keys.Set(value.key[:len(prefix)], h)
+				if t.maxHistory == 0 {
+					t.maxHistory = 1
+				}
+			}
 			continue
 		}
+		h, exists := cowOrderedPrimaryGet(t.keys, prefix)
 		if !exists {
-			h = &cowOrderedHistory{private: true}
-			dirty = append(dirty, h)
-		} else if !h.private {
+			continue
+		}
+		if _, member := h.exact(ts); !member {
+			continue
+		}
+		if !h.private {
 			h = h.fork()
 			dirty = append(dirty, h)
 		}
-		if e.Remove {
-			numeric := h.versions
-			if h.remove(ts) {
-				t.versions--
-			}
-			if numeric != nil && h.versions == nil {
-				// Removing the penultimate version drops the private map. Its
-				// allocation receipt must survive subsequent singleton writes
-				// or a new promotion of this same history.
-				t.addHistoryNodeCharge(numeric.AllocationCharge())
-			}
-		} else {
-			value := cowOrderedValue{key: string(e.Key), value: cowEncodeValue(e)}
-			if !h.set(ts, value) {
-				t.versions++
-			}
+		numeric := h.versions
+		if h.remove(ts) {
+			t.versions--
+		}
+		if numeric != nil && h.versions == nil {
+			// Removing the penultimate version drops the private map. Its
+			// allocation receipt must survive subsequent singleton writes
+			// or a new promotion of this same history.
+			t.addHistoryNodeCharge(numeric.AllocationCharge())
 		}
 		if h.count == 0 {
 			cowOrderedPrimaryDelete(t.keys, prefix)
 		} else {
-			// Reuse the first retained physical key's prefix backing. Existing
-			// Set replacements preserve the old primary key string anyway.
+			// Set replaces the entire pair, keeping the primary prefix on a live
+			// latest version even when key and value share their owned backing.
 			t.keys.Set(h.latest.key[:len(h.latest.key)-mvcckey.TimestampSize], h)
 			if h.count > t.maxHistory {
 				t.maxHistory = h.count
@@ -619,7 +718,10 @@ func (t *cowOrderedTree) applyFrom(basis *cowOrderedTree, entries []COWMutation)
 	for _, h := range dirty {
 		if h.versions != nil {
 			t.addHistoryNodeCharge(h.versions.AllocationCharge())
-			h.versions = h.versions.ImmutableCopy()
+			// This history exclusively owns its private numeric header. Consume
+			// it now: no producer alias survives publication, and future writers
+			// get a fresh isolation identity through h.fork/ForkImmutable.
+			h.versions = h.versions.SealOwned()
 		}
 		h.private = false
 	}
@@ -693,8 +795,8 @@ func (t *cowOrderedTree) estimate(entries []COWMutation) (COWCharge, error) {
 			if e.Flags&node.FlagPointer != 0 && e.Flags&node.FlagTombstone != 0 {
 				return c, fmt.Errorf("COW entry has pointer and tombstone flags")
 			}
-			valueBytes, ok := cowValueSize(len(e.Value))
-			if !ok || !add(&c.Payload, cowAllocation(uint64(len(e.Key)))) || !add(&c.Payload, cowAllocation(uint64(valueBytes))) {
+			payloadCharge, _, ok := cowOrderedEncodingCharge(len(e.Key), len(e.Value))
+			if !ok || !add(&c.Payload, payloadCharge) {
 				return c, ErrCOWCapacity
 			}
 		}
@@ -843,7 +945,7 @@ func (t *cowOrderedTree) estimate(entries []COWMutation) (COWCharge, error) {
 			} else {
 				reserve = uint64(operations) * cowOrderedNodeReserve(height, false, true, maximum, historyPair)
 			}
-			if !add(&c.Nodes, reserve) || !add(&c.Wrappers, 2*uint64(headers)*cowAllocation(uint64(unsafe.Sizeof(btree.Map[uint64, *cowOrderedValue]{})))) {
+			if !add(&c.Nodes, reserve) || !add(&c.Wrappers, uint64(headers)*cowAllocation(uint64(unsafe.Sizeof(btree.Map[uint64, *cowOrderedValue]{})))) {
 				return c, ErrCOWCapacity
 			}
 		}

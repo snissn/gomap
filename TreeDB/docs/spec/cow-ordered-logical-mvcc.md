@@ -44,11 +44,15 @@ copied numeric nodes; the costs include descriptor objects and pointer loads.
 Neither lower native admission charge nor less node copying proves universally
 denser retained heap or faster reads.
 
-Each retained version owns one canonical physical key string. Its `cowValue`
-owns an immutable encoding of payload, full `ValuePtr`, flags and native
-`EntryRevision`. Path copies share those immutable string backings. The primary
-prefix aliases retained physical-key backing; it is not a second full physical
-index. Stable keys and values remain valid across cursor movement while their
+Each retained version owns a canonical physical key string and a `cowValue`
+encoding of payload, full `ValuePtr`, flags and native `EntryRevision`. The key
+and encoded value share one immutable backing when its rounded admission charge
+is no greater than two separate backings; small pointer/tombstone records can
+retain the cheaper separate layout. Estimation and encoding use the same length
+decision. Path copies share those immutable string backings. The primary prefix
+aliases a live latest version's physical-key backing, including after replacement
+or removal of the previous maximum; it is not a second full physical index.
+Stable keys and values remain valid across cursor movement while their
 root owner remains retained. Canonical encoding and ownership copies still
 exist: typed operands stage directly into the admitted native batch arena, then
 the prepared tree owns its retained strings.
@@ -63,6 +67,12 @@ same-batch replacement/removal and migration from an older raw member.
 `Store.CommitGroupAt` retains distinct `(logical key, application timestamp)`
 members of one atomic group and rejects duplicate pairs through its existing
 validation order. Each touched history is forked once within preparation.
+An existing primary PUT isolates its path and updates the pair in one descent;
+its callback is invoked once after the complete path is private. A missing PUT
+uses ordinary insertion. The private numeric map header is consumed when sealed,
+rather than copied a second time. No mutable producer retains that consumed
+header, and a later writer uses a fresh isolation identity. Erase/re-promotion
+retains receipts for discarded maps as well as the surviving sealed map.
 Application timestamps, native revisions, complete-publication sequence and WAL
 LSN remain separate. A read cut selects the actual immutable history root; an
 overwritten shared anchor cannot change an older cut.
@@ -137,9 +147,24 @@ Physical tombstones retain the established cross-source suppression/fallback.
 key buffer. Source seeks consume the pivot synchronously. This preserves
 seeking with `EntryView().Key`; owned results remain independent of subsequent
 movement. Reusable primary/history cursor stacks avoid allocation on warmed
-navigation after their admitted growth. Public snapshot/iterator construction,
-merged reseeks, native metadata decoding and requested owned results still cost
-work and memory. There is no new native visible-logical iterator API here.
+navigation after their admitted growth. Forward `VersionIterator.NextKey`
+skips remaining versions using at most eight physical cursor steps, then seeks
+to the exact current-key upper bound for a deeper history. A snapshot-bound
+source performs those bounded merged-cursor operations under one existing read
+guard; generic sources use the same bounded algorithm through ordinary iterator
+methods. It does not read
+discarded version values. The upper bound supports maximum codec keys and
+prefix-child keys without appending a synthetic logical NUL. The next selected
+version still passes the original options, timestamp ceiling, tombstone and
+storage-error handling; the same retained snapshot owns it. Reverse use returns
+`ErrNextKeyReverse`; ordinary `Next` and `Seek` retain their history semantics.
+Its counters describe physically inspected records, excluding records bypassed
+by a seek. If the next key starts above the original read timestamp, `NextKey`
+seeks directly to that key at the timestamp ceiling. This optimization is local
+to distinct-key movement; ordinary `Next`, constructor positioning and `Seek`
+retain their established behavior. Public snapshot/iterator construction,
+movement guards, merged reseeks, native metadata decoding and requested owned
+results still cost work and memory.
 
 Durable-basis reads reuse *existing verified* backend leaf-cache entries under
 the retained basis and its original read lock. Cache identity includes the
@@ -220,9 +245,11 @@ discarded by erase/demotion. After private preparation, reconciliation refunds
 only the unused **node** reservation. Payload, wrapper, temporary and resource
 charges keep their original rules.
 
-Descriptor objects have a separate pre-admitted wrapper envelope, including
-singleton promotion and mixed remove/re-promotion cycles. They are not hidden in
-the smaller numeric-pair receipt or refunded by node reconciliation.
+Descriptor objects and private numeric headers have separate pre-admitted
+wrapper envelopes, including singleton promotion and mixed remove/re-promotion
+cycles. Consuming a private numeric header requires one header per construction
+or fork, with no second sealing header. These allocations are not hidden in the
+smaller numeric-pair receipt or refunded by node reconciliation.
 
 A receipt is not new allocation authority. Exceeding the original envelope is
 a diagnostic refusal before WAL acceptance; the estimator must already cover
@@ -234,6 +261,17 @@ alone is insufficient.
 The conservative envelope can refuse preparation even when its eventual actual
 receipt would fit. Reconciliation does not bypass that original admission gate.
 
+The host's preliminary rollover prediction has a positive-only shortcut for
+fully qualified inline/tombstone PUTs in monotone logical-prefix order. It scans
+the operands once and uses conservative full-capacity structural bounds without
+membership or history-tree searches. It bypasses only that preliminary exact
+estimate when the bound proves the existing generation, mutable, retained,
+in-flight and total limits cannot request pressure or rollover. Unsupported
+operands, overflow, a loose bound or pressure use the original predictor. Final
+canonical preparation still performs the original exact admission and retains
+the sole preparation/publication authority. This bound is not an admission
+receipt and cannot refuse a write or spend budget.
+
 Finite source, generation, view, resource, pending and retirement limits can
 refuse further preparation when old cuts or accepted custody hold capacity.
 Durable spill and eventual last-owner release provide progress under the stated
@@ -243,6 +281,8 @@ No quota increase is part of this representation.
 Sources: [preallocation and node reconciliation](../../internal/memtable/cow_tree.go),
 [history estimator/receipts](../../internal/memtable/cow_ordered.go),
 [actual map allocation tracking](../../internal/cowbtree/map.go),
+[positive-only prediction bound](../../internal/memtable/cow_ordered_prediction.go),
+[host prediction frontiers](../../caching/cow_generation_prediction.go),
 [generation budget](../../internal/memtable/cow_budget.go).
 
 ## Activation and validation
@@ -264,6 +304,10 @@ final exact-source qualification record:
 | Prune, old cuts, interrupted prefix and reopen | [prune integration](../../mvcc/native_ordered_prune_test.go), [floor boundary](../../mvcc/native_ordered_prune_boundary_test.go) |
 | Exact bound/receipt and last-owner release | [allocation envelopes](../../internal/memtable/cow_ordered_lifecycle_test.go), [mixed history estimates](../../internal/memtable/cow_ordered_estimator_test.go), [discarded-map receipts](../../internal/memtable/cow_ordered_receipt_test.go), [active read/iterator lifetime](../../caching/cow_ordered_lifecycle_test.go) |
 | Immutable descriptor sharing, promotion and accounting | [descriptor controls](../../internal/memtable/cow_ordered_descriptor_test.go) |
+| Private header consumption and fused primary updates | [map ownership controls](../../internal/cowbtree/map_owned_update_test.go), [grouped old-cut/receipt controls](../../internal/memtable/cow_ordered_fused_test.go) |
+| Lazy routing, conditional backing and validated application | [local ownership and charge controls](../../internal/memtable/cow_ordered_local_optimization_test.go) |
+| Positive-only prediction and exact fallback | [structural upper-bound controls](../../internal/memtable/cow_ordered_prediction_test.go), [host frontier controls](../../caching/cow_generation_prediction_test.go) |
+| Distinct-key movement, future versions, masks and snapshot close | [MVCC next-key controls](../../mvcc/next_key_test.go), [coalesced read-guard controls](../../caching/snapshot_iterator_mvcc_test.go) |
 | Durable prefix/new tail, pressure, persistent pointers and GC | [paused handoff](../../caching/cow_ordered_prefix_pause_test.go), [reopen/ACK](../../cow_ordered_reopen_test.go), [rewrite/compact](../../cow_ordered_rewrite_test.go), [last-owner GC](../../cow_ordered_gc_progress_test.go) |
 
 The public comparison harness is `benchmarks/orderedmem_native`. Qualification

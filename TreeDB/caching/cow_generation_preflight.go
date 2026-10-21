@@ -39,6 +39,9 @@ func (b *Batch) cowGenerationRollover() (_ *cowRollover, pressure bool, _ error)
 		i := b.shardIdxs[index]
 		groups[i] = append(groups[i], m)
 	}
+	if b.cowPredictionCanSkipEstimate(groups) {
+		return nil, false, nil
+	}
 	max := c.budget.Limits().MaxGenerationBytes
 	rotate := false
 	var total uint64

@@ -153,6 +153,20 @@ func (tr *Map[K, V]) ImmutableCopy() *Map[K, V] {
 	return copy
 }
 
+// SealOwned consumes an exclusively owned private header and returns that same
+// header as an immutable read map. The caller must stop all mutation through
+// every alias of the header before publishing it. Shared opening nodes remain
+// valid: private mutations have already isolated every changed path.
+//
+// Unlike ImmutableCopy, this does not allocate a header, rotate isolation
+// identities, or reset the private allocation receipt. A later writer must use
+// ForkImmutable. Calling SealOwned on an already sealed map panics.
+func (tr *Map[K, V]) SealOwned() *Map[K, V] {
+	tr.assertMutable()
+	tr.sealed = true
+	return tr
+}
+
 // ForkImmutable creates a private mutation header without changing the sealed
 // original. Its fresh isolation identity forces copies of every touched node.
 // The caller must hold the original node/value ownership until the fork ends.
@@ -259,6 +273,59 @@ func (tr *Map[K, V]) init(degree int) {
 func (tr *Map[K, V]) Set(key K, value V) (V, bool) {
 	previous, replaced, _, _ := tr.SetWithWork(key, value, nil)
 	return previous, replaced
+}
+
+// UpdateExisting replaces an existing key/value pair with one callback and one
+// search. A missing key leaves the map and its allocation receipt unchanged and
+// does not invoke update. The callback receives the private path's current pair
+// and must return an equal key; its returned key backing replaces the old key
+// backing just as Set does. An unequal replacement key panics before changing
+// the logical pair.
+//
+// The callback must not mutate or reenter this map. All path copies precede its
+// invocation, so it is never retried by a split or a second search. Node copies
+// use the ordinary isolation and allocation receipt rules. Callers must reserve
+// a proven bound before mutation; allocations inside opaque value-copy or
+// update callbacks are outside the node allocation receipt.
+func (tr *Map[K, V]) UpdateExisting(key K, update func(K, V) (K, V)) (previous V, found bool) {
+	tr.assertMutable()
+	if tr.root == nil {
+		return tr.empty.value, false
+	}
+	root, slot := tr.nodeUpdateExisting(tr.root, key)
+	if slot == nil {
+		return tr.empty.value, false
+	}
+	tr.root = root
+	previous = slot.value
+	replacementKey, replacementValue := update(slot.key, slot.value)
+	if replacementKey != slot.key {
+		panic("cowbtree: update must preserve key")
+	}
+	*slot = mapPair[K, V]{key: replacementKey, value: replacementValue}
+	return previous, true
+}
+
+// Descend without copying first: a miss must leave even the private structural
+// state untouched. Once a slot is found, isolate its path bottom-up. The slot's
+// node is already private when its ancestors are copied, so its address remains
+// valid and the callback can run only after the whole path is private.
+func (tr *Map[K, V]) nodeUpdateExisting(n *mapNode[K, V], key K) (*mapNode[K, V], *mapPair[K, V]) {
+	i, found := tr.search(n, key)
+	if found {
+		n = tr.isoLoad(&n, true)
+		return n, &n.items[i]
+	}
+	if n.leaf() {
+		return n, nil
+	}
+	child, slot := tr.nodeUpdateExisting((*n.children)[i], key)
+	if slot == nil {
+		return n, nil
+	}
+	n = tr.isoLoad(&n, true)
+	(*n.children)[i] = child
+	return n, slot
 }
 
 // SetWithWork uses Set's original mutation engine with reserve-before-effect
