@@ -41,13 +41,15 @@ type publicEngine interface {
 }
 
 type route struct {
-	Engine             string            `json:"engine"`
-	ResolvedProfile    string            `json:"resolved_profile"`
-	MemtableMode       string            `json:"memtable_mode,omitempty"`
-	LogicalMVCC        bool              `json:"logical_mvcc"`
-	Acknowledgment     string            `json:"acknowledgment"`
-	PersistenceBarrier string            `json:"persistence_barrier"`
-	Options            map[string]string `json:"options"`
+	Engine                string            `json:"engine"`
+	ResolvedProfile       string            `json:"resolved_profile"`
+	RequestedMemtableMode string            `json:"requested_memtable_mode"`
+	MemtableMode          string            `json:"memtable_mode,omitempty"`
+	MemtableModeConfig    string            `json:"memtable_mode_config,omitempty"`
+	LogicalMVCC           bool              `json:"logical_mvcc"`
+	Acknowledgment        string            `json:"acknowledgment"`
+	PersistenceBarrier    string            `json:"persistence_barrier"`
+	Options               map[string]string `json:"options"`
 }
 
 func openEngine(c config) (publicEngine, route, error) {
@@ -92,7 +94,8 @@ func openEngine(c config) (publicEngine, route, error) {
 	}
 	stats := db.Stats()
 	r := route{Engine: "treedb", ResolvedProfile: string(db.ResolvedProfile()),
-		MemtableMode: stats["treedb.cache.memtable_mode"], Acknowledgment: c.Profile,
+		RequestedMemtableMode: c.MemtableMode, MemtableMode: stats["treedb.cache.memtable_mode"],
+		MemtableModeConfig: stats["treedb.cache.memtable_mode_config"], Acknowledgment: c.Profile,
 		PersistenceBarrier: "TreeDB.Checkpoint (sealed complete root covering captured frontier)",
 		Options: map[string]string{"flush_threshold": strconv.FormatInt(opts.FlushThreshold, 10),
 			"pointer_threshold": strconv.Itoa(opts.ValueLog.PointerThreshold), "iterator_debug": "false",
@@ -100,15 +103,31 @@ func openEngine(c config) (publicEngine, route, error) {
 	if capability, ok := any(db).(interface{ SupportsLogicalMVCC() bool }); ok {
 		r.LogicalMVCC = capability.SupportsLogicalMVCC()
 	}
-	if r.ResolvedProfile != c.Profile || r.MemtableMode != c.MemtableMode || (c.MemtableMode == "cow_ordered" && !r.LogicalMVCC) {
+	if err := validateTreeRoute(c, r); err != nil {
 		_ = db.Close()
-		return nil, r, fmt.Errorf("wrong public route: requested %s/%s, observed %+v", c.Profile, c.MemtableMode, r)
+		return nil, r, err
 	}
 	mode := mvcc.CommitRelaxed
 	if c.Profile == "command_wal_durable" {
 		mode = mvcc.CommitDurable
 	}
 	return &treeEngine{db: db, store: mvcc.New(db), mode: mode}, r, nil
+}
+
+func validateTreeRoute(c config, r route) error {
+	validMode := r.MemtableMode == c.MemtableMode && r.MemtableModeConfig == "fixed"
+	if c.MemtableMode == "adaptive" {
+		// This exact selector starts append_only and can choose hash_sorted or
+		// btree. Keep the public Stats value; adaptive is a selector, not a
+		// physical representation. Explicit adaptive:skiplist is not this arm.
+		validMode = r.MemtableModeConfig == "adaptive" &&
+			(r.MemtableMode == "append_only" || r.MemtableMode == "hash_sorted" || r.MemtableMode == "btree")
+	}
+	if r.Engine != "treedb" || r.ResolvedProfile != c.Profile || r.RequestedMemtableMode != c.MemtableMode ||
+		!validMode || (c.MemtableMode == "cow_ordered" && !r.LogicalMVCC) {
+		return fmt.Errorf("wrong public route: requested %s/%s, observed %+v", c.Profile, c.MemtableMode, r)
+	}
+	return nil
 }
 
 type treeEngine struct {

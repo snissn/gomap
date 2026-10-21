@@ -16,6 +16,13 @@ The optional capability assertion lets the same harness compile on the original
 baseline. Full Badger uses the root module's v4.8.0 dependency; this is not the
 old raw skiplist control.
 
+The route records the requested selector separately from the actual public
+`memtable_mode` and `memtable_mode_config` stats. Exact `adaptive` starts as
+`append_only` and may choose `hash_sorted` or `btree`; those actual modes remain
+visible and may differ after reopen. Fixed COW selectors must report their exact
+mode and fixed configuration. An adaptive resolution is never accepted as
+`cow_ordered` activation.
+
 Immediately after the first small seed commit, every arm saves its stats. The
 candidate must expose positive ordered logical-key and physical-version counts,
 before later flushing or checkpoints can drain the generation. Counts sum roots

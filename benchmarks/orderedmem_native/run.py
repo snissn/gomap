@@ -28,6 +28,9 @@ RUN_SCHEMA = "orderedmem-native-run-v1"
 RESULT_SCHEMA = "orderedmem-native-v1"
 PROFILES = ("no_wal_fast", "command_wal_relaxed", "command_wal_durable")
 ARMS = ("baseline", "cow-baseline", "candidate", "badger")
+# Exact selector "adaptive" opens append_only and its production chooser can
+# subsequently select btree/hash_sorted (TreeDB/caching/db.go).
+ADAPTIVE_MEMTABLE_MODES = frozenset({"append_only", "hash_sorted", "btree"})
 TEST_ARGS = ("-test.run=^TestOrderedMemNativeMeasurement$", "-test.count=1", "-test.timeout=30m")
 ENV_WHITELIST = (
     "PATH", "TMPDIR", "GOMAXPROCS", "GOGC", "GOMEMLIMIT", "GODEBUG",
@@ -234,6 +237,31 @@ def source_inventory(label: str, root: Path, claimed: str | None) -> dict[str, A
             "scope": "Go files, module/workspace files and orderedmem_native harness; inventory is not compiler-input attestation"}
 
 
+def memtable_route_errors(config: dict[str, Any], route: dict[str, Any]) -> list[str]:
+    errors = []
+    requested = config.get("memtable_mode", "")
+    if route.get("requested_memtable_mode") != requested:
+        errors.append("requested_memtable_mode differs from config")
+    actual = route.get("memtable_mode", "")
+    if config.get("engine") == "treedb" and requested == "adaptive":
+        if actual not in ADAPTIVE_MEMTABLE_MODES:
+            errors.append("memtable_mode is not a production adaptive resolution")
+        expected_config = "adaptive"
+    else:
+        if actual != requested:
+            errors.append("memtable_mode differs from explicit selector")
+        expected_config = "fixed" if config.get("engine") == "treedb" else ""
+    if route.get("memtable_mode_config", "") != expected_config:
+        errors.append("memtable_mode_config differs from requested routing")
+    return errors
+
+
+def reopened_route_matches(config: dict[str, Any], initial: dict[str, Any], reopened: dict[str, Any]) -> bool:
+    ignored = {"memtable_mode"} if config.get("engine") == "treedb" and config.get("memtable_mode") == "adaptive" else set()
+    return {key: value for key, value in initial.items() if key not in ignored} == {
+        key: value for key, value in reopened.items() if key not in ignored}
+
+
 def result_errors(result: Any, config: dict[str, Any]) -> list[str]:
     errors = []
     if not isinstance(result, dict):
@@ -263,11 +291,10 @@ def result_errors(result: Any, config: dict[str, Any]) -> list[str]:
         for key, value in expected_route.items():
             if route.get(key) != value:
                 errors.append(f"{field} mismatch: {key}")
-        if route.get("memtable_mode", "") != config.get("memtable_mode", ""):
-            errors.append(field + " mismatch: memtable_mode")
+        errors.extend(field + ": " + error for error in memtable_route_errors(config, route))
         if config.get("memtable_mode") == "cow_ordered" and route.get("logical_mvcc") is not True:
             errors.append(field + " does not confirm candidate logical_mvcc")
-    if isinstance(result.get("route"), dict) and isinstance(result.get("reopened_route"), dict) and result["route"] != result["reopened_route"]:
+    if isinstance(result.get("route"), dict) and isinstance(result.get("reopened_route"), dict) and not reopened_route_matches(config, result["route"], result["reopened_route"]):
         errors.append("reopened route differs from initial route")
     if not isinstance(result.get("verification"), dict):
         errors.append("missing verification object")

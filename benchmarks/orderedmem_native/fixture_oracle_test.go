@@ -121,3 +121,43 @@ func TestHistoryReadCoverageAcrossCutoffs(t *testing.T) {
 		}
 	}
 }
+
+func TestRequestedSelectorAndActualRoute(t *testing.T) {
+	c := config{Profile: "command_wal_relaxed", MemtableMode: "adaptive"}
+	r := route{Engine: "treedb", ResolvedProfile: c.Profile, RequestedMemtableMode: "adaptive", MemtableModeConfig: "adaptive"}
+	for _, mode := range []string{"append_only", "hash_sorted", "btree"} {
+		r.MemtableMode = mode
+		if err := validateTreeRoute(c, r); err != nil {
+			t.Fatalf("legitimate adaptive mode %s: %v", mode, err)
+		}
+	}
+	for _, mode := range []string{"adaptive", "skiplist", "cow_btree", "cow_ordered", ""} {
+		r.MemtableMode = mode
+		if validateTreeRoute(c, r) == nil {
+			t.Fatalf("accepted unsupported actual adaptive mode %q", mode)
+		}
+	}
+	r.MemtableMode, r.MemtableModeConfig = "append_only", "fixed"
+	if validateTreeRoute(c, r) == nil {
+		t.Fatal("accepted fixed mode for requested adaptive")
+	}
+	c.MemtableMode = "cow_ordered"
+	r.RequestedMemtableMode, r.MemtableMode, r.LogicalMVCC = "cow_ordered", "cow_ordered", true
+	if err := validateTreeRoute(c, r); err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"append_only", "btree", "cow_btree"} {
+		r.MemtableMode = mode
+		if validateTreeRoute(c, r) == nil {
+			t.Fatalf("accepted %s for requested cow_ordered", mode)
+		}
+	}
+	r.MemtableMode, r.LogicalMVCC = "cow_ordered", false
+	if validateTreeRoute(c, r) == nil {
+		t.Fatal("accepted cow_ordered without logical capability")
+	}
+	r.LogicalMVCC, r.RequestedMemtableMode = true, "cow_btree"
+	if validateTreeRoute(c, r) == nil {
+		t.Fatal("accepted mismatched requested selector")
+	}
+}
