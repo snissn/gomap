@@ -74,6 +74,7 @@ type VersionIterator struct {
 	snapshot treedb.Snapshot
 	options  VersionIteratorOptions
 	keyBuf   []byte
+	seekBuf  []byte
 	current  Version
 	stats    VersionIteratorStats
 	err      error
@@ -212,11 +213,12 @@ func (it *VersionIterator) Seek(logical []byte, timestamp uint64) {
 	if it == nil || it.closed || it.err != nil || it.raw == nil {
 		return
 	}
-	physical, err := mvcckey.Encode(logical, timestamp)
+	physical, err := mvcckey.Append(it.seekBuf[:0], logical, timestamp)
 	if err != nil {
 		it.err = fmt.Errorf("%w: %w", ErrInvalidKey, err)
 		return
 	}
+	it.seekBuf = physical
 	it.raw.Seek(physical)
 	it.advance()
 }
@@ -248,6 +250,7 @@ func (it *VersionIterator) Close() error {
 	it.closed = true
 	it.current = Version{}
 	it.keyBuf = nil
+	it.seekBuf = nil
 	var rawErr, snapshotErr error
 	if it.raw != nil {
 		rawErr = storageError("close version iterator", it.raw.Close())

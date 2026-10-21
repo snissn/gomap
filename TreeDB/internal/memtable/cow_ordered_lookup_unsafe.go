@@ -21,3 +21,16 @@ func cowOrderedPrimaryDescend(tree *btree.Map[string, *cowOrderedHistory], key [
 func cowOrderedPrimaryDelete(tree *btree.Map[string, *cowOrderedHistory], key []byte) {
 	tree.Delete(bytesToStringNoCopy(key))
 }
+
+// Seek does not retain its pivot. Rebinding clears its old endpoint flags while
+// preserving the stack backing already admitted for this immutable cursor.
+func cowOrderedPrimaryCursorFloor(cursor *btree.MapIter[string, *cowOrderedHistory], tree *btree.Map[string, *cowOrderedHistory], key []byte) bool {
+	cursor.ResetTree(tree)
+	if !cursor.Seek(bytesToStringNoCopy(key)) {
+		return cursor.Last()
+	}
+	if cowKeyCompare(cursor.Key(), key) > 0 {
+		return cursor.Prev()
+	}
+	return true
+}

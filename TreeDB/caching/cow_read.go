@@ -9,6 +9,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/merging"
+	"github.com/snissn/gomap/TreeDB/internal/mvcckey"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/tree"
@@ -53,6 +54,15 @@ func (s *Snapshot) cowSeekGE(start, end []byte) (key, value []byte, found bool, 
 	if empty {
 		var best pointSuccessorCandidate
 		queue := s.rootIterator.immutables
+		// A canonical exact-version range has the same shard affinity for
+		// every valid or malformed timestamp suffix. Use that shard's owned
+		// cut projection instead of seeking all unrelated sibling roots.
+		if _, exact := mvcckey.ExactVersionRange(start, end); exact && s.db != nil &&
+			!memtableViewHasRangeSpans(s.view) && len(s.rootPointShards) == len(s.cowCut.shards) {
+			if shard := s.db.shardIndex(start); shard >= 0 && shard < len(s.rootPointShards) {
+				queue = s.rootPointShards[shard].immutables
+			}
+		}
 		for i := len(queue) - 1; i >= 0; i-- {
 			if _, ok := queue[i].(memtable.SuccessorTable); !ok {
 				empty = false // Unknown sources require the existing merge.
@@ -66,6 +76,13 @@ func (s *Snapshot) cowSeekGE(start, end []byte) (key, value []byte, found bool, 
 				return nil, nil, false, nil
 			}
 			if best.flags&node.FlagTombstone == 0 {
+				// The original cut already owns this exact winning inline value.
+				// Materialize it directly instead of resolving its physical key a
+				// second time through the point-shard domains. Pointer values still
+				// use the original workspace and dependency materialization path.
+				if best.flags&node.FlagPointer == 0 {
+					return append([]byte(nil), best.key...), append([]byte(nil), best.value...), true, nil
+				}
 				s.cowReadMu.Lock()
 				borrowed, _, readErr := s.cowValueLocked(best.key)
 				if readErr == nil {

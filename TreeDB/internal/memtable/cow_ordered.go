@@ -882,32 +882,86 @@ func (c *cowOrderedCursor) seekGE(key []byte) bool {
 	if c.tree == nil {
 		return false
 	}
-	r, ok := c.tree.seekGE(key, nil)
-	if !ok {
-		c.valid = false
-		return false
+	// The primary floor is the only prefix whose versions can straddle key.
+	// Retain that search's stack instead of looking up its resulting record a
+	// second time. At most one adjacent primary key can supply the fallback.
+	if cowOrderedPrimaryCursorFloor(&c.primary, c.tree.keys, key) {
+		c.h = c.primary.Value()
+		encoded, suffixLen, same := cowOrderedSuffix(c.primary.Key(), key)
+		if same && (suffixLen <= mvcckey.TimestampSize || encoded != ^uint64(0)) {
+			if suffixLen > mvcckey.TimestampSize {
+				encoded++
+			}
+			if c.historyFloor(^encoded) {
+				c.valid = true
+				return true
+			}
+		}
+		c.valid = c.primary.Next()
+	} else {
+		c.valid = c.primary.First()
 	}
-	return c.position(r)
+	return c.valid && c.enter(false)
 }
 
 func (c *cowOrderedCursor) seekLE(key []byte) bool {
 	if c.tree == nil {
 		return false
 	}
-	// This operation always has an inclusive key, even when it is empty.
-	// Unbounded reverse positioning is the distinct last operation.
-	if key == nil {
-		key = []byte{}
-	}
-	if r, ok := c.tree.get(key); ok {
-		return c.position(r)
-	}
-	r, ok := c.tree.seekLT(nil, key)
-	if !ok {
-		c.valid = false
+	// Nil is the finite empty physical bound here; last is the distinct
+	// unbounded reverse operation. The numeric order is opposite the physical
+	// suffix order, so this direction needs a timestamp ceiling search.
+	c.valid = cowOrderedPrimaryCursorFloor(&c.primary, c.tree.keys, key)
+	if !c.valid {
 		return false
 	}
-	return c.position(r)
+	c.h = c.primary.Value()
+	encoded, suffixLen, same := cowOrderedSuffix(c.primary.Key(), key)
+	if !same {
+		return c.enter(true)
+	}
+	// A shorter suffix sorts before its zero-padded eight-byte extension;
+	// an equal or longer suffix admits that complete eight-byte version.
+	if suffixLen >= mvcckey.TimestampSize || encoded != 0 {
+		if suffixLen < mvcckey.TimestampSize {
+			encoded--
+		}
+		c.history.ResetTree(c.h.versions)
+		if c.h.versions == nil {
+			if c.h.maximum >= ^encoded {
+				c.value = c.h.latest
+				return true
+			}
+		} else if c.history.Seek(^encoded) {
+			c.value = c.history.Value()
+			return true
+		}
+	}
+	c.valid = c.primary.Prev()
+	return c.valid && c.enter(true)
+}
+
+// historyFloor positions the reusable numeric cursor at the greatest timestamp
+// <= timestamp. The caller has already retained the owning primary history.
+func (c *cowOrderedCursor) historyFloor(timestamp uint64) bool {
+	c.history.ResetTree(c.h.versions)
+	if c.h.versions == nil {
+		if c.h.maximum > timestamp {
+			return false
+		}
+		c.value = c.h.latest
+		return true
+	}
+	found := c.history.Seek(timestamp)
+	if !found {
+		found = c.history.Last()
+	} else if c.history.Key() > timestamp {
+		found = c.history.Prev()
+	}
+	if found {
+		c.value = c.history.Value()
+	}
+	return found
 }
 
 func (c *cowOrderedCursor) enter(last bool) bool {

@@ -58,3 +58,21 @@ func cowOrderedPrimaryDelete(tree *btree.Map[string, *cowOrderedHistory], key []
 		tree.Delete(owned)
 	}
 }
+
+// The rank lookup supplies an existing owned pivot, avoiding temporary string
+// allocation for arbitrary long byte bounds. The resulting iterator keeps the
+// original admitted stack and is positioned once for subsequent movement.
+func cowOrderedPrimaryCursorFloor(cursor *btree.MapIter[string, *cowOrderedHistory], tree *btree.Map[string, *cowOrderedHistory], key []byte) bool {
+	cursor.ResetTree(tree)
+	owned, _, found := cowOrderedPrimaryLowerBound(tree, key)
+	if !found {
+		return cursor.Last()
+	}
+	if !cursor.Seek(owned) {
+		return false
+	}
+	if cowKeyCompare(owned, key) > 0 {
+		return cursor.Prev()
+	}
+	return true
+}
