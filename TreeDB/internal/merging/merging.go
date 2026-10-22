@@ -24,6 +24,38 @@ type Iterator interface {
 	Domain() (start, end []byte)
 }
 
+// ForwardSeeker optionally reuses aligned forward source positions. Callers
+// still get ordinary Seek semantics; unsupported or unsafe states fall back.
+type ForwardSeeker interface {
+	SeekForward(key []byte)
+}
+
+// A source-private head operation combines eligibility, movement and the
+// resulting borrowed key under the source's existing synchronization.
+type forwardHeadSeeker interface {
+	SeekForwardHead(key []byte) (head []byte, valid bool, err error)
+}
+
+func iteratorHead(iter iterator.UnsafeIterator) (key []byte, valid bool) {
+	valid = iter.Valid()
+	if valid {
+		key = iter.UnsafeKey()
+	}
+	return key, valid
+}
+
+func seekForwardHead(iter iterator.UnsafeIterator, key []byte) ([]byte, bool, error) {
+	if source, ok := iter.(forwardHeadSeeker); ok {
+		return source.SeekForwardHead(key)
+	}
+	iter.Seek(key)
+	if err := iter.Error(); err != nil {
+		return nil, false, err
+	}
+	head, valid := iteratorHead(iter)
+	return head, valid, nil
+}
+
 // IteratorSource wraps an internal UnsafeIterator with a priority level.
 type IteratorSource struct {
 	Iter     iterator.UnsafeIterator
@@ -146,14 +178,15 @@ func (h *iteratorHeap) down(i0, n int) bool {
 
 // MergingIterator merges multiple sorted iterators.
 type MergingIterator struct {
-	sources []IteratorSource
-	h       iteratorHeap
-	cur     heapItem
-	hasCur  bool
-	valid   bool
-	err     error
-	start   []byte
-	end     []byte
+	sources        []IteratorSource
+	h              iteratorHeap
+	cur            heapItem
+	hasCur         bool
+	valid          bool
+	forwardAligned bool
+	err            error
+	start          []byte
+	end            []byte
 }
 
 // ForwardAllocationSizes describes the raw retained wrapper and heap sizes of
@@ -210,6 +243,7 @@ func (mi *MergingIterator) rebuildHeap() {
 // Seek positions the iterator at the first visible key greater than or equal
 // to key, restricted to the iterator's original [start, end) domain.
 func (mi *MergingIterator) Seek(key []byte) {
+	mi.forwardAligned = false
 	mi.err = nil
 	mi.hasCur = false
 	mi.valid = false
@@ -225,6 +259,34 @@ func (mi *MergingIterator) Seek(key []byte) {
 		return
 	}
 	mi.rebuildHeap()
+	mi.advance()
+	mi.forwardAligned = mi.err == nil
+}
+
+// SeekForward retains an already-ahead source only after a complete Seek has
+// aligned every original child. Constructor positions alone prove nothing.
+func (mi *MergingIterator) SeekForward(key []byte) {
+	if !mi.forwardAligned || !mi.valid || mi.err != nil || bytes.Compare(key, mi.cur.key) <= 0 || sourceIteratorErrors(mi.sources) != nil {
+		mi.Seek(key)
+		return
+	}
+	mi.hasCur, mi.valid = false, false
+	mi.h = mi.h[:0]
+	for _, src := range mi.sources {
+		head, valid, err := seekForwardHead(src.Iter, key)
+		mi.err = joinIteratorError(mi.err, err)
+		if valid {
+			mi.h = append(mi.h, heapItem{iter: src.Iter, priority: src.Priority, key: head})
+		}
+	}
+	if mi.err != nil {
+		mi.h = mi.h[:0]
+		mi.forwardAligned = false
+		return
+	}
+	for i := len(mi.h)/2 - 1; i >= 0; i-- {
+		mi.h.down(i, len(mi.h))
+	}
 	mi.advance()
 }
 

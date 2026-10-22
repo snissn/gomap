@@ -1,6 +1,7 @@
 package caching
 
 import (
+	"bytes"
 	"errors"
 	"sync"
 	"unsafe"
@@ -168,6 +169,27 @@ func (it *cowIterator) Seek(key []byte) {
 		return
 	}
 	it.load()
+}
+
+// SeekForwardHead is used only by an aligned forward merger. Its immutable
+// record owns the borrowed key until movement/Close; no value is materialized.
+func (it *cowIterator) SeekForwardHead(key []byte) ([]byte, bool, error) {
+	it.mu.Lock()
+	defer it.mu.Unlock()
+	if it.cursor == nil || it.err != nil {
+		return nil, false, it.err
+	}
+	if !it.valid || bytes.Compare(cowBytes(it.record.Key), key) < 0 {
+		if err := it.cursor.Seek(key); err != nil {
+			it.err, it.valid = err, false
+		} else {
+			it.load()
+		}
+	}
+	if !it.valid || it.err != nil {
+		return nil, false, it.err
+	}
+	return cowBytes(it.record.Key), true, nil
 }
 func (it *cowIterator) UnsafeKey() []byte {
 	it.mu.Lock()

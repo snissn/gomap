@@ -151,13 +151,28 @@ func (it *snapshotBoundIterator) Seek(key []byte) {
 	it.inner.Seek(key)
 }
 
+// SeekForward keeps the complete composite movement under the original pin.
+// Legacy/reverse sources without the optional capability retain full Seek.
+func (it *snapshotBoundIterator) SeekForward(key []byte) {
+	if !it.begin() {
+		return
+	}
+	defer it.endOperation()
+	if it.cow {
+		seekForwardIterator(it.inner, key)
+	} else {
+		it.inner.Seek(key)
+	}
+}
+
 // AdvanceMVCCKey advances a forward MVCC scan past its current logical key.
 // upper is the independent, canonical exclusive bound of that key's versions.
 // It is borrowed only for this call. The caller must not use this operation on
 // a reverse iterator. Like Next and Seek, it invalidates borrowed entry views.
 //
-// At most eight visible physical records are stepped before an ordinary Seek
-// to upper. Inspected keys below upper are validated without reading values;
+// At most eight visible physical records are stepped before seeking to upper.
+// A capable COW composite may retain aligned sources already beyond that bound.
+// Inspected keys below upper are validated without reading values;
 // visited includes a malformed key, while skipped counts only validated keys.
 // The first record at or above upper is neither validated nor counted here.
 // Negative limits behave as zero; a zero limit seeks directly to upper.
@@ -195,7 +210,11 @@ func (it *snapshotBoundIterator) AdvanceMVCCKey(upper []byte, limit int) (visite
 		}
 		skipped++
 	}
-	it.inner.Seek(upper)
+	if it.cow {
+		seekForwardIterator(it.inner, upper)
+	} else {
+		it.inner.Seek(upper)
+	}
 	return visited, skipped, nil, it.inner.Error()
 }
 

@@ -293,6 +293,17 @@ Sources: [preallocation and node reconciliation](../../internal/memtable/cow_tre
 [host prediction frontiers](../../caching/cow_generation_prediction.go),
 [generation budget](../../internal/memtable/cow_budget.go).
 
+At the direct future-timestamp seek and the unchanged eight-step current-group
+upper-bound fallback, capable COW composites may retain child cursors already at
+or beyond the target. A successful full common-bound seek must first establish
+alignment; constructor positions alone are insufficient. Fresh, invalid,
+nonforward or errored states retain full seek behavior. Retained COW child heads
+are checked under their existing mutex, and the original merge selector still
+applies source priority, physical masks and bounds. Generic and durable children
+lacking the optional head operation continue to seek normally. The movement uses
+the same snapshot read pin, invalidates the selected-value cache, and does not read
+discarded values or step through future histories.
+
 ## Activation and validation
 
 `SupportsLogicalMVCC` reports the actual optional producer. Stats
@@ -316,6 +327,7 @@ final exact-source qualification record:
 | Lazy routing, conditional backing and validated application | [local ownership and charge controls](../../internal/memtable/cow_ordered_local_optimization_test.go) |
 | Positive-only prediction and exact fallback | [structural upper-bound controls](../../internal/memtable/cow_ordered_prediction_test.go), [host frontier controls](../../caching/cow_generation_prediction_test.go) |
 | Distinct-key movement, future versions, masks and snapshot close | [MVCC next-key controls](../../mvcc/next_key_test.go), [coalesced read-guard controls](../../caching/snapshot_iterator_mvcc_test.go) |
+| Aligned forward seeks, mixed-source priority and retained-cut cache lifetime | [merge controls](../../internal/merging/forward_seek_test.go), [host lifetime controls](../../caching/cow_forward_seek_test.go), [deep future-seek controls](../../mvcc/forward_seek_test.go) |
 | Durable prefix/new tail, pressure, persistent pointers and GC | [paused handoff](../../caching/cow_ordered_prefix_pause_test.go), [reopen/ACK](../../cow_ordered_reopen_test.go), [rewrite/compact](../../cow_ordered_rewrite_test.go), [last-owner GC](../../cow_ordered_gc_progress_test.go) |
 
 The public comparison harness is `benchmarks/orderedmem_native`. Qualification

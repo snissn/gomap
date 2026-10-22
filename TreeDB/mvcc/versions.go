@@ -217,6 +217,10 @@ type mvccKeyAdvancer interface {
 	AdvanceMVCCKey(upper []byte, limit int) (visited, skipped uint64, malformed, storage error)
 }
 
+type mvccForwardSeeker interface {
+	SeekForward(key []byte)
+}
+
 // NextKey skips the remaining versions of the current logical key and selects
 // the next key's first version admitted by the iterator's original options.
 // Logical tombstones remain visible; callers must filter them after selection.
@@ -367,7 +371,11 @@ func (it *VersionIterator) advanceWithKeySkip(skipFuture bool) {
 				physical, err := mvcckey.Append(it.seekBuf[:0], logical, it.options.ReadTimestamp)
 				if err == nil {
 					it.seekBuf = physical
-					it.raw.Seek(physical)
+					if forward, ok := it.raw.(mvccForwardSeeker); ok {
+						forward.SeekForward(physical)
+					} else {
+						it.raw.Seek(physical)
+					}
 					continue
 				}
 			}

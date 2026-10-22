@@ -225,6 +225,19 @@ func (it *cowMergeIterator) Seek(key []byte) {
 	it.value = nil
 	it.cached = false
 }
+func (it *cowMergeIterator) SeekForward(key []byte) {
+	seekForwardIterator(it.Iterator, key)
+	it.value = nil
+	it.cached = false
+}
+
+func seekForwardIterator(iter merging.Iterator, key []byte) {
+	if forward, ok := iter.(merging.ForwardSeeker); ok {
+		forward.SeekForward(key)
+	} else {
+		iter.Seek(key)
+	}
+}
 func (it *cowMergeIterator) Value() []byte {
 	if !it.cached && it.Iterator.Valid() {
 		it.cached = true
