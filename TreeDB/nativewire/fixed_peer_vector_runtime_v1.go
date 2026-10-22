@@ -444,7 +444,8 @@ func openFixedPeerVectorRuntimeV1(parent *FixedPeerTCPRuntimeV1) (*fixedPeerVect
 		if err != nil {
 			// A committed document may advance the immutable source. Only the
 			// exact persisted live carrier can authorize validation-only recovery.
-			if _, recoveryErr := collection.NewPreparedVectorPartitionGenerationReplicatedLiveSearchOpenPlanWithContextV1(context.Background(), parent.servingVectorConfigV1().Manifest); recoveryErr != nil {
+			// This constructor runs before any local vector/coordinator serving.
+			if _, recoveryErr := collection.NewPreparedVectorPartitionGenerationReplicatedLiveStartupSearchOpenPlanWithContextV1(context.Background(), parent.servingVectorConfigV1().Manifest); recoveryErr != nil {
 				return nil, errors.Join(ErrFixedPeerVectorUnavailableV1, err, recoveryErr)
 			}
 			prepared = parent.servingVectorConfigV1().Manifest
@@ -461,8 +462,8 @@ func openFixedPeerVectorRuntimeV1(parent *FixedPeerTCPRuntimeV1) (*fixedPeerVect
 		// Replicated fixed-peer startup is validation-only: publishing a missing
 		// binding here would create local command-WAL coverage outside Raft. The
 		// prepared binding must already be durable before this process advertises
-		// readiness.
-		if _, err := collection.NewPreparedVectorPartitionGenerationReplicatedLiveSearchOpenPlanWithContextV1(context.Background(), prepared); err != nil {
+		// readiness. No local vector/coordinator serving has started yet.
+		if _, err := collection.NewPreparedVectorPartitionGenerationReplicatedLiveStartupSearchOpenPlanWithContextV1(context.Background(), prepared); err != nil {
 			return nil, errors.Join(ErrFixedPeerVectorUnavailableV1, fmt.Errorf("validate vector live binding: %w", err))
 		}
 	}

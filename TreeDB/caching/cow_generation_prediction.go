@@ -8,6 +8,11 @@ import "github.com/snissn/gomap/TreeDB/internal/memtable"
 // The caller holds the same host writer gate as cowGenerationRollover. Final
 // canonical preparation still performs its original exact admission.
 func (b *Batch) cowPredictionCanSkipEstimate(groups [][]memtable.COWMutation) bool {
+	control, err := b.cowKnownControlCharge(groups)
+	return err == nil && b.cowPredictionCanSkipEstimateWithControl(groups, control)
+}
+
+func (b *Batch) cowPredictionCanSkipEstimateWithControl(groups [][]memtable.COWMutation, control uint64) bool {
 	c := b.db.cow
 	if b.db.mutableBytes.Load() > b.db.mutableFlushThreshold() {
 		return false
@@ -18,7 +23,7 @@ func (b *Batch) cowPredictionCanSkipEstimate(groups [][]memtable.COWMutation) bo
 		return false
 	}
 	trigger := max - max/4
-	var total uint64
+	total := control
 	var successors int
 	active := false
 	for i, group := range groups {

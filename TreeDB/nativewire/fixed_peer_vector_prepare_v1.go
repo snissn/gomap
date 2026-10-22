@@ -76,6 +76,10 @@ func (r *FixedPeerTCPRuntimeV1) vectorInitializationPhaseV1() string {
 // This authenticated control read proves local durable preparation without
 // installing a serving config, changing roots, or manufacturing progress.
 func (r *FixedPeerTCPRuntimeV1) vectorPrepareStatusV1(ctx context.Context) (*fixedPeerVectorPrepareStatusV1, error) {
+	return r.vectorPrepareStatusWithStartupV1(ctx, false)
+}
+
+func (r *FixedPeerTCPRuntimeV1) vectorPrepareStatusWithStartupV1(ctx context.Context, startup bool) (*fixedPeerVectorPrepareStatusV1, error) {
 	intent := r.config.VectorInitialization
 	if intent == nil || len(r.config.Groups) != 1 {
 		return nil, ErrFixedPeerVectorUnavailableV1
@@ -125,7 +129,13 @@ func (r *FixedPeerTCPRuntimeV1) vectorPrepareStatusV1(ctx context.Context) (*fix
 		return nil, errors.New("nativewire: authenticated prepare closure differs")
 	}
 	// Validation-only open proves exact persisted carrier and retained bytes.
-	_, err = c.NewPreparedVectorPartitionGenerationReplicatedLiveSearchOpenPlanWithContextV1(ctx, m)
+	// The startup branch is used only by derivation before local vector/control
+	// serving starts; RPC status callers retain ordinary serving admission.
+	if startup {
+		_, err = c.NewPreparedVectorPartitionGenerationReplicatedLiveStartupSearchOpenPlanWithContextV1(ctx, m)
+	} else {
+		_, err = c.NewPreparedVectorPartitionGenerationReplicatedLiveSearchOpenPlanWithContextV1(ctx, m)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -152,7 +162,7 @@ func (r *FixedPeerTCPRuntimeV1) derivePreparedVectorInitializationV1(ctx context
 	if err != nil || !present {
 		return nil, err
 	}
-	status, err := r.vectorPrepareStatusV1(ctx)
+	status, err := r.vectorPrepareStatusWithStartupV1(ctx, true)
 	if err != nil {
 		return nil, err
 	}

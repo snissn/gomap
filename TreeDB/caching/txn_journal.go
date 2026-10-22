@@ -17,21 +17,27 @@ var (
 type txnJournal = txnhistory.History
 type txnMutationOwner = txnhistory.Prepared
 
+// txnJournalControlCharge includes the same external lease wrapper as New.
+func txnJournalControlCharge(n int) uint64 {
+	charge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
+	for _, size := range txnhistory.ControlAllocationSizes(n) {
+		charge += memtable.COWAllocationCharge(size)
+	}
+	return charge
+}
+func (c *cowCache) txnJournalCapacity() int {
+	n := 4096
+	for n > 8 && txnJournalControlCharge(n) > c.budget.Limits().MaxInFlightBytes/16 {
+		n /= 2
+	}
+	return n
+}
+
 func (c *cowCache) ensureTxnJournal() error {
 	if c.journal != nil || c.txnOwner == nil {
 		return nil
 	}
-	n := 4096
-	controlCharge := func(n int) uint64 {
-		charge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
-		for _, size := range txnhistory.ControlAllocationSizes(n) {
-			charge += memtable.COWAllocationCharge(size)
-		}
-		return charge
-	}
-	for n > 8 && controlCharge(n) > c.budget.Limits().MaxInFlightBytes/16 {
-		n /= 2
-	}
+	n := c.txnJournalCapacity()
 	var err error
 	c.journal, err = txnhistory.New(n, c.budget.Limits().MaxInFlightBytes/8, func(a, b, d, e, f uint64) (txnhistory.Lease, error) {
 		var charge uint64

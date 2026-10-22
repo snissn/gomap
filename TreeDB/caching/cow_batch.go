@@ -30,6 +30,25 @@ type cowBatchPreparation struct {
 	dictionaries [][]uint64
 }
 
+// cowPreparationScratchCharge is the concrete backing admitted by canonical preparation.
+func cowPreparationScratchCharge(shards, n, pointerCount int, reusePrediction bool) uint64 {
+	bytes := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowBatchPreparation{}))) +
+		memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof(memtable.COWPrepareOptions{})))
+	if pointerCount != 0 {
+		bytes += memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof([]uint32{}))) +
+			memtable.COWAllocationCharge(uint64(n)*4) +
+			2*memtable.COWAllocationCharge(uint64(pointerCount)*uint64(unsafe.Sizeof((*cowLiveResource)(nil)))) +
+			memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof([]uint64{}))) +
+			memtable.COWAllocationCharge(uint64(n)*8)
+	}
+	if !reusePrediction {
+		bytes += memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof(int(0)))) +
+			memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof([]memtable.COWMutation{}))) +
+			memtable.COWAllocationCharge(uint64(n)*uint64(unsafe.Sizeof(memtable.COWMutation{})))
+	}
+	return bytes
+}
+
 // PrepareExternalCommandWALPublication is called under the command append
 // sequencer, after its final point revisions have been assigned. Cached value
 // placement has already finished. No command frame exists yet.
@@ -129,21 +148,8 @@ func (b *Batch) PrepareExternalCommandWALPublication() (err error) {
 			pointerCount++
 		}
 	}
-	bytes := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowBatchPreparation{}))) +
-		memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof(memtable.COWPrepareOptions{})))
-	if pointerCount != 0 {
-		bytes += memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof([]uint32{}))) +
-			memtable.COWAllocationCharge(uint64(n)*4) +
-			2*memtable.COWAllocationCharge(uint64(pointerCount)*uint64(unsafe.Sizeof((*cowLiveResource)(nil)))) +
-			memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof([]uint64{}))) +
-			memtable.COWAllocationCharge(uint64(n)*8)
-	}
 	reusePrediction := len(b.shardCnts) == shards && len(b.cowState.predictionGroups) == shards && len(b.cowState.predictionStorage) == n
-	if !reusePrediction {
-		bytes += memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof(int(0)))) +
-			memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof([]memtable.COWMutation{}))) +
-			memtable.COWAllocationCharge(uint64(n)*uint64(unsafe.Sizeof(memtable.COWMutation{})))
-	}
+	bytes := cowPreparationScratchCharge(shards, n, pointerCount, reusePrediction)
 	lease, err := c.budget.AcquireExternal(bytes)
 	if err != nil {
 		return err

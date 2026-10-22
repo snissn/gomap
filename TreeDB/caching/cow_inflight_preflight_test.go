@@ -93,7 +93,7 @@ func TestCOWInFlightPressureJoinsOnceAndPreservesRefusal(t *testing.T) {
 			}
 			db.cow.writerMu.Lock()
 			loose := b.cowPredictionCanSkipEstimate(groups)
-			rollover, pressure, predictErr := b.cowGenerationRollover()
+			rollover, pressure, _, predictErr := b.cowGenerationRollover(true)
 			db.cow.writerMu.Unlock()
 			if loose || rollover != nil || predictErr != nil || !pressure {
 				t.Fatalf("in-flight-only aggregate pressure missed: loose=%t rollover=%v pressure=%t err=%v stats=%+v total=%d", loose, rollover != nil, pressure, predictErr, stats, total)

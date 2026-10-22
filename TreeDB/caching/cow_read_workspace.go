@@ -591,18 +591,24 @@ func (s *Snapshot) cowValueLocked(key []byte) ([]byte, page.EntryRevision, error
 	if err != nil {
 		return nil, 0, err
 	}
+	return s.cowValueFromEntryLocked(entry)
+}
+
+// cowValueFromEntryLocked materializes metadata already selected from this
+// snapshot's exact cut. The caller holds cowReadMu and the cache read gate.
+func (s *Snapshot) cowValueFromEntryLocked(entry node.LeafEntry) ([]byte, page.EntryRevision, error) {
 	if entry.Flags&node.FlagTombstone != 0 {
 		return nil, entry.Revision, tree.ErrKeyNotFound
 	}
-	value := entry.Value
 	if entry.Flags&node.FlagPointer != 0 {
 		w, workspaceErr := s.cowWorkspaceLocked()
 		if workspaceErr != nil {
 			return nil, entry.Revision, workspaceErr
 		}
-		value, err = w.read(entry.ValuePtr, false, nil)
+		value, err := w.read(entry.ValuePtr, false, nil)
+		return value, entry.Revision, err
 	}
-	return value, entry.Revision, err
+	return entry.Value, entry.Revision, nil
 }
 
 // A view callback runs after read gates and workspace locks are released. Its
