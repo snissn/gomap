@@ -128,8 +128,8 @@ func TestCOWOrderedOptInPreservesAdaptiveDefault(t *testing.T) {
 }
 
 // Immutable COW owners cannot participate in adaptive memtable rotation. Reject
-// the wrapper before opening a backend, instead of exposing an unbound COW cache
-// whose first command fails private-owner preflight.
+// the wrapper before opening a backend: late initialization can reject the
+// unsupported owner only after creating backend storage.
 func TestCOWPublicAdaptiveSelectorRejectedBeforeStorage(t *testing.T) {
 	for _, profile := range cowPublicContractProfiles {
 		for _, mode := range []string{"adaptive:cow_btree", "adaptive:cow_ordered"} {

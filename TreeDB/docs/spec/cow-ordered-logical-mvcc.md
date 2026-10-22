@@ -280,6 +280,12 @@ canonical preparation still performs the original exact admission and retains
 the sole preparation/publication authority. This bound is not an admission
 receipt and cannot refuse a write or spend budget.
 
+The exact fallback checks aggregate in-flight preparation bytes as well as
+retirement and total bytes before producer placement. Pressure joins at most one
+checkpoint outside the foreground gates. Capacity held by a live owner can
+still refuse the unassigned command after that join; accepted work is never
+replayed by this pressure loop.
+
 Finite source, generation, view, resource, pending and retirement limits can
 refuse further preparation when old cuts or accepted custody hold capacity.
 Durable spill and eventual last-owner release provide progress under the stated

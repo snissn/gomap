@@ -74,6 +74,12 @@ func (b *Batch) cowGenerationRollover() (_ *cowRollover, pressure bool, _ error)
 		}
 	}
 	limits, stats := c.budget.Limits(), c.budget.Stats()
+	// Canonical preparation holds every shard's reservation at once. A loose
+	// prediction may decline this frontier, so the exact fallback must also
+	// request the existing bounded pressure join for aggregate in-flight bytes.
+	if stats.ReservedBytes > limits.MaxInFlightBytes || total > limits.MaxInFlightBytes-stats.ReservedBytes {
+		return nil, true, nil
+	}
 	// Match retirementFitsLocked's History+Reserved+Deferred arithmetic without
 	// overflowing. Producer resource identities are not known yet; their exact
 	// admission remains with the original canonical prepare, never this trigger.
