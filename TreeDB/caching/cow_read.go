@@ -277,26 +277,18 @@ func (it *cowMergeIterator) readWorkspace() (*cowReadWorkspace, error) {
 	return it.workspace, nil
 }
 func (it *cowMergeIterator) readLeaf(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
-	// The iterator is bound to this original cut and serializes movement.
-	// Reuse the basis' already verified physical leaf slots, just as point
-	// reads do, rather than inspecting and decoding a page on every Seek.
-	basis := it.snapshot.cowCut.basis
-	basis.readMu.Lock()
-	_, err := basis.physicalWorkspaceLocked(it.snapshot.cowCache.budget, it.snapshot.cowCache.readLimits())
-	var data []byte
-	if err == nil {
-		data, err = basis.readPhysicalLeafLocked(it.snapshot.cowCache, ptr, dst, false)
+	// Bound iterator movement serializes its existing admitted workspace.
+	// Its original cut retains the exact basis independently of shared scratch.
+	w, err := it.readWorkspace()
+	if err != nil {
+		return nil, err
 	}
-	basis.readMu.Unlock()
+	data, err := it.snapshot.cowCut.basis.readPhysicalLeafWithWorkspace(it.snapshot.cowCache, w, ptr, dst, false, true)
 	if err != errCOWPhysicalDictionary {
 		return data, err
 	}
 	// Dictionary definitions belong to the complete caller cut. Preserve its
 	// original admitted decoder and resources for that fallback.
-	w, err := it.readWorkspace()
-	if err != nil {
-		return nil, err
-	}
 	return w.readLeaf(ptr, dst)
 }
 
@@ -467,9 +459,7 @@ func (s *Snapshot) cowOwnedPointSuccessor(disk node.LeafEntry, found bool, start
 
 func (s *Snapshot) cowPhysicalSuccessorLocked(start, end []byte) (pointSuccessorCandidate, error) {
 	basis := s.cowCut.basis
-	basis.readMu.Lock()
-	defer basis.readMu.Unlock()
-	w, err := basis.physicalWorkspaceLocked(s.cowCache.budget, s.cowCache.readLimits())
+	w, err := s.cowWorkspaceLocked()
 	if err != nil {
 		return pointSuccessorCandidate{}, err
 	}

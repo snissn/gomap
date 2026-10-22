@@ -45,10 +45,10 @@ type cowReadWorkspace struct {
 	point         *cowPointScratch
 }
 
-// Cut-local workspaces are serialized by cowReadMu; basis traversal uses
-// basis.readMu. Dictionary-free codecs use the original cache's physicalMu and
-// retain no Snapshot, file, pointer or dictionary authority. Their admission
-// survives through the cache's original last-cut/closed cleanup gate.
+// Cut-local workspaces are serialized by cowReadMu. Their fixed traversal and
+// small native block decoders are independent of other retained readers.
+// Generic dictionary-free codecs still use the original cache's physicalMu:
+// duplicating their large envelopes can exceed the finite producer budget.
 func (s *Snapshot) cowWorkspaceLocked() (*cowReadWorkspace, error) {
 	if s.cowReader != nil {
 		return s.cowReader, nil
@@ -464,15 +464,26 @@ func (w *cowReadWorkspace) readLeaf(ptr page.LeafLogPtr, dst []byte) ([]byte, er
 // through the original cut-local workspace; no public error is substituted.
 var errCOWPhysicalDictionary = errors.New("cow physical leaf requires cut dictionary")
 
-// Both cowReadMu and basis.readMu are held. No caller cut is stored in reader.
+// cowReadMu owns this caller's admitted scratch; the retained cut owns the
+// exact physical basis throughout traversal and copy-out.
 func (s *Snapshot) cowPhysicalLeafLocked(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
-	return s.cowCut.basis.readPhysicalLeafLocked(s.cowCache, ptr, dst, false)
+	w, err := s.cowWorkspaceLocked()
+	if err != nil {
+		return nil, err
+	}
+	return s.cowCut.basis.readPhysicalLeafWithWorkspace(s.cowCache, w, ptr, dst, false, true)
 }
 
 // basis.readMu protects traversal dst. Physical decoding takes physicalMu only
 // after that mutex; the cache scratch never takes a basis lock in return.
 func (b *cowBackendBasis) readPhysicalLeafLocked(c *cowCache, ptr page.LeafLogPtr, dst []byte, native bool) ([]byte, error) {
-	w := b.reader
+	return b.readPhysicalLeafWithWorkspace(c, b.reader, ptr, dst, native, false)
+}
+
+// Caller-owned workspaces hold no new physical authority. Small native block
+// decoders may belong to the caller; generic codecs retain the original shared
+// envelope and admission policy. Every path still inspects before a cache hit.
+func (b *cowBackendBasis) readPhysicalLeafWithWorkspace(c *cowCache, w *cowReadWorkspace, ptr page.LeafLogPtr, dst []byte, native, localBlock bool) ([]byte, error) {
 	f, identity, err := b.snapshot.PinnedValueLogFile(ptr.ValuePtr().FileID)
 	if err != nil {
 		return nil, err
@@ -491,7 +502,7 @@ func (b *cowBackendBasis) readPhysicalLeafLocked(c *cowCache, ptr page.LeafLogPt
 		return data, err
 	}
 	var data []byte
-	if shape.Compressed {
+	if shape.Compressed && !(localBlock && shape.DictID == 0 && (shape.Codec == valuelog.BlockCodecSnappy || shape.Codec == valuelog.BlockCodecLZ4)) {
 		c.physicalMu.Lock()
 		shared, workspaceErr := c.physicalWorkspaceLocked(w.limits)
 		if workspaceErr != nil {
@@ -512,14 +523,11 @@ func (b *cowBackendBasis) readPhysicalLeafLocked(c *cowCache, ptr page.LeafLogPt
 	return data, nil
 }
 
-// Physical entries borrow page scratch. Copy an inline value into the original
-// cut's admitted output before releasing the shared basis lock; the existing
-// cowEntryLocked callers may borrow that output only under cowReadMu.
+// Physical entries borrow this snapshot's admitted page scratch. cowReadMu
+// excludes its reuse until the existing caller has completed copy-out.
 func (s *Snapshot) cowPhysicalEntryLocked(key []byte) (node.LeafEntry, error) {
 	basis := s.cowCut.basis
-	basis.readMu.Lock()
-	defer basis.readMu.Unlock()
-	w, err := basis.physicalWorkspaceLocked(s.cowCache.budget, s.cowCache.readLimits())
+	w, err := s.cowWorkspaceLocked()
 	if err != nil {
 		return node.LeafEntry{}, err
 	}
@@ -536,16 +544,6 @@ func (s *Snapshot) cowPhysicalEntryLocked(key []byte) (node.LeafEntry, error) {
 		entry.Value = nil
 		return entry, nil
 	}
-	local, err := s.cowWorkspaceLocked()
-	if err != nil {
-		return node.LeafEntry{}, err
-	}
-	if err = local.grow(0, uint64(len(entry.Value))); err != nil {
-		return node.LeafEntry{}, err
-	}
-	value := local.output[:len(entry.Value)]
-	copy(value, entry.Value)
-	entry.Value = value
 	return entry, nil
 }
 

@@ -205,9 +205,31 @@ and actual Snappy/LZ4 headers use bounded native owners without constructing
 ZSTD state. Owned callback copies remain separately admitted even for inline
 values.
 
-On Windows and race builds, `ReadAt` makes the three fixed inspection buffers
-heap allocations. The serialized read workspace reserves their separately
-rounded 4,144-byte peak envelope before inspection and keeps it through Close.
+Retained snapshots and bound iterators reuse their own admitted physical
+traversal scratch. Their dictionary-free Snappy/LZ4 leaf decoders likewise
+belong to that reader, allowing independent readers of the same captured basis
+to proceed without its shared traversal or decoder mutex. Each actual capacity
+is reserved before allocation and refunded through the existing reader Close;
+capacity exhaustion refuses rather than borrowing another reader's scratch.
+Direct DB point reads and native physical readers retain the original shared
+workspace. Generic dictionary-free ZSTD decoding and pointer-value decoding
+also retain the original cache-owned decoder envelope, since duplicating generic
+state can exceed the default producer budget. Dictionary definitions continue
+to belong to the exact complete cut.
+
+Every physical leaf read still inspects the current record metadata before
+reusing a verified decoded cache entry. Leaf inspection reads one fixed maximum
+metadata window, interprets only the checked header and frame prefix, and ignores
+extra bytes. EOF beyond complete required metadata is harmless; truncated
+metadata and corruption retain the original errors. Uncompressed value-prefix
+checks reuse the window when present and otherwise read their exact bytes.
+Registered file identity checks, full CRC verification before cache promotion,
+page validation, cache disablement and captured-cut lifetimes remain required.
+
+On Windows and race builds, `ReadAt` makes fixed inspection buffers heap
+allocations. The serialized read workspace conservatively reserves the original
+three-buffer, separately rounded 4,144-byte peak envelope before inspection and
+keeps it through Close; the consolidated leaf window fits that same envelope.
 Normal Unix builds retain stack inspection and their zero-allocation check.
 Leaf namespace checks avoid the Windows volume/parent string join for canonical
 native file paths produced by `filepath.Join`. Arbitrary noncanonical paths may
