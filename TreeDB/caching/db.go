@@ -8516,8 +8516,11 @@ type Options struct {
 	FlushThreshold   int64
 
 	// MemtableMode selects the in-memory write buffer implementation.
-	// Supported: "skiplist", "hash_sorted", "btree", "append_only", "adaptive".
-	// Use "adaptive" or "adaptive:<mode>" to switch per-rotation based on workload.
+	// Supported: "skiplist", "hash_sorted", "btree", "append_only", "adaptive",
+	// and explicit immutable "cow_btree" or experimental "cow_ordered".
+	// Use "adaptive" or "adaptive:<mode>" for ordinary mutable modes to switch
+	// per-rotation based on workload. Adaptive wrappers of immutable COW modes
+	// are rejected with ErrCOWUnsupported.
 	MemtableMode      string
 	COWMemtableLimits memtable.COWLimits
 
@@ -12578,7 +12581,11 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		adaptive = true
 		modeStr = strings.TrimPrefix(modeStr, "adaptive:")
 	}
-	cowMode := modeStr == "cow_btree"
+	cowOrdered := modeStr == "cow_ordered"
+	cowMode := modeStr == "cow_btree" || cowOrdered
+	if adaptive && cowMode {
+		return nil, ErrCOWUnsupported
+	}
 	var cowLimits memtable.COWLimits
 	if cowMode {
 		var e error
@@ -12922,7 +12929,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		if !ok {
 			return nil, ErrCOWUnsupported
 		}
-		cowOwner, err = newCOWCache(provider, shardCount, cowLimits)
+		cowOwner, err = newCOWCacheMode(provider, shardCount, cowLimits, cowOrdered)
 		if cowOwner != nil {
 			cowOwner.txnOwner = opts.TransactionOwner
 		}
@@ -13236,7 +13243,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		journalCompression:                         opts.JournalCompression,
 		disableJournal:                             disableJournal,
 		externalCommandWAL:                         opts.ExternalCommandWAL,
-		conditionalTxnUnsupported:                  opts.TransactionOwner != nil && opts.ExternalCommandWAL && opts.MemtableMode != "cow_btree",
+		conditionalTxnUnsupported:                  opts.TransactionOwner != nil && opts.ExternalCommandWAL && opts.MemtableMode != "cow_btree" && opts.MemtableMode != "cow_ordered",
 		disableValueLog:                            false,
 		splitValueLog:                              true,
 		relaxedSync:                                opts.RelaxedSync,
@@ -32450,6 +32457,9 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.memtable_mode"] = memtableMode.String()
 	if db.cow != nil {
 		stats["treedb.cache.memtable_mode"] = "cow_btree"
+		if db.cow.ordered {
+			stats["treedb.cache.memtable_mode"] = "cow_ordered"
+		}
 	}
 	if memtableAdaptive {
 		stats["treedb.cache.memtable_mode_config"] = "adaptive"
@@ -38425,16 +38435,10 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 		}
 		b.cowState.holdBegan = time.Now()
 		b.db.cow.commitWaitNs.Add(uint64(time.Since(leaseWaitStart)))
-		capture, err := newCOWFrameCapture(b.db.cow.budget, len(b.entries))
-		if err != nil {
-			b.db.cow.writerMu.Unlock()
-			unlockWriteMu()
-			return err
-		}
-		b.cowState.producer = capture
 		b.cowState.inPublication = true
 		previousUnlock := unlockWriteMu
 		unlockWriteMu = func() {
+			capture := b.cowState.producer
 			b.cowState.inPublication = false
 			b.db.cow.commitHoldNs.Add(uint64(time.Since(b.cowState.holdBegan)))
 			b.db.cow.writerMu.Unlock()
@@ -38522,7 +38526,9 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 	} else {
 		shardCounts = shardCounts[:shardCount]
 	}
-	clear(shardCounts)
+	if b.db.cow == nil {
+		clear(shardCounts)
+	}
 	b.shardCnts = shardCounts
 
 	shardIdxs := b.shardIdxs
@@ -38565,9 +38571,12 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 				}
 			}
 		}
-		idx := b.db.shardIndex(op.Key)
-		shardIdxs[i] = idx
-		shardCounts[idx]++
+		idx := shardIdxs[i]
+		if b.db.cow == nil {
+			idx = b.db.shardIndex(op.Key)
+			shardIdxs[i] = idx
+			shardCounts[idx]++
+		}
 		add := int64(len(op.Key))
 		if op.Type == batch.OpPut {
 			add += int64(len(op.Value))
@@ -38716,6 +38725,17 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 			eligibleCount >= multiLaneValueLogMinRecords
 	}
 
+	// Inline publications need no producer observer or frame vector. Admit the
+	// exact eligible capacity only after the existing pointer policy selects it,
+	// before placement can expose a produced frame to canonical preparation.
+	if b.db.cow != nil && allowPointers && eligibleCount > 0 {
+		capture, err := newCOWFrameCapture(b.db.cow.budget, eligibleCount)
+		if err != nil {
+			unlockWriteMu()
+			return err
+		}
+		b.cowState.producer = capture
+	}
 	var (
 		lane *lane
 		rids []uint64

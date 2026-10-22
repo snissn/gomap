@@ -498,9 +498,24 @@ type commandWALPublicCOWOwner struct {
 	state commandWALPublicCOWState
 }
 
+// Only ordinary command-WAL batches build a second payload. Keep its large
+// inline revision-offset storage outside the admitted COW wrapper, whose inner
+// batch already owns the canonical operands scanned during append.
+type commandWALPublicOrdinaryState struct {
+	payload commitlog.RawKVBatchPayloadBuilder
+}
+
+// Ordinary batches retain their wrapper and payload in one allocation, just as
+// before the payload was separated. Interior pointers retain the whole owner.
+type commandWALPublicOrdinaryOwner struct {
+	batch commandWALPublicBatch
+	state commandWALPublicOrdinaryState
+}
+
 func (b *commandWALPublicBatch) isCOW() bool { return b.cowState != nil && b.cowState.cow }
 
 type commandWALPublicBatch struct {
+	*commandWALPublicOrdinaryState
 	cowState                 *commandWALPublicCOWState
 	db                       *DB
 	inner                    Batch
@@ -508,7 +523,6 @@ type commandWALPublicBatch struct {
 	innerSetViewer           commandWALPublicInnerSetViewer
 	innerDeleteViewValidated commandWALPublicInnerDeleteViewValidated
 	innerDeleteViewer        commandWALPublicInnerDeleteViewer
-	payload                  commitlog.RawKVBatchPayloadBuilder
 	payloadOpHint            int
 	payloadByteHint          int
 	payloadSoftCapBytes      int
@@ -627,7 +641,12 @@ func newCommandWALPublicBatchWithCustody(tdb *DB, inner Batch, opHint int, owned
 			}
 		}
 	}
-	b := &commandWALPublicBatch{db: tdb, inner: inner, payload: payload}
+	owner := &commandWALPublicOrdinaryOwner{
+		batch: commandWALPublicBatch{db: tdb, inner: inner},
+		state: commandWALPublicOrdinaryState{payload: payload},
+	}
+	b := &owner.batch
+	b.commandWALPublicOrdinaryState = &owner.state
 	b.disableInnerStreamingBypass()
 	b.rebindInnerViewers()
 	opHint = db.NormalizePublicBatchReserveHint(opHint)
@@ -651,6 +670,7 @@ func (b *commandWALPublicBatch) resetPayloadWithHint() {
 		b.hasDeleteRange = false
 		return
 	}
+	b.ensureOrdinaryPayload()
 	_ = b.payload.ResetWithHint(b.payloadOpHint, b.payloadByteHint)
 	if b.payloadShouldCarryEntryRevisions() {
 		_ = b.payload.EnableEntryRevisions()
@@ -667,7 +687,9 @@ func (b *commandWALPublicBatch) resetPayloadForReuse() {
 		return
 	}
 	if b.payloadLeasedToMemtable {
-		b.payload.DetachRetainedValueByteBuffers(b.payloadLeasedBufferMask)
+		if b.commandWALPublicOrdinaryState != nil {
+			b.payload.DetachRetainedValueByteBuffers(b.payloadLeasedBufferMask)
+		}
 		b.payloadLeasedToMemtable = false
 		b.payloadLeasedBufferMask = 0
 	}
@@ -683,8 +705,20 @@ func (b *commandWALPublicBatch) payloadShouldCarryEntryRevisions() bool {
 	return ok
 }
 
+// Constructors provide the coallocated ordinary state. Preserve method use by
+// hand-built ordinary wrappers as well, without creating a payload for COW.
+func (b *commandWALPublicBatch) ensureOrdinaryPayload() {
+	if b.commandWALPublicOrdinaryState == nil && !b.isCOW() {
+		b.commandWALPublicOrdinaryState = &commandWALPublicOrdinaryState{}
+	}
+}
+
 func (b *commandWALPublicBatch) preparePayloadForAppend() {
-	if b == nil || !b.retainPayloadAfterWrite || b.dirty {
+	if b == nil {
+		return
+	}
+	b.ensureOrdinaryPayload()
+	if !b.retainPayloadAfterWrite || b.dirty {
 		return
 	}
 	// A previous adapter replay-view Write kept payload bytes alive for external
@@ -699,7 +733,7 @@ func (b *commandWALPublicBatch) preparePayloadForAppend() {
 }
 
 func (b *commandWALPublicBatch) attachStableViewValueLease() bool {
-	if b == nil || b.inner == nil || b.payloadBypass || b.payload.Count() == 0 || b.payload.Count() != b.opCount {
+	if b == nil || b.inner == nil || b.payloadBypass || b.commandWALPublicOrdinaryState == nil || b.payload.Count() == 0 || b.payload.Count() != b.opCount {
 		return false
 	}
 	leaser, ok := b.inner.(commandWALPublicInnerStableViewValueLease)
@@ -791,6 +825,38 @@ func (b *commandWALPublicBatch) SetWithMVCCInput(key, value []byte, input mvccad
 	_, _, err := b.setViewWithMVCCInput(key, value, false, false, input)
 	return err
 }
+
+// StageLogicalMVCC preserves this wrapper's ingress and payload-bypass state
+// while the existing native batch owns the canonical encoded operands.
+func (b *commandWALPublicBatch) StageLogicalMVCC(mutations []mvccadmission.LogicalMutation, input mvccadmission.LogicalInput) (int, error) {
+	if b != nil && b.cowState != nil && b.cowState.batchError != nil {
+		return 0, b.cowState.batchError
+	}
+	if b == nil || b.inner == nil {
+		return 0, ErrClosed
+	}
+	if !b.isCOW() {
+		return 0, caching.ErrCOWUnsupported
+	}
+	b.preparePayloadForAppend()
+	producer, ok := b.inner.(interface {
+		StageLogicalMVCC([]mvccadmission.LogicalMutation, mvccadmission.LogicalInput) (int, error)
+	})
+	if !ok {
+		return 0, caching.ErrCOWUnsupported
+	}
+	bytes, err := producer.StageLogicalMVCC(mutations, input)
+	if err != nil || len(mutations) == 0 {
+		return bytes, err
+	}
+	b.payloadBypass = true
+	b.opCount += len(mutations)
+	b.setCalls += len(mutations)
+	b.setBytes += bytes
+	b.dirty = true
+	return bytes, nil
+}
+
 func (b *commandWALPublicBatch) setViewWithMVCCInput(key, value []byte, retainReplayViews, useInnerView bool, input mvccadmission.Input) (keyView, valueView []byte, err error) {
 	if b != nil && b.cowState != nil && b.cowState.batchError != nil {
 		return nil, nil, b.cowState.batchError
@@ -1237,9 +1303,6 @@ func (b *commandWALPublicBatch) write(explicitSync, commandSync bool) (err error
 }
 
 func (b *commandWALPublicBatch) Close() error {
-	if b != nil && b.cowState != nil && b.cowState.batchError != nil {
-		return nil
-	}
 	if b == nil || b.inner == nil {
 		return nil
 	}
@@ -1248,19 +1311,22 @@ func (b *commandWALPublicBatch) Close() error {
 	// payload bytes, matching ordinary batch semantics: only Write/WriteSync
 	// appends and publishes a RawKVBatch command frame.
 	err := b.inner.Close()
-	payload := b.payload
+	var payload commitlog.RawKVBatchPayloadBuilder
 	keepPayload := false
-	if b.payloadLeasedToMemtable {
-		payload.DetachRetainedValueByteBuffers(b.payloadLeasedBufferMask)
-	} else if !b.isCOW() {
-		keepPayload = payload.PrepareForReuse(commandWALPublicBatchPayloadPoolRetainMaxBytes)
+	if b.commandWALPublicOrdinaryState != nil {
+		payload = b.payload
+		if b.payloadLeasedToMemtable {
+			payload.DetachRetainedValueByteBuffers(b.payloadLeasedBufferMask)
+		} else if !b.isCOW() {
+			keepPayload = payload.PrepareForReuse(commandWALPublicBatchPayloadPoolRetainMaxBytes)
+		}
+		b.payload = commitlog.RawKVBatchPayloadBuilder{}
 	}
 	b.inner = nil
 	b.innerSetViewValidated = nil
 	b.innerSetViewer = nil
 	b.innerDeleteViewValidated = nil
 	b.innerDeleteViewer = nil
-	b.payload = commitlog.RawKVBatchPayloadBuilder{}
 	b.payloadBypass = false
 	b.payloadOpHint = 0
 	b.payloadByteHint = 0
@@ -1354,7 +1420,7 @@ func (b *commandWALPublicBatch) commandWALPayload() ([]byte, error) {
 	if b == nil || b.inner == nil {
 		return nil, ErrClosed
 	}
-	if !b.payloadBypass && b.payload.Count() == b.opCount && b.payload.Count() > 0 {
+	if !b.payloadBypass && b.commandWALPublicOrdinaryState != nil && b.payload.Count() == b.opCount && b.payload.Count() > 0 {
 		if b.payload.EntryRevisionsEnabled() {
 			if err := b.stampPayloadEntryRevisions(); err != nil {
 				return nil, err
@@ -1528,7 +1594,7 @@ func (b *commandWALPublicBatch) appendCommandWAL(sync bool) error {
 	if selector, ok := b.inner.(commandWALPublicEntryScanSelector); ok {
 		entryScanRequired = selector.ExternalCommandWALRequiresEntryScan()
 	}
-	if !entryScanRequired && !b.payloadBypass && b.payload.Count() == b.opCount && b.payload.Count() > 0 {
+	if !entryScanRequired && !b.payloadBypass && b.commandWALPublicOrdinaryState != nil && b.payload.Count() == b.opCount && b.payload.Count() > 0 {
 		return b.db.appendPublicRawKVCommandPayloadPrepared(func() ([]byte, error) {
 			if err := b.assignCommandWALPointRevisions(); err != nil {
 				return nil, err
@@ -1550,7 +1616,7 @@ func (b *commandWALPublicBatch) appendCommandWALMeasured(sync bool) (db.CommandW
 	if selector, ok := b.inner.(commandWALPublicEntryScanSelector); ok {
 		entryScanRequired = selector.ExternalCommandWALRequiresEntryScan()
 	}
-	if !entryScanRequired && !b.payloadBypass && b.payload.Count() == b.opCount && b.payload.Count() > 0 {
+	if !entryScanRequired && !b.payloadBypass && b.commandWALPublicOrdinaryState != nil && b.payload.Count() == b.opCount && b.payload.Count() > 0 {
 		var preparation time.Duration
 		timing, err := b.db.appendPublicRawKVCommandPayloadPreparedMeasured(func() ([]byte, error) {
 			preparationStart := time.Now()

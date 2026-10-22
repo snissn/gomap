@@ -123,14 +123,21 @@ func (b *Batch) PrepareExternalCommandWALPublication() (err error) {
 	}
 	n := len(b.entries)
 	shards := len(c.writers)
+	pointerCount := 0
+	for _, entry := range b.entries {
+		if entry.IsPtr {
+			pointerCount++
+		}
+	}
 	bytes := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowBatchPreparation{}))) +
-		memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof(memtable.COWPrepareOptions{}))) +
-		memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof([]uint32{}))) +
-		memtable.COWAllocationCharge(uint64(n)*4)
-	bytes += memtable.COWAllocationCharge(uint64(n) * uint64(unsafe.Sizeof((*cowLiveResource)(nil))))
-	bytes += memtable.COWAllocationCharge(uint64(n)*uint64(unsafe.Sizeof((*cowLiveResource)(nil)))) +
-		memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof([]uint64{}))) +
-		memtable.COWAllocationCharge(uint64(n)*8)
+		memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof(memtable.COWPrepareOptions{})))
+	if pointerCount != 0 {
+		bytes += memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof([]uint32{}))) +
+			memtable.COWAllocationCharge(uint64(n)*4) +
+			2*memtable.COWAllocationCharge(uint64(pointerCount)*uint64(unsafe.Sizeof((*cowLiveResource)(nil)))) +
+			memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof([]uint64{}))) +
+			memtable.COWAllocationCharge(uint64(n)*8)
+	}
 	reusePrediction := len(b.shardCnts) == shards && len(b.cowState.predictionGroups) == shards && len(b.cowState.predictionStorage) == n
 	if !reusePrediction {
 		bytes += memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof(int(0)))) +
@@ -141,7 +148,12 @@ func (b *Batch) PrepareExternalCommandWALPublication() (err error) {
 	if err != nil {
 		return err
 	}
-	p := &cowBatchPreparation{scratch: lease, files: make([][]uint32, shards), resources: make([]*cowLiveResource, 0, 2*n), dictionaries: make([][]uint64, shards)}
+	p := &cowBatchPreparation{scratch: lease}
+	if pointerCount != 0 {
+		p.files = make([][]uint32, shards)
+		p.resources = make([]*cowLiveResource, 0, 2*pointerCount)
+		p.dictionaries = make([][]uint64, shards)
+	}
 	p.mutation = mutation
 	mutation = txnMutationOwner{}
 	b.cowState.prepared = p // caller drains all cancellation, including partial stage
@@ -153,28 +165,43 @@ func (b *Batch) PrepareExternalCommandWALPublication() (err error) {
 		groups = make([][]memtable.COWMutation, shards)
 		mutations = make([]memtable.COWMutation, n)
 	}
-	clear(counts)
-	for _, e := range b.entries {
-		counts[b.db.shardIndex(e.Key)]++
+	reuseAssignments := reusePrediction && b.cowState.shardAssignmentsReady && len(b.shardIdxs) == n
+	if !reuseAssignments {
+		clear(counts)
+		for _, e := range b.entries {
+			counts[b.db.shardIndex(e.Key)]++
+		}
 	}
 	opts := make([]memtable.COWPrepareOptions, shards)
-	files := make([]uint32, n)
-	dictionaries := make([]uint64, n)
+	var files []uint32
+	var dictionaries []uint64
+	if pointerCount != 0 {
+		files = make([]uint32, n)
+		dictionaries = make([]uint64, n)
+	}
 	start := 0
 	for i, count := range counts {
 		groups[i] = mutations[start : start : start+count]
-		p.files[i] = files[start : start : start+count]
-		p.dictionaries[i] = dictionaries[start : start : start+count]
+		if pointerCount != 0 {
+			p.files[i] = files[start : start : start+count]
+			p.dictionaries[i] = dictionaries[start : start : start+count]
+		}
 		start += count
 	}
-	for _, e := range b.entries {
-		i := b.db.shardIndex(e.Key)
+	for index, e := range b.entries {
+		var i int
+		if reuseAssignments {
+			i = b.shardIdxs[index]
+		} else {
+			i = b.db.shardIndex(e.Key)
+		}
 		m := memtable.COWMutation{Key: e.Key, Value: e.Value, Ptr: e.ValuePtr, Revision: e.Revision}
 		switch e.Type {
 		case batch.OpDelete:
 			m.Flags = node.FlagTombstone
 			m.Value = nil
 		case batch.OpPut:
+			m.Timestamp, m.MVCC = e.MVCCInput.LogicalTimestamp(e.Key)
 			m.Flags = node.FlagInline
 			if e.IsPtr {
 				m.Flags = node.FlagPointer
@@ -203,6 +230,9 @@ func (b *Batch) PrepareExternalCommandWALPublication() (err error) {
 		groups[i] = append(groups[i], m)
 	}
 	for i := range opts {
+		if pointerCount == 0 {
+			break
+		}
 		slices.Sort(p.files[i])
 		p.files[i] = slices.Compact(p.files[i])
 		slices.Sort(p.dictionaries[i])
@@ -453,8 +483,15 @@ func (b *Batch) writeCOWPublication(syncWrite bool, unlock func()) error {
 		nativeOpening = native.opening
 		native.opening = nil
 	}
+	// Consume the producer's exact input under the SAME backend authority as
+	// ordinary cached writes. Canonical preparation and WAL I/O have finished;
+	// only accepted installation remains under this short authority cut.
+	admission := b.db.beginMVCCInputCut()
+	admission.ObserveSummary(b.mvccSummary)
 	old, publishErr := p.cut.publishAccepted(b.cowState.accepted)
 	if publishErr != nil {
+		// BeginInstall is the only error return and precedes any installation.
+		admission.Abort()
 		if poisoner, ok := b.db.backend.(interface{ MarkCommandWALRecoveryRequired() }); ok {
 			poisoner.MarkCommandWALRecoveryRequired()
 		}
@@ -473,6 +510,9 @@ func (b *Batch) writeCOWPublication(syncWrite bool, unlock func()) error {
 		unlock()
 		return joinCOWCleanupError(publishErr, p.drainCancelled())
 	}
+	// The logical cut is installed even if later cleanup/checkpoint reports an
+	// error. Its authority observation must not be rolled back in that case.
+	admission.Commit()
 	b.cowState.accepted = rootpublication.AcceptedTicket{}
 	b.cowState.receipt.LogicalInstalled = true
 	b.cowState.receipt.LogicalSeq = p.cut.next.logicalSeq

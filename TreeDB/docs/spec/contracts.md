@@ -212,7 +212,7 @@ Retained-version iteration and discard/pruning extend that opt-in owner:
   full-database materialization. Options are copied at open; `Entry` returns
   caller-owned keys and values, and tombstones remain explicit records. `EntryView`
   returns read-only borrowed key/payload slices valid until the next `Next`,
-  `Seek`, or `Close`. It reuses the current decoded version without copying or
+  `NextKey`, `Seek`, or `Close`. It reuses the current decoded version without copying or
   reading the payload again; advancing still materializes pointer values and
   reports their errors eagerly. Retained or mutable output must use `Entry`.
   `GetAt` transfers validated successor-owned payloads and copies borrowed
@@ -221,6 +221,12 @@ Retained-version iteration and discard/pruning extend that opt-in owner:
   the envelope byte and allocator rounding; reducing slice capacity cannot
   reduce this GC retention. Iterator
   accounting reports physical versions visited, filtered/skipped, and returned.
+- Forward `VersionIterator.NextKey` selects the next logical key under the
+  original bounds and timestamp ceiling, keeping tombstones explicit. It skips
+  older versions without materializing their values; inspected physical records
+  remain validated, while seek-bypassed records are not counted or checked.
+  Reverse use records `ErrNextKeyReverse`. Ordinary `Next` and `Seek` retain
+  their existing direction and history semantics.
 - `VersionIteratorOptions.ExactKey` intersects the other logical filters with
   one logical key. Nil disables this filter; a nonnil empty slice selects the
   empty key. Canonical codec bounds cover all its versions, including binary
@@ -366,8 +372,12 @@ side stores do not inherit this main-store budget. No on-disk format changes.
 
 ### 2.5.2 Explicit immutable COW cache
 
-`Options.MemtableMode="cow_btree"` selects the
-[coherent COW cut contract](cow-cache-publication.md). Snapshot capture pins one
+`Options.MemtableMode="cow_btree"` and explicit experimental
+`Options.MemtableMode="cow_ordered"` select the
+[coherent COW cut contract](cow-cache-publication.md). These immutable modes
+require exact selectors: `adaptive:cow_btree` and `adaptive:cow_ordered` return
+`caching.ErrCOWUnsupported` before backend opening or storage creation.
+Ordinary mutable `adaptive:<mode>` selectors remain supported. Snapshot capture pins one
 complete shard/source/backend-basis cut without rotation, record copying or
 history sorting. Owned point/versioned reads, presence/prefix queries,
 successors and forward/reverse iterators all resolve through that cut, including when
@@ -381,6 +391,21 @@ visible point effects. Mixed unsupported batches are not partially applied.
 These are explicit-mode exceptions to the broader raw/iterator API below;
 existing modes retain their current capabilities. COW supplies immutable
 physical views, not additional MVCC conflict or timestamp semantics.
+
+The [ordered logical-history representation](cow-ordered-logical-mvcc.md)
+adds an optional Store producer reported by `SupportsLogicalMVCC`. Only original
+Store-admitted operands enter its logical-key/numeric-timestamp index; raw KV
+operations retain the physical COW tree. `cow_btree` keeps the qualified physical
+codec route. The default remains adaptive, and selecting a production durability
+profile does not select either COW representation. Application timestamps, native
+entry revisions, complete publication sequence and WAL LSN remain independent.
+
+Ordered floor pruning uses the existing checkpoint before capture and after any
+physical delete-write attempt, with completion after batch/iterator/snapshot
+cleanup even on an error outcome. Those drains are part of its cost; original
+errors remain observable. Arbitrary physical deletes can retain masks until
+handoff. Persistent value-log reclamation still requires the original reachability
+and physical-resource owners; generation retirement does not authorize deletion.
 
 Finite `COWMemtableLimits` govern generations, sources, views, concrete resource
 identities and actual allocation capacities. An all-zero bundle selects finite

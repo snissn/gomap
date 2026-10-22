@@ -98,6 +98,9 @@ type COWCursor struct {
 	mu                                    sync.Mutex
 	view                                  *COWView
 	iter                                  btree.MapIter[string, cowValue]
+	ordered                               cowOrderedCursor
+	record                                COWRecord
+	rawValid, orderedValid, rawSelected   bool
 	start, end                            string
 	bounded, lowerBounded, valid, reverse bool
 }
@@ -156,6 +159,16 @@ func (r *COWRoot) cursorWithExtraBytes(start, end []byte, extraBytes uint64, rev
 	if !ok {
 		return nil, ErrCOWCapacity
 	}
+	if r.ordered != nil {
+		orderedStack, fits := cowOrderedCursorStackCharge(r.ordered)
+		if !fits {
+			return nil, ErrCOWCapacity
+		}
+		stack, ok = cowAdd(stack, orderedStack)
+		if !ok {
+			return nil, ErrCOWCapacity
+		}
+	}
 	extra, ok := cowAdd(cowAllocation(uint64(unsafe.Sizeof(COWCursor{}))), stack)
 	if !ok {
 		return nil, ErrCOWCapacity
@@ -179,12 +192,17 @@ func (r *COWRoot) cursorWithExtraBytes(start, end []byte, extraBytes uint64, rev
 		return nil, err
 	}
 	c := &COWCursor{view: v, iter: r.tree.Iter(), end: string(end), bounded: end != nil, reverse: reverse}
+	if r.ordered != nil {
+		c.ordered = r.ordered.cursor()
+	}
 	if reverse {
 		c.start = string(start)
 		c.lowerBounded = start != nil
 		c.seekReverse(nil)
 	} else {
-		c.valid = cowIteratorSeek(r.tree, &c.iter, start)
+		c.rawValid = cowIteratorSeek(r.tree, &c.iter, start)
+		c.orderedValid = c.ordered.seekGE(start)
+		c.selectRecord()
 		c.checkEnd()
 	}
 	return c, nil
@@ -199,8 +217,21 @@ func (v *COWView) Cursor(start, end []byte) (*COWCursor, error) {
 	return v.root.Cursor(start, end)
 }
 func (c *COWCursor) checkEnd() {
-	if c.valid && ((c.bounded && c.iter.Key() >= c.end) || (c.reverse && c.lowerBounded && c.iter.Key() < c.start)) {
+	if c.valid && ((c.bounded && c.record.Key >= c.end) || (c.reverse && c.lowerBounded && c.record.Key < c.start)) {
 		c.valid = false
+	}
+}
+
+func (c *COWCursor) selectRecord() {
+	ordered, ord := c.ordered.current()
+	c.orderedValid = c.orderedValid && ord
+	c.rawSelected = c.rawValid && (!c.orderedValid || (!c.reverse && c.iter.Key() <= ordered.Key) || (c.reverse && c.iter.Key() >= ordered.Key))
+	c.valid = c.rawValid || c.orderedValid
+	c.record = COWRecord{}
+	if c.rawSelected {
+		c.record = c.iter.Value().record(c.iter.Key())
+	} else if c.orderedValid {
+		c.record = ordered
 	}
 }
 func (c *COWCursor) Seek(key []byte) error {
@@ -213,7 +244,9 @@ func (c *COWCursor) Seek(key []byte) error {
 		c.seekReverse(key)
 		return nil
 	}
-	c.valid = cowIteratorSeek(c.view.root.tree, &c.iter, key)
+	c.rawValid = cowIteratorSeek(c.view.root.tree, &c.iter, key)
+	c.orderedValid = c.ordered.seekGE(key)
+	c.selectRecord()
 	c.checkEnd()
 	return nil
 }
@@ -224,11 +257,20 @@ func (c *COWCursor) Next() error {
 		return ErrCOWClosed
 	}
 	if c.valid {
-		if c.reverse {
-			c.valid = c.iter.Prev()
+		if c.rawSelected {
+			if c.reverse {
+				c.rawValid = c.iter.Prev()
+			} else {
+				c.rawValid = c.iter.Next()
+			}
 		} else {
-			c.valid = c.iter.Next()
+			if c.reverse {
+				c.orderedValid = c.ordered.prev()
+			} else {
+				c.orderedValid = c.ordered.next()
+			}
 		}
+		c.selectRecord()
 		c.checkEnd()
 	}
 	return nil
@@ -237,21 +279,29 @@ func (c *COWCursor) seekReverse(key []byte) {
 	if key == nil || (c.bounded && string(key) >= c.end) {
 		if c.bounded {
 			if c.iter.Seek(c.end) {
-				c.valid = c.iter.Prev()
+				c.rawValid = c.iter.Prev()
 			} else {
-				c.valid = c.iter.Last()
+				c.rawValid = c.iter.Last()
+			}
+			c.orderedValid = c.ordered.seekLE([]byte(c.end))
+			if r, ok := c.ordered.current(); ok && r.Key >= c.end {
+				c.orderedValid = c.ordered.prev()
 			}
 		} else {
-			c.valid = c.iter.Last()
+			c.rawValid = c.iter.Last()
+			c.orderedValid = c.ordered.last()
 		}
 	} else if cowIteratorSeek(c.view.root.tree, &c.iter, key) {
-		c.valid = true
+		c.rawValid = true
 		if c.iter.Key() > string(key) {
-			c.valid = c.iter.Prev()
+			c.rawValid = c.iter.Prev()
 		}
+		c.orderedValid = c.ordered.seekLE(key)
 	} else {
-		c.valid = c.iter.Last()
+		c.rawValid = c.iter.Last()
+		c.orderedValid = c.ordered.seekLE(key)
 	}
+	c.selectRecord()
 	c.checkEnd()
 }
 func (c *COWCursor) Record() (COWRecord, bool, error) {
@@ -263,8 +313,7 @@ func (c *COWCursor) Record() (COWRecord, bool, error) {
 	if !c.valid {
 		return COWRecord{}, false, nil
 	}
-	v := c.iter.Value()
-	return v.record(c.iter.Key()), true, nil
+	return c.record, true, nil
 }
 func (c *COWCursor) Close() {
 	c.mu.Lock()
@@ -272,6 +321,8 @@ func (c *COWCursor) Close() {
 	c.view = nil
 	c.valid = false
 	c.iter = btree.MapIter[string, cowValue]{}
+	c.ordered.clear()
+	c.record = COWRecord{}
 	c.end = ""
 	c.start = ""
 	c.mu.Unlock()

@@ -19,6 +19,10 @@ type COWMutation struct {
 	Revision   page.EntryRevision
 	Flags      byte
 	Remove     bool
+	// MVCC qualifies a canonical physical version for the logical-history
+	// representation. Timestamp is application time, never revision or LSN.
+	MVCC      bool
+	Timestamp uint64
 }
 
 // COWRecord exposes immutable owned strings. Byte conversions produce copies.
@@ -73,6 +77,7 @@ func (r *COWRetirement) Drain() {
 type COWWriter struct {
 	mu         sync.Mutex
 	private    *btree.Map[string, cowValue]
+	ordered    *cowOrderedTree
 	generation *cowGeneration
 	pending    *COWPrepared
 	maxEntries int
@@ -81,6 +86,10 @@ type COWWriter struct {
 
 func NewCOWWriter(b *COWBudget) (*COWWriter, error) {
 	return newCOWWriterWithConstruction(b, nil)
+}
+
+func NewCOWOrderedWriter(b *COWBudget) (*COWWriter, error) {
+	return newCOWWriterMode(b, nil, true)
 }
 
 // ForkCOWWriter prepares a private successor from an owned immutable source.
@@ -101,6 +110,9 @@ func ForkCOWWriter(root *COWRoot) (*COWWriter, error) {
 	g := root.generation
 	b := g.budget
 	charge := cowAllocation(uint64(unsafe.Sizeof(COWWriter{}))) + cowAllocation(uint64(unsafe.Sizeof(btree.Map[string, cowValue]{})))
+	if root.ordered != nil {
+		charge += cowOrderedForkCharge()
+	}
 	b.mu.Lock()
 	if b.closed {
 		b.mu.Unlock()
@@ -125,7 +137,11 @@ func ForkCOWWriter(root *COWRoot) (*COWWriter, error) {
 	g.refs++
 	g.activeWriters++
 	b.mu.Unlock()
-	return &COWWriter{private: root.tree.ForkImmutable(), generation: g, maxEntries: root.tree.Len()}, nil
+	w := &COWWriter{private: root.tree.ForkImmutable(), generation: g, maxEntries: root.tree.Len()}
+	if root.ordered != nil {
+		w.ordered = root.ordered.fork()
+	}
+	return w, nil
 }
 
 // NewCOWWriterWithMaintenanceConstruction admits only a fixed empty-source
@@ -139,6 +155,17 @@ func NewCOWWriterWithMaintenanceConstruction(b, maintenance *COWBudget) (*COWWri
 }
 
 func newCOWWriterWithConstruction(b, maintenance *COWBudget) (*COWWriter, error) {
+	return newCOWWriterMode(b, maintenance, false)
+}
+
+func NewCOWOrderedWriterWithMaintenanceConstruction(b, maintenance *COWBudget) (*COWWriter, error) {
+	if maintenance == nil {
+		return nil, ErrCOWCapacity
+	}
+	return newCOWWriterMode(b, maintenance, true)
+}
+
+func newCOWWriterMode(b, maintenance *COWBudget, ordered bool) (*COWWriter, error) {
 	if b == nil {
 		return nil, fmt.Errorf("nil COW budget")
 	}
@@ -151,11 +178,18 @@ func newCOWWriterWithConstruction(b, maintenance *COWBudget) (*COWWriter, error)
 		// no mutable payload or resource-growth allowance hidden in the reserve.
 		base += 2*cowAllocation(uint64(unsafe.Sizeof(btree.Map[string, cowValue]{}))) + cowAllocation(uint64(unsafe.Sizeof(COWRoot{})))
 	}
+	if ordered {
+		base += cowOrderedConstructionCharge(maintenance != nil)
+	}
 	g, err := newCOWGenerationWithConstruction(b, base, maintenance)
 	if err != nil {
 		return nil, err
 	}
-	return &COWWriter{private: btree.NewMap[string, cowValue](btreeDefaultDegree), generation: g}, nil
+	w := &COWWriter{private: btree.NewMap[string, cowValue](btreeDefaultDegree), generation: g}
+	if ordered {
+		w.ordered = newCOWOrderedTree()
+	}
+	return w, nil
 }
 
 // BindReservedEmptyRoot installs the one already-admitted generation resolver
@@ -164,7 +198,7 @@ func newCOWWriterWithConstruction(b, maintenance *COWBudget) (*COWWriter, error)
 func (w *COWWriter) BindReservedEmptyRoot(id COWResourceID, release func()) (*COWRoot, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.closed || w.pending != nil || w.private.Len() != 0 || release == nil {
+	if w.closed || w.pending != nil || w.private.Len() != 0 || (w.ordered != nil && w.ordered.len() != 0) || release == nil {
 		return nil, ErrCOWPending
 	}
 	g := w.generation
@@ -178,7 +212,11 @@ func (w *COWWriter) BindReservedEmptyRoot(id COWResourceID, release func()) (*CO
 	g.ids = append(g.ids, id)
 	g.owners = append(g.owners, cowResourceOwner{release: release})
 	b.mu.Unlock()
-	return &COWRoot{tree: w.private.ImmutableCopy(), generation: g, refs: 1}, nil
+	r := &COWRoot{tree: w.private.ImmutableCopy(), generation: g, refs: 1}
+	if w.ordered != nil {
+		r.ordered = w.ordered.immutableCopy()
+	}
+	return r, nil
 }
 
 // COWPrepareOptions reserves the later pre-frame resource binding and C2's
@@ -258,6 +296,7 @@ func cowNodeReserveFor(height int, replacement, remove bool, maxEntries int) uin
 
 func (w *COWWriter) estimate(entries []COWMutation, opts COWPrepareOptions) (COWCharge, error) {
 	var c COWCharge
+	routing := w.ordered.routing(entries)
 	if opts.ResourceSlots < 0 || opts.ResourceSlots > w.generation.budget.limits.MaxResources {
 		return c, ErrCOWCapacity
 	}
@@ -276,20 +315,42 @@ func (w *COWWriter) estimate(entries []COWMutation, opts COWPrepareOptions) (COW
 	if n := w.private.Len() + len(entries); n > maxEntries {
 		maxEntries = n
 	}
-	for _, e := range entries {
-		if !e.Remove {
+	for index, e := range entries {
+		routed := routing.routes(index)
+		rawRemove := e.Remove
+		if routed {
+			if !cowHasKey(w.private, e.Key) {
+				continue
+			}
+			rawRemove = true
+		}
+		if !rawRemove {
 			allRemove = false
 		}
-		if e.Remove {
+		if rawRemove {
 			deletes = true
+			allReplace = false
 		}
 	}
 	add := func(dst *uint64, n uint64) bool { v, ok := cowAdd(*dst, n); *dst = v; return ok }
 	var growth uint64
 	fullCapacity := cowNodeReserveFor(2, true, false, maxEntries) / 2
-	for _, e := range entries {
+	for index, e := range entries {
 		if !e.Remove && e.Flags&node.FlagPointer != 0 && e.Flags&node.FlagTombstone != 0 {
 			return c, fmt.Errorf("COW entry has pointer and tombstone flags")
+		}
+		if routing.routes(index) {
+			if cowHasKey(w.private, e.Key) {
+				reserve := cowNodeReserveFor(c.Height, false, true, maxEntries)
+				if !add(&c.Nodes, reserve) {
+					return c, ErrCOWCapacity
+				}
+				copies := 2 * cowNodeReserveFor(c.Height, true, false, maxEntries)
+				if !add(&growth, reserve-copies) {
+					return c, ErrCOWCapacity
+				}
+			}
+			continue
 		}
 		exists := cowHasKey(w.private, e.Key)
 		if !exists || e.Remove {
@@ -367,6 +428,26 @@ func (w *COWWriter) estimate(entries []COWMutation, opts COWPrepareOptions) (COW
 		cowAllocation(uint64(opts.ResourceSlots)*uint64(unsafe.Sizeof(cowResourceOwner{})))
 	c.Resources = opts.ResourceBytes
 	c.Extra = opts.ExtraBytes
+	if w.ordered != nil {
+		ordered, err := w.ordered.estimate(entries)
+		if err != nil {
+			return c, err
+		}
+		for _, pair := range []struct {
+			dst *uint64
+			n   uint64
+		}{
+			{&c.Nodes, ordered.Nodes}, {&c.Payload, ordered.Payload},
+			{&c.Wrappers, ordered.Wrappers}, {&c.Temporary, ordered.Temporary},
+		} {
+			if !add(pair.dst, pair.n) {
+				return c, ErrCOWCapacity
+			}
+		}
+		if ordered.Height > c.Height {
+			c.Height = ordered.Height
+		}
+	}
 	total := uint64(0)
 	for _, n := range []uint64{c.Nodes, c.Payload, c.Wrappers, c.Temporary, c.Resources, c.Extra} {
 		if !add(&total, n) {
@@ -388,16 +469,19 @@ func (w *COWWriter) Estimate(entries []COWMutation, opts COWPrepareOptions) (COW
 }
 
 type COWPrepared struct {
-	writer         *COWWriter
-	private        *btree.Map[string, cowValue]
-	root           *COWRoot
-	charge         COWCharge
-	ids            []COWResourceID
-	owners         []cowResourceOwner
-	maxEntries     int
-	deferredBudget *COWBudget
-	deferredCharge uint64
-	drainClaimed   bool
+	writer          *COWWriter
+	private         *btree.Map[string, cowValue]
+	ordered         *cowOrderedTree
+	root            *COWRoot
+	charge          COWCharge
+	ids             []COWResourceID
+	owners          []cowResourceOwner
+	maxEntries      int
+	deferredBudget  *COWBudget
+	deferredCharge  uint64
+	logicalBytes    int64
+	logicalOverflow bool
+	drainClaimed    bool
 }
 
 func (p *COWPrepared) Charge() COWCharge { return p.charge }
@@ -448,11 +532,31 @@ func (w *COWWriter) Prepare(entries []COWMutation, opts COWPrepareOptions) (*COW
 	b.mu.Unlock()
 	p := &COWPrepared{writer: w, private: w.private.Copy(), charge: c,
 		ids: make([]COWResourceID, 0, opts.ResourceSlots), owners: make([]cowResourceOwner, 0, opts.ResourceSlots), maxEntries: w.private.Len() + len(entries)}
-	for _, e := range entries {
+	var logicalDelta cowLogicalDelta
+	if w.ordered != nil {
+		p.ordered = w.ordered.fork()
+		logicalDelta = p.ordered.applyValidatedFrom(w.ordered, entries)
+	}
+	routing := w.ordered.routing(entries)
+	for index, e := range entries {
+		if routing.routes(index) {
+			// A newly qualified version replaces any prior raw incarnation.
+			// Deleting a missing key can still copy its raw search path. Only
+			// real migration work is included in the original reservation; use
+			// the staged tree because earlier operations may insert this key.
+			if p.private.Len() != 0 && cowHasKey(p.private, e.Key) {
+				if previous, removed := cowDeleteKey(p.private, e.Key); removed {
+					logicalDelta.replace(len(e.Key), "", previous)
+				}
+			}
+			continue
+		}
 		// Lookup returns an existing owned key; safe builds compare bytes
 		// directly, without temporary key conversions before or after admission.
 		if e.Remove {
-			cowDeleteKey(p.private, e.Key)
+			if previous, removed := cowDeleteKey(p.private, e.Key); removed {
+				logicalDelta.replace(len(e.Key), "", previous)
+			}
 			continue
 		}
 		ownedKey, _, exists := cowLookupGE(p.private, e.Key)
@@ -461,11 +565,60 @@ func (w *COWWriter) Prepare(entries []COWMutation, opts COWPrepareOptions) (*COW
 		if !exists {
 			ownedKey = string(e.Key)
 		}
-		p.private.Set(ownedKey, cowEncodeValue(e))
+		value := cowEncodeValue(e)
+		previous, _ := p.private.Set(ownedKey, value)
+		logicalDelta.replace(len(e.Key), value, previous)
 	}
+	p.logicalBytes, p.logicalOverflow = logicalDelta.bytes, logicalDelta.overflow
 	p.root = &COWRoot{tree: p.private.ImmutableCopy(), generation: g}
+	if p.ordered != nil {
+		p.root.ordered = p.ordered.immutableCopy()
+	}
+	actualNodes := p.private.AllocationCharge()
+	if p.ordered != nil {
+		orderedNodes := p.ordered.nodeAllocationCharge()
+		if orderedNodes > ^uint64(0)-actualNodes {
+			actualNodes = ^uint64(0)
+		} else {
+			actualNodes += orderedNodes
+		}
+	}
+	if err := p.reconcileNodes(actualNodes); err != nil {
+		// No resource callback or published source edge exists yet. End every
+		// private postimage alias before returning the original reservation.
+		p.private, p.ordered, p.root, p.ids, p.owners, p.writer = nil, nil, nil, nil, nil, nil
+		b.mu.Lock()
+		g.pending -= total
+		b.stats.ReservedBytes -= total
+		b.stats.TotalBytes -= total
+		b.mu.Unlock()
+		return nil, err
+	}
 	w.pending = p
 	return p, nil
+}
+
+// reconcileNodes returns only an unspent part of the original proven node
+// reservation. The counter includes every actual copied/grown backing, even
+// ones discarded while preparing. Payload, wrappers and resource envelopes
+// retain their original charge. Caller holds the writer lock before publication.
+func (p *COWPrepared) reconcileNodes(actual uint64) error {
+	if actual > p.charge.Nodes {
+		return fmt.Errorf("COW node allocation charge %d exceeds reservation %d: %w", actual, p.charge.Nodes, ErrCOWCapacity)
+	}
+	unused := p.charge.Nodes - actual
+	if unused == 0 {
+		return nil
+	}
+	g := p.writer.generation
+	b := g.budget
+	b.mu.Lock()
+	g.pending -= unused
+	b.stats.ReservedBytes -= unused
+	b.stats.TotalBytes -= unused
+	p.charge.Nodes = actual
+	b.mu.Unlock()
+	return nil
 }
 
 func (w *COWWriter) HasResource(id COWResourceID) bool {
@@ -556,6 +709,7 @@ func (p *COWPrepared) Publish() *COWRoot {
 	g.owners = append(g.owners, p.owners...)
 	b.mu.Unlock()
 	w.private = p.private
+	w.ordered = p.ordered
 	if n := p.maxEntries; n > w.maxEntries {
 		w.maxEntries = n
 	}
@@ -566,6 +720,7 @@ func (p *COWPrepared) Publish() *COWRoot {
 	root.mu.Unlock()
 	p.writer = nil
 	p.private = nil
+	p.ordered = nil
 	p.root = nil
 	p.ids = nil
 	p.owners = nil
@@ -608,6 +763,7 @@ func (p *COWPrepared) Cancel() COWRetirement {
 	}
 	p.writer = nil
 	p.private = nil
+	p.ordered = nil
 	p.root = nil
 	p.ids = nil
 	return r
@@ -723,6 +879,7 @@ func (w *COWWriter) Close() COWRetirement {
 	}
 	w.closed = true
 	w.private = nil
+	w.ordered = nil
 	g := w.generation
 	b := g.budget
 	b.mu.Lock()
@@ -744,6 +901,7 @@ func (w *COWWriter) Close() COWRetirement {
 type COWRoot struct {
 	mu         sync.Mutex
 	tree       *btree.Map[string, cowValue]
+	ordered    *cowOrderedTree
 	generation *cowGeneration
 	refs       int
 }
@@ -822,11 +980,32 @@ func (r *COWRoot) Release() COWRetirement {
 		return COWRetirement{}
 	}
 	generation := r.generation
-	r.tree, r.generation = nil, nil
+	r.tree, r.ordered, r.generation = nil, nil, nil
 	return generation.release()
 }
-func (r *COWRoot) Len() int    { return r.tree.Len() }
-func (r *COWRoot) Height() int { return r.tree.Height() }
+func (r *COWRoot) Len() int {
+	n := r.tree.Len()
+	if r.ordered != nil {
+		n += r.ordered.len()
+	}
+	return n
+}
+func (r *COWRoot) Height() int {
+	h := r.tree.Height()
+	if r.ordered != nil && r.ordered.height() > h {
+		h = r.ordered.height()
+	}
+	return h
+}
+
+// OrderedCounts reports representation activation while the caller owns this
+// immutable root. It creates no cursor or new ownership edge.
+func (r *COWRoot) OrderedCounts() (logicalKeys, physicalVersions int) {
+	if r == nil || r.ordered == nil {
+		return 0, 0
+	}
+	return r.ordered.keys.Len(), r.ordered.len()
+}
 func (r *COWRoot) Get(key []byte) (COWRecord, bool) {
 	record, ok := r.SeekGE(key, nil)
 	if !ok || cowKeyCompare(record.Key, key) != 0 {
@@ -841,6 +1020,11 @@ func (r *COWRoot) Get(key []byte) (COWRecord, bool) {
 // cleared. Callbacks run outside publication/cut gates and must not release the
 // enclosing source while scanning. Returning false stops the scan immediately.
 func (r *COWRoot) ScanOwned(iter func(COWRecord) bool) {
+	if r.ordered != nil && r.ordered.len() != 0 {
+		// Immutable projections share the original generation owner.
+		r.scanOrderedMerged(iter)
+		return
+	}
 	r.tree.Scan(func(key string, value cowValue) bool {
 		return iter(value.record(key))
 	})
@@ -852,6 +1036,11 @@ func (r *COWRoot) ScanOwned(iter func(COWRecord) bool) {
 // The returned strings are immutable generation-owned data.
 func (r *COWRoot) SeekGE(start, end []byte) (COWRecord, bool) {
 	key, v, found := cowLookupGE(r.tree, start)
+	if r.ordered != nil {
+		if candidate, ok := r.ordered.seekGE(start, end); ok && (!found || candidate.Key < key) {
+			return candidate, true
+		}
+	}
 	if !found || (end != nil && cowKeyCompare(key, end) >= 0) {
 		return COWRecord{}, false
 	}
@@ -862,6 +1051,11 @@ func (r *COWRoot) SeekGE(start, end []byte) (COWRecord, bool) {
 // It has the same original source lifetime and allocation contract as SeekGE.
 func (r *COWRoot) SeekLT(start, end []byte) (COWRecord, bool) {
 	key, v, found := cowLookupLT(r.tree, end)
+	if r.ordered != nil {
+		if candidate, ok := r.ordered.seekLT(start, end); ok && (!found || candidate.Key > key) {
+			return candidate, true
+		}
+	}
 	if !found || (start != nil && cowKeyCompare(key, start) < 0) {
 		return COWRecord{}, false
 	}

@@ -9,6 +9,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/merging"
+	"github.com/snissn/gomap/TreeDB/internal/mvcckey"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/tree"
@@ -53,6 +54,15 @@ func (s *Snapshot) cowSeekGE(start, end []byte) (key, value []byte, found bool, 
 	if empty {
 		var best pointSuccessorCandidate
 		queue := s.rootIterator.immutables
+		// A canonical exact-version range has the same shard affinity for
+		// every valid or malformed timestamp suffix. Use that shard's owned
+		// cut projection instead of seeking all unrelated sibling roots.
+		if _, exact := mvcckey.ExactVersionRange(start, end); exact && s.db != nil &&
+			!memtableViewHasRangeSpans(s.view) && len(s.rootPointShards) == len(s.cowCut.shards) {
+			if shard := s.db.shardIndex(start); shard >= 0 && shard < len(s.rootPointShards) {
+				queue = s.rootPointShards[shard].immutables
+			}
+		}
 		for i := len(queue) - 1; i >= 0; i-- {
 			if _, ok := queue[i].(memtable.SuccessorTable); !ok {
 				empty = false // Unknown sources require the existing merge.
@@ -66,6 +76,13 @@ func (s *Snapshot) cowSeekGE(start, end []byte) (key, value []byte, found bool, 
 				return nil, nil, false, nil
 			}
 			if best.flags&node.FlagTombstone == 0 {
+				// The original cut already owns this exact winning inline value.
+				// Materialize it directly instead of resolving its physical key a
+				// second time through the point-shard domains. Pointer values still
+				// use the original workspace and dependency materialization path.
+				if best.flags&node.FlagPointer == 0 {
+					return append([]byte(nil), best.key...), append([]byte(nil), best.value...), true, nil
+				}
 				s.cowReadMu.Lock()
 				borrowed, _, readErr := s.cowValueLocked(best.key)
 				if readErr == nil {
@@ -208,6 +225,19 @@ func (it *cowMergeIterator) Seek(key []byte) {
 	it.value = nil
 	it.cached = false
 }
+func (it *cowMergeIterator) SeekForward(key []byte) {
+	seekForwardIterator(it.Iterator, key)
+	it.value = nil
+	it.cached = false
+}
+
+func seekForwardIterator(iter merging.Iterator, key []byte) {
+	if forward, ok := iter.(merging.ForwardSeeker); ok {
+		forward.SeekForward(key)
+	} else {
+		iter.Seek(key)
+	}
+}
 func (it *cowMergeIterator) Value() []byte {
 	if !it.cached && it.Iterator.Valid() {
 		it.cached = true
@@ -247,6 +277,22 @@ func (it *cowMergeIterator) readWorkspace() (*cowReadWorkspace, error) {
 	return it.workspace, nil
 }
 func (it *cowMergeIterator) readLeaf(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
+	// The iterator is bound to this original cut and serializes movement.
+	// Reuse the basis' already verified physical leaf slots, just as point
+	// reads do, rather than inspecting and decoding a page on every Seek.
+	basis := it.snapshot.cowCut.basis
+	basis.readMu.Lock()
+	_, err := basis.physicalWorkspaceLocked(it.snapshot.cowCache.budget, it.snapshot.cowCache.readLimits())
+	var data []byte
+	if err == nil {
+		data, err = basis.readPhysicalLeafLocked(it.snapshot.cowCache, ptr, dst, false)
+	}
+	basis.readMu.Unlock()
+	if err != errCOWPhysicalDictionary {
+		return data, err
+	}
+	// Dictionary definitions belong to the complete caller cut. Preserve its
+	// original admitted decoder and resources for that fallback.
 	w, err := it.readWorkspace()
 	if err != nil {
 		return nil, err

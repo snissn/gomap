@@ -1293,7 +1293,10 @@ type Options struct {
 
 	FlushThreshold int64
 	// MemtableMode selects the cached-mode memtable implementation.
-	// Supported values: "skiplist", "hash_sorted", "btree", "append_only", "adaptive".
+	// Supported values: "skiplist", "hash_sorted", "btree", "append_only", "adaptive",
+	// and explicit immutable "cow_btree" or experimental "cow_ordered".
+	// "adaptive:<mode>" accepts ordinary mutable modes; immutable COW modes
+	// require their exact explicit selector and cannot use an adaptive wrapper.
 	MemtableMode      string
 	COWMemtableLimits COWMemtableLimits
 	// MemtableShards controls the number of mutable memtable shards in cached

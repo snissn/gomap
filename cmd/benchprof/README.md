@@ -564,6 +564,34 @@ Repeat without the tag for the default comparator. Fixture setup is excluded;
 1 MiB keys prevent short-input conversion elision from hiding allocation costs.
 See [ownership and qualification scope](../../TreeDB/docs/spec/cow-memtable-ownership.md).
 
+### Standalone ordered logical MVCC comparison
+
+The opt-in public harness in
+[`benchmarks/orderedmem_native`](../../benchmarks/orderedmem_native/README.md)
+compares Store-admitted `cow_ordered` histories with adaptive TreeDB, existing
+`cow_btree` and managed Badger. Ordinary `go test` runs fixture checks and skips
+measurement. Build its test binary separately, save a frozen plan, then use its
+`run.py --execute` interface with explicit source/binary mappings and a fresh
+output directory on the benchmark volume. The package README owns the runner options and
+work/acknowledgment/ownership boundaries. CPU and allocation captures
+are standalone Go test profiles for `go tool pprof`, not benchprof inputs.
+
+`unified-bench -treedb-memtable-mode cow_ordered` instead forces COW for raw KV;
+it does not activate the Store's logical-key/numeric-history index. Keep the
+adaptive default as a separate arm, record actual resolved modes and WAL state,
+and inspect complete settlement/shutdown costs beside foreground rates. TreeDB
+Checkpoint drains cached state; Badger Sync is a persistence barrier rather than
+an equivalent LSM drain. Match relaxed or explicit sync-on acknowledgments before
+comparing engines. The Badger unified adapter's relaxed-WAL comparison must not
+be relabeled a matched sync-on result.
+
+The selected prototype `2119eed86e46fecaac29bc96b33c7d26f3a3c5a5` has measured
+raw-KV regressions against adaptive TreeDB and Badger. Its managed-history gains
+against earlier COW candidates do not establish Badger parity or justify changing
+the default. Preserve exact-source results, all natural samples and adverse
+observations; collect instrumented profiles separately. Integration and subsequent
+500k optimization are tracked in [#5192](https://github.com/snissn/gomap/issues/5192).
+
 ### Standalone COW public integration diagnostics (#5046)
 
 These Go package benchmarks compare `append_only`, `btree` and `cow_btree` on

@@ -3,7 +3,41 @@ package cowbtree
 import (
 	"reflect"
 	"unsafe"
+
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 )
+
+// AllocationCharge reports only node and backing allocations made through this
+// header since creation or its private fork. It includes discarded growth
+// buffers, excludes the Map header and opaque value copies, and grants no
+// allocation authority. Callers must reserve a proven bound before mutation.
+// New headers returned by Copy/IsoCopy/ForkImmutable begin at zero; their opening
+// node graph is already owned by the original source. Published headers are
+// immutable, so readers never update or need this preparation-only scalar.
+func (tr *Map[K, V]) AllocationCharge() uint64 { return tr.allocationCharge }
+
+func (tr *Map[K, V]) recordAllocation(bytes uint64) {
+	charge := retainedalloc.AllocationCharge(bytes)
+	if charge > ^uint64(0)-tr.allocationCharge {
+		tr.allocationCharge = ^uint64(0)
+	} else {
+		tr.allocationCharge += charge
+	}
+}
+
+// These append sites use the runtime's growth policy. Charge the concrete new
+// capacity after allocation, while the caller still owns the private postimage.
+func (tr *Map[K, V]) recordItemsGrowth(oldCapacity int, items []mapPair[K, V]) {
+	if cap(items) > oldCapacity {
+		tr.recordAllocation(uint64(cap(items)) * uint64(unsafe.Sizeof(mapPair[K, V]{})))
+	}
+}
+
+func (tr *Map[K, V]) recordChildrenGrowth(oldCapacity int, children []*mapNode[K, V]) {
+	if cap(children) > oldCapacity {
+		tr.recordAllocation(uint64(cap(children)) * uint64(unsafe.Sizeof((*mapNode[K, V])(nil))))
+	}
+}
 
 // Mutation admission uses the caller's Work directly. It has no local budget,
 // retry journal, speculative logical write, or alternate tree representation.
@@ -72,6 +106,7 @@ func (tr *Map[K, V]) growItems(items []mapPair[K, V], extra int, w Work) ([]mapP
 		return nil, false
 	}
 	grown := make([]mapPair[K, V], len(items), capacity)
+	tr.recordAllocation(uint64(cap(grown)) * size)
 	copy(grown, items)
 	return grown, true
 }
@@ -92,6 +127,7 @@ func (tr *Map[K, V]) growChildren(children []*mapNode[K, V], extra int, w Work) 
 		return nil, false
 	}
 	grown := make([]*mapNode[K, V], len(children), capacity)
+	tr.recordAllocation(uint64(cap(grown)) * size)
 	copy(grown, children)
 	return grown, true
 }

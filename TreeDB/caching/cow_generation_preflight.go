@@ -15,10 +15,6 @@ import (
 // it is not a reservation and cannot authorize later canonical preparation.
 func (b *Batch) cowGenerationRollover() (_ *cowRollover, pressure bool, _ error) {
 	c := b.db.cow
-	clear(b.shardCnts)
-	for _, entry := range b.entries {
-		b.shardCnts[b.db.shardIndex(entry.Key)]++
-	}
 	groups := b.cowState.predictionGroups
 	storage := b.cowState.predictionStorage
 	start := 0
@@ -28,22 +24,37 @@ func (b *Batch) cowGenerationRollover() (_ *cowRollover, pressure bool, _ error)
 	}
 	allowPointers := b.db.valueLogEnabled() && b.db.allowValueLogPointers() &&
 		(!b.db.disableJournal || b.db.memtableValueLogPointers)
-	for _, entry := range b.entries {
+	for index, entry := range b.entries {
 		m := memtable.COWMutation{Key: entry.Key, Value: entry.Value, Flags: node.FlagInline}
 		if entry.Type == batch.OpDelete {
 			m.Flags, m.Value = node.FlagTombstone, nil
-		} else if allowPointers && b.db.shouldWriteViaValueLogForKeyValue(entry.Key, entry.Value) {
-			m.Flags, m.Value = node.FlagPointer, nil
+		} else {
+			if entry.Type == batch.OpPut {
+				m.Timestamp, m.MVCC = entry.MVCCInput.LogicalTimestamp(entry.Key)
+			}
+			if allowPointers && b.db.shouldWriteViaValueLogForKeyValue(entry.Key, entry.Value) {
+				m.Flags, m.Value = node.FlagPointer, nil
+			}
 		}
-		i := b.db.shardIndex(entry.Key)
+		i := b.shardIdxs[index]
 		groups[i] = append(groups[i], m)
+	}
+	if b.cowPredictionCanSkipEstimate(groups) {
+		return nil, false, nil
 	}
 	max := c.budget.Limits().MaxGenerationBytes
 	rotate := false
 	var total uint64
+	var successors int
 	for i, group := range groups {
 		if len(group) == 0 {
 			continue
+		}
+		// Canonical preparation promises one raw source and constructs one
+		// successor generation for each first-dirty shard, including logical
+		// groups. Already parked successors own both provisions.
+		if c.successors[i].writer == nil {
+			successors++
 		}
 		charge, err := c.writers[i].Estimate(group, memtable.COWPrepareOptions{})
 		if err != nil {
@@ -70,6 +81,16 @@ func (b *Batch) cowGenerationRollover() (_ *cowRollover, pressure bool, _ error)
 		}
 	}
 	limits, stats := c.budget.Limits(), c.budget.Stats()
+	if stats.Sources > limits.MaxSources || successors > limits.MaxSources-stats.Sources ||
+		stats.Generations > limits.MaxGenerations || successors > limits.MaxGenerations-stats.Generations {
+		return nil, true, nil
+	}
+	// Canonical preparation holds every shard's reservation at once. A loose
+	// prediction may decline this frontier, so the exact fallback must also
+	// request the existing bounded pressure join for aggregate in-flight bytes.
+	if stats.ReservedBytes > limits.MaxInFlightBytes || total > limits.MaxInFlightBytes-stats.ReservedBytes {
+		return nil, true, nil
+	}
 	// Match retirementFitsLocked's History+Reserved+Deferred arithmetic without
 	// overflowing. Producer resource identities are not known yet; their exact
 	// admission remains with the original canonical prepare, never this trigger.

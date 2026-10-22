@@ -7,6 +7,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/batch"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/mvccadmission"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -30,6 +31,7 @@ type cowBatchState struct {
 	predictionStorage            []memtable.COWMutation
 	inPublication, trustedAppend bool
 	guardReserved                bool
+	shardAssignmentsReady        bool
 }
 
 // One admitted allocation owns the public batch and its COW-only state. Both
@@ -157,6 +159,7 @@ func (b *Batch) cowAddEntry(e batch.Entry, owned bool) error {
 		b.hasViewOps = true
 	}
 	b.entries = append(b.entries, e)
+	b.cowState.shardAssignmentsReady = false
 	b.noteEntryAppend()
 	b.size += len(e.Key) + len(e.Value)
 	return nil
@@ -193,6 +196,7 @@ func (b *Batch) cowReset() {
 	}
 	b.releaseNativePublication()
 	b.entries = nil
+	b.mvccSummary = mvccadmission.Summary{}
 	b.copyArena = nil
 	b.shardAdds = nil
 	b.shardCnts = nil
@@ -200,6 +204,7 @@ func (b *Batch) cowReset() {
 	b.eligibleIdxs = nil
 	b.cowState.predictionGroups = nil
 	b.cowState.predictionStorage = nil
+	b.cowState.shardAssignmentsReady = false
 	b.stableViewValueLeaseChunks = nil
 	b.size, b.maxEntries = 0, 0
 	b.hasViewOps, b.hasDeleteRanges = false, false
@@ -250,6 +255,9 @@ func (b *Batch) cowPrepareWriteStorage() error {
 	// canonical dispatch. Admit their function+receiver environments before
 	// creating any of them; keep the shared scratch owner until Reset/Close.
 	bytes += 3 * memtable.COWAllocationCharge(2*uint64(unsafe.Sizeof(uintptr(0))))
+	// The unlock environment exists for inline publications too. Pointer-only
+	// producer capture has its own admission when placement actually needs it.
+	bytes += memtable.COWAllocationCharge(3 * uint64(unsafe.Sizeof(uintptr(0))))
 	if err := b.cowAdmitStorage(bytes); err != nil {
 		return err
 	}
@@ -259,6 +267,14 @@ func (b *Batch) cowPrepareWriteStorage() error {
 	b.shardCnts = make([]int, shards)
 	b.shardIdxs = make([]int, n)
 	b.eligibleIdxs = make([]int, 0, n)
+	// Keys and fixed shard ownership remain unchanged through prediction,
+	// placement and canonical preparation. Only values/pointers/revisions change.
+	for i, entry := range b.entries {
+		shard := b.db.shardIndex(entry.Key)
+		b.shardIdxs[i] = shard
+		b.shardCnts[shard]++
+	}
+	b.cowState.shardAssignmentsReady = true
 	return nil
 }
 

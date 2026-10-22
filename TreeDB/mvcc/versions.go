@@ -16,6 +16,7 @@ var (
 	ErrReadBeforeDiscardFloor   = errors.New("mvcc: read timestamp is at or below discard floor")
 	ErrVersionBelowDiscardFloor = errors.New("mvcc: commit timestamp is not above discard floor")
 	ErrSnapshotUnavailable      = errors.New("mvcc: TreeDB snapshot support is unavailable")
+	ErrNextKeyReverse           = errors.New("mvcc: NextKey requires a forward iterator")
 )
 
 // Metadata lives under an explicit zero-version marker followed by "M". It is
@@ -68,12 +69,13 @@ type VersionIteratorStats struct {
 }
 
 // VersionIterator owns a TreeDB snapshot and must be closed. Entry returns a
-// caller-owned record that remains valid after Next, Seek, or Close.
+// caller-owned record that remains valid after Next, NextKey, Seek, or Close.
 type VersionIterator struct {
 	raw      treedb.Iterator
 	snapshot treedb.Snapshot
 	options  VersionIteratorOptions
 	keyBuf   []byte
+	seekBuf  []byte
 	current  Version
 	stats    VersionIteratorStats
 	err      error
@@ -187,7 +189,7 @@ func (it *VersionIterator) Entry() Version {
 
 // EntryView returns the current version without copying its key or payload.
 // Key and Value are read-only borrowed slices, valid only until the next Next,
-// Seek, or Close call. Use Entry when retaining or modifying either slice.
+// NextKey, Seek, or Close call. Use Entry when retaining or modifying either slice.
 // Like Entry, EntryView returns a zero Version when the iterator is invalid.
 // Payload reads and their errors still occur when iteration advances, not here.
 func (it *VersionIterator) EntryView() Version {
@@ -205,6 +207,86 @@ func (it *VersionIterator) Next() {
 	it.advance()
 }
 
+// nextKeyStepLimit bounds physical iterator steps before seeking past a deep
+// history. A raw step can itself consume shadowed or physically deleted records.
+const nextKeyStepLimit = 8
+
+// mvccKeyAdvancer lets a snapshot-bound source hold its original read lease
+// across the bounded skip. The merged source still resolves physical masks.
+type mvccKeyAdvancer interface {
+	AdvanceMVCCKey(upper []byte, limit int) (visited, skipped uint64, malformed, storage error)
+}
+
+type mvccForwardSeeker interface {
+	SeekForward(key []byte)
+}
+
+// NextKey skips the remaining versions of the current logical key and selects
+// the next key's first version admitted by the iterator's original options.
+// Logical tombstones remain visible; callers must filter them after selection.
+// Like Next, it invalidates borrowed EntryView slices. Reverse iterators record
+// ErrNextKeyReverse without moving; Next and Seek retain their reverse behavior.
+//
+// A bounded number of physical steps reuses source cursors for shallow histories;
+// deeper histories seek to the exact key-group upper bound. Skipped inspected
+// keys are validated and counted, without reading their values. Records bypassed
+// by the seek are not inspected or counted. Future timestamps of subsequent
+// keys are skipped with a seek to that key at the original read timestamp.
+func (it *VersionIterator) NextKey() {
+	if !it.Valid() {
+		return
+	}
+	if it.options.Reverse {
+		it.err = ErrNextKeyReverse
+		return
+	}
+	// current.Key aliases keyBuf. Materialize the independent physical bound
+	// before either raw movement or decoder reuse can overwrite borrowed data.
+	// The exact bound also works for maximum-size keys and prefix-child keys.
+	upper, err := mvcckey.AppendKeyVersionsUpper(it.seekBuf[:0], it.current.Key)
+	if err != nil {
+		it.err = fmt.Errorf("%w: %w", ErrInvalidKey, err)
+		return
+	}
+	it.seekBuf = upper
+	if raw, ok := it.raw.(mvccKeyAdvancer); ok {
+		visited, skipped, malformed, storage := raw.AdvanceMVCCKey(upper, nextKeyStepLimit)
+		it.stats.Visited += visited
+		it.stats.Skipped += skipped
+		if malformed != nil {
+			it.err = fmt.Errorf("%w: %w", ErrMalformedRecord, malformed)
+			return
+		}
+		if storage != nil {
+			it.err = storageError("skip version iterator key", storage)
+			return
+		}
+		it.advanceWithKeySkip(true)
+		return
+	}
+	for steps := 0; steps < nextKeyStepLimit; steps++ {
+		it.raw.Next()
+		if !it.raw.Valid() {
+			it.advanceWithKeySkip(true)
+			return
+		}
+		physical := it.raw.Key()
+		if bytes.Compare(physical, upper) >= 0 {
+			it.advanceWithKeySkip(true)
+			return
+		}
+		it.stats.Visited++
+		it.keyBuf, _, err = mvcckey.DecodeAppend(it.keyBuf[:0], physical)
+		if err != nil {
+			it.err = fmt.Errorf("%w: %w", ErrMalformedRecord, err)
+			return
+		}
+		it.stats.Skipped++
+	}
+	it.raw.Seek(upper)
+	it.advanceWithKeySkip(true)
+}
+
 // Seek repositions inside the iterator's original domain. Timestamp must be
 // nonzero. Direction follows the iterator: forward seeks to the first encoded
 // record >= (logical,timestamp), reverse to the first <= it.
@@ -212,11 +294,12 @@ func (it *VersionIterator) Seek(logical []byte, timestamp uint64) {
 	if it == nil || it.closed || it.err != nil || it.raw == nil {
 		return
 	}
-	physical, err := mvcckey.Encode(logical, timestamp)
+	physical, err := mvcckey.Append(it.seekBuf[:0], logical, timestamp)
 	if err != nil {
 		it.err = fmt.Errorf("%w: %w", ErrInvalidKey, err)
 		return
 	}
+	it.seekBuf = physical
 	it.raw.Seek(physical)
 	it.advance()
 }
@@ -248,6 +331,7 @@ func (it *VersionIterator) Close() error {
 	it.closed = true
 	it.current = Version{}
 	it.keyBuf = nil
+	it.seekBuf = nil
 	var rawErr, snapshotErr error
 	if it.raw != nil {
 		rawErr = storageError("close version iterator", it.raw.Close())
@@ -259,6 +343,10 @@ func (it *VersionIterator) Close() error {
 }
 
 func (it *VersionIterator) advance() {
+	it.advanceWithKeySkip(false)
+}
+
+func (it *VersionIterator) advanceWithKeySkip(skipFuture bool) {
 	for it.raw != nil && it.raw.Valid() {
 		it.stats.Visited++
 		var timestamp uint64
@@ -269,8 +357,28 @@ func (it *VersionIterator) advance() {
 			return
 		}
 		logical := it.keyBuf
-		if !logicalMatchesOptions(logical, it.options) || (it.options.ReadTimestamp != 0 && timestamp > it.options.ReadTimestamp) {
+		if !logicalMatchesOptions(logical, it.options) {
 			it.stats.Skipped++
+			it.raw.Next()
+			continue
+		}
+		if it.options.ReadTimestamp != 0 && timestamp > it.options.ReadTimestamp {
+			it.stats.Skipped++
+			if skipFuture && !it.options.Reverse {
+				// The inspected key was fully decoded before this seek. A
+				// canonical key fits a full timestamp suffix; use independent
+				// storage because logical aliases keyBuf and raw.Key is borrowed.
+				physical, err := mvcckey.Append(it.seekBuf[:0], logical, it.options.ReadTimestamp)
+				if err == nil {
+					it.seekBuf = physical
+					if forward, ok := it.raw.(mvccForwardSeeker); ok {
+						forward.SeekForward(physical)
+					} else {
+						it.raw.Seek(physical)
+					}
+					continue
+				}
+			}
 			it.raw.Next()
 			continue
 		}
@@ -453,6 +561,11 @@ type PruneStats struct {
 // tail. Bypassed records are neither counted nor checked for corruption.
 // Durable mode re-syncs the floor before the first delete, so interruption and
 // restart are idempotent and cannot recover pruned data without its floor.
+// The optional native logical-history producer additionally drains to a durable
+// basis before capture and after delete-write attempts, including partial-error
+// prefixes. This charged checkpoint work prevents a completed prune from leaving
+// a deleted-version mask chain in the active overlays. Other producers retain
+// their existing boundaries. The selected delete acknowledgement mode is unchanged.
 func (s *Store) PruneVersions(options PruneOptions) (stats PruneStats, err error) {
 	if options.Mode != CommitRelaxed && options.Mode != CommitDurable {
 		return stats, ErrInvalidCommitMode
@@ -487,6 +600,24 @@ func (s *Store) PruneVersions(options PruneOptions) (stats PruneStats, err error
 			return stats, err
 		}
 	}
+	var complete func() error
+	if boundary, ok := s.db.(interface {
+		PrepareMVCCPrune() (func() error, error)
+	}); ok {
+		complete, err = boundary.PrepareMVCCPrune()
+		if err != nil {
+			s.mu.Unlock()
+			return stats, storageError("prepare prune boundary", err)
+		}
+	}
+	deleteWriteAttempted := false
+	// Register before source cleanup so completion runs after every borrowed
+	// alias and private batch has been released, while maintenance stays owned.
+	defer func() {
+		if complete != nil && deleteWriteAttempted {
+			err = errors.Join(err, storageError("complete prune boundary", complete()))
+		}
+	}()
 	var snapshot treedb.Snapshot
 	if s.readCuts != nil {
 		// Floor admission and physical capture are one cut. The original cut
@@ -548,6 +679,7 @@ func (s *Store) PruneVersions(options PruneOptions) (stats PruneStats, err error
 			return storageError("measure prune batch", sizeErr)
 		}
 		var writeErr error
+		deleteWriteAttempted = true
 		if options.Mode == CommitDurable {
 			writeErr = batch.WriteSync()
 		} else {

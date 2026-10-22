@@ -17,10 +17,11 @@ type TwoWayMerger struct {
 
 	cur iterator.UnsafeIterator
 
-	valid bool
-	err   error
-	start []byte
-	end   []byte
+	valid          bool
+	forwardAligned bool
+	err            error
+	start          []byte
+	end            []byte
 }
 
 func NewTwoWayMerger(src1, src2 iterator.UnsafeIterator, start, end []byte) *TwoWayMerger {
@@ -54,6 +55,7 @@ func (m *TwoWayMerger) Next() {
 // Seek positions the iterator at the first visible key greater than or equal
 // to key, restricted to the iterator's original [start, end) domain.
 func (m *TwoWayMerger) Seek(key []byte) {
+	m.forwardAligned = false
 	if m.start != nil && (key == nil || bytes.Compare(key, m.start) < 0) {
 		key = m.start
 	}
@@ -67,37 +69,64 @@ func (m *TwoWayMerger) Seek(key []byte) {
 		return
 	}
 	m.advance()
+	m.forwardAligned = m.err == nil
+}
+
+func (m *TwoWayMerger) SeekForward(key []byte) {
+	if !m.forwardAligned || !m.valid || m.err != nil || bytes.Compare(key, m.cur.UnsafeKey()) <= 0 || twoIteratorErrors(m.src1, m.src2) != nil {
+		m.Seek(key)
+		return
+	}
+	k1, v1, e1 := seekForwardHead(m.src1, key)
+	k2, v2, e2 := seekForwardHead(m.src2, key)
+	m.err = joinIteratorError(e1, e2)
+	if m.err != nil {
+		m.cur, m.valid, m.forwardAligned = nil, false, false
+		return
+	}
+	m.advanceHeads(k1, v1, k2, v2)
 }
 
 func (m *TwoWayMerger) advance() {
+	k1, v1 := iteratorHead(m.src1)
+	k2, v2 := iteratorHead(m.src2)
+	m.advanceHeads(k1, v1, k2, v2)
+}
+
+func (m *TwoWayMerger) advanceHeads(k1 []byte, v1 bool, k2 []byte, v2 bool) {
 	m.valid = false // Assume invalid until an item is found
 	m.cur = nil
 
-	for m.src1.Valid() || m.src2.Valid() {
+	for v1 || v2 {
 		var winner iterator.UnsafeIterator
+		var k []byte
+		first := false
 
 		switch {
-		case m.src1.Valid() && m.src2.Valid():
-			cmp := bytes.Compare(m.src1.UnsafeKey(), m.src2.UnsafeKey())
+		case v1 && v2:
+			cmp := bytes.Compare(k1, k2)
 			if cmp < 0 {
-				winner = m.src1
+				first = true
 			} else if cmp > 0 {
-				winner = m.src2
+				first = false
 			} else {
 				// Keys equal: src1 wins, src2 is shadowed.
-				winner = m.src1
+				first = true
 				m.src2.Next()
 				if m.captureIteratorError(m.src2) {
 					return
 				}
+				k2, v2 = iteratorHead(m.src2)
 			}
-		case m.src1.Valid():
-			winner = m.src1
-		default:
-			winner = m.src2
+		case v1:
+			first = true
 		}
 
-		k := winner.UnsafeKey()
+		if first {
+			winner, k = m.src1, k1
+		} else {
+			winner, k = m.src2, k2
+		}
 
 		// Handle range bounds (exclusive end)
 		if m.end != nil && bytes.Compare(k, m.end) >= 0 {
@@ -109,6 +138,11 @@ func (m *TwoWayMerger) advance() {
 			if m.captureIteratorError(winner) {
 				return
 			}
+			if first {
+				k1, v1 = iteratorHead(winner)
+			} else {
+				k2, v2 = iteratorHead(winner)
+			}
 			continue
 		}
 
@@ -117,6 +151,11 @@ func (m *TwoWayMerger) advance() {
 			winner.Next()
 			if m.captureIteratorError(winner) {
 				return
+			}
+			if first {
+				k1, v1 = iteratorHead(winner)
+			} else {
+				k2, v2 = iteratorHead(winner)
 			}
 			continue
 		}

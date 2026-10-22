@@ -788,7 +788,12 @@ func openResolved(opts Options) (*DB, error) {
 // profile/format options are resolved unchanged before selecting cache services.
 // This choice is made only at Open; a live cache never changes its owner role.
 func openResolvedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
-	if opts.MemtableMode == "cow_btree" {
+	// Immutable COW publication has one fixed private owner; adaptive rotation
+	// cannot select it. Reject before creating backend storage or binding owners.
+	if opts.MemtableMode == "adaptive:cow_btree" || opts.MemtableMode == "adaptive:cow_ordered" {
+		return nil, caching.ErrCOWUnsupported
+	}
+	if opts.MemtableMode == "cow_btree" || opts.MemtableMode == "cow_ordered" {
 		if opts.ReadOnly {
 			return nil, caching.ErrCOWUnsupported
 		}
@@ -1136,14 +1141,14 @@ func openResolvedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
 	}
 
 	cacheMode := opts.MemtableMode
-	if backendOnly && cacheMode == "cow_btree" {
+	if backendOnly && (cacheMode == "cow_btree" || cacheMode == "cow_ordered") {
 		// Backend-root producers publish directly. Reuse the ordinary cache's
 		// leaf/value-log services without binding a second logical authority.
 		// Keep the requested physical and durability options intact for DATA.
 		cacheMode = "btree"
 	}
 	txnOwner := transactionowner.New()
-	if cacheMode == "cow_btree" {
+	if cacheMode == "cow_btree" || cacheMode == "cow_ordered" {
 		if err := backend.BindPrivateCOWOwner(txnOwner); err != nil {
 			_ = backend.Close()
 			if dictBackend != nil {
@@ -1257,7 +1262,7 @@ func openResolvedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
 		return nil, err
 	}
 
-	if cacheMode == "cow_btree" {
+	if cacheMode == "cow_btree" || cacheMode == "cow_ordered" {
 		if err := backend.BindNativeSemanticBridge(txnOwner, cached); err != nil {
 			_ = cached.Close()
 			_ = backend.Close()

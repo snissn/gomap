@@ -2,6 +2,7 @@ package caching
 
 import (
 	"fmt"
+	"math"
 	"sync"
 	"sync/atomic"
 	"unsafe"
@@ -137,6 +138,7 @@ func drainCOWTables(tables []cowTable) {
 // cowCache serializes private preparation separately from the brief read latch.
 // writeMu admission and the existing command barrier remain outside this owner.
 type cowCache struct {
+	ordered bool
 	// Lock order is scope/caller -> basis.readMu -> physicalMu -> budget.mu.
 	// Pure decoder scratch never acquires a basis, scope or publication lock.
 	physicalMu                                                                                     sync.Mutex
@@ -179,7 +181,27 @@ type cowCache struct {
 // Backend wrapper capture uses a separate lease: a basis can outlive every
 // generation that existed when it was captured. Cache and cut allocations also
 // have independent lifetimes rather than attaching them to an arbitrary shard.
+func (c *cowCache) newWriter(maintenance bool) (*memtable.COWWriter, error) {
+	if maintenance {
+		if c.ordered {
+			return memtable.NewCOWOrderedWriterWithMaintenanceConstruction(c.budget, c.maintenance)
+		}
+		return memtable.NewCOWWriterWithMaintenanceConstruction(c.budget, c.maintenance)
+	}
+	if c.ordered {
+		return memtable.NewCOWOrderedWriter(c.budget)
+	}
+	return memtable.NewCOWWriter(c.budget)
+}
+
+// SupportsLogicalMVCC identifies the concrete, opt-in logical-history route.
+func (db *DB) SupportsLogicalMVCC() bool { return db != nil && db.cow != nil && db.cow.ordered }
+
 func newCOWCache(provider backendSnapshotProvider, shards int, limits memtable.COWLimits) (*cowCache, error) {
+	return newCOWCacheMode(provider, shards, limits, false)
+}
+
+func newCOWCacheMode(provider backendSnapshotProvider, shards int, limits memtable.COWLimits, ordered bool) (*cowCache, error) {
 	if provider == nil || shards < 1 {
 		return nil, fmt.Errorf("COW cache requires backend and fixed shards")
 	}
@@ -245,11 +267,11 @@ func newCOWCache(provider backendSnapshotProvider, shards int, limits memtable.C
 		}
 		return nil, joinCOWCleanupError(err, cleanupErr)
 	}
-	c := &cowCache{budget: budget, maintenance: maintenance, writers: make([]*memtable.COWWriter, shards), successors: make([]cowRawSuccessor, shards), lease: cacheLease, closeRetired: make([]memtable.COWRetirement, shards)}
+	c := &cowCache{ordered: ordered, budget: budget, maintenance: maintenance, writers: make([]*memtable.COWWriter, shards), successors: make([]cowRawSuccessor, shards), lease: cacheLease, closeRetired: make([]memtable.COWRetirement, shards)}
 	cut := &cowReadCut{refs: 1, shards: make([]cowTable, shards), basis: admitted, lease: cutLease, cache: c}
 	for i := range c.writers {
 		beforeHistory := budget.Stats().HistoryBytes
-		w, e := memtable.NewCOWWriter(budget)
+		w, e := c.newWriter(false)
 		if e != nil {
 			err = e
 			break
@@ -454,20 +476,13 @@ func (c *cowCache) prepareNative(groups [][]memtable.COWMutation, opts []memtabl
 	if first < 0 && native == nil {
 		return nil, fmt.Errorf("empty COW publication")
 	}
-	dedupBytes := uint64(0)
 	needsSuccessors := false
 	for i, group := range groups {
 		if len(group) != 0 && c.successors[i].writer == nil {
 			needsSuccessors = true
 		}
-		if len(group) > 1 {
-			dedupBytes += memtable.COWAllocationCharge(uint64(len(group))*128 + 4096)
-		}
 	}
-	// The deduplication map borrows staged owned key strings; it never copies
-	// payloads or traverses unchanged history. Conservative per-entry map
-	// capacity and header allowance are admitted before allocation.
-	bytes := dedupBytes + cowCutCharge(len(groups), len(old.frozen)) +
+	bytes := cowCutCharge(len(groups), len(old.frozen)) +
 		memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowPreparedCut{}))) +
 		memtable.COWAllocationCharge(uint64(len(groups))*uint64(unsafe.Sizeof((*memtable.COWPrepared)(nil)))) +
 		memtable.COWAllocationCharge(uint64(len(groups))*uint64(unsafe.Sizeof(memtable.COWRetirement{})))
@@ -497,7 +512,7 @@ func (c *cowCache) prepareNative(groups [][]memtable.COWMutation, opts []memtabl
 			}
 			p.successors[i].sourceReserved = true
 			var err error
-			p.successors[i].writer, err = memtable.NewCOWWriterWithMaintenanceConstruction(c.budget, c.maintenance)
+			p.successors[i].writer, err = c.newWriter(true)
 			if err == nil {
 				p.successors[i].root, p.successors[i].resources, err = prepareCOWReservedEmptyRoot(p.successors[i].writer, c.maintenance)
 			}
@@ -512,6 +527,13 @@ func (c *cowCache) prepareNative(groups [][]memtable.COWMutation, opts []memtabl
 			return p, err
 		}
 		p.prepared[i] = staged
+		if delta, valid := staged.LogicalSizeDelta(); !valid {
+			p.cancel()
+			return p, memtable.ErrCOWCapacity
+		} else if _, valid := cowApplySizeDelta(old.shards[i].size, delta); !valid {
+			p.cancel()
+			return p, memtable.ErrCOWCapacity
+		}
 	}
 	next := &cowReadCut{visibleCommandLSN: old.visibleCommandLSN, logicalSeq: old.logicalSeq, frozenLogicalSeq: old.frozenLogicalSeq, frozenCommandLSN: old.frozenCommandLSN, frozenSemanticRootSet: old.frozenSemanticRootSet, semanticRootSet: old.semanticRootSet, refs: 1, shards: make([]cowTable, len(groups)), frozen: make([]cowTable, len(old.frozen)), basis: old.basis, lease: lease, cache: c}
 	next.basis.retain()
@@ -531,7 +553,10 @@ func (c *cowCache) prepareNative(groups [][]memtable.COWMutation, opts []memtabl
 			}
 			next.shards[i].history += charge
 			next.shards[i].root = p.prepared[i].Root()
-			next.shards[i].size = cowChangedSize(old.shards[i], next.shards[i].root, groups[i])
+			// Preparation checked this scalar result before constructing the cut.
+			// Duplicates already telescope through each private replacement.
+			delta, _ := p.prepared[i].LogicalSizeDelta()
+			next.shards[i].size += delta
 		} else if !next.shards[i].root.Retain() {
 			panic("lost owned COW root")
 		}
@@ -550,6 +575,13 @@ func (c *cowCache) prepareNative(groups [][]memtable.COWMutation, opts []memtabl
 	}
 	p.next = next
 	return p, nil
+}
+
+func cowApplySizeDelta(size, delta int64) (int64, bool) {
+	if size < 0 || delta < -size || delta > math.MaxInt64-size {
+		return 0, false
+	}
+	return size + delta, true
 }
 
 // cancel drops pending writer state; drain must follow after writer/admission
@@ -784,44 +816,54 @@ func (c *cowCache) closeWithBudget(closeBudget bool) error {
 }
 
 // cowChangedSize updates logical flush accounting from changed keys only.
-// Duplicate operations use the final staged record once, preserving last-write
-// wins without a capture-time census or cumulative history ledger.
-func cowChangedSize(old cowTable, next *memtable.COWRoot, group []memtable.COWMutation) int64 {
+// Prepare applies these canonical mutations in order without changing their
+// key/value sizes or flags. Use the final mutation directly instead of looking
+// its record up again in the private postimage. The old root remains the sole
+// source of the previous record's size.
+func cowChangedSize(old cowTable, group []memtable.COWMutation) int64 {
 	size := old.size
 	if len(group) == 1 {
-		key := group[0].Key
-		record, found := next.Get(key)
-		if !found {
-			panic("staged COW point disappeared")
-		}
-		if previous, found := old.root.Get(key); found {
-			size -= cowRecordSize(previous)
-		}
-		return size + cowRecordSize(record)
-	}
-	seen := make(map[string]struct{}, len(group))
-	for _, mutation := range group {
-		record, found := next.Get(mutation.Key)
-		if !found {
-			panic("staged COW point disappeared")
-		}
-		if _, duplicate := seen[record.Key]; duplicate {
-			continue
-		}
-		seen[record.Key] = struct{}{}
+		mutation := group[0]
 		if previous, found := old.root.Get(mutation.Key); found {
 			size -= cowRecordSize(previous)
 		}
-		size += cowRecordSize(record)
+		return size + cowMutationSize(mutation)
+	}
+	seen := make(map[string]struct{}, len(group))
+	for i := len(group) - 1; i >= 0; i-- {
+		mutation := group[i]
+		// The staged operands remain immutable and owned throughout Prepare.
+		// This local deduplication map borrows their keys only until return.
+		key := conditionalBytesString(mutation.Key)
+		if _, duplicate := seen[key]; duplicate {
+			continue
+		}
+		seen[key] = struct{}{}
+		if previous, found := old.root.Get(mutation.Key); found {
+			size -= cowRecordSize(previous)
+		}
+		size += cowMutationSize(mutation)
 	}
 	return size
 }
+
+func cowMutationSize(mutation memtable.COWMutation) int64 {
+	if mutation.Remove {
+		return 0
+	}
+	return cowPointSize(len(mutation.Key), len(mutation.Value), mutation.Flags)
+}
+
 func cowRecordSize(record memtable.COWRecord) int64 {
-	size := len(record.Key)
-	if record.Flags&node.FlagPointer != 0 {
-		size += page.ValuePtrSize + len(record.Value)
-	} else if record.Flags&node.FlagTombstone == 0 {
-		size += len(record.Value)
+	return cowPointSize(len(record.Key), len(record.Value), record.Flags)
+}
+
+func cowPointSize(keyBytes, valueBytes int, flags byte) int64 {
+	size := keyBytes
+	if flags&node.FlagPointer != 0 {
+		size += page.ValuePtrSize + valueBytes
+	} else if flags&node.FlagTombstone == 0 {
+		size += valueBytes
 	}
 	return int64(size)
 }
