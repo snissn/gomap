@@ -112,7 +112,13 @@ Given pre-alpha status, this is a living spec that tracks implementation.
   - API-level behavioral contracts (reads/writes, iteration, snapshots, concurrency, locking).
 - `TreeDB/docs/spec/cow-cache-publication.md`
   - opt-in immutable cache publication, finite admission, read ownership,
-    checkpoint handoff, and qualification boundaries for `cow_btree`.
+    checkpoint handoff, and qualification boundaries for `cow_btree` and
+    experimental `cow_ordered`.
+- `TreeDB/docs/spec/cow-ordered-mvcc.md`
+  - explicit ordered-history activation and public integration limits.
+- `TreeDB/docs/spec/cow-ordered-logical-mvcc.md`
+  - grouped logical/numeric history representation, original admission and
+    publication owners, physical traversal, pruning and lifecycle witnesses.
 - `TreeDB/docs/spec/conditional-kv-adapter-readiness.md`
   - downstream adapter closeout for native `EntryRevision` cache tokens,
     conditional transaction conflict mapping, command-WAL/fail-closed surfaces,

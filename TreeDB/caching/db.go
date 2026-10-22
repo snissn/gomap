@@ -8516,7 +8516,8 @@ type Options struct {
 	FlushThreshold   int64
 
 	// MemtableMode selects the in-memory write buffer implementation.
-	// Supported: "skiplist", "hash_sorted", "btree", "append_only", "adaptive".
+	// Supported: "skiplist", "hash_sorted", "btree", "append_only", "adaptive",
+	// and explicit immutable "cow_btree" or experimental "cow_ordered".
 	// Use "adaptive" or "adaptive:<mode>" to switch per-rotation based on workload.
 	MemtableMode      string
 	COWMemtableLimits memtable.COWLimits

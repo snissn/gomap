@@ -78,3 +78,14 @@ be measured with distinct volatile, relaxed-WAL and durable-WAL acknowledgments.
 Foreground, persistence, release, close and reopen costs have separate phase
 boundaries. A component result or a passing correctness test is not a default
 selection decision.
+
+Integration is tracked in [#5193](https://github.com/snissn/gomap/issues/5193)
+under [#5192](https://github.com/snissn/gomap/issues/5192). The selected prototype
+is `2119eed86e46fecaac29bc96b33c7d26f3a3c5a5` over
+`b03c73fa010987b8ce4c904ff6dca2d2497be393`. Its characterized public API and
+canonical storage bytes are retained. Source-bound focused tests and earlier
+measurements remain evidence for their original source and declared scope;
+integration needs current-head checks and cannot inherit a full-repository pass.
+Raw 500k unified workloads do not exercise the typed history index and show
+material forced-COW regressions. Keep the adaptive default, raw-KV and managed
+MVCC comparisons separate, and retain adverse results during optimization.

@@ -1,7 +1,10 @@
 # Immutable COW cached publication
 
 `Options.MemtableMode = "cow_btree"` selects an explicit immutable cache for
-raw point operations and externally encoded MVCC versions. It is independent
+raw point operations and externally encoded MVCC versions. Experimental
+`Options.MemtableMode = "cow_ordered"` shares these same owners and adds the
+[Store-admitted logical-history representation](cow-ordered-logical-mvcc.md);
+its [activation and integration limits](cow-ordered-mvcc.md) are explicit. It is independent
 of the durability profile. Existing `append_only`, `btree`, adaptive selection
 and profile defaults retain their own dispatch. COW is a pre-alpha capability;
 qualified public ownership also enables the raw transaction contract in

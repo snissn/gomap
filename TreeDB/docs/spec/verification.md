@@ -146,6 +146,35 @@ ordering in both default and `treedb_safe` builds. `BenchmarkCOWLargeKeyLookup`
 reports the safe-build rank-search cost and zero key-conversion allocations;
 [build-tag commands and scope](cow-memtable-ownership.md) bind the comparator.
 
+## Opt-in ordered logical MVCC qualification
+
+`cow_ordered` shares the immutable COW qualification below. The
+[ordered specification's witness table](cow-ordered-logical-mvcc.md#activation-and-validation)
+binds grouped/backfilled history, admission, exact allocation receipts, retained
+cuts, physical masks, floor-prune boundaries, durable prefix handoff, pointer
+reopen, GC and rewrite controls to their maintained test files.
+`TestCOWOrderedOptInPreservesAdaptiveDefault` checks all three production
+profiles through public Open, batch Write, Get, Checkpoint and reopen: default
+and explicit adaptive selection stay adaptive, `cow_btree` remains physical,
+and only explicitly selected `cow_ordered` advertises and activates the typed
+history route before checkpoint drains its overlay counts.
+
+The import also changes shared COW preparation, ordinary command-WAL payload
+ownership and generic forward merging. Include original `cow_btree` public/cache
+contracts, `TestPublicCommandWALPayloadTail*` and full merging tests; ordered-only
+test names do not cover those surfaces. Run full internal memtable, cowbtree,
+merging, mvccadmission and MVCC packages, plus affected public/cache contracts,
+in default, actual `-tags=treedb_safe` and separate `-race` modes. These are distinct
+modes, not a combined safe-plus-race claim. Required CI retains the broader
+repository checks.
+
+Preserve exact source, commands, toolchain and result scope for reused evidence.
+The selected prototype's focused public/cache checks and full internal/MVCC
+checks do not establish a full public or repository suite pass. Fresh integration
+checks bind the reconciled head. Public 500k raw-KV comparisons and managed
+historical-MVCC comparisons exercise different routes; both require actual-mode
+activation evidence and separate natural versus instrumented observations.
+
 ## Immutable COW cache qualification
 
 
