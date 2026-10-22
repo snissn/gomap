@@ -627,3 +627,22 @@ error transfers one edge to existing off-gate cancellation; original custody is
 queued before the transaction's opening cut withdraws. Commit/Close terminate
 the original transaction once. Physical handoff alone is not a logical conflict;
 changed logical dependencies still refuse before assignment.
+
+## Ordinary DATA dependency projection
+
+Ordinary point-put DATA publication can update its exact external dependency
+closure from the successful zipper apply's old/new outer-leaf edge counts and
+logical value-pointer delta. Private build groups compose these signed counts,
+including cancellation of intermediate leaf replacements. A separate process-local
+raw census uses the existing value-log reference tracker's admitted metadata owner;
+it is never serialized as logical ValuePtr accounting. It is installed only after
+successful root activation and is bound to that root pair, commit sequence and
+physical index incarnation. Replaced, aborted and closed evidence releases its
+original metadata charges.
+
+This projection requires a distinct user root and an empty pager-backed system
+leaf, which rules out attached descriptors and role aliases. PRIMARY roots, delete
+operations, unsupported producers, stale evidence and invalid arithmetic retain
+the exact candidate scanner. Reopen starts without a raw census and reconstructs
+one through that scanner. Snapshot resource pinning, recovery validation and GC
+reachability remain authoritative and unchanged.

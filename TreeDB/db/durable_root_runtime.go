@@ -523,6 +523,8 @@ type candidateValueLogRefCountsV1 struct {
 	userRootID     uint64
 	systemRootID   uint64
 	counts         valueLogRefCounts
+	rawCounts      valueLogRefCounts
+	rawEligible    bool
 }
 
 func (db *DB) scanCandidateValueLogReferencesV1(idx *indexGen, next page.MetaPageBody, valueLogPublicationLocked bool) (map[uint32]struct{}, error) {
@@ -723,6 +725,10 @@ func (db *DB) scanCandidateExternalReferencesWithCountsAndLimitsV1(snapshot *Sna
 			idx:         snapshot.idx, commitSeq: snapshot.state.CommitSeq,
 			userRootID: snapshot.state.RootPageID, systemRootID: snapshot.state.SystemRootPageID,
 			counts: result.countRecords.take(),
+		}
+		if err := db.captureOrdinaryRawCensus(snapshot, scanned); err != nil {
+			scanned.counts.close()
+			return nil, err
 		}
 	}
 	return references, nil
@@ -1128,7 +1134,18 @@ func (db *DB) captureDurableRootResourcesFromBaseWithRefCountsV1(idx *indexGen, 
 			return nil, err
 		}
 	}
-	freshOuterLeafReferences, reuseOuterLeafBase, err := db.planOuterLeafBaseDependencyReuseV1(base, additional, next, delta)
+	var err error
+	var freshOuterLeafReferences map[uint32]struct{}
+	var reuseOuterLeafBase bool
+	if additional == nil && idx != nil {
+		freshOuterLeafReferences, reuseOuterLeafBase, err = db.projectOrdinaryRawReferences(idx, next, delta, scanned)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if !reuseOuterLeafBase {
+		freshOuterLeafReferences, reuseOuterLeafBase, err = db.planOuterLeafBaseDependencyReuseV1(base, additional, next, delta)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("plan outer-leaf candidate dependencies: %w", err)
 	}

@@ -663,6 +663,17 @@ func (install *rootPublicationVisibleInstallV1) completeOrderedPostActivation() 
 		} else {
 			db.valueLogRefTracker.invalidate()
 		}
+		tracker := db.valueLogRefTracker
+		tracker.mu.Lock()
+		tracker.rawCounts.close()
+		tracker.rawValid = false
+		if scanned := install.vlogRefCounts; scanned != nil && scanned.rawEligible && tracker.valid && tracker.commitSeq == scanned.commitSeq && tracker.incarnation == scanned.incarnation {
+			tracker.rawCounts = scanned.rawCounts.take()
+			tracker.rawValid = true
+			tracker.rawCommitSeq, tracker.rawUserRoot, tracker.rawSystemRoot = scanned.commitSeq, scanned.userRootID, scanned.systemRootID
+			tracker.rawIncarnation = scanned.incarnation
+		}
+		tracker.mu.Unlock()
 		install.post.vlogRefTrackerAdvanced = true
 	}
 	install.releaseReferenceCountEvidence()
@@ -1155,6 +1166,7 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 
 	var scanned candidateValueLogRefCountsV1
 	defer scanned.counts.close()
+	defer scanned.rawCounts.close()
 	resources, err := db.captureDurableRootResourcesFromBaseWithRefCountsV1(
 		idx, next, vlogRefDelta, visibleBase, opts.durableResources,
 		opts.durableResourceRequirements, opts.durableResourceMutation,
@@ -1207,6 +1219,7 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 		}
 		captured := scanned
 		captured.counts = scanned.counts.take()
+		captured.rawCounts = scanned.rawCounts.take()
 		captured.metadata, captured.metadataCharge = owner, charge
 		install.vlogRefCounts = &captured
 	}
@@ -2157,6 +2170,7 @@ func (install *rootPublicationVisibleInstallV1) releaseReferenceCountEvidence() 
 	evidence := install.vlogRefCounts
 	owner, charge := evidence.metadata, evidence.metadataCharge
 	evidence.counts.close()
+	evidence.rawCounts.close()
 	*evidence = candidateValueLogRefCountsV1{}
 	install.vlogRefCounts = nil
 	if owner != nil {

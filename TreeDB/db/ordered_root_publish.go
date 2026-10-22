@@ -1180,8 +1180,24 @@ func mergeValueLogRefDeltaInto(dst **valueLogRefDelta, src *valueLogRefDelta) {
 	if src == nil {
 		return
 	}
-	if *dst == nil {
+	first := *dst == nil
+	if first {
 		*dst = newValueLogRefDelta()
+	}
+	if first {
+		(*dst).rawExact = src.rawExact
+		(*dst).rawIndexID, (*dst).rawInput = src.rawIndexID, src.rawInput
+	} else if !src.rawExact || (*dst).rawIndexID != src.rawIndexID || (*dst).rawOutput != src.rawInput {
+		(*dst).rawExact = false
+	}
+	(*dst).rawOutput = src.rawOutput
+	if (*dst).rawExact && src.rawChanges != nil {
+		if (*dst).rawChanges == nil {
+			(*dst).rawChanges = newValueLogRefDelta()
+		}
+		if err := src.rawChanges.forEachChange(func(id uint32, n int64) error { return (*dst).rawChanges.addRawChangeChecked(id, n) }); err != nil {
+			(*dst).rawExact = false
+		}
 	}
 	(*dst).requiresCandidateProjection = (*dst).requiresCandidateProjection || src.requiresCandidateProjection
 	(*dst).allowEmptyDependencyReuse = (*dst).allowEmptyDependencyReuse || src.allowEmptyDependencyReuse
