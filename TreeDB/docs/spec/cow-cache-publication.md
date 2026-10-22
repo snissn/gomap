@@ -669,8 +669,9 @@ one through that scanner. Snapshot resource pinning, recovery validation and GC
 reachability remain authoritative and unchanged.
 
 Cloning a predecessor census is optional. If its admitted metadata capacity is
-exhausted, partial clones release their original charges before the existing
-dependency planner or final-root scanner runs under the same finite budget.
+exhausted (either retained metadata capacity or an enrolled COW budget capacity),
+partial clones release their original charges before the existing dependency
+planner or final-root scanner runs under the same finite budget.
 Required capture admission can still refuse, and other ownership, identity or
 registration errors remain fatal.
 

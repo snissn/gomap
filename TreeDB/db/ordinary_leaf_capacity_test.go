@@ -8,6 +8,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -73,6 +74,14 @@ func (l *ordinaryCensusCapacityLease) Close() {
 // raw-leaf segment, while copying the optional old logical census exceeds the
 // same finite cap after admitting the temporary raw census clone.
 func TestOrdinaryCensusCapacityFallsBackToOriginalCapture(t *testing.T) {
+	testOrdinaryCensusCapacityFallsBackToOriginalCapture(t, false)
+}
+
+func TestOrdinaryCOWCensusCapacityFallsBackToOriginalCapture(t *testing.T) {
+	testOrdinaryCensusCapacityFallsBackToOriginalCapture(t, true)
+}
+
+func testOrdinaryCensusCapacityFallsBackToOriginalCapture(t *testing.T, realCOW bool) {
 	d, err := Open(Options{Dir: t.TempDir(), Durability: DurabilityWALOffRelaxed, IndexOuterLeavesInValueLog: true, DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatal(err)
@@ -142,21 +151,72 @@ func TestOrdinaryCensusCapacityFallsBackToOriginalCapture(t *testing.T) {
 		t.Fatal("public seed did not activate the exact predecessor census")
 	}
 	owner := d.StableResourceIdentityPinRegistry().MetadataOwner()
-	budget := &ordinaryCensusCapacityBudget{limit: math.MaxUint64, refusal: retainedalloc.ErrCapacity}
+	var budget retainedalloc.Budget
+	var custom *ordinaryCensusCapacityBudget
+	var cow *memtable.COWBudget
+	var filler *memtable.COWExternalLease
+	if realCOW {
+		limits := memtable.DefaultCOWLimits()
+		limits.MaxTotalBytes, limits.MaxGenerationBytes = 32<<20, 32<<20
+		limits.MaxRetiredBytes, limits.MaxInFlightBytes = 32<<20, 32<<20
+		cow, err = memtable.NewCOWBudget(limits)
+		if err != nil {
+			t.Fatal(err)
+		}
+		filler, err = cow.AcquireExternal(0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		budget = cow
+	} else {
+		custom = &ordinaryCensusCapacityBudget{limit: math.MaxUint64, refusal: retainedalloc.ErrCapacity}
+		budget = custom
+	}
+	// Use the same owner enrollment as admitCOWSnapshotRetention. In the COW
+	// case all refusal and rollback effects come from real COWExternalLeases.
 	enrollment, err := owner.Enroll(budget)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() {
 		enrollment.Close()
-		budget.Lock()
-		defer budget.Unlock()
-		if budget.bytes != 0 {
-			t.Errorf("last metadata enrollment retained %d bytes", budget.bytes)
+		if realCOW {
+			filler.Close()
+			cow.Close()
+			if stats := cow.Stats(); stats.TotalBytes != 0 || stats.ExternalLeases != 0 {
+				t.Errorf("last COW metadata enrollment retained charges: %+v", stats)
+			}
+		} else if bytes, _, _ := custom.snapshot(); bytes != 0 {
+			t.Errorf("last metadata enrollment retained %d bytes", bytes)
 		}
 	}()
 	before := owner.Bytes()
-	budget.configure(before+8192, retainedalloc.ErrCapacity)
+	// Fill the real budget permanently, rather than replacing the governor or
+	// allowing a later allocation after a one-shot refusal. Resize includes the
+	// filler lease wrapper already present in Stats, so only payload is added.
+	setCOWHeadroom := func(headroom uint64) memtable.COWStats {
+		t.Helper()
+		if err := filler.Resize(0); err != nil {
+			t.Fatal(err)
+		}
+		stats := cow.Stats()
+		available := cow.Limits().MaxTotalBytes - stats.TotalBytes
+		if available < headroom {
+			t.Fatalf("headroom=%d exceeds available=%d", headroom, available)
+		}
+		if err := filler.Resize(available - headroom); err != nil {
+			t.Fatal(err)
+		}
+		return cow.Stats()
+	}
+	assertCOWRestored := func(want memtable.COWStats) {
+		t.Helper()
+		got := cow.Stats()
+		got.PeakBytes = want.PeakBytes
+		if got != want || owner.Bytes() != before {
+			t.Fatalf("COW capture retained charges: got=%+v want=%+v owner=%d want=%d", got, want, owner.Bytes(), before)
+		}
+	}
 	scans := 0
 	d.testScanCandidateExternalReferencesHook = func() { scans++ }
 	defer func() { d.testScanCandidateExternalReferencesHook = nil }()
@@ -180,43 +240,119 @@ func TestOrdinaryCensusCapacityFallsBackToOriginalCapture(t *testing.T) {
 		}
 		return captureErr
 	}
-	// The original route succeeds under this exact cap before trying the
-	// optional path; this is not a one-shot budget that forgives later growth.
-	delta.rawExact = false
-	if err := capture(); err != nil {
-		t.Fatalf("original capture under finite cap: %v", err)
-	}
-	if admitted, refusals, _ := budget.snapshot(); scans != 1 || refusals != 0 || admitted != before || owner.Bytes() != before {
-		t.Fatalf("original capture scans=%d refusals=%d lease/owner=%d/%d want 1/0/%d/%d", scans, refusals, admitted, owner.Bytes(), before, before)
-	}
-	delta.rawExact = true
-	if err := capture(); err != nil {
-		t.Fatalf("optional census capacity must fall back to viable original capture: %v", err)
-	}
-	if admitted, refusals, growth := budget.snapshot(); scans != 2 || refusals != 1 || growth != recordsChargeForSlots(segments*2) || admitted != before || owner.Bytes() != before {
-		t.Fatalf("fallback scans=%d refusals=%d refused growth=%d lease/owner=%d/%d want 2/1/%d/%d/%d", scans, refusals, growth, admitted, owner.Bytes(), recordsChargeForSlots(segments*2), before, before)
-	}
-	// Other admission/owner failures remain fatal and cannot be hidden by a
-	// successful original scanner.
-	brokenOwner := errors.New("governing metadata lease failed")
-	budget.configure(before+8192, brokenOwner)
-	if err := capture(); !errors.Is(err, brokenOwner) {
-		t.Fatalf("non-capacity owner error=%v want %v", err, brokenOwner)
-	}
-	if scans != 2 || owner.Bytes() != before {
-		t.Fatal("non-capacity refusal scanned or retained optional backing")
-	}
-	// Capacity required by the final scanner is still a write-blocking error.
-	budget.configure(before+64, retainedalloc.ErrCapacity)
-	if err := capture(); !errors.Is(err, retainedalloc.ErrCapacity) {
-		t.Fatalf("required capture admission error=%v want capacity refusal", err)
-	}
-	if scans != 3 || owner.Bytes() != before {
-		t.Fatal("required capture refusal skipped the scanner or retained backing")
+	if realCOW {
+		stats := setCOWHeadroom(8192)
+		// Prove a real raw clone is admitted before the logical clone is refused,
+		// then both the owner and every live budget counter are restored exactly.
+		var partial candidateValueLogRefCountsV1
+		defer partial.counts.close()
+		defer partial.rawCounts.close()
+		_, reused, projectionErr := d.projectOrdinaryRawReferences(snapshot.idx, next, delta, &partial)
+		if !errors.Is(projectionErr, memtable.ErrCOWCapacity) || reused || partial.rawEligible || partial.counts.used != 0 || partial.rawCounts.used != 0 {
+			t.Fatalf("real COW clone refusal: reused=%t candidate=%+v err=%v", reused, partial, projectionErr)
+		}
+		tracker.mu.RLock()
+		rawCloneCharge := tracker.rawCounts.charge
+		tracker.mu.RUnlock()
+		if peak := cow.Stats().PeakBytes; peak != stats.TotalBytes+rawCloneCharge {
+			t.Fatalf("partial raw clone admission peak=%d want=%d", peak, stats.TotalBytes+rawCloneCharge)
+		}
+		assertCOWRestored(stats)
+		// The exact original caller, final root and permanent governing cap fit.
+		delta.rawExact = false
+		if err := capture(); err != nil {
+			t.Fatalf("original capture under real COW cap: %v", err)
+		}
+		if scans != 1 {
+			t.Fatalf("original capture scans=%d want 1", scans)
+		}
+		assertCOWRestored(stats)
+		delta.rawExact = true
+		if err := capture(); err != nil {
+			t.Fatalf("optional real COW census capacity must fall back to viable original capture: %v", err)
+		}
+		if scans != 2 {
+			t.Fatalf("real COW fallback scans=%d want 2", scans)
+		}
+		assertCOWRestored(stats)
+		// Required scanner capacity still fails through the same real governor.
+		stats = setCOWHeadroom(64)
+		if err := capture(); !errors.Is(err, memtable.ErrCOWCapacity) {
+			t.Fatalf("required real COW capture error=%v want capacity refusal", err)
+		}
+		if scans != 3 {
+			t.Fatalf("required real COW refusal scans=%d want 3", scans)
+		}
+		assertCOWRestored(stats)
+		setCOWHeadroom(1 << 20)
+		// A closed real governing budget is not capacity and remains fatal.
+		closed, err := memtable.NewCOWBudget(memtable.DefaultCOWLimits())
+		if err != nil {
+			t.Fatal(err)
+		}
+		closedEnrollment, err := owner.Enroll(closed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer closed.Close()
+		defer closedEnrollment.Close()
+		closed.Close()
+		closedBefore := closed.Stats()
+		if err := capture(); !errors.Is(err, memtable.ErrCOWClosed) {
+			t.Fatalf("closed governing COW budget error=%v want closed", err)
+		}
+		if scans != 3 || closed.Stats() != closedBefore {
+			t.Fatal("closed COW governor scanned or changed retained charges")
+		}
+		closedEnrollment.Close()
+		if stats := closed.Stats(); stats.TotalBytes != 0 || stats.ExternalLeases != 0 {
+			t.Fatalf("closed COW governor retained charges: %+v", stats)
+		}
+		if owner.Bytes() != before {
+			t.Fatal("closed governor enrollment retained owner metadata")
+		}
+	} else {
+		custom.configure(before+8192, retainedalloc.ErrCapacity)
+		// The original route succeeds under this exact cap before trying the
+		// optional path; this is not a one-shot budget that forgives later growth.
+		delta.rawExact = false
+		if err := capture(); err != nil {
+			t.Fatalf("original capture under finite cap: %v", err)
+		}
+		if admitted, refusals, _ := custom.snapshot(); scans != 1 || refusals != 0 || admitted != before || owner.Bytes() != before {
+			t.Fatalf("original capture scans=%d refusals=%d lease/owner=%d/%d want 1/0/%d/%d", scans, refusals, admitted, owner.Bytes(), before, before)
+		}
+		delta.rawExact = true
+		if err := capture(); err != nil {
+			t.Fatalf("optional census capacity must fall back to viable original capture: %v", err)
+		}
+		if admitted, refusals, growth := custom.snapshot(); scans != 2 || refusals != 1 || growth != recordsChargeForSlots(segments*2) || admitted != before || owner.Bytes() != before {
+			t.Fatalf("fallback scans=%d refusals=%d refused growth=%d lease/owner=%d/%d want 2/1/%d/%d/%d", scans, refusals, growth, admitted, owner.Bytes(), recordsChargeForSlots(segments*2), before, before)
+		}
+		// Other admission/owner failures remain fatal and cannot be hidden by a
+		// successful original scanner.
+		brokenOwner := errors.New("governing metadata lease failed")
+		custom.configure(before+8192, brokenOwner)
+		if err := capture(); !errors.Is(err, brokenOwner) {
+			t.Fatalf("non-capacity owner error=%v want %v", err, brokenOwner)
+		}
+		if scans != 2 || owner.Bytes() != before {
+			t.Fatal("non-capacity refusal scanned or retained optional backing")
+		}
+		// Capacity required by the final scanner is still a write-blocking error.
+		custom.configure(before+64, retainedalloc.ErrCapacity)
+		if err := capture(); !errors.Is(err, retainedalloc.ErrCapacity) {
+			t.Fatalf("required capture admission error=%v want capacity refusal", err)
+		}
+		if scans != 3 || owner.Bytes() != before {
+			t.Fatal("required capture refusal skipped the scanner or retained backing")
+		}
 	}
 	// A second real private apply points at an unregistered producer segment.
 	// With enough census capacity, registration must fail before any fallback.
-	budget.configure(math.MaxUint64, retainedalloc.ErrCapacity)
+	if !realCOW {
+		custom.configure(math.MaxUint64, retainedalloc.ErrCapacity)
+	}
 	missingID, missingPtr, _ := writeUnregisteredValueLogRecord(t, d.dir, 0, segments+1, []byte("unregistered private value"), segments+1)
 	if d.valueLogManager.HasSegment(missingID) {
 		t.Fatal("unregistered producer control was already registered")

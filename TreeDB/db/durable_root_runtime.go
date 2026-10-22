@@ -22,6 +22,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/freelist"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/leafrefscan"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
@@ -1143,7 +1144,7 @@ func (db *DB) captureDurableRootResourcesFromBaseWithRefCountsV1(idx *indexGen, 
 		// can refuse even when the original planner or final-root scan fits.
 		// Projection releases partial clones before returning; required capture
 		// admission and all non-capacity/identity failures remain fail-closed.
-		if err != nil && !errors.Is(err, retainedalloc.ErrCapacity) {
+		if err != nil && !errors.Is(err, retainedalloc.ErrCapacity) && !errors.Is(err, memtable.ErrCOWCapacity) {
 			return nil, err
 		}
 	}
