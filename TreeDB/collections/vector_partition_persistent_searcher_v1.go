@@ -1635,27 +1635,45 @@ func (c *Collection) NewVectorPartitionGenerationLiveSearchOpenPlanWithContextV1
 // Re-reading the prepared manifest and the current binding here makes a stale
 // or mismatched caller fail closed before any partition asset is opened.
 func (c *Collection) NewPreparedVectorPartitionGenerationReplicatedLiveSearchOpenPlanWithContextV1(ctx context.Context, manifest VectorPartitionManifestV1) (*VectorPartitionGenerationSearchOpenPlanV1, error) {
-	if c == nil || manifest.Collection != c.name {
+	return c.newPreparedVectorPartitionGenerationReplicatedLiveSearchOpenPlanV1(ctx, manifest, false)
+}
+
+// NewPreparedVectorPartitionGenerationReplicatedLiveStartupSearchOpenPlanWithContextV1
+// validates startup after complete document/carrier mutation finalization. It must
+// be called BEFORE ANY local vector or coordinator serving starts on this DB.
+// The caller must not hold native admission or the root storage barrier. This is
+// not a concurrent-serving API; serving callers use the ordinary method above.
+func (c *Collection) NewPreparedVectorPartitionGenerationReplicatedLiveStartupSearchOpenPlanWithContextV1(ctx context.Context, manifest VectorPartitionManifestV1) (*VectorPartitionGenerationSearchOpenPlanV1, error) {
+	return c.newPreparedVectorPartitionGenerationReplicatedLiveSearchOpenPlanV1(ctx, manifest, true)
+}
+
+func (c *Collection) newPreparedVectorPartitionGenerationReplicatedLiveSearchOpenPlanV1(ctx context.Context, manifest VectorPartitionManifestV1, startup bool) (*VectorPartitionGenerationSearchOpenPlanV1, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if c == nil || c.db == nil || manifest.Collection != c.name {
 		return nil, ErrVectorPartitionSearchUnavailable
 	}
 	if err := manifest.validateWithContextV1(ctx, DefaultVectorPartitionManifestLimits()); err != nil {
 		return nil, fmt.Errorf("%w: replicated live manifest: %v", ErrVectorPartitionSearchUnavailable, err)
 	}
-	def, err := c.declaredVectorIndexDefinitionPrepared(manifest.IndexName)
-	if err != nil || VectorIndexDefinitionDigestV1(def) != manifest.IndexDefinitionDigest {
-		return nil, fmt.Errorf("%w: replicated live index definition: %v", ErrVectorPartitionSearchUnavailable, err)
-	}
-	// Reopening a collection does not eagerly install native vector runtimes.
-	// Restore only the already-persisted carrier under the ordinary load lock;
-	// this path must never rebuild or publish a replacement binding.
-	unlockLoad := c.lockNativeVectorIndexLoad()
-	carrier, loadStatus, loadErr := c.loadVectorPartitionLiveIndexForServingV1(def)
-	unlockLoad()
-	if loadErr != nil || carrier == nil || !loadStatus.Loaded || !carrier.isPartitionLiveCarrier() {
-		return nil, fmt.Errorf("%w: replicated durable live carrier: status=%+v err=%v", ErrVectorPartitionSearchUnavailable, loadStatus, loadErr)
+	load := func() error {
+		def, err := c.declaredVectorIndexDefinitionPrepared(manifest.IndexName)
+		if err != nil || VectorIndexDefinitionDigestV1(def) != manifest.IndexDefinitionDigest {
+			return fmt.Errorf("%w: replicated live index definition: %v", ErrVectorPartitionSearchUnavailable, err)
+		}
+		// Restore only the already-persisted carrier; never rebuild or publish
+		// a replacement binding. Warm loads also inspect document authority.
+		unlockLoad := c.lockNativeVectorIndexLoad()
+		carrier, loadStatus, loadErr := c.loadVectorPartitionLiveIndexForServingV1(def)
+		unlockLoad()
+		if loadErr != nil || carrier == nil || !loadStatus.Loaded || !carrier.isPartitionLiveCarrier() {
+			return fmt.Errorf("%w: replicated durable live carrier: status=%+v err=%v", ErrVectorPartitionSearchUnavailable, loadStatus, loadErr)
+		}
+		return nil
 	}
 	var plan *VectorPartitionGenerationSearchOpenPlanV1
-	err = WithVectorPartitionStorageBarrierV1(c.db.Dir(), func() error {
+	prove := func() error {
 		prepared, err := c.preparedVectorPartitionManifestUnderStorageBarrierV1(ctx, manifest.IndexName, manifest.Generation, true)
 		if err != nil {
 			return fmt.Errorf("%w: replicated prepared manifest: %v", ErrVectorPartitionSearchUnavailable, err)
@@ -1668,7 +1686,25 @@ func (c *Collection) NewPreparedVectorPartitionGenerationReplicatedLiveSearchOpe
 		}
 		plan, err = NewVectorPartitionGenerationSearchOpenPlanWithContextV1(ctx, prepared)
 		return err
-	})
+	}
+	var err error
+	if startup {
+		err = WithVectorPartitionStorageBarrierV1(c.db.Dir(), func() error {
+			// Native admission spans accepted roots, carrier publication and the
+			// notification/finalization tail. Acquire it before even a warm load.
+			unlock := c.lockNativeVectorAdmissionWrite()
+			defer unlock()
+			if err := load(); err != nil {
+				return err
+			}
+			return prove()
+		})
+	} else {
+		if err := load(); err != nil {
+			return nil, err
+		}
+		err = WithVectorPartitionStorageBarrierV1(c.db.Dir(), prove)
+	}
 	if err != nil {
 		return nil, err
 	}
