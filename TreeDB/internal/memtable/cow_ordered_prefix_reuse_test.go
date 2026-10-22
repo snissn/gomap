@@ -107,7 +107,19 @@ func TestCOWOrderedPrefixReuseMatchesFreshSeek(t *testing.T) {
 }
 
 func TestCOWOrderedPrefixReuseRetainedCutAndRawBounds(t *testing.T) {
-	budget, writer := cowOrderedLifecycleWriter(t)
+	// This large, deliberately nonmonotone group needs the ordinary finite
+	// envelope; the small lifecycle helper is for separate saturation controls.
+	budget, err := NewCOWBudget(DefaultCOWLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer, err := NewCOWOrderedWriter(budget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if writer.ordered == nil {
+		t.Fatal("ordered constructor activated the compatibility tree")
+	}
 	entries := cowOrderedPrefixReuseEntries(t)
 	anchor := cowOrderedStorageMutation(t, "a\x00b", 64)
 	anchor.Flags = node.FlagTombstone
