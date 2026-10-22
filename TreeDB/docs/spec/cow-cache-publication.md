@@ -650,3 +650,15 @@ operations, unsupported producers, stale evidence and invalid arithmetic retain
 the exact candidate scanner. Reopen starts without a raw census and reconstructs
 one through that scanner. Snapshot resource pinning, recovery validation and GC
 reachability remain authoritative and unchanged.
+
+## Immutable map copy backing
+
+COW map copies allocate independent item and child backing sized to the live
+length plus one spare slot, capped at the tree maximum. Further private growth
+uses the original admitted mutation work and records the actual allocation.
+Internal nodes contain their child slice header in the same allocation; leaves
+keep the smaller header. Admission charges the rounded containing allocation,
+and owned cleanup clears its embedded child reference before refunding it.
+Raw, logical and history trees retain degree 32; lower-fanout experiments did not
+justify their additional allocation objects and mixed batch performance. No new
+pool, arena, publication owner or retention lifetime is introduced.
