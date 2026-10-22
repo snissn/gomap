@@ -1030,6 +1030,20 @@ func (c *cowOrderedCursor) seekGE(key []byte) bool {
 	if c.tree == nil {
 		return false
 	}
+	// A complete canonical key in the retained current prefix needs only a
+	// numeric predecessor search. The immutable primary position already owns
+	// this history and its successor; arbitrary physical bounds use the full
+	// primary search below. An all-ones suffix is reserved timestamp zero.
+	if c.valid && c.h != nil {
+		encoded, suffixLen, same := cowOrderedSuffix(c.primary.Key(), key)
+		if same && suffixLen == mvcckey.TimestampSize && encoded != ^uint64(0) {
+			if c.historyFloor(^encoded) {
+				return true
+			}
+			c.valid = c.primary.Next()
+			return c.valid && c.enter(false)
+		}
+	}
 	// The primary floor is the only prefix whose versions can straddle key.
 	// Retain that search's stack instead of looking up its resulting record a
 	// second time. At most one adjacent primary key can supply the fallback.

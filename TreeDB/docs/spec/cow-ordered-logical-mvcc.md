@@ -135,6 +135,14 @@ including partial suffixes. A finite empty bound is distinct from an unbounded
 reverse `Last` operation. Maintenance traversal separately exposes admitted,
 resumable work steps.
 
+A forward seek to a complete canonical version key in the cursor's current
+logical prefix reuses its retained primary position and searches the numeric
+history directly. If no eligible timestamp remains, it advances to the next
+primary key. Short, extended, malformed and reserved timestamp-zero bounds,
+and unpositioned or exhausted cursors, retain the full primary search. This
+reuse does not bypass raw-source merging, physical masks, domain checks or
+the original read owner.
+
 The public read cut owns all sources used by a read. With an empty pinned disk
 basis, an exact canonical version range searches only its retained logical
 shard when the existing no-range-spans condition holds. Malformed timestamp
