@@ -121,6 +121,24 @@ func TestCOWPublicPackedDictionaryLeafOldCut(t *testing.T) {
 		t.Fatal(err)
 	}
 	finish()
+	// Publish real pages in the replacement leaf file so the backend can seal
+	// the original generation. These keys leave all original rows unchanged.
+	batch = database.NewBatch()
+	for i := 0; i < 64; i++ {
+		if err := batch.Set([]byte(fmt.Sprintf("dict-pack-seal-%04d", i)), want); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := batch.Write(); err != nil {
+		t.Fatal(err)
+	}
+	if err := batch.Close(); err != nil {
+		t.Fatal(err)
+	}
+	batch = nil
+	if err := database.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
 	plan, err := database.LeafGenerationPlan(ctx, LeafGenerationPlanOptions{Force: true})
 	if err != nil {
 		t.Fatal(err)

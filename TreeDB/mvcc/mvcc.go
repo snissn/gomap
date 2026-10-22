@@ -221,7 +221,11 @@ func (s *Store) CommitGroupAt(groups []CommitGroup, mode CommitMode) error {
 		}
 	}
 
-	staged := make([]stagedMutation, 0, total)
+	var singleton [1]stagedMutation
+	staged := singleton[:0]
+	if total != 1 {
+		staged = make([]stagedMutation, 0, total)
+	}
 	var seen map[string]struct{}
 	if total > 1 {
 		seen = make(map[string]struct{}, total)
