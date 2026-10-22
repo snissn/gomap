@@ -38348,9 +38348,13 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 		}()
 
 		pressureJoined := false
+		pressureRolloverUsed := false
 		for {
 			b.db.cow.writerMu.Lock()
-			rollover, pressure, err := b.cowGenerationRollover()
+			rollover, pressure, pressureRollover, err := b.cowGenerationRollover(!pressureRolloverUsed)
+			if pressureRollover {
+				pressureRolloverUsed = true
+			}
 			if pressure {
 				b.db.cow.writerMu.Unlock()
 				unlockWriteMu()

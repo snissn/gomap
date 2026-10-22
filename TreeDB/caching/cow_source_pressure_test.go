@@ -193,7 +193,7 @@ func TestCOWSourceGenerationAggregateDemandAndParkedSuccessors(t *testing.T) {
 							}
 							db.cow.writerMu.Lock()
 							loose := b.cowPredictionCanSkipEstimate(groups)
-							rollover, pressure, err := b.cowGenerationRollover()
+							rollover, pressure, _, err := b.cowGenerationRollover(true)
 							db.cow.writerMu.Unlock()
 							if err != nil || rollover != nil || pressure == parked {
 								t.Fatalf("aggregate source/generation demand: parked=%t pressure=%t err=%v", parked, pressure, err)
