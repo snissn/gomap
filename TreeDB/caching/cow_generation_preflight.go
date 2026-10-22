@@ -41,13 +41,17 @@ func (b *Batch) cowGenerationRollover(allowPressureRollover bool) (_ *cowRollove
 		i := b.shardIdxs[index]
 		groups[i] = append(groups[i], m)
 	}
-	if b.cowPredictionCanSkipEstimate(groups) {
+	control, err := b.cowKnownControlCharge(groups)
+	if err != nil {
+		return nil, false, false, err
+	}
+	if b.cowPredictionCanSkipEstimateWithControl(groups, control) {
 		return nil, false, false, nil
 	}
 	max := c.budget.Limits().MaxGenerationBytes
 	rotate := false
 	usefulPressureRollover := false
-	var total uint64
+	total := control
 	var successors int
 	for i, group := range groups {
 		if len(group) == 0 {

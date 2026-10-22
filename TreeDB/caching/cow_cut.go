@@ -466,6 +466,18 @@ func (c *cowCache) prepare(groups [][]memtable.COWMutation, opts []memtable.COWP
 	return c.prepareNative(groups, opts, nil)
 }
 
+// cowPreparedCutCharge matches the original publication cut and private vectors.
+func cowPreparedCutCharge(shards, frozen int, needsSuccessors bool) uint64 {
+	bytes := cowCutCharge(shards, frozen) +
+		memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowPreparedCut{}))) +
+		memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof((*memtable.COWPrepared)(nil)))) +
+		memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof(memtable.COWRetirement{})))
+	if needsSuccessors {
+		bytes += memtable.COWAllocationCharge(uint64(shards) * uint64(unsafe.Sizeof(cowRawSuccessor{})))
+	}
+	return bytes
+}
+
 func (c *cowCache) prepareNative(groups [][]memtable.COWMutation, opts []memtable.COWPrepareOptions, native *cowNativeOwner) (*cowPreparedCut, error) {
 	c.prepareCalls.Add(1)
 	// The caller owns writerMu continuously through prepare/cancel/publication.
@@ -489,13 +501,7 @@ func (c *cowCache) prepareNative(groups [][]memtable.COWMutation, opts []memtabl
 			needsSuccessors = true
 		}
 	}
-	bytes := cowCutCharge(len(groups), len(old.frozen)) +
-		memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowPreparedCut{}))) +
-		memtable.COWAllocationCharge(uint64(len(groups))*uint64(unsafe.Sizeof((*memtable.COWPrepared)(nil)))) +
-		memtable.COWAllocationCharge(uint64(len(groups))*uint64(unsafe.Sizeof(memtable.COWRetirement{})))
-	if needsSuccessors {
-		bytes += memtable.COWAllocationCharge(uint64(len(groups)) * uint64(unsafe.Sizeof(cowRawSuccessor{})))
-	}
+	bytes := cowPreparedCutCharge(len(groups), len(old.frozen), needsSuccessors)
 	lease, err := c.budget.AcquireExternal(bytes)
 	if err != nil {
 		return nil, err

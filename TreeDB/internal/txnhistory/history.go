@@ -178,6 +178,81 @@ func (j *History) Evict() {
 	}
 }
 
+func preparationShape(capacity int, maxBytes uint64, entries []batch.Entry, ranges []batch.DeleteRange, barrier bool, native []Effect) (int, bool, barrierReason, uint64) {
+	reason := barrierLogicalReplacement
+	collapse := false
+	// Arithmetic is checked against finite ring capacity before addition.
+	n := len(entries)
+	if len(ranges) > capacity || n > capacity-len(ranges) {
+		collapse = true
+	} else {
+		n += len(ranges)
+		if len(native) > capacity-n {
+			collapse = true
+		} else {
+			n += len(native)
+		}
+	}
+	if barrier {
+		if n >= capacity {
+			collapse = true
+		} else {
+			n++
+		}
+	}
+	if collapse {
+		reason = barrierEffectCapacity
+	}
+	keyBytes := uint64(0)
+	addKey := func(key []byte) {
+		if collapse {
+			return
+		}
+		if uint64(len(key)) > maxBytes/2-keyBytes {
+			collapse = true
+			reason = barrierByteCapacity
+			return
+		}
+		keyBytes += uint64(len(key))
+	}
+	for _, e := range entries {
+		addKey(e.Key)
+		if e.Type == batch.OpDeleteRange {
+			addKey(e.Value)
+		}
+	}
+	for _, r := range ranges {
+		addKey(r.Start)
+		addKey(r.End)
+	}
+	for _, e := range native {
+		if e.Kind != BarrierEffect {
+			addKey(e.Key)
+			if e.Kind == RangeEffect {
+				addKey(e.End)
+			}
+		}
+	}
+	if !collapse && uint64(n)*uint64(unsafe.Sizeof(effect{}))+keyBytes+256 > maxBytes {
+		collapse = true
+		reason = barrierByteCapacity
+	}
+	return n, collapse, reason, keyBytes
+}
+func preparationInline(collapse, barrier bool, entries []batch.Entry, ranges []batch.DeleteRange, native []Effect, keyBytes uint64) bool {
+	return !collapse && !barrier && len(native) == 0 && len(entries) == 1 && len(ranges) == 0 && entries[0].Type != batch.OpDeleteRange && keyBytes <= uint64(len(mutation{}.inlineKey))
+}
+
+// PreparationAllocationSizes reports only not-yet-owned key arena backing.
+// Collapsed barriers and inline singletons use the original admitted ring.
+func PreparationAllocationSizes(capacity int, maxBytes uint64, entries []batch.Entry, ranges []batch.DeleteRange, barrier bool, native []Effect) [5]uint64 {
+	_, collapse, _, keyBytes := preparationShape(capacity, maxBytes, entries, ranges, barrier, native)
+	if collapse || keyBytes == 0 || preparationInline(collapse, barrier, entries, ranges, native, keyBytes) {
+		return [5]uint64{}
+	}
+	return [5]uint64{0, 0, keyBytes, 0, 0}
+}
+
 // Prepare preserves the raw-key API. Semantic participants use PrepareEffects
 // so raw byte keys never carry catalog or collection identities.
 func (j *History) Prepare(entries []batch.Entry, ranges []batch.DeleteRange, barrier bool) (Prepared, error) {
@@ -203,64 +278,7 @@ func (j *History) PrepareEffects(entries []batch.Entry, ranges []batch.DeleteRan
 			return Prepared{}, ErrInvalidEffect
 		}
 	}
-	reason := barrierLogicalReplacement
-	collapse := false
-	// Arithmetic is checked against finite ring capacity before addition.
-	n := len(entries)
-	if len(ranges) > len(j.records) || n > len(j.records)-len(ranges) {
-		collapse = true
-	} else {
-		n += len(ranges)
-		if len(native) > len(j.records)-n {
-			collapse = true
-		} else {
-			n += len(native)
-		}
-	}
-	if barrier {
-		if n >= len(j.records) {
-			collapse = true
-		} else {
-			n++
-		}
-	}
-	if collapse {
-		reason = barrierEffectCapacity
-	}
-	keyBytes := uint64(0)
-	addKey := func(key []byte) {
-		if collapse {
-			return
-		}
-		if uint64(len(key)) > j.maxBytes/2-keyBytes {
-			collapse = true
-			reason = barrierByteCapacity
-			return
-		}
-		keyBytes += uint64(len(key))
-	}
-	for _, e := range entries {
-		addKey(e.Key)
-		if e.Type == batch.OpDeleteRange {
-			addKey(e.Value)
-		}
-	}
-	for _, r := range ranges {
-		addKey(r.Start)
-		addKey(r.End)
-	}
-	for _, e := range native {
-		if e.Kind != BarrierEffect {
-			addKey(e.Key)
-			if e.Kind == RangeEffect {
-				addKey(e.End)
-			}
-		}
-	}
-	if !collapse && uint64(n)*uint64(unsafe.Sizeof(effect{}))+keyBytes+256 > j.maxBytes {
-		collapse = true
-		reason = barrierByteCapacity
-	}
+	n, collapse, reason, keyBytes := preparationShape(len(j.records), j.maxBytes, entries, ranges, barrier, native)
 	effects := j.staging[:0]
 	if collapse {
 		addNamespace := func(ns Namespace) bool {
@@ -297,7 +315,7 @@ func (j *History) PrepareEffects(entries []batch.Entry, ranges []batch.DeleteRan
 	}
 	var lease Lease
 	var err error
-	inline := !collapse && !barrier && len(native) == 0 && len(entries) == 1 && len(ranges) == 0 && entries[0].Type != batch.OpDeleteRange && keyBytes <= uint64(len(mutation{}.inlineKey))
+	inline := preparationInline(collapse, barrier, entries, ranges, native, keyBytes)
 	if j.admit != nil && keyBytes != 0 && !inline {
 		lease, err = j.admit(0, 0, keyBytes, 0, 0)
 		if err != nil {

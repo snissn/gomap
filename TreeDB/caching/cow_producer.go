@@ -25,10 +25,15 @@ type cowFrameCapture struct {
 	sorted   bool
 }
 
-func newCOWFrameCapture(budget *memtable.COWBudget, points int) (*cowFrameCapture, error) {
+func cowFrameCaptureCharge(points int) uint64 {
 	bytes := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowFrameCapture{}))) +
 		memtable.COWAllocationCharge(uint64(points)*uint64(unsafe.Sizeof(cowProducedFrame{}))) +
 		memtable.COWAllocationCharge(2*uint64(unsafe.Sizeof(uintptr(0))))
+	return bytes
+}
+
+func newCOWFrameCapture(budget *memtable.COWBudget, points int) (*cowFrameCapture, error) {
+	bytes := cowFrameCaptureCharge(points)
 	lease, err := budget.AcquireExternal(bytes)
 	if err != nil {
 		return nil, err
