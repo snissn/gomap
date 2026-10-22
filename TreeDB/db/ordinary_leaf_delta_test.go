@@ -3,18 +3,39 @@ package db
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"github.com/snissn/gomap/TreeDB/internal/leafrefscan"
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 	"maps"
+	"math"
 	"path/filepath"
 	"testing"
 )
 
 func TestOrdinaryDATAOuterLeafOverwritesAvoidCandidateScan(t *testing.T) {
-	d, err := Open(Options{Dir: t.TempDir(), Durability: DurabilityWALOffRelaxed, IndexOuterLeavesInValueLog: true, DisableBackgroundPrune: true})
+	testOrdinaryDATAOuterLeafOverwritesAvoidCandidateScan(t, false)
+}
+
+func TestOrdinaryDATASpanNativeOverwritesAvoidCandidateScan(t *testing.T) {
+	testOrdinaryDATAOuterLeafOverwritesAvoidCandidateScan(t, true)
+}
+
+func testOrdinaryDATAOuterLeafOverwritesAvoidCandidateScan(t *testing.T, spanNative bool) {
+	t.Helper()
+	opts := Options{Dir: t.TempDir(), Durability: DurabilityWALOffRelaxed, IndexOuterLeavesInValueLog: true, DisableBackgroundPrune: true}
+	if spanNative {
+		opts.FlushAdmissionPolicy = FlushAdmissionPolicyExplicit
+		opts.FlushApplySpanNative = true
+		opts.FlushApplyConcurrency = 4
+		opts.FlushApplyMinEntries = 1
+		opts.FlushApplyMinSpans = 1
+		opts.FlushApplyMinBytes = 1
+	}
+	d, err := Open(opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,12 +63,19 @@ func TestOrdinaryDATAOuterLeafOverwritesAvoidCandidateScan(t *testing.T) {
 	put(2)
 	old := d.AcquireSnapshot()
 	defer old.Close()
+	usedBefore := rawSpanNativeRouteStatUint(t, d.Stats(), "treedb.raw.span_native.route.point_put.used_ops_total")
 	scans := 0
 	d.testScanCandidateExternalReferencesHook = func() { scans++ }
 	for round := 3; round < 6; round++ {
 		put(round)
 	}
 	d.testScanCandidateExternalReferencesHook = nil
+	if spanNative {
+		usedAfter := rawSpanNativeRouteStatUint(t, d.Stats(), "treedb.raw.span_native.route.point_put.used_ops_total")
+		if usedAfter-usedBefore != 3000 {
+			t.Fatalf("span-native consumed %d overwrite ops, want 3000", usedAfter-usedBefore)
+		}
+	}
 	if scans != 0 {
 		t.Fatalf("ordinary DATA overwrite performed %d full candidate scans", scans)
 	}
@@ -56,6 +84,7 @@ func TestOrdinaryDATAOuterLeafOverwritesAvoidCandidateScan(t *testing.T) {
 	}
 	assertCandidateTrackerMatchesFullScan(t, d)
 	assertOrdinaryRawCensus(t, d)
+	assertOrdinaryRawProjectionBoundaries(t, d)
 }
 
 func assertOrdinaryRawCensus(t *testing.T, d *DB) {
@@ -101,7 +130,24 @@ func assertOrdinaryRawCensus(t *testing.T, d *DB) {
 }
 
 func TestOrdinaryDATARawGroupCancellationRotationAndFallback(t *testing.T) {
+	testOrdinaryDATARawGroupCancellationRotationAndFallback(t, false)
+}
+
+func TestOrdinaryDATASpanNativeRawGroupCancellationRotationAndFallback(t *testing.T) {
+	testOrdinaryDATARawGroupCancellationRotationAndFallback(t, true)
+}
+
+func testOrdinaryDATARawGroupCancellationRotationAndFallback(t *testing.T, spanNative bool) {
+	t.Helper()
 	opts := Options{Dir: t.TempDir(), Durability: DurabilityWALOffRelaxed, IndexOuterLeavesInValueLog: true, DisableBackgroundPrune: true}
+	if spanNative {
+		opts.FlushAdmissionPolicy = FlushAdmissionPolicyExplicit
+		opts.FlushApplySpanNative = true
+		opts.FlushApplyConcurrency = 4
+		opts.FlushApplyMinEntries = 1
+		opts.FlushApplyMinSpans = 1
+		opts.FlushApplyMinBytes = 1
+	}
 	d, err := Open(opts)
 	if err != nil {
 		t.Fatal(err)
@@ -150,6 +196,7 @@ func TestOrdinaryDATARawGroupCancellationRotationAndFallback(t *testing.T) {
 	scans := 0
 	d.testScanCandidateExternalReferencesHook = func() { scans++ }
 	defer func() { d.testScanCandidateExternalReferencesHook = nil }()
+	usedBefore := rawSpanNativeRouteStatUint(t, d.Stats(), "treedb.raw.span_native.route.point_put.used_ops_total")
 	group, err := d.BeginRootPublicationBuildGroup()
 	if err != nil {
 		t.Fatal(err)
@@ -175,6 +222,12 @@ func TestOrdinaryDATARawGroupCancellationRotationAndFallback(t *testing.T) {
 		}
 		if err = b.Close(); err != nil {
 			t.Fatal(err)
+		}
+	}
+	if spanNative {
+		usedAfter := rawSpanNativeRouteStatUint(t, d.Stats(), "treedb.raw.span_native.route.point_put.used_ops_total")
+		if usedAfter-usedBefore != 3600 {
+			t.Fatalf("span-native consumed %d grouped put ops, want 3600", usedAfter-usedBefore)
 		}
 	}
 	if scans != 0 {
@@ -242,4 +295,73 @@ func TestOrdinaryDATARawGroupCancellationRotationAndFallback(t *testing.T) {
 		t.Fatal("descriptor alias accepted ordinary raw census")
 	}
 	assertCandidateTrackerMatchesFullScan(t, d)
+}
+
+// Broken arithmetic evidence and finite clone admission cannot authorize an
+// omitted dependency or mutate the accepted tracker. Exercise the real census
+// and existing metadata owner after public writes activate the receipt.
+func assertOrdinaryRawProjectionBoundaries(t *testing.T, d *DB) {
+	t.Helper()
+	snap := d.AcquireSnapshot()
+	defer snap.Close()
+	tracker := d.valueLogRefTracker
+	tracker.mu.RLock()
+	var id uint32
+	var count uint64
+	for _, slot := range tracker.rawCounts.slots {
+		if slot.fileID != 0 {
+			id, count = slot.fileID, slot.count
+			break
+		}
+	}
+	tracker.mu.RUnlock()
+	if id == 0 || count >= math.MaxInt64 {
+		t.Fatal("missing finite raw census")
+	}
+	next := page.MetaPageBody{CommitSeq: snap.state.CommitSeq + 1, UserRootPageID: snap.state.RootPageID, SystemRootPageID: snap.state.SystemRootPageID}
+	delta := newValueLogRefDelta()
+	defer releaseValueLogRefDelta(delta)
+	delta.rawExact, delta.rawIndexID = true, snap.idx.id
+	delta.rawInput, delta.rawOutput = snap.state.RootPageID, snap.state.RootPageID
+	delta.rawChanges = newValueLogRefDelta()
+	owner := d.StableResourceIdentityPinRegistry().MetadataOwner()
+	project := func(wantCapacity bool) {
+		t.Helper()
+		before := owner.Bytes()
+		var candidate candidateValueLogRefCountsV1
+		refs, exact, err := d.projectOrdinaryRawReferences(snap.idx, next, delta, &candidate)
+		if wantCapacity && !errors.Is(err, retainedalloc.ErrCapacity) || !wantCapacity && err != nil || exact || refs != nil {
+			t.Fatalf("unsafe projection exact=%v refs=%v err=%v capacity=%v", exact, refs, err, wantCapacity)
+		}
+		if owner.Bytes() != before || candidate.rawEligible || candidate.rawCounts.used != 0 || candidate.counts.used != 0 {
+			t.Fatal("rejected projection retained candidate backing")
+		}
+	}
+	delta.rawChanges.addChange(id, -int64(count)-1)
+	project(false)
+	delta.rawChanges.resetForReuse()
+	delta.rawChanges.addChange(id, 1)
+	tracker.mu.Lock()
+	err := tracker.rawCounts.set(id, math.MaxUint64)
+	tracker.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	project(false)
+	tracker.mu.Lock()
+	err = tracker.rawCounts.set(id, count)
+	tracker.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	budget := &originalClosureAdmissionBudget{limit: math.MaxUint64}
+	enrollment, err := owner.Enroll(budget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer enrollment.Close()
+	budget.setLimit(owner.Bytes())
+	project(true)
+	budget.setLimit(math.MaxUint64)
+	assertOrdinaryRawCensus(t, d)
 }

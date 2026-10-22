@@ -632,7 +632,11 @@ changed logical dependencies still refuse before assignment.
 
 Ordinary point-put DATA publication can update its exact external dependency
 closure from the successful zipper apply's old/new outer-leaf edge counts and
-logical value-pointer delta. Private build groups compose these signed counts,
+logical value-pointer delta. Span-native apply collects the same receipt from
+its validated leaf spans and final reducer outputs after successful reduction,
+before releasing those operands. Only pure point puts produce this evidence;
+maintenance point operations retain the exact scanner. Private build groups
+compose these signed counts,
 including cancellation of intermediate leaf replacements. A separate process-local
 raw census uses the existing value-log reference tracker's admitted metadata owner;
 it is never serialized as logical ValuePtr accounting. It is installed only after

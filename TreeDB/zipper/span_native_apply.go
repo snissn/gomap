@@ -574,7 +574,31 @@ func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, p
 	if err != nil {
 		return ApplyResult{Metrics: metrics, PendingRetiredPages: retired}, true, err
 	}
+	// Collect the reducer's final leaf edges while its prepared spans and
+	// outputs are still owned. Append receipts include abandoned intermediate
+	// records and cannot prove reachability. Maintenance point operations are
+	// accepted by this engine, but only pure puts support this exact receipt.
+	var raw rawLeafEvidence
+	if opts.CollectOldPointerRefs && z.outerLeavesInValueLog && !z.primaryDirectory && rootID != 0 {
+		purePuts := true
+		for _, op := range ops {
+			if op.Type != batch.OpPut {
+				purePuts = false
+				break
+			}
+		}
+		if purePuts {
+			for i, span := range prepared.LeafSpans {
+				out := outputs.output(i)
+				if err := raw.replacement(span.Ref, out.ref, out.splits); err != nil {
+					return ApplyResult{Metrics: metrics, PendingRetiredPages: retired}, true, err
+				}
+			}
+			raw.pager, raw.input, raw.output = z.pager, rootID, newRootID
+		}
+	}
 	return ApplyResult{
+		rawLeaves:               raw,
 		RootID:                  newRootID,
 		PendingRetiredPages:     retired,
 		Metrics:                 metrics,
