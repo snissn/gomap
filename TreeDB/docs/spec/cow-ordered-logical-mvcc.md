@@ -274,14 +274,18 @@ fully qualified inline/tombstone PUTs in monotone logical-prefix order. It scans
 the operands once and uses conservative full-capacity structural bounds without
 membership or history-tree searches. It bypasses only that preliminary exact
 estimate when the bound proves the existing generation, mutable, retained,
-in-flight and total limits cannot request pressure or rollover. Unsupported
-operands, overflow, a loose bound or pressure use the original predictor. Final
+in-flight, total, source and generation limits cannot request pressure or
+rollover. Unsupported operands, overflow, a loose bound or pressure use the
+original predictor. Final
 canonical preparation still performs the original exact admission and retains
 the sole preparation/publication authority. This bound is not an admission
 receipt and cannot refuse a write or spend budget.
 
-The exact fallback checks aggregate in-flight preparation bytes as well as
-retirement and total bytes before producer placement. Pressure joins at most one
+Both preliminary paths count one source and generation for each nonempty shard
+without an already parked successor, using shared remaining capacity. A parked
+successor needs neither provision again, including at a full frontier. The exact
+fallback also checks aggregate in-flight preparation bytes, retirement and total
+bytes before producer placement. Pressure joins at most one
 checkpoint outside the foreground gates. Capacity held by a live owner can
 still refuse the unassigned command after that join; accepted work is never
 replayed by this pressure loop.

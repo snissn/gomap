@@ -29,7 +29,7 @@ func (s *cowRefusingSemanticHandoff) PrepareHandoff(latest backenddb.NativeSeman
 	return latest, nil
 }
 
-func TestCheckpointFullSourceFrontierRefusesUnpromisedMutable(t *testing.T) {
+func TestCheckpointFullSourceFrontierJoinsBeforeDirtyAcceptance(t *testing.T) {
 	dir := t.TempDir()
 	backend, err := backenddb.Open(backenddb.Options{Dir: filepath.Join(dir, "backend"), DisableBackgroundPrune: true})
 	if err != nil {
@@ -55,17 +55,15 @@ func TestCheckpointFullSourceFrontierRefusesUnpromisedMutable(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := db.Set([]byte("mutable"), []byte("latest")); !errors.Is(err, memtable.ErrCOWCapacity) {
-		t.Fatalf("unpromised dirty generation accepted: %v", err)
-	}
 	if len(db.cow.cut.frozen) != limits.MaxSources || db.cow.cut.shards[0].Len() != 0 || db.cow.budget.Stats().Views != 0 {
-		t.Fatal("fixture does not fill source frontier")
+		t.Fatal("fixture does not fill source frontier with an unpromised empty mutable generation")
 	}
-	if err := db.Checkpoint(); err != nil {
-		t.Fatalf("checkpoint full frontier: %v", err)
-	}
+	runs := db.checkpointRuns.Load()
 	if err := db.Set([]byte("mutable"), []byte("latest")); err != nil {
-		t.Fatal(err)
+		t.Fatalf("source pressure failed to drain before dirty acceptance: %v", err)
+	}
+	if db.checkpointRuns.Load() != runs+1 || db.cow.successors[0].writer == nil || db.COWMemoryStats().Sources > limits.MaxSources {
+		t.Fatal("dirty acceptance did not retain its promised successor after one bounded join")
 	}
 	if err := db.Checkpoint(); err != nil {
 		t.Fatal(err)

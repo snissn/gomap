@@ -19,10 +19,17 @@ func (b *Batch) cowPredictionCanSkipEstimate(groups [][]memtable.COWMutation) bo
 	}
 	trigger := max - max/4
 	var total uint64
+	var successors int
 	active := false
 	for i, group := range groups {
 		if len(group) == 0 {
 			continue
+		}
+		// Canonical preparation promises one raw source and constructs one
+		// successor generation for each first-dirty shard, including logical
+		// groups. Already parked successors own both provisions.
+		if c.successors[i].writer == nil {
+			successors++
 		}
 		active = true
 		bound, valid := c.writers[i].OrderedPredictionUpperBound(group)
@@ -39,6 +46,10 @@ func (b *Batch) cowPredictionCanSkipEstimate(groups [][]memtable.COWMutation) bo
 		return false
 	}
 	stats := c.budget.Stats()
+	if stats.Sources > limits.MaxSources || successors > limits.MaxSources-stats.Sources ||
+		stats.Generations > limits.MaxGenerations || successors > limits.MaxGenerations-stats.Generations {
+		return false
+	}
 	remaining := limits.MaxRetiredBytes
 	for _, n := range [...]uint64{stats.HistoryBytes, stats.ReservedBytes, stats.DeferredBytes, total} {
 		if n > remaining {
