@@ -920,3 +920,24 @@ advancing rebuild and are not comparable to historical uncoordinated PL06 rows.
 Legacy timing/CV and all public classification gates remain unchanged. See
 [the M0 contract](../../TreeDB/docs/performance/index-vacuum-m0.md) for boundaries
 and the incremental #4519 scope.
+
+### Public COW point-read allocation boundary
+
+`BenchmarkCOWPublicPointRead` is a standalone public-package diagnostic:
+
+```sh
+go test ./TreeDB -run '^$' -bench '^BenchmarkCOWPublicPointRead$' -benchmem -benchtime=500000x -count=1
+```
+
+It measures `GetAppend` with reusable caller output, command-WAL-relaxed,
+`cow_ordered`, seed 1, 8-byte sortable raw keys and 128-byte zero values.
+`Settled500k` checkpoints 500,000 preloaded keys before timing; `Dirty4096`
+retains 4,096 inline keys in cache. `SettledPointer4096` and
+`DirtyPointer4096` guard pointer fallback with 4,096 records and forced
+4,096-byte pointer values under the same compression policy. Setup, warmup, checkpoint and Close are
+excluded, while cut capture, traversal, integrity checks and copy-out are included.
+Its standard Go benchmark output defines ns/op, B/op and allocs/op for one point
+read. Go test profiles from this diagnostic are not benchprof inputs. For A/B
+against an older source, use this exact benchmark-only file as an identical
+shared overlay on both sources. Unified natural reads retain their separate
+post-preload state and remain the public workload qualification.

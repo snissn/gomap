@@ -234,9 +234,18 @@ func TestCOWCutDBCloseExcludesAdmittedReadAndAllowsDelayedRelease(t *testing.T) 
 	}
 }
 
-func TestCOWReadPressurePreservesCapacityError(t *testing.T) {
-	db, c := cowCutFixture(t)
+// cowPinViewFrontier fills the actual shared view dimension. Register cleanup
+// before any assertion can fail; callers may release earlier to test recovery.
+func cowPinViewFrontier(t *testing.T, c *cowCache) func() {
+	t.Helper()
 	var pins []*memtable.COWView
+	release := func() {
+		for _, pin := range pins {
+			pin.Close()
+		}
+		pins = nil
+	}
+	t.Cleanup(release)
 	for {
 		pin, err := c.cut.shards[0].root.Acquire(0)
 		if err != nil {
@@ -247,8 +256,60 @@ func TestCOWReadPressurePreservesCapacityError(t *testing.T) {
 		}
 		pins = append(pins, pin)
 	}
-	if _, err := db.Get([]byte("disk")); err != memtable.ErrCOWCapacity {
-		t.Fatalf("Get pressure=%v", err)
+	if stats := c.budget.Stats(); stats.Views != c.budget.Limits().MaxViews {
+		t.Fatalf("did not exhaust actual view slots: %+v", stats)
+	}
+	return release
+}
+
+func TestCOWReadPressurePreservesCapacityError(t *testing.T) {
+	db, c := cowCutFixture(t)
+	c.writerMu.Lock()
+	p := cowCutPrepare(t, c, "cached")
+	retired := p.publish()
+	c.writerMu.Unlock()
+	if retired != nil {
+		retired.drain()
+	}
+	// The backend seed receives its real assigned revision; derive the
+	// expectation from the retained basis rather than assuming legacy zero.
+	basisEntry, err := c.cut.basis.snapshot.GetEntryExact([]byte("disk"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	release := cowPinViewFrontier(t, c)
+	views := c.budget.Stats().Views
+	// Inline points finish copy-out under the retained cut/basis owners. They
+	// create no lifetime-bearing COWView, even while exported views fill the cap.
+	for _, entry := range []struct {
+		key, want string
+		revision  page.EntryRevision
+	}{{"a", "cached", 11}, {"disk", "basis", basisEntry.Revision}} {
+		for _, api := range []string{"Get", "GetAppend", "GetVersioned", "GetVersionedAppend"} {
+			t.Run(entry.key+"/"+api, func(t *testing.T) {
+				prefix := []byte("keep:")
+				dst := make([]byte, len(prefix), 64)
+				copy(dst, prefix)
+				got, revision, err := cowPointReadForTest(db, api, []byte(entry.key), dst)
+				want := []byte(entry.want)
+				if api == "GetAppend" || api == "GetVersionedAppend" {
+					want = append(prefix, want...)
+				}
+				if err != nil || !bytes.Equal(got, want) {
+					t.Fatalf("inline point at view cap: %q/%v", got, err)
+				}
+				if (api == "GetVersioned" || api == "GetVersionedAppend") && revision != entry.revision {
+					t.Fatalf("revision=%d want %d", revision, entry.revision)
+				}
+				got[len(got)-1] ^= 255
+				if again, err := db.Get([]byte(entry.key)); err != nil || string(again) != entry.want {
+					t.Fatalf("point output aliases retained bytes: %q/%v", again, err)
+				}
+				if after := c.budget.Stats().Views; after != views {
+					t.Fatalf("inline point changed Views: %d -> %d", views, after)
+				}
+			})
+		}
 	}
 	if _, err := db.GetMany([][]byte{[]byte("disk")}); err != memtable.ErrCOWCapacity {
 		t.Fatalf("GetMany pressure=%v", err)
@@ -262,9 +323,10 @@ func TestCOWReadPressurePreservesCapacityError(t *testing.T) {
 	if db.AcquireSnapshot() != nil {
 		t.Fatal("errorless capture admitted despite pressure")
 	}
-	for _, pin := range pins {
-		pin.Close()
+	if c.budget.Stats().Views != views {
+		t.Fatal("refused snapshot operations changed view ownership")
 	}
+	release()
 	if value, err := db.Get([]byte("disk")); err != nil || string(value) != "basis" {
 		t.Fatalf("Get after pressure=%q err=%v", value, err)
 	}

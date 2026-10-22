@@ -67,6 +67,16 @@ retained basis. Dictionary leaves keep their original admitted decoder fallback.
 Cache misses retain the original read/decode path; this change does not populate
 a second cache or promise a cold-read improvement.
 
+Synchronous public point reads retain the complete cut through copy-out. Inline
+reads append directly from cached bytes or protected basis scratch into caller
+storage; they do not create a public Snapshot handle. Pointer and dictionary
+materialization retain the original admitted workspace and dependency policy on
+that same cut. Inline points allocate no COW view and may therefore proceed at
+`MaxViews` without increasing the view count; their actual scratch and byte
+admission limits still apply. Pointer and dictionary fallback construct an
+admitted Snapshot and retain its finite view limit. Exported snapshots remain
+distinct lifetime-bearing handles.
+
 Sealed roots project physical records directly into the maintained durable
 builder. Prefix handoff publishes its successor backend basis together with
 exact covered sources, retaining newer work and old cuts. Generation retirement

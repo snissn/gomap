@@ -31203,16 +31203,8 @@ func (db *DB) GetUnsafe(key []byte) ([]byte, error) {
 // Get returns a safe copy of the value.
 func (db *DB) Get(key []byte) ([]byte, error) {
 	if db.cow != nil {
-		s, err := db.acquireCOWSnapshotWithError()
-		if err != nil {
-			return nil, err
-		}
-		defer s.Close() // retain original panic unwind; actual outcome joins below
-		v, err := s.Get(key)
-		if err == tree.ErrKeyNotFound {
-			v, err = nil, nil
-		}
-		return v, joinCOWCleanupError(err, s.Close())
+		v, _, err := db.cowGetVersionedAppend(key, nil, true)
+		return v, err
 	}
 	key = normalizeRawKVPointKey(key)
 	db.beginForegroundRead()
@@ -31266,16 +31258,8 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 
 func (db *DB) GetVersioned(key []byte) ([]byte, page.EntryRevision, error) {
 	if db.cow != nil {
-		s, err := db.acquireCOWSnapshotWithError()
-		if err != nil {
-			return nil, 0, err
-		}
-		defer s.Close() // retain original panic unwind; actual outcome joins below
-		v, rev, err := s.GetVersioned(key)
-		if err == tree.ErrKeyNotFound {
-			v, err = nil, nil
-		}
-		return v, rev, joinCOWCleanupError(err, s.Close())
+		v, rev, err := db.cowGetVersionedAppend(key, nil, true)
+		return v, rev, err
 	}
 	key = normalizeRawKVPointKey(key)
 	scratch := getOwnedReadScratch()
@@ -31485,13 +31469,8 @@ func (db *DB) GetManyView(keys [][]byte, fn tree.GetManyViewFunc) error {
 // If the key is not found, it returns dst and ErrKeyNotFound.
 func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
 	if db.cow != nil {
-		s, err := db.acquireCOWSnapshotWithError()
-		if err != nil {
-			return dst, err
-		}
-		defer s.Close() // retain original panic unwind; actual outcome joins below
-		out, err := s.GetAppend(key, dst)
-		return out, joinCOWCleanupError(err, s.Close())
+		out, _, err := db.cowGetVersionedAppend(key, dst, false)
+		return out, err
 	}
 	key = normalizeRawKVPointKey(key)
 	db.beginForegroundRead()
@@ -31514,13 +31493,7 @@ func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
 
 func (db *DB) GetVersionedAppend(key, dst []byte) ([]byte, page.EntryRevision, error) {
 	if db.cow != nil {
-		s, err := db.acquireCOWSnapshotWithError()
-		if err != nil {
-			return dst, 0, err
-		}
-		defer s.Close() // retain original panic unwind; actual outcome joins below
-		out, revision, err := s.GetVersionedAppend(key, dst)
-		return out, revision, joinCOWCleanupError(err, s.Close())
+		return db.cowGetVersionedAppend(key, dst, false)
 	}
 	key = normalizeRawKVPointKey(key)
 	db.beginForegroundRead()

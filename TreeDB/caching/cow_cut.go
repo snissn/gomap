@@ -396,6 +396,13 @@ func (db *DB) acquireCOWSnapshotWithError() (*Snapshot, error) {
 	if cut == nil {
 		return nil, backenddb.ErrClosed
 	}
+	return db.snapshotFromCOWCut(cut)
+}
+
+// snapshotFromCOWCut consumes the caller's retained cut, including on admission
+// failure. The caller already holds the cache read gate; no recursive admission
+// is allowed while a concurrent Close may be waiting for that gate.
+func (db *DB) snapshotFromCOWCut(cut *cowReadCut) (*Snapshot, error) {
 	// Admission and allocation are outside cutMu. The temporary cut reference
 	// prevents a concurrent publication from retiring the chosen anchor.
 	pin, err := cut.shards[0].root.Acquire(memtable.COWAllocationCharge(uint64(unsafe.Sizeof(Snapshot{}))))

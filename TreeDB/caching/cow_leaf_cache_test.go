@@ -210,6 +210,9 @@ func TestCOWPhysicalLeafCacheRequiresVerifiedRecordAndInspection(t *testing.T) {
 	if _, err := s.Get([]byte("a000")); !errors.Is(err, valuelog.ErrCorrupt) {
 		t.Fatalf("unverified cached record bypassed CRC: %v", err)
 	}
+	if _, err := db.GetAppend([]byte("a000"), []byte("keep")); !errors.Is(err, valuelog.ErrCorrupt) {
+		t.Fatalf("public point bypassed CRC: %v", err)
+	}
 	if _, hit, err := basis.snapshot.CopyVerifiedCachedLeafPage(ptr, f, identity, leafScratch[:]); err != nil || hit {
 		t.Fatalf("failed full decode upgraded record: hit=%t %v", hit, err)
 	}
@@ -240,6 +243,9 @@ func TestCOWPhysicalLeafCacheRequiresVerifiedRecordAndInspection(t *testing.T) {
 	defer writer.WriteAt(version[:], versionOffset)
 	if _, err := s.Get([]byte("a000")); !errors.Is(err, valuelog.ErrCorrupt) {
 		t.Fatalf("verified cache bypassed record inspection: %v", err)
+	}
+	if _, err := db.Get([]byte("a000")); !errors.Is(err, valuelog.ErrCorrupt) {
+		t.Fatalf("public point bypassed record inspection: %v", err)
 	}
 	if _, err := writer.WriteAt(version[:], versionOffset); err != nil {
 		t.Fatal(err)

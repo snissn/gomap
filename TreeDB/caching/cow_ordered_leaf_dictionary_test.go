@@ -202,6 +202,18 @@ func TestCOWOrderedIteratorDictionaryLeafFallback(t *testing.T) {
 		t.Fatalf("persisted dictionary leaf shape: %+v %v; want dictionary %d", shape, err, dictID)
 	}
 
+	// This actual inspected dictionary leaf requires the original admitted
+	// Snapshot even though synchronous inline points need no view themselves.
+	cowAssertPointReadViewRefusal(t, db, []byte("a000"))
+
+	// Synchronous public points must fall back on this same cut's admitted
+	// dictionary owner, then release that private workspace before returning.
+	for i := 0; i < 2; i++ {
+		if got, err := db.Get([]byte("a000")); err != nil || !bytes.Equal(got, want) {
+			t.Fatalf("public dictionary point: %q %v", got, err)
+		}
+	}
+
 	it, err := old.Iterator(nil, nil)
 	if err != nil {
 		t.Fatal(err)
