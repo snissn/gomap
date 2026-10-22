@@ -668,6 +668,12 @@ the exact candidate scanner. Reopen starts without a raw census and reconstructs
 one through that scanner. Snapshot resource pinning, recovery validation and GC
 reachability remain authoritative and unchanged.
 
+Cloning a predecessor census is optional. If its admitted metadata capacity is
+exhausted, partial clones release their original charges before the existing
+dependency planner or final-root scanner runs under the same finite budget.
+Required capture admission can still refuse, and other ownership, identity or
+registration errors remain fatal.
+
 ## Immutable map copy backing
 
 COW map copies allocate independent item and child backing sized to the live

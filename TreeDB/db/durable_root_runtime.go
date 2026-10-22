@@ -1139,7 +1139,11 @@ func (db *DB) captureDurableRootResourcesFromBaseWithRefCountsV1(idx *indexGen, 
 	var reuseOuterLeafBase bool
 	if additional == nil && idx != nil {
 		freshOuterLeafReferences, reuseOuterLeafBase, err = db.projectOrdinaryRawReferences(idx, next, delta, scanned)
-		if err != nil {
+		// Cloning the predecessor censuses is optional: their finite admission
+		// can refuse even when the original planner or final-root scan fits.
+		// Projection releases partial clones before returning; required capture
+		// admission and all non-capacity/identity failures remain fail-closed.
+		if err != nil && !errors.Is(err, retainedalloc.ErrCapacity) {
 			return nil, err
 		}
 	}
