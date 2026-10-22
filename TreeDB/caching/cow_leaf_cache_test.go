@@ -256,3 +256,92 @@ func TestCOWPhysicalLeafCacheRequiresVerifiedRecordAndInspection(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A retained cut whose page was evicted by a later checkpoint must be able to
+// reuse the original cache backing after repeated, fully verified reads. The
+// one-slot cache makes eviction deterministic without populating it by a helper.
+func TestCOWOrderedVerifiedReadRefillsEvictedLeaf(t *testing.T) {
+	for _, compressed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("compressed=%t", compressed), func(t *testing.T) {
+			db, backend, want := cowLeafCacheModeFixture(t, 1, compressed, "cow_ordered")
+			old, err := db.acquireCOWSnapshotWithError()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer old.Close()
+			capture := func(s *Snapshot) page.LeafLogPtr {
+				t.Helper()
+				var keyScratch, leafScratch [page.PageSize]byte
+				var ptr page.LeafLogPtr
+				stop := errors.New("capture retained leaf")
+				_, err := s.cowCut.basis.snapshot.GetEntryExactWithFixedScratch([]byte("a000"), keyScratch[:], leafScratch[:], func(p page.LeafLogPtr, _ []byte) ([]byte, error) {
+					ptr = p
+					return nil, stop
+				})
+				if !errors.Is(err, stop) || ptr.FileID == 0 {
+					t.Fatalf("no physical leaf: %+v %v", ptr, err)
+				}
+				return ptr
+			}
+			oldPtr := capture(old)
+			if err := db.Set([]byte("a000"), []byte("replacement")); err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Checkpoint(); err != nil {
+				t.Fatal(err)
+			}
+			current, err := db.acquireCOWSnapshotWithError()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer current.Close()
+			if capture(current) == oldPtr {
+				t.Fatal("checkpoint did not replace the retained leaf")
+			}
+			stores := cowLeafCacheCounter(t, backend, "read_miss_admission_stores")
+			hits := cowLeafCacheCounter(t, backend, "hits")
+			file, _, err := old.cowCut.basis.snapshot.PinnedValueLogFile(oldPtr.ValueLogFileID())
+			if err != nil {
+				t.Fatal(err)
+			}
+			writer, err := os.OpenFile(file.Name(), os.O_RDWR, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer writer.Close()
+			var crc [1]byte
+			crcOffset := int64(oldPtr.Offset - 4)
+			if _, err := writer.ReadAt(crc[:], crcOffset); err != nil {
+				t.Fatal(err)
+			}
+			defer writer.WriteAt(crc[:], crcOffset)
+			if _, err := writer.WriteAt([]byte{crc[0] ^ 1}, crcOffset); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := old.Get([]byte("a000")); !errors.Is(err, valuelog.ErrCorrupt) {
+				t.Fatalf("evicted corrupt record was admitted: %v", err)
+			}
+			if cowLeafCacheCounter(t, backend, "read_miss_admission_stores") != stores {
+				t.Fatal("failed CRC populated an absent cache entry")
+			}
+			if _, err := writer.WriteAt(crc[:], crcOffset); err != nil {
+				t.Fatal(err)
+			}
+			for i := 0; i < 4; i++ {
+				got, err := old.Get([]byte("a000"))
+				if err != nil || !bytes.Equal(got, want) {
+					t.Fatalf("retained read %d: %q %v", i, got, err)
+				}
+			}
+			if got := cowLeafCacheCounter(t, backend, "read_miss_admission_stores"); got != stores+1 {
+				t.Fatalf("verified repeated reads did not refill evicted page: stores %d -> %d", stores, got)
+			}
+			if cowLeafCacheCounter(t, backend, "hits") <= hits {
+				t.Fatal("refilled retained page did not produce a verified cache hit")
+			}
+			if got, err := current.Get([]byte("a000")); err != nil || string(got) != "replacement" {
+				t.Fatalf("refill changed the current cut: %q %v", got, err)
+			}
+		})
+	}
+}

@@ -233,6 +233,16 @@ checks reuse the window when present and otherwise read their exact bytes.
 Registered file identity checks, full CRC verification before cache promotion,
 page validation, cache disablement and captured-cut lifetimes remain required.
 
+After a full verified decode, repeated COW misses may refill the original
+backend leaf cache using only slot backing already allocated by its original
+owner. Admission keeps the cache's existing repeated-miss, epoch, victim and
+nonblocking lock policy. It copies bytes rather than retaining reader scratch;
+an unallocated selected slot declines without allocating or changing its page.
+Existing byte-identical pages can be marked record-verified. Replacement resets
+independent page-checksum verification, and every subsequent hit still requires
+record inspection through the exact retained file identity. This bounded path
+adds no retained bytes or owner; an initially unallocated cache can remain cold.
+
 On Windows and race builds, `ReadAt` makes fixed inspection buffers heap
 allocations. The serialized read workspace conservatively reserves the original
 three-buffer, separately rounded 4,144-byte peak envelope before inspection and
