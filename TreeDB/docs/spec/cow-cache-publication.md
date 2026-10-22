@@ -199,8 +199,12 @@ Cached inline values, tombstones and pointer metadata need no decoder workspace.
 Forward iterators omit only zero-entry roots from their exact captured immutable
 cache-source vector; tombstone-bearing roots retain precedence. They omit the
 disk cursor only when their exact retained backend root is a validated empty normal leaf; later backend state cannot establish
-that fact for an old cut. Value/leaf workspace and point page scratch are
-admitted only when actually needed. Codec slots grow within finite admission,
+that fact for an old cut. Memory-only iterators retain their smaller owner and
+admit value workspace only if needed. Physical iterators place their independent
+workspace in the construction owner and reserve the full inspection envelope
+with that owner's single lease before allocation or initial seek. Decoder and
+buffer growth, and point page scratch, remain lazily admitted. Codec slots grow
+within finite admission,
 and actual Snappy/LZ4 headers use bounded native owners without constructing
 ZSTD state. Owned callback copies remain separately admitted even for inline
 values.
@@ -211,6 +215,9 @@ belong to that reader, allowing independent readers of the same captured basis
 to proceed without its shared traversal or decoder mutex. Each actual capacity
 is reserved before allocation and refunded through the existing reader Close;
 capacity exhaustion refuses rather than borrowing another reader's scratch.
+Physical iterator construction failures and Close drain workspace children
+before refunding the aggregate construction lease, including on verified-cache
+hits that need no decoder or buffer growth.
 Direct DB point reads and native physical readers retain the original shared
 workspace. Generic dictionary-free ZSTD decoding and pointer-value decoding
 also retain the original cache-owned decoder envelope, since duplicating generic

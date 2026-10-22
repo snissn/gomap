@@ -16,6 +16,11 @@ import (
 
 func cowLeafCacheFixture(t *testing.T, entries int, compressed bool) (*DB, *backenddb.DB, []byte) {
 	t.Helper()
+	return cowLeafCacheModeFixture(t, entries, compressed, "cow_btree")
+}
+
+func cowLeafCacheModeFixture(t *testing.T, entries int, compressed bool, mode string) (*DB, *backenddb.DB, []byte) {
+	t.Helper()
 	dir := t.TempDir()
 	backend, err := backenddb.Open(backenddb.Options{Dir: dir, IndexOuterLeavesInValueLog: true, LeafPageReadCacheEntries: entries})
 	if err != nil {
@@ -26,7 +31,7 @@ func cowLeafCacheFixture(t *testing.T, entries int, compressed bool) (*DB, *back
 		compression = vlogCompressionBlock
 	}
 	db, err := Open(dir, backend, Options{
-		DisableWAL: true, AllowUnsafe: true, MemtableMode: "cow_btree", FlushThreshold: 1 << 30,
+		DisableWAL: true, AllowUnsafe: true, MemtableMode: mode, FlushThreshold: 1 << 30,
 		IndexOuterLeavesInValueLog: true, ValueLogPointerThreshold: 256,
 		ValueLogCompression: uint8(compression), ValueLogBlockCodec: 0,
 	})

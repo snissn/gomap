@@ -205,6 +205,15 @@ type cowMergeIterator struct {
 	cached    bool
 }
 
+// Physical cursors need an independent workspace even on a verified cache hit.
+// Its fixed storage and inspection envelope share the construction allocation
+// and lease; decoder/buffer growth retains its separate bounded admission.
+// Memory-only cursors keep the smaller cowMergeIterator allocation.
+type cowPhysicalMergeIterator struct {
+	cowMergeIterator
+	storage cowReadWorkspace
+}
+
 func (it *cowMergeIterator) Close() error {
 	it.once.Do(func() {
 		it.err = errors.Join(it.err, it.Iterator.Close())
@@ -315,20 +324,37 @@ func (s *Snapshot) buildCOWIteratorLocked(start, end []byte, reverse bool) (merg
 	if reverse {
 		wrapper, heap = merging.ReverseAllocationSizes(count)
 	}
-	bytes := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowMergeIterator{}))) +
+	ownerSize := uint64(unsafe.Sizeof(cowMergeIterator{}))
+	if !empty {
+		ownerSize = uint64(unsafe.Sizeof(cowPhysicalMergeIterator{}))
+	}
+	bytes := memtable.COWAllocationCharge(ownerSize) +
 		memtable.COWAllocationCharge(uint64(count)*uint64(unsafe.Sizeof(merging.IteratorSource{}))) +
 		memtable.COWAllocationCharge(wrapper) + memtable.COWAllocationCharge(heap)
 	if !empty {
 		bytes += memtable.COWAllocationCharge(tree.OwnedPointerProjectionAllocationSize()) + memtable.COWAllocationCharge(2*uint64(unsafe.Sizeof(uintptr(0))))
+		bytes += cowReadWorkspaceInspectionCharge()
 	}
 	lease, err := s.cowCache.budget.AcquireExternal(bytes)
 	if err != nil {
 		return nil, err
 	}
-	it := &cowMergeIterator{snapshot: s, lease: lease}
+	var it *cowMergeIterator
+	if empty {
+		it = &cowMergeIterator{snapshot: s, lease: lease}
+	} else {
+		owner := &cowPhysicalMergeIterator{
+			cowMergeIterator: cowMergeIterator{snapshot: s, lease: lease},
+			storage:          cowReadWorkspace{snapshot: s, budget: s.cowCache.budget, limits: s.cowCache.readLimits()},
+		}
+		it = &owner.cowMergeIterator
+		it.workspace = &owner.storage
+	}
 	sources, err := s.cowIteratorSources(start, end, queue, count, empty, it, reverse)
 	if err != nil {
 		it.workspace.close()
+		it.workspace = nil
+		it.snapshot = nil
 		lease.Close()
 		return nil, err
 	}
@@ -337,8 +363,10 @@ func (s *Snapshot) buildCOWIteratorLocked(start, end []byte, reverse bool) (merg
 			for j := range sources {
 				_ = sources[j].Iter.Close()
 			}
-			lease.Close()
 			it.workspace.close()
+			it.workspace = nil
+			it.snapshot = nil
+			lease.Close()
 			return nil, err
 		}
 	}

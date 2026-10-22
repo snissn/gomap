@@ -70,18 +70,26 @@ func newCOWReadWorkspace(s *Snapshot) (*cowReadWorkspace, error) {
 
 func admitCOWReadWorkspace(budget *memtable.COWBudget, limits valuelog.COWReadLimits) (*cowReadWorkspace, error) {
 	bytes := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowReadWorkspace{}))) +
-		memtable.COWAllocationCharge(4*uint64(unsafe.Sizeof(uintptr(0))))
-	// Inspection precedes record/decoder growth. Reserve its peak heap metadata
-	// first; cowReadMu serializes reuse and Close owns the envelope's lifetime.
-	for _, size := range valuelog.COWInspectionMetadataAllocationSizes() {
-		bytes += memtable.COWAllocationCharge(size)
-	}
+		cowReadWorkspaceInspectionCharge()
 	lease, err := budget.AcquireExternal(bytes)
 	if err != nil {
 		return nil, err
 	}
 	w := &cowReadWorkspace{budget: budget, limits: limits, lease: lease}
 	return w, nil
+}
+
+// Standalone workspaces and physical iterator owners both reserve this whole
+// envelope before any inspector can run. Embedded storage itself is covered
+// by the iterator's actual composite allocation size, never charged twice.
+func cowReadWorkspaceInspectionCharge() uint64 {
+	bytes := memtable.COWAllocationCharge(4 * uint64(unsafe.Sizeof(uintptr(0))))
+	// Inspection precedes record/decoder growth. Reserve its peak heap metadata
+	// first; the read owner serializes reuse and Close ends its lifetime.
+	for _, size := range valuelog.COWInspectionMetadataAllocationSizes() {
+		bytes += memtable.COWAllocationCharge(size)
+	}
+	return bytes
 }
 
 // physicalWorkspaceLocked requires physicalMu. Only the original cache owns
