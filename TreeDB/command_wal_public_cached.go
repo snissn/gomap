@@ -1303,9 +1303,6 @@ func (b *commandWALPublicBatch) write(explicitSync, commandSync bool) (err error
 }
 
 func (b *commandWALPublicBatch) Close() error {
-	if b != nil && b.cowState != nil && b.cowState.batchError != nil {
-		return nil
-	}
 	if b == nil || b.inner == nil {
 		return nil
 	}

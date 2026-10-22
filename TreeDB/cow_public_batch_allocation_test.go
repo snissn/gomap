@@ -83,3 +83,63 @@ func TestCOWPublicCommandBatchOwnedStagingAndWrapperAdmission(t *testing.T) {
 		})
 	}
 }
+
+func TestCOWPublicCommandBatchAuthorizationFailureCloseReleasesOwners(t *testing.T) {
+	for _, profile := range []Profile{ProfileCommandWALDurable, ProfileCommandWALRelaxed} {
+		for _, mode := range []string{"cow_btree", "cow_ordered"} {
+			t.Run(string(profile)+"/"+mode, func(t *testing.T) {
+				database, opts, _ := cowPublicContractOpen(t, profile, func(o *Options) { o.MemtableMode = mode })
+				baseline := database.cached.COWMemoryStats()
+				nextLSN := database.backend.CommandWALNextLSN()
+				inner := database.cached.NewBatchWithSize(1)
+				defer inner.Close()
+				stats := database.cached.COWMemoryStats()
+				limits := opts.COWMemtableLimits
+				if limits == (memtable.COWLimits{}) {
+					limits = memtable.DefaultCOWLimits()
+				}
+				overhead := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
+				if stats.ReservedBytes+overhead >= limits.MaxInFlightBytes {
+					t.Fatal("fixture lacks producer headroom")
+				}
+				filler, err := database.cached.AcquireCOWAllocation(limits.MaxInFlightBytes - stats.ReservedBytes - overhead)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer filler.Close()
+				inner.Reserve(8192)
+				// Reserve has no error return. The existing authorizer exposes its sticky
+				// refusal without invoking any producer, assigning a revision or appending.
+				if err := inner.AuthorizeCOWAppend(database.txnOwner); !errors.Is(err, memtable.ErrCOWCapacity) {
+					t.Fatalf("Reserve did not retain capacity refusal: %v", err)
+				}
+				filler.Close()
+				command := newCommandWALPublicBatch(database, inner, 1)
+				defer command.Close()
+				if command == &cowDeniedPublicBatch || command == &cowClosedPublicBatch || command.cowState == nil || command.cowState.lease == nil || !errors.Is(command.cowState.batchError, memtable.ErrCOWCapacity) {
+					t.Fatal("fixture did not admit an owned wrapper with failed inner authorization")
+				}
+				opened := database.cached.COWMemoryStats()
+				if opened.ExternalLeases != baseline.ExternalLeases+2 {
+					t.Fatalf("wrapper and inner not independently owned: before=%+v opened=%+v", baseline, opened)
+				}
+				command.Reset()
+				if stats := database.cached.COWMemoryStats(); stats.TotalBytes != opened.TotalBytes || stats.ExternalLeases != opened.ExternalLeases {
+					t.Fatal("Reset changed a refused batch's owners")
+				}
+				for closeIndex := 0; closeIndex < 2; closeIndex++ {
+					if err := command.Close(); err != nil {
+						t.Fatal(err)
+					}
+					after := database.cached.COWMemoryStats()
+					if after.TotalBytes != baseline.TotalBytes || after.ReservedBytes != baseline.ReservedBytes || after.ExternalBytes != baseline.ExternalBytes || after.ExternalLeases != baseline.ExternalLeases {
+						t.Fatalf("Close %d retained refused batch owners: before=%+v after=%+v", closeIndex+1, baseline, after)
+					}
+					if database.backend.CommandWALNextLSN() != nextLSN {
+						t.Fatal("refused batch Close assigned a command")
+					}
+				}
+			})
+		}
+	}
+}
