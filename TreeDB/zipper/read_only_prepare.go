@@ -1143,7 +1143,6 @@ func (z *Zipper) ApplyWithOptions(rootID uint64, b *batch.Batch, opts ApplyOptio
 			result.ParallelApplyUsed = true
 		}
 	}
-	var raw rawLeafEvidence
 	if opts.CollectOldPointerRefs && z.outerLeavesInValueLog && !z.primaryDirectory && rootID != 0 && b != nil && !b.HasDeleteRanges() {
 		eligible := true
 		for _, op := range b.SortedEntries() {
@@ -1158,7 +1157,10 @@ func (z *Zipper) ApplyWithOptions(rootID uint64, b *batch.Batch, opts ApplyOptio
 		}
 		rootNode := node.NewNodeView(image)
 		if eligible && rootNode.Type() != page.PageTypePrimaryDirectory {
-			applyCfg.rawLeaves = &raw
+			// Recursive/parallel apply retains this pointer until its workers
+			// join. Allocate only after eligibility: a local declared outside
+			// this branch escapes even for unsupported PRIMARY/inline applies.
+			applyCfg.rawLeaves = &rawLeafEvidence{}
 		}
 	}
 	newRoot, retired, metrics, err := z.applyWithConfig(rootID, b, applyCfg)
@@ -1166,8 +1168,9 @@ func (z *Zipper) ApplyWithOptions(rootID uint64, b *batch.Batch, opts ApplyOptio
 	result.PendingRetiredPages = retired
 	result.Metrics = metrics
 	if err == nil && applyCfg.rawLeaves != nil {
+		raw := applyCfg.rawLeaves
 		raw.pager, raw.input, raw.output = z.pager, rootID, newRoot
-		result.rawLeaves = raw
+		result.rawLeaves = *raw
 	}
 	if err == nil && opts.CollectOldPointerRefs {
 		result.OldPointerRefs = collection.pointers
