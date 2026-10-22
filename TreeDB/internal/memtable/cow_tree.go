@@ -469,17 +469,19 @@ func (w *COWWriter) Estimate(entries []COWMutation, opts COWPrepareOptions) (COW
 }
 
 type COWPrepared struct {
-	writer         *COWWriter
-	private        *btree.Map[string, cowValue]
-	ordered        *cowOrderedTree
-	root           *COWRoot
-	charge         COWCharge
-	ids            []COWResourceID
-	owners         []cowResourceOwner
-	maxEntries     int
-	deferredBudget *COWBudget
-	deferredCharge uint64
-	drainClaimed   bool
+	writer          *COWWriter
+	private         *btree.Map[string, cowValue]
+	ordered         *cowOrderedTree
+	root            *COWRoot
+	charge          COWCharge
+	ids             []COWResourceID
+	owners          []cowResourceOwner
+	maxEntries      int
+	deferredBudget  *COWBudget
+	deferredCharge  uint64
+	logicalBytes    int64
+	logicalOverflow bool
+	drainClaimed    bool
 }
 
 func (p *COWPrepared) Charge() COWCharge { return p.charge }
@@ -530,9 +532,10 @@ func (w *COWWriter) Prepare(entries []COWMutation, opts COWPrepareOptions) (*COW
 	b.mu.Unlock()
 	p := &COWPrepared{writer: w, private: w.private.Copy(), charge: c,
 		ids: make([]COWResourceID, 0, opts.ResourceSlots), owners: make([]cowResourceOwner, 0, opts.ResourceSlots), maxEntries: w.private.Len() + len(entries)}
+	var logicalDelta cowLogicalDelta
 	if w.ordered != nil {
 		p.ordered = w.ordered.fork()
-		p.ordered.applyValidatedFrom(w.ordered, entries)
+		logicalDelta = p.ordered.applyValidatedFrom(w.ordered, entries)
 	}
 	routing := w.ordered.routing(entries)
 	for index, e := range entries {
@@ -542,14 +545,18 @@ func (w *COWWriter) Prepare(entries []COWMutation, opts COWPrepareOptions) (*COW
 			// real migration work is included in the original reservation; use
 			// the staged tree because earlier operations may insert this key.
 			if p.private.Len() != 0 && cowHasKey(p.private, e.Key) {
-				cowDeleteKey(p.private, e.Key)
+				if previous, removed := cowDeleteKey(p.private, e.Key); removed {
+					logicalDelta.replace(len(e.Key), "", previous)
+				}
 			}
 			continue
 		}
 		// Lookup returns an existing owned key; safe builds compare bytes
 		// directly, without temporary key conversions before or after admission.
 		if e.Remove {
-			cowDeleteKey(p.private, e.Key)
+			if previous, removed := cowDeleteKey(p.private, e.Key); removed {
+				logicalDelta.replace(len(e.Key), "", previous)
+			}
 			continue
 		}
 		ownedKey, _, exists := cowLookupGE(p.private, e.Key)
@@ -558,8 +565,11 @@ func (w *COWWriter) Prepare(entries []COWMutation, opts COWPrepareOptions) (*COW
 		if !exists {
 			ownedKey = string(e.Key)
 		}
-		p.private.Set(ownedKey, cowEncodeValue(e))
+		value := cowEncodeValue(e)
+		previous, _ := p.private.Set(ownedKey, value)
+		logicalDelta.replace(len(e.Key), value, previous)
 	}
+	p.logicalBytes, p.logicalOverflow = logicalDelta.bytes, logicalDelta.overflow
 	p.root = &COWRoot{tree: p.private.ImmutableCopy(), generation: g}
 	if p.ordered != nil {
 		p.root.ordered = p.ordered.immutableCopy()

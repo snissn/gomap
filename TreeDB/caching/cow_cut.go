@@ -2,6 +2,7 @@ package caching
 
 import (
 	"fmt"
+	"math"
 	"sync"
 	"sync/atomic"
 	"unsafe"
@@ -475,20 +476,13 @@ func (c *cowCache) prepareNative(groups [][]memtable.COWMutation, opts []memtabl
 	if first < 0 && native == nil {
 		return nil, fmt.Errorf("empty COW publication")
 	}
-	dedupBytes := uint64(0)
 	needsSuccessors := false
 	for i, group := range groups {
 		if len(group) != 0 && c.successors[i].writer == nil {
 			needsSuccessors = true
 		}
-		if len(group) > 1 {
-			dedupBytes += memtable.COWAllocationCharge(uint64(len(group))*128 + 4096)
-		}
 	}
-	// The deduplication map borrows staged owned key strings; it never copies
-	// payloads or traverses unchanged history. Conservative per-entry map
-	// capacity and header allowance are admitted before allocation.
-	bytes := dedupBytes + cowCutCharge(len(groups), len(old.frozen)) +
+	bytes := cowCutCharge(len(groups), len(old.frozen)) +
 		memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowPreparedCut{}))) +
 		memtable.COWAllocationCharge(uint64(len(groups))*uint64(unsafe.Sizeof((*memtable.COWPrepared)(nil)))) +
 		memtable.COWAllocationCharge(uint64(len(groups))*uint64(unsafe.Sizeof(memtable.COWRetirement{})))
@@ -533,6 +527,13 @@ func (c *cowCache) prepareNative(groups [][]memtable.COWMutation, opts []memtabl
 			return p, err
 		}
 		p.prepared[i] = staged
+		if delta, valid := staged.LogicalSizeDelta(); !valid {
+			p.cancel()
+			return p, memtable.ErrCOWCapacity
+		} else if _, valid := cowApplySizeDelta(old.shards[i].size, delta); !valid {
+			p.cancel()
+			return p, memtable.ErrCOWCapacity
+		}
 	}
 	next := &cowReadCut{visibleCommandLSN: old.visibleCommandLSN, logicalSeq: old.logicalSeq, frozenLogicalSeq: old.frozenLogicalSeq, frozenCommandLSN: old.frozenCommandLSN, frozenSemanticRootSet: old.frozenSemanticRootSet, semanticRootSet: old.semanticRootSet, refs: 1, shards: make([]cowTable, len(groups)), frozen: make([]cowTable, len(old.frozen)), basis: old.basis, lease: lease, cache: c}
 	next.basis.retain()
@@ -552,7 +553,10 @@ func (c *cowCache) prepareNative(groups [][]memtable.COWMutation, opts []memtabl
 			}
 			next.shards[i].history += charge
 			next.shards[i].root = p.prepared[i].Root()
-			next.shards[i].size = cowChangedSize(old.shards[i], groups[i])
+			// Preparation checked this scalar result before constructing the cut.
+			// Duplicates already telescope through each private replacement.
+			delta, _ := p.prepared[i].LogicalSizeDelta()
+			next.shards[i].size += delta
 		} else if !next.shards[i].root.Retain() {
 			panic("lost owned COW root")
 		}
@@ -571,6 +575,13 @@ func (c *cowCache) prepareNative(groups [][]memtable.COWMutation, opts []memtabl
 	}
 	p.next = next
 	return p, nil
+}
+
+func cowApplySizeDelta(size, delta int64) (int64, bool) {
+	if size < 0 || delta < -size || delta > math.MaxInt64-size {
+		return 0, false
+	}
+	return size + delta, true
 }
 
 // cancel drops pending writer state; drain must follow after writer/admission

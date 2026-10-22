@@ -304,6 +304,15 @@ lacking the optional head operation continue to seek normally. The movement uses
 the same snapshot read pin, invalidates the selected-value cache, and does not read
 discarded values or step through future histories.
 
+Each private preparation derives an exact signed logical flush-byte delta from
+the prior values already returned by its ordered and raw mutations. Repeated
+operands telescope, and the same fixed routing removes a migrated raw incarnation
+exactly once, so successor size needs no duplicate-key map or second index lookup.
+The delta owns no payload, root, or publication authority; it is distinct from
+retained admission charges and heap bytes. Checked per-record arithmetic, delta
+accumulation, and opening-size addition refuse before WAL through the existing
+cancellation path.
+
 ## Activation and validation
 
 `SupportsLogicalMVCC` reports the actual optional producer. Stats
@@ -328,6 +337,7 @@ final exact-source qualification record:
 | Positive-only prediction and exact fallback | [structural upper-bound controls](../../internal/memtable/cow_ordered_prediction_test.go), [host frontier controls](../../caching/cow_generation_prediction_test.go) |
 | Distinct-key movement, future versions, masks and snapshot close | [MVCC next-key controls](../../mvcc/next_key_test.go), [coalesced read-guard controls](../../caching/snapshot_iterator_mvcc_test.go) |
 | Aligned forward seeks, mixed-source priority and retained-cut cache lifetime | [merge controls](../../internal/merging/forward_seek_test.go), [host lifetime controls](../../caching/cow_forward_seek_test.go), [deep future-seek controls](../../mvcc/forward_seek_test.go) |
+| Exact logical-byte deltas, duplicate telescoping and pre-WAL overflow refusal | [size arithmetic](../../internal/memtable/cow_size_test.go), [full record census](../../caching/cow_changed_size_test.go), [cancellation and retry](../../caching/cow_size_delta_admission_test.go) |
 | Durable prefix/new tail, pressure, persistent pointers and GC | [paused handoff](../../caching/cow_ordered_prefix_pause_test.go), [reopen/ACK](../../cow_ordered_reopen_test.go), [rewrite/compact](../../cow_ordered_rewrite_test.go), [last-owner GC](../../cow_ordered_gc_progress_test.go) |
 
 The public comparison harness is `benchmarks/orderedmem_native`. Qualification

@@ -556,14 +556,20 @@ func cowEncodeOrderedValue(e COWMutation) cowOrderedValue {
 }
 
 func (h *cowOrderedHistory) set(ts uint64, value cowOrderedValue) bool {
+	_, replaced := h.setPrevious(ts, value)
+	return replaced
+}
+
+func (h *cowOrderedHistory) setPrevious(ts uint64, value cowOrderedValue) (cowValue, bool) {
 	if h.count == 0 {
 		h.maximum, h.latest, h.count = ts, value, 1
-		return false
+		return "", false
 	}
 	if h.versions == nil {
 		if ts == h.maximum {
+			previous := h.latest.value
 			h.latest = value
-			return true
+			return previous, true
 		}
 		h.versions = btree.NewMap[uint64, *cowOrderedValue](btreeDefaultDegree)
 		first, incoming := cowOrderedDescriptor(h.latest), cowOrderedDescriptor(value)
@@ -578,14 +584,15 @@ func (h *cowOrderedHistory) set(ts uint64, value cowOrderedValue) bool {
 		if ts > h.maximum {
 			h.maximum, h.latest = ts, value
 		}
-		return false
+		return "", false
 	}
 	var replaced bool
+	var previous *cowOrderedValue
 	descriptor := cowOrderedDescriptor(value)
 	if ts > h.maximum {
-		_, replaced = h.versions.Load(ts, descriptor)
+		previous, replaced = h.versions.Load(ts, descriptor)
 	} else {
-		_, replaced = h.versions.Set(ts, descriptor)
+		previous, replaced = h.versions.Set(ts, descriptor)
 	}
 	if !replaced {
 		h.count++
@@ -593,7 +600,10 @@ func (h *cowOrderedHistory) set(ts uint64, value cowOrderedValue) bool {
 	if ts >= h.maximum {
 		h.maximum, h.latest = ts, value
 	}
-	return replaced
+	if replaced {
+		return previous.value, true
+	}
+	return "", false
 }
 
 func (h *cowOrderedHistory) remove(ts uint64) bool {
@@ -624,17 +634,18 @@ func (h *cowOrderedHistory) remove(ts uint64) bool {
 // apply runs only after the caller has admitted estimate's complete promise.
 // Each touched history gets one private fork for the entire atomic group.
 // Newly allocated numeric trees and postimages are sealed before returning.
-func (t *cowOrderedTree) applyFrom(basis *cowOrderedTree, entries []COWMutation) {
-	t.apply(basis, entries, false)
+func (t *cowOrderedTree) applyFrom(basis *cowOrderedTree, entries []COWMutation) cowLogicalDelta {
+	return t.apply(basis, entries, false)
 }
 
 // applyValidatedFrom is used only after estimate has fully validated every
 // qualified key and Timestamp. Unqualified overrides retain canonical parsing.
-func (t *cowOrderedTree) applyValidatedFrom(basis *cowOrderedTree, entries []COWMutation) {
-	t.apply(basis, entries, true)
+func (t *cowOrderedTree) applyValidatedFrom(basis *cowOrderedTree, entries []COWMutation) cowLogicalDelta {
+	return t.apply(basis, entries, true)
 }
 
-func (t *cowOrderedTree) apply(basis *cowOrderedTree, entries []COWMutation, validated bool) {
+func (t *cowOrderedTree) apply(basis *cowOrderedTree, entries []COWMutation, validated bool) cowLogicalDelta {
+	var delta cowLogicalDelta
 	routing := basis.routing(entries)
 	dirty := make([]*cowOrderedHistory, 0, len(entries))
 	for i, e := range entries {
@@ -663,7 +674,9 @@ func (t *cowOrderedTree) apply(basis *cowOrderedTree, entries []COWMutation, val
 					h = h.fork()
 					dirty = append(dirty, h)
 				}
-				if !h.set(ts, value) {
+				previous, replaced := h.setPrevious(ts, value)
+				delta.replace(len(value.key), value.value, previous)
+				if !replaced {
 					t.versions++
 				}
 				if h.count > t.maxHistory {
@@ -675,6 +688,7 @@ func (t *cowOrderedTree) apply(basis *cowOrderedTree, entries []COWMutation, val
 				h := &cowOrderedHistory{private: true}
 				dirty = append(dirty, h)
 				h.set(ts, value)
+				delta.replace(len(value.key), value.value, "")
 				t.versions++
 				t.keys.Set(value.key[:len(prefix)], h)
 				if t.maxHistory == 0 {
@@ -687,7 +701,8 @@ func (t *cowOrderedTree) apply(basis *cowOrderedTree, entries []COWMutation, val
 		if !exists {
 			continue
 		}
-		if _, member := h.exact(ts); !member {
+		previous, member := h.exact(ts)
+		if !member {
 			continue
 		}
 		if !h.private {
@@ -697,6 +712,7 @@ func (t *cowOrderedTree) apply(basis *cowOrderedTree, entries []COWMutation, val
 		numeric := h.versions
 		if h.remove(ts) {
 			t.versions--
+			delta.replace(len(previous.key), "", previous.value)
 		}
 		if numeric != nil && h.versions == nil {
 			// Removing the penultimate version drops the private map. Its
@@ -725,6 +741,7 @@ func (t *cowOrderedTree) apply(basis *cowOrderedTree, entries []COWMutation, val
 		}
 		h.private = false
 	}
+	return delta
 }
 
 // This variant of the original reserve uses the concrete generic pair size.
@@ -1034,7 +1051,7 @@ func (c *cowOrderedCursor) seekGE(key []byte) bool {
 	// numeric predecessor search. The immutable primary position already owns
 	// this history and its successor; arbitrary physical bounds use the full
 	// primary search below. An all-ones suffix is reserved timestamp zero.
-	if c.valid && c.h != nil {
+	if c.valid && c.h != nil && len(key) == len(c.primary.Key())+mvcckey.TimestampSize {
 		encoded, suffixLen, same := cowOrderedSuffix(c.primary.Key(), key)
 		if same && suffixLen == mvcckey.TimestampSize && encoded != ^uint64(0) {
 			if c.historyFloor(^encoded) {

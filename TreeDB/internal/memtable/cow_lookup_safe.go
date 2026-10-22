@@ -50,11 +50,12 @@ func cowIteratorSeek(tree *btree.Map[string, cowValue], iter *btree.MapIter[stri
 	return ok && iter.Seek(owned)
 }
 
-func cowDeleteKey(tree *btree.Map[string, cowValue], key []byte) {
+func cowDeleteKey(tree *btree.Map[string, cowValue], key []byte) (cowValue, bool) {
 	owned, _, ok := cowLookupGE(tree, key)
 	if ok && cowKeyCompare(owned, key) == 0 {
-		tree.Delete(owned)
+		return tree.Delete(owned)
 	}
+	return "", false
 }
 
 func cowLookupLT(tree *btree.Map[string, cowValue], end []byte) (string, cowValue, bool) {
