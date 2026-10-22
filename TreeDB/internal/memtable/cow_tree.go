@@ -10,6 +10,12 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
+// COW paths are copied at each publication. A smaller fanout bounds copied
+// raw pairs rather than optimizing only mutable in-place insertion. Ordered
+// logical/numeric histories retain their independently selected degree 32.
+// Admission and cursor depths use the degree of their actual tree.
+const cowRawTreeDegree = 8
+
 // COWMutation borrows input only during Prepare. Remove erases the physical key;
 // FlagTombstone stores a cached physical-key deletion marker and its revision.
 // MVCC logical tombstones remain separately encoded in ordinary value bytes.
@@ -44,6 +50,10 @@ type cowNodeLayout struct {
 	count     int
 	items     []cowPairLayout
 	children  *[]*cowNodeLayout
+}
+type cowInternalNodeLayout struct {
+	node     cowNodeLayout
+	children []*cowNodeLayout
 }
 
 // COWRetirement is a bounded ownership transfer, not a background queue.
@@ -185,7 +195,7 @@ func newCOWWriterMode(b, maintenance *COWBudget, ordered bool) (*COWWriter, erro
 	if err != nil {
 		return nil, err
 	}
-	w := &COWWriter{private: btree.NewMap[string, cowValue](btreeDefaultDegree), generation: g}
+	w := &COWWriter{private: btree.NewMap[string, cowValue](cowRawTreeDegree), generation: g}
 	if ordered {
 		w.ordered = newCOWOrderedTree()
 	}
@@ -235,19 +245,27 @@ type COWCharge struct {
 func (c COWCharge) History() uint64 { return c.Nodes + c.Payload + c.Wrappers + c.Resources + c.Extra }
 func (c COWCharge) Total() uint64   { return c.History() + c.Temporary }
 
-// The minimum cardinality of a degree-32 height-h tree is 2*32^(h-1)-1.
+// The minimum cardinality of a degree-d height-h tree is 2*d^(h-1)-1.
 // This bounds height across the entire batch, including its transient inserts.
 func cowMaximumHeight(n int) int {
+	return cowMaximumHeightForDegree(n, btreeDefaultDegree)
+}
+
+func cowRawMaximumHeight(n int) int {
+	return cowMaximumHeightForDegree(n, cowRawTreeDegree)
+}
+
+func cowMaximumHeightForDegree(n, degree int) int {
 	if n <= 0 {
 		return 0
 	}
 	h := 1
 	min := uint64(1)
 	for min <= uint64(n) {
-		if min > (^uint64(0)-31)/32 {
+		if min > (^uint64(0)-uint64(degree-1))/uint64(degree) {
 			break
 		}
-		min = min*32 + 31
+		min = min*uint64(degree) + uint64(degree-1)
 		if min > uint64(n) {
 			break
 		}
@@ -262,14 +280,14 @@ func cowMaximumHeight(n int) int {
 // extra sibling per level and a merge can grow arrays twice. Replacement alone
 // neither splits nor grows and needs just the original path copies.
 func cowNodeReserve(height int, replacement, remove bool) uint64 {
-	return cowNodeReserveFor(height, replacement, remove, 2*btreeDefaultDegree-1)
+	return cowNodeReserveFor(height, replacement, remove, 2*cowRawTreeDegree-1)
 }
 
 func cowNodeReserveFor(height int, replacement, remove bool, maxEntries int) uint64 {
 	if height < 1 {
 		height = 1
 	}
-	items := 2*btreeDefaultDegree - 1
+	items := 2*cowRawTreeDegree - 1
 	if maxEntries < items {
 		items = maxEntries
 	}
@@ -277,8 +295,8 @@ func cowNodeReserveFor(height int, replacement, remove bool, maxEntries int) uin
 		items = 1
 	}
 	pairs := cowAllocation(uint64(2*items) * uint64(unsafe.Sizeof(cowPairLayout{})))
-	children := cowAllocation(uint64(4*btreeDefaultDegree) * uint64(unsafe.Sizeof(uintptr(0))))
-	header := cowAllocation(uint64(unsafe.Sizeof(cowNodeLayout{}))) + cowAllocation(uint64(unsafe.Sizeof([]uintptr{})))
+	children := cowAllocation(uint64(4*cowRawTreeDegree) * uint64(unsafe.Sizeof(uintptr(0))))
+	header := cowAllocation(uint64(unsafe.Sizeof(cowInternalNodeLayout{})))
 	if height == 1 {
 		children = 0
 		header = cowAllocation(uint64(unsafe.Sizeof(cowNodeLayout{})))
@@ -303,7 +321,7 @@ func (w *COWWriter) estimate(entries []COWMutation, opts COWPrepareOptions) (COW
 	if len(entries) > int(^uint(0)>>1)-w.private.Len() {
 		return c, ErrCOWCapacity
 	}
-	c.Height = cowMaximumHeight(w.private.Len() + len(entries))
+	c.Height = cowRawMaximumHeight(w.private.Len() + len(entries))
 	if h := w.private.Height(); h > c.Height {
 		c.Height = h
 	}
@@ -387,7 +405,7 @@ func (w *COWWriter) estimate(entries []COWMutation, opts COWPrepareOptions) (COW
 	// Across any one fork, each original node can be copied only once, even
 	// when deletes and inserts are interleaved. Fresh split nodes are private.
 	if len(entries) > 0 {
-		bound := uint64(w.private.Len()/31+1)*fullCapacity + growth
+		bound := uint64(w.private.Len()/(cowRawTreeDegree-1)+1)*fullCapacity + growth
 		if bound < c.Nodes {
 			c.Nodes = bound
 		}
@@ -396,8 +414,8 @@ func (w *COWWriter) estimate(entries []COWMutation, opts COWPrepareOptions) (COW
 	// without physical deletes nodes never disappear. This cardinality bound
 	// avoids charging every operation as an independent full-height fork.
 	if len(entries) > 0 && !deletes {
-		maxNodes := uint64((w.private.Len()+len(entries))/31 + 1)
-		oldNodes := uint64(w.private.Len()/31 + 1)
+		maxNodes := uint64((w.private.Len()+len(entries))/(cowRawTreeDegree-1) + 1)
+		oldNodes := uint64(w.private.Len()/(cowRawTreeDegree-1) + 1)
 		pathNodes := uint64(len(entries)) * uint64(c.Height)
 		if oldNodes > pathNodes {
 			oldNodes = pathNodes
@@ -418,7 +436,7 @@ func (w *COWWriter) estimate(entries []COWMutation, opts COWPrepareOptions) (COW
 		// Delete-only batches copy each original node at most once. Each
 		// merge removes one sibling and can allocate two array growths;
 		// rotations add at most one per surviving node capacity progression.
-		bound := 5 * uint64(w.private.Len()/31+1) * fullCapacity
+		bound := 5 * uint64(w.private.Len()/(cowRawTreeDegree-1)+1) * fullCapacity
 		if bound < c.Nodes {
 			c.Nodes = bound
 		}

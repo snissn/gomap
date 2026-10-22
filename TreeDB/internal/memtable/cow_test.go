@@ -409,7 +409,7 @@ func TestCOWDependencyLayoutContract(t *testing.T) {
 			t.Fatalf("dependency node field %s changed", name)
 		}
 	}
-	m := btree.NewMap[string, cowValue](32)
+	m := btree.NewMap[string, cowValue](cowRawTreeDegree)
 	v := reflect.ValueOf(m).Elem()
 	if v.FieldByName("copyValues").Bool() || v.FieldByName("isoCopyValues").Bool() {
 		t.Fatal("immutable values unexpectedly invoke dependency copying")
@@ -451,14 +451,14 @@ func TestCOWDependencyReserveWitness(t *testing.T) {
 	for _, n := range []int{1, 31, 63, 64, 1024, 2046, 2047, 4096} {
 		for _, kind := range []string{"insert", "replace", "delete"} {
 			t.Run(fmt.Sprintf("%d/%s", n, kind), func(t *testing.T) {
-				m := btree.NewMap[string, cowValue](32)
+				m := btree.NewMap[string, cowValue](cowRawTreeDegree)
 				oldValue := cowEncodeValue(COWMutation{Value: []byte("old")})
 				newValue := cowEncodeValue(COWMutation{Value: []byte("new")})
 				for i := 0; i < n; i++ {
 					m.Set(fmt.Sprintf("%08d", i), oldValue)
 				}
 				old := m.Copy()
-				height := cowMaximumHeight(n + 1)
+				height := cowRawMaximumHeight(n + 1)
 				if m.Height() > height {
 					height = m.Height()
 				}

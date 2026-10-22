@@ -31,7 +31,7 @@ import (
 // use a fixed count separately from the read/write diagnostics.
 func BenchmarkCOWPublicDirtyCost(b *testing.B) {
 	for _, profile := range []Profile{ProfileCommandWALDurable, ProfileCommandWALRelaxed, ProfileNoWALFast} {
-		for _, mode := range []string{"append_only", "btree", "cow_btree"} {
+		for _, mode := range []string{"append_only", "btree", "cow_btree", "cow_ordered"} {
 			for _, layout := range []string{"Inline64", "Pointer4096"} {
 				for _, records := range []int{1024, 2048} {
 					for _, operation := range []string{"FreshCapture", "CaptureReadRelease", "Forward16", "IncrementalWrite", "DirtyCheckpoint", "IncrementalWriteSync"} {
@@ -80,7 +80,7 @@ func cowPublicDirtyCost(b *testing.B, profile Profile, mode, layout string, reco
 		if err := database.Close(); err != nil {
 			b.Errorf("final Close: %v", err)
 		}
-		if mode == "cow_btree" {
+		if mode == "cow_btree" || mode == "cow_ordered" {
 			s := cache.COWMemoryStats()
 			b.Logf("COW_FINAL_CLOSE total=%d history=%d reserved=%d retired=%d controls=%d external=%d generations=%d sources=%d views=%d leases=%d peak=%d", s.TotalBytes, s.HistoryBytes, s.ReservedBytes, s.RetiredBytes, s.ControlBytes, s.ExternalBytes, s.Generations, s.Sources, s.Views, s.ExternalLeases, s.PeakBytes)
 			if s.TotalBytes != 0 || s.HistoryBytes != 0 || s.ReservedBytes != 0 || s.RetiredBytes != 0 || s.ControlBytes != 0 || s.ExternalBytes != 0 || s.Generations != 0 || s.Sources != 0 || s.Views != 0 || s.ExternalLeases != 0 || s.PeakBytes == 0 {
@@ -192,7 +192,7 @@ func cowPublicDirtyCost(b *testing.B, profile Profile, mode, layout string, reco
 	if operation != "FreshCapture" {
 		rotations = cowPublicCostCounter(b, database, "treedb.cache.snapshot.rotations_total") - initialRotations
 	}
-	if mode == "cow_btree" && (rotations != 0 || initialRotations != seedRotations) {
+	if (mode == "cow_btree" || mode == "cow_ordered") && (rotations != 0 || initialRotations != seedRotations) {
 		b.Fatalf("COW capture rotated cache: warm=%d timed=%d", initialRotations-seedRotations, rotations)
 	}
 	if writeOperation {
@@ -225,7 +225,7 @@ func cowPublicDirtyCost(b *testing.B, profile Profile, mode, layout string, reco
 	} {
 		b.ReportMetric(float64(cowPublicCostStat(b, fixtureStats, metric.key)), metric.unit)
 	}
-	if mode == "cow_btree" {
+	if mode == "cow_btree" || mode == "cow_ordered" {
 		// These are fixture-total counters/charges outside the timer, including
 		// seeding and FreshCapture reseeds. They are not per-operation deltas.
 		for _, key := range []string{"total_bytes", "history_bytes", "reserved_bytes", "retired_bytes", "peak_bytes", "control_bytes", "deferred_bytes", "external_bytes", "views", "generations", "sources", "external_leases", "active_cuts", "capture_calls_total", "prepare_calls_total", "publications_total", "rollovers_total", "handoffs_total", "current_roots", "frozen_roots"} {

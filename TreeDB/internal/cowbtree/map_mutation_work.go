@@ -58,10 +58,10 @@ func (tr *Map[K, V]) admitNewNode(leaf bool, w Work) bool {
 	if w == nil {
 		return true
 	}
-	if !w.Reserve(1, uint64(unsafe.Sizeof(mapNode[K, V]{}))) {
-		return false
+	if leaf {
+		return w.Reserve(1, uint64(unsafe.Sizeof(mapNode[K, V]{})))
 	}
-	return leaf || w.Reserve(1, uint64(unsafe.Sizeof([]*mapNode[K, V]{})))
+	return w.Reserve(1, uint64(unsafe.Sizeof(mapInternalNode[K, V]{})))
 }
 func (tr *Map[K, V]) admitCopy(n *mapNode[K, V], w Work) bool {
 	if w == nil {
@@ -75,15 +75,23 @@ func (tr *Map[K, V]) admitCopy(n *mapNode[K, V], w Work) bool {
 	pair := uint64(unsafe.Sizeof(mapPair[K, V]{}))
 	ptr := uint64(unsafe.Sizeof(uintptr(0)))
 	if !tr.admitNewNode(n.leaf(), w) ||
-		!w.Reserve(uint64(cap(n.items)), uint64(cap(n.items))*pair) ||
+		!w.Reserve(uint64(mapCopyCapacity(len(n.items), cap(n.items))), uint64(mapCopyCapacity(len(n.items), cap(n.items)))*pair) ||
 		!w.Reserve(uint64(len(n.items)), 2*uint64(len(n.items))*pair) {
 		return false
 	}
 	if n.leaf() {
 		return true
 	}
-	return w.Reserve(uint64(tr.max+1), uint64(tr.max+1)*ptr) &&
+	capacity := uint64(mapCopyCapacity(len(*n.children), tr.max+1))
+	return w.Reserve(capacity, capacity*ptr) &&
 		w.Reserve(uint64(len(*n.children)), 2*uint64(len(*n.children))*ptr)
+}
+
+func mapCopyCapacity(length, maximum int) int {
+	if length < maximum {
+		return length + 1
+	}
+	return maximum
 }
 
 // Every zeroed capacity slot and copied source/destination slot is admitted

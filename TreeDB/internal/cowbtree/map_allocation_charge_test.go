@@ -53,12 +53,15 @@ func TestMapAllocationChargeForksAndCopiedInternalNodes(t *testing.T) {
 	key := 511
 	var expected uint64
 	for n := m.root; n != nil; {
-		expected += retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(*n)))
-		expected += retainedalloc.AllocationCharge(uint64(cap(n.items)) * uint64(unsafe.Sizeof(mapPair[int, int]{})))
+		if n.leaf() {
+			expected += retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(*n)))
+		} else {
+			expected += retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(mapInternalNode[int, int]{})))
+		}
+		expected += retainedalloc.AllocationCharge(uint64(min(len(n.items)+1, cap(n.items))) * uint64(unsafe.Sizeof(mapPair[int, int]{})))
 		i, found := m.search(n, key)
 		if !n.leaf() {
-			expected += retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(*n.children)))
-			expected += retainedalloc.AllocationCharge(uint64(m.max+1) * uint64(unsafe.Sizeof((*mapNode[int, int])(nil))))
+			expected += retainedalloc.AllocationCharge(uint64(min(len(*n.children)+1, m.max+1)) * uint64(unsafe.Sizeof((*mapNode[int, int])(nil))))
 		}
 		if found || n.leaf() {
 			break

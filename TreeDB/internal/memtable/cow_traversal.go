@@ -51,7 +51,7 @@ func (r *COWRoot) NewTraversal(work *COWTraversalWork, extraBytes uint64) (*COWT
 	if work == nil || !work.Reserve(2, uint64(unsafe.Sizeof(COWTraversal{}))+uint64(unsafe.Sizeof(COWView{}))+uint64(unsafe.Sizeof(cowViewReleaseLease{}))) {
 		return nil, btree.ErrWork
 	}
-	depth := cowMaximumHeight(r.Len())
+	depth := cowRawMaximumHeight(r.Len())
 	stackBytes := btree.StringCursorBytes[cowValue](depth) - uint64(unsafe.Sizeof(btree.StringCursor[cowValue]{}))
 	orderedBytes := uint64(0)
 	orderedAllocation := uint64(0)

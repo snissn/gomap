@@ -408,6 +408,9 @@ func releaseOwnedNode[K ordered, V any](n *mapNode[K, V], completion *OwnedMapCo
 		return o.err
 	}
 	a := o.allocation
+	if n.children != nil {
+		*n.children = nil
+	}
 	n.items, n.children, n.ownership = nil, nil, nil
 	o.allocation, o.lifetime = nil, nil
 	n, o = nil, nil

@@ -60,7 +60,7 @@ func (w *COWWriter) OrderedPredictionUpperBound(entries []COWMutation) (COWCharg
 		return COWCharge{}, false
 	}
 	full := 2*btreeDefaultDegree - 1
-	rawHeight := max(cowMaximumHeight(w.private.Len()+n), w.private.Height())
+	rawHeight := max(cowRawMaximumHeight(w.private.Len()+n), w.private.Height())
 	primaryHeight := cowMaximumHeight(t.keys.Len() + n)
 	historyHeight := cowMaximumHeight(t.maxHistory + n)
 	c.Height = max(rawHeight, primaryHeight, historyHeight)
