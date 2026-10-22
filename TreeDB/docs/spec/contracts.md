@@ -374,7 +374,10 @@ side stores do not inherit this main-store budget. No on-disk format changes.
 
 `Options.MemtableMode="cow_btree"` and explicit experimental
 `Options.MemtableMode="cow_ordered"` select the
-[coherent COW cut contract](cow-cache-publication.md). Snapshot capture pins one
+[coherent COW cut contract](cow-cache-publication.md). These immutable modes
+require exact selectors: `adaptive:cow_btree` and `adaptive:cow_ordered` return
+`caching.ErrCOWUnsupported` before backend opening or storage creation.
+Ordinary mutable `adaptive:<mode>` selectors remain supported. Snapshot capture pins one
 complete shard/source/backend-basis cut without rotation, record copying or
 history sorting. Owned point/versioned reads, presence/prefix queries,
 successors and forward/reverse iterators all resolve through that cut, including when

@@ -2,9 +2,14 @@ package treedb
 
 import (
 	"bytes"
+	"errors"
+	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/caching"
 	"github.com/snissn/gomap/TreeDB/internal/mvccadmission"
 	"github.com/snissn/gomap/TreeDB/internal/mvcckey"
 )
@@ -14,7 +19,7 @@ import (
 // logical histories. Check before checkpoint drains the active generation.
 func TestCOWOrderedOptInPreservesAdaptiveDefault(t *testing.T) {
 	for _, profile := range cowPublicContractProfiles {
-		for _, mode := range []string{"", "adaptive", "cow_btree", "cow_ordered"} {
+		for _, mode := range []string{"", "adaptive", "adaptive:skiplist", "adaptive:hash_sorted", "adaptive:btree", "adaptive:append_only", "cow_btree", "cow_ordered"} {
 			name := mode
 			if name == "" {
 				name = "default"
@@ -38,8 +43,8 @@ func TestCOWOrderedOptInPreservesAdaptiveDefault(t *testing.T) {
 					t.Helper()
 					stats := database.Stats()
 					actual, config := stats["treedb.cache.memtable_mode"], stats["treedb.cache.memtable_mode_config"]
-					if mode == "" || mode == "adaptive" {
-						if config != "adaptive" || (actual != "append_only" && actual != "hash_sorted" && actual != "btree") {
+					if mode == "" || strings.HasPrefix(mode, "adaptive") {
+						if config != "adaptive" || (actual != "skiplist" && actual != "append_only" && actual != "hash_sorted" && actual != "btree") {
 							t.Fatalf("default route = %q/%q, want adaptive non-COW", actual, config)
 						}
 					} else if config != "fixed" || actual != mode {
@@ -117,6 +122,32 @@ func TestCOWOrderedOptInPreservesAdaptiveDefault(t *testing.T) {
 				}
 				checkRoute()
 				checkValues()
+			})
+		}
+	}
+}
+
+// Immutable COW owners cannot participate in adaptive memtable rotation. Reject
+// the wrapper before opening a backend, instead of exposing an unbound COW cache
+// whose first command fails private-owner preflight.
+func TestCOWPublicAdaptiveSelectorRejectedBeforeStorage(t *testing.T) {
+	for _, profile := range cowPublicContractProfiles {
+		for _, mode := range []string{"adaptive:cow_btree", "adaptive:cow_ordered"} {
+			t.Run(string(profile)+"/"+mode, func(t *testing.T) {
+				directory := filepath.Join(t.TempDir(), "absent-cow-db")
+				opts := OptionsFor(profile, directory)
+				opts.MemtableMode = mode
+				opts.MemtableShards = 2
+				database, err := Open(opts)
+				if database != nil {
+					_ = database.Close()
+				}
+				if !errors.Is(err, caching.ErrCOWUnsupported) || database != nil {
+					t.Errorf("Open(%q) = %v, %v; want nil, ErrCOWUnsupported", mode, database, err)
+				}
+				if _, err := os.Stat(directory); !errors.Is(err, os.ErrNotExist) {
+					t.Errorf("unsupported selector mutated storage: Stat = %v", err)
+				}
 			})
 		}
 	}

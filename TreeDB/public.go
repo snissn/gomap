@@ -788,6 +788,11 @@ func openResolved(opts Options) (*DB, error) {
 // profile/format options are resolved unchanged before selecting cache services.
 // This choice is made only at Open; a live cache never changes its owner role.
 func openResolvedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
+	// Immutable COW publication has one fixed private owner; adaptive rotation
+	// cannot select it. Reject before creating backend storage or binding owners.
+	if opts.MemtableMode == "adaptive:cow_btree" || opts.MemtableMode == "adaptive:cow_ordered" {
+		return nil, caching.ErrCOWUnsupported
+	}
 	if opts.MemtableMode == "cow_btree" || opts.MemtableMode == "cow_ordered" {
 		if opts.ReadOnly {
 			return nil, caching.ErrCOWUnsupported

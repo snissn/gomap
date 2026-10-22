@@ -8518,7 +8518,9 @@ type Options struct {
 	// MemtableMode selects the in-memory write buffer implementation.
 	// Supported: "skiplist", "hash_sorted", "btree", "append_only", "adaptive",
 	// and explicit immutable "cow_btree" or experimental "cow_ordered".
-	// Use "adaptive" or "adaptive:<mode>" to switch per-rotation based on workload.
+	// Use "adaptive" or "adaptive:<mode>" for ordinary mutable modes to switch
+	// per-rotation based on workload. Adaptive wrappers of immutable COW modes
+	// are rejected with ErrCOWUnsupported.
 	MemtableMode      string
 	COWMemtableLimits memtable.COWLimits
 
@@ -12581,6 +12583,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	}
 	cowOrdered := modeStr == "cow_ordered"
 	cowMode := modeStr == "cow_btree" || cowOrdered
+	if adaptive && cowMode {
+		return nil, ErrCOWUnsupported
+	}
 	var cowLimits memtable.COWLimits
 	if cowMode {
 		var e error

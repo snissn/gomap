@@ -6,6 +6,12 @@ cut, generation budget, native resources and sorted durable builder as
 `cow_btree`. It does not introduce another publication sequence or durability
 authority. The default selector is unchanged.
 
+Immutable COW modes require the exact selector `cow_ordered` or `cow_btree`.
+`adaptive:cow_ordered` and `adaptive:cow_btree` are rejected with
+`caching.ErrCOWUnsupported` before backend opening or storage creation; they
+cannot participate in adaptive memtable rotation. Ordinary mutable
+`adaptive:<mode>` selectors retain their existing behavior.
+
 Qualified Store operands are bound by the original MVCC admission capability.
 One group can contain distinct timestamps for the same logical key. Its
 application timestamps remain independent of native entry revisions, complete
