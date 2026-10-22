@@ -67,7 +67,21 @@ func testOrdinaryDATAOuterLeafOverwritesAvoidCandidateScan(t *testing.T, spanNat
 	scans := 0
 	d.testScanCandidateExternalReferencesHook = func() { scans++ }
 	for round := 3; round < 6; round++ {
+		var before map[string]string
+		if spanNative {
+			before = d.Stats()
+		}
 		put(round)
+		if spanNative {
+			after := d.Stats()
+			const prefix = "treedb.flush_apply.span_native.scheduler."
+			workers := rawSpanNativeRouteStatUint(t, after, prefix+"scheduled_workers_total") - rawSpanNativeRouteStatUint(t, before, prefix+"scheduled_workers_total")
+			dispatched := rawSpanNativeRouteStatUint(t, after, prefix+"dispatched_tasks_total") - rawSpanNativeRouteStatUint(t, before, prefix+"dispatched_tasks_total")
+			completed := rawSpanNativeRouteStatUint(t, after, prefix+"completed_tasks_total") - rawSpanNativeRouteStatUint(t, before, prefix+"completed_tasks_total")
+			if workers < 2 || dispatched < workers || completed != dispatched || rawSpanNativeRouteStatUint(t, after, prefix+"scheduled_workers_max") < 2 {
+				t.Fatalf("overwrite round %d native workers/dispatched/completed=%d/%d/%d, want multiple scheduled workers and completed tasks", round, workers, dispatched, completed)
+			}
+		}
 	}
 	d.testScanCandidateExternalReferencesHook = nil
 	if spanNative {
