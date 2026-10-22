@@ -91,6 +91,27 @@ func (s *Snapshot) MarkCachedLeafRecordVerified(ptr page.LeafLogPtr, inspected *
 	return nil
 }
 
+// StoreVerifiedCachedLeafPage follows a successful full CRC-verified decode
+// through this snapshot's exact inspected file. It upgrades an existing
+// byte-identical entry or applies the original repeated-miss admission policy
+// using only existing slot backing. Cold slots and contended locks decline
+// admission; this method never allocates page backing or retains a new owner.
+// Record verification does not establish the decoded page's own checksum.
+func (s *Snapshot) StoreVerifiedCachedLeafPage(ptr page.LeafLogPtr, inspected *os.File, identity rootpublication.StableIdentity, verifiedPage []byte) error {
+	if err := s.beginRead(); err != nil {
+		return err
+	}
+	defer s.endRead()
+	if err := s.checkInspectedLeafFile(ptr, inspected, identity); err != nil {
+		return err
+	}
+	cache := s.reader.leafPageCache
+	if !cache.markRecordChecksumVerifiedWithLockPolicy(ptr, verifiedPage, true) {
+		cache.storeReadMissNoAlloc(ptr, verifiedPage, true)
+	}
+	return nil
+}
+
 // The caller holds beginRead, so the captured Set and reader cannot detach.
 func (s *Snapshot) checkInspectedLeafFile(ptr page.LeafLogPtr, inspected *os.File, identity rootpublication.StableIdentity) error {
 	if s.state == nil || s.state.ValueLogSet == nil {

@@ -357,6 +357,16 @@ func (c *leafPageReadCache) shouldAdmitWriteStoreAdaptive() bool {
 // copying 4KiB pages into the cache and evicting leaves that are likely to be
 // reused during publish/apply.
 func (c *leafPageReadCache) storeReadMiss(ptr page.LeafLogPtr, leafPage []byte, recordChecksumVerified bool) bool {
+	return c.storeReadMissWithAllocationPolicy(ptr, leafPage, recordChecksumVerified, true)
+}
+
+// storeReadMissNoAlloc follows the same probation, epoch and victim policy,
+// but can only reuse page backing that already belongs to the selected slot.
+func (c *leafPageReadCache) storeReadMissNoAlloc(ptr page.LeafLogPtr, leafPage []byte, recordChecksumVerified bool) bool {
+	return c.storeReadMissWithAllocationPolicy(ptr, leafPage, recordChecksumVerified, false)
+}
+
+func (c *leafPageReadCache) storeReadMissWithAllocationPolicy(ptr page.LeafLogPtr, leafPage []byte, recordChecksumVerified, allowAllocation bool) bool {
 	if c == nil || c.disabled.Load() || len(c.slots) == 0 || len(c.buckets) == 0 || len(leafPage) != page.PageSize {
 		return false
 	}
@@ -406,9 +416,13 @@ func (c *leafPageReadCache) storeReadMiss(ptr page.LeafLogPtr, leafPage []byte, 
 		c.readMissAdmissionCandidateSkips.Add(1)
 		return false
 	}
-	result, ok := c.storeInBucketLocked(bucketIndex, key, leafPage, recordChecksumVerified, true)
+	result, ok := c.storeInBucketWithAllocationPolicyLocked(bucketIndex, key, leafPage, recordChecksumVerified, true, allowAllocation)
 	if !ok {
-		c.recordReadMissAdmissionLockSkip()
+		if result.backingUnavailable {
+			c.readMissAdmissionSkips.Add(1)
+		} else {
+			c.recordReadMissAdmissionLockSkip()
+		}
 		return false
 	}
 	c.resetReadMissCandidatesForStoreLocked(bucketIndex, key, result)
@@ -418,11 +432,16 @@ func (c *leafPageReadCache) storeReadMiss(ptr page.LeafLogPtr, leafPage []byte, 
 }
 
 type leafPageReadCacheStoreResult struct {
-	wasValid bool
-	prevKey  leafPageReadCacheKey
+	wasValid           bool
+	backingUnavailable bool
+	prevKey            leafPageReadCacheKey
 }
 
 func (c *leafPageReadCache) storeInBucketLocked(bucketIndex int, key leafPageReadCacheKey, leafPage []byte, recordChecksumVerified, nonBlocking bool) (leafPageReadCacheStoreResult, bool) {
+	return c.storeInBucketWithAllocationPolicyLocked(bucketIndex, key, leafPage, recordChecksumVerified, nonBlocking, true)
+}
+
+func (c *leafPageReadCache) storeInBucketWithAllocationPolicyLocked(bucketIndex int, key leafPageReadCacheKey, leafPage []byte, recordChecksumVerified, nonBlocking, allowAllocation bool) (leafPageReadCacheStoreResult, bool) {
 	keyFP := leafPageReadCacheKeyFingerprint(key)
 	start, end := c.bucketRange(bucketIndex)
 	for i := start; i < end; i++ {
@@ -434,9 +453,9 @@ func (c *leafPageReadCache) storeInBucketLocked(bucketIndex int, key leafPageRea
 			return leafPageReadCacheStoreResult{}, false
 		}
 		if slot.valid && slot.key == key {
-			result := slot.storeLockedWithRecordChecksumState(key, leafPage, recordChecksumVerified)
+			result, ok := slot.storeWithAllocationPolicyLocked(key, leafPage, recordChecksumVerified, allowAllocation)
 			slot.mu.Unlock()
-			return result, true
+			return result, ok
 		}
 		slot.mu.Unlock()
 	}
@@ -445,9 +464,9 @@ func (c *leafPageReadCache) storeInBucketLocked(bucketIndex int, key leafPageRea
 	if !ok {
 		return leafPageReadCacheStoreResult{}, false
 	}
-	result := slot.storeLockedWithRecordChecksumState(key, leafPage, recordChecksumVerified)
+	result, ok := slot.storeWithAllocationPolicyLocked(key, leafPage, recordChecksumVerified, allowAllocation)
 	slot.mu.Unlock()
-	return result, true
+	return result, ok
 }
 
 func (c *leafPageReadCache) lockVictimSlotLocked(bucketIndex int, nonBlocking bool) (*leafPageReadCacheSlot, bool) {
@@ -521,12 +540,28 @@ func (s *leafPageReadCacheSlot) storeLocked(key leafPageReadCacheKey, leafPage [
 }
 
 func (s *leafPageReadCacheSlot) storeLockedWithRecordChecksumState(key leafPageReadCacheKey, leafPage []byte, recordChecksumVerified bool) leafPageReadCacheStoreResult {
+	if cap(s.data) < page.PageSize {
+		s.data = make([]byte, page.PageSize)
+	}
+	return s.storeIntoBackingLocked(key, leafPage, recordChecksumVerified)
+}
+
+func (s *leafPageReadCacheSlot) storeWithAllocationPolicyLocked(key leafPageReadCacheKey, leafPage []byte, recordChecksumVerified, allowAllocation bool) (leafPageReadCacheStoreResult, bool) {
+	if allowAllocation {
+		return s.storeLockedWithRecordChecksumState(key, leafPage, recordChecksumVerified), true
+	}
+	if cap(s.data) < page.PageSize {
+		return leafPageReadCacheStoreResult{backingUnavailable: true}, false
+	}
+	return s.storeIntoBackingLocked(key, leafPage, recordChecksumVerified), true
+}
+
+// The caller holds the slot lock and has established sufficient existing
+// backing. Keep the no-allocation copy separate from the allocating wrapper.
+func (s *leafPageReadCacheSlot) storeIntoBackingLocked(key leafPageReadCacheKey, leafPage []byte, recordChecksumVerified bool) leafPageReadCacheStoreResult {
 	result := leafPageReadCacheStoreResult{
 		wasValid: s.valid,
 		prevKey:  s.key,
-	}
-	if cap(s.data) < page.PageSize {
-		s.data = make([]byte, page.PageSize)
 	}
 	s.data = s.data[:page.PageSize]
 	copy(s.data, leafPage)
@@ -802,8 +837,12 @@ func (c *leafPageReadCache) getToWithRecordPolicy(ptr page.LeafLogPtr, dst []byt
 // A concurrent eviction/rewrite or maintenance bypass simply loses the upgrade.
 // No slot/backing is created, and page-checksum state remains independent.
 func (c *leafPageReadCache) markRecordChecksumVerified(ptr page.LeafLogPtr, verifiedPage []byte) {
+	c.markRecordChecksumVerifiedWithLockPolicy(ptr, verifiedPage, false)
+}
+
+func (c *leafPageReadCache) markRecordChecksumVerifiedWithLockPolicy(ptr page.LeafLogPtr, verifiedPage []byte, nonBlocking bool) bool {
 	if c == nil || c.disabled.Load() || len(c.slots) == 0 || len(c.buckets) == 0 || len(verifiedPage) != page.PageSize {
-		return
+		return false
 	}
 	key := newLeafPageReadCacheKey(ptr)
 	keyFP := leafPageReadCacheKeyFingerprint(key)
@@ -813,14 +852,17 @@ func (c *leafPageReadCache) markRecordChecksumVerified(ptr page.LeafLogPtr, veri
 		if slot.keyFP.Load() != keyFP {
 			continue
 		}
-		slot.mu.Lock()
+		if !lockLeafPageReadCacheSlot(slot, nonBlocking) {
+			return false
+		}
 		if slot.valid && slot.key == key && !c.disabled.Load() && bytes.Equal(slot.data, verifiedPage) {
 			slot.recordChecksumVerified = true
 			slot.mu.Unlock()
-			return
+			return true
 		}
 		slot.mu.Unlock()
 	}
+	return false
 }
 
 func (c *leafPageReadCache) getViewLocked(ptr page.LeafLogPtr) ([]byte, *leafPageReadCacheSlot, bool) {
