@@ -4326,3 +4326,11 @@ inode/namespace bindings rather than copied images. See
 [external recovery](external-recovery.md#v2-certificate-and-retained-root) for the
 marker, CURRENT, certificate and retained-root encodings and size bounds. V1
 prototype owner directories require rebuilding; no migration is provided.
+
+
+External recovery V2 certificates bind a `data_directory` relative namespace.
+Local certificates initially select `working`; an authorized portable install
+selects a final `materialized-*` namespace. The previous certificate can name a
+different, closed physical namespace until retirement. Portable tar transfer and
+receiver identity rebinding are specified in
+[external recovery](external-recovery.md#authorized-portable-snapshot-transfer).

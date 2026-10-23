@@ -4439,3 +4439,11 @@ headroom is exhausted. These controls do not activate unconverted collections.
 - Initialization controls: racing ordinary/external public opens and deterministic
   invalid-configuration lock release; existing process-crash certificate cuts.
 - See [external recovery](external-recovery.md) for supported scope and limits.
+
+
+- `TestExternalRecoveryTransfer*`: exact requested public export during successor
+  Apply, distinct receiver identity and metadata, rejected/truncated/traversal
+  inputs, physical pointer replacement and namespace retirement, poisoned
+  publication/reopen, and process crash cuts around CURRENT.
+- These engine controls do not prove application reader draining, Raft snapshot
+  acceptance or durable cross-store install intent; those require consumer tests.

@@ -992,3 +992,11 @@ Ordinary public Open and maintenance backend opens refuse the owner marker and
 share fresh initialization ownership. See [external recovery](external-recovery.md)
 for exact certificates, resource ownership and supported raw DATA capabilities.
 This opt-in API does not redefine ordinary WriteSync.
+
+
+External snapshot InstallCheckpoint requires explicit accepted-source authority,
+receiver metadata, and a caller-owned full reader/queued-write drain. It replaces
+the DB pointer after receiver CURRENT publication. A separate durable log must
+persist accepted install intent before that publication and resolve it before
+replay/health; see the
+[transfer lifecycle contract](external-recovery.md#authorized-portable-snapshot-transfer).

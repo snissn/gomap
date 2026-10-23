@@ -27,9 +27,11 @@ to bypass the public recovery policy.
 ## V2 certificate and retained root
 
 The owner directory contains a V2 identity marker, `CURRENT`, `checkpoints/`, and
-its physical materialization. `checkpoints/<20-digit-generation>/certificate.json`
+its physical materialization. Each certificate names `data_directory`: initially
+`working`, or a private `materialized-*` namespace installed by authorized transfer. `checkpoints/<20-digit-generation>/certificate.json`
 contains V2 identity, generation, exact persistent StateToken, application
-metadata, previous generation/digest, a bounded root-file inventory, and a digest
+metadata, physical data namespace, previous generation/digest, a bounded root-file
+inventory, and a digest
 of the canonical JSON certificate with its Digest field cleared. Metadata is
 limited to 1 MiB; encoded certificates to 4 MiB. `db/root.json` binds a V1
 RetainedPhysicalRoot operand: existing newest DATA durable meta, index inode and
@@ -70,9 +72,12 @@ root/dependency pages, copy an image, or rebind live files.
 The immutable certificate operands remain stable throughout restore. If power
 loss tears either meta image or prevents its sync, the next external Open writes
 the same complete images again before opening any backend owner. Thus no partial
-restore can serve reads or authorize reuse. Normal backend startup validates and
-pins BOTH restored root/dependency closures before external Open captures their
-retained union and returns mutation authority. Newer incidental working seals or
+restore can serve reads or authorize reuse. When both certificates name the same physical namespace, normal backend startup
+validates and pins BOTH restored root/dependency closures before external Open
+captures their retained union and returns mutation authority. When an install
+changed namespaces, the previous namespace remains closed and untouched until
+its certificate retires; its root operand is restored independently. No current
+GC/rewrite owner can mutate that closed namespace. Newer incidental working seals or
 clean Close never advance certified application progress. The owner compares the
 selected persistent StateToken with CURRENT and fails closed on fallback/mismatch;
 it does not silently lower the upstream retention frontier. Without CURRENT,
@@ -96,9 +101,68 @@ Supported roots are raw DATA with inline/persistent values and ordinary
 outer-leaf logs/manifests/packs. PRIMARY and independently owned dictionary,
 template, typed/native/vector/column assets and side stores are refused. A stable
 index lease may delay online index vacuum; rewriting/GC still respects the
-retained exact roots. A network transfer needs a separate authenticated export /
-install contract with physical identity rebinding. A retained root descriptor is
+retained exact roots. A retained root descriptor is
 not a portable backup and MUST NOT be copied into another inode/namespace.
+
+## Authorized portable snapshot transfer
+
+`ExportCheckpoint(ctx, writer, generation, digest)` MUST match the currently
+certified generation and digest exactly; it never substitutes newer application
+progress. It retains the existing physical cut and captures stable child handles
+and lengths before copying. Apply may continue while export runs; Checkpoint,
+Install and Close wait. The maintained PhysicalSnapshotCutV1 writer exports the
+captured DATA meta/page image. Persistent value/outer-leaf files are copied from
+captured fixed prefixes; unreferenced suffix files may be included. Explicit
+transfer is O(image) copying/hashing; periodic certificates remain bounded.
+
+The portable format is a regular-file tar stream: `source.json` (complete source
+V2 certificate), `db/index.db`, `db/format.json`, and supported relative
+`db/value_vlog/*` / `db/leaf_vlog/*` files. Final `inventory.json` lists prior
+entries in order, with sizes and SHA256 hashes. Source/inventory JSON is capped
+at 4 MiB, source metadata at 1 MiB, and physical files/bytes by receiver limits.
+Traversal, duplicate paths, unsupported namespaces, symlinks, special files,
+excess depth/directory counts and missing required files are refused. Discovery
+and copying use bounded metadata plus a 64 KiB copy buffer, not an image-sized
+heap buffer. The inventory detects corruption; the application MUST authenticate
+snapshot transport and validate the source semantic authority.
+
+`InstallCheckpoint(ctx, reader, authorize)` requires an OPEN owner and a mandatory
+authorization callback. The caller MUST exclude all application admissions and
+drain outstanding DB/MVCC snapshots, iterators, readers, direct handles and queued
+writes before calling it. Owner Apply exclusion alone does not drain direct
+readers. Success changes `DB()`'s pointer; the caller MUST rebuild MVCC/schema/
+cache adapters before admission and health resume. The callback MUST NOT call
+back into the owner.
+
+Install extracts a complete private image, verifies every stream hash/path/limit,
+and syncs its files and containing namespaces before invoking authorize with the
+source certificate. The callback MUST verify exact accepted snapshot group,
+index, term and captured membership against source metadata, then explicitly
+return receiver progress metadata. It runs BEFORE any CURRENT publication. For
+a receiver with a separate durable Raft log, the callback MUST first persist and
+sync an accepted-install intent referring to the complete synced archive and
+its digest, exact snapshot identity and receiver metadata. The application owns
+that cross-store protocol; Gomap does not certify it on the caller's behalf.
+
+After authorization, install gives the image a final private namespace, uses the
+maintained durable-root snapshot layout rebind, opens/validates its exact source
+StateToken, captures its retained root, and publishes a receiver-owned
+certificate through the same CURRENT protocol as Checkpoint. Source owner
+identity is never silently adopted. Preparation failures preserve old authority;
+ambiguous publication poisons the owner until Close/reopen. Old physical storage
+remains available through the previous certificate and is removed only after its
+retained cuts and certificate retire. Unpublished install directories are
+orphans and can be removed on reopen.
+
+After a crash, the external application MUST resolve an accepted install intent
+before normal replay/validation/health: reopen the owner, compare recovered
+certificate Root and receiver Metadata with the intent, idempotently finish
+install when needed, then complete and sync the accepted Raft snapshot. The
+archive/intent must survive until that log step is durable. Log hard state MUST
+NOT advance commit past the installed snapshot before the corresponding suffix
+entries have been saved. Matching recovered Root plus receiver Metadata permits
+skipping a duplicate install generation. This is an application lifecycle
+requirement, not automatic multi-store atomicity.
 
 ## Verification
 
@@ -112,3 +176,11 @@ and interrupted restore retries; it is a byte-state recovery control, not a
 physical power-cut test. Identity replacement and concurrent initialization /
 failure-release controls exercise the public ownership boundary. Subprocess
 crash cuts remain process-crash controls, and do not certify hardware power loss.
+
+`TestExternalRecoveryTransfer*` exercises distinct source/receiver ownership,
+exact requested cuts despite persisted suffixes, successor Apply during export,
+refusal/traversal/truncation before authorization, pointer replacement and local
+checkpoint retirement, poison/reopen after publication errors, and subprocess
+crash cuts before and after CURRENT. These are focused API proofs; peer Raft
+acceptance, reader drain, durable accepted intent and real server recovery require
+consumer-level qualification.
