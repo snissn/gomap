@@ -12,7 +12,7 @@
     "M0 observation is manual diagnostic-only on a separately fixed product; no forecast starts it or replaces failed M0 acceptance.",
     "Bounded maintenance comparison is a manually granted diagnostic on fixed baseline/candidate products; no forecast starts it or establishes cost, M0 or native acceptance."
   ],
-  "discovery_source_sha256": "01f1e4ea4a1f4264d813fcfe5a68abc99c03f26d6cf63bba7277adb3906cd496",
+  "discovery_source_sha256": "7fa70bab4369cbcdd6ed0e1dd9f7e73af14d129a9302a49618d012cf86dfa456",
   "dynamic_consumers": [
     {
       "behavior": "AST/WalkDir discovery and go test subprocess producer witnesses; all TreeDB test/race members retained",
@@ -149,7 +149,7 @@
       "mode": "100644"
     },
     ".github/scripts/test_treedb_ci_contract.py": {
-      "git_blob": "5f62b0529d87337f20c963b170d14fd0032f8aeb",
+      "git_blob": "20f2f3e155dd29d8def2126225605e213ff68003",
       "mode": "100644"
     },
     ".github/scripts/test_treedb_windows_core_headroom.py": {
@@ -467,7 +467,7 @@
         "cgo": "setup-go platform default; explicit command overrides retained",
         "matrix": {},
         "race": false,
-        "runs_on": "${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && vars.TREEDB_PERF_RUNNER_LABEL != '' && vars.TREEDB_PERF_RUNNER_LABEL || 'ubuntu-24.04' }}",
+        "runs_on": "${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && vars.TREEDB_PERF_RUNNER_LABEL != '' && vars.TREEDB_PERF_RUNNER_PR != '' && vars.TREEDB_PERF_RUNNER_PR == format('{0}', github.event.pull_request.number) && vars.TREEDB_PERF_RUNNER_LABEL || 'ubuntu-24.04' }}",
         "tags": "entry command defaults/flags retained"
       },
       "workflow": "treedb-tests.yml"
@@ -2363,7 +2363,7 @@
         },
         "workflow_dispatch": null
       },
-      "git_blob": "954b79899f5719ee7d005c4e31e38a5206e0f4eb",
+      "git_blob": "39062844309ada6cbc51caa8d3929dff44f86ec2",
       "jobs": {
         "mvcc-raw-path-gate": {
           "checkout": [
@@ -2480,7 +2480,7 @@
           "matrix": null,
           "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
           "race": false,
-          "runs_on": "${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && vars.TREEDB_PERF_RUNNER_LABEL != '' && vars.TREEDB_PERF_RUNNER_LABEL || 'ubuntu-24.04' }}"
+          "runs_on": "${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && vars.TREEDB_PERF_RUNNER_LABEL != '' && vars.TREEDB_PERF_RUNNER_PR != '' && vars.TREEDB_PERF_RUNNER_PR == format('{0}', github.event.pull_request.number) && vars.TREEDB_PERF_RUNNER_LABEL || 'ubuntu-24.04' }}"
         },
         "perf": {
           "checkout": [
@@ -2921,7 +2921,7 @@
           "runs_on": "${{ matrix.os }}"
         }
       },
-      "sha256": "b85f67456870f70cf264eea78ad36063844b48fed0c1215896d54ad8a22703de"
+      "sha256": "2eda5d11d2b3ea04180142400fc0f73e1a1e134a1c904e10ee499219d66ab4f9"
     },
     "treedb-vacuum-m0-observation.yml": {
       "coverage": "existing execution only; triggers/path filters are unchanged",

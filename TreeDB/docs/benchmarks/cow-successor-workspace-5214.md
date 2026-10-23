@@ -417,21 +417,28 @@ requirement. An unchanged rerun hoping for a passing witness is not the remedy.
 
 Infrastructure issue [#5221](https://github.com/snissn/gomap/issues/5221)
 tracks this environment repair. The existing combined `mvcc-raw-path-gate`
-job now supports an optional
-administrator-controlled repository variable, `TREEDB_PERF_RUNNER_LABEL`.
-Only a `pull_request` whose head repository equals this repository, with that
-variable nonempty, uses its runner label. Fork PRs, other event types and an
-unset/empty variable retain `ubuntu-24.04`. This routing change leaves every
-job step, fixture, duration, workload, binding, numeric threshold and continuous
-noise check unchanged; it does not establish that the selected runner is quiet.
+job supports two optional administrator-controlled repository variables:
+`TREEDB_PERF_RUNNER_PR` and `TREEDB_PERF_RUNNER_LABEL`. Only a
+`pull_request` whose head repository equals this repository, with both variables
+nonempty and its decimal PR number exactly matching `TREEDB_PERF_RUNNER_PR`,
+uses the selected runner label. The comparison formats the event number as a
+string; malformed settings do not require JSON parsing. Fork PRs, other PRs,
+other event types and unset/empty settings retain `ubuntu-24.04`. This routing
+change leaves every job step, fixture, duration, workload, binding, numeric
+threshold and continuous noise check unchanged; it does not establish that the
+selected runner is quiet.
 
-The administrator must set a unique label for a disposable Ubuntu 24.04 VM
-runner registered for one job, then delete the VM and remove the variable.
-This opt-in must never select a persistent runner or run contributor fork code
-on a persistent host. Registration, source selection and runner disposal remain
-explicit operational responsibilities; the variable alone cannot enforce the
-VM's lifecycle. Qualification still requires the unchanged capture and its
-original witness to pass on the selected environment.
+Before arming either variable, the administrator must cancel or drain older
+queued/running executions of the selected PR; the PR guard alone cannot
+distinguish its old executions. Set `TREEDB_PERF_RUNNER_PR` first, then set
+`TREEDB_PERF_RUNNER_LABEL` to a unique label for the disposable Ubuntu 24.04
+VM runner registered for one job. Do not queue another execution while armed.
+After the selected run, clear the label first, clear the PR variable, and delete
+the VM. This opt-in must never select a persistent runner or run contributor
+fork code on a persistent host. Registration, source selection and runner
+disposal remain explicit operational responsibilities; the variables alone
+cannot enforce the VM's lifecycle. Qualification still requires the unchanged
+capture and its original witness to pass on the selected environment.
 
 This is an infrastructure remedy for an observed external-process disturbance,
 not a new product optimization or a waiver of W8's NULL. Runtime P8
