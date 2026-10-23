@@ -310,3 +310,35 @@ runtime is frozen at `d250f098c286ba639822d61d8c15ed860dc2764c`; tooling is
 rebound to that source with every original fixture and numerical guard unchanged.
 Earlier local and hosted results retain their original source bindings; final
 current-head CI and review remain required.
+
+
+### Completed-parent DATA barrier reuse
+
+The next frozen runtime is `a0e35df9b10a0ede99c4ff06291f582afbeaa09b`.
+For PRIMARY V6 publication with no inherited DATA writes, it can reuse a
+completed parent DATA-sync receipt bound to the exact physical identity, pager
+incarnation, selected parent and unchanged DATA/allocator projection. Open
+starts without that receipt; materialization, mismatch and ambiguity retain
+the ordinary DATA barrier. PRIMARY dependency/namespace/body/fence syncs and
+original resource custody remain. The durability specification documents the
+proof; no format, public API, default or ACK boundary changes.
+
+The original public-path regression fails against the preceding runtime with
+one unnecessary DATA barrier. The new physical-cut, materialization, reopen,
+inherited-debt/retry, identity, failure and selective-writeback controls pass
+normally and under race. The maintained tagged public generation control also
+passes. Independent review accepts the exact source batch.
+
+One trace of the unchanged 128-iteration public PRIMARY fixture records DATA
+syncs falling from 133 to 3 and unchanged 266 PRIMARY syncs, including
+setup/calibration/Close. A separate single matched allocation-only discriminator
+(GOMAXPROCS=1, ordinary GC) records baseline 103,041 B/op and 374 allocs/op
+versus candidate 98,818 B/op and 372 allocs/op. Both are developmental
+controls, with no quiet-host or acceptance claim. The earlier GOMAXPROCS2
+candidate observation of 105,045 B/op is retained separately.
+
+The published W5 gate failure (+8.100% paired PRIMARY time), COW quiet-host NULL
+and historical rewrite cleanup failure remain retained. New exact-head original
+CI and review are required; these controls do not replace them. Only the
+frozen-product binding and documentation/inventory are refreshed here; fixture,
+workload, numeric/noise gates and original raw/PRIMARY/M0 checks are unchanged.
