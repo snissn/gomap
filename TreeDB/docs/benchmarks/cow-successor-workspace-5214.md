@@ -84,3 +84,85 @@ Set TMPDIR and all artifact/output paths under the assigned `/mnt/fast4tb` task
 directory. These standalone Go benchmark results/profiles are not benchprof
 inputs. A viable discriminator still needs unchanged strict PRIMARY/ordinary/COW
 guards, applicable races, exact-head review/CI and final public-server evidence.
+
+## Hosted discriminator and pre-execution policy
+
+The local `preflight-01` exhausted the original quiet acquisition with **zero
+timed rows**, so its result remains NULL. No historical timing rows are replaced.
+The issue and initial plan used “material” without numeric limits. Before any
+timing, the coordinator accepted the following explicit policy on 2026-10-23:
+
+- For **each** of the eight GetAt cells and two prefix controls, the median of
+  its three paired head/base time ratios must be at most 1.05, and median B/op
+  and allocs/op must each be no greater than baseline.
+- Both serial depth-eight GetAt cells, inline and forced-pointer separately,
+  must remove at least one median alloc/op. Unseparated or smaller improvement
+  is insufficient, even if the other cells pass.
+
+These are this diagnostic's pre-execution limits. They do not change PRIMARY
+or any final qualification threshold. Three pairs provide a bounded discriminator,
+not statistical or product acceptance. A per-cell failure is visible; an average
+across cells cannot hide concurrent or prefix regression.
+
+`scripts/cow_successor_workspace_diagnostic.py` runs on an ephemeral hosted
+Linux runner using the maintained PRIMARY quiet acquisition, process observation,
+ELF/runtime binding and checkout guards. The exact baseline remains
+`857890de8dec2cae5d9047b99bc7d5373c748990`, independently of a later PR merge base.
+The candidate tooling head must descend from frozen product
+`786d74430bc67b0b71af6b6eccf461ec23948eee` with only the runner, its Python controls,
+scoped workflow, generated inventory and this document changed. Runtime and all
+original Go correctness controls remain byte-identical. The sole baseline overlay
+is the frozen public fixture, SHA-256
+`2226735b88900fe2b33178498172d946de6d536e793f045c5b2f8c1a38544d08`;
+no new candidate helper or product source is copied into baseline.
+
+The original ten cells, 1024 fixed calls, GOMAXPROCS=8 and six fresh benchmark
+processes in AB/BA/AB order remain unchanged. No CPU0 affinity is imposed: the
+runner records its actual allowed CPUs and each child's affinity. If fewer than
+eight CPUs are available, oversubscription is explicit and the result is not an
+eight-core scaling claim. GC and sampler settings are inherited and bound, not
+disabled by the driver; the original fixture's checkpoint/vacuum configuration is
+unchanged on both arms.
+
+Builds occur before quiet acquisition. One six-minute total deadline covers source
+checks, both builds, quiet acquisition, measurement, identity checks and cleanup;
+five seconds of that budget are reserved for cleanup. Interrupted child process
+groups are killed and their direct children joined. The original full five-second
+quiet predicate, 60-second acquisition cap and 2% external-process CPU threshold
+remain unchanged. Process observation continues across all six invocations.
+Quiet failure, timeout, source/runtime/affinity drift, malformed or missing rows,
+command failure and cleanup failure produce NULL and no available guard. A clean
+complete run violating any cell or improvement limit produces FAIL. Only complete,
+quiet, identity-bound rows satisfying all limits produce diagnostic PASS.
+
+The existing Linux MVCC job runs the diagnostic only for PR head ref
+`codex/5214-cow-successor-workspace` with successor implementation, fixture or
+runner/observer changes. Later unrelated PRs do not inherit this frozen-product
+diagnostic, including later changes to the same source files. Its 15-minute job
+budget and existing raw/PRIMARY
+commands are unchanged. The diagnostic's six-minute allowance has limited headroom
+after those gates; job or command timeout supplies no evidence. Always-run artifact
+upload and summary steps retain failures and absent-evidence NULLs. This is not a
+new blanket gate for unrelated changes.
+
+```sh
+python3 scripts/cow_successor_workspace_diagnostic.py \
+  --root "$GITHUB_WORKSPACE" \
+  --baseline 857890de8dec2cae5d9047b99bc7d5373c748990 \
+  --candidate "$HEAD_SHA" \
+  --output "$RUNNER_TEMP/mvcc-raw-path-gate/cow-successor"
+```
+
+Artifacts include the immutable plan, both binary hashes and Go build information,
+source/fixture/observer hashes, actual CPU affinity, environment hash, before/after
+runtime bindings, all command receipts and separate stdout/stderr, quiet/process
+witnesses, up to sixty ordered rows, per-cell paired deltas/medians and the two
+separate improvement decisions. Setup, checkpoint, warmup and Close retain their
+original untimed boundaries. No hosted timed result is asserted by this source
+packet. Pure source controls run with:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/test_cow_successor_workspace_diagnostic.py
+PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/test_mvcc_primary_cost_gate.py
+PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/test_treedb_ci_contract.py
+```
