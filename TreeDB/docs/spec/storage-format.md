@@ -4318,3 +4318,14 @@ Native deterministic JSON apply reuses the existing catalog-create and by-ID
 insert/update/delete singleton command kinds and payload encodings. Native
 assignment and exact physical-seal completion introduce no on-disk format or
 sidecar; see [write-path-and-durability.md](write-path-and-durability.md#native-deterministic-collection-apply).
+
+### Initial ordinary DATA dependency closure
+
+The dependency-manifest encoding is unchanged. Its raw outer-leaf entries must
+include every file referenced by the selected root, including noncurrent files
+created during its first apply. File registration and current-writer membership
+are ownership evidence, not a complete root dependency inventory. The initial
+ordinary DATA publication can derive exact membership from its bound apply
+receipt and a proven empty user/system predecessor; otherwise it uses the
+maintained final-root scanner. No directory-discovery recovery fallback repairs
+an incomplete manifest.
