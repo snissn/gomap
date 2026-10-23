@@ -1065,3 +1065,23 @@ Snapshot allocation admission runs inside that capture fence. Admission callback
 may reserve charges for selected owners, but must not synchronously publish,
 refresh, or close the same DB. A competing publisher waits until capture either
 pins the selected state or refuses without acquiring a reader/Set reference.
+
+## First ordinary DATA publication closure
+
+Registering a raw outer-leaf file establishes its physical ownership; it does
+not establish that the next root references it. In particular, cached COW
+producers can register intermediate rotations without retaining a pending-created
+inventory. Ordinary DATA dependency capture therefore uses exact root-bound
+raw-edge receipts, or the maintained final-root reachability scanner when that
+evidence is unavailable. Current-writer inventory cannot substitute for closure.
+
+The first exact receipt can start from zero only when its predecessor user tree
+and predecessor system tree are both empty pager leaves, the candidate system
+root is unchanged, and the existing logical census matches the predecessor
+commit and physical index incarnation. This constructs private candidate counts;
+it does not make an unverified live raw census valid. Populated unknown bases,
+changed system roots, unsupported receipts and optional census capacity refusal
+retain the maintained exact scan. Successful ordinary receipt projection needs
+no full-tree scan and includes only reachable raw files, excluding unused
+registered rotations. The existing publication, pinning and retirement owners
+remain authoritative.
