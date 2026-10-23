@@ -24,20 +24,21 @@ import (
 )
 
 var (
-	quicksilverChurnShape  = flag.String("quicksilver-churn-shape", "full-refresh", "quicksilver churn: full-refresh stress or sparse original mutation-target restore")
-	quicksilverMeasureDir  = flag.String("quicksilver-measure-dir", "", "Measure an existing final realistic Quicksilver fixture without reloading it (one DB, same fixture flags; idempotent repeated writer)")
-	quicksilverChurnRounds = flag.Int("quicksilver-churn-rounds", 0, "quicksilver realistic cached TreeDB: bounded maintenance characterization rounds after measured reads (0 disables, maximum 32)")
-	quicksilverChurnPause  = flag.Duration("quicksilver-churn-pause", 6*time.Second, "quicksilver characterization pause per round (positive, maximum 1m; only with churn rounds)")
-	quicksilverVerifyDir   = flag.String("quicksilver-verify-dir", "", "Verify an existing final Quicksilver database without rerunning the workload (one DB, same fixture flags)")
-	quicksilverCase        = flag.String("quicksilver-case", "realistic", "quicksilver fixture: realistic (3M keys), random4k (100k keys), structured256 (250k keys)")
-	quicksilverReads       = flag.Int("quicksilver-reads", 2000000, "quicksilver aggregate operations per fixed read phase")
-	quicksilverReadBatch   = flag.Int("quicksilver-read-batch", 64, "quicksilver reads per owned-read snapshot; 1 uses ordinary Get")
-	quicksilverDuration    = flag.Duration("quicksilver-duration", 4*time.Second, "quicksilver concurrent read/update duration")
-	quicksilverUpdates     = flag.Int("quicksilver-updates", 40000, "quicksilver mutation targets (default capped at key count); realistic mixes updates/deletes/inserts/overwrite bursts")
-	quicksilverCommit      = flag.String("quicksilver-commit", "auto", "quicksilver batch API: auto (ordinary for realistic, sync for historical cases), ordinary, sync")
-	quicksilverWorkingSet  = flag.String("quicksilver-working-set", "uniform", "quicksilver realistic read working set: uniform, 1%, 20%")
-	quicksilverMissPercent = flag.Int("quicksilver-miss-percent", 90, "quicksilver realistic mixed/concurrent absent-key request percentage (0..100)")
-	quicksilverMixture     = flag.String("quicksilver-mixture", "primary", "quicksilver realistic fixture mixture: primary, holdout (different key/value/content weights)")
+	quicksilverChurnShape     = flag.String("quicksilver-churn-shape", "full-refresh", "quicksilver churn: full-refresh stress or sparse original mutation-target restore")
+	quicksilverMeasureDir     = flag.String("quicksilver-measure-dir", "", "Measure an existing final realistic Quicksilver fixture without reloading it (one DB, same fixture flags; idempotent repeated writer)")
+	quicksilverChurnRounds    = flag.Int("quicksilver-churn-rounds", 0, "quicksilver realistic cached TreeDB: bounded maintenance characterization rounds after measured reads (0 disables, maximum 32)")
+	quicksilverChurnPause     = flag.Duration("quicksilver-churn-pause", 6*time.Second, "quicksilver characterization pause per round (positive, maximum 1m; only with churn rounds)")
+	quicksilverVerifyDir      = flag.String("quicksilver-verify-dir", "", "Verify an existing final Quicksilver database without rerunning the workload (one DB, same fixture flags)")
+	quicksilverCase           = flag.String("quicksilver-case", "realistic", "quicksilver fixture: realistic (3M keys), random4k (100k keys), structured256 (250k keys)")
+	quicksilverReads          = flag.Int("quicksilver-reads", 2000000, "quicksilver aggregate operations per fixed read phase")
+	quicksilverReadBatch      = flag.Int("quicksilver-read-batch", 64, "quicksilver reads per owned-read snapshot; 1 uses ordinary Get")
+	quicksilverConcurrentMode = flag.String("quicksilver-concurrent-mode", "duration", "quicksilver concurrent reads: duration or fixed-work (duration remains writer pacing horizon)")
+	quicksilverDuration       = flag.Duration("quicksilver-duration", 4*time.Second, "quicksilver concurrent read/update duration")
+	quicksilverUpdates        = flag.Int("quicksilver-updates", 40000, "quicksilver mutation targets (default capped at key count); realistic mixes updates/deletes/inserts/overwrite bursts")
+	quicksilverCommit         = flag.String("quicksilver-commit", "auto", "quicksilver batch API: auto (ordinary for realistic, sync for historical cases), ordinary, sync")
+	quicksilverWorkingSet     = flag.String("quicksilver-working-set", "uniform", "quicksilver realistic read working set: uniform, 1%, 20%")
+	quicksilverMissPercent    = flag.Int("quicksilver-miss-percent", 90, "quicksilver realistic mixed/concurrent absent-key request percentage (0..100)")
+	quicksilverMixture        = flag.String("quicksilver-mixture", "primary", "quicksilver realistic fixture mixture: primary, holdout (different key/value/content weights)")
 )
 
 const quicksilverTraceLength = 65536
@@ -46,6 +47,7 @@ const quicksilverSampleLimit = 1000000
 var quicksilverPhaseNames = []string{"quicksilver_hits", "quicksilver_misses", "quicksilver_mixed", "quicksilver_concurrent"}
 
 type quicksilverConfig struct {
+	ConcurrentMode      string        `json:"concurrent_mode"`
 	ChurnShape          string        `json:"churn_shape,omitempty"`
 	FinalFixture        bool          `json:"final_fixture,omitempty"`
 	ChurnRounds         int           `json:"churn_rounds,omitempty"`
@@ -76,6 +78,9 @@ func (c quicksilverConfig) valueSize() int {
 	return 256
 }
 func (c quicksilverConfig) validate() error {
+	if c.ConcurrentMode != "" && c.ConcurrentMode != "duration" && c.ConcurrentMode != "fixed-work" {
+		return fmt.Errorf("quicksilver: unknown concurrent mode %q", c.ConcurrentMode)
+	}
 	if c.ChurnShape != "" && c.ChurnShape != "full-refresh" && c.ChurnShape != "sparse" {
 		return fmt.Errorf("quicksilver: unknown churn shape %q", c.ChurnShape)
 	}
@@ -107,7 +112,7 @@ func (c quicksilverConfig) validate() error {
 	return nil
 }
 func resolveQuicksilverConfig(base BenchConfig, isSet map[string]bool) (quicksilverConfig, error) {
-	c := quicksilverConfig{Case: *quicksilverCase, Keys: base.Keys, Reads: *quicksilverReads, Workers: base.ReadWorkers, ReadBatch: *quicksilverReadBatch, Duration: *quicksilverDuration, Updates: *quicksilverUpdates, Seed: 24, CommitMode: *quicksilverCommit, WorkingSet: *quicksilverWorkingSet, MissPercent: *quicksilverMissPercent, Mixture: *quicksilverMixture}
+	c := quicksilverConfig{ConcurrentMode: *quicksilverConcurrentMode, Case: *quicksilverCase, Keys: base.Keys, Reads: *quicksilverReads, Workers: base.ReadWorkers, ReadBatch: *quicksilverReadBatch, Duration: *quicksilverDuration, Updates: *quicksilverUpdates, Seed: 24, CommitMode: *quicksilverCommit, WorkingSet: *quicksilverWorkingSet, MissPercent: *quicksilverMissPercent, Mixture: *quicksilverMixture}
 	c.ChurnRounds = *quicksilverChurnRounds
 	if c.ChurnRounds > 0 || isSet["quicksilver-churn-shape"] {
 		c.ChurnShape = *quicksilverChurnShape
@@ -161,34 +166,35 @@ func resolveQuicksilverConfig(base BenchConfig, isSet map[string]bool) (quicksil
 }
 
 type quicksilverPhase struct {
-	Name                    string            `json:"name"`
-	DistinctAccesses        int               `json:"distinct_accesses"`
-	DistinctPresentRequests int               `json:"distinct_present_requests"`
-	DistinctAbsentRequests  int               `json:"distinct_absent_requests"`
-	RequestedPresent        int               `json:"requested_present"`
-	RequestedAbsent         int               `json:"requested_absent"`
-	ObservedHits            int               `json:"observed_hits"`
-	MissKinds               [3]int            `json:"miss_kind_requests_arbitrary_common_prefix_deleted"`
-	Ops                     int               `json:"ops"`
-	Seconds                 float64           `json:"seconds"`
-	CompositionSeconds      float64           `json:"composition_seconds"`
-	OpsPerSec               float64           `json:"ops_per_sec"`
-	Samples                 int               `json:"samples"`
-	P50US                   float64           `json:"p50_us"`
-	P95US                   float64           `json:"p95_us"`
-	P99US                   float64           `json:"p99_us"`
-	P999US                  float64           `json:"p999_us"`
-	MaxUS                   float64           `json:"max_us"`
-	AllocatedBytes          uint64            `json:"process_allocated_bytes"`
-	Mallocs                 uint64            `json:"process_mallocs"`
-	BytesPerOp              float64           `json:"process_bytes_per_op"`
-	AllocsPerOp             float64           `json:"process_allocs_per_op"`
-	HeapBefore              uint64            `json:"process_heap_alloc_before"`
-	HeapAfter               uint64            `json:"process_heap_alloc_after"`
-	GCPauseNS               uint64            `json:"process_gc_pause_ns"`
-	GCCycles                uint32            `json:"process_gc_cycles"`
-	StatsBefore             map[string]string `json:"stats_before,omitempty"`
-	StatsAfter              map[string]string `json:"stats_after,omitempty"`
+	ConcurrentWork          *quicksilverConcurrentWork `json:"concurrent_work,omitempty"`
+	Name                    string                     `json:"name"`
+	DistinctAccesses        int                        `json:"distinct_accesses"`
+	DistinctPresentRequests int                        `json:"distinct_present_requests"`
+	DistinctAbsentRequests  int                        `json:"distinct_absent_requests"`
+	RequestedPresent        int                        `json:"requested_present"`
+	RequestedAbsent         int                        `json:"requested_absent"`
+	ObservedHits            int                        `json:"observed_hits"`
+	MissKinds               [3]int                     `json:"miss_kind_requests_arbitrary_common_prefix_deleted"`
+	Ops                     int                        `json:"ops"`
+	Seconds                 float64                    `json:"seconds"`
+	CompositionSeconds      float64                    `json:"composition_seconds"`
+	OpsPerSec               float64                    `json:"ops_per_sec"`
+	Samples                 int                        `json:"samples"`
+	P50US                   float64                    `json:"p50_us"`
+	P95US                   float64                    `json:"p95_us"`
+	P99US                   float64                    `json:"p99_us"`
+	P999US                  float64                    `json:"p999_us"`
+	MaxUS                   float64                    `json:"max_us"`
+	AllocatedBytes          uint64                     `json:"process_allocated_bytes"`
+	Mallocs                 uint64                     `json:"process_mallocs"`
+	BytesPerOp              float64                    `json:"process_bytes_per_op"`
+	AllocsPerOp             float64                    `json:"process_allocs_per_op"`
+	HeapBefore              uint64                     `json:"process_heap_alloc_before"`
+	HeapAfter               uint64                     `json:"process_heap_alloc_after"`
+	GCPauseNS               uint64                     `json:"process_gc_pause_ns"`
+	GCCycles                uint32                     `json:"process_gc_cycles"`
+	StatsBefore             map[string]string          `json:"stats_before,omitempty"`
+	StatsAfter              map[string]string          `json:"stats_after,omitempty"`
 }
 type quicksilverResult struct {
 	MeasurementState          string                  `json:"measurement_state,omitempty"`
@@ -299,9 +305,9 @@ func quicksilverFiles(dir string) (map[string]int64, error) {
 	})
 	return out, err
 }
-func quicksilverWrite(db kvstore.DB, c quicksilverConfig, offset, count, stride int, update bool) (err error) {
+func quicksilverWrite(db kvstore.DB, c quicksilverConfig, offset, count, stride int, update bool, progress ...*quicksilverWriterProgress) (err error) {
 	if c.Case == "realistic" {
-		return quicksilverRealisticWrite(db, c, offset, count, stride, update)
+		return quicksilverRealisticWrite(db, c, offset, count, stride, update, progress...)
 	}
 	// Normal LMDB batches require creation, staging and commit on one OS thread.
 	runtime.LockOSThread()
@@ -326,7 +332,11 @@ func quicksilverWrite(db kvstore.DB, c quicksilverConfig, offset, count, stride 
 			return err
 		}
 	}
-	return quicksilverCommitBatch(b, c)
+	err = quicksilverCommitBatch(b, c)
+	if err == nil && len(progress) > 0 {
+		progress[0].commit(count, 0)
+	}
+	return err
 }
 func quicksilverGet(get func([]byte) ([]byte, error), key []byte) ([]byte, error) {
 	v, err := get(key)
@@ -420,8 +430,28 @@ func newQuicksilverFixture(c quicksilverConfig) *quicksilverFixture {
 
 // Every worker and the paced writer use the same barrier; errors cancel waits,
 // then all goroutines join before this returns and the owner can close the DB.
-func quicksilverReadPhase(db kvstore.DB, c quicksilverConfig, f *quicksilverFixture, mode int, guard *benchGuard, writer func(context.Context) error, stopProfile func()) (quicksilverPhase, error) {
+func quicksilverReadPhase(db kvstore.DB, c quicksilverConfig, f *quicksilverFixture, mode int, guard *benchGuard, writer func(context.Context) error, stopProfile func(), progress ...*quicksilverWriterProgress) (quicksilverPhase, error) {
 	c = c.resolved()
+	fixedWork := mode == 3 && c.ConcurrentMode == "fixed-work"
+	if fixedWork && (writer == nil || len(progress) != 1 || progress[0] == nil) {
+		return quicksilverPhase{}, errors.New("quicksilver: fixed work requires one owned writer progress receipt")
+	}
+	var work *quicksilverConcurrentWork
+	var writerProgress *quicksilverWriterProgress
+	if mode == 3 && len(progress) > 0 {
+		writerProgress = progress[0]
+		work = &quicksilverConcurrentWork{RequestedReadCounts: make([]int, c.Workers), CompletedReadCounts: make([]int, c.Workers), Schema: 1, Mode: c.ConcurrentMode, RequestedTargets: c.Updates, AllocationScope: "process_go_runtime_concurrent_composition", CPUProfileScope: "reader_join", AllocsProfileScope: "phase_return_including_report_orchestration"}
+		if fixedWork {
+			work.RequestedReads = c.Reads
+			for w := range work.RequestedReadCounts {
+				work.RequestedReadCounts[w] = c.Reads / c.Workers
+				if w < c.Reads%c.Workers {
+					work.RequestedReadCounts[w]++
+				}
+			}
+			work.CPUProfileScope = "both_join"
+		}
+	}
 	readStride := quicksilverUpdateStride(c.Keys)
 	readOffset := int(quicksilverMix(uint64(c.Seed)) % uint64(c.Keys))
 	ctx, cancel := context.WithCancel(context.Background())
@@ -467,7 +497,7 @@ func quicksilverReadPhase(db kvstore.DB, c quicksilverConfig, f *quicksilverFixt
 			if w < c.Reads%c.Workers {
 				limit++
 			}
-			for i := 0; mode == 3 || i < limit; i++ {
+			for i := 0; (mode == 3 && !fixedWork) || i < limit; i++ {
 				if i%256 == 0 {
 					if ctx.Err() != nil {
 						return
@@ -477,7 +507,7 @@ func quicksilverReadPhase(db kvstore.DB, c quicksilverConfig, f *quicksilverFixt
 						cancel()
 						return
 					}
-					if mode == 3 && time.Now().After(deadline) {
+					if mode == 3 && !fixedWork && time.Now().After(deadline) {
 						return
 					}
 				}
@@ -590,18 +620,42 @@ func quicksilverReadPhase(db kvstore.DB, c quicksilverConfig, f *quicksilverFixt
 	} else {
 		close(writerDone)
 	}
-	p := quicksilverPhase{Name: quicksilverPhaseNames[mode], StatsBefore: quicksilverStats(db)}
+	p := quicksilverPhase{Name: quicksilverPhaseNames[mode], StatsBefore: quicksilverStats(db), ConcurrentWork: work}
 	var before, after runtime.MemStats
 	runtime.ReadMemStats(&before)
 	clock := time.Now()
 	close(start)
 	wg.Wait()
 	elapsed := time.Since(clock)
+	if work != nil {
+		work.ReaderJoined = true
+		work.ReaderElapsedNS = elapsed.Nanoseconds()
+		work.ReaderCutProgress.Before = writerProgress.snapshot(clock)
+	}
 	runtime.ReadMemStats(&after)
-	if stopProfile != nil {
+	if work != nil {
+		work.ReaderCutProgress.After = writerProgress.snapshot(clock)
+		work.ReaderCut = quicksilverAllocationDelta(&before, &after)
+		writerProgress.readerCutTaken.Store(true)
+	}
+	if stopProfile != nil && !fixedWork {
 		stopProfile()
 	}
 	<-writerDone
+	if work != nil {
+		work.WriterJoined = true
+		work.BothJoinElapsedNS = time.Since(clock).Nanoseconds()
+		if fixedWork {
+			var both runtime.MemStats
+			runtime.ReadMemStats(&both)
+			cut := quicksilverAllocationDelta(&before, &both)
+			work.BothJoin = &cut
+		}
+		work.AfterBothJoin = writerProgress.snapshot(clock)
+	}
+	if stopProfile != nil && fixedWork {
+		stopProfile()
+	}
 	p.StatsAfter = quicksilverStats(db)
 	p.CompositionSeconds = time.Since(clock).Seconds()
 	p.Seconds = elapsed.Seconds()
@@ -615,7 +669,10 @@ func quicksilverReadPhase(db kvstore.DB, c quicksilverConfig, f *quicksilverFixt
 	all := f.samples[:0]
 	clear(f.distinct)
 	err := writerErr
-	for _, s := range f.readers {
+	for w, s := range f.readers {
+		if work != nil {
+			work.CompletedReadCounts[w] = s.count
+		}
 		err = errors.Join(err, s.err)
 		p.Ops += s.count
 		p.RequestedPresent += s.present
@@ -631,6 +688,22 @@ func quicksilverReadPhase(db kvstore.DB, c quicksilverConfig, f *quicksilverFixt
 		n := len(all)
 		all = all[:n+len(s.samples)]
 		copy(all[n:], s.samples)
+	}
+	if work != nil {
+		work.CompletedReads = p.Ops
+		if err == nil && fixedWork && (p.Ops != c.Reads || !quicksilverWriterComplete(c, work.AfterBothJoin)) {
+			err = fmt.Errorf("quicksilver: incomplete fixed work: reads %d/%d writer %+v", p.Ops, c.Reads, work.AfterBothJoin)
+		}
+		work.Completed = err == nil && quicksilverWriterComplete(c, work.AfterBothJoin)
+		if err != nil {
+			work.Error = err.Error()
+		}
+		if work.Completed && fixedWork {
+			work.BytesPerRead = float64(work.BothJoin.AllocatedBytes) / float64(p.Ops)
+			work.MallocsPerRead = float64(work.BothJoin.Mallocs) / float64(p.Ops)
+			work.BytesPerTarget = float64(work.BothJoin.AllocatedBytes) / float64(work.AfterBothJoin.Targets)
+			work.MallocsPerTarget = float64(work.BothJoin.Mallocs) / float64(work.AfterBothJoin.Targets)
+		}
 	}
 	if err != nil {
 		return p, err
@@ -957,6 +1030,7 @@ func runQuicksilverEngine(cfg BenchConfig, c quicksilverConfig, engine string, o
 		}
 		res.Phases = append(res.Phases, p)
 	}
+	progress := &quicksilverWriterProgress{}
 	writer := func(ctx context.Context) error {
 		batches := (c.Updates + 999) / 1000
 		t := time.Now()
@@ -973,11 +1047,12 @@ func runQuicksilverEngine(cfg BenchConfig, c quicksilverConfig, engine string, o
 			}
 			start := time.Now()
 			count := min(1000, c.Updates-i*1000)
-			if e := quicksilverWrite(db, c, i*1000, count, res.UpdateStride, true); e != nil {
+			if e := quicksilverWrite(db, c, i*1000, count, res.UpdateStride, true, progress); e != nil {
 				return e
 			}
 			res.UpdateBatches = append(res.UpdateBatches, float64(time.Since(start))/float64(time.Millisecond))
 			res.UpdatedKeys += count
+			progress.group(count)
 			if c.Case == "realistic" {
 				res.Mutations.add(i*1000, count)
 				res.MutationCommitBatches++
@@ -988,21 +1063,24 @@ func runQuicksilverEngine(cfg BenchConfig, c quicksilverConfig, engine string, o
 			// Four checkpoints at approximately quarter intervals (all four at defaults).
 			if (i+1)*4/batches > i*4/batches {
 				start = time.Now()
+				progress.startCheckpoint()
 				if e := db.(checkpointer).Checkpoint(); e != nil {
+					progress.checkpoint(false)
 					return e
 				}
+				progress.checkpoint(true)
 				res.Checkpoints = append(res.Checkpoints, float64(time.Since(start))/float64(time.Millisecond))
 			}
 		}
 		return nil
 	}
 	p, e := quicksilverProfilePhase(cfg, quicksilverPhaseNames[3], engine, func(stop func()) (quicksilverPhase, error) {
-		return quicksilverReadPhase(db, c, fixture, 3, guard, writer, stop)
+		return quicksilverReadPhase(db, c, fixture, 3, guard, writer, stop, progress)
 	})
+	res.Phases = append(res.Phases, p)
 	if e != nil {
 		return res, e
 	}
-	res.Phases = append(res.Phases, p)
 	if res.UpdatedKeys != c.Updates {
 		return res, fmt.Errorf("quicksilver: incomplete updates %d/%d", res.UpdatedKeys, c.Updates)
 	}
@@ -1149,6 +1227,9 @@ func runQuicksilverSuite(cfg BenchConfig, c quicksilverConfig, profileDir string
 		return "", errors.New("quicksilver: retained verification does not accept churn rounds")
 	}
 	if cfg.QuicksilverVerifyDir != "" {
+		if c.ConcurrentMode == "fixed-work" {
+			return "", errors.New("quicksilver: fixed-work concurrent mode does not apply to verify-only workflow")
+		}
 		return verifyQuicksilverRetained(cfg, c, names, profileDir)
 	}
 	// These adapters checkpoint by replacing a live handle, which is unsafe
@@ -1203,6 +1284,12 @@ func runQuicksilverSuite(cfg BenchConfig, c quicksilverConfig, profileDir string
 		}
 		report, e := runQuicksilverEngine(cfg, c, name, open, dir)
 		if e != nil {
+			if len(report.Phases) > 0 {
+				if work := report.Phases[len(report.Phases)-1].ConcurrentWork; work != nil {
+					raw, _ := json.Marshal(work)
+					return "", fmt.Errorf("quicksilver %s (failed DB retained at %s; concurrent_work=%s): %w", name, dir, raw, e)
+				}
+			}
 			return "", fmt.Errorf("quicksilver %s (failed DB retained at %s): %w", name, dir, e)
 		}
 		report.Flags = flags

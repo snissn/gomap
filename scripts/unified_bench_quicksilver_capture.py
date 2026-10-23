@@ -19,7 +19,7 @@ Frozen controls override the manifest. run.json records the entire sanitized
 child env under environment_policy=sanitized-full-v1, without ambient credentials.
 Plan: output (new root-relative directory), repeats (default 1), cells [{label,
 source, engine, profile, keys, reads, updates, workers, case, duration, duration_ns,
-commit, seed, mixture, working_set, miss_percent, profiled, keep, flags, churn_rounds, churn_pause, churn_pause_ns, churn_shape, measure_dir, rss_sample_interval_ms}]. Defaults match
+commit, concurrent_mode, seed, mixture, working_set, miss_percent, profiled, keep, flags, churn_rounds, churn_pause, churn_pause_ns, churn_shape, measure_dir, rss_sample_interval_ms}]. Defaults match
 the prior 3M capture flow. Custom duration requires duration_ns and Go's canonical
 duration string. Churn pauses require matching nanoseconds and canonical text
 (`1m` is an accepted alias for `1m0s`); the pair is checked before launch.
@@ -200,6 +200,101 @@ def capture_wall_limit(cell):
     return (f'{hours}h' if hours else '') + f'{minutes}m{seconds}{fraction}s'
 
 
+def concurrent_mode(cell):
+    mode = cell.get('concurrent_mode', 'duration')
+    assert isinstance(mode, str) and mode in ('duration', 'fixed-work'), 'unknown concurrent mode'
+    return mode
+
+
+def validate_concurrent_work(phase, report, cell, metadata):
+    mode = concurrent_mode(cell)
+    command = metadata['command']
+    selectors = [i for i,v in enumerate(command) if v.startswith('-quicksilver-concurrent-mode')]
+    if mode == 'fixed-work':
+        assert len(selectors) == 1, 'fixed-work argv selector missing/duplicated'
+        i = selectors[0]
+        assert command[i:i+2] == ['-quicksilver-concurrent-mode', mode], 'fixed-work argv drift'
+    else:
+        assert not selectors, 'duration capture must retain original argv'
+    assert report['config'].get('concurrent_mode', 'duration') == mode, 'concurrent config drift'
+    assert report['registered_cli_flags'].get('quicksilver-concurrent-mode', 'duration') == mode, 'concurrent CLI drift'
+    work = phase.get('concurrent_work')
+    if work is None:
+        assert mode == 'duration', 'fixed work requires a complete receipt'
+        return  # Original duration captures remain replayable.
+    fields = {'schema', 'mode', 'allocation_scope', 'cpu_profile_scope', 'allocs_profile_scope',
+              'requested_reads', 'requested_read_counts', 'completed_read_counts', 'requested_mutation_targets', 'completed_reads', 'reader_joined',
+              'writer_joined', 'completed', 'reader_elapsed_ns', 'both_join_elapsed_ns', 'reader_cut',
+              'reader_cut_progress', 'after_both_join', 'both_join_bytes_per_read', 'both_join_mallocs_per_read',
+              'both_join_bytes_per_mutation_target', 'both_join_mallocs_per_mutation_target'}
+    if mode == 'fixed-work':
+        fields.add('both_join')
+    assert isinstance(work, dict) and set(work) == fields, 'incomplete/unknown concurrent receipt'
+    assert type(work['schema']) is int and work['schema'] == 1 and work['mode'] == mode
+    assert all(work[k] is True for k in ('reader_joined', 'writer_joined', 'completed')), 'concurrent owner incomplete'
+    assert work['allocation_scope'] == 'process_go_runtime_concurrent_composition'
+    assert work['cpu_profile_scope'] == ('both_join' if mode == 'fixed-work' else 'reader_join')
+    assert work['allocs_profile_scope'] == 'phase_return_including_report_orchestration'
+    reads, targets = cell.get('reads', 6000000), cell.get('updates', 40000)
+    for key, expected in (('requested_reads', reads if mode == 'fixed-work' else 0),
+                          ('requested_mutation_targets', targets), ('completed_reads', phase['ops'])):
+        assert type(work[key]) is int and work[key] == expected and expected >= 0, key
+    if mode == 'fixed-work':
+        assert type(phase['ops']) is int and phase['ops'] == reads and reads > 0 and targets > 0
+    workers = cell.get('workers', 4)
+    quotas = [reads//workers + (worker < reads%workers) for worker in range(workers)]
+    for key in ('requested_read_counts', 'completed_read_counts'):
+        assert isinstance(work[key], list) and len(work[key]) == workers
+        assert all(type(v) is int and v >= 0 for v in work[key]), 'invalid worker counts'
+    assert sum(work['completed_read_counts']) == work['completed_reads']
+    assert work['requested_read_counts'] == (quotas if mode == 'fixed-work' else [0]*workers)
+    if mode == 'fixed-work':
+        assert work['completed_read_counts'] == quotas, 'worker quota incomplete'
+    groups = math.ceil(targets/1000)
+    realistic = cell.get('case', 'realistic') == 'realistic'
+    final = dict(completed_groups=groups, completed_mutation_targets=targets,
+                 successful_commits=sum(1+3*(realistic and min(1000, targets-off) >= 4) for off in range(0, targets, 1000)),
+                 committed_set_operations=targets-(targets+2)//4+3*(targets//4) if realistic else targets,
+                 committed_delete_operations=(targets+2)//4 if realistic else 0, completed_checkpoints=min(4, groups))
+    progress_keys = set(final) | {'elapsed_ns', 'checkpoint_in_flight'}
+    bracket = work['reader_cut_progress']
+    assert isinstance(bracket, dict) and set(bracket) == {'before', 'after'}
+    snapshots = [bracket['before'], bracket['after'], work['after_both_join']]
+    for snapshot in snapshots:
+        assert isinstance(snapshot, dict) and set(snapshot) == progress_keys
+        assert type(snapshot['checkpoint_in_flight']) is bool
+        assert type(snapshot['elapsed_ns']) is int and snapshot['elapsed_ns'] > 0
+        for key, maximum in final.items():
+            assert type(snapshot[key]) is int and 0 <= snapshot[key] <= maximum, key
+        assert snapshot['completed_mutation_targets'] == min(targets, 1000*snapshot['completed_groups'])
+    for previous, following in zip(snapshots, snapshots[1:]):
+        assert previous['elapsed_ns'] <= following['elapsed_ns']
+        assert all(previous[k] <= following[k] for k in final), 'progress regression'
+    assert all(snapshots[-1][k] == v for k,v in final.items()) and not snapshots[-1]['checkpoint_in_flight'], 'writer incomplete'
+    reader_ns, both_ns = work['reader_elapsed_ns'], work['both_join_elapsed_ns']
+    assert type(reader_ns) is int and type(both_ns) is int
+    assert 0 < reader_ns <= snapshots[0]['elapsed_ns'] <= snapshots[1]['elapsed_ns'] <= both_ns <= snapshots[2]['elapsed_ns']
+    assert math.isclose(reader_ns/1e9, phase['seconds'], rel_tol=1e-9, abs_tol=1e-9)
+    assert snapshots[2]['elapsed_ns']/1e9 <= phase['composition_seconds'] + 1e-9
+    cut_keys = {'process_allocated_bytes', 'process_mallocs', 'process_heap_alloc_before', 'process_heap_alloc_after', 'process_gc_pause_ns', 'process_gc_cycles'}
+    for cut in [work['reader_cut']] + ([work['both_join']] if mode == 'fixed-work' else []):
+        assert isinstance(cut, dict) and set(cut) == cut_keys
+        assert all(type(v) is int and v >= 0 for v in cut.values()), 'invalid allocation cut'
+    assert all(type(phase[key]) is int and work['reader_cut'][key] == phase[key] for key in cut_keys), 'legacy reader-cut drift'
+    normalized = ('both_join_bytes_per_read', 'both_join_mallocs_per_read', 'both_join_bytes_per_mutation_target', 'both_join_mallocs_per_mutation_target')
+    assert all(type(work[k]) in (int, float) and math.isfinite(work[k]) and work[k] >= 0 for k in normalized)
+    if mode == 'fixed-work':
+        both, reader = work['both_join'], work['reader_cut']
+        for key in ('process_allocated_bytes', 'process_mallocs', 'process_gc_pause_ns', 'process_gc_cycles'):
+            assert both[key] >= reader[key], 'both-join cumulative counter regressed'
+        assert both['process_heap_alloc_before'] == reader['process_heap_alloc_before']
+        values = (both['process_allocated_bytes']/reads, both['process_mallocs']/reads,
+                  both['process_allocated_bytes']/targets, both['process_mallocs']/targets)
+        assert all(math.isclose(work[key], value, rel_tol=1e-9, abs_tol=1e-9) for key,value in zip(normalized, values))
+    else:
+        assert all(work[k] == 0 for k in normalized), 'duration cannot claim matched allocation'
+
+
 def validate(reports, cell, directory, fixtures, metadata):
     manifest_path = directory.parent/'manifest.json'
     assert sha256(manifest_path) == metadata['manifest_sha256'], 'manifest drift'
@@ -330,6 +425,8 @@ def validate(reports, cell, directory, fixtures, metadata):
         for s in stats:
             assert s['rocksdb.sync_writes'] == s['rocksdb.verify_checksums'] == 'true'
     assert [p['name'] for p in r['phases']] == PHASES
+    assert all('concurrent_work' not in p for p in r['phases'][:3]), 'concurrent receipt on another phase'
+    validate_concurrent_work(r['phases'][3], r, cell, metadata)
     for i, p in enumerate(r['phases']):
         assert math.isfinite(p['seconds']) and p['seconds'] > 0 and p['ops'] > 0
         assert math.isfinite(p['composition_seconds']) and p['composition_seconds'] >= p['seconds']
@@ -406,6 +503,7 @@ def main():
     assert all(isinstance(cell.get('keep', False), bool) for cell in plan['cells']), 'keep must be boolean'
     retained_directories = set()
     for cell in plan['cells']:
+        concurrent_mode(cell)
         churn_settings(cell)
         sampling_interval(cell)
         retained = retained_settings(cell)
@@ -424,11 +522,14 @@ def main():
             source = manifest['sources'][cell['source']]
             binary = root/'bin'/source['binary']
             case, duration = cell.get('case', 'realistic'), cell.get('duration', '8s')
+            mode = concurrent_mode(cell)
             extra = cell.get('flags', [])
             command = [str(binary), '-suite', 'quicksilver', '-dbs', cell['engine'], '-profile', cell.get('profile', 'durable'),
                        '-quicksilver-case', case, '-keys', str(cell.get('keys', 3000000)), '-read-workers', str(cell.get('workers', 4)),
                        '-quicksilver-reads', str(cell.get('reads', 6000000)), '-quicksilver-updates', str(cell.get('updates', 40000)),
                        '-quicksilver-duration', duration, '-quicksilver-read-batch', '64', '-quicksilver-commit', cell.get('commit', 'auto'), '-max-wall', capture_wall_limit(cell)]
+            if mode == 'fixed-work':
+                command += ['-quicksilver-concurrent-mode', mode]
             if case == 'realistic':
                 command += ['-seed', str(cell.get('seed', 24)), '-quicksilver-mixture', cell.get('mixture', 'primary'),
                             '-quicksilver-working-set', cell.get('working_set', 'uniform'), '-quicksilver-miss-percent', str(cell.get('miss_percent', 90))]
