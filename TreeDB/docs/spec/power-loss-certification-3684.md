@@ -221,3 +221,45 @@ as byte prefixes; command-WAL LSN, frame checksum and external-RID replay checks
 remain separately enforced by the existing command-frame oracle and public
 reopen. Full-file equality still applies where the model asks about an entire
 file. These fixture/model checks do not certify current main or physical media.
+
+
+## Captured-prefix grouped witness addressing
+
+The grouped public witnesses use the same maintained evidence capture and strict
+replay selectors as the rest of this catalog. Durable mutations themselves now
+carry V2 durable class; a separate prefix frame is required only to certify a
+relaxed suffix. The four-waiter acknowledged witness therefore replays through
+LSN 4 as commit 5. Its dependency-failure and ambiguous-failure full-writeback
+images also recover commit 5 / LSN 4. Their recovered `durable_wal_lsn=4`
+classifies durable frames present in the modeled crash image; it does not mean
+any failed source waiter received an acknowledgement. Stable-only failure
+images retain genesis. A complete dirty-image control establishes the outcome
+of that complete image, not all possible partial-writeback images.
+
+The ambiguous cut is `after-userspace-flush/000`: all four mutation frames are
+flushed to the file, before physical WAL sync. Its full-writeback variant uses
+the generator-emitted seed 8643471594498286418. The rotation/external witness
+first seeds a prior durable frame so physical rotation remains real without an
+extra prefix frame. Its final stable selector is
+`after-dependency-file-sync/004`; occurrences count that point across ALL
+resources in the retained trace, including value-log dependencies. Counting
+only command-WAL events gives an invalid evidence selector. The lifecycle
+witness deliberately overrides the coordinator delay to exercise timeout;
+production default dispatch remains immediate. Its checkpoint restores commit
+2 / applied LSN 1.
+
+To refresh a changed witness, build the package test binary and execute its exact
+registered test with all six replay/evidence environment values above in a NEW
+empty evidence directory. Inspect the emitted `recovery_trace.json` and use the
+maintained `observedWitnessState` mapping in `internal/powerlosscert/runner.go`
+for the catalog state. Full-writeback selectors and seeds come from the actual
+variant generator output. Plain `go test` without evidence environment validates
+values but does not validate that the final trace ends at the declared selector.
+Run `TestCommittedWitnessContractsOwnCompleteFrozenInventory`, production witness
+source anchors and the immutable historical stale-build archive guard after
+catalog edits. Keep failed attempts and immutable historical fixtures unchanged.
+
+A focused dirty-feature-branch refresh remains developmental modeled evidence.
+It is not the clean exact-main runner, sealed full-inventory certification, or a
+physical block-device power-loss result. Current-main certification still needs
+the full exact-SHA runner and all gates described above.

@@ -936,7 +936,7 @@
       "data_resource_shapes": [
         "inline_values"
       ],
-      "dependency_graph": "four waiters -> mutation frames -> one durable-prefix barrier -> public command-WAL replay",
+      "dependency_graph": "four waiters -> durable-class mutation frames -> one captured physical WAL sync -> public command-WAL replay",
       "storage_boundaries": [
         "durable_frame_barrier_append_sync"
       ],
@@ -944,17 +944,17 @@
       "failure_classes": [
         "dependency_closed_reopen"
       ],
-      "expected_durable_horizon": "the shared barrier through LSN 5 replays all four acknowledgements as commit 6",
+      "expected_durable_horizon": "the captured sync through LSN 4 replays all four acknowledgements as commit 5",
       "expected_outcome": "accepted:stable-root",
       "expected_typed_error": "none",
       "state": {
-        "root_meta_generation": "selected_slot=1 commit_seq=6 slot0=5 slot1=6",
-        "freelist_generation": "generation=7",
+        "root_meta_generation": "selected_slot=0 commit_seq=5 slot0=5 slot1=4",
+        "freelist_generation": "generation=10",
         "external_resource_ids_frontiers": "stable_image_tree_artifact=stable_image_tree.json manifest_entries=1",
         "namespace_generations": "stable_image_tree_artifact=stable_image_tree.json",
-        "wal_lineage": "profile=command_wal_durable applied_lsn=5",
-        "durable_lsn": "durable_wal_lsn=5 durable_root_seq=6",
-        "cleanup_maintenance_pins": "slot0_commit_seq=5 slot1_commit_seq=6"
+        "wal_lineage": "profile=command_wal_durable applied_lsn=4",
+        "durable_lsn": "durable_wal_lsn=4 durable_root_seq=5",
+        "cleanup_maintenance_pins": "slot0_commit_seq=5 slot1_commit_seq=4"
       },
       "seed": 3674,
       "cut_id": "cut/public-grouped-acknowledgements-stable-image/after-dependency-file-sync/000",
@@ -964,8 +964,8 @@
       "expected_recovery": {
         "rejected": false,
         "error_type": "",
-        "commit_seq": 6,
-        "applied_lsn": 5
+        "commit_seq": 5,
+        "applied_lsn": 4
       },
       "claim_boundary": "normal public read-write reopen replays one deterministic four-waiter acknowledged group"
     },
@@ -1020,7 +1020,7 @@
       "data_resource_shapes": [
         "inline_values"
       ],
-      "dependency_graph": "four mutation frames plus prefix append -> pre-sync ambiguity -> no waiter acknowledgement -> prior stable root",
+      "dependency_graph": "four durable-class mutation frames -> complete userspace flush before physical sync -> ambiguity -> no waiter acknowledgement -> prior stable root",
       "storage_boundaries": [
         "durable_frame_barrier_append_sync"
       ],
@@ -1041,9 +1041,9 @@
         "cleanup_maintenance_pins": "slot0_commit_seq=1 slot1_commit_seq=0"
       },
       "seed": 3674,
-      "cut_id": "cut/public-grouped-ambiguous-failure-stable-image/after-dependency-append/004",
+      "cut_id": "cut/public-grouped-ambiguous-failure-stable-image/after-userspace-flush/000",
       "variant_id": "public-grouped-ambiguous-failure-stable-image",
-      "cut_point": "after-dependency-append",
+      "cut_point": "after-userspace-flush",
       "reopen_mode": "read-only",
       "expected_recovery": {
         "rejected": false,
@@ -1075,11 +1075,11 @@
       "expected_typed_error": "none",
       "state": {
         "root_meta_generation": "selected_slot=0 commit_seq=5 slot0=5 slot1=4",
-        "freelist_generation": "generation=6",
+        "freelist_generation": "generation=10",
         "external_resource_ids_frontiers": "stable_image_tree_artifact=stable_image_tree.json manifest_entries=1",
         "namespace_generations": "stable_image_tree_artifact=stable_image_tree.json",
         "wal_lineage": "profile=command_wal_durable applied_lsn=4",
-        "durable_lsn": "durable_wal_lsn=0 durable_root_seq=5",
+        "durable_lsn": "durable_wal_lsn=4 durable_root_seq=5",
         "cleanup_maintenance_pins": "slot0_commit_seq=5 slot1_commit_seq=4"
       },
       "seed": 15425837517959215427,
@@ -1104,7 +1104,7 @@
       "data_resource_shapes": [
         "inline_values"
       ],
-      "dependency_graph": "four mutation frames plus prefix append -> pre-sync ambiguity -> no waiter acknowledgement -> complete dirty WAL writeback -> atomic public replay",
+      "dependency_graph": "four durable-class mutation frames -> complete userspace flush before physical sync -> ambiguity -> no waiter acknowledgement -> complete dirty WAL writeback -> atomic public replay",
       "storage_boundaries": [
         "durable_frame_barrier_append_sync"
       ],
@@ -1117,17 +1117,17 @@
       "expected_typed_error": "none",
       "state": {
         "root_meta_generation": "selected_slot=0 commit_seq=5 slot0=5 slot1=4",
-        "freelist_generation": "generation=6",
+        "freelist_generation": "generation=10",
         "external_resource_ids_frontiers": "stable_image_tree_artifact=stable_image_tree.json manifest_entries=1",
         "namespace_generations": "stable_image_tree_artifact=stable_image_tree.json",
         "wal_lineage": "profile=command_wal_durable applied_lsn=4",
-        "durable_lsn": "durable_wal_lsn=0 durable_root_seq=5",
+        "durable_lsn": "durable_wal_lsn=4 durable_root_seq=5",
         "cleanup_maintenance_pins": "slot0_commit_seq=5 slot1_commit_seq=4"
       },
-      "seed": 7257721757473077420,
-      "cut_id": "cut/public-grouped-ambiguous-failure-dirty-wal/after-dependency-append/004",
-      "variant_id": "cut/public-grouped-ambiguous-failure-dirty-wal/after-dependency-append/004/variant/full-writeback",
-      "cut_point": "after-dependency-append",
+      "seed": 8643471594498286418,
+      "cut_id": "cut/public-grouped-ambiguous-failure-dirty-wal/after-userspace-flush/000",
+      "variant_id": "cut/public-grouped-ambiguous-failure-dirty-wal/after-userspace-flush/000/variant/full-writeback",
+      "cut_point": "after-userspace-flush",
       "reopen_mode": "read-write",
       "expected_recovery": {
         "rejected": false,
@@ -1147,7 +1147,7 @@
         "forced_value_log_pointers",
         "command_wal_rotation"
       ],
-      "dependency_graph": "external value resources -> grouped dependency barrier -> rotated and active command-WAL segments -> public replay",
+      "dependency_graph": "prior durable seed frame -> external value resources -> durable-class mutation rotation -> captured rotated and active command-WAL segments -> public replay",
       "storage_boundaries": [
         "resource_create_write_sync",
         "wal_old_segment_sync",
@@ -1163,15 +1163,15 @@
       "expected_typed_error": "none",
       "state": {
         "root_meta_generation": "selected_slot=0 commit_seq=3 slot0=3 slot1=2",
-        "freelist_generation": "generation=4",
-        "external_resource_ids_frontiers": "stable_image_tree_artifact=stable_image_tree.json manifest_entries=2",
+        "freelist_generation": "generation=6",
+        "external_resource_ids_frontiers": "stable_image_tree_artifact=stable_image_tree.json manifest_entries=3",
         "namespace_generations": "stable_image_tree_artifact=stable_image_tree.json",
         "wal_lineage": "profile=command_wal_durable applied_lsn=2",
         "durable_lsn": "durable_wal_lsn=2 durable_root_seq=3",
         "cleanup_maintenance_pins": "slot0_commit_seq=3 slot1_commit_seq=2"
       },
       "seed": 3674,
-      "cut_id": "cut/public-grouped-rotation-external-stable-image/after-dependency-file-sync/002",
+      "cut_id": "cut/public-grouped-rotation-external-stable-image/after-dependency-file-sync/004",
       "variant_id": "public-grouped-rotation-external-stable-image",
       "cut_point": "after-dependency-file-sync",
       "reopen_mode": "read-write",
@@ -1192,7 +1192,7 @@
       "data_resource_shapes": [
         "inline_values"
       ],
-      "dependency_graph": "low-traffic timeout -> singleton group barrier -> checkpoint -> close lifecycle",
+      "dependency_graph": "deterministic low-traffic timeout override -> singleton captured sync -> checkpoint -> close lifecycle",
       "storage_boundaries": [
         "durable_frame_barrier_append_sync",
         "target_meta_write_sync"
@@ -1201,7 +1201,7 @@
       "failure_classes": [
         "dependency_closed_reopen"
       ],
-      "expected_durable_horizon": "the timeout-triggered singleton reaches checkpointed commit 2 with applied LSN 2",
+      "expected_durable_horizon": "the timeout-triggered singleton reaches checkpointed commit 2 with applied LSN 1",
       "expected_outcome": "accepted:stable-root",
       "expected_typed_error": "none",
       "state": {
@@ -1209,7 +1209,7 @@
         "freelist_generation": "generation=4",
         "external_resource_ids_frontiers": "stable_image_tree_artifact=stable_image_tree.json manifest_entries=1",
         "namespace_generations": "stable_image_tree_artifact=stable_image_tree.json",
-        "wal_lineage": "profile=command_wal_durable applied_lsn=2",
+        "wal_lineage": "profile=command_wal_durable applied_lsn=1",
         "durable_lsn": "durable_wal_lsn=0 durable_root_seq=2",
         "cleanup_maintenance_pins": "slot0_commit_seq=1 slot1_commit_seq=2"
       },
@@ -1222,7 +1222,7 @@
         "rejected": false,
         "error_type": "",
         "commit_seq": 2,
-        "applied_lsn": 2
+        "applied_lsn": 1
       },
       "claim_boundary": "normal public read-only reopen after deterministic low-traffic timeout, checkpoint, and close progress"
     },
