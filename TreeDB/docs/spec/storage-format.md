@@ -2172,6 +2172,14 @@ registry excludes prepared and published resources; held snapshot generation
 pins conservatively retain every matching revision. The current compatibility
 revision is always retained. GC validates the complete exact-parent revision
 inventory before deletion; it never selects revisions by age or a fixed count.
+The existing generation-maintenance scheduler invokes this same whole-generation
+collector independently of value rewrite and experimental leaf packing. This
+changes collection scheduling, not manifest bytes, reachability rules, or deletion
+authority. Independent cached leaf writers share a sequence reservation allocator;
+a higher sequence reserved by another writer does not alone require rotation.
+Unreserved external advances and explicit compaction retain their collision fences.
+See [periodic leaf reclamation](value-log-lifecycle.md#51-periodic-whole-generation-leaf-reclamation)
+for admission, retry cadence, observability and scan-cost limits.
 
 Deletion uses an exact-parent private rename, validates the moved physical
 identity, then unlinks and syncs that retained directory before committing the
