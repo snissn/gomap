@@ -185,7 +185,7 @@ var dbGetCallerStatsMap sync.Map
 var snapshotGetCallerSamplesTotal atomic.Uint64
 var snapshotGetCallerSampleSeq atomic.Uint64
 var snapshotGetCallerStatsMap sync.Map
-var poolPressureState atomic.Value
+var poolPressureState poolPressureSnapshotCache
 var poolPressureLevelState atomic.Uint64
 var poolPressureMu sync.Mutex
 var poolPressureSamplerMu sync.Mutex
@@ -910,27 +910,47 @@ func retainPoolPressureSampler() func() {
 
 func currentPoolPressureSnapshot() poolPressureSnapshot {
 	now := poolPressureNow()
-	if cached, ok := poolPressureState.Load().(poolPressureSnapshot); ok {
-		if now.UnixNano()-cached.sampledUnixNano <= int64(poolPressureRefreshInterval) {
-			return cached
-		}
+	cached := poolPressureState.Load()
+	if now.UnixNano()-cached.sampledUnixNano <= int64(poolPressureRefreshInterval) {
+		return cached
 	}
 
 	poolPressureMu.Lock()
 	defer poolPressureMu.Unlock()
 
 	now = poolPressureNow()
-	if cached, ok := poolPressureState.Load().(poolPressureSnapshot); ok {
-		if now.UnixNano()-cached.sampledUnixNano <= int64(poolPressureRefreshInterval) {
-			return cached
-		}
+	cached = poolPressureState.Load()
+	if now.UnixNano()-cached.sampledUnixNano <= int64(poolPressureRefreshInterval) {
+		return cached
 	}
 
 	return sampleAndPublishPoolPressureSnapshot()
 }
 
+// Policy callers need a coherent sample time and pressure level, not the full
+// diagnostic record. Preserve the same foreground refresh and double check as
+// currentPoolPressureSnapshot, including refresh when no sampler is running.
+func currentPoolPressureLevel() poolPressureLevel {
+	now := poolPressureNow()
+	sampledUnixNano, level := poolPressureState.LoadPressure()
+	if now.UnixNano()-sampledUnixNano <= int64(poolPressureRefreshInterval) {
+		return level
+	}
+
+	poolPressureMu.Lock()
+	defer poolPressureMu.Unlock()
+
+	now = poolPressureNow()
+	sampledUnixNano, level = poolPressureState.LoadPressure()
+	if now.UnixNano()-sampledUnixNano <= int64(poolPressureRefreshInterval) {
+		return level
+	}
+
+	return sampleAndPublishPoolPressureSnapshot().level
+}
+
 func currentZipperParallelMergePressure() zipper.ParallelMergePressureLevel {
-	switch currentPoolPressureSnapshot().level {
+	switch currentPoolPressureLevel() {
 	case poolPressureCritical:
 		return zipper.ParallelMergePressureCritical
 	case poolPressureHigh:
@@ -956,7 +976,7 @@ func scalePoolBudgetForPressure(base int64, level poolPressureLevel) int64 {
 
 func currentBatchArenaRetentionBudgetBytes() int64 {
 	base := currentBatchArenaPoolBudgetBytes()
-	level := currentPoolPressureSnapshot().level
+	level := currentPoolPressureLevel()
 	return scalePoolBudgetForPressure(base, level)
 }
 
@@ -972,7 +992,7 @@ func currentBatchArenaRetainedHardCapBytes() int64 {
 	if hardCap < int64(batchCopyArenaMinChunk) {
 		hardCap = int64(batchCopyArenaMinChunk)
 	}
-	level := currentPoolPressureSnapshot().level
+	level := currentPoolPressureLevel()
 	hardCap = scalePoolBudgetForPressure(hardCap, level)
 	if hardCap < 0 {
 		hardCap = 0
@@ -1090,7 +1110,7 @@ func batchArenaChunksCapBytes(chunks [][]byte) int64 {
 
 func currentEntrySlicePoolBudgetBytes() int64 {
 	base := entrySlicePoolBudgetBytes
-	level := currentPoolPressureSnapshot().level
+	level := currentPoolPressureLevel()
 	return scalePoolBudgetForPressure(base, level)
 }
 
@@ -1140,7 +1160,7 @@ func batchCopyArenaMaxChunkForPressure(level poolPressureLevel) int {
 }
 
 func currentBatchCopyArenaMaxChunk() int {
-	return batchCopyArenaMaxChunkForPressure(currentPoolPressureSnapshot().level)
+	return batchCopyArenaMaxChunkForPressure(currentPoolPressureLevel())
 }
 
 func shouldRetainBatchAuxPoolEntries(level poolPressureLevel) bool {
@@ -2072,7 +2092,7 @@ func (a *appendOnlyDirectValueArena) evictOldestRetainedToPool() bool {
 }
 
 func (a *appendOnlyDirectValueArena) retainChunks(chunks [][]byte) {
-	level := currentPoolPressureSnapshot().level
+	level := currentPoolPressureLevel()
 	maxRetainedChunks, maxRetainedBytes := appendOnlyDirectArenaRetentionLimitsForPressure(level)
 	for len(a.retained) > 0 && (len(a.retained) > maxRetainedChunks || a.retainedBytes > maxRetainedBytes) {
 		if !a.evictOldestRetainedToPool() {
@@ -11794,7 +11814,7 @@ func (db *DB) trimMutableShardAppendOnlyDirectArenas(checkpoint bool) {
 	if db == nil || len(db.mutableShards) == 0 {
 		return
 	}
-	level := currentPoolPressureSnapshot().level
+	level := currentPoolPressureLevel()
 	maxChunks, maxBytes := appendOnlyDirectArenaRetentionLimitsForPressure(level)
 	if db.currentMemtableMode() != memtable.ModeAppendOnly {
 		maxChunks = 0
@@ -36100,7 +36120,7 @@ func (db *DB) putBatchEntries(entries []batch.Entry) {
 	if cap(entries) > batchEntriesPoolMaxRetain {
 		return
 	}
-	if !shouldRetainBatchAuxPoolEntries(currentPoolPressureSnapshot().level) {
+	if !shouldRetainBatchAuxPoolEntries(currentPoolPressureLevel()) {
 		batchEntriesPoolDropUnderPressureTotal.Add(1)
 		return
 	}
@@ -36149,7 +36169,7 @@ func (db *DB) putBatchShardEntries(entries []batch.Entry) {
 	if cap(entries) > batchEntriesPoolMaxRetain {
 		return
 	}
-	if !shouldRetainBatchAuxPoolEntries(currentPoolPressureSnapshot().level) {
+	if !shouldRetainBatchAuxPoolEntries(currentPoolPressureLevel()) {
 		batchShardEntriesPoolDropUnderPressureTotal.Add(1)
 		return
 	}
@@ -36198,7 +36218,7 @@ func (db *DB) putBatchIntSlice(idxs []int) {
 	if cap(idxs) > batchIntSlicePoolMaxRetain {
 		return
 	}
-	if !shouldRetainBatchAuxPoolEntries(currentPoolPressureSnapshot().level) {
+	if !shouldRetainBatchAuxPoolEntries(currentPoolPressureLevel()) {
 		batchIntPoolDropUnderPressureTotal.Add(1)
 		return
 	}
@@ -36245,7 +36265,7 @@ func (db *DB) putBatchInt64Slice(idxs []int64) {
 	if cap(idxs) > batchIntSlicePoolMaxRetain {
 		return
 	}
-	if !shouldRetainBatchAuxPoolEntries(currentPoolPressureSnapshot().level) {
+	if !shouldRetainBatchAuxPoolEntries(currentPoolPressureLevel()) {
 		batchInt64PoolDropUnderPressureTotal.Add(1)
 		return
 	}
