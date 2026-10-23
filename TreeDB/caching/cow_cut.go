@@ -37,7 +37,8 @@ type cowBackendBasis struct {
 
 // physicalWorkspaceLocked borrows only the immutable backend snapshot. Each
 // caller sets its original inspection limits under readMu. This workspace owns
-// traversal only; dictionary-free decoding belongs to the original cowCache.
+// traversal and, for successor reads, bounded Snappy/LZ4 leaf decoding. Generic
+// dictionary-free decoding belongs to the original cowCache.
 func (b *cowBackendBasis) physicalWorkspaceLocked(budget *memtable.COWBudget, limits valuelog.COWReadLimits) (*cowReadWorkspace, error) {
 	if b.reader == nil {
 		w, err := admitCOWReadWorkspace(budget, limits)

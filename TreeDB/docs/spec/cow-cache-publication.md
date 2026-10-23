@@ -209,12 +209,25 @@ and actual Snappy/LZ4 headers use bounded native owners without constructing
 ZSTD state. Owned callback copies remain separately admitted even for inline
 values.
 
-Retained snapshots and bound iterators reuse their own admitted physical
-traversal scratch. Their dictionary-free Snappy/LZ4 leaf decoders likewise
-belong to that reader, allowing independent readers of the same captured basis
-to proceed without its shared traversal or decoder mutex. Each actual capacity
-is reserved before allocation and refunded through the existing reader Close;
-capacity exhaustion refuses rather than borrowing another reader's scratch.
+Retained snapshot point reads and bound iterators reuse their own admitted
+physical traversal scratch. A snapshot successor first tries the retained
+backend basis's original traversal mutex without waiting. If available, it
+borrows that basis's admitted workspace and copies the winning key and inline
+value before unlocking. Dictionary-free Snappy/LZ4 leaf decoding retains the
+successor's independent block-decoder policy in that workspace; this borrowing
+does not add a generic decoder mutex wait. A busy basis takes the original
+cut-local traversal and block-decoder path. Thus independent retained readers
+can still proceed while another owner holds shared scratch. Dictionary leaves
+continue through the complete caller cut's definition and decoder; pointer
+materialization occurs after the shared traversal mutex is released.
+
+Each actual capacity is reserved before allocation. Cut-local capacity is
+refunded through the existing reader Close. Shared successor scratch remains
+charged to its exact backend basis until the last basis reference releases;
+successor calls and short-lived snapshot closes neither refund nor reset live
+shared backing. A later handoff cannot rebind that scratch to a different root.
+Capacity exhaustion refuses through the existing error rather than using
+unadmitted storage. This reuse adds no pool, root publication or recovery owner.
 Physical iterator construction failures and Close drain workspace children
 before refunding the aggregate construction lease, including on verified-cache
 hits that need no decoder or buffer growth.
@@ -254,10 +267,10 @@ need lexical normalization allocation and are outside the low-level bounded
 leaf-read caller contract; legacy namespace classification remains unchanged.
 
 Successor reads search the captured cache roots using existing immutable
-lower-bound lookups only when the exact retained backend user root is proven
-empty. They inspect all captured shards/sources and preserve newest-source
-ties. Winning physical tombstones, nonempty disk bases and missing successor
-capabilities use the general merge on that same captured snapshot. Selection,
+lower-bound lookups. An exact empty retained backend user root omits the disk
+probe. Otherwise one owned disk candidate competes with the immutable sources
+on the same cut, preserving newest-source ties. Winning physical tombstones and
+missing successor capabilities use the general merge on that same snapshot. Selection,
 materialization and caller copies retain the ordinary read/Close ownership;
 the Store uses this same successor on its admitted snapshot after releasing
 floor admission; it never seeks through a newly captured DB cut.
