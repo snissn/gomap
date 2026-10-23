@@ -20,10 +20,9 @@ import (
 func TestNativeExistingIndexedJSONInsertCapturedReplay(t *testing.T) {
 	const sentinel = 97
 	childDir, childProfile := os.Getenv("GOMAP_INDEXED_SLICE_CRASH_DIR"), os.Getenv("GOMAP_INDEXED_SLICE_PROFILE")
-	if childDir != "" {
-		// Keep the exact unapplied replay basis; periodic GC may checkpoint.
-		t.Setenv("TREEDB_DISABLE_VLOG_GENERATION_LOOP", "1")
-	}
+	// Parent and crash-child cases both require an exact unapplied suffix.
+	// The generation scheduler may checkpoint even with automatic checkpoints disabled.
+	t.Setenv("TREEDB_DISABLE_VLOG_GENERATION_LOOP", "1")
 	for _, profile := range []Profile{ProfileCommandWALDurable, ProfileCommandWALRelaxed, ProfileNoWALFast} {
 		if childDir != "" && string(profile) != childProfile {
 			continue
