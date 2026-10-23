@@ -8157,10 +8157,19 @@ func (db *DB) reconcileSplitValueLogWritersAfterBackendMaintenanceAdmitted(admit
 	}
 	if db.indexOuterLeavesInValueLog {
 		observedMaxSeq := maxSeqByLane[leafLogLaneID]
-		db.advanceLeafLogAppendSeqAtLeast(observedMaxSeq)
-		for _, l := range db.leafLogAppendLanesSnapshot() {
-			if err := db.advanceLeafLogAppendWriterPastObservedSeq(l, observedMaxSeq); err != nil {
-				return err
+		// Independent cached leaf writers share this reservation floor. A peer's
+		// higher sequence is not backend output and must not rotate every older
+		// writer after a read-only or no-op maintenance pass. Maintained backend
+		// writers also reserve from this allocator before creating their files.
+		// Preserve the conservative fence for an unreserved external advance;
+		// explicit CompactStorage handoff retains its own stronger fence.
+		reservedSeq := db.leafLogAppendSeq.Load()
+		if uint64(observedMaxSeq) > uint64(reservedSeq) {
+			db.advanceLeafLogAppendSeqAtLeast(observedMaxSeq)
+			for _, l := range db.leafLogAppendLanesSnapshot() {
+				if err := db.advanceLeafLogAppendWriterPastObservedSeq(l, observedMaxSeq); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -9957,6 +9966,14 @@ type DB struct {
 	vlogGenerationLeafPackLastSelectionBytesDead                 atomic.Int64
 	vlogGenerationLeafPackLastSelectionGenerations               atomic.Int64
 	vlogGenerationLeafPackLastBytesCopied                        atomic.Int64
+	vlogGenerationLeafGCRuns                                     atomic.Uint64
+	vlogGenerationLeafGCErrors                                   atomic.Uint64
+	vlogGenerationLeafGCExecNanos                                atomic.Uint64
+	vlogGenerationLeafGCDeletedGenerations                       atomic.Uint64
+	vlogGenerationLeafGCDeletedFiles                             atomic.Uint64
+	vlogGenerationLeafGCDeletedBytes                             atomic.Uint64
+	vlogGenerationLeafGCDeletedManifestRevisions                 atomic.Uint64
+	vlogGenerationLeafGCDeletedManifestBytes                     atomic.Uint64
 	vlogGenerationLeafPackGCRuns                                 atomic.Uint64
 	vlogGenerationLeafPackGCEligibleGenerations                  atomic.Uint64
 	vlogGenerationLeafPackGCDeletedGenerations                   atomic.Uint64
@@ -23823,12 +23840,34 @@ planned:
 		skipCheckpoint:        opts.skipCheckpoint,
 		skipRetainedPruneWait: opts.skipRetainedPruneWait,
 	}, func() error {
+		// Whole-generation leaf reclamation is independent of value rewrite and
+		// experimental leaf packing. Share the admitted checkpoint/quiet/cooldown
+		// barrier, but run before value-only eligibility can short-circuit it.
+		ctx, cancel := db.vlogGenerationMaintenanceContext(30*time.Second, opts)
+		defer cancel()
+		leafStats, leafAttempted, err := db.runVlogGenerationLeafGC(ctx)
+		gcAttempted = leafAttempted
+		if leafAttempted {
+			// A leaf-only pass consumes the same bounded retry interval even if
+			// the following value eligibility estimate returns early.
+			db.vlogGenerationLastGCUnixNano.Store(time.Now().UnixNano())
+		}
+		if err != nil {
+			return fmt.Errorf("generational leaf gc: %w", err)
+		}
+		leafProgress := leafStats.GenerationsDeleted > 0 || leafStats.ManifestRevisionsDeleted > 0 || leafStats.FilesDeleted > 0
+		if leafProgress {
+			db.vlogGenerationLastGCNoopUnixNano.Store(0)
+		}
 		if needEligibilityEstimate {
 			gcStats, err := db.estimateVlogGenerationGCEligible(gcer)
 			if err != nil {
 				return fmt.Errorf("generational gc dry-run: %w", err)
 			}
 			if gcStats.BytesEligible < vlogGenerationGCMinBytes && gcStats.SegmentsEligible == 0 {
+				if leafAttempted && !leafProgress {
+					db.vlogGenerationLastGCNoopUnixNano.Store(time.Now().UnixNano())
+				}
 				db.debugVlogMaintf(
 					"gc_skip reason=below_eligibility_floor run_gc=%t force_observed=%t eligible_bytes=%d eligible_segments=%d min_bytes=%d",
 					runGC,
@@ -23842,7 +23881,6 @@ planned:
 		}
 		now := time.Now()
 		db.vlogGenerationLastGCUnixNano.Store(now.UnixNano())
-		ctx, cancel := db.vlogGenerationMaintenanceContext(30*time.Second, opts)
 		gcOpts := db.valueLogGCOptions(false)
 		if forceObservedSourceGC {
 			gcOpts.ObservedSourceFileIDs = append([]uint32(nil), observedSourceGCIDs...)
@@ -23892,7 +23930,7 @@ planned:
 			gcStats.BytesDeleted == 0 &&
 			gcStats.SegmentsDeleted == 0 &&
 			gcStats.BytesEligible == 0 &&
-			gcStats.SegmentsEligible == 0 {
+			gcStats.SegmentsEligible == 0 && !leafProgress {
 			db.vlogGenerationLastGCNoopUnixNano.Store(now.UnixNano())
 		} else {
 			db.vlogGenerationLastGCNoopUnixNano.Store(0)
@@ -33623,6 +33661,14 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.leaf_pack.last_bytes_copied"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackLastBytesCopied.Load())
 	stats["treedb.cache.vlog_generation.leaf_pack.last_attributed_reclaim_bytes"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackLastReclaimedBytes.Load())
 	stats["treedb.cache.vlog_generation.leaf_pack.last_attributed_reclaim_per_byte_copied_ppm"] = fmt.Sprintf("%d", leafGenerationPackReclaimPerByteCopiedPPM(db.vlogGenerationLeafPackLastReclaimedBytes.Load(), db.vlogGenerationLeafPackLastBytesCopied.Load()))
+	stats["treedb.cache.vlog_generation.leaf_gc.runs"] = fmt.Sprintf("%d", db.vlogGenerationLeafGCRuns.Load())
+	stats["treedb.cache.vlog_generation.leaf_gc.errors"] = fmt.Sprintf("%d", db.vlogGenerationLeafGCErrors.Load())
+	stats["treedb.cache.vlog_generation.leaf_gc.exec.total_ms"] = fmt.Sprintf("%.3f", float64(db.vlogGenerationLeafGCExecNanos.Load())/float64(time.Millisecond))
+	stats["treedb.cache.vlog_generation.leaf_gc.deleted_generations"] = fmt.Sprintf("%d", db.vlogGenerationLeafGCDeletedGenerations.Load())
+	stats["treedb.cache.vlog_generation.leaf_gc.deleted_files"] = fmt.Sprintf("%d", db.vlogGenerationLeafGCDeletedFiles.Load())
+	stats["treedb.cache.vlog_generation.leaf_gc.deleted_bytes"] = fmt.Sprintf("%d", db.vlogGenerationLeafGCDeletedBytes.Load())
+	stats["treedb.cache.vlog_generation.leaf_gc.deleted_manifest_revisions"] = fmt.Sprintf("%d", db.vlogGenerationLeafGCDeletedManifestRevisions.Load())
+	stats["treedb.cache.vlog_generation.leaf_gc.deleted_manifest_bytes"] = fmt.Sprintf("%d", db.vlogGenerationLeafGCDeletedManifestBytes.Load())
 	stats["treedb.cache.vlog_generation.leaf_pack.gc.runs"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackGCRuns.Load())
 	stats["treedb.cache.vlog_generation.leaf_pack.gc.eligible_generations"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackGCEligibleGenerations.Load())
 	stats["treedb.cache.vlog_generation.leaf_pack.gc.deleted_generations"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackGCDeletedGenerations.Load())
