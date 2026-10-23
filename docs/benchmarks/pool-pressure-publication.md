@@ -59,7 +59,7 @@ volume. Correctness and allocation controls exercise the real production sampler
 and publisher, concurrent complete-field snapshots, and retained copies:
 
 ```sh
-GOWORK=off go test ./TreeDB/caching -run '^TestPoolPressure(Real|Cached|Publication|Sampler|Snapshot)' -count=1
+GOWORK=off go test ./TreeDB/caching -run '^TestPoolPressure(Real|Cached|Publication|Sampler|Snapshot|Policy)' -count=1
 GOWORK=off go test -race ./TreeDB/caching -run '^Test(PoolPressure|SampleProcessMemoryPeaks)' -count=1
 ```
 
@@ -129,3 +129,27 @@ orders, the inclusive freshness boundary, pressure policies, and owning race
 controls passed. These development diagnostics select a representation; they
 do not establish public PRIMARY acceptance or eliminate the separate Linux RSS
 parser allocation source. No public PRIMARY comparison has run on this source.
+
+
+The first public development attempt built both exact-source PRIMARY binaries
+and the same actual public Stats fixture on baseline and candidate. The Stats
+fixture opens the real backend and cached DB with 64 inline keys, retains normal
+samplers and real clocks, and times `DB.Stats`. Its standalone command is:
+
+```sh
+GOWORK=off go test ./TreeDB/caching -run '^$' -bench '^BenchmarkPoolPressurePublicStats$' -benchmem -cpu=1 -benchtime=250ms -count=1
+```
+
+The attempt passed the candidate's actual durable PRIMARY lifecycle control, but
+the maintained 60-second host-quiet acquisition exhausted before any timed row.
+All twelve planned rows (three pairs each of Stats and PRIMARY) are unavailable,
+not failed product measurements. Runtime, binary, harness, source bindings, and
+all process observations remain in the task's `telemetry-5213/public-01` evidence.
+Neither a material-public-Stats claim nor a public PRIMARY claim is established.
+No selective retry, sampling change, or allocation tolerance was applied.
+
+At 3.8 ms per PRIMARY operation, the 250 ms sampler's removed 144-byte box alone
+would average about 2.19 bytes per operation. This is an attribution estimate for
+that sampler, not a bound on all telemetry: the one-second process sampler also
+publishes a snapshot, and RSS parsing has independent allocations. Actual timed
+publication counts were not instrumented in the public diagnostic.
