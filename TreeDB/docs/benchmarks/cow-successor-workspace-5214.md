@@ -352,3 +352,55 @@ Public Stats formats its nine residency integer fields directly with strconv rat
 At the preceding W6 tooling head `029eeb9d4e07cfaa37dcf5552c73a790d2e94ad4`, the original raw controls, PRIMARY (+2.798% paired time) and all 60 COW rows pass with their original gates; PRIMARY and COW have quiet-host witnesses. Stats fails its strict byte guard by one median byte (882,719 to 882,720 B/op), despite removing 38 allocations. The new formatting diagnostic does not replace that failure.
 
 W6 also fails the RabitQ exact-allocation assertion and all three legacy vacuum timing-CV limits. The RabitQ source is unchanged from the baseline; one isolated diagnostic passes, and compiler escape evidence rules out the measured stats literal escaping on the success path. The original allocation failure remains unexplained. Vacuum operations complete without unexpected errors, but stability remains failed. No fixture, timing/allocation/noise limit or failure classification is relaxed, and no selective original gate is rerun. The new reviewed runtime requires its own original current-head CI and review; neither these diagnostics nor an isolated passing test waive earlier failures or complete final graph qualification.
+
+### Complete-cut capacity retry with warm workspace reuse
+
+Runtime `f495aa04e9daf1f8cc7ccdb1adb46faf54129b9c` resolves fresh
+dictionary, queued-pointer and direct-point handoffs without discarding useful
+scratch after every read. An identity token borrows the fresh owner under the
+original retained cut. If the original cut-local admission or materializer
+returns capacity refusal, it can refund only the matching owner and retry that
+same phase once. A stale token cannot close a replacement or authorize a retry.
+Direct-point admission preserves an exact spare cut reference because Snapshot
+admission consumes its input even on failure. Successful handoffs and logical
+misses preserve reusable traversal. Existing warm owners, dictionary/codec
+authority, inspection integrity and complete-cut file custody remain unchanged.
+
+The old published runtime genuinely fails the constrained public controls.
+The final repair passes owning normal (5.608s) and race (7.120s) controls,
+including idle/busy dictionary and queue handoffs, all four direct-point APIs,
+view-refusal reference/accounting cleanup, warm reuse and stale identity. A
+source-reviewed intermediate retry discarded scratch on logical misses; its
+specific regression is retained and fails causally before the final exemption.
+
+The first local repair unconditionally refunded fresh scratch and passed its
+correctness controls, but increased both direct-pointer and dictionary reads by
+11,072 B/op and four allocations. That version was rejected before publication.
+One fixed-count old/final public comparison of the selected replacement records:
+
+| Public shape | Old B/op | Final B/op | Old allocs/op | Final allocs/op |
+| --- | ---: | ---: | ---: | ---: |
+| GetAppend physical pointer | 33,376 | 33,376 | 9 | 9 |
+| GetAppend dictionary leaf | 87,049 | 87,049 | 53 | 53 |
+| Fresh-cut successor queued pointer | 189,032 | 189,032 | 11 | 11 |
+| Fresh-cut successor dictionary leaf | 87,169 | 87,169 | 55 | 55 |
+| Fresh-cut successor compressed value | 62,889 | 51,817 | 14 | 10 |
+| GetAppend missing key | 0 | 0 | 0 | 0 |
+
+Each shape uses 16 warmup calls and 1,024 timed calls, ordinary GC,
+GOMAXPROCS=1 and matching fixtures, toolchain and inherited affinity. Binaries
+are prebuilt outside timing; byte/key result checks remain in the loops.
+Compiler diagnostics confirm the fresh-owner parameters do not escape. This
+single pair is an allocation/reuse discriminator without a quiet-host or timing
+acceptance claim; it does not replace original CI or final Dgraph qualification.
+
+The preceding W7 head `7b25ed187fa4dfb5c3ed6711b31624fe7d82245c` passes
+all 54 reported original checks: raw controls, quiet PRIMARY (-1.678% median
+paired time), all 60 quiet COW rows, quiet Stats, original M0 and the owning
+RabitQ shard. Its later dictionary-capacity review finding required this final
+repair, so those checks do not certify the new head. The macOS dependency
+bootstrap TLS failure occurred before tests and remains retained alongside its
+successful bounded infrastructure retry. Earlier W5/W6 failures and nulls are
+unchanged. Only runtime binding, source-discovery inventory and evidence are
+refreshed here; no workload, fixture, numeric/noise gate or original execution
+policy is changed. New exact-head original CI and mature review remain required.
