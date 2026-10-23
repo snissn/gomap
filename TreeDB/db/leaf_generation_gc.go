@@ -121,7 +121,7 @@ func (db *DB) leafGenerationGCAttempt(ctx context.Context, opts LeafGenerationGC
 		return stats, false, nil
 	}
 
-	prepared, err := db.prepareLeafGenerationGCScan(ctx, opts.MaintenanceLimits)
+	stats, prepared, err := db.prepareLeafGenerationGCScan(ctx, opts.MaintenanceLimits)
 	if err != nil || !prepared {
 		return stats, false, err
 	}
@@ -203,17 +203,21 @@ type leafGenerationGCDecision struct {
 	zombieFileIDs       map[uint32]struct{}
 }
 
-func (db *DB) prepareLeafGenerationGCScan(ctx context.Context, limits LeafGenerationMaintenanceLimits) (bool, error) {
+func (db *DB) prepareLeafGenerationGCScan(ctx context.Context, limits LeafGenerationMaintenanceLimits) (LeafGenerationGCStats, bool, error) {
+	var stats LeafGenerationGCStats
+	if err := ctx.Err(); err != nil {
+		return stats, false, err
+	}
 	if db.closing.Load() {
-		return false, nil
+		return stats, false, nil
 	}
 	if err := db.admitLeafGenerationMaintenance(ctx, limits); err != nil {
-		return false, err
+		return stats, false, err
 	}
 	db.mu.RLock()
 	if db.leafGenerationManifest == nil || db.valueLogManager == nil {
 		db.mu.RUnlock()
-		return false, nil
+		return stats, false, nil
 	}
 	valueLogManager := db.valueLogManager
 	db.mu.RUnlock()
@@ -221,7 +225,7 @@ func (db *DB) prepareLeafGenerationGCScan(ctx context.Context, limits LeafGenera
 	// The caller's teardown read lock keeps Close from clearing or closing this
 	// manager. Manager synchronization handles concurrent normal DB activity.
 	if err := valueLogManager.Refresh(); err != nil {
-		return false, err
+		return stats, false, err
 	}
 
 	db.writeMu.Lock()
@@ -232,19 +236,48 @@ func (db *DB) prepareLeafGenerationGCScan(ctx context.Context, limits LeafGenera
 	}()
 
 	if db.closing.Load() || db.leafGenerationManifest == nil || db.valueLogManager == nil {
-		return false, nil
+		return stats, false, nil
 	}
 	if err := limits.admitManifest(db.leafGenerationManifest); err != nil {
-		return false, err
+		return stats, false, err
 	}
 	commitSeq := uint64(1)
 	if state, ok := db.StateToken(); ok && state.CommitSeq != 0 {
 		commitSeq = state.CommitSeq
 	}
 	if _, err := db.reconcileLeafGenerationManifestWithDirLocked(commitSeq); err != nil {
-		return false, err
+		return stats, false, err
 	}
-	return true, nil
+	if err := ctx.Err(); err != nil {
+		return stats, false, err
+	}
+	currentFileIDs, err := db.currentLeafPageLogRawFileIDSet()
+	if err != nil {
+		return stats, false, err
+	}
+	// Optimistic root publishers also replace the manifest under db.mu.
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	// These are the decision builder's unconditional retention cases. They
+	// cannot retire or normalize any segment, regardless of root reachability
+	// or pins. Inspect the reconciled manifest under the same writer exclusion;
+	// do not cache this negative result across producer changes. A rotation
+	// after this sample can only defer reclamation until the next pass.
+	for _, gen := range db.leafGenerationManifest.Generations {
+		stats.GenerationsTotal++
+		switch {
+		case gen.State == leafGenerationStateWritable:
+			stats.GenerationsWritable++
+		case gen.State == leafGenerationStateSealed && leafGenerationRecordIntersectsFileIDSet(gen, currentFileIDs):
+			stats.GenerationsLive++
+		default:
+			return LeafGenerationGCStats{}, true, nil
+		}
+	}
+	// The caller still runs immutable manifest revision GC with its own fresh
+	// recoverable-root capture. All-current producers do not prove old revision
+	// debt absent, and this segment-only shortcut never authorizes a deletion.
+	return stats, false, nil
 }
 
 func (db *DB) captureLeafGenerationGCScanBasis(snap *Snapshot, limits LeafGenerationMaintenanceLimits) (leafGenerationGCScanBasis, bool, error) {

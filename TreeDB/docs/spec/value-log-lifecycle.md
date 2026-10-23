@@ -545,6 +545,15 @@ cached roots, recoverable durable roots and physical-identity pins retain their
 existing authority. Partly live generations still require a separate rewrite or
 pack operation to reclaim their internal dead space.
 
+After refresh and manifest reconciliation, a segment pass avoids root capture
+and reachability scans when every record is Writable or Sealed with a current
+producer file. Those cases cannot retire a segment under the existing decision
+rules. Deleted, Retiring, unknown, and sealed noncurrent records retain the full
+scan path. This is a fresh writer-state check, not cached reachability: a
+concurrent rotation can defer collection until the next admitted pass. Immutable
+manifest revision GC still runs independently with fresh current/previous-root
+and reader protection, even when the segment phase has no candidate.
+
 Leaf and value collection share the existing maintenance admission, checkpoint
 and COW writer fence, a 30-second cancellable context, 90-second attempt interval,
 and three-minute joint-noop cooldown. Leaf deletion clears that joint cooldown
