@@ -1,5 +1,29 @@
 # unified_bench
 
+Pool-pressure publication has standalone component controls:
+
+```sh
+GOWORK=off go test ./TreeDB/caching -run '^$' -bench '^BenchmarkPoolPressure(PublishSnapshot|CachedSnapshotRead|CachedPolicy)$' -benchmem -cpu=1,4,16 -benchtime=1s -count=3
+```
+
+See [the publication runbook](../../docs/benchmarks/pool-pressure-publication.md)
+for fresh-process stdout/stderr artifacts, cached-read contention, and the
+separate public durable PRIMARY guardrail. These Go outputs/profiles are not
+benchprof inputs.
+
+The scoped hosted public Stats diagnostic uses the same public fixture (v2 excludes Close)
+on exact base/head binaries (three AB/BA/AB pairs, 250 ms, GOMAXPROCS=1):
+
+```sh
+python3 scripts/pool_pressure_stats_diagnostic.py --root "$PWD" --baseline FULL_BASE_SHA --candidate FULL_HEAD_SHA --output /mnt/fast4tb/TASK/pressure-stats-FRESH
+```
+
+Its fresh output contains source/runtime/binary hashes, separate stdout/stderr,
+command receipts, six chronological rows, quiet-process observations, and a
+PASS/FAIL/NULL summary. NULL/failure leaves the product guard unavailable. See
+the publication runbook for exact thresholds and CI scope; these standalone
+artifacts are not benchprof inputs and do not replace PRIMARY qualification.
+
 Raw value-log frame read amplification has a standalone production-planner
 microbenchmark:
 
