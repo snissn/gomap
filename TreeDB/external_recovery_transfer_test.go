@@ -53,6 +53,7 @@ func externalTransferFixture(t *testing.T) ([]byte, ExternalRecoveryCheckpoint, 
 }
 
 func TestExternalRecoveryTransferExactRootAndReceiverAuthority(t *testing.T) {
+	requireExternalRecoveryPlatform(t)
 	archive, source, want := externalTransferFixture(t)
 	dir := t.TempDir()
 	target := externalTransferOwner(t, dir, "group-7/receiver-node-2")
@@ -110,6 +111,7 @@ func TestExternalRecoveryTransferExactRootAndReceiverAuthority(t *testing.T) {
 }
 
 func TestExternalRecoveryTransferRefusalPreservesOldOwner(t *testing.T) {
+	requireExternalRecoveryPlatform(t)
 	archive, _, _ := externalTransferFixture(t)
 	target := externalTransferOwner(t, t.TempDir(), "receiver")
 	externalTestSet(t, target, "key", []byte("old"))
@@ -145,6 +147,7 @@ func TestExternalRecoveryTransferRefusalPreservesOldOwner(t *testing.T) {
 }
 
 func TestExternalRecoveryTransferRejectsTraversalBeforeWriting(t *testing.T) {
+	requireExternalRecoveryPlatform(t)
 	_, source, _ := externalTransferFixture(t)
 	var archive bytes.Buffer
 	writer := tar.NewWriter(&archive)
@@ -171,6 +174,7 @@ func TestExternalRecoveryTransferRejectsTraversalBeforeWriting(t *testing.T) {
 }
 
 func TestExternalRecoveryTransferCrashCuts(t *testing.T) {
+	requireExternalRecoveryPlatform(t)
 	archive, _, want := externalTransferFixture(t)
 	archivePath := filepath.Join(t.TempDir(), "snapshot.tar")
 	if err := os.WriteFile(archivePath, archive, 0600); err != nil {
@@ -208,6 +212,7 @@ func TestExternalRecoveryTransferCrashCuts(t *testing.T) {
 }
 
 func TestExternalRecoveryTransferCrashHelper(t *testing.T) {
+	requireExternalRecoveryPlatform(t)
 	dir := os.Getenv("TREEDB_TRANSFER_DIR")
 	if dir == "" {
 		t.Skip("subprocess helper")
@@ -242,6 +247,7 @@ func (w *externalBlockedTransferWriter) Write(p []byte) (int, error) {
 	return w.Buffer.Write(p)
 }
 func TestExternalRecoveryTransferExportAllowsSuccessorApply(t *testing.T) {
+	requireExternalRecoveryPlatform(t)
 	source := externalTransferOwner(t, t.TempDir(), "source")
 	externalTestSet(t, source, "key", []byte("certified"))
 	cert, err := source.Checkpoint(context.Background(), []byte("cut"))
@@ -292,6 +298,7 @@ func TestExternalRecoveryTransferExportAllowsSuccessorApply(t *testing.T) {
 }
 
 func TestExternalRecoveryTransferPublicationFailureRequiresReopen(t *testing.T) {
+	requireExternalRecoveryPlatform(t)
 	archive, _, want := externalTransferFixture(t)
 	dir := t.TempDir()
 	target := externalTransferOwner(t, dir, "receiver")

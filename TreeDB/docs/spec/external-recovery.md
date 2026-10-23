@@ -24,6 +24,10 @@ ownership for their lifetime, and mark their internal physical namespace too.
 Low-level physical backend helpers are engine integration surfaces, not a way
 to bypass the public recovery policy.
 
+External recovery requires exact stable relative namespace primitives (currently
+Unix platforms). Unsupported platforms, including Windows, refuse before creating
+the owner directory; ordinary TreeDB profiles remain available there.
+
 ## V2 certificate and retained root
 
 The owner directory contains a V2 identity marker, `CURRENT`, `checkpoints/`, and

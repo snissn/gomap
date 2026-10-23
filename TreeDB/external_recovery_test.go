@@ -13,9 +13,11 @@ import (
 	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
 func TestExternalRecoveryTwoGenerationClosureAcrossRewriteAndReopen(t *testing.T) {
+	requireExternalRecoveryPlatform(t)
 	for _, outer := range []bool{false, true} {
 		t.Run(fmt.Sprint("outer=", outer), func(t *testing.T) {
 			dir := t.TempDir()
@@ -113,6 +115,7 @@ func TestExternalRecoveryTwoGenerationClosureAcrossRewriteAndReopen(t *testing.T
 }
 
 func TestExternalRecoveryInitializationOwnership(t *testing.T) {
+	requireExternalRecoveryPlatform(t)
 	for i := 0; i < 12; i++ {
 		dir := t.TempDir()
 		opts := OptionsFor(ProfileNoWALFast, dir)
@@ -178,6 +181,7 @@ func TestExternalRecoveryInitializationOwnership(t *testing.T) {
 }
 
 func TestExternalRecoveryRetainsRootWithoutCopyingImage(t *testing.T) {
+	requireExternalRecoveryPlatform(t)
 	dir := t.TempDir()
 	o := externalTestOpen(t, dir)
 	want := bytes.Repeat([]byte("retained-pointer"), 16384)
@@ -251,6 +255,7 @@ func externalTestSet(t *testing.T, o *ExternalRecovery, key string, value []byte
 // progress part of the recovery base. Large pointer values exercise exact file
 // identity rebinding and the full persistent value/outer-leaf closure.
 func TestExternalRecoveryRestoresExactCertifiedImage(t *testing.T) {
+	requireExternalRecoveryPlatform(t)
 	dir := t.TempDir()
 	o := externalTestOpen(t, dir)
 	want := bytes.Repeat([]byte("certified"), 2048)
@@ -288,6 +293,7 @@ func TestExternalRecoveryRestoresExactCertifiedImage(t *testing.T) {
 }
 
 func TestExternalRecoveryGenesisDiscardsUncertifiedClose(t *testing.T) {
+	requireExternalRecoveryPlatform(t)
 	dir := t.TempDir()
 	o := externalTestOpen(t, dir)
 	externalTestSet(t, o, "suffix", []byte("uncheckpointed"))
@@ -304,6 +310,7 @@ func TestExternalRecoveryGenesisDiscardsUncertifiedClose(t *testing.T) {
 }
 
 func TestExternalRecoveryRejectsCorruptionIdentityAndConcurrentOwner(t *testing.T) {
+	requireExternalRecoveryPlatform(t)
 	dir := t.TempDir()
 	o := externalTestOpen(t, dir)
 	opts := OptionsFor(ProfileNoWALFast, dir)
@@ -339,6 +346,7 @@ func TestExternalRecoveryRejectsCorruptionIdentityAndConcurrentOwner(t *testing.
 }
 
 func TestExternalRecoveryFailedCheckpointPreservesAuthority(t *testing.T) {
+	requireExternalRecoveryPlatform(t)
 	dir := t.TempDir()
 	o := externalTestOpen(t, dir)
 	externalTestSet(t, o, "key", []byte("base"))
@@ -374,6 +382,7 @@ func TestExternalRecoveryFailedCheckpointPreservesAuthority(t *testing.T) {
 // These are abrupt subprocess exits, not power-cut simulation: kernel dirty
 // state may survive, but recovery must still honor only the certified image.
 func TestExternalRecoveryCrashCuts(t *testing.T) {
+	requireExternalRecoveryPlatform(t)
 	for _, stage := range []string{"image-stable", "before-current", "current-stable"} {
 		t.Run(stage, func(t *testing.T) {
 			dir := t.TempDir()
@@ -406,6 +415,7 @@ func TestExternalRecoveryCrashCuts(t *testing.T) {
 }
 
 func TestExternalRecoveryCrashHelper(t *testing.T) {
+	requireExternalRecoveryPlatform(t)
 	dir := os.Getenv("TREEDB_EXTERNAL_CRASH_DIR")
 	if dir == "" {
 		t.Skip("subprocess helper")
@@ -425,6 +435,7 @@ func TestExternalRecoveryCrashHelper(t *testing.T) {
 }
 
 func TestExternalRecoveryCheckpointLimitsAndRetention(t *testing.T) {
+	requireExternalRecoveryPlatform(t)
 	o := externalTestOpen(t, t.TempDir())
 	for i := 0; i < 3; i++ {
 		externalTestSet(t, o, "key", []byte{byte(i)})
@@ -448,6 +459,7 @@ func TestExternalRecoveryCheckpointLimitsAndRetention(t *testing.T) {
 }
 
 func TestExternalRecoveryCheckpointWaitsForCompleteApply(t *testing.T) {
+	requireExternalRecoveryPlatform(t)
 	o := externalTestOpen(t, t.TempDir())
 	entered, release := make(chan struct{}), make(chan struct{})
 	applyDone := make(chan error, 1)
@@ -488,6 +500,7 @@ func TestExternalRecoveryCheckpointWaitsForCompleteApply(t *testing.T) {
 }
 
 func TestExternalRecoveryCertificateDoesNotAliasCaller(t *testing.T) {
+	requireExternalRecoveryPlatform(t)
 	o := externalTestOpen(t, t.TempDir())
 	externalTestSet(t, o, "key", []byte("base"))
 	cert, err := o.Checkpoint(context.Background(), []byte("metadata"))
@@ -503,6 +516,7 @@ func TestExternalRecoveryCertificateDoesNotAliasCaller(t *testing.T) {
 }
 
 func TestExternalRecoveryRejectsUnrecoverableIdentity(t *testing.T) {
+	requireExternalRecoveryPlatform(t)
 	for _, identity := range []string{strings.Repeat("<", 2000), string([]byte{0xff})} {
 		opts := OptionsFor(ProfileNoWALFast, t.TempDir())
 		opts.MemtableMode = "cow_ordered"
@@ -510,5 +524,32 @@ func TestExternalRecoveryRejectsUnrecoverableIdentity(t *testing.T) {
 			o.Close()
 			t.Fatal("unrecoverable encoded identity admitted")
 		}
+	}
+}
+
+func requireExternalRecoveryPlatform(tb testing.TB) {
+	tb.Helper()
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		tb.Skip("external recovery requires exact stable relative namespace primitives")
+	}
+}
+
+func TestExternalRecoveryUnsupportedPlatformRefusesBeforeMutation(t *testing.T) {
+	if rootpublication.StableRelativeNamespaceSupported() {
+		t.Skip("platform supports external recovery")
+	}
+	parent := t.TempDir()
+	dir := filepath.Join(parent, "must-remain-absent")
+	opts := OptionsFor(ProfileNoWALFast, dir)
+	opts.MemtableMode = "cow_ordered"
+	owner, err := OpenExternalRecovery(opts, ExternalRecoveryConfig{Identity: "unsupported"})
+	if owner != nil || !errors.Is(err, ErrExternalRecovery) {
+		if owner != nil {
+			_ = owner.Close()
+		}
+		t.Fatalf("owner=%v err=%v", owner != nil, err)
+	}
+	if _, err := os.Lstat(dir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("unsupported open mutated namespace: %v", err)
 	}
 }

@@ -17,6 +17,7 @@ import (
 // Dgraph RPC/transaction latency. Pointer4096 uses default compression and a
 // repeated value, so N measures index/cardinality scale, not unique value bytes.
 func BenchmarkExternalRecoveryCheckpoint(b *testing.B) {
+	requireExternalRecoveryPlatform(b)
 	for _, layout := range []string{"Inline64", "Pointer4096"} {
 		for _, records := range []int{1024, 16384, 131072} {
 			b.Run(fmt.Sprintf("%s/N=%d/OneUpdateAndCheckpoint", layout, records), func(b *testing.B) {
