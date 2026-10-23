@@ -20,6 +20,7 @@ type freshLayoutNamespaceCase struct {
 	variantID         string
 	disableSideStores bool
 	partial           bool
+	symlinkParent     bool
 	point             durabilitycut.Point
 	path              func(parent, database string) string
 	wantOccurrence    int
@@ -100,6 +101,20 @@ func TestPowerLossCertificationPartialCompositeAfterOuterParentSync(t *testing.T
 	})
 }
 
+// Exercise the canonical witness spelling even when a caller supplied an
+// alias, as macOS temporary roots commonly do via /var -> /private/var.
+func TestPowerLossCertificationPartialCompositeAfterOuterParentSyncSymlinkParent(t *testing.T) {
+	testPowerLossCertificationFreshLayout(t, freshLayoutNamespaceCase{
+		variantID:      "partial-layout-composite-owned-init-v2-canonical-symlink-parent-after-outer-parent-sync",
+		partial:        true,
+		symlinkParent:  true,
+		point:          durabilitycut.AfterNewFileDirectorySync,
+		path:           func(parent, _ string) string { return parent },
+		wantOccurrence: 0,
+		wantStableDirs: []string{".", "db"},
+	})
+}
+
 func TestPowerLossCertificationFreshFlatBeforeOuterParentSync(t *testing.T) {
 	testPowerLossCertificationFreshLayout(t, freshLayoutNamespaceCase{
 		variantID:         "fresh-layout-flat-before-outer-parent-sync",
@@ -132,6 +147,23 @@ func testPowerLossCertificationFreshLayout(t *testing.T, testCase freshLayoutNam
 		t.Fatal(err)
 	}
 	parent := t.TempDir()
+	if testCase.symlinkParent {
+		alias := filepath.Join(t.TempDir(), "alias")
+		if err := os.Symlink(parent, alias); err != nil {
+			t.Fatal(err)
+		}
+		parent = filepath.Join(alias, "child")
+		if err := os.Mkdir(parent, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Match the canonical ownership-lock namespace. Without this, an existing
+	// partial layout resolves the symlink while a fresh path retains its alias,
+	// shifting global event ordinals on macOS even at the same physical cut.
+	parent, err = filepath.EvalSymlinks(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
 	databaseDir := filepath.Join(parent, "db")
 	model, err := powerlossoracle.Capture(parent)
 	if err != nil {
