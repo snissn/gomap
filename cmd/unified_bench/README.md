@@ -1630,3 +1630,23 @@ read. Go test profiles from this diagnostic are not benchprof inputs. For A/B
 against an older source, use this exact benchmark-only file as an identical
 shared overlay on both sources. Unified natural reads retain their separate
 post-preload state and remain the public workload qualification.
+
+### Public parallel durable-ACK diagnostic
+
+`BenchmarkCommandWALParallelSync` measures public `SetSync` at one, four and
+sixteen workers for ordinary btree and `cow_ordered`, with inline64 and forced
+pointer4096 values under default compression:
+
+```sh
+go test ./TreeDB -run '^$' -bench '^BenchmarkCommandWALParallelSync$' -benchmem -benchtime=256x
+```
+
+Each worker replaces its own preloaded key. One operation includes mutation
+preparation, publication, queueing and durable ACK; fixture checkpoint, worker
+launch, final reopen verification and Close are excluded. Standard Go output
+includes ns/op, B/op, allocs/op, durable_writes/s, per-call p50/p95/p99, and measured
+counter deltas for physical WAL syncs, group syncs, grouped commits and value
+syncs per operation. A fixed finite run is a contention diagnostic, not sustained
+resource equilibrium or hardware crash certification. Go test profiles from this
+benchmark are not benchprof inputs. For source A/B use this identical benchmark
+file on both candidates and preserve every sample.
