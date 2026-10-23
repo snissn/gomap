@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/snissn/gomap/TreeDB/internal/leafrefscan"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -143,6 +144,23 @@ func (db *DB) projectOrdinaryRawReferences(idx *indexGen, next page.MetaPageBody
 	for _, slot := range counts.slots {
 		if slot.fileID != 0 {
 			references[slot.fileID] = struct{}{}
+		}
+	}
+	// Additive publications retain the producer's captured created/current
+	// physical inventory, including empty lanes and intermediate build-group
+	// records. Registration may already have cleared that inventory by now.
+	// It is a conservative physical obligation, not a raw edge or a logical
+	// ValuePtr count. Destructive receipts instead project exact membership so
+	// unreachable outer-leaf files can become eligible for generation GC.
+	if !delta.requiresCandidateProjection {
+		if err = delta.forEachPositive(func(id uint32, _ int64) error {
+			lane, _ := valuelog.DecodeFileID(id)
+			if lane == valuelog.ReservedLeafLogLaneID {
+				references[id] = struct{}{}
+			}
+			return nil
+		}); err != nil {
+			return nil, false, err
 		}
 	}
 	if err = db.requireDurableValueLogReferencesRegisteredV1(references); err != nil {

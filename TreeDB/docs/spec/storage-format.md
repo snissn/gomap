@@ -4359,3 +4359,10 @@ ordinary DATA publication can derive exact membership from its bound apply
 receipt and a proven empty user/system predecessor; otherwise it uses the
 maintained final-root scanner. No directory-discovery recovery fallback repairs
 an incomplete manifest.
+
+The raw census is distinct from conservative producer inventory: additive
+ordinary publications also retain captured created/current leaf-file identities
+(including empty lanes) as physical obligations, without counting them as raw
+edges or logical ValuePtrs. Exact destructive receipts remove that superset.
+Ordered multi-root publications retain their separately proven descriptor/delta
+projection; their pager-backed index layout does not imply ordinary DATA role.

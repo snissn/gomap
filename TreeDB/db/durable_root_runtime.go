@@ -1155,7 +1155,10 @@ func (db *DB) captureDurableRootResourcesFromBaseWithRefCountsV1(idx *indexGen, 
 	// final-root scanner. Registered/current producer files are not a complete
 	// reachability inventory: COW can register multiple rotations during one
 	// apply without retaining them as pending-created segments.
-	ordinaryData := additional == nil && idx != nil && idx.primary == nil && db.indexOuterLeavesInValueLog
+	// The index layout alone does not identify an ordinary DATA publication:
+	// ordered collection groups also use a pager-backed DATA index. Their
+	// independently proven descriptor/delta coverage retains the bounded planner.
+	ordinaryData := delta != nil && delta.ordinaryRawProducer && db.indexOuterLeavesInValueLog
 	if !reuseOuterLeafBase && !ordinaryData {
 		freshOuterLeafReferences, reuseOuterLeafBase, err = db.planOuterLeafBaseDependencyReuseV1(base, additional, next, delta)
 	}

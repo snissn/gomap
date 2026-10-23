@@ -1202,6 +1202,9 @@ func mergeValueLogRefDeltaInto(dst **valueLogRefDelta, src *valueLogRefDelta) {
 	(*dst).requiresCandidateProjection = (*dst).requiresCandidateProjection || src.requiresCandidateProjection
 	(*dst).allowEmptyDependencyReuse = (*dst).allowEmptyDependencyReuse || src.allowEmptyDependencyReuse
 	(*dst).outerLeafDependencyReuse = (*dst).outerLeafDependencyReuse || src.outerLeafDependencyReuse
+	// A mixed/partial ordinary group must retain the ordinary fallback rule
+	// even if its exact chained receipt was invalidated above.
+	(*dst).ordinaryRawProducer = (*dst).ordinaryRawProducer || src.ordinaryRawProducer
 	_ = src.forEachChange(func(fileID uint32, change int64) error {
 		(*dst).addChange(fileID, change)
 		return nil

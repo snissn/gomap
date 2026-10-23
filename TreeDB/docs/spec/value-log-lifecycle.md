@@ -1090,6 +1090,19 @@ commit and physical index incarnation. This constructs private candidate counts;
 it does not make an unverified live raw census valid. Populated unknown bases,
 changed system roots, unsupported receipts and optional census capacity refusal
 retain the maintained exact scan. Successful ordinary receipt projection needs
-no full-tree scan and includes only reachable raw files, excluding unused
-registered rotations. The existing publication, pinning and retirement owners
-remain authoritative.
+no full-tree scan. Its raw census counts only reachable edges, excluding unused
+registered rotations. An additive publication also retains the producer's
+captured created/current leaf-file inventory as conservative physical
+obligations, including empty lanes and intermediate build-group output. These
+obligations never enter logical ValuePtr or raw-edge counts. Destructive exact
+receipts retire that inventory superset and select reachable raw membership.
+
+The ordinary producer role is carried with its delta, independently of whether
+its optional raw receipt is available. A pager-backed index alone cannot
+identify that role: ordered multi-root groups use the same index layout and
+retain their existing bounded predecessor/producer projection when their
+collection-descriptor transitions are completely covered. Missing coverage or
+invalid tracking still uses the exact scanner. PRIMARY-only replacements also
+retain their existing root-bound unchanged materialized-base proof; a real DATA
+materialization still requires its complete candidate projection. The existing publication,
+pinning and retirement owners remain authoritative.
