@@ -11895,14 +11895,14 @@ func (db *DB) newMutableMemtableWithCapacityMode(capacity int, mode memtable.Mod
 		capacity = db.appendOnlyMemtableCapacityHint(capacity, estimate)
 		if mt := db.popAppendOnlyMemLease(); mt != nil {
 			db.appendOnlyMemLeaseHitTotal.Add(1)
-			mt.ResetWithCapacity(capacity, estimate)
+			mt.ResetWithCapacityLimit(capacity, estimate)
 			return mt, nil
 		}
 		if pool := db.appendOnlyMemtablePool(); pool != nil {
 			if v := pool.Get(); v != nil {
 				if mt, ok := v.(*memtable.AppendOnly); ok && mt != nil {
 					db.appendOnlyMemPoolHitTotal.Add(1)
-					mt.ResetWithCapacity(capacity, estimate)
+					mt.ResetWithCapacityLimit(capacity, estimate)
 					return mt, nil
 				}
 			}
@@ -11914,7 +11914,7 @@ func (db *DB) newMutableMemtableWithCapacityMode(capacity int, mode memtable.Mod
 			db.appendOnlyMemNewAllocQueueBytes.Add(uint64(backlog))
 		}
 		db.appendOnlyMemNewAllocTotal.Add(1)
-		return memtable.NewAppendOnlyWithCapacityEstimatedEntryBytes(capacity, estimate), nil
+		return memtable.NewAppendOnlyWithCapacityHint(capacity, estimate), nil
 	}
 	capacity = mutableMemtableCapacityForMode(capacity, mode)
 	return memtable.NewWithCapacityModeAndIndexer(capacity, mode, db.hashSortedIndexer)

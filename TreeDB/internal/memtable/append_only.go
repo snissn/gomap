@@ -682,6 +682,14 @@ func NewAppendOnlyWithCapacityEstimatedEntryBytes(capacity, estimatedBytesPerEnt
 	return newAppendOnlyWithInitialEntries(n)
 }
 
+// NewAppendOnlyWithCapacityHint records the expected capacity without allocating
+// entry backing until the first write or reservation. This is useful for mutable
+// shards that may be rotated without receiving any writes.
+func NewAppendOnlyWithCapacityHint(capacity, estimatedBytesPerEntry int) *AppendOnly {
+	n := appendOnlyInitialEntriesForCapacity(capacity, estimatedBytesPerEntry)
+	return newAppendOnlyWithInitialEntriesHint(n)
+}
+
 // NewAppendOnlyWithEntryCapacity creates an append-only table sized for an
 // expected entry count instead of a byte-capacity estimate.
 func NewAppendOnlyWithEntryCapacity(entries int) *AppendOnly {
@@ -690,8 +698,13 @@ func NewAppendOnlyWithEntryCapacity(entries int) *AppendOnly {
 }
 
 func newAppendOnlyWithInitialEntries(n int) *AppendOnly {
+	m := newAppendOnlyWithInitialEntriesHint(n)
+	m.entries = getAppendOnlyEntries(n)
+	return m
+}
+
+func newAppendOnlyWithInitialEntriesHint(n int) *AppendOnly {
 	return &AppendOnly{
-		entries:        getAppendOnlyEntries(n),
 		baseEntriesLen: n,
 		count:          0,
 		ordered:        true,
@@ -1054,7 +1067,13 @@ func (m *AppendOnly) reserveAdditionalEntriesLocked(additional int) bool {
 	if needed <= len(m.entries) {
 		return false
 	}
-	target, skippedGrowthAllocs, skippedGrowthBytes := appendOnlyReserveTargetCapacity(len(m.entries), needed)
+	current := len(m.entries)
+	if current == 0 && m.baseEntriesLen > current {
+		// A deferred table should reserve as though its planned baseline were
+		// already present, avoiding intermediate growth on the first batch.
+		current = m.baseEntriesLen
+	}
+	target, skippedGrowthAllocs, skippedGrowthBytes := appendOnlyReserveTargetCapacity(current, needed)
 	if target <= len(m.entries) {
 		return false
 	}
@@ -1442,6 +1461,9 @@ func (m *AppendOnly) updateLatestIndexLocked(key []byte, idx int) {
 func (m *AppendOnly) appendEntryCoreLocked(key, value []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision, steal bool, borrowValue bool) (idx int, ent *appendOnlyEntry, storedKey []byte) {
 	if m.count == len(m.entries) {
 		nextCap := appendOnlyNextCapacity(len(m.entries))
+		if len(m.entries) == 0 && nextCap < m.baseEntriesLen {
+			nextCap = m.baseEntriesLen
+		}
 		m.growEntriesLocked(nextCap, true)
 	}
 	idx = m.count
@@ -2450,7 +2472,7 @@ func (m *AppendOnly) ResetWithCapacityHard(capacity, estimatedBytesPerEntry int)
 
 // ResetWithCapacityLimit resets the table and bounds retained entry backing
 // without allocating a replacement array. Use this when recycling an idle
-// table; ResetWithCapacity prepares its buffers when it becomes mutable again.
+// table; the first write or reservation prepares deferred backing.
 func (m *AppendOnly) ResetWithCapacityLimit(capacity, estimatedBytesPerEntry int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

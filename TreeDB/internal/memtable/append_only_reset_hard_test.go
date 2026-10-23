@@ -3,6 +3,7 @@ package memtable
 import (
 	"fmt"
 	"testing"
+	"time"
 )
 
 func TestAppendOnlyResetWithCapacityHard_DropsObservedSpike(t *testing.T) {
@@ -223,5 +224,97 @@ func TestAppendOnlyResetWithCapacityLimitDefersEntryAllocation(t *testing.T) {
 	mt.ResetWithCapacityLimit(4096*estimate, estimate)
 	if got := mt.EntryCapacity(); got != 0 {
 		t.Fatalf("cold recycle allocated entry backing: capacity=%d", got)
+	}
+}
+
+func TestAppendOnlyCapacityHintAllocatesBaselineOnFirstUse(t *testing.T) {
+	const estimate, baseline = 96, 512
+	for _, reserve := range []int{0, 1, baseline * 3} {
+		t.Run(fmt.Sprint(reserve), func(t *testing.T) {
+			DropAppendOnlyEntryPools()
+			t.Cleanup(DropAppendOnlyEntryPools)
+			mt := NewAppendOnlyWithCapacityHint(baseline*estimate, estimate)
+			if mt.EntryBackingBytes() != 0 || mt.baseEntriesLen != baseline {
+				t.Fatalf("deferred table: backing=%d baseline=%d", mt.EntryBackingBytes(), mt.baseEntriesLen)
+			}
+			want := baseline
+			if reserve > 0 {
+				want, _, _ = appendOnlyReserveTargetCapacity(baseline, reserve)
+				mt.ReserveAdditionalEntries(reserve)
+			} else {
+				mt.Set([]byte("first-key"), []byte("first-value"))
+			}
+			if got := len(mt.entries); got != want {
+				t.Fatalf("first-use backing length=%d want=%d", got, want)
+			}
+			backing := &mt.entries[0]
+			mt.Set([]byte("second-key"), []byte("second-value"))
+			if &mt.entries[0] != backing {
+				t.Fatal("write after first use grew prepared backing")
+			}
+			if value, deleted, found := mt.Get([]byte("second-key")); !found || deleted || string(value) != "second-value" {
+				t.Fatalf("Get after first use=(%q,%t,%t)", value, deleted, found)
+			}
+		})
+	}
+	// Existing constructors retain their eager allocation contract.
+	for _, mt := range []*AppendOnly{
+		NewAppendOnlyWithCapacity(baseline * estimate),
+		NewAppendOnlyWithCapacityEstimatedEntryBytes(baseline*estimate, estimate),
+		NewAppendOnlyWithEntryCapacity(baseline),
+	} {
+		if mt.EntryBackingBytes() == 0 {
+			t.Fatal("eager constructor deferred its backing")
+		}
+	}
+}
+
+func TestAppendOnlyCapacityHintEmptyAndHeldIterators(t *testing.T) {
+	const estimate, baseline = 96, 512
+	mt := NewAppendOnlyWithCapacityHint(baseline*estimate, estimate)
+	mt.Freeze()
+	for _, it := range []interface {
+		Valid() bool
+		Close() error
+	}{mt.NewIterator(nil, nil), mt.NewReverseIterator(nil, nil)} {
+		if it.Valid() {
+			t.Fatal("empty deferred table has a valid iterator")
+		}
+		if err := it.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if mt.EntryBackingBytes() != 0 {
+		t.Fatal("reading or freezing an empty table allocated entry backing")
+	}
+	mt.ResetWithCapacityLimit(baseline*estimate, estimate)
+	mt.Set([]byte("k2"), []byte("v2"))
+	mt.Set([]byte("k1"), []byte("v1"))
+	mt.Freeze()
+	it := mt.NewIterator(nil, nil)
+	defer it.Close()
+	resetDone := make(chan struct{})
+	go func() {
+		mt.ResetWithCapacityLimit(128*estimate, estimate)
+		close(resetDone)
+	}()
+	select {
+	case <-resetDone:
+		t.Fatal("reset completed while frozen iterator was held")
+	case <-time.After(50 * time.Millisecond):
+	}
+	if !it.Valid() || string(it.Key()) != "k1" || string(it.Value()) != "v1" {
+		t.Fatal("held iterator lost its frozen contents")
+	}
+	if err := it.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-resetDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("reset did not resume after iterator close")
+	}
+	if mt.EntryBackingBytes() != 0 || mt.Len() != 0 {
+		t.Fatal("reset retained oversized backing or old entries")
 	}
 }

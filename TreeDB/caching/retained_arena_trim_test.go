@@ -371,8 +371,8 @@ func TestCheckpointDropsEmptyAppendOnlyMutableBackingStats(t *testing.T) {
 	if got := parseUintStat(after, "treedb.cache.append_only.mutable_trim_total"); got == 0 {
 		t.Fatalf("mutable trim total after checkpoint=0, stats=%v", after)
 	}
-	if got := parseUintStat(after, "treedb.cache.append_only.mutable_trim_dropped_bytes_total"); got == 0 {
-		t.Fatalf("mutable trim dropped bytes after checkpoint=0, stats=%v", after)
+	if got := parseUintStat(after, "treedb.cache.append_only.mutable_trim_dropped_bytes_total"); got != 0 {
+		t.Fatalf("checkpoint allocated then dropped empty replacement backing: %d bytes", got)
 	}
 
 	gotBefore, err := db.Get([]byte("before"))
@@ -417,14 +417,70 @@ func TestRecycleAppendOnlyMemtablesDoesNotPreallocateIdleBacking(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reused != mt || mt.EntryCapacity() == 0 {
-		t.Fatal("re-admission did not prepare the same leased table")
+	if reused != mt || mt.EntryCapacity() != 0 {
+		t.Fatal("re-admission did not preserve the same deferred table")
 	}
 	mt.Set([]byte("current-key"), []byte("current-value"))
+	if mt.EntryCapacity() < 128 {
+		t.Fatalf("first write did not prepare baseline: capacity=%d", mt.EntryCapacity())
+	}
 	if _, _, found := mt.Get([]byte("retired-key")); found {
 		t.Fatal("re-admitted table retained a retired key")
 	}
 	if value, deleted, found := mt.Get([]byte("current-key")); !found || deleted || string(value) != "current-value" {
 		t.Fatalf("re-admitted Get=(%q,%t,%t)", value, deleted, found)
+	}
+}
+
+func TestAppendOnlyFactoryDefersUntouchedShardBacking(t *testing.T) {
+	var db DB
+	db.storeMemtableMode(memtable.ModeAppendOnly)
+	const baseline = 512
+	db.memtableCap = baseline * appendOnlyEstimatedBytesPerEntryDefault
+	first, err := db.newMutableMemtableWithCapacityMode(db.memtableCap, memtable.ModeAppendOnly)
+	if err != nil {
+		t.Fatal(err)
+	}
+	untouched, err := db.newMutableMemtableWithCapacityMode(db.memtableCap, memtable.ModeAppendOnly)
+	if err != nil {
+		t.Fatal(err)
+	}
+	active := first.(*memtable.AppendOnly)
+	idle := untouched.(*memtable.AppendOnly)
+	if active.EntryBackingBytes() != 0 || idle.EntryBackingBytes() != 0 {
+		t.Fatal("new mutable factory allocated entry backing before any write")
+	}
+	active.Set([]byte("active-key"), []byte("active-value"))
+	if active.EntryCapacity() < baseline || idle.EntryBackingBytes() != 0 {
+		t.Fatal("first write did not prepare only the active shard")
+	}
+	// An empty shard can be frozen, recycled and re-admitted without ever
+	// needing entry storage; a later batch still receives the capacity hint.
+	idle.Freeze()
+	db.recycleMemtables([]memtable.Table{idle})
+	reused, err := db.newMutableMemtableWithCapacityMode(db.memtableCap, memtable.ModeAppendOnly)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reused != idle || idle.EntryBackingBytes() != 0 {
+		t.Fatal("idle lease reuse allocated entry backing")
+	}
+	idle.ReserveAdditionalEntries(1)
+	if idle.EntryCapacity() < baseline {
+		t.Fatalf("first reserve capacity=%d want >=%d", idle.EntryCapacity(), baseline)
+	}
+	// The descriptor pool also defers re-admission of cold tables.
+	db.putAppendOnlyMemPoolDropEntries(idle)
+	pooled, err := db.newMutableMemtableWithCapacityMode(db.memtableCap, memtable.ModeAppendOnly)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pooledAppendOnly := pooled.(*memtable.AppendOnly)
+	if pooledAppendOnly.EntryBackingBytes() != 0 {
+		t.Fatal("descriptor pool re-admission allocated entry backing")
+	}
+	pooledAppendOnly.Set([]byte("pool-key"), []byte("pool-value"))
+	if pooledAppendOnly.EntryCapacity() < baseline {
+		t.Fatal("descriptor pool first write lost the capacity hint")
 	}
 }
