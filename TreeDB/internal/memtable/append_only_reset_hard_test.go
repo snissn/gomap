@@ -175,3 +175,53 @@ func TestAppendOnlyResetDropEntries_AllowsReuseOnNextWrite(t *testing.T) {
 		t.Fatal("entry backing after reuse write=0 want >0")
 	}
 }
+
+func TestAppendOnlyResetWithCapacityLimitDefersEntryAllocation(t *testing.T) {
+	const estimate = 96
+	for _, entries := range []int{128, 4096} {
+		t.Run(fmt.Sprint(entries), func(t *testing.T) {
+			mt := NewAppendOnlyWithEntryCapacity(entries)
+			mt.Set([]byte("old-long-key"), []byte("old-value"))
+			mt.Set([]byte("earlier-long-key"), []byte("other-value"))
+			mt.Freeze()
+			before := mt.EntryCapacity()
+
+			mt.ResetWithCapacityLimit(128*estimate, estimate)
+			if got := mt.EntryCapacity(); got > 128 {
+				t.Fatalf("recycled entry capacity=%d want <=128", got)
+			}
+			if before <= 128 && mt.EntryCapacity() != before {
+				t.Fatalf("small backing lost: before=%d after=%d", before, mt.EntryCapacity())
+			}
+			if before > 128 && mt.EntryCapacity() != 0 {
+				t.Fatalf("oversize backing replaced: capacity=%d want 0", mt.EntryCapacity())
+			}
+			if mt.Len() != 0 || mt.Size() != 0 || mt.frozenFast.Load() {
+				t.Fatalf("reset did not clear table: len=%d size=%d frozen=%t", mt.Len(), mt.Size(), mt.frozenFast.Load())
+			}
+			if _, _, found := mt.Get([]byte("old-long-key")); found {
+				t.Fatal("recycled table retained old key")
+			}
+			if got := mt.ValueArenaBackingStats(); got.ActiveBytes != 0 || got.RetainedBytes != 0 {
+				t.Fatalf("recycled table retained values: %+v", got)
+			}
+
+			// Re-admission is the point that prepares the requested capacity.
+			mt.ResetWithCapacity(256*estimate, estimate)
+			if mt.EntryCapacity() < 256 {
+				t.Fatalf("mutable backing not prepared: capacity=%d", mt.EntryCapacity())
+			}
+			mt.Set([]byte("new-key"), []byte("new-value"))
+			if value, deleted, found := mt.Get([]byte("new-key")); !found || deleted || string(value) != "new-value" {
+				t.Fatalf("reused table Get=(%q,%t,%t)", value, deleted, found)
+			}
+		})
+	}
+
+	mt := NewAppendOnlyWithEntryCapacity(128)
+	mt.ResetDropEntries()
+	mt.ResetWithCapacityLimit(4096*estimate, estimate)
+	if got := mt.EntryCapacity(); got != 0 {
+		t.Fatalf("cold recycle allocated entry backing: capacity=%d", got)
+	}
+}

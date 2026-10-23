@@ -2372,7 +2372,7 @@ func (m *AppendOnly) Reset() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.waitIteratorLeasesLocked()
-	m.resetLockedWithPolicy(0, 0, true)
+	m.resetLockedWithPolicy(0, 0, appendOnlyResetRetainObserved)
 }
 
 // Release returns large internal buffers to package pools when the table is no
@@ -2432,11 +2432,11 @@ func (m *AppendOnly) ResetWithCapacity(capacity, estimatedBytesPerEntry int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.waitIteratorLeasesLocked()
-	m.resetLockedWithPolicy(capacity, estimatedBytesPerEntry, true)
+	m.resetLockedWithPolicy(capacity, estimatedBytesPerEntry, appendOnlyResetRetainObserved)
 }
 
 func (m *AppendOnly) resetLocked(capacity, estimatedBytesPerEntry int) {
-	m.resetLockedWithPolicy(capacity, estimatedBytesPerEntry, true)
+	m.resetLockedWithPolicy(capacity, estimatedBytesPerEntry, appendOnlyResetRetainObserved)
 }
 
 // ResetWithCapacityHard resets and clamps retained internal buffers to the
@@ -2445,7 +2445,17 @@ func (m *AppendOnly) ResetWithCapacityHard(capacity, estimatedBytesPerEntry int)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.waitIteratorLeasesLocked()
-	m.resetLockedWithPolicy(capacity, estimatedBytesPerEntry, false)
+	m.resetLockedWithPolicy(capacity, estimatedBytesPerEntry, appendOnlyResetPreallocate)
+}
+
+// ResetWithCapacityLimit resets the table and bounds retained entry backing
+// without allocating a replacement array. Use this when recycling an idle
+// table; ResetWithCapacity prepares its buffers when it becomes mutable again.
+func (m *AppendOnly) ResetWithCapacityLimit(capacity, estimatedBytesPerEntry int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.waitIteratorLeasesLocked()
+	m.resetLockedWithPolicy(capacity, estimatedBytesPerEntry, appendOnlyResetLimitOnly)
 }
 
 // ResetDropEntries resets the table for reuse without retaining entry backing.
@@ -2454,7 +2464,16 @@ func (m *AppendOnly) ResetDropEntries() {
 	m.release(false)
 }
 
-func (m *AppendOnly) resetLockedWithPolicy(capacity, estimatedBytesPerEntry int, retainObserved bool) {
+type appendOnlyResetPolicy uint8
+
+const (
+	appendOnlyResetRetainObserved appendOnlyResetPolicy = iota
+	appendOnlyResetPreallocate
+	appendOnlyResetLimitOnly
+)
+
+func (m *AppendOnly) resetLockedWithPolicy(capacity, estimatedBytesPerEntry int, policy appendOnlyResetPolicy) {
+	retainObserved := policy == appendOnlyResetRetainObserved
 	desiredEntries := m.baseEntriesLen
 	if capacity > 0 {
 		desiredEntries = appendOnlyInitialEntriesForCapacity(capacity, estimatedBytesPerEntry)
@@ -2534,6 +2553,14 @@ func (m *AppendOnly) resetLockedWithPolicy(capacity, estimatedBytesPerEntry int,
 	m.lastIdx = -1
 
 	if !retainObserved {
+		if policy == appendOnlyResetLimitOnly {
+			if cap(m.entries) > retainedEntries {
+				prev := m.entries
+				m.entries = nil
+				putAppendOnlyEntries(prev)
+			}
+			return
+		}
 		if cap(m.entries) != retainedEntries {
 			m.replaceEntriesSliceWithPolicy(retainedEntries, true)
 			return

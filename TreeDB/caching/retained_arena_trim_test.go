@@ -397,3 +397,34 @@ func TestCheckpointDropsEmptyAppendOnlyMutableBackingStats(t *testing.T) {
 		t.Fatalf("mutable entry backing after post-checkpoint write=0, stats=%v", postWrite)
 	}
 }
+
+func TestRecycleAppendOnlyMemtablesDoesNotPreallocateIdleBacking(t *testing.T) {
+	var db DB
+	db.storeMemtableMode(memtable.ModeAppendOnly)
+	db.memtableCap = 128 * appendOnlyEstimatedBytesPerEntryDefault
+	mt := memtable.NewAppendOnlyWithEntryCapacity(4096)
+	mt.Set([]byte("retired-key"), []byte("retired-value"))
+	mt.Freeze()
+
+	db.recycleMemtables([]memtable.Table{mt})
+	if len(db.appendOnlyMemLeases) != 1 || db.appendOnlyMemLeases[0] != mt {
+		t.Fatal("recycled table not retained as a lease")
+	}
+	if got := mt.EntryBackingBytes(); got != 0 {
+		t.Fatalf("idle recycled table allocated replacement backing: %d bytes", got)
+	}
+	reused, err := db.newMutableMemtableWithCapacityMode(db.memtableCap, memtable.ModeAppendOnly)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reused != mt || mt.EntryCapacity() == 0 {
+		t.Fatal("re-admission did not prepare the same leased table")
+	}
+	mt.Set([]byte("current-key"), []byte("current-value"))
+	if _, _, found := mt.Get([]byte("retired-key")); found {
+		t.Fatal("re-admitted table retained a retired key")
+	}
+	if value, deleted, found := mt.Get([]byte("current-key")); !found || deleted || string(value) != "current-value" {
+		t.Fatalf("re-admitted Get=(%q,%t,%t)", value, deleted, found)
+	}
+}

@@ -11556,7 +11556,7 @@ func (db *DB) recycleMemtables(mems []memtable.Table) {
 				db.releaseBatchArenaLeasesForMemtable(typed)
 				continue
 			}
-			typed.ResetWithCapacityHard(appendOnlyResetCapacity, estimate)
+			typed.ResetWithCapacityLimit(appendOnlyResetCapacity, estimate)
 			db.releaseBatchArenaLeasesForMemtable(typed)
 			db.releaseAppendOnlyDirectArenaLeaseForMemtableWithPolicy(typed, true)
 			if !db.putAppendOnlyMemLease(typed) {
