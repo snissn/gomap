@@ -221,3 +221,31 @@ integration branch. The tooling-only descendant must qualify this complete
 product; the original 030 and 88 evidence remains bound to those earlier
 sources. No combined-head result exists at this tooling commit. Earlier strict
 PRIMARY byte failures remain failed and are not replaced by the COW result.
+
+### Maintenance and iterator follow-up
+
+The next complete product is
+`ed996b2fb4375f4f8e6f19d841af05e3d254206c`. It retains the preceding product
+and adds two reviewed changes. Ordinary snapshot iterators borrow their existing
+tree iterator for direct forwarding while retaining snapshot invalidation and
+the sole close owner. Leaf-generation GC skips segment reachability scans only
+when a fresh reconciled manifest contains exclusively writable generations or
+sealed generations intersecting current producers. Those states cannot retire
+a segment. All other states retain the complete scan; immutable manifest
+revision GC always performs its independent fresh root protection.
+
+At tooling head `d20594a712184c565646916c64723c4e2549a6e8`, the unchanged
+public raw, PRIMARY and Stats gates passed. All 60 COW rows had quiet-host
+witnesses, but pointer-prefix bytes failed (64300 to 64334 B/op). The separate
+snapshot seek gate failed at +5.40%, and vacuum foreground-p99 stability failed
+at CV 0.9525. Those failures remain bound to that source.
+
+The follow-up's owning normal/race and exact retained-root GC/reopen controls
+pass. One six-row public prefix diagnostic activates the no-candidate branch
+and reduces median bytes from 64332 to 64277 B/op, with 25 allocations unchanged.
+The ordinary iterator diagnostic improves Next about 5%; its 16384-key seek
+median is effectively unchanged. These are development observations, not
+replacements for the failed hosted gates. The rebound runner must qualify the
+complete new product using the unchanged baseline, fixture, cells, row count,
+order, resource limits and numerical gates. No result for the new tooling head
+exists at this commit.
