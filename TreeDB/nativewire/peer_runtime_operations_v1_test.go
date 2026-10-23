@@ -23,6 +23,7 @@ func TestPeerSecurityReadinessNeedsQuorumAndDrainPreservesStatusV1(t *testing.T)
 }
 
 func peerSecurityReadinessSparseV1(t *testing.T, ownsData bool) {
+	fixtureStarted := time.Now()
 	configs := sparseCatalogTestConfigsV1(t)
 	if ownsData {
 		group := configs[0].Groups[0]
@@ -38,6 +39,43 @@ func peerSecurityReadinessSparseV1(t *testing.T, ownsData bool) {
 			configs[i].Groups[0] = group
 		}
 	}
+	// Keep only observations from the existing calls. Failure reporting does
+	// not issue RPCs or change the fixture's request order or deadline.
+	opens := make([]struct {
+		started  time.Time
+		duration time.Duration
+		err      error
+	}, len(configs))
+	probes := make([]struct {
+		attempts            uint64
+		started             time.Time
+		duration            time.Duration
+		status              FixedPeerTCPStatusV1
+		err                 error
+		lastSuccess         FixedPeerTCPStatusV1
+		lastSuccessStarted  time.Time
+		lastSuccessDuration time.Duration
+		lastFailure         error
+		lastFailureStarted  time.Time
+		lastFailureDuration time.Duration
+	}, len(configs))
+	var contextCreated, contextDeadline, readinessStarted time.Time
+	var readinessDuration time.Duration
+	var readinessReport FixedPeerReadinessV1
+	var readinessErr error
+	var pollAttempts uint64
+	defer func() {
+		if !t.Failed() {
+			return
+		}
+		t.Logf("readiness fixture observations: started=%s context_created=%s context_deadline=%s poll_attempts=%d", fixtureStarted.Format(time.RFC3339Nano), contextCreated.Format(time.RFC3339Nano), contextDeadline.Format(time.RFC3339Nano), pollAttempts)
+		for i, config := range configs {
+			open, probe := opens[i], probes[i]
+			t.Logf("readiness fixture node=%s request_timeout=%s raft_timeout=%s open_started=%s open_duration=%s open_error=%v status_attempts=%d status_started=%s status_duration=%s status=%+v status_error=%v", config.NodeID, config.RequestTimeout, config.RaftTimeout, open.started.Format(time.RFC3339Nano), open.duration, open.err, probe.attempts, probe.started.Format(time.RFC3339Nano), probe.duration, probe.status, probe.err)
+			t.Logf("readiness fixture node=%s last_success_started=%s last_success_duration=%s last_success_status=%+v last_failure_started=%s last_failure_duration=%s last_failure_error=%v", config.NodeID, probe.lastSuccessStarted.Format(time.RFC3339Nano), probe.lastSuccessDuration, probe.lastSuccess, probe.lastFailureStarted.Format(time.RFC3339Nano), probe.lastFailureDuration, probe.lastFailure)
+		}
+		t.Logf("readiness fixture initial refusal: started=%s duration=%s report=%+v error=%v", readinessStarted.Format(time.RFC3339Nano), readinessDuration, readinessReport, readinessErr)
+	}()
 	ca := newPeerCAFixtureV1(t)
 	nodes := make([]*FixedPeerTCPRuntimeV1, len(configs))
 	for i := range configs {
@@ -46,22 +84,45 @@ func peerSecurityReadinessSparseV1(t *testing.T, ownsData bool) {
 	}
 	for i := range configs {
 		var err error
+		opens[i].started = time.Now()
 		nodes[i], err = fixedPeerOpenTestRuntimeV1(t, configs[i])
+		opens[i].duration = time.Since(opens[i].started)
+		opens[i].err = err
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer nodes[i].Close()
 	}
+	contextCreated = time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	contextDeadline, _ = ctx.Deadline()
 	defer cancel()
 	client := nodes[0].client
-	if report, err := client.ReadinessV1(ctx, configs[0].NodeID); err == nil || report.Ready {
-		t.Fatalf("uninitialized catalog advertised readiness: %+v %v", report, err)
+	readinessStarted = time.Now()
+	readinessReport, readinessErr = client.ReadinessV1(ctx, configs[0].NodeID)
+	readinessDuration = time.Since(readinessStarted)
+	if readinessErr == nil || readinessReport.Ready {
+		t.Fatalf("uninitialized catalog advertised readiness: %+v %v", readinessReport, readinessErr)
 	}
 	var leader raftcluster.NodeID
 	fixedPeerWaitV1(t, ctx, func() bool {
-		for _, config := range configs {
+		pollAttempts++
+		for i, config := range configs {
+			probe := &probes[i]
+			probe.attempts++
+			probe.started = time.Now()
 			status, err := client.Status(ctx, config.NodeID)
+			probe.duration = time.Since(probe.started)
+			probe.status, probe.err = status, err
+			if err == nil {
+				probe.lastSuccess = status
+				probe.lastSuccessStarted = probe.started
+				probe.lastSuccessDuration = probe.duration
+			} else {
+				probe.lastFailure = err
+				probe.lastFailureStarted = probe.started
+				probe.lastFailureDuration = probe.duration
+			}
 			if err == nil && status.CatalogRaft.State == "Leader" {
 				leader = config.NodeID
 				return true
