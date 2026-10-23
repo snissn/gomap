@@ -1,0 +1,11 @@
+{
+  "baseline": {
+    "sha256": "f184a9c6d4128538b191d68ffaa2d8a4a7d3385a7aaa9b6247f2d8239ba0aa9f",
+    "bytes": 64568705
+  },
+  "candidate": {
+    "sha256": "9de853d4739d6c0af70bdfc82450c1aa234bfdff66689529a0646c974861fa6f",
+    "bytes": 64619155
+  },
+  "harness_git_blob": "ba2aa3c9c1697a8508470f26fffe0f530f280d91"
+}

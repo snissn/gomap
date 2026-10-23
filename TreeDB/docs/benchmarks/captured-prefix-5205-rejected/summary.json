@@ -1,0 +1,422 @@
+[
+  {
+    "name": "BenchmarkCommandWALParallelSync/btree/Inline64/G=1-4",
+    "medians": {
+      "baseline": {
+        "ns/op": 4985210.0,
+        "B/op": 8596.0,
+        "allocs/op": 6.0,
+        "physical_wal_syncs/op": 1.0,
+        "captured_group_syncs/op": 0.0,
+        "value_syncs/op": 0.0,
+        "p50-ns": 4802858.0,
+        "p95-ns": 5560387.0,
+        "p99-ns": 5694047.0
+      },
+      "candidate": {
+        "ns/op": 5038575.0,
+        "B/op": 8613.0,
+        "allocs/op": 6.0,
+        "physical_wal_syncs/op": 1.0,
+        "captured_group_syncs/op": 1.0,
+        "value_syncs/op": 0.0,
+        "p50-ns": 5208003.0,
+        "p95-ns": 5527584.0,
+        "p99-ns": 6205372.0
+      }
+    },
+    "paired_time_change_percent": [
+      -0.06117500837370393,
+      1.1293360426533283,
+      -1.2606851064869695,
+      4.740943711498602,
+      0.3166648309285147
+    ],
+    "median_paired_time_change_percent": 0.3166648309285147
+  },
+  {
+    "name": "BenchmarkCommandWALParallelSync/btree/Inline64/G=16-4",
+    "medians": {
+      "baseline": {
+        "ns/op": 476661.0,
+        "B/op": 16676.0,
+        "allocs/op": 6.0,
+        "physical_wal_syncs/op": 0.07812,
+        "captured_group_syncs/op": 0.07031,
+        "value_syncs/op": 0.0,
+        "p50-ns": 6438854.0,
+        "p95-ns": 11127361.0,
+        "p99-ns": 17964529.0
+      },
+      "candidate": {
+        "ns/op": 667570.0,
+        "B/op": 16688.0,
+        "allocs/op": 6.0,
+        "physical_wal_syncs/op": 0.1328,
+        "captured_group_syncs/op": 0.1328,
+        "value_syncs/op": 0.0,
+        "p50-ns": 9931007.0,
+        "p95-ns": 10097966.0,
+        "p99-ns": 29743401.0
+      }
+    },
+    "paired_time_change_percent": [
+      40.05131529535666,
+      53.3228818611913,
+      31.907311541685157,
+      52.19611754064522,
+      29.132501520069788
+    ],
+    "median_paired_time_change_percent": 40.05131529535666
+  },
+  {
+    "name": "BenchmarkCommandWALParallelSync/btree/Inline64/G=4-4",
+    "medians": {
+      "baseline": {
+        "ns/op": 1548078.0,
+        "B/op": 16654.0,
+        "allocs/op": 6.0,
+        "physical_wal_syncs/op": 0.2578,
+        "captured_group_syncs/op": 0.25,
+        "value_syncs/op": 0.0,
+        "p50-ns": 5803810.0,
+        "p95-ns": 6668409.0,
+        "p99-ns": 11214807.0
+      },
+      "candidate": {
+        "ns/op": 2027105.0,
+        "B/op": 16665.0,
+        "allocs/op": 6.0,
+        "physical_wal_syncs/op": 0.4062,
+        "captured_group_syncs/op": 0.4062,
+        "value_syncs/op": 0.0,
+        "p50-ns": 9795605.0,
+        "p95-ns": 10064455.0,
+        "p99-ns": 10156260.0
+      }
+    },
+    "paired_time_change_percent": [
+      34.021850709308055,
+      34.64378493683809,
+      32.054361197352236,
+      30.943337480411202,
+      23.62243607653094
+    ],
+    "median_paired_time_change_percent": 32.054361197352236
+  },
+  {
+    "name": "BenchmarkCommandWALParallelSync/btree/Pointer4096/G=1-4",
+    "medians": {
+      "baseline": {
+        "ns/op": 5275015.0,
+        "B/op": 239742.0,
+        "allocs/op": 41.0,
+        "physical_wal_syncs/op": 1.0,
+        "captured_group_syncs/op": 0.0,
+        "value_syncs/op": 0.0,
+        "p50-ns": 5354299.0,
+        "p95-ns": 9718713.0,
+        "p99-ns": 10278106.0
+      },
+      "candidate": {
+        "ns/op": 5306394.0,
+        "B/op": 232695.0,
+        "allocs/op": 41.0,
+        "physical_wal_syncs/op": 1.0,
+        "captured_group_syncs/op": 1.0,
+        "value_syncs/op": 0.0,
+        "p50-ns": 5342127.0,
+        "p95-ns": 9703544.0,
+        "p99-ns": 10205612.0
+      }
+    },
+    "paired_time_change_percent": [
+      -0.5337701235492376,
+      1.5554932146273792,
+      0.5948608676942246,
+      -1.8551986200838755,
+      -0.2101648466289796
+    ],
+    "median_paired_time_change_percent": -0.2101648466289796
+  },
+  {
+    "name": "BenchmarkCommandWALParallelSync/btree/Pointer4096/G=16-4",
+    "medians": {
+      "baseline": {
+        "ns/op": 719985.0,
+        "B/op": 199244.0,
+        "allocs/op": 28.0,
+        "physical_wal_syncs/op": 0.08594,
+        "captured_group_syncs/op": 0.07031,
+        "value_syncs/op": 0.0,
+        "p50-ns": 9278346.0,
+        "p95-ns": 15818114.0,
+        "p99-ns": 27317019.0
+      },
+      "candidate": {
+        "ns/op": 991012.0,
+        "B/op": 189963.0,
+        "allocs/op": 28.0,
+        "physical_wal_syncs/op": 0.1484,
+        "captured_group_syncs/op": 0.1484,
+        "value_syncs/op": 0.0,
+        "p50-ns": 14620932.0,
+        "p95-ns": 20134410.0,
+        "p99-ns": 45001657.0
+      }
+    },
+    "paired_time_change_percent": [
+      34.850645533517664,
+      35.43448821850455,
+      60.6207930395932,
+      28.812104849415874,
+      42.13405874176412
+    ],
+    "median_paired_time_change_percent": 35.43448821850455
+  },
+  {
+    "name": "BenchmarkCommandWALParallelSync/btree/Pointer4096/G=4-4",
+    "medians": {
+      "baseline": {
+        "ns/op": 1852754.0,
+        "B/op": 232486.0,
+        "allocs/op": 44.0,
+        "physical_wal_syncs/op": 0.2734,
+        "captured_group_syncs/op": 0.25,
+        "value_syncs/op": 0.0,
+        "p50-ns": 6511728.0,
+        "p95-ns": 11044597.0,
+        "p99-ns": 11338456.0
+      },
+      "candidate": {
+        "ns/op": 2590312.0,
+        "B/op": 233351.0,
+        "allocs/op": 44.0,
+        "physical_wal_syncs/op": 0.4609,
+        "captured_group_syncs/op": 0.4609,
+        "value_syncs/op": 0.0,
+        "p50-ns": 9959662.0,
+        "p95-ns": 19932206.0,
+        "p99-ns": 20356712.0
+      }
+    },
+    "paired_time_change_percent": [
+      41.16873939632648,
+      35.5512591891195,
+      60.66407089122463,
+      38.958800550295216,
+      41.49414017157511
+    ],
+    "median_paired_time_change_percent": 41.16873939632648
+  },
+  {
+    "name": "BenchmarkCommandWALParallelSync/cow_ordered/Inline64/G=1-4",
+    "medians": {
+      "baseline": {
+        "ns/op": 4975497.0,
+        "B/op": 4164.0,
+        "allocs/op": 53.0,
+        "physical_wal_syncs/op": 1.0,
+        "captured_group_syncs/op": 0.0,
+        "value_syncs/op": 0.0,
+        "p50-ns": 4935644.0,
+        "p95-ns": 5520833.0,
+        "p99-ns": 5585035.0
+      },
+      "candidate": {
+        "ns/op": 4987182.0,
+        "B/op": 4180.0,
+        "allocs/op": 53.0,
+        "physical_wal_syncs/op": 1.0,
+        "captured_group_syncs/op": 1.0,
+        "value_syncs/op": 0.0,
+        "p50-ns": 4758847.0,
+        "p95-ns": 5534440.0,
+        "p99-ns": 5603785.0
+      }
+    },
+    "paired_time_change_percent": [
+      0.3467149358101773,
+      -0.4346616079924037,
+      0.6754462877923695,
+      -5.138206368869702,
+      0.058084649633993735
+    ],
+    "median_paired_time_change_percent": 0.058084649633993735
+  },
+  {
+    "name": "BenchmarkCommandWALParallelSync/cow_ordered/Inline64/G=16-4",
+    "medians": {
+      "baseline": {
+        "ns/op": 497543.0,
+        "B/op": 4477.0,
+        "allocs/op": 53.0,
+        "physical_wal_syncs/op": 0.07812,
+        "captured_group_syncs/op": 0.0625,
+        "value_syncs/op": 0.0,
+        "p50-ns": 6437878.0,
+        "p95-ns": 16761219.0,
+        "p99-ns": 16778407.0
+      },
+      "candidate": {
+        "ns/op": 618978.0,
+        "B/op": 4491.0,
+        "allocs/op": 53.0,
+        "physical_wal_syncs/op": 0.125,
+        "captured_group_syncs/op": 0.125,
+        "value_syncs/op": 0.0,
+        "p50-ns": 9895814.0,
+        "p95-ns": 10059082.0,
+        "p99-ns": 10093016.0
+      }
+    },
+    "paired_time_change_percent": [
+      40.113155801893164,
+      20.799028130104414,
+      22.38098263784092,
+      23.755534697503535,
+      34.57359959126436
+    ],
+    "median_paired_time_change_percent": 23.755534697503535
+  },
+  {
+    "name": "BenchmarkCommandWALParallelSync/cow_ordered/Inline64/G=4-4",
+    "medians": {
+      "baseline": {
+        "ns/op": 1798933.0,
+        "B/op": 4315.0,
+        "allocs/op": 53.0,
+        "physical_wal_syncs/op": 0.2656,
+        "captured_group_syncs/op": 0.25,
+        "value_syncs/op": 0.0,
+        "p50-ns": 6415573.0,
+        "p95-ns": 8370347.0,
+        "p99-ns": 16846846.0
+      },
+      "candidate": {
+        "ns/op": 2362140.0,
+        "B/op": 4324.0,
+        "allocs/op": 53.0,
+        "physical_wal_syncs/op": 0.4766,
+        "captured_group_syncs/op": 0.4766,
+        "value_syncs/op": 0.0,
+        "p50-ns": 9893180.0,
+        "p95-ns": 10120271.0,
+        "p99-ns": 10203799.0
+      }
+    },
+    "paired_time_change_percent": [
+      44.109789222986365,
+      35.71178026085462,
+      45.71806134906431,
+      27.09469177059529,
+      32.18145036186579
+    ],
+    "median_paired_time_change_percent": 35.71178026085462
+  },
+  {
+    "name": "BenchmarkCommandWALParallelSync/cow_ordered/Pointer4096/G=1-4",
+    "medians": {
+      "baseline": {
+        "ns/op": 10283642.0,
+        "B/op": 207817.0,
+        "allocs/op": 193.0,
+        "physical_wal_syncs/op": 1.0,
+        "captured_group_syncs/op": 0.0,
+        "value_syncs/op": 0.0,
+        "p50-ns": 9971557.0,
+        "p95-ns": 10875163.0,
+        "p99-ns": 19595662.0
+      },
+      "candidate": {
+        "ns/op": 10326741.0,
+        "B/op": 204666.0,
+        "allocs/op": 235.0,
+        "physical_wal_syncs/op": 1.0,
+        "captured_group_syncs/op": 1.0,
+        "value_syncs/op": 0.0,
+        "p50-ns": 10048547.0,
+        "p95-ns": 10363053.0,
+        "p99-ns": 19701979.0
+      }
+    },
+    "paired_time_change_percent": [
+      -0.27256603067926655,
+      -3.1662713484718608,
+      1.2749665925748888,
+      -1.0377393295383008,
+      0.7951486697812982
+    ],
+    "median_paired_time_change_percent": -0.27256603067926655
+  },
+  {
+    "name": "BenchmarkCommandWALParallelSync/cow_ordered/Pointer4096/G=16-4",
+    "medians": {
+      "baseline": {
+        "ns/op": 3319072.0,
+        "B/op": 184104.0,
+        "allocs/op": 176.0,
+        "physical_wal_syncs/op": 0.2969,
+        "captured_group_syncs/op": 0.1328,
+        "value_syncs/op": 0.0,
+        "p50-ns": 30703635.0,
+        "p95-ns": 182720515.0,
+        "p99-ns": 194845882.0
+      },
+      "candidate": {
+        "ns/op": 6075991.0,
+        "B/op": 190077.0,
+        "allocs/op": 227.0,
+        "physical_wal_syncs/op": 0.7188,
+        "captured_group_syncs/op": 0.7188,
+        "value_syncs/op": 0.0,
+        "p50-ns": 89640998.0,
+        "p95-ns": 125436337.0,
+        "p99-ns": 140315039.0
+      }
+    },
+    "paired_time_change_percent": [
+      21.12699214560607,
+      83.06294651034989,
+      73.68221125915215,
+      101.47153395492082,
+      88.29148563404199
+    ],
+    "median_paired_time_change_percent": 83.06294651034989
+  },
+  {
+    "name": "BenchmarkCommandWALParallelSync/cow_ordered/Pointer4096/G=4-4",
+    "medians": {
+      "baseline": {
+        "ns/op": 5938623.0,
+        "B/op": 226729.0,
+        "allocs/op": 194.0,
+        "physical_wal_syncs/op": 0.5469,
+        "captured_group_syncs/op": 0.1641,
+        "value_syncs/op": 0.0,
+        "p50-ns": 19564144.0,
+        "p95-ns": 45047923.0,
+        "p99-ns": 59000092.0
+      },
+      "candidate": {
+        "ns/op": 5995473.0,
+        "B/op": 230654.0,
+        "allocs/op": 245.0,
+        "physical_wal_syncs/op": 0.75,
+        "captured_group_syncs/op": 0.75,
+        "value_syncs/op": 0.0,
+        "p50-ns": 21775629.0,
+        "p95-ns": 35721813.0,
+        "p99-ns": 41089886.0
+      }
+    },
+    "paired_time_change_percent": [
+      -18.320701469341138,
+      16.193980081288494,
+      -22.517635555740867,
+      15.357668169852289,
+      0.9572926249064917
+    ],
+    "median_paired_time_change_percent": 0.9572926249064917
+  }
+]

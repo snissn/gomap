@@ -1,0 +1,172 @@
+[
+  {
+    "pair": 1,
+    "label": "baseline",
+    "argv": [
+      "/mnt/fast4tb/gomap-raft-production-20261023T0744Z/artifacts/engine-component-ab-01/baseline.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCommandWALParallelSync$",
+      "-test.benchtime=128x",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.cpu=4",
+      "-test.timeout=120s"
+    ],
+    "start_utc": "2026-10-23T10:48:45.432407+00:00",
+    "elapsed_s": 11.431651593185961,
+    "exit": 0
+  },
+  {
+    "pair": 1,
+    "label": "candidate",
+    "argv": [
+      "/mnt/fast4tb/gomap-raft-production-20261023T0744Z/artifacts/engine-component-ab-01/candidate.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCommandWALParallelSync$",
+      "-test.benchtime=128x",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.cpu=4",
+      "-test.timeout=120s"
+    ],
+    "start_utc": "2026-10-23T10:48:56.864247+00:00",
+    "elapsed_s": 11.631820030510426,
+    "exit": 0
+  },
+  {
+    "pair": 2,
+    "label": "candidate",
+    "argv": [
+      "/mnt/fast4tb/gomap-raft-production-20261023T0744Z/artifacts/engine-component-ab-01/candidate.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCommandWALParallelSync$",
+      "-test.benchtime=128x",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.cpu=4",
+      "-test.timeout=120s"
+    ],
+    "start_utc": "2026-10-23T10:49:08.496313+00:00",
+    "elapsed_s": 11.783041986636817,
+    "exit": 0
+  },
+  {
+    "pair": 2,
+    "label": "baseline",
+    "argv": [
+      "/mnt/fast4tb/gomap-raft-production-20261023T0744Z/artifacts/engine-component-ab-01/baseline.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCommandWALParallelSync$",
+      "-test.benchtime=128x",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.cpu=4",
+      "-test.timeout=120s"
+    ],
+    "start_utc": "2026-10-23T10:49:20.279575+00:00",
+    "elapsed_s": 11.232716240920126,
+    "exit": 0
+  },
+  {
+    "pair": 3,
+    "label": "baseline",
+    "argv": [
+      "/mnt/fast4tb/gomap-raft-production-20261023T0744Z/artifacts/engine-component-ab-01/baseline.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCommandWALParallelSync$",
+      "-test.benchtime=128x",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.cpu=4",
+      "-test.timeout=120s"
+    ],
+    "start_utc": "2026-10-23T10:49:31.512543+00:00",
+    "elapsed_s": 11.33149494510144,
+    "exit": 0
+  },
+  {
+    "pair": 3,
+    "label": "candidate",
+    "argv": [
+      "/mnt/fast4tb/gomap-raft-production-20261023T0744Z/artifacts/engine-component-ab-01/candidate.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCommandWALParallelSync$",
+      "-test.benchtime=128x",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.cpu=4",
+      "-test.timeout=120s"
+    ],
+    "start_utc": "2026-10-23T10:49:42.844287+00:00",
+    "elapsed_s": 12.185050433501601,
+    "exit": 0
+  },
+  {
+    "pair": 4,
+    "label": "candidate",
+    "argv": [
+      "/mnt/fast4tb/gomap-raft-production-20261023T0744Z/artifacts/engine-component-ab-01/candidate.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCommandWALParallelSync$",
+      "-test.benchtime=128x",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.cpu=4",
+      "-test.timeout=120s"
+    ],
+    "start_utc": "2026-10-23T10:49:55.029694+00:00",
+    "elapsed_s": 11.733490080572665,
+    "exit": 0
+  },
+  {
+    "pair": 4,
+    "label": "baseline",
+    "argv": [
+      "/mnt/fast4tb/gomap-raft-production-20261023T0744Z/artifacts/engine-component-ab-01/baseline.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCommandWALParallelSync$",
+      "-test.benchtime=128x",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.cpu=4",
+      "-test.timeout=120s"
+    ],
+    "start_utc": "2026-10-23T10:50:06.763441+00:00",
+    "elapsed_s": 11.081457463093102,
+    "exit": 0
+  },
+  {
+    "pair": 5,
+    "label": "baseline",
+    "argv": [
+      "/mnt/fast4tb/gomap-raft-production-20261023T0744Z/artifacts/engine-component-ab-01/baseline.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCommandWALParallelSync$",
+      "-test.benchtime=128x",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.cpu=4",
+      "-test.timeout=120s"
+    ],
+    "start_utc": "2026-10-23T10:50:17.845161+00:00",
+    "elapsed_s": 11.032521613873541,
+    "exit": 0
+  },
+  {
+    "pair": 5,
+    "label": "candidate",
+    "argv": [
+      "/mnt/fast4tb/gomap-raft-production-20261023T0744Z/artifacts/engine-component-ab-01/candidate.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCommandWALParallelSync$",
+      "-test.benchtime=128x",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.cpu=4",
+      "-test.timeout=120s"
+    ],
+    "start_utc": "2026-10-23T10:50:28.877985+00:00",
+    "elapsed_s": 11.78283516317606,
+    "exit": 0
+  }
+]
