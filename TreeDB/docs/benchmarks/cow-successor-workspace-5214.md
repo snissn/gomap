@@ -404,3 +404,38 @@ successful bounded infrastructure retry. Earlier W5/W6 failures and nulls are
 unchanged. Only runtime binding, source-discovery inventory and evidence are
 refreshed here; no workload, fixture, numeric/noise gate or original execution
 policy is changed. New exact-head original CI and mature review remain required.
+
+### Disposable performance-runner qualification
+
+At W8 `29a2fdf153ce6e214abf9502d7970de727a38967`, the original COW
+capture completes all 60 rows with every numeric guard passing, including the
+intended four/eight-allocation improvements. Its qualification remains NULL:
+the continuous quiet-host witness records external `provjobd6206737` PID 2168 at
+9.91% CPU over 14.83 seconds. That original capture remains evidence; neither
+its numeric results nor the other passing component gates waive its noise
+requirement. An unchanged rerun hoping for a passing witness is not the remedy.
+
+Infrastructure issue [#5221](https://github.com/snissn/gomap/issues/5221)
+tracks this environment repair. The existing combined `mvcc-raw-path-gate`
+job now supports an optional
+administrator-controlled repository variable, `TREEDB_PERF_RUNNER_LABEL`.
+Only a `pull_request` whose head repository equals this repository, with that
+variable nonempty, uses its runner label. Fork PRs, other event types and an
+unset/empty variable retain `ubuntu-24.04`. This routing change leaves every
+job step, fixture, duration, workload, binding, numeric threshold and continuous
+noise check unchanged; it does not establish that the selected runner is quiet.
+
+The administrator must set a unique label for a disposable Ubuntu 24.04 VM
+runner registered for one job, then delete the VM and remove the variable.
+This opt-in must never select a persistent runner or run contributor fork code
+on a persistent host. Registration, source selection and runner disposal remain
+explicit operational responsibilities; the variable alone cannot enforce the
+VM's lifecycle. Qualification still requires the unchanged capture and its
+original witness to pass on the selected environment.
+
+This is an infrastructure remedy for an observed external-process disturbance,
+not a new product optimization or a waiver of W8's NULL. Runtime P8
+`f495aa04e9daf1f8cc7ccdb1adb46faf54129b9c` remains unchanged. The existing
+Dgraph W8 dependency stays a valid runtime ancestor if all Go sources and
+module files remain byte-identical; it does not acquire new qualification from
+a later tooling-only head without its own source-bound evidence.

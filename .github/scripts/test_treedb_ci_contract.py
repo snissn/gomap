@@ -70,6 +70,20 @@ class TreeDBCIContractTests(unittest.TestCase):
                 self.assertIn("uses: actions/checkout@v4", checkout)
                 self.assertNotIn("ref:", checkout)
 
+    def test_mvcc_runner_override_is_opt_in_and_same_repository_pr_only(self) -> None:
+        mvcc = block(self.source, "  mvcc-raw-path-gate:\n", "\n  test:\n")
+        match = re.search(r"(?m)^    runs-on: \$\{\{ (.+) \}\}$", mvcc)
+        self.assertIsNotNone(match)
+        expression = match.group(1)
+        self.assertEqual(
+            expression,
+            "github.event_name == 'pull_request' && "
+            "github.event.pull_request.head.repo.full_name == github.repository && "
+            "vars.TREEDB_PERF_RUNNER_LABEL != '' && "
+            "vars.TREEDB_PERF_RUNNER_LABEL || 'ubuntu-24.04'",
+        )
+        self.assertEqual(self.source.count("vars.TREEDB_PERF_RUNNER_LABEL"), 2)
+
     def test_mvcc_attribution_uses_pull_request_base_and_head(self) -> None:
         mvcc = block(self.source, "  mvcc-raw-path-gate:\n", "\n  test:\n")
         self.assertIn("EVENT_NAME: ${{ github.event_name }}", mvcc)
