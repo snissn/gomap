@@ -68,9 +68,40 @@ func (db *DB) projectOrdinaryRawReferences(idx *indexGen, next page.MetaPageBody
 	valid := tracker.valid && tracker.rawValid && tracker.commitSeq == next.CommitSeq-1 && tracker.rawCommitSeq == next.CommitSeq-1 && tracker.rawUserRoot == delta.rawInput && tracker.rawSystemRoot == next.SystemRootPageID && tracker.rawIncarnation == incarnation && incarnation.indexID == idx.id && incarnation.valid()
 	if !valid {
 		tracker.mu.RUnlock()
-		return nil, false, nil
+		// Registration proves ownership, not reachability: a cached COW
+		// producer need not retain a created-segment inventory after registering
+		// rotations. Bootstrap from the exact receipt only when BOTH roots of
+		// its predecessor are provably empty. Read the predecessor before taking
+		// the tracker lock, preserving the publication lock order.
+		db.mu.RLock()
+		previous := db.meta
+		db.mu.RUnlock()
+		if previous.CommitSeq != next.CommitSeq-1 || previous.UserRootPageID != delta.rawInput || previous.SystemRootPageID != next.SystemRootPageID || !ordinaryRawRootEligible(idx, previous.UserRootPageID, previous.SystemRootPageID) {
+			return nil, false, nil
+		}
+		image, err := idx.pager.Get(previous.UserRootPageID)
+		if err != nil {
+			return nil, false, err
+		}
+		user := node.NewNodeView(image)
+		if user.Type() != page.PageTypeLeaf || user.Count() != 0 {
+			return nil, false, nil
+		}
+		tracker.mu.RLock()
+		incarnation = tracker.incarnation
+		if !tracker.valid || tracker.commitSeq != previous.CommitSeq || tracker.counts.used != 0 || incarnation.indexID != idx.id || !incarnation.valid() {
+			tracker.mu.RUnlock()
+			return nil, false, nil
+		}
 	}
-	raw, err := tracker.rawCounts.clone()
+	// A valid ordinary census clones its predecessor. The empty-root proof
+	// above instead contributes exactly zero edges, without changing rawValid
+	// or any live tracker state before publication succeeds.
+	raw := valueLogRefCounts{metadata: tracker.metadata}
+	var err error
+	if valid {
+		raw, err = tracker.rawCounts.clone()
+	}
 	if err != nil {
 		tracker.mu.RUnlock()
 		return nil, false, err

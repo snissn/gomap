@@ -2172,6 +2172,14 @@ registry excludes prepared and published resources; held snapshot generation
 pins conservatively retain every matching revision. The current compatibility
 revision is always retained. GC validates the complete exact-parent revision
 inventory before deletion; it never selects revisions by age or a fixed count.
+The existing generation-maintenance scheduler invokes this same whole-generation
+collector independently of value rewrite and experimental leaf packing. This
+changes collection scheduling, not manifest bytes, reachability rules, or deletion
+authority. Independent cached leaf writers share a sequence reservation allocator;
+a higher sequence reserved by another writer does not alone require rotation.
+Unreserved external advances and explicit compaction retain their collision fences.
+See [periodic leaf reclamation](value-log-lifecycle.md#51-periodic-whole-generation-leaf-reclamation)
+for admission, retry cadence, observability and scan-cost limits.
 
 Deletion uses an exact-parent private rename, validates the moved physical
 identity, then unlinks and syncs that retained directory before committing the
@@ -4318,3 +4326,14 @@ Native deterministic JSON apply reuses the existing catalog-create and by-ID
 insert/update/delete singleton command kinds and payload encodings. Native
 assignment and exact physical-seal completion introduce no on-disk format or
 sidecar; see [write-path-and-durability.md](write-path-and-durability.md#native-deterministic-collection-apply).
+
+### Initial ordinary DATA dependency closure
+
+The dependency-manifest encoding is unchanged. Its raw outer-leaf entries must
+include every file referenced by the selected root, including noncurrent files
+created during its first apply. File registration and current-writer membership
+are ownership evidence, not a complete root dependency inventory. The initial
+ordinary DATA publication can derive exact membership from its bound apply
+receipt and a proven empty user/system predecessor; otherwise it uses the
+maintained final-root scanner. No directory-discovery recovery fallback repairs
+an incomplete manifest.
