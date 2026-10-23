@@ -539,11 +539,16 @@ The existing quiet, priority, WAL-mode and maintenance-phase guards still apply;
 this is not an independent timer or a promise of foreground maintenance progress.
 
 `treedb.cache.vlog_generation.leaf_gc.*` reports attempted runs, errors, cumulative
-execution milliseconds, deleted generations/files/bytes, and deleted immutable
-manifest revisions/bytes for this periodic path. Explicit API calls and
-rewrite/pack cleanup keep their own accounting. A nonzero run count alone does
-not establish reclamation or a storage bound. Scans retain the maintained
-collector's input-sized inventory/scratch costs; cancellation does not turn them
+execution milliseconds, deleted generations/files, logical retirement bytes, and
+deleted immutable manifest revisions/bytes for this periodic path. The
+`deleted_bytes` key preserves backend `BytesDeleted` accounting: it charges a
+generation when marked Deleted, before pinned files necessarily unlink, including
+partial-error results. It does not measure physically reclaimed bytes. Use actual
+deleted-file counts and physical file identities/inventory to establish unlink or
+space reclamation. Explicit API calls and rewrite/pack cleanup keep their own
+accounting. A nonzero run count alone does not establish reclamation or a storage
+bound. Scans retain the maintained collector's input-sized inventory/scratch
+costs; cancellation does not turn them
 into a fixed-RSS or strict wall-time bound. Pinned roots, active heads and
 partly live segments may prevent deletion indefinitely. This can add a full-index
 reachability scan and foreground write fencing even when value GC is below its
@@ -553,9 +558,12 @@ change. A joint no-op is retried after the existing three-minute cooldown.
 
 The focused small-target test deliberately crosses an 8 KiB leaf target through
 fixed logical churn, preserves an old snapshot, releases it, advances durable
-meta slots, and checks actual file/revision deletion plus reopen. It is separate
-from default-target resource evidence and does not establish global steady-state
-storage equilibrium.
+meta slots, and checks actual file deletion plus reopen on every platform.
+Platforms with retained-parent namespace support must also delete immutable
+manifest revisions. Compatibility platforms retain their existing segment GC,
+report `ManifestRevisionGCUnsupported`, and claim zero immutable revision
+deletions. This test is separate from default-target resource evidence and does
+not establish global steady-state storage equilibrium.
 
 ### 5.2 Immutable COW read ownership
 
