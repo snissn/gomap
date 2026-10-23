@@ -90,16 +90,28 @@ func TestCOWOrderedUnorderedGroupKeepsDuplicateWinnerAndEntryOrder(t *testing.T)
 		{cowOrderedLifecycleKey(t, "z-sort", 50), []byte{2}, 7},
 	}
 	b := cowOrderedPreparedGroup(t, db, owner, group)
-	if err := b.Write(); err != nil {
-		t.Fatal(err)
-	}
-	if len(b.entries) != len(group) {
-		t.Fatalf("original producer entry count=%d want=%d", len(b.entries), len(group))
-	}
-	for i, entry := range b.entries {
-		if !bytes.Equal(entry.Key, group[i].key) || !bytes.Equal(entry.Value, group[i].value) || entry.Revision != group[i].revision {
-			t.Fatalf("original producer entry %d reordered or changed", i)
+	observed := 0
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Point != durabilitycut.AfterCOWCanonicalPreparation || event.Root != db.dir {
+			return nil
 		}
+		// Successful Write resets the batch. Inspect the original operands at
+		// the canonical boundary, after scratch ordering and before acceptance.
+		observed++
+		if len(b.entries) != len(group) {
+			return fmt.Errorf("original producer entry count=%d want=%d", len(b.entries), len(group))
+		}
+		for i, entry := range b.entries {
+			if !bytes.Equal(entry.Key, group[i].key) || !bytes.Equal(entry.Value, group[i].value) || entry.Revision != group[i].revision {
+				return fmt.Errorf("original producer entry %d reordered or changed", i)
+			}
+		}
+		return nil
+	})
+	err := b.Write()
+	restore()
+	if err != nil || observed != 1 {
+		t.Fatalf("qualified write: observed=%d err=%v", observed, err)
 	}
 	current := db.AcquireSnapshot()
 	defer current.Close()
