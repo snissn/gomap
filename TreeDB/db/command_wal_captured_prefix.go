@@ -7,18 +7,20 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
 )
 
 // CommandWALCapturedPrefix is a single-use complete-frame durability target.
 // Capture owns teardown and independent physical-resource pins until Sync.
 // It never borrows mutable journal buffers after capture returns.
 type CommandWALCapturedPrefix struct {
-	db           *DB
-	journal      *commitlog.CapturedSync
-	dependencies *rootpublication.StableResourceSet
-	result       CommandWALBarrierResult
-	once         sync.Once
-	err          error
+	db             *DB
+	journal        *commitlog.CapturedSync
+	journalCapture commitlog.CapturedSync
+	dependencies   *rootpublication.StableResourceSet
+	result         CommandWALBarrierResult
+	once           sync.Once
+	err            error
 }
 
 // CaptureCommandWALPrefix drains publishers, appends the existing durable V2
@@ -26,14 +28,33 @@ type CommandWALCapturedPrefix struct {
 // closure under append authority. Captured WAL sync is deferred to target.Sync.
 // Every successful capture must be consumed by Sync; abandoning it pins Close.
 func (db *DB) CaptureCommandWALPrefix() (_ *CommandWALCapturedPrefix, result CommandWALBarrierResult, err error) {
-	unlock, err := db.LockCommandWALPublishWithBarriers()
-	if err != nil {
+	return db.captureCommandWALPrefix(nil, nil)
+}
+
+// CaptureCommandWALPrefixInto uses caller-owned, unused storage. The caller
+// must own it exclusively until Sync returns, including every deferred pin
+// release. Only then may the caller zero it and start a new capture. No waiter
+// or other consumer may retain an earlier pointer across that reuse boundary.
+// A nil owner selects ordinary authority; native semantic mode still requires
+// the original private COW owner.
+func (db *DB) CaptureCommandWALPrefixInto(target *CommandWALCapturedPrefix, owner *transactionowner.Owner) (*CommandWALCapturedPrefix, CommandWALBarrierResult, error) {
+	if target == nil || target.db != nil {
+		return nil, CommandWALBarrierResult{}, errors.New("command WAL capture target must be unused")
+	}
+	if owner != nil && (db == nil || owner != db.privateCOWOwner) {
+		return nil, CommandWALBarrierResult{}, ErrNativeSemanticUnsupported
+	}
+	return db.captureCommandWALPrefix(owner, target)
+}
+
+func (db *DB) captureCommandWALPrefix(owner *transactionowner.Owner, target *CommandWALCapturedPrefix) (_ *CommandWALCapturedPrefix, result CommandWALBarrierResult, err error) {
+	if err = db.acquireCommandWALPublishWithBarriersForOwner(owner); err != nil {
 		return nil, result, err
 	}
 	retained := false
 	defer func() {
 		if !retained {
-			unlock()
+			db.unlockCommandWALRawPublishWithAdmissionAndTeardown()
 		}
 	}()
 	if db == nil || !db.commandWAL || db.commandJournal == nil {
@@ -42,47 +63,56 @@ func (db *DB) CaptureCommandWALPrefix() (_ *CommandWALCapturedPrefix, result Com
 	if err := db.commandWALPoisonedError(); err != nil {
 		return nil, result, err
 	}
-	next := db.CommandWALNextLSN()
-	if next > 1 && db.commandWALDurableLSN.Load() < next-1 {
-		result.AttemptedDependencyEntries = db.commandWALDebt.entryCountThrough(next - 1)
+	frontier := db.commandJournal.AppendedLSN()
+	if frontier != 0 {
+		result.AttemptedDependencyEntries = db.commandWALDebt.entryCountThrough(frontier)
+	}
+	if frontier != 0 && db.commandWALDurableLSN.Load() < frontier && db.commandWALDurableMarkerLSN.Load() < frontier {
 		// Existing V2 durable markers can reach storage before their final
 		// fsync. Preserve the format's dependency-before-marker ordering.
 		// A future format may defer this I/O behind a separate certificate.
-		if err := db.syncCommandWALDependenciesThrough(next-1, nil); err != nil {
+		if err := db.syncCommandWALDependenciesThrough(frontier, nil); err != nil {
 			return nil, result, err
 		}
 	}
 	// Union is a borrowed view; the independent clone owns every producer's
 	// flush/sync implementation and exact content certificate during overlap.
-	frontier := db.CommandWALNextLSN() - 1
-	view, err := db.commandWALDebt.resourceViewThrough(frontier)
-	if err != nil {
-		return nil, result, err
+	var dependencies *rootpublication.StableResourceSet
+	if db.commandWALDebt.hasPhysicalDependenciesThrough(frontier) {
+		view, viewErr := db.commandWALDebt.resourceViewThrough(frontier)
+		if viewErr != nil {
+			return nil, result, viewErr
+		}
+		dependencies, err = rootpublication.CloneStableResourceSetExcludingKinds(view)
+		if err != nil {
+			return nil, result, err
+		}
 	}
-	dependencies, err := rootpublication.CloneStableResourceSetExcludingKinds(view)
-	if err != nil {
-		return nil, result, err
-	}
-	if next > 1 && db.commandWALDurableLSN.Load() < next-1 {
-		result.LSN, err = db.appendCommandWALPrefixBarrier(true)
+
+	if frontier != 0 && db.commandWALDurableLSN.Load() < frontier && db.commandWALDurableMarkerLSN.Load() < frontier {
+		result.LSN, err = db.appendCommandWALPrefixBarrierForOwner(true, owner)
 		if err != nil {
 			dependencies.Release()
 			return nil, result, err
 		}
 	}
-	frontier = db.CommandWALNextLSN() - 1
+	frontier = db.commandJournal.AppendedLSN()
 	rotations, err := db.commandWALDebt.rotationFileViewThrough(frontier)
 	if err != nil {
 		dependencies.Release()
 		return nil, result, err
 	}
-	journal, err := db.commandJournal.CaptureSync(rotations)
+	if target == nil {
+		target = new(CommandWALCapturedPrefix)
+	}
+	*target = CommandWALCapturedPrefix{db: db, dependencies: dependencies, result: result}
+	journal, err := db.commandJournal.CaptureSyncInto(&target.journalCapture, rotations)
 	if err != nil {
 		dependencies.Release()
 		db.commandWALFlushPoisoned.Store(true)
 		return nil, result, err
 	}
-	target := &CommandWALCapturedPrefix{db: db, journal: journal, dependencies: dependencies, result: result}
+	target.journal = journal
 	// Keep teardown pinned, but admit new prepared publishers and raw appends.
 	db.commandWALRawPublishMu.Unlock()
 	db.commandWALRawAdmissionMu.Unlock()

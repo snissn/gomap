@@ -55,6 +55,8 @@ func TestPublicCommandWALDirectRoutesEmitAppendAndFlushCuts(t *testing.T) {
 		want := []durabilitycut.Point{
 			durabilitycut.BeforeDependencyAppend,
 			durabilitycut.AfterDependencyAppend,
+			durabilitycut.BeforeUserspaceFlush,
+			durabilitycut.AfterUserspaceFlush,
 			durabilitycut.BeforeDependencyFileSync,
 			durabilitycut.AfterDependencyFileSync,
 		}
@@ -72,9 +74,9 @@ func TestPublicCommandWALDirectRoutesEmitAppendAndFlushCuts(t *testing.T) {
 		if events[1].Path == "" {
 			t.Fatalf("%s after-append omitted exact segment path", name)
 		}
-		if events[2].Path == "" || events[3].Path != events[2].Path {
+		if events[4].Path == "" || events[5].Path != events[4].Path {
 			t.Fatalf("%s sync paths=(%q,%q), want paired non-empty paths",
-				name, events[2].Path, events[3].Path)
+				name, events[4].Path, events[5].Path)
 		}
 	}
 

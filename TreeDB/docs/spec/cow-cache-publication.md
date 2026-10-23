@@ -332,9 +332,17 @@ acceptance:
    an independently retained generation read lease. WAL dependency custody
    remains owned by the WAL intent/debt, including materialized/self-contained
    frames with no external closure.
-5. Append using existing command-WAL hooks, release the WAL barrier, and install
+5. Append and register using existing command-WAL hooks, release the WAL barrier, and install
    the already-prepared complete cut without allocation, callback, rebase or
-   rebuilding roots.
+   rebuilding roots. Release COW writer ownership before awaiting durability.
+
+The public collector captures a complete journal prefix and independent resource
+pins under append authority, then releases that authority before physical WAL
+sync. New complete cuts may be visible while earlier callers await their durable
+ACK. The captured ticket/LSN frontier alone authorizes acknowledgement; incidental
+sync of successor bytes does not. Singleton requests use the same immediate
+collector path. V2 external dependency sync still precedes its durable marker
+under append authority. See the [durable write contract](command-wal-durable-write-contract.md#captured-command-prefix-and-acknowledgement).
 
 Newly produced pointer bytes are flushed for live readability through the
 registered producer before publication. This visibility flush is not fsync or

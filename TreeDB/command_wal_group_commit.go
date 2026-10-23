@@ -5,6 +5,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
 const (
@@ -17,6 +19,7 @@ type publicCommandWALGroupCommit struct {
 	mu                   sync.Mutex
 	cond                 sync.Cond
 	wake                 chan struct{}
+	capturedPrefix       backenddb.CommandWALCapturedPrefix // exclusively owned by the active leader
 	timer                *time.Timer
 	leaderActive         bool
 	nextTicket           uint64
@@ -149,7 +152,7 @@ func (tdb *DB) registerPublicCommandWAL(bytes int, preparedBytes *int, durable b
 		tdb.commandWALPublicPublishMu.Lock()
 		defer tdb.commandWALPublicPublishMu.Unlock()
 
-		lsn, appendErr := appendFrame(false)
+		lsn, appendErr := appendFrame(durable)
 		err = appendErr
 		if lsn != 0 {
 			start := time.Now()
@@ -540,7 +543,18 @@ func (group *publicCommandWALGroupCommit) runLeader(tdb *DB) {
 		hook(batchCount)
 	}
 	// Seal buffers and pin files/dependencies before releasing append authority.
-	target, barrier, err := tdb.backend.CaptureCommandWALPrefix()
+	var target *backenddb.CommandWALCapturedPrefix
+	var barrier backenddb.CommandWALBarrierResult
+	var err error
+	// The previous leader completed Sync and all deferred releases before it
+	// cleared leaderActive. This storage is never exposed to public waiters.
+	group.capturedPrefix = backenddb.CommandWALCapturedPrefix{}
+	if tdb.cached != nil && tdb.cached.COWMode() {
+		target, barrier, err = tdb.backend.CaptureCommandWALPrefixInto(&group.capturedPrefix, tdb.txnOwner)
+	} else {
+		target, barrier, err = tdb.backend.CaptureCommandWALPrefixInto(&group.capturedPrefix, nil)
+	}
+
 	if barrier.LSN != 0 {
 		tdb.recordPublicCommandWALPendingLSN(barrier.LSN)
 	}
@@ -550,7 +564,7 @@ func (group *publicCommandWALGroupCommit) runLeader(tdb *DB) {
 	if err == nil {
 		barrier, err = target.Sync()
 	}
-	retryableForceOnlyErr := err != nil && barrier.LSN == 0 && batchCommits == 0
+	retryableForceOnlyErr := err != nil && target == nil && barrier.LSN == 0 && batchCommits == 0
 	if err != nil {
 		group.errors.Add(1)
 		if !retryableForceOnlyErr {

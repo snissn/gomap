@@ -117,11 +117,10 @@ func TestPowerLossCertificationGroupedDependencyFailureDirtyPublicReopen(t *test
 }
 
 // TestPowerLossCertificationGroupedAmbiguousFailurePublicReopen cuts after
-// all mutation frames and the shared prefix barrier have reached userspace but
-// before the file sync. The entire group must fail rather than partially ack.
+// all mutation frames have been flushed to the WAL file, before its physical
+// sync. The entire group must fail rather than partially acknowledge.
 func TestPowerLossCertificationGroupedAmbiguousFailurePublicReopen(t *testing.T) {
-	const waiters = 4
-	testPowerLossCertificationGroupedStableFailure(t, groupedAmbiguousFailureVariant, durabilitycut.AfterDependencyAppend, waiters)
+	testPowerLossCertificationGroupedStableFailure(t, groupedAmbiguousFailureVariant, durabilitycut.AfterUserspaceFlush, 0)
 }
 
 // TestPowerLossCertificationGroupedAmbiguousFailureDirtyPublicReopen promotes
@@ -129,8 +128,7 @@ func TestPowerLossCertificationGroupedAmbiguousFailurePublicReopen(t *testing.T)
 // may expose the unacknowledged group, but only atomically as one complete
 // command-WAL prefix.
 func TestPowerLossCertificationGroupedAmbiguousFailureDirtyPublicReopen(t *testing.T) {
-	const waiters = 4
-	testPowerLossCertificationGroupedDirtyFailure(t, groupedAmbiguousDirtyVariant, durabilitycut.AfterDependencyAppend, waiters)
+	testPowerLossCertificationGroupedDirtyFailure(t, groupedAmbiguousDirtyVariant, durabilitycut.AfterUserspaceFlush, 0)
 }
 
 // TestPowerLossCertificationGroupedRotationExternalPublicReopen retains the
@@ -152,14 +150,17 @@ func TestPowerLossCertificationGroupedRotationExternalPublicReopen(t *testing.T)
 			_ = database.Close()
 		}
 	}()
+	// Fill the first segment before capture. The external mutation itself now
+	// carries the durable class, so rotation must not depend on an extra marker.
+	if err := database.SetSync([]byte("rotation-seed"), []byte("stable")); err != nil {
+		t.Fatal(err)
+	}
 	database.commandWALGroupCommit.delay = 2 * time.Millisecond
 	database.commandWALGroupCommit.maxCommits = 64
 	database.commandWALGroupCommit.maxBytes = 1 << 30
-	var barrierStarted atomic.Bool
 	var observedGroupSize atomic.Int32
 	database.commandWALGroupCommit.testBeforeSync = func(groupSize int) {
 		observedGroupSize.Store(int32(groupSize))
-		barrierStarted.Store(true)
 	}
 	model, err := powerlossoracle.Capture(dir)
 	if err != nil {
@@ -167,10 +168,6 @@ func TestPowerLossCertificationGroupedRotationExternalPublicReopen(t *testing.T)
 	}
 	commandWALSyncs := 0
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
-		if !barrierStarted.Load() && event.Namespace == "" &&
-			event.Point != durabilitycut.BeforeNewFileDirectorySync && event.Point != durabilitycut.AfterNewFileDirectorySync {
-			return nil
-		}
 		if err := model.Observe(dir, event); err != nil {
 			return err
 		}
@@ -197,13 +194,13 @@ func TestPowerLossCertificationGroupedRotationExternalPublicReopen(t *testing.T)
 		t.Fatal(err)
 	}
 	restore()
-	if commandWALSyncs != 2 {
-		t.Fatalf("rotation/external command-WAL syncs=%d want frozen old+active segment boundary count 2", commandWALSyncs)
+	if commandWALSyncs < 2 {
+		t.Fatalf("rotation/external command-WAL syncs=%d want rotated and captured active segment", commandWALSyncs)
 	}
-	// Occurrence zero is the grouped external-resource barrier. Occurrences one
-	// and two are the rotated and active command-WAL segments respectively, so
-	// the latter is the first cut that contains the complete acknowledged group.
-	requireGroupCertificationSelector(t, groupedRotationExternalVariant, durabilitycut.AfterDependencyFileSync, 2)
+	// The model observes dependency synchronization before durable-class append,
+	// including any rotated segment, and the captured active segment afterwards.
+	// Freeze only after all of these obligations, never only the final fsync.
+	requireGroupCertificationSelector(t, groupedRotationExternalVariant, durabilitycut.AfterDependencyFileSync, 4)
 	stats := database.Stats()
 	if got := certificationStatUint64(t, stats, "treedb.command_wal.group_commit.group_size_max"); got != 1 || observedGroupSize.Load() != 1 {
 		t.Fatalf("external group size stats=%d hook=%d want=1", got, observedGroupSize.Load())
@@ -224,7 +221,7 @@ func TestPowerLossCertificationGroupedRotationExternalPublicReopen(t *testing.T)
 			t.Fatalf("recovered external value %d len=%d err=%v", index, len(value), err)
 		}
 	}
-	t.Log("rotation/external stable cut occurrence=2")
+	t.Log("rotation/external stable cut occurrence=4")
 }
 
 // TestPowerLossCertificationGroupedLifecyclePublicReopen proves that a

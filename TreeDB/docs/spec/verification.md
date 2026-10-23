@@ -175,6 +175,19 @@ checks bind the reconciled head. Public 500k raw-KV comparisons and managed
 historical-MVCC comparisons exercise different routes; both require actual-mode
 activation evidence and separate natural versus instrumented observations.
 
+## Captured command-WAL durability
+
+`TestPublicCOWCapturedPrefixAppendInstallAndExactACK` blocks a real physical
+WAL sync and proves successor append, complete-cut visibility, independent ACK
+coverage and reopen, with both ordinary and forced-pointer rotated journals.
+`TestPublicCOWCapturedPrefixFailureWakesSuccessorAndPoisons` proves failure wakes
+both callers and rejects later acceptance. The public group-commit tests cover
+singleton collector selection, mixed durable/relaxed tickets, force-only retry
+and publication order. `TestCapturedSyncPinsPrefixAcrossAppendRotationAndClose`
+checks exact journal identity/frontier retention and Close waiting for release.
+These focused controls complement owning-package, race and performance gates;
+they do not establish sustained workload qualification by themselves.
+
 ## Immutable COW cache qualification
 
 

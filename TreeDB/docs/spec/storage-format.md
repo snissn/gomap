@@ -2940,6 +2940,15 @@ through an obsolete rotation token. A failure before a durable frame append
 retains the debt for retry; a failure after append or during the final WAL sync
 is commit-ambiguous and poisons the open handle with `ErrRecoveryRequired`.
 
+The public captured-prefix collector may emit that durable class on the
+mutation itself after ordering all preceding dependencies, then flush and pin
+its complete prefix before releasing append authority. Its physical WAL sync
+runs outside append authority. Emitted class, captured LSN and completed durable
+LSN remain distinct: no caller acknowledges until its captured physical sync
+succeeds, and incidental persistence of later frames grants no additional ACK.
+A relaxed suffix still requires the existing durable-prefix marker. These are
+scheduling changes to V2, with no new envelope bytes or weaker recovery rule.
+
 Every V2 command envelope containing a `RawKVBatch` payload with at least one
 `SetRID` operation has exactly one `ExternalRefFenceV1` precondition. Frames
 without `SetRID` have no RID fence, including `RawKVBatchV2` frames whose

@@ -340,6 +340,16 @@ guard's teardown lease and never reacquires it while Close may be queued.
 
 ### 4.3 Backend lock roles
 
+The command-WAL collector captures its complete prefix under the public operation
+gate and publish mutex plus backend raw admission/publish authority. Capturing
+flushes mutable buffers and retains independent journal/dependency owners. The
+physical captured WAL sync runs after append authority is released, retaining
+only teardown/resource pins. Completion reacquires backend raw publish authority
+to advance exactly the captured durable LSN. COW writers install their prepared
+complete cut and release the COW writer before awaiting the ticket. Successor
+append/installation can overlap an earlier WAL sync; durable ACK cannot pass the
+captured ticket frontier. V2 dependency-before-marker I/O remains serialized.
+
 - `writeMu`:
   - serializes serialized write path and heavyweight maintenance paths.
 - `commitMu`:

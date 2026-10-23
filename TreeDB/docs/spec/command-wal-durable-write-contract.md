@@ -46,7 +46,7 @@ ordinary ACK class. Neither class requires a backend tree flush or checkpoint.
 
 ## Explicit immutable COW cache ordering
 
-Selecting `MemtableMode="cow_btree"` changes cached installation, not the durable
+Selecting `MemtableMode="cow_btree"` or `"cow_ordered"` changes cached installation, not the durable
 return boundary above. It prepares every changed shard and the complete cut
 before append. The existing intent encodes canonical RID/revision operations
 and captures its dependency closure; a pre-append finalizer validates the staged
@@ -55,13 +55,39 @@ Self-contained `SetMaterializedRID` frames still require live read owners even
 when their WAL external closure is nil. WAL debt owns its own resources.
 
 Producer buffer flush establishes pointer readability, not file/name sync or
-command durability. After the existing frame/sync frontier, the WAL barrier is
-released and the prepared cut installs once without allocation or rebuilding.
+command durability. After command append and ticket registration, the prepared
+cut installs once without allocation or rebuilding. The writer then releases
+its COW sequencing ownership before awaiting the captured durable prefix.
 Readers acquire the complete old or new cut. Capacity/unsupported refusal is
 pre-append; later failures retain existing ambiguity/poison/reopen semantics.
 No command payload is re-encoded for COW. The
 [COW publication contract](cow-cache-publication.md) also covers accepted backend
 flush receipts, checkpoint handoff and `no_wal_fast` explicit sync.
+
+### Captured command prefix and acknowledgement
+
+The existing public collector handles both singleton and concurrent durable
+requests. Production dispatch starts immediately, without a collection sleep.
+Under append authority durable mutation append orders dependencies and emits
+the existing V2 durable class without a physical sync. The leader flushes complete
+frames, appends the existing V2 prefix barrier only for a relaxed suffix, and pins the exact journal handles and dependency
+closure. It releases append authority before synchronizing those captured WAL
+files. Successors can append and install complete COW cuts while that physical
+sync is in flight. A visible cut can therefore precede its durable caller's ACK.
+
+Only tickets included in that capture become eligible for durable ACK. A later
+frame may reach storage incidentally during the same file sync, but requires its
+own covering capture. Resource and teardown pins outlive the physical sync and
+the corresponding durable-frontier update. Sync failure wakes affected callers,
+poisons subsequent acceptance and requires reopen. Close waits for captured
+owners; journal rotation retains the original file identities.
+
+The existing V2 format still requires external dependencies to become stable
+before a durable-class mutation or prefix marker can reach storage. That dependency I/O remains under
+append authority; this change overlaps the captured WAL sync, not arbitrary
+value-log dependency work. The ordered paths below state the logical durable
+return contract. For COW, installation occurs before the captured sync completes;
+for other cached modes installation retains its existing ticket order.
 
 ## Current ordered paths
 
@@ -130,11 +156,13 @@ different RID or duplicating a logical record.
 The backend encoder independently enforces the same 64 KiB value, 1 MiB frame,
 and 256 total-operation bounds. Retaining `entry.Value` beside a pointer is not
 by itself permission to emit `SetMaterializedRID`. One-shot raw entry APIs must
-declare one of three append modes: relaxed, directly durable, or a grouped
-durable-prefix participant. Relaxed mode always emits the V1 `SetRID` fallback.
+declare its append mode: relaxed, directly durable, a grouped
+durable-prefix participant, or captured durable. Relaxed mode always emits the V1 `SetRID` fallback.
 A prefix participant may emit bounded V2 while appending an individually
 relaxed frame, but its caller must not acknowledge the mutation until a later
-durable-prefix barrier covers that frame. Reusable entry intents, whose eventual
+durable-prefix barrier covers that frame. Captured durable orders dependencies
+before emitting the existing durable mutation class, then waits for a covering
+physical capture without appending a redundant marker. Reusable entry intents, whose eventual
 boundary is unknown, conservatively remain V1.
 
 ### `SetRID` fallback

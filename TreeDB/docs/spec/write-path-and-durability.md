@@ -892,18 +892,20 @@ namespace requirements and original error custody. Stream readers are borrowed
 only through finalization and dropped before the captured read is released.
 No live ANN authority or new storage format is implied.
 
-### Captured-prefix pipeline prototype
+### Captured-prefix command pipeline
 
-The isolated captured-prefix prototype uses the existing public ticket collector
+The captured-prefix pipeline uses the existing public ticket collector
 for both singleton and grouped durable writes. A production singleton dispatches
 immediately. Work arriving during its WAL file sync can append and install its
 complete COW cut, then joins a subsequent captured prefix. There is one
 publication order and one collector; no speculative root chain or second queue.
 Explicit test delay seams remain for deterministic group controls.
 
-Capture drains registered publication barriers, closes the selected dependency
-prefix, appends the existing V2 durable-prefix marker, flushes complete buffers,
-and pins exact segment identities and byte/LSN frontiers. It retains teardown
+Durable public append orders dependencies and emits the existing V2 durable class
+on the mutation, then registers its ticket without physical WAL sync. Capture
+drains registered publication barriers, closes the selected dependency prefix,
+adds a V2 durable-prefix marker only when promoting a relaxed suffix, flushes
+complete buffers and pins exact segment identities and byte/LSN frontiers. It retains teardown
 but releases append/admission/publication gates before syncing the pinned WAL
 handles. Journal Close waits for capture release; rotation and cleanup respect
 its identity pins. Completion advances only the captured LSN. Incidental
@@ -911,14 +913,24 @@ persistence of later bytes cannot acknowledge their tickets. Failed physical
 sync poisons the open handle and wakes all affected waiters; it is ambiguous
 and must not be transparently retried.
 
-This prototype preserves V2's dependency-before-durable-marker ordering:
+The pipeline preserves V2's dependency-before-durable-marker ordering:
 external value/auxiliary dependency sync, and required pre-marker rotation
-syncs, still run under capture authority. Moving those barriers outside append
-authority requires a recovery-format/certificate redesign. The prototype moves
+syncs, still run under append authority. Moving those barriers outside append
+authority requires a recovery-format/certificate redesign. The pipeline moves
 the captured WAL file barrier outside the COW writer and append gates without
-claiming that all dependency I/O overlaps. It adds a durable-prefix frame to
-singleton public writes, replacing the old directly synced singleton bypass.
+claiming that all dependency I/O overlaps. Ordinary singleton durable writes
+retain one mutation frame, replacing the old directly synced singleton bypass.
 Standalone durability semantics and on-disk encodings remain unchanged.
+
+The journal shares one exact pinned handle per active segment across captures,
+retiring its journal reference on rotation. Each immutable capture retains that
+handle independently and always performs its own physical sync; the shared
+handle does not cache durability for later byte/LSN frontiers. The backend
+capture embeds its journal target instead of allocating another wrapper. The
+collector retains caller-owned target storage under its sole active leader,
+reinitializing it only after Sync and all deferred releases return. Empty
+physical-dependency closures skip union/map construction without skipping
+marker decisions, buffer flushing, physical sync or teardown retention.
 
 Focused blocked-fsync controls cover successor installation, exact-prefix ACK,
 failure wakeup/poisoning, rotation and clean reopen. These controls establish

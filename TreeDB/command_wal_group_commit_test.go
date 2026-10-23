@@ -126,7 +126,7 @@ func TestPublicCommandWALGroupCommitSingletonUsesCapturedPrefix(t *testing.T) {
 		t.Fatalf("SetSync: %v", err)
 	}
 	after := db.Stats()
-	requirePublicStatDelta(t, before, after, "treedb.command_wal.append.count_total", 2)
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.append.count_total", 1)
 	requirePublicStatDelta(t, before, after, "treedb.command_wal.file_sync.calls_total", 1)
 	requirePublicStatDelta(t, before, after, "treedb.command_wal.sync.barrier.count_total", 1)
 	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.groups_total", 1)
@@ -135,8 +135,8 @@ func TestPublicCommandWALGroupCommitSingletonUsesCapturedPrefix(t *testing.T) {
 	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.bypass.reason.solo_durable_sync_total", 0)
 
 	frames := scanPublicCommandWALV2(t, dir)
-	if len(frames) != 2 || frames[0].Kind == commitlog.CommandKindDurablePrefixBarrier || frames[1].Kind != commitlog.CommandKindDurablePrefixBarrier || frames[1].DurabilityClass != commitlog.CommandDurabilityDurable {
-		t.Fatalf("singleton frames=%+v, want mutation followed by captured durable barrier", frames)
+	if len(frames) != 1 || frames[0].Kind == commitlog.CommandKindDurablePrefixBarrier || frames[0].DurabilityClass != commitlog.CommandDurabilityDurable {
+		t.Fatalf("singleton frames=%+v, want one durable-class mutation with captured sync", frames)
 	}
 }
 
@@ -491,8 +491,8 @@ func TestPublicCommandWALGroupCommitSameKeyRevisionWinsAfterReversePublication(t
 	}
 
 	frames := scanPublicCommandWALV2(t, dir)
-	if len(frames) != 3 {
-		t.Fatalf("frames=%d, want two mutations plus one barrier: %+v", len(frames), frames)
+	if len(frames) != 2 {
+		t.Fatalf("frames=%d, want two captured durable mutations: %+v", len(frames), frames)
 	}
 	type versionedValue struct {
 		value    string
@@ -591,8 +591,8 @@ func TestPublicCommandWALGroupCommitAcknowledgedPrefixRecoversFromCrashImage(t *
 		acknowledged[key] = acknowledgedValue{value: string(value), revision: revision}
 	}
 	frames := scanPublicCommandWALV2(t, sourceDir)
-	if len(frames) != waiters+1 || frames[len(frames)-1].Kind != commitlog.CommandKindDurablePrefixBarrier {
-		t.Fatalf("acknowledged group frames=%+v, want %d mutations plus terminal barrier", frames, waiters)
+	if len(frames) != waiters || frames[len(frames)-1].DurabilityClass != commitlog.CommandDurabilityDurable {
+		t.Fatalf("acknowledged group frames=%+v, want %d captured durable mutations", frames, waiters)
 	}
 	barrierLSN := frames[len(frames)-1].LSN
 
@@ -702,7 +702,7 @@ func TestPublicCommandWALGroupCommitMixedRelaxedDurablePreservesLSNPublicationOr
 	if len(frames) != 3 {
 		t.Fatalf("frames=%d, want durable mutation, relaxed mutation, barrier: %+v", len(frames), frames)
 	}
-	if frames[0].DurabilityClass != commitlog.CommandDurabilityRelaxed ||
+	if frames[0].DurabilityClass != commitlog.CommandDurabilityDurable ||
 		frames[1].DurabilityClass != commitlog.CommandDurabilityRelaxed ||
 		frames[2].Kind != commitlog.CommandKindDurablePrefixBarrier {
 		t.Fatalf("unexpected mixed durable-prefix frames: %+v", frames)
@@ -1264,20 +1264,20 @@ func TestPublicCommandWALGroupCommitCoversRotationAndExternalValueDependencies(t
 
 	eventsMu.Lock()
 	defer eventsMu.Unlock()
-	var sawExternalSync, sawRotationNamespaceSync, sawBarrier bool
+	var sawExternalSync, sawRotationNamespaceSync, sawCapturedSync bool
 	for _, event := range events {
 		switch {
 		case event.Resource == durabilitycut.ResourceAuxiliary && event.Point == durabilitycut.AfterDependencyFileSync:
 			sawExternalSync = true
 		case event.Resource == durabilitycut.ResourceCommandWAL && event.Point == durabilitycut.AfterNewFileDirectorySync:
 			sawRotationNamespaceSync = true
-		case event.Resource == durabilitycut.ResourceCommandWAL && event.Point == durabilitycut.AfterDependencyAppend && event.LSN >= 3:
-			sawBarrier = true
+		case event.Resource == durabilitycut.ResourceCommandWAL && event.Point == durabilitycut.AfterDependencyFileSync && event.LSN == 2:
+			sawCapturedSync = true
 		}
 	}
-	if !sawExternalSync || !sawRotationNamespaceSync || !sawBarrier {
-		t.Fatalf("shared group dependency proof external_sync=%t rotation_namespace_sync=%t barrier=%t events=%#v",
-			sawExternalSync, sawRotationNamespaceSync, sawBarrier, events)
+	if !sawExternalSync || !sawRotationNamespaceSync || !sawCapturedSync {
+		t.Fatalf("shared group dependency proof external_sync=%t rotation_namespace_sync=%t captured_sync=%t events=%#v",
+			sawExternalSync, sawRotationNamespaceSync, sawCapturedSync, events)
 	}
 }
 
@@ -1641,7 +1641,7 @@ func TestPublicCommandWALGroupCommitDependencyFailurePoisonsAllWaiters(t *testin
 	cutErr := errors.New("injected grouped dependency sync failure")
 	var cutOnce sync.Once
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
-		if event.Resource == durabilitycut.ResourceCommandWAL && event.Point == durabilitycut.BeforeDependencyFileSync {
+		if event.Resource == durabilitycut.ResourceCommandWAL && event.Point == durabilitycut.BeforeDependencyFileSync && event.LSN != 0 {
 			var err error
 			cutOnce.Do(func() { err = cutErr })
 			return err
@@ -1683,16 +1683,8 @@ func TestPublicCommandWALGroupCommitAmbiguousBarrierFailurePoisonsAllWaiters(t *
 	db.commandWALGroupCommit.maxBytes = 1 << 30
 	before := db.Stats()
 	cutErr := errors.New("injected grouped post-barrier-append failure")
-	var cutMu sync.Mutex
-	appendCount := 0
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
-		if event.Resource != durabilitycut.ResourceCommandWAL || event.Point != durabilitycut.AfterDependencyAppend {
-			return nil
-		}
-		cutMu.Lock()
-		defer cutMu.Unlock()
-		appendCount++
-		if appendCount == 3 {
+		if event.Resource == durabilitycut.ResourceCommandWAL && event.Point == durabilitycut.AfterDependencyFileSync && event.LSN != 0 {
 			return cutErr
 		}
 		return nil

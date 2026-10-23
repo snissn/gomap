@@ -16,10 +16,14 @@ import (
 // predecessor's physical WAL barrier is blocked. Their ACK still needs a
 // second captured barrier, even if its bytes were incidentally persisted.
 func TestPublicCOWCapturedPrefixAppendInstallAndExactACK(t *testing.T) {
-	for _, rotate := range []bool{false, true} {
-		t.Run(fmt.Sprintf("rotate=%t", rotate), func(t *testing.T) {
+	for _, tc := range []struct {
+		mode   string
+		rotate bool
+	}{{"cow_btree", false}, {"cow_btree", true}, {"cow_ordered", false}, {"cow_ordered", true}} {
+		rotate := tc.rotate
+		t.Run(fmt.Sprintf("%s/rotate=%t", tc.mode, rotate), func(t *testing.T) {
 			opts := commandWALDurabilityProofOptions(t.TempDir())
-			opts.MemtableMode = "cow_btree"
+			opts.MemtableMode = tc.mode
 			firstValue, secondValue := []byte("one"), []byte("two")
 			if rotate {
 				opts.CommandWALSegmentTargetBytes = 1
@@ -42,10 +46,10 @@ func TestPublicCOWCapturedPrefixAppendInstallAndExactACK(t *testing.T) {
 			restore := durabilitycut.Install(func(e durabilitycut.Event) error {
 				// Rotated prefix files may also need syncing; gate the active target via
 				// its file-sync event. Blocking the first physical WAL sync is sufficient.
-				if e.Resource == durabilitycut.ResourceCommandWAL && e.Point == durabilitycut.AfterDependencyAppend && e.LSN == 2 {
+				if e.Resource == durabilitycut.ResourceCommandWAL && e.Point == durabilitycut.AfterDependencyAppend && e.LSN == 1 {
 					barrierAppended.Store(true)
 				}
-				if barrierAppended.Load() && e.Resource == durabilitycut.ResourceCommandWAL && e.Point == durabilitycut.BeforeDependencyFileSync {
+				if barrierAppended.Load() && e.Resource == durabilitycut.ResourceCommandWAL && e.Point == durabilitycut.BeforeDependencyFileSync && e.LSN != 0 {
 					i := int(syncs.Add(1)) - 1
 					if i < 2 {
 						close(entered[i])
@@ -141,12 +145,19 @@ func TestPublicCOWCapturedPrefixAppendInstallAndExactACK(t *testing.T) {
 
 func TestPublicCOWCapturedPrefixFailureWakesSuccessorAndPoisons(t *testing.T) {
 	opts := commandWALDurabilityProofOptions(t.TempDir())
-	opts.MemtableMode = "cow_btree"
+	opts.MemtableMode = "cow_ordered"
 	database, err := Open(opts)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer database.Close()
+	// Reuse collector-owned storage through completed captures before the
+	// injected failure. Old retained resources must not survive that reuse.
+	for i := 0; i < 8; i++ {
+		if err := database.SetSync([]byte("warm"), []byte("value")); err != nil {
+			t.Fatal(err)
+		}
+	}
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	var once sync.Once

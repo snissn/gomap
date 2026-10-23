@@ -91,10 +91,14 @@ const (
 	// frame. The caller must not acknowledge it until a later durable-prefix
 	// barrier has synced the frame. It may select bounded SetMaterializedRID.
 	RawKVCommandWALAppendDurablePrefixParticipant
+	// RawKVCommandWALAppendCapturedDurable orders dependencies before emitting a
+	// durable-class mutation, without performing the physical WAL sync. Its
+	// caller must retain and sync a captured prefix before acknowledging.
+	RawKVCommandWALAppendCapturedDurable
 )
 
 func (mode RawKVCommandWALAppendMode) valid() bool {
-	return mode <= RawKVCommandWALAppendDurablePrefixParticipant
+	return mode <= RawKVCommandWALAppendCapturedDurable
 }
 
 func (mode RawKVCommandWALAppendMode) sync() bool {
@@ -102,7 +106,14 @@ func (mode RawKVCommandWALAppendMode) sync() bool {
 }
 
 func (mode RawKVCommandWALAppendMode) allowsMaterializedRID() bool {
-	return mode == RawKVCommandWALAppendDurable || mode == RawKVCommandWALAppendDurablePrefixParticipant
+	return mode == RawKVCommandWALAppendDurable || mode == RawKVCommandWALAppendDurablePrefixParticipant || mode == RawKVCommandWALAppendCapturedDurable
+}
+
+func rawKVCommandWALAppendMode(sync bool) RawKVCommandWALAppendMode {
+	if sync {
+		return RawKVCommandWALAppendDurable
+	}
+	return RawKVCommandWALAppendRelaxed
 }
 
 type rawKVCommandWALRIDCacheEntry struct {
@@ -589,8 +600,13 @@ func (db *DB) appendCommandWALDurablePrefixBarrier() (uint64, error) {
 }
 
 func (db *DB) appendCommandWALPrefixBarrier(captured bool) (uint64, error) {
+	return db.appendCommandWALPrefixBarrierForOwner(captured, nil)
+}
+
+func (db *DB) appendCommandWALPrefixBarrierForOwner(captured bool, privateOwner *transactionowner.Owner) (uint64, error) {
 	intent := &commandWALBatchIntent{
-		kind: commitlog.CommandKindDurablePrefixBarrier, scope: commitlog.CommandScopeSystem,
+		privateCOWOwner: privateOwner,
+		kind:            commitlog.CommandKindDurablePrefixBarrier, scope: commitlog.CommandScopeSystem,
 		payloadFormat: commitlog.PayloadFormatDurablePrefixBarrierV1,
 		statsPath:     commandWALAppendStatsBarrier, statsPathSet: true,
 		capturedDurable: captured,
@@ -1353,6 +1369,7 @@ func (db *DB) AppendRawKVCommandWALOrderedEntriesWithMode(entries []batchpkg.Ent
 	if intent == nil || err != nil {
 		return 0, err
 	}
+	intent.capturedDurable = mode == RawKVCommandWALAppendCapturedDurable
 	publicIntent := &CommandWALIntent{inner: *intent}
 	defer releaseUnassignedCommandWALIntent(&publicIntent.inner)
 	return db.AppendCommandWALIntent(publicIntent, mode.sync())
@@ -1397,6 +1414,7 @@ func (db *DB) AppendRawKVCommandWALOrderedEntryScanWithHintAndMode(scanEntries f
 	if intent == nil || err != nil {
 		return 0, err
 	}
+	intent.capturedDurable = mode == RawKVCommandWALAppendCapturedDurable
 	publicIntent := &CommandWALIntent{inner: *intent}
 	defer releaseUnassignedCommandWALIntent(&publicIntent.inner)
 	return db.AppendCommandWALIntent(publicIntent, mode.sync())
@@ -1449,6 +1467,7 @@ func (db *DB) AppendRawKVCommandWALOrderedEntryScanWithHintAndModeMeasured(scanE
 		return 0, timing, err
 	}
 	defer unlockCommandWALPublish()
+	intent.capturedDurable = mode == RawKVCommandWALAppendCapturedDurable
 	lsn, err := db.appendCommandWALIntentWithTiming(intent, mode.sync(), &timing)
 	return lsn, timing, err
 }
@@ -1690,6 +1709,7 @@ func (db *DB) appendRawKVCommandWALOrderedEntryScanWithHintPreparedFinalized(pre
 		return 0, timing, err
 	}
 	intent.rawKVFinalize = finalize
+	intent.capturedDurable = mode == RawKVCommandWALAppendCapturedDurable
 	if guard != nil {
 		intent.privateCOWOwner = guard.privateCOWOwnerFor(db)
 	}
@@ -2462,6 +2482,14 @@ func (db *DB) AppendRawKVPointCommandWALTrustedWithRevision(op commitlog.RawKVOp
 // command-WAL frames. The assigned revision is therefore ordered with the
 // frame's LSN and may be reused by the caller for subsequent memtable publish.
 func (db *DB) AppendRawKVPointCommandWALTrustedWithPreparedRevision(op commitlog.RawKVOp, key, value []byte, assignRevision func() page.EntryRevision, sync bool) (uint64, error) {
+	return db.AppendRawKVPointCommandWALTrustedWithPreparedRevisionAndMode(op, key, value, assignRevision, rawKVCommandWALAppendMode(sync))
+}
+
+// AppendRawKVPointCommandWALTrustedWithPreparedRevisionAndMode selects the physical acknowledgement owner explicitly.
+func (db *DB) AppendRawKVPointCommandWALTrustedWithPreparedRevisionAndMode(op commitlog.RawKVOp, key, value []byte, assignRevision func() page.EntryRevision, mode RawKVCommandWALAppendMode) (uint64, error) {
+	if !mode.valid() {
+		return 0, ErrCommandWALUnsupported
+	}
 	if db == nil || !db.commandWAL {
 		return 0, nil
 	}
@@ -2501,8 +2529,8 @@ func (db *DB) AppendRawKVPointCommandWALTrustedWithPreparedRevision(op commitlog
 	return db.appendCommandWALIntent(&commandWALBatchIntent{
 		kind: commitlog.CommandKindRawKVBatch, scope: commitlog.CommandScopeRawKV,
 		payloadFormat: commitlog.PayloadFormatRawKVBatchV1, payload: payload, trustedPayload: true,
-		statsPath: commandWALAppendStatsPoint, statsPathSet: true,
-	}, sync)
+		statsPath: commandWALAppendStatsPoint, statsPathSet: true, capturedDurable: mode == RawKVCommandWALAppendCapturedDurable,
+	}, mode.sync())
 }
 
 func (db *DB) appendRawKVPointCommandWALTrustedWithRevision(op commitlog.RawKVOp, key, value []byte, revision uint64, sync bool) (uint64, error) {
@@ -2546,7 +2574,7 @@ func (db *DB) appendRawKVPointCommandWALTrustedWithRevision(op commitlog.RawKVOp
 // must record the command as pending and treat subsequent command-WAL appends as
 // recovery-required until the DB is reopened.
 func (db *DB) AppendRawKVBatchPayloadCommandWAL(payload []byte, sync bool) (uint64, error) {
-	lsn, _, err := db.appendRawKVBatchPayloadCommandWAL(payload, sync, false, false)
+	lsn, _, err := db.appendRawKVBatchPayloadCommandWAL(payload, rawKVCommandWALAppendMode(sync), false, false)
 	return lsn, err
 }
 
@@ -2555,7 +2583,7 @@ func (db *DB) AppendRawKVBatchPayloadCommandWAL(payload []byte, sync bool) (uint
 // It has the same post-append flush-failure contract as
 // AppendRawKVBatchPayloadCommandWAL.
 func (db *DB) AppendRawKVBatchPayloadCommandWALTrusted(payload []byte, sync bool) (uint64, error) {
-	lsn, _, err := db.appendRawKVBatchPayloadCommandWAL(payload, sync, true, false)
+	lsn, _, err := db.appendRawKVBatchPayloadCommandWAL(payload, rawKVCommandWALAppendMode(sync), true, false)
 	return lsn, err
 }
 
@@ -2564,31 +2592,34 @@ func (db *DB) AppendRawKVBatchPayloadCommandWALTrusted(payload []byte, sync bool
 // serialization/barriers, backend preparation, append, flush/sync, and
 // post-append bookkeeping without changing write ordering.
 func (db *DB) AppendRawKVBatchPayloadCommandWALTrustedMeasured(payload []byte, sync bool) (uint64, CommandWALRequestTiming, error) {
-	return db.appendRawKVBatchPayloadCommandWAL(payload, sync, true, true)
+	return db.appendRawKVBatchPayloadCommandWAL(payload, rawKVCommandWALAppendMode(sync), true, true)
 }
 
-func (db *DB) appendRawKVBatchPayloadCommandWAL(payload []byte, sync bool, trusted bool, measured bool) (uint64, CommandWALRequestTiming, error) {
+func (db *DB) appendRawKVBatchPayloadCommandWAL(payload []byte, mode RawKVCommandWALAppendMode, trusted bool, measured bool) (uint64, CommandWALRequestTiming, error) {
 	return db.appendRawKVBatchPayloadCommandWALPrepared(func() ([]byte, error) {
 		return payload, nil
-	}, sync, trusted, measured)
+	}, mode, trusted, measured)
 }
 
 // AppendRawKVBatchPayloadCommandWALTrustedPrepared builds a trusted payload
 // while holding the barrier-aware command-WAL publish lock, then appends that
 // exact payload before releasing the lock.
 func (db *DB) AppendRawKVBatchPayloadCommandWALTrustedPrepared(prepare func() ([]byte, error), sync bool) (uint64, error) {
-	lsn, _, err := db.appendRawKVBatchPayloadCommandWALPrepared(prepare, sync, true, false)
+	lsn, _, err := db.appendRawKVBatchPayloadCommandWALPrepared(prepare, rawKVCommandWALAppendMode(sync), true, false)
 	return lsn, err
 }
 
 // AppendRawKVBatchPayloadCommandWALTrustedPreparedMeasured is the diagnostic
 // counterpart to AppendRawKVBatchPayloadCommandWALTrustedPrepared.
 func (db *DB) AppendRawKVBatchPayloadCommandWALTrustedPreparedMeasured(prepare func() ([]byte, error), sync bool) (uint64, CommandWALRequestTiming, error) {
-	return db.appendRawKVBatchPayloadCommandWALPrepared(prepare, sync, true, true)
+	return db.appendRawKVBatchPayloadCommandWALPrepared(prepare, rawKVCommandWALAppendMode(sync), true, true)
 }
 
-func (db *DB) appendRawKVBatchPayloadCommandWALPrepared(prepare func() ([]byte, error), sync bool, trusted bool, measured bool) (uint64, CommandWALRequestTiming, error) {
+func (db *DB) appendRawKVBatchPayloadCommandWALPrepared(prepare func() ([]byte, error), mode RawKVCommandWALAppendMode, trusted bool, measured bool) (uint64, CommandWALRequestTiming, error) {
 	var requestTiming CommandWALRequestTiming
+	if !mode.valid() {
+		return 0, requestTiming, ErrCommandWALUnsupported
+	}
 	if db == nil || !db.commandWAL {
 		return 0, requestTiming, nil
 	}
@@ -2641,15 +2672,31 @@ func (db *DB) appendRawKVBatchPayloadCommandWALPrepared(prepare func() ([]byte, 
 	intent := &commandWALBatchIntent{
 		kind: commitlog.CommandKindRawKVBatch, scope: commitlog.CommandScopeRawKV,
 		payloadFormat: commitlog.PayloadFormatRawKVBatchV1, payload: payload, trustedPayload: trusted,
-		statsPath: commandWALAppendStatsPayload, statsPathSet: true,
+		statsPath: commandWALAppendStatsPayload, statsPathSet: true, capturedDurable: mode == RawKVCommandWALAppendCapturedDurable,
 	}
-	lsn, err := db.appendCommandWALIntentWithTiming(intent, sync, func() *CommandWALRequestTiming {
+	lsn, err := db.appendCommandWALIntentWithTiming(intent, mode.sync(), func() *CommandWALRequestTiming {
 		if measured {
 			return &requestTiming
 		}
 		return nil
 	}())
 	return lsn, requestTiming, err
+}
+
+// Mode variants share canonical payload construction and preserve dependency ordering.
+func (db *DB) AppendRawKVBatchPayloadCommandWALTrustedWithMode(payload []byte, mode RawKVCommandWALAppendMode) (uint64, error) {
+	lsn, _, err := db.appendRawKVBatchPayloadCommandWAL(payload, mode, true, false)
+	return lsn, err
+}
+func (db *DB) AppendRawKVBatchPayloadCommandWALTrustedMeasuredWithMode(payload []byte, mode RawKVCommandWALAppendMode) (uint64, CommandWALRequestTiming, error) {
+	return db.appendRawKVBatchPayloadCommandWAL(payload, mode, true, true)
+}
+func (db *DB) AppendRawKVBatchPayloadCommandWALTrustedPreparedWithMode(prepare func() ([]byte, error), mode RawKVCommandWALAppendMode) (uint64, error) {
+	lsn, _, err := db.appendRawKVBatchPayloadCommandWALPrepared(prepare, mode, true, false)
+	return lsn, err
+}
+func (db *DB) AppendRawKVBatchPayloadCommandWALTrustedPreparedMeasuredWithMode(prepare func() ([]byte, error), mode RawKVCommandWALAppendMode) (uint64, CommandWALRequestTiming, error) {
+	return db.appendRawKVBatchPayloadCommandWALPrepared(prepare, mode, true, true)
 }
 
 func (db *DB) PublishCommandWALNoop(intent *CommandWALIntent, sync bool) error {
@@ -2857,7 +2904,7 @@ func (db *DB) appendCommandWALIntentWithTiming(intent *commandWALBatchIntent, sy
 		intent.rawKVRIDCache.release()
 	}
 	beforeAppend := func() error {
-		if !sync {
+		if !sync && !intent.capturedDurable {
 			return nil
 		}
 		return db.syncCommandWALDependenciesThrough(^uint64(0), dependencies)
@@ -2923,6 +2970,9 @@ func (db *DB) appendCommandWALIntentWithTiming(intent *commandWALBatchIntent, sy
 			db.poisonCommandWALAfterPostAppendFailure(intent)
 		}
 		return lsn, err
+	}
+	if intent.capturedDurable {
+		commandWALStoreMax(&db.commandWALDurableMarkerLSN, lsn)
 	}
 	actualSync := sync
 	if requestTiming != nil {

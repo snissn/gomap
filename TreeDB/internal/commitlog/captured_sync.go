@@ -9,7 +9,17 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/internal/stableio"
 )
+
+// One exact handle per active segment is shared by captures. Its reference
+// count is protected by journal.mu; each capture retains it through Sync.
+// Frontier authority belongs to the immutable capture, not this handle owner.
+type capturedJournalFile struct {
+	token *rootpublication.StableResourceToken
+	seq   uint64
+	refs  int
+}
 
 // CapturedSync owns a complete flushed segment prefix independently of the
 // writer's mutable buffers. Appends and rotations may proceed while Sync runs.
@@ -19,7 +29,7 @@ import (
 type CapturedSync struct {
 	journal            *CommandJournal
 	writer             *Writer // Only atomic I/O counters are accessed after capture.
-	active             *rootpublication.StableResourceToken
+	active             *capturedJournalFile
 	rotated            []*rootpublication.StableResourceToken
 	root, path, walDir string
 	LSN                uint64
@@ -30,6 +40,12 @@ type CapturedSync struct {
 // CaptureSync flushes under append authority and pins the exact active handle
 // and every earlier rotation dependency before relinquishing that authority.
 func (j *CommandJournal) CaptureSync(rotated []*rootpublication.StableResourceToken) (_ *CapturedSync, err error) {
+	return j.CaptureSyncInto(new(CapturedSync), rotated)
+}
+
+// CaptureSyncInto initializes unused caller-owned storage. A target may not be
+// reused: its captured identity/frontier must remain immutable through release.
+func (j *CommandJournal) CaptureSyncInto(target *CapturedSync, rotated []*rootpublication.StableResourceToken) (_ *CapturedSync, err error) {
 	if j == nil {
 		return nil, errors.New("commitlog: command journal is closed")
 	}
@@ -38,22 +54,38 @@ func (j *CommandJournal) CaptureSync(rotated []*rootpublication.StableResourceTo
 	if err := j.stableRotationFailStopErrorLocked(); err != nil {
 		return nil, err
 	}
-	if j.writer == nil {
+	if j.closing || j.writer == nil {
 		return nil, errors.New("commitlog: command journal is closed")
+	}
+	if target == nil || target.journal != nil {
+		return nil, errors.New("commitlog: capture target must be unused")
 	}
 	if err := j.flushDirectCommandWALLocked(false, durabilitycut.Enabled()); err != nil {
 		return nil, err
 	}
-	target := &CapturedSync{journal: j, writer: j.writer, root: filepath.Dir(j.walDir), path: j.path, walDir: j.walDir, LSN: j.activeSegmentMaxLSN, Bytes: uint64(j.writer.Size())}
+	*target = CapturedSync{journal: j, writer: j.writer, root: filepath.Dir(j.walDir), path: j.path, walDir: j.walDir, LSN: j.activeSegmentMaxLSN, Bytes: uint64(j.writer.Size())}
 	defer func() {
 		if err != nil {
-			target.releaseResources()
+			for _, token := range target.rotated {
+				token.Release()
+			}
+			if target.active != nil {
+				j.releaseCapturedFileLocked(target.active)
+			}
 		}
 	}()
-	target.active, err = j.stableSegmentToken(j.writer.f, j.path, j.segmentSeq, rootpublication.ReachabilityCommandWALActive, rootpublication.DurableFrontier{Bytes: target.Bytes, MaxLSN: target.LSN}, nil, false)
-	if err != nil {
-		return nil, err
+	if j.capturedFile == nil || j.capturedFile.seq != j.segmentSeq {
+		token, tokenErr := j.stableSegmentToken(j.writer.f, j.path, j.segmentSeq, rootpublication.ReachabilityCommandWALActive, rootpublication.DurableFrontier{}, nil, false)
+		if tokenErr != nil {
+			return nil, tokenErr
+		}
+		if j.capturedFile != nil {
+			j.releaseCapturedFileLocked(j.capturedFile)
+		}
+		j.capturedFile = &capturedJournalFile{token: token, seq: j.segmentSeq, refs: 1}
 	}
+	target.active = j.capturedFile
+	target.active.refs++
 	for _, original := range rotated {
 		var pinned *rootpublication.StableResourceToken
 		err = original.WithPinnedFile(func(file *os.File) error {
@@ -102,24 +134,26 @@ func (target *CapturedSync) Sync() error {
 			}
 		}
 	}
-	if err := durabilitycut.EmitPath(durabilitycut.BeforeDependencyFileSync, durabilitycut.ResourceCommandWAL, target.root, target.path); err != nil {
+	if err := durabilitycut.EmitPathLSN(durabilitycut.BeforeDependencyFileSync, durabilitycut.ResourceCommandWAL, target.root, target.path, target.LSN); err != nil {
 		return err
 	}
 	started := time.Now()
-	err := target.active.SyncThrough()
+	// Always perform a physical sync. The shared handle's zero frontier is only
+	// a retention pin and must never cache a later capture's durability result.
+	err := target.active.token.WithPinnedFile(func(file *os.File) error { return stableio.SyncFile(file) })
 	target.writer.fileSyncCalls.Add(1)
 	target.writer.fileSyncNs.Add(uint64(time.Since(started)))
 	if err != nil {
 		target.writer.fileSyncErrors.Add(1)
 		return err
 	}
-	return durabilitycut.EmitPath(durabilitycut.AfterDependencyFileSync, durabilitycut.ResourceCommandWAL, target.root, target.path)
+	return durabilitycut.EmitPathLSN(durabilitycut.AfterDependencyFileSync, durabilitycut.ResourceCommandWAL, target.root, target.path, target.LSN)
 }
 
-func (target *CapturedSync) releaseResources() {
-	target.active.Release()
-	for _, token := range target.rotated {
-		token.Release()
+func (j *CommandJournal) releaseCapturedFileLocked(file *capturedJournalFile) {
+	file.refs--
+	if file.refs == 0 {
+		file.token.Release()
 	}
 }
 
@@ -128,9 +162,12 @@ func (target *CapturedSync) Release() {
 		return
 	}
 	target.once.Do(func() {
-		target.releaseResources()
+		for _, token := range target.rotated {
+			token.Release()
+		}
 		j := target.journal
 		j.mu.Lock()
+		j.releaseCapturedFileLocked(target.active)
 		j.syncPins--
 		j.syncCond.Broadcast()
 		j.mu.Unlock()

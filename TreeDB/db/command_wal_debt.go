@@ -147,6 +147,10 @@ func (debt *CommandWALDependencyDebt) rotationFileViewThrough(lsn uint64) ([]*ro
 	}
 	debt.mu.Unlock()
 
+	if len(tokens) == 0 {
+		return nil, nil
+	}
+
 	// One segment may first be retained as the active successor of a rotation
 	// and later as the closed predecessor of another rotation. Coalesce that
 	// exact physical identity and select the token with the greatest byte/LSN
