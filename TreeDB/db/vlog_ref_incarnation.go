@@ -132,6 +132,8 @@ func (t *valueLogRefTracker) close() error {
 	t.mu.Lock()
 	owner, charge := t.metadata, t.metadataCharge
 	t.counts.close()
+	t.rawCounts.close()
+	t.rawValid = false
 	t.incarnation = valueLogRefIncarnation{}
 	t.valid, t.dirty = false, false
 	t.metadata, t.metadataCharge = nil, 0

@@ -171,6 +171,7 @@ func TestCOWIteratorLeafCacheRetainsRecordVerification(t *testing.T) {
 	defer writer.Close()
 	check := func(wantCorrupt bool) {
 		t.Helper()
+		before := db.cow.budget.Stats()
 		it, err := snapshot.Iterator([]byte("a000"), nil)
 		if err == nil {
 			err = it.Error()
@@ -181,6 +182,10 @@ func TestCOWIteratorLeafCacheRetainsRecordVerification(t *testing.T) {
 		}
 		if !wantCorrupt && err != nil {
 			t.Fatal(err)
+		}
+		after := db.cow.budget.Stats()
+		if after.ExternalBytes != before.ExternalBytes || after.ExternalLeases != before.ExternalLeases || after.ReservedBytes != before.ReservedBytes {
+			t.Fatalf("physical iterator did not drain after corrupt=%t: before=%+v after=%+v", wantCorrupt, before, after)
 		}
 	}
 	for _, offset := range []int64{int64(pointer.Offset - 4), int64(pointer.Offset)} {

@@ -211,7 +211,7 @@ func TestSetWithWorkChargesStringBytesAndCapacity(t *testing.T) {
 	}
 	fork := shared.Copy()
 	originalRoot := shared.root
-	capacity := cap(originalRoot.items)
+	capacity := min(len(originalRoot.items)+1, cap(originalRoot.items))
 	pairBytes := uint64(unsafe.Sizeof(mapPair[string, int]{}))
 	rejected := false
 	work := &mutationWorkTrace{reject: func(records, bytes uint64) bool {
@@ -222,7 +222,7 @@ func TestSetWithWorkChargesStringBytesAndCapacity(t *testing.T) {
 		return false
 	}}
 	if _, _, ready, err := shared.SetWithWork("5", 55, work); ready || err != nil || !rejected {
-		t.Fatalf("full capacity refusal: ready=%v err=%v rejected=%v cap=%d", ready, err, rejected, capacity)
+		t.Fatalf("allocated capacity refusal: ready=%v err=%v rejected=%v cap=%d", ready, err, rejected, capacity)
 	}
 	if shared.root != originalRoot {
 		t.Fatal("copied node published before backing admission")

@@ -760,7 +760,7 @@ func cowOrderedNodeReserve(height int, replacement, remove bool, maxEntries int,
 	}
 	pairs := cowAllocation(uint64(2*items) * pairBytes)
 	children := cowAllocation(uint64(4*btreeDefaultDegree) * uint64(unsafe.Sizeof(uintptr(0))))
-	header := cowAllocation(uint64(unsafe.Sizeof(cowNodeLayout{}))) + cowAllocation(uint64(unsafe.Sizeof([]uintptr{})))
+	header := cowAllocation(uint64(unsafe.Sizeof(cowInternalNodeLayout{})))
 	if height == 1 {
 		children = 0
 		header = cowAllocation(uint64(unsafe.Sizeof(cowNodeLayout{})))

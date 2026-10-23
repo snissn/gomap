@@ -143,7 +143,10 @@ func TestCOWRawBasisWorkspaceLifetime(t *testing.T) {
 			t.Fatal("caller duplicated the cache-owned dictionary-free decoder")
 		}
 	}
-	workspace, point, receipt := basis.reader, basis.reader.point, basis.reader.lease
+	workspace, point, receipt := b.cowReader, b.cowReader.point, b.cowReader.lease
+	if point == nil || point == a.cowReader.point {
+		t.Fatal("retained readers did not own independent physical traversal scratch")
+	}
 	token, ok := basis.snapshot.StateToken()
 	if !ok {
 		t.Fatal("missing basis token")
@@ -183,11 +186,8 @@ func TestCOWRawBasisWorkspaceLifetime(t *testing.T) {
 		t.Fatal(err)
 	}
 	wg.Wait()
-	if basis.reader != workspace || basis.reader.point != point {
-		t.Fatal("shared physical backing replaced between fresh cuts")
-	}
-	if b.cowReader == nil || b.cowReader.point != nil {
-		t.Fatal("raw point/successor duplicated physical traversal scratch in caller cut")
+	if b.cowReader != workspace || b.cowReader.point != point {
+		t.Fatal("retained reader backing replaced between reads")
 	}
 	// This pointer is not in the retained disk Snapshot. Reusing its decoder
 	// must still resolve the file and visibility through the newer caller cut.
@@ -235,7 +235,7 @@ func TestCOWRawBasisWorkspaceLifetime(t *testing.T) {
 	if got, err := current.Get([]byte("p")); err != nil || !bytes.Equal(got, pointer) {
 		t.Fatalf("new physical basis pointer: %d %v", len(got), err)
 	}
-	if db.cow.physicalReader != shared || len(current.cowCut.basis.reader.codecs) != 0 || len(basis.reader.codecs) != 0 {
+	if db.cow.physicalReader != shared || (current.cowCut.basis.reader != nil && len(current.cowCut.basis.reader.codecs) != 0) || len(basis.reader.codecs) != 0 || len(current.cowReader.codecs) != 0 {
 		t.Fatal("physical bases duplicated dictionary-free leaf/value decoding")
 	}
 	check(b)
@@ -248,7 +248,7 @@ func TestCOWRawBasisWorkspaceLifetime(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !errors.Is(receipt.Resize(1), memtable.ErrCOWClosed) {
-		t.Fatal("last old-basis edge did not refund shared workspace")
+		t.Fatal("retained reader close did not refund its workspace")
 	}
 	receipt = nil
 	if err := db.Close(); err != nil {

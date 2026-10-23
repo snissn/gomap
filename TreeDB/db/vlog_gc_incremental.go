@@ -104,13 +104,16 @@ func runLookupValueLogRefAtKeyHook() {
 }
 
 type valueLogRefDelta struct {
-	inline                      [16]valueLogRefDeltaEntry
-	inlineN                     int
-	changes                     map[uint32]int64
-	positives                   map[uint32]int64
-	requiresCandidateProjection bool
-	allowEmptyDependencyReuse   bool
-	outerLeafDependencyReuse    bool
+	inline                          [16]valueLogRefDeltaEntry
+	inlineN                         int
+	changes                         map[uint32]int64
+	positives                       map[uint32]int64
+	requiresCandidateProjection     bool
+	allowEmptyDependencyReuse       bool
+	outerLeafDependencyReuse        bool
+	rawChanges                      *valueLogRefDelta
+	rawExact                        bool
+	rawIndexID, rawInput, rawOutput uint64
 }
 
 const valueLogRefDeltaPromotedMapInitCap = 128
@@ -151,6 +154,12 @@ func (d *valueLogRefDelta) resetForReuse() {
 		clear(d.inline[:d.inlineN])
 		d.inlineN = 0
 	}
+	if d.rawChanges != nil {
+		releaseValueLogRefDelta(d.rawChanges)
+		d.rawChanges = nil
+	}
+	d.rawExact = false
+	d.rawIndexID, d.rawInput, d.rawOutput = 0, 0, 0
 	d.requiresCandidateProjection = false
 	d.allowEmptyDependencyReuse = false
 	d.outerLeafDependencyReuse = false
@@ -295,6 +304,11 @@ type valueLogRefTracker struct {
 	revision                                 uint64
 	commitSeq                                uint64
 	counts                                   valueLogRefCounts
+	// Process-local raw edges belong to one exact ordinary DATA root.
+	rawCounts                                valueLogRefCounts
+	rawCommitSeq, rawUserRoot, rawSystemRoot uint64
+	rawIncarnation                           valueLogRefIncarnation
+	rawValid                                 bool
 	valid                                    bool
 	dirty                                    bool
 }
@@ -330,6 +344,8 @@ func (t *valueLogRefTracker) replaceOwned(counts *valueLogRefCounts, seq uint64,
 		return
 	}
 	t.mu.Lock()
+	t.rawCounts.close()
+	t.rawValid = false
 	old := t.counts.take()
 	t.counts = counts.take()
 	t.commitSeq, t.incarnation, t.valid, t.dirty = seq, incarnation, true, dirty
@@ -369,6 +385,8 @@ func (t *valueLogRefTracker) replaceUnlessAdvancedOwned(counts *valueLogRefCount
 	if t.revision != revision && (t.commitSeq > seq || (t.commitSeq == seq && t.incarnation != incarnation)) {
 		return false
 	}
+	t.rawCounts.close()
+	t.rawValid = false
 	old := t.counts.take()
 	t.counts = counts.take()
 	t.commitSeq, t.incarnation, t.valid, t.dirty = seq, incarnation, true, dirty
@@ -383,6 +401,8 @@ func (t *valueLogRefTracker) invalidate() {
 	}
 	t.mu.Lock()
 	t.valid = false
+	t.rawValid = false
+	t.rawCounts.close()
 	t.revision++
 	t.mu.Unlock()
 }
@@ -398,6 +418,8 @@ func (t *valueLogRefTracker) applyDelta(nextCommitSeq uint64, generation uint64,
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
+	t.rawCounts.close()
+	t.rawValid = false
 	if !t.valid {
 		// Invalidation is the conservative fallback for commits without an exact
 		// delta. Later deltas cannot repair missing history, so leave the optional
@@ -806,9 +828,8 @@ func (db *DB) shouldCollectValueLogRefDelta(baseSeq uint64) bool {
 		return false
 	}
 	// Outer-leaf publication consumes this apply-local delta independently of
-	// the persisted GC tracker. It proves the common additive/unchanged
-	// transition without rescanning the candidate tree; subtractive transitions
-	// still fall back to exact projection.
+	// the persisted GC tracker. Exact raw-leaf receipts also prove ordinary
+	// subtractive transitions once the process-local census is initialized.
 	if db.indexOuterLeavesInValueLog {
 		return true
 	}
@@ -817,14 +838,46 @@ func (db *DB) shouldCollectValueLogRefDelta(baseSeq uint64) bool {
 
 // buildValueLogRefDeltaForApply consumes the producer's borrowed receipt before
 // the caller releases either the source root or output construction. Logical
-// removals remain unchanged; only the proven unchanged raw-leaf base may reuse
-// the already admitted physical dependency closure.
+// removals remain unchanged. The separately bound raw-edge receipt permits
+// exact dependency projection without treating physical edges as ValuePtrs.
 func (db *DB) buildValueLogRefDeltaForApply(idx *indexGen, rootID, newRoot, baseSeq uint64, entries []batchpkg.Entry, ranges []batchpkg.DeleteRange, result *zipper.ApplyResult) (*valueLogRefDelta, error) {
 	delta, err := db.buildValueLogRefDelta(idx.pager, rootID, baseSeq, entries, ranges, &result.OldPointerRefs, result.OldEntriesRemoved, result.OldPointerRefsCollected)
 	if err == nil && delta != nil && idx.zipper.PreservesMaterializedBaseV6(result, rootID, newRoot) {
 		delta.requiresCandidateProjection = false
 	}
+	if err == nil && delta != nil {
+		raw := newValueLogRefDelta()
+		exact, rawErr := idx.zipper.RawLeafReferenceDelta(result, rootID, newRoot, func(id uint32, change int64) error { return raw.addRawChangeChecked(id, change) })
+		if rawErr != nil {
+			releaseValueLogRefDelta(raw)
+			releaseValueLogRefDelta(delta)
+			return nil, rawErr
+		}
+		if exact {
+			delta.rawChanges, delta.rawExact = raw, true
+			delta.rawIndexID, delta.rawInput, delta.rawOutput = idx.id, rootID, newRoot
+		} else {
+			releaseValueLogRefDelta(raw)
+		}
+	}
 	return delta, err
+}
+
+// Raw edge aggregation is finite even when multiple private applies cancel.
+func (d *valueLogRefDelta) addRawChangeChecked(id uint32, change int64) error {
+	var current int64
+	_ = d.forEachChange(func(fileID uint32, n int64) error {
+		if id == fileID {
+			current = n
+		}
+		return nil
+	})
+	const max = int64(^uint64(0) >> 1)
+	if change > 0 && current > max-change || change < 0 && current < -max-change {
+		return errors.New("raw leaf delta overflow")
+	}
+	d.addChange(id, change)
+	return nil
 }
 
 func (db *DB) buildValueLogRefDelta(p *pager.Pager, rootID uint64, baseSeq uint64, entries []batchpkg.Entry, ranges []batchpkg.DeleteRange, oldPointerRefs *zipper.PointerRefCounts, oldEntriesRemoved uint64, oldPointerRefsCollected bool) (*valueLogRefDelta, error) {

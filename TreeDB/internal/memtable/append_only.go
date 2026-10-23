@@ -682,6 +682,14 @@ func NewAppendOnlyWithCapacityEstimatedEntryBytes(capacity, estimatedBytesPerEnt
 	return newAppendOnlyWithInitialEntries(n)
 }
 
+// NewAppendOnlyWithCapacityHint records the expected capacity without allocating
+// entry backing until the first write or reservation. This is useful for mutable
+// shards that may be rotated without receiving any writes.
+func NewAppendOnlyWithCapacityHint(capacity, estimatedBytesPerEntry int) *AppendOnly {
+	n := appendOnlyInitialEntriesForCapacity(capacity, estimatedBytesPerEntry)
+	return newAppendOnlyWithInitialEntriesHint(n)
+}
+
 // NewAppendOnlyWithEntryCapacity creates an append-only table sized for an
 // expected entry count instead of a byte-capacity estimate.
 func NewAppendOnlyWithEntryCapacity(entries int) *AppendOnly {
@@ -690,8 +698,13 @@ func NewAppendOnlyWithEntryCapacity(entries int) *AppendOnly {
 }
 
 func newAppendOnlyWithInitialEntries(n int) *AppendOnly {
+	m := newAppendOnlyWithInitialEntriesHint(n)
+	m.entries = getAppendOnlyEntries(n)
+	return m
+}
+
+func newAppendOnlyWithInitialEntriesHint(n int) *AppendOnly {
 	return &AppendOnly{
-		entries:        getAppendOnlyEntries(n),
 		baseEntriesLen: n,
 		count:          0,
 		ordered:        true,
@@ -1054,7 +1067,13 @@ func (m *AppendOnly) reserveAdditionalEntriesLocked(additional int) bool {
 	if needed <= len(m.entries) {
 		return false
 	}
-	target, skippedGrowthAllocs, skippedGrowthBytes := appendOnlyReserveTargetCapacity(len(m.entries), needed)
+	current := len(m.entries)
+	if m.baseEntriesLen > current {
+		// A deferred table should reserve as though its planned baseline were
+		// already present, including when a smaller warm backing was retained.
+		current = m.baseEntriesLen
+	}
+	target, skippedGrowthAllocs, skippedGrowthBytes := appendOnlyReserveTargetCapacity(current, needed)
 	if target <= len(m.entries) {
 		return false
 	}
@@ -1442,6 +1461,9 @@ func (m *AppendOnly) updateLatestIndexLocked(key []byte, idx int) {
 func (m *AppendOnly) appendEntryCoreLocked(key, value []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision, steal bool, borrowValue bool) (idx int, ent *appendOnlyEntry, storedKey []byte) {
 	if m.count == len(m.entries) {
 		nextCap := appendOnlyNextCapacity(len(m.entries))
+		if nextCap < m.baseEntriesLen {
+			nextCap = m.baseEntriesLen
+		}
 		m.growEntriesLocked(nextCap, true)
 	}
 	idx = m.count
@@ -2372,7 +2394,7 @@ func (m *AppendOnly) Reset() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.waitIteratorLeasesLocked()
-	m.resetLockedWithPolicy(0, 0, true)
+	m.resetLockedWithPolicy(0, 0, appendOnlyResetRetainObserved)
 }
 
 // Release returns large internal buffers to package pools when the table is no
@@ -2432,11 +2454,11 @@ func (m *AppendOnly) ResetWithCapacity(capacity, estimatedBytesPerEntry int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.waitIteratorLeasesLocked()
-	m.resetLockedWithPolicy(capacity, estimatedBytesPerEntry, true)
+	m.resetLockedWithPolicy(capacity, estimatedBytesPerEntry, appendOnlyResetRetainObserved)
 }
 
 func (m *AppendOnly) resetLocked(capacity, estimatedBytesPerEntry int) {
-	m.resetLockedWithPolicy(capacity, estimatedBytesPerEntry, true)
+	m.resetLockedWithPolicy(capacity, estimatedBytesPerEntry, appendOnlyResetRetainObserved)
 }
 
 // ResetWithCapacityHard resets and clamps retained internal buffers to the
@@ -2445,7 +2467,17 @@ func (m *AppendOnly) ResetWithCapacityHard(capacity, estimatedBytesPerEntry int)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.waitIteratorLeasesLocked()
-	m.resetLockedWithPolicy(capacity, estimatedBytesPerEntry, false)
+	m.resetLockedWithPolicy(capacity, estimatedBytesPerEntry, appendOnlyResetPreallocate)
+}
+
+// ResetWithCapacityLimit resets the table and bounds retained entry backing
+// without allocating a replacement array. Use this when recycling an idle
+// table; the first write or reservation prepares deferred backing.
+func (m *AppendOnly) ResetWithCapacityLimit(capacity, estimatedBytesPerEntry int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.waitIteratorLeasesLocked()
+	m.resetLockedWithPolicy(capacity, estimatedBytesPerEntry, appendOnlyResetLimitOnly)
 }
 
 // ResetDropEntries resets the table for reuse without retaining entry backing.
@@ -2454,7 +2486,16 @@ func (m *AppendOnly) ResetDropEntries() {
 	m.release(false)
 }
 
-func (m *AppendOnly) resetLockedWithPolicy(capacity, estimatedBytesPerEntry int, retainObserved bool) {
+type appendOnlyResetPolicy uint8
+
+const (
+	appendOnlyResetRetainObserved appendOnlyResetPolicy = iota
+	appendOnlyResetPreallocate
+	appendOnlyResetLimitOnly
+)
+
+func (m *AppendOnly) resetLockedWithPolicy(capacity, estimatedBytesPerEntry int, policy appendOnlyResetPolicy) {
+	retainObserved := policy == appendOnlyResetRetainObserved
 	desiredEntries := m.baseEntriesLen
 	if capacity > 0 {
 		desiredEntries = appendOnlyInitialEntriesForCapacity(capacity, estimatedBytesPerEntry)
@@ -2534,6 +2575,14 @@ func (m *AppendOnly) resetLockedWithPolicy(capacity, estimatedBytesPerEntry int,
 	m.lastIdx = -1
 
 	if !retainObserved {
+		if policy == appendOnlyResetLimitOnly {
+			if cap(m.entries) > retainedEntries {
+				prev := m.entries
+				m.entries = nil
+				putAppendOnlyEntries(prev)
+			}
+			return
+		}
 		if cap(m.entries) != retainedEntries {
 			m.replaceEntriesSliceWithPolicy(retainedEntries, true)
 			return

@@ -199,15 +199,54 @@ Cached inline values, tombstones and pointer metadata need no decoder workspace.
 Forward iterators omit only zero-entry roots from their exact captured immutable
 cache-source vector; tombstone-bearing roots retain precedence. They omit the
 disk cursor only when their exact retained backend root is a validated empty normal leaf; later backend state cannot establish
-that fact for an old cut. Value/leaf workspace and point page scratch are
-admitted only when actually needed. Codec slots grow within finite admission,
+that fact for an old cut. Memory-only iterators retain their smaller owner and
+admit value workspace only if needed. Physical iterators place their independent
+workspace in the construction owner and reserve the full inspection envelope
+with that owner's single lease before allocation or initial seek. Decoder and
+buffer growth, and point page scratch, remain lazily admitted. Codec slots grow
+within finite admission,
 and actual Snappy/LZ4 headers use bounded native owners without constructing
 ZSTD state. Owned callback copies remain separately admitted even for inline
 values.
 
-On Windows and race builds, `ReadAt` makes the three fixed inspection buffers
-heap allocations. The serialized read workspace reserves their separately
-rounded 4,144-byte peak envelope before inspection and keeps it through Close.
+Retained snapshots and bound iterators reuse their own admitted physical
+traversal scratch. Their dictionary-free Snappy/LZ4 leaf decoders likewise
+belong to that reader, allowing independent readers of the same captured basis
+to proceed without its shared traversal or decoder mutex. Each actual capacity
+is reserved before allocation and refunded through the existing reader Close;
+capacity exhaustion refuses rather than borrowing another reader's scratch.
+Physical iterator construction failures and Close drain workspace children
+before refunding the aggregate construction lease, including on verified-cache
+hits that need no decoder or buffer growth.
+Direct DB point reads and native physical readers retain the original shared
+workspace. Generic dictionary-free ZSTD decoding and pointer-value decoding
+also retain the original cache-owned decoder envelope, since duplicating generic
+state can exceed the default producer budget. Dictionary definitions continue
+to belong to the exact complete cut.
+
+Every physical leaf read still inspects the current record metadata before
+reusing a verified decoded cache entry. Leaf inspection reads one fixed maximum
+metadata window, interprets only the checked header and frame prefix, and ignores
+extra bytes. EOF beyond complete required metadata is harmless; truncated
+metadata and corruption retain the original errors. Uncompressed value-prefix
+checks reuse the window when present and otherwise read their exact bytes.
+Registered file identity checks, full CRC verification before cache promotion,
+page validation, cache disablement and captured-cut lifetimes remain required.
+
+After a full verified decode, repeated COW misses may refill the original
+backend leaf cache using only slot backing already allocated by its original
+owner. Admission keeps the cache's existing repeated-miss, epoch, victim and
+nonblocking lock policy. It copies bytes rather than retaining reader scratch;
+an unallocated selected slot declines without allocating or changing its page.
+Existing byte-identical pages can be marked record-verified. Replacement resets
+independent page-checksum verification, and every subsequent hit still requires
+record inspection through the exact retained file identity. This bounded path
+adds no retained bytes or owner; an initially unallocated cache can remain cold.
+
+On Windows and race builds, `ReadAt` makes fixed inspection buffers heap
+allocations. The serialized read workspace conservatively reserves the original
+three-buffer, separately rounded 4,144-byte peak envelope before inspection and
+keeps it through Close; the consolidated leaf window fits that same envelope.
 Normal Unix builds retain stack inspection and their zero-allocation check.
 Leaf namespace checks avoid the Windows volume/parent string join for canonical
 native file paths produced by `filepath.Join`. Arbitrary noncanonical paths may
@@ -605,3 +644,45 @@ error transfers one edge to existing off-gate cancellation; original custody is
 queued before the transaction's opening cut withdraws. Commit/Close terminate
 the original transaction once. Physical handoff alone is not a logical conflict;
 changed logical dependencies still refuse before assignment.
+
+## Ordinary DATA dependency projection
+
+Ordinary point-put DATA publication can update its exact external dependency
+closure from the successful zipper apply's old/new outer-leaf edge counts and
+logical value-pointer delta. Span-native apply collects the same receipt from
+its validated leaf spans and final reducer outputs after successful reduction,
+before releasing those operands. Only pure point puts produce this evidence;
+maintenance point operations retain the exact scanner. Private build groups
+compose these signed counts,
+including cancellation of intermediate leaf replacements. A separate process-local
+raw census uses the existing value-log reference tracker's admitted metadata owner;
+it is never serialized as logical ValuePtr accounting. It is installed only after
+successful root activation and is bound to that root pair, commit sequence and
+physical index incarnation. Replaced, aborted and closed evidence releases its
+original metadata charges.
+
+This projection requires a distinct user root and an empty pager-backed system
+leaf, which rules out attached descriptors and role aliases. PRIMARY roots, delete
+operations, unsupported producers, stale evidence and invalid arithmetic retain
+the exact candidate scanner. Reopen starts without a raw census and reconstructs
+one through that scanner. Snapshot resource pinning, recovery validation and GC
+reachability remain authoritative and unchanged.
+
+Cloning a predecessor census is optional. If its admitted metadata capacity is
+exhausted (either retained metadata capacity or an enrolled COW budget capacity),
+partial clones release their original charges before the existing dependency
+planner or final-root scanner runs under the same finite budget.
+Required capture admission can still refuse, and other ownership, identity or
+registration errors remain fatal.
+
+## Immutable map copy backing
+
+COW map copies allocate independent item and child backing sized to the live
+length plus one spare slot, capped at the tree maximum. Further private growth
+uses the original admitted mutation work and records the actual allocation.
+Internal nodes contain their child slice header in the same allocation; leaves
+keep the smaller header. Admission charges the rounded containing allocation,
+and owned cleanup clears its embedded child reference before refunding it.
+Raw, logical and history trees retain degree 32; lower-fanout experiments did not
+justify their additional allocation objects and mixed batch performance. No new
+pool, arena, publication owner or retention lifetime is introduced.

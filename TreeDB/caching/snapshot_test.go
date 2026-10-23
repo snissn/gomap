@@ -18,6 +18,57 @@ type publishedAppendMissWithPrefix struct {
 	prefix []byte
 }
 
+func TestSnapshotRetainsAppendOnlyContentsAcrossDeferredShardRotation(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := db.Open(db.Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer backend.Close()
+	cached, err := Open(dir, backend, Options{
+		DisableWAL:     true,
+		AllowUnsafe:    true,
+		MemtableMode:   "append_only",
+		MemtableShards: 2,
+		FlushThreshold: 1 << 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cached.Close()
+	empty := cached.AcquireSnapshot()
+	if empty == nil {
+		t.Fatal("empty snapshot is nil")
+	}
+	defer empty.Close()
+	if err := cached.Set([]byte("key"), []byte("captured")); err != nil {
+		t.Fatal(err)
+	}
+	held := cached.AcquireSnapshot()
+	if held == nil {
+		t.Fatal("populated snapshot is nil")
+	}
+	defer held.Close()
+	if err := cached.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	if err := cached.Set([]byte("key"), []byte("later")); err != nil {
+		t.Fatal(err)
+	}
+	if err := cached.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	if found, err := empty.Has([]byte("key")); err != nil || found {
+		t.Fatalf("empty snapshot Has=(%t,%v)", found, err)
+	}
+	if value, err := held.Get([]byte("key")); err != nil || string(value) != "captured" {
+		t.Fatalf("held snapshot Get=(%q,%v)", value, err)
+	}
+	if value, err := cached.Get([]byte("key")); err != nil || string(value) != "later" {
+		t.Fatalf("current Get=(%q,%v)", value, err)
+	}
+}
+
 func (p publishedAppendMissWithPrefix) GetEntry(_ []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool) {
 	return nil, page.ValuePtr{}, 0, false
 }

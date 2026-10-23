@@ -99,6 +99,7 @@ type ApplyResult struct {
 	// unchangedPrimaryBase is apply-local evidence from the actual sealed
 	// constructor. It owns no edge and expires with that constructor.
 	unchangedPrimaryBase unchangedPrimaryBaseEvidence
+	rawLeaves            rawLeafEvidence
 
 	// ReadOnlyPrepare is populated only when ApplyOptions.PrepareReadOnly is
 	// true or opt-in parallel apply needs the M1 span plan for gating. It is
@@ -1142,10 +1143,35 @@ func (z *Zipper) ApplyWithOptions(rootID uint64, b *batch.Batch, opts ApplyOptio
 			result.ParallelApplyUsed = true
 		}
 	}
+	if opts.CollectOldPointerRefs && z.outerLeavesInValueLog && !z.primaryDirectory && rootID != 0 && b != nil && !b.HasDeleteRanges() {
+		eligible := true
+		for _, op := range b.SortedEntries() {
+			if op.Type != batch.OpPut {
+				eligible = false
+				break
+			}
+		}
+		image, readErr := z.pager.Get(rootID)
+		if readErr != nil {
+			return result, readErr
+		}
+		rootNode := node.NewNodeView(image)
+		if eligible && rootNode.Type() != page.PageTypePrimaryDirectory {
+			// Recursive/parallel apply retains this pointer until its workers
+			// join. Allocate only after eligibility: a local declared outside
+			// this branch escapes even for unsupported PRIMARY/inline applies.
+			applyCfg.rawLeaves = &rawLeafEvidence{}
+		}
+	}
 	newRoot, retired, metrics, err := z.applyWithConfig(rootID, b, applyCfg)
 	result.RootID = newRoot
 	result.PendingRetiredPages = retired
 	result.Metrics = metrics
+	if err == nil && applyCfg.rawLeaves != nil {
+		raw := applyCfg.rawLeaves
+		raw.pager, raw.input, raw.output = z.pager, rootID, newRoot
+		result.rawLeaves = *raw
+	}
 	if err == nil && opts.CollectOldPointerRefs {
 		result.OldPointerRefs = collection.pointers
 		result.OldEntriesRemoved = collection.removed

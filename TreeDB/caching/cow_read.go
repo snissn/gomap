@@ -205,6 +205,15 @@ type cowMergeIterator struct {
 	cached    bool
 }
 
+// Physical cursors need an independent workspace even on a verified cache hit.
+// Its fixed storage and inspection envelope share the construction allocation
+// and lease; decoder/buffer growth retains its separate bounded admission.
+// Memory-only cursors keep the smaller cowMergeIterator allocation.
+type cowPhysicalMergeIterator struct {
+	cowMergeIterator
+	storage cowReadWorkspace
+}
+
 func (it *cowMergeIterator) Close() error {
 	it.once.Do(func() {
 		it.err = errors.Join(it.err, it.Iterator.Close())
@@ -277,26 +286,18 @@ func (it *cowMergeIterator) readWorkspace() (*cowReadWorkspace, error) {
 	return it.workspace, nil
 }
 func (it *cowMergeIterator) readLeaf(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
-	// The iterator is bound to this original cut and serializes movement.
-	// Reuse the basis' already verified physical leaf slots, just as point
-	// reads do, rather than inspecting and decoding a page on every Seek.
-	basis := it.snapshot.cowCut.basis
-	basis.readMu.Lock()
-	_, err := basis.physicalWorkspaceLocked(it.snapshot.cowCache.budget, it.snapshot.cowCache.readLimits())
-	var data []byte
-	if err == nil {
-		data, err = basis.readPhysicalLeafLocked(it.snapshot.cowCache, ptr, dst, false)
+	// Bound iterator movement serializes its existing admitted workspace.
+	// Its original cut retains the exact basis independently of shared scratch.
+	w, err := it.readWorkspace()
+	if err != nil {
+		return nil, err
 	}
-	basis.readMu.Unlock()
+	data, err := it.snapshot.cowCut.basis.readPhysicalLeafWithWorkspace(it.snapshot.cowCache, w, ptr, dst, false, true)
 	if err != errCOWPhysicalDictionary {
 		return data, err
 	}
 	// Dictionary definitions belong to the complete caller cut. Preserve its
 	// original admitted decoder and resources for that fallback.
-	w, err := it.readWorkspace()
-	if err != nil {
-		return nil, err
-	}
 	return w.readLeaf(ptr, dst)
 }
 
@@ -323,20 +324,37 @@ func (s *Snapshot) buildCOWIteratorLocked(start, end []byte, reverse bool) (merg
 	if reverse {
 		wrapper, heap = merging.ReverseAllocationSizes(count)
 	}
-	bytes := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowMergeIterator{}))) +
+	ownerSize := uint64(unsafe.Sizeof(cowMergeIterator{}))
+	if !empty {
+		ownerSize = uint64(unsafe.Sizeof(cowPhysicalMergeIterator{}))
+	}
+	bytes := memtable.COWAllocationCharge(ownerSize) +
 		memtable.COWAllocationCharge(uint64(count)*uint64(unsafe.Sizeof(merging.IteratorSource{}))) +
 		memtable.COWAllocationCharge(wrapper) + memtable.COWAllocationCharge(heap)
 	if !empty {
 		bytes += memtable.COWAllocationCharge(tree.OwnedPointerProjectionAllocationSize()) + memtable.COWAllocationCharge(2*uint64(unsafe.Sizeof(uintptr(0))))
+		bytes += cowReadWorkspaceInspectionCharge()
 	}
 	lease, err := s.cowCache.budget.AcquireExternal(bytes)
 	if err != nil {
 		return nil, err
 	}
-	it := &cowMergeIterator{snapshot: s, lease: lease}
+	var it *cowMergeIterator
+	if empty {
+		it = &cowMergeIterator{snapshot: s, lease: lease}
+	} else {
+		owner := &cowPhysicalMergeIterator{
+			cowMergeIterator: cowMergeIterator{snapshot: s, lease: lease},
+			storage:          cowReadWorkspace{snapshot: s, budget: s.cowCache.budget, limits: s.cowCache.readLimits()},
+		}
+		it = &owner.cowMergeIterator
+		it.workspace = &owner.storage
+	}
 	sources, err := s.cowIteratorSources(start, end, queue, count, empty, it, reverse)
 	if err != nil {
 		it.workspace.close()
+		it.workspace = nil
+		it.snapshot = nil
 		lease.Close()
 		return nil, err
 	}
@@ -345,8 +363,10 @@ func (s *Snapshot) buildCOWIteratorLocked(start, end []byte, reverse bool) (merg
 			for j := range sources {
 				_ = sources[j].Iter.Close()
 			}
-			lease.Close()
 			it.workspace.close()
+			it.workspace = nil
+			it.snapshot = nil
+			lease.Close()
 			return nil, err
 		}
 	}
@@ -467,9 +487,7 @@ func (s *Snapshot) cowOwnedPointSuccessor(disk node.LeafEntry, found bool, start
 
 func (s *Snapshot) cowPhysicalSuccessorLocked(start, end []byte) (pointSuccessorCandidate, error) {
 	basis := s.cowCut.basis
-	basis.readMu.Lock()
-	defer basis.readMu.Unlock()
-	w, err := basis.physicalWorkspaceLocked(s.cowCache.budget, s.cowCache.readLimits())
+	w, err := s.cowWorkspaceLocked()
 	if err != nil {
 		return pointSuccessorCandidate{}, err
 	}

@@ -45,6 +45,10 @@ type cowNodeLayout struct {
 	items     []cowPairLayout
 	children  *[]*cowNodeLayout
 }
+type cowInternalNodeLayout struct {
+	node     cowNodeLayout
+	children []*cowNodeLayout
+}
 
 // COWRetirement is a bounded ownership transfer, not a background queue.
 // Drain runs outside publication/admission locks. Copies share a once-only
@@ -278,7 +282,7 @@ func cowNodeReserveFor(height int, replacement, remove bool, maxEntries int) uin
 	}
 	pairs := cowAllocation(uint64(2*items) * uint64(unsafe.Sizeof(cowPairLayout{})))
 	children := cowAllocation(uint64(4*btreeDefaultDegree) * uint64(unsafe.Sizeof(uintptr(0))))
-	header := cowAllocation(uint64(unsafe.Sizeof(cowNodeLayout{}))) + cowAllocation(uint64(unsafe.Sizeof([]uintptr{})))
+	header := cowAllocation(uint64(unsafe.Sizeof(cowInternalNodeLayout{})))
 	if height == 1 {
 		children = 0
 		header = cowAllocation(uint64(unsafe.Sizeof(cowNodeLayout{})))

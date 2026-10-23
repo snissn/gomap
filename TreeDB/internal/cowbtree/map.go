@@ -74,6 +74,14 @@ type mapNode[K ordered, V any] struct {
 	children  *[]*mapNode[K, V]
 }
 
+// Internal nodes keep their slice header in the same allocation as the node.
+// Leaves retain the smaller node layout. Ordinary interior pointers preserve
+// the composite lifetime without an unsafe conversion or separate owner.
+type mapInternalNode[K ordered, V any] struct {
+	node     mapNode[K, V]
+	children []*mapNode[K, V]
+}
+
 // Copy the node for safe isolation.
 func (tr *Map[K, V]) copy(n *mapNode[K, V]) *mapNode[K, V] {
 	n2, _ := tr.copyWithWork(n, nil)
@@ -84,11 +92,13 @@ func (tr *Map[K, V]) copyWithWork(n *mapNode[K, V], w Work) (*mapNode[K, V], boo
 	if !tr.admitCopy(n, w) {
 		return nil, false
 	}
-	n2 := new(mapNode[K, V])
-	tr.recordAllocation(uint64(unsafe.Sizeof(*n2)))
-	n2.isoid = tr.isoid
+	n2 := tr.newNode(n.leaf())
 	n2.count = n.count
-	n2.items = make([]mapPair[K, V], len(n.items), cap(n.items))
+	// A published path is usually forked for one mutation. Its unused backing
+	// belongs to the old node; duplicating all of it amplifies every publication.
+	// Keep one insertion slot where available. A private bulk writer can grow
+	// normally, with the same explicit admission and allocation receipts.
+	n2.items = make([]mapPair[K, V], len(n.items), mapCopyCapacity(len(n.items), cap(n.items)))
 	tr.recordAllocation(uint64(cap(n2.items)) * uint64(unsafe.Sizeof(mapPair[K, V]{})))
 	copy(n2.items, n.items)
 	if tr.copyValues {
@@ -103,9 +113,7 @@ func (tr *Map[K, V]) copyWithWork(n *mapNode[K, V], w Work) (*mapNode[K, V], boo
 		}
 	}
 	if !n.leaf() {
-		n2.children = new([]*mapNode[K, V])
-		tr.recordAllocation(uint64(unsafe.Sizeof(*n2.children)))
-		*n2.children = make([]*mapNode[K, V], len(*n.children), tr.max+1)
+		*n2.children = make([]*mapNode[K, V], len(*n.children), mapCopyCapacity(len(*n.children), tr.max+1))
 		tr.recordAllocation(uint64(cap(*n2.children)) * uint64(unsafe.Sizeof((*mapNode[K, V])(nil))))
 		copy(*n2.children, *n.children)
 	}
@@ -194,13 +202,17 @@ func (tr *Map[K, V]) IsoCopy() *Map[K, V] {
 }
 
 func (tr *Map[K, V]) newNode(leaf bool) *mapNode[K, V] {
-	n := new(mapNode[K, V])
-	tr.recordAllocation(uint64(unsafe.Sizeof(*n)))
-	n.isoid = tr.isoid
-	if !leaf {
-		n.children = new([]*mapNode[K, V])
-		tr.recordAllocation(uint64(unsafe.Sizeof(*n.children)))
+	var n *mapNode[K, V]
+	if leaf {
+		n = new(mapNode[K, V])
+		tr.recordAllocation(uint64(unsafe.Sizeof(*n)))
+	} else {
+		branch := new(mapInternalNode[K, V])
+		tr.recordAllocation(uint64(unsafe.Sizeof(*branch)))
+		n = &branch.node
+		n.children = &branch.children
 	}
+	n.isoid = tr.isoid
 	return n
 }
 

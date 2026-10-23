@@ -1863,6 +1863,7 @@ type applyRunConfig struct {
 	maxParallelWorkers   int
 	workerPool           *ApplyWorkerPool
 	leafPagePersister    leafPagePersistSink
+	rawLeaves            *rawLeafEvidence
 	oldPointerRefs       *PointerRefCounts
 	oldEntriesRemoved    *uint64
 	unchangedPrimaryBase *unchangedPrimaryBaseEvidence
@@ -2543,6 +2544,11 @@ func (z *Zipper) writeRecursive(ref page.ChildRef, ops []batch.Entry, ranges []b
 			newRef, splits, err := z.mergeLeaf(&oldNode, builder, ops, ranges, metrics, scratch, reuseOuterLeafPages, cacheOwnedOuterLeafPages, cfg)
 			if err != nil {
 				return page.ChildRef{}, nil, fmt.Errorf("zipper: merge leaf ref=%+v count=%d ops=%d low_len=%d high_len=%d: %w", ref, oldNode.Count(), len(ops), len(low), len(high), err)
+			}
+			if cfg.rawLeaves != nil {
+				if err := cfg.rawLeaves.replacement(ref, newRef, splits); err != nil {
+					return page.ChildRef{}, nil, err
+				}
 			}
 			return newRef, splits, nil
 		}
@@ -3309,6 +3315,10 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 			childCfg.maxParallelWorkers = 1
 		}
 		var childScratches []*mergeScratch
+		var childRawLeaves []rawLeafEvidence
+		if cfg.rawLeaves != nil {
+			childRawLeaves = make([]rawLeafEvidence, len(children))
+		}
 		var childOldPointerRefs []PointerRefCounts
 		var childOldEntriesRemoved []uint64
 		if cfg.oldPointerRefs != nil {
@@ -3339,6 +3349,9 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 			var childMetrics adaptive.Metrics
 			childRet := children[i].retired[:0]
 			localCfg := childCfg
+			if childRawLeaves != nil {
+				localCfg.rawLeaves = &childRawLeaves[i]
+			}
 			if childOldPointerRefs != nil {
 				localCfg.oldPointerRefs = &childOldPointerRefs[i]
 			}
@@ -3384,6 +3397,11 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 		for i := range children {
 			if len(children[i].ops) == 0 {
 				continue
+			}
+			if childRawLeaves != nil {
+				if err := cfg.rawLeaves.merge(&childRawLeaves[i]); err != nil {
+					return page.ChildRef{}, nil, err
+				}
 			}
 			mergeMetrics(metrics, &children[i].childStat)
 			if retired != nil && len(children[i].retired) > 0 {

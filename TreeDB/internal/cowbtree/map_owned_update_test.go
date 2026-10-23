@@ -76,12 +76,15 @@ func TestMapSealOwnedConsumesHeaderAndPreservesReceipt(t *testing.T) {
 func ownedUpdatePathCharge(m *Map[int, int], key int) uint64 {
 	var charge uint64
 	for n := m.root; n != nil; {
-		charge += retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(*n)))
-		charge += retainedalloc.AllocationCharge(uint64(cap(n.items)) * uint64(unsafe.Sizeof(mapPair[int, int]{})))
+		if n.leaf() {
+			charge += retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(*n)))
+		} else {
+			charge += retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(mapInternalNode[int, int]{})))
+		}
+		charge += retainedalloc.AllocationCharge(uint64(min(len(n.items)+1, cap(n.items))) * uint64(unsafe.Sizeof(mapPair[int, int]{})))
 		i, found := m.search(n, key)
 		if !n.leaf() {
-			charge += retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(*n.children)))
-			charge += retainedalloc.AllocationCharge(uint64(m.max+1) * uint64(unsafe.Sizeof((*mapNode[int, int])(nil))))
+			charge += retainedalloc.AllocationCharge(uint64(min(len(*n.children)+1, m.max+1)) * uint64(unsafe.Sizeof((*mapNode[int, int])(nil))))
 		}
 		if found || n.leaf() {
 			return charge

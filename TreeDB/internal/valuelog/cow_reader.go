@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
+	"io"
 	"math"
 	"os"
 	"sync"
@@ -64,17 +65,28 @@ type COWDecodeFunc func(frame FrameHeader, payload, dst []byte) ([]byte, error)
 const cowMaxPrefix = FrameHeaderSize + MaxFrameK*8 + (MaxFrameK+1)*4
 
 func cowReadHeader(f *os.File, ptr page.ValuePtr, header []byte, limits COWReadLimits, leaf bool) (uint32, error) {
-	if f == nil || ptr.Offset < 4 || ptr.Offset-4 > math.MaxInt64 || isLeafLogFileID(ptr.FileID) != leaf || (leaf && !allowsCompactLeafLogPayload(ptr.FileID, f.Name())) {
-		return 0, ErrCOWReadUnsupported
-	}
-	maxInt := uint64(^uint(0) >> 1)
-	if limits.MaxRecordBytes == 0 || limits.MaxRawBytes == 0 || limits.MaxValueBytes == 0 ||
-		limits.MaxRecordBytes > maxInt || limits.MaxRawBytes > maxInt || limits.MaxValueBytes > maxInt {
-		return 0, ErrCOWReadCapacity
+	if err := cowCheckReadSource(f, ptr, limits, leaf); err != nil {
+		return 0, err
 	}
 	if _, err := f.ReadAt(header, int64(ptr.Offset-4)); err != nil {
 		return 0, err
 	}
+	return cowCheckReadHeader(ptr, header, limits)
+}
+
+func cowCheckReadSource(f *os.File, ptr page.ValuePtr, limits COWReadLimits, leaf bool) error {
+	if f == nil || ptr.Offset < 4 || ptr.Offset-4 > math.MaxInt64 || isLeafLogFileID(ptr.FileID) != leaf || (leaf && !allowsCompactLeafLogPayload(ptr.FileID, f.Name())) {
+		return ErrCOWReadUnsupported
+	}
+	maxInt := uint64(^uint(0) >> 1)
+	if limits.MaxRecordBytes == 0 || limits.MaxRawBytes == 0 || limits.MaxValueBytes == 0 ||
+		limits.MaxRecordBytes > maxInt || limits.MaxRawBytes > maxInt || limits.MaxValueBytes > maxInt {
+		return ErrCOWReadCapacity
+	}
+	return nil
+}
+
+func cowCheckReadHeader(ptr page.ValuePtr, header []byte, limits COWReadLimits) (uint32, error) {
 	if header[4] != Version || header[5]&^recordFlagGrouped != 0 || header[6] != 0 || header[7] != 0 {
 		return 0, ErrCorrupt
 	}
@@ -174,7 +186,56 @@ func InspectCOWLeafRecord(f *os.File, ptr page.ValuePtr, limits COWReadLimits) (
 	limits.MaxRecordBytes = min(limits.MaxRecordBytes, 2<<20)
 	limits.MaxRawBytes = min(limits.MaxRawBytes, MaxFrameK*page.PageSize)
 	limits.MaxValueBytes = min(limits.MaxValueBytes, page.PageSize)
-	return inspectCOWRecord(f, ptr, limits, true)
+	return inspectCOWLeafRecord(f, ptr, limits)
+}
+
+// One fixed metadata window replaces the separate header/frame/offset reads.
+// Only its checked prefix is interpreted; bytes from a following record grant
+// no authority. EOF beyond that prefix is harmless, but missing metadata and
+// other read errors retain the ordinary inspector's failure behavior. This
+// buffer fits within the existing separately rounded inspection envelope.
+func inspectCOWLeafRecord(f *os.File, ptr page.ValuePtr, limits COWReadLimits) (COWRecordShape, error) {
+	if err := cowCheckReadSource(f, ptr, limits, true); err != nil {
+		return COWRecordShape{}, err
+	}
+	var metadata [HeaderSize + cowMaxPrefix]byte
+	available, readErr := f.ReadAt(metadata[:], int64(ptr.Offset-4))
+	if readErr != nil && readErr != io.EOF {
+		return COWRecordShape{}, readErr
+	}
+	if available < HeaderSize {
+		return COWRecordShape{}, io.EOF
+	}
+	header := metadata[:HeaderSize]
+	n, err := cowCheckReadHeader(ptr, header, limits)
+	if err != nil {
+		return COWRecordShape{}, err
+	}
+	p := 0
+	if header[5]&recordFlagGrouped != 0 {
+		if n < FrameHeaderSize {
+			return COWRecordShape{}, ErrCorrupt
+		}
+		if available < HeaderSize+FrameHeaderSize {
+			return COWRecordShape{}, io.EOF
+		}
+		k := int(metadata[HeaderSize+2])
+		if k == 0 {
+			return COWRecordShape{}, ErrCorrupt
+		}
+		p = FrameHeaderSize + k*8 + (k+1)*4
+		if uint64(p) > uint64(n) {
+			return COWRecordShape{}, ErrCorrupt
+		}
+		if available < HeaderSize+p {
+			return COWRecordShape{}, io.EOF
+		}
+	}
+	s, err := cowShape(header, metadata[HeaderSize:HeaderSize+p], n, ptr, limits)
+	if err != nil {
+		return COWRecordShape{}, err
+	}
+	return inspectCOWValuePrefix(f, ptr, s, true, metadata[:available])
 }
 
 func inspectCOWRecord(f *os.File, ptr page.ValuePtr, limits COWReadLimits, leaf bool) (COWRecordShape, error) {
@@ -208,11 +269,20 @@ func inspectCOWRecord(f *os.File, ptr page.ValuePtr, limits COWReadLimits, leaf 
 	if err != nil {
 		return COWRecordShape{}, err
 	}
+	return inspectCOWValuePrefix(f, ptr, s, leaf, nil)
+}
+
+func inspectCOWValuePrefix(f *os.File, ptr page.ValuePtr, s COWRecordShape, leaf bool, metadata []byte) (COWRecordShape, error) {
 	if !s.Compressed {
 		var valuePrefix [compactLeafPagePayloadHeaderSize]byte
 		v := min(uint64(len(valuePrefix)), s.ValueBytes)
-		if _, err := f.ReadAt(valuePrefix[:int(v)], int64(ptr.Offset-4)+HeaderSize+int64(s.prefix)+int64(s.valueStart)); err != nil {
-			return COWRecordShape{}, err
+		start := uint64(HeaderSize) + uint64(s.prefix) + uint64(s.valueStart)
+		if start+v <= uint64(len(metadata)) {
+			copy(valuePrefix[:int(v)], metadata[start:start+v])
+		} else {
+			if _, err := f.ReadAt(valuePrefix[:int(v)], int64(ptr.Offset-4)+int64(start)); err != nil {
+				return COWRecordShape{}, err
+			}
 		}
 		if templ.IsEncodedPayload(valuePrefix[:int(v)]) || (!leaf && HasCompactLeafLogPayload(valuePrefix[:int(v)])) {
 			return COWRecordShape{}, ErrCOWReadUnsupported

@@ -108,7 +108,7 @@ func duplicateStableFile(file *os.File) (*os.File, error) {
 		return nil, err
 	}
 	unix.CloseOnExec(fd)
-	return os.NewFile(uintptr(fd), file.Name()+"#stable-pin"), nil
+	return os.NewFile(uintptr(fd), stableDuplicateFileName(file.Name(), "#stable-pin")), nil
 }
 
 func duplicateStableSyncFile(file *os.File) (*os.File, error) {

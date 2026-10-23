@@ -232,7 +232,7 @@ func duplicateStableFile(file *os.File) (*os.File, error) {
 	if err := windows.DuplicateHandle(process, windows.Handle(file.Fd()), process, &duplicate, 0, false, windows.DUPLICATE_SAME_ACCESS); err != nil {
 		return nil, err
 	}
-	return os.NewFile(uintptr(duplicate), file.Name()+"#stable-pin"), nil
+	return os.NewFile(uintptr(duplicate), stableDuplicateFileName(file.Name(), "#stable-pin")), nil
 }
 
 // duplicateStableSyncFile reopens the exact file object with GENERIC_WRITE.
@@ -257,7 +257,7 @@ func duplicateStableSyncFile(file *os.File) (*os.File, error) {
 		}
 		return nil, windows.ERROR_INVALID_HANDLE
 	}
-	pinned := os.NewFile(handle, file.Name()+"#stable-sync-pin")
+	pinned := os.NewFile(handle, stableDuplicateFileName(file.Name(), "#stable-sync-pin"))
 	if pinned == nil {
 		_ = windows.CloseHandle(windows.Handle(handle))
 		return nil, errors.New("invalid Windows stable sync handle")

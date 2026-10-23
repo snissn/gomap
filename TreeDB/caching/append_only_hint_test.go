@@ -149,6 +149,10 @@ func TestAppendOnlyReserveDemandTeachesFutureCapacityHint(t *testing.T) {
 	if !ok {
 		t.Fatalf("new mutable type=%T, want append-only", next)
 	}
+	if got := appendOnly.EntryCapacity(); got != 0 {
+		t.Fatalf("untouched future mutable capacity=%d want 0", got)
+	}
+	appendOnly.Set([]byte("first-key"), []byte("first-value"))
 	if got := appendOnly.EntryCapacity(); got < hint {
 		t.Fatalf("future mutable capacity=%d want >= learned hint %d", got, hint)
 	}
