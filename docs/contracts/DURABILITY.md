@@ -149,3 +149,16 @@ and poisons later acceptance before the publication lease is released. Durable
 and relaxed WAL acknowledgements retain their existing exact request-prefix
 requirements; NoWAL explicit sync seals the complete prior logical cut, including
 an empty transaction's explicit sync boundary.
+
+## Externally owned recovery
+
+`treedb.OpenExternalRecovery` is an explicit no-WAL `cow_ordered` integration for
+an application that durably logs commands and decisions elsewhere. `Apply`
+materializes state; it is not a local durable acknowledgement. The application
+must retain its log until a matching successful certificate covers the complete
+semantic cut. Periodic certificates retain exact DATA roots and their persistent
+value dependencies. Ordinary `Open` and `OpenBackend` refuse owner-marked
+directories. Portable install additionally requires the caller to drain readers
+and writes, authorize the exact source cut, persist cross-store acceptance when
+applicable, and rebuild adapters before resuming admission. See the complete
+[external-recovery contract](../../TreeDB/docs/spec/external-recovery.md).

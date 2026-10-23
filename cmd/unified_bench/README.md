@@ -1630,3 +1630,22 @@ read. Go test profiles from this diagnostic are not benchprof inputs. For A/B
 against an older source, use this exact benchmark-only file as an identical
 shared overlay on both sources. Unified natural reads retain their separate
 post-preload state and remain the public workload qualification.
+
+### Certified external-recovery checkpoint cost
+
+`BenchmarkExternalRecoveryCheckpoint` is a standalone public-package diagnostic:
+
+```sh
+go test ./TreeDB -run '^$' -bench '^BenchmarkExternalRecoveryCheckpoint$' -benchmem -benchtime=8x
+```
+
+It measures an existing-key update plus a complete certified checkpoint at three
+record counts, with inline64 and forced-pointer4096 values. Standard Go output
+reports ns/op, B/op, allocs/op and `checkpoint_files_B/op`; the latter counts
+certificate descriptor files, not all physical writes. Fixture loading, the
+initial checkpoint, final reopen verification and Close are excluded. Pointer
+values repeat and use default compression. This component measurement does not
+certify sustained resource equilibrium or Dgraph transaction latency. Go test
+profiles from it are not benchprof inputs. See the
+[external-recovery contract](../../TreeDB/docs/spec/external-recovery.md#component-cost-diagnostic)
+for the exact boundary.

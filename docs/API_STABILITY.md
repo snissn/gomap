@@ -92,3 +92,12 @@ bounded DeleteRange. ErrTxnTooOld reports finite conflict-history expiration;
 ErrTxnIteratorOpen rejects mutation while a private-view iterator remains open.
 The exact eligibility and acknowledgement contract is in
 `TreeDB/docs/spec/raw-cow-transactions.md`.
+
+`OpenExternalRecovery` is an opt-in pre-alpha integration surface for externally
+logged raw DATA materializations. Its V2 owner/certificate format and V1 retained
+root descriptor deliberately reject the earlier unmerged V1 image-copy
+prototype. Ordinary TreeDB directories and their durability APIs keep their
+existing formats. External owner directories require this API and must not be
+opened through ordinary `Open` or maintenance entrypoints. See
+[external recovery](../TreeDB/docs/spec/external-recovery.md) for ownership,
+retention and portable-transfer requirements.
