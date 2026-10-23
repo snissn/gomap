@@ -1,12 +1,48 @@
 package caching
 
 import (
+	"reflect"
 	"testing"
 	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/node"
 )
+
+// These operands can change routing within the same group. Even an unqualified
+// entry after an out-of-order prefix must exclude the entire group from sorting.
+func TestCOWMutationOrderingPreservesOrderDependentGroups(t *testing.T) {
+	base := []memtable.COWMutation{
+		{Key: []byte("z"), Value: []byte("first"), MVCC: true, Revision: 9},
+		{Key: []byte("a"), Value: []byte("second"), MVCC: true, Revision: 3},
+		{Key: []byte("m"), Value: []byte("third"), MVCC: true, Revision: 5},
+	}
+	for _, test := range []struct {
+		name    string
+		ordered bool
+		mutate  func([]memtable.COWMutation)
+	}{
+		{"physical_mode", false, func([]memtable.COWMutation) {}},
+		{"mixed_raw_tail", true, func(ms []memtable.COWMutation) { ms[2].MVCC = false }},
+		{"raw_group", true, func(ms []memtable.COWMutation) {
+			for i := range ms {
+				ms[i].MVCC = false
+			}
+		}},
+		{"physical_remove_tail", true, func(ms []memtable.COWMutation) { ms[2].Remove = true }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			group := append([]memtable.COWMutation(nil), base...)
+			test.mutate(group)
+			original := append([]memtable.COWMutation(nil), group...)
+			cache := cowCache{ordered: test.ordered}
+			cache.orderQualifiedMutationGroups([][]memtable.COWMutation{group})
+			if !reflect.DeepEqual(group, original) {
+				t.Fatal("order-dependent group was changed")
+			}
+		})
+	}
+}
 
 func TestCOWOrderedPredictionPositiveAndPressureFallback(t *testing.T) {
 	db, _ := cowOrderedLifecycleFixture(t)

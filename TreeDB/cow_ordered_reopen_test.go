@@ -52,6 +52,100 @@ func cowOrderedDurabilityOpen(t *testing.T, opts treedb.Options) *treedb.DB {
 	return db
 }
 
+// Dgraph's initial posting transaction contains 500 distinct keys in map order.
+// Admission must account for those independent histories, rather than reserving
+// a 500-version history separately for every key in an unordered shard.
+func TestCOWOrderedUnorderedPostingBatchAdmission(t *testing.T) {
+	for _, profile := range []treedb.Profile{treedb.ProfileCommandWALDurable, treedb.ProfileCommandWALRelaxed} {
+		t.Run(string(profile), func(t *testing.T) {
+			opts := cowOrderedDurabilityOptions(profile, t.TempDir())
+			opts.MemtableShards = 4 // The Dgraph adapter's ordinary configuration.
+			db := cowOrderedDurabilityOpen(t, opts)
+			defer func() {
+				if db != nil {
+					_ = db.Close()
+				}
+			}()
+			store := mvcc.New(db)
+			key := []byte(fmt.Sprintf("posting.next/%064d", 0))
+			if err := store.CommitAt(10, []mvcc.Mutation{{Key: key, Value: []byte("old")}}, mvcc.CommitRelaxed); err != nil {
+				t.Fatal(err)
+			}
+			old := db.AcquireSnapshot()
+			if old == nil {
+				t.Fatal("old posting snapshot unavailable")
+			}
+			oldOpen := true
+			defer func() {
+				if oldOpen {
+					_ = old.Close()
+				}
+			}()
+			physicalKey, err := mvcckey.Encode(key, 10)
+			if err != nil {
+				t.Fatal(err)
+			}
+			oldValue, oldRevision, err := old.GetVersioned(physicalKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+			oldValue = bytes.Clone(oldValue)
+			mutations := make([]mvcc.Mutation, 500)
+			versions := []cowOrderedVersion{{key: key, ts: 10, state: mvcc.Present, value: []byte("old")}}
+			for i := range mutations {
+				// A fixed permutation keeps the failing order reproducible.
+				k := []byte(fmt.Sprintf("posting.next/%064d", i*197%len(mutations)))
+				value := bytes.Repeat([]byte{byte(i), byte(i >> 8)}, 64)
+				mutations[i] = mvcc.Mutation{Key: k, Value: value}
+				versions = append(versions, cowOrderedVersion{key: k, ts: 20, state: mvcc.Present, value: value})
+			}
+			prepared, appended, swapped := 0, 0, 0
+			restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+				switch event.Point {
+				case durabilitycut.AfterCOWCanonicalPreparation:
+					prepared++
+				case durabilitycut.BeforeCOWCutSwap:
+					swapped++
+				case durabilitycut.BeforeDependencyAppend:
+					if event.Resource == durabilitycut.ResourceCommandWAL && event.Root == opts.Dir {
+						appended++
+					}
+				}
+				return nil
+			})
+			mode := mvcc.CommitRelaxed
+			if profile == treedb.ProfileCommandWALDurable {
+				mode = mvcc.CommitDurable
+			}
+			err = store.CommitAt(20, mutations, mode)
+			restore()
+			if err != nil || prepared != 1 || appended != 1 || swapped != 1 {
+				t.Fatalf("500-key posting transaction: err=%v prepared=%d appends=%d swaps=%d", err, prepared, appended, swapped)
+			}
+			cowOrderedRequireVersions(t, store, versions)
+			physical := cowOrderedCapturePhysical(t, db, versions)
+			if err := db.Checkpoint(); err != nil {
+				t.Fatal(err)
+			}
+			if got, revision, err := old.GetVersioned(physicalKey); err != nil || revision != oldRevision || !bytes.Equal(got, oldValue) {
+				t.Fatalf("old posting snapshot changed: revision=%d err=%v", revision, err)
+			}
+			oldErr := old.Close()
+			oldOpen = false
+			if err := oldErr; err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Close(); err != nil {
+				t.Fatal(err)
+			}
+			db = nil
+			db = cowOrderedDurabilityOpen(t, opts)
+			cowOrderedRequireVersions(t, mvcc.New(db), versions)
+			cowOrderedRequirePhysical(t, db, physical)
+		})
+	}
+}
+
 type cowOrderedVersion struct {
 	key   []byte
 	ts    uint64
