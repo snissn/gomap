@@ -31,3 +31,11 @@ replacement directories, and moves into the source subtree. No model operation
 makes `os.Exit`, userspace flush, or a copied live filesystem equivalent to power
 loss. These model controls are prerequisites for public-path durability tests;
 they do not by themselves establish an external checkpoint ACK guarantee.
+
+Overlay matches physical file IDs only through live or explicitly detached names.
+Stable-only inodes still supply crash-visible bytes, but cannot establish identity
+for a new file after the host has unlinked and recycled an inode number. On hosts
+without native directory IDs, per-object synthetic IDs and live `os.SameFile`
+observations preserve the directory graph through capture, overlay, and rename.
+Those observations identify objects only; they never promote names or bytes and
+do not turn an unsupported host persistence primitive into a supported one.

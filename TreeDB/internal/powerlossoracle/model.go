@@ -94,6 +94,11 @@ type ByteRange struct{ Offset, Length int64 }
 // names that survive power loss. Names reference inode identities so that file
 // sync followed by rename and directory sync has realistic semantics.
 type Model struct {
+	// Observations identify live directory objects when native stable IDs are unavailable.
+	// They are not persistence authority; durableDirs remains the only authority.
+	directoryObservations map[rootpublication.StableIdentity]fs.FileInfo
+	identityFromFile      func(*os.File) (rootpublication.StableIdentity, error)
+
 	nextID    uint64
 	nextDirID uint64
 	inodes    map[uint64]*inode
@@ -140,6 +145,10 @@ func captureExcluding(root string, excluded ...string) (*Model, error) {
 }
 
 func capture(root string, excludeLockFiles bool, excluded []string) (*Model, error) {
+	return captureWithIdentity(root, excludeLockFiles, excluded, captureStableIdentityFromFile)
+}
+
+func captureWithIdentity(root string, excludeLockFiles bool, excluded []string, identityFromFile func(*os.File) (rootpublication.StableIdentity, error)) (*Model, error) {
 	excludedPaths := make(map[string]struct{}, len(excluded))
 	for _, path := range excluded {
 		rel, err := normalize(path)
@@ -150,6 +159,7 @@ func capture(root string, excludeLockFiles bool, excluded []string) (*Model, err
 	}
 	m := newModel()
 	m.excludeLockFiles = excludeLockFiles
+	m.identityFromFile = identityFromFile
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -172,13 +182,14 @@ func capture(root string, excludeLockFiles bool, excluded []string) (*Model, err
 			return nil
 		}
 		if entry.IsDir() {
-			info, _, identity, err := capturePathSnapshot(path)
+			info, _, identity, err := m.capturePathSnapshot(path)
 			if err != nil {
 				return err
 			}
 			if !info.IsDir() {
 				return fmt.Errorf("powerlossoracle: captured directory %q rebound to %s", rel, info.Mode())
 			}
+			identity = m.directoryIdentity(info, identity)
 			m.volatileDirs[rel] = identity
 			m.stableDirs[rel] = identity
 			return nil
@@ -186,7 +197,7 @@ func capture(root string, excludeLockFiles bool, excluded []string) (*Model, err
 		if !entry.Type().IsRegular() {
 			return fmt.Errorf("powerlossoracle: unsupported entry %q (%s)", rel, entry.Type())
 		}
-		data, identity, err := captureRegularPathSnapshot(path)
+		data, identity, err := m.captureRegularPathSnapshot(path)
 		if err != nil {
 			return err
 		}
@@ -207,18 +218,20 @@ func capture(root string, excludeLockFiles bool, excluded []string) (*Model, err
 func newModel() *Model {
 	rootIdentity := syntheticDirectoryIdentity(1)
 	return &Model{
-		nextDirID:           1,
-		inodes:              make(map[uint64]*inode),
-		volatile:            make(map[string]uint64),
-		stable:              make(map[string]uint64),
-		syncedFiles:         make(map[uint64]struct{}),
-		syncedDirs:          make(map[rootpublication.StableIdentity]struct{}),
-		overlayDetached:     make(map[string]uint64),
-		overlayDetachedDirs: make(map[string]rootpublication.StableIdentity),
-		durableDirs:         map[rootpublication.StableIdentity]*directoryEntries{rootIdentity: {files: make(map[string]uint64), dirs: make(map[string]rootpublication.StableIdentity)}},
-		stableRoot:          rootIdentity,
-		volatileDirs:        map[string]rootpublication.StableIdentity{".": rootIdentity},
-		stableDirs:          map[string]rootpublication.StableIdentity{".": rootIdentity},
+		nextDirID:             1,
+		inodes:                make(map[uint64]*inode),
+		volatile:              make(map[string]uint64),
+		stable:                make(map[string]uint64),
+		syncedFiles:           make(map[uint64]struct{}),
+		syncedDirs:            make(map[rootpublication.StableIdentity]struct{}),
+		directoryObservations: make(map[rootpublication.StableIdentity]fs.FileInfo),
+		identityFromFile:      captureStableIdentityFromFile,
+		overlayDetached:       make(map[string]uint64),
+		overlayDetachedDirs:   make(map[string]rootpublication.StableIdentity),
+		durableDirs:           map[rootpublication.StableIdentity]*directoryEntries{rootIdentity: {files: make(map[string]uint64), dirs: make(map[string]rootpublication.StableIdentity)}},
+		stableRoot:            rootIdentity,
+		volatileDirs:          map[string]rootpublication.StableIdentity{".": rootIdentity},
+		stableDirs:            map[string]rootpublication.StableIdentity{".": rootIdentity},
 	}
 }
 
@@ -239,6 +252,10 @@ func (m *Model) allocateWithIdentity(volatile, stable []byte, identity rootpubli
 // Clone returns a deep copy suitable for evaluating another crash cut.
 func (m *Model) Clone() *Model {
 	out := newModel()
+	out.identityFromFile = m.identityFromFile
+	for identity, info := range m.directoryObservations {
+		out.directoryObservations[identity] = info
+	}
 	out.nextID = m.nextID
 	out.nextDirID = m.nextDirID
 	out.excludeLockFiles = m.excludeLockFiles
@@ -360,14 +377,23 @@ func (m *Model) Overlay(root string) error {
 	seenDirs := make(map[string]rootpublication.StableIdentity)
 	// An overlay can see a completed rename before its explicit callback. Match
 	// physical inodes across paths rather than allocating a second byte object.
-	knownInodes := make(map[rootpublication.StableIdentity]uint64, len(m.inodes))
-	for id, node := range m.inodes {
-		identity := physicalStableIdentity(node.stableIdentity)
+	knownInodes := make(map[rootpublication.StableIdentity]uint64, len(m.volatile)+len(m.overlayDetached))
+	remember := func(id uint64) {
+		identity := physicalStableIdentity(m.inodes[id].stableIdentity)
 		if validStableIdentity(identity) {
 			if prior, ok := knownInodes[identity]; !ok || id < prior {
 				knownInodes[identity] = id
 			}
 		}
+	}
+	// Stable-only inodes still back crash-visible names, but their native IDs
+	// can have been recycled by the real filesystem after unlink. Only live
+	// names and explicitly detached observation races establish reuse authority.
+	for _, id := range m.volatile {
+		remember(id)
+	}
+	for _, id := range m.overlayDetached {
+		remember(id)
 	}
 	importFile := func(data []byte, identity rootpublication.StableIdentity) uint64 {
 		key := physicalStableIdentity(identity)
@@ -397,20 +423,20 @@ func (m *Model) Overlay(root string) error {
 			return nil
 		}
 		if entry.IsDir() {
-			info, _, identity, err := capturePathSnapshot(path)
+			info, _, identity, err := m.capturePathSnapshot(path)
 			if err != nil {
 				return err
 			}
 			if !info.IsDir() {
 				return fmt.Errorf("powerlossoracle: overlaid directory %q rebound to %s", rel, info.Mode())
 			}
-			seenDirs[rel] = identity
+			seenDirs[rel] = m.directoryIdentity(info, identity)
 			return nil
 		}
 		if !entry.Type().IsRegular() {
 			return fmt.Errorf("powerlossoracle: unsupported entry %q (%s)", rel, entry.Type())
 		}
-		data, identity, err := captureRegularPathSnapshot(path)
+		data, identity, err := m.captureRegularPathSnapshot(path)
 		if err != nil {
 			return err
 		}
@@ -577,9 +603,16 @@ func stableChildObservationPath(root, parent, name string) string {
 }
 
 func (m *Model) stableDirectoryPath(file *os.File) (string, error) {
-	identity, err := captureStableIdentityFromFile(file)
+	identity, err := m.identityFromFile(file)
 	if err != nil {
 		return "", err
+	}
+	if !validStableIdentity(identity) {
+		info, err := file.Stat()
+		if err != nil {
+			return "", err
+		}
+		identity = m.directoryIdentity(info, identity)
 	}
 	for path, candidate := range m.volatileDirs {
 		if rootpublication.SamePhysicalIdentity(candidate, identity) {
@@ -597,7 +630,7 @@ func (m *Model) stableOpenFilePath(file *os.File) (string, error) {
 	if info.IsDir() {
 		return m.stableDirectoryPath(file)
 	}
-	identity, err := captureStableIdentityFromFile(file)
+	identity, err := m.identityFromFile(file)
 	if err != nil {
 		return "", err
 	}
@@ -636,13 +669,13 @@ func (m *Model) observeNamespace(root string, event durabilitycut.Event) error {
 		if err != nil {
 			return err
 		}
-		info, data, identity, err := capturePathSnapshot(event.NewPath)
+		info, data, identity, err := m.capturePathSnapshot(event.NewPath)
 		if err != nil {
 			return fmt.Errorf("powerlossoracle: capture created path %q: %w", event.NewPath, err)
 		}
 		if info.IsDir() {
 			m.ensureVolatileParents(path)
-			m.volatileDirs[path] = identity
+			m.volatileDirs[path] = m.directoryIdentity(info, identity)
 			m.trace = append(m.trace, "create-dir:"+path)
 			return nil
 		}
@@ -1285,23 +1318,66 @@ func (m *Model) ensureVolatileParents(path string) {
 	}
 }
 
+// directoryIdentity imports an observation, never a durability boundary. On
+// platforms without native IDs, SameFile distinguishes live host objects while
+// synthetic IDs preserve the model's directory-inode graph through rename.
+func (m *Model) directoryIdentity(info fs.FileInfo, identity rootpublication.StableIdentity) rootpublication.StableIdentity {
+	identity = physicalStableIdentity(identity)
+	if !validStableIdentity(identity) {
+		find := func(names map[string]rootpublication.StableIdentity) rootpublication.StableIdentity {
+			for _, candidate := range names {
+				if observed := m.directoryObservations[candidate]; observed != nil && os.SameFile(observed, info) {
+					return candidate
+				}
+			}
+			return rootpublication.StableIdentity{}
+		}
+		identity = find(m.volatileDirs)
+		if !validStableIdentity(identity) {
+			identity = find(m.overlayDetachedDirs)
+		}
+		if !validStableIdentity(identity) {
+			m.nextDirID++
+			identity = syntheticDirectoryIdentity(m.nextDirID)
+		}
+	}
+	m.directoryObservations[identity] = info
+	return identity
+}
+
 func syntheticDirectoryIdentity(id uint64) rootpublication.StableIdentity {
 	var objectID [16]byte
 	binary.BigEndian.PutUint64(objectID[8:], id)
 	return rootpublication.StableIdentity{Platform: "powerlossoracle", ObjectID: objectID}
 }
 
+func (m *Model) capturePathSnapshot(path string) (fs.FileInfo, []byte, rootpublication.StableIdentity, error) {
+	return capturePathSnapshotWithIdentity(path, m.identityFromFile)
+}
+
 func capturePathSnapshot(path string) (fs.FileInfo, []byte, rootpublication.StableIdentity, error) {
+	return capturePathSnapshotWithIdentity(path, captureStableIdentityFromFile)
+}
+
+func capturePathSnapshotWithIdentity(path string, identityFromFile func(*os.File) (rootpublication.StableIdentity, error)) (fs.FileInfo, []byte, rootpublication.StableIdentity, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, nil, rootpublication.StableIdentity{}, err
 	}
 	defer file.Close()
-	return captureOpenFileSnapshot(file)
+	return captureOpenFileSnapshotWithIdentity(file, identityFromFile)
 }
 
 func captureRegularPathSnapshot(path string) ([]byte, rootpublication.StableIdentity, error) {
-	info, data, identity, err := capturePathSnapshot(path)
+	return captureRegularPathSnapshotWithIdentity(path, captureStableIdentityFromFile)
+}
+
+func (m *Model) captureRegularPathSnapshot(path string) ([]byte, rootpublication.StableIdentity, error) {
+	return captureRegularPathSnapshotWithIdentity(path, m.identityFromFile)
+}
+
+func captureRegularPathSnapshotWithIdentity(path string, identityFromFile func(*os.File) (rootpublication.StableIdentity, error)) ([]byte, rootpublication.StableIdentity, error) {
+	info, data, identity, err := capturePathSnapshotWithIdentity(path, identityFromFile)
 	if err != nil {
 		return nil, rootpublication.StableIdentity{}, err
 	}
@@ -1312,6 +1388,10 @@ func captureRegularPathSnapshot(path string) ([]byte, rootpublication.StableIden
 }
 
 func captureOpenFileSnapshot(file *os.File) (fs.FileInfo, []byte, rootpublication.StableIdentity, error) {
+	return captureOpenFileSnapshotWithIdentity(file, captureStableIdentityFromFile)
+}
+
+func captureOpenFileSnapshotWithIdentity(file *os.File, identityFromFile func(*os.File) (rootpublication.StableIdentity, error)) (fs.FileInfo, []byte, rootpublication.StableIdentity, error) {
 	if file == nil {
 		return nil, nil, rootpublication.StableIdentity{}, os.ErrInvalid
 	}
@@ -1319,7 +1399,7 @@ func captureOpenFileSnapshot(file *os.File) (fs.FileInfo, []byte, rootpublicatio
 	if err != nil {
 		return nil, nil, rootpublication.StableIdentity{}, err
 	}
-	identity, err := captureStableIdentityFromFile(file)
+	identity, err := identityFromFile(file)
 	if err != nil {
 		return nil, nil, rootpublication.StableIdentity{}, err
 	}
