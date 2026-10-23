@@ -4340,3 +4340,14 @@ by the stable-image observation seam. Their replacement protocol synchronizes
 the exact metadata file before rename and the containing directory afterward;
 restore synchronizes both selected meta slots before backend Open. The modeled
 recovery coverage and limits are described in [external recovery](external-recovery.md#modeled-stable-image-recovery).
+
+### Initial ordinary DATA dependency closure
+
+The dependency-manifest encoding is unchanged. Its raw outer-leaf entries must
+include every file referenced by the selected root, including noncurrent files
+created during its first apply. File registration and current-writer membership
+are ownership evidence, not a complete root dependency inventory. The initial
+ordinary DATA publication can derive exact membership from its bound apply
+receipt and a proven empty user/system predecessor; otherwise it uses the
+maintained final-root scanner. No directory-discovery recovery fallback repairs
+an incomplete manifest.
