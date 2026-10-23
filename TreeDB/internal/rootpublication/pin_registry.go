@@ -375,6 +375,20 @@ func (registry *IdentityPinRegistry) beginDelete(identity StableIdentity, namesp
 	return &IdentityDeleteLease{registry: registry, identity: identity, namespace: namespace}, nil
 }
 
+// IsRetired reports only a positively known completed deletion of this exact
+// physical identity. It neither admits access nor removes the retired state.
+// An existing observer keeps a positive result stable until it is unobserved.
+func (registry *IdentityPinRegistry) IsRetired(identity StableIdentity) bool {
+	identity, err := validateRegistryIdentity(identity)
+	if err != nil || registry == nil {
+		return false
+	}
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	state := registry.states.get(identity)
+	return state != nil && state.retired
+}
+
 func (registry *IdentityPinRegistry) WaitUnpinned(identity StableIdentity) <-chan struct{} {
 	ready := make(chan struct{})
 	identity, err := validateRegistryIdentity(identity)

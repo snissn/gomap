@@ -746,6 +746,47 @@ func (m *Manager) stableDeleteLease(file *File) (*rootpublication.IdentityDelete
 	return lease, err
 }
 
+// ownsUnpinnedRetiredSegmentLocked keeps the exact observation live across the
+// registry query: Manager.mu excludes this owner's Unobserve, and another
+// owner's release cannot evict a state that this File still observes. Retired
+// state cannot admit a new pin/observer or become live again in that interval.
+func (m *Manager) ownsUnpinnedRetiredSegmentLocked(file *File) bool {
+	return m.stableResourcePins != nil && file != nil && file.stableObserved &&
+		m.files[file.ID] == file && file.RefCount.Load() == 0 && file.deletionAdmissions == 0 &&
+		m.stableResourcePins.IsRetired(file.stableIdentity)
+}
+
+// reconcileRetiredSegmentLocked consumes only this Manager's stale original
+// observation after another owner completed deletion. A retired registry identity
+// is not sufficient: the exact captured physical parent must also prove the
+// canonical child absent. Never unlink here or reinterpret a replacement child.
+// The returned original completion must run after releasing Manager.mu.
+func (m *Manager) reconcileRetiredSegmentLocked(file *File, admissionErr error) (func() error, error) {
+	if !errors.Is(admissionErr, rootpublication.ErrResourceConflict) || !m.ownsUnpinnedRetiredSegmentLocked(file) {
+		return nil, admissionErr
+	}
+	parent, release, err := borrowRetirementParent(file)
+	if err != nil {
+		return nil, errors.Join(admissionErr, err)
+	}
+	_, proofErr := requireRetirementChildAbsent(parent, filepath.Base(file.Path))
+	proofErr = errors.Join(proofErr, release())
+	if proofErr != nil {
+		return nil, errors.Join(admissionErr, proofErr)
+	}
+	// Exclude all later admissions before dropping discovery and observation.
+	// The original cleanup guard keeps failed Close ownership and accounting.
+	m.retainSegmentForDeletionLocked(file)
+	parentToClose := m.forgetSegmentLocked(file)
+	unobserveErr := m.unobserveStableFileLocked(file)
+	m.retryWorkers.Add(1)
+	return func() error {
+		defer m.retryWorkers.Done()
+		defer m.finishDeletionAdmission(file)
+		return m.finishOriginalDeletion(file, errors.Join(unobserveErr, file.Close()), parentToClose)
+	}, nil
+}
+
 func stableDeleteNamespace(path string) (string, error) {
 	if path == "" {
 		return "", fmt.Errorf("%w: empty value-log path", rootpublication.ErrUnresolvedResource)
@@ -795,26 +836,31 @@ func (m *Manager) prepareRetirementIdentityLocked(file *File) (rootpublication.S
 	}
 	parentIdentity, err := rootpublication.StableIdentityFromFile(parent)
 	if err != nil {
-		_ = parent.Close()
-		return rootpublication.StableIdentity{}, nil, err
+		return rootpublication.StableIdentity{}, parent, err
 	}
 	if !rootpublication.SamePhysicalIdentity(file.registeredParentIdentity, parentIdentity) {
-		_ = parent.Close()
-		return rootpublication.StableIdentity{}, nil, fmt.Errorf("%w: original registered segment parent was rebound", rootpublication.ErrResourceConflict)
+		return rootpublication.StableIdentity{}, parent, fmt.Errorf("%w: original registered segment parent was rebound", rootpublication.ErrResourceConflict)
 	}
 	// Verify the exact opened parent still names this handle. Resolving an alias
 	// and reopening its target must not combine two different namespaces.
 	linkedIdentity, err := stableIdentityAtChild(parent, filepath.Base(file.Path))
 	if err != nil {
-		_ = parent.Close()
-		if os.IsNotExist(err) {
-			return rootpublication.StableIdentity{}, nil, fmt.Errorf("%w: retirement admission cannot prove the original linked child: %v", rootpublication.ErrResourceConflict, err)
+		if !os.IsNotExist(err) {
+			return rootpublication.StableIdentity{}, parent, err
 		}
-		return rootpublication.StableIdentity{}, nil, err
-	}
-	if !rootpublication.SamePhysicalIdentity(identity, linkedIdentity) {
-		_ = parent.Close()
-		return rootpublication.StableIdentity{}, nil, fmt.Errorf("%w: retirement parent does not name captured segment", rootpublication.ErrResourceConflict)
+		// A different Manager may have completed deletion before this owner
+		// captured its retirement parent. Only positive exact retirement plus
+		// absence through this same original physical parent admits capture;
+		// the resulting authority can only reconcile the stale owner, never
+		// authorize a new unlink or a replacement child.
+		if !m.ownsUnpinnedRetiredSegmentLocked(file) {
+			return rootpublication.StableIdentity{}, parent, fmt.Errorf("%w: retirement admission cannot prove the original linked child: %v", rootpublication.ErrResourceConflict, err)
+		}
+		if _, proofErr := requireRetirementChildAbsent(parent, filepath.Base(file.Path)); proofErr != nil {
+			return rootpublication.StableIdentity{}, parent, errors.Join(rootpublication.ErrResourceConflict, proofErr)
+		}
+	} else if !rootpublication.SamePhysicalIdentity(identity, linkedIdentity) {
+		return rootpublication.StableIdentity{}, parent, fmt.Errorf("%w: retirement parent does not name captured segment", rootpublication.ErrResourceConflict)
 	}
 	if m.retirementParents == nil {
 		m.retirementParents = &retirementParentPool{}
@@ -868,11 +914,15 @@ func (m *Manager) finishDirectSegmentDeletion(file *File, identity rootpublicati
 		m.directDeleteAdmissionHook()
 	}
 	deleted, removeErr := closeAndRemoveStableSegmentFileResult(file, identity)
-	finishStableDeleteLease(lease, deleted)
 	if !deleted {
+		abortStableDeleteLease(lease)
 		return removeErr
 	}
 	m.mu.Lock()
+	// Publish retirement and remove this Manager's discovery authority under
+	// the same lock used by delete admission. Otherwise a queued contender can
+	// observe a tracked original whose registry identity is already retired.
+	commitStableDeleteLease(lease)
 	var unobserveErr error
 	var parent *os.File
 	if m.files[file.ID] == file {
@@ -1564,8 +1614,12 @@ func (m *Manager) deleteZombieFile(file *File) error {
 		return nil
 	}
 	if err != nil {
+		complete, reconcileErr := m.reconcileRetiredSegmentLocked(file, err)
 		m.mu.Unlock()
-		return err
+		if complete != nil {
+			return complete()
+		}
+		return reconcileErr
 	}
 	if err := validateRetirementPath(file, identity); err != nil {
 		abortStableDeleteLease(lease)
@@ -1590,8 +1644,9 @@ func (m *Manager) deleteZombieFile(file *File) error {
 		return unlinkErr
 	}
 	syncErr := m.syncDeferredDeletion(file.Path)
-	commitStableDeleteLease(lease)
 	m.mu.Lock()
+	// Admission must not observe registry retirement before owner detachment.
+	commitStableDeleteLease(lease)
 	var unobserveErr error
 	var parent *os.File
 	if current, exists := m.files[file.ID]; exists && current == file && file.RefCount.Load() == 0 && file.IsZombie.Load() {

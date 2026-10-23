@@ -210,13 +210,15 @@ ZSTD state. Owned callback copies remain separately admitted even for inline
 values.
 
 Retained snapshot point reads and bound iterators reuse their own admitted
-physical traversal scratch. A snapshot successor first tries the retained
-backend basis's original traversal mutex without waiting. If available, it
+physical traversal scratch. A snapshot successor keeps using already admitted
+cut-local point storage when present. Otherwise it tries the retained backend
+basis's original traversal mutex without waiting. If available, it
 borrows that basis's admitted workspace and copies the winning key and inline
 value before unlocking. Dictionary-free Snappy/LZ4 leaf decoding retains the
 successor's independent block-decoder policy in that workspace; this borrowing
 does not add a generic decoder mutex wait. A busy basis takes the original
-cut-local traversal and block-decoder path. Thus independent retained readers
+cut-local traversal and block-decoder path. Shared capacity refusal also releases
+the basis mutex before trying the cut-local owner. Thus independent retained readers
 can still proceed while another owner holds shared scratch. Dictionary leaves
 continue through the complete caller cut's definition and decoder; pointer
 materialization occurs after the shared traversal mutex is released.

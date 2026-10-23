@@ -19,6 +19,21 @@ and readable while an older snapshot holds its Set. It must not be reported as
 an absent segment to cached cleanup through another manager. A genuinely absent
 manager entry retains the missing-segment result used for orphan cleanup.
 
+Successful physical retirement publishes the registry's retired disposition and
+removes the exact manager discovery/observation under the same manager lock used
+by deletion admission. Physical unlink, deferred directory sync and final handle
+close remain outside that lock. A second manager may discard a stale zero-reference
+observation only when the registry positively records that exact identity as
+retired, no local deletion is active, and the retained physical parent proves
+the original child absent. An owner that had not yet captured its retirement
+parent may capture an absent child only with that same positive retired-identity
+proof and an opened parent matching the originally registered parent identity.
+The exact observation remains owned under the manager lock throughout the
+registry query and parent capture. This cleanup closes the original handles
+without unlinking any child. A replacement child, mismatched expected identity, live
+reference, or failed absence proof preserves refusal; retirement never authorizes
+late pins or adoption of a replacement file.
+
 ### 1.1 Decode scratch reuse
 
 The shared compressed-frame decoder limits output to the admitted raw frame

@@ -128,7 +128,9 @@ func TestUnsupportedDirectoryIdentityCaptureOverlayAndRename(t *testing.T) {
 			if m.volatileDirs["source"] != sourceID {
 				t.Fatal("Overlay changed an unchanged synthetic directory identity")
 			}
-			handle, err := os.Open(filepath.Join(root, "source"))
+			// Use the maintained retained-directory opener: Windows requires delete
+			// sharing for a real rename while the original handle remains open.
+			handle, err := rootpublication.OpenStableParent(filepath.Join(root, "source"))
 			if err != nil {
 				t.Fatal(err)
 			}

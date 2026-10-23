@@ -486,6 +486,11 @@ func (s *Snapshot) cowOwnedPointSuccessor(disk node.LeafEntry, found bool, start
 }
 
 func (s *Snapshot) cowPhysicalSuccessorLocked(start, end []byte) (pointSuccessorCandidate, error) {
+	// A retained reader may already own admitted traversal and decoder storage.
+	// Keep using it rather than require a second, opportunistic admission.
+	if s.cowReader != nil && s.cowReader.point != nil {
+		return s.cowCutPhysicalSuccessorLocked(start, end)
+	}
 	basis := s.cowCut.basis
 	// Reuse the original physical owner's admitted traversal storage when idle.
 	// Never wait for another reader's scratch: retained readers keep their
@@ -493,7 +498,20 @@ func (s *Snapshot) cowPhysicalSuccessorLocked(start, end []byte) (pointSuccessor
 	if !basis.readMu.TryLock() {
 		return s.cowCutPhysicalSuccessorLocked(start, end)
 	}
-	defer basis.readMu.Unlock()
+	best, err := s.cowBasisPhysicalSuccessorLocked(start, end)
+	basis.readMu.Unlock()
+	if errors.Is(err, memtable.ErrCOWCapacity) {
+		// Shared scratch is an optimization. Its allocation or decoder growth
+		// must not invalidate a read that the cut-local owner can still admit.
+		return s.cowCutPhysicalSuccessorLocked(start, end)
+	}
+	return best, err
+}
+
+// The caller holds basis.readMu until winner bytes have become owned. Release
+// that lock before invoking a cut-local fallback, which can perform its own I/O.
+func (s *Snapshot) cowBasisPhysicalSuccessorLocked(start, end []byte) (pointSuccessorCandidate, error) {
+	basis := s.cowCut.basis
 	w, err := basis.physicalWorkspaceLocked(s.cowCache.budget, s.cowCache.readLimits())
 	if err != nil {
 		return pointSuccessorCandidate{}, err

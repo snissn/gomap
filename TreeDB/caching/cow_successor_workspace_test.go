@@ -10,6 +10,8 @@ import (
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 func TestCOWSuccessorBasisWorkspaceDoesNotWaitForSharedBlockDecoder(t *testing.T) {
@@ -191,4 +193,158 @@ func TestCOWSuccessorBasisWorkspaceFiniteAdmission(t *testing.T) {
 	if err != nil || !found || string(key) != "a000" || !bytes.Equal(got, want) {
 		t.Fatalf("retry after pressure release: found=%t value=%q err=%v", found, got, err)
 	}
+}
+
+func TestCOWSuccessorBasisWorkspaceKeepsAdmittedCutUnderPressure(t *testing.T) {
+	for _, compressed := range []bool{false, true} {
+		for _, shared := range []string{"cold", "workspace", "point"} {
+			t.Run(fmt.Sprintf("compressed=%t/shared=%s", compressed, shared), func(t *testing.T) {
+				db, _, want := cowLeafCacheModeFixture(t, -1, compressed, "cow_ordered")
+				s, err := db.acquireCOWSnapshotWithError()
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer s.Close()
+				got, err := s.Get([]byte("a000"))
+				if err != nil || !bytes.Equal(got, want) || s.cowReader == nil || s.cowReader.point == nil {
+					t.Fatalf("physical Get did not warm cut storage: value=%q err=%v", got, err)
+				}
+				basis := s.cowCut.basis
+				if basis.reader != nil {
+					t.Fatal("point Get unexpectedly warmed shared successor storage")
+				}
+				if shared != "cold" {
+					basis.readMu.Lock()
+					w, err := basis.physicalWorkspaceLocked(db.cow.budget, db.cow.readLimits())
+					if err == nil && shared == "point" {
+						_, err = w.pointScratch()
+					}
+					basis.readMu.Unlock()
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				reader, point, sharedReader := s.cowReader, s.cowReader.point, basis.reader
+				budget := db.cow.budget
+				before := budget.Stats()
+				overhead := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
+				pressure, err := budget.AcquireExternal(budget.Limits().MaxInFlightBytes - before.ReservedBytes - overhead)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer pressure.Close()
+				pressured := budget.Stats()
+				key, value, found, readErr := s.SeekGEVersionRange([]byte("a000"), []byte("a001"))
+				after := budget.Stats()
+				pressure.Close()
+				if readErr != nil || !found || string(key) != "a000" || !bytes.Equal(value, want) {
+					t.Fatalf("admitted cut successor refused under pressure: key=%q found=%t value=%q err=%v", key, found, value, readErr)
+				}
+				if s.cowReader != reader || reader.point != point || basis.reader != sharedReader ||
+					after.ExternalBytes != pressured.ExternalBytes || after.ExternalLeases != pressured.ExternalLeases ||
+					after.ReservedBytes != pressured.ReservedBytes || after.Views != pressured.Views {
+					t.Fatalf("warmed successor changed admission: before=%+v after=%+v", pressured, after)
+				}
+				key[0], value[0] = '!', '!'
+				again, err := s.Get([]byte("a000"))
+				if err != nil || !bytes.Equal(again, want) {
+					t.Fatalf("successor result alias changed the retained value: value=%q err=%v", again, err)
+				}
+			})
+		}
+	}
+}
+
+// A cached pointer Get admits record input without point traversal. When a
+// grouped physical leaf needs more new shared input than a local point costs,
+// the existing local input can still serve SeekGE after shared admission fails.
+func TestCOWSuccessorBasisCapacityFallsBackToAdmittedLocalInput(t *testing.T) {
+	db, _, want := cowLeafCacheModeFixture(t, -1, false, "cow_ordered")
+	// Remain in the cached root: reading this real uncompressed value pointer
+	// must warm local input while never traversing the physical tree.
+	warmValue := bytes.Repeat([]byte("warm-pointer-input"), 1<<10)
+	if err := db.Set([]byte("zz-warm"), warmValue); err != nil {
+		t.Fatal(err)
+	}
+	s, err := db.acquireCOWSnapshotWithError()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if got, err := s.Get([]byte("zz-warm")); err != nil || !bytes.Equal(got, warmValue) {
+		t.Fatalf("cached pointer Get: len=%d err=%v", len(got), err)
+	}
+	local, basis := s.cowReader, s.cowCut.basis
+	if local == nil || local.point != nil || basis.reader != nil {
+		t.Fatal("cached pointer Get must admit only local input, without point or basis scratch")
+	}
+	var keyScratch, leafScratch [page.PageSize]byte
+	var ptr page.LeafLogPtr
+	stop := errors.New("capture grouped leaf")
+	_, err = basis.snapshot.GetEntryExactWithFixedScratch([]byte("a000"), keyScratch[:], leafScratch[:], func(p page.LeafLogPtr, _ []byte) ([]byte, error) {
+		ptr = p
+		return nil, stop
+	})
+	if !errors.Is(err, stop) || ptr.FileID == 0 {
+		t.Fatalf("fixture did not traverse logged leaf: ptr=%+v err=%v", ptr, err)
+	}
+	f, _, err := basis.snapshot.PinnedValueLogFile(ptr.ValueLogFileID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	shape, err := valuelog.InspectCOWLeafRecord(f, ptr.ValuePtr(), db.cow.readLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaseCharge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
+	pointCharge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowPointScratch{}))) + leaseCharge
+	inputCharge := memtable.COWAllocationCharge(cowReadCapacity(shape.PayloadBytes())) +
+		memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowReadAllocation{}))) + leaseCharge
+	if shape.Compressed || shape.RawBytes <= page.PageSize || inputCharge <= pointCharge || uint64(cap(local.input)) < shape.PayloadBytes() {
+		t.Fatalf("need real grouped input larger than point: shape=%+v inputCharge=%d pointCharge=%d localInput=%d", shape, inputCharge, pointCharge, cap(local.input))
+	}
+	basis.readMu.Lock()
+	shared, err := basis.physicalWorkspaceLocked(db.cow.budget, db.cow.readLimits())
+	if err == nil {
+		_, err = shared.pointScratch()
+	}
+	basis.readMu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cap(shared.input) != 0 {
+		t.Fatal("basis input must still be cold")
+	}
+	budget := db.cow.budget
+	before := budget.Stats()
+	pressure, err := budget.AcquireExternal(budget.Limits().MaxInFlightBytes - before.ReservedBytes - pointCharge - leaseCharge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pressure.Close()
+	pressured := budget.Stats()
+	// Establish the actual shared leaf reader refuses with exactly this
+	// remaining budget, without consuming any admission on the failed growth.
+	basis.readMu.Lock()
+	_, sharedErr := basis.readPhysicalLeafWithWorkspace(db.cow, shared, ptr, shared.point.leaf[:0], false, true)
+	basis.readMu.Unlock()
+	if !errors.Is(sharedErr, memtable.ErrCOWCapacity) || cap(shared.input) != 0 || budget.Stats() != pressured {
+		t.Fatalf("shared input did not refuse cleanly: err=%v before=%+v after=%+v", sharedErr, pressured, budget.Stats())
+	}
+	key, value, found, err := s.SeekGEVersionRange([]byte("a000"), []byte("a001"))
+	if err != nil || !found || string(key) != "a000" || !bytes.Equal(value, want) {
+		t.Fatalf("public successor did not fall back: key=%q found=%t len=%d err=%v", key, found, len(value), err)
+	}
+	after := budget.Stats()
+	if s.cowReader != local || local.point == nil || basis.reader != shared || cap(shared.input) != 0 ||
+		after.ExternalBytes != pressured.ExternalBytes+pointCharge || after.ReservedBytes != pressured.ReservedBytes+pointCharge ||
+		after.ExternalLeases != pressured.ExternalLeases+1 || after.Views != pressured.Views {
+		t.Fatalf("fallback must admit exactly one local point: before=%+v after=%+v", pressured, after)
+	}
+	key[0], value[0] = '!', '!'
+	key, value, found, err = s.SeekGEVersionRange([]byte("a000"), []byte("a001"))
+	if err != nil || !found || string(key) != "a000" || !bytes.Equal(value, want) || budget.Stats() != after {
+		t.Fatalf("owned result/reuse: key=%q found=%t len=%d err=%v", key, found, len(value), err)
+	}
+	t.Logf("grouped payload=%d raw=%d localInput=%d sharedInputCharge=%d localPointCharge=%d", shape.PayloadBytes(), shape.RawBytes, cap(local.input), inputCharge, pointCharge)
 }

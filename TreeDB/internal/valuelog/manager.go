@@ -2799,8 +2799,15 @@ func (m *Manager) retryZombieDelete(f *File) {
 			continue
 		}
 		if leaseErr != nil {
+			complete, reconcileErr := m.reconcileRetiredSegmentLocked(f, leaseErr)
 			m.mu.Unlock()
-			log.Printf("valuelog: retry zombie delete gate failed for %s: %v", f.Path, leaseErr)
+			if complete != nil {
+				if err := complete(); err != nil {
+					log.Printf("valuelog: retired zombie owner completion failed for %s: %v", f.Path, err)
+				}
+				return
+			}
+			log.Printf("valuelog: retry zombie delete gate failed for %s: %v", f.Path, reconcileErr)
 			return
 		}
 		if err := validateRetirementPath(f, identity); err != nil {
@@ -2820,8 +2827,9 @@ func (m *Manager) retryZombieDelete(f *File) {
 		deleted, removeErr := closeAndRemoveStableSegmentFileResult(f, identity)
 		if deleted {
 			syncErr := m.syncDeferredDeletion(f.Path)
-			commitStableDeleteLease(lease)
 			m.mu.Lock()
+			// Admission must not observe registry retirement before owner detachment.
+			commitStableDeleteLease(lease)
 			var unobserveErr error
 			var parent *os.File
 			if cur, exists := m.files[f.ID]; exists && cur == f && f.RefCount.Load() == 0 && f.IsZombie.Load() {
@@ -3316,8 +3324,12 @@ func (m *Manager) RemoveSegmentExpectedIdentity(id uint32, expected rootpublicat
 	}
 	lease, err := m.stableDeleteLease(f)
 	if err != nil {
+		complete, reconcileErr := m.reconcileRetiredSegmentLocked(f, err)
 		m.mu.Unlock()
-		return err
+		if complete != nil {
+			return complete()
+		}
+		return reconcileErr
 	}
 	if err := validateRetirementPath(f, identity); err != nil {
 		abortStableDeleteLease(lease)
@@ -3365,8 +3377,13 @@ func (m *Manager) RemoveSegmentIfUnpinned(id uint32) (bool, error) {
 		return false, nil
 	}
 	if err != nil {
+		complete, reconcileErr := m.reconcileRetiredSegmentLocked(f, err)
 		m.mu.Unlock()
-		return false, err
+		if complete != nil {
+			// This owner observes an already absent file, not a new unlink.
+			return false, complete()
+		}
+		return false, reconcileErr
 	}
 	if err := validateRetirementPath(f, identity); err != nil {
 		abortStableDeleteLease(lease)
@@ -3400,8 +3417,12 @@ func (m *Manager) RemoveSegmentForce(id uint32) error {
 	}
 	lease, err := m.stableDeleteLease(f)
 	if err != nil {
+		complete, reconcileErr := m.reconcileRetiredSegmentLocked(f, err)
 		m.mu.Unlock()
-		return err
+		if complete != nil {
+			return complete()
+		}
+		return reconcileErr
 	}
 	if err := validateRetirementPath(f, identity); err != nil {
 		abortStableDeleteLease(lease)
