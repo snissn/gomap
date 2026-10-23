@@ -100,6 +100,11 @@ class COWSuccessorDiagnosticTests(unittest.TestCase):
             self.assertEqual(result["retained_rows"], 0)
         self.assertEqual(hashlib.sha256((ROOT / diagnostic.HARNESS).read_bytes()).hexdigest(),
                          diagnostic.HARNESS_SHA256)
+        self.assertEqual(diagnostic.ALLOWED_CHANGES, {
+            "scripts/cow_successor_workspace_diagnostic.py",
+            ".github/scripts/test_cow_successor_workspace_diagnostic.py",
+            ".github/workflows/treedb-tests.yml", ".github/ci/ci_impact.json",
+            "TreeDB/docs/benchmarks/cow-successor-workspace-5214.md"})
         self.assertFalse(any(path.endswith(".go") for path in diagnostic.ALLOWED_CHANGES))
         for path in ("TreeDB/caching/cow_read.go", "TreeDB/caching/cow_cut.go", diagnostic.HARNESS,
                      "scripts/mvcc_primary_cost_gate.py"):

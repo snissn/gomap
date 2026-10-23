@@ -35,8 +35,8 @@ The original independent-reader test is preserved, including its successor case.
 Compile the exact same `cow_successor_workspace_external_test.go` harness against
 the anchor and candidate using a test overlay. Record the file hash, both exact
 source heads, toolchain, binaries/hashes, environment and commands. Prebuilds,
-correctness tests and profiles are outside the measurement slot. No samples have
-been collected at construction time.
+correctness tests and profiles are outside the measurement slot. No samples were
+collected at initial construction time; the later hosted result is recorded below.
 
 `BenchmarkCOWSuccessorWorkspace` has ten leaves: inline/forced-pointer GetAt,
 depth 1/8, concurrency 1/8 (eight cells), and unchanged prefix iteration at depth
@@ -106,13 +106,13 @@ across cells cannot hide concurrent or prefix regression.
 
 `scripts/cow_successor_workspace_diagnostic.py` runs on an ephemeral hosted
 Linux runner using the maintained PRIMARY quiet acquisition, process observation,
-ELF/runtime binding and checkout guards. The exact baseline remains
-`857890de8dec2cae5d9047b99bc7d5373c748990`, independently of a later PR merge base.
-The candidate tooling head must descend from frozen product
-`786d74430bc67b0b71af6b6eccf461ec23948eee` with only the runner, its Python controls,
-scoped workflow, generated inventory and this document changed. Runtime and all
-original Go correctness controls remain byte-identical. The sole baseline overlay
-is the frozen public fixture, SHA-256
+ELF/runtime binding and checkout guards. The original hosted comparison used
+baseline `857890de8dec2cae5d9047b99bc7d5373c748990`, candidate
+`030a377b2513930a59c48116165fdcdbd6320e01` and frozen product
+`786d74430bc67b0b71af6b6eccf461ec23948eee`. Only the runner, its Python controls,
+scoped workflow, generated inventory and this document differed from that product.
+Runtime and all original Go correctness controls were byte-identical. The sole
+baseline overlay is the frozen public fixture, SHA-256
 `2226735b88900fe2b33178498172d946de6d536e793f045c5b2f8c1a38544d08`;
 no new candidate helper or product source is copied into baseline.
 
@@ -145,10 +145,45 @@ after those gates; job or command timeout supplies no evidence. Always-run artif
 upload and summary steps retain failures and absent-evidence NULLs. This is not a
 new blanket gate for unrelated changes.
 
+## Original hosted result and main integration
+
+Hosted artifact **12509276552**, retained as `ci-030/cow-successor`, contains all
+60 original rows and returned diagnostic **PASS**, with quiet and source/runtime
+identity checks satisfied. Both serial depth-eight GetAt cells improved:
+
+| Layout | Median B/op, base to candidate | Median allocs/op | Median paired time change |
+| --- | --- | --- | --- |
+| Inline | 11,720 to 648 | 12 to 8 | -58.916% |
+| Forced pointer | 16,880 to 5,976 | 16 to 14 | -25.457% |
+
+Every cell met the unchanged policy. The largest median paired time increase was
+parallel inline depth eight, **+4.286%**, within the predeclared +5% limit. Both
+prefix controls had unchanged median allocations and bytes. Ratios are paired
+per cell before taking the median; they are not ratios of the displayed medians.
+The original local NULL and all original hosted samples remain retained. This
+result applies to the original heads above, not to the later main integration.
+
+Main `8c392a8e27b8f23e795d07edfb3782ca32d46976` was merged once into that candidate.
+The new frozen integration product is
+`3dff6da9663bd9fc1f56558926e9aee2127ffb46`: every Go file is byte-identical to
+main or, for the scratch product's changed paths, original product `786d74430`.
+Both the existing public Stats diagnostic and scoped successor diagnostic remain
+in the shared workflow. The following tooling descendant binds baseline to that
+exact main commit and product to this merge; it permits the same **five tooling
+paths only**. It does not permit runtime or Go fixture/control changes after the
+merge. Fixture hash, ten cells, 60 rows, ordering, budgets and numeric limits are
+unchanged. The workflow uses the same exact baseline as the runner.
+
+**Integration qualification is pending.** Python/inventory controls and a clean
+runtime-union check do not transfer the earlier hosted PASS to the integrated
+source. Latest-head ordinary/PRIMARY, successor, applicable races and review/CI
+must qualify the integration independently. No integrated Go or timing campaign
+was run during source integration.
+
 ```sh
 python3 scripts/cow_successor_workspace_diagnostic.py \
   --root "$GITHUB_WORKSPACE" \
-  --baseline 857890de8dec2cae5d9047b99bc7d5373c748990 \
+  --baseline 8c392a8e27b8f23e795d07edfb3782ca32d46976 \
   --candidate "$HEAD_SHA" \
   --output "$RUNNER_TEMP/mvcc-raw-path-gate/cow-successor"
 ```
@@ -158,8 +193,8 @@ source/fixture/observer hashes, actual CPU affinity, environment hash, before/af
 runtime bindings, all command receipts and separate stdout/stderr, quiet/process
 witnesses, up to sixty ordered rows, per-cell paired deltas/medians and the two
 separate improvement decisions. Setup, checkpoint, warmup and Close retain their
-original untimed boundaries. No hosted timed result is asserted by this source
-packet. Pure source controls run with:
+original untimed boundaries. The hosted result above is confined to its original
+source binding. Pure source controls run with:
 
 ```sh
 PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/test_cow_successor_workspace_diagnostic.py

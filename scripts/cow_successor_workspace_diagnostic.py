@@ -20,8 +20,8 @@ import time
 import mvcc_primary_cost_gate as maintained
 
 
-BASELINE = "857890de8dec2cae5d9047b99bc7d5373c748990"
-PRODUCT = "786d74430bc67b0b71af6b6eccf461ec23948eee"
+BASELINE = "8c392a8e27b8f23e795d07edfb3782ca32d46976"
+PRODUCT = "3dff6da9663bd9fc1f56558926e9aee2127ffb46"
 HARNESS = "TreeDB/mvcc/cow_successor_workspace_external_test.go"
 HARNESS_SHA256 = "2226735b88900fe2b33178498172d946de6d536e793f045c5b2f8c1a38544d08"
 BENCHMARK = "BenchmarkCOWSuccessorWorkspace"

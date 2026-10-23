@@ -217,7 +217,7 @@ jobs:
         run: |
           python3 scripts/cow_successor_workspace_diagnostic.py \
             --root "$GITHUB_WORKSPACE" \
-            --baseline 857890de8dec2cae5d9047b99bc7d5373c748990 --candidate "$HEAD_SHA" \
+            --baseline 8c392a8e27b8f23e795d07edfb3782ca32d46976 --candidate "$HEAD_SHA" \
             --output "$RUNNER_TEMP/mvcc-raw-path-gate/cow-successor"
 
       - name: Compare public Stats diagnostic
