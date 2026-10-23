@@ -11,16 +11,27 @@ import (
 	treedb "github.com/snissn/gomap/TreeDB"
 )
 
+// primaryReplacementOptions isolates this narrow publication measurement from
+// the default periodic vacuum worker. The same maintained harness is overlaid onto
+// baseline and candidate; the actual durable CommitAt path remains unchanged.
+func primaryReplacementOptions(dir string) treedb.Options {
+	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, dir)
+	opts.IndexPrimaryDirectory = true
+	opts.DisableSideStores = true
+	opts.BackgroundCheckpointInterval = -1
+	opts.BackgroundCheckpointIdleDuration = -1
+	opts.MaxWALBytes = -1
+	opts.BackgroundIndexVacuumInterval = -1
+	opts.ValueLog.PointerThreshold = 4096
+	return opts
+}
+
 // PRIMARY-only replacement advances the actual public frontier while retaining
 // the allocator generation. Successor metadata retirement is deferred bookkeeping,
 // whereas materializing new DATA must still publish a new allocator generation.
 func TestCommitAtPrimaryOnlyRetainsActualDataGeneration(t *testing.T) {
 	dir := t.TempDir()
-	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, dir)
-	opts.IndexPrimaryDirectory = true // This gate measures the explicit PRIMARY route.
-	opts.DisableSideStores = true
-	opts.BackgroundCheckpointInterval = -1
-	opts.ValueLog.PointerThreshold = 4096
+	opts := primaryReplacementOptions(dir)
 	d, err := treedb.Open(opts)
 	if err != nil {
 		t.Fatal(err)
@@ -31,6 +42,10 @@ func TestCommitAtPrimaryOnlyRetainsActualDataGeneration(t *testing.T) {
 			_ = d.Close()
 		}
 	}()
+	if got := d.Stats()["treedb.bg_vacuum.enabled"]; got != "false" {
+		_ = d.Close()
+		t.Fatal("PRIMARY fixture has background vacuum enabled: " + got)
+	}
 	st := New(d)
 	commit := func(ts uint64, ms []Mutation) {
 		t.Helper()
@@ -116,11 +131,7 @@ func TestCommitAtPrimaryOnlyRetainsActualDataGeneration(t *testing.T) {
 // public replacement route after genuine DATA materialization. Both versions
 // report generation advances; the baseline may churn and must remain runnable.
 func BenchmarkCommitAtPrimaryOnlyAfterDataGeneration(b *testing.B) {
-	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, b.TempDir())
-	opts.IndexPrimaryDirectory = true // This gate measures the explicit PRIMARY route.
-	opts.DisableSideStores = true
-	opts.BackgroundCheckpointInterval = -1
-	opts.ValueLog.PointerThreshold = 4096
+	opts := primaryReplacementOptions(b.TempDir())
 	d, err := treedb.Open(opts)
 	if err != nil {
 		b.Fatal(err)
@@ -130,6 +141,10 @@ func BenchmarkCommitAtPrimaryOnlyAfterDataGeneration(b *testing.B) {
 			b.Fatal(err)
 		}
 	}()
+	if got := d.Stats()["treedb.bg_vacuum.enabled"]; got != "false" {
+		_ = d.Close()
+		b.Fatal("PRIMARY fixture has background vacuum enabled: " + got)
+	}
 	st := New(d)
 	commit := func(ts uint64, ms []Mutation) {
 		b.Helper()
