@@ -342,3 +342,13 @@ and historical rewrite cleanup failure remain retained. New exact-head original
 CI and review are required; these controls do not replace them. Only the
 frozen-product binding and documentation/inventory are refreshed here; fixture,
 workload, numeric/noise gates and original raw/PRIMARY/M0 checks are unchanged.
+
+### Cold compressed-value handoff and Stats formatting
+
+The complete runtime is now frozen at `24830c7eac5cab1a7b0595278c0eafabea74528c`. A cold primary physical reader now refunds freshly admitted traversal scratch before handing a compressed-value inspection to the cut-local decoder. The retained cut still pins the inspected file; warm readers, codec authority and original capacity checks remain unchanged. The existing constrained-budget regression now covers both idle primary and busy-primary parallel handoffs. Its idle-primary case fails on the old runtime; focused normal and race controls pass.
+
+Public Stats formats its nine residency integer fields directly with strconv rather than the generic formatter. Signed decimal values, field names, samplers and synchronization are unchanged. Owning normal and race controls pass. One matched old/current public Stats diagnostic records 882,765 to 882,733 B/op and 2,852 to 2,844 allocs/op. It has no quiet-host or acceptance claim.
+
+At the preceding W6 tooling head `029eeb9d4e07cfaa37dcf5552c73a790d2e94ad4`, the original raw controls, PRIMARY (+2.798% paired time) and all 60 COW rows pass with their original gates; PRIMARY and COW have quiet-host witnesses. Stats fails its strict byte guard by one median byte (882,719 to 882,720 B/op), despite removing 38 allocations. The new formatting diagnostic does not replace that failure.
+
+W6 also fails the RabitQ exact-allocation assertion and all three legacy vacuum timing-CV limits. The RabitQ source is unchanged from the baseline; one isolated diagnostic passes, and compiler escape evidence rules out the measured stats literal escaping on the success path. The original allocation failure remains unexplained. Vacuum operations complete without unexpected errors, but stability remains failed. No fixture, timing/allocation/noise limit or failure classification is relaxed, and no selective original gate is rerun. The new reviewed runtime requires its own original current-head CI and review; neither these diagnostics nor an isolated passing test waive earlier failures or complete final graph qualification.

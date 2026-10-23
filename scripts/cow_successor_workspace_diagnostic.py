@@ -21,7 +21,7 @@ import mvcc_primary_cost_gate as maintained
 
 
 BASELINE = "8c392a8e27b8f23e795d07edfb3782ca32d46976"
-PRODUCT = "a0e35df9b10a0ede99c4ff06291f582afbeaa09b"
+PRODUCT = "24830c7eac5cab1a7b0595278c0eafabea74528c"
 HARNESS = "TreeDB/mvcc/cow_successor_workspace_external_test.go"
 HARNESS_SHA256 = "2226735b88900fe2b33178498172d946de6d536e793f045c5b2f8c1a38544d08"
 BENCHMARK = "BenchmarkCOWSuccessorWorkspace"
