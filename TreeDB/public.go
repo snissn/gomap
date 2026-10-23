@@ -777,6 +777,9 @@ func Open(opts Options) (*DB, error) {
 	if err := resolveOpenProfileOptions(&opts); err != nil {
 		return nil, err
 	}
+	if err := validateCOWOpenOptions(&opts); err != nil {
+		return nil, err
+	}
 	unlock, err := acquireOrdinaryOpenOwnership(opts)
 	if err != nil {
 		return nil, err
@@ -793,14 +796,24 @@ func openResolved(opts Options) (*DB, error) {
 // profile/format options are resolved unchanged before selecting cache services.
 // This choice is made only at Open; a live cache never changes its owner role.
 func openResolvedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
+	if err := validateCOWOpenOptions(&opts); err != nil {
+		return nil, err
+	}
+	return openValidatedWithCacheRole(opts, backendOnly)
+}
+
+// Validate immutable publication policy before ordinary initialization can
+// create the directory containing INIT.LOCK. External opens also pass through
+// this check after selecting their explicitly owned namespace.
+func validateCOWOpenOptions(opts *Options) error {
 	// Immutable COW publication has one fixed private owner; adaptive rotation
 	// cannot select it. Reject before creating backend storage or binding owners.
 	if opts.MemtableMode == "adaptive:cow_btree" || opts.MemtableMode == "adaptive:cow_ordered" {
-		return nil, caching.ErrCOWUnsupported
+		return caching.ErrCOWUnsupported
 	}
 	if opts.MemtableMode == "cow_btree" || opts.MemtableMode == "cow_ordered" {
 		if opts.ReadOnly {
-			return nil, caching.ErrCOWUnsupported
+			return caching.ErrCOWUnsupported
 		}
 		limits, shards, err := caching.ValidateCOWOpenOptions(caching.Options{
 			COWMemtableLimits: opts.COWMemtableLimits, MemtableShards: opts.MemtableShards,
@@ -808,10 +821,14 @@ func openResolvedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
 			DisableWAL:           opts.Durability == db.DurabilityWALOffRelaxed, ExternalCommandWAL: opts.CommandWAL,
 		})
 		if err != nil {
-			return nil, err
+			return err
 		}
 		opts.COWMemtableLimits, opts.MemtableShards = limits, shards
 	}
+	return nil
+}
+
+func openValidatedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
 	// Cached mode writes to the backend in large flush batches, so commit sequence
 	// advances much more slowly than "number of writes". A large KeepRecent value
 	// can therefore delay page reuse for a very long time (and cause index.db to

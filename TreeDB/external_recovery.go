@@ -71,6 +71,9 @@ type externalRetainedCut struct {
 // Checkpoints retain the maintained DATA publisher's exact physical cut and
 // persist bounded meta operands. No full image copy or second publisher exists.
 type ExternalRecovery struct {
+	// Transfer exclusion is separate from Apply exclusion: a queued checkpoint
+	// waits here without triggering RWMutex writer preference against Apply.
+	transferMu    sync.RWMutex
 	mu            sync.RWMutex
 	db            *DB
 	dir           string
@@ -101,6 +104,9 @@ func OpenExternalRecovery(opts Options, config ExternalRecoveryConfig) (_ *Exter
 	}
 	if opts.Durability != DurabilityWALOffRelaxed || opts.CommandWAL || opts.MemtableMode != "cow_ordered" {
 		return nil, fmt.Errorf("%w: explicit no_wal_fast cow_ordered materialization required", ErrExternalRecovery)
+	}
+	if err := validateCOWOpenOptions(&opts); err != nil {
+		return nil, err
 	}
 	if config.MaxCheckpointBytes == 0 {
 		config.MaxCheckpointBytes = 8 << 30
@@ -214,6 +220,9 @@ func OpenExternalRecovery(opts Options, config ExternalRecoveryConfig) (_ *Exter
 		}
 		o.checkpoint = cert
 	} else {
+		if err := o.validateUncertifiedGenesis(); err != nil {
+			return nil, err
+		}
 		// Without a certificate genesis has no retained user state.
 		if err := os.RemoveAll(working); err != nil {
 			return nil, err
@@ -302,6 +311,8 @@ func (o *ExternalRecovery) Checkpoint(ctx context.Context, metadata []byte) (Ext
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	o.transferMu.Lock()
+	defer o.transferMu.Unlock()
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if o.closed {
@@ -479,6 +490,8 @@ func (o *ExternalRecovery) Close() error {
 	if o == nil {
 		return nil
 	}
+	o.transferMu.Lock()
+	defer o.transferMu.Unlock()
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if o.closed {
@@ -495,6 +508,37 @@ func (o *ExternalRecovery) Close() error {
 
 func (o *ExternalRecovery) imageDir(gen uint64) string {
 	return filepath.Join(o.dir, "checkpoints", fmt.Sprintf("%020d", gen), "db")
+}
+
+// A lone first generation may be an interrupted initial publication. Later
+// generations require an earlier stable CURRENT and cannot be reset to genesis
+// when that authority is missing. Validate before any namespace cleanup.
+func (o *ExternalRecovery) validateUncertifiedGenesis() error {
+	entries, err := os.ReadDir(filepath.Join(o.dir, "checkpoints"))
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".staging-") && entry.IsDir() {
+			continue
+		}
+		if entry.Name() != fmt.Sprintf("%020d", 1) || !entry.IsDir() {
+			return fmt.Errorf("%w: checkpoint %q exists without CURRENT", ErrExternalRecovery, entry.Name())
+		}
+		raw, err := readExternalBounded(filepath.Join(o.dir, "checkpoints", entry.Name(), "certificate.json"), 4<<20)
+		if err != nil {
+			return err
+		}
+		var cert ExternalRecoveryCheckpoint
+		if json.Unmarshal(raw, &cert) != nil || cert.Version != 2 || cert.Identity != o.config.Identity || cert.Generation != 1 || cert.PreviousGeneration != 0 || cert.PreviousDigest != "" {
+			return fmt.Errorf("%w: invalid initial checkpoint without CURRENT", ErrExternalRecovery)
+		}
+		digest, err := externalDigest(cert)
+		if err != nil || digest != cert.Digest {
+			return fmt.Errorf("%w: corrupt initial checkpoint without CURRENT", ErrExternalRecovery)
+		}
+	}
+	return nil
 }
 
 func (o *ExternalRecovery) readCurrent() (ExternalRecoveryCheckpoint, bool, error) {

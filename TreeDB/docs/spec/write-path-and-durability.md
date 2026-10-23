@@ -894,7 +894,7 @@ No live ANN authority or new storage format is implied.
 
 ## Externally logged raw DATA materialization
 
-The opt-in ExternalRecovery owner accepts only explicitly configured no-WAL raw
+The opt-in ExternalRecovery owner accepts only explicitly configured journal-disabled raw
 DATA COW materialization. Its ordinary Apply return acknowledges materialization;
 the caller owns durable command/decision authority. Its checkpoint certificate
 retains the maintained publisher's exact root/dependencies with bounded descriptor

@@ -21,6 +21,9 @@ again under initialization ownership. An ordinary/external fresh-open race has
 at most one successful policy. Failure releases the acquired ownership. Read-only
 ordinary opens do not create lock files. External owners retain initialization
 ownership for their lifetime, and mark their internal physical namespace too.
+Pure COW/profile validation precedes writable initialization. A fresh ordinary
+open persists the lock's parent before building child stores; the corresponding
+fresh-layout power-loss witnesses have versioned owned-init-v2 cut identities.
 Low-level physical backend helpers are engine integration surfaces, not a way
 to bypass the public recovery policy.
 
@@ -85,8 +88,12 @@ GC/rewrite owner can mutate that closed namespace. Newer incidental working seal
 clean Close never advance certified application progress. The owner compares the
 selected persistent StateToken with CURRENT and fails closed on fallback/mismatch;
 it does not silently lower the upstream retention frontier. Without CURRENT,
-uncertified genesis is discarded. A corrupt/missing certificate is an error,
-not permission to recreate genesis.
+uncertified genesis is discarded only when no evidence of an earlier published
+generation exists: staging directories and a valid lone first generation with
+no predecessor may be an interrupted initial publication. Later generations,
+unknown checkpoint entries and invalid initial certificates MUST fail before
+working/checkpoint/namespace cleanup. A corrupt/missing selected certificate is
+an error, not permission to recreate genesis.
 
 ## Resources and supported capabilities
 
@@ -113,8 +120,11 @@ not a portable backup and MUST NOT be copied into another inode/namespace.
 `ExportCheckpoint(ctx, writer, generation, digest)` MUST match the currently
 certified generation and digest exactly; it never substitutes newer application
 progress. It retains the existing physical cut and captures stable child handles
-and lengths before copying. Apply may continue while export runs; Checkpoint,
-Install and Close wait. The maintained PhysicalSnapshotCutV1 writer exports the
+and lengths before copying. Apply may continue while export runs, including
+when Checkpoint, Install or Close is queued behind the export. Transfer lifetime
+exclusion MUST be acquired before Apply exclusion by those writers, so a queued
+transfer waiter cannot stall new Apply calls through RWMutex writer preference.
+The maintained PhysicalSnapshotCutV1 writer exports the
 captured DATA meta/page image. Persistent value/outer-leaf files are copied from
 captured fixed prefixes; unreferenced suffix files may be included. Explicit
 transfer is O(image) copying/hashing; periodic certificates remain bounded.

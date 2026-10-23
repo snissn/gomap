@@ -266,6 +266,26 @@ func TestExternalRecoveryTransferExportAllowsSuccessorApply(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("export did not reach copy")
 	}
+	checkpointed := make(chan error, 1)
+	go func() {
+		_, err := source.Checkpoint(context.Background(), []byte("successor-cut"))
+		checkpointed <- err
+	}()
+	// Wait until the writer is queued behind the export. RWMutex writer
+	// preference must not propagate from this transfer lock into Apply's lock.
+	deadline := time.Now().Add(5 * time.Second)
+	for source.transferMu.TryRLock() {
+		source.transferMu.RUnlock()
+		if time.Now().After(deadline) {
+			t.Fatal("checkpoint did not queue behind export")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	select {
+	case err := <-checkpointed:
+		t.Fatalf("checkpoint completed before export release: %v", err)
+	default:
+	}
 	applied := make(chan error, 1)
 	go func() {
 		applied <- source.Apply(func() error {
@@ -285,6 +305,9 @@ func TestExternalRecoveryTransferExportAllowsSuccessorApply(t *testing.T) {
 	}
 	release.Do(func() { close(writer.release) })
 	if err := <-exported; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-checkpointed; err != nil {
 		t.Fatal(err)
 	}
 	target := externalTransferOwner(t, t.TempDir(), "receiver")

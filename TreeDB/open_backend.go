@@ -11,14 +11,14 @@ import (
 // avoid cached-layer side effects but still needs value-log decode/publication
 // plumbing. Cleanup closes the main backend before its side-store owners.
 func OpenBackend(opts Options) (*db.DB, func() error, error) {
+	if err := resolveOpenProfileOptions(&opts); err != nil {
+		return nil, nil, err
+	}
 	unlock, err := acquireOrdinaryOpenOwnership(opts)
 	if err != nil {
 		return nil, nil, err
 	}
 	defer unlock()
-	if err := resolveOpenProfileOptions(&opts); err != nil {
-		return nil, nil, err
-	}
 	layout, err := resolveOpenDirLayout(opts.Dir, opts.DisableSideStores)
 	if err != nil {
 		return nil, nil, err
@@ -120,6 +120,9 @@ func OpenBackendWithCachedLeafLogStatsAndDeferredVectorBuildMaintenance(opts Opt
 // particular, do not rewrite MemtableMode before physical options are applied.
 func openBackendWithCachedServices(opts Options) (*DB, error) {
 	if err := resolveOpenProfileOptions(&opts); err != nil {
+		return nil, err
+	}
+	if err := validateCOWOpenOptions(&opts); err != nil {
 		return nil, err
 	}
 	unlock, err := acquireOrdinaryOpenOwnership(opts)

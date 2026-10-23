@@ -30,16 +30,21 @@ func (o *ExternalRecovery) ExportCheckpoint(ctx context.Context, dst io.Writer, 
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	o.transferMu.RLock()
+	defer o.transferMu.RUnlock()
 	o.mu.RLock()
-	defer o.mu.RUnlock()
 	if o.closed {
+		o.mu.RUnlock()
 		return ErrClosed
 	}
 	if o.poison != nil {
-		return o.poison
+		err := o.poison
+		o.mu.RUnlock()
+		return err
 	}
 	cert := o.checkpoint
 	if cert.Generation == 0 || cert.Generation != expectedGeneration || cert.Digest != expectedDigest {
+		o.mu.RUnlock()
 		return fmt.Errorf("%w: stale checkpoint export request", ErrExternalRecovery)
 	}
 	var cut *backenddb.PhysicalSnapshotCutV1
@@ -48,6 +53,7 @@ func (o *ExternalRecovery) ExportCheckpoint(ctx context.Context, dst io.Writer, 
 			cut = retained.cut
 		}
 	}
+	o.mu.RUnlock()
 	if cut == nil {
 		return ErrExternalRecovery
 	}
@@ -239,6 +245,8 @@ func (o *ExternalRecovery) InstallCheckpoint(ctx context.Context, src io.Reader,
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	o.transferMu.Lock()
+	defer o.transferMu.Unlock()
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if o.closed {

@@ -3,6 +3,7 @@ package treedb
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -306,6 +307,101 @@ func TestExternalRecoveryGenesisDiscardsUncertifiedClose(t *testing.T) {
 	}
 	if _, ok := o.RecoveredCheckpoint(); ok {
 		t.Fatal("uncertified progress adopted")
+	}
+}
+
+func TestExternalRecoveryMissingCurrentPreservesCertifiedState(t *testing.T) {
+	requireExternalRecoveryPlatform(t)
+	for _, invalid := range []string{"later-generation", "initial-has-predecessor", "initial-corrupt"} {
+		t.Run(invalid, func(t *testing.T) {
+			dir := t.TempDir()
+			o := externalTestOpen(t, dir)
+			externalTestSet(t, o, "key", []byte("retained"))
+			cert, err := o.Checkpoint(context.Background(), []byte("first"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if invalid == "later-generation" {
+				cert, err = o.Checkpoint(context.Background(), []byte("second"))
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := o.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(filepath.Join(dir, "CURRENT")); err != nil {
+				t.Fatal(err)
+			}
+			certificate := filepath.Join(filepath.Dir(o.imageDir(cert.Generation)), "certificate.json")
+			if invalid != "later-generation" {
+				if invalid == "initial-has-predecessor" {
+					cert.PreviousGeneration, cert.PreviousDigest = 9, "prior"
+					cert.Digest, err = externalDigest(cert)
+					if err != nil {
+						t.Fatal(err)
+					}
+				} else {
+					cert.Digest = "corrupt"
+				}
+				raw, err := json.Marshal(cert)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(certificate, raw, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			retained, err := os.ReadFile(certificate)
+			if err != nil {
+				t.Fatal(err)
+			}
+			canary := filepath.Join(dir, "working", "preserve-on-refusal")
+			if err := os.WriteFile(canary, []byte("preserve"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			opts := OptionsFor(ProfileNoWALFast, dir)
+			opts.MemtableMode = "cow_ordered"
+			if other, err := OpenExternalRecovery(opts, o.config); err == nil || other != nil {
+				if other != nil {
+					_ = other.Close()
+				}
+				t.Fatalf("missing CURRENT accepted: owner=%v err=%v", other, err)
+			}
+			if got, err := os.ReadFile(certificate); err != nil || !bytes.Equal(got, retained) {
+				t.Fatalf("refusal changed retained certificate: %v", err)
+			}
+			if got, err := os.ReadFile(canary); err != nil || string(got) != "preserve" {
+				t.Fatalf("refusal cleaned working state: %v", err)
+			}
+		})
+	}
+}
+
+func TestExternalRecoveryInterruptedFirstPublicationRecreatesGenesis(t *testing.T) {
+	requireExternalRecoveryPlatform(t)
+	dir := t.TempDir()
+	o := externalTestOpen(t, dir)
+	externalTestSet(t, o, "suffix", []byte("uncertified"))
+	injected := errors.New("before first CURRENT")
+	o.testCut = func(stage string) error {
+		if stage == "before-current" {
+			return injected
+		}
+		return nil
+	}
+	if _, err := o.Checkpoint(context.Background(), []byte("unpublished")); !errors.Is(err, injected) {
+		t.Fatalf("checkpoint=%v, want injected cut", err)
+	}
+	if err := o.Close(); err != nil {
+		t.Fatal(err)
+	}
+	o = externalTestOpen(t, dir)
+	if _, ok := o.RecoveredCheckpoint(); ok {
+		t.Fatal("adopted unpublished first certificate")
+	}
+	if found, err := o.DB().Has([]byte("suffix")); err != nil || found {
+		t.Fatalf("uncertified suffix found=%v err=%v", found, err)
 	}
 }
 

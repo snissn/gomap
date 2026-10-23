@@ -152,7 +152,7 @@ an empty transaction's explicit sync boundary.
 
 ## Externally owned recovery
 
-`treedb.OpenExternalRecovery` is an explicit no-WAL `cow_ordered` integration for
+`treedb.OpenExternalRecovery` is an explicit journal-disabled `cow_ordered` integration for
 an application that durably logs commands and decisions elsewhere. `Apply`
 materializes state; it is not a local durable acknowledgement. The application
 must retain its log until a matching successful certificate covers the complete
