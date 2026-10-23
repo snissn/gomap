@@ -964,8 +964,11 @@ file on both candidates and preserve every sample.
 
 ### Isolated public PRIMARY cost boundary
 
-`mvcc_primary_cost_gate.py` overlays the same maintained
-`TreeDB/mvcc/primary_generation_routing_v6_test.go` onto both source revisions.
+`mvcc_primary_cost_gate.py` copies the maintained
+`TreeDB/mvcc/primary_generation_routing_v6_test.go` from the candidate
+checkout into the baseline build with an overlay; the candidate build uses
+the fixture directly from that checkout. Both builds therefore use the same
+fixture bytes.
 The fixture explicitly disables periodic background index vacuum and makes its
 already-disabled periodic/idle checkpoint and WAL-size checkpoint triggers
 explicit. Pruning retains the default background scheduling; it is not moved
