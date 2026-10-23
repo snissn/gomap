@@ -539,7 +539,10 @@ func (s *Snapshot) cowPhysicalSuccessorLocked(start, end []byte, inspected *cowS
 	}
 	fresh := basis.reader == nil
 	best, err := s.cowBasisPhysicalSuccessorLocked(start, end, inspected)
-	if fresh && errors.Is(err, memtable.ErrCOWCapacity) && basis.reader != nil {
+	if fresh && (errors.Is(err, memtable.ErrCOWCapacity) || (inspected.file != nil && !best.valueOwned)) && basis.reader != nil {
+		// A compressed-value inspection hands off without an error, but the
+		// complete-cut decoder still needs its own admission. Refund fresh
+		// traversal exactly as for a refused value grow before that handoff.
 		basis.reader.close()
 		basis.reader = nil
 	}

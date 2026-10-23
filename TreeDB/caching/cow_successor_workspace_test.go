@@ -290,54 +290,66 @@ func TestCOWSuccessorCompressedInspectionHandoffUsesCutDecoder(t *testing.T) {
 }
 
 func TestCOWSuccessorFreshCompressedHandoffRefundsBeforeLocalAdmission(t *testing.T) {
-	db, want := cowSuccessorCompressedPointerFixture(t)
-	warm, err := db.acquireCOWSnapshotWithError()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, got, found, err := warm.SeekGEVersionRange([]byte("a"), []byte("b")); err != nil || !found || !bytes.Equal(got, want) {
-		_ = warm.Close()
-		t.Fatalf("warm original shared decoder: found=%t err=%v", found, err)
-	}
-	if err := warm.Close(); err != nil {
-		t.Fatal(err)
-	}
-	s, err := db.acquireCOWSnapshotWithError()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	basis, budget := s.cowCut.basis, db.cow.budget
-	shared := db.cow.physicalReader
-	if s.cowReader != nil || shared == nil || len(shared.codecs) == 0 || basis.readSlots[0].reader != nil {
-		t.Fatal("fixture needs a warm shared decoder and cold cut/extra lane")
-	}
-	leaseCharge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
-	workspaceCharge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowReadWorkspace{}))) + cowReadWorkspaceInspectionCharge() + leaseCharge
-	pointCharge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowPointScratch{}))) + leaseCharge
-	outputCharge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowReadAllocation{}))) + leaseCharge +
-		memtable.COWAllocationCharge(cowReadCapacity(uint64(len(want))))
-	// The old independent cut can admit traversal plus output. Retaining a
-	// fresh extra lane would leave only outputCharge, stranding local admission.
-	remaining := workspaceCharge + pointCharge + outputCharge
-	before := budget.Stats()
-	pressure, err := budget.AcquireExternal(budget.Limits().MaxInFlightBytes - before.ReservedBytes - remaining - leaseCharge)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer pressure.Close()
-	pressured := budget.Stats()
-	basis.readMu.Lock()
-	defer basis.readMu.Unlock()
-	key, got, found, err := s.SeekGEVersionRange([]byte("a"), []byte("b"))
-	after := budget.Stats()
-	if err != nil || !found || string(key) != "a" || !bytes.Equal(got, want) {
-		t.Fatalf("compressed handoff stranded original local admission: found=%t err=%v", found, err)
-	}
-	if basis.readSlots[0].reader != nil || s.cowReader == nil || s.cowReader.point != nil || len(s.cowReader.codecs) != 0 ||
-		db.cow.physicalReader != shared || after.ExternalBytes != pressured.ExternalBytes+workspaceCharge+outputCharge ||
-		after.ReservedBytes != pressured.ReservedBytes+workspaceCharge+outputCharge || after.ExternalLeases != pressured.ExternalLeases+2 {
-		t.Fatalf("fresh compressed lane must refund before original cut admission: before=%+v after=%+v", pressured, after)
+	for _, busyPrimary := range []bool{false, true} {
+		t.Run(fmt.Sprintf("busy-primary=%t", busyPrimary), func(t *testing.T) {
+			db, want := cowSuccessorCompressedPointerFixture(t)
+			warm, err := db.acquireCOWSnapshotWithError()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, got, found, err := warm.SeekGEVersionRange([]byte("a"), []byte("b")); err != nil || !found || !bytes.Equal(got, want) {
+				_ = warm.Close()
+				t.Fatalf("warm original shared decoder: found=%t err=%v", found, err)
+			}
+			if err := warm.Close(); err != nil {
+				t.Fatal(err)
+			}
+			s, err := db.acquireCOWSnapshotWithError()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			basis, budget := s.cowCut.basis, db.cow.budget
+			// Only the original shared codec is warm. Start either opportunistic
+			// traversal owner cold so retaining it would duplicate local admission.
+			basis.readMu.Lock()
+			basis.reader.close()
+			basis.reader = nil
+			basis.readMu.Unlock()
+			shared := db.cow.physicalReader
+			if s.cowReader != nil || shared == nil || len(shared.codecs) == 0 || basis.reader != nil || basis.readSlots[0].reader != nil {
+				t.Fatal("fixture needs a warm shared decoder and cold cut/primary/extra lane")
+			}
+			leaseCharge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
+			workspaceCharge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowReadWorkspace{}))) + cowReadWorkspaceInspectionCharge() + leaseCharge
+			pointCharge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowPointScratch{}))) + leaseCharge
+			outputCharge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowReadAllocation{}))) + leaseCharge +
+				memtable.COWAllocationCharge(cowReadCapacity(uint64(len(want))))
+			// The old independent cut can admit traversal plus output. Retaining a
+			// fresh primary or extra lane would leave only outputCharge, stranding local admission.
+			remaining := workspaceCharge + pointCharge + outputCharge
+			before := budget.Stats()
+			pressure, err := budget.AcquireExternal(budget.Limits().MaxInFlightBytes - before.ReservedBytes - remaining - leaseCharge)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer pressure.Close()
+			pressured := budget.Stats()
+			if busyPrimary {
+				basis.readMu.Lock()
+				defer basis.readMu.Unlock()
+			}
+			key, got, found, err := s.SeekGEVersionRange([]byte("a"), []byte("b"))
+			after := budget.Stats()
+			if err != nil || !found || string(key) != "a" || !bytes.Equal(got, want) {
+				t.Fatalf("compressed handoff stranded original local admission: found=%t err=%v", found, err)
+			}
+			if basis.reader != nil || basis.readSlots[0].reader != nil || s.cowReader == nil || s.cowReader.point != nil || len(s.cowReader.codecs) != 0 ||
+				db.cow.physicalReader != shared || after.ExternalBytes != pressured.ExternalBytes+workspaceCharge+outputCharge ||
+				after.ReservedBytes != pressured.ReservedBytes+workspaceCharge+outputCharge || after.ExternalLeases != pressured.ExternalLeases+2 {
+				t.Fatalf("fresh compressed lane must refund before original cut admission: before=%+v after=%+v", pressured, after)
+			}
+		})
 	}
 }
 

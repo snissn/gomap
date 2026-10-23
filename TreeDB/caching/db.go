@@ -12126,15 +12126,15 @@ func addMemtableResidencyStats(stats map[string]string, prefix string, summary m
 		return
 	}
 	add := func(name string, s memtableResidencySummary) {
-		stats[prefix+"."+name+".count"] = fmt.Sprintf("%d", s.count)
-		stats[prefix+"."+name+".entries"] = fmt.Sprintf("%d", s.len)
-		stats[prefix+"."+name+".size_bytes"] = fmt.Sprintf("%d", s.size)
-		stats[prefix+"."+name+".entry_capacity"] = fmt.Sprintf("%d", s.entryCapacity)
-		stats[prefix+"."+name+".entry_backing_bytes"] = fmt.Sprintf("%d", s.entryBackingBytes)
-		stats[prefix+"."+name+".value_arena_active_chunks"] = fmt.Sprintf("%d", s.valueArenaActiveChunks)
-		stats[prefix+"."+name+".value_arena_active_bytes"] = fmt.Sprintf("%d", s.valueArenaActiveBytes)
-		stats[prefix+"."+name+".value_arena_retained_chunks"] = fmt.Sprintf("%d", s.valueArenaRetainedChunks)
-		stats[prefix+"."+name+".value_arena_retained_bytes"] = fmt.Sprintf("%d", s.valueArenaRetainedBytes)
+		stats[prefix+"."+name+".count"] = strconv.FormatInt(int64(s.count), 10)
+		stats[prefix+"."+name+".entries"] = strconv.FormatInt(int64(s.len), 10)
+		stats[prefix+"."+name+".size_bytes"] = strconv.FormatInt(s.size, 10)
+		stats[prefix+"."+name+".entry_capacity"] = strconv.FormatInt(s.entryCapacity, 10)
+		stats[prefix+"."+name+".entry_backing_bytes"] = strconv.FormatInt(s.entryBackingBytes, 10)
+		stats[prefix+"."+name+".value_arena_active_chunks"] = strconv.FormatInt(s.valueArenaActiveChunks, 10)
+		stats[prefix+"."+name+".value_arena_active_bytes"] = strconv.FormatInt(s.valueArenaActiveBytes, 10)
+		stats[prefix+"."+name+".value_arena_retained_chunks"] = strconv.FormatInt(s.valueArenaRetainedChunks, 10)
+		stats[prefix+"."+name+".value_arena_retained_bytes"] = strconv.FormatInt(s.valueArenaRetainedBytes, 10)
 	}
 	add("total", summary.total)
 	add("skiplist", summary.skiplist)
