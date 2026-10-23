@@ -128,10 +128,14 @@ func OpenExternalRecovery(opts Options, config ExternalRecoveryConfig) (_ *Exter
 	if err != nil {
 		return nil, err
 	}
-	if err := backenddb.EnsureStorageLayoutDirsForOpen(0700, filepath.Join(dir, externalRecoveryMarker), dir); err != nil {
+	ownershipDir := openOwnershipRoot(dir)
+	if err := refuseExternalRecoveryEnclosingLayout(dir, ownershipDir); err != nil {
 		return nil, err
 	}
-	lock, err := lockfile.Acquire(filepath.Join(dir, "INIT.LOCK"))
+	if err := backenddb.EnsureStorageLayoutDirsForOpen(0700, filepath.Join(ownershipDir, "INIT.LOCK"), ownershipDir); err != nil {
+		return nil, err
+	}
+	lock, err := lockfile.Acquire(filepath.Join(ownershipDir, "INIT.LOCK"))
 	if err != nil {
 		return nil, err
 	}
@@ -141,6 +145,14 @@ func OpenExternalRecovery(opts Options, config ExternalRecoveryConfig) (_ *Exter
 			_ = lock.Close()
 		}
 	}()
+	if err := refuseExternalRecoveryEnclosingLayout(dir, ownershipDir); err != nil {
+		return nil, err
+	}
+	if ownershipDir != dir {
+		if err := backenddb.EnsureStorageLayoutDirsForOpen(0700, filepath.Join(dir, externalRecoveryMarker), dir); err != nil {
+			return nil, err
+		}
+	}
 	markerPath := filepath.Join(dir, externalRecoveryMarker)
 	marker, readErr := readExternalBounded(markerPath, 8192)
 	if errors.Is(readErr, os.ErrNotExist) {

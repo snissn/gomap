@@ -115,6 +115,150 @@ func TestExternalRecoveryTwoGenerationClosureAcrossRewriteAndReopen(t *testing.T
 	}
 }
 
+func TestExternalRecoveryOrdinaryLayoutAliasesRefuse(t *testing.T) {
+	requireExternalRecoveryPlatform(t)
+	for _, ownerInMain := range []bool{false, true} {
+		t.Run(fmt.Sprintf("ownerInMain=%v", ownerInMain), func(t *testing.T) {
+			root := t.TempDir()
+			ownerDir, alias := root, filepath.Join(root, "maindb")
+			if ownerInMain {
+				ownerDir, alias = alias, root
+			}
+			o := externalTestOpen(t, ownerDir)
+			externalTestSet(t, o, "owned", []byte("certificate"))
+			if _, err := o.Checkpoint(context.Background(), nil); err != nil {
+				t.Fatal(err)
+			}
+			for _, live := range []bool{true, false} {
+				if !live {
+					if err := o.Close(); err != nil {
+						t.Fatal(err)
+					}
+				}
+				for _, flat := range []bool{false, true} {
+					for _, readOnly := range []bool{false, true} {
+						opts := OptionsFor(ProfileNoWALFast, alias)
+						opts.MemtableMode, opts.DisableSideStores, opts.ReadOnly = "cow_ordered", flat, readOnly
+						if readOnly {
+							opts.MemtableMode = "btree"
+						}
+						for _, entry := range []string{"public", "backend", "cached-maintenance"} {
+							var err error
+							switch entry {
+							case "public":
+								var db *DB
+								db, err = Open(opts)
+								if db != nil {
+									_ = db.Close()
+								}
+							case "backend":
+								var closeDB func() error
+								_, closeDB, err = OpenBackend(opts)
+								if closeDB != nil {
+									_ = closeDB()
+								}
+							case "cached-maintenance":
+								var db *DB
+								db, err = openBackendWithCachedServices(opts)
+								if db != nil {
+									_ = db.Close()
+								}
+							}
+							if !errors.Is(err, ErrExternalRecovery) {
+								t.Errorf("live=%v flat=%v readOnly=%v %s alias accepted or wrong refusal: %v", live, flat, readOnly, entry, err)
+							}
+						}
+					}
+				}
+			}
+			if !ownerInMain {
+				if _, err := os.Lstat(alias); !errors.Is(err, os.ErrNotExist) {
+					t.Errorf("refused alias created storage: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestExternalRecoveryAlternateInitializationOwnership(t *testing.T) {
+	requireExternalRecoveryPlatform(t)
+	for _, ownerInMain := range []bool{false, true} {
+		for _, flat := range []bool{false, true} {
+			for i := 0; i < 4; i++ {
+				root := t.TempDir()
+				ownerDir, ordinaryDir := root, filepath.Join(root, "maindb")
+				if ownerInMain {
+					ownerDir, ordinaryDir = ordinaryDir, root
+				}
+				opts := OptionsFor(ProfileNoWALFast, ordinaryDir)
+				opts.MemtableMode, opts.DisableSideStores = "cow_ordered", flat
+				owned := OptionsFor(ProfileNoWALFast, ownerDir)
+				owned.MemtableMode = "cow_ordered"
+				start := make(chan struct{})
+				type result struct {
+					close func() error
+					err   error
+				}
+				ordinary, external := make(chan result, 1), make(chan result, 1)
+				go func() {
+					<-start
+					db, err := Open(opts)
+					r := result{err: err}
+					if db != nil {
+						r.close = db.Close
+					}
+					ordinary <- r
+				}()
+				go func() {
+					<-start
+					o, err := OpenExternalRecovery(owned, ExternalRecoveryConfig{Identity: "alternate-init"})
+					r := result{err: err}
+					if o != nil {
+						r.close = o.Close
+					}
+					external <- r
+				}()
+				close(start)
+				a, b := <-ordinary, <-external
+				for _, r := range []result{a, b} {
+					if r.close != nil {
+						if err := r.close(); err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
+				if (a.err == nil) == (b.err == nil) {
+					t.Fatalf("ownerInMain=%v flat=%v: exactly one initializer must succeed: ordinary=%v external=%v", ownerInMain, flat, a.err, b.err)
+				}
+			}
+		}
+	}
+}
+
+func TestExternalRecoveryRefusesOrdinaryFlatParent(t *testing.T) {
+	requireExternalRecoveryPlatform(t)
+	root := t.TempDir()
+	opts := OptionsFor(ProfileNoWALFast, root)
+	opts.DisableSideStores = true
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	owned := OptionsFor(ProfileNoWALFast, filepath.Join(root, "maindb"))
+	owned.MemtableMode = "cow_ordered"
+	o, err := OpenExternalRecovery(owned, ExternalRecoveryConfig{Identity: "nested"})
+	if o != nil {
+		_ = o.Close()
+	}
+	if !errors.Is(err, ErrExternalRecovery) {
+		t.Fatalf("nested owner: %v", err)
+	}
+	if _, err := os.Lstat(owned.Dir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("refused owner created namespace: %v", err)
+	}
+}
+
 func TestExternalRecoveryInitializationOwnership(t *testing.T) {
 	requireExternalRecoveryPlatform(t)
 	for i := 0; i < 12; i++ {

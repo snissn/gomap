@@ -16,7 +16,11 @@ acknowledgement. The external owner MUST durably retain commands and decisions
 until a successful matching certificate permits their retirement.
 
 Ordinary public Open, OpenBackend, and cached-backend Open share `INIT.LOCK`
-with external initialization. They check `external-recovery.json` before and
+with external initialization. The accepted `<root>` and `<root>/maindb`
+spellings share the enclosing root lock, including flat and side-store-disabled
+opens. Both marker locations are checked before layout validation and again
+under initialization ownership; an external owner cannot nest in an enclosing
+ordinary flat database. They check `external-recovery.json` before and
 again under initialization ownership. An ordinary/external fresh-open race has
 at most one successful policy. Failure releases the acquired ownership. Read-only
 ordinary opens do not create lock files. External owners retain initialization
