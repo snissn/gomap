@@ -205,10 +205,15 @@ PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/test_treedb_ci_contract.py
 ## Canonical checkpoint integration
 
 The combined delivery in PR #5209 freezes product
-`00211fbccfb6460d3255ab8c9b19e2cb91e19302`: external recovery #5208,
+`682de67faf0812a88667fe3f8721b7bba92b7462`: external recovery #5208,
 leaf maintenance #5216, raw dependency closure #5218 and this workspace change,
 including the corrected DATA/PRIMARY/ordered producer distinctions and the
-reviewed power-loss model. The baseline remains
+reviewed power-loss model. The final product also preserves admitted local COW
+workspace under shared admission pressure, serializes physical retirement with
+manager detachment, safely releases stale shared-manager observations, reuses
+governed PRIMARY encoding scratch and removes Stats boxing. Focused causal
+normal/race proofs protect those changes; the failed 5d98 performance rows and
+contaminated COW diagnostic remain bound to that old source. The baseline remains
 `8c392a8e27b8f23e795d07edfb3782ca32d46976`. The runner's five permitted
 tooling paths, fixture hash, ten cells, 60 rows, deadlines, order and numerical
 gates are unchanged. Its narrow branch selector now names the canonical
