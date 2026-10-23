@@ -1871,7 +1871,16 @@ func (runtime *rootPublicationRuntimeV1) Publish(ctx context.Context, candidate 
 					return e
 				}
 			}
-			return seal.token.SyncThrough()
+			if seal.primary != nil && seal.primary.dataParentCoverage.valid() {
+				return nil
+			}
+			if e := seal.token.SyncThrough(); e != nil {
+				return e
+			}
+			if seal.primary != nil {
+				seal.primary.dataSynced = true
+			}
+			return nil
 		},
 		sink:   durablePagerSinkV1{pager: seal.idx.pager},
 		target: seal.target,

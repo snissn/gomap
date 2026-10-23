@@ -28,6 +28,7 @@ type primaryStateRootV5 struct {
 	certificate *primaryarena.ReadRootCertificateV6
 }
 type primaryDurableRuntimeV5 struct {
+	dataCompletion          primaryDataCompletionV6
 	projection              rootpublication.PrimaryProjectionV5
 	slots                   [2]rootpublication.PrimaryProjectionV5
 	records                 [2]primaryarena.Ref
@@ -58,18 +59,20 @@ type primaryDurableRuntimeV5 struct {
 	rebuildScratchCharge    uint64
 }
 type primaryPublicationSealV5 struct {
-	disposalMu        sync.Mutex
-	disposalAttempted bool
-	disposalErr       error
-	disposalFailure   originalDBCleanupFailure
-	prepared          *rootpublication.PreparedPrimaryRootV5
-	projection        rootpublication.PrimaryProjectionV5
-	manifestBanks     *primaryBankConstructionV5
-	token             *rootpublication.StableResourceToken
-	proof             primaryarena.Ref
-	recordTransferred bool
-	proofResources    *rootpublication.StableResourceSet
-	promotion         *rootpublication.PrimaryPromotionV6
+	dataParentCoverage primaryDataParentCoverageV6
+	dataSynced         bool
+	disposalMu         sync.Mutex
+	disposalAttempted  bool
+	disposalErr        error
+	disposalFailure    originalDBCleanupFailure
+	prepared           *rootpublication.PreparedPrimaryRootV5
+	projection         rootpublication.PrimaryProjectionV5
+	manifestBanks      *primaryBankConstructionV5
+	token              *rootpublication.StableResourceToken
+	proof              primaryarena.Ref
+	recordTransferred  bool
+	proofResources     *rootpublication.StableResourceSet
+	promotion          *rootpublication.PrimaryPromotionV6
 }
 
 func (db *DB) primaryCurrentRootV5() *primaryStateRootV5 {
@@ -651,7 +654,12 @@ func (runtime *rootPublicationRuntimeV1) materializePrimarySealV5(seal *rootPubl
 	}
 	generation := seal.primary.prepared.Generation()
 	p := seal.idx.pager
-	if e := p.GrowTo(generation.HighWater()); e != nil {
+	if seal.primary.dataParentCoverage.valid() {
+		// This seal must not grow or write DATA after claiming parent coverage.
+		if len(seal.prefix) != 0 || p.PageCount() < generation.HighWater() {
+			return rootpublication.ErrDurableRootOwnership
+		}
+	} else if e := p.GrowTo(generation.HighWater()); e != nil {
 		return e
 	}
 	if e := seal.idx.allocator.ValidateCOWPhysicalTailV1(generation.HighWater()); e != nil {
@@ -718,12 +726,26 @@ func (runtime *rootPublicationRuntimeV1) commitPrimarySealV5(seal *rootPublicati
 	if base.primary == nil || base.record.CommitSeq >= seal.latestSequence {
 		return 0, errDurableRootCandidateStale
 	}
+	var completion primaryDataCompletionV6
+	if seal.primary.promotion != nil {
+		if proof := seal.primary.dataParentCoverage; proof.valid() {
+			if !proof.matchesParent(seal, base) {
+				return 0, rootpublication.ErrDurableRootOwnership
+			}
+			completion = proof.completed
+		} else if seal.primary.dataSynced {
+			completion = primaryDataCompletionV6{pager: seal.idx.pager, incarnation: seal.token.Generation(), identity: seal.token.Identity()}
+		} else {
+			return 0, rootpublication.ErrDurableRootOwnership
+		}
+	}
 	runtimeCharge := primaryRuntimeDescriptorChargeV5()
 	if e := a.MetadataOwner().AddPending(runtimeCharge); e != nil {
 		return 0, e
 	}
 	primary := &primaryDurableRuntimeV5{
-		projection: base.primary.projection, slots: base.primary.slots,
+		dataCompletion: completion,
+		projection:     base.primary.projection, slots: base.primary.slots,
 		records: base.primary.records, proofs: base.primary.proofs,
 		closures: base.primary.closures, proofClosures: base.primary.proofClosures, capsuleCharges: base.primary.capsuleCharges,
 		proofRecords: base.primary.proofRecords, proofResources: base.primary.proofResources,
@@ -742,6 +764,7 @@ func (runtime *rootPublicationRuntimeV1) commitPrimarySealV5(seal *rootPublicati
 			clear(primary.proofResources[:])
 			clear(primary.capsuleImages[:])
 			clear(primary.capsuleViews[:])
+			primary.dataCompletion = primaryDataCompletionV6{}
 			primary.current, primary.metadata, primary.metadataCharge = nil, nil, 0
 			a.MetadataOwner().RemovePending(runtimeCharge)
 		}

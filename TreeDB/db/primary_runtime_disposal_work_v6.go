@@ -134,6 +134,7 @@ func releasePrimaryRuntimeOriginalV6(a *primaryarena.Arena, r *primaryDurableRun
 		}
 	}
 	clear(r.constructionRoots[:cap(r.constructionRoots)])
+	r.dataCompletion = primaryDataCompletionV6{}
 	r.projection = rootpublication.PrimaryProjectionV5{}
 	clear(r.slots[:])
 	clear(r.proofRecords[:])
