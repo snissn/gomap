@@ -21,7 +21,7 @@ import mvcc_primary_cost_gate as maintained
 
 
 BASELINE = "8c392a8e27b8f23e795d07edfb3782ca32d46976"
-PRODUCT = "ed996b2fb4375f4f8e6f19d841af05e3d254206c"
+PRODUCT = "d4a2745ec52b2eae88ff398603fbde511b344955"
 HARNESS = "TreeDB/mvcc/cow_successor_workspace_external_test.go"
 HARNESS_SHA256 = "2226735b88900fe2b33178498172d946de6d536e793f045c5b2f8c1a38544d08"
 BENCHMARK = "BenchmarkCOWSuccessorWorkspace"
@@ -41,7 +41,7 @@ ALLOWED_CHANGES = {
     ".github/scripts/test_cow_successor_workspace_diagnostic.py",
     ".github/workflows/treedb-tests.yml", ".github/ci/ci_impact.json",
     "TreeDB/docs/benchmarks/cow-successor-workspace-5214.md"}
-SCOPE = re.compile(r"^(?:TreeDB/caching/cow_(?:read|cut|successor_workspace_test)\.go|"
+SCOPE = re.compile(r"^(?:TreeDB/caching/(?:cow_(?:read(?:_workspace)?|cut|successor_workspace_test)|point_successor)\.go|"
                    r"TreeDB/mvcc/cow_successor_workspace_external_test\.go|"
                    r"scripts/(?:cow_successor_workspace_diagnostic|mvcc_primary_cost_gate)\.py|"
                    r"\.github/scripts/test_cow_successor_workspace_diagnostic\.py)$")

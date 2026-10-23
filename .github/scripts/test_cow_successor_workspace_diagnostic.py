@@ -199,7 +199,8 @@ class COWSuccessorDiagnosticTests(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/treedb-tests.yml").read_text()
         expression = re.search(r"(?m)^      COW_SUCCESSOR_PATH_RE: '([^']+)'$", workflow)[1]
         scope = re.compile(expression)
-        included = ["TreeDB/caching/cow_read.go", "TreeDB/caching/cow_cut.go",
+        included = ["TreeDB/caching/cow_read.go", "TreeDB/caching/cow_read_workspace.go",
+                    "TreeDB/caching/point_successor.go", "TreeDB/caching/cow_cut.go",
                     "TreeDB/caching/cow_successor_workspace_test.go", diagnostic.HARNESS,
                     "scripts/cow_successor_workspace_diagnostic.py", "scripts/mvcc_primary_cost_gate.py",
                     ".github/scripts/test_cow_successor_workspace_diagnostic.py"]

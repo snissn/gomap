@@ -14,8 +14,9 @@ Public `Store.GetAt` captures and closes one physical read cut per call. It uses
 the captured successor, not the direct raw `DB.Get` optimization. Previously,
 a nonempty backend basis required a point scratch allocation on each fresh cut.
 The original `cowBackendBasis.physicalWorkspaceLocked` and `pointScratch` seam
-already supports admitted traversal reuse for direct raw points. Successors
-now try that owner's mutex; a busy owner uses the unchanged per-cut path.
+already supports admitted traversal reuse for direct raw points. The initial successor change
+tries that owner's mutex; a busy owner uses the original per-cut path. The later
+parallel extension is described below.
 Copy-out finishes before unlocking. Snappy/LZ4 stay on the maintained bounded
 block-decoder path, while generic codecs and dictionary authority retain their
 existing policies. The exact basis owns the lazy scratch and any block decoder
@@ -24,7 +25,8 @@ until final release; multiple retained bases remain separately budget charged.
 Batch arenas have the wrong last-consumer boundary. The ordinary tree iterator
 pool does not carry COW admission or successor state. Reusing exported snapshot
 identities would let stale closed aliases refer to a new owner. None is used.
-No new arena, pool, publisher, on-disk format or durability boundary is added.
+The initial change adds no arena, pool, publisher, on-disk format or durability
+boundary. The later extension adds a fixed set of admitted basis scratch owners.
 
 This is a representation optimization: baseline logical behavior should already
 pass. Activation and allocation evidence replace a fabricated behavioral red.
@@ -249,3 +251,50 @@ replacements for the failed hosted gates. The rebound runner must qualify the
 complete new product using the unchanged baseline, fixture, cells, row count,
 order, resource limits and numerical gates. No result for the new tooling head
 exists at this commit.
+
+### Parallel physical-pointer reuse and unused iterator leases
+
+W3 tooling `bb966ad3bb942fe9ac0bd4dc9cc1ae95e9e0cd09` returned PRIMARY,
+Stats and snapshot-iterator PASS. Its raw repeated-iterator paired time failed
++7.15%, and the COW pointer/depth1/concurrency8 cell failed +7.078%. All 60 COW
+rows remain retained. The pointer-prefix bytes control passes at 64300 to 64279
+B/op, with 25 allocations unchanged. These are results for W3, not the next
+candidate. The separate M0 workflow failed all three original strict CV limits.
+
+The next reuse change keeps four independently admitted scratch owners per
+physical basis: the original owner and three fixed opportunistic slots. It never
+waits for a busy slot, never expands the slot array, and preserves an already
+admitted cut-local traversal before trying shared storage. All workspace, codec
+and buffer storage is budget charged; the additional 48-byte amd64 basis header
+is charged once per retained physical basis. Every slot closes before that
+basis releases its original snapshot custody. Busy or refused admissions retain
+the complete cut-local fallback.
+
+An uncompressed physical pointer winner now reuses the selected basis owner's
+record buffers and copies its final value before unlocking. Queued pointers keep
+the complete cut resolver. Compressed pointers and refused buffer growth carry
+only a caller-local inspected file/shape into that original resolver, avoiding
+duplicate metadata reads while preserving dictionary and shared-codec authority.
+The retained cut pins the file during this handoff. A fresh owner that refuses
+value growth detaches and refunds before local fallback, including when the
+local reader already owns input but no traversal scratch. Corruption, inspection
+limits and pointer binding still use the maintained record reader.
+
+The ordinary empty-queue forward/reverse iterator also omits a tracked memtable
+view retain that was immediately released before backend/root construction.
+Published roots remain immutable; nonempty queues keep the original tracked
+view lease. Old-runtime controls are red, 47 owning normal/race controls pass,
+and three local diagnostic pairs improve time 37.78% at unchanged 112B/1alloc.
+Those diagnostic results do not replace the W3 failed gate.
+
+The unchanged public COW fixture, all ten cells, 1024 total calls, three alternating
+pairs, original admission/quiet rules and numerical guards remain authoritative.
+Workflow scope now includes the physical read workspace and point-successor
+representation files so later changes to these seams cannot miss this check.
+The complete runtime is frozen at
+`d4a2745ec52b2eae88ff398603fbde511b344955`. All COW caching controls pass
+normally, and focused caching/public MVCC controls have normal/race coverage.
+The final portable focused race controls pass (74 cases), all COW normal controls
+pass (380 cases), and Windows test cross-compilation passes. The caller-local
+inspection descriptor does not escape. Windows execution and the rebound tooling
+qualification remain required. No final-source timing result is asserted here.
