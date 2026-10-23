@@ -1329,11 +1329,34 @@ func TestBackgroundIndexVacuumFreelistDebtInvalidatesUnchangedCommitSkip(t *test
 	d.bgVac.collectionRootSpanRatioPPM = ^uint32(0)
 	counts, restoreCounts := installBackgroundVacuumProbeCounter()
 	defer restoreCounts()
+	// Exercise probe invalidation without performing platform-dependent vacuum
+	// work or changing the commit sequence underneath the unchanged-cut check.
+	restoreVacuum := setBackgroundIndexVacuumRunHookForTest(func(*DB, context.Context) (backenddb.VacuumOnlineStats, error) {
+		return backenddb.VacuumOnlineStats{}, nil
+	})
+	defer restoreVacuum()
+	initial, ok := d.backend.StateToken()
+	if !ok {
+		t.Fatal("initial backend state unavailable")
+	}
+	assertStable := func() {
+		t.Helper()
+		state, ok := d.backend.StateToken()
+		if !ok || state.CommitSeq != initial.CommitSeq || d.bgVac.unsupported {
+			t.Fatalf("probe changed fixture state: state=%+v initial=%+v available=%t unsupported=%t", state, initial, ok, d.bgVac.unsupported)
+		}
+	}
 
 	d.bgVac.runOnce(d)
 	if got := counts[backenddb.FragmentationProbeEventTriggerReport]; got != 1 {
 		t.Fatalf("initial trigger probes=%d want 1", got)
 	}
+	assertStable()
+	d.bgVac.runOnce(d)
+	if got := counts[backenddb.FragmentationProbeEventTriggerReport]; got != 1 {
+		t.Fatalf("trigger probes with unchanged commit and debt=%d want 1", got)
+	}
+	assertStable()
 	changed := backenddb.IndexVacuumFreelistDebtSnapshot{
 		TotalPages:               128,
 		FreelistHead:             1,
@@ -1350,6 +1373,7 @@ func TestBackgroundIndexVacuumFreelistDebtInvalidatesUnchangedCommitSkip(t *test
 	if got := counts[backenddb.FragmentationProbeEventTriggerReport]; got != 2 {
 		t.Fatalf("trigger probes after freelist debt change=%d want 2", got)
 	}
+	assertStable()
 	assertNoBackgroundVacuumFullFragmentationWalks(t, counts)
 }
 
