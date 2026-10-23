@@ -374,47 +374,67 @@ func cowSuccessorDictionaryLeafFixture(t *testing.T) (*DB, []byte, page.LeafLogP
 }
 
 func TestCOWSuccessorFreshDictionaryLaneRefundsBeforeLocalTraversal(t *testing.T) {
-	db, want, pointer := cowSuccessorDictionaryLeafFixture(t)
-	s, err := db.acquireCOWSnapshotWithError()
-	if err != nil {
-		t.Fatal(err)
+	for _, busyPrimary := range []bool{false, true} {
+		t.Run(fmt.Sprintf("busy-primary=%t", busyPrimary), func(t *testing.T) {
+			db, want, pointer := cowSuccessorDictionaryLeafFixture(t)
+			s, err := db.acquireCOWSnapshotWithError()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			// Warm the real original-cut dictionary decoder without point scratch.
+			// The subsequent public successor still needs to admit its own traversal.
+			s.cowReadMu.Lock()
+			w, err := s.cowWorkspaceLocked()
+			var pageScratch [page.PageSize]byte
+			if err == nil {
+				_, err = w.readLeaf(pointer, pageScratch[:])
+			}
+			s.cowReadMu.Unlock()
+			if err != nil || w.point != nil || len(w.codecs) == 0 || w.codecs[0].id == 0 {
+				t.Fatalf("warm actual dictionary decoder without traversal: err=%v", err)
+			}
+			basis, budget := s.cowCut.basis, db.cow.budget
+			leaseCharge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
+			workspaceCharge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowReadWorkspace{}))) + cowReadWorkspaceInspectionCharge() + leaseCharge
+			pointCharge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowPointScratch{}))) + leaseCharge
+			// Exactly one fresh lane fits, but retaining it during the dictionary
+			// retry would prevent admission of the original local point scratch.
+			before := budget.Stats()
+			pressure, err := budget.AcquireExternal(budget.Limits().MaxInFlightBytes - before.ReservedBytes - workspaceCharge - pointCharge - leaseCharge)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer pressure.Close()
+			pressured := budget.Stats()
+			if busyPrimary {
+				basis.readMu.Lock()
+				defer basis.readMu.Unlock()
+			}
+			key, got, found, err := s.SeekGEVersionRange([]byte("a000"), []byte("a001"))
+			after := budget.Stats()
+			if err != nil || !found || string(key) != "a000" || !bytes.Equal(got, want) {
+				t.Fatalf("dictionary handoff stranded original local traversal: found=%t err=%v", found, err)
+			}
+			if basis.reader != nil || basis.readSlots[0].reader != nil || s.cowReader != w || w.point == nil ||
+				after.ExternalBytes != pressured.ExternalBytes+pointCharge || after.ReservedBytes != pressured.ReservedBytes+pointCharge ||
+				after.ExternalLeases != pressured.ExternalLeases+1 {
+				t.Fatalf("fresh dictionary lane must refund before exactly one local point: before=%+v after=%+v", pressured, after)
+			}
+		})
 	}
-	defer s.Close()
-	// Warm the real original-cut dictionary decoder without point scratch.
-	// The subsequent public successor still needs to admit its own traversal.
-	s.cowReadMu.Lock()
-	w, err := s.cowWorkspaceLocked()
-	var pageScratch [page.PageSize]byte
-	if err == nil {
-		_, err = w.readLeaf(pointer, pageScratch[:])
-	}
-	s.cowReadMu.Unlock()
-	if err != nil || w.point != nil || len(w.codecs) == 0 || w.codecs[0].id == 0 {
-		t.Fatalf("warm actual dictionary decoder without traversal: err=%v", err)
-	}
-	basis, budget := s.cowCut.basis, db.cow.budget
-	leaseCharge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
-	workspaceCharge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowReadWorkspace{}))) + cowReadWorkspaceInspectionCharge() + leaseCharge
-	pointCharge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowPointScratch{}))) + leaseCharge
-	// Exactly one fresh lane fits, but retaining it during the dictionary
-	// retry would prevent admission of the original local point scratch.
-	before := budget.Stats()
-	pressure, err := budget.AcquireExternal(budget.Limits().MaxInFlightBytes - before.ReservedBytes - workspaceCharge - pointCharge - leaseCharge)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer pressure.Close()
-	pressured := budget.Stats()
-	basis.readMu.Lock()
-	defer basis.readMu.Unlock()
-	key, got, found, err := s.SeekGEVersionRange([]byte("a000"), []byte("a001"))
-	after := budget.Stats()
-	if err != nil || !found || string(key) != "a000" || !bytes.Equal(got, want) {
-		t.Fatalf("dictionary handoff stranded original local traversal: found=%t err=%v", found, err)
-	}
-	if basis.readSlots[0].reader != nil || s.cowReader != w || w.point == nil ||
-		after.ExternalBytes != pressured.ExternalBytes+pointCharge || after.ReservedBytes != pressured.ReservedBytes+pointCharge ||
-		after.ExternalLeases != pressured.ExternalLeases+1 {
-		t.Fatalf("fresh dictionary lane must refund before exactly one local point: before=%+v after=%+v", pressured, after)
+}
+
+func TestCOWPublicPointFreshDictionaryRefundsBeforeLocalAdmission(t *testing.T) {
+	db, want, _ := cowSuccessorDictionaryLeafFixture(t)
+	cowAssertFreshPointHandoffRefundsBeforeLocalAdmission(t, db, []byte("a000"), want, false)
+}
+
+func TestCOWSuccessorDictionaryHandoffKeepsWarmTraversal(t *testing.T) {
+	for _, busy := range []bool{false, true} {
+		t.Run(fmt.Sprintf("busy-primary=%t", busy), func(t *testing.T) {
+			db, want, _ := cowSuccessorDictionaryLeafFixture(t)
+			cowAssertSuccessorHandoffKeepsWarmOwner(t, db, []byte("a000"), []byte("a001"), want, busy)
+		})
 	}
 }

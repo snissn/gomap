@@ -11,6 +11,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -258,7 +259,8 @@ func TestCOWSuccessorCompressedInspectionHandoffUsesCutDecoder(t *testing.T) {
 	s.cowReadMu.Lock()
 	defer s.cowReadMu.Unlock()
 	var inspected cowSuccessorInspection
-	best, err := s.cowPhysicalSuccessorLocked([]byte("a"), []byte("b"), &inspected)
+	var fresh cowFreshReadOwner
+	best, err := s.cowPhysicalSuccessorLocked([]byte("a"), []byte("b"), &inspected, &fresh)
 	if err != nil || !best.found || best.valueOwned || inspected.file == nil ||
 		!inspected.shape.Compressed || inspected.shape.DictID != 0 || inspected.shape.Codec != valuelog.BlockCodecZSTD {
 		t.Fatalf("compressed winner did not hand off its inspection: best=%+v shape=%+v err=%v", best, inspected.shape, err)
@@ -427,6 +429,80 @@ func TestCOWSuccessorFreshValueGrowthRefusalRefundsBeforeLocalFallback(t *testin
 				after.ExternalBytes != pressured.ExternalBytes+growth || after.ReservedBytes != pressured.ReservedBytes+growth ||
 				after.ExternalLeases != pressured.ExternalLeases+1 {
 				t.Fatalf("fresh value refusal must refund before exactly one local grow: before=%+v after=%+v", pressured, after)
+			}
+		})
+	}
+}
+
+// A queued pointer wins after physical traversal but has no physical inspection
+// handoff. Its original cut still needs value growth after fresh scratch refunds.
+func TestCOWSuccessorFreshQueuedPointerRefundsBeforeLocalGrowth(t *testing.T) {
+	for _, busyPrimary := range []bool{false, true} {
+		t.Run(fmt.Sprintf("busy-primary=%t", busyPrimary), func(t *testing.T) {
+			db := cowPointerFixture(t)
+			if err := db.Set([]byte("a"), bytes.Repeat([]byte("old"), 512)); err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Checkpoint(); err != nil {
+				t.Fatal(err)
+			}
+			want := bytes.Repeat([]byte("queued-pointer"), 4096)
+			if err := db.Set([]byte("a"), want); err != nil {
+				t.Fatal(err)
+			}
+			warmValue := bytes.Repeat([]byte("warm"), 256)
+			if err := db.Set([]byte("zz-warm"), warmValue); err != nil {
+				t.Fatal(err)
+			}
+			s, err := db.acquireCOWSnapshotWithError()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			if got, err := s.Get([]byte("zz-warm")); err != nil || !bytes.Equal(got, warmValue) {
+				t.Fatalf("warm local value: len=%d err=%v", len(got), err)
+			}
+			local, basis, budget := s.cowReader, s.cowCut.basis, db.cow.budget
+			_, ptr, flags, _, found := s.lookupCachedRootDomainEntryWithRevision([]byte("a"))
+			if !found || flags&node.FlagPointer == 0 || local == nil || local.point != nil || basis.reader != nil {
+				t.Fatal("fixture needs actual queued pointer, partial local input and cold basis traversal")
+			}
+			file, err := local.file(ptr)
+			if err != nil {
+				t.Fatal(err)
+			}
+			shape, err := valuelog.InspectCOWRecord(file, ptr, db.cow.readLimits())
+			if err != nil || shape.Compressed || shape.PayloadBytes() <= uint64(cap(local.input)) || shape.ValueBytes <= uint64(cap(local.output)) {
+				t.Fatalf("queued pointer must require real uncompressed growth: shape=%+v err=%v", shape, err)
+			}
+			leaseCharge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
+			workspaceCharge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowReadWorkspace{}))) + cowReadWorkspaceInspectionCharge() + leaseCharge
+			pointCharge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowPointScratch{}))) + leaseCharge
+			growth := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowReadAllocation{}))) + leaseCharge +
+				memtable.COWAllocationCharge(cowReadCapacity(shape.PayloadBytes())) + memtable.COWAllocationCharge(cowReadCapacity(shape.ValueBytes))
+			if growth <= workspaceCharge+pointCharge {
+				t.Fatal("growth budget must admit physical traversal before winner selection")
+			}
+			before := budget.Stats()
+			pressure, err := budget.AcquireExternal(budget.Limits().MaxInFlightBytes - before.ReservedBytes - growth - leaseCharge)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer pressure.Close()
+			pressured := budget.Stats()
+			if busyPrimary {
+				basis.readMu.Lock()
+				defer basis.readMu.Unlock()
+			}
+			key, got, found, err := s.SeekGEVersionRange([]byte("a"), []byte("b"))
+			after := budget.Stats()
+			if err != nil || !found || string(key) != "a" || !bytes.Equal(got, want) {
+				t.Fatalf("queued winner stranded original local growth: found=%t err=%v", found, err)
+			}
+			if basis.reader != nil || basis.readSlots[0].reader != nil || s.cowReader != local || local.point != nil ||
+				after.ExternalBytes != pressured.ExternalBytes+growth || after.ReservedBytes != pressured.ReservedBytes+growth ||
+				after.ExternalLeases != pressured.ExternalLeases+1 {
+				t.Fatalf("queued pointer must retain only its original value growth: before=%+v after=%+v", pressured, after)
 			}
 		})
 	}
@@ -689,4 +765,74 @@ func TestCOWSuccessorBasisCapacityFallsBackToAdmittedLocalInput(t *testing.T) {
 		t.Fatalf("owned result/reuse: key=%q found=%t len=%d err=%v", key, found, len(value), err)
 	}
 	t.Logf("grouped payload=%d raw=%d localInput=%d sharedInputCharge=%d localPointCharge=%d", shape.PayloadBytes(), shape.RawBytes, cap(local.input), inputCharge, pointCharge)
+}
+
+// Short-lived public cuts retain a successful opportunistic handoff owner for
+// the next cut. Only a real capacity refusal may discard that exact owner.
+func cowAssertSuccessorHandoffKeepsWarmOwner(t *testing.T, db *DB, key, end, want []byte, busyPrimary bool) {
+	t.Helper()
+	basis, budget := db.cow.cut.basis, db.cow.budget
+	if busyPrimary {
+		basis.readMu.Lock()
+		defer basis.readMu.Unlock()
+	}
+	var original *cowReadWorkspace
+	var retained memtable.COWStats
+	for i := 0; i < 3; i++ {
+		s, err := db.acquireCOWSnapshotWithError()
+		if err != nil {
+			t.Fatal(err)
+		}
+		gotKey, got, found, err := s.SeekGEVersionRange(key, end)
+		if err != nil || !found || !bytes.Equal(gotKey, key) || !bytes.Equal(got, want) {
+			_ = s.Close()
+			t.Fatalf("successful handoff: found=%t err=%v", found, err)
+		}
+		if err := s.Close(); err != nil {
+			t.Fatal(err)
+		}
+		owner := basis.reader
+		if busyPrimary {
+			owner = basis.readSlots[0].reader
+		}
+		if owner == nil || owner.point == nil {
+			t.Fatal("successful handoff discarded reusable traversal")
+		}
+		if i == 0 {
+			original, retained = owner, budget.Stats()
+		} else {
+			after := budget.Stats()
+			after.PeakBytes = retained.PeakBytes
+			if owner != original || after != retained {
+				t.Fatalf("warm handoff changed owner/admission: before=%+v after=%+v", retained, after)
+			}
+		}
+	}
+}
+
+func TestCOWSuccessorHandoffKeepsWarmTraversal(t *testing.T) {
+	for _, shape := range []string{"queued-pointer", "compressed-value"} {
+		for _, busy := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/busy-primary=%t", shape, busy), func(t *testing.T) {
+				var db *DB
+				var want []byte
+				if shape == "compressed-value" {
+					db, want = cowSuccessorCompressedPointerFixture(t)
+				} else {
+					db = cowPointerFixture(t)
+					if err := db.Set([]byte("a"), []byte("physical")); err != nil {
+						t.Fatal(err)
+					}
+					if err := db.Checkpoint(); err != nil {
+						t.Fatal(err)
+					}
+					want = bytes.Repeat([]byte("queued-pointer"), 4096)
+					if err := db.Set([]byte("a"), want); err != nil {
+						t.Fatal(err)
+					}
+				}
+				cowAssertSuccessorHandoffKeepsWarmOwner(t, db, []byte("a"), []byte("b"), want, busy)
+			})
+		}
+	}
 }

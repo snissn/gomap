@@ -326,6 +326,11 @@ func cowAssertPointReadViewRefusal(t *testing.T, db *DB, key []byte) {
 	views := db.COWMemoryStats().Views
 	for _, api := range []string{"Get", "GetAppend", "GetVersioned", "GetVersionedAppend"} {
 		t.Run(api, func(t *testing.T) {
+			c := db.cow
+			c.cutMu.Lock()
+			cut, refs := c.cut, c.cut.refs
+			c.cutMu.Unlock()
+			before := c.budget.Stats()
 			dst := []byte("keep")
 			got, _, err := cowPointReadForTest(db, api, key, dst)
 			if !errors.Is(err, memtable.ErrCOWCapacity) {
@@ -336,6 +341,14 @@ func cowAssertPointReadViewRefusal(t *testing.T, db *DB, key []byte) {
 			}
 			if db.COWMemoryStats().Views != views {
 				t.Fatal("fallback refusal changed view ownership")
+			}
+			c.cutMu.Lock()
+			sameCut, afterRefs := c.cut == cut, cut.refs
+			c.cutMu.Unlock()
+			after := c.budget.Stats()
+			after.PeakBytes = before.PeakBytes
+			if !sameCut || afterRefs != refs || after != before {
+				t.Fatalf("refused fallback leaked its exact-cut reference/admission: refs=%d->%d before=%+v after=%+v", refs, afterRefs, before, after)
 			}
 		})
 	}
@@ -371,5 +384,178 @@ func TestCOWPublicPointReadPointerPreservesViewAdmission(t *testing.T) {
 				t.Fatalf("fallback after releasing views: %d/%v", len(got), err)
 			}
 		})
+	}
+}
+
+// Measure the original complete-cut materializer's real retained charge before
+// applying pressure. The public DB call must fit that same budget, without also
+// retaining a fresh opportunistic basis traversal throughout the handoff.
+func cowAssertFreshPointHandoffRefundsBeforeLocalAdmission(t *testing.T, db *DB, key, want []byte, pointer bool) {
+	t.Helper()
+	if got, err := db.Get(key); err != nil || !bytes.Equal(got, want) {
+		t.Fatalf("warm original shared codec: len=%d err=%v", len(got), err)
+	}
+	basis, budget := db.cow.cut.basis, db.cow.budget
+	basis.readMu.Lock()
+	basis.reader.close()
+	basis.reader = nil
+	basis.readMu.Unlock()
+	var entry node.LeafEntry
+	if pointer {
+		var err error
+		entry, err = basis.snapshot.GetEntryExact(key)
+		if err != nil || entry.Flags&node.FlagPointer == 0 {
+			t.Fatalf("fixture requires an actual physical pointer: entry=%+v err=%v", entry, err)
+		}
+	}
+	before := budget.Stats()
+	s, err := db.acquireCOWSnapshotWithError()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []byte
+	if pointer {
+		s.cowReadMu.Lock()
+		got, _, err = s.cowValueFromEntryLocked(entry)
+		s.cowReadMu.Unlock()
+	} else {
+		got, err = s.Get(key)
+	}
+	if err != nil || !bytes.Equal(got, want) || s.cowReader == nil {
+		_ = s.Close()
+		t.Fatalf("original cut materializer: len=%d err=%v", len(got), err)
+	}
+	localCharge := budget.Stats().ReservedBytes - before.ReservedBytes
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if localCharge == 0 || budget.Stats() != before || basis.reader != nil {
+		t.Fatalf("measurement must refund the original local owner: before=%+v after=%+v", before, budget.Stats())
+	}
+	leaseCharge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
+	pressure, err := budget.AcquireExternal(budget.Limits().MaxInFlightBytes - before.ReservedBytes - localCharge - leaseCharge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pressure.Close()
+	pressured := budget.Stats()
+	for _, api := range []string{"Get", "GetAppend", "GetVersioned", "GetVersionedAppend"} {
+		dst := []byte("keep:")
+		got, _, err := cowPointReadForTest(db, api, key, dst)
+		expected := want
+		if api == "GetAppend" || api == "GetVersionedAppend" {
+			expected = append(append([]byte(nil), dst...), want...)
+		}
+		if err != nil || !bytes.Equal(got, expected) {
+			t.Fatalf("%s fresh handoff exceeded original local budget: len=%d err=%v", api, len(got), err)
+		}
+		after := budget.Stats()
+		// PeakBytes is a cumulative high-water counter, not live ownership.
+		// Preserve exact equality for every current byte/lease/view counter.
+		after.PeakBytes = pressured.PeakBytes
+		if basis.reader != nil || after != pressured {
+			t.Fatalf("%s retained opportunistic scratch or leaked local ownership: before=%+v after=%+v", api, pressured, budget.Stats())
+		}
+	}
+	pressure.Close()
+	if got, err := db.GetAppend(key, nil); err != nil || !bytes.Equal(got, want) {
+		t.Fatalf("unpressured handoff: len=%d err=%v", len(got), err)
+	}
+	owner, retained := basis.reader, budget.Stats()
+	if owner == nil || owner.point == nil {
+		t.Fatal("successful point handoff discarded reusable traversal")
+	}
+	for _, api := range []string{"Get", "GetAppend", "GetVersioned", "GetVersionedAppend"} {
+		got, _, err := cowPointReadForTest(db, api, key, nil)
+		after := budget.Stats()
+		after.PeakBytes = retained.PeakBytes
+		if err != nil || !bytes.Equal(got, want) || basis.reader != owner || after != retained {
+			t.Fatalf("%s warm handoff changed owner/admission: err=%v before=%+v after=%+v", api, err, retained, after)
+		}
+	}
+}
+
+func TestCOWPublicPointFreshPointerRefundsBeforeLocalAdmission(t *testing.T) {
+	db := cowPointReadFixture(t)
+	want := bytes.Repeat([]byte("physical-pointer-handoff"), 512)
+	if err := db.Set([]byte("pointer"), want); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	cowAssertFreshPointHandoffRefundsBeforeLocalAdmission(t, db, []byte("pointer"), want, true)
+}
+
+func TestCOWPublicPointReadMissingKeepsWarmTraversal(t *testing.T) {
+	db := cowPointReadFixture(t)
+	if err := db.Set([]byte("present"), []byte("inline")); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	key, dst := []byte("missing"), []byte("keep:")
+	got, revision, err := db.GetVersionedAppend(key, dst)
+	if !errors.Is(err, tree.ErrKeyNotFound) || !bytes.Equal(got, dst) || revision != page.LegacyEntryRevision {
+		t.Fatalf("physical miss changed API contract: out=%q revision=%d err=%v", got, revision, err)
+	}
+	basis, budget := db.cow.cut.basis, db.cow.budget
+	owner, retained := basis.reader, budget.Stats()
+	if owner == nil || owner.point == nil {
+		t.Fatal("completed physical miss discarded reusable traversal")
+	}
+	for i := 0; i < 3; i++ {
+		for _, api := range []string{"Get", "GetAppend", "GetVersioned", "GetVersionedAppend"} {
+			got, revision, err := cowPointReadForTest(db, api, key, dst)
+			if api == "Get" || api == "GetVersioned" {
+				if err != nil || got != nil {
+					t.Fatalf("%s normalized miss changed: out=%q err=%v", api, got, err)
+				}
+			} else if !errors.Is(err, tree.ErrKeyNotFound) || !bytes.Equal(got, dst) {
+				t.Fatalf("%s miss consumed prefix: out=%q err=%v", api, got, err)
+			}
+			after := budget.Stats()
+			after.PeakBytes = retained.PeakBytes
+			if revision != page.LegacyEntryRevision || basis.reader != owner || after != retained {
+				t.Fatalf("%s repeated miss changed revision/owner/admission: revision=%d before=%+v after=%+v", api, revision, retained, after)
+			}
+		}
+	}
+}
+
+func TestCOWFreshReadOwnerRefundMatchesIdentity(t *testing.T) {
+	db := cowPointReadFixture(t)
+	s, err := db.acquireCOWSnapshotWithError()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	basis, budget := s.cowCut.basis, db.cow.budget
+	basis.readMu.Lock()
+	first, err := basis.physicalWorkspaceLocked(budget, db.cow.readLimits())
+	if err != nil {
+		basis.readMu.Unlock()
+		t.Fatal(err)
+	}
+	stale := cowReadHandoffLocked(&basis.readMu, &basis.reader, true, true, nil)
+	// Another read has already refunded the first owner and admitted a new
+	// one. The old token must not evict that replacement, even under pressure.
+	basis.reader = nil
+	first.close()
+	replacement, err := basis.physicalWorkspaceLocked(budget, db.cow.readLimits())
+	basis.readMu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := budget.Stats()
+	if stale.refund() || stale.refund() || basis.reader != replacement || budget.Stats() != before {
+		t.Fatal("stale token changed another owner or authorized a retry")
+	}
+	basis.readMu.Lock()
+	warm := cowReadHandoffLocked(&basis.readMu, &basis.reader, false, true, nil)
+	basis.readMu.Unlock()
+	if warm.refund() || basis.reader != replacement {
+		t.Fatal("warm owner must never be refundable by a handoff token")
 	}
 }
