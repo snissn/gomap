@@ -124,7 +124,7 @@ func OpenExternalRecovery(opts Options, config ExternalRecoveryConfig) (_ *Exter
 	if len(markerBytes) > 8192 {
 		return nil, fmt.Errorf("%w: encoded owner identity exceeds marker limit", ErrExternalRecovery)
 	}
-	dir, err := filepath.Abs(opts.Dir)
+	dir, err := resolveOpenOwnershipDirectory(opts.Dir)
 	if err != nil {
 		return nil, err
 	}

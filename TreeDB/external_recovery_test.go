@@ -180,6 +180,40 @@ func TestExternalRecoveryOrdinaryLayoutAliasesRefuse(t *testing.T) {
 	}
 }
 
+func TestExternalRecoverySymlinkLayoutAliasesRefuse(t *testing.T) {
+	requireExternalRecoveryPlatform(t)
+	for _, ownerInMain := range []bool{false, true} {
+		root := t.TempDir()
+		ownerDir, aliasDir := root, filepath.Join(root, "maindb")
+		if ownerInMain {
+			ownerDir, aliasDir = aliasDir, root
+		}
+		o := externalTestOpen(t, ownerDir)
+		if err := os.MkdirAll(aliasDir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		alias := filepath.Join(t.TempDir(), "symlink-alias")
+		if err := os.Symlink(aliasDir, alias); err != nil {
+			t.Fatal(err)
+		}
+		opts := OptionsFor(ProfileNoWALFast, alias)
+		for _, live := range []bool{true, false} {
+			if !live {
+				if err := o.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			db, err := Open(opts)
+			if db != nil {
+				_ = db.Close()
+			}
+			if !errors.Is(err, ErrExternalRecovery) {
+				t.Fatalf("ownerInMain=%v live=%v symlink alias: %v", ownerInMain, live, err)
+			}
+		}
+	}
+}
+
 func TestExternalRecoveryAlternateInitializationOwnership(t *testing.T) {
 	requireExternalRecoveryPlatform(t)
 	for _, ownerInMain := range []bool{false, true} {

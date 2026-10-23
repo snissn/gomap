@@ -17,7 +17,7 @@ func acquireOrdinaryOpenOwnership(opts Options) (func(), error) {
 	if opts.Dir == "" {
 		return nil, errors.New("treedb: db dir required")
 	}
-	dir, err := filepath.Abs(opts.Dir)
+	dir, err := resolveOpenOwnershipDirectory(opts.Dir)
 	if err != nil {
 		return nil, err
 	}
@@ -75,6 +75,24 @@ func openOwnershipRoot(absoluteDir string) string {
 		return filepath.Dir(absoluteDir)
 	}
 	return absoluteDir
+}
+
+// Existing symlink aliases must select the same namespace before applying the
+// maindb spelling rule. Missing new directories retain their absolute spelling;
+// the OS still resolves any existing ancestor to the same lock inode.
+func resolveOpenOwnershipDirectory(dir string) (string, error) {
+	absolute, err := filepath.Abs(dir)
+	if err != nil {
+		return "", err
+	}
+	resolved, err := filepath.EvalSymlinks(absolute)
+	if err == nil {
+		return resolved, nil
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return absolute, nil
+	}
+	return "", err
 }
 
 func refuseExternalRecoveryEnclosingLayout(dir, root string) error {
