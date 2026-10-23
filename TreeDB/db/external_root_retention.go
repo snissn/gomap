@@ -133,6 +133,14 @@ func restoreRetainedPhysicalRootsV1(dir string, current RetainedPhysicalRootV1, 
 		if root.Version != 1 || root.Index != identity || root.Namespace != namespace || root.HighWater > store.pageCount || root.Meta.CommitSeq != root.State.CommitSeq || root.Meta.CommitSeq > current.Meta.CommitSeq {
 			return errors.New("retained root identity/extent mismatch")
 		}
+		// Validate both complete operands before either selectable slot changes.
+		// A deserialized Meta can be internally malformed even if its record
+		// identity is valid, and the second operand must not fail only after
+		// the first slot has already been overwritten.
+		var encoded [page.DurableMetaV1BodySize]byte
+		if err := root.Meta.Encode(encoded[:]); err != nil {
+			return fmt.Errorf("retained root meta: %w", err)
+		}
 		image, err := store.ReadPage(root.Meta.RootRecordPageID)
 		if err != nil {
 			return err
@@ -141,7 +149,9 @@ func restoreRetainedPhysicalRootsV1(dir string, current RetainedPhysicalRootV1, 
 		if err != nil {
 			return err
 		}
-		if record.CommitSeq != root.Meta.CommitSeq || record.TotalPages != root.HighWater || record.UserRootPageID != root.State.RootPageID || record.SystemRootPageID != root.State.SystemRootPageID {
+		if record.CommitSeq != root.Meta.CommitSeq || record.DurableSeq != root.Meta.DurableSeq || record.MetaProjectionDigest != root.Meta.MetaProjectionDigest ||
+			record.TotalPages != root.HighWater || record.UserRootPageID != root.State.RootPageID || record.SystemRootPageID != root.State.SystemRootPageID ||
+			record.AppliedCommandLSN != root.State.AppliedCommandLSN || record.MaxEntryRevision != uint64(root.State.MaxEntryRevision) {
 			return errors.New("retained root projection mismatch")
 		}
 		if err := validateDurableRootLineageV1(store, record); err != nil {

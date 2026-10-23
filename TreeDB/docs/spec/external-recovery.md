@@ -80,6 +80,10 @@ certified roots as the two ordinary DATA meta slots using the maintained
 checksummed durable-meta writer, and syncs the index. Restore does not rewrite
 root/dependency pages, copy an image, or rebind live files.
 
+Both operands' complete persistent state tokens and selectable meta projections
+must match their decoded durable-root records before either slot is written.
+Malformed metadata in the second operand cannot partially install the first.
+
 The immutable certificate operands remain stable throughout restore. If power
 loss tears either meta image or prevents its sync, the next external Open writes
 the same complete images again before opening any backend owner. Thus no partial

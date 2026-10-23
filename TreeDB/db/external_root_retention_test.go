@@ -164,3 +164,118 @@ func TestRetainedPhysicalRootsRejectInodeAndNamespaceReplacement(t *testing.T) {
 		t.Fatal("replacement namespace admitted")
 	}
 }
+
+func TestRetainedPhysicalRootsRejectProjectionBeforeAnySlotWrite(t *testing.T) {
+	dir := t.TempDir()
+	opts := Options{Dir: dir, DisableSideStores: true, DisableBackgroundPrune: true}
+	database, err := Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	capture := func(value string) (*PhysicalSnapshotCutV1, RetainedPhysicalRootV1) {
+		t.Helper()
+		if err := database.SetSync([]byte("key"), []byte(value)); err != nil {
+			t.Fatal(err)
+		}
+		cut, err := database.CapturePhysicalSnapshotCutV1(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		root, err := cut.RetainedRootV1()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return cut, root
+	}
+	previousCut, previous := capture("previous")
+	defer previousCut.Close()
+	currentCut, current := capture("current")
+	defer currentCut.Close()
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// Release the capture's backend ownership before restore. Otherwise an
+	// initialization-lock refusal could mask missing projection validation.
+	if err := currentCut.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := previousCut.Close(); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "index.db")
+	original, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutations := []struct {
+		name string
+		edit func(*RetainedPhysicalRootV1)
+	}{
+		{"command-lsn", func(root *RetainedPhysicalRootV1) { root.State.AppliedCommandLSN++ }},
+		{"entry-revision", func(root *RetainedPhysicalRootV1) { root.State.MaxEntryRevision++ }},
+		{"user-root", func(root *RetainedPhysicalRootV1) { root.State.RootPageID++ }},
+		{"system-root", func(root *RetainedPhysicalRootV1) { root.State.SystemRootPageID++ }},
+		{"durable-sequence-encodable", func(root *RetainedPhysicalRootV1) {
+			root.Meta.DurableSeq = 0
+			root.Meta.MetaProjectionDigest = page.DurableMetaProjectionDigestV1(root.Meta.CommitSeq, root.Meta.DurableSeq, root.Meta.RootRecordPageID)
+			var image [page.DurableMetaV1BodySize]byte
+			if err := root.Meta.Encode(image[:]); err != nil {
+				t.Fatalf("control must remain internally encodable: %v", err)
+			}
+		}},
+		{"meta-projection", func(root *RetainedPhysicalRootV1) { root.Meta.MetaProjectionDigest[0] ^= 1 }},
+		{"meta-format", func(root *RetainedPhysicalRootV1) { root.Meta.DurableSeq = root.Meta.CommitSeq + 1 }},
+	}
+	for _, operand := range []string{"current", "previous"} {
+		for _, mutation := range mutations {
+			t.Run(operand+"/"+mutation.name, func(t *testing.T) {
+				selected, parent := current, previous
+				if operand == "current" {
+					mutation.edit(&selected)
+				} else {
+					mutation.edit(&parent)
+				}
+				writes := 0
+				err := restoreRetainedPhysicalRootsV1(dir, selected, &parent, func(int) error { writes++; return nil })
+				switch mutation.name {
+				case "meta-projection":
+					if !errors.Is(err, page.ErrDurableMetaProjection) {
+						t.Errorf("restore error=%v want %v", err, page.ErrDurableMetaProjection)
+					}
+				case "meta-format":
+					if !errors.Is(err, page.ErrDurableMetaFormat) {
+						t.Errorf("restore error=%v want %v", err, page.ErrDurableMetaFormat)
+					}
+				default:
+					if err == nil || err.Error() != "retained root projection mismatch" {
+						t.Errorf("restore error=%v want retained root projection mismatch", err)
+					}
+				}
+				after, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if writes != 0 || !bytes.Equal(original, after) {
+					t.Fatalf("invalid operand changed storage: writes=%d", writes)
+				}
+			})
+		}
+	}
+	if err := RestoreRetainedPhysicalRootsV1(dir, current, &previous); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	got, err := reopened.Get([]byte("key"))
+	if err != nil || string(got) != "current" {
+		t.Fatalf("valid restore value=%q err=%v", got, err)
+	}
+	state, ok := reopened.StateToken()
+	if !ok || state.CommitSeq != current.State.CommitSeq || state.AppliedCommandLSN != current.State.AppliedCommandLSN || state.MaxEntryRevision != current.State.MaxEntryRevision {
+		t.Fatalf("valid restore state=%+v want=%+v", state, current.State)
+	}
+}
