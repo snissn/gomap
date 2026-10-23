@@ -68,6 +68,65 @@ func cowOrderedPreparedRequire(t *testing.T, snapshot *Snapshot, want []cowOrder
 	}
 }
 
+func TestCOWOrderedUnorderedGroupKeepsDuplicateWinnerAndEntryOrder(t *testing.T) {
+	db, owner := cowOrderedLifecycleFixture(t)
+	last := cowOrderedLifecycleKey(t, "z-sort", 90)
+	var first []byte
+	for i := 0; i < 100; i++ {
+		candidate := cowOrderedLifecycleKey(t, fmt.Sprintf("a-sort-%d", i), 50)
+		if db.shardIndex(candidate) == db.shardIndex(last) {
+			first = candidate
+			break
+		}
+	}
+	if first == nil {
+		t.Fatal("no same-shard peer")
+	}
+	group := []cowOrderedPreparedVersion{
+		{last, []byte{1, 'h'}, 900},
+		{first, []byte{1, 'x'}, 1000},
+		{cowOrderedLifecycleKey(t, "z-sort", 10), []byte{1, 'l'}, 2},
+		{first, []byte{1, 'w'}, 3}, // Last entry wins despite its lower revision.
+		{cowOrderedLifecycleKey(t, "z-sort", 50), []byte{2}, 7},
+	}
+	b := cowOrderedPreparedGroup(t, db, owner, group)
+	observed := 0
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Point != durabilitycut.AfterCOWCanonicalPreparation || event.Root != db.dir {
+			return nil
+		}
+		// Successful Write resets the batch. Inspect the original operands at
+		// the canonical boundary, after scratch ordering and before acceptance.
+		observed++
+		if len(b.entries) != len(group) {
+			return fmt.Errorf("original producer entry count=%d want=%d", len(b.entries), len(group))
+		}
+		for i, entry := range b.entries {
+			if !bytes.Equal(entry.Key, group[i].key) || !bytes.Equal(entry.Value, group[i].value) || entry.Revision != group[i].revision {
+				return fmt.Errorf("original producer entry %d reordered or changed", i)
+			}
+		}
+		return nil
+	})
+	err := b.Write()
+	restore()
+	if err != nil || observed != 1 {
+		t.Fatalf("qualified write: observed=%d err=%v", observed, err)
+	}
+	current := db.AcquireSnapshot()
+	defer current.Close()
+	cowOrderedPreparedRequire(t, current, []cowOrderedPreparedVersion{group[0], group[2], group[3], group[4]})
+	logical, physical := 0, 0
+	for _, shard := range current.cowCut.shards {
+		keys, versions := shard.root.OrderedCounts()
+		logical += keys
+		physical += versions
+	}
+	if logical != 2 || physical != 4 {
+		t.Fatalf("ordered postimage: logical=%d physical=%d", logical, physical)
+	}
+}
+
 // Exercise an actual qualified batch, not a manually assembled raw COW root.
 // Both logical keys and all their timestamps remain private until the one cut
 // swap. Native revisions need not increase with application time or publication.

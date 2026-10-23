@@ -269,6 +269,16 @@ alone is insufficient.
 The conservative envelope can refuse preparation even when its eventual actual
 receipt would fit. Reconciliation does not bypass that original admission gate.
 
+For an exclusively explicit-MVCC, non-removal shard group, the host stably orders
+its already admitted mutation scratch by physical key before both preliminary
+prediction and canonical preparation. This makes each history contiguous, so an
+unordered batch of distinct keys is not charged as a separate batch-sized history
+for every key. Equal physical keys keep their input order and last-writer value,
+pointer and revision. Original producer entries, command-WAL and journal order
+remain unchanged. Raw/mixed groups and groups containing physical removals keep
+their original order because routing may depend on earlier operands. Sorting
+adds no backing allocation or admission authority and changes no budget limit.
+
 The host's preliminary rollover prediction has a positive-only shortcut for
 fully qualified inline/tombstone PUTs in monotone logical-prefix order. It scans
 the operands once and uses conservative full-capacity structural bounds without

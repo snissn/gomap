@@ -1,6 +1,48 @@
 package caching
 
-import "github.com/snissn/gomap/TreeDB/internal/memtable"
+import (
+	"bytes"
+	"slices"
+
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
+)
+
+// orderQualifiedMutationGroups makes each logical history contiguous using only
+// the batch's already admitted scratch. The ordered estimator can then bound
+// each history by its actual group instead of charging every unordered key for
+// a possible group-wide history. Canonical preparation receives the same order.
+//
+// Explicit MVCC puts commute across physical keys; stable ties retain their
+// original last-writer value, pointer and revision. Raw/mixed groups and physical
+// removals can have order-dependent routing and must keep their original order.
+// Original batch entries, producer placement and command-WAL order never change.
+func (c *cowCache) orderQualifiedMutationGroups(groups [][]memtable.COWMutation) {
+	if !c.ordered {
+		return
+	}
+	for _, group := range groups {
+		if len(group) < 2 {
+			continue
+		}
+		qualified, ordered := true, true
+		for i := range group {
+			if !group[i].MVCC || group[i].Remove {
+				qualified = false
+				break
+			}
+			if i > 0 && bytes.Compare(group[i-1].Key, group[i].Key) > 0 {
+				ordered = false
+			}
+		}
+		if qualified && !ordered {
+			slices.SortStableFunc(group, cowCompareMutationKeys)
+		}
+	}
+}
+
+func cowCompareMutationKeys(a, b memtable.COWMutation) int {
+	return bytes.Compare(a.Key, b.Key)
+}
 
 // cowPredictionCanSkipEstimate only proves the existing predictor would neither
 // request pressure nor rotate. A loose bound, unsupported input, or any doubtful

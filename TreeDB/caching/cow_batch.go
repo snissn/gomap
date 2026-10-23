@@ -235,6 +235,7 @@ func (b *Batch) PrepareExternalCommandWALPublication() (err error) {
 		}
 		groups[i] = append(groups[i], m)
 	}
+	c.orderQualifiedMutationGroups(groups)
 	for i := range opts {
 		if pointerCount == 0 {
 			break

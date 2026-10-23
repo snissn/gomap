@@ -41,6 +41,7 @@ func (b *Batch) cowGenerationRollover(allowPressureRollover bool) (_ *cowRollove
 		i := b.shardIdxs[index]
 		groups[i] = append(groups[i], m)
 	}
+	c.orderQualifiedMutationGroups(groups)
 	control, err := b.cowKnownControlCharge(groups)
 	if err != nil {
 		return nil, false, false, err
