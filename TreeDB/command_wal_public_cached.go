@@ -464,20 +464,6 @@ func (tdb *DB) syncPublicCommandWAL() error {
 	return tdb.forcePublicCommandWALGroupCommit()
 }
 
-func (tdb *DB) syncPublicCommandWALDirect() (db.CommandWALBarrierResult, error) {
-	if tdb == nil || !tdb.commandWALCached {
-		return db.CommandWALBarrierResult{}, nil
-	}
-	if tdb.backend == nil {
-		return db.CommandWALBarrierResult{}, ErrClosed
-	}
-	result, err := tdb.backend.FlushCommandWALBarrierWithResult(true)
-	if result.LSN != 0 {
-		tdb.recordPublicCommandWALPendingLSN(result.LSN)
-	}
-	return result, err
-}
-
 // Refused constructors return an immutable carrier rather than allocating an
 // uncharged public wrapper. Every mutable entry point checks batchError first.
 var cowDeniedPublicBatch = commandWALPublicBatch{cowState: &commandWALPublicCOWState{batchError: memtable.ErrCOWCapacity}}
