@@ -1,9 +1,14 @@
 package memtable
 
 import (
+	"bytes"
 	"fmt"
 	"testing"
 	"time"
+
+	batchpkg "github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 func TestAppendOnlyResetWithCapacityHard_DropsObservedSpike(t *testing.T) {
@@ -316,5 +321,126 @@ func TestAppendOnlyCapacityHintEmptyAndHeldIterators(t *testing.T) {
 	}
 	if mt.EntryBackingBytes() != 0 || mt.Len() != 0 {
 		t.Fatal("reset retained oversized backing or old entries")
+	}
+}
+
+func TestAppendOnlyRaisedCapacityHintMatchesEagerGrowth(t *testing.T) {
+	const estimate, baseline = 96, 4096
+	for _, reserve := range []bool{false, true} {
+		t.Run(fmt.Sprint(reserve), func(t *testing.T) {
+			DropAppendOnlyEntryPools()
+			t.Cleanup(DropAppendOnlyEntryPools)
+			lazy := NewAppendOnlyWithEntryCapacity(128)
+			eager := NewAppendOnlyWithEntryCapacity(128)
+			lazy.Set([]byte("old-key"), []byte("old-value"))
+			eager.Set([]byte("old-key"), []byte("old-value"))
+			lazy.ResetWithCapacityLimit(baseline*estimate, estimate)
+			eager.ResetWithCapacity(baseline*estimate, estimate)
+			if len(lazy.entries) != 128 || len(eager.entries) != baseline {
+				t.Fatalf("raised-hint admission: lazy=%d eager=%d", len(lazy.entries), len(eager.entries))
+			}
+			backing := &lazy.entries[0]
+			for i := 0; i < 128; i++ {
+				key := []byte(fmt.Sprintf("key-%04d", i))
+				lazy.Set(key, []byte("value"))
+				eager.Set(key, []byte("value"))
+			}
+			if &lazy.entries[0] != backing {
+				t.Fatal("writes that fit warm backing allocated raised baseline early")
+			}
+			if reserve {
+				lazy.ReserveAdditionalEntries(1)
+				eager.ReserveAdditionalEntries(1)
+			} else {
+				lazy.Set([]byte("key-0128"), []byte("value"))
+				eager.Set([]byte("key-0128"), []byte("value"))
+			}
+			if len(lazy.entries) != baseline || len(lazy.entries) != len(eager.entries) {
+				t.Fatalf("first needed growth: lazy=%d eager=%d want=%d", len(lazy.entries), len(eager.entries), baseline)
+			}
+			if lazy.Len() != eager.Len() || lazy.Size() != eager.Size() {
+				t.Fatal("raised-hint eager and lazy table sizes differ")
+			}
+			for i := 0; i < 128; i++ {
+				value, deleted, found := lazy.Get([]byte(fmt.Sprintf("key-%04d", i)))
+				if !found || deleted || string(value) != "value" {
+					t.Fatalf("growth lost key %d: (%q,%t,%t)", i, value, deleted, found)
+				}
+			}
+			if _, _, found := lazy.Get([]byte("old-key")); found {
+				t.Fatal("reuse retained an old key")
+			}
+		})
+	}
+}
+
+func TestAppendOnlyCapacityHintFirstBulkApplicationMatchesEager(t *testing.T) {
+	const estimate, baseline, count = 96, 4096, 300
+	for _, reused := range []bool{false, true} {
+		for _, copyBatch := range []bool{false, true} {
+			t.Run(fmt.Sprintf("reused=%t/copy=%t", reused, copyBatch), func(t *testing.T) {
+				DropAppendOnlyEntryPools()
+				t.Cleanup(DropAppendOnlyEntryPools)
+				lazy := NewAppendOnlyWithCapacityHint(baseline*estimate, estimate)
+				if reused {
+					lazy = NewAppendOnlyWithEntryCapacity(128)
+					lazy.Set([]byte("retired-key"), []byte("retired-value"))
+					lazy.ResetWithCapacityLimit(baseline*estimate, estimate)
+				}
+				eager := NewAppendOnlyWithEntryCapacity(baseline)
+				entries := make([]batchpkg.Entry, count)
+				for i := range entries {
+					op := &entries[i]
+					op.Key = []byte(fmt.Sprintf("key-%04d", i))
+					op.Revision = page.EntryRevision(1000 + i)
+					switch i % 3 {
+					case 0:
+						op.Value = []byte(fmt.Sprintf("value-%04d", i))
+					case 1:
+						op.Type = batchpkg.OpDelete
+					case 2:
+						op.IsPtr = true
+						op.ValuePtr = page.ValuePtr{FileID: 7, Offset: uint64(4096 + 32*i), Length: 48}
+					}
+				}
+				apply := func(mt *AppendOnly) {
+					if copyBatch {
+						mt.ApplyCopySortedBatchTrusted(entries, false, false, nil)
+					} else {
+						mt.ApplyStealSortedBatchTrusted(entries, nil)
+					}
+				}
+				before := AppendOnlyEntryReserveStatsSnapshot().GrowCallsTotal
+				apply(lazy)
+				if delta := AppendOnlyEntryReserveStatsSnapshot().GrowCallsTotal - before; delta != 1 {
+					t.Fatalf("first bulk application reserve grows=%d want 1", delta)
+				}
+				apply(eager)
+				if len(lazy.entries) != baseline || len(lazy.entries) != len(eager.entries) {
+					t.Fatalf("bulk backing lengths lazy=%d eager=%d want=%d", len(lazy.entries), len(eager.entries), baseline)
+				}
+				if lazy.Len() != count || lazy.Len() != eager.Len() || lazy.Size() != eager.Size() {
+					t.Fatal("first bulk application eager/lazy sizes differ")
+				}
+				lazy.Freeze()
+				eager.Freeze()
+				for i, op := range entries {
+					value, ptr, flags, revision, found := lazy.GetEntryWithRevision(op.Key)
+					eagerValue, eagerPtr, eagerFlags, eagerRevision, eagerFound := eager.GetEntryWithRevision(op.Key)
+					wantFlags := byte(node.FlagInline)
+					if i%3 == 1 {
+						wantFlags = node.FlagTombstone
+					} else if i%3 == 2 {
+						wantFlags = node.FlagPointer
+					}
+					if !found || !bytes.Equal(value, op.Value) || ptr != op.ValuePtr || flags != wantFlags || revision != op.Revision {
+						t.Fatalf("bulk entry %d lost payload: value=%q ptr=%+v flags=%d revision=%d found=%t", i, value, ptr, flags, revision, found)
+					}
+					if found != eagerFound || !bytes.Equal(value, eagerValue) || ptr != eagerPtr || flags != eagerFlags || revision != eagerRevision {
+						t.Fatalf("bulk entry %d differs from eager table", i)
+					}
+				}
+			})
+		}
 	}
 }

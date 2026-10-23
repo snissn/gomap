@@ -1068,9 +1068,9 @@ func (m *AppendOnly) reserveAdditionalEntriesLocked(additional int) bool {
 		return false
 	}
 	current := len(m.entries)
-	if current == 0 && m.baseEntriesLen > current {
+	if m.baseEntriesLen > current {
 		// A deferred table should reserve as though its planned baseline were
-		// already present, avoiding intermediate growth on the first batch.
+		// already present, including when a smaller warm backing was retained.
 		current = m.baseEntriesLen
 	}
 	target, skippedGrowthAllocs, skippedGrowthBytes := appendOnlyReserveTargetCapacity(current, needed)
@@ -1461,7 +1461,7 @@ func (m *AppendOnly) updateLatestIndexLocked(key []byte, idx int) {
 func (m *AppendOnly) appendEntryCoreLocked(key, value []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision, steal bool, borrowValue bool) (idx int, ent *appendOnlyEntry, storedKey []byte) {
 	if m.count == len(m.entries) {
 		nextCap := appendOnlyNextCapacity(len(m.entries))
-		if len(m.entries) == 0 && nextCap < m.baseEntriesLen {
+		if nextCap < m.baseEntriesLen {
 			nextCap = m.baseEntriesLen
 		}
 		m.growEntriesLocked(nextCap, true)

@@ -1,6 +1,7 @@
 package caching
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
@@ -215,6 +216,40 @@ func TestTrimEmptyAppendOnlyMutableShards_DropsWarmEntryBacking(t *testing.T) {
 	}
 	if got := db.appendOnlyMutableTrimDropped.Load(); got == 0 {
 		t.Fatal("mutable trim dropped bytes=0 want >0")
+	}
+}
+
+func TestTrimEmptyAppendOnlyMutableShardsPreservesDeferredBacking(t *testing.T) {
+	const baseline = 512
+	for _, initial := range []int{0, 128, 4096} {
+		t.Run(fmt.Sprint(initial), func(t *testing.T) {
+			var db DB
+			db.storeMemtableMode(memtable.ModeAppendOnly)
+			mt := memtable.NewAppendOnlyWithCapacityHint(baseline*appendOnlyEstimatedBytesPerEntryDefault, appendOnlyEstimatedBytesPerEntryDefault)
+			if initial > 0 {
+				mt = memtable.NewAppendOnlyWithEntryCapacity(initial)
+			}
+			db.mutableShards = []memShard{{mem: mt}}
+			before := mt.EntryBackingBytes()
+			if got := db.trimEmptyAppendOnlyMutableShards(baseline * appendOnlyEstimatedBytesPerEntryDefault); got != 1 {
+				t.Fatalf("empty shards trimmed=%d want 1", got)
+			}
+			after := mt.EntryBackingBytes()
+			if initial > baseline {
+				if after != 0 {
+					t.Fatalf("oversized empty backing replaced: %d bytes", after)
+				}
+			} else if after != before {
+				t.Fatalf("empty backing changed unnecessarily: before=%d after=%d", before, after)
+			}
+			if got := db.appendOnlyMutableTrimDropped.Load(); got != uint64(before-after) {
+				t.Fatalf("dropped-byte accounting=%d want=%d", got, before-after)
+			}
+			mt.ReserveAdditionalEntries(129)
+			if got := mt.EntryCapacity(); got < baseline {
+				t.Fatalf("trimmed table lost baseline: capacity=%d want >=%d", got, baseline)
+			}
+		})
 	}
 }
 

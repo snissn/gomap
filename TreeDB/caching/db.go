@@ -11703,7 +11703,7 @@ func (db *DB) trimEmptyAppendOnlyMutableShards(capacity int) int {
 		if capacity <= 0 {
 			mt.ResetDropEntries()
 		} else {
-			mt.ResetWithCapacityHard(capacity, estimate)
+			mt.ResetWithCapacityLimit(capacity, estimate)
 		}
 		after := mt.EntryBackingBytes()
 		shard.mu.Unlock()
