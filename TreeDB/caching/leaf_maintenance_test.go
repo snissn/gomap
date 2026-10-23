@@ -11,6 +11,7 @@ import (
 	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )
 
@@ -165,6 +166,19 @@ func TestLeafMaintenanceProgressBeforeValueEligibility(t *testing.T) {
 }
 
 func TestLeafMaintenanceJointNoopCooldownAndError(t *testing.T) {
+	t.Run("retirement_without_unlink", func(t *testing.T) {
+		db, _ := openLeafGCPeriodicTestDB(t, backenddb.LeafGenerationGCStats{BytesDeleted: 8192}, nil)
+		db.maybeRunVlogGenerationMaintenance(false)
+		stats := db.Stats()
+		for key, want := range map[string]string{"deleted_bytes": "8192", "deleted_files": "0", "deleted_generations": "0"} {
+			if got := stats["treedb.cache.vlog_generation.leaf_gc."+key]; got != want {
+				t.Errorf("%s=%q want%q", key, got, want)
+			}
+		}
+		if db.vlogGenerationLastGCNoopUnixNano.Load() == 0 {
+			t.Fatal("logical retirement bytes claimed physical deletion progress")
+		}
+	})
 	t.Run("noop", func(t *testing.T) {
 		db, backend := openLeafGCPeriodicTestDB(t, backenddb.LeafGenerationGCStats{}, nil)
 		db.maybeRunVlogGenerationMaintenance(false)
@@ -298,10 +312,33 @@ func TestLeafMaintenancePeriodicGCReclaimsSealedFilesAndManifests(t *testing.T) 
 	if removed == 0 {
 		t.Fatal("no old sealed leaf file reclaimed after snapshot release and meta advancement")
 	}
-	if db.vlogGenerationLeafGCDeletedGenerations.Load() == 0 || db.vlogGenerationLeafGCDeletedBytes.Load() == 0 || db.vlogGenerationLeafGCDeletedManifestRevisions.Load() == 0 {
-		t.Fatalf("missing actual segment/revision deletion counters: generations=%d bytes=%d revisions=%d", db.vlogGenerationLeafGCDeletedGenerations.Load(), db.vlogGenerationLeafGCDeletedBytes.Load(), db.vlogGenerationLeafGCDeletedManifestRevisions.Load())
+	if db.vlogGenerationLeafGCDeletedGenerations.Load() == 0 || db.vlogGenerationLeafGCDeletedFiles.Load() == 0 || db.vlogGenerationLeafGCDeletedBytes.Load() == 0 {
+		t.Fatalf("missing segment reclamation counters: generations=%d files=%d logical_retirement_bytes=%d", db.vlogGenerationLeafGCDeletedGenerations.Load(), db.vlogGenerationLeafGCDeletedFiles.Load(), db.vlogGenerationLeafGCDeletedBytes.Load())
 	}
-	t.Logf("small-target actual reclamation: old_files_removed=%d generations=%d bytes=%d manifest_revisions=%d manifest_bytes=%d", removed, db.vlogGenerationLeafGCDeletedGenerations.Load(), db.vlogGenerationLeafGCDeletedBytes.Load(), db.vlogGenerationLeafGCDeletedManifestRevisions.Load(), db.vlogGenerationLeafGCDeletedManifestBytes.Load())
+	namespaceSupported := rootpublication.StableRelativeNamespaceSupported()
+	revisions := db.vlogGenerationLeafGCDeletedManifestRevisions.Load()
+	if namespaceSupported {
+		if revisions == 0 {
+			t.Fatal("supported immutable manifest GC did not delete any revision")
+		}
+	} else {
+		if revisions != 0 {
+			t.Fatalf("compatibility manifest GC claimed %d immutable revision deletions", revisions)
+		}
+		// Compatibility platforms publish only manifest.json. Check the maintained
+		// collector's explicit unsupported result without skipping segment or
+		// historical-read/reopen coverage on those platforms.
+		var inspected backenddb.LeafGenerationGCStats
+		err := db.RunBackendMaintenance(func() error {
+			var err error
+			inspected, err = backend.LeafGenerationGC(context.Background(), backenddb.LeafGenerationGCOptions{DryRun: true})
+			return err
+		})
+		if err != nil || !inspected.ManifestRevisionGCUnsupported || inspected.ManifestRevisionsDeleted != 0 {
+			t.Fatalf("compatibility manifest GC contract: stats=%+v err=%v", inspected, err)
+		}
+	}
+	t.Logf("small-target actual reclamation: old_files_removed=%d generations=%d files=%d logical_retirement_bytes=%d immutable_namespace_supported=%t manifest_revisions=%d manifest_bytes=%d", removed, db.vlogGenerationLeafGCDeletedGenerations.Load(), db.vlogGenerationLeafGCDeletedFiles.Load(), db.vlogGenerationLeafGCDeletedBytes.Load(), namespaceSupported, revisions, db.vlogGenerationLeafGCDeletedManifestBytes.Load())
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}

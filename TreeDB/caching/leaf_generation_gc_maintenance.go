@@ -29,6 +29,9 @@ func (db *DB) runVlogGenerationLeafGC(ctx context.Context) (backenddb.LeafGenera
 		db.vlogGenerationLeafGCDeletedFiles.Add(uint64(stats.FilesDeleted))
 	}
 	if stats.BytesDeleted > 0 {
+		// Backend BytesDeleted charges generations when they enter Deleted,
+		// before pinned files necessarily unlink. Preserve that logical retirement
+		// accounting; FilesDeleted and physical inventory prove reclamation.
 		db.vlogGenerationLeafGCDeletedBytes.Add(uint64(stats.BytesDeleted))
 	}
 	if stats.ManifestRevisionsDeleted > 0 {
