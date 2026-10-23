@@ -291,10 +291,22 @@ The unchanged public COW fixture, all ten cells, 1024 total calls, three alterna
 pairs, original admission/quiet rules and numerical guards remain authoritative.
 Workflow scope now includes the physical read workspace and point-successor
 representation files so later changes to these seams cannot miss this check.
-The complete runtime is frozen at
+The COW repair runtime was frozen at
 `d4a2745ec52b2eae88ff398603fbde511b344955`. All COW caching controls pass
 normally, and focused caching/public MVCC controls have normal/race coverage.
 The final portable focused race controls pass (74 cases), all COW normal controls
 pass (380 cases), and Windows test cross-compilation passes. The caller-local
 inspection descriptor does not escape. Windows execution and the rebound tooling
 qualification remain required. No final-source timing result is asserted here.
+
+The final review repair additionally records the existing no-op cooldown after
+a successful below-floor value estimate when leaf GC is unavailable. A genuine
+old-product control fails; five affected scheduler controls pass normally
+(0.524s) and under race detection (1.608s), including actual checkpoint avoidance,
+cooldown expiry, leaf progress and errors. The ownership specification now
+distinguishes application DATA mutations from checkpoint installation lifecycle
+operations. Neither repair changes the COW read implementation. The complete
+runtime is frozen at `d250f098c286ba639822d61d8c15ed860dc2764c`; tooling is
+rebound to that source with every original fixture and numerical guard unchanged.
+Earlier local and hosted results retain their original source bindings; final
+current-head CI and review remain required.
