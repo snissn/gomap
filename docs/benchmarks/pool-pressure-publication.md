@@ -153,3 +153,57 @@ would average about 2.19 bytes per operation. This is an attribution estimate fo
 that sampler, not a bound on all telemetry: the one-second process sampler also
 publishes a snapshot, and RSS parsing has independent allocations. Actual timed
 publication counts were not instrumented in the public diagnostic.
+
+## Scoped hosted public Stats diagnostic
+
+`scripts/pool_pressure_stats_diagnostic.py` supplies a short public-path check
+for the full-snapshot component regression. It times
+`BenchmarkPoolPressurePublicStats`, now isolated in
+`TreeDB/caching/pool_pressure_public_stats_bench_test.go`. Fixture version
+`public-stats-v2-close-excluded` adds `b.StopTimer()` after the measured Stats
+loop so deferred cached/backend Close is excluded. The earlier `public-01`
+attempt retained zero timed rows, so this phase correction revises no measured
+result. Both products use identical corrected fixture bytes. Only that fixture is
+overlaid on the exact PR base; no candidate implementation or component helper
+is copied into the baseline. Both binaries retain real clocks, ordinary samplers,
+64 inline keys, and the actual cached `DB.Stats` call. The runner imports the
+existing PRIMARY quiet acquisition, process observation, ELF/runtime binding,
+and hashing helpers; it does not modify PRIMARY or its qualification policy.
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/test_pool_pressure_stats_diagnostic.py
+python3 scripts/pool_pressure_stats_diagnostic.py \
+  --root "$PWD" --baseline FULL_BASE_SHA --candidate FULL_HEAD_SHA \
+  --output /mnt/fast4tb/TASK/pressure-stats-FRESH
+```
+
+The existing ephemeral Linux `mvcc-raw-path-gate` job resolves the PR pair and
+runs this additional step only for changes to caching `db.go`, `pool_pressure*.go`,
+the diagnostic runner/self-test, or its maintained PRIMARY helper. Changes to
+other TreeDB files do not activate this step. The existing PRIMARY comparison
+still runs with its original fixture, sample count, thresholds, and disposition.
+This diagnostic step has no observation-only override. It retains three
+alternating pairs AB/BA/AB, GOMAXPROCS=1, CPU0, 250 ms per sample, and fresh
+processes. Median paired time may increase at most 5%; median bytes/op and
+allocations/op must not grow. Equal binary inputs do not waive a failed metric.
+
+Builds finish before the maintained quiet acquisition: complete five-second
+windows, at most 60 seconds, external process CPU strictly below 2%. The same
+process observer covers the six benchmark invocations. A missing quiet window,
+measured interference, source/runtime drift, malformed/missing row, timeout, or
+build failure produces **NULL**, exits nonzero, and leaves this product guard
+unavailable. Complete quiet rows that exceed a limit produce **FAIL**; their raw
+measurements remain evidence. Neither disposition supplies product acceptance,
+and there is no selective rerun. PASS addresses this small public Stats workload,
+not server memory, retained-resource equilibrium, or final storage qualification.
+
+Under the existing uploaded `mvcc-raw-path-gate-HEAD` artifact, `pressure-stats/`
+contains `bindings.json` (source, fixture, runner/helper, binary identities and
+fixed policy), `runtime-inputs-before.json`/`after.json` (actual ELF loader and
+library hashes), separate command stdout/stderr plus `commands.json` receipts,
+all six chronological `samples.json` rows, complete quiet acquisition/process
+observations, and `summary.json`/`summary.md`. Output must be fresh and outside
+the checkout. Go benchmark text and these JSON receipts are not benchprof inputs.
+No hosted measurement is claimed by adding this runner. Normal measurement and
+quiet acquisition should take roughly 10–20 seconds after both package binaries
+are built; cold builds can add minutes and all command durations are recorded.
