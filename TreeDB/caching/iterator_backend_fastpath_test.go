@@ -82,6 +82,7 @@ func TestIterator_EmptyForegroundLeaseBoundsDebugAndShutdown(t *testing.T) {
 						t.Fatal("fixture did not publish the expected memtable view")
 					}
 					refs := view.refs.Load()
+					retains := db.memtableViewTelemetry.retainTotal.Load()
 					backendCalls := backend.iteratorCalls.Load() + backend.reverseIteratorCalls.Load()
 					iteratorCalls := db.iteratorCallsTotal.Load()
 					open := db.Iterator
@@ -128,6 +129,15 @@ func TestIterator_EmptyForegroundLeaseBoundsDebugAndShutdown(t *testing.T) {
 					}
 					if view.refs.Load() != refs || db.activeForegroundIterators.Load() != 1 {
 						t.Fatal("empty route retained a memtable view or released the foreground lease")
+					}
+					wantRetains := retains
+					if tc.queued {
+						// Selecting a queued root still takes the normal lease, even when
+						// range filtering subsequently excludes every memtable source.
+						wantRetains++
+					}
+					if got := db.memtableViewTelemetry.retainTotal.Load(); got != wantRetains {
+						t.Fatalf("view retains=%d want=%d", got, wantRetains)
 					}
 					dbClosed = true
 					if err := db.Close(); err != nil {
@@ -259,5 +269,89 @@ func TestIterator_BackendOnlyFastPathSkipsBackendOnKnownDisjointRange(t *testing
 	}
 	if calls := backend.iteratorCalls.Load(); calls != 0 {
 		t.Fatalf("backend iterator calls=%d want=0", calls)
+	}
+}
+
+func TestIterator_BackendOnlyFastPathAvoidsViewLease(t *testing.T) {
+	for _, reverse := range []bool{false, true} {
+		for _, mode := range []string{"current", "published root", "nil view", "stale view"} {
+			name := mode + "/forward"
+			if reverse {
+				name = mode + "/reverse"
+			}
+			t.Run(name, func(t *testing.T) {
+				backend := &countingIteratorBackend{MockBackend: NewMockBackend()}
+				backend.Set([]byte("k"), []byte("backend"))
+				db, err := Open(t.TempDir(), backend, Options{
+					DisableWAL: true, AllowUnsafe: true, FlushThreshold: 1 << 30, MemtableShards: 1,
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer db.Close()
+				if err := db.ensureBackendRange(); err != nil {
+					t.Fatal(err)
+				}
+
+				// Exercise the published-root authority independently of the generic
+				// backend, and preserve the existing nil/stale-view fallback behavior.
+				wantValue := "backend"
+				published := newRootDomainTestTable(t, rootDomainTestOp{key: "k", value: "published"})
+				db.mu.Lock()
+				original := db.memtables.Load()
+				switch mode {
+				case "published root":
+					view := &memtableView{rootIterator: rootDomainSnapshot{
+						published: published,
+					}}
+					view.refs.Store(1)
+					db.memtables.Store(view)
+					wantValue = "published"
+				case "nil view":
+					db.memtables.Store(nil)
+				case "stale view":
+					view := &memtableView{}
+					view.refs.Store(1)
+					db.memtables.Store(view)
+				}
+				db.mu.Unlock()
+				defer func() {
+					db.mu.Lock()
+					db.memtables.Store(original)
+					db.mu.Unlock()
+				}()
+
+				retains := db.memtableViewTelemetry.retainTotal.Load()
+				releases := db.memtableViewTelemetry.releaseTotal.Load()
+				open := db.Iterator
+				if reverse {
+					open = db.ReverseIterator
+				}
+				it, err := open(nil, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer it.Close()
+				if !it.Valid() {
+					t.Fatalf("iterator invalid: %v", it.Error())
+				}
+				if string(it.Key()) != "k" || string(it.Value()) != wantValue {
+					t.Fatalf("iterator key=%q value=%q want k/%s", it.Key(), it.Value(), wantValue)
+				}
+				it.Next()
+				if it.Valid() || it.Error() != nil {
+					t.Fatalf("iterator end valid=%t error=%v", it.Valid(), it.Error())
+				}
+				if err := it.Close(); err != nil {
+					t.Fatal(err)
+				}
+				if db.memtableViewTelemetry.retainTotal.Load() != retains || db.memtableViewTelemetry.releaseTotal.Load() != releases {
+					t.Fatal("backend-only iterator took a transient memtable view lease")
+				}
+				if db.activeForegroundIterators.Load() != 0 {
+					t.Fatal("Close did not release the foreground iterator lease")
+				}
+			})
+		}
 	}
 }

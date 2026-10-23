@@ -423,7 +423,8 @@ func (s *Snapshot) cowSeekGEOneAdmitted(start, end []byte) (key, value []byte, f
 	}
 	s.cowReadMu.Lock()
 	defer s.cowReadMu.Unlock()
-	best, err := s.cowPhysicalSuccessorLocked(start, end)
+	var inspected cowSuccessorInspection
+	best, err := s.cowPhysicalSuccessorLocked(start, end, &inspected)
 	if err == errCOWPhysicalDictionary {
 		// Dictionary records retain the original caller-cut definition and decoder.
 		w, workspaceErr := s.cowWorkspaceLocked()
@@ -450,12 +451,18 @@ func (s *Snapshot) cowSeekGEOneAdmitted(start, end []byte) (key, value []byte, f
 	if best.flags&node.FlagTombstone != 0 {
 		return nil, nil, false, false, nil
 	}
-	if best.flags&node.FlagPointer != 0 {
+	if best.flags&node.FlagPointer != 0 && !best.valueOwned {
 		w, workspaceErr := s.cowWorkspaceLocked()
 		if workspaceErr != nil {
 			return nil, nil, false, true, workspaceErr
 		}
-		borrowed, readErr := w.read(best.ptr, false, nil)
+		var borrowed []byte
+		var readErr error
+		if inspected.file != nil {
+			borrowed, readErr = w.readWithInspection(inspected.file, best.ptr, inspected.shape, false, nil)
+		} else {
+			borrowed, readErr = w.read(best.ptr, false, nil)
+		}
 		if readErr != nil {
 			return nil, nil, false, true, readErr
 		}
@@ -485,7 +492,7 @@ func (s *Snapshot) cowOwnedPointSuccessor(disk node.LeafEntry, found bool, start
 	return best
 }
 
-func (s *Snapshot) cowPhysicalSuccessorLocked(start, end []byte) (pointSuccessorCandidate, error) {
+func (s *Snapshot) cowPhysicalSuccessorLocked(start, end []byte, inspected *cowSuccessorInspection) (pointSuccessorCandidate, error) {
 	// A retained reader may already own admitted traversal and decoder storage.
 	// Keep using it rather than require a second, opportunistic admission.
 	if s.cowReader != nil && s.cowReader.point != nil {
@@ -496,11 +503,51 @@ func (s *Snapshot) cowPhysicalSuccessorLocked(start, end []byte) (pointSuccessor
 	// Never wait for another reader's scratch: retained readers keep their
 	// independent cut-local path when the basis is already in use.
 	if !basis.readMu.TryLock() {
+		// A fixed number of independently admitted owners amortizes scratch
+		// across short-lived parallel cuts. Never wait for a slot or grow the
+		// pool; an admitted cut-local reader retains priority above this path.
+		for i := range basis.readSlots {
+			slot := &basis.readSlots[i]
+			if !slot.mu.TryLock() {
+				continue
+			}
+			fresh := slot.reader == nil
+			w, err := basis.workspaceLocked(&slot.reader, s.cowCache.budget, s.cowCache.readLimits())
+			var best pointSuccessorCandidate
+			if err == nil {
+				best, err = s.cowWorkspacePhysicalSuccessorLocked(w, start, end, inspected)
+			}
+			if fresh && (err != nil || (inspected.file != nil && !best.valueOwned)) && slot.reader != nil {
+				// A fresh lane keeps only a self-contained result. Errors and
+				// complete-cut value handoffs must release its admission before
+				// the original local traversal/decoder can consume that capacity.
+				slot.reader.close()
+				slot.reader = nil
+			}
+			slot.mu.Unlock()
+			if errors.Is(err, memtable.ErrCOWCapacity) {
+				if inspected.file != nil {
+					// Traversal and inspection completed. The cut can reuse that
+					// metadata after a fresh slot refunds its refused value growth.
+					return best, nil
+				}
+				continue
+			}
+			return best, err
+		}
 		return s.cowCutPhysicalSuccessorLocked(start, end)
 	}
-	best, err := s.cowBasisPhysicalSuccessorLocked(start, end)
+	fresh := basis.reader == nil
+	best, err := s.cowBasisPhysicalSuccessorLocked(start, end, inspected)
+	if fresh && errors.Is(err, memtable.ErrCOWCapacity) && basis.reader != nil {
+		basis.reader.close()
+		basis.reader = nil
+	}
 	basis.readMu.Unlock()
 	if errors.Is(err, memtable.ErrCOWCapacity) {
+		if inspected.file != nil {
+			return best, nil
+		}
 		// Shared scratch is an optimization. Its allocation or decoder growth
 		// must not invalidate a read that the cut-local owner can still admit.
 		return s.cowCutPhysicalSuccessorLocked(start, end)
@@ -510,12 +557,18 @@ func (s *Snapshot) cowPhysicalSuccessorLocked(start, end []byte) (pointSuccessor
 
 // The caller holds basis.readMu until winner bytes have become owned. Release
 // that lock before invoking a cut-local fallback, which can perform its own I/O.
-func (s *Snapshot) cowBasisPhysicalSuccessorLocked(start, end []byte) (pointSuccessorCandidate, error) {
+func (s *Snapshot) cowBasisPhysicalSuccessorLocked(start, end []byte, inspected *cowSuccessorInspection) (pointSuccessorCandidate, error) {
 	basis := s.cowCut.basis
 	w, err := basis.physicalWorkspaceLocked(s.cowCache.budget, s.cowCache.readLimits())
 	if err != nil {
 		return pointSuccessorCandidate{}, err
 	}
+	return s.cowWorkspacePhysicalSuccessorLocked(w, start, end, inspected)
+}
+
+// Caller owns this basis slot until all selected output bytes become owned.
+func (s *Snapshot) cowWorkspacePhysicalSuccessorLocked(w *cowReadWorkspace, start, end []byte, inspected *cowSuccessorInspection) (pointSuccessorCandidate, error) {
+	basis := s.cowCut.basis
 	point, err := w.pointScratch()
 	if err != nil {
 		return pointSuccessorCandidate{}, err
@@ -529,8 +582,16 @@ func (s *Snapshot) cowBasisPhysicalSuccessorLocked(start, end []byte) (pointSucc
 	if err != nil {
 		return pointSuccessorCandidate{}, err
 	}
-	// The selected key/inline value must become owned before readMu unlocks.
-	return s.cowOwnedPointSuccessor(disk, found, start, end), nil
+	best := s.cowOwnedPointSuccessor(disk, found, start, end)
+	if best.found && best.flags&node.FlagTombstone == 0 && best.flags&node.FlagPointer != 0 && best.priority == len(s.rootIterator.immutables) {
+		// Only the physical winner belongs to this basis. Queue pointers and
+		// dictionary/codec fallback keep the original complete-cut resolver.
+		best.value, best.valueOwned, err = w.readUncompressedOwned(best.ptr, inspected)
+		if err != nil {
+			return best, err
+		}
+	}
+	return best, nil
 }
 
 // cowReadMu protects the original per-cut traversal/decoder workspace. This is

@@ -1043,6 +1043,35 @@ func TestValueLogRewriteOnline_RetainsStaleTrailingLeafGenerationCleanup(t *test
 	db, leafLog := openLeafGenerationGCTestDB(t)
 	dir := db.dir
 
+	// Trailing cleanup only needs a reachability scan when a generation can
+	// become noncurrent. Build that real state before pausing publication;
+	// writable/current producers correctly skip the segment scan entirely.
+	writeLeafGenerationKeys(t, db, "trailing-scan-old", 64, 'a')
+	_, oldFileID := currentLeafSegmentOrFatal(t, leafLog)
+	oldRawFileID := page.ValueLogSegmentID(oldFileID)
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotate leaf producer for trailing scan: %v", err)
+	}
+	writeLeafGenerationKeys(t, db, "trailing-scan-new", 1, 'b')
+	currentFiles := currentLeafLogRawFileIDSetForTest(t, db)
+	db.mu.RLock()
+	manifest := db.leafGenerationManifest.clone()
+	db.mu.RUnlock()
+	sealedNoncurrent := false
+	for _, gen := range manifest.Generations {
+		if gen.State != leafGenerationStateSealed || leafGenerationRecordIntersectsFileIDSet(gen, currentFiles) {
+			continue
+		}
+		for _, fileID := range gen.FileIDs {
+			if fileID == oldRawFileID {
+				sealedNoncurrent = true
+			}
+		}
+	}
+	if !sealedNoncurrent {
+		t.Fatalf("trailing scan requires sealed noncurrent producer %d: current=%v manifest=%+v", oldRawFileID, currentFiles, manifest)
+	}
+
 	// Freeze publication of this test's relaxed root at the seal write. That
 	// lets the trailing scan capture its recoverable basis before Checkpoint
 	// advances the durable root, without depending on publication timing.

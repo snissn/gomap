@@ -22,6 +22,7 @@ import (
 type cowBackendBasis struct {
 	readMu          sync.Mutex // serializes physical workspace reuse, never publication gates
 	reader          *cowReadWorkspace
+	readSlots       [3]cowBasisReadSlot // bounded, opportunistic parallel traversal owners
 	logicalSeq      uint64
 	refs            atomic.Int64
 	snapshot        *backenddb.Snapshot
@@ -35,21 +36,32 @@ type cowBackendBasis struct {
 	originalCustody *rootpublication.OriginalCleanupCustody
 }
 
+type cowBasisReadSlot struct {
+	mu     sync.Mutex
+	reader *cowReadWorkspace
+}
+
 // physicalWorkspaceLocked borrows only the immutable backend snapshot. Each
 // caller sets its original inspection limits under readMu. This workspace owns
 // traversal and, for successor reads, bounded Snappy/LZ4 leaf decoding. Generic
 // dictionary-free decoding belongs to the original cowCache.
 func (b *cowBackendBasis) physicalWorkspaceLocked(budget *memtable.COWBudget, limits valuelog.COWReadLimits) (*cowReadWorkspace, error) {
-	if b.reader == nil {
+	return b.workspaceLocked(&b.reader, budget, limits)
+}
+
+// The original basis retains authority; each slot owns only admitted scratch.
+// Its own mutex protects both lazy admission and the caller's inspection limits.
+func (b *cowBackendBasis) workspaceLocked(reader **cowReadWorkspace, budget *memtable.COWBudget, limits valuelog.COWReadLimits) (*cowReadWorkspace, error) {
+	if *reader == nil {
 		w, err := admitCOWReadWorkspace(budget, limits)
 		if err != nil {
 			return nil, err
 		}
 		w.basis = b.snapshot
-		b.reader = w
+		*reader = w
 	}
-	b.reader.limits = limits
-	return b.reader, nil
+	(*reader).limits = limits
+	return *reader, nil
 }
 
 func (b *cowBackendBasis) retain() { b.refs.Add(1) }
@@ -64,6 +76,16 @@ func (b *cowBackendBasis) release() error {
 	if reader != nil {
 		reader.close()
 		reader = nil
+	}
+	for i := range b.readSlots {
+		slot := &b.readSlots[i]
+		slot.mu.Lock()
+		reader, slot.reader = slot.reader, nil
+		slot.mu.Unlock()
+		if reader != nil {
+			reader.close()
+			reader = nil
+		}
 	}
 	b.completionMu.Lock()
 	snapshot, priorErr := b.snapshot, b.cleanupErr

@@ -393,6 +393,13 @@ func (w *cowReadWorkspace) read(ptr page.ValuePtr, leaf bool, dst []byte) ([]byt
 	if err != nil {
 		return nil, err
 	}
+	return w.readWithInspection(f, ptr, shape, leaf, dst)
+}
+
+// Preserve the original read-owner dispatch after an inspection handoff. Only
+// the complete cut may resolve dictionaries; generic dictionary-free codecs
+// still belong to its original cache. The retained cut pins f throughout.
+func (w *cowReadWorkspace) readWithInspection(f *os.File, ptr page.ValuePtr, shape valuelog.COWRecordShape, leaf bool, dst []byte) ([]byte, error) {
 	if w.basis != nil && shape.Compressed && (shape.DictID != 0 || (shape.Codec != valuelog.BlockCodecSnappy && shape.Codec != valuelog.BlockCodecLZ4)) {
 		return nil, valuelog.ErrCOWReadUnsupported
 	}
@@ -400,6 +407,37 @@ func (w *cowReadWorkspace) read(ptr page.ValuePtr, leaf bool, dst []byte) ([]byt
 		return w.readSharedRecord(f, ptr, shape, leaf, dst)
 	}
 	return w.readInspected(f, ptr, shape, leaf, dst)
+}
+
+// cowSuccessorInspection is caller-local metadata, never retained by a slot.
+// Its file is pinned by the original basis until the admitted read completes.
+type cowSuccessorInspection struct {
+	file  *os.File
+	shape valuelog.COWRecordShape
+}
+
+// Uncompressed physical pointer winners can reuse their basis slot's input and
+// output. Refused growth remains explicit until the caller refunds a fresh slot.
+// Compressed values and capacity fallbacks hand off this same inspection to the
+// original complete-cut resolver without transferring dictionary authority.
+func (w *cowReadWorkspace) readUncompressedOwned(ptr page.ValuePtr, inspected *cowSuccessorInspection) ([]byte, bool, error) {
+	f, err := w.file(ptr)
+	if err != nil {
+		return nil, false, err
+	}
+	shape, err := valuelog.InspectCOWRecord(f, ptr, w.limits)
+	if err != nil {
+		return nil, false, err
+	}
+	*inspected = cowSuccessorInspection{file: f, shape: shape}
+	if shape.Compressed {
+		return nil, false, nil
+	}
+	value, err := w.readInspected(f, ptr, shape, false, nil)
+	if err != nil {
+		return nil, false, err
+	}
+	return append([]byte(nil), value...), true, nil
 }
 
 // The caller's admitted read owns f and the inspected pointer; neither escapes

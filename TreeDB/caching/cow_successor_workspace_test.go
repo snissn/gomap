@@ -110,7 +110,13 @@ func TestCOWSuccessorBasisWorkspaceReuseAndCutOwnership(t *testing.T) {
 			}
 			defer busy.Close()
 			basis.readMu.Lock()
+			for i := range basis.readSlots {
+				basis.readSlots[i].mu.Lock()
+			}
 			busyKey, busyValue, busyFound, busyErr := busy.SeekGEVersionRange([]byte("a000"), []byte("a001"))
+			for i := range basis.readSlots {
+				basis.readSlots[i].mu.Unlock()
+			}
 			basis.readMu.Unlock()
 			if busyErr != nil || !busyFound || string(busyKey) != "a000" || !bytes.Equal(busyValue, want) {
 				t.Fatalf("busy successor: key=%q found=%t err=%v", busyKey, busyFound, busyErr)
@@ -161,6 +167,330 @@ func TestCOWSuccessorBasisWorkspaceReuseAndCutOwnership(t *testing.T) {
 				t.Fatalf("final successor owners not drained: %+v", stats)
 			}
 		})
+	}
+}
+
+func TestCOWSuccessorPhysicalPointerReusesBasisValueInput(t *testing.T) {
+	db := cowPointerFixture(t)
+	want := bytes.Repeat([]byte("physical-pointer"), 8)
+	if err := db.Set([]byte("a"), want); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	var owned []byte
+	var basis *cowBackendBasis
+	for range 8 {
+		s, err := db.acquireCOWSnapshotWithError()
+		if err != nil {
+			t.Fatal(err)
+		}
+		key, got, found, err := s.SeekGEVersionRange([]byte("a"), []byte("b"))
+		if err != nil || !found || string(key) != "a" || !bytes.Equal(got, want) {
+			_ = s.Close()
+			t.Fatalf("physical pointer successor key=%q found=%t value=%q err=%v", key, found, got, err)
+		}
+		basis = s.cowCut.basis
+		if s.cowReader != nil || basis.reader == nil || cap(basis.reader.output) < len(want) {
+			_ = s.Close()
+			t.Fatal("physical pointer winner allocated short-lived cut-local value input")
+		}
+		if owned != nil && !bytes.Equal(owned, want) {
+			_ = s.Close()
+			t.Fatal("basis scratch reuse changed a previous caller's output")
+		}
+		owned = got
+		if err := s.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A newer queued pointer belongs to the complete cut, not the physical
+	// basis's pinned files. It must retain its original local resolver.
+	newValue := bytes.Repeat([]byte("queued-pointer"), 9)
+	if err := db.Set([]byte("a"), newValue); err != nil {
+		t.Fatal(err)
+	}
+	s, err := db.acquireCOWSnapshotWithError()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	_, got, found, err := s.SeekGEVersionRange([]byte("a"), []byte("b"))
+	if err != nil || !found || !bytes.Equal(got, newValue) || s.cowReader == nil || !bytes.Equal(owned, want) {
+		t.Fatalf("queued pointer lost its complete-cut resolver: found=%t err=%v", found, err)
+	}
+}
+
+func cowSuccessorCompressedPointerFixture(t *testing.T) (*DB, []byte) {
+	t.Helper()
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := Open(dir, backend, Options{
+		DisableWAL: true, AllowUnsafe: true, MemtableMode: "cow_ordered", FlushThreshold: 1 << 30,
+		ValueLogPointerThreshold: 1, ValueLogCompression: uint8(vlogCompressionBlock), ValueLogBlockCodec: 2,
+	})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	want := bytes.Repeat([]byte("compressed-pointer"), 1024)
+	if err := db.Set([]byte("a"), want); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	return db, want
+}
+
+func TestCOWSuccessorCompressedInspectionHandoffUsesCutDecoder(t *testing.T) {
+	db, want := cowSuccessorCompressedPointerFixture(t)
+	s, err := db.acquireCOWSnapshotWithError()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	s.cowReadMu.Lock()
+	defer s.cowReadMu.Unlock()
+	var inspected cowSuccessorInspection
+	best, err := s.cowPhysicalSuccessorLocked([]byte("a"), []byte("b"), &inspected)
+	if err != nil || !best.found || best.valueOwned || inspected.file == nil ||
+		!inspected.shape.Compressed || inspected.shape.DictID != 0 || inspected.shape.Codec != valuelog.BlockCodecZSTD {
+		t.Fatalf("compressed winner did not hand off its inspection: best=%+v shape=%+v err=%v", best, inspected.shape, err)
+	}
+	// The descriptor owns no scratch. Releasing the entire scratch owner must
+	// leave its file/shape usable under the original cut's physical custody.
+	basis := s.cowCut.basis
+	basis.readMu.Lock()
+	basis.reader.close()
+	basis.reader = nil
+	basis.readMu.Unlock()
+	w, err := s.cowWorkspaceLocked()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := w.readWithInspection(inspected.file, best.ptr, inspected.shape, false, nil)
+	if err != nil || !bytes.Equal(got, want) || len(w.codecs) != 0 {
+		t.Fatalf("handoff lost complete-cut shared decoding: len=%d codecs=%d err=%v", len(got), len(w.codecs), err)
+	}
+	if shared := db.cow.physicalReader; shared == nil || len(shared.codecs) == 0 {
+		t.Fatal("handoff did not preserve the original cache decoder owner")
+	}
+	// A reused shape must still fail closed if bound to another pointer.
+	wrong := best.ptr
+	wrong.Offset++
+	if _, err := w.readWithInspection(inspected.file, wrong, inspected.shape, false, nil); err == nil {
+		t.Fatal("inspected handoff accepted a different pointer")
+	}
+}
+
+func TestCOWSuccessorFreshCompressedHandoffRefundsBeforeLocalAdmission(t *testing.T) {
+	db, want := cowSuccessorCompressedPointerFixture(t)
+	warm, err := db.acquireCOWSnapshotWithError()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, got, found, err := warm.SeekGEVersionRange([]byte("a"), []byte("b")); err != nil || !found || !bytes.Equal(got, want) {
+		_ = warm.Close()
+		t.Fatalf("warm original shared decoder: found=%t err=%v", found, err)
+	}
+	if err := warm.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err := db.acquireCOWSnapshotWithError()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	basis, budget := s.cowCut.basis, db.cow.budget
+	shared := db.cow.physicalReader
+	if s.cowReader != nil || shared == nil || len(shared.codecs) == 0 || basis.readSlots[0].reader != nil {
+		t.Fatal("fixture needs a warm shared decoder and cold cut/extra lane")
+	}
+	leaseCharge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
+	workspaceCharge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowReadWorkspace{}))) + cowReadWorkspaceInspectionCharge() + leaseCharge
+	pointCharge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowPointScratch{}))) + leaseCharge
+	outputCharge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowReadAllocation{}))) + leaseCharge +
+		memtable.COWAllocationCharge(cowReadCapacity(uint64(len(want))))
+	// The old independent cut can admit traversal plus output. Retaining a
+	// fresh extra lane would leave only outputCharge, stranding local admission.
+	remaining := workspaceCharge + pointCharge + outputCharge
+	before := budget.Stats()
+	pressure, err := budget.AcquireExternal(budget.Limits().MaxInFlightBytes - before.ReservedBytes - remaining - leaseCharge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pressure.Close()
+	pressured := budget.Stats()
+	basis.readMu.Lock()
+	defer basis.readMu.Unlock()
+	key, got, found, err := s.SeekGEVersionRange([]byte("a"), []byte("b"))
+	after := budget.Stats()
+	if err != nil || !found || string(key) != "a" || !bytes.Equal(got, want) {
+		t.Fatalf("compressed handoff stranded original local admission: found=%t err=%v", found, err)
+	}
+	if basis.readSlots[0].reader != nil || s.cowReader == nil || s.cowReader.point != nil || len(s.cowReader.codecs) != 0 ||
+		db.cow.physicalReader != shared || after.ExternalBytes != pressured.ExternalBytes+workspaceCharge+outputCharge ||
+		after.ReservedBytes != pressured.ReservedBytes+workspaceCharge+outputCharge || after.ExternalLeases != pressured.ExternalLeases+2 {
+		t.Fatalf("fresh compressed lane must refund before original cut admission: before=%+v after=%+v", pressured, after)
+	}
+}
+
+func TestCOWSuccessorFreshValueGrowthRefusalRefundsBeforeLocalFallback(t *testing.T) {
+	for _, busyPrimary := range []bool{false, true} {
+		t.Run(fmt.Sprintf("busy-primary=%t", busyPrimary), func(t *testing.T) {
+			db := cowPointerFixture(t)
+			want := bytes.Repeat([]byte("large-physical-pointer"), 1024)
+			if err := db.Set([]byte("a"), want); err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Checkpoint(); err != nil {
+				t.Fatal(err)
+			}
+			warm := bytes.Repeat([]byte("warm"), 256)
+			if err := db.Set([]byte("zz-warm"), warm); err != nil {
+				t.Fatal(err)
+			}
+			s, err := db.acquireCOWSnapshotWithError()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			if got, err := s.Get([]byte("zz-warm")); err != nil || !bytes.Equal(got, warm) {
+				t.Fatalf("warm local pointer input: len=%d err=%v", len(got), err)
+			}
+			local, basis := s.cowReader, s.cowCut.basis
+			if local == nil || local.point != nil || basis.reader != nil {
+				t.Fatal("fixture must have partially warmed local storage and no traversal owner")
+			}
+			// Inspect the actual physical target with caller scratch, without
+			// warming the local or opportunistic traversal/storage under test.
+			var key, leaf [page.PageSize]byte
+			entry, err := basis.snapshot.GetEntryExactWithFixedScratch([]byte("a"), key[:], leaf[:], nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			file, _, err := basis.snapshot.PinnedValueLogFile(entry.ValuePtr.FileID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			shape, err := valuelog.InspectCOWRecord(file, entry.ValuePtr, db.cow.readLimits())
+			if err != nil || shape.Compressed || shape.PayloadBytes() <= uint64(cap(local.input)) || shape.ValueBytes <= uint64(cap(local.output)) {
+				t.Fatalf("fixture needs real larger uncompressed input and output: shape=%+v err=%v", shape, err)
+			}
+			budget := db.cow.budget
+			leaseCharge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
+			growth := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowReadAllocation{}))) + leaseCharge +
+				memtable.COWAllocationCharge(cowReadCapacity(shape.PayloadBytes())) + memtable.COWAllocationCharge(cowReadCapacity(shape.ValueBytes))
+			pointCharge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowPointScratch{}))) + leaseCharge
+			// The original local traversal plus its required growth fits. A new
+			// workspace and point consume enough to refuse that same value grow.
+			remaining := pointCharge + growth
+			workspaceCharge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowReadWorkspace{}))) + cowReadWorkspaceInspectionCharge() + leaseCharge
+			if workspaceCharge >= growth {
+				t.Fatal("target growth must exceed the fresh workspace envelope")
+			}
+			before := budget.Stats()
+			pressure, err := budget.AcquireExternal(budget.Limits().MaxInFlightBytes - before.ReservedBytes - remaining - leaseCharge)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer pressure.Close()
+			pressured := budget.Stats()
+			if busyPrimary {
+				basis.readMu.Lock()
+				defer basis.readMu.Unlock()
+			}
+			gotKey, got, found, err := s.SeekGEVersionRange([]byte("a"), []byte("b"))
+			after := budget.Stats()
+			if err != nil || !found || string(gotKey) != "a" || !bytes.Equal(got, want) {
+				t.Fatalf("refused opportunistic value growth lost original local read: found=%t len=%d err=%v", found, len(got), err)
+			}
+			if basis.reader != nil || basis.readSlots[0].reader != nil || s.cowReader != local || local.point != nil ||
+				after.ExternalBytes != pressured.ExternalBytes+growth || after.ReservedBytes != pressured.ReservedBytes+growth ||
+				after.ExternalLeases != pressured.ExternalLeases+1 {
+				t.Fatalf("fresh value refusal must refund before exactly one local grow: before=%+v after=%+v", pressured, after)
+			}
+		})
+	}
+}
+
+func TestCOWSuccessorParallelBasisSlotsReuseAndRelease(t *testing.T) {
+	db := cowPointerFixture(t)
+	want := bytes.Repeat([]byte("parallel-pointer"), 8)
+	if err := db.Set([]byte("a"), want); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	old, err := db.acquireCOWSnapshotWithError()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer old.Close()
+	basis := old.cowCut.basis
+	var workspaces []*cowReadWorkspace
+	var owned [][]byte
+	basis.readMu.Lock()
+	lockedSlots, locked := 0, true
+	defer func() {
+		if locked {
+			for i := 0; i < lockedSlots; i++ {
+				basis.readSlots[i].mu.Unlock()
+			}
+			basis.readMu.Unlock()
+		}
+	}()
+	for i := range basis.readSlots {
+		s, err := db.acquireCOWSnapshotWithError()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer s.Close()
+		_, value, found, readErr := s.SeekGEVersionRange([]byte("a"), []byte("b"))
+		if readErr != nil || !found || !bytes.Equal(value, want) || s.cowReader != nil || basis.readSlots[i].reader == nil {
+			t.Fatalf("parallel slot %d did not reuse basis-owned value/traversal: found=%t err=%v", i, found, readErr)
+		}
+		owned = append(owned, value)
+		workspaces = append(workspaces, basis.readSlots[i].reader)
+		if err := s.Close(); err != nil {
+			t.Fatal(err)
+		}
+		basis.readSlots[i].mu.Lock()
+		lockedSlots++
+	}
+	for i := range basis.readSlots {
+		basis.readSlots[i].mu.Unlock()
+	}
+	basis.readMu.Unlock()
+	locked = false
+	// Replace the root, then release the last original cut. Every slot must
+	// detach/refund before the basis snapshot releases its physical custody.
+	if err := db.Set([]byte("a"), []byte("new")); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	if err := old.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for i, w := range workspaces {
+		if basis.readSlots[i].reader != nil || w.point != nil || w.lease != nil || w.budget != nil || !bytes.Equal(owned[i], want) {
+			t.Fatalf("parallel slot %d retained scratch or changed owned output", i)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if stats := db.COWMemoryStats(); stats.TotalBytes != 0 || stats.ExternalLeases != 0 || stats.Views != 0 {
+		t.Fatalf("parallel basis owners did not refund: %+v", stats)
 	}
 }
 

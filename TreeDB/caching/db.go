@@ -34694,14 +34694,20 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 
 	backendRangeKnown := db.backendRangeKnown
 	backendRange := db.backendRange
-	view = db.retainMemtableView()
+	// The published iterator root is immutable. Under db.mu, inspect it before
+	// taking a tracked view lease: a backend-only iterator never uses the view's
+	// memtables. Close may unpublish the view, but does not clear its root snapshot.
+	publishedView := db.memtables.Load()
 	queueLenLocked := 0
 	var iteratorSnap rootDomainSnapshot
-	if snap, ok := liveIteratorRootDomainSnapshot(view); ok {
+	if snap, ok := liveIteratorRootDomainSnapshot(publishedView); ok {
 		iteratorSnap = snap
 		queueLenLocked = len(snap.immutables)
-	} else if view == nil {
+	} else if publishedView == nil {
 		queueLenLocked = len(db.queue)
+	}
+	if queueLenLocked > 0 {
+		view = db.retainMemtableView()
 	}
 
 	db.mu.Unlock()
@@ -34710,10 +34716,6 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 	// are no in-memory iterator sources to merge. Avoid memtable view retain/release
 	// and construct a backend iterator directly.
 	if queueLenLocked == 0 {
-		if view != nil {
-			db.releaseMemtableView(view)
-			view = nil
-		}
 		decorate := func(it merging.Iterator, sourcesUsed int) merging.Iterator {
 			if iteratorDebug {
 				db.observeIteratorShape(0, sourcesUsed)
@@ -35160,14 +35162,20 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 		}
 	}
 
-	view = db.retainMemtableView()
+	// The published iterator root is immutable. Under db.mu, inspect it before
+	// taking a tracked view lease: a backend-only iterator never uses the view's
+	// memtables. Close may unpublish the view, but does not clear its root snapshot.
+	publishedView := db.memtables.Load()
 	queueLenLocked := 0
 	var iteratorSnap rootDomainSnapshot
-	if snap, ok := liveIteratorRootDomainSnapshot(view); ok {
+	if snap, ok := liveIteratorRootDomainSnapshot(publishedView); ok {
 		iteratorSnap = snap
 		queueLenLocked = len(snap.immutables)
-	} else if view == nil {
+	} else if publishedView == nil {
 		queueLenLocked = len(db.queue)
+	}
+	if queueLenLocked > 0 {
+		view = db.retainMemtableView()
 	}
 
 	db.mu.Unlock()
@@ -35182,10 +35190,6 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 
 	// Backend-only fast path.
 	if queueLenLocked == 0 {
-		if view != nil {
-			db.releaseMemtableView(view)
-			view = nil
-		}
 		decorate := func(it merging.Iterator, sourcesUsed int) merging.Iterator {
 			if iteratorDebugEnabled.Load() {
 				it = &debugIterator{Iterator: it, queueLen: 0, sourcesUsed: sourcesUsed}

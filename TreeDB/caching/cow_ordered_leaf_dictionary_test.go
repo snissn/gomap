@@ -8,10 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"unsafe"
 
 	"github.com/snissn/compress/zstd"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/dictdb"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -282,5 +284,137 @@ func TestCOWOrderedIteratorDictionaryLeafFallback(t *testing.T) {
 	}
 	if got, err := db.Get([]byte("a000")); err != nil || string(got) != "new-current-value" {
 		t.Fatalf("new cut value: %q %v", got, err)
+	}
+}
+
+// Use the maintained dictionary leaf producer and training recipe, rather than
+// inventing a read hook or an unsupported cached leaf serialization.
+func cowSuccessorDictionaryLeafFixture(t *testing.T) (*DB, []byte, page.LeafLogPtr) {
+	t.Helper()
+	dir := t.TempDir()
+	var store *dictdb.Store
+	backend, err := backenddb.Open(backenddb.Options{
+		Dir: dir, IndexOuterLeavesInValueLog: true, DisableBackgroundPrune: true,
+		ValueLog: backenddb.ValueLogOptions{DictLookup: func(id uint64) ([]byte, error) {
+			if store == nil {
+				return nil, valuelog.ErrMissingDict
+			}
+			return store.GetDictBytes(context.Background(), id)
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := Open(dir, backend, Options{
+		DisableWAL: true, AllowUnsafe: true, MemtableMode: "cow_ordered", FlushThreshold: 1 << 30,
+		IndexOuterLeavesInValueLog: true, ValueLogPointerThreshold: 256,
+		ValueLogCompression: uint8(vlogCompressionDict), ValueLogAutoPolicy: uint8(vlogAutoSize),
+		ValueLogCompressionAutotune: valuelog.AutotuneOptions{Mode: valuelog.AutotuneMedium}, ValueLogDictIncompressibleHoldBytes: -1,
+	})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	want := bytes.Repeat([]byte("old-inline-dictionary-value|"), 4)
+	samples := make([][]byte, 4)
+	for sample := range samples {
+		leaf := make([]byte, page.PageSize)
+		builder := node.NewBuilderWithOptions(leaf, page.PageTypeLeaf, node.BuilderOptions{})
+		for i := 0; i < 16; i++ {
+			if err := builder.AddLeafEntry([]byte(fmt.Sprintf("a%03d", sample*16+i)), want, node.FlagInline, page.ValuePtr{}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		builder.FinishNoNode()
+		samples[sample], _, err = valuelog.MaybeCompactLeafLogPayload(leaf)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	dictionary, err := zstd.BuildDict(zstd.BuildDictOptions{
+		ID: 73, Contents: samples, History: append([]byte(nil), samples[0]...), Offsets: [3]int{1, 4, 8}, Level: zstd.SpeedFastest,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err = dictdb.Open(dir+"/dictdb", backenddb.Options{ChunkSize: 64 << 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dictID, err := store.PutDictBytes(context.Background(), dictionary)
+	if err != nil {
+		_ = store.Close()
+		t.Fatal(err)
+	}
+	db.SetDictStore(store)
+	backend.SetLeafPageLog(&cowDictionaryLeafLog{
+		cowDictionaryLeafLifecycle: &cachingLeafPageLog{db: db, lane: &db.leafLog}, db: db, dictID: dictID, dictionary: dictionary,
+	})
+	for i := 0; i < 64; i++ {
+		if err := db.Set([]byte(fmt.Sprintf("a%03d", i)), want); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	basis := db.cow.cut.basis
+	var key, leaf [page.PageSize]byte
+	var pointer page.LeafLogPtr
+	stop := errors.New("capture real dictionary leaf")
+	_, err = basis.snapshot.GetEntryExactWithFixedScratch([]byte("a000"), key[:], leaf[:], func(ptr page.LeafLogPtr, _ []byte) ([]byte, error) {
+		pointer = ptr
+		return nil, stop
+	})
+	if !errors.Is(err, stop) || pointer.FileID == 0 {
+		t.Fatalf("real dictionary leaf pointer: %+v err=%v", pointer, err)
+	}
+	return db, want, pointer
+}
+
+func TestCOWSuccessorFreshDictionaryLaneRefundsBeforeLocalTraversal(t *testing.T) {
+	db, want, pointer := cowSuccessorDictionaryLeafFixture(t)
+	s, err := db.acquireCOWSnapshotWithError()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	// Warm the real original-cut dictionary decoder without point scratch.
+	// The subsequent public successor still needs to admit its own traversal.
+	s.cowReadMu.Lock()
+	w, err := s.cowWorkspaceLocked()
+	var pageScratch [page.PageSize]byte
+	if err == nil {
+		_, err = w.readLeaf(pointer, pageScratch[:])
+	}
+	s.cowReadMu.Unlock()
+	if err != nil || w.point != nil || len(w.codecs) == 0 || w.codecs[0].id == 0 {
+		t.Fatalf("warm actual dictionary decoder without traversal: err=%v", err)
+	}
+	basis, budget := s.cowCut.basis, db.cow.budget
+	leaseCharge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
+	workspaceCharge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowReadWorkspace{}))) + cowReadWorkspaceInspectionCharge() + leaseCharge
+	pointCharge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowPointScratch{}))) + leaseCharge
+	// Exactly one fresh lane fits, but retaining it during the dictionary
+	// retry would prevent admission of the original local point scratch.
+	before := budget.Stats()
+	pressure, err := budget.AcquireExternal(budget.Limits().MaxInFlightBytes - before.ReservedBytes - workspaceCharge - pointCharge - leaseCharge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pressure.Close()
+	pressured := budget.Stats()
+	basis.readMu.Lock()
+	defer basis.readMu.Unlock()
+	key, got, found, err := s.SeekGEVersionRange([]byte("a000"), []byte("a001"))
+	after := budget.Stats()
+	if err != nil || !found || string(key) != "a000" || !bytes.Equal(got, want) {
+		t.Fatalf("dictionary handoff stranded original local traversal: found=%t err=%v", found, err)
+	}
+	if basis.readSlots[0].reader != nil || s.cowReader != w || w.point == nil ||
+		after.ExternalBytes != pressured.ExternalBytes+pointCharge || after.ReservedBytes != pressured.ReservedBytes+pointCharge ||
+		after.ExternalLeases != pressured.ExternalLeases+1 {
+		t.Fatalf("fresh dictionary lane must refund before exactly one local point: before=%+v after=%+v", pressured, after)
 	}
 }

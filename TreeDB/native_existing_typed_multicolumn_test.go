@@ -82,8 +82,44 @@ func checkNativeTypedMultiColumnDocument(t *testing.T, got []byte, row nativeTyp
 	}
 }
 
+func pauseNativeTypedMultiColumnMaintenance(t *testing.T) func() {
+	t.Helper()
+	const key = "TREEDB_VLOG_MAINTENANCE_PAUSE_FILE"
+	previous, wasSet := os.LookupEnv(key)
+	pauseFile := filepath.Join(t.TempDir(), "typed-multicolumn-maintenance.pause")
+	if err := os.WriteFile(pauseFile, []byte("pause"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(key, pauseFile)
+	released := false
+	resume := func() {
+		t.Helper()
+		if released {
+			return
+		}
+		released = true
+		if err := os.Remove(pauseFile); err != nil {
+			t.Fatal(err)
+		}
+		var err error
+		if wasSet {
+			err = os.Setenv(key, previous)
+		} else {
+			err = os.Unsetenv(key)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(resume)
+	return resume
+}
+
 func runNativeTypedMultiColumn(t *testing.T, dir string, crash bool) {
 	t.Helper()
+	// Maintenance may checkpoint before GC. Fence its admission before Open
+	// until the exact unapplied physical token and command frame are checked.
+	resumeMaintenance := pauseNativeTypedMultiColumnMaintenance(t)
 	opts := indexedSliceOptions(ProfileCommandWALDurable, dir)
 	database, err := Open(opts)
 	if err != nil {
@@ -196,6 +232,7 @@ func runNativeTypedMultiColumn(t *testing.T, dir string, crash bool) {
 		t.Log("TYPED MULTICOLUMN UNAPPLIED basis=2 accepted=3")
 		os.Exit(97)
 	}
+	resumeMaintenance()
 	native, err := collections.NewNativeJSONManager(handle)
 	if err != nil {
 		t.Fatal(err)
