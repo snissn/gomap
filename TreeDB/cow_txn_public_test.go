@@ -1066,13 +1066,13 @@ func TestPublicCOWTxnGroupCommitSharesSyncAfterInstall(t *testing.T) {
 		t.Fatalf("redundant group sync: %d", n)
 	default:
 	}
-	// The final accepted command is the group's durable barrier. Checkpoint
+	// The final accepted command is the group's last durable mutation. Checkpoint
 	// must cover that identity without requiring a later mutation to advance
 	// the cache's cut, and without changing an already-held logical view.
 	accepted := publicStatUint64(t, db, "treedb.command_wal.live_accepted_max_lsn")
 	logical := publicStatUint64(t, db, "treedb.cache.cow.txn.logical_seq")
-	if accepted != 3 || logical != 2 {
-		t.Fatalf("group endpoint accepted=%d logical=%d, want 3/2", accepted, logical)
+	if accepted != 2 || logical != 2 {
+		t.Fatalf("group endpoint accepted=%d logical=%d, want 2/2", accepted, logical)
 	}
 	for key, want := range map[string]string{"a": "one", "b": "two"} {
 		if got, err := db.Get([]byte(key)); err != nil || string(got) != want {

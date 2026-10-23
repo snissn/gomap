@@ -57,29 +57,24 @@ func TestPublicCommandWALRelaxedExplicitSyncPersistsGroupedDurablePrefix(t *test
 		t.Fatalf("Open relaxed command WAL: %v", err)
 	}
 	defer func() { _ = db.Close() }()
-	// This test certifies the grouped durable-prefix representation rather than
-	// the production solo-sync optimization.
+	// Force coordinator routing. Its durable mutation carries the prefix marker;
+	// the captured physical sync must complete before this call returns.
 	db.commandWALGroupCommit.testBeforeSync = func(int) {}
-
 	if err := db.SetSync([]byte("durable"), []byte("value")); err != nil {
-		t.Fatalf("SetSync: %v", err)
+		t.Fatal(err)
 	}
-
 	frames := scanPublicCommandWALV2(t, dir)
-	if len(frames) != 2 {
-		t.Fatalf("frames=%d, want relaxed mutation plus grouped durable-prefix barrier: %+v", len(frames), frames)
+	if len(frames) != 1 {
+		t.Fatalf("frames=%d, want one captured durable mutation", len(frames))
 	}
-	if got := frames[0].DurabilityClass; got != commitlog.CommandDurabilityRelaxed {
-		t.Fatalf("mutation durability class=%v, want relaxed group member", got)
+	if got := frames[0].DurabilityClass; got != commitlog.CommandDurabilityDurable {
+		t.Fatalf("mutation durability class=%v, want durable", got)
 	}
 	if got := frames[0].Kind; got != commitlog.CommandKindRawKVBatch {
 		t.Fatalf("kind=%v, want RawKVBatch", got)
 	}
-	if got := frames[1].DurabilityClass; got != commitlog.CommandDurabilityDurable {
-		t.Fatalf("barrier durability class=%v, want durable", got)
-	}
-	if got := frames[1].Kind; got != commitlog.CommandKindDurablePrefixBarrier {
-		t.Fatalf("barrier kind=%v, want DurablePrefixBarrier", got)
+	if got := statMapUint64(t, db.Stats(), "treedb.command_wal.durable_wal_lsn"); got < frames[0].LSN {
+		t.Fatalf("completed durable frontier=%d, want >=%d", got, frames[0].LSN)
 	}
 }
 

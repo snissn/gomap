@@ -36,7 +36,9 @@ func (db *DB) CaptureCommandWALPrefix() (_ *CommandWALCapturedPrefix, result Com
 // release. Only then may the caller zero it and start a new capture. No waiter
 // or other consumer may retain an earlier pointer across that reuse boundary.
 // A nil owner selects ordinary authority; native semantic mode still requires
-// the original private COW owner.
+// the original private COW owner. That owner's fully prepared commands need
+// teardown and raw append authority, without legacy publisher admission held
+// by an overlapping physical checkpoint.
 func (db *DB) CaptureCommandWALPrefixInto(target *CommandWALCapturedPrefix, owner *transactionowner.Owner) (*CommandWALCapturedPrefix, CommandWALBarrierResult, error) {
 	if target == nil || target.db != nil {
 		return nil, CommandWALBarrierResult{}, errors.New("command WAL capture target must be unused")
@@ -48,15 +50,34 @@ func (db *DB) CaptureCommandWALPrefixInto(target *CommandWALCapturedPrefix, owne
 }
 
 func (db *DB) captureCommandWALPrefix(owner *transactionowner.Owner, target *CommandWALCapturedPrefix) (_ *CommandWALCapturedPrefix, result CommandWALBarrierResult, err error) {
-	if err = db.acquireCommandWALPublishWithBarriersForOwner(owner); err != nil {
+	// The fixed COW owner appends only fully prepared commands under its typed
+	// staging guard. As with LockPrivateCOWStagingGuard, it needs raw append
+	// authority, not legacy prepared-publisher admission. A physical checkpoint
+	// can retain that admission through I/O while COW successor cuts advance.
+	privateOwner := db != nil && owner != nil && owner == db.privateCOWOwner
+	if privateOwner {
+		db.teardownMu.RLock()
+		if db.closing.Load() {
+			db.teardownMu.RUnlock()
+			return nil, result, ErrClosed
+		}
+		db.commandWALRawPublishMu.Lock()
+	} else if err = db.acquireCommandWALPublishWithBarriersForOwner(owner); err != nil {
 		return nil, result, err
 	}
 	retained := false
 	defer func() {
 		if !retained {
-			db.unlockCommandWALRawPublishWithAdmissionAndTeardown()
+			db.commandWALRawPublishMu.Unlock()
+			if !privateOwner {
+				db.commandWALRawAdmissionMu.Unlock()
+			}
+			db.teardownMu.RUnlock()
 		}
 	}()
+	if db.closing.Load() {
+		return nil, result, ErrClosed
+	}
 	if db == nil || !db.commandWAL || db.commandJournal == nil {
 		return nil, result, ErrCommandWALUnsupported
 	}
@@ -106,7 +127,9 @@ func (db *DB) captureCommandWALPrefix(owner *transactionowner.Owner, target *Com
 		target = new(CommandWALCapturedPrefix)
 	}
 	*target = CommandWALCapturedPrefix{db: db, dependencies: dependencies, result: result}
+	flushStarted := time.Now()
 	journal, err := db.commandJournal.CaptureSyncInto(&target.journalCapture, rotations)
+	db.observeCommandWALFlush(commandWALAppendStatsBarrier, false, time.Since(flushStarted))
 	if err != nil {
 		dependencies.Release()
 		db.commandWALFlushPoisoned.Store(true)
@@ -115,7 +138,9 @@ func (db *DB) captureCommandWALPrefix(owner *transactionowner.Owner, target *Com
 	target.journal = journal
 	// Keep teardown pinned, but admit new prepared publishers and raw appends.
 	db.commandWALRawPublishMu.Unlock()
-	db.commandWALRawAdmissionMu.Unlock()
+	if !privateOwner {
+		db.commandWALRawAdmissionMu.Unlock()
+	}
 	retained = true
 	return target, result, nil
 }

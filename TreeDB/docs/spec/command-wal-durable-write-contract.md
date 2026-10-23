@@ -75,6 +75,13 @@ closure. It releases append authority before synchronizing those captured WAL
 files. Successors can append and install complete COW cuts while that physical
 sync is in flight. A visible cut can therefore precede its durable caller's ACK.
 
+Ordinary capture drains the registered prepared publishers. Capture by the
+original private COW owner uses the same narrower authority as its staging
+guard: teardown and raw append ownership, without legacy publisher admission.
+Those commands are already fully prepared, so a physical checkpoint may retain
+legacy admission through its I/O while a COW successor captures its WAL prefix.
+This exception grants no authority to an arbitrary caller or another owner.
+
 Only tickets included in that capture become eligible for durable ACK. A later
 frame may reach storage incidentally during the same file sync, but requires its
 own covering capture. Resource and teardown pins outlive the physical sync and
@@ -222,7 +229,7 @@ window.
 | --- | --- | --- |
 | public operation | `treedb.public.batch.write{,_sync}.*`, `treedb.public.point.*` | caller-visible operations and wall time |
 | frame append | `treedb.command_wal.append.{point,payload,entry_scan,intent}.*` | one typed frame accepted by an append route; not a syscall count |
-| writer boundary | `treedb.command_wal.flush.<path>.*`, `treedb.command_wal.sync.<path>.*` | logical command-writer Flush or durable Sync calls; `barrier` has no associated frame |
+| writer boundary | `treedb.command_wal.flush.<path>.*`, `treedb.command_wal.sync.<path>.*` | logical command-writer Flush or durable Sync calls; captured-prefix userspace flush and physical sync are group-scoped under `barrier`, which need not have an associated frame |
 | command writes | `treedb.command_wal.write.{syscalls,bytes,ns,errors}_total` | actual underlying `write`/`writev` calls made by the command writer |
 | command file sync | `treedb.command_wal.file_sync.{calls,ns,errors}_total` | calls at the injected production hook, which is `os.File.Sync` |
 | directory sync | `treedb.command_wal.directory_sync.{calls,ns,errors}_total` | parent-directory sync on segment creation/rotation |

@@ -902,8 +902,12 @@ publication order and one collector; no speculative root chain or second queue.
 Explicit test delay seams remain for deterministic group controls.
 
 Durable public append orders dependencies and emits the existing V2 durable class
-on the mutation, then registers its ticket without physical WAL sync. Capture
-drains registered publication barriers, closes the selected dependency prefix,
+on the mutation, then registers its ticket without physical WAL sync. Ordinary
+capture drains registered publication barriers. The original private COW owner
+already appends fully prepared commands under its typed staging guard; its
+capture takes teardown and raw append authority without waiting for legacy
+prepared-publisher admission retained by an overlapping physical checkpoint.
+Both routes close the selected dependency prefix,
 adds a V2 durable-prefix marker only when promoting a relaxed suffix, flushes
 complete buffers and pins exact segment identities and byte/LSN frontiers. It retains teardown
 but releases append/admission/publication gates before syncing the pinned WAL

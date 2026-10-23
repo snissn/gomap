@@ -76,8 +76,8 @@ const (
 
 // RawKVCommandWALAppendMode declares the durability boundary that will cover a
 // raw-KV command frame. It is intentionally separate from whether this append
-// performs the sync: grouped durable writes append participant frames first and
-// acknowledge them only after a later durable-prefix barrier.
+// performs the sync: captured durable writes append a durable-class mutation first and
+// acknowledge it only after its immutable captured physical prefix syncs.
 type RawKVCommandWALAppendMode uint8
 
 const (
@@ -2980,7 +2980,7 @@ func (db *DB) appendCommandWALIntentWithTiming(intent *commandWALBatchIntent, sy
 	}
 	flushStart := time.Time{}
 	if requestTiming != nil {
-		requestTiming.FlushObserved = true
+		requestTiming.FlushObserved = !intent.capturedDurable
 		requestTiming.Sync = actualSync
 		requestTiming.FlushSync = actualSync
 		flushStart = time.Now()
