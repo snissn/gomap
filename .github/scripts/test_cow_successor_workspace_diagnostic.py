@@ -221,7 +221,7 @@ class COWSuccessorDiagnosticTests(unittest.TestCase):
         self.assertIn('"$RUNNER_TEMP/mvcc-raw-path-gate/cow-successor"', step)
         self.assertIn("timeout-minutes: 15", workflow)
         self.assertIn('PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}', workflow)
-        self.assertIn('if [[ "$PR_HEAD_REF" == "codex/5214-cow-successor-workspace" ]] &&', workflow)
+        self.assertIn('if [[ "$PR_HEAD_REF" == "codex/5208-external-recovery-main" ]] &&', workflow)
         self.assertIn("scripts/mvcc_primary_cost_gate.py", workflow)
         self.assertEqual(diagnostic.GOMAXPROCS, 8)
         self.assertEqual(diagnostic.DEADLINE_SECONDS, 360)

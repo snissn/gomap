@@ -12,7 +12,7 @@
     "M0 observation is manual diagnostic-only on a separately fixed product; no forecast starts it or replaces failed M0 acceptance.",
     "Bounded maintenance comparison is a manually granted diagnostic on fixed baseline/candidate products; no forecast starts it or establishes cost, M0 or native acceptance."
   ],
-  "discovery_source_sha256": "3596ea4551563211976074271f28c08bce52a40012d28add390b53ec624bf630",
+  "discovery_source_sha256": "c35dee467f548809d2c53c95aafe303211269e5245109d1d19aa7b3d4d837945",
   "dynamic_consumers": [
     {
       "behavior": "AST/WalkDir discovery and go test subprocess producer witnesses; all TreeDB test/race members retained",
@@ -2363,7 +2363,7 @@
         },
         "workflow_dispatch": null
       },
-      "git_blob": "f8ce04bb27a3ffbc104348123ffe816e815c4faf",
+      "git_blob": "2cad1ab648b2e79505a6e13d340fa90ac4d34955",
       "jobs": {
         "mvcc-raw-path-gate": {
           "checkout": [
@@ -2388,7 +2388,7 @@
               "name": "Resolve pull request and relevant paths"
             },
             {
-              "command_sha256": "4a592ad86e16c8a8c701425d59e9f0e29342ff7122888ed7b78d8eda9da0f15b",
+              "command_sha256": "0453b4bbe72ce16035f3576c325fe22aaa5349aae420ea051dc49aa4f218ab4a",
               "entrypoint": ".github/workflows/treedb-tests.yml:83",
               "env": {
                 "BASE_SHA": "${{ steps.scope.outputs.base_sha }}",
@@ -2921,7 +2921,7 @@
           "runs_on": "${{ matrix.os }}"
         }
       },
-      "sha256": "95a1e1749e4c85c487f0b6a39f32f147fd36bf659670dd504fee5bad29b27277"
+      "sha256": "69012cfa26d2eea4043bfd076478b684ad568afa8cad7a9ae94c21cf15fa1f0b"
     },
     "treedb-vacuum-m0-observation.yml": {
       "coverage": "existing execution only; triggers/path filters are unchanged",

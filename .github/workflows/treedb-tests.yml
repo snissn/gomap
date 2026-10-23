@@ -89,7 +89,7 @@ jobs:
           git cat-file -e "${BASE_SHA}^{commit}"
           git diff --name-only "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/pr-files.txt"
           cat "$RUNNER_TEMP/pr-files.txt"
-          if [[ "$PR_HEAD_REF" == "codex/5214-cow-successor-workspace" ]] && \
+          if [[ "$PR_HEAD_REF" == "codex/5208-external-recovery-main" ]] && \
              grep -Eq "$COW_SUCCESSOR_PATH_RE" "$RUNNER_TEMP/pr-files.txt"; then
             echo "cow_successor=true" >> "$GITHUB_OUTPUT"
           else

@@ -201,3 +201,18 @@ PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/test_cow_successor_workspace_d
 PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/test_mvcc_primary_cost_gate.py
 PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/test_treedb_ci_contract.py
 ```
+
+## Canonical checkpoint integration
+
+The combined delivery in PR #5209 freezes product
+`00211fbccfb6460d3255ab8c9b19e2cb91e19302`: external recovery #5208,
+leaf maintenance #5216, raw dependency closure #5218 and this workspace change,
+including the corrected DATA/PRIMARY/ordered producer distinctions and the
+reviewed power-loss model. The baseline remains
+`8c392a8e27b8f23e795d07edfb3782ca32d46976`. The runner's five permitted
+tooling paths, fixture hash, ten cells, 60 rows, deadlines, order and numerical
+gates are unchanged. Its narrow branch selector now names the canonical
+integration branch. The tooling-only descendant must qualify this complete
+product; the original 030 and 88 evidence remains bound to those earlier
+sources. No combined-head result exists at this tooling commit. Earlier strict
+PRIMARY byte failures remain failed and are not replaced by the COW result.
