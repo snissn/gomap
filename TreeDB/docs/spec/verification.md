@@ -177,6 +177,21 @@ activation evidence and separate natural versus instrumented observations.
 
 ## Immutable COW cache qualification
 
+`TestCOWSuccessorBasisWorkspaceReuseAndCutOwnership` covers opportunistic
+successor scratch reuse across short-lived cuts, owned output, checkpoint
+handoff and final basis/DB teardown. `TestCOWSuccessorBasisWorkspaceFiniteAdmission`
+covers refusal and retry without unadmitted backing.
+`TestCOWSuccessorBasisWorkspaceDoesNotWaitForSharedBlockDecoder` holds only the
+generic decoder mutex while a cold compressed successor reads. The unchanged
+`TestCOWRetainedReadersOwnPhysicalScratch` also holds the basis mutex and checks
+point, successor and iterator progress through their independent paths. The
+dictionary-leaf fixture includes successor fallback on the exact caller cut.
+`TestCOWSuccessorWorkspacePublicGetAtAndHistory` exercises resolved public
+`no_wal_fast/cow_ordered` GetAt with real checkpointed inline/pointer histories,
+concurrent readers and checkpoint handoffs, plus exact-key and prefix iterators.
+The associated diagnostic benchmark and predeclared A/B boundary are documented
+in [successor workspace diagnostics](../benchmarks/cow-successor-workspace-5214.md).
+
 
 `TestCOWPhysicalLeafCacheActivationAndCapturedCuts` exercises actual COW public
 point and owned successor reads of real logged leaves, then the same captured

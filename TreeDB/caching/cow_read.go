@@ -487,6 +487,38 @@ func (s *Snapshot) cowOwnedPointSuccessor(disk node.LeafEntry, found bool, start
 
 func (s *Snapshot) cowPhysicalSuccessorLocked(start, end []byte) (pointSuccessorCandidate, error) {
 	basis := s.cowCut.basis
+	// Reuse the original physical owner's admitted traversal storage when idle.
+	// Never wait for another reader's scratch: retained readers keep their
+	// independent cut-local path when the basis is already in use.
+	if !basis.readMu.TryLock() {
+		return s.cowCutPhysicalSuccessorLocked(start, end)
+	}
+	defer basis.readMu.Unlock()
+	w, err := basis.physicalWorkspaceLocked(s.cowCache.budget, s.cowCache.readLimits())
+	if err != nil {
+		return pointSuccessorCandidate{}, err
+	}
+	point, err := w.pointScratch()
+	if err != nil {
+		return pointSuccessorCandidate{}, err
+	}
+	readLeaf := func(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
+		// Keep the successor's original Snappy/LZ4 block-decoder policy.
+		// Borrowing traversal must not introduce a new physicalMu wait.
+		return basis.readPhysicalLeafWithWorkspace(s.cowCache, w, ptr, dst, false, true)
+	}
+	disk, found, err := basis.snapshot.SeekGEEntryWithFixedScratch(start, end, point.key[:], point.leaf[:], &point.successor, readLeaf)
+	if err != nil {
+		return pointSuccessorCandidate{}, err
+	}
+	// The selected key/inline value must become owned before readMu unlocks.
+	return s.cowOwnedPointSuccessor(disk, found, start, end), nil
+}
+
+// cowReadMu protects the original per-cut traversal/decoder workspace. This is
+// also the nonblocking fallback when another reader owns the basis workspace.
+func (s *Snapshot) cowCutPhysicalSuccessorLocked(start, end []byte) (pointSuccessorCandidate, error) {
+	basis := s.cowCut.basis
 	w, err := s.cowWorkspaceLocked()
 	if err != nil {
 		return pointSuccessorCandidate{}, err

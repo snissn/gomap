@@ -213,6 +213,23 @@ func TestCOWOrderedIteratorDictionaryLeafFallback(t *testing.T) {
 			t.Fatalf("public dictionary point: %q %v", got, err)
 		}
 	}
+	// An available shared traversal workspace cannot supply this dictionary's
+	// authority. Successor fallback must use the original complete caller cut.
+	successor, err := db.acquireCOWSnapshotWithError()
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, value, found, seekErr := successor.SeekGEVersionRange([]byte("a000"), []byte("a001"))
+	if seekErr != nil || !found || string(key) != "a000" || !bytes.Equal(value, want) || successor.cowCut.basis != basis || successor.cowReader == nil || successor.cowReader.snapshot != successor {
+		_ = successor.Close()
+		t.Fatalf("dictionary successor lost its exact caller cut: key=%q found=%t err=%v", key, found, seekErr)
+	}
+	if err := successor.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(value, want) {
+		t.Fatal("dictionary successor output did not survive caller-cut close")
+	}
 
 	it, err := old.Iterator(nil, nil)
 	if err != nil {

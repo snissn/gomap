@@ -1674,3 +1674,12 @@ no median bytes/allocation growth, identity binding and quiet-host qualification
 remain unchanged. Old failed/noisy measurements remain failed retained evidence;
 new-harness rows cannot be silently pooled with them. Short diagnostics do not
 establish that disabling workers resolves every observed byte difference.
+
+### Standalone COW successor workspace diagnostic
+
+`BenchmarkCOWSuccessorWorkspace` in `TreeDB/mvcc` measures checkpointed public
+`no_wal_fast/cow_ordered` GetAt and unchanged prefix iteration. It emits ordinary
+Go benchmark rows (ns/op, B/op, allocs/op), not benchprof inputs. The exact
+configuration, `go test -c`/prebuilt-binary commands and ten-cell, three-pair
+diagnostic boundary are in
+[the #5214 packet](../../TreeDB/docs/benchmarks/cow-successor-workspace-5214.md).
