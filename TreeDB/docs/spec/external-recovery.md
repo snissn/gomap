@@ -184,3 +184,25 @@ checkpoint retirement, poison/reopen after publication errors, and subprocess
 crash cuts before and after CURRENT. These are focused API proofs; peer Raft
 acceptance, reader drain, durable accepted intent and real server recovery require
 consumer-level qualification.
+
+## Component cost diagnostic
+
+`BenchmarkExternalRecoveryCheckpoint` uses the ordinary public no-WAL
+`cow_ordered` owner for inline64 and forced-pointer4096 layouts at 1,024,
+16,384 and 131,072 records. Run fixed counts, for example:
+
+```sh
+go test ./TreeDB -run '^$' -bench '^BenchmarkExternalRecoveryCheckpoint$' -benchmem -benchtime=8x
+```
+
+One timed operation updates an existing key and completes its certified
+checkpoint, including TreeDB root publication, retained dependency capture,
+certificate serialization/sync and generation retirement. Fixture loading,
+initial certification, final Close and recovery verification are outside the
+timer. Each cell verifies resolved COW/no-WAL routing and exact certificate/value
+recovery. `checkpoint_files_B/op` sums files enumerated by the returned
+certificate; for retained roots these are descriptor bytes, not all physical
+write I/O. Pointer values repeat and use default compression, so cardinality
+scaling is not a unique-value-byte scaling claim. The benchmark reports Go
+B/op and allocs/op; it does not qualify sustained memory/disk equilibrium,
+upstream log debt, crash safety, or Dgraph RPC/transaction tails.
