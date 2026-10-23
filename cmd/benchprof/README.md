@@ -980,3 +980,27 @@ syncs per operation. A fixed finite run is a contention diagnostic, not sustaine
 resource equilibrium or hardware crash certification. Go test profiles from this
 benchmark are not benchprof inputs. For source A/B use this identical benchmark
 file on both candidates and preserve every sample.
+
+### Isolated public PRIMARY cost boundary
+
+`mvcc_primary_cost_gate.py` copies the maintained
+`TreeDB/mvcc/primary_generation_routing_v6_test.go` from the candidate
+checkout into the baseline build with an overlay; the candidate build uses
+the fixture directly from that checkout. Both builds therefore use the same
+fixture bytes.
+The fixture explicitly disables periodic background index vacuum and makes its
+already-disabled periodic/idle checkpoint and WAL-size checkpoint triggers
+explicit. Pruning retains the default background scheduling; it is not moved
+onto foreground commits. Its actual public
+`CommitAt(..., CommitDurable)` publication, PRIMARY activation witness, DATA
+fixture, timer and clean-reopen lifecycle remain the same. Setup and configuration
+assertions precede the timer. Go allocation counters are process-global, so
+the incidental vacuum ticker must not enter this narrow boundary. The hypothesis
+is a 128-byte ticker allocation crossing the timer in a 128-iteration run; this
+does not prove all remaining process-global allocation noise is removed.
+This is a harness isolation change, not a storage optimization or a relaxation of
+the gate: eight alternating pairs, 128 iterations, the 5% paired timing limit,
+no median bytes/allocation growth, identity binding and quiet-host qualification
+remain unchanged. Old failed/noisy measurements remain failed retained evidence;
+new-harness rows cannot be silently pooled with them. Short diagnostics do not
+establish that disabling workers resolves every observed byte difference.
