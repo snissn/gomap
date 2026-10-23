@@ -1,3 +1,9 @@
+> Historical prototype record. The production integration in #5208 replaces
+> copied-image V1 owner directories with retained DATA root V2 certificates.
+> Current behavior and supported scope are specified in
+> [the canonical external recovery specification](../TreeDB/docs/spec/external-recovery.md).
+> Retained prototype evidence below applies to its recorded source only.
+
 # Raft-owned recovery and certified TreeDB checkpoints
 
 Status: opt-in prototype, not a production durability or performance certification.

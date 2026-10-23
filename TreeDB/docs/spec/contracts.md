@@ -983,3 +983,12 @@ one opening view, staged point effects and forward/reverse predicates, latest-ro
 R-union-W validation, bounded history with ErrTxnTooOld, and named open-iterator
 mutation rejection. This implemented capability is separate from the legacy
 conditional target text above and from managed external timestamps.
+
+## Explicit external recovery owner
+
+`OpenExternalRecovery` requires a durable external command/decision authority and
+Apply-scoped mutation; Checkpoint requires the application semantic barrier.
+Ordinary public Open and maintenance backend opens refuse the owner marker and
+share fresh initialization ownership. See [external recovery](external-recovery.md)
+for exact certificates, resource ownership and supported raw DATA capabilities.
+This opt-in API does not redefine ordinary WriteSync.

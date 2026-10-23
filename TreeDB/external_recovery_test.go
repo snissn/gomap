@@ -4,13 +4,223 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
+
+func TestExternalRecoveryTwoGenerationClosureAcrossRewriteAndReopen(t *testing.T) {
+	for _, outer := range []bool{false, true} {
+		t.Run(fmt.Sprint("outer=", outer), func(t *testing.T) {
+			dir := t.TempDir()
+			opts := OptionsFor(ProfileNoWALFast, dir)
+			opts.MemtableMode = "cow_ordered"
+			opts.ValueLog.PointerThreshold, opts.ValueLog.ForcePointers = 1, true
+			opts.IndexOuterLeavesInValueLog = outer
+			config := ExternalRecoveryConfig{Identity: "two-generation"}
+			o, err := OpenExternalRecovery(opts, config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = o.Close() }()
+			firstValue := bytes.Repeat([]byte("first"), 16000)
+			secondValue := bytes.Repeat([]byte("second"), 16000)
+			externalTestSet(t, o, "key", firstValue)
+			first, err := o.Checkpoint(context.Background(), []byte("first"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			firstRoot, err := o.readRetainedRoot(first)
+			if err != nil {
+				t.Fatal(err)
+			}
+			externalTestSet(t, o, "key", secondValue)
+			second, err := o.Checkpoint(context.Background(), []byte("second"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := o.Close(); err != nil {
+				t.Fatal(err)
+			}
+			o, err = OpenExternalRecovery(opts, config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			roots, err := o.db.backend.CaptureRecoverableRootSet(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			foundFirst, foundSecond := false, false
+			for _, root := range roots.Roots() {
+				foundFirst = foundFirst || root.CommitSeq == first.Root.CommitSeq
+				foundSecond = foundSecond || root.CommitSeq == second.Root.CommitSeq
+			}
+			roots.Release()
+			if !foundFirst || !foundSecond {
+				t.Fatal("Open did not reacquire both certified roots")
+			}
+			for i := 0; i < 12; i++ {
+				externalTestSet(t, o, "key", []byte(fmt.Sprint("suffix", i)))
+				if err := o.db.Checkpoint(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := o.db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{BatchSize: 4, MaxCopiedBytes: 1 << 20}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := o.db.ValueLogGC(context.Background(), ValueLogGCOptions{}); err != nil {
+				t.Fatal(err)
+			}
+			if err := o.Close(); err != nil {
+				t.Fatal(err)
+			}
+			o, err = OpenExternalRecovery(opts, config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := o.DB().Get([]byte("key"))
+			if err != nil || !bytes.Equal(got, secondValue) {
+				t.Fatalf("current lost after rewrite: bytes=%d err=%v", len(got), err)
+			}
+			if err := o.Close(); err != nil {
+				t.Fatal(err)
+			}
+			// Direct physical restore proves previous selectability, independently
+			// of the external owner's fail-closed CURRENT metadata policy.
+			working := filepath.Join(dir, "working")
+			if err := backenddb.RestoreRetainedPhysicalRootsV1(working, firstRoot, nil); err != nil {
+				t.Fatal(err)
+			}
+			physicalOpts := OptionsFor(ProfileNoWALFast, working)
+			physicalOpts.DisableSideStores, physicalOpts.DisableBackgroundPrune = true, true
+			database, err := backenddb.Open(physicalOpts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer database.Close()
+			got, err = database.Get([]byte("key"))
+			if err != nil || !bytes.Equal(got, firstValue) {
+				t.Fatalf("previous root lost: bytes=%d err=%v", len(got), err)
+			}
+		})
+	}
+}
+
+func TestExternalRecoveryInitializationOwnership(t *testing.T) {
+	for i := 0; i < 12; i++ {
+		dir := t.TempDir()
+		opts := OptionsFor(ProfileNoWALFast, dir)
+		opts.MemtableMode, opts.DisableSideStores = "cow_ordered", true
+		start := make(chan struct{})
+		type result struct {
+			close func() error
+			err   error
+		}
+		ordinary, external := make(chan result, 1), make(chan result, 1)
+		go func() {
+			<-start
+			o, err := Open(opts)
+			r := result{err: err}
+			if o != nil {
+				r.close = o.Close
+			}
+			ordinary <- r
+		}()
+		go func() {
+			<-start
+			o, err := OpenExternalRecovery(opts, ExternalRecoveryConfig{Identity: "owner"})
+			r := result{err: err}
+			if o != nil {
+				r.close = o.Close
+			}
+			external <- r
+		}()
+		close(start)
+		a, b := <-ordinary, <-external
+		if a.close != nil {
+			defer a.close()
+		}
+		if b.close != nil {
+			defer b.close()
+		}
+		if a.err == nil && b.err == nil {
+			t.Fatal("ordinary and external initialization both acquired ownership")
+		}
+		if a.err != nil && b.err != nil {
+			t.Fatalf("no owner succeeded: ordinary=%v external=%v", a.err, b.err)
+		}
+		if a.close != nil {
+			if err := a.close(); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if b.close != nil {
+			if err := b.close(); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	// Failure after lock acquisition must release it, permitting another policy.
+	dir := t.TempDir()
+	opts := OptionsFor(ProfileNoWALFast, dir)
+	opts.MemtableMode = "adaptive:cow_ordered"
+	if o, err := Open(opts); err == nil {
+		_ = o.Close()
+		t.Fatal("invalid configuration accepted")
+	}
+	_ = externalTestOpen(t, dir)
+}
+
+func TestExternalRecoveryRetainsRootWithoutCopyingImage(t *testing.T) {
+	dir := t.TempDir()
+	o := externalTestOpen(t, dir)
+	want := bytes.Repeat([]byte("retained-pointer"), 16384)
+	for i := 0; i < 24; i++ {
+		externalTestSet(t, o, fmt.Sprintf("key-%03d", i), want)
+	}
+	cert, err := o.Checkpoint(context.Background(), []byte("exact-root"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var checkpointBytes int64
+	for _, file := range cert.Files {
+		checkpointBytes += file.Bytes
+	}
+	if checkpointBytes > 64<<10 {
+		t.Fatalf("checkpoint copied database: %d bytes", checkpointBytes)
+	}
+	before, err := os.Stat(filepath.Join(dir, "working", "index.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 24; i++ {
+		externalTestSet(t, o, "key-000", []byte(fmt.Sprintf("suffix-%d", i)))
+		if err := o.DB().Checkpoint(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := o.DB().ValueLogGC(context.Background(), ValueLogGCOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := o.Close(); err != nil {
+		t.Fatal(err)
+	}
+	o = externalTestOpen(t, dir)
+	after, err := os.Stat(filepath.Join(dir, "working", "index.db"))
+	if err != nil || !os.SameFile(before, after) {
+		t.Fatalf("recovery replaced working inode: %v", err)
+	}
+	got, err := o.DB().Get([]byte("key-000"))
+	if err != nil || !bytes.Equal(got, want) {
+		t.Fatalf("retained root lost: bytes=%d err=%v", len(got), err)
+	}
+}
 
 func externalTestOpen(t *testing.T, dir string) *ExternalRecovery {
 	t.Helper()
@@ -114,7 +324,7 @@ func TestExternalRecoveryRejectsCorruptionIdentityAndConcurrentOwner(t *testing.
 		other.Close()
 		t.Fatal("wrong identity admitted")
 	}
-	f, err := os.OpenFile(filepath.Join(o.imageDir(cert.Generation), "index.db"), os.O_WRONLY, 0)
+	f, err := os.OpenFile(filepath.Join(o.imageDir(cert.Generation), "root.json"), os.O_WRONLY, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

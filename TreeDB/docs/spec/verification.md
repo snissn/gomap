@@ -4427,3 +4427,15 @@ headroom is exhausted. These controls do not activate unconverted collections.
 - `TestBatchWriteSync_WALOffSmallNonOverlappingSealsQueuedWrites` covers earlier
   queued writes; `TestBatchWrite_WALOffLargeNonOverlappingBypassesAsPointers`
   preserves ordinary bypass non-overlap and pointer-operation assertions.
+
+### Externally logged raw DATA ownership (#5208)
+
+- Public retained-root control: bounded certificate output, unchanged physical
+  inode, forced-pointer exact recovery through newer working seals and GC.
+- Current/previous closure control: both slots reacquired before writes, repeated
+  seals, value rewrite/GC, reopen and prior-root selectability in both leaf placements.
+- Restore controls: torn meta byte states, interruption before sync and idempotent
+  retry, active-writer refusal and inode/namespace replacement refusal.
+- Initialization controls: racing ordinary/external public opens and deterministic
+  invalid-configuration lock release; existing process-crash certificate cuts.
+- See [external recovery](external-recovery.md) for supported scope and limits.

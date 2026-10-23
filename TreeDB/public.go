@@ -774,14 +774,14 @@ func normalizeBackpressureDefaults(opts *Options) {
 
 // Open opens TreeDB. By default it enables caching (write-back layer).
 func Open(opts Options) (*DB, error) {
-	if _, err := os.Stat(filepath.Join(opts.Dir, externalRecoveryMarker)); err == nil {
-		return nil, fmt.Errorf("%w: use OpenExternalRecovery for this directory", ErrExternalRecovery)
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return nil, err
-	}
 	if err := resolveOpenProfileOptions(&opts); err != nil {
 		return nil, err
 	}
+	unlock, err := acquireOrdinaryOpenOwnership(opts)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	return openResolved(opts)
 }
 

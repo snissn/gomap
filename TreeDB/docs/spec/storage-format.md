@@ -4318,3 +4318,11 @@ Native deterministic JSON apply reuses the existing catalog-create and by-ID
 insert/update/delete singleton command kinds and payload encodings. Native
 assignment and exact physical-seal completion introduce no on-disk format or
 sidecar; see [write-path-and-durability.md](write-path-and-durability.md#native-deterministic-collection-apply).
+
+## External recovery owner format V2
+
+The opt-in V2 external owner uses immutable bounded root descriptors and exact
+inode/namespace bindings rather than copied images. See
+[external recovery](external-recovery.md#v2-certificate-and-retained-root) for the
+marker, CURRENT, certificate and retained-root encodings and size bounds. V1
+prototype owner directories require rebuilding; no migration is provided.

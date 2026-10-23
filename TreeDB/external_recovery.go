@@ -10,7 +10,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"unicode/utf8"
@@ -21,31 +20,35 @@ import (
 )
 
 // ErrExternalRecovery identifies a refused external-recovery contract. This
-// experimental API deliberately does not change the meaning of WriteSync.
+// opt-in API deliberately does not change the meaning of WriteSync.
 var ErrExternalRecovery = errors.New("treedb: external recovery contract")
 
 const externalRecoveryMarker = "external-recovery.json"
 
 // ExternalRecoveryConfig names the authoritative recovery owner. The caller
 // must durably retain committed commands/decisions until a certified checkpoint
-// covers them. Limits apply to one physical checkpoint, not to upstream log debt.
+// covers them. Limits apply to each retained physical closure (conservatively
+// counting index high-water), not to upstream log debt or total process memory.
 type ExternalRecoveryConfig struct {
 	Identity           string
 	MaxCheckpointBytes int64
 	MaxCheckpointFiles int
 }
 
-// ExternalRecoveryCheckpoint certifies one immutable physical image together
+// ExternalRecoveryCheckpoint certifies one retained physical root together
 // with opaque application progress. Metadata must be sampled at the same
-// application barrier as the data. Digest binds the complete file inventory.
+// application barrier as the data. Digest binds the bounded root descriptor;
+// Files describes that descriptor, not a portable copy of the database.
 type ExternalRecoveryCheckpoint struct {
-	Version    int                      `json:"version"`
-	Identity   string                   `json:"identity"`
-	Generation uint64                   `json:"generation"`
-	Root       backenddb.StateToken     `json:"root"`
-	Metadata   []byte                   `json:"metadata"`
-	Files      []externalCheckpointFile `json:"files"`
-	Digest     string                   `json:"digest"`
+	Version            int                      `json:"version"`
+	Identity           string                   `json:"identity"`
+	Generation         uint64                   `json:"generation"`
+	Root               backenddb.StateToken     `json:"root"`
+	Metadata           []byte                   `json:"metadata"`
+	Files              []externalCheckpointFile `json:"files"`
+	Digest             string                   `json:"digest"`
+	PreviousGeneration uint64                   `json:"previous_generation,omitempty"`
+	PreviousDigest     string                   `json:"previous_digest,omitempty"`
 }
 
 type externalCheckpointFile struct {
@@ -58,9 +61,8 @@ type externalCheckpointFile struct {
 // calls may overlap; Checkpoint and Close exclude them. DB must only be mutated
 // inside Apply, and no asynchronous mutation may outlive its callback.
 //
-// Prototype checkpoints copy a maintained physical snapshot into an immutable
-// generation. This proves exact-root recovery without adding a new durable root
-// pin implementation; its O(database image) checkpoint cost is explicit.
+// Checkpoints retain the maintained DATA publisher's exact physical cut and
+// persist bounded meta operands. No full image copy or second publisher exists.
 type ExternalRecovery struct {
 	mu         sync.RWMutex
 	db         *DB
@@ -70,15 +72,14 @@ type ExternalRecovery struct {
 	checkpoint ExternalRecoveryCheckpoint
 	closed     bool
 	poison     error
+	retained   []*backenddb.PhysicalSnapshotCutV1
 	// Per-owner fault injection never changes another database's behavior.
 	testCut func(string) error
 }
 
-// OpenExternalRecovery opens a fresh or previously owned prototype directory.
-// It restores exactly CURRENT before opening TreeDB: even cleanly flushed work
-// beyond the certificate is discarded and must be replayed by the external owner.
-// First-time initialization must be exclusive across recovery policies: an
-// ordinary Open racing before this owner's marker exists uses a different lock.
+// OpenExternalRecovery opens a fresh or previously owned DATA directory. It
+// restores only the certified current/previous meta operands before TreeDB can
+// reclaim or reuse any resources. Uncertified suffix work must be replayed.
 func OpenExternalRecovery(opts Options, config ExternalRecoveryConfig) (_ *ExternalRecovery, err error) {
 	if opts.Dir == "" || config.Identity == "" || len(config.Identity) > 4096 || !utf8.ValidString(config.Identity) || opts.ReadOnly {
 		return nil, fmt.Errorf("%w: directory, identity and writable owner required", ErrExternalRecovery)
@@ -104,7 +105,7 @@ func OpenExternalRecovery(opts Options, config ExternalRecoveryConfig) (_ *Exter
 	markerBytes, _ := json.Marshal(struct {
 		Version  int
 		Identity string
-	}{1, config.Identity})
+	}{2, config.Identity})
 	if len(markerBytes) > 8192 {
 		return nil, fmt.Errorf("%w: encoded owner identity exceeds marker limit", ErrExternalRecovery)
 	}
@@ -115,7 +116,7 @@ func OpenExternalRecovery(opts Options, config ExternalRecoveryConfig) (_ *Exter
 	if err := backenddb.EnsureStorageLayoutDirsForOpen(0700, filepath.Join(dir, externalRecoveryMarker), dir); err != nil {
 		return nil, err
 	}
-	lock, err := lockfile.Acquire(filepath.Join(dir, "EXTERNAL.LOCK"))
+	lock, err := lockfile.Acquire(filepath.Join(dir, "INIT.LOCK"))
 	if err != nil {
 		return nil, err
 	}
@@ -133,7 +134,7 @@ func OpenExternalRecovery(opts Options, config ExternalRecoveryConfig) (_ *Exter
 			return nil, e
 		}
 		for _, entry := range entries {
-			if entry.Name() != "EXTERNAL.LOCK" {
+			if entry.Name() != "INIT.LOCK" {
 				return nil, fmt.Errorf("%w: refusing nonempty unowned directory", ErrExternalRecovery)
 			}
 		}
@@ -147,7 +148,7 @@ func OpenExternalRecovery(opts Options, config ExternalRecoveryConfig) (_ *Exter
 			Version  int
 			Identity string
 		}
-		if json.Unmarshal(marker, &m) != nil || m.Version != 1 || m.Identity != config.Identity {
+		if json.Unmarshal(marker, &m) != nil || m.Version != 2 || m.Identity != config.Identity {
 			return nil, fmt.Errorf("%w: owner identity/version mismatch", ErrExternalRecovery)
 		}
 	}
@@ -158,29 +159,51 @@ func OpenExternalRecovery(opts Options, config ExternalRecoveryConfig) (_ *Exter
 	if err != nil {
 		return nil, err
 	}
-	// Validate the immutable image completely before removing disposable work.
+	working := filepath.Join(dir, "working")
+	var previous *backenddb.RetainedPhysicalRootV1
 	if ok {
 		if err := o.verifyImage(cert); err != nil {
 			return nil, err
 		}
+		current, err := o.readRetainedRoot(cert)
+		if err != nil {
+			return nil, err
+		}
+		if cert.PreviousGeneration != 0 {
+			prior, err := o.readCertificate(cert.PreviousGeneration, cert.PreviousDigest)
+			if err != nil {
+				return nil, err
+			}
+			if err := o.verifyImage(prior); err != nil {
+				return nil, err
+			}
+			root, err := o.readRetainedRoot(prior)
+			if err != nil {
+				return nil, err
+			}
+			previous = &root
+		}
+		if err := backenddb.RestoreRetainedPhysicalRootsV1(working, current, previous); err != nil {
+			return nil, err
+		}
 		o.checkpoint = cert
+	} else {
+		// Without a certificate genesis has no retained user state.
+		if err := os.RemoveAll(working); err != nil {
+			return nil, err
+		}
 	}
-	working := filepath.Join(dir, "working")
-	if err := os.RemoveAll(working); err != nil {
+	if err := backenddb.EnsureStorageLayoutDirs(0700, working); err != nil {
 		return nil, err
 	}
-	if ok {
-		if err := externalCopyTree(context.Background(), o.imageDir(cert.Generation), working, config); err != nil {
-			return nil, err
-		}
-		if err := backenddb.RebindDurableRootSnapshotV1(working); err != nil {
-			return nil, err
-		}
+	// All ordinary public entry points refuse this internal physical namespace.
+	if err := externalAtomicFile(filepath.Join(working, externalRecoveryMarker), markerBytes); err != nil {
+		return nil, err
 	}
 	opts.Dir, opts.DisableSideStores = working, true
 	opts.BackgroundCheckpointInterval, opts.BackgroundCheckpointIdleDuration = -1, -1
 	opts.BackgroundIndexVacuumInterval, opts.DisableBackgroundPrune = -1, true
-	o.db, err = Open(opts)
+	o.db, err = openResolved(opts)
 	if err != nil {
 		return nil, err
 	}
@@ -191,8 +214,21 @@ func OpenExternalRecovery(opts Options, config ExternalRecoveryConfig) (_ *Exter
 			return nil, fmt.Errorf("%w: restored root %+v differs from certificate %+v", ErrExternalRecovery, state, cert.Root)
 		}
 	}
+	if ok {
+		// Normal Open has validated/pinned both restored slots. Capture its maintained
+		// union before returning any mutation authority to the external caller.
+		cut, err := o.db.backend.CapturePhysicalSnapshotCutV1(context.Background())
+		if err != nil {
+			_ = o.db.Close()
+			return nil, err
+		}
+		o.retained = append(o.retained, cut)
+	}
 	if err := o.cleanupImages(); err != nil {
 		_ = o.db.Close()
+		for _, cut := range o.retained {
+			_ = cut.Close()
+		}
 		return nil, err
 	}
 	return o, nil
@@ -260,7 +296,12 @@ func (o *ExternalRecovery) Checkpoint(ctx context.Context, metadata []byte) (Ext
 	if err != nil {
 		return ExternalRecoveryCheckpoint{}, err
 	}
-	defer cut.Close()
+	keepCut := false
+	defer func() {
+		if !keepCut {
+			_ = cut.Close()
+		}
+	}()
 	gen := o.checkpoint.Generation + 1
 	if gen == 0 {
 		return ExternalRecoveryCheckpoint{}, ErrExternalRecovery
@@ -271,26 +312,29 @@ func (o *ExternalRecovery) Checkpoint(ctx context.Context, metadata []byte) (Ext
 	}
 	defer os.RemoveAll(stage)
 	image := filepath.Join(stage, "db")
-	if err := externalCopyTree(ctx, filepath.Join(o.dir, "working"), image, o.config); err != nil {
+	if err := backenddb.EnsureStorageLayoutDirs(0700, image); err != nil {
 		return ExternalRecoveryCheckpoint{}, err
 	}
-	// Use the maintained immutable cut instead of copying mutable meta/free pages.
-	if err := externalWriteFile(filepath.Join(image, "index.db"), func(w io.Writer) error { return cut.WriteToContext(ctx, w) }); err != nil {
-		return ExternalRecoveryCheckpoint{}, err
-	}
-	if cut.PrimarySizeBytes() != 0 {
-		if err := externalWriteFile(filepath.Join(image, "index.db.primary"), func(w io.Writer) error { return cut.WritePrimaryToContext(ctx, w) }); err != nil {
-			return ExternalRecoveryCheckpoint{}, err
-		}
-	}
-	if err := backenddb.RebindDurableRootSnapshotV1(image); err != nil {
-		return ExternalRecoveryCheckpoint{}, err
-	}
-	cert := ExternalRecoveryCheckpoint{Version: 1, Identity: o.config.Identity, Generation: gen, Root: externalPersistentRoot(cut.StateToken()), Metadata: append([]byte(nil), metadata...)}
-	cert.Files, err = externalInventory(ctx, image, o.config)
+	root, err := cut.RetainedRootV1()
 	if err != nil {
 		return ExternalRecoveryCheckpoint{}, err
 	}
+	if root.ResourceBytes > uint64(o.config.MaxCheckpointBytes) || root.ResourceFiles > uint64(o.config.MaxCheckpointFiles) {
+		return ExternalRecoveryCheckpoint{}, ErrExternalRecovery
+	}
+	rootBytes, err := json.Marshal(root)
+	if err != nil {
+		return ExternalRecoveryCheckpoint{}, err
+	}
+	if int64(len(rootBytes)) > o.config.MaxCheckpointBytes || o.config.MaxCheckpointFiles < 1 {
+		return ExternalRecoveryCheckpoint{}, ErrExternalRecovery
+	}
+	if err := externalAtomicFile(filepath.Join(image, "root.json"), rootBytes); err != nil {
+		return ExternalRecoveryCheckpoint{}, err
+	}
+	cert := ExternalRecoveryCheckpoint{Version: 2, Identity: o.config.Identity, Generation: gen, Root: externalPersistentRoot(cut.StateToken()), Metadata: append([]byte(nil), metadata...), PreviousGeneration: o.checkpoint.Generation, PreviousDigest: o.checkpoint.Digest}
+	sum := sha256.Sum256(rootBytes)
+	cert.Files = []externalCheckpointFile{{Path: "root.json", Bytes: int64(len(rootBytes)), SHA256: hex.EncodeToString(sum[:])}}
 	cert.Digest, err = externalDigest(cert)
 	if err != nil {
 		return ExternalRecoveryCheckpoint{}, err
@@ -326,11 +370,24 @@ func (o *ExternalRecovery) Checkpoint(ctx context.Context, metadata []byte) (Ext
 		Generation uint64
 		Digest     string
 	}{gen, cert.Digest})
+	// Publication failure may have installed CURRENT. Retain the candidate until
+	// Close as well; the poisoned owner cannot accept another mutation/checkpoint.
+	o.retained = append(o.retained, cut)
+	keepCut = true
 	if err := externalAtomicFile(filepath.Join(o.dir, "CURRENT"), pointer); err != nil {
 		o.poison = fmt.Errorf("%w: ambiguous checkpoint publication: %v", ErrExternalRecovery, err)
 		return ExternalRecoveryCheckpoint{}, o.poison
 	}
 	o.checkpoint = cert
+	// Keep the previous certificate's original cut until CURRENT is stable.
+	// A reopened cut already contains the restored current+previous slot union.
+	if len(o.retained) > 2 {
+		if err := o.retained[0].Close(); err != nil {
+			o.poison = err
+			return ExternalRecoveryCheckpoint{}, err
+		}
+		o.retained = o.retained[1:]
+	}
 	if err := o.cut("current-stable"); err != nil {
 		o.poison = err
 		return ExternalRecoveryCheckpoint{}, err
@@ -394,7 +451,12 @@ func (o *ExternalRecovery) Close() error {
 		return nil
 	}
 	o.closed = true
-	return errors.Join(o.db.Close(), o.lock.Close())
+	err := o.db.Close()
+	for _, cut := range o.retained {
+		err = errors.Join(err, cut.Close())
+	}
+	o.retained = nil
+	return errors.Join(err, o.lock.Close())
 }
 
 func (o *ExternalRecovery) imageDir(gen uint64) string {
@@ -417,34 +479,57 @@ func (o *ExternalRecovery) readCurrent() (ExternalRecoveryCheckpoint, bool, erro
 	if json.Unmarshal(raw, &pointer) != nil || pointer.Generation == 0 || len(pointer.Digest) != 64 {
 		return cert, false, ErrExternalRecovery
 	}
-	raw, err = readExternalBounded(filepath.Join(filepath.Dir(o.imageDir(pointer.Generation)), "certificate.json"), 4<<20)
+	cert, err = o.readCertificate(pointer.Generation, pointer.Digest)
+	return cert, err == nil, err
+}
+
+func (o *ExternalRecovery) readCertificate(generation uint64, expectedDigest string) (ExternalRecoveryCheckpoint, error) {
+	var cert ExternalRecoveryCheckpoint
+	raw, err := readExternalBounded(filepath.Join(filepath.Dir(o.imageDir(generation)), "certificate.json"), 4<<20)
 	if err != nil {
-		return cert, false, err
+		return cert, err
 	}
 	if err := json.Unmarshal(raw, &cert); err != nil {
-		return cert, false, err
+		return cert, err
 	}
 	digest, err := externalDigest(cert)
-	if err != nil || cert.Version != 1 || cert.Identity != o.config.Identity || cert.Generation != pointer.Generation || digest != cert.Digest || digest != pointer.Digest {
-		return cert, false, fmt.Errorf("%w: certificate identity/digest mismatch", ErrExternalRecovery)
+	if err != nil || cert.Version != 2 || cert.Identity != o.config.Identity || cert.Generation != generation || digest != cert.Digest || digest != expectedDigest || len(cert.Metadata) > 1<<20 || (cert.PreviousGeneration != 0 && cert.PreviousGeneration >= cert.Generation) {
+		return cert, fmt.Errorf("%w: certificate identity/digest mismatch", ErrExternalRecovery)
 	}
-	return cert, true, nil
+	return cert, nil
 }
 
 func (o *ExternalRecovery) verifyImage(cert ExternalRecoveryCheckpoint) error {
-	files, err := externalInventory(context.Background(), o.imageDir(cert.Generation), o.config)
+	if len(cert.Files) != 1 || cert.Files[0].Path != "root.json" || cert.Files[0].Bytes < 1 || cert.Files[0].Bytes > 64<<10 || cert.Files[0].Bytes > o.config.MaxCheckpointBytes || o.config.MaxCheckpointFiles < 1 {
+		return ErrExternalRecovery
+	}
+	raw, err := readExternalBounded(filepath.Join(o.imageDir(cert.Generation), "root.json"), 64<<10)
 	if err != nil {
 		return err
 	}
-	if len(files) != len(cert.Files) {
-		return ErrExternalRecovery
-	}
-	for i := range files {
-		if files[i] != cert.Files[i] {
-			return fmt.Errorf("%w: checkpoint file mismatch: %s", ErrExternalRecovery, files[i].Path)
-		}
+	sum := sha256.Sum256(raw)
+	if int64(len(raw)) != cert.Files[0].Bytes || hex.EncodeToString(sum[:]) != cert.Files[0].SHA256 {
+		return fmt.Errorf("%w: retained root digest mismatch", ErrExternalRecovery)
 	}
 	return nil
+}
+
+func (o *ExternalRecovery) readRetainedRoot(cert ExternalRecoveryCheckpoint) (backenddb.RetainedPhysicalRootV1, error) {
+	var root backenddb.RetainedPhysicalRootV1
+	raw, err := readExternalBounded(filepath.Join(o.imageDir(cert.Generation), "root.json"), 64<<10)
+	if err != nil {
+		return root, err
+	}
+	if err := json.Unmarshal(raw, &root); err != nil {
+		return root, err
+	}
+	if root.State != cert.Root {
+		return root, ErrExternalRecovery
+	}
+	if root.ResourceBytes > uint64(o.config.MaxCheckpointBytes) || root.ResourceFiles > uint64(o.config.MaxCheckpointFiles) {
+		return root, ErrExternalRecovery
+	}
+	return root, nil
 }
 
 func externalDigest(cert ExternalRecoveryCheckpoint) (string, error) {
@@ -471,132 +556,6 @@ func readExternalBounded(path string, max int64) ([]byte, error) {
 		return nil, ErrExternalRecovery
 	}
 	return b, nil
-}
-
-func externalInventory(ctx context.Context, root string, config ExternalRecoveryConfig) ([]externalCheckpointFile, error) {
-	var files []externalCheckpointFile
-	var bytes int64
-	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if entry.Type()&os.ModeSymlink != 0 {
-			return ErrExternalRecovery
-		}
-		if entry.IsDir() {
-			return nil
-		}
-		info, err := entry.Info()
-		if err != nil {
-			return err
-		}
-		if !info.Mode().IsRegular() || len(files) >= config.MaxCheckpointFiles || info.Size() > config.MaxCheckpointBytes-bytes {
-			return ErrExternalRecovery
-		}
-		bytes += info.Size()
-		f, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		h := sha256.New()
-		_, copyErr := io.Copy(h, f)
-		if err := errors.Join(copyErr, f.Close()); err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			return err
-		}
-		files = append(files, externalCheckpointFile{filepath.ToSlash(rel), info.Size(), hex.EncodeToString(h.Sum(nil))})
-		return nil
-	})
-	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
-	return files, err
-}
-
-// externalCopyTree only copies known physical raw-MVCC storage; application,
-// side-store and arbitrary lifecycle namespaces are refused rather than omitted.
-func externalCopyTree(ctx context.Context, source, target string, config ExternalRecoveryConfig) error {
-	var bytes int64
-	var count int
-	return filepath.WalkDir(source, func(path string, entry os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(source, path)
-		if err != nil {
-			return err
-		}
-		if entry.Type()&os.ModeSymlink != 0 {
-			return ErrExternalRecovery
-		}
-		if rel != "." {
-			parts := strings.Split(filepath.ToSlash(rel), "/")
-			if parts[0] == "LOCK" || parts[0] == "vlog_ref_counts.meta" {
-				// Refcounts are an optional scan cache, never recovery authority.
-				return nil
-			}
-			// Open creates this namespace even for raw MVCC. Native assets are
-			// outside this prototype's replay surface; accept only its empty dir.
-			if parts[0] == "column_assets" && entry.IsDir() {
-				entries, err := os.ReadDir(path)
-				if err != nil {
-					return err
-				}
-				if len(entries) != 0 {
-					return fmt.Errorf("%w: native assets unsupported", ErrExternalRecovery)
-				}
-				return backenddb.EnsureStorageLayoutDirs(0700, filepath.Join(target, rel))
-			}
-			allowed := parts[0] == "index.db" || parts[0] == "index.db.primary" || parts[0] == "format.json" || parts[0] == "value_vlog" || parts[0] == "leaf_vlog" || parts[0] == "wal"
-			if !allowed {
-				return fmt.Errorf("%w: unsupported checkpoint namespace %q", ErrExternalRecovery, parts[0])
-			}
-		}
-		dest := filepath.Join(target, rel)
-		if entry.IsDir() {
-			return backenddb.EnsureStorageLayoutDirs(0700, dest)
-		}
-		info, err := entry.Info()
-		if err != nil {
-			return err
-		}
-		count++
-		if !info.Mode().IsRegular() || count > config.MaxCheckpointFiles || info.Size() > config.MaxCheckpointBytes-bytes {
-			return ErrExternalRecovery
-		}
-		bytes += info.Size()
-		return externalWriteFile(dest, func(w io.Writer) error {
-			f, err := os.Open(path)
-			if err != nil {
-				return err
-			}
-			defer f.Close()
-			_, err = io.CopyN(w, f, info.Size())
-			return err
-		})
-	})
-}
-
-func externalWriteFile(path string, write func(io.Writer) error) error {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
-	if err != nil {
-		return err
-	}
-	writeErr := write(f)
-	if writeErr == nil {
-		writeErr = rootpublication.SyncStableFile(f)
-	}
-	if err := errors.Join(writeErr, f.Close()); err != nil {
-		return err
-	}
-	return externalSyncDir(filepath.Dir(path))
 }
 
 func externalAtomicFile(path string, data []byte) error {

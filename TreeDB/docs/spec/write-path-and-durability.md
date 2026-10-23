@@ -891,3 +891,12 @@ records; verification still uses the original selected metadata owner, complete
 namespace requirements and original error custody. Stream readers are borrowed
 only through finalization and dropped before the captured read is released.
 No live ANN authority or new storage format is implied.
+
+## Externally logged raw DATA materialization
+
+The opt-in ExternalRecovery owner accepts only explicitly configured no-WAL raw
+DATA COW materialization. Its ordinary Apply return acknowledges materialization;
+the caller owns durable command/decision authority. Its checkpoint certificate
+retains the maintained publisher's exact root/dependencies with bounded descriptor
+output. See [external recovery](external-recovery.md) for the semantic barrier,
+publication order, retained roots, and unchanged standalone WriteSync contract.

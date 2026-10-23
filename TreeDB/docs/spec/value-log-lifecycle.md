@@ -1015,3 +1015,11 @@ Snapshot allocation admission runs inside that capture fence. Admission callback
 may reserve charges for selected owners, but must not synchronously publish,
 refresh, or close the same DB. A competing publisher waits until capture either
 pins the selected state or refuses without acquiring a reader/Set reference.
+
+## Externally certified raw DATA roots
+
+An external-recovery certificate retains the existing PhysicalSnapshotCut /
+RecoverableRootSet resource pins and page-reuse floor until certificate retirement.
+GC/rewrite must preserve those original dependency closures even if the visible
+working root has advanced. Recovery reinstalls both certified slots before startup
+reacquires their resources. See [external recovery](external-recovery.md).

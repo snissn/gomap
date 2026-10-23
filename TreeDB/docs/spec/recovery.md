@@ -954,3 +954,11 @@ document is validated before ordered insert/update/delete reduction; a later
 delete cannot erase malformed BSON or an unsupported indexed scalar. Update
 replacements preserve the original BSON `_id`, as in ordinary foreground writes.
 This activation uses existing command/member and BSON index formats.
+
+## External recovery policy
+
+Externally logged raw DATA owners restore current and previous certified meta
+operands before backend startup can validate/pin their closures or reuse pages.
+Uncertified incidental seals never advance application recovery. See
+[external recovery](external-recovery.md#recovery-and-restore-interruption) for
+identity checks, interrupted restore retry, and fail-closed frontier selection.
