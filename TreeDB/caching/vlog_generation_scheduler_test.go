@@ -11629,6 +11629,10 @@ func TestVlogGenerationGC_DryRunNoEligibleBytesReturnsSchedulerIdle(t *testing.T
 
 	db.vlogGenerationLastGCUnixNano.Store(0)
 	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+	if db.indexOuterLeavesInValueLog {
+		t.Fatal("fixture must exercise unavailable leaf collection")
+	}
+	checkpointsBefore := db.checkpointRuns.Load()
 	forceVlogMaintenanceIdle(db)
 	db.maybeRunVlogGenerationMaintenance(false)
 
@@ -11641,6 +11645,43 @@ func TestVlogGenerationGC_DryRunNoEligibleBytesReturnsSchedulerIdle(t *testing.T
 	}
 	if got := db.vlogGenerationSchedulerState.Load(); got != vlogGenerationSchedulerIdle {
 		t.Fatalf("scheduler state=%d want=%d", got, vlogGenerationSchedulerIdle)
+	}
+	checkpointsAfter := db.checkpointRuns.Load()
+	if checkpointsAfter <= checkpointsBefore {
+		t.Fatal("eligibility estimate did not cross its checkpoint barrier")
+	}
+	noopAt := db.vlogGenerationLastGCNoopUnixNano.Load()
+	if noopAt <= 0 {
+		t.Fatal("empty estimate without leaf collection lacks no-op cooldown")
+	}
+	// Both subsequent estimate and periodic-GC requests must stop before the
+	// checkpoint barrier while the successful no-progress result is recent.
+	for _, runGC := range []bool{false, true} {
+		forceVlogMaintenanceIdle(db)
+		db.maybeRunVlogGenerationMaintenance(runGC)
+		if dry, real, _ := recorder.recordedCalls(); dry != 1 || real != 0 {
+			t.Fatalf("cooldown repeated GC: runGC=%t dry/real=%d/%d", runGC, dry, real)
+		}
+		if got := db.checkpointRuns.Load(); got != checkpointsAfter {
+			t.Fatalf("cooldown repeated checkpoint: runGC=%t got=%d want=%d", runGC, got, checkpointsAfter)
+		}
+		if got := db.vlogGenerationLastGCNoopUnixNano.Load(); got != noopAt {
+			t.Fatalf("skipped pass renewed cooldown: got=%d want=%d", got, noopAt)
+		}
+	}
+	// Expiry permits another real checkpoint/estimate without a wall-clock wait.
+	expiredAt := time.Now().Add(-2 * vlogGenerationGCNoopMinInterval).UnixNano()
+	db.vlogGenerationLastGCNoopUnixNano.Store(expiredAt)
+	forceVlogMaintenanceIdle(db)
+	db.maybeRunVlogGenerationMaintenance(false)
+	if dry, real, _ := recorder.recordedCalls(); dry != 2 || real != 0 {
+		t.Fatalf("expired cooldown failed to resume estimate: dry/real=%d/%d", dry, real)
+	}
+	if got := db.checkpointRuns.Load(); got <= checkpointsAfter {
+		t.Fatal("expired cooldown did not resume checkpoint barrier")
+	}
+	if got := db.vlogGenerationLastGCNoopUnixNano.Load(); got <= expiredAt {
+		t.Fatal("resumed no-progress pass did not renew cooldown")
 	}
 }
 

@@ -23885,7 +23885,9 @@ planned:
 				return fmt.Errorf("generational gc dry-run: %w", err)
 			}
 			if gcStats.BytesEligible < vlogGenerationGCMinBytes && gcStats.SegmentsEligible == 0 {
-				if leafAttempted && !leafProgress {
+				if !leafProgress {
+					// A below-floor value estimate is a successful no-progress pass
+					// even when leaf collection is unavailable for this backend.
 					db.vlogGenerationLastGCNoopUnixNano.Store(time.Now().UnixNano())
 				}
 				db.debugVlogMaintf(

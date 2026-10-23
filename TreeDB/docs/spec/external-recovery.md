@@ -8,8 +8,12 @@ resolution, and ordinary recovery semantics do not change.
 
 ## Ownership and application contract
 
-All mutations MUST execute inside `ExternalRecovery.Apply`; asynchronous work
-MUST finish before its callback returns. Checkpoint and Close exclude Apply.
+All application DATA mutations MUST execute inside `ExternalRecovery.Apply`;
+asynchronous work MUST finish before its callback returns. Checkpoint,
+InstallCheckpoint, and Close exclude Apply. `InstallCheckpoint` is an owner
+lifecycle operation, not an application mutation: it MUST be called outside an
+Apply callback, after the caller has excluded admissions and drained handles as
+specified by the transfer protocol below.
 The application MUST hold its semantic apply barrier when sampling progress
 metadata and calling Checkpoint. A materialization return is not a local durable
 acknowledgement. The external owner MUST durably retain commands and decisions
