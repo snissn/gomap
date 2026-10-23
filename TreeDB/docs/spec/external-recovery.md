@@ -203,6 +203,41 @@ crash cuts before and after CURRENT. These are focused API proofs; peer Raft
 acceptance, reader drain, durable accepted intent and real server recovery require
 consumer-level qualification.
 
+## Modeled stable-image recovery
+
+The maintained power-loss oracle records real file-sync, meta-range, directory-sync
+and completed namespace mutation events. File bytes belong to physical inodes;
+immediate durable directory entries belong to directory identities. A directory
+rename preserves its previously synced contents without making an unsynced parent
+edge durable. Materialized test directories contain only the modeled stable image,
+with identity overrides preserving the captured physical descriptors.
+
+`TestExternalRecoveryStableCheckpointPublication` reopens eight images for each
+USER leaf placement, including selective CURRENT name/data writeback.
+`TestExternalRecoveryStableRestoreMetaSlots` reopens twelve restore images:
+both slot writes, selective meta persistence, actual changed-byte tears in both
+slots, and the meta-sync boundary. `TestExternalRecoveryStableTransferPublication`
+reopens eight receiver images spanning acceptance, extraction, directory rename
+and CURRENT publication. Extraction coverage matches every archived DB file to
+one completed sync through a distinct exact file handle and its resource kind.
+Every selected image is opened twice through `OpenExternalRecovery`; the previous
+certificate is also physically selected and read, including a previous DATA
+namespace. Uncertified source keys remain absent. Removing the installed forced-
+pointer namespace must cause public recovery or reading to fail.
+
+The publication-sync failure controls require a poisoned live owner after an
+ambiguous CURRENT rename and recover old/new according to the completed parent
+barrier. Restore-sync failures must return no owner, release initialization
+ownership and permit a retry from the selected certificate. The durable metadata
+writer reuses the ordinary atomic-file implementation with explicit stable file
+and parent-directory barriers; ordinary `atomicfile.Write` keeps its file-only
+contract. Unsupported stable persistence fails closed.
+
+These are deterministic model proofs for the enumerated bytes, names and cuts.
+They do not exhaust all possible partial writes or replace filesystem/device
+power-cut qualification. The separate subprocess controls remain process-crash
+tests, where kernel dirty state may survive.
+
 ## Component cost diagnostic
 
 `BenchmarkExternalRecoveryCheckpoint` uses the ordinary public no-WAL

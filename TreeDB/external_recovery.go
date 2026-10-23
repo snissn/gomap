@@ -15,6 +15,8 @@ import (
 	"unicode/utf8"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/atomicfile"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
@@ -236,7 +238,7 @@ func OpenExternalRecovery(opts Options, config ExternalRecoveryConfig) (_ *Exter
 			return nil, err
 		}
 		// Without a certificate genesis has no retained user state.
-		if err := os.RemoveAll(working); err != nil {
+		if err := externalRemoveAll(working); err != nil {
 			return nil, err
 		}
 	}
@@ -361,11 +363,11 @@ func (o *ExternalRecovery) publishCut(ctx context.Context, cut *backenddb.Physic
 	if gen == 0 {
 		return ExternalRecoveryCheckpoint{}, ErrExternalRecovery
 	}
-	stage, err := os.MkdirTemp(filepath.Join(o.dir, "checkpoints"), ".staging-")
+	stage, err := externalMkdirTemp(filepath.Join(o.dir, "checkpoints"), ".staging-")
 	if err != nil {
 		return ExternalRecoveryCheckpoint{}, err
 	}
-	defer os.RemoveAll(stage)
+	defer externalRemoveAll(stage)
 	image := filepath.Join(stage, "db")
 	if err := backenddb.EnsureStorageLayoutDirs(0700, image); err != nil {
 		return ExternalRecoveryCheckpoint{}, err
@@ -409,10 +411,10 @@ func (o *ExternalRecovery) publishCut(ctx context.Context, cut *backenddb.Physic
 	}
 	final := filepath.Join(o.dir, "checkpoints", fmt.Sprintf("%020d", gen))
 	// A failed previous attempt can leave the next generation unreferenced.
-	if err := os.RemoveAll(final); err != nil {
+	if err := externalRemoveAll(final); err != nil {
 		return ExternalRecoveryCheckpoint{}, err
 	}
-	if err := os.Rename(stage, final); err != nil {
+	if err := externalRename(stage, final); err != nil {
 		return ExternalRecoveryCheckpoint{}, err
 	}
 	if err := externalSyncDir(filepath.Dir(final)); err != nil {
@@ -481,7 +483,7 @@ func (o *ExternalRecovery) cleanupImages() error {
 			remove = n > current || (n < current && current-n > 1)
 		}
 		if remove {
-			if err := os.RemoveAll(filepath.Join(root, name)); err != nil {
+			if err := externalRemoveAll(filepath.Join(root, name)); err != nil {
 				return err
 			}
 		}
@@ -652,31 +654,54 @@ func readExternalBounded(path string, max int64) ([]byte, error) {
 }
 
 func externalAtomicFile(path string, data []byte) error {
-	f, err := os.CreateTemp(filepath.Dir(path), ".publish-")
-	if err != nil {
-		return err
-	}
-	name := f.Name()
-	defer os.Remove(name)
-	_, err = f.Write(data)
-	if err == nil {
-		err = rootpublication.SyncStableFile(f)
-	}
-	if err := errors.Join(err, f.Close()); err != nil {
-		return err
-	}
-	if err := os.Rename(name, path); err != nil {
-		return err
-	}
-	return externalSyncDir(filepath.Dir(path))
+	return atomicfile.WriteDurable(path, data, 0600)
 }
 
 func externalSyncDir(path string) error {
-	f, err := os.Open(path)
+	return atomicfile.SyncDirectory(path)
+}
+
+func externalSyncFile(file *os.File, resource durabilitycut.Resource) error {
+	path := file.Name()
+	if err := durabilitycut.EmitStablePath(durabilitycut.BeforeDependencyFileSync, resource, filepath.Dir(path), path, file); err != nil {
+		return err
+	}
+	if err := rootpublication.SyncStableFile(file); err != nil {
+		return err
+	}
+	return durabilitycut.EmitStablePath(durabilitycut.AfterDependencyFileSync, resource, filepath.Dir(path), path, file)
+}
+
+func externalMkdirTemp(dir, pattern string) (string, error) {
+	path, err := os.MkdirTemp(dir, pattern)
+	if err != nil {
+		return "", err
+	}
+	if err := durabilitycut.EmitNamespace(durabilitycut.NamespaceCreate, durabilitycut.ResourceAuxiliary, dir, "", path); err != nil {
+		return "", errors.Join(err, externalRemoveAll(path))
+	}
+	return path, nil
+}
+
+func externalRename(oldPath, newPath string) error {
+	if err := os.Rename(oldPath, newPath); err != nil {
+		return err
+	}
+	return durabilitycut.EmitNamespace(durabilitycut.NamespaceRename, durabilitycut.ResourceAuxiliary, filepath.Dir(newPath), oldPath, newPath)
+}
+
+func externalRemoveAll(path string) error {
+	_, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
 	if err != nil {
 		return err
 	}
-	return errors.Join(rootpublication.SyncStableFile(f), f.Close())
+	if err := os.RemoveAll(path); err != nil {
+		return err
+	}
+	return durabilitycut.EmitNamespace(durabilitycut.NamespaceUnlink, durabilitycut.ResourceAuxiliary, filepath.Dir(path), path, "")
 }
 
 func (o *ExternalRecovery) dataPath(name string) (string, error) {
@@ -716,7 +741,7 @@ func (o *ExternalRecovery) cleanupDataDirectories() error {
 		if !entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
 			return ErrExternalRecovery
 		}
-		if err := os.RemoveAll(filepath.Join(o.dir, name)); err != nil {
+		if err := externalRemoveAll(filepath.Join(o.dir, name)); err != nil {
 			return err
 		}
 	}

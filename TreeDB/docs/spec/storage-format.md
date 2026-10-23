@@ -4334,3 +4334,9 @@ selects a final `materialized-*` namespace. The previous certificate can name a
 different, closed physical namespace until retirement. Portable tar transfer and
 receiver identity rebinding are specified in
 [external recovery](external-recovery.md#authorized-portable-snapshot-transfer).
+
+External-recovery certificate, root descriptor and CURRENT encodings are unchanged
+by the stable-image observation seam. Their replacement protocol synchronizes
+the exact metadata file before rename and the containing directory afterward;
+restore synchronizes both selected meta slots before backend Open. The modeled
+recovery coverage and limits are described in [external recovery](external-recovery.md#modeled-stable-image-recovery).

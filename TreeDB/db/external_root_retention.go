@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -148,7 +149,14 @@ func restoreRetainedPhysicalRootsV1(dir string, current RetainedPhysicalRootV1, 
 		}
 	}
 	for slot, root := range roots {
+		offset := int64(slot) * int64(page.PageSize)
+		if err := durabilitycut.EmitStableRange(durabilitycut.BeforeMetaWrite, durabilitycut.ResourceMeta, dir, path, file, offset, int64(page.PageSize)); err != nil {
+			return err
+		}
 		if err := writeDurableMetaSlotV1(store, uint64(slot), root.Meta); err != nil {
+			return err
+		}
+		if err := durabilitycut.EmitStableRange(durabilitycut.AfterMetaWrite, durabilitycut.ResourceMeta, dir, path, file, offset, int64(page.PageSize)); err != nil {
 			return err
 		}
 		if afterSlot != nil {
@@ -157,5 +165,11 @@ func restoreRetainedPhysicalRootsV1(dir string, current RetainedPhysicalRootV1, 
 			}
 		}
 	}
-	return rootpublication.SyncStableFile(file)
+	if err := durabilitycut.EmitStablePath(durabilitycut.BeforeMetaSync, durabilitycut.ResourceMeta, dir, path, file); err != nil {
+		return err
+	}
+	if err := rootpublication.SyncStableFile(file); err != nil {
+		return err
+	}
+	return durabilitycut.EmitStablePath(durabilitycut.AfterMetaSync, durabilitycut.ResourceMeta, dir, path, file)
 }

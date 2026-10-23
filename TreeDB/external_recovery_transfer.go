@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
@@ -255,11 +256,11 @@ func (o *ExternalRecovery) InstallCheckpoint(ctx context.Context, src io.Reader,
 	if o.poison != nil {
 		return ExternalRecoveryCheckpoint{}, o.poison
 	}
-	stage, err := os.MkdirTemp(o.dir, ".install-")
+	stage, err := externalMkdirTemp(o.dir, ".install-")
 	if err != nil {
 		return ExternalRecoveryCheckpoint{}, err
 	}
-	defer os.RemoveAll(stage)
+	defer externalRemoveAll(stage)
 	source, err := o.extractCheckpoint(ctx, src, stage)
 	if err != nil {
 		return ExternalRecoveryCheckpoint{}, err
@@ -284,13 +285,13 @@ func (o *ExternalRecovery) InstallCheckpoint(ctx context.Context, src io.Reader,
 	if err != nil {
 		return ExternalRecoveryCheckpoint{}, err
 	}
-	if err := os.Rename(stage, final); err != nil {
+	if err := externalRename(stage, final); err != nil {
 		return ExternalRecoveryCheckpoint{}, err
 	}
 	publicationAttempted := false
 	defer func() {
 		if !publicationAttempted {
-			_ = os.RemoveAll(final)
+			_ = externalRemoveAll(final)
 		}
 	}()
 	if err := externalSyncDir(o.dir); err != nil {
@@ -441,8 +442,21 @@ func (o *ExternalRecovery) extractCheckpoint(ctx context.Context, src io.Reader,
 			if err != nil {
 				return source, err
 			}
+			if err := durabilitycut.EmitNamespace(durabilitycut.NamespaceCreate, durabilitycut.ResourceAuxiliary, stage, "", filePath); err != nil {
+				_ = file.Close()
+				return source, err
+			}
 			_, copyErr := io.CopyBuffer(io.MultiWriter(file, hash), reader, buffer)
-			if err := errors.Join(copyErr, rootpublication.SyncStableFile(file), file.Close()); err != nil {
+			resource := durabilitycut.ResourceAuxiliary
+			switch {
+			case rel == "index.db":
+				resource = durabilitycut.ResourceIndex
+			case strings.HasPrefix(rel, "value_vlog/"):
+				resource = durabilitycut.ResourceValueLog
+			case strings.HasPrefix(rel, "leaf_vlog/"):
+				resource = durabilitycut.ResourceOuterLeaf
+			}
+			if err := errors.Join(copyErr, externalSyncFile(file, resource), file.Close()); err != nil {
 				return source, err
 			}
 			if err := externalSyncDir(filepath.Dir(filePath)); err != nil {
