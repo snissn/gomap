@@ -10,7 +10,7 @@ import (
 
 func forceNormalPoolPressureForTest(tb testing.TB) {
 	tb.Helper()
-	saved, _ := poolPressureState.Load().(poolPressureSnapshot)
+	saved := poolPressureState.Load()
 	poolPressureState.Store(poolPressureSnapshot{
 		sampledUnixNano: poolPressureNow().UnixNano(),
 		level:           poolPressureNormal,

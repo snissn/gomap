@@ -1,5 +1,16 @@
 # benchprof
 
+Pool-pressure publication has standalone component controls:
+
+```sh
+GOWORK=off go test ./TreeDB/caching -run '^$' -bench '^BenchmarkPoolPressure(PublishSnapshot|CachedSnapshotRead|CachedPolicy)$' -benchmem -cpu=1,4,16 -benchtime=1s -count=3
+```
+
+See [the publication runbook](../../docs/benchmarks/pool-pressure-publication.md)
+for fresh-process stdout/stderr artifacts, cached-read contention, and the
+separate public durable PRIMARY guardrail. These Go outputs/profiles are not
+benchprof inputs.
+
 Raw value-log frame read amplification has a standalone production-planner
 microbenchmark:
 
