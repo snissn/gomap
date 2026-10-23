@@ -112,7 +112,7 @@ func TestPublicCommandWALGroupCommitSharesOneSyncAcrossConcurrentWaiters(t *test
 	}
 }
 
-func TestPublicCommandWALGroupCommitSoloDurableSyncBypassesCollection(t *testing.T) {
+func TestPublicCommandWALGroupCommitSingletonUsesCapturedPrefix(t *testing.T) {
 	dir := t.TempDir()
 	opts := commandWALDurabilityProofOptions(dir)
 	db, err := Open(opts)
@@ -126,23 +126,17 @@ func TestPublicCommandWALGroupCommitSoloDurableSyncBypassesCollection(t *testing
 		t.Fatalf("SetSync: %v", err)
 	}
 	after := db.Stats()
-	requirePublicStatDelta(t, before, after, "treedb.command_wal.append.count_total", 1)
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.append.count_total", 2)
 	requirePublicStatDelta(t, before, after, "treedb.command_wal.file_sync.calls_total", 1)
-	requirePublicStatDelta(t, before, after, "treedb.command_wal.sync.barrier.count_total", 0)
-	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.groups_total", 0)
-	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.syncs_total", 0)
-	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.bypasses_total", 1)
-	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.bypass.reason.solo_durable_sync_total", 1)
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.sync.barrier.count_total", 1)
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.groups_total", 1)
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.syncs_total", 1)
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.bypasses_total", 0)
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.bypass.reason.solo_durable_sync_total", 0)
 
 	frames := scanPublicCommandWALV2(t, dir)
-	if len(frames) != 1 {
-		t.Fatalf("solo durable frames=%+v, want one directly synced mutation", frames)
-	}
-	if frames[0].Kind == commitlog.CommandKindDurablePrefixBarrier {
-		t.Fatalf("solo durable frame=%+v, want mutation rather than collection barrier", frames[0])
-	}
-	if frames[0].DurabilityClass != commitlog.CommandDurabilityDurable {
-		t.Fatalf("solo durable frame class=%v, want durable", frames[0].DurabilityClass)
+	if len(frames) != 2 || frames[0].Kind == commitlog.CommandKindDurablePrefixBarrier || frames[1].Kind != commitlog.CommandKindDurablePrefixBarrier || frames[1].DurabilityClass != commitlog.CommandDurabilityDurable {
+		t.Fatalf("singleton frames=%+v, want mutation followed by captured durable barrier", frames)
 	}
 }
 
@@ -282,7 +276,10 @@ func TestPublicCommandWALGroupCommitSoloDurableTicketBlocksLaterRelaxedPublicati
 		releaseSoloOnce.Do(func() { close(releaseSolo) })
 	}
 	defer releaseSoloPublication()
-	db.commandWALGroupCommit.testAfterSoloRegister = func(ticket uint64) {
+	db.commandWALGroupCommit.testAfterRegister = func(ticket uint64, durable bool) {
+		if !durable {
+			return
+		}
 		if ticket != 1 {
 			t.Errorf("solo ticket=%d, want 1", ticket)
 		}
@@ -311,7 +308,7 @@ func TestPublicCommandWALGroupCommitSoloDurableTicketBlocksLaterRelaxedPublicati
 		completedTicket := db.commandWALGroupCommit.completedTicket
 		publishTicket := db.commandWALGroupCommit.publishTicket
 		db.commandWALGroupCommit.mu.Unlock()
-		if nextTicket == 2 && completedTicket == 2 && publishTicket == 1 {
+		if nextTicket == 2 && completedTicket == 0 && publishTicket == 1 {
 			break
 		}
 		if time.Now().After(deadline) {

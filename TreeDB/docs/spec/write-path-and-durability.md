@@ -891,3 +891,38 @@ records; verification still uses the original selected metadata owner, complete
 namespace requirements and original error custody. Stream readers are borrowed
 only through finalization and dropped before the captured read is released.
 No live ANN authority or new storage format is implied.
+
+### Captured-prefix pipeline prototype
+
+The isolated captured-prefix prototype uses the existing public ticket collector
+for both singleton and grouped durable writes. A production singleton dispatches
+immediately. Work arriving during its WAL file sync can append and install its
+complete COW cut, then joins a subsequent captured prefix. There is one
+publication order and one collector; no speculative root chain or second queue.
+Explicit test delay seams remain for deterministic group controls.
+
+Capture drains registered publication barriers, closes the selected dependency
+prefix, appends the existing V2 durable-prefix marker, flushes complete buffers,
+and pins exact segment identities and byte/LSN frontiers. It retains teardown
+but releases append/admission/publication gates before syncing the pinned WAL
+handles. Journal Close waits for capture release; rotation and cleanup respect
+its identity pins. Completion advances only the captured LSN. Incidental
+persistence of later bytes cannot acknowledge their tickets. Failed physical
+sync poisons the open handle and wakes all affected waiters; it is ambiguous
+and must not be transparently retried.
+
+This prototype preserves V2's dependency-before-durable-marker ordering:
+external value/auxiliary dependency sync, and required pre-marker rotation
+syncs, still run under capture authority. Moving those barriers outside append
+authority requires a recovery-format/certificate redesign. The prototype moves
+the captured WAL file barrier outside the COW writer and append gates without
+claiming that all dependency I/O overlaps. It adds a durable-prefix frame to
+singleton public writes, replacing the old directly synced singleton bypass.
+Standalone durability semantics and on-disk encodings remain unchanged.
+
+Focused blocked-fsync controls cover successor installation, exact-prefix ACK,
+failure wakeup/poisoning, rotation and clean reopen. These controls establish
+mechanism behavior, not production qualification, power-loss certification,
+resource equilibrium, or performance parity. Captured targets must be consumed;
+abandoning one retains its teardown lease and blocks Close. The public collector
+owns this lifecycle. Backend capture is an internal engine integration surface.

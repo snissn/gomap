@@ -44,6 +44,7 @@ type commandWALBatchIntent struct {
 	coveredRange        [1]CommandWALLSNRange
 	durablePrefixGroup  []*CommandWALIntent
 	syncOnPublish       bool
+	capturedDurable     bool // Durable frame class; physical barrier is completed by an owned capture.
 	staged              bool
 	dependencyResources *rootpublication.StableResourceSet
 	statsPath           commandWALAppendStatsPath
@@ -584,10 +585,15 @@ func (db *DB) SyncCommandWALAppliedPrefix() (physicalSync bool, err error) {
 }
 
 func (db *DB) appendCommandWALDurablePrefixBarrier() (uint64, error) {
+	return db.appendCommandWALPrefixBarrier(false)
+}
+
+func (db *DB) appendCommandWALPrefixBarrier(captured bool) (uint64, error) {
 	intent := &commandWALBatchIntent{
 		kind: commitlog.CommandKindDurablePrefixBarrier, scope: commitlog.CommandScopeSystem,
 		payloadFormat: commitlog.PayloadFormatDurablePrefixBarrierV1,
 		statsPath:     commandWALAppendStatsBarrier, statsPathSet: true,
+		capturedDurable: captured,
 	}
 	owner := db.acceptedPrefix.Load()
 	var ticket rootpublication.AcceptedTicket
@@ -601,14 +607,14 @@ func (db *DB) appendCommandWALDurablePrefixBarrier() (uint64, error) {
 			return 0, err
 		}
 	}
-	lsn, err := db.appendCommandWALIntent(intent, true)
+	lsn, err := db.appendCommandWALIntent(intent, !captured)
 	if owner == nil {
 		return lsn, err
 	}
 	if intent.lsn == 0 {
 		return lsn, errors.Join(err, ticket.CancelAccepted())
 	}
-	if recordErr := ticket.RecordAssigned(intent.lsn, err, err == nil); recordErr != nil {
+	if recordErr := ticket.RecordAssigned(intent.lsn, err, err == nil && !captured); recordErr != nil {
 		return intent.lsn, errors.Join(err, recordErr)
 	}
 	if err = ticket.InstallAccepted(rootpublication.AcceptedDescriptor{Sequence: owner.LogicalFrontiers().V, RootNeutral: true}); err != nil {
@@ -2878,7 +2884,7 @@ func (db *DB) appendCommandWALIntentWithTiming(intent *commandWALBatchIntent, sy
 		requestTiming.BackendIntentPlanningSerialization += time.Since(planningStart)
 	}
 	class := commitlog.CommandDurabilityRelaxed
-	if sync {
+	if sync || intent.capturedDurable {
 		class = commitlog.CommandDurabilityDurable
 	}
 	appendStart := time.Now()
@@ -2929,7 +2935,10 @@ func (db *DB) appendCommandWALIntentWithTiming(intent *commandWALBatchIntent, sy
 		requestTiming.FlushSync = actualSync
 		flushStart = time.Now()
 	}
-	flushErr := db.flushCommandWALForPath(sync, true, appendPath)
+	var flushErr error
+	if !intent.capturedDurable {
+		flushErr = db.flushCommandWALForPath(sync, true, appendPath)
+	}
 	if requestTiming != nil {
 		requestTiming.Flush = time.Since(flushStart)
 	}

@@ -209,6 +209,9 @@ type CommandJournalOptions struct {
 
 type CommandJournal struct {
 	mu                     sync.Mutex
+	closing                bool
+	syncPins               int
+	syncCond               *sync.Cond
 	owner                  *JournalOwner
 	writer                 *Writer
 	walDir                 string
@@ -604,6 +607,9 @@ func (j *CommandJournal) requireNoPendingStableRotationLocked() error {
 }
 
 func (j *CommandJournal) stableRotationFailStopErrorLocked() error {
+	if j != nil && j.closing {
+		return errors.New("commitlog: command journal is closed")
+	}
 	if j != nil && j.pendingStableSuccessor != nil && j.pendingStableSuccessor.failStop {
 		return errCommandJournalStableRotationFailStop
 	}
@@ -1918,6 +1924,10 @@ func (j *CommandJournal) Close() error {
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
+	j.closing = true
+	for j.syncPins != 0 {
+		j.syncCond.Wait()
+	}
 	var closeErrs []error
 	for _, rotation := range j.pendingStableRotations {
 		rotation.Release()
