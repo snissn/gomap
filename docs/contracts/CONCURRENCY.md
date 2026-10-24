@@ -29,6 +29,13 @@ No background writer or second accepted-prefix owner is introduced. Earlier V2
 external dependency and rotation synchronization remains serialized before a
 durable marker can be emitted.
 
+Ordinary prepared payloads retain their original backend append leases through
+the final full publisher check and fresh prefix capture. A pending publisher
+releases every original lease before draining and reacquiring; the assigned
+mutation is not appended again. Capture transfers the original teardown lease
+to the existing target and releases append/admission locks before file sync.
+Point, entry-scan and COW producers keep their existing admission routes.
+
 ### Iterators and snapshots
 
 - A TreeDB iterator is a point-in-time view of the DB as of iterator creation.

@@ -242,6 +242,20 @@ physical sync and terminal completion. Every backend producer drain remains
 required. The exclusive public gates release before physical sync. COW retains
 its separate registration, accepted installation and completion sequence.
 
+The ordinary prepared-payload family can retain the backend's original teardown,
+publisher-admission and raw-publication leases from append through capture. This
+includes prebuilt and prepared payloads, with and without request timing. The
+final full producer-hook scan still runs: existing hooks may acquire pending work
+without changing registration identity. PendingDrain releases all original leases
+and uses the existing drain/acquisition loop to capture the same assigned append,
+without appending it again. Capture samples the current complete frontier,
+dependency closure and exact journal file; retained admission alone does not
+freeze hook registration or direct journal rotation. Successful capture transfers
+the original teardown lease to the existing captured target, releasing raw and
+admission ownership before physical sync. Postassignment errors or selector panic
+remain ambiguous and poison later mutation. Point commands, entry scans and COW
+retain their existing admission routes; this does not optimize those paths.
+
 An idle captured-durable mutation orders all preceding dependencies before
 emitting its existing V2 durable class, but does not perform its own WAL sync.
 Queued durable participants append relaxed-class frames and retain exact debt

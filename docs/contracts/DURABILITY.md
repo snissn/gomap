@@ -67,6 +67,12 @@ earlier external-reference and rotation synchronization under append ordering.
 Only successful physical completion advances the existing stable-WAL frontier.
 Checkpoint and Close join the same accepted-prefix and retained-resource owners.
 
+An ordinary prepared-payload append may keep its backend leases through capture,
+while retaining the final complete publisher check. Pending publishers use the
+original unlocked drain and capture loop for that same assigned mutation.
+Capture still fixes the actual dependency closure and current journal file;
+postassignment uncertainty poisons writes rather than granting a durable ACK.
+
 For `no_wal_fast`, cached `Batch.WriteSync` covers the batch and earlier queued
 writes even when it bypasses the cache or stores USER leaves in the index. A
 successful backend write followed by a failed seal returns an error; the
