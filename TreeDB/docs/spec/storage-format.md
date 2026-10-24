@@ -4421,8 +4421,28 @@ external dependencies, and durable-prefix barriers remain authoritative.
 
 Writer/reader/recovery positions are logical stream offsets. Stable-resource
 byte frontiers are physical immutable extent ends, never physical capacity.
-Suffix repair zeros only discarded complete extents while retaining the file's
-capacity and every retained extent unchanged. Linux syncs initialized WAL
+Exclusive startup suffix repair copies the original header and retained complete
+extent prefix into a private file at the original capacity, fully writes zero
+reserve for the discarded suffix, and full-syncs that file before atomically
+replacing the canonical name through its retained parent and syncing the parent.
+Interrupted private writes leave the original classifiable container unchanged;
+after rename, the canonical image is a complete repair. No in-place multi-write
+erasure or repair marker changes the reserve validator. Unsupported atomic
+publication refuses fixed-container repair before mutation; native stream
+fallback retains ordinary truncation.
+
+Repair transfers its caller's owned file handle to the actual canonical
+replacement, including after an ambiguous namespace-sync error. It closes the
+old owned descriptor only after a replacement is open. A failed reopen leaves
+the old descriptor live for caller cleanup; both production callers abort on
+error. Independently retained handles, snapshots, and resource tokens keep the
+unchanged original inode and its bytes. This operation is limited to cold
+recovery before writer construction: it cannot update a live writer's buffered
+state or frontiers. A validated already-repaired logical end needs no new file.
+Ordinary journal construction persists its namespace before admitting appends,
+including when retry sees an already-published replacement.
+
+Linux syncs initialized WAL
 content with `fdatasync`; initialization, namespace persistence, all non-WAL
 resources, and portable fallback retain the full stable-file sync primitive.
 

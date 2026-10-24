@@ -7,6 +7,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 )
 
 func TestResolveRunnerPathsRequiresOutputDisjointFromRepository(t *testing.T) {
@@ -490,7 +492,11 @@ func TestReadExactCertificationInputsIgnoresMutableWorktreeAfterCheckout(t *test
 		t.Fatal(err)
 	}
 	inventoryData := []byte(mustJSON(t, testRiskInventory()))
-	contractsData := []byte(mustJSON(t, testWitnessContracts(testRunPlan())))
+	committedContracts := testWitnessContracts(testRunPlan())
+	fallback := committedContracts.Cases[0]
+	fallback.CutID = "cut/variant-a/after-meta-write/003"
+	committedContracts.StreamFallbackCases = []RunCase{fallback}
+	contractsData := []byte(mustJSON(t, committedContracts))
 	ledgerData := []byte(`{"schema_version":"exact-ledger/v1"}`)
 	for name, data := range map[string][]byte{
 		"power_loss_risk_inventory.json":    inventoryData,
@@ -526,6 +532,13 @@ func TestReadExactCertificationInputsIgnoresMutableWorktreeAfterCheckout(t *test
 	}
 	if string(inputs.contractsData) != string(contractsData) || string(inputs.ledgerData) != string(ledgerData) {
 		t.Fatal("mutable worktree certification input entered exact-SHA inputs")
+	}
+	expected, err := ResolveWitnessContracts(committedContracts, commitlog.FixedWALCreationSupported())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mustJSON(t, inputs.contracts) != mustJSON(t, expected) {
+		t.Fatal("exact-SHA loader did not project the real platform capability")
 	}
 	if err := os.WriteFile(filepath.Join(testdataDir, "power_loss_risk_inventory.json"), []byte(`{"mutable_worktree":true}`), 0o600); err != nil {
 		t.Fatal(err)

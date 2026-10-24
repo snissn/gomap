@@ -100,41 +100,28 @@ func TestFixedWALImmutableCaptureAndCorruption(t *testing.T) {
 }
 
 func TestFixedWALRepairRetainsImmutablePrefix(t *testing.T) {
-	if !FixedWALCreationSupported() {
-		t.Skip("fixed-container publication is unsupported on this platform")
-	}
-	journal, err := OpenCommandJournal(t.TempDir(), CommandJournalOptions{SegmentTargetBytes: 4096})
+	_, path, offset, original := fixedWALRepairFixture(t)
+	file, err := os.OpenFile(path, os.O_RDWR, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer journal.Close()
-	for i := 0; i < 2; i++ {
-		if _, e := journal.AppendCommand(fixedWALTestBarrier()); e != nil {
-			t.Fatal(e)
-		}
-	}
-	if err = journal.Sync(); err != nil {
-		t.Fatal(err)
-	}
-	state, _, err := loadFixedWAL(journal.writer.f)
+	defer func() { _ = file.Close() }()
+	state, _, err := loadFixedWAL(file)
 	if err != nil {
 		t.Fatal(err)
 	}
-	prefix := make([]byte, state.extents[0].end)
-	if _, err = journal.writer.f.ReadAt(prefix, 0); err != nil {
-		t.Fatal(err)
-	}
-	if err = TruncateLogicalFile(journal.writer.f, state.extents[0].length); err != nil {
+	prefix := original[:state.extents[0].end]
+	if err = TruncateLogicalFile(&file, offset); err != nil {
 		t.Fatal(err)
 	}
 	after := make([]byte, len(prefix))
-	if _, err = journal.writer.f.ReadAt(after, 0); err != nil {
+	if _, err = file.ReadAt(after, 0); err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(prefix, after) {
-		t.Fatal("repair rewrote retained prefix")
+		t.Fatal("repair changed retained prefix bytes")
 	}
-	loaded, _, err := loadFixedWAL(journal.writer.f)
+	loaded, _, err := loadFixedWAL(file)
 	if err != nil {
 		t.Fatal(err)
 	}

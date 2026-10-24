@@ -31,6 +31,9 @@ const (
 var fixedWALInitializeWrite = writeFixedAt
 var fixedWALInitializeSync = stableio.SyncFile
 var fixedWALUnacceptedSync = stableio.SyncFile
+var fixedWALRepairWrite = writeFixedAt
+var fixedWALRepairSync = stableio.SyncFile
+var fixedWALRepairOpen = rootpublication.OpenStableChildFile
 
 var fixedWALMagic = [8]byte{'T', 'D', 'B', 'W', 'A', 'L', 3, 0}
 var fixedWALExtentMagic = [8]byte{'T', 'D', 'B', 'E', 'X', 'T', 3, 0}
@@ -572,22 +575,34 @@ func (state *fixedWAL) flush(w *Writer) error {
 	return nil
 }
 
-// TruncateLogicalFile removes only complete frame extents. Retained extents are
-// never rewritten; repair therefore cannot tear a previously certified frame.
-// Callers retain existing append exclusion, exact-handle identity, and sync.
-func TruncateLogicalFile(file *os.File, offset int64) error {
-	state, _, err := loadFixedWAL(file)
+// TruncateLogicalFile is exclusive startup repair, before writer construction.
+// For a fixed container it atomically publishes a fully synced replacement with
+// the original header/retained complete extents and initialized zero reserve.
+// It transfers the caller's owned handle to the canonical replacement; other
+// retained handles keep the unchanged original inode. It cannot update a live
+// Writer's buffered state, resource tokens, or logical/physical frontiers.
+// On error callers must abort/close, including after ambiguous namespace sync.
+// Stream files retain their original in-place truncation behavior.
+func TruncateLogicalFile(file **os.File, offset int64) error {
+	if file == nil || *file == nil {
+		return os.ErrInvalid
+	}
+	previous := *file
+	state, _, err := loadFixedWAL(previous)
 	if err != nil {
 		return err
 	}
 	if state == nil {
-		return file.Truncate(offset)
+		return previous.Truncate(offset)
 	}
 	physical := int64(fixedWALHeaderSize)
 	logical := int64(0)
 	for _, extent := range state.extents {
 		if logical == offset {
 			break
+		}
+		if state.incomplete[extent.logical] != nil {
+			return fmt.Errorf("%w: logical repair retains an incomplete frame", ErrCorrupt)
 		}
 		logical += extent.length
 		physical = extent.end
@@ -598,13 +613,86 @@ func TruncateLogicalFile(file *os.File, offset int64) error {
 	if logical != offset {
 		return ErrCorrupt
 	}
-	zero := make([]byte, 64<<10)
-	for physical < state.capacity {
-		size := min(int64(len(zero)), state.capacity-physical)
-		if err := writeFixedAt(file, zero[:size], physical); err != nil {
+	if offset == state.logical {
+		return nil // The validated reserve is already empty.
+	}
+	if !FixedWALCreationSupported() {
+		return rootpublication.ErrNamespacePersistenceUnsupported
+	}
+	parent, err := rootpublication.OpenStableParent(filepath.Dir(previous.Name()))
+	if err != nil {
+		return err
+	}
+	defer parent.Close()
+	name := filepath.Base(previous.Name())
+	if err = rootpublication.ValidateStableChildLink(parent, previous, name); err != nil {
+		return err
+	}
+	var nonce [16]byte
+	if _, err = rand.Read(nonce[:]); err != nil {
+		return err
+	}
+	privateName := fmt.Sprintf(".wal-repair-%x", nonce)
+	private, err := rootpublication.OpenStableChildFile(parent, privateName, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = private.Close()
+		removePrivateFixedWAL(parent, privateName)
+	}()
+	if err = durabilitycut.EmitStableNamespace(durabilitycut.NamespaceCreate, durabilitycut.ResourceCommandWAL, parent.Name(), "", private.Name(), parent, private, "", privateName); err != nil {
+		return err
+	}
+	block := make([]byte, 64<<10)
+	for off := int64(0); off < state.capacity; {
+		size := min(int64(len(block)), state.capacity-off)
+		clear(block[:size])
+		if retained := min(size, physical-off); retained > 0 {
+			if _, err = previous.ReadAt(block[:retained], off); err != nil {
+				return err
+			}
+		}
+		if err = fixedWALRepairWrite(private, block[:size], off); err != nil {
 			return err
 		}
-		physical += size
+		off += size
+	}
+	if err = durabilitycut.EmitStablePath(durabilitycut.BeforeDependencyFileSync, durabilitycut.ResourceCommandWAL, parent.Name(), private.Name(), private); err != nil {
+		return err
+	}
+	if err = fixedWALRepairSync(private); err != nil {
+		return err
+	}
+	if err = durabilitycut.EmitStablePath(durabilitycut.AfterDependencyFileSync, durabilitycut.ResourceCommandWAL, parent.Name(), private.Name(), private); err != nil {
+		return err
+	}
+	initializedInfo, err := private.Stat()
+	if err != nil {
+		return err
+	}
+	if err = rootpublication.ValidateStableChildLink(parent, previous, name); err != nil {
+		return err
+	}
+	// Full private sync precedes atomic publication. Even if the namespace
+	// barrier fails, the canonical name can expose only the original retryable
+	// image or the complete repair. Keep old custody until a new handle exists.
+	publishErr := publishInitializedFixedWAL(parent, privateName, name)
+	replacement, openErr := fixedWALRepairOpen(parent, name, os.O_RDWR, 0)
+	if openErr != nil {
+		return errors.Join(publishErr, openErr)
+	}
+	*file = replacement
+	closeErr := previous.Close()
+	if publishErr != nil || closeErr != nil {
+		return errors.Join(publishErr, closeErr)
+	}
+	replacementInfo, err := replacement.Stat()
+	if err != nil {
+		return err
+	}
+	if !os.SameFile(initializedInfo, replacementInfo) {
+		return fmt.Errorf("%w: fixed WAL repair changed initialized identity", rootpublication.ErrResourceConflict)
 	}
 	return nil
 }

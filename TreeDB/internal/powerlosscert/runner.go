@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 )
 
 const (
@@ -331,6 +333,10 @@ func readExactCertificationInputs(sourceRoot, suppliedInventoryPath string) (exa
 		return exactCertificationInputs{}, fmt.Errorf("powerlosscert: read committed witness contracts: %w", err)
 	}
 	contracts, err := ParseWitnessContracts(contractsData)
+	if err != nil {
+		return exactCertificationInputs{}, err
+	}
+	contracts, err = ResolveWitnessContracts(contracts, commitlog.FixedWALCreationSupported())
 	if err != nil {
 		return exactCertificationInputs{}, err
 	}

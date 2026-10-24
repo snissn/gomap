@@ -635,7 +635,7 @@ func truncateAndSyncCommandWALV2(walDir, path string, offset int64, plan command
 		return nil
 	}
 	if logicalSize > offset {
-		err = commitlog.TruncateLogicalFile(f, offset)
+		err = commitlog.TruncateLogicalFile(&f, offset)
 	}
 	if err == nil {
 		err = durabilitycut.EmitPath(durabilitycut.BeforeDependencyFileSync, durabilitycut.ResourceCommandWAL, walDir, path)

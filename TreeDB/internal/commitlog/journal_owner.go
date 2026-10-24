@@ -548,7 +548,7 @@ func truncateCommandJournalTail(path string, size int64) error {
 	if err != nil {
 		return err
 	}
-	if err := TruncateLogicalFile(f, size); err != nil {
+	if err := TruncateLogicalFile(&f, size); err != nil {
 		_ = f.Close()
 		return err
 	}

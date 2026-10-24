@@ -52,6 +52,23 @@ Child manifests carry exact repository and PR provenance, structured
 test commands, observed cut metadata, recovery state, expected and actual
 outcomes, and SHA-256-addressed artifacts.
 
+The same authoritative witness-contract JSON can declare
+`stream_fallback_cases` for physical replay addresses that differ when fixed-WAL
+creation is unsupported. `ResolveWitnessContracts(contracts, fixedWAL)` projects
+those rows for both plan construction and exact-SHA execution. The runner uses
+the real fixed-WAL creation capability and compares the caller's concrete plan
+with the resolved cases; it never rewrites that plan. The original raw JSON,
+including both platform descriptions, remains in the bundle. Overrides preserve
+case IDs, count/order, PR provenance, risk labels, seed, test, profile, and
+recovery state. Only the cut address and physical dependency/horizon/claim text
+can differ. Unknown, duplicate, or authority-changing overrides fail closed even
+when the current platform would not select them.
+
+The grouped rotation/external witness therefore uses physical sync occurrence
+`/004` with private fixed-WAL initialization and `/003` on stream fallback,
+with identical recovered commit 3 / applied LSN 2. Every physical event remains
+in the model; platform projection does not renumber or suppress trace events.
+
 `TreeDB/internal/powerlosscert` rejects unknown JSON fields, stale or partial
 SHAs, duplicate IDs, undeclared inventory values, incomplete interactions,
 non-production profiles, unobserved cuts, missing modeled-crash artifact
