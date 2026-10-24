@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"unsafe"
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/internal/mvccadmission"
@@ -15,6 +16,10 @@ type logicalMVCCBuilderOwner interface {
 	SupportsLogicalMVCCStaging() bool
 }
 
+// Scratch reuse is a retention policy, not an admission limit. A large cut may
+// grow these structures, but cannot pin its largest allocation in an idle builder.
+const commitBuilderScratchRows = (64 << 10) / int(unsafe.Sizeof(mvccadmission.LogicalMutation{}))
+
 type commitIdentity struct {
 	key       string
 	timestamp uint64
@@ -25,11 +30,13 @@ type commitIdentity struct {
 // Begin retains discard-floor/lifecycle exclusion until Submit or Abort. No
 // accepted prefix or ticket exists before Submit. Never copy an active builder.
 type CommitBuilder struct {
-	mu     sync.Mutex
-	store  *Store
-	engine treedb.LogicalMVCCBuilder
-	seen   map[commitIdentity]struct{}
-	err    error
+	mu        sync.Mutex
+	store     *Store
+	engine    treedb.LogicalMVCCBuilder
+	seen      map[commitIdentity]struct{}
+	seenPeak  int
+	mutations []mvccadmission.LogicalMutation
+	err       error
 }
 
 // SupportsCommitGroupStaging reports exact native incremental route support.
@@ -69,7 +76,7 @@ func (s *Store) BeginCommitGroup(b *CommitBuilder) error {
 		s.mu.RUnlock()
 		return storageError("begin batch", err)
 	}
-	b.store, b.seen, b.err = s, nil, nil
+	b.store, b.err = s, nil
 	return nil
 }
 
@@ -91,8 +98,33 @@ func (b *CommitBuilder) AppendGroup(group CommitGroup) error {
 	if group.Timestamp == 0 {
 		return ErrZeroTimestamp
 	}
-	mutations := make([]mvccadmission.LogicalMutation, len(group.Mutations))
-	added := make(map[commitIdentity]struct{}, len(group.Mutations))
+	n := len(group.Mutations)
+	if cap(b.mutations) < n {
+		capacity := max(n, 2*cap(b.mutations))
+		b.mutations = make([]mvccadmission.LogicalMutation, n, capacity)
+	}
+	mutations := b.mutations[:n]
+	if b.seen == nil && n != 0 {
+		b.seen = make(map[commitIdentity]struct{}, n)
+		b.seenPeak = n
+	}
+	inserted, staged := 0, false
+	defer func() {
+		// These identities were absent before this call. Roll back only its
+		// additions, preserving prior groups even if this group duplicates one.
+		if !staged {
+			for _, m := range mutations[:inserted] {
+				delete(b.seen, commitIdentity{string(m.Key), m.Timestamp})
+			}
+		}
+		// LogicalInput/Append borrow this vector only through native staging;
+		// the batch retains its own copied keys and values, never these slices.
+		clear(mutations)
+		b.mutations = mutations[:0]
+		if cap(b.mutations) > commitBuilderScratchRows {
+			b.mutations = nil
+		}
+	}()
 	for i, m := range group.Mutations {
 		if _, err := mvcckey.EncodedLen(m.Key); err != nil {
 			return fmt.Errorf("%w at key index %d: %w", ErrInvalidKey, i, err)
@@ -101,11 +133,10 @@ func (b *CommitBuilder) AppendGroup(group CommitGroup) error {
 		if _, exists := b.seen[id]; exists {
 			return fmt.Errorf("%w at key index %d", ErrDuplicateKey, i)
 		}
-		if _, exists := added[id]; exists {
-			return fmt.Errorf("%w at key index %d", ErrDuplicateKey, i)
-		}
-		added[id] = struct{}{}
+		b.seen[id] = struct{}{}
+		b.seenPeak = max(b.seenPeak, len(b.seen))
 		mutations[i] = mvccadmission.LogicalMutation{Key: m.Key, Value: m.Value, Timestamp: group.Timestamp, Delete: m.Delete}
+		inserted++
 	}
 	if len(group.Mutations) != 0 && group.Timestamp <= b.store.discardFloor {
 		return fmt.Errorf("%w: timestamp %d is not above floor %d", ErrVersionBelowDiscardFloor, group.Timestamp, b.store.discardFloor)
@@ -114,13 +145,7 @@ func (b *CommitBuilder) AppendGroup(group CommitGroup) error {
 		b.err = storageError("stage batch", err)
 		return b.err
 	}
-	if b.seen == nil {
-		b.seen = added
-	} else {
-		for id := range added {
-			b.seen[id] = struct{}{}
-		}
-	}
+	staged = true
 	return nil
 }
 
@@ -151,7 +176,8 @@ func (b *CommitBuilder) Submit(mode CommitMode, c *CommitCompletion) error {
 	if b.err == nil && len(b.seen) == 0 {
 		err := b.engine.Abort()
 		b.store.mu.RUnlock()
-		b.store, b.seen = nil, nil
+		b.store = nil
+		b.resetScratchLocked()
 		if err != nil {
 			c.err = storageError("close empty batch", err)
 		}
@@ -170,7 +196,8 @@ func (b *CommitBuilder) Submit(mode CommitMode, c *CommitCompletion) error {
 	} else {
 		c.store = b.store
 	}
-	b.store, b.seen, b.err = nil, nil, nil
+	b.store, b.err = nil, nil
+	b.resetScratchLocked()
 	return err
 }
 
@@ -190,9 +217,22 @@ func (b *CommitBuilder) abortLocked() error {
 	}
 	err := b.engine.Abort()
 	b.store.mu.RUnlock()
-	b.store, b.seen, b.err = nil, nil, nil
+	b.store, b.err = nil, nil
+	b.resetScratchLocked()
 	if err != nil {
 		return storageError("abort batch", err)
 	}
 	return nil
+}
+
+// resetScratchLocked releases identity strings at the cut boundary. The peak
+// includes rolled-back groups: an oversized invalid input must not leave a large
+// empty map retained by an otherwise small reusable builder.
+func (b *CommitBuilder) resetScratchLocked() {
+	if b.seenPeak > commitBuilderScratchRows {
+		b.seen = nil
+	} else {
+		clear(b.seen)
+	}
+	b.seenPeak = 0
 }
