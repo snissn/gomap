@@ -299,6 +299,24 @@ and the active target is DB-owned reusable storage. COW admission and the existi
 finite accepted FIFO retain their capacity refusals; count/byte collector limits
 are triggers, not a new memory-admission guarantee for arbitrary caller concurrency.
 
+## Command encoding ownership
+
+V2 encoding uses a private transient plan containing the normalized envelope,
+canonical extensions and checked section lengths. Writer and public encoder
+entry points construct the plan through the same validator and emit through the
+same implementation. The plan borrows command storage only within the existing
+journal or writer ownership; it is not a retained validation certificate.
+The public encoder snapshots extension sections before writing its destination,
+preserving extension alias behavior. The private writer emits them directly.
+
+Journal preflight still validates size and capacity before rotation or LSN
+reservation. A callback that can mutate borrowed inputs ends that preparation's
+validity: encoding must validate the resulting command again using its actual
+assigned LSN. No caller can request skipped validation. Fixed-container flush
+still validates the complete buffered frame sequence before its first physical
+write. Checksums, extent framing, append accounting, failure poisoning and
+dependency-before-marker ordering retain their existing contracts.
+
 ## Logical observations versus physical calls
 
 The stats below are cumulative. Reports must delta them over the same active
