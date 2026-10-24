@@ -956,7 +956,15 @@ func (db *DB) cleanupCommandWALCoveredSegmentsV1() (retErr error) {
 		return db.syncCommandWALCleanupNamespaceIfDirty()
 	}
 	scanStart := time.Now()
-	decisions, err := scanCommandWALSegmentsForCleanupProof(db.dir, proof.cleanupThrough, proof.durableWALLSN, db.walMaxSegmentBytes)
+	var decisions []commandWALSegmentCleanupDecision
+	// Listing and reader construction both validate fixed-container reserve.
+	// Retain append exclusion through the complete scan so they inspect one
+	// immutable physical prefix. Release it before durablePublishMu below.
+	err = proof.journalOwner.WithCleanupScan(proof.journal, func() error {
+		var scanErr error
+		decisions, scanErr = scanCommandWALSegmentsForCleanupProof(db.dir, proof.cleanupThrough, proof.durableWALLSN, db.walMaxSegmentBytes)
+		return scanErr
+	})
 	proof.segments = decisions
 	db.commandWALCleanupScans.Add(1)
 	if scanNs := commandWALDurationNs(time.Since(scanStart)); scanNs > 0 {

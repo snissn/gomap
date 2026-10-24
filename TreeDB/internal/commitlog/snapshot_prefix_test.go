@@ -218,6 +218,9 @@ type snapshotShortWriter struct{}
 func (snapshotShortWriter) Write(p []byte) (int, error) { return len(p) - 1, nil }
 
 func TestCommandWALSnapshotPrefixRejectsCorruptReserve(t *testing.T) {
+	if !FixedWALCreationSupported() {
+		t.Skip("requires a fixed-container reserve")
+	}
 	j, err := OpenCommandJournal(t.TempDir(), CommandJournalOptions{SegmentTargetBytes: 1024})
 	if err != nil {
 		t.Fatal(err)
@@ -238,6 +241,9 @@ func TestCommandWALSnapshotPrefixRejectsCorruptReserve(t *testing.T) {
 }
 
 func TestCommandWALSnapshotPrefixCannotDiscardIncompleteCommand(t *testing.T) {
+	if !FixedWALCreationSupported() {
+		t.Skip("requires a fixed-container reserve")
+	}
 	j, err := OpenCommandJournal(t.TempDir(), CommandJournalOptions{SegmentTargetBytes: 4096})
 	if err != nil {
 		t.Fatal(err)

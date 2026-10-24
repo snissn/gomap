@@ -4,9 +4,14 @@ import (
 	"context"
 	"os"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 )
 
 func TestCommandWALFixedCapacityCleanupSeparatesLogicalDebtAndPhysicalBytes(t *testing.T) {
+	if !commitlog.FixedWALCreationSupported() {
+		t.Skip("requires fixed-container physical reserve accounting")
+	}
 	dir := t.TempDir()
 	database, err := Open(Options{
 		Dir: dir, CommandWAL: true, Durability: DurabilityWALOnRelaxed,

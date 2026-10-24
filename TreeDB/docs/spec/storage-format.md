@@ -4369,16 +4369,33 @@ projection; their pager-backed index layout does not imply ordinary DATA role.
 
 ## Initialized command-WAL container v3
 
-New production command-journal segments use a fixed-capacity container around
-unchanged length/CRC-bounded V2 frames. This is a pre-alpha container format
+On supported Unix platforms, new production command-journal segments use a
+fixed-capacity container around unchanged length/CRC-bounded V2 frames. This is a pre-alpha container format
 change, separate from the inner command frame version. Intact older stream
 segments remain readable; no migration or format downgrade is performed.
 
 The 4096-byte container header starts with `TDBWAL\x03\x00`, a random 16-byte
 segment identity, physical capacity, and a CRC32C. Reserved header bytes and
 unused capacity are initialized to zero. Creation writes every reserved byte,
-fully syncs the initialized file, and persists its namespace before appending
-frames. A sparse truncate or unwritten preallocation is insufficient.
+fully syncs a private `.wal-initialize-*` file, and atomically publishes the
+complete container over the still-empty canonical segment before appending
+frames. Supported Unix publication uses retained-parent rename and directory
+sync; the reopened replacement is checked against the initialized physical identity.
+Windows does not expose this retained-parent atomic publication contract, so
+fresh Windows segments retain the original stream format and full-file sync.
+Existing V3 containers remain readable on Windows; subsequent rotation creates
+a stream successor. Direct fixed-container initialization fails with typed
+`ErrNamespacePersistenceUnsupported` before changing canonical bytes or handles.
+This selection is automatic and adds no durability option. Private initialization
+names are ignored by recovery. A process stop during reserve writes therefore
+leaves either the original empty canonical segment or a complete initialized
+container, never an accepted magic prefix with a short reserve. A sparse
+truncate or unwritten preallocation is insufficient. An installed empty
+container that cannot hold the incoming frame rotates to a larger successor;
+its existing header/reserve are never grown in place. A validated empty,
+not-yet-installed successor may be replaced through the same atomic publication.
+Accepted-container corruption continues to fail closed without an initialization
+recovery exception.
 
 Each immutable extent contains one unchanged command frame, with 96-byte start
 and end witnesses. Padding places each end witness on a 64-byte boundary;
@@ -4420,8 +4437,14 @@ The initial implementation uses an approximately 4 MiB initialized physical
 reserve and a conservative logical rotation budget of at most 1 MiB. An
 oversized atomic frame initializes an appropriately larger chosen empty segment
 before append, including when a nonempty predecessor must first rotate.
-Initialization/rotation cost and reserved disk space are part of operational
-cost, not a steady-state append optimization claim.
+Rotation also checks the physical capacity recorded by the reopened container,
+including a bounded allowance for buffered frames, even if the newly configured
+logical target is larger. Initialization/rotation cost and reserved disk space
+are part of operational cost, not a steady-state append optimization claim.
+Cleanup holds journal append exclusion through both segment listing and complete
+reader scans, releasing it before publication/durability revalidation locks.
+This keeps reserve validation on a coherent immutable prefix without flushing
+unaccepted buffered bytes as a maintenance side effect.
 
 An interrupted relaxed extent can retain an explicit incomplete-frame identity
 only when its start bounds/checksum and stable V2 identity validate and its end

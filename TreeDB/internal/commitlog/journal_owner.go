@@ -15,6 +15,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/internal/stableio"
 )
 
 type JournalOwner struct {
@@ -591,11 +592,11 @@ func (j *CommandJournal) maybeRotateForFrameLockedObservedWithNamespaceDebt(fram
 	}
 	total := int64(segmentHeaderSize + frameSize)
 	activeBytes := j.writer.ActiveBytes()
-	if err := j.writer.ensureEmptyFixedFrameCapacity(total); err != nil {
+	if err := j.writer.commandBufferError(); err != nil {
 		return err
 	}
 
-	if activeBytes <= 0 || activeBytes+total <= j.segmentTargetBytes {
+	if (activeBytes <= 0 || activeBytes+total <= j.segmentTargetBytes) && j.writer.fixedFitsAppend(total) {
 		return nil
 	}
 	if err := j.requireNoPendingStableRotationLocked(); err != nil {
@@ -900,14 +901,12 @@ func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurren
 		j.pendingStableSuccessor = pending
 	}
 	prepared := pending.file
-	if !pending.observerEmitted {
-		pending.observerEmitted = true
-		if observeErr := durabilitycut.EmitNamespace(durabilitycut.NamespaceCreate, durabilitycut.ResourceCommandWAL, filepath.Dir(nextPath), "", nextPath); observeErr != nil {
-			closedToken.Release()
-			return nil, pendingCommandWALFailure(parent, prepared, nextPath, observeErr)
-		}
+	if err := rootpublication.ValidateStableChildLink(parent, prepared, filepath.Base(nextPath)); err != nil {
+		closedToken.Release()
+		return nil, err
 	}
-	state, _, err := j.writer.prepareFixedSuccessor(prepared)
+	state, _, err := j.writer.prepareFixedSuccessor(&prepared, parent)
+	pending.file = prepared
 	if err != nil {
 		closedToken.Release()
 		pending.failStop = true
@@ -915,6 +914,13 @@ func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurren
 		closeErr := prepared.Close()
 		pending.file = nil
 		return nil, j.writer.poisonCommandBuffer(errors.Join(err, cleanupErr, closeErr))
+	}
+	if !pending.observerEmitted {
+		pending.observerEmitted = true
+		if observeErr := durabilitycut.EmitNamespace(durabilitycut.NamespaceCreate, durabilitycut.ResourceCommandWAL, filepath.Dir(nextPath), "", nextPath); observeErr != nil {
+			closedToken.Release()
+			return nil, pendingCommandWALFailure(parent, prepared, nextPath, observeErr)
+		}
 	}
 	activeInfo, err := prepared.Stat()
 	if err != nil {
@@ -959,8 +965,12 @@ func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurren
 			}
 		}
 	}
+	activeStableBytes := activeInfo.Size()
+	if state != nil {
+		activeStableBytes = state.physical
+	}
 	activeToken, err := j.stableSegmentToken(prepared, nextPath, nextSeq, rootpublication.ReachabilityCommandWALActive,
-		rootpublication.DurableFrontier{Bytes: uint64(fixedWALHeaderSize)}, namespace, false)
+		rootpublication.DurableFrontier{Bytes: uint64(activeStableBytes)}, namespace, false)
 	namespace.Release()
 	if err != nil {
 		closedToken.Release()
@@ -988,6 +998,8 @@ func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurren
 		if oldFixed == nil {
 			j.writer.syncFn = syncWALData
 		}
+	} else if oldFixed != nil {
+		j.writer.syncFn = stableio.SyncFile
 	}
 	j.writer.scratch = j.writer.scratch[:0]
 	j.segmentSeq = nextSeq
@@ -1127,6 +1139,30 @@ func (j *CommandJournal) CaptureCleanupSnapshot() (CommandJournalCleanupSnapshot
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	return j.cleanupSnapshotLocked()
+}
+
+// WithCleanupScan excludes append and rotation for the entire listing/reader
+// scan, including reserve validation of the active fixed container. The caller
+// must release this authority before acquiring publication/durability locks;
+// fn may inspect files but must not call back into the journal or publish roots.
+// Unflushed accepted bytes are intentionally not flushed by maintenance.
+func (j *CommandJournal) WithCleanupScan(snapshot CommandJournalCleanupSnapshot, fn func() error) error {
+	if j == nil {
+		return errors.Join(ErrCommandWALCleanupSnapshotStale, errors.New("commitlog: command journal is closed"))
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	current, err := j.cleanupSnapshotLocked()
+	if err != nil {
+		return errors.Join(ErrCommandWALCleanupSnapshotStale, err)
+	}
+	if err = validateMonotonicCleanupSnapshot(snapshot, current); err != nil {
+		return err
+	}
+	if fn == nil {
+		return nil
+	}
+	return fn()
 }
 
 func validateMonotonicCleanupSnapshot(captured, current CommandJournalCleanupSnapshot) error {

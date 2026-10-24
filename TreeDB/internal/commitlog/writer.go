@@ -232,6 +232,9 @@ func NewWriter(path string) (*Writer, error) {
 }
 
 func NewWriterWithOptions(path string, opts Options) (*Writer, error) {
+	if !FixedWALCreationSupported() {
+		opts.fixedCapacity = 0
+	}
 	f, err := openLogFile(path, os.O_RDWR)
 	if err != nil {
 		return nil, err
@@ -252,13 +255,14 @@ func NewWriterWithOptions(path string, opts Options) (*Writer, error) {
 			return nil, e
 		}
 		if info.Size() == 0 {
-			state, loadErr = initializeFixedWAL(f, opts.fixedCapacity)
+			state, loadErr = initializeFixedWAL(&f, opts.fixedCapacity, nil)
 			if loadErr != nil {
 				_ = f.Close()
 				return nil, loadErr
 			}
 		}
 	}
+	w.f = f
 	w.fixed = state
 	w.fixedTarget = opts.fixedCapacity
 	if state != nil {
@@ -661,7 +665,7 @@ func (w *Writer) rotateToWithSyncObserved(path string, syncCurrent bool, root st
 			return writerRotationOutcome{}, errors.Join(err, file.Close())
 		}
 	}
-	state, size, err := w.prepareFixedSuccessor(file)
+	state, size, err := w.prepareFixedSuccessor(&file, preparedParent)
 	if err != nil {
 		// Keep ownership of the old descriptor; the failed candidate is never the
 		// writer's authoritative file, and is closed even after partial reserve I/O.

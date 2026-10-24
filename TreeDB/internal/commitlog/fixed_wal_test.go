@@ -9,6 +9,9 @@ import (
 )
 
 func TestFixedWALImmutableCaptureAndCorruption(t *testing.T) {
+	if !FixedWALCreationSupported() {
+		t.Skip("fixed-container publication is unsupported on this platform")
+	}
 	dir := t.TempDir()
 	journal, err := OpenCommandJournal(dir, CommandJournalOptions{SegmentTargetBytes: 4096, CaptureStableResources: true})
 	if err != nil {
@@ -97,6 +100,9 @@ func TestFixedWALImmutableCaptureAndCorruption(t *testing.T) {
 }
 
 func TestFixedWALRepairRetainsImmutablePrefix(t *testing.T) {
+	if !FixedWALCreationSupported() {
+		t.Skip("fixed-container publication is unsupported on this platform")
+	}
 	journal, err := OpenCommandJournal(t.TempDir(), CommandJournalOptions{SegmentTargetBytes: 4096})
 	if err != nil {
 		t.Fatal(err)
@@ -144,6 +150,9 @@ func fixedWALTestBarrier() CommandEnvelope {
 }
 
 func TestFixedWALEncodeReusePreservesFramesAndZeroPadding(t *testing.T) {
+	if !FixedWALCreationSupported() {
+		t.Skip("fixed-container publication is unsupported on this platform")
+	}
 	journal, err := OpenCommandJournal(t.TempDir(), CommandJournalOptions{SegmentTargetBytes: 16 << 10})
 	if err != nil {
 		t.Fatal(err)

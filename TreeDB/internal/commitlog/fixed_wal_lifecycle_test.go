@@ -88,6 +88,9 @@ func TestFixedWALDiscardRejectsForeignSuccessor(t *testing.T) {
 }
 
 func TestFixedWALWindowsNeutralizationFailureStopsWriter(t *testing.T) {
+	if !FixedWALCreationSupported() {
+		t.Skip("fixed-container publication is unsupported on this platform")
+	}
 	if runtime.GOOS != "windows" {
 		t.Skip("Windows child-only creation persistence")
 	}
@@ -203,6 +206,9 @@ func fixedWALDrainRotations(t *testing.T, j *CommandJournal) {
 	}
 }
 func TestFixedWALOversizedChosenSuccessor(t *testing.T) {
+	if !FixedWALCreationSupported() {
+		t.Skip("fixed-container publication is unsupported on this platform")
+	}
 	for _, stable := range []bool{false, true} {
 		for _, firstLarge := range []bool{false, true} {
 			name := "ordinary"
@@ -276,6 +282,9 @@ func TestFixedWALOversizedChosenSuccessor(t *testing.T) {
 // new header and part of its reserve; the sync fault follows all reserve writes
 // and an actual full sync. Restoring I/O must not permit another ACK.
 func TestFixedWALInitializationFailureStopsWriter(t *testing.T) {
+	if !FixedWALCreationSupported() {
+		t.Skip("fixed-container publication is unsupported on this platform")
+	}
 	for _, where := range []string{"resize", "ordinary_rotation", "stable_rotation"} {
 		for _, fault := range []string{"short_write", "enospc", "full_sync"} {
 			t.Run(where+"/"+fault, func(t *testing.T) {
@@ -360,13 +369,8 @@ func TestFixedWALInitializationFailureStopsWriter(t *testing.T) {
 					if _, e := modified.ReadAt(make([]byte, 1), 0); !errors.Is(e, os.ErrClosed) {
 						t.Errorf("failed prepared descriptor remains open: %v", e)
 					}
-					if runtime.GOOS == "windows" {
-						info, e := os.Stat(modified.Name())
-						if e != nil || info.Size() != 0 {
-							t.Errorf("failed Windows successor is not canonical empty: info=%v err=%v", info, e)
-						}
-					} else if _, e := os.Stat(modified.Name()); !errors.Is(e, os.ErrNotExist) {
-						t.Errorf("unaccepted partial successor remains linked: %v", e)
+					if _, e := os.Stat(modified.Name()); !errors.Is(e, os.ErrNotExist) {
+						t.Errorf("unpublished partial initialization remains linked: %v", e)
 					}
 				}
 				if _, e := oldFile.Stat(); e != nil {
@@ -396,6 +400,9 @@ func TestFixedWALInitializationFailureStopsWriter(t *testing.T) {
 }
 
 func TestFixedWALFlushRetainsPendingBase(t *testing.T) {
+	if !FixedWALCreationSupported() {
+		t.Skip("fixed-container publication is unsupported on this platform")
+	}
 	j, err := OpenCommandJournal(t.TempDir(), CommandJournalOptions{SegmentTargetBytes: 4096})
 	if err != nil {
 		t.Fatal(err)
@@ -427,6 +434,9 @@ func TestFixedWALFlushRetainsPendingBase(t *testing.T) {
 // Cleanup requires exclusive creation proof. An existing foreign/corrupt
 // successor must remain untouched even though this writer then fails stop.
 func TestFixedWALFailedPreparationRetainsExistingSuccessor(t *testing.T) {
+	if !FixedWALCreationSupported() {
+		t.Skip("fixed-container publication is unsupported on this platform")
+	}
 	j, err := OpenCommandJournal(t.TempDir(), CommandJournalOptions{SegmentTargetBytes: 1024})
 	if err != nil {
 		t.Fatal(err)
@@ -455,6 +465,9 @@ func TestFixedWALFailedPreparationRetainsExistingSuccessor(t *testing.T) {
 }
 
 func TestFixedWALOversizedExistingEmptySuccessor(t *testing.T) {
+	if !FixedWALCreationSupported() {
+		t.Skip("fixed-container publication is unsupported on this platform")
+	}
 	j, err := OpenCommandJournal(t.TempDir(), CommandJournalOptions{SegmentTargetBytes: 1024})
 	if err != nil {
 		t.Fatal(err)
@@ -487,6 +500,9 @@ func TestFixedWALOversizedExistingEmptySuccessor(t *testing.T) {
 }
 
 func TestFixedWALRawJournalRejectsIncompleteRelaxedExtent(t *testing.T) {
+	if !FixedWALCreationSupported() {
+		t.Skip("fixed-container publication is unsupported on this platform")
+	}
 	j, err := OpenCommandJournal(t.TempDir(), CommandJournalOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -547,6 +563,9 @@ func TestFixedWALRawJournalRejectsIncompleteRelaxedExtent(t *testing.T) {
 }
 
 func TestFixedWALRejectsAnonymousPhysicalEOFTail(t *testing.T) {
+	if !FixedWALCreationSupported() {
+		t.Skip("fixed-container publication is unsupported on this platform")
+	}
 	j, err := OpenCommandJournal(t.TempDir(), CommandJournalOptions{})
 	if err != nil {
 		t.Fatal(err)
