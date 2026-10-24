@@ -6,9 +6,170 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"syscall"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
+
+func TestFixedWALUnacceptedSuccessorNeutralization(t *testing.T) {
+	for _, failSync := range []bool{false, true} {
+		t.Run(map[bool]string{false: "success", true: "sync_failure"}[failSync], func(t *testing.T) {
+			file, err := os.CreateTemp(t.TempDir(), "unaccepted")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer file.Close()
+			// An actual partly initialized header/reserve, never an accepted file.
+			if _, err = file.Write([]byte("TDBWAL\x03\x00partial reserve")); err != nil {
+				t.Fatal(err)
+			}
+			oldSync := fixedWALUnacceptedSync
+			defer func() { fixedWALUnacceptedSync = oldSync }()
+			synced := false
+			fixedWALUnacceptedSync = func(f *os.File) error {
+				if f != file {
+					t.Fatal("sync used another handle")
+				}
+				info, e := f.Stat()
+				if e != nil || info.Size() != 0 {
+					t.Fatalf("sync before canonical empty: %v", e)
+				}
+				if e = oldSync(f); e != nil {
+					return e
+				}
+				synced = true
+				if failSync {
+					return syscall.EIO
+				}
+				return nil
+			}
+			err = neutralizeUnacceptedFixedSuccessor(file)
+			if !synced || (failSync && !errors.Is(err, syscall.EIO)) || (!failSync && err != nil) {
+				t.Fatalf("synced=%v err=%v", synced, err)
+			}
+			if err = file.Close(); err != nil {
+				t.Fatal(err)
+			}
+			frames, err := ScanCommandFramesV2(file.Name(), Options{})
+			if err != nil || len(frames) != 0 {
+				t.Fatalf("neutralized file: frames=%d err=%v", len(frames), err)
+			}
+			if err = neutralizeUnacceptedFixedSuccessor(file); !errors.Is(err, os.ErrClosed) {
+				t.Fatalf("closed-handle truncate=%v", err)
+			}
+		})
+	}
+}
+
+func TestFixedWALDiscardRejectsForeignSuccessor(t *testing.T) {
+	parent, err := rootpublication.OpenStableParent(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Close()
+	file, err := os.CreateTemp(t.TempDir(), "foreign")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	before := []byte("unowned corrupt candidate")
+	if _, err = file.Write(before); err != nil {
+		t.Fatal(err)
+	}
+	if err = discardUnacceptedFixedSuccessor(parent, file); err == nil {
+		t.Fatal("discard accepted foreign identity")
+	}
+	after, err := os.ReadFile(file.Name())
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("foreign file changed: %v", err)
+	}
+}
+
+func TestFixedWALWindowsNeutralizationFailureStopsWriter(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows child-only creation persistence")
+	}
+	for _, stable := range []bool{false, true} {
+		t.Run(map[bool]string{false: "ordinary", true: "stable"}[stable], func(t *testing.T) {
+			j, err := OpenCommandJournal(t.TempDir(), CommandJournalOptions{SegmentTargetBytes: 1024, CaptureStableResources: stable})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer j.Close()
+			if _, err = j.AppendCommand(fixedWALTestBarrier()); err != nil {
+				t.Fatal(err)
+			}
+			if err = j.Sync(); err != nil {
+				t.Fatal(err)
+			}
+			accepted, err := os.ReadFile(j.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			oldPath := j.path
+			before := j.NextLSN()
+			oldWrite, oldSync := fixedWALInitializeWrite, fixedWALUnacceptedSync
+			defer func() { fixedWALInitializeWrite, fixedWALUnacceptedSync = oldWrite, oldSync }()
+			var candidate *os.File
+			writes, syncs := 0, 0
+			fixedWALInitializeWrite = func(w io.WriterAt, p []byte, off int64) error {
+				writes++
+				candidate = w.(*os.File)
+				if writes == 2 {
+					if _, e := w.WriteAt(p[:97], off); e != nil {
+						return e
+					}
+					return io.ErrShortWrite
+				}
+				return oldWrite(w, p, off)
+			}
+			fixedWALUnacceptedSync = func(f *os.File) error {
+				syncs++
+				if e := oldSync(f); e != nil {
+					return e
+				}
+				return syscall.EIO
+			}
+			_, err = j.AppendCommand(fixedWALLifecycleFrame(t, 32<<10))
+			fixedWALInitializeWrite, fixedWALUnacceptedSync = oldWrite, oldSync
+			if !errors.Is(err, io.ErrShortWrite) || !errors.Is(err, syscall.EIO) || syncs != 1 {
+				t.Fatalf("neutralization custody: syncs=%d err=%v", syncs, err)
+			}
+			if _, err = j.AppendCommand(fixedWALTestBarrier()); err == nil {
+				t.Fatal("append ACK after neutralization error")
+			}
+			if err = j.Sync(); err == nil {
+				t.Fatal("sync ACK after neutralization error")
+			}
+			if j.NextLSN() != before {
+				t.Fatal("failed successor consumed LSN")
+			}
+			if candidate == nil {
+				t.Fatal("no modified successor")
+			}
+			if _, err = candidate.ReadAt(make([]byte, 1), 0); !errors.Is(err, os.ErrClosed) {
+				t.Fatalf("candidate open: %v", err)
+			}
+			after, err := os.ReadFile(oldPath)
+			if err != nil || !bytes.Equal(accepted, after) {
+				t.Fatalf("accepted bytes changed: %v", err)
+			}
+			_ = j.Close() // The originating initialization error remains sticky.
+			// The injected sync completed physically before returning an error.
+			// Recovery is possible, but the failed writer must stay poisoned.
+			reopened, err := OpenCommandJournal(j.walDir, CommandJournalOptions{SegmentTargetBytes: 1024})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer reopened.Close()
+			if reopened.NextLSN() != before {
+				t.Fatal("prior ACK frontier lost")
+			}
+		})
+	}
+}
 
 func fixedWALLifecycleFrame(t *testing.T, size int) CommandEnvelope {
 	t.Helper()
@@ -196,10 +357,15 @@ func TestFixedWALInitializationFailureStopsWriter(t *testing.T) {
 					}
 				}
 				if where != "resize" {
-					if _, e := modified.Stat(); !errors.Is(e, os.ErrClosed) {
+					if _, e := modified.ReadAt(make([]byte, 1), 0); !errors.Is(e, os.ErrClosed) {
 						t.Errorf("failed prepared descriptor remains open: %v", e)
 					}
-					if _, e := os.Stat(modified.Name()); !errors.Is(e, os.ErrNotExist) {
+					if runtime.GOOS == "windows" {
+						info, e := os.Stat(modified.Name())
+						if e != nil || info.Size() != 0 {
+							t.Errorf("failed Windows successor is not canonical empty: info=%v err=%v", info, e)
+						}
+					} else if _, e := os.Stat(modified.Name()); !errors.Is(e, os.ErrNotExist) {
 						t.Errorf("unaccepted partial successor remains linked: %v", e)
 					}
 				}
@@ -207,7 +373,7 @@ func TestFixedWALInitializationFailureStopsWriter(t *testing.T) {
 					t.Errorf("old descriptor closed before owner Close: %v", e)
 				}
 				_ = j.Close()
-				if _, e := oldFile.Stat(); !errors.Is(e, os.ErrClosed) {
+				if _, e := oldFile.ReadAt(make([]byte, 1), 0); !errors.Is(e, os.ErrClosed) {
 					t.Errorf("old descriptor leaked after Close: %v", e)
 				}
 				if where != "resize" {

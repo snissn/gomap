@@ -4440,10 +4440,24 @@ its writer state or issuing resource/namespace tokens. An initialization error
 before LSN reservation still poisons the writer; restoring I/O cannot permit a
 later append to acknowledge bytes under a stale container identity. A failed
 fresh successor that has never been installed or received a frame is removed
-through its validated exact parent/name and the parent is synced. Its descriptor
+through its validated exact parent/name and the parent is synced on Unix.
+Windows supports child-based creation persistence, without advertising durable
+rename/removal. There the validated fresh handle is truncated to a canonical
+empty legacy segment and fully synced before close; ordinary recovery can
+initialize that empty successor again. Any neutralization error remains part of
+the poisoned writer's failure and cannot authorize a later ACK. Its descriptor
 is then closed; the predecessor descriptor remains owned until journal close.
 Existing successors are never removed by this failure cleanup. If cleanup or
 its namespace sync also fails, the error is retained and prior-prefix recovery
 availability is not claimed. An empty active file resized in place has no
 accepted frame; failure there remains fail-stop without unlinking that active
 file.
+
+Deferred physical snapshots freeze each command-WAL file's validated occupied
+extent boundary while apply admission is excluded. Export reads only that
+immutable prefix through its retained exact handle, emits the captured header,
+and synthesizes zeroes for the original initialized reserve. Later source
+appends, rotations, empty-segment resizing, and pathname replacement therefore
+cannot enter the captured cut. Legacy stream files retain their captured EOF.
+Export preserves physical capacity and never mutates source bytes or relaxes the
+read-only applied-LSN check. Snapshot disk admission still counts full capacity.

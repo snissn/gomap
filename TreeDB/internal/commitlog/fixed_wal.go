@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"time"
 
@@ -27,6 +28,7 @@ const (
 // partial reserve write or full-sync failure without changing append I/O.
 var fixedWALInitializeWrite = writeFixedAt
 var fixedWALInitializeSync = stableio.SyncFile
+var fixedWALUnacceptedSync = stableio.SyncFile
 
 var fixedWALMagic = [8]byte{'T', 'D', 'B', 'W', 'A', 'L', 3, 0}
 var fixedWALExtentMagic = [8]byte{'T', 'D', 'B', 'E', 'X', 'T', 3, 0}
@@ -327,17 +329,32 @@ func (w *Writer) flushFixed() error {
 
 // discardUnacceptedFixedSuccessor is only for an exact freshly created
 // successor that has never been installed and cannot contain an accepted frame.
-// Removing and syncing its name keeps a partially initialized reserve from
-// preventing ordinary recovery of the unchanged acknowledged predecessor.
+// Unix removes and syncs its name. Windows offers only child-based creation
+// persistence, so it restores a valid empty successor through the exact handle.
+// Both keep a failed reserve from blocking recovery of the accepted predecessor.
 func discardUnacceptedFixedSuccessor(parent, file *os.File) error {
 	name := filepath.Base(file.Name())
 	if err := rootpublication.ValidateStableChildLink(parent, file, name); err != nil {
 		return err
 	}
+	if runtime.GOOS == "windows" {
+		return neutralizeUnacceptedFixedSuccessor(file)
+	}
 	if err := rootpublication.RemoveStableChildFile(parent, name); err != nil {
 		return err
 	}
 	return rootpublication.SyncStableNamespace(parent)
+}
+
+// Only discardUnacceptedFixedSuccessor may supply a proven fresh, never-installed
+// handle. Empty legacy streams are canonical journal segments. Restoring one is
+// a create-only operation, not a claim of Windows rename/removal persistence.
+// Any error is retained by the caller's poisoned writer; it cannot permit ACK.
+func neutralizeUnacceptedFixedSuccessor(file *os.File) error {
+	if err := file.Truncate(0); err != nil {
+		return err
+	}
+	return fixedWALUnacceptedSync(file)
 }
 
 // prepareFixedSuccessor never changes the current writer. Capacity and full
