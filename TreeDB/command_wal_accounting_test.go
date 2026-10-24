@@ -47,8 +47,12 @@ func TestPublicExternalCommandWALHasOneByteAccountingOwner(t *testing.T) {
 		if got := database.backend.CommandWALBytes(); got != logical {
 			t.Fatalf("logical WAL pressure=%d, want %d (physical footprint=%d)", got, logical, physical)
 		}
-		if physical <= logical {
-			t.Fatalf("fixture lacks initialized reserve: physical=%d logical=%d", physical, logical)
+		if commitlog.FixedWALCreationSupported() {
+			if physical <= logical {
+				t.Fatalf("fixture lacks initialized reserve: physical=%d logical=%d", physical, logical)
+			}
+		} else if physical != logical {
+			t.Fatalf("stream WAL physical=%d, want logical size %d", physical, logical)
 		}
 	}
 	database, err := Open(opts)
@@ -56,7 +60,7 @@ func TestPublicExternalCommandWALHasOneByteAccountingOwner(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = database.Close() }()
-	check(database) // A newly initialized physical reserve has no logical debt.
+	check(database) // A newly created WAL has no logical debt in either format.
 	for i := 0; i < 6; i++ {
 		if err := database.Set([]byte(fmt.Sprintf("accounting-%d", i)), []byte("value")); err != nil {
 			t.Fatal(err)

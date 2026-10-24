@@ -16,6 +16,9 @@ import (
 // Container witnesses are transport; unchanged V2 and persistent vlog evidence
 // remain the replay/durability authority.
 func TestFixedWALPublicStableImage(t *testing.T) {
+	if !commitlog.FixedWALCreationSupported() {
+		t.Skip("requires production fixed-container publication")
+	}
 	source := t.TempDir()
 	opts := commandWALDurabilityProofOptions(source)
 	opts.ValueLog.PointerThreshold = 1
@@ -100,6 +103,9 @@ func TestFixedWALPublicStableImage(t *testing.T) {
 }
 
 func TestFixedWALPublicIncompleteRelaxedExtentHorizon(t *testing.T) {
+	if !commitlog.FixedWALCreationSupported() {
+		t.Skip("requires production fixed-container publication")
+	}
 	for _, tc := range []struct {
 		name                                     string
 		cover, rotate, footerPresent, tornFooter bool

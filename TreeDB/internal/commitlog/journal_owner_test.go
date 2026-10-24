@@ -1424,7 +1424,7 @@ func TestCommandJournalDeterministicStressReopenAcrossLanesAndTails(t *testing.T
 
 		if step%2 == 0 {
 			path := filepath.Join(dir, CommandSegmentName(lane, seg))
-			tearFixedWALRedundantFooterForTest(t, path)
+			tearCommandWALTailForTest(t, path)
 
 			reopen, err := OpenCommandJournal(dir, CommandJournalOptions{Lane: lane, SegmentSeq: seg})
 			if err != nil {
@@ -1563,7 +1563,7 @@ func writeLegacyCommandJournalFrameForTest(t *testing.T, path string, lsn uint64
 	}
 }
 
-func tearFixedWALRedundantFooterForTest(t *testing.T, path string) {
+func tearCommandWALTailForTest(t *testing.T, path string) {
 	t.Helper()
 	file, err := os.OpenFile(path, os.O_RDWR, 0)
 	if err != nil {
@@ -1571,8 +1571,27 @@ func tearFixedWALRedundantFooterForTest(t *testing.T, path string) {
 	}
 	defer file.Close()
 	state, _, err := loadFixedWAL(file)
-	if err != nil || state == nil || len(state.extents) == 0 {
-		t.Fatalf("fixed fixture state=%v err=%v", state, err)
+	if err != nil {
+		t.Fatalf("load WAL fixture: %v", err)
+	}
+	if state == nil {
+		frames, err := ScanCommandFrames(path, Options{})
+		if err != nil || len(frames) == 0 {
+			t.Fatalf("stream fixture frames=%d err=%v", len(frames), err)
+		}
+		info, err := file.Stat()
+		if err != nil {
+			t.Fatal(err)
+		}
+		// An incomplete terminal segment header leaves every accepted V2 frame
+		// intact. Reopening the active stream must discard this suffix.
+		if err := writeFixedAt(file, []byte{1, 2, 3}, info.Size()); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	if len(state.extents) == 0 {
+		t.Fatal("fixed fixture has no extents")
 	}
 	last := state.extents[len(state.extents)-1]
 	// The independently bounded entire V2 frame remains CRC/identity valid.

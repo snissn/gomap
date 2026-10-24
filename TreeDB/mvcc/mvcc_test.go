@@ -479,6 +479,7 @@ func TestCommitAtDurableProcessCrashRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open incomplete relaxed suffix writer: %v", err)
 	}
+	suffixStart := fixture.Size()
 	if err := fixture.AppendCommandV2(commitlog.CommandEnvelope{
 		Version:         commitlog.CommandFrameVersionV2,
 		LSN:             incompleteSuffixLSN,
@@ -506,32 +507,50 @@ func TestCommitAtDurableProcessCrashRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read incomplete relaxed suffix fixture: %v", err)
 	}
-	if len(image) < 4096 || string(image[:6]) != "TDBWAL" {
-		t.Fatal("crash fixture did not select the production fixed container")
-	}
 	const witnessBytes, classifiablePrefixBytes = 96, 8 + 56
-	found := false
-	for off := int64(4096); off+witnessBytes < int64(len(image)) && string(image[off:off+6]) == "TDBEXT"; {
-		length := int64(binary.LittleEndian.Uint64(image[off+40 : off+48]))
-		end := int64(binary.LittleEndian.Uint64(image[off+48 : off+56]))
-		body := image[off+witnessBytes : off+witnessBytes+length]
-		if bytes.Contains(body, []byte("incomplete-relaxed-suffix")) {
-			if found || length <= classifiablePrefixBytes {
-				t.Fatal("ambiguous incomplete relaxed suffix extent")
-			}
-			// Preserve the valid extent start and stable V2 identity, modeling
-			// an interrupted body write into the initialized zero reserve.
-			clear(image[off+witnessBytes+classifiablePrefixBytes : off+witnessBytes+length])
-			clear(image[end-witnessBytes : end])
-			found = true
+	if commitlog.FixedWALCreationSupported() {
+		if len(image) < 4096 || string(image[:6]) != "TDBWAL" {
+			t.Fatal("crash fixture did not select the production fixed container")
 		}
-		off = end
-	}
-	if !found {
-		t.Fatal("did not locate relaxed suffix extent")
+		found := false
+		for off := int64(4096); off+witnessBytes < int64(len(image)) && string(image[off:off+6]) == "TDBEXT"; {
+			length := int64(binary.LittleEndian.Uint64(image[off+40 : off+48]))
+			end := int64(binary.LittleEndian.Uint64(image[off+48 : off+56]))
+			body := image[off+witnessBytes : off+witnessBytes+length]
+			if bytes.Contains(body, []byte("incomplete-relaxed-suffix")) {
+				if found || length <= classifiablePrefixBytes {
+					t.Fatal("ambiguous incomplete relaxed suffix extent")
+				}
+				// Preserve the valid extent start and stable V2 identity, modeling
+				// an interrupted body write into the initialized zero reserve.
+				clear(image[off+witnessBytes+classifiablePrefixBytes : off+witnessBytes+length])
+				clear(image[end-witnessBytes : end])
+				found = true
+			}
+			off = end
+		}
+		if !found {
+			t.Fatal("did not locate relaxed suffix extent")
+		}
+	} else {
+		if len(image) >= 6 && string(image[:6]) == "TDBWAL" {
+			t.Fatal("crash fixture did not select the production stream fallback")
+		}
+		if suffixStart < 0 || suffixStart+classifiablePrefixBytes >= int64(len(image)) {
+			t.Fatalf("stream suffix lacks a partial-frame boundary: start=%d size=%d", suffixStart, len(image))
+		}
+		// Retain the complete V2 LSN and durability class while tearing its
+		// payload. Recovery must discard only this classifiable relaxed tail.
+		image = image[:suffixStart+classifiablePrefixBytes]
 	}
 	if err := os.WriteFile(suffixPath, image, 0600); err != nil {
 		t.Fatalf("write interrupted relaxed suffix: %v", err)
+	}
+	if !commitlog.FixedWALCreationSupported() {
+		tail, end, err := commitlog.InspectCommandFrameV2TerminalTail(suffixPath, suffixStart)
+		if err != nil || tail.LSN != incompleteSuffixLSN || tail.DurabilityClass != commitlog.CommandDurabilityRelaxed || end != int64(len(image)) {
+			t.Fatalf("classifiable stream suffix=%+v end=%d err=%v", tail, end, err)
+		}
 	}
 	db := openTestDB(t, dir, treedb.DurabilityDurable)
 	defer db.Close()
