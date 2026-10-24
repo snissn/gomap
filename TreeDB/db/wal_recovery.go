@@ -59,6 +59,18 @@ func listSegmentsInDir(segDir string) ([]logSegment, error) {
 		if info, err := entry.Info(); err == nil {
 			seg.size = info.Size()
 		}
+		if !valueLog {
+			file, err := os.Open(seg.path)
+			if err != nil {
+				return nil, err
+			}
+			logicalSize, err := commitlog.LogicalFileSize(file)
+			_ = file.Close()
+			if err != nil {
+				return nil, err
+			}
+			seg.size = logicalSize
+		}
 		if valueLog {
 			if lane < 0 {
 				continue

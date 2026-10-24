@@ -321,7 +321,12 @@ func OpenCommandJournal(walDir string, opts CommandJournalOptions) (*CommandJour
 		_ = owner.Close()
 		return nil, err
 	}
+	target := opts.SegmentTargetBytes
+	if target <= 0 || target > fixedWALDefaultTarget {
+		target = fixedWALDefaultTarget
+	}
 	writer, err := NewWriterWithOptions(path, Options{
+		fixedCapacity:                   target,
 		MaxSegmentSize:                  opts.MaxSegmentSize,
 		BufferSize:                      opts.BufferSize,
 		DeferredCommandBufferSize:       opts.DeferredCommandBufferSize,
@@ -348,7 +353,7 @@ func OpenCommandJournal(walDir string, opts CommandJournalOptions) (*CommandJour
 		activeSegmentMaxLSN:    activeSegmentMaxLSN,
 		cleanupEpoch:           1,
 		namespaceGeneration:    opts.SegmentSeq,
-		segmentTargetBytes:     opts.SegmentTargetBytes,
+		segmentTargetBytes:     target,
 		onSegmentRotated:       opts.OnSegmentRotated,
 		stableParent:           stableParent,
 		stableParentErr:        stableParentErr,
@@ -474,15 +479,24 @@ func commandJournalSegments(walDir string, activePath string) ([]commandJournalS
 			continue
 		}
 		path := filepath.Join(walDir, entry.Name())
-		info, err := entry.Info()
+		_, err := entry.Info()
 		if err != nil {
 			return nil, err
+		}
+		file, e := os.Open(path)
+		if e != nil {
+			return nil, e
+		}
+		size, e := LogicalFileSize(file)
+		_ = file.Close()
+		if e != nil {
+			return nil, e
 		}
 		segments = append(segments, commandJournalSegment{
 			path: path,
 			lane: entryLane,
 			seq:  seq,
-			size: info.Size(),
+			size: size,
 		})
 		if seq > activeSeqByLane[entryLane] {
 			activeSeqByLane[entryLane] = seq
@@ -529,11 +543,11 @@ func parseCommandSegmentName(name string) (lane int, seq uint64, ok bool) {
 }
 
 func truncateCommandJournalTail(path string, size int64) error {
-	f, err := os.OpenFile(path, os.O_WRONLY, 0)
+	f, err := os.OpenFile(path, os.O_RDWR, 0)
 	if err != nil {
 		return err
 	}
-	if err := f.Truncate(size); err != nil {
+	if err := TruncateLogicalFile(f, size); err != nil {
 		_ = f.Close()
 		return err
 	}
@@ -577,6 +591,14 @@ func (j *CommandJournal) maybeRotateForFrameLockedObservedWithNamespaceDebt(fram
 	}
 	total := int64(segmentHeaderSize + frameSize)
 	activeBytes := j.writer.ActiveBytes()
+	if activeBytes == 0 && j.writer.fixed != nil && total > j.segmentTargetBytes {
+		state, err := initializeFixedWAL(j.writer.f, total)
+		if err != nil {
+			return err
+		}
+		j.writer.fixed = state
+	}
+
 	if activeBytes <= 0 || activeBytes+total <= j.segmentTargetBytes {
 		return nil
 	}
@@ -761,6 +783,7 @@ func (j *CommandJournal) stableSegmentToken(file *os.File, path string, seq uint
 		DiagnosticPath: commandWALDiagnosticPath(path), File: file, Frontier: frontier,
 		Digest: digest, Reachability: field, Namespace: namespace,
 		ContentSynced: contentSynced, PinRegistry: j.stableResourcePins,
+		SyncThrough: func(file *os.File, _ rootpublication.DurableFrontier) error { return syncCommandWALFile(file) },
 	}
 	token, tokenErr := NewStableCommandWALResourceToken(spec)
 	unobserveErr := j.stableResourcePins.Unobserve(identity)
@@ -844,12 +867,12 @@ func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurren
 	} else if err := j.writer.Flush(); err != nil {
 		return nil, err
 	}
-	closedInfo, err := j.writer.f.Stat()
+	_, err := j.writer.f.Stat()
 	if err != nil {
 		return nil, err
 	}
 	closedToken, err := j.stableSegmentToken(j.writer.f, closedPath, closedSeq, rootpublication.ReachabilityCommandWALRotated,
-		rootpublication.DurableFrontier{Bytes: uint64(closedInfo.Size()), MaxLSN: j.activeSegmentMaxLSN}, nil, syncCurrent)
+		rootpublication.DurableFrontier{Bytes: uint64(j.writer.StableBytes()), MaxLSN: j.activeSegmentMaxLSN}, nil, syncCurrent)
 	if err != nil {
 		return nil, err
 	}
@@ -876,6 +899,18 @@ func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurren
 		if observeErr := durabilitycut.EmitNamespace(durabilitycut.NamespaceCreate, durabilitycut.ResourceCommandWAL, filepath.Dir(nextPath), "", nextPath); observeErr != nil {
 			closedToken.Release()
 			return nil, pendingCommandWALFailure(parent, prepared, nextPath, observeErr)
+		}
+	}
+	state, _, err := loadFixedWAL(prepared)
+	if err != nil {
+		closedToken.Release()
+		return nil, err
+	}
+	if state == nil && j.writer.fixedTarget > 0 {
+		state, err = initializeFixedWAL(prepared, j.writer.fixedTarget)
+		if err != nil {
+			closedToken.Release()
+			return nil, err
 		}
 	}
 	activeInfo, err := prepared.Stat()
@@ -922,7 +957,7 @@ func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurren
 		}
 	}
 	activeToken, err := j.stableSegmentToken(prepared, nextPath, nextSeq, rootpublication.ReachabilityCommandWALActive,
-		rootpublication.DurableFrontier{Bytes: uint64(activeInfo.Size())}, namespace, false)
+		rootpublication.DurableFrontier{Bytes: uint64(fixedWALHeaderSize)}, namespace, false)
 	namespace.Release()
 	if err != nil {
 		closedToken.Release()
@@ -943,6 +978,11 @@ func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurren
 	j.writer.fileSink.file = prepared
 	j.writer.bw.Reset(&j.writer.fileSink)
 	j.writer.size = activeInfo.Size()
+	j.writer.fixed = state
+	if state != nil {
+		j.writer.size = state.logical
+		j.writer.syncFn = syncWALData
+	}
 	j.writer.scratch = j.writer.scratch[:0]
 	j.segmentSeq = nextSeq
 	j.path = nextPath
@@ -982,7 +1022,7 @@ func (j *CommandJournal) takePendingStableRotationsLocked() ([]*CommandJournalSt
 	if err := j.writer.Flush(); err != nil {
 		return nil, err
 	}
-	info, err := j.writer.f.Stat()
+	_, err := j.writer.f.Stat()
 	if err != nil {
 		return nil, err
 	}
@@ -991,7 +1031,7 @@ func (j *CommandJournal) takePendingStableRotationsLocked() ([]*CommandJournalSt
 		return nil, fmt.Errorf("%w: pending command-WAL rotation has no active resource", rootpublication.ErrResourceOwnership)
 	}
 	active, err := j.stableSegmentToken(j.writer.f, j.path, j.segmentSeq, rootpublication.ReachabilityCommandWALActive,
-		rootpublication.DurableFrontier{Bytes: uint64(info.Size()), MaxLSN: j.activeSegmentMaxLSN}, last.Active.Namespace(), false)
+		rootpublication.DurableFrontier{Bytes: uint64(j.writer.StableBytes()), MaxLSN: j.activeSegmentMaxLSN}, last.Active.Namespace(), false)
 	if err != nil {
 		return nil, err
 	}

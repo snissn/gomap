@@ -4366,3 +4366,48 @@ ordinary publications also retain captured created/current leaf-file identities
 edges or logical ValuePtrs. Exact destructive receipts remove that superset.
 Ordered multi-root publications retain their separately proven descriptor/delta
 projection; their pager-backed index layout does not imply ordinary DATA role.
+
+## Initialized command-WAL container v3
+
+New production command-journal segments use a fixed-capacity container around
+unchanged length/CRC-bounded V2 frames. This is a pre-alpha container format
+change, separate from the inner command frame version. Intact older stream
+segments remain readable; no migration or format downgrade is performed.
+
+The 4096-byte container header starts with `TDBWAL\x03\x00`, a random 16-byte
+segment identity, physical capacity, and a CRC32C. Reserved header bytes and
+unused capacity are initialized to zero. Creation writes every reserved byte,
+fully syncs the initialized file, and persists its namespace before appending
+frames. A sparse truncate or unwritten preallocation is insufficient.
+
+Each immutable extent contains one unchanged command frame, with 96-byte start
+and end witnesses. Extents start on 64-byte boundaries. Witnesses bind the
+container identity, physical start/end, logical stream start/length, first/last
+LSN, data checksum, and their own checksum. Padding is zero. The end witness is
+redundant framing evidence; it does not establish a durable LSN. Appending a
+successor never overwrites a predecessor's data or positive end witness.
+
+Opening scans the complete reserve and validates occupied extents. Zero bytes
+at a candidate boundary do not establish EOF until all remaining capacity is
+verified unused. A damaged start, unknown occupied suffix, hole, checksum
+failure, overlap, or inconsistent identity/order fails closed. A torn redundant
+end witness may be reconstructed only from valid independent start bounds and
+complete V2 frame CRC/identity/order validation. An intact but mismatched end
+witness is corruption. Reconstruction never discards a valid frame or promotes
+framing into durability authority. Existing V2 durable class, continuity,
+external dependencies, and durable-prefix barriers remain authoritative.
+
+Writer/reader/recovery positions are logical stream offsets. Stable-resource
+byte frontiers are physical immutable extent ends, never physical capacity.
+Suffix repair zeros only discarded complete extents while retaining the file's
+capacity and every retained extent unchanged. Linux syncs initialized WAL
+content with `fdatasync`; initialization, namespace persistence, all non-WAL
+resources, and portable fallback retain the full stable-file sync primitive.
+
+The initial implementation uses an approximately 4 MiB initialized physical
+reserve and a conservative logical rotation budget of at most 1 MiB. An
+oversized first atomic frame initializes an appropriately larger empty segment
+before append. Initialization/rotation cost and reserved disk space are part of
+operational cost, not a steady-state append optimization claim. Interrupted
+new-format data writes fail closed when complete-frame evidence cannot be
+established; transport framing is never permission for a CRC fallback.

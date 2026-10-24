@@ -69,6 +69,9 @@ type Record struct {
 }
 
 type Options struct {
+	// fixedCapacity is selected by the production command journal only.
+	fixedCapacity int64
+
 	// MaxSegmentSize bounds the total commitlog segment payload size (bytes).
 	// 0 uses the default limit; values < 0 disable the cap.
 	MaxSegmentSize int64

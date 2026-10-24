@@ -118,6 +118,8 @@ func sameNonEmptyBytesData(a, b []byte) bool {
 
 type Writer struct {
 	f                      *os.File
+	fixed                  *fixedWAL
+	fixedTarget            int64
 	bw                     *bufio.Writer
 	fileSink               writerFileSink
 	scratch                []byte
@@ -159,6 +161,10 @@ type writerFileSink struct {
 func (s *writerFileSink) Write(p []byte) (int, error) {
 	if s == nil || s.file == nil {
 		return 0, os.ErrInvalid
+	}
+	if s.owner != nil && s.owner.fixed != nil {
+		s.owner.fixed.pending = append(s.owner.fixed.pending, p...)
+		return len(p), nil
 	}
 	start := time.Now()
 	n, err := s.file.Write(p)
@@ -225,6 +231,30 @@ func NewWriterWithOptions(path string, opts Options) (*Writer, error) {
 		f:      f,
 		syncFn: func(file *os.File) error { return file.Sync() },
 	}
+	state, _, loadErr := loadFixedWAL(f)
+	if loadErr != nil {
+		_ = f.Close()
+		return nil, loadErr
+	}
+	if state == nil && opts.fixedCapacity > 0 {
+		info, e := f.Stat()
+		if e != nil {
+			_ = f.Close()
+			return nil, e
+		}
+		if info.Size() == 0 {
+			state, loadErr = initializeFixedWAL(f, opts.fixedCapacity)
+			if loadErr != nil {
+				_ = f.Close()
+				return nil, loadErr
+			}
+		}
+	}
+	w.fixed = state
+	w.fixedTarget = opts.fixedCapacity
+	if state != nil {
+		w.syncFn = syncWALData
+	}
 	w.fileSink = writerFileSink{owner: w, file: f}
 	if err := syncNewLogFileDirectory(w, f, path); err != nil {
 		_ = f.Close()
@@ -250,6 +280,9 @@ func NewWriterWithOptions(path string, opts Options) (*Writer, error) {
 	w.commandBufLimit = commandBufLimit
 	w.commandBufRetain = commandBufRetain
 	w.size = info.Size()
+	if w.fixed != nil {
+		w.size = w.fixed.logical
+	}
 	w.maxSegmentSize = normalizeMaxSegmentSize(opts.MaxSegmentSize)
 	w.compress = opts.Compress
 	return w, nil
@@ -294,6 +327,15 @@ func (w *Writer) observeWriteSyscalls(calls, bytes uint64, elapsed time.Duration
 }
 
 func (w *Writer) writev(parts [][]byte) error {
+	if w.fixed != nil {
+		for _, p := range parts {
+			if err := w.writeFull(p); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
 	start := time.Now()
 	stats, err := writevFull(w.f, parts)
 	w.observeWriteSyscalls(stats.syscalls, stats.bytes, time.Since(start), err)
@@ -570,7 +612,7 @@ func (w *Writer) rotateToWithSyncObserved(path string, syncCurrent bool, root st
 	}
 
 	if w.f == nil {
-		f, err := openLogFile(path, os.O_RDWR|os.O_APPEND)
+		f, err := openLogFile(path, os.O_RDWR)
 		if err != nil {
 			return writerRotationOutcome{}, err
 		}
@@ -589,6 +631,13 @@ func (w *Writer) rotateToWithSyncObserved(path string, syncCurrent bool, root st
 		w.fileSink.file = f
 		w.bw.Reset(&w.fileSink)
 		w.size = info.Size()
+		if _, err := f.Seek(info.Size(), io.SeekStart); err != nil {
+			_ = f.Close()
+			return writerRotationOutcome{}, err
+		}
+		if err := w.installFixedSuccessor(f); err != nil {
+			return writerRotationOutcome{Installed: true}, rotationInstalledError{err}
+		}
 		w.scratch = w.scratch[:0]
 		return writerRotationOutcome{Installed: true}, nil
 	}
@@ -613,6 +662,9 @@ func (w *Writer) rotateToWithSyncObserved(path string, syncCurrent bool, root st
 	if err := w.bw.Flush(); err != nil {
 		return writerRotationOutcome{}, err
 	}
+	if err := w.flushFixed(); err != nil {
+		return writerRotationOutcome{}, err
+	}
 	if syncCurrent {
 		if err := w.syncFile(); err != nil {
 			return writerRotationOutcome{}, err
@@ -624,7 +676,7 @@ func (w *Writer) rotateToWithSyncObserved(path string, syncCurrent bool, root st
 		}
 	}
 
-	f, err := openLogFile(path, os.O_RDWR|os.O_APPEND)
+	f, err := openLogFile(path, os.O_RDWR)
 	if err != nil {
 		return writerRotationOutcome{}, err
 	}
@@ -645,6 +697,13 @@ func (w *Writer) rotateToWithSyncObserved(path string, syncCurrent bool, root st
 	w.fileSink.file = f
 	w.bw.Reset(&w.fileSink)
 	w.size = info.Size()
+	if _, err := f.Seek(info.Size(), io.SeekStart); err != nil {
+		_ = f.Close()
+		return writerRotationOutcome{}, err
+	}
+	if err := w.installFixedSuccessor(f); err != nil {
+		return writerRotationOutcome{Installed: true}, rotationInstalledError{err}
+	}
 	w.scratch = w.scratch[:0]
 	return writerRotationOutcome{Installed: true}, w.closeRotatedResource(old)
 }
@@ -1628,7 +1687,7 @@ func (w *Writer) poisonCommandBuffer(err error) error {
 		return err
 	}
 	if w.commandErr == nil {
-		if w.f != nil {
+		if w.f != nil && w.fixed == nil {
 			if truncErr := w.f.Truncate(w.size); truncErr != nil {
 				err = errors.Join(err, truncErr)
 			}
@@ -1793,7 +1852,10 @@ func (w *Writer) Flush() error {
 	if err := w.flushBufferedCommandFrames(); err != nil {
 		return err
 	}
-	return w.bw.Flush()
+	if err := w.bw.Flush(); err != nil {
+		return err
+	}
+	return w.flushFixed()
 }
 
 func (w *Writer) Sync() error {
@@ -1809,6 +1871,9 @@ func (w *Writer) Sync() error {
 		return err
 	}
 	if err := w.bw.Flush(); err != nil {
+		return err
+	}
+	if err := w.flushFixed(); err != nil {
 		return err
 	}
 	return w.syncFile()
@@ -1831,6 +1896,10 @@ func (w *Writer) Close() error {
 		return err
 	}
 	if err := w.bw.Flush(); err != nil {
+		_ = w.f.Close()
+		return err
+	}
+	if err := w.flushFixed(); err != nil {
 		_ = w.f.Close()
 		return err
 	}

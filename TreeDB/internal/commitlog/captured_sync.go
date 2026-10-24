@@ -9,7 +9,6 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
-	"github.com/snissn/gomap/TreeDB/internal/stableio"
 )
 
 // One exact handle per active segment is shared by captures. Its reference
@@ -63,7 +62,7 @@ func (j *CommandJournal) CaptureSyncInto(target *CapturedSync, rotated []*rootpu
 	if err := j.flushDirectCommandWALLocked(false, durabilitycut.Enabled()); err != nil {
 		return nil, err
 	}
-	*target = CapturedSync{journal: j, writer: j.writer, root: filepath.Dir(j.walDir), path: j.path, walDir: j.walDir, LSN: j.activeSegmentMaxLSN, Bytes: uint64(j.writer.Size())}
+	*target = CapturedSync{journal: j, writer: j.writer, root: filepath.Dir(j.walDir), path: j.path, walDir: j.walDir, LSN: j.activeSegmentMaxLSN, Bytes: uint64(j.writer.StableBytes())}
 	defer func() {
 		if err != nil {
 			for _, token := range target.rotated {
@@ -140,7 +139,7 @@ func (target *CapturedSync) Sync() error {
 	started := time.Now()
 	// Always perform a physical sync. The shared handle's zero frontier is only
 	// a retention pin and must never cache a later capture's durability result.
-	err := target.active.token.WithPinnedFile(func(file *os.File) error { return stableio.SyncFile(file) })
+	err := target.active.token.WithPinnedFile(func(file *os.File) error { return syncCommandWALFile(file) })
 	target.writer.fileSyncCalls.Add(1)
 	target.writer.fileSyncNs.Add(uint64(time.Since(started)))
 	if err != nil {

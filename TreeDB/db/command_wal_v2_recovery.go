@@ -591,33 +591,33 @@ func truncateAndSyncCommandWALV2(walDir, path string, offset int64, plan command
 		}
 		return errors.Join(err, ErrRecoveryRequired)
 	}
-	info, statErr := f.Stat()
+	logicalSize, statErr := commitlog.LogicalFileSize(f)
 	if statErr != nil {
 		_ = f.Close()
 		return errors.Join(statErr, ErrRecoveryRequired)
 	}
-	if plan.pathMode == commandWALV2TruncateRetained && info.Size() < plan.retainedFloor {
+	if plan.pathMode == commandWALV2TruncateRetained && logicalSize < plan.retainedFloor {
 		closeErr := f.Close()
 		return errors.Join(
-			fmt.Errorf("%w: retained repair path %s size=%d is below floor=%d", commitlog.ErrCorrupt, filepath.Base(path), info.Size(), plan.retainedFloor),
+			fmt.Errorf("%w: retained repair path %s size=%d is below floor=%d", commitlog.ErrCorrupt, filepath.Base(path), logicalSize, plan.retainedFloor),
 			closeErr,
 			ErrRecoveryRequired,
 		)
 	}
-	if plan.pathMode == commandWALV2TruncateRetained && info.Size() < offset {
+	if plan.pathMode == commandWALV2TruncateRetained && logicalSize < offset {
 		if closeErr := f.Close(); closeErr != nil {
 			return errors.Join(closeErr, ErrRecoveryRequired)
 		}
 		return nil
 	}
-	if plan.pathMode == commandWALV2TruncateDisposable && info.Size() <= offset {
+	if plan.pathMode == commandWALV2TruncateDisposable && logicalSize <= offset {
 		if closeErr := f.Close(); closeErr != nil {
 			return errors.Join(closeErr, ErrRecoveryRequired)
 		}
 		return nil
 	}
-	if info.Size() > offset {
-		err = f.Truncate(offset)
+	if logicalSize > offset {
+		err = commitlog.TruncateLogicalFile(f, offset)
 	}
 	if err == nil {
 		err = durabilitycut.EmitPath(durabilitycut.BeforeDependencyFileSync, durabilitycut.ResourceCommandWAL, walDir, path)
