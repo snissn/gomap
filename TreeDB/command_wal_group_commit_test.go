@@ -1638,19 +1638,82 @@ func TestPublicCommandWALGroupCommitDependencyFailurePoisonsAllWaiters(t *testin
 	db.commandWALGroupCommit.delay = time.Second
 	db.commandWALGroupCommit.maxCommits = 2
 	db.commandWALGroupCommit.maxBytes = 1 << 30
+	var syncingGroup atomic.Int32
+	db.commandWALGroupCommit.testBeforeSync = func(size int) { syncingGroup.Store(int32(size)) }
 	before := db.Stats()
 	cutErr := errors.New("injected grouped dependency sync failure")
 	var cutOnce sync.Once
+	var initializers atomic.Int32
+	var cutPublished atomic.Bool
+	var pathOnlyDebtSyncs atomic.Int32
+	var appendedLSN atomic.Uint64
+	var observeMu sync.Mutex
+	var lastFramePath string
+	var lastFrameIdentity os.FileInfo
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		observeMu.Lock()
+		defer observeMu.Unlock()
+		if event.Resource == durabilitycut.ResourceCommandWAL && event.Point == durabilitycut.AfterDependencyAppend {
+			appendedLSN.Store(event.LSN)
+			if event.LSN == 2 {
+				lastFramePath = event.Path
+				var err error
+				lastFrameIdentity, err = os.Stat(event.Path)
+				if err != nil {
+					return err
+				}
+			}
+		}
 		if event.Resource == durabilitycut.ResourceCommandWAL && event.Point == durabilitycut.BeforeDependencyFileSync {
-			var err error
-			cutOnce.Do(func() { err = cutErr })
-			return err
+			// Rotation-debt observations carry no borrowed handle. Account for
+			// them, then cut the retained published writer sync before the barrier
+			// append. Initializer I/O must complete without becoming the fault.
+			if event.StablePath == nil {
+				pathOnlyDebtSyncs.Add(1)
+				return nil
+			}
+			initialization, err := commandWALFixtureSyncIdentity(event)
+			if err != nil {
+				return err
+			}
+			if initialization {
+				initializers.Add(1)
+				return nil
+			}
+			if syncingGroup.Load() != 2 || appendedLSN.Load() != 2 {
+				return fmt.Errorf("published frame dependency sync began with group size %d and appended LSN %d, want 2/2", syncingGroup.Load(), appendedLSN.Load())
+			}
+			held, err := event.StablePath.Stat()
+			if err != nil {
+				return err
+			}
+			if lastFrameIdentity == nil || event.Path != lastFramePath || !os.SameFile(held, lastFrameIdentity) {
+				return fmt.Errorf("dependency cut does not retain the published LSN2 frame file: %#v", event)
+			}
+			var injected error
+			cutOnce.Do(func() {
+				cutPublished.Store(true)
+				injected = cutErr
+			})
+			return injected
 		}
 		return nil
 	})
 	errs := runPublicCommandWALGroupWaiters(db, 2)
 	restore()
+	if !cutPublished.Load() || syncingGroup.Load() != 2 {
+		t.Fatalf("cut published dependency=%t group=%d, want true/2", cutPublished.Load(), syncingGroup.Load())
+	}
+	if pathOnlyDebtSyncs.Load() == 0 {
+		t.Fatal("did not observe preceding path-only rotation debt sync")
+	}
+	wantInitializers := int32(0)
+	if commitlog.FixedWALCreationSupported() {
+		wantInitializers = 1
+	}
+	if initializers.Load() != wantInitializers {
+		t.Fatalf("private initializer attempts=%d want=%d, separately from frame dependency attempts", initializers.Load(), wantInitializers)
+	}
 
 	for i, err := range errs {
 		if !errors.Is(err, cutErr) {

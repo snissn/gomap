@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -48,6 +50,35 @@ func writeEmptyPublicCommandWALSync(db *DB) error {
 	b := db.NewBatch()
 	writeErr := b.WriteSync()
 	return errors.Join(writeErr, b.Close())
+}
+
+// A private reserve sync is real physical I/O, but does not certify any command
+// frame. Validate its exact handle while the observer owns it; no handle may be
+// retained after the callback. Published segment syncs must keep their identity.
+func commandWALFixtureSyncIdentity(event durabilitycut.Event) (initialization bool, err error) {
+	name := filepath.Base(event.Path)
+	initialization = strings.HasPrefix(name, ".wal-initialize-")
+	if !initialization && !commitlog.IsCommandSegmentName(name) {
+		return false, fmt.Errorf("unexpected command-WAL sync path %q", event.Path)
+	}
+	if event.StablePath == nil {
+		return initialization, fmt.Errorf("command-WAL sync %q has no retained handle", event.Path)
+	}
+	held, err := event.StablePath.Stat()
+	if err != nil {
+		return initialization, err
+	}
+	linked, err := os.Stat(event.Path)
+	if err != nil {
+		return initialization, err
+	}
+	if !held.Mode().IsRegular() || !os.SameFile(held, linked) {
+		return initialization, fmt.Errorf("command-WAL sync identity differs from linked file %q", event.Path)
+	}
+	if initialization && event.LSN != 0 {
+		return true, fmt.Errorf("private initializer carries command frontier %d", event.LSN)
+	}
+	return initialization, nil
 }
 
 func TestPublicCommandWALRelaxedExplicitSyncPersistsGroupedDurablePrefix(t *testing.T) {
@@ -459,7 +490,48 @@ func TestPublicCommandWALRelaxedRotationsStabilizeExactPrefixBeforeBarrierAppend
 	defer func() { _ = db.Close() }()
 
 	var events []durabilitycut.Event
+	var privateFileSyncs, privateNamespaceSyncs int
+	initializingNamespace := false
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		initialization := false
+		if event.Resource == durabilitycut.ResourceCommandWAL {
+			if event.Point == durabilitycut.BeforeDependencyFileSync || event.Point == durabilitycut.AfterDependencyFileSync {
+				// Rotation debt may use path-only observations. Private reserve I/O
+				// always has its exact unpublished handle; validate it synchronously.
+				if strings.HasPrefix(filepath.Base(event.Path), ".wal-initialize-") {
+					var err error
+					initialization, err = commandWALFixtureSyncIdentity(event)
+					if err != nil {
+						return err
+					}
+					if event.Point == durabilitycut.AfterDependencyFileSync {
+						privateFileSyncs++
+					}
+				}
+			}
+			if event.Namespace == durabilitycut.NamespaceRename && strings.HasPrefix(event.StableOldName, ".wal-initialize-") {
+				if privateFileSyncs != privateNamespaceSyncs+1 || !commitlog.IsCommandSegmentName(event.StableNewName) {
+					return fmt.Errorf("private WAL publication lacks its completed initializer sync: %#v", event)
+				}
+				initializingNamespace = true
+			}
+			if initializingNamespace && (event.Point == durabilitycut.BeforeNewFileDirectorySync || event.Point == durabilitycut.AfterNewFileDirectorySync) {
+				if event.StablePath == nil || event.Path != backenddb.WALDirPath(dir) {
+					return fmt.Errorf("private WAL publication lacks its exact parent sync: %#v", event)
+				}
+				initialization = true
+				if event.Point == durabilitycut.AfterNewFileDirectorySync {
+					privateNamespaceSyncs++
+					initializingNamespace = false
+				}
+			}
+		}
+		// Keep initializer events accounted above, separately from the command
+		// prefix whose persistence this test checks below. Do not retain handles.
+		event.StablePath, event.StableParent = nil, nil
+		if initialization {
+			return nil
+		}
 		events = append(events, event)
 		return nil
 	})
@@ -470,6 +542,13 @@ func TestPublicCommandWALRelaxedRotationsStabilizeExactPrefixBeforeBarrierAppend
 	}
 	if err := db.Set([]byte("relaxed-b"), []byte("value-b")); err != nil {
 		t.Fatalf("Set relaxed-b: %v", err)
+	}
+	wantInitializers := 0
+	if commitlog.FixedWALCreationSupported() {
+		wantInitializers = 1
+	}
+	if privateFileSyncs != wantInitializers || privateNamespaceSyncs != wantInitializers || initializingNamespace {
+		t.Fatalf("relaxed successor initializer file/namespace syncs=%d/%d want=%d/%d", privateFileSyncs, privateNamespaceSyncs, wantInitializers, wantInitializers)
 	}
 	for _, event := range events {
 		if event.Resource != durabilitycut.ResourceCommandWAL {
