@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/crc"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/stableio"
 )
 
@@ -20,6 +22,11 @@ const (
 	fixedWALAlignment     = 64
 	fixedWALDefaultTarget = 1 << 20
 )
+
+// Initialization uses distinct operations so failure tests can inject an actual
+// partial reserve write or full-sync failure without changing append I/O.
+var fixedWALInitializeWrite = writeFixedAt
+var fixedWALInitializeSync = stableio.SyncFile
 
 var fixedWALMagic = [8]byte{'T', 'D', 'B', 'W', 'A', 'L', 3, 0}
 var fixedWALExtentMagic = [8]byte{'T', 'D', 'B', 'E', 'X', 'T', 3, 0}
@@ -57,17 +64,17 @@ func initializeFixedWAL(file *os.File, target int64) (*fixedWAL, error) {
 	binary.LittleEndian.PutUint64(header[24:32], uint64(capacity))
 	binary.LittleEndian.PutUint32(header[32:36], crc.Checksum(header[:32]))
 	block := make([]byte, 256<<10)
-	if err := writeFixedAt(file, header, 0); err != nil {
+	if err := fixedWALInitializeWrite(file, header, 0); err != nil {
 		return nil, err
 	}
 	for off := int64(len(header)); off < capacity; {
 		n := min(int64(len(block)), capacity-off)
-		if err := writeFixedAt(file, block[:n], off); err != nil {
+		if err := fixedWALInitializeWrite(file, block[:n], off); err != nil {
 			return nil, err
 		}
 		off += n
 	}
-	if err := stableio.SyncFile(file); err != nil {
+	if err := fixedWALInitializeSync(file); err != nil {
 		return nil, err
 	}
 	return state, nil
@@ -317,31 +324,71 @@ func (w *Writer) flushFixed() error {
 	}
 	return nil
 }
-func (w *Writer) installFixedSuccessor(file *os.File) error {
-	state, _, err := loadFixedWAL(file)
-	if err != nil {
+
+// discardUnacceptedFixedSuccessor is only for an exact freshly created
+// successor that has never been installed and cannot contain an accepted frame.
+// Removing and syncing its name keeps a partially initialized reserve from
+// preventing ordinary recovery of the unchanged acknowledged predecessor.
+func discardUnacceptedFixedSuccessor(parent, file *os.File) error {
+	name := filepath.Base(file.Name())
+	if err := rootpublication.ValidateStableChildLink(parent, file, name); err != nil {
 		return err
 	}
-	if state == nil && w.fixedTarget > 0 {
-		info, e := file.Stat()
-		if e != nil {
-			return e
-		}
-		if info.Size() != 0 {
-			w.fixed = nil
-			w.syncFn = stableio.SyncFile
-			return nil
-		}
-		state, err = initializeFixedWAL(file, w.fixedTarget)
+	if err := rootpublication.RemoveStableChildFile(parent, name); err != nil {
+		return err
+	}
+	return rootpublication.SyncStableNamespace(parent)
+}
+
+// prepareFixedSuccessor never changes the current writer. Capacity and full
+// initialization sync must succeed before a successor handle/state is installed.
+func (w *Writer) prepareFixedSuccessor(file *os.File) (*fixedWAL, int64, error) {
+	state, _, err := loadFixedWAL(file)
+	if err != nil {
+		return nil, 0, err
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return nil, 0, err
+	}
+	needsCapacity := state != nil && state.logical == 0 && !state.fitsEmptyFrame(w.fixedIncomingBytes)
+	if (state == nil && w.fixedTarget > 0 && info.Size() == 0) || needsCapacity {
+		state, err = initializeFixedWAL(file, max(w.fixedTarget, w.fixedIncomingBytes))
 		if err != nil {
-			return err
+			return nil, 0, err
 		}
+	}
+	if state != nil {
+		return state, state.logical, nil
+	}
+	if _, err = file.Seek(info.Size(), io.SeekStart); err != nil {
+		return nil, 0, err
+	}
+	return nil, info.Size(), nil
+}
+
+func (state *fixedWAL) fitsEmptyFrame(frameBytes int64) bool {
+	required := fixedWALAlign(fixedWALHeaderSize+fixedWALWitnessSize+frameBytes) + fixedWALWitnessSize
+	return required <= state.capacity
+}
+
+// ensureEmptyFixedFrameCapacity runs before LSN reservation. A failed in-place
+// initialization has uncertain bytes/identity, so every later write fails stop.
+func (w *Writer) ensureEmptyFixedFrameCapacity(frameBytes int64) error {
+	if err := w.commandBufferError(); err != nil {
+		return err
+	}
+	if w.fixed == nil || w.ActiveBytes() != 0 {
+		return nil
+	}
+	if w.fixed.fitsEmptyFrame(frameBytes) {
+		return nil
+	}
+	state, err := initializeFixedWAL(w.f, max(w.fixedTarget, frameBytes))
+	if err != nil {
+		return w.poisonCommandBuffer(err)
 	}
 	w.fixed = state
-	if state != nil {
-		w.size = state.logical
-		w.syncFn = syncWALData
-	}
 	return nil
 }
 
@@ -378,7 +425,8 @@ func (state *fixedWAL) flush(w *Writer) error {
 	if _, _, err := validateFixedWALFrames(state.pending); err != nil {
 		return err
 	}
-	pending := state.pending
+	base := state.pending
+	pending := base
 	for len(pending) > 0 {
 		size := segmentHeaderSize + int(binary.LittleEndian.Uint32(pending[:4]))
 		state.pending = pending[:size]
@@ -388,7 +436,7 @@ func (state *fixedWAL) flush(w *Writer) error {
 		}
 		pending = pending[size:]
 	}
-	state.pending = pending[:0]
+	state.pending = base[:0]
 	return nil
 }
 

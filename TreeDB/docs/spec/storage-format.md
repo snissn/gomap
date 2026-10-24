@@ -4411,9 +4411,12 @@ resources, and portable fallback retain the full stable-file sync primitive.
 
 The initial implementation uses an approximately 4 MiB initialized physical
 reserve and a conservative logical rotation budget of at most 1 MiB. An
-oversized first atomic frame initializes an appropriately larger empty segment
-before append. Initialization/rotation cost and reserved disk space are part of
-operational cost, not a steady-state append optimization claim. An interrupted relaxed extent can retain an explicit incomplete-frame identity
+oversized atomic frame initializes an appropriately larger chosen empty segment
+before append, including when a nonempty predecessor must first rotate.
+Initialization/rotation cost and reserved disk space are part of operational
+cost, not a steady-state append optimization claim.
+
+An interrupted relaxed extent can retain an explicit incomplete-frame identity
 only when its start bounds/checksum and stable V2 identity validate and its end
 witness is still exactly initialized zero reserve. The reader continues through
 all later positive extents. The existing global V2 horizon classifier rejects
@@ -4424,3 +4427,16 @@ data with a torn end still follows the narrow reconstruction rule above. This
 qualified prefix-cut model does not promise repair for every reordered or
 full-length corrupt write; transport framing never authorizes blanket CRC
 fallback.
+
+Successor capacity and its full initialization sync complete before installing
+its writer state or issuing resource/namespace tokens. An initialization error
+before LSN reservation still poisons the writer; restoring I/O cannot permit a
+later append to acknowledge bytes under a stale container identity. A failed
+fresh successor that has never been installed or received a frame is removed
+through its validated exact parent/name and the parent is synced. Its descriptor
+is then closed; the predecessor descriptor remains owned until journal close.
+Existing successors are never removed by this failure cleanup. If cleanup or
+its namespace sync also fails, the error is retained and prior-prefix recovery
+availability is not claimed. An empty active file resized in place has no
+accepted frame; failure there remains fail-stop without unlinking that active
+file.

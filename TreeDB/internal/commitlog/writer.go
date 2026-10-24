@@ -16,6 +16,8 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/crc"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/limits"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/internal/stableio"
 )
 
 const (
@@ -32,18 +34,24 @@ const (
 var syncDirFn = syncDir
 
 func openLogFile(path string, flags int) (*os.File, error) {
+	file, _, err := openLogFileWithCreation(path, flags)
+	return file, err
+}
+
+func openLogFileWithCreation(path string, flags int) (*os.File, bool, error) {
 	created, err := os.OpenFile(path, flags|os.O_CREATE|os.O_EXCL, 0o600)
 	if err == nil {
 		if observeErr := durabilitycut.EmitNamespace(durabilitycut.NamespaceCreate, durabilitycut.ResourceCommandWAL, filepath.Dir(path), "", path); observeErr != nil {
 			_ = created.Close()
-			return nil, observeErr
+			return nil, true, observeErr
 		}
-		return created, nil
+		return created, true, nil
 	}
 	if !errors.Is(err, os.ErrExist) {
-		return nil, err
+		return nil, false, err
 	}
-	return os.OpenFile(path, flags|os.O_CREATE, 0o600)
+	file, err := os.OpenFile(path, flags|os.O_CREATE, 0o600)
+	return file, false, err
 }
 
 func syncNewLogFileDirectory(w *Writer, file *os.File, path string) error {
@@ -120,6 +128,7 @@ type Writer struct {
 	f                      *os.File
 	fixed                  *fixedWAL
 	fixedTarget            int64
+	fixedIncomingBytes     int64
 	bw                     *bufio.Writer
 	fileSink               writerFileSink
 	scratch                []byte
@@ -610,99 +619,74 @@ func (w *Writer) rotateToWithSyncObserved(path string, syncCurrent bool, root st
 	if w == nil {
 		return writerRotationOutcome{}, errors.New("commitlog: nil writer")
 	}
-
-	if w.f == nil {
-		f, err := openLogFile(path, os.O_RDWR)
-		if err != nil {
-			return writerRotationOutcome{}, err
-		}
+	if err := w.commandBufferError(); err != nil {
+		return writerRotationOutcome{}, err
+	}
+	if w.f != nil {
+		before, after := durabilitycut.BeforeUserspaceFlush, durabilitycut.AfterUserspaceFlush
 		if syncCurrent {
-			if err := syncNewLogFileDirectory(w, f, path); err != nil {
-				_ = f.Close()
+			before, after = durabilitycut.BeforeDependencyFileSync, durabilitycut.AfterDependencyFileSync
+		}
+		if observe {
+			if err := durabilitycut.EmitPath(before, durabilitycut.ResourceCommandWAL, root, w.f.Name()); err != nil {
 				return writerRotationOutcome{}, err
 			}
 		}
-		info, err := f.Stat()
+		if err := w.Flush(); err != nil {
+			return writerRotationOutcome{}, err
+		}
+		if syncCurrent {
+			if err := w.syncFile(); err != nil {
+				return writerRotationOutcome{}, err
+			}
+		}
+		if observe {
+			if err := durabilitycut.EmitPath(after, durabilitycut.ResourceCommandWAL, root, w.f.Name()); err != nil {
+				return writerRotationOutcome{}, err
+			}
+		}
+	}
+	file, created, err := openLogFileWithCreation(path, os.O_RDWR)
+	if err != nil {
+		return writerRotationOutcome{}, err
+	}
+	var preparedParent *os.File
+	if created && w.fixedTarget > 0 {
+		preparedParent, err = rootpublication.OpenStableParent(filepath.Dir(path))
 		if err != nil {
-			_ = f.Close()
-			return writerRotationOutcome{}, err
+			return writerRotationOutcome{}, errors.Join(err, file.Close())
 		}
-		w.f = f
-		w.fileSink.file = f
-		w.bw.Reset(&w.fileSink)
-		w.size = info.Size()
-		if _, err := f.Seek(info.Size(), io.SeekStart); err != nil {
-			_ = f.Close()
-			return writerRotationOutcome{}, err
-		}
-		if err := w.installFixedSuccessor(f); err != nil {
-			return writerRotationOutcome{Installed: true}, rotationInstalledError{err}
-		}
-		w.scratch = w.scratch[:0]
-		return writerRotationOutcome{Installed: true}, nil
-	}
-
-	before, after := durabilitycut.BeforeUserspaceFlush, durabilitycut.AfterUserspaceFlush
-	if syncCurrent {
-		before, after = durabilitycut.BeforeDependencyFileSync, durabilitycut.AfterDependencyFileSync
-	}
-	if observe {
-		if err := durabilitycut.EmitPath(before, durabilitycut.ResourceCommandWAL, root, w.f.Name()); err != nil {
-			return writerRotationOutcome{}, err
+		defer preparedParent.Close()
+		if err = rootpublication.ValidateStableChildLink(preparedParent, file, filepath.Base(path)); err != nil {
+			return writerRotationOutcome{}, errors.Join(err, file.Close())
 		}
 	}
-	if w.pendingBatchRecs != 0 {
-		if err := w.flushPendingBatch(); err != nil {
-			return writerRotationOutcome{}, err
-		}
-	}
-	if err := w.flushBufferedCommandFrames(); err != nil {
-		return writerRotationOutcome{}, err
-	}
-	if err := w.bw.Flush(); err != nil {
-		return writerRotationOutcome{}, err
-	}
-	if err := w.flushFixed(); err != nil {
-		return writerRotationOutcome{}, err
-	}
-	if syncCurrent {
-		if err := w.syncFile(); err != nil {
-			return writerRotationOutcome{}, err
-		}
-	}
-	if observe {
-		if err := durabilitycut.EmitPath(after, durabilitycut.ResourceCommandWAL, root, w.f.Name()); err != nil {
-			return writerRotationOutcome{}, err
-		}
-	}
-
-	f, err := openLogFile(path, os.O_RDWR)
+	state, size, err := w.prepareFixedSuccessor(file)
 	if err != nil {
-		return writerRotationOutcome{}, err
-	}
-	info, err := f.Stat()
-	if err != nil {
-		_ = f.Close()
-		return writerRotationOutcome{}, err
+		// Keep ownership of the old descriptor; the failed candidate is never the
+		// writer's authoritative file, and is closed even after partial reserve I/O.
+		if preparedParent != nil {
+			err = errors.Join(err, discardUnacceptedFixedSuccessor(preparedParent, file))
+		}
+		err = errors.Join(err, file.Close())
+		return writerRotationOutcome{}, w.poisonCommandBuffer(err)
 	}
 	if syncCurrent {
-		if err := syncNewLogFileDirectory(w, f, path); err != nil {
-			_ = f.Close()
+		if err := syncNewLogFileDirectory(w, file, path); err != nil {
+			_ = file.Close()
 			return writerRotationOutcome{}, err
 		}
 	}
-
-	old := w.f
-	w.f = f
-	w.fileSink.file = f
+	old, oldFixed := w.f, w.fixed
+	w.f = file
+	w.fixed = state
+	w.fileSink.file = file
 	w.bw.Reset(&w.fileSink)
-	w.size = info.Size()
-	if _, err := f.Seek(info.Size(), io.SeekStart); err != nil {
-		_ = f.Close()
-		return writerRotationOutcome{}, err
-	}
-	if err := w.installFixedSuccessor(f); err != nil {
-		return writerRotationOutcome{Installed: true}, rotationInstalledError{err}
+	w.size = size
+	if state != nil && oldFixed == nil {
+		w.syncFn = syncWALData
+	} else if state == nil && oldFixed != nil {
+		w.syncFn = stableio.SyncFile
 	}
 	w.scratch = w.scratch[:0]
 	return writerRotationOutcome{Installed: true}, w.closeRotatedResource(old)

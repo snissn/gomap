@@ -591,12 +591,8 @@ func (j *CommandJournal) maybeRotateForFrameLockedObservedWithNamespaceDebt(fram
 	}
 	total := int64(segmentHeaderSize + frameSize)
 	activeBytes := j.writer.ActiveBytes()
-	if activeBytes == 0 && j.writer.fixed != nil && total > j.segmentTargetBytes {
-		state, err := initializeFixedWAL(j.writer.f, total)
-		if err != nil {
-			return err
-		}
-		j.writer.fixed = state
+	if err := j.writer.ensureEmptyFixedFrameCapacity(total); err != nil {
+		return err
 	}
 
 	if activeBytes <= 0 || activeBytes+total <= j.segmentTargetBytes {
@@ -605,6 +601,11 @@ func (j *CommandJournal) maybeRotateForFrameLockedObservedWithNamespaceDebt(fram
 	if err := j.requireNoPendingStableRotationLocked(); err != nil {
 		return err
 	}
+	// Both successor routes must initialize the chosen empty file for this
+	// atomic frame before installing it or issuing namespace/resource tokens.
+	previousIncoming := j.writer.fixedIncomingBytes
+	j.writer.fixedIncomingBytes = total
+	defer func() { j.writer.fixedIncomingBytes = previousIncoming }()
 	if j.captureStableResources {
 		rotation, err := j.rotateActiveSegmentWithStableResourcesLocked(syncCurrent, deferNamespace, observe)
 		if err != nil {
@@ -630,6 +631,11 @@ func (j *CommandJournal) requireNoPendingStableRotationLocked() error {
 }
 
 func (j *CommandJournal) stableRotationFailStopErrorLocked() error {
+	if j != nil && j.writer != nil {
+		if err := j.writer.commandBufferError(); err != nil {
+			return err
+		}
+	}
 	if j != nil && j.closing {
 		return errors.New("commitlog: command journal is closed")
 	}
@@ -901,17 +907,14 @@ func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurren
 			return nil, pendingCommandWALFailure(parent, prepared, nextPath, observeErr)
 		}
 	}
-	state, _, err := loadFixedWAL(prepared)
+	state, _, err := j.writer.prepareFixedSuccessor(prepared)
 	if err != nil {
 		closedToken.Release()
-		return nil, err
-	}
-	if state == nil && j.writer.fixedTarget > 0 {
-		state, err = initializeFixedWAL(prepared, j.writer.fixedTarget)
-		if err != nil {
-			closedToken.Release()
-			return nil, err
-		}
+		pending.failStop = true
+		cleanupErr := discardUnacceptedFixedSuccessor(parent, prepared)
+		closeErr := prepared.Close()
+		pending.file = nil
+		return nil, j.writer.poisonCommandBuffer(errors.Join(err, cleanupErr, closeErr))
 	}
 	activeInfo, err := prepared.Stat()
 	if err != nil {
@@ -978,10 +981,13 @@ func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurren
 	j.writer.fileSink.file = prepared
 	j.writer.bw.Reset(&j.writer.fileSink)
 	j.writer.size = activeInfo.Size()
+	oldFixed := j.writer.fixed
 	j.writer.fixed = state
 	if state != nil {
 		j.writer.size = state.logical
-		j.writer.syncFn = syncWALData
+		if oldFixed == nil {
+			j.writer.syncFn = syncWALData
+		}
 	}
 	j.writer.scratch = j.writer.scratch[:0]
 	j.segmentSeq = nextSeq
