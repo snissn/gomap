@@ -59,65 +59,41 @@ func (tdb *DB) appendPublicRawKVPointCommand(op commitlog.RawKVOp, key, value []
 }
 
 func (tdb *DB) appendPublicRawKVCommandPayload(payload []byte, sync bool, publication *publicCommandWALPublication) error {
-	if tdb == nil || !tdb.commandWALCached || len(payload) == 0 {
+	if len(payload) == 0 {
 		return nil
 	}
-	if tdb.backend == nil {
-		return ErrClosed
-	}
-	result, err := tdb.appendAndRegisterPublicCommandWAL(len(payload), nil, sync, nil, nil, nil, func(capturedDurable bool) (uint64, error) {
-		return tdb.backend.AppendRawKVBatchPayloadCommandWALTrustedWithMode(payload, publicRawKVCommandWALAppendMode(sync, capturedDurable))
-	})
+	var ticket uint64
+	err := tdb.appendPublicRawKVCommandPayloadPrepared(func() ([]byte, error) { return payload, nil }, sync, &ticket)
 	if publication != nil {
-		*publication = result
+		publication.ticket = ticket
 	}
 	return err
 }
 
 func (tdb *DB) appendPublicRawKVCommandPayloadMeasured(payload []byte, sync bool, publication *publicCommandWALPublication) (db.CommandWALRequestTiming, error) {
-	var timing db.CommandWALRequestTiming
-	if tdb == nil || !tdb.commandWALCached || len(payload) == 0 {
-		return timing, nil
+	if len(payload) == 0 {
+		return db.CommandWALRequestTiming{}, nil
 	}
-	if tdb.backend == nil {
-		return timing, ErrClosed
-	}
-	timing.PostAppendPendingLSNBookkeepingObserved = true
-	result, err := tdb.appendAndRegisterPublicCommandWAL(len(payload), nil, sync, &timing.PostAppendPendingLSNBookkeeping, &timing.GroupCommitWait, &timing.GroupCommitWaitObserved, func(capturedDurable bool) (uint64, error) {
-		var appendErr error
-		var lsn uint64
-		lsn, timing, appendErr = tdb.backend.AppendRawKVBatchPayloadCommandWALTrustedMeasuredWithMode(payload, publicRawKVCommandWALAppendMode(sync, capturedDurable))
-		return lsn, appendErr
-	})
+	var ticket uint64
+	timing, err := tdb.appendPublicRawKVCommandPayloadPreparedMeasured(func() ([]byte, error) { return payload, nil }, sync, &ticket)
 	if publication != nil {
-		*publication = result
+		publication.ticket = ticket
 	}
-	timing.Sync = sync
 	return timing, err
 }
 
 func (tdb *DB) appendPublicRawKVCommandPayloadPrepared(prepare func() ([]byte, error), sync bool, publicationTicket *uint64) error {
-	if tdb == nil || !tdb.commandWALCached || prepare == nil {
-		return nil
-	}
-	if tdb.backend == nil {
-		return ErrClosed
-	}
-	preparedBytes := 0
-	result, err := tdb.appendAndRegisterPublicCommandWAL(0, &preparedBytes, sync, nil, nil, nil, func(capturedDurable bool) (uint64, error) {
-		return tdb.backend.AppendRawKVBatchPayloadCommandWALTrustedPreparedWithMode(func() ([]byte, error) {
-			payload, prepareErr := prepare()
-			preparedBytes = len(payload)
-			return payload, prepareErr
-		}, publicRawKVCommandWALAppendMode(sync, capturedDurable))
-	})
-	if publicationTicket != nil {
-		*publicationTicket = result.ticket
-	}
+	_, err := tdb.appendPublicRawKVCommandPayloadPreparedRequest(prepare, sync, false, publicationTicket)
 	return err
 }
 
 func (tdb *DB) appendPublicRawKVCommandPayloadPreparedMeasured(prepare func() ([]byte, error), sync bool, publicationTicket *uint64) (db.CommandWALRequestTiming, error) {
+	return tdb.appendPublicRawKVCommandPayloadPreparedRequest(prepare, sync, true, publicationTicket)
+}
+
+// All ordinary payload callers share the same preparation and continuation;
+// entry scans, point commands and COW keep their existing admission paths.
+func (tdb *DB) appendPublicRawKVCommandPayloadPreparedRequest(prepare func() ([]byte, error), sync, measured bool, publicationTicket *uint64) (db.CommandWALRequestTiming, error) {
 	var timing db.CommandWALRequestTiming
 	if tdb == nil || !tdb.commandWALCached || prepare == nil {
 		return timing, nil
@@ -125,18 +101,29 @@ func (tdb *DB) appendPublicRawKVCommandPayloadPreparedMeasured(prepare func() ([
 	if tdb.backend == nil {
 		return timing, ErrClosed
 	}
-	timing.PostAppendPendingLSNBookkeepingObserved = true
+	timing.PostAppendPendingLSNBookkeepingObserved = measured
 	preparedBytes := 0
-	result, err := tdb.appendAndRegisterPublicCommandWAL(0, &preparedBytes, sync, &timing.PostAppendPendingLSNBookkeeping, &timing.GroupCommitWait, &timing.GroupCommitWaitObserved, func(capturedDurable bool) (uint64, error) {
-		var appendErr error
-		var lsn uint64
-		lsn, timing, appendErr = tdb.backend.AppendRawKVBatchPayloadCommandWALTrustedPreparedMeasuredWithMode(func() ([]byte, error) {
-			payload, prepareErr := prepare()
-			preparedBytes = len(payload)
-			return payload, prepareErr
-		}, publicRawKVCommandWALAppendMode(sync, capturedDurable))
+	preparePayload := func() ([]byte, error) {
+		payload, prepareErr := prepare()
+		preparedBytes = len(payload)
+		return payload, prepareErr
+	}
+	var pendingBookkeeping, groupWait *time.Duration
+	var groupWaitObserved *bool
+	var timingPointer *db.CommandWALRequestTiming
+	if measured {
+		pendingBookkeeping, groupWait = &timing.PostAppendPendingLSNBookkeeping, &timing.GroupCommitWait
+		groupWaitObserved, timingPointer = &timing.GroupCommitWaitObserved, &timing
+	}
+	result, err := tdb.appendAndRegisterPublicCommandWALCapture(0, &preparedBytes, sync, pendingBookkeeping, groupWait, groupWaitObserved, func(capturedDurable bool) (uint64, error) {
+		if !measured {
+			return tdb.backend.AppendRawKVBatchPayloadCommandWALTrustedPreparedWithMode(preparePayload, publicRawKVCommandWALAppendMode(sync, capturedDurable))
+		}
+		lsn, requestTiming, appendErr := tdb.backend.AppendRawKVBatchPayloadCommandWALTrustedPreparedMeasuredWithMode(preparePayload, publicRawKVCommandWALAppendMode(sync, capturedDurable))
+		requestTiming.PostAppendPendingLSNBookkeepingObserved = true
+		timing = requestTiming
 		return lsn, appendErr
-	})
+	}, preparePayload, timingPointer)
 	if publicationTicket != nil {
 		*publicationTicket = result.ticket
 	}

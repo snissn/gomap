@@ -100,9 +100,13 @@ func (tdb *DB) forcePublicCommandWALGroupCommit() error {
 }
 
 func (tdb *DB) appendAndRegisterPublicCommandWAL(bytes int, preparedBytes *int, durable bool, pendingBookkeeping, groupCommitWait *time.Duration, groupWaitObserved *bool, appendFrame func(sync bool) (uint64, error)) (publicCommandWALPublication, error) {
+	return tdb.appendAndRegisterPublicCommandWALCapture(bytes, preparedBytes, durable, pendingBookkeeping, groupCommitWait, groupWaitObserved, appendFrame, nil, nil)
+}
+
+func (tdb *DB) appendAndRegisterPublicCommandWALCapture(bytes int, preparedBytes *int, durable bool, pendingBookkeeping, groupCommitWait *time.Duration, groupWaitObserved *bool, appendFrame func(sync bool) (uint64, error), prepareCapture func() ([]byte, error), captureTiming *backenddb.CommandWALRequestTiming) (publicCommandWALPublication, error) {
 	if durable && tdb != nil && tdb.commandWALCached && tdb.backend != nil && appendFrame != nil &&
 		tdb.cached != nil && !tdb.cached.COWMode() {
-		return tdb.appendAndCaptureOrdinaryPublicCommandWAL(bytes, preparedBytes, pendingBookkeeping, groupCommitWait, groupWaitObserved, appendFrame)
+		return tdb.appendAndCaptureOrdinaryPublicCommandWAL(bytes, preparedBytes, pendingBookkeeping, groupCommitWait, groupWaitObserved, appendFrame, prepareCapture, captureTiming)
 	}
 	registration, err := tdb.registerPublicCommandWAL(bytes, preparedBytes, durable, pendingBookkeeping, appendFrame)
 	if err != nil {
@@ -114,7 +118,7 @@ func (tdb *DB) appendAndRegisterPublicCommandWAL(bytes int, preparedBytes *int, 
 // appendAndCaptureOrdinaryPublicCommandWAL enters the existing leader directly
 // only when exclusive append admission can freeze a truly idle ordinary epoch.
 // COW retains its separate register/install/await path and typed staging guard.
-func (tdb *DB) appendAndCaptureOrdinaryPublicCommandWAL(bytes int, preparedBytes *int, pendingBookkeeping, groupCommitWait *time.Duration, groupWaitObserved *bool, appendFrame func(bool) (uint64, error)) (publicCommandWALPublication, error) {
+func (tdb *DB) appendAndCaptureOrdinaryPublicCommandWAL(bytes int, preparedBytes *int, pendingBookkeeping, groupCommitWait *time.Duration, groupWaitObserved *bool, appendFrame func(bool) (uint64, error), prepareCapture func() ([]byte, error), captureTiming *backenddb.CommandWALRequestTiming) (publicCommandWALPublication, error) {
 	group := &tdb.commandWALGroupCommit
 	group.durableIntents.Add(1)
 	intentPending := true
@@ -153,34 +157,86 @@ func (tdb *DB) appendAndCaptureOrdinaryPublicCommandWAL(bytes int, preparedBytes
 		if !eligible {
 			return
 		}
+		// The backend continuation runs under the original append admission.
+		// It chooses only this existing coordinator epoch; it mints no lease.
+		selected := false
+		recordAppend := func(lsn uint64) {
+			if lsn != 0 {
+				start := time.Now()
+				tdb.recordPublicCommandWALPendingLSN(lsn)
+				if pendingBookkeeping != nil {
+					*pendingBookkeeping += time.Since(start)
+				}
+			}
+		}
+		selectCapture := func(lsn uint64) bool {
+			selected = true
+			recordAppend(lsn)
+			group.mu.Lock()
+			eligible = group.idleDurableCaptureEligibleLocked()
+			if eligible {
+				group.initLocked()
+				publication.ticket, err = group.allocateTicketLocked()
+				if err == nil {
+					group.leaderActive = true
+					group.leaders.Add(1)
+					batch = publicCommandWALCapturedGroup{count: 1, commits: 1, lastTicket: publication.ticket}
+					captured = true
+				}
+			}
+			group.mu.Unlock()
+			if captured {
+				if groupWaitObserved != nil {
+					*groupWaitObserved = true
+				}
+				waitStart = time.Now()
+			}
+			return captured
+		}
 		// Only this call may append. A demand change after assignment joins
 		// the same append to pending collection; it never resubmits it.
 		appended = true
-		lsn, appendErr := appendFrame(true)
-		err = appendErr
-		if lsn != 0 {
-			start := time.Now()
-			tdb.recordPublicCommandWALPendingLSN(lsn)
-			if pendingBookkeeping != nil {
-				*pendingBookkeeping += time.Since(start)
+		var lsn uint64
+		var appendErr error
+		if prepareCapture != nil {
+			group.capturedPrefix = backenddb.CommandWALCapturedPrefix{}
+			var barrier backenddb.CommandWALBarrierResult
+			var requestTiming backenddb.CommandWALRequestTiming
+			lsn, requestTiming, barrier, appendErr = tdb.backend.AppendRawKVBatchPayloadCommandWALTrustedPreparedCapture(prepareCapture, &group.capturedPrefix, selectCapture, captureTiming != nil)
+			if captureTiming != nil {
+				// Assignment and wait observations were recorded in the scoped
+				// selector before the backend append partitions were returned.
+				requestTiming.PostAppendPendingLSNBookkeeping = captureTiming.PostAppendPendingLSNBookkeeping
+				requestTiming.PostAppendPendingLSNBookkeepingObserved = true
+				requestTiming.GroupCommitWaitObserved = captureTiming.GroupCommitWaitObserved
+				*captureTiming = requestTiming
 			}
+			if captured {
+				batch.barrier, batch.err = barrier, appendErr
+				if appendErr == nil {
+					batch.target = &group.capturedPrefix
+				}
+				if barrier.LSN != 0 {
+					tdb.recordPublicCommandWALPendingLSN(barrier.LSN)
+				}
+				return
+			}
+		} else {
+			lsn, appendErr = appendFrame(true)
+		}
+		if !selected {
+			if appendErr != nil || lsn == 0 {
+				recordAppend(lsn)
+			} else {
+				selectCapture(lsn)
+			}
+		}
+		if appendErr != nil {
+			err = appendErr
 		}
 		if err != nil || lsn == 0 {
 			return
 		}
-		group.mu.Lock()
-		eligible = group.idleDurableCaptureEligibleLocked()
-		if eligible {
-			group.initLocked()
-			publication.ticket, err = group.allocateTicketLocked()
-			if err == nil {
-				group.leaderActive = true
-				group.leaders.Add(1)
-				batch = publicCommandWALCapturedGroup{count: 1, commits: 1, lastTicket: publication.ticket}
-				captured = true
-			}
-		}
-		group.mu.Unlock()
 		if !eligible {
 			if preparedBytes != nil {
 				bytes = *preparedBytes
@@ -189,12 +245,9 @@ func (tdb *DB) appendAndCaptureOrdinaryPublicCommandWAL(bytes int, preparedBytes
 			publication.awaiting, publication.observeWait, publication.durable = err == nil, true, true
 		}
 		if captured {
-			if groupWaitObserved != nil {
-				*groupWaitObserved = true
-			}
-			waitStart = time.Now()
 			group.captureGroup(tdb, &batch)
 		}
+
 	}()
 	if !appended {
 		publication, err = tdb.registerPublicCommandWALWithIntent(bytes, preparedBytes, true, true, pendingBookkeeping, appendFrame)

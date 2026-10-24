@@ -2627,43 +2627,77 @@ func (db *DB) AppendRawKVBatchPayloadCommandWALTrustedPreparedMeasured(prepare f
 }
 
 func (db *DB) appendRawKVBatchPayloadCommandWALPrepared(prepare func() ([]byte, error), mode RawKVCommandWALAppendMode, trusted bool, measured bool) (uint64, CommandWALRequestTiming, error) {
+	lsn, timing, _, err := db.appendRawKVBatchPayloadCommandWALPreparedCapture(prepare, mode, trusted, measured, nil, nil)
+	return lsn, timing, err
+}
+
+// AppendRawKVBatchPayloadCommandWALTrustedPreparedCapture appends one prepared
+// durable mutation and, when selectCapture selects it, captures its fresh
+// complete prefix before releasing the original backend publication admission.
+// selectCapture runs once after successful assignment under that admission; it
+// must not acquire backend publication locks. A false result leaves target
+// unused. A true result with no error transfers teardown to target.Sync; every such
+// target must be Synced. A postassignment error is ambiguous and poisons append.
+// No lease escapes through selectCapture, and physical Sync is never done here.
+func (db *DB) AppendRawKVBatchPayloadCommandWALTrustedPreparedCapture(prepare func() ([]byte, error), target *CommandWALCapturedPrefix, selectCapture func(uint64) bool, measured bool) (uint64, CommandWALRequestTiming, CommandWALBarrierResult, error) {
+	if target == nil || target.db != nil || selectCapture == nil {
+		return 0, CommandWALRequestTiming{}, CommandWALBarrierResult{}, ErrCommandWALRejected
+	}
+	return db.appendRawKVBatchPayloadCommandWALPreparedCapture(prepare, RawKVCommandWALAppendCapturedDurable, true, measured, target, selectCapture)
+}
+
+func (db *DB) appendRawKVBatchPayloadCommandWALPreparedCapture(prepare func() ([]byte, error), mode RawKVCommandWALAppendMode, trusted bool, measured bool, target *CommandWALCapturedPrefix, selectCapture func(uint64) bool) (uint64, CommandWALRequestTiming, CommandWALBarrierResult, error) {
 	var requestTiming CommandWALRequestTiming
 	if !mode.valid() {
-		return 0, requestTiming, ErrCommandWALUnsupported
+		return 0, requestTiming, CommandWALBarrierResult{}, ErrCommandWALUnsupported
 	}
 	if db == nil || !db.commandWAL {
-		return 0, requestTiming, nil
+		return 0, requestTiming, CommandWALBarrierResult{}, nil
 	}
 	if db.durability == DurabilityWALOffRelaxed {
-		return 0, requestTiming, fmt.Errorf("%w: WAL-off durability is incompatible with command WAL", ErrCommandWALUnsupported)
+		return 0, requestTiming, CommandWALBarrierResult{}, fmt.Errorf("%w: WAL-off durability is incompatible with command WAL", ErrCommandWALUnsupported)
 	}
 	if prepare == nil {
-		return 0, requestTiming, fmt.Errorf("%w: missing command wal payload preparation", ErrCommandWALRejected)
+		return 0, requestTiming, CommandWALBarrierResult{}, fmt.Errorf("%w: missing command wal payload preparation", ErrCommandWALRejected)
 	}
 	publishStart := time.Time{}
 	if measured {
 		publishStart = time.Now()
 		requestTiming.PublishLockBarrierWaitObserved = true
 	}
-	unlockCommandWALPublish, err := db.LockCommandWALPublishWithBarriers()
+	err := db.acquireCommandWALPublishWithBarriersForOwner(nil)
 	if err != nil {
 		if measured {
 			requestTiming.PublishLockBarrierWait += time.Since(publishStart)
 		}
-		return 0, requestTiming, err
+		return 0, requestTiming, CommandWALBarrierResult{}, err
 	}
-	defer unlockCommandWALPublish()
+	owned, assigned := true, false
+	defer func() {
+		recovered := recover()
+		if recovered != nil && assigned && selectCapture != nil {
+			// Publish poison before releasing admission: an assigned selector
+			// panic cannot let a successor accept an uncertified continuation.
+			db.commandWALFlushPoisoned.Store(true)
+		}
+		if owned {
+			db.unlockCommandWALRawPublishWithAdmissionAndTeardown()
+		}
+		if recovered != nil {
+			panic(recovered)
+		}
+	}()
 	if measured {
 		requestTiming.PublishLockBarrierWait += time.Since(publishStart)
 	}
 	if db.closing.Load() {
-		return 0, requestTiming, ErrClosed
+		return 0, requestTiming, CommandWALBarrierResult{}, ErrClosed
 	}
 	if db.commandJournal == nil {
-		return 0, requestTiming, db.commandWALJournalUnavailableError()
+		return 0, requestTiming, CommandWALBarrierResult{}, db.commandWALJournalUnavailableError()
 	}
 	if db.commandWALFlushPoisoned.Load() {
-		return 0, requestTiming, fmt.Errorf("%w: command wal post-append failure; reopen required", ErrRecoveryRequired)
+		return 0, requestTiming, CommandWALBarrierResult{}, fmt.Errorf("%w: command wal post-append failure; reopen required", ErrRecoveryRequired)
 	}
 	backendStart := time.Time{}
 	if measured {
@@ -2675,7 +2709,7 @@ func (db *DB) appendRawKVBatchPayloadCommandWALPrepared(prepare func() ([]byte, 
 		if measured {
 			requestTiming.BackendIntentPlanningSerialization += time.Since(backendStart)
 		}
-		return 0, requestTiming, err
+		return 0, requestTiming, CommandWALBarrierResult{}, err
 	}
 	if measured {
 		requestTiming.BackendIntentPlanningSerialization += time.Since(backendStart)
@@ -2691,7 +2725,36 @@ func (db *DB) appendRawKVBatchPayloadCommandWALPrepared(prepare func() ([]byte, 
 		}
 		return nil
 	}())
-	return lsn, requestTiming, err
+	assigned = lsn != 0
+	if err != nil || lsn == 0 || selectCapture == nil || !selectCapture(lsn) {
+		return lsn, requestTiming, CommandWALBarrierResult{}, err
+	}
+	// Registration and higher-level preparation can change under raw admission.
+	// Preserve the final hook observation. New assigned/staged WAL publishers
+	// cannot pass the continuously held raw publication lock.
+	if err = db.runCommandWALRawPublishBarriers(); err != nil {
+		if commandWALPendingDrain(err) == nil {
+			db.commandWALFlushPoisoned.Store(true)
+			return lsn, requestTiming, CommandWALBarrierResult{}, err
+		}
+		db.unlockCommandWALRawPublishWithAdmissionAndTeardown()
+		owned = false
+		// The existing acquisition loop performs the unlocked drain and reruns
+		// every hook. The assigned mutation is never appended again.
+		_, result, captureErr := db.captureCommandWALPrefixAfterAppend(nil, target, lsn)
+		return lsn, requestTiming, result, captureErr
+	}
+	_, result, captureErr := db.captureCommandWALPrefixLocked(nil, target)
+	if captureErr != nil {
+		db.commandWALFlushPoisoned.Store(true)
+		return lsn, requestTiming, result, captureErr
+	}
+	// The original teardown lease now belongs to target.Sync. Release raw
+	// publication/admission before the coordinator starts physical I/O.
+	db.commandWALRawPublishMu.Unlock()
+	db.commandWALRawAdmissionMu.Unlock()
+	owned = false
+	return lsn, requestTiming, result, nil
 }
 
 // Mode variants share canonical payload construction and preserve dependency ordering.

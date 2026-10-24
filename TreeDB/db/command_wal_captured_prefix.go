@@ -49,6 +49,12 @@ func (db *DB) CaptureCommandWALPrefixInto(target *CommandWALCapturedPrefix, owne
 }
 
 func (db *DB) captureCommandWALPrefix(owner *transactionowner.Owner, target *CommandWALCapturedPrefix) (_ *CommandWALCapturedPrefix, result CommandWALBarrierResult, err error) {
+	return db.captureCommandWALPrefixAfterAppend(owner, target, 0)
+}
+
+// The exact already-assigned identity enables only failure poisoning. Capture
+// always reacquires its original authority, reruns hooks and samples a fresh cut.
+func (db *DB) captureCommandWALPrefixAfterAppend(owner *transactionowner.Owner, target *CommandWALCapturedPrefix, assignedLSN uint64) (_ *CommandWALCapturedPrefix, result CommandWALBarrierResult, err error) {
 	// The fixed COW owner appends only fully prepared commands under its typed
 	// staging guard. As with LockPrivateCOWStagingGuard, it needs raw append
 	// authority, not legacy prepared-publisher admission. A physical checkpoint
@@ -61,19 +67,44 @@ func (db *DB) captureCommandWALPrefix(owner *transactionowner.Owner, target *Com
 			return nil, result, ErrClosed
 		}
 		db.commandWALRawPublishMu.Lock()
-	} else if err = db.acquireCommandWALPublishWithBarriersForOwner(owner); err != nil {
+	} else if err = db.acquireCommandWALPublishWithBarriersAfterAppend(owner, assignedLSN); err != nil {
 		return nil, result, err
 	}
 	retained := false
 	defer func() {
+		recovered := recover()
 		if !retained {
+			if assignedLSN != 0 && (err != nil || recovered != nil) {
+				db.commandWALFlushPoisoned.Store(true)
+			}
 			db.commandWALRawPublishMu.Unlock()
 			if !privateOwner {
 				db.commandWALRawAdmissionMu.Unlock()
 			}
 			db.teardownMu.RUnlock()
 		}
+		if recovered != nil {
+			panic(recovered)
+		}
 	}()
+	target, result, err = db.captureCommandWALPrefixLocked(owner, target)
+	if err != nil {
+		return nil, result, err
+	}
+	// Transfer the original teardown lease; Sync releases it exactly once.
+	db.commandWALRawPublishMu.Unlock()
+	if !privateOwner {
+		db.commandWALRawAdmissionMu.Unlock()
+	}
+	retained = true
+	return target, result, nil
+}
+
+// captureCommandWALPrefixLocked samples the actual journal/dependency frontier
+// under existing teardown/raw publication custody. The caller retains ownership
+// of those locks on failure; success transfers only the captured resources, and
+// the caller must transfer its original teardown lease to target.Sync.
+func (db *DB) captureCommandWALPrefixLocked(owner *transactionowner.Owner, target *CommandWALCapturedPrefix) (_ *CommandWALCapturedPrefix, result CommandWALBarrierResult, err error) {
 	if db.closing.Load() {
 		return nil, result, ErrClosed
 	}
@@ -118,12 +149,6 @@ func (db *DB) captureCommandWALPrefix(owner *transactionowner.Owner, target *Com
 	}
 	db.commandWALDebt.retainCapture()
 	target.journal = journal
-	// Keep teardown pinned, but admit new prepared publishers and raw appends.
-	db.commandWALRawPublishMu.Unlock()
-	if !privateOwner {
-		db.commandWALRawAdmissionMu.Unlock()
-	}
-	retained = true
 	return target, result, nil
 }
 
