@@ -72,6 +72,13 @@ processing per commit. Captured file handles, namespace tokens and complete
 LSN prefixes continue to determine resource identity and durability; witness
 strings do not grant access or replace those checks.
 
+An idle ordinary mutable-cache caller checks durability and publication readiness
+under the existing epoch-completion lock. It returns from that check only when
+its completed ticket is covered and its publication ticket is current; completion
+does not advance publication. A preceding publication or installed wait hook
+retains the normal wait path without repeating the physical sync. The coordinator
+and request timing counters share one elapsed capture-through-readiness sample.
+
 ### Durable singleton `SetSync`
 
 ```text
