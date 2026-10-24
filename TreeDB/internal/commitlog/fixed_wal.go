@@ -378,15 +378,12 @@ func validateFixedWALFrames(data []byte) (first, last uint64, err error) {
 	}
 	return first, last, nil
 }
-func (state *fixedWAL) flushExtent(w *Writer) error {
-	if len(state.pending) == 0 {
-		return nil
-	}
-	first, last, err := validateFixedWALFrames(state.pending)
-	if err != nil {
-		return err
-	}
-	end := fixedWALAlign(state.physical+fixedWALWitnessSize+int64(len(state.pending))) + fixedWALWitnessSize
+
+// flushExtent emits exactly one frame from flush's fully validated, exclusively
+// owned pending buffer. Its caller supplies the validated frame's common V1/V2
+// LSN; no borrowed decoder state or mutable scratch escapes the synchronous write.
+func (state *fixedWAL) flushExtent(w *Writer, frame []byte, lsn uint64) error {
+	end := fixedWALAlign(state.physical+fixedWALWitnessSize+int64(len(frame))) + fixedWALWitnessSize
 	if end > state.capacity {
 		return fmt.Errorf("commitlog: initialized WAL capacity exhausted")
 	}
@@ -409,27 +406,26 @@ func (state *fixedWAL) flushExtent(w *Writer) error {
 	copy(header[8:24], state.identity[:])
 	binary.LittleEndian.PutUint64(header[24:32], uint64(state.physical))
 	binary.LittleEndian.PutUint64(header[32:40], uint64(state.logical))
-	binary.LittleEndian.PutUint64(header[40:48], uint64(len(state.pending)))
+	binary.LittleEndian.PutUint64(header[40:48], uint64(len(frame)))
 	binary.LittleEndian.PutUint64(header[48:56], uint64(end))
-	binary.LittleEndian.PutUint64(header[56:64], first)
-	binary.LittleEndian.PutUint64(header[64:72], last)
-	binary.LittleEndian.PutUint32(header[72:76], crc.Checksum(state.pending))
+	binary.LittleEndian.PutUint64(header[56:64], lsn)
+	binary.LittleEndian.PutUint64(header[64:72], lsn)
+	binary.LittleEndian.PutUint32(header[72:76], crc.Checksum(frame))
 	binary.LittleEndian.PutUint32(header[92:96], crc.Checksum(header[:92]))
-	copy(image[fixedWALWitnessSize:], state.pending)
+	copy(image[fixedWALWitnessSize:], frame)
 	footer := image[len(image)-fixedWALWitnessSize:]
 	copy(footer, header)
 	copy(footer, fixedWALEndMagic[:])
 	binary.LittleEndian.PutUint32(footer[92:96], crc.Checksum(footer[:92]))
 	started := time.Now()
-	err = writeFixedAt(w.f, image, state.physical)
+	err := writeFixedAt(w.f, image, state.physical)
 	w.observeWriteSyscalls(1, uint64(len(image)), time.Since(started), err)
 	if err != nil {
 		return err
 	}
-	state.logical += int64(len(state.pending))
+	state.logical += int64(len(frame))
 	state.physical = end
-	state.lastLSN = last
-	state.pending = state.pending[:0]
+	state.lastLSN = lsn
 	return nil
 }
 
@@ -552,6 +548,9 @@ func (state *fixedWAL) flush(w *Writer) error {
 	if len(state.pending) == 0 {
 		return nil
 	}
+	// Validate every frame before emitting any extent: malformed later bytes
+	// must not leave a physically written prefix. This pass retains all outer
+	// checksums, strict envelope/payload validation and monotone LSN checks.
 	if _, _, err := validateFixedWALFrames(state.pending); err != nil {
 		return err
 	}
@@ -559,8 +558,11 @@ func (state *fixedWAL) flush(w *Writer) error {
 	pending := base
 	for len(pending) > 0 {
 		size := segmentHeaderSize + int(binary.LittleEndian.Uint32(pending[:4]))
-		state.pending = pending[:size]
-		if err := state.flushExtent(w); err != nil {
+		// Both supported versions store LSN at bytes 20:28 of their common
+		// header. The full pass above proved these bounds and this exact identity;
+		// append exclusion keeps pending unchanged throughout both passes.
+		lsn := binary.LittleEndian.Uint64(pending[segmentHeaderSize+20 : segmentHeaderSize+28])
+		if err := state.flushExtent(w, pending[:size], lsn); err != nil {
 			state.pending = pending
 			return err
 		}
