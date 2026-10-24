@@ -582,7 +582,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 		return stats, err
 	}
 
-	if err := db.runCompactStoragePhase(&stats, "value-log-gc", func() error {
+	if err := db.runCompactStorageReclamationPhase(&stats, "value-log-gc", func() error {
 		gc, err := db.valueLogGC(ctx, ValueLogGCOptions{ProtectedPaths: compactStorageValueLogProtectedPaths(opts)}, !maintenanceLocked)
 		stats.ValueLogGC = gc
 		return err
@@ -757,7 +757,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 			SkipReason: "disabled",
 		})
 	} else {
-		if err := db.runCompactStoragePhase(&stats, "prune-empty-value-log-files", func() error {
+		if err := db.runCompactStorageReclamationPhase(&stats, "prune-empty-value-log-files", func() error {
 			deleted, err := db.pruneZeroByteValueLogFiles(compactStorageCleanupValueLogProtectedPaths(opts))
 			stats.ZeroByteValueLogFilesDeleted = deleted
 			return err
@@ -987,7 +987,7 @@ func (db *DB) settleCompactStorageGC(ctx context.Context, opts CompactStorageOpt
 		}
 		if debt.ValueLogGCSegments > 0 {
 			phaseName := fmt.Sprintf("settle-value-log-gc-%d", pass+1)
-			if err := db.runCompactStoragePhase(stats, phaseName, func() error {
+			if err := db.runCompactStorageReclamationPhase(stats, phaseName, func() error {
 				gc, err := db.valueLogGC(ctx, ValueLogGCOptions{ProtectedPaths: compactStorageValueLogProtectedPaths(opts)}, lockMaintenance)
 				stats.ValueLogGC = gc
 				return err
@@ -1002,7 +1002,7 @@ func (db *DB) settleCompactStorageGC(ctx context.Context, opts CompactStorageOpt
 		}
 		if len(fencedIDs) > 0 {
 			phaseName := fmt.Sprintf("settle-fenced-value-log-gc-%d", pass+1)
-			if err := db.runCompactStoragePhase(stats, phaseName, func() error {
+			if err := db.runCompactStorageReclamationPhase(stats, phaseName, func() error {
 				// Fenced IDs are independently proven unreachable by the
 				// tracker-aware referenced set (strict commit-sequence match) or
 				// its full-scan fallback. Cached callers rotate and block writers
@@ -1682,6 +1682,47 @@ func (db *DB) compactStorageReferencedValueLogRefs(ctx context.Context) (map[uin
 		})
 	}
 	return refs, nil
+}
+
+// Reclamation can conservatively refuse a stale root capability before any
+// destructive mutation. Preserve those candidates and report deferred work;
+// publisher contention is not a failure of the remaining compaction phases.
+func (db *DB) runCompactStorageReclamationPhase(stats *CompactStorageStats, name string, fn func() error) error {
+	err := db.runCompactStoragePhase(stats, name, fn)
+	if compactStorageOnlyStaleRootError(err) {
+		phase := &stats.Phases[len(stats.Phases)-1]
+		phase.Status = CompactStoragePhaseStatusDeferred
+		phase.Reason = err.Error()
+		phase.Skipped = true
+		phase.SkipReason = err.Error()
+		return nil
+	}
+	return err
+}
+
+// A stale capability can be joined with a real release or publication failure.
+// Defer only when every underlying cause is the contention sentinel.
+func compactStorageOnlyStaleRootError(err error) bool {
+	if err == ErrRecoverableRootSetStale {
+		return true
+	}
+	switch cause := err.(type) {
+	case interface{ Unwrap() []error }:
+		causes := cause.Unwrap()
+		if len(causes) == 0 {
+			return false
+		}
+		for _, child := range causes {
+			if !compactStorageOnlyStaleRootError(child) {
+				return false
+			}
+		}
+		return true
+	case interface{ Unwrap() error }:
+		return compactStorageOnlyStaleRootError(cause.Unwrap())
+	default:
+		return false
+	}
 }
 
 func (db *DB) runCompactStoragePhase(stats *CompactStorageStats, name string, fn func() error) error {
