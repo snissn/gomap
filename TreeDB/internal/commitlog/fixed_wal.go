@@ -139,7 +139,10 @@ func loadFixedWAL(file *os.File) (*fixedWAL, []byte, error) {
 				if _, err = file.ReadAt(block[:size], off); err != nil {
 					return nil, nil, err
 				}
-				if !allZeroBytes(block[:size]) {
+				// Count uses the standard library's byte scan rather than one
+				// instrumented Go read per byte across the initialized reserve.
+				// Every byte remains covered by the corruption check.
+				if bytes.Count(block[:size], []byte{0}) != int(size) {
 					return nil, nil, fmt.Errorf("%w: fixed WAL occupied bytes after gap at %d", ErrCorrupt, pos)
 				}
 				off += size
