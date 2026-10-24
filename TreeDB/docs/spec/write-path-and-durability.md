@@ -909,3 +909,15 @@ the caller owns durable command/decision authority. Its checkpoint certificate
 retains the maintained publisher's exact root/dependencies with bounded descriptor
 output. See [external recovery](external-recovery.md) for the semantic barrier,
 publication order, retained roots, and unchanged standalone WriteSync contract.
+
+### Captured command-WAL completion
+
+The ordinary public durable coordinator captures an idle singleton immediately
+and collects queued writes through the maintained bounded window before
+capturing one exact complete journal prefix. COW installs its complete cut
+and releases admission/raw guards before awaiting that physical prefix. Final
+WAL sync uses retained file handles outside writer/publication/journal mutexes;
+queued successors form the next collected epoch and need their own certificate.
+Earlier external dependency and V2 marker-ordering waits remain serialized.
+See [the durable write contract](command-wal-durable-write-contract.md#shared-captured-prefix-scheduler)
+for lifecycle, allocation and boundary details. No WAL format or ACK guarantee changes.

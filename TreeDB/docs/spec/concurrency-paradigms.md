@@ -599,3 +599,15 @@ Representative coverage includes:
 - `TreeDB/caching/backpressure_wait_test.go`.
 
 When changing concurrency behavior, these tests SHOULD be reviewed/expanded with the change.
+
+## Durable command-WAL wait ownership
+
+One public coordinator owns the current captured WAL target and ticket cut.
+Queued epochs use count/byte/explicit triggers and the maintained collection
+timer before capture. An idle singleton captures immediately.
+Final physical sync holds resource/teardown pins, not public writer, raw append
+or journal mutexes. A waiting successor elects the next leader only after the
+previous target's complete Sync and deferred releases finish. Request tickets
+remain ordered through publication, including mixed relaxed/durable calls.
+External dependency stabilization before a V2 durable marker remains an earlier
+serialized phase; final-sync overlap does not certify dependency-wait progress.

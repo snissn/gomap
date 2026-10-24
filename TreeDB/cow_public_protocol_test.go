@@ -65,7 +65,9 @@ func TestCOWPublicActualPreparationAppendSwapAndDurablePause(t *testing.T) {
 					t.Fatal("capture blocked or refused")
 				}
 				want := "old"
-				if profile == ProfileNoWALFast && point == durabilitycut.BeforeIndexDataSync {
+				published := (profile == ProfileNoWALFast && point == durabilitycut.BeforeIndexDataSync) ||
+					(profile == ProfileCommandWALDurable && point == durabilitycut.BeforeDependencyFileSync)
+				if published {
 					want = "new"
 				}
 				for _, key := range []string{"a", "d"} {
@@ -82,11 +84,11 @@ func TestCOWPublicActualPreparationAppendSwapAndDurablePause(t *testing.T) {
 				}
 				fresh.Close()
 				// A concurrent public writer joins the same admission/sequencer. It
-				// cannot publish through a preaccepted paused command. NoWAL sync
-				// checkpoint pauses after ordinary publication released that owner.
+				// cannot publish before the preceding complete cut is installed. Both
+				// NoWAL checkpoints and captured WAL fsync release the COW owner.
 				queued := make(chan error, 1)
 				go func() { queued <- db.Set([]byte("later"), []byte("writer")) }()
-				if profile != ProfileNoWALFast || point != durabilitycut.BeforeIndexDataSync {
+				if !published {
 					select {
 					case err := <-queued:
 						unpause()

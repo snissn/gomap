@@ -4462,3 +4462,26 @@ headroom is exhausted. These controls do not activate unconverted collections.
   publication/reopen, and process crash cuts around CURRENT.
 - These engine controls do not prove application reader draining, Raft snapshot
   acceptance or durable cross-store install intent; those require consumer tests.
+
+## Captured public WAL epoch controls
+
+- `TestPublicCOWCapturedPrefixAppendInstallAndExactACK`: default public COW
+  successor installation during blocked final sync, exact ACKs, pointer rotation
+  and clean reopen. Its rotation observation targets the final captured sync,
+  not earlier serialized V2 dependency syncs.
+- `TestPublicDurableDefaultBlockedSyncCollectsSuccessorEpoch`: ordinary durable
+  Set on btree/cow_ordered with inline, materialized-RID, and external-pointer
+  values, first blocked sync, four successor appends, two exact epochs and exactly
+  two physical WAL syncs.
+- `TestPublicCOWCapturedPrefixExternalDependencyWaitBoundary`: a successor
+  announces intent before cache admission while an earlier V2 external-reference
+  dependency sync is blocked; canonical appends wait until that dependency is
+  stable. This records the remaining earlier-phase serialization limitation.
+- `TestPublicCOWCapturedPrefixFailureWakesSuccessorAndPoisons`: reused capture
+  storage, ambiguity, waiter release and subsequent recovery-required refusal.
+- `TestCapturedDurableMutationWaitsForPhysicalPrefixAndRelaxedTailPromotion`:
+  emitted marker versus certified W, single-use target and relaxed suffix.
+- `TestCapturedSyncPinsPrefixAcrossAppendRotationAndClose`,
+  `TestCapturedSyncSharedSegmentProgressAndOutOfOrderRelease`, and
+  `TestCapturedSyncFinalLegalLSN`: retained exact identity, independent physical
+  syncs, rotations, last legal LSN and Close joining all pins.

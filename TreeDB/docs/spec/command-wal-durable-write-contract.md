@@ -55,8 +55,9 @@ Self-contained `SetMaterializedRID` frames still require live read owners even
 when their WAL external closure is nil. WAL debt owns its own resources.
 
 Producer buffer flush establishes pointer readability, not file/name sync or
-command durability. After the existing frame/sync frontier, the WAL barrier is
-released and the prepared cut installs once without allocation or rebuilding.
+command durability. After canonical append the prepared cut installs once without allocation or
+rebuilding. COW releases writer/admission exclusion before waiting for its
+captured physical WAL prefix; visibility may therefore precede durable ACK.
 Readers acquire the complete old or new cut. Capacity/unsupported refusal is
 pre-append; later failures retain existing ambiguity/poison/reopen semantics.
 No command payload is re-encoded for COW. The
@@ -129,9 +130,8 @@ different RID or duplicating a logical record.
 
 The backend encoder independently enforces the same 64 KiB value, 1 MiB frame,
 and 256 total-operation bounds. Retaining `entry.Value` beside a pointer is not
-by itself permission to emit `SetMaterializedRID`. One-shot raw entry APIs must
-declare one of three append modes: relaxed, directly durable, or a grouped
-durable-prefix participant. Relaxed mode always emits the V1 `SetRID` fallback.
+by itself permission to emit `SetMaterializedRID`. One-shot raw entry APIs declare relaxed, directly durable, grouped
+durable-prefix participant, or captured-durable append mode. Relaxed mode always emits the V1 `SetRID` fallback.
 A prefix participant may emit bounded V2 while appending an individually
 relaxed frame, but its caller must not acknowledge the mutation until a later
 durable-prefix barrier covers that frame. Reusable entry intents, whose eventual
@@ -184,6 +184,54 @@ mutations. When the current command prefix is already durable (including a
 fresh database), it performs the physical sync without manufacturing another
 LSN. It therefore cannot leave an unapplied no-op LSN between consecutive
 public checkpoint ranges.
+
+## Shared captured-prefix scheduler
+
+Ordinary durable and explicit sync public writes use the same coordinator. Each
+request retains its compact publication ticket. An idle singleton uses an immediate
+capture; one leader collects a queued cohort through the existing bounded
+200 microsecond window, with early count/byte/explicit triggers, then
+fixes the exact complete-frame endpoint. Successors append while the leader's
+final physical WAL sync is in flight and elect one next leader after completion.
+The next leader retains the collection window; it must not snapshot immediately
+merely because it inherited queued work. There is one active capture and no
+background goroutine or second accepted-prefix/root owner.
+
+An idle captured-durable mutation orders all preceding dependencies before
+emitting its existing V2 durable class, but does not perform its own WAL sync.
+Queued durable participants append relaxed-class frames and retain exact debt
+for the next finite epoch. That epoch orders external dependencies once before
+its terminal durable-prefix barrier. COW announces durable intent before cache
+writer admission, so serialized preparation cannot disguise a queued cohort. The capture
+flushes complete bytes and pins the exact current file. Prior rotation files
+and namespaces are already stable before the V2 marker and need no repeated
+physical synchronization. A counted capture lease retains the original debt
+owner until every outstanding capture completes; concurrent durable frontier
+updates defer resource release rather than clone a second physical closure. A trailing relaxed prefix requires the existing root-neutral durable
+barrier. An already durable-class endpoint needs no redundant barrier frame.
+Physical sync runs outside public operation/publication, raw append and journal
+mutexes, using the retained exact active-file handle. Completion certifies only
+the captured LSN, even when later bytes happen to reach stable storage. Only
+that completion advances the existing stable WAL frontier and releases debt.
+
+V2 dependency-before-marker ordering remains mandatory. External-reference
+synchronization and durable-class rotation can still wait under append ordering;
+this scheduler does not claim independent canonical append progress during
+those earlier disk waits. The final captured-WAL-sync overlap guarantee is
+separate from external dependency progress. Relaxed ordinary writes retain their
+kernel-drained ACK contract. Singleton durable writes use one mutation frame and
+one physical sync, without a collector wait when still uncontended.
+
+Pre-assignment failure remains retryable. Assigned/captured-sync or publication
+failure poisons later mutation, wakes all waiters and preserves original LSN
+custody for recovery. Captures retain teardown/resource pins through completion
+and release. Checkpoint keeps its exact cut; Close joins active leaders and pins
+before journal teardown. A stable-WAL certificate never advances sealed-root S.
+
+The production queue adds no per-request queue node: tickets remain caller-owned
+and the active target is DB-owned reusable storage. COW admission and the existing
+finite accepted FIFO retain their capacity refusals; count/byte collector limits
+are triggers, not a new memory-admission guarantee for arbitrary caller concurrency.
 
 ## Logical observations versus physical calls
 

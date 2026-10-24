@@ -701,3 +701,14 @@ and owned cleanup clears its embedded child reference before refunding it.
 Raw, logical and history trees retain degree 32; lower-fanout experiments did not
 justify their additional allocation objects and mixed batch performance. No new
 pool, arena, publication owner or retention lifetime is introduced.
+
+### Public captured WAL epochs
+
+A public durable COW mutation records canonical assignment without claiming WAL
+stability, installs its complete cut, then releases original writer/raw guards
+before waiting for the coordinator's captured exact prefix. Later complete cuts
+may become visible during that sync, but their ACK requires a later certificate.
+The original accepted FIFO and coalesced coverage runs remain the sole complete
+prefix owner. The WAL owner alone calls ObserveStableWAL after successful sync;
+checkpoint/root sealing does not synthesize W. V2 external dependency ordering
+can still serialize earlier append preparation.

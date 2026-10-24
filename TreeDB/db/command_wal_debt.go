@@ -15,8 +15,10 @@ import (
 // relaxed command frame depends until a later durable command/barrier covers
 // its LSN. Entries are ordered by the command-journal serialization boundary.
 type CommandWALDependencyDebt struct {
-	mu      sync.Mutex
-	entries []commandWALDependencyDebtEntry
+	mu                 sync.Mutex
+	entries            []commandWALDependencyDebtEntry
+	capturePins        int
+	deferredReleaseLSN uint64
 }
 
 func (debt *CommandWALDependencyDebt) entryCountThrough(lsn uint64) uint64 {
@@ -146,6 +148,10 @@ func (debt *CommandWALDependencyDebt) rotationFileViewThrough(lsn uint64) ([]*ro
 		tokens = append(tokens, entry.rotationFiles...)
 	}
 	debt.mu.Unlock()
+
+	if len(tokens) == 0 {
+		return nil, nil
+	}
 
 	// One segment may first be retained as the active successor of a rotation
 	// and later as the closed predecessor of another rotation. Coalesce that
@@ -300,11 +306,42 @@ func (debt *CommandWALDependencyDebt) noteRetryThrough(lsn uint64) {
 	}
 }
 
+// Captures retain the original debt owner rather than cloning every physical
+// resource. Completed barriers may advance W concurrently, but physical debt
+// release is deferred until all captured file synchronizations finish. The
+// pins add constant DB-owned state and never hold this mutex during disk I/O.
+func (debt *CommandWALDependencyDebt) retainCapture() {
+	debt.mu.Lock()
+	debt.capturePins++
+	debt.mu.Unlock()
+}
+
+func (debt *CommandWALDependencyDebt) releaseCapture() {
+	debt.mu.Lock()
+	debt.capturePins--
+	var frontier uint64
+	if debt.capturePins == 0 {
+		frontier = debt.deferredReleaseLSN
+		debt.deferredReleaseLSN = 0
+	}
+	debt.mu.Unlock()
+	// A newly admitted capture can race here; releaseThrough will defer this
+	// frontier again under the same mutex rather than dropping its resources.
+	debt.releaseThrough(frontier)
+}
+
 func (debt *CommandWALDependencyDebt) releaseThrough(lsn uint64) {
 	if debt == nil || lsn == 0 {
 		return
 	}
 	debt.mu.Lock()
+	if debt.capturePins != 0 {
+		if lsn > debt.deferredReleaseLSN {
+			debt.deferredReleaseLSN = lsn
+		}
+		debt.mu.Unlock()
+		return
+	}
 	cut := 0
 	for cut < len(debt.entries) && debt.entries[cut].lastLSN <= lsn {
 		cut++

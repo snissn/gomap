@@ -209,6 +209,10 @@ type CommandJournalOptions struct {
 
 type CommandJournal struct {
 	mu                     sync.Mutex
+	closing                bool
+	syncPins               int
+	syncCond               *sync.Cond
+	capturedFile           *capturedJournalFile
 	owner                  *JournalOwner
 	writer                 *Writer
 	walDir                 string
@@ -604,6 +608,9 @@ func (j *CommandJournal) requireNoPendingStableRotationLocked() error {
 }
 
 func (j *CommandJournal) stableRotationFailStopErrorLocked() error {
+	if j != nil && j.closing {
+		return errors.New("commitlog: command journal is closed")
+	}
 	if j != nil && j.pendingStableSuccessor != nil && j.pendingStableSuccessor.failStop {
 		return errCommandJournalStableRotationFailStop
 	}
@@ -640,6 +647,10 @@ func (j *CommandJournal) rotateActiveSegmentLockedObserved(syncCurrent, observe 
 	}
 	j.segmentSeq = nextSeq
 	j.path = nextPath
+	if j.capturedFile != nil {
+		j.releaseCapturedFileLocked(j.capturedFile)
+		j.capturedFile = nil
+	}
 	j.activeSegmentMaxLSN = 0
 	j.namespaceGeneration++
 	j.cleanupEpoch++
@@ -935,6 +946,10 @@ func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurren
 	j.writer.scratch = j.writer.scratch[:0]
 	j.segmentSeq = nextSeq
 	j.path = nextPath
+	if j.capturedFile != nil {
+		j.releaseCapturedFileLocked(j.capturedFile)
+		j.capturedFile = nil
+	}
 	j.activeSegmentMaxLSN = 0
 	j.namespaceGeneration++
 	j.cleanupEpoch++
@@ -1131,6 +1146,21 @@ func (j *CommandJournal) NextLSN() uint64 {
 	j.owner.mu.Lock()
 	defer j.owner.mu.Unlock()
 	return j.owner.nextLSN
+}
+
+// AppendedLSN reports the assigned prefix without subtracting from NextLSN,
+// which saturates at MaxUint64 after the final legal append. Callers that bind
+// this to a capture must retain their append authority across both operations.
+func (j *CommandJournal) AppendedLSN() uint64 {
+	if j == nil || j.owner == nil {
+		return 0
+	}
+	j.owner.mu.Lock()
+	defer j.owner.mu.Unlock()
+	if j.owner.exhausted {
+		return ^uint64(0)
+	}
+	return j.owner.nextLSN - 1
 }
 
 // AppendCommand validates a complete command frame, assigns the next journal
@@ -1918,6 +1948,14 @@ func (j *CommandJournal) Close() error {
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
+	j.closing = true
+	for j.syncPins != 0 {
+		j.syncCond.Wait()
+	}
+	if j.capturedFile != nil {
+		j.releaseCapturedFileLocked(j.capturedFile)
+		j.capturedFile = nil
+	}
 	var closeErrs []error
 	for _, rotation := range j.pendingStableRotations {
 		rotation.Release()
