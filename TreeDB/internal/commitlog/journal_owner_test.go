@@ -569,12 +569,19 @@ func TestCommandJournalDirectSyncRotationCutOrderAndPaths(t *testing.T) {
 		durabilitycut.BeforeDependencyAppend,
 		durabilitycut.BeforeDependencyFileSync,
 		durabilitycut.AfterDependencyFileSync,
-		durabilitycut.BeforeNewFileDirectorySync,
-		durabilitycut.AfterNewFileDirectorySync,
-		durabilitycut.AfterDependencyAppend,
-		durabilitycut.BeforeDependencyFileSync,
-		durabilitycut.AfterDependencyFileSync,
 	}
+	if FixedWALCreationSupported() {
+		// Private successor initialization persists its bytes, then publishes and
+		// syncs the exact parent before the existing new-log namespace barrier.
+		want = append(want,
+			durabilitycut.BeforeDependencyFileSync, durabilitycut.AfterDependencyFileSync,
+			durabilitycut.BeforeNewFileDirectorySync, durabilitycut.AfterNewFileDirectorySync)
+	}
+	want = append(want,
+		durabilitycut.BeforeNewFileDirectorySync, durabilitycut.AfterNewFileDirectorySync,
+		durabilitycut.AfterDependencyAppend,
+		durabilitycut.BeforeDependencyFileSync, durabilitycut.AfterDependencyFileSync)
+
 	if len(events) != len(want) {
 		t.Fatalf("events=%+v, want points %v", events, want)
 	}
@@ -586,11 +593,12 @@ func TestCommandJournalDirectSyncRotationCutOrderAndPaths(t *testing.T) {
 	if events[1].Path != oldPath || events[2].Path != oldPath {
 		t.Fatalf("old-segment sync paths=(%q,%q), want %q", events[1].Path, events[2].Path, oldPath)
 	}
-	if events[5].LSN != lsn {
-		t.Fatalf("after-append LSN=%d, want %d", events[5].LSN, lsn)
+	afterAppend := len(events) - 3
+	if events[afterAppend].LSN != lsn {
+		t.Fatalf("after-append LSN=%d, want %d", events[afterAppend].LSN, lsn)
 	}
-	if events[6].Path != newPath || events[7].Path != newPath {
-		t.Fatalf("new-segment sync paths=(%q,%q), want %q", events[6].Path, events[7].Path, newPath)
+	if events[len(events)-2].Path != newPath || events[len(events)-1].Path != newPath {
+		t.Fatalf("new-segment sync paths=(%q,%q), want %q", events[len(events)-2].Path, events[len(events)-1].Path, newPath)
 	}
 }
 

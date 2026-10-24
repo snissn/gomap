@@ -108,14 +108,19 @@ func (j *CommandJournal) CaptureSyncInto(target *CapturedSync, rotated []*rootpu
 // capture may become durable incidentally; that does not extend its LSN.
 func (target *CapturedSync) Sync() error {
 	for _, token := range target.rotated {
+		// CaptureSyncInto creates these private tokens with ContentSynced=false,
+		// including when the original rotation was already synced. SyncThrough
+		// therefore performs physical I/O before this successful-sync witness.
 		path := filepath.Join(target.walDir, filepath.Base(token.DiagnosticPath()))
-		if err := durabilitycut.EmitPath(durabilitycut.BeforeDependencyFileSync, durabilitycut.ResourceCommandWAL, target.root, path); err != nil {
-			return err
-		}
-		if err := token.SyncThrough(); err != nil {
-			return err
-		}
-		if err := durabilitycut.EmitPath(durabilitycut.AfterDependencyFileSync, durabilitycut.ResourceCommandWAL, target.root, path); err != nil {
+		if err := token.WithPinnedFile(func(file *os.File) error {
+			if err := durabilitycut.EmitStablePath(durabilitycut.BeforeDependencyFileSync, durabilitycut.ResourceCommandWAL, target.root, path, file); err != nil {
+				return err
+			}
+			if err := token.SyncThrough(); err != nil {
+				return err
+			}
+			return durabilitycut.EmitStablePath(durabilitycut.AfterDependencyFileSync, durabilitycut.ResourceCommandWAL, target.root, path, file)
+		}); err != nil {
 			return err
 		}
 	}
@@ -133,20 +138,28 @@ func (target *CapturedSync) Sync() error {
 			}
 		}
 	}
-	if err := durabilitycut.EmitPathLSN(durabilitycut.BeforeDependencyFileSync, durabilitycut.ResourceCommandWAL, target.root, target.path, target.LSN); err != nil {
-		return err
-	}
-	started := time.Now()
-	// Always perform a physical sync. The shared handle's zero frontier is only
-	// a retention pin and must never cache a later capture's durability result.
-	err := target.active.token.WithPinnedFile(func(file *os.File) error { return syncCommandWALFile(file) })
-	target.writer.fileSyncCalls.Add(1)
-	target.writer.fileSyncNs.Add(uint64(time.Since(started)))
-	if err != nil {
-		target.writer.fileSyncErrors.Add(1)
-		return err
-	}
-	return durabilitycut.EmitPathLSN(durabilitycut.AfterDependencyFileSync, durabilitycut.ResourceCommandWAL, target.root, target.path, target.LSN)
+	return target.active.token.WithPinnedFile(func(file *os.File) error {
+		emit := func(point durabilitycut.Point) error {
+			if !durabilitycut.Enabled() {
+				return nil
+			}
+			return durabilitycut.Emit(durabilitycut.Event{Point: point, Resource: durabilitycut.ResourceCommandWAL, Root: target.root, Path: target.path, StablePath: file, LSN: target.LSN})
+		}
+		if err := emit(durabilitycut.BeforeDependencyFileSync); err != nil {
+			return err
+		}
+		started := time.Now()
+		// Always perform a physical sync. The shared handle's zero frontier is only
+		// a retention pin and must never cache a later capture's durability result.
+		err := syncCommandWALFile(file)
+		target.writer.fileSyncCalls.Add(1)
+		target.writer.fileSyncNs.Add(uint64(time.Since(started)))
+		if err != nil {
+			target.writer.fileSyncErrors.Add(1)
+			return err
+		}
+		return emit(durabilitycut.AfterDependencyFileSync)
+	})
 }
 
 func (j *CommandJournal) releaseCapturedFileLocked(file *capturedJournalFile) {

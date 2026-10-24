@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/crc"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/stableio"
 )
@@ -102,6 +103,9 @@ func initializeFixedWAL(file **os.File, target int64, parent *os.File) (*fixedWA
 		// is only hygiene and never an accepted-frame durability obligation.
 		removePrivateFixedWAL(parent, privateName)
 	}()
+	if err = durabilitycut.EmitStableNamespace(durabilitycut.NamespaceCreate, durabilitycut.ResourceCommandWAL, parent.Name(), "", private.Name(), parent, private, "", privateName); err != nil {
+		return nil, err
+	}
 	state, err := writeInitializedFixedWAL(private, target)
 	if err != nil {
 		return nil, err
@@ -164,7 +168,14 @@ func writeInitializedFixedWAL(file *os.File, target int64) (*fixedWAL, error) {
 		}
 		off += n
 	}
+	root := filepath.Dir(file.Name())
+	if err := durabilitycut.EmitStablePath(durabilitycut.BeforeDependencyFileSync, durabilitycut.ResourceCommandWAL, root, file.Name(), file); err != nil {
+		return nil, err
+	}
 	if err := fixedWALInitializeSync(file); err != nil {
+		return nil, err
+	}
+	if err := durabilitycut.EmitStablePath(durabilitycut.AfterDependencyFileSync, durabilitycut.ResourceCommandWAL, root, file.Name(), file); err != nil {
 		return nil, err
 	}
 	return state, nil

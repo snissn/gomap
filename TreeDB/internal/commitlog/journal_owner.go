@@ -701,7 +701,7 @@ func (j *CommandJournal) RotateActiveSegment(syncCurrent bool) error {
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	return j.rotateActiveSegmentLocked(syncCurrent)
+	return j.rotateActiveSegmentLockedObserved(syncCurrent, durabilitycut.Enabled())
 }
 
 // CommandJournalStableRotation retains exact handles for the segment closed by
@@ -859,7 +859,7 @@ func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurren
 	}
 	if syncCurrent {
 		if observe {
-			if err := durabilitycut.EmitPath(durabilitycut.BeforeDependencyFileSync, durabilitycut.ResourceCommandWAL, filepath.Dir(j.walDir), closedPath); err != nil {
+			if err := durabilitycut.EmitStablePath(durabilitycut.BeforeDependencyFileSync, durabilitycut.ResourceCommandWAL, filepath.Dir(j.walDir), closedPath, j.writer.f); err != nil {
 				return nil, err
 			}
 		}
@@ -867,7 +867,7 @@ func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurren
 			return nil, err
 		}
 		if observe {
-			if err := durabilitycut.EmitPath(durabilitycut.AfterDependencyFileSync, durabilitycut.ResourceCommandWAL, filepath.Dir(j.walDir), closedPath); err != nil {
+			if err := durabilitycut.EmitStablePath(durabilitycut.AfterDependencyFileSync, durabilitycut.ResourceCommandWAL, filepath.Dir(j.walDir), closedPath, j.writer.f); err != nil {
 				return nil, err
 			}
 		}
@@ -1845,13 +1845,13 @@ func (j *CommandJournal) flushDirectCommandWALLocked(sync, observe bool) error {
 	if sync {
 		before, after = durabilitycut.BeforeDependencyFileSync, durabilitycut.AfterDependencyFileSync
 	}
-	if err := durabilitycut.EmitPath(before, durabilitycut.ResourceCommandWAL, filepath.Dir(j.walDir), j.path); err != nil {
+	if err := durabilitycut.EmitStablePath(before, durabilitycut.ResourceCommandWAL, filepath.Dir(j.walDir), j.path, j.writer.f); err != nil {
 		return err
 	}
 	if err := j.flushLocked(sync); err != nil {
 		return err
 	}
-	return durabilitycut.EmitPath(after, durabilitycut.ResourceCommandWAL, filepath.Dir(j.walDir), j.path)
+	return durabilitycut.EmitStablePath(after, durabilitycut.ResourceCommandWAL, filepath.Dir(j.walDir), j.path, j.writer.f)
 }
 
 // AppendRawKVBatchPayloadCommandTrustedAndFlush appends a caller-validated

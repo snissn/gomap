@@ -632,7 +632,7 @@ func (w *Writer) rotateToWithSyncObserved(path string, syncCurrent bool, root st
 			before, after = durabilitycut.BeforeDependencyFileSync, durabilitycut.AfterDependencyFileSync
 		}
 		if observe {
-			if err := durabilitycut.EmitPath(before, durabilitycut.ResourceCommandWAL, root, w.f.Name()); err != nil {
+			if err := durabilitycut.EmitStablePath(before, durabilitycut.ResourceCommandWAL, root, w.f.Name(), w.f); err != nil {
 				return writerRotationOutcome{}, err
 			}
 		}
@@ -645,7 +645,7 @@ func (w *Writer) rotateToWithSyncObserved(path string, syncCurrent bool, root st
 			}
 		}
 		if observe {
-			if err := durabilitycut.EmitPath(after, durabilitycut.ResourceCommandWAL, root, w.f.Name()); err != nil {
+			if err := durabilitycut.EmitStablePath(after, durabilitycut.ResourceCommandWAL, root, w.f.Name(), w.f); err != nil {
 				return writerRotationOutcome{}, err
 			}
 		}
