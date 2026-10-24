@@ -940,6 +940,12 @@ func TestColumnStoreStaleColumnRootPreflightDoesNotAppendCommandWALM10B(t *testi
 			if staleMeta.Options.ColumnStore == nil || staleMeta.Options.ColumnStore.ActiveManifest != nil {
 				t.Fatalf("stale handle has unexpected column manifest metadata: %+v", staleMeta.Options.ColumnStore)
 			}
+			// Finish the fresh insert's asynchronous durable-root publication before
+			// measuring resources owned by the rejected stale publication below.
+			// Its index-file capture shares the DB-wide stable resource registry.
+			if err := d.Checkpoint(); err != nil {
+				t.Fatalf("Checkpoint fresh insert: %v", err)
+			}
 			framesBefore := countCollectionCommandWALFrames(t, dir)
 			appliedBefore := d.State().AppliedCommandLSN
 			registry := d.StableResourceIdentityPinRegistry()
