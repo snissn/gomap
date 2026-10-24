@@ -25873,15 +25873,21 @@ func (db *DB) checkpointContext(ctx context.Context, automatic bool) error {
 		db.checkpointPostFrontierAdmission.Store(true)
 	}
 	db.mu.Unlock()
-	rotateLaneIDs := make([]int, 0, len(db.lanes))
-	for i := range db.lanes {
-		if db.lanes[i].walLiveBytes.Load() > 0 {
-			rotateLaneIDs = append(rotateLaneIDs, i)
-		}
-	}
-	if len(rotateLaneIDs) == 0 {
+	var rotateLaneIDs []int
+	// WAL-off checkpoints still flush persistent value-log and leaf resources
+	// below, but rotating their disabled redo journal would only launch no-op
+	// workers. Preserve the captured frontier and writer cutover in both modes.
+	if !db.disableJournal {
+		rotateLaneIDs = make([]int, 0, len(db.lanes))
 		for i := range db.lanes {
-			rotateLaneIDs = append(rotateLaneIDs, i)
+			if db.lanes[i].walLiveBytes.Load() > 0 {
+				rotateLaneIDs = append(rotateLaneIDs, i)
+			}
+		}
+		if len(rotateLaneIDs) == 0 {
+			for i := range db.lanes {
+				rotateLaneIDs = append(rotateLaneIDs, i)
+			}
 		}
 	}
 	releaseWriteMu()
@@ -25894,23 +25900,25 @@ func (db *DB) checkpointContext(ctx context.Context, automatic bool) error {
 	}
 
 	walRotateStart := time.Now()
-	errCh := make(chan error, len(rotateLaneIDs))
-	var rotateWG sync.WaitGroup
-	for _, laneID := range rotateLaneIDs {
-		rotateWG.Add(1)
-		go func(id int) {
-			defer rotateWG.Done()
-			if err := db.rotateWALCheckpointLocked(&db.lanes[id]); err != nil {
-				errCh <- err
+	if len(rotateLaneIDs) > 0 {
+		errCh := make(chan error, len(rotateLaneIDs))
+		var rotateWG sync.WaitGroup
+		for _, laneID := range rotateLaneIDs {
+			rotateWG.Add(1)
+			go func(id int) {
+				defer rotateWG.Done()
+				if err := db.rotateWALCheckpointLocked(&db.lanes[id]); err != nil {
+					errCh <- err
+				}
+			}(laneID)
+		}
+		rotateWG.Wait()
+		close(errCh)
+		for err := range errCh {
+			if err != nil {
+				recordCheckpointStageSince(&db.checkpointStageWALRotate, walRotateStart)
+				return err
 			}
-		}(laneID)
-	}
-	rotateWG.Wait()
-	close(errCh)
-	for err := range errCh {
-		if err != nil {
-			recordCheckpointStageSince(&db.checkpointStageWALRotate, walRotateStart)
-			return err
 		}
 	}
 	recordCheckpointStageSince(&db.checkpointStageWALRotate, walRotateStart)
@@ -29853,8 +29861,12 @@ func (db *DB) collectFlushUnitsWithOpsLocked(laneID int, maxMemtables int, targe
 	if maxMemtables > flushBacklogCoalescingHardMaxMemtables {
 		maxMemtables = flushBacklogCoalescingHardMaxMemtables
 	}
-	units := make([]flushUnit, 0, maxMemtables)
-	ids := make([]uint64, 0, maxMemtables)
+	// The queue bounds the initial backing allocation even when the collection
+	// budget is larger. Keep the collection limits below unchanged: span-only
+	// runs may grow these slices beyond this initial capacity.
+	initialCapacity := min(queueLen, maxMemtables)
+	units := make([]flushUnit, 0, initialCapacity)
+	ids := make([]uint64, 0, initialCapacity)
 	var totalBytes int64
 	var totalLen int
 	spanOnly := false
