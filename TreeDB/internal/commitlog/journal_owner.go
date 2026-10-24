@@ -217,6 +217,7 @@ type CommandJournal struct {
 	owner                  *JournalOwner
 	writer                 *Writer
 	walDir                 string
+	root                   string // Immutable lexical witness root; retained handles own resource identity.
 	path                   string
 	lane                   int
 	segmentSeq             uint64
@@ -348,6 +349,7 @@ func OpenCommandJournal(walDir string, opts CommandJournalOptions) (*CommandJour
 		owner:                  owner,
 		writer:                 writer,
 		walDir:                 walDir,
+		root:                   filepath.Dir(walDir),
 		path:                   path,
 		lane:                   opts.Lane,
 		segmentSeq:             opts.SegmentSeq,
@@ -663,7 +665,7 @@ func (j *CommandJournal) rotateActiveSegmentLockedObserved(syncCurrent, observe 
 	nextSeq := j.segmentSeq + 1
 	nextPath := filepath.Join(j.walDir, CommandSegmentName(j.lane, nextSeq))
 	closedBytes := j.writer.ActiveBytes()
-	outcome, rotateErr := j.writer.rotateToWithSyncObserved(nextPath, syncCurrent, filepath.Dir(j.walDir), observe)
+	outcome, rotateErr := j.writer.rotateToWithSyncObserved(nextPath, syncCurrent, j.root, observe)
 	if !outcome.Installed {
 		return rotateErr
 	}
@@ -859,7 +861,7 @@ func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurren
 	}
 	if syncCurrent {
 		if observe {
-			if err := durabilitycut.EmitStablePath(durabilitycut.BeforeDependencyFileSync, durabilitycut.ResourceCommandWAL, filepath.Dir(j.walDir), closedPath, j.writer.f); err != nil {
+			if err := durabilitycut.EmitStablePath(durabilitycut.BeforeDependencyFileSync, durabilitycut.ResourceCommandWAL, j.root, closedPath, j.writer.f); err != nil {
 				return nil, err
 			}
 		}
@@ -867,7 +869,7 @@ func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurren
 			return nil, err
 		}
 		if observe {
-			if err := durabilitycut.EmitStablePath(durabilitycut.AfterDependencyFileSync, durabilitycut.ResourceCommandWAL, filepath.Dir(j.walDir), closedPath, j.writer.f); err != nil {
+			if err := durabilitycut.EmitStablePath(durabilitycut.AfterDependencyFileSync, durabilitycut.ResourceCommandWAL, j.root, closedPath, j.writer.f); err != nil {
 				return nil, err
 			}
 		}
@@ -946,7 +948,7 @@ func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurren
 	// not introduce a stable namespace sync.
 	if !deferNamespace {
 		if observe {
-			if err := durabilitycut.EmitPath(durabilitycut.BeforeNewFileDirectorySync, durabilitycut.ResourceCommandWAL, filepath.Dir(j.walDir), filepath.Dir(nextPath)); err != nil {
+			if err := durabilitycut.EmitPath(durabilitycut.BeforeNewFileDirectorySync, durabilitycut.ResourceCommandWAL, j.root, filepath.Dir(nextPath)); err != nil {
 				namespace.Release()
 				closedToken.Release()
 				return nil, pendingCommandWALFailure(parent, prepared, nextPath, err)
@@ -958,7 +960,7 @@ func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurren
 			return nil, pendingCommandWALFailure(parent, prepared, nextPath, err)
 		}
 		if observe {
-			if err := durabilitycut.EmitPath(durabilitycut.AfterNewFileDirectorySync, durabilitycut.ResourceCommandWAL, filepath.Dir(j.walDir), filepath.Dir(nextPath)); err != nil {
+			if err := durabilitycut.EmitPath(durabilitycut.AfterNewFileDirectorySync, durabilitycut.ResourceCommandWAL, j.root, filepath.Dir(nextPath)); err != nil {
 				namespace.Release()
 				closedToken.Release()
 				return nil, pendingCommandWALFailure(parent, prepared, nextPath, err)
@@ -1824,14 +1826,14 @@ func (j *CommandJournal) emitDirectCommandWALAppendBeforeLocked(observe bool) er
 	if !observe {
 		return nil
 	}
-	return durabilitycut.EmitBasic(durabilitycut.BeforeDependencyAppend, durabilitycut.ResourceCommandWAL, filepath.Dir(j.walDir))
+	return durabilitycut.EmitBasic(durabilitycut.BeforeDependencyAppend, durabilitycut.ResourceCommandWAL, j.root)
 }
 
 func (j *CommandJournal) emitDirectCommandWALAppendAfterLocked(observe bool, lsn uint64) error {
 	if !observe {
 		return nil
 	}
-	return durabilitycut.EmitPathLSN(durabilitycut.AfterDependencyAppend, durabilitycut.ResourceCommandWAL, filepath.Dir(j.walDir), j.path, lsn)
+	return durabilitycut.EmitPathLSN(durabilitycut.AfterDependencyAppend, durabilitycut.ResourceCommandWAL, j.root, j.path, lsn)
 }
 
 func (j *CommandJournal) flushDirectCommandWALLocked(sync, observe bool) error {
@@ -1845,13 +1847,13 @@ func (j *CommandJournal) flushDirectCommandWALLocked(sync, observe bool) error {
 	if sync {
 		before, after = durabilitycut.BeforeDependencyFileSync, durabilitycut.AfterDependencyFileSync
 	}
-	if err := durabilitycut.EmitStablePath(before, durabilitycut.ResourceCommandWAL, filepath.Dir(j.walDir), j.path, j.writer.f); err != nil {
+	if err := durabilitycut.EmitStablePath(before, durabilitycut.ResourceCommandWAL, j.root, j.path, j.writer.f); err != nil {
 		return err
 	}
 	if err := j.flushLocked(sync); err != nil {
 		return err
 	}
-	return durabilitycut.EmitStablePath(after, durabilitycut.ResourceCommandWAL, filepath.Dir(j.walDir), j.path, j.writer.f)
+	return durabilitycut.EmitStablePath(after, durabilitycut.ResourceCommandWAL, j.root, j.path, j.writer.f)
 }
 
 // AppendRawKVBatchPayloadCommandTrustedAndFlush appends a caller-validated

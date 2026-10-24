@@ -64,7 +64,7 @@ func (j *CommandJournal) CaptureSyncInto(target *CapturedSync, rotated []*rootpu
 	if err := j.flushDirectCommandWALLocked(false, durabilitycut.Enabled()); err != nil {
 		return nil, err
 	}
-	*target = CapturedSync{journal: j, writer: j.writer, root: filepath.Dir(j.walDir), path: j.path, walDir: j.walDir, LSN: j.activeSegmentMaxLSN, Bytes: uint64(j.writer.StableBytes())}
+	*target = CapturedSync{journal: j, writer: j.writer, root: j.root, path: j.path, walDir: j.walDir, LSN: j.activeSegmentMaxLSN, Bytes: uint64(j.writer.StableBytes())}
 	defer func() {
 		if err != nil {
 			for _, token := range target.rotated {

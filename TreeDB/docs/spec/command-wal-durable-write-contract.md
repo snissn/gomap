@@ -66,6 +66,12 @@ flush receipts, checkpoint handoff and `no_wal_fast` explicit sync.
 
 ## Current ordered paths
 
+The journal derives its lexical witness root once at open and reuses that
+unchanged string across captures and rotations. This avoids repeated path
+processing per commit. Captured file handles, namespace tokens and complete
+LSN prefixes continue to determine resource identity and durability; witness
+strings do not grant access or replace those checks.
+
 ### Durable singleton `SetSync`
 
 ```text
