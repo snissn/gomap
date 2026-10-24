@@ -92,7 +92,9 @@ func TestPublicCommandWALCollectionBudgetAgesFromRegistration(t *testing.T) {
 	if group.pendingDeadline != first {
 		t.Fatal("arrival restarted existing collection window")
 	}
-	group.timer.Stop()
+	if group.timer != nil {
+		group.timer.Stop()
+	}
 
 	opts := commandWALDurabilityProofOptions(t.TempDir())
 	db, err := Open(opts)
