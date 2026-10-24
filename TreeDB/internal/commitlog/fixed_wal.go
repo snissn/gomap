@@ -42,7 +42,7 @@ type fixedWAL struct {
 	lastLSN                     uint64
 	reconstructedFooters        uint64
 	incomplete                  map[int64]*CommandWALIncompleteFrame
-	extents                     []fixedWALExtent
+	extents                     []fixedWALExtent // Read/repair index populated by loadFixedWAL.
 }
 
 func fixedWALAlign(n int64) int64 { return (n + fixedWALAlignment - 1) &^ (fixedWALAlignment - 1) }
@@ -262,7 +262,9 @@ func validateFixedWALFrames(data []byte) (first, last uint64, err error) {
 		if crc.Checksum(payload) != binary.LittleEndian.Uint32(data[4:8]) {
 			return 0, 0, ErrCorrupt
 		}
-		env, e := DecodeCommandFrame(payload)
+		// Only the LSN escapes this validation pass. Keep the full decoder's
+		// integrity checks while borrowing bytes owned by this call's input.
+		env, e := decodeCommandFrame(payload, true)
 		if e != nil {
 			return 0, 0, e
 		}
@@ -289,7 +291,21 @@ func (state *fixedWAL) flushExtent(w *Writer) error {
 	if end > state.capacity {
 		return fmt.Errorf("commitlog: initialized WAL capacity exhausted")
 	}
-	header := make([]byte, fixedWALWitnessSize)
+	// Flush has already copied the writer's buffered frames into pending.
+	// Reuse its encode storage until synchronous WriteAt completes; captured
+	// syncs retain the file and physical prefix, never this mutable scratch.
+	imageSize := int(end - state.physical)
+	var image []byte
+	if w.commandBufRetain > 0 && imageSize > w.commandBufRetain {
+		image = make([]byte, imageSize)
+	} else {
+		if cap(w.scratch) < imageSize {
+			w.scratch = make([]byte, imageSize)
+		}
+		image = w.scratch[:imageSize]
+	}
+	clear(image) // Reserved witness bytes and alignment padding stay canonical.
+	header := image[:fixedWALWitnessSize]
 	copy(header, fixedWALExtentMagic[:])
 	copy(header[8:24], state.identity[:])
 	binary.LittleEndian.PutUint64(header[24:32], uint64(state.physical))
@@ -300,19 +316,17 @@ func (state *fixedWAL) flushExtent(w *Writer) error {
 	binary.LittleEndian.PutUint64(header[64:72], last)
 	binary.LittleEndian.PutUint32(header[72:76], crc.Checksum(state.pending))
 	binary.LittleEndian.PutUint32(header[92:96], crc.Checksum(header[:92]))
-	image := make([]byte, end-state.physical)
-	copy(image, header)
 	copy(image[fixedWALWitnessSize:], state.pending)
-	copy(header, fixedWALEndMagic[:])
-	binary.LittleEndian.PutUint32(header[92:96], crc.Checksum(header[:92]))
-	copy(image[len(image)-fixedWALWitnessSize:], header)
+	footer := image[len(image)-fixedWALWitnessSize:]
+	copy(footer, header)
+	copy(footer, fixedWALEndMagic[:])
+	binary.LittleEndian.PutUint32(footer[92:96], crc.Checksum(footer[:92]))
 	started := time.Now()
 	err = writeFixedAt(w.f, image, state.physical)
 	w.observeWriteSyscalls(1, uint64(len(image)), time.Since(started), err)
 	if err != nil {
 		return err
 	}
-	state.extents = append(state.extents, fixedWALExtent{state.physical, state.logical, int64(len(state.pending)), end})
 	state.logical += int64(len(state.pending))
 	state.physical = end
 	state.lastLSN = last
@@ -439,6 +453,9 @@ func LogicalFileSize(file *os.File) (int64, error) {
 }
 
 func (state *fixedWAL) flush(w *Writer) error {
+	// Only the append owner calls flush. Readers and repair load their own
+	// immutable extent indexes; the writer needs only the physical/logical cut.
+	state.extents = nil
 	if len(state.pending) == 0 {
 		return nil
 	}

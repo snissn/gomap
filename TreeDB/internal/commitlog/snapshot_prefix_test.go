@@ -257,7 +257,10 @@ func TestCommandWALSnapshotPrefixCannotDiscardIncompleteCommand(t *testing.T) {
 	if err = j.Flush(); err != nil {
 		t.Fatal(err)
 	}
-	state := j.writer.fixed
+	state, _, err := loadFixedWAL(j.writer.f)
+	if err != nil {
+		t.Fatal(err)
+	}
 	extent := state.extents[len(state.extents)-1]
 	image, err := os.ReadFile(j.path)
 	if err != nil {

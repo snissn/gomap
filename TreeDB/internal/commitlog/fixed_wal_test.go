@@ -110,7 +110,10 @@ func TestFixedWALRepairRetainsImmutablePrefix(t *testing.T) {
 	if err = journal.Sync(); err != nil {
 		t.Fatal(err)
 	}
-	state := journal.writer.fixed
+	state, _, err := loadFixedWAL(journal.writer.f)
+	if err != nil {
+		t.Fatal(err)
+	}
 	prefix := make([]byte, state.extents[0].end)
 	if _, err = journal.writer.f.ReadAt(prefix, 0); err != nil {
 		t.Fatal(err)
@@ -138,4 +141,46 @@ func fixedWALTestBarrier() CommandEnvelope {
 	env := NewDurablePrefixBarrierV1(1, 0)
 	env.LSN = 0
 	return env
+}
+
+func TestFixedWALEncodeReusePreservesFramesAndZeroPadding(t *testing.T) {
+	journal, err := OpenCommandJournal(t.TempDir(), CommandJournalOptions{SegmentTargetBytes: 16 << 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer journal.Close()
+
+	// Exercise growth, reuse for a smaller image, and multiple pending frames.
+	// Poisoning encode scratch after its buffered copy makes stale padding and
+	// accidental aliasing observable through the strict recovery reader.
+	for _, sizes := range [][]int{{1024}, {7, 128}, {3}} {
+		for _, size := range sizes {
+			if _, err := journal.AppendCommand(fixedWALLifecycleFrame(t, size)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := journal.writer.bw.Flush(); err != nil {
+			t.Fatal(err)
+		}
+		for i := range journal.writer.scratch[:cap(journal.writer.scratch)] {
+			journal.writer.scratch[:cap(journal.writer.scratch)][i] = 0xa5
+		}
+		if err := journal.Sync(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reader, err := NewReader(journal.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	for i, size := range []int{1024, 7, 128, 3} {
+		env, err := reader.ReadCommandFrameV2()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if env.LSN != uint64(i+1) || !bytes.Equal(env.Payload, fixedWALLifecycleFrame(t, size).Payload) {
+			t.Fatalf("recovered frame %d changed after encode reuse", i+1)
+		}
+	}
 }
