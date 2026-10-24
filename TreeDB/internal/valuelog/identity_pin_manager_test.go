@@ -842,3 +842,132 @@ func TestNewManagerRefreshFailureReleasesObservedIdentities(t *testing.T) {
 		t.Fatalf("registry retained %d constructor observers", got)
 	}
 }
+
+// Directory discovery may omit an admitted retirement; callers naming an exact
+// resource (bounded recovery or writer registration) must receive the refusal.
+func TestManagerDiscoveryRetirementDoesNotWaiveExplicitRegistration(t *testing.T) {
+	dir := t.TempDir()
+	fileID, path := writeIdentityPinTestSegment(t, dir)
+	registry := rootpublication.NewIdentityPinRegistry()
+	owner, err := NewManagerWithStableResourcePinRegistry(dir, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer owner.Close()
+	discovery, err := NewManagerForBoundedRecoveryWithStableResourcePinRegistry(dir, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer discovery.Close()
+	identity, ok := owner.StableSegmentIdentity(fileID)
+	if !ok {
+		t.Fatal("owner lost physical identity")
+	}
+	lease, err := registry.BeginDelete(identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.Abort()
+	var witness *rootpublication.ResourceObservationRetirementError
+	if err := discovery.RegisterSegment(path, fileID); !errors.Is(err, rootpublication.ErrResourceConflict) || !errors.As(err, &witness) || !rootpublication.SamePhysicalIdentity(witness.Identity(), identity) {
+		t.Fatalf("explicit registration waived admitted deletion: %v", err)
+	}
+	if err := discovery.Refresh(); err != nil {
+		t.Fatal(err)
+	}
+	if discovery.HasSegment(fileID) {
+		t.Fatal("discovery resurrected admitted deletion")
+	}
+	lease.Abort()
+	if err := discovery.Refresh(); err != nil {
+		t.Fatal(err)
+	}
+	if !discovery.HasSegment(fileID) {
+		t.Fatal("aborted deletion was permanently omitted")
+	}
+}
+
+func TestManagerDiscoveryRetirementPreservesOriginalCleanupFailure(t *testing.T) {
+	dir := t.TempDir()
+	fileID, _ := writeIdentityPinTestSegment(t, dir)
+	registry := rootpublication.NewIdentityPinRegistry()
+	owner, err := NewManagerWithStableResourcePinRegistry(dir, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer owner.Close()
+	discovery, err := NewManagerForBoundedRecoveryWithStableResourcePinRegistry(dir, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, _ := owner.StableSegmentIdentity(fileID)
+	lease, err := registry.BeginDelete(identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.Abort()
+	wantErr := errors.New("original construction-parent cleanup refusal")
+	originalOpen := currentOpenSegmentFile()
+	swapOpenSegmentFileForTest(func(path string, id uint32, dict DictLookup, templates TemplateLookup, opts templ.DecodeOptions, cache *templateDefCache) (*File, error) {
+		file, err := originalOpen(path, id, dict, templates, opts, cache)
+		if err == nil {
+			file.constructionParentErrors[0] = wantErr
+		}
+		return file, err
+	})
+	defer swapOpenSegmentFileForTest(originalOpen)
+	err = discovery.Refresh()
+	var witness *rootpublication.ResourceObservationRetirementError
+	var cleanup *ManagerCleanupFailure
+	if !errors.Is(err, wantErr) || !errors.As(err, &witness) || !errors.As(err, &cleanup) {
+		t.Fatalf("discovery hid original physical cleanup refusal: %v", err)
+	}
+	if discovery.HasSegment(fileID) {
+		t.Fatal("failed original cleanup became a live registration")
+	}
+	swapOpenSegmentFileForTest(originalOpen)
+	if err := discovery.Refresh(); !errors.Is(err, wantErr) {
+		t.Fatalf("later retirement discovery hid the original cleanup refusal: %v", err)
+	}
+	if !errors.Is(discovery.Close(), wantErr) {
+		t.Fatal("original cleanup refusal was not retained")
+	}
+}
+
+// Merely carrying a retirement-shaped error is not physical deletion proof.
+// Discovery omission belongs only to the fresh Observe of its opened handle.
+func TestManagerDiscoveryDoesNotAcceptReplayedRetirementWitness(t *testing.T) {
+	dir := t.TempDir()
+	fileID, _ := writeIdentityPinTestSegment(t, dir)
+	registry := rootpublication.NewIdentityPinRegistry()
+	owner, err := NewManagerWithStableResourcePinRegistry(dir, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer owner.Close()
+	identity, _ := owner.StableSegmentIdentity(fileID)
+	lease, err := registry.BeginDelete(identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayed := registry.Observe(identity)
+	lease.Abort()
+	for _, refusal := range []error{&rootpublication.ResourceObservationRetirementError{}, replayed} {
+		discovery, err := NewManagerForBoundedRecoveryWithStableResourcePinRegistry(dir, registry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		originalOpen := currentOpenSegmentFile()
+		swapOpenSegmentFileForTest(func(string, uint32, DictLookup, TemplateLookup, templ.DecodeOptions, *templateDefCache) (*File, error) {
+			return nil, refusal
+		})
+		err = discovery.Refresh()
+		swapOpenSegmentFileForTest(originalOpen)
+		if !errors.Is(err, rootpublication.ErrResourceConflict) {
+			t.Errorf("discovery accepted a replayed/forged permission: %v", err)
+		}
+		if err := discovery.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}

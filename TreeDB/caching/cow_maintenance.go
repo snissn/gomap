@@ -3,9 +3,19 @@ package caching
 import (
 	"context"
 	"errors"
+	"fmt"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
 )
+
+// backendMaintenanceError adds no allocations on successful calls while
+// preserving errors.Is/As through a failure's concrete ownership phase.
+func backendMaintenanceError(stage string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("backend maintenance %s: %w", stage, err)
+}
 
 // RunBackendMaintenance fences cached writers around an existing backend
 // operation. Its caller performs the required checkpoint first. COW then
@@ -24,24 +34,24 @@ func (db *DB) RunBackendMaintenanceWithPostRefresh(fn, settle func() error) erro
 func (db *DB) refreshCOWBackendBasis() error {
 	basis, err := db.cow.captureBackendBasis(db.backend.(backendSnapshotProvider))
 	if err != nil {
-		return err
+		return backendMaintenanceError("capture COW basis", err)
 	}
 	old, err := db.installCOWBasis(basis, nil)
 	err = joinCOWCleanupError(err, basis.release())
 	if err != nil {
-		return err
+		return backendMaintenanceError("install COW basis", err)
 	}
 	if old != nil {
 		err = old.drain()
 	}
 	db.cow.refreshRequired.Store(false)
-	return err
+	return backendMaintenanceError("drain previous COW basis", err)
 }
 
 func (db *DB) finishCOWBackendMaintenance(fnErr error) error {
 	if refresher, ok := db.backend.(valueLogSetRefresher); ok {
 		if err := refresher.RefreshValueLogSet(); err != nil {
-			return errors.Join(fnErr, err)
+			return errors.Join(fnErr, backendMaintenanceError("refresh backend value-log set after callback", err))
 		}
 	}
 	return errors.Join(fnErr, db.refreshCOWBackendBasis())

@@ -2087,7 +2087,7 @@ func (m *Manager) Refresh() error {
 				// refresh must neither stat it nor resurrect it as a live segment.
 				continue
 			}
-			if err := m.registerSegmentLocked(seg.path, seg.id); err != nil {
+			if err := m.registerSegmentLocked(seg.path, seg.id, true); err != nil {
 				cleanupRefused := m.closeErr != nil
 				m.mu.Unlock()
 				// Error traversal can consult the same original Manager receipt.
@@ -2174,10 +2174,10 @@ func (m *Manager) prepareScanDir(dir string) error {
 func (m *Manager) RegisterSegment(path string, id uint32) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.registerSegmentLocked(path, id)
+	return m.registerSegmentLocked(path, id, false)
 }
 
-func (m *Manager) registerSegmentLocked(path string, id uint32) error {
+func (m *Manager) registerSegmentLocked(path string, id uint32, discovery bool) error {
 	if m.closing {
 		return os.ErrClosed
 	}
@@ -2263,6 +2263,20 @@ func (m *Manager) registerSegmentLocked(path string, id uint32) error {
 	f.setGroupedFrameCacheEntries(m.groupedFrameCacheEntries)
 	f.setGroupedFrameCacheMaxRawBytes(m.groupedFrameCacheMaxRaw)
 	if err := m.observeStableFileLocked(f); err != nil {
+		// Only a refusal from this fresh physical observation may authorize a
+		// discovery omission. An arbitrary error chain carrying an old or forged
+		// witness (for example from open) grants no permission. Explicit bounded
+		// recovery and writer registration always retain the original refusal.
+		omitRetiringDiscovery := false
+		var retirement *rootpublication.ResourceObservationRetirementError
+		if discovery && errors.As(err, &retirement) {
+			identity, identityErr := rootpublication.StableIdentityFromFile(f.File)
+			if identityErr != nil {
+				err = errors.Join(err, identityErr)
+			} else {
+				omitRetiringDiscovery = rootpublication.SamePhysicalIdentity(retirement.Identity(), identity)
+			}
+		}
 		closeErr := f.Close()
 		if closeErr == nil {
 			f.producerDetached.Store(true)
@@ -2272,6 +2286,14 @@ func (m *Manager) registerSegmentLocked(path string, id uint32) error {
 			f.terminalAttempted, f.terminalErr = true, errors.Join(err, closeErr)
 			m.retainOriginalFileFailureLocked(f)
 			return m.closeErr
+		}
+		if omitRetiringDiscovery {
+			if m.closeErr != nil {
+				return errors.Join(err, m.closeErr)
+			}
+			// The original handle has now closed successfully. No live file or
+			// read authority was acquired, just as when unlink precedes open.
+			return nil
 		}
 		return err
 	}

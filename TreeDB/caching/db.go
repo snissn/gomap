@@ -8070,7 +8070,7 @@ func (db *DB) runWithBackendMaintenanceOptions(opts backendMaintenanceOptions, f
 	}()
 	if !opts.skipCheckpoint {
 		if err := db.Checkpoint(); err != nil {
-			return err
+			return backendMaintenanceError("checkpoint", err)
 		}
 	}
 	if db.cow != nil {
@@ -8084,27 +8084,27 @@ func (db *DB) runWithBackendMaintenanceOptions(opts backendMaintenanceOptions, f
 		db.writeMu.Lock()
 		db.writeMu.Unlock()
 		if err := db.completeCOWHandoff(); err != nil {
-			return err
+			return backendMaintenanceError("complete COW handoff", err)
 		}
 		if opts.cowCheckpointFallback {
-			return db.refreshCOWCheckpointFallback()
+			return backendMaintenanceError("refresh COW checkpoint fallback", db.refreshCOWCheckpointFallback())
 		}
 		db.cow.refreshRequired.Store(true)
 	}
 
 	if refresher, ok := db.backend.(valueLogSetRefresher); ok {
 		if err := refresher.RefreshValueLogSet(); err != nil {
-			return err
+			return backendMaintenanceError("refresh backend value-log set before callback", err)
 		}
 	}
 	var fnErr error
 	if fn != nil {
-		fnErr = fn()
+		fnErr = backendMaintenanceError("callback", fn())
 	}
 	if db.closing.Load() && !opts.completeAdmittedCOW {
 		return fnErr
 	}
-	reconcileErr := db.reconcileSplitValueLogWritersAfterBackendMaintenanceAdmitted(opts.completeAdmittedCOW)
+	reconcileErr := backendMaintenanceError("reconcile cached value-log readers and writers", db.reconcileSplitValueLogWritersAfterBackendMaintenanceAdmitted(opts.completeAdmittedCOW))
 	if db.cow != nil {
 		if err := db.finishCOWBackendMaintenance(errors.Join(fnErr, reconcileErr)); err != nil {
 			return err
@@ -8114,7 +8114,7 @@ func (db *DB) runWithBackendMaintenanceOptions(opts backendMaintenanceOptions, f
 		}
 		// Settlement may publish a manifest even when it reports a later error.
 		// Reconcile that accepted state before releasing the existing writer fence.
-		return db.finishCOWBackendMaintenance(opts.afterCOWRefresh())
+		return db.finishCOWBackendMaintenance(backendMaintenanceError("post-refresh callback", opts.afterCOWRefresh()))
 	}
 	if fnErr != nil {
 		if reconcileErr != nil {
