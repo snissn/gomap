@@ -4409,6 +4409,13 @@ capacity and every retained extent unchanged. Linux syncs initialized WAL
 content with `fdatasync`; initialization, namespace persistence, all non-WAL
 resources, and portable fallback retain the full stable-file sync primitive.
 
+WAL pressure and closed-segment debt count logical command bytes. Cleanup
+footprint statistics count physical file bytes, including initialized reserve;
+removing a segment debits its logical size from debt and its physical size from
+the retained footprint. When the backend owns the external command WAL, the
+cache does not import those files as cache-owned redo segments or count them a
+second time toward checkpoint pressure.
+
 The initial implementation uses an approximately 4 MiB initialized physical
 reserve and a conservative logical rotation budget of at most 1 MiB. An
 oversized atomic frame initializes an appropriately larger chosen empty segment
