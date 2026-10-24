@@ -30,15 +30,13 @@ producer/ACK path. These methods introduce no separate durability profile.
 | `DB.SupportsLogicalMVCCStaging`, `Store.SupportsCommitGroupStaging` | Read-only capability check under lifecycle protection; cached logical command-WAL only, with phase instrumentation excluded. Unsupported routes keep the synchronous writer. |
 | `DB.BeginLogicalMVCC`, `Store.BeginCommitGroup` | Acquire existing lifecycle/floor custody and an unassigned native batch; no command, root preparation or ACK. |
 | `LogicalMVCCBuilder.Append`, `CommitBuilder.AppendGroup` | Validate and copy native operands before seal; no accepted prefix or durability boundary. |
-| `LogicalMVCCBuilder.CollectionDeadline`, `CommitBuilder.CollectionDeadline` | Monotonic scheduling metadata established at Begin from the existing 200us collection budget; inactive builders return zero. No command or persistence authority. Sealed Submit ends collection without a force ticket or second engine wait. |
-| `DB.SubmitLogicalMVCC`, `Store.SubmitCommitGroupAt`, builder `Submit` | Use the original preparation, append/registration and complete-cut installation. Return transfers custody to the caller-owned completion; it is not a durable ACK. Unsupported direct-submission routes retain synchronous commit. |
+| `DB.SubmitLogicalMVCC`, `Store.SubmitCommitGroupAt`, builder `Submit` | Use the original preparation, append/registration and complete-cut installation. Both known-size and incremental submission hand off an already sealed cut without another engine collection wait or a force ticket. Return transfers custody to the caller-owned completion; it is not a durable ACK. Unsupported direct-submission routes retain synchronous commit. |
 | `LogicalMVCCCompletion.Complete`, `CommitCompletion.Complete` | Drive the existing captured-prefix and ordered ACK path, then release original batch/lifecycle/floor custody exactly once. |
 | builder `Abort` | Release only unassigned staging; no rollback or retry of an assigned command. |
 | `DB.NewMVCCWriteWorkEstimator`, `DB.EstimateMVCCWriteWork`, `DB.MVCCWriteWorkLimit`, estimator `Estimate` | Non-mutating shaping metadata. DB access retains lifecycle protection; the captured estimator contains immutable scalars and remains usable after Close. Zero limit is unsupported; supported without headroom returns1. No reservation, publication authority or sync boundary. |
 
 Runtime controls include `TestOrderedCollectionSealedHandoffSkipsSecondWindow`,
 `TestPublicCommandWALCollectionBudgetAgesFromRegistration`,
-`TestOrderedCollectionDeadlineIsOneMonotonicBoundary`,
 `TestOrderedBuilderIncrementalNativeWorkBeforeSeal`,
 `TestOrderedBuilderTransfersQueuedFloorWriter`,
 `TestOrderedBuilderTransfersQueuedClose`,

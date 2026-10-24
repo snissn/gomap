@@ -162,6 +162,10 @@ func (db *DB) SubmitLogicalMVCC(mutations []mvccadmission.LogicalMutation, input
 		_, err = public.StageLogicalMVCC(mutations, input)
 	}
 	if err == nil {
+		// Ordered submission owns a fully collected cut, just like the
+		// incremental builder. Do not collect the same work a second time.
+		// This scheduling hint creates no force ticket or durability authority.
+		public.cowState.collectionSealed = true
 		submitted = true
 		err = public.submitCOWWrite(true)
 	}

@@ -13,10 +13,9 @@ import (
 // read lock. The Store owns serialization and discard-floor custody. Never copy
 // an active builder. Append only stages owned operands; Submit prepares one cut.
 type LogicalMVCCBuilder struct {
-	db                 *DB
-	batch              *commandWALPublicBatch
-	err                error
-	collectionDeadline time.Time
+	db    *DB
+	batch *commandWALPublicBatch
+	err   error
 }
 
 // SupportsLogicalMVCCStaging identifies the exact incremental staging route.
@@ -55,26 +54,8 @@ func (db *DB) BeginLogicalMVCC(builder *LogicalMVCCBuilder) error {
 		db.lifecycleMu.RUnlock()
 		return err
 	}
-	group := &db.commandWALGroupCommit
-	group.mu.Lock()
-	delay := group.delay
-	group.mu.Unlock()
-	if delay <= 0 {
-		delay = defaultPublicCommandWALGroupDelay
-	}
 	builder.db, builder.batch, builder.err = db, public, nil
-	builder.collectionDeadline = time.Now().Add(delay)
 	return nil
-}
-
-// CollectionDeadline is the aggregate's one monotonic collection boundary.
-// It grants no storage position or durability; Submit closes collection even
-// when an idle producer elects to submit before this deadline.
-func (b *LogicalMVCCBuilder) CollectionDeadline() time.Time {
-	if b == nil || b.db == nil {
-		return time.Time{}
-	}
-	return b.collectionDeadline
 }
 
 // Append copies admitted operands into the original native owned arena. It
@@ -102,7 +83,6 @@ func (b *LogicalMVCCBuilder) Abort() error {
 	}
 	db, batch := b.db, b.batch
 	b.db, b.batch = nil, nil
-	b.collectionDeadline = time.Time{}
 	err := batch.Close()
 	db.lifecycleMu.RUnlock()
 	return err
@@ -140,6 +120,5 @@ func (b *LogicalMVCCBuilder) Submit(syncWrite bool, c *LogicalMVCCCompletion) (e
 	}
 	c.db, c.batch, c.started, c.syncWrite = db, batch, started, syncWrite
 	b.db, b.batch = nil, nil
-	b.collectionDeadline = time.Time{}
 	return nil
 }

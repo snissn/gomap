@@ -208,10 +208,13 @@ fixes the exact complete-frame endpoint. Successors append while the leader's
 final physical WAL sync is in flight and elect one next leader after completion.
 The collection deadline starts at the first pending registration, so time spent
 behind the preceding physical sync consumes that same budget. Leader takeover
-uses only its remaining time. A caller-owned logical MVCC builder establishes
-the same monotonic deadline at Begin and exposes it as scheduling metadata. Its
-sealed Submit ends collection and the engine adds no second wait. This flag
+uses only its remaining time. Caller-owned logical MVCC submissions already
+represent a sealed cut, whether built incrementally or supplied at its known
+final size. The engine adds no second collection wait. This scheduling hint
 creates no force ticket and changes no append, publication or ACK obligation.
+An adapter may keep an unassigned successor open while its predecessor is in
+flight, sealing on real capacity pressure, predecessor completion or shutdown;
+there is no builder timer or exported scheduling deadline.
 Idle first work remains immediate. There is one active capture and no
 background goroutine or second accepted-prefix/root owner.
 
