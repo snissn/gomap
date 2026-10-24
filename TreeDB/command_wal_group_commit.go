@@ -302,7 +302,7 @@ func (group *publicCommandWALGroupCommit) registerCollected(bytes int, durable, 
 		group.cond.Broadcast()
 		return ticket, false, nil
 	}
-	group.initLeaderResourcesLocked()
+	group.initWakeLocked()
 	if group.pendingCount == 0 {
 		group.pendingDeadline = time.Now().Add(group.delay)
 	}
@@ -414,15 +414,9 @@ func (group *publicCommandWALGroupCommit) initPublicationLocked() {
 	}
 }
 
-func (group *publicCommandWALGroupCommit) initLeaderResourcesLocked() {
+func (group *publicCommandWALGroupCommit) initWakeLocked() {
 	if group.wake == nil {
 		group.wake = make(chan struct{}, 1)
-	}
-	if group.timer == nil {
-		group.timer = time.NewTimer(time.Hour)
-		if !group.timer.Stop() {
-			<-group.timer.C
-		}
 	}
 }
 
@@ -531,22 +525,29 @@ func (group *publicCommandWALGroupCommit) triggerLocked(counter *atomic.Uint64) 
 func (group *publicCommandWALGroupCommit) runLeader(tdb *DB) {
 	group.mu.Lock()
 	group.initLocked()
-	group.initLeaderResourcesLocked()
+	group.initWakeLocked()
 	// An epoch containing only relaxed followers needs ordered completion,
 	// not a collection delay or a new physical durability certificate.
 	relaxedOnly := group.pendingCommits == 0 && len(group.pendingForceTickets) == 0
-	delay := time.Until(group.pendingDeadline)
-	immediate := relaxedOnly || group.pendingSealed || delay <= 0 || (group.pendingCount == 1 && group.pendingSingleton == group.nextTicket && group.durableIntents.Load() == 0)
+	immediate := relaxedOnly || group.pendingSealed || (group.pendingCount == 1 && group.pendingSingleton == group.nextTicket && group.durableIntents.Load() == 0)
+	var delay time.Duration
+	if !immediate {
+		delay = time.Until(group.pendingDeadline)
+		immediate = delay <= 0
+	}
 	wake := group.wake
 	timer := group.timer
-	if !timer.Stop() {
-		select {
-		case <-timer.C:
-		default:
-		}
-	}
 	if !immediate {
-		timer.Reset(delay)
+		// Immediate cuts never use a timer. A previous collector consumes or
+		// stops its timer before returning, so only a new collection needs to
+		// create or reset it. Keep the first-registration deadline unchanged:
+		// demand arriving before this decision can still require collection.
+		if timer == nil {
+			timer = time.NewTimer(delay)
+			group.timer = timer
+		} else {
+			timer.Reset(delay)
+		}
 	}
 	leaderWaitHook := group.testBeforeLeaderWait
 	group.mu.Unlock()

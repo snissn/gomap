@@ -134,6 +134,12 @@ func TestPublicCommandWALGroupCommitSingletonUsesCapturedPrefix(t *testing.T) {
 	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.bypasses_total", 0)
 	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.trigger.timeout_total", 0)
 	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.bypass.reason.solo_durable_sync_total", 0)
+	db.commandWALGroupCommit.mu.Lock()
+	timer := db.commandWALGroupCommit.timer
+	db.commandWALGroupCommit.mu.Unlock()
+	if timer != nil {
+		t.Fatal("immediate captured singleton initialized a collection timer")
+	}
 
 	frames := scanPublicCommandWALV2(t, dir)
 	if len(frames) != 1 || frames[0].Kind == commitlog.CommandKindDurablePrefixBarrier || frames[0].DurabilityClass != commitlog.CommandDurabilityDurable {

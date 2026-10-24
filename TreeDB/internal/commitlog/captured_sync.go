@@ -9,15 +9,17 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/internal/stableio"
 )
 
 // One exact handle per active segment is shared by captures. Its reference
 // count is protected by journal.mu; each capture retains it through Sync.
 // Frontier authority belongs to the immutable capture, not this handle owner.
 type capturedJournalFile struct {
-	token *rootpublication.StableResourceToken
-	seq   uint64
-	refs  int
+	token        *rootpublication.StableResourceToken
+	seq          uint64
+	refs         int
+	dataOnlySync bool // Immutable format of this exact retained segment, not the mutable writer.
 }
 
 // CapturedSync owns a complete flushed segment prefix independently of the
@@ -81,7 +83,7 @@ func (j *CommandJournal) CaptureSyncInto(target *CapturedSync, rotated []*rootpu
 		if j.capturedFile != nil {
 			j.releaseCapturedFileLocked(j.capturedFile)
 		}
-		j.capturedFile = &capturedJournalFile{token: token, seq: j.segmentSeq, refs: 1}
+		j.capturedFile = &capturedJournalFile{token: token, seq: j.segmentSeq, refs: 1, dataOnlySync: j.writer.fixed != nil}
 	}
 	target.active = j.capturedFile
 	target.active.refs++
@@ -151,7 +153,15 @@ func (target *CapturedSync) Sync() error {
 		started := time.Now()
 		// Always perform a physical sync. The shared handle's zero frontier is only
 		// a retention pin and must never cache a later capture's durability result.
-		err := syncCommandWALFile(file)
+		// Writer construction validated the format before this exact segment
+		// was captured. Rotation may now change the writer's file and format,
+		// but not the captured owner. Avoid probing its header on every ACK.
+		var err error
+		if target.active.dataOnlySync {
+			err = syncWALData(file)
+		} else {
+			err = stableio.SyncFile(file)
+		}
 		target.writer.fileSyncCalls.Add(1)
 		target.writer.fileSyncNs.Add(uint64(time.Since(started)))
 		if err != nil {
