@@ -39,7 +39,9 @@ ORDER = [(pair, revision) for pair in range(PAIRS) for revision in
 ALLOWED_CHANGES = {
     "scripts/cow_successor_workspace_diagnostic.py",
     ".github/scripts/test_cow_successor_workspace_diagnostic.py",
-    ".github/workflows/treedb-tests.yml", ".github/ci/ci_impact.json",
+    ".github/scripts/test_treedb_ci_contract.py",
+    ".github/workflows/treedb-tests.yml", ".github/workflows/treedb-vacuum-m0.yml",
+    ".github/ci/ci_impact.json",
     "TreeDB/docs/benchmarks/cow-successor-workspace-5214.md"}
 SCOPE = re.compile(r"^(?:TreeDB/caching/(?:cow_(?:read(?:_workspace)?|cut|successor_workspace_test)|point_successor)\.go|"
                    r"TreeDB/mvcc/cow_successor_workspace_external_test\.go|"

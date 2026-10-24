@@ -24,6 +24,9 @@ class TreeDBCIContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.source = WORKFLOW.read_text(encoding="utf-8")
+        cls.m0 = (ROOT / ".github/workflows/treedb-vacuum-m0.yml").read_text(
+            encoding="utf-8"
+        )
 
     def test_events_cover_merge_results_manual_certification_and_main_push(self) -> None:
         events = block(self.source, "on:\n", "\npermissions:")
@@ -86,6 +89,35 @@ class TreeDBCIContractTests(unittest.TestCase):
         )
         self.assertEqual(self.source.count("vars.TREEDB_PERF_RUNNER_LABEL"), 2)
         self.assertEqual(self.source.count("vars.TREEDB_PERF_RUNNER_PR"), 2)
+
+    def test_m0_runner_override_is_exact_pr_only_with_a_distinct_job_label(self) -> None:
+        match = re.search(r"(?m)^    runs-on: \$\{\{ (.+) \}\}$", self.m0)
+        self.assertIsNotNone(match)
+        expression = match.group(1)
+        self.assertEqual(
+            expression,
+            "github.event_name == 'pull_request' && "
+            "github.event.pull_request.head.repo.full_name == github.repository && "
+            "vars.TREEDB_PERF_RUNNER_LABEL != '' && "
+            "vars.TREEDB_PERF_RUNNER_PR != '' && "
+            "vars.TREEDB_PERF_RUNNER_PR == format('{0}', github.event.pull_request.number) && "
+            "format('{0}-m0', vars.TREEDB_PERF_RUNNER_LABEL) || 'ubuntu-24.04'",
+        )
+        self.assertEqual(self.m0.count("vars.TREEDB_PERF_RUNNER_LABEL"), 2)
+        self.assertEqual(self.m0.count("vars.TREEDB_PERF_RUNNER_PR"), 2)
+
+    def test_m0_routing_preserves_original_enforced_capture(self) -> None:
+        self.assertIn("    timeout-minutes: 20\n", self.m0)
+        self.assertNotIn("continue-on-error", self.m0)
+        self.assertNotIn("fromJSON", self.m0)
+        self.assertNotIn("inputs:", self.m0)
+        self.assertIn("ref: ${{ github.event.pull_request.head.sha || github.sha }}", self.m0)
+        self.assertIn(
+            'run: RUN_DIR="$RUNNER_TEMP/treedb-vacuum-m0" scripts/treedb_vacuum_m0_capture.sh',
+            self.m0,
+        )
+        self.assertIn("      - name: Upload complete evidence packet\n        if: always()", self.m0)
+        self.assertIn("          if-no-files-found: error", self.m0)
 
     def test_mvcc_attribution_uses_pull_request_base_and_head(self) -> None:
         mvcc = block(self.source, "  mvcc-raw-path-gate:\n", "\n  test:\n")

@@ -12,7 +12,7 @@
     "M0 observation is manual diagnostic-only on a separately fixed product; no forecast starts it or replaces failed M0 acceptance.",
     "Bounded maintenance comparison is a manually granted diagnostic on fixed baseline/candidate products; no forecast starts it or establishes cost, M0 or native acceptance."
   ],
-  "discovery_source_sha256": "7fa70bab4369cbcdd6ed0e1dd9f7e73af14d129a9302a49618d012cf86dfa456",
+  "discovery_source_sha256": "7241436d25c16fe7e7212d612ba142e69f4ae6172d0306ddf062fbe2a0569f79",
   "dynamic_consumers": [
     {
       "behavior": "AST/WalkDir discovery and go test subprocess producer witnesses; all TreeDB test/race members retained",
@@ -149,7 +149,7 @@
       "mode": "100644"
     },
     ".github/scripts/test_treedb_ci_contract.py": {
-      "git_blob": "20f2f3e155dd29d8def2126225605e213ff68003",
+      "git_blob": "8eacc795dfef2d9a864f045b84db19bfa1f16d68",
       "mode": "100644"
     },
     ".github/scripts/test_treedb_windows_core_headroom.py": {
@@ -1158,7 +1158,7 @@
         "cgo": "setup-go platform default; explicit command overrides retained",
         "matrix": {},
         "race": false,
-        "runs_on": "ubuntu-24.04",
+        "runs_on": "${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && vars.TREEDB_PERF_RUNNER_LABEL != '' && vars.TREEDB_PERF_RUNNER_PR != '' && vars.TREEDB_PERF_RUNNER_PR == format('{0}', github.event.pull_request.number) && format('{0}-m0', vars.TREEDB_PERF_RUNNER_LABEL) || 'ubuntu-24.04' }}",
         "tags": "entry command defaults/flags retained"
       },
       "workflow": "treedb-vacuum-m0.yml"
@@ -3007,7 +3007,7 @@
         },
         "workflow_dispatch": null
       },
-      "git_blob": "b0ea24e0bf4d8a67ad39ab1668a39fcc69525508",
+      "git_blob": "b9766c12f0f24c927e18d7a48ad670406d15e4eb",
       "jobs": {
         "capture": {
           "checkout": [
@@ -3020,7 +3020,7 @@
           "commands": [
             {
               "command_sha256": "c670090f86b7b236bdec4c8d60b6c5305cf860be5a6eb46a511f13f342ccebc2",
-              "entrypoint": ".github/workflows/treedb-vacuum-m0.yml:48",
+              "entrypoint": ".github/workflows/treedb-vacuum-m0.yml:50",
               "invocation": "RUN_DIR=\"$RUNNER_TEMP/treedb-vacuum-m0\" scripts/treedb_vacuum_m0_capture.sh",
               "name": "Capture and enforce M0 evidence"
             }
@@ -3029,10 +3029,10 @@
           "matrix": null,
           "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
           "race": false,
-          "runs_on": "ubuntu-24.04"
+          "runs_on": "${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && vars.TREEDB_PERF_RUNNER_LABEL != '' && vars.TREEDB_PERF_RUNNER_PR != '' && vars.TREEDB_PERF_RUNNER_PR == format('{0}', github.event.pull_request.number) && format('{0}-m0', vars.TREEDB_PERF_RUNNER_LABEL) || 'ubuntu-24.04' }}"
         }
       },
-      "sha256": "9026cc7e16f7bb0cbbac8c380368e4fcce5a6d6016d333c7a9b276420b6c8235"
+      "sha256": "90b1d628cb366990391493cfd191b03ef49c83e51ad089991ce6a355e13af69f"
     },
     "unified-bench-suites.yml": {
       "coverage": "existing execution only; triggers/path filters are unchanged",

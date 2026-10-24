@@ -417,11 +417,12 @@ requirement. An unchanged rerun hoping for a passing witness is not the remedy.
 
 Infrastructure issue [#5221](https://github.com/snissn/gomap/issues/5221)
 tracks this environment repair. The existing combined `mvcc-raw-path-gate`
-job supports two optional administrator-controlled repository variables:
+job and the separate M0 capture support two optional administrator-controlled repository variables:
 `TREEDB_PERF_RUNNER_PR` and `TREEDB_PERF_RUNNER_LABEL`. Only a
 `pull_request` whose head repository equals this repository, with both variables
 nonempty and its decimal PR number exactly matching `TREEDB_PERF_RUNNER_PR`,
-uses the selected runner label. The comparison formats the event number as a
+uses the selected runner label for raw and that label plus `-m0` for M0.
+The comparison formats the event number as a
 string; malformed settings do not require JSON parsing. Fork PRs, other PRs,
 other event types and unset/empty settings retain `ubuntu-24.04`. This routing
 change leaves every job step, fixture, duration, workload, binding, numeric
@@ -429,10 +430,17 @@ threshold and continuous noise check unchanged; it does not establish that the
 selected runner is quiet.
 
 Before arming either variable, the administrator must cancel or drain older
-queued/running executions of the selected PR; the PR guard alone cannot
+queued/running raw and M0 executions of the selected PR; the PR guard alone cannot
 distinguish its old executions. Set `TREEDB_PERF_RUNNER_PR` first, then set
 `TREEDB_PERF_RUNNER_LABEL` to a unique label for the disposable Ubuntu 24.04
-VM runner registered for one job. Do not queue another execution while armed.
+VM runner registered for one job. Register only the raw label or its `-m0`
+label for each disposable runner, never both: the two jobs must not consume
+each other's one-job runner. Serialize jobs on the owned physical host, joining
+one runner and its workload before registering the next. Do not queue another
+execution while armed. M0 retains its original 20-minute timeout, ten interleaved
+legacy/public pairs, semantic assertions and CV <= 0.10 for every original
+stability metric. Its failed hosted evidence remains retained; this prospective
+routing change supplies no numerical waiver or unchanged-run retry policy.
 After the selected run, clear the label first, clear the PR variable, and delete
 the VM. This opt-in must never select a persistent runner or run contributor
 fork code on a persistent host. Registration, source selection and runner

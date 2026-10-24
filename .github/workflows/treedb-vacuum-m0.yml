@@ -28,7 +28,9 @@ permissions:
 jobs:
   capture:
     name: stable legacy/public capture
-    runs-on: ubuntu-24.04
+    # Same administrator-selected PR as raw; distinct label prevents job theft.
+    # Drain older raw/M0 runs before arming; register one job label at a time.
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && vars.TREEDB_PERF_RUNNER_LABEL != '' && vars.TREEDB_PERF_RUNNER_PR != '' && vars.TREEDB_PERF_RUNNER_PR == format('{0}', github.event.pull_request.number) && format('{0}-m0', vars.TREEDB_PERF_RUNNER_LABEL) || 'ubuntu-24.04' }}
     timeout-minutes: 20
     steps:
       - name: Checkout exact head
