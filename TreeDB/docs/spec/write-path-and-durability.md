@@ -912,6 +912,12 @@ publication order, retained roots, and unchanged standalone WriteSync contract.
 
 ### Captured command-WAL completion
 
+Caller-owned logical MVCC builders preserve the configured ordinary ACK class.
+`CommitRelaxed` inherits `ProfileCommandWALDurable` durability; it cannot downgrade
+that profile. Submit retains the effective WAL sync requirement in the owned
+batch through Complete, including physical sync errors. Public Write/WriteSync
+metrics continue to describe the explicit API selected by the caller.
+
 The ordinary public durable coordinator captures an idle singleton immediately
 and collects queued writes through the maintained bounded window before
 capturing one exact complete journal prefix. COW installs its complete cut

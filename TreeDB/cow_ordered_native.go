@@ -98,7 +98,9 @@ func (c *LogicalMVCCCompletion) Complete() error {
 		return c.err
 	}
 	b, db := c.batch, c.db
-	c.err = b.completeCOWWrite(c.syncWrite, nil)
+	// The owned batch retains the effective profile-upgraded WAL ACK class.
+	// syncWrite separately records which public API the caller selected.
+	c.err = b.completeCOWWrite(b.cowState.commandSync, nil)
 	db.observePublicBatchWrite(c.syncWrite, c.started, c.err)
 	c.err = errors.Join(c.err, b.Close())
 	c.batch, c.db = nil, nil

@@ -109,10 +109,13 @@ func (b *LogicalMVCCBuilder) Submit(syncWrite bool, c *LogicalMVCCCompletion) (e
 		return err
 	}
 	db, batch, started := b.db, b.batch, time.Now()
+	// Ordinary builder commits inherit the profile ACK class, just like Write.
+	// Keep the explicit API class separate from the effective WAL requirement.
+	commandSync := syncWrite || db.commandWALOrdinaryWriteRequiresSync()
 	batch.cowState.collectionSealed = true
-	err = batch.submitCOWWrite(syncWrite)
+	err = batch.submitCOWWrite(commandSync)
 	if err != nil {
-		err = batch.completeCOWWrite(syncWrite, err)
+		err = batch.completeCOWWrite(commandSync, err)
 		db.observePublicBatchWrite(syncWrite, started, err)
 		err = errors.Join(err, b.Abort())
 		c.err = err
