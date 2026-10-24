@@ -3909,6 +3909,10 @@ func scanCommandSegmentSummary(path string, opts Options, onLSN func(uint64) err
 		}
 		env, err := r.ReadCommandFrame()
 		if err != nil {
+			var partial *CommandWALIncompleteFrame
+			if errors.As(err, &partial) {
+				return 0, typed, completeEnd, fmt.Errorf("%w: incomplete container requires global V2 recovery", ErrCorrupt)
+			}
 			if errorsIsEOFOrTail(err) {
 				return maxLSN, typed, start, nil
 			}

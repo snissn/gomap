@@ -4408,6 +4408,14 @@ The initial implementation uses an approximately 4 MiB initialized physical
 reserve and a conservative logical rotation budget of at most 1 MiB. An
 oversized first atomic frame initializes an appropriately larger empty segment
 before append. Initialization/rotation cost and reserved disk space are part of
-operational cost, not a steady-state append optimization claim. Interrupted
-new-format data writes fail closed when complete-frame evidence cannot be
-established; transport framing is never permission for a CRC fallback.
+operational cost, not a steady-state append optimization claim. An interrupted relaxed extent can retain an explicit incomplete-frame identity
+only when its start bounds/checksum and stable V2 identity validate and its end
+witness is still exactly initialized zero reserve. The reader continues through
+all later positive extents. The existing global V2 horizon classifier rejects
+incompleteness covered by any later durable barrier and can discard only an
+identified relaxed suffix above that horizon. An intact end witness plus bad
+data, or any nonzero torn end plus bad data, remains corruption. Full valid V2
+data with a torn end still follows the narrow reconstruction rule above. This
+qualified prefix-cut model does not promise repair for every reordered or
+full-length corrupt write; transport framing never authorizes blanket CRC
+fallback.

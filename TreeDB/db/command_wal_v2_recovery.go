@@ -108,6 +108,24 @@ func readCommandWALV2PhysicalFrames(segments []logSegment, appliedLSN uint64, ma
 			if errors.Is(readErr, io.EOF) {
 				break
 			}
+			var partial *commitlog.CommandWALIncompleteFrame
+			if errors.As(readErr, &partial) {
+				if segment.seq != activeByLane[segment.lane] {
+					_ = reader.Close()
+					return nil, commitlog.ErrCorrupt
+				}
+				if lsnErr := acceptPhysicalLSN(partial.Envelope.LSN); lsnErr != nil {
+					_ = reader.Close()
+					return nil, lsnErr
+				}
+				if partial.Envelope.LSN > appliedLSN {
+					frames = append(frames, commandWALV2PhysicalFrame{Envelope: partial.Envelope, Coordinate: commandWALV2Coordinate{Lane: segment.lane, SegmentSequence: segment.seq, StartOffset: start, EndOffset: partial.EndOffset, SourceSegment: segment.path}, Incomplete: true})
+				}
+				// The container has already scanned all reserved capacity.
+				// Keep reading positive successors; a later durable barrier
+				// makes this incomplete record fatal in the global classifier.
+				continue
+			}
 			if errors.Is(readErr, commitlog.ErrCommandWALTerminalTail) && segment.seq == activeByLane[segment.lane] {
 				tailEnv, end, inspectErr := commitlog.InspectCommandFrameV2TerminalTail(segment.path, start)
 				if inspectErr != nil {

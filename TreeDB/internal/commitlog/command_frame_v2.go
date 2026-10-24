@@ -339,31 +339,40 @@ func InspectCommandFrameV2TerminalTail(path string, segmentStart int64) (Command
 	if _, err := readAt(header, segmentStart+segmentHeaderSize); err != nil && !errors.Is(err, io.EOF) {
 		return env, logicalSize, err
 	}
+	env, err = decodeCommandFrameV2TailIdentity(header)
+	return env, logicalSize, err
+}
+
+func decodeCommandFrameV2TailIdentity(header []byte) (CommandEnvelope, error) {
+	var env CommandEnvelope
+	if len(header) < 56 {
+		return env, errors.Join(ErrCorrupt, ErrCommandWALV2TailIdentityUnavailable)
+	}
 	if !bytes.Equal(header[0:4], commandFrameMagic[:]) {
-		return env, logicalSize, ErrCorrupt
+		return env, ErrCorrupt
 	}
 	version := binary.LittleEndian.Uint16(header[4:6])
 	if version == CommandFrameVersion {
-		return env, logicalSize, ErrCommandWALV1RebuildRequired
+		return env, ErrCommandWALV1RebuildRequired
 	}
 	if version != CommandFrameVersionV2 || binary.LittleEndian.Uint16(header[6:8]) > CommandFrameVersionV2 {
-		return env, logicalSize, ErrCommandWALUnsupportedVersion
+		return env, ErrCommandWALUnsupportedVersion
 	}
 	env.Version = version
 	env.Kind = CommandKind(binary.LittleEndian.Uint16(header[8:10]))
 	env.Scope = CommandScope(binary.LittleEndian.Uint16(header[10:12]))
 	env.FeatureFlags = binary.LittleEndian.Uint64(header[12:20])
 	if env.FeatureFlags&commandWALCriticalFlagsMask != 0 {
-		return env, logicalSize, ErrCommandWALUnsupportedCriticalFlag
+		return env, ErrCommandWALUnsupportedCriticalFlag
 	}
 	env.LSN = binary.LittleEndian.Uint64(header[20:28])
 	env.BaseAppliedLSN = binary.LittleEndian.Uint64(header[44:52])
 	env.PayloadFormat = PayloadFormat(binary.LittleEndian.Uint16(header[52:54]))
 	env.DurabilityClass = CommandDurabilityClass(binary.LittleEndian.Uint16(header[54:56]))
 	if env.LSN == 0 || !validCommandDurabilityClass(env.DurabilityClass) {
-		return CommandEnvelope{}, logicalSize, ErrCorrupt
+		return CommandEnvelope{}, ErrCorrupt
 	}
-	return env, logicalSize, nil
+	return env, nil
 }
 
 func validateCommandEnvelopeV2Identity(env CommandEnvelope) error {

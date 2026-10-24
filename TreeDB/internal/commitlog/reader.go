@@ -96,6 +96,18 @@ func (r *Reader) readSegmentPayloadForCommandScan() ([]byte, error) {
 }
 
 func (r *Reader) readSegmentPayloadWithCompressionBuffers(commandMode, allowCompressed bool, rawBuf, decodedBuf *[]byte) ([]byte, error) {
+	if commandMode && r.fixed != nil {
+		offset, err := r.Offset()
+		if err != nil {
+			return nil, err
+		}
+		if partial := r.fixed.incomplete[offset]; partial != nil {
+			if _, err = r.input.Seek(partial.EndOffset, io.SeekStart); err != nil {
+				return nil, err
+			}
+			return nil, partial
+		}
+	}
 	var header [segmentHeaderSize]byte
 	if n, err := io.ReadFull(r.input, header[:]); err != nil {
 		if commandMode && n > 0 && (err == io.EOF || err == io.ErrUnexpectedEOF) {

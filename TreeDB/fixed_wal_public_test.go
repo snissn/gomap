@@ -98,3 +98,109 @@ func TestFixedWALPublicStableImage(t *testing.T) {
 		})
 	}
 }
+
+func TestFixedWALPublicIncompleteRelaxedExtentHorizon(t *testing.T) {
+	for _, tc := range []struct {
+		name                                     string
+		cover, rotate, footerPresent, tornFooter bool
+		corrupt                                  bool
+	}{
+		{name: "relaxed_suffix_above_ack_frontier"},
+		{name: "later_durable_barrier", cover: true, corrupt: true},
+		{name: "later_segment_durable_barrier", cover: true, rotate: true, corrupt: true},
+		{name: "positive_footer_crc_damage", footerPresent: true, corrupt: true},
+		{name: "torn_nonzero_footer_bad_data", tornFooter: true, corrupt: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			source := t.TempDir()
+			opts := relaxedCommandWALDurablePrefixOptions(source)
+			if tc.rotate {
+				opts.CommandWALSegmentTargetBytes = 1
+			}
+			database, err := Open(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer database.Close()
+			if err = database.SetSync([]byte("a"), []byte("accepted-a")); err != nil {
+				t.Fatal(err)
+			}
+			if err = database.Set([]byte("b"), []byte("relaxed-body-that-will-tear")); err != nil {
+				t.Fatal(err)
+			}
+			if err = database.backend.FlushCommandWAL(false); err != nil {
+				t.Fatal(err)
+			}
+			if tc.cover {
+				if err = writeEmptyPublicCommandWALSync(database); err != nil {
+					t.Fatal(err)
+				}
+			}
+			crash := filepath.Join(t.TempDir(), "image")
+			if err = copyPublicCommandWALCrashImage(source, crash); err != nil {
+				t.Fatal(err)
+			}
+			paths, err := filepath.Glob(filepath.Join(backenddb.WALDirPath(crash), "commit-l*.log"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, path := range paths {
+				image, e := os.ReadFile(path)
+				if e != nil {
+					t.Fatal(e)
+				}
+				for off := int64(4096); off+96 < int64(len(image)) && string(image[off:off+6]) == "TDBEXT"; {
+					length := int64(binary.LittleEndian.Uint64(image[off+40 : off+48]))
+					end := int64(binary.LittleEndian.Uint64(image[off+48 : off+56]))
+					body := image[off+96 : off+96+length]
+					if bytes.Contains(body, []byte("relaxed-body-that-will-tear")) {
+						// Keep the outer bound and stable 56-byte V2 identity. Replace the
+						// unwritten body/end range with its exact initialized reserve bytes.
+						clear(image[off+96+8+56 : off+96+length])
+						if !tc.footerPresent {
+							clear(image[end-96 : end])
+						}
+						if tc.tornFooter {
+							image[end-96] = 'T'
+						}
+						found = true
+					}
+					off = end
+				}
+				if e = os.WriteFile(path, image, 0600); e != nil {
+					t.Fatal(e)
+				}
+			}
+			if !found {
+				t.Fatal("did not locate relaxed B extent")
+			}
+			recovered, err := Open(relaxedCommandWALDurablePrefixOptions(crash))
+			if tc.corrupt {
+				if recovered != nil {
+					_ = recovered.Close()
+				}
+				if !errors.Is(err, commitlog.ErrCorrupt) {
+					t.Fatalf("Open err=%v want corruption", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer recovered.Close()
+			got, e := recovered.Get([]byte("a"))
+			if e != nil || string(got) != "accepted-a" {
+				t.Fatalf("A=%q err=%v", got, e)
+			}
+			got, e = recovered.Get([]byte("b"))
+			if e != nil || got != nil {
+				t.Fatalf("discarded B=%q err=%v", got, e)
+			}
+			// A repair retry uses the normal reopened directory and must stay usable.
+			if err = recovered.SetSync([]byte("c"), []byte("after-repair")); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}

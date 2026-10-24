@@ -32,6 +32,7 @@ type fixedWAL struct {
 	pending                     []byte
 	lastLSN                     uint64
 	reconstructedFooters        uint64
+	incomplete                  map[int64]*CommandWALIncompleteFrame
 	extents                     []fixedWALExtent
 }
 
@@ -149,19 +150,6 @@ func loadFixedWAL(file *os.File) (*fixedWAL, []byte, error) {
 		if _, err = file.ReadAt(payload, pos+fixedWALWitnessSize); err != nil {
 			return nil, nil, err
 		}
-		if crc.Checksum(payload) != binary.LittleEndian.Uint32(probe[72:76]) {
-			return nil, nil, ErrCorrupt
-		}
-		first, last, err := validateFixedWALFrames(payload)
-		if err != nil {
-			return nil, nil, err
-		}
-		if first != binary.LittleEndian.Uint64(probe[56:64]) || last != binary.LittleEndian.Uint64(probe[64:72]) {
-			return nil, nil, ErrCorrupt
-		}
-		if state.lastLSN != 0 && first <= state.lastLSN {
-			return nil, nil, ErrCommandWALDuplicateLSN
-		}
 		footer := make([]byte, fixedWALWitnessSize)
 		if _, err = file.ReadAt(footer, end-fixedWALWitnessSize); err != nil {
 			return nil, nil, err
@@ -169,16 +157,55 @@ func loadFixedWAL(file *os.File) (*fixedWAL, []byte, error) {
 		expected := append([]byte(nil), probe[:]...)
 		copy(expected, fixedWALEndMagic[:])
 		binary.LittleEndian.PutUint32(expected[92:96], crc.Checksum(expected[:92]))
-		// Narrow C: start, entire inner records, and all frame identities have
-		// already validated. Footer damage cannot hide or discard a durable frame.
-		if !bytes.Equal(footer, expected) {
-			if bytes.Equal(footer[:8], fixedWALEndMagic[:]) && binary.LittleEndian.Uint32(footer[92:96]) == crc.Checksum(footer[:92]) {
-				return nil, nil, fmt.Errorf("%w: mismatched intact fixed WAL footer", ErrCorrupt)
-			}
-			if len(payload) < segmentHeaderSize+6 || binary.LittleEndian.Uint16(payload[segmentHeaderSize+4:segmentHeaderSize+6]) != CommandFrameVersionV2 {
+		var first, last uint64
+		dataComplete := crc.Checksum(payload) == binary.LittleEndian.Uint32(probe[72:76])
+		if !dataComplete {
+			// Only a positively bounded new extent whose end is still exactly
+			// initialized reserve can represent an interrupted relaxed frame.
+			// An intact or partly written end plus damaged data stays corrupt.
+			if !allZeroBytes(footer) {
 				return nil, nil, ErrCorrupt
 			}
-			state.reconstructedFooters++
+			if len(payload) < segmentHeaderSize+56 || int(binary.LittleEndian.Uint32(payload[:4])) != len(payload)-segmentHeaderSize {
+				return nil, nil, ErrCorrupt
+			}
+			env, e := decodeCommandFrameV2TailIdentity(payload[segmentHeaderSize:])
+			if e != nil {
+				return nil, nil, e
+			}
+			if env.DurabilityClass != CommandDurabilityRelaxed {
+				return nil, nil, ErrCorrupt
+			}
+			if e = validateCommandEnvelopeV2Identity(env); e != nil {
+				return nil, nil, e
+			}
+			first, last = env.LSN, env.LSN
+			if state.incomplete == nil {
+				state.incomplete = make(map[int64]*CommandWALIncompleteFrame)
+			}
+			state.incomplete[start] = &CommandWALIncompleteFrame{Envelope: env, EndOffset: start + length}
+		} else {
+			first, last, err = validateFixedWALFrames(payload)
+			if err != nil {
+				return nil, nil, err
+			}
+			// Narrow C reconstructs redundant framing only after the entire
+			// unchanged V2 frame, CRC, identity, and order have validated.
+			if !bytes.Equal(footer, expected) {
+				if bytes.Equal(footer[:8], fixedWALEndMagic[:]) && binary.LittleEndian.Uint32(footer[92:96]) == crc.Checksum(footer[:92]) {
+					return nil, nil, fmt.Errorf("%w: mismatched intact fixed WAL footer", ErrCorrupt)
+				}
+				if len(payload) < segmentHeaderSize+6 || binary.LittleEndian.Uint16(payload[segmentHeaderSize+4:segmentHeaderSize+6]) != CommandFrameVersionV2 {
+					return nil, nil, ErrCorrupt
+				}
+				state.reconstructedFooters++
+			}
+		}
+		if first != binary.LittleEndian.Uint64(probe[56:64]) || last != binary.LittleEndian.Uint64(probe[64:72]) {
+			return nil, nil, ErrCorrupt
+		}
+		if state.lastLSN != 0 && first <= state.lastLSN {
+			return nil, nil, ErrCommandWALDuplicateLSN
 		}
 		padding := make([]byte, end-fixedWALWitnessSize-pos-fixedWALWitnessSize-length)
 		if len(padding) > 0 {
@@ -447,3 +474,14 @@ func (stream *fixedWALStream) Seek(offset int64, whence int) (int64, error) {
 	stream.offset = offset
 	return offset, nil
 }
+
+// CommandWALIncompleteFrame retains only independently validated V2 identity
+// from a bounded interrupted relaxed extent. It is not a valid replay frame or
+// durability authority. Readers continue so later positive barriers are seen.
+type CommandWALIncompleteFrame struct {
+	Envelope  CommandEnvelope
+	EndOffset int64
+}
+
+func (*CommandWALIncompleteFrame) Error() string { return ErrCommandWALTerminalTail.Error() }
+func (*CommandWALIncompleteFrame) Unwrap() error { return ErrCommandWALTerminalTail }
