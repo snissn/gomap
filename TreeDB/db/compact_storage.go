@@ -1940,7 +1940,7 @@ func (db *DB) pruneZeroByteValueLogFiles(protectedPaths []string) (int, error) {
 	defer recoverableRoots.Release()
 	db.publishPrepareMu.Lock()
 	defer db.publishPrepareMu.Unlock()
-	if err := recoverableRoots.Revalidate(); err != nil {
+	if err := recoverableRoots.revalidateWithPublishPrepareLockHeld(); err != nil {
 		return 0, err
 	}
 	// No root publication can advance while publishPrepareMu is held. Consume

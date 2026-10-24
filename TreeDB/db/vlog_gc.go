@@ -589,7 +589,7 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 		if hook := db.testValueLogGCBeforeRevalidateHook; hook != nil {
 			hook()
 		}
-		if err := recoverableRoots.Revalidate(); err != nil {
+		if err := recoverableRoots.revalidateWithPublishPrepareLockHeld(); err != nil {
 			return stats, err
 		}
 		for id := range candidates {

@@ -348,6 +348,17 @@ guard's teardown lease and never reacquires it while Close may be queued.
   - protects mutable DB metadata state (`meta`, state swap).
 - `idxMu`:
   - protects index generation tracking map/lifecycle operations.
+- `publishPrepareMu`:
+  - read admission protects prepared output; exclusive admission fences GC and
+    zero-byte cleanup through destructive mutation.
+- `durablePublishMu`:
+  - protects the exact durable publication basis and private root build groups.
+    Grouped/serialized publication can own it before preparation read admission,
+    while optimistic publication can retain preparation admission before taking
+    it. Maintenance holding exclusive preparation admission must therefore use
+    the internal nonblocking root-set revalidation and defer on contention;
+    blocking on this gate would deadlock a publisher. Deferred candidates and
+    cleanup ownership remain retained for a later fresh capture.
 
 ## 5. Worker and Queue Topology
 

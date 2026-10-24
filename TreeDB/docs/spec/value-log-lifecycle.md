@@ -417,6 +417,20 @@ retention token, compute candidates, perform the destructive phase, then release
 the token. No command WAL append lock may be held while acquiring backend
 publish locks.
 
+During destructive value-log GC and zero-byte cleanup, exclusive
+`publishPrepareMu` excludes new prepared output through mutation. Final root-set
+revalidation must acquire `durablePublishMu` without waiting: a private grouped
+or serialized publisher can already own that gate while waiting for preparation
+admission. Optimistic publishers can acquire these gates in the opposite order,
+so reversing the maintenance order is insufficient. The internal prepared-mutation
+revalidation returns `ErrRecoverableRootSetStale` when the durable gate is busy
+and otherwise retains every visible-root, durable-root, coordinator, index and
+system-root validation. A refused pass must not mark or unlink candidates, and
+observed-source cleanup retains its deferred ownership. A later pass captures a
+fresh root set before retrying. Continuous publication can defer reclamation;
+this protocol guarantees safe refusal and publisher progress, not a fixed GC
+completion deadline.
+
 ### 3.2 Command WAL Operator Runbook
 
 Operators must use `treemap command-wal health --json` before manual cleanup,

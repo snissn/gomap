@@ -1060,6 +1060,18 @@ Invariant:
 Coverage:
 - `TreeDB/db/vlog_gc_test.go`:
   - `TestValueLogGC_RemovesUnreferencedSegment`
+- `TreeDB/db/vlog_gc_publication_lock_order_test.go`:
+  - `TestValueLogGCDefersForPrivatePublicationAndLaterReclaims` drives public GC
+    and private grouped publication through opposing preparation/durable gates;
+    it requires conservative refusal, complete publication, retained candidate
+    bytes, and physical reclamation by a later real GC pass. The same test
+    deadlocks on the original `f906b8a2` implementation.
+- `TreeDB/db/recoverable_root_prepared_mutation_test.go`:
+  - `TestRecoverableRootSetPreparedMutationRetainsEveryValidation` checks busy
+    durable authority and each original captured-basis validation independently.
+- `TreeDB/external_recovery_leaf_maintenance_test.go`:
+  - `TestExternalRecoveryLeafMaintenanceRetainsAndReclaimsExactCuts` covers
+    repeated no-WAL checkpoint publication alongside background reclamation.
 - `TreeDB/db/durable_root_tracker_repair_test.go`:
   - `TestDurableRootCandidateScanRepairsReferenceTracker`
   - `TestDurableRootCandidateScanColdCollectionAttachmentRepairsTracker`
