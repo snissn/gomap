@@ -206,8 +206,13 @@ capture; one leader collects a queued cohort through the existing bounded
 200 microsecond window, with early count/byte/explicit triggers, then
 fixes the exact complete-frame endpoint. Successors append while the leader's
 final physical WAL sync is in flight and elect one next leader after completion.
-The next leader retains the collection window; it must not snapshot immediately
-merely because it inherited queued work. There is one active capture and no
+The collection deadline starts at the first pending registration, so time spent
+behind the preceding physical sync consumes that same budget. Leader takeover
+uses only its remaining time. A caller-owned logical MVCC builder establishes
+the same monotonic deadline at Begin and exposes it as scheduling metadata. Its
+sealed Submit ends collection and the engine adds no second wait. This flag
+creates no force ticket and changes no append, publication or ACK obligation.
+Idle first work remains immediate. There is one active capture and no
 background goroutine or second accepted-prefix/root owner.
 
 An idle captured-durable mutation orders all preceding dependencies before

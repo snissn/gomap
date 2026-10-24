@@ -173,10 +173,10 @@ func TestDurabilityProfileOrderedSubmissionEntrypointInventory(t *testing.T) {
 		dir, pkg, receiver string
 		want               []string
 	}{
-		{treeDBDir, "treedb", "LogicalMVCCBuilder", []string{"Abort", "Append", "Submit"}},
+		{treeDBDir, "treedb", "LogicalMVCCBuilder", []string{"Abort", "Append", "CollectionDeadline", "Submit"}},
 		{treeDBDir, "treedb", "LogicalMVCCCompletion", []string{"Complete"}},
 		{treeDBDir, "treedb", "MVCCWriteWorkEstimator", []string{"Estimate"}},
-		{filepath.Join(treeDBDir, "mvcc"), "mvcc", "CommitBuilder", []string{"Abort", "AppendGroup", "Submit"}},
+		{filepath.Join(treeDBDir, "mvcc"), "mvcc", "CommitBuilder", []string{"Abort", "AppendGroup", "CollectionDeadline", "Submit"}},
 		{filepath.Join(treeDBDir, "mvcc"), "mvcc", "CommitCompletion", []string{"Complete"}},
 	} {
 		if got := profileInventoryMethods(t, item.dir, item.pkg, item.receiver); !slices.Equal(got, item.want) {
@@ -188,12 +188,13 @@ func TestDurabilityProfileOrderedSubmissionEntrypointInventory(t *testing.T) {
 		routes map[string][]string
 	}{
 		{"cow_ordered_builder.go", map[string][]string{
-			"(*DB).SupportsLogicalMVCCStaging":       {"db.lifecycleMu.RLock()", "db.supportsLogicalMVCCStagingLocked()"},
-			"(*DB).supportsLogicalMVCCStagingLocked": {"db.cached.SupportsLogicalMVCC()", "db.commandWALCached", "!db.publicBatchWriteSyncPhaseEnabled"},
-			"(*DB).BeginLogicalMVCC":                 {"db.beginPublicOperation()", "db.supportsLogicalMVCCStagingLocked()", "db.cached.NewBatchWithSize(0)", "newCommandWALPublicBatch", "public.GetByteSize()"},
-			"(*LogicalMVCCBuilder).Append":           {"b.batch.StageLogicalMVCC(mutations, input)", "durabilitycut.AfterLogicalMVCCStaging"},
-			"(*LogicalMVCCBuilder).Abort":            {"batch.Close()", "db.lifecycleMu.RUnlock()"},
-			"(*LogicalMVCCBuilder).Submit":           {"batch.submitCOWWrite(syncWrite)", "batch.completeCOWWrite(syncWrite, err)", "c.db, c.batch", "b.db, b.batch = nil, nil"},
+			"(*DB).SupportsLogicalMVCCStaging":         {"db.lifecycleMu.RLock()", "db.supportsLogicalMVCCStagingLocked()"},
+			"(*DB).supportsLogicalMVCCStagingLocked":   {"db.cached.SupportsLogicalMVCC()", "db.commandWALCached", "!db.publicBatchWriteSyncPhaseEnabled"},
+			"(*DB).BeginLogicalMVCC":                   {"db.beginPublicOperation()", "db.supportsLogicalMVCCStagingLocked()", "db.cached.NewBatchWithSize(0)", "newCommandWALPublicBatch", "public.GetByteSize()"},
+			"(*LogicalMVCCBuilder).Append":             {"b.batch.StageLogicalMVCC(mutations, input)", "durabilitycut.AfterLogicalMVCCStaging"},
+			"(*LogicalMVCCBuilder).CollectionDeadline": {"b.collectionDeadline"},
+			"(*LogicalMVCCBuilder).Abort":              {"batch.Close()", "db.lifecycleMu.RUnlock()"},
+			"(*LogicalMVCCBuilder).Submit":             {"batch.submitCOWWrite(syncWrite)", "batch.completeCOWWrite(syncWrite, err)", "c.db, c.batch", "b.db, b.batch = nil, nil"},
 		}},
 		{"cow_ordered_native.go", map[string][]string{
 			"(*DB).SubmitLogicalMVCC":           {"db.CommitLogicalMVCC(mutations, input, syncWrite)", "db.beginPublicOperation()", "db.cached.SupportsLogicalMVCC()", "input.Matches(mutations)", "public.StageLogicalMVCC(mutations, input)", "public.submitCOWWrite(true)", "public.completeCOWWrite(true, err)", "completion.db, completion.batch"},
@@ -221,6 +222,9 @@ func TestDurabilityProfileOrderedSubmissionEntrypointInventory(t *testing.T) {
 		{filepath.Join("mvcc", "ordered_completion.go"), map[string][]string{
 			"(*Store).SubmitCommitGroupAt": {"s.commitLogicalGroupsWithCompletion", "s.CommitGroupAt(groups, mode)"},
 			"(*CommitCompletion).Complete": {"c.engine.Complete()", "c.store.mu.RUnlock()"},
+		}},
+		{filepath.Join("mvcc", "ordered_collection.go"), map[string][]string{
+			"(*CommitBuilder).CollectionDeadline": {"b.mu.Lock()", "b.engine.CollectionDeadline()"},
 		}},
 	} {
 		bodies := profileInventoryFunctionBodies(t, filepath.Join(treeDBDir, source.path))

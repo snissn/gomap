@@ -470,11 +470,12 @@ var cowDeniedPublicBatch = commandWALPublicBatch{cowState: &commandWALPublicCOWS
 var cowClosedPublicBatch = commandWALPublicBatch{cowState: &commandWALPublicCOWState{batchError: ErrClosed}}
 
 type commandWALPublicCOWState struct {
-	registration publicCommandWALRegistration
-	commandSync  bool
-	lease        *memtable.COWExternalLease
-	batchError   error
-	cow          bool
+	registration     publicCommandWALRegistration
+	commandSync      bool
+	collectionSealed bool
+	lease            *memtable.COWExternalLease
+	batchError       error
+	cow              bool
 }
 
 // The COW wrapper and state share one admitted allocation. Its interior
@@ -1723,7 +1724,7 @@ func (b *commandWALPublicBatch) completeCOWWrite(commandSync bool, err error) er
 // The existing COW wrapper owns registration scratch through ACK. Named
 // callbacks avoid an escaping per-write registration cell and nested captures.
 func (b *commandWALPublicBatch) registerCOWAppend() error {
-	registration, err := b.db.registerPublicCommandWALWithIntent(b.opCount*64, nil, b.cowState.commandSync, b.cowState.commandSync, nil, b.appendCOWFrame)
+	registration, err := b.db.registerPublicCommandWALCollected(b.opCount*64, nil, b.cowState.commandSync, b.cowState.commandSync, b.cowState.collectionSealed, nil, b.appendCOWFrame)
 	b.cowState.registration = registration
 	return err
 }

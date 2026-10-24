@@ -26,7 +26,9 @@ type publicCommandWALGroupCommit struct {
 	completedTicket      uint64
 	publishTicket        uint64
 	terminalErr          error
-	pendingSingleton     uint64 // an idle mutation can form an immediate one-ticket epoch
+	pendingSingleton     uint64    // an idle mutation can form an immediate one-ticket epoch
+	pendingDeadline      time.Time // collection starts at first registration, including prior I/O
+	pendingSealed        bool      // caller-owned aggregate already completed its collection window
 	pendingCount         int
 	pendingCommits       int
 	pendingBytes         int
@@ -57,6 +59,7 @@ type publicCommandWALGroupCommit struct {
 	triggerCommits       atomic.Uint64
 	triggerBytes         atomic.Uint64
 	triggerExplicit      atomic.Uint64
+	triggerSealed        atomic.Uint64
 	groupSizeMax         atomic.Uint64
 	dependencyCoveredMax atomic.Uint64
 	waitNsTotal          atomic.Uint64
@@ -114,6 +117,12 @@ func (tdb *DB) registerPublicCommandWAL(bytes int, preparedBytes *int, durable b
 // intentRegistered is true only while the COW caller owns an intent announced
 // before cache admission. That intent is released before any physical ACK wait.
 func (tdb *DB) registerPublicCommandWALWithIntent(bytes int, preparedBytes *int, durable, intentRegistered bool, pendingBookkeeping *time.Duration, appendFrame func(bool) (uint64, error)) (publicCommandWALRegistration, error) {
+	return tdb.registerPublicCommandWALCollected(bytes, preparedBytes, durable, intentRegistered, false, pendingBookkeeping, appendFrame)
+}
+
+// collectionSealed is scheduling metadata from a caller-owned aggregate. It
+// closes collection without adding a force ticket or changing prefix/ACK rules.
+func (tdb *DB) registerPublicCommandWALCollected(bytes int, preparedBytes *int, durable, intentRegistered, collectionSealed bool, pendingBookkeeping *time.Duration, appendFrame func(bool) (uint64, error)) (publicCommandWALRegistration, error) {
 	var publication publicCommandWALRegistration
 	if tdb == nil || !tdb.commandWALCached || tdb.backend == nil || appendFrame == nil {
 		return publication, ErrClosed
@@ -178,7 +187,7 @@ func (tdb *DB) registerPublicCommandWALWithIntent(bytes int, preparedBytes *int,
 			if preparedBytes != nil {
 				bytes = *preparedBytes
 			}
-			ticket, leader, err = group.register(bytes, durable, false)
+			ticket, leader, err = group.registerCollected(bytes, durable, false, collectionSealed)
 			if err == nil && singleton && leader {
 				group.mu.Lock()
 				group.pendingSingleton = ticket
@@ -267,6 +276,10 @@ func (group *publicCommandWALGroupCommit) idleDurableCaptureEligibleLocked() boo
 }
 
 func (group *publicCommandWALGroupCommit) register(bytes int, durable, force bool) (ticket uint64, leader bool, err error) {
+	return group.registerCollected(bytes, durable, force, false)
+}
+
+func (group *publicCommandWALGroupCommit) registerCollected(bytes int, durable, force, collectionSealed bool) (ticket uint64, leader bool, err error) {
 	if group == nil {
 		return 0, false, ErrClosed
 	}
@@ -290,7 +303,11 @@ func (group *publicCommandWALGroupCommit) register(bytes int, durable, force boo
 		return ticket, false, nil
 	}
 	group.initLeaderResourcesLocked()
+	if group.pendingCount == 0 {
+		group.pendingDeadline = time.Now().Add(group.delay)
+	}
 	group.pendingCount++
+	group.pendingSealed = group.pendingSealed || collectionSealed
 	if durable && !force {
 		group.pendingCommits++
 	} else if force {
@@ -308,6 +325,8 @@ func (group *publicCommandWALGroupCommit) register(bytes int, durable, force boo
 	case force:
 		group.forced.Add(1)
 		group.triggerLocked(&group.triggerExplicit)
+	case collectionSealed:
+		group.triggerLocked(&group.triggerSealed)
 	case group.pendingCount >= group.maxCommits:
 		group.triggerLocked(&group.triggerCommits)
 	case group.pendingBytes >= group.maxBytes:
@@ -483,6 +502,8 @@ func (tdb *DB) finishPublicCommandWALGroupPublication(publication publicCommandW
 		group.terminalErr = publishErr
 		group.completedTicket = group.nextTicket
 		group.pendingCount = 0
+		group.pendingDeadline = time.Time{}
+		group.pendingSealed = false
 		group.pendingCommits = 0
 		group.pendingBytes = 0
 		group.pendingForceTickets = group.pendingForceTickets[:0]
@@ -514,8 +535,8 @@ func (group *publicCommandWALGroupCommit) runLeader(tdb *DB) {
 	// An epoch containing only relaxed followers needs ordered completion,
 	// not a collection delay or a new physical durability certificate.
 	relaxedOnly := group.pendingCommits == 0 && len(group.pendingForceTickets) == 0
-	immediate := relaxedOnly || (group.pendingCount == 1 && group.pendingSingleton == group.nextTicket && group.durableIntents.Load() == 0)
-	delay := group.delay
+	delay := time.Until(group.pendingDeadline)
+	immediate := relaxedOnly || group.pendingSealed || delay <= 0 || (group.pendingCount == 1 && group.pendingSingleton == group.nextTicket && group.durableIntents.Load() == 0)
 	wake := group.wake
 	timer := group.timer
 	if !timer.Stop() {
@@ -533,8 +554,9 @@ func (group *publicCommandWALGroupCommit) runLeader(tdb *DB) {
 	if leaderWaitHook != nil {
 		leaderWaitHook()
 	}
-	// An idle singleton or relaxed-only epoch needs no timer. Durable successor
-	// epochs keep the collection window so COW preparation does not fragment them.
+	// A sealed native aggregate has already spent its collection window upstream.
+	// Generic successors spend only the remaining first-registration budget; prior
+	// physical I/O never starts another full collection delay.
 	if !immediate {
 		select {
 		case <-timer.C:
@@ -561,6 +583,8 @@ func (group *publicCommandWALGroupCommit) runLeader(tdb *DB) {
 	batchLastTicket := group.nextTicket
 	batchForceTickets := append([]uint64(nil), group.pendingForceTickets...)
 	group.pendingCount = 0
+	group.pendingDeadline = time.Time{}
+	group.pendingSealed = false
 	group.pendingCommits = 0
 	group.pendingBytes = 0
 	group.pendingForceTickets = group.pendingForceTickets[:0]
@@ -711,6 +735,7 @@ func (tdb *DB) publicCommandWALGroupStatsInto(stats map[string]string) {
 	stats["treedb.command_wal.group_commit.trigger.commit_limit_total"] = fmt.Sprintf("%d", group.triggerCommits.Load())
 	stats["treedb.command_wal.group_commit.trigger.byte_limit_total"] = fmt.Sprintf("%d", group.triggerBytes.Load())
 	stats["treedb.command_wal.group_commit.trigger.explicit_sync_total"] = fmt.Sprintf("%d", group.triggerExplicit.Load())
+	stats["treedb.command_wal.group_commit.trigger.sealed_collection_total"] = fmt.Sprintf("%d", group.triggerSealed.Load())
 	stats["treedb.command_wal.group_commit.fallbacks_total"] = "0"
 	stats["treedb.command_wal.group_commit.fallback.reason.coordinator_unavailable_total"] = "0"
 	stats["treedb.command_wal.group_commit.bypasses_total"] = fmt.Sprintf("%d", group.bypassRelaxedNoGroup.Load()+group.bypassSoloDurable.Load())
