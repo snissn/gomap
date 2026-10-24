@@ -113,9 +113,9 @@ The opt-in `TreeDB/mvcc` package owns the first read/write use of this codec:
 - All puts and tombstones in one call are stored through one TreeDB atomic
   batch. A storage error may be commit-ambiguous, but the batch is wholly
   visible or wholly absent, never partially visible.
-- `CommitRelaxed` uses `Batch.Write` with the resolved profile's ordinary ACK
-  class. `CommitDurable` uses `Batch.WriteSync`, including the explicit durable
-  opt-up supported by production relaxed profiles.
+- `CommitRelaxed` uses `Batch.Write` and promises atomic visibility without an
+  fsync boundary. `CommitDurable` is accepted only when TreeDB is configured in
+  `DurabilityDurable` mode and uses `Batch.WriteSync`.
 - `GetAt(key, readTimestamp)` creates a physical lower bound at
   `(key, readTimestamp)` and seeks directly into the exact-key range. It returns
   the newest retained version whose timestamp is at most the read timestamp;
@@ -153,35 +153,6 @@ are not capability proofs. On that route, groups share floor admission through
 `Write`/`WriteSync` and batch Close. Floor advancement still excludes admitted
 commits until their ordinary acknowledgement completes. Group publication remains
 all-or-none across shards and timestamps.
-
-`SubmitCommitGroupAt(groups, mode)` preserves the same validation and aggregate
-atomicity. On native `cow_ordered` command-WAL durable writes, Submit establishes
-canonical append order and installs the complete aggregate before returning a
-`*treedb.CommitFuture`. The final captured WAL file sync happens independently.
-Visibility can precede durability; `future.Wait()==nil` is the durable ACK.
-`Done` closes after the immutable result, COW acknowledgement, private-batch
-cleanup and floor-lease release. Both methods only observe completion. Abandoning
-a future does not cancel or stall accepted work. Caller keys/values can be reused
-after Submit returns. Direct errors and future errors may be commit ambiguous;
-future storage errors retain `ErrStorage` and their underlying causes.
-
-One lazily started DB-owned worker completes at most 64 admitted aggregates
-(active plus queued), reusing the existing public WAL scheduler and accepted
-prefix. Capacity waits precede DB lifecycle admission. A preparation/enqueue
-mutex makes queue order equal canonical order; the worker holds neither it nor
-append gates during final sync. Each accepted aggregate retains its original
-batch arena, lifecycle read lease and Store floor read lease through completion.
-The completer never reacquires floor admission, so a queued floor writer cannot
-prevent older futures draining. `DB.Close` stops new submissions, wakes capacity
-waiters and drains accepted work before closing storage. Relaxed/unsupported
-routes complete synchronously through `CommitGroupAt` and return a completed
-future. Existing synchronous APIs retain their caller-owned scheduling and use
-the same COW preparation/completion primitive without queue overhead.
-
-Submit is not a nonblocking or zero-I/O promise: COW preparation, materialization,
-capacity admission and V2 dependency-before-marker/rotation ordering can wait.
-Only the final captured WAL sync is transferred. No on-disk format or durable
-ACK class changes, and aggregates are never split into per-mutation futures.
 
 `GetAt` and `IterateVersions` validate the cached floor and pin one physical cut
 under shared Store admission, then release that admission before successor seek,

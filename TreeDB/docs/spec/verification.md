@@ -4497,22 +4497,3 @@ headroom is exhausted. These controls do not activate unconverted collections.
   `TestCapturedSyncSharedSegmentProgressAndOutOfOrderRelease`, and
   `TestCapturedSyncFinalLegalLSN`: retained exact identity, independent physical
   syncs, rotations, last legal LSN and Close joining all pins.
-
-## Owned asynchronous MVCC completion
-
-- `mvcc.TestSubmitCommitGroupAtOwnedProgressAndExactACK`: aggregate Submit B/C
-  installs while A's final physical sync is blocked; exact later ACK, abandoned
-  A, Close drain and public reopen.
-- `mvcc.TestSubmitCommitGroupAtFailurePoisonsAllOwnedWork`: ambiguous sync error,
-  immutable classified future errors, queued completion and later refusal.
-- `mvcc.TestSubmitCommitGroupAtFloorWriterCannotBlockCompletion`: actual queued
-  floor writer excludes new readers while the independent completer drains and
-  releases its transferred floor read lease.
-- `mvcc.TestSubmitCommitGroupAtSaturationCloseAndOwnership`: all 64 slots occupied,
-  caller byte reuse, capacity wait rejected by Close, accepted work drained.
-- `mvcc.TestSubmitCommitGroupAtCompatibilityAndValidation`: synchronous fallback,
-  completed future, mode/nil/duplicate validation.
-- `mvcc.TestSubmitCommitGroupAtPointerStableImagePublicReopen`: public aggregate
-  future ACKs, 4096-byte materialized pointers and 65-KiB external values with
-  rotation, modeled stable bytes/names frozen before Close's checkpoint and
-  recovered through public Open at every acknowledged timestamp.

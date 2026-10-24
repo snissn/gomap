@@ -23,12 +23,9 @@
 The public coordinator fixes an exact complete-frame prefix and retains its
 active file and original dependency owner before releasing append authority.
 Its physical file sync permits successor appends and complete COW cut installs;
-successors require their own later epoch before durable ACK. A waiting caller or
-the bounded logical-MVCC completion worker elects the next leader after the
-earlier capture and all retained pins finish. Submit installs each aggregate
-before returning; Wait only observes the DB-owned final ACK. Close stops queue
-admission and drains accepted work even when its futures are abandoned. No
-second accepted-prefix or WAL owner is introduced. Earlier V2
+successors require their own later epoch before durable ACK. One waiting caller
+elects the next leader after the earlier capture and all retained pins finish.
+No background writer or second accepted-prefix owner is introduced. Earlier V2
 external dependency and rotation synchronization remains serialized before a
 durable marker can be emitted.
 

@@ -712,12 +712,3 @@ The original accepted FIFO and coalesced coverage runs remain the sole complete
 prefix owner. The WAL owner alone calls ObserveStableWAL after successful sync;
 checkpoint/root sealing does not synthesize W. V2 external dependency ordering
 can still serialize earlier append preparation.
-
-The optional logical MVCC Submit API transfers the same preparation's original
-registration, batch and lifecycle lease to one bounded DB-owned completer.
-It does not create another publication or WAL owner. The completer runs the
-ordinary exact-prefix wait, finishes publication, records COW acknowledgement,
-closes the private batch and releases the Store floor lease before publishing
-the future result. Future observation owns no progress or cleanup. Queue order
-is canonical append order; Close rejects new work and drains accepted entries.
-See [API contracts](contracts.md) for fallback and earlier-I/O boundaries.
