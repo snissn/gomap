@@ -101,13 +101,15 @@ class COWSuccessorDiagnosticTests(unittest.TestCase):
         self.assertEqual(hashlib.sha256((ROOT / diagnostic.HARNESS).read_bytes()).hexdigest(),
                          diagnostic.HARNESS_SHA256)
         self.assertEqual(diagnostic.ALLOWED_CHANGES, {
+            "TreeDB/cow_small_budget_recovery_test.go",
             "scripts/cow_successor_workspace_diagnostic.py",
             ".github/scripts/test_cow_successor_workspace_diagnostic.py",
             ".github/scripts/test_treedb_ci_contract.py",
             ".github/workflows/treedb-tests.yml", ".github/workflows/treedb-vacuum-m0.yml",
             ".github/ci/ci_impact.json",
             "TreeDB/docs/benchmarks/cow-successor-workspace-5214.md"})
-        self.assertFalse(any(path.endswith(".go") for path in diagnostic.ALLOWED_CHANGES))
+        self.assertEqual({path for path in diagnostic.ALLOWED_CHANGES if path.endswith(".go")},
+                         {"TreeDB/cow_small_budget_recovery_test.go"})
         for path in ("TreeDB/caching/cow_read.go", "TreeDB/caching/cow_cut.go", diagnostic.HARNESS,
                      "scripts/mvcc_primary_cost_gate.py"):
             actual = (ROOT / path).read_bytes()
@@ -141,7 +143,8 @@ class COWSuccessorDiagnosticTests(unittest.TestCase):
     def test_synthetic_collection_missing_rows_and_continuous_noise_are_null(self):
         # This substitutes command execution and observation, never invokes Go.
         # It checks orchestration/qualification, not product performance.
-        for variant in ("complete", "infrastructure", "runtime_drift", "noise", "partial", "quiet_failure"):
+        for variant in ("complete", "infrastructure", "lifecycle_test", "other_test", "benchmark_fixture",
+                        "runtime_drift", "noise", "partial", "quiet_failure"):
             with self.subTest(variant=variant), tempfile.TemporaryDirectory() as directory:
                 output = Path(directory) / "evidence"
                 observer = mock.Mock()
@@ -158,6 +161,12 @@ class COWSuccessorDiagnosticTests(unittest.TestCase):
                         if variant == "infrastructure":
                             text = (".github/scripts/test_treedb_ci_contract.py\n"
                                     ".github/workflows/treedb-vacuum-m0.yml\n")
+                        elif variant == "lifecycle_test":
+                            text = "TreeDB/cow_small_budget_recovery_test.go\n"
+                        elif variant == "other_test":
+                            text = "TreeDB/cow_public_contract_test.go\n"
+                        elif variant == "benchmark_fixture":
+                            text = diagnostic.HARNESS + "\n"
                         elif variant == "runtime_drift":
                             text = "TreeDB/caching/cow_read.go\n"
                     elif argv[:3] == ["git", "worktree", "add"]:
@@ -190,15 +199,15 @@ class COWSuccessorDiagnosticTests(unittest.TestCase):
                             side_effect=RuntimeError("quiet unavailable") if variant == "quiet_failure" else None):
                     status = diagnostic.run(ROOT, output, diagnostic.BASELINE, "1" * 40)
                 result = json.loads((output / "summary.json").read_text())
-                refused = variant in ("quiet_failure", "runtime_drift")
-                passed = variant in ("complete", "infrastructure")
+                refused = variant in ("quiet_failure", "runtime_drift", "other_test", "benchmark_fixture")
+                passed = variant in ("complete", "infrastructure", "lifecycle_test")
                 expected_rows = 0 if refused else 4 if variant == "partial" else 60
                 self.assertEqual(result["retained_rows"], expected_rows)
                 self.assertEqual(result["verdict"], "PASS" if passed else "NULL")
                 self.assertEqual(status, 0 if passed else 1)
                 self.assertEqual(result["product_guard_available"], passed)
                 self.assertEqual(observer.observe.call_count, 0 if refused else 1 if variant == "partial" else 6)
-                if variant == "runtime_drift":
+                if variant in ("runtime_drift", "other_test", "benchmark_fixture"):
                     self.assertIn("candidate changed frozen runtime", result["error"])
                     continue
                 cpu = json.loads((output / "cpu.json").read_text())

@@ -37,6 +37,9 @@ CELLS = [BENCHMARK + "/" + cell for pointer in ("false", "true") for cell in (
 ORDER = [(pair, revision) for pair in range(PAIRS) for revision in
          (("baseline", "candidate") if pair % 2 == 0 else ("candidate", "baseline"))]
 ALLOWED_CHANGES = {
+    # This public lifecycle test is outside the ./TreeDB/mvcc benchmark binary.
+    # Its maintenance fencing does not change the frozen workload or runtime.
+    "TreeDB/cow_small_budget_recovery_test.go",
     "scripts/cow_successor_workspace_diagnostic.py",
     ".github/scripts/test_cow_successor_workspace_diagnostic.py",
     ".github/scripts/test_treedb_ci_contract.py",
