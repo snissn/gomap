@@ -424,6 +424,20 @@ func TestCOWOrderedDurableGroupStableImageAtAcknowledgement(t *testing.T) {
 				t.Fatalf("acknowledged stable image rejected: %+v %v", result, err)
 			}
 			defer closeReopened()
+			defer func() {
+				if !t.Failed() {
+					return
+				}
+				trace := stable.Trace()
+				if len(trace) > 20 {
+					trace = trace[len(trace)-20:]
+				}
+				t.Logf("durable ACK recovery diagnostic: applied=%d baseline=%d commit=%d command_syncs=%d meta_syncs=%d stable=%s trace_tail=%q", result.AppliedLSN, baselineLSN, result.CommitSeq, commandSyncs, metaSyncs, stable.StableFingerprint(), trace)
+				for _, version := range physical {
+					value, revision, err := reopened.GetVersioned(version.key)
+					t.Logf("durable ACK physical diagnostic: key=%x length=%d want_length=%d revision=%d want_revision=%d equal=%t err=%v", version.key, len(value), len(version.value), revision, version.revision, bytes.Equal(value, version.value), err)
+				}
+			}()
 			if value, err := reopened.Get([]byte("seed")); err != nil || string(value) != "baseline" {
 				t.Fatalf("baseline after stable reopen: %q, %v", value, err)
 			}
