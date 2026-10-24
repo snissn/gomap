@@ -46,7 +46,7 @@ ordinary ACK class. Neither class requires a backend tree flush or checkpoint.
 
 ## Explicit immutable COW cache ordering
 
-Selecting `MemtableMode="cow_btree"` changes cached installation, not the durable
+Selecting `MemtableMode="cow_btree"` or `"cow_ordered"` changes cached installation, not the durable
 return boundary above. It prepares every changed shard and the complete cut
 before append. The existing intent encodes canonical RID/revision operations
 and captures its dependency closure; a pre-append finalizer validates the staged
@@ -72,8 +72,10 @@ flush receipts, checkpoint handoff and `no_wal_fast` explicit sync.
 public SetSync (including singleton MVCC put/tombstone)
   -> append any persistent value-log record without fsync
   -> append one point command frame containing the full key/value bytes
-  -> sync the recoverable command-WAL prefix and any prior dependency debt
-  -> publish the inline value or persistent pointer to the cached memtable
+  -> install the complete prepared COW cut, when selected
+  -> capture the shared epoch after dependency-before-marker ordering
+  -> sync its exact recoverable command-WAL prefix outside append gates
+  -> complete ordered mutable-cache publication, when selected
   -> return nil
 ```
 
@@ -91,15 +93,18 @@ An error from an attempted point write is returned, never retried as a batch.
 public Batch.WriteSync
   -> cached preflight / inline entry preparation
   -> append one RawKVBatch command frame
-  -> flush command writer buffers
-  -> command-WAL file Sync
-  -> publish entries to cached memtables and reset the batch
-  -> return nil
+  -> install the complete prepared COW cut, when selected
+  -> capture the shared epoch and flush complete command bytes
+  -> command-WAL file Sync outside append gates
+  -> complete ordered mutable-cache publication, when selected
+  -> reset the batch and return nil
 ```
 
-There is one logical command-WAL sync and one actual command-WAL file-sync hook
-for this operation when no segment rotation occurs. Directory sync is a segment
-creation/rotation concern, not a per-operation durability barrier.
+Without segment rotation, each captured epoch has one physical command-WAL
+sync. An idle singleton uses one mutation frame; a collected relaxed participant
+prefix needs one additional durable barrier frame. Concurrent requests share
+that epoch's synchronization. Directory sync belongs to segment creation and
+rotation.
 
 ### Bounded materialized pointer-backed dirty `WriteSync`
 
@@ -115,10 +120,11 @@ public Batch.WriteSync
   -> validate/read each pointer RID
   -> encode each RID plus its exact logical bytes in RawKVBatchV2
   -> append one RawKVBatch command frame
-  -> flush command writer buffers
-  -> command-WAL file Sync
-  -> publish pointers to cached memtables and reset the batch
-  -> return nil
+  -> install the complete prepared COW cut, when selected
+  -> capture the shared epoch and flush complete command bytes
+  -> command-WAL file Sync outside append gates
+  -> complete ordered mutable-cache publication, when selected
+  -> reset the batch and return nil
 ```
 
 This path has one durable barrier: the command-WAL file sync. Recovery scans the
@@ -144,11 +150,18 @@ the append could cross a configured value-log segment boundary, the whole batch
 retains the external-reference path:
 
 ```text
-append value-log records -> sync exact producer closure -> encode SetRID
--> sync command WAL -> publish pointers
+idle:   append/flush values -> encode SetRID -> sync exact producer closure
+        -> append durable mutation -> install complete COW cut, when selected
+        -> capture/sync command WAL -> finish publication and ACK
+queued: append/flush values -> encode SetRID -> append relaxed participant
+        -> install complete COW cut, when selected
+        -> epoch syncs exact closure -> appends durable prefix marker
+        -> capture/sync command WAL -> finish publication and ACK
 ```
 
-The fallback keeps `ExternalRefFenceV1`, exact stable dependency handles,
+An idle captured-durable mutation orders its producer closure before its own
+canonical append; queued participants defer that ordering to the shared epoch's
+terminal marker. The fallback keeps `ExternalRefFenceV1`, exact stable dependency handles,
 rotation/old-segment handling, pending-debt barriers, and GC/rewrite protection.
 A mixed V2 payload may contain both operations: only `SetRID` contributes to the
 external RID fence and producer closure. Malformed or unreadable pointers fail
@@ -162,9 +175,9 @@ unsynced Write                         following WriteSync
 append/flush external bytes, if any   materialize its external bytes, if any
 append/flush command frame      --->  order/sync required value-log lanes
 publish to memtable                    append its command frame
-return                                 command-WAL file Sync
-                                       publish to memtable
-                                       return nil
+return                                 install complete COW cut, when selected
+                                       capture / command-WAL file Sync
+                                       finish ordered publication and return nil
 ```
 
 File sync applies to the file contents preceding the boundary, not only the
