@@ -143,6 +143,16 @@ func loadFixedWAL(file *os.File) (*fixedWAL, []byte, error) {
 		start := int64(binary.LittleEndian.Uint64(probe[32:40]))
 		length := int64(binary.LittleEndian.Uint64(probe[40:48]))
 		end := int64(binary.LittleEndian.Uint64(probe[48:56]))
+		// Check bounds with subtraction before alignment/addition or allocation.
+		// A valid witness CRC is integrity evidence, not a trusted memory size.
+		remaining := capacity - pos
+		if remaining < 2*fixedWALWitnessSize || length <= 0 || length > remaining-2*fixedWALWitnessSize || uint64(length) > uint64(^uint(0)>>1) {
+			return nil, nil, ErrCorrupt
+		}
+		footerOffset := fixedWALAlign(pos + fixedWALWitnessSize + length)
+		if footerOffset > capacity-fixedWALWitnessSize {
+			return nil, nil, ErrCorrupt
+		}
 		if start != state.logical || length <= 0 || end != fixedWALAlign(pos+fixedWALWitnessSize+length)+fixedWALWitnessSize || end > capacity || end < pos {
 			return nil, nil, ErrCorrupt
 		}

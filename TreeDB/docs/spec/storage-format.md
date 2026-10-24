@@ -4381,11 +4381,16 @@ fully syncs the initialized file, and persists its namespace before appending
 frames. A sparse truncate or unwritten preallocation is insufficient.
 
 Each immutable extent contains one unchanged command frame, with 96-byte start
-and end witnesses. Extents start on 64-byte boundaries. Witnesses bind the
+and end witnesses. Padding places each end witness on a 64-byte boundary;
+subsequent starts follow the preceding 96-byte end witness. Witnesses bind the
 container identity, physical start/end, logical stream start/length, first/last
 LSN, data checksum, and their own checksum. Padding is zero. The end witness is
 redundant framing evidence; it does not establish a durable LSN. Appending a
-successor never overwrites a predecessor's data or positive end witness.
+successor never overwrites a predecessor's data or positive end witness. This
+uses the existing POSIX sync model: completed sync persists preceding writes,
+and a later write can tear only its own byte range. Extents with this padding
+can share a physical sector/page; this format does not claim protection against
+sector-wide collateral damage to adjacent acknowledged bytes.
 
 Opening scans the complete reserve and validates occupied extents. Zero bytes
 at a candidate boundary do not establish EOF until all remaining capacity is
