@@ -511,7 +511,10 @@ func (group *publicCommandWALGroupCommit) runLeader(tdb *DB) {
 	group.mu.Lock()
 	group.initLocked()
 	group.initLeaderResourcesLocked()
-	immediate := group.pendingCount == 1 && group.pendingSingleton == group.nextTicket && group.durableIntents.Load() == 0
+	// An epoch containing only relaxed followers needs ordered completion,
+	// not a collection delay or a new physical durability certificate.
+	relaxedOnly := group.pendingCommits == 0 && len(group.pendingForceTickets) == 0
+	immediate := relaxedOnly || (group.pendingCount == 1 && group.pendingSingleton == group.nextTicket && group.durableIntents.Load() == 0)
 	delay := group.delay
 	wake := group.wake
 	timer := group.timer
@@ -530,8 +533,8 @@ func (group *publicCommandWALGroupCommit) runLeader(tdb *DB) {
 	if leaderWaitHook != nil {
 		leaderWaitHook()
 	}
-	// An idle singleton needs no timer. A successor epoch always keeps the
-	// maintained collection window so COW preparation does not fragment it.
+	// An idle singleton or relaxed-only epoch needs no timer. Durable successor
+	// epochs keep the collection window so COW preparation does not fragment them.
 	if !immediate {
 		select {
 		case <-timer.C:
@@ -570,6 +573,21 @@ func (group *publicCommandWALGroupCommit) runLeader(tdb *DB) {
 	group.mu.Unlock()
 	if batchCount == 0 {
 		group.mu.Lock()
+		group.leaderActive = false
+		group.cond.Broadcast()
+		group.mu.Unlock()
+		tdb.commandWALPublicPublishMu.Unlock()
+		tdb.commandWALPublicOperationGate.Unlock()
+		return
+	}
+	if batchCommits == 0 && len(batchForceTickets) == 0 {
+		group.mu.Lock()
+		if group.terminalErr != nil {
+			group.completedTicket = group.nextTicket
+		} else {
+			group.completedTicket = batchLastTicket
+		}
+		group.bypassRelaxedNoGroup.Add(uint64(batchCount))
 		group.leaderActive = false
 		group.cond.Broadcast()
 		group.mu.Unlock()
