@@ -1678,12 +1678,18 @@ func (b *commandWALPublicBatch) writeCOW(explicitSync, commandSync bool) error {
 		}
 		return b.inner.Write()
 	}
-	inner, ok := b.inner.(*caching.Batch)
-	if !ok {
+	if _, ok := b.inner.(*caching.Batch); !ok {
 		return caching.ErrCOWUnsupported
 	}
+	err := b.prepareCOWWrite(commandSync)
+	return b.completeCOWWrite(err)
+}
+
+// prepareCOWWrite establishes canonical append order and installs the complete
+// private COW postimage. It performs no final captured WAL synchronization.
+func (b *commandWALPublicBatch) prepareCOWWrite(commandSync bool) error {
+	inner := b.inner.(*caching.Batch)
 	b.cowState.commandSync = commandSync
-	defer func() { b.cowState.registration = publicCommandWALRegistration{} }()
 	// Announce durability before cache writer admission. A serialized callback
 	// must not make a concurrent cohort look like a sequence of idle writers.
 	var err error
@@ -1694,12 +1700,20 @@ func (b *commandWALPublicBatch) writeCOW(explicitSync, commandSync bool) error {
 		}
 		err = inner.WriteAfterCommandWALAppendWithPreparedRevision(commandSync, b.registerCOWAppend)
 	}()
+	return err
+}
+
+// Both synchronous calls and the bounded database completer use the same ACK
+// and publication owner. A future observer never owns this transition.
+func (b *commandWALPublicBatch) completeCOWWrite(err error) error {
+	inner := b.inner.(*caching.Batch)
+	defer func() { b.cowState.registration = publicCommandWALRegistration{} }()
 	publication := b.cowState.registration.publicCommandWALPublication
 	if err == nil {
 		publication, err = b.db.awaitPublicCommandWAL(b.cowState.registration, nil, nil)
 	}
 	b.db.finishPublicCommandWALGroupPublication(publication, err)
-	inner.CompleteCOWAcknowledgement(b.db.txnOwner, commandSync, err)
+	inner.CompleteCOWAcknowledgement(b.db.txnOwner, b.cowState.commandSync, err)
 	if err != nil {
 		return err
 	}

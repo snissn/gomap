@@ -31,7 +31,7 @@ func TestDurabilityProfilePublicEntrypointInventory(t *testing.T) {
 		"LeafGenerationPack", "LeafGenerationPackFromPlan", "LeafGenerationPackRunOnce",
 		"LeafGenerationPlan", "MaintenancePhase", "NewBatch", "NewBatchWithSize",
 		"NativeSemanticBackend", "NewConditionalTxn", "NewConditionalTxnWithSnapshot", "NewMVCCAdmission", "PreflightMVCCPrune", "PrepareMVCCPrune", "Print", "ResolvedProfile",
-		"ReverseIterator", "SeekGE", "SeekGEVersionRange", "Set", "SetMaintenancePhase", "SetPointWithMVCCInput", "SetNativeSemanticPublication", "SetSync", "Stats", "SupportsLogicalMVCC", "SupportsMVCCReadCut",
+		"ReverseIterator", "SeekGE", "SeekGEVersionRange", "Set", "SetMaintenancePhase", "SetPointWithMVCCInput", "SetNativeSemanticPublication", "SetSync", "Stats", "SubmitLogicalMVCC", "SupportsLogicalMVCC", "SupportsMVCCReadCut",
 		"Update", "UpdateSync", "VacuumIndexOnline", "VacuumOnlineStats", "ValueLogGC", "ValueLogRewriteOnline",
 	}
 	slices.Sort(want)
@@ -90,6 +90,13 @@ func TestDurabilityProfilePublicEntrypointInventory(t *testing.T) {
 		"producer.StageLogicalMVCC(mutations, input)", "b.WriteSync()", "b.Write()", "b.Close()",
 	} {
 		profileInventoryRequireBody(t, logicalBodies, "(*DB).CommitLogicalMVCC", fragment)
+	}
+	for _, fragment := range []string{
+		"o.reserve(db)", "o.submitMu.Lock()", "db.beginPublicOperation()", "db.cached.SupportsLogicalMVCC()",
+		"input.Matches(mutations)", "b.StageLogicalMVCC(mutations, input)", "b.prepareCOWWrite(true)",
+		"o.work <- commitCompletionWork", "db.CommitLogicalMVCC(mutations, input, syncWrite)",
+	} {
+		profileInventoryRequireBody(t, logicalBodies, "(*DB).SubmitLogicalMVCC", fragment)
 	}
 	for _, fragment := range []string{"b.cowState.batchError", "b.isCOW()", "b.preparePayloadForAppend()", "producer.StageLogicalMVCC(mutations, input)"} {
 		profileInventoryRequireBody(t, batchBodies, "(*commandWALPublicBatch).StageLogicalMVCC", fragment)

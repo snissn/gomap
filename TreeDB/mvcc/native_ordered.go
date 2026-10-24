@@ -15,10 +15,10 @@ type logicalMVCCWriter interface {
 	CommitLogicalMVCC([]mvccadmission.LogicalMutation, mvccadmission.LogicalInput, bool) error
 }
 
-// commitLogicalGroups preserves CommitGroupAt's validation order while passing
+// logicalGroupMutations preserves CommitGroupAt's validation order while passing
 // typed operands to the existing DB producer. All key/duplicate validation
 // precedes discard-floor I/O. No physical keys or value envelopes are allocated.
-func (s *Store) commitLogicalGroups(writer logicalMVCCWriter, groups []CommitGroup, total int, mode CommitMode) error {
+func logicalGroupMutations(groups []CommitGroup, total int) ([]mvccadmission.LogicalMutation, error) {
 	mutations := make([]mvccadmission.LogicalMutation, 0, total)
 	type identity struct {
 		key       string
@@ -33,12 +33,12 @@ func (s *Store) commitLogicalGroups(writer logicalMVCCWriter, groups []CommitGro
 		for keyIndex := range group.Mutations {
 			m := &group.Mutations[keyIndex]
 			if _, err := mvcckey.EncodedLen(m.Key); err != nil {
-				return fmt.Errorf("%w at group index %d key index %d: %w", ErrInvalidKey, groupIndex, keyIndex, err)
+				return nil, fmt.Errorf("%w at group index %d key index %d: %w", ErrInvalidKey, groupIndex, keyIndex, err)
 			}
 			if seen != nil {
 				id := identity{key: string(m.Key), timestamp: group.Timestamp}
 				if _, exists := seen[id]; exists {
-					return fmt.Errorf("%w at group index %d key index %d", ErrDuplicateKey, groupIndex, keyIndex)
+					return nil, fmt.Errorf("%w at group index %d key index %d", ErrDuplicateKey, groupIndex, keyIndex)
 				}
 				seen[id] = struct{}{}
 			}
@@ -46,6 +46,14 @@ func (s *Store) commitLogicalGroups(writer logicalMVCCWriter, groups []CommitGro
 				Key: m.Key, Value: m.Value, Timestamp: group.Timestamp, Delete: m.Delete,
 			})
 		}
+	}
+	return mutations, nil
+}
+
+func (s *Store) commitLogicalGroups(writer logicalMVCCWriter, groups []CommitGroup, total int, mode CommitMode) error {
+	mutations, err := logicalGroupMutations(groups, total)
+	if err != nil {
+		return err
 	}
 	// The selected producer must provide atomic group publication. Store keeps
 	// its existing admitted floor exclusion through that synchronous call.

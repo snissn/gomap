@@ -64,6 +64,15 @@ No command payload is re-encoded for COW. The
 [COW publication contract](cow-cache-publication.md) also covers accepted backend
 flush receipts, checkpoint handoff and `no_wal_fast` explicit sync.
 
+`mvcc.Store.SubmitCommitGroupAt` exposes this split for native logical COW
+durable aggregates. Submit owns preparation/append/install; one bounded DB-owned
+completer owns the existing captured-prefix wait, final COW acknowledgement,
+batch cleanup and admitted-floor/lifecycle lease release. `CommitFuture.Wait`
+and `Done` observe the final ACK and never drive progress. Close drains accepted
+work even when observation is abandoned. Earlier dependency/rotation I/O can
+still occur during Submit; only final captured synchronization is transferred.
+Legacy/relaxed routes complete synchronously. See [API contracts](contracts.md).
+
 ## Current ordered paths
 
 ### Durable singleton `SetSync`

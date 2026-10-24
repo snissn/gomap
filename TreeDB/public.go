@@ -170,6 +170,7 @@ type DB struct {
 	templateDB                           *DB
 	writePath                            writePathInfo
 	lifecycleMu                          sync.RWMutex
+	commitCompletions                    commitCompletionOwner
 	commandWALCached                     bool
 	commandWALPointMaxPayloadBytes       int64
 	commandWALPendingMu                  sync.Mutex
@@ -1902,6 +1903,9 @@ func (db *DB) Close() error {
 	if err := db.ownedCloseGuard.CheckClose(); err != nil {
 		return err
 	}
+	// Accepted asynchronous publications own lifecycle read leases. Drain their
+	// database-owned completer before maintenance or the exclusive Close gate.
+	db.commitCompletions.close()
 	db.bgVac.deferredVectorBuildClosed.Store(true)
 	db.bgVac.Stop()
 	// A service finalizer also owns runMu while draining, checkpointing,
