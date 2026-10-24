@@ -818,7 +818,7 @@ func (db *DB) captureDurableValueLogResourcesWithLimitsV1(idx *indexGen, next pa
 	return db.captureDurableValueLogResourcesWithMetadataV1(idx, next, delta, exactPackedFileIDs, valueLogPublicationLocked, scanned, limits, metadata)
 }
 
-func (db *DB) captureDurableValueLogResourcesWithMetadataV1(idx *indexGen, next page.MetaPageBody, delta *valueLogRefDelta, exactPackedFileIDs map[uint32]struct{}, valueLogPublicationLocked bool, scanned *candidateValueLogRefCountsV1, limits *PreparedRootPublicationLimits, metadata *retainedalloc.Owner) (*rootpublication.StableResourceSet, error) {
+func (db *DB) captureDurableValueLogResourcesWithMetadataV1(idx *indexGen, next page.MetaPageBody, delta *valueLogRefDelta, exactPackedFileIDs map[uint32]struct{}, valueLogPublicationLocked bool, scanned *candidateValueLogRefCountsV1, limits *PreparedRootPublicationLimits, metadata *retainedalloc.Owner, reuse ...*rootpublication.StableResourceSet) (*rootpublication.StableResourceSet, error) {
 
 	if db.valueLogManager == nil {
 		return nil, nil
@@ -846,7 +846,7 @@ func (db *DB) captureDurableValueLogResourcesWithMetadataV1(idx *indexGen, next 
 	if err := db.requireDurableValueLogReferencesRegisteredV1(references); err != nil {
 		return nil, err
 	}
-	return db.captureRegisteredDurableValueLogResourcesWithMetadataV1(references, limits, metadata)
+	return db.captureRegisteredDurableValueLogResourcesWithMetadataV1(references, limits, metadata, reuse...)
 }
 
 // planOuterLeafBaseDependencyReuseV1 recognizes the common COW transition in
@@ -1285,9 +1285,9 @@ func (db *DB) captureDurableRootResourcesFromBaseWithRefCountsV1(idx *indexGen, 
 		for fileID := range exactPackedFileIDs {
 			delete(freshOuterLeafReferences, fileID)
 		}
-		fresh, err = db.captureRegisteredDurableValueLogResourcesWithMetadataV1(freshOuterLeafReferences, limits, metadata)
+		fresh, err = db.captureRegisteredDurableValueLogResourcesWithMetadataV1(freshOuterLeafReferences, limits, metadata, base)
 	} else {
-		fresh, err = db.captureDurableValueLogResourcesWithMetadataV1(idx, next, delta, exactPackedFileIDs, valueLogPublicationLocked, scanned, limits, metadata)
+		fresh, err = db.captureDurableValueLogResourcesWithMetadataV1(idx, next, delta, exactPackedFileIDs, valueLogPublicationLocked, scanned, limits, metadata, base)
 	}
 	if err != nil {
 		return nil, err
@@ -1367,7 +1367,7 @@ func (db *DB) captureRegisteredDurableValueLogResourcesWithLimitsV1(references m
 	return db.captureRegisteredDurableValueLogResourcesWithMetadataV1(references, limits, nil)
 }
 
-func (db *DB) captureRegisteredDurableValueLogResourcesWithMetadataV1(references map[uint32]struct{}, limits *PreparedRootPublicationLimits, metadata *retainedalloc.Owner) (result *rootpublication.StableResourceSet, retErr error) {
+func (db *DB) captureRegisteredDurableValueLogResourcesWithMetadataV1(references map[uint32]struct{}, limits *PreparedRootPublicationLimits, metadata *retainedalloc.Owner, reuse ...*rootpublication.StableResourceSet) (result *rootpublication.StableResourceSet, retErr error) {
 	defer db.finishResourceCapture(&result, &retErr)
 	if db == nil || db.valueLogManager == nil || len(references) == 0 {
 		return nil, nil
@@ -1432,11 +1432,29 @@ func (db *DB) captureRegisteredDurableValueLogResourcesWithMetadataV1(references
 			logicalLane = "db/outer-leaf-raw"
 			reachability = rootpublication.ReachabilityOuterLeafRawPointer
 		}
-		token, err := db.valueLogManager.StableResourceToken(fileID, valuelog.StableResourceRegistration{
-			MetadataOwner: metadata, Kind: kind, LogicalLane: logicalLane,
-			Generation: uint64(fileID), DiagnosticPath: diagnosticPath,
-			Reachability: reachability,
-		})
+		var token *rootpublication.StableResourceToken
+		if kind == rootpublication.ResourceOuterLeafLog && len(reuse) != 0 && reuse[0] != nil && reuse[0].MetadataOwner() == metadata {
+			identity, registered := file.RegisteredStableIdentity()
+			if registered {
+				info, statErr := file.File.Stat()
+				if statErr != nil {
+					return nil, statErr
+				}
+				if info.Size() >= 0 {
+					token, err = rootpublication.CloneUnchangedRawLeafCapture(reuse[0], identity, file.RegisteredParentIdentity(), logicalLane, strconv.FormatUint(uint64(fileID), 10), diagnosticPath, uint64(fileID), uint64(info.Size()))
+					if err != nil {
+						return nil, err
+					}
+				}
+			}
+		}
+		if token == nil {
+			token, err = db.valueLogManager.StableResourceToken(fileID, valuelog.StableResourceRegistration{
+				MetadataOwner: metadata, Kind: kind, LogicalLane: logicalLane,
+				Generation: uint64(fileID), DiagnosticPath: diagnosticPath,
+				Reachability: reachability,
+			})
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -2077,18 +2095,19 @@ func (db *DB) poisonDurableRootCandidateV1(candidate *durableRootPublishCandidat
 }
 
 type durableRootStorageTransactionV1 struct {
-	installAuthority func() (bool, error) // Selected complete capsule authority replaces DATA META.
-	resources        *rootpublication.StableResourceSet
-	materialize      func() error
-	syncIndex        func() error
-	sink             freelist.AppendPageSink
-	target           uint64
-	meta             page.DurableMetaV1
-	syncMeta         func() error
-	dir              string
-	indexPath        string
-	beforeMetaWrite  func() error
-	beforeMetaSync   func() error
+	dependenciesCovered bool                 // exact completed parent proof, prepared by coordinator
+	installAuthority    func() (bool, error) // Selected complete capsule authority replaces DATA META.
+	resources           *rootpublication.StableResourceSet
+	materialize         func() error
+	syncIndex           func() error
+	sink                freelist.AppendPageSink
+	target              uint64
+	meta                page.DurableMetaV1
+	syncMeta            func() error
+	dir                 string
+	indexPath           string
+	beforeMetaWrite     func() error
+	beforeMetaSync      func() error
 }
 
 type stableResourceDependencySyncPhaseV1 uint8
@@ -2113,15 +2132,17 @@ func executeDurableRootStorageTransactionV1(tx durableRootStorageTransactionV1) 
 		if err := tx.resources.FlushThrough(); err != nil {
 			return false, fmt.Errorf("flush durable-root external dependencies: %w", err)
 		}
-		phase, err := syncStableResourceDependenciesV1(tx.resources, tx.dir, tx.resources.SyncThrough, nil)
-		if err != nil {
-			switch phase {
-			case stableResourceDependencyObserveV1:
-				return false, fmt.Errorf("observe durable-root external dependencies: %w", err)
-			case stableResourceDependencySyncV1:
-				return false, fmt.Errorf("sync durable-root external dependencies: %w", err)
-			default:
-				return false, err
+		if !tx.dependenciesCovered {
+			phase, err := syncStableResourceDependenciesV1(tx.resources, tx.dir, tx.resources.SyncThrough, nil)
+			if err != nil {
+				switch phase {
+				case stableResourceDependencyObserveV1:
+					return false, fmt.Errorf("observe durable-root external dependencies: %w", err)
+				case stableResourceDependencySyncV1:
+					return false, fmt.Errorf("sync durable-root external dependencies: %w", err)
+				default:
+					return false, err
+				}
 			}
 		}
 	}
