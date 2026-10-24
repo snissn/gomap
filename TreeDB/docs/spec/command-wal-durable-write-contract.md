@@ -256,6 +256,13 @@ admission ownership before physical sync. Postassignment errors or selector pani
 remain ambiguous and poison later mutation. Point commands, entry scans and COW
 retain their existing admission routes; this does not optimize those paths.
 
+The acquisition and capture helpers carry the already assigned LSN solely to
+distinguish ambiguous postappend failures from preappend refusals. A terminal
+error or panic poisons writes before releasing any retained append leases. A
+failed unlocked drain publishes poison as soon as its error or panic is known; work completed
+while that drain was still pending cannot be rejected retroactively. The original
+error is preserved, and preappend admission refusals remain nonpoisoning.
+
 An idle captured-durable mutation orders all preceding dependencies before
 emitting its existing V2 durable class, but does not perform its own WAL sync.
 Queued durable participants append relaxed-class frames and retain exact debt

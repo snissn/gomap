@@ -72,6 +72,9 @@ while retaining the final complete publisher check. Pending publishers use the
 original unlocked drain and capture loop for that same assigned mutation.
 Capture still fixes the actual dependency closure and current journal file;
 postassignment uncertainty poisons writes rather than granting a durable ACK.
+Terminal failure publishes poison before retained append leases release, or
+immediately when an unlocked drain returns its failure. Preappend refusals retain
+their existing behavior.
 
 For `no_wal_fast`, cached `Batch.WriteSync` covers the batch and earlier queued
 writes even when it bypasses the cache or stores USER leaves in the index. A
