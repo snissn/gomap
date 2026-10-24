@@ -729,11 +729,12 @@ func (db *DB) commandWALActiveSegmentSnapshot() (path string, bytes int64) {
 	return db.commandJournal.ActiveSegmentSnapshot()
 }
 
-// CommandWALBytes reports command-WAL bytes currently present on disk, plus any
-// active command frames buffered by the open writer. It intentionally counts
+// CommandWALBytes reports logical command-stream bytes, including any active
+// command frames buffered by the open writer. It intentionally counts
 // covered non-active segments until cleanup removes them so byte-pressure
 // checkpointing can bound total command-WAL growth rather than only the active
-// file.
+// file. Initialized physical reserve is not command-stream debt; cleanup
+// footprint counters separately report the physical file bytes reclaimed.
 func (db *DB) CommandWALBytes() int64 {
 	if db == nil || !db.commandWAL {
 		return 0
@@ -998,6 +999,7 @@ func (db *DB) cleanupCommandWALCoveredSegmentsV1() (retErr error) {
 	decisions = proof.segments
 	removed := uint64(0)
 	removedBytes := uint64(0)
+	removedLogicalBytes := int64(0)
 	scannedBytes := uint64(0)
 	scannedFrames := uint64(0)
 	covered := uint64(0)
@@ -1046,6 +1048,7 @@ func (db *DB) cleanupCommandWALCoveredSegmentsV1() (retErr error) {
 		if decision.Size > 0 {
 			removedBytes += uint64(decision.Size)
 		}
+		removedLogicalBytes += decision.LogicalSize
 	}
 	if scannedBytes > 0 {
 		db.commandWALCleanupScanBytes.Add(scannedBytes)
@@ -1070,8 +1073,8 @@ func (db *DB) cleanupCommandWALCoveredSegmentsV1() (retErr error) {
 		db.commandWALCleanupUnlinkedPending.Add(removed)
 		db.commandWALCleanupBytesPending.Add(removedBytes)
 		db.commandWALCleanupNamespaceDirty.Store(true)
-		if removedBytes > 0 {
-			db.commandWALClosedBytes.Add(-int64(removedBytes))
+		if removedLogicalBytes > 0 {
+			db.commandWALClosedBytes.Add(-removedLogicalBytes)
 		}
 		if err != nil {
 			// At least one unlink completed, but cleanup stopped before the

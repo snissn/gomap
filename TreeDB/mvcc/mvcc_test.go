@@ -2,6 +2,7 @@ package mvcc
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"math"
@@ -463,16 +464,20 @@ func TestCommitAtDurableProcessCrashRecovery(t *testing.T) {
 	}
 	incompleteSuffixLSN := frames[len(frames)-1].LSN + 1
 	payload, err := commitlog.EncodeRawKVBatchPayload([]commitlog.RawKVOperation{{
-		Op:  commitlog.RawKVOpDelete,
-		Key: []byte("incomplete-relaxed-suffix"),
+		Op:    commitlog.RawKVOpSet,
+		Key:   []byte("incomplete-relaxed-suffix"),
+		Value: []byte("must-be-discarded"),
 	}})
 	if err != nil {
 		t.Fatalf("encode incomplete relaxed suffix payload: %v", err)
 	}
-	fixturePath := filepath.Join(t.TempDir(), "incomplete-relaxed.log")
-	fixture, err := commitlog.NewWriter(fixturePath)
+	// Append through the production writer after the crashed DB owner exits.
+	// A fixed container's physical EOF is reserved capacity, so O_APPEND would
+	// manufacture unrelated corruption rather than a classifiable torn frame.
+	suffixPath := segments[len(segments)-1]
+	fixture, err := commitlog.NewWriter(suffixPath)
 	if err != nil {
-		t.Fatalf("create incomplete relaxed suffix fixture: %v", err)
+		t.Fatalf("open incomplete relaxed suffix writer: %v", err)
 	}
 	if err := fixture.AppendCommandV2(commitlog.CommandEnvelope{
 		Version:         commitlog.CommandFrameVersionV2,
@@ -487,32 +492,59 @@ func TestCommitAtDurableProcessCrashRecovery(t *testing.T) {
 		t.Fatalf("append incomplete relaxed suffix fixture: %v", err)
 	}
 	if err := fixture.Close(); err != nil {
-		t.Fatalf("close incomplete relaxed suffix fixture: %v", err)
+		t.Fatalf("flush incomplete relaxed suffix fixture: %v", err)
 	}
-	record, err := os.ReadFile(fixturePath)
+	complete, err := commitlog.ScanCommandFrames(suffixPath, commitlog.Options{})
+	if err != nil || len(complete) == 0 {
+		t.Fatalf("scan complete relaxed suffix fixture: frames=%d err=%v", len(complete), err)
+	}
+	last := complete[len(complete)-1]
+	if last.LSN != incompleteSuffixLSN || last.DurabilityClass != commitlog.CommandDurabilityRelaxed {
+		t.Fatalf("suffix identity/class=%+v", last)
+	}
+	image, err := os.ReadFile(suffixPath)
 	if err != nil {
 		t.Fatalf("read incomplete relaxed suffix fixture: %v", err)
 	}
-	const classifiablePrefixBytes = 8 + 56
-	if len(record) <= classifiablePrefixBytes {
-		t.Fatalf("incomplete relaxed suffix fixture length=%d, want >%d", len(record), classifiablePrefixBytes)
+	if len(image) < 4096 || string(image[:6]) != "TDBWAL" {
+		t.Fatal("crash fixture did not select the production fixed container")
 	}
-	tail, err := os.OpenFile(segments[len(segments)-1], os.O_WRONLY|os.O_APPEND, 0)
-	if err != nil {
-		t.Fatalf("open crash WAL tail: %v", err)
+	const witnessBytes, classifiablePrefixBytes = 96, 8 + 56
+	found := false
+	for off := int64(4096); off+witnessBytes < int64(len(image)) && string(image[off:off+6]) == "TDBEXT"; {
+		length := int64(binary.LittleEndian.Uint64(image[off+40 : off+48]))
+		end := int64(binary.LittleEndian.Uint64(image[off+48 : off+56]))
+		body := image[off+witnessBytes : off+witnessBytes+length]
+		if bytes.Contains(body, []byte("incomplete-relaxed-suffix")) {
+			if found || length <= classifiablePrefixBytes {
+				t.Fatal("ambiguous incomplete relaxed suffix extent")
+			}
+			// Preserve the valid extent start and stable V2 identity, modeling
+			// an interrupted body write into the initialized zero reserve.
+			clear(image[off+witnessBytes+classifiablePrefixBytes : off+witnessBytes+length])
+			clear(image[end-witnessBytes : end])
+			found = true
+		}
+		off = end
 	}
-	if _, err := tail.Write(record[:classifiablePrefixBytes]); err != nil {
-		_ = tail.Close()
-		t.Fatalf("append classifiable incomplete relaxed suffix: %v", err)
+	if !found {
+		t.Fatal("did not locate relaxed suffix extent")
 	}
-	if err := tail.Close(); err != nil {
-		t.Fatalf("close crash WAL tail: %v", err)
+	if err := os.WriteFile(suffixPath, image, 0600); err != nil {
+		t.Fatalf("write interrupted relaxed suffix: %v", err)
 	}
 	db := openTestDB(t, dir, treedb.DurabilityDurable)
 	defer db.Close()
 	store := New(db)
 	requireResult(t, store, []byte("a"), 31, Present, 31, []byte("A"))
 	requireResult(t, store, []byte("b"), 31, Tombstone, 31, nil)
+	if got, err := db.Get([]byte("incomplete-relaxed-suffix")); err != nil || got != nil {
+		t.Fatalf("discarded relaxed suffix=%q err=%v", got, err)
+	}
+	if err := store.CommitAt(32, []Mutation{{Key: []byte("c"), Value: []byte("after-repair")}}, CommitDurable); err != nil {
+		t.Fatalf("CommitAt after suffix repair: %v", err)
+	}
+	requireResult(t, store, []byte("c"), 32, Present, 32, []byte("after-repair"))
 }
 
 func TestGetAtRandomizedOracle(t *testing.T) {

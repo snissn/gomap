@@ -13439,6 +13439,13 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	}
 	if len(segments) > 0 {
 		for _, seg := range segments {
+			// The backend owns external command WAL, including its initialized
+			// physical reserve. Its checkpoint byte hook accounts for logical
+			// debt; importing these files as cached redo would double-charge it
+			// and make an empty reserved segment trigger size maintenance.
+			if opts.ExternalCommandWAL && !seg.valueLog && commitlog.IsCommandSegmentName(filepath.Base(seg.path)) {
+				continue
+			}
 			l := db.valueLogLaneByID(seg.lane)
 			if l == nil {
 				if seg.valueLog {
