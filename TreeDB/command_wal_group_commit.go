@@ -139,7 +139,7 @@ func (tdb *DB) appendAndCaptureOrdinaryPublicCommandWAL(bytes int, preparedBytes
 	}()
 	appended := false
 	var err error
-	var waitStart, enqueued time.Time
+	var waitStart time.Time
 	func() {
 		if !tdb.commandWALPublicOperationGate.TryLock() {
 			return
@@ -193,7 +193,6 @@ func (tdb *DB) appendAndCaptureOrdinaryPublicCommandWAL(bytes int, preparedBytes
 				*groupWaitObserved = true
 			}
 			waitStart = time.Now()
-			enqueued = waitStart
 			group.captureGroup(tdb, &batch)
 		}
 	}()
@@ -209,12 +208,24 @@ func (tdb *DB) appendAndCaptureOrdinaryPublicCommandWAL(bytes int, preparedBytes
 	}
 
 	releaseIntent()
-	group.syncAndCompleteGroup(tdb, &batch)
+	ready, completionErr := group.syncAndCompleteGroup(tdb, &batch, publication.ticket)
 	// Completion retired this epoch; a successor may now own leaderActive.
 	captured = false
-	ticket, err := group.awaitRegisteredSince(tdb, publication.ticket, false, false, true, enqueued)
+	ticket := publication.ticket
+	var elapsed time.Duration
+	if ready {
+		err = completionErr
+		elapsed = group.observeWaitSince(waitStart)
+		if err != nil {
+			ticket = 0
+		}
+	} else {
+		// A previous publication or an installed wait hook still belongs to
+		// the original await path. The captured epoch is already synced.
+		ticket, elapsed, err = group.awaitRegisteredSince(tdb, ticket, false, false, true, waitStart)
+	}
 	if groupCommitWait != nil {
-		*groupCommitWait += time.Since(waitStart)
+		*groupCommitWait += elapsed
 	}
 	return publicCommandWALPublication{ticket: ticket}, err
 }
@@ -464,10 +475,11 @@ func (group *publicCommandWALGroupCommit) awaitRegistered(tdb *DB, ticket uint64
 	if group == nil || tdb == nil || tdb.backend == nil || ticket == 0 {
 		return 0, ErrClosed
 	}
-	return group.awaitRegisteredSince(tdb, ticket, leader, force, observeWait, time.Now())
+	ticket, _, err := group.awaitRegisteredSince(tdb, ticket, leader, force, observeWait, time.Now())
+	return ticket, err
 }
 
-func (group *publicCommandWALGroupCommit) awaitRegisteredSince(tdb *DB, ticket uint64, leader, force, observeWait bool, enqueued time.Time) (uint64, error) {
+func (group *publicCommandWALGroupCommit) awaitRegisteredSince(tdb *DB, ticket uint64, leader, force, observeWait bool, enqueued time.Time) (uint64, time.Duration, error) {
 	if leader {
 		group.runLeader(tdb)
 	}
@@ -499,15 +511,24 @@ func (group *publicCommandWALGroupCommit) awaitRegisteredSince(tdb *DB, ticket u
 	if hook != nil {
 		hook(ticket)
 	}
+	var elapsed time.Duration
 	if observeWait {
-		waitNs := uint64(time.Since(enqueued).Nanoseconds())
-		group.waitNsTotal.Add(waitNs)
-		publicCommandWALGroupAtomicMax(&group.waitNsMax, waitNs)
+		elapsed = group.observeWaitSince(enqueued)
 	}
 	if err != nil {
-		return 0, err
+		return 0, elapsed, err
 	}
-	return ticket, nil
+	return ticket, elapsed, nil
+}
+
+// One sample feeds both coordinator counters and the enclosing request phase.
+// The interval includes capture, physical sync, publication readiness and hooks.
+func (group *publicCommandWALGroupCommit) observeWaitSince(enqueued time.Time) time.Duration {
+	elapsed := time.Since(enqueued)
+	waitNs := uint64(elapsed.Nanoseconds())
+	group.waitNsTotal.Add(waitNs)
+	publicCommandWALGroupAtomicMax(&group.waitNsMax, waitNs)
+	return elapsed
 }
 
 func (group *publicCommandWALGroupCommit) initLocked() {
@@ -747,7 +768,7 @@ func (group *publicCommandWALGroupCommit) runLeader(tdb *DB) {
 	if batch.count == 0 || (batch.commits == 0 && len(batch.forceTickets) == 0) {
 		return
 	}
-	group.syncAndCompleteGroup(tdb, &batch)
+	group.syncAndCompleteGroup(tdb, &batch, 0)
 }
 
 func (group *publicCommandWALGroupCommit) detachPendingLocked() publicCommandWALCapturedGroup {
@@ -805,8 +826,11 @@ func (group *publicCommandWALGroupCommit) failPanickedLeader(tdb *DB) {
 	group.mu.Unlock()
 }
 
-// syncAndCompleteGroup runs after every public append gate is released.
-func (group *publicCommandWALGroupCommit) syncAndCompleteGroup(tdb *DB, batch *publicCommandWALCapturedGroup) {
+// syncAndCompleteGroup runs after every public append gate is released. A
+// nonzero ordinaryTicket belongs only to the fused ordinary, non-force caller.
+// Its original ACK predicate can be checked under this same completion lock;
+// generic and force callers retain awaitRegistered and its retryable errors.
+func (group *publicCommandWALGroupCommit) syncAndCompleteGroup(tdb *DB, batch *publicCommandWALCapturedGroup, ordinaryTicket uint64) (ready bool, err error) {
 	group.syncs.Add(1)
 	if batch.err == nil {
 		batch.barrier, batch.err = batch.target.Sync()
@@ -845,7 +869,11 @@ func (group *publicCommandWALGroupCommit) syncAndCompleteGroup(tdb *DB, batch *p
 	}
 	group.leaderActive = false
 	group.cond.Broadcast()
+	if ordinaryTicket != 0 && group.completedTicket >= ordinaryTicket && group.publishTicket == ordinaryTicket && group.testAfterWait == nil {
+		ready, err = true, group.terminalErr
+	}
 	group.mu.Unlock()
+	return ready, err
 }
 
 func (group *publicCommandWALGroupCommit) observeCompletedBatch(
