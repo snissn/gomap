@@ -3614,6 +3614,15 @@ func encodeExternalRefs(refs []ExternalRef) ([]byte, error) {
 		return nil, err
 	}
 	out := make([]byte, total)
+	putExternalRefs(out, refs)
+	return out, nil
+}
+
+// putExternalRefs emits a section whose length was checked before destination mutation.
+func putExternalRefs(out []byte, refs []ExternalRef) {
+	if len(refs) == 0 {
+		return
+	}
 	binary.LittleEndian.PutUint32(out[0:4], uint32(len(refs)))
 	off := 4
 	for i := range refs {
@@ -3629,7 +3638,6 @@ func encodeExternalRefs(refs []ExternalRef) ([]byte, error) {
 		copy(out[off:], ref.Path)
 		off += len(ref.Path)
 	}
-	return out, nil
 }
 
 func externalRefsEncodedLen(refs []ExternalRef) (int, error) {
@@ -3709,6 +3717,15 @@ func encodeCommandExtensions(exts []CommandExtension) ([]byte, error) {
 		return nil, err
 	}
 	out := make([]byte, total)
+	putCommandExtensions(out, exts)
+	return out, nil
+}
+
+// putCommandExtensions emits a section whose length was checked before destination mutation.
+func putCommandExtensions(out []byte, exts []CommandExtension) {
+	if len(exts) == 0 {
+		return
+	}
 	binary.LittleEndian.PutUint32(out[0:4], uint32(len(exts)))
 	off := 4
 	for i := range exts {
@@ -3720,7 +3737,6 @@ func encodeCommandExtensions(exts []CommandExtension) ([]byte, error) {
 		copy(out[off:], ext.Payload)
 		off += len(ext.Payload)
 	}
-	return out, nil
 }
 
 func commandExtensionsEncodedLen(exts []CommandExtension) (int, error) {

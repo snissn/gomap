@@ -1296,15 +1296,12 @@ func (j *CommandJournal) appendCommand(
 	if env.LSN != 0 {
 		return 0, errors.New("commitlog: command journal owns lsn assignment")
 	}
-	// Validate shape and payload before reserving, using a synthetic non-zero
-	// LSN. Writer.AppendCommand repeats encode validation with the actual
-	// reserved LSN before it writes bytes, so late LSN-sensitive validation
-	// still rolls the reservation back through the error path below.
+	// Validate shape/capacity before any rotation or reservation. A V2 plan
+	// can be reused only while its borrowed input has crossed no callback.
 	probe := env
 	probe.LSN = 1
 	if probe.Kind == CommandKindRawKVBatch && probe.Payload == nil {
-		// Nil RawKVBatch payloads are accepted as an explicit empty batch so
-		// callers can append a no-op frame without constructing payload bytes.
+		// Nil means an explicit empty batch, not a malformed empty payload.
 		payload, err := EncodeRawKVBatchPayload(nil)
 		if err != nil {
 			return 0, err
@@ -1313,11 +1310,19 @@ func (j *CommandJournal) appendCommand(
 		env.Payload = payload
 	}
 	v2 := probe.Version == CommandFrameVersionV2 || probe.DurabilityClass != 0
+	var plan commandFrameV2Encoding
 	var size int
-	if v2 {
+	prepareV2 := func() error {
 		var err error
-		size, err = commandFrameV2EncodedSize(probe)
+		plan, err = prepareCommandFrameV2Encoding(probe)
 		if err != nil {
+			return err
+		}
+		size = plan.total
+		return j.writer.commandFrameSizeError(size)
+	}
+	if v2 {
+		if err := prepareV2(); err != nil {
 			return 0, err
 		}
 	} else {
@@ -1329,32 +1334,53 @@ func (j *CommandJournal) appendCommand(
 		if err != nil {
 			return 0, err
 		}
-	}
-	// maxSegmentSize is the per-frame safety cap used by Writer.AppendCommand;
-	// segmentTargetBytes is the separate active file rotation target checked
-	// before LSN reservation.
-	if j.writer.maxSegmentSize > 0 && int64(size) > j.writer.maxSegmentSize {
-		return 0, ErrRecordTooLarge
-	}
-	if size > int(segmentLenMask) {
-		return 0, ErrRecordTooLarge
+		if err := j.writer.commandFrameSizeError(size); err != nil {
+			return 0, err
+		}
 	}
 	if beforeAppend != nil {
 		if err := beforeAppend(); err != nil {
 			return 0, err
 		}
+		// Even an existing hook can mutate backing bytes/extension headers.
+		// Revalidate and recheck capacity before rotation/LSN reservation.
+		if v2 {
+			if err := prepareV2(); err != nil {
+				return 0, err
+			}
+		}
 	}
 	syncRotation := v2 && probe.DurabilityClass == CommandDurabilityDurable
 	deferRotationNamespace := v2 && probe.DurabilityClass == CommandDurabilityRelaxed
+	previousSegment := j.segmentSeq
 	if err := j.maybeRotateForFrameLockedObservedWithNamespaceDebt(size, syncRotation, deferRotationNamespace, observe); err != nil {
 		return 0, err
+	}
+	if v2 && j.segmentSeq != previousSegment {
+		// Rotation may run observers/onSegmentRotated. No borrowed plan may
+		// cross that callback boundary, even if the encoded size is unchanged.
+		if err := prepareV2(); err != nil {
+			return 0, err
+		}
 	}
 	lsn, err := j.reserveLSNLocked()
 	if err != nil {
 		return 0, err
 	}
 	env.LSN = lsn
-	if err := j.writer.AppendCommand(env); err != nil {
+	if v2 {
+		// Only assignment changed since the final preparation. Validate the
+		// ACTUAL identity, then consume this private plan with no callbacks in
+		// between. It grants no reusable or caller-asserted validation bypass.
+		plan.env.LSN = lsn
+		err = validateCommandEnvelopeV2Identity(plan.env)
+		if err == nil {
+			err = j.writer.appendCommandV2Prepared(plan)
+		}
+	} else {
+		err = j.writer.AppendCommand(env)
+	}
+	if err != nil {
 		if rollbackErr := j.owner.rollbackReservedLSN(lsn); rollbackErr != nil {
 			return 0, errors.Join(err, rollbackErr)
 		}

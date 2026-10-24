@@ -1093,28 +1093,35 @@ func (w *Writer) AppendCommand(env CommandEnvelope) error {
 // fast-path escape hatch; specialized allocation-free V2 encoders may replace
 // it without changing the persisted contract.
 func (w *Writer) AppendCommandV2(env CommandEnvelope) error {
-	size, err := commandFrameV2EncodedSize(env)
+	plan, err := prepareCommandFrameV2Encoding(env)
 	if err != nil {
 		return err
 	}
+	return w.appendCommandV2Prepared(plan)
+}
+
+func (w *Writer) commandFrameSizeError(size int) error {
 	if w.maxSegmentSize > 0 && int64(size) > w.maxSegmentSize {
 		return ErrRecordTooLarge
 	}
 	if size > int(segmentLenMask) {
 		return ErrRecordTooLarge
 	}
-	payload, err := EncodeCommandFrameV2To(w.scratch[:0], env)
-	if err != nil {
+	return nil
+}
+
+// appendCommandV2Prepared consumes the journal's private plan under its existing
+// ownership. Public writer entrypoints always construct their own plan first.
+func (w *Writer) appendCommandV2Prepared(plan commandFrameV2Encoding) error {
+	if err := w.commandFrameSizeError(plan.total); err != nil {
 		return err
 	}
-	if len(payload) != size {
-		return ErrCorrupt
-	}
+	payload := plan.encodeTo(w.scratch[:0])
 	w.scratch = payload
 	// Strict V2 readers reject compressed segment storage so recovery can
 	// inspect frame identity directly at a torn terminal tail. Keep V2 command
 	// frames raw even when compression remains enabled for other journal data.
-	err = w.writeRawSegmentWithChecksum(payload, crc.Checksum(payload))
+	err := w.writeRawSegmentWithChecksum(payload, crc.Checksum(payload))
 	if w.commandBufRetain > 0 && cap(w.scratch) > w.commandBufRetain {
 		w.scratch = make([]byte, 0, w.commandBufRetain)
 	}
