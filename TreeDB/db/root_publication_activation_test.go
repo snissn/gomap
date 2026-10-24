@@ -144,16 +144,35 @@ func TestOuterLeafSteadyStateWriteDoesNotScanCandidateTree(t *testing.T) {
 
 	// Replacing an existing key can make the old physical leaf record
 	// unreachable even when the producer is still appending to the same segment.
-	// Apply-fed removal evidence must therefore restore exact projection.
+	// The exact root-bound raw receipt must project those removals without a scan.
 	scans = 0
 	database.testScanCandidateExternalReferencesHook = func() { scans++ }
 	if err := database.SetSync([]byte("outer-leaf-prime"), []byte("r")); err != nil {
 		t.Fatalf("overwrite SetSync: %v", err)
 	}
 	database.testScanCandidateExternalReferencesHook = nil
-	if scans == 0 {
-		t.Fatal("outer-leaf overwrite did not scan candidate tree")
+	if scans != 0 {
+		t.Fatalf("exact outer-leaf overwrite candidate scans=%d want 0", scans)
 	}
+	assertCandidateTrackerMatchesFullScan(t, database)
+	assertOrdinaryRawCensus(t, database)
+
+	// Missing predecessor raw evidence must still fall back; registration is
+	// not a replacement for reachability, even on an additive publication.
+	database.valueLogRefTracker.mu.Lock()
+	database.valueLogRefTracker.rawValid = false
+	database.valueLogRefTracker.rawCounts.close()
+	database.valueLogRefTracker.mu.Unlock()
+	database.testScanCandidateExternalReferencesHook = func() { scans++ }
+	if err := database.SetSync([]byte("outer-leaf-fallback"), []byte("f")); err != nil {
+		t.Fatalf("fallback SetSync: %v", err)
+	}
+	database.testScanCandidateExternalReferencesHook = nil
+	if scans != 1 {
+		t.Fatalf("unknown raw-basis candidate scans=%d want 1", scans)
+	}
+	assertCandidateTrackerMatchesFullScan(t, database)
+	assertOrdinaryRawCensus(t, database)
 }
 
 func TestOuterLeafFirstPublicationFromEmptyDependencyBaseDoesNotScanCandidateTree(t *testing.T) {
@@ -1100,7 +1119,7 @@ func TestOuterLeafOrdinaryAdditiveProducerInventory(t *testing.T) {
 			}
 			snapshot := database.AcquireSnapshot()
 			defer snapshot.Close()
-			for _, mutation := range []func() error{
+			for mutationIndex, mutation := range []func() error{
 				func() error { return database.SetSync(key(0), []byte("replacement")) },
 				func() error { return database.DeleteSync(key(1)) },
 				func() error {
@@ -1118,10 +1137,17 @@ func TestOuterLeafOrdinaryAdditiveProducerInventory(t *testing.T) {
 					t.Fatal(err)
 				}
 				database.testScanCandidateExternalReferencesHook = nil
-				if scans == 0 {
-					t.Fatal("destructive publication skipped exact candidate projection")
+				// Point replacement has an exact raw receipt. Delete and range
+				// maintenance do not, and must keep the final-root scan.
+				wantScans := 1
+				if mutationIndex == 0 {
+					wantScans = 0
+				}
+				if scans != wantScans {
+					t.Fatalf("destructive mutation %d candidate scans=%d want %d", mutationIndex, scans, wantScans)
 				}
 				assertCandidateTrackerMatchesFullScan(t, database)
+				assertOrdinaryRawCensus(t, database)
 			}
 			if got, err := snapshot.Get(key(0)); err != nil || string(got) != "pointer-value-0000" {
 				t.Fatalf("retained snapshot Get=(%q,%v)", got, err)

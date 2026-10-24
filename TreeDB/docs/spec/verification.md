@@ -177,6 +177,21 @@ activation evidence and separate natural versus instrumented observations.
 
 ## Immutable COW cache qualification
 
+`TestCOWSuccessorBasisWorkspaceReuseAndCutOwnership` covers opportunistic
+successor scratch reuse across short-lived cuts, owned output, checkpoint
+handoff and final basis/DB teardown. `TestCOWSuccessorBasisWorkspaceFiniteAdmission`
+covers refusal and retry without unadmitted backing.
+`TestCOWSuccessorBasisWorkspaceDoesNotWaitForSharedBlockDecoder` holds only the
+generic decoder mutex while a cold compressed successor reads. The unchanged
+`TestCOWRetainedReadersOwnPhysicalScratch` also holds the basis mutex and checks
+point, successor and iterator progress through their independent paths. The
+dictionary-leaf fixture includes successor fallback on the exact caller cut.
+`TestCOWSuccessorWorkspacePublicGetAtAndHistory` exercises resolved public
+`no_wal_fast/cow_ordered` GetAt with real checkpointed inline/pointer histories,
+concurrent readers and checkpoint handoffs, plus exact-key and prefix iterators.
+The associated diagnostic benchmark and predeclared A/B boundary are documented
+in [successor workspace diagnostics](../benchmarks/cow-successor-workspace-5214.md).
+
 
 `TestCOWPhysicalLeafCacheActivationAndCapturedCuts` exercises actual COW public
 point and owned successor reads of real logged leaves, then the same captured
@@ -4427,3 +4442,23 @@ headroom is exhausted. These controls do not activate unconverted collections.
 - `TestBatchWriteSync_WALOffSmallNonOverlappingSealsQueuedWrites` covers earlier
   queued writes; `TestBatchWrite_WALOffLargeNonOverlappingBypassesAsPointers`
   preserves ordinary bypass non-overlap and pointer-operation assertions.
+
+### Externally logged raw DATA ownership (#5208)
+
+- Public retained-root control: bounded certificate output, unchanged physical
+  inode, forced-pointer exact recovery through newer working seals and GC.
+- Current/previous closure control: both slots reacquired before writes, repeated
+  seals, value rewrite/GC, reopen and prior-root selectability in both leaf placements.
+- Restore controls: torn meta byte states, interruption before sync and idempotent
+  retry, active-writer refusal and inode/namespace replacement refusal.
+- Initialization controls: racing ordinary/external public opens and deterministic
+  invalid-configuration lock release; existing process-crash certificate cuts.
+- See [external recovery](external-recovery.md) for supported scope and limits.
+
+
+- `TestExternalRecoveryTransfer*`: exact requested public export during successor
+  Apply, distinct receiver identity and metadata, rejected/truncated/traversal
+  inputs, physical pointer replacement and namespace retirement, poisoned
+  publication/reopen, and process crash cuts around CURRENT.
+- These engine controls do not prove application reader draining, Raft snapshot
+  acceptance or durable cross-store install intent; those require consumer tests.

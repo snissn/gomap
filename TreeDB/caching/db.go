@@ -8177,10 +8177,19 @@ func (db *DB) reconcileSplitValueLogWritersAfterBackendMaintenanceAdmitted(admit
 	}
 	if db.indexOuterLeavesInValueLog {
 		observedMaxSeq := maxSeqByLane[leafLogLaneID]
-		db.advanceLeafLogAppendSeqAtLeast(observedMaxSeq)
-		for _, l := range db.leafLogAppendLanesSnapshot() {
-			if err := db.advanceLeafLogAppendWriterPastObservedSeq(l, observedMaxSeq); err != nil {
-				return err
+		// Independent cached leaf writers share this reservation floor. A peer's
+		// higher sequence is not backend output and must not rotate every older
+		// writer after a read-only or no-op maintenance pass. Maintained backend
+		// writers also reserve from this allocator before creating their files.
+		// Preserve the conservative fence for an unreserved external advance;
+		// explicit CompactStorage handoff retains its own stronger fence.
+		reservedSeq := db.leafLogAppendSeq.Load()
+		if uint64(observedMaxSeq) > uint64(reservedSeq) {
+			db.advanceLeafLogAppendSeqAtLeast(observedMaxSeq)
+			for _, l := range db.leafLogAppendLanesSnapshot() {
+				if err := db.advanceLeafLogAppendWriterPastObservedSeq(l, observedMaxSeq); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -9977,6 +9986,14 @@ type DB struct {
 	vlogGenerationLeafPackLastSelectionBytesDead                 atomic.Int64
 	vlogGenerationLeafPackLastSelectionGenerations               atomic.Int64
 	vlogGenerationLeafPackLastBytesCopied                        atomic.Int64
+	vlogGenerationLeafGCRuns                                     atomic.Uint64
+	vlogGenerationLeafGCErrors                                   atomic.Uint64
+	vlogGenerationLeafGCExecNanos                                atomic.Uint64
+	vlogGenerationLeafGCDeletedGenerations                       atomic.Uint64
+	vlogGenerationLeafGCDeletedFiles                             atomic.Uint64
+	vlogGenerationLeafGCDeletedBytes                             atomic.Uint64
+	vlogGenerationLeafGCDeletedManifestRevisions                 atomic.Uint64
+	vlogGenerationLeafGCDeletedManifestBytes                     atomic.Uint64
 	vlogGenerationLeafPackGCRuns                                 atomic.Uint64
 	vlogGenerationLeafPackGCEligibleGenerations                  atomic.Uint64
 	vlogGenerationLeafPackGCDeletedGenerations                   atomic.Uint64
@@ -12109,15 +12126,15 @@ func addMemtableResidencyStats(stats map[string]string, prefix string, summary m
 		return
 	}
 	add := func(name string, s memtableResidencySummary) {
-		stats[prefix+"."+name+".count"] = fmt.Sprintf("%d", s.count)
-		stats[prefix+"."+name+".entries"] = fmt.Sprintf("%d", s.len)
-		stats[prefix+"."+name+".size_bytes"] = fmt.Sprintf("%d", s.size)
-		stats[prefix+"."+name+".entry_capacity"] = fmt.Sprintf("%d", s.entryCapacity)
-		stats[prefix+"."+name+".entry_backing_bytes"] = fmt.Sprintf("%d", s.entryBackingBytes)
-		stats[prefix+"."+name+".value_arena_active_chunks"] = fmt.Sprintf("%d", s.valueArenaActiveChunks)
-		stats[prefix+"."+name+".value_arena_active_bytes"] = fmt.Sprintf("%d", s.valueArenaActiveBytes)
-		stats[prefix+"."+name+".value_arena_retained_chunks"] = fmt.Sprintf("%d", s.valueArenaRetainedChunks)
-		stats[prefix+"."+name+".value_arena_retained_bytes"] = fmt.Sprintf("%d", s.valueArenaRetainedBytes)
+		stats[prefix+"."+name+".count"] = strconv.FormatInt(int64(s.count), 10)
+		stats[prefix+"."+name+".entries"] = strconv.FormatInt(int64(s.len), 10)
+		stats[prefix+"."+name+".size_bytes"] = strconv.FormatInt(s.size, 10)
+		stats[prefix+"."+name+".entry_capacity"] = strconv.FormatInt(s.entryCapacity, 10)
+		stats[prefix+"."+name+".entry_backing_bytes"] = strconv.FormatInt(s.entryBackingBytes, 10)
+		stats[prefix+"."+name+".value_arena_active_chunks"] = strconv.FormatInt(s.valueArenaActiveChunks, 10)
+		stats[prefix+"."+name+".value_arena_active_bytes"] = strconv.FormatInt(s.valueArenaActiveBytes, 10)
+		stats[prefix+"."+name+".value_arena_retained_chunks"] = strconv.FormatInt(s.valueArenaRetainedChunks, 10)
+		stats[prefix+"."+name+".value_arena_retained_bytes"] = strconv.FormatInt(s.valueArenaRetainedBytes, 10)
 	}
 	add("total", summary.total)
 	add("skiplist", summary.skiplist)
@@ -23843,12 +23860,36 @@ planned:
 		skipCheckpoint:        opts.skipCheckpoint,
 		skipRetainedPruneWait: opts.skipRetainedPruneWait,
 	}, func() error {
+		// Whole-generation leaf reclamation is independent of value rewrite and
+		// experimental leaf packing. Share the admitted checkpoint/quiet/cooldown
+		// barrier, but run before value-only eligibility can short-circuit it.
+		ctx, cancel := db.vlogGenerationMaintenanceContext(30*time.Second, opts)
+		defer cancel()
+		leafStats, leafAttempted, err := db.runVlogGenerationLeafGC(ctx)
+		gcAttempted = leafAttempted
+		if leafAttempted {
+			// A leaf-only pass consumes the same bounded retry interval even if
+			// the following value eligibility estimate returns early.
+			db.vlogGenerationLastGCUnixNano.Store(time.Now().UnixNano())
+		}
+		if err != nil {
+			return fmt.Errorf("generational leaf gc: %w", err)
+		}
+		leafProgress := leafStats.GenerationsDeleted > 0 || leafStats.ManifestRevisionsDeleted > 0 || leafStats.FilesDeleted > 0
+		if leafProgress {
+			db.vlogGenerationLastGCNoopUnixNano.Store(0)
+		}
 		if needEligibilityEstimate {
 			gcStats, err := db.estimateVlogGenerationGCEligible(gcer)
 			if err != nil {
 				return fmt.Errorf("generational gc dry-run: %w", err)
 			}
 			if gcStats.BytesEligible < vlogGenerationGCMinBytes && gcStats.SegmentsEligible == 0 {
+				if !leafProgress {
+					// A below-floor value estimate is a successful no-progress pass
+					// even when leaf collection is unavailable for this backend.
+					db.vlogGenerationLastGCNoopUnixNano.Store(time.Now().UnixNano())
+				}
 				db.debugVlogMaintf(
 					"gc_skip reason=below_eligibility_floor run_gc=%t force_observed=%t eligible_bytes=%d eligible_segments=%d min_bytes=%d",
 					runGC,
@@ -23862,7 +23903,6 @@ planned:
 		}
 		now := time.Now()
 		db.vlogGenerationLastGCUnixNano.Store(now.UnixNano())
-		ctx, cancel := db.vlogGenerationMaintenanceContext(30*time.Second, opts)
 		gcOpts := db.valueLogGCOptions(false)
 		if forceObservedSourceGC {
 			gcOpts.ObservedSourceFileIDs = append([]uint32(nil), observedSourceGCIDs...)
@@ -23912,7 +23952,7 @@ planned:
 			gcStats.BytesDeleted == 0 &&
 			gcStats.SegmentsDeleted == 0 &&
 			gcStats.BytesEligible == 0 &&
-			gcStats.SegmentsEligible == 0 {
+			gcStats.SegmentsEligible == 0 && !leafProgress {
 			db.vlogGenerationLastGCNoopUnixNano.Store(now.UnixNano())
 		} else {
 			db.vlogGenerationLastGCNoopUnixNano.Store(0)
@@ -31906,7 +31946,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.process.identity.wal_dir"] = db.dir
 	stats["treedb.cache.memtable_shards"] = fmt.Sprintf("%d", len(db.mutableShards))
 	stats["treedb.cache.journal_lanes.configured"] = fmt.Sprintf("%d", db.journalLanesConfigured)
-	stats["treedb.cache.journal_lanes.defaulted"] = fmt.Sprintf("%t", db.journalLanesDefaulted)
+	stats["treedb.cache.journal_lanes.defaulted"] = strconv.FormatBool(db.journalLanesDefaulted)
 	stats["treedb.cache.journal_lanes.effective"] = fmt.Sprintf("%d", len(db.lanes))
 	stats["treedb.cache.journal_lanes.hot"] = fmt.Sprintf("%d", len(db.valueLogHotLanes))
 	stats["treedb.cache.journal_lanes.warm"] = fmt.Sprintf("%d", len(db.valueLogWarmLanes))
@@ -31915,7 +31955,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.journal_lanes.physical_cores"] = fmt.Sprintf("%d", db.journalLanesPhysicalCores)
 	nativeRootWriters := db.nativeRootValueLogAppendLanesSnapshot()
 	stats["treedb.cache.native_root_vlog_append.writers"] = fmt.Sprintf("%d", len(nativeRootWriters))
-	stats["treedb.cache.native_root_vlog_append.shared_logical_lane"] = fmt.Sprintf("%t", db.nativeRootValueLogAppendShared)
+	stats["treedb.cache.native_root_vlog_append.shared_logical_lane"] = strconv.FormatBool(db.nativeRootValueLogAppendShared)
 	for i, l := range nativeRootWriters {
 		prefix := fmt.Sprintf("treedb.cache.native_root_vlog_append.writer.%d", i)
 		stats[prefix+".logical_lane"] = fmt.Sprintf("%d", l.id)
@@ -31943,8 +31983,8 @@ func (db *DB) Stats() map[string]string {
 		redoLogMode = "disabled_unsafe"
 	}
 	stats["treedb.cache.redo_log.mode"] = redoLogMode
-	stats["treedb.cache.redo_log.enabled"] = fmt.Sprintf("%t", !db.disableJournal)
-	stats["treedb.cache.command_wal.external_durability"] = fmt.Sprintf("%t", db.externalCommandWAL)
+	stats["treedb.cache.redo_log.enabled"] = strconv.FormatBool(!db.disableJournal)
+	stats["treedb.cache.command_wal.external_durability"] = strconv.FormatBool(db.externalCommandWAL)
 	db.sampleProcessMemoryPeaks(backendVlogMmap)
 	db.mu.RLock()
 	queueLen := len(db.queue)
@@ -32302,7 +32342,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.conditional_txn.oracle.active_records"] = fmt.Sprintf("%d", conditionalActiveRecords)
 	stats["treedb.cache.conditional_txn.oracle.retained_points"] = fmt.Sprintf("%d", conditionalRetainedPoints)
 	stats["treedb.cache.conditional_txn.oracle.retained_ranges"] = fmt.Sprintf("%d", conditionalRetainedRanges)
-	stats["treedb.cache.conditional_txn.oracle.root_conflict_active"] = fmt.Sprintf("%t", conditionalRootConflictActive)
+	stats["treedb.cache.conditional_txn.oracle.root_conflict_active"] = strconv.FormatBool(conditionalRootConflictActive)
 	stats["treedb.cache.conditional_txn.oracle.barrier_effect_capacity_total"] = fmt.Sprintf("%d", conditionalBarriers.EffectCapacity)
 	stats["treedb.cache.conditional_txn.oracle.barrier_byte_capacity_total"] = fmt.Sprintf("%d", conditionalBarriers.ByteCapacity)
 	stats["treedb.cache.conditional_txn.oracle.barrier_logical_replacement_total"] = fmt.Sprintf("%d", conditionalBarriers.LogicalReplacement)
@@ -32318,10 +32358,10 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.mutable_flush_threshold_base_bytes"] = fmt.Sprintf("%d", mutableThresholdBase)
 	stats["treedb.cache.mutable_flush_threshold_effective_bytes"] = fmt.Sprintf("%d", db.mutableFlushThreshold())
 	stats["treedb.cache.checkpoint.runs"] = fmt.Sprintf("%d", db.checkpointRuns.Load())
-	stats["treedb.cache.checkpoint.active"] = fmt.Sprintf("%t", db.checkpointing.Load())
-	stats["treedb.cache.checkpoint.write_cutover.active"] = fmt.Sprintf("%t", db.checkpointWriteCutoverActive.Load())
-	stats["treedb.cache.checkpoint.post_frontier_admission_enabled"] = fmt.Sprintf("%t", db.externalCommandWAL && db.loadCommandWALCheckpointCutoverHook() != nil)
-	stats["treedb.cache.checkpoint.post_frontier_admission.active"] = fmt.Sprintf("%t", db.checkpointPostFrontierAdmission.Load())
+	stats["treedb.cache.checkpoint.active"] = strconv.FormatBool(db.checkpointing.Load())
+	stats["treedb.cache.checkpoint.write_cutover.active"] = strconv.FormatBool(db.checkpointWriteCutoverActive.Load())
+	stats["treedb.cache.checkpoint.post_frontier_admission_enabled"] = strconv.FormatBool(db.externalCommandWAL && db.loadCommandWALCheckpointCutoverHook() != nil)
+	stats["treedb.cache.checkpoint.post_frontier_admission.active"] = strconv.FormatBool(db.checkpointPostFrontierAdmission.Load())
 	stats["treedb.cache.checkpoint.total_ms"] = fmt.Sprintf("%.3f", float64(db.checkpointTotalNs.Load())/float64(time.Millisecond))
 	stats["treedb.cache.checkpoint.max_ms"] = fmt.Sprintf("%.3f", float64(db.checkpointMaxNs.Load())/float64(time.Millisecond))
 	stats["treedb.cache.checkpoint.flushmu_wait_total_ms"] = fmt.Sprintf("%.3f", float64(db.checkpointFlushMuWaitNs.Load())/float64(time.Millisecond))
@@ -32436,8 +32476,8 @@ func (db *DB) Stats() map[string]string {
 	appendCheckpointStageStats(stats, "post_maintenance", &db.checkpointStagePostMaintenance)
 	stats["treedb.cache.command_wal.checkpoint_publish.piggybacked"] = fmt.Sprintf("%d", db.commandWALCheckpointPublishPiggybacked.Load())
 	stats["treedb.cache.command_wal.checkpoint_publish.separate"] = fmt.Sprintf("%d", db.commandWALCheckpointPublishSeparate.Load())
-	stats["treedb.cache.command_wal.cleanup.pending"] = fmt.Sprintf("%t", db.commandWALCleanupPending.Load())
-	stats["treedb.cache.command_wal.cleanup.active"] = fmt.Sprintf("%t", db.commandWALCleanupActive.Load())
+	stats["treedb.cache.command_wal.cleanup.pending"] = strconv.FormatBool(db.commandWALCleanupPending.Load())
+	stats["treedb.cache.command_wal.cleanup.active"] = strconv.FormatBool(db.commandWALCleanupActive.Load())
 	stats["treedb.cache.command_wal.cleanup.requests_total"] = fmt.Sprintf("%d", db.commandWALCleanupRequests.Load())
 	stats["treedb.cache.command_wal.cleanup.coalesced_total"] = fmt.Sprintf("%d", db.commandWALCleanupCoalesced.Load())
 	stats["treedb.cache.command_wal.cleanup.completions_total"] = fmt.Sprintf("%d", db.commandWALCleanupCompletions.Load())
@@ -32550,7 +32590,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.retired_memtable_hold.memtables_current"] = fmt.Sprintf("%d", retiredHoldMemtablesCurrent)
 	stats["treedb.cache.retired_memtable_hold.bytes_current"] = fmt.Sprintf("%d", retiredHoldBytesCurrent)
 	stats["treedb.cache.retired_memtable_hold.oldest_age_ms"] = fmt.Sprintf("%.3f", retiredHoldOldestAgeMS)
-	stats["treedb.cache.memtable_warmup_active"] = fmt.Sprintf("%t", memtableWarmupActive)
+	stats["treedb.cache.memtable_warmup_active"] = strconv.FormatBool(memtableWarmupActive)
 	stats["treedb.cache.max_queued_memtables"] = fmt.Sprintf("%d", maxQueued)
 	poolPressure := currentPoolPressureSnapshot()
 	arenaBaseBudget := currentBatchArenaPoolBudgetBytes()
@@ -32598,7 +32638,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.batch_arena.leased_bytes_max"] = arenaLeasedMax
 	stats["treedb.cache.batch_arena.retained_hard_cap_bytes"] = fmt.Sprintf("%d", arenaRetainedHardCapBytes)
 	stats["treedb.cache.batch_arena.retained_hard_cap_effective_bytes"] = fmt.Sprintf("%d", arenaRetainedHardCapEffectiveBytes)
-	stats["treedb.cache.batch_arena.deferred_pressure_active"] = fmt.Sprintf("%t", db.batchArenaDeferredPressureActive())
+	stats["treedb.cache.batch_arena.deferred_pressure_active"] = strconv.FormatBool(db.batchArenaDeferredPressureActive())
 	stats["treedb.cache.batch_arena.retained_bytes_global_estimate"] = fmt.Sprintf("%d", arenaRetainedEstimate)
 	stats["treedb.cache.batch_arena.retained_bytes_global_max_estimate"] = fmt.Sprintf("%d", arenaRetainedMaxEstimate)
 	stats["treedb.cache.batch_arena.pool_plus_db_leases_bytes_estimate"] = fmt.Sprintf("%d", arenaPoolBytes+arenaLeasedBytes)
@@ -32671,7 +32711,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.process.batch_arena.leased_bytes_max"] = arenaLeasedMax
 	stats["treedb.process.batch_arena.retained_hard_cap_bytes"] = fmt.Sprintf("%d", arenaRetainedHardCapBytes)
 	stats["treedb.process.batch_arena.retained_hard_cap_effective_bytes"] = fmt.Sprintf("%d", arenaRetainedHardCapEffectiveBytes)
-	stats["treedb.process.batch_arena.deferred_pressure_active"] = fmt.Sprintf("%t", db.batchArenaDeferredPressureActive())
+	stats["treedb.process.batch_arena.deferred_pressure_active"] = strconv.FormatBool(db.batchArenaDeferredPressureActive())
 	stats["treedb.process.batch_arena.retained_bytes_estimate"] = fmt.Sprintf("%d", arenaRetainedEstimate)
 	stats["treedb.process.batch_arena.retained_bytes_global_max_estimate"] = fmt.Sprintf("%d", arenaRetainedMaxEstimate)
 	stats["treedb.process.batch_arena.alloc_requested_bytes_total"] = fmt.Sprintf("%d", arenaAllocRequestedBytes)
@@ -33084,7 +33124,7 @@ func (db *DB) Stats() map[string]string {
 		ingressDepth += len(ch)
 	}
 	db.domainIngressMu.Unlock()
-	stats["treedb.cache.domain_ingress.enabled"] = fmt.Sprintf("%t", ingressWorkers > 0)
+	stats["treedb.cache.domain_ingress.enabled"] = strconv.FormatBool(ingressWorkers > 0)
 	stats["treedb.cache.domain_ingress.workers"] = fmt.Sprintf("%d", ingressWorkers)
 	stats["treedb.cache.domain_ingress.queue_size"] = fmt.Sprintf("%d", ingressQueueSize)
 	stats["treedb.cache.domain_ingress.queue_depth"] = fmt.Sprintf("%d", ingressDepth)
@@ -33454,9 +33494,9 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_retained_prune.last_start_unix_nano"] = fmt.Sprintf("%d", db.retainedValueLogPruneLastStartUnixNano.Load())
 	stats["treedb.cache.vlog_retained_prune.last_status"] = retainedPruneStatusString(db.retainedValueLogPruneLastStatus.Load())
 	stats["treedb.cache.vlog_retained_prune.last_mode"] = retainedPruneModeString(db.retainedValueLogPruneLastMode.Load())
-	stats["treedb.cache.vlog_retained_prune.last_force"] = fmt.Sprintf("%t", db.retainedValueLogPruneLastForce.Load())
-	stats["treedb.cache.vlog_retained_prune.active"] = fmt.Sprintf("%t", retainedPruneActive)
-	stats["treedb.cache.vlog_retained_prune.inflight"] = fmt.Sprintf("%t", retainedPruneInflight)
+	stats["treedb.cache.vlog_retained_prune.last_force"] = strconv.FormatBool(db.retainedValueLogPruneLastForce.Load())
+	stats["treedb.cache.vlog_retained_prune.active"] = strconv.FormatBool(retainedPruneActive)
+	stats["treedb.cache.vlog_retained_prune.inflight"] = strconv.FormatBool(retainedPruneInflight)
 	stats["treedb.cache.vlog_retained_prune.last_elapsed_ms"] = fmt.Sprintf("%.3f", float64(db.retainedValueLogPruneLastElapsedNanos.Load())/float64(time.Millisecond))
 	stats["treedb.cache.vlog_retained_prune.total_elapsed_ms"] = fmt.Sprintf("%.3f", float64(db.retainedValueLogPruneTotalNanos.Load())/float64(time.Millisecond))
 	stats["treedb.cache.vlog_retained_prune.max_elapsed_ms"] = fmt.Sprintf("%.3f", float64(db.retainedValueLogPruneMaxNanos.Load())/float64(time.Millisecond))
@@ -33530,37 +33570,37 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_retained_prune.schedule_skip.min_interval"] = fmt.Sprintf("%d", db.retainedValueLogPruneScheduleSkipMinInterval.Load())
 	stats["treedb.cache.vlog_retained_prune.write_gate_retries"] = fmt.Sprintf("%d", db.retainedValueLogPruneWriteGateRetries.Load())
 	stats["treedb.cache.vlog_retained_prune.write_gate_retry_successes"] = fmt.Sprintf("%d", db.retainedValueLogPruneWriteGateRetrySuccesses.Load())
-	stats["treedb.cache.vlog_retained_prune.force_pending"] = fmt.Sprintf("%t", db.retainedPruneForceRequested.Load())
+	stats["treedb.cache.vlog_retained_prune.force_pending"] = strconv.FormatBool(db.retainedPruneForceRequested.Load())
 	stats["treedb.cache.vlog_generation.policy"] = fmt.Sprintf("%d", db.valueLogGenerationPolicy)
-	stats["treedb.cache.vlog_generation.enabled"] = fmt.Sprintf("%t", db.valueLogGenerationPolicy == uint8(backenddb.ValueLogGenerationHotWarmCold))
+	stats["treedb.cache.vlog_generation.enabled"] = strconv.FormatBool(db.valueLogGenerationPolicy == uint8(backenddb.ValueLogGenerationHotWarmCold))
 	stats["treedb.cache.vlog_generation.maintenance_phase"] = maintenancePhaseString(db.maintenancePhase.Load())
 	stats["treedb.cache.vlog_generation.scheduler_state"] = vlogGenerationSchedulerStateString(db.vlogGenerationSchedulerState.Load())
-	stats["treedb.cache.vlog_generation.maintenance.active"] = fmt.Sprintf("%t", db.vlogGenerationMaintenanceActive.Load())
-	stats["treedb.cache.vlog_generation.deferred_vector_build.active"] = fmt.Sprintf("%t", db.deferredVectorBuildVlogMaintenanceState.Load() != deferredVectorBuildVlogMaintenanceInactive)
-	stats["treedb.cache.vlog_generation.deferred_vector_build.debt"] = fmt.Sprintf("%t", db.deferredVectorBuildVlogMaintenanceDebt.Load())
+	stats["treedb.cache.vlog_generation.maintenance.active"] = strconv.FormatBool(db.vlogGenerationMaintenanceActive.Load())
+	stats["treedb.cache.vlog_generation.deferred_vector_build.active"] = strconv.FormatBool(db.deferredVectorBuildVlogMaintenanceState.Load() != deferredVectorBuildVlogMaintenanceInactive)
+	stats["treedb.cache.vlog_generation.deferred_vector_build.debt"] = strconv.FormatBool(db.deferredVectorBuildVlogMaintenanceDebt.Load())
 	stats["treedb.cache.vlog_generation.deferred_vector_build.skips"] = fmt.Sprintf("%d", db.deferredVectorBuildVlogMaintenanceSkips.Load())
 	stats["treedb.cache.vlog_generation.deferred_vector_build.debt_set"] = fmt.Sprintf("%d", db.deferredVectorBuildVlogMaintenanceDebtSet.Load())
 	stats["treedb.cache.vlog_generation.deferred_vector_build.finalizations"] = fmt.Sprintf("%d", db.deferredVectorBuildVlogMaintenanceFinalizations.Load())
 	stats["treedb.cache.vlog_generation.deferred_vector_build.failures"] = fmt.Sprintf("%d", db.deferredVectorBuildVlogMaintenanceFailures.Load())
 	stats["treedb.cache.vlog_generation.scheduler_last_reason"] = vlogGenerationReasonString(db.vlogGenerationLastReason.Load())
-	stats["treedb.cache.vlog_generation.checkpoint_kick.active"] = fmt.Sprintf("%t", db.vlogGenerationCheckpointKickActive.Load())
-	stats["treedb.cache.vlog_generation.checkpoint_kick.pending"] = fmt.Sprintf("%t", db.vlogGenerationCheckpointKickPending.Load())
-	stats["treedb.cache.vlog_generation.rewrite.queue.pending"] = fmt.Sprintf("%t", db.vlogGenerationRewriteQueuePending.Load())
-	stats["treedb.cache.vlog_generation.rewrite.queue.running"] = fmt.Sprintf("%t", db.vlogGenerationRewriteQueueRunning.Load())
+	stats["treedb.cache.vlog_generation.checkpoint_kick.active"] = strconv.FormatBool(db.vlogGenerationCheckpointKickActive.Load())
+	stats["treedb.cache.vlog_generation.checkpoint_kick.pending"] = strconv.FormatBool(db.vlogGenerationCheckpointKickPending.Load())
+	stats["treedb.cache.vlog_generation.rewrite.queue.pending"] = strconv.FormatBool(db.vlogGenerationRewriteQueuePending.Load())
+	stats["treedb.cache.vlog_generation.rewrite.queue.running"] = strconv.FormatBool(db.vlogGenerationRewriteQueueRunning.Load())
 	stats["treedb.cache.vlog_generation.checkpoint_kick.last_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationLastCheckpointKickUnixNano.Load())
 	stats["treedb.cache.vlog_generation.checkpoint_kick.runs"] = fmt.Sprintf("%d", db.vlogGenerationCheckpointKickRuns.Load())
 	stats["treedb.cache.vlog_generation.checkpoint_kick.rewrite_runs"] = fmt.Sprintf("%d", db.vlogGenerationCheckpointKickRewriteRuns.Load())
 	stats["treedb.cache.vlog_generation.checkpoint_kick.gc_runs"] = fmt.Sprintf("%d", db.vlogGenerationCheckpointKickGCRuns.Load())
 	stats["treedb.cache.vlog_generation.checkpoint_kick.skipped_hot_no_debt"] = fmt.Sprintf("%d", db.vlogGenerationCheckpointKickSkippedHotNoDebt.Load())
-	stats["treedb.cache.vlog_generation.checkpoint_kick.hot_no_debt_wake.running"] = fmt.Sprintf("%t", db.vlogGenerationCheckpointKickHotNoDebtWakeRunning.Load())
+	stats["treedb.cache.vlog_generation.checkpoint_kick.hot_no_debt_wake.running"] = strconv.FormatBool(db.vlogGenerationCheckpointKickHotNoDebtWakeRunning.Load())
 	stats["treedb.cache.vlog_generation.checkpoint_kick.hot_no_debt_wake.runs"] = fmt.Sprintf("%d", db.vlogGenerationCheckpointKickHotNoDebtWakeRuns.Load())
 	stats["treedb.cache.vlog_generation.maintenance.attempts"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceAttempts.Load())
 	stats["treedb.cache.vlog_generation.maintenance.acquired"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceAcquired.Load())
 	stats["treedb.cache.vlog_generation.maintenance.collisions"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceCollisions.Load())
 	pauseFilePath := vlogGenerationMaintenancePauseFilePath()
 	pauseFilePaused, _ := vlogGenerationMaintenancePausedByFile()
-	stats["treedb.cache.vlog_generation.maintenance.pause_file.configured"] = fmt.Sprintf("%t", pauseFilePath != "")
-	stats["treedb.cache.vlog_generation.maintenance.pause_file.paused"] = fmt.Sprintf("%t", pauseFilePaused)
+	stats["treedb.cache.vlog_generation.maintenance.pause_file.configured"] = strconv.FormatBool(pauseFilePath != "")
+	stats["treedb.cache.vlog_generation.maintenance.pause_file.paused"] = strconv.FormatBool(pauseFilePaused)
 	stats["treedb.cache.vlog_generation.maintenance.skip.pause_file"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceSkipPauseFile.Load())
 	stats["treedb.cache.vlog_generation.maintenance.skip.wal_on_periodic"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceSkipWALOnPeriodic.Load())
 	stats["treedb.cache.vlog_generation.maintenance.skip.maintenance_phase"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceSkipPhase.Load())
@@ -33572,9 +33612,9 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.maintenance.skip.quiet_window"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceSkipQuiet.Load())
 	stats["treedb.cache.vlog_generation.maintenance.skip.before_first_checkpoint"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceSkipPreCheckpoint.Load())
 	stats["treedb.cache.vlog_generation.maintenance.skip.checkpoint_inflight"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceSkipCheckpointing.Load())
-	stats["treedb.cache.vlog_generation.maintenance.foreground_quiet"] = fmt.Sprintf("%t", foregroundQuiet)
-	stats["treedb.cache.vlog_generation.maintenance.foreground_write_quiet"] = fmt.Sprintf("%t", foregroundWriteQuiet)
-	stats["treedb.cache.vlog_generation.maintenance.foreground_read_quiet"] = fmt.Sprintf("%t", foregroundReadQuiet)
+	stats["treedb.cache.vlog_generation.maintenance.foreground_quiet"] = strconv.FormatBool(foregroundQuiet)
+	stats["treedb.cache.vlog_generation.maintenance.foreground_write_quiet"] = strconv.FormatBool(foregroundWriteQuiet)
+	stats["treedb.cache.vlog_generation.maintenance.foreground_read_quiet"] = strconv.FormatBool(foregroundReadQuiet)
 	stats["treedb.cache.vlog_generation.maintenance.foreground_active_iterators"] = fmt.Sprintf("%d", foregroundActiveIters)
 	stats["treedb.cache.vlog_generation.maintenance.foreground_last_write_unix_nano"] = fmt.Sprintf("%d", foregroundLastWriteNS)
 	stats["treedb.cache.vlog_generation.maintenance.foreground_last_read_unix_nano"] = fmt.Sprintf("%d", foregroundLastReadNS)
@@ -33643,6 +33683,17 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.leaf_pack.last_bytes_copied"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackLastBytesCopied.Load())
 	stats["treedb.cache.vlog_generation.leaf_pack.last_attributed_reclaim_bytes"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackLastReclaimedBytes.Load())
 	stats["treedb.cache.vlog_generation.leaf_pack.last_attributed_reclaim_per_byte_copied_ppm"] = fmt.Sprintf("%d", leafGenerationPackReclaimPerByteCopiedPPM(db.vlogGenerationLeafPackLastReclaimedBytes.Load(), db.vlogGenerationLeafPackLastBytesCopied.Load()))
+	stats["treedb.cache.vlog_generation.leaf_gc.runs"] = strconv.FormatUint(db.vlogGenerationLeafGCRuns.Load(), 10)
+	stats["treedb.cache.vlog_generation.leaf_gc.errors"] = strconv.FormatUint(db.vlogGenerationLeafGCErrors.Load(), 10)
+	stats["treedb.cache.vlog_generation.leaf_gc.exec.total_ms"] = "0.000"
+	if nanos := db.vlogGenerationLeafGCExecNanos.Load(); nanos != 0 {
+		stats["treedb.cache.vlog_generation.leaf_gc.exec.total_ms"] = strconv.FormatFloat(float64(nanos)/float64(time.Millisecond), 'f', 3, 64)
+	}
+	stats["treedb.cache.vlog_generation.leaf_gc.deleted_generations"] = strconv.FormatUint(db.vlogGenerationLeafGCDeletedGenerations.Load(), 10)
+	stats["treedb.cache.vlog_generation.leaf_gc.deleted_files"] = strconv.FormatUint(db.vlogGenerationLeafGCDeletedFiles.Load(), 10)
+	stats["treedb.cache.vlog_generation.leaf_gc.deleted_bytes"] = strconv.FormatUint(db.vlogGenerationLeafGCDeletedBytes.Load(), 10)
+	stats["treedb.cache.vlog_generation.leaf_gc.deleted_manifest_revisions"] = strconv.FormatUint(db.vlogGenerationLeafGCDeletedManifestRevisions.Load(), 10)
+	stats["treedb.cache.vlog_generation.leaf_gc.deleted_manifest_bytes"] = strconv.FormatUint(db.vlogGenerationLeafGCDeletedManifestBytes.Load(), 10)
 	stats["treedb.cache.vlog_generation.leaf_pack.gc.runs"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackGCRuns.Load())
 	stats["treedb.cache.vlog_generation.leaf_pack.gc.eligible_generations"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackGCEligibleGenerations.Load())
 	stats["treedb.cache.vlog_generation.leaf_pack.gc.deleted_generations"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackGCDeletedGenerations.Load())
@@ -33667,8 +33718,8 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.churn_bytes_total"] = fmt.Sprintf("%d", db.vlogGenerationChurnBytes.Load())
 	stats["treedb.cache.vlog_generation.churn_bytes_per_sec"] = fmt.Sprintf("%d", rewriteChurnBps)
 	stats["treedb.cache.vlog_generation.rewrite.queue_len"] = fmt.Sprintf("%d", rewriteQueueLen)
-	stats["treedb.cache.vlog_generation.rewrite.queue_loaded"] = fmt.Sprintf("%t", rewriteQueueLoaded)
-	stats["treedb.cache.vlog_generation.rewrite.queue_live_hint.known"] = fmt.Sprintf("%t", rewriteQueueLiveBytesHintKnown)
+	stats["treedb.cache.vlog_generation.rewrite.queue_loaded"] = strconv.FormatBool(rewriteQueueLoaded)
+	stats["treedb.cache.vlog_generation.rewrite.queue_live_hint.known"] = strconv.FormatBool(rewriteQueueLiveBytesHintKnown)
 	stats["treedb.cache.vlog_generation.rewrite.queue_live_hint.ids_present"] = fmt.Sprintf("%d", rewriteQueueLiveHintIDsPresent)
 	stats["treedb.cache.vlog_generation.rewrite.queue_live_hint.ids_known"] = fmt.Sprintf("%d", rewriteQueueLiveHintIDsKnown)
 	stats["treedb.cache.vlog_generation.rewrite.queue_live_hint.coverage_pct"] = fmt.Sprintf("%.3f", rewriteQueueLiveHintCoveragePct)
@@ -33759,14 +33810,14 @@ func (db *DB) Stats() map[string]string {
 	} else {
 		stats["treedb.cache.vlog_generation.rewrite.ledger_stale_ratio_ppm"] = "0"
 	}
-	stats["treedb.cache.vlog_generation.rewrite.stage_pending"] = fmt.Sprintf("%t", rewriteStagePending)
+	stats["treedb.cache.vlog_generation.rewrite.stage_pending"] = strconv.FormatBool(rewriteStagePending)
 	stats["treedb.cache.vlog_generation.rewrite.stage_observed_unix_nano"] = fmt.Sprintf("%d", rewriteStageObservedNS)
 	stats["treedb.cache.vlog_generation.rewrite.stage_observed_age_ms"] = fmt.Sprintf("%d", rewriteStageObservedAgeMS)
-	stats["treedb.cache.vlog_generation.rewrite.stage_due"] = fmt.Sprintf("%t", rewriteStageDue)
+	stats["treedb.cache.vlog_generation.rewrite.stage_due"] = strconv.FormatBool(rewriteStageDue)
 	stats["treedb.cache.vlog_generation.rewrite.stage_due_in_ms"] = fmt.Sprintf("%d", rewriteStageDueInMS)
 	stats["treedb.cache.vlog_generation.rewrite.penalties_active"] = fmt.Sprintf("%d", rewritePenaltiesActive)
 	stats["treedb.cache.vlog_generation.rewrite.age_blocked_until_unix_nano"] = fmt.Sprintf("%d", rewriteAgeBlockedUntilNS)
-	stats["treedb.cache.vlog_generation.rewrite.age_blocked_due"] = fmt.Sprintf("%t", rewriteAgeBlockedDue)
+	stats["treedb.cache.vlog_generation.rewrite.age_blocked_due"] = strconv.FormatBool(rewriteAgeBlockedDue)
 	stats["treedb.cache.vlog_generation.rewrite.age_blocked_remaining_ms"] = fmt.Sprintf("%d", rewriteAgeBlockedRemainingMS)
 	stats["treedb.cache.vlog_generation.leaf.segment_target_bytes"] = fmt.Sprintf("%d", db.valueLogGenerationLeafTarget)
 	stats["treedb.cache.vlog_generation.hot.segment_target_bytes"] = fmt.Sprintf("%d", db.valueLogGenerationHotTarget)
@@ -34645,14 +34696,20 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 
 	backendRangeKnown := db.backendRangeKnown
 	backendRange := db.backendRange
-	view = db.retainMemtableView()
+	// The published iterator root is immutable. Under db.mu, inspect it before
+	// taking a tracked view lease: a backend-only iterator never uses the view's
+	// memtables. Close may unpublish the view, but does not clear its root snapshot.
+	publishedView := db.memtables.Load()
 	queueLenLocked := 0
 	var iteratorSnap rootDomainSnapshot
-	if snap, ok := liveIteratorRootDomainSnapshot(view); ok {
+	if snap, ok := liveIteratorRootDomainSnapshot(publishedView); ok {
 		iteratorSnap = snap
 		queueLenLocked = len(snap.immutables)
-	} else if view == nil {
+	} else if publishedView == nil {
 		queueLenLocked = len(db.queue)
+	}
+	if queueLenLocked > 0 {
+		view = db.retainMemtableView()
 	}
 
 	db.mu.Unlock()
@@ -34661,10 +34718,6 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 	// are no in-memory iterator sources to merge. Avoid memtable view retain/release
 	// and construct a backend iterator directly.
 	if queueLenLocked == 0 {
-		if view != nil {
-			db.releaseMemtableView(view)
-			view = nil
-		}
 		decorate := func(it merging.Iterator, sourcesUsed int) merging.Iterator {
 			if iteratorDebug {
 				db.observeIteratorShape(0, sourcesUsed)
@@ -35111,14 +35164,20 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 		}
 	}
 
-	view = db.retainMemtableView()
+	// The published iterator root is immutable. Under db.mu, inspect it before
+	// taking a tracked view lease: a backend-only iterator never uses the view's
+	// memtables. Close may unpublish the view, but does not clear its root snapshot.
+	publishedView := db.memtables.Load()
 	queueLenLocked := 0
 	var iteratorSnap rootDomainSnapshot
-	if snap, ok := liveIteratorRootDomainSnapshot(view); ok {
+	if snap, ok := liveIteratorRootDomainSnapshot(publishedView); ok {
 		iteratorSnap = snap
 		queueLenLocked = len(snap.immutables)
-	} else if view == nil {
+	} else if publishedView == nil {
 		queueLenLocked = len(db.queue)
+	}
+	if queueLenLocked > 0 {
+		view = db.retainMemtableView()
 	}
 
 	db.mu.Unlock()
@@ -35133,10 +35192,6 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 
 	// Backend-only fast path.
 	if queueLenLocked == 0 {
-		if view != nil {
-			db.releaseMemtableView(view)
-			view = nil
-		}
 		decorate := func(it merging.Iterator, sourcesUsed int) merging.Iterator {
 			if iteratorDebugEnabled.Load() {
 				it = &debugIterator{Iterator: it, queueLen: 0, sourcesUsed: sourcesUsed}

@@ -19,6 +19,21 @@ and readable while an older snapshot holds its Set. It must not be reported as
 an absent segment to cached cleanup through another manager. A genuinely absent
 manager entry retains the missing-segment result used for orphan cleanup.
 
+Successful physical retirement publishes the registry's retired disposition and
+removes the exact manager discovery/observation under the same manager lock used
+by deletion admission. Physical unlink, deferred directory sync and final handle
+close remain outside that lock. A second manager may discard a stale zero-reference
+observation only when the registry positively records that exact identity as
+retired, no local deletion is active, and the retained physical parent proves
+the original child absent. An owner that had not yet captured its retirement
+parent may capture an absent child only with that same positive retired-identity
+proof and an opened parent matching the originally registered parent identity.
+The exact observation remains owned under the manager lock throughout the
+registry query and parent capture. This cleanup closes the original handles
+without unlinking any child. A replacement child, mismatched expected identity, live
+reference, or failed absence proof preserves refusal; retirement never authorizes
+late pins or adoption of a replacement file.
+
 ### 1.1 Decode scratch reuse
 
 The shared compressed-frame decoder limits output to the admitted raw frame
@@ -510,12 +525,71 @@ Checkpoint and retention pruning:
 
 Backend maintenance that creates new value-log or split leaf-log segments must
 reconcile cached-mode split writers after the backend operation. Reconciliation
-refreshes the value-log reader and advances each cached writer lane past the
-maximum observed on-disk segment sequence, preventing later cached writes from
-reusing segment filenames created by compaction, rewrite, leaf packing, or index
-vacuum.
+refreshes the value-log reader. Value lanes advance past their maximum observed
+on-disk sequence. Independent cached leaf writers reserve unique sequences from
+one allocator before creating files; observing a peer's higher reserved sequence
+does not rotate the other leaf writers. Maintained backend leaf writers reserve
+through that same allocator. An unreserved external leaf sequence still invokes
+the conservative advance-and-rotate fence, and explicit compaction retains its
+stronger handoff. These fences prevent filename collisions without creating
+empty successor generations after no-op GC.
 
-### 5.1 Immutable COW read ownership
+### 5.1 Periodic whole-generation leaf reclamation
+
+With the existing hot/warm/cold generation policy enabled, an admitted GC pass
+also invokes the maintained `LeafGenerationGC` collector before value-only
+eligibility can return early. This does not enable experimental leaf packing or
+change segment-size targets. Only wholly unreachable sealed generations and
+eligible immutable manifest revisions can be deleted; current writers, published
+cached roots, recoverable durable roots and physical-identity pins retain their
+existing authority. Partly live generations still require a separate rewrite or
+pack operation to reclaim their internal dead space.
+
+After refresh and manifest reconciliation, a segment pass avoids root capture
+and reachability scans when every record is Writable or Sealed with a current
+producer file. Those cases cannot retire a segment under the existing decision
+rules. Deleted, Retiring, unknown, and sealed noncurrent records retain the full
+scan path. This is a fresh writer-state check, not cached reachability: a
+concurrent rotation can defer collection until the next admitted pass. Immutable
+manifest revision GC still runs independently with fresh current/previous-root
+and reader protection, even when the segment phase has no candidate.
+
+Leaf and value collection share the existing maintenance admission, checkpoint
+and COW writer fence, a 30-second cancellable context, 90-second attempt interval,
+and three-minute joint-noop cooldown. Leaf deletion clears that joint cooldown
+even when value collection has no eligible bytes. A leaf-only eligibility pass
+consumes the same interval; errors remain errors rather than successful no-ops.
+The existing quiet, priority, WAL-mode and maintenance-phase guards still apply;
+this is not an independent timer or a promise of foreground maintenance progress.
+
+`treedb.cache.vlog_generation.leaf_gc.*` reports attempted runs, errors, cumulative
+execution milliseconds, deleted generations/files, logical retirement bytes, and
+deleted immutable manifest revisions/bytes for this periodic path. The
+`deleted_bytes` key preserves backend `BytesDeleted` accounting: it charges a
+generation when marked Deleted, before pinned files necessarily unlink, including
+partial-error results. It does not measure physically reclaimed bytes. Use actual
+deleted-file counts and physical file identities/inventory to establish unlink or
+space reclamation. Explicit API calls and rewrite/pack cleanup keep their own
+accounting. A nonzero run count alone does not establish reclamation or a storage
+bound. Scans retain the maintained collector's input-sized inventory/scratch
+costs; cancellation does not turn them
+into a fixed-RSS or strict wall-time bound. Pinned roots, active heads and
+partly live segments may prevent deletion indefinitely. This can add a full-index
+reachability scan and foreground write fencing even when value GC is below its
+eligibility floor. No same-DATA-root shortcut is used: releasing snapshot or
+recoverable-root resource pins can expose reclamation debt without a DATA root
+change. A joint no-op is retried after the existing three-minute cooldown.
+
+The focused small-target test deliberately crosses an 8 KiB leaf target through
+fixed logical churn, preserves an old snapshot, releases it, advances durable
+meta slots, and checks actual file deletion plus reopen on every platform.
+Platforms with retained-parent namespace support must also delete immutable
+manifest revisions. Compatibility platforms retain their existing segment GC,
+report `ManifestRevisionGCUnsupported`, and claim zero immutable revision
+deletions. This test is separate from default-target resource evidence and does
+not establish global steady-state storage equilibrium.
+
+### 5.2 Immutable COW read ownership
 
 Explicit `cow_btree` cuts retain registered value-log subsets and deletion pins
 through the existing DB-scoped physical identity authority. Each newly
@@ -1015,3 +1089,44 @@ Snapshot allocation admission runs inside that capture fence. Admission callback
 may reserve charges for selected owners, but must not synchronously publish,
 refresh, or close the same DB. A competing publisher waits until capture either
 pins the selected state or refuses without acquiring a reader/Set reference.
+
+## Externally certified raw DATA roots
+
+An external-recovery certificate retains the existing PhysicalSnapshotCut /
+RecoverableRootSet resource pins and page-reuse floor until certificate retirement.
+GC/rewrite must preserve those original dependency closures even if the visible
+working root has advanced. Recovery reinstalls both certified slots before startup
+reacquires their resources. See [external recovery](external-recovery.md).
+
+## First ordinary DATA publication closure
+
+Registering a raw outer-leaf file establishes its physical ownership; it does
+not establish that the next root references it. In particular, cached COW
+producers can register intermediate rotations without retaining a pending-created
+inventory. Ordinary DATA dependency capture therefore uses exact root-bound
+raw-edge receipts, or the maintained final-root reachability scanner when that
+evidence is unavailable. Current-writer inventory cannot substitute for closure.
+
+The first exact receipt can start from zero only when its predecessor user tree
+and predecessor system tree are both empty pager leaves, the candidate system
+root is unchanged, and the existing logical census matches the predecessor
+commit and physical index incarnation. This constructs private candidate counts;
+it does not make an unverified live raw census valid. Populated unknown bases,
+changed system roots, unsupported receipts and optional census capacity refusal
+retain the maintained exact scan. Successful ordinary receipt projection needs
+no full-tree scan. Its raw census counts only reachable edges, excluding unused
+registered rotations. An additive publication also retains the producer's
+captured created/current leaf-file inventory as conservative physical
+obligations, including empty lanes and intermediate build-group output. These
+obligations never enter logical ValuePtr or raw-edge counts. Destructive exact
+receipts retire that inventory superset and select reachable raw membership.
+
+The ordinary producer role is carried with its delta, independently of whether
+its optional raw receipt is available. A pager-backed index alone cannot
+identify that role: ordered multi-root groups use the same index layout and
+retain their existing bounded predecessor/producer projection when their
+collection-descriptor transitions are completely covered. Missing coverage or
+invalid tracking still uses the exact scanner. PRIMARY-only replacements also
+retain their existing root-bound unchanged materialized-base proof; a real DATA
+materialization still requires its complete candidate projection. The existing publication,
+pinning and retirement owners remain authoritative.

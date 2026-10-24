@@ -1144,11 +1144,22 @@ func (db *DB) captureDurableRootResourcesFromBaseWithRefCountsV1(idx *indexGen, 
 		// can refuse even when the original planner or final-root scan fits.
 		// Projection releases partial clones before returning; required capture
 		// admission and all non-capacity/identity failures remain fail-closed.
-		if err != nil && !errors.Is(err, retainedalloc.ErrCapacity) && !errors.Is(err, memtable.ErrCOWCapacity) {
-			return nil, err
+		if err != nil {
+			if !errors.Is(err, retainedalloc.ErrCapacity) && !errors.Is(err, memtable.ErrCOWCapacity) {
+				return nil, err
+			}
+			err = nil // The maintained exact scanner owns fallback admission.
 		}
 	}
-	if !reuseOuterLeafBase {
+	// Ordinary DATA must use exact root-bound edge evidence or the maintained
+	// final-root scanner. Registered/current producer files are not a complete
+	// reachability inventory: COW can register multiple rotations during one
+	// apply without retaining them as pending-created segments.
+	// The index layout alone does not identify an ordinary DATA publication:
+	// ordered collection groups also use a pager-backed DATA index. Their
+	// independently proven descriptor/delta coverage retains the bounded planner.
+	ordinaryData := delta != nil && delta.ordinaryRawProducer && db.indexOuterLeavesInValueLog
+	if !reuseOuterLeafBase && !ordinaryData {
 		freshOuterLeafReferences, reuseOuterLeafBase, err = db.planOuterLeafBaseDependencyReuseV1(base, additional, next, delta)
 	}
 	if err != nil {

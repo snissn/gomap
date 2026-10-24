@@ -966,6 +966,25 @@ against an older source, use this exact benchmark-only file as an identical
 shared overlay on both sources. Unified natural reads retain their separate
 post-preload state and remain the public workload qualification.
 
+### Certified external-recovery checkpoint cost
+
+`BenchmarkExternalRecoveryCheckpoint` is a standalone public-package diagnostic:
+
+```sh
+go test ./TreeDB -run '^$' -bench '^BenchmarkExternalRecoveryCheckpoint$' -benchmem -benchtime=8x
+```
+
+It measures an existing-key update plus a complete certified checkpoint at three
+record counts, with inline64 and forced-pointer4096 values. Standard Go output
+reports ns/op, B/op, allocs/op and `checkpoint_files_B/op`; the latter counts
+certificate descriptor files, not all physical writes. Fixture loading, the
+initial checkpoint, final reopen verification and Close are excluded. Pointer
+values repeat and use default compression. This component measurement does not
+certify sustained resource equilibrium or Dgraph transaction latency. Go test
+profiles from it are not benchprof inputs. See the
+[external-recovery contract](../../TreeDB/docs/spec/external-recovery.md#component-cost-diagnostic)
+for the exact boundary.
+
 ### Public parallel durable-ACK diagnostic
 
 `BenchmarkCommandWALParallelSync` measures public `SetSync` at one, four and
@@ -1009,3 +1028,12 @@ no median bytes/allocation growth, identity binding and quiet-host qualification
 remain unchanged. Old failed/noisy measurements remain failed retained evidence;
 new-harness rows cannot be silently pooled with them. Short diagnostics do not
 establish that disabling workers resolves every observed byte difference.
+
+### Standalone COW successor workspace diagnostic
+
+`BenchmarkCOWSuccessorWorkspace` in `TreeDB/mvcc` measures checkpointed public
+`no_wal_fast/cow_ordered` GetAt and unchanged prefix iteration. It emits ordinary
+Go benchmark rows (ns/op, B/op, allocs/op), not benchprof inputs. The exact
+configuration, `go test -c`/prebuilt-binary commands and ten-cell, three-pair
+diagnostic boundary are in
+[the #5214 packet](../../TreeDB/docs/benchmarks/cow-successor-workspace-5214.md).

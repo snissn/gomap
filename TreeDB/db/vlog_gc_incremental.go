@@ -111,6 +111,7 @@ type valueLogRefDelta struct {
 	requiresCandidateProjection     bool
 	allowEmptyDependencyReuse       bool
 	outerLeafDependencyReuse        bool
+	ordinaryRawProducer             bool
 	rawChanges                      *valueLogRefDelta
 	rawExact                        bool
 	rawIndexID, rawInput, rawOutput uint64
@@ -163,6 +164,7 @@ func (d *valueLogRefDelta) resetForReuse() {
 	d.requiresCandidateProjection = false
 	d.allowEmptyDependencyReuse = false
 	d.outerLeafDependencyReuse = false
+	d.ordinaryRawProducer = false
 	if d.changes != nil {
 		// Keep small/typical maps warm for reuse; drop unusually large maps.
 		if len(d.changes) > valueLogRefDeltaPoolMaxRetainedEntries {
@@ -846,6 +848,13 @@ func (db *DB) buildValueLogRefDeltaForApply(idx *indexGen, rootID, newRoot, base
 		delta.requiresCandidateProjection = false
 	}
 	if err == nil && delta != nil {
+		// Preserve producer role even when the optional exact receipt is absent.
+		// Ordinary DATA may then scan, but must not substitute registered-file
+		// inventory for missing root-bound raw-edge evidence. Ordered multi-root
+		// publishers establish their different descriptor-coverage proof separately.
+		// PRIMARY also has its own unchanged materialized-base receipt; it must
+		// retain that bounded planner rather than take the ordinary DATA fallback.
+		delta.ordinaryRawProducer = idx.primary == nil
 		raw := newValueLogRefDelta()
 		exact, rawErr := idx.zipper.RawLeafReferenceDelta(result, rootID, newRoot, func(id uint32, change int64) error { return raw.addRawChangeChecked(id, change) })
 		if rawErr != nil {

@@ -815,8 +815,17 @@ already-admitted reader root's closure. Capture and physical-cut enumeration
 include both slot closures and their parent-proof closures; overwrite and
 terminal disposal consume each original edge once.
 DATA and external/PRIMARY dependency obligations remain durable before capsule
-installation, followed by the PRIMARY fence. Constructor reuse does not make
-those syncs redundant. Post-install uncertainty preserves actual prior custody,
+installation, followed by the PRIMARY fence. A V6 publication may reuse the
+completed parent's DATA sync only when an in-memory completion receipt binds
+the same physical DATA identity and pager incarnation, the complete inherited
+DATA-write prefix is empty, and every DATA projection and allocator operand
+matches that selected parent. This path performs no DATA growth or page writes;
+it retains the original DATA token's custody and all PRIMARY dependency,
+namespace, capsule-body and fence barriers. Open/recovery starts without a
+receipt, so the first publication syncs DATA. Missing or mismatched evidence
+uses the ordinary DATA sync path. A receipt is installed only after successful
+capsule publication; visibility alone grants no durability. Post-install
+uncertainty preserves actual prior custody,
 poisons publication, and refuses later writes until recovery. Durable report
 finishes the ordinary transaction synchronously; this ordinary callback path is
 not bounded native Accepted/Finish qualification.
@@ -891,3 +900,12 @@ records; verification still uses the original selected metadata owner, complete
 namespace requirements and original error custody. Stream readers are borrowed
 only through finalization and dropped before the captured read is released.
 No live ANN authority or new storage format is implied.
+
+## Externally logged raw DATA materialization
+
+The opt-in ExternalRecovery owner accepts only explicitly configured journal-disabled raw
+DATA COW materialization. Its ordinary Apply return acknowledges materialization;
+the caller owns durable command/decision authority. Its checkpoint certificate
+retains the maintained publisher's exact root/dependencies with bounded descriptor
+output. See [external recovery](external-recovery.md) for the semantic barrier,
+publication order, retained roots, and unchanged standalone WriteSync contract.

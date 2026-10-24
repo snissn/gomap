@@ -154,8 +154,14 @@ func TestSnapshotClosedSurfaceRejectsReadsAndInvalidatesAllIterators(t *testing.
 	}
 
 	for i, it := range iters {
+		if bound, ok := it.(*snapshotBoundIterator); !ok || bound.ordinary == nil {
+			t.Fatalf("iterator %d did not cache its ordinary tree", i)
+		}
 		if err := it.Close(); err != nil {
 			t.Fatalf("iterator %d Close: %v", i, err)
+		}
+		if bound := it.(*snapshotBoundIterator); bound.ordinary != nil {
+			t.Fatalf("iterator %d retained its ordinary tree after Close", i)
 		}
 		if i+1 < len(iters) && snap.db == nil {
 			t.Fatalf("snapshot released state with %d iterators still open", len(iters)-i-1)

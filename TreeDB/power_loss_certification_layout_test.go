@@ -20,80 +20,98 @@ type freshLayoutNamespaceCase struct {
 	variantID         string
 	disableSideStores bool
 	partial           bool
+	symlinkParent     bool
 	point             durabilitycut.Point
 	path              func(parent, database string) string
 	wantOccurrence    int
 	wantStableDirs    []string
 }
 
+// Ordinary open now persists the INIT.LOCK parent before constructing child
+// stores. Version these exact witness addresses rather than reusing the earlier
+// cut IDs for a different initialization sequence.
 func TestPowerLossCertificationFreshCompositeBeforeOuterParentSync(t *testing.T) {
 	testPowerLossCertificationFreshLayout(t, freshLayoutNamespaceCase{
-		variantID:      "fresh-layout-composite-before-outer-parent-sync",
+		variantID:      "fresh-layout-composite-owned-init-v2-before-outer-parent-sync",
 		point:          durabilitycut.BeforeNewFileDirectorySync,
 		path:           func(parent, _ string) string { return parent },
-		wantOccurrence: 1,
+		wantOccurrence: 0,
 		wantStableDirs: []string{"."},
 	})
 }
 
 func TestPowerLossCertificationFreshCompositeBeforeRootSync(t *testing.T) {
 	testPowerLossCertificationFreshLayout(t, freshLayoutNamespaceCase{
-		variantID:      "fresh-layout-composite-before-root-sync",
+		variantID:      "fresh-layout-composite-owned-init-v2-before-root-sync",
 		point:          durabilitycut.BeforeNewFileDirectorySync,
 		path:           func(_, database string) string { return database },
-		wantOccurrence: 0,
-		wantStableDirs: []string{"."},
+		wantOccurrence: 1,
+		wantStableDirs: []string{".", "db"},
 	})
 }
 
 func TestPowerLossCertificationFreshCompositeAfterRootSync(t *testing.T) {
 	testPowerLossCertificationFreshLayout(t, freshLayoutNamespaceCase{
-		variantID:      "fresh-layout-composite-after-root-sync",
+		variantID:      "fresh-layout-composite-owned-init-v2-after-root-sync",
 		point:          durabilitycut.AfterNewFileDirectorySync,
 		path:           func(_, database string) string { return database },
-		wantOccurrence: 0,
-		wantStableDirs: []string{"."},
-	})
-}
-
-func TestPowerLossCertificationFreshCompositeAfterOuterParentSync(t *testing.T) {
-	testPowerLossCertificationFreshLayout(t, freshLayoutNamespaceCase{
-		variantID:      "fresh-layout-composite-after-outer-parent-sync",
-		point:          durabilitycut.AfterNewFileDirectorySync,
-		path:           func(parent, _ string) string { return parent },
 		wantOccurrence: 1,
 		wantStableDirs: []string{".", "db", "db/dictdb", "db/maindb"},
 	})
 }
 
+func TestPowerLossCertificationFreshCompositeAfterOuterParentSync(t *testing.T) {
+	testPowerLossCertificationFreshLayout(t, freshLayoutNamespaceCase{
+		variantID:      "fresh-layout-composite-owned-init-v2-after-outer-parent-sync",
+		point:          durabilitycut.AfterNewFileDirectorySync,
+		path:           func(parent, _ string) string { return parent },
+		wantOccurrence: 0,
+		wantStableDirs: []string{".", "db"},
+	})
+}
+
 func TestPowerLossCertificationFreshCompositeBeforeMainDBParentSync(t *testing.T) {
 	testPowerLossCertificationFreshLayout(t, freshLayoutNamespaceCase{
-		variantID:      "fresh-layout-composite-before-maindb-parent-sync",
+		variantID:      "fresh-layout-composite-owned-init-v2-before-maindb-parent-sync",
 		point:          durabilitycut.BeforeNewFileDirectorySync,
 		path:           func(_, database string) string { return filepath.Join(database, "maindb") },
-		wantOccurrence: 5,
+		wantOccurrence: 6,
 		wantStableDirs: []string{".", "db", "db/dictdb", "db/dictdb/column_assets", "db/dictdb/leaf_vlog", "db/dictdb/value_vlog", "db/dictdb/wal", "db/maindb"},
 	})
 }
 
 func TestPowerLossCertificationFreshCompositeAfterMainDBParentSync(t *testing.T) {
 	testPowerLossCertificationFreshLayout(t, freshLayoutNamespaceCase{
-		variantID:      "fresh-layout-composite-after-maindb-parent-sync",
+		variantID:      "fresh-layout-composite-owned-init-v2-after-maindb-parent-sync",
 		point:          durabilitycut.AfterNewFileDirectorySync,
 		path:           func(_, database string) string { return filepath.Join(database, "maindb") },
-		wantOccurrence: 5,
+		wantOccurrence: 6,
 		wantStableDirs: []string{".", "db", "db/dictdb", "db/dictdb/column_assets", "db/dictdb/leaf_vlog", "db/dictdb/value_vlog", "db/dictdb/wal", "db/maindb", "db/maindb/column_assets", "db/maindb/leaf_vlog", "db/maindb/value_vlog", "db/maindb/wal"},
 	})
 }
 
 func TestPowerLossCertificationPartialCompositeAfterOuterParentSync(t *testing.T) {
 	testPowerLossCertificationFreshLayout(t, freshLayoutNamespaceCase{
-		variantID:      "partial-layout-composite-after-outer-parent-sync",
+		variantID:      "partial-layout-composite-owned-init-v2-after-outer-parent-sync",
 		partial:        true,
 		point:          durabilitycut.AfterNewFileDirectorySync,
 		path:           func(parent, _ string) string { return parent },
-		wantOccurrence: 1,
-		wantStableDirs: []string{".", "db", "db/dictdb", "db/maindb"},
+		wantOccurrence: 0,
+		wantStableDirs: []string{".", "db"},
+	})
+}
+
+// Exercise the canonical witness spelling even when a caller supplied an
+// alias, as macOS temporary roots commonly do via /var -> /private/var.
+func TestPowerLossCertificationPartialCompositeAfterOuterParentSyncSymlinkParent(t *testing.T) {
+	testPowerLossCertificationFreshLayout(t, freshLayoutNamespaceCase{
+		variantID:      "partial-layout-composite-owned-init-v2-canonical-symlink-parent-after-outer-parent-sync",
+		partial:        true,
+		symlinkParent:  true,
+		point:          durabilitycut.AfterNewFileDirectorySync,
+		path:           func(parent, _ string) string { return parent },
+		wantOccurrence: 0,
+		wantStableDirs: []string{".", "db"},
 	})
 }
 
@@ -129,6 +147,23 @@ func testPowerLossCertificationFreshLayout(t *testing.T, testCase freshLayoutNam
 		t.Fatal(err)
 	}
 	parent := t.TempDir()
+	if testCase.symlinkParent {
+		alias := filepath.Join(t.TempDir(), "alias")
+		if err := os.Symlink(parent, alias); err != nil {
+			t.Fatal(err)
+		}
+		parent = filepath.Join(alias, "child")
+		if err := os.Mkdir(parent, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Match the canonical ownership-lock namespace. Without this, an existing
+	// partial layout resolves the symlink while a fresh path retains its alias,
+	// shifting global event ordinals on macOS even at the same physical cut.
+	parent, err = filepath.EvalSymlinks(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
 	databaseDir := filepath.Join(parent, "db")
 	model, err := powerlossoracle.Capture(parent)
 	if err != nil {

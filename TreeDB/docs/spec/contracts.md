@@ -983,3 +983,20 @@ one opening view, staged point effects and forward/reverse predicates, latest-ro
 R-union-W validation, bounded history with ErrTxnTooOld, and named open-iterator
 mutation rejection. This implemented capability is separate from the legacy
 conditional target text above and from managed external timestamps.
+
+## Explicit external recovery owner
+
+`OpenExternalRecovery` requires a durable external command/decision authority and
+Apply-scoped mutation; Checkpoint requires the application semantic barrier.
+Ordinary public Open and maintenance backend opens refuse the owner marker and
+share fresh initialization ownership. See [external recovery](external-recovery.md)
+for exact certificates, resource ownership and supported raw DATA capabilities.
+This opt-in API does not redefine ordinary WriteSync.
+
+
+External snapshot InstallCheckpoint requires explicit accepted-source authority,
+receiver metadata, and a caller-owned full reader/queued-write drain. It replaces
+the DB pointer after receiver CURRENT publication. A separate durable log must
+persist accepted install intent before that publication and resolve it before
+replay/health; see the
+[transfer lifecycle contract](external-recovery.md#authorized-portable-snapshot-transfer).

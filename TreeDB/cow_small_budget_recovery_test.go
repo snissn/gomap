@@ -3,6 +3,8 @@ package treedb
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"unsafe"
 
@@ -15,6 +17,14 @@ import (
 func TestCOWPublicSmallBudgetAcceptedPrefixDrainsAndReopens(t *testing.T) {
 	for _, profile := range cowPublicContractProfiles {
 		t.Run(string(profile), func(t *testing.T) {
+			// Generational GC can checkpoint independently of the periodic WAL
+			// checkpoint interval. Keep this exact unsealed-prefix fixture stable
+			// from Open through the explicit reserved-maintenance checkpoint.
+			pauseFile := filepath.Join(t.TempDir(), "accepted-prefix-maintenance.pause")
+			if err := os.WriteFile(pauseFile, []byte("pause"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("TREEDB_VLOG_MAINTENANCE_PAUSE_FILE", pauseFile)
 			database, opts, _ := cowPublicContractOpen(t, profile, func(o *Options) {
 				o.COWMemtableLimits = DefaultCOWMemtableLimits()
 				o.COWMemtableLimits.MaxInFlightBytes = 1 << 20
@@ -22,6 +32,9 @@ func TestCOWPublicSmallBudgetAcceptedPrefixDrainsAndReopens(t *testing.T) {
 				o.ValueLog.PointerThreshold = 1 << 30
 				o.DisableBackgroundPrune = true
 				o.BackgroundCheckpointInterval = -1
+				o.BackgroundCheckpointIdleDuration = -1
+				o.MaxWALBytes = -1
+				o.BackgroundIndexVacuumInterval = -1
 			})
 			prefix, initial, err := database.backend.PrivateCOWAcceptedPrefix(database.txnOwner)
 			if err != nil {
@@ -69,6 +82,9 @@ func TestCOWPublicSmallBudgetAcceptedPrefixDrainsAndReopens(t *testing.T) {
 				t.Fatalf("reserved maintenance did not seal accepted endpoint: accepted=%+v sealed=%+v", accepted, sealed)
 			}
 			pressure.Close()
+			if err := os.Remove(pauseFile); err != nil {
+				t.Fatal(err)
+			}
 			if got, err := database.Get([]byte("bounded")); err != nil || string(got) != last {
 				t.Fatalf("refusal changed accepted value: %q, %v; want %q", got, err, last)
 			}

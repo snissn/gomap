@@ -7,6 +7,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/tree"
 )
 
 // snapshotBoundIterator prevents a Snapshot from releasing its pinned state
@@ -16,6 +17,8 @@ import (
 type snapshotBoundIterator struct {
 	owner *Snapshot
 	inner iterator.UnsafeIterator
+	// ordinary borrows inner for direct forwarding; inner remains the sole close owner.
+	ordinary *tree.Iterator
 
 	closed    atomic.Bool
 	closeOnce sync.Once
@@ -51,7 +54,8 @@ func (s *Snapshot) bindIteratorLocked(inner iterator.UnsafeIterator) (iterator.U
 		return nil, ErrClosed
 	}
 	start, end := inner.Domain()
-	it := &snapshotBoundIterator{owner: s, inner: inner, start: start, end: end}
+	ordinary, _ := inner.(*tree.Iterator)
+	it := &snapshotBoundIterator{owner: s, inner: inner, ordinary: ordinary, start: start, end: end}
 	if s.iterators == nil {
 		s.iterators = make(map[*snapshotBoundIterator]struct{})
 	}
@@ -66,12 +70,17 @@ func (s *Snapshot) invalidateBoundIteratorsLocked() {
 }
 
 func (it *snapshotBoundIterator) begin() bool {
-	return it != nil && !it.closed.Load() && it.inner != nil
+	// Construction rejects a nil inner, and Close marks the handle closed before
+	// detaching inner. An admitted handle therefore always has an inner owner.
+	return it != nil && !it.closed.Load()
 }
 
 func (it *snapshotBoundIterator) Valid() bool {
 	if !it.begin() {
 		return false
+	}
+	if it.ordinary != nil {
+		return it.ordinary.Valid()
 	}
 	return it.inner.Valid()
 }
@@ -80,11 +89,19 @@ func (it *snapshotBoundIterator) Next() {
 	if !it.begin() {
 		return
 	}
+	if it.ordinary != nil {
+		it.ordinary.Next()
+		return
+	}
 	it.inner.Next()
 }
 
 func (it *snapshotBoundIterator) Seek(key []byte) {
 	if !it.begin() {
+		return
+	}
+	if it.ordinary != nil {
+		it.ordinary.Seek(key)
 		return
 	}
 	it.inner.Seek(key)
@@ -122,6 +139,9 @@ func (it *snapshotBoundIterator) Key() []byte {
 	if !it.begin() {
 		return nil
 	}
+	if it.ordinary != nil {
+		return it.ordinary.Key()
+	}
 	return it.inner.Key()
 }
 
@@ -154,7 +174,7 @@ func (it *snapshotBoundIterator) IsDeleted() bool {
 }
 
 func (it *snapshotBoundIterator) Error() error {
-	if it == nil || it.closed.Load() || !it.begin() {
+	if !it.begin() {
 		return ErrClosed
 	}
 	return it.inner.Error()
@@ -168,6 +188,7 @@ func (it *snapshotBoundIterator) Close() error {
 	it.closeOnce.Do(func() {
 		inner := it.inner
 		it.inner = nil
+		it.ordinary = nil
 		if inner != nil {
 			it.closeErr = inner.Close()
 		}

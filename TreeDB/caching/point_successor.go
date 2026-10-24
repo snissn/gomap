@@ -17,14 +17,15 @@ import (
 var errPointSuccessorExclusiveRetry = errors.New("cachingdb: successor requires exclusive retry")
 
 type pointSuccessorCandidate struct {
-	key      []byte
-	value    []byte
-	ptr      page.ValuePtr
-	flags    byte
-	revision page.EntryRevision
-	priority int
-	found    bool
-	layer    pointSuccessorLayer
+	key        []byte
+	value      []byte
+	ptr        page.ValuePtr
+	flags      byte
+	revision   page.EntryRevision
+	priority   int
+	found      bool
+	layer      pointSuccessorLayer
+	valueOwned bool // COW basis already copied a physical pointer winner
 }
 
 // pointSuccessorLayer identifies the source that supplied a visible result.

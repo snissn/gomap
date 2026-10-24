@@ -514,3 +514,5 @@ For architecture/behavior/format authority, prefer this folder.
 
 - `TreeDB/docs/spec/raw-cow-transactions.md`: qualified public raw transactions,
   opening views, bounded conflict history, publication and iterator lifetime.
+
+- [External recovery ownership and retained DATA checkpoints](external-recovery.md) specifies the opt-in externally logged raw DATA owner.

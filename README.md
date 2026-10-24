@@ -19,6 +19,11 @@ TreeDB is pre-alpha:
 - Benchmark DB directories should be rebuilt from scratch unless a report says
   otherwise.
 
+Historical evidence under `TreeDB/docs/evidence` and `docs/evidence` is kept in
+Git. Those archives have separate module boundaries so runtime Go module
+downloads remain below Go's 500 MiB source archive limit. Clone the repository
+to inspect the complete evidence archive.
+
 ## What TreeDB Provides
 
 - Persistent B+Tree index with copy-on-write root publishing.

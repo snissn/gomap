@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/stableio"
 )
 
 // ReplacementMayHaveCommitted reports whether an atomic replacement reached
@@ -34,6 +35,18 @@ func (e *replacementMayHaveCommittedError) Unwrap() error { return e.err }
 // Write atomically replaces path with data using a temp file in the same
 // directory. On Windows it retries rename on transient sharing/access errors.
 func Write(path string, data []byte, perm os.FileMode) error {
+	return write(path, data, perm, false)
+}
+
+// WriteDurable atomically replaces path and persists its parent namespace.
+// Success covers both the replacement bytes and their recovery-selectable name.
+// A failure after rename is ambiguous, including a failed parent-directory sync.
+// Write retains its existing file-sync-only contract.
+func WriteDurable(path string, data []byte, perm os.FileMode) error {
+	return write(path, data, perm, true)
+}
+
+func write(path string, data []byte, perm os.FileMode, durable bool) error {
 	if path == "" {
 		return nil
 	}
@@ -57,15 +70,19 @@ func Write(path string, data []byte, perm os.FileMode) error {
 		_ = f.Close()
 		return err
 	}
-	if err := durabilitycut.EmitPath(durabilitycut.BeforeDependencyFileSync, durabilitycut.ResourceAuxiliary, dir, tmp); err != nil {
+	if err := durabilitycut.EmitStablePath(durabilitycut.BeforeDependencyFileSync, durabilitycut.ResourceAuxiliary, dir, tmp, f); err != nil {
 		_ = f.Close()
 		return err
 	}
-	if err := f.Sync(); err != nil {
+	syncFile := (*os.File).Sync
+	if durable {
+		syncFile = stableio.SyncFile
+	}
+	if err := syncFile(f); err != nil {
 		_ = f.Close()
 		return err
 	}
-	if err := durabilitycut.EmitPath(durabilitycut.AfterDependencyFileSync, durabilitycut.ResourceAuxiliary, dir, tmp); err != nil {
+	if err := durabilitycut.EmitStablePath(durabilitycut.AfterDependencyFileSync, durabilitycut.ResourceAuxiliary, dir, tmp, f); err != nil {
 		_ = f.Close()
 		return err
 	}
@@ -80,6 +97,11 @@ func Write(path string, data []byte, perm os.FileMode) error {
 		if err := os.Rename(tmp, path); err == nil {
 			if err := durabilitycut.EmitNamespace(durabilitycut.NamespaceRename, durabilitycut.ResourceAuxiliary, dir, tmp, path); err != nil {
 				return &replacementMayHaveCommittedError{err: err}
+			}
+			if durable {
+				if err := SyncDirectory(dir); err != nil {
+					return &replacementMayHaveCommittedError{err: err}
+				}
 			}
 			return nil
 		}
@@ -97,6 +119,23 @@ func Write(path string, data []byte, perm os.FileMode) error {
 		return err
 	}
 	return lastErr
+}
+
+// SyncDirectory persists the namespace through the exact directory handle and
+// exposes the same before/after boundary used by the stable-storage model.
+func SyncDirectory(path string) (err error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, f.Close()) }()
+	if err := durabilitycut.EmitStablePath(durabilitycut.BeforeNewFileDirectorySync, durabilitycut.ResourceAuxiliary, path, path, f); err != nil {
+		return err
+	}
+	if err := stableio.SyncFile(f); err != nil {
+		return err
+	}
+	return durabilitycut.EmitStablePath(durabilitycut.AfterNewFileDirectorySync, durabilitycut.ResourceAuxiliary, path, path, f)
 }
 
 func removeObserved(root, path string) error {

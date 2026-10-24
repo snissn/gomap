@@ -77,6 +77,7 @@ func releasePrimaryPublicationSealV6(s *primaryPublicationSealV5) (bool, error) 
 		s.promotion.View = rootpublication.PrimaryCapsuleViewV6{}
 	}
 	s.promotion, s.prepared = nil, nil
+	s.dataParentCoverage = primaryDataParentCoverageV6{}
 	s.projection = rootpublication.PrimaryProjectionV5{}
 	s.disposalAttempted = true
 	return true, nil

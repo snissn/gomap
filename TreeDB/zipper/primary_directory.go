@@ -201,7 +201,7 @@ func (z *Zipper) loadPrimaryOperand(op node.PrimaryOperand, entry *node.PrimaryD
 	return n, nil
 }
 
-func (z *Zipper) writePrimaryDirectory(base node.PrimaryOperand, baseSeq uint64, entries []node.PrimaryDirectoryEntry, metrics *adaptive.Metrics, owners ...primaryarena.ReadRootConstructionV6) (uint64, error) {
+func (z *Zipper) writePrimaryDirectory(base node.PrimaryOperand, baseSeq uint64, entries []node.PrimaryDirectoryEntry, metrics *adaptive.Metrics, image []byte, owners ...primaryarena.ReadRootConstructionV6) (uint64, error) {
 	// Compaction removes classes; only that genuine construction reindexes them.
 	var seen [node.PrimaryDirectoryMaxEntries]bool
 	valid := true
@@ -218,13 +218,13 @@ func (z *Zipper) writePrimaryDirectory(base node.PrimaryOperand, baseSeq uint64,
 		}
 	}
 	if z.primaryArena != nil {
-		return z.writePrimaryArenaDirectory(base, baseSeq, entries, metrics, owners...)
+		return z.writePrimaryArenaDirectory(base, baseSeq, entries, metrics, image, owners...)
 	}
 	id, err := z.allocator.Alloc(0)
 	if err != nil {
 		return 0, err
 	}
-	image, err := z.pager.GetForWrite(id)
+	image, err = z.pager.GetForWrite(id)
 	if err != nil {
 		return 0, err
 	}
@@ -339,7 +339,7 @@ func (z *Zipper) ConsolidatePrimaryDirectory(rootID uint64, maxCells int) (uint6
 	if err != nil {
 		return 0, nil, metrics, err
 	}
-	root, err := z.writePrimaryDirectory(base, seq, entries[count:], &metrics)
+	root, err := z.writePrimaryDirectory(base, seq, entries[count:], &metrics, nil)
 	if err != nil {
 		return 0, nil, metrics, err
 	}
@@ -462,7 +462,7 @@ func (z *Zipper) applyPrimaryDirectory(rootID uint64, ops []batch.Entry, ranges 
 				return 0, nil, metrics, e
 			}
 			base = node.PrimaryOperand{Ref: page.PageChildRef(newBase), Digest: sha256.Sum256(data)}
-			root, e := z.writePrimaryDirectory(base, baseSeq+1, nil, &metrics, constructor)
+			root, e := z.writePrimaryDirectory(base, baseSeq+1, nil, &metrics, nil, constructor)
 			return root, retired, metrics, e
 		}
 	}
@@ -582,7 +582,11 @@ func (z *Zipper) applyPrimaryDirectory(rootID uint64, ops []batch.Entry, ranges 
 		metrics.PrimaryBytesWritten += page.PageSize
 	}
 	metrics.ZipperApplyOps = len(ops) + len(ranges)
-	root, err = z.writePrimaryDirectory(base, baseSeq, entries, &metrics, constructor)
+	// SealComponent copies each component into its immutable bank before it
+	// returns. Reuse the same admitted image for the directory after the final
+	// component digest is captured; the outer defer retains its charge and clears
+	// it only after the directory seal has copied it too.
+	root, err = z.writePrimaryDirectory(base, baseSeq, entries, &metrics, componentImage, constructor)
 	if err == nil && unchangedBase && constructor != nil && cfg.unchangedPrimaryBase != nil {
 		*cfg.unchangedPrimaryBase = unchangedPrimaryBaseEvidence{
 			pager: z.pager, arena: z.primaryArena, input: rootID, output: root,
@@ -637,7 +641,10 @@ func (z *Zipper) collectPrimaryBaseOld(ref page.ChildRef, key []byte, cfg applyR
 	return node.ErrPrimaryDirectory
 }
 
-func (z *Zipper) writePrimaryArenaDirectory(base node.PrimaryOperand, baseSeq uint64, entries []node.PrimaryDirectoryEntry, metrics *adaptive.Metrics, owners ...primaryarena.ReadRootConstructionV6) (root uint64, err error) {
+// A non-nil image is borrowed from the caller's still-admitted private scratch.
+// Its owner keeps both the backing and its charge until this synchronous seal
+// returns. Other callers allocate and refund their own image here.
+func (z *Zipper) writePrimaryArenaDirectory(base node.PrimaryOperand, baseSeq uint64, entries []node.PrimaryDirectoryEntry, metrics *adaptive.Metrics, image []byte, owners ...primaryarena.ReadRootConstructionV6) (root uint64, err error) {
 	a := z.primaryArena
 	work := &iterator.OrdinalScanWork{RecordLimit: ^uint64(0), ByteLimit: ^uint64(0)}
 	defer func() { metrics.PrimaryBankRecords += work.Records; metrics.PrimaryBankWorkBytes += work.Bytes }()
@@ -713,11 +720,15 @@ func (z *Zipper) writePrimaryArenaDirectory(base node.PrimaryOperand, baseSeq ui
 		}
 		defer a.DropGroup(groups[0], work)
 	}
-	image, e := makePrimaryScratch[byte](a, page.PageSize, page.PageSize)
-	if e != nil {
-		return 0, e
+	if image == nil {
+		image, e = makePrimaryScratch[byte](a, page.PageSize, page.PageSize)
+		if e != nil {
+			return 0, e
+		}
+		defer releasePrimaryScratch(a, &image)
+	} else if len(image) != page.PageSize {
+		return 0, node.ErrPrimaryDirectory
 	}
-	defer releasePrimaryScratch(a, &image)
 	if e = node.EncodePrimaryDirectory(image, bundle.Directory.PageID, baseSeq, base, entries); e != nil {
 		return 0, e
 	}
@@ -744,7 +755,7 @@ func (z *Zipper) BuildPrimaryRoot(baseID, baseSequence uint64) (uint64, error) {
 	if e != nil {
 		return 0, e
 	}
-	return z.writePrimaryDirectory(node.PrimaryOperand{Ref: page.PageChildRef(baseID), Digest: sha256.Sum256(image)}, baseSequence, nil, &adaptive.Metrics{})
+	return z.writePrimaryDirectory(node.PrimaryOperand{Ref: page.PageChildRef(baseID), Digest: sha256.Sum256(image)}, baseSequence, nil, &adaptive.Metrics{}, nil)
 }
 
 // CopyPrimaryRoot gives a system-only ordinary publication its own complete
@@ -770,7 +781,7 @@ func (z *Zipper) CopyPrimaryRoot(id uint64) (uint64, error) {
 		}
 	}
 	base, seq := d.Base()
-	return z.writePrimaryDirectory(base, seq, entries, &adaptive.Metrics{})
+	return z.writePrimaryDirectory(base, seq, entries, &adaptive.Metrics{}, nil)
 }
 
 // RebasePrimaryRoot builds a new complete ordinary directory after genuine DATA
@@ -781,5 +792,5 @@ func (z *Zipper) RebasePrimaryRoot(baseID, baseSequence uint64, entries []node.P
 	if err != nil {
 		return 0, err
 	}
-	return z.writePrimaryDirectory(node.PrimaryOperand{Ref: page.PageChildRef(baseID), Digest: sha256.Sum256(image)}, baseSequence, entries, &adaptive.Metrics{})
+	return z.writePrimaryDirectory(node.PrimaryOperand{Ref: page.PageChildRef(baseID), Digest: sha256.Sum256(image)}, baseSequence, entries, &adaptive.Metrics{}, nil)
 }

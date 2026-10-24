@@ -2172,6 +2172,14 @@ registry excludes prepared and published resources; held snapshot generation
 pins conservatively retain every matching revision. The current compatibility
 revision is always retained. GC validates the complete exact-parent revision
 inventory before deletion; it never selects revisions by age or a fixed count.
+The existing generation-maintenance scheduler invokes this same whole-generation
+collector independently of value rewrite and experimental leaf packing. This
+changes collection scheduling, not manifest bytes, reachability rules, or deletion
+authority. Independent cached leaf writers share a sequence reservation allocator;
+a higher sequence reserved by another writer does not alone require rotation.
+Unreserved external advances and explicit compaction retain their collision fences.
+See [periodic leaf reclamation](value-log-lifecycle.md#51-periodic-whole-generation-leaf-reclamation)
+for admission, retry cadence, observability and scan-cost limits.
 
 Deletion uses an exact-parent private rename, validates the moved physical
 identity, then unlinks and syncs that retained directory before committing the
@@ -4318,3 +4326,43 @@ Native deterministic JSON apply reuses the existing catalog-create and by-ID
 insert/update/delete singleton command kinds and payload encodings. Native
 assignment and exact physical-seal completion introduce no on-disk format or
 sidecar; see [write-path-and-durability.md](write-path-and-durability.md#native-deterministic-collection-apply).
+
+## External recovery owner format V2
+
+The opt-in V2 external owner uses immutable bounded root descriptors and exact
+inode/namespace bindings rather than copied images. See
+[external recovery](external-recovery.md#v2-certificate-and-retained-root) for the
+marker, CURRENT, certificate and retained-root encodings and size bounds. V1
+prototype owner directories require rebuilding; no migration is provided.
+
+
+External recovery V2 certificates bind a `data_directory` relative namespace.
+Local certificates initially select `working`; an authorized portable install
+selects a final `materialized-*` namespace. The previous certificate can name a
+different, closed physical namespace until retirement. Portable tar transfer and
+receiver identity rebinding are specified in
+[external recovery](external-recovery.md#authorized-portable-snapshot-transfer).
+
+External-recovery certificate, root descriptor and CURRENT encodings are unchanged
+by the stable-image observation seam. Their replacement protocol synchronizes
+the exact metadata file before rename and the containing directory afterward;
+restore synchronizes both selected meta slots before backend Open. The modeled
+recovery coverage and limits are described in [external recovery](external-recovery.md#modeled-stable-image-recovery).
+
+### Initial ordinary DATA dependency closure
+
+The dependency-manifest encoding is unchanged. Its raw outer-leaf entries must
+include every file referenced by the selected root, including noncurrent files
+created during its first apply. File registration and current-writer membership
+are ownership evidence, not a complete root dependency inventory. The initial
+ordinary DATA publication can derive exact membership from its bound apply
+receipt and a proven empty user/system predecessor; otherwise it uses the
+maintained final-root scanner. No directory-discovery recovery fallback repairs
+an incomplete manifest.
+
+The raw census is distinct from conservative producer inventory: additive
+ordinary publications also retain captured created/current leaf-file identities
+(including empty lanes) as physical obligations, without counting them as raw
+edges or logical ValuePtrs. Exact destructive receipts remove that superset.
+Ordered multi-root publications retain their separately proven descriptor/delta
+projection; their pager-backed index layout does not imply ordinary DATA role.

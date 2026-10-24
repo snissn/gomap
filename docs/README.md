@@ -18,6 +18,7 @@ TreeDB is a persistent B+Tree with a high-throughput cached write-back layer.
 - **[Write Paths](TREEDB_WRITE_PATHS.md)**: command-WAL write semantics and legacy compatibility notes.
 - **[Cached vs Backend](TREEDB_CACHED_VS_BACKEND.md)**: Legacy note (backend-only removed).
 - **[Recovery](TREEDB_RECOVERY.md)**: Crash consistency, command-WAL replay, and legacy compatibility boundaries.
+- **[External Recovery Prototype](TREEDB_EXTERNAL_RECOVERY_PROTOTYPE.md)**: Raft-owned recovery, exact certified checkpoints, validation and remaining architecture gates.
 - **[Profiles](TREEDB_PROFILES.md)**: Public command-WAL profiles plus the explicit benchmark-only ceiling.
 - **[Downstream Validation](TREEDB_DOWNSTREAM_VALIDATION.md)**: Adapter benchmark checklist for command-WAL counters, checkpoint separation, and load-window evidence.
 - **[Ironbird Attribution](TREEDB_IRONBIRD_ATTRIBUTION.md)**: TreeDB lifecycle counters, Ironbird phase boundaries, and non-ABCI accounting contract for low-fanout benchmark rows.

@@ -14,6 +14,11 @@ func OpenBackend(opts Options) (*db.DB, func() error, error) {
 	if err := resolveOpenProfileOptions(&opts); err != nil {
 		return nil, nil, err
 	}
+	unlock, err := acquireOrdinaryOpenOwnership(opts)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer unlock()
 	layout, err := resolveOpenDirLayout(opts.Dir, opts.DisableSideStores)
 	if err != nil {
 		return nil, nil, err
@@ -117,5 +122,13 @@ func openBackendWithCachedServices(opts Options) (*DB, error) {
 	if err := resolveOpenProfileOptions(&opts); err != nil {
 		return nil, err
 	}
+	if err := validateCOWOpenOptions(&opts); err != nil {
+		return nil, err
+	}
+	unlock, err := acquireOrdinaryOpenOwnership(opts)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	return openResolvedWithCacheRole(opts, true)
 }

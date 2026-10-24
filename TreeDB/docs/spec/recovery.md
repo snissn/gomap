@@ -954,3 +954,20 @@ document is validated before ordered insert/update/delete reduction; a later
 delete cannot erase malformed BSON or an unsupported indexed scalar. Update
 replacements preserve the original BSON `_id`, as in ordinary foreground writes.
 This activation uses existing command/member and BSON index formats.
+
+## External recovery policy
+
+Externally logged raw DATA owners restore current and previous certified meta
+operands before backend startup can validate/pin their closures or reuse pages.
+Uncertified incidental seals never advance application recovery. See
+[external recovery](external-recovery.md#recovery-and-restore-interruption) for
+identity checks, interrupted restore retry, and fail-closed frontier selection.
+
+
+An accepted external peer install can span two physical data namespaces. Reopen
+restores CURRENT's exact root in its namespace and independently restores the
+previous certificate's root in its closed namespace; only CURRENT's namespace
+receives a mutation owner. Receiver applications must resolve their durable
+accepted-install intent and synchronize the external-log snapshot before normal
+validation/replay/health. See the
+[authorized transfer protocol](external-recovery.md#authorized-portable-snapshot-transfer).
