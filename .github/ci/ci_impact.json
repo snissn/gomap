@@ -12,7 +12,7 @@
     "M0 observation is manual diagnostic-only on a separately fixed product; no forecast starts it or replaces failed M0 acceptance.",
     "Bounded maintenance comparison is a manually granted diagnostic on fixed baseline/candidate products; no forecast starts it or establishes cost, M0 or native acceptance."
   ],
-  "discovery_source_sha256": "35cc1af954db05934932e5f3fa3111111d442aa1e947e1e08b4f49e65d3ccd2c",
+  "discovery_source_sha256": "38ecd67a3d37a05d852fd05ad136ae4c671db0df994d0065e2d79e37223e98f1",
   "dynamic_consumers": [
     {
       "behavior": "AST/WalkDir discovery and go test subprocess producer witnesses; all TreeDB test/race members retained",
@@ -125,7 +125,7 @@
       "mode": "100644"
     },
     ".github/ci/treedb_unix_weighted_shards.tsv": {
-      "git_blob": "22f0d32237b1ab7318dfa8b8f396c325c779bca9",
+      "git_blob": "f08ab2a8036dff5b47ec4046a948507d30d05281",
       "mode": "100644"
     },
     ".github/ci/treedb_windows_caching_heavy_shard0_tests.txt": {
@@ -157,11 +157,11 @@
       "mode": "100644"
     },
     "go.mod": {
-      "git_blob": "43348c6f8caf975769a417ceb4d0eab26e8d8196",
+      "git_blob": "107227014330d94272779e0f550a68fd5741dfdb",
       "mode": "100644"
     },
     "go.sum": {
-      "git_blob": "b9f11157eeaa7b5bf8ed60cccb22e6f7bc831050",
+      "git_blob": "61980713af7f56d676f1a30a70448de33ff19bab",
       "mode": "100644"
     },
     "scripts/cow_c3_read/collect.py": {

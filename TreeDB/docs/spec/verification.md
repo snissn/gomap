@@ -1060,6 +1060,19 @@ Invariant:
 Coverage:
 - `TreeDB/db/vlog_gc_test.go`:
   - `TestValueLogGC_RemovesUnreferencedSegment`
+- `TreeDB/db/vlog_gc_publication_lock_order_test.go`:
+  - `TestValueLogGCDefersForPrivatePublicationAndLaterReclaims` drives public GC
+    and private grouped publication through opposing preparation/durable gates;
+    it requires conservative refusal, complete publication, retained candidate
+    bytes, and physical reclamation by a later real GC pass. The same test
+    deadlocks on the original `f906b8a2` implementation.
+- `TreeDB/db/recoverable_root_prepared_mutation_test.go`:
+  - `TestRecoverableRootSetPreparedMutationRetainsEveryValidation` checks busy
+    durable authority and each original captured-basis validation independently.
+- `TreeDB/external_recovery_leaf_maintenance_test.go`:
+  - `TestExternalRecoveryLeafMaintenanceRetainsAndReclaimsExactCuts` covers
+    repeated checkpoint publication with journaling disabled alongside background
+    reclamation.
 - `TreeDB/db/durable_root_tracker_repair_test.go`:
   - `TestDurableRootCandidateScanRepairsReferenceTracker`
   - `TestDurableRootCandidateScanColdCollectionAttachmentRepairsTracker`
@@ -4462,3 +4475,26 @@ headroom is exhausted. These controls do not activate unconverted collections.
   publication/reopen, and process crash cuts around CURRENT.
 - These engine controls do not prove application reader draining, Raft snapshot
   acceptance or durable cross-store install intent; those require consumer tests.
+
+## Captured public WAL epoch controls
+
+- `TestPublicCOWCapturedPrefixAppendInstallAndExactACK`: default public COW
+  successor installation during blocked final sync, exact ACKs, pointer rotation
+  and clean reopen. Its rotation observation targets the final captured sync,
+  not earlier serialized V2 dependency syncs.
+- `TestPublicDurableDefaultBlockedSyncCollectsSuccessorEpoch`: ordinary durable
+  Set on btree/cow_ordered with inline, materialized-RID, and external-pointer
+  values, first blocked sync, four successor appends, two exact epochs and exactly
+  two physical WAL syncs.
+- `TestPublicCOWCapturedPrefixExternalDependencyWaitBoundary`: a successor
+  announces intent before cache admission while an earlier V2 external-reference
+  dependency sync is blocked; canonical appends wait until that dependency is
+  stable. This records the remaining earlier-phase serialization limitation.
+- `TestPublicCOWCapturedPrefixFailureWakesSuccessorAndPoisons`: reused capture
+  storage, ambiguity, waiter release and subsequent recovery-required refusal.
+- `TestCapturedDurableMutationWaitsForPhysicalPrefixAndRelaxedTailPromotion`:
+  emitted marker versus certified W, single-use target and relaxed suffix.
+- `TestCapturedSyncPinsPrefixAcrossAppendRotationAndClose`,
+  `TestCapturedSyncSharedSegmentProgressAndOutOfOrderRelease`, and
+  `TestCapturedSyncFinalLegalLSN`: retained exact identity, independent physical
+  syncs, rotations, last legal LSN and Close joining all pins.

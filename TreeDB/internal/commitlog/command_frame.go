@@ -3903,12 +3903,16 @@ func scanCommandSegmentSummary(path string, opts Options, onLSN func(uint64) err
 
 	var lastLSN uint64
 	for {
-		start, seekErr := r.f.Seek(0, io.SeekCurrent)
+		start, seekErr := r.Offset()
 		if seekErr != nil {
 			return 0, typed, completeEnd, seekErr
 		}
 		env, err := r.ReadCommandFrame()
 		if err != nil {
+			var partial *CommandWALIncompleteFrame
+			if errors.As(err, &partial) {
+				return 0, typed, completeEnd, fmt.Errorf("%w: incomplete container requires global V2 recovery", ErrCorrupt)
+			}
 			if errorsIsEOFOrTail(err) {
 				return maxLSN, typed, start, nil
 			}
@@ -3930,7 +3934,7 @@ func scanCommandSegmentSummary(path string, opts Options, onLSN func(uint64) err
 		if env.LSN > maxLSN {
 			maxLSN = env.LSN
 		}
-		completeEnd, err = r.f.Seek(0, io.SeekCurrent)
+		completeEnd, err = r.Offset()
 		if err != nil {
 			return 0, typed, completeEnd, err
 		}

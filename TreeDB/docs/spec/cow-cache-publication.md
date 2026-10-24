@@ -701,3 +701,81 @@ and owned cleanup clears its embedded child reference before refunding it.
 Raw, logical and history trees retain degree 32; lower-fanout experiments did not
 justify their additional allocation objects and mixed batch performance. No new
 pool, arena, publication owner or retention lifetime is introduced.
+
+### Public captured WAL epochs
+
+A public durable COW mutation records canonical assignment without claiming WAL
+stability, installs its complete cut, then releases original writer/raw guards
+before waiting for the coordinator's captured exact prefix. Later complete cuts
+may become visible during that sync, but their ACK requires a later certificate.
+The original accepted FIFO and coalesced coverage runs remain the sole complete
+prefix owner. The WAL owner alone calls ObserveStableWAL after successful sync;
+checkpoint/root sealing does not synthesize W. V2 external dependency ordering
+can still serialize earlier append preparation.
+
+### Caller-owned logical MVCC acknowledgement handoff
+
+`mvcc.SubmitCommitGroupAt` uses the same Store validation and discard-floor
+exclusion, producer preparation, command append/registration, accepted cut
+installation, and captured-prefix durability coordinator as `CommitGroupAt`.
+The submit call returns after the complete logical cut is installed. It does
+not acknowledge durability. The caller supplies a reusable `CommitCompletion`
+record; a dedicated FIFO completion owner calls `Complete` to drive physical
+progress, finish the original ordered ACK and release batch, lifecycle and
+floor custody. Application `Wait` is not the progress driver. A record cannot
+be copied, reused or abandoned while it owns a command. Completed records are
+idempotent and reusable after all old users have left. Submission errors retain
+no caller completion custody; assigned errors keep the existing poisoning and
+uncertain-publication handling, never a retry or subdivision opportunity.
+There is no engine request queue, per-request worker or new publication owner.
+The ordinary blocking path remains inline; unsupported profiles and measured
+phase instrumentation retain their synchronous writer.
+
+`DB.EstimateMVCCWriteWork` supplies an overflow-saturating composable work
+estimate for the Store-owned ordered logical path. It includes escaped codec
+bytes, retained backing growth, placement scratch and canonical tree-copy work.
+Mutually exclusive singleton insertion and existing-history promotion are not
+added together. Whole-command cut/root/frame controls are reserved once per
+aggregate in `MVCCWriteWorkLimit`; journal controls and the original maintenance
+partition are deducted before dividing the producer envelope between two
+simultaneously owned aggregate records. Each individual transaction and the
+entire combined cohort must fit this same limit. Zero means unsupported, not
+an unlimited certificate. Final canonical admission remains authoritative for
+retained histories, pins and placement-discovered resources. This estimator
+creates no lease, accepted ticket, LSN or durability certificate, and raw writes
+in the Store's reserved namespace remain unsupported. Oversized indivisible
+engine commands still refuse before append; consumers that already support
+pre-commit chunking must apply that boundary before copying or assigning the
+next physical command, and must not recombine chunks into an oversized cohort.
+
+`Store.BeginCommitGroup(&builder)` retains the original floor exclusion and DB
+lifecycle custody once. Each `AppendGroup` validates its entire new group
+(timestamp, key envelope, duplicate physical version and retained floor), then
+encodes into the existing native batch's owned arena. Caller operands may be
+reused when AppendGroup returns. Before seal there is no assigned command,
+accepted cut or root-dependent preparation. The native entry vector grows
+geometrically; its old backing remains charged through the same batch lifetime.
+`Submit(mode, &completion)` prepares the complete staged cut once and transfers
+its existing custody without recursively acquiring either read lock behind a
+queued floor writer or Close. `Abort` releases only unassigned staging. Every
+Submit error releases the builder; an occupied completion retains its previous
+command. Prevalidation errors are not storage errors and preserve the unchanged
+builder until the caller aborts or continues. A staging/storage failure is
+terminal for that builder and must never trigger assigned-command subdivision.
+The incremental builder is scoped to the cached command-WAL logical route;
+unsupported adapters/profiles keep their established synchronous writer.
+
+The work limit reserves two aggregate envelopes, including unassigned successor
+staging. Zero exclusively means unsupported. A supported configuration without
+headroom returns 1, below every valid row estimate, so it must refuse shaping
+rather than disable the bound. The public integration-test bridge at
+`TreeDB/testutil/durabilitycut` shares the original serialized observer. The new
+`AfterLogicalMVCCStaging` boundary witnesses successful native owned staging; it
+is not a persistence event, accepted prefix or acknowledgement.
+
+Consumers capture `DB.NewMVCCWriteWorkEstimator()` at Open and use its immutable
+value for per-entry shaping. It contains only scalar canonical path/layout
+constants, retains no engine/budget/root pointer, and remains safe after Close.
+This avoids per-entry lifecycle locking and repeated tree-height computation.
+The convenience DB estimate/limit methods retain lifecycle protection; their
+unsupported/closed result cannot race a cleared cached owner.

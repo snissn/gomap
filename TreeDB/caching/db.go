@@ -8070,7 +8070,7 @@ func (db *DB) runWithBackendMaintenanceOptions(opts backendMaintenanceOptions, f
 	}()
 	if !opts.skipCheckpoint {
 		if err := db.Checkpoint(); err != nil {
-			return err
+			return backendMaintenanceError("checkpoint", err)
 		}
 	}
 	if db.cow != nil {
@@ -8084,27 +8084,27 @@ func (db *DB) runWithBackendMaintenanceOptions(opts backendMaintenanceOptions, f
 		db.writeMu.Lock()
 		db.writeMu.Unlock()
 		if err := db.completeCOWHandoff(); err != nil {
-			return err
+			return backendMaintenanceError("complete COW handoff", err)
 		}
 		if opts.cowCheckpointFallback {
-			return db.refreshCOWCheckpointFallback()
+			return backendMaintenanceError("refresh COW checkpoint fallback", db.refreshCOWCheckpointFallback())
 		}
 		db.cow.refreshRequired.Store(true)
 	}
 
 	if refresher, ok := db.backend.(valueLogSetRefresher); ok {
 		if err := refresher.RefreshValueLogSet(); err != nil {
-			return err
+			return backendMaintenanceError("refresh backend value-log set before callback", err)
 		}
 	}
 	var fnErr error
 	if fn != nil {
-		fnErr = fn()
+		fnErr = backendMaintenanceError("callback", fn())
 	}
 	if db.closing.Load() && !opts.completeAdmittedCOW {
 		return fnErr
 	}
-	reconcileErr := db.reconcileSplitValueLogWritersAfterBackendMaintenanceAdmitted(opts.completeAdmittedCOW)
+	reconcileErr := backendMaintenanceError("reconcile cached value-log readers and writers", db.reconcileSplitValueLogWritersAfterBackendMaintenanceAdmitted(opts.completeAdmittedCOW))
 	if db.cow != nil {
 		if err := db.finishCOWBackendMaintenance(errors.Join(fnErr, reconcileErr)); err != nil {
 			return err
@@ -8114,7 +8114,7 @@ func (db *DB) runWithBackendMaintenanceOptions(opts backendMaintenanceOptions, f
 		}
 		// Settlement may publish a manifest even when it reports a later error.
 		// Reconcile that accepted state before releasing the existing writer fence.
-		return db.finishCOWBackendMaintenance(opts.afterCOWRefresh())
+		return db.finishCOWBackendMaintenance(backendMaintenanceError("post-refresh callback", opts.afterCOWRefresh()))
 	}
 	if fnErr != nil {
 		if reconcileErr != nil {
@@ -13439,6 +13439,13 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	}
 	if len(segments) > 0 {
 		for _, seg := range segments {
+			// The backend owns external command WAL, including its initialized
+			// physical reserve. Its checkpoint byte hook accounts for logical
+			// debt; importing these files as cached redo would double-charge it
+			// and make an empty reserved segment trigger size maintenance.
+			if opts.ExternalCommandWAL && !seg.valueLog && commitlog.IsCommandSegmentName(filepath.Base(seg.path)) {
+				continue
+			}
 			l := db.valueLogLaneByID(seg.lane)
 			if l == nil {
 				if seg.valueLog {
@@ -25866,15 +25873,21 @@ func (db *DB) checkpointContext(ctx context.Context, automatic bool) error {
 		db.checkpointPostFrontierAdmission.Store(true)
 	}
 	db.mu.Unlock()
-	rotateLaneIDs := make([]int, 0, len(db.lanes))
-	for i := range db.lanes {
-		if db.lanes[i].walLiveBytes.Load() > 0 {
-			rotateLaneIDs = append(rotateLaneIDs, i)
-		}
-	}
-	if len(rotateLaneIDs) == 0 {
+	var rotateLaneIDs []int
+	// WAL-off checkpoints still flush persistent value-log and leaf resources
+	// below, but rotating their disabled redo journal would only launch no-op
+	// workers. Preserve the captured frontier and writer cutover in both modes.
+	if !db.disableJournal {
+		rotateLaneIDs = make([]int, 0, len(db.lanes))
 		for i := range db.lanes {
-			rotateLaneIDs = append(rotateLaneIDs, i)
+			if db.lanes[i].walLiveBytes.Load() > 0 {
+				rotateLaneIDs = append(rotateLaneIDs, i)
+			}
+		}
+		if len(rotateLaneIDs) == 0 {
+			for i := range db.lanes {
+				rotateLaneIDs = append(rotateLaneIDs, i)
+			}
 		}
 	}
 	releaseWriteMu()
@@ -25887,23 +25900,25 @@ func (db *DB) checkpointContext(ctx context.Context, automatic bool) error {
 	}
 
 	walRotateStart := time.Now()
-	errCh := make(chan error, len(rotateLaneIDs))
-	var rotateWG sync.WaitGroup
-	for _, laneID := range rotateLaneIDs {
-		rotateWG.Add(1)
-		go func(id int) {
-			defer rotateWG.Done()
-			if err := db.rotateWALCheckpointLocked(&db.lanes[id]); err != nil {
-				errCh <- err
+	if len(rotateLaneIDs) > 0 {
+		errCh := make(chan error, len(rotateLaneIDs))
+		var rotateWG sync.WaitGroup
+		for _, laneID := range rotateLaneIDs {
+			rotateWG.Add(1)
+			go func(id int) {
+				defer rotateWG.Done()
+				if err := db.rotateWALCheckpointLocked(&db.lanes[id]); err != nil {
+					errCh <- err
+				}
+			}(laneID)
+		}
+		rotateWG.Wait()
+		close(errCh)
+		for err := range errCh {
+			if err != nil {
+				recordCheckpointStageSince(&db.checkpointStageWALRotate, walRotateStart)
+				return err
 			}
-		}(laneID)
-	}
-	rotateWG.Wait()
-	close(errCh)
-	for err := range errCh {
-		if err != nil {
-			recordCheckpointStageSince(&db.checkpointStageWALRotate, walRotateStart)
-			return err
 		}
 	}
 	recordCheckpointStageSince(&db.checkpointStageWALRotate, walRotateStart)
@@ -29846,8 +29861,12 @@ func (db *DB) collectFlushUnitsWithOpsLocked(laneID int, maxMemtables int, targe
 	if maxMemtables > flushBacklogCoalescingHardMaxMemtables {
 		maxMemtables = flushBacklogCoalescingHardMaxMemtables
 	}
-	units := make([]flushUnit, 0, maxMemtables)
-	ids := make([]uint64, 0, maxMemtables)
+	// The queue bounds the initial backing allocation even when the collection
+	// budget is larger. Keep the collection limits below unchanged: span-only
+	// runs may grow these slices beyond this initial capacity.
+	initialCapacity := min(queueLen, maxMemtables)
+	units := make([]flushUnit, 0, initialCapacity)
+	ids := make([]uint64, 0, initialCapacity)
 	var totalBytes int64
 	var totalLen int
 	spanOnly := false

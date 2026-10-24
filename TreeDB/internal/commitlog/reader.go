@@ -11,6 +11,8 @@ import (
 
 type Reader struct {
 	f              *os.File
+	input          io.ReadSeeker
+	fixed          *fixedWAL
 	ownsFile       bool
 	maxSegmentSize int64
 	dec            *zstd.Decoder
@@ -27,7 +29,16 @@ func NewReaderWithOptions(path string, opts Options) (*Reader, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Reader{
+	state, _, err := loadFixedWAL(f)
+	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	var input io.ReadSeeker = f
+	if state != nil {
+		input = &fixedWALStream{file: f, state: state}
+	}
+	return &Reader{input: input, fixed: state,
 		f:              f,
 		ownsFile:       true,
 		maxSegmentSize: normalizeMaxSegmentSize(opts.MaxSegmentSize),
@@ -42,7 +53,15 @@ func NewReaderFromFileWithOptions(file *os.File, opts Options) (*Reader, error) 
 	if file == nil {
 		return nil, os.ErrInvalid
 	}
-	return &Reader{
+	state, _, err := loadFixedWAL(file)
+	if err != nil {
+		return nil, err
+	}
+	var input io.ReadSeeker = file
+	if state != nil {
+		input = &fixedWALStream{file: file, state: state}
+	}
+	return &Reader{input: input, fixed: state,
 		f:              file,
 		maxSegmentSize: normalizeMaxSegmentSize(opts.MaxSegmentSize),
 	}, nil
@@ -61,7 +80,7 @@ func (r *Reader) Offset() (int64, error) {
 	if r == nil || r.f == nil {
 		return 0, os.ErrInvalid
 	}
-	return r.f.Seek(0, io.SeekCurrent)
+	return r.input.Seek(0, io.SeekCurrent)
 }
 
 func (r *Reader) readSegmentPayload(commandMode bool) ([]byte, error) {
@@ -77,8 +96,20 @@ func (r *Reader) readSegmentPayloadForCommandScan() ([]byte, error) {
 }
 
 func (r *Reader) readSegmentPayloadWithCompressionBuffers(commandMode, allowCompressed bool, rawBuf, decodedBuf *[]byte) ([]byte, error) {
+	if commandMode && r.fixed != nil {
+		offset, err := r.Offset()
+		if err != nil {
+			return nil, err
+		}
+		if partial := r.fixed.incomplete[offset]; partial != nil {
+			if _, err = r.input.Seek(partial.EndOffset, io.SeekStart); err != nil {
+				return nil, err
+			}
+			return nil, partial
+		}
+	}
 	var header [segmentHeaderSize]byte
-	if n, err := io.ReadFull(r.f, header[:]); err != nil {
+	if n, err := io.ReadFull(r.input, header[:]); err != nil {
 		if commandMode && n > 0 && (err == io.EOF || err == io.ErrUnexpectedEOF) {
 			return nil, ErrCommandWALTerminalTail
 		}
@@ -100,7 +131,7 @@ func (r *Reader) readSegmentPayloadWithCompressionBuffers(commandMode, allowComp
 	}
 
 	payload := resizeReaderBuffer(rawBuf, int(length))
-	if _, err := io.ReadFull(r.f, payload); err != nil {
+	if _, err := io.ReadFull(r.input, payload); err != nil {
 		if commandMode && (err == io.EOF || err == io.ErrUnexpectedEOF) {
 			return nil, ErrCommandWALTerminalTail
 		}

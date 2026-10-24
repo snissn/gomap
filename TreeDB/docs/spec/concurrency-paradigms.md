@@ -348,6 +348,17 @@ guard's teardown lease and never reacquires it while Close may be queued.
   - protects mutable DB metadata state (`meta`, state swap).
 - `idxMu`:
   - protects index generation tracking map/lifecycle operations.
+- `publishPrepareMu`:
+  - read admission protects prepared output; exclusive admission fences GC and
+    zero-byte cleanup through destructive mutation.
+- `durablePublishMu`:
+  - protects the exact durable publication basis and private root build groups.
+    Grouped/serialized publication can own it before preparation read admission,
+    while optimistic publication can retain preparation admission before taking
+    it. Maintenance holding exclusive preparation admission must therefore use
+    the internal nonblocking root-set revalidation and defer on contention;
+    blocking on this gate would deadlock a publisher. Deferred candidates and
+    cleanup ownership remain retained for a later fresh capture.
 
 ## 5. Worker and Queue Topology
 
@@ -599,3 +610,15 @@ Representative coverage includes:
 - `TreeDB/caching/backpressure_wait_test.go`.
 
 When changing concurrency behavior, these tests SHOULD be reviewed/expanded with the change.
+
+## Durable command-WAL wait ownership
+
+One public coordinator owns the current captured WAL target and ticket cut.
+Queued epochs use count/byte/explicit triggers and the maintained collection
+timer before capture. An idle singleton captures immediately.
+Final physical sync holds resource/teardown pins, not public writer, raw append
+or journal mutexes. A waiting successor elects the next leader only after the
+previous target's complete Sync and deferred releases finish. Request tickets
+remain ordered through publication, including mixed relaxed/durable calls.
+External dependency stabilization before a V2 durable marker remains an earlier
+serialized phase; final-sync overlap does not certify dependency-wait progress.

@@ -909,3 +909,27 @@ the caller owns durable command/decision authority. Its checkpoint certificate
 retains the maintained publisher's exact root/dependencies with bounded descriptor
 output. See [external recovery](external-recovery.md) for the semantic barrier,
 publication order, retained roots, and unchanged standalone WriteSync contract.
+
+### Captured command-WAL completion
+
+Caller-owned logical MVCC builders preserve the configured ordinary ACK class.
+`CommitRelaxed` inherits `ProfileCommandWALDurable` durability; it cannot downgrade
+that profile. Submit retains the effective WAL sync requirement in the owned
+batch through Complete, including physical sync errors. Public Write/WriteSync
+metrics continue to describe the explicit API selected by the caller.
+
+The ordinary public durable coordinator captures an idle singleton immediately
+and collects queued writes through the maintained bounded window before
+capturing one exact complete journal prefix. Uncontended ordinary cached writes
+can register and capture under one exclusive public admission, with a demand
+recheck after append; a newly announced intent joins that same append to pending
+collection. This shares the existing ledger and retains all backend dependency
+drains. COW installs its complete cut
+and releases admission/raw guards before awaiting that physical prefix. Final
+WAL sync uses retained file handles outside writer/publication/journal mutexes;
+queued successors form the next collected epoch and need their own certificate.
+Earlier external dependency and V2 marker-ordering waits remain serialized.
+See [the durable write contract](command-wal-durable-write-contract.md#shared-captured-prefix-scheduler)
+for lifecycle, allocation and boundary details. The acknowledgement guarantees
+remain unchanged. Newly created command journals use the initialized immutable
+extent container described in [storage format](storage-format.md).

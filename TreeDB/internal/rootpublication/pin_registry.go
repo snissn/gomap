@@ -15,6 +15,32 @@ var (
 	ErrResourceDeletionInProgress = errors.New("stable resource deletion in progress")
 )
 
+// ResourceObservationRetirementError proves that Observe refused this exact
+// physical identity because a deletion was already admitted or completed. It
+// grants no read or registration authority. Directory discovery may omit the
+// refused handle, just as it may omit a file unlinked after its directory scan;
+// explicit registration and pin acquisition must still fail closed.
+//
+// The private identity is captured under the registry lock, never from a later
+// pathname lookup. Only Observe creates this witness.
+type ResourceObservationRetirementError struct {
+	identity StableIdentity
+	retired  bool
+}
+
+func (err *ResourceObservationRetirementError) Error() string {
+	phase := "admitted deletion"
+	if err.retired {
+		phase = "completed deletion"
+	}
+	return fmt.Sprintf("%v: observation of %+v encountered %s", ErrResourceConflict, err.identity, phase)
+}
+
+func (err *ResourceObservationRetirementError) Unwrap() error { return ErrResourceConflict }
+
+// Identity returns the exact physical identity whose observation was refused.
+func (err *ResourceObservationRetirementError) Identity() StableIdentity { return err.identity }
+
 // IdentityPinRegistry is a DB-scoped gate shared by every producer and
 // deleter that can reach the same physical files. Logical generations are not
 // part of this key: deleting an inode must be blocked by every alias of it.
@@ -309,7 +335,7 @@ func (registry *IdentityPinRegistry) Observe(identity StableIdentity) error {
 		return err
 	}
 	if state.retired || state.deleting {
-		return ErrResourceConflict
+		return &ResourceObservationRetirementError{identity: identity, retired: state.retired}
 	}
 	state.observers++
 	return nil

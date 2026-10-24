@@ -10,6 +10,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/raftapply"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
@@ -21,6 +22,7 @@ type snapshotCapturedFileV1 struct {
 	file    *os.File
 	index   *backenddb.PhysicalSnapshotCutV1
 	prefix  *raftapply.DurableSnapshotPrefixV1
+	wal     *commitlog.CommandWALSnapshotPrefix
 	primary bool
 }
 
@@ -39,6 +41,7 @@ func (c *snapshotCapturedFilesV1) close() error {
 		if e.file != nil {
 			err = errors.Join(err, e.file.Close())
 			e.file = nil
+			e.wal = nil
 		}
 		if e.index != nil {
 			err = errors.Join(err, e.index.Close())
@@ -235,7 +238,18 @@ func (c *snapshotCapturedFilesV1) captureChild(ctx context.Context, name string,
 	if !info.Mode().IsRegular() {
 		return fmt.Errorf("raftfsm: nonregular snapshot entry %q", name)
 	}
-	if err := c.add(snapshotCapturedFileV1{name: name, size: info.Size(), mode: info.Mode().Perm(), file: file}); err != nil {
+	if info.Size() < 0 || info.Size() > c.limits.MaxBytes-c.bytes {
+		return fmt.Errorf("raftfsm: snapshot file/byte admission exceeded")
+	}
+	captured := snapshotCapturedFileV1{name: name, size: info.Size(), mode: info.Mode().Perm(), file: file}
+	if commitlog.IsCommandSegmentName(base) {
+		captured.wal, err = commitlog.CaptureCommandWALSnapshotPrefix(file)
+		if err != nil {
+			return err
+		}
+		captured.size = captured.wal.SizeBytes()
+	}
+	if err := c.add(captured); err != nil {
 		return err
 	}
 	owned = true
@@ -288,6 +302,9 @@ func (e snapshotCapturedFileV1) writeTo(ctx context.Context, dst io.Writer) erro
 	}
 	if e.prefix != nil {
 		return e.prefix.WriteToContext(ctx, dst)
+	}
+	if e.wal != nil {
+		return e.wal.WriteToContext(ctx, dst)
 	}
 	if e.file == nil {
 		return fmt.Errorf("raftfsm: snapshot source closed")

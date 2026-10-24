@@ -57,6 +57,16 @@ directory-sync, durable command-WAL, or sealed-root boundaries.
 - A command-WAL `*Sync` does not require a full backend `Checkpoint()` per
   write. A no-WAL production `*Sync` does require a sealed backend root.
 
+Cached command-WAL durable writes share one captured-prefix coordinator. An
+idle singleton captures immediately; queued writes share the next collected
+epoch and cannot acknowledge against an earlier capture. COW installs one
+complete cut before its physical ACK wait, so readers may see an unacknowledged
+complete mutation. The captured file synchronization runs outside append and
+publication gates. Existing V2 dependency-before-marker ordering still requires
+earlier external-reference and rotation synchronization under append ordering.
+Only successful physical completion advances the existing stable-WAL frontier.
+Checkpoint and Close join the same accepted-prefix and retained-resource owners.
+
 For `no_wal_fast`, cached `Batch.WriteSync` covers the batch and earlier queued
 writes even when it bypasses the cache or stores USER leaves in the index. A
 successful backend write followed by a failed seal returns an error; the

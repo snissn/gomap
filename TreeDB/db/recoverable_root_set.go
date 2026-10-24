@@ -896,6 +896,26 @@ func (set *RecoverableRootSet) Revalidate() error {
 	return set.revalidate(false)
 }
 
+// revalidateWithPublishPrepareLockHeld is the destructive-maintenance form.
+// The caller must hold publishPrepareMu exclusively through the mutation.
+// Private grouped/serialized producers can own durablePublishMu before asking
+// for prepare admission, whereas optimistic producers can hold prepare admission
+// before waiting for durable publication. Never block on the durable gate from
+// this exclusive side: doing so would prevent its owner from finishing.
+// Contention therefore refuses this captured capability without deleting or
+// zombifying anything. A later pass captures and validates a fresh root set.
+func (set *RecoverableRootSet) revalidateWithPublishPrepareLockHeld() error {
+	if set == nil || set.released.Load() || set.db == nil {
+		return ErrRecoverableRootSetStale
+	}
+	db := set.db
+	if !db.durablePublishMu.TryLock() {
+		return ErrRecoverableRootSetStale
+	}
+	defer db.durablePublishMu.Unlock()
+	return set.revalidateWithDurablePublishLockHeld()
+}
+
 // revalidateWithDurablePublishLockHeld is the cutover form of Revalidate.
 // The caller must hold durablePublishMu, which closes the last candidate
 // publication window without recursively acquiring the same mutex.

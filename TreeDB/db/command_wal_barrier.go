@@ -260,39 +260,49 @@ func (db *DB) LockCommandWALPublish() func() {
 // drains registered staged-command barriers before the caller appends a frame.
 // The returned guard also pins teardown and must be released after raw publish.
 func (db *DB) LockCommandWALPublishWithBarriers() (func(), error) {
-	if db != nil && db.nativeSemanticActive.Load() {
-		return nil, ErrNativeSemanticUnsupported
-	}
 	if db == nil || !db.commandWAL {
 		return func() {}, nil
+	}
+	if err := db.acquireCommandWALPublishWithBarriersForOwner(nil); err != nil {
+		return nil, err
+	}
+	return db.unlockCommandWALRawPublishWithAdmissionAndTeardown, nil
+}
+
+func (db *DB) acquireCommandWALPublishWithBarriersForOwner(owner *transactionowner.Owner) error {
+	if db != nil && db.nativeSemanticActive.Load() && (owner == nil || owner != db.privateCOWOwner) {
+		return ErrNativeSemanticUnsupported
+	}
+	if db == nil || !db.commandWAL {
+		return ErrCommandWALUnsupported
 	}
 	for {
 		db.teardownMu.RLock()
 		if db.closing.Load() {
 			db.teardownMu.RUnlock()
-			return nil, ErrClosed
+			return ErrClosed
 		}
 		db.commandWALRawAdmissionMu.Lock()
 		db.commandWALRawPublishMu.Lock()
-		if db.nativeSemanticActive.Load() {
+		if db.nativeSemanticActive.Load() && (owner == nil || owner != db.privateCOWOwner) {
 			db.unlockCommandWALRawPublishWithAdmissionAndTeardown()
-			return nil, ErrNativeSemanticUnsupported
+			return ErrNativeSemanticUnsupported
 		}
 		if db.closing.Load() {
 			db.unlockCommandWALRawPublishWithAdmissionAndTeardown()
-			return nil, ErrClosed
+			return ErrClosed
 		}
 		err := db.runCommandWALRawPublishBarriers()
 		if err == nil {
-			return db.unlockCommandWALRawPublishWithAdmissionAndTeardown, nil
+			return nil
 		}
 		db.unlockCommandWALRawPublishWithAdmissionAndTeardown()
 		drain := commandWALPendingDrain(err)
 		if drain == nil {
-			return nil, err
+			return err
 		}
 		if err := drain.Drain(); err != nil {
-			return nil, err
+			return err
 		}
 	}
 }

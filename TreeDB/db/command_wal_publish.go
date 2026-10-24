@@ -496,7 +496,8 @@ func validateContiguousAppliedCommandLSN(current, next uint64, covered []Command
 
 type commandWALSegmentCleanupDecision struct {
 	Path            string
-	Size            int64
+	Size            int64 // Physical file footprint, including initialized reserve.
+	LogicalSize     int64 // Command-stream debt charged to commandWALClosedBytes.
 	ScannedBytes    int64
 	Frames          uint64
 	MinLSN          uint64
@@ -769,6 +770,7 @@ func scanCommandWALSegmentsForCleanupProof(dir string, cleanupThrough uint64, du
 			decisions = append(decisions, commandWALSegmentCleanupDecision{
 				Path:         seg.path,
 				Size:         info.Size(),
+				LogicalSize:  seg.size,
 				ScannedBytes: scan.scannedBytes,
 				Frames:       scan.frames,
 				MinLSN:       scan.minLSN,
@@ -786,6 +788,7 @@ func scanCommandWALSegmentsForCleanupProof(dir string, cleanupThrough uint64, du
 		decision := commandWALSegmentCleanupDecision{
 			Path:            seg.path,
 			Size:            info.Size(),
+			LogicalSize:     seg.size,
 			ScannedBytes:    scan.scannedBytes,
 			Frames:          scan.frames,
 			MinLSN:          scan.minLSN,

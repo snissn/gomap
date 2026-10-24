@@ -614,8 +614,9 @@ type DB struct {
 	// reopening the DB. After an append reached the journal but flush/sync or
 	// root publication failed, continuing on the same handle could create an
 	// unrecoverable LSN gap.
-	commandWALFlushPoisoned atomic.Bool
-	commandWALDurableLSN    atomic.Uint64
+	commandWALFlushPoisoned    atomic.Bool
+	commandWALDurableLSN       atomic.Uint64
+	commandWALDurableMarkerLSN atomic.Uint64 // Emitted durable class, distinct from physically certified prefix.
 	// commandWALSessionAppliedLSN is the durable-root applied frontier used to
 	// seed this journal owner's LSN sequence. When recovery classified a lower
 	// physical durable-WAL frontier, checkpoint must not bridge that pre-session

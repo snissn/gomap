@@ -125,27 +125,28 @@ type rootPublicationSealBaseV1 struct {
 // the retry, Prepare creates a successor seal and retains this seal as ordered
 // allocator debt until the successor publishes.
 type rootPublicationSealV1 struct {
-	disposalMu      sync.Mutex
-	disposalErr     error
-	disposalFailure originalDBCleanupFailure
-	metadata        *retainedalloc.Owner
-	metadataCharge  uint64
-	primary         *primaryPublicationSealV5
-	latestSequence  uint64
-	groupLength     int
-	idx             *indexGen
-	base            rootPublicationSealBaseV1
-	next            page.MetaPageBody
-	resources       *rootpublication.StableResourceSet
-	manifest        *rootpublication.DependencyManifestV1
-	prepared        *freelist.PreparedCOWCandidateV1
-	prefix          []*freelist.PreparedCOWCandidateV1
-	token           *rootpublication.StableResourceToken
-	record          rootpublication.DurableRootRecordV1
-	meta            page.DurableMetaV1
-	target          uint64
-	materialized    bool
-	released        bool
+	disposalMu          sync.Mutex
+	disposalErr         error
+	disposalFailure     originalDBCleanupFailure
+	metadata            *retainedalloc.Owner
+	metadataCharge      uint64
+	primary             *primaryPublicationSealV5
+	latestSequence      uint64
+	groupLength         int
+	idx                 *indexGen
+	base                rootPublicationSealBaseV1
+	next                page.MetaPageBody
+	resources           *rootpublication.StableResourceSet
+	dependenciesCovered bool
+	manifest            *rootpublication.DependencyManifestV1
+	prepared            *freelist.PreparedCOWCandidateV1
+	prefix              []*freelist.PreparedCOWCandidateV1
+	token               *rootpublication.StableResourceToken
+	record              rootpublication.DurableRootRecordV1
+	meta                page.DurableMetaV1
+	target              uint64
+	materialized        bool
+	released            bool
 }
 
 // publicRootPublicationErrorV1 preserves coordinator diagnostics while making
@@ -1859,9 +1860,10 @@ func (runtime *rootPublicationRuntimeV1) Publish(ctx context.Context, candidate 
 		}
 	}
 	mutated, err := executeDurableRootStorageTransactionV1(durableRootStorageTransactionV1{
-		installAuthority: installAuthority,
-		resources:        seal.resources,
-		materialize:      func() error { return runtime.materializeSeal(seal) },
+		installAuthority:    installAuthority,
+		resources:           seal.resources,
+		dependenciesCovered: seal.dependenciesCovered,
+		materialize:         func() error { return runtime.materializeSeal(seal) },
 		syncIndex: func() error {
 			if seal.primary != nil {
 				if e := seal.primary.token.SyncThrough(); e != nil {

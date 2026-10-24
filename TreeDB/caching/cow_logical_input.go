@@ -52,7 +52,13 @@ func (b *Batch) StageLogicalMVCC(mutations []mvccadmission.LogicalMutation, inpu
 	if b.size > maxInt-total {
 		return 0, memtable.ErrCOWCapacity
 	}
-	b.cowReserve(len(b.entries) + len(mutations))
+	required := len(b.entries) + len(mutations)
+	// Incremental owned builders retain prior backing until close. Geometric
+	// growth bounds that retained sum; singleton staging keeps its exact hint.
+	if len(b.entries) != 0 && required > cap(b.entries) && cap(b.entries) <= maxInt/2 {
+		required = max(required, 2*cap(b.entries))
+	}
+	b.cowReserve(required)
 	if b.cowState.err != nil {
 		return 0, b.cowState.err
 	}
