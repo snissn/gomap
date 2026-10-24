@@ -920,4 +920,6 @@ WAL sync uses retained file handles outside writer/publication/journal mutexes;
 queued successors form the next collected epoch and need their own certificate.
 Earlier external dependency and V2 marker-ordering waits remain serialized.
 See [the durable write contract](command-wal-durable-write-contract.md#shared-captured-prefix-scheduler)
-for lifecycle, allocation and boundary details. No WAL format or ACK guarantee changes.
+for lifecycle, allocation and boundary details. The acknowledgement guarantees
+remain unchanged. Newly created command journals use the initialized immutable
+extent container described in [storage format](storage-format.md).

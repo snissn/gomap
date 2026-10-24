@@ -4279,7 +4279,20 @@ func benchmarkPublicCommandWALDurableShape(b *testing.B, forcedPointers bool, sh
 	perIteration := publicCommandWALDurableShapeExpectedCounters(shape, forcedPointers, DurabilityDurable)
 	after := db.Stats()
 	for key, want := range perIteration {
-		requireBenchmarkStatDelta(b, before, after, key, want*uint64(b.N))
+		expected := want * uint64(b.N)
+		if key == "treedb.command_wal.file_sync.calls_total" {
+			// Each durable rotation also stabilizes its closed predecessor.
+			// Keep the production segment target and charge those actual syncs;
+			// this fixture disables checkpoints/cleanup, so every new segment
+			// witnesses exactly one rotation throughout the measured loop.
+			beforeSegments := statMapUint64B(b, before, "treedb.command_wal.segments.total")
+			afterSegments := statMapUint64B(b, after, "treedb.command_wal.segments.total")
+			if afterSegments < beforeSegments {
+				b.Fatal("isolated durable shape unexpectedly removed a command-WAL segment")
+			}
+			expected += afterSegments - beforeSegments
+		}
+		requireBenchmarkStatDelta(b, before, after, key, expected)
 	}
 	requireBenchmarkStatDelta(b, before, after, "treedb.public.checkpoint.calls_total", 0)
 	if got := statMapUint64B(b, after, "treedb.cache.checkpoint.runs"); got != 0 {

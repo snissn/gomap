@@ -874,8 +874,6 @@ func typedStorageLegacyNamePatternText() string {
 	return "Column" + "Store|column " + "store|column-" + "store"
 }
 
-var typedStorageLegacyNamePattern = regexp.MustCompile(typedStorageLegacyNamePatternText())
-
 func scanTypedStorageLegacyNameUsage(t *testing.T) map[string]typedStorageLegacyNameUsage {
 	t.Helper()
 	return scanTypedStorageLegacyNameUsageAtRoot(t, typedStorageRepoRoot(t))
@@ -885,6 +883,10 @@ func scanTypedStorageLegacyNameUsageAtRoot(t *testing.T, repoRoot string) map[st
 	t.Helper()
 	roots := []string{"TreeDB", "docs", "experiments"}
 	usage := make(map[string]typedStorageLegacyNameUsage)
+	// The audit pattern is an alternation of three nonoverlapping literals.
+	// Count those directly: running the regexp engine over every source line
+	// consumes a substantial part of the whole-package race-test budget.
+	terms := strings.Split(typedStorageLegacyNamePatternText(), "|")
 	for _, rel := range typedStorageLegacyNameScanFiles(t, repoRoot, roots) {
 		if typedStorageLegacyNameScanSkipsGeneratedArtifact(rel) {
 			continue
@@ -898,12 +900,15 @@ func scanTypedStorageLegacyNameUsageAtRoot(t *testing.T, repoRoot string) map[st
 		}
 		var current typedStorageLegacyNameUsage
 		for _, line := range strings.Split(string(data), "\n") {
-			matches := typedStorageLegacyNamePattern.FindAllStringIndex(line, -1)
-			if len(matches) == 0 {
+			matches := 0
+			for _, term := range terms {
+				matches += strings.Count(line, term)
+			}
+			if matches == 0 {
 				continue
 			}
 			current.matchingLines++
-			current.occurrences += len(matches)
+			current.occurrences += matches
 		}
 		if current.matchingLines > 0 {
 			usage[rel] = current

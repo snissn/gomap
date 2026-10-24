@@ -1071,7 +1071,8 @@ Coverage:
     durable authority and each original captured-basis validation independently.
 - `TreeDB/external_recovery_leaf_maintenance_test.go`:
   - `TestExternalRecoveryLeafMaintenanceRetainsAndReclaimsExactCuts` covers
-    repeated no-WAL checkpoint publication alongside background reclamation.
+    repeated checkpoint publication with journaling disabled alongside background
+    reclamation.
 - `TreeDB/db/durable_root_tracker_repair_test.go`:
   - `TestDurableRootCandidateScanRepairsReferenceTracker`
   - `TestDurableRootCandidateScanColdCollectionAttachmentRepairsTracker`
