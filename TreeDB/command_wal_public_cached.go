@@ -1678,22 +1678,31 @@ func (b *commandWALPublicBatch) writeCOW(explicitSync, commandSync bool) error {
 		}
 		return b.inner.Write()
 	}
+	if _, ok := b.inner.(*caching.Batch); !ok {
+		return caching.ErrCOWUnsupported
+	}
+	err := b.submitCOWWrite(commandSync)
+	return b.completeCOWWrite(commandSync, err)
+}
+
+// submitCOWWrite stops at the existing installed-cut boundary. Its caller owns
+// the batch and public lifecycle lease until completeCOWWrite returns.
+func (b *commandWALPublicBatch) submitCOWWrite(commandSync bool) error {
 	inner, ok := b.inner.(*caching.Batch)
 	if !ok {
 		return caching.ErrCOWUnsupported
 	}
 	b.cowState.commandSync = commandSync
+	if commandSync {
+		b.db.commandWALGroupCommit.durableIntents.Add(1)
+		defer b.db.commandWALGroupCommit.durableIntents.Add(-1)
+	}
+	return inner.WriteAfterCommandWALAppendWithPreparedRevision(commandSync, b.registerCOWAppend)
+}
+
+func (b *commandWALPublicBatch) completeCOWWrite(commandSync bool, err error) error {
+	inner := b.inner.(*caching.Batch)
 	defer func() { b.cowState.registration = publicCommandWALRegistration{} }()
-	// Announce durability before cache writer admission. A serialized callback
-	// must not make a concurrent cohort look like a sequence of idle writers.
-	var err error
-	func() {
-		if commandSync {
-			b.db.commandWALGroupCommit.durableIntents.Add(1)
-			defer b.db.commandWALGroupCommit.durableIntents.Add(-1)
-		}
-		err = inner.WriteAfterCommandWALAppendWithPreparedRevision(commandSync, b.registerCOWAppend)
-	}()
 	publication := b.cowState.registration.publicCommandWALPublication
 	if err == nil {
 		publication, err = b.db.awaitPublicCommandWAL(b.cowState.registration, nil, nil)
