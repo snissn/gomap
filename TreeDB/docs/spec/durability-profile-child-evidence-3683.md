@@ -17,6 +17,36 @@ replace latest-head CI or the successor's own end-to-end review.
 | profile-less reopen and maintenance adopt the persisted production contract, while explicit mismatches still fail and persisted `bench_unsafe` never becomes a production default | `TestOpen_PersistedProductionProfileImplicitlyReopensSameContract`, `TestOpen_PersistedProfileCannotChangeContracts`, `TestOpen_BenchUnsafeManifestCannotBecomeProductionDefault`, `TestFormatConfig_PersistsAndGatesCanonicalDurabilityProfile`, `TestLoadPersistedDurabilityProfile_ReadsOnlyContractGate` |
 | deprecated Go aliases map exactly and expose a diagnostic | `TestApplyProfile_DeprecatedAliasesResolveToFrozenMappings` |
 
+## Owned MVCC submission surface
+
+The exhaustive DB inventory also includes the owned submission and physical-work
+interfaces below. Their routing guard is
+`TestDurabilityProfileOrderedSubmissionEntrypointInventory`; it retains exact
+method inventories for the new builder/completion/estimator types and the shared
+producer/ACK path. These methods introduce no separate durability profile.
+
+| Entry point | Profile classification and boundary |
+| --- | --- |
+| `DB.SupportsLogicalMVCCStaging`, `Store.SupportsCommitGroupStaging` | Read-only capability check under lifecycle protection; cached logical command-WAL only, with phase instrumentation excluded. Unsupported routes keep the synchronous writer. |
+| `DB.BeginLogicalMVCC`, `Store.BeginCommitGroup` | Acquire existing lifecycle/floor custody and an unassigned native batch; no command, root preparation or ACK. |
+| `LogicalMVCCBuilder.Append`, `CommitBuilder.AppendGroup` | Validate and copy native operands before seal; no accepted prefix or durability boundary. |
+| `DB.SubmitLogicalMVCC`, `Store.SubmitCommitGroupAt`, builder `Submit` | Use the original preparation, append/registration and complete-cut installation. Return transfers custody to the caller-owned completion; it is not a durable ACK. Unsupported direct-submission routes retain synchronous commit. |
+| `LogicalMVCCCompletion.Complete`, `CommitCompletion.Complete` | Drive the existing captured-prefix and ordered ACK path, then release original batch/lifecycle/floor custody exactly once. |
+| builder `Abort` | Release only unassigned staging; no rollback or retry of an assigned command. |
+| `DB.NewMVCCWriteWorkEstimator`, `DB.EstimateMVCCWriteWork`, `DB.MVCCWriteWorkLimit`, estimator `Estimate` | Non-mutating shaping metadata. DB access retains lifecycle protection; the captured estimator contains immutable scalars and remains usable after Close. Zero limit is unsupported; supported without headroom returns1. No reservation, publication authority or sync boundary. |
+
+Runtime controls remain `TestOrderedBuilderIncrementalNativeWorkBeforeSeal`,
+`TestOrderedBuilderTransfersQueuedFloorWriter`,
+`TestOrderedBuilderTransfersQueuedClose`,
+`TestOrderedBuilderExactRouteEligibility`,
+`TestOrderedSubmissionSuccessorWhileCapturedSyncHeld`,
+`TestOrderedSubmissionSyncFailureReleasesCustody`,
+`TestOrderedPhysicalWorkBoundsAndOversizedAtomicRefusal`,
+`TestOrderedWorkEstimateConcurrentClose` and
+`TestOrderedImmutableWorkEstimatorOutlivesClose`. The test-only
+`TreeDB/testutil/durabilitycut` bridge aliases the original serialized observer;
+its staging event witnesses an owned copy, not physical persistence.
+
 ## Publication and asset closure inherited from merged children
 
 The profile layer does not duplicate each physical producer. It routes every

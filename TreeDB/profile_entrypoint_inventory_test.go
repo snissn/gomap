@@ -22,16 +22,16 @@ func TestDurabilityProfilePublicEntrypointInventory(t *testing.T) {
 	treeDBDir := profileInventoryTreeDBDir(t)
 	methods := profileInventoryMethods(t, treeDBDir, "treedb", "DB")
 	want := []string{
-		"AcquireMVCCReadCut", "AcquireSnapshot", "CaptureNativeSemanticState", "Checkpoint", "Close", "CommitLogicalMVCC", "CompactIndex", "CompactStorage",
+		"AcquireMVCCReadCut", "AcquireSnapshot", "BeginLogicalMVCC", "CaptureNativeSemanticState", "Checkpoint", "Close", "CommitLogicalMVCC", "CompactIndex", "CompactStorage",
 		"CompactStorageLeafPageLogOwnerClassification", "CompactStoragePlan", "Delete",
-		"DeleteRange", "DeleteSync", "DurabilityMode", "FragmentationReport", "Get",
+		"DeleteRange", "DeleteSync", "DurabilityMode", "EstimateMVCCWriteWork", "FragmentationReport", "Get",
 		"GetAppend", "GetMany", "GetManyParallelPlan", "GetManyView", "GetUnsafe",
 		"GetVersioned", "GetVersionedAppend", "Has", "HasMany", "HasPrefixes",
 		"InitConditionalTxn", "InitConditionalTxnWithSnapshot", "Iterator", "LeafGenerationGC",
 		"LeafGenerationPack", "LeafGenerationPackFromPlan", "LeafGenerationPackRunOnce",
-		"LeafGenerationPlan", "MaintenancePhase", "NewBatch", "NewBatchWithSize",
-		"NativeSemanticBackend", "NewConditionalTxn", "NewConditionalTxnWithSnapshot", "NewMVCCAdmission", "PreflightMVCCPrune", "PrepareMVCCPrune", "Print", "ResolvedProfile",
-		"ReverseIterator", "SeekGE", "SeekGEVersionRange", "Set", "SetMaintenancePhase", "SetPointWithMVCCInput", "SetNativeSemanticPublication", "SetSync", "Stats", "SupportsLogicalMVCC", "SupportsMVCCReadCut",
+		"LeafGenerationPlan", "MVCCWriteWorkLimit", "MaintenancePhase", "NewBatch", "NewBatchWithSize",
+		"NativeSemanticBackend", "NewConditionalTxn", "NewConditionalTxnWithSnapshot", "NewMVCCAdmission", "NewMVCCWriteWorkEstimator", "PreflightMVCCPrune", "PrepareMVCCPrune", "Print", "ResolvedProfile",
+		"ReverseIterator", "SeekGE", "SeekGEVersionRange", "Set", "SetMaintenancePhase", "SetPointWithMVCCInput", "SetNativeSemanticPublication", "SetSync", "Stats", "SubmitLogicalMVCC", "SupportsLogicalMVCC", "SupportsLogicalMVCCStaging", "SupportsMVCCReadCut",
 		"Update", "UpdateSync", "VacuumIndexOnline", "VacuumOnlineStats", "ValueLogGC", "ValueLogRewriteOnline",
 	}
 	slices.Sort(want)
@@ -162,6 +162,74 @@ func TestDurabilityProfilePublicEntrypointInventory(t *testing.T) {
 
 	profileInventoryRequireBody(t, orderedRootBodies, "(*DB).publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder", "publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilderSerialized")
 	profileInventoryRequireBody(t, orderedRootBodies, "(*DB).publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilderSerialized", "commandWALIntentPublishSync")
+}
+
+// The owned submission surface is deliberately classified separately from
+// ordinary writes: staging grants no ACK and completion must retain the exact
+// original producer/physical-prefix route. Work shaping grants no admission.
+func TestDurabilityProfileOrderedSubmissionEntrypointInventory(t *testing.T) {
+	treeDBDir := profileInventoryTreeDBDir(t)
+	for _, item := range []struct {
+		dir, pkg, receiver string
+		want               []string
+	}{
+		{treeDBDir, "treedb", "LogicalMVCCBuilder", []string{"Abort", "Append", "Submit"}},
+		{treeDBDir, "treedb", "LogicalMVCCCompletion", []string{"Complete"}},
+		{treeDBDir, "treedb", "MVCCWriteWorkEstimator", []string{"Estimate"}},
+		{filepath.Join(treeDBDir, "mvcc"), "mvcc", "CommitBuilder", []string{"Abort", "AppendGroup", "Submit"}},
+		{filepath.Join(treeDBDir, "mvcc"), "mvcc", "CommitCompletion", []string{"Complete"}},
+	} {
+		if got := profileInventoryMethods(t, item.dir, item.pkg, item.receiver); !slices.Equal(got, item.want) {
+			t.Fatalf("%s exported entrypoint inventory changed\n got: %v\nwant: %v", item.receiver, got, item.want)
+		}
+	}
+	for _, source := range []struct {
+		path   string
+		routes map[string][]string
+	}{
+		{"cow_ordered_builder.go", map[string][]string{
+			"(*DB).SupportsLogicalMVCCStaging":       {"db.lifecycleMu.RLock()", "db.supportsLogicalMVCCStagingLocked()"},
+			"(*DB).supportsLogicalMVCCStagingLocked": {"db.cached.SupportsLogicalMVCC()", "db.commandWALCached", "!db.publicBatchWriteSyncPhaseEnabled"},
+			"(*DB).BeginLogicalMVCC":                 {"db.beginPublicOperation()", "db.supportsLogicalMVCCStagingLocked()", "db.cached.NewBatchWithSize(0)", "newCommandWALPublicBatch", "public.GetByteSize()"},
+			"(*LogicalMVCCBuilder).Append":           {"b.batch.StageLogicalMVCC(mutations, input)", "durabilitycut.AfterLogicalMVCCStaging"},
+			"(*LogicalMVCCBuilder).Abort":            {"batch.Close()", "db.lifecycleMu.RUnlock()"},
+			"(*LogicalMVCCBuilder).Submit":           {"batch.submitCOWWrite(syncWrite)", "batch.completeCOWWrite(syncWrite, err)", "c.db, c.batch", "b.db, b.batch = nil, nil"},
+		}},
+		{"cow_ordered_native.go", map[string][]string{
+			"(*DB).SubmitLogicalMVCC":           {"db.CommitLogicalMVCC(mutations, input, syncWrite)", "db.beginPublicOperation()", "db.cached.SupportsLogicalMVCC()", "input.Matches(mutations)", "public.StageLogicalMVCC(mutations, input)", "public.submitCOWWrite(true)", "public.completeCOWWrite(true, err)", "completion.db, completion.batch"},
+			"(*LogicalMVCCCompletion).Complete": {"b.completeCOWWrite(c.syncWrite, nil)", "b.Close()", "db.lifecycleMu.RUnlock()"},
+		}},
+		{"command_wal_public_cached.go", map[string][]string{
+			"(*commandWALPublicBatch).writeCOW":         {"b.submitCOWWrite(commandSync)", "b.completeCOWWrite(commandSync, err)"},
+			"(*commandWALPublicBatch).submitCOWWrite":   {"durableIntents.Add(1)", "inner.WriteAfterCommandWALAppendWithPreparedRevision(commandSync, b.registerCOWAppend)"},
+			"(*commandWALPublicBatch).completeCOWWrite": {"b.db.awaitPublicCommandWAL", "b.db.finishPublicCommandWALGroupPublication", "inner.CompleteCOWAcknowledgement"},
+		}},
+		{"cow_work.go", map[string][]string{
+			"(*DB).EstimateMVCCWriteWork":        {"db.NewMVCCWriteWorkEstimator().Estimate(keyBytes, valueBytes)"},
+			"(*DB).NewMVCCWriteWorkEstimator":    {"db.lifecycleMu.RLock()", "db.cached.NewMVCCWriteWorkEstimator()"},
+			"(*DB).MVCCWriteWorkLimit":           {"db.lifecycleMu.RLock()", "db.cached.MVCCWriteWorkLimit()"},
+			"(*MVCCWriteWorkEstimator).Estimate": {"e.inner.Estimate(keyBytes, valueBytes)"},
+		}},
+		{filepath.Join("mvcc", "ordered_builder.go"), map[string][]string{
+			"(*Store).SupportsCommitGroupStaging": {"owner.SupportsLogicalMVCCStaging()"},
+			"(*Store).BeginCommitGroup":           {"s.lockDiscardFloorRead()", "owner.BeginLogicalMVCC(&b.engine)"},
+			"(*CommitBuilder).AppendGroup":        {"mvcckey.EncodedLen(m.Key)", "b.seen[id]", "b.store.discardFloor", "b.engine.Append(mutations, b.store.admission.LogicalInput"},
+			"(*CommitBuilder).Submit":             {"b.engine.Submit(mode == CommitDurable, &c.engine)", "c.store = b.store", "b.engine.Abort()"},
+			"(*CommitBuilder).Abort":              {"b.abortLocked()"},
+			"(*CommitBuilder).abortLocked":        {"b.engine.Abort()", "b.store.mu.RUnlock()"},
+		}},
+		{filepath.Join("mvcc", "ordered_completion.go"), map[string][]string{
+			"(*Store).SubmitCommitGroupAt": {"s.commitLogicalGroupsWithCompletion", "s.CommitGroupAt(groups, mode)"},
+			"(*CommitCompletion).Complete": {"c.engine.Complete()", "c.store.mu.RUnlock()"},
+		}},
+	} {
+		bodies := profileInventoryFunctionBodies(t, filepath.Join(treeDBDir, source.path))
+		for name, fragments := range source.routes {
+			for _, fragment := range fragments {
+				profileInventoryRequireBody(t, bodies, name, fragment)
+			}
+		}
+	}
 }
 
 func profileInventoryTreeDBDir(t *testing.T) string {
