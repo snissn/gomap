@@ -218,6 +218,17 @@ there is no builder timer or exported scheduling deadline.
 Idle first work remains immediate. There is one active capture and no
 background goroutine or second accepted-prefix/root owner.
 
+For an ordinary cached durable write, uncontended exclusive public admission
+can combine append registration and capture in one handoff. The caller announces
+one durable intent before attempting that admission. It rechecks demand after
+append: if another intent arrived, the same assigned append enters the pending
+cohort with its original collection deadline. It is never appended again. A
+pre-append admission miss uses the existing registration path while retaining
+that intent. Both routes use the same ticket ledger, dependency capture,
+physical sync and terminal completion. Every backend producer drain remains
+required. The exclusive public gates release before physical sync. COW retains
+its separate registration, accepted installation and completion sequence.
+
 An idle captured-durable mutation orders all preceding dependencies before
 emitting its existing V2 durable class, but does not perform its own WAL sync.
 Queued durable participants append relaxed-class frames and retain exact debt

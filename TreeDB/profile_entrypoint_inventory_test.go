@@ -193,11 +193,11 @@ func TestDurabilityProfileOrderedSubmissionEntrypointInventory(t *testing.T) {
 			"(*DB).BeginLogicalMVCC":                 {"db.beginPublicOperation()", "db.supportsLogicalMVCCStagingLocked()", "db.cached.NewBatchWithSize(0)", "newCommandWALPublicBatch", "public.GetByteSize()"},
 			"(*LogicalMVCCBuilder).Append":           {"b.batch.StageLogicalMVCC(mutations, input)", "durabilitycut.AfterLogicalMVCCStaging"},
 			"(*LogicalMVCCBuilder).Abort":            {"batch.Close()", "db.lifecycleMu.RUnlock()"},
-			"(*LogicalMVCCBuilder).Submit":           {"batch.submitCOWWrite(syncWrite)", "batch.completeCOWWrite(syncWrite, err)", "c.db, c.batch", "b.db, b.batch = nil, nil"},
+			"(*LogicalMVCCBuilder).Submit":           {"commandSync := syncWrite || db.commandWALOrdinaryWriteRequiresSync()", "batch.submitCOWWrite(commandSync)", "batch.completeCOWWrite(commandSync, err)", "c.db, c.batch", "b.db, b.batch = nil, nil"},
 		}},
 		{"cow_ordered_native.go", map[string][]string{
 			"(*DB).SubmitLogicalMVCC":           {"db.CommitLogicalMVCC(mutations, input, syncWrite)", "db.beginPublicOperation()", "db.cached.SupportsLogicalMVCC()", "input.Matches(mutations)", "public.StageLogicalMVCC(mutations, input)", "public.cowState.collectionSealed = true", "public.submitCOWWrite(true)", "public.completeCOWWrite(true, err)", "completion.db, completion.batch"},
-			"(*LogicalMVCCCompletion).Complete": {"b.completeCOWWrite(c.syncWrite, nil)", "b.Close()", "db.lifecycleMu.RUnlock()"},
+			"(*LogicalMVCCCompletion).Complete": {"b.completeCOWWrite(b.cowState.commandSync, nil)", "b.Close()", "db.lifecycleMu.RUnlock()"},
 		}},
 		{"command_wal_public_cached.go", map[string][]string{
 			"(*commandWALPublicBatch).writeCOW":         {"b.submitCOWWrite(commandSync)", "b.completeCOWWrite(commandSync, err)"},

@@ -920,7 +920,11 @@ metrics continue to describe the explicit API selected by the caller.
 
 The ordinary public durable coordinator captures an idle singleton immediately
 and collects queued writes through the maintained bounded window before
-capturing one exact complete journal prefix. COW installs its complete cut
+capturing one exact complete journal prefix. Uncontended ordinary cached writes
+can register and capture under one exclusive public admission, with a demand
+recheck after append; a newly announced intent joins that same append to pending
+collection. This shares the existing ledger and retains all backend dependency
+drains. COW installs its complete cut
 and releases admission/raw guards before awaiting that physical prefix. Final
 WAL sync uses retained file handles outside writer/publication/journal mutexes;
 queued successors form the next collected epoch and need their own certificate.
