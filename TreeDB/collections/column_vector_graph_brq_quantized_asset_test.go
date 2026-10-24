@@ -234,6 +234,9 @@ func TestColumnGraphBRQQuantizedScorerMatchesOracle2481(t *testing.T) {
 	if status.Prepared == nil || status.BRQPlan == nil || status.Err != nil {
 		t.Fatalf("brq prepared status=%+v", status)
 	}
+	if status.resource != nil || status.ownsResource || status.MappedBytes != 0 || status.ActiveHandles != 0 {
+		t.Fatal("brq scorer fixture requires heap-owned quantized asset bytes")
+	}
 	var scratch columnVectorGraphNativeSearchScratch
 	scorer, err := reader.prepareBRQQuantizedScorer(columnVectorGraphNativeSearchQueryModeQuantizedOnly, q.Name, query, &scratch)
 	if err != nil {
@@ -253,6 +256,7 @@ func TestColumnGraphBRQQuantizedScorerMatchesOracle2481(t *testing.T) {
 	if !ok {
 		t.Fatal("prepared packed code view unavailable")
 	}
+	oracleScores := make([]float64, len(ordinals))
 	for i, ordinal := range ordinals {
 		code, ok := view.RowBytes(ordinal)
 		if !ok {
@@ -270,6 +274,7 @@ func TestColumnGraphBRQQuantizedScorerMatchesOracle2481(t *testing.T) {
 		if err != nil {
 			t.Fatalf("oracle ScoreCosine ordinal=%d: %v", ordinal, err)
 		}
+		oracleScores[i] = want
 		if math.Abs(scores[i]-want) > 1e-9 {
 			t.Fatalf("ordinal=%d score=%v want oracle=%v", ordinal, scores[i], want)
 		}
@@ -283,6 +288,25 @@ func TestColumnGraphBRQQuantizedScorerMatchesOracle2481(t *testing.T) {
 	}
 	if _, err = scorer.scoreOrdinals(ordinals, scores[:0], nil, &columnVectorGraphNativeSearchStats{}); !errors.Is(err, errColumnVectorGraphNativeSearchScratchRequired) {
 		t.Fatalf("nil scratch err=%v want scratch required", err)
+	}
+
+	// BRQ scoring retains heap-owned asset bytes and query scratch. Close both
+	// fixture owners so their background work cannot enter AllocsPerRun's
+	// process-global allocation count, then verify every retained score.
+	if err := reader.Close(); err != nil {
+		t.Fatalf("reader Close before allocation probe: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("DB Close before allocation probe: %v", err)
+	}
+	scores, err = scorer.scoreOrdinals(ordinals, scores[:0], &scratch, &columnVectorGraphNativeSearchStats{})
+	if err != nil {
+		t.Fatalf("scoreOrdinals after fixture close: %v", err)
+	}
+	for i, want := range oracleScores {
+		if math.Abs(scores[i]-want) > 1e-9 {
+			t.Fatalf("ordinal=%d score after fixture close=%v want oracle=%v", ordinals[i], scores[i], want)
+		}
 	}
 
 	if !enterIsolatedVectorAllocationGate(t, "brq-quantized-scorer-oracle") {
