@@ -374,6 +374,9 @@ func (c *Collection) searchTextAtReadView(opts TextSearchOptions, resultMode tex
 		if err != nil {
 			return response, err
 		}
+		if view.catalog != nil && view.catalog.nativeText != nil {
+			return c.searchNativeTextAdmitted(opts, resultMode, read, response, view.catalog.nativeText.admit)
+		}
 		return c.searchNativeText(opts, resultMode, read, response)
 	}
 	endRead := view.beginForegroundRead()

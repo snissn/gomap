@@ -24,7 +24,8 @@ func (s *Service) searchKeywordWithScalarFilter(ctx context.Context, col *collec
 		return KeywordSearchResponse{}, err
 	}
 	opts := collections.HybridSearchOptions{
-		TopK: req.TopK,
+		Context: ctx,
+		TopK:    req.TopK,
 		Text: &collections.HybridTextQuery{
 			IndexName:          defaultTextIndexName,
 			Query:              req.Query,

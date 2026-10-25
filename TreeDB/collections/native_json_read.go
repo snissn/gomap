@@ -142,6 +142,12 @@ func (r *NativeJSONRead) detachScratch() *memtable.COWExternalLease {
 }
 
 func (r *NativeJSONRead) Get(id []byte) ([]byte, error) {
+	return r.getAdmitted(id, nil)
+}
+
+// Internal ordinary readers retain their independent output on the enclosing
+// operation's original receipt. Public Get keeps its caller-owned output contract.
+func (r *NativeJSONRead) getAdmitted(id []byte, admitOutput func(uint64) error) ([]byte, error) {
 	if r == nil {
 		return nil, backenddb.ErrClosed
 	}
@@ -151,6 +157,9 @@ func (r *NativeJSONRead) Get(id []byte) ([]byte, error) {
 		return nil, backenddb.ErrClosed
 	}
 	typed := nativeTypedMeta(r.meta)
+	if typed && admitOutput != nil {
+		return nil, backenddb.ErrNativeSemanticUnsupported
+	}
 	if typed && r.domain.domain != nil {
 		if row, residual, ok := r.domain.domain.typed.find(id); ok {
 			return r.reconstructPendingTyped(row, residual)
@@ -159,7 +168,25 @@ func (r *NativeJSONRead) Get(id []byte) ([]byte, error) {
 	if r.domain.domain == nil {
 		return nil, tree.ErrKeyNotFound
 	}
-	entry, owned, err := r.lookupEntry(id, true)
+	var entry node.LeafEntry
+	var owned bool
+	var err error
+	if admitOutput == nil {
+		entry, owned, err = r.lookupEntry(id, true)
+	} else {
+		// The shared physical point reader deliberately returns no inline
+		// bytes without copy-out. Borrow the existing domain/page scratch
+		// instead, so original admission precedes the independent output.
+		var resolved bool
+		entry, resolved, err = r.domain.memoryEntry(id)
+		if !resolved {
+			var scratch *nativeDomainReadScratch
+			scratch, err = r.physicalScratch()
+			if err == nil {
+				entry, err = r.domain.baseEntry(id, scratch, r.readLeaf)
+			}
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -170,7 +197,7 @@ func (r *NativeJSONRead) Get(id []byte) ([]byte, error) {
 	// ordinary owned pointer/inline output path without touching typed assets.
 	reconstruct := typed && r.meta.Options.ColumnStore.RetainedPayload != ColumnRetainedPayloadFull
 	if entry.Flags&node.FlagPointer != 0 {
-		value, err := r.readValue(entry.ValuePtr, nil)
+		value, err := r.readValue(entry.ValuePtr, admitOutput)
 		if err != nil {
 			return nil, err
 		}
@@ -185,7 +212,13 @@ func (r *NativeJSONRead) Get(id []byte) ([]byte, error) {
 	if owned {
 		return entry.Value, nil
 	}
-	// The result belongs to the caller, not to retained database accounting.
+	if admitOutput != nil {
+		if err := admitOutput(memtable.COWAllocationCharge(uint64(len(entry.Value)))); err != nil {
+			return nil, err
+		}
+	}
+	// Public nil-admission output belongs to the caller. Internal copies remain
+	// admitted until their enclosing consumer releases the original receipt.
 	value := make([]byte, len(entry.Value))
 	copy(value, entry.Value)
 	return value, nil

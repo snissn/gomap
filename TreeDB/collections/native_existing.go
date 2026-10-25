@@ -129,6 +129,19 @@ func (v *CollectionReadView) fetchNativeDocuments(ids [][]byte, opts DocumentFet
 	}
 	// The stored-format and JSON projection contracts are shared with legacy
 	// materialization; Get already returns independent caller-owned documents.
+	var admitOutput func(uint64) error
+	if v.catalog != nil && v.catalog.nativeText != nil {
+		admitOutput = v.catalog.nativeText.admit
+		if nativeTypedMeta(v.nativeRead.meta) {
+			return DocumentFetchResponse{}, backenddb.ErrNativeSemanticUnsupported
+		}
+		if uint64(len(ids)) > ^uint64(0)/uint64(unsafe.Sizeof(DocumentFetchResult{})) {
+			return DocumentFetchResponse{}, memtable.ErrCOWCapacity
+		}
+		if err := admitOutput(memtable.COWAllocationCharge(uint64(len(ids)) * uint64(unsafe.Sizeof(DocumentFetchResult{})))); err != nil {
+			return DocumentFetchResponse{}, err
+		}
+	}
 	projection, err := normalizeDocumentFetchProjection(v.nativeRead.meta, opts)
 	if err != nil {
 		return DocumentFetchResponse{}, err
@@ -141,7 +154,12 @@ func (v *CollectionReadView) fetchNativeDocuments(ids [][]byte, opts DocumentFet
 				return DocumentFetchResponse{}, err
 			}
 		}
-		value, err := v.nativeRead.Get(id)
+		if admitOutput != nil {
+			if err := admitOutput(memtable.COWAllocationCharge(uint64(len(id)))); err != nil {
+				return DocumentFetchResponse{}, err
+			}
+		}
+		value, err := v.nativeRead.getAdmitted(id, admitOutput)
 		out.Results[i].ID = append([]byte(nil), id...)
 		if errors.Is(err, tree.ErrKeyNotFound) {
 			out.Stats.DocumentsMissing++

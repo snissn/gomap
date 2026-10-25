@@ -10,6 +10,12 @@ import (
 )
 
 func (c *Collection) searchNativeText(opts TextSearchOptions, mode textSearchResultMode, read *NativeJSONRead, response TextSearchResponse) (result TextSearchResponse, resultErr error) {
+	return c.searchNativeTextAdmitted(opts, mode, read, response, nil)
+}
+
+// admit, when supplied, belongs to the caller's complete captured operation.
+// Text scratch and returned candidate storage stay charged through its phases.
+func (c *Collection) searchNativeTextAdmitted(opts TextSearchOptions, mode textSearchResultMode, read *NativeJSONRead, response TextSearchResponse, admit func(uint64) error) (result TextSearchResponse, resultErr error) {
 	if read == nil {
 		var err error
 		read, err = c.nativeJSON.Capture(c.name)
@@ -18,21 +24,24 @@ func (c *Collection) searchNativeText(opts TextSearchOptions, mode textSearchRes
 		}
 		defer func() { resultErr = errors.Join(resultErr, read.Close()) }()
 	}
-	lease, err := read.capture.NativeAllocator().AdmitNativeBytes(0)
-	if err != nil {
-		return response, err
-	}
-	defer lease.Close()
-	var charged uint64
-	admit := func(n uint64) error {
-		if n > ^uint64(0)-charged {
-			return memtable.ErrCOWCapacity
+	var err error
+	if admit == nil {
+		lease, leaseErr := read.capture.NativeAllocator().AdmitNativeBytes(0)
+		if leaseErr != nil {
+			return response, leaseErr
 		}
-		if err := lease.Resize(charged + n); err != nil {
-			return err
+		defer lease.Close()
+		var charged uint64
+		admit = func(n uint64) error {
+			if n > ^uint64(0)-charged {
+				return memtable.ErrCOWCapacity
+			}
+			if err := lease.Resize(charged + n); err != nil {
+				return err
+			}
+			charged += n
+			return nil
 		}
-		charged += n
-		return nil
 	}
 	// Query tokens, terms and candidate/result headers are source/request bounded.
 	// Posting/position block decoding is admitted by each captured domain read.

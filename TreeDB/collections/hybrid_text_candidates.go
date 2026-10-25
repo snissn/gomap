@@ -3,6 +3,8 @@ package collections
 import (
 	"errors"
 	"fmt"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"unsafe"
 )
 
 // hybridTextCandidateDefaultScanCandidateLimit is the finite internal
@@ -34,7 +36,7 @@ func (c *Collection) searchHybridTextCandidatesWithScanBudgetAtReadView(query Hy
 	if c == nil {
 		return HybridCandidateResponse{}, errCollectionNil
 	}
-	if c.db == nil {
+	if c.db == nil && (view == nil || view.nativeRead == nil) {
 		return HybridCandidateResponse{}, errCollectionDBNil
 	}
 	requested := query.CandidateLimit
@@ -77,6 +79,22 @@ func (c *Collection) searchHybridTextCandidatesWithScanBudgetAtReadView(query Hy
 		return response, hybridTextCandidateError(err, query.IndexName)
 	}
 
+	if view != nil && view.nativeRead != nil {
+		admit := view.catalog.nativeText.admit
+		if err := admit(memtable.COWAllocationCharge(uint64(len(textResponse.Results)) * uint64(unsafe.Sizeof(HybridSearchCandidate{})))); err != nil {
+			return HybridCandidateResponse{}, err
+		}
+		for _, result := range textResponse.Results {
+			if err := admit(memtable.COWAllocationCharge(uint64(len(result.DocumentID))) + memtable.COWAllocationCharge(uint64(len(result.TextMatches))*uint64(unsafe.Sizeof(HybridTextMatch{})))); err != nil {
+				return HybridCandidateResponse{}, err
+			}
+			for _, match := range result.TextMatches {
+				if err := admit(memtable.COWAllocationCharge(uint64(len(match.Terms)) * uint64(unsafe.Sizeof(string(""))))); err != nil {
+					return HybridCandidateResponse{}, err
+				}
+			}
+		}
+	}
 	return hybridTextCandidatesFromSearchResponse(requested, query.IndexName, textResponse)
 }
 
@@ -106,12 +124,33 @@ func validateHybridTextCandidateQuery(query HybridTextQuery) error {
 // that planning cannot perform. It is used only when an empty scalar allow-set
 // skips normal candidate generation. A non-nil view is borrowed, not closed.
 func (c *Collection) validateHybridTextCandidateQueryAtReadView(query HybridTextQuery, view *CollectionReadView) error {
-	if c == nil || c.db == nil {
+	if c == nil || (c.db == nil && (view == nil || view.nativeRead == nil)) {
 		return hybridTextCandidateError(ErrTextIndexUnavailable, query.IndexName)
 	}
 	if view != nil {
-		if view.collection != c || view.validateOpen() != nil {
+		if view.collection != c || validateHybridReadView(view) != nil {
 			return hybridTextCandidateError(ErrTextIndexUnavailable, query.IndexName)
+		}
+		if view.nativeRead != nil {
+			// Empty allow-sets still perform the same analyzer validation; its
+			// query/definition scratch remains admitted through this operation.
+			unit := uint64(unsafe.Sizeof(TextToken{})) + uint64(unsafe.Sizeof(textV2SearchCandidate{})) + uint64(unsafe.Sizeof(TextSearchResult{}))
+			size := uint64(len(query.Query)) + 1
+			if size > ^uint64(0)/unit/2 {
+				return memtable.ErrCOWCapacity
+			}
+			if err := view.catalog.nativeText.admit(memtable.COWAllocationCharge(size * unit * 2)); err != nil {
+				return err
+			}
+			if def, ok := findTextIndex(view.nativeRead.meta.TextIndexes, query.IndexName); ok {
+				charge, err := nativeTextDefinitionCharge(def, 2)
+				if err != nil {
+					return err
+				}
+				if err = view.catalog.nativeText.admit(charge); err != nil {
+					return err
+				}
+			}
 		}
 		return validateHybridTextCandidateQueryAgainstCatalog(query, view.catalog)
 	}

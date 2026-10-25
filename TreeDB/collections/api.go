@@ -24457,6 +24457,18 @@ func scanMergedCollectionIndexIDsWithOptionsAndDirectionWorkCap(bufferedIt, pers
 	}
 	var seen map[string]struct{}
 	if opts.DedupeDocumentID {
+		if opts.admitTemporary != nil {
+			// The optional original-read receipt covers the initial Swiss map
+			// before make. 64 bytes per requested string slot includes controls,
+			// load-factor rounding and table metadata; the fixed part covers
+			// the header/small group. Later growth/copies are charged below.
+			if uint64(maxResults) > (^uint64(0)-256)/64 {
+				return false, memtable.ErrCOWCapacity
+			}
+			if err := opts.admitTemporary(memtable.COWAllocationCharge(256 + uint64(maxResults)*64)); err != nil {
+				return false, err
+			}
+		}
 		if maxResults > 0 {
 			seen = make(map[string]struct{}, maxResults)
 		} else {
@@ -24470,6 +24482,15 @@ func scanMergedCollectionIndexIDsWithOptionsAndDirectionWorkCap(bufferedIt, pers
 			return false, false, err
 		}
 		if opts.DedupeDocumentID {
+			if opts.admitTemporary != nil {
+				// Admit the string copy before conversion. Sixteen string slots
+				// plus controls cover both small-map groups and geometric growth
+				// cohorts per emitted ID, including the truncation sentinel.
+				charge := memtable.COWAllocationCharge(uint64(len(id))) + memtable.COWAllocationCharge(16*(uint64(unsafe.Sizeof(string("")))+2))
+				if err := opts.admitTemporary(charge); err != nil {
+					return false, false, err
+				}
+			}
 			idKey := string(id)
 			if _, ok := seen[idKey]; ok {
 				return true, false, nil

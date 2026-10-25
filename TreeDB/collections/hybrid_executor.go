@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/collections/chunking"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -35,6 +36,7 @@ type hybridSearchExecutionPlan struct {
 
 	context                       context.Context
 	readView                      *CollectionReadView
+	nativeScratch                 *hybridNativeScratch
 	readOwnerAcquireNanos         int64
 	text                          *HybridTextQuery
 	textCandidateScanBudget       int
@@ -68,8 +70,10 @@ func runHybridSearchAfterReadOwnerAcquiredHookForTest(c *Collection, view *Colle
 }
 
 type hybridSearchStateToken struct {
-	state     backenddb.StateToken
-	available bool
+	native                                           bool
+	logicalSequence, incarnation, documentGeneration uint64
+	state                                            backenddb.StateToken
+	available                                        bool
 }
 
 func hybridSearchDBStateToken(db *backenddb.DB) hybridSearchStateToken {
@@ -99,10 +103,46 @@ func (c *Collection) searchHybridWithCandidateBudgetPolicy(opts HybridSearchOpti
 		return hybridSearchFailClosed(response, hybridPlanFailClosedReason(err), err)
 	}
 
-	if err := c.flushBufferedWrites(); err != nil {
-		return hybridSearchFailClosed(response, HybridFailClosedReasonSnapshotMismatch, fmt.Errorf("%w: hybrid search cannot flush current snapshot: %w", ErrHybridSearchIndexUnavailable, err))
+	var baseState hybridSearchStateToken
+	if c.nativeJSON != nil {
+		// No native vector adapter is selected yet. Refuse before capture/work.
+		if plan.vector != nil {
+			return hybridSearchFailClosed(response, HybridFailClosedReasonVectorIndexUnavailable, fmt.Errorf("%w: native hybrid vector candidates", ErrHybridSearchUnsupported))
+		}
+		view, openErr := c.OpenCollectionReadView()
+		if openErr != nil {
+			return hybridSearchFailClosed(response, HybridFailClosedReasonSnapshotMismatch, openErr)
+		}
+		plan.readView = view
+		defer func() {
+			// Catalog and operation scratch borrow this view only; no aliases are
+			// installed on the facade or its shared native decoder.
+			view.catalog = nil
+			plan.nativeScratch = nil
+			if closeErr := view.Close(); closeErr != nil {
+				if err == nil {
+					response, err = hybridSearchFailClosed(response, HybridFailClosedReasonSnapshotMismatch, closeErr)
+				} else {
+					err = errors.Join(err, closeErr)
+				}
+			}
+		}()
+		plan.nativeScratch, err = newHybridNativeScratch(view)
+		if err != nil {
+			return hybridSearchFailClosed(response, HybridFailClosedReasonUnsupported, err)
+		}
+		view.catalog, err = newNativeTextCatalog(view.nativeRead, plan.nativeScratch.admit)
+		if err != nil {
+			return hybridSearchFailClosed(response, HybridFailClosedReasonUnsupported, err)
+		}
+		baseState = hybridSearchReadViewStateToken(view)
+		runHybridSearchAfterReadOwnerAcquiredHookForTest(c, view)
+	} else {
+		if err := c.flushBufferedWrites(); err != nil {
+			return hybridSearchFailClosed(response, HybridFailClosedReasonSnapshotMismatch, fmt.Errorf("%w: hybrid search cannot flush current snapshot: %w", ErrHybridSearchIndexUnavailable, err))
+		}
+		baseState = hybridSearchDBStateToken(c.db)
 	}
-	baseState := hybridSearchDBStateToken(c.db)
 	if hybridVectorQuerySelectsQuantizedRerank(plan.vector) {
 		view, acquiredNanos, openErr := c.openTypedGraphHybridReadView(plan.context, plan.vector.IndexName)
 		if openErr != nil {
@@ -180,6 +220,11 @@ func (c *Collection) searchHybridWithCandidateBudgetPolicy(opts HybridSearchOpti
 		return hybridSearchFailClosed(response, HybridFailClosedReasonSnapshotMismatch, err)
 	}
 
+	if plan.nativeScratch != nil {
+		if err := plan.nativeScratch.admitFusion(candidates); err != nil {
+			return hybridSearchFailClosed(response, HybridFailClosedReasonUnsupported, err)
+		}
+	}
 	fusionCandidates := candidates
 	if allowSet != nil && plan.scalarFilterStrategy != HybridScalarFilterStrategyPostfilter {
 		fusionCandidates = hybridFilterCandidatesByScalarAllowSet(candidates, allowSet, &response.Stats)
@@ -214,8 +259,12 @@ func (c *Collection) searchHybridWithCandidateBudgetPolicy(opts HybridSearchOpti
 	}
 	if plan.resultMode == HybridResultModeFull {
 		var fetchErr error
+		fetchOpts := opts.DocumentFetchOptions
+		if plan.nativeScratch != nil && fetchOpts.Context == nil {
+			fetchOpts.Context = plan.context
+		}
 		if plan.readView != nil {
-			fetchErr = c.hybridFetchResultDocumentsAtReadView(&response, opts.DocumentFetchOptions, baseState, plan.readView)
+			fetchErr = c.hybridFetchResultDocumentsAtReadView(&response, fetchOpts, baseState, plan.readView)
 		} else {
 			fetchErr = c.hybridFetchResultDocuments(&response, opts.DocumentFetchOptions, baseState)
 		}
@@ -227,6 +276,11 @@ func (c *Collection) searchHybridWithCandidateBudgetPolicy(opts HybridSearchOpti
 			return hybridSearchFailClosed(response, reason, fetchErr)
 		}
 	}
+	if plan.nativeScratch != nil {
+		if err := hybridSearchCheckExecutionSnapshot(c, plan, baseState); err != nil {
+			return hybridSearchFailClosed(response, HybridFailClosedReasonSnapshotMismatch, err)
+		}
+	}
 	hybridSetScalarFilterSelectivity(&response.Stats)
 	return response, nil
 }
@@ -234,6 +288,20 @@ func (c *Collection) searchHybridWithCandidateBudgetPolicy(opts HybridSearchOpti
 func hybridSearchCheckExecutionSnapshot(c *Collection, plan hybridSearchExecutionPlan, baseState hybridSearchStateToken) error {
 	if err := plan.context.Err(); err != nil {
 		return err
+	}
+	if plan.readView != nil && plan.readView.nativeRead != nil {
+		if err := validateHybridReadView(plan.readView); err != nil {
+			return err
+		}
+		probe, err := c.nativeJSON.db.CaptureNativeSemanticState()
+		if err != nil {
+			if probe != nil {
+				return errors.Join(err, probe.Close())
+			}
+			return err
+		}
+		current := hybridSearchStateToken{native: true, available: true, logicalSequence: probe.LogicalSequence()}
+		return errors.Join(hybridSearchCheckCurrentSnapshot(current, baseState), probe.Close())
 	}
 	if plan.readView != nil {
 		if err := plan.readView.validateOpen(); err != nil {
@@ -650,7 +718,7 @@ func (c *Collection) hybridScalarAllowSetAtReadView(plan hybridSearchExecutionPl
 	if readView == nil || readView.collection != c {
 		return nil, HybridSearchStats{}, ErrVectorIndexSnapshotMismatch
 	}
-	if err := readView.validateOpen(); err != nil {
+	if err := validateHybridReadView(readView); err != nil {
 		return nil, HybridSearchStats{}, err
 	}
 	limit := plan.scalarLookupLimit
@@ -666,13 +734,38 @@ func (c *Collection) hybridScalarAllowSetAtReadView(plan hybridSearchExecutionPl
 		filters = []HybridScalarFilter{*plan.scalarFilter}
 	}
 	lookup := hybridScalarLookupView{context: plan.context, snapshot: readView.snapshot, catalog: readView.catalog}
+	if plan.nativeScratch != nil {
+		if err := plan.nativeScratch.admit(memtable.COWAllocationCharge(uint64(len(filters)) * uint64(unsafe.Sizeof(hybridScalarAllowSet{})))); err != nil {
+			return nil, HybridSearchStats{}, err
+		}
+	}
 	endRead := readView.beginForegroundRead()
 	defer endRead()
 	stats := HybridSearchStats{}
 	sets := make([]hybridScalarAllowSet, 0, len(filters))
 	for i := range filters {
 		stats.ScalarFilterLookups++
-		set, inputIDs, truncated, err := lookup.leafAllowSet(filters[i], limit)
+		var set hybridScalarAllowSet
+		var inputIDs uint64
+		var truncated bool
+		var err error
+		if plan.nativeScratch != nil {
+			if err = plan.nativeScratch.admitMap(min(limit, hybridScalarDefaultLookupLimit), uint64(unsafe.Sizeof(string("")))); err != nil {
+				return nil, stats, err
+			}
+			inspectLimit := limit
+			if inspectLimit < maxCollectionInt {
+				inspectLimit++
+			}
+			set, inputIDs, truncated, err = lookup.leafProbeBeforeCopy(filters[i], limit, inspectLimit, nil, func(id []byte) error {
+				return plan.nativeScratch.admit(memtable.COWAllocationCharge(uint64(len(id))) + memtable.COWAllocationCharge(16*(uint64(unsafe.Sizeof(string("")))+2)))
+			})
+			if truncated && err == nil {
+				err = fmt.Errorf("%w: scalar lookup limit %d", ErrHybridSearchIndexUnavailable, limit)
+			}
+		} else {
+			set, inputIDs, truncated, err = lookup.leafAllowSet(filters[i], limit)
+		}
 		stats.ScalarFilterInputIDs += inputIDs
 		if truncated {
 			stats.Truncated++
@@ -754,6 +847,22 @@ func (view *hybridScalarLookupView) visitLeafIDs(filter HybridScalarFilter, limi
 		opts = *filter.Range
 		opts.Limit = limit
 	}
+	// Bound encoding uses the captured declaration and the same allowance as
+	// ordinary native index reads. Admit before allocating encoded range keys.
+	if view.catalog.nativeText != nil {
+		for _, bound := range []IndexRangeBound{opts.Lower, opts.Upper} {
+			if bound.Unbounded {
+				continue
+			}
+			charge, err := nativeIndexQueryCharge(idx, bound.Value)
+			if err != nil {
+				return 0, false, err
+			}
+			if err := view.catalog.nativeText.admit(charge); err != nil {
+				return 0, false, err
+			}
+		}
+	}
 	start, end, empty, err := indexRangeScanBounds(idx.ValueType, opts)
 	if err != nil {
 		return 0, false, fmt.Errorf("%w: hybrid scalar filter index %q lookup failed: %w", ErrHybridSearchIndexUnavailable, filter.IndexName, err)
@@ -782,15 +891,26 @@ func (view *hybridScalarLookupView) visitLeafIDs(filter HybridScalarFilter, limi
 		bufferedIt = bufferedTable.NewIterator(start, end)
 		defer func() { _ = bufferedIt.Close() }()
 	}
-	persistedIt, err := collectionIteratorAtCatalogRoot(view.snapshot, view.catalog, collectionSecondaryRootName(view.catalog.meta.Name, idx.Name), start, end, true)
+	var persistedIt iterator.UnsafeIterator
+	if view.catalog.nativeText != nil {
+		persistedIt, err = collectionIteratorAtCatalogRootWithInspectionError(view.snapshot, view.catalog, collectionSecondaryRootName(view.catalog.meta.Name, idx.Name), start, end, true, maxInspected, nil, view.context.Err)
+		// Native seek already counts shadowed and tombstoned physical sources.
+		maxInspected, inspected = 0, nil
+	} else {
+		persistedIt, err = collectionIteratorAtCatalogRoot(view.snapshot, view.catalog, collectionSecondaryRootName(view.catalog.meta.Name, idx.Name), start, end, true)
+	}
 	if err != nil {
 		return 0, false, fmt.Errorf("%w: hybrid scalar filter index %q lookup failed: %w", ErrHybridSearchIndexUnavailable, filter.IndexName, err)
 	}
 	if persistedIt != nil {
 		defer func() { _ = persistedIt.Close() }()
 	}
+	var admitTemporary func(uint64) error
+	if view.catalog.nativeText != nil {
+		admitTemporary = view.catalog.nativeText.admit
+	}
 	var inputIDs uint64
-	truncated, err := scanMergedCollectionIndexIDsWithOptionsAndDirectionWorkCap(bufferedIt, persistedIt, idx.ValueType, limit, false, maxInspected, scanMergedCollectionIndexIDOptions{Context: view.context, DedupeDocumentID: shouldDedupeIndexDocumentIDs(idx, view.catalog.meta.Options), Inspected: inspected}, func(id []byte) (bool, error) {
+	truncated, err := scanMergedCollectionIndexIDsWithOptionsAndDirectionWorkCap(bufferedIt, persistedIt, idx.ValueType, limit, false, maxInspected, scanMergedCollectionIndexIDOptions{Context: view.context, DedupeDocumentID: shouldDedupeIndexDocumentIDs(idx, view.catalog.meta.Options), Inspected: inspected, admitTemporary: admitTemporary}, func(id []byte) (bool, error) {
 		inputIDs++
 		err := visit(id)
 		return err == nil, err
@@ -1148,7 +1268,7 @@ func (c *Collection) hybridFetchResultDocumentsAtReadView(response *HybridSearch
 	for i := range response.Results {
 		ids[i] = response.Results[i].ID
 	}
-	if err := hybridSearchCheckCurrentSnapshot(hybridSearchSnapshotStateToken(view.snapshot), baseState); err != nil {
+	if err := hybridSearchCheckCurrentSnapshot(hybridSearchReadViewStateToken(view), baseState); err != nil {
 		return err
 	}
 	fetch, err := view.FetchDocumentsByID(ids, opts)
@@ -1163,7 +1283,16 @@ func (c *Collection) hybridFetchResultDocumentsAtReadView(response *HybridSearch
 		if !fetch.Results[i].Found {
 			return fmt.Errorf("%w: hybrid final document %q not found", ErrHybridSearchIndexUnavailable, string(fetch.Results[i].ID))
 		}
-		response.Results[i].Document = bytes.Clone(fetch.Results[i].Document)
+		if view.nativeRead != nil {
+			// Fetch owns independent output; this private response has no other
+			// escaping owner. Transfer it without a second full document copy and
+			// limit capacity so caller appends cannot expose unrelated backing.
+			doc := fetch.Results[i].Document
+			response.Results[i].Document = doc[:len(doc):len(doc)]
+			fetch.Results[i].Document = nil
+		} else {
+			response.Results[i].Document = bytes.Clone(fetch.Results[i].Document)
+		}
 		response.Results[i].DocumentFound = true
 	}
 	return nil
@@ -1177,13 +1306,26 @@ func hybridSearchSnapshotFromState(token hybridSearchStateToken) HybridSearchSna
 	state := token.state
 	snapshot.CommitSeq = state.CommitSeq
 	snapshot.SystemRootPageID = state.SystemRootPageID
-	snapshot.CollectionGeneration = state.CommitSeq
+	if token.native {
+		snapshot.Native = true
+		snapshot.NativeLogicalSequence = token.logicalSequence
+		snapshot.CollectionIncarnation = token.incarnation
+		snapshot.DocumentGeneration = token.documentGeneration
+	} else {
+		snapshot.CollectionGeneration = state.CommitSeq
+	}
 	return snapshot
 }
 
 func hybridSearchCheckCurrentSnapshot(current, base hybridSearchStateToken) error {
 	if !current.available || !base.available {
 		return fmt.Errorf("%w: hybrid search current snapshot disappeared", ErrHybridSearchStaleIndex)
+	}
+	if current.native || base.native {
+		if !current.native || !base.native || current.logicalSequence != base.logicalSequence {
+			return fmt.Errorf("%w: native hybrid logical sequence changed from %d to %d", ErrHybridSearchStaleIndex, base.logicalSequence, current.logicalSequence)
+		}
+		return nil
 	}
 	currentState := current.state
 	baseState := base.state
@@ -1397,4 +1539,111 @@ func cloneHybridSearchCandidates(in []HybridSearchCandidate) []HybridSearchCandi
 		out[i].TextMatches = cloneHybridTextMatches(in[i].TextMatches)
 	}
 	return out
+}
+
+// validateHybridReadView is deliberately local: legacy-only users of
+// CollectionReadView.validateOpen still reject native views.
+func validateHybridReadView(view *CollectionReadView) error {
+	if view != nil && view.nativeRead != nil {
+		if view.closed || view.collection == nil || view.nativeLease == nil || view.nativeRead.capture == nil || view.nativeRead.collection == nil {
+			return backenddb.ErrClosed
+		}
+		return nil
+	}
+	return view.validateOpen()
+}
+
+func hybridSearchReadViewStateToken(view *CollectionReadView) hybridSearchStateToken {
+	if view != nil && view.nativeRead != nil {
+		r := view.nativeRead
+		token := hybridSearchSnapshotStateToken(r.capture.Snapshot())
+		token.native, token.available = true, true
+		token.logicalSequence = r.capture.LogicalSequence()
+		token.incarnation, token.documentGeneration = r.collection.incarnation, r.collection.documentGeneration
+		return token
+	}
+	return hybridSearchSnapshotStateToken(view.snapshot)
+}
+
+// This operation-private scope grows the view's original receipt. Charges are
+// cumulative across serial phases: retired Go backing may coexist until GC.
+// No receipt, scratch pool or mutable decoder is installed on a shared owner.
+type hybridNativeScratch struct {
+	view    *CollectionReadView
+	charged uint64
+}
+
+func newHybridNativeScratch(view *CollectionReadView) (*hybridNativeScratch, error) {
+	n := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(CollectionReadView{}))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(hybridNativeScratch{})))
+	if err := view.nativeLease.Resize(n); err != nil {
+		return nil, err
+	}
+	return &hybridNativeScratch{view: view, charged: n}, nil
+}
+func (s *hybridNativeScratch) admit(n uint64) error {
+	if n > ^uint64(0)-s.charged {
+		return memtable.ErrCOWCapacity
+	}
+	if err := s.view.nativeLease.Resize(s.charged + n); err != nil {
+		return err
+	}
+	s.charged += n
+	return nil
+}
+
+// Swiss tables use eight-slot groups. Twice the next power-of-two requested
+// slots covers load-factor/rounding; another factor of two retains all growth
+// cohorts. Each group includes controls and a pointer-sized overflow allowance.
+func (s *hybridNativeScratch) admitMap(n int, entryBytes uint64) error {
+	if n < 0 {
+		return memtable.ErrCOWCapacity
+	}
+	slots := uint64(8)
+	for slots/2 < uint64(n) {
+		if slots > ^uint64(0)/2 {
+			return memtable.ErrCOWCapacity
+		}
+		slots *= 2
+	}
+	unit := entryBytes + 2
+	if unit < entryBytes || slots > (^uint64(0)-256)/unit/2 {
+		return memtable.ErrCOWCapacity
+	}
+	return s.admit(memtable.COWAllocationCharge(256 + slots*unit*2))
+}
+func (s *hybridNativeScratch) admitFusion(candidates []HybridSearchCandidate) error {
+	if err := s.admitMap(len(candidates), uint64(unsafe.Sizeof(string("")))+uint64(unsafe.Sizeof(int(0)))); err != nil {
+		return err
+	}
+	// Accumulator/result/source arrays, debug copy and final fetch ID headers.
+	unit := uint64(unsafe.Sizeof(hybridFusionAccumulator{})) + uint64(unsafe.Sizeof(HybridSearchResult{})) + 2*uint64(unsafe.Sizeof(HybridSourceContribution{})) + uint64(unsafe.Sizeof(HybridSearchCandidate{})) + uint64(unsafe.Sizeof([]byte{}))
+	if uint64(len(candidates)) > ^uint64(0)/unit {
+		return memtable.ErrCOWCapacity
+	}
+	if err := s.admit(memtable.COWAllocationCharge(uint64(len(candidates)) * unit)); err != nil {
+		return err
+	}
+	// Parent-collapse map plus IDs copied for the fusion map, result, debug and
+	// parent parsing. Match/term arrays are cloned by fusion and optional debug.
+	if err := s.admitMap(len(candidates), uint64(unsafe.Sizeof(string("")))+uint64(unsafe.Sizeof(int(0)))); err != nil {
+		return err
+	}
+	for _, c := range candidates {
+		for i := 0; i < 4; i++ {
+			if err := s.admit(memtable.COWAllocationCharge(uint64(len(c.ID)))); err != nil {
+				return err
+			}
+		}
+		for i := 0; i < 2; i++ {
+			if err := s.admit(memtable.COWAllocationCharge(uint64(len(c.TextMatches)) * uint64(unsafe.Sizeof(HybridTextMatch{})))); err != nil {
+				return err
+			}
+			for _, m := range c.TextMatches {
+				if err := s.admit(memtable.COWAllocationCharge(uint64(len(m.Terms)) * uint64(unsafe.Sizeof(string(""))))); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
 }
