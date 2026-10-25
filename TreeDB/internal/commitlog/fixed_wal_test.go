@@ -13,7 +13,7 @@ func TestFixedWALImmutableCaptureAndCorruption(t *testing.T) {
 		t.Skip("fixed-container publication is unsupported on this platform")
 	}
 	dir := t.TempDir()
-	journal, err := OpenCommandJournal(dir, CommandJournalOptions{SegmentTargetBytes: 4096, CaptureStableResources: true})
+	journal, err := openFixedTestCommandJournal(dir, CommandJournalOptions{SegmentTargetBytes: 4096, CaptureStableResources: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +84,7 @@ func TestFixedWALImmutableCaptureAndCorruption(t *testing.T) {
 					t.Fatalf("frame=%+v err=%v", env, e)
 				}
 			}
-			recovered, e := OpenCommandJournal(filepath.Dir(target), CommandJournalOptions{SegmentTargetBytes: 4096})
+			recovered, e := openFixedTestCommandJournal(filepath.Dir(target), CommandJournalOptions{SegmentTargetBytes: 4096})
 			if e != nil {
 				t.Fatal(e)
 			}
@@ -140,7 +140,7 @@ func TestFixedWALEncodeReusePreservesFramesAndZeroPadding(t *testing.T) {
 	if !FixedWALCreationSupported() {
 		t.Skip("fixed-container publication is unsupported on this platform")
 	}
-	journal, err := OpenCommandJournal(t.TempDir(), CommandJournalOptions{SegmentTargetBytes: 16 << 10})
+	journal, err := openFixedTestCommandJournal(t.TempDir(), CommandJournalOptions{SegmentTargetBytes: 16 << 10})
 	if err != nil {
 		t.Fatal(err)
 	}

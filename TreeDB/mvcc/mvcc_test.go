@@ -508,7 +508,8 @@ func TestCommitAtDurableProcessCrashRecovery(t *testing.T) {
 		t.Fatalf("read incomplete relaxed suffix fixture: %v", err)
 	}
 	const witnessBytes, classifiablePrefixBytes = 96, 8 + 56
-	if commitlog.FixedWALCreationSupported() {
+	fixedContainer := len(image) >= 6 && string(image[:6]) == "TDBWAL"
+	if fixedContainer {
 		if len(image) < 4096 || string(image[:6]) != "TDBWAL" {
 			t.Fatal("crash fixture did not select the production fixed container")
 		}
@@ -546,7 +547,7 @@ func TestCommitAtDurableProcessCrashRecovery(t *testing.T) {
 	if err := os.WriteFile(suffixPath, image, 0600); err != nil {
 		t.Fatalf("write interrupted relaxed suffix: %v", err)
 	}
-	if !commitlog.FixedWALCreationSupported() {
+	if !fixedContainer {
 		tail, end, err := commitlog.InspectCommandFrameV2TerminalTail(suffixPath, suffixStart)
 		if err != nil || tail.LSN != incompleteSuffixLSN || tail.DurabilityClass != commitlog.CommandDurabilityRelaxed || end != int64(len(image)) {
 			t.Fatalf("classifiable stream suffix=%+v end=%d err=%v", tail, end, err)

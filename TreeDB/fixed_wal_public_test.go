@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +15,56 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
+
+// seedPublicFixedSuccessor constructs the actual next canonical segment. The
+// existing backend rotation opens it, retains ownership and inspects its format.
+func seedPublicFixedSuccessor(t *testing.T, database *DB) {
+	t.Helper()
+	active := database.Stats()["treedb.command_wal.writer.path"]
+	var seq uint64
+	if n, err := fmt.Sscanf(filepath.Base(active), "commit-l0-%d.log", &seq); err != nil || n != 1 || seq == ^uint64(0) {
+		t.Fatalf("active command segment=%q: %v", active, err)
+	}
+	w, err := commitlog.NewFixedWriter(filepath.Join(filepath.Dir(active), commitlog.CommandSegmentName(0, seq+1)), 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = w.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func requirePublicFixedWAL(t *testing.T, database *DB) {
+	t.Helper()
+	if database.Stats()["treedb.command_wal.writer.container"] != "fixed" {
+		seedPublicFixedSuccessor(t, database)
+		if err := database.backend.RotateCommandWALActiveSegment(false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if database.Stats()["treedb.command_wal.writer.container"] != "fixed" {
+		t.Fatal("actual selected segment is not fixed")
+	}
+}
+
+func publicFixedWALPaths(t *testing.T, dir string) []string {
+	t.Helper()
+	paths, err := filepath.Glob(filepath.Join(backenddb.WALDirPath(dir), "commit-l*.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixed []string
+	for _, path := range paths {
+		data, e := os.ReadFile(path)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if len(data) >= 6 && string(data[:6]) == "TDBWAL" {
+			fixed = append(fixed, path)
+		}
+	}
+	return fixed
+}
 
 // This uses ordinary Open and SetSync plus an independent pre-Close image.
 // Container witnesses are transport; unchanged V2 and persistent vlog evidence
@@ -31,6 +82,7 @@ func TestFixedWALPublicStableImage(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer database.Close()
+	requirePublicFixedWAL(t, database)
 	first := bytes.Repeat([]byte("a"), 66<<10)
 	if err = database.SetSync([]byte("a"), first); err != nil {
 		t.Fatal(err)
@@ -38,7 +90,7 @@ func TestFixedWALPublicStableImage(t *testing.T) {
 	if err = database.SetSync([]byte("b"), []byte("accepted-b")); err != nil {
 		t.Fatal(err)
 	}
-	paths, err := filepath.Glob(filepath.Join(backenddb.WALDirPath(source), "commit-l*.log"))
+	paths := publicFixedWALPaths(t, source)
 	if err != nil || len(paths) != 1 {
 		t.Fatalf("WAL paths=%v err=%v", paths, err)
 	}
@@ -115,6 +167,7 @@ func TestFixedWALPublicRepairInterruptedOpenRetries(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer database.Close()
+	requirePublicFixedWAL(t, database)
 	if err = database.SetSync([]byte("a"), []byte("accepted-a")); err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +182,7 @@ func TestFixedWALPublicRepairInterruptedOpenRetries(t *testing.T) {
 	if err = copyPublicCommandWALCrashImage(source, template); err != nil {
 		t.Fatal(err)
 	}
-	paths, err := filepath.Glob(filepath.Join(backenddb.WALDirPath(template), "commit-l*.log"))
+	paths := publicFixedWALPaths(t, template)
 	if err != nil || len(paths) != 1 {
 		t.Fatalf("WAL paths=%v err=%v", paths, err)
 	}
@@ -322,8 +375,21 @@ func TestFixedWALPublicIncompleteRelaxedExtentHorizon(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer database.Close()
+			requirePublicFixedWAL(t, database)
 			if err = database.SetSync([]byte("a"), []byte("accepted-a")); err != nil {
 				t.Fatal(err)
+			}
+			if tc.rotate {
+				// Stable automatic rotation requires a fresh O_EXCL successor.
+				// Select the real explicit-format successor with ordinary rotation
+				// before accepting b; the later barrier still crosses segments.
+				seedPublicFixedSuccessor(t, database)
+				if err = database.backend.RotateCommandWALActiveSegment(false); err != nil {
+					t.Fatal(err)
+				}
+				if database.Stats()["treedb.command_wal.writer.container"] != "fixed" {
+					t.Fatal("horizon fixture did not select fixed successor")
+				}
 			}
 			if err = database.Set([]byte("b"), []byte("relaxed-body-that-will-tear")); err != nil {
 				t.Fatal(err)
@@ -331,10 +397,14 @@ func TestFixedWALPublicIncompleteRelaxedExtentHorizon(t *testing.T) {
 			if err = database.backend.FlushCommandWAL(false); err != nil {
 				t.Fatal(err)
 			}
+			relaxedSegment := database.Stats()["treedb.command_wal.writer.path"]
 			if tc.cover {
 				if err = writeEmptyPublicCommandWALSync(database); err != nil {
 					t.Fatal(err)
 				}
+			}
+			if tc.rotate && database.Stats()["treedb.command_wal.writer.path"] == relaxedSegment {
+				t.Fatal("durable barrier did not move beyond the relaxed extent's physical segment")
 			}
 			crash := filepath.Join(t.TempDir(), "image")
 			if err = copyPublicCommandWALCrashImage(source, crash); err != nil {
@@ -355,6 +425,9 @@ func TestFixedWALPublicIncompleteRelaxedExtentHorizon(t *testing.T) {
 					end := int64(binary.LittleEndian.Uint64(image[off+48 : off+56]))
 					body := image[off+96 : off+96+length]
 					if bytes.Contains(body, []byte("relaxed-body-that-will-tear")) {
+						if filepath.Base(path) != filepath.Base(relaxedSegment) {
+							t.Fatal("tear target differs from selected relaxed segment")
+						}
 						// Keep the outer bound and stable 56-byte V2 identity. Replace the
 						// unwritten body/end range with its exact initialized reserve bytes.
 						clear(image[off+96+8+56 : off+96+length])

@@ -267,3 +267,17 @@ func TestResolveWitnessContractsRejectsFallbackAuthorityChanges(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateFrozenWALContainerRejectsMismatch(t *testing.T) {
+	for _, tc := range []struct {
+		expected, actual string
+		reject           bool
+	}{
+		{"fixed", "fixed", false}, {"stream", "stream", false}, {"", "fixed", false},
+		{"fixed", "stream", true}, {"stream", "fixed", true}, {"unknown", "fixed", true},
+	} {
+		if err := ValidateFrozenWALContainer(tc.expected, tc.actual); (err != nil) != tc.reject {
+			t.Fatalf("frozen=%q actual=%q error=%v", tc.expected, tc.actual, err)
+		}
+	}
+}

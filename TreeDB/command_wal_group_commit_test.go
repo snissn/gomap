@@ -1714,7 +1714,7 @@ func TestPublicCommandWALGroupCommitDependencyFailurePoisonsAllWaiters(t *testin
 		t.Fatal("did not observe preceding path-only rotation debt sync")
 	}
 	wantInitializers := int32(0)
-	if commitlog.FixedWALCreationSupported() {
+	if db.Stats()["treedb.command_wal.writer.container"] == "fixed" {
 		wantInitializers = 1
 	}
 	if initializers.Load() != wantInitializers {

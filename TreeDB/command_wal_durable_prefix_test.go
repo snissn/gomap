@@ -544,7 +544,7 @@ func TestPublicCommandWALRelaxedRotationsStabilizeExactPrefixBeforeBarrierAppend
 		t.Fatalf("Set relaxed-b: %v", err)
 	}
 	wantInitializers := 0
-	if commitlog.FixedWALCreationSupported() {
+	if db.Stats()["treedb.command_wal.writer.container"] == "fixed" {
 		wantInitializers = 1
 	}
 	if privateFileSyncs != wantInitializers || privateNamespaceSyncs != wantInitializers || initializingNamespace {

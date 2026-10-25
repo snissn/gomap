@@ -5229,6 +5229,19 @@ func reportWriteSyncLatencyDistribution(b *testing.B, samples []time.Duration) {
 
 func reportCommandWALBenchmarkDeltas(b *testing.B, before, after map[string]string, operations uint64) {
 	b.Helper()
+	// These are cold witnesses from the existing post-StopTimer Stats snapshot.
+	// They do not change measured work or the required gate metrics.
+	fixed, memory := 0.0, 0.0
+	if after["treedb.command_wal.writer.container"] == "fixed" {
+		fixed = 1
+	}
+	if after["treedb.command_wal.writer.memory_filesystem"] == "true" {
+		memory = 1
+	}
+	b.ReportMetric(fixed, "command_wal.container.fixed")
+	b.ReportMetric(memory, "command_wal.filesystem.memory")
+	b.ReportMetric(float64(statMapUint64B(b, after, "treedb.command_wal.writer.filesystem_type")), "command_wal.filesystem.type")
+	b.Logf("command-WAL container=%s reason=%s filesystem_type=%s memory_filesystem=%s", after["treedb.command_wal.writer.container"], after["treedb.command_wal.writer.container_reason"], after["treedb.command_wal.writer.filesystem_type"], after["treedb.command_wal.writer.memory_filesystem"])
 	for _, key := range []string{
 		"treedb.command_wal.append.count_total",
 		"treedb.command_wal.flush.count_total",

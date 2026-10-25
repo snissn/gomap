@@ -47,7 +47,7 @@ func TestPublicExternalCommandWALHasOneByteAccountingOwner(t *testing.T) {
 		if got := database.backend.CommandWALBytes(); got != logical {
 			t.Fatalf("logical WAL pressure=%d, want %d (physical footprint=%d)", got, logical, physical)
 		}
-		if commitlog.FixedWALCreationSupported() {
+		if database.Stats()["treedb.command_wal.writer.container"] == "fixed" {
 			if physical <= logical {
 				t.Fatalf("fixture lacks initialized reserve: physical=%d logical=%d", physical, logical)
 			}

@@ -283,6 +283,12 @@ func IsCommandSegmentName(name string) bool {
 }
 
 func OpenCommandJournal(walDir string, opts CommandJournalOptions) (*CommandJournal, error) {
+	return openCommandJournal(walDir, opts, true)
+}
+
+// openCommandJournal preserves the same journal lifecycle for explicit low-level
+// fixed-container fixtures and production medium-selected writers.
+func openCommandJournal(walDir string, opts CommandJournalOptions, productionMediumPolicy bool) (*CommandJournal, error) {
 	if walDir == "" {
 		return nil, errors.New("commitlog: command journal dir required")
 	}
@@ -329,6 +335,7 @@ func OpenCommandJournal(walDir string, opts CommandJournalOptions) (*CommandJour
 	}
 	writer, err := NewWriterWithOptions(path, Options{
 		fixedCapacity:                   target,
+		productionMediumPolicy:          productionMediumPolicy,
 		MaxSegmentSize:                  opts.MaxSegmentSize,
 		BufferSize:                      opts.BufferSize,
 		DeferredCommandBufferSize:       opts.DeferredCommandBufferSize,
@@ -907,7 +914,7 @@ func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurren
 		closedToken.Release()
 		return nil, err
 	}
-	state, _, err := j.writer.prepareFixedSuccessor(&prepared, parent)
+	state, _, selection, err := j.writer.prepareFixedSuccessor(&prepared, parent)
 	pending.file = prepared
 	if err != nil {
 		closedToken.Release()
@@ -995,6 +1002,7 @@ func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurren
 	j.writer.size = activeInfo.Size()
 	oldFixed := j.writer.fixed
 	j.writer.fixed = state
+	j.writer.containerSelection = selection
 	if state != nil {
 		j.writer.size = state.logical
 		if oldFixed == nil {

@@ -2,7 +2,9 @@ package db
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
@@ -21,6 +23,27 @@ func TestCommandWALFixedCapacityCleanupSeparatesLogicalDebtAndPhysicalBytes(t *t
 		t.Fatal(err)
 	}
 	defer func() { _ = database.Close() }()
+	if database.commandJournal.WriterBufferStats().Container != "fixed" {
+		active, _ := database.commandWALActiveSegmentSnapshot()
+		var seq uint64
+		if n, e := fmt.Sscanf(filepath.Base(active), "commit-l0-%d.log", &seq); e != nil || n != 1 || seq == ^uint64(0) {
+			t.Fatalf("active=%q: %v", active, e)
+		}
+		seed, e := commitlog.NewFixedWriter(filepath.Join(filepath.Dir(active), commitlog.CommandSegmentName(0, seq+1)), 256)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if e = seed.Close(); e != nil {
+			t.Fatal(e)
+		}
+		if e = database.RotateCommandWALActiveSegment(false); e != nil {
+			t.Fatal(e)
+		}
+	}
+	if database.commandJournal.WriterBufferStats().Container != "fixed" {
+		t.Fatal("fixed accounting fixture did not select actual fixed segment")
+	}
+
 	if err := database.Set([]byte("covered"), []byte("value")); err != nil {
 		t.Fatal(err)
 	}

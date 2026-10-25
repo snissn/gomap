@@ -221,7 +221,7 @@ func TestCommandWALSnapshotPrefixRejectsCorruptReserve(t *testing.T) {
 	if !FixedWALCreationSupported() {
 		t.Skip("requires a fixed-container reserve")
 	}
-	j, err := OpenCommandJournal(t.TempDir(), CommandJournalOptions{SegmentTargetBytes: 1024})
+	j, err := openFixedTestCommandJournal(t.TempDir(), CommandJournalOptions{SegmentTargetBytes: 1024})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,7 +244,7 @@ func TestCommandWALSnapshotPrefixCannotDiscardIncompleteCommand(t *testing.T) {
 	if !FixedWALCreationSupported() {
 		t.Skip("requires a fixed-container reserve")
 	}
-	j, err := OpenCommandJournal(t.TempDir(), CommandJournalOptions{SegmentTargetBytes: 4096})
+	j, err := openFixedTestCommandJournal(t.TempDir(), CommandJournalOptions{SegmentTargetBytes: 4096})
 	if err != nil {
 		t.Fatal(err)
 	}

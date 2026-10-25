@@ -130,6 +130,8 @@ type Writer struct {
 	fixed                  *fixedWAL
 	fixedTarget            int64
 	fixedIncomingBytes     int64
+	productionMediumPolicy bool
+	containerSelection     walContainerSelection
 	bw                     *bufio.Writer
 	fileSink               writerFileSink
 	scratch                []byte
@@ -185,6 +187,11 @@ func (s *writerFileSink) Write(p []byte) (int, error) {
 }
 
 type WriterBufferStats struct {
+	ActivePath                  string
+	Container                   string
+	ContainerReason             string
+	FilesystemType              uint64
+	MemoryFilesystem            bool
 	BufferedWriterSize          int
 	BufferedWriterBufferedBytes int
 	ScratchCapacity             int
@@ -232,6 +239,22 @@ func NewWriter(path string) (*Writer, error) {
 	return NewWriterWithOptions(path, Options{})
 }
 
+// NewFixedWriter requests initialized fixed capacity for a new empty segment.
+// Occupied existing segments retain their actual format. Unsupported platforms
+// reject the request; production journals use their descriptor-based policy.
+func NewFixedWriter(path string, capacity int64) (*Writer, error) {
+	if capacity <= 0 {
+		return nil, errors.New("commitlog: positive fixed capacity required")
+	}
+	if _, err := fixedWALCapacity(capacity); err != nil {
+		return nil, err
+	}
+	if !FixedWALCreationSupported() {
+		return nil, rootpublication.ErrNamespacePersistenceUnsupported
+	}
+	return NewWriterWithOptions(path, Options{fixedCapacity: capacity})
+}
+
 func NewWriterWithOptions(path string, opts Options) (*Writer, error) {
 	if !FixedWALCreationSupported() {
 		opts.fixedCapacity = 0
@@ -242,30 +265,36 @@ func NewWriterWithOptions(path string, opts Options) (*Writer, error) {
 	}
 	w := &Writer{
 		f:      f,
-		syncFn: func(file *os.File) error { return file.Sync() },
+		syncFn: stableio.SyncFile,
 	}
 	state, _, loadErr := loadFixedWAL(f)
 	if loadErr != nil {
 		_ = f.Close()
 		return nil, loadErr
 	}
-	if state == nil && opts.fixedCapacity > 0 {
+	selection := existingWALContainer(state)
+	if state == nil {
 		info, e := f.Stat()
 		if e != nil {
 			_ = f.Close()
 			return nil, e
 		}
 		if info.Size() == 0 {
-			state, loadErr = initializeFixedWAL(&f, opts.fixedCapacity, nil)
-			if loadErr != nil {
-				_ = f.Close()
-				return nil, loadErr
+			selection = selectWALContainer(f, opts.fixedCapacity, opts.productionMediumPolicy)
+			if selection.fixed {
+				state, loadErr = initializeFixedWAL(&f, opts.fixedCapacity, nil)
+				if loadErr != nil {
+					_ = f.Close()
+					return nil, loadErr
+				}
 			}
 		}
 	}
 	w.f = f
 	w.fixed = state
 	w.fixedTarget = opts.fixedCapacity
+	w.productionMediumPolicy = opts.productionMediumPolicy
+	w.containerSelection = selection
 	if state != nil {
 		w.syncFn = syncWALData
 	}
@@ -439,6 +468,10 @@ func (w *Writer) BufferStats() WriterBufferStats {
 		return WriterBufferStats{}
 	}
 	stats := WriterBufferStats{
+		Container:                 walContainerName(w.fixed != nil),
+		ContainerReason:           w.containerSelection.reason,
+		FilesystemType:            w.containerSelection.filesystemType,
+		MemoryFilesystem:          w.containerSelection.memory,
 		ScratchCapacity:           cap(w.scratch),
 		CommandBufferLength:       len(w.commandBuf),
 		CommandBufferCapacity:     cap(w.commandBuf),
@@ -448,6 +481,9 @@ func (w *Writer) BufferStats() WriterBufferStats {
 		CommandBufferDroppedBytes: w.commandBufDroppedBytes,
 		PendingBatchLength:        len(w.pendingBatch),
 		PendingBatchCapacity:      cap(w.pendingBatch),
+	}
+	if w.f != nil {
+		stats.ActivePath = w.f.Name()
 	}
 	if w.bw != nil {
 		stats.BufferedWriterSize = w.bw.Size()
@@ -666,7 +702,7 @@ func (w *Writer) rotateToWithSyncObserved(path string, syncCurrent bool, root st
 			return writerRotationOutcome{}, errors.Join(err, file.Close())
 		}
 	}
-	state, size, err := w.prepareFixedSuccessor(&file, preparedParent)
+	state, size, selection, err := w.prepareFixedSuccessor(&file, preparedParent)
 	if err != nil {
 		// Keep ownership of the old descriptor; the failed candidate is never the
 		// writer's authoritative file, and is closed even after partial reserve I/O.
@@ -685,6 +721,7 @@ func (w *Writer) rotateToWithSyncObserved(path string, syncCurrent bool, root st
 	old, oldFixed := w.f, w.fixed
 	w.f = file
 	w.fixed = state
+	w.containerSelection = selection
 	w.fileSink.file = file
 	w.bw.Reset(&w.fileSink)
 	w.size = size

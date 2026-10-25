@@ -128,3 +128,16 @@ func ValidateWitnessContracts(plan RunPlan, contracts WitnessContracts) error {
 	}
 	return nil
 }
+
+// ValidateFrozenWALContainer rejects a child medium mismatch before comparing
+// physical selectors. Empty expectations are ordinary non-certification tests;
+// a frozen runner expectation can never be rebound after observing the child.
+func ValidateFrozenWALContainer(expected, actual string) error {
+	if expected == "" {
+		return nil
+	}
+	if (expected != "fixed" && expected != "stream") || actual != expected {
+		return fmt.Errorf("powerlosscert: actual WAL container %q differs from frozen runner-preflight container %q", actual, expected)
+	}
+	return nil
+}

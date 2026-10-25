@@ -69,8 +69,11 @@ type Record struct {
 }
 
 type Options struct {
-	// fixedCapacity is selected by the production command journal only.
-	fixedCapacity int64
+	// fixedCapacity requests fixed storage explicitly for low-level writers.
+	// productionMediumPolicy lets the command journal select each fresh segment
+	// from its actual descriptor; it is not a public format option.
+	productionMediumPolicy bool
+	fixedCapacity          int64
 
 	// MaxSegmentSize bounds the total commitlog segment payload size (bytes).
 	// 0 uses the default limit; values < 0 disable the cap.

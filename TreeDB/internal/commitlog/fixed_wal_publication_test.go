@@ -28,13 +28,13 @@ func TestFixedWALInitializationCrashHelper(t *testing.T) {
 		}
 		return original(file, p, offset)
 	}
-	j, err := OpenCommandJournal(dir, CommandJournalOptions{SegmentTargetBytes: 256})
+	j, err := openFixedTestCommandJournal(dir, CommandJournalOptions{SegmentTargetBytes: 256})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if mode == "existing_empty_successor_growth" {
 		j.writer.fixedIncomingBytes = 32 << 10
-		_, _, err = j.writer.prepareFixedSuccessor(&j.writer.f, nil)
+		_, _, _, err = j.writer.prepareFixedSuccessor(&j.writer.f, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -56,7 +56,7 @@ func TestFixedWALInitializationCrashRecovery(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			dir := t.TempDir()
 			if mode != "fresh" {
-				j, err := OpenCommandJournal(dir, CommandJournalOptions{SegmentTargetBytes: 256})
+				j, err := openFixedTestCommandJournal(dir, CommandJournalOptions{SegmentTargetBytes: 256})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -71,7 +71,7 @@ func TestFixedWALInitializationCrashRecovery(t *testing.T) {
 			if !errors.As(err, &exit) || exit.ExitCode() != 73 {
 				t.Fatalf("helper: %v\n%s", err, output)
 			}
-			reopened, err := OpenCommandJournal(dir, CommandJournalOptions{SegmentTargetBytes: 256})
+			reopened, err := openFixedTestCommandJournal(dir, CommandJournalOptions{SegmentTargetBytes: 256})
 			if err != nil {
 				t.Fatalf("reopen after unaccepted initialization crash: %v", err)
 			}
@@ -96,7 +96,7 @@ func TestFixedWALReopenLargerTargetRotatesAtPhysicalCapacity(t *testing.T) {
 	for _, stable := range []bool{false, true} {
 		t.Run(map[bool]string{false: "ordinary", true: "stable"}[stable], func(t *testing.T) {
 			dir := t.TempDir()
-			j, err := OpenCommandJournal(dir, CommandJournalOptions{SegmentTargetBytes: 256, CaptureStableResources: stable})
+			j, err := openFixedTestCommandJournal(dir, CommandJournalOptions{SegmentTargetBytes: 256, CaptureStableResources: stable})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -109,7 +109,7 @@ func TestFixedWALReopenLargerTargetRotatesAtPhysicalCapacity(t *testing.T) {
 			if err = j.Close(); err != nil {
 				t.Fatal(err)
 			}
-			j, err = OpenCommandJournal(dir, CommandJournalOptions{CaptureStableResources: stable})
+			j, err = openFixedTestCommandJournal(dir, CommandJournalOptions{CaptureStableResources: stable})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -135,7 +135,7 @@ func TestFixedWALReopenLargerTargetRotatesAtPhysicalCapacity(t *testing.T) {
 }
 
 func TestCommandJournalCleanupScanKeepsListingAndReaderPrefix(t *testing.T) {
-	j, err := OpenCommandJournal(t.TempDir(), CommandJournalOptions{})
+	j, err := openFixedTestCommandJournal(t.TempDir(), CommandJournalOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +208,7 @@ func TestCommandJournalCleanupScanKeepsListingAndReaderPrefix(t *testing.T) {
 }
 
 func TestCommandJournalStableRotationToStreamPreservesFrontier(t *testing.T) {
-	j, err := OpenCommandJournal(t.TempDir(), CommandJournalOptions{CaptureStableResources: true})
+	j, err := openFixedTestCommandJournal(t.TempDir(), CommandJournalOptions{CaptureStableResources: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -249,7 +249,7 @@ func TestFixedWALReopenPhysicalCapacityIncludesBufferedFrames(t *testing.T) {
 		t.Skip("requires a fixed-container reserve")
 	}
 	dir := t.TempDir()
-	j, err := OpenCommandJournal(dir, CommandJournalOptions{SegmentTargetBytes: 256})
+	j, err := openFixedTestCommandJournal(dir, CommandJournalOptions{SegmentTargetBytes: 256})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -262,7 +262,7 @@ func TestFixedWALReopenPhysicalCapacityIncludesBufferedFrames(t *testing.T) {
 	if err = j.Close(); err != nil {
 		t.Fatal(err)
 	}
-	j, err = OpenCommandJournal(dir, CommandJournalOptions{})
+	j, err = openFixedTestCommandJournal(dir, CommandJournalOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

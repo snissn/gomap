@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/powerlosscert"
 	"github.com/snissn/gomap/TreeDB/internal/powerlossoracle"
 )
 
@@ -269,9 +269,12 @@ func TestPowerLossCertificationGroupedRotationExternalPublicReopen(t *testing.T)
 		t.Fatal(err)
 	}
 	restore()
+	if err := powerlosscert.ValidateFrozenWALContainer(os.Getenv("TREEDB_POWERLOSS_WAL_CONTAINER"), database.Stats()["treedb.command_wal.writer.container"]); err != nil {
+		t.Fatal(err)
+	}
 	wantOrder := []string{"auxiliary", "auxiliary", "published-old"}
 	wantInitializers := 0
-	if commitlog.FixedWALCreationSupported() {
+	if database.Stats()["treedb.command_wal.writer.container"] == "fixed" {
 		wantInitializers = 1
 		wantOrder = append(wantOrder, "private-initialization")
 	}

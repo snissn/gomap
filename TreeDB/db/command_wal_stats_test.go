@@ -261,8 +261,8 @@ func TestCommandWALStatsBoundV2ScratchAfterLargeFrame(t *testing.T) {
 	}
 
 	stats := db.Stats()
-	if got, want := stats["treedb.command_wal.writer.scratch_capacity_bytes"], strconv.Itoa(commandWALDeferredPointBufferRetainSize); got != want {
-		t.Fatalf("V2 scratch cap=%q, want retain cap %s after oversized append (stats=%#v)", got, want, stats)
+	if got, err := strconv.Atoi(stats["treedb.command_wal.writer.scratch_capacity_bytes"]); err != nil || got < 0 || got > commandWALDeferredPointBufferRetainSize {
+		t.Fatalf("V2 scratch cap=%d err=%v, want 0..%d after oversized append (stats=%#v)", got, err, commandWALDeferredPointBufferRetainSize, stats)
 	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("Close: %v", err)

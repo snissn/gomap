@@ -23,7 +23,7 @@ func fixedWALRepairFixture(t *testing.T) (string, string, int64, []byte) {
 		t.Skip("fixed-container publication is unsupported on this platform")
 	}
 	dir := t.TempDir()
-	j, err := OpenCommandJournal(dir, CommandJournalOptions{SegmentTargetBytes: 256 << 10})
+	j, err := openFixedTestCommandJournal(dir, CommandJournalOptions{SegmentTargetBytes: 256 << 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +103,7 @@ func TestFixedWALRepairInterruptedWriteCanRetry(t *testing.T) {
 			if err = file.Sync(); err != nil {
 				t.Fatal(err)
 			}
-			j, err := OpenCommandJournal(dir, CommandJournalOptions{})
+			j, err := openFixedTestCommandJournal(dir, CommandJournalOptions{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -141,7 +141,7 @@ func verifyFixedWALRepairRetry(t *testing.T, dir, path string, offset int64, ori
 	if err != nil || len(state.extents) != 1 || len(state.incomplete) != 0 || state.lastLSN != 1 {
 		t.Fatalf("repaired container=%v err=%v", state, err)
 	}
-	j, err := OpenCommandJournal(dir, CommandJournalOptions{})
+	j, err := openFixedTestCommandJournal(dir, CommandJournalOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +157,7 @@ func verifyFixedWALRepairRetry(t *testing.T, dir, path string, offset int64, ori
 	if err = j.Close(); err != nil {
 		t.Fatal(err)
 	}
-	j, err = OpenCommandJournal(dir, CommandJournalOptions{})
+	j, err = openFixedTestCommandJournal(dir, CommandJournalOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

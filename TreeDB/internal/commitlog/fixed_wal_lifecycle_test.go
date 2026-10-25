@@ -96,7 +96,7 @@ func TestFixedWALWindowsNeutralizationFailureStopsWriter(t *testing.T) {
 	}
 	for _, stable := range []bool{false, true} {
 		t.Run(map[bool]string{false: "ordinary", true: "stable"}[stable], func(t *testing.T) {
-			j, err := OpenCommandJournal(t.TempDir(), CommandJournalOptions{SegmentTargetBytes: 1024, CaptureStableResources: stable})
+			j, err := openFixedTestCommandJournal(t.TempDir(), CommandJournalOptions{SegmentTargetBytes: 1024, CaptureStableResources: stable})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -162,7 +162,7 @@ func TestFixedWALWindowsNeutralizationFailureStopsWriter(t *testing.T) {
 			_ = j.Close() // The originating initialization error remains sticky.
 			// The injected sync completed physically before returning an error.
 			// Recovery is possible, but the failed writer must stay poisoned.
-			reopened, err := OpenCommandJournal(j.walDir, CommandJournalOptions{SegmentTargetBytes: 1024})
+			reopened, err := openFixedTestCommandJournal(j.walDir, CommandJournalOptions{SegmentTargetBytes: 1024})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -221,7 +221,7 @@ func TestFixedWALOversizedChosenSuccessor(t *testing.T) {
 				name += "/accepted_small_first"
 			}
 			t.Run(name, func(t *testing.T) {
-				j, err := OpenCommandJournal(t.TempDir(), CommandJournalOptions{SegmentTargetBytes: 1024, CaptureStableResources: stable})
+				j, err := openFixedTestCommandJournal(t.TempDir(), CommandJournalOptions{SegmentTargetBytes: 1024, CaptureStableResources: stable})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -288,7 +288,7 @@ func TestFixedWALInitializationFailureStopsWriter(t *testing.T) {
 	for _, where := range []string{"resize", "ordinary_rotation", "stable_rotation"} {
 		for _, fault := range []string{"short_write", "enospc", "full_sync"} {
 			t.Run(where+"/"+fault, func(t *testing.T) {
-				j, err := OpenCommandJournal(t.TempDir(), CommandJournalOptions{SegmentTargetBytes: 1024, CaptureStableResources: where == "stable_rotation"})
+				j, err := openFixedTestCommandJournal(t.TempDir(), CommandJournalOptions{SegmentTargetBytes: 1024, CaptureStableResources: where == "stable_rotation"})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -381,7 +381,7 @@ func TestFixedWALInitializationFailureStopsWriter(t *testing.T) {
 					t.Errorf("old descriptor leaked after Close: %v", e)
 				}
 				if where != "resize" {
-					reopened, e := OpenCommandJournal(walDir, CommandJournalOptions{SegmentTargetBytes: 1024})
+					reopened, e := openFixedTestCommandJournal(walDir, CommandJournalOptions{SegmentTargetBytes: 1024})
 					if e != nil {
 						t.Fatalf("ordinary reopen lost prior ACK after failed successor: %v", e)
 					}
@@ -403,7 +403,7 @@ func TestFixedWALFlushRetainsPendingBase(t *testing.T) {
 	if !FixedWALCreationSupported() {
 		t.Skip("fixed-container publication is unsupported on this platform")
 	}
-	j, err := OpenCommandJournal(t.TempDir(), CommandJournalOptions{SegmentTargetBytes: 4096})
+	j, err := openFixedTestCommandJournal(t.TempDir(), CommandJournalOptions{SegmentTargetBytes: 4096})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -437,7 +437,7 @@ func TestFixedWALFailedPreparationRetainsExistingSuccessor(t *testing.T) {
 	if !FixedWALCreationSupported() {
 		t.Skip("fixed-container publication is unsupported on this platform")
 	}
-	j, err := OpenCommandJournal(t.TempDir(), CommandJournalOptions{SegmentTargetBytes: 1024})
+	j, err := openFixedTestCommandJournal(t.TempDir(), CommandJournalOptions{SegmentTargetBytes: 1024})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -468,7 +468,7 @@ func TestFixedWALOversizedExistingEmptySuccessor(t *testing.T) {
 	if !FixedWALCreationSupported() {
 		t.Skip("fixed-container publication is unsupported on this platform")
 	}
-	j, err := OpenCommandJournal(t.TempDir(), CommandJournalOptions{SegmentTargetBytes: 1024})
+	j, err := openFixedTestCommandJournal(t.TempDir(), CommandJournalOptions{SegmentTargetBytes: 1024})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -503,7 +503,7 @@ func TestFixedWALRawJournalRejectsIncompleteRelaxedExtent(t *testing.T) {
 	if !FixedWALCreationSupported() {
 		t.Skip("fixed-container publication is unsupported on this platform")
 	}
-	j, err := OpenCommandJournal(t.TempDir(), CommandJournalOptions{})
+	j, err := openFixedTestCommandJournal(t.TempDir(), CommandJournalOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -553,7 +553,7 @@ func TestFixedWALRawJournalRejectsIncompleteRelaxedExtent(t *testing.T) {
 	if !errors.As(err, &incomplete) || incomplete.Envelope.LSN != 2 || incomplete.Envelope.DurabilityClass != CommandDurabilityRelaxed {
 		t.Fatalf("incomplete identity: %v", err)
 	}
-	reopened, err := OpenCommandJournal(dir, CommandJournalOptions{})
+	reopened, err := openFixedTestCommandJournal(dir, CommandJournalOptions{})
 	if reopened != nil {
 		_ = reopened.Close()
 	}
@@ -566,7 +566,7 @@ func TestFixedWALRejectsAnonymousPhysicalEOFTail(t *testing.T) {
 	if !FixedWALCreationSupported() {
 		t.Skip("fixed-container publication is unsupported on this platform")
 	}
-	j, err := OpenCommandJournal(t.TempDir(), CommandJournalOptions{})
+	j, err := openFixedTestCommandJournal(t.TempDir(), CommandJournalOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -588,7 +588,7 @@ func TestFixedWALRejectsAnonymousPhysicalEOFTail(t *testing.T) {
 	if err = file.Close(); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := OpenCommandJournal(dir, CommandJournalOptions{})
+	reopened, err := openFixedTestCommandJournal(dir, CommandJournalOptions{})
 	if reopened != nil {
 		_ = reopened.Close()
 	}

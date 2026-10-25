@@ -51,7 +51,7 @@ func TestFixedWALPrivateInitializationStableWitness(t *testing.T) {
 		}
 		return nil
 	})
-	journal, err := OpenCommandJournal(dir, CommandJournalOptions{SegmentTargetBytes: 4096})
+	journal, err := openFixedTestCommandJournal(dir, CommandJournalOptions{SegmentTargetBytes: 4096})
 	restore()
 	if err != nil {
 		t.Fatal(err)
@@ -99,7 +99,7 @@ func TestFixedWALFailedPrivateSyncHasNoStableWitness(t *testing.T) {
 		}
 		return nil
 	})
-	journal, err := OpenCommandJournal(t.TempDir(), CommandJournalOptions{SegmentTargetBytes: 4096})
+	journal, err := openFixedTestCommandJournal(t.TempDir(), CommandJournalOptions{SegmentTargetBytes: 4096})
 	restore()
 	if journal != nil {
 		_ = journal.Close()
@@ -110,7 +110,7 @@ func TestFixedWALFailedPrivateSyncHasNoStableWitness(t *testing.T) {
 }
 
 func TestCapturedSyncObservesExactRetainedFile(t *testing.T) {
-	journal, err := OpenCommandJournal(t.TempDir(), CommandJournalOptions{CaptureStableResources: true})
+	journal, err := openFixedTestCommandJournal(t.TempDir(), CommandJournalOptions{CaptureStableResources: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +155,7 @@ func TestCapturedSyncObservesExactRetainedFile(t *testing.T) {
 }
 
 func TestCapturedSyncRotatedWitnessPerformsFreshPhysicalSync(t *testing.T) {
-	journal, err := OpenCommandJournal(t.TempDir(), CommandJournalOptions{CaptureStableResources: true})
+	journal, err := openFixedTestCommandJournal(t.TempDir(), CommandJournalOptions{CaptureStableResources: true})
 	if err != nil {
 		t.Fatal(err)
 	}

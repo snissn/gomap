@@ -20,7 +20,7 @@ func TestCapturedSyncRetainsFormatAcrossMixedRotation(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
-			journal, err := OpenCommandJournal(dir, CommandJournalOptions{SegmentTargetBytes: 1024, CaptureStableResources: true})
+			journal, err := openFixedTestCommandJournal(dir, CommandJournalOptions{SegmentTargetBytes: 1024, CaptureStableResources: true})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -107,7 +107,7 @@ func TestCapturedSyncRetainsFormatAcrossMixedRotation(t *testing.T) {
 			if err := journal.Close(); err != nil {
 				t.Fatal(err)
 			}
-			reopened, err := OpenCommandJournal(dir, CommandJournalOptions{})
+			reopened, err := openFixedTestCommandJournal(dir, CommandJournalOptions{})
 			if err != nil {
 				t.Fatal(err)
 			}
