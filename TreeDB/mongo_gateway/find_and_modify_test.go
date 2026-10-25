@@ -165,6 +165,22 @@ func TestFindAndModifyOverflowPreflightDoesNotPublishCommandWAL(t *testing.T) {
 	}
 	beforeState := standalone.Backend.State()
 	beforeFrames := standalone.Backend.Stats()["treedb.command_wal.frames"]
+	beforeNext := standalone.Backend.CommandWALNextLSN()
+	logicalSequence := func() uint64 {
+		if !standalone.Backend.HasNativeSemanticBridge() {
+			return 0
+		}
+		capture, err := standalone.Backend.CaptureNativeSemanticState()
+		if err != nil {
+			t.Fatal(err)
+		}
+		sequence := capture.LogicalSequence()
+		if err := capture.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return sequence
+	}
+	beforeLogical := logicalSequence()
 	server.MaxMessageLength = 512
 	overflow := serveCommand(t, server, 2, bson.D{{Key: "findAndModify", Value: "users"}, {Key: "query", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "update", Value: bson.D{{Key: "$inc", Value: bson.D{{Key: "n", Value: int32(1)}}}}}, {Key: "$db", Value: "app"}})
 	assertCommandError(t, overflow, "BadValue")
@@ -175,14 +191,24 @@ func TestFindAndModifyOverflowPreflightDoesNotPublishCommandWAL(t *testing.T) {
 	if got := standalone.Backend.Stats()["treedb.command_wal.frames"]; got != beforeFrames {
 		t.Fatalf("rejected preflight command_wal.frames=%s want %s", got, beforeFrames)
 	}
+	if standalone.Backend.CommandWALNextLSN() != beforeNext || logicalSequence() != beforeLogical {
+		t.Fatal("rejected preflight changed assigned or visible logical command boundary")
+	}
 
 	server.MaxMessageLength = wire.DefaultMaxMessageLength
 	assertOK(t, serveCommand(t, server, 3, bson.D{{Key: "findAndModify", Value: "users"}, {Key: "query", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "update", Value: bson.D{{Key: "$inc", Value: bson.D{{Key: "n", Value: int32(1)}}}}}, {Key: "$db", Value: "app"}}))
 	afterSuccess := standalone.Backend.State()
-	// With the seed flushed before the baseline, one accepted exact FAM adds
-	// exactly its real command boundary. The rejected callback admission above
-	// contributes neither a collection frame nor root work.
-	if afterSuccess.AppliedCommandLSN != beforeState.AppliedCommandLSN+1 {
+	// An accepted exact FAM assigns a command and one visible logical effect.
+	// Root-neutral durable barriers may allocate additional command LSNs;
+	// physical projection may remain at the opening applied prefix.
+	if next := standalone.Backend.CommandWALNextLSN(); next <= beforeNext {
+		t.Fatalf("successful exact findAndModify next command LSN=%d did not advance beyond %d", next, beforeNext)
+	}
+	if standalone.Backend.HasNativeSemanticBridge() {
+		if afterLogical := logicalSequence(); afterLogical != beforeLogical+1 {
+			t.Fatalf("successful exact findAndModify logical sequence=%d want %d", afterLogical, beforeLogical+1)
+		}
+	} else if afterSuccess.AppliedCommandLSN != beforeState.AppliedCommandLSN+1 {
 		t.Fatalf("successful exact findAndModify AppliedCommandLSN=%d want %d", afterSuccess.AppliedCommandLSN, beforeState.AppliedCommandLSN+1)
 	}
 }
