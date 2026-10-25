@@ -9,10 +9,6 @@ import (
 // follows a previous publication. Every selected component binds native bytes
 // as well as its exact key, revision and put/absence class.
 func (t *Tree) selectPrimaryOperand(data, key []byte, readLeaf func(page.LeafLogPtr, []byte) ([]byte, error), leafScratch []byte, bounded bool) (page.ChildRef, node.PrimaryDirectoryEntry, error) {
-	return t.selectPrimaryOperandWithView(data, key, readLeaf, leafScratch, bounded, nil)
-}
-
-func (t *Tree) selectPrimaryOperandWithView(data, key []byte, readLeaf func(page.LeafLogPtr, []byte) ([]byte, error), leafScratch []byte, bounded bool, view *pointLeafView) (page.ChildRef, node.PrimaryDirectoryEntry, error) {
 	directory, err := node.DecodePrimaryDirectory(data)
 	if err != nil {
 		return page.ChildRef{}, node.PrimaryDirectoryEntry{}, err
@@ -26,7 +22,7 @@ func (t *Tree) selectPrimaryOperandWithView(data, key []byte, readLeaf func(page
 		op = entry.Operand
 	}
 	var n node.Node
-	if err = t.loadPointReadRefInto(&n, op.Ref, true, nil, leafScratch, readLeaf, bounded, view); err != nil {
+	if err = t.loadReadRefInto(&n, op.Ref, true, nil, leafScratch, readLeaf, bounded); err != nil {
 		return page.ChildRef{}, node.PrimaryDirectoryEntry{}, err
 	}
 

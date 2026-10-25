@@ -61,41 +61,26 @@ func (n *nativeTextCatalog) admitSingleTermServing(def TextIndexDefinition, opts
 	return nil
 }
 
-// valueAdmission is shared by the original copy path and the optional physical
-// companion. Both callbacks receive the already-rounded independent-copy promise.
-func (n *nativeTextCatalog) valueAdmission() (func(uint64) error, error) {
-	if n.singleTermFields != 0 {
-		return n.admit, nil
-	}
-	// Production catalogs bind this in their admitted constructor. Private
-	// callers retain that same one-time callback admission on the original lease.
-	if n.recordAdmit == nil {
-		if err := n.admit(memtable.COWAllocationCharge(2 * uint64(unsafe.Sizeof(uintptr(0))))); err != nil {
-			return nil, err
-		}
-		n.recordAdmit = n.admitRecord
-	}
-	return n.recordAdmit, nil
-}
-
 func (n *nativeTextCatalog) value(entry node.LeafEntry, root string, key []byte) ([]byte, error) {
-	admit, err := n.valueAdmission()
-	if err != nil {
-		return nil, err
-	}
-	value, err := n.read.namedDomainValueAdmitted(entry, admit)
-	if err != nil {
-		return nil, err
-	}
-	return n.copiedValue(value, root, key)
-}
-
-// copiedValue admits downstream decoding after the independent source copy.
-// The general callback has already admitted both stages; serving callbacks admit
-// raw bytes first and classify the exact record here. No second source copy.
-func (n *nativeTextCatalog) copiedValue(value []byte, root string, key []byte) ([]byte, error) {
 	if n.singleTermFields == 0 {
-		return value, nil
+		// Production catalogs bind this once in their admitted constructor.
+		// Keep private callers that construct a catalog directly on the same
+		// original receipt, with admission before the bound callback escapes.
+		if n.recordAdmit == nil {
+			if err := n.admit(memtable.COWAllocationCharge(2 * uint64(unsafe.Sizeof(uintptr(0))))); err != nil {
+				return nil, err
+			}
+			n.recordAdmit = n.admitRecord
+		}
+		return n.read.namedDomainValueAdmitted(entry, n.recordAdmit)
+	}
+	// The callback receives an ALREADY rounded allocation promise. Spend it
+	// directly on the original receipt before making the independent source
+	// copy. The second stage knows its exact length; it admits all downstream
+	// allocations before any maintained decoder sees the returned bytes.
+	value, err := n.read.namedDomainValueAdmitted(entry, n.admit)
+	if err != nil {
+		return nil, err
 	}
 	// The shared classifier borrows the existing names without allocating.
 	family := textV2RootFamily(0)

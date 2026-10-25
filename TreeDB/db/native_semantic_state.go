@@ -348,17 +348,6 @@ type NativePhysicalReader interface {
 	NativeEntryAtRoot(root uint64, key []byte, copyValue bool) (node.LeafEntry, error)
 }
 
-// NativeAdmittedPhysicalReader is an optional synchronous point companion.
-// It preserves NativePhysicalReader implementations. admitOutput receives the
-// already rounded inline allocation charge before independent copy-out under
-// the original basis lock and any existing cache-slot lease. It must not reenter
-// that owner. Key and borrowed cache/decoder bytes never escape; pointer and
-// tombstone metadata require no inline output admission. The enclosing scope
-// retains this capture and excludes concurrent Close through the entire call.
-type NativeAdmittedPhysicalReader interface {
-	NativeEntryAtRootAdmitted(root uint64, key []byte, copyValue bool, admitOutput func(uint64) error) (node.LeafEntry, error)
-}
-
 // NativePhysicalLeafReader decodes an outer leaf through the capture's exact
 // retained basis and original admitted physical workspace. dst must contain
 // caller-admitted page storage. Successful output aliases only dst, never shared

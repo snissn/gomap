@@ -4402,23 +4402,6 @@ apply paths require their own supported executors and caller migration. Current
 unsupported operations must retain their preaccept refusal. A passing JSON
 lifecycle does not establish full collection migration or performance acceptance.
 
-## Native admitted physical point reads
-
-`TestPointViewEntryMatchesFixedScratch`,
-`TestPointViewVerifyOnReadAndPrimary` and
-`TestPointViewRootFenceBeforeLeafCallback` compare the optional view path with
-fixed-scratch traversal across leaf layouts, release/error/fallback behavior,
-negative filtering, real pager PRIMARY operands and root fences.
-`TestSnapshotVerifiedPointViewIdentityStateAndRelease` checks the existing slot's proof and snapshot
-identity. `TestCOWNativeAdmittedPointVerifiedView` and its closed/codec controls
-exercise real plain/compressed, enabled/disabled cache reads, current inspection
-limits, independent output, pre-copy refusal, old/new captured bases and final
-owner cleanup. `TestNativeTextCatalogAdmittedPhysicalPoint` covers real
-alternating docmap/norm reads, original admission equivalence, fallback
-implementations, memory tombstone precedence and full Close release. These
-controls and changed-risk race checks establish correctness; public service
-performance still requires its separate representative comparison.
-
 ## Complete COW prefix, original custody and sealed completion
 
 The lower native seam is independently testable while unmigrated collection
