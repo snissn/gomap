@@ -102,12 +102,9 @@ type textAnalyzedField struct {
 	Terms  map[string]*textAnalyzedTerm
 }
 
-type textAnalyzedTerm struct {
-	Term      string
-	Frequency uint32
-	Positions []uint32
-	Offsets   []textTokenOffset
-}
+// Analysis and retained state share the same owned term/occurrence backing.
+// Legacy map consumers still use pointers to these terms.
+type textAnalyzedTerm = textDocumentTermState
 
 const textTermAccumulatorInlineTerms = 8
 
@@ -118,6 +115,8 @@ type textTermAccumulator struct {
 	inline         [textTermAccumulatorInlineTerms]textAnalyzedTerm
 	terms          []textAnalyzedTerm
 	lookup         map[string]int
+	admit          func(uint64) error
+	lookupCapacity int
 }
 
 func newTextTermAccumulator(storePositions, storeOffsets bool) textTermAccumulator {
@@ -127,6 +126,9 @@ func newTextTermAccumulator(storePositions, storeOffsets bool) textTermAccumulat
 }
 
 func (a *textTermAccumulator) AddTextToken(token TextToken) error {
+	if a.admit != nil {
+		return a.addAdmittedToken(token)
+	}
 	a.addToken(token)
 	return nil
 }
@@ -816,12 +818,7 @@ func textDocumentStateValueFromAnalysis(analysis textAnalyzedDocument) textDocum
 				Offsets:   analyzedTerm.Offsets,
 			})
 		}
-		slices.SortFunc(terms, func(a, b textDocumentTermState) int { return compareTextStrings(a.Term, b.Term) })
-		state.Fields = append(state.Fields, textDocumentFieldState{
-			Field:  analyzedField.Field,
-			Length: analyzedField.Length,
-			Terms:  terms,
-		})
+		state.Fields = append(state.Fields, orderedTextDocumentField(analyzedField.Field, analyzedField.Length, terms))
 	}
 	slices.SortFunc(state.Fields, func(a, b textDocumentFieldState) int { return compareTextStrings(a.Field, b.Field) })
 	return state

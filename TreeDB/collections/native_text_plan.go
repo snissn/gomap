@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"unicode/utf8"
 	"unsafe"
@@ -321,8 +322,7 @@ func nativeTextCanPrepare(def TextIndexDefinition, opts collectionOptions, value
 // terms borrow those strings/occurrence arrays, never refunded analyzer credit.
 func nativeTextPrepareCurrent(def TextIndexDefinition, values []jsonParserIndexValue, admit func(uint64) error) (textDocumentStateValue, error) {
 	var headers nativeTextAdmissionSum
-	headers.array(1, uint64(unsafe.Sizeof(textAnalyzedDocument{}))+uint64(unsafe.Sizeof(textDocumentStateValue{})))
-	headers.array(uint64(len(def.Fields)), uint64(unsafe.Sizeof(textAnalyzedField{})))
+	headers.array(1, uint64(unsafe.Sizeof(textDocumentStateValue{})))
 	headers.array(uint64(len(def.Fields)), uint64(unsafe.Sizeof(textDocumentFieldState{})))
 	if headers.bad {
 		return textDocumentStateValue{}, memtable.ErrCOWCapacity
@@ -330,7 +330,7 @@ func nativeTextPrepareCurrent(def TextIndexDefinition, values []jsonParserIndexV
 	if err := admit(headers.total); err != nil {
 		return textDocumentStateValue{}, fmt.Errorf("collections: native text prepared headers: %w", err)
 	}
-	analysis := textAnalyzedDocument{Fields: make([]textAnalyzedField, 0, len(def.Fields))}
+	state := textDocumentStateValue{Fields: make([]textDocumentFieldState, 0, len(def.Fields))}
 	for i, value := range values {
 		if value.valueType != jsonparser.String {
 			continue
@@ -338,46 +338,31 @@ func nativeTextPrepareCurrent(def TextIndexDefinition, values []jsonParserIndexV
 		n, t := uint64(len(value.raw)), nativeTextRootValueTokenBound(def, value)
 		var input nativeTextAdmissionSum
 		input.array(n, 1)
+		// Builder.WriteRune precedes the sink. Preserve its independent
+		// full-source/current+discarded backing promise, even for duplicates
+		// and stopwords. Options were admitted by the original caller.
 		input.add(n, 128)
 		input.add(t, 256)
-		input.array(t, uint64(unsafe.Sizeof(textAnalyzedTerm{})))
 		input.array(1, uint64(unsafe.Sizeof(textTermAccumulator{})))
-		if t > ^uint64(0)/2 {
-			return textDocumentStateValue{}, memtable.ErrCOWCapacity
-		}
-		input.mapEntries(2*t, uint64(unsafe.Sizeof(string("")))+uint64(unsafe.Sizeof(int(0))))
-		// Each enabled occurrence lane grows independently; retain all old
-		// backing and its per-allocation rounding, even for one repeated term.
-		if def.StorePositions {
-			input.add(t, 32*(uint64(unsafe.Sizeof(uint32(0)))+1))
-		}
-		if def.StoreOffsets {
-			input.add(t, 32*(uint64(unsafe.Sizeof(textTokenOffset{}))+1))
-		}
 		if input.bad {
 			return textDocumentStateValue{}, memtable.ErrCOWCapacity
 		}
 		if err := admit(input.total); err != nil {
 			return textDocumentStateValue{}, fmt.Errorf("collections: native text prepared analysis: %w", err)
 		}
-		acc := textTermAccumulator{storePositions: def.StorePositions, storeOffsets: def.StoreOffsets, terms: make([]textAnalyzedTerm, 0, int(t))}
-		if err := analyzeTextToTermAccumulator(def.Analyzer, def.AnalyzerOptions, string(value.raw), &acc); err != nil {
-			return textDocumentStateValue{}, err
-		}
-		// U is discovered by the SAME retained analyzer. Admit the exact map
-		// and state descriptors before their constructors, not from later data.
-		var retained nativeTextAdmissionSum
-		retained.mapEntries(uint64(len(acc.terms)), uint64(unsafe.Sizeof(string("")))+uint64(unsafe.Sizeof((*textAnalyzedTerm)(nil))))
-		retained.array(uint64(len(acc.terms)), uint64(unsafe.Sizeof(textDocumentTermState{})))
-		if retained.bad {
-			return textDocumentStateValue{}, memtable.ErrCOWCapacity
-		}
-		if err := admit(retained.total); err != nil {
+		// This exact owner remains reachable through its inline term backing
+		// when <=8 distinct terms are retained. Never copy/reuse the owner.
+		acc := &textTermAccumulator{storePositions: def.StorePositions, storeOffsets: def.StoreOffsets, admit: admit}
+		acc.terms = acc.inline[:0]
+		if err := analyzeTextToTermAccumulator(def.Analyzer, def.AnalyzerOptions, string(value.raw), acc); err != nil {
 			return textDocumentStateValue{}, fmt.Errorf("collections: native text prepared state: %w", err)
 		}
-		analysis.Fields = append(analysis.Fields, textAnalyzedField{Field: def.Fields[i].Field, Length: acc.length, Terms: acc.termsMap()})
+		// No termsMap, analyzed-field adapter, or second term array: consume
+		// the same owned lane after its last lookup; discard lookup aliases.
+		state.Fields = append(state.Fields, acc.takeDocumentField(def.Fields[i].Field))
 	}
-	return textDocumentStateValueFromAnalysis(analysis), nil
+	slices.SortFunc(state.Fields, func(a, b textDocumentFieldState) int { return compareTextStrings(a.Field, b.Field) })
+	return state, nil
 }
 
 type nativeTextPreparation struct {

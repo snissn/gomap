@@ -91,6 +91,21 @@ The maintained reducer emits only stealing setters and tombstones, so this
 BTree route does not allocate its copying arena or transfer temporary backing to
 global memtable pools. Admission includes structural node/slice growth cohorts,
 iterator capacity, selected-text conversion, token/state and emitted-row storage.
+For eligible native V2 top-level unescaped JSON fields, the maintained analyzer
+streams into one admitted owned term/state accumulator. Its inline eight-term
+lane, explicitly grown term/lookup/position/offset backings, and obsolete growth
+cohorts remain on the original stage receipt. The finalizer sorts and transfers
+the same term/occurrence backing to `preparedNew`; it constructs neither an
+intermediate term-pointer map nor a copied state-term array. Legacy analysis
+map consumers keep their existing path and share only the internal term type
+and canonical ordering finalizer. Public analyzed tokens remain owned.
+Input/options and the normalizer's Builder backing are admitted independently
+before analysis, since rune writes precede the failable sink. Prepared state
+still pays downstream encoder clones, retry candidates and all reducer/table
+work. Admission failure publishes no partial state and earns no early refund.
+Fallback formats, V1, nested/escaped/array selection and DDL keep their existing
+eligibility and conservative accounting.
+
 Native CRUD confines catalog, analysis, reducer and temporary-table construction
 to one private planning phase. After successful return, all iterators are closed,
 tables reset and temporary aliases detached. The original stage receipt then
