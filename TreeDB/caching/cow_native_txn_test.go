@@ -3,7 +3,9 @@ package caching
 import (
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
+	"time"
 	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/batch"
@@ -11,7 +13,89 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/txnhistory"
+	"github.com/snissn/gomap/TreeDB/tree"
 )
+
+func TestCOWNativeProducerPressureStartsExistingWorkerBeforeBlocking(t *testing.T) {
+	registerNativeBridgeTestCommand()
+	cache, backend := nativeBridgeFixture(t, true)
+	cache.SetCommandWALCheckpointCutoverHook(func() {})
+	cache.SetAutoCheckpointWALBytesHook(backend.CommandWALActiveBytes)
+	cache.StartAutoCheckpoint(time.Hour, 1<<30, 0)
+	held := cache.AcquireSnapshot()
+	if held == nil {
+		t.Fatal("missing original opening")
+	}
+	defer held.Close()
+	write := func(key string) {
+		t.Helper()
+		tx, err := backend.BeginNativeConditionalTxn()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Close()
+		publication, _ := nativeTxnPublication(t, tx, key)
+		result, err := tx.CommitNative(publication, nativeTxnIntent(t, backend, true), false)
+		if err != nil || !result.LogicalInstalled {
+			t.Fatalf("publication %s: %+v/%v", key, result, err)
+		}
+	}
+	write("before")
+	entered, release := make(chan struct{}), make(chan struct{})
+	var pause, unblock sync.Once
+	defer unblock.Do(func() { close(release) })
+	cache.testBeforeCheckpointFrontierDrain = func() {
+		pause.Do(func() {
+			close(entered)
+			<-release
+		})
+	}
+	limit := cache.cow.budget.Limits().MaxInFlightBytes
+	// This independent, genuinely admitted owner holds reservations between the
+	// early maintenance request and the unchanged synchronous pressure boundary.
+	target := limit - limit/4 - limit/8 + 4096
+	before := cache.cow.budget.Stats()
+	if before.ReservedBytes >= target {
+		t.Fatal("fixture already exceeds early pressure target")
+	}
+	filler, err := cache.cow.budget.AcquireExternal(target - before.ReservedBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer filler.Close()
+	opening, err := backend.BeginNativeConditionalTxn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := opening.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("native pressure did not wake the existing checkpoint worker")
+	}
+	// The captured physical drain is still blocked: a later logical publication
+	// must be admitted without joining its IO or changing the retained opening.
+	write("after")
+	if got, err := held.Get([]byte("before")); !errors.Is(err, tree.ErrKeyNotFound) || got != nil {
+		t.Fatalf("retained opening changed: %q/%v", got, err)
+	}
+	if got, err := cache.Get([]byte("after")); err != nil || string(got) != "after" {
+		t.Fatalf("post-frontier write: %q/%v", got, err)
+	}
+	filler.Close()
+	unblock.Do(func() { close(release) })
+	if err := held.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := cache.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if stats := cache.COWMemoryStats(); stats.TotalBytes != 0 {
+		t.Fatalf("final pressure custody: %+v", stats)
+	}
+}
 
 func TestCOWNativeProducerPressureCannotDiscountRetainedReservations(t *testing.T) {
 	cache, backend := nativeBridgeFixture(t, true)

@@ -93,6 +93,17 @@ Rollover rejoins write admission iteratively after unlocked retirement and
 signals the ordinary flush worker. It neither scans history nor hides a
 foreground checkpoint inside an accepted publication.
 
+Native-only publications also retain reservations without raw memtable bytes.
+Before opening a native transaction, reservation pressure at five eighths of
+the inflight limit requests the existing automatic checkpoint worker when it is
+enabled and the command-WAL profile supports post-frontier write admission.
+The coalesced request is best effort: it neither reserves capacity nor promises
+immediate physical sealing or retirement. One further pass can queue while the
+worker runs. At three quarters, producers still serialize and join an explicit
+checkpoint before opening, then receive normal finite admission or refusal.
+Disabled automatic maintenance and profiles without post-frontier admission
+retain that synchronous fallback. ACK and journal durability are unchanged.
+
 Before a raw shard's first dirty acceptance, its original generation reserves a
 source slot and the cache constructs the actual empty rollover writer/root using
 the existing maintenance constructor. Both must succeed before canonical append

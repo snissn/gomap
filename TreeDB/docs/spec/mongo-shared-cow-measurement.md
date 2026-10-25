@@ -99,6 +99,26 @@ lifecycle control. A resource ceiling alone is not a performance gain. Charge
 all work required by the declared ACK interval and explicitly report deferred
 work and Close cost.
 
+## Ordinary-vector guardrail
+
+Collect three alternating fresh-process pairs for each maintained ordinary API
+benchmark: `BenchmarkStandalonePublicVectorBuildSaveLoad` (10 operations),
+`BenchmarkStandalonePublicVectorSaveReopenLoad` (10), and
+`BenchmarkStandalonePublicVectorSearch` (10,000), with anchored names,
+`-count=1 -benchmem` and GOMAXPROCS=4. This is 18 processes; calibration is
+retained separately from each final benchmark row. Freeze this plan in the
+manifest before collection. These counts were recorded before the 950976af8
+campaign; this section makes its existing manifest protocol explicit.
+
+Both sides use the product standalone opener, `no_wal_fast`, 512 BSON documents,
+eight dimensions, cosine, M=16 and TopK=5 with exact fallback disabled. Build,
+logical Save/hot Load, physical Close/reopen Load, and warmed Search have the
+separate maintained timing boundaries documented in the benchmark README.
+Verify actual route, fixture, operation count, process status and results from
+raw output/source. Report all paired time, byte and allocation ratios and
+explicitly assess tradeoffs; this small guardrail is not a precise 5% timing
+certification or a substitute for primary Mongo targets.
+
 ## Review and promotion
 
 Focused source/lifetime controls and whole affected-package checks precede final
