@@ -4525,3 +4525,11 @@ headroom is exhausted. These controls do not activate unconverted collections.
 These geometry controls supplement the existing initialization, corruption,
 captured-resource, namespace, failure and public pointer/reopen controls. They
 do not replace those durability proofs or establish performance acceptance.
+
+Buffered fixed-WAL validation and replay additionally use
+`TestFixedWALScanAcrossBuffersAndSeeks` for mixed frame sizes across read-ahead
+boundaries, retained payload ownership and logical seeks;
+`TestFixedWALScanRejectsCorruptionBeyondReadAhead` for later start/payload/padding
+damage and nonzero reserve beyond the first buffer; and
+`TestFixedWALStreamPartialPhysicalReadKeepsEOF` for the original partial-read
+count and EOF identity after physical truncation of a captured prefix.

@@ -4440,6 +4440,15 @@ witness is corruption. Reconstruction never discards a valid frame or promotes
 framing into durability authority. Existing V2 durable class, continuity,
 external dependencies, and durable-prefix barriers remain authoritative.
 
+Validation reads sequentially through a bounded 64 KiB buffer on the exact
+retained descriptor and captured container capacity. It reuses payload scratch
+only within that scan; returned frame identities and the validated extent index
+do not borrow those bytes. Logical replay uses its own bounded read-ahead buffer
+limited to the captured occupied physical prefix. Sequential extent traversal
+is constant time per extent; arbitrary logical seeks use the validated index.
+Neither buffer changes the full reserve scan, frame validation, captured prefix,
+or the reader's ownership of its descriptor.
+
 Writer/reader/recovery positions are logical stream offsets. Stable-resource
 byte frontiers are physical immutable extent ends, never physical capacity.
 Exclusive startup suffix repair copies the original header and retained complete

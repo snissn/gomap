@@ -1,6 +1,7 @@
 package commitlog
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/rand"
 	"encoding/binary"
@@ -24,6 +25,7 @@ const (
 	fixedWALWitnessSize     = 96
 	fixedWALAlignment       = 64
 	fixedWALDefaultCapacity = 4_199_424
+	fixedWALReadBufferSize  = 64 << 10
 )
 
 // Initialization uses distinct operations so failure tests can inject an actual
@@ -284,6 +286,16 @@ func writeFixedAt(file io.WriterAt, p []byte, offset int64) error {
 	return nil
 }
 
+// readFixedWALFull preserves the exact-read error identity of file.ReadAt.
+func readFixedWALFull(input io.Reader, p []byte) (int, error) {
+	n, err := io.ReadFull(input, p)
+	if err == io.ErrUnexpectedEOF {
+		// The former exact ReadAt calls reported EOF even after a partial read.
+		err = io.EOF
+	}
+	return n, err
+}
+
 // loadFixedWAL returns nil for the original stream format. For containers every
 // reserve byte is examined: a zero header is never an EOF decision by itself.
 func loadFixedWAL(file *os.File) (*fixedWAL, []byte, error) {
@@ -312,28 +324,41 @@ func loadFixedWAL(file *os.File) (*fixedWAL, []byte, error) {
 	}
 	state := &fixedWAL{capacity: capacity, physical: fixedWALHeaderSize}
 	copy(state.identity[:], header[8:24])
+	// Keep all validation on this exact descriptor and captured capacity. A
+	// scan owns its cursor and payload scratch; no bytes escape into the extent
+	// index or incomplete-frame identities. Buffering removes per-witness reads
+	// without treating initialized reserve as an implicit end marker.
+	input := bufio.NewReaderSize(io.NewSectionReader(file, fixedWALHeaderSize, capacity-fixedWALHeaderSize), fixedWALReadBufferSize)
+	var payload []byte
+	// io.Reader and the checksum implementation may retain these addresses in
+	// compiler escape analysis. Own them once per scan, not once per extent.
+	var probe, footer, expected [fixedWALWitnessSize]byte
+	var padding [fixedWALAlignment - 1]byte
 	for pos := int64(fixedWALHeaderSize); pos < capacity; {
 		// Read a bounded reserve window, rather than allocating physical capacity.
-		var probe [fixedWALWitnessSize]byte
+		clear(probe[:])
 		count := min(int64(len(probe)), capacity-pos)
-		if _, err = file.ReadAt(probe[:count], pos); err != nil {
+		if _, err = readFixedWALFull(input, probe[:count]); err != nil {
 			return nil, nil, err
 		}
 		if allZeroBytes(probe[:count]) {
 			// Full remainder scan detects a lost header, stale suffix, or unknown data.
-			block := make([]byte, 64<<10)
-			for off := pos; off < capacity; {
-				size := min(int64(len(block)), capacity-off)
-				if _, err = file.ReadAt(block[:size], off); err != nil {
-					return nil, nil, err
+			for off := pos + count; off < capacity; {
+				size := int(min(int64(fixedWALReadBufferSize), capacity-off))
+				block, readErr := input.Peek(size)
+				if readErr != nil {
+					return nil, nil, readErr
 				}
 				// Count uses the standard library's byte scan rather than one
 				// instrumented Go read per byte across the initialized reserve.
 				// Every byte remains covered by the corruption check.
-				if bytes.Count(block[:size], []byte{0}) != int(size) {
+				if bytes.Count(block, []byte{0}) != size {
 					return nil, nil, fmt.Errorf("%w: fixed WAL occupied bytes after gap at %d", ErrCorrupt, pos)
 				}
-				off += size
+				if _, err = input.Discard(size); err != nil {
+					return nil, nil, err
+				}
+				off += int64(size)
 			}
 			break
 		}
@@ -356,16 +381,23 @@ func loadFixedWAL(file *os.File) (*fixedWAL, []byte, error) {
 		if start != state.logical || length <= 0 || end != fixedWALAlign(pos+fixedWALWitnessSize+length)+fixedWALWitnessSize || end > capacity || end < pos {
 			return nil, nil, ErrCorrupt
 		}
-		payload := make([]byte, length)
-		if _, err = file.ReadAt(payload, pos+fixedWALWitnessSize); err != nil {
+		if int64(cap(payload)) < length {
+			payload = make([]byte, int(length))
+		} else {
+			payload = payload[:int(length)]
+		}
+		if _, err = readFixedWALFull(input, payload); err != nil {
 			return nil, nil, err
 		}
-		footer := make([]byte, fixedWALWitnessSize)
-		if _, err = file.ReadAt(footer, end-fixedWALWitnessSize); err != nil {
+		paddingBytes := int(footerOffset - pos - fixedWALWitnessSize - length)
+		if _, err = readFixedWALFull(input, padding[:paddingBytes]); err != nil {
 			return nil, nil, err
 		}
-		expected := append([]byte(nil), probe[:]...)
-		copy(expected, fixedWALEndMagic[:])
+		if _, err = readFixedWALFull(input, footer[:]); err != nil {
+			return nil, nil, err
+		}
+		expected = probe
+		copy(expected[:], fixedWALEndMagic[:])
 		binary.LittleEndian.PutUint32(expected[92:96], crc.Checksum(expected[:92]))
 		var first, last uint64
 		dataComplete := crc.Checksum(payload) == binary.LittleEndian.Uint32(probe[72:76])
@@ -373,7 +405,7 @@ func loadFixedWAL(file *os.File) (*fixedWAL, []byte, error) {
 			// Only a positively bounded new extent whose end is still exactly
 			// initialized reserve can represent an interrupted relaxed frame.
 			// An intact or partly written end plus damaged data stays corrupt.
-			if !allZeroBytes(footer) {
+			if !allZeroBytes(footer[:]) {
 				return nil, nil, ErrCorrupt
 			}
 			if len(payload) < segmentHeaderSize+56 || int(binary.LittleEndian.Uint32(payload[:4])) != len(payload)-segmentHeaderSize {
@@ -401,7 +433,7 @@ func loadFixedWAL(file *os.File) (*fixedWAL, []byte, error) {
 			}
 			// Narrow C reconstructs redundant framing only after the entire
 			// unchanged V2 frame, CRC, identity, and order have validated.
-			if !bytes.Equal(footer, expected) {
+			if !bytes.Equal(footer[:], expected[:]) {
 				if bytes.Equal(footer[:8], fixedWALEndMagic[:]) && binary.LittleEndian.Uint32(footer[92:96]) == crc.Checksum(footer[:92]) {
 					return nil, nil, fmt.Errorf("%w: mismatched intact fixed WAL footer", ErrCorrupt)
 				}
@@ -417,14 +449,8 @@ func loadFixedWAL(file *os.File) (*fixedWAL, []byte, error) {
 		if state.lastLSN != 0 && first <= state.lastLSN {
 			return nil, nil, ErrCommandWALDuplicateLSN
 		}
-		padding := make([]byte, end-fixedWALWitnessSize-pos-fixedWALWitnessSize-length)
-		if len(padding) > 0 {
-			if _, err = file.ReadAt(padding, pos+fixedWALWitnessSize+length); err != nil {
-				return nil, nil, err
-			}
-			if !allZeroBytes(padding) {
-				return nil, nil, ErrCorrupt
-			}
+		if !allZeroBytes(padding[:paddingBytes]) {
+			return nil, nil, ErrCorrupt
 		}
 		state.extents = append(state.extents, fixedWALExtent{pos, start, length, end})
 		state.logical += length
@@ -812,9 +838,13 @@ func syncCommandWALFile(file *os.File) error {
 // fixedWALStream presents validated logical bytes from exact immutable extents
 // without materializing or copying the complete log on every reader open.
 type fixedWALStream struct {
-	file   *os.File
-	state  *fixedWAL
-	offset int64
+	file           *os.File
+	state          *fixedWAL
+	offset         int64
+	index          int
+	input          *io.SectionReader
+	buffer         *bufio.Reader
+	physicalOffset int64
 }
 
 func (stream *fixedWALStream) Read(p []byte) (int, error) {
@@ -823,11 +853,39 @@ func (stream *fixedWALStream) Read(p []byte) (int, error) {
 	}
 	n := 0
 	for len(p) > 0 && stream.offset < stream.state.logical {
-		index := sort.Search(len(stream.state.extents), func(i int) bool { e := stream.state.extents[i]; return e.logical+e.length > stream.offset })
+		index := stream.index
+		if index >= len(stream.state.extents) || stream.offset < stream.state.extents[index].logical || stream.offset >= stream.state.extents[index].logical+stream.state.extents[index].length {
+			// Sequential reads advance in constant time. Random seeks retain
+			// the existing validated extent index and logarithmic lookup.
+			if index+1 < len(stream.state.extents) && stream.offset == stream.state.extents[index+1].logical {
+				index++
+			} else {
+				index = sort.Search(len(stream.state.extents), func(i int) bool { e := stream.state.extents[i]; return e.logical+e.length > stream.offset })
+			}
+			stream.index = index
+		}
 		extent := stream.state.extents[index]
 		inside := stream.offset - extent.logical
 		size := min(int64(len(p)), extent.length-inside)
-		count, err := stream.file.ReadAt(p[:size], extent.physical+fixedWALWitnessSize+inside)
+		physical := extent.physical + fixedWALWitnessSize + inside
+		if stream.buffer == nil {
+			stream.input = io.NewSectionReader(stream.file, 0, stream.state.physical)
+			stream.buffer = bufio.NewReaderSize(stream.input, fixedWALReadBufferSize)
+		}
+		if physical != stream.physicalOffset {
+			skip := physical - stream.physicalOffset
+			if skip >= 0 && skip <= int64(stream.buffer.Buffered()) {
+				_, _ = stream.buffer.Discard(int(skip))
+			} else {
+				if _, err := stream.input.Seek(physical, io.SeekStart); err != nil {
+					return n, err
+				}
+				stream.buffer.Reset(stream.input)
+			}
+			stream.physicalOffset = physical
+		}
+		count, err := readFixedWALFull(stream.buffer, p[:size])
+		stream.physicalOffset += int64(count)
 		n += count
 		stream.offset += int64(count)
 		p = p[count:]
