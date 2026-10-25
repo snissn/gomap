@@ -12,11 +12,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"sync/atomic"
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/nativewire"
 	"github.com/snissn/gomap/TreeDB/internal/raftapply"
@@ -309,8 +311,9 @@ func runNativeTemplateClusterAdapter(t *testing.T, dir string, crash bool) {
 			{ID: nativewire.SectionReplacementMode, Bytes: binary.AppendUvarint(nil, 1)},
 		})
 	if crash {
-		// The original durable native append invokes this existing observer before
-		// installation/seal/result/progress. It may not reenter or lock the DB.
+		// Assignment is before installation and grants no physical-sync witness.
+		// Record that original fault context, then exit at the exact retained
+		// WAL's AfterSync before seal/result/progress or Close can run.
 		if err := database.Checkpoint(); err != nil {
 			t.Fatal(err)
 		}
@@ -323,11 +326,35 @@ func runNativeTemplateClusterAdapter(t *testing.T, dir string, crash bool) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		assigned := &nativeTemplateAssignedObserver{}
+		restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+			if event.Resource != durabilitycut.ResourceCommandWAL || event.Root != backend.Dir() || event.Point != durabilitycut.AfterDependencyFileSync || event.LSN != 4 {
+				return nil
+			}
+			if !assigned.reached.Load() || event.StablePath == nil {
+				fmt.Fprintln(os.Stderr, "template fence lacks original assignment or retained physical handle")
+				os.Exit(98)
+			}
+			retained, statErr := event.StablePath.Stat()
+			if statErr != nil {
+				fmt.Fprintln(os.Stderr, statErr)
+				os.Exit(98)
+			}
+			named, statErr := os.Stat(event.Path)
+			if statErr != nil || !os.SameFile(retained, named) {
+				fmt.Fprintf(os.Stderr, "template fence is not its actual command-WAL file: %v\n", statErr)
+				os.Exit(98)
+			}
+			fmt.Fprintln(os.Stdout, "TEMPLATE APPLY UNAPPLIED basis=3 entry=2/4 retained-sync=4")
+			os.Exit(97)
+			return nil
+		})
+		defer restore()
 		_, err = raftapply.ApplyCommittedEntryV1(fsm.db, committed.Bytes, meta, raftapply.Options{
 			DecodeLimits: fsm.decodeLimits, ProgressStore: fsm.progress, ResultStore: fsm.results,
-			FaultInjector: nativeTemplateExitAfterAppend{},
+			FaultInjector: assigned,
 		})
-		t.Fatalf("unapplied observer did not exit: %v", err)
+		t.Fatalf("retained sync observer did not exit: %v", err)
 	}
 	if result := apply(4, replace, 2); result.MatchedCount != 2 {
 		t.Fatalf("matched=%d", result.MatchedCount)
@@ -467,18 +494,18 @@ func nativeClusterTemplatePacket(t *testing.T, document string) ([]byte, []byte)
 	return rootRecord, wire
 }
 
-// This is the maintained apply fault seam, with the same non-reentrant observer
-// contract as production. SyncLocalCommandWAL=true already synced the real frame.
-type nativeTemplateExitAfterAppend struct{}
+// This maintained preinstall observer records only its deterministic context;
+// the separate retained-file AfterSync observer supplies the persistence cut.
+type nativeTemplateAssignedObserver struct {
+	reached atomic.Bool
+}
 
-func (nativeTemplateExitAfterAppend) InjectApplyFault(point raftapply.FaultPointV1, ctx raftapply.ApplyFaultContextV1) error {
+func (o *nativeTemplateAssignedObserver) InjectApplyFault(point raftapply.FaultPointV1, ctx raftapply.ApplyFaultContextV1) error {
 	if point == raftapply.FaultAfterLocalWALAppendBeforeVisibleV1 {
-		if ctx.AppliedCommandLSN != 3 || ctx.EntryID != (raftentry.ApplyEntryID{Term: 2, Index: 4}) {
-			fmt.Fprintf(os.Stderr, "unexpected template append LSN=%d\n", ctx.AppliedCommandLSN)
+		if ctx.AppliedCommandLSN != 3 || ctx.EntryID != (raftentry.ApplyEntryID{Term: 2, Index: 4}) || o.reached.Swap(true) {
+			fmt.Fprintf(os.Stderr, "unexpected template append context=%+v\n", ctx)
 			os.Exit(98)
 		}
-		fmt.Fprintln(os.Stdout, "TEMPLATE APPLY UNAPPLIED basis=3 entry=2/4")
-		os.Exit(97)
 	}
 	return nil
 }
@@ -494,7 +521,7 @@ func TestNativeTemplateClusterAdapterUnappliedReplay(t *testing.T) {
 	cmd.Env = append(os.Environ(), "GOMAP_TEMPLATE_APPLY_CHILD_DIR="+dir)
 	output, err := cmd.CombinedOutput()
 	var exit *exec.ExitError
-	if !errors.As(err, &exit) || exit.ExitCode() != 97 || !bytes.Contains(output, []byte("TEMPLATE APPLY UNAPPLIED basis=3 entry=2/4")) || bytes.Contains(output, []byte("DATA RACE")) {
+	if !errors.As(err, &exit) || exit.ExitCode() != 97 || !bytes.Contains(output, []byte("TEMPLATE APPLY UNAPPLIED basis=3 entry=2/4 retained-sync=4")) || bytes.Contains(output, []byte("DATA RACE")) {
 		t.Fatalf("child: %v\n%s", err, output)
 	}
 	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, dir)

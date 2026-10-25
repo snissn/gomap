@@ -33,6 +33,11 @@ func primarySingleCutFilesV6(t *testing.T, dir string) map[string][]byte {
 		if err != nil {
 			return err
 		}
+		// Process-local locks are not storage operands. In particular, Windows
+		// forbids reading LOCK while the source database owns its byte lock.
+		if entry.Name() == "LOCK" || entry.Name() == "command-wal-journal-owner.lock" {
+			return nil
+		}
 		files[name], err = os.ReadFile(path)
 		return err
 	}); err != nil {
