@@ -318,3 +318,38 @@ func TestPrivateCOWLeafPackAcceptedErrorStillAdoptsBasis(t *testing.T) {
 		t.Fatalf("old live value lost: %x %v", got, err)
 	}
 }
+
+// A logical capacity reservation is deliberately sparse: this exercises the
+// whole-input admission cliff without allocating or reading four GiB of data.
+// The existing live leaf fixture still has to pack and reach its real GC.
+func TestPrivateCOWLeafPackLargeInputDoesNotDisableDefaultMaintenance(t *testing.T) {
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		t.Skip("actual leaf-pack promotion requires stable relative namespace")
+	}
+	cache, backend := privateCOWPackFixture(t)
+	preparePrivateCOWPack(t, cache, backend.DB)
+	reservation := filepath.Join(backend.DB.Dir(), "capacity-reservation.test")
+	f, err := os.OpenFile(reservation, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	truncateErr := f.Truncate((4 << 30) + 1)
+	closeErr := f.Close()
+	if truncateErr != nil || closeErr != nil {
+		t.Fatal(errors.Join(truncateErr, closeErr))
+	}
+	// Corroborate that this exact input exceeds the old diagnostic-style cap.
+	_, err = backend.DB.LeafGenerationPlan(context.Background(), backenddb.LeafGenerationPlanOptions{
+		MaintenanceLimits: backenddb.LeafGenerationMaintenanceLimits{NativeEntries: 8192, NativeBytes: 4 << 30, PagerPages: 1 << 20},
+	})
+	if !errors.Is(err, backenddb.ErrLeafGenerationMaintenanceLimit) {
+		t.Fatalf("large-input fixture did not exceed the old admission ceiling: %v", err)
+	}
+	attempted, err := cache.runPrivateCOWLeafPackSlice()
+	if err != nil || !attempted || !backend.last.Ran || backend.last.Pack.BytesCopied == 0 || backend.gcCalls != 1 {
+		t.Fatalf("large input disabled real default maintenance: attempted%t ran%t copied%d GC%d err%v", attempted, backend.last.Ran, backend.last.Pack.BytesCopied, backend.gcCalls, err)
+	}
+	if got, err := cache.Get([]byte("pack-03000")); err != nil || !bytes.Equal(got, bytes.Repeat([]byte{1}, 128)) {
+		t.Fatalf("large-input maintenance lost live value: %x %v", got, err)
+	}
+}

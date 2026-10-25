@@ -49,11 +49,6 @@ func samePrivateCOWLeafLogicalBasis(a, b backenddb.StateToken) bool {
 		a.SystemRootPageID == b.SystemRootPageID && a.AppliedCommandLSN == b.AppliedCommandLSN && a.MaxEntryRevision == b.MaxEntryRevision
 }
 
-func privateCOWLeafMaintenanceLimits() backenddb.LeafGenerationMaintenanceLimits {
-	// Native per-phase footprint admission; this is not a cumulative I/O quota.
-	return backenddb.LeafGenerationMaintenanceLimits{NativeEntries: 8192, NativeBytes: 4 << 30, PagerPages: 1 << 20}
-}
-
 // runPrivateCOWLeafPackSlice performs one planner/selection/pack pass and at most
 // one ensuing GC. It never drains a plan to completion, waits for quiet traffic,
 // or retries until useful work appears. Both no-progress and failures back off.
@@ -136,7 +131,6 @@ func (db *DB) runPrivateCOWLeafPackSlice() (attempted bool, retErr error) {
 		MinReclaimPerByteCopiedPPM: leafGenerationPackMaintenanceDefaultMinReclaimPerByteCopiedPPM,
 		MaxGenerations:             privateCOWLeafPackGenerations, MaxBytesToCopy: privateCOWLeafPackCopyBytes,
 		ReserveRIDs: db.ReserveValueLogRIDs, ProtectedRootIDs: roots, ProtectedSystemRootIDs: systemRoots,
-		MaintenanceLimits: privateCOWLeafMaintenanceLimits(),
 	})
 	db.vlogGenerationLeafPackLastSelectionGenerations.Store(int64(len(stats.Selection.GenerationIDs)))
 	db.vlogGenerationLeafPackLastSelectionBytesToCopy.Store(stats.Selection.BytesToCopy)
@@ -197,7 +191,6 @@ func (db *DB) runPrivateCOWLeafPackSlice() (attempted bool, retErr error) {
 	// govern deletion. BytesDeleted is logical retirement, not proved unlink.
 	if gc, ok := db.backend.(backendLeafGenerationGCRunner); ok && !envBool(envDisableVlogGenerationGC) && ctx.Err() == nil && !db.closing.Load() {
 		opts := db.leafGenerationGCOptions()
-		opts.MaintenanceLimits = privateCOWLeafMaintenanceLimits()
 		gcStats, gcErr := gc.LeafGenerationGC(ctx, opts)
 		db.vlogGenerationLeafPackGCRuns.Add(1)
 		if gcStats.GenerationsEligible > 0 {

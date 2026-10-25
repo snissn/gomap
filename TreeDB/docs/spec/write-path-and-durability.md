@@ -23,8 +23,12 @@ and semantic descriptors survive through the original `installCOWBasis(..., nil)
 protocol. The authenticated backend role authorizes only equivalent physical
 packing; it grants no new logical publication or callback authority.
 
-One pass selects at most two generations and 32MiB of live copying, uses native
-per-phase footprint admission, and attempts at most one subsequent GC. Declined
+One pass selects at most two generations and 32MiB of live copying and attempts
+at most one subsequent GC. Ordinary production uses the maintained input policy,
+without imposing a maximum whole-database size on automatic packing or its GC.
+Whole-store planning still scales with the retained roots and files; the slice
+is not a hard memory or total-I/O quota. Explicit input-footprint limits remain
+available to diagnostic callers. Declined
 plans still reach GC so an ordinary later root advance or reader release can
 permit retirement. Both recoverable roots, named roots, and exact reader/file
 pins remain deletion authority; no root horizon is forced. No-progress passes
