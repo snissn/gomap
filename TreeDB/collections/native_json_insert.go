@@ -22,7 +22,7 @@ func (m *NativeJSONManager) InsertBatch(name string, ids, documents [][]byte) (r
 	}
 	defer func() { resultErr = errors.Join(resultErr, tx.Close()) }()
 	if err = tx.InsertBatch(ids, documents); err != nil {
-		return err
+		return mutationNotAcceptedError(err)
 	}
 	return tx.Commit()
 }

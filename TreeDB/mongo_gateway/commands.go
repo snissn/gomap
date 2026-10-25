@@ -648,7 +648,7 @@ func (c *mongoInsertCoalescer) runInsertBatch(batch []mongoInsertCoalescerReques
 	}
 	_, err := batch[0].col.InsertBatchValidatedBSON(ids, stored)
 	if err != nil {
-		if collections.IsDuplicateKeyError(err) && !errors.Is(err, collections.ErrCommitAmbiguous) {
+		if (collections.IsDuplicateKeyError(err) || errors.Is(err, collections.ErrMutationNotAccepted)) && !errors.Is(err, collections.ErrCommitAmbiguous) {
 			runMongoInsertCoalescerSequential(batch)
 			return
 		}
