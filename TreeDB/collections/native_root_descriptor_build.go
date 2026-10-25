@@ -29,6 +29,14 @@ func nativeEngineRootDescriptorKeyChargeForCompaction(captured *nativeEngineVers
 				return false
 			}
 			total += charge
+			if name == "primary" {
+				charge = memtable.COWAllocationCharge(uint64(len(systemCollectionDocumentGenerationPrefix) + len(c.schema.meta.Name)))
+				if charge > ^uint64(0)-total {
+					err = memtable.ErrCOWCapacity
+					return false
+				}
+				total += charge
+			}
 			return true
 		})
 		return err == nil
@@ -68,6 +76,17 @@ func (b *nativeEngineBuild) materializeRootDescriptors(group nativeOrderedRootBu
 		}
 		if err := delta.AppendViewTrustedSortedUnique(nativeBorrowedStringBytes(result.rootKey), result.rootValue[:]); err != nil {
 			return err
+		}
+		if result.generationKey != "" {
+			if err := flush(); err != nil {
+				return err
+			}
+			if err := delta.AppendViewTrustedSortedUnique(nativeBorrowedStringBytes(result.generationKey), result.generationValue[:]); err != nil {
+				return err
+			}
+			if err := flush(); err != nil {
+				return err
+			}
 		}
 		if delta.Len() == nativeBuildBatchEntries {
 			if err := flush(); err != nil {

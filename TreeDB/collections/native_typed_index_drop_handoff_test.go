@@ -8,6 +8,7 @@ import (
 	"time"
 
 	treedb "github.com/snissn/gomap/TreeDB"
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 )
 
 // Pause the actual off-P typed asset preparation, remove an index from the
@@ -64,7 +65,8 @@ func TestNativeTypedIndexDropDuringCapturedBuild(t *testing.T) {
 	if err := database.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
-	if token, ok := handle.StateToken(); !ok || token.AppliedCommandLSN != 2 || handle.CommandWALNextLSN() != 3 {
+	seedNext := handle.CommandWALNextLSN()
+	if token, ok := handle.StateToken(); !ok || token.AppliedCommandLSN == 0 || token.AppliedCommandLSN+1 != seedNext {
 		t.Fatalf("seed physical basis=%+v ok=%v next=%d", token, ok, handle.CommandWALNextLSN())
 	}
 	held, err := collection.OpenCollectionReadView()
@@ -136,8 +138,17 @@ func TestNativeTypedIndexDropDuringCapturedBuild(t *testing.T) {
 	case <-time.After(15 * time.Second):
 		t.Fatal("logical DROP blocked on off-P asset preparation")
 	}
-	if handle.CommandWALNextLSN() != 5 {
-		t.Fatalf("typed row and concurrent DROP did not append exactly two frames: next=%d", handle.CommandWALNextLSN())
+	var mutationLSNs []uint64
+	var kinds []commitlog.CommandKind
+	for _, frame := range collectionCommandWALFrames(t, handle.Dir()) {
+		if frame.LSN < seedNext || frame.Kind == commitlog.CommandKindDurablePrefixBarrier {
+			continue
+		}
+		mutationLSNs = append(mutationLSNs, frame.LSN)
+		kinds = append(kinds, frame.Kind)
+	}
+	if len(kinds) != 2 || kinds[0] != commitlog.CommandKindCompositeMutation || kinds[1] != commitlog.CommandKindCatalogIndexMutation {
+		t.Fatalf("typed row and concurrent DROP canonical mutations: LSNs=%v kinds=%v", mutationLSNs, kinds)
 	}
 	checkCurrent := func() {
 		t.Helper()
@@ -175,7 +186,7 @@ func TestNativeTypedIndexDropDuringCapturedBuild(t *testing.T) {
 	}
 	restore()
 	checkCurrent()
-	if cfg := collection.Meta().Options.ColumnStore; cfg == nil || cfg.ActiveManifest == nil || cfg.RecoveryAuthoritativeAppliedCommandLSN < 3 {
+	if cfg := collection.Meta().Options.ColumnStore; cfg == nil || cfg.ActiveManifest == nil || cfg.RecoveryAuthoritativeAppliedCommandLSN < mutationLSNs[0] {
 		t.Fatal("typed physical manifest did not advance through captured pending row")
 	}
 	var oldIDs []string

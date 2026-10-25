@@ -205,6 +205,11 @@ func prepareNativeEngineBuildForCompaction(captured *nativeEngineVersion, basis 
 				empty: boundary == nil, physicalOnly: id == target && nativeTypedPhysicalDomain(name),
 				rootKey: systemCollectionRootPrefix + c.schema.meta.Name + "/" + name,
 			})
+			if name == "primary" {
+				result := &b.built[len(b.built)-1]
+				result.generationKey = systemCollectionDocumentGenerationKey(c.schema.meta.Name)
+				binary.BigEndian.PutUint64(result.generationValue[:], c.documentGeneration)
+			}
 			return true
 		})
 		return b.failure == nil

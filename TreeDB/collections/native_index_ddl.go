@@ -216,7 +216,7 @@ func prepareNativeIndexMutation(base *nativeEngineVersion, old *nativeCollection
 	}
 	p.domains, p.pendingDomains = p.domainBuilder.Seal(), p.pendingDomainBuilder.Seal()
 	p.domainBuilder, p.pendingDomainBuilder = nil, nil
-	collection, err := newNativeCollectionState(old.incarnation, p.schema, p.domains, p.pendingDomains, admit)
+	collection, err := newNativeCollectionState(old.incarnation, old.documentGeneration, p.schema, p.domains, p.pendingDomains, admit)
 	if err != nil {
 		return nil, err
 	}

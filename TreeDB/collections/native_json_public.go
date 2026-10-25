@@ -204,7 +204,7 @@ func prepareNativeJSONCreate(base *nativeEngineVersion, meta CollectionMeta) (pu
 		return nil, err
 	}
 	p.sealPrivateBuilders(scratch)
-	collection, err = newNativeCollectionState(base.nextIncarnation, p.schema, p.domains, p.pendingDomains, admit)
+	collection, err = newNativeCollectionState(base.nextIncarnation, 0, p.schema, p.domains, p.pendingDomains, admit)
 	if err != nil {
 		return nil, err
 	}

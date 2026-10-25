@@ -189,6 +189,14 @@ func importNativeJSONCollection(base *nativeEngineVersion, meta CollectionMeta, 
 	if base.inventory != nil || base.build != nil {
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	} // private import only
+	generation := uint64(0)
+	rawGeneration, generationErr := get(systemCollectionDocumentGenerationKey(meta.Name))
+	if generationErr == nil {
+		generation, generationErr = decodeRootID(rawGeneration)
+	}
+	if generationErr != nil && !errors.Is(generationErr, tree.ErrKeyNotFound) {
+		return nil, generationErr
+	}
 	roots := collectionRootNames(meta)
 	next, err = newNativeEnginePreparation(base, 1, len(roots), base.allocator)
 	if err != nil {
@@ -235,7 +243,7 @@ func importNativeJSONCollection(base *nativeEngineVersion, meta CollectionMeta, 
 		}
 	}
 	p.sealPrivateBuilders(next)
-	c, err := newNativeCollectionState(id, p.schema, p.domains, p.pendingDomains, admit)
+	c, err := newNativeCollectionState(id, generation, p.schema, p.domains, p.pendingDomains, admit)
 	if err != nil {
 		return next, err
 	}

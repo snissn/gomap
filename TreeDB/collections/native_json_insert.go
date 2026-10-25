@@ -89,11 +89,41 @@ type nativeJSONPrimaryChange struct {
 	typed         *nativeTypedDelta
 }
 
+// nativeNamedDomainChange keeps replacement-only metadata off the ordinary
+// maintained index delta representation and its per-write allocation budget.
+type nativeNamedDomainChange struct {
+	name    string
+	policy  backenddb.OrderedRootStoragePolicy
+	entries []memtable.COWMutation
+	// Replacement discards all old physical and logical sources. The expected
+	// interpretation authenticates the captured domain before issuing a fresh one.
+	replace                bool
+	expectedInterpretation uint64
+}
+
+// nativeNamedCollectionChange borrows an already captured immutable collection.
+// Named-only changes never advance documentGeneration. Saved images must cover
+// exactly the document generation and prior domain interpretation they read.
+type nativeNamedCollectionChange struct {
+	collection       *nativeCollectionState
+	sourceGeneration uint64
+	domains          []nativeNamedDomainChange
+}
+
+func prepareNativeNamedDomains(base *nativeEngineVersion, changes []nativeNamedCollectionChange) (*nativeEngineVersion, error) {
+	return prepareNativeCollectionChanges(base, nil, changes)
+}
+
 func prepareNativeJSONPrimary(base *nativeEngineVersion, c *nativeCollectionState, entries []memtable.COWMutation) (*nativeEngineVersion, error) {
 	return prepareNativeJSONPrimaries(base, []nativeJSONPrimaryChange{{collection: c, entries: entries}})
 }
 func prepareNativeJSONPrimaries(base *nativeEngineVersion, changes []nativeJSONPrimaryChange) (*nativeEngineVersion, error) {
-	if base == nil || base.inventory != nil || len(changes) == 0 {
+	return prepareNativeCollectionChanges(base, changes, nil)
+}
+
+func prepareNativeCollectionChanges(base *nativeEngineVersion, changes []nativeJSONPrimaryChange, named []nativeNamedCollectionChange) (*nativeEngineVersion, error) {
+	count := len(changes) + len(named)
+	if base == nil || base.inventory != nil || count == 0 || (len(changes) != 0 && len(named) != 0) {
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
 	domainCount := len(changes)
@@ -103,7 +133,13 @@ func prepareNativeJSONPrimaries(base *nativeEngineVersion, changes []nativeJSONP
 		}
 		domainCount += len(change.additional)
 	}
-	next, err := newNativeEnginePreparation(base, len(changes), domainCount, base.allocator)
+	for _, change := range named {
+		if len(change.domains) > int(^uint(0)>>1)-domainCount {
+			return nil, memtable.ErrCOWCapacity
+		}
+		domainCount += len(change.domains)
+	}
+	next, err := newNativeEnginePreparation(base, count, domainCount, base.allocator)
 	if err != nil {
 		return nil, err
 	}
@@ -114,21 +150,53 @@ func prepareNativeJSONPrimaries(base *nativeEngineVersion, changes []nativeJSONP
 		(nativeDomainLifetime{}).Retain(base.catalog)
 		next.catalog = base.catalog
 	}
-	p.names, err = cowbtree.NewOwnedMapBuilder(base.names, len(changes), nativeCollectionLifetime{}, admit)
+	p.names, err = cowbtree.NewOwnedMapBuilder(base.names, count, nativeCollectionLifetime{}, admit)
 	if err != nil {
 		return next, err
 	}
-	p.collections, err = cowbtree.NewOwnedMapBuilder(base.collections, len(changes), nativeCollectionLifetime{}, admit)
+	p.collections, err = cowbtree.NewOwnedMapBuilder(base.collections, count, nativeCollectionLifetime{}, admit)
 	if err != nil {
 		return next, err
 	}
-	p.pending, err = cowbtree.NewOwnedMapBuilder(base.pending, len(changes), nativeCollectionLifetime{}, admit)
+	p.pending, err = cowbtree.NewOwnedMapBuilder(base.pending, count, nativeCollectionLifetime{}, admit)
 	if err != nil {
 		return next, err
 	}
-	for _, change := range changes {
+	for changeIndex := 0; changeIndex < count; changeIndex++ {
+		var change nativeJSONPrimaryChange
+		var namedChange nativeNamedCollectionChange
+		primary := len(changes) != 0
+		if primary {
+			change = changes[changeIndex]
+		} else {
+			namedChange = named[changeIndex]
+			change.collection = namedChange.collection
+		}
 		c, entries := change.collection, change.entries
+		if c == nil {
+			return next, backenddb.ErrNativeSemanticUnsupported
+		}
+		current, exists := base.collections.Get(c.incarnation)
+		if !exists || (primary && current != c) || (!primary && current.schema != c.schema) {
+			return next, backenddb.ErrConcurrentModification
+		}
+		if !primary {
+			c = current
+		}
+		if !primary && c.documentGeneration != namedChange.sourceGeneration {
+			return next, backenddb.ErrConcurrentModification
+		}
+		generation := c.documentGeneration
+		if primary && (len(entries) != 0 || change.typed != nil) {
+			if generation == ^uint64(0) {
+				return next, memtable.ErrCOWCapacity
+			}
+			generation++
+		}
 		domainCount := 1 + len(change.additional)
+		if !primary {
+			domainCount = len(namedChange.domains)
+		}
 		p.domainBuilder, err = cowbtree.NewOwnedMapBuilder(c.domains, domainCount, nativeDomainLifetime{}, admit)
 		if err != nil {
 			return next, err
@@ -139,9 +207,17 @@ func prepareNativeJSONPrimaries(base *nativeEngineVersion, changes []nativeJSONP
 		}
 		for i := 0; i < domainCount; i++ {
 			name, policy, rows := "primary", change.primaryPolicy, entries
-			if i > 0 {
+			if primary && i > 0 {
 				delta := change.additional[i-1]
 				name, policy, rows = delta.name, delta.policy, delta.entries
+			}
+			var delta nativeNamedDomainChange
+			if !primary {
+				delta = namedChange.domains[i]
+				name, policy, rows = delta.name, delta.policy, delta.entries
+				if name == "primary" || name == nativeCatalogDomainName || name == "" {
+					return next, backenddb.ErrNativeSemanticUnsupported
+				}
 			}
 			old, _ := c.domains.Get(name)
 			root := uint64(0)
@@ -149,13 +225,31 @@ func prepareNativeJSONPrimaries(base *nativeEngineVersion, changes []nativeJSONP
 				root = old.baseRoot
 				// The legacy primary-only adapter did not carry a policy.
 				// Preserve its exact original physical-domain policy.
-				if i == 0 {
+				if primary && i == 0 {
 					policy = old.storagePolicy
 				}
 			}
 			interpretation := uint64(1)
 			if old != nil {
 				interpretation = old.interpretation
+			}
+			if !primary {
+				expected := uint64(0)
+				if old != nil {
+					expected = old.interpretation
+				}
+				if delta.expectedInterpretation != expected {
+					return next, backenddb.ErrConcurrentModification
+				}
+				if delta.replace {
+					if interpretation == ^uint64(0) {
+						return next, memtable.ErrCOWCapacity
+					}
+					if old != nil {
+						interpretation++
+					}
+					old, root = nil, 0
+				}
 			}
 			domain, err := prepareNativeDomainUpdate(old, name, root, interpretation, policy, rows, base.allocator)
 			if domain != nil {
@@ -164,7 +258,10 @@ func prepareNativeJSONPrimaries(base *nativeEngineVersion, changes []nativeJSONP
 			if err != nil {
 				return next, err
 			}
-			if i == 0 && change.typed != nil {
+			if !primary && delta.replace {
+				domain.sourceGeneration = namedChange.sourceGeneration
+			}
+			if primary && i == 0 && change.typed != nil {
 				// Clone only private headers: their original vector receipts remain
 				// shared, while reprepare never grafts into the staged chain itself.
 				typed, cloneErr := cloneNativeTypedSuffix(change.typed, nil, admit)
@@ -191,7 +288,7 @@ func prepareNativeJSONPrimaries(base *nativeEngineVersion, changes []nativeJSONP
 		p.domainBuilder, p.pendingDomainBuilder = nil, nil
 		c.schema.retain()
 		p.schema = c.schema
-		replacement, err := newNativeCollectionState(c.incarnation, p.schema, p.domains, p.pendingDomains, admit)
+		replacement, err := newNativeCollectionState(c.incarnation, generation, p.schema, p.domains, p.pendingDomains, admit)
 		if err != nil {
 			return next, err
 		}

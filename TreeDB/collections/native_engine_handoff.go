@@ -26,6 +26,10 @@ type nativeBuiltDomain struct {
 	// result array. Handoff never samples a current collection name.
 	rootKey   string
 	rootValue [8]byte
+	// A primary result persists its captured document generation with its root.
+	// Newer logical handoff retains the current collection generation.
+	generationKey   string
+	generationValue [8]byte
 }
 
 // prepareNativeEngineHandoff rebases only captured touched domains onto their
@@ -204,7 +208,7 @@ func prepareNativeEngineHandoffWithCatalog(latest *nativeEngineVersion, built []
 			c.schema.retain()
 			p.schema = c.schema
 		}
-		successor, e := newNativeCollectionState(id, p.schema, p.domains, p.pendingDomains, admit)
+		successor, e := newNativeCollectionState(id, c.documentGeneration, p.schema, p.domains, p.pendingDomains, admit)
 		if e != nil {
 			return next, e
 		}
@@ -247,6 +251,7 @@ func prepareNativeDomainHandoff(current *nativeDomainState, result *nativeBuiltD
 	if err != nil {
 		return domain, scratch, err
 	}
+	domain.sourceGeneration = current.sourceGeneration
 	domain.typed, err = cloneNativeTypedSuffix(current.typed, result.typedBoundary, admit)
 	if err != nil {
 		return domain, scratch, err

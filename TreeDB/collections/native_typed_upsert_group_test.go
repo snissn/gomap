@@ -375,7 +375,16 @@ func TestNativeTypedUpsertGroupPartialPrefixRecovery(t *testing.T) {
 					checkNativeTypedGroupDocument(t, col, id, i < scenario.assigned)
 				}
 				checkNativeTypedGroupDocument(t, col, "seed", true)
-				if got := handle.CommandWALNextLSN(); got != 3+uint64(scenario.assigned) {
+				var seedNext uint64
+				for _, line := range bytes.Split(output, []byte("\n")) {
+					if _, err := fmt.Sscanf(string(line), "ORIGINAL GROUP SEED NEXT %d", &seedNext); err == nil {
+						break
+					}
+				}
+				if seedNext == 0 {
+					t.Fatal("child did not preserve seed identity")
+				}
+				if got := handle.CommandWALNextLSN(); got != seedNext+uint64(scenario.assigned) {
 					t.Fatalf("replay reassigned prefix: next=%d", got)
 				}
 				if err := database.Checkpoint(); err != nil {
@@ -405,12 +414,13 @@ func TestNativeTypedUpsertGroupPartialPrefixRecovery(t *testing.T) {
 				t.Fatal("missing basis")
 			}
 			beforeNext := handle.CommandWALNextLSN()
-			if before.AppliedCommandLSN != 2 || beforeNext != 3 {
+			if before.AppliedCommandLSN == 0 || beforeNext != before.AppliedCommandLSN+1 {
 				t.Fatalf("seed checkpoint frontier=%d next=%d", before.AppliedCommandLSN, beforeNext)
 			}
+			fmt.Printf("ORIGINAL GROUP SEED NEXT %d\n", beforeNext)
 			// Checkpoint can reclaim the already materialized catalog and seed
 			// frames. Preserve its actual retained baseline, rather than assuming
-			// those two historical frames are still physically present.
+			// those historical frames are still physically present.
 			beforeFrames := collectionCommandWALFrames(t, handle.Dir())
 			for _, frame := range beforeFrames {
 				if frame.LSN >= beforeNext {
@@ -495,7 +505,7 @@ func TestNativeTypedUpsertGroupPartialPrefixRecovery(t *testing.T) {
 					t.Fatalf("assigned participant ordinal grammar: members=%d err=%v", members, err)
 				}
 			}
-			if now, ok := handle.StateToken(); !ok || now != before || database.Stats()["treedb.cache.cow.txn.logical_seq"] != sequence || handle.CommandWALNextLSN() != 3+uint64(scenario.assigned) {
+			if now, ok := handle.StateToken(); !ok || now != before || database.Stats()["treedb.cache.cow.txn.logical_seq"] != sequence || handle.CommandWALNextLSN() != beforeNext+uint64(scenario.assigned) {
 				t.Fatalf("failed prefix installed logical/physical cut: %+v next=%d", now, handle.CommandWALNextLSN())
 			}
 			old, err := held.FetchDocumentsByID([][]byte{[]byte("seed"), []byte("a"), []byte("b"), []byte("c")}, DocumentFetchOptions{})
@@ -503,7 +513,7 @@ func TestNativeTypedUpsertGroupPartialPrefixRecovery(t *testing.T) {
 				t.Fatalf("failed prefix changed held cut: %+v %v", old.Results, err)
 			}
 			if scenario.assigned != 0 {
-				if _, _, err := col.InsertTypedBatchWithStats(nativeTypedGroupBatch("retry")); err == nil || handle.CommandWALNextLSN() != 3+uint64(scenario.assigned) {
+				if _, _, err := col.InsertTypedBatchWithStats(nativeTypedGroupBatch("retry")); err == nil || handle.CommandWALNextLSN() != beforeNext+uint64(scenario.assigned) {
 					t.Fatalf("assigned failed group allowed continuation: %v next=%d", err, handle.CommandWALNextLSN())
 				}
 			}
