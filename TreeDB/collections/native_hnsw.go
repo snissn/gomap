@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"time"
 	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -354,7 +355,13 @@ func (c *Collection) buildNativeHNSW(opts VectorIndexOptions, register bool) (in
 	return index, nil
 }
 
-func (c *Collection) installNativeHNSW(index *VectorIndex, expected *NativeJSONRead) (resultErr error) {
+func (c *Collection) installNativeHNSW(index *VectorIndex, expected *NativeJSONRead) error {
+	return c.installNativeHNSWInto(index, expected, nil)
+}
+
+// receiver, when nonnil, is use-locked by the caller. The candidate remains
+// privately admitted until validation/manager registration have both succeeded.
+func (c *Collection) installNativeHNSWInto(index *VectorIndex, expected *NativeJSONRead, receiver *VectorIndex) (resultErr error) {
 	runNativeVectorIndexBeforeInstallHookForTest(index.name)
 	valid := func(r *NativeJSONRead) bool {
 		def, ok := findVectorIndex(r.meta.VectorIndexes, index.name)
@@ -378,7 +385,11 @@ func (c *Collection) installNativeHNSW(index *VectorIndex, expected *NativeJSONR
 		coord.nativeHNSWIndexes = make(map[string]*VectorIndex)
 	}
 	old := coord.nativeHNSWIndexes[index.name]
-	coord.nativeHNSWIndexes[index.name] = index
+	installed := index
+	if receiver != nil {
+		installed = receiver
+	}
+	coord.nativeHNSWIndexes[index.name] = installed
 	coord.nativeHNSWIndexesMu.Unlock()
 	post, err := c.nativeJSON.Capture(c.name)
 	if err == nil {
@@ -392,7 +403,7 @@ func (c *Collection) installNativeHNSW(index *VectorIndex, expected *NativeJSONR
 	}
 	if err != nil {
 		coord.nativeHNSWIndexesMu.Lock()
-		if coord.nativeHNSWIndexes[index.name] == index {
+		if coord.nativeHNSWIndexes[index.name] == installed {
 			if old == nil {
 				delete(coord.nativeHNSWIndexes, index.name)
 			} else {
@@ -402,7 +413,11 @@ func (c *Collection) installNativeHNSW(index *VectorIndex, expected *NativeJSONR
 		coord.nativeHNSWIndexesMu.Unlock()
 		return err
 	}
-	if old != nil && old != index {
+	if receiver != nil {
+		receiver.swapNativeHNSW(index)
+		index.releaseNativeHNSW() // the candidate now owns the superseded payload
+	}
+	if old != nil && old != installed {
 		old.releaseNativeHNSW()
 	}
 	return nil
@@ -412,7 +427,7 @@ func (idx *VectorIndex) validateNativeHNSWRead(read *NativeJSONRead) error {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
 	def, ok := findVectorIndex(read.meta.VectorIndexes, idx.name)
-	if !ok || idx.nativeHNSWSchemaState == nil || !collectionMetaValuesEqual(read.meta, *idx.nativeHNSWSchemaState.meta) || def.SchemaGeneration != idx.nativeHNSWSchema || read.collection.incarnation != idx.nativeHNSWIncarnation {
+	if !ok || idx.nativeHNSWLease == nil || idx.nativeHNSWSchemaState == nil || !collectionMetaValuesEqual(read.meta, *idx.nativeHNSWSchemaState.meta) || def.SchemaGeneration != idx.nativeHNSWSchema || read.collection.incarnation != idx.nativeHNSWIncarnation {
 		return errVectorIndexStaleNativeRoot
 	}
 	domain, ok := read.collection.domains.Get("vector-index/" + idx.name)
@@ -495,29 +510,10 @@ func (c *Collection) reconcileNativeHNSWWithMutationHeld(ids [][]byte) (resultEr
 			// append maintained graph storage (including its tombstoned history)
 			// until the ordinary rebuild replaces and releases this runtime.
 			if vector != nil {
-				charge, e := nativeHNSWRowCharge(def, id)
-				for _, value := range scalarRow {
-					n := memtable.COWAllocationCharge(uint64(len(value)) * 4)
-					if n > ^uint64(0)-charge {
-						e = memtable.ErrCOWCapacity
-						break
-					}
-					charge += n
-				}
-				if e != nil || charge > ^uint64(0)-idx.nativeHNSWCharge {
-					err = memtable.ErrCOWCapacity
-					break
-				}
-				if e = idx.nativeHNSWLease.Resize(idx.nativeHNSWCharge + charge); e != nil {
+				if e = idx.admitNativeHNSWRowLocked(def, id, scalarRow); e != nil {
 					err = e
 					break
 				}
-				if uint64(len(id)) > ^uint64(0)-idx.nativeHNSWIDBytes {
-					err = memtable.ErrCOWCapacity
-					break
-				}
-				idx.nativeHNSWIDBytes += uint64(len(id))
-				idx.nativeHNSWCharge += charge
 			}
 			if e = idx.insertParsedStoredDocumentLocked(id, vector, scalarRow, false); e != nil {
 				err = e
@@ -568,6 +564,11 @@ func (idx *VectorIndex) saveNativeHNSW() (status VectorIndexLoadStatus, resultEr
 	c := idx.collection
 	unlock := c.lockVectorIndexMutation()
 	defer unlock()
+	return idx.saveNativeHNSWWithMutationHeld()
+}
+
+func (idx *VectorIndex) saveNativeHNSWWithMutationHeld() (status VectorIndexLoadStatus, resultErr error) {
+	c := idx.collection
 	idx.nativeHNSWUseMu.Lock()
 	defer idx.nativeHNSWUseMu.Unlock()
 	read, err := c.nativeJSON.Capture(c.name)
@@ -1059,4 +1060,372 @@ func (c *Collection) finishNativeHNSWMutation(ids [][]byte, held bool) error {
 		return c.reconcileNativeHNSWWithMutationHeld(ids)
 	}
 	return c.reconcileNativeHNSW(ids)
+}
+
+// Every public native graph mutation uses the established mutation -> use ->
+// graph lock order. Captured canonical rows and scratch live until cleanup.
+func (idx *VectorIndex) ownedNativeHNSWRead() (*NativeJSONRead, func(), error) {
+	c := idx.collection
+	unlock := c.lockVectorIndexMutation()
+	idx.nativeHNSWUseMu.Lock()
+	cleanup := func() { idx.nativeHNSWUseMu.Unlock(); unlock() }
+	if c.nativeJSON.db.IsClosing() {
+		cleanup()
+		return nil, nil, backenddb.ErrClosed
+	}
+	if c.registeredVectorIndex(idx.name) != idx {
+		cleanup()
+		return nil, nil, errVectorIndexStaleRuntime
+	}
+	r, err := c.nativeJSON.Capture(c.name)
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	if err = idx.validateNativeHNSWRead(r); err != nil {
+		r.Close()
+		cleanup()
+		return nil, nil, err
+	}
+	return r, func() { r.Close(); cleanup() }, nil
+}
+
+func (idx *VectorIndex) admitNativeHNSWRowLocked(def VectorIndexDefinition, id []byte, scalar map[string][]byte) error {
+	charge, err := nativeHNSWRowCharge(def, id)
+	for _, value := range scalar {
+		n := memtable.COWAllocationCharge(uint64(len(value)) * 4)
+		if n > ^uint64(0)-charge {
+			return memtable.ErrCOWCapacity
+		}
+		charge += n
+	}
+	if err != nil {
+		return err
+	}
+	if idx.nativeHNSWLease == nil || charge > ^uint64(0)-idx.nativeHNSWCharge || uint64(len(id)) > ^uint64(0)-idx.nativeHNSWIDBytes {
+		return memtable.ErrCOWCapacity
+	}
+	if err = idx.nativeHNSWLease.Resize(idx.nativeHNSWCharge + charge); err != nil {
+		return fmt.Errorf("collections: native vector row admission: %w", err)
+	}
+	idx.nativeHNSWCharge += charge
+	idx.nativeHNSWIDBytes += uint64(len(id))
+	return nil
+}
+
+func (idx *VectorIndex) insertNativeHNSWDocument(id []byte) error {
+	read, done, err := idx.ownedNativeHNSWRead()
+	if err != nil {
+		return err
+	}
+	defer done()
+	lease, err := read.capture.NativeAllocator().AdmitNativeBytes(0)
+	if err != nil {
+		return err
+	}
+	defer lease.Close()
+	scratch := nativeHNSWPeakAdmission(lease)
+	doc, err := read.namedDomainGetAdmitted("primary", id, scratch)
+	if err != nil {
+		return err
+	}
+	if err = scratch(uint64(len(doc))); err != nil {
+		return err
+	}
+	materializer := &StoredDocumentJSONMaterializer{documentFormat: normalizedDocumentFormat(read.meta.Options.DocumentFormat), nativeRead: read}
+	vector, scalar, err := idx.parseStoredVectorRow(materializer, id, doc)
+	if err != nil {
+		return err
+	}
+	def, _ := findVectorIndex(read.meta.VectorIndexes, idx.name)
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+	if idx.bufferedStoredVectorMatchesLocked(id, vector, scalar) {
+		return nil
+	}
+	if vector != nil {
+		if err = idx.admitNativeHNSWRowLocked(def, id, scalar); err != nil {
+			return err
+		}
+	}
+	return idx.insertParsedStoredDocumentLocked(id, vector, scalar, true)
+}
+
+func (idx *VectorIndex) tombstoneNativeHNSWDocument(id []byte) {
+	_, done, err := idx.ownedNativeHNSWRead()
+	if err != nil {
+		return
+	}
+	defer done()
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+	if idx.liveDeltaActiveLocked() {
+		idx.tombstoneLiveDocumentLocked(id)
+	} else {
+		idx.tombstoneDocumentIDLocked(id)
+	}
+	idx.acknowledgeSearchViewStateLocked()
+}
+
+// Rebuild and explicit re-registration keep the caller's receiver. The fresh
+// maintained builder owns all replacement arrays/schema; no mutex is copied and
+// no graph backing is cloned after admission. The candidate receives old custody.
+func (c *Collection) rebuildNativeHNSWReceiver(idx *VectorIndex, register bool) error {
+	if idx.collection == nil || idx.collection.nativeJSON == nil || idx.collection.nativeJSON.db != c.nativeJSON.db || idx.collection.name != c.name {
+		return errVectorIndexStaleRuntime
+	}
+	unlock := c.lockVectorIndexMutation()
+	defer unlock()
+	idx.nativeHNSWUseMu.Lock()
+	defer idx.nativeHNSWUseMu.Unlock()
+	current := c.registeredVectorIndex(idx.name)
+	if (current != idx && !register) || (current != nil && current != idx) {
+		return errVectorIndexStaleRuntime
+	}
+	read, err := c.nativeJSON.Capture(c.name)
+	if err != nil {
+		return err
+	}
+	defer read.Close()
+	def, ok := findVectorIndex(read.meta.VectorIndexes, idx.name)
+	domain, hasDomain := read.collection.domains.Get("vector-index/" + idx.name)
+	if !ok || !hasDomain || !vectorIndexDefinitionUsesNativeRuntime(def) || read.collection.incarnation != idx.nativeHNSWIncarnation || def.SchemaGeneration != idx.nativeHNSWSchema || domain.interpretation != idx.nativeHNSWVersion || idx.validateNativeSnapshotDefinition(def) != "" {
+		return errVectorIndexStaleRuntime
+	}
+	if idx.nativeHNSWLease != nil {
+		if err = idx.validateNativeHNSWRead(read); err != nil {
+			return err
+		}
+		if register && current == idx {
+			return nil
+		}
+	}
+	start := time.Now()
+	options := vectorIndexOptionsFromDefinition(def)
+	options.RebuildDeletedRatio = idx.rebuildDeletedRatio
+	candidate, err := c.buildNativeHNSW(options, false)
+	if err != nil {
+		return err
+	}
+	defer candidate.releaseNativeHNSW()
+	candidate.lastRebuildDuration = collectionObservedElapsedSince(start)
+	return c.installNativeHNSWInto(candidate, read, idx)
+}
+
+func (c *Collection) unregisterNativeHNSW(name string) {
+	unlock := c.lockVectorIndexMutation()
+	defer unlock()
+	coord := c.collectionSchemaCoordinator()
+	coord.nativeHNSWIndexesMu.Lock()
+	old := coord.nativeHNSWIndexes[name]
+	delete(coord.nativeHNSWIndexes, name)
+	coord.nativeHNSWIndexesMu.Unlock()
+	if old != nil {
+		old.releaseNativeHNSW()
+	}
+	if c.manager != nil && !c.hasNativePersistentVectorIndex() && !c.hasCollectionVectorIndexPreparedSearchCacheEntries() && !c.hasCollectionQueryReadyGenerationCache() {
+		c.manager.unregisterCollectionHandle(c)
+	}
+}
+
+// The use lock excludes admitted queries and mutators. Both receipts remain
+// live throughout the swap; releasing the temporary then retires exactly old.
+func (idx *VectorIndex) swapNativeHNSW(other *VectorIndex) {
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+	idx.nativeHNSWSchemaState, other.nativeHNSWSchemaState = other.nativeHNSWSchemaState, idx.nativeHNSWSchemaState
+	idx.nativeHNSWLease, other.nativeHNSWLease = other.nativeHNSWLease, idx.nativeHNSWLease
+	idx.nativeHNSWCharge, other.nativeHNSWCharge = other.nativeHNSWCharge, idx.nativeHNSWCharge
+	idx.nativeHNSWIDBytes, other.nativeHNSWIDBytes = other.nativeHNSWIDBytes, idx.nativeHNSWIDBytes
+	idx.nativeHNSWIncarnation, other.nativeHNSWIncarnation = other.nativeHNSWIncarnation, idx.nativeHNSWIncarnation
+	idx.nativeHNSWSchema, other.nativeHNSWSchema = other.nativeHNSWSchema, idx.nativeHNSWSchema
+	idx.nativeHNSWVersion, other.nativeHNSWVersion = other.nativeHNSWVersion, idx.nativeHNSWVersion
+	idx.nodes, other.nodes = other.nodes, idx.nodes
+	idx.vectorRows, other.vectorRows = other.vectorRows, idx.vectorRows
+	idx.constructionRowsFixed, other.constructionRowsFixed = other.constructionRowsFixed, idx.constructionRowsFixed
+	idx.currentNode, other.currentNode = other.currentNode, idx.currentNode
+	idx.entry, other.entry = other.entry, idx.entry
+	idx.maxLevel, other.maxLevel = other.maxLevel, idx.maxLevel
+	idx.insertScratch, other.insertScratch = other.insertScratch, idx.insertScratch
+	idx.liveDelta, other.liveDelta = other.liveDelta, idx.liveDelta
+	idx.scalarDefinitions, other.scalarDefinitions = other.scalarDefinitions, idx.scalarDefinitions
+	idx.scalarRuntimes, other.scalarRuntimes = other.scalarRuntimes, idx.scalarRuntimes
+	idx.scalarColumns, other.scalarColumns = other.scalarColumns, idx.scalarColumns
+	idx.mutationSeq, other.mutationSeq = other.mutationSeq, idx.mutationSeq
+	idx.sourceDocumentRootsValid, other.sourceDocumentRootsValid = other.sourceDocumentRootsValid, idx.sourceDocumentRootsValid
+	idx.unnotifiedDocumentIDs, other.unnotifiedDocumentIDs = other.unnotifiedDocumentIDs, idx.unnotifiedDocumentIDs
+	idx.sourceDocumentGeneration, other.sourceDocumentGeneration = other.sourceDocumentGeneration, idx.sourceDocumentGeneration
+	idx.sourceDocumentAccountedGeneration, other.sourceDocumentAccountedGeneration = other.sourceDocumentAccountedGeneration, idx.sourceDocumentAccountedGeneration
+	idx.sourceDocumentAccountedGenerationValid, other.sourceDocumentAccountedGenerationValid = other.sourceDocumentAccountedGenerationValid, idx.sourceDocumentAccountedGenerationValid
+	idx.sourceDocumentState, other.sourceDocumentState = other.sourceDocumentState, idx.sourceDocumentState
+	idx.sourceDocumentStateValid, other.sourceDocumentStateValid = other.sourceDocumentStateValid, idx.sourceDocumentStateValid
+	idx.searchViewDirty, other.searchViewDirty = other.searchViewDirty, idx.searchViewDirty
+	idx.trackSearchViewDirty, other.trackSearchViewDirty = other.trackSearchViewDirty, idx.trackSearchViewDirty
+	idx.searchViewForceFull, other.searchViewForceFull = other.searchViewForceFull, idx.searchViewForceFull
+	idx.searchViewAcknowledged, other.searchViewAcknowledged = other.searchViewAcknowledged, idx.searchViewAcknowledged
+	idx.searchViewAcknowledgedMutationSeq, other.searchViewAcknowledgedMutationSeq = other.searchViewAcknowledgedMutationSeq, idx.searchViewAcknowledgedMutationSeq
+	idx.searchViewAcknowledgedGeneration, other.searchViewAcknowledgedGeneration = other.searchViewAcknowledgedGeneration, idx.searchViewAcknowledgedGeneration
+	idx.persistedEpoch, other.persistedEpoch = other.persistedEpoch, idx.persistedEpoch
+	idx.fullSnapshotBaseEpoch, other.fullSnapshotBaseEpoch = other.fullSnapshotBaseEpoch, idx.fullSnapshotBaseEpoch
+	idx.persistedBytesDisk, other.persistedBytesDisk = other.persistedBytesDisk, idx.persistedBytesDisk
+	idx.persistedSnapshotDirty, other.persistedSnapshotDirty = other.persistedSnapshotDirty, idx.persistedSnapshotDirty
+	idx.dirtyMeta, other.dirtyMeta = other.dirtyMeta, idx.dirtyMeta
+	idx.dirtyNodes, other.dirtyNodes = other.dirtyNodes, idx.dirtyNodes
+	idx.dirtyDocs, other.dirtyDocs = other.dirtyDocs, idx.dirtyDocs
+	idx.lastRebuildDuration, other.lastRebuildDuration = other.lastRebuildDuration, idx.lastRebuildDuration
+	idx.insertQuantScratch, other.insertQuantScratch = other.insertQuantScratch, idx.insertQuantScratch
+	asearchView := idx.searchView.Load()
+	idx.searchView.Store(other.searchView.Load())
+	other.searchView.Store(asearchView)
+	asearchViewSpare := idx.searchViewSpare.Load()
+	idx.searchViewSpare.Store(other.searchViewSpare.Load())
+	other.searchViewSpare.Store(asearchViewSpare)
+	asearchViewCurrent := idx.searchViewCurrent.Load()
+	idx.searchViewCurrent.Store(other.searchViewCurrent.Load())
+	other.searchViewCurrent.Store(asearchViewCurrent)
+	aliveDeltaEnabled := idx.liveDeltaEnabled.Load()
+	idx.liveDeltaEnabled.Store(other.liveDeltaEnabled.Load())
+	other.liveDeltaEnabled.Store(aliveDeltaEnabled)
+}
+
+// Dispatch from a captured declared role, preserving the separate source-import
+// graph route. A facade's nil legacy DB does not describe its vector capability.
+func (c *Collection) nativeOrdinaryHNSWRole(name string) (bool, error) {
+	if err := ValidateIndexName(name); err != nil {
+		return false, err
+	}
+	r, err := c.nativeJSON.Capture(c.name)
+	if err != nil {
+		return false, err
+	}
+	defer r.Close()
+	def, ok := findVectorIndex(r.meta.VectorIndexes, name)
+	if !ok {
+		return false, ErrIndexNotFound
+	}
+	return r.meta.Options.ColumnStore == nil && vectorIndexDefinitionUsesNativeRuntime(def), nil
+}
+
+func (c *Collection) rebuildNativeOrdinaryHNSW(name string) (VectorIndexStatus, error) {
+	unlock := c.lockVectorIndexMutation()
+	defer unlock()
+	r, err := c.nativeJSON.Capture(c.name)
+	if err != nil {
+		return VectorIndexStatus{}, err
+	}
+	def, ok := findVectorIndex(r.meta.VectorIndexes, name)
+	if !ok || r.meta.Options.ColumnStore != nil || !vectorIndexDefinitionUsesNativeRuntime(def) {
+		r.Close()
+		return VectorIndexStatus{}, errVectorIndexNotDeclared
+	}
+	options := vectorIndexOptionsFromDefinition(def)
+	r.Close()
+	start := time.Now()
+	idx, err := c.buildNativeHNSW(options, true)
+	if err != nil {
+		return VectorIndexStatus{}, err
+	}
+	if _, err = idx.saveNativeHNSWWithMutationHeld(); err != nil {
+		return VectorIndexStatus{}, err
+	}
+	out, err := c.nativeOrdinaryHNSWStatusWithMutationHeld(name, true)
+	out.Duration = collectionObservedElapsedSince(start)
+	return out, err
+}
+
+func (c *Collection) nativeOrdinaryHNSWStatus(name string, inspect bool) (VectorIndexStatus, error) {
+	unlock := c.lockVectorIndexMutation()
+	defer unlock()
+	return c.nativeOrdinaryHNSWStatusWithMutationHeld(name, inspect)
+}
+
+func (c *Collection) nativeOrdinaryHNSWStatusWithMutationHeld(name string, inspect bool) (out VectorIndexStatus, resultErr error) {
+	r, err := c.nativeJSON.Capture(c.name)
+	if err != nil {
+		return out, err
+	}
+	defer func() { resultErr = errors.Join(resultErr, r.Close()) }()
+	def, ok := findVectorIndex(r.meta.VectorIndexes, name)
+	if !ok {
+		return out, ErrIndexNotFound
+	}
+	// Metadata returned by this diagnostic is external caller-owned output.
+	meta := r.meta.copy()
+	def, _ = findVectorIndex(meta.VectorIndexes, name)
+	out = VectorIndexStatus{Definition: def, Name: name, Strategy: def.Strategy, State: VectorIndexStateNativeRuntime, Reason: VectorIndexReasonNativeRuntime, RootName: collectionVectorIndexRootName(c.name, name)}
+	domain, ok := r.collection.domains.Get("vector-index/" + name)
+	if !ok {
+		out.ExactFallbackReason = vectorIndexFallbackMissingGraphRoot
+		out.RebuildNeeded = true
+		return out, nil
+	}
+	out.RootID = domain.baseRoot
+	validRuntime := false
+	if idx := c.registeredVectorIndex(name); idx != nil {
+		out.Registered = true
+		idx.nativeHNSWUseMu.RLock()
+		validRuntime = idx.validateNativeHNSWRead(r) == nil
+		if validRuntime {
+			out.Stats = idx.Stats()
+			out.Loaded = true
+		}
+		idx.nativeHNSWUseMu.RUnlock()
+	}
+	if !inspect {
+		out.NativeRootLoaded = domain.sourceGeneration == r.collection.documentGeneration
+		out.RebuildNeeded = out.Stats.RebuildNeeded || out.Stats.SnapshotDirty || !out.NativeRootLoaded
+		return out, nil
+	}
+	lease, err := r.capture.NativeAllocator().AdmitNativeBytes(64 << 10)
+	if err != nil {
+		return out, err
+	}
+	defer lease.Close()
+	charge := uint64(64 << 10)
+	admit := func(n uint64) error {
+		if n > ^uint64(0)-charge {
+			return memtable.ErrCOWCapacity
+		}
+		if e := lease.Resize(charge + n); e != nil {
+			return e
+		}
+		charge += n
+		return nil
+	}
+	snapshot, disk, reason, err := readNativeHNSWSnapshot(r, def, admit)
+	if err != nil {
+		return out, err
+	}
+	if reason != "" {
+		out.ExactFallbackReason = reason
+		out.RebuildNeeded = true
+		return out, nil
+	}
+	for _, row := range snapshot.Nodes {
+		n, e := nativeHNSWRowCharge(def, []byte(row.DocumentID))
+		if e != nil {
+			return out, e
+		}
+		if e = admit(n); e != nil {
+			return out, e
+		}
+	}
+	probe, err := newVectorIndexWithMeta(c, vectorIndexOptionsFromDefinition(def), r.meta)
+	if err != nil {
+		return out, err
+	}
+	if reason = probe.loadPersistSnapshot(snapshot); reason != "" {
+		out.ExactFallbackReason = reason
+		out.RebuildNeeded = true
+		return out, nil
+	}
+	probe.recordLoadedSnapshot(domain.baseRoot, disk)
+	out.NativeRootLoaded = true
+	out.NativeRootBytes = disk
+	out.Loaded = true
+	if !validRuntime {
+		out.Stats = probe.Stats()
+	}
+	out.RebuildNeeded = out.Stats.RebuildNeeded || out.Stats.SnapshotDirty
+	return out, nil
 }

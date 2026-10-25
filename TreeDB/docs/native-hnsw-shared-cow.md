@@ -29,6 +29,28 @@ reconciliation. Manager Close flushes registered graphs; DB Close releases their
 receipts after active public Search readers finish. A graph may outlive the
 manager that originally built it while the DB and a sibling manager remain open.
 
+Public receiver `Rebuild` preserves receiver identity while the maintained builder
+constructs a separately admitted replacement. The installation swaps graph backing,
+schema ownership and allocation receipts explicitly; it never copies mutexes.
+`UnregisterVectorIndex` removes the shared registration and retires graph storage
+after active graph readers finish. The detached receiver refuses Search and
+mutation until explicit registration rebuilds canonical rows. Registration refuses
+another DB, a replaced runtime, and dropped or recreated declarations. Ordinary
+collection Status and Rebuild use this runtime family; source-import and typed
+graph declarations retain their separate dispatch. `SaveNativeDeltaSnapshot`
+uses full native domain replacement with the existing Save acknowledgment.
+
+Manual Insert and Tombstone share the coordinator mutation gate, runtime use lock
+and graph lock with ordinary mutation notification. Insert admits retained row
+growth on the original runtime receipt before graph allocation. Filtered Search
+copies candidate IDs and immutable query configuration while graph storage is
+protected, then releases the runtime use lock before invoking user code. Its
+original captured read and admitted workspace remain live through reranking,
+exact fallback and final validation. A callback that changes the captured document
+or graph interpretation makes the outer Search unavailable. CheckRecall uses the
+maintained serial exact path for native owners rather than allocating the legacy
+whole-corpus matrix without admission.
+
 Runtime storage is admitted before allocation against the existing finite COW
 budget. Row charges use the actual deterministic HNSW level and maintained
 layer capacities. Unchanged vectors and deletions do not accumulate new node

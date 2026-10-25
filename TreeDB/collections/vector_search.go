@@ -113,6 +113,11 @@ type VectorIndexRangeFilter struct {
 // nearest TopK matches. The collection primary row remains the canonical vector
 // storage; missing or null vector fields are skipped.
 func (c *Collection) SearchVectorsExact(query []float32, opts VectorSearchOptions) ([]VectorSearchResult, error) {
+	return c.searchVectorsExactWithRead(query, opts, nil)
+}
+
+// A native graph query retains its original cut through exact fallback and user callbacks.
+func (c *Collection) searchVectorsExactWithRead(query []float32, opts VectorSearchOptions, read *NativeJSONRead) ([]VectorSearchResult, error) {
 	if c == nil {
 		return nil, errCollectionNil
 	}
@@ -147,15 +152,16 @@ func (c *Collection) SearchVectorsExact(query []float32, opts VectorSearchOption
 
 	// Native exact evaluation borrows one cut for rows and materialization,
 	// including when a DB-owned graph outlives its opening manager.
-	var read *NativeJSONRead
 	var materializer *StoredDocumentJSONMaterializer
 	var scratch func(uint64) error
 	if c.nativeJSON != nil {
-		read, err = c.nativeJSON.Capture(c.name)
-		if err != nil {
-			return nil, err
+		if read == nil {
+			read, err = c.nativeJSON.Capture(c.name)
+			if err != nil {
+				return nil, err
+			}
+			defer read.Close()
 		}
-		defer read.Close()
 		materializer = &StoredDocumentJSONMaterializer{documentFormat: normalizedDocumentFormat(read.meta.Options.DocumentFormat), nativeRead: read}
 		var lease *memtable.COWExternalLease
 		lease, err = read.capture.NativeAllocator().AdmitNativeBytes(0)

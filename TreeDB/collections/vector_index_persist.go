@@ -472,6 +472,9 @@ func (c *Collection) installNativeVectorIndexCandidate(candidate *VectorIndex, e
 // rebuild/shrink publication should continue to use SaveNativeSnapshot so
 // removed graph keys cannot survive.
 func (idx *VectorIndex) SaveNativeDeltaSnapshot() (VectorIndexLoadStatus, error) {
+	if idx != nil && idx.collection != nil && idx.collection.nativeJSON != nil {
+		return idx.saveNativeHNSW()
+	}
 	return idx.saveNativeDeltaSnapshotWithCommandWALIntent(nil)
 }
 
