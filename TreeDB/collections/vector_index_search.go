@@ -3094,14 +3094,15 @@ func (c *Collection) searchNativeHNSWAtReadView(opts VectorIndexSearchOptions, b
 	if index == nil {
 		unlock := c.lockVectorIndexMutation()
 		index = c.registeredVectorIndex(def.Name)
-		if index == nil {
+		didLoad := index == nil
+		if didLoad {
 			index, load, err = c.loadNativeHNSWAtRead(vectorIndexOptionsFromDefinition(def), read)
 		}
 		unlock()
 		if err != nil {
 			return response, fmt.Errorf("%w: native runtime load: %w", ErrVectorIndexSnapshotMismatch, err)
 		}
-		if index == nil || !load.Loaded {
+		if index == nil || (didLoad && !load.Loaded) {
 			return response, fmt.Errorf("%w: native runtime unavailable: %s", ErrVectorIndexSearchUnavailable, load.ExactFallbackReason)
 		}
 	}

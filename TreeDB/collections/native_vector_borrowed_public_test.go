@@ -4,10 +4,14 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 // The buffered public route must search and materialize the same native cut.
@@ -287,5 +291,88 @@ func TestNativeVectorBorrowedHybridFence(t *testing.T) {
 				t.Fatalf("not fail closed: %+v", response)
 			}
 		})
+	}
+}
+
+// The second public query must use the runtime installed while it waited for
+// the existing mutation gate, rather than interpreting an unrun loader's zero
+// status as a failed load.
+func TestNativeVectorBorrowedConcurrentColdLoad(t *testing.T) {
+	dir := t.TempDir()
+	owner, manager, c := openNativeTextPublic(t, dir, treedb.ProfileNoWALFast, true)
+	if _, err := c.Insert([]byte("a"), []byte(`{"tenant":"a","content":"alpha","embedding":[1,0]}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := owner.Close(); err != nil {
+		t.Fatal(err)
+	}
+	_, _, c = openNativeTextPublic(t, dir, treedb.ProfileNoWALFast, false)
+	if c.registeredVectorIndex("embedding") != nil {
+		t.Fatal("fixture is not cold")
+	}
+	entered, release := make(chan struct{}), make(chan struct{})
+	var installOnce, releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	defer unblock()
+	restore := setNativeVectorIndexBeforeInstallHookForTest(func(string) { installOnce.Do(func() { close(entered); <-release }) })
+	defer restore()
+	done := make(chan error, 2)
+	query := func() {
+		var buffer VectorIndexSearchBuffer
+		defer buffer.Reset()
+		response, err := c.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: "embedding", Query: []float32{1, 0}, TopK: 1, StatsMode: VectorIndexSearchStatsModeProduction, DeclaredScalarFilter: &HybridScalarFilter{IndexName: "tenant", Value: "a"}}, &buffer)
+		if err == nil && (len(response.Results) != 1 || string(response.Results[0].ID) != "a") {
+			err = fmt.Errorf("cold results: %+v", response)
+		}
+		done <- err
+	}
+	go query()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first cold loader did not reach install")
+	}
+	go query()
+	// The established install hook holds the first loader before registration.
+	// Observe the sibling actually parked at the mutation gate, with no sleeps
+	// or assumption about scheduler timing, before allowing publication.
+	deadline := time.After(5 * time.Second)
+	stacks := make([]byte, 256<<10)
+	for {
+		n := runtime.Stack(stacks, true)
+		waiting := false
+		for _, stack := range strings.Split(string(stacks[:n]), "\n\n") {
+			if strings.Contains(stack, "lockVectorIndexMutation") && strings.Contains(stack, "searchNativeHNSWAtReadView") {
+				waiting = true
+				break
+			}
+		}
+		if waiting {
+			break
+		}
+		select {
+		case <-deadline:
+			unblock()
+			t.Fatal("sibling did not wait at cold-load mutation gate")
+		default:
+			runtime.Gosched()
+		}
+	}
+	unblock()
+	for i := 0; i < 2; i++ {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Error(err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("concurrent cold query did not finish")
+		}
 	}
 }
