@@ -767,49 +767,39 @@ func (idx *VectorIndex) saveNativeHNSWWithMutationHeld() (status VectorIndexLoad
 	if domain.interpretation == ^uint64(0) {
 		return status, memtable.ErrCOWCapacity
 	}
-	persistCharge, e := idx.nativeHNSWPersistenceCharge()
+	imagePlan, e := idx.nativeHNSWImagePlan()
 	if e != nil {
 		return status, e
 	}
-	persistLease, e := read.capture.NativeAllocator().AdmitNativeBytes(persistCharge)
+	persistLease, e := read.capture.NativeAllocator().AdmitNativeBytes(imagePlan.charge)
 	if e != nil {
 		return status, e
 	}
 	defer persistLease.Close()
-
 	if err = idx.foldLiveDeltaForPersistence(); err != nil {
 		return status, err
 	}
-	// Admit the maintained snapshot and codec workspace before allocating it.
-	snapshot, sequence := idx.persistSnapshot()
-	snapshot.Meta.NativeLogicalVersion = domain.interpretation + 1
-	table, disk, err := buildVectorIndexNativeSnapshotTable(snapshot)
+	rows, disk, sequence, err := idx.encodeNativeHNSWImage(domain.interpretation+1, imagePlan)
 	if err != nil {
 		return status, err
 	}
-	snapshot = vectorIndexPersistSnapshot{}
-	defer resetCollectionRunTable(table)
-	rows := make([]memtable.COWMutation, 0, table.Len())
-	it := table.NewIterator(nil, nil)
-	defer it.Close()
-	for ; it.Valid(); it.Next() {
-		// The immutable run table and iterator remain owned until P1 finishes.
-		// Existing COWWriter.Prepare copies these borrowed payloads exactly once.
-		rows = append(rows, memtable.COWMutation{Key: it.UnsafeKey(), Value: it.UnsafeValue(), Flags: node.FlagInline})
+	// Encoding has returned: its private buffer, edge conversion arrays and
+	// record construction aliases have ended. Keep the actual original output
+	// capacities and downstream publication controls on the SAME receipt;
+	// publication separately admits its COW copy.
+	retained, err := nativeHNSWImageRetainedCharge(rows)
+	admitted := memtable.COWAllocationCharge(imagePlan.charge)
+	if err != nil || imagePlan.control > ^uint64(0)-retained {
+		return status, memtable.ErrCOWCapacity
 	}
-	if err = it.Error(); err != nil {
+	retained += imagePlan.control
+	if retained > admitted {
+		return status, memtable.ErrCOWCapacity
+	}
+	if err = persistLease.ShrinkNativeBytes(admitted-retained, retained); err != nil {
 		return status, err
 	}
-	// The snapshot is now unreachable. Keep the encoded image, iterator/table
-	// descriptor arrays and outgoing headers admitted, without retaining the
-	// obsolete decoder/vector/edge workspace through COW preparation.
-	projectionCharge := uint64(64<<10) + uint64(table.Len())*512 + uint64(disk)*2
-	for _, row := range rows {
-		projectionCharge += uint64(len(row.Key)) * 2
-	}
-	if err = persistLease.Resize(memtable.COWAllocationCharge(projectionCharge)); err != nil {
-		return status, err
-	}
+
 	base, _ := read.capture.State().(*nativeEngineVersion)
 	if base == nil {
 		base = read.privateEngine
@@ -1520,12 +1510,31 @@ func (c *Collection) rebuildNativeOrdinaryHNSW(name string) (VectorIndexStatus, 
 	if err != nil {
 		return VectorIndexStatus{}, err
 	}
-	if _, err = idx.saveNativeHNSWWithMutationHeld(); err != nil {
+	saved, err := idx.saveNativeHNSWWithMutationHeld()
+	if err != nil {
 		return VectorIndexStatus{}, err
 	}
-	out, err := c.nativeOrdinaryHNSWStatusWithMutationHeld(name, true)
+	// Save just validated and published this exact runtime under the mutation
+	// gate. Assemble its result from a fresh authenticated capture, rather than
+	// decoding a second graph beside it. Explicit VectorIndexStatus continues
+	// to inspect the persisted image independently.
+	out, err := c.nativeOrdinaryHNSWStatusWithMutationHeld(name, false)
+	if err != nil {
+		return out, err
+	}
+	idx.nativeHNSWUseMu.RLock()
+	idx.mu.RLock()
+	clean := saved.Loaded && idx.nativeHNSWLease != nil && idx.nativeHNSWVersion == saved.LogicalVersion &&
+		!idx.dirtyMeta && !idx.persistedSnapshotDirty && idx.persistedBytesDisk == saved.BytesDisk
+	idx.mu.RUnlock()
+	idx.nativeHNSWUseMu.RUnlock()
+	if c.registeredVectorIndex(name) != idx || !clean || !out.Loaded || !out.NativeRootLoaded ||
+		out.Stats.SnapshotDirty || out.RebuildNeeded || saved.BytesDisk <= 0 || out.Stats.BytesDisk != saved.BytesDisk {
+		return out, errVectorIndexStaleNativeRoot
+	}
+	out.NativeRootBytes = saved.BytesDisk
 	out.Duration = collectionObservedElapsedSince(start)
-	return out, err
+	return out, nil
 }
 
 func (c *Collection) nativeOrdinaryHNSWStatus(name string, inspect bool) (VectorIndexStatus, error) {

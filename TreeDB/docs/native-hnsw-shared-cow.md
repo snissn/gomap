@@ -137,3 +137,47 @@ search, template graph materialization, legacy catalog upgrade, all filtered
 query paths, or the complete Mongo capability inventory. Existing specialized
 routes keep their separate contracts. The parent adoption issue remains open
 until its remaining public capabilities and performance gates are satisfied.
+
+Native full-image Save traverses the runtime under its existing mutation/use and
+graph-read locks and emits the maintained node, normalized-edge, tombstone and
+doc-map records directly into the publication rows. It preserves the same JSON
+record structs, default escaping, newline, source generation, logical version and
+mutation sequence. No intermediate full graph snapshot or temporary table exists.
+The original operation receipt admits the complete encoded/key/header image,
+record-construction cohorts, one reusable private encoder buffer and one edge
+conversion workspace before construction. A live-delta fold uses a preflight bound
+on both planes and final degree limits; its runtime workspace remains separately
+charged to the original runtime receipt. The schema-clone path still constructs
+an actual snapshot and retains its original snapshot admission.
+
+The private buffer and returned records never enter an application pool. The
+maintained encoding/json codec has the same narrow inherited library-cache
+boundary as native template normalization: inaccessible encodeState buffers,
+ptrSeen and type caches can outlive a call. Returned output, private buffer growth,
+record/edge arrays, headers and graph storage remain admitted; this boundary is
+not an exemption for application-owned pools and is not a process RSS bound.
+
+The direct encoder's construction phase ends before publication preparation.
+The same original persistence receipt then retains the rounded capacity of the
+original mutation array and every owned key/value backing, plus the fixed
+publication-control envelope and checked variable domain/catalog/root names and
+canonical command payload. Those controls are constructed after encoding and
+remain charged through publication. Its ended encoder,
+edge conversion and formatting workspace, and unused preflight allowance, are
+returned through `ShrinkNativeBytes`; the original receipt header remains.
+The publication writer separately admits its immutable COW payload copy.
+
+A successful collection rebuild returns status from its exact newly saved runtime
+and a fresh authenticated capture while retaining mutation ownership. It checks
+registration, schema/incarnation, graph interpretation, document generation,
+clean persistence state and saved byte count; physical root IDs remain physical
+IDs (including zero before materialization). It does not decode a duplicate graph
+solely to report that result. Explicit `Collection.VectorIndexStatus` still
+performs independent persisted-image validation and reports stale or malformed
+saved state, even when a current runtime exists.
+
+Native runtime Stats use actual graph persistence dirty flags rather than a
+nonzero physical epoch. Every accepted native graph mutation marks that state
+dirty, including a non-entry manual tombstone after a logical Save at root zero;
+a subsequent successful Save clears it without fabricating an epoch or changing
+the mutation sequence. Legacy physical persistence retains its epoch heuristic.

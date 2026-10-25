@@ -1413,41 +1413,11 @@ func (idx *VectorIndex) persistNativeDeltaTable(includeMeta bool) (memtable.Tabl
 			return nil, 0, seq, persistedEpoch, false, err
 		}
 	}
+	var edge vectorIndexPersistEdges
 	for _, nodeID := range nodeIDs {
-		node := idx.nodes[nodeID]
-		if err := add(vectorIndexNativeNodeKey(nodeID), vectorIndexPersistNodeFromRuntime(node)); err != nil {
+		if err := idx.emitNativeNodeLocked(nodeID, &edge, add); err != nil {
 			resetCollectionRunTable(table)
 			return nil, 0, seq, persistedEpoch, false, err
-		}
-		for layer, neighbors := range node.neighbors {
-			edge := vectorIndexPersistEdges{
-				NodeID:    nodeID,
-				Layer:     layer,
-				Neighbor:  make([]int, len(neighbors)),
-				Distances: make([]float32, len(neighbors)),
-			}
-			for i, neighbor := range neighbors {
-				edge.Neighbor[i] = int(neighbor.nodeID)
-				distance, ok := normalizeVectorIndexEdgeDistance(neighbor.distance)
-				if !ok {
-					distance = idx.distanceBetweenNodesLocked(nodeID, int(neighbor.nodeID))
-					distance, ok = normalizeVectorIndexEdgeDistance(distance)
-					if !ok {
-						distance = math.MaxFloat32
-					}
-				}
-				edge.Distances[i] = distance
-			}
-			if err := add(vectorIndexNativeEdgeKey(nodeID, layer), edge); err != nil {
-				resetCollectionRunTable(table)
-				return nil, 0, seq, persistedEpoch, false, err
-			}
-		}
-		if node.deleted {
-			if err := add(vectorIndexNativeTombstoneKey(nodeID), nodeID); err != nil {
-				resetCollectionRunTable(table)
-				return nil, 0, seq, persistedEpoch, false, err
-			}
 		}
 	}
 	for _, docID := range docIDs {
@@ -1544,15 +1514,46 @@ func (idx *VectorIndex) persistMetaLocked() vectorIndexPersistMeta {
 	}
 }
 
-func vectorIndexPersistNodeFromRuntime(node vectorIndexNode) vectorIndexPersistNode {
-	return vectorIndexPersistNode{
-		DocumentID: string(node.documentID),
-		Vector:     append([]float32(nil), node.vector...),
-		Quantized:  append([]int8(nil), node.quantized...),
-		QuantScale: node.quantScale,
-		Level:      node.level,
-		Deleted:    node.deleted,
+// emitNativeNodeLocked uses the maintained record structs and edge normalization.
+// Encoding is synchronous under the graph read lock; vectors may be borrowed,
+// and one edge-conversion workspace is reused instead of copying a full graph.
+func (idx *VectorIndex) emitNativeNodeLocked(nodeID int, edge *vectorIndexPersistEdges, add func([]byte, any) error) error {
+	node := idx.nodes[nodeID]
+	if err := add(vectorIndexNativeNodeKey(nodeID), vectorIndexPersistNode{
+		DocumentID: string(node.documentID), Vector: node.vector, Quantized: node.quantized,
+		QuantScale: node.quantScale, Level: node.level, Deleted: node.deleted,
+	}); err != nil {
+		return err
 	}
+	for layer, neighbors := range node.neighbors {
+		edge.NodeID, edge.Layer = nodeID, layer
+		if cap(edge.Neighbor) < len(neighbors) {
+			edge.Neighbor = make([]int, len(neighbors))
+			edge.Distances = make([]float32, len(neighbors))
+		} else {
+			edge.Neighbor = edge.Neighbor[:len(neighbors)]
+			edge.Distances = edge.Distances[:len(neighbors)]
+		}
+		for i, neighbor := range neighbors {
+			edge.Neighbor[i] = int(neighbor.nodeID)
+			distance, ok := normalizeVectorIndexEdgeDistance(neighbor.distance)
+			if !ok {
+				distance = idx.distanceBetweenNodesLocked(nodeID, int(neighbor.nodeID))
+				distance, ok = normalizeVectorIndexEdgeDistance(distance)
+				if !ok {
+					distance = math.MaxFloat32
+				}
+			}
+			edge.Distances[i] = distance
+		}
+		if err := add(vectorIndexNativeEdgeKey(nodeID, layer), *edge); err != nil {
+			return err
+		}
+	}
+	if node.deleted {
+		return add(vectorIndexNativeTombstoneKey(nodeID), nodeID)
+	}
+	return nil
 }
 
 func readVectorIndexNativeSnapshot(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string) (vectorIndexPersistSnapshot, int64, string, error) {

@@ -3720,7 +3720,7 @@ func (idx *VectorIndex) levelForDocumentID(documentID []byte) int {
 func (idx *VectorIndex) markGraphChangedLocked() {
 	idx.mutationSeq++
 	idx.searchViewCurrent.Store(false)
-	if idx.persistedEpoch != 0 {
+	if idx.nativeHNSWOwned || idx.persistedEpoch != 0 {
 		idx.persistedSnapshotDirty = true
 	}
 }
@@ -7184,20 +7184,23 @@ func (idx *VectorIndex) Stats() VectorIndexStats {
 		maxLevel = maxInt(maxLevel, idx.liveDelta.maxLevel)
 	}
 	stats := VectorIndexStats{
-		Name:                idx.name,
-		Field:               idx.field,
-		Metric:              idx.metric,
-		Encoding:            idx.encoding,
-		Dimensions:          idx.dimensions,
-		M:                   idx.m,
-		EfConstruction:      idx.efConstruction,
-		EfSearch:            idx.efSearch,
-		Nodes:               len(idx.nodes) + deltaNodes,
-		LiveDocs:            len(idx.currentNode) + deltaDocs,
-		MaxLevel:            maxLevel,
-		Epoch:               idx.persistedEpoch,
-		BytesDisk:           idx.persistedBytesDisk,
-		SnapshotDirty:       idx.persistedSnapshotDirty || (idx.nativePersistent && idx.persistedEpoch == 0 && idx.mutationSeq != 0),
+		Name:           idx.name,
+		Field:          idx.field,
+		Metric:         idx.metric,
+		Encoding:       idx.encoding,
+		Dimensions:     idx.dimensions,
+		M:              idx.m,
+		EfConstruction: idx.efConstruction,
+		EfSearch:       idx.efSearch,
+		Nodes:          len(idx.nodes) + deltaNodes,
+		LiveDocs:       len(idx.currentNode) + deltaDocs,
+		MaxLevel:       maxLevel,
+		Epoch:          idx.persistedEpoch,
+		BytesDisk:      idx.persistedBytesDisk,
+		// Shared native persistence is identified by its authenticated logical
+		// version; its physical root can lawfully remain zero after Save.
+		SnapshotDirty: idx.persistedSnapshotDirty || (idx.nativeHNSWOwned && idx.dirtyMeta) ||
+			(idx.nativePersistent && !idx.nativeHNSWOwned && idx.persistedEpoch == 0 && idx.mutationSeq != 0),
 		LastRebuildDuration: idx.lastRebuildDuration,
 		LiveANNFullRebuilds: idx.liveANNFullRebuilds,
 		LiveDeltaNodes:      deltaNodes,

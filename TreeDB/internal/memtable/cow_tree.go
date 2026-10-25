@@ -608,6 +608,14 @@ func (w *COWWriter) Prepare(entries []COWMutation, opts COWPrepareOptions) (*COW
 				p.abortUnpublished()
 				return nil, err
 			}
+			// This successful mutation has ended its probe/comparison/copy work.
+			// Retain every allocated backing cohort, including discarded growth,
+			// but return unspent work credit before admitting the next row.
+			if err = p.reconcileNodes(p.private.AllocationCharge()); err != nil {
+				work.prepared = nil
+				p.abortUnpublished()
+				return nil, err
+			}
 		}
 		logicalDelta.replace(len(e.Key), value, previous)
 	}

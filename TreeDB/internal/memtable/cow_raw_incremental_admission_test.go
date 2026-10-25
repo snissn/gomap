@@ -13,13 +13,17 @@ import (
 // without leaving room for the independent-path upper estimate. Admission may
 // follow the existing mutation engine, but must preserve whole-batch refusal.
 func TestCOWRawPreparationUsesRemainingCapacity(t *testing.T) {
-	for _, headroom := range []uint64{2 << 20, 64 << 10} {
+	for _, headroom := range []uint64{2 << 20, 256 << 10, 64 << 10, 32 << 10} {
 		t.Run(fmt.Sprint(headroom), func(t *testing.T) {
 			budget, writer := cowTestWriter(t, DefaultCOWLimits())
 			old := cowTestPublish(t, writer, cowTestEntries(1024))
 			var next *COWRoot
 			var blocker *COWExternalLease
 			t.Cleanup(func() {
+				if writer.pending != nil {
+					retirement := writer.pending.Cancel()
+					retirement.Drain()
+				}
 				if blocker != nil {
 					blocker.Close()
 				}
@@ -48,7 +52,7 @@ func TestCOWRawPreparationUsesRemainingCapacity(t *testing.T) {
 			}
 			before := budget.Stats()
 			prepared, err := writer.Prepare(entries, COWPrepareOptions{})
-			if headroom == 64<<10 {
+			if headroom == 32<<10 {
 				if !errors.Is(err, ErrCOWCapacity) || prepared != nil {
 					t.Fatalf("partial private preparation must refuse: prepared=%v err=%v", prepared, err)
 				}
@@ -66,6 +70,15 @@ func TestCOWRawPreparationUsesRemainingCapacity(t *testing.T) {
 			if prepared.Charge().Nodes != prepared.private.AllocationCharge() {
 				t.Fatal("node receipt is not the actual reconciled allocation")
 			}
+			charge := prepared.Charge()
+			expectedTemporary := upper.Temporary
+			if headroom != 32<<10 { // The retry after releasing that blocker uses the coarse path.
+				expectedTemporary += cowAllocation(uint64(unsafe.Sizeof(cowPreparedNodeWork{})))
+			}
+			if charge.Payload != upper.Payload || charge.Wrappers != upper.Wrappers || charge.Temporary != expectedTemporary || charge.Resources != upper.Resources || charge.Extra != upper.Extra {
+				t.Fatalf("incremental reconciliation refunded non-node ownership: charge=%+v upper=%+v", charge, upper)
+			}
+			t.Logf("headroom=%d actual=%+v coarse=%+v", headroom, charge, upper)
 			next = prepared.Publish()
 			if old.Len() != 1024 || next.Len() != 1280 {
 				t.Fatalf("whole images old=%d new=%d", old.Len(), next.Len())
