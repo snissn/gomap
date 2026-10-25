@@ -297,7 +297,8 @@ func TestNativeHNSWPublicSchemaDDLAdmission(t *testing.T) {
 	defer blocker.Close()
 	available := budget.Limits().MaxInFlightBytes - budget.Stats().ReservedBytes
 	// DDL's original capture/schema scratch fit; the admitted second graph does
-	// not. Every setup cut is pinned so exact receipt equality is meaningful.
+	// not. Pinned semantic cuts do not prevent preflight from refunding older
+	// physical checkpoint custody, but refusal must add no retained debt.
 	var schemaScratch uint64
 	proposed := IndexDefinition{Name: "new", Field: "new", ValueType: IndexValueString}
 	if err = nativeIndexSchemaScratch(read.meta, &proposed, func(n uint64) error { schemaScratch += memtable.COWAllocationCharge(n); return nil }); err != nil {
@@ -312,6 +313,7 @@ func TestNativeHNSWPublicSchemaDDLAdmission(t *testing.T) {
 	}
 	oldSchema, oldLease, oldCharge := idx.nativeHNSWSchemaState, idx.nativeHNSWLease, idx.nativeHNSWCharge
 	beforeGraph, _ := idx.persistSnapshot()
+	beforeLSN := c.nativeJSON.db.CommandWALNextLSN()
 	for i := 0; i < 3; i++ {
 		before := budget.Stats()
 		_, err = c.CreateIndex(IndexDefinition{Name: "new", Field: "new", ValueType: IndexValueString})
@@ -323,12 +325,17 @@ func TestNativeHNSWPublicSchemaDDLAdmission(t *testing.T) {
 		if e != nil {
 			t.Fatal(e)
 		}
-		if latest.capture.LogicalSequence() != read.capture.LogicalSequence() || !collectionMetaValuesEqual(latest.meta, read.meta) {
+		if latest.capture.LogicalSequence() != read.capture.LogicalSequence() ||
+			latest.collection.incarnation != read.collection.incarnation ||
+			latest.collection.documentGeneration != read.collection.documentGeneration ||
+			latest.collection.schema != read.collection.schema || !collectionMetaValuesEqual(latest.meta, read.meta) ||
+			c.nativeJSON.db.CommandWALNextLSN() != beforeLSN {
+			latest.Close()
 			t.Fatal("refused DDL published metadata")
 		}
 		latest.Close()
 		graph, _ := idx.persistSnapshot()
-		if before.ReservedBytes != after.ReservedBytes || before.ExternalLeases != after.ExternalLeases || idx.nativeHNSWSchemaState != oldSchema || idx.nativeHNSWLease != oldLease || idx.nativeHNSWCharge != oldCharge || !reflect.DeepEqual(beforeGraph, graph) {
+		if after.ReservedBytes > before.ReservedBytes || after.ExternalLeases > before.ExternalLeases || idx.nativeHNSWSchemaState != oldSchema || idx.nativeHNSWLease != oldLease || idx.nativeHNSWCharge != oldCharge || !reflect.DeepEqual(beforeGraph, graph) {
 			t.Fatalf("refusal changed custody: before=%+v after=%+v", before, after)
 		}
 	}

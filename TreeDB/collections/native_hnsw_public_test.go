@@ -868,14 +868,17 @@ func TestNativeHNSWPublicDeclaredCreateRefusalHasNoEffects(t *testing.T) {
 		t.Fatal(err)
 	}
 	meta := &CollectionMeta{Name: "declared", Options: CollectionOptions{DocumentFormat: DocumentFormatJSON}, VectorIndexes: []VectorIndexDefinition{def}}
+	beforeLSN := c.nativeJSON.db.CommandWALNextLSN()
 	for attempt := 0; attempt < 3; attempt++ {
 		before := budget.Stats()
-		if _, err = c.manager.CreateCollection(meta); !errors.Is(err, memtable.ErrCOWCapacity) {
+		if _, err = c.manager.CreateCollection(meta); !errors.Is(err, memtable.ErrCOWCapacity) || backenddb.CommitPublicationAccepted(err) {
 			t.Fatalf("attempt %d expected finite admission refusal: %v", attempt, err)
 		}
 		after := budget.Stats()
-		if after.ReservedBytes != before.ReservedBytes || after.ExternalLeases != before.ExternalLeases {
-			t.Fatalf("attempt %d refused create changed receipts: before=%+v after=%+v", attempt, before, after)
+		// Producer preflight can refund old physical checkpoint custody while
+		// these semantic cuts stay pinned. Refusal may add no retained debt.
+		if after.ReservedBytes > before.ReservedBytes || after.ExternalLeases > before.ExternalLeases || c.nativeJSON.db.CommandWALNextLSN() != beforeLSN {
+			t.Fatalf("attempt %d refused create added receipts or changed WAL: before=%+v after=%+v", attempt, before, after)
 		}
 	}
 	blocker.Close()
@@ -883,9 +886,18 @@ func TestNativeHNSWPublicDeclaredCreateRefusalHasNoEffects(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if current.capture.State() != read.capture.State() || current.capture.LogicalSequence() != read.capture.LogicalSequence() {
+	beforeState := read.capture.State().(*nativeEngineVersion)
+	afterState := current.capture.State().(*nativeEngineVersion)
+	_, declaredVisible := afterState.names.Get(meta.Name)
+	if current.capture.LogicalSequence() != read.capture.LogicalSequence() ||
+		current.collection.incarnation != read.collection.incarnation ||
+		current.collection.documentGeneration != read.collection.documentGeneration ||
+		current.collection.schema != read.collection.schema || !collectionMetaValuesEqual(current.meta, read.meta) ||
+		afterState.nextIncarnation != beforeState.nextIncarnation ||
+		afterState.names.Len() != beforeState.names.Len() || afterState.collections.Len() != beforeState.collections.Len() ||
+		declaredVisible || c.nativeJSON.db.CommandWALNextLSN() != beforeLSN {
 		current.Close()
-		t.Fatal("refused create published a catalog successor")
+		t.Fatal("refused create changed logical catalog, schema, incarnation, document generation or WAL")
 	}
 	current.Close()
 	if _, err = c.manager.OpenCollection(meta.Name); err == nil {
