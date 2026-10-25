@@ -1,10 +1,28 @@
 package db
 
 import (
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
+
+// OwnedPointerProjectionIterator borrows this reader's exact tree and snapshot.
+// The caller admits tree.OwnedPointerProjectionAllocationSize before calling,
+// serializes use with its enclosing read scope, and keeps this reader at a
+// stable address until the iterator is closed. It adds no snapshot/root owner.
+func (r *SnapshotRootReader) OwnedPointerProjectionIterator(start, end []byte, readLeaf func(page.LeafLogPtr, []byte) ([]byte, error)) (iterator.UnsafeIterator, error) {
+	if err := r.beginRead(); err != nil {
+		return nil, err
+	}
+	defer r.owner.endRead()
+	it := r.tree.OwnedPointerProjectionIterator(start, end, readLeaf)
+	if err := it.Error(); err != nil {
+		_ = it.Close()
+		return nil, err
+	}
+	return it, nil
+}
 
 // NativeReaderAtRoot constructs a by-value reader without adding to the
 // snapshot's root cache. The caller admits its containing storage before this

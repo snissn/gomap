@@ -91,14 +91,16 @@ func (n *nativeTextCatalog) iterator(root string, start, end []byte, deleted boo
 		return nil, err
 	}
 	it := &nativeTextIterator{scope: n, root: root, start: bytes.Clone(start), end: bytes.Clone(end), includeDeleted: deleted, max: max, onInspect: onInspect, inspectionError: inspectionError}
+	it.cursor.start, it.cursor.end = it.start, it.end
 	it.Seek(start)
 	if it.err != nil {
-		return nil, it.err
+		return nil, errors.Join(it.err, it.Close())
 	}
 	return it, nil
 }
 
 type nativeTextIterator struct {
+	cursor                 nativeDomainCursor
 	scope                  *nativeTextCatalog
 	root                   string
 	start, end, key, value []byte
@@ -127,6 +129,9 @@ func (it *nativeTextIterator) inspect() error {
 	return nil
 }
 func (it *nativeTextIterator) Seek(start []byte) {
+	it.seek(start, false)
+}
+func (it *nativeTextIterator) seek(start []byte, forward bool) {
 	it.valid = false
 	it.key, it.value = nil, nil
 	if it.scope == nil || it.err != nil {
@@ -143,13 +148,16 @@ func (it *nativeTextIterator) Seek(start []byte) {
 		it.err = err
 		return
 	}
+	if it.cursor.read.domain == nil {
+		it.cursor.read = domain
+	}
 	scratch, err := r.physicalScratch()
 	if err != nil {
 		it.err = err
 		return
 	}
 	for {
-		entry, found, err := domain.seek(start, it.end, scratch, r.readLeaf, false, it.inspect)
+		entry, found, err := it.cursor.read.seekWithCursor(start, it.end, scratch, r.readLeaf, false, it.inspect, &it.cursor, forward, it.scope.admit)
 		if err != nil {
 			it.err = err
 			return
@@ -170,6 +178,7 @@ func (it *nativeTextIterator) Seek(start []byte) {
 		key := append([]byte(nil), entry.Key...)
 		if entry.Flags&node.FlagTombstone != 0 && !it.includeDeleted {
 			start = append(key, 0)
+			forward = true
 			continue
 		}
 		var value []byte
@@ -196,7 +205,7 @@ func (it *nativeTextIterator) Next() {
 		it.valid = false
 		return
 	}
-	it.Seek(append(bytes.Clone(it.key), 0))
+	it.seek(append(bytes.Clone(it.key), 0), true)
 }
 func (it *nativeTextIterator) Valid() bool         { return it.valid && it.err == nil }
 func (it *nativeTextIterator) UnsafeKey() []byte   { return it.key }
@@ -211,10 +220,11 @@ func (it *nativeTextIterator) ValueCopy(dst []byte) []byte { return append(dst[:
 func (it *nativeTextIterator) IsDeleted() bool             { return it.flags&node.FlagTombstone != 0 }
 func (it *nativeTextIterator) Error() error                { return it.err }
 func (it *nativeTextIterator) Close() error {
+	err := it.cursor.close()
 	it.valid = false
 	it.scope = nil
 	it.start, it.end, it.key, it.value = nil, nil, nil, nil
-	return nil
+	return err
 }
 func (it *nativeTextIterator) Domain() ([]byte, []byte) { return it.start, it.end }
 

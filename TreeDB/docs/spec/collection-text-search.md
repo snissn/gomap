@@ -41,6 +41,16 @@ matrix are defined in `TreeDB/docs/spec/collection-text-v2-contract.md`.
   complete query. V1, multi-term/phrase/explain queries, storage inspection,
   rewrite and reducers retain the general record envelope. This changes
   admission sizing, not query budgets, ranking, index eligibility or ownership.
+- Native text range scans reuse the existing fixed owned physical-tree cursor
+  inside their original captured domain. Pending/captured COW sources keep the
+  same newest-first merge, including tombstones and per-entry revisions. Each
+  source is inspected before every probe, even when its physical candidate is
+  retained across memory-only results. Arbitrary seeks reposition that cursor
+  within its original `[start,end)` domain, clamping both source families to the
+  original lower bound;
+  forward movement advances it without descending from the root for each row.
+  Cursor backing is admitted before construction and detached before the read
+  and operation receipt are released; no new snapshot, pool or source pin exists.
 - No-WAL native collections use the maintained V2 rewrite/merge planner through
   their captured catalog. The six sparse output domains publish together through
   the existing native COW authority without replacing unaffected records or
