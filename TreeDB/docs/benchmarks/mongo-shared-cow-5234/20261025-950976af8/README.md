@@ -1,5 +1,7 @@
 # Ordinary standalone Mongo shared-COW qualification
 
+> Historical developmental evidence for source `950976af8688ba0a5ed7eaced44b82da25c44181`. The final reviewed runtime and fresh complete qualification are in [the d040 report](../20261025-d0407930e/README.md). Original outcomes and dispositions below remain source-bound; this packet does not qualify later runtime revisions. Reproduction now uses the landed maintained driver and frozen structured vector commands described in that report.
+
 Source/runtime: `950976af8688ba0a5ed7eaced44b82da25c44181`.
 Baseline: `f906b8a2aa1279ed6b6627028cba71d491db04c3` with the identical
 three maintained Go harness files. Go 1.26.0, GOMAXPROCS=4, Linux/ext4 on a local

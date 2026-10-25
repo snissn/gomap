@@ -1,0 +1,101 @@
+{
+  "BenchmarkStandalonePublicVectorBuildSaveLoad": {
+    "pairs": [
+      {
+        "pair": 1,
+        "ratios": {
+          "ns_op": 1.0284040662185605,
+          "bytes_op": 0.26599586164531397,
+          "allocs_op": 0.4078189137985475
+        }
+      },
+      {
+        "pair": 2,
+        "ratios": {
+          "ns_op": 0.944933408627818,
+          "bytes_op": 0.29921659073027906,
+          "allocs_op": 0.4074234688849027
+        }
+      },
+      {
+        "pair": 3,
+        "ratios": {
+          "ns_op": 0.9728502746085357,
+          "bytes_op": 0.18638449302576915,
+          "allocs_op": 0.4070557645714736
+        }
+      }
+    ],
+    "median_ratios": {
+      "ns_op": 0.9728502746085357,
+      "bytes_op": 0.26599586164531397,
+      "allocs_op": 0.4074234688849027
+    }
+  },
+  "BenchmarkStandalonePublicVectorSaveReopenLoad": {
+    "pairs": [
+      {
+        "pair": 1,
+        "ratios": {
+          "ns_op": 0.740169744832883,
+          "bytes_op": 0.22587347043601774,
+          "allocs_op": 0.9000858337746772
+        }
+      },
+      {
+        "pair": 2,
+        "ratios": {
+          "ns_op": 0.7569514079403838,
+          "bytes_op": 0.2210361360105621,
+          "allocs_op": 0.8911372719217345
+        }
+      },
+      {
+        "pair": 3,
+        "ratios": {
+          "ns_op": 0.7571979356082268,
+          "bytes_op": 0.21929035632614619,
+          "allocs_op": 0.895612185546023
+        }
+      }
+    ],
+    "median_ratios": {
+      "ns_op": 0.7569514079403838,
+      "bytes_op": 0.2210361360105621,
+      "allocs_op": 0.895612185546023
+    }
+  },
+  "BenchmarkStandalonePublicVectorSearch": {
+    "pairs": [
+      {
+        "pair": 1,
+        "ratios": {
+          "ns_op": 0.33150839247493524,
+          "bytes_op": 0.4701027889326898,
+          "allocs_op": 1.2666666666666666
+        }
+      },
+      {
+        "pair": 2,
+        "ratios": {
+          "ns_op": 0.3252199544459828,
+          "bytes_op": 0.47015475313190863,
+          "allocs_op": 1.2666666666666666
+        }
+      },
+      {
+        "pair": 3,
+        "ratios": {
+          "ns_op": 0.32709158836182495,
+          "bytes_op": 0.4701027889326898,
+          "allocs_op": 1.2666666666666666
+        }
+      }
+    ],
+    "median_ratios": {
+      "ns_op": 0.32709158836182495,
+      "bytes_op": 0.4701027889326898,
+      "allocs_op": 1.2666666666666666
+    }
+  }
+}
