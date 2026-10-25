@@ -60,6 +60,9 @@ graph and may refuse finite capacity before assignment. Charges are recomputed
 from current node/column storage, so obsolete scalar charge does not accumulate
 across DDL. A previously stale document generation remains stale; DDL does not
 bless incomplete graph coverage. Full schema authentication remains exact.
+This preparation performs work proportional to the surviving graph and scalar
+rows, and excludes queries on those receivers until DDL completes. It is a
+correctness and ownership tradeoff for index DDL, not a DDL speed improvement.
 
 Manual Insert and Tombstone share the coordinator mutation gate, runtime use lock
 and graph lock with ordinary mutation notification. Insert admits retained row
