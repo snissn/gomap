@@ -78,6 +78,6 @@ if command -v benchstat >/dev/null 2>&1; then
 fi
 
 python3 "$ROOT/scripts/treedb_vacuum_m0_summarize_test.py"
-python3 "$ROOT/scripts/treedb_vacuum_m0_summarize.py" --repo-root "$ROOT" --run-dir "$RUN_DIR" --stability-arm production
+python3 "$ROOT/scripts/treedb_vacuum_m0_summarize.py" --repo-root "$ROOT" --run-dir "$RUN_DIR" --stability-arm production --acceptance-contract v3
 
 echo "M0 artifacts written to $RUN_DIR"

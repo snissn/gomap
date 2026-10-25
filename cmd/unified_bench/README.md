@@ -1643,10 +1643,12 @@ not benchprof profile inputs. The public PL06 rows are an admitted-paused vacuum
 status fixture: unchanged foreground mutations enter the real recorder before
 the same vacuum resumes. Their revised timings do not measure a simultaneously
 advancing rebuild and are not comparable to historical uncoordinated PL06 rows.
-The production stability arm retains all 4,096 fixed operations, ten samples and
-the same three CV <= 0.10 predicates, with the coordinator enabled. Schema-v2
-results name the selected arm; historical legacy failures remain source-bound
-and are never relabeled. All public classification gates remain unchanged. See
+The production stability arm retains all 4,096 fixed operations and ten samples,
+with the coordinator enabled. Schema-v3 retains the unchanged total and
+foreground-p99 CV <= 0.10 gates; every maximum writer pause and its CV/failure
+remain diagnostic and require separate outcome-owner review before merge.
+Explicit v2 decoding retains all three original gates and historical failures.
+All public classification gates remain unchanged. See
 [the M0 contract](../../TreeDB/docs/performance/index-vacuum-m0.md) for boundaries
 and the incremental #4519 scope.
 
