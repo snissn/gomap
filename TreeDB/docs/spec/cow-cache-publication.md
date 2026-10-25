@@ -230,9 +230,9 @@ successor's independent block-decoder policy in that workspace; this borrowing
 does not add a generic decoder mutex wait. A busy basis takes the original
 cut-local traversal and block-decoder path. Shared capacity refusal also releases
 the basis mutex before trying the cut-local owner. Thus independent retained readers
-can still proceed while another owner holds shared scratch. Dictionary leaves
-continue through the complete caller cut's definition and decoder; pointer
-materialization occurs after the shared traversal mutex is released.
+can still proceed while another owner holds shared scratch. Dictionary leaf
+and pointer materialization occur after the shared traversal mutex is released,
+using the complete caller cut's exact file and dictionary identity.
 
 Each actual capacity is reserved before allocation. Cut-local capacity is
 refunded through the existing reader Close. Shared successor scratch remains
@@ -247,13 +247,27 @@ hits that need no decoder or buffer growth.
 Direct DB point reads and native physical readers retain the original shared
 workspace. Generic dictionary-free ZSTD decoding and pointer-value decoding
 also retain the original cache-owned decoder envelope, since duplicating generic
-state can exceed the default producer budget. Ordinary raw dictionary reads
-resolve definitions through their complete cut. Native physical value reads may
-also decode the normal producer's trained dictionary records: the shared decoder
+state can exceed the default producer budget. Owned version-successor reads first
+reuse an already-admitted matching cut-local dictionary decoder. Otherwise they
+decode through the original cache physical workspace, finishing leaf copy-out
+or owned value append before releasing its mutex. Borrowed snapshot and iterator
+results keep their original decoder ownership. A provider without independent
+definition admission retains the original complete-cut local route.
+Native physical value reads also decode the normal producer's trained dictionary
+records: the shared decoder
 owns independently admitted, SHA-verified definition bytes from the built-in pure
 read provider. A per-call provider capability never installs borrowed cut bytes
 in shared scratch or remains in the decoder. Partial preparation, replacement
 and final cache cleanup release the original definition owner and reservations.
+The shared workspace retains one generic producer decoder, reusing matching
+definitions and retiring incompatible idle storage before replacement admission.
+Different content-addressed definitions can reuse an inner ZSTD dictionary ID;
+switching definitions can therefore reconstruct the decoder. Its roughly 19 MiB
+conservative reservation is not a measurement of physical allocation per switch.
+On a borrowed generic decoder's capacity refusal, one nonblocking physical-mutex
+attempt may refund only idle shared generic storage and retry the same admission
+once after a refund. Busy or borrowed owners are never evicted. The original
+finite limits and legitimate capacity refusals remain in force.
 Warm decoders survive producer Close while held captures remain; a cold read
 after Close refuses fresh admission. This does not enable dictionary-compressed
 native external leaves, whose producer still writes the existing block format.

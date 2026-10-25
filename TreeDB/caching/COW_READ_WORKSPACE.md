@@ -36,3 +36,26 @@ requirement. Seek, decompression and checksum work still occur on each read.
 
 This changes transient ownership/reuse only, with no on-disk format, durability,
 GC or public API change.
+
+Owned version-successor reads resolve dictionary leaves and winning values
+through their exact retained cut. Decode into caller leaf storage or copy the
+winning value before releasing the cache physical mutex, using an independently
+owned dictionary definition. An already-admitted matching cut-local decoder can
+serve the same synchronous copy-out under the caller read mutex. Borrowed
+Snapshot and iterator results keep their original decoder lifetimes.
+
+The shared workspace retains one generic producer decoder. Same-producer reads
+reuse it; incompatible producer or capacity transitions retire idle backing
+before replacement admission. Alternating producer IDs can therefore rebuild a
+decoder; the approximately 19 MiB envelope is a conservative reservation, not a
+measurement of allocation per transition. Multiple definitions cannot simply be
+registered together: distinct content-addressed producer IDs can reuse the same
+inner zstd dictionary ID. Genuine oversized or concurrently retained borrowed
+scratch still receives the original explicit capacity refusal.
+
+If borrowed generic admission is refused, a single nonblocking physical-mutex
+attempt may refund an idle shared generic decoder and retry that same admission
+once. Busy shared scratch and other borrowed owners are never evicted or waited
+on by this fallback. Reference removal and decoder/definition closure precede
+receipt refund. The original limits, record inspection, full CRC, and definition
+provenance apply on every route.

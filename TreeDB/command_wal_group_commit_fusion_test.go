@@ -175,7 +175,9 @@ func TestPublicCommandWALIdleFusionDemandDuringAppendUsesSameCommand(t *testing.
 		}
 	}
 	assertPublicFusionMutationCount(t, opts.Dir, 2)
-	if db.commandWALGroupCommit.timer == nil {
+	// Collection may already have expired when the leader is scheduled. That
+	// common-collector path records a timeout without allocating a timer.
+	if db.commandWALGroupCommit.timer == nil && db.commandWALGroupCommit.triggerTimeout.Load() == 0 {
 		t.Fatal("changed demand did not return to common collection")
 	}
 	if got := db.commandWALGroupCommit.durableIntents.Load(); got != 0 {
