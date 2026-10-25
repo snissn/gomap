@@ -881,8 +881,20 @@ New external system leaves remain tracked for the final resource closure even
 when a preparation is invalidated.
 
 Pre-cutover mapped writeback includes the prepared system pages and earns no
-durability credit. System-tree time includes all preparation attempts outside the
-writer gate. The final bounded user tail, exact metadata/frontier binding,
+durability credit. After successful preflush and its existing hook, each bounded
+cutover attempt detaches and applies one additional private user delta while the
+recorder remains active, before draining publication debt and the existing
+before-cutover hook. Arrivals after that detach remain in the recorder for the
+final gated residual. The pass reuses ordinary delta ordering, shared-page
+retirement, outer-leaf flush and growth checks; dirt it creates is covered by the
+unchanged final durability transaction. It does not validate the prepared catalog
+or recoverable capability and does not loop to catch ongoing writers.
+
+`LateCatchupPasses` and `LateCatchupMutations`/point/range counts describe detached
+plans, including attempts later invalidated or canceled; `LateCatchupDuration`
+measures their private drain/apply interval. `UserTailMutations`/point/range counts
+continue to describe the actual gated residual across attempts. System-tree time
+includes all preparation attempts outside the writer gate. The final bounded user tail, exact metadata/frontier binding,
 resource/index/authority fences, namespace decision and runtime installation keep
 their existing ordering and writer exclusion. This applies without depending on
 WAL replay and does not combine DATA and PRIMARY authority or change ordinary ACKs.

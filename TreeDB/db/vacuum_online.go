@@ -71,6 +71,11 @@ type VacuumOnlineStats struct {
 	SystemReserveDuration                   time.Duration
 	CollectionBasisDuration                 time.Duration
 	PreflushDuration                        time.Duration
+	LateCatchupDuration                     time.Duration
+	LateCatchupPasses                       uint64
+	LateCatchupMutations                    uint64
+	LateCatchupPointMutations               uint64
+	LateCatchupRangeMutations               uint64
 	CutoverDuration                         time.Duration
 	SystemTreeDuration                      time.Duration
 	FinalPagerSyncDuration                  time.Duration
@@ -1119,6 +1124,32 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 				cleanupNewPager()
 				return err
 			}
+		}
+		// Preparation and preflush can accumulate a new user delta. Detach and
+		// apply it once while writers still enter the live generation; arrivals
+		// after this drain stay in the active recorder for the final gated cut.
+		// Do not chase writers or reuse this work as durability/capability credit.
+		if err := ctx.Err(); err != nil {
+			cleanupNewPager()
+			return err
+		}
+		lateStarted := time.Now()
+		lateOps, lateRanges := db.vacuum.DrainApplyPlan()
+		runStats.LateCatchupPasses++
+		runStats.LateCatchupPointMutations += uint64(len(lateOps))
+		runStats.LateCatchupRangeMutations += uint64(len(lateRanges))
+		runStats.LateCatchupMutations += uint64(len(lateOps) + len(lateRanges))
+		if hook := db.vacuumLateCatchupHook; hook != nil {
+			hook(len(lateOps), len(lateRanges))
+		}
+		lateErr := ctx.Err()
+		if lateErr == nil {
+			lateErr = applyTail(lateOps, lateRanges)
+		}
+		runStats.LateCatchupDuration += time.Since(lateStarted)
+		if lateErr != nil {
+			cleanupNewPager()
+			return lateErr
 		}
 		// Publication debt must be durable before its coordinator can be retired.
 		// Drain outside writeMu so stable I/O is not charged to the writer pause;

@@ -247,6 +247,7 @@ type DB struct {
 	vacuumBeforeRecorderFenceHook    func()
 	vacuumPagerSyncHook              func(vacuumPagerSyncPhase)
 	vacuumPreflushHook               func() error
+	vacuumLateCatchupHook            func(points, ranges int)
 	vacuumReplacementRuntimeHook     func(*rootPublicationRuntimeV1) error
 	vacuumOldRootPublicationStopHook func() error
 	vacuumAfterSwapPublishHook       func(VacuumOnlineStats)
