@@ -855,6 +855,11 @@ func (c *Collection) loadNativeHNSWAtRead(opts VectorIndexOptions, read *NativeJ
 	if !ok {
 		return nil, status, errVectorIndexNotDeclared
 	}
+	var err error
+	def, err = normalizeVectorIndexDefinition(def)
+	if err != nil {
+		return nil, status, err
+	}
 	name := "vector-index/" + def.Name
 	domain, ok := read.collection.domains.Get(name)
 	if !ok {
@@ -893,39 +898,32 @@ func (c *Collection) loadNativeHNSWAtRead(opts VectorIndexOptions, read *NativeJ
 		charge += n
 		return nil
 	}
-	snapshot, disk, reason, err := readNativeHNSWSnapshot(read, def, admit)
+	meta, disk, reason, err := readNativeHNSWMeta(read, def, admit)
 	if err != nil || reason != "" {
 		status.ExactFallbackReason = reason
-		if err != nil {
-			err = fmt.Errorf("collections: native vector snapshot decode (%d admitted bytes): %w", charge, err)
-		}
 		return nil, status, err
 	}
-
-	runtimeCharge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(VectorIndex{}))) + 64<<10
-	var idBytes uint64
-	for _, row := range snapshot.Nodes {
-		if uint64(len(row.DocumentID)) > ^uint64(0)-idBytes {
-			return nil, status, memtable.ErrCOWCapacity
-		}
-		idBytes += uint64(len(row.DocumentID))
-		n, e := nativeHNSWRowCharge(def, []byte(row.DocumentID))
-		if e != nil {
-			return nil, status, e
-		}
-		if n > ^uint64(0)-runtimeCharge {
-			return nil, status, memtable.ErrCOWCapacity
-		}
-		runtimeCharge += n
+	counts, reason, err := inspectNativeHNSWRecordKeys(read, "vector-index/"+def.Name, admit)
+	if err != nil || reason != "" {
+		status.ExactFallbackReason = reason
+		return nil, status, err
 	}
-	constructionPeak, err := nativeHNSWConstructionCharge(def, uint64(len(snapshot.Nodes)))
-	if err != nil || constructionPeak > ^uint64(0)-runtimeCharge {
+	if reason = validateVectorIndexPersistShape(meta, counts.nodes, counts.edges, counts.tombs, counts.docs); reason != "" {
+		status.ExactFallbackReason = reason
+		return nil, status, nil
+	}
+	// Exact final node descriptors are allocated before the first record. Six
+	// descriptor cohorts per row preserve the existing retained-growth contract;
+	// each row later adds the remainder of the shared nativeHNSWRowCharge.
+	rowDescriptors := uint64(6) * uint64(unsafe.Sizeof(vectorIndexNode{}))
+	runtimeCharge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(VectorIndex{}))) + 64<<10
+	if uint64(counts.nodes) > (^uint64(0)-runtimeCharge)/rowDescriptors {
 		return nil, status, memtable.ErrCOWCapacity
 	}
-	runtimeCharge += constructionPeak
+	runtimeCharge += uint64(counts.nodes) * rowDescriptors
 	runtimeLease, err := read.capture.NativeAllocator().AdmitNativeBytes(runtimeCharge)
 	if err != nil {
-		return nil, status, fmt.Errorf("collections: native vector snapshot runtime (%d decode bytes, %d runtime bytes): %w", charge, runtimeCharge, err)
+		return nil, status, err
 	}
 	retained := false
 	var owned *VectorIndex
@@ -938,20 +936,30 @@ func (c *Collection) loadNativeHNSWAtRead(opts VectorIndexOptions, read *NativeJ
 			}
 		}
 	}()
-
 	index, err = newVectorIndexWithMeta(c, vectorIndexOptionsFromDefinition(def), read.meta)
 	if err != nil {
 		return nil, status, err
 	}
-	if reason := index.loadPersistSnapshot(snapshot); reason != "" {
-		status.ExactFallbackReason = reason
-		return nil, status, nil
-	}
 	owned = index
 	index.nativeHNSWLease = runtimeLease
 	index.nativeHNSWCharge = runtimeCharge
-	index.nativeHNSWConstructionPeak = constructionPeak
-	index.nativeHNSWIDBytes = idBytes
+	// Cold conversion performs no insertion traversal and creates no insert
+	// scratch. Native mutation/fold admission grows this high-water term before
+	// insertion workers allocate anything; no reserved graph storage is refunded.
+	index.nativeHNSWConstructionPeak = 0
+	def.Dimensions = meta.Dimensions
+	graphDisk, reason, err := loadNativeHNSWRecords(index, read, def, meta, counts, admit)
+	if err != nil {
+		return nil, status, fmt.Errorf("collections: native vector direct load (%d decode bytes, %d runtime bytes): %w", charge, index.nativeHNSWCharge, err)
+	}
+	if reason != "" {
+		status.ExactFallbackReason = reason
+		return nil, status, nil
+	}
+	if graphDisk > math.MaxInt64-disk {
+		return nil, status, memtable.ErrCOWCapacity
+	}
+	disk += graphDisk
 	read.collection.schema.retain()
 	index.nativeHNSWSchemaState = read.collection.schema
 	index.nativeHNSWIncarnation = read.collection.incarnation
@@ -1005,17 +1013,6 @@ func appendNativeHNSWVersion(it iterator.UnsafeIterator, version *nativeHNSWRoot
 	return base, nil
 }
 
-func nativeHNSWDecodeCharge(key, value int) (uint64, error) {
-	n := uint64(key) + uint64(value)
-	if n > (^uint64(0)-512)/8 {
-		return 0, memtable.ErrCOWCapacity
-	}
-	// The largest decoded numeric element is an eight-byte int. JSON needs
-	// at least two bytes per element (digit and separator); growable slices
-	// can retain twice their length. Eight bytes per encoded byte covers that
-	// worst case, while512 covers map/record and duplicate node descriptors.
-	return memtable.COWAllocationCharge(512 + n*8), nil
-}
 func (idx *VectorIndex) nativeHNSWPersistenceCharge() (uint64, error) {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
@@ -1063,35 +1060,34 @@ func (idx *VectorIndex) nativeHNSWPersistenceCharge() (uint64, error) {
 	return memtable.COWAllocationCharge(total), nil
 }
 
-func readNativeHNSWSnapshot(read *NativeJSONRead, def VectorIndexDefinition, admit func(uint64) error) (snapshot vectorIndexPersistSnapshot, disk int64, reason string, resultErr error) {
-	normalized, normalizeErr := normalizeVectorIndexDefinition(def)
-	if normalizeErr != nil {
-		return snapshot, 0, vectorIndexFallbackMetaMismatch, normalizeErr
-	}
-	def = normalized
-
+func readNativeHNSWMeta(read *NativeJSONRead, def VectorIndexDefinition, admit func(uint64) error) (meta vectorIndexPersistMeta, disk int64, reason string, resultErr error) {
 	name := "vector-index/" + def.Name
 	domain, ok := read.collection.domains.Get(name)
 	if !ok {
-		return snapshot, 0, vectorIndexFallbackMissingGraphRoot, nil
+		return meta, 0, vectorIndexFallbackMissingGraphRoot, nil
 	}
-
 	raw, err := read.namedDomainGetAdmitted(name, []byte(vectorIndexNativeKeyMeta), admit)
 	if errors.Is(err, tree.ErrKeyNotFound) {
-		return snapshot, disk, vectorIndexFallbackMissingGraphRoot, nil
+		return meta, int64(len(raw)), vectorIndexFallbackMissingGraphRoot, nil
 	}
 	if err != nil {
-		return snapshot, disk, "", err
+		return meta, int64(len(raw)), "", err
 	}
-	if e := admit(uint64(len(raw)) * 16); e != nil {
-		return snapshot, disk, "", e
+	var metaPlan nativeHNSWDecodePlan
+	if e := metaPlan.allocation(uint64(len(raw)), 16); e != nil {
+		return meta, int64(len(raw)), "", e
 	}
-	var meta vectorIndexPersistMeta
+	if e := admit(metaPlan.charge); e != nil {
+		return meta, int64(len(raw)), "", e
+	}
+	if _, reason, e := planNativeHNSWDecode([]byte(vectorIndexNativeKeyMeta), raw, admit); e != nil || reason != "" {
+		return meta, int64(len(raw)), reason, e
+	}
 	if err = json.Unmarshal(raw, &meta); err != nil {
-		return snapshot, disk, "", err
+		return meta, int64(len(raw)), "", err
 	}
 	if meta.NativeLogicalVersion != domain.interpretation || meta.SourceDocumentGeneration != read.collection.documentGeneration || meta.SourceDocumentGenerationVersion != vectorIndexDocumentGenerationVersion {
-		return snapshot, disk, vectorIndexFallbackStaleDocumentRoot, nil
+		return meta, int64(len(raw)), vectorIndexFallbackStaleDocumentRoot, nil
 	}
 	// Persisted tuning cannot change the canonical graph's allocation bounds.
 	// The maintained decoder adopts these fields, so authenticate them before it
@@ -1100,8 +1096,32 @@ func readNativeHNSWSnapshot(read *NativeJSONRead, def VectorIndexDefinition, adm
 		meta.M != def.M || meta.EfConstruction != def.EfConstruction || meta.EfSearch != def.EfSearch ||
 		meta.Dimensions <= 0 || (def.Dimensions != 0 && meta.Dimensions != def.Dimensions) ||
 		!(meta.RebuildDeletedRatio > 0 && meta.RebuildDeletedRatio <= 1) {
-		return snapshot, disk, vectorIndexFallbackMetaMismatch, nil
+		return meta, int64(len(raw)), vectorIndexFallbackMetaMismatch, nil
 	}
+	if meta.PartitionLive != nil {
+		return meta, int64(len(raw)), vectorIndexFallbackMetaMismatch, nil
+	}
+	return meta, int64(len(raw)), "", nil
+}
+
+func readNativeHNSWSnapshot(read *NativeJSONRead, def VectorIndexDefinition, admit func(uint64) error) (snapshot vectorIndexPersistSnapshot, disk int64, reason string, resultErr error) {
+	normalized, normalizeErr := normalizeVectorIndexDefinition(def)
+	if normalizeErr != nil {
+		return snapshot, 0, vectorIndexFallbackMetaMismatch, normalizeErr
+	}
+	def = normalized
+
+	name := "vector-index/" + def.Name
+	_, ok := read.collection.domains.Get(name)
+	if !ok {
+		return snapshot, 0, vectorIndexFallbackMissingGraphRoot, nil
+	}
+
+	meta, _, reason, err := readNativeHNSWMeta(read, def, admit)
+	if err != nil || reason != "" {
+		return snapshot, disk, reason, err
+	}
+
 	// Decode incrementally with the maintained graph record codec. Each encoded
 	// record, decoder backing and eventual HNSW storage is admitted first.
 	snapshot.Meta = meta
@@ -1117,16 +1137,14 @@ func readNativeHNSWSnapshot(read *NativeJSONRead, def VectorIndexDefinition, adm
 		if !found {
 			break
 		}
-		n, e := nativeHNSWDecodeCharge(len(key), len(value))
-		if e != nil {
-			return snapshot, disk, "", e
-		}
-		if e = admit(n); e != nil {
-			return snapshot, disk, "", e
-		}
 		disk += int64(len(value))
 		if !bytes.Equal(key, []byte(vectorIndexNativeKeyMeta)) {
-			if reason := appendVectorIndexNativeSnapshotRecordV2(&snapshot, nodes, &maxNode, key, value); reason != "" {
+			plan, reason, e := planNativeHNSWDecode(key, value, admit)
+			if e != nil || reason != "" {
+				return snapshot, disk, reason, e
+			}
+			node, edge := plan.seeds()
+			if reason := appendVectorIndexNativeSnapshotSeededRecordV2(&snapshot, nodes, &maxNode, key, value, node, edge); reason != "" {
 				return snapshot, disk, reason, nil
 			}
 		}

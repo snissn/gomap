@@ -19,6 +19,26 @@ clean, already-saved runtime may satisfy Load without constructing a duplicate.
 A dirty or unsaved runtime cannot satisfy that cache path. An old captured read
 retains its original graph and value pointers through replacement and checkpoint.
 
+Cold native loads preflight individual saved record families with the existing
+borrowed JSON walker, then decode with the same maintained JSON record codec.
+Numeric arrays receive exact admitted capacities before decoding. Null or empty
+duplicate fields may discard those capacities; their later growth cohorts remain
+admitted too. The original cumulative operation receipt separately covers raw
+record copies, decoded strings, scanner nesting (including unknown fields and
+malformed input), and discarded decoder growth cohorts. A borrowed key-only census
+rejects unknown record families and sizes final node descriptors; disjoint family
+ranges then read each encoded value once. The maintained snapshot loader shares
+node conversion, edge validation and distance normalization, document-map checks,
+and final graph assembly with this native path. The native loader constructs final
+runtime rows directly under their original runtime receipt, without retaining a
+complete decoded snapshot beside them. No scratch credit is refunded during
+decoding. Cold conversion does no insertion traversal and retains no insertion
+workspace; the first later mutation or live-delta fold admits that construction
+high-water term before allocating it. This bound describes those owned record/backing allocations,
+not process RSS or inaccessible standard-library type caches. A cold-load capacity,
+codec, close or read error preserves its cause and reports search unavailable;
+only an actual concurrent publication conflict is classified for snapshot retry.
+
 Ordinary Flush consults canonical vector declarations, including when its handle
 predates vector DDL. It reuses covered registered runtimes, or builds the current
 canonical rows through the maintained builder before saving. This repair does

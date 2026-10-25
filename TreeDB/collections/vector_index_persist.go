@@ -1686,14 +1686,20 @@ func readVectorIndexNativeSnapshot(snap *backenddb.Snapshot, catalog *collection
 }
 
 func appendVectorIndexNativeSnapshotRecordV2(snapshot *vectorIndexPersistSnapshot, nodes map[int]vectorIndexPersistNode, maxNodeID *int, key, value []byte) string {
+	return appendVectorIndexNativeSnapshotSeededRecordV2(snapshot, nodes, maxNodeID, key, value, vectorIndexPersistNode{}, vectorIndexPersistEdges{})
+}
+
+// Optional native seeds own admitted array backing. The record codec and its
+// duplicate, ordinal and JSON validation remain shared with physical readers.
+func appendVectorIndexNativeSnapshotSeededRecordV2(snapshot *vectorIndexPersistSnapshot, nodes map[int]vectorIndexPersistNode, maxNodeID *int, key, value []byte, node vectorIndexPersistNode, edge vectorIndexPersistEdges) string {
 	switch {
 	case bytes.HasPrefix(key, []byte(vectorIndexNativeKeyPrefixNode)):
 		nodeID, ok := parseVectorIndexNativeOrdinal(string(key[len(vectorIndexNativeKeyPrefixNode):]))
 		if !ok {
 			return vectorIndexFallbackInvalidGraphRootKey
 		}
-		var node vectorIndexPersistNode
-		if err := json.Unmarshal(value, &node); err != nil {
+		var err error
+		if node, err = decodeVectorIndexPersistNode(value, node); err != nil {
 			return vectorIndexFallbackInvalidGraphRootEntry
 		}
 		if _, duplicate := nodes[nodeID]; duplicate {
@@ -1704,8 +1710,8 @@ func appendVectorIndexNativeSnapshotRecordV2(snapshot *vectorIndexPersistSnapsho
 			*maxNodeID = nodeID
 		}
 	case bytes.HasPrefix(key, []byte(vectorIndexNativeKeyPrefixEdge)):
-		var edge vectorIndexPersistEdges
-		if err := json.Unmarshal(value, &edge); err != nil {
+		var err error
+		if edge, err = decodeVectorIndexPersistEdge(value, edge); err != nil {
 			return vectorIndexFallbackInvalidGraphRootEntry
 		}
 		snapshot.Edges = append(snapshot.Edges, edge)
@@ -1729,6 +1735,16 @@ func appendVectorIndexNativeSnapshotRecordV2(snapshot *vectorIndexPersistSnapsho
 		return vectorIndexFallbackInvalidGraphRootKey
 	}
 	return ""
+}
+
+func decodeVectorIndexPersistNode(value []byte, seed vectorIndexPersistNode) (vectorIndexPersistNode, error) {
+	err := json.Unmarshal(value, &seed)
+	return seed, err
+}
+
+func decodeVectorIndexPersistEdge(value []byte, seed vectorIndexPersistEdges) (vectorIndexPersistEdges, error) {
+	err := json.Unmarshal(value, &seed)
+	return seed, err
 }
 
 func finalizeVectorIndexNativeSnapshotRecordsV2(snapshot *vectorIndexPersistSnapshot, nodes map[int]vectorIndexPersistNode, maxNodeID int) string {
@@ -2033,48 +2049,10 @@ func (idx *VectorIndex) loadPersistSnapshot(snapshot vectorIndexPersistSnapshot)
 		return vectorIndexFallbackInvalidDimensions
 	}
 	if len(snapshot.Nodes) == 0 {
-		if len(snapshot.Edges) != 0 {
-			return vectorIndexFallbackInvalidEdgeNode
-		}
-		if len(snapshot.Tombstones.NodeIDs) != 0 {
-			return vectorIndexFallbackInvalidTombstone
-		}
-		if len(snapshot.DocMap.Current) != 0 {
-			return vectorIndexFallbackInvalidDocMapNode
-		}
-		if snapshot.Meta.Entry >= 0 {
-			return vectorIndexFallbackInvalidEntry
-		}
-		idx.mu.Lock()
-		defer idx.mu.Unlock()
-		idx.name = snapshot.Meta.Name
-		idx.encoding = encoding
-		idx.dimensions = snapshot.Meta.Dimensions
-		idx.m = snapshot.Meta.M
-		idx.efConstruction = snapshot.Meta.EfConstruction
-		idx.efSearch = snapshot.Meta.EfSearch
-		idx.rebuildDeletedRatio = snapshot.Meta.RebuildDeletedRatio
-		idx.nodes = nil
-		idx.vectorRows = nil
-		idx.currentNode = make(map[string]int)
-		idx.entry = -1
-		idx.maxLevel = -1
-		idx.persistedEpoch = 0
-		idx.fullSnapshotBaseEpoch = 0
-		idx.persistedBytesDisk = 0
-		idx.persistedSnapshotDirty = false
-		idx.lastRebuildDuration = 0
-		idx.mutationSeq = 0
-		idx.sourceDocumentGeneration = snapshot.Meta.SourceDocumentGeneration
-		idx.sourceDocumentRootsValid = true
-		partitionLive, reason := idx.restorePartitionLiveSnapshotV2(snapshot.Meta.PartitionLive, snapshot.PartitionLiveOwners, snapshot.PartitionLiveDomains, snapshot.Meta.SourceDocumentGeneration)
-		if reason != "" {
+		if reason := validateVectorIndexPersistShape(snapshot.Meta, 0, len(snapshot.Edges), len(snapshot.Tombstones.NodeIDs), len(snapshot.DocMap.Current)); reason != "" {
 			return reason
 		}
-		idx.partitionLive = partitionLive
-		idx.partitionPreparation = snapshot.Meta.Preparation
-		idx.publishSearchViewLocked(true)
-		return ""
+		return idx.finishVectorIndexPersistLoadWithPartitions(snapshot.Meta, nil, make(map[string]int), snapshot.PartitionLiveOwners, snapshot.PartitionLiveDomains)
 	}
 	tombstoned := make(map[int]struct{}, len(snapshot.Tombstones.NodeIDs))
 	for _, nodeID := range snapshot.Tombstones.NodeIDs {
@@ -2095,92 +2073,145 @@ func (idx *VectorIndex) loadPersistSnapshot(snapshot vectorIndexPersistSnapshot)
 		if node.Deleted != deletedByTombstone {
 			return "tombstone_mismatch"
 		}
-		if node.Level < 0 {
-			return "invalid_node_level"
+		converted, reason := idx.convertVectorIndexPersistNode(node, snapshot.Meta)
+		if reason != "" {
+			return reason
 		}
-		nodes[i] = vectorIndexNode{
-			documentID: []byte(node.DocumentID),
-			vector:     append([]float32(nil), node.Vector...),
-			quantized:  append([]int8(nil), node.Quantized...),
-			quantScale: node.QuantScale,
-			level:      node.Level,
-			neighbors:  make([][]vectorIndexNeighbor, node.Level+1),
-			deleted:    node.Deleted,
-		}
-		if idx.nativeHNSWOwned {
-			for layer := range nodes[i].neighbors {
-				nodes[i].neighbors[layer] = make([]vectorIndexNeighbor, 0, idx.maxNeighborsForLayer(layer)+1)
-			}
-		}
-		nodes[i].cacheVectorNorms()
+		nodes[i] = converted
 	}
 	for _, edge := range snapshot.Edges {
-		if edge.NodeID < 0 || edge.NodeID >= len(nodes) {
-			return vectorIndexFallbackInvalidEdgeNode
+		if reason := idx.applyVectorIndexPersistEdge(nodes, edge, snapshot.Meta); reason != "" {
+			return reason
 		}
-		if edge.Layer < 0 || edge.Layer > nodes[edge.NodeID].level {
-			return "invalid_edge_layer"
-		}
-		for _, neighbor := range edge.Neighbor {
-			if neighbor < 0 || neighbor >= len(nodes) {
-				return "invalid_edge_neighbor"
-			}
-			if nodes[neighbor].level < edge.Layer {
-				return "edge_neighbor_missing_layer"
-			}
-		}
-		if len(edge.Distances) > len(edge.Neighbor) {
-			return "invalid_edge_distance_count"
-		}
-		var neighbors []vectorIndexNeighbor
-		if idx.nativeHNSWOwned {
-			if len(edge.Neighbor) > idx.maxNeighborsForLayer(edge.Layer) {
-				return "invalid_edge_neighbor_count"
-			}
-			neighbors = nodes[edge.NodeID].neighbors[edge.Layer][:len(edge.Neighbor)]
-		} else {
-			neighbors = make([]vectorIndexNeighbor, len(edge.Neighbor))
-		}
-		for i, neighbor := range edge.Neighbor {
-			if neighbor < 0 || neighbor >= len(nodes) {
-				return "invalid_edge_neighbor"
-			}
-			distance := float32(math.Inf(1))
-			if i < len(edge.Distances) {
-				distance = edge.Distances[i]
-			}
-			if normalized, ok := normalizeVectorIndexEdgeDistance(distance); ok {
-				distance = normalized
-			} else {
-				var err error
-				distance, err = vectorDistanceBetweenStoredNodes(&nodes[edge.NodeID], &nodes[neighbor], snapshot.Meta.Metric)
-				if err != nil {
-					return "invalid_edge_distance"
-				}
-				normalized, ok = normalizeVectorIndexEdgeDistance(distance)
-				if !ok {
-					return "invalid_edge_distance"
-				}
-				distance = normalized
-			}
-			neighbors[i] = vectorIndexNeighbor{nodeID: uint32(neighbor), distance: distance}
-		}
-		nodes[edge.NodeID].neighbors[edge.Layer] = neighbors
 	}
 	current := make(map[string]int, len(snapshot.DocMap.Current))
 	for docID, nodeID := range snapshot.DocMap.Current {
-		if nodeID < 0 || nodeID >= len(nodes) {
-			return vectorIndexFallbackInvalidDocMapNode
-		}
-		if nodes[nodeID].deleted {
-			return "docmap_points_to_deleted_node"
-		}
-		if !bytes.Equal(nodes[nodeID].documentID, []byte(docID)) {
-			return "docmap_document_mismatch"
+		if reason := validateVectorIndexPersistDocMapNode(nodes, docID, nodeID); reason != "" {
+			return reason
 		}
 		current[docID] = nodeID
 	}
-	entry := snapshot.Meta.Entry
+	return idx.finishVectorIndexPersistLoadWithPartitions(snapshot.Meta, nodes, current, snapshot.PartitionLiveOwners, snapshot.PartitionLiveDomains)
+}
+
+func validateVectorIndexPersistShape(meta vectorIndexPersistMeta, nodes, edges, tombs, docs int) string {
+	if nodes == 0 {
+		if edges != 0 {
+			return vectorIndexFallbackInvalidEdgeNode
+		}
+		if tombs != 0 {
+			return vectorIndexFallbackInvalidTombstone
+		}
+		if docs != 0 {
+			return vectorIndexFallbackInvalidDocMapNode
+		}
+		if meta.Entry >= 0 {
+			return vectorIndexFallbackInvalidEntry
+		}
+	}
+	if !vectorIndexNodeOrdinalsFitUint32(0, uint64(nodes)) {
+		return vectorIndexFallbackInvalidEdgeNode
+	}
+	return ""
+}
+
+// convertVectorIndexPersistNode and the edge/doc-map helpers are the maintained
+// snapshot-loader contract, also used by native family-at-a-time loading.
+func (idx *VectorIndex) convertVectorIndexPersistNode(node vectorIndexPersistNode, meta vectorIndexPersistMeta) (vectorIndexNode, string) {
+	if reason := validateVectorIndexPersistNode(node, meta); reason != "" {
+		return vectorIndexNode{}, reason
+	}
+	if node.Level < 0 {
+		return vectorIndexNode{}, "invalid_node_level"
+	}
+	out := vectorIndexNode{
+		documentID: []byte(node.DocumentID), vector: append([]float32(nil), node.Vector...),
+		quantized: append([]int8(nil), node.Quantized...), quantScale: node.QuantScale,
+		level: node.Level, neighbors: make([][]vectorIndexNeighbor, node.Level+1), deleted: node.Deleted,
+	}
+	if idx.nativeHNSWOwned {
+		for layer := range out.neighbors {
+			out.neighbors[layer] = make([]vectorIndexNeighbor, 0, idx.maxNeighborsForLayer(layer)+1)
+		}
+	}
+	out.cacheVectorNorms()
+	return out, ""
+}
+
+func (idx *VectorIndex) applyVectorIndexPersistEdge(nodes []vectorIndexNode, edge vectorIndexPersistEdges, meta vectorIndexPersistMeta) string {
+	if edge.NodeID < 0 || edge.NodeID >= len(nodes) {
+		return vectorIndexFallbackInvalidEdgeNode
+	}
+	if edge.Layer < 0 || edge.Layer > nodes[edge.NodeID].level {
+		return "invalid_edge_layer"
+	}
+	for _, neighbor := range edge.Neighbor {
+		if neighbor < 0 || neighbor >= len(nodes) {
+			return "invalid_edge_neighbor"
+		}
+		if nodes[neighbor].level < edge.Layer {
+			return "edge_neighbor_missing_layer"
+		}
+	}
+	if len(edge.Distances) > len(edge.Neighbor) {
+		return "invalid_edge_distance_count"
+	}
+	var neighbors []vectorIndexNeighbor
+	if idx.nativeHNSWOwned {
+		if len(edge.Neighbor) > idx.maxNeighborsForLayer(edge.Layer) {
+			return "invalid_edge_neighbor_count"
+		}
+		neighbors = nodes[edge.NodeID].neighbors[edge.Layer][:len(edge.Neighbor)]
+	} else {
+		neighbors = make([]vectorIndexNeighbor, len(edge.Neighbor))
+	}
+	for i, neighbor := range edge.Neighbor {
+		if neighbor < 0 || neighbor >= len(nodes) {
+			return "invalid_edge_neighbor"
+		}
+		distance := float32(math.Inf(1))
+		if i < len(edge.Distances) {
+			distance = edge.Distances[i]
+		}
+		if normalized, ok := normalizeVectorIndexEdgeDistance(distance); ok {
+			distance = normalized
+		} else {
+			var err error
+			distance, err = vectorDistanceBetweenStoredNodes(&nodes[edge.NodeID], &nodes[neighbor], meta.Metric)
+			if err != nil {
+				return "invalid_edge_distance"
+			}
+			normalized, ok = normalizeVectorIndexEdgeDistance(distance)
+			if !ok {
+				return "invalid_edge_distance"
+			}
+			distance = normalized
+		}
+		neighbors[i] = vectorIndexNeighbor{nodeID: uint32(neighbor), distance: distance}
+	}
+	nodes[edge.NodeID].neighbors[edge.Layer] = neighbors
+	return ""
+}
+
+func validateVectorIndexPersistDocMapNode(nodes []vectorIndexNode, docID string, nodeID int) string {
+	if nodeID < 0 || nodeID >= len(nodes) {
+		return vectorIndexFallbackInvalidDocMapNode
+	}
+	if nodes[nodeID].deleted {
+		return "docmap_points_to_deleted_node"
+	}
+	if !bytes.Equal(nodes[nodeID].documentID, []byte(docID)) {
+		return "docmap_document_mismatch"
+	}
+	return ""
+}
+
+func (idx *VectorIndex) finishVectorIndexPersistLoad(meta vectorIndexPersistMeta, nodes []vectorIndexNode, current map[string]int) string {
+	return idx.finishVectorIndexPersistLoadWithPartitions(meta, nodes, current, nil, nil)
+}
+
+func (idx *VectorIndex) finishVectorIndexPersistLoadWithPartitions(meta vectorIndexPersistMeta, nodes []vectorIndexNode, current map[string]int, owners []vectorIndexPartitionLivePersistOwnerV1, domains []vectorIndexPartitionLivePersistDomainV1) string {
+	entry := meta.Entry
 	if entry < 0 || entry >= len(nodes) || nodes[entry].deleted {
 		entry = -1
 		for i := range nodes {
@@ -2192,13 +2223,13 @@ func (idx *VectorIndex) loadPersistSnapshot(snapshot vectorIndexPersistSnapshot)
 	}
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
-	idx.name = snapshot.Meta.Name
-	idx.encoding = encoding
-	idx.dimensions = snapshot.Meta.Dimensions
-	idx.m = snapshot.Meta.M
-	idx.efConstruction = snapshot.Meta.EfConstruction
-	idx.efSearch = snapshot.Meta.EfSearch
-	idx.rebuildDeletedRatio = snapshot.Meta.RebuildDeletedRatio
+	idx.name = meta.Name
+	idx.encoding, _ = normalizeVectorIndexEncoding(meta.Encoding)
+	idx.dimensions = meta.Dimensions
+	idx.m = meta.M
+	idx.efConstruction = meta.EfConstruction
+	idx.efSearch = meta.EfSearch
+	idx.rebuildDeletedRatio = meta.RebuildDeletedRatio
 	idx.nodes = nodes
 	idx.vectorRows = nil
 	idx.currentNode = current
@@ -2210,14 +2241,14 @@ func (idx *VectorIndex) loadPersistSnapshot(snapshot vectorIndexPersistSnapshot)
 	idx.persistedSnapshotDirty = false
 	idx.lastRebuildDuration = 0
 	idx.mutationSeq = 0
-	idx.sourceDocumentGeneration = snapshot.Meta.SourceDocumentGeneration
+	idx.sourceDocumentGeneration = meta.SourceDocumentGeneration
 	idx.sourceDocumentRootsValid = true
-	partitionLive, reason := idx.restorePartitionLiveSnapshotV2(snapshot.Meta.PartitionLive, snapshot.PartitionLiveOwners, snapshot.PartitionLiveDomains, snapshot.Meta.SourceDocumentGeneration)
+	partitionLive, reason := idx.restorePartitionLiveSnapshotV2(meta.PartitionLive, owners, domains, meta.SourceDocumentGeneration)
 	if reason != "" {
 		return reason
 	}
 	idx.partitionLive = partitionLive
-	idx.partitionPreparation = snapshot.Meta.Preparation
+	idx.partitionPreparation = meta.Preparation
 	idx.publishSearchViewLocked(true)
 	return ""
 }

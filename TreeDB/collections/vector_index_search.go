@@ -3100,7 +3100,7 @@ func (c *Collection) searchNativeHNSWAtReadView(opts VectorIndexSearchOptions, b
 		}
 		unlock()
 		if err != nil {
-			return response, fmt.Errorf("%w: native runtime load: %w", ErrVectorIndexSnapshotMismatch, err)
+			return response, nativeHNSWLoadSearchError(err)
 		}
 		if index == nil || (didLoad && !load.Loaded) {
 			return response, fmt.Errorf("%w: native runtime unavailable: %s", ErrVectorIndexSearchUnavailable, load.ExactFallbackReason)
