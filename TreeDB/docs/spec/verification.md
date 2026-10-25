@@ -4533,3 +4533,12 @@ boundaries, retained payload ownership and logical seeks;
 damage and nonzero reserve beyond the first buffer; and
 `TestFixedWALStreamPartialPhysicalReadKeepsEOF` for the original partial-read
 count and EOF identity after physical truncation of a captured prefix.
+
+The `TestCommandWALCleanupEmptyFixed*` families cover first-frame rotation,
+including an oversized first atomic command, positive empty-container validation,
+active/generation protection, pins and pathname replacement, physical accounting
+and namespace-sync debt. Reader reopen checks retain uncovered values and LSNs;
+they do not substitute for crash recovery. The unchanged public
+`TestPublicCommandWALCheckpointReleasesCoveredRotationDebtBeforeNextBarrier`
+requires checkpoint cleanup to reclaim every covered predecessor, including a
+validated frame-free reserve.

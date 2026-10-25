@@ -4449,6 +4449,12 @@ is constant time per extent; arbitrary logical seeks use the validated index.
 Neither buffer changes the full reserve scan, frame validation, captured prefix,
 or the reader's ownership of its descriptor.
 
+A fully validated, frame-free fixed container may be reclaimed by covered-prefix
+cleanup through the same root, replay-lineage, active-generation, pin and exact
+file-identity guards as occupied segments. Its logical debit is zero; its actual
+physical reserve remains subject to namespace persistence accounting. An empty
+stream or an unvalidated/damaged container does not establish this eligibility.
+
 Writer/reader/recovery positions are logical stream offsets. Stable-resource
 byte frontiers are physical immutable extent ends, never physical capacity.
 Exclusive startup suffix repair copies the original header and retained complete
