@@ -5,6 +5,55 @@ TreeDB Mongo gateway or a MongoDB server. It is intended to make the first
 Mongo-compatible product benchmarks reproducible, especially ops/sec and disk
 usage comparisons.
 
+## Standalone product opener
+
+The command below measures indexed updates through `OpenStandaloneServer` and
+the official driver. The executable's configurable backend harness below has a
+different construction path; use this benchmark when evaluating startup defaults.
+
+```sh
+GOWORK=off GOMAXPROCS=4 go test ./cmd/mongo_gateway_bench -run '^$' \
+  -bench '^BenchmarkStandalonePublicIndexedUpdate$' -benchmem -benchtime=1000x -count=1
+```
+
+It uses durable and relaxed command-WAL profiles, one/eight writers, two
+secondary indexes, 64 disjoint rows per writer, and a 256-byte payload. Every
+operation changes an indexed value. The timed interval runs from sending
+updates through receiving all `w:1,j:unspecified` acknowledgements; the resolved
+profile supplies the durability policy. Setup and Close are outside timing.
+Output includes ACK/s, whole-process client-plus-server B/op and allocs/op,
+native-route activation, physical WAL sync counters, and Close time. These are
+Go benchmark text/profile artifacts, inspected directly with `go tool pprof`,
+not benchprof inputs. Record deferred work separately before making sustained
+performance claims. Compare prebuilt binaries with identical harness bytes on
+exact baseline/candidate sources, alternate on a quiet host, and retain failures.
+
+The fixed retained protocol is in
+[`mongo-shared-cow-measurement.md`](../../TreeDB/docs/spec/mongo-shared-cow-measurement.md).
+Its Python 3.10+ driver runs prebuilt binaries in fresh processes, verifies binary
+hashes and the actual profile/route/fixture, and retains every fixed sample:
+
+```sh
+python3 cmd/mongo_gateway_bench/scripts/run_shared_cow_qualification.py \
+  manifest.json primary /mnt/fast4tb/mongo-qualification/primary
+python3 cmd/mongo_gateway_bench/scripts/run_shared_cow_qualification.py \
+  manifest.json resources /mnt/fast4tb/mongo-qualification/resources
+```
+
+The manifest supplies `tmpdir` plus `baseline` and `candidate` objects, each with
+absolute `binary` and `cwd` paths and the binary's `sha256`. Record the source,
+harness and environment identities alongside them before collection. Output
+directories must be new. The driver prewrites the complete plan and unrun
+receipts, then records raw logs, local host inventories, failures and parsed
+receipts without retrying. A successful driver exit means the batch finished;
+inspect every receipt and the numeric summary. It does not certify isolation,
+resources, capabilities, recovery, CI or review.
+
+An inventory, log, or process-launch failure records
+`INFRASTRUCTURE_UNAVAILABLE` with its stage and OS error, leaves metrics null,
+and continues the fixed plan. A process that exits nonzero retains that exit
+code and null metrics. Neither failure is retried or counted as a valid sample.
+
 ## Build
 
 ```sh
@@ -864,3 +913,58 @@ The benchmark intentionally keeps BSON format questions visible. If TreeDB load
 or read phases spend a meaningful amount of time re-encoding documents in future
 profiles, that is evidence for adding a native BSON collection document format
 beside JSON and template-v1.
+
+The opt-in `TestStandalonePublicResourceDiagnostic` in
+`cmd/mongo_gateway_bench` complements the uninstrumented public benchmark:
+
+```sh
+GOMAP_MONGO_PUBLIC_DIAGNOSTIC=1 go test ./cmd/mongo_gateway_bench \
+  -run '^TestStandalonePublicResourceDiagnostic$' -count=1 -timeout=20m -v
+```
+
+It uses the same product opener and official driver, a held ordinary collection
+read view, 10,000 indexed updates per cell and 4 KiB payloads. Optional
+`GOMAP_MONGO_DIAGNOSTIC_OPERATIONS` and `GOMAP_MONGO_DIAGNOSTIC_PAYLOAD` select
+explicit fixture sizes. Preallocated latency slots report p50/p95/p99/max;
+one-second observations sample whole-process heap/RSS, logical file sizes and available
+owning-engine COW/WAL/checkpoint counters. When available, `StandaloneServer.Stats`
+exposes the owning TreeDB diagnostics without opening another backend; earlier
+products use their existing backend Stats. Missing historical counters remain
+absent. Reader release, natural two-second idle maintenance, and
+close/GC are separately labeled; no checkpoint is imposed between phases.
+Timestamps, periodic observation and held reads make this a separate latency and
+resource experiment, not throughput/allocation qualification from the primary
+benchmark. File bytes are regular-file sizes, not allocated disk blocks.
+
+Run each diagnostic cell in a fresh process (for example
+`-run '^TestStandalonePublicResourceDiagnostic$/^command_wal_durable$/^writers=8$'`)
+for resource comparisons. Sampled heap/RSS values are not guaranteed peaks;
+latencies describe this closed-loop writer load. Reports include attempted and
+completed counts and mark any test failure; failed or incomplete runs have null
+latency quantiles and remain retained evidence.
+
+The portable `BenchmarkStandalonePublicVectorBuildSaveLoad` and
+`BenchmarkStandalonePublicVectorSearch` guard the ordinary collection/vector
+APIs of the actual standalone owner. Both use `no_wal_fast`, 512 BSON rows,
+8 dimensions, cosine distance and M=16. Build/save/load excludes fixture setup;
+steady Search warms the graph, requests five ANN results and disables exact
+fallback. These are direct ordinary APIs, not Mongo wire vector-search results.
+`BenchmarkStandalonePublicVectorSaveReopenLoad` separately includes Save,
+physical owner Close, a fresh owner, Load and a validating ANN query. The
+Build/Save/hot-Load benchmark uses each implementation's public logical-save
+boundary and cache reuse; it does not establish equivalent physical work by
+itself. Profile-derived sync policy remains unchanged.
+Run identical harness overlays on baseline/candidate in fresh processes:
+
+```sh
+GOMAXPROCS=4 go test ./cmd/mongo_gateway_bench -run '^$' \
+  -bench '^BenchmarkStandalonePublicVectorSearch$' -benchmem -benchtime=10000x -count=1
+GOMAXPROCS=4 go test ./cmd/mongo_gateway_bench -run '^$' \
+  -bench '^BenchmarkStandalonePublicVectorBuildSaveLoad$' -benchmem -benchtime=10x -count=1
+GOMAXPROCS=4 go test ./cmd/mongo_gateway_bench -run '^$' \
+  -bench '^BenchmarkStandalonePublicVectorSaveReopenLoad$' -benchmem -benchtime=10x -count=1
+```
+
+Retain before/after samples and investigate material timing/allocation
+regressions before promotion. A successful small fixture is not large-graph
+qualification. These ordinary Go rows are not benchprof artifact inputs.
