@@ -922,9 +922,10 @@ read view, 10,000 indexed updates per cell and 4 KiB payloads. Optional
 `GOMAP_MONGO_DIAGNOSTIC_OPERATIONS` and `GOMAP_MONGO_DIAGNOSTIC_PAYLOAD` select
 explicit fixture sizes. Preallocated latency slots report p50/p95/p99/max;
 one-second observations sample whole-process heap/RSS, logical file sizes and available
-owning-engine COW/WAL/checkpoint counters. `StandaloneServer.Stats` exposes the
-owning TreeDB diagnostics without opening another backend. Missing historical
-counters remain absent. Reader release, natural two-second idle maintenance, and
+owning-engine COW/WAL/checkpoint counters. When available, `StandaloneServer.Stats`
+exposes the owning TreeDB diagnostics without opening another backend; earlier
+products use their existing backend Stats. Missing historical counters remain
+absent. Reader release, natural two-second idle maintenance, and
 close/GC are separately labeled; no checkpoint is imposed between phases.
 Timestamps, periodic observation and held reads make this a separate latency and
 resource experiment, not throughput/allocation qualification from the primary
