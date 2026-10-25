@@ -749,24 +749,6 @@ func TestVectorIndexSearcherQuantizedSearchWithBufferSuccessAndErrorReset1926(t 
 		t.Fatalf("rerank buffer/results stats=%+v buffer.results=%d idBytes=%d", reranked.Stats, len(buffer.results), len(buffer.idBytes))
 	}
 	assertScalarU8PackNativeQuantizedRerankNoDocumentGuardrailStats2657(t, reranked.Stats, len(rows), def.Dimensions)
-	quantizedAllocs := testing.AllocsPerRun(100, func() {
-		got, err := searcher.SearchWithBuffer(quantizedOpts, &buffer)
-		if err != nil || len(got.Results) != 2 {
-			panic("unexpected quantized SearchWithBuffer allocation probe result")
-		}
-	})
-	if quantizedAllocs != 0 {
-		t.Fatalf("quantized SearchWithBuffer steady-state allocs/run=%v want 0", quantizedAllocs)
-	}
-	rerankAllocs := testing.AllocsPerRun(100, func() {
-		got, err := searcher.SearchWithBuffer(rerankOpts, &buffer)
-		if err != nil || len(got.Results) != 2 {
-			panic("unexpected quantized_rerank SearchWithBuffer allocation probe result")
-		}
-	})
-	if rerankAllocs != 0 {
-		t.Fatalf("quantized_rerank SearchWithBuffer steady-state allocs/run=%v want 0", rerankAllocs)
-	}
 	got, err := searcher.SearchWithBuffer(VectorIndexSearcherSearchOptions{
 		Query:              query,
 		QueryMode:          VectorIndexQueryModeQuantizedRerank,
@@ -785,6 +767,48 @@ func TestVectorIndexSearcherQuantizedSearchWithBufferSuccessAndErrorReset1926(t 
 	if err != nil || len(validAgain.Results) != 2 {
 		t.Fatalf("valid SearchWithBuffer after quantized error results=%d err=%v", len(validAgain.Results), err)
 	}
+	// Keep repeated search/reset correctness in race builds. Exact allocation
+	// counters belong to an isolated normal process, as in the other vector
+	// allocation gates; AllocsPerRun observes process-global malloc counters.
+	if collectionsRaceEnabled {
+		wantQuantized := scalarU8QuantizedTopKForTest1926(t, rows, query, 2)
+		wantRerank := exactColumnGraphTopKForTest(t, rows, query, 2)
+		for i := 0; i < 100; i++ {
+			for _, probe := range []struct {
+				opts VectorIndexSearcherSearchOptions
+				want []columnVectorGraphNativeSearchResult
+			}{{quantizedOpts, wantQuantized}, {rerankOpts, wantRerank}} {
+				got, err := searcher.SearchWithBuffer(probe.opts, &buffer)
+				if err != nil {
+					t.Fatalf("repeated SearchWithBuffer: %v", err)
+				}
+				assertVectorIndexSearchResultsV4(t, got.Results, probe.want, false)
+			}
+		}
+		return
+	}
+	if !enterIsolatedVectorAllocationGate(t, "searcher-quantized-buffer-success-error-reset") {
+		return
+	}
+	quantizedAllocs := testing.AllocsPerRun(100, func() {
+		got, err := searcher.SearchWithBuffer(quantizedOpts, &buffer)
+		if err != nil || len(got.Results) != 2 {
+			panic("unexpected quantized SearchWithBuffer allocation probe result")
+		}
+	})
+	if quantizedAllocs != 0 {
+		t.Fatalf("quantized SearchWithBuffer steady-state allocs/run=%v want 0", quantizedAllocs)
+	}
+	rerankAllocs := testing.AllocsPerRun(100, func() {
+		got, err := searcher.SearchWithBuffer(rerankOpts, &buffer)
+		if err != nil || len(got.Results) != 2 {
+			panic("unexpected quantized_rerank SearchWithBuffer allocation probe result")
+		}
+	})
+	if rerankAllocs != 0 {
+		t.Fatalf("quantized_rerank SearchWithBuffer steady-state allocs/run=%v want 0", rerankAllocs)
+	}
+
 }
 
 func TestVectorIndexSearcherQuantizedAssetUnavailableCounters2416(t *testing.T) {

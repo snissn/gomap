@@ -1,4 +1,39 @@
-# Index Vacuum M0 Baseline
+# Index Vacuum Capture
+
+## Current production stability contract
+
+The capture script now measures
+`BenchmarkVacuumIndexOnlineCollectionProductionForegroundChurn/bytes_64x`.
+It uses the existing shared 4,096-operation fixture (2,048 point writes and
+2,048 range deletes), with the publication coordinator enabled and the
+production recoverable-root maintenance entry. It retains ten fresh interleaved
+samples and the same three CV <= 0.10 predicates: total vacuum time, maximum
+writer pause, and foreground p99. Every sample must complete all fixed work,
+with zero vacuum errors, exposure misses or concurrent aborts. The independent
+160-operation PL06 public status arm and its classifier remain unchanged; they
+cannot replace the 4,096-operation stability arm.
+
+Run `RUN_DIR=/mnt/fast4tb/<task>/vacuum-m0 scripts/treedb_vacuum_m0_capture.sh`.
+New schema-v2 output names its stability arm and exact benchmark; raw files are
+`raw/production-*.txt` and `raw/public-*.txt`, with
+`production-benchstat-input.txt`. The summarizer binds raw benchmark identity,
+fixed iteration count and successful process completion. Its explicit
+`--stability-arm legacy` mode reads historical legacy captures without
+relabeling their metrics or failures. The capture script selects production.
+
+This is a prospective contract revision. Historical legacy captures and failed
+CV predicates remain valid under their original source and contract. A new
+production result requires a complete capture at its actual clean source head;
+route separation and the public status arm alone provide no quantitative pass.
+The legacy entry requires a package-private test capability and deliberately
+removes the coordinator. It remains available as a characterization benchmark,
+while the current product gate exercises the production path. This maintenance
+fixture is distinct from Dgraph's cached COW commit-path qualification.
+
+The historical sections below document the previous capture contract and its
+scheduling revisions; their legacy artifact names describe those captures.
+
+## Historical M0 baseline
 
 Issue #3943 froze the fail-closed production contract before M1 changed the
 internal online-vacuum backend. The fixture and capture script remain
