@@ -137,7 +137,11 @@ splits, and per-workload counters) into a "Collection Workload Metadata" table.
   - `block.pprof` / `mutex.pprof` (global run-level fallback/supplement)
   - `trace.out` (detected, but not deeply analyzed yet)
 - `benchprof_results.json` preserves selected TreeDB stats under
-  `runs[].treedb_stats` when the benchmark exposes them. Checkpoint-enabled
+  `runs[].treedb_stats` when the benchmark exposes them. The per-engine map
+  retains actual opened-instance profile, durability, read-integrity,
+  benchmark-unsafe and memtable-mode Stats fields; missing fields remain absent.
+  Requested flags and pre-open option text cannot substitute for these fields.
+  Checkpoint-enabled
   runs also expose `runs[].checkpoint_durations_seconds`, optional
   `runs[].checkpoint_settle_seconds`, and checkpoint-local selected stats under
   `runs[].checkpoint_treedb_stats`. This is the raw

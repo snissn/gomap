@@ -23,6 +23,12 @@ func Selected(stats map[string]string) map[string]string {
 
 func isSelectedKey(key string) bool {
 	switch {
+	case key == "treedb.profile.resolved",
+		key == "treedb.durability_mode",
+		key == "treedb.vlog.read_integrity",
+		key == "treedb.profile.bench_unsafe",
+		key == "treedb.cache.memtable_mode":
+		return true
 	case key == "treedb.commit_seq":
 		return true
 	case key == "treedb.applied_command_lsn":

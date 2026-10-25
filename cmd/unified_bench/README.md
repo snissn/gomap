@@ -381,7 +381,13 @@ This writes:
 For TreeDB runs, `benchprof_results.json` also preserves selected TreeDB stats
 under `runs[].treedb_stats`, including ordered-root/root-apply, value-log mmap
 read counters, and generic plus leaf-specific mmap sealed-budget caps used by
-raw-engine review gates. Checkpoint-enabled runs also export
+raw-engine review gates. Per-engine snapshots also preserve the opened database's
+`treedb.profile.resolved`, `treedb.durability_mode`,
+`treedb.vlog.read_integrity`, `treedb.profile.bench_unsafe`, and
+`treedb.cache.memtable_mode` when exposed. These are actual instance facts,
+separate from requested flags and pre-open report configuration. Missing fields
+remain missing; an explicit memtable override does not establish the default.
+Checkpoint-enabled runs also export
 `runs[].checkpoint_durations_seconds`; selected settled runs export
 `runs[].checkpoint_settle_seconds`; and TreeDB checkpoint snapshots are preserved
 under `runs[].checkpoint_treedb_stats` so immediate-vs-settled checkpoint rows can
