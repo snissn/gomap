@@ -12,10 +12,10 @@ Close can dispose those resources, even when rewrite reports a partial-work
 error. New admission after Close remains refused. This role does not authorize
 other backend maintenance callbacks. See [value-log lifecycle](value-log-lifecycle.md).
 
-Eligible ordinary WAL-on private-COW handles with outer leaf logging schedule
-one bounded leaf-generation pack slice by default. External command-WAL mode
-counts as WAL-on even though it disables the redundant cache journal. Explicit
-loop disable, an explicitly false leaf-pack switch, restore/catch-up phases, and
+Eligible private-COW handles with outer leaf logging and either the cache
+journal enabled or ExternalCommandWAL active schedule one bounded leaf-generation
+pack slice by default. ExternalCommandWAL disables the redundant cache journal.
+Explicit loop disable, an explicitly false leaf-pack switch, restore/catch-up phases, and
 the maintenance pause file retain their meanings. A slice retains `flushMu`
 through copy and equivalent-basis adoption, without setting the full cache
 maintenance admission fence. Mutable/frozen sources, revisions, command coverage,

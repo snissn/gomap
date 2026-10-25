@@ -67,8 +67,9 @@ func cowLeafCacheCounter(t *testing.T, backend *backenddb.DB, name string) uint6
 	return value
 }
 
-// Real COW point/successor dispatch first verifies write-origin pages, then
-// reuses only existing decoded slots. No helper-only populated cache fixture.
+// The write-populated case first verifies write-origin pages, then reuses
+// their decoded slots without another store. The cold reopen is tested below
+// in TestCOWColdLeafCacheReopenAdmission, without write-origin backing.
 func TestCOWPhysicalLeafCacheActivationAndCapturedCuts(t *testing.T) {
 	for _, compressed := range []bool{false, true} {
 		for _, entries := range []int{128, -1} {

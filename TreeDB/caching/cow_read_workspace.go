@@ -639,7 +639,7 @@ func (b *cowBackendBasis) readPhysicalLeafWithWorkspace(c *cowCache, w *cowReadW
 	if err != nil {
 		return nil, err
 	}
-	if err = b.snapshot.StoreVerifiedCachedLeafPage(ptr, f, identity, data); err != nil {
+	if err = b.snapshot.AdmitVerifiedCachedLeafPage(ptr, f, identity, data); err != nil {
 		return nil, err
 	}
 	return data, nil

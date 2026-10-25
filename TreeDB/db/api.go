@@ -1036,6 +1036,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.process.read_path.outer_leaf.cache.buckets"] = fmt.Sprintf("%d", cacheStats.Buckets)
 	stats["treedb.process.read_path.outer_leaf.cache.ways"] = fmt.Sprintf("%d", cacheStats.Ways)
 	stats["treedb.process.read_path.outer_leaf.cache.bytes"] = fmt.Sprintf("%d", cacheStats.Bytes)
+	stats["treedb.process.read_path.outer_leaf.cache.backing_bytes"] = fmt.Sprintf("%d", cacheStats.BackingBytes)
 	stats["treedb.process.read_path.outer_leaf.cache.write_admission_policy"] = db.leafPageReadCache.writeAdmissionPolicyName()
 	stats["treedb.process.read_path.outer_leaf.cache.read_miss_admission_skips"] = fmt.Sprintf("%d", cacheStats.ReadMissAdmissionSkips)
 	stats["treedb.process.read_path.outer_leaf.cache.read_miss_admission_candidate_skips"] = fmt.Sprintf("%d", cacheStats.ReadMissAdmissionCandidateSkips)

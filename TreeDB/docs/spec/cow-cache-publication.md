@@ -275,15 +275,21 @@ checks reuse the window when present and otherwise read their exact bytes.
 Registered file identity checks, full CRC verification before cache promotion,
 page validation, cache disablement and captured-cut lifetimes remain required.
 
-After a full verified decode, repeated COW misses may refill the original
-backend leaf cache using only slot backing already allocated by its original
-owner. Admission keeps the cache's existing repeated-miss, epoch, victim and
-nonblocking lock policy. It copies bytes rather than retaining reader scratch;
-an unallocated selected slot declines without allocating or changing its page.
+After a full verified decode, repeated COW misses may populate the original
+backend leaf cache through explicit cache-owned admission. Each configured slot
+can lazily allocate one 4096-byte page, reused on eviction; no reader scratch or
+file is retained. The default 8192 slots bound page backing to 32 MiB, and the
+maximum 262144 slots bound it to 1 GiB, shared across readers. Admission keeps
+the cache's existing repeated-miss, epoch, victim and nonblocking lock policy;
+disabled caches or contended slots decline while the uncached read succeeds.
+The separate `StoreVerifiedCachedLeafPage` API still permits only existing
+backing and never allocates a cold page. Cache `bytes` counts valid-entry bytes;
+`backing_bytes` counts allocated slot backing, including legacy/write admission,
+which can remain retained independently of validity. This cache-owned capacity
+is separate from the caller's temporary workspace admission.
 Existing byte-identical pages can be marked record-verified. Replacement resets
 independent page-checksum verification, and every subsequent hit still requires
-record inspection through the exact retained file identity. This bounded path
-adds no retained bytes or owner; an initially unallocated cache can remain cold.
+record inspection through the exact retained file identity.
 
 On Windows and race builds, `ReadAt` makes fixed inspection buffers heap
 allocations. The serialized read workspace conservatively reserves the original
