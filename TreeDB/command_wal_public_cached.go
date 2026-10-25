@@ -1763,22 +1763,53 @@ func (b *commandWALPublicBatch) closeCOWAdapter() {
 type nativePublicCommandWALCompletion struct {
 	db           *DB
 	registration publicCommandWALRegistration
+	bytes        int
+	durable      bool
+	announced    bool
+	registered   bool
 }
 
 func (tdb *DB) NativeCommandWALCompletionBytes() uint64 {
 	return uint64(unsafe.Sizeof(nativePublicCommandWALCompletion{}))
 }
-func (tdb *DB) RegisterNativeCommandWAL(bytes int, durable bool, appendFrame func(bool) (uint64, error)) (db.NativeCommandWALCompletion, error) {
-	completion := &nativePublicCommandWALCompletion{db: tdb}
-	registration, err := tdb.registerPublicCommandWALPolicy(bytes, nil, durable, nil, appendFrame, true)
-	completion.registration = registration
-	return completion, err
+func (tdb *DB) PrepareNativeCommandWAL(bytes int, durable bool) (db.NativeCommandWALCompletion, error) {
+	if tdb == nil || !tdb.commandWALCached || tdb.backend == nil {
+		return nil, ErrClosed
+	}
+	completion := &nativePublicCommandWALCompletion{db: tdb, bytes: bytes, durable: durable, announced: durable}
+	if durable {
+		// Announce before native producer serialization, without holding a public
+		// gate. The existing solo path can now distinguish queued producers from
+		// an uncontended request using the same counter as ordinary writes.
+		tdb.commandWALGroupCommit.durableIntents.Add(1)
+	}
+	return completion, nil
+}
+func (c *nativePublicCommandWALCompletion) ReleaseNativeCommandWAL() {
+	if c.announced {
+		c.announced = false
+		c.db.commandWALGroupCommit.durableIntents.Add(-1)
+	}
+}
+func (c *nativePublicCommandWALCompletion) RegisterNativeCommandWAL(appendFrame func(bool) (uint64, error)) error {
+	if c.db == nil || c.registered {
+		return ErrClosed
+	}
+	c.registered = true
+	defer c.ReleaseNativeCommandWAL()
+	registration, err := c.db.registerPublicCommandWALPolicy(c.bytes, nil, c.durable, nil, appendFrame, c.announced)
+	c.registration = registration
+	return err
 }
 func (c *nativePublicCommandWALCompletion) CompleteNativeCommandWAL(installErr error) error {
+	c.ReleaseNativeCommandWAL()
 	tdb, registration := c.db, c.registration
 	c.db, c.registration = nil, publicCommandWALRegistration{}
 	if tdb == nil {
 		return ErrClosed
+	}
+	if hook := tdb.commandWALGroupCommit.testBeforeNativeComplete; hook != nil {
+		hook()
 	}
 	publication := registration.publicCommandWALPublication
 	err := installErr

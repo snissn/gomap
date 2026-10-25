@@ -369,7 +369,20 @@ func (db *DB) writeNativePublication(b *Batch, native *backenddb.NativePreparedP
 		return result, completionErr
 	}
 	r := &cowNativeCommandWALRequest{batch: b, backend: backend, native: native, intent: intent, owner: owner, bridge: bridge, durable: effectiveDurable}
-	defer func() { *r = cowNativeCommandWALRequest{}; r = nil; completionLease.Close() }()
+	defer func() {
+		if r.completion != nil {
+			r.completion.ReleaseNativeCommandWAL()
+		}
+		*r = cowNativeCommandWALRequest{}
+		r = nil
+		completionLease.Close()
+	}()
+	if bridge != nil {
+		r.completion, err = bridge.PrepareNativeCommandWAL(intent.PayloadBytes(), effectiveDurable)
+		if err != nil {
+			return result, err
+		}
+	}
 	err = b.WriteAfterCommandWALAppendWithPreparedRevision(effectiveDurable, r.register)
 	if r.completion != nil {
 		err = r.completion.CompleteNativeCommandWAL(err)
@@ -408,9 +421,7 @@ func (r *cowNativeCommandWALRequest) register() error {
 		_, err := r.append(r.durable)
 		return err
 	}
-	var err error
-	r.completion, err = r.bridge.RegisterNativeCommandWAL(r.intent.PayloadBytes(), r.durable, r.append)
-	return err
+	return r.completion.RegisterNativeCommandWAL(r.append)
 }
 func (r *cowNativeCommandWALRequest) append(sync bool) (uint64, error) {
 	b, backend, native, intent, owner := r.batch, r.backend, r.native, r.intent, r.owner
@@ -427,7 +438,7 @@ func (r *cowNativeCommandWALRequest) append(sync bool) (uint64, error) {
 	}
 	var assigned backenddb.CommandWALLSNRange
 	var appendErr error
-	if r.bridge != nil {
+	if r.bridge != nil && !sync {
 		assigned, appendErr = guard.AppendNativeDurablePrefixParticipant(intent)
 	} else {
 		assigned, appendErr = guard.AppendWithAssignedRange(intent, sync)

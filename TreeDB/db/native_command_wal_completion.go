@@ -4,13 +4,17 @@ import "github.com/snissn/gomap/TreeDB/internal/transactionowner"
 
 // NativeCommandWALCompletion is transient request ownership through the ordinary
 // public group's final ACK. It owns neither a command nor an engine version.
-type NativeCommandWALCompletion interface{ CompleteNativeCommandWAL(error) error }
+type NativeCommandWALCompletion interface {
+	RegisterNativeCommandWAL(func(bool) (uint64, error)) error
+	CompleteNativeCommandWAL(error) error
+	ReleaseNativeCommandWAL()
+}
 
 // NativeCommandWALCompletionBridge is bound once by public Open. Direct backend
 // constructors have no bridge and retain their original inline sync behavior.
 type NativeCommandWALCompletionBridge interface {
 	NativeCommandWALCompletionBytes() uint64
-	RegisterNativeCommandWAL(int, bool, func(bool) (uint64, error)) (NativeCommandWALCompletion, error)
+	PrepareNativeCommandWAL(int, bool) (NativeCommandWALCompletion, error)
 }
 
 func (db *DB) BindNativeCommandWALCompletion(owner *transactionowner.Owner, bridge NativeCommandWALCompletionBridge) error {

@@ -14,30 +14,31 @@ const (
 )
 
 type publicCommandWALGroupCommit struct {
-	mu                    sync.Mutex
-	cond                  sync.Cond
-	wake                  chan struct{}
-	timer                 *time.Timer
-	leaderActive          bool
-	nextTicket            uint64
-	completedTicket       uint64
-	publishTicket         uint64
-	terminalErr           error
-	pendingCount          int
-	pendingCommits        int
-	pendingBytes          int
-	pendingForceTickets   []uint64
-	pendingTriggered      bool
-	retryableErrors       map[uint64]error
-	delay                 time.Duration
-	maxCommits            int
-	maxBytes              int
-	testBeforeSync        func(groupSize int)
-	testAfterRegister     func(ticket uint64, durable bool)
-	testAfterWait         func(ticket uint64)
-	testBeforeLeaderWait  func()
-	testAfterSoloRegister func(ticket uint64)
-	durableIntents        atomic.Int64
+	mu                       sync.Mutex
+	cond                     sync.Cond
+	wake                     chan struct{}
+	timer                    *time.Timer
+	leaderActive             bool
+	nextTicket               uint64
+	completedTicket          uint64
+	publishTicket            uint64
+	terminalErr              error
+	pendingCount             int
+	pendingCommits           int
+	pendingBytes             int
+	pendingForceTickets      []uint64
+	pendingTriggered         bool
+	retryableErrors          map[uint64]error
+	delay                    time.Duration
+	maxCommits               int
+	maxBytes                 int
+	testBeforeSync           func(groupSize int)
+	testAfterRegister        func(ticket uint64, durable bool)
+	testAfterWait            func(ticket uint64)
+	testBeforeLeaderWait     func()
+	testAfterSoloRegister    func(ticket uint64)
+	testBeforeNativeComplete func()
+	durableIntents           atomic.Int64
 
 	attempts             atomic.Uint64
 	groups               atomic.Uint64
@@ -109,9 +110,10 @@ func (tdb *DB) registerPublicCommandWAL(bytes int, preparedBytes *int, durable b
 	return tdb.registerPublicCommandWALPolicy(bytes, preparedBytes, durable, pendingBookkeeping, appendFrame, false)
 }
 
-// Native installers serialize under P; joining the delayed group avoids making
-// that serialization look like a genuinely solo synchronous request.
-func (tdb *DB) registerPublicCommandWALPolicy(bytes int, preparedBytes *int, durable bool, pendingBookkeeping *time.Duration, appendFrame func(bool) (uint64, error), join bool) (publicCommandWALRegistration, error) {
+// Native callers may have announced durability before producer serialization.
+// That request withdraws its own announcement after registration; ordinary
+// callers announce and withdraw within this function.
+func (tdb *DB) registerPublicCommandWALPolicy(bytes int, preparedBytes *int, durable bool, pendingBookkeeping *time.Duration, appendFrame func(bool) (uint64, error), announced bool) (publicCommandWALRegistration, error) {
 	var publication publicCommandWALRegistration
 	if tdb == nil || !tdb.commandWALCached || tdb.backend == nil || appendFrame == nil {
 		return publication, ErrClosed
@@ -144,17 +146,17 @@ func (tdb *DB) registerPublicCommandWALPolicy(bytes int, preparedBytes *int, dur
 		}
 	}
 	if durable {
-		tdb.commandWALGroupCommit.durableIntents.Add(1)
-		durableIntentPending = true
-		defer releaseDurableIntent()
-		if !join {
-			if direct, attempted, err := tdb.trySoloDurablePublicCommandWAL(
-				pendingBookkeeping,
-				appendFrame,
-			); attempted {
-				releaseDurableIntent()
-				return direct, err
-			}
+		if !announced {
+			tdb.commandWALGroupCommit.durableIntents.Add(1)
+			durableIntentPending = true
+			defer releaseDurableIntent()
+		}
+		if direct, attempted, err := tdb.trySoloDurablePublicCommandWAL(
+			pendingBookkeeping,
+			appendFrame,
+		); attempted {
+			releaseDurableIntent()
+			return direct, err
 		}
 	}
 	var ticket uint64

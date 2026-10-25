@@ -16,22 +16,29 @@ type nativeCompletionTestBridge struct {
 	failure                  error
 	appendCalls, completions int
 	assigned                 uint64
+	appendSync               bool
 }
 
 func (*nativeCompletionTestBridge) NativeCommandWALCompletionBytes() uint64 {
 	return uint64(unsafe.Sizeof(nativeCompletionTestRequest{}))
 }
-func (b *nativeCompletionTestBridge) RegisterNativeCommandWAL(_ int, durable bool, appendFrame func(bool) (uint64, error)) (backenddb.NativeCommandWALCompletion, error) {
+func (b *nativeCompletionTestBridge) PrepareNativeCommandWAL(_ int, durable bool) (backenddb.NativeCommandWALCompletion, error) {
 	if !durable {
 		panic("durable obligation lost")
 	}
-	b.appendCalls++
-	lsn, err := appendFrame(false)
-	b.assigned = lsn
-	return &nativeCompletionTestRequest{bridge: b}, err
+	return &nativeCompletionTestRequest{bridge: b}, nil
 }
 
 type nativeCompletionTestRequest struct{ bridge *nativeCompletionTestBridge }
+
+func (r *nativeCompletionTestRequest) RegisterNativeCommandWAL(appendFrame func(bool) (uint64, error)) error {
+	b := r.bridge
+	b.appendCalls++
+	lsn, err := appendFrame(b.appendSync)
+	b.assigned = lsn
+	return err
+}
+func (*nativeCompletionTestRequest) ReleaseNativeCommandWAL() {}
 
 func (r *nativeCompletionTestRequest) CompleteNativeCommandWAL(err error) error {
 	b := r.bridge
@@ -67,9 +74,17 @@ func TestCOWNativeDeferredCompletionPreservesInstalledReceipt(t *testing.T) {
 }
 
 func TestCOWNativeParticipantAssignedFailureKeepsIdentity(t *testing.T) {
+	testCOWNativeCompletionAssignedFailureKeepsIdentity(t, false)
+}
+
+func TestCOWNativeSoloAssignedSyncFailureKeepsIdentity(t *testing.T) {
+	testCOWNativeCompletionAssignedFailureKeepsIdentity(t, true)
+}
+
+func testCOWNativeCompletionAssignedFailureKeepsIdentity(t *testing.T, sync bool) {
 	registerNativeBridgeTestCommand()
 	cache, backend := nativeBridgeFixture(t, true)
-	bridge := &nativeCompletionTestBridge{}
+	bridge := &nativeCompletionTestBridge{appendSync: sync}
 	if err := backend.BindNativeCommandWALCompletion(cache.cow.txnOwner, bridge); err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +97,11 @@ func TestCOWNativeParticipantAssignedFailureKeepsIdentity(t *testing.T) {
 	intent := nativeTxnIntent(t, backend, true)
 	failure := errors.New("original participant assigned before flush failure")
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
-		if event.Resource == durabilitycut.ResourceCommandWAL && event.Point == durabilitycut.AfterDependencyAppend {
+		point := durabilitycut.AfterDependencyAppend
+		if sync {
+			point = durabilitycut.BeforeDependencyFileSync
+		}
+		if event.Resource == durabilitycut.ResourceCommandWAL && event.Point == point {
 			return failure
 		}
 		return nil

@@ -168,7 +168,7 @@ func TestNativeExistingIndexedJSONInsertCapturedReplay(t *testing.T) {
 			}
 			if profile != ProfileNoWALFast {
 				accepted := handle.CommandWALNextLSN() - 1
-				if accepted != basisLSN+nativePublicSingletonFrames(profile, 2) || physicalApplied() != basisLSN {
+				if accepted != basisLSN+2 || physicalApplied() != basisLSN {
 					t.Fatalf("suffix basis=%d physical=%d accepted=%d", basisLSN, physicalApplied(), accepted)
 				}
 				if childDir != "" {
@@ -267,7 +267,7 @@ func TestNativeExistingIndexedJSONInsertCapturedReplay(t *testing.T) {
 						}
 					}
 				})
-				if after.FramesApplied-before.FramesApplied != nativePublicSingletonFrames(profile, 2) || after.FrameErrors != before.FrameErrors {
+				if after.FramesApplied-before.FramesApplied != 2 || after.FrameErrors != before.FrameErrors {
 					t.Fatalf("replay %+v -> %+v", before, after)
 				}
 				handle, err := database.NativeSemanticBackend()

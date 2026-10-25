@@ -121,17 +121,17 @@ func testNativeColumnPendingCase(t *testing.T, family string, fixture nativeColu
 		output, err := cmd.CombinedOutput()
 		t.Logf("child:\n%s", output)
 		var exit *exec.ExitError
-		if !errors.As(err, &exit) || exit.ExitCode() != sentinel || !bytes.Contains(output, []byte("COLUMN UNAPPLIED basis=4 accepted=6")) || bytes.Contains(output, []byte("DATA RACE")) {
+		if !errors.As(err, &exit) || exit.ExitCode() != sentinel || !bytes.Contains(output, []byte("COLUMN UNAPPLIED basis=2 accepted=3")) || bytes.Contains(output, []byte("DATA RACE")) {
 			t.Fatalf("unapplied child: %v\n%s", err, output)
 		}
-		checkNativeColumnFrame(t, indexedSliceOptions(ProfileCommandWALDurable, dir), 4)
+		checkNativeColumnFrame(t, indexedSliceOptions(ProfileCommandWALDurable, dir), 2)
 		before := workstats.Read().Replay
 		database, err := Open(indexedSliceOptions(ProfileCommandWALDurable, dir))
 		if err != nil {
 			t.Fatal(err)
 		}
 		after := workstats.Read().Replay
-		if after.FramesApplied-before.FramesApplied != 2 || after.FrameErrors != before.FrameErrors {
+		if after.FramesApplied-before.FramesApplied != 1 || after.FrameErrors != before.FrameErrors {
 			_ = database.Close()
 			t.Fatalf("one aggregate replay: %+v -> %+v", before, after)
 		}
@@ -270,7 +270,7 @@ func runNativeColumnPending(t *testing.T, dir string, crash bool, fixture native
 		t.Fatal(err)
 	}
 	basis := indexedCRUDAppliedLSN(t, handle)
-	if basis != 4 || handle.CommandWALNextLSN() != 5 {
+	if basis != 2 || handle.CommandWALNextLSN() != 3 {
 		t.Fatalf("typed seed basis=%d next=%d", basis, handle.CommandWALNextLSN())
 	}
 	held, err := collection.OpenCollectionReadView()
@@ -353,7 +353,7 @@ func runNativeColumnPending(t *testing.T, dir string, crash bool, fixture native
 	if err != nil {
 		t.Fatal(err)
 	}
-	if handle.CommandWALNextLSN() != basis+3 || indexedCRUDAppliedLSN(t, handle) != basis || database.Stats()["treedb.cache.cow.txn.logical_seq"] != strconv.FormatUint(sequence+1, 10) {
+	if handle.CommandWALNextLSN() != basis+2 || indexedCRUDAppliedLSN(t, handle) != basis || database.Stats()["treedb.cache.cow.txn.logical_seq"] != strconv.FormatUint(sequence+1, 10) {
 		t.Fatal("raw+typed commit did not install exactly one logical publication and one pending frame")
 	}
 	checkNativeColumnCurrent(t, manager, database, fixture)
@@ -372,7 +372,7 @@ func runNativeColumnPending(t *testing.T, dir string, crash bool, fixture native
 	if err := database.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
-	if indexedCRUDAppliedLSN(t, handle) != basis+2 {
+	if indexedCRUDAppliedLSN(t, handle) != basis+1 {
 		t.Fatal("checkpoint omitted aggregate typed suffix")
 	}
 	checkNativeColumnCurrent(t, manager, database, fixture)
@@ -451,8 +451,8 @@ func checkNativeColumnReopened(t *testing.T, database *DB, fixture nativeColumnP
 		}
 	}()
 	checkNativeColumnCurrent(t, manager, database, fixture)
-	if indexedCRUDAppliedLSN(t, handle) != 6 {
-		t.Fatal("reopened typed LSN does not include the aggregate and its barrier")
+	if indexedCRUDAppliedLSN(t, handle) != 3 {
+		t.Fatal("reopened typed LSN is not the single aggregate frame")
 	}
 	if err := manager.Close(); err != nil {
 		t.Fatal(err)
@@ -492,7 +492,7 @@ func checkNativeColumnFrame(t *testing.T, opts Options, basis uint64) {
 				_ = reader.Close()
 				t.Fatal(err)
 			}
-			if envelope.LSN > basis && envelope.Kind != commitlog.CommandKindDurablePrefixBarrier {
+			if envelope.LSN > basis {
 				suffix = append(suffix, envelope)
 			}
 		}

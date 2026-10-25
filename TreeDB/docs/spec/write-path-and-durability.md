@@ -30,11 +30,15 @@ Previously captured immutable cuts retain their original basis and values. The
 same ordering applies to the final public checkpoint during `Close`.
 
 Native collection commands opened through the public COW owner use the same
-public command-WAL group coordinator as raw writes. Each command retains its
-original assigned LSN and installs one complete logical successor before waiting
-for durability. A group stabilizes the dependency-complete prefix through the
-existing root-neutral durable-prefix barrier; no waiter acknowledges before that
-barrier succeeds. The barrier adds a canonical LSN without adding a logical
+public command-WAL group coordinator as raw writes. Durable requests announce
+before native producer serialization, without holding a public progress gate.
+The coordinator's existing solo eligibility can synchronously append an
+uncontended original mutation; queued requests register with the same group.
+Each command retains its original assigned LSN and installs one complete logical
+successor. Grouped commands install before awaiting durability. A group stabilizes
+the dependency-complete prefix through the existing root-neutral durable-prefix
+barrier; no grouped waiter acknowledges before that barrier succeeds. The barrier
+adds a canonical LSN without adding a logical
 transaction. Immediate logical visibility and WAL completion therefore do not
 imply that the physical `AppliedCommandLSN` has advanced. Checkpoint or recovery
 publishes that physical frontier. Direct backend constructors keep their inline

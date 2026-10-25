@@ -77,7 +77,7 @@ func TestNativeExistingIndexedJSONOrderedRowsAtomicReplay(t *testing.T) {
 				t.Fatal(err)
 			}
 			basis := indexedCRUDAppliedLSN(t, handle)
-			if profile != ProfileNoWALFast && basis != nativePublicSingletonFrames(profile, 2) {
+			if profile != ProfileNoWALFast && basis != 2 {
 				t.Fatalf("basis=%d want2", basis)
 			}
 			held, err := users.OpenCollectionReadView()
@@ -168,7 +168,7 @@ func TestNativeExistingIndexedJSONOrderedRowsAtomicReplay(t *testing.T) {
 			if err := tx.Commit(); err != nil {
 				t.Fatal(err)
 			}
-			if profile != ProfileNoWALFast && handle.CommandWALNextLSN() != before+nativePublicSingletonFrames(profile, 1) {
+			if profile != ProfileNoWALFast && handle.CommandWALNextLSN() != before+1 {
 				t.Fatal("ordered transaction did not assign exactly one LSN")
 			}
 			checkOrderedRowsFinal(t, database, manager)
@@ -205,7 +205,7 @@ func TestNativeExistingIndexedJSONOrderedRowsAtomicReplay(t *testing.T) {
 				t.Fatal(err)
 			}
 			if profile != ProfileNoWALFast {
-				if handle.CommandWALNextLSN()-1 != basis+nativePublicSingletonFrames(profile, 1) || indexedCRUDAppliedLSN(t, handle) != basis {
+				if handle.CommandWALNextLSN()-1 != basis+1 || indexedCRUDAppliedLSN(t, handle) != basis {
 					t.Fatalf("basis%d accepted%d applied%d", basis, handle.CommandWALNextLSN()-1, indexedCRUDAppliedLSN(t, handle))
 				}
 				if childDir != "" {
@@ -277,7 +277,7 @@ func TestNativeExistingIndexedJSONOrderedRowsAtomicReplay(t *testing.T) {
 			if !errors.As(err, &exit) || exit.ExitCode() != sentinel || bytes.Contains(output, []byte("DATA RACE")) {
 				t.Fatalf("child %v\n%s", err, output)
 			}
-			checkOrderedRowsFrame(t, indexedSliceOptions(profile, dir), profile)
+			checkOrderedRowsFrame(t, indexedSliceOptions(profile, dir))
 			before := workstats.Read().Replay
 			database, err := Open(indexedSliceOptions(profile, dir))
 			if err != nil {
@@ -292,7 +292,7 @@ func TestNativeExistingIndexedJSONOrderedRowsAtomicReplay(t *testing.T) {
 				}
 			})
 			after := workstats.Read().Replay
-			if after.FramesAttempted-before.FramesAttempted != nativePublicSingletonFrames(profile, 1) || after.FramesApplied-before.FramesApplied != nativePublicSingletonFrames(profile, 1) || after.FrameErrors != before.FrameErrors {
+			if after.FramesAttempted-before.FramesAttempted != 1 || after.FramesApplied-before.FramesApplied != 1 || after.FrameErrors != before.FrameErrors {
 				t.Fatalf("actual replay %+v -> %+v", before, after)
 			}
 			handle, err := database.NativeSemanticBackend()
@@ -307,7 +307,7 @@ func TestNativeExistingIndexedJSONOrderedRowsAtomicReplay(t *testing.T) {
 					}
 				}
 			})
-			if indexedCRUDAppliedLSN(t, handle) != nativePublicSingletonFrames(profile, 3) {
+			if indexedCRUDAppliedLSN(t, handle) != 3 {
 				t.Fatal("replay exact applied LSN !=3")
 			}
 			checkOrderedRowsFinal(t, database, manager)
@@ -370,7 +370,7 @@ func checkOrderedRowsFinal(t *testing.T, database *DB, manager *collections.Coll
 		t.Fatalf("final raw=%s %v", got, err)
 	}
 }
-func checkOrderedRowsFrame(t *testing.T, opts Options, profile Profile) {
+func checkOrderedRowsFrame(t *testing.T, opts Options) {
 	t.Helper()
 	layout, err := resolveOpenDirLayout(opts.Dir, opts.DisableSideStores)
 	if err != nil {
@@ -395,7 +395,7 @@ func checkOrderedRowsFrame(t *testing.T, opts Options, profile Profile) {
 				_ = reader.Close()
 				t.Fatal(err)
 			}
-			if env.LSN > nativePublicSingletonFrames(profile, 2) && env.Kind != commitlog.CommandKindDurablePrefixBarrier {
+			if env.LSN > 2 {
 				suffix = append(suffix, env)
 			}
 		}
@@ -403,7 +403,7 @@ func checkOrderedRowsFrame(t *testing.T, opts Options, profile Profile) {
 			t.Fatal(err)
 		}
 	}
-	if len(suffix) != 1 || suffix[0].LSN != nativePublicSingletonFrames(profile, 2)+1 || suffix[0].Kind != commitlog.CommandKindCompositeMutation {
+	if len(suffix) != 1 || suffix[0].LSN != 3 || suffix[0].Kind != commitlog.CommandKindCompositeMutation {
 		t.Fatalf("outer suffix %+v", suffix)
 	}
 	var kinds []commitlog.CommandKind

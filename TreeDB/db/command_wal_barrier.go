@@ -475,11 +475,17 @@ func (guard *CommandWALStagingGuardV1) AppendWithAssignedRange(intent *CommandWA
 	intent.inner.privateCOWOwner = held.privateOwner
 	defer func() { intent.inner.privateCOWOwner = nil }()
 	lsn, err := held.db.AppendStagedCommandWALIntent(intent, sync)
+	// A dependency/sync failure may occur after irreversible assignment. Keep
+	// that identity and the original guard's custody even when append returns
+	// zero with the error; callers must poison rather than refund that request.
+	if actual := intent.AssignedLSN(); actual != 0 {
+		lsn = actual
+	}
 	assigned := CommandWALLSNRange{First: lsn, Last: lsn}
 	if len(intent.inner.durablePrefixGroup) != 0 {
 		assigned = intent.inner.coveredRange[0]
 	}
-	if err == nil && lsn != 0 {
+	if assigned.Last != 0 {
 		held.intent = intent
 	}
 	return assigned, err
