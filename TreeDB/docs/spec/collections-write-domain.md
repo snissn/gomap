@@ -68,7 +68,7 @@ their existing construction route. JSON materialization clones captured JSON,
 converts captured BSON, and invokes the captured template resolver only for
 template-v1 documents, including exact vector-search fallback.
 
-The native JSON text adapter publishes the maintained V1 reducer's three domains
+The native text adapter publishes the maintained V1 reducer's three domains
 or V2 reducer's seven domains with primary and scalar changes in one successor.
 V2 status and V1 shared-statistics dependencies authenticate the planning cut;
 search borrows one complete cut for postings, metadata and documents. V1 retains
@@ -78,7 +78,7 @@ unpooled BTree; nested analysis reserves both serial decoder cohorts on the
 original operation lease before token/table construction. See
 `collection-text-v2-contract.md` for ownership and refusal details.
 
-For ordinary JSON under `no_wal_fast`, native `CreateTextIndex` backfills V1 or
+For ordinary JSON, BSON or template-v1 under `no_wal_fast`, native `CreateTextIndex` backfills V1 or
 V2 from one captured primary, including physical and pending rows when no
 physical root ID exists. The existing native index-family owner publishes the
 schema and complete three/seven-domain replacement atomically. `DropTextIndex`
@@ -89,8 +89,11 @@ scalar/vector DDL. Preparation refusal installs no schema/domain successor;
 all temporary backfill sources, decoder/table cohorts and outgoing rows stay on
 the original operation receipt until private COW sources own their copies.
 Command-WAL text DDL retains the maintained preassignment rejection. This slice
-does not complete the text family: rewrite/maintenance, other document formats
-and service/hybrid adoption still require native proofs.
+does not complete the text family: rewrite/maintenance, typed eligibility and
+server/default adoption still require native proofs. Stored-format normalization
+and the narrow inherited encoding/json cache boundary are specified in
+`collection-text-v2-contract.md`; primary bytes and dictionary authority remain
+owned by the original capture/transaction.
 
 Each accepted native mutation installs one complete logical successor; a shared
 physical durable group preserves each command's outcomes and original LSN.

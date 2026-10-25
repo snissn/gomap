@@ -515,7 +515,7 @@ func replayNativeJSONComposite(db *backenddb.DB, env commitlog.CommandEnvelope) 
 				}
 				catalog.roots[name] = root
 			}
-			text, e := nativeTextMutationDomains(snapshot, catalog, target.rows.rows, noAdmission)
+			text, e := nativeTextMutationDomains(snapshot, catalog, target.rows.rows, target.planner.options.templateResolver, noAdmission)
 			if e != nil {
 				return e
 			}

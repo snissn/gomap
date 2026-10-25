@@ -239,7 +239,7 @@ func testNativeTextBuilderTemporaryOwnership(t *testing.T, version TextIndexVers
 		t.Fatal(err)
 	}
 	rows := []nativeJSONRow{{id: []byte("a"), current: []byte(`{"content":"refund policy"}`)}}
-	changes, err := nativeTextMutationDomains(read.capture.Snapshot(), catalog, rows, admit)
+	changes, err := nativeTextMutationDomains(read.capture.Snapshot(), catalog, rows, nil, admit)
 	if err != nil || len(changes) == 0 {
 		t.Fatalf("native mutation domains=%d err=%v", len(changes), err)
 	}

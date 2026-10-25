@@ -274,7 +274,7 @@ func (m *NativeJSONManager) mutateIndexFamilies(owner *Collection, name string, 
 		meta := read.meta
 		var normalizedVector VectorIndexDefinition
 		if text != nil {
-			if normalizedDocumentFormat(meta.Options.DocumentFormat) != DocumentFormatJSON || meta.Options.ColumnStore != nil {
+			if !nativeTextDocumentFormat(meta.Options.DocumentFormat) || meta.Options.ColumnStore != nil {
 				return nil, backenddb.ErrNativeSemanticUnsupported
 			}
 			if text.create != nil {

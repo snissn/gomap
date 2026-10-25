@@ -2,6 +2,7 @@ package collections
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -16,6 +17,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/node"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 func nativeTextPublicMeta(versions ...TextIndexVersion) *CollectionMeta {
@@ -31,6 +33,11 @@ func nativeTextPublicMeta(versions ...TextIndexVersion) *CollectionMeta {
 }
 
 func openNativeTextPublic(t *testing.T, dir string, profile treedb.Profile, create bool, versions ...TextIndexVersion) (*treedb.DB, *CollectionManager, *Collection) {
+	t.Helper()
+	return openNativeTextPublicFormat(t, dir, profile, create, DocumentFormatJSON, versions...)
+}
+
+func openNativeTextPublicFormat(t *testing.T, dir string, profile treedb.Profile, create bool, format DocumentFormat, versions ...TextIndexVersion) (*treedb.DB, *CollectionManager, *Collection) {
 	t.Helper()
 	opts := treedb.OptionsFor(profile, dir)
 	opts.MemtableMode = "cow_btree"
@@ -56,7 +63,9 @@ func openNativeTextPublic(t *testing.T, dir string, profile treedb.Profile, crea
 		}
 	})
 	if create {
-		if _, err := manager.CreateCollection(nativeTextPublicMeta(versions...)); err != nil {
+		meta := nativeTextPublicMeta(versions...)
+		meta.Options.DocumentFormat = format
+		if _, err := manager.CreateCollection(meta); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -91,9 +100,31 @@ func requireNativeTextIDs(t *testing.T, c *Collection, query string, want ...str
 // maintained text image on process restart. This is not a power-loss test.
 func TestNativeTextPublicCrashReplay(t *testing.T) {
 	if dir := os.Getenv("GOMAP_NATIVE_TEXT_CRASH_DIR"); dir != "" {
-		_, _, c := openNativeTextPublic(t, dir, treedb.Profile(os.Getenv("GOMAP_NATIVE_TEXT_CRASH_PROFILE")), true, TextIndexVersion(os.Getenv("GOMAP_NATIVE_TEXT_CRASH_VERSION")))
+		format := normalizedDocumentFormat(DocumentFormat(os.Getenv("GOMAP_NATIVE_TEXT_CRASH_FORMAT")))
+		_, _, c := openNativeTextPublicFormat(t, dir, treedb.Profile(os.Getenv("GOMAP_NATIVE_TEXT_CRASH_PROFILE")), true, format, TextIndexVersion(os.Getenv("GOMAP_NATIVE_TEXT_CRASH_VERSION")))
 		doc := func(text string) []byte {
-			return []byte(fmt.Sprintf(`{"tenant":"a","content":%q,"embedding":[1,0]}`, text))
+			if format == DocumentFormatBSON {
+				raw, err := bson.Marshal(bson.D{{Key: "tenant", Value: "a"}, {Key: "content", Value: text}, {Key: "embedding", Value: bson.A{1.0, 0.0}}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return raw
+			}
+			raw := []byte(fmt.Sprintf(`{"tenant":"a","content":%q,"embedding":[1,0]}`, text))
+			if format == DocumentFormatTemplateV1 {
+				// Every changed text shape introduces new root/nested dictionary
+				// records; a composite's later member must see its staged overlay.
+				raw, err := json.Marshal(map[string]any{"tenant": "a", "content": text, "embedding": []float64{1, 0}, strings.ReplaceAll(text, " ", "_"): map[string]any{"new_field": text}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				raw, err = EncodeTemplateV1DocumentJSON(raw)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return raw
+			}
+			return raw
 		}
 		if _, err := c.InsertBatch([][]byte{[]byte("a"), []byte("b")}, [][]byte{doc("refund policy"), doc("shipping policy")}); err != nil {
 			t.Fatal(err)
@@ -129,25 +160,31 @@ func TestNativeTextPublicCrashReplay(t *testing.T) {
 		}
 		os.Exit(0)
 	}
-	for _, version := range []TextIndexVersion{TextIndexVersionV1, TextIndexVersionV2} {
-		for _, profile := range []treedb.Profile{treedb.ProfileCommandWALDurable, treedb.ProfileCommandWALRelaxed} {
-			for _, mode := range []string{"singleton", "composite"} {
-				t.Run(string(version)+"/"+string(profile)+"/"+mode, func(t *testing.T) {
-					dir := t.TempDir()
-					cmd := exec.Command(os.Args[0], "-test.run=^TestNativeTextPublicCrashReplay$")
-					cmd.Env = append(os.Environ(), "GOMAP_NATIVE_TEXT_CRASH_DIR="+dir, "GOMAP_NATIVE_TEXT_CRASH_PROFILE="+string(profile), "GOMAP_NATIVE_TEXT_CRASH_MODE="+mode, "GOMAP_NATIVE_TEXT_CRASH_VERSION="+string(version))
-					if out, err := cmd.CombinedOutput(); err != nil {
-						t.Fatalf("child: %v %s", err, out)
+	for _, format := range []DocumentFormat{DocumentFormatJSON, DocumentFormatBSON, DocumentFormatTemplateV1} {
+		for _, version := range []TextIndexVersion{TextIndexVersionV1, TextIndexVersionV2} {
+			for _, profile := range []treedb.Profile{treedb.ProfileCommandWALDurable, treedb.ProfileCommandWALRelaxed} {
+				for _, mode := range []string{"singleton", "composite"} {
+					name := string(version) + "/" + string(profile) + "/" + mode
+					if format != DocumentFormatJSON {
+						name = string(format) + "/" + name
 					}
-					owner, _, c := openNativeTextPublic(t, dir, profile, false, version)
-					requireNativeTextIDs(t, c, "returns", "a", "c")
-					requireNativeTextIDs(t, c, "refund")
-					requireNativeTextIDs(t, c, "shipping")
-					if err := owner.Checkpoint(); err != nil {
-						t.Fatal(err)
-					}
-					requireNativeTextIDs(t, c, "returns", "a", "c")
-				})
+					t.Run(name, func(t *testing.T) {
+						dir := t.TempDir()
+						cmd := exec.Command(os.Args[0], "-test.run=^TestNativeTextPublicCrashReplay$")
+						cmd.Env = append(os.Environ(), "GOMAP_NATIVE_TEXT_CRASH_DIR="+dir, "GOMAP_NATIVE_TEXT_CRASH_PROFILE="+string(profile), "GOMAP_NATIVE_TEXT_CRASH_MODE="+mode, "GOMAP_NATIVE_TEXT_CRASH_VERSION="+string(version), "GOMAP_NATIVE_TEXT_CRASH_FORMAT="+string(format))
+						if out, err := cmd.CombinedOutput(); err != nil {
+							t.Fatalf("child: %v %s", err, out)
+						}
+						owner, _, c := openNativeTextPublicFormat(t, dir, profile, false, format, version)
+						requireNativeTextIDs(t, c, "returns", "a", "c")
+						requireNativeTextIDs(t, c, "refund")
+						requireNativeTextIDs(t, c, "shipping")
+						if err := owner.Checkpoint(); err != nil {
+							t.Fatal(err)
+						}
+						requireNativeTextIDs(t, c, "returns", "a", "c")
+					})
+				}
 			}
 		}
 	}

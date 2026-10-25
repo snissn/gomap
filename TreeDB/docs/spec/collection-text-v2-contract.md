@@ -35,7 +35,7 @@ Text index v2 is B-tree-native TreeDB storage:
 
 ### Shared COW collection adapter
 
-The native semantic collection owner can create ordinary JSON collections with
+The native semantic collection owner can create ordinary JSON, BSON or template-v1 collections with
 declared V1 or V2 text indexes, scalar indexes, and ordinary runtime HNSW indexes. Its
 CRUD finalizer feeds the maintained text reducer's old/new document effects into
 the same immutable publication as primary and scalar changes. V1 retains its
@@ -67,10 +67,15 @@ follow the existing caller-owned output contract. Conservative source bounds can
 refuse a request under the finite native budget; they do not authorize retrying
 an installed mutation or raising the budget.
 
-This adapter currently selects declared V1/V2 with JSON document storage and no
-typed storage configuration. It does not promote a server constructor, BSON/template text,
-text DDL/rewrite/compaction APIs, or mixed-source hybrid execution. Those capabilities
-retain their existing legacy implementation and require separate native proofs.
+This adapter selects declared V1/V2 without typed storage configuration. Ordinary
+`no_wal_fast` text DDL uses the existing native index-family owner for atomic
+schema/backfill/domain replacement; command-WAL text DDL retains its existing
+preassignment refusal. Server default promotion, rewrite/compaction and typed
+storage require their own native proofs; format eligibility does not imply
+whole-product or performance qualification.
+Ordinary HNSW construction and mutation reconciliation resolve template documents
+through their original captured `NativeJSONRead`, using the maintained admitted
+stored-document materializer rather than an independent latest-state resolver.
 The focused `TestNativeTextPublic*` controls cover ordinary mixed-index CRUD,
 held old/current reads, checkpoint/reopen, process-exit singleton/composite replay,
 shared-status/statistics conflict and finite-admission cleanup; they are not performance or
@@ -94,6 +99,27 @@ immediate refund. These finite bounds can still refuse large requests. Focused
 refusal controls require no logical/WAL effects, unchanged live reservations and
 zero native receipts at full close; they do not establish a global RSS bound or
 performance qualification.
+
+Stored-format text normalization reuses `materializeTextBackfillDocumentJSON`.
+BSON uses the maintained canonical Extended JSON codec (`canonical=true`,
+`escapeHTML=false`) with a private public writer/encoder; its growing mode stack
+and buffers do not enter mongo-driver's writer pool. Sizing and reduction each
+charge their conversion cohorts on the original operation lease. JSON passes
+through as borrowed bytes. Template-v1 reuses the maintained object decoder and
+`json.Marshal`, resolving names through the original DDL capture or transaction's
+staged dictionary overlay. Composite replay supplies its original planner's
+resolver. No latest-state recapture or physical-only substitute is used.
+
+Template decoding admits the existing 768-byte construction allowance per compact
+source byte, plus that allowance per dictionary-name byte and field occurrence
+before each object's map is constructed. This covers decoded objects, name/read
+storage, JSON output and serial growth cohorts; sizing and reduction retain both
+cohorts until operation cleanup. The narrow inherited library-cache exclusion is
+only encoding/json's inaccessible encodeState buffer, ptrSeen and type caches
+after codec return. It does not exempt decoded application objects, resolver
+reads, returned cloned output, table/source backing or application pools. The
+finite COW budget is not a process RSS quota, and allocation/footprint evidence
+must include this inherited codec-cache cost.
 
 `TextIndexDefinition` now carries the contract fields:
 

@@ -45,7 +45,7 @@ func nativeTextDefinitionCharge(def TextIndexDefinition, calls uint64) (uint64, 
 	return memtable.COWAllocationCharge(size * calls * unit), nil
 }
 
-func nativeTextSourceCharge(meta CollectionMeta, rows []nativeJSONRow, admit func(uint64) error) (uint64, error) {
+func nativeTextSourceCharge(meta CollectionMeta, rows []nativeJSONRow, opts collectionOptions, admit func(uint64) error) (uint64, error) {
 	var total uint64
 	add := func(n uint64) bool {
 		if n > ^uint64(0)-total {
@@ -78,6 +78,14 @@ func nativeTextSourceCharge(meta CollectionMeta, rows []nativeJSONRow, admit fun
 			for _, doc := range [][]byte{row.opening, row.current} {
 				if doc == nil {
 					continue
+				}
+				// Size the same maintained stored-to-JSON representation that the
+				// reducer analyzes. Conversion cohorts remain charged: the reducer
+				// converts again while the sizing buffer may await collection.
+				var err error
+				doc, err = materializeTextBackfillDocumentJSON(doc, opts)
+				if err != nil {
+					return 0, err
 				}
 				// JSON selection borrows source spans; ObjectEach can decode
 				// escaped keys. Reserve source-sized parser/conversion scratch
@@ -288,15 +296,16 @@ func nativeTextInitialDomains(meta CollectionMeta, admit func(uint64) error) ([]
 	if len(meta.TextIndexes) == 0 {
 		return nil, nil
 	}
-	charge, err := nativeTextSourceCharge(meta, nil, admit)
+	opts, err := collectionPlannerOptions(meta)
+	if err != nil {
+		return nil, err
+	}
+	opts.textMaterializationAdmit = admit
+	charge, err := nativeTextSourceCharge(meta, nil, opts, admit)
 	if err != nil {
 		return nil, err
 	}
 	if err = admit(charge); err != nil {
-		return nil, err
-	}
-	opts, err := collectionPlannerOptions(meta)
-	if err != nil {
 		return nil, err
 	}
 	opts.textTableFactory = nativeTextTable
@@ -351,20 +360,22 @@ func nativeTextInitialDomains(meta CollectionMeta, admit func(uint64) error) ([]
 	}
 	return out, nil
 }
-func nativeTextMutationDomains(snap *backenddb.Snapshot, catalog *collectionCatalog, rows []nativeJSONRow, admit func(uint64) error) ([]nativeJSONDomainChange, error) {
+func nativeTextMutationDomains(snap *backenddb.Snapshot, catalog *collectionCatalog, rows []nativeJSONRow, resolver templateV1Resolver, admit func(uint64) error) ([]nativeJSONDomainChange, error) {
 	if len(catalog.meta.TextIndexes) == 0 {
 		return nil, nil
 	}
-	charge, err := nativeTextSourceCharge(catalog.meta, rows, admit)
+	opts, err := collectionPlannerOptions(catalog.meta)
+	if err != nil {
+		return nil, err
+	}
+	opts.textMaterializationAdmit = admit
+	opts.templateResolver = resolver
+	charge, err := nativeTextSourceCharge(catalog.meta, rows, opts, admit)
 	if err != nil {
 		return nil, err
 	}
 	if err = admit(charge); err != nil {
 		return nil, fmt.Errorf("collections: native text analysis workspace: %w", err)
-	}
-	opts, err := collectionPlannerOptions(catalog.meta)
-	if err != nil {
-		return nil, err
 	}
 	opts.textTableFactory = nativeTextTable
 	mutations := make([]textDocumentMutation, 0, len(rows))
@@ -410,7 +421,7 @@ func (t *NativeJSONTxn) finalizeNativeText(g *nativeJSONTxnBinding) error {
 			return err
 		}
 	}
-	additional, err := nativeTextMutationDomains(g.probe.capture.Snapshot(), catalog, g.rows.rows, admit)
+	additional, err := nativeTextMutationDomains(g.probe.capture.Snapshot(), catalog, g.rows.rows, g.templates, admit)
 	if err != nil {
 		return err
 	}
@@ -437,9 +448,18 @@ func (t *NativeJSONTxn) finalizeNativeText(g *nativeJSONTxnBinding) error {
 	return nil
 }
 
+func nativeTextDocumentFormat(format DocumentFormat) bool {
+	switch normalizedDocumentFormat(format) {
+	case DocumentFormatJSON, DocumentFormatBSON, DocumentFormatTemplateV1:
+		return true
+	default:
+		return false
+	}
+}
+
 func nativeTextMeta(meta CollectionMeta) bool {
 	for _, def := range meta.TextIndexes {
-		if (def.Version != TextIndexVersionV1 && def.Version != TextIndexVersionV2) || meta.Options.ColumnStore != nil || normalizedDocumentFormat(meta.Options.DocumentFormat) != DocumentFormatJSON {
+		if (def.Version != TextIndexVersionV1 && def.Version != TextIndexVersionV2) || meta.Options.ColumnStore != nil || !nativeTextDocumentFormat(meta.Options.DocumentFormat) {
 			return false
 		}
 	}

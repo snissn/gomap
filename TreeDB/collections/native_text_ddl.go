@@ -88,16 +88,23 @@ func nativeTextBackfill(read *NativeJSONRead, meta CollectionMeta, def TextIndex
 	definition[0] = def
 	selected := meta
 	selected.TextIndexes = definition[:]
-	charge, err := nativeTextSourceCharge(selected, rows.rows, admit)
+	opts, err := collectionPlannerOptions(meta)
+	if err != nil {
+		return nil, empty, err
+	}
+	opts.textMaterializationAdmit = admit
+	if normalizedDocumentFormat(opts.documentFormat) == DocumentFormatTemplateV1 {
+		opts.templateResolver, err = nativeTextCapturedTemplateResolver(read, admit)
+		if err != nil {
+			return nil, empty, err
+		}
+	}
+	charge, err := nativeTextSourceCharge(selected, rows.rows, opts, admit)
 	if err != nil {
 		return nil, empty, err
 	}
 	if err = admit(charge); err != nil {
 		return nil, empty, fmt.Errorf("collections: native text backfill workspace: %w", err)
-	}
-	opts, err := collectionPlannerOptions(meta)
-	if err != nil {
-		return nil, empty, err
 	}
 	opts.textTableFactory = nativeTextTable
 	plan, err := buildCreateTextIndexBackfillPlan(read.capture.Snapshot(), catalog, def, opts)

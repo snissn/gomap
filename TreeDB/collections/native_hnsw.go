@@ -296,11 +296,9 @@ func (c *Collection) buildNativeHNSW(opts VectorIndexOptions, register bool) (in
 	if err != nil {
 		return nil, err
 	}
-	materializer := &StoredDocumentJSONMaterializer{documentFormat: normalizedDocumentFormat(read.meta.Options.DocumentFormat)}
-	// Template resolution must borrow this same cut, rather than open another.
-	if materializer.documentFormat == DocumentFormatTemplateV1 {
-		return nil, backenddb.ErrNativeSemanticUnsupported
-	}
+	// Stored templates resolve through this original cut and its maintained
+	// admitted materializer, just as explicit native document insertion does.
+	materializer := &StoredDocumentJSONMaterializer{documentFormat: normalizedDocumentFormat(read.meta.Options.DocumentFormat), nativeRead: read}
 	err = walkNativeHNSWRows(read, admit, scratch, func(id, doc []byte) error {
 		vector, ok, e := vectorFromStoredDocument(materializer, doc, index.fieldPath)
 		if e != nil {
@@ -501,7 +499,7 @@ func (c *Collection) reconcileNativeHNSWWithMutationHeld(ids [][]byte) (resultEr
 				err = e
 				break
 			}
-			materializer := &StoredDocumentJSONMaterializer{documentFormat: normalizedDocumentFormat(read.meta.Options.DocumentFormat)}
+			materializer := &StoredDocumentJSONMaterializer{documentFormat: normalizedDocumentFormat(read.meta.Options.DocumentFormat), nativeRead: read}
 			idx.mu.Unlock()
 			vector, scalarRow, e := idx.parseStoredVectorRow(materializer, id, doc)
 			idx.mu.Lock()

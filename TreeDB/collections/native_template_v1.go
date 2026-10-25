@@ -253,6 +253,16 @@ func nativeTemplatePlanEntries(plan *directBufferedInsertPlan, name string, reco
 	return nil
 }
 
+// Same full-source decoded-object/JSON construction allowance used by the
+// captured template materializer. A byte bounds one value/header; repeated
+// dictionary names must be added separately for each decoded object occurrence.
+func nativeTemplateMaterializationCharge(source uint64) (uint64, error) {
+	if source > ^uint64(0)/768 {
+		return 0, memtable.ErrCOWCapacity
+	}
+	return memtable.COWAllocationCharge(source * 768), nil
+}
+
 // The materializer retains the original exact read capture, never a template
 // cache. All parser/object/output working storage is operation-owned. Returned
 // JSON is an independent caller-owned byte slice before this receipt refunds.
@@ -280,12 +290,12 @@ func (r *NativeJSONRead) templateJSON(document []byte) (out []byte, resultErr er
 	// Every encoded value consumes a source byte. The original object decoder's
 	// map/key/value cells plus JSON's simultaneous growing buffers are bounded by
 	// one maintained map reserve per source byte; field names are covered below.
-	n := uint64(len(document))
-	if n > ^uint64(0)/768 {
+	amount, err := nativeTemplateMaterializationCharge(uint64(len(document)))
+	if err != nil {
 		lease.Close()
-		return nil, memtable.ErrCOWCapacity
+		return nil, err
 	}
-	if err = admit(memtable.COWAllocationCharge(n * 768)); err != nil {
+	if err = admit(amount); err != nil {
 		lease.Close()
 		return nil, err
 	}
@@ -296,11 +306,11 @@ func (r *NativeJSONRead) templateJSON(document []byte) (out []byte, resultErr er
 		if err != nil {
 			return nil, err
 		}
-		n := uint64(len(raw))
-		if n > ^uint64(0)/768 {
-			return nil, memtable.ErrCOWCapacity
+		amount, err := nativeTemplateMaterializationCharge(uint64(len(raw)))
+		if err != nil {
+			return nil, err
 		}
-		if err = admit(memtable.COWAllocationCharge(n * 768)); err != nil {
+		if err = admit(amount); err != nil {
 			return nil, err
 		}
 		return raw, nil

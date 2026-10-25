@@ -531,11 +531,17 @@ func materializeTextBackfillDocumentJSON(document []byte, opts collectionOptions
 		return document, nil
 	case DocumentFormatBSON:
 		raw := bson.Raw(document)
+		if opts.textMaterializationAdmit != nil {
+			return nativeTextBSONJSON(raw, opts.textMaterializationAdmit)
+		}
 		if err := raw.Validate(); err != nil {
 			return nil, fmt.Errorf("collections: text index backfill BSON document: %w", err)
 		}
 		return bson.MarshalExtJSON(raw, true, false)
 	case DocumentFormatTemplateV1:
+		if opts.textMaterializationAdmit != nil {
+			return nativeTextTemplateJSON(document, opts.templateResolver, opts.textMaterializationAdmit)
+		}
 		return templateV1StoredDocumentJSON(document, opts.templateResolver)
 	default:
 		return nil, fmt.Errorf("collections: unsupported text index backfill document format %q", opts.documentFormat)
