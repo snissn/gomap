@@ -4999,10 +4999,12 @@ func (c *Collection) dropIndexes(names map[string]struct{}, all bool) (*Collecti
 func (c *Collection) Insert(id, document []byte) ([]byte, error) {
 	if c != nil && c.nativeJSON != nil {
 		ids, err := c.nativeInsertBatch([][]byte{id}, [][]byte{document})
-		if err != nil {
+		if len(ids) == 0 {
 			return nil, err
 		}
-		return ids[0], nil
+		// Maintenance can fail after accepting the canonical document. Keep
+		// its owned identity alongside the ambiguous completion result.
+		return ids[0], err
 	}
 	if c == nil {
 		return nil, errCollectionNil

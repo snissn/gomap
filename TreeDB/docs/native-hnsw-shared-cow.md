@@ -40,6 +40,16 @@ After any invalid canonical vector row is corrected, the same receiver's
 no failed partial graph is marked current. Reconciliation holds one runtime use
 lock at a time and releases it before retiring a failed payload.
 
+The graph's scalar columns hold one value per document. A native ordinary HNSW
+collection rejects actual arrays in eligible non-MultiKey scalar indexes before
+publishing an insert or replacement, even when `AllowArrayValuesInIndex` is set.
+The declaration itself and ordinary scalar values remain valid; explicit MultiKey
+indexes and collections without ordinary HNSW retain their existing array rules.
+The maintained strict scalar parser enforces this boundary during transaction
+validation. This avoids the previous accepted-but-ambiguous array failure and
+unreadable canonical graph rows. Other post-accepted maintenance failures still
+return their owned accepted document IDs with the ambiguity error.
+
 Public receiver `Rebuild` preserves receiver identity while the maintained builder
 constructs a separately admitted replacement. The installation swaps graph backing,
 schema ownership and allocation receipts explicitly; it never copies mutexes.

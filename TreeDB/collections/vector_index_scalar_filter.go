@@ -148,10 +148,14 @@ func supportedNativeScalarType(valueType IndexValueType) bool {
 	}
 }
 
+func supportsNativeScalarColumn(def IndexDefinition) bool {
+	return supportedNativeScalarType(def.ValueType) && !def.MultiKey && len(def.Components) <= 1
+}
+
 func nativeScalarDefinitions(meta CollectionMeta) []IndexDefinition {
 	out := make([]IndexDefinition, 0, len(meta.Indexes))
 	for _, def := range meta.Indexes {
-		if supportedNativeScalarType(def.ValueType) && !def.MultiKey && len(def.Components) <= 1 {
+		if supportsNativeScalarColumn(def) {
 			out = append(out, def)
 		}
 	}
