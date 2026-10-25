@@ -295,8 +295,9 @@ func prepareNativeCollectionChanges(base *nativeEngineVersion, changes []nativeJ
 				}
 			}
 			old, _ := c.domains.Get(name)
-			root := uint64(0)
+			root, catalogRoot := uint64(0), uint64(0)
 			if old != nil {
+				catalogRoot = old.catalogRoot
 				root = old.baseRoot
 				// The legacy primary-only adapter did not carry a policy.
 				// Preserve its exact original physical-domain policy.
@@ -334,6 +335,7 @@ func prepareNativeCollectionChanges(base *nativeEngineVersion, changes []nativeJ
 				return next, err
 			}
 			if !primary && delta.replace {
+				domain.catalogRoot = catalogRoot
 				domain.sourceGeneration = namedChange.sourceGeneration
 			}
 			if primary && i == 0 && change.typed != nil {

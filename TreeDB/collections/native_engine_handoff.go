@@ -10,14 +10,14 @@ import (
 // ledger. name and boundary borrow that ledger's own captured descriptor/root,
 // never current metadata. Results are grouped by collection incarnation.
 type nativeBuiltDomain struct {
-	vectorVersionKey           string
-	vectorVersionValue         [16]byte
-	collection, interpretation uint64
-	name                       string
-	oldBaseRoot, root          uint64
-	boundary                   *memtable.COWRoot
-	typedBoundary              *nativeTypedDelta
-	typedMeta                  *CollectionMeta
+	vectorVersionKey                  string
+	vectorVersionValue                [16]byte
+	collection, interpretation        uint64
+	name                              string
+	oldBaseRoot, oldCatalogRoot, root uint64
+	boundary                          *memtable.COWRoot
+	typedBoundary                     *nativeTypedDelta
+	typedMeta                         *CollectionMeta
 	// empty proves the captured descriptor had no pending physical source.
 	// Its unchanged root cannot consume any newer source in latest.
 	empty bool
@@ -137,8 +137,12 @@ func prepareNativeEngineHandoffWithCatalog(latest *nativeEngineVersion, built []
 		for i := start; i < end; i++ {
 			result := &built[i]
 			current, ok := c.domains.Get(result.name)
-			if !ok || current.interpretation != result.interpretation {
+			if !ok {
 				continue
+			}
+			if current.interpretation != result.interpretation &&
+				(current.interpretation < result.interpretation || current.baseRoot != 0 || current.catalogRoot != result.oldCatalogRoot) {
+				continue // a removed/recreated declaration is not this captured lineage
 			}
 			domain, scratch, e := prepareNativeDomainHandoff(current, result, admit)
 			if domain != nil {
@@ -246,6 +250,32 @@ func prepareNativeEngineHandoffWithCatalog(latest *nativeEngineVersion, built []
 // Work before inspecting err. The exact captured boundary alone removes prefix
 // sources; newer active and captured sources remain independently owned.
 func prepareNativeDomainHandoff(current *nativeDomainState, result *nativeBuiltDomain, admit cowbtree.OwnedMapAdmit) (domain *nativeDomainState, scratch cowbtree.OwnedMapCompletion, err error) {
+	if current.catalogRoot != result.oldCatalogRoot {
+		return nil, scratch, backenddb.ErrRootPublicationBasisMismatch
+	}
+	if current.interpretation != result.interpretation {
+		// A newer full image supersedes the captured graph. The old build
+		// still changed its qualified physical catalog descriptor, but none
+		// of that graph may become a source of the replacement.
+		if current.interpretation < result.interpretation || current.baseRoot != 0 {
+			return nil, scratch, backenddb.ErrRootPublicationBasisMismatch
+		}
+		domain, err = newNativeDomainState(current.name, 0, current.interpretation, current.storagePolicy, nil, admit)
+		if err != nil {
+			return domain, scratch, err
+		}
+		domain.catalogRoot = result.root
+		domain.sourceGeneration = current.sourceGeneration
+		if current.pending != nil && !current.pending.RetainOwned() {
+			return domain, scratch, memtable.ErrCOWClosed
+		}
+		domain.pending = current.pending
+		current.typed.retain()
+		domain.typed = current.typed
+		current.captured.retain()
+		domain.captured = current.captured
+		return domain, scratch, nil
+	}
 	if current.baseRoot != result.oldBaseRoot {
 		return nil, scratch, backenddb.ErrRootPublicationBasisMismatch
 	}

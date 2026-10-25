@@ -148,7 +148,7 @@ func (s *nativeBasisRefreshScratch) root(c *nativeCollectionState, d *nativeDoma
 			return 0, err
 		}
 	}
-	if oldRoot != d.baseRoot {
+	if oldRoot != d.catalogRoot {
 		return 0, backenddb.ErrRootPublicationBasisMismatch
 	}
 	current, found, err := s.get(key, true)
@@ -227,7 +227,7 @@ func prepareNativeEngineBasisRefresh(base *nativeEngineVersion, before, after *b
 			if err != nil {
 				return false
 			}
-			if root != d.baseRoot {
+			if root != d.catalogRoot {
 				if domains == int(^uint(0)>>1) {
 					err = memtable.ErrCOWCapacity
 					return false
@@ -280,7 +280,7 @@ func prepareNativeEngineBasisRefresh(base *nativeEngineVersion, before, after *b
 				err = e
 				return false
 			}
-			if root != d.baseRoot {
+			if root != d.catalogRoot {
 				touched++
 			}
 			return true
@@ -302,17 +302,24 @@ func prepareNativeEngineBasisRefresh(base *nativeEngineVersion, before, after *b
 				err = e
 				return false
 			}
-			if root == d.baseRoot {
+			if root == d.catalogRoot {
 				return true
 			}
 			var domain *nativeDomainState
-			domain, err = newNativeDomainState(d.name, root, d.interpretation, d.storagePolicy, nil, admit)
+			baseRoot := d.baseRoot
+			// A full replacement deliberately has no physical read base, even
+			// while the authenticated old catalog descriptor moves underneath it.
+			if baseRoot != 0 {
+				baseRoot = root
+			}
+			domain, err = newNativeDomainState(d.name, baseRoot, d.interpretation, d.storagePolicy, nil, admit)
 			if domain != nil {
 				p.ownedDomains = append(p.ownedDomains, domain)
 			}
 			if err != nil {
 				return false
 			}
+			domain.catalogRoot = root
 			domain.sourceGeneration = d.sourceGeneration
 			if d.pending != nil {
 				if !d.pending.RetainOwned() {

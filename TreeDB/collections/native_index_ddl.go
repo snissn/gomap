@@ -209,6 +209,9 @@ func prepareNativeIndexMutation(base *nativeEngineVersion, old *nativeCollection
 		if e != nil {
 			return nil, e
 		}
+		if prior, found := old.domains.Get(change.name); found {
+			domain.catalogRoot = prior.catalogRoot
+		}
 		if err = p.domainBuilder.Set(change.name, domain); err != nil {
 			return nil, err
 		}

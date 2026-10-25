@@ -27,6 +27,17 @@ cut and command-WAL completion as direct native callers; it does not stage a
 second manager-local write domain. Reads capture one complete cut. Legacy
 backend-only constructors retain the write-domain path described below.
 
+A native domain distinguishes its logical physical-read base (`baseRoot`) from
+its authenticated persisted catalog descriptor (`catalogRoot`). A full named or
+schema-derived replacement preserves catalog provenance while discarding the
+superseded logical base and sources. Equivalent physical maintenance remaps that
+provenance without reattaching the old image. If an older captured checkpoint
+publishes after a newer full replacement, its handoff updates only that newer
+replacement's matching catalog provenance; the replacement's interpretation,
+source generation, pending image and zero logical base remain unchanged. Both
+headers and the captured build's provenance are covered by their existing
+size-derived admission, with no new resource owner or publication boundary.
+
 Ordinary native `InsertBatch` and `InsertBatchWithStats` use the same original
 native row planner and publication. Successful ordinary facade inserts replace
 `LastInsertStats`; `WithStats` additionally returns an independent request-owned
