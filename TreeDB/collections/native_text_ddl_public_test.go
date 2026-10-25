@@ -308,8 +308,11 @@ func TestNativeTextPublicDDLAdmissionCleanup(t *testing.T) {
 							t.Fatalf("drop=%v attempt%d expected preassignment capacity refusal: %v", drop, attempt, e)
 						}
 						after := budget.Stats()
-						if after.ReservedBytes != before.ReservedBytes || after.ExternalLeases != before.ExternalLeases {
-							t.Fatalf("refused DDL changed receipts: before=%+v after=%+v", before, after)
+						// Producer preflight can retire checkpoint-owned receipts,
+						// independently of pinned semantic cuts. Refusal must add
+						// no retained private reservation or lease on any attempt.
+						if after.ReservedBytes > before.ReservedBytes || after.ExternalLeases > before.ExternalLeases {
+							t.Fatalf("refused DDL added receipts: before=%+v after=%+v", before, after)
 						}
 					}
 					blocker.Close()
@@ -318,11 +321,16 @@ func TestNativeTextPublicDDLAdmissionCleanup(t *testing.T) {
 						t.Fatal(e)
 					}
 					defer current.Close()
-					if current.capture.LogicalSequence() != beforeSequence || backend.CommandWALNextLSN() != beforeLSN || !sameCollectionMeta(current.meta, beforeMeta) {
-						t.Fatal("refused DDL changed logical/schema/command identity")
+					if current.capture.LogicalSequence() != beforeSequence || backend.CommandWALNextLSN() != beforeLSN ||
+						current.collection.incarnation != read.collection.incarnation ||
+						current.collection.documentGeneration != read.collection.documentGeneration ||
+						current.collection.schema != read.collection.schema || !sameCollectionMeta(current.meta, beforeMeta) {
+						t.Fatal("refused DDL changed logical/schema/incarnation/document/command identity")
 					}
-					if got, e := c.Get([]byte("a")); e != nil || string(got) != `{"content":"alpha beta"}` {
-						t.Fatalf("refused DDL changed primary: %s %v", got, e)
+					for _, captured := range []*NativeJSONRead{read, current} {
+						if got, e := captured.Get([]byte("a")); e != nil || string(got) != `{"content":"alpha beta"}` {
+							t.Fatalf("refused DDL changed held/current primary: %s %v", got, e)
+						}
 					}
 				}()
 				if drop {

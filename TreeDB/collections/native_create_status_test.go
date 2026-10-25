@@ -169,8 +169,11 @@ func TestNativeCreateCollectionWithStatusRefusal(t *testing.T) {
 			t.Fatalf("attempt %d: existed=%t meta=%v err=%v", attempt, existed, got, err)
 		}
 		after := budget.Stats()
-		if after.ReservedBytes != before.ReservedBytes || after.ExternalLeases != before.ExternalLeases || c.nativeJSON.db.CommandWALNextLSN() != beforeLSN {
-			t.Fatalf("refused create changed receipt or WAL: before=%+v after=%+v", before, after)
+		// Producer preflight may retire earlier checkpoint-owned receipts even
+		// with the semantic setup cuts pinned. A refused request must retain
+		// no added reservation or lease, and must assign no WAL identity.
+		if after.ReservedBytes > before.ReservedBytes || after.ExternalLeases > before.ExternalLeases || c.nativeJSON.db.CommandWALNextLSN() != beforeLSN {
+			t.Fatalf("refused create added receipts or changed WAL: before=%+v after=%+v", before, after)
 		}
 		dbCoord.mu.Lock()
 		afterNamespaces := len(dbCoord.collections)
@@ -184,9 +187,29 @@ func TestNativeCreateCollectionWithStatusRefusal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if current.capture.LogicalSequence() != read.capture.LogicalSequence() || current.capture.State() != read.capture.State() {
+	// A preflight checkpoint may replace the physical descriptor/header while
+	// retaining this exact logical catalog. Compare logical identities and the
+	// authenticated schema, rather than the maintenance-owned state pointer.
+	beforeState := read.capture.State().(*nativeEngineVersion)
+	afterState := current.capture.State().(*nativeEngineVersion)
+	if current.capture.LogicalSequence() != read.capture.LogicalSequence() ||
+		current.collection.incarnation != read.collection.incarnation ||
+		current.collection.documentGeneration != read.collection.documentGeneration ||
+		current.collection.schema != read.collection.schema || !sameCollectionMeta(current.meta, read.meta) ||
+		afterState.nextIncarnation != beforeState.nextIncarnation ||
+		afterState.names.Len() != beforeState.names.Len() || afterState.collections.Len() != beforeState.collections.Len() ||
+		c.nativeJSON.db.CommandWALNextLSN() != beforeLSN {
 		current.Close()
-		t.Fatal("refused create installed a catalog successor")
+		t.Fatal("refused create changed logical catalog, schema, incarnation, document generation or WAL")
+	}
+	for attempt := 0; attempt < 3; attempt++ {
+		if _, exists := afterState.names.Get(fmt.Sprintf("refused_%d", attempt)); exists {
+			current.Close()
+			t.Fatal("refused create added a catalog name")
+		}
+	}
+	if beforeState != afterState {
+		t.Logf("preflight rebased physical state with logical sequence unchanged at %d", current.capture.LogicalSequence())
 	}
 	current.Close()
 	if got, existed, err := c.manager.CreateCollectionWithStatus(meta); err != nil || got == nil || existed {
