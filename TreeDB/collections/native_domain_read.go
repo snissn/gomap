@@ -27,6 +27,8 @@ type nativeDomainRead struct {
 type nativeDomainReadScratch struct {
 	key, leaf [page.PageSize]byte
 	successor tree.OwnedSuccessorScratch
+	leafRef   page.LeafLogPtr
+	leafValid bool
 }
 
 func newNativeDomainRead(domain *nativeDomainState, basis *backenddb.Snapshot) (nativeDomainRead, error) {

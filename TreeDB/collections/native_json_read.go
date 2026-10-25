@@ -307,6 +307,30 @@ func (r *NativeJSONRead) readValue(ptr page.ValuePtr, admitOutput func(uint64) e
 }
 
 func (r *NativeJSONRead) readLeaf(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
+	if r.capture == nil || r.closing || r.failure != nil {
+		return nil, backenddb.ErrClosed
+	}
+	// This scope already retains its exact immutable capture. Reuse only the
+	// decoded page still resident in its exclusively admitted point scratch.
+	// Importers and iterators also call this reader with OTHER buffers: every
+	// such call invalidates the one-page identity before it can write anything.
+	// Tree/PRIMARY checksum, type and operand validation still run on each use.
+	scratch := r.scratch
+	canonical := scratch != nil && cap(dst) == page.PageSize && &dst[:page.PageSize][0] == &scratch.leaf[0]
+	if canonical && scratch.leafValid && scratch.leafRef == ptr {
+		return scratch.leaf[:], nil
+	}
+	if scratch != nil {
+		scratch.leafValid = false
+	}
+	data, err := r.loadLeaf(ptr, dst)
+	if err == nil && canonical && len(data) == page.PageSize && cap(data) == page.PageSize && &data[0] == &scratch.leaf[0] {
+		scratch.leafRef, scratch.leafValid = ptr, true
+	}
+	return data, err
+}
+
+func (r *NativeJSONRead) loadLeaf(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
 	if physical, ok := r.capture.(backenddb.NativePhysicalLeafReader); ok {
 		return physical.NativeLeafPage(ptr, dst)
 	}
