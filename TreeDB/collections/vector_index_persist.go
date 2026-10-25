@@ -2106,6 +2106,11 @@ func (idx *VectorIndex) loadPersistSnapshot(snapshot vectorIndexPersistSnapshot)
 			neighbors:  make([][]vectorIndexNeighbor, node.Level+1),
 			deleted:    node.Deleted,
 		}
+		if idx.nativeHNSWOwned {
+			for layer := range nodes[i].neighbors {
+				nodes[i].neighbors[layer] = make([]vectorIndexNeighbor, 0, idx.maxNeighborsForLayer(layer)+1)
+			}
+		}
 		nodes[i].cacheVectorNorms()
 	}
 	for _, edge := range snapshot.Edges {
@@ -2126,7 +2131,15 @@ func (idx *VectorIndex) loadPersistSnapshot(snapshot vectorIndexPersistSnapshot)
 		if len(edge.Distances) > len(edge.Neighbor) {
 			return "invalid_edge_distance_count"
 		}
-		neighbors := make([]vectorIndexNeighbor, len(edge.Neighbor))
+		var neighbors []vectorIndexNeighbor
+		if idx.nativeHNSWOwned {
+			if len(edge.Neighbor) > idx.maxNeighborsForLayer(edge.Layer) {
+				return "invalid_edge_neighbor_count"
+			}
+			neighbors = nodes[edge.NodeID].neighbors[edge.Layer][:len(edge.Neighbor)]
+		} else {
+			neighbors = make([]vectorIndexNeighbor, len(edge.Neighbor))
+		}
 		for i, neighbor := range edge.Neighbor {
 			if neighbor < 0 || neighbor >= len(nodes) {
 				return "invalid_edge_neighbor"

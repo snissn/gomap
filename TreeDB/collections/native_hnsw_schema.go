@@ -107,10 +107,12 @@ func (idx *VectorIndex) cloneNativeHNSWForSchema(read *NativeJSONRead, meta Coll
 	peak := nativeHNSWPeakAdmission(decoder)
 	def, _ := findVectorIndex(meta.VectorIndexes, idx.name)
 	charge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(VectorIndex{}))) + 64<<10
+	var nodeCount uint64
 	for _, plane := range []*VectorIndex{idx, idx.liveDelta} {
 		if plane == nil {
 			continue
 		}
+		nodeCount += uint64(len(plane.nodes))
 		for _, row := range plane.nodes {
 			n, e := nativeHNSWRowCharge(def, row.documentID)
 			if e != nil || n > ^uint64(0)-charge {
@@ -126,6 +128,11 @@ func (idx *VectorIndex) cloneNativeHNSWForSchema(read *NativeJSONRead, meta Coll
 		}
 		charge += n
 	}
+	constructionPeak, err := nativeHNSWConstructionCharge(def, nodeCount)
+	if err != nil || constructionPeak > ^uint64(0)-charge {
+		return nil, memtable.ErrCOWCapacity
+	}
+	charge += constructionPeak
 	// Reuse the maintained metadata construction bound for retained scalar
 	// definitions, compiled path/runtimes and map descriptors in each plane.
 	// Recompute it from the proposed schema rather than retaining old charges.
@@ -171,6 +178,7 @@ func (idx *VectorIndex) cloneNativeHNSWForSchema(read *NativeJSONRead, meta Coll
 	}
 	owned = candidate
 	candidate.nativeHNSWLease, candidate.nativeHNSWCharge = lease, charge
+	candidate.nativeHNSWConstructionPeak = constructionPeak
 	schema.retain()
 	candidate.nativeHNSWSchemaState = schema
 	clonePlane := func(source, target *VectorIndex) error {
@@ -274,16 +282,14 @@ func populateNativeHNSWScalarRows(index *VectorIndex, read *NativeJSONRead, admi
 				return err
 			}
 		}
-		for _, value := range scalar {
-			n := memtable.COWAllocationCharge(uint64(len(value)) * 4)
-			if n > ^uint64(0)-owner.nativeHNSWCharge {
-				return memtable.ErrCOWCapacity
-			}
-			if err = owner.nativeHNSWLease.Resize(owner.nativeHNSWCharge + n); err != nil {
-				return err
-			}
-			owner.nativeHNSWCharge += n
+		n, err := nativeHNSWScalarCharge(index.scalarDefinitions, scalar)
+		if err != nil || n > ^uint64(0)-owner.nativeHNSWCharge {
+			return memtable.ErrCOWCapacity
 		}
+		if err = owner.nativeHNSWLease.Resize(owner.nativeHNSWCharge + n); err != nil {
+			return err
+		}
+		owner.nativeHNSWCharge += n
 		if err = index.appendNativeScalarRowValuesLocked(scalar); err != nil {
 			return err
 		}

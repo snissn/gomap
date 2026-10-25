@@ -91,36 +91,185 @@ func (c *Collection) nativeDropVectorIndex(name string) (*CollectionMeta, error)
 	return meta, err
 }
 
-// The retained receipt covers runtime backings and maintained construction
-// scratch. Decoder, persistence and concurrent query workspaces have separate
-// operation-local receipts.
+// A native runtime has one mutable graph and at most two immutable images
+// during publication. IDs/vectors alias across those images. Native adjacency
+// has one fixed limit+1 backing (the extra reciprocal edge is pruned in place),
+// and native node descriptors double explicitly; their complete growth cohorts
+// total less than four descriptors per appended node. Legacy growth is unchanged.
 func nativeHNSWRowCharge(def VectorIndexDefinition, id []byte) (uint64, error) {
-	// levelForDocumentID is deterministic and capped at32. Capacity is 2*M
-	// on layer0 and M on each actual upper layer. Four copies cover growable
-	// node/adjacency backings, the maintained immutable search view and scratch.
 	if def.M <= 0 || def.Dimensions <= 0 {
 		return 0, memtable.ErrCOWCapacity
 	}
 	probe := VectorIndex{name: def.Name, m: def.M}
 	level := probe.levelForDocumentID(id)
-	if uint64(def.M) > ^uint64(0)/uint64(level+2) {
+	var total uint64
+	add := func(count, size uint64) bool {
+		if count != 0 && size > (^uint64(0)-total)/count {
+			return false
+		}
+		total += count * size
+		return true
+	}
+	allocation := func(count, size uint64) bool {
+		if count != 0 && size > ^uint64(0)/count {
+			return false
+		}
+		return add(1, memtable.COWAllocationCharge(count*size))
+	}
+	// Mutable descriptor growth cohorts plus two exact-length view descriptors.
+	if !add(6, uint64(unsafe.Sizeof(vectorIndexNode{}))) ||
+		!allocation(uint64(def.Dimensions), 4) ||
+		!add(6, memtable.COWAllocationCharge(uint64(len(id)))) ||
+		!add(3, memtable.COWAllocationCharge(uint64(level+1)*uint64(unsafe.Sizeof([]vectorIndexNeighbor{})))) {
 		return 0, memtable.ErrCOWCapacity
 	}
-	neighborCapacity := uint64(level+2) * uint64(def.M)
-	total := uint64(512)
-	for _, pair := range [][2]uint64{
-		{uint64(unsafe.Sizeof(vectorIndexNode{})), 4},
-		{uint64(def.Dimensions), 4 * 4},
-		{neighborCapacity, 4 * uint64(unsafe.Sizeof(vectorIndexNeighbor{}))},
-		{uint64(level + 1), 4 * uint64(unsafe.Sizeof([]vectorIndexNeighbor{}))},
-		{uint64(len(id)), 8},
-	} {
-		if pair[0] > (^uint64(0)-total)/pair[1] {
+	for layer := 0; layer <= level; layer++ {
+		limit := uint64(def.M)
+		if layer == 0 {
+			if limit > (^uint64(0)-1)/2 {
+				return 0, memtable.ErrCOWCapacity
+			}
+			limit *= 2
+		}
+		if !allocation(limit+1, uint64(unsafe.Sizeof(vectorIndexNeighbor{}))) ||
+			!add(2, memtable.COWAllocationCharge(limit*uint64(unsafe.Sizeof(vectorIndexNeighbor{})))) {
 			return 0, memtable.ErrCOWCapacity
 		}
-		total += pair[0] * pair[1]
 	}
-	return memtable.COWAllocationCharge(total), nil
+	// Current ordinal, dirty node/document, unnotified document and dirty-view
+	// maps plus two immutable ordinal maps. Four slots per logical entry bound
+	// hash-table occupancy/growth, including control bytes and rounded groups.
+	mapSlotBytes := uint64(unsafe.Sizeof(string(""))+unsafe.Sizeof(int(0)))*3 +
+		uint64(unsafe.Sizeof(int(0)))*2 + uint64(unsafe.Sizeof(string("")))*2 + 7*8
+	if !add(4, mapSlotBytes) {
+		return 0, memtable.ErrCOWCapacity
+	}
+	return total, nil
+}
+
+// Construction scratch is one high-water envelope, not one copy per historical
+// row. Queue/visited can reach every node; best/output/selection are bounded by
+// EF and degree. Eight backing elements per logical element cover append growth
+// cohorts; visited uses the maintained doubling policy. No scratch is refunded
+// while insertScratch or quantization scratch still refers to it.
+func nativeHNSWConstructionCharge(def VectorIndexDefinition, nodes uint64) (uint64, error) {
+	return nativeHNSWConstructionChargeForWorkers(def, nodes, 1)
+}
+
+func nativeHNSWConstructionChargeForWorkers(def VectorIndexDefinition, nodes, workers uint64) (uint64, error) {
+	if def.M <= 0 || def.Dimensions <= 0 || def.EfConstruction <= 0 {
+		return 0, memtable.ErrCOWCapacity
+	}
+	var total uint64
+	add := func(count, size uint64) bool {
+		if count != 0 && size > (^uint64(0)-total)/count {
+			return false
+		}
+		total += count * size
+		return true
+	}
+	capacity := uint64(64)
+	for capacity < nodes {
+		if capacity > ^uint64(0)/2 {
+			return 0, memtable.ErrCOWCapacity
+		}
+		capacity *= 2
+	}
+	degree := uint64(def.M)
+	if degree > (^uint64(0)-1)/2 {
+		return 0, memtable.ErrCOWCapacity
+	}
+	degree = degree*2 + 1
+	bounded := min(nodes, max(uint64(def.EfConstruction), degree))
+	// Queue; visited epochs; best, liveBest, output, scored/rejected/selected
+	// candidates; selected neighbor ordinals; quantization/conversion vector.
+	if !add(nodes, 8*uint64(unsafe.Sizeof(vectorIndexCandidate{}))) ||
+		!add(capacity, 2*uint64(unsafe.Sizeof(uint32(0)))) ||
+		!add(bounded, 8*6*uint64(unsafe.Sizeof(vectorIndexCandidate{}))) ||
+		!add(degree, 2*uint64(unsafe.Sizeof(int(0)))) || !add(uint64(def.Dimensions), 8) {
+		return 0, memtable.ErrCOWCapacity
+	}
+	// Native float32 rows keep their per-node backing. The maintained int8
+	// fold temporarily dequantizes a whole delta before inserting its rows.
+	if def.Encoding == VectorIndexEncodingInt8 {
+		if nodes != 0 && uint64(def.Dimensions) > ^uint64(0)/nodes {
+			return 0, memtable.ErrCOWCapacity
+		}
+		if !add(nodes*uint64(def.Dimensions), 4) {
+			return 0, memtable.ErrCOWCapacity
+		}
+	}
+	// Frozen-prefix planning/reciprocal pruning owns independent worker scratch.
+	// The same runtime peak grows at the existing fold boundary before workers
+	// start; the serial builder pays for one workspace.
+	if degree > ^uint64(0)/degree || !add(degree*degree, 4) {
+		return 0, memtable.ErrCOWCapacity
+	}
+	if workers == 0 || total > ^uint64(0)/workers {
+		return 0, memtable.ErrCOWCapacity
+	}
+	return memtable.COWAllocationCharge(total * workers), nil
+}
+
+func nativeHNSWAdmissionDelta(def VectorIndexDefinition, id []byte, nodes, previousPeak uint64) (retained, peak, delta uint64, err error) {
+	retained, err = nativeHNSWRowCharge(def, id)
+	if err != nil {
+		return
+	}
+	peak, err = nativeHNSWConstructionCharge(def, nodes)
+	if err != nil {
+		return
+	}
+	peak = max(peak, previousPeak)
+	if retained > ^uint64(0)-(peak-previousPeak) {
+		err = memtable.ErrCOWCapacity
+		return
+	}
+	delta = retained + peak - previousPeak
+	return
+}
+
+// Column offset/presence/chunk descriptors grow even for a missing value.
+// Eight payload cohorts bound append growth; two immutable tail images add two
+// copies. Full immutable chunks alias their original data rather than copying it.
+func nativeHNSWScalarCharge(definitions []IndexDefinition, row map[string][]byte) (uint64, error) {
+	var total uint64
+	for _, def := range definitions {
+		n := uint64(len(row[def.Name]))
+		if total > ^uint64(0)-64 || n > (^uint64(0)-total-64)/10 {
+			return 0, memtable.ErrCOWCapacity
+		}
+		total += 64 + n*10
+	}
+	return total, nil
+}
+
+// Called under the graph lock before the maintained live-delta fold allocates
+// frozen-prefix plans or starts workers. It extends the same receipt and peak.
+func (idx *VectorIndex) admitNativeHNSWFoldLocked() error {
+	if !idx.nativeHNSWOwned || idx.liveDelta == nil {
+		return nil
+	}
+	def := VectorIndexDefinition{Name: idx.name, M: idx.m, Dimensions: idx.dimensions, EfConstruction: idx.efConstruction, Encoding: idx.encoding}
+	nodes := uint64(len(idx.nodes)) + uint64(len(idx.liveDelta.nodes))
+	workers := max(idx.constructionWorkerCount(minInt(nativeVectorFrozenPrefixBatchWidth, len(idx.liveDelta.nodes))), idx.constructionWorkerCount(vectorIndexReciprocalLinkWorkerCount(idx.maxNeighborsForLayer(0))))
+	peak, err := nativeHNSWConstructionChargeForWorkers(def, nodes, uint64(maxInt(1, workers)))
+	if err != nil {
+		return err
+	}
+	if peak <= idx.nativeHNSWConstructionPeak {
+		return nil
+	}
+	delta := peak - idx.nativeHNSWConstructionPeak
+	if idx.nativeHNSWLease == nil || delta > ^uint64(0)-idx.nativeHNSWCharge {
+		return memtable.ErrCOWCapacity
+	}
+	if err = idx.nativeHNSWLease.Resize(idx.nativeHNSWCharge + delta); err != nil {
+		return err
+	}
+	idx.nativeHNSWCharge += delta
+	idx.nativeHNSWConstructionPeak = peak
+	return nil
 }
 
 // Decoder receipts are operation-local. Retaining one maximum document/record
@@ -174,6 +323,7 @@ func (idx *VectorIndex) releaseNativeHNSW() {
 	}
 	idx.nativeHNSWLease.Close()
 	idx.nativeHNSWLease = nil
+	idx.nativeHNSWCharge, idx.nativeHNSWConstructionPeak, idx.nativeHNSWIDBytes = 0, 0, 0
 }
 func (coord *collectionSchemaCoordinator) nativeHNSWRuntimeList() []*VectorIndex {
 	if coord == nil {
@@ -313,21 +463,24 @@ func (c *Collection) buildNativeHNSW(opts VectorIndexOptions, register bool) (in
 		if !ok {
 			return nil
 		}
-		rowCharge, e := nativeHNSWRowCharge(def, id)
+		_, peak, rowCharge, e := nativeHNSWAdmissionDelta(def, id, uint64(len(index.nodes)+1), index.nativeHNSWConstructionPeak)
 		if e != nil {
 			return e
 		}
 		if e = admit(rowCharge); e != nil {
 			return e
 		}
+		index.nativeHNSWConstructionPeak = peak
 		scalar, e := index.nativeScalarRow(materializer, doc)
 		if e != nil {
 			return e
 		}
-		for _, value := range scalar {
-			if e = admit(memtable.COWAllocationCharge(uint64(len(value)) * 4)); e != nil {
-				return e
-			}
+		scalarCharge, e := nativeHNSWScalarCharge(index.scalarDefinitions, scalar)
+		if e != nil {
+			return e
+		}
+		if e = admit(scalarCharge); e != nil {
+			return e
 		}
 		if uint64(len(id)) > ^uint64(0)-index.nativeHNSWIDBytes {
 			return memtable.ErrCOWCapacity
@@ -775,6 +928,11 @@ func (c *Collection) loadNativeHNSWAtRead(opts VectorIndexOptions, read *NativeJ
 		}
 		runtimeCharge += n
 	}
+	constructionPeak, err := nativeHNSWConstructionCharge(def, uint64(len(snapshot.Nodes)))
+	if err != nil || constructionPeak > ^uint64(0)-runtimeCharge {
+		return nil, status, memtable.ErrCOWCapacity
+	}
+	runtimeCharge += constructionPeak
 	runtimeLease, err := read.capture.NativeAllocator().AdmitNativeBytes(runtimeCharge)
 	if err != nil {
 		return nil, status, fmt.Errorf("collections: native vector snapshot runtime (%d decode bytes, %d runtime bytes): %w", charge, runtimeCharge, err)
@@ -802,6 +960,7 @@ func (c *Collection) loadNativeHNSWAtRead(opts VectorIndexOptions, read *NativeJ
 	owned = index
 	index.nativeHNSWLease = runtimeLease
 	index.nativeHNSWCharge = runtimeCharge
+	index.nativeHNSWConstructionPeak = constructionPeak
 	index.nativeHNSWIDBytes = idBytes
 	read.collection.schema.retain()
 	index.nativeHNSWSchemaState = read.collection.schema
@@ -1105,14 +1264,31 @@ func (idx *VectorIndex) ownedNativeHNSWRead() (*NativeJSONRead, func(), error) {
 }
 
 func (idx *VectorIndex) admitNativeHNSWRowLocked(def VectorIndexDefinition, id []byte, scalar map[string][]byte) error {
-	charge, err := nativeHNSWRowCharge(def, id)
-	for _, value := range scalar {
-		n := memtable.COWAllocationCharge(uint64(len(value)) * 4)
-		if n > ^uint64(0)-charge {
+	nodes := uint64(len(idx.nodes) + 1)
+	if idx.liveDelta != nil {
+		nodes += uint64(len(idx.liveDelta.nodes))
+	}
+	_, peak, charge, err := nativeHNSWAdmissionDelta(def, id, nodes, idx.nativeHNSWConstructionPeak)
+	if err != nil {
+		return err
+	}
+	workers := uint64(idx.constructionWorkerCount(vectorIndexReciprocalLinkWorkerCount(idx.maxNeighborsForLayer(0))))
+	concurrentPeak, err := nativeHNSWConstructionChargeForWorkers(def, nodes, workers)
+	if err != nil {
+		return err
+	}
+	if concurrentPeak > peak {
+		if concurrentPeak-peak > ^uint64(0)-charge {
 			return memtable.ErrCOWCapacity
 		}
-		charge += n
+		charge += concurrentPeak - peak
+		peak = concurrentPeak
 	}
+	scalarCharge, err := nativeHNSWScalarCharge(idx.scalarDefinitions, scalar)
+	if err != nil || scalarCharge > ^uint64(0)-charge {
+		return memtable.ErrCOWCapacity
+	}
+	charge += scalarCharge
 	if err != nil {
 		return err
 	}
@@ -1123,6 +1299,7 @@ func (idx *VectorIndex) admitNativeHNSWRowLocked(def VectorIndexDefinition, id [
 		return fmt.Errorf("collections: native vector row admission: %w", err)
 	}
 	idx.nativeHNSWCharge += charge
+	idx.nativeHNSWConstructionPeak = peak
 	idx.nativeHNSWIDBytes += uint64(len(id))
 	return nil
 }
@@ -1250,6 +1427,7 @@ func (idx *VectorIndex) swapNativeHNSW(other *VectorIndex) {
 	idx.nativeHNSWSchemaState, other.nativeHNSWSchemaState = other.nativeHNSWSchemaState, idx.nativeHNSWSchemaState
 	idx.nativeHNSWLease, other.nativeHNSWLease = other.nativeHNSWLease, idx.nativeHNSWLease
 	idx.nativeHNSWCharge, other.nativeHNSWCharge = other.nativeHNSWCharge, idx.nativeHNSWCharge
+	idx.nativeHNSWConstructionPeak, other.nativeHNSWConstructionPeak = other.nativeHNSWConstructionPeak, idx.nativeHNSWConstructionPeak
 	idx.nativeHNSWIDBytes, other.nativeHNSWIDBytes = other.nativeHNSWIDBytes, idx.nativeHNSWIDBytes
 	idx.nativeHNSWIncarnation, other.nativeHNSWIncarnation = other.nativeHNSWIncarnation, idx.nativeHNSWIncarnation
 	idx.nativeHNSWSchema, other.nativeHNSWSchema = other.nativeHNSWSchema, idx.nativeHNSWSchema
@@ -1426,6 +1604,13 @@ func (c *Collection) nativeOrdinaryHNSWStatusWithMutationHeld(name string, inspe
 		if e = admit(n); e != nil {
 			return out, e
 		}
+	}
+	peak, err := nativeHNSWConstructionCharge(def, uint64(len(snapshot.Nodes)))
+	if err != nil {
+		return out, err
+	}
+	if err = admit(peak); err != nil {
+		return out, err
 	}
 	probe, err := newVectorIndexWithMeta(c, vectorIndexOptionsFromDefinition(def), r.meta)
 	if err != nil {

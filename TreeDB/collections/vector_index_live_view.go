@@ -114,6 +114,13 @@ func (idx *VectorIndex) publishSearchViewLocked(forceFull bool) {
 		next = &vectorIndexSearchView{}
 		next.mu.Lock()
 	}
+	// A spare can alias the previous immutable image. Drop its headers before
+	// cloning; never clear shared nodes or their neighbor backings in place.
+	if idx.nativeHNSWOwned {
+		next.nodes, next.deltaNodes = nil, nil
+		next.scalarColumns, next.deltaScalarColumns = nil, nil
+		next.currentNode, next.deltaCurrentNode = nil, nil
+	}
 	next.reuseState.Store(vectorIndexSearchViewActive)
 	var previousNodes, previousDeltaNodes []vectorIndexNode
 	if previous != nil {
@@ -194,7 +201,7 @@ func (idx *VectorIndex) publishSearchViewLocked(forceFull bool) {
 	next.sourceDocumentGeneration = idx.sourceDocumentGeneration
 	next.mu.Unlock()
 	idx.searchView.Store(next)
-	if previous != nil {
+	if !idx.nativeHNSWOwned && previous != nil {
 		if len(previous.nodes) > len(next.nodes) || len(previous.deltaNodes) > len(next.deltaNodes) {
 			previous.reuseState.Store(vectorIndexSearchViewDiscarded)
 		} else {
@@ -270,6 +277,15 @@ func cloneVectorIndexSearchNode(node vectorIndexNode) vectorIndexNode {
 }
 
 func (idx *VectorIndex) prepareSearchViewForMutationLocked() {
+	if idx != nil && idx.nativeHNSWOwned && idx.searchView.Load() != nil {
+		// Native mutators hold Use exclusively (or own a private candidate).
+		// No retired reader image survives that boundary. Keep the last current
+		// image for dirty-row sharing and live-delta routing, but do not publish
+		// intermediate images between rows in one accepted mutation. With no
+		// image yet, retain the maintained first-publication path below.
+		idx.searchViewSpare.Store(nil)
+		return
+	}
 	if idx == nil || !idx.liveDeltaEnabled.Load() || idx.searchViewCurrent.Load() {
 		return
 	}

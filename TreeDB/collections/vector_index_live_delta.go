@@ -25,6 +25,7 @@ func (idx *VectorIndex) ensureLiveDeltaLocked() (*VectorIndex, error) {
 	if err != nil {
 		return nil, err
 	}
+	delta.nativeHNSWOwned = idx.nativeHNSWOwned
 	delta.scalarDefinitions = idx.scalarDefinitions
 	delta.scalarRuntimes = cloneNativeScalarRuntimes(idx.scalarRuntimes)
 	delta.scalarColumns = newNativeScalarColumns(delta.scalarDefinitions)
@@ -106,6 +107,9 @@ func (idx *VectorIndex) foldLiveDeltaLocked() error {
 	if delta == nil || len(delta.currentNode) == 0 {
 		idx.liveDelta = nil
 		return nil
+	}
+	if err := idx.admitNativeHNSWFoldLocked(); err != nil {
+		return err
 	}
 	documentIDs := make([][]byte, 0, len(delta.currentNode))
 	scalarRows := make([]map[string][]byte, 0, len(delta.currentNode))

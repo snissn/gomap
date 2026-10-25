@@ -87,8 +87,18 @@ maintained serial exact path for native owners rather than allocating the legacy
 whole-corpus matrix without admission.
 
 Runtime storage is admitted before allocation against the existing finite COW
-budget. Row charges use the actual deterministic HNSW level and maintained
-layer capacities. Unchanged vectors and deletions do not accumulate new node
+budget. Retained row admission uses the deterministic HNSW level, one owned
+vector/ID image, explicitly doubling mutable node descriptors, fixed degree-plus-one
+mutable adjacency, and the current/replacement immutable image capacities. Native
+views keep dirty-row sharing but do not retain an obsolete spare or publish
+intermediate images during one mutation; legacy reader-view recycling is unchanged.
+Native float32 insertion keeps per-node immutable vectors instead of the optional
+contiguous matrix, avoiding cross-view matrix-growth aliases. Legacy matrix storage
+is unchanged. A separate high-water term on the same runtime receipt covers construction scratch,
+including independent frozen-prefix worker workspaces before a live-delta fold.
+Column offsets/presence and payload growth are charged even for missing values.
+Build, Load, manual insertion, reconciliation, schema cloning and status decoding
+use this same model. Scratch remains charged while runtime fields retain it. Unchanged vectors and deletions do not accumulate new node
 charges; changed vectors retain their actual graph history until rebuild replaces
 it. Decoder and persistence receipts have operation lifetimes. Save borrows its
 immutable encoded run table through COW preparation, rather than copying another

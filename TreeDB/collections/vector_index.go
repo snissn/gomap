@@ -401,6 +401,8 @@ type VectorIndex struct {
 	nativeHNSWLease                                            *memtable.COWExternalLease
 	nativeHNSWCharge                                           uint64
 	nativeHNSWIDBytes                                          uint64
+	nativeHNSWConstructionPeak                                 uint64
+	nativeHNSWOwned                                            bool
 	nativeHNSWIncarnation, nativeHNSWSchema, nativeHNSWVersion uint64
 
 	collection *Collection
@@ -1267,6 +1269,7 @@ func newVectorIndexWithMeta(c *Collection, opts VectorIndexOptions, meta Collect
 	}
 	return &VectorIndex{
 		collection:          c,
+		nativeHNSWOwned:     c != nil && c.nativeJSON != nil && nativeRuntime,
 		name:                opts.Name,
 		nativeRootName:      nativeRootName,
 		field:               opts.Field,
@@ -2896,6 +2899,7 @@ func (idx *VectorIndex) insertVectorLocked(documentID []byte, vector []float32) 
 		quantized = append([]int8(nil), quantized...)
 	}
 	node := idx.newVectorIndexNodePrepared(documentID, vector, level, quantized, quantScale)
+	idx.prepareNativeHNSWNodeSlotLocked()
 	idx.nodes = append(idx.nodes, node)
 	idx.markGraphChangedLocked()
 	idx.markVectorNodeDirtyLocked(nodeID)
@@ -3092,7 +3096,7 @@ func (idx *VectorIndex) insertVectorBatchWithContextLocked(ctx context.Context, 
 }
 
 func (idx *VectorIndex) prepareFrozenPrefixVectorRowsLocked(additional int) {
-	if idx.vectorRows != nil || idx.encoding != VectorIndexEncodingFloat32 || idx.metric != VectorMetricCosine || idx.dimensions <= 0 || additional <= 0 {
+	if idx.nativeHNSWOwned || idx.vectorRows != nil || idx.encoding != VectorIndexEncodingFloat32 || idx.metric != VectorMetricCosine || idx.dimensions <= 0 || additional <= 0 {
 		return
 	}
 	rows := make([]float32, 0, (len(idx.nodes)+additional)*idx.dimensions)
@@ -3276,6 +3280,7 @@ func (idx *VectorIndex) commitFrozenPrefixBatchLocked(plans []vectorIndexFrozenP
 	for i := range plans {
 		plan := plans[i]
 		nodeID := len(idx.nodes)
+		idx.prepareNativeHNSWNodeSlotLocked()
 		idx.nodes = append(idx.nodes, idx.newVectorIndexNodePrepared(plan.documentID, plan.vector, plan.level, nil, 0))
 		idx.markGraphChangedLocked()
 		idx.markVectorNodeDirtyLocked(nodeID)
@@ -3554,6 +3559,18 @@ func (idx *VectorIndex) newVectorIndexNode(documentID []byte, vector []float32, 
 	return idx.newVectorIndexNodePrepared(documentID, vector, level, quantized, quantScale)
 }
 
+// Admission has already covered all descriptor doubling cohorts before this
+// helper is reached. Keep the native representation independent of Go append's
+// changing large-slice growth policy.
+func (idx *VectorIndex) prepareNativeHNSWNodeSlotLocked() {
+	if idx.nativeHNSWOwned && len(idx.nodes) == cap(idx.nodes) {
+		capacity := maxInt(8, cap(idx.nodes)*2)
+		nodes := make([]vectorIndexNode, len(idx.nodes), capacity)
+		copy(nodes, idx.nodes)
+		idx.nodes = nodes
+	}
+}
+
 func (idx *VectorIndex) newVectorIndexNodePrepared(documentID []byte, vector []float32, level int, quantized []int8, quantScale float32) vectorIndexNode {
 	node := vectorIndexNode{
 		documentID: bytes.Clone(documentID),
@@ -3561,7 +3578,11 @@ func (idx *VectorIndex) newVectorIndexNodePrepared(documentID []byte, vector []f
 		neighbors:  make([][]vectorIndexNeighbor, level+1),
 	}
 	for layer := range node.neighbors {
-		node.neighbors[layer] = make([]vectorIndexNeighbor, 0, idx.initialNeighborCapacityForLayer(layer))
+		capacity := idx.initialNeighborCapacityForLayer(layer)
+		if idx.nativeHNSWOwned {
+			capacity = idx.maxNeighborsForLayer(layer) + 1
+		}
+		node.neighbors[layer] = make([]vectorIndexNeighbor, 0, capacity)
 	}
 	switch idx.encoding {
 	case VectorIndexEncodingInt8:
