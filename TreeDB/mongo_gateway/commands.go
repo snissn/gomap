@@ -607,6 +607,30 @@ drained:
 
 func (c *mongoInsertCoalescer) runBatch(batch []mongoInsertCoalescerRequest) {
 	batch = filterExpiredMongoInsertCoalescerRequests(batch)
+	limit := int(wire.DefaultMaxMessageLength)
+	if c.server != nil {
+		limit = int(c.server.maxMessageLength())
+	}
+	// Independent wire requests must not become an unbounded byte-sized native
+	// transaction merely because the request-count limit permits a large group.
+	// A single request keeps its own validation and outcome; splitting changes
+	// only which independent requests share the existing insert planner.
+	for len(batch) != 0 {
+		end, bytes := 0, 0
+		for end < len(batch) {
+			n := len(batch[end].stored) + len(batch[end].id) + 8
+			if end != 0 && n > limit-bytes {
+				break
+			}
+			bytes += n
+			end++
+		}
+		c.runInsertBatch(batch[:end])
+		batch = batch[end:]
+	}
+}
+
+func (c *mongoInsertCoalescer) runInsertBatch(batch []mongoInsertCoalescerRequest) {
 	if len(batch) == 0 {
 		return
 	}

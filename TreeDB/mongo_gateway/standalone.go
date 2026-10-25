@@ -70,6 +70,10 @@ func (m *transportMetrics) recordHandshakeDuration(elapsed time.Duration) {
 type StandaloneOptions struct {
 	Dir     string
 	Profile treedb.Profile
+	// COWMemtableLimits bounds engine-owned retention, rather than process RSS.
+	// Zero selects a finite Mongo budget for 16 MiB documents and wire-sized
+	// batches. Explicit limits retain the usual pre-assignment capacity refusal.
+	COWMemtableLimits treedb.COWMemtableLimits
 
 	DefaultCollectionOptions  collections.CollectionOptions
 	DefaultIndexStoragePolicy collections.RootStoragePolicy
@@ -142,6 +146,19 @@ func NormalizeStandaloneOptions(opts StandaloneOptions) (StandaloneOptions, erro
 		return opts, err
 	}
 	opts.Profile = profile
+	if opts.COWMemtableLimits == (treedb.COWMemtableLimits{}) {
+		opts.COWMemtableLimits = treedb.DefaultCOWMemtableLimits()
+		// Half the in-flight budget is reserved for physical maintenance. The
+		// other 256 MiB covers overlapping row, canonical WAL and immutable
+		// images of a <=48 MB request, plus catalog/index planning. Index scratch
+		// is admitted from referenced BSON fields, not unrelated payload bytes.
+		opts.COWMemtableLimits.MaxInFlightBytes = 512 << 20
+		opts.COWMemtableLimits.MaxTotalBytes = 1 << 30
+		opts.COWMemtableLimits.MaxRetiredBytes = 1 << 30
+	}
+	if err := opts.COWMemtableLimits.Validate(); err != nil {
+		return opts, fmt.Errorf("mongo gateway standalone: COWMemtableLimits: %w", err)
+	}
 
 	format, err := normalizeStandaloneDocumentFormat(opts.DefaultCollectionOptions.DocumentFormat)
 	if err != nil {
@@ -220,13 +237,18 @@ func OpenStandaloneServer(opts StandaloneOptions) (*StandaloneServer, error) {
 	}
 
 	treeOpts := treedb.OptionsFor(normalized.Profile, normalized.Dir)
-	open := treedb.OpenBackend
-	if treeOpts.IndexOuterLeavesInValueLog {
-		open = treedb.OpenBackendWithCachedLeafLog
-	}
-	backend, cleanup, err := open(treeOpts)
+	treeOpts.MemtableMode = "cow_btree"
+	treeOpts.COWMemtableLimits = normalized.COWMemtableLimits
+	// Own the public DB for the entire server lifetime. The semantic backend
+	// borrows its complete COW cut; it must never be independently closed.
+	database, err := treedb.Open(treeOpts)
 	if err != nil {
 		return nil, err
+	}
+	cleanup := database.Close
+	backend, err := database.NativeSemanticBackend()
+	if err != nil {
+		return nil, errors.Join(err, cleanup())
 	}
 
 	manager := collections.NewCollectionManager(backend)
@@ -239,7 +261,7 @@ func OpenStandaloneServer(opts StandaloneOptions) (*StandaloneServer, error) {
 	server.ClusterCatalogVersion = normalized.ClusterCatalogVersion
 	server.AuthenticationEnabled = normalized.AuthenticationEnabled
 	if normalized.AuthenticationEnabled {
-		catalog, err := NewAuthCatalog(backend)
+		catalog, err := NewAuthCatalog(database)
 		if err != nil {
 			errs := []error{err}
 			if cleanup != nil {

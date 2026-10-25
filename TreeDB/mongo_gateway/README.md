@@ -39,6 +39,25 @@ with direct/single-server mode when their driver supports it, for example:
 mongodb://127.0.0.1:27017/?directConnection=true
 ```
 
+## Storage memory admission
+
+The standalone opener owns the shared immutable COW database for its full
+lifetime, including authentication writes and collection reads. Its Mongo
+budget has finite 512 MiB in-flight and 1 GiB total/retired allocation limits;
+the core COW defaults remain unchanged. Half the in-flight allowance is reserved
+for physical maintenance. The producer allowance covers overlapping BSON,
+canonical command and immutable images for ordinary 16 MiB documents and batches
+within the 48 MB wire envelope. Scalar BSON index preparation sizes its work from
+referenced fields; an unrelated large payload does not require a whole-document
+decoder. Insert coalescing also bounds aggregate bytes by the wire envelope.
+
+These are engine-owned allocation charges, not preallocated memory or a process
+RSS limit. Array/index shapes, concurrent preparation and retained read views
+still consume capacity and can refuse before acceptance. Library callers can
+supply a complete `StandaloneOptions.COWMemtableLimits` bundle; explicit smaller
+limits are respected. Profile selection and write concern retain their normal
+acknowledgement boundaries.
+
 ## Transport policy
 
 Plaintext is deliberately limited to loopback listeners. A standalone listener

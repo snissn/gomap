@@ -102,14 +102,15 @@ func nativeJSONFinalRowsResolved(name string, meta CollectionMeta, rows *nativeJ
 			if doc == nil {
 				continue
 			}
-			capacity, err := nativeJSONDocumentEncodedCapacity(doc, meta.Indexes, meta.Options.AllowArrayValuesInIndex)
+			capacity, err := nativeJSONDocumentEncodedCapacity(doc, meta)
 			if err != nil || capacity > int(^uint(0)>>1)-bytesCap || len(runtimes) > int(^uint(0)>>1)-stateCount {
 				return nil, nil, nil, memtable.ErrCOWCapacity
 			}
 			bytesCap += capacity
 			stateCount += len(runtimes)
+			source, scalar := nativeJSONIndexedDocumentSource(doc, meta)
 			for _, index := range meta.Indexes {
-				if index.MultiKey || meta.Options.AllowArrayValuesInIndex {
+				if !scalar && (index.MultiKey || meta.Options.AllowArrayValuesInIndex) {
 					// Every array value occupies at least one source byte.
 					// The maintained parser allocates a reference for every
 					// input element before sorting/deduplicating it.
@@ -119,7 +120,7 @@ func nativeJSONFinalRowsResolved(name string, meta CollectionMeta, rows *nativeJ
 				}
 			}
 			if len(runtimes) != 0 {
-				maxDocument = max(maxDocument, len(doc))
+				maxDocument = max(maxDocument, source)
 			}
 		}
 	}
@@ -258,11 +259,13 @@ func nativeJSONEncodedCapacity(document int, indexes []IndexDefinition) (int, er
 // the source. Counting every such byte (including false positives inside values)
 // is a conservative allocation-free bound, not an alternate document parser.
 // Repeated/dotted indexed paths each receive their independent full allowance.
-func nativeJSONDocumentEncodedCapacity(document []byte, indexes []IndexDefinition, allowArrays bool) (int, error) {
+func nativeJSONDocumentEncodedCapacity(document []byte, meta CollectionMeta) (int, error) {
 	limit := int(^uint(0) >> 1)
+	indexes, allowArrays := meta.Indexes, meta.Options.AllowArrayValuesInIndex
+	source, scalar := nativeJSONIndexedDocumentSource(document, meta)
 	var total, numericBytes int
 	for _, index := range indexes {
-		if index.ValueType != IndexValueBSONOrderedV2 || (!index.MultiKey && !allowArrays) {
+		if scalar || index.ValueType != IndexValueBSONOrderedV2 || (!index.MultiKey && !allowArrays) {
 			continue
 		}
 		for _, b := range document {
@@ -274,11 +277,11 @@ func nativeJSONDocumentEncodedCapacity(document []byte, indexes []IndexDefinitio
 		break
 	}
 	for _, index := range indexes {
-		capacity, err := nativeJSONEncodedCapacity(len(document), []IndexDefinition{index})
+		capacity, err := nativeJSONEncodedCapacity(source, []IndexDefinition{index})
 		if err != nil {
 			return 0, err
 		}
-		if index.MultiKey || allowArrays {
+		if !scalar && (index.MultiKey || allowArrays) {
 			if len(document) > (limit-capacity)/16 {
 				return 0, memtable.ErrCOWCapacity
 			}
@@ -311,11 +314,12 @@ func (t *NativeJSONTxn) prepareValidation(g *nativeJSONTxnBinding, doc []byte) e
 	if err != nil {
 		return err
 	}
-	capacity, err := nativeJSONDocumentEncodedCapacity(doc, g.probe.meta.Indexes, g.probe.meta.Options.AllowArrayValuesInIndex)
+	capacity, err := nativeJSONDocumentEncodedCapacity(doc, g.probe.meta)
 	if err != nil {
 		return err
 	}
-	if n <= g.validationCharge && capacity <= cap(g.validation.buf) && len(doc) <= cap(g.validation.scratch) {
+	source, _ := nativeJSONIndexedDocumentSource(doc, g.probe.meta)
+	if n <= g.validationCharge && capacity <= cap(g.validation.buf) && source <= cap(g.validation.scratch) {
 		return nil
 	}
 	n = max(n, g.validationCharge)
@@ -330,7 +334,7 @@ func (t *NativeJSONTxn) prepareValidation(g *nativeJSONTxnBinding, doc []byte) e
 	if err != nil {
 		return err
 	}
-	g.validation = indexEncodeArena{buf: make([]byte, 0, capacity), scratch: make([]byte, 0, len(doc)), states: make([][][]byte, 0, len(g.probe.meta.Indexes)), valueRefs: make([][]byte, 0, len(g.probe.meta.Indexes))}
+	g.validation = indexEncodeArena{buf: make([]byte, 0, capacity), scratch: make([]byte, 0, source), states: make([][][]byte, 0, len(g.probe.meta.Indexes)), valueRefs: make([][]byte, 0, len(g.probe.meta.Indexes))}
 	// Replacement detached every old arena alias before the original charge shrinks.
 	if err = g.validationLease.Resize(n); err != nil {
 		return err

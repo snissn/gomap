@@ -37,6 +37,17 @@ field and satisfy the consistency checks. It is not a process RSS quota.
 | `MaxRetiredBytes` | 512 MiB | Conservatively reserved potential retirement |
 | `MaxInFlightBytes` | 64 MiB | Preparations and outstanding external leases |
 
+The standalone Mongo opener supplies an explicit product bundle: 512 MiB
+in-flight and 1 GiB total/retired, with the other limits above. Half the in-flight
+budget remains reserved for physical maintenance; the producer partition covers
+overlapping ordinary BSON/command/COW images for 16 MiB documents and byte-bounded
+wire-sized insert groups. This does not change core defaults or qualify earlier
+fixed-limit measurements under a different limit. Scalar BSON index work is
+bounded from referenced field bytes; arrays retain their conservative source
+bounds. Explicit `StandaloneOptions.COWMemtableLimits` overrides remain finite and
+can refuse before assignment. Neither bundle is a process RSS bound or a promise
+that arbitrary concurrent/index shapes fit.
+
 The COW default is four fixed shards. Explicit shard counts are normalized and
 must fit the source/generation limits. Open validates the mode, limits and
 required cached/backend capabilities before mutating storage. Domain ingress,

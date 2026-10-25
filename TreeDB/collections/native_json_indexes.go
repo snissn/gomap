@@ -109,11 +109,14 @@ func nativeJSONIndexedCharge(meta CollectionMeta, ids, documents [][]byte, heade
 		return 0, memtable.ErrCOWCapacity
 	}
 	for i, doc := range documents {
+		sourceBytes, _ := nativeJSONIndexedDocumentSource(doc, meta)
 		for _, index := range meta.Indexes {
 			if len(index.Components) == 0 && !index.MultiKey && !meta.Options.AllowArrayValuesInIndex {
 				continue
 			}
-			capacity, err := nativeJSONDocumentEncodedCapacity(doc, []IndexDefinition{index}, meta.Options.AllowArrayValuesInIndex)
+			indexMeta := meta
+			indexMeta.Indexes = []IndexDefinition{index}
+			capacity, err := nativeJSONDocumentEncodedCapacity(doc, indexMeta)
 			if err != nil {
 				return 0, err
 			}
@@ -142,7 +145,7 @@ func nativeJSONIndexedCharge(meta CollectionMeta, ids, documents [][]byte, heade
 						paths += depth
 					}
 				}
-				refs, ok := mul(uint64(len(doc)), paths)
+				refs, ok := mul(uint64(sourceBytes), paths)
 				if !ok {
 					return 0, memtable.ErrCOWCapacity
 				}
@@ -151,19 +154,19 @@ func nativeJSONIndexedCharge(meta CollectionMeta, ids, documents [][]byte, heade
 					return 0, memtable.ErrCOWCapacity
 				}
 			}
-			refs, ok := mul(uint64(len(doc)), 2*uint64(unsafe.Sizeof([]byte{})))
+			refs, ok := mul(uint64(sourceBytes), 2*uint64(unsafe.Sizeof([]byte{})))
 			if !ok || !add(refs) {
 				return 0, memtable.ErrCOWCapacity
 			}
 		}
 		// Encoding strings can double escaped bytes; each of the value, secondary,
 		// unique and index-state arenas may coexist with its growing predecessor.
-		n, ok = mul(uint64(len(doc))+uint64(len(ids[i]))+uint64(len(meta.Name))+64, 16*uint64(len(meta.Indexes)))
+		n, ok = mul(uint64(sourceBytes)+uint64(len(ids[i]))+uint64(len(meta.Name))+64, 16*uint64(len(meta.Indexes)))
 		if !ok || !add(n) {
 			return 0, memtable.ErrCOWCapacity
 		}
 		if decoder {
-			source := uint64(len(doc))
+			source := uint64(sourceBytes)
 			for _, index := range meta.Indexes {
 				if index.ValueType == IndexValueBSONOrderedV2 && (len(index.Components) > 0 || index.MultiKey || meta.Options.AllowArrayValuesInIndex) {
 					// Values encode sequentially. One exact numeric expansion
