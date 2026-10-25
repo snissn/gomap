@@ -196,6 +196,8 @@ type cowCache struct {
 	generationBase                                                                                 uint64           // exact identical empty-generation startup history charge
 	handoff                                                                                        *cowFlushHandoff // serialized by the existing flush coordinator
 	semanticMu                                                                                     sync.Mutex
+	semanticCond                                                                                   sync.Cond
+	semanticEnqueued, semanticCompleted                                                            uint64
 	nativePressureMu                                                                               sync.Mutex // only before a native producer captures its opening
 	semanticHead, semanticTail, semanticFailed                                                     *rootpublication.SemanticCleanup
 	semanticRunning, semanticStopped, closeCleanupDone                                             bool
@@ -292,6 +294,7 @@ func newCOWCacheMode(provider backendSnapshotProvider, shards int, limits memtab
 		return nil, joinCOWCleanupError(err, cleanupErr)
 	}
 	c := &cowCache{ordered: ordered, budget: budget, maintenance: maintenance, writers: make([]*memtable.COWWriter, shards), successors: make([]cowRawSuccessor, shards), lease: cacheLease, closeRetired: make([]memtable.COWRetirement, shards)}
+	c.semanticCond.L = &c.semanticMu
 	cut := &cowReadCut{refs: 1, shards: make([]cowTable, shards), basis: admitted, lease: cutLease, cache: c}
 	for i := range c.writers {
 		beforeHistory := budget.Stats().HistoryBytes

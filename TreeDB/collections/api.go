@@ -12081,6 +12081,13 @@ func (c *Collection) InsertBatchWithCommandWALIntent(ids, documents [][]byte, tr
 // fast path; public callers that need returned IDs should keep using
 // InsertBatch or InsertBatchValidatedBSON.
 func (c *Collection) NativewireInsertBatchNoResultIDs(ids, documents [][]byte, trustedValidBSON bool) error {
+	if c != nil && c.nativeJSON != nil {
+		if trustedValidBSON {
+			return backenddb.ErrNativeSemanticUnsupported
+		}
+		_, err := c.nativeInsertBatch(ids, documents)
+		return err
+	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
 	admissionState := c.lockCollectionCommandWALAdmission()

@@ -17,6 +17,15 @@ import (
 // InsertBatch is the one-shot form of Begin, staged InsertBatch, and Commit.
 func (m *NativeJSONManager) InsertBatch(name string, ids, documents [][]byte) (resultErr error) {
 	tx, err := m.Begin(name)
+	return finishNativeJSONInsert(tx, err, ids, documents)
+}
+
+func (m *NativeJSONManager) insertPrepared(name string, ids, documents [][]byte) error {
+	tx, err := m.beginPrepared(name)
+	return finishNativeJSONInsert(tx, err, ids, documents)
+}
+
+func finishNativeJSONInsert(tx *NativeJSONTxn, err error, ids, documents [][]byte) (resultErr error) {
 	if err != nil {
 		return err
 	}

@@ -47,9 +47,12 @@ func (c *Collection) nativeInsertBatch(ids, documents [][]byte) ([][]byte, error
 	if err != nil {
 		return nil, err
 	}
+	if err = c.nativeJSON.db.PrepareNativeProducer(); err != nil {
+		return nil, err
+	}
 	unlockVector, vectorMutationHeld := c.lockNativeHNSWMutationIfNeeded()
 	defer unlockVector()
-	if err = c.nativeJSON.InsertBatch(c.name, ids, documents); err != nil {
+	if err = c.nativeJSON.insertPrepared(c.name, ids, documents); err != nil {
 		return nil, err
 	}
 	if c.nativeHNSWMaintenanceNeeded() {

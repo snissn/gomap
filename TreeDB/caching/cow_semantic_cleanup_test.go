@@ -4,11 +4,65 @@ import (
 	"errors"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
+
+func TestCOWSemanticPressureJoinWaitsForOriginalRefundFrontier(t *testing.T) {
+	db, c := cowCutFixture(t)
+	db.ownedCloseGuard = db.backend.(*backenddb.DB).OwnedCallbackCloseGuard()
+	c.flushWake = make(chan struct{}, 1)
+	started, release := make(chan struct{}), make(chan struct{})
+	lateStarted, lateRelease := make(chan struct{}), make(chan struct{})
+	first := newTestSemanticState(func() error { close(started); <-release; return nil })
+	late := newTestSemanticState(func() error { close(lateStarted); <-lateRelease; return nil })
+	c.semanticMu.Lock()
+	c.enqueueSemanticLocked(first.Release())
+	c.semanticMu.Unlock()
+	workerDone := make(chan struct{})
+	go func() { db.drainSemanticCleanup(); close(workerDone) }()
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+		select {
+		case <-lateRelease:
+		default:
+			close(lateRelease)
+		}
+		<-workerDone
+	}()
+	<-started
+	joined := make(chan error, 1)
+	go func() { joined <- db.joinSemanticCleanupFrontier() }()
+	// The wake is issued under semanticMu after capturing the fixed frontier.
+	<-c.flushWake
+	select {
+	case err := <-joined:
+		t.Fatalf("joined before refund: %v", err)
+	default:
+	}
+	c.semanticMu.Lock()
+	c.enqueueSemanticLocked(late.Release())
+	c.semanticMu.Unlock()
+	close(release)
+	<-lateStarted
+	select {
+	case err := <-joined:
+		if err != nil || first.resource != nil || first.calls != 1 {
+			t.Fatalf("original refund incomplete: %v %+v", err, first)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("fixed frontier waited for later producer cleanup")
+	}
+	close(lateRelease)
+	<-workerDone
+}
 
 type testSemanticState struct {
 	refs     atomic.Int32
@@ -144,8 +198,18 @@ func TestCOWSemanticFailureParksSameWorkAndGuardsDestructorAndNotificationClose(
 	db.ownedCloseGuard = db.backend.(*backenddb.DB).OwnedCallbackCloseGuard()
 	c.flushWake = make(chan struct{}, 1)
 	failure := errors.New("original semantic cleanup failure")
-	var destructClose, notifyClose error
-	failed := newTestSemanticState(func() error { destructClose = db.Close(); return failure })
+	limit := c.budget.Limits().MaxInFlightBytes
+	filler, err := c.budget.AcquireExternal(limit - limit/4 - c.budget.Stats().ReservedBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer filler.Close()
+	var destructClose, notifyClose, destructPrepare, notifyPrepare error
+	failed := newTestSemanticState(func() error {
+		destructClose = db.Close()
+		destructPrepare = db.PrepareNativeProducer()
+		return failure
+	})
 	successful := newTestSemanticState(nil)
 	original := failed.resource
 	notifications := 0
@@ -155,19 +219,23 @@ func TestCOWSemanticFailureParksSameWorkAndGuardsDestructorAndNotificationClose(
 			t.Error(err)
 		}
 		notifyClose = db.Close()
+		notifyPrepare = db.PrepareNativeProducer()
 	}
 	c.semanticMu.Lock()
 	c.enqueueSemanticLocked(failed.Release())
 	c.enqueueSemanticLocked(successful.Release())
 	c.semanticMu.Unlock()
 	db.drainSemanticCleanup()
-	if destructClose == nil || notifyClose == nil || db.closing.Load() {
+	if destructClose == nil || notifyClose == nil || destructPrepare == nil || notifyPrepare == nil || db.closing.Load() {
 		t.Fatal("same-caller Close was not rejected before side effects")
 	}
 	if notifications != 1 || db.backgroundError() != failure || c.semanticFailed != &failed.cleanup || failed.cleanup.Work != failed || failed.cleanup.Err != failure || failed.resource != original || original.charge != 8192 {
 		t.Fatal("lost original failure/resource/charge")
 	}
 	db.drainSemanticCleanup()
+	if err := db.joinSemanticCleanupFrontier(); err != failure {
+		t.Fatalf("pressure join lost original cleanup failure: %v", err)
+	}
 	if failed.calls != 1 || successful.calls != 1 || successful.resource != nil || failed.resource != original {
 		t.Fatal("replayed original work or lost successful sibling refund")
 	}

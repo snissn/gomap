@@ -49,6 +49,116 @@ func TestCOWNativeProducerPressureCannotDiscountRetainedReservations(t *testing.
 	}
 }
 
+func TestCOWNativeProducerPressureDiscreteLimits(t *testing.T) {
+	for _, kind := range []string{"sources", "generations"} {
+		t.Run(kind, func(t *testing.T) {
+			cache, backend := nativeBridgeFixture(t, false)
+			if kind == "generations" {
+				if err := cache.Set([]byte("pressure"), []byte("payload")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			budget := cache.cow.budget
+			var pins []*memtable.COWWriter
+			release := func() {
+				for _, writer := range pins {
+					work := writer.Close()
+					work.Drain()
+				}
+				pins = nil
+			}
+			defer release()
+			for {
+				stats, limits := budget.Stats(), budget.Limits()
+				if (kind == "sources" && stats.Sources == limits.MaxSources) || (kind == "generations" && stats.Generations == limits.MaxGenerations) {
+					break
+				}
+				var writer *memtable.COWWriter
+				var err error
+				if kind == "sources" {
+					writer, err = budget.NewNativeCOWWriter(0)
+				} else {
+					writer, err = memtable.NewCOWWriter(budget)
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				pins = append(pins, writer)
+			}
+			if stats := budget.Stats(); stats.ReservedBytes >= budget.Limits().MaxInFlightBytes*3/4 {
+				t.Fatalf("not independent of bytes: %+v", stats)
+			}
+			frontiers, next := cache.cow.prefix.LogicalFrontiers(), backend.CommandWALNextLSN()
+			runs := cache.checkpointRuns.Load()
+			capture, err := backend.CaptureNativeSemanticState()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := capture.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if cache.checkpointRuns.Load() != runs {
+				t.Fatal("read capture ran producer maintenance")
+			}
+			err = backend.PrepareNativeProducer()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cache.checkpointRuns.Load() != runs+1 {
+				t.Fatal("expected exactly one checkpoint")
+			}
+			if cache.cow.prefix.LogicalFrontiers().V != frontiers.V || backend.CommandWALNextLSN() != next {
+				t.Fatal("preflight changed logical publication")
+			}
+			if kind == "sources" {
+				writer, err := budget.NewNativeCOWWriter(0)
+				if writer != nil || !errors.Is(err, memtable.ErrCOWCapacity) {
+					t.Fatalf("lost final source refusal: %v/%v", writer, err)
+				}
+				tx, err := backend.BeginPreparedNativeConditionalTxn()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := tx.Close(); err != nil {
+					t.Fatal(err)
+				}
+				if cache.checkpointRuns.Load() != runs+1 {
+					t.Fatal("prepared opening checked pressure again")
+				}
+			} else {
+				if budget.Stats().Generations >= budget.Limits().MaxGenerations {
+					t.Fatal("checkpoint did not reclaim the nonempty raw generation")
+				}
+				for budget.Stats().Generations < budget.Limits().MaxGenerations {
+					writer, err := memtable.NewCOWWriter(budget)
+					if err != nil {
+						t.Fatal(err)
+					}
+					pins = append(pins, writer)
+				}
+				writer, err := memtable.NewCOWWriter(budget)
+				if writer != nil || !errors.Is(err, memtable.ErrCOWCapacity) {
+					t.Fatalf("lost finite generation refusal: %v/%v", writer, err)
+				}
+			}
+			release()
+			tx, err := backend.BeginNativeConditionalTxn()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := tx.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := cache.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if stats := cache.COWMemoryStats(); stats.TotalBytes != 0 {
+				t.Fatalf("final debt=%+v", stats)
+			}
+		})
+	}
+}
+
 type nativeTxnTestPlan struct {
 	state    *testSemanticState
 	latest   backenddb.NativeSemanticState

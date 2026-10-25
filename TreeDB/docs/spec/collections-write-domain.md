@@ -56,6 +56,19 @@ a generic failure is not proof that application callbacks can safely retry.
 Assigned uncertain failures retain their identity and poison further writes
 until recovery.
 
+Native live producers run shared pressure preparation before collection locks,
+captures, private staging and callbacks. The existing byte watermark or an
+exhausted finite source/generation counter requests at most one coalesced
+checkpoint. It then joins refunds already queued on the existing semantic
+cleanup worker through a fixed completion frontier; later producers and held
+read cuts are outside that wait. Cleanup failure retains its original custody
+and error. Reentry from an active publication/cleanup callback refuses before
+waiting. Read capture, replay/apply and publication itself do not initiate this
+maintenance. Lock-held facade openings reuse the original transaction opening
+without a second pressure check. Preparation reserves no capacity: multi-domain
+work and readers retaining old sources can still reach ordinary finite
+admission refusal without assignment or a callback retry.
+
 ## Indexed Write Memtables
 
 Legacy backend-only indexed collections use collection-local write memtables by default.

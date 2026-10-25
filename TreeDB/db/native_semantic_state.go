@@ -215,8 +215,10 @@ type NativeColumnStoreCompactionState interface {
 type NativeSemanticBridge interface {
 	CompactNativeColumnStore(context.Context, NativeColumnStoreCompaction) error
 	Checkpoint() error
+	PrepareNativeProducer() error
 	CaptureNativeCut() (NativeSemanticCapture, error)
 	BeginNativeConditionalTxn() (NativeConditionalTxn, error)
+	BeginPreparedNativeConditionalTxn() (NativeConditionalTxn, error)
 	WriteNativePublication(*NativePreparedPublication, *CommandWALIntent, bool) (NativePublicationResult, error)
 }
 
@@ -274,6 +276,24 @@ func (db *DB) BeginNativeConditionalTxn() (NativeConditionalTxn, error) {
 		return nil, ErrNativeSemanticUnsupported
 	}
 	return db.nativeSemanticBridge.BeginNativeConditionalTxn()
+}
+
+// PrepareNativeProducer runs maintenance before collection locks or captures.
+// It reserves no capacity and grants no publication authority.
+func (db *DB) PrepareNativeProducer() error {
+	if !db.HasNativeSemanticBridge() {
+		return ErrNativeSemanticUnsupported
+	}
+	return db.nativeSemanticBridge.PrepareNativeProducer()
+}
+
+// BeginPreparedNativeConditionalTxn is the opening-only adapter for consumers
+// that prepared before acquiring their own mutation locks.
+func (db *DB) BeginPreparedNativeConditionalTxn() (NativeConditionalTxn, error) {
+	if !db.HasNativeSemanticBridge() {
+		return nil, ErrNativeSemanticUnsupported
+	}
+	return db.nativeSemanticBridge.BeginPreparedNativeConditionalTxn()
 }
 func (db *DB) WriteNativePublication(native *NativePreparedPublication, intent *CommandWALIntent, sync bool) (NativePublicationResult, error) {
 	if !db.HasNativeSemanticBridge() {

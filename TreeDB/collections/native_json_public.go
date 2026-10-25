@@ -77,6 +77,11 @@ func (m *NativeJSONManager) createCollection(meta CollectionMeta, apply *nativeC
 	if err != nil {
 		return nil, err
 	}
+	if apply == nil {
+		if err := m.db.PrepareNativeProducer(); err != nil {
+			return nil, err
+		}
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	capture, err := m.db.CaptureNativeSemanticState()

@@ -17,11 +17,17 @@ type nativeConditionalTxn struct {
 // BeginNativeConditionalTxn uses the original P1 opening Snapshot, sequence,
 // read/write validation and batch. It creates no second capture or journal.
 func (db *DB) BeginNativeConditionalTxn() (backenddb.NativeConditionalTxn, error) {
+	if err := db.PrepareNativeProducer(); err != nil {
+		return nil, err
+	}
+	return db.BeginPreparedNativeConditionalTxn()
+}
+
+// BeginPreparedNativeConditionalTxn opens the same original transaction after
+// outer producer preparation, without checkpointing under consumer locks.
+func (db *DB) BeginPreparedNativeConditionalTxn() (backenddb.NativeConditionalTxn, error) {
 	if db == nil || db.cow == nil {
 		return nil, ErrCOWUnsupported
-	}
-	if err := db.checkpointNativeProducerPressure(); err != nil {
-		return nil, err
 	}
 	charge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(ConditionalTxn{}))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeConditionalTxn{})))
 	lease, err := db.cow.budget.AcquireExternal(charge)
@@ -36,27 +42,42 @@ func (db *DB) BeginNativeConditionalTxn() (backenddb.NativeConditionalTxn, error
 	return &nativeConditionalTxn{ConditionalTxn: tx, lease: lease}, nil
 }
 
-// Semantic-only publications retain allocation reservations without adding raw
-// memtable bytes, so the raw generation preflight cannot schedule their drain.
-// Leave a quarter of the finite reservation budget for the next producer's
-// preparation. This is a maintenance watermark, not an admission promise: the
-// allocator still refuses oversized work or reservations held by old readers.
-func (db *DB) checkpointNativeProducerPressure() error {
+// PrepareNativeProducer joins at most one existing checkpoint before any
+// consumer lock, capture or private preparation. Semantic sources can exhaust
+// independently of bytes. This maintenance is not an admission promise: old
+// readers or concurrent producers can retain the original finite capacity.
+func (db *DB) PrepareNativeProducer() error {
+	if db == nil || db.cow == nil {
+		return ErrCOWUnsupported
+	}
 	c := db.cow
-	limit := c.budget.Limits().MaxInFlightBytes
-	watermark := limit - limit/4
-	if c.budget.Stats().ReservedBytes < watermark {
+	limits := c.budget.Limits()
+	underPressure := func() bool {
+		stats := c.budget.Stats()
+		return stats.ReservedBytes >= limits.MaxInFlightBytes-limits.MaxInFlightBytes/4 ||
+			stats.Sources >= limits.MaxSources || stats.Generations >= limits.MaxGenerations
+	}
+	if !underPressure() {
 		return nil
+	}
+	// A cleanup/Finish callback cannot join its own original worker frontier.
+	if err := db.ownedCloseGuard.CheckClose(); err != nil {
+		return err
 	}
 	// Concurrent producers join one drain and recheck after it, before acquiring
 	// any opening, allocation receipt, writer gate or append authority. Never
 	// retry an application callback or a partially prepared transaction here.
 	c.nativePressureMu.Lock()
 	defer c.nativePressureMu.Unlock()
-	if c.budget.Stats().ReservedBytes < watermark {
+	if !underPressure() {
 		return nil
 	}
-	return db.Checkpoint()
+	if err := db.Checkpoint(); err != nil {
+		return err
+	}
+	// Physical handoff queues old semantic edges. Join their actual refunds on
+	// the original worker; NoWAL can otherwise return before source slots retire.
+	return db.joinSemanticCleanupFrontier()
 }
 func (tx *nativeConditionalTxn) State() backenddb.NativeSemanticState {
 	if tx == nil || tx.ConditionalTxn == nil || tx.closed || tx.snap == nil {

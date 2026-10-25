@@ -4,11 +4,139 @@ import (
 	"bytes"
 	"fmt"
 	"strconv"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
+
+// Pause the real checkpoint cutover, then exercise the ordinary mutation gate
+// and graph query. Producer preflight must hold neither while waiting for IO.
+func TestNativeProducerPressurePrecedesCollectionLocks(t *testing.T) {
+	for _, operation := range []string{"update", "save", "scalar-ddl", "rebuild", "nativewire-insert"} {
+		t.Run(operation, func(t *testing.T) {
+			opts := OptionsFor(ProfileNoWALFast, t.TempDir())
+			opts.MemtableMode = "cow_btree"
+			opts.BackgroundCheckpointInterval, opts.BackgroundCheckpointIdleDuration = -1, -1
+			database, err := Open(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			backend, err := database.NativeSemanticBackend()
+			if err != nil {
+				t.Fatal(err)
+			}
+			manager := collections.NewCollectionManager(backend)
+			defer func() {
+				database.cached.SetCommandWALCheckpointCutoverHook(nil)
+				if err := manager.Close(); err != nil {
+					t.Error(err)
+				}
+				cache := database.cached
+				if err := database.Close(); err != nil {
+					t.Error(err)
+				}
+				requirePublicCOWFinalZero(t, cache)
+			}()
+			def := collections.VectorIndexDefinition{Name: "embedding", Field: "embedding", Dimensions: 2, Metric: collections.VectorMetricCosine, M: 4}
+			if _, err := manager.CreateCollection(&collections.CollectionMeta{Name: "rows", Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatJSON}, VectorIndexes: []collections.VectorIndexDefinition{def}}); err != nil {
+				t.Fatal(err)
+			}
+			c, err := manager.OpenCollection("rows")
+			if err != nil {
+				t.Fatal(err)
+			}
+			document := []byte(`{"embedding":[1,0],"marker":1}`)
+			if _, err := c.Insert([]byte("first"), document); err != nil {
+				t.Fatal(err)
+			}
+			idx, err := c.BuildVectorIndex(collections.VectorIndexOptions{Name: def.Name, Field: def.Field, Dimensions: def.Dimensions, Metric: def.Metric, M: def.M})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for i := 0; database.cached.COWMemoryStats().Sources < DefaultCOWMemtableLimits().MaxSources; i++ {
+				if i > DefaultCOWMemtableLimits().MaxSources+4 {
+					t.Fatal("source ceiling was not reached")
+				}
+				if _, err := idx.SaveSnapshot(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			entered, release, finished := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+			database.cached.SetCommandWALCheckpointCutoverHook(func() { close(entered); <-release })
+			var callbacks atomic.Int32
+			go func() {
+				var err error
+				switch operation {
+				case "update":
+					_, _, err = c.Update([]byte("first"), func([]byte) ([]byte, bool, error) {
+						callbacks.Add(1)
+						return []byte(`{"embedding":[1,0],"marker":2}`), true, nil
+					})
+				case "save":
+					_, err = idx.SaveSnapshot()
+				case "scalar-ddl":
+					_, err = c.CreateIndex(collections.IndexDefinition{Name: "marker", Field: "marker", ValueType: collections.IndexValueInt64})
+				case "rebuild":
+					_, err = c.RebuildVectorIndex(def.Name)
+				case "nativewire-insert":
+					err = c.NativewireInsertBatchNoResultIDs([][]byte{[]byte("second")}, [][]byte{document}, false)
+				}
+				finished <- err
+			}()
+			joined := false
+			var available chan error
+			availableJoined := false
+			defer func() {
+				select {
+				case <-release:
+				default:
+					close(release)
+				}
+				if !joined {
+					<-finished
+				}
+				if available != nil && !availableJoined {
+					<-available
+				}
+			}()
+			select {
+			case <-entered:
+			case <-time.After(5 * time.Second):
+				t.Fatal("producer did not enter pressure checkpoint")
+			}
+			available = make(chan error, 1)
+			go func() {
+				c.UnregisterVectorIndex("absent")
+				_, _, err := idx.Search([]float32{1, 0}, collections.VectorIndexSearchOptions{TopK: 1, DisableExactFallback: true})
+				available <- err
+			}()
+			select {
+			case err := <-available:
+				availableJoined = true
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("checkpoint preflight held collection or graph query gate")
+			}
+			if callbacks.Load() != 0 {
+				t.Fatal("callback ran before maintenance completed")
+			}
+			close(release)
+			err = <-finished
+			joined = true
+			if err != nil {
+				t.Fatal(err)
+			}
+			if operation == "update" && callbacks.Load() != 1 {
+				t.Fatal("callback was replayed")
+			}
+		})
+	}
+}
 
 // Tiny semantic writes used to exhaust the default reservation budget at about
 // 444 rows even though an ordinary checkpoint reclaimed most of that debt.

@@ -51,6 +51,9 @@ func nativeVectorVersionKey(collection, index string) string {
 }
 
 func (c *Collection) nativeCreateVectorIndex(def VectorIndexDefinition) (*CollectionMeta, error) {
+	if err := c.nativeJSON.db.PrepareNativeProducer(); err != nil {
+		return nil, err
+	}
 	unlock := c.lockVectorIndexMutation()
 	defer unlock()
 	meta, err := c.nativeJSON.mutateIndexFamilies(c, c.name, nil, nil, false, &def, "")
@@ -60,6 +63,9 @@ func (c *Collection) nativeCreateVectorIndex(def VectorIndexDefinition) (*Collec
 	return meta, err
 }
 func (c *Collection) nativeDropVectorIndex(name string) (*CollectionMeta, error) {
+	if err := c.nativeJSON.db.PrepareNativeProducer(); err != nil {
+		return nil, err
+	}
 	unlock := c.lockVectorIndexMutation()
 	defer unlock()
 	meta, err := c.nativeJSON.mutateIndexFamilies(c, c.name, nil, nil, false, nil, name)
@@ -562,6 +568,9 @@ func (p *nativeHNSWPublication) PrepareNativePublication(latest backenddb.Native
 
 func (idx *VectorIndex) saveNativeHNSW() (status VectorIndexLoadStatus, resultErr error) {
 	c := idx.collection
+	if err := c.nativeJSON.db.PrepareNativeProducer(); err != nil {
+		return status, err
+	}
 	unlock := c.lockVectorIndexMutation()
 	defer unlock()
 	return idx.saveNativeHNSWWithMutationHeld()
@@ -1281,6 +1290,9 @@ func (c *Collection) nativeOrdinaryHNSWRole(name string) (bool, error) {
 }
 
 func (c *Collection) rebuildNativeOrdinaryHNSW(name string) (VectorIndexStatus, error) {
+	if err := c.nativeJSON.db.PrepareNativeProducer(); err != nil {
+		return VectorIndexStatus{}, err
+	}
 	unlock := c.lockVectorIndexMutation()
 	defer unlock()
 	r, err := c.nativeJSON.Capture(c.name)

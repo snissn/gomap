@@ -13,6 +13,9 @@ import (
 )
 
 func (c *Collection) nativeMutateIndexes(create *IndexDefinition, remove map[string]struct{}, all bool) (*CollectionMeta, error) {
+	if err := c.nativeJSON.db.PrepareNativeProducer(); err != nil {
+		return nil, err
+	}
 	unlock := c.lockVectorIndexMutation()
 	defer unlock()
 	return c.nativeJSON.mutateIndexFamilies(c, c.name, create, remove, all, nil, "")
