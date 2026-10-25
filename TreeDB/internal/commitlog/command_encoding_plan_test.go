@@ -183,6 +183,12 @@ func TestCommandJournalV2EncodingActualLSNAndRollback(t *testing.T) {
 	}
 	defer j.Close()
 	restore := j.installBufferedWriterForTest(commandJournalFailWriter{}, 1)
+	// Fixed V2 frames now enter owned memory directly. Seed older unaccepted
+	// bytes so the required ordered drain still observes this exact failure
+	// after reservation. Restore discards only the injected, unaccepted buffer.
+	if _, err := j.writer.bw.Write([]byte{0xa5}); err != nil {
+		t.Fatal(err)
+	}
 	if lsn, err := j.AppendCommand(encodingPlanEnvelope(t, 0)); lsn != 0 || !errors.Is(err, errCommandJournalInjectedWrite) {
 		t.Fatal("changed failed-write identity", lsn, err)
 	}

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sync/atomic"
 	"time"
 
@@ -1116,16 +1117,61 @@ func (w *Writer) appendCommandV2Prepared(plan commandFrameV2Encoding) error {
 	if err := w.commandFrameSizeError(plan.total); err != nil {
 		return err
 	}
-	payload := plan.encodeTo(w.scratch[:0])
-	w.scratch = payload
-	// Strict V2 readers reject compressed segment storage so recovery can
-	// inspect frame identity directly at a torn terminal tail. Keep V2 command
-	// frames raw even when compression remains enabled for other journal data.
-	err := w.writeRawSegmentWithChecksum(payload, crc.Checksum(payload))
+	var err error
+	if w.fixed != nil {
+		err = w.appendFixedCommandV2Prepared(plan)
+	} else {
+		payload := plan.encodeTo(w.scratch[:0])
+		w.scratch = payload
+		// Strict V2 readers reject compressed segment storage so recovery can
+		// inspect frame identity directly at a torn terminal tail. Keep V2 command
+		// frames raw even when compression remains enabled for other journal data.
+		err = w.writeRawSegmentWithChecksum(payload, crc.Checksum(payload))
+	}
 	if w.commandBufRetain > 0 && cap(w.scratch) > w.commandBufRetain {
 		w.scratch = make([]byte, 0, w.commandBufRetain)
 	}
 	return err
+}
+
+// appendFixedCommandV2Prepared emits directly into the existing canonical
+// logical pending buffer. It remains unaccepted in memory until the complete
+// frame and outer checksum exist; Flush still validates ALL pending frames
+// before writing ANY immutable physical extent.
+func (w *Writer) appendFixedCommandV2Prepared(plan commandFrameV2Encoding) error {
+	if plan.total > int(^uint(0)>>1)-segmentHeaderSize {
+		return ErrRecordTooLarge
+	}
+	// Older entrypoints may still own buffered bytes. Preserve their original
+	// ordering before reserving the new command's tail; none of these drains
+	// writes physical fixed extents.
+	if w.pendingBatchRecs != 0 {
+		if err := w.flushPendingBatch(); err != nil {
+			return err
+		}
+	}
+	if err := w.flushBufferedCommandFrames(); err != nil {
+		return err
+	}
+	if err := w.bw.Flush(); err != nil {
+		return err
+	}
+	size := segmentHeaderSize + plan.total
+	before := len(w.fixed.pending)
+	if before > int(^uint(0)>>1)-size {
+		return ErrRecordTooLarge
+	}
+	// Grow/extend only a local slice. A panic before the final publication
+	// leaves pending's length and every prior byte unchanged; only an unused
+	// tail may have been touched. No borrowed encoder storage is retained.
+	pending := slices.Grow(w.fixed.pending, size)[:before+size]
+	frame := plan.encodeTo(pending[before+segmentHeaderSize : before+segmentHeaderSize])
+	header := pending[before : before+segmentHeaderSize]
+	binary.LittleEndian.PutUint32(header[:4], uint32(len(frame)))
+	binary.LittleEndian.PutUint32(header[4:8], crc.Checksum(frame))
+	w.fixed.pending = pending
+	w.size += int64(size)
+	return nil
 }
 
 func (w *Writer) AppendRawKVSingleCommandDirect(lsn, baseAppliedLSN uint64, op RawKVOperation) error {
