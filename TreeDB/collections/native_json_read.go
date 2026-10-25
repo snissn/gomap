@@ -308,6 +308,9 @@ func (r *NativeJSONRead) readValue(ptr page.ValuePtr, admitOutput func(uint64) e
 
 func (r *NativeJSONRead) readLeaf(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
 	if r.capture == nil || r.closing || r.failure != nil {
+		if r.scratch != nil {
+			r.scratch.point.Invalidate()
+		}
 		return nil, backenddb.ErrClosed
 	}
 	// This scope already retains its exact immutable capture. Reuse only the
@@ -316,6 +319,12 @@ func (r *NativeJSONRead) readLeaf(ptr page.LeafLogPtr, dst []byte) ([]byte, erro
 	// such call invalidates the one-page identity before it can write anything.
 	// Tree/PRIMARY checksum, type and operand validation still run on each use.
 	scratch := r.scratch
+	// The point helper holds a decoded view of both private backing arrays.
+	// Canonical or overlapping writes invalidate it before touching bytes;
+	// a disjoint iterator destination cannot mutate either of those arrays.
+	if scratch != nil && scratch.overlapsPointBacking(dst) {
+		scratch.point.Invalidate()
+	}
 	canonical := scratch != nil && cap(dst) == page.PageSize && &dst[:page.PageSize][0] == &scratch.leaf[0]
 	if canonical && scratch.leafValid && scratch.leafRef == ptr {
 		return scratch.leaf[:], nil
@@ -324,10 +333,31 @@ func (r *NativeJSONRead) readLeaf(ptr page.LeafLogPtr, dst []byte) ([]byte, erro
 		scratch.leafValid = false
 	}
 	data, err := r.loadLeaf(ptr, dst)
+	if err != nil && scratch != nil {
+		scratch.point.Invalidate()
+	}
 	if err == nil && canonical && len(data) == page.PageSize && cap(data) == page.PageSize && &data[0] == &scratch.leaf[0] {
 		scratch.leafRef, scratch.leafValid = ptr, true
 	}
 	return data, err
+}
+
+func (s *nativeDomainReadScratch) overlapsPointBacking(dst []byte) bool {
+	if cap(dst) == 0 {
+		return false
+	}
+	start := uintptr(unsafe.Pointer(unsafe.SliceData(dst[:cap(dst)])))
+	for _, backing := range [][]byte{s.key[:], s.leaf[:]} {
+		base := uintptr(unsafe.Pointer(unsafe.SliceData(backing)))
+		if start >= base {
+			if start-base < uintptr(len(backing)) {
+				return true
+			}
+		} else if base-start < uintptr(cap(dst)) {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *NativeJSONRead) loadLeaf(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {

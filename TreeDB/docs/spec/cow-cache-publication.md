@@ -193,6 +193,23 @@ cut and admitted scratch through Close. Snapshot Close invalidates its bound
 iterators, and physical ownership drains after admitted operations/cursors
 finish. DB Close denies new reads and waits for admitted reads before storage
 teardown; it does not promise storage reads after DB Close.
+Native collection point probes can retain a validated external leaf in their
+existing admitted private scratch. Exact successful hits reuse its decoded view
+under the same Snapshot, root, reader, namespace, extent and backing identity;
+by-value reconstruction of the root reader grants no new authority. Newest
+pending/captured sources still win before every physical probe. Root fences and
+negative filters still apply. Missing keys take the complete traversal, and
+PRIMARY or VerifyOnRead bindings never use this shortcut. The older fixed-scratch
+API retains its per-call validation contract.
+
+The scratch header and fixed target copy are charged with their containing
+storage before allocation. Copy borrowed lookup targets before key reconstruction
+can overwrite them. Shared key/leaf writers invalidate the retained view before
+writing; disjoint iterator buffers may preserve it. Errors and Close detach its
+aliases before refund. The view adds no root/file pin, owner, pool or shared cache,
+and does not authorize retaining returned metadata across scratch reuse. Value
+resolution and independent output copies keep their original capture and admission.
+
 The inherited `Print` and `FragmentationReport` diagnostics require caller
 synchronization with Close.
 Public reads capture their existing cached/backend owner under the public

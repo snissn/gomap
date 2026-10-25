@@ -279,7 +279,7 @@ func (r *VectorPartitionSourceReaderV2) ReadChunk(index uint64) (VectorPartition
 			if e != nil {
 				return nil, e
 			}
-			entry, err = reader.GetEntryExactWithFixedScratch(key, scratch.key[:], scratch.leaf[:], r.nativeRead.readLeaf)
+			entry, err = reader.GetEntryExactWithOwnedScratch(key, scratch.key[:], scratch.leaf[:], &scratch.point, r.nativeRead.readLeaf)
 		} else {
 			entry, err = r.snap.GetEntryAtRoot(r.root, key)
 		}

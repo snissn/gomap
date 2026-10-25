@@ -88,7 +88,7 @@ func (r *NativeJSONRead) sourceReadRecordsV2(id []byte, manifestRoot uint64) ([]
 	records := make([]columnManifestRecord, 0, 2)
 	for _, partID := range [...]uint64{ref.PartID, typedColumnPartAssetPartID} {
 		key := columnManifestPartRecordKey(ref.Generation, partID)
-		entry, e = reader.GetEntryExactWithFixedScratch(key, scratch.key[:], scratch.leaf[:], r.readLeaf)
+		entry, e = reader.GetEntryExactWithOwnedScratch(key, scratch.key[:], scratch.leaf[:], &scratch.point, r.readLeaf)
 		if e != nil {
 			return nil, e
 		}
