@@ -26,7 +26,6 @@ type nativeDomainRead struct {
 // scratch instance cannot serve overlapping operations or outstanding entries.
 type nativeDomainReadScratch struct {
 	key, leaf [page.PageSize]byte
-	point     backenddb.NativePointScratch
 	successor tree.OwnedSuccessorScratch
 	leafRef   page.LeafLogPtr
 	leafValid bool
@@ -74,7 +73,7 @@ func (r *nativeDomainRead) baseEntry(key []byte, scratch *nativeDomainReadScratc
 	if scratch == nil {
 		return node.LeafEntry{}, backenddb.ErrNativeSemanticUnsupported
 	}
-	return r.base.GetEntryExactWithOwnedScratch(key, scratch.key[:], scratch.leaf[:], &scratch.point, readLeaf)
+	return r.base.GetEntryExactWithFixedScratch(key, scratch.key[:], scratch.leaf[:], readLeaf)
 }
 
 func (r *nativeDomainRead) getEntry(key []byte, scratch *nativeDomainReadScratch, readLeaf func(page.LeafLogPtr, []byte) ([]byte, error)) (node.LeafEntry, error) {
@@ -156,10 +155,8 @@ func (r *nativeDomainRead) seekWithCursor(start, end []byte, scratch *nativeDoma
 		if cursor != nil {
 			entry, ok, err = cursor.physicalEntry(start, readLeaf, forward, admit, inspect)
 		} else if reverse {
-			scratch.point.Invalidate()
 			entry, ok, err = r.base.SeekLTEntryWithFixedScratch(start, end, scratch.key[:], scratch.leaf[:], &scratch.successor, readLeaf)
 		} else {
-			scratch.point.Invalidate()
 			entry, ok, err = r.base.SeekGEEntryWithFixedScratch(start, end, scratch.key[:], scratch.leaf[:], &scratch.successor, readLeaf)
 		}
 		if err != nil {

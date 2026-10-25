@@ -53,7 +53,7 @@ func importNativeJSONCatalog(capture backenddb.NativeSemanticCapture) (base *nat
 		return base, err
 	}
 	get := func(key string) ([]byte, error) {
-		entry, err := reader.GetEntryExactWithOwnedScratch([]byte(key), scratch.key[:], scratch.leaf[:], &scratch.point, probe.readLeaf)
+		entry, err := reader.GetEntryExactWithFixedScratch([]byte(key), scratch.key[:], scratch.leaf[:], probe.readLeaf)
 		if err != nil {
 			return nil, err
 		}
@@ -77,7 +77,6 @@ func importNativeJSONCatalog(capture backenddb.NativeSemanticCapture) (base *nat
 		start := []byte(prefix)
 		end := prefixEnd(start)
 		for {
-			probe.scratch.point.Invalidate()
 			entry, found, err := reader.SeekGEEntryWithFixedScratch(start, end, probe.scratch.key[:], probe.scratch.leaf[:], &probe.scratch.successor, probe.readLeaf)
 			if err != nil {
 				return err

@@ -112,7 +112,6 @@ func (s *nativeSourceRequirementStreamV2) scan(slot *nativeSourceRequirementSlot
 	}
 	n := copy(slot.pivot[:], start)
 	for {
-		slot.scratch.point.Invalidate()
 		entry, ok, err := s.reader.SeekGEEntryWithFixedScratch(slot.pivot[:n], end, slot.scratch.key[:], slot.scratch.leaf[:], &slot.scratch.successor, s.readLeaf)
 		if err != nil || !ok {
 			return err
@@ -260,7 +259,7 @@ func (s *nativeSourceRequirementStreamV2) Lookup(query rootpublication.StableLog
 			if !s.hasBase {
 				continue
 			}
-			entry, e := s.reader.GetEntryExactWithOwnedScratch(key, s.point.scratch.key[:], s.point.scratch.leaf[:], &s.point.scratch.point, s.readLeaf)
+			entry, e := s.reader.GetEntryExactWithFixedScratch(key, s.point.scratch.key[:], s.point.scratch.leaf[:], s.readLeaf)
 			if errors.Is(e, tree.ErrKeyNotFound) {
 				continue
 			}

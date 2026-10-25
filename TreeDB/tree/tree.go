@@ -618,25 +618,9 @@ func (t *Tree) GetEntryWithFixedScratch(key, keyScratch, leafScratch []byte, rea
 }
 
 func (t *Tree) getEntry(key, keyScratch, leafScratch []byte, readLeaf func(page.LeafLogPtr, []byte) ([]byte, error), bounded bool) (node.LeafEntry, error) {
-	return t.getEntryOwned(key, keyScratch, leafScratch, readLeaf, bounded, nil)
-}
-
-func (t *Tree) getEntryOwned(key, keyScratch, leafScratch []byte, readLeaf func(page.LeafLogPtr, []byte) ([]byte, error), bounded bool, owned *OwnedPointScratch) (node.LeafEntry, error) {
 	if t.pointDefinitelyAbsent(key) {
 		return node.LeafEntry{}, ErrKeyNotFound
 	}
-	if owned != nil {
-		if entry, found, err := owned.exactHit(key); found || err != nil {
-			return entry, err
-		}
-		// No absence shortcut: even an interior miss takes the original walk.
-		owned.leaf = node.Node{}
-		owned.low, owned.high = nil, nil
-	}
-	// Callback invalidation may clear the retained header while loading. Keep
-	// current traversal authentication local until a complete hit is installed.
-	primary := owned != nil && owned.primary
-	var rootLow, rootHigh []byte
 	currRef := page.PageChildRef(t.rootPageID)
 	verifyAlways := false
 	if t.pager != nil {
@@ -655,7 +639,6 @@ func (t *Tree) getEntryOwned(key, keyScratch, leafScratch []byte, readLeaf func(
 
 		switch n.Type() {
 		case page.PageTypePrimaryDirectory:
-			primary = true
 			if depth != 0 {
 				return node.LeafEntry{}, node.ErrPrimaryDirectory
 			}
@@ -663,9 +646,6 @@ func (t *Tree) getEntryOwned(key, keyScratch, leafScratch []byte, readLeaf func(
 			var inline node.PrimaryDirectoryEntry
 			currRef, inline, err = t.selectPrimaryOperand(n.Data(), key, readLeaf, leafScratch, bounded)
 			if inline.InlineAbsence() {
-				if owned != nil {
-					owned.primary = true
-				}
 				return node.LeafEntry{Key: inline.Key, Flags: node.FlagTombstone, Revision: inline.Revision}, nil
 			}
 			if err != nil {
@@ -677,7 +657,6 @@ func (t *Tree) getEntryOwned(key, keyScratch, leafScratch []byte, readLeaf func(
 				if low, high, ok, err := n.InternalFenceBounds(); err != nil {
 					return node.LeafEntry{}, err
 				} else if ok {
-					rootLow, rootHigh = low, high
 					if len(low) > 0 && compareTreeKey(key, low) < 0 {
 						return node.LeafEntry{}, ErrKeyNotFound
 					}
@@ -715,13 +694,6 @@ func (t *Tree) getEntryOwned(key, keyScratch, leafScratch []byte, readLeaf func(
 				return node.LeafEntry{}, err
 			}
 
-			if owned != nil {
-				owned.primary, owned.low, owned.high = primary, rootLow, rootHigh
-				if !primary && currRef.Kind == page.ChildRefLeafLog && !verifyAlways {
-					// loadReadRefInto proved this image is in the exact private buffer.
-					owned.leaf = n
-				}
-			}
 			return node.LeafEntry{
 				Key:      k,
 				Value:    v,
