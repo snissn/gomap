@@ -67,6 +67,16 @@ func NewReaderFromFileWithOptions(file *os.File, opts Options) (*Reader, error) 
 	}, nil
 }
 
+// IsEmptyFixedContainer reports a positively validated frame-free fixed
+// container, not an empty stream or an EOF observation. Reader construction
+// validated the complete header and reserve on this exact descriptor; callers
+// must retain their existing append exclusion and identity/deletion custody.
+func (r *Reader) IsEmptyFixedContainer() bool {
+	return r != nil && r.f != nil && r.fixed != nil && r.fixed.logical == 0 &&
+		r.fixed.physical == fixedWALHeaderSize && len(r.fixed.extents) == 0 &&
+		len(r.fixed.incomplete) == 0 && r.fixed.reconstructedFooters == 0
+}
+
 // ReadBatch reads the next batch segment.
 func (r *Reader) ReadBatch() ([]Record, error) {
 	payload, err := r.readSegmentPayload(false)
