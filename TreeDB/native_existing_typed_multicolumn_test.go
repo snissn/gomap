@@ -32,7 +32,7 @@ func TestNativeExistingTypedMultiColumnLifecycle(t *testing.T) {
 		cmd.Env = append(os.Environ(), "GOMAP_TYPED_MULTICOLUMN_CRASH_DIR="+dir)
 		output, err := cmd.CombinedOutput()
 		var exit *exec.ExitError
-		if !errors.As(err, &exit) || exit.ExitCode() != 97 || !bytes.Contains(output, []byte("TYPED MULTICOLUMN UNAPPLIED basis=2 accepted=3")) || bytes.Contains(output, []byte("DATA RACE")) {
+		if !errors.As(err, &exit) || exit.ExitCode() != 97 || !bytes.Contains(output, []byte("TYPED MULTICOLUMN UNAPPLIED basis=4 accepted=6")) || bytes.Contains(output, []byte("DATA RACE")) {
 			t.Fatalf("real multicolumn typed child: %v\n%s", err, output)
 		}
 		t.Logf("child:\n%s", output)
@@ -42,12 +42,12 @@ func TestNativeExistingTypedMultiColumnLifecycle(t *testing.T) {
 			t.Fatal(err)
 		}
 		after := workstats.Read().Replay
-		if after.FramesApplied-before.FramesApplied != 1 || after.FrameErrors != before.FrameErrors {
+		if after.FramesApplied-before.FramesApplied != 2 || after.FrameErrors != before.FrameErrors {
 			_ = database.Close()
 			t.Fatalf("one actual multicolumn typed replay: %+v -> %+v", before, after)
 		}
 		a, b, c := nativeTypedOpsRows("")
-		checkNativeTypedMultiColumnReopened(t, database, []nativeTypedOpsRow{nativeTypedOpsChanged(a), b, c}, false, 3)
+		checkNativeTypedMultiColumnReopened(t, database, []nativeTypedOpsRow{nativeTypedOpsChanged(a), b, c}, false, 6)
 	})
 }
 
@@ -175,7 +175,7 @@ func runNativeTypedMultiColumn(t *testing.T, dir string, crash bool) {
 		t.Fatal(err)
 	}
 	basis, ok := handle.StateToken()
-	if !ok || basis.AppliedCommandLSN != 2 || indexedCRUDAppliedLSN(t, handle) != 2 || handle.CommandWALNextLSN() != 3 {
+	if !ok || basis.AppliedCommandLSN != 4 || indexedCRUDAppliedLSN(t, handle) != 4 || handle.CommandWALNextLSN() != 5 {
 		t.Fatalf("real seeded multicolumn basis=%+v valid=%v next=%d", basis, ok, handle.CommandWALNextLSN())
 	}
 	held, err = col.OpenCollectionReadView()
@@ -224,12 +224,12 @@ func runNativeTypedMultiColumn(t *testing.T, dir string, crash bool) {
 		t.Fatal(err)
 	}
 	after, valid := handle.StateToken()
-	if !valid || after != basis || indexedCRUDAppliedLSN(t, handle) != 2 || handle.CommandWALNextLSN() != 4 {
+	if !valid || after != basis || indexedCRUDAppliedLSN(t, handle) != 4 || handle.CommandWALNextLSN() != 7 {
 		t.Fatalf("typed suffix applied before checkpoint: basis=%+v after=%+v valid=%v", basis, after, valid)
 	}
 	checkNativeTypedMultiColumnFrame(t, opts, []nativeTypedOpsRow{changedA, c})
 	if crash {
-		t.Log("TYPED MULTICOLUMN UNAPPLIED basis=2 accepted=3")
+		t.Log("TYPED MULTICOLUMN UNAPPLIED basis=4 accepted=6")
 		os.Exit(97)
 	}
 	resumeMaintenance()
@@ -288,7 +288,7 @@ func runNativeTypedMultiColumn(t *testing.T, dir string, crash bool) {
 	if err := database.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
-	if indexedCRUDAppliedLSN(t, handle) != 4 {
+	if indexedCRUDAppliedLSN(t, handle) != 8 {
 		t.Fatal("checkpoint omitted a multicolumn command")
 	}
 	checkCurrent(changedA, b, finalC)
@@ -314,7 +314,7 @@ func runNativeTypedMultiColumn(t *testing.T, dir string, crash bool) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	checkNativeTypedMultiColumnReopened(t, reopened, []nativeTypedOpsRow{changedA, b, finalC}, true, 4)
+	checkNativeTypedMultiColumnReopened(t, reopened, []nativeTypedOpsRow{changedA, b, finalC}, true, 8)
 }
 
 func checkNativeTypedMultiColumnReopened(t *testing.T, database *DB, rows []nativeTypedOpsRow, raw bool, applied uint64) {
@@ -382,7 +382,7 @@ func checkNativeTypedMultiColumnFrame(t *testing.T, opts Options, rows []nativeT
 				_ = reader.Close()
 				t.Fatal(err)
 			}
-			if frame.LSN >= 3 {
+			if frame.LSN >= 5 && frame.Kind != commitlog.CommandKindDurablePrefixBarrier {
 				frames = append(frames, frame)
 			}
 		}
@@ -390,8 +390,8 @@ func checkNativeTypedMultiColumnFrame(t *testing.T, opts Options, rows []nativeT
 			t.Fatal(err)
 		}
 	}
-	if len(frames) != 1 || frames[0].LSN != 3 || frames[0].Kind != commitlog.CommandKindCompositeMutation || frames[0].PayloadFormat != commitlog.PayloadFormatCompositeMutationV1 {
-		t.Fatalf("one multicolumn typed aggregate at LSN3: %+v", frames)
+	if len(frames) != 1 || frames[0].LSN != 5 || frames[0].Kind != commitlog.CommandKindCompositeMutation || frames[0].PayloadFormat != commitlog.PayloadFormatCompositeMutationV1 {
+		t.Fatalf("one multicolumn typed aggregate at LSN5: %+v", frames)
 	}
 	var members []commitlog.CompositeMutationMember
 	if err := commitlog.ScanCompositeMutationPayload(frames[0].Payload, func(member commitlog.CompositeMutationMember) error {

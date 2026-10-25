@@ -3041,6 +3041,11 @@ boundary use V1 even if pointer entries retain logical value bytes. A grouped
 participant's envelope remains individually relaxed; its later durable-prefix
 barrier is the acknowledgement boundary that stabilizes the preceding frame.
 
+Public native collection publications use that same existing barrier record and
+frame encoding. Their mutation frame keeps its own LSN; group completion may add
+a root-neutral canonical LSN without changing the logical transaction sequence.
+There is no additional native WAL format or native durability coordinator.
+
 A `RawKVBatch` command frame is one atomic command: one frame, one `LSN`, and
 all contained operations decode as one batch. Delete operations require
 `ValueLen=0`. Delete-range operations use half-open `[start,end)` semantics;

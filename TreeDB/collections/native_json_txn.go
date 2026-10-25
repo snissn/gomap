@@ -606,8 +606,8 @@ func (t *NativeJSONTxn) commitNativePlan(sealed bool, apply *nativeCommandWALApp
 		apply.result = result
 	}
 
-	if sealed && apply == nil && err != nil && result.LogicalInstalled {
-		err = commitAmbiguousError("PreparedInsertBatch sealed completion", err)
+	if apply == nil && err != nil && (result.Assigned || result.LogicalInstalled) {
+		err = commitAmbiguousError("native command publication completion", err)
 	}
 	t.custody = nil
 	if !result.Consumed {

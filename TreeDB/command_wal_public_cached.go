@@ -471,7 +471,13 @@ func (tdb *DB) syncPublicCommandWALDirect() (db.CommandWALBarrierResult, error) 
 	if tdb.backend == nil {
 		return db.CommandWALBarrierResult{}, ErrClosed
 	}
-	result, err := tdb.backend.FlushCommandWALBarrierWithResult(true)
+	var result db.CommandWALBarrierResult
+	var err error
+	if tdb.backend.HasNativeSemanticBridge() {
+		result, err = tdb.backend.FlushPrivateCOWCommandWALBarrier(tdb.txnOwner)
+	} else {
+		result, err = tdb.backend.FlushCommandWALBarrierWithResult(true)
+	}
 	if result.LSN != 0 {
 		tdb.recordPublicCommandWALPendingLSN(result.LSN)
 	}
@@ -1750,4 +1756,37 @@ func (b *commandWALPublicBatch) closeCOWAdapter() {
 		b.cowState.lease.Close()
 	}
 	b.closed = true
+}
+
+// The native request admits this concrete adapter before registration, retaining
+// it through the same group's ACK. It is never another command/custody ledger.
+type nativePublicCommandWALCompletion struct {
+	db           *DB
+	registration publicCommandWALRegistration
+}
+
+func (tdb *DB) NativeCommandWALCompletionBytes() uint64 {
+	return uint64(unsafe.Sizeof(nativePublicCommandWALCompletion{}))
+}
+func (tdb *DB) RegisterNativeCommandWAL(bytes int, durable bool, appendFrame func(bool) (uint64, error)) (db.NativeCommandWALCompletion, error) {
+	completion := &nativePublicCommandWALCompletion{db: tdb}
+	registration, err := tdb.registerPublicCommandWALPolicy(bytes, nil, durable, nil, appendFrame, true)
+	completion.registration = registration
+	return completion, err
+}
+func (c *nativePublicCommandWALCompletion) CompleteNativeCommandWAL(installErr error) error {
+	tdb, registration := c.db, c.registration
+	c.db, c.registration = nil, publicCommandWALRegistration{}
+	if tdb == nil {
+		return ErrClosed
+	}
+	publication := registration.publicCommandWALPublication
+	err := installErr
+	if err == nil {
+		publication, err = tdb.awaitPublicCommandWAL(registration, nil, nil)
+	}
+	tdb.finishPublicCommandWALGroupPublication(publication, err)
+	// The original COW receipt poisons assigned failures, including failures
+	// before registration. A preassignment refusal leaves the handle usable.
+	return err
 }

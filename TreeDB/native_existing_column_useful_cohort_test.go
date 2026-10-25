@@ -135,7 +135,7 @@ func TestNativeExistingColumnUsefulCohort(t *testing.T) {
 					}
 					documents[i][0] = '!'
 				}
-				if handle.CommandWALNextLSN() != beforeLSN+1 || database.Stats()["treedb.cache.cow.txn.logical_seq"] != strconv.FormatUint(beforeSeq+1, 10) {
+				if handle.CommandWALNextLSN() != beforeLSN+2 || database.Stats()["treedb.cache.cow.txn.logical_seq"] != strconv.FormatUint(beforeSeq+1, 10) {
 					t.Fatalf("batch %d did not install one canonical command and successor", batch)
 				}
 				requireNativeUsefulCohortFrame(t, opts, beforeLSN, ids[start:end], expected[start:end])
@@ -150,7 +150,7 @@ func TestNativeExistingColumnUsefulCohort(t *testing.T) {
 				if err := database.Checkpoint(); err != nil {
 					t.Fatalf("batch %d checkpoint: %v", batch, err)
 				}
-				if applied := indexedCRUDAppliedLSN(t, handle); applied != beforeLSN {
+				if applied := indexedCRUDAppliedLSN(t, handle); applied != beforeLSN+1 {
 					t.Fatalf("batch %d applied=%d want=%d", batch, applied, beforeLSN)
 				}
 				checkRows(end)

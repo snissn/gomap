@@ -3,6 +3,7 @@ package treedb
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"reflect"
@@ -40,7 +41,7 @@ func TestNativeExistingBSONCompoundUnappliedReplay(t *testing.T) {
 			cmd.Env = append(os.Environ(), "GOMAP_COMPOUND_DIR="+dir, "GOMAP_COMPOUND_PROFILE="+string(profile))
 			output, err := cmd.CombinedOutput()
 			var exit *exec.ExitError
-			if !errors.As(err, &exit) || exit.ExitCode() != 97 || !bytes.Contains(output, []byte("COMPOUND UNAPPLIED basis=2 accepted=7")) || bytes.Contains(output, []byte("DATA RACE")) {
+			if !errors.As(err, &exit) || exit.ExitCode() != 97 || !bytes.Contains(output, []byte(fmt.Sprintf("COMPOUND UNAPPLIED basis=%d accepted=%d", nativePublicSingletonFrames(profile, 2), nativePublicSingletonFrames(profile, 7)))) || bytes.Contains(output, []byte("DATA RACE")) {
 				t.Fatalf("unapplied child: %v\n%s", err, output)
 			}
 			before := workstats.Read().Replay
@@ -50,7 +51,7 @@ func TestNativeExistingBSONCompoundUnappliedReplay(t *testing.T) {
 			}
 			t.Cleanup(func() { _ = database.Close() })
 			after := workstats.Read().Replay
-			if after.FramesAttempted-before.FramesAttempted != 5 || after.FramesApplied-before.FramesApplied != 5 || after.FrameErrors != before.FrameErrors {
+			if after.FramesAttempted-before.FramesAttempted != nativePublicSingletonFrames(profile, 5) || after.FramesApplied-before.FramesApplied != nativePublicSingletonFrames(profile, 5) || after.FrameErrors != before.FrameErrors {
 				t.Fatalf("five original CRUD/DDL/aggregate frames: %+v -> %+v", before, after)
 			}
 			handle, err := database.NativeSemanticBackend()
@@ -64,7 +65,7 @@ func TestNativeExistingBSONCompoundUnappliedReplay(t *testing.T) {
 				t.Fatal(err)
 			}
 			checkNativeBSONCompoundFinal(t, database, collection)
-			if applied := indexedCRUDAppliedLSN(t, handle); applied != 7 || handle.CommandWALNextLSN() != 8 {
+			if applied := indexedCRUDAppliedLSN(t, handle); applied != nativePublicSingletonFrames(profile, 7) || handle.CommandWALNextLSN() != nativePublicSingletonFrames(profile, 7)+1 {
 				t.Fatalf("replay applied=%d next=%d", applied, handle.CommandWALNextLSN())
 			}
 			cache, registry := database.cached, handle.ValueLogIdentityPinRegistry()
@@ -167,7 +168,7 @@ func runNativeBSONCompound(t *testing.T, profile Profile, dir string, crash bool
 	if err = database.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
-	if profile != ProfileNoWALFast && indexedCRUDAppliedLSN(t, handle) != 2 {
+	if profile != ProfileNoWALFast && indexedCRUDAppliedLSN(t, handle) != nativePublicSingletonFrames(profile, 2) {
 		t.Fatal("seed physical basis is not actual LSN2")
 	}
 	old, err = collection.OpenCollectionReadView()
@@ -304,7 +305,7 @@ func runNativeBSONCompound(t *testing.T, profile Profile, dir string, crash bool
 	if err = tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
-	if sequence() != seq+1 || (profile != ProfileNoWALFast && handle.CommandWALNextLSN() != next+1) {
+	if sequence() != seq+1 || (profile != ProfileNoWALFast && handle.CommandWALNextLSN() != next+nativePublicSingletonFrames(profile, 1)) {
 		t.Fatal("compound aggregate did not use one logical/canonical successor")
 	}
 	if err = tx.Close(); err != nil {
@@ -320,10 +321,10 @@ func runNativeBSONCompound(t *testing.T, profile Profile, dir string, crash bool
 		if err = handle.FlushCommandWAL(true); err != nil {
 			t.Fatal(err)
 		}
-		if applied, accepted := indexedCRUDAppliedLSN(t, handle), handle.CommandWALNextLSN()-1; applied != 2 || accepted != 7 {
+		if applied, accepted := indexedCRUDAppliedLSN(t, handle), handle.CommandWALNextLSN()-1; applied != nativePublicSingletonFrames(profile, 2) || accepted != nativePublicSingletonFrames(profile, 7) {
 			t.Fatalf("unapplied physical=%d accepted=%d", applied, accepted)
 		}
-		t.Log("COMPOUND UNAPPLIED basis=2 accepted=7")
+		t.Logf("COMPOUND UNAPPLIED basis=%d accepted=%d", nativePublicSingletonFrames(profile, 2), nativePublicSingletonFrames(profile, 7))
 		os.Exit(97)
 	}
 	if err = database.Checkpoint(); err != nil {

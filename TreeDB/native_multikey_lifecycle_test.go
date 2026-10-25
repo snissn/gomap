@@ -3,6 +3,7 @@ package treedb
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"math"
 	"os"
 	"os/exec"
@@ -44,7 +45,7 @@ func TestNativeExistingMultikeyUnappliedReplay(t *testing.T) {
 				cmd.Env = append(os.Environ(), "GOMAP_MULTIKEY_DIR="+dir, "GOMAP_MULTIKEY_FORMAT="+string(format), "GOMAP_MULTIKEY_PROFILE="+string(profile))
 				output, err := cmd.CombinedOutput()
 				var exit *exec.ExitError
-				if !errors.As(err, &exit) || exit.ExitCode() != 97 || !bytes.Contains(output, []byte("MULTIKEY UNAPPLIED basis=2 accepted=7")) || bytes.Contains(output, []byte("DATA RACE")) {
+				if !errors.As(err, &exit) || exit.ExitCode() != 97 || !bytes.Contains(output, []byte(fmt.Sprintf("MULTIKEY UNAPPLIED basis=%d accepted=%d", nativePublicSingletonFrames(profile, 2), nativePublicSingletonFrames(profile, 7)))) || bytes.Contains(output, []byte("DATA RACE")) {
 					t.Fatalf("unapplied child: %v\n%s", err, output)
 				}
 				before := workstats.Read().Replay
@@ -53,7 +54,7 @@ func TestNativeExistingMultikeyUnappliedReplay(t *testing.T) {
 					t.Fatal(err)
 				}
 				after := workstats.Read().Replay
-				if after.FramesApplied-before.FramesApplied != 5 || after.FrameErrors != before.FrameErrors {
+				if after.FramesApplied-before.FramesApplied != nativePublicSingletonFrames(profile, 5) || after.FrameErrors != before.FrameErrors {
 					_ = database.Close()
 					t.Fatalf("five original frames: %+v -> %+v", before, after)
 				}
@@ -68,7 +69,7 @@ func TestNativeExistingMultikeyUnappliedReplay(t *testing.T) {
 				}
 				checkNativeMultikeyFinal(t, collection, format)
 				checkNativeMultikeyRaw(t, database)
-				if applied := indexedCRUDAppliedLSN(t, handle); applied != 7 {
+				if applied := indexedCRUDAppliedLSN(t, handle); applied != nativePublicSingletonFrames(profile, 7) {
 					t.Fatalf("replay applied=%d want7", applied)
 				}
 				cache, registry := database.cached, handle.ValueLogIdentityPinRegistry()
@@ -134,7 +135,7 @@ func runNativeMultikeyLifecycle(t *testing.T, profile Profile, format collection
 	if err = database.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
-	if profile != ProfileNoWALFast && indexedCRUDAppliedLSN(t, handle) != 2 {
+	if profile != ProfileNoWALFast && indexedCRUDAppliedLSN(t, handle) != nativePublicSingletonFrames(profile, 2) {
 		t.Fatal("seed basis must be actual LSN2")
 	}
 	old, err := collection.OpenCollectionReadView()
@@ -200,7 +201,7 @@ func runNativeMultikeyLifecycle(t *testing.T, profile Profile, format collection
 	if err = tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
-	if profile != ProfileNoWALFast && handle.CommandWALNextLSN() != next+1 {
+	if profile != ProfileNoWALFast && handle.CommandWALNextLSN() != next+nativePublicSingletonFrames(profile, 1) {
 		t.Fatal("aggregate did not use one canonical identity")
 	}
 	if err = tx.Close(); err != nil {
@@ -254,10 +255,10 @@ func runNativeMultikeyLifecycle(t *testing.T, profile Profile, format collection
 		if err = handle.FlushCommandWAL(true); err != nil {
 			t.Fatal(err)
 		}
-		if applied, accepted := indexedCRUDAppliedLSN(t, handle), handle.CommandWALNextLSN()-1; applied != 2 || accepted != 7 {
+		if applied, accepted := indexedCRUDAppliedLSN(t, handle), handle.CommandWALNextLSN()-1; applied != nativePublicSingletonFrames(profile, 2) || accepted != nativePublicSingletonFrames(profile, 7) {
 			t.Fatalf("unapplied basis=%d accepted=%d", applied, accepted)
 		}
-		t.Log("MULTIKEY UNAPPLIED basis=2 accepted=7")
+		t.Logf("MULTIKEY UNAPPLIED basis=%d accepted=%d", nativePublicSingletonFrames(profile, 2), nativePublicSingletonFrames(profile, 7))
 		os.Exit(97)
 	}
 	if err = database.Checkpoint(); err != nil {

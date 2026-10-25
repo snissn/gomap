@@ -83,7 +83,7 @@ func runNativeExistingIndexDDLUnappliedReplay(t *testing.T, format collections.D
 				if err := database.Checkpoint(); err != nil {
 					t.Fatal(err)
 				}
-				if applied := indexedCRUDAppliedLSN(t, handle); applied != 2 {
+				if applied := indexedCRUDAppliedLSN(t, handle); applied != nativePublicSingletonFrames(profile, 2) {
 					t.Fatalf("seed physical LSN=%d want 2", applied)
 				}
 				if _, err := users.InsertBatch([][]byte{[]byte("u3")}, [][]byte{nativeIndexDDLDocument(t, format, `{"email":"c@example.com","city":"hnl"}`)}); err != nil {
@@ -124,16 +124,16 @@ func runNativeExistingIndexDDLUnappliedReplay(t *testing.T, format collections.D
 				if err := handle.FlushCommandWAL(true); err != nil {
 					t.Fatal(err)
 				}
-				if applied, accepted := indexedCRUDAppliedLSN(t, handle), handle.CommandWALNextLSN()-1; applied != 2 || accepted != 12 {
+				if applied, accepted := indexedCRUDAppliedLSN(t, handle), handle.CommandWALNextLSN()-1; applied != nativePublicSingletonFrames(profile, 2) || accepted != nativePublicSingletonFrames(profile, 12) {
 					t.Fatalf("exact unapplied suffix: applied=%d accepted=%d want 2/12", applied, accepted)
 				}
-				t.Log("DDL UNAPPLIED SUFFIX applied=2 accepted=12: six schema transitions and four CRUD commands")
+				t.Logf("DDL UNAPPLIED SUFFIX applied=%d accepted=%d: six schema transitions and four CRUD commands", nativePublicSingletonFrames(profile, 2), nativePublicSingletonFrames(profile, 12))
 				os.Exit(sentinel)
 			}
-			if after.FramesAttempted-before.FramesAttempted != 10 || after.FramesApplied-before.FramesApplied != 10 || after.FrameErrors != before.FrameErrors {
+			if after.FramesAttempted-before.FramesAttempted != nativePublicSingletonFrames(profile, 10) || after.FramesApplied-before.FramesApplied != nativePublicSingletonFrames(profile, 10) || after.FrameErrors != before.FrameErrors {
 				t.Fatalf("actual ten-command replay %+v -> %+v", before, after)
 			}
-			if applied := indexedCRUDAppliedLSN(t, handle); applied != 12 {
+			if applied := indexedCRUDAppliedLSN(t, handle); applied != nativePublicSingletonFrames(profile, 12) {
 				t.Fatalf("replayed physical LSN=%d want 12", applied)
 			}
 			users, err := manager.OpenCollection("users")

@@ -13,6 +13,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/workstats"
 )
 
@@ -39,7 +40,7 @@ func TestNativeExistingTemplateV1UnappliedReplay(t *testing.T) {
 			cmd.Env = append(os.Environ(), "GOMAP_TEMPLATE_DIR="+dir, "GOMAP_TEMPLATE_PROFILE="+string(profile))
 			output, err := cmd.CombinedOutput()
 			var exit *exec.ExitError
-			if !errors.As(err, &exit) || exit.ExitCode() != 97 || !bytes.Contains(output, []byte("TEMPLATE UNAPPLIED basis=2 accepted=5")) || bytes.Contains(output, []byte("DATA RACE")) {
+			if !errors.As(err, &exit) || exit.ExitCode() != 97 || !bytes.Contains(output, []byte(fmt.Sprintf("TEMPLATE UNAPPLIED basis=%d accepted=%d", nativePublicSingletonFrames(profile, 2), nativePublicSingletonFrames(profile, 5)))) || bytes.Contains(output, []byte("DATA RACE")) {
 				t.Fatalf("child: %v\n%s", err, output)
 			}
 			before := workstats.Read().Replay
@@ -48,7 +49,7 @@ func TestNativeExistingTemplateV1UnappliedReplay(t *testing.T) {
 				t.Fatal(err)
 			}
 			after := workstats.Read().Replay
-			if after.FramesApplied-before.FramesApplied != 3 || after.FrameErrors != before.FrameErrors {
+			if after.FramesApplied-before.FramesApplied != nativePublicSingletonFrames(profile, 3) || after.FrameErrors != before.FrameErrors {
 				t.Fatalf("replay: %+v -> %+v", before, after)
 			}
 			handle, err := database.NativeSemanticBackend()
@@ -61,7 +62,7 @@ func TestNativeExistingTemplateV1UnappliedReplay(t *testing.T) {
 				t.Fatal(err)
 			}
 			checkNativeTemplateFinal(t, database, col)
-			if applied := indexedCRUDAppliedLSN(t, handle); applied != 5 {
+			if applied := indexedCRUDAppliedLSN(t, handle); applied != nativePublicSingletonFrames(profile, 5) {
 				t.Fatalf("applied=%d", applied)
 			}
 			cache, registry := database.cached, handle.ValueLogIdentityPinRegistry()
@@ -191,7 +192,7 @@ func runNativeTemplateV1(t *testing.T, profile Profile, dir string, crash bool) 
 	if err = database.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
-	if profile != ProfileNoWALFast && indexedCRUDAppliedLSN(t, handle) != 2 {
+	if profile != ProfileNoWALFast && indexedCRUDAppliedLSN(t, handle) != nativePublicSingletonFrames(profile, 2) {
 		t.Fatal("seed basis !=2")
 	}
 	old, err := col.OpenCollectionReadView()
@@ -303,7 +304,7 @@ func runNativeTemplateV1(t *testing.T, profile Profile, dir string, crash bool) 
 	if err = tx.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if profile != ProfileNoWALFast && handle.CommandWALNextLSN() != next+1 {
+	if profile != ProfileNoWALFast && handle.CommandWALNextLSN() != next+nativePublicSingletonFrames(profile, 1) {
 		t.Fatal("aggregate identity")
 	}
 	if _, err = col.CreateIndex(collections.IndexDefinition{Name: "city_backfill", Field: "city", ValueType: collections.IndexValueString}); err != nil {
@@ -352,10 +353,10 @@ func runNativeTemplateV1(t *testing.T, profile Profile, dir string, crash bool) 
 		if err = handle.FlushCommandWAL(true); err != nil {
 			t.Fatal(err)
 		}
-		if applied, accepted := indexedCRUDAppliedLSN(t, handle), handle.CommandWALNextLSN()-1; applied != 2 || accepted != 5 {
+		if applied, accepted := indexedCRUDAppliedLSN(t, handle), handle.CommandWALNextLSN()-1; applied != nativePublicSingletonFrames(profile, 2) || accepted != nativePublicSingletonFrames(profile, 5) {
 			t.Fatalf("basis=%d accepted=%d", applied, accepted)
 		}
-		t.Log("TEMPLATE UNAPPLIED basis=2 accepted=5")
+		t.Logf("TEMPLATE UNAPPLIED basis=%d accepted=%d", nativePublicSingletonFrames(profile, 2), nativePublicSingletonFrames(profile, 5))
 		os.Exit(97)
 	}
 	if err = database.Checkpoint(); err != nil {
@@ -534,7 +535,7 @@ func TestNativeTemplateApplyUnchangedFirstCanonicalReplay(t *testing.T) {
 		if err = database.Checkpoint(); err != nil {
 			t.Fatal(err)
 		}
-		if applied := indexedCRUDAppliedLSN(t, handle); applied != 2 {
+		if applied := indexedCRUDAppliedLSN(t, handle); applied != 4 {
 			t.Fatalf("seed applied=%d", applied)
 		}
 		// Convert only the exported envelope's root distinction to external TD1D.
@@ -564,22 +565,30 @@ func TestNativeTemplateApplyUnchangedFirstCanonicalReplay(t *testing.T) {
 		if stored, err := col.Get([]byte("a")); err != nil || !bytes.HasPrefix(stored, []byte("TD1D")) {
 			t.Fatalf("stored holder=%x %v", stored, err)
 		}
+		// The assignment observer precedes deferred durability. Crash only once
+		// the existing group barrier has synced, before Apply can checkpoint.
+		restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+			if event.Resource == durabilitycut.ResourceCommandWAL && event.Point == durabilitycut.AfterDependencyFileSync {
+				fmt.Fprintln(os.Stderr, "UNCHANGED TEMPLATE APPENDED")
+				os.Exit(97)
+			}
+			return nil
+		})
+		defer restore()
 		_, err = manager.ApplyNativeCommandWALMutation("unchanged_first", collections.DocumentFormatTemplateV1, commitlog.CommandKindCollectionUpdateBatchByID, [][]byte{[]byte("a"), []byte("b")}, [][]byte{unchanged, changed}, true, func(lsn uint64) error {
-			if lsn != 3 {
+			if lsn != 5 {
 				fmt.Fprintf(os.Stderr, "unexpected template LSN=%d\n", lsn)
 				os.Exit(98)
 			}
-			fmt.Fprintln(os.Stderr, "UNCHANGED TEMPLATE APPENDED")
-			os.Exit(97)
 			return nil
 		})
-		t.Fatalf("append observer returned: %v", err)
+		t.Fatalf("durable barrier crash hook returned: %v", err)
 	}
 	after := workstats.Read().Replay
-	if after.FramesApplied-before.FramesApplied != 1 || after.FrameErrors != before.FrameErrors {
-		t.Fatalf("one canonical frame replay: %+v -> %+v", before, after)
+	if after.FramesApplied-before.FramesApplied != 2 || after.FrameErrors != before.FrameErrors {
+		t.Fatalf("one canonical mutation and root-neutral barrier replay: %+v -> %+v", before, after)
 	}
-	if applied := indexedCRUDAppliedLSN(t, handle); applied != 3 || handle.CommandWALNextLSN() != 4 {
+	if applied := indexedCRUDAppliedLSN(t, handle); applied != 6 || handle.CommandWALNextLSN() != 7 {
 		t.Fatalf("applied=%d next=%d", applied, handle.CommandWALNextLSN())
 	}
 	materializer, err := col.NewStoredDocumentJSONMaterializer()

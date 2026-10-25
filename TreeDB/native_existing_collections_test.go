@@ -277,7 +277,7 @@ func TestNativeExistingCollectionPublicLifecycle(t *testing.T) {
 			t.Fatalf("replayed %s: %s %v", id, v, e)
 		}
 	}
-	if after.FramesApplied-before.FramesApplied != 2 {
+	if after.FramesApplied-before.FramesApplied != 4 {
 		t.Fatalf("replayed frames: %d", after.FramesApplied-before.FramesApplied)
 	}
 	if err = manager.Close(); err != nil {

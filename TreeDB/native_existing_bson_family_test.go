@@ -44,11 +44,11 @@ func TestNativeExistingBSONPublicLifecycle(t *testing.T) {
 			cmd.Env = append(os.Environ(), "GOMAP_NATIVE_BSON_CRASH_DIR="+dir, "GOMAP_NATIVE_BSON_PROFILE="+string(profile))
 			output, err := cmd.CombinedOutput()
 			var exit *exec.ExitError
-			if !errors.As(err, &exit) || exit.ExitCode() != 97 || !bytes.Contains(output, []byte("BSON UNAPPLIED basis=4 accepted=5")) || bytes.Contains(output, []byte("DATA RACE")) {
+			if !errors.As(err, &exit) || exit.ExitCode() != 97 || !bytes.Contains(output, []byte(fmt.Sprintf("BSON UNAPPLIED basis=%d accepted=%d", nativePublicSingletonFrames(profile, 4), nativePublicSingletonFrames(profile, 5)))) || bytes.Contains(output, []byte("DATA RACE")) {
 				t.Fatalf("unapplied child: %v\n%s", err, output)
 			}
 			opts := indexedSliceOptions(profile, dir)
-			checkNativeBSONAggregate(t, opts)
+			checkNativeBSONAggregate(t, opts, profile)
 			before := workstats.Read().Replay
 			database, err := Open(opts)
 			if err != nil {
@@ -62,7 +62,7 @@ func TestNativeExistingBSONPublicLifecycle(t *testing.T) {
 					}
 				}
 			})
-			if after.FramesAttempted-before.FramesAttempted != 1 || after.FramesApplied-before.FramesApplied != 1 || after.FrameErrors != before.FrameErrors {
+			if after.FramesAttempted-before.FramesAttempted != nativePublicSingletonFrames(profile, 1) || after.FramesApplied-before.FramesApplied != nativePublicSingletonFrames(profile, 1) || after.FrameErrors != before.FrameErrors {
 				t.Fatalf("actual one aggregate replay: %+v -> %+v", before, after)
 			}
 			handle, err := database.NativeSemanticBackend()
@@ -78,7 +78,7 @@ func TestNativeExistingBSONPublicLifecycle(t *testing.T) {
 				}
 			})
 			checkNativeBSONFinal(t, database, manager)
-			if got := indexedCRUDAppliedLSN(t, handle); got != 5 || handle.CommandWALNextLSN() != 6 {
+			if got := indexedCRUDAppliedLSN(t, handle); got != nativePublicSingletonFrames(profile, 5) || handle.CommandWALNextLSN() != nativePublicSingletonFrames(profile, 5)+1 {
 				t.Fatalf("replayed physical=%d next=%d", got, handle.CommandWALNextLSN())
 			}
 			if err := manager.Close(); err != nil {
@@ -177,7 +177,7 @@ func runNativeBSONLifecycle(t *testing.T, profile Profile, dir string, crash boo
 	if err := database.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
-	if profile != ProfileNoWALFast && indexedCRUDAppliedLSN(t, handle) != 2 {
+	if profile != ProfileNoWALFast && indexedCRUDAppliedLSN(t, handle) != nativePublicSingletonFrames(profile, 2) {
 		t.Fatalf("seed basis=%d want2", indexedCRUDAppliedLSN(t, handle))
 	}
 	held, err = users.OpenCollectionReadView()
@@ -262,7 +262,7 @@ func runNativeBSONLifecycle(t *testing.T, profile Profile, dir string, crash boo
 	if err := database.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
-	if profile != ProfileNoWALFast && indexedCRUDAppliedLSN(t, handle) != 4 {
+	if profile != ProfileNoWALFast && indexedCRUDAppliedLSN(t, handle) != nativePublicSingletonFrames(profile, 4) {
 		t.Fatalf("pre-aggregate basis=%d want4", indexedCRUDAppliedLSN(t, handle))
 	}
 	checkHeld()
@@ -319,17 +319,17 @@ func runNativeBSONLifecycle(t *testing.T, profile Profile, dir string, crash boo
 	checkNativeBSONFinal(t, database, manager)
 	checkHeld()
 	if profile != ProfileNoWALFast {
-		if handle.CommandWALNextLSN() != 6 || indexedCRUDAppliedLSN(t, handle) != 4 {
+		if handle.CommandWALNextLSN() != nativePublicSingletonFrames(profile, 5)+1 || indexedCRUDAppliedLSN(t, handle) != nativePublicSingletonFrames(profile, 4) {
 			t.Fatalf("aggregate next=%d physical=%d", handle.CommandWALNextLSN(), indexedCRUDAppliedLSN(t, handle))
 		}
 		if crash {
 			if err := handle.FlushCommandWAL(true); err != nil {
 				t.Fatal(err)
 			}
-			if indexedCRUDAppliedLSN(t, handle) != 4 {
+			if indexedCRUDAppliedLSN(t, handle) != nativePublicSingletonFrames(profile, 4) {
 				t.Fatal("WAL sync applied the aggregate")
 			}
-			t.Log("BSON UNAPPLIED basis=4 accepted=5")
+			t.Logf("BSON UNAPPLIED basis=%d accepted=%d", nativePublicSingletonFrames(profile, 4), nativePublicSingletonFrames(profile, 5))
 			os.Exit(97)
 		}
 	}
@@ -338,7 +338,7 @@ func runNativeBSONLifecycle(t *testing.T, profile Profile, dir string, crash boo
 	}
 	checkNativeBSONFinal(t, database, manager)
 	checkHeld()
-	if profile != ProfileNoWALFast && indexedCRUDAppliedLSN(t, handle) != 5 {
+	if profile != ProfileNoWALFast && indexedCRUDAppliedLSN(t, handle) != nativePublicSingletonFrames(profile, 5) {
 		t.Fatal("checkpoint lost aggregate prefix")
 	}
 	closeOriginal()
@@ -352,7 +352,7 @@ func runNativeBSONLifecycle(t *testing.T, profile Profile, dir string, crash boo
 	}
 	manager = collections.NewCollectionManager(handle)
 	checkNativeBSONFinal(t, database, manager)
-	if profile != ProfileNoWALFast && indexedCRUDAppliedLSN(t, handle) != 5 {
+	if profile != ProfileNoWALFast && indexedCRUDAppliedLSN(t, handle) != nativePublicSingletonFrames(profile, 5) {
 		t.Fatal("reopen lost aggregate prefix")
 	}
 	closeOriginal()
@@ -439,7 +439,7 @@ func checkNativeBSONFinal(t *testing.T, database *DB, manager *collections.Colle
 	}
 }
 
-func checkNativeBSONAggregate(t *testing.T, opts Options) {
+func checkNativeBSONAggregate(t *testing.T, opts Options, profile Profile) {
 	t.Helper()
 	layout, err := resolveOpenDirLayout(opts.Dir, opts.DisableSideStores)
 	if err != nil {
@@ -464,7 +464,7 @@ func checkNativeBSONAggregate(t *testing.T, opts Options) {
 				_ = reader.Close()
 				t.Fatal(err)
 			}
-			if env.LSN > 4 {
+			if env.LSN > nativePublicSingletonFrames(profile, 4) && env.Kind != commitlog.CommandKindDurablePrefixBarrier {
 				suffix = append(suffix, env)
 			}
 		}
@@ -472,7 +472,7 @@ func checkNativeBSONAggregate(t *testing.T, opts Options) {
 			t.Fatal(err)
 		}
 	}
-	if len(suffix) != 1 || suffix[0].LSN != 5 || suffix[0].BaseAppliedLSN != 4 || suffix[0].Kind != commitlog.CommandKindCompositeMutation || suffix[0].PayloadFormat != commitlog.PayloadFormatCompositeMutationV1 {
+	if len(suffix) != 1 || suffix[0].LSN != nativePublicSingletonFrames(profile, 4)+1 || suffix[0].BaseAppliedLSN != nativePublicSingletonFrames(profile, 4) || suffix[0].Kind != commitlog.CommandKindCompositeMutation || suffix[0].PayloadFormat != commitlog.PayloadFormatCompositeMutationV1 {
 		t.Fatalf("one actual unapplied BSON aggregate: %+v", suffix)
 	}
 	members, err := commitlog.DecodeCompositeMutationPayloadView(suffix[0].Payload)

@@ -29,6 +29,26 @@ and the cache captures the exact successor backend basis before writers resume.
 Previously captured immutable cuts retain their original basis and values. The
 same ordering applies to the final public checkpoint during `Close`.
 
+Native collection commands opened through the public COW owner use the same
+public command-WAL group coordinator as raw writes. Each command retains its
+original assigned LSN and installs one complete logical successor before waiting
+for durability. A group stabilizes the dependency-complete prefix through the
+existing root-neutral durable-prefix barrier; no waiter acknowledges before that
+barrier succeeds. The barrier adds a canonical LSN without adding a logical
+transaction. Immediate logical visibility and WAL completion therefore do not
+imply that the physical `AppliedCommandLSN` has advanced. Checkpoint or recovery
+publishes that physical frontier. Direct backend constructors keep their inline
+completion path, and already combined command groups keep their existing path.
+
+A failure after assignment retains the command identity and is ambiguous to an
+ordinary collection caller, even if logical installation did not complete. The
+handle requires recovery and the caller must not retry the application callback.
+A refusal before assignment has no such publication effect. If a checkpoint
+captures a finite cut before a delayed group appends its root-neutral barrier,
+optional fallback convergence may defer that proven suffix under the maintenance
+writer fence. It does not change the captured cut or accept a different logical
+or sealed identity.
+
 ## 0. Frozen Publication Contract
 
 This section is normative for every production durability profile. It freezes

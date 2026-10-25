@@ -49,15 +49,15 @@ func TestNativeExistingTypedOperations(t *testing.T) {
 						t.Fatal(err)
 					}
 					after := workstats.Read().Replay
-					if after.FramesApplied-before.FramesApplied != 1 || after.FrameErrors != before.FrameErrors {
+					if after.FramesApplied-before.FramesApplied != 2 || after.FrameErrors != before.FrameErrors {
 						_ = database.Close()
 						t.Fatalf("one actual typed replay: %+v -> %+v", before, after)
 					}
 					a, b, c := nativeTypedOpsRows(family)
-					want, applied := []nativeTypedOpsRow{a, b}, uint64(2)
+					want, applied := []nativeTypedOpsRow{a, b}, uint64(4)
 					if mode == "typed-source" {
 						b = nativeTypedOpsChanged(b)
-						want, applied = []nativeTypedOpsRow{a, b, c}, 3
+						want, applied = []nativeTypedOpsRow{a, b, c}, 6
 					}
 					checkNativeTypedOpsReopened(t, database, family, want, nil, applied)
 				})
@@ -168,8 +168,8 @@ func requireNativeTypedOpsAdvance(t *testing.T, database *DB, handle *backenddb.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if handle.CommandWALNextLSN() != next+1 || database.Stats()["treedb.cache.cow.txn.logical_seq"] != strconv.FormatUint(n+1, 10) {
-		t.Fatalf("one canonical publication: next=%d want=%d sequence=%s prior=%s", handle.CommandWALNextLSN(), next+1, database.Stats()["treedb.cache.cow.txn.logical_seq"], sequence)
+	if handle.CommandWALNextLSN() != next+2 || database.Stats()["treedb.cache.cow.txn.logical_seq"] != strconv.FormatUint(n+1, 10) {
+		t.Fatalf("one canonical publication: next=%d want=%d sequence=%s prior=%s", handle.CommandWALNextLSN(), next+2, database.Stats()["treedb.cache.cow.txn.logical_seq"], sequence)
 	}
 }
 
@@ -240,7 +240,7 @@ func runNativeTypedOperations(t *testing.T, dir, family, mode string) {
 		t.Fatalf("actual typed insert ids=%q documents=%d: %v", inserted, stats.Documents, err)
 	}
 	requireNativeTypedOpsAdvance(t, database, handle, next, seq)
-	checkNativeTypedOpsFrame(t, opts, 2, commitlog.CommandKindCollectionInsertBatchByID, commitlog.PayloadFormatCollectionTypedBatchByIDV1, family, []nativeTypedOpsRow{a, b}, nil)
+	checkNativeTypedOpsFrame(t, opts, next, commitlog.CommandKindCollectionInsertBatchByID, commitlog.PayloadFormatCollectionTypedBatchByIDV1, family, []nativeTypedOpsRow{a, b}, nil)
 	// The service promises inputs may be reused immediately after return.
 	ids[0][0], residual[0][0] = '!', '!'
 	if family == "string" {
@@ -300,16 +300,16 @@ func runNativeTypedOperations(t *testing.T, dir, family, mode string) {
 	}
 	checkHeld()
 	if mode == "typed-insert" {
-		if applied := indexedCRUDAppliedLSN(t, handle); applied != 1 {
+		if applied := indexedCRUDAppliedLSN(t, handle); applied != 2 {
 			t.Fatalf("insert child did not keep basis1: applied=%d", applied)
 		}
 		if err := handle.FlushCommandWAL(true); err != nil {
 			t.Fatal(err)
 		}
-		if applied := indexedCRUDAppliedLSN(t, handle); applied != 1 {
+		if applied := indexedCRUDAppliedLSN(t, handle); applied != 2 {
 			t.Fatalf("WAL flush applied typed insert: applied=%d", applied)
 		}
-		t.Log("TYPED OPS UNAPPLIED typed-insert basis=1 accepted=2")
+		t.Log("TYPED OPS UNAPPLIED typed-insert basis=2 accepted=4")
 		os.Exit(97)
 	}
 	changedA, changedB := nativeTypedOpsChanged(a), nativeTypedOpsChanged(b)
@@ -331,7 +331,7 @@ func runNativeTypedOperations(t *testing.T, dir, family, mode string) {
 		residual[0] = append(append([]byte(" \n"), residual[0]...), '\t')
 		next = handle.CommandWALNextLSN()
 		results, err = col.ReplaceTypedBatch(ids, residual, columns)
-		if err != nil || len(results) != 1 || !results[0].Matched || results[0].Modified || handle.CommandWALNextLSN() != next+1 {
+		if err != nil || len(results) != 1 || !results[0].Matched || results[0].Modified || handle.CommandWALNextLSN() != next+2 {
 			t.Fatalf("noop replace: %+v %v", results, err)
 		}
 		checkNativeTypedOpsFrame(t, opts, next, commitlog.CommandKindCollectionUpdateBatchByID, commitlog.PayloadFormatCollectionUpdateBatchByIDV1, family, nil, nil)
@@ -362,16 +362,16 @@ func runNativeTypedOperations(t *testing.T, dir, family, mode string) {
 	checkNativeTypedOpsCurrent(t, col, family, []nativeTypedOpsRow{currentA, changedB, c}, nil)
 	checkHeld()
 	if mode == "typed-source" {
-		if got := indexedCRUDAppliedLSN(t, handle); got != 2 {
+		if got := indexedCRUDAppliedLSN(t, handle); got != 4 {
 			t.Fatalf("source child did not keep basis2: seed=%d upsert=%d current=%d next=%d checkpoint_runs=%s", seedAppliedLSN, upsertAppliedLSN, got, handle.CommandWALNextLSN(), database.Stats()["treedb.cache.checkpoint.runs"])
 		}
 		if err := handle.FlushCommandWAL(true); err != nil {
 			t.Fatal(err)
 		}
-		if got := indexedCRUDAppliedLSN(t, handle); got != 2 {
+		if got := indexedCRUDAppliedLSN(t, handle); got != 4 {
 			t.Fatalf("WAL flush applied typed source: seed=%d upsert=%d current=%d next=%d checkpoint_runs=%s", seedAppliedLSN, upsertAppliedLSN, got, handle.CommandWALNextLSN(), database.Stats()["treedb.cache.checkpoint.runs"])
 		}
-		t.Log("TYPED OPS UNAPPLIED typed-source basis=2 accepted=3")
+		t.Log("TYPED OPS UNAPPLIED typed-source basis=4 accepted=6")
 		os.Exit(97)
 	}
 	next, seq = handle.CommandWALNextLSN(), database.Stats()["treedb.cache.cow.txn.logical_seq"]
@@ -526,7 +526,7 @@ func checkNativeTypedOpsFrame(t *testing.T, opts Options, lsn uint64, kind commi
 				_ = reader.Close()
 				t.Fatal(err)
 			}
-			if frame.LSN >= lsn {
+			if frame.LSN >= lsn && frame.Kind != commitlog.CommandKindDurablePrefixBarrier {
 				frames = append(frames, frame)
 			}
 		}

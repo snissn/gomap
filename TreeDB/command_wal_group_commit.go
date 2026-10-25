@@ -106,6 +106,12 @@ func (tdb *DB) appendAndRegisterPublicCommandWAL(bytes int, preparedBytes *int, 
 // durability or publication. COW calls it only after admission and installs its
 // complete cut before invoking awaitPublicCommandWAL.
 func (tdb *DB) registerPublicCommandWAL(bytes int, preparedBytes *int, durable bool, pendingBookkeeping *time.Duration, appendFrame func(sync bool) (uint64, error)) (publicCommandWALRegistration, error) {
+	return tdb.registerPublicCommandWALPolicy(bytes, preparedBytes, durable, pendingBookkeeping, appendFrame, false)
+}
+
+// Native installers serialize under P; joining the delayed group avoids making
+// that serialization look like a genuinely solo synchronous request.
+func (tdb *DB) registerPublicCommandWALPolicy(bytes int, preparedBytes *int, durable bool, pendingBookkeeping *time.Duration, appendFrame func(bool) (uint64, error), join bool) (publicCommandWALRegistration, error) {
 	var publication publicCommandWALRegistration
 	if tdb == nil || !tdb.commandWALCached || tdb.backend == nil || appendFrame == nil {
 		return publication, ErrClosed
@@ -141,12 +147,14 @@ func (tdb *DB) registerPublicCommandWAL(bytes int, preparedBytes *int, durable b
 		tdb.commandWALGroupCommit.durableIntents.Add(1)
 		durableIntentPending = true
 		defer releaseDurableIntent()
-		if direct, attempted, err := tdb.trySoloDurablePublicCommandWAL(
-			pendingBookkeeping,
-			appendFrame,
-		); attempted {
-			releaseDurableIntent()
-			return direct, err
+		if !join {
+			if direct, attempted, err := tdb.trySoloDurablePublicCommandWAL(
+				pendingBookkeeping,
+				appendFrame,
+			); attempted {
+				releaseDurableIntent()
+				return direct, err
+			}
 		}
 	}
 	var ticket uint64

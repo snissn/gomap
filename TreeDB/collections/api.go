@@ -4379,11 +4379,33 @@ func (c *Collection) nativeMetaCopy() CollectionMeta {
 }
 
 // SameCachedCatalog reports whether both handles are cached against the same
-// collection catalog state. DATA pages can be reused after their snapshots are
+// collection catalog state. Native handles authenticate their logical
+// incarnation/schema under complete-cut captures. DATA pages can be reused after their snapshots are
 // released, so matching system root page IDs also require the same commit.
 func (c *Collection) SameCachedCatalog(other *Collection) bool {
 	if c == nil || other == nil {
 		return false
+	}
+	if c.nativeJSON != nil || other.nativeJSON != nil {
+		if c.nativeJSON == nil || other.nativeJSON == nil || c.nativeJSON.db != other.nativeJSON.db || c.name != other.name || c.manager.isClosing() || other.manager.isClosing() {
+			return false
+		}
+		// Native logical roots need no physical catalog root. Compare actual
+		// incarnation and immutable schema identity while BOTH captures are live;
+		// a concurrent schema replacement conservatively declines coalescing.
+		left, err := c.nativeJSON.Capture(c.name)
+		if err != nil {
+			return false
+		}
+		right, err := other.nativeJSON.Capture(other.name)
+		if err != nil {
+			_ = left.Close()
+			return false
+		}
+		same := left.collection != nil && right.collection != nil && left.collection.incarnation != 0 &&
+			left.collection.incarnation == right.collection.incarnation && left.collection.schema != nil && left.collection.schema == right.collection.schema
+		leftErr, rightErr := left.Close(), right.Close()
+		return same && leftErr == nil && rightErr == nil
 	}
 	cName, cSystemRoot, cCommitSeq := c.cachedCatalogIdentity()
 	otherName, otherSystemRoot, otherCommitSeq := other.cachedCatalogIdentity()

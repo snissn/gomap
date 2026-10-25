@@ -478,6 +478,13 @@ func (db *DB) FlushCommandWALBarrierWithResult(sync bool) (CommandWALBarrierResu
 		return result, err
 	}
 	defer unlock()
+	return db.flushCommandWALBarrierLocked(sync, nil)
+}
+
+// The caller owns the original teardown/raw leases, excluding all prior installs.
+func (db *DB) flushCommandWALBarrierLocked(sync bool, privateOwner *transactionowner.Owner) (CommandWALBarrierResult, error) {
+	var result CommandWALBarrierResult
+	var err error
 	if sync && db != nil && db.commandWAL {
 		// A barrier is a logical frame only when it promotes an undurable
 		// command prefix. Appending one when the current prefix is already
@@ -488,7 +495,7 @@ func (db *DB) FlushCommandWALBarrierWithResult(sync bool) (CommandWALBarrierResu
 		nextLSN := db.CommandWALNextLSN()
 		if nextLSN > 1 && db.commandWALDurableLSN.Load() < nextLSN-1 {
 			result.AttemptedDependencyEntries = db.commandWALDebt.entryCountThrough(nextLSN - 1)
-			result.LSN, err = db.appendCommandWALDurablePrefixBarrier()
+			result.LSN, err = db.appendOwnedCommandWALDurablePrefixBarrier(privateOwner)
 			if err == nil {
 				result.CoveredDependencyEntries = result.AttemptedDependencyEntries
 			}
@@ -584,8 +591,13 @@ func (db *DB) SyncCommandWALAppliedPrefix() (physicalSync bool, err error) {
 }
 
 func (db *DB) appendCommandWALDurablePrefixBarrier() (uint64, error) {
+	return db.appendOwnedCommandWALDurablePrefixBarrier(nil)
+}
+
+func (db *DB) appendOwnedCommandWALDurablePrefixBarrier(privateOwner *transactionowner.Owner) (uint64, error) {
 	intent := &commandWALBatchIntent{
-		kind: commitlog.CommandKindDurablePrefixBarrier, scope: commitlog.CommandScopeSystem,
+		privateCOWOwner: privateOwner,
+		kind:            commitlog.CommandKindDurablePrefixBarrier, scope: commitlog.CommandScopeSystem,
 		payloadFormat: commitlog.PayloadFormatDurablePrefixBarrierV1,
 		statsPath:     commandWALAppendStatsBarrier, statsPathSet: true,
 	}

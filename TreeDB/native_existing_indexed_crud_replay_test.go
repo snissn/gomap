@@ -79,7 +79,7 @@ func TestNativeExistingIndexedJSONCRUDSingletonReplay(t *testing.T) {
 				t.Fatal(err)
 			}
 			basis := indexedCRUDAppliedLSN(t, handle)
-			if profile != ProfileNoWALFast && basis != 2 {
+			if profile != ProfileNoWALFast && basis != nativePublicSingletonFrames(profile, 2) {
 				t.Fatalf("seed physical LSN=%d want 2", basis)
 			}
 			held, err := users.OpenCollectionReadView()
@@ -134,7 +134,7 @@ func TestNativeExistingIndexedJSONCRUDSingletonReplay(t *testing.T) {
 			checkIndexedCRUDSingletonFinal(t, manager)
 			checkHeld()
 			if profile != ProfileNoWALFast {
-				if accepted := handle.CommandWALNextLSN() - 1; accepted != basis+2 {
+				if accepted := handle.CommandWALNextLSN() - 1; accepted != basis+nativePublicSingletonFrames(profile, 2) {
 					t.Fatalf("accepted LSN=%d basis=%d", accepted, basis)
 				}
 				if applied := indexedCRUDAppliedLSN(t, handle); applied != basis {
@@ -156,7 +156,7 @@ func TestNativeExistingIndexedJSONCRUDSingletonReplay(t *testing.T) {
 			}
 			checkHeld()
 			checkIndexedCRUDSingletonFinal(t, manager)
-			if profile != ProfileNoWALFast && indexedCRUDAppliedLSN(t, handle) != basis+2 {
+			if profile != ProfileNoWALFast && indexedCRUDAppliedLSN(t, handle) != basis+nativePublicSingletonFrames(profile, 2) {
 				t.Fatal("checkpoint did not seal exact singleton suffix")
 			}
 			if err := held.Close(); err != nil {
@@ -187,7 +187,7 @@ func TestNativeExistingIndexedJSONCRUDSingletonReplay(t *testing.T) {
 			}
 			manager = collections.NewCollectionManager(handle)
 			checkIndexedCRUDSingletonFinal(t, manager)
-			if profile != ProfileNoWALFast && indexedCRUDAppliedLSN(t, handle) != basis+2 {
+			if profile != ProfileNoWALFast && indexedCRUDAppliedLSN(t, handle) != basis+nativePublicSingletonFrames(profile, 2) {
 				t.Fatal("reopened checkpoint LSN changed")
 			}
 			if err := manager.Close(); err != nil {
@@ -217,7 +217,7 @@ func TestNativeExistingIndexedJSONCRUDSingletonReplay(t *testing.T) {
 			if !errors.As(err, &exit) || exit.ExitCode() != sentinel || bytes.Contains(output, []byte("DATA RACE")) {
 				t.Fatalf("child %v\n%s", err, output)
 			}
-			checkIndexedCRUDSingletonFrames(t, indexedSliceOptions(profile, dir))
+			checkIndexedCRUDSingletonFrames(t, indexedSliceOptions(profile, dir), profile)
 			before := workstats.Read().Replay
 			database, err := Open(indexedSliceOptions(profile, dir))
 			if err != nil {
@@ -232,7 +232,7 @@ func TestNativeExistingIndexedJSONCRUDSingletonReplay(t *testing.T) {
 					}
 				}
 			})
-			if after.FramesAttempted-before.FramesAttempted != 2 || after.FramesApplied-before.FramesApplied != 2 || after.FrameErrors != before.FrameErrors {
+			if after.FramesAttempted-before.FramesAttempted != nativePublicSingletonFrames(profile, 2) || after.FramesApplied-before.FramesApplied != nativePublicSingletonFrames(profile, 2) || after.FrameErrors != before.FrameErrors {
 				t.Fatalf("actual replay %+v -> %+v", before, after)
 			}
 			handle, err := database.NativeSemanticBackend()
@@ -247,7 +247,7 @@ func TestNativeExistingIndexedJSONCRUDSingletonReplay(t *testing.T) {
 					}
 				}
 			})
-			if applied := indexedCRUDAppliedLSN(t, handle); applied != 4 {
+			if applied := indexedCRUDAppliedLSN(t, handle); applied != nativePublicSingletonFrames(profile, 4) {
 				t.Fatalf("replayed physical LSN=%d want 4", applied)
 			}
 			checkIndexedCRUDSingletonFinal(t, manager)
@@ -317,7 +317,7 @@ func checkIndexedCRUDSingletonFinal(t *testing.T, manager *collections.Collectio
 	}
 }
 
-func checkIndexedCRUDSingletonFrames(t *testing.T, opts Options) {
+func checkIndexedCRUDSingletonFrames(t *testing.T, opts Options, profile Profile) {
 	t.Helper()
 	// Resolve the same public root/side-store mapping as Open, rather than
 	// treating its configured root as a backend database directory.
@@ -344,7 +344,7 @@ func checkIndexedCRUDSingletonFrames(t *testing.T, opts Options) {
 				_ = reader.Close()
 				t.Fatalf("canonical frame %s: %v", path, readErr)
 			}
-			if env.LSN > 2 {
+			if env.LSN > nativePublicSingletonFrames(profile, 2) && env.Kind != commitlog.CommandKindDurablePrefixBarrier {
 				suffix = append(suffix, env)
 			}
 		}
@@ -352,7 +352,7 @@ func checkIndexedCRUDSingletonFrames(t *testing.T, opts Options) {
 			t.Fatal(err)
 		}
 	}
-	if len(suffix) != 2 || suffix[0].LSN != 3 || suffix[1].LSN != 4 || suffix[0].Kind != commitlog.CommandKindCollectionUpdateBatchByID || suffix[1].Kind != commitlog.CommandKindCollectionDeleteBatchByID {
+	if len(suffix) != 2 || suffix[0].LSN != nativePublicSingletonFrames(profile, 2)+1 || suffix[1].LSN != nativePublicSingletonFrames(profile, 3)+1 || suffix[0].Kind != commitlog.CommandKindCollectionUpdateBatchByID || suffix[1].Kind != commitlog.CommandKindCollectionDeleteBatchByID {
 		t.Fatalf("actual singleton suffix %+v", suffix)
 	}
 	update, err := commitlog.DecodeCollectionUpdateBatchByIDPayload(suffix[0].Payload)
@@ -368,4 +368,14 @@ func checkIndexedCRUDSingletonFrames(t *testing.T, opts Options) {
 	if err != nil || deleted.Collection != "users" || len(deleted.IDs) != 1 || string(deleted.IDs[0]) != "u1" {
 		t.Fatalf("canonical delete %+v: %v", deleted, err)
 	}
+}
+
+// nativePublicSingletonFrames counts the physical frames in these serialized
+// fixtures. Each durable public mutation is followed by its shared coordinator's
+// root-neutral barrier. Command-kind checks below count the mutations separately.
+func nativePublicSingletonFrames(profile Profile, commands uint64) uint64 {
+	if profile == ProfileCommandWALDurable {
+		return 2 * commands
+	}
+	return commands
 }
