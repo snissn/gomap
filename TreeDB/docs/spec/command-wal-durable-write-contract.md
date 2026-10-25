@@ -309,6 +309,14 @@ journal or writer ownership; it is not a retained validation certificate.
 The public encoder snapshots extension sections before writing its destination,
 preserving extension alias behavior. The private writer emits them directly.
 
+For fixed containers, V2 append emits the checked frame and outer record checksum
+directly into the writer-owned logical pending buffer. Older batch, command and
+buffered-writer bytes drain into that buffer first, preserving append order.
+The new tail becomes accepted only after its complete encoding exists; borrowed
+caller buffers are not retained. Stream containers and V1 keep their existing
+buffering routes. This removes intermediate staging without changing extent
+construction, physical write or sync boundaries, or logical byte accounting.
+
 Journal preflight still validates size and capacity before rotation or LSN
 reservation. A callback that can mutate borrowed inputs ends that preparation's
 validity: encoding must validate the resulting command again using its actual
