@@ -379,29 +379,55 @@ func testNativeTextPublicAdmissionCleanup(t *testing.T, version TextIndexVersion
 	}
 	blocker.Close()
 	requireNativeTextIDs(t, c, "refund", "a")
-	// A source-bounded analysis allowance refuses before any row/text publication.
-	// Stage a modest canonical document, but exceed the text analysis allowance.
-	// A much larger input can be refused earlier by ordinary scalar preparation.
+	// Refusal follows actual finite headroom, rather than an obsolete pessimistic
+	// source-size estimate. The same repeated-term input succeeds after release.
 	large := []byte(fmt.Sprintf(`{"tenant":"a","content":%q,"embedding":[1,0]}`, strings.Repeat("word ", 1<<13)))
+	beforeLSN := backend.CommandWALNextLSN()
+	insertBlocker, err := read.capture.NativeAllocator().AdmitNativeBytes(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer insertBlocker.Close()
+	available = budget.Limits().MaxInFlightBytes - budget.Stats().ReservedBytes
+	if err := insertBlocker.Resize(available); err != nil {
+		t.Fatal(err)
+	}
 	for attempt := 0; attempt < 3; attempt++ {
 		before := budget.Stats()
 		_, err = c.Insert([]byte("b"), large)
-		if !errors.Is(err, memtable.ErrCOWCapacity) || !strings.Contains(err.Error(), "native text analysis workspace") {
-			t.Fatalf("attempt%d expected analysis capacity refusal: %v", attempt, err)
+		if !errors.Is(err, memtable.ErrCOWCapacity) || backenddb.CommitPublicationAccepted(err) {
+			t.Fatalf("attempt%d expected prepublication capacity refusal: %v", attempt, err)
 		}
 		after := budget.Stats()
-		if after.ReservedBytes != before.ReservedBytes || after.ExternalLeases != before.ExternalLeases {
+		// Producer preflight may retire checkpoint-owned receipts. Refusal
+		// must add no retained private debt on any attempt.
+		if after.ReservedBytes > before.ReservedBytes || after.ExternalLeases > before.ExternalLeases {
 			t.Fatalf("attempt%d refused insert changed receipts: before=%+v after=%+v", attempt, before, after)
 		}
-		if got, err := c.Get([]byte("b")); err != nil || got != nil {
-			t.Fatalf("refused row=%s err=%v", got, err)
-		}
 	}
-	if _, err = c.Insert([]byte("b"), doc); err != nil {
+	insertBlocker.Close()
+	current, err := c.nativeJSON.Capture(c.name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer current.Close()
+	if current.capture.LogicalSequence() != read.capture.LogicalSequence() || backend.CommandWALNextLSN() != beforeLSN ||
+		current.collection.incarnation != read.collection.incarnation || current.collection.documentGeneration != read.collection.documentGeneration ||
+		current.collection.schema != read.collection.schema || !sameCollectionMeta(current.meta, read.meta) {
+		t.Fatal("refused insertion changed logical/schema/document/WAL identity")
+	}
+	if err := current.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := c.Get([]byte("b")); err != nil || got != nil {
+		t.Fatalf("refused row=%s err=%v", got, err)
+	}
+	if _, err = c.Insert([]byte("b"), large); err != nil {
 		t.Fatal(err)
 	}
 	pin()
-	requireNativeTextIDs(t, c, "refund", "a", "b")
+	requireNativeTextIDs(t, c, "word", "b")
+	requireNativeTextIDs(t, c, "refund", "a")
 }
 
 func TestNativeTextPublicBoundedImage(t *testing.T) {

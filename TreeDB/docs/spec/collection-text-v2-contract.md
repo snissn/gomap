@@ -324,9 +324,31 @@ Visibility is generation-based: posting entries whose `(ordinal,generation)` do
 not match the current norm/docmap generation or that map to tombstoned ordinals
 are ignored, so append-only historical blocks from updates/deletes are safe until
 later rewrite/merge compacts them. Doc IDs for ranking tie-breaks and final IDs
-come from v2 docmap blocks. Snapshot-local norm/docmap caches are bounded by the
-number of ordinal blocks touched by the query and are discarded after the search;
-no shared cross-snapshot cache is introduced.
+come from v2 docmap blocks for unfiltered or otherwise unknown identities.
+For scalar-filtered serving, the same captured cut's validated `text-v2-docid`
+forward tuple retains the scalar allow-set's already-owned documentID string,
+ordinal, generation and flags. Distinct selected IDs mapping to one ordinal are
+corruption. Every consumed known norm tuple must agree with that forward tuple
+before tombstone, generation or score-bound pruning. The all-live optimization
+retains this mapping; live-count equality does not substitute ordinal order for
+bytewise documentID tie order. Exact, single/AND/OR block-max, phrase and exact
+fallback use the same identity resolution. Known lexical bounds borrow the owned
+string without an inverse lookup or temporary ID conversion; candidate and final
+result IDs remain independent copies.
+
+All seven root-format records are still validated. Every consumed norm/posting/
+position record retains its complete codec validation, including excluded entries.
+A filtered plan deliberately need not detect corruption in inverse DATA records
+it never consumes. Unfiltered queries and full storage inspection retain inverse
+validation. The forward identity is query-local evidence, not a change in storage
+format, catalog authority or cross-capture cache.
+
+Snapshot-local norm/docmap caches are bounded by the number of ordinal blocks
+touched by the query and are discarded after the search; no shared cross-snapshot
+cache is introduced. Native forward maps, sorting storage, lookup conversions and
+keys, and independently copied candidate/detail/result IDs are admitted before
+allocation on the original operation receipt. A block-max exact restart retains
+both constructions' charges; it does not refund already consumed query work.
 
 The request posting-entry limit is cumulative across the selected v2 serving
 path. Work decoded before a block-max fallback is not refunded when exact scan

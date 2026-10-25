@@ -169,8 +169,78 @@ type textV2SearchDocMapEntry struct {
 
 func (e textV2SearchDocMapEntry) tombstoned() bool { return e.Flags&textV2DocFlagTombstone != 0 }
 
+// Forward identities borrow the scalar allow-set's operation-owned strings.
+// Only a validated same-cut docID tuple can populate this map.
+type textV2SearchForwardIdentity struct {
+	documentID string
+	generation uint64
+	flags      byte
+}
+
+// An identity borrows either an owned scalar string or the inverse decoder's
+// retained bytes. Bounds compare it without allocating; retained results copy it.
+type textV2SearchIdentity struct {
+	Generation uint64
+	Flags      byte
+	known      string
+	inverse    []byte
+}
+
+func (id textV2SearchIdentity) tombstoned() bool { return id.Flags&textV2DocFlagTombstone != 0 }
+
+func (id textV2SearchIdentity) appendTo(dst []byte) []byte {
+	if id.known != "" {
+		return append(dst, id.known...)
+	}
+	return append(dst, id.inverse...)
+}
+
+func (id textV2SearchIdentity) candidateID() []byte {
+	if id.known != "" {
+		return id.appendTo(nil)
+	}
+	return id.inverse
+}
+
+func (id textV2SearchIdentity) len() int {
+	if id.known != "" {
+		return len(id.known)
+	}
+	return len(id.inverse)
+}
+
+func (id textV2SearchIdentity) at(i int) byte {
+	if id.known != "" {
+		return id.known[i]
+	}
+	return id.inverse[i]
+}
+
+func (id textV2SearchIdentity) compare(other textV2SearchIdentity) int {
+	if id.known == "" && other.known == "" {
+		return bytes.Compare(id.inverse, other.inverse)
+	}
+	if id.known != "" && other.known != "" {
+		return strings.Compare(id.known, other.known)
+	}
+	for i := 0; i < min(id.len(), other.len()); i++ {
+		if a, b := id.at(i), other.at(i); a < b {
+			return -1
+		} else if a > b {
+			return 1
+		}
+	}
+	if id.len() < other.len() {
+		return -1
+	}
+	if id.len() > other.len() {
+		return 1
+	}
+	return 0
+}
+
 type textV2SearchOrdinalAllowSet struct {
-	ordinals map[uint64]struct{}
+	ordinals map[uint64]textV2SearchForwardIdentity
 	sorted   []uint64
 	count    int
 	all      bool
@@ -204,7 +274,7 @@ func (s *textV2SearchOrdinalAllowSet) rangeBounds(first, last uint64) (int, int,
 	if first > last {
 		return 0, 0, false
 	}
-	if s == nil || s.all {
+	if s == nil {
 		return 0, 0, true
 	}
 	if len(s.sorted) == 0 {
@@ -381,7 +451,7 @@ func executeTextV2SearchAtSnapshot(
 		if !ok {
 			continue
 		}
-		docMap, ok, err := cache.docMapEntry(snap, catalog, ctx, candidate.ordinal)
+		docMap, ok, err := cache.identityEntry(snap, catalog, ctx, candidate.ordinal)
 		if err != nil {
 			return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
 		}
@@ -406,7 +476,7 @@ func executeTextV2SearchAtSnapshot(
 			return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
 		}
 		candidate.generation = norm.Generation
-		candidate.documentID = append(candidate.documentID[:0], docMap.DocumentID...)
+		candidate.documentID = docMap.appendTo(candidate.documentID[:0])
 		candidate.score = score
 		scored = append(scored, candidate)
 	}
@@ -574,6 +644,11 @@ func newTextV2SearchOrdinalAllowSet(snap *backenddb.Snapshot, catalog *collectio
 	if allowedIDs == nil {
 		return nil, nil
 	}
+	if catalog != nil && catalog.nativeText != nil {
+		if err := catalog.nativeText.admitForwardIdentities(allowedIDs); err != nil {
+			return nil, err
+		}
+	}
 	ids := make([]string, 0, len(allowedIDs))
 	for id := range allowedIDs {
 		ids = append(ids, id)
@@ -588,7 +663,7 @@ func newTextV2SearchOrdinalAllowSet(snap *backenddb.Snapshot, catalog *collectio
 		}
 		defer points.close()
 	}
-	set := &textV2SearchOrdinalAllowSet{ordinals: make(map[uint64]struct{}, len(ids)), sorted: make([]uint64, 0, len(ids))}
+	set := &textV2SearchOrdinalAllowSet{ordinals: make(map[uint64]textV2SearchForwardIdentity, len(ids)), sorted: make([]uint64, 0, len(ids))}
 	for _, id := range ids {
 		documentID := []byte(id)
 		var doc textV2DocIDValue
@@ -612,10 +687,11 @@ func newTextV2SearchOrdinalAllowSet(snap *backenddb.Snapshot, catalog *collectio
 		if doc.Ordinal >= ctx.status.NextOrdinal || doc.Generation > ctx.status.DocMapGeneration || doc.tombstoned() {
 			return nil, errMalformedTextStorage("text-v2 docid mapping for scalar-filtered document %q outside status snapshot", id)
 		}
-		if _, exists := set.ordinals[doc.Ordinal]; !exists {
-			set.ordinals[doc.Ordinal] = struct{}{}
-			set.sorted = append(set.sorted, doc.Ordinal)
+		if previous, exists := set.ordinals[doc.Ordinal]; exists {
+			return nil, errMalformedTextStorage("text-v2 distinct scalar IDs %q and %q share ordinal %d", previous.documentID, id, doc.Ordinal)
 		}
+		set.ordinals[doc.Ordinal] = textV2SearchForwardIdentity{documentID: id, generation: doc.Generation, flags: doc.Flags}
+		set.sorted = append(set.sorted, doc.Ordinal)
 	}
 	slices.Sort(set.sorted)
 	set.count = len(set.sorted)
@@ -781,7 +857,7 @@ func executeTextV2BlockMaxSearchAtSnapshot(
 			if !top.needsDocumentIDForScore(score) {
 				continue
 			}
-			docMap, ok, err := cache.docMapEntry(snap, catalog, ctx, entry.Ordinal)
+			docMap, ok, err := cache.identityEntry(snap, catalog, ctx, entry.Ordinal)
 			if err != nil {
 				return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
 			}
@@ -795,7 +871,7 @@ func executeTextV2BlockMaxSearchAtSnapshot(
 				continue
 			}
 			beforeThreshold, beforeReady := top.threshold()
-			topCandidate := textV2SearchTopCandidate{ordinal: entry.Ordinal, generation: entry.Generation, documentID: docMap.DocumentID, score: score}
+			topCandidate := textV2SearchTopCandidate{ordinal: entry.Ordinal, generation: entry.Generation, documentID: docMap.candidateID(), score: score}
 			if resultMode != textSearchResultScoreOnly || response.Explain != nil {
 				topCandidate.term = term
 				topCandidate.posting = posting
@@ -1452,7 +1528,7 @@ func visitTextV2ANDBlockMaxOverlap(
 					stats.TextCandidatesScored++
 				}
 				if top.needsDocumentIDForScore(score) {
-					docMap, ok, err := cache.docMapEntry(snap, catalog, ctx, target)
+					docMap, ok, err := cache.identityEntry(snap, catalog, ctx, target)
 					if err != nil {
 						return false, false, err
 					}
@@ -1461,10 +1537,10 @@ func visitTextV2ANDBlockMaxOverlap(
 							return false, false, errMalformedTextStorage("text-v2 norm/docmap generation mismatch for ordinal %d", target)
 						}
 						if !docMap.tombstoned() {
-							topCandidate := textV2SearchTopCandidate{ordinal: target, generation: norm.Generation, documentID: docMap.DocumentID, score: score}
+							topCandidate := textV2SearchTopCandidate{ordinal: target, generation: norm.Generation, documentID: docMap.candidateID(), score: score}
 							pos, admitted, thresholdChanged := top.addCandidate(topCandidate)
 							if admitted && retainDetail {
-								detail := &textV2SearchCandidate{ordinal: target, generation: norm.Generation, documentID: append([]byte(nil), docMap.DocumentID...), score: score}
+								detail := &textV2SearchCandidate{ordinal: target, generation: norm.Generation, documentID: docMap.appendTo(nil), score: score}
 								for _, state := range states {
 									if err := detail.addPostingValue(state.term, state.entries[state.entryIdx].value); err != nil {
 										return false, false, err
@@ -1973,7 +2049,7 @@ func visitTextV2ORBlockMaxCandidate(
 			stats.TextCandidatesScored++
 		}
 		if top.needsDocumentIDForScore(score) {
-			docMap, ok, err := cache.docMapEntry(snap, catalog, ctx, target)
+			docMap, ok, err := cache.identityEntry(snap, catalog, ctx, target)
 			if err != nil {
 				return false, err
 			}
@@ -1982,10 +2058,10 @@ func visitTextV2ORBlockMaxCandidate(
 					return false, errMalformedTextStorage("text-v2 norm/docmap generation mismatch for ordinal %d", target)
 				}
 				if !docMap.tombstoned() {
-					topCandidate := textV2SearchTopCandidate{ordinal: target, generation: norm.Generation, documentID: docMap.DocumentID, score: score}
+					topCandidate := textV2SearchTopCandidate{ordinal: target, generation: norm.Generation, documentID: docMap.candidateID(), score: score}
 					pos, admitted, thresholdChanged := top.addCandidate(topCandidate)
 					if admitted && retainDetail {
-						detail := &textV2SearchCandidate{ordinal: target, generation: norm.Generation, documentID: append([]byte(nil), docMap.DocumentID...), score: score}
+						detail := &textV2SearchCandidate{ordinal: target, generation: norm.Generation, documentID: docMap.appendTo(nil), score: score}
 						for _, state := range scoreStates {
 							if state == nil || state.exhausted || state.currentFirst() != target || state.entryIdx >= len(state.entries) || state.entries[state.entryIdx].ordinal != target {
 								continue
@@ -2420,7 +2496,7 @@ func textV2SearchTightUpperBoundSkipsRange(snap *backenddb.Snapshot, catalog *co
 	if !hasLive {
 		return true, nil
 	}
-	return bytes.Compare(minDocID, worst.documentID) >= 0, nil
+	return minDocID.compare(textV2SearchIdentity{inverse: worst.documentID}) >= 0, nil
 }
 
 func scoreTextV2SearchPostingValue(term string, posting textV2SearchPostingValue, ctx *textV2SearchContext, norm textV2SearchNormEntry) (float64, error) {
@@ -2854,6 +2930,17 @@ func (cache *textV2SearchBlockCache) normBlockAtOptional(snap *backenddb.Snapsho
 	if decoded.BlockStart != blockStart || decoded.BlockSize != textV2DefaultNormBlockSize || decoded.FieldCount != uint32(len(ctx.fieldNames)) {
 		return textV2SearchNormBlock{}, false, errMalformedTextStorage("text-v2 norm block key/value mismatch")
 	}
+	// The decoder still validates the complete consumed record. Validate every
+	// retained known tuple before any caller can tombstone/score-bound skip it.
+	if cache.allowed != nil {
+		for _, entry := range decoded.Entries {
+			if known, ok := cache.allowed.ordinals[entry.Ordinal]; ok && known.documentID != "" {
+				if entry.Ordinal >= ctx.status.NextOrdinal || entry.Generation > ctx.status.NormGeneration || entry.Generation != known.generation || entry.Flags != known.flags {
+					return textV2SearchNormBlock{}, false, errMalformedTextStorage("text-v2 norm/forward identity mismatch for ordinal %d", entry.Ordinal)
+				}
+			}
+		}
+	}
 	cache.normBlocks[blockStart] = decoded
 	return decoded, true, nil
 }
@@ -2956,7 +3043,7 @@ func (cache *textV2SearchBlockCache) minFieldLengthsInRange(snap *backenddb.Snap
 }
 
 func (cache *textV2SearchBlockCache) minFieldLengthsInAllowedRange(snap *backenddb.Snapshot, catalog *collectionCatalog, ctx *textV2SearchContext, allowSet *textV2SearchOrdinalAllowSet, first, last uint64, mins []uint32, stats *TextSearchStats) (hasLive bool, complete bool, err error) {
-	if allowSet == nil || allowSet.all {
+	if allowSet == nil {
 		return cache.minFieldLengthsInRange(snap, catalog, ctx, first, last, mins, stats)
 	}
 	if first == 0 || last < first {
@@ -3006,6 +3093,25 @@ func (cache *textV2SearchBlockCache) minFieldLengthsInAllowedRange(snap *backend
 		hasLive = true
 	}
 	return hasLive, true, nil
+}
+
+// identityEntry is shared by exact, all block-max scorers, and phrase scoring.
+// Unknown/unfiltered ordinals retain the original inverse-sidecar validation.
+func (cache *textV2SearchBlockCache) identityEntry(snap *backenddb.Snapshot, catalog *collectionCatalog, ctx *textV2SearchContext, ordinal uint64) (textV2SearchIdentity, bool, error) {
+	if cache.allowed != nil {
+		if known, ok := cache.allowed.ordinals[ordinal]; ok && known.documentID != "" {
+			norm, found, err := cache.normEntry(snap, catalog, ctx, ordinal, nil)
+			if err != nil || !found {
+				return textV2SearchIdentity{}, false, err
+			}
+			if norm.Generation != known.generation || norm.Flags != known.flags {
+				return textV2SearchIdentity{}, false, errMalformedTextStorage("text-v2 norm/forward identity mismatch for ordinal %d", ordinal)
+			}
+			return textV2SearchIdentity{Generation: known.generation, Flags: known.flags, known: known.documentID}, true, nil
+		}
+	}
+	entry, found, err := cache.docMapEntry(snap, catalog, ctx, ordinal)
+	return textV2SearchIdentity{Generation: entry.Generation, Flags: entry.Flags, inverse: entry.DocumentID}, found, err
 }
 
 func (cache *textV2SearchBlockCache) docMapBlockAtOptional(snap *backenddb.Snapshot, catalog *collectionCatalog, ctx *textV2SearchContext, blockStart uint64) (textV2SearchDocMapBlock, bool, error) {
@@ -3125,45 +3231,35 @@ func (cache *textV2SearchBlockCache) minDocumentIDInRange(snap *backenddb.Snapsh
 	return minID, true, true, nil
 }
 
-func (cache *textV2SearchBlockCache) minDocumentIDInAllowedRange(snap *backenddb.Snapshot, catalog *collectionCatalog, ctx *textV2SearchContext, allowSet *textV2SearchOrdinalAllowSet, first, last uint64) (minID []byte, hasLive bool, complete bool, err error) {
-	if allowSet == nil || allowSet.all {
-		return cache.minDocumentIDInRange(snap, catalog, ctx, first, last)
+func (cache *textV2SearchBlockCache) minDocumentIDInAllowedRange(snap *backenddb.Snapshot, catalog *collectionCatalog, ctx *textV2SearchContext, allowSet *textV2SearchOrdinalAllowSet, first, last uint64) (minimum textV2SearchIdentity, hasLive bool, complete bool, err error) {
+	if allowSet == nil {
+		id, live, complete, err := cache.minDocumentIDInRange(snap, catalog, ctx, first, last)
+		return textV2SearchIdentity{inverse: id}, live, complete, err
 	}
 	if first == 0 || last < first {
-		return nil, false, false, errMalformedTextStorage("text-v2 invalid scalar docmap range [%d,%d]", first, last)
+		return minimum, false, false, errMalformedTextStorage("text-v2 invalid scalar docmap range [%d,%d]", first, last)
 	}
 	start, end, ok := allowSet.rangeBounds(first, last)
 	if !ok {
-		return nil, false, true, nil
+		return minimum, false, true, nil
 	}
-	for i := start; i < end; i++ {
-		ordinal := allowSet.sorted[i]
-		blockStart := textV2OrdinalBlockStart(ordinal, textV2DefaultDocMapBlockSize)
-		if blockStart == 0 {
-			return nil, false, false, errMalformedTextStorage("text-v2 invalid scalar docmap ordinal %d", ordinal)
-		}
-		block, found, err := cache.docMapBlockAtOptional(snap, catalog, ctx, blockStart)
+	for _, ordinal := range allowSet.sorted[start:end] {
+		identity, found, err := cache.identityEntry(snap, catalog, ctx, ordinal)
 		if err != nil {
-			return nil, false, false, err
+			return minimum, false, false, err
 		}
 		if !found {
-			return minID, minID != nil, false, nil
+			return minimum, hasLive, false, nil
 		}
-		entry, found := block.find(ordinal)
-		if !found {
-			return minID, minID != nil, false, nil
-		}
-		if entry.Ordinal >= ctx.status.NextOrdinal || entry.Generation > ctx.status.DocMapGeneration {
-			return nil, false, false, errMalformedTextStorage("text-v2 scalar docmap entry outside status snapshot")
-		}
-		if entry.tombstoned() {
+		if identity.tombstoned() {
 			continue
 		}
-		if minID == nil || bytes.Compare(entry.DocumentID, minID) < 0 {
-			minID = entry.DocumentID
+		if !hasLive || identity.compare(minimum) < 0 {
+			minimum = identity
 		}
+		hasLive = true
 	}
-	return minID, minID != nil, true, nil
+	return minimum, hasLive, true, nil
 }
 
 func orderTextV2SearchScanTerms(terms []string, operator TextSearchOperator, stats map[string]textV2TermStatsValue) []string {

@@ -16,7 +16,7 @@ func (n *nativeTextCatalog) admitSingleTermServing(def TextIndexDefinition, opts
 	if n.singleTermFields != 0 {
 		return nil
 	}
-	f, k, allowed := uint64(len(def.Fields)), uint64(opts.TopK), uint64(len(opts.textV2AllowedDocumentIDs))
+	f, k := uint64(len(def.Fields)), uint64(opts.TopK)
 	if f == 0 || f > uint64(textV2PostingBlockMaxFieldCount) || opts.TopK < 0 {
 		return memtable.ErrCOWCapacity
 	}
@@ -35,21 +35,13 @@ func (n *nativeTextCatalog) admitSingleTermServing(def TextIndexDefinition, opts
 	charge.array(pairs, uint64(unsafe.Sizeof(TextSearchMatch{})))
 	charge.array(pairs, 3*uint64(unsafe.Sizeof(string(""))))
 	charge.add(pairs, memtable.COWAllocationCharge(uint64(unsafe.Sizeof(string("")))))
-	// Scalar IDs are converted to sorted ordinal storage before its first
-	// docid read. Admit that complete backing now, never from future records.
-	charge.array(allowed, uint64(unsafe.Sizeof(string(""))))
-	charge.array(allowed, uint64(unsafe.Sizeof(uint64(0))))
-	charge.mapEntries(allowed, uint64(unsafe.Sizeof(uint64(0))))
-	for id := range opts.textV2AllowedDocumentIDs {
-		// Each maintained allow-set traversal encodes its own docid key
-		// before a value lookup can admit record storage. Block-max may
-		// restart once through exact fallback, so retain both key cohorts.
-		if uint64(len(id)) > ^uint64(0)-2 {
-			return memtable.ErrCOWCapacity
-		}
-		charge.add(2, memtable.COWAllocationCharge(uint64(len(id))))
-		charge.add(2, memtable.COWAllocationCharge(uint64(len(id))+2))
+	// Block-max can restart once through exact fallback. Both allow-set maps,
+	// lookup keys and independently owned candidate/detail/output IDs coexist.
+	forward, err := nativeTextForwardIdentityCharge(opts.textV2AllowedDocumentIDs, 2)
+	if err != nil {
+		return err
 	}
+	charge.add(1, forward)
 	charge.array(1, uint64(unsafe.Sizeof(nativeTextCatalog{}))+uint64(unsafe.Sizeof(textV2SearchContext{}))+uint64(unsafe.Sizeof(textV2SearchBlockCache{}))+uint64(unsafe.Sizeof(textV2SearchOrdinalAllowSet{})))
 	if charge.bad {
 		return memtable.ErrCOWCapacity
@@ -59,6 +51,52 @@ func (n *nativeTextCatalog) admitSingleTermServing(def TextIndexDefinition, opts
 	}
 	n.singleTermFields = f
 	return nil
+}
+
+// The specialized serving preflight reserves two constructions up front. Other
+// paths reserve each construction here, including an exact fallback restart,
+// before allocating any map, sorting slice, conversion or lookup key.
+func (n *nativeTextCatalog) admitForwardIdentities(ids hybridScalarAllowSet) error {
+	if n.singleTermFields != 0 {
+		return nil
+	}
+	charge, err := nativeTextForwardIdentityCharge(ids, 1)
+	if err != nil {
+		return err
+	}
+	return n.admit(charge)
+}
+
+func nativeTextForwardIdentityCharge(ids hybridScalarAllowSet, paths uint64) (uint64, error) {
+	if ids == nil {
+		return 0, nil
+	}
+	var charge nativeTextAdmissionSum
+	count := uint64(len(ids))
+	for path := uint64(0); path < paths; path++ {
+		charge.array(1, uint64(unsafe.Sizeof(textV2SearchOrdinalAllowSet{})))
+		charge.array(count, uint64(unsafe.Sizeof(string(""))))
+		charge.array(count, uint64(unsafe.Sizeof(uint64(0))))
+		charge.mapEntries(count, uint64(unsafe.Sizeof(uint64(0)))+uint64(unsafe.Sizeof(textV2SearchForwardIdentity{})))
+		for id := range ids {
+			length := uint64(len(id))
+			if length > ^uint64(0)-2 {
+				return 0, memtable.ErrCOWCapacity
+			}
+			// []byte(id) and encodeTextV2DocIDKey are separate pre-lookup cohorts.
+			charge.add(1, memtable.COWAllocationCharge(length))
+			charge.add(1, memtable.COWAllocationCharge(length+2))
+			// A current ordinal scores once per path. Exact/phrase retain candidate
+			// and result IDs; block-max additionally retains a separate detail ID,
+			// and Explain retains its own ID copy. Bound all four independent
+			// backings without relying on inverse bytes or shared source custody.
+			charge.add(4, memtable.COWAllocationCharge(length))
+		}
+	}
+	if charge.bad {
+		return 0, memtable.ErrCOWCapacity
+	}
+	return charge.total, nil
 }
 
 func (n *nativeTextCatalog) value(entry node.LeafEntry, root string, key []byte) ([]byte, error) {
