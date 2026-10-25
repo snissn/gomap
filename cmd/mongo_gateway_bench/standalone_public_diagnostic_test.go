@@ -108,7 +108,12 @@ func TestStandalonePublicResourceDiagnostic(t *testing.T) {
 				if err := held.VisitIndexValueIDs("n_1", bson.RawValue{Type: bson.TypeInt64, Value: make([]byte, 8)}, func(id []byte) error { heldIDs = append(heldIDs, bytes.Clone(id)); return nil }); err != nil || !equalPublicIDs(seedIDs, heldIDs) {
 					t.Errorf("held membership changed: count=%d error=%v", len(heldIDs), err)
 				}
-				if got, err := held.FetchDocumentsByID(seedIDs[:1], collections.DocumentFetchOptions{}); err != nil || len(got.Results) != 1 || !got.Results[0].Found || bson.Raw(got.Results[0].Document).Lookup("n").Int64() != 0 {
+				got, err := held.FetchDocumentsByID(seedIDs[:1], collections.DocumentFetchOptions{})
+				heldN, valid := int64(0), false
+				if err == nil && len(got.Results) == 1 && got.Results[0].Found {
+					heldN, valid = bson.Raw(got.Results[0].Document).Lookup("n").Int64OK()
+				}
+				if err != nil || !valid || heldN != 0 {
 					t.Errorf("held document changed: %+v/%v", got, err)
 				}
 				if err := held.Close(); err != nil {

@@ -4,6 +4,9 @@ This protocol accompanies #5225/#5234. It defines retained qualification after a
 stable viable candidate, not acceptance of earlier diagnostic runs. Changes to
 runtime or harness code invalidate affected evidence; artifact-only descendants
 may reuse evidence only with identical recorded implementation/harness blobs.
+Land the reviewed harness and schema before retained collection. Results from
+an unmerged development packet remain source-bound development evidence; final
+product acceptance still requires the agreed landed-source qualification.
 
 ## Construction and boundaries
 

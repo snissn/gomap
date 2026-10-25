@@ -24,7 +24,7 @@ def digest(path):
 
 def host_inventory(path):
     with path.open("w") as stream:
-        subprocess.run(["ps", "-eo", "pid,ppid,etime,pcpu,pmem,args", "--sort=-pcpu"], stdout=stream, stderr=subprocess.STDOUT, check=True)
+        subprocess.run(["ps", "-eo", "pid,ppid,etime,pcpu,pmem,args"], stdout=stream, stderr=subprocess.STDOUT, check=True)
 
 
 def validate_route(raw, profile, writers, payload, native):
@@ -137,16 +137,29 @@ def main():
     receipts =[{**sample, "status":"not_run", "metrics":None, "returncode":None} for sample in plan]
     write_json(args.output/"receipts.json", receipts)
     for row in receipts:
-        host_inventory(args.output/(row["label"]+"-host.txt"))
         started =time.time()
-        with (args.output/(row["label"]+".log")).open("w") as stream:
-            result =subprocess.run(row["command"], env=env, stdout=stream, stderr=subprocess.STDOUT, cwd=manifest[row["route"]]["cwd"])
-        row.update(started_unix=started, wall_seconds=time.time()-started, returncode=result.returncode, status="failed")
-        raw =(args.output/(row["label"]+".log")).read_text()
-        if result.returncode ==0:
+        row.update(started_unix=started, status="running")
+        write_json(args.output/"receipts.json", receipts)
+        stage ="host_inventory"
+        try:
+            host_inventory(args.output/(row["label"]+"-host.txt"))
+            stage ="log_open"
+            with (args.output/(row["label"]+".log")).open("w") as stream:
+                stage ="launch"
+                result =subprocess.run(row["command"], env=env, stdout=stream, stderr=subprocess.STDOUT, cwd=manifest[row["route"]]["cwd"])
+            row["returncode"] =result.returncode
+        except (OSError, subprocess.CalledProcessError) as error:
+            row["infrastructure_failure"] =dict(kind="INFRASTRUCTURE_UNAVAILABLE", stage=stage,
+                error_type=type(error).__name__, errno=getattr(error, "errno", None), message=str(error))
+        row.update(wall_seconds=time.time()-started, status="failed")
+        if row["returncode"] ==0:
             try:
+                raw =(args.output/(row["label"]+".log")).read_text()
                 row["metrics"] =parse_primary(raw, row["profile"], row["writers"], row["route"] == "candidate") if args.mode =="primary" else parse_resource(raw, row["profile"], row["writers"], row["route"] == "candidate")
                 row["status"] ="valid"
+            except OSError as error:
+                row["infrastructure_failure"] =dict(kind="INFRASTRUCTURE_UNAVAILABLE", stage="log_read",
+                    error_type=type(error).__name__, errno=error.errno, message=str(error))
             except (ValueError, KeyError, json.JSONDecodeError) as error:
                 row["parse_error"] =str(error)
         write_json(args.output/"receipts.json", receipts)

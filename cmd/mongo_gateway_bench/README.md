@@ -49,6 +49,11 @@ receipts without retrying. A successful driver exit means the batch finished;
 inspect every receipt and the numeric summary. It does not certify isolation,
 resources, capabilities, recovery, CI or review.
 
+An inventory, log, or process-launch failure records
+`INFRASTRUCTURE_UNAVAILABLE` with its stage and OS error, leaves metrics null,
+and continues the fixed plan. A process that exits nonzero retains that exit
+code and null metrics. Neither failure is retried or counted as a valid sample.
+
 ## Build
 
 ```sh
@@ -922,9 +927,10 @@ read view, 10,000 indexed updates per cell and 4 KiB payloads. Optional
 `GOMAP_MONGO_DIAGNOSTIC_OPERATIONS` and `GOMAP_MONGO_DIAGNOSTIC_PAYLOAD` select
 explicit fixture sizes. Preallocated latency slots report p50/p95/p99/max;
 one-second observations sample whole-process heap/RSS, logical file sizes and available
-owning-engine COW/WAL/checkpoint counters. `StandaloneServer.Stats` exposes the
-owning TreeDB diagnostics without opening another backend. Missing historical
-counters remain absent. Reader release, natural two-second idle maintenance, and
+owning-engine COW/WAL/checkpoint counters. When available, `StandaloneServer.Stats`
+exposes the owning TreeDB diagnostics without opening another backend; earlier
+products use their existing backend Stats. Missing historical counters remain
+absent. Reader release, natural two-second idle maintenance, and
 close/GC are separately labeled; no checkpoint is imposed between phases.
 Timestamps, periodic observation and held reads make this a separate latency and
 resource experiment, not throughput/allocation qualification from the primary
