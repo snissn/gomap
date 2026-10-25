@@ -868,6 +868,25 @@ poisons publication, and refuses later writes until recovery. Durable report
 finishes the ordinary transaction synchronously; this ordinary callback path is
 not bounded native Accepted/Finish qualification.
 
+## Online vacuum system preparation
+
+Online vacuum prepares the rewritten system catalog from its pinned collection
+basis before taking the writer cutover lock. At cutover, the original generation,
+system-root and publication-epoch checks, together with the recoverable-root
+capability check, determine whether that exact preparation can be installed.
+A changed basis follows the existing bounded recapture/reclone path; the private
+system pages, including reserved pages and allocator spills, are reclaimed before
+rebuilding. No reservation is reset and no live or older-root page is reclaimed.
+New external system leaves remain tracked for the final resource closure even
+when a preparation is invalidated.
+
+Pre-cutover mapped writeback includes the prepared system pages and earns no
+durability credit. System-tree time includes all preparation attempts outside the
+writer gate. The final bounded user tail, exact metadata/frontier binding,
+resource/index/authority fences, namespace decision and runtime installation keep
+their existing ordering and writer exclusion. This applies without depending on
+WAL replay and does not combine DATA and PRIMARY authority or change ordinary ACKs.
+
 ## Capsule-format joint vacuum durability
 
 The temporary explicit/persisted PRIMARY path retains this joint protocol.

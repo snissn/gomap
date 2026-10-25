@@ -120,14 +120,15 @@ type VacuumOnlineStats struct {
 	Canceled                                bool
 }
 
-// vacuumReservedAllocator keeps the final system-tree writes in pages reserved
-// before the larger user and collection trees are built. That lets the
-// pre-cutover sync flush those larger trees without the final system rebuild
-// dirtying their tail chunks again.
+// vacuumReservedAllocator keeps prepared system-tree writes in pages reserved
+// before the larger user and collection trees are built. A recording allocator
+// above it owns both reserved pages and spills until the prepared basis is
+// accepted or those exact private pages are reclaimed.
 type vacuumReservedAllocator struct {
-	base vacuumCollectionAllocator
-	next uint64
-	end  uint64
+	base     vacuumCollectionAllocator
+	pageHook func(uint64)
+	next     uint64
+	end      uint64
 }
 
 func newVacuumReservedAllocator(base vacuumCollectionAllocator, start, count uint64) *vacuumReservedAllocator {
@@ -142,12 +143,25 @@ func (a *vacuumReservedAllocator) Alloc(hint uint64) (uint64, error) {
 	if a == nil || a.base == nil {
 		return 0, errors.New("vacuum: missing reserved allocator")
 	}
+	var id uint64
+	var err error
 	if a.next < a.end {
-		id := a.next
+		id = a.next
 		a.next++
-		return id, nil
+	} else {
+		id, err = a.base.Alloc(hint)
 	}
-	return a.base.Alloc(hint)
+	if err == nil && a.pageHook != nil {
+		a.pageHook(id)
+	}
+	return id, err
+}
+
+func (a *vacuumReservedAllocator) Free(id uint64) error {
+	if a == nil || a.base == nil {
+		return errors.New("vacuum: missing reserved allocator")
+	}
+	return a.base.Free(id)
 }
 
 func (a *vacuumReservedAllocator) ReleaseUnused() error {
@@ -871,8 +885,7 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 		return err
 	}
 	systemAlloc := newVacuumReservedAllocator(newAlloc, systemReserveStart, systemTreePages)
-	reservedBytes := systemAlloc.end * uint64(page.PageSize)
-	firstPreflushChunk := int((reservedBytes + uint64(db.chunkSize) - 1) / uint64(db.chunkSize))
+	systemAlloc.pageHook = db.vacuumSystemTreePageHook
 	runStats.SystemReserveDuration += time.Since(reserveStarted)
 
 	userTreeStarted := time.Now()
@@ -1036,8 +1049,8 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 		return checkGrowth()
 	}
 
-	// Final cutover: stop recording, validate the pinned collection basis, apply
-	// only a bounded user tail, rebuild the system tree, then perform the existing
+	// Prepare the system tree outside cutover, then stop recording, validate its
+	// pinned basis, apply only a bounded user tail, and perform the existing
 	// durability/swap/publication sequence.
 	defers := 0
 	for {
@@ -1045,14 +1058,57 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 			cleanupNewPager()
 			return err
 		}
-		// Flush preclone, catch-up, and reclone overflow chunks while writers can
-		// continue. Reserved low chunks stay dirty for the final durability sync,
-		// which remains in the established crash sequence.
+		// Prepare against the pinned catalog before closing writer admission.
+		// The existing cutover token/capability checks below decide whether this
+		// exact private tree can be installed; stale pages are reclaimed before
+		// the existing bounded recapture/reclone path.
+		collectionRootReplacements, err := basis.replacements()
+		if err != nil {
+			cleanupNewPager()
+			return err
+		}
+
+		systemPages := newVacuumRecordingAllocator(systemAlloc)
+		var newSysRoot uint64
+		var systemLeafAppended bool
+		effectiveInternalBaseDelta := db.indexInternalBaseDelta && !db.indexOuterLeavesInValueLog
+		systemTreeStarted := time.Now()
+		if db.indexOuterLeavesInValueLog && len(collectionRootReplacements) == 0 {
+			newSysRoot, err = vacuumClonePagerTreeWithLeafRefs(basis.snapshot.idx.pager, basis.token.systemRootPageID, systemPages, newPager, effectiveInternalBaseDelta)
+		} else {
+			newSysRoot, systemLeafAppended, err = db.vacuumBuildSystemRoot(basis.snapshot.idx.pager, &basis.snapshot.reader, basis.token.systemRootPageID, systemPages, newPager, bulk.BuildOptions{
+				LeafPrefixCompression: db.leafPrefixCompression,
+				LeafColumnar:          db.indexColumnarLeaves,
+				PackedValuePtr:        db.indexPackedValuePtr,
+				InternalBaseDelta:     effectiveInternalBaseDelta,
+			}, collectionRootReplacements)
+		}
+		if err != nil {
+			cleanupNewPager()
+			return err
+		}
+		// Newly appended system leaves are outside the source resource closure.
+		rebuiltExternalClosureChanged = rebuiltExternalClosureChanged || systemLeafAppended
+		systemLeavesAppended = systemLeavesAppended || systemLeafAppended
+		if err := systemAlloc.ReleaseUnused(); err != nil {
+			cleanupNewPager()
+			return err
+		}
+		runStats.SystemTreeDuration += time.Since(systemTreeStarted)
+		if err := checkGrowth(); err != nil {
+			cleanupNewPager()
+			return err
+		}
+
+		// Write back the complete private tree, including its reserved system
+		// chunks, while writers continue. This is not a durability fence and
+		// grants no publication credit. Final-tail and metadata writes re-dirty
+		// their actual chunks before the unchanged final storage transaction.
 		if hook := db.vacuumPagerSyncHook; hook != nil {
 			hook(vacuumPagerSyncPrecutover)
 		}
 		preflushStarted := time.Now()
-		preflushErr := newPager.FlushDirtyChunksFrom(firstPreflushChunk)
+		preflushErr := newPager.FlushDirtyChunksFrom(0)
 		runStats.PreflushDuration += time.Since(preflushStarted)
 		if preflushErr != nil {
 			cleanupNewPager()
@@ -1186,6 +1242,14 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 			}
 			db.vacuum.Start()
 			unlockCutover(false)
+			// No live root refers to this unaccepted system tree. Recordings cover
+			// both the original reservation and fallback allocator spills; do not
+			// reset the reservation or free any collection/user-tree pages here.
+			if err := freeVacuumRetired(newAlloc, systemPages.pages); err != nil {
+				successorCloseErr := successor.Close()
+				cleanupNewPager()
+				return errors.Join(err, successorCloseErr)
+			}
 			defers++
 			runStats.DeferredCutovers++
 			if recoverableRoots != nil {
@@ -1311,46 +1375,6 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 		db.mu.RLock()
 		baseMeta := db.meta
 		db.mu.RUnlock()
-		collectionRootReplacements, err := basis.replacements()
-		if err != nil {
-			unlockCutover(false)
-			cleanupNewPager()
-			return err
-		}
-
-		var newSysRoot uint64
-		var systemLeafAppended bool
-		effectiveInternalBaseDelta := db.indexInternalBaseDelta && !db.indexOuterLeavesInValueLog
-		systemTreeStarted := time.Now()
-		if db.indexOuterLeavesInValueLog && len(collectionRootReplacements) == 0 {
-			newSysRoot, err = vacuumClonePagerTreeWithLeafRefs(basis.snapshot.idx.pager, basis.token.systemRootPageID, systemAlloc, newPager, effectiveInternalBaseDelta)
-		} else {
-			newSysRoot, systemLeafAppended, err = db.vacuumBuildSystemRoot(basis.snapshot.idx.pager, &basis.snapshot.reader, basis.token.systemRootPageID, systemAlloc, newPager, bulk.BuildOptions{
-				LeafPrefixCompression: db.leafPrefixCompression,
-				LeafColumnar:          db.indexColumnarLeaves,
-				PackedValuePtr:        db.indexPackedValuePtr,
-				InternalBaseDelta:     effectiveInternalBaseDelta,
-			}, collectionRootReplacements)
-		}
-		if err != nil {
-			unlockCutover(false)
-			cleanupNewPager()
-			return err
-		}
-		// Newly appended system leaves are outside the source resource closure.
-		rebuiltExternalClosureChanged = rebuiltExternalClosureChanged || systemLeafAppended
-		systemLeavesAppended = systemLeavesAppended || systemLeafAppended
-		if err := systemAlloc.ReleaseUnused(); err != nil {
-			unlockCutover(false)
-			cleanupNewPager()
-			return err
-		}
-		runStats.SystemTreeDuration += time.Since(systemTreeStarted)
-		if err := checkGrowth(); err != nil {
-			unlockCutover(false)
-			cleanupNewPager()
-			return err
-		}
 
 		// Prepare new meta.
 		nextMeta := baseMeta
