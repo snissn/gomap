@@ -179,7 +179,10 @@ func (it *nativeTextIterator) seek(start []byte, forward bool) {
 				return
 			}
 		}
-		key := append([]byte(nil), entry.Key...)
+		// The original receipt includes one successor byte. Keep that exact
+		// capacity so Next and tombstone skipping reuse this admitted cohort.
+		key := make([]byte, len(entry.Key), len(entry.Key)+1)
+		copy(key, entry.Key)
 		if entry.Flags&node.FlagTombstone != 0 && !it.includeDeleted {
 			start = append(key, 0)
 			forward = true
@@ -204,12 +207,7 @@ func (it *nativeTextIterator) Next() {
 	if !it.valid {
 		return
 	}
-	if err := it.scope.admit(memtable.COWAllocationCharge(uint64(len(it.key) + 1))); err != nil {
-		it.err = err
-		it.valid = false
-		return
-	}
-	it.seek(append(bytes.Clone(it.key), 0), true)
+	it.seek(append(it.key, 0), true)
 }
 func (it *nativeTextIterator) Valid() bool         { return it.valid && it.err == nil }
 func (it *nativeTextIterator) UnsafeKey() []byte   { return it.key }

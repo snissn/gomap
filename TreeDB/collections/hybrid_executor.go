@@ -816,7 +816,10 @@ func (view *hybridScalarLookupView) leafProbeBeforeCopy(filter HybridScalarFilte
 			}
 		}
 		if set == nil {
-			set = make(hybridScalarAllowSet, max(0, min(limit, hybridScalarDefaultLookupLimit)))
+			// A lookup limit bounds work, not the expected result population.
+			// Native callers retain the original full-map allowance and admit
+			// each ID/growth cohort before this callback allocates or inserts.
+			set = make(hybridScalarAllowSet, max(0, min(limit, 64)))
 		}
 		set[string(id)] = struct{}{}
 		return nil

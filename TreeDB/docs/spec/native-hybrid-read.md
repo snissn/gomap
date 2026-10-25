@@ -45,6 +45,14 @@ fresh captures and physical misses retain the original file/record checks.
 The existing per-leaf, aggregate, postings, cancellation and no-primary-scan
 contracts still apply. Empty scalar sets still validate the captured text analyzer.
 
+Maintained V2 query caches may retain only strict scalar-allowed ordinals in
+decoded norm/docmap blocks, on both legacy and native reads. Every excluded entry
+is still structurally parsed and validated. Capacity follows selected ordinals
+within each block; an all-ordinals shortcut and unfiltered/rewrite caches retain
+complete blocks. Borrowed docmap IDs keep their entire original raw record live,
+and native admission remains conservative for that complete source. This changes
+retained working storage without changing scoring, scan counters or codecs.
+
 Ordinary `native_runtime` cosine float32 vector candidates borrow the same cut.
 The existing graph-only traversal and scalar-column matcher supply IDs and
 scores without document fetch or exact scan fallback. Cold load decodes that
