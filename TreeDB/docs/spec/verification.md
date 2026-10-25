@@ -2,6 +2,42 @@
 
 This document maps specification invariants to existing tests and harnesses.
 
+## Standalone shared COW delivery
+
+- `TestStandaloneSharedCOWCollectionLifecycle` and
+  `TestStandaloneSharedCOWCrashReopen` exercise ordinary startup, indexed BSON
+  mutation/read, authentication and explicit journal ACK across all three
+  production profiles, including an actual child-process exit without cleanup.
+- `TestStandaloneLargeIndexedBSON`,
+  `TestStandaloneExplicitCOWBudgetRefusesBeforeAssignment` and
+  `TestMongoInsertCoalescerBoundsBytes` cover advertised document size, explicit
+  finite admission and independent byte-bounded groups.
+- `TestMongoMultiWriteOrderedAndUnorderedStableIndices`,
+  `TestMongoInsertBatchOrderedAndUnorderedStableIndices` and
+  `TestStandaloneServerOfficialGoDriverCompoundPlanner` use ordinary standalone
+  construction in all three profiles; the driver control includes hinted
+  descending compound reads, cursor batches, count/distinct and aggregation.
+- `native_command_wal_solo_test.go` and `native_command_wal_group_test.go` preserve
+  actual solo/group eligibility, per-command identities, post-producer completion
+  and assigned-failure custody. Native logical sequence assertions are separate
+  from physical applied and canonical barrier LSNs.
+- `TestNativeCollectionPressureDrainsBeforeOpening` holds a public collection
+  read across repeated automatic handoffs, checks old visibility and reopen, and
+  requires the original allocator to reach zero after final release/close.
+- `native_named_domain_replacement_test.go` covers named-root omission, empty
+  replacement, both scan directions, old captures, source-generation and graph
+  interpretation guards, physical handoff and final allocation release.
+- `BenchmarkStandalonePublicIndexedUpdate` is the uninstrumented actual-opener,
+  official-driver ACK/allocation comparison. The opt-in
+  `TestStandalonePublicResourceDiagnostic` separately observes preallocated
+  request latency, held reads, heap/RSS, file bytes, deferred work and close.
+  Run each resource cell in a fresh process to avoid inherited Go arenas/RSS.
+  Missing counters and failed/incomplete samples are not fabricated success.
+
+These controls define their exercised surfaces; they do not qualify every
+text/hybrid/typed consumer or replace source-bound public performance evidence.
+
+
 `TestManagerRefreshDuringRetiredSegmentUnlink` exercises actual close-before-
 unlink and failed-unlink ownership without scheduler timing. Refresh discovers
 new live segments while excluding the closed zombie. Companion tests preserve

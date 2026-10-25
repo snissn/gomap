@@ -302,3 +302,10 @@ and `listIndexes` also fail closed instead of returning gateway-local metadata.
 Collection-placement mutations remain supported. See
 [`COMPATIBILITY.md`](COMPATIBILITY.md#cluster-tokenring-read-and-index-policy)
 for the exact policy, counters, and internal-scaffold limitation.
+
+The separate opt-in public latency/resource diagnostic uses a held collection
+read, preallocated latency slots and sampled heap/RSS/file/debt counters. Run
+each cell in a fresh process; failed/incomplete results remain failures with
+null quantiles. See the [public harness instructions](../../cmd/mongo_gateway_bench/README.md) for commands and
+measurement boundaries. `StandaloneServer.Stats` exposes its owning TreeDB's
+COW and maintenance diagnostics with existing lifecycle admission.

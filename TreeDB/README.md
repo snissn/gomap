@@ -482,3 +482,10 @@ each existing private pooled capture, without pooling exported Snapshot handles.
 Cleanup errors are returned and failed original captures remain with their
 original cleanup owner. Custom providers, general/exclusive seeks and physical
 tombstone retries retain the existing cursor path. COW read admission is unchanged.
+
+The separate opt-in public latency/resource diagnostic uses a held collection
+read, preallocated latency slots and sampled heap/RSS/file/debt counters. Run
+each cell in a fresh process; failed/incomplete results remain failures with
+null quantiles. See the [public harness instructions](../cmd/mongo_gateway_bench/README.md) for commands and
+measurement boundaries. `StandaloneServer.Stats` exposes its owning TreeDB's
+COW and maintenance diagnostics with existing lifecycle admission.

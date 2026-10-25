@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
@@ -679,74 +680,82 @@ func TestMongoMultiUpdateReplacementIsRejectedBeforeEarlierMutation(t *testing.T
 }
 
 func TestMongoMultiWriteOrderedAndUnorderedStableIndices(t *testing.T) {
-	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	s := NewServer()
-	s.Collections = collections.NewCollectionManager(db)
-	assertOK(t, serveCommand(t, s, 1, bson.D{{Key: "createIndexes", Value: "users"}, {Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}}, {Key: "name", Value: "email_1"}, {Key: "treedbValueType", Value: "string"}, {Key: "unique", Value: true}}}}, {Key: "$db", Value: "app"}}))
-	assertOK(t, serveCommand(t, s, 2, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "a"}, {Key: "email", Value: "a@example.com"}}, bson.D{{Key: "_id", Value: "b"}, {Key: "email", Value: "b@example.com"}}}}, {Key: "$db", Value: "app"}}))
-	for _, ordered := range []bool{true, false} {
-		response := serveCommand(t, s, 3, bson.D{{Key: "update", Value: "users"}, {Key: "ordered", Value: ordered}, {Key: "updates", Value: bson.A{
-			bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "a"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "email", Value: "b@example.com"}}}}}},
-			bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "b"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "ok", Value: true}}}}}},
-		}}, {Key: "$db", Value: "app"}})
-		assertOK(t, response)
-		errs, ok := bson.Raw(response).Lookup("writeErrors").ArrayOK()
-		values, valuesErr := errs.Values()
-		if !ok || valuesErr != nil || len(values) != 1 {
-			t.Fatalf("writeErrors=%s", response)
-		}
-		index, _ := values[0].Document().Lookup("index").Int32OK()
-		if index != 0 {
-			t.Fatalf("error index=%d", index)
-		}
-		find := serveCommand(t, s, 3, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "b"}}}, {Key: "$db", Value: "app"}})
-		got := cursorFirstBatch(t, find)[0].Lookup("ok")
-		if ordered && !got.IsZero() {
-			t.Fatal("ordered command executed later item")
-		}
-		if !ordered && got.IsZero() {
-			t.Fatal("unordered command did not continue")
-		}
+	for _, profile := range []treedb.Profile{treedb.ProfileCommandWALDurable, treedb.ProfileCommandWALRelaxed, treedb.ProfileNoWALFast} {
+		t.Run(string(profile), func(t *testing.T) {
+			standalone, err := OpenStandaloneServer(StandaloneOptions{Dir: t.TempDir(), Profile: profile})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer standalone.Close()
+			s := standalone.Server
+			assertOK(t, serveCommand(t, s, 1, bson.D{{Key: "createIndexes", Value: "users"}, {Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}}, {Key: "name", Value: "email_1"}, {Key: "treedbValueType", Value: "string"}, {Key: "unique", Value: true}}}}, {Key: "$db", Value: "app"}}))
+			assertOK(t, serveCommand(t, s, 2, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "a"}, {Key: "email", Value: "a@example.com"}}, bson.D{{Key: "_id", Value: "b"}, {Key: "email", Value: "b@example.com"}}}}, {Key: "$db", Value: "app"}}))
+			for _, ordered := range []bool{true, false} {
+				response := serveCommand(t, s, 3, bson.D{{Key: "update", Value: "users"}, {Key: "ordered", Value: ordered}, {Key: "updates", Value: bson.A{
+					bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "a"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "email", Value: "b@example.com"}}}}}},
+					bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "b"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "ok", Value: true}}}}}},
+				}}, {Key: "$db", Value: "app"}})
+				assertOK(t, response)
+				errs, ok := bson.Raw(response).Lookup("writeErrors").ArrayOK()
+				values, valuesErr := errs.Values()
+				if !ok || valuesErr != nil || len(values) != 1 {
+					t.Fatalf("writeErrors=%s", response)
+				}
+				index, _ := values[0].Document().Lookup("index").Int32OK()
+				if index != 0 {
+					t.Fatalf("error index=%d", index)
+				}
+				find := serveCommand(t, s, 3, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "b"}}}, {Key: "$db", Value: "app"}})
+				got := cursorFirstBatch(t, find)[0].Lookup("ok")
+				if ordered && !got.IsZero() {
+					t.Fatal("ordered command executed later item")
+				}
+				if !ordered && got.IsZero() {
+					t.Fatal("unordered command did not continue")
+				}
+			}
+
+		})
 	}
 }
 
 func TestMongoInsertBatchOrderedAndUnorderedStableIndices(t *testing.T) {
-	for _, ordered := range []bool{true, false} {
-		t.Run(map[bool]string{true: "ordered", false: "unordered"}[ordered], func(t *testing.T) {
-			db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
-			if err != nil {
-				t.Fatal(err)
+	for _, profile := range []treedb.Profile{treedb.ProfileCommandWALDurable, treedb.ProfileCommandWALRelaxed, treedb.ProfileNoWALFast} {
+		t.Run(string(profile), func(t *testing.T) {
+			for _, ordered := range []bool{true, false} {
+				t.Run(map[bool]string{true: "ordered", false: "unordered"}[ordered], func(t *testing.T) {
+					standalone, err := OpenStandaloneServer(StandaloneOptions{Dir: t.TempDir(), Profile: profile})
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer standalone.Close()
+					s := standalone.Server
+					assertOK(t, serveCommand(t, s, 1, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "taken"}}}}, {Key: "$db", Value: "app"}}))
+					response := serveCommand(t, s, 2, bson.D{{Key: "insert", Value: "users"}, {Key: "ordered", Value: ordered}, {Key: "documents", Value: bson.A{
+						bson.D{{Key: "_id", Value: "taken"}},
+						bson.D{{Key: "_id", Value: "later"}},
+					}}, {Key: "$db", Value: "app"}})
+					assertOK(t, response)
+					wantN := int32(0)
+					if !ordered {
+						wantN = 1
+					}
+					assertInt32(t, response, "n", wantN)
+					errs, ok := bson.Raw(response).Lookup("writeErrors").ArrayOK()
+					values, valuesErr := errs.Values()
+					if !ok || valuesErr != nil || len(values) != 1 {
+						t.Fatalf("writeErrors=%s", response)
+					}
+					if index, indexOK := values[0].Document().Lookup("index").Int32OK(); !indexOK || index != 0 {
+						t.Fatalf("writeErrors index=%d ok=%v, want 0", index, indexOK)
+					}
+					find := serveCommand(t, s, 3, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "later"}}}, {Key: "$db", Value: "app"}})
+					if got := len(cursorFirstBatch(t, find)); (got == 1) != !ordered {
+						t.Fatalf("later insert presence=%v, ordered=%v", got == 1, ordered)
+					}
+				})
 			}
-			defer db.Close()
-			s := NewServer()
-			s.Collections = collections.NewCollectionManager(db)
-			assertOK(t, serveCommand(t, s, 1, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "taken"}}}}, {Key: "$db", Value: "app"}}))
-			response := serveCommand(t, s, 2, bson.D{{Key: "insert", Value: "users"}, {Key: "ordered", Value: ordered}, {Key: "documents", Value: bson.A{
-				bson.D{{Key: "_id", Value: "taken"}},
-				bson.D{{Key: "_id", Value: "later"}},
-			}}, {Key: "$db", Value: "app"}})
-			assertOK(t, response)
-			wantN := int32(0)
-			if !ordered {
-				wantN = 1
-			}
-			assertInt32(t, response, "n", wantN)
-			errs, ok := bson.Raw(response).Lookup("writeErrors").ArrayOK()
-			values, valuesErr := errs.Values()
-			if !ok || valuesErr != nil || len(values) != 1 {
-				t.Fatalf("writeErrors=%s", response)
-			}
-			if index, indexOK := values[0].Document().Lookup("index").Int32OK(); !indexOK || index != 0 {
-				t.Fatalf("writeErrors index=%d ok=%v, want 0", index, indexOK)
-			}
-			find := serveCommand(t, s, 3, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "later"}}}, {Key: "$db", Value: "app"}})
-			if got := len(cursorFirstBatch(t, find)); (got == 1) != !ordered {
-				t.Fatalf("later insert presence=%v, ordered=%v", got == 1, ordered)
-			}
+
 		})
 	}
 }

@@ -124,6 +124,7 @@ type StandaloneServer struct {
 	Server      *Server
 
 	cleanup          func() error
+	ownerStats       func() map[string]string
 	closeOnce        sync.Once
 	closeErr         error
 	serveMu          sync.Mutex
@@ -303,10 +304,21 @@ func OpenStandaloneServer(opts StandaloneOptions) (*StandaloneServer, error) {
 		Collections:      manager,
 		Server:           server,
 		cleanup:          cleanup,
+		ownerStats:       database.Stats,
 		transport:        transport,
 		tlsConfig:        tlsConfig,
 		transportMetrics: &transportMetrics{},
 	}, nil
+}
+
+// Stats returns the owning TreeDB's diagnostic snapshot, including COW memory,
+// publication and maintenance counters. A nil result means diagnostics could not
+// be admitted (for example, during or after Close).
+func (s *StandaloneServer) Stats() map[string]string {
+	if s == nil || s.ownerStats == nil {
+		return nil
+	}
+	return s.ownerStats()
 }
 
 // Serve accepts MongoDB wire-protocol connections on ln until ctx is canceled,

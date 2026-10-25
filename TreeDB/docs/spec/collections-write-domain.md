@@ -17,9 +17,33 @@ collections. The normative profile/API matrix is owned by
 independent durability profile. Unsupported command kinds fail closed before
 admission rather than silently downgrading acknowledgement guarantees.
 
+## Shared COW collection authority
+
+The ordinary standalone Mongo opener owns a public `treedb.DB` in `cow_btree`
+mode and creates its collection manager from `NativeSemanticBackend`. The
+backend is borrowed for that owner's lifetime. The ordinary collection facade
+routes supported mutations through the same immutable native collection/catalog
+cut and command-WAL completion as direct native callers; it does not stage a
+second manager-local write domain. Reads capture one complete cut. Legacy
+backend-only constructors retain the write-domain path described below.
+
+Each accepted native mutation installs one complete logical successor; a shared
+physical durable group preserves each command's outcomes and original LSN.
+Logical sequence, physical applied LSN and durable-prefix coverage are separate
+identities. Durable requests wait for their own completion, including persistent
+dependencies. Existing solo-sync eligibility avoids an extra barrier for an
+uncontended mutation. See `write-path-and-durability.md` for the ACK contract.
+
+Mongo insert coalescing bounds combined stored documents and ID bytes by the
+configured message envelope. A staged invalid indexed request may be isolated
+only on an explicit pre-assignment rejection marker or duplicate-key outcome;
+a generic failure is not proof that application callbacks can safely retry.
+Assigned uncertain failures retain their identity and poison further writes
+until recovery.
+
 ## Indexed Write Memtables
 
-Indexed collections use collection-local write memtables by default.
+Legacy backend-only indexed collections use collection-local write memtables by default.
 
 The write domain stages the ordered runs for one collection together:
 

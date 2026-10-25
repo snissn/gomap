@@ -887,3 +887,31 @@ The benchmark intentionally keeps BSON format questions visible. If TreeDB load
 or read phases spend a meaningful amount of time re-encoding documents in future
 profiles, that is evidence for adding a native BSON collection document format
 beside JSON and template-v1.
+
+The opt-in `TestStandalonePublicResourceDiagnostic` in
+`cmd/mongo_gateway_bench` complements the uninstrumented public benchmark:
+
+```sh
+GOMAP_MONGO_PUBLIC_DIAGNOSTIC=1 go test ./cmd/mongo_gateway_bench \
+  -run '^TestStandalonePublicResourceDiagnostic$' -count=1 -timeout=20m -v
+```
+
+It uses the same product opener and official driver, a held ordinary collection
+read view, 10,000 indexed updates per cell and 4 KiB payloads. Optional
+`GOMAP_MONGO_DIAGNOSTIC_OPERATIONS` and `GOMAP_MONGO_DIAGNOSTIC_PAYLOAD` select
+explicit fixture sizes. Preallocated latency slots report p50/p95/p99/max;
+one-second observations sample whole-process heap/RSS, logical file sizes and available
+owning-engine COW/WAL/checkpoint counters. `StandaloneServer.Stats` exposes the
+owning TreeDB diagnostics without opening another backend. Missing historical
+counters remain absent. Reader release, natural two-second idle maintenance, and
+close/GC are separately labeled; no checkpoint is imposed between phases.
+Timestamps, periodic observation and held reads make this a separate latency and
+resource experiment, not throughput/allocation qualification from the primary
+benchmark. File bytes are regular-file sizes, not allocated disk blocks.
+
+Run each diagnostic cell in a fresh process (for example
+`-run '^TestStandalonePublicResourceDiagnostic$/^command_wal_durable$/^writers=8$'`)
+for resource comparisons. Sampled heap/RSS values are not guaranteed peaks;
+latencies describe this closed-loop writer load. Reports include attempted and
+completed counts and mark any test failure; failed or incomplete runs have null
+latency quantiles and remain retained evidence.
