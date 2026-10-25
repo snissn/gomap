@@ -915,3 +915,29 @@ for resource comparisons. Sampled heap/RSS values are not guaranteed peaks;
 latencies describe this closed-loop writer load. Reports include attempted and
 completed counts and mark any test failure; failed or incomplete runs have null
 latency quantiles and remain retained evidence.
+
+The portable `BenchmarkStandalonePublicVectorBuildSaveLoad` and
+`BenchmarkStandalonePublicVectorSearch` guard the ordinary collection/vector
+APIs of the actual standalone owner. Both use `no_wal_fast`, 512 BSON rows,
+8 dimensions, cosine distance and M=16. Build/save/load excludes fixture setup;
+steady Search warms the graph, requests five ANN results and disables exact
+fallback. These are direct ordinary APIs, not Mongo wire vector-search results.
+`BenchmarkStandalonePublicVectorSaveReopenLoad` separately includes Save,
+physical owner Close, a fresh owner, Load and a validating ANN query. The
+Build/Save/hot-Load benchmark uses each implementation's public logical-save
+boundary and cache reuse; it does not establish equivalent physical work by
+itself. Profile-derived sync policy remains unchanged.
+Run identical harness overlays on baseline/candidate in fresh processes:
+
+```sh
+GOMAXPROCS=4 go test ./cmd/mongo_gateway_bench -run '^$' \
+  -bench '^BenchmarkStandalonePublicVectorSearch$' -benchmem -benchtime=10000x -count=1
+GOMAXPROCS=4 go test ./cmd/mongo_gateway_bench -run '^$' \
+  -bench '^BenchmarkStandalonePublicVectorBuildSaveLoad$' -benchmem -benchtime=10x -count=1
+GOMAXPROCS=4 go test ./cmd/mongo_gateway_bench -run '^$' \
+  -bench '^BenchmarkStandalonePublicVectorSaveReopenLoad$' -benchmem -benchtime=10x -count=1
+```
+
+Retain before/after samples and investigate material timing/allocation
+regressions before promotion. A successful small fixture is not large-graph
+qualification. These ordinary Go rows are not benchprof artifact inputs.

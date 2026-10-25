@@ -1044,3 +1044,11 @@ Go benchmark rows (ns/op, B/op, allocs/op), not benchprof inputs. The exact
 configuration, `go test -c`/prebuilt-binary commands and ten-cell, three-pair
 diagnostic boundary are in
 [the #5214 packet](../../TreeDB/docs/benchmarks/cow-successor-workspace-5214.md).
+
+`BenchmarkStandalonePublicVectorBuildSaveLoad` and
+`BenchmarkStandalonePublicVectorSearch` in `cmd/mongo_gateway_bench` exercise
+ordinary BSON/HNSW APIs on the standalone owner. Their fixture, commands and
+Go-row artifact boundary are documented in
+[the Mongo benchmark README](../mongo_gateway_bench/README.md).
+`BenchmarkStandalonePublicVectorSaveReopenLoad` also charges the physical
+owner-close and fresh-owner reconstruction boundary.
