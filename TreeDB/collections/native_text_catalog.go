@@ -6,6 +6,7 @@ import (
 	"strings"
 	"unsafe"
 
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -51,18 +52,43 @@ func (n *nativeTextCatalog) entry(root string, key []byte) (entry node.LeafEntry
 	if err != nil {
 		return entry, err
 	}
-	scratch, err := r.physicalScratch()
-	if err != nil {
-		return entry, err
-	}
-	entry, err = domain.getEntry(key, scratch, r.readLeaf)
+	entry, resolved, err := domain.memoryEntry(key)
 	if err != nil {
 		return node.LeafEntry{}, err
+	}
+	copied := false
+	if !resolved {
+		if physical, ok := r.capture.(backenddb.NativeAdmittedPhysicalReader); ok {
+			admit, admissionErr := n.valueAdmission()
+			if admissionErr != nil {
+				return node.LeafEntry{}, admissionErr
+			}
+			// The basis keeps its existing slot lease through output admission
+			// and the independent inline copy. Pointer resolution remains below.
+			entry, err = physical.NativeEntryAtRootAdmitted(domain.domain.baseRoot, key, true, admit)
+			copied = entry.Flags&(node.FlagPointer|node.FlagTombstone) == 0
+		} else {
+			// Preserve implementations without the optional companion and their
+			// original fixed-scratch/readLeaf validation and copy path.
+			scratch, scratchErr := r.physicalScratch()
+			if scratchErr != nil {
+				return node.LeafEntry{}, scratchErr
+			}
+			entry, err = domain.baseEntry(key, scratch, r.readLeaf)
+		}
+		if err != nil {
+			return node.LeafEntry{}, err
+		}
 	}
 	if entry.Flags&node.FlagTombstone != 0 {
 		return entry, nil
 	}
-	value, err := n.value(entry, root, key)
+	var value []byte
+	if copied {
+		value, err = n.copiedValue(entry.Value, root, key)
+	} else {
+		value, err = n.value(entry, root, key)
+	}
 	if err != nil {
 		return node.LeafEntry{}, err
 	}

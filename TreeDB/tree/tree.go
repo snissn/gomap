@@ -604,7 +604,7 @@ func (t *Tree) loadNodeViewWithLoadKindInto(dst *node.Node, pageID uint64, verif
 // CAUTION: Returned entry Key/Value might point directly to mmap memory.
 // Do not modify or hold reference for long.
 func (t *Tree) GetEntry(key []byte) (node.LeafEntry, error) {
-	return t.getEntry(key, nil, nil, nil, false)
+	return t.getEntry(key, nil, nil, nil, false, nil)
 }
 
 // GetEntryWithFixedScratch borrows admitted fixed-page scratch and returns an
@@ -614,10 +614,10 @@ func (t *Tree) GetEntryWithFixedScratch(key, keyScratch, leafScratch []byte, rea
 	if cap(keyScratch) < page.PageSize || cap(leafScratch) < page.PageSize {
 		return node.LeafEntry{}, node.ErrCorruptedNode
 	}
-	return t.getEntry(key, keyScratch, leafScratch, readLeaf, true)
+	return t.getEntry(key, keyScratch, leafScratch, readLeaf, true, nil)
 }
 
-func (t *Tree) getEntry(key, keyScratch, leafScratch []byte, readLeaf func(page.LeafLogPtr, []byte) ([]byte, error), bounded bool) (node.LeafEntry, error) {
+func (t *Tree) getEntry(key, keyScratch, leafScratch []byte, readLeaf func(page.LeafLogPtr, []byte) ([]byte, error), bounded bool, view *pointLeafView) (node.LeafEntry, error) {
 	if t.pointDefinitelyAbsent(key) {
 		return node.LeafEntry{}, ErrKeyNotFound
 	}
@@ -629,7 +629,7 @@ func (t *Tree) getEntry(key, keyScratch, leafScratch []byte, readLeaf func(page.
 
 	for depth := 0; depth < maxTraversalDepth; depth++ {
 		var n node.Node
-		if err := t.loadReadRefInto(&n, currRef, verifyAlways, keyScratch, leafScratch, readLeaf, bounded); err != nil {
+		if err := t.loadPointReadRefInto(&n, currRef, verifyAlways, keyScratch, leafScratch, readLeaf, bounded, view); err != nil {
 			return node.LeafEntry{}, err
 		}
 
@@ -644,7 +644,7 @@ func (t *Tree) getEntry(key, keyScratch, leafScratch []byte, readLeaf func(page.
 			}
 			var err error
 			var inline node.PrimaryDirectoryEntry
-			currRef, inline, err = t.selectPrimaryOperand(n.Data(), key, readLeaf, leafScratch, bounded)
+			currRef, inline, err = t.selectPrimaryOperandWithView(n.Data(), key, readLeaf, leafScratch, bounded, view)
 			if inline.InlineAbsence() {
 				return node.LeafEntry{Key: inline.Key, Flags: node.FlagTombstone, Revision: inline.Revision}, nil
 			}

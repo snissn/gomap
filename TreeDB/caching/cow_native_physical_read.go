@@ -6,6 +6,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/tree"
 )
 
 // nativeEntryAtRoot shares only physical decoding/traversal, never logical
@@ -58,6 +59,67 @@ func (tx *nativeConditionalTxn) NativeEntryAtRoot(root uint64, key []byte, copyV
 		return node.LeafEntry{}, err
 	}
 	return tx.snap.cowCut.basis.nativeEntryAtRoot(tx.db.cow, root, key, copyValue)
+}
+
+// nativeEntryAtRootAdmitted uses the original basis lock, workspace and cache
+// slot. Its final lease remains live through retained-output admission and the
+// independent inline copy. The callback is non-reentrant, like value-pointer
+// output admission: it must not capture/checkpoint/read/close the same owner.
+func (b *cowBackendBasis) nativeEntryAtRootAdmitted(cache *cowCache, root uint64, key []byte, copyValue bool, admitOutput func(uint64) error) (node.LeafEntry, error) {
+	b.readMu.Lock()
+	defer b.readMu.Unlock()
+	limit := cache.budget.Limits().MaxInFlightBytes
+	w, err := b.physicalWorkspaceLocked(cache.budget, valuelog.COWReadLimits{MaxRecordBytes: limit, MaxRawBytes: limit, MaxValueBytes: limit})
+	if err != nil {
+		return node.LeafEntry{}, err
+	}
+	point, err := w.pointScratch()
+	if err != nil {
+		return node.LeafEntry{}, err
+	}
+	reader, err := b.snapshot.NativeReaderAtRoot(root)
+	if err != nil {
+		return node.LeafEntry{}, err
+	}
+	entry, lease, err := reader.GetEntryExactWithFixedScratchView(key, point.key[:], point.leaf[:], func(ptr page.LeafLogPtr, dst []byte) ([]byte, tree.LeafLogPageViewLease, tree.LeafLogPageReadState, error) {
+		return b.readPhysicalLeafWithWorkspaceView(cache, w, ptr, dst, true, false, true)
+	})
+	if lease != nil {
+		defer lease.ReleaseLeafLogPageView()
+	}
+	if err != nil {
+		return node.LeafEntry{}, err
+	}
+	entry.Key = nil
+	value := entry.Value
+	entry.Value = nil
+	if copyValue && entry.Flags&(node.FlagPointer|node.FlagTombstone) == 0 {
+		if admitOutput != nil {
+			if err = admitOutput(memtable.COWAllocationCharge(uint64(len(value)))); err != nil {
+				return node.LeafEntry{}, err
+			}
+		}
+		entry.Value = make([]byte, len(value))
+		copy(entry.Value, value)
+	}
+	return entry, nil
+}
+
+func (c *NativeSemanticCapture) NativeEntryAtRootAdmitted(root uint64, key []byte, copyValue bool, admitOutput func(uint64) error) (node.LeafEntry, error) {
+	if c == nil || c.cut == nil || c.cache == nil {
+		return node.LeafEntry{}, backenddb.ErrClosed
+	}
+	return c.cut.basis.nativeEntryAtRootAdmitted(c.cache, root, key, copyValue, admitOutput)
+}
+
+func (tx *nativeConditionalTxn) NativeEntryAtRootAdmitted(root uint64, key []byte, copyValue bool, admitOutput func(uint64) error) (node.LeafEntry, error) {
+	if tx == nil || tx.ConditionalTxn == nil {
+		return node.LeafEntry{}, backenddb.ErrConditionalTxnClosed
+	}
+	if err := tx.ensureOpen(); err != nil {
+		return node.LeafEntry{}, err
+	}
+	return tx.snap.cowCut.basis.nativeEntryAtRootAdmitted(tx.db.cow, root, key, copyValue, admitOutput)
 }
 
 // nativeLeafPage uses the SAME basis traversal lock and cache decoder owner as

@@ -76,6 +76,34 @@ func (s *Snapshot) CopyVerifiedCachedLeafPage(ptr page.LeafLogPtr, inspected *os
 	return data, hit, nil
 }
 
+// ViewVerifiedCachedLeafPage borrows only an existing record-verified slot
+// after the caller's current inspection and exact registered-file check. It
+// adds no record policy, backing, pin or owner. Miss/disabled/unverified returns
+// no lease. The enclosing captured owner must remain live until lease release;
+// callers must release before decoder/cache-store paths or another slot lookup.
+func (s *Snapshot) ViewVerifiedCachedLeafPage(ptr page.LeafLogPtr, inspected *os.File, identity rootpublication.StableIdentity) ([]byte, tree.LeafLogPageViewLease, tree.LeafLogPageReadState, bool, error) {
+	if s == nil {
+		return nil, nil, tree.LeafLogPageReadState{}, false, ErrClosed
+	}
+	if err := s.beginRead(); err != nil {
+		return nil, nil, tree.LeafLogPageReadState{}, false, err
+	}
+	defer s.endRead()
+	if err := s.checkInspectedLeafFile(ptr, inspected, identity); err != nil {
+		return nil, nil, tree.LeafLogPageReadState{}, false, err
+	}
+	cache := s.reader.leafPageCache
+	data, slot, state, hit := cache.getViewLockedWithState(ptr)
+	if !hit {
+		return nil, nil, tree.LeafLogPageReadState{}, false, nil
+	}
+	if !state.RecordChecksumVerified || cache.disabled.Load() {
+		slot.ReleaseLeafLogPageView()
+		return nil, nil, tree.LeafLogPageReadState{}, false, nil
+	}
+	return data, slot, tree.LeafLogPageReadState{RecordChecksumVerified: state.RecordChecksumVerified, CacheEntryPresent: state.CacheEntryPresent, PageChecksumVerified: state.PageChecksumVerified}, true, nil
+}
+
 // MarkCachedLeafRecordVerified follows a successful full CRC-verified decode
 // through this snapshot's exact inspected file. It can upgrade only an existing
 // byte-identical decoded page; misses never allocate or populate the cache.

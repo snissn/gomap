@@ -86,3 +86,14 @@ func (r *SnapshotRootReader) SeekLTEntryWithFixedScratch(start, end, keyScratch,
 	defer r.owner.endRead()
 	return r.tree.SeekLTWithFixedScratch(start, end, keyScratch, leafScratch, scratch, readLeaf)
 }
+
+// GetEntryExactWithFixedScratchView is the scoped state/view counterpart of the
+// original fixed-destination point read. The caller retains this snapshot and
+// consumes all borrowed entry bytes before releasing the returned cache lease.
+func (r *SnapshotRootReader) GetEntryExactWithFixedScratchView(key, keyScratch, leafScratch []byte, readLeaf tree.LeafLogPointViewReader) (node.LeafEntry, tree.LeafLogPageViewLease, error) {
+	if err := r.beginRead(); err != nil {
+		return node.LeafEntry{}, nil, err
+	}
+	defer r.owner.endRead()
+	return r.tree.GetEntryWithFixedScratchView(key, keyScratch, leafScratch, readLeaf)
+}

@@ -277,6 +277,23 @@ independent page-checksum verification, and every subsequent hit still requires
 record inspection through the exact retained file identity. This bounded path
 adds no retained bytes or owner; an initially unallocated cache can remain cold.
 
+Native text catalog point reads may borrow that existing record-verified cache
+slot through the optional `NativeAdmittedPhysicalReader` companion. Each lookup
+still inspects the current record, file identity, codec and limits before cache
+reuse, then follows the original tree descent and PRIMARY/checksum validation.
+An actual page checksum check can mark the immutable slot's existing proof;
+`VerifyOnRead` continues to require the check. No slot lease survives into a
+subsequent read, decoder or cache store. The final lease remains held through
+output admission and an independent inline-value copy under the original basis
+traversal lock, then releases before that lock. The admission callback receives
+an already rounded allocation charge and must not reenter that owner. The
+enclosing capture must remain live and exclude concurrent Close throughout the
+call. Pointer metadata retains the original separately admitted value resolver.
+Cached/mutable domain entries, including tombstones, retain precedence over
+physical reads. Implementations without the companion use the original fixed
+scratch path. This changes neither the captured data cut nor publication,
+durability, cache capacity or decoder ownership.
+
 On Windows and race builds, `ReadAt` makes fixed inspection buffers heap
 allocations. The serialized read workspace conservatively reserves the original
 three-buffer, separately rounded 4,144-byte peak envelope before inspection and

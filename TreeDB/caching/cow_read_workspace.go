@@ -549,22 +549,35 @@ func (b *cowBackendBasis) readPhysicalLeafLocked(c *cowCache, ptr page.LeafLogPt
 // decoders may belong to the caller; generic codecs retain the original shared
 // envelope and admission policy. Every path still inspects before a cache hit.
 func (b *cowBackendBasis) readPhysicalLeafWithWorkspace(c *cowCache, w *cowReadWorkspace, ptr page.LeafLogPtr, dst []byte, native, localBlock bool) ([]byte, error) {
+	data, _, _, err := b.readPhysicalLeafWithWorkspaceView(c, w, ptr, dst, native, localBlock, false)
+	return data, err
+}
+
+// The state/view variant shares the exact inspector, current limits and native
+// codec policy. A refused view is released before the original decode/store.
+// Fallback pages still alias dst; no decoder/cache bytes escape unleased.
+func (b *cowBackendBasis) readPhysicalLeafWithWorkspaceView(c *cowCache, w *cowReadWorkspace, ptr page.LeafLogPtr, dst []byte, native, localBlock, useView bool) ([]byte, tree.LeafLogPageViewLease, tree.LeafLogPageReadState, error) {
 	f, identity, err := b.snapshot.PinnedValueLogFile(ptr.ValuePtr().FileID)
 	if err != nil {
-		return nil, err
+		return nil, nil, tree.LeafLogPageReadState{}, err
 	}
 	shape, err := valuelog.InspectCOWLeafRecord(f, ptr.ValuePtr(), w.limits)
 	if err != nil {
-		return nil, err
+		return nil, nil, tree.LeafLogPageReadState{}, err
 	}
 	if !native && shape.DictID != 0 {
-		return nil, errCOWPhysicalDictionary
+		return nil, nil, tree.LeafLogPageReadState{}, errCOWPhysicalDictionary
 	}
 	if native && shape.Compressed && (shape.DictID != 0 || (shape.Codec != valuelog.BlockCodecSnappy && shape.Codec != valuelog.BlockCodecLZ4)) {
-		return nil, valuelog.ErrCOWReadUnsupported
+		return nil, nil, tree.LeafLogPageReadState{}, valuelog.ErrCOWReadUnsupported
 	}
-	if data, hit, err := b.snapshot.CopyVerifiedCachedLeafPage(ptr, f, identity, dst); err != nil || hit {
-		return data, err
+	if useView {
+		data, lease, state, hit, err := b.snapshot.ViewVerifiedCachedLeafPage(ptr, f, identity)
+		if err != nil || hit {
+			return data, lease, state, err
+		}
+	} else if data, hit, err := b.snapshot.CopyVerifiedCachedLeafPage(ptr, f, identity, dst); err != nil || hit {
+		return data, nil, tree.LeafLogPageReadState{}, err
 	}
 	var data []byte
 	if shape.Compressed && !(localBlock && shape.DictID == 0 && (shape.Codec == valuelog.BlockCodecSnappy || shape.Codec == valuelog.BlockCodecLZ4)) {
@@ -572,7 +585,7 @@ func (b *cowBackendBasis) readPhysicalLeafWithWorkspace(c *cowCache, w *cowReadW
 		shared, workspaceErr := c.physicalWorkspaceLocked(w.limits)
 		if workspaceErr != nil {
 			c.physicalMu.Unlock()
-			return nil, workspaceErr
+			return nil, nil, tree.LeafLogPageReadState{}, workspaceErr
 		}
 		data, err = shared.readInspected(f, ptr.ValuePtr(), shape, true, dst, nil)
 		c.physicalMu.Unlock()
@@ -580,12 +593,12 @@ func (b *cowBackendBasis) readPhysicalLeafWithWorkspace(c *cowCache, w *cowReadW
 		data, err = w.readInspected(f, ptr.ValuePtr(), shape, true, dst, nil)
 	}
 	if err != nil {
-		return nil, err
+		return nil, nil, tree.LeafLogPageReadState{}, err
 	}
 	if err = b.snapshot.StoreVerifiedCachedLeafPage(ptr, f, identity, data); err != nil {
-		return nil, err
+		return nil, nil, tree.LeafLogPageReadState{}, err
 	}
-	return data, nil
+	return data, nil, tree.LeafLogPageReadState{}, nil
 }
 
 // Physical entries borrow this snapshot's admitted page scratch. cowReadMu
