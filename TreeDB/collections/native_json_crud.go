@@ -11,6 +11,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/txnhistory"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/tree"
 )
 
 // Existing Collection methods own one original ConditionalTxn. The callback
@@ -235,4 +236,83 @@ func (t *NativeJSONTxn) checkNativeUpdateUnique(g *nativeJSONTxnBinding, runtime
 		}
 	}
 	return nil
+}
+
+// Evaluate the predicate and stage deletion under one original conditional
+// transaction. Its read dependency prevents a concurrent replacement from being
+// deleted after the predicate accepted an older value.
+func (c *Collection) nativeDeleteDocumentIf(id []byte, predicate func([]byte) (bool, error)) (bool, error) {
+	var lastErr error
+	for attempt := 0; attempt < maxCollectionMutationRetries; attempt++ {
+		deleted, err := c.nativeDeleteDocumentIfOnce(id, predicate)
+		if !nativeSingleMutationRetryable(err) {
+			return deleted, err
+		}
+		lastErr = err
+		waitBeforeCollectionMutationRetry(attempt)
+	}
+	return false, collectionMutationRetryExhausted(lastErr)
+}
+
+func nativeSingleMutationRetryable(err error) bool {
+	return !backenddb.CommitPublicationAccepted(err) && !errors.Is(err, ErrCommitAmbiguous) && errors.Is(err, backenddb.ErrConcurrentModification)
+}
+
+func (c *Collection) nativeDeleteDocumentIfOnce(id []byte, predicate func([]byte) (bool, error)) (deleted bool, resultErr error) {
+	if c.manager.isClosing() {
+		return false, backenddb.ErrClosed
+	}
+	if len(id) == 0 {
+		return false, errors.New("collections: document id cannot be empty")
+	}
+	tx, err := c.nativeJSON.Begin(c.name)
+	if err != nil {
+		return false, err
+	}
+	defer func() { resultErr = errors.Join(resultErr, tx.Close()) }()
+	if predicate != nil {
+		current, err := tx.Get(id)
+		if errors.Is(err, tree.ErrKeyNotFound) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		accepted, err := predicate(current)
+		if err != nil || !accepted {
+			return false, err
+		}
+	}
+	count, err := tx.DeleteBatch([][]byte{id})
+	if err != nil || count == 0 {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (c *Collection) nativeUpdateDocument(id []byte, update func([]byte) ([]byte, bool, error)) (bool, bool, error) {
+	var lastErr error
+	for attempt := 0; attempt < maxCollectionMutationRetries; attempt++ {
+		results, err := c.nativeUpdateBatch([]UpdateBatchItem{{DocumentID: id, Update: update}})
+		if nativeSingleMutationRetryable(err) {
+			lastErr = err
+			waitBeforeCollectionMutationRetry(attempt)
+			continue
+		}
+		if err != nil {
+			var item *UpdateBatchItemError
+			if errors.As(err, &item) && item.Index == 0 {
+				err = item.Err
+			}
+			return false, false, err
+		}
+		if len(results) != 1 {
+			return false, false, fmt.Errorf("collections: update result count %d for single update", len(results))
+		}
+		return results[0].Matched, results[0].Modified, nil
+	}
+	return false, false, collectionMutationRetryExhausted(lastErr)
 }

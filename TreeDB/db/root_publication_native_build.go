@@ -5,6 +5,7 @@ import (
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 // MarkNativeSemanticBuildRecoveryRequired fences the original backend before
@@ -127,4 +128,49 @@ func (group *RootPublicationBuildGroup) NativeColumnAssetBuildContext() (string,
 		return "", nil, ErrNativeSemanticUnsupported
 	}
 	return root, registry, nil
+}
+
+// NativeInlineThresholdForKey returns the maintained physical value placement
+// policy. It is independent of the inline logical BSON/WAL representation.
+func (group *RootPublicationBuildGroup) NativeInlineThresholdForKey(key []byte) int {
+	group.mu.Lock()
+	defer group.mu.Unlock()
+	return group.db.InlineThresholdForKey(key)
+}
+
+// AppendNativeValueLogValues prepares physical projection values. The existing
+// append owner fences GC until these per-pointer pins have been transferred to
+// this group's segment ledger. Finalize includes those segments in its ordinary
+// dependency flush/sync; Close releases them on success and abandon alike.
+func (group *RootPublicationBuildGroup) AppendNativeValueLogValues(values [][]byte) ([]page.ValuePtr, error) {
+	if group == nil {
+		return nil, ErrNativeSemanticUnsupported
+	}
+	group.mu.Lock()
+	defer group.mu.Unlock()
+	if group.db == nil || group.closed || group.failed || !group.writeLocked || !group.durablePublishLocked || group.tracker == nil {
+		return nil, ErrNativeSemanticUnsupported
+	}
+	ptrs, err := group.db.AppendValueLogValues(values)
+	if err != nil {
+		group.failed = true
+		return nil, err
+	}
+	if len(ptrs) != len(values) {
+		group.db.ReleaseValueLogValues(ptrs)
+		group.failed = true
+		return nil, errors.New("native physical value append returned an invalid pointer count")
+	}
+	for _, ptr := range ptrs {
+		if !page.IsValueLogFileID(ptr.FileID) {
+			group.db.ReleaseValueLogValues(ptrs)
+			group.failed = true
+			return nil, errors.New("native physical value append returned an invalid value-log pointer")
+		}
+	}
+	for _, ptr := range ptrs {
+		group.pinValueLogSegmentLocked(ptr.FileID)
+	}
+	group.db.ReleaseValueLogValues(ptrs)
+	return ptrs, nil
 }

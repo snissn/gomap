@@ -58,7 +58,8 @@ func TestNativeExistingCollectionPublicLifecycle(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			// Unmigrated producers refuse before callbacks, metadata or WAL effects.
+			// Missing single-document mutations are no-ops; unsupported metadata
+			// producers still refuse before metadata or WAL effects.
 			assignedBefore := backend.CommandWALNextLSN()
 			opening, e := backend.CaptureNativeSemanticState()
 			if e != nil {
@@ -73,11 +74,11 @@ func TestNativeExistingCollectionPublicLifecycle(t *testing.T) {
 			if _, _, e := collection.Update([]byte("a"), func(current []byte) ([]byte, bool, error) {
 				called = true
 				return []byte(`{"changed":true}`), true, nil
-			}); e == nil || called {
-				t.Fatalf("unsupported update: callback=%v error=%v", called, e)
+			}); e != nil || called {
+				t.Fatalf("missing update: callback=%v error=%v", called, e)
 			}
-			if e := collection.Delete([]byte("a")); e == nil {
-				t.Fatal("unsupported delete accepted")
+			if e := collection.Delete([]byte("a")); e != nil {
+				t.Fatalf("missing delete: %v", e)
 			}
 			if _, e := collection.CreateIndex(collections.IndexDefinition{Name: "blocked"}); e == nil {
 				t.Fatal("unsupported index accepted")

@@ -4961,6 +4961,13 @@ func (c *Collection) Insert(id, document []byte) ([]byte, error) {
 // callers that need durability must use the selected profile's explicit sync,
 // Checkpoint, or clean Close contract.
 func (c *Collection) Flush() error {
+	if c != nil && c.nativeJSON != nil {
+		if c.manager.isClosing() {
+			return backenddb.ErrClosed
+		}
+		// Native writes already publish through the shared COW owner.
+		return nil
+	}
 	if c == nil {
 		return errCollectionNil
 	}
@@ -11853,6 +11860,9 @@ func (c *Collection) InsertBatchWithTemplateV1Encoder(ids, documents [][]byte, e
 // BSON while parsing the request and need to avoid a duplicate full-document
 // validation pass on the insert hot path.
 func (c *Collection) InsertBatchValidatedBSON(ids, documents [][]byte) ([][]byte, error) {
+	if c != nil && c.nativeJSON != nil {
+		return c.nativeInsertBatch(ids, documents)
+	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
 	admissionState := c.lockCollectionCommandWALAdmission()
@@ -14008,6 +14018,9 @@ func (c *Collection) DeleteDocumentIf(documentID []byte, predicate func(current 
 }
 
 func (c *Collection) deleteDocumentIf(documentID []byte, predicate func(current []byte) (bool, error)) (bool, error) {
+	if c != nil && c.nativeJSON != nil {
+		return c.nativeDeleteDocumentIf(documentID, predicate)
+	}
 	if c == nil {
 		return false, errCollectionNil
 	}
@@ -14849,6 +14862,9 @@ func (c *Collection) Replace(documentID, document []byte) (bool, error) {
 // idempotent or protected by an application-level guard or durable idempotency
 // key.
 func (c *Collection) Update(documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error)) (bool, bool, error) {
+	if c != nil && c.nativeJSON != nil {
+		return c.nativeUpdateDocument(documentID, update)
+	}
 	if err := validateCollectionUpdateInput(c, documentID, update); err != nil {
 		return false, false, err
 	}
