@@ -12,6 +12,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -65,6 +66,8 @@ func cleanupLeafGenerationPackStagingDirs(leafDir string) error {
 }
 
 type LeafGenerationPackOptions struct {
+	// Set only by the named private-COW operation, never by an application callback.
+	privateCOWOwner   *transactionowner.Owner
 	MaintenanceLimits LeafGenerationMaintenanceLimits
 	GenerationIDs     []uint64
 	// Sync is retained for API compatibility. Leaf-generation pack publication
@@ -355,6 +358,7 @@ func (db *DB) leafGenerationPackLocked(ctx context.Context, opts LeafGenerationP
 
 		rewriteStats := leafRefRewriteRunStats{
 			maintenanceLimits:      opts.MaintenanceLimits,
+			privateCOWOwner:        opts.privateCOWOwner,
 			trackCarry:             carry != nil,
 			trackSourceLiveMoved:   carry != nil && (len(opts.ProtectedRootIDs) > 0 || len(opts.ProtectedSystemRootIDs) > 0),
 			protectedRootIDs:       opts.ProtectedRootIDs,

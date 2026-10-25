@@ -2438,8 +2438,8 @@ const (
 	envDisableVlogGenerationPeriodicRewritePlanBudget = "TREEDB_DISABLE_VLOG_GENERATION_PERIODIC_REWRITE_PLAN_BUDGET"
 	envVlogGenerationPeriodicRewritePlanBudgetMillis  = "TREEDB_VLOG_GENERATION_PERIODIC_REWRITE_PLAN_BUDGET_MS"
 	envVlogGenerationMaintenancePauseFile             = "TREEDB_VLOG_MAINTENANCE_PAUSE_FILE"
-	// Experimental immutable-leaf maintenance hook. Disabled by default until
-	// the cached scheduler policy and dwell behavior are validated.
+	// Explicit override for immutable-leaf packing. Private WAL-on COW uses a
+	// bounded default slice; legacy routes retain their opt-in behavior.
 	envEnableLeafGenerationPackMaintenance                     = "TREEDB_ENABLE_LEAF_GENERATION_PACK_MAINTENANCE"
 	envLeafGenerationPackMaintenanceMaxBytesToCopy             = "TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_MAX_BYTES_TO_COPY"
 	envLeafGenerationPackMaintenanceMaxGenerations             = "TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_MAX_GENERATIONS"
@@ -10007,6 +10007,7 @@ type DB struct {
 	vlogGenerationLeafPackGCLastDeletedBytes                     atomic.Int64
 	vlogGenerationLeafPackLastReclaimedBytes                     atomic.Int64
 	vlogGenerationLeafPackLastUnixNano                           atomic.Int64
+	vlogGenerationPrivateCOWPackLastAttemptNS                    atomic.Int64
 	vlogGenerationLeafPackCanceledLastNS                         atomic.Int64
 	vlogGenerationLeafPackDeadlineLastNS                         atomic.Int64
 	vlogGenerationLeafPackLastSkipReason                         atomic.Value // string
@@ -19769,8 +19770,8 @@ func (db *DB) startVlogGenerationLoop() {
 		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerDisabled)
 		return
 	}
-	if !db.disableJournal {
-		// WAL-on profiles start with the periodic scheduler disabled and re-enable
+	if !db.disableJournal && !db.privateCOWLeafPackEnabled() {
+		// Other WAL-on profiles start with the periodic scheduler disabled and re-enable
 		// it only after the caller transitions back to steady phase. The loop still
 		// starts here so later steady-phase arming never needs to spawn a new
 		// goroutine during runtime or shutdown.
@@ -19827,6 +19828,18 @@ func (db *DB) maybeRunPeriodicVlogGenerationMaintenance(runGC bool) bool {
 	if db == nil {
 		return false
 	}
+	// The bounded private-COW path owns no full cache maintenance fence. It
+	// runs on the existing non-GC tick before generic quiet/rewrite admission.
+	if !runGC && db.privateCOWLeafPackEnabled() {
+		attempted, err := db.runPrivateCOWLeafPackSlice()
+		if err != nil && db.notifyError != nil {
+			db.notifyError(fmt.Errorf("cachingdb: private COW leaf maintenance: %w", err))
+		}
+		if attempted {
+			return true
+		}
+	}
+
 	if db.coalesceDeferredVectorBuildVlogMaintenance() {
 		return false
 	}
@@ -31712,6 +31725,12 @@ func (db *DB) HasPrefixes(prefixes [][]byte) ([]bool, error) {
 }
 
 func (db *DB) maybeRunLeafGenerationPackMaintenance(runGC bool, quiet bool, admission leafGenerationPackMaintenanceAdmission, opts vlogGenerationMaintenanceOptions) (attempted bool, ran bool, err error) {
+	// Eligible WAL-on/private-COW stores use the named bounded path only.
+	// Never fall through to the older full-cache copy fence for these stores.
+	if db.privateCOWLeafPackEnabled() {
+		return false, false, nil
+	}
+
 	if db == nil || db.closing.Load() {
 		return false, false, nil
 	}
@@ -33691,6 +33710,11 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.leaf_pack.write_burst_grace_ms"] = fmt.Sprintf("%d", leafGenerationPackMaintenanceWriteBurstGrace().Milliseconds())
 	stats["treedb.cache.vlog_generation.leaf_pack.max_foreground_queue"] = fmt.Sprintf("%d", leafGenerationPackMaintenanceMaxForegroundQueue())
 	stats["treedb.cache.vlog_generation.leaf_pack.max_generations"] = fmt.Sprintf("%d", leafGenerationPackMaintenanceMaxGenerations())
+	stats["treedb.cache.vlog_generation.leaf_pack.private_cow_last_attempt_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationPrivateCOWPackLastAttemptNS.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.private_cow_max_bytes_to_copy"] = fmt.Sprintf("%d", privateCOWLeafPackCopyBytes)
+	stats["treedb.cache.vlog_generation.leaf_pack.private_cow_max_generations"] = fmt.Sprintf("%d", privateCOWLeafPackGenerations)
+	stats["treedb.cache.vlog_generation.leaf_pack.private_cow_timeout_ms"] = fmt.Sprintf("%d", privateCOWLeafPackTimeout.Milliseconds())
+	stats["treedb.cache.vlog_generation.leaf_pack.private_cow_default"] = strconv.FormatBool(db.privateCOWLeafPackEnabled())
 	stats["treedb.cache.vlog_generation.leaf_pack.max_bytes_to_copy"] = fmt.Sprintf("%d", int64(envUint64(envLeafGenerationPackMaintenanceMaxBytesToCopy, leafGenerationPackMaintenanceDefaultMaxBytesToCopy)))
 	stats["treedb.cache.vlog_generation.leaf_pack.min_candidate_generations"] = fmt.Sprintf("%d", loadPositiveIntEnvDefault(envLeafGenerationPackMaintenanceMinCandidateGenerations, leafGenerationPackMaintenanceDefaultMinCandidateGenerations))
 	stats["treedb.cache.vlog_generation.leaf_pack.min_reclaim_per_byte_copied_ppm"] = fmt.Sprintf("%d", leafGenerationPackMaintenanceMinReclaimPerByteCopiedPPM())

@@ -12,6 +12,32 @@ Close can dispose those resources, even when rewrite reports a partial-work
 error. New admission after Close remains refused. This role does not authorize
 other backend maintenance callbacks. See [value-log lifecycle](value-log-lifecycle.md).
 
+Eligible ordinary WAL-on private-COW handles with outer leaf logging schedule
+one bounded leaf-generation pack slice by default. External command-WAL mode
+counts as WAL-on even though it disables the redundant cache journal. Explicit
+loop disable, an explicitly false leaf-pack switch, restore/catch-up phases, and
+the maintenance pause file retain their meanings. A slice retains `flushMu`
+through copy and equivalent-basis adoption, without setting the full cache
+maintenance admission fence. Mutable/frozen sources, revisions, command coverage,
+and semantic descriptors survive through the original `installCOWBasis(..., nil)`
+protocol. The authenticated backend role authorizes only equivalent physical
+packing; it grants no new logical publication or callback authority.
+
+One pass selects at most two generations and 32MiB of live copying, uses native
+per-phase footprint admission, and attempts at most one subsequent GC. Declined
+plans still reach GC so an ordinary later root advance or reader release can
+permit retirement. Both recoverable roots, named roots, and exact reader/file
+pins remain deletion authority; no root horizon is forced. No-progress passes
+back off for 30 seconds. Generations exceeding the slice selection budget remain
+visible debt rather than being copied without a bound. The five-second context
+is cooperative: it does not bound native I/O, a pending handoff, checkpoint/Close
+latency, or writers requiring a flush. Ordinary COW writers that do not require
+those owners can proceed while copying. Snapshot/cut allocation or exact semantic
+rebinding refusal after publication fails closed; an uncertain backend outcome
+remains recovery-required. Copied/expected-reclaim bytes and GC logical retirement
+are distinct from actual physical unlink/reclaimed bytes. This scheduling change
+makes no performance, settled-memory, or qualification claim.
+
 Ordinary typed INSERTs may append to a manifest-owned column asset segment under
 the serialized command-publication context. Exact retained resource authority
 must match the existing file and parent before writing; every batch retains its
