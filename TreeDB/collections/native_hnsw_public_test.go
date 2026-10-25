@@ -21,9 +21,30 @@ import (
 )
 
 // This uses the product opener and ordinary collection/vector APIs throughout.
-func TestNativeHNSWPublicBSONLifecycle(t *testing.T) {
+func TestNativeHNSWPublicDocumentLifecycle(t *testing.T) {
+	type scenario struct {
+		profile  treedb.Profile
+		format   DocumentFormat
+		declared bool
+	}
+	var scenarios []scenario
 	for _, profile := range []treedb.Profile{treedb.ProfileCommandWALDurable, treedb.ProfileCommandWALRelaxed, treedb.ProfileNoWALFast} {
-		t.Run(string(profile), func(t *testing.T) {
+		for _, format := range []DocumentFormat{DocumentFormatBSON, DocumentFormatJSON} {
+			for _, declared := range []bool{false, true} {
+				scenarios = append(scenarios, scenario{profile, format, declared})
+			}
+		}
+	}
+	for _, test := range scenarios {
+		t.Run(fmt.Sprintf("%s/%s/declared=%t", test.profile, test.format, test.declared), func(t *testing.T) {
+			profile := test.profile
+			def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Dimensions: 2, Metric: VectorMetricCosine, M: 4}
+			marshal := func(vector bson.A) ([]byte, error) {
+				if test.format == DocumentFormatJSON {
+					return json.Marshal(map[string]any{"embedding": vector})
+				}
+				return bson.Marshal(bson.D{{Key: "embedding", Value: vector}})
+			}
 			dir := t.TempDir()
 			opts := treedb.OptionsFor(profile, dir)
 			opts.MemtableMode = "cow_btree"
@@ -41,7 +62,11 @@ func TestNativeHNSWPublicBSONLifecycle(t *testing.T) {
 				}
 				m := NewCollectionManager(h)
 				if create {
-					if _, err := m.CreateCollection(&CollectionMeta{Name: "docs", Options: CollectionOptions{DocumentFormat: DocumentFormatBSON}}); err != nil {
+					meta := &CollectionMeta{Name: "docs", Options: CollectionOptions{DocumentFormat: test.format}}
+					if test.declared {
+						meta.VectorIndexes = []VectorIndexDefinition{def}
+					}
+					if _, err := m.CreateCollection(meta); err != nil {
 						t.Fatal(err)
 					}
 				}
@@ -60,13 +85,14 @@ func TestNativeHNSWPublicBSONLifecycle(t *testing.T) {
 					_ = d.Close()
 				}
 			}()
-			def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Dimensions: 2, Metric: VectorMetricCosine, M: 4}
-			if _, err := c.CreateVectorIndex(def); err != nil {
-				t.Fatalf("ordinary CreateVectorIndex: %v", err)
+			if !test.declared {
+				if _, err := c.CreateVectorIndex(def); err != nil {
+					t.Fatalf("ordinary CreateVectorIndex: %v", err)
+				}
 			}
 			insert := func(id string, v bson.A) {
 				t.Helper()
-				doc, err := bson.Marshal(bson.D{{Key: "embedding", Value: v}})
+				doc, err := marshal(v)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -223,7 +249,7 @@ func TestNativeHNSWPublicBSONLifecycle(t *testing.T) {
 			}
 			before := read.capture.LogicalSequence()
 			_ = read.Close()
-			doc, _ := bson.Marshal(bson.D{{Key: "embedding", Value: bson.A{1.0, 0.1}}})
+			doc, _ := marshal(bson.A{1.0, 0.1})
 			if err = c.nativeJSON.InsertBatch("docs", [][]byte{[]byte("raw")}, [][]byte{doc}); err != nil {
 				t.Fatal(err)
 			}
@@ -818,6 +844,65 @@ func TestNativeHNSWPublicBuildScratchRefusalReleasesRuntime(t *testing.T) {
 	blocker.Close()
 	if _, err = c.BuildVectorIndex(vectorIndexOptionsFromDefinition(def)); err != nil {
 		t.Fatalf("build after blocker release: %v", err)
+	}
+}
+
+func TestNativeHNSWPublicDeclaredCreateRefusalHasNoEffects(t *testing.T) {
+	c, def, budget := openPinnedNativeHNSWAdmissionFixture(t, nil)
+	read, err := c.nativeJSON.Capture(c.name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer read.Close()
+	captureBytes := nativeHNSWAdmissionCaptureBytes(t, c, budget)
+	blocker, err := read.capture.NativeAllocator().AdmitNativeBytes(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer blocker.Close()
+	available := budget.Limits().MaxInFlightBytes - budget.Stats().ReservedBytes
+	if available < captureBytes {
+		t.Fatal("setup has no room for another capture")
+	}
+	if err = blocker.Resize(available - captureBytes); err != nil {
+		t.Fatal(err)
+	}
+	meta := &CollectionMeta{Name: "declared", Options: CollectionOptions{DocumentFormat: DocumentFormatJSON}, VectorIndexes: []VectorIndexDefinition{def}}
+	for attempt := 0; attempt < 3; attempt++ {
+		before := budget.Stats()
+		if _, err = c.manager.CreateCollection(meta); !errors.Is(err, memtable.ErrCOWCapacity) {
+			t.Fatalf("attempt %d expected finite admission refusal: %v", attempt, err)
+		}
+		after := budget.Stats()
+		if after.ReservedBytes != before.ReservedBytes || after.ExternalLeases != before.ExternalLeases {
+			t.Fatalf("attempt %d refused create changed receipts: before=%+v after=%+v", attempt, before, after)
+		}
+	}
+	blocker.Close()
+	current, err := c.nativeJSON.Capture(c.name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.capture.State() != read.capture.State() || current.capture.LogicalSequence() != read.capture.LogicalSequence() {
+		current.Close()
+		t.Fatal("refused create published a catalog successor")
+	}
+	current.Close()
+	if _, err = c.manager.OpenCollection(meta.Name); err == nil {
+		t.Fatal("refused collection is visible")
+	}
+	if _, err = c.manager.CreateCollection(meta); err != nil {
+		t.Fatalf("create after blocker release: %v", err)
+	}
+	declared, err := c.manager.OpenCollection(meta.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = declared.Insert([]byte("row"), []byte(`{"embedding":[1,0]}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = declared.BuildVectorIndex(vectorIndexOptionsFromDefinition(def)); err != nil {
+		t.Fatal(err)
 	}
 }
 

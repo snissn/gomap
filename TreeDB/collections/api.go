@@ -568,7 +568,7 @@ func (m *StoredDocumentJSONMaterializer) StoredDocumentJSON(document []byte) ([]
 	if m == nil {
 		return nil, errCollectionNil
 	}
-	if m.nativeRead != nil {
+	if m.nativeRead != nil && m.documentFormat == DocumentFormatTemplateV1 {
 		return m.nativeRead.templateJSON(document)
 	}
 	endForegroundRead := noCollectionForegroundReadEnd
