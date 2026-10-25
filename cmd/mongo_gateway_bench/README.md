@@ -49,6 +49,11 @@ receipts without retrying. A successful driver exit means the batch finished;
 inspect every receipt and the numeric summary. It does not certify isolation,
 resources, capabilities, recovery, CI or review.
 
+An inventory, log, or process-launch failure records
+`INFRASTRUCTURE_UNAVAILABLE` with its stage and OS error, leaves metrics null,
+and continues the fixed plan. A process that exits nonzero retains that exit
+code and null metrics. Neither failure is retried or counted as a valid sample.
+
 ## Build
 
 ```sh
