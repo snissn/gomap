@@ -861,10 +861,11 @@ func (t *NativeJSONTxn) finalizeNativeRowsWithStats(graphSingleton bool, stats *
 			return err
 		}
 		g.plan = &nativeJSONLogicalInsert{name: g.name, incarnation: g.incarnation, bootstrap: t.imported, custody: t.custody, primaryPolicy: nativeInsertRootPolicy(direct, direct.primaryRootName), mutations: make([]memtable.COWMutation, len(direct.primaryEntries))}
-		g.plan.additional, g.effects, err = extractNativeInsertEffects(g.name, g.incarnation, direct, g.plan.mutations, admit)
-		if err == nil {
-			err = t.finalizeNativeText(g)
+		text, err := t.prepareNativeText(g)
+		if err != nil {
+			return err
 		}
+		g.plan.additional, g.effects, err = extractNativeInsertEffectsAndText(g.name, g.incarnation, direct, g.plan.mutations, admit, text, g.probe.meta)
 		if err != nil {
 			return err
 		}

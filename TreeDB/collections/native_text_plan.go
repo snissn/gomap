@@ -852,14 +852,9 @@ func nativeTextMutationDomains(snap *backenddb.Snapshot, catalog *collectionCata
 	}
 	return out, err
 }
-func (t *NativeJSONTxn) finalizeNativeText(g *nativeJSONTxnBinding) error {
+func (t *NativeJSONTxn) prepareNativeText(g *nativeJSONTxnBinding) ([]nativeJSONDomainChange, error) {
 	if len(g.probe.meta.TextIndexes) == 0 {
-		return nil
-	}
-	admit := func(n uint64) error { return t.admitStage(g, n) }
-	catalog, err := newNativeTextCatalog(&g.probe, admit)
-	if err != nil {
-		return err
+		return nil, nil
 	}
 	for _, def := range g.probe.meta.TextIndexes {
 		name := collectionTextV2GenerationsRootName(g.name, def.Name)
@@ -871,55 +866,21 @@ func (t *NativeJSONTxn) finalizeNativeText(g *nativeJSONTxnBinding) error {
 		}
 		name = strings.TrimPrefix(name, g.name+"/")
 		ns := txnhistory.Namespace{Kind: txnhistory.CollectionNamespace, Collection: g.incarnation, Domain: nativeTextDomainNumber(g.probe.meta, name), Interpretation: 1}
-		if err = t.trackDependency(ns, kind, key, nil); err != nil {
-			return err
+		if err := t.trackDependency(ns, kind, key, nil); err != nil {
+			return nil, err
 		}
 	}
-	additional, err := nativeTextMutationDomains(g.probe.capture.Snapshot(), catalog, g.rows.rows, g.templates, admit)
+	// Dependency backing survives publication. The private phase starts only
+	// after those dependencies, and returns before ended construction credit is
+	// returned to the SAME original stage receipt.
+	phase, err := t.buildNativeTextPhase(g)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if err = admit(memtable.COWAllocationCharge(uint64(len(g.plan.additional)+len(additional)) * uint64(unsafe.Sizeof(nativeJSONDomainChange{})))); err != nil {
-		return err
+	if err = t.completeNativeTextPhase(g, phase); err != nil {
+		return nil, err
 	}
-	g.plan.additional = append(g.plan.additional, additional...)
-	var count uint64
-	for _, change := range additional {
-		if len(change.entries) != 0 {
-			count++
-		}
-	}
-	if count == 0 {
-		return nil
-	}
-	// A full-domain effect conservatively covers every point/range reader,
-	// as in text rewrite publication. Row writers already share the V2 status
-	// point (or V1 stats range); per-key history adds no independent concurrency.
-	// Keep the non-text prefix and admit one exact replacement backing before
-	// allocation. Its previous backing remains on the original stage receipt.
-	count += uint64(len(g.effects))
-	var descriptors nativeTextAdmissionSum
-	descriptors.array(count, uint64(unsafe.Sizeof(txnhistory.Effect{})))
-	if descriptors.bad || count > uint64(int(^uint(0)>>1)) {
-		return memtable.ErrCOWCapacity
-	}
-	if err = admit(descriptors.total); err != nil {
-		return err
-	}
-	effects := make([]txnhistory.Effect, len(g.effects), int(count))
-	copy(effects, g.effects)
-	for _, change := range additional {
-		if len(change.entries) == 0 {
-			continue
-		}
-		ns := txnhistory.Namespace{Kind: txnhistory.CollectionNamespace, Collection: g.incarnation, Domain: nativeTextDomainNumber(g.probe.meta, change.name), Interpretation: 1}
-		if ns.Domain == 0 {
-			return backenddb.ErrNativeSemanticUnsupported
-		}
-		effects = append(effects, txnhistory.Effect{Namespace: ns, Kind: txnhistory.RangeEffect})
-	}
-	g.effects = effects
-	return nil
+	return phase.domains, nil
 }
 
 func nativeTextDocumentFormat(format DocumentFormat) bool {

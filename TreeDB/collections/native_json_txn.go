@@ -467,6 +467,9 @@ func (t *NativeJSONTxn) commitNativePlanWithStats(sealed bool, apply *nativeComm
 		g := &t.bindings[i]
 		if g.plan != nil {
 			count++
+			if len(g.effects) > int(^uint(0)>>1)-totalEffects {
+				return memtable.ErrCOWCapacity
+			}
 			totalEffects += len(g.effects)
 		}
 	}
@@ -489,7 +492,6 @@ func (t *NativeJSONTxn) commitNativePlanWithStats(sealed bool, apply *nativeComm
 	}
 	for _, bytes := range []uint64{
 		uint64(unsafe.Sizeof(nativeJSONLogicalGroup{})),
-		uint64(totalEffects) * uint64(unsafe.Sizeof(txnhistory.Effect{})),
 		uint64(len(t.members)+1) * uint64(unsafe.Sizeof(commitlog.CompositeMutationMember{})),
 		uint64(t.count) * uint64(unsafe.Sizeof(nativeJSONPrimaryChange{})),
 		uint64(unsafe.Sizeof(backenddb.NativePreparedPublication{})),
@@ -499,8 +501,26 @@ func (t *NativeJSONTxn) commitNativePlanWithStats(sealed bool, apply *nativeComm
 			return err
 		}
 	}
+	// A singleton's original binding receipt stays live through synchronous
+	// CommitNative, including cancellation and assigned/installed errors. Borrow
+	// that final image; the journal still takes its own retained key ownership.
+	// Multiple bindings keep the original ordered, independently owned flattening.
+	var effects []txnhistory.Effect
+	if t.count == 1 {
+		effects = t.bindings[0].effects
+	} else {
+		if uint64(totalEffects) > ^uint64(0)/uint64(unsafe.Sizeof(txnhistory.Effect{})) {
+			return memtable.ErrCOWCapacity
+		}
+		if err := admit(uint64(totalEffects) * uint64(unsafe.Sizeof(txnhistory.Effect{}))); err != nil {
+			return err
+		}
+		effects = make([]txnhistory.Effect, 0, totalEffects)
+		for i := 0; i < t.count; i++ {
+			effects = append(effects, t.bindings[i].effects...)
+		}
+	}
 	var rawGrowth int
-	effects := make([]txnhistory.Effect, 0, totalEffects)
 	members := make([]commitlog.CompositeMutationMember, len(t.members)+1)
 	memberCount := 0
 	if t.rawStaged {
@@ -530,9 +550,6 @@ func (t *NativeJSONTxn) commitNativePlanWithStats(sealed bool, apply *nativeComm
 		rawGrowth = finalPlan.PayloadLen - rawPlan.PayloadLen
 		members[memberCount] = commitlog.CompositeMutationMember{Kind: commitlog.CommandKindRawKVBatch, PayloadFormat: commitlog.PayloadFormatRawKVBatchV1, Payload: payload}
 		memberCount++
-	}
-	for i := 0; i < t.count; i++ {
-		effects = append(effects, t.bindings[i].effects...)
 	}
 	for _, member := range t.members {
 		members[memberCount] = member

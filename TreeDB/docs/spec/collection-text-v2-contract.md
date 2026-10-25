@@ -91,15 +91,25 @@ The maintained reducer emits only stealing setters and tombstones, so this
 BTree route does not allocate its copying arena or transfer temporary backing to
 global memtable pools. Admission includes structural node/slice growth cohorts,
 iterator capacity, selected-text conversion, token/state and emitted-row storage.
-Temporary tables and their operation receipt share one cleanup scope, including
-builder errors and replay preparation.
+Native CRUD confines catalog, analysis, reducer and temporary-table construction
+to one private planning phase. After successful return, all iterators are closed,
+tables reset and temporary aliases detached. The original stage receipt then
+releases only the completed phase's admitted credit, retaining actual output
+array/key/value capacities, full qualified-name backing, the whole prephase
+floor and all staged-resolver growth outside the phase callback. That same
+receipt remains live for later planning and publication; later growth uses its
+reduced ledger. A failed phase uses normal cancellation without an early refund.
+Other builders retain their operation cleanup scope, including errors and replay
+preparation. Ending allocation custody does not promise immediate garbage
+collection or a process RSS bound.
 
 Top-level analysis and sizing share borrowed-field selection. Nested paths use
 the maintained complete JSON decoder and path walker: the original operation
 lease first admits a full-source decoder cohort, then grows for a second decoder
 cohort and the actual selected values before reducer allocation. Both cohorts
-remain charged until operation cleanup; an unreachable sizing tree is not an
-immediate refund. These finite bounds can still refuse large requests. Focused
+remain charged through sizing and reduction, until their completed private phase
+or operation cleanup; an individually unreachable sizing tree is not an immediate
+refund. These finite bounds can still refuse large requests. Focused
 refusal controls require no logical/WAL effects, unchanged live reservations and
 zero native receipts at full close; they do not establish a global RSS bound or
 performance qualification.
@@ -118,7 +128,9 @@ Template decoding admits the existing 768-byte construction allowance per compac
 source byte, plus that allowance per dictionary-name byte and field occurrence
 before each object's map is constructed. This covers decoded objects, name/read
 storage, JSON output and serial growth cohorts; sizing and reduction retain both
-cohorts until operation cleanup. The narrow inherited library-cache exclusion is
+cohorts through their completed private phase or operation cleanup. Resolver
+backing that outlives the phase remains admitted. The narrow inherited
+library-cache exclusion is
 only encoding/json's inaccessible encodeState buffer, ptrSeen and type caches
 after codec return. It does not exempt decoded application objects, resolver
 reads, returned cloned output, table/source backing or application pools. The
