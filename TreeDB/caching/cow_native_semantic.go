@@ -14,9 +14,10 @@ import (
 // backend capture. State and Snapshot are borrowed until Close. This internal
 // capability is admitted before allocation and belongs to this public owner.
 type NativeSemanticCapture struct {
-	cache *cowCache
-	cut   *cowReadCut
-	lease *memtable.COWExternalLease
+	cache      *cowCache
+	cut        *cowReadCut
+	lease      *memtable.COWExternalLease
+	dictionary cowDictionaryReadProvider // immutable provider capability; shared decoders own copied definitions
 }
 
 func (db *DB) CaptureNativeSemanticState(owner *transactionowner.Owner) (*NativeSemanticCapture, error) {
@@ -32,7 +33,8 @@ func (db *DB) CaptureNativeSemanticState(owner *transactionowner.Owner) (*Native
 		lease.Close()
 		return nil, backenddb.ErrClosed
 	}
-	return &NativeSemanticCapture{cache: db.cow, cut: cut, lease: lease}, nil
+	provider, _ := db.dictStore.(cowDictionaryReadProvider)
+	return &NativeSemanticCapture{cache: db.cow, cut: cut, lease: lease, dictionary: provider}, nil
 }
 func (c *NativeSemanticCapture) State() backenddb.NativeSemanticState { return c.cut.semanticRootSet }
 func (c *NativeSemanticCapture) Snapshot() *backenddb.Snapshot        { return c.cut.basis.snapshot }
@@ -62,7 +64,7 @@ func (c *NativeSemanticCapture) Close() error {
 		return nil
 	}
 	cut, cache, lease := c.cut, c.cache, c.lease
-	c.cut, c.cache, c.lease = nil, nil, nil
+	c.cut, c.cache, c.lease, c.dictionary = nil, nil, nil, nil
 	err := cache.releaseCut(cut)
 	lease.Close() // final containing-owner access follows alias scrubbing
 	return err

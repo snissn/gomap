@@ -91,9 +91,9 @@ func (tx *nativeConditionalTxn) NativeLeafPage(ptr page.LeafLogPtr, dst []byte) 
 }
 
 // nativeValueAtPointer borrows the exact retained basis file and the original
-// cache's dictionary-free decoder. No basis/file/caller scope is retained by
+// cache's independently owned decoder. No basis/file/caller scope is retained by
 // scratch. Copy-out and retained-output admission finish under physicalMu.
-func (b *cowBackendBasis) nativeValueAtPointer(cache *cowCache, ptr page.ValuePtr, admitOutput func(uint64) error) ([]byte, error) {
+func (b *cowBackendBasis) nativeValueAtPointer(cache *cowCache, provider cowDictionaryReadProvider, ptr page.ValuePtr, admitOutput func(uint64) error) ([]byte, error) {
 	cache.physicalMu.Lock()
 	defer cache.physicalMu.Unlock()
 	limit := cache.budget.Limits().MaxInFlightBytes
@@ -109,10 +109,14 @@ func (b *cowBackendBasis) nativeValueAtPointer(cache *cowCache, ptr page.ValuePt
 	if err != nil {
 		return nil, err
 	}
+	var definition *cowCacheDictionaryRead
 	if shape.Compressed && shape.DictID != 0 {
-		return nil, valuelog.ErrCOWReadUnsupported
+		if provider == nil {
+			return nil, valuelog.ErrCOWReadUnsupported
+		}
+		definition = &cowCacheDictionaryRead{provider: provider, cache: cache}
 	}
-	value, err := w.readInspected(f, ptr, shape, false, nil)
+	value, err := w.readInspected(f, ptr, shape, false, nil, definition)
 	if err != nil {
 		return nil, err
 	}
@@ -130,7 +134,7 @@ func (c *NativeSemanticCapture) NativeValueAtPointer(ptr page.ValuePtr, admitOut
 	if c == nil || c.cut == nil || c.cache == nil {
 		return nil, backenddb.ErrClosed
 	}
-	return c.cut.basis.nativeValueAtPointer(c.cache, ptr, admitOutput)
+	return c.cut.basis.nativeValueAtPointer(c.cache, c.dictionary, ptr, admitOutput)
 }
 
 func (tx *nativeConditionalTxn) NativeValueAtPointer(ptr page.ValuePtr, admitOutput func(uint64) error) ([]byte, error) {
@@ -140,5 +144,6 @@ func (tx *nativeConditionalTxn) NativeValueAtPointer(ptr page.ValuePtr, admitOut
 	if err := tx.ensureOpen(); err != nil {
 		return nil, err
 	}
-	return tx.snap.cowCut.basis.nativeValueAtPointer(tx.db.cow, ptr, admitOutput)
+	provider, _ := tx.db.dictStore.(cowDictionaryReadProvider)
+	return tx.snap.cowCut.basis.nativeValueAtPointer(tx.db.cow, provider, ptr, admitOutput)
 }

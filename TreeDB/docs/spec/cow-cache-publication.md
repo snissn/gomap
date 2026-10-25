@@ -247,8 +247,16 @@ hits that need no decoder or buffer growth.
 Direct DB point reads and native physical readers retain the original shared
 workspace. Generic dictionary-free ZSTD decoding and pointer-value decoding
 also retain the original cache-owned decoder envelope, since duplicating generic
-state can exceed the default producer budget. Dictionary definitions continue
-to belong to the exact complete cut.
+state can exceed the default producer budget. Ordinary raw dictionary reads
+resolve definitions through their complete cut. Native physical value reads may
+also decode the normal producer's trained dictionary records: the shared decoder
+owns independently admitted, SHA-verified definition bytes from the built-in pure
+read provider. A per-call provider capability never installs borrowed cut bytes
+in shared scratch or remains in the decoder. Partial preparation, replacement
+and final cache cleanup release the original definition owner and reservations.
+Warm decoders survive producer Close while held captures remain; a cold read
+after Close refuses fresh admission. This does not enable dictionary-compressed
+native external leaves, whose producer still writes the existing block format.
 
 Every physical leaf read still inspects the current record metadata before
 reusing a verified decoded cache entry. Leaf inspection reads one fixed maximum
@@ -596,6 +604,15 @@ set wrapper disposal refunds its own admitted allocation while an active scope
 retains immutable descriptor and original physical closure. Same-identity
 coalescing updates the canonical selected index without mutating an older shared
 rope's frontier. Temporary captures and real producer enrollment are distinct.
+
+Ordinary PRIMARY component claims hold the arena lock across preparation and
+installation. Background manifest allocation therefore cannot invalidate their
+private epoch between these steps. The existing nonnil ordinary work meter still
+records the same reservations; resumable maintenance retains its split
+PrepareClaim/Step contract and epoch validation. If private cancellation fails,
+the already admitted arena receipt retains the exact claim and both causes.
+Further claims and physical Close report that same failure without retrying,
+discarding private mappings or refunding their charge.
 
 Snapshots retaining PRIMARY roots also retain the existing physical arena owner.
 Their original last-read finalizer drops the bank edge, settles original cleanup

@@ -342,8 +342,10 @@ type NativePhysicalLeafReader interface {
 
 // NativePhysicalValueReader decodes an already captured pointer using that
 // capture's exact retained basis and registered files. It returns exact-length,
-// independent output before releasing shared scratch. Compressed dictionaries
-// remain unsupported; dictionary-free codecs use the maintained bounded reader.
+// independent output before releasing shared scratch. Dictionary-free codecs
+// use the maintained bounded reader. Trained codecs additionally require the
+// pure dictionary provider's independently owned, verified definition; no codec
+// slot may borrow a caller's capture or a global-cache dictionary alias.
 //
 // admitOutput is nil for caller-owned public results. The existing internal
 // retained consumer may supply only its synchronous original-budget admission:

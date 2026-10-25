@@ -24,6 +24,14 @@ func (a *Arena) closePhysical() (bool, error) {
 	for {
 		switch s.phase {
 		case 0:
+			a.mu.Lock()
+			if a.ordinaryClaimFailure.claim != nil {
+				s.failure = &a.ordinaryClaimFailure
+			}
+			a.mu.Unlock()
+			if s.failure != nil {
+				return false, s.failure
+			}
 			s.phase = 1
 		case 1:
 			if err := a.pager.Close(); err != nil {
