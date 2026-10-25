@@ -1634,7 +1634,7 @@ func TestPublicCommandWALGroupCommitLowTrafficTimeoutMakesProgress(t *testing.T)
 
 func TestPublicCommandWALGroupCommitDependencyFailurePoisonsAllWaiters(t *testing.T) {
 	opts := commandWALDurabilityProofOptions(t.TempDir())
-	opts.CommandWALSegmentTargetBytes = 1
+	opts.CommandWALSegmentTargetBytes = publicCommandWALSingleFrameTarget(t, []byte("failure-group/0"), []byte("value"))
 	db, err := Open(opts)
 	if err != nil {
 		t.Fatalf("Open command WAL: %v", err)

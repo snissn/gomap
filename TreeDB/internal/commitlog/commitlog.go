@@ -69,7 +69,8 @@ type Record struct {
 }
 
 type Options struct {
-	// fixedCapacity requests fixed storage explicitly for low-level writers.
+	// fixedCapacity requests a physical byte capacity for new empty low-level
+	// fixed writers, independently of any journal logical rotation target.
 	// productionMediumPolicy lets the command journal select each fresh segment
 	// from its actual descriptor; it is not a public format option.
 	productionMediumPolicy bool

@@ -46,7 +46,7 @@ func fixedWALValidationWriter(t *testing.T) *Writer {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = file.Close() })
-	state, err := writeInitializedFixedWAL(file, 4096)
+	state, err := writeInitializedFixedWAL(file, 16<<10)
 	if err != nil {
 		t.Fatal(err)
 	}

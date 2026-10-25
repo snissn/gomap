@@ -34,7 +34,11 @@ func TestFixedWALInitializationCrashHelper(t *testing.T) {
 	}
 	if mode == "existing_empty_successor_growth" {
 		j.writer.fixedIncomingBytes = 32 << 10
-		_, _, _, err = j.writer.prepareFixedSuccessor(&j.writer.f, nil)
+		plan, planErr := j.writer.fixedSuccessorSizePlan()
+		if planErr != nil {
+			t.Fatal(planErr)
+		}
+		_, _, _, err = j.writer.prepareFixedSuccessor(&j.writer.f, nil, plan)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -220,7 +224,7 @@ func TestCommandJournalStableRotationToStreamPreservesFrontier(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Exercise the supported stream successor even on fixed-capable platforms.
-	j.writer.fixedTarget = 0
+	j.writer.fixedBudget = 0
 	rotation, err := j.RotateActiveSegmentWithStableResources(true)
 	if err != nil {
 		t.Fatal(err)

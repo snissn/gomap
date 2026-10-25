@@ -26,7 +26,7 @@ func TestWindowsCommandWALFreshStreamDurableRotationAndReopen(t *testing.T) {
 		if err = j.Sync(); err != nil {
 			t.Fatal(err)
 		}
-		if j.writer.fixed != nil || j.writer.fixedTarget != 0 {
+		if j.writer.fixed != nil || j.writer.fixedBudget != 0 {
 			t.Fatal("new Windows segment selected fixed container")
 		}
 	}
@@ -79,7 +79,7 @@ func TestWindowsAcceptedFixedWALRemainsReadableAndRotatesToStream(t *testing.T) 
 		t.Fatal(err)
 	}
 	// Exact fixture for an already accepted V3 file from a supported platform.
-	if _, err = writeInitializedFixedWAL(f, 256); err != nil {
+	if _, err = writeInitializedFixedWAL(f, 8192); err != nil {
 		t.Fatal(err)
 	}
 	if err = f.Close(); err != nil {

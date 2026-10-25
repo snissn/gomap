@@ -295,6 +295,10 @@ func openCommandJournal(walDir string, opts CommandJournalOptions, productionMed
 	if opts.Lane < 0 || opts.Lane > MaxCommandJournalLane {
 		return nil, fmt.Errorf("commitlog: invalid command journal lane %d", opts.Lane)
 	}
+	budget, err := fixedWALPhysicalBudget(opts.SegmentTargetBytes)
+	if err != nil {
+		return nil, err
+	}
 	owner, err := AcquireJournalOwnerWithOptions(walDir, JournalOwnerOptions{InitialLSN: opts.InitialLSN})
 	if err != nil {
 		return nil, err
@@ -329,12 +333,9 @@ func openCommandJournal(walDir string, opts CommandJournalOptions, productionMed
 		_ = owner.Close()
 		return nil, err
 	}
-	target := opts.SegmentTargetBytes
-	if target <= 0 || target > fixedWALDefaultTarget {
-		target = fixedWALDefaultTarget
-	}
+	initialCapacity := min(int64(fixedWALDefaultCapacity), budget)
 	writer, err := NewWriterWithOptions(path, Options{
-		fixedCapacity:                   target,
+		fixedCapacity:                   initialCapacity,
 		productionMediumPolicy:          productionMediumPolicy,
 		MaxSegmentSize:                  opts.MaxSegmentSize,
 		BufferSize:                      opts.BufferSize,
@@ -345,6 +346,9 @@ func openCommandJournal(walDir string, opts CommandJournalOptions, productionMed
 	if err != nil {
 		_ = owner.Close()
 		return nil, err
+	}
+	if FixedWALCreationSupported() {
+		writer.fixedBudget = budget
 	}
 	stableParent, stableParentErr := captureStableCommandWALParent(walDir, writer.f)
 	if opts.CaptureStableResources && stableParentErr != nil {
@@ -363,7 +367,7 @@ func openCommandJournal(walDir string, opts CommandJournalOptions, productionMed
 		activeSegmentMaxLSN:    activeSegmentMaxLSN,
 		cleanupEpoch:           1,
 		namespaceGeneration:    opts.SegmentSeq,
-		segmentTargetBytes:     target,
+		segmentTargetBytes:     opts.SegmentTargetBytes,
 		onSegmentRotated:       opts.OnSegmentRotated,
 		stableParent:           stableParent,
 		stableParentErr:        stableParentErr,
@@ -596,16 +600,21 @@ func (j *CommandJournal) maybeRotateForFrameLockedObserved(frameSize int, syncCu
 }
 
 func (j *CommandJournal) maybeRotateForFrameLockedObservedWithNamespaceDebt(frameSize int, syncCurrent, deferNamespace, observe bool) error {
-	if j == nil || j.writer == nil || j.segmentTargetBytes <= 0 || frameSize <= 0 {
+	if j == nil || j.writer == nil || frameSize <= 0 {
 		return nil
 	}
-	total := int64(segmentHeaderSize + frameSize)
+	if int64(frameSize) > int64(1<<63-1)-segmentHeaderSize {
+		return ErrRecordTooLarge
+	}
+	total := int64(segmentHeaderSize) + int64(frameSize)
 	activeBytes := j.writer.ActiveBytes()
 	if err := j.writer.commandBufferError(); err != nil {
 		return err
 	}
 
-	if (activeBytes <= 0 || activeBytes+total <= j.segmentTargetBytes) && j.writer.fixedFitsAppend(total) {
+	physicalFits := j.writer.fixedFitsAppend(total)
+	logicalCrossing := j.segmentTargetBytes > 0 && activeBytes > 0 && (activeBytes >= j.segmentTargetBytes || total > j.segmentTargetBytes-activeBytes)
+	if !logicalCrossing && physicalFits {
 		return nil
 	}
 	if err := j.requireNoPendingStableRotationLocked(); err != nil {
@@ -613,9 +622,13 @@ func (j *CommandJournal) maybeRotateForFrameLockedObservedWithNamespaceDebt(fram
 	}
 	// Both successor routes must initialize the chosen empty file for this
 	// atomic frame before installing it or issuing namespace/resource tokens.
-	previousIncoming := j.writer.fixedIncomingBytes
+	previousIncoming, previousReason := j.writer.fixedIncomingBytes, j.writer.fixedRotationReason
 	j.writer.fixedIncomingBytes = total
-	defer func() { j.writer.fixedIncomingBytes = previousIncoming }()
+	j.writer.fixedRotationReason = fixedWALLogicalRotation
+	if !physicalFits {
+		j.writer.fixedRotationReason = fixedWALPressureRotation
+	}
+	defer func() { j.writer.fixedIncomingBytes = previousIncoming; j.writer.fixedRotationReason = previousReason }()
 	if j.captureStableResources {
 		rotation, err := j.rotateActiveSegmentWithStableResourcesLocked(syncCurrent, deferNamespace, observe)
 		if err != nil {
@@ -856,6 +869,10 @@ func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurren
 	if j.segmentSeq == ^uint64(0) {
 		return nil, ErrCommandWALSegmentSeqExhausted
 	}
+	plan, err := j.writer.fixedSuccessorSizePlan()
+	if err != nil {
+		return nil, err
+	}
 	closedPath, closedSeq := j.path, j.segmentSeq
 	nextSeq := closedSeq + 1
 	nextPath := filepath.Join(j.walDir, CommandSegmentName(j.lane, nextSeq))
@@ -883,7 +900,7 @@ func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurren
 	} else if err := j.writer.Flush(); err != nil {
 		return nil, err
 	}
-	_, err := j.writer.f.Stat()
+	_, err = j.writer.f.Stat()
 	if err != nil {
 		return nil, err
 	}
@@ -914,7 +931,7 @@ func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurren
 		closedToken.Release()
 		return nil, err
 	}
-	state, _, selection, err := j.writer.prepareFixedSuccessor(&prepared, parent)
+	state, _, selection, err := j.writer.prepareFixedSuccessor(&prepared, parent, plan)
 	pending.file = prepared
 	if err != nil {
 		closedToken.Release()
@@ -1320,42 +1337,37 @@ func (j *CommandJournal) appendCommand(
 	v2 := probe.Version == CommandFrameVersionV2 || probe.DurabilityClass != 0
 	var plan commandFrameV2Encoding
 	var size int
-	prepareV2 := func() error {
-		var err error
-		plan, err = prepareCommandFrameV2Encoding(probe)
-		if err != nil {
-			return err
+	prepareFrame := func() error {
+		if v2 {
+			var err error
+			plan, err = prepareCommandFrameV2Encoding(probe)
+			if err != nil {
+				return err
+			}
+			size = plan.total
+		} else {
+			if err := validateCommandEnvelopeForEncode(probe); err != nil {
+				return err
+			}
+			var err error
+			size, err = commandFrameEncodedSize(probe)
+			if err != nil {
+				return err
+			}
 		}
-		size = plan.total
 		return j.writer.commandFrameSizeError(size)
 	}
-	if v2 {
-		if err := prepareV2(); err != nil {
-			return 0, err
-		}
-	} else {
-		if err := validateCommandEnvelopeForEncode(probe); err != nil {
-			return 0, err
-		}
-		var err error
-		size, err = commandFrameEncodedSize(probe)
-		if err != nil {
-			return 0, err
-		}
-		if err := j.writer.commandFrameSizeError(size); err != nil {
-			return 0, err
-		}
+	if err := prepareFrame(); err != nil {
+		return 0, err
 	}
 	if beforeAppend != nil {
 		if err := beforeAppend(); err != nil {
 			return 0, err
 		}
-		// Even an existing hook can mutate backing bytes/extension headers.
-		// Revalidate and recheck capacity before rotation/LSN reservation.
-		if v2 {
-			if err := prepareV2(); err != nil {
-				return 0, err
-			}
+		// Both codecs borrow nested extension headers. Refresh their shape and
+		// size after the hook, before selecting a successor or reserving an LSN.
+		if err := prepareFrame(); err != nil {
+			return 0, err
 		}
 	}
 	syncRotation := v2 && probe.DurabilityClass == CommandDurabilityDurable
@@ -1364,11 +1376,16 @@ func (j *CommandJournal) appendCommand(
 	if err := j.maybeRotateForFrameLockedObservedWithNamespaceDebt(size, syncRotation, deferRotationNamespace, observe); err != nil {
 		return 0, err
 	}
-	if v2 && j.segmentSeq != previousSegment {
-		// Rotation may run observers/onSegmentRotated. No borrowed plan may
-		// cross that callback boundary, even if the encoded size is unchanged.
-		if err := prepareV2(); err != nil {
+	if j.segmentSeq != previousSegment {
+		// Rotation can invoke mutable observers/onSegmentRotated. Refresh both
+		// codecs and verify the installed actual capacity before assignment.
+		if err := prepareFrame(); err != nil {
 			return 0, err
+		}
+		if int64(size) > int64(1<<63-1)-segmentHeaderSize || !j.writer.fixedFitsAppend(int64(segmentHeaderSize)+int64(size)) {
+			// Keep already-created rotation tokens in their existing pending
+			// custody. Do not loop through callbacks or resize a pinned successor.
+			return 0, ErrRecordTooLarge
 		}
 	}
 	lsn, err := j.reserveLSNLocked()

@@ -20,10 +20,10 @@ import (
 )
 
 const (
-	fixedWALHeaderSize    = 4096
-	fixedWALWitnessSize   = 96
-	fixedWALAlignment     = 64
-	fixedWALDefaultTarget = 1 << 20
+	fixedWALHeaderSize      = 4096
+	fixedWALWitnessSize     = 96
+	fixedWALAlignment       = 64
+	fixedWALDefaultCapacity = 4_199_424
 )
 
 // Initialization uses distinct operations so failure tests can inject an actual
@@ -57,17 +57,88 @@ func fixedWALAlign(n int64) int64 { return (n + fixedWALAlignment - 1) &^ (fixed
 // stream WAL and full-file sync; existing fixed containers remain readable.
 func FixedWALCreationSupported() bool { return fixedWALCreationSupported }
 
-// fixedWALCapacity checks every multiply/add/alignment before initialization
-// can create a private file or write any bytes.
-func fixedWALCapacity(target int64) (int64, error) {
-	if target <= 0 {
-		target = fixedWALDefaultTarget
-	}
-	const maxTarget = (int64(1<<63-1) - fixedWALHeaderSize - 1024 - (fixedWALAlignment - 1)) / 4
-	if target > maxTarget {
+// fixedWALCapacity validates an exact physical byte budget, independently of
+// the journal's logical rotation target. Published files are never resized.
+func fixedWALCapacity(capacity int64) (int64, error) {
+	if capacity < fixedWALHeaderSize+2*fixedWALWitnessSize+fixedWALAlignment || capacity > int64(1<<63-1)-(fixedWALAlignment-1) {
 		return 0, ErrRecordTooLarge
 	}
-	return fixedWALAlign(target*4 + fixedWALHeaderSize + 1024), nil
+	return fixedWALAlign(capacity), nil
+}
+
+func fixedWALPhysicalBudget(target int64) (int64, error) {
+	if target <= 0 {
+		return fixedWALDefaultCapacity, nil
+	}
+	const overhead = fixedWALHeaderSize + 2*fixedWALWitnessSize + (fixedWALAlignment - 1)
+	if target > int64(1<<63-1)-overhead-(fixedWALAlignment-1) {
+		return 0, ErrRecordTooLarge
+	}
+	return fixedWALAlign(target + overhead), nil
+}
+
+// fixedWALExtentEnd is the actual existing on-disk extent geometry. Capacity
+// adds its final alignment, without changing a witness offset or format byte.
+func fixedWALExtentEnd(start, frameBytes int64) (int64, error) {
+	const overhead = 2*fixedWALWitnessSize + (fixedWALAlignment - 1)
+	if start < fixedWALHeaderSize || frameBytes < 0 || start > int64(1<<63-1)-overhead || frameBytes > int64(1<<63-1)-overhead-start {
+		return 0, ErrRecordTooLarge
+	}
+	return fixedWALAlign(start+fixedWALWitnessSize+frameBytes) + fixedWALWitnessSize, nil
+}
+
+func fixedWALFrameCapacity(frameBytes int64) (int64, error) {
+	end, err := fixedWALExtentEnd(fixedWALHeaderSize, frameBytes)
+	if err != nil || end > int64(1<<63-1)-(fixedWALAlignment-1) {
+		return 0, ErrRecordTooLarge
+	}
+	return fixedWALAlign(end), nil
+}
+
+type fixedWALRotationReason uint8
+
+const (
+	fixedWALForcedRotation fixedWALRotationReason = iota
+	fixedWALLogicalRotation
+	fixedWALPressureRotation
+)
+
+type fixedWALSizePlan struct{ capacity, incoming int64 }
+
+// The plan lives only during existing exclusive writer ownership. It is a
+// physical reserve decision, never a logical frontier or durability receipt.
+func (w *Writer) fixedSuccessorSizePlan() (fixedWALSizePlan, error) {
+	plan := fixedWALSizePlan{incoming: w.fixedIncomingBytes}
+	if w.fixedBudget <= 0 {
+		return plan, nil
+	}
+	budget := w.fixedBudget
+	base := min(int64(fixedWALDefaultCapacity), budget)
+	normal := base
+	if w.fixedRotationReason != fixedWALForcedRotation && w.fixed != nil {
+		previous := min(w.fixed.capacity, budget)
+		normal = max(base, previous)
+		if w.fixedRotationReason == fixedWALPressureRotation {
+			// Cap before addition: an oversized atomic frame grants no growth beyond B.
+			normal = budget
+			if previous < budget-previous {
+				normal = previous + previous
+			}
+		}
+	}
+	if plan.incoming > 0 {
+		required, err := fixedWALFrameCapacity(plan.incoming)
+		if err != nil {
+			return fixedWALSizePlan{}, err
+		}
+		normal = max(normal, required)
+	}
+	capacity, err := fixedWALCapacity(normal)
+	if err != nil {
+		return fixedWALSizePlan{}, err
+	}
+	plan.capacity = capacity
+	return plan, nil
 }
 
 // initializeFixedWAL publishes a fully initialized private file over an unused
@@ -75,11 +146,11 @@ func fixedWALCapacity(target int64) (int64, error) {
 // a crash after it leaves a complete fixed container. Neither path needs a
 // corruption exception in loadFixedWAL. Published containers are never resized.
 // The replacement handle must reach every later resource/namespace token.
-func initializeFixedWAL(file **os.File, target int64, parent *os.File) (*fixedWAL, error) {
+func initializeFixedWAL(file **os.File, capacity int64, parent *os.File) (*fixedWAL, error) {
 	if !FixedWALCreationSupported() {
 		return nil, rootpublication.ErrNamespacePersistenceUnsupported
 	}
-	if _, err := fixedWALCapacity(target); err != nil {
+	if _, err := fixedWALCapacity(capacity); err != nil {
 		return nil, err
 	}
 	previous := *file
@@ -125,7 +196,7 @@ func initializeFixedWAL(file **os.File, target int64, parent *os.File) (*fixedWA
 	if err = durabilitycut.EmitStableNamespace(durabilitycut.NamespaceCreate, durabilitycut.ResourceCommandWAL, parent.Name(), "", private.Name(), parent, private, "", privateName); err != nil {
 		return nil, err
 	}
-	state, err := writeInitializedFixedWAL(private, target)
+	state, err := writeInitializedFixedWAL(private, capacity)
 	if err != nil {
 		return nil, err
 	}
@@ -160,10 +231,9 @@ func initializeFixedWAL(file **os.File, target int64, parent *os.File) (*fixedWA
 
 // writeInitializedFixedWAL writes only an unpublished private file. Every
 // reserved byte reaches stable storage before the canonical name can see it.
-func writeInitializedFixedWAL(file *os.File, target int64) (*fixedWAL, error) {
-	// A minimally sized record consumes an extent witness pair and alignment.
-	// Reserve four physical bytes per logical byte so even tiny frames fit.
-	capacity, err := fixedWALCapacity(target)
+func writeInitializedFixedWAL(file *os.File, capacity int64) (*fixedWAL, error) {
+	// Validate before creating buffers or writing the unpublished file.
+	capacity, err := fixedWALCapacity(capacity)
 	if err != nil {
 		return nil, err
 	}
@@ -402,7 +472,10 @@ func validateFixedWALFrames(data []byte) (first, last uint64, err error) {
 // owned pending buffer. Its caller supplies the validated frame's common V1/V2
 // LSN; no borrowed decoder state or mutable scratch escapes the synchronous write.
 func (state *fixedWAL) flushExtent(w *Writer, frame []byte, lsn uint64) error {
-	end := fixedWALAlign(state.physical+fixedWALWitnessSize+int64(len(frame))) + fixedWALWitnessSize
+	end, geometryErr := fixedWALExtentEnd(state.physical, int64(len(frame)))
+	if geometryErr != nil {
+		return geometryErr
+	}
 	if end > state.capacity {
 		return fmt.Errorf("commitlog: initialized WAL capacity exhausted")
 	}
@@ -490,7 +563,7 @@ func neutralizeUnacceptedFixedSuccessor(file *os.File) error {
 
 // prepareFixedSuccessor never changes the current writer. Capacity and full
 // initialization sync must succeed before a successor handle/state is installed.
-func (w *Writer) prepareFixedSuccessor(file **os.File, parent *os.File) (*fixedWAL, int64, walContainerSelection, error) {
+func (w *Writer) prepareFixedSuccessor(file **os.File, parent *os.File, plan fixedWALSizePlan) (*fixedWAL, int64, walContainerSelection, error) {
 	state, _, err := loadFixedWAL(*file)
 	if err != nil {
 		return nil, 0, walContainerSelection{}, err
@@ -501,16 +574,20 @@ func (w *Writer) prepareFixedSuccessor(file **os.File, parent *os.File) (*fixedW
 		return nil, 0, selection, err
 	}
 	if state == nil && info.Size() == 0 {
-		selection = selectWALContainer(*file, w.fixedTarget, w.productionMediumPolicy)
+		selection = selectWALContainer(*file, plan.capacity, w.productionMediumPolicy)
 	}
-	needsCapacity := state != nil && state.logical == 0 && !state.fitsEmptyFrame(w.fixedIncomingBytes)
+	needsCapacity := state != nil && state.logical == 0 && !state.fitsEmptyFrame(plan.incoming)
 	if (state == nil && selection.fixed) || needsCapacity {
-		state, err = initializeFixedWAL(file, max(w.fixedTarget, w.fixedIncomingBytes), parent)
+		state, err = initializeFixedWAL(file, plan.capacity, parent)
 		if err != nil {
 			return nil, 0, selection, err
 		}
 	}
 	if state != nil {
+		end, sizeErr := fixedWALExtentEnd(state.physical, plan.incoming)
+		if plan.incoming > 0 && (sizeErr != nil || end > state.capacity) {
+			return nil, 0, selection, ErrRecordTooLarge
+		}
 		return state, state.logical, selection, nil
 	}
 	if _, err = (*file).Seek(info.Size(), io.SeekStart); err != nil {
@@ -520,8 +597,8 @@ func (w *Writer) prepareFixedSuccessor(file **os.File, parent *os.File) (*fixedW
 }
 
 func (state *fixedWAL) fitsEmptyFrame(frameBytes int64) bool {
-	required := fixedWALAlign(fixedWALHeaderSize+fixedWALWitnessSize+frameBytes) + fixedWALWitnessSize
-	return required <= state.capacity
+	required, err := fixedWALExtentEnd(fixedWALHeaderSize, frameBytes)
+	return err == nil && required <= state.capacity
 }
 
 // fixedFitsAppend includes accepted but unflushed logical bytes. Each minimum
@@ -533,7 +610,11 @@ func (w *Writer) fixedFitsAppend(frameBytes int64) bool {
 		return true
 	}
 	remaining := w.fixed.capacity - w.fixed.physical
-	incoming := fixedWALAlign(w.fixed.physical+fixedWALWitnessSize+frameBytes) + fixedWALWitnessSize - w.fixed.physical
+	end, err := fixedWALExtentEnd(w.fixed.physical, frameBytes)
+	if err != nil {
+		return false
+	}
+	incoming := end - w.fixed.physical
 	buffered := w.ActiveBytes() - w.fixed.logical
 	return incoming <= remaining && buffered >= 0 && buffered <= (remaining-incoming)/4
 }

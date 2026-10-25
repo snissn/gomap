@@ -35,6 +35,34 @@ func (j *CommandJournal) installBufferedWriterForTest(w io.Writer, size int) fun
 	}
 }
 
+// Size the fixture for exactly one canonical frame: its first append fits the
+// selected physical reserve and its second append crosses the logical target.
+// A one-byte target now legitimately needs an oversized first-frame successor.
+func commandJournalSingleFrameTarget(t *testing.T, envelope CommandEnvelope) int64 {
+	t.Helper()
+	envelope.LSN = 1
+	var frame []byte
+	var err error
+	if envelope.Version == CommandFrameVersionV2 {
+		frame, err = EncodeCommandFrameV2(envelope)
+	} else {
+		frame, err = EncodeCommandFrame(envelope)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return int64(segmentHeaderSize + len(frame))
+}
+
+func commandJournalSinglePointTarget(t *testing.T) int64 {
+	t.Helper()
+	payload, err := EncodeRawKVBatchPayload([]RawKVOperation{{Op: RawKVOpSet, Key: []byte("k1"), Value: []byte("v1")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return commandJournalSingleFrameTarget(t, CommandEnvelope{Kind: CommandKindRawKVBatch, Scope: CommandScopeRawKV, PayloadFormat: PayloadFormatRawKVBatchV1, Payload: payload})
+}
+
 func TestCommandJournalAllocatesContiguousLSNs(t *testing.T) {
 	j, err := OpenCommandJournal(t.TempDir(), CommandJournalOptions{InitialLSN: 40})
 	if err != nil {
@@ -136,15 +164,6 @@ func TestCommandJournalObservedBoundariesHoldJournalLock(t *testing.T) {
 }
 
 func TestCommandJournalAppendHooksHoldLockAndTransferCurrentRotation(t *testing.T) {
-	j, err := OpenCommandJournal(t.TempDir(), CommandJournalOptions{
-		SegmentTargetBytes:     1,
-		CaptureStableResources: true,
-	})
-	if err != nil {
-		t.Fatalf("OpenCommandJournal: %v", err)
-	}
-	defer func() { _ = j.Close() }()
-
 	envelope := CommandEnvelope{
 		Version:         CommandFrameVersionV2,
 		DurabilityClass: CommandDurabilityRelaxed,
@@ -152,6 +171,15 @@ func TestCommandJournalAppendHooksHoldLockAndTransferCurrentRotation(t *testing.
 		Scope:           CommandScopeRawKV,
 		PayloadFormat:   PayloadFormatRawKVBatchV1,
 	}
+	j, err := OpenCommandJournal(t.TempDir(), CommandJournalOptions{
+		SegmentTargetBytes:     commandJournalSingleFrameTarget(t, envelope),
+		CaptureStableResources: true,
+	})
+	if err != nil {
+		t.Fatalf("OpenCommandJournal: %v", err)
+	}
+	defer func() { _ = j.Close() }()
+
 	assertLocked := func(stage string) {
 		t.Helper()
 		if j.mu.TryLock() {
@@ -355,7 +383,7 @@ func TestCommandJournalDefaultSegmentSeqUsesLatestSegment(t *testing.T) {
 
 func TestCommandJournalSegmentTargetRotatesBeforeLSNReservation(t *testing.T) {
 	dir := t.TempDir()
-	j, err := OpenCommandJournal(dir, CommandJournalOptions{SegmentTargetBytes: 1})
+	j, err := OpenCommandJournal(dir, CommandJournalOptions{SegmentTargetBytes: commandJournalSingleFrameTarget(t, CommandEnvelope{Kind: CommandKindRawKVBatch, Scope: CommandScopeRawKV, PayloadFormat: PayloadFormatRawKVBatchV1})})
 	if err != nil {
 		t.Fatalf("OpenCommandJournal: %v", err)
 	}
@@ -408,7 +436,7 @@ func TestCommandJournalSegmentTargetRotatesBeforeLSNReservation(t *testing.T) {
 
 func TestCommandJournalPointAppendAndFlushSyncsRotatedSegment(t *testing.T) {
 	dir := t.TempDir()
-	j, err := OpenCommandJournal(dir, CommandJournalOptions{SegmentTargetBytes: 1})
+	j, err := OpenCommandJournal(dir, CommandJournalOptions{SegmentTargetBytes: commandJournalSinglePointTarget(t)})
 	if err != nil {
 		t.Fatalf("OpenCommandJournal: %v", err)
 	}
@@ -683,7 +711,7 @@ func TestCommandJournalPointAppendWithRevisionWritesCanonicalPayload(t *testing.
 
 func TestCommandJournalSingleAppendAndFlushSyncsRotatedSegment(t *testing.T) {
 	dir := t.TempDir()
-	j, err := OpenCommandJournal(dir, CommandJournalOptions{SegmentTargetBytes: 1})
+	j, err := OpenCommandJournal(dir, CommandJournalOptions{SegmentTargetBytes: commandJournalSinglePointTarget(t)})
 	if err != nil {
 		t.Fatalf("OpenCommandJournal: %v", err)
 	}

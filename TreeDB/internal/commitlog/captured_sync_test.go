@@ -27,9 +27,9 @@ func TestCapturedSyncRetainsFormatAcrossMixedRotation(t *testing.T) {
 			defer journal.Close()
 			rotate := func(fixed bool) {
 				t.Helper()
-				journal.writer.fixedTarget = 0
+				journal.writer.fixedBudget = 0
 				if fixed {
-					journal.writer.fixedTarget = 1024
+					journal.writer.fixedBudget = 8192
 				}
 				rotation, err := journal.RotateActiveSegmentWithStableResources(false)
 				if err != nil {

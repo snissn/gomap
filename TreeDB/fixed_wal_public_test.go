@@ -16,6 +16,39 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
+// publicCommandWALSingleFrameTarget fits one inline canonical V2 frame and
+// forces rotation on the second. Entry revision values have fixed width; cover
+// both legacy and native revision payload layouts without assuming a producer.
+func publicCommandWALSingleFrameTarget(t *testing.T, key, value []byte) int64 {
+	t.Helper()
+	var smallest, largest int64
+	for _, revision := range []uint64{0, 1} {
+		payload, err := commitlog.EncodeRawKVBatchPayload([]commitlog.RawKVOperation{{Op: commitlog.RawKVOpSet, Key: key, Value: value, Revision: revision}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		format := commitlog.PayloadFormatRawKVBatchV1
+		if revision != 0 {
+			format = commitlog.PayloadFormatRawKVBatchV2
+		}
+		frame, err := commitlog.EncodeCommandFrameV2(commitlog.CommandEnvelope{Version: commitlog.CommandFrameVersionV2, LSN: 1, DurabilityClass: commitlog.CommandDurabilityDurable, Kind: commitlog.CommandKindRawKVBatch, Scope: commitlog.CommandScopeRawKV, PayloadFormat: format, Payload: payload})
+		if err != nil {
+			t.Fatal(err)
+		}
+		size := int64(8 + len(frame)) // Existing outer length/checksum header.
+		if smallest == 0 || size < smallest {
+			smallest = size
+		}
+		if size > largest {
+			largest = size
+		}
+	}
+	if 2*smallest <= largest {
+		t.Fatal("fixture cannot force its second-frame logical rotation")
+	}
+	return largest
+}
+
 // seedPublicFixedSuccessor constructs the actual next canonical segment. The
 // existing backend rotation opens it, retains ownership and inspects its format.
 func seedPublicFixedSuccessor(t *testing.T, database *DB) {
@@ -25,7 +58,7 @@ func seedPublicFixedSuccessor(t *testing.T, database *DB) {
 	if n, err := fmt.Sscanf(filepath.Base(active), "commit-l0-%d.log", &seq); err != nil || n != 1 || seq == ^uint64(0) {
 		t.Fatalf("active command segment=%q: %v", active, err)
 	}
-	w, err := commitlog.NewFixedWriter(filepath.Join(filepath.Dir(active), commitlog.CommandSegmentName(0, seq+1)), 1<<20)
+	w, err := commitlog.NewFixedWriterWithCapacity(filepath.Join(filepath.Dir(active), commitlog.CommandSegmentName(0, seq+1)), 1<<20)
 	if err != nil {
 		t.Fatal(err)
 	}

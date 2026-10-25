@@ -482,7 +482,7 @@ func TestPublicCommandWALRelaxedPointerDependencySyncCutsRetainDebtForRetry(t *t
 func TestPublicCommandWALRelaxedRotationsStabilizeExactPrefixBeforeBarrierAppend(t *testing.T) {
 	dir := t.TempDir()
 	opts := relaxedCommandWALDurablePrefixOptions(dir)
-	opts.CommandWALSegmentTargetBytes = 1
+	opts.CommandWALSegmentTargetBytes = publicCommandWALSingleFrameTarget(t, []byte("relaxed-a"), []byte("value-a"))
 	db, err := Open(opts)
 	if err != nil {
 		t.Fatalf("Open relaxed command WAL: %v", err)

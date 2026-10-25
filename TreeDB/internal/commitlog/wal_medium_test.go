@@ -130,7 +130,7 @@ func TestWALMediumExplicitFixedAndExistingStreamPrecedence(t *testing.T) {
 			path := filepath.Join(wal, CommandSegmentName(0, 1))
 			var w *Writer
 			if fixed {
-				w, err = NewFixedWriter(path, 1024)
+				w, err = NewFixedWriterWithCapacity(path, 8192)
 			} else {
 				w, err = NewWriter(path)
 			}
@@ -151,7 +151,7 @@ func TestWALMediumExplicitFixedAndExistingStreamPrecedence(t *testing.T) {
 				t.Fatal(err)
 			}
 			// Even an explicit fixed request cannot convert an occupied stream.
-			w, err = NewFixedWriter(path, 1024)
+			w, err = NewFixedWriterWithCapacity(path, 8192)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -238,15 +238,31 @@ func TestWALMediumStreamSyncFailureDoesNotCertifyPrefix(t *testing.T) {
 }
 
 func TestNewFixedWriterRejectsInvalidCapacity(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "wal")
-	if _, err := NewFixedWriter(path, 0); err == nil {
-		t.Fatal("accepted zero capacity")
-	}
-	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("invalid request touched destination: %v", err)
+	for _, capacity := range []int64{0, 1, fixedWALHeaderSize, fixedWALHeaderSize + 2*fixedWALWitnessSize + fixedWALAlignment - 1} {
+		for _, existing := range []bool{false, true} {
+			path := filepath.Join(t.TempDir(), "wal")
+			original := []byte("existing stream remains untouched")
+			if existing {
+				if err := os.WriteFile(path, original, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := NewFixedWriterWithCapacity(path, capacity); err == nil {
+				t.Fatalf("accepted undersized physical capacity%d", capacity)
+			}
+			data, err := os.ReadFile(path)
+			if existing {
+				if err != nil || string(data) != string(original) {
+					t.Fatalf("invalid capacity%d changed existing destination: %q %v", capacity, data, err)
+				}
+			} else if !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("invalid capacity%d touched destination: %v", capacity, err)
+			}
+		}
 	}
 	if !FixedWALCreationSupported() {
-		if _, err := NewFixedWriter(path, 1024); !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
+		path := filepath.Join(t.TempDir(), "unsupported")
+		if _, err := NewFixedWriterWithCapacity(path, 8192); !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
 			t.Fatalf("unsupported error=%v", err)
 		}
 	}
@@ -262,7 +278,7 @@ func TestNewFixedWriterRejectsOverflowBeforeTouchingDestination(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		if _, err := NewFixedWriter(path, int64(1<<63-1)); !errors.Is(err, ErrRecordTooLarge) {
+		if _, err := NewFixedWriterWithCapacity(path, int64(1<<63-1)); !errors.Is(err, ErrRecordTooLarge) {
 			t.Fatalf("overflow error=%v", err)
 		}
 		data, err := os.ReadFile(path)
@@ -286,7 +302,7 @@ func TestNewFixedWriterRejectsOverflowBeforeTouchingDestination(t *testing.T) {
 	if st, err := f.Stat(); err != nil || st.Size() != 0 {
 		t.Fatalf("initializer mutated file: %v %v", st, err)
 	}
-	const largestTarget = (int64(1<<63-1) - fixedWALHeaderSize - 1024 - (fixedWALAlignment - 1)) / 4
+	const largestTarget = int64(1<<63-1) - (fixedWALAlignment - 1)
 	if capacity, err := fixedWALCapacity(largestTarget); err != nil || capacity < fixedWALHeaderSize {
 		t.Fatalf("valid boundary capacity=%d err=%v", capacity, err)
 	}

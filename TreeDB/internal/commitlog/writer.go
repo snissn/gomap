@@ -128,8 +128,9 @@ func sameNonEmptyBytesData(a, b []byte) bool {
 type Writer struct {
 	f                      *os.File
 	fixed                  *fixedWAL
-	fixedTarget            int64
+	fixedBudget            int64
 	fixedIncomingBytes     int64
+	fixedRotationReason    fixedWALRotationReason
 	productionMediumPolicy bool
 	containerSelection     walContainerSelection
 	bw                     *bufio.Writer
@@ -239,10 +240,11 @@ func NewWriter(path string) (*Writer, error) {
 	return NewWriterWithOptions(path, Options{})
 }
 
-// NewFixedWriter requests initialized fixed capacity for a new empty segment.
+// NewFixedWriterWithCapacity requests an exact physical byte capacity (rounded
+// to format alignment) for a new empty segment; it is not a logical target.
 // Occupied existing segments retain their actual format. Unsupported platforms
 // reject the request; production journals use their descriptor-based policy.
-func NewFixedWriter(path string, capacity int64) (*Writer, error) {
+func NewFixedWriterWithCapacity(path string, capacity int64) (*Writer, error) {
 	if capacity <= 0 {
 		return nil, errors.New("commitlog: positive fixed capacity required")
 	}
@@ -256,6 +258,13 @@ func NewFixedWriter(path string, capacity int64) (*Writer, error) {
 }
 
 func NewWriterWithOptions(path string, opts Options) (*Writer, error) {
+	if opts.fixedCapacity > 0 {
+		capacity, err := fixedWALCapacity(opts.fixedCapacity)
+		if err != nil {
+			return nil, err
+		}
+		opts.fixedCapacity = capacity
+	}
 	if !FixedWALCreationSupported() {
 		opts.fixedCapacity = 0
 	}
@@ -292,7 +301,7 @@ func NewWriterWithOptions(path string, opts Options) (*Writer, error) {
 	}
 	w.f = f
 	w.fixed = state
-	w.fixedTarget = opts.fixedCapacity
+	w.fixedBudget = opts.fixedCapacity
 	w.productionMediumPolicy = opts.productionMediumPolicy
 	w.containerSelection = selection
 	if state != nil {
@@ -663,6 +672,10 @@ func (w *Writer) rotateToWithSyncObserved(path string, syncCurrent bool, root st
 	if err := w.commandBufferError(); err != nil {
 		return writerRotationOutcome{}, err
 	}
+	plan, err := w.fixedSuccessorSizePlan()
+	if err != nil {
+		return writerRotationOutcome{}, err
+	}
 	if w.f != nil {
 		before, after := durabilitycut.BeforeUserspaceFlush, durabilitycut.AfterUserspaceFlush
 		if syncCurrent {
@@ -692,7 +705,7 @@ func (w *Writer) rotateToWithSyncObserved(path string, syncCurrent bool, root st
 		return writerRotationOutcome{}, err
 	}
 	var preparedParent *os.File
-	if created && w.fixedTarget > 0 {
+	if created && w.fixedBudget > 0 {
 		preparedParent, err = rootpublication.OpenStableParent(filepath.Dir(path))
 		if err != nil {
 			return writerRotationOutcome{}, errors.Join(err, file.Close())
@@ -702,7 +715,7 @@ func (w *Writer) rotateToWithSyncObserved(path string, syncCurrent bool, root st
 			return writerRotationOutcome{}, errors.Join(err, file.Close())
 		}
 	}
-	state, size, selection, err := w.prepareFixedSuccessor(&file, preparedParent)
+	state, size, selection, err := w.prepareFixedSuccessor(&file, preparedParent, plan)
 	if err != nil {
 		// Keep ownership of the old descriptor; the failed candidate is never the
 		// writer's authoritative file, and is closed even after partial reserve I/O.

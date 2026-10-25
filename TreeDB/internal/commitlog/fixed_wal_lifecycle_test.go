@@ -480,7 +480,7 @@ func TestFixedWALOversizedExistingEmptySuccessor(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(j.walDir, CommandSegmentName(j.lane, j.segmentSeq+1))
-	empty, err := NewWriterWithOptions(path, Options{fixedCapacity: 1024})
+	empty, err := NewWriterWithOptions(path, Options{fixedCapacity: 8192})
 	if err != nil {
 		t.Fatal(err)
 	}

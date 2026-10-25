@@ -29,7 +29,7 @@ func TestCommandWALFixedCapacityCleanupSeparatesLogicalDebtAndPhysicalBytes(t *t
 		if n, e := fmt.Sscanf(filepath.Base(active), "commit-l0-%d.log", &seq); e != nil || n != 1 || seq == ^uint64(0) {
 			t.Fatalf("active=%q: %v", active, e)
 		}
-		seed, e := commitlog.NewFixedWriter(filepath.Join(filepath.Dir(active), commitlog.CommandSegmentName(0, seq+1)), 256)
+		seed, e := commitlog.NewFixedWriterWithCapacity(filepath.Join(filepath.Dir(active), commitlog.CommandSegmentName(0, seq+1)), 8192)
 		if e != nil {
 			t.Fatal(e)
 		}
