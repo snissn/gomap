@@ -24893,7 +24893,12 @@ func (c *Collection) ScanDocumentIDsFunc(maxDocuments int, fn func([]byte) (bool
 // physical primary-source entry (including tombstones and merged-run work),
 // while fn receives only live IDs. It therefore proves a complete live count
 // only when the physical primary walk is exhausted.
+// Native COW scans charge each source successor probe, including exhausted
+// sources; the inspected count can therefore exceed the number of stored rows.
 func (c *Collection) ScanDocumentIDsPhysicalFunc(maxEntries int, fn func([]byte) (bool, error)) (inspected int, truncated bool, err error) {
+	if c != nil && c.nativeJSON != nil {
+		return c.nativeScanDocumentIDsPhysical(maxEntries, fn)
+	}
 	if c == nil {
 		return 0, false, errCollectionNil
 	}
