@@ -22,12 +22,9 @@ import (
 func TestNativeTextPublicStoredFormats(t *testing.T) {
 	for _, format := range []DocumentFormat{DocumentFormatBSON, DocumentFormatTemplateV1} {
 		for _, version := range []TextIndexVersion{TextIndexVersionV1, TextIndexVersionV2} {
-			for _, native := range []bool{false, true} {
-				route := "legacy"
-				if native {
-					route = "native"
-				}
+			for _, route := range []string{"legacy", "native", "legacy-import"} {
 				t.Run(string(format)+"/"+string(version)+"/"+route, func(t *testing.T) {
+					native := route == "native"
 					dir := t.TempDir()
 					var manager *CollectionManager
 					var closeOwner, checkpoint func() error
@@ -189,6 +186,11 @@ func TestNativeTextPublicStoredFormats(t *testing.T) {
 						t.Fatal(err)
 					}
 					closeAll()
+					if route == "legacy-import" {
+						// Import the actual current-binary legacy physical catalog,
+						// text roots and persisted template definitions at first use.
+						native = true
+					}
 					open()
 					c, err = manager.OpenCollection("docs")
 					if err != nil {
@@ -196,10 +198,41 @@ func TestNativeTextPublicStoredFormats(t *testing.T) {
 					}
 					requireNativeTextIDs(t, c, "alpha", "c", "d")
 					requireNativeTextIDs(t, c, "delta", "a")
+					var importedView *CollectionReadView
+					if route == "legacy-import" {
+						importedView, err = c.OpenCollectionReadView()
+						if err != nil {
+							t.Fatal(err)
+						}
+						defer importedView.Close()
+					}
 					if _, err = c.Insert([]byte("e"), encode("reopened policy", "reopenednested", "reopenedtag", "reopened_shape")); err != nil {
 						t.Fatalf("reopened resolver mutation: %v", err)
 					}
 					requireNativeTextIDs(t, c, "reopenednested", "e")
+					if importedView != nil {
+						old, err := c.searchTextAtReadView(TextSearchOptions{IndexName: "content", Query: "reopenednested", TopK: 8}, textSearchResultFull, importedView)
+						if err != nil || len(old.Results) != 0 {
+							t.Fatalf("imported old cut observed new native document: %+v %v", old, err)
+						}
+						if err = importedView.Close(); err != nil {
+							t.Fatal(err)
+						}
+						if err = checkpoint(); err != nil {
+							t.Fatal(err)
+						}
+						closeAll()
+						open()
+						c, err = manager.OpenCollection("docs")
+						if err != nil {
+							t.Fatal(err)
+						}
+						requireNativeTextIDs(t, c, "alpha", "c", "d")
+						requireNativeTextIDs(t, c, "reopenednested", "e")
+						if stats, err := c.TextIndexStorageStats("content"); err != nil || stats.Documents != 4 {
+							t.Fatalf("imported native corpus after second reopen: %+v %v", stats, err)
+						}
+					}
 				})
 			}
 		}

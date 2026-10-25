@@ -24,6 +24,11 @@ matrix are defined in `TreeDB/docs/spec/collection-text-v2-contract.md`.
 - `DropTextIndex` removes metadata and clears all v1 and v2 text root
   descriptors for that index, including v1 postings/text-state/text-stats roots
   and v2 doc ordinal/docmap/term-stat/norm/status roots.
+  Cleared descriptors persist as encoded zero roots. Cold native catalog import
+  treats well-formed zero-root descriptors as inactive, including the other
+  version's descriptors after recreation. Every nonzero root still requires
+  its current collection and domain declaration; malformed descriptors and root
+  overlays refuse the complete import.
 - `TextIndexStorageStats` validates storage versions and returns root accounting.
 - Insert, delete, update, and batch write paths maintain ordinals/generations,
   tombstones, docmap/norm blocks, stats metadata, compressed scoring posting
