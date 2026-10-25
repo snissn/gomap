@@ -1056,3 +1056,9 @@ Go-row artifact boundary are documented in
 [the Mongo benchmark README](../mongo_gateway_bench/README.md).
 `BenchmarkStandalonePublicVectorSaveReopenLoad` also charges the physical
 owner-close and fresh-owner reconstruction boundary.
+
+`BenchmarkServiceSharedCOWConsumers` in `TreeDB/documentservice` measures
+ordinary Get, filtered keyword, Dense and combined Hybrid through legacy/native
+public constructors. Its fixed fixture, strategy/route attribution limits and
+fresh-process commands are in [the consumer diagnostic packet](../../TreeDB/docs/benchmarks/shared-cow-consumers-5238.md).
+It emits Go benchmark rows, not benchprof inputs.

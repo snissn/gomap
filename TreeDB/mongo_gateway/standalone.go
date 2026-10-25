@@ -70,6 +70,10 @@ func (m *transportMetrics) recordHandshakeDuration(elapsed time.Duration) {
 type StandaloneOptions struct {
 	Dir     string
 	Profile treedb.Profile
+	// COWMemtableLimits bounds engine-owned retention, rather than process RSS.
+	// Zero selects a finite Mongo budget for 16 MiB documents and wire-sized
+	// batches. Explicit limits retain the usual pre-assignment capacity refusal.
+	COWMemtableLimits treedb.COWMemtableLimits
 
 	DefaultCollectionOptions  collections.CollectionOptions
 	DefaultIndexStoragePolicy collections.RootStoragePolicy
@@ -120,6 +124,7 @@ type StandaloneServer struct {
 	Server      *Server
 
 	cleanup          func() error
+	ownerStats       func() map[string]string
 	closeOnce        sync.Once
 	closeErr         error
 	serveMu          sync.Mutex
@@ -142,6 +147,19 @@ func NormalizeStandaloneOptions(opts StandaloneOptions) (StandaloneOptions, erro
 		return opts, err
 	}
 	opts.Profile = profile
+	if opts.COWMemtableLimits == (treedb.COWMemtableLimits{}) {
+		opts.COWMemtableLimits = treedb.DefaultCOWMemtableLimits()
+		// Half the in-flight budget is reserved for physical maintenance. The
+		// other 256 MiB covers overlapping row, canonical WAL and immutable
+		// images of a <=48 MB request, plus catalog/index planning. Index scratch
+		// is admitted from referenced BSON fields, not unrelated payload bytes.
+		opts.COWMemtableLimits.MaxInFlightBytes = 512 << 20
+		opts.COWMemtableLimits.MaxTotalBytes = 1 << 30
+		opts.COWMemtableLimits.MaxRetiredBytes = 1 << 30
+	}
+	if err := opts.COWMemtableLimits.Validate(); err != nil {
+		return opts, fmt.Errorf("mongo gateway standalone: COWMemtableLimits: %w", err)
+	}
 
 	format, err := normalizeStandaloneDocumentFormat(opts.DefaultCollectionOptions.DocumentFormat)
 	if err != nil {
@@ -220,16 +238,30 @@ func OpenStandaloneServer(opts StandaloneOptions) (*StandaloneServer, error) {
 	}
 
 	treeOpts := treedb.OptionsFor(normalized.Profile, normalized.Dir)
-	open := treedb.OpenBackend
-	if treeOpts.IndexOuterLeavesInValueLog {
-		open = treedb.OpenBackendWithCachedLeafLog
-	}
-	backend, cleanup, err := open(treeOpts)
+	treeOpts.MemtableMode = "cow_btree"
+	treeOpts.COWMemtableLimits = normalized.COWMemtableLimits
+	// Own the public DB for the entire server lifetime. The semantic backend
+	// borrows its complete COW cut; it must never be independently closed.
+	database, err := treedb.Open(treeOpts)
 	if err != nil {
 		return nil, err
 	}
+	cleanup := database.Close
+	backend, err := database.NativeSemanticBackend()
+	if err != nil {
+		return nil, errors.Join(err, cleanup())
+	}
 
 	manager := collections.NewCollectionManager(backend)
+	failedOpen := func(cause error) (*StandaloneServer, error) {
+		return nil, errors.Join(cause, manager.Close(), cleanup())
+	}
+	// Import validates the complete physical catalog before serving requests;
+	// the bound limits copied output, not the compatibility check. Old catalogs
+	// without logical incarnation records require an explicit offline cutover.
+	if _, _, err := manager.ListCollectionsBounded(1); err != nil {
+		return failedOpen(fmt.Errorf("mongo gateway standalone: shared COW catalog preflight: %w", err))
+	}
 	server := NewServer()
 	server.Collections = manager
 	server.diagnosticCommandWALEnabled = backend.CommandWALEnabled
@@ -239,13 +271,9 @@ func OpenStandaloneServer(opts StandaloneOptions) (*StandaloneServer, error) {
 	server.ClusterCatalogVersion = normalized.ClusterCatalogVersion
 	server.AuthenticationEnabled = normalized.AuthenticationEnabled
 	if normalized.AuthenticationEnabled {
-		catalog, err := NewAuthCatalog(backend)
+		catalog, err := NewAuthCatalog(database)
 		if err != nil {
-			errs := []error{err}
-			if cleanup != nil {
-				errs = append(errs, cleanup())
-			}
-			return nil, errors.Join(errs...)
+			return failedOpen(err)
 		}
 		server.AuthCatalog = catalog
 	}
@@ -269,11 +297,7 @@ func OpenStandaloneServer(opts StandaloneOptions) (*StandaloneServer, error) {
 
 	tlsConfig, transport, err := loadStandaloneTLS(normalized)
 	if err != nil {
-		errs := []error{err}
-		if cleanup != nil {
-			errs = append(errs, cleanup())
-		}
-		return nil, errors.Join(errs...)
+		return failedOpen(err)
 	}
 	return &StandaloneServer{
 		Options:          normalized,
@@ -281,10 +305,21 @@ func OpenStandaloneServer(opts StandaloneOptions) (*StandaloneServer, error) {
 		Collections:      manager,
 		Server:           server,
 		cleanup:          cleanup,
+		ownerStats:       database.Stats,
 		transport:        transport,
 		tlsConfig:        tlsConfig,
 		transportMetrics: &transportMetrics{},
 	}, nil
+}
+
+// Stats returns the owning TreeDB's diagnostic snapshot, including COW memory,
+// publication and maintenance counters. A nil result means diagnostics could not
+// be admitted (for example, during or after Close).
+func (s *StandaloneServer) Stats() map[string]string {
+	if s == nil || s.ownerStats == nil {
+		return nil
+	}
+	return s.ownerStats()
 }
 
 // Serve accepts MongoDB wire-protocol connections on ln until ctx is canceled,

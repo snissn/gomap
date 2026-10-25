@@ -2,6 +2,7 @@ package caching
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -9,7 +10,9 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/snissn/compress/zstd"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/dictdb"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
@@ -122,10 +125,36 @@ func TestCOWNativeBasisWorkspaceLifetime(t *testing.T) {
 	}
 }
 
+// Refuse the real provider's snapshot stage after it has admitted a partial
+// definition owner. The caller must retire that owner even on preparation error.
+type cowNativeDefinitionRefusal struct{ cowDictionaryReadProvider }
+
+var errCOWNativeDefinitionRefused = errors.New("native definition admission refused")
+
+func (p cowNativeDefinitionRefusal) PrepareDictionaryReadDefinition(id uint64, limits valuelog.COWReadLimits, resources int, admit func(dictdb.DictionaryReadAllocationSizes) (func(), error)) (*dictdb.DictionaryReadDefinition, error) {
+	stage := 0
+	return p.cowDictionaryReadProvider.PrepareDictionaryReadDefinition(id, limits, resources, func(s dictdb.DictionaryReadAllocationSizes) (func(), error) {
+		stage++
+		if stage == 2 {
+			return nil, errCOWNativeDefinitionRefused
+		}
+		return admit(s)
+	})
+}
+
 // The capture and the original conditional transaction must share one real
 // dictionary-free ZSTD decoder. Retained output still needs its own original
 // receipt, and refusal must leave both opening scopes available for retry.
 func TestCOWNativeValueWorkspaceAdmissionAndLifetime(t *testing.T) {
+	t.Run("dictionary-free", func(t *testing.T) { testCOWNativeValueWorkspaceAdmissionAndLifetime(t, false, false) })
+	t.Run("trained-dictionary", func(t *testing.T) { testCOWNativeValueWorkspaceAdmissionAndLifetime(t, true, false) })
+}
+
+func TestCOWNativeValueDictionaryColdAfterClose(t *testing.T) {
+	testCOWNativeValueWorkspaceAdmissionAndLifetime(t, true, true)
+}
+
+func testCOWNativeValueWorkspaceAdmissionAndLifetime(t *testing.T, trained, coldClose bool) {
 	dir := t.TempDir()
 	backend, err := backenddb.Open(backenddb.Options{Dir: dir, Durability: backenddb.DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
 	if err != nil {
@@ -135,10 +164,15 @@ func TestCOWNativeValueWorkspaceAdmissionAndLifetime(t *testing.T) {
 	if err := backend.BindPrivateCOWOwner(owner); err != nil {
 		t.Fatal(err)
 	}
+	compression := uint8(vlogCompressionBlock)
+	if trained {
+		compression = uint8(vlogCompressionDict)
+	}
 	db, err := Open(dir, backend, Options{
 		TransactionOwner: owner, DisableWAL: true, AllowUnsafe: true,
 		MemtableMode: "cow_btree", FlushThreshold: 1 << 30,
-		ValueLogPointerThreshold: 1, ValueLogCompression: uint8(vlogCompressionBlock), ValueLogBlockCodec: 2,
+		ValueLogPointerThreshold: 1, ValueLogCompression: compression, ValueLogBlockCodec: 2,
+		ValueLogAutoPolicy: uint8(vlogAutoSize), ValueLogDictIncompressibleHoldBytes: -1,
 	})
 	if err != nil {
 		if closeErr := backend.Close(); closeErr != nil {
@@ -157,6 +191,33 @@ func TestCOWNativeValueWorkspaceAdmissionAndLifetime(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := bytes.Repeat([]byte("native-original-pointer"), 256)
+	var dictID uint64
+	expectedCodec := valuelog.BlockCodecZSTD
+	if trained {
+		samples := make([][]byte, 8)
+		for i := range samples {
+			samples[i] = bytes.Repeat([]byte(fmt.Sprintf("native-original-pointer-%d|", i)), 256)
+		}
+		dictionary, err := zstd.BuildDict(zstd.BuildDictOptions{ID: 73, Contents: samples, History: append([]byte(nil), samples[0]...), Offsets: [3]int{1, 4, 8}, Level: zstd.SpeedFastest})
+		if err != nil {
+			t.Fatal(err)
+		}
+		store, err := dictdb.Open(dir+"/dictdb", backenddb.Options{ChunkSize: 64 << 10})
+		if err != nil {
+			t.Fatal(err)
+		}
+		dictID, err = store.PutDictBytes(context.Background(), dictionary)
+		if err == nil {
+			err = store.SetCurrent(context.Background(), dictID)
+		}
+		if err != nil {
+			_ = store.Close()
+			t.Fatal(err)
+		}
+		db.SetDictStore(store)
+		expectedCodec = valuelog.BlockCodecNone
+	}
+
 	if err := db.Set([]byte("p"), want); err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +267,72 @@ func TestCOWNativeValueWorkspaceAdmissionAndLifetime(t *testing.T) {
 		t.Fatalf("real persistent pointer: %+v %v", entry, err)
 	}
 	ptr := entry.ValuePtr
+	f, _, err := a.Snapshot().PinnedValueLogFile(ptr.FileID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shape, err := valuelog.InspectCOWRecord(f, ptr, db.cow.readLimits())
+	if err != nil || !shape.Compressed || shape.DictID != dictID {
+		t.Fatalf("actual produced compression shape: %+v %v", shape, err)
+	}
 	entry = node.LeafEntry{}
+	if coldClose {
+		if err := db.Close(); err != nil {
+			t.Fatal(err)
+		}
+		before := budget.Stats()
+		got, err := a.(backenddb.NativePhysicalValueReader).NativeValueAtPointer(ptr, nil)
+		if got != nil || !errors.Is(err, memtable.ErrCOWClosed) {
+			t.Fatalf("cold closed-owner read must refuse fresh admission: len=%d err=%v", len(got), err)
+		}
+		after := budget.Stats()
+		if after.ReservedBytes != before.ReservedBytes || after.ExternalLeases != before.ExternalLeases {
+			t.Fatal("cold refusal leaked reservation", before, after)
+		}
+		if err := tx.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := a.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := b.Close(); err != nil {
+			t.Fatal(err)
+		}
+		deadline := time.Now().Add(5 * time.Second)
+		for budget.Stats().TotalBytes != 0 {
+			if time.Now().After(deadline) {
+				t.Fatal("cold-close ownership did not drain", budget.Stats())
+			}
+			time.Sleep(time.Millisecond)
+		}
+		return
+	}
+	if trained {
+		// Warm only independently retained workspace/slot metadata so a partial
+		// definition refusal must leave the original reservation exactly unchanged.
+		db.cow.physicalMu.Lock()
+		shared, err := db.cow.physicalWorkspaceLocked(db.cow.readLimits())
+		if err == nil {
+			_, err = shared.addCodecSlot()
+		}
+		db.cow.physicalMu.Unlock()
+		if err != nil {
+			t.Fatal(err)
+		}
+		before := budget.Stats()
+		capture := a.(*NativeSemanticCapture)
+		provider := capture.dictionary
+		capture.dictionary = cowNativeDefinitionRefusal{provider}
+		got, readErr := capture.NativeValueAtPointer(ptr, nil)
+		capture.dictionary = provider
+		after := budget.Stats()
+		if got != nil || !errors.Is(readErr, errCOWNativeDefinitionRefused) {
+			t.Fatalf("partial definition refusal: %d %v", len(got), readErr)
+		}
+		if after.ReservedBytes != before.ReservedBytes || after.ExternalLeases != before.ExternalLeases {
+			t.Fatal("partial definition owner leaked", before, after)
+		}
+	}
 	read := func(scope backenddb.NativePhysicalValueReader) {
 		t.Helper()
 		got, err := scope.NativeValueAtPointer(ptr, nil)
@@ -219,8 +345,8 @@ func TestCOWNativeValueWorkspaceAdmissionAndLifetime(t *testing.T) {
 	read(a.(backenddb.NativePhysicalValueReader))
 	read(tx.(backenddb.NativePhysicalValueReader))
 	workspace := db.cow.physicalReader
-	if workspace == nil || workspace.snapshot != nil || workspace.basis != nil || len(workspace.codecs) != 1 || workspace.codecs[0] == nil || workspace.codecs[0].codec != valuelog.BlockCodecZSTD || workspace.codecs[0].id != 0 {
-		t.Fatal("actual pointer did not activate one dictionary-free ZSTD decoder")
+	if workspace == nil || workspace.snapshot != nil || workspace.basis != nil || len(workspace.codecs) != 1 || workspace.codecs[0] == nil || workspace.codecs[0].codec != expectedCodec || workspace.codecs[0].id != dictID {
+		t.Fatal("actual pointer did not activate the expected shared decoder")
 	}
 	codec, receipt := workspace.codecs[0], workspace.lease
 	output, err := budget.AcquireExternal(0)

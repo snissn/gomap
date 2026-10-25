@@ -5,6 +5,12 @@ See `docs/API_STABILITY.md` for what is intended to be stable for downstream use
 
 ## Unreleased
 
+- The standalone Mongo gateway now defaults to the shared immutable COW engine
+  through ordinary collection APIs. This pre-alpha cutover refuses legacy
+  catalogs without logical incarnation records and unsupported native domains
+  at startup. Preserve and export old directories with their original binary,
+  then reingest into a fresh directory; no in-place migration is provided.
+
 - TreeDB partition routing v3 now treats domains as virtual containers and
   emits genuine top-level bucket centroids under one global all-level spherical
   kRt budget, with fanout 64 and minimum cluster size 250 defaults. Search still

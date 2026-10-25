@@ -58,7 +58,8 @@ func TestNativeExistingCollectionPublicLifecycle(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			// Unmigrated producers refuse before callbacks, metadata or WAL effects.
+			// Missing single-document mutations are no-ops; unsupported metadata
+			// producers still refuse before metadata or WAL effects.
 			assignedBefore := backend.CommandWALNextLSN()
 			opening, e := backend.CaptureNativeSemanticState()
 			if e != nil {
@@ -73,11 +74,11 @@ func TestNativeExistingCollectionPublicLifecycle(t *testing.T) {
 			if _, _, e := collection.Update([]byte("a"), func(current []byte) ([]byte, bool, error) {
 				called = true
 				return []byte(`{"changed":true}`), true, nil
-			}); e == nil || called {
-				t.Fatalf("unsupported update: callback=%v error=%v", called, e)
+			}); e != nil || called {
+				t.Fatalf("missing update: callback=%v error=%v", called, e)
 			}
-			if e := collection.Delete([]byte("a")); e == nil {
-				t.Fatal("unsupported delete accepted")
+			if e := collection.Delete([]byte("a")); e != nil {
+				t.Fatalf("missing delete: %v", e)
 			}
 			if _, e := collection.CreateIndex(collections.IndexDefinition{Name: "blocked"}); e == nil {
 				t.Fatal("unsupported index accepted")
@@ -173,9 +174,32 @@ func TestNativeExistingCollectionPublicLifecycle(t *testing.T) {
 			if len(old.Results) != 2 || !old.Results[0].Found || string(old.Results[0].Document) != `{"n":1}` || old.Results[1].Found {
 				t.Fatalf("old complete view: %+v", old.Results)
 			}
+			checkProjection := func() {
+				t.Helper()
+				projected, e := held.FetchDocumentsByID([][]byte{[]byte("a"), []byte("c")}, collections.DocumentFetchOptions{ExcludePaths: []string{"n"}})
+				if e != nil || len(projected.Results) != 2 || !projected.Results[0].Found || string(projected.Results[0].Document) != `{}` || projected.Results[1].Found {
+					t.Fatalf("held public JSON projection: %+v %v", projected, e)
+				}
+				if projected.Stats.FieldsSkipped != 1 || projected.Stats.FieldsReconstructed != 0 || projected.Stats.OutputBytes != 2 || projected.Stats.DocumentsMissing != 1 {
+					t.Fatalf("projection counters: %+v", projected.Stats)
+				}
+				included, e := held.FetchDocumentsByID([][]byte{[]byte("a")}, collections.DocumentFetchOptions{IncludePaths: []string{"n"}})
+				if e != nil || string(included.Results[0].Document) != `{"n":1}` || included.Stats.FieldsReconstructed != 1 {
+					t.Fatalf("held include projection: %+v %v", included, e)
+				}
+				for _, invalid := range []collections.DocumentFetchOptions{
+					{IncludePaths: []string{"n.x"}}, {IncludePaths: []string{"n", "n"}}, {Format: collections.DocumentFormatBSON},
+				} {
+					if _, e := held.FetchDocumentsByID([][]byte{[]byte("a")}, invalid); e == nil {
+						t.Fatalf("invalid projection options accepted: %+v", invalid)
+					}
+				}
+			}
+			checkProjection()
 			if err = database.Checkpoint(); err != nil {
 				t.Fatal(err)
 			}
+			checkProjection()
 			if v, e := collection.Get([]byte("c")); e != nil || string(v) != `{"n":3}` {
 				t.Fatalf("new Get: %s %v", v, e)
 			}

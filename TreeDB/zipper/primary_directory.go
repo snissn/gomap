@@ -75,20 +75,11 @@ func (z *Zipper) constructPrimaryV6(a *primaryarena.Arena, work *iterator.Ordina
 	return owner, ready, err
 }
 func claimPrimaryComponent(a *primaryarena.Arena, w *iterator.OrdinalScanWork) (primaryarena.Ref, error) {
-	c, ok, e := a.PrepareClaim(primaryarena.Component, w)
-	if !ok || e != nil {
-		return primaryarena.Ref{}, e
+	r, ready, err := a.ClaimOrdinary(primaryarena.Component, w)
+	if !ready && err == nil {
+		return primaryarena.Ref{}, errors.New("zipper: ordinary primary claim exhausted work")
 	}
-	for {
-		r, done, e := c.Step(w)
-		if e != nil {
-			_, cancelErr := c.Cancel(nil)
-			return primaryarena.Ref{}, errors.Join(e, cancelErr)
-		}
-		if done {
-			return r, nil
-		}
-	}
+	return r, err
 }
 func primaryDataRetired(ids []uint64) []uint64 {
 	out := ids[:0]

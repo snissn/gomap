@@ -19,6 +19,14 @@ type cowReadAllocation struct {
 	lease *memtable.COWExternalLease
 	next  *cowReadAllocation
 }
+
+// Per-call borrowed capability only; codec storage retains neither provider
+// nor cache through this descriptor. Definitions have independent owned bytes.
+type cowCacheDictionaryRead struct {
+	provider cowDictionaryReadProvider
+	cache    *cowCache
+}
+
 type cowReadCodec struct {
 	id         uint64
 	codec      valuelog.BlockCodec
@@ -253,6 +261,10 @@ func (w *cowReadWorkspace) definition(id uint64) ([]byte, *dictdb.DictionaryRead
 }
 
 func (w *cowReadWorkspace) codec(shape valuelog.COWRecordShape) (*cowReadCodec, error) {
+	return w.codecWithDictionary(shape, nil)
+}
+
+func (w *cowReadWorkspace) codecWithDictionary(shape valuelog.COWRecordShape, independent *cowCacheDictionaryRead) (*cowReadCodec, error) {
 	var slot int = -1
 	for i, c := range w.codecs {
 		if c == nil {
@@ -291,8 +303,19 @@ func (w *cowReadWorkspace) codec(shape valuelog.COWRecordShape) (*cowReadCodec, 
 	var owner *dictdb.DictionaryReadDefinition
 	var err error
 	if shape.DictID != 0 {
-		definition, owner, err = w.definition(shape.DictID)
+		if independent != nil {
+			// Shared physical scratch must own its definition independently. Never
+			// install a borrowed cut's bytes into a decoder that outlives that cut.
+			owner, err = independent.provider.PrepareDictionaryReadDefinition(shape.DictID, w.limits, w.budget.Limits().MaxResources, independent.cache.admitDictionaryRead)
+			if owner != nil {
+				owner.ReleaseCapture()
+				definition = owner.Bytes
+			}
+		} else {
+			definition, owner, err = w.definition(shape.DictID)
+		}
 		if err != nil {
+			owner.Close()
 			return nil, err
 		}
 	}
@@ -406,7 +429,7 @@ func (w *cowReadWorkspace) readWithInspection(f *os.File, ptr page.ValuePtr, sha
 	if shape.Compressed && shape.DictID == 0 && w.snapshot != nil {
 		return w.readSharedRecord(f, ptr, shape, leaf, dst)
 	}
-	return w.readInspected(f, ptr, shape, leaf, dst)
+	return w.readInspected(f, ptr, shape, leaf, dst, nil)
 }
 
 // cowSuccessorInspection is caller-local metadata, never retained by a slot.
@@ -433,7 +456,7 @@ func (w *cowReadWorkspace) readUncompressedOwned(ptr page.ValuePtr, inspected *c
 	if shape.Compressed {
 		return nil, false, nil
 	}
-	value, err := w.readInspected(f, ptr, shape, false, nil)
+	value, err := w.readInspected(f, ptr, shape, false, nil, nil)
 	if err != nil {
 		return nil, false, err
 	}
@@ -452,7 +475,7 @@ func (w *cowReadWorkspace) readSharedRecord(f *os.File, ptr page.ValuePtr, shape
 	if err != nil {
 		return nil, err
 	}
-	value, err := shared.readInspected(f, ptr, shape, leaf, dst)
+	value, err := shared.readInspected(f, ptr, shape, leaf, dst, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -469,12 +492,12 @@ func (w *cowReadWorkspace) readSharedRecord(f *os.File, ptr page.ValuePtr, shape
 
 // readInspected shares the maintained admission/codec/CRC path. The inspector
 // and its caller's policy have already validated this exact file and shape.
-func (w *cowReadWorkspace) readInspected(f *os.File, ptr page.ValuePtr, shape valuelog.COWRecordShape, leaf bool, dst []byte) ([]byte, error) {
+func (w *cowReadWorkspace) readInspected(f *os.File, ptr page.ValuePtr, shape valuelog.COWRecordShape, leaf bool, dst []byte, independent *cowCacheDictionaryRead) ([]byte, error) {
 	outputNeed := shape.ValueBytes
 	if leaf {
 		outputNeed = 0
 	}
-	input, raw, codec, err := w.prepareRead(shape, outputNeed)
+	input, raw, codec, err := w.prepareRead(shape, outputNeed, independent)
 	if err != nil {
 		return nil, err
 	}
@@ -491,11 +514,11 @@ func (w *cowReadWorkspace) readInspected(f *os.File, ptr page.ValuePtr, shape va
 // prepareRead preserves one admission/codec path for borrowed materialization
 // and synchronous owned copy-out. The latter needs no retained output buffer;
 // input/raw and dictionary/decoder ownership are unchanged.
-func (w *cowReadWorkspace) prepareRead(shape valuelog.COWRecordShape, outputNeed uint64) ([]byte, []byte, *cowReadCodec, error) {
+func (w *cowReadWorkspace) prepareRead(shape valuelog.COWRecordShape, outputNeed uint64, independent *cowCacheDictionaryRead) ([]byte, []byte, *cowReadCodec, error) {
 	var codec *cowReadCodec
 	if shape.Compressed {
 		var err error
-		codec, err = w.codec(shape)
+		codec, err = w.codecWithDictionary(shape, independent)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -537,13 +560,13 @@ func (w *cowReadWorkspace) appendPointer(ptr page.ValuePtr, dst []byte) ([]byte,
 		if err != nil {
 			return dst, err
 		}
-		return shared.appendInspected(f, ptr, shape, dst)
+		return shared.appendInspected(f, ptr, shape, dst, nil)
 	}
-	return w.appendInspected(f, ptr, shape, dst)
+	return w.appendInspected(f, ptr, shape, dst, nil)
 }
 
-func (w *cowReadWorkspace) appendInspected(f *os.File, ptr page.ValuePtr, shape valuelog.COWRecordShape, dst []byte) ([]byte, error) {
-	input, raw, codec, err := w.prepareRead(shape, 0)
+func (w *cowReadWorkspace) appendInspected(f *os.File, ptr page.ValuePtr, shape valuelog.COWRecordShape, dst []byte, independent *cowCacheDictionaryRead) ([]byte, error) {
+	input, raw, codec, err := w.prepareRead(shape, 0, independent)
 	if err != nil {
 		return dst, err
 	}
@@ -608,10 +631,10 @@ func (b *cowBackendBasis) readPhysicalLeafWithWorkspace(c *cowCache, w *cowReadW
 			c.physicalMu.Unlock()
 			return nil, workspaceErr
 		}
-		data, err = shared.readInspected(f, ptr.ValuePtr(), shape, true, dst)
+		data, err = shared.readInspected(f, ptr.ValuePtr(), shape, true, dst, nil)
 		c.physicalMu.Unlock()
 	} else {
-		data, err = w.readInspected(f, ptr.ValuePtr(), shape, true, dst)
+		data, err = w.readInspected(f, ptr.ValuePtr(), shape, true, dst, nil)
 	}
 	if err != nil {
 		return nil, err

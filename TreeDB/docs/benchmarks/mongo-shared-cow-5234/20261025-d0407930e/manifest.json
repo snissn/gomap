@@ -1,0 +1,211 @@
+{
+  "baseline": {
+    "source": "eb9a4ab4a8e7c2c4ff34b53552b2cdde9a9c7144",
+    "product_source": "f906b8a2aa1279ed6b6627028cba71d491db04c3",
+    "binary": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/baseline-public-eb9a4ab4a.test",
+    "sha256": "2218517aa643004a19590bb530bb2e83e236a77ee954d4c98b18cc467784182a",
+    "cwd": "/mnt/fast4tb/gomap-mongo-execution-20261024/landed-harness-baseline"
+  },
+  "candidate": {
+    "source": "d0407930ef138915306e1a89c2c80522174c50ad",
+    "binary": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/candidate-public-d0407930e.test",
+    "sha256": "52bc3afbc46088218e0e8f8d0b59598b434e69d343d9c861d52cb5f1553a9455",
+    "cwd": "/mnt/fast4tb/gomap-mongo-execution-20261024/first-slice-finalization"
+  },
+  "tmpdir": "/mnt/fast4tb/gomap-mongo-execution-20261024/tmp",
+  "harness_landed_commit": "eb9a4ab4a8e7c2c4ff34b53552b2cdde9a9c7144",
+  "harness_pr": 5239,
+  "harness_blobs": {
+    "TreeDB/docs/spec/mongo-shared-cow-measurement.md": {
+      "landed": "3c8ab5bc8a316f68ad0e8647a122acbb9ce02bc0",
+      "candidate": "3c8ab5bc8a316f68ad0e8647a122acbb9ce02bc0",
+      "baseline": "3c8ab5bc8a316f68ad0e8647a122acbb9ce02bc0"
+    },
+    "cmd/mongo_gateway_bench/README.md": {
+      "landed": "1ebab8fc425b782f36678e7d68a8b38140d63588",
+      "candidate": "1ebab8fc425b782f36678e7d68a8b38140d63588",
+      "baseline": "1ebab8fc425b782f36678e7d68a8b38140d63588"
+    },
+    "cmd/mongo_gateway_bench/scripts/run_shared_cow_qualification.py": {
+      "landed": "54fb0acf9e2a7068b297e3efb2246497e4965feb",
+      "candidate": "54fb0acf9e2a7068b297e3efb2246497e4965feb",
+      "baseline": "54fb0acf9e2a7068b297e3efb2246497e4965feb"
+    },
+    "cmd/mongo_gateway_bench/scripts/test_run_shared_cow_qualification.py": {
+      "landed": "6b63453f4cb9cb8ec1e40e66631889601e66cd8b",
+      "candidate": "6b63453f4cb9cb8ec1e40e66631889601e66cd8b",
+      "baseline": "6b63453f4cb9cb8ec1e40e66631889601e66cd8b"
+    },
+    "cmd/mongo_gateway_bench/standalone_public_bench_test.go": {
+      "landed": "5b433e12ca0e04d64d6ea7f1037dfa22522b49c4",
+      "candidate": "5b433e12ca0e04d64d6ea7f1037dfa22522b49c4",
+      "baseline": "5b433e12ca0e04d64d6ea7f1037dfa22522b49c4"
+    },
+    "cmd/mongo_gateway_bench/standalone_public_diagnostic_test.go": {
+      "landed": "8d7d502151138a5749997f12af30e95e6716efe3",
+      "candidate": "8d7d502151138a5749997f12af30e95e6716efe3",
+      "baseline": "8d7d502151138a5749997f12af30e95e6716efe3"
+    },
+    "cmd/mongo_gateway_bench/standalone_vector_bench_test.go": {
+      "landed": "e0930c57e233853bbeb889f5b2c67fc578d8f979",
+      "candidate": "e0930c57e233853bbeb889f5b2c67fc578d8f979",
+      "baseline": "e0930c57e233853bbeb889f5b2c67fc578d8f979"
+    }
+  },
+  "reviewed_pressure_blobs": {
+    "TreeDB/caching/cow_cut.go": {
+      "reviewed": "18472a678e74d9e40b6eb24a82408ded1934bd3b",
+      "projected": "18472a678e74d9e40b6eb24a82408ded1934bd3b",
+      "candidate": "18472a678e74d9e40b6eb24a82408ded1934bd3b"
+    },
+    "TreeDB/caching/cow_native_txn.go": {
+      "reviewed": "e37bff0102a96fba66510e09aa2baa3d2e781e5f",
+      "projected": "e37bff0102a96fba66510e09aa2baa3d2e781e5f",
+      "candidate": "e37bff0102a96fba66510e09aa2baa3d2e781e5f"
+    },
+    "TreeDB/caching/cow_native_txn_test.go": {
+      "reviewed": "d0c18066cc04bd7ee99a74abaf6408b411e777e0",
+      "projected": "d0c18066cc04bd7ee99a74abaf6408b411e777e0",
+      "candidate": "d0c18066cc04bd7ee99a74abaf6408b411e777e0"
+    },
+    "TreeDB/caching/cow_semantic_cleanup.go": {
+      "reviewed": "f42438bf7d630ef7655777c6ecbfc72398b31358",
+      "projected": "f42438bf7d630ef7655777c6ecbfc72398b31358",
+      "candidate": "f42438bf7d630ef7655777c6ecbfc72398b31358"
+    },
+    "TreeDB/caching/cow_semantic_cleanup_test.go": {
+      "reviewed": "c5826f15f608c04d1a1969003a8a7eb826764e62",
+      "projected": "c5826f15f608c04d1a1969003a8a7eb826764e62",
+      "candidate": "c5826f15f608c04d1a1969003a8a7eb826764e62"
+    },
+    "TreeDB/collections/api.go": {
+      "reviewed": "ef505af995a5ca6725c7ce71f172f5da0b1be366",
+      "projected": "ef505af995a5ca6725c7ce71f172f5da0b1be366",
+      "candidate": "ef505af995a5ca6725c7ce71f172f5da0b1be366"
+    },
+    "TreeDB/collections/native_existing.go": {
+      "reviewed": "a42155db7b89f2ff76f794c4745185228006789a",
+      "projected": "a42155db7b89f2ff76f794c4745185228006789a",
+      "candidate": "a42155db7b89f2ff76f794c4745185228006789a"
+    },
+    "TreeDB/collections/native_hnsw.go": {
+      "reviewed": "025e158cb5c098ce717c41984dd15eaae65666ac",
+      "projected": "025e158cb5c098ce717c41984dd15eaae65666ac",
+      "candidate": "025e158cb5c098ce717c41984dd15eaae65666ac"
+    },
+    "TreeDB/collections/native_hnsw_schema.go": {
+      "reviewed": "21688d3fd612f89c823d1b897f00d50470690b28",
+      "projected": "21688d3fd612f89c823d1b897f00d50470690b28",
+      "candidate": "21688d3fd612f89c823d1b897f00d50470690b28"
+    },
+    "TreeDB/collections/native_json_crud.go": {
+      "reviewed": "182dd2461239a2a6d6cd76953d28412161d3d6dd",
+      "projected": "182dd2461239a2a6d6cd76953d28412161d3d6dd",
+      "candidate": "182dd2461239a2a6d6cd76953d28412161d3d6dd"
+    },
+    "TreeDB/collections/native_json_insert.go": {
+      "reviewed": "0ba4f2eb63f11240b5e2eb0ea81aee66686a1e56",
+      "projected": "0ba4f2eb63f11240b5e2eb0ea81aee66686a1e56",
+      "candidate": "0ba4f2eb63f11240b5e2eb0ea81aee66686a1e56"
+    },
+    "TreeDB/collections/native_json_public.go": {
+      "reviewed": "8a1486faa7b0d7e607faf63aac644ac84ce94915",
+      "projected": "8a1486faa7b0d7e607faf63aac644ac84ce94915",
+      "candidate": "8a1486faa7b0d7e607faf63aac644ac84ce94915"
+    },
+    "TreeDB/collections/native_json_txn.go": {
+      "reviewed": "d327d272a9e6515cb63448a4533815f57ba3c942",
+      "projected": "d327d272a9e6515cb63448a4533815f57ba3c942",
+      "candidate": "d327d272a9e6515cb63448a4533815f57ba3c942"
+    },
+    "TreeDB/collections/native_source_pressure_public_test.go": {
+      "reviewed": "a46cc8e405b23f23cbbc77b45b6626b5a64222ef",
+      "projected": "a46cc8e405b23f23cbbc77b45b6626b5a64222ef",
+      "candidate": "a46cc8e405b23f23cbbc77b45b6626b5a64222ef"
+    },
+    "TreeDB/collections/native_typed_upsert_group.go": {
+      "reviewed": "47967c06b5a0899f096c8502680fd38ddc00f7f2",
+      "projected": "47967c06b5a0899f096c8502680fd38ddc00f7f2",
+      "candidate": "47967c06b5a0899f096c8502680fd38ddc00f7f2"
+    },
+    "TreeDB/db/native_semantic_state.go": {
+      "reviewed": "b4926e8118a96221ae44077d491cf9637188609d",
+      "projected": "b4926e8118a96221ae44077d491cf9637188609d",
+      "candidate": "b4926e8118a96221ae44077d491cf9637188609d"
+    },
+    "TreeDB/docs/spec/collections-write-domain.md": {
+      "reviewed": "ce5275d9f271c9b6ff65f4573c390c8b5d539864",
+      "projected": "ce5275d9f271c9b6ff65f4573c390c8b5d539864",
+      "candidate": "ce5275d9f271c9b6ff65f4573c390c8b5d539864"
+    },
+    "TreeDB/native_collection_pressure_test.go": {
+      "reviewed": "b00063d8d50be5f2cd189e8b266526702610b038",
+      "projected": "b00063d8d50be5f2cd189e8b266526702610b038",
+      "candidate": "b00063d8d50be5f2cd189e8b266526702610b038"
+    }
+  },
+  "baseline_decision": "Frozen initial f906 product is unchanged: eb9 contains only the already reviewed/landed harness/schema/docs/CI inventory. This is the exact identical-harness representation of the original baseline, not a replacement failed comparison.",
+  "product_scope": "firstslice d040 direct rerank dispatch removes avoidable query entry/trace escapes; all broader text/stats/service changes excluded",
+  "go": "go1.26.0",
+  "gomaxprocs": 4,
+  "planned_utc": "2026-10-25T12:11:23.584990+00:00",
+  "sampling": "primary64(8pairs/fourcells), resources24(3pairs/fourcells), vectors18(3pairs/threecells); freshprocess, BC/CB alternating; allfails/nulls retained; no retries",
+  "infrastructure": [
+    {
+      "kind": "INFRASTRUCTURE_UNAVAILABLE",
+      "resource": "runner",
+      "reason": "No dedicated high-capacity runner allocated to this workstream. Fallback existing shared i5-11400F host; stop graph builds/tests for collection and disclose external activity."
+    },
+    {
+      "resource": "cache",
+      "available": true,
+      "path": "/mnt/fast4tb/gomap-mongo-execution-20261024/gocache",
+      "kind": "persistent Go build cache"
+    },
+    {
+      "resource": "storage",
+      "available": true,
+      "path": "/mnt/fast4tb/gomap-mongo-execution-20261024",
+      "kind": "local mounted ext4 artifact storage; later committed raw artifact packet"
+    }
+  ],
+  "status": "frozen source/binary/harness/plans; checks passed; waiting host/precollection audit then fixed106",
+  "ci_inventory_identity": {
+    "reviewed_pressure_source": {
+      "reviewed": "467394c94fd5662bf26490f7ca1416432bcc18a6",
+      "projected": "467394c94fd5662bf26490f7ca1416432bcc18a6"
+    },
+    "candidate_blob": "7310d5feb2115c17c6ad5e178f2e75a915ff8fae",
+    "disposition": "Hash-only maintained refresh preserves17workflows63originalmembers; CI is metadata, not a claim of byte-identical pressure runtime. Independently reviewed stale-CI condition corrected before firstsample."
+  },
+  "frozen_utc": "2026-10-25T12:11:23.584990+00:00",
+  "source_trees": {
+    "TreeDB/caching": "aadc5cf66d734e98f939236b6e739ad109da9a3e",
+    "TreeDB/collections": "02bb70058644c251f8e7fec9689658ccf05d9823",
+    "TreeDB/db": "feb56a07acc0187b267327e33caa5b9d2d0fd492",
+    "TreeDB/mongo_gateway": "21cba3c0e76fada7e45e05691bbd5611255e9252",
+    "TreeDB/internal": "16315dbb7d79c3a8dcaf74b11b1b9ccf369ee84a",
+    "internal": "a647bdfee32ac3506077b1add5145f1ed949897d",
+    "cmd/mongo_gateway_bench": "b1d90a53b9ae98b9da781d6494e4057d4fbf0d6e",
+    "go.mod": "43348c6f8caf975769a417ceb4d0eab26e8d8196",
+    "go.sum": "b9f11157eeaa7b5bf8ed60cccb22e6f7bc831050"
+  },
+  "validation": {
+    "original07d": "all106 valid fully retained, whole promotion withheld avoidable21vs19historical Search objects; primary/resource independently audited",
+    "direct_repair_focused": "PASS7.186s",
+    "direct_repair_race": "PASS17.843s exact process exit0",
+    "public_diagnostic": "10000Search 14549ns/op12760B/op19allocs; tool exit0; not retained qualification",
+    "source_review": "vector-rerank-direct-review.md immutable ACCEPT; direct config/custody/reentry preserved",
+    "owning": "PASS488.271s complete collections exactprocess exit0",
+    "unaffected_owning": "e806 gateway59.082s/harness4.792s PASS; no source/harness change in either subtree since",
+    "ci_inventory": "hash-only17workflows63members refreshed/checkPASS",
+    "worker_quiet_ack": "mongo_cow_delivery12:17UTC terminalcherrypick93ff16b; noGo/build/test/benchmark/checkout/cleanup; source-only untilall106terminal",
+    "direct_source_frozen_clean": "d0407930ef138915306e1a89c2c80522174c50ad cleangit status; root alltests/builds terminal"
+  },
+  "vector_operator_procedure": "Run each frozen18 Go benchmark command sequentially using structuredtool invocation; store unmodifiedlog, hostinventory, started/status/returncode/errors/nullmetrics receipt perattempt; continue remaining fixedplan after failure withoutretry. BenchmarkGo harness/schema is reviewed/landed; do not execute oldprivatevectorcollector. Operator validates exactrawroute/fixture/count/status against landed schema before deriving ratios; no fabricated metrics.",
+  "retained_predecessor": {
+    "manifest": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/qualification-07dca301b/manifest.json",
+    "sha256": "0d7ab42962c96c30e44c623192cba52cd5cdb71dcf7f56435a39afd6b5dbb136",
+    "disposition": "all106valid retained; avoidable Search allocation increase prompted causal runtime repair, no sample replaced or threshold changed"
+  }
+}

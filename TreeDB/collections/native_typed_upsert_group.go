@@ -70,6 +70,9 @@ func (c *Collection) nativeTryUpsertTypedBatchGroup(ids, retained [][]byte, colu
 	if len(ids) == 0 {
 		return 0, false, stats, nil
 	}
+	if err := c.nativeJSON.db.PrepareNativeProducer(); err != nil {
+		return 0, true, stats, err
+	}
 	read, err := c.nativeJSON.Capture(c.name)
 	if err != nil {
 		return 0, true, stats, err
@@ -176,7 +179,7 @@ func (group *typedUpsertGroup) executeNative(requests []*typedUpsertGroupRequest
 	if c.manager.isClosing() {
 		return typedUpsertGroupErrorResults(requests, backenddb.ErrClosed)
 	}
-	tx, err := c.nativeJSON.Begin(c.name)
+	tx, err := c.nativeJSON.beginPrepared(c.name)
 	if err != nil {
 		return typedUpsertGroupErrorResults(requests, err)
 	}

@@ -17,9 +17,61 @@ collections. The normative profile/API matrix is owned by
 independent durability profile. Unsupported command kinds fail closed before
 admission rather than silently downgrading acknowledgement guarantees.
 
+## Shared COW collection authority
+
+The ordinary standalone Mongo opener owns a public `treedb.DB` in `cow_btree`
+mode and creates its collection manager from `NativeSemanticBackend`. The
+backend is borrowed for that owner's lifetime. The ordinary collection facade
+routes supported mutations through the same immutable native collection/catalog
+cut and command-WAL completion as direct native callers; it does not stage a
+second manager-local write domain. Reads capture one complete cut. Legacy
+backend-only constructors retain the write-domain path described below.
+
+Public native read views reuse the existing JSON projection validator and
+projector, including include/exclude precedence and materialization counters.
+Projection reads the view's captured document cut through physical handoff.
+BSON and template-v1 keep the existing stored-format contract; the shared
+projection validator permits JSON documents only.
+
+Ordinary native HNSW definitions declared in `CreateCollection` initialize the
+same clean logical index domains as `CreateVectorIndex`. Each domain and its
+directory are admitted before allocation and enter the original private
+successor cleanup; refusal publishes no catalog successor. Empty clean domains
+do not create physical checkpoint debt. Typed/ColumnGraph source imports keep
+their existing construction route. JSON materialization clones captured JSON,
+converts captured BSON, and invokes the captured template resolver only for
+template-v1 documents, including exact vector-search fallback.
+
+Each accepted native mutation installs one complete logical successor; a shared
+physical durable group preserves each command's outcomes and original LSN.
+Logical sequence, physical applied LSN and durable-prefix coverage are separate
+identities. Durable requests wait for their own completion, including persistent
+dependencies. Existing solo-sync eligibility avoids an extra barrier for an
+uncontended mutation. See `write-path-and-durability.md` for the ACK contract.
+
+Mongo insert coalescing bounds combined stored documents and ID bytes by the
+configured message envelope. A staged invalid indexed request may be isolated
+only on an explicit pre-assignment rejection marker or duplicate-key outcome;
+a generic failure is not proof that application callbacks can safely retry.
+Assigned uncertain failures retain their identity and poison further writes
+until recovery.
+
+Native live producers run shared pressure preparation before collection locks,
+captures, private staging and callbacks. The existing byte watermark or an
+exhausted finite source/generation counter requests at most one coalesced
+checkpoint. It then joins refunds already queued on the existing semantic
+cleanup worker through a fixed completion frontier; later producers and held
+read cuts are outside that wait. Cleanup failure retains its original custody
+and error. Reentry from an active publication/cleanup callback refuses before
+waiting. Read capture, replay/apply and publication itself do not initiate this
+maintenance. Lock-held facade openings reuse the original transaction opening
+without a second pressure check. Preparation reserves no capacity: multi-domain
+work and readers retaining old sources can still reach ordinary finite
+admission refusal without assignment or a callback retry.
+
 ## Indexed Write Memtables
 
-Indexed collections use collection-local write memtables by default.
+Legacy backend-only indexed collections use collection-local write memtables by default.
 
 The write domain stages the ordered runs for one collection together:
 

@@ -39,6 +39,34 @@ with direct/single-server mode when their driver supports it, for example:
 mongodb://127.0.0.1:27017/?directConnection=true
 ```
 
+## Storage memory admission
+
+The standalone opener owns the shared immutable COW database for its full
+lifetime, including authentication writes and collection reads. Its Mongo
+budget has finite 512 MiB in-flight and 1 GiB total/retired allocation limits;
+the core COW defaults remain unchanged. Half the in-flight allowance is reserved
+for physical maintenance. The producer allowance covers overlapping BSON,
+canonical command and immutable images for ordinary 16 MiB documents and batches
+within the 48 MB wire envelope. Scalar BSON index preparation sizes its work from
+referenced fields; an unrelated large payload does not require a whole-document
+decoder. Insert coalescing also bounds aggregate bytes by the wire envelope.
+
+These are engine-owned allocation charges, not preallocated memory or a process
+RSS limit. Array/index shapes, concurrent preparation and retained read views
+still consume capacity and can refuse before acceptance. Library callers can
+supply a complete `StandaloneOptions.COWMemtableLimits` bundle; explicit smaller
+limits are respected. Profile selection and write concern retain their normal
+acknowledgement boundaries.
+
+The default also selects the native immutable catalog. Startup validates the
+complete catalog and refuses legacy directories missing logical incarnation
+records or containing unsupported native domains. This is a pre-alpha format
+cutover: preserve the old directory, export using its original binary, and
+reingest into a fresh directory with the new binary. See
+[API stability](../../docs/API_STABILITY.md#on-disk-format-compatibility) for the
+cross-version policy. Startup errors preserve their underlying I/O, capacity or
+compatibility cause.
+
 ## Transport policy
 
 Plaintext is deliberately limited to loopback listeners. A standalone listener
@@ -283,3 +311,10 @@ and `listIndexes` also fail closed instead of returning gateway-local metadata.
 Collection-placement mutations remain supported. See
 [`COMPATIBILITY.md`](COMPATIBILITY.md#cluster-tokenring-read-and-index-policy)
 for the exact policy, counters, and internal-scaffold limitation.
+
+The separate opt-in public latency/resource diagnostic uses a held collection
+read, preallocated latency slots and sampled heap/RSS/file/debt counters. Run
+each cell in a fresh process; failed/incomplete results remain failures with
+null quantiles. See the [public harness instructions](../../cmd/mongo_gateway_bench/README.md) for commands and
+measurement boundaries. `StandaloneServer.Stats` exposes its owning TreeDB's
+COW and maintenance diagnostics with existing lifecycle admission.

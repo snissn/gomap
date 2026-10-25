@@ -37,7 +37,7 @@ func nativeJSONMeta(meta CollectionMeta) (CollectionMeta, error) {
 		return CollectionMeta{}, err
 	}
 	format := normalizedDocumentFormat(normalized.Options.DocumentFormat)
-	if (len(normalized.VectorIndexes) != 0 && !nativeSourceImportMetaV2(normalized)) || len(normalized.TextIndexes) != 0 || (normalized.Options.ColumnStore != nil && (normalized.Options.AllowArrayValuesInIndex || !nativeTypedMeta(normalized))) || (format != DocumentFormatJSON && format != DocumentFormatBSON && format != DocumentFormatTemplateV1) {
+	if (!nativeOrdinaryHNSWMeta(normalized) && len(normalized.VectorIndexes) != 0 && !nativeSourceImportMetaV2(normalized)) || len(normalized.TextIndexes) != 0 || (normalized.Options.ColumnStore != nil && (normalized.Options.AllowArrayValuesInIndex || !nativeTypedMeta(normalized))) || (format != DocumentFormatJSON && format != DocumentFormatBSON && format != DocumentFormatTemplateV1) {
 		return CollectionMeta{}, backenddb.ErrNativeSemanticUnsupported
 	}
 	for _, index := range normalized.Indexes {
@@ -76,6 +76,11 @@ func (m *NativeJSONManager) createCollection(meta CollectionMeta, apply *nativeC
 	normalized, err := nativeJSONMeta(meta)
 	if err != nil {
 		return nil, err
+	}
+	if apply == nil {
+		if err := m.db.PrepareNativeProducer(); err != nil {
+			return nil, err
+		}
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -176,7 +181,11 @@ func prepareNativeJSONCreate(base *nativeEngineVersion, meta CollectionMeta) (pu
 	if base == nil || base.inventory != nil {
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
-	scratch, err := newNativeEnginePreparation(base, 1, 0, base.allocator)
+	vectorDomains := 0
+	if nativeOrdinaryHNSWMeta(meta) {
+		vectorDomains = len(meta.VectorIndexes)
+	}
+	scratch, err := newNativeEnginePreparation(base, 1, vectorDomains, base.allocator)
 	if err != nil {
 		return nil, err
 	}
@@ -195,7 +204,7 @@ func prepareNativeJSONCreate(base *nativeEngineVersion, meta CollectionMeta) (pu
 	if err != nil {
 		return nil, err
 	}
-	p.domainBuilder, err = cowbtree.NewOwnedMapBuilder[string, *nativeDomainState](nil, 0, nativeDomainLifetime{}, admit)
+	p.domainBuilder, err = cowbtree.NewOwnedMapBuilder[string, *nativeDomainState](nil, vectorDomains, nativeDomainLifetime{}, admit)
 	if err != nil {
 		return nil, err
 	}
@@ -203,8 +212,26 @@ func prepareNativeJSONCreate(base *nativeEngineVersion, meta CollectionMeta) (pu
 	if err != nil {
 		return nil, err
 	}
+	// Declared ordinary HNSW indexes need the same clean logical domain as
+	// CreateVectorIndex. ColumnGraph source imports keep their separate route.
+	for i := 0; i < vectorDomains; i++ {
+		def := meta.VectorIndexes[i]
+		policy, err := collectionRootStoragePolicy(meta, collectionVectorIndexRootName(meta.Name, def.Name))
+		if err != nil {
+			return nil, err
+		}
+		name := "vector-index/" + def.Name
+		domain, err := newNativeDomainState(name, 0, 1, policy, nil, admit)
+		if err != nil {
+			return nil, err
+		}
+		p.ownedDomains = append(p.ownedDomains, domain)
+		if err := p.domainBuilder.Set(name, domain); err != nil {
+			return nil, err
+		}
+	}
 	p.sealPrivateBuilders(scratch)
-	collection, err = newNativeCollectionState(base.nextIncarnation, p.schema, p.domains, p.pendingDomains, admit)
+	collection, err = newNativeCollectionState(base.nextIncarnation, 0, p.schema, p.domains, p.pendingDomains, admit)
 	if err != nil {
 		return nil, err
 	}

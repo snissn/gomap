@@ -1745,3 +1745,73 @@ func (b *commandWALPublicBatch) closeCOWAdapter() {
 	}
 	b.closed = true
 }
+
+// The native request admits this concrete adapter before registration, retaining
+// it through the same group's ACK. It is never another command/custody ledger.
+type nativePublicCommandWALCompletion struct {
+	db           *DB
+	registration publicCommandWALRegistration
+	bytes        int
+	durable      bool
+	announced    bool
+	registered   bool
+}
+
+// NativeCommandWALCompletionBytes reports transient adapter storage for the
+// native publisher's existing admission receipt.
+func (tdb *DB) NativeCommandWALCompletionBytes() uint64 {
+	return uint64(unsafe.Sizeof(nativePublicCommandWALCompletion{}))
+}
+
+// PrepareNativeCommandWAL joins the owning public DB's completion policy. The
+// authenticated native publisher calls it while retaining its owner lifetime;
+// callers must release or complete the returned request on every exit.
+func (tdb *DB) PrepareNativeCommandWAL(bytes int, durable bool) (db.NativeCommandWALCompletion, error) {
+	if tdb == nil || !tdb.commandWALCached || tdb.backend == nil {
+		return nil, ErrClosed
+	}
+	completion := &nativePublicCommandWALCompletion{db: tdb, bytes: bytes, durable: durable, announced: durable}
+	if durable {
+		// Announce before native producer serialization, without holding a public
+		// gate. The existing coordinator can now distinguish queued producers
+		// from an uncontended request using the same counter as ordinary writes.
+		tdb.commandWALGroupCommit.durableIntents.Add(1)
+	}
+	return completion, nil
+}
+func (c *nativePublicCommandWALCompletion) ReleaseNativeCommandWAL() {
+	if c.announced {
+		c.announced = false
+		c.db.commandWALGroupCommit.durableIntents.Add(-1)
+	}
+}
+func (c *nativePublicCommandWALCompletion) RegisterNativeCommandWAL(appendFrame func(bool) (uint64, error)) error {
+	if c.db == nil || c.registered {
+		return ErrClosed
+	}
+	c.registered = true
+	defer c.ReleaseNativeCommandWAL()
+	registration, err := c.db.registerPublicCommandWALPolicy(c.bytes, nil, c.durable, nil, appendFrame, c.announced)
+	c.registration = registration
+	return err
+}
+func (c *nativePublicCommandWALCompletion) CompleteNativeCommandWAL(installErr error) error {
+	c.ReleaseNativeCommandWAL()
+	tdb, registration := c.db, c.registration
+	c.db, c.registration = nil, publicCommandWALRegistration{}
+	if tdb == nil {
+		return ErrClosed
+	}
+	if hook := tdb.commandWALGroupCommit.testBeforeNativeComplete; hook != nil {
+		hook()
+	}
+	publication := registration.publicCommandWALPublication
+	err := installErr
+	if err == nil {
+		publication, err = tdb.awaitPublicCommandWAL(registration, nil, nil)
+	}
+	tdb.finishPublicCommandWALGroupPublication(publication, err)
+	// The original COW receipt poisons assigned failures, including failures
+	// before registration. A preassignment refusal leaves the handle usable.
+	return err
+}

@@ -30,7 +30,7 @@ func TestDurabilityProfilePublicEntrypointInventory(t *testing.T) {
 		"InitConditionalTxn", "InitConditionalTxnWithSnapshot", "Iterator", "LeafGenerationGC",
 		"LeafGenerationPack", "LeafGenerationPackFromPlan", "LeafGenerationPackRunOnce",
 		"LeafGenerationPlan", "MVCCWriteWorkLimit", "MaintenancePhase", "NewBatch", "NewBatchWithSize",
-		"NativeSemanticBackend", "NewConditionalTxn", "NewConditionalTxnWithSnapshot", "NewMVCCAdmission", "NewMVCCWriteWorkEstimator", "PreflightMVCCPrune", "PrepareMVCCPrune", "Print", "ResolvedProfile",
+		"NativeCommandWALCompletionBytes", "NativeSemanticBackend", "NewConditionalTxn", "NewConditionalTxnWithSnapshot", "NewMVCCAdmission", "NewMVCCWriteWorkEstimator", "PreflightMVCCPrune", "PrepareMVCCPrune", "PrepareNativeCommandWAL", "Print", "ResolvedProfile",
 		"ReverseIterator", "SeekGE", "SeekGEVersionRange", "Set", "SetMaintenancePhase", "SetPointWithMVCCInput", "SetNativeSemanticPublication", "SetSync", "Stats", "SubmitLogicalMVCC", "SupportsLogicalMVCC", "SupportsLogicalMVCCStaging", "SupportsMVCCReadCut",
 		"Update", "UpdateSync", "VacuumIndexOnline", "VacuumOnlineStats", "ValueLogGC", "ValueLogRewriteOnline",
 	}
@@ -54,6 +54,12 @@ func TestDurabilityProfilePublicEntrypointInventory(t *testing.T) {
 	profileBodies := profileInventoryFunctionBodies(t, filepath.Join(treeDBDir, "profiles.go"))
 	backendOpenBodies := profileInventoryFunctionBodies(t, filepath.Join(treeDBDir, "open_backend.go"))
 	batchBodies := profileInventoryFunctionBodies(t, filepath.Join(treeDBDir, "command_wal_public_cached.go"))
+	profileInventoryRequireBody(t, batchBodies, "(*DB).NativeCommandWALCompletionBytes", "unsafe.Sizeof(nativePublicCommandWALCompletion{})")
+	for _, fragment := range []string{"!tdb.commandWALCached", "tdb.backend == nil", "announced: durable", "tdb.commandWALGroupCommit.durableIntents.Add(1)"} {
+		profileInventoryRequireBody(t, batchBodies, "(*DB).PrepareNativeCommandWAL", fragment)
+	}
+	profileInventoryRequireBody(t, batchBodies, "(*nativePublicCommandWALCompletion).RegisterNativeCommandWAL", "registerPublicCommandWALPolicy")
+	profileInventoryRequireBody(t, batchBodies, "(*nativePublicCommandWALCompletion).CompleteNativeCommandWAL", "awaitPublicCommandWAL")
 	backendBodies := profileInventoryFunctionBodies(t, filepath.Join(treeDBDir, "db", "command_wal_raw.go"))
 	backendDBBodies := profileInventoryFunctionBodies(t, filepath.Join(treeDBDir, "db", "db.go"))
 	orderedRootBodies := profileInventoryFunctionBodies(t, filepath.Join(treeDBDir, "db", "ordered_root_publish.go"))

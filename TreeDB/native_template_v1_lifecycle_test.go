@@ -8,11 +8,14 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
+	"sync/atomic"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/workstats"
 )
 
@@ -495,7 +498,7 @@ func TestNativeTemplateApplyUnchangedFirstCanonicalReplay(t *testing.T) {
 		cmd.Env = append(os.Environ(), "GOMAP_TEMPLATE_UNCHANGED_DIR="+dir)
 		output, err := cmd.CombinedOutput()
 		var exit *exec.ExitError
-		if !errors.As(err, &exit) || exit.ExitCode() != 97 || !bytes.Contains(output, []byte("UNCHANGED TEMPLATE APPENDED")) || bytes.Contains(output, []byte("DATA RACE")) {
+		if !errors.As(err, &exit) || exit.ExitCode() != 97 || !bytes.Contains(output, []byte("UNCHANGED TEMPLATE CAPTURED")) || bytes.Contains(output, []byte("DATA RACE")) {
 			t.Fatalf("unapplied child: %v\n%s", err, output)
 		}
 	}
@@ -564,16 +567,33 @@ func TestNativeTemplateApplyUnchangedFirstCanonicalReplay(t *testing.T) {
 		if stored, err := col.Get([]byte("a")); err != nil || !bytes.HasPrefix(stored, []byte("TD1D")) {
 			t.Fatalf("stored holder=%x %v", stored, err)
 		}
+		// Assignment precedes deferred singleton capture. Exit after the exact
+		// retained-file fence, without Close or a checkpoint; replay must still
+		// apply this canonical frame from basis 2 and its dictionary carrier.
+		mainRoot := filepath.Join(database.dir, "maindb")
+		var assigned atomic.Bool
+		restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+			if event.Resource != durabilitycut.ResourceCommandWAL || event.Root != mainRoot || event.Point != durabilitycut.AfterDependencyFileSync || event.LSN != 3 {
+				return nil
+			}
+			if !assigned.Load() || event.StablePath == nil {
+				fmt.Fprintln(os.Stderr, "template capture lacks assignment or retained physical handle")
+				os.Exit(98)
+			}
+			fmt.Fprintln(os.Stderr, "UNCHANGED TEMPLATE CAPTURED")
+			os.Exit(97)
+			return nil
+		})
+		defer restore()
 		_, err = manager.ApplyNativeCommandWALMutation("unchanged_first", collections.DocumentFormatTemplateV1, commitlog.CommandKindCollectionUpdateBatchByID, [][]byte{[]byte("a"), []byte("b")}, [][]byte{unchanged, changed}, true, func(lsn uint64) error {
 			if lsn != 3 {
 				fmt.Fprintf(os.Stderr, "unexpected template LSN=%d\n", lsn)
 				os.Exit(98)
 			}
-			fmt.Fprintln(os.Stderr, "UNCHANGED TEMPLATE APPENDED")
-			os.Exit(97)
+			assigned.Store(true)
 			return nil
 		})
-		t.Fatalf("append observer returned: %v", err)
+		t.Fatalf("captured sync observer returned: %v", err)
 	}
 	after := workstats.Read().Replay
 	if after.FramesApplied-before.FramesApplied != 1 || after.FrameErrors != before.FrameErrors {

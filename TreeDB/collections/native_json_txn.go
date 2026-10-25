@@ -59,6 +59,16 @@ type NativeJSONTxn struct {
 // Begin binds the collection's original logical incarnation and interpretation.
 // Close must be called on every outcome. Database.Close retains database ownership.
 func (m *NativeJSONManager) Begin(name string, additional ...string) (result *NativeJSONTxn, resultErr error) {
+	return m.begin(name, additional, false)
+}
+
+// beginPrepared shares the original opening and planner, but never checkpoints
+// below an outer collection mutation gate.
+func (m *NativeJSONManager) beginPrepared(name string) (*NativeJSONTxn, error) {
+	return m.begin(name, nil, true)
+}
+
+func (m *NativeJSONManager) begin(name string, additional []string, prepared bool) (result *NativeJSONTxn, resultErr error) {
 	if len(additional) >= commitlog.MaxCompositeMutationMembersV1 {
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
@@ -83,7 +93,13 @@ func (m *NativeJSONManager) Begin(name string, additional ...string) (result *Na
 	if m == nil || m.db == nil {
 		return nil, backenddb.ErrClosed
 	}
-	core, err := m.db.BeginNativeConditionalTxn()
+	var core backenddb.NativeConditionalTxn
+	var err error
+	if prepared {
+		core, err = m.db.BeginPreparedNativeConditionalTxn()
+	} else {
+		core, err = m.db.BeginNativeConditionalTxn()
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -606,8 +622,8 @@ func (t *NativeJSONTxn) commitNativePlan(sealed bool, apply *nativeCommandWALApp
 		apply.result = result
 	}
 
-	if sealed && apply == nil && err != nil && result.LogicalInstalled {
-		err = commitAmbiguousError("PreparedInsertBatch sealed completion", err)
+	if apply == nil && err != nil && (result.Assigned || result.LogicalInstalled) {
+		err = commitAmbiguousError("native command publication completion", err)
 	}
 	t.custody = nil
 	if !result.Consumed {

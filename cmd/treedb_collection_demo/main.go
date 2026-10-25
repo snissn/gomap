@@ -106,6 +106,8 @@ type diagnosticSummary struct {
 }
 
 type summary struct {
+	PublicationOwner  string                 `json:"publication_owner"`
+	MemtableMode      string                 `json:"memtable_mode"`
 	Mode              string                 `json:"mode"`
 	Workload          string                 `json:"workload"`
 	Rows              int                    `json:"rows"`
@@ -322,7 +324,7 @@ func validateConfig(cfg config) (config, error) {
 	return cfg, nil
 }
 
-func runDemo(cfg config) (summary, error) {
+func runDemo(cfg config) (resultSummary summary, resultErr error) {
 	dir, kept, dirCleanup, err := prepareDemoDir(cfg.Dir, cfg.KeepDir)
 	if err != nil {
 		return summary{}, err
@@ -337,21 +339,16 @@ func runDemo(cfg config) (summary, error) {
 	defer prof.stop()
 
 	rows := generateFixtureRows(cfg)
-	backend, backendCleanup, err := openDemoBackend(cfg.Dir)
+	database, err := openDemoBackend(cfg)
 	if err != nil {
 		return summary{}, err
 	}
-	cleanupCalled := false
-	closeBackend := func() error {
-		if cleanupCalled {
-			return nil
+	defer func() {
+		if database != nil && !database.closed {
+			resultErr = errors.Join(resultErr, database.Close())
 		}
-		cleanupCalled = true
-		return backendCleanup()
-	}
-	defer closeBackend()
-
-	mgr := collections.NewCollectionManager(backend)
+	}()
+	mgr := database.manager
 	if _, err := mgr.CreateCollection(collectionMetaForMode(cfg.Mode)); err != nil {
 		return summary{}, err
 	}
@@ -371,20 +368,19 @@ func runDemo(cfg config) (summary, error) {
 
 	needReopen := cfg.Reopen || cfg.Workload == workloadReopenRead
 	if cfg.Checkpoint || needReopen {
-		if err := backend.Checkpoint(); err != nil {
+		if err := database.Checkpoint(); err != nil {
 			return summary{}, err
 		}
 	}
 	if needReopen {
-		if err := closeBackend(); err != nil {
+		if err := database.Close(); err != nil {
 			return summary{}, err
 		}
-		backend, backendCleanup, err = openDemoBackend(cfg.Dir)
+		database, err = openDemoBackend(cfg)
 		if err != nil {
 			return summary{}, err
 		}
-		cleanupCalled = false
-		mgr = collections.NewCollectionManager(backend)
+		mgr = database.manager
 		col, err = mgr.OpenCollection(collectionName)
 		if err != nil {
 			return summary{}, err
@@ -398,7 +394,9 @@ func runDemo(cfg config) (summary, error) {
 	}
 	queryDur := time.Since(queryStart)
 
+	stats := database.stats()
 	out := summary{
+		PublicationOwner: database.publicationOwner(), MemtableMode: stats["treedb.cache.memtable_mode"],
 		Mode: cfg.Mode, Workload: cfg.Workload, Rows: cfg.Rows, BatchSize: cfg.BatchSize,
 		PayloadBytes: cfg.PayloadBytes, Int64Distribution: cfg.Int64Distribution,
 		StringCardinality: cfg.StringCardinality, ExtraFields: cfg.ExtraFields,
@@ -558,10 +556,68 @@ func ensureFreshDemoDir(abs string) error {
 	return err
 }
 
-func openDemoBackend(dir string) (*backenddb.DB, func() error, error) {
-	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, dir)
+// demoDatabase keeps the borrowed backend and its actual publication owner
+// together. Route selection happens once from the resolved mode, before open.
+type demoDatabase struct {
+	backend  *backenddb.DB
+	manager  *collections.CollectionManager
+	owner    *treedb.DB
+	cleanup  func() error
+	stats    func() map[string]string
+	closed   bool
+	closeErr error
+}
+
+func openDemoBackend(cfg config) (*demoDatabase, error) {
+	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, cfg.Dir)
 	opts.DisableBackgroundPrune = true
-	return treedb.OpenBackendWithCachedLeafLog(opts)
+	database := &demoDatabase{}
+	if cfg.Mode == modeDocument {
+		opts.MemtableMode = "cow_btree"
+		owner, err := treedb.Open(opts)
+		if err != nil {
+			return nil, err
+		}
+		backend, err := owner.NativeSemanticBackend()
+		if err != nil {
+			return nil, errors.Join(err, owner.Close())
+		}
+		database.backend, database.owner = backend, owner
+		database.cleanup, database.stats = owner.Close, owner.Stats
+	} else {
+		backend, cleanup, stats, err := treedb.OpenBackendWithCachedLeafLogStats(opts)
+		if err != nil {
+			return nil, err
+		}
+		database.backend, database.cleanup, database.stats = backend, cleanup, stats
+	}
+	database.manager = collections.NewCollectionManager(database.backend)
+	return database, nil
+}
+
+func (d *demoDatabase) publicationOwner() string {
+	if d.owner != nil {
+		return "native_semantic"
+	}
+	return "backend_roots"
+}
+
+func (d *demoDatabase) Checkpoint() error {
+	if d.owner != nil {
+		return d.owner.Checkpoint()
+	}
+	return d.backend.Checkpoint()
+}
+
+func (d *demoDatabase) Close() error {
+	if d == nil {
+		return nil
+	}
+	if !d.closed {
+		d.closed = true
+		d.closeErr = errors.Join(d.manager.Close(), d.cleanup())
+	}
+	return d.closeErr
 }
 
 func collectionMetaForMode(mode string) *collections.CollectionMeta {
@@ -850,7 +906,7 @@ func materializationFrom(d collections.TypedColumnInt64PredicateScanDiagnostics)
 func durationMS(d time.Duration) float64 { return float64(d.Microseconds()) / 1000 }
 
 func printSummary(w interface{ Write([]byte) (int, error) }, s summary) {
-	fmt.Fprintf(w, "mode=%s workload=%s rows=%d\n", s.Mode, s.Workload, s.Rows)
+	fmt.Fprintf(w, "mode=%s workload=%s rows=%d publication_owner=%s memtable_mode=%s\n", s.Mode, s.Workload, s.Rows, s.PublicationOwner, s.MemtableMode)
 	fmt.Fprintf(w, "setup_ms=%.3f query_ms=%.3f ops_sec=%.2f rows_sec=%.2f\n", s.SetupMS, s.QueryMS, s.OpsSec, s.RowsSec)
 	fmt.Fprintf(w, "matches=%d count=%d sum=%d avg=%.3f\n", s.Matches, s.Aggregate.Count, s.Aggregate.Sum, s.Aggregate.Avg)
 	fmt.Fprintf(w, "document_materializations=%d row_materializations=%d mapped_bytes=%d decoded_bytes=%d\n", s.Materialization.DocumentMaterializations, s.Materialization.RowMaterializations, s.Diagnostics.MappedBytes, s.Diagnostics.DecodedBytes)
@@ -861,5 +917,5 @@ func printSummary(w interface{ Write([]byte) (int, error) }, s summary) {
 }
 
 func markdownSummary(s summary) string {
-	return fmt.Sprintf("# TreeDB collection demo\n\n- mode: `%s`\n- workload: `%s`\n- rows: `%d`\n- setup_ms: `%.3f`\n- query_ms: `%.3f`\n- matches: `%d`\n- count/sum/avg: `%d` / `%d` / `%.3f`\n- db_dir: `%s`\n", s.Mode, s.Workload, s.Rows, s.SetupMS, s.QueryMS, s.Matches, s.Aggregate.Count, s.Aggregate.Sum, s.Aggregate.Avg, s.DBDir)
+	return fmt.Sprintf("# TreeDB collection demo\n\n- mode: `%s`\n- publication_owner: `%s`\n- memtable_mode: `%s`\n- workload: `%s`\n- rows: `%d`\n- setup_ms: `%.3f`\n- query_ms: `%.3f`\n- matches: `%d`\n- count/sum/avg: `%d` / `%d` / `%.3f`\n- db_dir: `%s`\n", s.Mode, s.PublicationOwner, s.MemtableMode, s.Workload, s.Rows, s.SetupMS, s.QueryMS, s.Matches, s.Aggregate.Count, s.Aggregate.Sum, s.Aggregate.Avg, s.DBDir)
 }

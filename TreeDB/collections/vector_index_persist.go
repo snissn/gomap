@@ -3,6 +3,7 @@ package collections
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -56,6 +57,7 @@ type VectorIndexLoadStatus struct {
 	ManifestPath        string
 	RootName            string
 	RootID              uint64
+	LogicalVersion      uint64
 	Epoch               uint64
 	BytesDisk           int64
 }
@@ -83,6 +85,9 @@ func (idx *VectorIndex) SaveSnapshot() (VectorIndexLoadStatus, error) {
 // TreeDB collection-root content and publishes that root through the collection
 // root descriptor system state.
 func (idx *VectorIndex) SaveNativeSnapshot() (VectorIndexLoadStatus, error) {
+	if idx != nil && idx.collection != nil && idx.collection.nativeJSON != nil {
+		return idx.saveNativeHNSW()
+	}
 	status := VectorIndexLoadStatus{}
 	if idx == nil {
 		return status, errors.New("collections: vector index is nil")
@@ -218,6 +223,31 @@ func (idx *VectorIndex) saveNativeSnapshotPreparedWithCommandWALIntentAndPublica
 		return status, err
 	}
 	snapshot, snapshotSeq := idx.persistSnapshot()
+	var nativeVersion *nativeHNSWRootVersion
+	if _, present, e := getSystemValue(pin, nativeCatalogIncarnationPrefix+catalog.meta.Name); e != nil {
+		return status, e
+	} else if present {
+		key := nativeVectorVersionKey(catalog.meta.Name, idx.name)
+		version := def.SchemaGeneration
+		raw, exists, e := getSystemValue(pin, key)
+		if e != nil {
+			return status, e
+		}
+		if exists {
+			if len(raw) != 16 {
+				return status, backenddb.ErrNativeSemanticUnsupported
+			}
+			version = binary.BigEndian.Uint64(raw[:8])
+		} else if baseRoot != 0 {
+			version = baseRoot
+		}
+		if version == ^uint64(0) {
+			return status, memtable.ErrCOWCapacity
+		}
+		snapshot.Meta.NativeLogicalVersion = version + 1
+		nativeVersion = &nativeHNSWRootVersion{key: key, value: nativeVectorVersionRecord(version+1, snapshot.Meta.SourceDocumentGeneration)}
+	}
+
 	table, bytesDisk, err := buildVectorIndexNativeSnapshotTable(snapshot)
 	if err != nil {
 		return status, err
@@ -262,13 +292,14 @@ func (idx *VectorIndex) saveNativeSnapshotPreparedWithCommandWALIntentAndPublica
 		Iter:          iter,
 		StoragePolicy: policy,
 	}}, columnWritePublishInput{
-		meta:             catalog.meta,
-		baseCommitSeq:    baseCommitSeq,
-		baseSystemRoot:   baseSystemRoot,
-		rootNames:        []string{rootName},
-		baseRootIDs:      baseRootIDs,
-		commandWALIntent: intent,
-		rawPublishLocked: rawPublishLocked,
+		nativeHNSWVersion: nativeVersion,
+		meta:              catalog.meta,
+		baseCommitSeq:     baseCommitSeq,
+		baseSystemRoot:    baseSystemRoot,
+		rootNames:         []string{rootName},
+		baseRootIDs:       baseRootIDs,
+		commandWALIntent:  intent,
+		rawPublishLocked:  rawPublishLocked,
 	})
 	if err == nil && len(rootIDs) == 1 {
 		status.Loaded = true
@@ -441,6 +472,9 @@ func (c *Collection) installNativeVectorIndexCandidate(candidate *VectorIndex, e
 // rebuild/shrink publication should continue to use SaveNativeSnapshot so
 // removed graph keys cannot survive.
 func (idx *VectorIndex) SaveNativeDeltaSnapshot() (VectorIndexLoadStatus, error) {
+	if idx != nil && idx.collection != nil && idx.collection.nativeJSON != nil {
+		return idx.saveNativeHNSW()
+	}
 	return idx.saveNativeDeltaSnapshotWithCommandWALIntent(nil)
 }
 
@@ -767,6 +801,9 @@ func (c *Collection) LoadVectorIndexSnapshot(opts VectorIndexOptions) (*VectorIn
 // collection root. Missing or invalid graph roots return a non-loaded status so
 // callers can safely fall back to exact search.
 func (c *Collection) LoadNativeVectorIndexSnapshot(opts VectorIndexOptions) (*VectorIndex, VectorIndexLoadStatus, error) {
+	if c != nil && c.nativeJSON != nil {
+		return c.loadNativeHNSW(opts)
+	}
 	status := VectorIndexLoadStatus{}
 	if c == nil {
 		return nil, status, errCollectionNil
@@ -1111,6 +1148,7 @@ type vectorIndexPersistSnapshot struct {
 }
 
 type vectorIndexPersistMeta struct {
+	NativeLogicalVersion            uint64                              `json:"native_logical_version,omitempty"`
 	Name                            string                              `json:"name"`
 	Field                           string                              `json:"field"`
 	Metric                          VectorMetric                        `json:"metric"`

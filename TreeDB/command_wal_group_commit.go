@@ -16,33 +16,34 @@ const (
 )
 
 type publicCommandWALGroupCommit struct {
-	mu                   sync.Mutex
-	cond                 sync.Cond
-	wake                 chan struct{}
-	capturedPrefix       backenddb.CommandWALCapturedPrefix // exclusively owned by the active leader
-	timer                *time.Timer
-	leaderActive         bool
-	nextTicket           uint64
-	completedTicket      uint64
-	publishTicket        uint64
-	terminalErr          error
-	pendingSingleton     uint64    // an idle mutation can form an immediate one-ticket epoch
-	pendingDeadline      time.Time // collection starts at first registration, including prior I/O
-	pendingSealed        bool      // caller-owned aggregate already completed its collection window
-	pendingCount         int
-	pendingCommits       int
-	pendingBytes         int
-	pendingForceTickets  []uint64
-	pendingTriggered     bool
-	retryableErrors      map[uint64]error
-	delay                time.Duration
-	maxCommits           int
-	maxBytes             int
-	testBeforeSync       func(groupSize int)
-	testAfterRegister    func(ticket uint64, durable bool)
-	testAfterWait        func(ticket uint64)
-	testBeforeLeaderWait func()
-	durableIntents       atomic.Int64
+	mu                       sync.Mutex
+	cond                     sync.Cond
+	wake                     chan struct{}
+	capturedPrefix           backenddb.CommandWALCapturedPrefix // exclusively owned by the active leader
+	timer                    *time.Timer
+	leaderActive             bool
+	nextTicket               uint64
+	completedTicket          uint64
+	publishTicket            uint64
+	terminalErr              error
+	pendingSingleton         uint64    // an idle mutation can form an immediate one-ticket epoch
+	pendingDeadline          time.Time // collection starts at first registration, including prior I/O
+	pendingSealed            bool      // caller-owned aggregate already completed its collection window
+	pendingCount             int
+	pendingCommits           int
+	pendingBytes             int
+	pendingForceTickets      []uint64
+	pendingTriggered         bool
+	retryableErrors          map[uint64]error
+	delay                    time.Duration
+	maxCommits               int
+	maxBytes                 int
+	testBeforeSync           func(groupSize int)
+	testAfterRegister        func(ticket uint64, durable bool)
+	testAfterWait            func(ticket uint64)
+	testBeforeLeaderWait     func()
+	testBeforeNativeComplete func()
+	durableIntents           atomic.Int64
 
 	attempts             atomic.Uint64
 	groups               atomic.Uint64
@@ -288,6 +289,13 @@ func (tdb *DB) appendAndCaptureOrdinaryPublicCommandWAL(bytes int, preparedBytes
 // complete cut before invoking awaitPublicCommandWAL.
 func (tdb *DB) registerPublicCommandWAL(bytes int, preparedBytes *int, durable bool, pendingBookkeeping *time.Duration, appendFrame func(sync bool) (uint64, error)) (publicCommandWALRegistration, error) {
 	return tdb.registerPublicCommandWALWithIntent(bytes, preparedBytes, durable, false, pendingBookkeeping, appendFrame)
+}
+
+// Native registration borrows the announcement made before producer
+// serialization. Its completion owns withdrawal after registration; the group
+// uses the same captured-prefix and publication tickets as ordinary COW writes.
+func (tdb *DB) registerPublicCommandWALPolicy(bytes int, preparedBytes *int, durable bool, pendingBookkeeping *time.Duration, appendFrame func(bool) (uint64, error), announced bool) (publicCommandWALRegistration, error) {
+	return tdb.registerPublicCommandWALWithIntent(bytes, preparedBytes, durable, announced, pendingBookkeeping, appendFrame)
 }
 
 // intentRegistered means the caller already owns its announced durable intent.

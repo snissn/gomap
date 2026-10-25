@@ -118,7 +118,7 @@ func prepareNativeEngineRollover(base *nativeEngineVersion) (*nativeEngineVersio
 		c.schema.retain()
 		p.schema = c.schema
 		var successor *nativeCollectionState
-		successor, err = newNativeCollectionState(id, p.schema, p.domains, p.pendingDomains, admit)
+		successor, err = newNativeCollectionState(id, c.documentGeneration, p.schema, p.domains, p.pendingDomains, admit)
 		if err != nil {
 			return false
 		}

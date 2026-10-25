@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"strings"
 	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -205,6 +206,17 @@ func prepareNativeEngineBuildForCompaction(captured *nativeEngineVersion, basis 
 				empty: boundary == nil, physicalOnly: id == target && nativeTypedPhysicalDomain(name),
 				rootKey: systemCollectionRootPrefix + c.schema.meta.Name + "/" + name,
 			})
+			if index, ok := strings.CutPrefix(name, "vector-index/"); ok {
+				result := &b.built[len(b.built)-1]
+				result.vectorVersionKey = nativeVectorVersionKey(c.schema.meta.Name, index)
+				result.vectorVersionValue = nativeVectorVersionRecord(d.interpretation, d.sourceGeneration)
+			}
+
+			if name == "primary" {
+				result := &b.built[len(b.built)-1]
+				result.generationKey = systemCollectionDocumentGenerationKey(c.schema.meta.Name)
+				binary.BigEndian.PutUint64(result.generationValue[:], c.documentGeneration)
+			}
 			return true
 		})
 		return b.failure == nil

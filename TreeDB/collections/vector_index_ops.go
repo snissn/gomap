@@ -76,6 +76,13 @@ func (c *Collection) VectorIndexStatus(name string) (VectorIndexStatus, error) {
 // collection change rejects the rebuild before append; unrelated writes do not.
 func (c *Collection) RebuildVectorIndex(name string) (VectorIndexStatus, error) {
 	if c != nil && c.nativeJSON != nil {
+		ordinary, err := c.nativeOrdinaryHNSWRole(name)
+		if err != nil {
+			return VectorIndexStatus{}, err
+		}
+		if ordinary {
+			return c.rebuildNativeOrdinaryHNSW(name)
+		}
 		return c.nativeRebuildVectorGraph(name)
 	}
 	if policy := c.typedGraphServingPolicy(); policy != nil {
@@ -191,6 +198,13 @@ func (c *Collection) vectorIndexStatus(name string, inspectNativeRoot bool) (Vec
 		return VectorIndexStatus{}, errCollectionNil
 	}
 	if c.nativeJSON != nil {
+		ordinary, err := c.nativeOrdinaryHNSWRole(name)
+		if err != nil {
+			return VectorIndexStatus{}, err
+		}
+		if ordinary {
+			return c.nativeOrdinaryHNSWStatus(name, inspectNativeRoot)
+		}
 		return c.nativeVectorGraphStatus(name)
 	}
 	if c.db == nil {
@@ -304,6 +318,12 @@ func vectorIndexStatusRootID(catalog *collectionCatalog, rootName string) (uint6
 }
 
 func (c *Collection) registeredVectorIndex(name string) *VectorIndex {
+	if c != nil && c.nativeJSON != nil {
+		coord := c.collectionSchemaCoordinator()
+		coord.nativeHNSWIndexesMu.RLock()
+		defer coord.nativeHNSWIndexesMu.RUnlock()
+		return coord.nativeHNSWIndexes[name]
+	}
 	if c == nil {
 		return nil
 	}

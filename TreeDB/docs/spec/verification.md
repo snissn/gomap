@@ -2,6 +2,47 @@
 
 This document maps specification invariants to existing tests and harnesses.
 
+## Standalone shared COW delivery
+
+- `TestStandaloneSharedCOWCollectionLifecycle` and
+  `TestStandaloneSharedCOWCrashReopen` exercise ordinary startup, indexed BSON
+  mutation/read, authentication and explicit journal ACK across all three
+  production profiles, including an actual child-process exit without cleanup.
+- `TestStandaloneLargeIndexedBSON`,
+  `TestStandaloneExplicitCOWBudgetRefusesBeforeAssignment` and
+  `TestMongoInsertCoalescerBoundsBytes` cover advertised document size, explicit
+  finite admission and independent byte-bounded groups.
+- `TestMongoMultiWriteOrderedAndUnorderedStableIndices`,
+  `TestMongoInsertBatchOrderedAndUnorderedStableIndices` and
+  `TestStandaloneServerOfficialGoDriverCompoundPlanner` use ordinary standalone
+  construction in all three profiles; the driver control includes hinted
+  descending compound reads, cursor batches, count/distinct and aggregation.
+- `native_command_wal_solo_test.go` and `native_command_wal_group_test.go` preserve
+  captured-singleton/group eligibility, one actual singleton file sync and
+  canonical command, per-command identities, post-producer completion and
+  assigned-failure custody. A held actual final file fence prevents a successful
+  ACK and durable-frontier advance. Failure after logical install retains the
+  exact visible successor with ambiguous error and poisons later writes;
+  preassignment and preinstall refusal controls retain their separate behavior.
+  Native logical sequence assertions are separate from physical applied and
+  canonical barrier LSNs.
+- `TestNativeCollectionPressureDrainsBeforeOpening` holds a public collection
+  read across repeated automatic handoffs, checks old visibility and reopen, and
+  requires the original allocator to reach zero after final release/close.
+- `native_named_domain_replacement_test.go` covers named-root omission, empty
+  replacement, both scan directions, old captures, source-generation and graph
+  interpretation guards, physical handoff and final allocation release.
+- `BenchmarkStandalonePublicIndexedUpdate` is the uninstrumented actual-opener,
+  official-driver ACK/allocation comparison. The opt-in
+  `TestStandalonePublicResourceDiagnostic` separately observes preallocated
+  request latency, held reads, heap/RSS, file bytes, deferred work and close.
+  Run each resource cell in a fresh process to avoid inherited Go arenas/RSS.
+  Missing counters and failed/incomplete samples are not fabricated success.
+
+These controls define their exercised surfaces; they do not qualify every
+text/hybrid/typed consumer or replace source-bound public performance evidence.
+
+
 `TestManagerRefreshDuringRetiredSegmentUnlink` exercises actual close-before-
 unlink and failed-unlink ownership without scheduler timing. Refresh discovers
 new live segments while excluding the closed zombie. Companion tests preserve
@@ -848,7 +889,7 @@ Later children update these stable test names rather than duplicating them.
 
 | Stable scenario | Current counterexample | Positive-conformance owner |
 |---|---|---|
-| `TestPowerLossOracleCounterexampleNewMetaMissingClosure` | resolved: the target meta is written only after the durable-root record, manifest, index, value-log, and outer-leaf closure is stable; incomplete candidates fall back | DUR-09 #3679 |
+| `TestPowerLossOracleCounterexampleNewMetaMissingClosure` | resolved: DATA publication writes target meta after its closure is stable; explicit V6 PRIMARY stages capsule and banks before their combined file fence, with DATA and external-file dependencies already stable; incomplete candidates fall back | DUR-09 #3679 |
 | `TestPowerLossOracleCounterexampleRecoverablePageReuse` | resolved for synchronous publication: the root-reuse admission fence prevents reuse from racing older-root capture, and both durable slots retain their exact COW generations | DUR-04 #3678 and DUR-09 #3679; maintenance horizon remains DUR-08 #3681 |
 | `TestPowerLossOracleCounterexampleRelaxedCommandFrameMissingRID` | relaxed command-WAL external-RID replay applies a checksum-valid frame with a missing RID | DUR-05 #3718 |
 | `TestPowerLossOracleCounterexampleSourceDeletionBeforeStableCoverage` | resolved for activation: cleanup retains the command-WAL source until AppliedCommandLSN coverage is stable; complete cleanup convergence remains downstream | DUR-06 #3680; convergence remains DUR-07 #3682 and DUR-08 #3681 |

@@ -268,32 +268,35 @@ func (group *RootPublicationBuildGroup) pinBatchValueLogSegmentsLocked(delta *ba
 	if group == nil || group.db == nil || delta == nil {
 		return
 	}
-	ids := delta.TouchedValueLogSegments()
-	if len(ids) == 0 {
+	for _, fileID := range delta.TouchedValueLogSegments() {
+		group.pinValueLogSegmentLocked(fileID)
+	}
+}
+
+// The group mutex protects the original physical build's segment ledger. A
+// segment pin may precede its first DATA root so failed construction and GC
+// retain the same ownership boundary as an ordinary pointer-bearing batch.
+func (group *RootPublicationBuildGroup) pinValueLogSegmentLocked(fileID uint32) {
+	if fileID == 0 {
 		return
 	}
 	if group.touchedValueLogSegments == nil {
-		group.touchedValueLogSegments = make(map[uint32]struct{}, len(ids))
+		group.touchedValueLogSegments = make(map[uint32]struct{})
+	}
+	group.touchedValueLogSegments[fileID] = struct{}{}
+	if _, ok := group.pinnedValueLogSegments[fileID]; ok {
+		return
 	}
 	if group.pinnedValueLogSegments == nil {
-		group.pinnedValueLogSegments = make(map[uint32]struct{}, len(ids))
+		group.pinnedValueLogSegments = make(map[uint32]struct{})
 	}
 	group.db.pendingValueLogAppendMu.Lock()
 	defer group.db.pendingValueLogAppendMu.Unlock()
-	for _, fileID := range ids {
-		if fileID == 0 {
-			continue
-		}
-		group.touchedValueLogSegments[fileID] = struct{}{}
-		if _, ok := group.pinnedValueLogSegments[fileID]; ok {
-			continue
-		}
-		if group.db.pendingValueLogAppendFileIDRefs == nil {
-			group.db.pendingValueLogAppendFileIDRefs = make(map[uint32]int)
-		}
-		group.db.pendingValueLogAppendFileIDRefs[fileID]++
-		group.pinnedValueLogSegments[fileID] = struct{}{}
+	if group.db.pendingValueLogAppendFileIDRefs == nil {
+		group.db.pendingValueLogAppendFileIDRefs = make(map[uint32]int)
 	}
+	group.db.pendingValueLogAppendFileIDRefs[fileID]++
+	group.pinnedValueLogSegments[fileID] = struct{}{}
 }
 
 func (group *RootPublicationBuildGroup) mergeValueLogRefDeltaLocked(delta *valueLogRefDelta) {

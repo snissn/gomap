@@ -229,6 +229,8 @@ func TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts(t *testing.
 				var capturedPoint durabilitycut.Point
 				var resource durabilitycut.Resource
 				cutReturned := false
+				var stagedPrimary os.FileInfo
+				capturedPrimaryAuthoritySync := false
 				var observerMu sync.Mutex
 				active := true
 				matchingCuts := 0
@@ -251,10 +253,33 @@ func TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts(t *testing.
 						}
 						return nil
 					}
+					if event.Point == durabilitycut.AfterMetaWrite && event.Resource == durabilitycut.ResourceMeta && filepath.Clean(event.Path) == targetPrimary {
+						if event.StablePath == nil {
+							return errors.New("staged PRIMARY authority has no retained file")
+						}
+						var statErr error
+						stagedPrimary, statErr = event.StablePath.Stat()
+						if statErr != nil {
+							return statErr
+						}
+					}
 					if err := model.Observe(opts.Dir, event); err != nil {
 						return err
 					}
 					if target {
+						if point == durabilitycut.AfterIndexDataSync && filepath.Clean(event.Path) == targetPrimary && stagedPrimary != nil {
+							if event.StablePath == nil {
+								return errors.New("completed PRIMARY fence has no retained file")
+							}
+							actual, statErr := event.StablePath.Stat()
+							if statErr != nil {
+								return statErr
+							}
+							capturedPrimaryAuthoritySync = os.SameFile(stagedPrimary, actual)
+							if !capturedPrimaryAuthoritySync {
+								return errors.New("completed PRIMARY fence did not cover staged authority file")
+							}
+						}
 						cut = model.Clone()
 						capturedPoint, resource = event.Point, event.Resource
 						matchingCuts++
@@ -334,11 +359,15 @@ func TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts(t *testing.
 				if acknowledged && profile == treedb.ProfileCommandWALDurable && !present {
 					t.Fatal("durable acknowledged group lost")
 				}
-				if acknowledged && profile == treedb.ProfileNoWALFast && point != durabilitycut.AfterMetaSync && !absent {
-					t.Fatal("NoWAL interrupted pre-meta-sync group became stable")
+				// V6 stages its capsule before the sole all-dirty PRIMARY
+				// fence. Its completed physical sync already covers authority,
+				// even when interruption prevents the later AfterMetaSync label.
+				// A DATA-only sync or any pre-fence cut has no such coverage.
+				if acknowledged && profile == treedb.ProfileNoWALFast && point != durabilitycut.AfterMetaSync && !capturedPrimaryAuthoritySync && !absent {
+					t.Fatal("NoWAL interrupted group became stable before its authority fence")
 				}
-				if point == durabilitycut.AfterMetaSync && !present {
-					t.Fatal("completed meta sync lost grouped command")
+				if (point == durabilitycut.AfterMetaSync || capturedPrimaryAuthoritySync) && !present {
+					t.Fatal("completed authority sync lost grouped command")
 				}
 				t.Logf("actual COW cut=%s resource=%s matching_attempts=%d group_acknowledged=%t recovered_group=%t", point, resource, matchingCuts, acknowledged, present)
 			})

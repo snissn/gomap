@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"encoding/binary"
 	"errors"
 	"strings"
 	"unsafe"
@@ -189,6 +190,14 @@ func importNativeJSONCollection(base *nativeEngineVersion, meta CollectionMeta, 
 	if base.inventory != nil || base.build != nil {
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	} // private import only
+	generation := uint64(0)
+	rawGeneration, generationErr := get(systemCollectionDocumentGenerationKey(meta.Name))
+	if generationErr == nil {
+		generation, generationErr = decodeRootID(rawGeneration)
+	}
+	if generationErr != nil && !errors.Is(generationErr, tree.ErrKeyNotFound) {
+		return nil, generationErr
+	}
 	roots := collectionRootNames(meta)
 	next, err = newNativeEnginePreparation(base, 1, len(roots), base.allocator)
 	if err != nil {
@@ -223,8 +232,28 @@ func importNativeJSONCollection(base *nativeEngineVersion, meta CollectionMeta, 
 			return next, policyErr
 		}
 		name := strings.TrimPrefix(qualified, meta.Name+"/")
-		domain, domainErr := newNativeDomainState(name, root, 1, policy, nil, admit)
+		interpretation, sourceGeneration := uint64(1), uint64(0)
+		if index, ok := strings.CutPrefix(name, "vector-index/"); ok {
+			version, e := get(nativeVectorVersionKey(meta.Name, index))
+			if e == nil {
+				if len(version) != 16 {
+					return next, backenddb.ErrNativeSemanticUnsupported
+				}
+				interpretation = binary.BigEndian.Uint64(version[:8])
+				sourceGeneration = binary.BigEndian.Uint64(version[8:])
+				if interpretation == 0 {
+					return next, backenddb.ErrNativeSemanticUnsupported
+				}
+			} else if !errors.Is(e, tree.ErrKeyNotFound) {
+				return next, e
+			} else if root != 0 {
+				interpretation = root
+			}
+		}
+
+		domain, domainErr := newNativeDomainState(name, root, interpretation, policy, nil, admit)
 		if domain != nil {
+			domain.sourceGeneration = sourceGeneration
 			p.ownedDomains = append(p.ownedDomains, domain)
 		}
 		if domainErr != nil {
@@ -235,7 +264,7 @@ func importNativeJSONCollection(base *nativeEngineVersion, meta CollectionMeta, 
 		}
 	}
 	p.sealPrivateBuilders(next)
-	c, err := newNativeCollectionState(id, p.schema, p.domains, p.pendingDomains, admit)
+	c, err := newNativeCollectionState(id, generation, p.schema, p.domains, p.pendingDomains, admit)
 	if err != nil {
 		return next, err
 	}

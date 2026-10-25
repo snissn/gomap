@@ -29,6 +29,35 @@ and the cache captures the exact successor backend basis before writers resume.
 Previously captured immutable cuts retain their original basis and values. The
 same ordering applies to the final public checkpoint during `Close`.
 
+Native collection commands opened through the public COW owner use the same
+public command-WAL group coordinator as raw writes. Durable requests announce
+before native producer serialization, without holding a public progress gate.
+Registration appends through the original authenticated native staging guard and
+installs one complete logical successor before waiting for the covering durable
+ticket. Preparation and raw-publication gates end before that wait. An idle
+singleton uses the captured-durable append class: it retains one original
+canonical command/LSN, adds no collection timer or barrier frame, and performs one
+physical command-file sync at final completion. Its append receipt does not claim
+that the WAL is already stable. Queued requests retain the coordinator's shared
+prefix completion; any root-neutral barrier frame adds no logical transaction.
+No durable waiter acknowledges before its dependency-complete file and namespace
+obligations succeed. Immediate logical visibility and WAL completion therefore do
+not imply that the physical `AppliedCommandLSN` has advanced. Checkpoint or
+recovery publishes that physical frontier. Direct backend constructors keep their
+inline completion path, and already combined command groups keep their existing
+path.
+
+A failure after assignment retains the command identity and is ambiguous to an
+ordinary collection caller, even if logical installation did not complete. The
+exact successor may already be visible when final synchronization fails; that
+failure gives no durable acknowledgement or durable-frontier credit. The handle
+requires recovery and the caller must not retry the application callback. A
+refusal before assignment has no such publication effect. If a checkpoint
+captures a finite cut before a delayed group appends its root-neutral barrier,
+optional fallback convergence may defer that proven suffix under the maintenance
+writer fence. It does not change the captured cut or accept a different logical
+or sealed identity.
+
 ## 0. Frozen Publication Contract
 
 This section is normative for every production durability profile. It freezes

@@ -14,18 +14,21 @@ import (
 // baseRoot and pending are resolved under the enclosing complete engine cut's
 // exact disk snapshot. No read follows a mutable write-domain table or catalog.
 // Ordinary changes preserve interpretation; DDL replaces it explicitly.
+// sourceGeneration records the primary generation covered by a named saved
+// image; physical rollover/handoff and ordinary domain deltas preserve it.
 type nativeDomainState struct {
-	refs           atomic.Int64
-	name           string
-	baseRoot       uint64
-	interpretation uint64
-	storagePolicy  backenddb.OrderedRootStoragePolicy
-	pending        *memtable.COWRoot
-	typed          *nativeTypedDelta
-	captured       *nativePendingSources
-	privateSource  *nativePendingSource // partial rollover edge; never published
-	refund         *cowbtree.OwnedMapRefund
-	finished       bool
+	refs             atomic.Int64
+	name             string
+	baseRoot         uint64
+	interpretation   uint64
+	sourceGeneration uint64
+	storagePolicy    backenddb.OrderedRootStoragePolicy
+	pending          *memtable.COWRoot
+	typed            *nativeTypedDelta
+	captured         *nativePendingSources
+	privateSource    *nativePendingSource // partial rollover edge; never published
+	refund           *cowbtree.OwnedMapRefund
+	finished         bool
 }
 
 // newNativeDomainState consumes pending only on success. Its descriptor/name
