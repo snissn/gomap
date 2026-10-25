@@ -9,6 +9,31 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
 
+func TestTextV2RootFamilyClassifierBorrowed(t *testing.T) {
+	collection, index := strings.Repeat("collection", 16), strings.Repeat("index", 16)
+	roots := collectionTextV2RootNames(collection, index)
+	for i, root := range roots {
+		family, ok := textV2RootFamilyForName(collection, index, root)
+		if !ok || family != textV2RootFamily(i+1) {
+			t.Fatal(root, family, ok)
+		}
+		for _, invalid := range []string{root + "x", "x" + root, root[:len(root)-1], collection + "/other/" + index} {
+			if _, ok := textV2RootFamilyForName(collection, index, invalid); ok {
+				t.Fatal("accepted unrelated qualified root", invalid)
+			}
+		}
+	}
+	if got := testing.AllocsPerRun(100, func() {
+		for _, root := range roots {
+			if _, ok := textV2RootFamilyForName(collection, index, root); !ok {
+				panic("missing family")
+			}
+		}
+	}); got != 0 {
+		t.Fatalf("root family classification allocated %g", got)
+	}
+}
+
 func TestNativeTextServingLongIDAdmission(t *testing.T) {
 	def := TextIndexDefinition{Fields: []TextIndexField{{Field: "body"}}}
 	id := strings.Repeat("x", 64<<10)

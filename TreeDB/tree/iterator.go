@@ -1026,7 +1026,9 @@ func (it *Iterator) UnsafeEntryWithRevision() ([]byte, page.ValuePtr, byte, page
 	if top.Node.Type() != page.PageTypeLeaf || top.Index < 0 || top.Index >= int(top.Node.Count()) {
 		return val, ptr, flags, page.LegacyEntryRevision
 	}
-	_, _, _, _, revision, err := top.Node.GetLeafEntryViewWithRevision(uint16(top.Index))
+	// Key reconstruction already belongs to the cursor. Reading only value
+	// metadata preserves that key view and avoids a second key scratch cohort.
+	_, _, _, revision, err := top.Node.GetLeafValueViewWithRevision(uint16(top.Index))
 	if err != nil {
 		it.err = err
 		it.valid = false

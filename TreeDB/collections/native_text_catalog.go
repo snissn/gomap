@@ -87,10 +87,13 @@ func (n *nativeTextCatalog) get(root string, key, dst []byte) ([]byte, bool, err
 }
 
 func (n *nativeTextCatalog) iterator(root string, start, end []byte, deleted bool, max int, onInspect func(int), inspectionError func() error) (iterator.UnsafeIterator, error) {
-	if err := n.admit(memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeTextIterator{}))) + memtable.COWAllocationCharge(uint64(len(start)+len(end)))); err != nil {
+	if err := n.admit(memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeTextIterator{}))) + memtable.COWAllocationCharge(uint64(len(start)+len(end))) + memtable.COWAllocationCharge(2*uint64(unsafe.Sizeof(uintptr(0))))); err != nil {
 		return nil, err
 	}
 	it := &nativeTextIterator{scope: n, root: root, start: bytes.Clone(start), end: bytes.Clone(end), includeDeleted: deleted, max: max, onInspect: onInspect, inspectionError: inspectionError}
+	// The physical cursor retains this bound method. Construct it once on the
+	// admitted wrapper, rather than allocating another escaping closure per row.
+	it.readLeaf = n.read.readLeaf
 	it.cursor.start, it.cursor.end = it.start, it.end
 	it.Seek(start)
 	if it.err != nil {
@@ -101,6 +104,7 @@ func (n *nativeTextCatalog) iterator(root string, start, end []byte, deleted boo
 
 type nativeTextIterator struct {
 	cursor                 nativeDomainCursor
+	readLeaf               func(page.LeafLogPtr, []byte) ([]byte, error)
 	scope                  *nativeTextCatalog
 	root                   string
 	start, end, key, value []byte
@@ -157,7 +161,7 @@ func (it *nativeTextIterator) seek(start []byte, forward bool) {
 		return
 	}
 	for {
-		entry, found, err := it.cursor.read.seekWithCursor(start, it.end, scratch, r.readLeaf, false, it.inspect, &it.cursor, forward, it.scope.admit)
+		entry, found, err := it.cursor.read.seekWithCursor(start, it.end, scratch, it.readLeaf, false, it.inspect, &it.cursor, forward, it.scope.admit)
 		if err != nil {
 			it.err = err
 			return
@@ -223,6 +227,7 @@ func (it *nativeTextIterator) Close() error {
 	err := it.cursor.close()
 	it.valid = false
 	it.scope = nil
+	it.readLeaf = nil
 	it.start, it.end, it.key, it.value = nil, nil, nil, nil
 	return err
 }

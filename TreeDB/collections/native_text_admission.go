@@ -73,17 +73,7 @@ func (n *nativeTextCatalog) value(entry node.LeafEntry, root string, key []byte)
 	if err != nil {
 		return nil, err
 	}
-	var names nativeTextAdmissionSum
-	for _, def := range n.read.meta.TextIndexes {
-		// The existing classifier constructs at most seven qualified names.
-		names.add(7, memtable.COWAllocationCharge(uint64(len(n.read.meta.Name)+len(def.Name)+len("/text-v2-posting-blocks/"))))
-	}
-	if names.bad {
-		return nil, memtable.ErrCOWCapacity
-	}
-	if err := n.admit(names.total); err != nil {
-		return nil, err
-	}
+	// The shared classifier borrows the existing names without allocating.
 	family := textV2RootFamily(0)
 	for _, def := range n.read.meta.TextIndexes {
 		if f, ok := textV2RootFamilyForName(n.read.meta.Name, def.Name, root); ok {

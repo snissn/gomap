@@ -101,8 +101,8 @@ func TestCOWLimitsMultiLeafProjectionReusesBuffers(t *testing.T) {
 		name string
 		opts node.BuilderOptions
 	}{
-		{"prefix", node.BuilderOptions{LeafPrefixCompression: true}},
-		{"columnar_prefix", node.BuilderOptions{LeafPrefixCompression: true, LeafColumnar: true}},
+		{"prefix", node.BuilderOptions{LeafPrefixCompression: true, EntryRevisions: true}},
+		{"columnar_prefix", node.BuilderOptions{LeafPrefixCompression: true, LeafColumnar: true, EntryRevisions: true}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			const leaves, perLeaf = 3, 18 // Cross both a page boundary and prefix restart.
@@ -127,7 +127,7 @@ func TestCOWLimitsMultiLeafProjectionReusesBuffers(t *testing.T) {
 					i := l*perLeaf + j
 					keys[i] = []byte(fmt.Sprintf("%s%03d", strings.Repeat("namespace/", 20), i))
 					ptrs[i] = page.ValuePtr{FileID: 7, Offset: uint64(100 + i), Length: uint32(20 + i)}
-					if err := b.AddLeafEntry(keys[i], nil, node.FlagPointer, ptrs[i]); err != nil {
+					if err := b.AddLeafEntryWithRevision(keys[i], nil, node.FlagPointer, ptrs[i], page.EntryRevision(i+11)); err != nil {
 						t.Fatal(err)
 					}
 				}
@@ -169,9 +169,13 @@ func TestCOWLimitsMultiLeafProjectionReusesBuffers(t *testing.T) {
 				if !it.Valid() || !bytes.Equal(it.Key(), keys[i]) {
 					t.Fatalf("row %d key=%q error=%v", i, it.Key(), it.Error())
 				}
-				value, ptr, flags := it.UnsafeEntry()
-				if value != nil || ptr != ptrs[i] || flags&node.FlagPointer == 0 {
-					t.Fatalf("row %d projection=%v/%v/%d", i, value, ptr, flags)
+				key := it.Key()
+				value, ptr, flags, revision := it.UnsafeEntryWithRevision()
+				if value != nil || ptr != ptrs[i] || flags&node.FlagPointer == 0 || revision != page.EntryRevision(i+11) {
+					t.Fatalf("row %d projection=%v/%v/%d revision=%d", i, value, ptr, flags, revision)
+				}
+				if !bytes.Equal(key, keys[i]) {
+					t.Fatal("revision lookup changed the borrowed cursor key")
 				}
 			}
 			run := func() {
