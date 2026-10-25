@@ -1354,9 +1354,9 @@ reject older metadata versions instead of migrating them.
 
 ## 3.2 Collection Document Payloads
 
-### Native catalog incarnation records (construction)
+### Native catalog incarnation records
 
-The native immutable catalog implementation under construction reserves these
+The native immutable catalog implementation reserves these
 ordinary system-tree keys:
 
 - `collections/native/v1/next-incarnation`: next unused logical collection ID.
@@ -1376,8 +1376,14 @@ maximum `uint64` represents exhaustion and refuses further creation before
 admission. Existing catalogs without identity records require an explicit
 opening decision; a reader must not invent IDs from physical page IDs.
 
-These records currently have private build/reopen controls. Public collection
-producer activation and native catalog bootstrap remain incomplete.
+The standalone Mongo opener now selects the native immutable catalog through
+the ordinary collection facade. It validates the whole catalog before serving
+requests and refuses existing catalogs without these identity records, or with
+unsupported domains. It never invents identities, converts an old directory in
+place, or silently falls back to a different producer. For this pre-alpha
+cutover, preserve the old directory, export through the binary that created it,
+and reingest into a fresh directory with the new binary. There is no automatic
+cross-version migration guarantee; see `docs/API_STABILITY.md`.
 
 ### 3.2.1 BSON-ordered scalar secondary-index keys (v2)
 

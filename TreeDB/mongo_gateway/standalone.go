@@ -253,6 +253,15 @@ func OpenStandaloneServer(opts StandaloneOptions) (*StandaloneServer, error) {
 	}
 
 	manager := collections.NewCollectionManager(backend)
+	failedOpen := func(cause error) (*StandaloneServer, error) {
+		return nil, errors.Join(cause, manager.Close(), cleanup())
+	}
+	// Import validates the complete physical catalog before serving requests;
+	// the bound limits copied output, not the compatibility check. Old catalogs
+	// without logical incarnation records require an explicit offline cutover.
+	if _, _, err := manager.ListCollectionsBounded(1); err != nil {
+		return failedOpen(fmt.Errorf("mongo gateway standalone: shared COW catalog preflight: %w", err))
+	}
 	server := NewServer()
 	server.Collections = manager
 	server.diagnosticCommandWALEnabled = backend.CommandWALEnabled
@@ -264,11 +273,7 @@ func OpenStandaloneServer(opts StandaloneOptions) (*StandaloneServer, error) {
 	if normalized.AuthenticationEnabled {
 		catalog, err := NewAuthCatalog(database)
 		if err != nil {
-			errs := []error{err}
-			if cleanup != nil {
-				errs = append(errs, cleanup())
-			}
-			return nil, errors.Join(errs...)
+			return failedOpen(err)
 		}
 		server.AuthCatalog = catalog
 	}
@@ -292,11 +297,7 @@ func OpenStandaloneServer(opts StandaloneOptions) (*StandaloneServer, error) {
 
 	tlsConfig, transport, err := loadStandaloneTLS(normalized)
 	if err != nil {
-		errs := []error{err}
-		if cleanup != nil {
-			errs = append(errs, cleanup())
-		}
-		return nil, errors.Join(errs...)
+		return failedOpen(err)
 	}
 	return &StandaloneServer{
 		Options:          normalized,

@@ -58,6 +58,15 @@ supply a complete `StandaloneOptions.COWMemtableLimits` bundle; explicit smaller
 limits are respected. Profile selection and write concern retain their normal
 acknowledgement boundaries.
 
+The default also selects the native immutable catalog. Startup validates the
+complete catalog and refuses legacy directories missing logical incarnation
+records or containing unsupported native domains. This is a pre-alpha format
+cutover: preserve the old directory, export using its original binary, and
+reingest into a fresh directory with the new binary. See
+[API stability](../../docs/API_STABILITY.md#on-disk-format-compatibility) for the
+cross-version policy. Startup errors preserve their underlying I/O, capacity or
+compatibility cause.
+
 ## Transport policy
 
 Plaintext is deliberately limited to loopback listeners. A standalone listener
