@@ -4157,31 +4157,11 @@ func (idx *VectorIndex) Search(query []float32, opts VectorIndexSearchOptions) (
 		}
 		// Each concurrent query owns its workspace. Native scratch bypasses
 		// the retained pool below, so returning this receipt ends its lifetime.
-		idx.mu.RLock()
-		nodes := len(idx.nodes)
-		idBytes := idx.nativeHNSWIDBytes
-		if idx.liveDelta != nil {
-			idx.liveDelta.mu.RLock()
-			nodes += len(idx.liveDelta.nodes)
-			idx.liveDelta.mu.RUnlock()
+		charge, err := idx.nativeHNSWQueryCharge(query, opts.Filter != nil, false)
+		if err != nil {
+			return nil, VectorIndexTrace{}, err
 		}
-		idx.mu.RUnlock()
-		fixed := uint64(64<<10) + uint64(nodes)*512 + uint64(len(query))*32
-		if opts.Filter != nil {
-			// Path string bytes borrow the original captured schema; the copied
-			// descriptor backing must survive runtime replacement independently.
-			pathBytes := memtable.COWAllocationCharge(uint64(len(idx.fieldPath)) * uint64(unsafe.Sizeof(string(""))))
-			if pathBytes > ^uint64(0)-fixed {
-				return nil, VectorIndexTrace{}, memtable.ErrCOWCapacity
-			}
-			fixed += pathBytes
-		}
-		if idBytes > (^uint64(0)-fixed)/8 {
-			return nil, VectorIndexTrace{}, memtable.ErrCOWCapacity
-		}
-		// Candidate IDs and base/delta/result arenas are query-owned, including
-		// arbitrary key widths. Their receipts cannot borrow runtime reservation.
-		workspace, err := read.capture.NativeAllocator().AdmitNativeBytes(memtable.COWAllocationCharge(fixed + idBytes*8))
+		workspace, err := read.capture.NativeAllocator().AdmitNativeBytes(charge)
 		if err != nil {
 			return nil, VectorIndexTrace{}, fmt.Errorf("collections: native vector query workspace: %w", err)
 		}
@@ -4214,6 +4194,56 @@ func (idx *VectorIndex) Search(query []float32, opts VectorIndexSearchOptions) (
 		return rows, trace, nil
 	}
 	return idx.searchCurrent(query, opts, nil)
+}
+
+// The caller holds nativeHNSWUseMu, so both planes and their retained ID
+// sizes remain fixed until the workspace has been admitted and used.
+func (idx *VectorIndex) nativeHNSWQueryCharge(query []float32, filter, buffered bool) (uint64, error) {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	nodes, idBytes := uint64(len(idx.nodes)), idx.nativeHNSWIDBytes
+	if idx.liveDelta != nil {
+		idx.liveDelta.mu.RLock()
+		nodes += uint64(len(idx.liveDelta.nodes))
+		idx.liveDelta.mu.RUnlock()
+	}
+	unit, idCopies := uint64(512), uint64(8)
+	if buffered {
+		// Go 1.26 append grows by at least 1.25x above its small-slice
+		// threshold. Summing those cohorts costs at most five final backings;
+		// rounding the final capacity to twice the node count gives ten. Six
+		// candidate slices use append. Visited epochs double explicitly, and
+		// base/delta/merged result arrays grow with doubling search budgets.
+		// Minimum capacities and slice/heap headers fit the fixed 64KiB.
+		unit = 6*10*uint64(unsafe.Sizeof(vectorIndexCandidate{})) + 4*uint64(unsafe.Sizeof(uint32(0))) + 3*4*uint64(unsafe.Sizeof(VectorIndexSearchResult{})) + 4*uint64(unsafe.Sizeof(string("")))
+		// A single long ID may recur in every doubling delta pass even when
+		// total output bytes barely grow. Bound passes by the node count,
+		// plus one initial pass and the base/final merge arenas.
+		idCopies = 3
+		for remaining := nodes; remaining != 0; remaining >>= 1 {
+			idCopies++
+		}
+	}
+	fixed := uint64(64 << 10)
+	if uint64(len(query)) > (^uint64(0)-fixed)/32 {
+		return 0, memtable.ErrCOWCapacity
+	}
+	fixed += uint64(len(query)) * 32
+	if filter {
+		fieldCharge := memtable.COWAllocationCharge(uint64(len(idx.fieldPath)) * uint64(unsafe.Sizeof(string(""))))
+		if fieldCharge > ^uint64(0)-fixed {
+			return 0, memtable.ErrCOWCapacity
+		}
+		fixed += fieldCharge
+	}
+	if nodes > (^uint64(0)-fixed)/unit {
+		return 0, memtable.ErrCOWCapacity
+	}
+	fixed += nodes * unit
+	if idBytes > (^uint64(0)-fixed)/idCopies {
+		return 0, memtable.ErrCOWCapacity
+	}
+	return memtable.COWAllocationCharge(fixed + idBytes*idCopies), nil
 }
 
 func (idx *VectorIndex) searchCurrent(query []float32, opts VectorIndexSearchOptions, nativeRead *NativeJSONRead) ([]VectorSearchResult, VectorIndexTrace, error) {
@@ -4541,7 +4571,7 @@ func (idx *VectorIndex) searchGraphOnlyWithBuffer(query []float32, topK, efSearc
 	if buffer == nil {
 		return nil, vectorIndexNativeSearchState{}, errors.New("collections: nil vector index search buffer")
 	}
-	buffer.Reset()
+	buffer.resetSearch()
 	if view := idx.acquireSearchView(); view != nil {
 		results, err := view.searchGraphOnlyWithBuffer(query, topK, efSearch, buffer)
 		state := view.nativeSearchState()

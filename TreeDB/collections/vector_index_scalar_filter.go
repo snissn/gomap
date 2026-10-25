@@ -5,8 +5,10 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"math"
 	"sort"
+	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/workstats"
@@ -866,9 +868,27 @@ func (c *Collection) planNativeScalarFilter(filter *HybridScalarFilter, index *V
 	if err != nil {
 		return nil, nativeScalarPlanCacheStats{}, err
 	}
+	return c.planNativeScalarFilterAtLookup(filter, index, vectorDef, view, generation, nil)
+}
+
+func (c *Collection) planNativeScalarFilterAtLookup(filter *HybridScalarFilter, index *VectorIndex, vectorDef VectorIndexDefinition, view *hybridScalarLookupView, generation uint64, completeSet hybridScalarAllowSet) (*nativeScalarFilterExecution, nativeScalarPlanCacheStats, error) {
+	if filter == nil {
+		return nil, nativeScalarPlanCacheStats{}, nil
+	}
+	if err := validateHybridScalarFilter(*filter); err != nil {
+		return nil, nativeScalarPlanCacheStats{}, err
+	}
 	leaves := filter.And
 	if len(leaves) == 0 {
 		leaves = []HybridScalarFilter{*filter}
+	}
+	var admit func(uint64) error
+	if view.catalog.nativeText != nil {
+		admit = view.catalog.nativeText.admit
+		structural := uint64(len(leaves)) * (uint64(unsafe.Sizeof(nativeScalarClause{})) + uint64(unsafe.Sizeof(nativeScalarLeafProbe{})) + uint64(unsafe.Sizeof(hybridScalarAllowSet{})) + uint64(nativeScalarANNSeedLimit)*uint64(unsafe.Sizeof(string(""))))
+		if err := admit(memtable.COWAllocationCharge(structural) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeScalarFilterExecution{})))); err != nil {
+			return nil, nativeScalarPlanCacheStats{}, err
+		}
 	}
 	plan := &nativeScalarFilterExecution{
 		sourceGeneration: generation,
@@ -879,6 +899,30 @@ func (c *Collection) planNativeScalarFilter(filter *HybridScalarFilter, index *V
 		if !ok {
 			return nil, nativeScalarPlanCacheStats{}, fmt.Errorf("%w: native scalar index %q is unavailable", ErrHybridSearchIndexUnavailable, leaf.IndexName)
 		}
+		if admit != nil {
+			values := [2]any{leaf.Value}
+			count := 1
+			if leaf.Range != nil {
+				count = 0
+				if !leaf.Range.Lower.Unbounded {
+					values[count] = leaf.Range.Lower.Value
+					count++
+				}
+				if !leaf.Range.Upper.Unbounded {
+					values[count] = leaf.Range.Upper.Value
+					count++
+				}
+			}
+			for _, value := range values[:count] {
+				n, e := nativeIndexQueryCharge(def, value)
+				if e != nil {
+					return nil, nativeScalarPlanCacheStats{}, e
+				}
+				if e = admit(n); e != nil {
+					return nil, nativeScalarPlanCacheStats{}, e
+				}
+			}
+		}
 		clause, err := compileNativeScalarClause(def, leaf)
 		if err != nil {
 			return nil, nativeScalarPlanCacheStats{}, err
@@ -886,30 +930,47 @@ func (c *Collection) planNativeScalarFilter(filter *HybridScalarFilter, index *V
 		plan.clauses = append(plan.clauses, clause)
 	}
 
-	vectorGeneration, vectorMutationSeq, vectorGenerationValid := index.nativeScalarPlanCacheGeneration()
-	cacheKey := nativeScalarPlanCacheKey{
-		vectorIndex:       index,
-		sourceGeneration:  generation,
-		vectorGeneration:  vectorGeneration,
-		vectorMutationSeq: vectorMutationSeq,
-		vectorSchema:      nativeScalarVectorSchemaIdentity(vectorDef),
-		scalarSchema:      nativeScalarSchemaIdentity(view.catalog.meta.Indexes),
-		filterIdentity:    nativeScalarFilterIdentity(plan.clauses),
-		probeLimit:        nativeScalarProbeLimit,
-		exactSafetyCap:    nativeScalarExactSafetyCap,
-		annSeedProbeLimit: nativeScalarANNSeedProbeLimit,
-		annSeedLimit:      nativeScalarANNSeedLimit,
-	}
-	cacheable := vectorGenerationValid && vectorGeneration == generation
-	var cacheStats nativeScalarPlanCacheStats
-	if cacheable {
-		if cached, stats := c.nativeScalarPlanCacheGet(cacheKey); cached != nil {
-			return cached, stats, nil
-		} else {
-			cacheStats = stats
+	if completeSet != nil {
+		plan.finiteIDs = completeSet
+		plan.candidateIDs = uint64(len(completeSet))
+		plan.retainedCandidateIDs = plan.candidateIDs
+		plan.refinedCandidateIDs = plan.candidateIDs
+		plan.exactScoring = len(completeSet) <= nativeScalarExactSafetyCap
+		plan.identity = NativeScalarFilterPlanCompleteFinite
+		if plan.exactScoring {
+			plan.identity = NativeScalarFilterPlanCompleteExact
 		}
-	} else {
-		cacheStats = c.nativeScalarPlanCacheSnapshot(nativeScalarPlanCacheStats{generationBypasses: 1})
+		return plan, nativeScalarPlanCacheStats{}, nil
+	}
+
+	var cacheKey nativeScalarPlanCacheKey
+	var cacheStats nativeScalarPlanCacheStats
+	cacheable := false
+	if admit == nil {
+		vectorGeneration, vectorMutationSeq, vectorGenerationValid := index.nativeScalarPlanCacheGeneration()
+		cacheKey = nativeScalarPlanCacheKey{
+			vectorIndex:       index,
+			sourceGeneration:  generation,
+			vectorGeneration:  vectorGeneration,
+			vectorMutationSeq: vectorMutationSeq,
+			vectorSchema:      nativeScalarVectorSchemaIdentity(vectorDef),
+			scalarSchema:      nativeScalarSchemaIdentity(view.catalog.meta.Indexes),
+			filterIdentity:    nativeScalarFilterIdentity(plan.clauses),
+			probeLimit:        nativeScalarProbeLimit,
+			exactSafetyCap:    nativeScalarExactSafetyCap,
+			annSeedProbeLimit: nativeScalarANNSeedProbeLimit,
+			annSeedLimit:      nativeScalarANNSeedLimit,
+		}
+		cacheable = vectorGenerationValid && vectorGeneration == generation
+		if cacheable {
+			if cached, stats := c.nativeScalarPlanCacheGet(cacheKey); cached != nil {
+				return cached, stats, nil
+			} else {
+				cacheStats = stats
+			}
+		} else {
+			cacheStats = c.nativeScalarPlanCacheSnapshot(nativeScalarPlanCacheStats{generationBypasses: 1})
+		}
 	}
 	finish := func(plan *nativeScalarFilterExecution) (*nativeScalarFilterExecution, nativeScalarPlanCacheStats, error) {
 		if !cacheable {
@@ -921,7 +982,19 @@ func (c *Collection) planNativeScalarFilter(filter *HybridScalarFilter, index *V
 
 	probes := make([]nativeScalarLeafProbe, 0, len(leaves))
 	for _, leaf := range leaves {
-		set, inputIDs, truncated, err := view.leafProbe(leaf, nativeScalarProbeLimit)
+		var set hybridScalarAllowSet
+		var inputIDs uint64
+		var truncated bool
+		var err error
+		if admit == nil {
+			set, inputIDs, truncated, err = view.leafProbe(leaf, nativeScalarProbeLimit)
+		} else {
+			// The map is created with the probe capacity on its first retained ID.
+			n := uint64(nativeScalarProbeLimit)*2*(uint64(unsafe.Sizeof(string("")))+2) + 256
+			if err = admit(memtable.COWAllocationCharge(n)); err == nil {
+				set, inputIDs, truncated, err = view.leafProbeBeforeCopy(leaf, nativeScalarProbeLimit, nativeScalarProbeLimit+1, nil, func(id []byte) error { return admit(memtable.COWAllocationCharge(uint64(len(id)))) })
+			}
+		}
 		if err != nil {
 			return nil, cacheStats, err
 		}
@@ -1075,7 +1148,7 @@ func (idx *VectorIndex) searchGraphOnlyWithNativeScalarFilterBuffer(query []floa
 	if idx == nil || buffer == nil {
 		return nil, vectorIndexNativeSearchState{}, nativeScalarSearchWork{}, errors.New("collections: nil native scalar search state")
 	}
-	buffer.Reset()
+	buffer.resetSearch()
 	view := idx.acquireSearchView()
 	if view == nil {
 		return nil, vectorIndexNativeSearchState{}, nativeScalarSearchWork{}, fmt.Errorf("%w: native_runtime vector index %q has no published scalar generation", ErrVectorIndexSearchUnavailable, idx.name)
@@ -1129,7 +1202,9 @@ func bindNativeScalarMatcher(plan *nativeScalarFilterExecution, columns map[stri
 	matcher := nativeScalarBoundMatcher{plan: plan}
 	for i, clause := range plan.clauses {
 		column, ok := columns[clause.indexName]
-		if !ok || column.rows != rows {
+		// Empty declared base images can have no scalar backing before the
+		// first live-delta insert. No row can consult that absent column.
+		if (!ok && rows != 0) || (ok && column.rows != rows) {
 			return nativeScalarBoundMatcher{}, fmt.Errorf("%w: native scalar %s column %q is missing or misaligned", ErrVectorIndexSearchUnavailable, plane, clause.indexName)
 		}
 		if i < len(matcher.columns) {

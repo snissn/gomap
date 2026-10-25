@@ -1,8 +1,10 @@
 package collections
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"math"
 	"sync"
 
@@ -636,6 +638,8 @@ type VectorIndexSearchStats struct {
 }
 
 type vectorIndexSearchVisibility struct {
+	nativeIncarnation        uint64
+	nativeVersion            uint64
 	runtime                  *VectorIndex
 	collectionName           string
 	indexName                string
@@ -925,6 +929,8 @@ func (s VectorIndexSearchStats) ExactHNSWSearchPackNoDocumentRoute() bool {
 // buffer is reused or Reset is called. Parallel callers should use independent
 // searcher/buffer pairs per worker.
 type VectorIndexSearchBuffer struct {
+	// Native backing remains admitted until Reset; legacy reuse is unchanged.
+	nativeLease             *memtable.COWExternalLease
 	results                 []VectorIndexSearchResult
 	idBytes                 []byte
 	baseResults             []VectorIndexSearchResult
@@ -938,13 +944,24 @@ type VectorIndexSearchBuffer struct {
 	nativeSearchWork        vectorIndexNativeSearchWork
 }
 
-// Reset clears the buffer's current response view while retaining reusable
-// capacity. Any response previously returned by a buffered search API with this
+// Reset clears the buffer's current response view. Legacy buffers retain
+// reusable capacity; native buffers drop admitted backing before releasing its receipt. Any response previously returned by a buffered search API with this
 // buffer must be considered invalid after Reset returns.
 func (b *VectorIndexSearchBuffer) Reset() {
 	if b == nil {
 		return
 	}
+	if b.nativeLease != nil {
+		lease := b.nativeLease
+		*b = VectorIndexSearchBuffer{}
+		lease.Close()
+		return
+	}
+	b.resetSearch()
+}
+
+// Internal traversal restarts retain the caller-owned native receipt.
+func (b *VectorIndexSearchBuffer) resetSearch() {
 	clear(b.results)
 	b.nativeSearchWork = vectorIndexNativeSearchWork{}
 	b.resetView()
@@ -1372,6 +1389,21 @@ func (c *Collection) SearchVectorIndexWithBuffer(opts VectorIndexSearchOptions, 
 }
 
 func (c *Collection) searchVectorIndexWithBuffer(opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer, coverageLocked bool) (VectorIndexSearchResponse, error) {
+	if c != nil && c.nativeJSON != nil && c.typedGraphServingPolicy() == nil {
+		response, view, err := c.searchNativeHNSWWithBufferReadView(opts, buffer)
+		if view != nil {
+			err = errors.Join(err, view.Close())
+		}
+		if err != nil {
+			buffer.Reset()
+			response.Results = nil
+		}
+		return response, err
+	}
+
+	if buffer != nil && buffer.nativeLease != nil {
+		buffer.Reset()
+	}
 	if c.typedGraphServingPolicy() != nil {
 		response, view, err := c.searchTypedGraphServing(opts, buffer, false)
 		if err != nil {
@@ -1588,56 +1620,11 @@ func (c *Collection) searchNativeRuntimeVectorIndexWithBufferCoverage(def Vector
 			}
 		}
 		if err == nil {
-			response.Status.Loaded = true
-			response.Status.Registered = true
-			response.Status.RootName = load.RootName
-			response.Status.RootID = load.RootID
-			response.Status.NativeRootLoaded = load.RootID != 0
-			response.Status.NativeRootBytes = load.BytesDisk
-			response.Status.RebuildNeeded = searchState.rebuildNeeded
-			workstats.Runtime.QueriesCompleted.Add(1)
-			response.Stats.SearchRouteNativeRuntime = 1
-			response.Stats.NativeRuntimeFullRebuilds = searchState.fullRebuilds
-			response.Stats.CandidateRows = uint64(searchState.liveDocs)
-			if scalarPlan != nil {
-				response.Stats.ScalarFilterPlan = scalarPlan.identity
-				response.Stats.ScalarFilterProbeIDs = scalarPlan.probeIDs
-				response.Stats.ScalarFilterProbeTruncated = scalarPlan.probeTruncated
-				response.Stats.ScalarFilterCandidates = uint64(scalarWork.scored)
-				response.Stats.ScalarFilterCandidateIDs = scalarPlan.candidateIDs
-				response.Stats.ScalarFilterRetainedCandidateIDs = scalarPlan.retainedCandidateIDs
-				response.Stats.ScalarFilterRefinedCandidateIDs = scalarPlan.refinedCandidateIDs
-				response.Stats.ScalarFilterVisited = uint64(scalarWork.visited)
-				response.Stats.ScalarFilterScored = uint64(scalarWork.scored)
-				response.Stats.ScalarFilterSeedRowsVisited = uint64(scalarWork.seedRowsVisited)
-				response.Stats.ScalarFilterEligibleSeeds = uint64(scalarWork.eligibleSeeds)
-				response.Stats.ScalarFilterAdmitted = uint64(scalarWork.admitted)
-				if scalarWork.underfill {
-					response.Stats.ScalarFilterUnderfill = 1
-				}
-				if scalarPlan.exact() {
-					response.Stats.ScalarFilterExactScoring = 1
-				}
-				response.Stats.ScalarFilterPlanCacheHits = scalarPlanCache.hits
-				response.Stats.ScalarFilterPlanCacheMisses = scalarPlanCache.misses
-				response.Stats.ScalarFilterPlanCacheInvalidations = scalarPlanCache.invalidations
-				response.Stats.ScalarFilterPlanCacheGenerationBypasses = scalarPlanCache.generationBypasses
-				response.Stats.ScalarFilterPlanCacheEvictions = scalarPlanCache.evictions
-				response.Stats.ScalarFilterPlanCacheEntries = scalarPlanCache.entries
-				response.Stats.ScalarFilterPlanCacheRetainedBytes = scalarPlanCache.retainedBytes
-			}
-			response.visibility = vectorIndexSearchVisibility{
-				runtime:                  index,
-				collectionName:           c.collectionName(),
-				indexName:                def.Name,
-				strategy:                 def.Strategy,
-				schemaGeneration:         def.SchemaGeneration,
-				mutationSeq:              searchState.mutationSeq,
-				sourceDocumentGeneration: searchState.sourceDocumentGeneration,
-			}
+			c.finishNativeRuntimeVectorResponse(&response, index, def, load, searchState, scalarPlan, scalarPlanCache, scalarWork)
 		} else if !index.hasValidSourceDocumentRoots() {
 			response.Status.ExactFallbackReason = vectorIndexFallbackStaleDocumentRoot
 		}
+
 		publicationMu.RUnlock()
 		return response, err
 	}
@@ -2392,6 +2379,9 @@ func (s *VectorIndexSearcher) SearchWithBuffer(opts VectorIndexSearcherSearchOpt
 	if buffer == nil {
 		return VectorIndexSearchResponse{}, errors.New("collections: nil vector index search buffer")
 	}
+	if buffer.nativeLease != nil {
+		buffer.Reset()
+	}
 	previousResults := buffer.results
 	buffer.resetView()
 	var response VectorIndexSearchResponse
@@ -2977,4 +2967,196 @@ func vectorIndexSearchStatsFromInternal(searchStats columnVectorGraphNativeSearc
 		stats.HeapPops = searchStats.FrontierPops
 	}
 	return stats
+}
+
+// Shared telemetry is populated only after the maintained graph traversal returns.
+func (c *Collection) finishNativeRuntimeVectorResponse(out *VectorIndexSearchResponse, index *VectorIndex, def VectorIndexDefinition, load VectorIndexLoadStatus, searchState vectorIndexNativeSearchState, scalarPlan *nativeScalarFilterExecution, scalarPlanCache nativeScalarPlanCacheStats, scalarWork nativeScalarSearchWork) {
+	response := out
+	response.Status.Loaded = true
+	response.Status.Registered = true
+	response.Status.RootName = load.RootName
+	response.Status.RootID = load.RootID
+	response.Status.NativeRootLoaded = load.RootID != 0
+	response.Status.NativeRootBytes = load.BytesDisk
+	response.Status.RebuildNeeded = searchState.rebuildNeeded
+	workstats.Runtime.QueriesCompleted.Add(1)
+	response.Stats.SearchRouteNativeRuntime = 1
+	response.Stats.NativeRuntimeFullRebuilds = searchState.fullRebuilds
+	response.Stats.CandidateRows = uint64(searchState.liveDocs)
+	if scalarPlan != nil {
+		response.Stats.ScalarFilterPlan = scalarPlan.identity
+		response.Stats.ScalarFilterProbeIDs = scalarPlan.probeIDs
+		response.Stats.ScalarFilterProbeTruncated = scalarPlan.probeTruncated
+		response.Stats.ScalarFilterCandidates = uint64(scalarWork.scored)
+		response.Stats.ScalarFilterCandidateIDs = scalarPlan.candidateIDs
+		response.Stats.ScalarFilterRetainedCandidateIDs = scalarPlan.retainedCandidateIDs
+		response.Stats.ScalarFilterRefinedCandidateIDs = scalarPlan.refinedCandidateIDs
+		response.Stats.ScalarFilterVisited = uint64(scalarWork.visited)
+		response.Stats.ScalarFilterScored = uint64(scalarWork.scored)
+		response.Stats.ScalarFilterSeedRowsVisited = uint64(scalarWork.seedRowsVisited)
+		response.Stats.ScalarFilterEligibleSeeds = uint64(scalarWork.eligibleSeeds)
+		response.Stats.ScalarFilterAdmitted = uint64(scalarWork.admitted)
+		if scalarWork.underfill {
+			response.Stats.ScalarFilterUnderfill = 1
+		}
+		if scalarPlan.exact() {
+			response.Stats.ScalarFilterExactScoring = 1
+		}
+		response.Stats.ScalarFilterPlanCacheHits = scalarPlanCache.hits
+		response.Stats.ScalarFilterPlanCacheMisses = scalarPlanCache.misses
+		response.Stats.ScalarFilterPlanCacheInvalidations = scalarPlanCache.invalidations
+		response.Stats.ScalarFilterPlanCacheGenerationBypasses = scalarPlanCache.generationBypasses
+		response.Stats.ScalarFilterPlanCacheEvictions = scalarPlanCache.evictions
+		response.Stats.ScalarFilterPlanCacheEntries = scalarPlanCache.entries
+		response.Stats.ScalarFilterPlanCacheRetainedBytes = scalarPlanCache.retainedBytes
+	}
+	response.visibility = vectorIndexSearchVisibility{
+		runtime:                  index,
+		collectionName:           c.collectionName(),
+		indexName:                def.Name,
+		strategy:                 def.Strategy,
+		schemaGeneration:         def.SchemaGeneration,
+		mutationSeq:              searchState.mutationSeq,
+		sourceDocumentGeneration: searchState.sourceDocumentGeneration,
+	}
+}
+
+// This wrapper owns the view; the AtReadView helper below always borrows it.
+func (c *Collection) searchNativeHNSWWithBufferReadView(opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer) (response VectorIndexSearchResponse, view *CollectionReadView, err error) {
+	if err = validateCollectionVectorIndexSearchWithBufferOptions(opts, buffer); err != nil {
+		return response, nil, err
+	}
+	view, err = c.OpenCollectionReadView()
+	if err != nil {
+		buffer.Reset()
+		return response, nil, err
+	}
+	response, err = c.searchNativeHNSWAtReadView(opts, buffer, view, nil)
+	if err != nil {
+		err = errors.Join(err, view.Close())
+		return response, nil, err
+	}
+	return response, view, nil
+}
+
+func (c *Collection) searchNativeHNSWAtReadView(opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer, view *CollectionReadView, allowSet hybridScalarAllowSet) (response VectorIndexSearchResponse, resultErr error) {
+	if err := validateCollectionVectorIndexSearchWithBufferOptions(opts, buffer); err != nil {
+		return response, err
+	}
+	buffer.Reset()
+	defer func() {
+		if resultErr != nil {
+			buffer.Reset()
+			response.Results = nil
+		}
+	}()
+	if view == nil || view.closed || view.collection != c || view.nativeRead == nil {
+		return response, ErrVectorIndexSnapshotMismatch
+	}
+	read := view.nativeRead
+	def, ok := findVectorIndex(read.meta.VectorIndexes, opts.IndexName)
+	if !ok {
+		return response, ErrIndexNotFound
+	}
+	response = VectorIndexSearchResponse{IndexName: def.Name, Strategy: def.Strategy, Path: VectorIndexSearchPathNativeRuntime, Status: VectorIndexStatus{Definition: def, Name: def.Name, Strategy: def.Strategy, State: VectorIndexStateNativeRuntime, Reason: VectorIndexReasonNativeRuntime}}
+	if !nativeOrdinaryHNSWMeta(read.meta) || !vectorIndexDefinitionUsesNativeRuntime(def) || def.Metric != VectorMetricCosine || def.Encoding != VectorIndexEncodingFloat32 || def.Representation != "" || len(def.QuantizedIndexes) != 0 {
+		return response, fmt.Errorf("%w: ordinary cosine float32 native runtime required", ErrVectorIndexSearchUnavailable)
+	}
+	if opts.StatsMode != VectorIndexSearchStatsModeMinimal && opts.StatsMode != VectorIndexSearchStatsModeProduction {
+		return response, collectionVectorIndexWithBufferUnsupportedOptionError("StatsMode", "native_runtime buffered search supports production/minimal mode")
+	}
+	mode, err := normalizeVectorIndexSearchQueryMode(opts.QueryMode, opts.QuantizedIndexName, opts.QuantizedRerankCandidates, opts.TopK)
+	if err != nil {
+		return response, err
+	}
+	if mode != columnVectorGraphNativeSearchQueryModeExact {
+		return response, fmt.Errorf("%w: native runtime quantized query", ErrVectorIndexSearchUnavailable)
+	}
+	ctx := opts.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err = ctx.Err(); err != nil {
+		return response, err
+	}
+	if view.catalog == nil {
+		scratch, e := newHybridNativeScratch(view)
+		if e != nil {
+			return response, e
+		}
+		view.catalog, e = newNativeTextCatalog(read, scratch.admit)
+		if e != nil {
+			return response, e
+		}
+	}
+	index := c.registeredVectorIndex(def.Name)
+	var load VectorIndexLoadStatus
+	if index == nil {
+		unlock := c.lockVectorIndexMutation()
+		index = c.registeredVectorIndex(def.Name)
+		if index == nil {
+			index, load, err = c.loadNativeHNSWAtRead(vectorIndexOptionsFromDefinition(def), read)
+		}
+		unlock()
+		if err != nil {
+			return response, fmt.Errorf("%w: native runtime load: %w", ErrVectorIndexSnapshotMismatch, err)
+		}
+		if index == nil || !load.Loaded {
+			return response, fmt.Errorf("%w: native runtime unavailable: %s", ErrVectorIndexSearchUnavailable, load.ExactFallbackReason)
+		}
+	}
+	index.nativeHNSWUseMu.RLock()
+	defer index.nativeHNSWUseMu.RUnlock()
+	if c.registeredVectorIndex(def.Name) != index {
+		return response, ErrVectorIndexSnapshotMismatch
+	}
+	if err = index.validateNativeHNSWRead(read); err != nil {
+		return response, fmt.Errorf("%w: %w", ErrVectorIndexSnapshotMismatch, err)
+	}
+	charge, err := index.nativeHNSWQueryCharge(opts.Query, false, true)
+	if err != nil {
+		return response, err
+	}
+	buffer.nativeLease, err = read.capture.NativeAllocator().AdmitNativeBytes(charge)
+	if err != nil {
+		return response, fmt.Errorf("collections: native buffered vector query workspace: %w", err)
+	}
+	buffer.nativeSearchWorkEnabled = false
+	buffer.nativeSearchScratch.setContext(ctx)
+	defer buffer.nativeSearchScratch.clearContext()
+	var scalarPlan *nativeScalarFilterExecution
+	var scalarCache nativeScalarPlanCacheStats
+	if opts.DeclaredScalarFilter != nil {
+		lookup := hybridScalarLookupView{context: ctx, catalog: view.catalog}
+		scalarPlan, scalarCache, err = c.planNativeScalarFilterAtLookup(opts.DeclaredScalarFilter, index, def, &lookup, read.collection.documentGeneration, allowSet)
+		if err != nil {
+			return response, err
+		}
+	}
+	var state vectorIndexNativeSearchState
+	var work nativeScalarSearchWork
+	workstats.Runtime.QueryAttempts.Add(1)
+	if scalarPlan == nil {
+		response.Results, state, err = index.searchGraphOnlyWithBuffer(opts.Query, opts.TopK, opts.EfSearch, buffer)
+	} else {
+		response.Results, state, work, err = index.searchGraphOnlyWithNativeScalarFilterBuffer(opts.Query, opts.TopK, opts.EfSearch, scalarPlan, buffer)
+	}
+	if err != nil {
+		return response, err
+	}
+	if err = ctx.Err(); err != nil {
+		return response, err
+	}
+	if state.sourceDocumentGeneration != read.collection.documentGeneration {
+		return response, ErrVectorIndexSnapshotMismatch
+	}
+	domain, _ := read.collection.domains.Get("vector-index/" + def.Name)
+	index.mu.RLock()
+	disk := index.persistedBytesDisk
+	index.mu.RUnlock()
+	load = VectorIndexLoadStatus{Loaded: true, RootName: collectionVectorIndexRootName(c.name, def.Name), RootID: domain.baseRoot, Epoch: domain.baseRoot, LogicalVersion: domain.interpretation, BytesDisk: disk}
+	c.finishNativeRuntimeVectorResponse(&response, index, def, load, state, scalarPlan, scalarCache, work)
+	response.visibility.nativeIncarnation = read.collection.incarnation
+	response.visibility.nativeVersion = domain.interpretation
+	return response, nil
 }

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"unsafe"
 )
 
 const (
@@ -22,6 +24,15 @@ var errHybridVectorAllowSetScanBudgetExceeded = errors.New("collections: hybrid 
 // ranks, and fails closed if the backing vector path reports any document
 // materialization or unavailable vector-index state.
 func (c *Collection) SearchHybridVectorCandidates(query HybridVectorQuery) (HybridCandidateResponse, error) {
+	if c != nil && c.nativeJSON != nil && c.typedGraphServingPolicy() == nil {
+		view, err := c.OpenCollectionReadView()
+		if err != nil {
+			return HybridCandidateResponse{}, err
+		}
+		response, err := c.searchHybridVectorCandidatesDeclaredScalarAtReadView(context.Background(), query, nil, view, 0, false)
+		return response, errors.Join(err, view.Close())
+	}
+
 	policy := c.typedGraphServingPolicy()
 	if hybridVectorQuerySelectsQuantizedRerank(&query) && policy == nil {
 		requested := query.CandidateLimit
@@ -70,6 +81,7 @@ func (c *Collection) searchHybridVectorCandidatesWithAllowSetBudget(query Hybrid
 
 	opts := hybridVectorSearchOptions(query)
 	var buffer VectorIndexSearchBuffer
+	defer buffer.Reset()
 	vectorResponse, err := c.SearchVectorIndexWithBuffer(opts, &buffer)
 	if err != nil {
 		response := HybridCandidateResponse{Stats: hybridVectorCandidateStatsFromSearch(requested, vectorResponse.Stats, 0)}
@@ -97,6 +109,7 @@ func (c *Collection) searchHybridVectorCandidatesDeclaredScalar(query HybridVect
 	}
 	opts.DeclaredScalarFilter = filter
 	var buffer VectorIndexSearchBuffer
+	defer buffer.Reset()
 	var vectorResponse VectorIndexSearchResponse
 	var view *CollectionReadView
 	var err error
@@ -119,12 +132,41 @@ func (c *Collection) searchHybridVectorCandidatesDeclaredScalar(query HybridVect
 }
 
 func (c *Collection) searchHybridVectorCandidatesDeclaredScalarAtReadView(ctx context.Context, query HybridVectorQuery, filter *HybridScalarFilter, view *CollectionReadView, ownerAcquireNanos int64, scalarStatsOwner bool) (HybridCandidateResponse, error) {
+	return c.searchHybridVectorCandidatesDeclaredScalarAtReadViewWithAllowSet(ctx, query, filter, view, ownerAcquireNanos, scalarStatsOwner, nil)
+}
+
+func (c *Collection) searchHybridVectorCandidatesDeclaredScalarAtReadViewWithAllowSet(ctx context.Context, query HybridVectorQuery, filter *HybridScalarFilter, view *CollectionReadView, ownerAcquireNanos int64, scalarStatsOwner bool, allowSet hybridScalarAllowSet) (HybridCandidateResponse, error) {
 	requested := query.CandidateLimit
 	if err := validateHybridVectorCandidateQuery(query); err != nil {
 		response := HybridCandidateResponse{Stats: hybridVectorCandidateStatsFromSearch(requested, VectorIndexSearchStats{}, 0)}
 		response.Stats.FailClosed = 1
 		response.Stats.FailClosedReason = HybridFailClosedReasonUnsupported
 		return response, err
+	}
+	if view != nil && view.nativeRead != nil {
+		opts := hybridVectorSearchOptions(query)
+		opts.Context = ctx
+		opts.StatsMode = VectorIndexSearchStatsModeProduction
+		opts.DeclaredScalarFilter = filter
+		var buffer VectorIndexSearchBuffer
+		defer buffer.Reset()
+		vectorResponse, err := c.searchNativeHNSWAtReadView(opts, &buffer, view, allowSet)
+		if err != nil {
+			stats := hybridVectorCandidateStatsFromSearch(requested, vectorResponse.Stats, 0)
+			stats.FailClosed = 1
+			stats.FailClosedReason = hybridVectorCandidateFailClosedReason(err)
+			return HybridCandidateResponse{Stats: stats}, hybridVectorCandidateError(err, query.IndexName)
+		}
+		admit := view.catalog.nativeText.admit
+		if err = admit(memtable.COWAllocationCharge(uint64(len(vectorResponse.Results)) * uint64(unsafe.Sizeof(HybridSearchCandidate{})))); err != nil {
+			return HybridCandidateResponse{}, err
+		}
+		for _, result := range vectorResponse.Results {
+			if err = admit(memtable.COWAllocationCharge(uint64(len(result.ID)))); err != nil {
+				return HybridCandidateResponse{}, err
+			}
+		}
+		return hybridVectorCandidatesFromSearchResponse(requested, query.IndexName, vectorResponse)
 	}
 	if view == nil || view.typedGraphOwner == nil {
 		return HybridCandidateResponse{}, hybridVectorCandidateError(ErrVectorIndexSnapshotMismatch, query.IndexName)
@@ -134,6 +176,7 @@ func (c *Collection) searchHybridVectorCandidatesDeclaredScalarAtReadView(ctx co
 	opts.StatsMode = VectorIndexSearchStatsModeMinimal
 	opts.DeclaredScalarFilter = filter
 	var buffer VectorIndexSearchBuffer
+	defer buffer.Reset()
 	vectorResponse, gotView, filterWork, err := c.searchTypedGraphServingWithOwner(opts, &buffer, true, view.typedGraphOwner, ownerAcquireNanos, scalarStatsOwner)
 	if err != nil {
 		stats := hybridVectorCandidateStatsFromSearch(requested, vectorResponse.Stats, 0)

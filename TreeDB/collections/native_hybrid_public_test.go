@@ -347,6 +347,7 @@ func TestNativeHybridPublicBoundsAndCleanup(t *testing.T) {
 	requireNativeHybridResult(t, c, opts)
 	opts = nativeHybridRequest()
 	opts.Vector = &HybridVectorQuery{IndexName: "embedding", Query: []float32{1, 0}, CandidateLimit: 3}
+	opts.Vector.QueryMode = VectorIndexQueryModeQuantizedOnly // ordinary adapter does not reinterpret typed/quantized modes
 	before := budget.Stats()
 	failed, err = c.SearchHybrid(opts)
 	after := budget.Stats()

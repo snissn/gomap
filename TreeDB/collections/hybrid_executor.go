@@ -105,10 +105,6 @@ func (c *Collection) searchHybridWithCandidateBudgetPolicy(opts HybridSearchOpti
 
 	var baseState hybridSearchStateToken
 	if c.nativeJSON != nil {
-		// No native vector adapter is selected yet. Refuse before capture/work.
-		if plan.vector != nil {
-			return hybridSearchFailClosed(response, HybridFailClosedReasonVectorIndexUnavailable, fmt.Errorf("%w: native hybrid vector candidates", ErrHybridSearchUnsupported))
-		}
 		view, openErr := c.OpenCollectionReadView()
 		if openErr != nil {
 			return hybridSearchFailClosed(response, HybridFailClosedReasonSnapshotMismatch, openErr)
@@ -134,6 +130,13 @@ func (c *Collection) searchHybridWithCandidateBudgetPolicy(opts HybridSearchOpti
 		view.catalog, err = newNativeTextCatalog(view.nativeRead, plan.nativeScratch.admit)
 		if err != nil {
 			return hybridSearchFailClosed(response, HybridFailClosedReasonUnsupported, err)
+		}
+		if plan.vector != nil {
+			def, ok := findVectorIndex(view.nativeRead.meta.VectorIndexes, plan.vector.IndexName)
+			if !ok || !nativeOrdinaryHNSWMeta(view.nativeRead.meta) || !vectorIndexDefinitionUsesNativeRuntime(def) || def.Metric != VectorMetricCosine || def.Encoding != VectorIndexEncodingFloat32 || def.Representation != "" || len(def.QuantizedIndexes) != 0 || hybridVectorQuerySelectsQuantizedRerank(plan.vector) {
+				return hybridSearchFailClosed(response, HybridFailClosedReasonVectorIndexUnavailable, fmt.Errorf("%w: ordinary native vector declaration required", ErrHybridSearchUnsupported))
+			}
+			plan.nativeVectorRuntime = true
 		}
 		baseState = hybridSearchReadViewStateToken(view)
 		runHybridSearchAfterReadOwnerAcquiredHookForTest(c, view)
@@ -174,7 +177,9 @@ func (c *Collection) searchHybridWithCandidateBudgetPolicy(opts HybridSearchOpti
 	var scalarStats HybridSearchStats
 	nativeVectorOnlyShape := plan.text == nil && plan.vector != nil
 	if nativeVectorOnlyShape {
-		plan.nativeVectorRuntime, err = c.hybridVectorQueryUsesNativeRuntime(plan.vector)
+		if c.nativeJSON == nil {
+			plan.nativeVectorRuntime, err = c.hybridVectorQueryUsesNativeRuntime(plan.vector)
+		}
 		if err != nil {
 			return hybridSearchFailClosed(response, HybridFailClosedReasonVectorIndexUnavailable, err)
 		}
@@ -1031,11 +1036,11 @@ func (c *Collection) hybridSearchCandidates(plan hybridSearchExecutionPlan, allo
 			var filter *HybridScalarFilter
 			// Keep prefilter admission/order in the executor, but let the
 			// selected owner search its captured base and current mutations.
-			if plan.nativeVectorScalar || plan.ownerBoundVectorScalar || (selectedTyped && allowSet != nil) {
+			if plan.nativeVectorScalar || plan.ownerBoundVectorScalar || (plan.nativeScratch != nil && plan.scalarFilterStrategy == HybridScalarFilterStrategyPrefilter) || (selectedTyped && allowSet != nil) {
 				filter = plan.scalarFilter
 			}
 			if plan.readView != nil {
-				return c.searchHybridVectorCandidatesDeclaredScalarAtReadView(plan.context, *plan.vector, filter, plan.readView, plan.readOwnerAcquireNanos, plan.ownerBoundVectorScalar)
+				return c.searchHybridVectorCandidatesDeclaredScalarAtReadViewWithAllowSet(plan.context, *plan.vector, filter, plan.readView, plan.readOwnerAcquireNanos, plan.ownerBoundVectorScalar, allowSet)
 			}
 			return c.searchHybridVectorCandidatesDeclaredScalar(*plan.vector, filter)
 		}
@@ -1569,6 +1574,7 @@ func hybridSearchReadViewStateToken(view *CollectionReadView) hybridSearchStateT
 // cumulative across serial phases: retired Go backing may coexist until GC.
 // No receipt, scratch pool or mutable decoder is installed on a shared owner.
 type hybridNativeScratch struct {
+	mu      sync.Mutex
 	view    *CollectionReadView
 	charged uint64
 }
@@ -1581,6 +1587,8 @@ func newHybridNativeScratch(view *CollectionReadView) (*hybridNativeScratch, err
 	return &hybridNativeScratch{view: view, charged: n}, nil
 }
 func (s *hybridNativeScratch) admit(n uint64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if n > ^uint64(0)-s.charged {
 		return memtable.ErrCOWCapacity
 	}

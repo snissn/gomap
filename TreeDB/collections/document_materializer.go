@@ -304,6 +304,28 @@ func (c *Collection) OpenCollectionReadViewForVectorIndexSearch(response VectorI
 		return nil, errors.Join(err, view.Close())
 	}
 	visibility := response.visibility
+	if view.nativeRead != nil {
+		read := view.nativeRead
+		index := visibility.runtime
+		if index == nil || visibility.collectionName != c.name || visibility.indexName != response.IndexName || visibility.strategy != VectorIndexStrategyNativeRuntime || c.registeredVectorIndex(visibility.indexName) != index {
+			return closeWithError(ErrVectorIndexSnapshotMismatch)
+		}
+		index.nativeHNSWUseMu.RLock()
+		defer index.nativeHNSWUseMu.RUnlock()
+		domain, ok := read.collection.domains.Get("vector-index/" + visibility.indexName)
+		if !ok || read.collection.incarnation != visibility.nativeIncarnation || domain.interpretation != visibility.nativeVersion || read.collection.documentGeneration != visibility.sourceDocumentGeneration || index.validateNativeHNSWRead(read) != nil || !index.nativeSearchStateCoversCurrentDocuments(vectorIndexNativeSearchState{mutationSeq: visibility.mutationSeq, sourceDocumentGeneration: visibility.sourceDocumentGeneration}) {
+			return closeWithError(ErrVectorIndexSnapshotMismatch)
+		}
+		scratch, e := newHybridNativeScratch(view)
+		if e != nil {
+			return closeWithError(e)
+		}
+		view.catalog, e = newNativeTextCatalog(read, scratch.admit)
+		if e != nil {
+			return closeWithError(e)
+		}
+		return view, nil
+	}
 	if visibility.runtime == nil ||
 		visibility.collectionName != view.catalog.meta.Name ||
 		visibility.indexName != response.IndexName ||
@@ -342,6 +364,10 @@ func (c *Collection) OpenCollectionReadViewForVectorIndexSearch(response VectorI
 // SearchVectorIndexWithBufferReadView searches and opens the matching document
 // snapshot while excluding coverage mutations across the combined operation.
 func (c *Collection) SearchVectorIndexWithBufferReadView(opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer) (VectorIndexSearchResponse, *CollectionReadView, error) {
+	if c != nil && c.nativeJSON != nil && c.typedGraphServingPolicy() == nil {
+		return c.searchNativeHNSWWithBufferReadView(opts, buffer)
+	}
+
 	if c.typedGraphServingPolicy() != nil {
 		return c.searchTypedGraphServing(opts, buffer, true)
 	}
@@ -393,6 +419,7 @@ func (v *CollectionReadView) Close() error {
 	}
 	v.closed = true
 	if v.nativeRead != nil {
+		v.catalog = nil // drop private admission callbacks before releasing their owner
 		read, lease := v.nativeRead, v.nativeLease
 		v.nativeRead, v.nativeLease, v.collection = nil, nil, nil
 		err := read.Close()

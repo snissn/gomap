@@ -1,12 +1,13 @@
-# Native lexical hybrid reads
+# Native captured hybrid reads
 
 Ordinary JSON collections use the maintained hybrid executor for lexical search,
-scalar equality/range/conjunction filters, rank fusion and final JSON projection.
+ordinary cosine float32 native-runtime HNSW, scalar equality/range/conjunction
+filters, rank fusion and final JSON projection.
 This is a read adapter over existing text and scalar domains. It does not add a
 publication authority or select a server default.
 
 The executor owns one `CollectionReadView` and its `NativeJSONRead` for the whole
-request. Scalar iterators, text analysis/search and final document fetch borrow
+request. Scalar iterators, text analysis/search, no-document HNSW traversal and final document fetch borrow
 that capture and its immutable schema. A native snapshot explicitly reports
 `Native`, `NativeLogicalSequence`, `CollectionIncarnation` and
 `DocumentGeneration`. Existing physical snapshot fields describe the captured
@@ -36,11 +37,27 @@ Final fetch admits its result headers, ID copies and full ordinary native input 
 The existing per-leaf, aggregate, postings, cancellation and no-primary-scan
 contracts still apply. Empty scalar sets still validate the captured text analyzer.
 
-Native vector candidate requests are explicitly refused before opening a read.
-Ordinary HNSW hybrid/buffer adaptation and default ColumnGraph service eligibility
-remain separate required capabilities. The unchanged eight-cell service fixture
-must keep those later failures visible; passing filtered lexical search does not
-certify a complete document service or any performance claim.
+Ordinary `native_runtime` cosine float32 vector candidates borrow the same cut.
+The existing graph-only traversal and scalar-column matcher supply IDs and
+scores without document fetch or exact scan fallback. Cold load decodes that
+captured graph image; short installer captures validate identity only. Native
+scalar plans bypass the legacy retained cache because their ID sets belong to
+the request view. Parallel text/vector branches serialize receipt growth through
+a private mutex, while traversal remains independent.
+
+A native `VectorIndexSearchBuffer` retains its separate query receipt until
+`Reset` or reuse. Reset drops all native scratch/result backing before refund,
+so returning buffers to an existing pool cannot retain uncharged arrays. Result
+IDs remain valid after the read view closes, until buffer reset; document fetch
+must finish before then. Legacy buffers retain their existing reusable capacity.
+The public ordinary `idx.Search` retains its existing ownership and callback
+postvalidation; its query charge calculation is shared without changing ranking.
+
+Typed/ColumnGraph, normalized and quantized vector dispatch remain explicit and
+are not reinterpreted by this adapter. Default ColumnGraph service eligibility
+remains required separately. The unchanged eight-cell service fixture keeps that
+failure visible; this packet does not select a new strategy default or assert
+performance acceptance.
 
 The selected public controls cover V1/V2 text, scalar equality/range/AND, projection, held
 views, logical stale checks, checkpoint and cold reopen, empty-set analyzer

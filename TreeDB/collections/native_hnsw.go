@@ -681,6 +681,11 @@ func (c *Collection) loadNativeHNSW(opts VectorIndexOptions) (index *VectorIndex
 		return nil, status, err
 	}
 	defer func() { resultErr = errors.Join(resultErr, read.Close()) }()
+	return c.loadNativeHNSWAtRead(opts, read)
+}
+
+// Caller owns the existing mutation gate and the borrowed data capture.
+func (c *Collection) loadNativeHNSWAtRead(opts VectorIndexOptions, read *NativeJSONRead) (index *VectorIndex, status VectorIndexLoadStatus, resultErr error) {
 	def, ok := findVectorIndex(read.meta.VectorIndexes, vectorIndexOptionName(opts))
 	if !ok {
 		return nil, status, errVectorIndexNotDeclared
@@ -787,6 +792,10 @@ func (c *Collection) loadNativeHNSW(opts VectorIndexOptions) (index *VectorIndex
 	if err = populateNativeHNSWScalarRows(index, read, admit, index); err != nil {
 		return nil, status, err
 	}
+	// The codec published its graph view before scalar reconstruction. Keep
+	// that incomplete view private and rebuild both planes before first use.
+	index.searchViewForceFull = true
+	index.searchViewCurrent.Store(false)
 	state, _ := read.capture.Snapshot().StateToken()
 	index.recordSourceDocumentState(read.collection.documentGeneration, state)
 	if err = c.installNativeHNSW(index, read); err != nil {

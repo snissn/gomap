@@ -1478,7 +1478,7 @@ func (s *Service) SearchHybrid(ctx context.Context, index string, req HybridSear
 		info.VectorStrategy == collections.VectorIndexStrategyNativeRuntime &&
 		info.Capabilities.NoDocumentVectorSearch
 	if !nativeVectorOnly && !info.Capabilities.HybridSearch {
-		return HybridSearchResponse{}, serviceError(CodeIndexUnavailable, "hybrid search requires a cosine column_graph vector index and content text index")
+		return HybridSearchResponse{}, serviceError(CodeIndexUnavailable, "hybrid search requires a cosine column_graph or native_runtime vector index and content text index")
 	}
 	if req.CandidateLimit < 0 || req.TextCandidateLimit < 0 || req.VectorCandidateLimit < 0 || req.MaxPostingsScanned < 0 || req.QuantizedRerankCandidates < 0 || req.EfSearch < 0 {
 		return HybridSearchResponse{}, serviceError(CodeInvalidRequest, "candidate limits, max_postings_scanned, and ef_search must be non-negative")
@@ -1877,7 +1877,8 @@ func indexInfoFromMeta(meta collections.CollectionMeta) (IndexInfo, error) {
 	if generation == 0 {
 		generation = 1
 	}
-	hybridSearch := vectorDef.Strategy == collections.VectorIndexStrategyColumnGraph && vectorDef.Metric == collections.VectorMetricCosine && vectorDef.Encoding == collections.VectorIndexEncodingFloat32
+	nativeHybrid := vectorDef.Strategy == collections.VectorIndexStrategyNativeRuntime && meta.Options.ColumnStore == nil && vectorDef.Representation == "" && len(vectorDef.QuantizedIndexes) == 0
+	hybridSearch := (vectorDef.Strategy == collections.VectorIndexStrategyColumnGraph || nativeHybrid) && vectorDef.Metric == collections.VectorMetricCosine && vectorDef.Encoding == collections.VectorIndexEncodingFloat32
 	scalarFields := scalarFieldsFromCollectionIndexes(meta.Indexes)
 	typedInput := serviceUsesTypedInput(meta)
 	capabilities := indexCapabilities(vectorDef, hybridSearch)
