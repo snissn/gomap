@@ -4156,7 +4156,7 @@ func (idx *VectorIndex) Search(query []float32, opts VectorIndexSearchOptions) (
 			return nil, VectorIndexTrace{}, fmt.Errorf("collections: native vector query workspace: %w", err)
 		}
 		defer workspace.Close()
-		rows, trace, err := idx.searchCurrent(query, opts)
+		rows, trace, err := idx.searchCurrent(query, opts, read)
 		if err != nil {
 			return rows, trace, err
 		}
@@ -4170,10 +4170,10 @@ func (idx *VectorIndex) Search(query []float32, opts VectorIndexSearchOptions) (
 		}
 		return rows, trace, nil
 	}
-	return idx.searchCurrent(query, opts)
+	return idx.searchCurrent(query, opts, nil)
 }
 
-func (idx *VectorIndex) searchCurrent(query []float32, opts VectorIndexSearchOptions) ([]VectorSearchResult, VectorIndexTrace, error) {
+func (idx *VectorIndex) searchCurrent(query []float32, opts VectorIndexSearchOptions, nativeRead *NativeJSONRead) ([]VectorSearchResult, VectorIndexTrace, error) {
 	trace := VectorIndexTrace{Strategy: "ann_graph"}
 	if idx == nil {
 		return nil, trace, errors.New("collections: vector index is nil")
@@ -4344,6 +4344,17 @@ func (idx *VectorIndex) searchCurrent(query []float32, opts VectorIndexSearchOpt
 			return nil, trace, fmt.Errorf("%w: native_runtime vector index %q does not cover current documents", ErrVectorIndexSearchUnavailable, idx.name)
 		}
 		scratch := idx.getSearchScratch()
+		if nativeRead != nil {
+			// These backings belong to this query's admitted workspace. Reserve
+			// bounded initial capacities together instead of growing each heap
+			// geometrically; no scratch survives the operation in a global pool.
+			limit := minInt(candidateLimit, len(idx.nodes))
+			arena := make([]vectorIndexCandidate, 4*limit)
+			scratch.queue = arena[: 0 : 2*limit]
+			scratch.best = arena[2*limit : 2*limit : 3*limit]
+			scratch.out = arena[3*limit : 3*limit : 4*limit]
+			scratch.visitedEpochs = make([]uint32, len(idx.nodes))
+		}
 		candidates := idx.searchCandidatesLocked(query, queryNorm, prepared, candidateLimit, scratch)
 		trace.CandidatesExamined = len(candidates)
 		fastRerank := filter == nil && idx.metric == VectorMetricCosine && idx.encoding == VectorIndexEncodingFloat32
@@ -4365,7 +4376,7 @@ func (idx *VectorIndex) searchCurrent(query []float32, opts VectorIndexSearchOpt
 		idx.mu.RUnlock()
 
 		if fastRerank && err == nil {
-			results, err = idx.attachVectorSearchResultDocuments(results, resultNodeIDs, opts.TopK)
+			results, err = idx.attachVectorSearchResultDocuments(results, resultNodeIDs, opts.TopK, nativeRead)
 		} else if !fastRerank {
 			results, err = idx.rerankCandidates(query, candidateIDs, filter, opts.TopK, &trace)
 		}
@@ -4836,7 +4847,7 @@ func (idx *VectorIndex) isCurrentVectorNodeResult(documentID []byte, nodeID int)
 	return currentNodeID >= 0 && currentNodeID < len(idx.nodes) && !idx.nodes[currentNodeID].deleted
 }
 
-func (idx *VectorIndex) attachVectorSearchResultDocuments(ranked []VectorSearchResult, rankedNodeIDs []int, topK int) ([]VectorSearchResult, error) {
+func (idx *VectorIndex) attachVectorSearchResultDocuments(ranked []VectorSearchResult, rankedNodeIDs []int, topK int, nativeRead *NativeJSONRead) ([]VectorSearchResult, error) {
 	if idx == nil {
 		return nil, errors.New("collections: vector index is nil")
 	}
@@ -4844,12 +4855,10 @@ func (idx *VectorIndex) attachVectorSearchResultDocuments(ranked []VectorSearchR
 		return nil, errCollectionNil
 	}
 	if idx.collection.nativeJSON != nil {
-		read, err := idx.collection.nativeJSON.Capture(idx.collection.name)
-		if err != nil {
-			return nil, err
+		if nativeRead == nil {
+			return nil, errors.New("collections: native vector search requires its captured read")
 		}
-		defer read.Close()
-		results := make([]VectorSearchResult, 0, minInt(topK, len(ranked)))
+		results := ranked[:0]
 		for i, result := range ranked {
 			if len(results) == topK {
 				break
@@ -4857,18 +4866,21 @@ func (idx *VectorIndex) attachVectorSearchResultDocuments(ranked []VectorSearchR
 			if i >= len(rankedNodeIDs) || !idx.isCurrentVectorNodeResult(result.DocumentID, rankedNodeIDs[i]) {
 				continue
 			}
-			doc, e := read.Get(result.DocumentID)
+			doc, e := nativeRead.Get(result.DocumentID)
 			if errors.Is(e, tree.ErrKeyNotFound) {
 				continue
 			}
 			if e != nil {
 				return nil, e
 			}
-			result.DocumentID = bytes.Clone(result.DocumentID)
 			result.Document = doc
 			results = append(results, result)
 		}
-		return results, nil
+		cloneVectorSearchResultDocumentIDs(results)
+		// The discarded ranked tail still contains borrowed runtime IDs. Clear
+		// those references before returning the reused caller-owned backing.
+		clear(ranked[len(results):cap(ranked)])
+		return results[:len(results):len(results)], nil
 	}
 
 	if idx.collection.db == nil {

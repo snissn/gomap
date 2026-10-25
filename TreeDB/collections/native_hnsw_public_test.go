@@ -667,44 +667,157 @@ func TestNativeHNSWPublicStaleHandleFlush(t *testing.T) {
 	}
 }
 
+type nativeHNSWAdmissionBudget interface {
+	Stats() memtable.COWStats
+	Limits() memtable.COWLimits
+}
+
+// Retain every setup cut, including the empty OPEN cut. Otherwise an admission
+// attempt may complete teardown of a former cut and change the measured budget
+// even when all allocations belonging to that attempt were correctly refunded.
+func openPinnedNativeHNSWAdmissionFixture(t *testing.T, id []byte) (*Collection, VectorIndexDefinition, nativeHNSWAdmissionBudget) {
+	t.Helper()
+	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, t.TempDir())
+	opts.MemtableMode = "cow_btree"
+	opts.FlushThreshold = 1 << 30
+	opts.BackgroundCheckpointInterval = -1
+	opts.BackgroundCheckpointIdleDuration = -1
+	database, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manager *CollectionManager
+	var pins []backenddb.NativeSemanticCapture
+	var budget nativeHNSWAdmissionBudget
+	t.Cleanup(func() {
+		for i := len(pins) - 1; i >= 0; i-- {
+			if err := pins[i].Close(); err != nil {
+				t.Error(err)
+			}
+		}
+		if manager != nil {
+			if err := manager.Close(); err != nil {
+				t.Error(err)
+			}
+		}
+		if err := database.Close(); err != nil {
+			t.Error(err)
+		}
+		if budget != nil {
+			stats := budget.Stats()
+			if stats.TotalBytes != 0 || stats.ExternalLeases != 0 {
+				t.Errorf("full Close retained admission fixture: %+v", stats)
+			}
+		}
+	})
+	backend, err := database.NativeSemanticBackend()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pin := func() {
+		t.Helper()
+		captured, err := backend.CaptureNativeSemanticState()
+		if err != nil {
+			t.Fatal(err)
+		}
+		pins = append(pins, captured)
+	}
+	pin() // OPEN, before the first catalog publication
+	budget = pins[0].NativeAllocator().(nativeHNSWAdmissionBudget)
+	manager = NewCollectionManager(backend)
+	if _, err = manager.CreateCollection(&CollectionMeta{Name: "docs", Options: CollectionOptions{DocumentFormat: DocumentFormatBSON}}); err != nil {
+		t.Fatal(err)
+	}
+	pin()
+	collection, err := manager.OpenCollection("docs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Dimensions: 2, Metric: VectorMetricCosine, M: 16}
+	if _, err = collection.CreateVectorIndex(def); err != nil {
+		t.Fatal(err)
+	}
+	pin()
+	if id != nil {
+		document, err := bson.Marshal(bson.D{{Key: "embedding", Value: bson.A{1., 0.}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = collection.Insert(id, document); err != nil {
+			t.Fatal(err)
+		}
+		pin()
+	}
+	return collection, def, budget
+}
+
+func nativeHNSWAdmissionCaptureBytes(t *testing.T, c *Collection, budget nativeHNSWAdmissionBudget) uint64 {
+	t.Helper()
+	before := budget.Stats()
+	probe, err := c.nativeJSON.Capture(c.name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if probe.capture.State() == nil || probe.privateEngine != nil {
+		probe.Close()
+		t.Fatal("admission fixture lacks logical native state")
+	}
+	during := budget.Stats()
+	if err = probe.Close(); err != nil {
+		t.Fatal(err)
+	}
+	after := budget.Stats()
+	if before.ReservedBytes != after.ReservedBytes || before.ExternalLeases != after.ExternalLeases {
+		t.Fatalf("Capture/Close changed stable setup receipts: before=%+v after=%+v", before, after)
+	}
+	if during.ReservedBytes <= before.ReservedBytes || during.ExternalLeases <= before.ExternalLeases {
+		t.Fatal("capture did not admit independent receipts")
+	}
+	return during.ReservedBytes - before.ReservedBytes
+}
+
 func TestNativeHNSWPublicBuildScratchRefusalReleasesRuntime(t *testing.T) {
-	c, closeAll, _, def, _ := openHNSWPublicFixture(t, "native", 0, 2)
-	defer closeAll()
+	c, def, budget := openPinnedNativeHNSWAdmissionFixture(t, nil)
 	read, err := c.nativeJSON.Capture(c.name)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer read.Close()
-	type budgetStats interface {
-		Stats() memtable.COWStats
-		Limits() memtable.COWLimits
-	}
-	budget := read.capture.NativeAllocator().(budgetStats)
-	initial := budget.Stats()
-	probe, err := c.nativeJSON.Capture(c.name)
-	if err != nil {
-		t.Fatal(err)
-	}
-	captureBytes := budget.Stats().ReservedBytes - initial.ReservedBytes
-	probe.Close()
+	captureBytes := nativeHNSWAdmissionCaptureBytes(t, c, budget)
 	blocker, err := read.capture.NativeAllocator().AdmitNativeBytes(0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer blocker.Close()
-	available := budget.Limits().MaxInFlightBytes - budget.Stats().ReservedBytes
+	// Match the maintained runtime lease's containing allocation and its own
+	// receipt. Nothing remains for the immediately following zero-byte scratch
+	// lease, which still needs its independent receipt metadata.
 	runtimeBytes := memtable.COWAllocationCharge(memtable.COWAllocationCharge(uint64(unsafe.Sizeof(VectorIndex{})))+64<<10) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
-	if err = blocker.Resize(available - captureBytes - runtimeBytes); err != nil {
+	leave := captureBytes + runtimeBytes
+	available := budget.Limits().MaxInFlightBytes - budget.Stats().ReservedBytes
+	if available < leave {
+		t.Fatalf("setup exhausted runtime boundary: available=%d leave=%d", available, leave)
+	}
+	if err = blocker.Resize(available - leave); err != nil {
 		t.Fatal(err)
 	}
-	before := budget.Stats()
-	_, err = c.BuildVectorIndex(vectorIndexOptionsFromDefinition(def))
-	if !errors.Is(err, memtable.ErrCOWCapacity) || !strings.Contains(err.Error(), "build scratch admission") {
-		t.Fatalf("expected scratch admission refusal: %v", err)
+	if remaining := budget.Limits().MaxInFlightBytes - budget.Stats().ReservedBytes; remaining != leave {
+		t.Fatalf("runtime boundary remaining=%d want=%d", remaining, leave)
 	}
-	after := budget.Stats()
-	if after.ReservedBytes != before.ReservedBytes || after.ExternalLeases != before.ExternalLeases {
-		t.Fatalf("refused build retained runtime: before=%+v after=%+v", before, after)
+	for attempt := 0; attempt < 5; attempt++ {
+		before := budget.Stats()
+		_, err = c.BuildVectorIndex(vectorIndexOptionsFromDefinition(def))
+		if !errors.Is(err, memtable.ErrCOWCapacity) || !strings.Contains(err.Error(), "build scratch admission") {
+			t.Fatalf("attempt %d expected scratch admission refusal: %v", attempt, err)
+		}
+		after := budget.Stats()
+		if after.ReservedBytes != before.ReservedBytes || after.ExternalLeases != before.ExternalLeases {
+			t.Fatalf("attempt %d refused build changed receipts: before=%+v after=%+v", attempt, before, after)
+		}
+	}
+	blocker.Close()
+	if _, err = c.BuildVectorIndex(vectorIndexOptionsFromDefinition(def)); err != nil {
+		t.Fatalf("build after blocker release: %v", err)
 	}
 }
 
@@ -939,16 +1052,8 @@ func TestNativeHNSWPublicInstallManagerCloseRollback(t *testing.T) {
 }
 
 func TestNativeHNSWPublicQueryAdmissionCleanup(t *testing.T) {
-	c, closeAll, _, def, _ := openHNSWPublicFixture(t, "native", 0, 2)
-	defer closeAll()
 	id := []byte(strings.Repeat("wide-id", 128))
-	doc, err := bson.Marshal(bson.D{{Key: "embedding", Value: bson.A{1., 0.}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = c.Insert(id, doc); err != nil {
-		t.Fatal(err)
-	}
+	c, def, budget := openPinnedNativeHNSWAdmissionFixture(t, id)
 	idx, err := c.BuildVectorIndex(vectorIndexOptionsFromDefinition(def))
 	if err != nil {
 		t.Fatal(err)
@@ -956,45 +1061,49 @@ func TestNativeHNSWPublicQueryAdmissionCleanup(t *testing.T) {
 	if idx.nativeHNSWIDBytes != uint64(len(id)) {
 		t.Fatalf("query ID accounting=%d want=%d", idx.nativeHNSWIDBytes, len(id))
 	}
+	// A first successful query may adopt a physical cache. Admit that retained
+	// owner before measuring operation-local workspace refusal and refund.
+	rows, _, err := idx.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 1})
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("warm query: rows=%d err=%v", len(rows), err)
+	}
 	read, err := c.nativeJSON.Capture(c.name)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer read.Close()
-	type budgetStats interface {
-		Stats() memtable.COWStats
-		Limits() memtable.COWLimits
-	}
-	budget := read.capture.NativeAllocator().(budgetStats)
+	captureBytes := nativeHNSWAdmissionCaptureBytes(t, c, budget)
 	blocker, err := read.capture.NativeAllocator().AdmitNativeBytes(0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer blocker.Close()
-	// A capture may complete retirement of prior publications. Refill to the
-	// same admission boundary and require no added reservation on every refusal.
-	var blocked uint64
+	available := budget.Limits().MaxInFlightBytes - budget.Stats().ReservedBytes
+	if available < captureBytes {
+		t.Fatalf("setup exhausted capture boundary: available=%d capture=%d", available, captureBytes)
+	}
+	// Admit precisely the initial captured read; no bytes remain for the query's
+	// separate workspace. No successful attempt or retirement may hide a leak.
+	if err = blocker.Resize(available - captureBytes); err != nil {
+		t.Fatal(err)
+	}
+	if remaining := budget.Limits().MaxInFlightBytes - budget.Stats().ReservedBytes; remaining != captureBytes {
+		t.Fatalf("query boundary remaining=%d want=%d", remaining, captureBytes)
+	}
 	for attempt := 0; attempt < 5; attempt++ {
-		current := budget.Stats()
-		available := budget.Limits().MaxInFlightBytes - current.ReservedBytes
-		blocked += available - (40 << 10)
-		if err = blocker.Resize(blocked); err != nil {
-			t.Fatal(err)
-		}
 		before := budget.Stats()
 		_, _, err = idx.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 1})
 		if !errors.Is(err, memtable.ErrCOWCapacity) || !strings.Contains(err.Error(), "query workspace") {
-			t.Fatalf("expected query workspace refusal: %v", err)
+			t.Fatalf("attempt %d expected query workspace refusal: %v", attempt, err)
 		}
 		after := budget.Stats()
-		if after.ReservedBytes > before.ReservedBytes || after.ExternalLeases > before.ExternalLeases {
-			t.Fatalf("query refusal retained reservation: before=%+v after=%+v", before, after)
+		if after.ReservedBytes != before.ReservedBytes || after.ExternalLeases != before.ExternalLeases {
+			t.Fatalf("attempt %d refused query changed receipts: before=%+v after=%+v", attempt, before, after)
 		}
 	}
-
 	blocker.Close()
-	rows, _, err := idx.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 1})
+	rows, _, err = idx.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 1})
 	if err != nil || len(rows) != 1 {
-		t.Fatalf("query after budget release: rows=%d err=%v", len(rows), err)
+		t.Fatalf("query after blocker release: rows=%d err=%v", len(rows), err)
 	}
 }

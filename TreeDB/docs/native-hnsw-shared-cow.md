@@ -38,7 +38,10 @@ immutable encoded run table through COW preparation, rather than copying another
 complete encoded graph. It releases the obsolete snapshot reservation before
 preparation. Public Search admits a separate workspace per concurrent query and
 uses operation-local graph scratch and live-delta result buffers rather than
-retaining a query pool. Default underfill and empty searches reuse the maintained
+retaining a query pool. The ordinary query reuses its initial captured read for
+final document attachment, pre-sizes bounded candidate scratch, and copies selected
+IDs through the maintained output arena. Discarded candidate references are cleared
+before returning caller-owned results. Default underfill and empty searches reuse the maintained
 exact scan and ranking with a single native capture. Persisted M and EF settings
 must match the normalized canonical declaration before runtime decoding; the
 per-runtime rebuild ratio is preserved when finite and in (0, 1]. Returned
