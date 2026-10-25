@@ -27,6 +27,12 @@ cut and command-WAL completion as direct native callers; it does not stage a
 second manager-local write domain. Reads capture one complete cut. Legacy
 backend-only constructors retain the write-domain path described below.
 
+Public native read views reuse the existing JSON projection validator and
+projector, including include/exclude precedence and materialization counters.
+Projection reads the view's captured document cut through physical handoff.
+BSON and template-v1 keep the existing stored-format contract; the shared
+projection validator permits JSON documents only.
+
 Each accepted native mutation installs one complete logical successor; a shared
 physical durable group preserves each command's outcomes and original LSN.
 Logical sequence, physical applied LSN and durable-prefix coverage are separate
