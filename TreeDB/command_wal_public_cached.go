@@ -1769,9 +1769,15 @@ type nativePublicCommandWALCompletion struct {
 	registered   bool
 }
 
+// NativeCommandWALCompletionBytes reports transient adapter storage for the
+// native publisher's existing admission receipt.
 func (tdb *DB) NativeCommandWALCompletionBytes() uint64 {
 	return uint64(unsafe.Sizeof(nativePublicCommandWALCompletion{}))
 }
+
+// PrepareNativeCommandWAL joins the owning public DB's completion policy. The
+// authenticated native publisher calls it while retaining its owner lifetime;
+// callers must release or complete the returned request on every exit.
 func (tdb *DB) PrepareNativeCommandWAL(bytes int, durable bool) (db.NativeCommandWALCompletion, error) {
 	if tdb == nil || !tdb.commandWALCached || tdb.backend == nil {
 		return nil, ErrClosed

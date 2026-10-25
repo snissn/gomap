@@ -113,7 +113,9 @@ func openStandalonePublicFixture(tb testing.TB, profile treedb.Profile, writers,
 	finish := func() {
 		closeOnce.Do(func() {
 			closeStart := time.Now()
-			_ = client.Disconnect(context.Background())
+			if err := client.Disconnect(context.Background()); err != nil {
+				tb.Errorf("disconnect: %v", err)
+			}
 			cancel()
 			if err := server.Close(); err != nil {
 				tb.Errorf("close: %v", err)
