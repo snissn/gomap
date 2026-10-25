@@ -19,6 +19,8 @@ import (
 type nativeTextCatalog struct {
 	read  *NativeJSONRead
 	admit func(uint64) error
+	// Optional rewrite-only key-derived map/string/slice cohorts.
+	admitKey func(uint64) error
 }
 
 func (n *nativeTextCatalog) relative(root string) string {
@@ -155,6 +157,12 @@ func (it *nativeTextIterator) Seek(start []byte) {
 		if err = it.scope.admit(memtable.COWAllocationCharge(uint64(len(entry.Key) + 1))); err != nil {
 			it.err = err
 			return
+		}
+		if it.scope.admitKey != nil {
+			if err = it.scope.admitKey(uint64(len(entry.Key))); err != nil {
+				it.err = err
+				return
+			}
 		}
 		key := append([]byte(nil), entry.Key...)
 		if entry.Flags&node.FlagTombstone != 0 && !it.includeDeleted {

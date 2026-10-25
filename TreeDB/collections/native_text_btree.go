@@ -57,7 +57,7 @@ func nativeTextTableCharge(operations, roots uint64) (uint64, error) {
 	ptr := uint64(unsafe.Sizeof(uintptr(0)))
 	// Reset allocates a fresh empty map, before the entire table is dropped.
 	base := charge(uint64(unsafe.Sizeof(memtable.BTree{}))) + 2*charge(uint64(unsafe.Sizeof(btree.Map[string, nativeTextBTreeEntry]{}))) + charge(uint64(unsafe.Sizeof(nativeTextBTreeArena{}))) + charge(uint64(unsafe.Sizeof(nativeTextBTreeIterator{})))
-	if roots != 3 && roots != 7 {
+	if roots != 3 && roots != 6 && roots != 7 {
 		return 0, memtable.ErrCOWCapacity
 	}
 	nodes := roots + operations/31

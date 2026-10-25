@@ -30,6 +30,20 @@ matrix are defined in `TreeDB/docs/spec/collection-text-v2-contract.md`.
   its current collection and domain declaration; malformed descriptors and root
   overlays refuse the complete import.
 - `TextIndexStorageStats` validates storage versions and returns root accounting.
+- No-WAL native collections use the maintained V2 rewrite/merge planner through
+  their captured catalog. The six sparse output domains publish together through
+  the existing native COW authority without replacing unaffected records or
+  advancing collection document generation. Old read cuts retain the old index.
+  Dry-run, policy skip, cancellation and exhausted budgets publish no rewrite;
+  temporary decoded/key/map/codec/table/output cohorts retain original-operation
+  admission until publication preparation and cleanup finish. V1 rewrite and
+  command-WAL text maintenance retain their explicit restrictions.
+- Native `MaintainTextIndex` and collection/manager `MaintainTextIndexes` reuse
+  the existing bounded policy. An explicit `RunStorageCompaction` request is
+  rejected before any logical rewrite because the native owner currently lacks
+  full collection compaction authority. Ordinary checkpoint/reclamation remains
+  owned by TreeDB; logical maintenance does not introduce physical maintenance.
+
 - Insert, delete, update, and batch write paths maintain ordinals/generations,
   tombstones, docmap/norm blocks, stats metadata, compressed scoring posting
   blocks, and optional lazy position/detail payloads for default-v2 text indexes.
@@ -39,10 +53,9 @@ matrix are defined in `TreeDB/docs/spec/collection-text-v2-contract.md`.
   weighting from persisted stats/text-state or v2 norm blocks, and fetches
   documents only for final top-K results when requested.
 
-Not implemented yet:
-
-- phrase/proximity/highlighting/stemming/trigram/fuzzy search;
-- query-vector syntax, gateway integration, or hybrid text+vector executor integration.
+The supported query grammar and Hybrid composition follow the maintained text-V2
+and native Hybrid contracts. Storage API support does not imply Mongo gateway
+query syntax or full storage-compaction support.
 
 ## Metadata
 
