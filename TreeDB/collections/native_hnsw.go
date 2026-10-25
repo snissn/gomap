@@ -51,6 +51,9 @@ func nativeVectorVersionKey(collection, index string) string {
 }
 
 func (c *Collection) nativeCreateVectorIndex(def VectorIndexDefinition) (*CollectionMeta, error) {
+	if c.manager.isClosing() {
+		return nil, backenddb.ErrClosed
+	}
 	if err := c.nativeJSON.db.PrepareNativeProducer(); err != nil {
 		return nil, err
 	}
@@ -63,6 +66,9 @@ func (c *Collection) nativeCreateVectorIndex(def VectorIndexDefinition) (*Collec
 	return meta, err
 }
 func (c *Collection) nativeDropVectorIndex(name string) (*CollectionMeta, error) {
+	if c.manager.isClosing() {
+		return nil, backenddb.ErrClosed
+	}
 	if err := c.nativeJSON.db.PrepareNativeProducer(); err != nil {
 		return nil, err
 	}
@@ -453,6 +459,17 @@ func (c *Collection) reconcileNativeHNSW(ids [][]byte) error {
 	return c.reconcileNativeHNSWWithMutationHeld(ids)
 }
 func (c *Collection) reconcileNativeHNSWWithMutationHeld(ids [][]byte) (resultErr error) {
+	// The primary mutation is already accepted. On any maintenance failure,
+	// retire every potentially partial/stale payload, preserving registration
+	// and receiver identity for explicit canonical Rebuild recovery. Per-index
+	// use locks must be released before this existing retirement boundary.
+	defer func() {
+		if resultErr != nil {
+			for _, idx := range c.collectionSchemaCoordinator().nativeHNSWRuntimeList() {
+				idx.releaseNativeHNSW()
+			}
+		}
+	}()
 	read, err := c.nativeJSON.Capture(c.name)
 	if err != nil {
 		return err
@@ -467,7 +484,6 @@ func (c *Collection) reconcileNativeHNSWWithMutationHeld(ids [][]byte) (resultEr
 	}
 	defer scratchLease.Close()
 	scratch := nativeHNSWPeakAdmission(scratchLease)
-
 	for _, def := range read.meta.VectorIndexes {
 		idx := c.registeredVectorIndex(def.Name)
 		if idx == nil {
@@ -476,62 +492,70 @@ func (c *Collection) reconcileNativeHNSWWithMutationHeld(ids [][]byte) (resultEr
 			}
 			continue
 		}
-		// Keep the admitted public query's graph-size bound stable through
-		// evaluation; graph mutations wait for its existing use lease.
-		idx.nativeHNSWUseMu.Lock()
-		defer idx.nativeHNSWUseMu.Unlock()
-		generation, valid := idx.sourceDocumentCoverage()
-		if valid && generation == read.collection.documentGeneration {
-			continue
-		}
-		if !valid || generation+1 != read.collection.documentGeneration {
-			idx.invalidateSourceDocumentRoots()
-			return errVectorIndexStaleDocumentGeneration
-		}
-		idx.mu.Lock()
-		for _, id := range ids {
-			doc, e := read.namedDomainGetAdmitted("primary", id, scratch)
-			if errors.Is(e, tree.ErrKeyNotFound) {
-				doc = nil
-				e = nil
-			}
-			if e != nil {
-				err = e
-				break
-			}
-			materializer := &StoredDocumentJSONMaterializer{documentFormat: normalizedDocumentFormat(read.meta.Options.DocumentFormat), nativeRead: read}
-			idx.mu.Unlock()
-			vector, scalarRow, e := idx.parseStoredVectorRow(materializer, id, doc)
-			idx.mu.Lock()
-			if e != nil {
-				err = e
-				break
-			}
-			if idx.bufferedStoredVectorMatchesLocked(id, vector, scalarRow) {
-				continue
-			}
-			// Deletions and identical vectors retain no new node. Changed rows
-			// append maintained graph storage (including its tombstoned history)
-			// until the ordinary rebuild replaces and releases this runtime.
-			if vector != nil {
-				if e = idx.admitNativeHNSWRowLocked(def, id, scalarRow); e != nil {
-					err = e
-					break
-				}
-			}
-			if e = idx.insertParsedStoredDocumentLocked(id, vector, scalarRow, false); e != nil {
-				err = e
-				break
-			}
-		}
-		idx.mu.Unlock()
-		if err != nil {
-			idx.invalidateSourceDocumentRoots()
+		if err = idx.reconcileNativeHNSWRows(read, def, ids, scratch); err != nil {
 			return err
 		}
-		state, _ := read.capture.Snapshot().StateToken()
-		idx.recordSourceDocumentState(read.collection.documentGeneration, state)
 	}
+	return nil
+}
+
+// Keep only this receiver use-locked. The caller's shared mutation gate excludes
+// registry replacement; its failure cleanup runs after this lock is released.
+func (idx *VectorIndex) reconcileNativeHNSWRows(read *NativeJSONRead, def VectorIndexDefinition, ids [][]byte, scratch func(uint64) error) error {
+	idx.nativeHNSWUseMu.Lock()
+	defer idx.nativeHNSWUseMu.Unlock()
+	generation, valid := idx.sourceDocumentCoverage()
+	if valid && generation == read.collection.documentGeneration {
+		return nil
+	}
+	if !valid || generation+1 != read.collection.documentGeneration {
+		idx.invalidateSourceDocumentRoots()
+		return errVectorIndexStaleDocumentGeneration
+	}
+	var err error
+	idx.mu.Lock()
+	for _, id := range ids {
+		doc, e := read.namedDomainGetAdmitted("primary", id, scratch)
+		if errors.Is(e, tree.ErrKeyNotFound) {
+			doc = nil
+			e = nil
+		}
+		if e != nil {
+			err = e
+			break
+		}
+		materializer := &StoredDocumentJSONMaterializer{documentFormat: normalizedDocumentFormat(read.meta.Options.DocumentFormat), nativeRead: read}
+		idx.mu.Unlock()
+		vector, scalarRow, e := idx.parseStoredVectorRow(materializer, id, doc)
+		idx.mu.Lock()
+		if e != nil {
+			err = e
+			break
+		}
+		if idx.bufferedStoredVectorMatchesLocked(id, vector, scalarRow) {
+			continue
+		}
+		// Deletions and identical vectors retain no new node. Changed rows
+		// append maintained graph storage (including its tombstoned history)
+		// until the ordinary rebuild replaces and releases this runtime.
+		if vector != nil {
+			if e = idx.admitNativeHNSWRowLocked(def, id, scalarRow); e != nil {
+				err = e
+				break
+			}
+		}
+		if e = idx.insertParsedStoredDocumentLocked(id, vector, scalarRow, false); e != nil {
+			err = e
+			break
+		}
+	}
+	idx.mu.Unlock()
+	if err != nil {
+		idx.invalidateSourceDocumentRoots()
+		return err
+	}
+	state, _ := read.capture.Snapshot().StateToken()
+	idx.recordSourceDocumentState(read.collection.documentGeneration, state)
 	return nil
 }
 

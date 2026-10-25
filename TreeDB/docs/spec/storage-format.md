@@ -3140,6 +3140,27 @@ The root contains `meta`, `node/<20-digit-node-id>`,
 `doc/<document-id>` keys. Nodes and edges store the HNSW graph, tombstone keys
 mark deleted nodes, and document keys map the current document ID to its node.
 
+The shared COW owner persists the system-catalog key
+`collection-vector-version/<collection>/<index_name>` with the graph root in
+one physical publication. Its value is exactly 16 bytes: a big-endian `uint64`
+graph-domain interpretation in bytes `[0:8]`, followed by the saved collection
+document generation as a big-endian `uint64` in `[8:16]`. Interpretation zero,
+wrong record lengths, and read errors fail closed. The saved document generation
+may be zero for an empty initial collection. This is an identity record, not a
+command LSN or a physical page ID.
+
+Current shared-COW saves also write `meta.native_logical_version` equal to the
+new graph interpretation. Reopen imports the persisted 16-byte identity and
+Load authenticates the graph meta against that interpretation and the current
+collection document generation. A physical checkpoint can change the root ID
+without changing this logical version; `VectorIndexLoadStatus.LogicalVersion`
+reports it separately from the physical `RootID` and `Epoch`. An acknowledged
+logical save can therefore have the same physical fields as its predecessor
+until materialization. These logical fields are not aliases for the current
+process's captured sequence, which may restart at zero after reopen. Legacy
+physical roots lacking the version record retain their existing import rule;
+this record does not introduce a migration or permit mismatched graph metadata.
+
 The `meta` value binds the graph to one collection document snapshot. Coverage
 version `3` stores `source_document_generation_version` and
 `source_document_generation`. The generation is the big-endian `uint64` value

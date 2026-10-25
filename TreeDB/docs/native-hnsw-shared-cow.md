@@ -28,6 +28,17 @@ and handles opened before vector DDL; accepted mutation ACKs follow graph
 reconciliation. Manager Close flushes registered graphs; DB Close releases their
 receipts after active public Search readers finish. A graph may outlive the
 manager that originally built it while the DB and a sibling manager remain open.
+Vector Create/Drop on a handle whose manager has closed refuse before producer
+preflight or publication, even while another manager keeps the DB usable.
+
+A post-accepted reconciliation failure keeps its ambiguous mutation result and
+the canonical committed rows. It retires invalid graph payloads and their schema
+and allocation receipts after active graph readers finish, retaining registered
+receiver identity. Search remains unavailable until an explicit rebuild succeeds.
+After any invalid canonical vector row is corrected, the same receiver's
+`Rebuild` uses the existing authenticated builder and ownership swap to recover;
+no failed partial graph is marked current. Reconciliation holds one runtime use
+lock at a time and releases it before retiring a failed payload.
 
 Public receiver `Rebuild` preserves receiver identity while the maintained builder
 constructs a separately admitted replacement. The installation swaps graph backing,
