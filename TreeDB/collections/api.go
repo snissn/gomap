@@ -425,6 +425,7 @@ type collectionManagerOptions struct {
 }
 
 type Collection struct {
+	nativeSchemaCoordinator *collectionSchemaCoordinator
 	// nativeOperationLocalReads keeps admitted temporary read backing out of global pools.
 	nativeOperationLocalReads   bool
 	nativeJSON                  *NativeJSONManager
@@ -567,7 +568,7 @@ func (m *StoredDocumentJSONMaterializer) StoredDocumentJSON(document []byte) ([]
 	if m == nil {
 		return nil, errCollectionNil
 	}
-	if m.nativeRead != nil {
+	if m.nativeRead != nil && m.documentFormat == DocumentFormatTemplateV1 {
 		return m.nativeRead.templateJSON(document)
 	}
 	endForegroundRead := noCollectionForegroundReadEnd
@@ -1841,11 +1842,15 @@ func (m *CollectionManager) closeManagerOwned() error {
 		}
 	}()
 	m.stopUpdateCombiners()
+	var nativeFlushErr error
+	if m.nativeJSON != nil {
+		nativeFlushErr = m.FlushAll()
+	}
 	m.closeCollectionTypedColumnOneShotCaches()
 	queryReadyErr := m.closeCollectionQueryReadyGenerationCaches()
 	cacheErr := m.closeCollectionVectorIndexPreparedSearchCaches()
 	flushErr := m.FlushAll()
-	return errors.Join(queryReadyErr, cacheErr, flushErr)
+	return errors.Join(nativeFlushErr, queryReadyErr, cacheErr, flushErr)
 }
 
 func (m *CollectionManager) isClosing() bool {
@@ -3376,6 +3381,19 @@ func (m *CollectionManager) existingWriteDomainForCollection(name string) *colle
 // root. The backend DB also calls this as a close hook while
 // write APIs are still available.
 func (m *CollectionManager) FlushAll() error {
+	if m != nil && m.nativeJSON != nil {
+		m.collectionsMu.RLock()
+		collections := make([]*Collection, 0, len(m.collections))
+		for c := range m.collections {
+			collections = append(collections, c)
+		}
+		m.collectionsMu.RUnlock()
+		var errs []error
+		for _, c := range collections {
+			errs = append(errs, c.flushNativeHNSW())
+		}
+		return errors.Join(errs...)
+	}
 	if m == nil || m.db == nil {
 		return nil
 	}
@@ -4379,11 +4397,33 @@ func (c *Collection) nativeMetaCopy() CollectionMeta {
 }
 
 // SameCachedCatalog reports whether both handles are cached against the same
-// collection catalog state. DATA pages can be reused after their snapshots are
+// collection catalog state. Native handles authenticate their logical
+// incarnation/schema under complete-cut captures. DATA pages can be reused after their snapshots are
 // released, so matching system root page IDs also require the same commit.
 func (c *Collection) SameCachedCatalog(other *Collection) bool {
 	if c == nil || other == nil {
 		return false
+	}
+	if c.nativeJSON != nil || other.nativeJSON != nil {
+		if c.nativeJSON == nil || other.nativeJSON == nil || c.nativeJSON.db != other.nativeJSON.db || c.name != other.name || c.manager.isClosing() || other.manager.isClosing() {
+			return false
+		}
+		// Native logical roots need no physical catalog root. Compare actual
+		// incarnation and immutable schema identity while BOTH captures are live;
+		// a concurrent schema replacement conservatively declines coalescing.
+		left, err := c.nativeJSON.Capture(c.name)
+		if err != nil {
+			return false
+		}
+		right, err := other.nativeJSON.Capture(other.name)
+		if err != nil {
+			_ = left.Close()
+			return false
+		}
+		same := left.collection != nil && right.collection != nil && left.collection.incarnation != 0 &&
+			left.collection.incarnation == right.collection.incarnation && left.collection.schema != nil && left.collection.schema == right.collection.schema
+		leftErr, rightErr := left.Close(), right.Close()
+		return same && leftErr == nil && rightErr == nil
 	}
 	cName, cSystemRoot, cCommitSeq := c.cachedCatalogIdentity()
 	otherName, otherSystemRoot, otherCommitSeq := other.cachedCatalogIdentity()
@@ -4417,7 +4457,7 @@ func (c *Collection) CreateIndex(def IndexDefinition) (*CollectionMeta, error) {
 		if c.manager.isClosing() {
 			return nil, backenddb.ErrClosed
 		}
-		return c.nativeJSON.mutateIndexes(c.meta.Name, &def, nil, false)
+		return c.nativeMutateIndexes(&def, nil, false)
 	}
 	if c.db == nil {
 		return nil, errCollectionDBNil
@@ -4588,6 +4628,9 @@ func (c *Collection) CreateVectorIndex(def VectorIndexDefinition) (*CollectionMe
 	if c == nil {
 		return nil, errCollectionNil
 	}
+	if c.nativeJSON != nil {
+		return c.nativeCreateVectorIndex(def)
+	}
 	if c.db == nil {
 		return nil, errCollectionDBNil
 	}
@@ -4687,6 +4730,9 @@ func (c *Collection) DropVectorIndex(name string) (*CollectionMeta, error) {
 	}
 	if c == nil {
 		return nil, errCollectionNil
+	}
+	if c.nativeJSON != nil {
+		return c.nativeDropVectorIndex(name)
 	}
 	if c.db == nil {
 		return nil, errCollectionDBNil
@@ -4811,7 +4857,7 @@ func (c *Collection) dropIndexes(names map[string]struct{}, all bool) (*Collecti
 		if c.manager.isClosing() {
 			return nil, backenddb.ErrClosed
 		}
-		return c.nativeJSON.mutateIndexes(c.meta.Name, nil, names, all)
+		return c.nativeMutateIndexes(nil, names, all)
 	}
 	if c.db == nil {
 		return nil, errCollectionDBNil
@@ -4961,6 +5007,12 @@ func (c *Collection) Insert(id, document []byte) ([]byte, error) {
 // callers that need durability must use the selected profile's explicit sync,
 // Checkpoint, or clean Close contract.
 func (c *Collection) Flush() error {
+	if c != nil && c.nativeJSON != nil {
+		if c.manager.isClosing() {
+			return backenddb.ErrClosed
+		}
+		return c.flushNativeHNSW()
+	}
 	if c == nil {
 		return errCollectionNil
 	}
@@ -11853,6 +11905,9 @@ func (c *Collection) InsertBatchWithTemplateV1Encoder(ids, documents [][]byte, e
 // BSON while parsing the request and need to avoid a duplicate full-document
 // validation pass on the insert hot path.
 func (c *Collection) InsertBatchValidatedBSON(ids, documents [][]byte) ([][]byte, error) {
+	if c != nil && c.nativeJSON != nil {
+		return c.nativeInsertBatch(ids, documents)
+	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
 	admissionState := c.lockCollectionCommandWALAdmission()
@@ -12026,6 +12081,13 @@ func (c *Collection) InsertBatchWithCommandWALIntent(ids, documents [][]byte, tr
 // fast path; public callers that need returned IDs should keep using
 // InsertBatch or InsertBatchValidatedBSON.
 func (c *Collection) NativewireInsertBatchNoResultIDs(ids, documents [][]byte, trustedValidBSON bool) error {
+	if c != nil && c.nativeJSON != nil {
+		if trustedValidBSON {
+			return backenddb.ErrNativeSemanticUnsupported
+		}
+		_, err := c.nativeInsertBatch(ids, documents)
+		return err
+	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
 	admissionState := c.lockCollectionCommandWALAdmission()
@@ -14008,6 +14070,9 @@ func (c *Collection) DeleteDocumentIf(documentID []byte, predicate func(current 
 }
 
 func (c *Collection) deleteDocumentIf(documentID []byte, predicate func(current []byte) (bool, error)) (bool, error) {
+	if c != nil && c.nativeJSON != nil {
+		return c.nativeDeleteDocumentIf(documentID, predicate)
+	}
 	if c == nil {
 		return false, errCollectionNil
 	}
@@ -14849,6 +14914,9 @@ func (c *Collection) Replace(documentID, document []byte) (bool, error) {
 // idempotent or protected by an application-level guard or durable idempotency
 // key.
 func (c *Collection) Update(documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error)) (bool, bool, error) {
+	if c != nil && c.nativeJSON != nil {
+		return c.nativeUpdateDocument(documentID, update)
+	}
 	if err := validateCollectionUpdateInput(c, documentID, update); err != nil {
 		return false, false, err
 	}
@@ -24877,7 +24945,12 @@ func (c *Collection) ScanDocumentIDsFunc(maxDocuments int, fn func([]byte) (bool
 // physical primary-source entry (including tombstones and merged-run work),
 // while fn receives only live IDs. It therefore proves a complete live count
 // only when the physical primary walk is exhausted.
+// Native COW scans charge each source successor probe, including exhausted
+// sources; the inspected count can therefore exceed the number of stored rows.
 func (c *Collection) ScanDocumentIDsPhysicalFunc(maxEntries int, fn func([]byte) (bool, error)) (inspected int, truncated bool, err error) {
+	if c != nil && c.nativeJSON != nil {
+		return c.nativeScanDocumentIDsPhysical(maxEntries, fn)
+	}
 	if c == nil {
 		return 0, false, errCollectionNil
 	}

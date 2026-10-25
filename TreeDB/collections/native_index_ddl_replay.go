@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"reflect"
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -42,6 +43,7 @@ func decodeNativeIndexMutation(payload []byte) (commitlog.CatalogIndexMutationPa
 	}
 	same := before
 	same.Indexes = after.Indexes
+	same.VectorIndexes = after.VectorIndexes
 	same, err = nativeJSONMeta(same)
 	if err != nil {
 		return p, before, after, err
@@ -122,7 +124,7 @@ func replayNativeIndexMutation(db *backenddb.DB, env commitlog.CommandEnvelope) 
 		}
 	}
 	var domains []nativeJSONDomainChange
-	if !pureDrop {
+	if !pureDrop && !reflect.DeepEqual(before.Indexes, after.Indexes) {
 		root := uint64(0)
 		encoded, err = snapshot.GetAtRoot(token.SystemRootPageID, []byte(systemCollectionRootKey(collectionPrimaryRootName(p.Collection))))
 		if err == nil {

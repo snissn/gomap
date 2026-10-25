@@ -46,6 +46,15 @@ changes until the project reaches a stable post-pre-alpha phase.
 
 This repo is a dev project; formats may evolve rapidly.
 
+The standalone Mongo gateway now opens the shared immutable COW engine by
+default. Its catalog requires logical collection incarnation records; existing
+legacy collection catalogs without those records and catalogs containing
+unsupported native domains fail at startup. There is no automatic in-place
+conversion or fallback. Preserve the old directory and export with the binary
+that created it, then reingest into a fresh directory using the new binary.
+The native record layout is documented in
+`TreeDB/docs/spec/storage-format.md` under "Native catalog incarnation records".
+
 Ordinary new TreeDB directories use the existing DATA durable-root format,
 including NoWAL and COW cache modes. The existing explicit
 `IndexPrimaryDirectory` option and persisted `index.db.primary` directories

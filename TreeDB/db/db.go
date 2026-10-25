@@ -97,6 +97,7 @@ type DB struct {
 	legacyCommandProducers         uint64 // commandWALRawBarrierMu
 	semanticUnownedInFlight        uint64 // commandWALRawBarrierMu
 	nativeSemanticBridge           NativeSemanticBridge
+	nativeCommandWALCompletion     NativeCommandWALCompletionBridge
 	acceptedPrefix                 atomic.Pointer[rootpublication.Coordinator] // immutable logical owner after private binding
 	mvccAdmission                  mvccadmission.Authority
 	valueLogManager                *valuelog.Manager

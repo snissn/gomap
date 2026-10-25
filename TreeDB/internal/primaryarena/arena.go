@@ -97,6 +97,7 @@ type Counters struct {
 type Arena struct {
 	mu                   sync.Mutex
 	closeWork            physicalCloseState
+	ordinaryClaimFailure ordinaryClaimDisposalFailure
 	pager                *pager.Pager
 	uuid                 [16]byte
 	chunks               [maxChunks]*bankChunk
@@ -247,6 +248,14 @@ func (a *Arena) PrepareClaim(class Class, w *iterator.OrdinalScanWork) (*Claim, 
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	return a.prepareClaimLocked(class, w)
+}
+
+// prepareClaimLocked requires a.mu and work reservation for the Claim wrapper.
+func (a *Arena) prepareClaimLocked(class Class, w *iterator.OrdinalScanWork) (*Claim, bool, error) {
+	if a.ordinaryClaimFailure.claim != nil {
+		return nil, false, &a.ordinaryClaimFailure
+	}
 	if !a.recovered {
 		return nil, false, ErrUnrecovered
 	}
@@ -321,6 +330,12 @@ func (c *Claim) Step(w *iterator.OrdinalScanWork) (Ref, bool, error) {
 	a := c.arena
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	return c.stepLocked(w)
+}
+
+// stepLocked requires c.arena.mu; the claim must still be private and live.
+func (c *Claim) stepLocked(w *iterator.OrdinalScanWork) (Ref, bool, error) {
+	a := c.arena
 	if a.epoch != c.epoch {
 		return Ref{}, false, ErrStale
 	}
@@ -376,6 +391,54 @@ func (c *Claim) Step(w *iterator.OrdinalScanWork) (Ref, bool, error) {
 	install()
 	c.finish()
 	return c.ref, true, nil
+}
+
+// ClaimOrdinary completes one non-resumable claim under the arena lock. This
+// prevents concurrent manifest sealing from invalidating a component between
+// preparation and installation. Ordinary callers may supply their unlimited
+// work meter; bounded refusal cancels the exact private claim before returning.
+// Resumable maintenance continues to use PrepareClaim and Claim.Step.
+func (a *Arena) ClaimOrdinary(class Class, w *iterator.OrdinalScanWork) (Ref, bool, error) {
+	if class != Component && class != Directory && class != Dependency && class != Manifest && class != Record {
+		return Ref{}, false, ErrFormat
+	}
+	if !reserve(w, 1, 2*uint64(unsafe.Sizeof(Claim{}))+128) {
+		return Ref{}, false, nil
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	c, ready, err := a.prepareClaimLocked(class, w)
+	if !ready || err != nil {
+		return Ref{}, false, err
+	}
+	ref, ready, err := c.stepLocked(w)
+	if !ready || err != nil {
+		canceled, cancelErr := c.Cancel(nil)
+		if !canceled || cancelErr != nil {
+			return Ref{}, false, a.retainFailedOrdinaryClaimLocked(c, err, cancelErr)
+		}
+		return Ref{}, false, err
+	}
+	return ref, true, nil
+}
+
+// This receipt is part of the already admitted arena. A failed private disposal
+// retains the SAME claim, with no allocation or retry at the failure boundary.
+type ordinaryClaimDisposalFailure struct {
+	claim  *Claim
+	causes [2]error
+}
+
+func (*ordinaryClaimDisposalFailure) Error() string {
+	return "primary arena: private claim disposal failed"
+}
+func (f *ordinaryClaimDisposalFailure) Unwrap() []error { return f.causes[:] }
+
+func (a *Arena) retainFailedOrdinaryClaimLocked(c *Claim, cause, cleanup error) error {
+	a.ordinaryClaimFailure.claim = c
+	a.ordinaryClaimFailure.causes = [2]error{cause, cleanup}
+	a.metadata.CleanupFailed()
+	return &a.ordinaryClaimFailure
 }
 
 // finish detaches private construction aliases before refunding its wrapper.

@@ -51,6 +51,27 @@ opens may scan their selected root without replaying it. A bounded scan failure
 leaves exact reads available. Filter contents are never recovered from disk or
 used as durability evidence. See [point lookup coverage](contracts.md#251-optional-negative-point-lookup-coverage).
 
+## Standalone Mongo and native collection recovery
+
+Standalone Mongo retains the public DB owner through gateway and collection
+cleanup. Reopen selects the same immutable profile and recovers native collection
+commands through the existing replay owner. A durable ACK (including an explicit
+Mongo journal request) must recover the acknowledged documents, index effects,
+authentication records and referenced persistent value-log dependencies. Abrupt
+process exit controls are process-crash evidence, not a physical power-loss test.
+
+Logical collection/WAL BSON stays inline when the physical builder places large
+root values in the value log. The physical projection retains the exact appended
+file identities until published roots and captured reads release them; checkpoint,
+GC and reopen must not rely on a foreground pointer absent from its captured
+physical basis. Root-neutral durable barriers can advance canonical coverage
+without creating a logical collection mutation.
+
+Native catalog import validates the complete persisted catalog and each domain's
+codec/eligibility. Unsupported layouts and feature/profile combinations fail
+closed. This pre-alpha contract does not imply automatic migration of every
+legacy collection catalog or fallback to a weaker cache/durability profile.
+
 ## Immutable COW cache recovery
 
 `cow_btree` is a process-local cache selection, not a new persistent format or

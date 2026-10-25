@@ -103,9 +103,28 @@ func TestStandaloneServerCommandWALCRUDReopens(t *testing.T) {
 				stopStandaloneMongoClientForTest(t, client, cancel, ln, serveErr, standalone)
 				t.Fatalf("required_feature=%q, want true", got)
 			}
-			if got := standalone.Backend.State().AppliedCommandLSN; got < 4 {
+			// The ordinary ACK covers visible semantic publication and its WAL
+			// command, while AppliedCommandLSN describes physical projection.
+			// Close below checkpoints that projection before the reopen check.
+			if got := standalone.Backend.CommandWALNextLSN() - 1; got < 4 {
 				stopStandaloneMongoClientForTest(t, client, cancel, ln, serveErr, standalone)
-				t.Fatalf("AppliedCommandLSN=%d, want at least 4", got)
+				t.Fatalf("assigned command LSN=%d, want at least 4", got)
+			}
+			if standalone.Backend.HasNativeSemanticBridge() {
+				capture, err := standalone.Backend.CaptureNativeSemanticState()
+				if err != nil {
+					stopStandaloneMongoClientForTest(t, client, cancel, ln, serveErr, standalone)
+					t.Fatal(err)
+				}
+				sequence := capture.LogicalSequence()
+				if err := capture.Close(); err != nil {
+					stopStandaloneMongoClientForTest(t, client, cancel, ln, serveErr, standalone)
+					t.Fatal(err)
+				}
+				if sequence < 4 {
+					stopStandaloneMongoClientForTest(t, client, cancel, ln, serveErr, standalone)
+					t.Fatalf("visible logical sequence=%d, want at least 4", sequence)
+				}
 			}
 			stopStandaloneMongoClientForTest(t, client, cancel, ln, serveErr, standalone)
 

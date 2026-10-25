@@ -1302,6 +1302,11 @@ func openValidatedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
 	cached.SetTemplateStore(templateStore)
 	out := &DB{ownedCloseGuard: backend.OwnedCallbackCloseGuard(), txnOwner: txnOwner, cached: cached, backend: backend, dictdb: dictBackend, templateDB: templateDB, writePath: writePath, commandWALCached: opts.CommandWAL, publicBatchWriteSyncPhaseEnabled: opts.CommandWAL && opts.PublicBatchWriteSyncPhaseStats, notifyError: opts.NotifyError, resolvedProfile: Profile(opts.ResolvedProfile), deprecatedProfileAlias: Profile(opts.DeprecatedProfileAlias), durabilityMode: computeDurabilityMode(opts), valueLogReadIntegrity: valueLogReadIntegrityLabel(opts), dir: rootDir}
 	if out.commandWALCached {
+		if cached.COWMode() {
+			if err := backend.BindNativeCommandWALCompletion(txnOwner, out); err != nil {
+				return nil, errors.Join(err, out.Close())
+			}
+		}
 		// ponytail: reuse the existing bounded logical-payload budget. Larger
 		// point values use the batch's compact persistent-value references.
 		out.commandWALPointMaxPayloadBytes = db.RawKVCommandWALMaterializedRIDMaxFrameBytes

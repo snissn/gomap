@@ -54,6 +54,22 @@ func (db *DB) refreshCOWCheckpointFallback() (retErr error) {
 		return err
 	}
 	frontiers := c.prefix.LogicalFrontiers()
+	if cut.logicalSeq == frontiers.V && cut.basis.logicalSeq == frontiers.S.LogicalSequence &&
+		cut.visibleCommandLSN >= frontiers.S.CanonicalLSN && cut.visibleCommandLSN < frontiers.C {
+		// A delayed durable group may close a root-neutral suffix after the
+		// checkpoint captured its finite endpoint. Maintenance has drained all
+		// admitted writers; prove that exact suffix under the original writer
+		// exclusion rather than rewriting this immutable cut's command identity.
+		c.writerMu.Lock()
+		_, proofErr := c.prefix.MarkAcceptedRootNeutralBoundary(rootpublication.SealedPrefix{LogicalSequence: cut.logicalSeq, CanonicalLSN: cut.visibleCommandLSN})
+		c.writerMu.Unlock()
+		if proofErr != nil {
+			return proofErr
+		}
+		// Optional fallback convergence cannot seal this newer suffix. The next
+		// checkpoint (or ordinary recovery) carries its real barrier identity.
+		return nil
+	}
 	if cut.logicalSeq != frontiers.V || cut.visibleCommandLSN != frontiers.C || cut.basis.logicalSeq != frontiers.S.LogicalSequence || cut.logicalSeq < frontiers.S.LogicalSequence || cut.visibleCommandLSN < frontiers.S.CanonicalLSN {
 		return fmt.Errorf("%w: fallback cut logical=%d canonical=%d basis=%d frontiers=%+v", backenddb.ErrRootPublicationBasisMismatch, cut.logicalSeq, cut.visibleCommandLSN, cut.basis.logicalSeq, frontiers)
 	}

@@ -76,7 +76,8 @@ func nativeDomainBuildCharge(maxSources int) (uint64, error) {
 	if maxSources <= 0 || uint64(maxSources) > ^uint64(0)/ptr {
 		return 0, memtable.ErrCOWCapacity
 	}
-	charge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeDomainBuild{}))) +
+	charge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(page.ValuePtr{}))) + // one synchronous physical append result
+		memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeDomainBuild{}))) +
 		memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowbtree.OwnedMapRefund{}))) +
 		memtable.COWAllocationCharge(uint64(unsafe.Sizeof(batch.Batch{}))) +
 		memtable.COWAllocationCharge(nativeBuildBatchEntries*uint64(unsafe.Sizeof(batch.Entry{})))
@@ -146,22 +147,7 @@ func (b *nativeDomainBuild) buildSource(group nativeOrderedRootBuilder, root *me
 				b.failure = backenddb.ErrNativeSemanticUnsupported
 				break
 			}
-			known := false
-			for i := 0; i < b.pointerCount; i++ {
-				known = known || b.pointerFiles[i] == row.Ptr.FileID
-			}
-			if !known {
-				if b.pointerCount == len(b.pointerFiles) {
-					b.flush(group)
-					if b.failure != nil {
-						return false
-					}
-				}
-				b.pointerFiles[b.pointerCount] = row.Ptr.FileID
-				b.pointerCount++
-			}
-			b.delta.AppendPointerViewNoTouchTrustedSortedWithRevision(key, row.Ptr, row.Revision)
-			b.delta.NoteTouchedValueLogFileID(row.Ptr.FileID)
+			b.appendPointer(group, key, row.Ptr, row.Revision)
 		default:
 			value := nativeBorrowedStringBytes(row.Value)
 			if b.catalog && names != nil {
@@ -172,7 +158,30 @@ func (b *nativeDomainBuild) buildSource(group nativeOrderedRootBuilder, root *me
 					}
 				}
 			}
-			b.failure = b.delta.AppendViewTrustedSortedUniqueWithRevision(key, value, row.Revision)
+			threshold := max(0, page.PageSize-node.NodeHeaderSize-node.DirectoryEntrySize-7-page.EntryRevisionSize-len(key))
+			placement, hasPlacement := group.(interface {
+				NativeInlineThresholdForKey([]byte) int
+				AppendNativeValueLogValues([][]byte) ([]page.ValuePtr, error)
+			})
+			if !b.catalog && hasPlacement && (b.source.name == "primary" || b.source.name == "templates") {
+				threshold = min(threshold, placement.NativeInlineThresholdForKey(key))
+			}
+			if !b.catalog && len(value) > threshold {
+				if !hasPlacement {
+					b.failure = backenddb.ErrValueLogAppenderUnavailable
+					return false
+				}
+				var values [1][]byte
+				values[0] = value
+				ptrs, err := placement.AppendNativeValueLogValues(values[:])
+				if err != nil {
+					b.failure = err
+					return false
+				}
+				b.appendPointer(group, key, ptrs[0], row.Revision)
+			} else {
+				b.failure = b.delta.AppendViewTrustedSortedUniqueWithRevision(key, value, row.Revision)
+			}
 		}
 		if b.failure == nil && b.delta.Len() == nativeBuildBatchEntries {
 			b.flush(group)
@@ -182,6 +191,25 @@ func (b *nativeDomainBuild) buildSource(group nativeOrderedRootBuilder, root *me
 	if b.failure == nil {
 		b.flush(group)
 	}
+}
+
+func (b *nativeDomainBuild) appendPointer(group nativeOrderedRootBuilder, key []byte, ptr page.ValuePtr, revision page.EntryRevision) {
+	known := false
+	for i := 0; i < b.pointerCount; i++ {
+		known = known || b.pointerFiles[i] == ptr.FileID
+	}
+	if !known {
+		if b.pointerCount == len(b.pointerFiles) {
+			b.flush(group)
+			if b.failure != nil {
+				return
+			}
+		}
+		b.pointerFiles[b.pointerCount] = ptr.FileID
+		b.pointerCount++
+	}
+	b.delta.AppendPointerViewNoTouchTrustedSortedWithRevision(key, ptr, revision)
+	b.delta.NoteTouchedValueLogFileID(ptr.FileID)
 }
 
 func (b *nativeDomainBuild) flush(group nativeOrderedRootBuilder) {

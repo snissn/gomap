@@ -1,0 +1,40 @@
+=== RUN   TestNativeHNSWPublicDocumentLifecycle
+=== RUN   TestNativeHNSWPublicDocumentLifecycle/command_wal_durable/bson/declared=false/unnamed=false
+=== RUN   TestNativeHNSWPublicDocumentLifecycle/command_wal_durable/bson/declared=true/unnamed=false
+=== RUN   TestNativeHNSWPublicDocumentLifecycle/command_wal_durable/bson/declared=false/unnamed=true
+=== RUN   TestNativeHNSWPublicDocumentLifecycle/command_wal_durable/json/declared=false/unnamed=false
+=== RUN   TestNativeHNSWPublicDocumentLifecycle/command_wal_durable/json/declared=true/unnamed=false
+=== RUN   TestNativeHNSWPublicDocumentLifecycle/command_wal_durable/json/declared=false/unnamed=true
+=== RUN   TestNativeHNSWPublicDocumentLifecycle/command_wal_relaxed/bson/declared=false/unnamed=false
+=== RUN   TestNativeHNSWPublicDocumentLifecycle/command_wal_relaxed/bson/declared=true/unnamed=false
+=== RUN   TestNativeHNSWPublicDocumentLifecycle/command_wal_relaxed/bson/declared=false/unnamed=true
+=== RUN   TestNativeHNSWPublicDocumentLifecycle/command_wal_relaxed/json/declared=false/unnamed=false
+=== RUN   TestNativeHNSWPublicDocumentLifecycle/command_wal_relaxed/json/declared=true/unnamed=false
+=== RUN   TestNativeHNSWPublicDocumentLifecycle/command_wal_relaxed/json/declared=false/unnamed=true
+=== RUN   TestNativeHNSWPublicDocumentLifecycle/no_wal_fast/bson/declared=false/unnamed=false
+=== RUN   TestNativeHNSWPublicDocumentLifecycle/no_wal_fast/bson/declared=true/unnamed=false
+=== RUN   TestNativeHNSWPublicDocumentLifecycle/no_wal_fast/bson/declared=false/unnamed=true
+=== RUN   TestNativeHNSWPublicDocumentLifecycle/no_wal_fast/json/declared=false/unnamed=false
+=== RUN   TestNativeHNSWPublicDocumentLifecycle/no_wal_fast/json/declared=true/unnamed=false
+=== RUN   TestNativeHNSWPublicDocumentLifecycle/no_wal_fast/json/declared=false/unnamed=true
+--- PASS: TestNativeHNSWPublicDocumentLifecycle (10.53s)
+    --- PASS: TestNativeHNSWPublicDocumentLifecycle/command_wal_durable/bson/declared=false/unnamed=false (0.69s)
+    --- PASS: TestNativeHNSWPublicDocumentLifecycle/command_wal_durable/bson/declared=true/unnamed=false (0.69s)
+    --- PASS: TestNativeHNSWPublicDocumentLifecycle/command_wal_durable/bson/declared=false/unnamed=true (0.67s)
+    --- PASS: TestNativeHNSWPublicDocumentLifecycle/command_wal_durable/json/declared=false/unnamed=false (0.67s)
+    --- PASS: TestNativeHNSWPublicDocumentLifecycle/command_wal_durable/json/declared=true/unnamed=false (0.67s)
+    --- PASS: TestNativeHNSWPublicDocumentLifecycle/command_wal_durable/json/declared=false/unnamed=true (0.86s)
+    --- PASS: TestNativeHNSWPublicDocumentLifecycle/command_wal_relaxed/bson/declared=false/unnamed=false (0.58s)
+    --- PASS: TestNativeHNSWPublicDocumentLifecycle/command_wal_relaxed/bson/declared=true/unnamed=false (0.62s)
+    --- PASS: TestNativeHNSWPublicDocumentLifecycle/command_wal_relaxed/bson/declared=false/unnamed=true (0.61s)
+    --- PASS: TestNativeHNSWPublicDocumentLifecycle/command_wal_relaxed/json/declared=false/unnamed=false (0.58s)
+    --- PASS: TestNativeHNSWPublicDocumentLifecycle/command_wal_relaxed/json/declared=true/unnamed=false (0.57s)
+    --- PASS: TestNativeHNSWPublicDocumentLifecycle/command_wal_relaxed/json/declared=false/unnamed=true (0.61s)
+    --- PASS: TestNativeHNSWPublicDocumentLifecycle/no_wal_fast/bson/declared=false/unnamed=false (0.45s)
+    --- PASS: TestNativeHNSWPublicDocumentLifecycle/no_wal_fast/bson/declared=true/unnamed=false (0.45s)
+    --- PASS: TestNativeHNSWPublicDocumentLifecycle/no_wal_fast/bson/declared=false/unnamed=true (0.45s)
+    --- PASS: TestNativeHNSWPublicDocumentLifecycle/no_wal_fast/json/declared=false/unnamed=false (0.46s)
+    --- PASS: TestNativeHNSWPublicDocumentLifecycle/no_wal_fast/json/declared=true/unnamed=false (0.43s)
+    --- PASS: TestNativeHNSWPublicDocumentLifecycle/no_wal_fast/json/declared=false/unnamed=true (0.48s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/collections	11.553s

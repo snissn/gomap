@@ -15,6 +15,10 @@ func (c *cowCache) enqueueSemanticLocked(record *rootpublication.SemanticCleanup
 	if !record.EnqueueOnce() {
 		panic("semantic cleanup record transferred twice")
 	}
+	if c.semanticEnqueued == ^uint64(0) {
+		panic("semantic cleanup frontier exhausted")
+	}
+	c.semanticEnqueued++
 	record.Next = nil
 	if c.semanticTail == nil {
 		c.semanticHead = record
@@ -132,7 +136,6 @@ func (db *DB) drainSemanticCleanup() {
 			db.retainOriginalCleanupError(err)
 		}
 		c.semanticMu.Lock()
-		c.semanticRunning = false
 		if err != nil {
 			// Parking retains this SAME record, Work, failure and charge. Future
 			// wakes drain eligible siblings; this record is never runnable again.
@@ -150,6 +153,34 @@ func (db *DB) drainSemanticCleanup() {
 		if entered {
 			db.ownedCloseGuard.LeaveCleanup()
 		}
+		c.semanticMu.Lock()
+		c.semanticRunning = false
+		c.semanticCompleted++
+		c.semanticCond.Broadcast()
+		c.semanticMu.Unlock()
+	}
+}
+
+// Join only work already transferred after the producer's checkpoint. The
+// existing FIFO flush worker remains the sole destructor; retained cuts and
+// cleanup queued by later producers are outside this fixed frontier.
+func (db *DB) joinSemanticCleanupFrontier() error {
+	c := db.cow
+	c.semanticMu.Lock()
+	target := c.semanticEnqueued
+	c.wakeSemanticCleanup()
+	defer c.semanticMu.Unlock()
+	for {
+		if c.semanticFailed != nil {
+			return c.semanticFailed.Err
+		}
+		if c.semanticCompleted >= target {
+			return nil
+		}
+		if c.semanticStopped {
+			return memtable.ErrCOWClosed
+		}
+		c.semanticCond.Wait()
 	}
 }
 
@@ -164,6 +195,7 @@ func (db *DB) semanticCleanupTerminal() bool {
 		return false
 	}
 	c.semanticStopped = true
+	c.semanticCond.Broadcast()
 	var refund *memtable.COWExternalLease
 	// Failed original work remains in terminal custody and keeps its charge.
 	if c.semanticFailed == nil && (c.prefix == nil || !c.prefix.AcceptedCleanupFailed()) {

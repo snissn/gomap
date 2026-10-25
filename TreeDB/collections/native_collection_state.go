@@ -14,21 +14,25 @@ import (
 // rename replaces schema/name-directory entries while retaining incarnation.
 // pending contains only domains requiring physical materialization, so the
 // physical builder need not scan an untouched collection's entire domain set.
+// documentGeneration is the exact logical primary generation. Its existing
+// persisted catalog marker advances atomically with the captured primary root,
+// so native readers use this immutable field while newer rows remain pending.
 type nativeCollectionState struct {
-	refs        atomic.Int64
-	incarnation uint64
-	schema      *nativeSchemaState
-	domains     *cowbtree.OwnedMap[string, *nativeDomainState]
-	pending     *cowbtree.OwnedMap[string, *nativeDomainState]
-	refund      *cowbtree.OwnedMapRefund
-	attempted   bool
-	err         error
+	refs               atomic.Int64
+	incarnation        uint64
+	documentGeneration uint64
+	schema             *nativeSchemaState
+	domains            *cowbtree.OwnedMap[string, *nativeDomainState]
+	pending            *cowbtree.OwnedMap[string, *nativeDomainState]
+	refund             *cowbtree.OwnedMapRefund
+	attempted          bool
+	err                error
 }
 
 // newNativeCollectionState adopts the supplied original schema/directory
 // references only on success. Ordinary replacement retains the schema once;
 // each structurally shared directory separately owns its actual root edge.
-func newNativeCollectionState(incarnation uint64, schema *nativeSchemaState, domains, pending *cowbtree.OwnedMap[string, *nativeDomainState], admit cowbtree.OwnedMapAdmit) (*nativeCollectionState, error) {
+func newNativeCollectionState(incarnation, documentGeneration uint64, schema *nativeSchemaState, domains, pending *cowbtree.OwnedMap[string, *nativeDomainState], admit cowbtree.OwnedMapAdmit) (*nativeCollectionState, error) {
 	if incarnation == 0 || schema == nil || domains == nil || pending == nil || admit == nil {
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
@@ -39,7 +43,7 @@ func newNativeCollectionState(incarnation uint64, schema *nativeSchemaState, dom
 	}
 	refund := new(cowbtree.OwnedMapRefund)
 	refund.Init(lease)
-	c := &nativeCollectionState{incarnation: incarnation, schema: schema, domains: domains, pending: pending, refund: refund}
+	c := &nativeCollectionState{incarnation: incarnation, documentGeneration: documentGeneration, schema: schema, domains: domains, pending: pending, refund: refund}
 	c.refs.Store(1)
 	return c, nil
 }

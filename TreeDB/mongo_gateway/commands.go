@@ -606,6 +606,30 @@ drained:
 }
 
 func (c *mongoInsertCoalescer) runBatch(batch []mongoInsertCoalescerRequest) {
+	limit := int(wire.DefaultMaxMessageLength)
+	if c.server != nil {
+		limit = int(c.server.maxMessageLength())
+	}
+	// Independent wire requests must not become an unbounded byte-sized native
+	// transaction merely because the request-count limit permits a large group.
+	// A single request keeps its own validation and outcome; splitting changes
+	// only which independent requests share the existing insert planner.
+	for len(batch) != 0 {
+		end, bytes := 0, 0
+		for end < len(batch) {
+			n := len(batch[end].stored) + len(batch[end].id) + 8
+			if end != 0 && n > limit-bytes {
+				break
+			}
+			bytes += n
+			end++
+		}
+		c.runInsertBatch(batch[:end])
+		batch = batch[end:]
+	}
+}
+
+func (c *mongoInsertCoalescer) runInsertBatch(batch []mongoInsertCoalescerRequest) {
 	batch = filterExpiredMongoInsertCoalescerRequests(batch)
 	if len(batch) == 0 {
 		return
@@ -624,7 +648,7 @@ func (c *mongoInsertCoalescer) runBatch(batch []mongoInsertCoalescerRequest) {
 	}
 	_, err := batch[0].col.InsertBatchValidatedBSON(ids, stored)
 	if err != nil {
-		if collections.IsDuplicateKeyError(err) && !errors.Is(err, collections.ErrCommitAmbiguous) {
+		if (collections.IsDuplicateKeyError(err) || errors.Is(err, collections.ErrMutationNotAccepted)) && !errors.Is(err, collections.ErrCommitAmbiguous) {
 			runMongoInsertCoalescerSequential(batch)
 			return
 		}

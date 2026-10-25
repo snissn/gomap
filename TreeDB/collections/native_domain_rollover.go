@@ -17,6 +17,7 @@ func prepareNativeDomainRollover(base *nativeDomainState, admit cowbtree.OwnedMa
 	if err != nil {
 		return nil, err
 	}
+	domain.sourceGeneration = base.sourceGeneration
 	base.typed.retain()
 	domain.typed = base.typed
 	// This preborn descriptor owns every partial edge before the next fallible

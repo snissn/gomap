@@ -14,9 +14,10 @@ import (
 // backend capture. State and Snapshot are borrowed until Close. This internal
 // capability is admitted before allocation and belongs to this public owner.
 type NativeSemanticCapture struct {
-	cache *cowCache
-	cut   *cowReadCut
-	lease *memtable.COWExternalLease
+	cache      *cowCache
+	cut        *cowReadCut
+	lease      *memtable.COWExternalLease
+	dictionary cowDictionaryReadProvider // immutable provider capability; shared decoders own copied definitions
 }
 
 func (db *DB) CaptureNativeSemanticState(owner *transactionowner.Owner) (*NativeSemanticCapture, error) {
@@ -32,7 +33,8 @@ func (db *DB) CaptureNativeSemanticState(owner *transactionowner.Owner) (*Native
 		lease.Close()
 		return nil, backenddb.ErrClosed
 	}
-	return &NativeSemanticCapture{cache: db.cow, cut: cut, lease: lease}, nil
+	provider, _ := db.dictStore.(cowDictionaryReadProvider)
+	return &NativeSemanticCapture{cache: db.cow, cut: cut, lease: lease, dictionary: provider}, nil
 }
 func (c *NativeSemanticCapture) State() backenddb.NativeSemanticState { return c.cut.semanticRootSet }
 func (c *NativeSemanticCapture) Snapshot() *backenddb.Snapshot        { return c.cut.basis.snapshot }
@@ -62,7 +64,7 @@ func (c *NativeSemanticCapture) Close() error {
 		return nil
 	}
 	cut, cache, lease := c.cut, c.cache, c.lease
-	c.cut, c.cache, c.lease = nil, nil, nil
+	c.cut, c.cache, c.lease, c.dictionary = nil, nil, nil, nil
 	err := cache.releaseCut(cut)
 	lease.Close() // final containing-owner access follows alias scrubbing
 	return err
@@ -356,56 +358,39 @@ func (db *DB) writeNativePublication(b *Batch, native *backenddb.NativePreparedP
 		b.cowState.native.sealReceipt = sealed
 	}
 	b.cowState.native.sealTarget = intent.NativeSealTarget()
-	err = b.WriteAfterCommandWALAppendWithPreparedRevision(sync, func() error {
-		if err := b.AcquireCOWAppendGuard(owner); err != nil {
-			return err
+	bridge, effectiveDurable, completionErr := backend.NativeCommandWALCompletionFor(owner, intent, sync)
+	if completionErr != nil {
+		return result, completionErr
+	}
+	charge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowNativeCommandWALRequest{}))) + 3*memtable.COWAllocationCharge(uint64(unsafe.Sizeof([2]uintptr{})))
+	if bridge != nil {
+		charge += memtable.COWAllocationCharge(bridge.NativeCommandWALCompletionBytes())
+	}
+	completionLease, completionErr := db.cow.budget.AcquireExternal(charge)
+	if completionErr != nil {
+		return result, completionErr
+	}
+	r := &cowNativeCommandWALRequest{batch: b, backend: backend, native: native, intent: intent, owner: owner, bridge: bridge, durable: effectiveDurable}
+	defer func() {
+		if r.completion != nil {
+			r.completion.ReleaseNativeCommandWAL()
 		}
-		guard := b.COWAppendGuard()
-		if err := backend.FinalizeNativeRawUnderGuard(guard, intent, b.PrepareExternalCommandWALPublication, b.finalizeCOWPublication, b.Replay, len(b.entries)); err != nil {
-			return err
+		*r = cowNativeCommandWALRequest{}
+		r = nil
+		completionLease.Close()
+	}()
+	if bridge != nil {
+		r.completion, err = bridge.PrepareNativeCommandWAL(intent.PayloadBytes(), effectiveDurable)
+		if err != nil {
+			return result, err
 		}
-		if err := b.cowState.accepted.BindPreassignedCustody(b.cowState.native); err != nil {
-			return err
-		}
-		assigned, appendErr := guard.AppendWithAssignedRange(intent, sync)
-		lsn := assigned.Last
-		receiptErr := b.recordCOWAppendRange(owner, assigned, appendErr, sync)
-		if appendErr != nil {
-			return appendErr
-		}
-		if receiptErr != nil {
-			return receiptErr
-		}
-		if lsn == 0 {
-			return backenddb.ErrCommandWALRejected
-		}
-		if observe := native.ObserveAssigned; observe != nil {
-			native.ObserveAssigned = nil
-			if err := observe(lsn); err != nil {
-				return err // SAME original assigned ticket retains/poisons custody.
-			}
-		}
-		if native.Finalizer != nil {
-			finalized, err := backend.FinalizeNativeUnderGuard(guard, intent, native)
-			if err != nil {
-				b.cowState.native.failedResult = finalized
-				return err
-			}
-			cut := b.cowState.prepared.cut
-			if cut.next.semanticRootSet != nil {
-				// Its original complete-version edge ends only after the admitted sparse
-				// plan owns all replacement resources. Opening still retains the old cut.
-				record := cut.next.semanticRootSet.Release()
-				db.cow.semanticMu.Lock()
-				db.cow.enqueueSemanticLocked(record)
-				db.cow.semanticMu.Unlock()
-				db.cow.wakeSemanticCleanup()
-			}
-			cut.next.semanticRootSet = finalized.State
-			native.Projections = finalized.Projections
-		}
-		return nil
-	})
+	}
+	err = b.WriteAfterCommandWALAppendWithPreparedRevision(effectiveDurable, r.register)
+	if r.completion != nil {
+		err = r.completion.CompleteNativeCommandWAL(err)
+		r.completion = nil
+	}
+	b.CompleteCOWAcknowledgement(owner, effectiveDurable, err)
 	receipt := b.COWReceipt()
 	result.AssignedLSN, result.LogicalSequence = receipt.AssignedLSN, receipt.LogicalSeq
 	result.Assigned, result.Uncertain, result.LogicalInstalled = receipt.Assigned, receipt.Uncertain, receipt.LogicalInstalled
@@ -418,4 +403,83 @@ func (db *DB) writeNativePublication(b *Batch, native *backenddb.NativePreparedP
 		}
 	}
 	return result, err
+}
+
+// All escaping callback carriers and the public registration are admitted from
+// the original native budget before assignment, and scrubbed only after ACK.
+type cowNativeCommandWALRequest struct {
+	batch      *Batch
+	backend    *backenddb.DB
+	native     *backenddb.NativePreparedPublication
+	intent     *backenddb.CommandWALIntent
+	owner      *transactionowner.Owner
+	bridge     backenddb.NativeCommandWALCompletionBridge
+	completion backenddb.NativeCommandWALCompletion
+	durable    bool
+}
+
+func (r *cowNativeCommandWALRequest) register() error {
+	if r.bridge == nil {
+		_, err := r.append(r.durable)
+		return err
+	}
+	return r.completion.RegisterNativeCommandWAL(r.append)
+}
+func (r *cowNativeCommandWALRequest) append(sync bool) (uint64, error) {
+	b, backend, native, intent, owner := r.batch, r.backend, r.native, r.intent, r.owner
+
+	if err := b.AcquireCOWAppendGuard(owner); err != nil {
+		return intent.AssignedLSN(), err
+	}
+	guard := b.COWAppendGuard()
+	if err := backend.FinalizeNativeRawUnderGuard(guard, intent, b.PrepareExternalCommandWALPublication, b.finalizeCOWPublication, b.Replay, len(b.entries)); err != nil {
+		return intent.AssignedLSN(), err
+	}
+	if err := b.cowState.accepted.BindPreassignedCustody(b.cowState.native); err != nil {
+		return intent.AssignedLSN(), err
+	}
+	var assigned backenddb.CommandWALLSNRange
+	var appendErr error
+	if r.bridge != nil && !sync {
+		assigned, appendErr = guard.AppendNativeDurablePrefixParticipant(intent)
+	} else {
+		assigned, appendErr = guard.AppendWithAssignedRange(intent, sync)
+	}
+	lsn := assigned.Last
+	receiptErr := b.recordCOWAppendRange(owner, assigned, appendErr, sync)
+	if appendErr != nil {
+		return lsn, appendErr
+	}
+	if receiptErr != nil {
+		return lsn, receiptErr
+	}
+	if lsn == 0 {
+		return 0, backenddb.ErrCommandWALRejected
+	}
+	if observe := native.ObserveAssigned; observe != nil {
+		native.ObserveAssigned = nil
+		if err := observe(lsn); err != nil {
+			return lsn, err // SAME original assigned ticket retains/poisons custody.
+		}
+	}
+	if native.Finalizer != nil {
+		finalized, err := backend.FinalizeNativeUnderGuard(guard, intent, native)
+		if err != nil {
+			b.cowState.native.failedResult = finalized
+			return intent.AssignedLSN(), err
+		}
+		cut := b.cowState.prepared.cut
+		if cut.next.semanticRootSet != nil {
+			// Its original complete-version edge ends only after the admitted sparse
+			// plan owns all replacement resources. Opening still retains the old cut.
+			record := cut.next.semanticRootSet.Release()
+			b.db.cow.semanticMu.Lock()
+			b.db.cow.enqueueSemanticLocked(record)
+			b.db.cow.semanticMu.Unlock()
+			b.db.cow.wakeSemanticCleanup()
+		}
+		cut.next.semanticRootSet = finalized.State
+		native.Projections = finalized.Projections
+	}
+	return lsn, nil
 }

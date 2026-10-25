@@ -313,6 +313,7 @@ func prepareNativeEngineBasisRefresh(base *nativeEngineVersion, before, after *b
 			if err != nil {
 				return false
 			}
+			domain.sourceGeneration = d.sourceGeneration
 			if d.pending != nil {
 				if !d.pending.RetainOwned() {
 					err = memtable.ErrCOWClosed
@@ -342,7 +343,7 @@ func prepareNativeEngineBasisRefresh(base *nativeEngineVersion, before, after *b
 		c.schema.retain()
 		p.schema = c.schema
 		var successor *nativeCollectionState
-		successor, err = newNativeCollectionState(id, p.schema, p.domains, p.pendingDomains, admit)
+		successor, err = newNativeCollectionState(id, c.documentGeneration, p.schema, p.domains, p.pendingDomains, admit)
 		if err != nil {
 			return false
 		}

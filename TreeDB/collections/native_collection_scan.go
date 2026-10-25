@@ -112,6 +112,104 @@ func (r *NativeJSONRead) scanDocuments(afterID []byte, maxDocuments int, documen
 	return truncated, resultErr
 }
 
+func (c *Collection) nativeScanDocumentIDsPhysical(maxEntries int, fn func([]byte) (bool, error)) (inspected int, truncated bool, resultErr error) {
+	if maxEntries < 0 {
+		return 0, false, errors.New("collections: max physical entries must not be negative")
+	}
+	if fn == nil {
+		return 0, false, errors.New("collections: scan callback is nil")
+	}
+	if c.manager.isClosing() {
+		return 0, false, backenddb.ErrClosed
+	}
+	read, err := c.nativeJSON.Capture(c.name)
+	if err != nil {
+		return 0, false, err
+	}
+	defer func() { resultErr = errors.Join(resultErr, read.Close()) }()
+	return read.scanDocumentIDsPhysical(maxEntries, fn)
+}
+
+func (r *NativeJSONRead) scanDocumentIDsPhysical(maxEntries int, fn func([]byte) (bool, error)) (inspected int, truncated bool, resultErr error) {
+	r.mu.Lock()
+	if r.capture == nil || r.failure != nil || r.closing || r.visits == ^uint32(0) {
+		r.mu.Unlock()
+		return 0, false, backenddb.ErrClosed
+	}
+	r.visits++
+	defer func() {
+		r.visits--
+		closeRequested := r.closing && r.visits == 0
+		r.mu.Unlock()
+		if closeRequested {
+			resultErr = errors.Join(resultErr, r.Close())
+		}
+	}()
+	if r.domain.domain == nil {
+		return 0, false, nil // exact captured metadata proves no primary sources
+	}
+	if maxEntries == 0 {
+		return 0, true, nil
+	}
+	scratch, err := r.physicalScratch()
+	if err != nil {
+		return 0, false, err
+	}
+	lease, err := r.capture.NativeAllocator().AdmitNativeBytes(memtable.COWAllocationCharge(page.PageSize + 1))
+	if err != nil {
+		return 0, false, err
+	}
+	cursor := make([]byte, page.PageSize+1)
+	var start []byte
+	defer func() {
+		clear(cursor)
+		cursor, start = nil, nil
+		lease.Close()
+	}()
+	inspect := func() error {
+		if inspected == maxEntries {
+			return errCollectionIndexScanWorkCap
+		}
+		inspected++
+		return nil
+	}
+	for {
+		if r.closing || r.failure != nil {
+			return inspected, false, backenddb.ErrClosed
+		}
+		// Charge before every source probe, including tombstones, shadowed
+		// candidates and exhausted sources. A partially probed merge never
+		// reaches fn, and no further source work runs after the cap.
+		entry, found, err := r.domain.seek(start, nil, scratch, r.readLeaf, false, inspect)
+		if errors.Is(err, errCollectionIndexScanWorkCap) {
+			return inspected, true, nil
+		}
+		if err != nil || !found {
+			return inspected, false, err
+		}
+		if len(entry.Key) >= len(cursor) {
+			return inspected, false, memtable.ErrCOWCapacity
+		}
+		n := copy(cursor, entry.Key)
+		cursor[n] = 0
+		start = cursor[:n+1]
+		if entry.Flags&node.FlagTombstone != 0 {
+			continue
+		}
+		id := bytes.Clone(entry.Key)
+		entry = node.LeafEntry{}
+		next, err := func() (bool, error) {
+			r.mu.Unlock()
+			defer r.mu.Lock()
+			return fn(id)
+		}()
+		id = nil
+		if err != nil || !next {
+			return inspected, false, err
+		}
+	}
+}
+
 // These receipt families require column publication, whose metadata survives
 // index removal. Only an exact captured non-column schema proves absence; native
 // typed roles remain unsupported here rather than silently losing receipts.

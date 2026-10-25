@@ -215,8 +215,10 @@ type NativeColumnStoreCompactionState interface {
 type NativeSemanticBridge interface {
 	CompactNativeColumnStore(context.Context, NativeColumnStoreCompaction) error
 	Checkpoint() error
+	PrepareNativeProducer() error
 	CaptureNativeCut() (NativeSemanticCapture, error)
 	BeginNativeConditionalTxn() (NativeConditionalTxn, error)
+	BeginPreparedNativeConditionalTxn() (NativeConditionalTxn, error)
 	WriteNativePublication(*NativePreparedPublication, *CommandWALIntent, bool) (NativePublicationResult, error)
 }
 
@@ -274,6 +276,24 @@ func (db *DB) BeginNativeConditionalTxn() (NativeConditionalTxn, error) {
 		return nil, ErrNativeSemanticUnsupported
 	}
 	return db.nativeSemanticBridge.BeginNativeConditionalTxn()
+}
+
+// PrepareNativeProducer runs maintenance before collection locks or captures.
+// It reserves no capacity and grants no publication authority.
+func (db *DB) PrepareNativeProducer() error {
+	if !db.HasNativeSemanticBridge() {
+		return ErrNativeSemanticUnsupported
+	}
+	return db.nativeSemanticBridge.PrepareNativeProducer()
+}
+
+// BeginPreparedNativeConditionalTxn is the opening-only adapter for consumers
+// that prepared before acquiring their own mutation locks.
+func (db *DB) BeginPreparedNativeConditionalTxn() (NativeConditionalTxn, error) {
+	if !db.HasNativeSemanticBridge() {
+		return nil, ErrNativeSemanticUnsupported
+	}
+	return db.nativeSemanticBridge.BeginPreparedNativeConditionalTxn()
 }
 func (db *DB) WriteNativePublication(native *NativePreparedPublication, intent *CommandWALIntent, sync bool) (NativePublicationResult, error) {
 	if !db.HasNativeSemanticBridge() {
@@ -342,8 +362,10 @@ type NativePhysicalLeafReader interface {
 
 // NativePhysicalValueReader decodes an already captured pointer using that
 // capture's exact retained basis and registered files. It returns exact-length,
-// independent output before releasing shared scratch. Compressed dictionaries
-// remain unsupported; dictionary-free codecs use the maintained bounded reader.
+// independent output before releasing shared scratch. Dictionary-free codecs
+// use the maintained bounded reader. Trained codecs additionally require the
+// pure dictionary provider's independently owned, verified definition; no codec
+// slot may borrow a caller's capture or a global-cache dictionary alias.
 //
 // admitOutput is nil for caller-owned public results. The existing internal
 // retained consumer may supply only its synchronous original-budget admission:

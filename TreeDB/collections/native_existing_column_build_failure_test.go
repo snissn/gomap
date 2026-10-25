@@ -13,6 +13,7 @@ import (
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/workstats"
@@ -38,8 +39,7 @@ func runNativeColumnAcceptedBuildFailure(t *testing.T, two bool) {
 		childEnv += "_TWO"
 		names = append(names, "events_two")
 	}
-	basis, accepted := uint64(2*len(names)), uint64(2*len(names)+1)
-	marker := fmt.Sprintf("COLUMN BUILD FAILURE basis=%d accepted=%d original-build-retained", basis, accepted)
+	const marker = "COLUMN BUILD FAILURE original-build-retained"
 	const exitCode = 97
 	options := func(dir string) treedb.Options {
 		opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, dir)
@@ -76,6 +76,16 @@ func runNativeColumnAcceptedBuildFailure(t *testing.T, two bool) {
 		if !errors.As(err, &exit) || exit.ExitCode() != exitCode || !bytes.Contains(output, []byte(marker)) || bytes.Contains(output, []byte("DATA RACE")) {
 			t.Fatalf("accepted build failure child: %v\n%s", err, output)
 		}
+		var basis, accepted, postNext uint64
+		for _, line := range bytes.Split(output, []byte("\n")) {
+			if _, err := fmt.Sscanf(string(line), "COLUMN BUILD IDENTITY basis=%d accepted=%d next=%d", &basis, &accepted, &postNext); err == nil {
+				break
+			}
+		}
+		if basis == 0 || accepted != basis+1 || postNext <= accepted {
+			t.Fatalf("child lost actual canonical identities: basis=%d accepted=%d next=%d", basis, accepted, postNext)
+		}
+
 		before := workstats.Read().Replay
 		database, err := treedb.Open(options(dir))
 		if err != nil {
@@ -83,7 +93,7 @@ func runNativeColumnAcceptedBuildFailure(t *testing.T, two bool) {
 		}
 		defer database.Close()
 		after := workstats.Read().Replay
-		if after.FramesApplied-before.FramesApplied != 1 || after.FrameErrors != before.FrameErrors {
+		if after.FramesApplied-before.FramesApplied != postNext-accepted || after.FrameErrors != before.FrameErrors {
 			t.Fatalf("accepted canonical suffix replay: %+v -> %+v", before, after)
 		}
 		handle, err := database.NativeSemanticBackend()
@@ -108,7 +118,7 @@ func runNativeColumnAcceptedBuildFailure(t *testing.T, two bool) {
 		if got, err := database.Get(rawKey); err != nil || !bytes.Equal(got, rawValue) {
 			t.Fatalf("replayed raw member=%q: %v", got, err)
 		}
-		if handle.CommandWALNextLSN() != accepted+1 {
+		if handle.CommandWALNextLSN() != postNext {
 			t.Fatalf("replay changed original identity: next=%d", handle.CommandWALNextLSN())
 		}
 		if err := manager.Close(); err != nil {
@@ -162,7 +172,8 @@ func runNativeColumnAcceptedBuildFailure(t *testing.T, two bool) {
 		}
 		return token.AppliedCommandLSN
 	}
-	if physicalLSN() != basis || handle.CommandWALNextLSN() != accepted {
+	basis, accepted := physicalLSN(), handle.CommandWALNextLSN()
+	if basis == 0 || accepted != basis+1 {
 		t.Fatalf("typed seed basis=%d next=%d want=%d/%d", physicalLSN(), handle.CommandWALNextLSN(), basis, accepted)
 	}
 	held := make([]*CollectionReadView, len(names))
@@ -212,8 +223,23 @@ func runNativeColumnAcceptedBuildFailure(t *testing.T, two bool) {
 	if err := tx.Close(); err != nil {
 		t.Fatal(err)
 	}
+	postNext := handle.CommandWALNextLSN()
+	var canonical int
+	for _, frame := range collectionCommandWALFrames(t, handle.Dir()) {
+		if frame.LSN < accepted || frame.Kind == commitlog.CommandKindDurablePrefixBarrier {
+			continue
+		}
+		canonical++
+		if frame.LSN != accepted || frame.Kind != commitlog.CommandKindCompositeMutation || frame.PayloadFormat != commitlog.PayloadFormatCompositeMutationV1 {
+			t.Fatalf("accepted canonical aggregate=%+v", frame)
+		}
+	}
+	if canonical != 1 || postNext <= accepted {
+		t.Fatalf("canonical aggregates=%d accepted=%d next=%d", canonical, accepted, postNext)
+	}
+
 	sequence := database.Stats()["treedb.cache.cow.txn.logical_seq"]
-	if physicalLSN() != basis || handle.CommandWALNextLSN() != accepted+1 {
+	if physicalLSN() != basis || handle.CommandWALNextLSN() != postNext {
 		t.Fatal("accepted aggregate changed the physical basis or lost canonical identity")
 	}
 	current := make([]*NativeJSONRead, len(names))
@@ -275,7 +301,7 @@ func runNativeColumnAcceptedBuildFailure(t *testing.T, two bool) {
 	observed := make(map[string]rootpublication.StableIdentity)
 	outputs := make(map[string]rootpublication.StableIdentity)
 	restoreObserve := setColumnAssetStableBeforeObserveTestHook(func(parent, file *os.File, name string) {
-		if handle.CommandWALNextLSN() == accepted+1 {
+		if handle.CommandWALNextLSN() == postNext {
 			for namespace, directory := range segmentDirs {
 				if filepath.Clean(parent.Name()) != directory {
 					continue
@@ -292,7 +318,7 @@ func runNativeColumnAcceptedBuildFailure(t *testing.T, two bool) {
 	defer restoreObserve()
 	var failedIdentity rootpublication.StableIdentity
 	restore := setColumnAssetStableObligationTestHook(func(ref ColumnAssetRef, _ rootpublication.StableLogicalObligation, _ *rootpublication.StableNamespaceToken) columnAssetStableCaptureTestDecision {
-		if ref.Kind == ColumnAssetKindTCS1TypedColumnPart && ref.Namespace == targetNamespace && handle.CommandWALNextLSN() == accepted+1 && selected.CompareAndSwap(false, true) {
+		if ref.Kind == ColumnAssetKindTCS1TypedColumnPart && ref.Namespace == targetNamespace && handle.CommandWALNextLSN() == postNext && selected.CompareAndSwap(false, true) {
 			if two {
 				first := outputs[collections[0].Meta().Options.ColumnStore.AssetManager.Namespace]
 				if first == (rootpublication.StableIdentity{}) || handle.ValueLogIdentityPinRegistry().PinCount(first) == 0 {
@@ -312,7 +338,7 @@ func runNativeColumnAcceptedBuildFailure(t *testing.T, two bool) {
 	restore()
 	restoreObserve()
 	physicalAfter, ok := handle.StateToken()
-	if !ok || physicalAfter != physicalBefore || handle.CommandWALNextLSN() != accepted+1 || database.Stats()["treedb.cache.cow.txn.logical_seq"] != sequence {
+	if !ok || physicalAfter != physicalBefore || handle.CommandWALNextLSN() != postNext || database.Stats()["treedb.cache.cow.txn.logical_seq"] != sequence {
 		t.Fatal("failed build changed the accepted logical cut or installed a partial disk basis")
 	}
 	build := engine.build
@@ -379,6 +405,7 @@ func runNativeColumnAcceptedBuildFailure(t *testing.T, two bool) {
 	// Registry Close makes new deletion leases terminal while retaining each
 	// original output pin until its real release.
 	checkOutputPins(retainedalloc.ErrClosed)
+	fmt.Printf("COLUMN BUILD IDENTITY basis=%d accepted=%d next=%d\n", basis, accepted, postNext)
 	fmt.Println(marker)
 	os.Exit(exitCode)
 }

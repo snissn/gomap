@@ -18,6 +18,7 @@ import (
 
 	"github.com/cespare/xxhash/v2"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/vectorops"
 	"github.com/snissn/gomap/TreeDB/internal/workstats"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -395,6 +396,13 @@ type VectorIndexRecall struct {
 // TreeDB-managed collection root; ad hoc indexes can still be rebuilt from
 // primary collection rows.
 type VectorIndex struct {
+	nativeHNSWSchemaState                                      *nativeSchemaState
+	nativeHNSWUseMu                                            sync.RWMutex
+	nativeHNSWLease                                            *memtable.COWExternalLease
+	nativeHNSWCharge                                           uint64
+	nativeHNSWIDBytes                                          uint64
+	nativeHNSWIncarnation, nativeHNSWSchema, nativeHNSWVersion uint64
+
 	collection *Collection
 
 	name                string
@@ -1000,6 +1008,13 @@ func (c *Collection) buildVectorIndexPrepared(opts VectorIndexOptions, register,
 // The loader inherits notification's native graph mutation owner. Both its
 // preflush and scanner must keep that owner through exact publication repair.
 func (c *Collection) buildVectorIndexPreparedWithMutationState(opts VectorIndexOptions, register, flushBuffered, liveANNFullRebuild, admissionLocked, vectorMutationLocked bool) (*VectorIndex, error) {
+	if c != nil && c.nativeJSON != nil {
+		if !vectorMutationLocked {
+			unlock := c.lockVectorIndexMutation()
+			defer unlock()
+		}
+		return c.buildNativeHNSW(opts, register)
+	}
 	if c == nil {
 		return nil, errCollectionNil
 	}
@@ -1185,6 +1200,13 @@ func (c *Collection) currentVectorIndexDocumentGenerationForAdmission() (uint64,
 }
 
 func newVectorIndex(c *Collection, opts VectorIndexOptions) (*VectorIndex, error) {
+	var meta CollectionMeta
+	if c != nil {
+		meta = c.meta
+	}
+	return newVectorIndexWithMeta(c, opts, meta)
+}
+func newVectorIndexWithMeta(c *Collection, opts VectorIndexOptions, meta CollectionMeta) (*VectorIndex, error) {
 	if opts.Name == "" {
 		opts.Name = vectorIndexDefaultName(opts.Field)
 	}
@@ -1232,12 +1254,12 @@ func newVectorIndex(c *Collection, opts VectorIndexOptions) (*VectorIndex, error
 	var scalarDefinitions []IndexDefinition
 	nativeRuntime := opts.nativeRuntime
 	if c != nil && !nativeRuntime {
-		if def, ok := findVectorIndex(c.meta.VectorIndexes, opts.Name); ok {
+		if def, ok := findVectorIndex(meta.VectorIndexes, opts.Name); ok {
 			nativeRuntime = vectorIndexDefinitionUsesNativeRuntime(def)
 		}
 	}
 	if c != nil && nativeRuntime {
-		scalarDefinitions = nativeScalarDefinitions(c.meta)
+		scalarDefinitions = nativeScalarDefinitions(meta)
 	}
 	scalarRuntimes, err := nativeScalarRuntimes(scalarDefinitions)
 	if err != nil {
@@ -1294,6 +1316,9 @@ func (c *Collection) RegisterVectorIndex(index *VectorIndex) error {
 	}
 	if index == nil {
 		return errors.New("collections: vector index is nil")
+	}
+	if c.nativeJSON != nil {
+		return c.rebuildNativeHNSWReceiver(index, true)
 	}
 	unlockSchema := c.lockCollectionSchemaWrite()
 	defer unlockSchema()
@@ -1461,6 +1486,10 @@ func (c *Collection) UnregisterVectorIndex(name string) {
 	if c == nil {
 		return
 	}
+	if c.nativeJSON != nil {
+		c.unregisterNativeHNSW(name)
+		return
+	}
 	coord := c.collectionSchemaCoordinator()
 	if coord != nil {
 		coord.partitionLivePublishMu.Lock()
@@ -1511,6 +1540,9 @@ func (c *Collection) hasNativePersistentVectorIndex() bool {
 }
 
 func (c *Collection) registeredVectorIndexes() []*VectorIndex {
+	if c != nil && c.nativeJSON != nil {
+		return c.collectionSchemaCoordinator().nativeHNSWRuntimeList()
+	}
 	if c == nil {
 		return nil
 	}
@@ -2077,6 +2109,11 @@ func (c *Collection) invalidateVectorIndexCoverageOnAcceptedMutation(err error) 
 }
 
 func (c *Collection) lockVectorIndexMutation() func() {
+	if c != nil && c.nativeJSON != nil {
+		coord := c.collectionSchemaCoordinator()
+		coord.nativeHNSWMutationMu.Lock()
+		return coord.nativeHNSWMutationMu.Unlock
+	}
 	if c == nil {
 		return func() {}
 	}
@@ -2555,6 +2592,9 @@ func (idx *VectorIndex) InsertDocument(documentID []byte) error {
 	if len(documentID) == 0 {
 		return errors.New("collections: document id cannot be empty")
 	}
+	if idx.collection != nil && idx.collection.nativeJSON != nil {
+		return idx.insertNativeHNSWDocument(documentID)
+	}
 	runVectorPartitionLiveInsertDocumentBeforePublicationHookForTest()
 	unlockPublication := idx.collection.lockNativeVectorIndexPublicationRead()
 	defer unlockPublication()
@@ -2781,6 +2821,10 @@ func (idx *VectorIndex) insertStoredDocumentsWithReconciliation(materializer *St
 // Tombstoned nodes remain in the graph until the caller rebuilds the index.
 func (idx *VectorIndex) TombstoneDocumentID(documentID []byte) {
 	if idx == nil || len(documentID) == 0 {
+		return
+	}
+	if idx.collection != nil && idx.collection.nativeJSON != nil {
+		idx.tombstoneNativeHNSWDocument(documentID)
 		return
 	}
 	idx.mu.Lock()
@@ -4089,6 +4133,94 @@ func (idx *VectorIndex) pruneLayerNeighborsWithFrozenPrefixScratchObservedLocked
 // graph search underfills and DisableExactFallback is false, it falls back to
 // the exact scan API.
 func (idx *VectorIndex) Search(query []float32, opts VectorIndexSearchOptions) ([]VectorSearchResult, VectorIndexTrace, error) {
+	if idx != nil && idx.collection != nil && idx.collection.nativeJSON != nil {
+		c := idx.collection
+		idx.nativeHNSWUseMu.RLock()
+		useHeld := true
+		releaseUse := func() {
+			if useHeld {
+				useHeld = false
+				idx.nativeHNSWUseMu.RUnlock()
+			}
+		}
+		defer releaseUse()
+		if c.nativeJSON.db.IsClosing() {
+			return nil, VectorIndexTrace{}, backenddb.ErrClosed
+		}
+		read, err := c.nativeJSON.Capture(c.name)
+		if err != nil {
+			return nil, VectorIndexTrace{}, err
+		}
+		defer read.Close()
+		if err = idx.validateNativeHNSWRead(read); err != nil {
+			return nil, VectorIndexTrace{}, fmt.Errorf("%w: %v", ErrVectorIndexSearchUnavailable, err)
+		}
+		// Each concurrent query owns its workspace. Native scratch bypasses
+		// the retained pool below, so returning this receipt ends its lifetime.
+		idx.mu.RLock()
+		nodes := len(idx.nodes)
+		idBytes := idx.nativeHNSWIDBytes
+		if idx.liveDelta != nil {
+			idx.liveDelta.mu.RLock()
+			nodes += len(idx.liveDelta.nodes)
+			idx.liveDelta.mu.RUnlock()
+		}
+		idx.mu.RUnlock()
+		fixed := uint64(64<<10) + uint64(nodes)*512 + uint64(len(query))*32
+		if opts.Filter != nil {
+			// Path string bytes borrow the original captured schema; the copied
+			// descriptor backing must survive runtime replacement independently.
+			pathBytes := memtable.COWAllocationCharge(uint64(len(idx.fieldPath)) * uint64(unsafe.Sizeof(string(""))))
+			if pathBytes > ^uint64(0)-fixed {
+				return nil, VectorIndexTrace{}, memtable.ErrCOWCapacity
+			}
+			fixed += pathBytes
+		}
+		if idBytes > (^uint64(0)-fixed)/8 {
+			return nil, VectorIndexTrace{}, memtable.ErrCOWCapacity
+		}
+		// Candidate IDs and base/delta/result arenas are query-owned, including
+		// arbitrary key widths. Their receipts cannot borrow runtime reservation.
+		workspace, err := read.capture.NativeAllocator().AdmitNativeBytes(memtable.COWAllocationCharge(fixed + idBytes*8))
+		if err != nil {
+			return nil, VectorIndexTrace{}, fmt.Errorf("collections: native vector query workspace: %w", err)
+		}
+		defer workspace.Close()
+		var rows []VectorSearchResult
+		var trace VectorIndexTrace
+		if opts.Filter != nil {
+			rows, trace, err = idx.searchCurrentWithNativeRelease(query, opts, read, releaseUse)
+		} else {
+			rows, trace, err = idx.searchCurrent(query, opts, read)
+		}
+		if err != nil {
+			return rows, trace, err
+		}
+		post, e := c.nativeJSON.Capture(c.name)
+		if e != nil {
+			return nil, trace, e
+		}
+		defer post.Close()
+		if !useHeld {
+			beforeDomain, beforeOK := read.collection.domains.Get("vector-index/" + idx.name)
+			afterDomain, afterOK := post.collection.domains.Get("vector-index/" + idx.name)
+			if read.collection.incarnation != post.collection.incarnation || read.collection.documentGeneration != post.collection.documentGeneration || !collectionMetaValuesEqual(read.meta, post.meta) || !beforeOK || !afterOK || beforeDomain.interpretation != afterDomain.interpretation {
+				return nil, trace, fmt.Errorf("%w: collection changed during vector filter", ErrVectorIndexSearchUnavailable)
+			}
+		}
+		if e = idx.validateNativeHNSWRead(post); e != nil {
+			return nil, trace, fmt.Errorf("%w: %v", ErrVectorIndexSearchUnavailable, e)
+		}
+		return rows, trace, nil
+	}
+	return idx.searchCurrent(query, opts, nil)
+}
+
+func (idx *VectorIndex) searchCurrent(query []float32, opts VectorIndexSearchOptions, nativeRead *NativeJSONRead) ([]VectorSearchResult, VectorIndexTrace, error) {
+	return idx.searchCurrentWithNativeRelease(query, opts, nativeRead, nil)
+}
+
+func (idx *VectorIndex) searchCurrentWithNativeRelease(query []float32, opts VectorIndexSearchOptions, nativeRead *NativeJSONRead, releaseNativeUse func()) ([]VectorSearchResult, VectorIndexTrace, error) {
 	trace := VectorIndexTrace{Strategy: "ann_graph"}
 	if idx == nil {
 		return nil, trace, errors.New("collections: vector index is nil")
@@ -4160,7 +4292,10 @@ func (idx *VectorIndex) Search(query []float32, opts VectorIndexSearchOptions) (
 		if opts.DisableExactFallback {
 			return nil, trace, fmt.Errorf("%w: vector index %q does not cover current documents", ErrVectorIndexSearchUnavailable, idx.name)
 		}
-		return idx.searchExactFallback(query, opts, trace)
+		if releaseNativeUse != nil {
+			releaseNativeUse()
+		}
+		return idx.searchExactFallback(query, opts, trace, nativeRead)
 	}
 	if knownGap {
 		return staleFallback()
@@ -4181,7 +4316,7 @@ func (idx *VectorIndex) Search(query []float32, opts VectorIndexSearchOptions) (
 			trace.Strategy = "exact_filtered"
 			trace.CandidatesExamined = len(probeIDs)
 			trace.CandidatesAfterTombstone = len(probeIDs)
-			results, err := idx.rerankCandidates(query, probeIDs, opts.Filter, opts.TopK, &trace)
+			results, err := idx.rerankSearchCandidates(query, probeIDs, opts.Filter, opts.TopK, &trace, nativeRead, releaseNativeUse)
 			if err != nil {
 				return nil, trace, err
 			}
@@ -4221,8 +4356,13 @@ func (idx *VectorIndex) Search(query []float32, opts VectorIndexSearchOptions) (
 	}
 	if idx.liveDelta != nil {
 		idx.mu.RUnlock()
-		buffer := acquireCollectionSearchVectorIndexResponseBuffer()
-		defer releaseCollectionSearchVectorIndexResponseBuffer(buffer)
+		var buffer *VectorIndexSearchBuffer
+		if idx.collection != nil && idx.collection.nativeJSON != nil {
+			buffer = &VectorIndexSearchBuffer{} // workspace receipt ends with this query
+		} else {
+			buffer = acquireCollectionSearchVectorIndexResponseBuffer()
+			defer releaseCollectionSearchVectorIndexResponseBuffer(buffer)
+		}
 		candidates, searchState, searchErr := idx.searchGraphOnlyWithBuffer(query, candidateLimit, ef, buffer)
 		if searchErr != nil {
 			idx.mu.RLock()
@@ -4236,13 +4376,16 @@ func (idx *VectorIndex) Search(query []float32, opts VectorIndexSearchOptions) (
 		candidateIDs := make([][]byte, len(candidates))
 		for i := range candidates {
 			candidateIDs[i] = candidates[i].ID
+			if nativeRead != nil {
+				candidateIDs[i] = bytes.Clone(candidateIDs[i])
+			}
 		}
 		trace.CandidatesExamined = len(candidateIDs)
 		trace.CandidatesAfterTombstone = len(candidateIDs)
 		if !idx.nativeSearchStateCoversCurrentDocuments(searchState) {
 			trace.ExactFallbackReason = vectorIndexFallbackStaleDocumentRoot
 		} else {
-			results, err = idx.rerankCandidates(query, candidateIDs, filter, opts.TopK, &trace)
+			results, err = idx.rerankSearchCandidates(query, candidateIDs, filter, opts.TopK, &trace, nativeRead, releaseNativeUse)
 			if err == nil && !idx.nativeSearchStateCoversCurrentDocuments(searchState) {
 				results = nil
 				trace.ExactFallbackReason = vectorIndexFallbackStaleDocumentRoot
@@ -4254,6 +4397,17 @@ func (idx *VectorIndex) Search(query []float32, opts VectorIndexSearchOptions) (
 			return nil, trace, fmt.Errorf("%w: native_runtime vector index %q does not cover current documents", ErrVectorIndexSearchUnavailable, idx.name)
 		}
 		scratch := idx.getSearchScratch()
+		if nativeRead != nil {
+			// These backings belong to this query's admitted workspace. Reserve
+			// bounded initial capacities together instead of growing each heap
+			// geometrically; no scratch survives the operation in a global pool.
+			limit := minInt(candidateLimit, len(idx.nodes))
+			arena := make([]vectorIndexCandidate, 4*limit)
+			scratch.queue = arena[: 0 : 2*limit]
+			scratch.best = arena[2*limit : 2*limit : 3*limit]
+			scratch.out = arena[3*limit : 3*limit : 4*limit]
+			scratch.visitedEpochs = make([]uint32, len(idx.nodes))
+		}
 		candidates := idx.searchCandidatesLocked(query, queryNorm, prepared, candidateLimit, scratch)
 		trace.CandidatesExamined = len(candidates)
 		fastRerank := filter == nil && idx.metric == VectorMetricCosine && idx.encoding == VectorIndexEncodingFloat32
@@ -4275,9 +4429,9 @@ func (idx *VectorIndex) Search(query []float32, opts VectorIndexSearchOptions) (
 		idx.mu.RUnlock()
 
 		if fastRerank && err == nil {
-			results, err = idx.attachVectorSearchResultDocuments(results, resultNodeIDs, opts.TopK)
+			results, err = idx.attachVectorSearchResultDocuments(results, resultNodeIDs, opts.TopK, nativeRead)
 		} else if !fastRerank {
-			results, err = idx.rerankCandidates(query, candidateIDs, filter, opts.TopK, &trace)
+			results, err = idx.rerankSearchCandidates(query, candidateIDs, filter, opts.TopK, &trace, nativeRead, releaseNativeUse)
 		}
 	}
 	if err != nil {
@@ -4296,7 +4450,10 @@ func (idx *VectorIndex) Search(query []float32, opts VectorIndexSearchOptions) (
 		if trace.ExactFallbackReason == "" {
 			trace.ExactFallbackReason = "underfilled_results"
 		}
-		return idx.searchExactFallback(query, opts, trace)
+		if releaseNativeUse != nil {
+			releaseNativeUse()
+		}
+		return idx.searchExactFallback(query, opts, trace, nativeRead)
 	}
 	workstats.Runtime.QueriesCompleted.Add(1)
 	return results, trace, nil
@@ -4304,15 +4461,15 @@ func (idx *VectorIndex) Search(query []float32, opts VectorIndexSearchOptions) (
 
 // Direct Search's controlled fallback reads current collection rows without
 // acknowledging an incomplete native graph.
-func (idx *VectorIndex) searchExactFallback(query []float32, opts VectorIndexSearchOptions, trace VectorIndexTrace) ([]VectorSearchResult, VectorIndexTrace, error) {
+func (idx *VectorIndex) searchExactFallback(query []float32, opts VectorIndexSearchOptions, trace VectorIndexTrace, read *NativeJSONRead) ([]VectorSearchResult, VectorIndexTrace, error) {
 	if opts.IndexRangeFilter != nil {
 		trace.Strategy = "ann_postfilter_exact_fallback"
 	} else {
 		trace.Strategy = "ann_graph_exact_fallback"
 	}
-	exact, err := idx.collection.SearchVectorsExact(query, VectorSearchOptions{
+	exact, err := idx.collection.searchVectorsExactWithRead(query, VectorSearchOptions{
 		Field: idx.field, Metric: idx.metric, TopK: opts.TopK, Filter: opts.Filter, IndexRangeFilter: opts.IndexRangeFilter,
-	})
+	}, read)
 	if err != nil {
 		return nil, trace, err
 	}
@@ -4604,8 +4761,52 @@ func (idx *VectorIndex) rerankFloat32CosineCandidatesFromNodesLocked(query []flo
 	return ranked, rankedNodeIDs, nil
 }
 
+type vectorIndexRerankConfig struct {
+	collection *Collection
+	field      string
+	fieldPath  []string
+	metric     VectorMetric
+}
+
+// Keep dispatch direct so an unfiltered query's options and trace remain local.
+// A callback query copies runtime configuration before releasing use custody;
+// reentrant user code may replace the original runtime during canonical rerank.
+func (idx *VectorIndex) rerankSearchCandidates(query []float32, candidateIDs [][]byte, filter func(DocumentRecord) (bool, error), topK int, trace *VectorIndexTrace, nativeRead *NativeJSONRead, releaseNativeUse func()) ([]VectorSearchResult, error) {
+	if releaseNativeUse == nil {
+		return idx.rerankCandidates(query, candidateIDs, filter, topK, trace)
+	}
+	config := vectorIndexRerankConfig{collection: idx.collection, field: idx.field, fieldPath: append([]string(nil), idx.fieldPath...), metric: idx.metric}
+	releaseNativeUse()
+	return rerankVectorIndexCandidates(config, nativeRead, query, candidateIDs, filter, topK, trace)
+}
+
 func (idx *VectorIndex) rerankCandidates(query []float32, candidateIDs [][]byte, filter func(DocumentRecord) (bool, error), topK int, trace *VectorIndexTrace) ([]VectorSearchResult, error) {
-	materializer, err := idx.collection.NewStoredDocumentJSONMaterializer()
+	return rerankVectorIndexCandidates(vectorIndexRerankConfig{idx.collection, idx.field, idx.fieldPath, idx.metric}, nil, query, candidateIDs, filter, topK, trace)
+}
+
+func rerankVectorIndexCandidates(config vectorIndexRerankConfig, read *NativeJSONRead, query []float32, candidateIDs [][]byte, filter func(DocumentRecord) (bool, error), topK int, trace *VectorIndexTrace) ([]VectorSearchResult, error) {
+	var materializer *StoredDocumentJSONMaterializer
+	var scratch func(uint64) error
+	var err error
+	if config.collection.nativeJSON != nil {
+		if read == nil {
+			read, err = config.collection.nativeJSON.Capture(config.collection.name)
+			if err != nil {
+				return nil, err
+			}
+			defer read.Close()
+		}
+		materializer = &StoredDocumentJSONMaterializer{documentFormat: normalizedDocumentFormat(read.meta.Options.DocumentFormat), nativeRead: read}
+		var lease *memtable.COWExternalLease
+		lease, err = read.capture.NativeAllocator().AdmitNativeBytes(0)
+		if err != nil {
+			return nil, err
+		}
+		defer lease.Close()
+		scratch = nativeHNSWPeakAdmission(lease)
+	} else {
+		materializer, err = config.collection.NewStoredDocumentJSONMaterializer()
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -4613,12 +4814,28 @@ func (idx *VectorIndex) rerankCandidates(query []float32, candidateIDs [][]byte,
 
 	results := make([]VectorSearchResult, 0, minInt(topK, len(candidateIDs)))
 	for _, documentID := range candidateIDs {
-		document, found, err := idx.collection.GetInto(documentID, nil)
+		var document []byte
+		var found bool
+		var err error
+		if read != nil {
+			document, err = read.namedDomainGetAdmitted("primary", documentID, scratch)
+			found = err == nil
+			if errors.Is(err, tree.ErrKeyNotFound) {
+				err = nil
+			}
+		} else {
+			document, found, err = config.collection.GetInto(documentID, nil)
+		}
 		if err != nil {
 			return nil, err
 		}
 		if !found {
 			continue
+		}
+		if scratch != nil {
+			if err := scratch(uint64(len(document))); err != nil {
+				return nil, err
+			}
 		}
 		resultID := bytes.Clone(documentID)
 		record := DocumentRecord{ID: resultID, Document: document}
@@ -4634,14 +4851,14 @@ func (idx *VectorIndex) rerankCandidates(query []float32, candidateIDs [][]byte,
 		if trace != nil {
 			trace.CandidatesAfterFilter++
 		}
-		vector, ok, err := vectorFromStoredDocument(materializer, document, idx.fieldPath)
+		vector, ok, err := vectorFromStoredDocument(materializer, document, config.fieldPath)
 		if err != nil {
-			return nil, fmt.Errorf("collections: vector field %q in document %q: %w", idx.field, documentID, err)
+			return nil, fmt.Errorf("collections: vector field %q in document %q: %w", config.field, documentID, err)
 		}
 		if !ok || len(vector) != len(query) {
 			continue
 		}
-		distance, err := exactVectorDistance(query, vector, idx.metric)
+		distance, err := exactVectorDistance(query, vector, config.metric)
 		if err != nil {
 			return nil, err
 		}
@@ -4710,13 +4927,42 @@ func (idx *VectorIndex) isCurrentVectorNodeResult(documentID []byte, nodeID int)
 	return currentNodeID >= 0 && currentNodeID < len(idx.nodes) && !idx.nodes[currentNodeID].deleted
 }
 
-func (idx *VectorIndex) attachVectorSearchResultDocuments(ranked []VectorSearchResult, rankedNodeIDs []int, topK int) ([]VectorSearchResult, error) {
+func (idx *VectorIndex) attachVectorSearchResultDocuments(ranked []VectorSearchResult, rankedNodeIDs []int, topK int, nativeRead *NativeJSONRead) ([]VectorSearchResult, error) {
 	if idx == nil {
 		return nil, errors.New("collections: vector index is nil")
 	}
 	if idx.collection == nil {
 		return nil, errCollectionNil
 	}
+	if idx.collection.nativeJSON != nil {
+		if nativeRead == nil {
+			return nil, errors.New("collections: native vector search requires its captured read")
+		}
+		results := ranked[:0]
+		for i, result := range ranked {
+			if len(results) == topK {
+				break
+			}
+			if i >= len(rankedNodeIDs) || !idx.isCurrentVectorNodeResult(result.DocumentID, rankedNodeIDs[i]) {
+				continue
+			}
+			doc, e := nativeRead.Get(result.DocumentID)
+			if errors.Is(e, tree.ErrKeyNotFound) {
+				continue
+			}
+			if e != nil {
+				return nil, e
+			}
+			result.Document = doc
+			results = append(results, result)
+		}
+		cloneVectorSearchResultDocumentIDs(results)
+		// The discarded ranked tail still contains borrowed runtime IDs. Clear
+		// those references before returning the reused caller-owned backing.
+		clear(ranked[len(results):cap(ranked)])
+		return results[:len(results):len(results)], nil
+	}
+
 	if idx.collection.db == nil {
 		return nil, errCollectionDBNil
 	}
@@ -5193,6 +5439,9 @@ func (idx *VectorIndex) searchLayerLocked(query []float32, queryNormSquared floa
 }
 
 func (idx *VectorIndex) getSearchScratch() *vectorIndexSearchScratch {
+	if idx.collection != nil && idx.collection.nativeJSON != nil {
+		return &vectorIndexSearchScratch{}
+	}
 	if scratch, ok := idx.searchScratch.Get().(*vectorIndexSearchScratch); ok {
 		return scratch
 	}
@@ -5203,7 +5452,9 @@ func (idx *VectorIndex) putSearchScratch(scratch *vectorIndexSearchScratch) {
 	if scratch == nil {
 		return
 	}
-	idx.searchScratch.Put(scratch)
+	if idx.collection == nil || idx.collection.nativeJSON == nil {
+		idx.searchScratch.Put(scratch)
+	}
 }
 
 func (idx *VectorIndex) searchLayerWithScratchLocked(query []float32, queryNormSquared float64, prepared *preparedFloat32CosineQuery, entryPoint int, limit int, layer int, scratch *vectorIndexSearchScratch) []vectorIndexCandidate {
@@ -7033,6 +7284,9 @@ func (idx *VectorIndex) CheckRecall(queries [][]float32, opts VectorIndexSearchO
 }
 
 func (idx *VectorIndex) checkRecallExactBatch(queries [][]float32, opts VectorIndexSearchOptions) ([][]VectorSearchResult, bool, error) {
+	if idx.collection != nil && idx.collection.nativeJSON != nil {
+		return nil, false, nil
+	}
 	if len(queries) < 2 || opts.Filter != nil || opts.IndexRangeFilter != nil || idx.metric != VectorMetricCosine {
 		return nil, false, nil
 	}
@@ -7184,6 +7438,9 @@ func (idx *VectorIndex) Rebuild() error {
 	c := idx.collection
 	if c == nil {
 		return errCollectionNil
+	}
+	if c.nativeJSON != nil {
+		return c.rebuildNativeHNSWReceiver(idx, false)
 	}
 	unlockSchema := c.lockCollectionSchemaWrite()
 	defer unlockSchema()
