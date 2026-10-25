@@ -2,6 +2,8 @@ package collections
 
 import (
 	"errors"
+	"strings"
+	"time"
 	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -15,25 +17,89 @@ import (
 )
 
 // InsertBatch is the one-shot form of Begin, staged InsertBatch, and Commit.
-func (m *NativeJSONManager) InsertBatch(name string, ids, documents [][]byte) (resultErr error) {
+func (m *NativeJSONManager) InsertBatch(name string, ids, documents [][]byte) error {
 	tx, err := m.Begin(name)
-	return finishNativeJSONInsert(tx, err, ids, documents)
+	_, err = finishNativeJSONInsert(tx, err, ids, documents, nil, false)
+	return err
 }
 
-func (m *NativeJSONManager) insertPrepared(name string, ids, documents [][]byte) error {
+func (m *NativeJSONManager) insertPrepared(name string, ids, documents [][]byte, stats *CollectionInsertStats, ordinaryOnly bool) (bool, error) {
 	tx, err := m.beginPrepared(name)
-	return finishNativeJSONInsert(tx, err, ids, documents)
+	return finishNativeJSONInsert(tx, err, ids, documents, stats, ordinaryOnly)
 }
 
-func finishNativeJSONInsert(tx *NativeJSONTxn, err error, ids, documents [][]byte) (resultErr error) {
+func finishNativeJSONInsert(tx *NativeJSONTxn, err error, ids, documents [][]byte, stats *CollectionInsertStats, ordinaryOnly bool) (recordStats bool, resultErr error) {
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer func() { resultErr = errors.Join(resultErr, tx.Close()) }()
-	if err = tx.InsertBatch(ids, documents); err != nil {
-		return mutationNotAcceptedError(err)
+	if tx.bindings[0].probe.meta.Options.ColumnStore != nil {
+		if ordinaryOnly {
+			return false, backenddb.ErrNativeSemanticUnsupported
+		}
+		// Plain typed insertion keeps its existing route and Last behavior.
+		// Typed diagnostics use their distinct maintained API.
+		stats = nil
 	}
-	return tx.Commit()
+	var started time.Time
+	if stats != nil {
+		started = time.Now()
+	}
+	if err = tx.InsertBatch(ids, documents); err != nil {
+		return false, mutationNotAcceptedError(err)
+	}
+	if stats != nil {
+		stats.PrepareDocuments = time.Since(started)
+	}
+	return stats != nil, tx.commitNativePlanWithStats(false, nil, false, stats)
+}
+
+// collectNativeInsertStats observes the original prepared work without another
+// capture or document decode. Its one array and cloned names become diagnostic
+// output owned by the Collection handle only after successful completion; the
+// request gets a separate slice only when WithStats was requested. Until then
+// construction is admitted on the original transaction's staging lease.
+func (t *NativeJSONTxn) collectNativeInsertStats(g *nativeJSONTxnBinding, direct *directBufferedInsertPlan, stats *CollectionInsertStats) error {
+	indexes := g.probe.meta.Indexes
+	if uint64(len(indexes)) > ^uint64(0)/uint64(unsafe.Sizeof(CollectionSecondaryRunStats{})) {
+		return memtable.ErrCOWCapacity
+	}
+	charge := memtable.COWAllocationCharge(uint64(len(indexes)) * uint64(unsafe.Sizeof(CollectionSecondaryRunStats{})))
+	for _, index := range indexes {
+		n := memtable.COWAllocationCharge(uint64(len(index.Name)))
+		if n > ^uint64(0)-charge {
+			return memtable.ErrCOWCapacity
+		}
+		charge += n
+	}
+	if charge != 0 {
+		if err := t.admitStage(g, charge); err != nil {
+			return err
+		}
+	}
+	s := stats
+	s.Documents, s.Indexes = len(g.rows.rows), len(indexes)
+	// These are prepared logical domain runs, not physical checkpoint roots.
+	s.Runs = 1 + len(g.plan.additional)
+	if len(indexes) != 0 {
+		s.SecondaryRuns = make([]CollectionSecondaryRunStats, len(indexes))
+	}
+	for i, index := range indexes {
+		s.SecondaryRuns[i].IndexName = strings.Clone(index.Name)
+	}
+	for _, run := range direct.secondaryRootPlans {
+		entry := &s.SecondaryRuns[run.runtimeIdx]
+		entry.Entries, entry.KeyBytes = len(run.entries), run.keyBytes
+		// The maintained native planner has sorted the prepared run already;
+		// this does not claim that caller input was originally ordered.
+		entry.AlreadySorted = true
+		s.SecondaryEntries += entry.Entries
+		s.SecondaryKeyBytes += entry.KeyBytes
+		if entry.Entries != 0 {
+			s.SecondarySortedRuns++
+		}
+	}
+	return nil
 }
 
 func nativeJSONInsertCharge(name string, ids, documents [][]byte) (uint64, error) {

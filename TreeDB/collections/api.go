@@ -682,6 +682,14 @@ func (work *ColumnPublishCandidateResourceWork) Add(other ColumnPublishCandidate
 
 // CollectionInsertStats captures phase timings and counters from a completed
 // InsertBatch call or an optional diagnostics-enabled typed upsert.
+//
+// Ordinary native facade inserts report counts from their original captured
+// schema and prepared logical domain runs. PrepareDocuments times row staging;
+// Publish times CommitNative, including its required acknowledgement wait.
+// Other phase timings are unmeasured on that route and remain zero. Secondary
+// AlreadySorted describes the prepared run, not the caller's document order.
+// These diagnostics are caller/handle-owned outputs rather than native engine
+// state; LastInsertStats retains one array and WithStats copies it for the caller.
 type CollectionInsertStats struct {
 	Documents                    int
 	Indexes                      int
@@ -1306,6 +1314,7 @@ type collectionMetaDisk struct {
 }
 
 type collectionCatalog struct {
+	nativeText *nativeTextCatalog // borrowed complete-cut text read; never cached
 	// collectionCatalog is immutable once cached or published. Root updates must
 	// create a replacement catalog via cloneCatalogWithRootUpdates.
 	meta                   CollectionMeta
@@ -3723,6 +3732,35 @@ func (m *CollectionManager) CreateCollection(meta *CollectionMeta) (*CollectionM
 		return nil, err
 	}
 	return m.createCollectionWithCommandWALIntent(normalized, nil)
+}
+
+// CreateCollectionWithStatus publishes an ordinary catalog create and reports
+// whether a compatible collection already existed under the catalog owner.
+// It does not accept an externally assigned intent or run a preflight callback.
+func (m *CollectionManager) CreateCollectionWithStatus(meta CollectionMeta) (*CollectionMeta, bool, error) {
+	if m != nil && m.nativeJSON != nil {
+		if m.isClosing() {
+			return nil, false, backenddb.ErrClosed
+		}
+		return m.nativeJSON.CreateCollectionWithStatus(meta)
+	}
+	if m != nil && m.initializationError != nil {
+		return nil, false, m.initializationError
+	}
+	if m == nil {
+		return nil, false, errCollectionManagerNil
+	}
+	if m.db == nil {
+		return nil, false, errCollectionDBNil
+	}
+	if m.isClosing() {
+		return nil, false, backenddb.ErrClosed
+	}
+	normalized, err := normalizeCollectionMeta(meta)
+	if err != nil {
+		return nil, false, err
+	}
+	return m.createCollectionWithPreparedCommandWALIntent(normalized, nil, nil, nil)
 }
 
 // CreateCollectionWithCommandWALIntent applies a catalog create through the
@@ -11864,6 +11902,11 @@ func (c *Collection) InsertBatchWithStatsValidatedFloat32Projection(ids, documen
 }
 
 func (c *Collection) insertBatchWithStats(ids, documents [][]byte) ([][]byte, CollectionInsertStats, error) {
+	if c != nil && c.nativeJSON != nil {
+		var stats CollectionInsertStats
+		ids, err := c.nativeInsertBatchWithStats(ids, documents, &stats)
+		return ids, stats, err
+	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
 	admissionState := c.lockCollectionCommandWALAdmission()
@@ -25476,6 +25519,10 @@ func (c *collectionCatalog) rootStack(rootName string) []uint64 {
 }
 
 func collectionGetEntryAtCatalogRoot(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string, key []byte) (node.LeafEntry, uint64, error) {
+	if catalog != nil && catalog.nativeText != nil {
+		entry, err := catalog.nativeText.entry(rootName, key)
+		return entry, 0, err
+	}
 	if snap == nil {
 		return node.LeafEntry{}, 0, backenddb.ErrClosed
 	}
@@ -25505,6 +25552,9 @@ func collectionGetEntryAtCatalogRoot(snap *backenddb.Snapshot, catalog *collecti
 }
 
 func collectionGetAppendAtCatalogRoot(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string, key, dst []byte) ([]byte, bool, error) {
+	if catalog != nil && catalog.nativeText != nil {
+		return catalog.nativeText.get(rootName, key, dst)
+	}
 	if snap == nil {
 		return dst[:0], false, backenddb.ErrClosed
 	}
@@ -25650,6 +25700,9 @@ func collectionIteratorAtCatalogRootWithWorkCapAndInspect(snap *backenddb.Snapsh
 // The optional inspection error checks cancellation during physical merge
 // work, including superseded rows and tombstones that never reach a callback.
 func collectionIteratorAtCatalogRootWithInspectionError(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string, start, end []byte, includeDeleted bool, maxInspected int, onInspected func(int), inspectionError func() error) (iterator.UnsafeIterator, error) {
+	if catalog != nil && catalog.nativeText != nil {
+		return catalog.nativeText.iterator(rootName, start, end, includeDeleted, maxInspected, onInspected, inspectionError)
+	}
 	if inspectionError != nil {
 		if err := inspectionError(); err != nil {
 			return nil, err

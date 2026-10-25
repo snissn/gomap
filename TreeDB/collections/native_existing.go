@@ -32,17 +32,38 @@ func (m *CollectionManager) openNativeCollection(name string) (collection *Colle
 }
 
 func (c *Collection) nativeInsertBatch(ids, documents [][]byte) ([][]byte, error) {
+	return c.nativeInsertBatchWithStats(ids, documents, nil)
+}
+
+func (c *Collection) nativeInsertBatchWithStats(ids, documents [][]byte, requested *CollectionInsertStats) ([][]byte, error) {
 	if c.manager.isClosing() {
 		return nil, backenddb.ErrClosed
 	}
 	if len(ids) != len(documents) {
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
+	var stats CollectionInsertStats
 	if len(ids) == 0 {
+		read, err := c.nativeJSON.Capture(c.name)
+		if err != nil {
+			return nil, err
+		}
+		ordinary := read.meta.Options.ColumnStore == nil
+		stats.Indexes = len(read.meta.Indexes)
+		if err = read.Close(); err != nil {
+			return nil, err
+		}
+		if !ordinary {
+			if requested != nil {
+				return nil, backenddb.ErrNativeSemanticUnsupported
+			}
+			return nil, nil
+		}
+		c.recordInsertBatchStats(stats, insertBatchExecutionOptions{insertStats: requested})
 		return nil, nil
 	}
-	// Returned IDs are caller-owned, like the legacy planner result, and cannot
-	// borrow transaction scratch whose original receipt ends at Commit/Close.
+	// Returned IDs and diagnostics are caller/handle-owned outputs, like the
+	// legacy planner result; neither borrows the transaction's captured schema.
 	result, err := cloneBatchDocumentIDs(ids)
 	if err != nil {
 		return nil, err
@@ -52,13 +73,17 @@ func (c *Collection) nativeInsertBatch(ids, documents [][]byte) ([][]byte, error
 	}
 	unlockVector, vectorMutationHeld := c.lockNativeHNSWMutationIfNeeded()
 	defer unlockVector()
-	if err = c.nativeJSON.insertPrepared(c.name, ids, documents); err != nil {
+	recordStats, err := c.nativeJSON.insertPrepared(c.name, ids, documents, &stats, requested != nil)
+	if err != nil {
 		return nil, err
 	}
 	if c.nativeHNSWMaintenanceNeeded() {
 		if err = c.finishNativeHNSWMutation(ids, vectorMutationHeld); err != nil {
 			return result, commitAmbiguousError("native vector maintenance", err)
 		}
+	}
+	if recordStats {
+		c.recordInsertBatchStats(stats, insertBatchExecutionOptions{insertStats: requested})
 	}
 	return result, nil
 }

@@ -173,10 +173,13 @@ func (coord *collectionSchemaCoordinator) unregisterPartitionLiveCarrier(name st
 }
 
 type collectionDBSchemaCoordinators struct {
-	mu            sync.Mutex
-	collections   map[string]*collectionSchemaCoordinator
-	sourceMu      sync.Mutex
-	sourceManager *CollectionManager
+	mu          sync.Mutex
+	collections map[string]*collectionSchemaCoordinator
+	// Create status needs one DB-scoped owner, without retaining a namespace
+	// coordinator for every fresh name refused before native admission.
+	nativeCreateMu sync.Mutex
+	sourceMu       sync.Mutex
+	sourceManager  *CollectionManager
 }
 
 var collectionSchemaCoordinators sync.Map

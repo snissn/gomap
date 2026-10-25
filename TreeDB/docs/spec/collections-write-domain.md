@@ -27,6 +27,32 @@ cut and command-WAL completion as direct native callers; it does not stage a
 second manager-local write domain. Reads capture one complete cut. Legacy
 backend-only constructors retain the write-domain path described below.
 
+Ordinary native `InsertBatch` and `InsertBatchWithStats` use the same original
+native row planner and publication. Successful ordinary facade inserts replace
+`LastInsertStats`; `WithStats` additionally returns an independent request-owned
+copy. Failed or commit-ambiguous attempts leave the last successful diagnostics
+unchanged and return no success statistics. Empty batches capture the current
+schema for the index count without publishing a mutation. ColumnStore
+`WithStats` remains unsupported here; plain typed insertion and the separate
+typed diagnostics API retain their previous behavior.
+
+Native counts come from the captured scalar declarations and actual prepared
+primary/additional logical domain runs, including encoded secondary entry/key
+sizes. They count prepared work, not physical checkpoint roots. `AlreadySorted`
+describes each sorted prepared secondary run. `PrepareDocuments` measures row
+staging and `Publish` measures the existing native commit including its required
+acknowledgement wait. Native final planning and other legacy phase timings are
+unmeasured; zero values do not claim those phases took no time. No new capture,
+decode, retry, journal, durability profile, or vector notification is introduced
+for a nonempty insert.
+
+Diagnostic array/name construction is admitted on the original transaction
+staging lease before allocation. On success it becomes handle-owned output,
+like returned document IDs, outside the retained native engine state. A plain
+facade insert retains one per-index array and cloned names; `WithStats` adds one
+independent array copy. The direct native manager keeps the existing no-sink
+path. There is no native performance acceptance claim for the added diagnostics.
+
 Public native read views reuse the existing JSON projection validator and
 projector, including include/exclude precedence and materialization counters.
 Projection reads the view's captured document cut through physical handoff.
@@ -41,6 +67,30 @@ do not create physical checkpoint debt. Typed/ColumnGraph source imports keep
 their existing construction route. JSON materialization clones captured JSON,
 converts captured BSON, and invokes the captured template resolver only for
 template-v1 documents, including exact vector-search fallback.
+
+The native JSON text adapter publishes the maintained V1 reducer's three domains
+or V2 reducer's seven domains with primary and scalar changes in one successor.
+V2 status and V1 shared-statistics dependencies authenticate the planning cut;
+search borrows one complete cut for postings, metadata and documents. V1 retains
+its maintained phrase/proximity refusal. Status/storage diagnostics use captured
+schema and version-specific validators. Temporary reducer tables use an admitted
+unpooled BTree; nested analysis reserves both serial decoder cohorts on the
+original operation lease before token/table construction. See
+`collection-text-v2-contract.md` for ownership and refusal details.
+
+For ordinary JSON under `no_wal_fast`, native `CreateTextIndex` backfills V1 or
+V2 from one captured primary, including physical and pending rows when no
+physical root ID exists. The existing native index-family owner publishes the
+schema and complete three/seven-domain replacement atomically. `DropTextIndex`
+removes its logical domains and both maintained physical descriptor families;
+older read views retain their original schema and domains. Unchanged registered
+HNSW receivers use the same admitted schema-change payload preservation as
+scalar/vector DDL. Preparation refusal installs no schema/domain successor;
+all temporary backfill sources, decoder/table cohorts and outgoing rows stay on
+the original operation receipt until private COW sources own their copies.
+Command-WAL text DDL retains the maintained preassignment rejection. This slice
+does not complete the text family: rewrite/maintenance, other document formats
+and service/hybrid adoption still require native proofs.
 
 Each accepted native mutation installs one complete logical successor; a shared
 physical durable group preserves each command's outcomes and original LSN.

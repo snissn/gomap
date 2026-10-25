@@ -17,6 +17,9 @@ import (
 // Domain numbers are derived only from the captured schema, exactly like the
 // maintained planner's runtimeIdx. Physical roots never determine identity.
 func nativeJSONDomainNumber(meta CollectionMeta, name string) uint64 {
+	if number := nativeTextDomainNumber(meta, name); number != 0 {
+		return number
+	}
 	switch name {
 	case "primary":
 		return 1

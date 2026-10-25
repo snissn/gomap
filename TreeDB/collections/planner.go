@@ -56,6 +56,9 @@ const (
 )
 
 type collectionOptions struct {
+	// Native text preparation uses operation-private unpooled tables. Legacy
+	// callers keep the maintained append-only representation.
+	textTableFactory        func(int) memtable.Table
 	db                      *backenddb.DB
 	typedProjection         *trustedFloat32Projection
 	allowArrayValuesInIndex bool
@@ -66,6 +69,13 @@ type collectionOptions struct {
 	allowTemplateV1Stored   bool
 	dataStoragePolicy       backenddb.OrderedRootStoragePolicy
 	indexStateStoragePolicy backenddb.OrderedRootStoragePolicy
+}
+
+func (o collectionOptions) newTextTable(entries int) memtable.Table {
+	if o.textTableFactory != nil {
+		return o.textTableFactory(entries)
+	}
+	return newCollectionRunTable(entries)
 }
 
 type indexDefinition struct {

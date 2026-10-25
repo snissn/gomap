@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"sync"
+	"time"
 	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -424,7 +425,11 @@ func (t *NativeJSONTxn) commitNativeApply(sealed bool, apply *nativeCommandWALAp
 	return t.commitNativePlan(sealed, apply, false)
 }
 
-func (t *NativeJSONTxn) commitNativePlan(sealed bool, apply *nativeCommandWALApplyCommit, typedGroup bool) (resultErr error) {
+func (t *NativeJSONTxn) commitNativePlan(sealed bool, apply *nativeCommandWALApplyCommit, typedGroup bool) error {
+	return t.commitNativePlanWithStats(sealed, apply, typedGroup, nil)
+}
+
+func (t *NativeJSONTxn) commitNativePlanWithStats(sealed bool, apply *nativeCommandWALApplyCommit, typedGroup bool, stats *CollectionInsertStats) (resultErr error) {
 	if t == nil {
 		return backenddb.ErrClosed
 	}
@@ -454,7 +459,7 @@ func (t *NativeJSONTxn) commitNativePlan(sealed bool, apply *nativeCommandWALApp
 	// Only the original singleton103 graph apply may have a typed recipe and
 	// catalog effect without any CRUD members.
 	graphSingleton := apply != nil && apply.frame.Kind == commitlog.CommandKindCollectionRebuildVectorIndex && !typedGroup && t.count == 1 && !t.rawStaged && len(t.members) == 0 && nativeTypedGraphOnly(t.bindings[0].typed)
-	if err := t.finalizeNativeRows(graphSingleton); err != nil {
+	if err := t.finalizeNativeRowsWithStats(graphSingleton, stats); err != nil {
 		return err
 	}
 	count, totalEffects := 0, 0
@@ -614,7 +619,14 @@ func (t *NativeJSONTxn) commitNativePlan(sealed bool, apply *nativeCommandWALApp
 	if typedGroup {
 		sync = true
 	}
+	var publishStarted time.Time
+	if stats != nil {
+		publishStarted = time.Now()
+	}
 	result, err := t.core.CommitNative(native, intent, sync)
+	if stats != nil {
+		stats.Publish = time.Since(publishStarted)
+	}
 	// The assigned binding borrows these synchronous request intents only.
 	// No failed sparse custody may retain them after the input receipt ends.
 	plan.participants = nil

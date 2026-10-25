@@ -33,6 +33,68 @@ Text index v2 is B-tree-native TreeDB storage:
 
 ## Public version and rollout vocabulary
 
+### Shared COW collection adapter
+
+The native semantic collection owner can create ordinary JSON collections with
+declared V1 or V2 text indexes, scalar indexes, and ordinary runtime HNSW indexes. Its
+CRUD finalizer feeds the maintained text reducer's old/new document effects into
+the same immutable publication as primary and scalar changes. V1 retains its
+three posting/state/statistics domains; V2 retains its seven domains and
+format/status records. Both preserve the maintained names, policies and codecs. Physical checkpoint materializes these domains through the
+existing ordered-root and persistent value-log owner; logical publication does
+not invent physical root IDs or require a checkpoint for visibility.
+
+V2 status is a shared read-modify-write basis even for different document IDs.
+V1 instead authenticates its complete statistics domain, including replacements
+that change field/term counts without changing corpus cardinality. Native
+transactions record these dependencies and every emitted text key effect, so
+incompatible captured plans fail before publication. Ordinary
+mixed text/HNSW mutations also retain the existing DB-scoped HNSW mutation gate.
+Canonical singleton and composite command replay regenerate text effects using
+the maintained reducer against the original physical replay snapshot.
+
+Search borrows one complete native cut for metadata, text blocks and returned
+documents. It uses the maintained BM25/boolean/phrase executor with captured
+domain Get/iterator adapters. V1 retains the maintained phrase/proximity refusal;
+positive phrase execution remains V2. `TextIndexStatus` reads the captured schema;
+`TextIndexStorageStats` runs the maintained version-specific validator over one
+complete native cut with admitted decode/iteration workspace. Pointer values
+resolve under that same capture;
+iterator work limits and cancellation include inspected physical sources.
+Analysis, table, decoded-block and query workspace are admitted before
+construction; operation receipts close with their scope. Returned documents/results
+follow the existing caller-owned output contract. Conservative source bounds can
+refuse a request under the finite native budget; they do not authorize retrying
+an installed mutation or raising the budget.
+
+This adapter currently selects declared V1/V2 with JSON document storage and no
+typed storage configuration. It does not promote a server constructor, BSON/template text,
+text DDL/rewrite/compaction APIs, or mixed-source hybrid execution. Those capabilities
+retain their existing legacy implementation and require separate native proofs.
+The focused `TestNativeTextPublic*` controls cover ordinary mixed-index CRUD,
+held old/current reads, checkpoint/reopen, process-exit singleton/composite replay,
+shared-status/statistics conflict and finite-admission cleanup; they are not performance or
+whole-product qualification.
+
+Native V1/V2 initial and mutation builders select the existing unpooled BTree
+through a private per-operation table factory; legacy builders retain AppendOnly.
+The maintained reducer emits only stealing setters and tombstones, so this
+BTree route does not allocate its copying arena or transfer temporary backing to
+global memtable pools. Admission includes structural node/slice growth cohorts,
+iterator capacity, selected-text conversion, token/state and emitted-row storage.
+Temporary tables and their operation receipt share one cleanup scope, including
+builder errors and replay preparation.
+
+Top-level analysis and sizing share borrowed-field selection. Nested paths use
+the maintained complete JSON decoder and path walker: the original operation
+lease first admits a full-source decoder cohort, then grows for a second decoder
+cohort and the actual selected values before reducer allocation. Both cohorts
+remain charged until operation cleanup; an unreachable sizing tree is not an
+immediate refund. These finite bounds can still refuse large requests. Focused
+refusal controls require no logical/WAL effects, unchanged live reservations and
+zero native receipts at full close; they do not establish a global RSS bound or
+performance qualification.
+
 `TextIndexDefinition` now carries the contract fields:
 
 ```go

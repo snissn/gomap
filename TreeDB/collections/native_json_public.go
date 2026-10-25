@@ -2,6 +2,7 @@ package collections
 
 import (
 	"errors"
+	"fmt"
 	"sort"
 	"sync"
 
@@ -37,7 +38,7 @@ func nativeJSONMeta(meta CollectionMeta) (CollectionMeta, error) {
 		return CollectionMeta{}, err
 	}
 	format := normalizedDocumentFormat(normalized.Options.DocumentFormat)
-	if (!nativeOrdinaryHNSWMeta(normalized) && len(normalized.VectorIndexes) != 0 && !nativeSourceImportMetaV2(normalized)) || len(normalized.TextIndexes) != 0 || (normalized.Options.ColumnStore != nil && (normalized.Options.AllowArrayValuesInIndex || !nativeTypedMeta(normalized))) || (format != DocumentFormatJSON && format != DocumentFormatBSON && format != DocumentFormatTemplateV1) {
+	if (!nativeOrdinaryHNSWMeta(normalized) && len(normalized.VectorIndexes) != 0 && !nativeSourceImportMetaV2(normalized)) || !nativeTextMeta(normalized) || (normalized.Options.ColumnStore != nil && (normalized.Options.AllowArrayValuesInIndex || !nativeTypedMeta(normalized))) || (format != DocumentFormatJSON && format != DocumentFormatBSON && format != DocumentFormatTemplateV1) {
 		return CollectionMeta{}, backenddb.ErrNativeSemanticUnsupported
 	}
 	for _, index := range normalized.Indexes {
@@ -63,36 +64,57 @@ func finishPrivateNative(work *rootpublication.SemanticCleanup) error {
 // CreateCollection prepares one immutable successor before entering the same
 // canonical command-WAL bridge used by raw COW publication.
 func (m *NativeJSONManager) CreateCollection(meta CollectionMeta) (*CollectionMeta, error) {
-	return m.createCollection(meta, nil)
+	created, _, err := m.CreateCollectionWithStatus(meta)
+	return created, err
 }
 
-func (m *NativeJSONManager) createCollection(meta CollectionMeta, apply *nativeCommandWALApplyCommit) (created *CollectionMeta, resultErr error) {
+// CreateCollectionWithStatus uses the ordinary native create planner and reports
+// a compatible existing schema without assigning or publishing a command.
+func (m *NativeJSONManager) CreateCollectionWithStatus(meta CollectionMeta) (*CollectionMeta, bool, error) {
+	return m.createCollectionWithStatus(meta, nil)
+}
+
+func (m *NativeJSONManager) createCollection(meta CollectionMeta, apply *nativeCommandWALApplyCommit) (*CollectionMeta, error) {
+	created, _, err := m.createCollectionWithStatus(meta, apply)
+	return created, err
+}
+
+func (m *NativeJSONManager) createCollectionWithStatus(meta CollectionMeta, apply *nativeCommandWALApplyCommit) (created *CollectionMeta, alreadyExisted bool, resultErr error) {
 	if m == nil || m.db == nil {
-		return nil, backenddb.ErrClosed
+		return nil, false, backenddb.ErrClosed
 	}
 	if err := nativeTypedProfile(m.db, meta); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	normalized, err := nativeJSONMeta(meta)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if apply == nil {
 		if err := m.db.PrepareNativeProducer(); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 	}
+	// Independent managers share one cold create owner. Avoid retaining a
+	// per-name runtime coordinator before a fresh collection is admitted.
+	// Catalog OCC still validates this create against other logical writers.
+	coord := collectionDBSchemaCoordinatorForDB(m.db)
+	if coord == nil {
+		return nil, false, backenddb.ErrClosed
+	}
+	coord.nativeCreateMu.Lock()
+	defer coord.nativeCreateMu.Unlock()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	capture, err := m.db.CaptureNativeSemanticState()
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer func() { resultErr = errors.Join(resultErr, capture.Close()) }()
 	basis := capture.State()
 	base, ok := basis.(*nativeEngineVersion)
 	if basis != nil && !ok {
-		return nil, backenddb.ErrNativeSemanticUnsupported
+		return nil, false, backenddb.ErrNativeSemanticUnsupported
 	}
 	if base == nil {
 		base, err = importNativeJSONCatalog(capture)
@@ -104,47 +126,48 @@ func (m *NativeJSONManager) createCollection(meta CollectionMeta, apply *nativeC
 			}()
 		}
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 	}
 
 	var native *backenddb.NativePreparedPublication
 	if existing, found := base.names.Get(normalized.Name); found {
 		if !sameCollectionMeta(*existing.schema.meta, normalized) {
-			return nil, backenddb.ErrNativeSemanticUnsupported
+			return nil, false, fmt.Errorf("collections: existing schema for %q is incompatible: %w", normalized.Name, backenddb.ErrNativeSemanticUnsupported)
 		}
+		alreadyExisted = true
 		if apply == nil {
-			return existing.schema.meta.copy(), nil
+			return existing.schema.meta.copy(), true, nil
 		}
 		apply.alreadyApplied = true
 		next, prepErr := prepareNativeCommandWALNoop(base)
 		if prepErr != nil {
-			return nil, prepErr
+			return nil, false, prepErr
 		}
 		native = &backenddb.NativePreparedPublication{State: next}
 	} else {
 		native, err = prepareNativeJSONCreate(base, normalized)
 	}
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	native.Basis, native.StartSequence = basis, capture.LogicalSequence()
 	payload, err := EncodeCatalogCreateCollectionCommandWALPayload(normalized)
 	if err != nil {
 		cleanupErr := cancelPrivateNativePublication(native)
-		return nil, errors.Join(err, cleanupErr)
+		return nil, false, errors.Join(err, cleanupErr)
 	}
 	intent, err := m.db.NewTrustedCommandWALIntent(commitlog.CommandKindCatalogCreateCollection, commitlog.CommandScopeCatalog, commitlog.PayloadFormatCatalogCreateCollectionV1, payload)
 	if err != nil {
 		cleanupErr := cancelPrivateNativePublication(native)
-		return nil, errors.Join(err, cleanupErr)
+		return nil, false, errors.Join(err, cleanupErr)
 	}
 	sync := false
 	if apply != nil {
 		sync = apply.sync
 		native.ObserveAssigned = apply.observe
 		if err = intent.PrepareSealedReceiptWithAdmission(capture.NativeAllocator()); err != nil {
-			return nil, errors.Join(err, cancelPrivateNativePublication(native))
+			return nil, false, errors.Join(err, cancelPrivateNativePublication(native))
 		}
 		defer intent.ReleaseNativeSealedReceipt()
 	}
@@ -156,9 +179,15 @@ func (m *NativeJSONManager) createCollection(meta CollectionMeta, apply *nativeC
 		err = errors.Join(err, cancelPrivateNativePublication(native))
 	}
 	if err != nil {
-		return nil, err
+		if result.Assigned || result.LogicalInstalled {
+			err = commitAmbiguousError("native collection create completion", err)
+		}
+		if result.LogicalInstalled {
+			return normalized.copy(), alreadyExisted, err
+		}
+		return nil, false, err
 	}
-	return normalized.copy(), nil
+	return normalized.copy(), alreadyExisted, nil
 }
 
 func nativeCreateIdentityUpdates(name string, next uint64) (map[string][]byte, error) {
@@ -185,7 +214,8 @@ func prepareNativeJSONCreate(base *nativeEngineVersion, meta CollectionMeta) (pu
 	if nativeOrdinaryHNSWMeta(meta) {
 		vectorDomains = len(meta.VectorIndexes)
 	}
-	scratch, err := newNativeEnginePreparation(base, 1, vectorDomains, base.allocator)
+	domainCount := nativeTextDomainCount(meta) + vectorDomains
+	scratch, err := newNativeEnginePreparation(base, 1, domainCount, base.allocator)
 	if err != nil {
 		return nil, err
 	}
@@ -204,11 +234,11 @@ func prepareNativeJSONCreate(base *nativeEngineVersion, meta CollectionMeta) (pu
 	if err != nil {
 		return nil, err
 	}
-	p.domainBuilder, err = cowbtree.NewOwnedMapBuilder[string, *nativeDomainState](nil, vectorDomains, nativeDomainLifetime{}, admit)
+	p.domainBuilder, err = cowbtree.NewOwnedMapBuilder[string, *nativeDomainState](nil, domainCount, nativeDomainLifetime{}, admit)
 	if err != nil {
 		return nil, err
 	}
-	p.pendingDomainBuilder, err = cowbtree.NewOwnedMapBuilder[string, *nativeDomainState](nil, 0, nativeDomainLifetime{}, admit)
+	p.pendingDomainBuilder, err = cowbtree.NewOwnedMapBuilder[string, *nativeDomainState](nil, nativeTextDomainCount(meta), nativeDomainLifetime{}, admit)
 	if err != nil {
 		return nil, err
 	}
@@ -228,6 +258,41 @@ func prepareNativeJSONCreate(base *nativeEngineVersion, meta CollectionMeta) (pu
 		p.ownedDomains = append(p.ownedDomains, domain)
 		if err := p.domainBuilder.Set(name, domain); err != nil {
 			return nil, err
+		}
+	}
+	if len(meta.TextIndexes) != 0 {
+		initialTextLease, err := base.allocator.AdmitNativeBytes(0)
+		if err != nil {
+			return nil, err
+		}
+		defer initialTextLease.Close()
+		var textCharge uint64
+		textAdmit := func(n uint64) error {
+			if n > ^uint64(0)-textCharge {
+				return memtable.ErrCOWCapacity
+			}
+			if e := initialTextLease.Resize(textCharge + n); e != nil {
+				return e
+			}
+			textCharge += n
+			return nil
+		}
+		textDomains, err := nativeTextInitialDomains(meta, textAdmit)
+		if err != nil {
+			return nil, err
+		}
+		for _, input := range textDomains {
+			domain, e := prepareNativeDomainUpdate(nil, input.name, 0, 1, input.policy, input.entries, base.allocator)
+			if e != nil {
+				return nil, e
+			}
+			p.ownedDomains = append(p.ownedDomains, domain)
+			if e = p.domainBuilder.Set(input.name, domain); e != nil {
+				return nil, e
+			}
+			if e = p.pendingDomainBuilder.Set(input.name, domain); e != nil {
+				return nil, e
+			}
 		}
 	}
 	p.sealPrivateBuilders(scratch)

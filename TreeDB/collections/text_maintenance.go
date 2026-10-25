@@ -118,8 +118,8 @@ func appendSingleTextIndexMutationDeltas(
 	postingsRootName := collectionTextIndexRootName(catalog.meta.Name, def.Name)
 	stateRootName := collectionTextStateRootName(catalog.meta.Name, def.Name)
 	statsRootName := collectionTextStatsRootName(catalog.meta.Name, def.Name)
-	postingsTable := newCollectionRunTable(0)
-	stateTable := newCollectionRunTable(len(mutations))
+	postingsTable := opts.newTextTable(0)
+	stateTable := opts.newTextTable(len(mutations))
 	statsDelta := textStatsDelta{}
 	success := false
 	defer func() {
@@ -154,7 +154,7 @@ func appendSingleTextIndexMutationDeltas(
 		}
 	}
 
-	statsTable := newCollectionRunTable(0)
+	statsTable := opts.newTextTable(0)
 	if err := buildTextStatsDeltaTable(snap, catalog, statsRootName, statsDelta, statsTable); err != nil {
 		resetCollectionRunTable(statsTable)
 		return err
@@ -220,13 +220,13 @@ func appendSingleTextV2IndexMutationDeltas(
 	postingBlocksRootName := collectionTextV2PostingBlocksRootName(catalog.meta.Name, def.Name)
 	normRootName := collectionTextV2NormBlocksRootName(catalog.meta.Name, def.Name)
 	positionsRootName := collectionTextV2PositionsRootName(catalog.meta.Name, def.Name)
-	docIDTable := newCollectionRunTable(len(orderedMutations))
-	docMapTable := newCollectionRunTable(0)
-	termsTable := newCollectionRunTable(0)
-	postingBlocksTable := newCollectionRunTable(0)
-	normTable := newCollectionRunTable(0)
-	positionsTable := newCollectionRunTable(0)
-	generationsTable := newCollectionRunTable(1)
+	docIDTable := opts.newTextTable(len(orderedMutations))
+	docMapTable := opts.newTextTable(0)
+	termsTable := opts.newTextTable(0)
+	postingBlocksTable := opts.newTextTable(0)
+	normTable := opts.newTextTable(0)
+	positionsTable := opts.newTextTable(0)
+	generationsTable := opts.newTextTable(1)
 	deltaOwned := []memtable.Table{docIDTable, docMapTable, termsTable, postingBlocksTable, normTable, positionsTable, generationsTable}
 	success := false
 	defer func() {

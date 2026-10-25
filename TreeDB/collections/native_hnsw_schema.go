@@ -18,7 +18,7 @@ func (c *Collection) nativeMutateIndexes(create *IndexDefinition, remove map[str
 	}
 	unlock := c.lockVectorIndexMutation()
 	defer unlock()
-	return c.nativeJSON.mutateIndexFamilies(c, c.name, create, remove, all, nil, "")
+	return c.nativeJSON.mutateIndexFamilies(c, c.name, create, remove, all, nil, "", nil)
 }
 
 func finishNativeHNSWSchemaNoop(bool) {}

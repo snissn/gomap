@@ -307,7 +307,7 @@ func (s *Service) createIndexLocked(ctx context.Context, req CreateIndexRequest)
 			return IndexInfo{}, wrapServiceError(CodeInternal, "open existing index before create failed", openErr)
 		}
 	}
-	created, alreadyExisted, err := s.manager.CreateCollectionWithPreparedCommandWALIntentStatus(*meta, nil)
+	created, alreadyExisted, err := s.manager.CreateCollectionWithStatus(*meta)
 	if err != nil {
 		if strings.Contains(err.Error(), "incompatible") {
 			return IndexInfo{}, wrapServiceError(CodeConflict, fmt.Sprintf("index %q already exists with an incompatible schema", req.Name), err)

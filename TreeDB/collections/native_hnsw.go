@@ -56,7 +56,7 @@ func (c *Collection) nativeCreateVectorIndex(def VectorIndexDefinition) (*Collec
 	}
 	unlock := c.lockVectorIndexMutation()
 	defer unlock()
-	meta, err := c.nativeJSON.mutateIndexFamilies(c, c.name, nil, nil, false, &def, "")
+	meta, err := c.nativeJSON.mutateIndexFamilies(c, c.name, nil, nil, false, &def, "", nil)
 	if meta != nil {
 		c.collectionSchemaCoordinator().hasNativeVectorIndexes.Store(len(meta.VectorIndexes) != 0)
 	}
@@ -68,7 +68,7 @@ func (c *Collection) nativeDropVectorIndex(name string) (*CollectionMeta, error)
 	}
 	unlock := c.lockVectorIndexMutation()
 	defer unlock()
-	meta, err := c.nativeJSON.mutateIndexFamilies(c, c.name, nil, nil, false, nil, name)
+	meta, err := c.nativeJSON.mutateIndexFamilies(c, c.name, nil, nil, false, nil, name, nil)
 	if meta != nil {
 		c.collectionSchemaCoordinator().hasNativeVectorIndexes.Store(len(meta.VectorIndexes) != 0)
 		old := c.registeredVectorIndex(name)

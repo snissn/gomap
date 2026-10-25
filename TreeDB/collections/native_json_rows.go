@@ -767,6 +767,10 @@ func (t *NativeJSONTxn) DeleteBatchFrom(name string, ids [][]byte) (count int, r
 }
 
 func (t *NativeJSONTxn) finalizeNativeRows(graphSingleton bool) error {
+	return t.finalizeNativeRowsWithStats(graphSingleton, nil)
+}
+
+func (t *NativeJSONTxn) finalizeNativeRowsWithStats(graphSingleton bool, stats *CollectionInsertStats) error {
 	for i := range t.bindings {
 		g := &t.bindings[i]
 		if g.typed != nil {
@@ -834,8 +838,16 @@ func (t *NativeJSONTxn) finalizeNativeRows(graphSingleton bool) error {
 		}
 		g.plan = &nativeJSONLogicalInsert{name: g.name, incarnation: g.incarnation, bootstrap: t.imported, custody: t.custody, primaryPolicy: nativeInsertRootPolicy(direct, direct.primaryRootName), mutations: make([]memtable.COWMutation, len(direct.primaryEntries))}
 		g.plan.additional, g.effects, err = extractNativeInsertEffects(g.name, g.incarnation, direct, g.plan.mutations, admit)
+		if err == nil {
+			err = t.finalizeNativeText(g)
+		}
 		if err != nil {
 			return err
+		}
+		if stats != nil {
+			if err = t.collectNativeInsertStats(g, direct, stats); err != nil {
+				return err
+			}
 		}
 	}
 	// Graph rebuild finalizes a catalog effect and a typed recipe without CRUD
