@@ -4301,16 +4301,6 @@ func (idx *VectorIndex) searchCurrentWithNativeRelease(query []float32, opts Vec
 		return staleFallback()
 	}
 
-	rerank := idx.rerankCandidates
-	if releaseNativeUse != nil {
-		config := vectorIndexRerankConfig{collection: idx.collection, field: idx.field, fieldPath: append([]string(nil), idx.fieldPath...), metric: idx.metric}
-		rerank = func(query []float32, ids [][]byte, filter func(DocumentRecord) (bool, error), topK int, trace *VectorIndexTrace) ([]VectorSearchResult, error) {
-			// IDs/config and captured document resources are query-owned before
-			// calling user code; no graph/registry mutex spans the callback.
-			releaseNativeUse()
-			return rerankVectorIndexCandidates(config, nativeRead, query, ids, filter, topK, trace)
-		}
-	}
 	var rangeIDs [][]byte
 	var rangeFilter func(DocumentRecord) (bool, error)
 	if opts.IndexRangeFilter != nil {
@@ -4326,7 +4316,7 @@ func (idx *VectorIndex) searchCurrentWithNativeRelease(query []float32, opts Vec
 			trace.Strategy = "exact_filtered"
 			trace.CandidatesExamined = len(probeIDs)
 			trace.CandidatesAfterTombstone = len(probeIDs)
-			results, err := rerank(query, probeIDs, opts.Filter, opts.TopK, &trace)
+			results, err := idx.rerankSearchCandidates(query, probeIDs, opts.Filter, opts.TopK, &trace, nativeRead, releaseNativeUse)
 			if err != nil {
 				return nil, trace, err
 			}
@@ -4395,7 +4385,7 @@ func (idx *VectorIndex) searchCurrentWithNativeRelease(query []float32, opts Vec
 		if !idx.nativeSearchStateCoversCurrentDocuments(searchState) {
 			trace.ExactFallbackReason = vectorIndexFallbackStaleDocumentRoot
 		} else {
-			results, err = rerank(query, candidateIDs, filter, opts.TopK, &trace)
+			results, err = idx.rerankSearchCandidates(query, candidateIDs, filter, opts.TopK, &trace, nativeRead, releaseNativeUse)
 			if err == nil && !idx.nativeSearchStateCoversCurrentDocuments(searchState) {
 				results = nil
 				trace.ExactFallbackReason = vectorIndexFallbackStaleDocumentRoot
@@ -4441,7 +4431,7 @@ func (idx *VectorIndex) searchCurrentWithNativeRelease(query []float32, opts Vec
 		if fastRerank && err == nil {
 			results, err = idx.attachVectorSearchResultDocuments(results, resultNodeIDs, opts.TopK, nativeRead)
 		} else if !fastRerank {
-			results, err = rerank(query, candidateIDs, filter, opts.TopK, &trace)
+			results, err = idx.rerankSearchCandidates(query, candidateIDs, filter, opts.TopK, &trace, nativeRead, releaseNativeUse)
 		}
 	}
 	if err != nil {
@@ -4776,6 +4766,18 @@ type vectorIndexRerankConfig struct {
 	field      string
 	fieldPath  []string
 	metric     VectorMetric
+}
+
+// Keep dispatch direct so an unfiltered query's options and trace remain local.
+// A callback query copies runtime configuration before releasing use custody;
+// reentrant user code may replace the original runtime during canonical rerank.
+func (idx *VectorIndex) rerankSearchCandidates(query []float32, candidateIDs [][]byte, filter func(DocumentRecord) (bool, error), topK int, trace *VectorIndexTrace, nativeRead *NativeJSONRead, releaseNativeUse func()) ([]VectorSearchResult, error) {
+	if releaseNativeUse == nil {
+		return idx.rerankCandidates(query, candidateIDs, filter, topK, trace)
+	}
+	config := vectorIndexRerankConfig{collection: idx.collection, field: idx.field, fieldPath: append([]string(nil), idx.fieldPath...), metric: idx.metric}
+	releaseNativeUse()
+	return rerankVectorIndexCandidates(config, nativeRead, query, candidateIDs, filter, topK, trace)
 }
 
 func (idx *VectorIndex) rerankCandidates(query []float32, candidateIDs [][]byte, filter func(DocumentRecord) (bool, error), topK int, trace *VectorIndexTrace) ([]VectorSearchResult, error) {
