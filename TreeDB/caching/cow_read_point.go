@@ -93,21 +93,22 @@ func (db *DB) cowGetVersionedAppend(key, dst []byte, missingIsNil bool) (out []b
 	}
 	if entry.Flags&node.FlagPointer != 0 {
 		// The exact pointer metadata is stable under this retained cut. Reuse
-		// the original materializer without traversing the same backend again.
+		// the original exact-cut workspace with owned copy-out, without traversing
+		// the same backend again.
 		snapshot.cowReadMu.Lock()
 		defer snapshot.cowReadMu.Unlock()
-		value, revision, err := snapshot.cowValueFromEntryLocked(entry)
+		out, revision, err := snapshot.cowAppendPointEntryLocked(entry, dst)
 		if errors.Is(err, memtable.ErrCOWCapacity) && fresh.refund() {
-			value, revision, err = snapshot.cowValueFromEntryLocked(entry)
+			out, revision, err = snapshot.cowAppendPointEntryLocked(entry, dst)
 		}
 		if err != nil {
 			return dst, revision, err
 		}
-		return append(dst, value...), revision, nil
+		return out, revision, nil
 	}
-	out, revision, err = snapshot.cowGetVersionedAppendOpen(key, dst)
+	out, revision, err = snapshot.cowOwnedPointAppendOpen(key, dst)
 	if errors.Is(err, memtable.ErrCOWCapacity) && fresh.refund() {
-		out, revision, err = snapshot.cowGetVersionedAppendOpen(key, dst)
+		out, revision, err = snapshot.cowOwnedPointAppendOpen(key, dst)
 	}
 	return out, revision, err
 }

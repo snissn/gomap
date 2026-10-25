@@ -470,35 +470,88 @@ func (w *cowReadWorkspace) readSharedRecord(f *os.File, ptr page.ValuePtr, shape
 // readInspected shares the maintained admission/codec/CRC path. The inspector
 // and its caller's policy have already validated this exact file and shape.
 func (w *cowReadWorkspace) readInspected(f *os.File, ptr page.ValuePtr, shape valuelog.COWRecordShape, leaf bool, dst []byte) ([]byte, error) {
-	var err error
-	var codec *cowReadCodec
-	var decode valuelog.COWDecodeFunc
-	if shape.Compressed {
-		codec, err = w.codec(shape)
-		if err != nil {
-			return nil, err
-		}
-		decode = codec.decoder.Decode
-	}
-	inputNeed := shape.PayloadBytes()
-	if codec != nil {
-		inputNeed = 0
-	}
 	outputNeed := shape.ValueBytes
 	if leaf {
 		outputNeed = 0
 	}
-	if err = w.grow(inputNeed, outputNeed); err != nil {
+	input, raw, codec, err := w.prepareRead(shape, outputNeed)
+	if err != nil {
 		return nil, err
 	}
-	input, raw := w.input, []byte(nil)
+	var decode valuelog.COWDecodeFunc
 	if codec != nil {
-		input, raw = codec.input, codec.raw
+		decode = codec.decoder.Decode
 	}
 	if leaf {
 		return valuelog.ReadCOWLeafPage(f, ptr, shape, true, input, raw, dst, decode)
 	}
 	return valuelog.ReadCOWRecord(f, ptr, shape, true, input, raw, w.output, decode)
+}
+
+// prepareRead preserves one admission/codec path for borrowed materialization
+// and synchronous owned copy-out. The latter needs no retained output buffer;
+// input/raw and dictionary/decoder ownership are unchanged.
+func (w *cowReadWorkspace) prepareRead(shape valuelog.COWRecordShape, outputNeed uint64) ([]byte, []byte, *cowReadCodec, error) {
+	var codec *cowReadCodec
+	if shape.Compressed {
+		var err error
+		codec, err = w.codec(shape)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+	}
+	inputNeed := shape.PayloadBytes()
+	if codec != nil {
+		inputNeed = 0
+	}
+	if err := w.grow(inputNeed, outputNeed); err != nil {
+		return nil, nil, nil, err
+	}
+	input, raw := w.input, []byte(nil)
+	if codec != nil {
+		input, raw = codec.input, codec.raw
+	}
+	return input, raw, codec, nil
+}
+
+// appendPointer finishes the owned public point result before releasing the
+// exact cut or its original decoder owner. It never changes borrowed Snapshot,
+// iterator, View or leaf materialization and retains no caller destination.
+func (w *cowReadWorkspace) appendPointer(ptr page.ValuePtr, dst []byte) ([]byte, error) {
+	f, err := w.file(ptr)
+	if err != nil {
+		return dst, err
+	}
+	shape, err := valuelog.InspectCOWRecord(f, ptr, w.limits)
+	if err != nil {
+		return dst, err
+	}
+	if w.basis != nil && shape.Compressed && (shape.DictID != 0 || (shape.Codec != valuelog.BlockCodecSnappy && shape.Codec != valuelog.BlockCodecLZ4)) {
+		return dst, valuelog.ErrCOWReadUnsupported
+	}
+	if shape.Compressed && shape.DictID == 0 && w.snapshot != nil {
+		c := w.snapshot.cowCache
+		c.physicalMu.Lock()
+		defer c.physicalMu.Unlock()
+		shared, err := c.physicalWorkspaceLocked(w.limits)
+		if err != nil {
+			return dst, err
+		}
+		return shared.appendInspected(f, ptr, shape, dst)
+	}
+	return w.appendInspected(f, ptr, shape, dst)
+}
+
+func (w *cowReadWorkspace) appendInspected(f *os.File, ptr page.ValuePtr, shape valuelog.COWRecordShape, dst []byte) ([]byte, error) {
+	input, raw, codec, err := w.prepareRead(shape, 0)
+	if err != nil {
+		return dst, err
+	}
+	var decode valuelog.COWDecodeFunc
+	if codec != nil {
+		decode = codec.decoder.Decode
+	}
+	return valuelog.AppendCOWRecord(f, ptr, shape, true, input, raw, dst, decode)
 }
 
 func (w *cowReadWorkspace) readLeaf(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
@@ -627,6 +680,33 @@ func (s *Snapshot) cowGetVersionedAppendOpen(key, dst []byte) ([]byte, page.Entr
 		return dst, revision, err
 	}
 	return append(dst, value...), revision, nil
+}
+
+// cowOwnedPointAppendOpen is only the DB point-read continuation. Exported
+// Snapshot APIs keep their original borrowed materialization/admission route.
+func (s *Snapshot) cowOwnedPointAppendOpen(key, dst []byte) ([]byte, page.EntryRevision, error) {
+	s.cowReadMu.Lock()
+	defer s.cowReadMu.Unlock()
+	entry, err := s.cowEntryLocked(key)
+	if err != nil {
+		return dst, 0, err
+	}
+	return s.cowAppendPointEntryLocked(entry, dst)
+}
+
+func (s *Snapshot) cowAppendPointEntryLocked(entry node.LeafEntry, dst []byte) ([]byte, page.EntryRevision, error) {
+	if entry.Flags&node.FlagTombstone != 0 {
+		return dst, entry.Revision, tree.ErrKeyNotFound
+	}
+	if entry.Flags&node.FlagPointer != 0 {
+		w, err := s.cowWorkspaceLocked()
+		if err != nil {
+			return dst, entry.Revision, err
+		}
+		out, err := w.appendPointer(entry.ValuePtr, dst)
+		return out, entry.Revision, err
+	}
+	return append(dst, entry.Value...), entry.Revision, nil
 }
 
 // cowValueLocked borrows one winning value under cowReadMu and beginRead.

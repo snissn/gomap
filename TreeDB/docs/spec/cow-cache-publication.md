@@ -239,6 +239,14 @@ also retain the original cache-owned decoder envelope, since duplicating generic
 state can exceed the default producer budget. Dictionary definitions continue
 to belong to the exact complete cut.
 
+Synchronous DB point reads (`Get`, `GetAppend` and versioned variants) append
+the fully shape-checked, CRC-verified and decoded winning value directly into
+caller-owned output while the original workspace/physical-read lock and exact cut/file pins
+remain held. This avoids both shared value-output and cut-local value-output
+materialization. Input/raw/decoder admission and dictionary resolution remain
+unchanged. Exported Snapshot, iterator, leaf and callback View materializers keep
+their existing admitted output ownership; shared decoder aliases never escape.
+
 Every physical leaf read still inspects the current record metadata before
 reusing a verified decoded cache entry. Leaf inspection reads one fixed maximum
 metadata window, interprets only the checked header and frame prefix, and ignores

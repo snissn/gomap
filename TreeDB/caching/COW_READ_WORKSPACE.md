@@ -12,8 +12,17 @@ unlocking. Successor keys and inline values are copied into owned results there.
 Winning pointer scalars resolve their file and record shape through the original
 caller cut. Compressed dictionary-free values then reuse the same basis decoder
 as physical leaves: the file, pointer and shape are borrowed only for that read,
-and the decoded value is copied into caller-admitted output before unlocking.
-Uncompressed and dictionary values retain their original caller workspace path.
+and borrowed values are copied into the original reader-admitted output before
+unlocking. Uncompressed and dictionary values keep their original input/raw
+workspace and definition ownership.
+
+Synchronous DB `Get`, `GetAppend` and versioned variants instead copy the fully
+validated value directly into caller-owned output before releasing the existing physical-read workspace
+lock and exact cut. They do not materialize a shared value-output buffer or a
+second cut-local output buffer. The same shape, checksum, decode and value
+selection code serves both routes; input/raw/decoder storage remains admitted.
+Exported Snapshot, iterator, callback View and leaf readers retain their original
+borrowed-output or separately admitted callback lifetimes.
 Dictionary leaves retry the physical lookup through that original workspace,
 preserving its definition/resource ownership. Native root reads keep
 their existing narrower codec policy independently of raw reads.
