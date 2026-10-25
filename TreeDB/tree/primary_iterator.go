@@ -32,6 +32,12 @@ func (t *Tree) initPrimaryIterator(p *primaryIterator, base *Iterator, start, en
 	if err := t.loadNodeViewWithLoadKindInto(&root, t.rootPageID, true, true); err != nil {
 		return nil, err
 	}
+	return t.initPrimaryIteratorFromRoot(&root, p, base, start, end, opts, reverse, readLeaf, leafScratch, bounded)
+}
+
+// The caller has loaded/authenticated this exact captured root through the
+// original loader. Keep directory and base validation shared with pooled users.
+func (t *Tree) initPrimaryIteratorFromRoot(root *node.Node, p *primaryIterator, base *Iterator, start, end []byte, opts IteratorOptions, reverse bool, readLeaf func(page.LeafLogPtr, []byte) ([]byte, error), leafScratch []byte, bounded bool) (*primaryIterator, error) {
 	if root.Type() != page.PageTypePrimaryDirectory {
 		return nil, nil
 	}

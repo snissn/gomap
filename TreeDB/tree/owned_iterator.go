@@ -23,9 +23,21 @@ type ownedProjectionStorage struct {
 	leaf        [page.PageSize]byte
 }
 
-// OwnedPointerProjectionAllocationSize reports the raw single-allocation size.
+// Ordinary roots do not need the complete PRIMARY delta iterator or its
+// independent leaf backing. All ordinary fixed traversal/key storage remains.
+// Both selected layouts use one allocation and never enter iteratorPool.
+type ownedOrdinaryProjectionStorage struct {
+	iterator    Iterator
+	stack       [maxTraversalDepth]CursorItem
+	nodeKey     [page.PageSize]byte
+	combinedKey [page.PageSize]byte
+	leaf        [page.PageSize]byte
+}
+
+// OwnedPointerProjectionAllocationSize reports the maximum constructor storage.
 // The caller must reserve it before constructing an iterator, and hold the
 // reservation and exact tree/root owner until Close. Domain bytes are borrowed.
+// Ordinary roots retain that same conservative maximum admission promise.
 func OwnedPointerProjectionAllocationSize() uint64 {
 	return uint64(unsafe.Sizeof(ownedProjectionStorage{}))
 }
@@ -45,32 +57,48 @@ func (t *Tree) OwnedReversePointerProjectionIterator(start, end []byte, readLeaf
 	return t.ownedPointerProjectionIterator(start, end, readLeaf, true)
 }
 func (t *Tree) ownedPointerProjectionIterator(start, end []byte, readLeaf func(page.LeafLogPtr, []byte) ([]byte, error), reverse bool) iterator.UnsafeIterator {
+	// Use the SAME root load/authentication as initPrimaryIterator, before
+	// choosing a single backing. No second root read is needed for PRIMARY.
+	var root node.Node
+	rootErr := t.loadNodeViewWithLoadKindInto(&root, t.rootPageID, true, true)
+	if rootErr != nil || root.Type() != page.PageTypePrimaryDirectory {
+		storage := new(ownedOrdinaryProjectionStorage)
+		it := &storage.iterator
+		t.initOwnedProjectionIterator(it, start, end, readLeaf, reverse, storage.nodeKey[:], storage.stack[:], storage.combinedKey[:], storage.leaf[:])
+		if rootErr != nil {
+			it.err = rootErr
+			return it
+		}
+		if reverse {
+			it.Seek(nil)
+		} else {
+			it.Seek(start)
+		}
+		return it
+	}
 	storage := new(ownedProjectionStorage)
 	it := &storage.iterator
+	t.initOwnedProjectionIterator(it, start, end, readLeaf, reverse, storage.nodeKey[:], storage.stack[:], storage.combinedKey[:], storage.leaf[:])
+	p, err := t.initPrimaryIteratorFromRoot(&root, &storage.primary, it, start, end, IteratorOptions{Mode: IteratorModePointerProjection, IncludeTombstones: true}, reverse, readLeaf, storage.deltaLeaf[:], true)
+	if err != nil {
+		it.err = err
+		return it
+	}
+	return p
+}
+
+func (t *Tree) initOwnedProjectionIterator(it *Iterator, start, end []byte, readLeaf func(page.LeafLogPtr, []byte) ([]byte, error), reverse bool, nodeKey []byte, stack []CursorItem, combinedKey, leaf []byte) {
 	*it = Iterator{
 		tree: t, start: start, end: end, owned: true, reverse: reverse,
 		mode: IteratorModePointerProjection, includeTombstones: true,
 		emptyDomain:    start != nil && end != nil && compareTreeKey(start, end) >= 0,
 		verifyAlways:   t.pager != nil && t.pager.VerifyOnRead(),
-		nodeKeyScratch: storage.nodeKey[:], ownedStack: storage.stack[:],
-		leafRefScratch: storage.leaf[:0], boundedLeafReader: readLeaf,
+		nodeKeyScratch: nodeKey, ownedStack: stack,
+		leafRefScratch: leaf[:0], boundedLeafReader: readLeaf,
 	}
-	it.leafState.keyScratch = storage.combinedKey[:0]
+	it.leafState.keyScratch = combinedKey[:0]
 	it.leafState.fixedScratch = true
 	it.resetStack()
-	if p, err := t.initPrimaryIterator(&storage.primary, it, start, end, IteratorOptions{Mode: IteratorModePointerProjection, IncludeTombstones: true}, reverse, readLeaf, storage.deltaLeaf[:], true); p != nil || err != nil {
-		if err != nil {
-			it.err = err
-			return it
-		}
-		return p
-	}
-	if reverse {
-		it.Seek(nil)
-	} else {
-		it.Seek(start)
-	}
-	return it
 }
 
 // OwnedUserRootEmpty proves emptiness from this exact captured tree root
