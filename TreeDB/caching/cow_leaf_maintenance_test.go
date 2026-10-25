@@ -12,7 +12,6 @@ import (
 	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
-	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
 )
 
@@ -129,9 +128,7 @@ func preparePrivateCOWPack(t *testing.T, cache *DB, disk *backenddb.DB) {
 }
 
 func TestPrivateCOWLeafPackPreservesConcurrentWALWritesAndHeldCut(t *testing.T) {
-	if !rootpublication.StableRelativeNamespaceSupported() {
-		t.Skip("actual leaf-pack promotion requires stable relative namespace")
-	}
+	requireLeafGenerationPackPromotionSupport(t)
 	cache, backend := privateCOWPackFixture(t)
 	preparePrivateCOWPack(t, cache, backend.DB)
 	held := cache.AcquireSnapshot()
@@ -297,9 +294,7 @@ func TestPrivateCOWLeafPackDefaultsOptOutAndNoProgressBackoff(t *testing.T) {
 }
 
 func TestPrivateCOWLeafPackAcceptedErrorStillAdoptsBasis(t *testing.T) {
-	if !rootpublication.StableRelativeNamespaceSupported() {
-		t.Skip("actual leaf-pack promotion requires stable relative namespace")
-	}
+	requireLeafGenerationPackPromotionSupport(t)
 	cache, backend := privateCOWPackFixture(t)
 	preparePrivateCOWPack(t, cache, backend.DB)
 	failure := errors.New("report after actual durable leaf pack")
@@ -323,9 +318,7 @@ func TestPrivateCOWLeafPackAcceptedErrorStillAdoptsBasis(t *testing.T) {
 // whole-input admission cliff without allocating or reading four GiB of data.
 // The existing live leaf fixture still has to pack and reach its real GC.
 func TestPrivateCOWLeafPackLargeInputDoesNotDisableDefaultMaintenance(t *testing.T) {
-	if !rootpublication.StableRelativeNamespaceSupported() {
-		t.Skip("actual leaf-pack promotion requires stable relative namespace")
-	}
+	requireLeafGenerationPackPromotionSupport(t)
 	cache, backend := privateCOWPackFixture(t)
 	preparePrivateCOWPack(t, cache, backend.DB)
 	reservation := filepath.Join(backend.DB.Dir(), "capacity-reservation.test")
