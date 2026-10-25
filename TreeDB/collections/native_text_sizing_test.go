@@ -2,6 +2,7 @@ package collections
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -9,6 +10,7 @@ import (
 	"testing"
 	"unsafe"
 
+	"github.com/buger/jsonparser"
 	treedb "github.com/snissn/gomap/TreeDB"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
@@ -376,4 +378,339 @@ func TestNativeTextPublicNestedAdmissionStages(t *testing.T) {
 	}
 	pin()
 	requireNativeTextIDs(t, c, "refund", "a", "refused")
+}
+
+// Compare the structural census with the maintained analyzer, including token
+// positions removed by stopwords. It bounds runs, not distinct terms.
+func TestNativeTextSimpleRootTokenBound(t *testing.T) {
+	def := TextIndexDefinition{Analyzer: TextAnalyzerSimple}
+	for _, test := range []struct {
+		name, text string
+		stop       []string
+	}{
+		{"empty", "", nil}, {"ascii", "refund policy " + strings.Repeat("payload ", 32), nil},
+		{"repeats", "one one one", nil}, {"unicode", "École 東京 १२३ İ HTTP_500 _", nil},
+		{"delimiters", " .,-!\t one___two : three\n", nil},
+		{"invalid_utf8", string([]byte{'a', 0xff, 'b', 0xc0, 0xaf, '_', 0xfe}), nil},
+		{"stopwords", "the refund the policy", []string{"the", "policy"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			raw := []byte(test.text)
+			value := jsonParserIndexValue{raw: raw, valueType: jsonparser.String}
+			bound := nativeTextRootValueTokenBound(def, value)
+			unfiltered, err := AnalyzeText(TextAnalyzerSimple, test.text)
+			if err != nil {
+				t.Fatal(err)
+			}
+			actual, err := AnalyzeTextWithOptions(TextAnalyzerSimple, &TextAnalyzerOptions{StopWords: test.stop}, test.text)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if bound != uint64(len(unfiltered)) || bound < uint64(len(actual)) {
+				t.Fatalf("bound=%d unfiltered=%d actual=%d", bound, len(unfiltered), len(actual))
+			}
+			var got uint64
+			if allocs := testing.AllocsPerRun(100, func() { got = nativeTextRootValueTokenBound(def, value) }); allocs != 0 || got != bound {
+				t.Fatalf("census allocations=%g got=%d want=%d", allocs, got, bound)
+			}
+		})
+	}
+	for _, test := range []struct {
+		name     string
+		analyzer TextAnalyzer
+		value    jsonParserIndexValue
+	}{
+		{"array", TextAnalyzerSimple, jsonParserIndexValue{raw: []byte(`["refund","policy"]`), valueType: jsonparser.Array}},
+		{"escaped", TextAnalyzerSimple, jsonParserIndexValue{raw: []byte(`refund\u0020policy`), valueType: jsonparser.String}},
+		{"other_analyzer", TextAnalyzer("other"), jsonParserIndexValue{raw: []byte("longsingleword"), valueType: jsonparser.String}},
+		{"omitted_analyzer", TextAnalyzer(""), jsonParserIndexValue{raw: []byte("longsingleword"), valueType: jsonparser.String}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got, want := nativeTextRootValueTokenBound(TextIndexDefinition{Analyzer: test.analyzer}, test.value), (uint64(len(test.value.raw))+1)/2; got != want {
+				t.Fatalf("fallback=%d want%d", got, want)
+			}
+		})
+	}
+	// Nested selection must keep the existing decoder/byte-derived path.
+	nested := TextIndexDefinition{Analyzer: TextAnalyzerSimple, Fields: []TextIndexField{{Field: "article.content"}}}
+	var values [1]jsonParserIndexValue
+	if handled, err := selectTextIndexDocumentJSONRootValues(nested, []byte(`{"article":{"content":"refund policy"}}`), values[:]); err != nil || handled {
+		t.Fatalf("nested selected as top-level: %v %v", handled, err)
+	}
+}
+
+func TestNativeTextRootTermCensusAdmission(t *testing.T) {
+	for _, version := range []TextIndexVersion{TextIndexVersionV1, TextIndexVersionV2} {
+		for _, text := range []string{"", "refund policy " + strings.Repeat("payload ", 32), "A a É é 東京 १२३ _", "a b c d e f g h i j k l m n o p q r s t u v w x y z", strings.Repeat("LongWord", 4096)} {
+			def := TextIndexDefinition{Version: version, Analyzer: TextAnalyzerSimple, AnalyzerOptions: &TextAnalyzerOptions{StopWords: []string{"policy"}}, StorePositions: true, StoreOffsets: true}
+			value := jsonParserIndexValue{raw: []byte(text), valueType: jsonparser.String}
+			denied := errors.New("census denied")
+			if _, err := nativeTextRootValueTermBound(def, value, func(uint64) error { return denied }); !errors.Is(err, denied) {
+				t.Fatalf("census admission: %v", err)
+			}
+			var charged uint64
+			got, err := nativeTextRootValueTermBound(def, value, func(n uint64) error { charged += n; return nil })
+			if err != nil || charged == 0 {
+				t.Fatalf("census charge=%d err=%v", charged, err)
+			}
+			field, _, err := analyzeTextIndexField(def, "content", text)
+			if err != nil || got != uint64(len(field.Terms)) {
+				t.Fatalf("version=%s census=%d terms=%d err=%v", version, got, len(field.Terms), err)
+			}
+		}
+	}
+	for _, value := range []jsonParserIndexValue{{raw: []byte(`["one","two"]`), valueType: jsonparser.Array}, {raw: []byte(`one\u0020two`), valueType: jsonparser.String}} {
+		got, err := nativeTextRootValueTermBound(TextIndexDefinition{Analyzer: TextAnalyzerSimple}, value, func(uint64) error { t.Fatal("fallback constructed census"); return nil })
+		if err != nil || got != (uint64(len(value.raw))+1)/2 {
+			t.Fatalf("fallback=%d err=%v", got, err)
+		}
+	}
+}
+
+// Original command geometry's first request, through the ordinary native
+// WithStats authority with its unchanged core64MiB budget and mixed indexes.
+func TestNativeTextPublicRepeatedContentBatch128(t *testing.T) {
+	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir())
+	opts.MemtableMode = "cow_btree"
+	opts.BackgroundCheckpointInterval = -1
+	opts.BackgroundCheckpointIdleDuration = -1
+	owner, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend, err := owner.NativeSemanticBackend()
+	if err != nil {
+		owner.Close()
+		t.Fatal(err)
+	}
+	opening, err := backend.CaptureNativeSemanticState()
+	if err != nil {
+		owner.Close()
+		t.Fatal(err)
+	}
+	budget := opening.NativeAllocator().(nativeHNSWAdmissionBudget)
+	if err = opening.Close(); err != nil {
+		t.Fatal(err)
+	}
+	manager := NewCollectionManager(backend)
+	defer func() {
+		if err := manager.Close(); err != nil {
+			t.Error(err)
+		}
+		if err := owner.Close(); err != nil {
+			t.Error(err)
+		}
+		if stats := budget.Stats(); stats.TotalBytes != 0 || stats.ExternalLeases != 0 {
+			t.Errorf("fullClose receipts: %+v", stats)
+		}
+	}()
+	meta := nativeTextPublicMeta()
+	meta.Indexes[0].Field = "meta.tenant"
+	meta.Indexes = append(meta.Indexes, IndexDefinition{Name: "rank", Field: "meta.rank", ValueType: IndexValueInt64})
+	meta.VectorIndexes[0].Dimensions = 8
+	meta.VectorIndexes[0].M = 16
+	meta.VectorIndexes[0].EfConstruction = 128
+	if _, err = manager.CreateCollection(meta); err != nil {
+		t.Fatal(err)
+	}
+	c, err := manager.OpenCollection("docs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const count = 128
+	content := "refund policy " + strings.Repeat("payload ", 32)
+	if got := nativeTextRootValueTokenBound(TextIndexDefinition{Analyzer: TextAnalyzerSimple}, jsonParserIndexValue{raw: []byte(content), valueType: jsonparser.String}); len(content) != 270 || got != 34 {
+		t.Fatalf("command content geometry: bytes=%d tokens=%d", len(content), got)
+	}
+	ids, documents := make([][]byte, count), make([][]byte, count)
+	for i := range ids {
+		ids[i] = []byte(fmt.Sprintf("d%06d", i))
+		var embedding [8]float32
+		embedding[0] = 1
+		for d := 1; d < len(embedding); d++ {
+			embedding[d] = float32((i+d)%17) / 17
+		}
+		documents[i], err = json.Marshal(struct {
+			Content   string     `json:"content"`
+			Embedding [8]float32 `json:"embedding"`
+			Meta      struct {
+				Tenant string `json:"tenant"`
+				Rank   int64  `json:"rank"`
+			} `json:"meta"`
+		}{Content: content, Embedding: embedding, Meta: struct {
+			Tenant string `json:"tenant"`
+			Rank   int64  `json:"rank"`
+		}{Tenant: fmt.Sprintf("t%02d", i%16), Rank: int64(i)}})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	inserted, stats, err := c.InsertBatchWithStats(ids, documents)
+	if err != nil || len(inserted) != count || stats.Documents != count {
+		t.Fatalf("128-row insert: ids=%d stats=%+v err=%v", len(inserted), stats, err)
+	}
+	response, err := c.SearchText(TextSearchOptions{IndexName: "content", Query: "refund", TopK: count})
+	if err != nil || len(response.Results) != count {
+		t.Fatalf("indexed rows=%d err=%v", len(response.Results), err)
+	}
+	for _, i := range []int{0, count - 1} {
+		raw, err := c.Get(ids[i])
+		if err != nil || !bytes.Equal(raw, documents[i]) {
+			t.Fatalf("row%d err=%v", i, err)
+		}
+	}
+	held, err := backend.CaptureNativeSemanticState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	sequence := held.LogicalSequence()
+	// A genuinely large token workload must still refuse before assignment;
+	// do not turn this tighter structural bound into unlimited admission.
+	refused := []byte(fmt.Sprintf(`{"content":%q,"embedding":[1,1,1,1,1,1,1,1],"meta":{"tenant":"tenant-00"}}`, strings.Repeat("word ", 1<<16)))
+	for attempt := 0; attempt < 2; attempt++ {
+		before := budget.Stats()
+		beforeLSN := backend.CommandWALNextLSN()
+		if _, err = c.Insert([]byte("refused"), refused); !errors.Is(err, memtable.ErrCOWCapacity) {
+			t.Fatalf("expected capacity refusal: %v", err)
+		}
+		if backend.CommandWALNextLSN() != beforeLSN {
+			t.Fatal("refusal assigned WAL identity")
+		}
+		after, err := backend.CaptureNativeSemanticState()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if after.LogicalSequence() != sequence {
+			t.Error("refusal changed logical sequence")
+		}
+		if err = after.Close(); err != nil {
+			t.Fatal(err)
+		}
+		current := budget.Stats()
+		if current.ReservedBytes > before.ReservedBytes || current.ExternalLeases > before.ExternalLeases {
+			t.Fatalf("refusal added ownership: before=%+v after=%+v", before, current)
+		}
+		if got, err := c.Get([]byte("refused")); err != nil || got != nil {
+			t.Fatalf("refused row=%q err=%v", got, err)
+		}
+	}
+	t.Logf("contentBytes=%d unfilteredRuns=34 priorByteBound=%d budget=%+v", len(content), (len(content)+1)/2, budget.Stats())
+}
+
+// Count actual maintained analyzer/state output, including repeated positions
+// and offsets, beside the pre-effect envelope. This is an allocation bound
+// witness, not an alternative analyzer or a performance benchmark.
+func TestNativeTextSimpleFieldAllocationBound(t *testing.T) {
+	inputs := []string{
+		"", "refund policy " + strings.Repeat("payload ", 32),
+		strings.Repeat("REPEAT_1 ", 1024),
+		"ÄPFEL İSTANBUL ǰ 你好 Привет κόσμος _1\t--refund--",
+		"one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen",
+	}
+	for _, flags := range []struct{ positions, offsets bool }{{}, {true, false}, {true, true}} {
+		def := TextIndexDefinition{Name: "content", Version: TextIndexVersionV2, Fields: []TextIndexField{{Field: "content"}}, Analyzer: TextAnalyzerSimple, StorePositions: flags.positions, StoreOffsets: flags.offsets, AnalyzerOptions: &TextAnalyzerOptions{StopWords: []string{"policy"}}}
+		for index, input := range inputs {
+			t.Run(fmt.Sprintf("positions=%v/offsets=%v/input=%d", flags.positions, flags.offsets, index), func(t *testing.T) {
+				value := jsonParserIndexValue{raw: []byte(input), valueType: jsonparser.String}
+				runs := nativeTextRootValueTokenBound(def, value)
+				terms, err := nativeTextRootValueTermBound(def, value, func(uint64) error { return nil })
+				if err != nil {
+					t.Fatal(err)
+				}
+				field, ok, err := analyzeTextIndexField(def, "content", input)
+				if err != nil || !ok || uint64(len(field.Terms)) != terms || uint64(field.Length) > runs {
+					t.Fatalf("maintained analysis: runs=%d terms=%d field=%+v err=%v", runs, terms, field, err)
+				}
+				analysis := textAnalyzedDocument{Fields: []textAnalyzedField{field}}
+				state := textDocumentStateValueFromAnalysis(analysis)
+				var retained uint64
+				retained += memtable.COWAllocationCharge(uint64(cap(state.Fields[0].Terms)) * uint64(unsafe.Sizeof(textDocumentTermState{})))
+				for _, term := range field.Terms {
+					if flags.positions && uint64(len(term.Positions)) != uint64(term.Frequency) || flags.offsets && uint64(len(term.Offsets)) != uint64(term.Frequency) {
+						t.Fatal("repeated occurrence information lost")
+					}
+					retained += memtable.COWAllocationCharge(uint64(len(term.Term)))
+					retained += memtable.COWAllocationCharge(uint64(cap(term.Positions)) * uint64(unsafe.Sizeof(uint32(0))))
+					retained += memtable.COWAllocationCharge(uint64(cap(term.Offsets)) * uint64(unsafe.Sizeof(textTokenOffset{})))
+				}
+				bound, err := nativeTextSimpleFieldCharge(def, uint64(len(input)), runs, terms, 7, uint64(len("content")))
+				if err != nil || bound < retained {
+					t.Fatalf("retained output exceeds pre-effect bound: bound=%d retained=%d err=%v", bound, retained, err)
+				}
+			})
+		}
+	}
+	def := TextIndexDefinition{Version: TextIndexVersionV1, Fields: []TextIndexField{{Field: "content"}}, StorePositions: true, StoreOffsets: true}
+	short, err := nativeTextSimpleFieldCharge(def, 4096, 2, 1, 7, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	many, err := nativeTextSimpleFieldCharge(def, 4096, 256, 1, 7, 7)
+	if err != nil || many <= short {
+		t.Fatalf("one distinct term must still pay every occurrence: short=%d many=%d err=%v", short, many, err)
+	}
+	for _, test := range []struct{ source, tokens, terms, id, field uint64 }{
+		{1, 2, 1, 1, 1}, {2, 1, 2, 1, 1},
+		{^uint64(0), 1, 1, 1, 1}, {1, 1, 1, ^uint64(0), 1},
+	} {
+		if _, err := nativeTextSimpleFieldCharge(def, test.source, test.tokens, test.terms, test.id, test.field); !errors.Is(err, memtable.ErrCOWCapacity) {
+			t.Fatalf("unchecked count/overflow %+v: %v", test, err)
+		}
+	}
+}
+
+func TestNativeTextSimpleFieldSourceEnvelopeSelection(t *testing.T) {
+	def := TextIndexDefinition{Name: "content", Version: TextIndexVersionV2, Fields: []TextIndexField{{Field: "content"}}, Analyzer: TextAnalyzerSimple, StorePositions: true, StoreOffsets: true}
+	meta := CollectionMeta{Name: "docs", TextIndexes: []TextIndexDefinition{def}}
+	// Keep exact legacy byte weighting for unhandled representations, including
+	// its aggregate rounding. Neither escaped strings nor arrays use T/U bounds.
+	unit := 2 * (uint64(unsafe.Sizeof(TextToken{})) + uint64(unsafe.Sizeof(textAnalyzedTerm{})) + uint64(unsafe.Sizeof(textDocumentTermState{})) + uint64(unsafe.Sizeof(textV2PostingBlockEntry{})) + uint64(unsafe.Sizeof(textV2PositionFieldValue{})) + 8*uint64(unsafe.Sizeof(string(""))))
+	for _, raw := range []string{`{"content":"refund\u0020policy"}`, `{"content":["refund","policy",7]}`} {
+		row := nativeJSONRow{id: []byte("id"), current: []byte(raw)}
+		var values [1]jsonParserIndexValue
+		if ok, err := selectTextIndexDocumentJSONRootValues(def, row.current, values[:]); !ok || err != nil {
+			t.Fatalf("select fallback: %v", err)
+		}
+		n := uint64(len(values[0].raw))
+		definition, err := nativeTextDefinitionCharge(def, 3)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tables, err := nativeTextTableCharge(9+1+3+3*((n+1)/2), 7)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := definition + tables + memtable.COWAllocationCharge((n+uint64(len(row.id))+2)*unit)
+		got, err := nativeTextSourceCharge(meta, []nativeJSONRow{row}, collectionOptions{}, func(uint64) error { return nil })
+		if err != nil || got != want {
+			t.Fatalf("fallback %s: charge=%d want original=%d err=%v", raw, got, want, err)
+		}
+	}
+	content := "refund policy " + strings.Repeat("payload ", 32)
+	document, err := json.Marshal(map[string]string{"content": content})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := nativeTextSourceCharge(meta, []nativeJSONRow{{id: []byte("d000000"), current: document}}, collectionOptions{}, func(uint64) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Compare identical definition/table accounting: a small batch still pays
+	// seven minimum BTree roots, so its total need not fit the old byte lane
+	// alone. This discriminator concerns only the changed source envelope.
+	definition, err := nativeTextDefinitionCharge(def, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tables, err := nativeTextTableCharge(9+1+3+3*3, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldByteLane := memtable.COWAllocationCharge(uint64(len(content)+7+2) * unit)
+	oldTotal := definition + tables + oldByteLane
+	if got >= oldTotal {
+		t.Fatalf("eligible repeated field retained byte-as-descriptor envelope: got=%d old total=%d", got, oldTotal)
+	}
+	t.Logf("bytes=%d runs=34 distinct=3 analysis+tables=%d prior analysis+tables=%d", len(content), got, oldTotal)
 }

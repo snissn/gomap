@@ -2,9 +2,11 @@ package collections
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 	"unsafe"
 
 	"github.com/buger/jsonparser"
@@ -45,7 +47,352 @@ func nativeTextDefinitionCharge(def TextIndexDefinition, calls uint64) (uint64, 
 	return memtable.COWAllocationCharge(size * calls * unit), nil
 }
 
+// nativeTextRootValueTokenBound bounds unfiltered token occurrences. The
+// source-envelope fallback retains its byte bound. The handled root selector
+// borrows string contents without JSON quotes. Without escapes, the maintained
+// simple analyzer sees these exact UTF-8 runes and emits one token per maximal
+// simpleTextTokenRune run before stopword filtering. No distinct-term claim is
+// needed. Rune decoding retains no string or copy of the borrowed byte span.
+// Arrays, escaped strings and all other analyzers keep the existing byte bound;
+// nested fields never reach this helper (their decoder path remains unchanged).
+func nativeTextRootValueTokenBound(def TextIndexDefinition, value jsonParserIndexValue) uint64 {
+	if value.valueType != jsonparser.String || def.Analyzer != TextAnalyzerSimple || bytes.IndexByte(value.raw, '\\') >= 0 {
+		return (uint64(len(value.raw)) + 1) / 2
+	}
+	var tokens uint64
+	inToken := false
+	for raw := value.raw; len(raw) > 0; {
+		r, width := utf8.DecodeRune(raw)
+		raw = raw[width:]
+		if simpleTextTokenRune(r) {
+			if !inToken {
+				tokens++
+			}
+			inToken = true
+		} else {
+			inToken = false
+		}
+	}
+	return tokens
+}
+
+// nativeTextRootValueTermBound counts the keys the maintained analyzer can
+// produce for one eligible field. Repeated occurrences remain separately charged
+// by the unfiltered run bound below; this distinct count bounds only per-term
+// maps, descriptors and temporary table keys. Every additional census allocation is admitted
+// first on the original transaction lease and remains charged through teardown.
+func nativeTextRootValueTermBound(def TextIndexDefinition, value jsonParserIndexValue, admit func(uint64) error) (uint64, error) {
+	if value.valueType != jsonparser.String || def.Analyzer != TextAnalyzerSimple || bytes.IndexByte(value.raw, '\\') >= 0 {
+		return (uint64(len(value.raw)) + 1) / 2, nil
+	}
+	tokens := nativeTextRootValueTokenBound(def, value)
+	definition, err := nativeTextDefinitionCharge(def, 1)
+	if err != nil || tokens > ^uint64(0)/2 {
+		return 0, memtable.ErrCOWCapacity
+	}
+	var charge nativeTextAdmissionSum
+	charge.add(1, definition)
+	charge.array(1, uint64(unsafe.Sizeof(textTermAccumulator{})))
+	charge.array(tokens, uint64(unsafe.Sizeof(textAnalyzedTerm{})))
+	charge.array(uint64(len(value.raw)), 1) // owned analyzer input string
+	// Lowercased UTF-8 is at most twice the source bytes. Byte-slice growth is
+	// at least1.25x; the final rounded capacity is at most4*output+16, so all
+	// old capacities sum to at most5 times that. With AllocationCharge(c)
+	// <=2*c+16 and at most output allocations,128*n+256*T covers every
+	// current/discarded Builder backing, including repeated tokens.
+	charge.add(uint64(len(value.raw)), 128)
+	charge.add(tokens, 256)
+	charge.mapEntries(2*tokens, uint64(unsafe.Sizeof(string("")))+uint64(unsafe.Sizeof(int(0))))
+	if charge.bad {
+		return 0, memtable.ErrCOWCapacity
+	}
+	if err = admit(charge.total); err != nil {
+		return 0, fmt.Errorf("collections: native text term census workspace: %w", err)
+	}
+	// Preallocate the existing accumulator's term lane to the unfiltered run
+	// bound: stopword filtering/lowercasing cannot add terms. No slice growth,
+	// positions, offsets, output map or retained census state is constructed.
+	acc := textTermAccumulator{terms: make([]textAnalyzedTerm, 0, int(tokens))}
+	if err = analyzeTextToTermAccumulator(def.Analyzer, def.AnalyzerOptions, string(value.raw), &acc); err != nil {
+		return 0, err
+	}
+	return uint64(len(acc.terms)), nil
+}
+
+// nativeTextSimpleFieldCharge separates byte storage from cardinality storage
+// for the exact unescaped simple-analyzer input counted above. N is source
+// bytes, T is unfiltered runs, and U is the maintained census's distinct terms.
+// The caller retains the original byte envelope whenever it is smaller.
+// All cohorts (including unreachable growth) remain on the operation lease.
+func nativeTextSimpleFieldCharge(def TextIndexDefinition, source, tokens, terms, documentIDBytes, fieldBytes uint64) (uint64, error) {
+	return nativeTextFieldCharge(def, source, tokens, terms, documentIDBytes, fieldBytes, false)
+}
+
+// Prepared input already owns analyzer/state backing. Here source counts the
+// actual normalized term bytes, rather than a raw-source expansion bound.
+func nativeTextFieldCharge(def TextIndexDefinition, source, tokens, terms, documentIDBytes, fieldBytes uint64, prepared bool) (uint64, error) {
+	if terms > tokens || (!prepared && tokens > source) || terms > ^uint64(0)/2 || uint64(len(def.Fields)) > uint64(textV2PostingBlockMaxFieldCount) {
+		return 0, memtable.ErrCOWCapacity
+	}
+	var charge nativeTextAdmissionSum
+	// This is the SAME builder/input proof as the separately admitted census:
+	// lowercasing emits <=2*N UTF-8 bytes, including discarded repeated terms.
+	// Reset does not reuse a previous term's backing. It is not U-weighted.
+	if !prepared {
+		charge.array(source, 1)
+		charge.add(source, 128)
+		charge.add(tokens, 256)
+	}
+	// Append-only typed slices: geometric growth >=1.25, final capacity <=2*n
+	// plus allocator rounding. 32*n*(element+1) covers all backing cohorts,
+	// including discarded ones, independently for each lane below. Batch
+	// lanes are amortized over cumulative admitted per-document U, not merely
+	// charged to the row that happens to trigger their next growth.
+	grow := func(count, element uint64) {
+		if element == ^uint64(0) || element+1 > ^uint64(0)/32 {
+			charge.bad = true
+			return
+		}
+		charge.add(count, 32*(element+1))
+	}
+	if !prepared {
+		grow(terms, uint64(unsafe.Sizeof(textAnalyzedTerm{})))
+	}
+	grow(terms, uint64(unsafe.Sizeof(textPostingFieldValue{})))
+	grow(terms, uint64(unsafe.Sizeof(textV2DocumentPostingTerm{})))
+	grow(terms, uint64(unsafe.Sizeof(textV2PostingBlockEntry{})))
+	grow(terms, uint64(unsafe.Sizeof(textV2PositionFieldValue{})))
+	grow(terms, uint64(unsafe.Sizeof(textV2PostingBlockKV{})))
+	// Fixed-capacity state/sort clones, posting header clone and sorted term
+	// lists. Per-element rounding also covers independently small arrays.
+	if !prepared {
+		charge.add(terms, 2*memtable.COWAllocationCharge(uint64(unsafe.Sizeof(textDocumentTermState{}))))
+	}
+	charge.add(terms, memtable.COWAllocationCharge(uint64(unsafe.Sizeof(textV2PostingBlockEntry{}))))
+	charge.add(terms, memtable.COWAllocationCharge(uint64(unsafe.Sizeof(textV2PositionFieldValue{}))))
+	charge.add(terms, memtable.COWAllocationCharge(uint64(unsafe.Sizeof(textPostingFieldValue{}))))
+	charge.add(terms, memtable.COWAllocationCharge(uint64(unsafe.Sizeof(textStatsTermValue{}))))
+	charge.add(terms, 10*memtable.COWAllocationCharge(uint64(unsafe.Sizeof(string("")))))
+	// Accumulator lookup (2*U hint), analysis map, V1 posting map, V2
+	// document lookup (2*U hint), batch postings, position fields, stats seen,
+	// term deltas, term union, block counts and block deltas. Adding both
+	// version families is conservative; maps are never assumed to share storage.
+	str, integer := uint64(unsafe.Sizeof(string(""))), uint64(unsafe.Sizeof(int(0)))
+	if !prepared {
+		charge.mapEntries(2*terms, str+integer)
+		charge.mapEntries(terms, str+uint64(unsafe.Sizeof((*textAnalyzedTerm)(nil))))
+	}
+	charge.mapEntries(terms, str+uint64(unsafe.Sizeof(textPostingValue{})))
+	charge.mapEntries(2*terms, str+integer)
+	charge.mapEntries(terms, str+uint64(unsafe.Sizeof([]textV2PostingBlockEntry{})))
+	charge.mapEntries(terms, str+uint64(unsafe.Sizeof([]textV2PositionFieldValue{})))
+	charge.mapEntries(terms, str+uint64(unsafe.Sizeof(uint64(0))))
+	charge.mapEntries(terms, str+uint64(unsafe.Sizeof(textStatsTermDelta{})))
+	charge.mapEntries(terms, str)
+	charge.mapEntries(terms, str+uint64(unsafe.Sizeof(uint64(0))))
+	charge.mapEntries(terms, str+uint64(unsafe.Sizeof(int64(0))))
+	// Positions/offsets are per occurrence, even with one repeated term.
+	// Analysis append growth and both V2 copy+encoder-clone cohorts coexist;
+	// state terms borrow these arrays. Charge flags independently.
+	var occurrence uint64
+	if def.StorePositions {
+		occurrence += uint64(unsafe.Sizeof(uint32(0)))
+	}
+	if def.StoreOffsets {
+		occurrence += uint64(unsafe.Sizeof(textTokenOffset{}))
+	}
+	if !prepared {
+		grow(tokens, occurrence)
+		charge.add(tokens, 4*occurrence)
+		charge.add(terms, 4*16)
+	} else {
+		// State emission borrows original arrays; only the encoder clones.
+		charge.add(tokens, 2*occurrence)
+		charge.add(terms, 2*16)
+	} // rounding for the two separately copied arrays
+	// Each V2 document/term allocates one complete declared-field frequency
+	// lane. Candidate summary lanes, including retries, are charged below.
+	charge.add(terms, memtable.COWAllocationCharge(uint64(len(def.Fields))*4))
+	// Encoded term-byte cohorts include string-to-byte conversions, V1 state/
+	// posting/stats keys or V2 block-prefix growth/position/fingerprint/stats
+	// keys. Sixteen normalized-byte cohorts dominate either version, including
+	// both stats lookup/output keys. Normalized bytes <=2*N and Q(c)<=2*c+16;
+	// fixed encoder capacities are charged separately below.
+	if prepared {
+		charge.add(source, 32)
+	} else {
+		charge.add(source, 64)
+	}
+	charge.add(terms, 16*16)
+	// Maximum-varint posting wire capacities are the maintained encoder's
+	// H(F)+c*E(F), including its upper-capacity hints, not just emitted bytes.
+	// Source sizing also precedes sealed backfill (128), so bound that target,
+	// which dominates mutation micro-blocks (32). If even the full target fits,
+	// halving is impossible. Otherwise each of <=P output chunks may restart
+	// at target: <=8*P attempts and <256*P entry visits, not merely 2*P visits.
+	fields := uint64(len(def.Fields))
+	header := uint64(1 + 2 + 10*binary.MaxVarintLen64 + textV2PostingBlockChecksumBytes)
+	if fields > (^uint64(0)-header)/21 {
+		return 0, memtable.ErrCOWCapacity
+	}
+	header += fields * 11
+	entry := uint64(31) + fields*10
+	target := uint64(textV2PostingBlockTargetPostings)
+	attempts, visits := uint64(1), uint64(1)
+	if entry > (^uint64(0)-header)/target || header+target*entry > uint64(min(textV2PostingBlockInlineTargetBytes, textV2PostingBlockMaxValueBytes)) {
+		attempts, visits = 8, 2*target
+	}
+	// Q(c)<=2*c+16 for every candidate, and a separately allocated summary
+	// F*uint32 lane for every attempt. All failed candidates remain charged.
+	charge.add(terms, attempts*memtable.COWAllocationCharge(fields*4))
+	if header > (^uint64(0)-16)/2 || 2*header+16 > ^uint64(0)/attempts || entry > (^uint64(0)-attempts*(2*header+16))/(2*visits) {
+		return 0, memtable.ErrCOWCapacity
+	}
+	charge.add(terms, attempts*(2*header+16)+2*visits*entry)
+	// Fixed wire capacities are separate from normalized term bytes and
+	// occurrence varints. Pre-sized posting/state/position encoders allocate
+	// once; append-based stats encoders have a bounded number of append calls.
+	// For each such growth: cap<=2*required+16, Q(cap)<=4*required+48.
+	// This also admits discarded backing and conversions, without assuming
+	// string-to-byte conversion is compiler-borrowed.
+	var wire nativeTextAdmissionSum
+	if def.Version == TextIndexVersionV1 {
+		// Posting key; posting and state value per-field/term headers. The
+		// state's per-document zero-term headers remain in row controls.
+		wire.add(1, 2*(1+binary.MaxVarintLen64)+16)
+		wire.add(documentIDBytes, 2)
+		wire.add(2, 2*(1+6*binary.MaxVarintLen64)+16)
+		wire.add(fieldBytes, 4)
+		// Two stats keys (read/write), each <=3 appends, and a two-varint
+		// stats value (initial byte plus <=2 appends).
+		wire.add(6, 4*(2+binary.MaxVarintLen64)+48)
+		wire.add(3, 4*(1+2*binary.MaxVarintLen64)+48)
+	} else {
+		// Position key; position value envelope includes five top-level
+		// varints/fingerprint plus four field/count varints per field.
+		wire.add(1, 2*(2+8+binary.MaxVarintLen64)+16)
+		wire.add(1, 2*(1+9*binary.MaxVarintLen64+textV2PositionTermFingerprintSize)+16)
+		// Both stats keys; four-varint stats value; block prefix/suffix
+		// backing (two allocations, each with <=28 fixed bytes).
+		wire.add(6, 4*(2+binary.MaxVarintLen64)+48)
+		wire.add(5, 4*(1+4*binary.MaxVarintLen64)+48)
+		wire.add(2, 4*(2+binary.MaxVarintLen64+16)+48)
+	}
+	if wire.bad {
+		return 0, memtable.ErrCOWCapacity
+	}
+	charge.add(terms, wire.total)
+	// V1 posting+state and V2 positions serialize each occurrence at most
+	// three times; a uint32 position takes <=5 bytes and two offsets <=10.
+	charge.add(tokens, 6*uint64(3*binary.MaxVarintLen32))
+	if !prepared {
+		charge.array(1, uint64(unsafe.Sizeof(textTermAccumulator{}))+uint64(unsafe.Sizeof(textV2DocumentPostingAccumulator{})))
+	} else {
+		charge.array(1, uint64(unsafe.Sizeof(textV2DocumentPostingAccumulator{})))
+	}
+	if charge.bad {
+		return 0, memtable.ErrCOWCapacity
+	}
+	return charge.total, nil
+}
+
+// Only this existing stored-JSON/simple representation is prepared here.
+// Other formats, V1 and selected arrays/escapes retain their original planner.
+func nativeTextCanPrepare(def TextIndexDefinition, opts collectionOptions, values []jsonParserIndexValue) bool {
+	if def.Version != TextIndexVersionV2 || def.Analyzer != TextAnalyzerSimple || normalizedDocumentFormat(opts.documentFormat) != DocumentFormatJSON {
+		return false
+	}
+	for _, field := range def.Fields {
+		if field.Field == "" || strings.Contains(field.Field, ".") {
+			return false
+		}
+	}
+	for _, value := range values {
+		if value.valueType == jsonparser.Array || value.valueType == jsonparser.String && bytes.IndexByte(value.raw, '\\') >= 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// The caller has already admitted selection and definition normalization.
+// Analyze once with the maintained sink and actual position/offset options.
+// Retain every input/Builder/growth cohort through the original lease; state
+// terms borrow those strings/occurrence arrays, never refunded analyzer credit.
+func nativeTextPrepareCurrent(def TextIndexDefinition, values []jsonParserIndexValue, admit func(uint64) error) (textDocumentStateValue, error) {
+	var headers nativeTextAdmissionSum
+	headers.array(1, uint64(unsafe.Sizeof(textAnalyzedDocument{}))+uint64(unsafe.Sizeof(textDocumentStateValue{})))
+	headers.array(uint64(len(def.Fields)), uint64(unsafe.Sizeof(textAnalyzedField{})))
+	headers.array(uint64(len(def.Fields)), uint64(unsafe.Sizeof(textDocumentFieldState{})))
+	if headers.bad {
+		return textDocumentStateValue{}, memtable.ErrCOWCapacity
+	}
+	if err := admit(headers.total); err != nil {
+		return textDocumentStateValue{}, fmt.Errorf("collections: native text prepared headers: %w", err)
+	}
+	analysis := textAnalyzedDocument{Fields: make([]textAnalyzedField, 0, len(def.Fields))}
+	for i, value := range values {
+		if value.valueType != jsonparser.String {
+			continue
+		}
+		n, t := uint64(len(value.raw)), nativeTextRootValueTokenBound(def, value)
+		var input nativeTextAdmissionSum
+		input.array(n, 1)
+		input.add(n, 128)
+		input.add(t, 256)
+		input.array(t, uint64(unsafe.Sizeof(textAnalyzedTerm{})))
+		input.array(1, uint64(unsafe.Sizeof(textTermAccumulator{})))
+		if t > ^uint64(0)/2 {
+			return textDocumentStateValue{}, memtable.ErrCOWCapacity
+		}
+		input.mapEntries(2*t, uint64(unsafe.Sizeof(string("")))+uint64(unsafe.Sizeof(int(0))))
+		// Each enabled occurrence lane grows independently; retain all old
+		// backing and its per-allocation rounding, even for one repeated term.
+		if def.StorePositions {
+			input.add(t, 32*(uint64(unsafe.Sizeof(uint32(0)))+1))
+		}
+		if def.StoreOffsets {
+			input.add(t, 32*(uint64(unsafe.Sizeof(textTokenOffset{}))+1))
+		}
+		if input.bad {
+			return textDocumentStateValue{}, memtable.ErrCOWCapacity
+		}
+		if err := admit(input.total); err != nil {
+			return textDocumentStateValue{}, fmt.Errorf("collections: native text prepared analysis: %w", err)
+		}
+		acc := textTermAccumulator{storePositions: def.StorePositions, storeOffsets: def.StoreOffsets, terms: make([]textAnalyzedTerm, 0, int(t))}
+		if err := analyzeTextToTermAccumulator(def.Analyzer, def.AnalyzerOptions, string(value.raw), &acc); err != nil {
+			return textDocumentStateValue{}, err
+		}
+		// U is discovered by the SAME retained analyzer. Admit the exact map
+		// and state descriptors before their constructors, not from later data.
+		var retained nativeTextAdmissionSum
+		retained.mapEntries(uint64(len(acc.terms)), uint64(unsafe.Sizeof(string("")))+uint64(unsafe.Sizeof((*textAnalyzedTerm)(nil))))
+		retained.array(uint64(len(acc.terms)), uint64(unsafe.Sizeof(textDocumentTermState{})))
+		if retained.bad {
+			return textDocumentStateValue{}, memtable.ErrCOWCapacity
+		}
+		if err := admit(retained.total); err != nil {
+			return textDocumentStateValue{}, fmt.Errorf("collections: native text prepared state: %w", err)
+		}
+		analysis.Fields = append(analysis.Fields, textAnalyzedField{Field: def.Fields[i].Field, Length: acc.length, Terms: acc.termsMap()})
+	}
+	return textDocumentStateValueFromAnalysis(analysis), nil
+}
+
+type nativeTextPreparation struct {
+	states    []textDocumentStateValue
+	mutations []textDocumentMutation
+}
+
 func nativeTextSourceCharge(meta CollectionMeta, rows []nativeJSONRow, opts collectionOptions, admit func(uint64) error) (uint64, error) {
+	return nativeTextSourceChargePrepared(meta, rows, opts, admit, nil)
+}
+
+// With preparation, already executed analyzer phases are admitted immediately;
+// the returned amount is ONLY the remaining downstream envelope. Without it,
+// preserve the original full returned source charge for fallback/DDL callers.
+func nativeTextSourceChargePrepared(meta CollectionMeta, rows []nativeJSONRow, opts collectionOptions, admit func(uint64) error, preparation *nativeTextPreparation) (uint64, error) {
 	var total uint64
 	add := func(n uint64) bool {
 		if n > ^uint64(0)-total {
@@ -54,7 +401,7 @@ func nativeTextSourceCharge(meta CollectionMeta, rows []nativeJSONRow, opts coll
 		total += n
 		return true
 	}
-	// A source byte bounds one token/term, all state/posting/position headers,
+	// Fallback: a source byte bounds one token/term, all state/posting/position headers,
 	// map entries, and simultaneous analysis/encoded images. No token expansion
 	// analyzer is eligible (synonyms/stemming are rejected by normalization).
 	unit := 2 * (uint64(unsafe.Sizeof(TextToken{})) + uint64(unsafe.Sizeof(textAnalyzedTerm{})) + uint64(unsafe.Sizeof(textDocumentTermState{})) + uint64(unsafe.Sizeof(textV2PostingBlockEntry{})) + uint64(unsafe.Sizeof(textV2PositionFieldValue{})) + 8*uint64(unsafe.Sizeof(string(""))))
@@ -67,15 +414,21 @@ func nativeTextSourceCharge(meta CollectionMeta, rows []nativeJSONRow, opts coll
 		if err != nil {
 			return 0, err
 		}
-		if !add(definitionCharge) {
+		if preparation != nil {
+			// Analyzer option normalization must be admitted BEFORE preparation.
+			// It is not charged again in the returned downstream envelope.
+			if err := admit(definitionCharge); err != nil {
+				return 0, err
+			}
+		} else if !add(definitionCharge) {
 			return 0, memtable.ErrCOWCapacity
 		}
 		// Fixed formats/status/corpus plus field stats; each row emits at most
 		// one docid, docmap and norm key. Term/posting/position keys are bounded
 		// by analyzed tokens below; existing block decode has its own receipt.
 		operations := uint64(9+len(def.Fields)) + 3*uint64(len(rows))
-		for _, row := range rows {
-			for _, doc := range [][]byte{row.opening, row.current} {
+		for rowIndex, row := range rows {
+			for imageIndex, doc := range [][]byte{row.opening, row.current} {
 				if doc == nil {
 					continue
 				}
@@ -115,20 +468,70 @@ func nativeTextSourceCharge(meta CollectionMeta, rows []nativeJSONRow, opts coll
 				if err != nil {
 					return 0, err
 				}
-				var selected, tokens uint64
+				if preparation != nil && imageIndex == 1 && handled && nativeTextCanPrepare(def, opts, values) {
+					state, err := nativeTextPrepareCurrent(def, values, admit)
+					if err != nil {
+						return 0, err
+					}
+					preparation.states[rowIndex] = state
+					preparation.mutations[rowIndex].preparedNew = &preparation.states[rowIndex]
+					var distinct uint64
+					for _, field := range state.Fields {
+						var normalized, occurrences uint64
+						for _, term := range field.Terms {
+							count := max(uint64(term.Frequency), uint64(len(term.Positions)), uint64(len(term.Offsets)))
+							if uint64(len(term.Term)) > ^uint64(0)-normalized || count > ^uint64(0)-occurrences {
+								return 0, memtable.ErrCOWCapacity
+							}
+							normalized += uint64(len(term.Term))
+							occurrences += count
+						}
+						u := uint64(len(field.Terms))
+						part, err := nativeTextFieldCharge(def, normalized, occurrences, u, uint64(len(row.id)), uint64(len(field.Field)), true)
+						if err != nil || !add(part) || u > ^uint64(0)-distinct {
+							return 0, memtable.ErrCOWCapacity
+						}
+						distinct += u
+					}
+					overhead := uint64(len(row.id)) + uint64(len(def.Fields)) + 1
+					if overhead > ^uint64(0)/unit || !add(memtable.COWAllocationCharge(overhead*unit)) || distinct > (^uint64(0)-operations)/3 {
+						return 0, memtable.ErrCOWCapacity
+					}
+					operations += 3 * distinct
+					continue
+				}
+				var selected, tokens, analyzed uint64
+				refined := false
 				if handled {
-					for _, value := range values {
+					for fieldIndex, value := range values {
 						if value.valueType != jsonparser.String && value.valueType != jsonparser.Array {
 							continue
 						}
 						n := uint64(len(value.raw))
-						if n > ^uint64(0)-selected || (n+1)/2 > ^uint64(0)-tokens {
+						bound, err := nativeTextRootValueTermBound(def, value, admit)
+						if err != nil {
+							return 0, err
+						}
+						if n > ^uint64(0)-selected || bound > ^uint64(0)-tokens {
 							return 0, memtable.ErrCOWCapacity
 						}
 						selected += n
-						// Simple tokens need a separating byte except the final
-						// token. Array syntax only increases this upper bound.
-						tokens += (n + 1) / 2
+						tokens += bound
+						if n > ^uint64(0)/unit {
+							return 0, memtable.ErrCOWCapacity
+						}
+						fieldCharge := memtable.COWAllocationCharge(n * unit)
+						if value.valueType == jsonparser.String && def.Analyzer == TextAnalyzerSimple && bytes.IndexByte(value.raw, '\\') < 0 {
+							precise, err := nativeTextSimpleFieldCharge(def, n, nativeTextRootValueTokenBound(def, value), bound, uint64(len(row.id)), uint64(len(def.Fields[fieldIndex].Field)))
+							if err == nil {
+								fieldCharge = min(fieldCharge, precise)
+								refined = true
+							} // Overflow retains the original, already-checked byte envelope.
+						}
+						if fieldCharge > ^uint64(0)-analyzed {
+							return 0, memtable.ErrCOWCapacity
+						}
+						analyzed += fieldCharge
 					}
 				} else {
 					// The sizing decode uses the exact maintained fallback. Admit
@@ -196,7 +599,18 @@ func nativeTextSourceCharge(meta CollectionMeta, rows []nativeJSONRow, opts coll
 					return 0, memtable.ErrCOWCapacity
 				}
 				size := selected + overhead
-				if size > ^uint64(0)/unit || !add(memtable.COWAllocationCharge(size*unit)) || tokens > (^uint64(0)-operations)/3 {
+				if size > ^uint64(0)/unit {
+					return 0, memtable.ErrCOWCapacity
+				}
+				analysisCharge := memtable.COWAllocationCharge(size * unit)
+				if refined {
+					control := memtable.COWAllocationCharge(overhead * unit)
+					if control > ^uint64(0)-analyzed {
+						return 0, memtable.ErrCOWCapacity
+					}
+					analysisCharge = min(analysisCharge, analyzed+control)
+				}
+				if !add(analysisCharge) || tokens > (^uint64(0)-operations)/3 {
 					return 0, memtable.ErrCOWCapacity
 				}
 				operations += 3 * tokens
@@ -370,27 +784,67 @@ func nativeTextMutationDomains(snap *backenddb.Snapshot, catalog *collectionCata
 	}
 	opts.textMaterializationAdmit = admit
 	opts.templateResolver = resolver
-	charge, err := nativeTextSourceCharge(catalog.meta, rows, opts, admit)
-	if err != nil {
-		return nil, err
-	}
-	if err = admit(charge); err != nil {
-		return nil, fmt.Errorf("collections: native text analysis workspace: %w", err)
-	}
 	opts.textTableFactory = nativeTextTable
-	mutations := make([]textDocumentMutation, 0, len(rows))
-	for _, row := range rows {
-		if row.opening == nil && row.current == nil {
-			continue
-		}
-		mutations = append(mutations, textDocumentMutation{documentID: row.id, oldDocument: row.opening, deleteOld: row.opening != nil, newDocument: row.current, setNew: row.current != nil})
-	}
 	var names []string
 	var policies []backenddb.OrderedRootStoragePolicy
 	var tables []memtable.Table
 	defer func() { resetCollectionTables(tables) }()
-	if err = appendTextIndexMutationDeltas(snap, catalog, opts, mutations, &names, make(map[string]uint64), &policies, &tables); err != nil {
-		return nil, err
+	var baseRootIDs map[string]uint64
+	for _, def := range catalog.meta.TextIndexes {
+		// Prepared state is local to this definition and this captured plan.
+		// The maintained reducer receives no state prepared for another index.
+		var descriptors nativeTextAdmissionSum
+		descriptors.array(1, uint64(unsafe.Sizeof(CollectionMeta{}))+uint64(unsafe.Sizeof(TextIndexDefinition{})))
+		descriptors.array(uint64(len(rows)), uint64(unsafe.Sizeof(textDocumentMutation{})))
+		canPrepare := nativeTextCanPrepare(def, opts, nil)
+		if canPrepare {
+			descriptors.array(uint64(len(rows)), uint64(unsafe.Sizeof(textDocumentStateValue{})))
+			descriptors.array(1, uint64(unsafe.Sizeof(nativeTextPreparation{})))
+		}
+		if descriptors.bad {
+			return nil, memtable.ErrCOWCapacity
+		}
+		if err = admit(descriptors.total); err != nil {
+			return nil, err
+		}
+		mutations := make([]textDocumentMutation, len(rows))
+		for i, row := range rows {
+			mutations[i] = textDocumentMutation{documentID: row.id, oldDocument: row.opening, deleteOld: row.opening != nil, newDocument: row.current, setNew: row.current != nil}
+		}
+		var preparation *nativeTextPreparation
+		if canPrepare {
+			preparation = &nativeTextPreparation{states: make([]textDocumentStateValue, len(rows)), mutations: mutations}
+		}
+		oneMeta := catalog.meta
+		oneDefinition := [1]TextIndexDefinition{def}
+		oneMeta.TextIndexes = oneDefinition[:]
+		// In prepared mode the explicit internal variant admits executed
+		// analyzer phases immediately and returns ONLY remaining downstream
+		// work. The old wrapper/DDL continues to return its full source charge.
+		charge, err := nativeTextSourceChargePrepared(oneMeta, rows, opts, admit, preparation)
+		if err != nil {
+			return nil, err
+		}
+		if err = admit(charge); err != nil {
+			return nil, fmt.Errorf("collections: native text analysis workspace: %w", err)
+		}
+		active := 0
+		for i := range mutations {
+			if mutations[i].deleteOld || mutations[i].setNew {
+				mutations[active] = mutations[i]
+				active++
+			}
+		}
+		if active == 0 {
+			continue
+		}
+		if baseRootIDs == nil {
+			// The admitted table/control envelope includes this existing map.
+			baseRootIDs = make(map[string]uint64)
+		}
+		if err = appendSingleTextIndexMutationDeltas(snap, catalog, opts, def, mutations[:active], &names, baseRootIDs, &policies, &tables); err != nil {
+			return nil, err
+		}
 	}
 	out, err := nativeTextTables(names, policies, tables, admit)
 	for i := range out {
