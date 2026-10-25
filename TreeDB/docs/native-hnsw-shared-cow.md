@@ -1,6 +1,7 @@
 # Ordinary HNSW on the shared COW owner
 
-Ordinary BSON collections using `Open` plus `NativeSemanticBackend` can declare
+Eligible ordinary JSON, BSON and template-v1 collections using `Open` plus
+`NativeSemanticBackend` can declare
 `native_runtime` vector indexes and use the maintained HNSW builder, `Search`,
 `SaveSnapshot`, and `LoadVectorIndexSnapshot`. This adapter uses the existing
 HNSW algorithm and graph record codec. It does not introduce a second graph
@@ -162,11 +163,15 @@ and clean-runtime reuse from physical checkpoint, Close and reopened decoding.
 Timing requires a coordinated quiet host slot. This is a compatibility guardrail,
 not a vector-optimization claim.
 
-This slice does not qualify ColumnGraph/partition-live codecs, text/hybrid
-search, template graph materialization, legacy catalog upgrade, all filtered
-query paths, or the complete Mongo capability inventory. Existing specialized
-routes keep their separate contracts. The parent adoption issue remains open
-until its remaining public capabilities and performance gates are satisfied.
+The original Mongo first-slice qualification does not qualify the later
+text/Hybrid and template-materialization adapters. Their selected functional
+contracts are documented in [the text V2 contract](spec/collection-text-v2-contract.md)
+and [native Hybrid reads](spec/native-hybrid-read.md); aggregate service performance
+remains unaccepted. ColumnGraph/partition-live, normalized/quantized/typed and
+distributed adoption retain their separate capability obligations. This does not
+establish complete Mongo capability coverage or unrestricted legacy-catalog
+migration. The parent adoption issue remains open until its remaining public
+capabilities and performance gates are satisfied.
 
 Native full-image Save traverses the runtime under its existing mutation/use and
 graph-read locks and emits the maintained node, normalized-edge, tombstone and

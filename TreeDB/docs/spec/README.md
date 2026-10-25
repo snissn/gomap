@@ -70,8 +70,15 @@ Given pre-alpha status, this is a living spec that tracks implementation.
   - dense vector typed-column placement, column graph demo/benchmarks, search-vs-fetch timing boundaries, and caveats.
 - `TreeDB/docs/guides/hybrid-search.md`
   - user-facing `SearchHybrid` index creation and query examples, mode-selection guidance, counters, and caveats.
+- [Ordinary HNSW on shared COW](../native-hnsw-shared-cow.md)
+  - ordinary vector ownership, persistence, captured materialization and qualification scope.
+- [Native document-service construction](../document-service-native-constructor.md)
+  - shared owner construction, ordinary strategy defaults and remaining adoption obligations.
 
 ### Canonical specs
+
+- [Native Hybrid reads](native-hybrid-read.md)
+  - captured logical identity, scalar/text/vector ownership and fail-closed phase validation.
 
 - [R1 local indexed row contract](r1-indexed-row-contract.md)
   - selected native full-row fixture, capability gaps, matched SQLite durability,

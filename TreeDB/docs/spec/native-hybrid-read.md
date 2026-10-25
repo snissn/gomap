@@ -93,4 +93,5 @@ views, logical stale checks, checkpoint and cold reopen, empty-set analyzer
 validation, finite refusals, cancellation and release. The incarnation-change
 control uses the existing internal catalog replacement plus real native commit
 because no public collection-drop API exists. Small scalar-limit controls use the
-private existing plan limits; production defaults and public options are unchanged.
+private existing plan limits; these controls do not change production scalar-plan
+limits or public query options.

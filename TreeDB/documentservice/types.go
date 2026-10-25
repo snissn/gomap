@@ -153,7 +153,9 @@ type CreateIndexRequest struct {
 	VectorIndexOptions *BenchmarkVectorIndexOptions `json:"vector_index_options,omitempty"`
 	// ScalarFields declares which meta fields are scalar-indexed for bounded
 	// filtered keyword/hybrid retrieval. Omitted fields keep the index
-	// filterless; filtered requests against undeclared fields fail closed.
+	// filterless. Keyword/Hybrid filters and explicit ANN requests against
+	// undeclared or unsupported scalar fields fail closed. An omitted Dense
+	// route retains the existing exact executor for other valid metadata filters.
 	ScalarFields []ScalarFieldDeclaration `json:"scalar_fields,omitempty"`
 }
 

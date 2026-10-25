@@ -257,10 +257,14 @@ Service-created indexes declare these stable names:
 - text field/index: `content`;
 - document type: `treedb_document_service_v1`.
 
-Cosine indexes are created with the collection `column_graph` vector strategy so
-hybrid vector sources and dense `route=ann` can use the collection graph. Non-
-cosine indexes keep exact dense scoring available, but hybrid vector capability
-is reported false until the collection vector path can serve that metric safely.
+New ordinary indexes with omitted `vector_index_options.strategy` use
+`native_runtime` on both storage backends. Omission when opening an existing
+compatible index preserves its stored strategy; other schema and tuning checks
+still apply. Explicit `column_graph`, typed input, normalized representation and
+quantized declarations retain their existing contracts and eligibility. Cosine
+float32 ordinary HNSW supports indexed Dense ANN and Hybrid vector candidates;
+non-cosine indexes retain exact Dense scoring and do not advertise Hybrid vector
+capability.
 Metadata filters on keyword/hybrid routes require fields declared in
 `scalar_fields`; undeclared or unbounded filters fail closed.
 
@@ -313,7 +317,8 @@ support on another platform does not establish this full lifecycle.
 GET /v1/indexes/{index}
 ```
 
-Responses include:
+Example for an explicitly declared normalized/quantized ColumnGraph index;
+capabilities reflect that declaration:
 
 ```json
 {

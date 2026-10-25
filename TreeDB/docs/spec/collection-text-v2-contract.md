@@ -70,9 +70,13 @@ an installed mutation or raising the budget.
 This adapter selects declared V1/V2 without typed storage configuration. Ordinary
 `no_wal_fast` text DDL uses the existing native index-family owner for atomic
 schema/backfill/domain replacement; command-WAL text DDL retains its existing
-preassignment refusal. Server default promotion, rewrite/compaction and typed
-storage require their own native proofs; format eligibility does not imply
-whole-product or performance qualification.
+preassignment refusal. No-WAL native V2 rewrite/maintenance reuses the maintained
+planner and sparse shared publication described in
+[collection text search](collection-text-search.md). V1 rewrite, command-WAL
+text maintenance and explicit native storage compaction retain their existing
+restrictions. Server storage-default promotion and broader typed adoption require
+separate proofs; format eligibility does not establish whole-product or
+performance qualification.
 Ordinary HNSW construction and mutation reconciliation resolve template documents
 through their original captured `NativeJSONRead`, using the maintained admitted
 stored-document materializer rather than an independent latest-state resolver.
