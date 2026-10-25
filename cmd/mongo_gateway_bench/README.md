@@ -5,6 +5,29 @@ TreeDB Mongo gateway or a MongoDB server. It is intended to make the first
 Mongo-compatible product benchmarks reproducible, especially ops/sec and disk
 usage comparisons.
 
+## Standalone product opener
+
+The command below measures indexed updates through `OpenStandaloneServer` and
+the official driver. The executable's configurable backend harness below has a
+different construction path; use this benchmark when evaluating startup defaults.
+
+```sh
+GOWORK=off GOMAXPROCS=4 go test ./cmd/mongo_gateway_bench -run '^$' \
+  -bench '^BenchmarkStandalonePublicIndexedUpdate$' -benchmem -benchtime=1000x -count=1
+```
+
+It uses durable and relaxed command-WAL profiles, one/eight writers, two
+secondary indexes, 64 disjoint rows per writer, and a 256-byte payload. Every
+operation changes an indexed value. The timed interval runs from sending
+updates through receiving all `w:1,j:unspecified` acknowledgements; the resolved
+profile supplies the durability policy. Setup and Close are outside timing.
+Output includes ACK/s, whole-process client-plus-server B/op and allocs/op,
+native-route activation, physical WAL sync counters, and Close time. These are
+Go benchmark text/profile artifacts, inspected directly with `go tool pprof`,
+not benchprof inputs. Record deferred work separately before making sustained
+performance claims. Compare prebuilt binaries with identical harness bytes on
+exact baseline/candidate sources, alternate on a quiet host, and retain failures.
+
 ## Build
 
 ```sh

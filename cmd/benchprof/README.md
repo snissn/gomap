@@ -1,5 +1,12 @@
 # benchprof
 
+Mongo startup-default comparisons use the standalone
+`BenchmarkStandalonePublicIndexedUpdate` in `cmd/mongo_gateway_bench`, through
+the product opener and official driver. See its [run instructions and timing
+boundary](../mongo_gateway_bench/README.md#standalone-product-opener).
+Its Go benchmark text and optional pprof files are standalone artifacts, inspected
+directly with `go tool pprof`; they are not benchprof inputs.
+
 Pool-pressure publication has standalone component controls:
 
 ```sh

@@ -1,5 +1,12 @@
 # unified_bench
 
+Mongo startup-default comparisons use the standalone
+`BenchmarkStandalonePublicIndexedUpdate` in `cmd/mongo_gateway_bench`, through
+the product opener and official driver. See its [run instructions and timing
+boundary](../mongo_gateway_bench/README.md#standalone-product-opener).
+Its Go benchmark text and optional pprof files are standalone artifacts, not
+benchprof inputs; no unified-bench schema changes.
+
 Pool-pressure publication has standalone component controls:
 
 ```sh
