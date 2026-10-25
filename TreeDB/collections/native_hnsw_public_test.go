@@ -26,17 +26,21 @@ func TestNativeHNSWPublicDocumentLifecycle(t *testing.T) {
 		profile  treedb.Profile
 		format   DocumentFormat
 		declared bool
+		unnamed  bool
 	}
 	var scenarios []scenario
 	for _, profile := range []treedb.Profile{treedb.ProfileCommandWALDurable, treedb.ProfileCommandWALRelaxed, treedb.ProfileNoWALFast} {
 		for _, format := range []DocumentFormat{DocumentFormatBSON, DocumentFormatJSON} {
 			for _, declared := range []bool{false, true} {
-				scenarios = append(scenarios, scenario{profile, format, declared})
+				scenarios = append(scenarios, scenario{profile: profile, format: format, declared: declared})
 			}
+			// An omitted name is normalized by CreateVectorIndex, rather than
+			// by collection creation. Its graph domain must use that same name.
+			scenarios = append(scenarios, scenario{profile: profile, format: format, unnamed: true})
 		}
 	}
 	for _, test := range scenarios {
-		t.Run(fmt.Sprintf("%s/%s/declared=%t", test.profile, test.format, test.declared), func(t *testing.T) {
+		t.Run(fmt.Sprintf("%s/%s/declared=%t/unnamed=%t", test.profile, test.format, test.declared, test.unnamed), func(t *testing.T) {
 			profile := test.profile
 			def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Dimensions: 2, Metric: VectorMetricCosine, M: 4}
 			marshal := func(vector bson.A) ([]byte, error) {
@@ -86,8 +90,24 @@ func TestNativeHNSWPublicDocumentLifecycle(t *testing.T) {
 				}
 			}()
 			if !test.declared {
-				if _, err := c.CreateVectorIndex(def); err != nil {
+				requested := def
+				if test.unnamed {
+					requested.Name = ""
+				}
+				if _, err := c.CreateVectorIndex(requested); err != nil {
 					t.Fatalf("ordinary CreateVectorIndex: %v", err)
+				}
+				read, err := c.nativeJSON.Capture("docs")
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, named := read.collection.domains.Get("vector-index/" + def.Name)
+				_, empty := read.collection.domains.Get("vector-index/")
+				if err = read.Close(); err != nil {
+					t.Fatal(err)
+				}
+				if !named || empty {
+					t.Fatalf("created vector domains: normalized=%t empty=%t", named, empty)
 				}
 			}
 			insert := func(id string, v bson.A) {

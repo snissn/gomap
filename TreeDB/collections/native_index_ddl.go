@@ -271,9 +271,10 @@ func (m *NativeJSONManager) mutateIndexFamilies(owner *Collection, name string, 
 			return nil, err
 		}
 		meta := read.meta
+		var normalizedVector VectorIndexDefinition
 		if vector != nil {
 			vector.SchemaGeneration = read.capture.LogicalSequence() + 1
-			meta, _, err = addVectorIndexToCollectionMeta(meta, *vector)
+			meta, normalizedVector, err = addVectorIndexToCollectionMeta(meta, *vector)
 		} else if dropVector != "" {
 			meta = *meta.copy()
 			found := false
@@ -450,15 +451,14 @@ func (m *NativeJSONManager) mutateIndexFamilies(owner *Collection, name string, 
 			}
 		}
 		if vector != nil {
-			def, _ := findVectorIndex(meta.VectorIndexes, vector.Name)
-			if vectorIndexUsesCosineNormalizedF32V1(def) {
+			if vectorIndexUsesCosineNormalizedF32V1(normalizedVector) {
 				if _, _, found, e := read.namedDomainSeek("primary", nil, nil, false); e != nil {
 					return nil, e
 				} else if found {
 					return nil, backenddb.ErrNativeSemanticUnsupported
 				}
 			}
-			domains = append(domains, nativeJSONDomainChange{name: "vector-index/" + def.Name})
+			domains = append(domains, nativeJSONDomainChange{name: "vector-index/" + normalizedVector.Name})
 		}
 
 		before, err := encodeNormalizedCollectionMeta(read.meta)
