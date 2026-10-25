@@ -23,6 +23,10 @@ func (a *textTermAccumulator) takeDocumentField(field string) textDocumentFieldS
 	return out
 }
 
+func (a *textTermAccumulator) textNormalizerAdmission() func(uint64) error {
+	return a.admit
+}
+
 func textTermGrowthCapacity(length, capacity int) (int, error) {
 	if length < capacity {
 		return capacity, nil
@@ -36,9 +40,10 @@ func textTermGrowthCapacity(length, capacity int) (int, error) {
 	return 2 * capacity, nil
 }
 
-// addAdmittedToken uses the maintained analyzer's failable sink. The input and
-// Builder promise is separately admitted BEFORE analysis, since WriteRune runs
-// before this callback. Every concrete new backing here is admitted before make;
+// addAdmittedToken uses the maintained analyzer's failable sink. Input and
+// options/conversion promises are separately admitted BEFORE analysis. The same
+// admission callback also governs Builder growth before WriteRune. Every
+// concrete new backing here is admitted before make;
 // no old backing credit is returned, even after successful replacement.
 func (a *textTermAccumulator) addAdmittedToken(token TextToken) error {
 	const max = uint64(^uint32(0))

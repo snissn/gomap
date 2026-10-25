@@ -99,8 +99,17 @@ the same term/occurrence backing to `preparedNew`; it constructs neither an
 intermediate term-pointer map nor a copied state-term array. Legacy analysis
 map consumers keep their existing path and share only the internal term type
 and canonical ordering finalizer. Public analyzed tokens remain owned.
-Input/options and the normalizer's Builder backing are admitted independently
-before analysis, since rune writes precede the failable sink. Prepared state
+Input conversion, owner headers and options remain admitted before analysis.
+For this prepared-current path, a private sink capability is captured before
+stopword wrapping and passes the same stage callback into the maintained analyzer
+loop. Before every necessary Builder growth, checked UTF-8 width and signed
+arithmetic bound the Go 1.26 `Grow` target `2*cap+width`; its complete rounded
+allocation charge is admitted before `Grow` or the rune write. The subsequent
+`WriteRune` has sufficient capacity. All initial, later, stopped, duplicate and
+discarded backing cohorts remain charged through the original phase, with no
+post hoc charge or early refund. Nil-capability public/legacy analysis retains
+its existing growth and owned-token behavior. Census and fallback Builder
+envelopes remain unchanged. Prepared state
 still pays downstream encoder clones, retry candidates and all reducer/table
 work. Admission failure publishes no partial state and earns no early refund.
 Fallback formats, V1, nested/escaped/array selection and DDL keep their existing

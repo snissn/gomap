@@ -335,14 +335,13 @@ func nativeTextPrepareCurrent(def TextIndexDefinition, values []jsonParserIndexV
 		if value.valueType != jsonparser.String {
 			continue
 		}
-		n, t := uint64(len(value.raw)), nativeTextRootValueTokenBound(def, value)
+		n := uint64(len(value.raw))
 		var input nativeTextAdmissionSum
 		input.array(n, 1)
-		// Builder.WriteRune precedes the sink. Preserve its independent
-		// full-source/current+discarded backing promise, even for duplicates
-		// and stopwords. Options were admitted by the original caller.
-		input.add(n, 128)
-		input.add(t, 256)
+		// Preserve input conversion and owner admission. Options were admitted
+		// by the original caller. This owner's private analyzer capability
+		// admits each Builder backing before Grow, including stopped/duplicate
+		// tokens and obsolete growth cohorts, on this SAME stage callback.
 		input.array(1, uint64(unsafe.Sizeof(textTermAccumulator{})))
 		if input.bad {
 			return textDocumentStateValue{}, memtable.ErrCOWCapacity
