@@ -45,15 +45,7 @@ func (db *DB) checkpointNativeProducerPressure() error {
 	c := db.cow
 	limit := c.budget.Limits().MaxInFlightBytes
 	watermark := limit - limit/4
-	reserved := c.budget.Stats().ReservedBytes
-	// Give the already configured checkpoint worker room to drain before a
-	// producer must join IO. Only profiles with post-frontier admission can
-	// overlap this work with writes; honor disabled automatic maintenance.
-	if reserved >= watermark-limit/8 && db.externalCommandWAL &&
-		db.loadCommandWALCheckpointCutoverHook() != nil {
-		db.TriggerAutoCheckpoint()
-	}
-	if reserved < watermark {
+	if c.budget.Stats().ReservedBytes < watermark {
 		return nil
 	}
 	// Concurrent producers join one drain and recheck after it, before acquiring
