@@ -1,5 +1,12 @@
 # unified_bench
 
+Mongo startup-default comparisons use the standalone
+`BenchmarkStandalonePublicIndexedUpdate` in `cmd/mongo_gateway_bench`, through
+the product opener and official driver. See its [run instructions and timing
+boundary](../mongo_gateway_bench/README.md#standalone-product-opener).
+Its Go benchmark text and optional pprof files are standalone artifacts, not
+benchprof inputs; no unified-bench schema changes.
+
 Pool-pressure publication has standalone component controls:
 
 ```sh
@@ -1726,3 +1733,11 @@ Go benchmark rows (ns/op, B/op, allocs/op), not benchprof inputs. The exact
 configuration, `go test -c`/prebuilt-binary commands and ten-cell, three-pair
 diagnostic boundary are in
 [the #5214 packet](../../TreeDB/docs/benchmarks/cow-successor-workspace-5214.md).
+
+`BenchmarkStandalonePublicVectorBuildSaveLoad` and
+`BenchmarkStandalonePublicVectorSearch` in `cmd/mongo_gateway_bench` exercise
+ordinary BSON/HNSW APIs on the standalone owner. Their fixture, commands and
+Go-row artifact boundary are documented in
+[the Mongo benchmark README](../mongo_gateway_bench/README.md).
+`BenchmarkStandalonePublicVectorSaveReopenLoad` also charges the physical
+owner-close and fresh-owner reconstruction boundary.
