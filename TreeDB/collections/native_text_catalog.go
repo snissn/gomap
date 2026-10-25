@@ -6,6 +6,7 @@ import (
 	"strings"
 	"unsafe"
 
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -148,15 +149,21 @@ func (it *nativeTextIterator) seek(start []byte, forward bool) {
 	r := it.scope.read
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	domain, err := r.borrowedNamedDomain(it.scope.relative(it.root))
-	if errors.Is(err, tree.ErrKeyNotFound) {
-		return
-	}
-	if err != nil {
-		it.err = err
+	if r.capture == nil || r.closing || r.failure != nil {
+		it.err = backenddb.ErrClosed
 		return
 	}
 	if it.cursor.read.domain == nil {
+		// The cursor borrows one immutable domain for the entire scope. Do not
+		// reconstruct and discard its physical root reader on every movement.
+		domain, err := r.borrowedNamedDomain(it.scope.relative(it.root))
+		if errors.Is(err, tree.ErrKeyNotFound) {
+			return
+		}
+		if err != nil {
+			it.err = err
+			return
+		}
 		it.cursor.read = domain
 	}
 	scratch, err := r.physicalScratch()
