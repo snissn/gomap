@@ -369,7 +369,7 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/collections/native_catalog_source.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	{path: "TreeDB/collections/native_json_composite_replay.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	{path: "TreeDB/collections/native_json_indexes.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
-	{path: "TreeDB/collections/native_json_insert.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
+	{path: "TreeDB/collections/native_json_insert.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
 	{path: "TreeDB/collections/native_json_public.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	// Native V2 text eligibility consumes the retained public typed-schema field.
 	{path: "TreeDB/collections/native_text_plan.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
@@ -380,7 +380,14 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	// Scalar index DROP consumes the retained schema field, preserving physical
 	// manifest progress while changing only eligible typed index declarations.
 	// Declared-column CREATE remains refused in foreground and replay.
-	{path: "TreeDB/collections/native_index_ddl.go", classification: typedStorageLegacyCompatibility, matchingLines: 8, occurrences: 9},
+	{path: "TreeDB/collections/native_index_ddl.go", classification: typedStorageLegacyCompatibility, matchingLines: 9, occurrences: 10},
+	// Existing native documents select ordinary semantics using the retained
+	// public schema field; this does not introduce a physical storage owner.
+	{path: "TreeDB/collections/native_existing.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
+	// Constructor and write-domain docs describe compatibility with that same
+	// public schema field and the existing statistics eligibility boundary.
+	{path: "TreeDB/docs/document-service-native-constructor.md", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
+	{path: "TreeDB/docs/spec/collections-write-domain.md", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	{path: "TreeDB/collections/native_index_ddl_replay.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 4},
 	// Native source/graph adapters consume the retained public physical schema.
 	{path: "TreeDB/collections/command_wal.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
@@ -670,7 +677,7 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/documentservice/typed_get_many_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
 	{path: "TreeDB/documentservice/typed_input.go", classification: typedStorageLegacyCompatibility, matchingLines: 10, occurrences: 10},
 	{path: "TreeDB/documentservice/typed_input_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
-	{path: "TreeDB/documentservice/service.go", classification: typedStorageLegacyCompatibility, matchingLines: 13, occurrences: 17},
+	{path: "TreeDB/documentservice/service.go", classification: typedStorageLegacyCompatibility, matchingLines: 14, occurrences: 18},
 	{path: "TreeDB/documentservice/service_column_graph_buffer_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 8, occurrences: 8},
 	{path: "TreeDB/documentservice/service_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 2},
 	{path: "TreeDB/cmd/treedb_rag_benchmark/service_overhead.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 4},
