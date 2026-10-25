@@ -442,6 +442,16 @@ Value-log segments remain persistent storage: deletion uses existing
 reachability/pin/scanner authorities, never segment age or a second COW GC
 tracker. Retired owner cleanup occurs outside writer/admission/cut locks.
 
+Native producer pressure preparation joins at most one checkpoint and the
+original semantic cleanup frontier before consumer locks. If the same finite
+live accounting and logical sequence remain after a successful drain, later
+producers skip another identical drain. Retained readers still cause ordinary
+admission refusal. Changes to outstanding ownership or logical publication
+permit maintenance again; historical peak alone does not. A concurrent logical
+suffix prevents remembering that checkpoint as covering the new work. The
+remembered state holds no additional captures or allocation leases, and is
+covered by the original cache header admission.
+
 ## Complete-prefix and native ownership seam
 
 The existing lower publication owner keeps one finite accepted FIFO for the DB.

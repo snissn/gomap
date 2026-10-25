@@ -199,6 +199,8 @@ type cowCache struct {
 	semanticCond                                                                                   sync.Cond
 	semanticEnqueued, semanticCompleted                                                            uint64
 	nativePressureMu                                                                               sync.Mutex // only before a native producer captures its opening
+	nativePressureState                                                                            cowNativePressureState
+	nativePressureRemembered                                                                       bool
 	semanticHead, semanticTail, semanticFailed                                                     *rootpublication.SemanticCleanup
 	semanticRunning, semanticStopped, closeCleanupDone                                             bool
 	flushWake                                                                                      chan struct{}

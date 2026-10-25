@@ -42,6 +42,27 @@ func (db *DB) BeginPreparedNativeConditionalTxn() (backenddb.NativeConditionalTx
 	return &nativeConditionalTxn{ConditionalTxn: tx, lease: lease}, nil
 }
 
+// A successful drain cannot reclaim unchanged owners retained by a reader.
+// Keep only its observed finite accounting and logical publication identity;
+// historical high water is not outstanding debt or new maintenance work.
+type cowNativePressureState struct {
+	stats      memtable.COWStats
+	logicalSeq uint64
+}
+
+func (c *cowCache) nativeProducerPressureState() (cowNativePressureState, error) {
+	c.cutMu.Lock()
+	if c.closed || c.cut == nil {
+		c.cutMu.Unlock()
+		return cowNativePressureState{}, backenddb.ErrClosed
+	}
+	seq := c.cut.logicalSeq
+	c.cutMu.Unlock()
+	stats := c.budget.Stats()
+	stats.PeakBytes = 0
+	return cowNativePressureState{stats: stats, logicalSeq: seq}, nil
+}
+
 // PrepareNativeProducer joins at most one existing checkpoint before any
 // consumer lock, capture or private preparation. Semantic sources can exhaust
 // independently of bytes. This maintenance is not an admission promise: old
@@ -72,12 +93,33 @@ func (db *DB) PrepareNativeProducer() error {
 	if !underPressure() {
 		return nil
 	}
+	before, err := c.nativeProducerPressureState()
+	if err != nil {
+		return err
+	}
+	if c.nativePressureRemembered && c.nativePressureState == before {
+		return nil
+	}
+	c.nativePressureRemembered = false
 	if err := db.Checkpoint(); err != nil {
 		return err
 	}
 	// Physical handoff queues old semantic edges. Join their actual refunds on
 	// the original worker; NoWAL can otherwise return before source slots retire.
-	return db.joinSemanticCleanupFrontier()
+	if err := db.joinSemanticCleanupFrontier(); err != nil {
+		return err
+	}
+	after, err := c.nativeProducerPressureState()
+	if err != nil {
+		return err
+	}
+	// A concurrently published suffix may not have been covered by this drain.
+	// Its new debt must remain eligible for a later producer's checkpoint.
+	if after.logicalSeq == before.logicalSeq {
+		c.nativePressureState = after
+		c.nativePressureRemembered = true
+	}
+	return nil
 }
 func (tx *nativeConditionalTxn) State() backenddb.NativeSemanticState {
 	if tx == nil || tx.ConditionalTxn == nil || tx.closed || tx.snap == nil {
