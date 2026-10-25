@@ -606,7 +606,6 @@ drained:
 }
 
 func (c *mongoInsertCoalescer) runBatch(batch []mongoInsertCoalescerRequest) {
-	batch = filterExpiredMongoInsertCoalescerRequests(batch)
 	limit := int(wire.DefaultMaxMessageLength)
 	if c.server != nil {
 		limit = int(c.server.maxMessageLength())
@@ -631,6 +630,7 @@ func (c *mongoInsertCoalescer) runBatch(batch []mongoInsertCoalescerRequest) {
 }
 
 func (c *mongoInsertCoalescer) runInsertBatch(batch []mongoInsertCoalescerRequest) {
+	batch = filterExpiredMongoInsertCoalescerRequests(batch)
 	if len(batch) == 0 {
 		return
 	}

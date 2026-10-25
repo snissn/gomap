@@ -5,11 +5,13 @@ import (
 	"errors"
 	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/tree"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -91,6 +93,90 @@ func TestMongoInsertCoalescerBoundsBytes(t *testing.T) {
 		if _, err := col.Get(id); err != nil {
 			t.Fatalf("read %q: %v", id, err)
 		}
+	}
+}
+
+func TestMongoInsertCoalescerRechecksDeadlineBetweenByteGroups(t *testing.T) {
+	large, err := bson.Marshal(bson.D{{Key: "payload", Value: strings.Repeat("x", 1024)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	small, err := bson.Marshal(bson.D{{Key: "payload", Value: "x"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The first request fills one byte group. The two remaining requests fit
+	// together, exercising the batch path rather than deadline-aware singles.
+	limit := len(large) + 1 + 8
+	if 2*(len(small)+1+8) > limit {
+		t.Fatal("fixture must retain a two-request second byte group")
+	}
+	s, err := OpenStandaloneServer(StandaloneOptions{Dir: t.TempDir(), Profile: treedb.ProfileCommandWALDurable, MaxMessageLength: int32(limit)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := s.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	if _, err = s.Collections.CreateCollection(&collections.CollectionMeta{Name: "app.rows", Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}}); err != nil {
+		t.Fatal(err)
+	}
+	col, err := s.Collections.OpenCollection("app.rows")
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch := []mongoInsertCoalescerRequest{
+		{col: col, id: []byte("a"), stored: large, done: make(chan mongoInsertCoalescerResult, 2)},
+		{col: col, id: []byte("b"), stored: small, deadline: time.Now().Add(time.Hour), done: make(chan mongoInsertCoalescerResult, 2)},
+		{col: col, id: []byte("c"), stored: small, deadline: time.Now().Add(time.Hour), done: make(chan mongoInsertCoalescerResult, 2)},
+	}
+	var once sync.Once
+	var atFirstSyncLSN uint64
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Resource == durabilitycut.ResourceCommandWAL && event.Point == durabilitycut.BeforeDependencyFileSync {
+			once.Do(func() {
+				atFirstSyncLSN = s.Backend.CommandWALNextLSN()
+				// Deterministically model expiry while the first group waits for
+				// real durable completion, without a wall-clock scheduling race.
+				for i := 1; i < len(batch); i++ {
+					batch[i].deadline = time.Now().Add(-time.Second)
+				}
+			})
+		}
+		return nil
+	})
+	defer restore()
+	(&mongoInsertCoalescer{server: s.Server}).runBatch(batch)
+	if atFirstSyncLSN == 0 {
+		t.Fatal("fixture did not reach a real durable boundary")
+	}
+	for i, request := range batch {
+		select {
+		case result := <-request.done:
+			if i == 0 && result.err != nil {
+				t.Fatalf("first request: %v", result.err)
+			}
+			if i > 0 && (result.err == nil || !strings.Contains(result.err.Error(), "execution-time budget")) {
+				t.Errorf("expired request%d result=%v", i, result.err)
+			}
+		default:
+			t.Fatalf("request%d has no completion", i)
+		}
+		if len(request.done) != 0 {
+			t.Errorf("request%d completed more than once", i)
+		}
+		got, err := col.Get(request.id)
+		if i == 0 && (err != nil || len(got) == 0) {
+			t.Errorf("first document unavailable: %v", err)
+		}
+		if i > 0 && (len(got) != 0 || (err != nil && !errors.Is(err, tree.ErrKeyNotFound))) {
+			t.Errorf("expired request%d published: len=%d err=%v", i, len(got), err)
+		}
+	}
+	if after := s.Backend.CommandWALNextLSN(); after != atFirstSyncLSN {
+		t.Errorf("expired group assigned WAL work: before=%d after=%d", atFirstSyncLSN, after)
 	}
 }
 
