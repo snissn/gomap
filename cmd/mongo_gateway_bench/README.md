@@ -28,6 +28,27 @@ not benchprof inputs. Record deferred work separately before making sustained
 performance claims. Compare prebuilt binaries with identical harness bytes on
 exact baseline/candidate sources, alternate on a quiet host, and retain failures.
 
+The fixed retained protocol is in
+[`mongo-shared-cow-measurement.md`](../../TreeDB/docs/spec/mongo-shared-cow-measurement.md).
+Its Python 3.10+ driver runs prebuilt binaries in fresh processes, verifies binary
+hashes and the actual profile/route/fixture, and retains every fixed sample:
+
+```sh
+python3 cmd/mongo_gateway_bench/scripts/run_shared_cow_qualification.py \
+  manifest.json primary /mnt/fast4tb/mongo-qualification/primary
+python3 cmd/mongo_gateway_bench/scripts/run_shared_cow_qualification.py \
+  manifest.json resources /mnt/fast4tb/mongo-qualification/resources
+```
+
+The manifest supplies `tmpdir` plus `baseline` and `candidate` objects, each with
+absolute `binary` and `cwd` paths and the binary's `sha256`. Record the source,
+harness and environment identities alongside them before collection. Output
+directories must be new. The driver prewrites the complete plan and unrun
+receipts, then records raw logs, local host inventories, failures and parsed
+receipts without retrying. A successful driver exit means the batch finished;
+inspect every receipt and the numeric summary. It does not certify isolation,
+resources, capabilities, recovery, CI or review.
+
 ## Build
 
 ```sh

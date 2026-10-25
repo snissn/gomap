@@ -106,3 +106,10 @@ qualification. Pre-review harness provenance, concurrency, failure handling and
 wording before freezing source. Public performance evidence does not waive
 capability, durability, recovery, exact-head CI or review gates. The first Mongo
 slice leaves the parent's other named consumer adoption obligations open.
+
+The maintained orchestration driver is
+`cmd/mongo_gateway_bench/scripts/run_shared_cow_qualification.py`; its README
+documents the source-bound manifest and two output batches. It validates actual
+route/activation, profile, fixture, count and payload before marking a receipt
+valid. Raw failed/unparsed samples remain in the fixed batch. Driver completion
+is distinct from coordinator acceptance of the resulting evidence.
