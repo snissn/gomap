@@ -39,8 +39,9 @@ complete encoded graph. It releases the obsolete snapshot reservation before
 preparation. Public Search admits a separate workspace per concurrent query and
 uses operation-local graph scratch and live-delta result buffers rather than
 retaining a query pool. Default underfill and empty searches reuse the maintained
-exact scan and ranking with a single native capture. Persisted tuning parameters
-must match the normalized canonical declaration before runtime decoding. Returned
+exact scan and ranking with a single native capture. Persisted M and EF settings
+must match the normalized canonical declaration before runtime decoding; the
+per-runtime rebuild ratio is preserved when finite and in (0, 1]. Returned
 IDs and document bytes remain caller-owned outputs under the ordinary read
 contract. These charges bound engine-owned allocations, not RSS or GC behavior.
 

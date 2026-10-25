@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"unsafe"
 
@@ -234,6 +235,12 @@ func walkNativeHNSWRows(r *NativeJSONRead, admit func(uint64) error, scratch fun
 }
 
 func (c *Collection) buildNativeHNSW(opts VectorIndexOptions, register bool) (index *VectorIndex, resultErr error) {
+	// Preserve the maintained constructor's finite nonpositive default, while
+	// refusing nonfinite tuning before it can poison runtime or saved metadata.
+	if math.IsNaN(opts.RebuildDeletedRatio) || math.IsInf(opts.RebuildDeletedRatio, 0) || opts.RebuildDeletedRatio > 1 {
+		return nil, errors.New("collections: vector index rebuild deleted ratio must be finite and at most 1")
+	}
+
 	read, err := c.nativeJSON.Capture(c.name)
 	if err != nil {
 		return nil, err
@@ -276,7 +283,9 @@ func (c *Collection) buildNativeHNSW(opts VectorIndexOptions, register bool) (in
 	defer scratchLease.Close()
 	scratch := nativeHNSWPeakAdmission(scratchLease)
 
-	index, err = newVectorIndexWithMeta(c, vectorIndexOptionsFromDefinition(def), read.meta)
+	buildOptions := vectorIndexOptionsFromDefinition(def)
+	buildOptions.RebuildDeletedRatio = opts.RebuildDeletedRatio
+	index, err = newVectorIndexWithMeta(c, buildOptions, read.meta)
 	if err != nil {
 		return nil, err
 	}
@@ -926,7 +935,7 @@ func readNativeHNSWSnapshot(read *NativeJSONRead, def VectorIndexDefinition, adm
 	if meta.Name != def.Name || meta.Field != def.Field || meta.Metric != def.Metric || meta.Encoding != def.Encoding ||
 		meta.M != def.M || meta.EfConstruction != def.EfConstruction || meta.EfSearch != def.EfSearch ||
 		meta.Dimensions <= 0 || (def.Dimensions != 0 && meta.Dimensions != def.Dimensions) ||
-		meta.RebuildDeletedRatio != float64(defaultVectorIndexRebuildPPM)/1_000_000 {
+		!(meta.RebuildDeletedRatio > 0 && meta.RebuildDeletedRatio <= 1) {
 		return snapshot, disk, vectorIndexFallbackMetaMismatch, nil
 	}
 	// Decode incrementally with the maintained graph record codec. Each encoded
