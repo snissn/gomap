@@ -325,6 +325,24 @@ still validates the complete buffered frame sequence before its first physical
 write. Checksums, extent framing, append accounting, failure poisoning and
 dependency-before-marker ordering retain their existing contracts.
 
+## Command segment creation
+
+Production segment creation classifies the actual opened file once. A positive
+`tmpfs` or `ramfs` identification selects the existing strict V2 stream container
+and full file sync. Supported persistent storage, unknown filesystems, and
+classification errors retain fixed containers. Both successor creation routes
+apply this rule. Existing occupied files are detected first and retain their
+actual format on reopen; captured handles use that format through completion.
+This changes neither the frame encoding nor the dependency-complete contiguous
+prefix required for a successful durable acknowledgement.
+
+The policy has no workload or profiling input. Fixed-container platform support
+remains distinct from the format selected for a particular file. Physical
+certification must exercise and identify the declared format, including explicit
+fixed controls where automatic creation selects streams. Runtime diagnostics
+report the actual selected container and creation reason. Scratch retention is
+an upper bound: a path that avoids scratch may retain zero bytes.
+
 ## Logical observations versus physical calls
 
 The stats below are cumulative. Reports must delta them over the same active

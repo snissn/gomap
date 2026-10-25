@@ -931,5 +931,8 @@ queued successors form the next collected epoch and need their own certificate.
 Earlier external dependency and V2 marker-ordering waits remain serialized.
 See [the durable write contract](command-wal-durable-write-contract.md#shared-captured-prefix-scheduler)
 for lifecycle, allocation and boundary details. The acknowledgement guarantees
-remain unchanged. Newly created command journals use the initialized immutable
-extent container described in [storage format](storage-format.md).
+remain unchanged. Fresh production command-journal segments choose the existing
+strict V2 stream/full-sync container on positively identified memory filesystems,
+and initialized immutable extents on supported persistent or unknown filesystems.
+The choice uses the actual opened file at creation; existing files and captured
+handles keep their detected format. See [storage format](storage-format.md#initialized-command-wal-container-v3).

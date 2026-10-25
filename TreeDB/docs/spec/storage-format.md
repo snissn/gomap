@@ -4369,10 +4369,31 @@ projection; their pager-backed index layout does not imply ordinary DATA role.
 
 ## Initialized command-WAL container v3
 
-On supported Unix platforms, new production command-journal segments use a
-fixed-capacity container around unchanged length/CRC-bounded V2 frames. This is a pre-alpha container format
-change, separate from the inner command frame version. Intact older stream
-segments remain readable; no migration or format downgrade is performed.
+Fresh production command-journal segments select their container once, using
+filesystem information from the actual opened file. Positively identified
+`tmpfs` or `ramfs` uses the existing stream container with strict V2 frames and
+full-file synchronization: preinitialized capacity provides no persistent
+file-growth advantage on those filesystems. Supported persistent filesystems,
+unknown filesystems, and classification errors retain the initialized
+fixed-capacity container. Platforms without fixed-container publication retain
+the stream fallback described below. The same policy applies to both rotation
+routes and newly created empty successors; it does not depend on the command,
+workload, benchmark, profile, concurrency, or timing.
+
+Existing file contents are inspected before creation policy is considered.
+An occupied stream or fixed file keeps its detected format and corresponding
+sync primitive, including when reopened on another filesystem. Database open may start a
+fresh active sequence; that new segment follows creation policy while historical
+segments keep their detected formats. Captured handles retain their actual
+format through rotation. Selection does not convert files or
+change strict frame validation, dependency closure, durable-prefix advancement,
+or acknowledgement semantics. Explicit low-level fixed-container creation
+remains available for physical-format controls; platform support does not mean
+that every automatically created file uses that format.
+
+The fixed-capacity container wraps unchanged length/CRC-bounded V2 frames. Its
+pre-alpha format version is separate from the inner command frame version.
+Intact stream segments remain readable; no migration is performed.
 
 The 4096-byte container header starts with `TDBWAL\x03\x00`, a random 16-byte
 segment identity, physical capacity, and a CRC32C. Reserved header bytes and
