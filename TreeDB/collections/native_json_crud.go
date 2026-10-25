@@ -33,6 +33,8 @@ func (c *Collection) nativeUpdateBatchMode(items []UpdateBatchItem, mode updateB
 	if bsonItems == nil && len(items) == 0 {
 		return nil, true, nil
 	}
+	unlockVector, vectorMutationHeld := c.lockNativeHNSWMutationIfNeeded()
+	defer unlockVector()
 	tx, err := c.nativeJSON.Begin(c.name)
 	if err != nil {
 		return nil, false, err
@@ -95,6 +97,16 @@ func (c *Collection) nativeUpdateBatchMode(items []UpdateBatchItem, mode updateB
 			return nil, false, err
 		}
 	}
+	if c.nativeHNSWMaintenanceNeeded() {
+		ids := make([][]byte, len(items))
+		for i, item := range items {
+			ids[i] = item.DocumentID
+		}
+		if err = c.finishNativeHNSWMutation(ids, vectorMutationHeld); err != nil {
+			return results, true, commitAmbiguousError("native vector update maintenance", err)
+		}
+	}
+
 	return results, true, nil
 }
 func (c *Collection) nativeDeleteBatch(ids [][]byte) (count int, resultErr error) {
@@ -104,6 +116,8 @@ func (c *Collection) nativeDeleteBatch(ids [][]byte) (count int, resultErr error
 	if len(ids) == 0 {
 		return 0, nil
 	}
+	unlockVector, vectorMutationHeld := c.lockNativeHNSWMutationIfNeeded()
+	defer unlockVector()
 	tx, err := c.nativeJSON.Begin(c.name)
 	if err != nil {
 		return 0, err
@@ -119,6 +133,12 @@ func (c *Collection) nativeDeleteBatch(ids [][]byte) (count int, resultErr error
 	if err = tx.Commit(); err != nil {
 		return 0, err
 	}
+	if c.nativeHNSWMaintenanceNeeded() {
+		if err = c.finishNativeHNSWMutation(ids, vectorMutationHeld); err != nil {
+			return count, commitAmbiguousError("native vector delete maintenance", err)
+		}
+	}
+
 	return count, nil
 }
 
@@ -265,6 +285,8 @@ func (c *Collection) nativeDeleteDocumentIfOnce(id []byte, predicate func([]byte
 	if len(id) == 0 {
 		return false, errors.New("collections: document id cannot be empty")
 	}
+	unlockVector, vectorMutationHeld := c.lockNativeHNSWMutationIfNeeded()
+	defer unlockVector()
 	tx, err := c.nativeJSON.Begin(c.name)
 	if err != nil {
 		return false, err
@@ -290,6 +312,12 @@ func (c *Collection) nativeDeleteDocumentIfOnce(id []byte, predicate func([]byte
 	if err := tx.Commit(); err != nil {
 		return false, err
 	}
+	if c.nativeHNSWMaintenanceNeeded() {
+		if err = c.finishNativeHNSWMutation([][]byte{id}, vectorMutationHeld); err != nil {
+			return true, commitAmbiguousError("native vector conditional delete maintenance", err)
+		}
+	}
+
 	return true, nil
 }
 

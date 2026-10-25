@@ -425,6 +425,7 @@ type collectionManagerOptions struct {
 }
 
 type Collection struct {
+	nativeSchemaCoordinator *collectionSchemaCoordinator
 	// nativeOperationLocalReads keeps admitted temporary read backing out of global pools.
 	nativeOperationLocalReads   bool
 	nativeJSON                  *NativeJSONManager
@@ -1841,11 +1842,15 @@ func (m *CollectionManager) closeManagerOwned() error {
 		}
 	}()
 	m.stopUpdateCombiners()
+	var nativeFlushErr error
+	if m.nativeJSON != nil {
+		nativeFlushErr = m.FlushAll()
+	}
 	m.closeCollectionTypedColumnOneShotCaches()
 	queryReadyErr := m.closeCollectionQueryReadyGenerationCaches()
 	cacheErr := m.closeCollectionVectorIndexPreparedSearchCaches()
 	flushErr := m.FlushAll()
-	return errors.Join(queryReadyErr, cacheErr, flushErr)
+	return errors.Join(nativeFlushErr, queryReadyErr, cacheErr, flushErr)
 }
 
 func (m *CollectionManager) isClosing() bool {
@@ -3376,6 +3381,19 @@ func (m *CollectionManager) existingWriteDomainForCollection(name string) *colle
 // root. The backend DB also calls this as a close hook while
 // write APIs are still available.
 func (m *CollectionManager) FlushAll() error {
+	if m != nil && m.nativeJSON != nil {
+		m.collectionsMu.RLock()
+		collections := make([]*Collection, 0, len(m.collections))
+		for c := range m.collections {
+			collections = append(collections, c)
+		}
+		m.collectionsMu.RUnlock()
+		var errs []error
+		for _, c := range collections {
+			errs = append(errs, c.flushNativeHNSW())
+		}
+		return errors.Join(errs...)
+	}
 	if m == nil || m.db == nil {
 		return nil
 	}
@@ -4610,6 +4628,9 @@ func (c *Collection) CreateVectorIndex(def VectorIndexDefinition) (*CollectionMe
 	if c == nil {
 		return nil, errCollectionNil
 	}
+	if c.nativeJSON != nil {
+		return c.nativeCreateVectorIndex(def)
+	}
 	if c.db == nil {
 		return nil, errCollectionDBNil
 	}
@@ -4709,6 +4730,9 @@ func (c *Collection) DropVectorIndex(name string) (*CollectionMeta, error) {
 	}
 	if c == nil {
 		return nil, errCollectionNil
+	}
+	if c.nativeJSON != nil {
+		return c.nativeDropVectorIndex(name)
 	}
 	if c.db == nil {
 		return nil, errCollectionDBNil
@@ -4987,8 +5011,7 @@ func (c *Collection) Flush() error {
 		if c.manager.isClosing() {
 			return backenddb.ErrClosed
 		}
-		// Native writes already publish through the shared COW owner.
-		return nil
+		return c.flushNativeHNSW()
 	}
 	if c == nil {
 		return errCollectionNil

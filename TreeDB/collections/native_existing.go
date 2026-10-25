@@ -21,7 +21,14 @@ func (m *CollectionManager) openNativeCollection(name string) (collection *Colle
 	}
 	defer func() { resultErr = errors.Join(resultErr, read.Close()) }()
 	meta := read.meta.copy()
-	return &Collection{manager: m, nativeJSON: m.nativeJSON, name: name, meta: *meta}, nil
+	coord := collectionSchemaCoordinatorForDBCollection(m.nativeJSON.db, name)
+	if coord == nil {
+		return nil, backenddb.ErrClosed
+	}
+	if len(meta.VectorIndexes) != 0 {
+		coord.hasNativeVectorIndexes.Store(true)
+	}
+	return &Collection{manager: m, nativeJSON: m.nativeJSON, nativeSchemaCoordinator: coord, name: name, meta: *meta}, nil
 }
 
 func (c *Collection) nativeInsertBatch(ids, documents [][]byte) ([][]byte, error) {
@@ -40,8 +47,15 @@ func (c *Collection) nativeInsertBatch(ids, documents [][]byte) ([][]byte, error
 	if err != nil {
 		return nil, err
 	}
+	unlockVector, vectorMutationHeld := c.lockNativeHNSWMutationIfNeeded()
+	defer unlockVector()
 	if err = c.nativeJSON.InsertBatch(c.name, ids, documents); err != nil {
 		return nil, err
+	}
+	if c.nativeHNSWMaintenanceNeeded() {
+		if err = c.finishNativeHNSWMutation(ids, vectorMutationHeld); err != nil {
+			return result, commitAmbiguousError("native vector maintenance", err)
+		}
 	}
 	return result, nil
 }

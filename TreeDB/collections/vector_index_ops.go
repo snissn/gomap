@@ -304,6 +304,12 @@ func vectorIndexStatusRootID(catalog *collectionCatalog, rootName string) (uint6
 }
 
 func (c *Collection) registeredVectorIndex(name string) *VectorIndex {
+	if c != nil && c.nativeJSON != nil {
+		coord := c.collectionSchemaCoordinator()
+		coord.nativeHNSWIndexesMu.RLock()
+		defer coord.nativeHNSWIndexesMu.RUnlock()
+		return coord.nativeHNSWIndexes[name]
+	}
 	if c == nil {
 		return nil
 	}

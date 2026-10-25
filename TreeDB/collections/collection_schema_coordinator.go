@@ -29,6 +29,9 @@ type collectionSchemaCoordinator struct {
 	typedPublicationChanged  chan struct{}
 	typedPublicationClosed   bool
 
+	nativeHNSWMutationMu                   sync.Mutex
+	nativeHNSWIndexesMu                    sync.RWMutex
+	nativeHNSWIndexes                      map[string]*VectorIndex
 	schemaMu                               sync.RWMutex
 	nativeVectorIndexLoadMu                sync.Mutex
 	nativeVectorAdmissionMu                sync.RWMutex
@@ -311,6 +314,11 @@ func collectionDBSchemaCoordinatorForDB(db *backenddb.DB) *collectionDBSchemaCoo
 	if db == nil {
 		return nil
 	}
+	// Close hooks may still need the established coordinator after new hook
+	// registration is closed. Its lifetime ends only after those hooks finish.
+	if existing, ok := collectionSchemaCoordinators.Load(db); ok {
+		return existing.(*collectionDBSchemaCoordinators)
+	}
 	coord := &collectionDBSchemaCoordinators{}
 	var actual any
 	var loaded bool
@@ -344,6 +352,7 @@ func collectionDBSchemaCoordinatorForDB(db *backenddb.DB) *collectionDBSchemaCoo
 					closeErr = errors.Join(closeErr, err)
 				}
 			}
+			closeErr = errors.Join(closeErr, collection.closeNativeHNSWForDB())
 			collection.typedPublicationDebtMu.Lock()
 			collection.typedPublicationClosed = true
 			collection.wakeTypedGraphPublicationWaitersLocked()
@@ -431,6 +440,9 @@ func (coord *collectionSchemaCoordinator) releaseChunkLifecycleRef(parentID stri
 }
 
 func (c *Collection) collectionSchemaCoordinator() *collectionSchemaCoordinator {
+	if c != nil && c.nativeSchemaCoordinator != nil {
+		return c.nativeSchemaCoordinator
+	}
 	if c == nil {
 		return nil
 	}
@@ -440,6 +452,9 @@ func (c *Collection) collectionSchemaCoordinator() *collectionSchemaCoordinator 
 	name := c.name
 	if name == "" {
 		name = c.meta.Name
+	}
+	if c.nativeJSON != nil {
+		return collectionSchemaCoordinatorForDBCollection(c.nativeJSON.db, name)
 	}
 	return collectionSchemaCoordinatorForDBCollection(c.db, name)
 }

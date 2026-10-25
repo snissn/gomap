@@ -10,6 +10,8 @@ import (
 // ledger. name and boundary borrow that ledger's own captured descriptor/root,
 // never current metadata. Results are grouped by collection incarnation.
 type nativeBuiltDomain struct {
+	vectorVersionKey           string
+	vectorVersionValue         [16]byte
 	collection, interpretation uint64
 	name                       string
 	oldBaseRoot, root          uint64

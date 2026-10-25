@@ -11,8 +11,10 @@ import (
 	"strings"
 
 	"github.com/buger/jsonparser"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/vectorops"
 	"github.com/snissn/gomap/TreeDB/internal/workstats"
+	"github.com/snissn/gomap/TreeDB/tree"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/x/bsonx/bsoncore"
 )
@@ -114,7 +116,7 @@ func (c *Collection) SearchVectorsExact(query []float32, opts VectorSearchOption
 	if c == nil {
 		return nil, errCollectionNil
 	}
-	if c.db == nil {
+	if c.db == nil && c.nativeJSON == nil {
 		return nil, errCollectionDBNil
 	}
 	fieldPath, err := parseVectorFieldPath(opts.Field)
@@ -137,11 +139,34 @@ func (c *Collection) SearchVectorsExact(query []float32, opts VectorSearchOption
 	if metric == VectorMetricCosine && vectorNormSquared(query) == 0 {
 		return nil, errors.New("collections: cosine vector query cannot have zero magnitude")
 	}
-	if err := c.flushBufferedWrites(); err != nil {
-		return nil, err
+	if c.nativeJSON == nil {
+		if err := c.flushBufferedWrites(); err != nil {
+			return nil, err
+		}
 	}
 
-	materializer, err := c.NewStoredDocumentJSONMaterializer()
+	// Native exact evaluation borrows one cut for rows and materialization,
+	// including when a DB-owned graph outlives its opening manager.
+	var read *NativeJSONRead
+	var materializer *StoredDocumentJSONMaterializer
+	var scratch func(uint64) error
+	if c.nativeJSON != nil {
+		read, err = c.nativeJSON.Capture(c.name)
+		if err != nil {
+			return nil, err
+		}
+		defer read.Close()
+		materializer = &StoredDocumentJSONMaterializer{documentFormat: normalizedDocumentFormat(read.meta.Options.DocumentFormat), nativeRead: read}
+		var lease *memtable.COWExternalLease
+		lease, err = read.capture.NativeAllocator().AdmitNativeBytes(0)
+		if err != nil {
+			return nil, err
+		}
+		defer lease.Close()
+		scratch = nativeHNSWPeakAdmission(lease)
+	} else {
+		materializer, err = c.NewStoredDocumentJSONMaterializer()
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -162,6 +187,11 @@ func (c *Collection) SearchVectorsExact(query []float32, opts VectorSearchOption
 	}
 	processRecord := func(record DocumentRecord) error {
 		scan.Rows.Add(1)
+		if scratch != nil {
+			if err := scratch(uint64(len(record.Document))); err != nil {
+				return err
+			}
+		}
 		if opts.Filter != nil {
 			include, err := opts.Filter(record)
 			if err != nil || !include {
@@ -192,7 +222,16 @@ func (c *Collection) SearchVectorsExact(query []float32, opts VectorSearchOption
 			return nil, err
 		}
 		for _, id := range ids {
-			document, err := c.Get(id)
+			var document []byte
+			var err error
+			if read != nil {
+				document, err = read.namedDomainGetAdmitted("primary", id, scratch)
+				if errors.Is(err, tree.ErrKeyNotFound) {
+					continue
+				}
+			} else {
+				document, err = c.Get(id)
+			}
 			if err != nil {
 				return nil, err
 			}
@@ -209,12 +248,24 @@ func (c *Collection) SearchVectorsExact(query []float32, opts VectorSearchOption
 		return matches, nil
 	}
 
-	_, err = c.ScanDocumentsFunc(maxCollectionInt, func(record DocumentRecord) (bool, error) {
+	visit := func(record DocumentRecord) (bool, error) {
 		if err := processRecord(record); err != nil {
 			return false, err
 		}
 		return true, nil
-	})
+	}
+	if read != nil {
+		_, err = read.scanDocuments(nil, maxCollectionInt, false, func(record DocumentRecord) (bool, error) {
+			var e error
+			record.Document, e = read.namedDomainGetAdmitted("primary", record.ID, scratch)
+			if e != nil {
+				return false, e
+			}
+			return visit(record)
+		})
+	} else {
+		_, err = c.ScanDocumentsFunc(maxCollectionInt, visit)
+	}
 	if err != nil {
 		return nil, err
 	}

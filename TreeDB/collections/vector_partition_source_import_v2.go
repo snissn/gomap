@@ -542,6 +542,13 @@ func (c *Collection) buildSourceImportRootSystemDeltaV2(input columnWritePublish
 	if err != nil {
 		return nil, err
 	}
+	if input.nativeHNSWVersion != nil {
+		it, err = appendNativeHNSWVersion(it, input.nativeHNSWVersion)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	it, err = c.appendSourceImportSystemDeltaV2(it, input.sourceImportV2)
 	if err != nil {
 		return nil, err

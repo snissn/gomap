@@ -3,6 +3,7 @@ package collections
 import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"strings"
 )
 
 // Qualified key bytes are copied once from the captured schema. They and their
@@ -29,6 +30,15 @@ func nativeEngineRootDescriptorKeyChargeForCompaction(captured *nativeEngineVers
 				return false
 			}
 			total += charge
+			if index, ok := strings.CutPrefix(name, "vector-index/"); ok {
+				charge = memtable.COWAllocationCharge(uint64(len(nativeVectorVersionKey(c.schema.meta.Name, index))))
+				if charge > ^uint64(0)-total {
+					err = memtable.ErrCOWCapacity
+					return false
+				}
+				total += charge
+			}
+
 			if name == "primary" {
 				charge = memtable.COWAllocationCharge(uint64(len(systemCollectionDocumentGenerationPrefix) + len(c.schema.meta.Name)))
 				if charge > ^uint64(0)-total {
@@ -77,6 +87,18 @@ func (b *nativeEngineBuild) materializeRootDescriptors(group nativeOrderedRootBu
 		if err := delta.AppendViewTrustedSortedUnique(nativeBorrowedStringBytes(result.rootKey), result.rootValue[:]); err != nil {
 			return err
 		}
+		if result.vectorVersionKey != "" {
+			if err := flush(); err != nil {
+				return err
+			}
+			if err := delta.AppendViewTrustedSortedUnique(nativeBorrowedStringBytes(result.vectorVersionKey), result.vectorVersionValue[:]); err != nil {
+				return err
+			}
+			if err := flush(); err != nil {
+				return err
+			}
+		}
+
 		if result.generationKey != "" {
 			if err := flush(); err != nil {
 				return err

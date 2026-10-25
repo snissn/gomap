@@ -27,6 +27,9 @@ func (r *NativeJSONRead) borrowedNamedDomain(name string) (nativeDomainRead, err
 }
 
 func (r *NativeJSONRead) namedDomainGet(name string, key []byte) ([]byte, error) {
+	return r.namedDomainGetAdmitted(name, key, nil)
+}
+func (r *NativeJSONRead) namedDomainGetAdmitted(name string, key []byte, admit func(uint64) error) ([]byte, error) {
 	if r == nil {
 		return nil, backenddb.ErrClosed
 	}
@@ -44,15 +47,23 @@ func (r *NativeJSONRead) namedDomainGet(name string, key []byte) ([]byte, error)
 	if err != nil {
 		return nil, err
 	}
-	return r.namedDomainValue(entry)
+	return r.namedDomainValueAdmitted(entry, admit)
 }
 
 func (r *NativeJSONRead) namedDomainValue(entry node.LeafEntry) ([]byte, error) {
+	return r.namedDomainValueAdmitted(entry, nil)
+}
+func (r *NativeJSONRead) namedDomainValueAdmitted(entry node.LeafEntry, admit func(uint64) error) ([]byte, error) {
 	if entry.Flags&node.FlagTombstone != 0 {
 		return nil, tree.ErrKeyNotFound
 	}
 	if entry.Flags&node.FlagPointer != 0 {
-		return r.readValue(entry.ValuePtr, nil)
+		return r.readValue(entry.ValuePtr, admit)
+	}
+	if admit != nil {
+		if err := admit(memtable.COWAllocationCharge(uint64(len(entry.Value)))); err != nil {
+			return nil, err
+		}
 	}
 	return bytes.Clone(entry.Value), nil
 }
@@ -60,7 +71,10 @@ func (r *NativeJSONRead) namedDomainValue(entry node.LeafEntry) ([]byte, error) 
 // namedDomainSeek returns independent caller-owned bytes. Bounds follow the
 // maintained [start,end) source convention in both directions. Tombstones and
 // shadowed rows are resolved by the same source merge used for ordinary reads.
-func (r *NativeJSONRead) namedDomainSeek(name string, start, end []byte, reverse bool) (key, value []byte, found bool, resultErr error) {
+func (r *NativeJSONRead) namedDomainSeek(name string, start, end []byte, reverse bool) ([]byte, []byte, bool, error) {
+	return r.namedDomainSeekAdmitted(name, start, end, reverse, nil)
+}
+func (r *NativeJSONRead) namedDomainSeekAdmitted(name string, start, end []byte, reverse bool, admit func(uint64) error) (key, value []byte, found bool, resultErr error) {
 	if r == nil {
 		return nil, nil, false, backenddb.ErrClosed
 	}
@@ -87,7 +101,12 @@ func (r *NativeJSONRead) namedDomainSeek(name string, start, end []byte, reverse
 				return nil, nil, false, err
 			}
 			if entry.Flags&node.FlagTombstone == 0 {
-				value, err := r.namedDomainValue(entry)
+				if admit != nil {
+					if err := admit(memtable.COWAllocationCharge(uint64(len(entry.Key) + 1))); err != nil {
+						return nil, nil, false, err
+					}
+				}
+				value, err := r.namedDomainValueAdmitted(entry, admit)
 				if err != nil {
 					return nil, nil, false, err
 				}

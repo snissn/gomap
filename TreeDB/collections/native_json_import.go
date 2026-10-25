@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"encoding/binary"
 	"errors"
 	"strings"
 	"unsafe"
@@ -231,8 +232,28 @@ func importNativeJSONCollection(base *nativeEngineVersion, meta CollectionMeta, 
 			return next, policyErr
 		}
 		name := strings.TrimPrefix(qualified, meta.Name+"/")
-		domain, domainErr := newNativeDomainState(name, root, 1, policy, nil, admit)
+		interpretation, sourceGeneration := uint64(1), uint64(0)
+		if index, ok := strings.CutPrefix(name, "vector-index/"); ok {
+			version, e := get(nativeVectorVersionKey(meta.Name, index))
+			if e == nil {
+				if len(version) != 16 {
+					return next, backenddb.ErrNativeSemanticUnsupported
+				}
+				interpretation = binary.BigEndian.Uint64(version[:8])
+				sourceGeneration = binary.BigEndian.Uint64(version[8:])
+				if interpretation == 0 {
+					return next, backenddb.ErrNativeSemanticUnsupported
+				}
+			} else if !errors.Is(e, tree.ErrKeyNotFound) {
+				return next, e
+			} else if root != 0 {
+				interpretation = root
+			}
+		}
+
+		domain, domainErr := newNativeDomainState(name, root, interpretation, policy, nil, admit)
 		if domain != nil {
+			domain.sourceGeneration = sourceGeneration
 			p.ownedDomains = append(p.ownedDomains, domain)
 		}
 		if domainErr != nil {
