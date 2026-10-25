@@ -883,22 +883,42 @@ func (t *NativeJSONTxn) finalizeNativeText(g *nativeJSONTxnBinding) error {
 		return err
 	}
 	g.plan.additional = append(g.plan.additional, additional...)
-	var count int
+	var count uint64
 	for _, change := range additional {
-		count += len(change.entries)
+		if len(change.entries) != 0 {
+			count++
+		}
 	}
-	if err = admit(memtable.COWAllocationCharge(uint64(len(g.effects)+count) * uint64(unsafe.Sizeof(txnhistory.Effect{})))); err != nil {
+	if count == 0 {
+		return nil
+	}
+	// A full-domain effect conservatively covers every point/range reader,
+	// as in text rewrite publication. Row writers already share the V2 status
+	// point (or V1 stats range); per-key history adds no independent concurrency.
+	// Keep the non-text prefix and admit one exact replacement backing before
+	// allocation. Its previous backing remains on the original stage receipt.
+	count += uint64(len(g.effects))
+	var descriptors nativeTextAdmissionSum
+	descriptors.array(count, uint64(unsafe.Sizeof(txnhistory.Effect{})))
+	if descriptors.bad || count > uint64(int(^uint(0)>>1)) {
+		return memtable.ErrCOWCapacity
+	}
+	if err = admit(descriptors.total); err != nil {
 		return err
 	}
+	effects := make([]txnhistory.Effect, len(g.effects), int(count))
+	copy(effects, g.effects)
 	for _, change := range additional {
+		if len(change.entries) == 0 {
+			continue
+		}
 		ns := txnhistory.Namespace{Kind: txnhistory.CollectionNamespace, Collection: g.incarnation, Domain: nativeTextDomainNumber(g.probe.meta, change.name), Interpretation: 1}
 		if ns.Domain == 0 {
 			return backenddb.ErrNativeSemanticUnsupported
 		}
-		for _, row := range change.entries {
-			g.effects = append(g.effects, txnhistory.Effect{Namespace: ns, Kind: txnhistory.PointEffect, Key: row.Key})
-		}
+		effects = append(effects, txnhistory.Effect{Namespace: ns, Kind: txnhistory.RangeEffect})
 	}
+	g.effects = effects
 	return nil
 }
 
