@@ -10,6 +10,24 @@ import (
 	"github.com/snissn/gomap/TreeDB/tree"
 )
 
+// exactEntry keeps the ordinary newest-first point resolution. Only an
+// unresolved physical point repositions the same owned projection; a successor
+// is absence and its value is never materialized by the enclosing catalog.
+func (c *nativeDomainCursor) exactEntry(key []byte, readLeaf func(page.LeafLogPtr, []byte) ([]byte, error), admit func(uint64) error) (node.LeafEntry, error) {
+	entry, resolved, err := c.read.memoryEntry(key)
+	if resolved {
+		return entry, err
+	}
+	entry, found, err := c.physicalEntry(key, readLeaf, false, admit, nil)
+	if err != nil {
+		return node.LeafEntry{}, err
+	}
+	if !found || !bytes.Equal(entry.Key, key) {
+		return node.LeafEntry{}, tree.ErrKeyNotFound
+	}
+	return entry, nil
+}
+
 // nativeDomainCursor borrows the same exact domain/snapshot as nativeDomainRead.
 // Its containing storage, bounds and physical projection are admitted by the
 // enclosing operation. Keep this value at a stable address and close it before

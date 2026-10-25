@@ -579,10 +579,30 @@ func newTextV2SearchOrdinalAllowSet(snap *backenddb.Snapshot, catalog *collectio
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
+	var points *nativeTextPointReader
+	if len(ids) > 1 && catalog != nil && catalog.nativeText != nil {
+		var err error
+		points, err = catalog.nativeText.pointReader(ctx.docIDRootName)
+		if err != nil {
+			return nil, err
+		}
+		defer points.close()
+	}
 	set := &textV2SearchOrdinalAllowSet{ordinals: make(map[uint64]struct{}, len(ids)), sorted: make([]uint64, 0, len(ids))}
 	for _, id := range ids {
 		documentID := []byte(id)
-		doc, ok, err := readTextV2DocIDAtRoot(snap, catalog, ctx.docIDRootName, documentID)
+		var doc textV2DocIDValue
+		var ok bool
+		var err error
+		if points == nil {
+			doc, ok, err = readTextV2DocIDAtRoot(snap, catalog, ctx.docIDRootName, documentID)
+		} else {
+			var raw []byte
+			raw, ok, err = points.get(encodeTextV2DocIDKey(documentID))
+			if err == nil && ok {
+				doc, err = decodeTextV2DocIDValue(raw)
+			}
+		}
 		if err != nil {
 			return nil, err
 		}

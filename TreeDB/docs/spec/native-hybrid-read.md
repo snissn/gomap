@@ -53,6 +53,16 @@ complete blocks. Borrowed docmap IDs keep their entire original raw record live,
 and native admission remains conservative for that complete source. This changes
 retained working storage without changing scoring, scan counters or codecs.
 
+Scalar-filtered V2 ordinal lookup can borrow one named-domain point reader for
+multiple requested IDs. Each point resolves the original newest logical sources
+first; physical successors are absence and are never decoded as requested rows.
+The reader reuses the existing owned projection and ordinary `Seek`. Its held,
+authenticated leaf can position a later key within that leaf; other requests use
+the original root positioning, without walking intervening records. The original
+capture, PRIMARY choice, value-copy/codec admission and status checks still apply.
+Reader storage, its method closure and lazy physical projection are admitted on
+the enclosing cumulative receipt and detached before that receipt is released.
+
 Ordinary `native_runtime` cosine float32 vector candidates borrow the same cut.
 The existing graph-only traversal and scalar-column matcher supply IDs and
 scores without document fetch or exact scan fallback. Cold load decodes that
@@ -70,10 +80,13 @@ The public ordinary `idx.Search` retains its existing ownership and callback
 postvalidation; its query charge calculation is shared without changing ranking.
 
 Typed/ColumnGraph, normalized and quantized vector dispatch remain explicit and
-are not reinterpreted by this adapter. Default ColumnGraph service eligibility
-remains required separately. The unchanged eight-cell service fixture keeps that
-failure visible; this packet does not select a new strategy default or assert
-performance acceptance.
+are not reinterpreted by this adapter. New ordinary service indexes with omitted
+strategy select maintained `native_runtime` on both storage backends. An existing
+index with omitted strategy binds its persisted algorithm; explicit advanced
+strategies retain their eligibility and capability contracts. Their broader native
+adoption and actual server storage defaults remain separate parent obligations.
+The original eight-cell service fixture and partial failure stay in the evidence;
+these dispatch rules do not establish performance acceptance.
 
 The selected public controls cover V1/V2 text, scalar equality/range/AND, projection, held
 views, logical stale checks, checkpoint and cold reopen, empty-set analyzer
