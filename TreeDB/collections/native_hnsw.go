@@ -53,8 +53,8 @@ func nativeVectorVersionKey(collection, index string) string {
 func (c *Collection) nativeCreateVectorIndex(def VectorIndexDefinition) (*CollectionMeta, error) {
 	unlock := c.lockVectorIndexMutation()
 	defer unlock()
-	meta, err := c.nativeJSON.mutateIndexFamilies(c.name, nil, nil, false, &def, "")
-	if err == nil {
+	meta, err := c.nativeJSON.mutateIndexFamilies(c, c.name, nil, nil, false, &def, "")
+	if meta != nil {
 		c.collectionSchemaCoordinator().hasNativeVectorIndexes.Store(len(meta.VectorIndexes) != 0)
 	}
 	return meta, err
@@ -62,8 +62,8 @@ func (c *Collection) nativeCreateVectorIndex(def VectorIndexDefinition) (*Collec
 func (c *Collection) nativeDropVectorIndex(name string) (*CollectionMeta, error) {
 	unlock := c.lockVectorIndexMutation()
 	defer unlock()
-	meta, err := c.nativeJSON.mutateIndexFamilies(c.name, nil, nil, false, nil, name)
-	if err == nil {
+	meta, err := c.nativeJSON.mutateIndexFamilies(c, c.name, nil, nil, false, nil, name)
+	if meta != nil {
 		c.collectionSchemaCoordinator().hasNativeVectorIndexes.Store(len(meta.VectorIndexes) != 0)
 		old := c.registeredVectorIndex(name)
 		coord := c.collectionSchemaCoordinator()
@@ -775,34 +775,8 @@ func (c *Collection) loadNativeHNSW(opts VectorIndexOptions) (index *VectorIndex
 	index.setNativePersistent(true)
 	index.recordNativeDefinition(def)
 	index.recordLoadedSnapshot(domain.baseRoot, disk)
-	if len(index.scalarDefinitions) != 0 {
-		materializer := &StoredDocumentJSONMaterializer{documentFormat: normalizedDocumentFormat(read.meta.Options.DocumentFormat)}
-		for _, row := range snapshot.Nodes {
-			doc, e := read.namedDomainGetAdmitted("primary", []byte(row.DocumentID), admit)
-			if errors.Is(e, tree.ErrKeyNotFound) && row.Deleted {
-				e = nil
-			}
-			if e != nil {
-				return nil, status, e
-			}
-			scalar, e := index.nativeScalarRow(materializer, doc)
-			if e != nil {
-				return nil, status, e
-			}
-			for _, value := range scalar {
-				n := memtable.COWAllocationCharge(uint64(len(value)) * 4)
-				if n > ^uint64(0)-index.nativeHNSWCharge {
-					return nil, status, memtable.ErrCOWCapacity
-				}
-				if e = index.nativeHNSWLease.Resize(index.nativeHNSWCharge + n); e != nil {
-					return nil, status, e
-				}
-				index.nativeHNSWCharge += n
-			}
-			if e = index.appendNativeScalarRowValuesLocked(scalar); e != nil {
-				return nil, status, e
-			}
-		}
+	if err = populateNativeHNSWScalarRows(index, read, admit, index); err != nil {
+		return nil, status, err
 	}
 	state, _ := read.capture.Snapshot().StateToken()
 	index.recordSourceDocumentState(read.collection.documentGeneration, state)

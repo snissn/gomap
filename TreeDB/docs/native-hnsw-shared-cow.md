@@ -40,6 +40,27 @@ collection Status and Rebuild use this runtime family; source-import and typed
 graph declarations retain their separate dispatch. `SaveNativeDeltaSnapshot`
 uses full native domain replacement with the existing Save acknowledgment.
 
+Scalar Create/Drop and changes to other vector declarations use the same DDL
+owner and shared mutation gate. Before assignment, they prepare an admitted
+replacement for each surviving registered ordinary HNSW receiver. The maintained
+snapshot/load codec clones the actual base and live-delta planes separately;
+current scalar columns are reconstructed from the original captured primary cut
+and proposed schema. The original graph is never folded or rebuilt from canonical
+rows during this preflight. Manual tombstones, node history, receiver identity,
+tuning, dirty/persisted bookkeeping, coverage and interpretation remain intact.
+The codec validates edge records using its existing saved-load rules; original
+entry/max-level state is retained rather than adopting load's normalized values.
+
+A successful logical DDL installation transfers the prepared payload and schema
+receipt into the same receiver before releasing the mutation/use boundary. A
+completion error after installation still performs that transfer and remains
+ambiguous. Admission or conflict refusal before installation leaves original
+metadata, runtime and receipts unchanged. This can require a temporary second
+graph and may refuse finite capacity before assignment. Charges are recomputed
+from current node/column storage, so obsolete scalar charge does not accumulate
+across DDL. A previously stale document generation remains stale; DDL does not
+bless incomplete graph coverage. Full schema authentication remains exact.
+
 Manual Insert and Tombstone share the coordinator mutation gate, runtime use lock
 and graph lock with ordinary mutation notification. Insert admits retained row
 growth on the original runtime receipt before graph allocation. Filtered Search

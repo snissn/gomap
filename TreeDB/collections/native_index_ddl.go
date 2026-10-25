@@ -227,13 +227,9 @@ func prepareNativeIndexMutation(base *nativeEngineVersion, old *nativeCollection
 	return next, err
 }
 
-// Every DDL operation conflicts on the same catalog name already read by ALL
-// native transaction bindings, including bindings used only to derive a write.
-func (m *NativeJSONManager) mutateIndexes(name string, create *IndexDefinition, remove map[string]struct{}, all bool) (*CollectionMeta, error) {
-	return m.mutateIndexFamilies(name, create, remove, all, nil, "")
-}
-
-func (m *NativeJSONManager) mutateIndexFamilies(name string, create *IndexDefinition, remove map[string]struct{}, all bool, vector *VectorIndexDefinition, dropVector string) (out *CollectionMeta, resultErr error) {
+// Every DDL operation conflicts on the catalog name already read by native
+// transaction bindings. The facade holds its shared vector mutation gate.
+func (m *NativeJSONManager) mutateIndexFamilies(owner *Collection, name string, create *IndexDefinition, remove map[string]struct{}, all bool, vector *VectorIndexDefinition, dropVector string) (out *CollectionMeta, resultErr error) {
 	if m == nil || m.db == nil {
 		return nil, backenddb.ErrClosed
 	}
@@ -322,6 +318,11 @@ func (m *NativeJSONManager) mutateIndexFamilies(name string, create *IndexDefini
 		if err != nil {
 			return nil, err
 		}
+		finishHNSW, e := owner.prepareNativeHNSWSchemaChange(read, meta, admit)
+		if e != nil {
+			return nil, e
+		}
+		defer finishHNSW(false)
 		var rows nativeJSONRows
 		var domains []nativeJSONDomainChange
 		var catalog []memtable.COWMutation
@@ -498,10 +499,19 @@ func (m *NativeJSONManager) mutateIndexFamilies(name string, create *IndexDefini
 			return nil, errors.Join(err, cancelPrivateNativePublication(publication))
 		}
 		result, err := m.db.WriteNativePublication(publication, intent, false)
+		if result.LogicalInstalled {
+			finishHNSW(true)
+		}
+		if err != nil && (result.Assigned || result.LogicalInstalled) {
+			err = commitAmbiguousError("native index DDL completion", err)
+		}
 		if !result.Consumed {
 			err = errors.Join(err, cancelPrivateNativePublication(publication))
 		}
 		if err != nil {
+			if result.LogicalInstalled {
+				return logical.meta.copy(), err
+			}
 			return nil, err
 		}
 		return logical.meta.copy(), nil
