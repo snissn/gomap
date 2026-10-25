@@ -620,7 +620,12 @@ func TestHTTPDenseAnnRouteValidationFailsClosed(t *testing.T) {
 	svc, db := newTestService(t)
 	defer db.Close()
 	handler := NewHandler(svc)
-	ragParityCreateIndex(t, handler, "docs")
+	// Filtered explicit ANN is unavailable for ColumnGraph, while native_runtime
+	// supports declared scalar filtering (covered by the native route tests).
+	status, payload := ragParityPost(t, handler, "/v1/indexes", `{"name":"docs","dimension":4,"scalar_fields":[{"field":"meta.tenant","value_type":"string"},{"field":"meta.priority","value_type":"int64"}],"vector_index_options":{"strategy":"column_graph"}}`)
+	if status != http.StatusOK {
+		t.Fatalf("create column graph status=%d body=%s", status, mustJSON(payload))
+	}
 	ragParityUpsertTenantDocs(t, handler, "docs", ragParityTenantDocs())
 
 	cases := []struct {
@@ -645,7 +650,7 @@ func TestHTTPDenseAnnRouteValidationFailsClosed(t *testing.T) {
 
 	// Non-column_graph indexes keep exact dense scoring and reject ann.
 	body := `{"name":"l2docs","dimension":4,"metric":"l2"}`
-	status, payload := ragParityPost(t, handler, "/v1/indexes", body)
+	status, payload = ragParityPost(t, handler, "/v1/indexes", body)
 	if status != http.StatusOK {
 		t.Fatalf("create l2 index status=%d body=%s", status, mustJSON(payload))
 	}

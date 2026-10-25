@@ -249,9 +249,10 @@ func TestServiceDeferredVectorBuildMaintenanceLifecycle(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = cleanup() })
 	svc := NewWithDeferredVectorBuildMaintenance(collections.NewCollectionManager(backend), maintenance)
+	// This fixture exercises ColumnGraph physical build/status and deferred publication.
 	ctx := context.Background()
 	for _, name := range []string{"docs", "other", "generation", "commitfail", "rejected", "optimized"} {
-		if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: name, Dimension: 2, Metric: MetricCosine}); err != nil {
+		if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: name, Dimension: 2, Metric: MetricCosine, VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyColumnGraph}}); err != nil {
 			t.Fatalf("CreateIndex(%s): %v", name, err)
 		}
 	}
@@ -302,7 +303,7 @@ func TestServiceDeferredVectorBuildMaintenanceLifecycle(t *testing.T) {
 	}
 	canceled, cancel := context.WithCancel(ctx)
 	cancel()
-	if _, err := svc.CreateIndex(canceled, CreateIndexRequest{Name: "canceled", Dimension: 2, Metric: MetricCosine}); !errors.Is(err, context.Canceled) {
+	if _, err := svc.CreateIndex(canceled, CreateIndexRequest{Name: "canceled", Dimension: 2, Metric: MetricCosine, VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyColumnGraph}}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled CreateIndex error=%v want context.Canceled", err)
 	}
 	assertActive(true)
@@ -609,7 +610,7 @@ func TestServiceDeferredVectorBuildOptimizeCheckpointCrashReopen(t *testing.T) {
 		}
 		svc := NewWithDeferredVectorBuildMaintenance(collections.NewCollectionManager(backend), maintenance)
 		ctx := context.Background()
-		if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "docs", Dimension: 2, Metric: MetricCosine}); err != nil {
+		if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "docs", Dimension: 2, Metric: MetricCosine, VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyColumnGraph}}); err != nil {
 			t.Fatalf("create helper index: %v", err)
 		}
 		if _, err := svc.UpsertDocuments(ctx, "docs", UpsertDocumentsRequest{Documents: []Document{{ID: "durable", Embedding: []float32{1, 0}}}, DeferVectorIndexRebuild: true}); err != nil {
@@ -658,7 +659,7 @@ func TestServiceStandardOptimizeCheckpointCrashReopen(t *testing.T) {
 		}
 		svc := New(collections.NewCollectionManager(db))
 		ctx := context.Background()
-		if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "docs", Dimension: 2, Metric: MetricCosine}); err != nil {
+		if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "docs", Dimension: 2, Metric: MetricCosine, VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyColumnGraph}}); err != nil {
 			t.Fatalf("create helper index: %v", err)
 		}
 		if _, err := svc.UpsertDocuments(ctx, "docs", UpsertDocumentsRequest{Documents: []Document{{ID: "durable", Embedding: []float32{1, 0}}}, DeferVectorIndexRebuild: true}); err != nil {
@@ -704,8 +705,9 @@ func TestServiceDeferredVectorBuildFailedFinalizeReopensDurableAndStale(t *testi
 		t.Fatalf("open: %v", err)
 	}
 	svc := NewWithDeferredVectorBuildMaintenance(collections.NewCollectionManager(backend), maintenance)
+	// This fixture exercises ColumnGraph physical build/status and deferred publication.
 	ctx := context.Background()
-	if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "docs", Dimension: 2, Metric: MetricCosine}); err != nil {
+	if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "docs", Dimension: 2, Metric: MetricCosine, VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyColumnGraph}}); err != nil {
 		t.Fatalf("CreateIndex: %v", err)
 	}
 	if _, err := svc.UpsertDocuments(ctx, "docs", UpsertDocumentsRequest{Documents: []Document{{ID: "prior", Embedding: []float32{1, 0}}}}); err != nil {
@@ -1199,7 +1201,7 @@ func TestServiceKeywordHybridFiltersAndMissingIndexesFailClosed(t *testing.T) {
 	svc, db := newTestService(t)
 	defer db.Close()
 	ctx := context.Background()
-	if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "docs", Dimension: 2}); err != nil {
+	if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "docs", Dimension: 2, VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyColumnGraph}}); err != nil {
 		t.Fatalf("CreateIndex: %v", err)
 	}
 	if _, err := svc.UpsertDocuments(ctx, "docs", UpsertDocumentsRequest{Documents: []Document{{ID: "a", Content: "refund", Embedding: []float32{1, 0}, Meta: map[string]any{"repo": "gomap"}}}}); err != nil {
@@ -1399,7 +1401,7 @@ func TestServiceLegacyColumnGraphMutationDefaultRouteAndReopen(t *testing.T) {
 			}
 			svc, db := open()
 			defer func() { _ = svc.Close(); _ = db.Close() }()
-			if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "docs", Dimension: 2}); err != nil {
+			if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "docs", Dimension: 2, VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyColumnGraph}}); err != nil {
 				t.Fatal(err)
 			}
 			docs := []Document{

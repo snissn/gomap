@@ -175,14 +175,14 @@ func (c *Collection) searchHybridWithCandidateBudgetPolicy(opts HybridSearchOpti
 
 	var allowSet hybridScalarAllowSet
 	var scalarStats HybridSearchStats
-	nativeVectorOnlyShape := plan.text == nil && plan.vector != nil
-	if nativeVectorOnlyShape {
-		if c.nativeJSON == nil {
-			plan.nativeVectorRuntime, err = c.hybridVectorQueryUsesNativeRuntime(plan.vector)
-		}
+	if plan.vector != nil && c.nativeJSON == nil {
+		plan.nativeVectorRuntime, err = c.hybridVectorQueryUsesNativeRuntime(plan.vector)
 		if err != nil {
 			return hybridSearchFailClosed(response, HybridFailClosedReasonVectorIndexUnavailable, err)
 		}
+	}
+	nativeVectorOnlyShape := plan.text == nil && plan.vector != nil
+	if nativeVectorOnlyShape {
 		plan.nativeVectorScalar = plan.nativeVectorRuntime &&
 			plan.scalarFilter != nil &&
 			plan.scalarFilterStrategy == HybridScalarFilterStrategyPrefilter
@@ -1036,7 +1036,7 @@ func (c *Collection) hybridSearchCandidates(plan hybridSearchExecutionPlan, allo
 			var filter *HybridScalarFilter
 			// Keep prefilter admission/order in the executor, but let the
 			// selected owner search its captured base and current mutations.
-			if plan.nativeVectorScalar || plan.ownerBoundVectorScalar || (plan.nativeScratch != nil && plan.scalarFilterStrategy == HybridScalarFilterStrategyPrefilter) || (selectedTyped && allowSet != nil) {
+			if plan.nativeVectorScalar || plan.ownerBoundVectorScalar || (plan.nativeVectorRuntime && plan.scalarFilterStrategy == HybridScalarFilterStrategyPrefilter) || (selectedTyped && allowSet != nil) {
 				filter = plan.scalarFilter
 			}
 			if plan.readView != nil {
@@ -1082,6 +1082,13 @@ func (c *Collection) hybridSearchCandidates(plan hybridSearchExecutionPlan, allo
 				vectorResponse, vectorErr = searchVector()
 			}
 		}
+	}
+	if plan.nativeVectorRuntime && plan.text != nil && plan.scalarFilter != nil {
+		// Mixed search already reports the complete scalar allow-set above.
+		// HNSW retains its probe/visited/plan work, but its copied population
+		// counters must not count that same lookup result a second time.
+		vectorResponse.Stats.ScalarFilterInputIDs = 0
+		vectorResponse.Stats.ScalarFilterFinalIDs = 0
 	}
 	if plan.scalarFilterStrategy == HybridScalarFilterStrategyVectorFirst {
 		hybridMergeStats(&stats, vectorResponse.Stats)

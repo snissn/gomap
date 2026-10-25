@@ -223,9 +223,36 @@ func (s *Service) createIndexLocked(ctx context.Context, req CreateIndexRequest)
 	if err != nil {
 		return IndexInfo{}, err
 	}
-	vectorOptions, err := benchmarkVectorIndexOptionsForCreate(metric, req.VectorIndexOptions)
+	// Resolve an omitted strategy once from the stored declaration. New ordinary
+	// indexes use HNSW independently of the storage owner; existing indexes keep
+	// their strategy and still pass the normal complete-schema compatibility check.
+	defaultStrategy := collections.VectorIndexStrategyNativeRuntime
+	if req.TypedInput {
+		defaultStrategy = collections.VectorIndexStrategyColumnGraph
+	}
+	var existingMeta *collections.CollectionMeta
+	existing, openErr := s.manager.OpenCollection(req.Name)
+	switch {
+	case openErr == nil:
+		meta := existing.Meta()
+		if req.TypedInput != serviceUsesTypedInput(meta) {
+			return IndexInfo{}, serviceError(CodeConflict, "existing index has incompatible typed input ownership")
+		}
+		definition, err := serviceVectorIndexDefinition(meta)
+		if err != nil {
+			return IndexInfo{}, wrapServiceError(CodeConflict, "existing index has an incompatible vector declaration", err)
+		}
+		defaultStrategy = definition.Strategy
+		existingMeta = &meta
+	case !errors.Is(openErr, collections.ErrCollectionNotFound):
+		return IndexInfo{}, wrapServiceError(CodeInternal, "open existing index before create failed", openErr)
+	}
+	vectorOptions, err := benchmarkVectorIndexOptionsForCreate(metric, req.VectorIndexOptions, defaultStrategy)
 	if err != nil {
 		return IndexInfo{}, err
+	}
+	if existingMeta != nil && vectorOptions.strategy != defaultStrategy {
+		return IndexInfo{}, serviceError(CodeConflict, "existing index has incompatible vector strategy")
 	}
 	scalarDeclarations, err := normalizeScalarFieldDeclarations(req.ScalarFields)
 	if err != nil {
@@ -288,24 +315,15 @@ func (s *Service) createIndexLocked(ctx context.Context, req CreateIndexRequest)
 		}
 		meta.Indexes = indexes
 	}
-	if vectorOptions.strategy == collections.VectorIndexStrategyColumnGraph {
-		existing, openErr := s.manager.OpenCollection(req.Name)
-		switch {
-		case openErr == nil:
-			if req.TypedInput != serviceUsesTypedInput(existing.Meta()) {
-				return IndexInfo{}, serviceError(CodeConflict, "existing index has incompatible typed input ownership")
-			}
-			existingOptions := existing.Meta().Options
-			if existingOptions.ColumnStore != nil && existingOptions.ColumnStore.Enabled &&
-				(req.TypedInput || len(scalarDeclarations) == 0 || existingOptions.ColumnStore.RetainedPayload == collections.ColumnRetainedPayloadFull) {
-				meta.Options.ColumnStore = existingOptions.ColumnStore
-			}
-			meta.Options.DisableBufferedIndexedAsyncFlush = existingOptions.DisableBufferedIndexedAsyncFlush
-			meta.Options.BufferedIndexedAsyncFlush = existingOptions.BufferedIndexedAsyncFlush
-			meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits = existingOptions.BufferedIndexedAsyncFlushMaxQueuedUnits
-		case !errors.Is(openErr, collections.ErrCollectionNotFound):
-			return IndexInfo{}, wrapServiceError(CodeInternal, "open existing index before create failed", openErr)
+	if vectorOptions.strategy == collections.VectorIndexStrategyColumnGraph && existingMeta != nil {
+		existingOptions := existingMeta.Options
+		if existingOptions.ColumnStore != nil && existingOptions.ColumnStore.Enabled &&
+			(req.TypedInput || len(scalarDeclarations) == 0 || existingOptions.ColumnStore.RetainedPayload == collections.ColumnRetainedPayloadFull) {
+			meta.Options.ColumnStore = existingOptions.ColumnStore
 		}
+		meta.Options.DisableBufferedIndexedAsyncFlush = existingOptions.DisableBufferedIndexedAsyncFlush
+		meta.Options.BufferedIndexedAsyncFlush = existingOptions.BufferedIndexedAsyncFlush
+		meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits = existingOptions.BufferedIndexedAsyncFlushMaxQueuedUnits
 	}
 	created, alreadyExisted, err := s.manager.CreateCollectionWithStatus(*meta)
 	if err != nil {
@@ -1007,7 +1025,7 @@ func bindDenseVectorRepresentation(req *DenseVectorSearchRequest, info IndexInfo
 // resolveDenseSearchRoute applies the deterministic route defaulting rules:
 // explicit route values are validated; an omitted route selects ann when the
 // index declares a compatible no-document vector route, including declared
-// scalar filters on native_runtime, and exact otherwise.
+// scalar filters on native_runtime. Other valid metadata filters retain exact.
 func resolveDenseSearchRoute(req DenseVectorSearchRequest, info IndexInfo) (Route, error) {
 	if info.TypedInput {
 		route := Route(strings.TrimSpace(strings.ToLower(string(req.Route))))
@@ -1018,9 +1036,21 @@ func resolveDenseSearchRoute(req DenseVectorSearchRequest, info IndexInfo) (Rout
 	}
 	switch Route(strings.TrimSpace(strings.ToLower(string(req.Route)))) {
 	case "":
-		if info.Capabilities.NoDocumentVectorSearch &&
-			(req.Filter == nil || info.VectorStrategy == collections.VectorIndexStrategyNativeRuntime) {
+		if !info.Capabilities.NoDocumentVectorSearch {
+			return RouteExact, nil
+		}
+		if req.Filter == nil {
 			return RouteAnn, nil
+		}
+		if err := req.Filter.Validate(); err != nil {
+			return "", err
+		}
+		if info.VectorStrategy == collections.VectorIndexStrategyNativeRuntime {
+			// Select before execution: arbitrary valid metadata filters keep
+			// the existing exact route, while declared scalar plans use ANN.
+			if _, err := translateScalarFilter(req.Filter, newScalarSchema(info.ScalarFields)); err == nil {
+				return RouteAnn, nil
+			}
 		}
 		return RouteExact, nil
 	case RouteExact:
@@ -1970,13 +2000,10 @@ type normalizedBenchmarkVectorIndexOptions struct {
 	quantizedIndexes []collections.QuantizedVectorIndexDefinition
 }
 
-func benchmarkVectorIndexOptionsForCreate(metric Metric, opts *BenchmarkVectorIndexOptions) (normalizedBenchmarkVectorIndexOptions, error) {
-	out := normalizedBenchmarkVectorIndexOptions{strategy: collections.VectorIndexStrategyNativeRuntime}
-	if metric == MetricCosine {
-		out.strategy = collections.VectorIndexStrategyColumnGraph
-	}
+func benchmarkVectorIndexOptionsForCreate(metric Metric, opts *BenchmarkVectorIndexOptions, defaultStrategy collections.VectorIndexStrategy) (normalizedBenchmarkVectorIndexOptions, error) {
+	out := normalizedBenchmarkVectorIndexOptions{strategy: defaultStrategy}
 	if opts == nil {
-		return out, nil
+		opts = &BenchmarkVectorIndexOptions{}
 	}
 	if opts.M < 0 || opts.EfConstruction < 0 || opts.EfSearch < 0 {
 		return normalizedBenchmarkVectorIndexOptions{}, serviceError(CodeInvalidRequest, "vector index m, ef_construction, and ef_search must be non-negative")
@@ -1991,7 +2018,7 @@ func benchmarkVectorIndexOptionsForCreate(metric Metric, opts *BenchmarkVectorIn
 		default:
 			return normalizedBenchmarkVectorIndexOptions{}, serviceErrorf(CodeInvalidRequest, "unsupported vector index strategy %q", opts.Strategy)
 		}
-	} else if len(opts.QuantizedIndexes) > 0 {
+	} else if len(opts.QuantizedIndexes) > 0 || opts.Representation == collections.VectorIndexRepresentationCosineNormalizedF32V1 {
 		out.strategy = collections.VectorIndexStrategyColumnGraph
 	}
 	switch opts.Representation {

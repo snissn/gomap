@@ -25,18 +25,34 @@ APIs retain their contracts and callbacks. This plain API does not grant those
 capabilities to the native facade. The selected native canonical apply wrapper
 continues to use the original native planner and its assigned-command result.
 
-This seam is provisional constructor integration. It does not switch either
-server default, change the service's cosine ColumnGraph strategy, certify its
-buffered, typed or hybrid search tails, or qualify owner/maintenance wiring. The
-public service fixture retains both default cosine ColumnGraph under its
-supported durable profile and explicit ordinary HNSW under all three profiles.
-The complete tail must be observed rather than inferred from successful catalog
-creation.
+## Service vector strategy selection
 
-The current public discriminator advances ordinary HNSW through service create
-and idempotent create in all three profiles, then stops at service Upsert:
-`InsertBatchWithStats` requests stats that the native insert executor explicitly
-refuses. Default cosine ColumnGraph still stops at create because its combined
-column, scalar and text schema is outside the selected native eligibility. The
-four equivalent legacy cells complete their count, filtered keyword and dense
-retrieval tails. These are remaining capability gates, not accepted exclusions.
+New ordinary service indexes use the maintained `native_runtime` HNSW strategy
+when `vector_index_options.strategy` is omitted, for both legacy and native
+storage owners. `IndexInfo.vector_strategy` reports the selected declaration.
+An explicitly selected `column_graph`, typed input, normalized representation or
+quantized declaration retains its ColumnGraph contract; these requests are never
+reinterpreted or retried as ordinary HNSW.
+
+An idempotent Create with omitted strategy derives only the stored strategy from
+the existing service declaration. Existing ColumnGraph indexes keep their schema
+and strategy, including an index created by the previous cosine default. Metric,
+dimension, scalar declarations and tuning still pass the ordinary compatibility
+checks; omission does not copy arbitrary stored options. An explicit strategy
+mismatch returns conflict before staging a replacement. One existing collection
+lookup supplies both this choice and ColumnStore compatibility handling.
+
+The Hybrid consumer selects production counters for an actual native-runtime
+declaration, reusing the maintained graph-only buffered executor. ColumnGraph
+keeps its diagnostics route, and explicit public full-diagnostics requests against
+native-runtime indexes retain their refusal. No server storage constructor or
+strategy fallback is changed here. Explicit ColumnGraph/typed/normalized/quantized
+native storage eligibility remains a separate capability obligation.
+
+Dense route selection preserves valid arbitrary metadata filters: an omitted
+route uses ANN for a supported declared scalar plan and the existing exact
+executor otherwise. Explicit ANN retains its scalar validation errors; typed
+input remains on its admitted graph route. The deterministic choice is returned
+in `route`, before query execution. The compiler probe adds a second scalar-plan
+compilation for declared filtered ANN requests; its feature cost remains to be
+measured. This does not add a new document-scan or allocation-governor guarantee.

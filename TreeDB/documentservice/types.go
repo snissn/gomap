@@ -128,8 +128,9 @@ type IndexInfo struct {
 }
 
 // BenchmarkVectorIndexOptions configures the service-owned collection vector
-// index for benchmark lifecycle setups. Omitted fields preserve the legacy
-// create-index defaults used by treedb-client and treedb-haystack.
+// index for lifecycle setups. A new ordinary index defaults to native_runtime;
+// typed input, normalized representation and quantized declarations require
+// column_graph. Omitted strategy on an existing index preserves its declaration.
 type BenchmarkVectorIndexOptions struct {
 	Strategy         collections.VectorIndexStrategy       `json:"strategy,omitempty"`
 	Representation   collections.VectorIndexRepresentation `json:"representation,omitempty"`
@@ -254,7 +255,8 @@ type FilterDocumentsResponse struct {
 // DenseVectorSearchRequest scores QueryEmbedding against the index. Route
 // selects ann (compatible native_runtime or column_graph traversal; the default
 // when one exists) or exact (bounded filtered scan). Declared scalar filters use
-// native_runtime ANN; unsupported fields and shapes fail closed.
+// native_runtime ANN. Other valid filters with omitted route retain exact; an
+// explicit ANN request with unsupported scalar fields or shapes fails closed.
 type DenseVectorSearchRequest struct {
 	ExpectedGeneration        uint64                                `json:"expected_generation,omitempty"`
 	QueryEmbedding            []float32                             `json:"query_embedding"`
