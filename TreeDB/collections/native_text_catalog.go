@@ -19,6 +19,8 @@ import (
 type nativeTextCatalog struct {
 	read  *NativeJSONRead
 	admit func(uint64) error
+	// One admitted bound callback for general record copies on this scope.
+	recordAdmit func(uint64) error
 	// Optional rewrite-only key-derived map/string/slice cohorts.
 	admitKey func(uint64) error
 	// Set only after the maintained query analyzer selects one V2 term.
@@ -108,13 +110,15 @@ type nativeTextIterator struct {
 	scope                  *nativeTextCatalog
 	root                   string
 	start, end, key, value []byte
-	flags                  byte
-	valid                  bool
-	err                    error
-	includeDeleted         bool
-	max, inspected         int
-	onInspect              func(int)
-	inspectionError        func() error
+	// Owned key/successor workspace; exposed key is invalidated on movement.
+	keyWorkspace    []byte
+	flags           byte
+	valid           bool
+	err             error
+	includeDeleted  bool
+	max, inspected  int
+	onInspect       func(int)
+	inspectionError func() error
 }
 
 func (it *nativeTextIterator) inspect() error {
@@ -169,9 +173,18 @@ func (it *nativeTextIterator) seek(start []byte, forward bool) {
 		if !found {
 			return
 		}
-		if err = it.scope.admit(memtable.COWAllocationCharge(uint64(len(entry.Key) + 1))); err != nil {
-			it.err = err
+		if len(entry.Key) == int(^uint(0)>>1) {
+			it.err = memtable.ErrCOWCapacity
 			return
+		}
+		if cap(it.keyWorkspace) < len(entry.Key)+1 {
+			// Keep every growth cohort charged through the original operation.
+			// The old backing can still be reachable until GC after movement.
+			if err = it.scope.admit(memtable.COWAllocationCharge(uint64(len(entry.Key)) + 1)); err != nil {
+				it.err = err
+				return
+			}
+			it.keyWorkspace = make([]byte, len(entry.Key), len(entry.Key)+1)
 		}
 		if it.scope.admitKey != nil {
 			if err = it.scope.admitKey(uint64(len(entry.Key))); err != nil {
@@ -179,9 +192,10 @@ func (it *nativeTextIterator) seek(start []byte, forward bool) {
 				return
 			}
 		}
-		// The original receipt includes one successor byte. Keep that exact
-		// capacity so Next and tombstone skipping reuse this admitted cohort.
-		key := make([]byte, len(entry.Key), len(entry.Key)+1)
+		// Merge has consumed start, which may alias this workspace. Only now
+		// overwrite it with the winner, before any source movement reuses keys.
+		it.keyWorkspace = it.keyWorkspace[:len(entry.Key)]
+		key := it.keyWorkspace
 		copy(key, entry.Key)
 		if entry.Flags&node.FlagTombstone != 0 && !it.includeDeleted {
 			start = append(key, 0)
@@ -226,16 +240,18 @@ func (it *nativeTextIterator) Close() error {
 	it.valid = false
 	it.scope = nil
 	it.readLeaf = nil
-	it.start, it.end, it.key, it.value = nil, nil, nil, nil
+	it.start, it.end, it.key, it.value, it.keyWorkspace = nil, nil, nil, nil, nil
 	return err
 }
 func (it *nativeTextIterator) Domain() ([]byte, []byte) { return it.start, it.end }
 
 func newNativeTextCatalog(r *NativeJSONRead, admit func(uint64) error) (*collectionCatalog, error) {
-	if err := admit(memtable.COWAllocationCharge(uint64(unsafe.Sizeof(collectionCatalog{}))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeTextCatalog{})))); err != nil {
+	if err := admit(memtable.COWAllocationCharge(uint64(unsafe.Sizeof(collectionCatalog{}))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeTextCatalog{}))) + memtable.COWAllocationCharge(2*uint64(unsafe.Sizeof(uintptr(0))))); err != nil {
 		return nil, err
 	}
-	return &collectionCatalog{meta: r.meta, primaryRootName: collectionPrimaryRootName(r.meta.Name), nativeText: &nativeTextCatalog{read: r, admit: admit}}, nil
+	scope := &nativeTextCatalog{read: r, admit: admit}
+	scope.recordAdmit = scope.admitRecord
+	return &collectionCatalog{meta: r.meta, primaryRootName: collectionPrimaryRootName(r.meta.Name), nativeText: scope}, nil
 }
 
 var _ iterator.UnsafeIterator = (*nativeTextIterator)(nil)

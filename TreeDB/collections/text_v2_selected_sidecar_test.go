@@ -143,3 +143,66 @@ func TestTextV2SelectedSidecarValidatesExcludedEntries(t *testing.T) {
 		t.Fatal("missing selected ordinal was manufactured")
 	}
 }
+
+func TestTextV2SelectedSidecarSparseDifferential(t *testing.T) {
+	// Sparse source ordinals and allow-set gaps exercise both sides of the
+	// ordered merge. The final block also exercises wide varints near uint64's
+	// upper bound without changing the maintained overflow refusal.
+	for _, start := range []uint64{1, 129, 1 << 32, math.MaxUint64 - 256} {
+		norm := textV2NormBlockValue{BlockStart: start, BlockSize: 128, FieldCount: 2}
+		docmap := textV2DocMapBlockValue{BlockStart: start, BlockSize: 128}
+		var allowed []uint64
+		for offset := uint64(0); offset < 128; offset++ {
+			ordinal := start + offset
+			if offset%5 == 0 || offset%11 == 0 {
+				allowed = append(allowed, ordinal)
+			}
+			if offset%3 == 1 {
+				continue
+			}
+			flags := byte(0)
+			if offset%7 == 0 {
+				flags = textV2DocFlagTombstone
+			}
+			norm.Entries = append(norm.Entries, textV2NormBlockEntry{Ordinal: ordinal, Generation: 1 + offset, Flags: flags, FieldLengths: []uint32{uint32(offset), uint32(offset * 2)}})
+			docmap.Entries = append(docmap.Entries, textV2DocMapEntry{Ordinal: ordinal, Generation: 1 + offset, Flags: flags, DocumentID: []byte(fmt.Sprintf("doc-%d", ordinal))})
+		}
+		// Include a different block and absent source ordinals. Neither can
+		// manufacture records or disturb the next block's immutable selection.
+		allowed = append(allowed, start+128)
+		set := selectedSidecarOrdinals(allowed...)
+		before := slices.Clone(set.sorted)
+		nraw, draw := encodeTextV2NormBlockValue(norm), encodeTextV2DocMapBlockValue(docmap)
+		n, err := decodeTextV2SearchNormBlockSelected(nraw, set)
+		if err != nil {
+			t.Fatal(err)
+		}
+		d, err := decodeTextV2SearchDocMapBlockSelected(draw, set)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var wantN []textV2SearchNormEntry
+		var wantD []textV2SearchDocMapEntry
+		for i, entry := range norm.Entries {
+			if _, ok := set.ordinals[entry.Ordinal]; !ok {
+				continue
+			}
+			wantN = append(wantN, textV2SearchNormEntry{Ordinal: entry.Ordinal, Generation: entry.Generation, Flags: entry.Flags, FieldLengths: entry.FieldLengths})
+			doc := docmap.Entries[i]
+			wantD = append(wantD, textV2SearchDocMapEntry{Ordinal: doc.Ordinal, Generation: doc.Generation, Flags: doc.Flags, DocumentID: doc.DocumentID})
+		}
+		if !reflect.DeepEqual(n.Entries, wantN) || !reflect.DeepEqual(d.Entries, wantD) || !slices.Equal(set.sorted, before) {
+			t.Fatalf("sparse selected decode differs at block %d", start)
+		}
+		// Overflowing blocks retain the original full decoder's rejection;
+		// selection must not turn excluded malformed entries into success.
+		norm.BlockStart = math.MaxUint64 - 1
+		norm.Entries = []textV2NormBlockEntry{{Ordinal: math.MaxUint64 - 1, Generation: 1, FieldLengths: []uint32{1, 1}}}
+		raw := encodeTextV2NormBlockValue(norm)
+		_, fullErr := decodeTextV2SearchNormBlock(raw)
+		_, selectedErr := decodeTextV2SearchNormBlockSelected(raw, set)
+		if fullErr == nil || selectedErr == nil || fullErr.Error() != selectedErr.Error() {
+			t.Fatalf("overflow validation changed: full=%v selected=%v", fullErr, selectedErr)
+		}
+	}
+}

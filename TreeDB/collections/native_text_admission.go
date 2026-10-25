@@ -63,7 +63,16 @@ func (n *nativeTextCatalog) admitSingleTermServing(def TextIndexDefinition, opts
 
 func (n *nativeTextCatalog) value(entry node.LeafEntry, root string, key []byte) ([]byte, error) {
 	if n.singleTermFields == 0 {
-		return n.read.namedDomainValueAdmitted(entry, n.admitRecord)
+		// Production catalogs bind this once in their admitted constructor.
+		// Keep private callers that construct a catalog directly on the same
+		// original receipt, with admission before the bound callback escapes.
+		if n.recordAdmit == nil {
+			if err := n.admit(memtable.COWAllocationCharge(2 * uint64(unsafe.Sizeof(uintptr(0))))); err != nil {
+				return nil, err
+			}
+			n.recordAdmit = n.admitRecord
+		}
+		return n.read.namedDomainValueAdmitted(entry, n.recordAdmit)
 	}
 	// The callback receives an ALREADY rounded allocation promise. Spend it
 	// directly on the original receipt before making the independent source
