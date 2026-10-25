@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/powerlosscert"
 	"github.com/snissn/gomap/TreeDB/internal/powerlossoracle"
@@ -138,10 +139,52 @@ func TestPowerLossCertificationGroupedAmbiguousFailureDirtyPublicReopen(t *testi
 // TestPowerLossCertificationGroupedRotationExternalPublicReopen retains the
 // complete stable boundary for a shared group spanning command-WAL rotation
 // and separately synchronized values larger than the materialized-RID limit.
+// groupedExternalFirstFrameTarget fits the actual two-RID canonical envelope
+// and forces its covering barrier into the next segment. The native revision
+// layout may differ; neither layout may rotate before accepting the first frame.
+func groupedExternalFirstFrameTarget(t *testing.T) int64 {
+	t.Helper()
+	var smallest, largest int64
+	for _, revision := range []uint64{0, 1} {
+		operations := []commitlog.RawKVOperation{
+			{Op: commitlog.RawKVOpSetRID, Key: []byte("grouped-external/0"), RID: 1, Revision: revision},
+			{Op: commitlog.RawKVOpSetRID, Key: []byte("grouped-external/1"), RID: 2, Revision: revision},
+		}
+		payload, err := commitlog.EncodeRawKVBatchPayload(operations)
+		if err != nil {
+			t.Fatal(err)
+		}
+		format := commitlog.PayloadFormatRawKVBatchV1
+		if revision != 0 {
+			format = commitlog.PayloadFormatRawKVBatchV2
+		}
+		frame, err := commitlog.EncodeCommandFrameV2(commitlog.CommandEnvelope{
+			Version: commitlog.CommandFrameVersionV2, LSN: 1,
+			DurabilityClass: commitlog.CommandDurabilityRelaxed,
+			Kind:            commitlog.CommandKindRawKVBatch, Scope: commitlog.CommandScopeRawKV,
+			PayloadFormat: format, Payload: payload,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		size := int64(8 + len(frame))
+		if smallest == 0 || size < smallest {
+			smallest = size
+		}
+		if size > largest {
+			largest = size
+		}
+	}
+	if 2*smallest <= largest {
+		t.Fatal("external fixture cannot force its second-frame rotation")
+	}
+	return largest
+}
+
 func TestPowerLossCertificationGroupedRotationExternalPublicReopen(t *testing.T) {
 	dir := t.TempDir()
 	opts := commandWALDurabilityProofOptions(dir)
-	opts.CommandWALSegmentTargetBytes = 1
+	opts.CommandWALSegmentTargetBytes = groupedExternalFirstFrameTarget(t)
 	opts.ValueLog.PointerThreshold = 1
 	opts.ValueLog.ForcePointers = true
 	database, err := Open(opts)

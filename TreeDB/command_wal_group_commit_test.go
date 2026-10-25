@@ -1651,16 +1651,24 @@ func TestPublicCommandWALGroupCommitDependencyFailurePoisonsAllWaiters(t *testin
 	var cutOnce sync.Once
 	var initializers atomic.Int32
 	var cutPublished atomic.Bool
-	var pathOnlyDebtSyncs atomic.Int32
+	var retainedDebtSyncs atomic.Int32
 	var appendedLSN atomic.Uint64
 	var observeMu sync.Mutex
-	var lastFramePath string
-	var lastFrameIdentity os.FileInfo
+	var debtFramePath, lastFramePath string
+	var debtFrameIdentity, lastFrameIdentity os.FileInfo
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
 		observeMu.Lock()
 		defer observeMu.Unlock()
 		if event.Resource == durabilitycut.ResourceCommandWAL && event.Point == durabilitycut.AfterDependencyAppend {
 			appendedLSN.Store(event.LSN)
+			if event.LSN == 1 {
+				debtFramePath = event.Path
+				var err error
+				debtFrameIdentity, err = os.Stat(event.Path)
+				if err != nil {
+					return err
+				}
+			}
 			if event.LSN == 2 {
 				lastFramePath = event.Path
 				var err error
@@ -1671,13 +1679,9 @@ func TestPublicCommandWALGroupCommitDependencyFailurePoisonsAllWaiters(t *testin
 			}
 		}
 		if event.Resource == durabilitycut.ResourceCommandWAL && event.Point == durabilitycut.BeforeDependencyFileSync {
-			// Rotation-debt observations carry no borrowed handle. Account for
-			// them, then cut the retained published writer sync before the barrier
-			// append. Initializer I/O must complete without becoming the fault.
-			if event.StablePath == nil {
-				pathOnlyDebtSyncs.Add(1)
-				return nil
-			}
+			// Validate the exact earlier debt file, then cut the retained LSN2
+			// writer sync before the barrier append. Initializer I/O must
+			// complete without becoming the fault; no pathname-only sync qualifies.
 			initialization, err := commandWALFixtureSyncIdentity(event)
 			if err != nil {
 				return err
@@ -1692,6 +1696,13 @@ func TestPublicCommandWALGroupCommitDependencyFailurePoisonsAllWaiters(t *testin
 			held, err := event.StablePath.Stat()
 			if err != nil {
 				return err
+			}
+			if debtFrameIdentity != nil && event.Path == debtFramePath && os.SameFile(held, debtFrameIdentity) {
+				if debtFramePath == lastFramePath || lastFrameIdentity == nil || os.SameFile(debtFrameIdentity, lastFrameIdentity) {
+					return fmt.Errorf("debt and LSN2 frame did not occupy distinct physical segments")
+				}
+				retainedDebtSyncs.Add(1)
+				return nil
 			}
 			if lastFrameIdentity == nil || event.Path != lastFramePath || !os.SameFile(held, lastFrameIdentity) {
 				return fmt.Errorf("dependency cut does not retain the published LSN2 frame file: %#v", event)
@@ -1710,8 +1721,8 @@ func TestPublicCommandWALGroupCommitDependencyFailurePoisonsAllWaiters(t *testin
 	if !cutPublished.Load() || syncingGroup.Load() != 2 {
 		t.Fatalf("cut published dependency=%t group=%d, want true/2", cutPublished.Load(), syncingGroup.Load())
 	}
-	if pathOnlyDebtSyncs.Load() == 0 {
-		t.Fatal("did not observe preceding path-only rotation debt sync")
+	if retainedDebtSyncs.Load() == 0 {
+		t.Fatal("did not observe preceding exact retained LSN1 rotation debt sync")
 	}
 	wantInitializers := int32(0)
 	if db.Stats()["treedb.command_wal.writer.container"] == "fixed" {

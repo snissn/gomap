@@ -531,6 +531,34 @@ func TestCommandWALCleanupStatsCountConsumedBytes(t *testing.T) {
 	db := &DB{dir: dir, commandWAL: true}
 	db.state.Store(&DBState{AppliedCommandLSN: 1})
 	installCommandWALCleanupRootForTest(t, db, 1, 1)
+	// Installing a live owner creates seq3. A positively validated empty fixed
+	// container is covered but must remain active; an empty stream is excluded.
+	ownerPath, _ := db.commandJournal.ActiveSegmentSnapshot()
+	if filepath.Base(ownerPath) != "commit-l0-000003.log" {
+		t.Fatalf("cleanup owner path=%q, want new sequence3", ownerPath)
+	}
+	ownerFile, err := os.Open(ownerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, err := commitlog.NewReaderFromFileWithOptions(ownerFile, commitlog.Options{})
+	if err != nil {
+		_ = ownerFile.Close()
+		t.Fatal(err)
+	}
+	emptyFixed := reader.IsEmptyFixedContainer()
+	if err = reader.Close(); err != nil {
+		t.Fatal(err)
+	}
+	ownerInfo, err := ownerFile.Stat()
+	_ = ownerFile.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	extraCovered, extraBytes := uint64(0), uint64(0)
+	if emptyFixed {
+		extraCovered, extraBytes = 1, uint64(ownerInfo.Size())
+	}
 
 	if err := db.CleanupCommandWALCoveredSegments(false); err != nil {
 		t.Fatalf("CleanupCommandWALCoveredSegments: %v", err)
@@ -543,9 +571,9 @@ func TestCommandWALCleanupStatsCountConsumedBytes(t *testing.T) {
 		"treedb.command_wal.cleanup.proof.durable_wal_lsn":                    1,
 		"treedb.command_wal.cleanup.proof.selected_root_commit_seq":           1,
 		"treedb.command_wal.cleanup.proof.older_root_commit_seq":              0,
-		"treedb.command_wal.cleanup.covered_segments_total":                   1,
-		"treedb.command_wal.cleanup.retained_segments_total":                  1,
-		"treedb.command_wal.cleanup.retained.reason.active_segments_total":    0,
+		"treedb.command_wal.cleanup.covered_segments_total":                   1 + extraCovered,
+		"treedb.command_wal.cleanup.retained_segments_total":                  1 + extraCovered,
+		"treedb.command_wal.cleanup.retained.reason.active_segments_total":    extraCovered,
 		"treedb.command_wal.cleanup.retained.reason.uncovered_segments_total": 1,
 		"treedb.command_wal.cleanup.retained.reason.pinned_segments_total":    0,
 		"treedb.command_wal.cleanup.retained.reason.error_segments_total":     0,
@@ -557,6 +585,23 @@ func TestCommandWALCleanupStatsCountConsumedBytes(t *testing.T) {
 	} {
 		if got := commandWALTestStatUint64(t, stats, key); got != want {
 			t.Fatalf("%s=%d, want %d (stats=%#v)", key, got, want, stats)
+		}
+	}
+	for key, want := range map[string]uint64{
+		"treedb.command_wal.cleanup.covered_bytes_total":  uint64(coveredInfo.Size()) + extraBytes,
+		"treedb.command_wal.cleanup.retained_bytes_total": uint64(activeInfo.Size()) + extraBytes,
+		"treedb.command_wal.cleanup.removed_bytes_total":  uint64(coveredInfo.Size()),
+	} {
+		if got := commandWALTestStatUint64(t, stats, key); got != want {
+			t.Fatalf("%s=%d, want %d", key, got, want)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(WALDirPath(dir), "commit-l0-000001.log")); !os.IsNotExist(err) {
+		t.Fatalf("covered seq1 still exists: %v", err)
+	}
+	for _, retained := range []string{activeInfo.Name(), ownerInfo.Name()} {
+		if _, err := os.Stat(filepath.Join(WALDirPath(dir), retained)); err != nil {
+			t.Fatalf("retained %s: %v", retained, err)
 		}
 	}
 	// The exact counts and byte totals are the observed-work signals. On

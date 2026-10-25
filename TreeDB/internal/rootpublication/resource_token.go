@@ -822,29 +822,57 @@ func (token *StableResourceToken) SyncThrough() error {
 	return token.syncThrough(token.frontier)
 }
 
-func (token *StableResourceToken) syncThrough(frontier DurableFrontier) error {
-	if token == nil || token.released.Load() {
+// SyncThroughWithFileSyncObserver observes only a physical producer sync on its
+// exact retained file. Covered frontiers emit neither callback. Imported tokens
+// forward observation to the source that performs the operation. Callbacks may
+// not retain or close the borrowed file. An after error does not undo successful
+// physical-work accounting; all errors retain their original identity.
+func (token *StableResourceToken) SyncThroughWithFileSyncObserver(before, after func(*os.File) error) error {
+	if token == nil {
 		return ErrResourceOwnership
+	}
+	err, _ := token.syncThroughWithFileSyncObserver(token.frontier, before, after)
+	return err
+}
+
+func (token *StableResourceToken) syncThrough(frontier DurableFrontier) error {
+	err, _ := token.syncThroughWithFileSyncObserver(frontier, nil, nil)
+	return err
+}
+
+func (token *StableResourceToken) syncThroughWithFileSyncObserver(frontier DurableFrontier, before, after func(*os.File) error) (error, bool) {
+	if token == nil || token.released.Load() {
+		return ErrResourceOwnership, false
 	}
 	started := time.Now()
 	var err error
+	physicalSucceeded := false
 	if !token.hasSyncedFrontier || !durableFrontierCovers(token.syncedFrontier, frontier) {
+		if token.importedSource == nil && before != nil {
+			if err := before(token.pinned); err != nil {
+				return err, false
+			}
+		}
 		physicalStarted := time.Now()
 		if token.importedSource != nil {
-			err = token.importedSource.syncThrough(frontier)
+			err, physicalSucceeded = token.importedSource.syncThroughWithFileSyncObserver(frontier, before, after)
 		} else if token.ownedOperations != nil {
 			err = token.ownedOperations.SyncThrough(token.pinned, frontier)
 		} else {
 			err = token.sync(token.pinned, frontier)
 		}
-		if err == nil {
+		if err == nil || physicalSucceeded {
+			physicalSucceeded = true
 			token.metrics.physicalFileSyncs.Add(1)
 			token.metrics.physicalFileSyncNanos.Add(uint64(time.Since(physicalStarted)))
+		}
+		if err == nil && token.importedSource == nil && after != nil {
+			err = after(token.pinned)
 		}
 	}
 	token.metrics.syncs.Add(1)
 	token.metrics.syncNanos.Add(uint64(time.Since(started)))
-	return err
+	return err, physicalSucceeded
 }
 
 // durableFrontierCovers reads already-validated, privately owned frontiers.

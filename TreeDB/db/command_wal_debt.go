@@ -2,6 +2,7 @@ package db
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"sync"
@@ -198,14 +199,18 @@ func (debt *CommandWALDependencyDebt) syncRotationFilesThrough(root, walDir stri
 		return err
 	}
 	for _, token := range tokens {
+		if !durabilitycut.Enabled() {
+			if err := token.SyncThrough(); err != nil {
+				return err
+			}
+			continue
+		}
 		path := filepath.Join(walDir, filepath.Base(token.DiagnosticPath()))
-		if err := durabilitycut.EmitPath(durabilitycut.BeforeDependencyFileSync, durabilitycut.ResourceCommandWAL, root, path); err != nil {
-			return err
-		}
-		if err := token.SyncThrough(); err != nil {
-			return err
-		}
-		if err := durabilitycut.EmitPath(durabilitycut.AfterDependencyFileSync, durabilitycut.ResourceCommandWAL, root, path); err != nil {
+		if err := token.SyncThroughWithFileSyncObserver(func(file *os.File) error {
+			return durabilitycut.EmitStablePath(durabilitycut.BeforeDependencyFileSync, durabilitycut.ResourceCommandWAL, root, path, file)
+		}, func(file *os.File) error {
+			return durabilitycut.EmitStablePath(durabilitycut.AfterDependencyFileSync, durabilitycut.ResourceCommandWAL, root, path, file)
+		}); err != nil {
 			return err
 		}
 	}
