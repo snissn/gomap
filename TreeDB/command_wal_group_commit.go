@@ -735,6 +735,11 @@ func (group *publicCommandWALGroupCommit) runLeader(tdb *DB) {
 	if !immediate {
 		delay = time.Until(group.pendingDeadline)
 		immediate = delay <= 0
+		if immediate && !group.pendingTriggered {
+			// Collection can expire before this leader gets to wait. It is
+			// still a timeout cut, without creating a timer or waiting again.
+			group.triggerTimeout.Add(1)
+		}
 	}
 	wake := group.wake
 	timer := group.timer

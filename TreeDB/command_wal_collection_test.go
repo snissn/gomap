@@ -102,6 +102,7 @@ func TestPublicCommandWALCollectionBudgetAgesFromRegistration(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
+	beforeStats := db.Stats()
 	db.commandWALGroupCommit.delay = time.Hour
 	db.commandWALGroupCommit.testAfterRegister = func(_ uint64, _ bool) {
 		// Model collection time already spent while the previous barrier ran.
@@ -133,4 +134,17 @@ func TestPublicCommandWALCollectionBudgetAgesFromRegistration(t *testing.T) {
 		<-done
 		t.Fatal("leader takeover restarted an expired collection budget")
 	}
+	afterStats := db.Stats()
+	requirePublicStatDelta(t, beforeStats, afterStats, "treedb.command_wal.file_sync.calls_total", 1)
+	requirePublicStatDelta(t, beforeStats, afterStats, "treedb.command_wal.group_commit.syncs_total", 1)
+	requirePublicStatDelta(t, beforeStats, afterStats, "treedb.command_wal.group_commit.groups_total", 1)
+	requirePublicStatDelta(t, beforeStats, afterStats, "treedb.command_wal.group_commit.trigger.timeout_total", 1)
+	requirePublicStatDelta(t, beforeStats, afterStats, "treedb.command_wal.group_commit.trigger.explicit_sync_total", 0)
+	db.commandWALGroupCommit.mu.Lock()
+	timer := db.commandWALGroupCommit.timer
+	db.commandWALGroupCommit.mu.Unlock()
+	if timer != nil {
+		t.Fatal("expired collection initialized a new timer")
+	}
+	requireRawKVValue(t, db, []byte("aged"), []byte("value"))
 }
