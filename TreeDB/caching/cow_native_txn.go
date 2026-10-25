@@ -20,6 +20,9 @@ func (db *DB) BeginNativeConditionalTxn() (backenddb.NativeConditionalTxn, error
 	if db == nil || db.cow == nil {
 		return nil, ErrCOWUnsupported
 	}
+	if err := db.checkpointNativeProducerPressure(); err != nil {
+		return nil, err
+	}
 	charge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(ConditionalTxn{}))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeConditionalTxn{})))
 	lease, err := db.cow.budget.AcquireExternal(charge)
 	if err != nil {
@@ -31,6 +34,29 @@ func (db *DB) BeginNativeConditionalTxn() (backenddb.NativeConditionalTxn, error
 		return nil, err
 	}
 	return &nativeConditionalTxn{ConditionalTxn: tx, lease: lease}, nil
+}
+
+// Semantic-only publications retain allocation reservations without adding raw
+// memtable bytes, so the raw generation preflight cannot schedule their drain.
+// Leave a quarter of the finite reservation budget for the next producer's
+// preparation. This is a maintenance watermark, not an admission promise: the
+// allocator still refuses oversized work or reservations held by old readers.
+func (db *DB) checkpointNativeProducerPressure() error {
+	c := db.cow
+	limit := c.budget.Limits().MaxInFlightBytes
+	watermark := limit - limit/4
+	if c.budget.Stats().ReservedBytes < watermark {
+		return nil
+	}
+	// Concurrent producers join one drain and recheck after it, before acquiring
+	// any opening, allocation receipt, writer gate or append authority. Never
+	// retry an application callback or a partially prepared transaction here.
+	c.nativePressureMu.Lock()
+	defer c.nativePressureMu.Unlock()
+	if c.budget.Stats().ReservedBytes < watermark {
+		return nil
+	}
+	return db.Checkpoint()
 }
 func (tx *nativeConditionalTxn) State() backenddb.NativeSemanticState {
 	if tx == nil || tx.ConditionalTxn == nil || tx.closed || tx.snap == nil {

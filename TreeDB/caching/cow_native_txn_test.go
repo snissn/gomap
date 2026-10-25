@@ -4,12 +4,50 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/txnhistory"
 )
+
+func TestCOWNativeProducerPressureCannotDiscountRetainedReservations(t *testing.T) {
+	cache, backend := nativeBridgeFixture(t, true)
+	held, err := backend.BeginNativeConditionalTxn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	before := cache.cow.budget.Stats()
+	leaseCharge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
+	filler, err := cache.cow.budget.AcquireExternal(cache.cow.budget.Limits().MaxInFlightBytes - before.ReservedBytes - leaseCharge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer filler.Close()
+	next, prepared := backend.CommandWALNextLSN(), cache.cow.prepareCalls.Load()
+	frontiers := cache.cow.prefix.LogicalFrontiers()
+	tx, err := backend.BeginNativeConditionalTxn()
+	if tx != nil || !errors.Is(err, memtable.ErrCOWCapacity) {
+		if tx != nil {
+			_ = tx.Close()
+		}
+		t.Fatalf("retained reservation admitted a producer: %v/%v", tx, err)
+	}
+	if backend.CommandWALNextLSN() != next || cache.cow.prepareCalls.Load() != prepared || cache.cow.prefix.LogicalFrontiers() != frontiers {
+		t.Fatal("pressure refusal prepared, assigned or installed a publication")
+	}
+	filler.Close()
+	tx, err = backend.BeginNativeConditionalTxn()
+	if err != nil {
+		t.Fatalf("admission after retained reservation release: %v", err)
+	}
+	if err := tx.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
 
 type nativeTxnTestPlan struct {
 	state    *testSemanticState

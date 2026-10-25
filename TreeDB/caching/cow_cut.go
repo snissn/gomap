@@ -196,6 +196,7 @@ type cowCache struct {
 	generationBase                                                                                 uint64           // exact identical empty-generation startup history charge
 	handoff                                                                                        *cowFlushHandoff // serialized by the existing flush coordinator
 	semanticMu                                                                                     sync.Mutex
+	nativePressureMu                                                                               sync.Mutex // only before a native producer captures its opening
 	semanticHead, semanticTail, semanticFailed                                                     *rootpublication.SemanticCleanup
 	semanticRunning, semanticStopped, closeCleanupDone                                             bool
 	flushWake                                                                                      chan struct{}
