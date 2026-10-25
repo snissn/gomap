@@ -522,20 +522,41 @@ func (w *COWWriter) Prepare(entries []COWMutation, opts COWPrepareOptions) (*COW
 		b.mu.Unlock()
 		return nil, ErrCOWPending
 	}
-	total := c.Total()
-	if g.frozen || !cowFits(b.limits.MaxInFlightBytes, b.stats.ReservedBytes, total) ||
-		!cowFits(b.limits.MaxGenerationBytes, g.generationHistoryLocked(), g.pending) ||
-		!cowFits(b.limits.MaxGenerationBytes, g.generationHistoryLocked()+g.pending, c.History()) ||
-		!b.retirementFitsLocked(total) ||
-		opts.ResourceSlots > b.limits.MaxResources-len(g.ids) || !b.addLocked(total) {
+	if g.frozen || opts.ResourceSlots > b.limits.MaxResources-len(g.ids) {
 		b.mu.Unlock()
 		return nil, ErrCOWCapacity
 	}
+	incremental := false
+	if !cowPreparationFitsLocked(g, c) {
+		// Preserve the ordinary pre-admitted fast path. Only raw PUTs (which
+		// include stored tombstones) can use the same mutation engine's finer
+		// reserve-before-effect path when its independent-path bound will not
+		// fit. Ordered history and physical deletion retain their proven bound.
+		eligible := w.ordered == nil && len(entries) != 0
+		for _, entry := range entries {
+			eligible = eligible && !entry.Remove
+		}
+		c.Nodes = 0
+		workCharge := cowAllocation(uint64(unsafe.Sizeof(cowPreparedNodeWork{})))
+		_, extraFits := cowAdd(c.Total(), workCharge)
+		c.Temporary, _ = cowAdd(c.Temporary, workCharge)
+		if !eligible || !extraFits || !cowPreparationFitsLocked(g, c) {
+			b.mu.Unlock()
+			return nil, ErrCOWCapacity
+		}
+		incremental = true
+	}
+	total := c.Total()
+	b.addLocked(total) // the same locked admission above proved this addition
 	g.pending += total
 	b.stats.ReservedBytes += total
 	b.mu.Unlock()
 	p := &COWPrepared{writer: w, private: w.private.Copy(), charge: c,
 		ids: make([]COWResourceID, 0, opts.ResourceSlots), owners: make([]cowResourceOwner, 0, opts.ResourceSlots), maxEntries: w.private.Len() + len(entries)}
+	var work *cowPreparedNodeWork
+	if incremental {
+		work = &cowPreparedNodeWork{prepared: p}
+	}
 	var logicalDelta cowLogicalDelta
 	if w.ordered != nil {
 		p.ordered = w.ordered.fork()
@@ -570,8 +591,28 @@ func (w *COWWriter) Prepare(entries []COWMutation, opts COWPrepareOptions) (*COW
 			ownedKey = string(e.Key)
 		}
 		value := cowEncodeValue(e)
-		previous, _ := p.private.Set(ownedKey, value)
+		var previous cowValue
+		if work == nil {
+			previous, _ = p.private.Set(ownedKey, value)
+		} else {
+			var ready bool
+			previous, _, ready, err = p.private.SetWithWork(ownedKey, value, work)
+			if err != nil || !ready {
+				if err == nil {
+					err = work.failure
+				}
+				if err == nil {
+					err = ErrCOWCapacity
+				}
+				work.prepared = nil
+				p.abortUnpublished()
+				return nil, err
+			}
+		}
 		logicalDelta.replace(len(e.Key), value, previous)
+	}
+	if work != nil {
+		work.prepared = nil
 	}
 	p.logicalBytes, p.logicalOverflow = logicalDelta.bytes, logicalDelta.overflow
 	p.root = &COWRoot{tree: p.private.ImmutableCopy(), generation: g}
@@ -590,16 +631,72 @@ func (w *COWWriter) Prepare(entries []COWMutation, opts COWPrepareOptions) (*COW
 	if err := p.reconcileNodes(actualNodes); err != nil {
 		// No resource callback or published source edge exists yet. End every
 		// private postimage alias before returning the original reservation.
-		p.private, p.ordered, p.root, p.ids, p.owners, p.writer = nil, nil, nil, nil, nil, nil
-		b.mu.Lock()
-		g.pending -= total
-		b.stats.ReservedBytes -= total
-		b.stats.TotalBytes -= total
-		b.mu.Unlock()
+		p.abortUnpublished()
 		return nil, err
 	}
 	w.pending = p
 	return p, nil
+}
+
+// Caller holds the original writer and budget locks. This checks the same
+// finite limits for coarse admission and its raw reserve-before-effect path.
+func cowPreparationFitsLocked(g *cowGeneration, c COWCharge) bool {
+	b := g.budget
+	total := c.Total()
+	history, ok := cowAdd(g.generationHistoryLocked(), g.pending)
+	return ok && cowFits(b.limits.MaxInFlightBytes, b.stats.ReservedBytes, total) &&
+		cowFits(b.limits.MaxGenerationBytes, history, c.History()) &&
+		b.retirementFitsLocked(total) && cowFits(b.limits.MaxTotalBytes, b.stats.TotalBytes, total)
+}
+
+// The existing Map.Work also counts comparisons and copied bytes. Spending
+// their rounded conservative allowance on the original preparation is safe;
+// final reconciliation retains only actual node/backing allocation charges.
+// No node, work counter or separate capacity authority survives preparation.
+type cowPreparedNodeWork struct {
+	prepared *COWPrepared
+	failure  error
+}
+
+func (work *cowPreparedNodeWork) Reserve(_ uint64, bytes uint64) bool {
+	if bytes == 0 {
+		return true
+	}
+	p := work.prepared
+	g := p.writer.generation
+	b := g.budget
+	n := cowAllocation(bytes)
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		work.failure = ErrCOWClosed
+		return false
+	}
+	nodes, ok := cowAdd(p.charge.Nodes, n)
+	if !ok || g.frozen || !cowPreparationFitsLocked(g, COWCharge{Nodes: n}) {
+		work.failure = ErrCOWCapacity
+		return false
+	}
+	b.addLocked(n)
+	g.pending += n
+	b.stats.ReservedBytes += n
+	p.charge.Nodes = nodes
+	return true
+}
+
+// Before Publish there are no resource callbacks or acquired source edges.
+// Drop every private alias before refunding the CURRENT original receipt,
+// including node credits admitted after initial header/payload reservation.
+func (p *COWPrepared) abortUnpublished() {
+	g := p.writer.generation
+	b := g.budget
+	total := p.charge.Total()
+	p.private, p.ordered, p.root, p.ids, p.owners, p.writer = nil, nil, nil, nil, nil, nil
+	b.mu.Lock()
+	g.pending -= total
+	b.stats.ReservedBytes -= total
+	b.stats.TotalBytes -= total
+	b.mu.Unlock()
 }
 
 // reconcileNodes returns only an unspent part of the original proven node
