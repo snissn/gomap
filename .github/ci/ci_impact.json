@@ -12,7 +12,7 @@
     "M0 observation is manual diagnostic-only on a separately fixed product; no forecast starts it or replaces failed M0 acceptance.",
     "Bounded maintenance comparison is a manually granted diagnostic on fixed baseline/candidate products; no forecast starts it or establishes cost, M0 or native acceptance."
   ],
-  "discovery_source_sha256": "5ffb7e03c51ed964087e2cc195481833d8107dc7ca686348083111e0678661fe",
+  "discovery_source_sha256": "e536c38b3f31e6d8eefbe4ef3458bf341cbf07aa00c9b8c51b735c1d5cdd92dd",
   "dynamic_consumers": [
     {
       "behavior": "AST/WalkDir discovery and go test subprocess producer witnesses; all TreeDB test/race members retained",
@@ -3007,7 +3007,7 @@
         },
         "workflow_dispatch": null
       },
-      "git_blob": "b9766c12f0f24c927e18d7a48ad670406d15e4eb",
+      "git_blob": "9e222e6ebe64da0f259319d727cdf10b68fe4d8f",
       "jobs": {
         "capture": {
           "checkout": [
@@ -3032,7 +3032,7 @@
           "runs_on": "${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && vars.TREEDB_PERF_RUNNER_LABEL != '' && vars.TREEDB_PERF_RUNNER_PR != '' && vars.TREEDB_PERF_RUNNER_PR == format('{0}', github.event.pull_request.number) && format('{0}-m0', vars.TREEDB_PERF_RUNNER_LABEL) || 'ubuntu-24.04' }}"
         }
       },
-      "sha256": "90b1d628cb366990391493cfd191b03ef49c83e51ad089991ce6a355e13af69f"
+      "sha256": "688e5de2f4025d2e45a7fd0b37cfa7cf686de01399c67a3b51431daf22253c96"
     },
     "unified-bench-suites.yml": {
       "coverage": "existing execution only; triggers/path filters are unchanged",
