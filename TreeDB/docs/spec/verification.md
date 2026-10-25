@@ -4498,3 +4498,30 @@ headroom is exhausted. These controls do not activate unconverted collections.
   `TestCapturedSyncSharedSegmentProgressAndOutOfOrderRelease`, and
   `TestCapturedSyncFinalLegalLSN`: retained exact identity, independent physical
   syncs, rotations, last legal LSN and Close joining all pins.
+
+### Logical rotation and physical command-WAL capacity
+
+- `TestCommandJournalPreservesLogicalRotationTarget` keeps the configured
+  logical target, including zero and a large positive target, independent of
+  the fixed container's initial physical reserve.
+- `TestFixedWALCheckedPhysicalGeometry` checks capacity, alignment and overflow
+  before file creation or mutation. `TestCommandJournalZeroTargetStreamDoesNotRotate`
+  keeps zero-target stream journals free of logical size rotations.
+- `TestFixedWALPhysicalBoundaryZeroTargetAndReopen` requires fixed-container
+  capacity checks even when logical rotation is disabled.
+- `TestFixedWALDemandGrowthAndForcedReset` exercises both rotation routes,
+  bounded pressure growth, the target-derived ceiling and a small forced
+  successor. `TestFixedWALOversizedFrameCapacityDoesNotAmplify` permits one
+  legal atomic frame without granting later unbounded growth.
+- `TestFixedWALReopenLargerTargetRotatesAtPhysicalCapacity` and
+  `TestFixedWALReopenPhysicalCapacityIncludesBufferedFrames` preserve occupied
+  header capacity and include accepted, buffered frames in the fit decision.
+- `TestCommandJournalMutableRotationSizeBeforeLSN` covers V1/V2 and both rotation
+  routes: callback growth beyond actual capacity returns no assigned LSN or new
+  pending bytes, preserves the predecessor and retains existing token custody;
+  growth that still fits succeeds. `TestCommandJournalBeforeAppendMutableSizeReprepares`
+  requires fresh sizing after mutable append hooks for both codecs.
+
+These geometry controls supplement the existing initialization, corruption,
+captured-resource, namespace, failure and public pointer/reopen controls. They
+do not replace those durability proofs or establish performance acceptance.

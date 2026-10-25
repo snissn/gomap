@@ -936,3 +936,13 @@ strict V2 stream/full-sync container on positively identified memory filesystems
 and initialized immutable extents on supported persistent or unknown filesystems.
 The choice uses the actual opened file at creation; existing files and captured
 handles keep their detected format. See [storage format](storage-format.md#initialized-command-wal-container-v3).
+
+The configured logical command-WAL segment target is independent of initialized
+physical capacity. Physical pressure grows fresh reserves geometrically within
+that target's physical byte budget; forced/checkpoint successors reset to a small
+reserve. A zero logical target still requires physical-fit checks. Successor
+preparation precedes installation; required file and namespace obligations
+follow the existing policy and settle before durable ACK. Fixed-container
+initialization itself is completely synced before publication. Capacity changes
+do not change logical frontiers, dependency closure, or ACK requirements.
+Occupied published files retain their existing size and identity.
