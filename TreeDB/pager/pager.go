@@ -1101,7 +1101,7 @@ func (p *Pager) syncIndexDataWithStableFileAtPath(file *os.File, path string, w 
 		p.durableFileSize.Store(info.Size())
 	}
 	if !p.readOnly && !p.memoryOnly {
-		if e := durabilitycut.EmitPath(durabilitycut.AfterIndexDataSync, durabilitycut.ResourceIndex, filepath.Dir(path), path); e != nil {
+		if e := durabilitycut.EmitStablePath(durabilitycut.AfterIndexDataSync, durabilitycut.ResourceIndex, filepath.Dir(path), path, file); e != nil {
 			return false, e
 		}
 	}
@@ -1155,7 +1155,7 @@ func (p *Pager) syncDirtyChunksWithFileWork(syncFile bool, firstChunk int, syncT
 
 	var syncErr error
 	if indexCut {
-		syncErr = durabilitycut.EmitPath(durabilitycut.BeforeIndexDataSync, durabilitycut.ResourceIndex, filepath.Dir(path), path)
+		syncErr = durabilitycut.EmitStablePath(durabilitycut.BeforeIndexDataSync, durabilitycut.ResourceIndex, filepath.Dir(path), path, syncTarget)
 	}
 	// Hold mappings stable through mapped-range and file sync.
 	p.mu.RLock()

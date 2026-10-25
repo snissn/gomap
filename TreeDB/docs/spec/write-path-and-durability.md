@@ -59,6 +59,15 @@ oracle's `before-publication-seal-write` and
 The record becomes stable only with the subsequent exact-index sync and becomes
 recovery-selectable only after the alternate meta is written and synced. These
 events describe ordered writes; they are not claims that an fsync happened.
+This DATA seal/META order is unchanged. The temporarily supported explicit V6
+PRIMARY format instead stages its opposite complete capsule and performs one
+full-dirty PRIMARY file fence covering the capsule and newly sealed banks.
+Its actual previous slot and current/parent closures stay intact, and recovery
+independently validates every new physical operand before selection. Required
+DATA and external-file fences remain separate; a pre-install validation or
+completed frontier cannot cover the newly staged capsule. Post-install failure
+is ambiguous and blocks further writes until reopen. See
+[PRIMARY recovery](recovery.md#temporarily-supported-explicit-primary-capsule-recovery).
 
 `Stable` means present in the modeled image after process-volatile file bytes
 and unsynced namespace mutations have been discarded. `Write`, mapped dirtying,

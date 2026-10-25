@@ -77,8 +77,8 @@ func TestPrimaryReplacementReusesDurableRawLeafPrefix(t *testing.T) {
 	if after := generation(); after != before {
 		t.Fatalf("PRIMARY replacement changed DATA generation %d -> %d", before, after)
 	}
-	if leaf != 0 || primary != 2 {
-		t.Fatalf("unchanged leaf physical witnesses=%d want0; mutable PRIMARY fences=%d want2", leaf, primary)
+	if leaf != 0 || primary != 1 {
+		t.Fatalf("unchanged leaf physical witnesses=%d want0; mutable PRIMARY fences=%d want1", leaf, primary)
 	}
 	// Growing the SAME raw-leaf inode must fall back to fresh capture and sync.
 	files, err := filepath.Glob(filepath.Join(dir, "leaf_vlog", "*.log"))
@@ -121,7 +121,7 @@ func TestPrimaryReplacementReusesDurableRawLeafPrefix(t *testing.T) {
 			grew = true
 		}
 	}
-	if !grew || leaf == 0 || primary != 2 {
+	if !grew || leaf == 0 || primary != 1 {
 		t.Fatalf("same-inode growth=%v leaf witnesses=%d PRIMARY fences=%d", grew, leaf, primary)
 	}
 	if err := d.Close(); err != nil {

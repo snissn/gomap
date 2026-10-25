@@ -941,8 +941,13 @@ Inline absence allocates no component page. Put components and dependency
 metadata use distinct physical bank identities with checksums and digests.
 
 Publication makes required DATA and external dependencies durable before
-installing the alternate complete capsule and fencing the actual PRIMARY
-file. This is the selected format's durable authority: DATA META pages 0 and 1
+installing the alternate complete capsule. Newly sealed PRIMARY banks and that
+capsule share one final full-dirty synchronization of the exact captured PRIMARY
+file. The currently selected capsule and every byte of its current and parent
+closures remain retained and unmodified through completion. A complete-looking
+new capsule is eligible only when its entire physical closure validates; before
+the final fence, recovery can select the previous slot or a completely persisted
+new slot. This is the selected format's durable authority: DATA META pages 0 and 1
 are not rewritten as a second selector. Ordinary `DurabilityNoWALFast` visibility
 and ACK still may precede this sealed root; explicit Sync, Checkpoint and clean
 Close require a complete eligible publication. A failure after capsule bytes
@@ -4222,12 +4227,21 @@ decodes and independently validates both eligible physical slots and each
 current/parent resource closure; no historical selector or parent promotion is
 introduced.
 
-Required DATA and external dependencies, including newly referenced PRIMARY
-component/dependency banks and their namespaces, still become durable before
-alternate capsule installation. The final PRIMARY capsule fence is additional.
-An immutable validation certificate is not a completed durability-cut authority
-and cannot remove these sync obligations. Relaxed ordinary ACK remains a visible
-publication; explicit durable operations retain the existing seal boundary.
+Required DATA and external files retain their separate durability and namespace
+obligations. V6 capsule publication stages the opposite capsule without fencing,
+then uses a fresh captured PRIMARY token to synchronize all dirty PRIMARY bank
+and capsule mappings and the retained file once. On platforms requiring mapped
+flushes, flushing only the capsule span is insufficient. The previous actual
+slot and both of its physical closures remain intact until completion; the
+existing selector rejects a partially persisted newer closure.
+
+An immutable validation certificate grants no completed durability credit. The
+fresh PRIMARY token cannot import a pre-install synced frontier. Failure after
+the first possible capsule store remains ambiguous and prevents another slot
+overwrite until reopen. Namespace completion remains required before durable
+completion. Other publication formats retain their existing ordering. Relaxed
+ordinary ACK remains a visible publication; explicit durable operations retain
+the existing seal boundary. No format, selector or default DATA routing changes.
 
 ### Nativewire collection metadata physical schema (version 6)
 

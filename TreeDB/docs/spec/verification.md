@@ -4174,6 +4174,26 @@ command-WAL route, power-loss or performance qualification.
 
 ### Shared ordinary V6 constructor boundary witnesses
 
+The explicit PRIMARY combined-fence controls use the existing V6 selector and
+physical closure ownership. With `treedb_test`,
+`TestCommitAtDurablePrimarySinglePhysicalFenceV6` observes the actual retained
+PRIMARY file fence through the public durable MVCC commit path; the same test
+source can run against the earlier two-fence publisher as a causal control.
+`TestPrimarySingleCutV6PersistedImages` checks staged physical bytes before any
+final fence or Close, then reopens complete and partially persisted capsule/bank
+images while requiring the acknowledged old slot's bytes to stay intact.
+`TestPrimarySingleCutV6HeldFenceExactPrefixAndSlotReuse` checks no early ACK or
+durable-frontier advance, disjoint successor preparation, exact completed prefix,
+old-reader retention and repeated slot reuse.
+`TestPrimarySingleCutV6PostStageFailures` checks ambiguous failure and overwrite
+refusal; `TestPrimarySingleCutV6FinalFenceUsesCapturedFile` substitutes the pathname
+and checks that the actual content fence still uses the retained original file.
+`TestPrimaryCapsuleStageAllDirtyStableFenceV6` checks dirty bank and capsule chunks,
+failure restoration and the full-dirty file operation. Linux execution does not
+establish non-Linux mapped-flush runtime coverage; that path reuses the maintained
+platform synchronization core. These controls address explicit PRIMARY, not
+default DATA routing or Dgraph throughput qualification.
+
 `TestPrimarySharedTransactionV6ReusesExactDataCertificate` exercises the actual
 unchanged NoWALFast ordinary path: directory-only durable writes reuse one DATA
 certificate, a real oversized-key DATA materialization replaces it, and a held

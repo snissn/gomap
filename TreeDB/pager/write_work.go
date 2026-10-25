@@ -281,6 +281,17 @@ func (p *Pager) writeOwnedSpanWithWork(first uint64, images [][]byte, durable, p
 	return destination, true, nil
 }
 
+// StagePrimaryCapsuleV6 installs the checked opposite-slot image without a
+// durability fence. The publication owner must retain both physical closures
+// and complete the captured PRIMARY ALL-DIRTY sync before publishing success.
+// The shared writer releases the pager lock before that separate operation.
+func (p *Pager) StagePrimaryCapsuleV6(first uint64, image []byte, w *iterator.OrdinalScanWork) ([]byte, bool, error) {
+	if len(image) != 3*page.PageSize || (first != 2 && first != 5) {
+		return nil, false, ErrPageOutOfBounds
+	}
+	return p.writeOwnedSpanWithWork(first, [][]byte{image[:page.PageSize], image[page.PageSize : 2*page.PageSize], image[2*page.PageSize:]}, false, true, 0, 3*page.PageSize, nil, w)
+}
+
 // WritePrimaryCapsuleWithFenceV6 uses the same physical core and admits the
 // publisher's final cancellation/fault guard after install, before durability.
 func (p *Pager) WritePrimaryCapsuleWithFenceV6(first uint64, image []byte, beforeFence func() error, w *iterator.OrdinalScanWork) ([]byte, bool, error) {

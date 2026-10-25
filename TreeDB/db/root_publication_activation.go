@@ -1837,20 +1837,32 @@ func (runtime *rootPublicationRuntimeV1) Publish(ctx context.Context, candidate 
 			if e := ctx.Err(); e != nil {
 				return false, e
 			}
-			// Installation begins here. Every later failure is ambiguous.
-			_, _, e := seal.idx.primary.Pager().WritePrimaryCapsuleWithFenceV6(2+seal.target*3, seal.primary.promotion.Image, func() error {
-				if e := runtime.emitPrimaryAuthorityCutV6(seal, durabilitycut.AfterMetaWrite); e != nil {
-					return e
-				}
-				if e := runtime.emitPrimaryAuthorityCutV6(seal, durabilitycut.BeforeMetaSync); e != nil {
-					return e
-				}
-				if db.testFailSyncMeta.Load() {
-					return errTestSyncMetaFailpoint
-				}
-				return ctx.Err()
-			}, nil)
-			if e != nil {
+			// Installation begins here. The selected slot and both of its
+			// physical closures remain pinned until this attempt completes.
+			// Every later failure is ambiguous, including observation errors.
+			if _, _, e := seal.idx.primary.Pager().StagePrimaryCapsuleV6(2+seal.target*3, seal.primary.promotion.Image, nil); e != nil {
+				return true, e
+			}
+			if e := runtime.emitPrimaryAuthorityCutV6(seal, durabilitycut.AfterMetaWrite); e != nil {
+				return true, e
+			}
+			if e := runtime.emitPrimaryAuthorityCutV6(seal, durabilitycut.BeforeMetaSync); e != nil {
+				return true, e
+			}
+			if db.testFailSyncMeta.Load() {
+				return true, errTestSyncMetaFailpoint
+			}
+			if e := ctx.Err(); e != nil {
+				return true, e
+			}
+			// This fresh captured token has no pre-stage completion credit.
+			// Its original all-dirty operation covers banks AND the capsule,
+			// including mapped flushing where required, on the retained file.
+			// Staging has released the pager lock before entering this call.
+			if e := seal.primary.token.SyncThrough(); e != nil {
+				return true, e
+			}
+			if e := seal.primary.token.Namespace().Stabilize(); e != nil {
 				return true, e
 			}
 			if e := runtime.emitPrimaryAuthorityCutV6(seal, durabilitycut.AfterMetaSync); e != nil {
@@ -1865,7 +1877,9 @@ func (runtime *rootPublicationRuntimeV1) Publish(ctx context.Context, candidate 
 		dependenciesCovered: seal.dependenciesCovered,
 		materialize:         func() error { return runtime.materializeSeal(seal) },
 		syncIndex: func() error {
-			if seal.primary != nil {
+			// V6 stages its opposite capsule before the sole PRIMARY fence.
+			// Other PRIMARY formats retain the original pre-authority sync.
+			if seal.primary != nil && seal.primary.promotion == nil {
 				if e := seal.primary.token.SyncThrough(); e != nil {
 					return e
 				}
