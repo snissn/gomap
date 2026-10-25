@@ -21,6 +21,9 @@ type nativeTextCatalog struct {
 	admit func(uint64) error
 	// Optional rewrite-only key-derived map/string/slice cohorts.
 	admitKey func(uint64) error
+	// Set only after the maintained query analyzer selects one V2 term.
+	// Reducers, inspection, rewrite and other serving shapes keep admitRecord.
+	singleTermFields uint64
 }
 
 func (n *nativeTextCatalog) relative(root string) string {
@@ -57,7 +60,7 @@ func (n *nativeTextCatalog) entry(root string, key []byte) (entry node.LeafEntry
 	if entry.Flags&node.FlagTombstone != 0 {
 		return entry, nil
 	}
-	value, err := r.namedDomainValueAdmitted(entry, n.admitRecord)
+	value, err := n.value(entry, root, key)
 	if err != nil {
 		return node.LeafEntry{}, err
 	}
@@ -171,7 +174,7 @@ func (it *nativeTextIterator) Seek(start []byte) {
 		}
 		var value []byte
 		if entry.Flags&node.FlagTombstone == 0 {
-			value, err = r.namedDomainValueAdmitted(entry, it.scope.admitRecord)
+			value, err = it.scope.value(entry, it.root, entry.Key)
 			if err != nil {
 				it.err = err
 				return

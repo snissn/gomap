@@ -437,6 +437,11 @@ func (c *Collection) searchTextAtSnapshot(opts TextSearchOptions, resultMode tex
 	response.Stats.TextCandidatesRequested = uint64(candidateLimit)
 	textSearchExplainBindParsed(response.Explain, terms, operator, candidateLimit, maxPostingsScanned)
 	if idx.Version == TextIndexVersionV2 {
+		if catalog.nativeText != nil && len(terms) == 1 && !opts.Explain {
+			if err := catalog.nativeText.admitSingleTermServing(idx, opts); err != nil {
+				return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
+			}
+		}
 		return executeTextV2SearchAtSnapshot(c, snap, catalog, idx, opts, terms, operator, candidateLimit, maxPostingsScanned, resultMode, response)
 	}
 

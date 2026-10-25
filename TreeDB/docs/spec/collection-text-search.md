@@ -30,6 +30,17 @@ matrix are defined in `TreeDB/docs/spec/collection-text-v2-contract.md`.
   its current collection and domain declaration; malformed descriptors and root
   overlays refuse the complete import.
 - `TextIndexStorageStats` validates storage versions and returns root accounting.
+- Native single-term V2 serving (without `Explain`) admits source copies and
+  decoder/search backing separately on the same cumulative operation receipt.
+  Selection follows the maintained analyzer and includes the existing exact
+  postings fallback. Posting capacity follows `P*(F+4) <= encoded bytes`, with
+  the scanner's maximum three field lanes charged independently before malformed
+  payload validation. Norm/docmap allowances retain the codecs' looser malformed
+  `entryCount <= remaining+1` preallocation bound. Cached arrays, ID copies,
+  candidates, map growth and final result cohorts remain charged through the
+  complete query. V1, multi-term/phrase/explain queries, storage inspection,
+  rewrite and reducers retain the general record envelope. This changes
+  admission sizing, not query budgets, ranking, index eligibility or ownership.
 - No-WAL native collections use the maintained V2 rewrite/merge planner through
   their captured catalog. The six sparse output domains publish together through
   the existing native COW authority without replacing unaffected records or
