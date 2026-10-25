@@ -85,17 +85,11 @@ func (v *CollectionReadView) fetchNativeDocuments(ids [][]byte, opts DocumentFet
 	if v.closed || v.nativeRead == nil {
 		return DocumentFetchResponse{}, backenddb.ErrClosed
 	}
-	// Reuse the public stored-format contract before returning owned raw bytes.
-	// Projection remains outside the native document capability.
-	if _, err := normalizeDocumentFetchProjection(v.nativeRead.meta, DocumentFetchOptions{Format: opts.Format}); err != nil {
+	// The stored-format and JSON projection contracts are shared with legacy
+	// materialization; Get already returns independent caller-owned documents.
+	projection, err := normalizeDocumentFetchProjection(v.nativeRead.meta, opts)
+	if err != nil {
 		return DocumentFetchResponse{}, err
-	}
-	if len(opts.IncludePaths)+len(opts.ExcludePaths) != 0 {
-		if normalizedDocumentFormat(v.nativeRead.meta.Options.DocumentFormat) == DocumentFormatBSON {
-			_, err := normalizeDocumentFetchProjection(v.nativeRead.meta, opts)
-			return DocumentFetchResponse{}, err
-		}
-		return DocumentFetchResponse{}, backenddb.ErrNativeSemanticUnsupported
 	}
 	out := DocumentFetchResponse{Results: make([]DocumentFetchResult, len(ids))}
 	out.Stats.DocumentsRequested = uint64(len(ids))
@@ -113,6 +107,12 @@ func (v *CollectionReadView) fetchNativeDocuments(ids [][]byte, opts DocumentFet
 		}
 		if err != nil {
 			return DocumentFetchResponse{}, err
+		}
+		if projection.active() {
+			value, err = projectJSONDocument(value, projection, &out.Stats)
+			if err != nil {
+				return DocumentFetchResponse{}, err
+			}
 		}
 		out.Results[i].Found = true
 		out.Results[i].Document = value
