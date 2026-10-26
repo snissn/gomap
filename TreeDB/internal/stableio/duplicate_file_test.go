@@ -44,7 +44,7 @@ func TestDuplicateFileOwnsExactObject(t *testing.T) {
 	if err := duplicate.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := duplicate.Stat(); !errors.Is(err, os.ErrClosed) {
+	if _, err := duplicate.ReadAt(got, 0); !errors.Is(err, os.ErrClosed) {
 		t.Fatalf("duplicate cleanup=%v", err)
 	}
 }
@@ -62,5 +62,50 @@ func TestDuplicateFileRejectsNilAndClosed(t *testing.T) {
 	}
 	if duplicate, err := DuplicateFile(file, "closed"); err == nil || duplicate != nil {
 		t.Fatalf("closed duplicate=%v %v", duplicate, err)
+	}
+}
+
+func TestDuplicateFileConcurrentCloseRetainsExactObject(t *testing.T) {
+	for range 64 {
+		file, err := os.CreateTemp(t.TempDir(), "source")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := file.WriteAt([]byte("retained"), 0); err != nil {
+			_ = file.Close()
+			t.Fatal(err)
+		}
+		identity, err := file.Stat()
+		if err != nil {
+			_ = file.Close()
+			t.Fatal(err)
+		}
+		start := make(chan struct{})
+		closed := make(chan error, 1)
+		go func() {
+			<-start
+			closed <- file.Close()
+		}()
+		close(start)
+		duplicate, duplicateErr := DuplicateFile(file, "concurrent-close")
+		if err := <-closed; err != nil {
+			t.Fatal(err)
+		}
+		if duplicateErr != nil {
+			if duplicate != nil {
+				t.Fatalf("concurrent closed duplicate=%v %v", duplicate, duplicateErr)
+			}
+			if _, err := file.ReadAt(make([]byte, 8), 0); !errors.Is(err, os.ErrClosed) {
+				t.Fatalf("source Close did not finish: %v", err)
+			}
+			continue
+		}
+		got := make([]byte, 8)
+		info, statErr := duplicate.Stat()
+		_, readErr := duplicate.ReadAt(got, 0)
+		closeErr := duplicate.Close()
+		if statErr != nil || !os.SameFile(identity, info) || readErr != nil || string(got) != "retained" || closeErr != nil {
+			t.Fatalf("duplicate lost source identity: stat=%v read=%q/%v close=%v", statErr, got, readErr, closeErr)
+		}
 	}
 }

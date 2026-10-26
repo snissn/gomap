@@ -9,6 +9,11 @@ same owned descriptor, including when the original pager closes or its path is
 replaced. A supplied retained handle must match a live pager's file identity;
 after pager retirement the retained handle remains the caller's authority.
 
+Descriptor duplication holds the source file's `SyscallConn.Control` reference
+through the duplication syscall. Concurrent `Close` therefore either follows a
+successful exact-object duplication or makes duplication fail as closed; a
+reused descriptor number or Windows process pseudo-handle cannot supply custody.
+
 On Linux the existing file-only `fdatasync` route does not dereference mapped
 chunks and releases the mapping guard during I/O. Allocation within represented
 capacity and page writes may proceed while the file barrier is outstanding.
