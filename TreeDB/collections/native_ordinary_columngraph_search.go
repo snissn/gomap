@@ -436,7 +436,20 @@ func nativeColumnGraphQueryCapacity(pack *columnHNSWSearchPackPreparedView, opts
 	return total, nil
 }
 
+// nativeColumnGraphPreparedSearchAcquisition is a borrowed operation-local result,
+// not a second prepared owner. The original cache owns prepared and its receipt.
+type nativeColumnGraphPreparedSearchAcquisition struct {
+	prepared *collectionVectorIndexPreparedSearch
+	response VectorIndexSearchResponse
+	stats    collectionVectorIndexPreparedSearchAcquireStats
+	err      error
+}
+
 func (c *Collection) searchNativeColumnGraphAtReadView(opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer, view *CollectionReadView, allowSet hybridScalarAllowSet) (response VectorIndexSearchResponse, resultErr error) {
+	return c.searchNativeColumnGraphAtReadViewWithPrepared(opts, buffer, view, allowSet, nil)
+}
+
+func (c *Collection) searchNativeColumnGraphAtReadViewWithPrepared(opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer, view *CollectionReadView, allowSet hybridScalarAllowSet, acquisition *nativeColumnGraphPreparedSearchAcquisition) (response VectorIndexSearchResponse, resultErr error) {
 	if err := validateCollectionVectorIndexSearchWithBufferOptions(opts, buffer); err != nil {
 		return response, err
 	}
@@ -453,7 +466,14 @@ func (c *Collection) searchNativeColumnGraphAtReadView(opts VectorIndexSearchOpt
 	if opts.DeclaredScalarFilter != nil {
 		return response, collectionVectorIndexWithBufferUnsupportedOptionError("DeclaredScalarFilter", "column_graph requires the captured scalar allow-set route")
 	}
-	prepared, response, stats, err := c.acquireNativeColumnGraphPreparedSearchAtRead(opts, view.nativeRead)
+	var prepared *collectionVectorIndexPreparedSearch
+	var stats collectionVectorIndexPreparedSearchAcquireStats
+	var err error
+	if acquisition == nil {
+		prepared, response, stats, err = c.acquireNativeColumnGraphPreparedSearchAtRead(opts, view.nativeRead)
+	} else {
+		prepared, response, stats, err = acquisition.prepared, acquisition.response, acquisition.stats, acquisition.err
+	}
 	if err != nil {
 		return response, err
 	}

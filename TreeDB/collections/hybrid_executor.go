@@ -1036,6 +1036,7 @@ func (c *Collection) hybridSearchCandidates(plan hybridSearchExecutionPlan, allo
 	var stats HybridSearchStats
 	var textResponse, vectorResponse HybridCandidateResponse
 	var textErr, vectorErr error
+	var acquisition *nativeColumnGraphPreparedSearchAcquisition
 	searchVector := func() (HybridCandidateResponse, error) {
 		selectedTyped := c.typedGraphServingPolicy() != nil
 		if plan.nativeVectorRuntime || plan.nativeColumnGraph || selectedTyped {
@@ -1052,7 +1053,7 @@ func (c *Collection) hybridSearchCandidates(plan hybridSearchExecutionPlan, allo
 					// predicates retain ANN followed by the executor's filtering.
 					vectorAllowSet = nil
 				}
-				return c.searchHybridVectorCandidatesDeclaredScalarAtReadViewWithAllowSet(plan.context, *plan.vector, filter, plan.readView, plan.readOwnerAcquireNanos, plan.ownerBoundVectorScalar, vectorAllowSet)
+				return c.searchHybridVectorCandidatesDeclaredScalarAtReadViewWithAllowSet(plan.context, *plan.vector, filter, plan.readView, plan.readOwnerAcquireNanos, plan.ownerBoundVectorScalar, vectorAllowSet, acquisition)
 			}
 			return c.searchHybridVectorCandidatesDeclaredScalar(*plan.vector, filter)
 		}
@@ -1078,12 +1079,36 @@ func (c *Collection) hybridSearchCandidates(plan hybridSearchExecutionPlan, allo
 		}
 	default:
 		if plan.text != nil && plan.vector != nil {
+			if plan.nativeColumnGraph {
+				// Finish cold pack validation before text scratch grows on this
+				// same captured cut. Only preparation is ordered: warm traversal
+				// and text candidates still execute concurrently below. Hand the
+				// actual acquisition statistics to traversal exactly once.
+				prepareErr := validateHybridVectorCandidateQuery(*plan.vector)
+				if prepareErr == nil {
+					prepareErr = plan.nativeScratch.admit(memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeColumnGraphPreparedSearchAcquisition{}))))
+				}
+				if prepareErr != nil {
+					vectorResponse.Stats = hybridVectorCandidateStatsFromSearch(plan.vector.CandidateLimit, VectorIndexSearchStats{}, 0)
+					vectorResponse.Stats.FailClosed = 1
+					vectorResponse.Stats.FailClosedReason = hybridVectorCandidateFailClosedReason(prepareErr)
+					vectorErr = hybridVectorCandidateError(prepareErr, plan.vector.IndexName)
+				} else {
+					acquisition = &nativeColumnGraphPreparedSearchAcquisition{}
+					opts := hybridVectorSearchOptions(*plan.vector)
+					opts.Context = plan.context
+					opts.StatsMode = VectorIndexSearchStatsModeProduction
+					acquisition.prepared, acquisition.response, acquisition.stats, acquisition.err = c.acquireNativeColumnGraphPreparedSearchAtRead(opts, plan.readView.nativeRead)
+				}
+			}
 			var wg sync.WaitGroup
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				vectorResponse, vectorErr = searchVector()
-			}()
+			if vectorErr == nil {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					vectorResponse, vectorErr = searchVector()
+				}()
+			}
 			textResponse, textErr = c.searchHybridTextCandidatesWithScanBudgetAtReadView(*plan.text, allowSet, plan.textCandidateScanBudget, plan.readView)
 			wg.Wait()
 		} else {

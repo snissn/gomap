@@ -1758,3 +1758,23 @@ ordinary Get, filtered keyword, Dense and combined Hybrid through legacy/native
 public constructors. Its fixed fixture, strategy/route attribution limits and
 fresh-process commands are in [the consumer diagnostic packet](../../TreeDB/docs/benchmarks/shared-cow-consumers-5238.md).
 It emits Go benchmark rows, not benchprof inputs.
+
+### Ordinary durable service write diagnostic
+
+`BenchmarkServiceSharedCOWWriteLoad` times successful public `UpsertDocuments`
+returns for one fresh4096-document load (32 batches of128), with1 and4 writers.
+Use `GOMAXPROCS=4 GOMAP_SERVICE_BENCH_BACKEND=legacy` or `native` and
+`GOMAP_SERVICE_BENCH_PROFILE=command_wal_durable`, then run:
+
+```sh
+go test ./TreeDB/documentservice -run '^$' -bench '^BenchmarkServiceSharedCOWWriteLoad$' -benchtime=1x -count=1 -benchmem -v
+```
+
+Standard ns/op, B/op and allocs/op are per whole load. `ns/request` is throughput
+normalization, not request latency. Create/fixtures, validation, Optimize, Close
+and reopen remain outside request timing; their phase costs and success are
+reported separately. Fixed-process artifacts live under
+`evidence/current-feature-service-write-diagnostic1/` in the execution root:
+`public-write-plan.json`, `source-binding.json`, `cell-*-receipt.json`,
+`cell-*.log`, and `result.json`. This diagnostic has no numerical acceptance
+threshold and does not replace final G1 or actual command/Mongo gates.

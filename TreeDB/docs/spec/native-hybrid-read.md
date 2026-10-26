@@ -1,7 +1,7 @@
 # Native captured hybrid reads
 
 Ordinary JSON collections use the maintained hybrid executor for lexical search,
-ordinary cosine float32 native-runtime HNSW, scalar equality/range/conjunction
+ordinary cosine float32 ColumnGraph and native-runtime HNSW, scalar equality/range/conjunction
 filters, rank fusion and final JSON projection.
 This is a read adapter over existing text and scalar domains. It does not add a
 publication authority or select a server default.
@@ -71,6 +71,16 @@ scalar plans bypass the legacy retained cache because their ID sets belong to
 the request view. Parallel text/vector branches serialize receipt growth through
 a private mutex, while traversal remains independent.
 
+Ordinary unquantized `column_graph` candidates use the existing prepared-pack
+cache with the same captured native read and manifest identity. For default
+mixed-source execution, cold pack preparation finishes before text/vector
+candidates run concurrently. Its original temporary validation leases end before
+text scratch grows; the independently charged retained pack remains owned by the
+cache. Traversal receives the one actual acquisition result and statistics, and
+still checks the prepared owner's lock and closed state. No warm-up request or
+second capture is required after reopen. Explicit source-order strategies retain
+their existing short-circuit order and finite admission checks.
+
 A native `VectorIndexSearchBuffer` retains its separate query receipt until
 `Reset` or reuse. Reset drops all native scratch/result backing before refund,
 so returning buffers to an existing pool cannot retain uncharged arrays. Result
@@ -79,14 +89,15 @@ must finish before then. Legacy buffers retain their existing reusable capacity.
 The public ordinary `idx.Search` retains its existing ownership and callback
 postvalidation; its query charge calculation is shared without changing ranking.
 
-Typed/ColumnGraph, normalized and quantized vector dispatch remain explicit and
+Specialized typed, normalized and quantized vector dispatch remain explicit and
 are not reinterpreted by this adapter. New ordinary service indexes retain the
 original omitted-strategy policy: cosine selects `column_graph`; other supported
 metrics select `native_runtime`. An existing index with omitted strategy binds its
 persisted algorithm. Explicit native-runtime HNSW remains supported within this
-adapter's capability; ordinary native ColumnGraph service adoption remains unmet
-and refuses without algorithm substitution or legacy fallback. Broader native
-adoption and actual server storage defaults remain separate parent obligations.
+adapter's capability. Ordinary native ColumnGraph supports its captured graph,
+text, scalar and final-document reads without algorithm substitution or legacy
+fallback. Broader default adoption and actual server storage defaults remain
+separate parent obligations and require their public performance gates.
 The original eight-cell service fixture and partial failure stay in the evidence;
 these dispatch rules do not establish performance acceptance.
 
@@ -97,3 +108,9 @@ control uses the existing internal catalog replacement plus real native commit
 because no public collection-drop API exists. Small scalar-limit controls use the
 private existing plan limits; these controls do not change production scalar-plan
 limits or public query options.
+
+`TestOrdinaryColumnGraphNativeColdHybrid4096` covers the maintained durable
+4096-document, fixed-128 request geometry and the first mixed request after clean
+reopen, without a preceding ANN warm-up. It also checks retained pack reuse and
+stable cold/warm ranks on the same unchanged cut. This correctness control does
+not qualify concurrent ingestion, performance or power-loss recovery.

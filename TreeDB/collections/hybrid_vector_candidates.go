@@ -132,10 +132,10 @@ func (c *Collection) searchHybridVectorCandidatesDeclaredScalar(query HybridVect
 }
 
 func (c *Collection) searchHybridVectorCandidatesDeclaredScalarAtReadView(ctx context.Context, query HybridVectorQuery, filter *HybridScalarFilter, view *CollectionReadView, ownerAcquireNanos int64, scalarStatsOwner bool) (HybridCandidateResponse, error) {
-	return c.searchHybridVectorCandidatesDeclaredScalarAtReadViewWithAllowSet(ctx, query, filter, view, ownerAcquireNanos, scalarStatsOwner, nil)
+	return c.searchHybridVectorCandidatesDeclaredScalarAtReadViewWithAllowSet(ctx, query, filter, view, ownerAcquireNanos, scalarStatsOwner, nil, nil)
 }
 
-func (c *Collection) searchHybridVectorCandidatesDeclaredScalarAtReadViewWithAllowSet(ctx context.Context, query HybridVectorQuery, filter *HybridScalarFilter, view *CollectionReadView, ownerAcquireNanos int64, scalarStatsOwner bool, allowSet hybridScalarAllowSet) (HybridCandidateResponse, error) {
+func (c *Collection) searchHybridVectorCandidatesDeclaredScalarAtReadViewWithAllowSet(ctx context.Context, query HybridVectorQuery, filter *HybridScalarFilter, view *CollectionReadView, ownerAcquireNanos int64, scalarStatsOwner bool, allowSet hybridScalarAllowSet, acquisition *nativeColumnGraphPreparedSearchAcquisition) (HybridCandidateResponse, error) {
 	requested := query.CandidateLimit
 	if err := validateHybridVectorCandidateQuery(query); err != nil {
 		response := HybridCandidateResponse{Stats: hybridVectorCandidateStatsFromSearch(requested, VectorIndexSearchStats{}, 0)}
@@ -159,7 +159,7 @@ func (c *Collection) searchHybridVectorCandidatesDeclaredScalarAtReadViewWithAll
 			if filter != nil {
 				return HybridCandidateResponse{}, ErrHybridSearchUnsupported
 			}
-			vectorResponse, err = c.searchNativeColumnGraphAtReadView(opts, &buffer, view, allowSet)
+			vectorResponse, err = c.searchNativeColumnGraphAtReadViewWithPrepared(opts, &buffer, view, allowSet, acquisition)
 		} else {
 			vectorResponse, err = c.searchNativeHNSWAtReadView(opts, &buffer, view, allowSet)
 		}
