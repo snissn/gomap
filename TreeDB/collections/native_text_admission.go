@@ -99,28 +99,41 @@ func nativeTextForwardIdentityCharge(ids hybridScalarAllowSet, paths uint64) (ui
 	return charge.total, nil
 }
 
+func (n *nativeTextCatalog) bindRecordAdmission() error {
+	if n.recordAdmit != nil {
+		return nil
+	}
+	if err := n.admit(memtable.COWAllocationCharge(2 * uint64(unsafe.Sizeof(uintptr(0))))); err != nil {
+		return err
+	}
+	n.recordAdmit = n.admitRecord
+	return nil
+}
+
 func (n *nativeTextCatalog) value(entry node.LeafEntry, root string, key []byte) ([]byte, error) {
 	if n.singleTermFields == 0 {
 		// Production catalogs bind this once in their admitted constructor.
-		// Keep private callers that construct a catalog directly on the same
-		// original receipt, with admission before the bound callback escapes.
-		if n.recordAdmit == nil {
-			if err := n.admit(memtable.COWAllocationCharge(2 * uint64(unsafe.Sizeof(uintptr(0))))); err != nil {
-				return nil, err
-			}
-			n.recordAdmit = n.admitRecord
+		// Private direct constructors use the same pre-binding admission.
+		if err := n.bindRecordAdmission(); err != nil {
+			return nil, err
 		}
 		return n.read.namedDomainValueAdmitted(entry, n.recordAdmit)
 	}
-	// The callback receives an ALREADY rounded allocation promise. Spend it
-	// directly on the original receipt before making the independent source
-	// copy. The second stage knows its exact length; it admits all downstream
-	// allocations before any maintained decoder sees the returned bytes.
+	// namedDomainValueAdmitted spends the ALREADY rounded source promise
+	// before making the independent copy. Decoded storage follows in order.
 	value, err := n.read.namedDomainValueAdmitted(entry, n.admit)
 	if err != nil {
 		return nil, err
 	}
-	// The shared classifier borrows the existing names without allocating.
+	if err := n.admitServingRecord(root, key, uint64(len(value))); err != nil {
+		return nil, err
+	}
+	return value, nil
+}
+
+// Owned and private borrowed records share exactly the same second-stage
+// classifier/charge. The original source promise always precedes this call.
+func (n *nativeTextCatalog) admitServingRecord(root string, key []byte, size uint64) error {
 	family := textV2RootFamily(0)
 	for _, def := range n.read.meta.TextIndexes {
 		if f, ok := textV2RootFamilyForName(n.read.meta.Name, def.Name, root); ok {
@@ -128,14 +141,11 @@ func (n *nativeTextCatalog) value(entry node.LeafEntry, root string, key []byte)
 			break
 		}
 	}
-	charge, err := nativeTextServingRecordCharge(family, bytes.Equal(key, encodeTextV2FormatKey()), uint64(len(value)), n.singleTermFields)
+	charge, err := nativeTextServingRecordCharge(family, bytes.Equal(key, encodeTextV2FormatKey()), size, n.singleTermFields)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	if err := n.admit(charge); err != nil {
-		return nil, err
-	}
-	return value, nil
+	return n.admit(charge)
 }
 
 // AllocationCharge(n)<=2*n+16 for each nonzero nonsaturating allocation.

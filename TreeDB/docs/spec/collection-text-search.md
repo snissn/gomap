@@ -51,6 +51,21 @@ matrix are defined in `TreeDB/docs/spec/collection-text-v2-contract.md`.
   forward movement advances it without descending from the root for each row.
   Cursor backing is admitted before construction and detached before the read
   and operation receipt are released; no new snapshot, pool or source pin exists.
+- Native text norm-cache reads synchronously validate/decode inline records
+  under the original read mutex into independently owned descriptor/field arrays.
+  Docmap cache reads keep independent raw bytes because decoded document IDs
+  retain raw subslices. Iterators constructed in the existing single-term V2
+  serving scope may borrow inline values from their own physical projection or
+  immutable captured memory source until that same iterator moves or closes.
+  Each borrowed iterator holds one existing read visit: a read
+  Close request rejects further movement immediately, retains active raw values,
+  and completes original capture disposal after the final iterator detaches.
+  General mutation, backfill, rewrite and multi-term iterators keep their owned
+  values and original lifetime behavior. Pointer values use the existing owned
+  decoder. Source-copy promises and all
+  decoded/cursor growth charges retain their original rounding, order and
+  cumulative receipt lifetime, even when an inline copy is omitted. Public Get
+  and returned documents remain independently owned.
 - No-WAL native collections use the maintained V2 rewrite/merge planner through
   their captured catalog. The six sparse output domains publish together through
   the existing native COW authority without replacing unaffected records or

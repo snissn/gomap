@@ -2727,7 +2727,8 @@ func decodeTextV2SearchNormBlock(raw []byte) (textV2SearchNormBlock, error) {
 }
 
 // Selection changes retained decoded storage, never structural validation.
-// The complete source record remains owned for the query's original lifetime.
+// Retained descriptors and field lengths own their arrays; raw is needed only
+// for this synchronous decode. Docmap decoding below has a different lifetime.
 func decodeTextV2SearchNormBlockSelected(raw []byte, allowed *textV2SearchOrdinalAllowSet) (textV2SearchNormBlock, error) {
 	cur, err := textV2ValueCursor(raw, textV2NormBlockValueVersion, "norm block")
 	if err != nil {
@@ -2913,19 +2914,37 @@ func (cache *textV2SearchBlockCache) normBlockAtOptional(snap *backenddb.Snapsho
 	if ok {
 		return block, true, nil
 	}
-	raw, found, err := collectionGetAppendAtCatalogRoot(snap, catalog, ctx.normBlocksRootName, encodeTextV2BlockKey(blockStart), nil)
-	if err != nil {
-		return textV2SearchNormBlock{}, false, err
-	}
-	if stats != nil {
-		stats.TextNormLookups++
-	}
-	if !found {
-		return textV2SearchNormBlock{}, false, nil
-	}
-	decoded, err := decodeTextV2SearchNormBlockSelected(raw, cache.allowed)
-	if err != nil {
-		return textV2SearchNormBlock{}, false, err
+	var decoded textV2SearchNormBlock
+	if catalog != nil && catalog.nativeText != nil {
+		var found bool
+		var err error
+		decoded, found, err = catalog.nativeText.normBlockSelected(ctx.normBlocksRootName, encodeTextV2BlockKey(blockStart), cache.allowed)
+		// A codec error follows a successful lookup; lookup/admission errors
+		// precede this counter, exactly as on the owned fetch path.
+		if stats != nil && (err == nil || found) {
+			stats.TextNormLookups++
+		}
+		if err != nil {
+			return textV2SearchNormBlock{}, false, err
+		}
+		if !found {
+			return textV2SearchNormBlock{}, false, nil
+		}
+	} else {
+		raw, found, err := collectionGetAppendAtCatalogRoot(snap, catalog, ctx.normBlocksRootName, encodeTextV2BlockKey(blockStart), nil)
+		if err != nil {
+			return textV2SearchNormBlock{}, false, err
+		}
+		if stats != nil {
+			stats.TextNormLookups++
+		}
+		if !found {
+			return textV2SearchNormBlock{}, false, nil
+		}
+		decoded, err = decodeTextV2SearchNormBlockSelected(raw, cache.allowed)
+		if err != nil {
+			return textV2SearchNormBlock{}, false, err
+		}
 	}
 	if decoded.BlockStart != blockStart || decoded.BlockSize != textV2DefaultNormBlockSize || decoded.FieldCount != uint32(len(ctx.fieldNames)) {
 		return textV2SearchNormBlock{}, false, errMalformedTextStorage("text-v2 norm block key/value mismatch")

@@ -89,11 +89,102 @@ func (n *nativeTextCatalog) get(root string, key, dst []byte) ([]byte, bool, err
 	return append(dst[:0], entry.Value...), true, nil
 }
 
+// withRecord confines a borrowed inline record to one synchronous private codec
+// call under the original read exclusion. consume must neither retain raw aliases
+// nor reenter a read, move a cursor, or invoke external callbacks. Pointer records
+// retain the unchanged owned value path. A true found also distinguishes a codec
+// error from a lookup/admission error for the original lookup counters.
+func (n *nativeTextCatalog) withRecord(root string, key []byte, consume func([]byte) error) (bool, error) {
+	r := n.read
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	domain, err := r.borrowedNamedDomain(n.relative(root))
+	if errors.Is(err, tree.ErrKeyNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	scratch, err := r.physicalScratch()
+	if err != nil {
+		return false, err
+	}
+	entry, err := domain.getEntry(key, scratch, r.readLeaf)
+	if errors.Is(err, tree.ErrKeyNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if entry.Flags&node.FlagTombstone != 0 {
+		return false, nil
+	}
+	value, err := n.iteratorValue(entry, root, key)
+	if err != nil {
+		return false, err
+	}
+	return true, consume(value)
+}
+
+// normBlockSelected is the only synchronous borrowed-record consumer. The
+// maintained decoder validates the complete record and retains only its own
+// descriptor/field arrays, including when selection excludes every entry.
+func (n *nativeTextCatalog) normBlockSelected(root string, key []byte, allowed *textV2SearchOrdinalAllowSet) (decoded textV2SearchNormBlock, found bool, err error) {
+	found, err = n.withRecord(root, key, func(raw []byte) error {
+		var decodeErr error
+		decoded, decodeErr = decodeTextV2SearchNormBlockSelected(raw, allowed)
+		return decodeErr
+	})
+	return decoded, found, err
+}
+
+// iteratorValue borrows inline bytes from this iterator's own projection or the
+// immutable captured memory sources. Synchronous consumption holds the read
+// mutex throughout; iterator consumption holds it during movement and retains
+// the existing read visit until all cursor/value aliases are detached.
+// Source and decoded-storage promises remain identical to value, including the
+// original rounded input to recordAdmit; omitting a copy grants no credit.
+func (n *nativeTextCatalog) iteratorValue(entry node.LeafEntry, root string, key []byte) ([]byte, error) {
+	if entry.Flags&node.FlagPointer != 0 {
+		return n.value(entry, root, key)
+	}
+	if n.singleTermFields == 0 {
+		if err := n.bindRecordAdmission(); err != nil {
+			return nil, err
+		}
+		if err := n.recordAdmit(memtable.COWAllocationCharge(uint64(len(entry.Value)))); err != nil {
+			return nil, err
+		}
+		return entry.Value, nil
+	}
+	if err := n.admit(memtable.COWAllocationCharge(uint64(len(entry.Value)))); err != nil {
+		return nil, err
+	}
+	if err := n.admitServingRecord(root, key, uint64(len(entry.Value))); err != nil {
+		return nil, err
+	}
+	return entry.Value, nil
+}
+
 func (n *nativeTextCatalog) iterator(root string, start, end []byte, deleted bool, max int, onInspect func(int), inspectionError func() error) (iterator.UnsafeIterator, error) {
 	if err := n.admit(memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeTextIterator{}))) + memtable.COWAllocationCharge(uint64(len(start)+len(end))) + memtable.COWAllocationCharge(2*uint64(unsafe.Sizeof(uintptr(0))))); err != nil {
 		return nil, err
 	}
 	it := &nativeTextIterator{scope: n, root: root, start: bytes.Clone(start), end: bytes.Clone(end), includeDeleted: deleted, max: max, onInspect: onInspect, inspectionError: inspectionError}
+	// General mutation/DDL/rewrite callers retain owned values across movement.
+	// Freeze borrowing only for the existing selected serving scope, together
+	// with the original read visit that protects that iterator's raw aliases.
+	if n.singleTermFields != 0 {
+		r := n.read
+		r.mu.Lock()
+		if r.capture == nil || r.failure != nil || r.closing || r.visits == ^uint32(0) {
+			r.mu.Unlock()
+			return nil, backenddb.ErrClosed
+		}
+		r.visits++
+		it.heldVisit = true
+		r.mu.Unlock()
+	}
 	// The physical cursor retains this bound method. Construct it once on the
 	// admitted wrapper, rather than allocating another escaping closure per row.
 	it.readLeaf = n.read.readLeaf
@@ -117,6 +208,7 @@ type nativeTextIterator struct {
 	valid           bool
 	err             error
 	includeDeleted  bool
+	heldVisit       bool
 	max, inspected  int
 	onInspect       func(int)
 	inspectionError func() error
@@ -211,7 +303,11 @@ func (it *nativeTextIterator) seek(start []byte, forward bool) {
 		}
 		var value []byte
 		if entry.Flags&node.FlagTombstone == 0 {
-			value, err = it.scope.value(entry, it.root, entry.Key)
+			if it.heldVisit {
+				value, err = it.scope.iteratorValue(entry, it.root, entry.Key)
+			} else {
+				value, err = it.scope.value(entry, it.root, entry.Key)
+			}
 			if err != nil {
 				it.err = err
 				return
@@ -243,11 +339,31 @@ func (it *nativeTextIterator) ValueCopy(dst []byte) []byte { return append(dst[:
 func (it *nativeTextIterator) IsDeleted() bool             { return it.flags&node.FlagTombstone != 0 }
 func (it *nativeTextIterator) Error() error                { return it.err }
 func (it *nativeTextIterator) Close() error {
+	if it.scope == nil {
+		return nil
+	}
+	r := it.scope.read
+	heldVisit := it.heldVisit
+	if heldVisit {
+		r.mu.Lock()
+	}
 	err := it.cursor.close()
 	it.valid = false
 	it.scope = nil
 	it.readLeaf = nil
 	it.start, it.end, it.key, it.value, it.keyWorkspace = nil, nil, nil, nil, nil
+	if !heldVisit {
+		return err
+	}
+	it.heldVisit = false
+	r.visits--
+	closeRequested := r.closing && r.visits == 0
+	r.mu.Unlock()
+	// The original Close acquires r.mu and releases the original capture and
+	// receipts. All borrowed aliases must be gone before its final disposal.
+	if closeRequested {
+		err = errors.Join(err, r.Close())
+	}
 	return err
 }
 func (it *nativeTextIterator) Domain() ([]byte, []byte) { return it.start, it.end }
