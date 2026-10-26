@@ -152,16 +152,10 @@ func TestNativeHNSWGraphPhaseCustody(t *testing.T) {
 }
 
 func TestNativeHNSWGraphPhaseFailureKeepsLedger(t *testing.T) {
-	c, closeAll, _, def, _ := openHNSWPublicFixture(t, "native", 8, 2)
-	var budget nativeHNSWAdmissionBudget
-	t.Cleanup(func() {
-		closeAll()
-		if budget != nil {
-			if s := budget.Stats(); s.TotalBytes != 0 || s.ExternalLeases != 0 {
-				t.Errorf("error full Close: %+v", s)
-			}
-		}
-	})
+	// Pin every setup cut: unrelated retirement must not mask the private
+	// runtime receipt or change the exact post-failure accounting baseline.
+	// The fixture retains the full-Close zero-bytes/zero-leases assertion.
+	c, def, budget := openPinnedNativeHNSWAdmissionFixture(t, []byte("row-00000"))
 	idx, err := c.BuildVectorIndex(vectorIndexOptionsFromDefinition(def))
 	if err != nil {
 		t.Fatal(err)
@@ -200,7 +194,6 @@ func TestNativeHNSWGraphPhaseFailureKeepsLedger(t *testing.T) {
 		t.Fatalf("meta %q: %v", reason, err)
 	}
 	floor := charge
-	budget = read.capture.NativeAllocator().(nativeHNSWAdmissionBudget)
 	baseline := budget.Stats()
 	stop := errors.New("graph read admission stopped")
 	failing := func(n uint64) error {
@@ -212,6 +205,9 @@ func TestNativeHNSWGraphPhaseFailureKeepsLedger(t *testing.T) {
 		return admit(n)
 	}
 	loaded, _, _, err := c.loadNativeHNSWGraphPhase(read, def, meta, &charge, failing)
+	if loaded != nil {
+		defer loaded.releaseNativeHNSW()
+	}
 	if !errors.Is(err, stop) || loaded != nil || charge <= floor {
 		t.Fatalf("failed phase: %v loaded=%p charge=%d floor=%d", err, loaded, charge, floor)
 	}
