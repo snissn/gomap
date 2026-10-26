@@ -49,7 +49,7 @@ func TestCommandJournalPreservesLogicalRotationTarget(t *testing.T) {
 
 func TestFixedWALCheckedPhysicalGeometry(t *testing.T) {
 	for _, tc := range []struct{ target, capacity int64 }{
-		{0, 4199424}, {-1, 4199424}, {1, 4352}, {1024, 5376}, {256 << 20, 268439808},
+		{0, 67108864}, {-1, 67108864}, {1, 4352}, {1024, 5376}, {256 << 20, 268439808},
 	} {
 		got, err := fixedWALPhysicalBudget(tc.target)
 		if err != nil || got != tc.capacity {

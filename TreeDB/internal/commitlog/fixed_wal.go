@@ -21,11 +21,12 @@ import (
 )
 
 const (
-	fixedWALHeaderSize      = 4096
-	fixedWALWitnessSize     = 96
-	fixedWALAlignment       = 64
-	fixedWALDefaultCapacity = 4_199_424
-	fixedWALReadBufferSize  = 64 << 10
+	fixedWALHeaderSize            = 4096
+	fixedWALWitnessSize           = 96
+	fixedWALAlignment             = 64
+	fixedWALDefaultCapacity       = 4_199_424
+	fixedWALDefaultPhysicalBudget = 64 << 20
+	fixedWALReadBufferSize        = 64 << 10
 )
 
 // Initialization uses distinct operations so failure tests can inject an actual
@@ -70,7 +71,7 @@ func fixedWALCapacity(capacity int64) (int64, error) {
 
 func fixedWALPhysicalBudget(target int64) (int64, error) {
 	if target <= 0 {
-		return fixedWALDefaultCapacity, nil
+		return fixedWALDefaultPhysicalBudget, nil
 	}
 	const overhead = fixedWALHeaderSize + 2*fixedWALWitnessSize + (fixedWALAlignment - 1)
 	if target > int64(1<<63-1)-overhead-(fixedWALAlignment-1) {

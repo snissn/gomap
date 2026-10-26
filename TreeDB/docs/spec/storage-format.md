@@ -4525,7 +4525,8 @@ frames. The per-frame `WALMaxSegmentBytes` limit remains independent.
 
 Fresh journals and forced/checkpoint successors start with at most the existing
 4,199,424-byte reserve. Physical-capacity pressure doubles the next fresh
-reserve, capped by the configured target's physical byte budget; a logical-only
+reserve, capped by the configured target's physical byte budget, or 64 MiB
+(67,108,864 bytes) when the logical target is nonpositive; a logical-only
 rotation retains the current bounded reserve. Forced boundaries reset it to the
 small initial reserve. Thus a large configured target does not require a large
 empty file at Open or after checkpoint, and sustained growth does not repeatedly
@@ -4533,7 +4534,7 @@ initialize small segments. Only unpublished fresh successors can change size.
 
 Precisely, let `H=4096`, `W=96`, `A=64`, and `align` round upward to `A`.
 For a positive logical target `T`, the physical budget is
-`B=align(H+T+2*W+(A-1))`; otherwise `B=4,199,424`. The initial/reset reserve is
+`B=align(H+T+2*W+(A-1))`; otherwise `B=67,108,864`. The initial/reset reserve is
 `Cbase=min(4,199,424,B)`. Physical pressure selects
 `min(B,2*min(Cold,B))`, where `Cold` is the previous header-declared capacity;
 logical-only rotation keeps at least `Cbase`, capped by `B`. A frame of `F`
@@ -4547,7 +4548,10 @@ even when the configuration changes. Rotation checks that capacity before
 acceptance and initializes the complete successor before installing it. No
 occupied published file is resized or reinitialized. Initialization/rotation
 cost and reserved disk space are part of operational cost, not a measured
-steady-state append improvement.
+steady-state append improvement. The default ceiling is a resource policy: lazy
+growth can increase initialized reserve, cold recovery scanning, and unused tail
+space up to 64 MiB per normal container. It changes neither per-frame geometry
+nor durability fences and does not establish a measured latency improvement.
 Mutable append hooks and rotation callbacks invalidate borrowed frame sizing.
 Both codecs refresh validation and sizing after those boundaries; a rotated
 frame that no longer fits the installed physical capacity is refused before
