@@ -266,7 +266,7 @@ func populateNativeHNSWScalarRows(index *VectorIndex, read *NativeJSONRead, admi
 	if len(index.scalarDefinitions) == 0 {
 		return nil
 	}
-	materializer := &StoredDocumentJSONMaterializer{documentFormat: normalizedDocumentFormat(read.meta.Options.DocumentFormat)}
+	materializer := &StoredDocumentJSONMaterializer{documentFormat: normalizedDocumentFormat(read.meta.Options.DocumentFormat), nativeRead: read}
 	for _, row := range index.nodes {
 		doc, err := read.namedDomainGetAdmitted("primary", row.documentID, admit)
 		if errors.Is(err, tree.ErrKeyNotFound) && (row.deleted || index.sourceDocumentGeneration != read.collection.documentGeneration) {

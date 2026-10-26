@@ -69,6 +69,10 @@ After any invalid canonical vector row is corrected, the same receiver's
 no failed partial graph is marked current. Reconciliation holds one runtime use
 lock at a time and releases it before retiring a failed payload.
 
+Cold scalar reconstruction and scalar-schema clones resolve template-v1 dictionaries
+through the same captured read that supplied their primary rows. The materializer
+borrows that read for conversion without acquiring or closing another capture.
+
 The graph's scalar columns hold one value per document. A native ordinary HNSW
 collection rejects actual arrays in eligible non-MultiKey scalar indexes before
 publishing an insert or replacement, even when `AllowArrayValuesInIndex` is set.
