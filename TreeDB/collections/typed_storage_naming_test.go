@@ -360,6 +360,9 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/collections/column_asset_dependency_directory_v2_rewrite_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 4},
 	{path: "TreeDB/collections/column_manifest_dependency_directory_v2_repeat_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 4},
 	{path: "TreeDB/collections/native_existing_column_build_failure_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 6, occurrences: 8},
+	// The handoff fixture constructs typed-row storage through the retained
+	// public schema API to pause an unrelated native build.
+	{path: "TreeDB/collections/native_named_domain_handoff_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 4},
 	// Deterministic document apply and advisory preflight check the retained
 	// schema field to refuse typed roles before original canonical assignment.
 	{path: "TreeDB/collections/native_command_wal_apply.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 4},
