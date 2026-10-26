@@ -102,6 +102,12 @@ func columnPartBlockCompressionReport(requested Compression, block ColumnBlock) 
 }
 
 func (p *ColumnPart) ByteAccounting() ColumnPartByteAccounting {
+	return p.byteAccounting(false)
+}
+
+// Image accounting replaces encoded stats/pruning sizes, so a raw ordinal
+// writer can avoid serializing those sections a second time.
+func (p *ColumnPart) byteAccounting(image bool) ColumnPartByteAccounting {
 	if p == nil {
 		return ColumnPartByteAccounting{}
 	}
@@ -110,6 +116,12 @@ func (p *ColumnPart) ByteAccounting() ColumnPartByteAccounting {
 		Granules:            len(p.Descriptor.Granules),
 		PhysicalFiles:       0,
 		RetainedJSONPayload: "absent_declared_columns_only",
+	}
+	if image {
+		out.ColumnsDetail = make([]ColumnPartColumnByteAccounting, 0, len(p.Descriptor.Columns))
+		if len(p.Descriptor.Granules) > 0 {
+			out.CompressionDetail = make([]ColumnPartCompressionByteAccounting, 0, len(p.Descriptor.Columns))
+		}
 	}
 	compressionByKey := make(map[columnCompressionKey]*ColumnPartCompressionByteAccounting)
 	for _, columnDescriptor := range p.Descriptor.Columns {
@@ -201,8 +213,10 @@ func (p *ColumnPart) ByteAccounting() ColumnPartByteAccounting {
 	out.MarkBytes = estimateSortKeyMarkBytes(p.Marks)
 	out.SortKeyMetadataBytes = estimateSortKeyMetadataBytes(p.Descriptor.SortKey)
 	out.AggregateMetadataBytes = aggregateMetadataStoredBytes(p.AggregateMetadata)
-	out.ColumnStatsBytes = columnStatsStoredBytes(p.ColumnStats)
-	out.PruningMetadataBytes = columnPruningStoredBytes(p.PruningMetadata)
+	if !image {
+		out.ColumnStatsBytes = columnStatsStoredBytes(p.ColumnStats)
+		out.PruningMetadataBytes = columnPruningStoredBytes(p.PruningMetadata)
+	}
 	out.DescriptorBytes = estimateColumnPartDescriptorBytes(p.Descriptor)
 	out.LocatorBytes = len(p.Locators) * rowLocatorBytes
 	for _, compression := range compressionByKey {
@@ -236,7 +250,10 @@ func (p *ColumnPart) ByteAccounting() ColumnPartByteAccounting {
 }
 
 func (p *ColumnPart) ByteAccountingFromImage(image ColumnPartImage) ColumnPartByteAccounting {
-	out := p.ByteAccounting()
+	return columnPartAccountingWithImage(p.ByteAccounting(), image)
+}
+
+func columnPartAccountingWithImage(out ColumnPartByteAccounting, image ColumnPartImage) ColumnPartByteAccounting {
 	if image.TotalBytes() == 0 {
 		return out
 	}

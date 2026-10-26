@@ -10,12 +10,24 @@ import (
 )
 
 func (c *Collection) searchNativeText(opts TextSearchOptions, mode textSearchResultMode, read *NativeJSONRead, response TextSearchResponse) (result TextSearchResponse, resultErr error) {
-	return c.searchNativeTextAdmitted(opts, mode, read, response, nil)
+	return c.searchNativeTextAtCatalog(opts, mode, read, response, nil)
 }
 
-// admit, when supplied, belongs to the caller's complete captured operation.
-// Text scratch and returned candidate storage stay charged through its phases.
-func (c *Collection) searchNativeTextAdmitted(opts TextSearchOptions, mode textSearchResultMode, read *NativeJSONRead, response TextSearchResponse, admit func(uint64) error) (result TextSearchResponse, resultErr error) {
+// A supplied catalog belongs to the same complete operation and capture, so
+// scalar/ordinal/posting phases can reuse its exclusively lent projection.
+func (c *Collection) searchNativeTextAtCatalog(opts TextSearchOptions, mode textSearchResultMode, read *NativeJSONRead, response TextSearchResponse, catalog *collectionCatalog) (result TextSearchResponse, resultErr error) {
+	var admit func(uint64) error
+	if catalog != nil {
+		if catalog.nativeText == nil || catalog.nativeText.read != read || read == nil || catalog.nativeText.admit == nil {
+			return response, backenddb.ErrNativeSemanticUnsupported
+		}
+		admit = catalog.nativeText.admit
+		// Serving specialization is query-local, while projection backing is
+		// operation-local. A reused view must re-admit each query's envelope.
+		previous := catalog.nativeText.singleTermFields
+		catalog.nativeText.singleTermFields = 0
+		defer func() { catalog.nativeText.singleTermFields = previous }()
+	}
 	if read == nil {
 		var err error
 		read, err = c.nativeJSON.Capture(c.name)
@@ -68,9 +80,11 @@ func (c *Collection) searchNativeTextAdmitted(opts TextSearchOptions, mode textS
 			return response, err
 		}
 	}
-	catalog, err := newNativeTextCatalog(read, admit)
-	if err != nil {
-		return response, err
+	if catalog == nil {
+		catalog, err = newNativeTextCatalog(read, admit)
+		if err != nil {
+			return response, err
+		}
 	}
 	return c.searchTextAtSnapshot(opts, mode, read.capture.Snapshot(), catalog, response)
 }

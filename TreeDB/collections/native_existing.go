@@ -36,6 +36,10 @@ func (c *Collection) nativeInsertBatch(ids, documents [][]byte) ([][]byte, error
 }
 
 func (c *Collection) nativeInsertBatchWithStats(ids, documents [][]byte, requested *CollectionInsertStats) ([][]byte, error) {
+	return c.nativeInsertBatchWithStatsProjection(ids, documents, requested, nil)
+}
+
+func (c *Collection) nativeInsertBatchWithStatsProjection(ids, documents [][]byte, requested *CollectionInsertStats, projection *trustedFloat32Projection) ([][]byte, error) {
 	if c.manager.isClosing() {
 		return nil, backenddb.ErrClosed
 	}
@@ -48,7 +52,17 @@ func (c *Collection) nativeInsertBatchWithStats(ids, documents [][]byte, request
 		if err != nil {
 			return nil, err
 		}
-		ordinary := read.meta.Options.ColumnStore == nil
+		ordinary := read.meta.Options.ColumnStore == nil || nativeOrdinaryColumnGraphMeta(read.meta)
+		if projection != nil {
+			if !nativeOrdinaryColumnGraphMeta(read.meta) {
+				err = backenddb.ErrNativeSemanticUnsupported
+			} else {
+				err = validateTrustedFloat32ProjectionMeta(read.meta, projection)
+			}
+			if err != nil {
+				return nil, errors.Join(err, read.Close())
+			}
+		}
 		stats.Indexes = len(read.meta.Indexes)
 		if err = read.Close(); err != nil {
 			return nil, err
@@ -73,7 +87,7 @@ func (c *Collection) nativeInsertBatchWithStats(ids, documents [][]byte, request
 	}
 	unlockVector, vectorMutationHeld := c.lockNativeHNSWMutationIfNeeded()
 	defer unlockVector()
-	recordStats, err := c.nativeJSON.insertPrepared(c.name, ids, documents, &stats, requested != nil)
+	recordStats, err := c.nativeJSON.insertPrepared(c.name, ids, documents, &stats, requested != nil, projection)
 	if err != nil {
 		return nil, err
 	}
@@ -132,7 +146,7 @@ func (v *CollectionReadView) fetchNativeDocuments(ids [][]byte, opts DocumentFet
 	var admitOutput func(uint64) error
 	if v.catalog != nil && v.catalog.nativeText != nil {
 		admitOutput = v.catalog.nativeText.admit
-		if nativeTypedMeta(v.nativeRead.meta) {
+		if nativeTypedMeta(v.nativeRead.meta) && v.nativeRead.meta.Options.ColumnStore.RetainedPayload != ColumnRetainedPayloadFull {
 			return DocumentFetchResponse{}, backenddb.ErrNativeSemanticUnsupported
 		}
 		if uint64(len(ids)) > ^uint64(0)/uint64(unsafe.Sizeof(DocumentFetchResult{})) {

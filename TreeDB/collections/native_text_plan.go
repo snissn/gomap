@@ -878,7 +878,7 @@ func nativeTextDocumentFormat(format DocumentFormat) bool {
 
 func nativeTextMeta(meta CollectionMeta) bool {
 	for _, def := range meta.TextIndexes {
-		if (def.Version != TextIndexVersionV1 && def.Version != TextIndexVersionV2) || meta.Options.ColumnStore != nil || !nativeTextDocumentFormat(meta.Options.DocumentFormat) {
+		if (def.Version != TextIndexVersionV1 && def.Version != TextIndexVersionV2) || (meta.Options.ColumnStore != nil && !nativeOrdinaryColumnGraphMeta(meta)) || !nativeTextDocumentFormat(meta.Options.DocumentFormat) {
 			return false
 		}
 	}

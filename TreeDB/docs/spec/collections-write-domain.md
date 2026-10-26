@@ -121,9 +121,12 @@ Assigned uncertain failures retain their identity and poison further writes
 until recovery.
 
 Native live producers run shared pressure preparation before collection locks,
-captures, private staging and callbacks. The existing byte watermark or an
-exhausted finite source/generation counter requests at most one coalesced
-checkpoint. It then joins refunds already queued on the existing semantic
+captures, private staging and callbacks. The existing three-quarter byte
+watermark or an exhausted finite source/generation counter requests at most one
+coalesced checkpoint. Pending typed construction uses the same watermark against
+both finite maintenance byte limits and the same source ceiling. Its inventory
+includes the original builder, handoff, typed workspace, root-key and catalog
+projection promises; exact final admission remains required. It then joins refunds already queued on the existing semantic
 cleanup worker through a fixed completion frontier; later producers and held
 read cuts are outside that wait. Cleanup failure retains its original custody
 and error. Reentry from an active publication/cleanup callback refuses before
@@ -132,6 +135,67 @@ maintenance. Lock-held facade openings reuse the original transaction opening
 without a second pressure check. Preparation reserves no capacity: multi-domain
 work and readers retaining old sources can still reach ordinary finite
 admission refusal without assignment or a callback retry.
+
+
+Eligible native ordinary retained-JSON ColumnGraph rebuilds capture one worker
+ceiling before admission and bind the existing offline builder to it. Frozen
+prefix batches retain their 16-row cuts and graph topology. The original recipe
+reserves source rows, IDs and adjacency, captured manifest and source backing,
+and the peak of the constructor phases. Asset authority and generated Config
+metadata start after private graph construction returns. Pending source images
+remain charged while the graph consumes them. The workspace stays reserved
+through publication; completion does not acquire a new construction receipt.
+
+The shared graph vector and inverse-norm readers use the maintained scan-only typed image
+projection. Whole-asset integrity, image identity, all declared column schemas,
+stored codecs and vector layout certification remain checked. It uses captured
+collection row locators rather than decoding unused image locator, dictionary,
+aggregate, statistics or pruning metadata. Native construction retains the fixed
+ZSTD decoder promise for captured data sections that can need it and for pending
+producers whose physical codecs are not yet known. Other typed readers retain
+their existing full metadata decoding.
+Ordinary unquantized status reserves payload workspace only for the inverse-norm asset it opens;
+reference and configuration validation retain their metadata charges. A status
+failure after successful rebuild completion is reported as an accepted ambiguous
+result, so a capacity error does not imply that the rebuild was refused.
+
+Ordinary native ColumnGraph search and lifecycle warming share the maintained
+exact prepared search pack. Setup uses the original native capture's physical
+manifest and catalog; unresolved source state cannot be replaced with older
+physical roots. The cache identity includes native publication identity, and
+its mapped or heap-backed assets retain independent admission until their final
+handles close. Dense and hybrid materialization keep that original capture
+through document fetch. Full retained JSON uses the existing admitted primary
+reader. Scalar-filtered dense search keeps its document-scan exact route;
+hybrid retains the maintained bounded allow-set cutoff and ANN postfiltering.
+
+The operation-local native text catalog lends one owned pointer-projection workspace across sequential scalar, document-ID and posting phases. Each actually encountered ordinary or PRIMARY backing is admitted before allocation and remains charged to the original operation through its final alias. A cursor holds its loan until Close; overlapping cursors use separately admitted independent storage because inline page bytes can remain borrowed outside the read mutex. Close clears tree, page, directory, key and callback aliases before reuse. Query specialization stays local to the text request, and abandoned or partially constructed posting iterators close before fallback or error return. No pool, new capture, owner or admission authority is introduced.
+
+Native collection scans traverse the same captured finite-source merge with an
+operation-owned forward cursor. They materialize each selected entry directly
+through the point reader's existing pending-typed, retained JSON and pointer
+rules. Cursor storage, its retained reader callback and physical projection are
+admitted before creation. IDs and documents become independent copies before
+the read mutex is released for application callbacks. Reentrant point reads,
+nested scans and mutations cannot replace the outer scan's cut or page storage;
+a callback Close defers capture release until visits finish. Cursor cleanup
+precedes its operation receipt and captured-read release.
+
+For ordinary ColumnGraph, the document service retains one search collection
+owner across cold Dense, Hybrid and prepared queries, including after reopening. Its existing search
+cache read lease spans search and final document conversion, excluding cache
+invalidation and service Close. Native collection-manager opens remain separate
+facades; their per-handle prepared assets must not accumulate through repeated
+service opens. Serving admits record backing and both untrusted TVIS decode
+envelopes without reserving the source-requirement stream it never constructs.
+
+Ordinary rebuilds derive durable requirements from their complete manifest.
+They preserve the captured untrusted TVIS codec envelope without constructing
+the source importer's streaming leaf slots. Source import keeps that original
+streaming reader and its full bounds. Fresh graph metadata has separately
+reserved decoder slots; its known shape does not weaken stored-state limits.
+Segment ID selection uses bounded name scans, with exclusive creation retaining
+allocation authority. Reachability reports and GC retain their identity checks.
 
 ## Indexed Write Memtables
 

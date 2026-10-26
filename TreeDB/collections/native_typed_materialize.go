@@ -250,11 +250,21 @@ func nativeTypedManifestAppendCapacity(meta CollectionMeta) (uint64, error) {
 // Retained source bytes bound structural entries independently of their encoded
 // compression ratio. These are the maintained prepared-materializer quota terms.
 func nativeTypedDeltaRowBuildCapacity(meta CollectionMeta, idBytes, retainedBytes uint64) (uint64, error) {
-	structural, err := nativeTypedCheckedMul(retainedBytes, uint64(4*preparedSemanticStreamMapEntryReserveBytes+2*preparedSemanticStreamMaxPathBytes+preparedSemanticStreamMaxCursorDepth*int(unsafe.Sizeof(""))+int(unsafe.Sizeof(columnRetainedSemanticStreamPathNode{}))))
-	if err != nil {
-		return 0, err
+	var total uint64
+	var err error
+	// This eligible Full+JSON lane passes already-declared values and the
+	// original complete JSON directly to the maintained asset builder. It never
+	// constructs the semantic-stream path trie/maps/cursors: validation returns
+	// early for JSON and materializeDelta assigns retained.documents=residual.
+	// Keep every other existing row/image/TCIM/source/codec term below. All
+	// excluded and non-column/semantic carriers retain their original promise.
+	if !nativeOrdinaryColumnGraphMeta(meta) {
+		structural, err := nativeTypedCheckedMul(retainedBytes, uint64(4*preparedSemanticStreamMapEntryReserveBytes+2*preparedSemanticStreamMaxPathBytes+preparedSemanticStreamMaxCursorDepth*int(unsafe.Sizeof(""))+int(unsafe.Sizeof(columnRetainedSemanticStreamPathNode{}))))
+		if err != nil {
+			return 0, err
+		}
+		total = memtable.COWAllocationCharge(structural)
 	}
-	total := memtable.COWAllocationCharge(structural)
 	// Match the maintained prepared publisher: scalar preparation per cell,
 	// TCIM containers per typed cell, C+3 sidecars, row image per cell, and
 	// original root/run controls per row. Codecs remain one shared workspace.
@@ -399,7 +409,10 @@ func nativeTypedCollectionRetainedCapacity(meta CollectionMeta, sourceBytes uint
 	if err = nativeTypedCheckedAdd(&total, schema); err != nil {
 		return 0, err
 	}
-	for _, n := range []uint64{uint64(unsafe.Sizeof(nativeTypedMaterialization{})), uint64(unsafe.Sizeof(cowbtree.OwnedMapRefund{})), 4 * uint64(unsafe.Sizeof(nativeTypedMaterializedRoot{}))} {
+	// The original typed receipt covers the complete original group control,
+	// including its fixed four-root read window, and the borrowed reader array.
+	// Generic group factories retain their existing external accounting owner.
+	for _, n := range []uint64{uint64(unsafe.Sizeof(backenddb.RootPublicationBuildGroup{})), uint64(unsafe.Sizeof(nativeTypedMaterialization{})), uint64(unsafe.Sizeof(cowbtree.OwnedMapRefund{})), 4 * uint64(unsafe.Sizeof(nativeTypedMaterializedRoot{})), 4 * uint64(unsafe.Sizeof(iterator.UnsafeIterator(nil)))} {
 		if err = nativeTypedCheckedAdd(&total, memtable.COWAllocationCharge(n)); err != nil {
 			return 0, err
 		}
@@ -752,37 +765,60 @@ func (w *nativeTypedMaterialization) materialize() (resultErr error) {
 			w.complete = true
 		}
 	}()
+	var previousLSN uint64
+	var previousMember uint32
 	for _, d := range w.input.deltas {
-		if d != nil && d.data != nil && d.data.graph != nil {
-			if w.input.compaction != nil || len(w.input.deltas) != 1 || len(d.rows)+len(d.retained)+len(d.deleted) != 0 {
-				return backenddb.ErrNativeSemanticUnsupported
-			}
-			return w.materializeVectorGraph(d)
+		if d == nil || d.appliedLSN == 0 || (previousLSN != 0 && (d.appliedLSN < previousLSN || (d.appliedLSN == previousLSN && d.memberOrdinal <= previousMember))) {
+			return backenddb.ErrNativeSemanticUnsupported
 		}
-	}
-	var mutations []nativeTypedMaterializeMutation
-	var err error
-	if len(w.input.deltas) != 0 {
-		mutations, err = selectNativeTypedMaterializeMutations(w.input.deltas)
-		if err != nil {
-			return err
-		}
+		previousLSN, previousMember = d.appliedLSN, d.memberOrdinal
 	}
 	rootDir, registry, err := w.input.group.NativeColumnAssetBuildContext()
 	if err != nil {
 		return err
 	}
 	context := columnPhysicalAssetBuildContext{rootDir: rootDir, registry: registry, recovery: w.input.capture, codec: &w.codec, singleOutput: true}
-	for start := 0; start < len(mutations); {
-		end := start + 1
-		for end < len(mutations) && mutations[end].delta == mutations[start].delta {
+	// Graph recipes are barriers: later mutations must not shadow the source
+	// visible to an earlier recipe. Reuse the original row selector per segment.
+	for first := 0; first < len(w.input.deltas); {
+		end := first
+		for end < len(w.input.deltas) && (w.input.deltas[end] == nil || w.input.deltas[end].data == nil || w.input.deltas[end].data.graph == nil) {
 			end++
 		}
-		d := w.input.deltas[mutations[start].delta]
-		if err = w.materializeDelta(context, d, mutations[start:end]); err != nil {
+		if end > first {
+			mutations, e := selectNativeTypedMaterializeMutations(w.input.deltas[first:end])
+			if e != nil {
+				return e
+			}
+			for start := 0; start < len(mutations); {
+				stop := start + 1
+				for stop < len(mutations) && mutations[stop].delta == mutations[start].delta {
+					stop++
+				}
+				d := w.input.deltas[first+mutations[start].delta]
+				if err = w.materializeDelta(context, d, mutations[start:stop]); err != nil {
+					return err
+				}
+				start = stop
+			}
+		}
+		if end == len(w.input.deltas) {
+			break
+		}
+		d := w.input.deltas[end]
+		if w.input.compaction != nil || len(d.rows)+len(d.retained)+len(d.deleted) != 0 {
+			return backenddb.ErrNativeSemanticUnsupported
+		}
+		if !d.data.graph.ordinary {
+			if len(w.input.deltas) != 1 {
+				return backenddb.ErrNativeSemanticUnsupported
+			}
+			return w.materializeVectorGraph(d)
+		}
+		if err = w.materializeOrdinaryVectorGraph(d); err != nil {
 			return err
 		}
-		start = end
+		first = end + 1
 	}
 	if w.input.compaction != nil {
 		if err = w.materializeCompaction(context); err != nil {
@@ -1428,6 +1464,10 @@ func nativeTypedReadCapacity(meta CollectionMeta, snapshot *backenddb.Snapshot, 
 type nativeTypedFamilyReadShape struct {
 	decodedBytes    uint64
 	dictionarySlots uint64
+	// The graph projection uses scan-only typed decoding: metadata sections are
+	// validated as stored bytes but never decompressed. A data section can still
+	// require the original fixed ZSTD decoder; other read callers ignore this flag.
+	columnDataZSTD bool
 }
 
 func nativeTypedFamilyReadCapacity(meta CollectionMeta, snapshot *backenddb.Snapshot, root uint64, rootDir string, shape *nativeTypedFamilyReadShape, admit func(uint64) error, selected ...columnManifestRecord) (extra, typedJSON uint64, err error) {
@@ -1545,6 +1585,9 @@ func nativeTypedFamilyReadCapacity(meta CollectionMeta, snapshot *backenddb.Snap
 					return e
 				}
 				if shape != nil {
+					if section.Kind == typedcolumn.ColumnPartImageSectionColumnData && section.Compression == typedcolumn.CompressionZSTD {
+						shape.columnDataZSTD = true
+					}
 					if e = nativeTypedCheckedAdd(&shape.decodedBytes, n); e != nil {
 						return e
 					}

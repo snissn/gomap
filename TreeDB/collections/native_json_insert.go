@@ -19,27 +19,38 @@ import (
 // InsertBatch is the one-shot form of Begin, staged InsertBatch, and Commit.
 func (m *NativeJSONManager) InsertBatch(name string, ids, documents [][]byte) error {
 	tx, err := m.Begin(name)
-	_, err = finishNativeJSONInsert(tx, err, ids, documents, nil, false)
+	_, err = finishNativeJSONInsert(tx, err, ids, documents, nil, false, nil)
 	return err
 }
 
-func (m *NativeJSONManager) insertPrepared(name string, ids, documents [][]byte, stats *CollectionInsertStats, ordinaryOnly bool) (bool, error) {
+func (m *NativeJSONManager) insertPrepared(name string, ids, documents [][]byte, stats *CollectionInsertStats, ordinaryOnly bool, projection *trustedFloat32Projection) (bool, error) {
 	tx, err := m.beginPrepared(name)
-	return finishNativeJSONInsert(tx, err, ids, documents, stats, ordinaryOnly)
+	return finishNativeJSONInsert(tx, err, ids, documents, stats, ordinaryOnly, projection)
 }
 
-func finishNativeJSONInsert(tx *NativeJSONTxn, err error, ids, documents [][]byte, stats *CollectionInsertStats, ordinaryOnly bool) (recordStats bool, resultErr error) {
+func finishNativeJSONInsert(tx *NativeJSONTxn, err error, ids, documents [][]byte, stats *CollectionInsertStats, ordinaryOnly bool, projection *trustedFloat32Projection) (recordStats bool, resultErr error) {
 	if err != nil {
 		return false, err
 	}
 	defer func() { resultErr = errors.Join(resultErr, tx.Close()) }()
-	if tx.bindings[0].probe.meta.Options.ColumnStore != nil {
+	if tx.bindings[0].probe.meta.Options.ColumnStore != nil && !nativeOrdinaryColumnGraphMeta(tx.bindings[0].probe.meta) {
 		if ordinaryOnly {
 			return false, backenddb.ErrNativeSemanticUnsupported
 		}
 		// Plain typed insertion keeps its existing route and Last behavior.
 		// Typed diagnostics use their distinct maintained API.
 		stats = nil
+	}
+	if projection != nil {
+		if !nativeOrdinaryColumnGraphMeta(tx.bindings[0].probe.meta) {
+			return false, backenddb.ErrNativeSemanticUnsupported
+		}
+		if err = validateTrustedFloat32ProjectionMeta(tx.bindings[0].probe.meta, projection); err != nil {
+			return false, err
+		}
+		// Borrow only for this synchronous request. The binding is cleared on
+		// Close; retained typed values always belong to their original delta.
+		tx.bindings[0].projection = projection
 	}
 	var started time.Time
 	if stats != nil {

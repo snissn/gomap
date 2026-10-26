@@ -150,7 +150,19 @@ func (c *Collection) searchHybridVectorCandidatesDeclaredScalarAtReadViewWithAll
 		opts.DeclaredScalarFilter = filter
 		var buffer VectorIndexSearchBuffer
 		defer buffer.Reset()
-		vectorResponse, err := c.searchNativeHNSWAtReadView(opts, &buffer, view, allowSet)
+		var vectorResponse VectorIndexSearchResponse
+		var err error
+		if nativeOrdinaryColumnGraphMeta(view.nativeRead.meta) {
+			// The executor prepares a bounded scalar allow-set at this same cut.
+			// ColumnGraph retains its maintained pack route rather than the
+			// native-runtime index's specialized scalar-filter planner.
+			if filter != nil {
+				return HybridCandidateResponse{}, ErrHybridSearchUnsupported
+			}
+			vectorResponse, err = c.searchNativeColumnGraphAtReadView(opts, &buffer, view, allowSet)
+		} else {
+			vectorResponse, err = c.searchNativeHNSWAtReadView(opts, &buffer, view, allowSet)
+		}
 		if err != nil {
 			stats := hybridVectorCandidateStatsFromSearch(requested, vectorResponse.Stats, 0)
 			stats.FailClosed = 1
@@ -166,7 +178,11 @@ func (c *Collection) searchHybridVectorCandidatesDeclaredScalarAtReadViewWithAll
 				return HybridCandidateResponse{}, err
 			}
 		}
-		return hybridVectorCandidatesFromSearchResponse(requested, query.IndexName, vectorResponse)
+		response, err := hybridVectorCandidatesFromSearchResponse(requested, query.IndexName, vectorResponse)
+		if nativeOrdinaryColumnGraphMeta(view.nativeRead.meta) && allowSet != nil {
+			hybridVectorCandidateAddAllowSetStats(&response.Stats, vectorResponse.Stats)
+		}
+		return response, err
 	}
 	if view == nil || view.typedGraphOwner == nil {
 		return HybridCandidateResponse{}, hybridVectorCandidateError(ErrVectorIndexSnapshotMismatch, query.IndexName)
@@ -414,6 +430,9 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineAllowSet(query []float32,
 	if degree <= maxCollectionInt/2 {
 		degree *= 2
 	}
+	// This route scans ordinals rather than expanding graph neighbors. Even a
+	// large configured M cannot require a score tile larger than the corpus.
+	degree = min(degree, rowCount)
 	if err := scratch.prepareHNSWSearchPack(rowCount, v.Header.VectorStride, degree, topK, topK, 0, 0, 0); err != nil {
 		return nil, stats, fmt.Errorf("collections: hnsw_search_pack_v1 allow-set search scratch prepare: %w", err)
 	}

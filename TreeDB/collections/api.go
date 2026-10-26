@@ -11904,6 +11904,11 @@ func (c *Collection) InsertBatchWithStatsValidatedFloat32Projection(ids, documen
 	if err != nil {
 		return nil, CollectionInsertStats{}, err
 	}
+	if c != nil && c.nativeJSON != nil {
+		var stats CollectionInsertStats
+		result, err := c.nativeInsertBatchWithStatsProjection(ids, documents, &stats, projection)
+		return result, stats, err
+	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
 	admissionState := c.lockCollectionCommandWALAdmission()

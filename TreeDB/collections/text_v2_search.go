@@ -733,6 +733,11 @@ func executeTextV2BlockMaxSearchAtSnapshot(
 
 	baseStats := response.Stats
 	fallbackToExactScan := func() (TextSearchResponse, error) {
+		// This cursor is abandoned: end borrowed scanner/value aliases before
+		// exact fallback can reuse the operation's projection storage.
+		if err := it.Close(); err != nil {
+			return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
+		}
 		postingsScanned := response.Stats.TextPostingsScanned
 		fallback := response
 		fallback.Stats = baseStats
@@ -777,6 +782,11 @@ func executeTextV2BlockMaxSearchAtSnapshot(
 			return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, errMalformedTextStorage("text-v2 posting block field count %d want %d", len(scanner.block.Summary.MaxFieldTermFrequencies), fieldCount))
 		}
 		if !scanner.ChecksumVerified() || !textV2PostingBlockKindSupportsBlockMax(scanner.block.Kind) || (hasLastBlock && scanner.block.Summary.FirstOrdinal <= lastBlockLast) {
+			// These views borrow the abandoned iterator; end them before its
+			// workspace can be reinitialized by recursive exact fallback.
+			scannerStorage = textV2PostingBlockEntryScanner{}
+			scanner = nil
+			keyBytes = nil
 			return fallbackToExactScan()
 		}
 		hasLastBlock = true
@@ -1002,6 +1012,11 @@ func executeTextV2ANDBlockMaxSearchAtSnapshot(
 	fieldCount := len(ctx.fieldNames)
 	scanTerms := orderTextV2SearchScanTerms(terms, TextSearchOperatorAND, ctx.termStats)
 	states := make([]*textV2ANDBlockMaxTermState, 0, len(scanTerms))
+	defer func() {
+		for _, state := range states {
+			_ = state.close()
+		}
+	}()
 	for _, term := range scanTerms {
 		state, err := newTextV2ANDBlockMaxTermState(snap, catalog, ctx, term, fieldCount)
 		if err != nil {
@@ -1009,11 +1024,6 @@ func executeTextV2ANDBlockMaxSearchAtSnapshot(
 		}
 		states = append(states, state)
 	}
-	defer func() {
-		for _, state := range states {
-			_ = state.close()
-		}
-	}()
 
 	cache := textV2SearchBlockCache{allowed: allowSet}
 	top := textV2SearchTopK{limit: opts.TopK, candidates: make([]textV2SearchTopCandidate, 0, opts.TopK)}
@@ -1613,6 +1623,11 @@ func executeTextV2ORBlockMaxSearchAtSnapshot(
 
 	fieldCount := len(ctx.fieldNames)
 	states := make([]*textV2ANDBlockMaxTermState, 0, len(liveTerms))
+	defer func() {
+		for _, state := range states {
+			_ = state.close()
+		}
+	}()
 	for _, term := range liveTerms {
 		state, err := newTextV2ANDBlockMaxTermState(snap, catalog, ctx, term, fieldCount)
 		if err != nil {
@@ -1620,11 +1635,6 @@ func executeTextV2ORBlockMaxSearchAtSnapshot(
 		}
 		states = append(states, state)
 	}
-	defer func() {
-		for _, state := range states {
-			_ = state.close()
-		}
-	}()
 
 	cache := textV2SearchBlockCache{allowed: allowSet}
 	top := textV2SearchTopK{limit: opts.TopK, candidates: make([]textV2SearchTopCandidate, 0, opts.TopK)}
@@ -2730,9 +2740,6 @@ func decodeTextV2SearchNormBlock(raw []byte) (textV2SearchNormBlock, error) {
 // Retained descriptors and field lengths own their arrays; raw is needed only
 // for this synchronous decode. Docmap decoding below has a different lifetime.
 func decodeTextV2SearchNormBlockSelected(raw []byte, allowed *textV2SearchOrdinalAllowSet) (textV2SearchNormBlock, error) {
-	if len(raw) != 0 && raw[0] == textV2DenseNormBlockValueVersion {
-		return decodeTextV2SearchDenseNormBlockSelected(raw, allowed)
-	}
 	cur, err := textV2ValueCursor(raw, textV2NormBlockValueVersion, "norm block")
 	if err != nil {
 		return textV2SearchNormBlock{}, err

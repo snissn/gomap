@@ -443,10 +443,18 @@ reachability/pin/scanner authorities, never segment age or a second COW GC
 tracker. Retired owner cleanup occurs outside writer/admission/cut locks.
 
 Native producer pressure preparation joins at most one checkpoint and the
-original semantic cleanup frontier before consumer locks. If the same finite
-live accounting and logical sequence remain after a successful drain, later
-producers skip another identical drain. Retained readers still cause ordinary
-admission refusal. Changes to outstanding ownership or logical publication
+original semantic cleanup frontier before consumer locks. It also inspects
+pending typed construction through an optional immutable-state inventory,
+borrowing the original retained cut and physical basis off the cut latch. That
+inspection cut is released before maintenance; it creates no snapshot or
+allocation authority. The same three-quarter watermark applies to both
+maintenance byte limits, alongside the existing byte/source/generation pressure.
+Exact final admission still applies to the incoming operation.
+
+If the same finite live accounting, semantic construction debt, physical basis
+and logical sequence remain after a successful drain, later producers skip
+another identical drain. Retained readers still cause ordinary admission
+refusal. Changes to outstanding ownership, physical basis or logical publication
 permit maintenance again; historical peak alone does not. A concurrent logical
 suffix prevents remembering that checkpoint as covering the new work. The
 remembered state holds no additional captures or allocation leases, and is

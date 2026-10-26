@@ -365,7 +365,7 @@ func (c *Collection) OpenCollectionReadViewForVectorIndexSearch(response VectorI
 // snapshot while excluding coverage mutations across the combined operation.
 func (c *Collection) SearchVectorIndexWithBufferReadView(opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer) (VectorIndexSearchResponse, *CollectionReadView, error) {
 	if c != nil && c.nativeJSON != nil && c.typedGraphServingPolicy() == nil {
-		return c.searchNativeHNSWWithBufferReadView(opts, buffer)
+		return c.searchNativeVectorWithBufferReadView(opts, buffer)
 	}
 
 	if c.typedGraphServingPolicy() != nil {

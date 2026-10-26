@@ -22,11 +22,29 @@ type nativeTextCatalog struct {
 	admit func(uint64) error
 	// One admitted bound callback for general record copies on this scope.
 	recordAdmit func(uint64) error
+	// Exclusively lent only until cursor Close. Overlaps allocate independently.
+	projection      tree.OwnedPointerProjectionWorkspace
+	projectionAdmit func(uint64) error
 	// Optional rewrite-only key-derived map/string/slice cohorts.
 	admitKey func(uint64) error
 	// Set only after the maintained query analyzer selects one V2 term.
 	// Reducers, inspection, rewrite and other serving shapes keep admitRecord.
 	singleTermFields uint64
+}
+
+// The tree seam reports raw maximum storage bytes. Keep the same original
+// operation's rounded admission, and admit this retained method before creation.
+func (n *nativeTextCatalog) admitProjectionStorage(raw uint64) error {
+	return n.admit(memtable.COWAllocationCharge(raw))
+}
+func (n *nativeTextCatalog) bindProjectionAdmission() error {
+	if n.projectionAdmit == nil {
+		if err := n.admit(memtable.COWAllocationCharge(2 * uint64(unsafe.Sizeof(uintptr(0))))); err != nil {
+			return err
+		}
+		n.projectionAdmit = n.admitProjectionStorage
+	}
+	return nil
 }
 
 func (n *nativeTextCatalog) relative(root string) string {
@@ -189,6 +207,7 @@ func (n *nativeTextCatalog) iterator(root string, start, end []byte, deleted boo
 	// admitted wrapper, rather than allocating another escaping closure per row.
 	it.readLeaf = n.read.readLeaf
 	it.cursor.start, it.cursor.end = it.start, it.end
+	it.cursor.projectionOwner = n
 	it.Seek(start)
 	if it.err != nil {
 		return nil, errors.Join(it.err, it.Close())
@@ -344,15 +363,14 @@ func (it *nativeTextIterator) Close() error {
 	}
 	r := it.scope.read
 	heldVisit := it.heldVisit
-	if heldVisit {
-		r.mu.Lock()
-	}
+	r.mu.Lock()
 	err := it.cursor.close()
 	it.valid = false
 	it.scope = nil
 	it.readLeaf = nil
 	it.start, it.end, it.key, it.value, it.keyWorkspace = nil, nil, nil, nil, nil
 	if !heldVisit {
+		r.mu.Unlock()
 		return err
 	}
 	it.heldVisit = false

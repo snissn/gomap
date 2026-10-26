@@ -934,6 +934,25 @@ func (s *Service) SearchDenseVector(ctx context.Context, index string, req Dense
 	if err != nil {
 		return DenseVectorSearchResponse{}, err
 	}
+	// Ordinary ColumnGraph Dense and Hybrid must share the service-owned
+	// collection before either opens a retained prepared pack. Native runtime
+	// and typed Dense retain their existing raw-route lifetime lock instead.
+	if !info.TypedInput && info.VectorStrategy == collections.VectorIndexStrategyColumnGraph {
+		var release func()
+		col, info, release, err = s.acquireBenchmarkSearchIndex(ctx, index, req.ExpectedGeneration)
+		if err != nil {
+			return DenseVectorSearchResponse{}, err
+		}
+		if !info.TypedInput && info.VectorStrategy == collections.VectorIndexStrategyColumnGraph {
+			defer release()
+		} else {
+			// Schema churn may select the raw route while acquiring the owner.
+			// Release before its wrapper RLocks: a queued writer makes recursive
+			// RWMutex read locking unsafe even in this same goroutine.
+			release()
+		}
+		s.noteDiagnosticsIndex(index, info)
+	}
 	if err := bindDenseVectorRepresentation(&req, info); err != nil {
 		return DenseVectorSearchResponse{}, err
 	}
@@ -1478,10 +1497,12 @@ func (s *Service) SearchKeyword(ctx context.Context, index string, req KeywordSe
 
 // SearchHybrid runs collection-native hybrid retrieval with text and/or vector sources.
 func (s *Service) SearchHybrid(ctx context.Context, index string, req HybridSearchRequest) (HybridSearchResponse, error) {
-	col, info, err := s.openIndex(ctx, index, req.ExpectedGeneration)
+	col, info, release, err := s.acquireBenchmarkSearchIndex(ctx, index, req.ExpectedGeneration)
 	if err != nil {
 		return HybridSearchResponse{}, err
 	}
+	defer release()
+	s.noteDiagnosticsIndex(index, info)
 	if req.TopK <= 0 {
 		return HybridSearchResponse{}, serviceError(CodeInvalidRequest, "top_k must be positive")
 	}
@@ -1643,7 +1664,11 @@ func (s *Service) acquireBenchmarkSearchIndex(ctx context.Context, name string, 
 				s.benchmarkSearchCache = make(map[string]*serviceBenchmarkSearchCacheEntry)
 			}
 			if existing := s.benchmarkSearchCache[name]; existing.matches(name) {
-				closeCol = col
+				// openIndex may itself have found this concurrent winner after
+				// our initial miss. Only a distinct losing facade may close.
+				if existing.collection != col {
+					closeCol = col
+				}
 			} else {
 				s.benchmarkSearchCache[name] = entry
 			}

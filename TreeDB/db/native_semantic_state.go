@@ -66,6 +66,28 @@ type NativeSemanticState interface {
 	PrepareHandoff(latest NativeSemanticState, accepted *Snapshot) (NativeSemanticState, error)
 }
 
+// NativeSemanticProducerPressure is an advisory inventory of construction for
+// the current immutable state, not an admission promise for an incoming write.
+// A zero value means no pending typed construction. Nonzero construction uses
+// the original finite maintenance limits and producer source limit.
+type NativeSemanticProducerPressure struct {
+	ConstructionBytes uint64
+	MaxInFlightBytes  uint64
+	MaxTotalBytes     uint64
+	Sources           int
+	MaxSources        int
+}
+
+// NativeSemanticProducerPressureState optionally observes the SAME retained
+// cut's immutable state and exact borrowed backend Snapshot. The caller holds
+// that cut throughout this call, outside the cut latch, and releases it before
+// joining maintenance. Implementations neither recapture nor retain the basis,
+// allocate publication work, acquire consumer locks, or change admission state.
+// Errors are observations, never retryable build/handoff refusals.
+type NativeSemanticProducerPressureState interface {
+	NativeProducerPressure(*Snapshot) (NativeSemanticProducerPressure, error)
+}
+
 // NativeSemanticBasisRefresher optionally rebinds an immutable semantic root set
 // after logically equivalent backend maintenance. before and after are the exact
 // retained old/new physical Snapshots, never newly captured by the participant.

@@ -188,10 +188,13 @@ func nativeTypedMeta(meta CollectionMeta) bool {
 	}
 	// The maintained direct typed producer indexes only declared, non-null
 	// String RowAsset values carried alongside non-column JSON residuals.
-	if full && len(meta.Indexes) != 0 {
+	if full && len(meta.Indexes) != 0 && !nativeOrdinaryColumnGraphMeta(meta) {
 		return false
 	}
 	for _, index := range meta.Indexes {
+		if full && nativeOrdinaryColumnGraphMeta(meta) {
+			continue // Complete JSON uses the ordinary scalar index planner.
+		}
 		if normalizedDocumentFormat(meta.Options.DocumentFormat) != DocumentFormatJSON || encoding != ColumnRetainedPayloadEncodingJSON || index.ValueType != IndexValueString || index.MultiKey || len(index.Components) != 0 || typedStringColumnIndex(cfg.Columns, index.Field) < 0 {
 			return false
 		}

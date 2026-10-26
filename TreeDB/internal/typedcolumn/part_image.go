@@ -395,12 +395,18 @@ type columnPartImageBuilder struct {
 	opts             ColumnPartImageOptions
 	sectionAlignment int
 	sections         []columnPartImageSectionData
+	// Nonzero only for the allocation-planned raw ordinal constructor.
+	encoderCapacity int
 }
 
 type columnPartImageSectionData struct {
 	section ColumnPartImageSection
 	data    []byte
 	chunks  [][]byte
+}
+
+func (b *columnPartImageBuilder) newEncoder() columnPartImageEncoder {
+	return columnPartImageEncoder{buf: make([]byte, 0, b.encoderCapacity)}
 }
 
 func (b *columnPartImageBuilder) build() (ColumnPartImage, error) {
@@ -474,7 +480,7 @@ func (b *columnPartImageBuilder) layoutManifestAndSections() ([]ColumnPartImageS
 	}
 	manifestBytes := 0
 	for attempt := 0; attempt < 8; attempt++ {
-		manifest, err := encodeColumnPartImageManifest(b.part, sections, manifestBytes)
+		manifest, err := encodeColumnPartImageManifestWithCapacity(b.part, sections, manifestBytes, b.encoderCapacity)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -489,7 +495,7 @@ func (b *columnPartImageBuilder) layoutManifestAndSections() ([]ColumnPartImageS
 		if err := b.refreshLayoutContractSection(sections, len(manifest)); err != nil {
 			return nil, nil, err
 		}
-		finalManifest, err := encodeColumnPartImageManifest(b.part, sections, len(manifest))
+		finalManifest, err := encodeColumnPartImageManifestWithCapacity(b.part, sections, len(manifest), b.encoderCapacity)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -502,7 +508,7 @@ func (b *columnPartImageBuilder) layoutManifestAndSections() ([]ColumnPartImageS
 }
 
 func (b *columnPartImageBuilder) addDescriptorSection() error {
-	var enc columnPartImageEncoder
+	enc := b.newEncoder()
 	desc := b.part.Descriptor
 	enc.u16(uint16(desc.Version))
 	enc.u64(desc.PartID)
@@ -698,7 +704,7 @@ func imageColumnCardinalityForDescriptor(column ColumnPartColumnDescriptor, part
 }
 
 func (b *columnPartImageBuilder) addSortKeyMetadataSection() error {
-	var enc columnPartImageEncoder
+	enc := b.newEncoder()
 	enc.u32(uint32(len(b.part.Descriptor.SortKey)))
 	for _, column := range b.part.Descriptor.SortKey {
 		enc.str(column.Column)
@@ -714,7 +720,7 @@ func (b *columnPartImageBuilder) addSortKeyMetadataSection() error {
 }
 
 func (b *columnPartImageBuilder) addSortKeyMarksSection() error {
-	var enc columnPartImageEncoder
+	enc := b.newEncoder()
 	enc.u32(uint32(len(b.part.Marks)))
 	for _, mark := range b.part.Marks {
 		enc.i64(int64(mark.Rows))
@@ -865,7 +871,7 @@ func (b *columnPartImageBuilder) addAggregateMetadataSections() error {
 }
 
 func (b *columnPartImageBuilder) addColumnStatsSection() error {
-	data, err := encodeColumnPartStatsSection(b.part.ColumnStats)
+	data, err := encodeColumnPartStatsSectionWithCapacity(b.part.ColumnStats, b.encoderCapacity)
 	if err != nil {
 		return err
 	}
@@ -884,7 +890,7 @@ func (b *columnPartImageBuilder) addColumnStatsSection() error {
 }
 
 func (b *columnPartImageBuilder) addPruningMetadataSection() error {
-	data, err := encodeColumnPartPruningSection(b.part.PruningMetadata)
+	data, err := encodeColumnPartPruningSectionWithCapacity(b.part.PruningMetadata, b.encoderCapacity)
 	if err != nil {
 		return err
 	}
@@ -906,7 +912,7 @@ func (b *columnPartImageBuilder) addDictionarySection() error {
 	if len(b.opts.Dictionaries) == 0 {
 		return nil
 	}
-	rawData, compactData, compactOK := encodeDictionarySectionPayloads(b.opts.Dictionaries)
+	rawData, compactData, compactOK := encodeDictionarySectionPayloadsWithCapacity(b.opts.Dictionaries, b.encoderCapacity)
 	section := ColumnPartImageSection{
 		Kind:     ColumnPartImageSectionDictionaries,
 		Category: ColumnPartImageCategoryDictionaries,
@@ -934,8 +940,12 @@ func (b *columnPartImageBuilder) addDictionarySection() error {
 }
 
 func encodeDictionarySectionPayloads(dictionaries map[string]map[string]int64) ([]byte, []byte, bool) {
-	var rawEnc columnPartImageEncoder
-	var compactEnc columnPartImageEncoder
+	return encodeDictionarySectionPayloadsWithCapacity(dictionaries, 0)
+}
+
+func encodeDictionarySectionPayloadsWithCapacity(dictionaries map[string]map[string]int64, capacity int) ([]byte, []byte, bool) {
+	rawEnc := columnPartImageEncoder{buf: make([]byte, 0, capacity)}
+	compactEnc := columnPartImageEncoder{buf: make([]byte, 0, capacity)}
 	names := make([]string, 0, len(dictionaries))
 	for name := range dictionaries {
 		names = append(names, name)
@@ -1150,7 +1160,7 @@ func (b *columnPartImageBuilder) addBytesColumnSections(columnDescriptor ColumnP
 }
 
 func (b *columnPartImageBuilder) addLayoutContractSection() error {
-	data, err := encodeColumnPartLayoutContract(b.part, b.opts, b.sections, 0)
+	data, err := encodeColumnPartLayoutContractWithCapacity(b.part, b.opts, b.sections, 0, b.encoderCapacity)
 	if err != nil {
 		return err
 	}
@@ -1187,7 +1197,7 @@ func (b *columnPartImageBuilder) refreshLayoutContractSection(sections []ColumnP
 	if idx < 0 {
 		return fmt.Errorf("typedcolumn: missing layout contract section")
 	}
-	data, err := encodeColumnPartLayoutContract(b.part, b.opts, b.sections, manifestBytes)
+	data, err := encodeColumnPartLayoutContractWithCapacity(b.part, b.opts, b.sections, manifestBytes, b.encoderCapacity)
 	if err != nil {
 		return err
 	}
@@ -1338,7 +1348,11 @@ func (e *columnPartImageEncoder) stringSlice(values []string) {
 }
 
 func encodeColumnPartImageManifest(part *ColumnPart, sections []ColumnPartImageSection, manifestBytes int) ([]byte, error) {
-	var enc columnPartImageEncoder
+	return encodeColumnPartImageManifestWithCapacity(part, sections, manifestBytes, 0)
+}
+
+func encodeColumnPartImageManifestWithCapacity(part *ColumnPart, sections []ColumnPartImageSection, manifestBytes int, capacity int) ([]byte, error) {
+	enc := columnPartImageEncoder{buf: make([]byte, 0, capacity)}
 	enc.u32(columnPartImageMagic)
 	enc.u16(columnPartImageVersion)
 	enc.u16(0)

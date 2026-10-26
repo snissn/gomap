@@ -1192,6 +1192,9 @@ func (r vectorIndexSearchRouteStats) apply(stats *VectorIndexSearchStats) {
 // filtering here; otherwise the legacy native-runtime buffered-only contract
 // remains fail closed rather than forwarding to an unfiltered one-shot route.
 func (c *Collection) SearchVectorIndex(opts VectorIndexSearchOptions) (VectorIndexSearchResponse, error) {
+	if c != nil && c.nativeJSON != nil && c.typedGraphServingPolicy() == nil {
+		return c.searchNativeVectorOwned(opts)
+	}
 	if c.typedGraphServingPolicy() != nil {
 		var buffer VectorIndexSearchBuffer
 		response, view, err := c.searchTypedGraphServing(opts, &buffer, false)
@@ -1390,7 +1393,7 @@ func (c *Collection) SearchVectorIndexWithBuffer(opts VectorIndexSearchOptions, 
 
 func (c *Collection) searchVectorIndexWithBuffer(opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer, coverageLocked bool) (VectorIndexSearchResponse, error) {
 	if c != nil && c.nativeJSON != nil && c.typedGraphServingPolicy() == nil {
-		response, view, err := c.searchNativeHNSWWithBufferReadView(opts, buffer)
+		response, view, err := c.searchNativeVectorWithBufferReadView(opts, buffer)
 		if view != nil {
 			err = errors.Join(err, view.Close())
 		}

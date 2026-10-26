@@ -602,7 +602,7 @@ func (t *NativeJSONTxn) UpdateBatchInto(name string, items []UpdateBatchItem) (r
 	if g == nil {
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
-	if g.probe.meta.Options.ColumnStore != nil {
+	if g.probe.meta.Options.ColumnStore != nil && !nativeOrdinaryColumnGraphMeta(g.probe.meta) {
 		return t.stageNativeTypedUpdate(g, items)
 	}
 	if len(items) == 0 {
@@ -747,7 +747,7 @@ func (t *NativeJSONTxn) DeleteBatchFrom(name string, ids [][]byte) (count int, r
 		}
 	}()
 	g := t.binding(name)
-	if g != nil && g.probe.meta.Options.ColumnStore != nil {
+	if g != nil && g.probe.meta.Options.ColumnStore != nil && !nativeOrdinaryColumnGraphMeta(g.probe.meta) {
 		_, count, err := t.stageNativeTypedBatch(g, nil, nil, nil, ids, commitlog.CommandKindCollectionDeleteBatchByID, false)
 		return count, err
 	}
@@ -868,6 +868,11 @@ func (t *NativeJSONTxn) finalizeNativeRowsWithStats(graphSingleton bool, stats *
 		g.plan.additional, g.effects, err = extractNativeInsertEffectsAndText(g.name, g.incarnation, direct, g.plan.mutations, admit, text, g.probe.meta)
 		if err != nil {
 			return err
+		}
+		if nativeOrdinaryColumnGraphMeta(g.probe.meta) {
+			if err = t.attachNativeOrdinaryColumnGraph(g); err != nil {
+				return fmt.Errorf("native ordinary ColumnGraph attachment: %w", err)
+			}
 		}
 		if stats != nil {
 			if err = t.collectNativeInsertStats(g, direct, stats); err != nil {

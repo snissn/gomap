@@ -43,24 +43,51 @@ func (db *DB) BeginPreparedNativeConditionalTxn() (backenddb.NativeConditionalTx
 }
 
 // A successful drain cannot reclaim unchanged owners retained by a reader.
-// Keep only its observed finite accounting and logical publication identity;
+// Keep current finite accounting, construction and physical/logical identity;
 // historical high water is not outstanding debt or new maintenance work.
 type cowNativePressureState struct {
 	stats      memtable.COWStats
 	logicalSeq uint64
+	semantic   backenddb.NativeSemanticProducerPressure
+	basis      backenddb.StateToken
 }
 
-func (c *cowCache) nativeProducerPressureState() (cowNativePressureState, error) {
-	c.cutMu.Lock()
-	if c.closed || c.cut == nil {
-		c.cutMu.Unlock()
-		return cowNativePressureState{}, backenddb.ErrClosed
+func (s cowNativePressureState) underPressure(limits memtable.COWLimits) bool {
+	p := s.semantic
+	return s.stats.ReservedBytes >= limits.MaxInFlightBytes-limits.MaxInFlightBytes/4 ||
+		s.stats.Sources >= limits.MaxSources || s.stats.Generations >= limits.MaxGenerations ||
+		(p.ConstructionBytes != 0 &&
+			(p.ConstructionBytes >= p.MaxInFlightBytes-p.MaxInFlightBytes/4 ||
+				p.ConstructionBytes >= p.MaxTotalBytes-p.MaxTotalBytes/4 ||
+				p.Sources >= p.MaxSources))
+}
+
+func (c *cowCache) nativeProducerPressureState() (state cowNativePressureState, err error) {
+	// Retain the existing cut, including its exact basis and semantic state, by
+	// incrementing its original edge under cutMu. No capture wrapper, receipt,
+	// new Snapshot, iterator, or participant callback is created under the latch.
+	cut := c.retainCut()
+	if cut == nil {
+		return state, backenddb.ErrClosed
 	}
-	seq := c.cut.logicalSeq
-	c.cutMu.Unlock()
-	stats := c.budget.Stats()
-	stats.PeakBytes = 0
-	return cowNativePressureState{stats: stats, logicalSeq: seq}, nil
+	state.logicalSeq = cut.logicalSeq
+	if observer, ok := cut.semanticRootSet.(backenddb.NativeSemanticProducerPressureState); ok {
+		state.semantic, err = observer.NativeProducerPressure(cut.basis.snapshot)
+		if err == nil && state.semantic.ConstructionBytes != 0 {
+			var valid bool
+			state.basis, valid = cut.basis.snapshot.StateToken()
+			if !valid {
+				err = backenddb.ErrClosed
+			}
+		}
+	}
+	// The same cut keeps all borrowed scan inputs alive. End that edge before
+	// returning, including on scan failure, so checkpoint/cleanup cannot wait on
+	// the producer's observation. Drain and error propagation are off all gates.
+	err = joinCOWCleanupError(err, c.releaseCut(cut))
+	state.stats = c.budget.Stats()
+	state.stats.PeakBytes = 0
+	return state, err
 }
 
 // PrepareNativeProducer joins at most one existing checkpoint before any
@@ -73,12 +100,11 @@ func (db *DB) PrepareNativeProducer() error {
 	}
 	c := db.cow
 	limits := c.budget.Limits()
-	underPressure := func() bool {
-		stats := c.budget.Stats()
-		return stats.ReservedBytes >= limits.MaxInFlightBytes-limits.MaxInFlightBytes/4 ||
-			stats.Sources >= limits.MaxSources || stats.Generations >= limits.MaxGenerations
+	observed, err := c.nativeProducerPressureState()
+	if err != nil {
+		return err
 	}
-	if !underPressure() {
+	if !observed.underPressure(limits) {
 		return nil
 	}
 	// A cleanup/Finish callback cannot join its own original worker frontier.
@@ -90,12 +116,12 @@ func (db *DB) PrepareNativeProducer() error {
 	// retry an application callback or a partially prepared transaction here.
 	c.nativePressureMu.Lock()
 	defer c.nativePressureMu.Unlock()
-	if !underPressure() {
-		return nil
-	}
 	before, err := c.nativeProducerPressureState()
 	if err != nil {
 		return err
+	}
+	if !before.underPressure(limits) {
+		return nil
 	}
 	if c.nativePressureRemembered && c.nativePressureState == before {
 		return nil

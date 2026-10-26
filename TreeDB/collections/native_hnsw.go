@@ -628,7 +628,7 @@ func (c *Collection) reconcileNativeHNSWWithMutationHeld(ids [][]byte) (resultEr
 		return err
 	}
 	defer func() { resultErr = errors.Join(resultErr, read.Close()) }()
-	if len(read.meta.VectorIndexes) == 0 {
+	if !collectionMetaHasNativeVectorIndexes(read.meta) {
 		return nil
 	}
 	scratchLease, err := read.capture.NativeAllocator().AdmitNativeBytes(0)
@@ -638,6 +638,9 @@ func (c *Collection) reconcileNativeHNSWWithMutationHeld(ids [][]byte) (resultEr
 	defer scratchLease.Close()
 	scratch := nativeHNSWPeakAdmission(scratchLease)
 	for _, def := range read.meta.VectorIndexes {
+		if !vectorIndexDefinitionUsesNativeRuntime(def) {
+			continue
+		}
 		idx := c.registeredVectorIndex(def.Name)
 		if idx == nil {
 			if _, err = c.buildNativeHNSW(vectorIndexOptionsFromDefinition(def), true); err != nil {
@@ -1159,6 +1162,9 @@ func (c *Collection) flushNativeHNSW() error {
 		return err
 	}
 	for _, def := range definitions {
+		if !vectorIndexDefinitionUsesNativeRuntime(def) {
+			continue
+		}
 		idx := c.registeredVectorIndex(def.Name)
 		current, e := c.nativeJSON.Capture(c.name)
 		if e != nil {
@@ -1192,6 +1198,8 @@ func (c *Collection) flushNativeHNSW() error {
 	return nil
 }
 
+// This flag is deliberately coarse across handle/DDL changes. The captured
+// declaration inside reconcile/flush decides which strategy owns maintenance.
 func (c *Collection) nativeHNSWMaintenanceNeeded() bool {
 	coord := c.collectionSchemaCoordinator()
 	return coord != nil && coord.hasNativeVectorIndexes.Load()

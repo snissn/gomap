@@ -36,7 +36,7 @@ func (n *nativeTextCatalog) pointReader(root string) (*nativeTextPointReader, er
 	if err := n.admit(memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeTextPointReader{}))) + memtable.COWAllocationCharge(2*uint64(unsafe.Sizeof(uintptr(0))))); err != nil {
 		return nil, err
 	}
-	return &nativeTextPointReader{scope: n, root: root, cursor: nativeDomainCursor{read: domain}, readLeaf: r.readLeaf}, nil
+	return &nativeTextPointReader{scope: n, root: root, cursor: nativeDomainCursor{read: domain, projectionOwner: n}, readLeaf: r.readLeaf}, nil
 }
 
 func (p *nativeTextPointReader) get(key []byte) ([]byte, bool, error) {
@@ -48,6 +48,9 @@ func (p *nativeTextPointReader) get(key []byte) ([]byte, bool, error) {
 	defer r.mu.Unlock()
 	if r.capture == nil || r.closing || r.failure != nil {
 		return nil, false, backenddb.ErrClosed
+	}
+	if p.cursor.physical == nil {
+		p.cursor.projectionOwner = p.scope
 	}
 	entry, err := p.cursor.exactEntry(key, p.readLeaf, p.scope.admit)
 	if errors.Is(err, tree.ErrKeyNotFound) {

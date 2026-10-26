@@ -339,40 +339,81 @@ func nativeTypedHandoffChargeForCompaction(c *nativeCollectionState, maxSources 
 	return schema + header + uint64(maxSources)*node, nil
 }
 
-// Validate the complete next finite cohort BEFORE canonical assignment. This
-// is the same construction inventory used by PrepareBuild, not a second budget.
-func nativeTypedEnsureConstructible(e *nativeEngineVersion, basis *backenddb.Snapshot) error {
-	typed, _, _, count, err := nativeTypedBuildCapacity(e, basis)
+// nativeTypedConstructionInventory is the shared complete preaccept inventory.
+// It owns no allocation receipt or state edge. In particular the producer
+// observer must not substitute its watermark for exact final admission.
+type nativeTypedConstructionInventory struct {
+	total, typed, keys, catalog uint64
+	domains, sources            int
+}
+
+func nativeTypedConstructionCapacity(e *nativeEngineVersion, basis *backenddb.Snapshot) (inventory nativeTypedConstructionInventory, err error) {
+	inventory.typed, _, _, inventory.sources, err = nativeTypedBuildCapacity(e, basis)
+	if err != nil || inventory.typed == 0 {
+		return inventory, err
+	}
+	if inventory.sources > e.allocator.Limits().MaxSources {
+		return inventory, memtable.ErrCOWCapacity
+	}
+	var promise uint64
+	promise, _, inventory.domains, err = nativeHandoffCapacity(e)
 	if err != nil {
-		return err
+		return inventory, err
 	}
-	if typed == 0 {
-		return nil
-	}
-	if count > e.allocator.Limits().MaxSources {
-		return memtable.ErrCOWCapacity
-	}
-	promise, _, domains, err := nativeHandoffCapacity(e)
+	inventory.total, _, err = nativeEngineBuildCapacity(inventory.domains, e.allocator.Limits().MaxSources, promise)
 	if err != nil {
-		return err
+		return inventory, err
 	}
-	total, _, err := nativeEngineBuildCapacity(domains, e.allocator.Limits().MaxSources, promise)
+	inventory.keys, err = nativeEngineRootDescriptorKeyCharge(e)
 	if err != nil {
-		return err
+		return inventory, err
 	}
-	keys, err := nativeEngineRootDescriptorKeyCharge(e)
-	if err != nil {
-		return err
-	}
-	for _, n := range []uint64{typed, keys} {
-		if n > ^uint64(0)-total {
-			return memtable.ErrCOWCapacity
+	for _, n := range []uint64{inventory.typed, inventory.keys} {
+		if n > ^uint64(0)-inventory.total {
+			return inventory, memtable.ErrCOWCapacity
 		}
-		total += n
+		inventory.total += n
+	}
+	inventory.catalog, err = nativeCatalogProjectionCapacity(e)
+	if err != nil {
+		return inventory, err
+	}
+	if err = nativeTypedCheckedAdd(&inventory.total, inventory.catalog); err != nil {
+		return inventory, err
+	}
+	return inventory, nil
+}
+
+// NativeProducerPressure scans only this retained immutable state's pending
+// typed prefixes against its paired physical basis. The zero-typed fast path
+// avoids manifest iterators and the handoff/build inventory for ordinary raw
+// and non-typed native producers. No result reserves or discounts capacity.
+func (e *nativeEngineVersion) NativeProducerPressure(basis *backenddb.Snapshot) (backenddb.NativeSemanticProducerPressure, error) {
+	inventory, err := nativeTypedConstructionCapacity(e, basis)
+	if err != nil || inventory.typed == 0 {
+		return backenddb.NativeSemanticProducerPressure{}, err
 	}
 	limits := e.maintenance.Limits()
-	if total > limits.MaxInFlightBytes || total > limits.MaxTotalBytes {
-		return fmt.Errorf("collections: native typed construction total=%d typed=%d keys=%d domains=%d in_flight_limit=%d total_limit=%d: %w", total, typed, keys, domains, limits.MaxInFlightBytes, limits.MaxTotalBytes, memtable.ErrCOWCapacity)
+	return backenddb.NativeSemanticProducerPressure{
+		ConstructionBytes: inventory.total,
+		MaxInFlightBytes:  limits.MaxInFlightBytes,
+		MaxTotalBytes:     limits.MaxTotalBytes,
+		Sources:           inventory.sources,
+		MaxSources:        e.allocator.Limits().MaxSources,
+	}, nil
+}
+
+// Validate the complete next finite cohort BEFORE canonical assignment. This
+// uses the identical inventory and original exact limits, independently of the
+// off-gate producer's advisory maintenance watermark.
+func nativeTypedEnsureConstructible(e *nativeEngineVersion, basis *backenddb.Snapshot) error {
+	inventory, err := nativeTypedConstructionCapacity(e, basis)
+	if err != nil || inventory.typed == 0 {
+		return err
+	}
+	limits := e.maintenance.Limits()
+	if inventory.total > limits.MaxInFlightBytes || inventory.total > limits.MaxTotalBytes {
+		return fmt.Errorf("collections: native typed construction total=%d typed=%d keys=%d catalog=%d domains=%d in_flight_limit=%d total_limit=%d: %w", inventory.total, inventory.typed, inventory.keys, inventory.catalog, inventory.domains, limits.MaxInFlightBytes, limits.MaxTotalBytes, memtable.ErrCOWCapacity)
 	}
 	return nil
 }

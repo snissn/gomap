@@ -24,6 +24,27 @@ func (r *SnapshotRootReader) OwnedPointerProjectionIterator(start, end []byte, r
 	return it, nil
 }
 
+// OwnedPointerProjectionIteratorWithWorkspace retains the same exact snapshot
+// authority and error cleanup as the ordinary constructor. The workspace owner
+// admits its header and raw-size callback before this call; the callback admits
+// each missing layout before allocation. Successful users Close then Reset.
+func (r *SnapshotRootReader) OwnedPointerProjectionIteratorWithWorkspace(start, end []byte, readLeaf func(page.LeafLogPtr, []byte) ([]byte, error), storage *tree.OwnedPointerProjectionWorkspace, admitStorage func(uint64) error) (iterator.UnsafeIterator, error) {
+	if err := r.beginRead(); err != nil {
+		return nil, err
+	}
+	defer r.owner.endRead()
+	it, err := r.tree.OwnedPointerProjectionIteratorWithWorkspace(start, end, readLeaf, storage, admitStorage)
+	if err != nil {
+		return nil, err
+	}
+	if err := it.Error(); err != nil {
+		_ = it.Close()
+		storage.Reset()
+		return nil, err
+	}
+	return it, nil
+}
+
 // NativeReaderAtRoot constructs a by-value reader without adding to the
 // snapshot's root cache. The caller admits its containing storage before this
 // call and retains this exact snapshot until all reader operations and borrowed

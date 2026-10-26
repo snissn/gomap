@@ -34,9 +34,11 @@ func (c *nativeDomainCursor) exactEntry(key []byte, readLeaf func(page.LeafLogPt
 // releasing that operation's read/capture/receipt. Memory probes retain the
 // existing allocation-free source traversal; no additional source pins exist.
 type nativeDomainCursor struct {
-	read       nativeDomainRead
-	start, end []byte
-	physical   iterator.UnsafeIterator
+	read               nativeDomainRead
+	start, end         []byte
+	physical           iterator.UnsafeIterator
+	projectionOwner    *nativeTextCatalog
+	borrowedProjection bool
 }
 
 // The caller has inspected the physical source BEFORE this method, including
@@ -45,10 +47,20 @@ type nativeDomainCursor struct {
 // survives memory-only winners. Arbitrary Seek resets the physical traversal.
 func (c *nativeDomainCursor) physicalEntry(start []byte, readLeaf func(page.LeafLogPtr, []byte) ([]byte, error), forward bool, admit func(uint64) error, inspect func() error) (node.LeafEntry, bool, error) {
 	if c.physical == nil {
-		if err := admit(memtable.COWAllocationCharge(tree.OwnedPointerProjectionAllocationSize())); err != nil {
-			return node.LeafEntry{}, false, err
+		var it iterator.UnsafeIterator
+		var err error
+		if owner := c.projectionOwner; owner != nil && !owner.projection.InUse() {
+			if err = owner.bindProjectionAdmission(); err != nil {
+				return node.LeafEntry{}, false, err
+			}
+			it, err = c.read.base.OwnedPointerProjectionIteratorWithWorkspace(c.start, c.end, readLeaf, &owner.projection, owner.projectionAdmit)
+			c.borrowedProjection = err == nil
+		} else {
+			if err = admit(memtable.COWAllocationCharge(tree.OwnedPointerProjectionAllocationSize())); err != nil {
+				return node.LeafEntry{}, false, err
+			}
+			it, err = c.read.base.OwnedPointerProjectionIterator(c.start, c.end, readLeaf)
 		}
-		it, err := c.read.base.OwnedPointerProjectionIterator(c.start, c.end, readLeaf)
 		if err != nil {
 			return node.LeafEntry{}, false, err
 		}
@@ -86,6 +98,9 @@ func (c *nativeDomainCursor) close() error {
 	var err error
 	if c.physical != nil {
 		err = c.physical.Close()
+	}
+	if c.borrowedProjection {
+		c.projectionOwner.projection.Reset()
 	}
 	*c = nativeDomainCursor{}
 	return err

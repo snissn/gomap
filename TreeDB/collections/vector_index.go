@@ -452,7 +452,8 @@ type VectorIndex struct {
 	scalarColumns                    map[string]vectorIndexScalarColumn
 	liveDeltaEnabled                 atomic.Bool
 	liveDeltaCutovers                uint64
-	// constructionWorkers is a private benchmark seam; zero preserves the
+	// constructionWorkers binds a captured native construction ceiling or a
+	// private benchmark budget; zero preserves the
 	// production worker choice.
 	constructionWorkers int
 	// parallelReciprocalLinks is enabled for native runtime indexes and the
@@ -3018,6 +3019,20 @@ func (idx *VectorIndex) insertVectorBatchWithContextLocked(ctx context.Context, 
 		}
 		return nil
 	}
+	// Own one search workspace per planning worker for this entire insertion
+	// operation. A sync.Pool can retain more workspaces than the concurrent
+	// worker count across successive batches, so it is not this cohort's owner.
+	var planningScratch *[nativeVectorFrozenPrefixBatchWidth]vectorIndexSearchScratch
+	if idx.collection == nil && idx.parallelReciprocalLinks {
+		planningScratch = new([nativeVectorFrozenPrefixBatchWidth]vectorIndexSearchScratch)
+	}
+	return idx.insertVectorFrozenPrefixBatchesWithPlanningScratchLocked(ctx, documentIDs, vectors, planningScratch)
+}
+
+// The caller has validated the batch and prepared its mutation view. A nil
+// workspace preserves the historical pooled planner for direct internal users;
+// the offline parallel batch entry above supplies the bounded operation owner.
+func (idx *VectorIndex) insertVectorFrozenPrefixBatchesWithPlanningScratchLocked(ctx context.Context, documentIDs [][]byte, vectors [][]float32, planningScratch *[nativeVectorFrozenPrefixBatchWidth]vectorIndexSearchScratch) error {
 	var commitScratch vectorIndexFrozenPrefixCommitScratch
 	if idx.decisionObserver != nil {
 		defer func() {
@@ -3062,6 +3077,13 @@ func (idx *VectorIndex) insertVectorBatchWithContextLocked(ctx context.Context, 
 		if idx.decisionObserver != nil {
 			decisionObservers = commitScratch.decisionObserverWorkers(workers)
 		}
+		planRow := func(plan, worker int, observer *vectorIndexConstructionDecisionObserverV1) {
+			var scratch *vectorIndexSearchScratch
+			if planningScratch != nil {
+				scratch = &planningScratch[worker]
+			}
+			plans[plan], errs[plan] = idx.planFrozenPrefixInsertWithScratchLocked(ctx, documentIDs[start+plan], vectors[start+plan], entry, maxLevel, len(idx.nodes)+plan, observer, scratch)
+		}
 		var wg sync.WaitGroup
 		for worker := 1; worker < workers; worker++ {
 			observer := (*vectorIndexConstructionDecisionObserverV1)(nil)
@@ -3070,7 +3092,7 @@ func (idx *VectorIndex) insertVectorBatchWithContextLocked(ctx context.Context, 
 			}
 			wg.Go(func() {
 				for plan := worker; plan < len(plans); plan += workers {
-					plans[plan], errs[plan] = idx.planFrozenPrefixInsertLocked(ctx, documentIDs[start+plan], vectors[start+plan], entry, maxLevel, len(idx.nodes)+plan, observer)
+					planRow(plan, worker, observer)
 				}
 			})
 		}
@@ -3079,7 +3101,7 @@ func (idx *VectorIndex) insertVectorBatchWithContextLocked(ctx context.Context, 
 			observer = &decisionObservers[0]
 		}
 		for plan := 0; plan < len(plans); plan += workers {
-			plans[plan], errs[plan] = idx.planFrozenPrefixInsertLocked(ctx, documentIDs[start+plan], vectors[start+plan], entry, maxLevel, len(idx.nodes)+plan, observer)
+			planRow(plan, 0, observer)
 		}
 		wg.Wait()
 		for row, err := range errs {
@@ -3212,6 +3234,10 @@ func (idx *VectorIndex) canPlanFrozenPrefixBatchLocked(documentIDs [][]byte) boo
 }
 
 func (idx *VectorIndex) planFrozenPrefixInsertLocked(ctx context.Context, documentID []byte, vector []float32, entry, maxLevel, sourceNodeID int, observer *vectorIndexConstructionDecisionObserverV1) (vectorIndexFrozenPrefixInsert, error) {
+	return idx.planFrozenPrefixInsertWithScratchLocked(ctx, documentID, vector, entry, maxLevel, sourceNodeID, observer, nil)
+}
+
+func (idx *VectorIndex) planFrozenPrefixInsertWithScratchLocked(ctx context.Context, documentID []byte, vector []float32, entry, maxLevel, sourceNodeID int, observer *vectorIndexConstructionDecisionObserverV1, scratch *vectorIndexSearchScratch) (vectorIndexFrozenPrefixInsert, error) {
 	started := time.Time{}
 	if observer != nil {
 		started = time.Now()
@@ -3236,8 +3262,10 @@ func (idx *VectorIndex) planFrozenPrefixInsertLocked(ctx context.Context, docume
 			entry = idx.greedyNearestAtLayerObservedLocked(vector, norm, &prepared, entry, layer, context)
 		}
 	}
-	scratch := idx.getSearchScratch()
-	defer idx.putSearchScratch(scratch)
+	if scratch == nil {
+		scratch = idx.getSearchScratch()
+		defer idx.putSearchScratch(scratch)
+	}
 	scratch.setContext(ctx)
 	defer scratch.clearContext()
 	plan.neighbors = make([][]int, minInt(plan.level, maxLevel)+1)

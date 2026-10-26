@@ -157,13 +157,8 @@ func (r *NativeJSONRead) getAdmitted(id []byte, admitOutput func(uint64) error) 
 		return nil, backenddb.ErrClosed
 	}
 	typed := nativeTypedMeta(r.meta)
-	if typed && admitOutput != nil {
-		return nil, backenddb.ErrNativeSemanticUnsupported
-	}
-	if typed && r.domain.domain != nil {
-		if row, residual, ok := r.domain.domain.typed.find(id); ok {
-			return r.reconstructPendingTyped(row, residual)
-		}
+	if value, handled, err := r.pendingTypedValueLocked(id, typed, admitOutput); handled {
+		return value, err
 	}
 	if r.domain.domain == nil {
 		return nil, tree.ErrKeyNotFound
@@ -190,12 +185,39 @@ func (r *NativeJSONRead) getAdmitted(id []byte, admitOutput func(uint64) error) 
 	if err != nil {
 		return nil, err
 	}
+	return r.materializeEntryLocked(id, entry, owned, admitOutput, typed && r.meta.Options.ColumnStore.RetainedPayload != ColumnRetainedPayloadFull)
+}
+
+// pendingTypedValueLocked preserves the point-read fast path before any
+// physical lookup, and is also used for a selected scan entry. A handled result
+// includes an eligibility refusal or pending tombstone; neither may fall through.
+func (r *NativeJSONRead) pendingTypedValueLocked(id []byte, typed bool, admitOutput func(uint64) error) ([]byte, bool, error) {
+	if typed && admitOutput != nil && r.meta.Options.ColumnStore.RetainedPayload != ColumnRetainedPayloadFull {
+		return nil, true, backenddb.ErrNativeSemanticUnsupported
+	}
+	if typed && r.domain.domain != nil {
+		if row, residual, ok := r.domain.domain.typed.find(id); ok {
+			if admitOutput != nil && row != nil {
+				if err := admitOutput(memtable.COWAllocationCharge(uint64(len(residual)))); err != nil {
+					return nil, true, err
+				}
+			}
+			value, err := r.reconstructPendingTyped(row, residual)
+			return value, true, err
+		}
+	}
+	return nil, false, nil
+}
+
+// materializeEntryLocked resolves an already selected entry under this read's
+// original mutex/capture. Inline bytes and pointer output become independently
+// owned before the caller can move its cursor or unlock for a callback.
+func (r *NativeJSONRead) materializeEntryLocked(id []byte, entry node.LeafEntry, owned bool, admitOutput func(uint64) error, reconstruct bool) ([]byte, error) {
 	if entry.Flags&node.FlagTombstone != 0 {
 		return nil, tree.ErrKeyNotFound
 	}
 	// Full retains the original whole JSON in primary storage. Preserve the
 	// ordinary owned pointer/inline output path without touching typed assets.
-	reconstruct := typed && r.meta.Options.ColumnStore.RetainedPayload != ColumnRetainedPayloadFull
 	if entry.Flags&node.FlagPointer != 0 {
 		value, err := r.readValue(entry.ValuePtr, admitOutput)
 		if err != nil {

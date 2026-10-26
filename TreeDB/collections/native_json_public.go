@@ -38,7 +38,7 @@ func nativeJSONMeta(meta CollectionMeta) (CollectionMeta, error) {
 		return CollectionMeta{}, err
 	}
 	format := normalizedDocumentFormat(normalized.Options.DocumentFormat)
-	if (!nativeOrdinaryHNSWMeta(normalized) && len(normalized.VectorIndexes) != 0 && !nativeSourceImportMetaV2(normalized)) || !nativeTextMeta(normalized) || (normalized.Options.ColumnStore != nil && (normalized.Options.AllowArrayValuesInIndex || !nativeTypedMeta(normalized))) || (format != DocumentFormatJSON && format != DocumentFormatBSON && format != DocumentFormatTemplateV1) {
+	if (!nativeOrdinaryHNSWMeta(normalized) && len(normalized.VectorIndexes) != 0 && !nativeSourceImportMetaV2(normalized) && !nativeOrdinaryColumnGraphMeta(normalized)) || !nativeTextMeta(normalized) || (normalized.Options.ColumnStore != nil && (normalized.Options.AllowArrayValuesInIndex || !nativeTypedMeta(normalized))) || (format != DocumentFormatJSON && format != DocumentFormatBSON && format != DocumentFormatTemplateV1) {
 		return CollectionMeta{}, backenddb.ErrNativeSemanticUnsupported
 	}
 	for _, index := range normalized.Indexes {

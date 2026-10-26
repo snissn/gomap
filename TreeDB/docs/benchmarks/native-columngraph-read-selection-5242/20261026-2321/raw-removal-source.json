@@ -1,0 +1,30 @@
+{
+  "utc": "2026-10-26T23:03:31.079312+00:00",
+  "head": "99e71bbca7e01d429fe5704d5ea954a575636173",
+  "worktree": "/mnt/fast4tb/gomap-mongo-execution-20261024/native-without-raw-refinement1",
+  "canonical_index_tree": "611af358eb7d37b3d45d7daa48b331c56b581121",
+  "changes_only": [
+    {
+      "path": "TreeDB/docs/spec/cow-memtable-ownership.md",
+      "canonical_sha256": "33842d5a835680f95822407253312dd257f0fdca8a7d799651975b8030236912",
+      "counterfactual_sha256": "7d9fae6dad659b9be05d6071e76dfad666da38a0f0e0b1c9ccb92ade9b25b3fc"
+    },
+    {
+      "path": "TreeDB/internal/memtable/cow_raw_incremental_admission_test.go",
+      "canonical_sha256": "04c8b1dba125cc8475feb1ca275948e4b6bd027308c10034908e2b43b8273d65",
+      "counterfactual_sha256": null
+    },
+    {
+      "path": "TreeDB/internal/memtable/cow_tree.go",
+      "canonical_sha256": "e0743c9f1a7a7ea3e208546523fb306c54caf67437fb8ebe9db6e37f6bebc0e0",
+      "counterfactual_sha256": "aa651cbf4b98d5ee423ace34d827ef9275024d30318dba870f7b297f3b58dacc"
+    },
+    {
+      "path": "TreeDB/internal/memtable/cow_value_test.go",
+      "canonical_sha256": "de4892fe71b38aef9ca568e264a2a4b6d1bd4d7e3b7f7e401df7604cca91e462",
+      "counterfactual_sha256": "f36f4effc54b8b9b46aac62495cc4f56f5ef7259ad7104770f6c0f25e7cefa42"
+    }
+  ],
+  "patch_sha256": "6771ff2c67c925b7c600a0378dc06d575137b0f9fedc8dc2a305927506a83cc3",
+  "qualification": null
+}

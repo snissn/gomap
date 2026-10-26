@@ -568,9 +568,6 @@ func encodeTextV2NormBlockValue(value textV2NormBlockValue) []byte {
 	slices.SortFunc(entries, func(a, b textV2NormBlockEntry) int {
 		return compareUint64(a.Ordinal, b.Ordinal)
 	})
-	if dense, ok := encodeTextV2DenseNormBlock(value, entries); ok {
-		return dense
-	}
 	out := make([]byte, 0, 24+len(entries)*(16+int(value.FieldCount)*2))
 	out = append(out, textV2NormBlockValueVersion)
 	out = appendTextUvarint(out, value.BlockStart)
@@ -589,9 +586,6 @@ func encodeTextV2NormBlockValue(value textV2NormBlockValue) []byte {
 }
 
 func decodeTextV2NormBlockValue(raw []byte) (textV2NormBlockValue, error) {
-	if len(raw) != 0 && raw[0] == textV2DenseNormBlockValueVersion {
-		return decodeTextV2DenseNormBlock(raw)
-	}
 	cur, err := textV2ValueCursor(raw, textV2NormBlockValueVersion, "norm block")
 	if err != nil {
 		return textV2NormBlockValue{}, err

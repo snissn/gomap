@@ -27,6 +27,7 @@ type nativeJSONTxnBinding struct {
 	probe             NativeJSONRead
 	plan              *nativeJSONLogicalInsert
 	typed             *nativeTypedDelta
+	projection        *trustedFloat32Projection
 	effects           []txnhistory.Effect
 	rows              nativeJSONRows
 	stageCharge       uint64
@@ -276,7 +277,7 @@ func (t *NativeJSONTxn) InsertBatchInto(name string, ids, documents [][]byte) (r
 	if g == nil {
 		return backenddb.ErrNativeSemanticUnsupported
 	}
-	if g.probe.meta.Options.ColumnStore != nil {
+	if g.probe.meta.Options.ColumnStore != nil && !nativeOrdinaryColumnGraphMeta(g.probe.meta) {
 		return t.stageNativeTypedInsert(g, ids, documents)
 	}
 	return t.stageNativeInsert(g, ids, documents)

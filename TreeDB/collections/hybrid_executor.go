@@ -45,6 +45,7 @@ type hybridSearchExecutionPlan struct {
 	scalarFilter                  *HybridScalarFilter
 	scalarFilterStrategy          HybridScalarFilterStrategy
 	nativeVectorRuntime           bool
+	nativeColumnGraph             bool
 	nativeVectorScalar            bool
 	ownerBoundVectorScalar        bool
 	fusion                        HybridFusionOptions
@@ -133,10 +134,11 @@ func (c *Collection) searchHybridWithCandidateBudgetPolicy(opts HybridSearchOpti
 		}
 		if plan.vector != nil {
 			def, ok := findVectorIndex(view.nativeRead.meta.VectorIndexes, plan.vector.IndexName)
-			if !ok || !nativeOrdinaryHNSWMeta(view.nativeRead.meta) || !vectorIndexDefinitionUsesNativeRuntime(def) || def.Metric != VectorMetricCosine || def.Encoding != VectorIndexEncodingFloat32 || def.Representation != "" || len(def.QuantizedIndexes) != 0 || hybridVectorQuerySelectsQuantizedRerank(plan.vector) {
+			plan.nativeColumnGraph = ok && nativeOrdinaryColumnGraphMeta(view.nativeRead.meta) && def.Strategy == VectorIndexStrategyColumnGraph
+			plan.nativeVectorRuntime = ok && nativeOrdinaryHNSWMeta(view.nativeRead.meta) && vectorIndexDefinitionUsesNativeRuntime(def)
+			if !ok || (!plan.nativeColumnGraph && !plan.nativeVectorRuntime) || def.Metric != VectorMetricCosine || def.Encoding != VectorIndexEncodingFloat32 || def.Representation != "" || len(def.QuantizedIndexes) != 0 || hybridVectorQuerySelectsQuantizedRerank(plan.vector) {
 				return hybridSearchFailClosed(response, HybridFailClosedReasonVectorIndexUnavailable, fmt.Errorf("%w: ordinary native vector declaration required", ErrHybridSearchUnsupported))
 			}
-			plan.nativeVectorRuntime = true
 		}
 		baseState = hybridSearchReadViewStateToken(view)
 		runHybridSearchAfterReadOwnerAcquiredHookForTest(c, view)
@@ -190,6 +192,7 @@ func (c *Collection) searchHybridWithCandidateBudgetPolicy(opts HybridSearchOpti
 		// the catalog definition itself is column_graph rather than
 		// native_runtime. Keep this distinct from the legacy native seam.
 		plan.ownerBoundVectorScalar = plan.readView != nil &&
+			!plan.nativeColumnGraph &&
 			plan.scalarFilter != nil &&
 			plan.scalarFilterStrategy == HybridScalarFilterStrategyPrefilter
 	}
@@ -1035,7 +1038,7 @@ func (c *Collection) hybridSearchCandidates(plan hybridSearchExecutionPlan, allo
 	var textErr, vectorErr error
 	searchVector := func() (HybridCandidateResponse, error) {
 		selectedTyped := c.typedGraphServingPolicy() != nil
-		if plan.nativeVectorRuntime || selectedTyped {
+		if plan.nativeVectorRuntime || plan.nativeColumnGraph || selectedTyped {
 			var filter *HybridScalarFilter
 			// Keep prefilter admission/order in the executor, but let the
 			// selected owner search its captured base and current mutations.
@@ -1043,7 +1046,13 @@ func (c *Collection) hybridSearchCandidates(plan hybridSearchExecutionPlan, allo
 				filter = plan.scalarFilter
 			}
 			if plan.readView != nil {
-				return c.searchHybridVectorCandidatesDeclaredScalarAtReadViewWithAllowSet(plan.context, *plan.vector, filter, plan.readView, plan.readOwnerAcquireNanos, plan.ownerBoundVectorScalar, allowSet)
+				vectorAllowSet := allowSet
+				if plan.nativeColumnGraph && !hybridVectorCandidateUseExactAllowSetBudget(*plan.vector, allowSet, plan.vectorCandidateAllowSetBudget) {
+					// Preserve the ordinary pack's exact-prefilter cutoff. Larger
+					// predicates retain ANN followed by the executor's filtering.
+					vectorAllowSet = nil
+				}
+				return c.searchHybridVectorCandidatesDeclaredScalarAtReadViewWithAllowSet(plan.context, *plan.vector, filter, plan.readView, plan.readOwnerAcquireNanos, plan.ownerBoundVectorScalar, vectorAllowSet)
 			}
 			return c.searchHybridVectorCandidatesDeclaredScalar(*plan.vector, filter)
 		}
