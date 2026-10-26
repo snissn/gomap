@@ -765,10 +765,6 @@ func (c *textCursor) readUvarint() (uint64, error) {
 	if c == nil || c.pos >= len(c.buf) {
 		return 0, io.ErrUnexpectedEOF
 	}
-	if b := c.buf[c.pos]; b < 0x80 {
-		c.pos++
-		return uint64(b), nil
-	}
 	value, n := binary.Uvarint(c.buf[c.pos:])
 	if n == 0 {
 		return 0, io.ErrUnexpectedEOF
