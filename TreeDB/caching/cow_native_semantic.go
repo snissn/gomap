@@ -440,13 +440,15 @@ func (r *cowNativeCommandWALRequest) append(sync bool) (uint64, error) {
 	}
 	var assigned backenddb.CommandWALLSNRange
 	var appendErr error
-	if r.bridge != nil && !sync {
-		assigned, appendErr = guard.AppendNativeDurablePrefixParticipant(intent)
+	if r.bridge != nil {
+		// The coordinator chooses the captured frame class; physical durability
+		// completes only after this same cut is installed and its gates release.
+		assigned, appendErr = guard.AppendNativeDurablePrefixParticipant(intent, sync)
 	} else {
 		assigned, appendErr = guard.AppendWithAssignedRange(intent, sync)
 	}
 	lsn := assigned.Last
-	receiptErr := b.recordCOWAppendRange(owner, assigned, appendErr, sync)
+	receiptErr := b.recordCOWAppendRange(owner, assigned, appendErr, r.bridge == nil && sync)
 	if appendErr != nil {
 		return lsn, appendErr
 	}

@@ -35,6 +35,34 @@ func (j *CommandJournal) installBufferedWriterForTest(w io.Writer, size int) fun
 	}
 }
 
+// Size the fixture for exactly one canonical frame: its first append fits the
+// selected physical reserve and its second append crosses the logical target.
+// A one-byte target now legitimately needs an oversized first-frame successor.
+func commandJournalSingleFrameTarget(t *testing.T, envelope CommandEnvelope) int64 {
+	t.Helper()
+	envelope.LSN = 1
+	var frame []byte
+	var err error
+	if envelope.Version == CommandFrameVersionV2 {
+		frame, err = EncodeCommandFrameV2(envelope)
+	} else {
+		frame, err = EncodeCommandFrame(envelope)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return int64(segmentHeaderSize + len(frame))
+}
+
+func commandJournalSinglePointTarget(t *testing.T) int64 {
+	t.Helper()
+	payload, err := EncodeRawKVBatchPayload([]RawKVOperation{{Op: RawKVOpSet, Key: []byte("k1"), Value: []byte("v1")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return commandJournalSingleFrameTarget(t, CommandEnvelope{Kind: CommandKindRawKVBatch, Scope: CommandScopeRawKV, PayloadFormat: PayloadFormatRawKVBatchV1, Payload: payload})
+}
+
 func TestCommandJournalAllocatesContiguousLSNs(t *testing.T) {
 	j, err := OpenCommandJournal(t.TempDir(), CommandJournalOptions{InitialLSN: 40})
 	if err != nil {
@@ -136,15 +164,6 @@ func TestCommandJournalObservedBoundariesHoldJournalLock(t *testing.T) {
 }
 
 func TestCommandJournalAppendHooksHoldLockAndTransferCurrentRotation(t *testing.T) {
-	j, err := OpenCommandJournal(t.TempDir(), CommandJournalOptions{
-		SegmentTargetBytes:     1,
-		CaptureStableResources: true,
-	})
-	if err != nil {
-		t.Fatalf("OpenCommandJournal: %v", err)
-	}
-	defer func() { _ = j.Close() }()
-
 	envelope := CommandEnvelope{
 		Version:         CommandFrameVersionV2,
 		DurabilityClass: CommandDurabilityRelaxed,
@@ -152,6 +171,15 @@ func TestCommandJournalAppendHooksHoldLockAndTransferCurrentRotation(t *testing.
 		Scope:           CommandScopeRawKV,
 		PayloadFormat:   PayloadFormatRawKVBatchV1,
 	}
+	j, err := OpenCommandJournal(t.TempDir(), CommandJournalOptions{
+		SegmentTargetBytes:     commandJournalSingleFrameTarget(t, envelope),
+		CaptureStableResources: true,
+	})
+	if err != nil {
+		t.Fatalf("OpenCommandJournal: %v", err)
+	}
+	defer func() { _ = j.Close() }()
+
 	assertLocked := func(stage string) {
 		t.Helper()
 		if j.mu.TryLock() {
@@ -355,7 +383,7 @@ func TestCommandJournalDefaultSegmentSeqUsesLatestSegment(t *testing.T) {
 
 func TestCommandJournalSegmentTargetRotatesBeforeLSNReservation(t *testing.T) {
 	dir := t.TempDir()
-	j, err := OpenCommandJournal(dir, CommandJournalOptions{SegmentTargetBytes: 1})
+	j, err := OpenCommandJournal(dir, CommandJournalOptions{SegmentTargetBytes: commandJournalSingleFrameTarget(t, CommandEnvelope{Kind: CommandKindRawKVBatch, Scope: CommandScopeRawKV, PayloadFormat: PayloadFormatRawKVBatchV1})})
 	if err != nil {
 		t.Fatalf("OpenCommandJournal: %v", err)
 	}
@@ -408,7 +436,7 @@ func TestCommandJournalSegmentTargetRotatesBeforeLSNReservation(t *testing.T) {
 
 func TestCommandJournalPointAppendAndFlushSyncsRotatedSegment(t *testing.T) {
 	dir := t.TempDir()
-	j, err := OpenCommandJournal(dir, CommandJournalOptions{SegmentTargetBytes: 1})
+	j, err := OpenCommandJournal(dir, CommandJournalOptions{SegmentTargetBytes: commandJournalSinglePointTarget(t)})
 	if err != nil {
 		t.Fatalf("OpenCommandJournal: %v", err)
 	}
@@ -569,12 +597,19 @@ func TestCommandJournalDirectSyncRotationCutOrderAndPaths(t *testing.T) {
 		durabilitycut.BeforeDependencyAppend,
 		durabilitycut.BeforeDependencyFileSync,
 		durabilitycut.AfterDependencyFileSync,
-		durabilitycut.BeforeNewFileDirectorySync,
-		durabilitycut.AfterNewFileDirectorySync,
-		durabilitycut.AfterDependencyAppend,
-		durabilitycut.BeforeDependencyFileSync,
-		durabilitycut.AfterDependencyFileSync,
 	}
+	if j.writer.fixed != nil {
+		// Private successor initialization persists its bytes, then publishes and
+		// syncs the exact parent before the existing new-log namespace barrier.
+		want = append(want,
+			durabilitycut.BeforeDependencyFileSync, durabilitycut.AfterDependencyFileSync,
+			durabilitycut.BeforeNewFileDirectorySync, durabilitycut.AfterNewFileDirectorySync)
+	}
+	want = append(want,
+		durabilitycut.BeforeNewFileDirectorySync, durabilitycut.AfterNewFileDirectorySync,
+		durabilitycut.AfterDependencyAppend,
+		durabilitycut.BeforeDependencyFileSync, durabilitycut.AfterDependencyFileSync)
+
 	if len(events) != len(want) {
 		t.Fatalf("events=%+v, want points %v", events, want)
 	}
@@ -586,11 +621,12 @@ func TestCommandJournalDirectSyncRotationCutOrderAndPaths(t *testing.T) {
 	if events[1].Path != oldPath || events[2].Path != oldPath {
 		t.Fatalf("old-segment sync paths=(%q,%q), want %q", events[1].Path, events[2].Path, oldPath)
 	}
-	if events[5].LSN != lsn {
-		t.Fatalf("after-append LSN=%d, want %d", events[5].LSN, lsn)
+	afterAppend := len(events) - 3
+	if events[afterAppend].LSN != lsn {
+		t.Fatalf("after-append LSN=%d, want %d", events[afterAppend].LSN, lsn)
 	}
-	if events[6].Path != newPath || events[7].Path != newPath {
-		t.Fatalf("new-segment sync paths=(%q,%q), want %q", events[6].Path, events[7].Path, newPath)
+	if events[len(events)-2].Path != newPath || events[len(events)-1].Path != newPath {
+		t.Fatalf("new-segment sync paths=(%q,%q), want %q", events[len(events)-2].Path, events[len(events)-1].Path, newPath)
 	}
 }
 
@@ -675,7 +711,7 @@ func TestCommandJournalPointAppendWithRevisionWritesCanonicalPayload(t *testing.
 
 func TestCommandJournalSingleAppendAndFlushSyncsRotatedSegment(t *testing.T) {
 	dir := t.TempDir()
-	j, err := OpenCommandJournal(dir, CommandJournalOptions{SegmentTargetBytes: 1})
+	j, err := OpenCommandJournal(dir, CommandJournalOptions{SegmentTargetBytes: commandJournalSinglePointTarget(t)})
 	if err != nil {
 		t.Fatalf("OpenCommandJournal: %v", err)
 	}
@@ -935,21 +971,10 @@ func TestCommandJournalRejectsNonActiveTerminalTail(t *testing.T) {
 
 func TestCommandJournalTruncatesActiveTerminalTailPerLane(t *testing.T) {
 	dir := t.TempDir()
-	j, err := OpenCommandJournal(dir, CommandJournalOptions{Lane: 0, SegmentSeq: 1})
-	if err != nil {
-		t.Fatalf("OpenCommandJournal lane 0: %v", err)
-	}
-	if _, err := j.AppendCommand(CommandEnvelope{
-		Kind:          CommandKindRawKVBatch,
-		Scope:         CommandScopeRawKV,
-		PayloadFormat: PayloadFormatRawKVBatchV1,
-	}); err != nil {
-		t.Fatalf("AppendCommand lane 0: %v", err)
-	}
-	if err := j.Close(); err != nil {
-		t.Fatalf("Close lane 0: %v", err)
-	}
+	// Anonymous terminal bytes are repairable only in the legacy stream format.
+	// A fixed container has explicit occupied extents and initialized reserve.
 	lane0Path := filepath.Join(dir, CommandSegmentName(0, 1))
+	writeLegacyCommandJournalFrameForTest(t, lane0Path, 1)
 	f, err := os.OpenFile(lane0Path, os.O_WRONLY|os.O_APPEND, 0)
 	if err != nil {
 		t.Fatalf("OpenFile append lane 0 tail: %v", err)
@@ -989,21 +1014,10 @@ func TestCommandJournalTruncatesActiveTerminalTailPerLane(t *testing.T) {
 
 func TestCommandJournalTruncatesTerminalTailBeforeAppend(t *testing.T) {
 	dir := t.TempDir()
-	j, err := OpenCommandJournal(dir, CommandJournalOptions{})
-	if err != nil {
-		t.Fatalf("OpenCommandJournal first: %v", err)
-	}
-	if _, err := j.AppendCommand(CommandEnvelope{
-		Kind:          CommandKindRawKVBatch,
-		Scope:         CommandScopeRawKV,
-		PayloadFormat: PayloadFormatRawKVBatchV1,
-	}); err != nil {
-		t.Fatalf("AppendCommand first: %v", err)
-	}
-	if err := j.Close(); err != nil {
-		t.Fatalf("Close first: %v", err)
-	}
+	// Anonymous terminal bytes are repairable only in the legacy stream format.
+	// A fixed container has explicit occupied extents and initialized reserve.
 	path := filepath.Join(dir, CommandSegmentName(0, 1))
+	writeLegacyCommandJournalFrameForTest(t, path, 1)
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
 	if err != nil {
 		t.Fatalf("OpenFile append tail: %v", err)
@@ -1429,11 +1443,7 @@ func TestCommandJournalDeterministicStressReopenAcrossLanesAndTails(t *testing.T
 			t.Fatalf("step %d OpenCommandJournal lane=%d seg=%d: %v", step, lane, seg, err)
 		}
 		for i := 0; i < appendCount; i++ {
-			got, err := j.AppendCommand(CommandEnvelope{
-				Kind:          CommandKindRawKVBatch,
-				Scope:         CommandScopeRawKV,
-				PayloadFormat: PayloadFormatRawKVBatchV1,
-			})
+			got, err := j.AppendCommand(fixedWALTestBarrier())
 			if err != nil {
 				_ = j.Close()
 				t.Fatalf("step %d AppendCommand %d: %v", step, i, err)
@@ -1450,27 +1460,13 @@ func TestCommandJournalDeterministicStressReopenAcrossLanesAndTails(t *testing.T
 
 		if step%2 == 0 {
 			path := filepath.Join(dir, CommandSegmentName(lane, seg))
-			f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
-			if err != nil {
-				t.Fatalf("step %d OpenFile tail: %v", step, err)
-			}
-			if _, err := f.Write([]byte{0xde, 0xad, 0xbe}); err != nil {
-				_ = f.Close()
-				t.Fatalf("step %d Write tail: %v", step, err)
-			}
-			if err := f.Close(); err != nil {
-				t.Fatalf("step %d Close tail: %v", step, err)
-			}
+			tearCommandWALTailForTest(t, path)
 
 			reopen, err := OpenCommandJournal(dir, CommandJournalOptions{Lane: lane, SegmentSeq: seg})
 			if err != nil {
 				t.Fatalf("step %d reopen after active tail: %v", step, err)
 			}
-			got, err := reopen.AppendCommand(CommandEnvelope{
-				Kind:          CommandKindRawKVBatch,
-				Scope:         CommandScopeRawKV,
-				PayloadFormat: PayloadFormatRawKVBatchV1,
-			})
+			got, err := reopen.AppendCommand(fixedWALTestBarrier())
 			if err != nil {
 				_ = reopen.Close()
 				t.Fatalf("step %d AppendCommand after active tail: %v", step, err)
@@ -1585,5 +1581,58 @@ func TestCommandJournalCleanupSnapshotRejectsRegressionAndPendingOwnership(t *te
 				t.Fatalf("validateMonotonicCleanupSnapshot error=%v, want stale", err)
 			}
 		})
+	}
+}
+
+func writeLegacyCommandJournalFrameForTest(t *testing.T, path string, lsn uint64) {
+	t.Helper()
+	writer, err := NewWriter(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = writer.AppendCommand(CommandEnvelope{LSN: lsn, Kind: CommandKindRawKVBatch, Scope: CommandScopeRawKV, PayloadFormat: PayloadFormatRawKVBatchV1}); err != nil {
+		_ = writer.Close()
+		t.Fatal(err)
+	}
+	if err = writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func tearCommandWALTailForTest(t *testing.T, path string) {
+	t.Helper()
+	file, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	state, _, err := loadFixedWAL(file)
+	if err != nil {
+		t.Fatalf("load WAL fixture: %v", err)
+	}
+	if state == nil {
+		frames, err := ScanCommandFrames(path, Options{})
+		if err != nil || len(frames) == 0 {
+			t.Fatalf("stream fixture frames=%d err=%v", len(frames), err)
+		}
+		info, err := file.Stat()
+		if err != nil {
+			t.Fatal(err)
+		}
+		// An incomplete terminal segment header leaves every accepted V2 frame
+		// intact. Reopening the active stream must discard this suffix.
+		if err := writeFixedAt(file, []byte{1, 2, 3}, info.Size()); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	if len(state.extents) == 0 {
+		t.Fatal("fixed fixture has no extents")
+	}
+	last := state.extents[len(state.extents)-1]
+	// The independently bounded entire V2 frame remains CRC/identity valid.
+	// Only its redundant footer is torn, so recovery must retain its LSN.
+	if err = writeFixedAt(file, make([]byte, fixedWALWitnessSize-16), last.end-fixedWALWitnessSize); err != nil {
+		t.Fatal(err)
 	}
 }

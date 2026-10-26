@@ -2,6 +2,8 @@ package treedb
 
 import (
 	"errors"
+	"sync"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/caching"
 	"github.com/snissn/gomap/TreeDB/internal/mvccadmission"
@@ -67,4 +69,118 @@ func (db *DB) CommitLogicalMVCC(mutations []mvccadmission.LogicalMutation, input
 		return b.WriteSync()
 	}
 	return b.Write()
+}
+
+// LogicalMVCCCompletion owns one installed logical command through its original
+// acknowledgement. The caller supplies and reuses the record only after
+// Complete. No engine queue, worker or independent publication authority is
+// created. A dedicated completion owner must call Complete even if its client
+// stops waiting; Close and discard-floor advancement can wait for that owner.
+// Do not copy a record after first use.
+type LogicalMVCCCompletion struct {
+	mu        sync.Mutex
+	db        *DB
+	batch     *commandWALPublicBatch
+	started   time.Time
+	syncWrite bool
+	err       error
+}
+
+// Complete drives the existing captured-prefix coordinator and releases the
+// batch/lifecycle custody exactly once. Repeated calls return the same result.
+func (c *LogicalMVCCCompletion) Complete() error {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.batch == nil {
+		return c.err
+	}
+	b, db := c.batch, c.db
+	// The owned batch retains the effective profile-upgraded WAL ACK class.
+	// syncWrite separately records which public API the caller selected.
+	c.err = b.completeCOWWrite(b.cowState.commandSync, nil)
+	db.observePublicBatchWrite(c.syncWrite, c.started, c.err)
+	c.err = errors.Join(c.err, b.Close())
+	c.batch, c.db = nil, nil
+	db.lifecycleMu.RUnlock()
+	return c.err
+}
+
+// SubmitLogicalMVCC performs the same canonical validation, preparation,
+// append/registration and cut installation as CommitLogicalMVCC. Only its
+// physical acknowledgement is handed to the caller-owned completion record.
+// Other profiles complete synchronously through the established writer.
+func (db *DB) SubmitLogicalMVCC(mutations []mvccadmission.LogicalMutation, input mvccadmission.LogicalInput, syncWrite bool, completion *LogicalMVCCCompletion) (err error) {
+	if completion == nil {
+		return errLogicalMVCCInput
+	}
+	completion.mu.Lock()
+	defer completion.mu.Unlock()
+	if completion.batch != nil {
+		return errors.New("treedb: completion still owns a command")
+	}
+	completion.err = nil
+	defer func() {
+		if err != nil {
+			completion.err = err
+		}
+	}()
+	if !syncWrite || db == nil || !db.commandWALCached || db.publicBatchWriteSyncPhaseEnabled {
+		err = db.CommitLogicalMVCC(mutations, input, syncWrite)
+		completion.err = err
+		return err
+	}
+	if err = db.beginPublicOperation(); err != nil {
+		return err
+	}
+	retained := false
+	defer func() {
+		if !retained {
+			db.lifecycleMu.RUnlock()
+		}
+	}()
+	if db.cached == nil || !db.cached.SupportsLogicalMVCC() {
+		return caching.ErrCOWUnsupported
+	}
+	if len(mutations) == 0 {
+		return nil
+	}
+	if !input.Matches(mutations) {
+		return errLogicalMVCCInput
+	}
+	// This record owns the original public batch and its admitted backing. It
+	// never borrows the caller's mutation slice after submission returns.
+	var b Batch = db.cached.NewBatchWithSize(len(mutations))
+	b = newCommandWALPublicBatch(db, b, len(mutations))
+	public, ok := b.(*commandWALPublicBatch)
+	if !ok {
+		return errors.Join(caching.ErrCOWUnsupported, b.Close())
+	}
+	submitted := false
+	started := time.Now()
+	if _, err = b.GetByteSize(); err == nil {
+		_, err = public.StageLogicalMVCC(mutations, input)
+	}
+	if err == nil {
+		// Ordered submission owns a fully collected cut, just like the
+		// incremental builder. Do not collect the same work a second time.
+		// This scheduling hint creates no force ticket or durability authority.
+		public.cowState.collectionSealed = true
+		submitted = true
+		err = public.submitCOWWrite(true)
+	}
+	if err != nil {
+		// An append/installation error still completes its original ticket and
+		// poison handling. It is never resubmitted or converted to a size signal.
+		if submitted {
+			err = public.completeCOWWrite(true, err)
+		}
+		db.observePublicBatchWrite(true, started, err)
+		return errors.Join(err, public.Close())
+	}
+	completion.db, completion.batch, completion.started, completion.syncWrite = db, public, started, true
+	retained = true
+	return nil
 }

@@ -37,8 +37,8 @@ func TestPrimaryDataParentCoverageV6PhysicalBarriers(t *testing.T) {
 		if err := db.SetSync(key, []byte("value")); err != nil {
 			t.Fatal(err)
 		}
-		if data != wantData || primary != 2 {
-			t.Fatalf("physical barriers DATA=%d PRIMARY=%d, want %d/2", data, primary, wantData)
+		if data != wantData || primary != 1 {
+			t.Fatalf("physical barriers DATA=%d PRIMARY=%d, want %d/1", data, primary, wantData)
 		}
 	}
 	write([]byte("first"), 1)

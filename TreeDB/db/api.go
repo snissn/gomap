@@ -888,7 +888,11 @@ func (s *Snapshot) iterate(start, end []byte, reverse bool, fn func(key, value [
 
 // Stats returns database statistics.
 func (db *DB) Stats() map[string]string {
-	stats := make(map[string]string)
+	// The fixed backend schema contains more than two thousand fields. Reserve
+	// its working size once instead of repeatedly growing and rehashing the map.
+	// Cached callers may append their own fields without retaining extra capacity
+	// in backend-only snapshots.
+	stats := make(map[string]string, 2048)
 	stats["treedb.negative_lookup_filter.active_bytes"] = "0"
 	if view := db.snapshotViewRO.Load(); view != nil {
 		stats["treedb.negative_lookup_filter.active_bytes"] = fmt.Sprint(view.negativeFilter.Bytes())
@@ -1032,6 +1036,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.process.read_path.outer_leaf.cache.buckets"] = fmt.Sprintf("%d", cacheStats.Buckets)
 	stats["treedb.process.read_path.outer_leaf.cache.ways"] = fmt.Sprintf("%d", cacheStats.Ways)
 	stats["treedb.process.read_path.outer_leaf.cache.bytes"] = fmt.Sprintf("%d", cacheStats.Bytes)
+	stats["treedb.process.read_path.outer_leaf.cache.backing_bytes"] = fmt.Sprintf("%d", cacheStats.BackingBytes)
 	stats["treedb.process.read_path.outer_leaf.cache.write_admission_policy"] = db.leafPageReadCache.writeAdmissionPolicyName()
 	stats["treedb.process.read_path.outer_leaf.cache.read_miss_admission_skips"] = fmt.Sprintf("%d", cacheStats.ReadMissAdmissionSkips)
 	stats["treedb.process.read_path.outer_leaf.cache.read_miss_admission_candidate_skips"] = fmt.Sprintf("%d", cacheStats.ReadMissAdmissionCandidateSkips)

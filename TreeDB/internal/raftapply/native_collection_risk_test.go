@@ -8,12 +8,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/nativewire"
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
@@ -132,12 +134,19 @@ func TestNativeCollectionDeterministicApplyNoEffectFrames(t *testing.T) {
 	}
 }
 
-// The real fault seam runs AFTER assigned append, BEFORE visibility. Process
-// death preserves that fsynced frame without allowing Close to repair the gap.
+// Assignment failure and durable-but-unacknowledged failure are distinct cuts.
+// The first preserves the old visible cut without promising physical retention;
+// the second witnesses the retained WAL's actual fence before cold replay. Neither
+// child allows Close to flush or checkpoint the interrupted operation.
 func TestNativeCollectionDeterministicApplyAssignedFailureReplay(t *testing.T) {
 	const env = "GOMAP_NATIVE_APPLY_FAILURE_DIR"
+	const cutEnv = "GOMAP_NATIVE_APPLY_FAILURE_CUT"
 	const sentinel = 97
 	if dir := os.Getenv(env); dir != "" {
+		cut := os.Getenv(cutEnv)
+		if cut != "preinstall" && cut != "after-sync" {
+			t.Fatalf("unknown native failure cut %q", cut)
+		}
 		t.Setenv("TREEDB_DISABLE_VLOG_GENERATION_LOOP", "1")
 		database, err := treedb.Open(nativeApplyPublicOptions(filepath.Join(dir, "db")))
 		if err != nil {
@@ -180,10 +189,56 @@ func TestNativeCollectionDeterministicApplyAssignedFailureReplay(t *testing.T) {
 		raw := deterministicInsertBatchEntry(t, "users", "native-failure:assigned", nativewire.DocumentFormatJSON, [][]byte{[]byte("new")}, [][]byte{[]byte(`{"id":"new","v":2}`)})
 		meta := applyMeta(1, 3)
 		meta.SyncLocalCommandWAL = true
-		opts.FaultInjector = singlePointFaultInjector{point: FaultAfterLocalWALAppendBeforeVisibleV1}
+		assigned := &nativeCollectionAssignedObserver{}
+		if cut == "preinstall" {
+			assigned.failure = codedError(raftentry.ErrorUnsafeDurabilityModeV1, "native apply assigned preinstall failure")
+		}
+		opts.FaultInjector = assigned
+		failure := errors.New("native apply retained WAL after-sync failure")
+		var physicalSyncs atomic.Uint64
+		beforeDurable := backend.Stats()["treedb.command_wal.durable_wal_lsn"]
+		if beforeDurable != "2" {
+			t.Fatalf("seed durable frontier=%q want 2", beforeDurable)
+		}
+		restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+			if cut != "after-sync" || event.Resource != durabilitycut.ResourceCommandWAL || event.Root != backend.Dir() || event.Point != durabilitycut.AfterDependencyFileSync || event.LSN != next {
+				return nil
+			}
+			if event.StablePath == nil {
+				return errors.New("native apply fence has no retained physical handle")
+			}
+			retained, statErr := event.StablePath.Stat()
+			if statErr != nil {
+				return statErr
+			}
+			named, statErr := os.Stat(event.Path)
+			if statErr != nil {
+				return statErr
+			}
+			if !os.SameFile(retained, named) {
+				return errors.New("native apply fence is not its actual command-WAL file")
+			}
+			physicalSyncs.Add(1)
+			return failure
+		})
+		defer restore()
 		result, err := ApplyCommittedEntryV1(backend, raw, meta, opts)
 		assertRecoveryRequired(t, result, err, raftentry.ErrorUnsafeDurabilityModeV1)
-		frames = append(frames, observeNativeApplyFrame(t, backend.Dir(), next))
+		if !assigned.reached {
+			t.Fatal("original assigned preinstall observer was not reached")
+		}
+		if cut == "preinstall" && !errors.Is(err, assigned.failure) {
+			t.Fatalf("preinstall failure lost its original cause: %v", err)
+		}
+		if cut == "after-sync" {
+			if !errors.Is(err, failure) || !errors.Is(err, backenddb.ErrRecoveryRequired) || physicalSyncs.Load() != 1 {
+				t.Fatalf("retained after-sync failure: error=%v physical fences=%d", err, physicalSyncs.Load())
+			}
+			frames = append(frames, observeNativeApplyFrame(t, backend.Dir(), next))
+		}
+		if got := backend.Stats()["treedb.command_wal.durable_wal_lsn"]; got != beforeDurable {
+			t.Fatalf("unacknowledged failure advanced durable frontier: %s -> %s", beforeDurable, got)
+		}
 		after, ok := backend.StateToken()
 		if !ok || after != token || backend.CommandWALNextLSN() != next+1 {
 			t.Fatalf("assigned failure moved physical cut: before=%+v after=%+v next=%d", token, after, backend.CommandWALNextLSN())
@@ -194,8 +249,14 @@ func TestNativeCollectionDeterministicApplyAssignedFailureReplay(t *testing.T) {
 		if _, found, err := progress.LookupApplyProgress(meta.EntryID); err != nil || found {
 			t.Fatalf("failed progress recorded: found=%v err=%v", found, err)
 		}
-		if got, err := collection.Get([]byte("new")); err != nil || got != nil {
-			t.Fatalf("failed row visible=%q err=%v", got, err)
+		wantLive := []byte(nil)
+		if cut == "after-sync" {
+			// Installation precedes the captured fence. Its failed completion is
+			// ambiguous, never a successful apply/result/progress acknowledgement.
+			wantLive = []byte(`{"id":"new","v":2}`)
+		}
+		if got, err := collection.Get([]byte("new")); err != nil || !bytes.Equal(got, wantLive) {
+			t.Fatalf("%s live row=%q want=%q err=%v", cut, got, wantLive, err)
 		}
 		response, err := held.FetchDocumentsByID([][]byte{[]byte("seed"), []byte("new")}, collections.DocumentFetchOptions{})
 		if err != nil || len(response.Results) != 2 || !response.Results[0].Found || response.Results[1].Found {
@@ -204,8 +265,12 @@ func TestNativeCollectionDeterministicApplyAssignedFailureReplay(t *testing.T) {
 		if err = backend.CheckStorageMaintenanceReady(); !errors.Is(err, backenddb.ErrRecoveryRequired) {
 			t.Fatalf("assigned failure did not poison original owner: %v", err)
 		}
-		if len(frames) != 3 {
-			t.Fatalf("frames=%d want 3", len(frames))
+		wantFrames := 2
+		if cut == "after-sync" {
+			wantFrames = 3
+		}
+		if len(frames) != wantFrames {
+			t.Fatalf("witnessed frames=%d want %d", len(frames), wantFrames)
 		}
 		assertCatalogCreateFrame(t, frames[0], "users")
 		assertCollectionInsertFrame(t, frames[1], "users", map[string][]byte{"seed": []byte(`{"id":"seed","v":1}`)})
@@ -214,61 +279,89 @@ func TestNativeCollectionDeterministicApplyAssignedFailureReplay(t *testing.T) {
 				t.Fatalf("frame %d LSN=%d want %d", i, frame.LSN, i+1)
 			}
 		}
-		assertCollectionInsertFrame(t, frames[2], "users", map[string][]byte{"new": []byte(`{"id":"new","v":2}`)})
-		fmt.Println("NATIVE APPLY ASSIGNED FAILURE basis=2 accepted=3")
+		if cut == "after-sync" {
+			assertCollectionInsertFrame(t, frames[2], "users", map[string][]byte{"new": []byte(`{"id":"new","v":2}`)})
+		}
+		fmt.Printf("NATIVE APPLY FAILURE cut=%s basis=2 assigned=3\n", cut)
 		os.Exit(sentinel)
 	}
-	dir := t.TempDir()
-	cmd := exec.Command(os.Args[0], "-test.run=^TestNativeCollectionDeterministicApplyAssignedFailureReplay$", "-test.v")
-	cmd.Env = append(os.Environ(), env+"="+dir)
-	output, err := cmd.CombinedOutput()
-	var exit *exec.ExitError
-	if !errors.As(err, &exit) || exit.ExitCode() != sentinel || !bytes.Contains(output, []byte("NATIVE APPLY ASSIGNED FAILURE basis=2 accepted=3")) || bytes.Contains(output, []byte("DATA RACE")) {
-		t.Fatalf("assigned-failure child: %v\n%s", err, output)
+	for _, cut := range []string{"preinstall", "after-sync"} {
+		t.Run(cut, func(t *testing.T) {
+			dir := t.TempDir()
+			cmd := exec.Command(os.Args[0], "-test.run=^TestNativeCollectionDeterministicApplyAssignedFailureReplay$", "-test.v")
+			cmd.Env = append(os.Environ(), env+"="+dir, cutEnv+"="+cut)
+			output, err := cmd.CombinedOutput()
+			var exit *exec.ExitError
+			if !errors.As(err, &exit) || exit.ExitCode() != sentinel || !bytes.Contains(output, []byte("NATIVE APPLY FAILURE cut="+cut+" basis=2 assigned=3")) || bytes.Contains(output, []byte("DATA RACE")) {
+				t.Fatalf("%s failure child: %v\n%s", cut, err, output)
+			}
+			if cut == "preinstall" {
+				// No completed physical fence was witnessed. Assigned bytes may or may
+				// not survive; only the separate after-sync cut requires cold replay.
+				return
+			}
+			database, err := treedb.Open(nativeApplyPublicOptions(filepath.Join(dir, "db")))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if err := database.Close(); err != nil {
+					t.Error(err)
+				}
+			}()
+			backend, err := database.NativeSemanticBackend()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if backend.State().AppliedCommandLSN != 3 || backend.CommandWALNextLSN() != 4 {
+				t.Fatalf("replay applied/next=%d/%d want 3/4", backend.State().AppliedCommandLSN, backend.CommandWALNextLSN())
+			}
+			manager := collections.NewCollectionManager(backend)
+			defer manager.Close()
+			collection, err := manager.OpenCollection("users")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for i, id := range []string{"seed", "new"} {
+				got, err := collection.Get([]byte(id))
+				if err != nil {
+					t.Fatalf("recovered %s: %v", id, err)
+				}
+				var document struct {
+					ID string `json:"id"`
+					V  int    `json:"v"`
+				}
+				if err = json.Unmarshal(got, &document); err != nil || document.ID != id || document.V != i+1 {
+					t.Fatalf("recovered %s=%q err=%v", id, got, err)
+				}
+			}
+			progress, results := openDurableApplyStoresForTest(t, filepath.Join(dir, "apply"), DurableApplyStoreOptions{})
+			defer closeDurableApplyStoresForTest(t, progress, results)
+			if _, found, err := results.LookupApplyResult(applyMeta(1, 3).EntryID); err != nil || found {
+				t.Fatalf("recovery fabricated deterministic result: found=%v err=%v", found, err)
+			}
+			if _, found, err := progress.LookupApplyProgress(applyMeta(1, 3).EntryID); err != nil || found {
+				t.Fatalf("recovery fabricated apply progress: found=%v err=%v", found, err)
+			}
+		})
 	}
-	database, err := treedb.Open(nativeApplyPublicOptions(filepath.Join(dir, "db")))
-	if err != nil {
-		t.Fatal(err)
+}
+
+// ObserveAssigned remains a non-reentrant preinstall seam, not a sync witness.
+type nativeCollectionAssignedObserver struct {
+	reached bool
+	failure error
+}
+
+func (o *nativeCollectionAssignedObserver) InjectApplyFault(point FaultPointV1, ctx ApplyFaultContextV1) error {
+	if point != FaultAfterLocalWALAppendBeforeVisibleV1 {
+		return nil
 	}
-	defer func() {
-		if err := database.Close(); err != nil {
-			t.Error(err)
-		}
-	}()
-	backend, err := database.NativeSemanticBackend()
-	if err != nil {
-		t.Fatal(err)
+	if ctx.AppliedCommandLSN != 2 || ctx.EntryID != (raftentry.ApplyEntryID{Term: 1, Index: 3}) || o.reached {
+		return fmt.Errorf("unexpected native assigned observer: context=%+v repeated=%t", ctx, o.reached)
 	}
-	if backend.State().AppliedCommandLSN != 3 || backend.CommandWALNextLSN() != 4 {
-		t.Fatalf("replay applied/next=%d/%d want 3/4", backend.State().AppliedCommandLSN, backend.CommandWALNextLSN())
-	}
-	manager := collections.NewCollectionManager(backend)
-	defer manager.Close()
-	collection, err := manager.OpenCollection("users")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for i, id := range []string{"seed", "new"} {
-		got, err := collection.Get([]byte(id))
-		if err != nil {
-			t.Fatalf("recovered %s: %v", id, err)
-		}
-		var document struct {
-			ID string `json:"id"`
-			V  int    `json:"v"`
-		}
-		if err = json.Unmarshal(got, &document); err != nil || document.ID != id || document.V != i+1 {
-			t.Fatalf("recovered %s=%q err=%v", id, got, err)
-		}
-	}
-	progress, results := openDurableApplyStoresForTest(t, filepath.Join(dir, "apply"), DurableApplyStoreOptions{})
-	defer closeDurableApplyStoresForTest(t, progress, results)
-	if _, found, err := results.LookupApplyResult(applyMeta(1, 3).EntryID); err != nil || found {
-		t.Fatalf("recovery fabricated deterministic result: found=%v err=%v", found, err)
-	}
-	if _, found, err := progress.LookupApplyProgress(applyMeta(1, 3).EntryID); err != nil || found {
-		t.Fatalf("recovery fabricated apply progress: found=%v err=%v", found, err)
-	}
+	o.reached = true
+	return o.failure
 }
 
 // Public scans use one original cut even when a callback publishes another cut.

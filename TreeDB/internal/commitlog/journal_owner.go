@@ -15,6 +15,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/internal/stableio"
 )
 
 type JournalOwner struct {
@@ -209,9 +210,19 @@ type CommandJournalOptions struct {
 
 type CommandJournal struct {
 	mu                     sync.Mutex
+	closing                bool
+	closed                 bool
+	closeErr               error
+	fixedAhead             *fixedWALAheadSlot
+	fixedAheadGeneration   uint64
+	fixedAheadErr          error
+	syncPins               int
+	syncCond               *sync.Cond
+	capturedFile           *capturedJournalFile
 	owner                  *JournalOwner
 	writer                 *Writer
 	walDir                 string
+	root                   string // Immutable lexical witness root; retained handles own resource identity.
 	path                   string
 	lane                   int
 	segmentSeq             uint64
@@ -277,15 +288,29 @@ func IsCommandSegmentName(name string) bool {
 }
 
 func OpenCommandJournal(walDir string, opts CommandJournalOptions) (*CommandJournal, error) {
+	return openCommandJournal(walDir, opts, true)
+}
+
+// openCommandJournal preserves the same journal lifecycle for explicit low-level
+// fixed-container fixtures and production medium-selected writers.
+func openCommandJournal(walDir string, opts CommandJournalOptions, productionMediumPolicy bool) (*CommandJournal, error) {
 	if walDir == "" {
 		return nil, errors.New("commitlog: command journal dir required")
 	}
 	if opts.Lane < 0 || opts.Lane > MaxCommandJournalLane {
 		return nil, fmt.Errorf("commitlog: invalid command journal lane %d", opts.Lane)
 	}
+	budget, err := fixedWALPhysicalBudget(opts.SegmentTargetBytes)
+	if err != nil {
+		return nil, err
+	}
 	owner, err := AcquireJournalOwnerWithOptions(walDir, JournalOwnerOptions{InitialLSN: opts.InitialLSN})
 	if err != nil {
 		return nil, err
+	}
+	if err := cleanupFixedWALAheadOrphan(walDir); err != nil {
+		_ = owner.Close()
+		return nil, fmt.Errorf("commitlog: clean private WAL ahead reserve: %w", err)
 	}
 	if opts.SegmentSeq == 0 {
 		seq, err := commandJournalLatestSegmentSeq(walDir, opts.Lane)
@@ -317,7 +342,10 @@ func OpenCommandJournal(walDir string, opts CommandJournalOptions) (*CommandJour
 		_ = owner.Close()
 		return nil, err
 	}
+	initialCapacity := min(int64(fixedWALDefaultCapacity), budget)
 	writer, err := NewWriterWithOptions(path, Options{
+		fixedCapacity:                   initialCapacity,
+		productionMediumPolicy:          productionMediumPolicy,
 		MaxSegmentSize:                  opts.MaxSegmentSize,
 		BufferSize:                      opts.BufferSize,
 		DeferredCommandBufferSize:       opts.DeferredCommandBufferSize,
@@ -327,6 +355,9 @@ func OpenCommandJournal(walDir string, opts CommandJournalOptions) (*CommandJour
 	if err != nil {
 		_ = owner.Close()
 		return nil, err
+	}
+	if FixedWALCreationSupported() {
+		writer.fixedBudget = budget
 	}
 	stableParent, stableParentErr := captureStableCommandWALParent(walDir, writer.f)
 	if opts.CaptureStableResources && stableParentErr != nil {
@@ -338,6 +369,7 @@ func OpenCommandJournal(walDir string, opts CommandJournalOptions) (*CommandJour
 		owner:                  owner,
 		writer:                 writer,
 		walDir:                 walDir,
+		root:                   filepath.Dir(walDir),
 		path:                   path,
 		lane:                   opts.Lane,
 		segmentSeq:             opts.SegmentSeq,
@@ -470,15 +502,24 @@ func commandJournalSegments(walDir string, activePath string) ([]commandJournalS
 			continue
 		}
 		path := filepath.Join(walDir, entry.Name())
-		info, err := entry.Info()
+		_, err := entry.Info()
 		if err != nil {
 			return nil, err
+		}
+		file, e := os.Open(path)
+		if e != nil {
+			return nil, e
+		}
+		size, e := LogicalFileSize(file)
+		_ = file.Close()
+		if e != nil {
+			return nil, e
 		}
 		segments = append(segments, commandJournalSegment{
 			path: path,
 			lane: entryLane,
 			seq:  seq,
-			size: info.Size(),
+			size: size,
 		})
 		if seq > activeSeqByLane[entryLane] {
 			activeSeqByLane[entryLane] = seq
@@ -525,11 +566,11 @@ func parseCommandSegmentName(name string) (lane int, seq uint64, ok bool) {
 }
 
 func truncateCommandJournalTail(path string, size int64) error {
-	f, err := os.OpenFile(path, os.O_WRONLY, 0)
+	f, err := os.OpenFile(path, os.O_RDWR, 0)
 	if err != nil {
 		return err
 	}
-	if err := f.Truncate(size); err != nil {
+	if err := TruncateLogicalFile(&f, size); err != nil {
 		_ = f.Close()
 		return err
 	}
@@ -568,17 +609,38 @@ func (j *CommandJournal) maybeRotateForFrameLockedObserved(frameSize int, syncCu
 }
 
 func (j *CommandJournal) maybeRotateForFrameLockedObservedWithNamespaceDebt(frameSize int, syncCurrent, deferNamespace, observe bool) error {
-	if j == nil || j.writer == nil || j.segmentTargetBytes <= 0 || frameSize <= 0 {
+	if j == nil || j.writer == nil || frameSize <= 0 {
 		return nil
 	}
-	total := int64(segmentHeaderSize + frameSize)
+	if int64(frameSize) > int64(1<<63-1)-segmentHeaderSize {
+		return ErrRecordTooLarge
+	}
+	total := int64(segmentHeaderSize) + int64(frameSize)
 	activeBytes := j.writer.ActiveBytes()
-	if activeBytes <= 0 || activeBytes+total <= j.segmentTargetBytes {
+	if err := j.writer.commandBufferError(); err != nil {
+		return err
+	}
+
+	physicalFits := j.writer.fixedFitsAppend(total)
+	logicalCrossing := j.segmentTargetBytes > 0 && activeBytes > 0 && (activeBytes >= j.segmentTargetBytes || total > j.segmentTargetBytes-activeBytes)
+	if !logicalCrossing && physicalFits {
+		if err := j.maybeStartFixedWALAheadLocked(); err != nil {
+			return j.writer.poisonCommandBuffer(err)
+		}
 		return nil
 	}
 	if err := j.requireNoPendingStableRotationLocked(); err != nil {
 		return err
 	}
+	// Both successor routes must initialize the chosen empty file for this
+	// atomic frame before installing it or issuing namespace/resource tokens.
+	previousIncoming, previousReason := j.writer.fixedIncomingBytes, j.writer.fixedRotationReason
+	j.writer.fixedIncomingBytes = total
+	j.writer.fixedRotationReason = fixedWALLogicalRotation
+	if !physicalFits {
+		j.writer.fixedRotationReason = fixedWALPressureRotation
+	}
+	defer func() { j.writer.fixedIncomingBytes = previousIncoming; j.writer.fixedRotationReason = previousReason }()
 	if j.captureStableResources {
 		rotation, err := j.rotateActiveSegmentWithStableResourcesLocked(syncCurrent, deferNamespace, observe)
 		if err != nil {
@@ -604,6 +666,20 @@ func (j *CommandJournal) requireNoPendingStableRotationLocked() error {
 }
 
 func (j *CommandJournal) stableRotationFailStopErrorLocked() error {
+	if j != nil {
+		if err := j.fixedWALAheadErrorLocked(); err != nil {
+			j.cancelFixedWALAheadLocked()
+			return err
+		}
+	}
+	if j != nil && j.writer != nil {
+		if err := j.writer.commandBufferError(); err != nil {
+			return err
+		}
+	}
+	if j != nil && j.closing {
+		return errors.New("commitlog: command journal is closed")
+	}
 	if j != nil && j.pendingStableSuccessor != nil && j.pendingStableSuccessor.failStop {
 		return errCommandJournalStableRotationFailStop
 	}
@@ -614,7 +690,7 @@ func (j *CommandJournal) rotateActiveSegmentLocked(syncCurrent bool) error {
 	return j.rotateActiveSegmentLockedObserved(syncCurrent, false)
 }
 
-func (j *CommandJournal) rotateActiveSegmentLockedObserved(syncCurrent, observe bool) error {
+func (j *CommandJournal) rotateActiveSegmentLockedObserved(syncCurrent, observe bool) (retErr error) {
 	if j == nil || j.writer == nil {
 		return errors.New("commitlog: command journal is closed")
 	}
@@ -626,8 +702,17 @@ func (j *CommandJournal) rotateActiveSegmentLockedObserved(syncCurrent, observe 
 	}
 	nextSeq := j.segmentSeq + 1
 	nextPath := filepath.Join(j.walDir, CommandSegmentName(j.lane, nextSeq))
+	plan, err := j.writer.fixedSuccessorSizePlan()
+	if err != nil {
+		return err
+	}
+	ahead, err := j.takeFixedWALAheadLocked(plan)
+	if err != nil {
+		return j.writer.poisonCommandBuffer(err)
+	}
+	defer func() { retErr = errors.Join(retErr, j.disposeFixedWALAheadLocked(ahead)) }()
 	closedBytes := j.writer.ActiveBytes()
-	outcome, rotateErr := j.writer.rotateToWithSyncObserved(nextPath, syncCurrent, filepath.Dir(j.walDir), observe)
+	outcome, rotateErr := j.writer.rotateToWithSyncObservedAhead(nextPath, syncCurrent, j.root, observe, ahead)
 	if !outcome.Installed {
 		return rotateErr
 	}
@@ -640,6 +725,10 @@ func (j *CommandJournal) rotateActiveSegmentLockedObserved(syncCurrent, observe 
 	}
 	j.segmentSeq = nextSeq
 	j.path = nextPath
+	if j.capturedFile != nil {
+		j.releaseCapturedFileLocked(j.capturedFile)
+		j.capturedFile = nil
+	}
 	j.activeSegmentMaxLSN = 0
 	j.namespaceGeneration++
 	j.cleanupEpoch++
@@ -661,7 +750,7 @@ func (j *CommandJournal) RotateActiveSegment(syncCurrent bool) error {
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	return j.rotateActiveSegmentLocked(syncCurrent)
+	return j.rotateActiveSegmentLockedObserved(syncCurrent, durabilitycut.Enabled())
 }
 
 // CommandJournalStableRotation retains exact handles for the segment closed by
@@ -750,6 +839,7 @@ func (j *CommandJournal) stableSegmentToken(file *os.File, path string, seq uint
 		DiagnosticPath: commandWALDiagnosticPath(path), File: file, Frontier: frontier,
 		Digest: digest, Reachability: field, Namespace: namespace,
 		ContentSynced: contentSynced, PinRegistry: j.stableResourcePins,
+		SyncThrough: func(file *os.File, _ rootpublication.DurableFrontier) error { return syncCommandWALFile(file) },
 	}
 	token, tokenErr := NewStableCommandWALResourceToken(spec)
 	unobserveErr := j.stableResourcePins.Unobserve(identity)
@@ -793,7 +883,7 @@ func (j *CommandJournal) RotateActiveSegmentWithStableResources(syncCurrent bool
 	return j.rotateActiveSegmentWithStableResourcesLocked(syncCurrent, false, durabilitycut.Enabled())
 }
 
-func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurrent, deferNamespace, observe bool) (*CommandJournalStableRotation, error) {
+func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurrent, deferNamespace, observe bool) (rotation *CommandJournalStableRotation, retErr error) {
 	if err := j.stableRotationFailStopErrorLocked(); err != nil {
 		return nil, err
 	}
@@ -806,6 +896,23 @@ func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurren
 	if j.segmentSeq == ^uint64(0) {
 		return nil, ErrCommandWALSegmentSeqExhausted
 	}
+	plan, err := j.writer.fixedSuccessorSizePlan()
+	if err != nil {
+		return nil, err
+	}
+	ahead, err := j.takeFixedWALAheadLocked(plan)
+	if err != nil {
+		return nil, j.writer.poisonCommandBuffer(err)
+	}
+	defer func() {
+		if cleanupErr := j.disposeFixedWALAheadLocked(ahead); cleanupErr != nil {
+			if rotation != nil {
+				rotation.Release()
+				rotation = nil
+			}
+			retErr = errors.Join(retErr, cleanupErr)
+		}
+	}()
 	closedPath, closedSeq := j.path, j.segmentSeq
 	nextSeq := closedSeq + 1
 	nextPath := filepath.Join(j.walDir, CommandSegmentName(j.lane, nextSeq))
@@ -818,7 +925,7 @@ func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurren
 	}
 	if syncCurrent {
 		if observe {
-			if err := durabilitycut.EmitPath(durabilitycut.BeforeDependencyFileSync, durabilitycut.ResourceCommandWAL, filepath.Dir(j.walDir), closedPath); err != nil {
+			if err := durabilitycut.EmitStablePath(durabilitycut.BeforeDependencyFileSync, durabilitycut.ResourceCommandWAL, j.root, closedPath, j.writer.f); err != nil {
 				return nil, err
 			}
 		}
@@ -826,19 +933,19 @@ func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurren
 			return nil, err
 		}
 		if observe {
-			if err := durabilitycut.EmitPath(durabilitycut.AfterDependencyFileSync, durabilitycut.ResourceCommandWAL, filepath.Dir(j.walDir), closedPath); err != nil {
+			if err := durabilitycut.EmitStablePath(durabilitycut.AfterDependencyFileSync, durabilitycut.ResourceCommandWAL, j.root, closedPath, j.writer.f); err != nil {
 				return nil, err
 			}
 		}
 	} else if err := j.writer.Flush(); err != nil {
 		return nil, err
 	}
-	closedInfo, err := j.writer.f.Stat()
+	_, err = j.writer.f.Stat()
 	if err != nil {
 		return nil, err
 	}
 	closedToken, err := j.stableSegmentToken(j.writer.f, closedPath, closedSeq, rootpublication.ReachabilityCommandWALRotated,
-		rootpublication.DurableFrontier{Bytes: uint64(closedInfo.Size()), MaxLSN: j.activeSegmentMaxLSN}, nil, syncCurrent)
+		rootpublication.DurableFrontier{Bytes: uint64(j.writer.StableBytes()), MaxLSN: j.activeSegmentMaxLSN}, nil, syncCurrent)
 	if err != nil {
 		return nil, err
 	}
@@ -850,6 +957,7 @@ func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurren
 		return nil, errors.New("commitlog: stable command-WAL parent unavailable")
 	}
 	pending := j.pendingStableSuccessor
+	fresh := pending == nil
 	if pending == nil {
 		prepared, openErr := openStableCommandWALFile(parent, nextPath)
 		if openErr != nil {
@@ -860,6 +968,24 @@ func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurren
 		j.pendingStableSuccessor = pending
 	}
 	prepared := pending.file
+	if err := rootpublication.ValidateStableChildLink(parent, prepared, filepath.Base(nextPath)); err != nil {
+		closedToken.Release()
+		return nil, err
+	}
+	preparedAhead := ahead
+	if !fresh {
+		preparedAhead = nil
+	}
+	state, _, selection, err := j.writer.prepareFixedSuccessorAhead(&prepared, parent, plan, preparedAhead)
+	pending.file = prepared
+	if err != nil {
+		closedToken.Release()
+		pending.failStop = true
+		cleanupErr := discardUnacceptedFixedSuccessor(parent, prepared)
+		closeErr := prepared.Close()
+		pending.file = nil
+		return nil, j.writer.poisonCommandBuffer(errors.Join(err, cleanupErr, closeErr))
+	}
 	if !pending.observerEmitted {
 		pending.observerEmitted = true
 		if observeErr := durabilitycut.EmitNamespace(durabilitycut.NamespaceCreate, durabilitycut.ResourceCommandWAL, filepath.Dir(nextPath), "", nextPath); observeErr != nil {
@@ -891,7 +1017,7 @@ func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurren
 	// not introduce a stable namespace sync.
 	if !deferNamespace {
 		if observe {
-			if err := durabilitycut.EmitPath(durabilitycut.BeforeNewFileDirectorySync, durabilitycut.ResourceCommandWAL, filepath.Dir(j.walDir), filepath.Dir(nextPath)); err != nil {
+			if err := durabilitycut.EmitPath(durabilitycut.BeforeNewFileDirectorySync, durabilitycut.ResourceCommandWAL, j.root, filepath.Dir(nextPath)); err != nil {
 				namespace.Release()
 				closedToken.Release()
 				return nil, pendingCommandWALFailure(parent, prepared, nextPath, err)
@@ -903,15 +1029,19 @@ func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurren
 			return nil, pendingCommandWALFailure(parent, prepared, nextPath, err)
 		}
 		if observe {
-			if err := durabilitycut.EmitPath(durabilitycut.AfterNewFileDirectorySync, durabilitycut.ResourceCommandWAL, filepath.Dir(j.walDir), filepath.Dir(nextPath)); err != nil {
+			if err := durabilitycut.EmitPath(durabilitycut.AfterNewFileDirectorySync, durabilitycut.ResourceCommandWAL, j.root, filepath.Dir(nextPath)); err != nil {
 				namespace.Release()
 				closedToken.Release()
 				return nil, pendingCommandWALFailure(parent, prepared, nextPath, err)
 			}
 		}
 	}
+	activeStableBytes := activeInfo.Size()
+	if state != nil {
+		activeStableBytes = state.physical
+	}
 	activeToken, err := j.stableSegmentToken(prepared, nextPath, nextSeq, rootpublication.ReachabilityCommandWALActive,
-		rootpublication.DurableFrontier{Bytes: uint64(activeInfo.Size())}, namespace, false)
+		rootpublication.DurableFrontier{Bytes: uint64(activeStableBytes)}, namespace, false)
 	namespace.Release()
 	if err != nil {
 		closedToken.Release()
@@ -932,9 +1062,24 @@ func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurren
 	j.writer.fileSink.file = prepared
 	j.writer.bw.Reset(&j.writer.fileSink)
 	j.writer.size = activeInfo.Size()
+	oldFixed := j.writer.fixed
+	j.writer.fixed = state
+	j.writer.containerSelection = selection
+	if state != nil {
+		j.writer.size = state.logical
+		if oldFixed == nil {
+			j.writer.syncFn = syncWALData
+		}
+	} else if oldFixed != nil {
+		j.writer.syncFn = stableio.SyncFile
+	}
 	j.writer.scratch = j.writer.scratch[:0]
 	j.segmentSeq = nextSeq
 	j.path = nextPath
+	if j.capturedFile != nil {
+		j.releaseCapturedFileLocked(j.capturedFile)
+		j.capturedFile = nil
+	}
 	j.activeSegmentMaxLSN = 0
 	j.namespaceGeneration++
 	j.cleanupEpoch++
@@ -967,7 +1112,7 @@ func (j *CommandJournal) takePendingStableRotationsLocked() ([]*CommandJournalSt
 	if err := j.writer.Flush(); err != nil {
 		return nil, err
 	}
-	info, err := j.writer.f.Stat()
+	_, err := j.writer.f.Stat()
 	if err != nil {
 		return nil, err
 	}
@@ -976,7 +1121,7 @@ func (j *CommandJournal) takePendingStableRotationsLocked() ([]*CommandJournalSt
 		return nil, fmt.Errorf("%w: pending command-WAL rotation has no active resource", rootpublication.ErrResourceOwnership)
 	}
 	active, err := j.stableSegmentToken(j.writer.f, j.path, j.segmentSeq, rootpublication.ReachabilityCommandWALActive,
-		rootpublication.DurableFrontier{Bytes: uint64(info.Size()), MaxLSN: j.activeSegmentMaxLSN}, last.Active.Namespace(), false)
+		rootpublication.DurableFrontier{Bytes: uint64(j.writer.StableBytes()), MaxLSN: j.activeSegmentMaxLSN}, last.Active.Namespace(), false)
 	if err != nil {
 		return nil, err
 	}
@@ -1068,6 +1213,30 @@ func (j *CommandJournal) CaptureCleanupSnapshot() (CommandJournalCleanupSnapshot
 	return j.cleanupSnapshotLocked()
 }
 
+// WithCleanupScan excludes append and rotation for the entire listing/reader
+// scan, including reserve validation of the active fixed container. The caller
+// must release this authority before acquiring publication/durability locks;
+// fn may inspect files but must not call back into the journal or publish roots.
+// Unflushed accepted bytes are intentionally not flushed by maintenance.
+func (j *CommandJournal) WithCleanupScan(snapshot CommandJournalCleanupSnapshot, fn func() error) error {
+	if j == nil {
+		return errors.Join(ErrCommandWALCleanupSnapshotStale, errors.New("commitlog: command journal is closed"))
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	current, err := j.cleanupSnapshotLocked()
+	if err != nil {
+		return errors.Join(ErrCommandWALCleanupSnapshotStale, err)
+	}
+	if err = validateMonotonicCleanupSnapshot(snapshot, current); err != nil {
+		return err
+	}
+	if fn == nil {
+		return nil
+	}
+	return fn()
+}
+
 func validateMonotonicCleanupSnapshot(captured, current CommandJournalCleanupSnapshot) error {
 	if current.PendingStableRotation != 0 || current.PendingSuccessor {
 		return errors.Join(ErrCommandWALCleanupSnapshotStale, errors.New("commitlog: command WAL rotation/retry ownership is pending"))
@@ -1133,6 +1302,21 @@ func (j *CommandJournal) NextLSN() uint64 {
 	return j.owner.nextLSN
 }
 
+// AppendedLSN reports the assigned prefix without subtracting from NextLSN,
+// which saturates at MaxUint64 after the final legal append. Callers that bind
+// this to a capture must retain their append authority across both operations.
+func (j *CommandJournal) AppendedLSN() uint64 {
+	if j == nil || j.owner == nil {
+		return 0
+	}
+	j.owner.mu.Lock()
+	defer j.owner.mu.Unlock()
+	if j.owner.exhausted {
+		return ^uint64(0)
+	}
+	return j.owner.nextLSN - 1
+}
+
 // AppendCommand validates a complete command frame, assigns the next journal
 // LSN, and appends it through this lane's single writer while holding the
 // journal mutex. This intentionally optimizes for deterministic frame order and
@@ -1182,15 +1366,12 @@ func (j *CommandJournal) appendCommand(
 	if env.LSN != 0 {
 		return 0, errors.New("commitlog: command journal owns lsn assignment")
 	}
-	// Validate shape and payload before reserving, using a synthetic non-zero
-	// LSN. Writer.AppendCommand repeats encode validation with the actual
-	// reserved LSN before it writes bytes, so late LSN-sensitive validation
-	// still rolls the reservation back through the error path below.
+	// Validate shape/capacity before any rotation or reservation. A V2 plan
+	// can be reused only while its borrowed input has crossed no callback.
 	probe := env
 	probe.LSN = 1
 	if probe.Kind == CommandKindRawKVBatch && probe.Payload == nil {
-		// Nil RawKVBatch payloads are accepted as an explicit empty batch so
-		// callers can append a no-op frame without constructing payload bytes.
+		// Nil means an explicit empty batch, not a malformed empty payload.
 		payload, err := EncodeRawKVBatchPayload(nil)
 		if err != nil {
 			return 0, err
@@ -1199,48 +1380,77 @@ func (j *CommandJournal) appendCommand(
 		env.Payload = payload
 	}
 	v2 := probe.Version == CommandFrameVersionV2 || probe.DurabilityClass != 0
+	var plan commandFrameV2Encoding
 	var size int
-	if v2 {
-		var err error
-		size, err = commandFrameV2EncodedSize(probe)
-		if err != nil {
-			return 0, err
+	prepareFrame := func() error {
+		if v2 {
+			var err error
+			plan, err = prepareCommandFrameV2Encoding(probe)
+			if err != nil {
+				return err
+			}
+			size = plan.total
+		} else {
+			if err := validateCommandEnvelopeForEncode(probe); err != nil {
+				return err
+			}
+			var err error
+			size, err = commandFrameEncodedSize(probe)
+			if err != nil {
+				return err
+			}
 		}
-	} else {
-		if err := validateCommandEnvelopeForEncode(probe); err != nil {
-			return 0, err
-		}
-		var err error
-		size, err = commandFrameEncodedSize(probe)
-		if err != nil {
-			return 0, err
-		}
+		return j.writer.commandFrameSizeError(size)
 	}
-	// maxSegmentSize is the per-frame safety cap used by Writer.AppendCommand;
-	// segmentTargetBytes is the separate active file rotation target checked
-	// before LSN reservation.
-	if j.writer.maxSegmentSize > 0 && int64(size) > j.writer.maxSegmentSize {
-		return 0, ErrRecordTooLarge
-	}
-	if size > int(segmentLenMask) {
-		return 0, ErrRecordTooLarge
+	if err := prepareFrame(); err != nil {
+		return 0, err
 	}
 	if beforeAppend != nil {
 		if err := beforeAppend(); err != nil {
 			return 0, err
 		}
+		// Both codecs borrow nested extension headers. Refresh their shape and
+		// size after the hook, before selecting a successor or reserving an LSN.
+		if err := prepareFrame(); err != nil {
+			return 0, err
+		}
 	}
 	syncRotation := v2 && probe.DurabilityClass == CommandDurabilityDurable
 	deferRotationNamespace := v2 && probe.DurabilityClass == CommandDurabilityRelaxed
+	previousSegment := j.segmentSeq
 	if err := j.maybeRotateForFrameLockedObservedWithNamespaceDebt(size, syncRotation, deferRotationNamespace, observe); err != nil {
 		return 0, err
+	}
+	if j.segmentSeq != previousSegment {
+		// Rotation can invoke mutable observers/onSegmentRotated. Refresh both
+		// codecs and verify the installed actual capacity before assignment.
+		if err := prepareFrame(); err != nil {
+			return 0, err
+		}
+		if int64(size) > int64(1<<63-1)-segmentHeaderSize || !j.writer.fixedFitsAppend(int64(segmentHeaderSize)+int64(size)) {
+			// Keep already-created rotation tokens in their existing pending
+			// custody. Do not loop through callbacks or resize a pinned successor.
+			return 0, ErrRecordTooLarge
+		}
 	}
 	lsn, err := j.reserveLSNLocked()
 	if err != nil {
 		return 0, err
 	}
 	env.LSN = lsn
-	if err := j.writer.AppendCommand(env); err != nil {
+	if v2 {
+		// Only assignment changed since the final preparation. Validate the
+		// ACTUAL identity, then consume this private plan with no callbacks in
+		// between. It grants no reusable or caller-asserted validation bypass.
+		plan.env.LSN = lsn
+		err = validateCommandEnvelopeV2Identity(plan.env)
+		if err == nil {
+			err = j.writer.appendCommandV2Prepared(plan)
+		}
+	} else {
+		err = j.writer.AppendCommand(env)
+	}
+	if err != nil {
 		if rollbackErr := j.owner.rollbackReservedLSN(lsn); rollbackErr != nil {
 			return 0, errors.Join(err, rollbackErr)
 		}
@@ -1712,14 +1922,14 @@ func (j *CommandJournal) emitDirectCommandWALAppendBeforeLocked(observe bool) er
 	if !observe {
 		return nil
 	}
-	return durabilitycut.EmitBasic(durabilitycut.BeforeDependencyAppend, durabilitycut.ResourceCommandWAL, filepath.Dir(j.walDir))
+	return durabilitycut.EmitBasic(durabilitycut.BeforeDependencyAppend, durabilitycut.ResourceCommandWAL, j.root)
 }
 
 func (j *CommandJournal) emitDirectCommandWALAppendAfterLocked(observe bool, lsn uint64) error {
 	if !observe {
 		return nil
 	}
-	return durabilitycut.EmitPathLSN(durabilitycut.AfterDependencyAppend, durabilitycut.ResourceCommandWAL, filepath.Dir(j.walDir), j.path, lsn)
+	return durabilitycut.EmitPathLSN(durabilitycut.AfterDependencyAppend, durabilitycut.ResourceCommandWAL, j.root, j.path, lsn)
 }
 
 func (j *CommandJournal) flushDirectCommandWALLocked(sync, observe bool) error {
@@ -1733,13 +1943,13 @@ func (j *CommandJournal) flushDirectCommandWALLocked(sync, observe bool) error {
 	if sync {
 		before, after = durabilitycut.BeforeDependencyFileSync, durabilitycut.AfterDependencyFileSync
 	}
-	if err := durabilitycut.EmitPath(before, durabilitycut.ResourceCommandWAL, filepath.Dir(j.walDir), j.path); err != nil {
+	if err := durabilitycut.EmitStablePath(before, durabilitycut.ResourceCommandWAL, j.root, j.path, j.writer.f); err != nil {
 		return err
 	}
 	if err := j.flushLocked(sync); err != nil {
 		return err
 	}
-	return durabilitycut.EmitPath(after, durabilitycut.ResourceCommandWAL, filepath.Dir(j.walDir), j.path)
+	return durabilitycut.EmitStablePath(after, durabilitycut.ResourceCommandWAL, j.root, j.path, j.writer.f)
 }
 
 // AppendRawKVBatchPayloadCommandTrustedAndFlush appends a caller-validated
@@ -1918,6 +2128,27 @@ func (j *CommandJournal) Close() error {
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
+	if j.syncCond == nil {
+		j.syncCond = sync.NewCond(&j.mu)
+	}
+	if j.closing {
+		for !j.closed {
+			j.syncCond.Wait()
+		}
+		return j.closeErr
+	}
+	j.closing = true
+	j.cancelFixedWALAheadLocked()
+	for j.fixedAhead != nil && !j.fixedAhead.done {
+		j.syncCond.Wait()
+	}
+	for j.syncPins != 0 {
+		j.syncCond.Wait()
+	}
+	if j.capturedFile != nil {
+		j.releaseCapturedFileLocked(j.capturedFile)
+		j.capturedFile = nil
+	}
 	var closeErrs []error
 	for _, rotation := range j.pendingStableRotations {
 		rotation.Release()
@@ -1944,5 +2175,10 @@ func (j *CommandJournal) Close() error {
 		closeErrs = append(closeErrs, j.stableParent.Close())
 		j.stableParent = nil
 	}
-	return errors.Join(closeErrs...)
+	closeErrs = append(closeErrs, j.fixedAheadErr)
+	j.fixedAhead = nil
+	j.closeErr = errors.Join(closeErrs...)
+	j.closed = true
+	j.syncCond.Broadcast()
+	return j.closeErr
 }

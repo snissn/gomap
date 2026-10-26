@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sync/atomic"
 	"time"
 
@@ -16,6 +17,8 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/crc"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/limits"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/internal/stableio"
 )
 
 const (
@@ -32,18 +35,24 @@ const (
 var syncDirFn = syncDir
 
 func openLogFile(path string, flags int) (*os.File, error) {
+	file, _, err := openLogFileWithCreation(path, flags)
+	return file, err
+}
+
+func openLogFileWithCreation(path string, flags int) (*os.File, bool, error) {
 	created, err := os.OpenFile(path, flags|os.O_CREATE|os.O_EXCL, 0o600)
 	if err == nil {
 		if observeErr := durabilitycut.EmitNamespace(durabilitycut.NamespaceCreate, durabilitycut.ResourceCommandWAL, filepath.Dir(path), "", path); observeErr != nil {
 			_ = created.Close()
-			return nil, observeErr
+			return nil, true, observeErr
 		}
-		return created, nil
+		return created, true, nil
 	}
 	if !errors.Is(err, os.ErrExist) {
-		return nil, err
+		return nil, false, err
 	}
-	return os.OpenFile(path, flags|os.O_CREATE, 0o600)
+	file, err := os.OpenFile(path, flags|os.O_CREATE, 0o600)
+	return file, false, err
 }
 
 func syncNewLogFileDirectory(w *Writer, file *os.File, path string) error {
@@ -118,6 +127,12 @@ func sameNonEmptyBytesData(a, b []byte) bool {
 
 type Writer struct {
 	f                      *os.File
+	fixed                  *fixedWAL
+	fixedBudget            int64
+	fixedIncomingBytes     int64
+	fixedRotationReason    fixedWALRotationReason
+	productionMediumPolicy bool
+	containerSelection     walContainerSelection
 	bw                     *bufio.Writer
 	fileSink               writerFileSink
 	scratch                []byte
@@ -160,6 +175,10 @@ func (s *writerFileSink) Write(p []byte) (int, error) {
 	if s == nil || s.file == nil {
 		return 0, os.ErrInvalid
 	}
+	if s.owner != nil && s.owner.fixed != nil {
+		s.owner.fixed.pending = append(s.owner.fixed.pending, p...)
+		return len(p), nil
+	}
 	start := time.Now()
 	n, err := s.file.Write(p)
 	if s.owner != nil {
@@ -169,6 +188,11 @@ func (s *writerFileSink) Write(p []byte) (int, error) {
 }
 
 type WriterBufferStats struct {
+	ActivePath                  string
+	Container                   string
+	ContainerReason             string
+	FilesystemType              uint64
+	MemoryFilesystem            bool
 	BufferedWriterSize          int
 	BufferedWriterBufferedBytes int
 	ScratchCapacity             int
@@ -216,14 +240,72 @@ func NewWriter(path string) (*Writer, error) {
 	return NewWriterWithOptions(path, Options{})
 }
 
+// NewFixedWriterWithCapacity requests an exact physical byte capacity (rounded
+// to format alignment) for a new empty segment; it is not a logical target.
+// Occupied existing segments retain their actual format. Unsupported platforms
+// reject the request; production journals use their descriptor-based policy.
+func NewFixedWriterWithCapacity(path string, capacity int64) (*Writer, error) {
+	if capacity <= 0 {
+		return nil, errors.New("commitlog: positive fixed capacity required")
+	}
+	if _, err := fixedWALCapacity(capacity); err != nil {
+		return nil, err
+	}
+	if !FixedWALCreationSupported() {
+		return nil, rootpublication.ErrNamespacePersistenceUnsupported
+	}
+	return NewWriterWithOptions(path, Options{fixedCapacity: capacity})
+}
+
 func NewWriterWithOptions(path string, opts Options) (*Writer, error) {
+	if opts.fixedCapacity > 0 {
+		capacity, err := fixedWALCapacity(opts.fixedCapacity)
+		if err != nil {
+			return nil, err
+		}
+		opts.fixedCapacity = capacity
+	}
+	if !FixedWALCreationSupported() {
+		opts.fixedCapacity = 0
+	}
 	f, err := openLogFile(path, os.O_RDWR)
 	if err != nil {
 		return nil, err
 	}
 	w := &Writer{
 		f:      f,
-		syncFn: func(file *os.File) error { return file.Sync() },
+		syncFn: stableio.SyncFile,
+	}
+	state, _, loadErr := loadFixedWAL(f)
+	if loadErr != nil {
+		_ = f.Close()
+		return nil, loadErr
+	}
+	selection := existingWALContainer(state)
+	if state == nil {
+		info, e := f.Stat()
+		if e != nil {
+			_ = f.Close()
+			return nil, e
+		}
+		if info.Size() == 0 {
+			selection = selectWALContainer(f, opts.fixedCapacity, opts.productionMediumPolicy)
+			if selection.fixed {
+				state, loadErr = initializeFixedWAL(&f, opts.fixedCapacity, nil)
+				if loadErr != nil {
+					_ = f.Close()
+					return nil, loadErr
+				}
+			}
+		}
+	}
+	w.f = f
+	w.fixed = state
+	w.fixedBudget = opts.fixedCapacity
+	w.productionMediumPolicy = opts.productionMediumPolicy
+	w.containerSelection = selection
+	if state != nil {
+		w.syncFn = syncWALData
 	}
 	w.fileSink = writerFileSink{owner: w, file: f}
 	if err := syncNewLogFileDirectory(w, f, path); err != nil {
@@ -250,6 +332,9 @@ func NewWriterWithOptions(path string, opts Options) (*Writer, error) {
 	w.commandBufLimit = commandBufLimit
 	w.commandBufRetain = commandBufRetain
 	w.size = info.Size()
+	if w.fixed != nil {
+		w.size = w.fixed.logical
+	}
 	w.maxSegmentSize = normalizeMaxSegmentSize(opts.MaxSegmentSize)
 	w.compress = opts.Compress
 	return w, nil
@@ -294,6 +379,15 @@ func (w *Writer) observeWriteSyscalls(calls, bytes uint64, elapsed time.Duration
 }
 
 func (w *Writer) writev(parts [][]byte) error {
+	if w.fixed != nil {
+		for _, p := range parts {
+			if err := w.writeFull(p); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
 	start := time.Now()
 	stats, err := writevFull(w.f, parts)
 	w.observeWriteSyscalls(stats.syscalls, stats.bytes, time.Since(start), err)
@@ -383,6 +477,10 @@ func (w *Writer) BufferStats() WriterBufferStats {
 		return WriterBufferStats{}
 	}
 	stats := WriterBufferStats{
+		Container:                 walContainerName(w.fixed != nil),
+		ContainerReason:           w.containerSelection.reason,
+		FilesystemType:            w.containerSelection.filesystemType,
+		MemoryFilesystem:          w.containerSelection.memory,
 		ScratchCapacity:           cap(w.scratch),
 		CommandBufferLength:       len(w.commandBuf),
 		CommandBufferCapacity:     cap(w.commandBuf),
@@ -392,6 +490,9 @@ func (w *Writer) BufferStats() WriterBufferStats {
 		CommandBufferDroppedBytes: w.commandBufDroppedBytes,
 		PendingBatchLength:        len(w.pendingBatch),
 		PendingBatchCapacity:      cap(w.pendingBatch),
+	}
+	if w.f != nil {
+		stats.ActivePath = w.f.Name()
 	}
 	if w.bw != nil {
 		stats.BufferedWriterSize = w.bw.Size()
@@ -565,86 +666,92 @@ type writerRotationOutcome struct {
 }
 
 func (w *Writer) rotateToWithSyncObserved(path string, syncCurrent bool, root string, observe bool) (writerRotationOutcome, error) {
+	return w.rotateToWithSyncObservedAhead(path, syncCurrent, root, observe, nil)
+}
+
+func (w *Writer) rotateToWithSyncObservedAhead(path string, syncCurrent bool, root string, observe bool, ahead *fixedWALAheadReserve) (writerRotationOutcome, error) {
 	if w == nil {
 		return writerRotationOutcome{}, errors.New("commitlog: nil writer")
 	}
-
-	if w.f == nil {
-		f, err := openLogFile(path, os.O_RDWR|os.O_APPEND)
-		if err != nil {
-			return writerRotationOutcome{}, err
-		}
+	if err := w.commandBufferError(); err != nil {
+		return writerRotationOutcome{}, err
+	}
+	plan, err := w.fixedSuccessorSizePlan()
+	if err != nil {
+		return writerRotationOutcome{}, err
+	}
+	if w.f != nil {
+		before, after := durabilitycut.BeforeUserspaceFlush, durabilitycut.AfterUserspaceFlush
 		if syncCurrent {
-			if err := syncNewLogFileDirectory(w, f, path); err != nil {
-				_ = f.Close()
+			before, after = durabilitycut.BeforeDependencyFileSync, durabilitycut.AfterDependencyFileSync
+		}
+		if observe {
+			if err := durabilitycut.EmitStablePath(before, durabilitycut.ResourceCommandWAL, root, w.f.Name(), w.f); err != nil {
 				return writerRotationOutcome{}, err
 			}
 		}
-		info, err := f.Stat()
+		if err := w.Flush(); err != nil {
+			return writerRotationOutcome{}, err
+		}
+		if syncCurrent {
+			if err := w.syncFile(); err != nil {
+				return writerRotationOutcome{}, err
+			}
+		}
+		if observe {
+			if err := durabilitycut.EmitStablePath(after, durabilitycut.ResourceCommandWAL, root, w.f.Name(), w.f); err != nil {
+				return writerRotationOutcome{}, err
+			}
+		}
+	}
+	file, created, err := openLogFileWithCreation(path, os.O_RDWR)
+	if err != nil {
+		return writerRotationOutcome{}, err
+	}
+	var preparedParent *os.File
+	if created && w.fixedBudget > 0 {
+		preparedParent, err = rootpublication.OpenStableParent(filepath.Dir(path))
 		if err != nil {
-			_ = f.Close()
-			return writerRotationOutcome{}, err
+			return writerRotationOutcome{}, errors.Join(err, file.Close())
 		}
-		w.f = f
-		w.fileSink.file = f
-		w.bw.Reset(&w.fileSink)
-		w.size = info.Size()
-		w.scratch = w.scratch[:0]
-		return writerRotationOutcome{Installed: true}, nil
-	}
-
-	before, after := durabilitycut.BeforeUserspaceFlush, durabilitycut.AfterUserspaceFlush
-	if syncCurrent {
-		before, after = durabilitycut.BeforeDependencyFileSync, durabilitycut.AfterDependencyFileSync
-	}
-	if observe {
-		if err := durabilitycut.EmitPath(before, durabilitycut.ResourceCommandWAL, root, w.f.Name()); err != nil {
-			return writerRotationOutcome{}, err
+		defer preparedParent.Close()
+		if err = rootpublication.ValidateStableChildLink(preparedParent, file, filepath.Base(path)); err != nil {
+			return writerRotationOutcome{}, errors.Join(err, file.Close())
 		}
 	}
-	if w.pendingBatchRecs != 0 {
-		if err := w.flushPendingBatch(); err != nil {
-			return writerRotationOutcome{}, err
-		}
+	// A pre-existing empty successor is not permission to replace its identity.
+	preparedAhead := ahead
+	if !created {
+		preparedAhead = nil
 	}
-	if err := w.flushBufferedCommandFrames(); err != nil {
-		return writerRotationOutcome{}, err
-	}
-	if err := w.bw.Flush(); err != nil {
-		return writerRotationOutcome{}, err
-	}
-	if syncCurrent {
-		if err := w.syncFile(); err != nil {
-			return writerRotationOutcome{}, err
-		}
-	}
-	if observe {
-		if err := durabilitycut.EmitPath(after, durabilitycut.ResourceCommandWAL, root, w.f.Name()); err != nil {
-			return writerRotationOutcome{}, err
-		}
-	}
-
-	f, err := openLogFile(path, os.O_RDWR|os.O_APPEND)
+	state, size, selection, err := w.prepareFixedSuccessorAhead(&file, preparedParent, plan, preparedAhead)
 	if err != nil {
-		return writerRotationOutcome{}, err
-	}
-	info, err := f.Stat()
-	if err != nil {
-		_ = f.Close()
-		return writerRotationOutcome{}, err
+		// Keep ownership of the old descriptor; the failed candidate is never the
+		// writer's authoritative file, and is closed even after partial reserve I/O.
+		if preparedParent != nil {
+			err = errors.Join(err, discardUnacceptedFixedSuccessor(preparedParent, file))
+		}
+		err = errors.Join(err, file.Close())
+		return writerRotationOutcome{}, w.poisonCommandBuffer(err)
 	}
 	if syncCurrent {
-		if err := syncNewLogFileDirectory(w, f, path); err != nil {
-			_ = f.Close()
+		if err := syncNewLogFileDirectory(w, file, path); err != nil {
+			_ = file.Close()
 			return writerRotationOutcome{}, err
 		}
 	}
-
-	old := w.f
-	w.f = f
-	w.fileSink.file = f
+	old, oldFixed := w.f, w.fixed
+	w.f = file
+	w.fixed = state
+	w.containerSelection = selection
+	w.fileSink.file = file
 	w.bw.Reset(&w.fileSink)
-	w.size = info.Size()
+	w.size = size
+	if state != nil && oldFixed == nil {
+		w.syncFn = syncWALData
+	} else if state == nil && oldFixed != nil {
+		w.syncFn = stableio.SyncFile
+	}
 	w.scratch = w.scratch[:0]
 	return writerRotationOutcome{Installed: true}, w.closeRotatedResource(old)
 }
@@ -1046,32 +1153,84 @@ func (w *Writer) AppendCommand(env CommandEnvelope) error {
 // fast-path escape hatch; specialized allocation-free V2 encoders may replace
 // it without changing the persisted contract.
 func (w *Writer) AppendCommandV2(env CommandEnvelope) error {
-	size, err := commandFrameV2EncodedSize(env)
+	plan, err := prepareCommandFrameV2Encoding(env)
 	if err != nil {
 		return err
 	}
+	return w.appendCommandV2Prepared(plan)
+}
+
+func (w *Writer) commandFrameSizeError(size int) error {
 	if w.maxSegmentSize > 0 && int64(size) > w.maxSegmentSize {
 		return ErrRecordTooLarge
 	}
 	if size > int(segmentLenMask) {
 		return ErrRecordTooLarge
 	}
-	payload, err := EncodeCommandFrameV2To(w.scratch[:0], env)
-	if err != nil {
+	return nil
+}
+
+// appendCommandV2Prepared consumes the journal's private plan under its existing
+// ownership. Public writer entrypoints always construct their own plan first.
+func (w *Writer) appendCommandV2Prepared(plan commandFrameV2Encoding) error {
+	if err := w.commandFrameSizeError(plan.total); err != nil {
 		return err
 	}
-	if len(payload) != size {
-		return ErrCorrupt
+	var err error
+	if w.fixed != nil {
+		err = w.appendFixedCommandV2Prepared(plan)
+	} else {
+		payload := plan.encodeTo(w.scratch[:0])
+		w.scratch = payload
+		// Strict V2 readers reject compressed segment storage so recovery can
+		// inspect frame identity directly at a torn terminal tail. Keep V2 command
+		// frames raw even when compression remains enabled for other journal data.
+		err = w.writeRawSegmentWithChecksum(payload, crc.Checksum(payload))
 	}
-	w.scratch = payload
-	// Strict V2 readers reject compressed segment storage so recovery can
-	// inspect frame identity directly at a torn terminal tail. Keep V2 command
-	// frames raw even when compression remains enabled for other journal data.
-	err = w.writeRawSegmentWithChecksum(payload, crc.Checksum(payload))
 	if w.commandBufRetain > 0 && cap(w.scratch) > w.commandBufRetain {
 		w.scratch = make([]byte, 0, w.commandBufRetain)
 	}
 	return err
+}
+
+// appendFixedCommandV2Prepared emits directly into the existing canonical
+// logical pending buffer. It remains unaccepted in memory until the complete
+// frame and outer checksum exist; Flush still validates ALL pending frames
+// before writing ANY immutable physical extent.
+func (w *Writer) appendFixedCommandV2Prepared(plan commandFrameV2Encoding) error {
+	if plan.total > int(^uint(0)>>1)-segmentHeaderSize {
+		return ErrRecordTooLarge
+	}
+	// Older entrypoints may still own buffered bytes. Preserve their original
+	// ordering before reserving the new command's tail; none of these drains
+	// writes physical fixed extents.
+	if w.pendingBatchRecs != 0 {
+		if err := w.flushPendingBatch(); err != nil {
+			return err
+		}
+	}
+	if err := w.flushBufferedCommandFrames(); err != nil {
+		return err
+	}
+	if err := w.bw.Flush(); err != nil {
+		return err
+	}
+	size := segmentHeaderSize + plan.total
+	before := len(w.fixed.pending)
+	if before > int(^uint(0)>>1)-size {
+		return ErrRecordTooLarge
+	}
+	// Grow/extend only a local slice. A panic before the final publication
+	// leaves pending's length and every prior byte unchanged; only an unused
+	// tail may have been touched. No borrowed encoder storage is retained.
+	pending := slices.Grow(w.fixed.pending, size)[:before+size]
+	frame := plan.encodeTo(pending[before+segmentHeaderSize : before+segmentHeaderSize])
+	header := pending[before : before+segmentHeaderSize]
+	binary.LittleEndian.PutUint32(header[:4], uint32(len(frame)))
+	binary.LittleEndian.PutUint32(header[4:8], crc.Checksum(frame))
+	w.fixed.pending = pending
+	w.size += int64(size)
+	return nil
 }
 
 func (w *Writer) AppendRawKVSingleCommandDirect(lsn, baseAppliedLSN uint64, op RawKVOperation) error {
@@ -1628,7 +1787,7 @@ func (w *Writer) poisonCommandBuffer(err error) error {
 		return err
 	}
 	if w.commandErr == nil {
-		if w.f != nil {
+		if w.f != nil && w.fixed == nil {
 			if truncErr := w.f.Truncate(w.size); truncErr != nil {
 				err = errors.Join(err, truncErr)
 			}
@@ -1793,7 +1952,10 @@ func (w *Writer) Flush() error {
 	if err := w.flushBufferedCommandFrames(); err != nil {
 		return err
 	}
-	return w.bw.Flush()
+	if err := w.bw.Flush(); err != nil {
+		return err
+	}
+	return w.flushFixed()
 }
 
 func (w *Writer) Sync() error {
@@ -1809,6 +1971,9 @@ func (w *Writer) Sync() error {
 		return err
 	}
 	if err := w.bw.Flush(); err != nil {
+		return err
+	}
+	if err := w.flushFixed(); err != nil {
 		return err
 	}
 	return w.syncFile()
@@ -1831,6 +1996,10 @@ func (w *Writer) Close() error {
 		return err
 	}
 	if err := w.bw.Flush(); err != nil {
+		_ = w.f.Close()
+		return err
+	}
+	if err := w.flushFixed(); err != nil {
 		_ = w.f.Close()
 		return err
 	}

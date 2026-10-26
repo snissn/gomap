@@ -18,6 +18,24 @@
 - Writes are effectively single-writer: concurrent writers are serialized.
 - Reads can proceed concurrently with writes.
 
+### Captured command-WAL epochs
+
+The public coordinator fixes an exact complete-frame prefix and retains its
+active file and original dependency owner before releasing append authority.
+Its physical file sync permits successor appends and complete COW cut installs;
+successors require their own later epoch before durable ACK. One waiting caller
+elects the next leader after the earlier capture and all retained pins finish.
+No background writer or second accepted-prefix owner is introduced. Earlier V2
+external dependency and rotation synchronization remains serialized before a
+durable marker can be emitted.
+
+Ordinary prepared payloads retain their original backend append leases through
+the final full publisher check and fresh prefix capture. A pending publisher
+releases every original lease before draining and reacquiring; the assigned
+mutation is not appended again. Capture transfers the original teardown lease
+to the existing target and releases append/admission locks before file sync.
+Point, entry-scan and COW producers keep their existing admission routes.
+
 ### Iterators and snapshots
 
 - A TreeDB iterator is a point-in-time view of the DB as of iterator creation.

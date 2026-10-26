@@ -57,6 +57,31 @@ directory-sync, durable command-WAL, or sealed-root boundaries.
 - A command-WAL `*Sync` does not require a full backend `Checkpoint()` per
   write. A no-WAL production `*Sync` does require a sealed backend root.
 
+Cached command-WAL durable writes share one captured-prefix coordinator. An
+idle singleton captures immediately; queued writes share the next collected
+epoch and cannot acknowledge against an earlier capture. COW installs one
+complete cut before its physical ACK wait, so readers may see an unacknowledged
+complete mutation. The captured file synchronization runs outside append and
+publication gates. Existing V2 dependency-before-marker ordering still requires
+earlier external-reference and rotation synchronization under append ordering.
+Only successful physical completion advances the existing stable-WAL frontier.
+Checkpoint and Close join the same accepted-prefix and retained-resource owners.
+
+Command-WAL logical rotation targets and initialized physical reserves are
+separate. Fresh reserves grow only under physical pressure and reset to a small
+size at forced/checkpoint boundaries. Capacity planning never resizes occupied
+files or changes the complete initialization, namespace or ACK barriers; see
+[the container contract](../../TreeDB/docs/spec/storage-format.md#initialized-command-wal-container-v3).
+
+An ordinary prepared-payload append may keep its backend leases through capture,
+while retaining the final complete publisher check. Pending publishers use the
+original unlocked drain and capture loop for that same assigned mutation.
+Capture still fixes the actual dependency closure and current journal file;
+postassignment uncertainty poisons writes rather than granting a durable ACK.
+Terminal failure publishes poison before retained append leases release, or
+immediately when an unlocked drain returns its failure. Preappend refusals retain
+their existing behavior.
+
 For `no_wal_fast`, cached `Batch.WriteSync` covers the batch and earlier queued
 writes even when it bypasses the cache or stores USER leaves in the index. A
 successful backend write followed by a failed seal returns an error; the

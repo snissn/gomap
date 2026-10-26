@@ -1,4 +1,56 @@
-# Index Vacuum M0 Baseline
+# Index Vacuum Capture
+
+## Current production stability contract
+
+The capture script now measures
+`BenchmarkVacuumIndexOnlineCollectionProductionForegroundChurn/bytes_64x`.
+It uses the existing shared 4,096-operation fixture (2,048 point writes and
+2,048 range deletes), with the publication coordinator enabled and the
+production recoverable-root maintenance entry. It retains ten fresh interleaved
+samples and the unchanged CV <= 0.10 predicates for total vacuum time and
+foreground p99. Every sample must complete all fixed work,
+with zero vacuum errors, exposure misses or concurrent aborts. The independent
+160-operation PL06 public status arm and its classifier remain unchanged; they
+cannot replace the 4,096-operation stability arm.
+
+Run `RUN_DIR=/mnt/fast4tb/<task>/vacuum-m0 scripts/treedb_vacuum_m0_capture.sh`.
+New schema-v3 output names its acceptance contract, stability arm and exact benchmark; raw files are
+`raw/production-*.txt` and `raw/public-*.txt`, with
+`production-benchstat-input.txt`. The summarizer binds raw benchmark identity,
+fixed iteration count and successful process completion. Its explicit
+`--acceptance-contract v2` mode (the summarizer default) retains all three
+original CV gates for either historical stability arm, without relabeling
+metrics or failures. The capture script selects production and v3 explicitly.
+
+V3 retains every maximum-writer-pause sample, median, maximum and CV, including
+its original <= 0.10 diagnostic pass/fail. It requires separate outcome-owner
+review of the complete distribution and source phase evidence before merge;
+the capture records that review as pending. CV of one per-vacuum extreme is
+no longer a v3 merge predicate: reducing its mean can increase relative
+dispersion, while adding a delay could improve CV and make the database slower.
+No delay, numerical tolerance, absolute service bound or sample exclusion is
+introduced. Correctness, progress, debt or demonstrated material regressions
+remain blocking independently of this diagnostic.
+
+This is an explicit prospective acceptance revision, not a v2 pass. The
+19b713e047d6ba39715ac1a9a544284bc8e9a5dc capture failed v2 with pause
+CV0.127754 (2.567–3.871ms); total and foreground-p99 CVs passed. Its original
+result and the earlier bb1 pass remain source-bound. Schema2/v2 and legacy
+decoders preserve their three-predicate interpretation.
+
+This is a prospective contract revision. Historical legacy captures and failed
+CV predicates remain valid under their original source and contract. A new
+production result requires a complete capture at its actual clean source head;
+route separation and the public status arm alone provide no quantitative pass.
+The legacy entry requires a package-private test capability and deliberately
+removes the coordinator. It remains available as a characterization benchmark,
+while the current product gate exercises the production path. This maintenance
+fixture is distinct from Dgraph's cached COW commit-path qualification.
+
+The historical sections below document the previous capture contract and its
+scheduling revisions; their legacy artifact names describe those captures.
+
+## Historical M0 baseline
 
 Issue #3943 froze the fail-closed production contract before M1 changed the
 internal online-vacuum backend. The fixture and capture script remain

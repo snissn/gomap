@@ -57,57 +57,101 @@ func EncodeCommandFrameV2(env CommandEnvelope) ([]byte, error) {
 // EncodeCommandFrameV2To is EncodeCommandFrameV2 with caller-owned capacity.
 // All semantic validation is completed before dst is resized or written.
 func EncodeCommandFrameV2To(dst []byte, env CommandEnvelope) ([]byte, error) {
+	plan, err := prepareCommandFrameV2Encoding(env)
+	if err != nil {
+		return nil, err
+	}
+	// Public callers may place extension bodies inside dst's backing storage.
+	// Snapshot the sections before any destination write, preserving the
+	// established alias behavior with one buffer instead of one per section.
+	sections := make([]byte, plan.externalRefsLen+plan.preconditionsLen+plan.assertionsLen)
+	plan.putSections(sections)
+	frame := plan.encodeHeaderAndPayloadTo(dst)
+	copy(frame[commandFrameHeaderSize+len(plan.env.Payload):], sections)
+	return frame, nil
+}
+
+// commandFrameV2Encoding is a private transient plan, not a validation token
+// supplied by a caller. It borrows envelope bytes only within the current
+// encoder or journal/writer ownership. No mutable callback may intervene between
+// preparation and emission; journal hooks/rotation must prepare a fresh plan.
+// Neither Writer nor CommandJournal retains the plan after the append returns.
+type commandFrameV2Encoding struct {
+	env                                                     CommandEnvelope
+	preconditions                                           []CommandExtension
+	externalRefsLen, preconditionsLen, assertionsLen, total int
+}
+
+func prepareCommandFrameV2Encoding(env CommandEnvelope) (commandFrameV2Encoding, error) {
 	env, preconditions, err := prepareCommandFrameV2ForEncode(env)
 	if err != nil {
-		return nil, err
+		return commandFrameV2Encoding{}, err
 	}
-	extRefs, err := encodeExternalRefs(env.ExternalRefs)
+	extRefsLen, err := externalRefsEncodedLen(env.ExternalRefs)
 	if err != nil {
-		return nil, err
+		return commandFrameV2Encoding{}, err
 	}
-	preconditionsBytes, err := encodeCommandExtensions(preconditions)
+	preconditionsLen, err := commandExtensionsEncodedLen(preconditions)
 	if err != nil {
-		return nil, err
+		return commandFrameV2Encoding{}, err
 	}
-	assertions, err := encodeCommandExtensions(env.ResultAssertions)
+	assertionsLen, err := commandExtensionsEncodedLen(env.ResultAssertions)
 	if err != nil {
-		return nil, err
+		return commandFrameV2Encoding{}, err
 	}
-	total, err := commandFrameEncodedSizeFromLengths(len(env.Payload), len(extRefs), len(preconditionsBytes), len(assertions))
+	total, err := commandFrameEncodedSizeFromLengths(len(env.Payload), extRefsLen, preconditionsLen, assertionsLen)
 	if err != nil {
-		return nil, err
+		return commandFrameV2Encoding{}, err
 	}
-	if cap(dst) < total {
-		dst = make([]byte, total)
+	return commandFrameV2Encoding{env: env, preconditions: preconditions,
+		externalRefsLen: extRefsLen, preconditionsLen: preconditionsLen,
+		assertionsLen: assertionsLen, total: total}, nil
+}
+
+// encodeTo consumes only the checked plan, without another validation/size pass
+// or temporary encoded sections. All rejection happens before touching dst.
+func (plan commandFrameV2Encoding) encodeTo(dst []byte) []byte {
+	frame := plan.encodeHeaderAndPayloadTo(dst)
+	plan.putSections(frame[commandFrameHeaderSize+len(plan.env.Payload):])
+	return frame
+}
+
+func (plan commandFrameV2Encoding) encodeHeaderAndPayloadTo(dst []byte) []byte {
+	if cap(dst) < plan.total {
+		dst = make([]byte, plan.total)
 	} else {
-		dst = dst[:total]
+		dst = dst[:plan.total]
 	}
 	frame := dst
 	copy(frame[0:4], commandFrameMagic[:])
 	binary.LittleEndian.PutUint16(frame[4:6], CommandFrameVersionV2)
 	binary.LittleEndian.PutUint16(frame[6:8], CommandFrameVersionV2)
-	binary.LittleEndian.PutUint16(frame[8:10], uint16(env.Kind))
-	binary.LittleEndian.PutUint16(frame[10:12], uint16(env.Scope))
-	binary.LittleEndian.PutUint64(frame[12:20], env.FeatureFlags)
-	binary.LittleEndian.PutUint64(frame[20:28], env.LSN)
-	binary.LittleEndian.PutUint64(frame[28:36], env.CatalogEpoch)
-	binary.LittleEndian.PutUint64(frame[36:44], env.SchemaEpoch)
-	binary.LittleEndian.PutUint64(frame[44:52], env.BaseAppliedLSN)
-	binary.LittleEndian.PutUint16(frame[52:54], uint16(env.PayloadFormat))
-	binary.LittleEndian.PutUint16(frame[54:56], uint16(env.DurabilityClass))
-	binary.LittleEndian.PutUint32(frame[56:60], uint32(len(env.Payload)))
-	binary.LittleEndian.PutUint32(frame[60:64], uint32(len(extRefs)))
-	binary.LittleEndian.PutUint32(frame[64:68], uint32(len(preconditionsBytes)))
-	binary.LittleEndian.PutUint32(frame[68:72], uint32(len(assertions)))
-	off := commandFrameHeaderSize
-	copy(frame[off:], env.Payload)
-	off += len(env.Payload)
-	copy(frame[off:], extRefs)
-	off += len(extRefs)
-	copy(frame[off:], preconditionsBytes)
-	off += len(preconditionsBytes)
-	copy(frame[off:], assertions)
-	return frame, nil
+	binary.LittleEndian.PutUint16(frame[8:10], uint16(plan.env.Kind))
+	binary.LittleEndian.PutUint16(frame[10:12], uint16(plan.env.Scope))
+	binary.LittleEndian.PutUint64(frame[12:20], plan.env.FeatureFlags)
+	binary.LittleEndian.PutUint64(frame[20:28], plan.env.LSN)
+	binary.LittleEndian.PutUint64(frame[28:36], plan.env.CatalogEpoch)
+	binary.LittleEndian.PutUint64(frame[36:44], plan.env.SchemaEpoch)
+	binary.LittleEndian.PutUint64(frame[44:52], plan.env.BaseAppliedLSN)
+	binary.LittleEndian.PutUint16(frame[52:54], uint16(plan.env.PayloadFormat))
+	binary.LittleEndian.PutUint16(frame[54:56], uint16(plan.env.DurabilityClass))
+	binary.LittleEndian.PutUint32(frame[56:60], uint32(len(plan.env.Payload)))
+	binary.LittleEndian.PutUint32(frame[60:64], uint32(plan.externalRefsLen))
+	binary.LittleEndian.PutUint32(frame[64:68], uint32(plan.preconditionsLen))
+	binary.LittleEndian.PutUint32(frame[68:72], uint32(plan.assertionsLen))
+	copy(frame[commandFrameHeaderSize:], plan.env.Payload)
+	return frame
+}
+
+// putSections is the single section emitter for public snapshots and direct
+// writer-owned emission. Its destination has already checked exact lengths.
+func (plan commandFrameV2Encoding) putSections(dst []byte) {
+	off := 0
+	putExternalRefs(dst[off:off+plan.externalRefsLen], plan.env.ExternalRefs)
+	off += plan.externalRefsLen
+	putCommandExtensions(dst[off:off+plan.preconditionsLen], plan.preconditions)
+	off += plan.preconditionsLen
+	putCommandExtensions(dst[off:off+plan.assertionsLen], plan.env.ResultAssertions)
 }
 
 func prepareCommandFrameV2ForEncode(env CommandEnvelope) (CommandEnvelope, []CommandExtension, error) {
@@ -150,23 +194,8 @@ func prepareCommandFrameV2ForEncode(env CommandEnvelope) (CommandEnvelope, []Com
 // encoded size without allocating the complete frame. Journal and writer caps
 // use this preflight before rotation, LSN reservation, or frame encoding.
 func commandFrameV2EncodedSize(env CommandEnvelope) (int, error) {
-	env, preconditions, err := prepareCommandFrameV2ForEncode(env)
-	if err != nil {
-		return 0, err
-	}
-	extRefsLen, err := externalRefsEncodedLen(env.ExternalRefs)
-	if err != nil {
-		return 0, err
-	}
-	preconditionsLen, err := commandExtensionsEncodedLen(preconditions)
-	if err != nil {
-		return 0, err
-	}
-	assertionsLen, err := commandExtensionsEncodedLen(env.ResultAssertions)
-	if err != nil {
-		return 0, err
-	}
-	return commandFrameEncodedSizeFromLengths(len(env.Payload), extRefsLen, preconditionsLen, assertionsLen)
+	plan, err := prepareCommandFrameV2Encoding(env)
+	return plan.total, err
 }
 
 // DecodeCommandFrameV2 decodes and fully validates one V2 frame.
@@ -299,60 +328,80 @@ func InspectCommandFrameV2TerminalTail(path string, segmentStart int64) (Command
 		return env, 0, err
 	}
 	defer f.Close()
-	info, err := f.Stat()
+	logicalSize, err := LogicalFileSize(f)
 	if err != nil {
 		return env, 0, err
 	}
-	if segmentStart < 0 || segmentStart > info.Size() {
-		return env, info.Size(), ErrCorrupt
+	if segmentStart < 0 || segmentStart > logicalSize {
+		return env, logicalSize, ErrCorrupt
 	}
-	if segmentStart+segmentHeaderSize > info.Size() {
-		return env, info.Size(), errors.Join(ErrCorrupt, ErrCommandWALV2TailIdentityUnavailable)
+	if segmentStart+segmentHeaderSize > logicalSize {
+		return env, logicalSize, errors.Join(ErrCorrupt, ErrCommandWALV2TailIdentityUnavailable)
+	}
+	reader, err := NewReaderFromFileWithOptions(f, Options{})
+	if err != nil {
+		return env, logicalSize, err
+	}
+	defer reader.Close()
+	readAt := func(p []byte, offset int64) (int, error) {
+		if _, e := reader.input.Seek(offset, io.SeekStart); e != nil {
+			return 0, e
+		}
+		return io.ReadFull(reader.input, p)
 	}
 	var segmentHeader [segmentHeaderSize]byte
-	if _, err := f.ReadAt(segmentHeader[:], segmentStart); err != nil {
-		return env, info.Size(), err
+	if _, err := readAt(segmentHeader[:], segmentStart); err != nil {
+		return env, logicalSize, err
 	}
 	if binary.LittleEndian.Uint32(segmentHeader[0:4])&segmentFlagCompressed != 0 {
-		return env, info.Size(), ErrCommandWALV2CompressedRecordUnsupported
+		return env, logicalSize, ErrCommandWALV2CompressedRecordUnsupported
 	}
-	available := info.Size() - segmentStart - segmentHeaderSize
+	available := logicalSize - segmentStart - segmentHeaderSize
 	if available < 56 {
-		return env, info.Size(), errors.Join(ErrCorrupt, ErrCommandWALV2TailIdentityUnavailable)
+		return env, logicalSize, errors.Join(ErrCorrupt, ErrCommandWALV2TailIdentityUnavailable)
 	}
 	readLen := int64(commandFrameHeaderSize)
 	if available < readLen {
 		readLen = available
 	}
 	header := make([]byte, readLen)
-	if _, err := f.ReadAt(header, segmentStart+segmentHeaderSize); err != nil && !errors.Is(err, io.EOF) {
-		return env, info.Size(), err
+	if _, err := readAt(header, segmentStart+segmentHeaderSize); err != nil && !errors.Is(err, io.EOF) {
+		return env, logicalSize, err
+	}
+	env, err = decodeCommandFrameV2TailIdentity(header)
+	return env, logicalSize, err
+}
+
+func decodeCommandFrameV2TailIdentity(header []byte) (CommandEnvelope, error) {
+	var env CommandEnvelope
+	if len(header) < 56 {
+		return env, errors.Join(ErrCorrupt, ErrCommandWALV2TailIdentityUnavailable)
 	}
 	if !bytes.Equal(header[0:4], commandFrameMagic[:]) {
-		return env, info.Size(), ErrCorrupt
+		return env, ErrCorrupt
 	}
 	version := binary.LittleEndian.Uint16(header[4:6])
 	if version == CommandFrameVersion {
-		return env, info.Size(), ErrCommandWALV1RebuildRequired
+		return env, ErrCommandWALV1RebuildRequired
 	}
 	if version != CommandFrameVersionV2 || binary.LittleEndian.Uint16(header[6:8]) > CommandFrameVersionV2 {
-		return env, info.Size(), ErrCommandWALUnsupportedVersion
+		return env, ErrCommandWALUnsupportedVersion
 	}
 	env.Version = version
 	env.Kind = CommandKind(binary.LittleEndian.Uint16(header[8:10]))
 	env.Scope = CommandScope(binary.LittleEndian.Uint16(header[10:12]))
 	env.FeatureFlags = binary.LittleEndian.Uint64(header[12:20])
 	if env.FeatureFlags&commandWALCriticalFlagsMask != 0 {
-		return env, info.Size(), ErrCommandWALUnsupportedCriticalFlag
+		return env, ErrCommandWALUnsupportedCriticalFlag
 	}
 	env.LSN = binary.LittleEndian.Uint64(header[20:28])
 	env.BaseAppliedLSN = binary.LittleEndian.Uint64(header[44:52])
 	env.PayloadFormat = PayloadFormat(binary.LittleEndian.Uint16(header[52:54]))
 	env.DurabilityClass = CommandDurabilityClass(binary.LittleEndian.Uint16(header[54:56]))
 	if env.LSN == 0 || !validCommandDurabilityClass(env.DurabilityClass) {
-		return CommandEnvelope{}, info.Size(), ErrCorrupt
+		return CommandEnvelope{}, ErrCorrupt
 	}
-	return env, info.Size(), nil
+	return env, nil
 }
 
 func validateCommandEnvelopeV2Identity(env CommandEnvelope) error {

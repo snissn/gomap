@@ -18,9 +18,14 @@ This document maps specification invariants to existing tests and harnesses.
   construction in all three profiles; the driver control includes hinted
   descending compound reads, cursor batches, count/distinct and aggregation.
 - `native_command_wal_solo_test.go` and `native_command_wal_group_test.go` preserve
-  actual solo/group eligibility, per-command identities, post-producer completion
-  and assigned-failure custody. Native logical sequence assertions are separate
-  from physical applied and canonical barrier LSNs.
+  captured-singleton/group eligibility, one actual singleton file sync and
+  canonical command, per-command identities, post-producer completion and
+  assigned-failure custody. A held actual final file fence prevents a successful
+  ACK and durable-frontier advance. Failure after logical install retains the
+  exact visible successor with ambiguous error and poisons later writes;
+  preassignment and preinstall refusal controls retain their separate behavior.
+  Native logical sequence assertions are separate from physical applied and
+  canonical barrier LSNs.
 - `TestNativeCollectionPressureDrainsBeforeOpening` holds a public collection
   read across repeated automatic handoffs, checks old visibility and reopen, and
   requires the original allocator to reach zero after final release/close.
@@ -884,7 +889,7 @@ Later children update these stable test names rather than duplicating them.
 
 | Stable scenario | Current counterexample | Positive-conformance owner |
 |---|---|---|
-| `TestPowerLossOracleCounterexampleNewMetaMissingClosure` | resolved: the target meta is written only after the durable-root record, manifest, index, value-log, and outer-leaf closure is stable; incomplete candidates fall back | DUR-09 #3679 |
+| `TestPowerLossOracleCounterexampleNewMetaMissingClosure` | resolved: DATA publication writes target meta after its closure is stable; explicit V6 PRIMARY stages capsule and banks before their combined file fence, with DATA and external-file dependencies already stable; incomplete candidates fall back | DUR-09 #3679 |
 | `TestPowerLossOracleCounterexampleRecoverablePageReuse` | resolved for synchronous publication: the root-reuse admission fence prevents reuse from racing older-root capture, and both durable slots retain their exact COW generations | DUR-04 #3678 and DUR-09 #3679; maintenance horizon remains DUR-08 #3681 |
 | `TestPowerLossOracleCounterexampleRelaxedCommandFrameMissingRID` | relaxed command-WAL external-RID replay applies a checksum-valid frame with a missing RID | DUR-05 #3718 |
 | `TestPowerLossOracleCounterexampleSourceDeletionBeforeStableCoverage` | resolved for activation: cleanup retains the command-WAL source until AppliedCommandLSN coverage is stable; complete cleanup convergence remains downstream | DUR-06 #3680; convergence remains DUR-07 #3682 and DUR-08 #3681 |
@@ -1096,6 +1101,19 @@ Invariant:
 Coverage:
 - `TreeDB/db/vlog_gc_test.go`:
   - `TestValueLogGC_RemovesUnreferencedSegment`
+- `TreeDB/db/vlog_gc_publication_lock_order_test.go`:
+  - `TestValueLogGCDefersForPrivatePublicationAndLaterReclaims` drives public GC
+    and private grouped publication through opposing preparation/durable gates;
+    it requires conservative refusal, complete publication, retained candidate
+    bytes, and physical reclamation by a later real GC pass. The same test
+    deadlocks on the original `f906b8a2` implementation.
+- `TreeDB/db/recoverable_root_prepared_mutation_test.go`:
+  - `TestRecoverableRootSetPreparedMutationRetainsEveryValidation` checks busy
+    durable authority and each original captured-basis validation independently.
+- `TreeDB/external_recovery_leaf_maintenance_test.go`:
+  - `TestExternalRecoveryLeafMaintenanceRetainsAndReclaimsExactCuts` covers
+    repeated checkpoint publication with journaling disabled alongside background
+    reclamation.
 - `TreeDB/db/durable_root_tracker_repair_test.go`:
   - `TestDurableRootCandidateScanRepairsReferenceTracker`
   - `TestDurableRootCandidateScanColdCollectionAttachmentRepairsTracker`
@@ -4226,6 +4244,26 @@ command-WAL route, power-loss or performance qualification.
 
 ### Shared ordinary V6 constructor boundary witnesses
 
+The explicit PRIMARY combined-fence controls use the existing V6 selector and
+physical closure ownership. With `treedb_test`,
+`TestCommitAtDurablePrimarySinglePhysicalFenceV6` observes the actual retained
+PRIMARY file fence through the public durable MVCC commit path; the same test
+source can run against the earlier two-fence publisher as a causal control.
+`TestPrimarySingleCutV6PersistedImages` checks staged physical bytes before any
+final fence or Close, then reopens complete and partially persisted capsule/bank
+images while requiring the acknowledged old slot's bytes to stay intact.
+`TestPrimarySingleCutV6HeldFenceExactPrefixAndSlotReuse` checks no early ACK or
+durable-frontier advance, disjoint successor preparation, exact completed prefix,
+old-reader retention and repeated slot reuse.
+`TestPrimarySingleCutV6PostStageFailures` checks ambiguous failure and overwrite
+refusal; `TestPrimarySingleCutV6FinalFenceUsesCapturedFile` substitutes the pathname
+and checks that the actual content fence still uses the retained original file.
+`TestPrimaryCapsuleStageAllDirtyStableFenceV6` checks dirty bank and capsule chunks,
+failure restoration and the full-dirty file operation. Linux execution does not
+establish non-Linux mapped-flush runtime coverage; that path reuses the maintained
+platform synchronization core. These controls address explicit PRIMARY, not
+default DATA routing or Dgraph throughput qualification.
+
 `TestPrimarySharedTransactionV6ReusesExactDataCertificate` exercises the actual
 unchanged NoWALFast ordinary path: directory-only durable writes reuse one DATA
 certificate, a real oversized-key DATA materialization replaces it, and a held
@@ -4527,3 +4565,70 @@ headroom is exhausted. These controls do not activate unconverted collections.
   publication/reopen, and process crash cuts around CURRENT.
 - These engine controls do not prove application reader draining, Raft snapshot
   acceptance or durable cross-store install intent; those require consumer tests.
+
+## Captured public WAL epoch controls
+
+- `TestPublicCOWCapturedPrefixAppendInstallAndExactACK`: default public COW
+  successor installation during blocked final sync, exact ACKs, pointer rotation
+  and clean reopen. Its rotation observation targets the final captured sync,
+  not earlier serialized V2 dependency syncs.
+- `TestPublicDurableDefaultBlockedSyncCollectsSuccessorEpoch`: ordinary durable
+  Set on btree/cow_ordered with inline, materialized-RID, and external-pointer
+  values, first blocked sync, four successor appends, two exact epochs and exactly
+  two physical WAL syncs.
+- `TestPublicCOWCapturedPrefixExternalDependencyWaitBoundary`: a successor
+  announces intent before cache admission while an earlier V2 external-reference
+  dependency sync is blocked; canonical appends wait until that dependency is
+  stable. This records the remaining earlier-phase serialization limitation.
+- `TestPublicCOWCapturedPrefixFailureWakesSuccessorAndPoisons`: reused capture
+  storage, ambiguity, waiter release and subsequent recovery-required refusal.
+- `TestCapturedDurableMutationWaitsForPhysicalPrefixAndRelaxedTailPromotion`:
+  emitted marker versus certified W, single-use target and relaxed suffix.
+- `TestCapturedSyncPinsPrefixAcrossAppendRotationAndClose`,
+  `TestCapturedSyncSharedSegmentProgressAndOutOfOrderRelease`, and
+  `TestCapturedSyncFinalLegalLSN`: retained exact identity, independent physical
+  syncs, rotations, last legal LSN and Close joining all pins.
+
+### Logical rotation and physical command-WAL capacity
+
+- `TestCommandJournalPreservesLogicalRotationTarget` keeps the configured
+  logical target, including zero and a large positive target, independent of
+  the fixed container's initial physical reserve.
+- `TestFixedWALCheckedPhysicalGeometry` checks capacity, alignment and overflow
+  before file creation or mutation. `TestCommandJournalZeroTargetStreamDoesNotRotate`
+  keeps zero-target stream journals free of logical size rotations.
+- `TestFixedWALPhysicalBoundaryZeroTargetAndReopen` requires fixed-container
+  capacity checks even when logical rotation is disabled.
+- `TestFixedWALDemandGrowthAndForcedReset` exercises both rotation routes,
+  bounded pressure growth, the target-derived ceiling and a small forced
+  successor. `TestFixedWALOversizedFrameCapacityDoesNotAmplify` permits one
+  legal atomic frame without granting later unbounded growth.
+- `TestFixedWALReopenLargerTargetRotatesAtPhysicalCapacity` and
+  `TestFixedWALReopenPhysicalCapacityIncludesBufferedFrames` preserve occupied
+  header capacity and include accepted, buffered frames in the fit decision.
+- `TestCommandJournalMutableRotationSizeBeforeLSN` covers V1/V2 and both rotation
+  routes: callback growth beyond actual capacity returns no assigned LSN or new
+  pending bytes, preserves the predecessor and retains existing token custody;
+  growth that still fits succeeds. `TestCommandJournalBeforeAppendMutableSizeReprepares`
+  requires fresh sizing after mutable append hooks for both codecs.
+
+These geometry controls supplement the existing initialization, corruption,
+captured-resource, namespace, failure and public pointer/reopen controls. They
+do not replace those durability proofs or establish performance acceptance.
+
+Buffered fixed-WAL validation and replay additionally use
+`TestFixedWALScanAcrossBuffersAndSeeks` for mixed frame sizes across read-ahead
+boundaries, retained payload ownership and logical seeks;
+`TestFixedWALScanRejectsCorruptionBeyondReadAhead` for later start/payload/padding
+damage and nonzero reserve beyond the first buffer; and
+`TestFixedWALStreamPartialPhysicalReadKeepsEOF` for the original partial-read
+count and EOF identity after physical truncation of a captured prefix.
+
+The `TestCommandWALCleanupEmptyFixed*` families cover first-frame rotation,
+including an oversized first atomic command, positive empty-container validation,
+active/generation protection, pins and pathname replacement, physical accounting
+and namespace-sync debt. Reader reopen checks retain uncovered values and LSNs;
+they do not substitute for crash recovery. The unchanged public
+`TestPublicCommandWALCheckpointReleasesCoveredRotationDebtBeforeNextBarrier`
+requires checkpoint cleanup to reclaim every covered predecessor, including a
+validated frame-free reserve.

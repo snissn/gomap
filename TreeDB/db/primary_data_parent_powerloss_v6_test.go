@@ -2,6 +2,7 @@ package db_test
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -9,13 +10,14 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/powerlossoracle"
 	"github.com/snissn/gomap/TreeDB/internal/powerlossreopen"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 // Legal selective writeback before the capsule fence may expose either parent
 // or child; after the completed fence the exact child must survive. DATA has no
 // new physical barrier on this actual bank-only publication.
 func TestPrimaryDataParentCoverageV6ModeledCrashCuts(t *testing.T) {
-	for _, variant := range []string{"before-fence-parent", "before-fence-child-writeback", "after-fence-child"} {
+	for _, variant := range []string{"before-fence-parent", "before-fence-capsule-only", "before-fence-child-writeback", "after-fence-child"} {
 		t.Run(variant, func(t *testing.T) {
 			dir := t.TempDir()
 			opts := treedb.OptionsFor(treedb.ProfileNoWALFast, dir)
@@ -32,7 +34,9 @@ func TestPrimaryDataParentCoverageV6ModeledCrashCuts(t *testing.T) {
 			if err = d.SetSync([]byte("parent"), []byte("stable")); err != nil {
 				t.Fatal(err)
 			}
-			parent := d.Stats()["treedb.durable_root.commit_seq"]
+			parentStats := d.Stats()
+			parent := parentStats["treedb.durable_root.commit_seq"]
+			dataGeneration := parentStats["treedb.durable_root.freelist.generation"]
 			model, err := powerlossoracle.Capture(dir)
 			if err != nil {
 				t.Fatal(err)
@@ -64,16 +68,66 @@ func TestPrimaryDataParentCoverageV6ModeledCrashCuts(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			child := d.Stats()["treedb.durable_root.commit_seq"]
+			childStats := d.Stats()
+			child := childStats["treedb.durable_root.commit_seq"]
+			if dataGeneration == "" || childStats["treedb.durable_root.freelist.generation"] != dataGeneration {
+				t.Fatal("bank-only child did not retain the completed DATA generation")
+			}
 			if cut == nil || dataSyncs != 0 {
 				t.Fatalf("actual no-DATA-sync capsule cut absent: cut=%v DATA=%d", cut != nil, dataSyncs)
 			}
-			if variant == "before-fence-child-writeback" {
-				if slotLength == 0 {
-					t.Fatal("capsule cut did not bind physical range")
-				}
-				if err := cut.PromoteRange("index.db.primary", slotOffset, slotLength); err != nil {
+			// Observe overlays the actual process-visible file before taking the
+			// cut. The put constructs a new immutable PRIMARY component bank
+			// (zipper.applyPrimaryDirectory -> SealComponent), not just a capsule.
+			// Assert those real bytes exist before modeling selective writeback.
+			if variant != "after-fence-child" {
+				changed, err := cut.ChangedRanges("index.db.primary")
+				if err != nil {
 					t.Fatal(err)
+				}
+				// Inspect the oracle's captured volatile image, not a later live
+				// file or a zero-filled newly grown tail. This is evidence only;
+				// recovery below still receives only the crashed stable image.
+				volatileDir := t.TempDir()
+				if err := cut.MaterializeVolatile(volatileDir); err != nil {
+					t.Fatal(err)
+				}
+				volatilePrimary, err := os.ReadFile(filepath.Join(volatileDir, "index.db.primary"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				bankChanged := false
+				for _, r := range changed {
+					lo, hi := max(r.Offset, 8*page.PageSize), r.Offset+r.Length
+					if hi > int64(len(volatilePrimary)) {
+						t.Fatal("changed range exceeds captured volatile PRIMARY bytes")
+					}
+					for i := lo; i < hi; i++ {
+						if volatilePrimary[i] != 0 {
+							bankChanged = true
+						}
+					}
+				}
+				if !bankChanged {
+					t.Fatal("child did not change actual noncapsule PRIMARY bank bytes")
+				}
+				switch variant {
+				case "before-fence-capsule-only":
+					if slotLength == 0 {
+						t.Fatal("capsule cut did not bind physical range")
+					}
+					if err := cut.PromoteRange("index.db.primary", slotOffset, slotLength); err != nil {
+						t.Fatal(err)
+					}
+				case "before-fence-child-writeback":
+					// Explicitly write back every actual changed byte, including
+					// banks and capsule; this is legal pre-fence writeback, not
+					// an invented completed sync or DATA/namespace credit.
+					for _, r := range changed {
+						if err := cut.PromoteRange("index.db.primary", r.Offset, r.Length); err != nil {
+							t.Fatal(err)
+						}
+					}
 				}
 			}
 			cut.Crash()
@@ -86,7 +140,7 @@ func TestPrimaryDataParentCoverageV6ModeledCrashCuts(t *testing.T) {
 				t.Fatalf("modeled exact capsule rejected: %v", result.Err)
 			}
 			want := child
-			if variant == "before-fence-parent" {
+			if variant == "before-fence-parent" || variant == "before-fence-capsule-only" {
 				want = parent
 			}
 			if got := fmt.Sprint(result.CommitSeq); got != want {
@@ -99,7 +153,7 @@ func TestPrimaryDataParentCoverageV6ModeledCrashCuts(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if variant == "before-fence-parent" {
+			if variant == "before-fence-parent" || variant == "before-fence-capsule-only" {
 				if got != nil {
 					t.Fatalf("old cut exposed child %q", got)
 				}

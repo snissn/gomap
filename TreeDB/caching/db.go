@@ -2438,8 +2438,8 @@ const (
 	envDisableVlogGenerationPeriodicRewritePlanBudget = "TREEDB_DISABLE_VLOG_GENERATION_PERIODIC_REWRITE_PLAN_BUDGET"
 	envVlogGenerationPeriodicRewritePlanBudgetMillis  = "TREEDB_VLOG_GENERATION_PERIODIC_REWRITE_PLAN_BUDGET_MS"
 	envVlogGenerationMaintenancePauseFile             = "TREEDB_VLOG_MAINTENANCE_PAUSE_FILE"
-	// Experimental immutable-leaf maintenance hook. Disabled by default until
-	// the cached scheduler policy and dwell behavior are validated.
+	// Explicit override for immutable-leaf packing. Private WAL-on COW uses a
+	// bounded default slice; legacy routes retain their opt-in behavior.
 	envEnableLeafGenerationPackMaintenance                     = "TREEDB_ENABLE_LEAF_GENERATION_PACK_MAINTENANCE"
 	envLeafGenerationPackMaintenanceMaxBytesToCopy             = "TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_MAX_BYTES_TO_COPY"
 	envLeafGenerationPackMaintenanceMaxGenerations             = "TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_MAX_GENERATIONS"
@@ -8070,7 +8070,7 @@ func (db *DB) runWithBackendMaintenanceOptions(opts backendMaintenanceOptions, f
 	}()
 	if !opts.skipCheckpoint {
 		if err := db.Checkpoint(); err != nil {
-			return err
+			return backendMaintenanceError("checkpoint", err)
 		}
 	}
 	if db.cow != nil {
@@ -8084,27 +8084,27 @@ func (db *DB) runWithBackendMaintenanceOptions(opts backendMaintenanceOptions, f
 		db.writeMu.Lock()
 		db.writeMu.Unlock()
 		if err := db.completeCOWHandoff(); err != nil {
-			return err
+			return backendMaintenanceError("complete COW handoff", err)
 		}
 		if opts.cowCheckpointFallback {
-			return db.refreshCOWCheckpointFallback()
+			return backendMaintenanceError("refresh COW checkpoint fallback", db.refreshCOWCheckpointFallback())
 		}
 		db.cow.refreshRequired.Store(true)
 	}
 
 	if refresher, ok := db.backend.(valueLogSetRefresher); ok {
 		if err := refresher.RefreshValueLogSet(); err != nil {
-			return err
+			return backendMaintenanceError("refresh backend value-log set before callback", err)
 		}
 	}
 	var fnErr error
 	if fn != nil {
-		fnErr = fn()
+		fnErr = backendMaintenanceError("callback", fn())
 	}
 	if db.closing.Load() && !opts.completeAdmittedCOW {
 		return fnErr
 	}
-	reconcileErr := db.reconcileSplitValueLogWritersAfterBackendMaintenanceAdmitted(opts.completeAdmittedCOW)
+	reconcileErr := backendMaintenanceError("reconcile cached value-log readers and writers", db.reconcileSplitValueLogWritersAfterBackendMaintenanceAdmitted(opts.completeAdmittedCOW))
 	if db.cow != nil {
 		if err := db.finishCOWBackendMaintenance(errors.Join(fnErr, reconcileErr)); err != nil {
 			return err
@@ -8114,7 +8114,7 @@ func (db *DB) runWithBackendMaintenanceOptions(opts backendMaintenanceOptions, f
 		}
 		// Settlement may publish a manifest even when it reports a later error.
 		// Reconcile that accepted state before releasing the existing writer fence.
-		return db.finishCOWBackendMaintenance(opts.afterCOWRefresh())
+		return db.finishCOWBackendMaintenance(backendMaintenanceError("post-refresh callback", opts.afterCOWRefresh()))
 	}
 	if fnErr != nil {
 		if reconcileErr != nil {
@@ -10007,6 +10007,7 @@ type DB struct {
 	vlogGenerationLeafPackGCLastDeletedBytes                     atomic.Int64
 	vlogGenerationLeafPackLastReclaimedBytes                     atomic.Int64
 	vlogGenerationLeafPackLastUnixNano                           atomic.Int64
+	vlogGenerationPrivateCOWPackLastAttemptNS                    atomic.Int64
 	vlogGenerationLeafPackCanceledLastNS                         atomic.Int64
 	vlogGenerationLeafPackDeadlineLastNS                         atomic.Int64
 	vlogGenerationLeafPackLastSkipReason                         atomic.Value // string
@@ -13439,6 +13440,13 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	}
 	if len(segments) > 0 {
 		for _, seg := range segments {
+			// The backend owns external command WAL, including its initialized
+			// physical reserve. Its checkpoint byte hook accounts for logical
+			// debt; importing these files as cached redo would double-charge it
+			// and make an empty reserved segment trigger size maintenance.
+			if opts.ExternalCommandWAL && !seg.valueLog && commitlog.IsCommandSegmentName(filepath.Base(seg.path)) {
+				continue
+			}
 			l := db.valueLogLaneByID(seg.lane)
 			if l == nil {
 				if seg.valueLog {
@@ -19762,8 +19770,8 @@ func (db *DB) startVlogGenerationLoop() {
 		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerDisabled)
 		return
 	}
-	if !db.disableJournal {
-		// WAL-on profiles start with the periodic scheduler disabled and re-enable
+	if !db.disableJournal && !db.privateCOWLeafPackEnabled() {
+		// Other WAL-on profiles start with the periodic scheduler disabled and re-enable
 		// it only after the caller transitions back to steady phase. The loop still
 		// starts here so later steady-phase arming never needs to spawn a new
 		// goroutine during runtime or shutdown.
@@ -19820,6 +19828,18 @@ func (db *DB) maybeRunPeriodicVlogGenerationMaintenance(runGC bool) bool {
 	if db == nil {
 		return false
 	}
+	// The bounded private-COW path owns no full cache maintenance fence. It
+	// runs on the existing non-GC tick before generic quiet/rewrite admission.
+	if !runGC && db.privateCOWLeafPackEnabled() {
+		attempted, err := db.runPrivateCOWLeafPackSlice()
+		if err != nil && db.notifyError != nil {
+			db.notifyError(fmt.Errorf("cachingdb: private COW leaf maintenance: %w", err))
+		}
+		if attempted {
+			return true
+		}
+	}
+
 	if db.coalesceDeferredVectorBuildVlogMaintenance() {
 		return false
 	}
@@ -25866,15 +25886,21 @@ func (db *DB) checkpointContext(ctx context.Context, automatic bool) error {
 		db.checkpointPostFrontierAdmission.Store(true)
 	}
 	db.mu.Unlock()
-	rotateLaneIDs := make([]int, 0, len(db.lanes))
-	for i := range db.lanes {
-		if db.lanes[i].walLiveBytes.Load() > 0 {
-			rotateLaneIDs = append(rotateLaneIDs, i)
-		}
-	}
-	if len(rotateLaneIDs) == 0 {
+	var rotateLaneIDs []int
+	// WAL-off checkpoints still flush persistent value-log and leaf resources
+	// below, but rotating their disabled redo journal would only launch no-op
+	// workers. Preserve the captured frontier and writer cutover in both modes.
+	if !db.disableJournal {
+		rotateLaneIDs = make([]int, 0, len(db.lanes))
 		for i := range db.lanes {
-			rotateLaneIDs = append(rotateLaneIDs, i)
+			if db.lanes[i].walLiveBytes.Load() > 0 {
+				rotateLaneIDs = append(rotateLaneIDs, i)
+			}
+		}
+		if len(rotateLaneIDs) == 0 {
+			for i := range db.lanes {
+				rotateLaneIDs = append(rotateLaneIDs, i)
+			}
 		}
 	}
 	releaseWriteMu()
@@ -25887,23 +25913,25 @@ func (db *DB) checkpointContext(ctx context.Context, automatic bool) error {
 	}
 
 	walRotateStart := time.Now()
-	errCh := make(chan error, len(rotateLaneIDs))
-	var rotateWG sync.WaitGroup
-	for _, laneID := range rotateLaneIDs {
-		rotateWG.Add(1)
-		go func(id int) {
-			defer rotateWG.Done()
-			if err := db.rotateWALCheckpointLocked(&db.lanes[id]); err != nil {
-				errCh <- err
+	if len(rotateLaneIDs) > 0 {
+		errCh := make(chan error, len(rotateLaneIDs))
+		var rotateWG sync.WaitGroup
+		for _, laneID := range rotateLaneIDs {
+			rotateWG.Add(1)
+			go func(id int) {
+				defer rotateWG.Done()
+				if err := db.rotateWALCheckpointLocked(&db.lanes[id]); err != nil {
+					errCh <- err
+				}
+			}(laneID)
+		}
+		rotateWG.Wait()
+		close(errCh)
+		for err := range errCh {
+			if err != nil {
+				recordCheckpointStageSince(&db.checkpointStageWALRotate, walRotateStart)
+				return err
 			}
-		}(laneID)
-	}
-	rotateWG.Wait()
-	close(errCh)
-	for err := range errCh {
-		if err != nil {
-			recordCheckpointStageSince(&db.checkpointStageWALRotate, walRotateStart)
-			return err
 		}
 	}
 	recordCheckpointStageSince(&db.checkpointStageWALRotate, walRotateStart)
@@ -29846,8 +29874,12 @@ func (db *DB) collectFlushUnitsWithOpsLocked(laneID int, maxMemtables int, targe
 	if maxMemtables > flushBacklogCoalescingHardMaxMemtables {
 		maxMemtables = flushBacklogCoalescingHardMaxMemtables
 	}
-	units := make([]flushUnit, 0, maxMemtables)
-	ids := make([]uint64, 0, maxMemtables)
+	// The queue bounds the initial backing allocation even when the collection
+	// budget is larger. Keep the collection limits below unchanged: span-only
+	// runs may grow these slices beyond this initial capacity.
+	initialCapacity := min(queueLen, maxMemtables)
+	units := make([]flushUnit, 0, initialCapacity)
+	ids := make([]uint64, 0, initialCapacity)
 	var totalBytes int64
 	var totalLen int
 	spanOnly := false
@@ -31693,6 +31725,12 @@ func (db *DB) HasPrefixes(prefixes [][]byte) ([]bool, error) {
 }
 
 func (db *DB) maybeRunLeafGenerationPackMaintenance(runGC bool, quiet bool, admission leafGenerationPackMaintenanceAdmission, opts vlogGenerationMaintenanceOptions) (attempted bool, ran bool, err error) {
+	// Eligible WAL-on/private-COW stores use the named bounded path only.
+	// Never fall through to the older full-cache copy fence for these stores.
+	if db.privateCOWLeafPackEnabled() {
+		return false, false, nil
+	}
+
 	if db == nil || db.closing.Load() {
 		return false, false, nil
 	}
@@ -33672,6 +33710,11 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.leaf_pack.write_burst_grace_ms"] = fmt.Sprintf("%d", leafGenerationPackMaintenanceWriteBurstGrace().Milliseconds())
 	stats["treedb.cache.vlog_generation.leaf_pack.max_foreground_queue"] = fmt.Sprintf("%d", leafGenerationPackMaintenanceMaxForegroundQueue())
 	stats["treedb.cache.vlog_generation.leaf_pack.max_generations"] = fmt.Sprintf("%d", leafGenerationPackMaintenanceMaxGenerations())
+	stats["treedb.cache.vlog_generation.leaf_pack.private_cow_last_attempt_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationPrivateCOWPackLastAttemptNS.Load())
+	stats["treedb.cache.vlog_generation.leaf_pack.private_cow_max_bytes_to_copy"] = fmt.Sprintf("%d", privateCOWLeafPackCopyBytes)
+	stats["treedb.cache.vlog_generation.leaf_pack.private_cow_max_generations"] = fmt.Sprintf("%d", privateCOWLeafPackGenerations)
+	stats["treedb.cache.vlog_generation.leaf_pack.private_cow_timeout_ms"] = fmt.Sprintf("%d", privateCOWLeafPackTimeout.Milliseconds())
+	stats["treedb.cache.vlog_generation.leaf_pack.private_cow_default"] = strconv.FormatBool(db.privateCOWLeafPackEnabled())
 	stats["treedb.cache.vlog_generation.leaf_pack.max_bytes_to_copy"] = fmt.Sprintf("%d", int64(envUint64(envLeafGenerationPackMaintenanceMaxBytesToCopy, leafGenerationPackMaintenanceDefaultMaxBytesToCopy)))
 	stats["treedb.cache.vlog_generation.leaf_pack.min_candidate_generations"] = fmt.Sprintf("%d", loadPositiveIntEnvDefault(envLeafGenerationPackMaintenanceMinCandidateGenerations, leafGenerationPackMaintenanceDefaultMinCandidateGenerations))
 	stats["treedb.cache.vlog_generation.leaf_pack.min_reclaim_per_byte_copied_ppm"] = fmt.Sprintf("%d", leafGenerationPackMaintenanceMinReclaimPerByteCopiedPPM())

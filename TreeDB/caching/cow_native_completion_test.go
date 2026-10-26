@@ -51,10 +51,19 @@ func (r *nativeCompletionTestRequest) CompleteNativeCommandWAL(err error) error 
 }
 
 func TestCOWNativeDeferredCompletionPreservesInstalledReceipt(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		capturedDurable bool
+	}{{"participant", false}, {"singleton", true}} {
+		t.Run(tc.name, func(t *testing.T) { testCOWNativeDeferredCompletionPreservesInstalledReceipt(t, tc.capturedDurable) })
+	}
+}
+
+func testCOWNativeDeferredCompletionPreservesInstalledReceipt(t *testing.T, capturedDurable bool) {
 	registerNativeBridgeTestCommand()
 	cache, backend := nativeBridgeFixture(t, true)
 	failure := errors.New("deferred original prefix sync failure")
-	bridge := &nativeCompletionTestBridge{failure: failure}
+	bridge := &nativeCompletionTestBridge{failure: failure, appendSync: capturedDurable}
 	if err := backend.BindNativeCommandWALCompletion(cache.cow.txnOwner, bridge); err != nil {
 		t.Fatal(err)
 	}
@@ -77,14 +86,14 @@ func TestCOWNativeParticipantAssignedFailureKeepsIdentity(t *testing.T) {
 	testCOWNativeCompletionAssignedFailureKeepsIdentity(t, false)
 }
 
-func TestCOWNativeSoloAssignedSyncFailureKeepsIdentity(t *testing.T) {
+func TestCOWNativeSoloAssignedAppendFailureKeepsIdentity(t *testing.T) {
 	testCOWNativeCompletionAssignedFailureKeepsIdentity(t, true)
 }
 
-func testCOWNativeCompletionAssignedFailureKeepsIdentity(t *testing.T, sync bool) {
+func testCOWNativeCompletionAssignedFailureKeepsIdentity(t *testing.T, capturedDurable bool) {
 	registerNativeBridgeTestCommand()
 	cache, backend := nativeBridgeFixture(t, true)
-	bridge := &nativeCompletionTestBridge{appendSync: sync}
+	bridge := &nativeCompletionTestBridge{appendSync: capturedDurable}
 	if err := backend.BindNativeCommandWALCompletion(cache.cow.txnOwner, bridge); err != nil {
 		t.Fatal(err)
 	}
@@ -95,13 +104,9 @@ func testCOWNativeCompletionAssignedFailureKeepsIdentity(t *testing.T, sync bool
 	defer tx.Close()
 	publication, plan := nativeTxnPublication(t, tx, "assigned")
 	intent := nativeTxnIntent(t, backend, true)
-	failure := errors.New("original participant assigned before flush failure")
+	failure := errors.New("original native command assigned before installation failure")
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
-		point := durabilitycut.AfterDependencyAppend
-		if sync {
-			point = durabilitycut.BeforeDependencyFileSync
-		}
-		if event.Resource == durabilitycut.ResourceCommandWAL && event.Point == point {
+		if event.Resource == durabilitycut.ResourceCommandWAL && event.Point == durabilitycut.AfterDependencyAppend {
 			return failure
 		}
 		return nil

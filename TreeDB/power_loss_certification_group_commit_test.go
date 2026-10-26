@@ -6,13 +6,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/powerlosscert"
 	"github.com/snissn/gomap/TreeDB/internal/powerlossoracle"
 )
 
@@ -136,10 +139,52 @@ func TestPowerLossCertificationGroupedAmbiguousFailureDirtyPublicReopen(t *testi
 // TestPowerLossCertificationGroupedRotationExternalPublicReopen retains the
 // complete stable boundary for a shared group spanning command-WAL rotation
 // and separately synchronized values larger than the materialized-RID limit.
+// groupedExternalFirstFrameTarget fits the actual two-RID canonical envelope
+// and forces its covering barrier into the next segment. The native revision
+// layout may differ; neither layout may rotate before accepting the first frame.
+func groupedExternalFirstFrameTarget(t *testing.T) int64 {
+	t.Helper()
+	var smallest, largest int64
+	for _, revision := range []uint64{0, 1} {
+		operations := []commitlog.RawKVOperation{
+			{Op: commitlog.RawKVOpSetRID, Key: []byte("grouped-external/0"), RID: 1, Revision: revision},
+			{Op: commitlog.RawKVOpSetRID, Key: []byte("grouped-external/1"), RID: 2, Revision: revision},
+		}
+		payload, err := commitlog.EncodeRawKVBatchPayload(operations)
+		if err != nil {
+			t.Fatal(err)
+		}
+		format := commitlog.PayloadFormatRawKVBatchV1
+		if revision != 0 {
+			format = commitlog.PayloadFormatRawKVBatchV2
+		}
+		frame, err := commitlog.EncodeCommandFrameV2(commitlog.CommandEnvelope{
+			Version: commitlog.CommandFrameVersionV2, LSN: 1,
+			DurabilityClass: commitlog.CommandDurabilityRelaxed,
+			Kind:            commitlog.CommandKindRawKVBatch, Scope: commitlog.CommandScopeRawKV,
+			PayloadFormat: format, Payload: payload,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		size := int64(8 + len(frame))
+		if smallest == 0 || size < smallest {
+			smallest = size
+		}
+		if size > largest {
+			largest = size
+		}
+	}
+	if 2*smallest <= largest {
+		t.Fatal("external fixture cannot force its second-frame rotation")
+	}
+	return largest
+}
+
 func TestPowerLossCertificationGroupedRotationExternalPublicReopen(t *testing.T) {
 	dir := t.TempDir()
 	opts := commandWALDurabilityProofOptions(dir)
-	opts.CommandWALSegmentTargetBytes = 1
+	opts.CommandWALSegmentTargetBytes = groupedExternalFirstFrameTarget(t)
 	opts.ValueLog.PointerThreshold = 1
 	opts.ValueLog.ForcePointers = true
 	database, err := Open(opts)
@@ -165,17 +210,87 @@ func TestPowerLossCertificationGroupedRotationExternalPublicReopen(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	commandWALSyncs := 0
+	var publishedSyncs, initializerSyncs int
+	var syncOrder []string
+	var barrierPath string
+	var barrierIdentity os.FileInfo
+	var framePath string
+	var frameIdentity os.FileInfo
+	var beforePublishedSync *powerlossoracle.Model
+	var observeMu sync.Mutex
+	frozen := false
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
-		if !barrierStarted.Load() && event.Namespace == "" &&
-			event.Point != durabilitycut.BeforeNewFileDirectorySync && event.Point != durabilitycut.AfterNewFileDirectorySync {
+		observeMu.Lock()
+		defer observeMu.Unlock()
+		if frozen {
 			return nil
 		}
+		// Every initializer, namespace and auxiliary event remains in the model.
 		if err := model.Observe(dir, event); err != nil {
 			return err
 		}
-		if event.Resource == durabilitycut.ResourceCommandWAL && event.Point == durabilitycut.AfterDependencyFileSync {
-			commandWALSyncs++
+		if event.Resource == durabilitycut.ResourceCommandWAL && event.Point == durabilitycut.AfterDependencyAppend && event.LSN == 1 {
+			framePath = event.Path
+			var err error
+			frameIdentity, err = os.Stat(event.Path)
+			if err != nil {
+				return err
+			}
+		}
+		if event.Resource == durabilitycut.ResourceCommandWAL && event.Point == durabilitycut.AfterDependencyAppend && event.LSN == 2 {
+			barrierPath = event.Path
+			var err error
+			barrierIdentity, err = os.Stat(event.Path)
+			if err != nil {
+				return err
+			}
+		}
+		activeBarrier := false
+		initialization := false
+		if event.Resource == durabilitycut.ResourceCommandWAL && (event.Point == durabilitycut.BeforeDependencyFileSync || event.Point == durabilitycut.AfterDependencyFileSync) {
+			var err error
+			initialization, err = commandWALFixtureSyncIdentity(event)
+			if err != nil {
+				return err
+			}
+			if !initialization && event.Point == durabilitycut.BeforeDependencyFileSync && beforePublishedSync == nil {
+				held, err := event.StablePath.Stat()
+				if err != nil {
+					return err
+				}
+				if !barrierStarted.Load() || frameIdentity == nil || event.Path != framePath || !os.SameFile(held, frameIdentity) {
+					return fmt.Errorf("old sync does not retain the published LSN1 frame: %#v", event)
+				}
+				beforePublishedSync = model.Clone()
+			}
+			if !initialization && event.LSN == 2 {
+				held, err := event.StablePath.Stat()
+				if err != nil {
+					return err
+				}
+				if !barrierStarted.Load() || barrierIdentity == nil || event.Path != barrierPath || !os.SameFile(held, barrierIdentity) {
+					return fmt.Errorf("active sync is not the retained published LSN2 barrier: %#v", event)
+				}
+				activeBarrier = true
+			}
+		}
+		if event.Point == durabilitycut.AfterDependencyFileSync {
+			switch {
+			case event.Resource == durabilitycut.ResourceAuxiliary:
+				syncOrder = append(syncOrder, "auxiliary")
+			case initialization:
+				initializerSyncs++
+				syncOrder = append(syncOrder, "private-initialization")
+			case activeBarrier:
+				publishedSyncs++
+				syncOrder = append(syncOrder, "active-barrier-lsn2")
+				frozen = true
+			case event.Resource == durabilitycut.ResourceCommandWAL:
+				publishedSyncs++
+				syncOrder = append(syncOrder, "published-old")
+			default:
+				return fmt.Errorf("unexpected physical dependency sync: %#v", event)
+			}
 		}
 		return nil
 	})
@@ -197,13 +312,25 @@ func TestPowerLossCertificationGroupedRotationExternalPublicReopen(t *testing.T)
 		t.Fatal(err)
 	}
 	restore()
-	if commandWALSyncs != 2 {
-		t.Fatalf("rotation/external command-WAL syncs=%d want frozen old+active segment boundary count 2", commandWALSyncs)
+	if err := powerlosscert.ValidateFrozenWALContainer(os.Getenv("TREEDB_POWERLOSS_WAL_CONTAINER"), database.Stats()["treedb.command_wal.writer.container"]); err != nil {
+		t.Fatal(err)
 	}
-	// Occurrence zero is the grouped external-resource barrier. Occurrences one
-	// and two are the rotated and active command-WAL segments respectively, so
-	// the latter is the first cut that contains the complete acknowledged group.
-	requireGroupCertificationSelector(t, groupedRotationExternalVariant, durabilitycut.AfterDependencyFileSync, 2)
+	wantOrder := []string{"auxiliary", "auxiliary", "published-old"}
+	wantInitializers := 0
+	if database.Stats()["treedb.command_wal.writer.container"] == "fixed" {
+		wantInitializers = 1
+		wantOrder = append(wantOrder, "private-initialization")
+	}
+	wantOrder = append(wantOrder, "active-barrier-lsn2")
+	if !frozen || beforePublishedSync == nil || publishedSyncs != 2 || initializerSyncs != wantInitializers || !slices.Equal(syncOrder, wantOrder) {
+		t.Fatalf("physical sync order=%v want=%v; published=%d initializer=%d frozen=%t before-published=%t", syncOrder, wantOrder, publishedSyncs, initializerSyncs, frozen, beforePublishedSync != nil)
+	}
+	// Occurrences count every successful physical file-sync event, including
+	// both auxiliary events and private initialization. The active barrier is
+	// /004 on fixed-container platforms, /003 on the stream fallback.
+	cutOccurrence := len(wantOrder) - 1
+	requireGroupCertificationSelector(t, groupedRotationExternalVariant, durabilitycut.AfterDependencyFileSync, cutOccurrence)
+	t.Logf("rotation/external physical sync order=%v stable cut occurrence=%d", syncOrder, cutOccurrence)
 	stats := database.Stats()
 	if got := certificationStatUint64(t, stats, "treedb.command_wal.group_commit.group_size_max"); got != 1 || observedGroupSize.Load() != 1 {
 		t.Fatalf("external group size stats=%d hook=%d want=1", got, observedGroupSize.Load())
@@ -224,7 +351,33 @@ func TestPowerLossCertificationGroupedRotationExternalPublicReopen(t *testing.T)
 			t.Fatalf("recovered external value %d len=%d err=%v", index, len(value), err)
 		}
 	}
-	t.Log("rotation/external stable cut occurrence=2")
+	// Before the first published WAL sync, both auxiliary sync events have
+	// completed but neither accepted frame nor barrier is durable. The group must
+	// remain absent. The later old-segment sync may already persist the frame.
+	t.Run("before-published-sync-does-not-recover-group", func(t *testing.T) {
+		root := filepath.Join(t.TempDir(), "before-published-sync")
+		if err := beforePublishedSync.MaterializeStable(root); err != nil {
+			t.Fatal(err)
+		}
+		release, err := beforePublishedSync.InstallStableIdentityOverrides(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer release()
+		beforeOpts := opts
+		beforeOpts.Dir = root
+		before, err := Open(beforeOpts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer before.Close()
+		for index := 0; index < 2; index++ {
+			value, err := before.Get([]byte(fmt.Sprintf("grouped-external/%d", index)))
+			if err != nil || len(value) != 0 {
+				t.Fatalf("before published sync recovered member%d len=%d error=%v, want absent", index, len(value), err)
+			}
+		}
+	})
 }
 
 // TestPowerLossCertificationGroupedLifecyclePublicReopen proves that a

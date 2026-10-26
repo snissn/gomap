@@ -93,28 +93,30 @@ func (db *DB) cowGetVersionedAppend(key, dst []byte, missingIsNil bool) (out []b
 	}
 	if entry.Flags&node.FlagPointer != 0 {
 		// The exact pointer metadata is stable under this retained cut. Reuse
-		// the original materializer without traversing the same backend again.
+		// the original exact-cut workspace with owned copy-out, without traversing
+		// the same backend again.
 		snapshot.cowReadMu.Lock()
 		defer snapshot.cowReadMu.Unlock()
-		value, revision, err := snapshot.cowValueFromEntryLocked(entry)
+		out, revision, err := snapshot.cowAppendPointEntryLocked(entry, dst)
 		if errors.Is(err, memtable.ErrCOWCapacity) && fresh.refund() {
-			value, revision, err = snapshot.cowValueFromEntryLocked(entry)
+			out, revision, err = snapshot.cowAppendPointEntryLocked(entry, dst)
 		}
 		if err != nil {
 			return dst, revision, err
 		}
-		return append(dst, value...), revision, nil
+		return out, revision, nil
 	}
-	out, revision, err = snapshot.cowGetVersionedAppendOpen(key, dst)
+	out, revision, err = snapshot.cowOwnedPointAppendOpen(key, dst)
 	if errors.Is(err, memtable.ErrCOWCapacity) && fresh.refund() {
-		out, revision, err = snapshot.cowGetVersionedAppendOpen(key, dst)
+		out, revision, err = snapshot.cowOwnedPointAppendOpen(key, dst)
 	}
 	return out, revision, err
 }
 
 // appendInline finishes copy-out before releasing basis.readMu. It never exposes
 // traversal scratch or changes inspection, checksum, leaf-cache or codec policy.
-// Pointers and dictionary leaves use the original cut-local materializer.
+// Pointers and captured-only dictionary providers retain the original
+// cut-local materializer; capable dictionary leaves finish this traversal.
 func (b *cowBackendBasis) appendInline(db *DB, key, dst []byte, freshOwner *cowFreshReadOwner) (out []byte, result node.LeafEntry, handled bool, err error) {
 	b.readMu.Lock()
 	defer b.readMu.Unlock()
@@ -132,11 +134,19 @@ func (b *cowBackendBasis) appendInline(db *DB, key, dst []byte, freshOwner *cowF
 	if err != nil {
 		return dst, node.LeafEntry{}, true, err
 	}
+	var independent *cowCacheDictionaryRead
+	if provider, ok := db.dictStore.(cowDictionaryReadProvider); ok {
+		definition := cowCacheDictionaryRead{provider: provider, cache: db.cow}
+		independent = &definition
+	}
 	readLeaf := func(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
-		return b.readPhysicalLeafLocked(db.cow, ptr, dst, false)
+		return b.readPhysicalLeafWithDictionary(db.cow, w, ptr, dst, false, false, independent)
 	}
 	entry, err := b.snapshot.GetEntryExactWithFixedScratch(key, point.key[:], point.leaf[:], readLeaf)
-	if err == errCOWPhysicalDictionary {
+	_, dictionaryCapacity := err.(*cowPhysicalDictionaryCapacity)
+	if err == errCOWPhysicalDictionary || dictionaryCapacity {
+		// Leave this lock before the original exact-cut Snapshot handoff can
+		// refund fresh traversal storage and retry its dictionary admission.
 		return dst, node.LeafEntry{}, false, nil
 	}
 	if err != nil {

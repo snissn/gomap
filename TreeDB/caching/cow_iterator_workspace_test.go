@@ -94,6 +94,11 @@ func TestCOWPhysicalIteratorWorkspaceSharesAdmission(t *testing.T) {
 			defer other.Close()
 			a := it.(*snapshotBoundIterator).inner.(*cowMergeIterator)
 			b := other.(*snapshotBoundIterator).inner.(*cowMergeIterator)
+			if !reverse {
+				if _, ok := a.Iterator.(*merging.SingleSourceMerger); !ok {
+					t.Fatalf("physical-only iterator used %T, want the admitted one-source adapter", a.Iterator)
+				}
+			}
 			if a.workspace == b.workspace {
 				t.Fatal("independent iterators shared mutable workspace")
 			}

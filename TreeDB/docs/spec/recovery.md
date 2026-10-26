@@ -203,6 +203,17 @@ If both eligible slots are invalid, Open fails. An embedded parent or older
 bank record is never promoted into an additional recovery candidate.
 DATA META pages supply no fallback authority in this selected format.
 
+V6 publication may persist the new capsule and its newly sealed PRIMARY banks
+in either order before their combined final file fence. Recovery therefore
+validates both complete physical closures even when the new capsule itself is
+intact. Missing or partial new bank data disqualifies that actual slot; it does
+not disqualify the untouched previous slot and its independently retained data.
+Before durable completion either a complete old or complete new state can be
+selected; after a successful durable acknowledgement the new complete state
+must survive. The embedded parent is still only a proof operand, never an
+additional selectable authority. DATA and external-file durability remain
+separate requirements, and other formats keep their existing write order.
+
 Command-WAL replay preserves this selected physical authority. Open constructs
 the same PRIMARY publication runtime and coordinator before replay, with the
 ordinary scheduler dormant. Replay drives the existing Prepare/Publish/Report

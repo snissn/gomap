@@ -1,5 +1,14 @@
 # Locking
 
+Backend destructive value-log GC and zero-byte cleanup retain exclusive prepare
+admission through mutation. Their final captured-root revalidation must not wait
+for durable publication authority: a private publisher may own that authority
+while waiting for prepare admission. Contention returns the existing stale-root
+refusal, preserves candidates and deferred cleanup ownership, and allows the
+publisher to finish. A subsequent maintenance pass must capture and validate
+fresh authority before reclaiming bytes. See the
+[maintenance barrier](../../TreeDB/docs/spec/value-log-lifecycle.md#31-command-wal-maintenance-barrier).
+
 ## TL;DR
 
 - TreeDB and HashDB enforce **exclusive open** (cross-process).

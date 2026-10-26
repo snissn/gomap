@@ -267,7 +267,7 @@ func testCommandJournalStableRotationFrontierUsesSegmentAppendsNotOwnerCursor(t 
 func testCommandJournalAutomaticRotationCapturesStableResources(t *testing.T) {
 	dir := t.TempDir()
 	journal, err := OpenCommandJournal(dir, CommandJournalOptions{
-		Lane: 2, SegmentTargetBytes: 1, CaptureStableResources: true,
+		Lane: 2, SegmentTargetBytes: commandJournalSingleFrameTarget(t, CommandEnvelope{Kind: CommandKindRawKVBatch, Scope: CommandScopeRawKV, PayloadFormat: PayloadFormatRawKVBatchV1}), CaptureStableResources: true,
 	})
 	if err != nil {
 		t.Fatal(err)

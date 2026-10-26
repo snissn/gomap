@@ -59,8 +59,9 @@ func (db *DB) FlushPrivateCOWCommandWALBarrier(owner *transactionowner.Owner) (C
 
 // AppendNativeDurablePrefixParticipant uses the SAME authenticated staging
 // ownership but defers durability to the public group's owned prefix barrier.
+// capturedDurable selects the singleton frame class, never physical sync.
 // Profile-forced durability remains the caller's completion obligation.
-func (guard *CommandWALStagingGuardV1) AppendNativeDurablePrefixParticipant(intent *CommandWALIntent) (CommandWALLSNRange, error) {
+func (guard *CommandWALStagingGuardV1) AppendNativeDurablePrefixParticipant(intent *CommandWALIntent, capturedDurable bool) (CommandWALLSNRange, error) {
 	if guard == nil || guard.ownership == nil {
 		return CommandWALLSNRange{}, ErrClosed
 	}
@@ -74,6 +75,7 @@ func (guard *CommandWALStagingGuardV1) AppendNativeDurablePrefixParticipant(inte
 		return CommandWALLSNRange{}, err
 	}
 	intent.inner.privateCOWOwner = held.privateOwner
+	intent.inner.capturedDurable = capturedDurable
 	lsn, err := held.db.appendCommandWALIntent(&intent.inner, false)
 	intent.inner.privateCOWOwner = nil
 	// Inner append may have assigned before a flush/dependency failure.

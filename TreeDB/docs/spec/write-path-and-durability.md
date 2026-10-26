@@ -12,6 +12,36 @@ Close can dispose those resources, even when rewrite reports a partial-work
 error. New admission after Close remains refused. This role does not authorize
 other backend maintenance callbacks. See [value-log lifecycle](value-log-lifecycle.md).
 
+Eligible private-COW handles with outer leaf logging and either the cache
+journal enabled or ExternalCommandWAL active schedule one bounded leaf-generation
+pack slice by default. ExternalCommandWAL disables the redundant cache journal.
+Explicit loop disable, an explicitly false leaf-pack switch, restore/catch-up phases, and
+the maintenance pause file retain their meanings. A slice retains `flushMu`
+through copy and equivalent-basis adoption, without setting the full cache
+maintenance admission fence. Mutable/frozen sources, revisions, command coverage,
+and semantic descriptors survive through the original `installCOWBasis(..., nil)`
+protocol. The authenticated backend role authorizes only equivalent physical
+packing; it grants no new logical publication or callback authority.
+
+One pass selects at most two generations and 32MiB of live copying and attempts
+at most one subsequent GC. Ordinary production uses the maintained input policy,
+without imposing a maximum whole-database size on automatic packing or its GC.
+Whole-store planning still scales with the retained roots and files; the slice
+is not a hard memory or total-I/O quota. Explicit input-footprint limits remain
+available to diagnostic callers. Declined
+plans still reach GC so an ordinary later root advance or reader release can
+permit retirement. Both recoverable roots, named roots, and exact reader/file
+pins remain deletion authority; no root horizon is forced. No-progress passes
+back off for 30 seconds. Generations exceeding the slice selection budget remain
+visible debt rather than being copied without a bound. The five-second context
+is cooperative: it does not bound native I/O, a pending handoff, checkpoint/Close
+latency, or writers requiring a flush. Ordinary COW writers that do not require
+those owners can proceed while copying. Snapshot/cut allocation or exact semantic
+rebinding refusal after publication fails closed; an uncertain backend outcome
+remains recovery-required. Copied/expected-reclaim bytes and GC logical retirement
+are distinct from actual physical unlink/reclaimed bytes. This scheduling change
+makes no performance, settled-memory, or qualification claim.
+
 Ordinary typed INSERTs may append to a manifest-owned column asset segment under
 the serialized command-publication context. Exact retained resource authority
 must match the existing file and parent before writing; every batch retains its
@@ -32,22 +62,27 @@ same ordering applies to the final public checkpoint during `Close`.
 Native collection commands opened through the public COW owner use the same
 public command-WAL group coordinator as raw writes. Durable requests announce
 before native producer serialization, without holding a public progress gate.
-The coordinator's existing solo eligibility can synchronously append an
-uncontended original mutation; queued requests register with the same group.
-Each command retains its original assigned LSN and installs one complete logical
-successor. Grouped commands install before awaiting durability. A group stabilizes
-the dependency-complete prefix through the existing root-neutral durable-prefix
-barrier; no grouped waiter acknowledges before that barrier succeeds. The barrier
-adds a canonical LSN without adding a logical
-transaction. Immediate logical visibility and WAL completion therefore do not
-imply that the physical `AppliedCommandLSN` has advanced. Checkpoint or recovery
-publishes that physical frontier. Direct backend constructors keep their inline
-completion path, and already combined command groups keep their existing path.
+Registration appends through the original authenticated native staging guard and
+installs one complete logical successor before waiting for the covering durable
+ticket. Preparation and raw-publication gates end before that wait. An idle
+singleton uses the captured-durable append class: it retains one original
+canonical command/LSN, adds no collection timer or barrier frame, and performs one
+physical command-file sync at final completion. Its append receipt does not claim
+that the WAL is already stable. Queued requests retain the coordinator's shared
+prefix completion; any root-neutral barrier frame adds no logical transaction.
+No durable waiter acknowledges before its dependency-complete file and namespace
+obligations succeed. Immediate logical visibility and WAL completion therefore do
+not imply that the physical `AppliedCommandLSN` has advanced. Checkpoint or
+recovery publishes that physical frontier. Direct backend constructors keep their
+inline completion path, and already combined command groups keep their existing
+path.
 
 A failure after assignment retains the command identity and is ambiguous to an
 ordinary collection caller, even if logical installation did not complete. The
-handle requires recovery and the caller must not retry the application callback.
-A refusal before assignment has no such publication effect. If a checkpoint
+exact successor may already be visible when final synchronization fails; that
+failure gives no durable acknowledgement or durable-frontier credit. The handle
+requires recovery and the caller must not retry the application callback. A
+refusal before assignment has no such publication effect. If a checkpoint
 captures a finite cut before a delayed group appends its root-neutral barrier,
 optional fallback convergence may defer that proven suffix under the maintenance
 writer fence. It does not change the captured cut or accept a different logical
@@ -83,6 +118,15 @@ oracle's `before-publication-seal-write` and
 The record becomes stable only with the subsequent exact-index sync and becomes
 recovery-selectable only after the alternate meta is written and synced. These
 events describe ordered writes; they are not claims that an fsync happened.
+This DATA seal/META order is unchanged. The temporarily supported explicit V6
+PRIMARY format instead stages its opposite complete capsule and performs one
+full-dirty PRIMARY file fence covering the capsule and newly sealed banks.
+Its actual previous slot and current/parent closures stay intact, and recovery
+independently validates every new physical operand before selection. Required
+DATA and external-file fences remain separate; a pre-install validation or
+completed frontier cannot cover the newly staged capsule. Post-install failure
+is ambiguous and blocks further writes until reopen. See
+[PRIMARY recovery](recovery.md#temporarily-supported-explicit-primary-capsule-recovery).
 
 `Stable` means present in the modeled image after process-volatile file bytes
 and unsynced namespace mutations have been discarded. `Write`, mapped dirtying,
@@ -307,6 +351,18 @@ Journal and value-log writes are decoupled resources with separate rotation/sync
 The mutable-memtable installation above describes existing cached modes.
 Explicit immutable COW mode uses the prepared sequence below and preserves the
 selected profile's acknowledgement boundary.
+
+The backend point-write combiner is work-conserving. After its first blocking
+receive, it takes only requests already queued, in FIFO order, up to the existing
+64-request limit, and immediately applies the collected batch. It does not wait
+for speculative arrivals. Requests accumulated during apply remain queued for
+the next bounded collection. This scheduling policy does not change request-owned
+key/value or MVCC-input binding, direct queue-saturation fallback, publication
+poison checks, or the underlying batch durability path. Any collected sync request
+makes the entire batch use `WriteSync`; all collected callers receive its common
+result. On observed stop, collected work is applied and remaining queued requests
+receive the existing closed error. Completed request pointers are cleared from
+the reusable local batch storage after result delivery.
 
 ### 3.1 Target raw-KV revision flow
 
@@ -854,6 +910,37 @@ poisons publication, and refuses later writes until recovery. Durable report
 finishes the ordinary transaction synchronously; this ordinary callback path is
 not bounded native Accepted/Finish qualification.
 
+## Online vacuum system preparation
+
+Online vacuum prepares the rewritten system catalog from its pinned collection
+basis before taking the writer cutover lock. At cutover, the original generation,
+system-root and publication-epoch checks, together with the recoverable-root
+capability check, determine whether that exact preparation can be installed.
+A changed basis follows the existing bounded recapture/reclone path; the private
+system pages, including reserved pages and allocator spills, are reclaimed before
+rebuilding. No reservation is reset and no live or older-root page is reclaimed.
+New external system leaves remain tracked for the final resource closure even
+when a preparation is invalidated.
+
+Pre-cutover mapped writeback includes the prepared system pages and earns no
+durability credit. After successful preflush and its existing hook, each bounded
+cutover attempt detaches and applies one additional private user delta while the
+recorder remains active, before draining publication debt and the existing
+before-cutover hook. Arrivals after that detach remain in the recorder for the
+final gated residual. The pass reuses ordinary delta ordering, shared-page
+retirement, outer-leaf flush and growth checks; dirt it creates is covered by the
+unchanged final durability transaction. It does not validate the prepared catalog
+or recoverable capability and does not loop to catch ongoing writers.
+
+`LateCatchupPasses` and `LateCatchupMutations`/point/range counts describe detached
+plans, including attempts later invalidated or canceled; `LateCatchupDuration`
+measures their private drain/apply interval. `UserTailMutations`/point/range counts
+continue to describe the actual gated residual across attempts. System-tree time
+includes all preparation attempts outside the writer gate. The final bounded user tail, exact metadata/frontier binding,
+resource/index/authority fences, namespace decision and runtime installation keep
+their existing ordering and writer exclusion. This applies without depending on
+WAL replay and does not combine DATA and PRIMARY authority or change ordinary ACKs.
+
 ## Capsule-format joint vacuum durability
 
 The temporary explicit/persisted PRIMARY path retains this joint protocol.
@@ -910,9 +997,12 @@ the original gate. Legacy preflight retains its existing admitted route.
 A request-local, nonblocking/no-reentry post-append observer can report an error
 after the original accepted receipt is recorded and before visibility. The
 original assigned-failure path retains sparse custody, poisons publication and
-requires recovery; result/progress are not persisted. Existing canonical replay
-recovers the frame. The WAL format, owner, startup replay route and assignment
-authority remain unchanged.
+requires recovery; result/progress are not persisted. Assignment does not prove
+that the frame reached the physical WAL or completed synchronization. An
+uncompleted assigned frame may or may not survive a crash; existing canonical
+replay recovers it if retained. A frame covered by a completed durable cut must
+survive and replay even if the caller did not receive an acknowledgment. The WAL
+format, owner, startup replay route and assignment authority remain unchanged.
 
 ### Native immutable source import
 
@@ -933,3 +1023,59 @@ the caller owns durable command/decision authority. Its checkpoint certificate
 retains the maintained publisher's exact root/dependencies with bounded descriptor
 output. See [external recovery](external-recovery.md) for the semantic barrier,
 publication order, retained roots, and unchanged standalone WriteSync contract.
+
+### Captured command-WAL completion
+
+Caller-owned logical MVCC builders preserve the configured ordinary ACK class.
+`CommitRelaxed` inherits `ProfileCommandWALDurable` durability; it cannot downgrade
+that profile. Submit retains the effective WAL sync requirement in the owned
+batch through Complete, including physical sync errors. Public Write/WriteSync
+metrics continue to describe the explicit API selected by the caller.
+
+The ordinary public durable coordinator captures an idle singleton immediately
+and collects queued writes through the maintained bounded window before
+capturing one exact complete journal prefix. Uncontended ordinary cached writes
+can register and capture under one exclusive public admission, with a demand
+recheck after append; a newly announced intent joins that same append to pending
+collection. This shares the existing ledger and retains all backend dependency
+drains. COW installs its complete cut
+and releases admission/raw guards before awaiting that physical prefix. Final
+WAL sync uses retained file handles outside writer/publication/journal mutexes;
+queued successors form the next collected epoch and need their own certificate.
+Earlier external dependency and V2 marker-ordering waits remain serialized.
+See [the durable write contract](command-wal-durable-write-contract.md#shared-captured-prefix-scheduler)
+for lifecycle, allocation and boundary details. The acknowledgement guarantees
+remain unchanged. Fresh production command-journal segments choose the existing
+strict V2 stream/full-sync container on positively identified memory filesystems,
+and initialized immutable extents on supported persistent or unknown filesystems.
+The choice uses the actual opened file at creation; existing files and captured
+handles keep their detected format. See [storage format](storage-format.md#initialized-command-wal-container-v3).
+
+The configured logical command-WAL segment target is independent of initialized
+physical capacity. Physical pressure grows fresh reserves geometrically within
+that target's physical byte budget. For a nonpositive logical target, the default
+physical ceiling is 64 MiB (67,108,864 bytes); initial and forced/checkpoint
+successors retain the small 4,199,424-byte reserve. A zero logical target still
+requires physical-fit checks. Larger reserves can increase initialized bytes,
+cold recovery scanning, and unused tail space; this policy changes no per-frame
+geometry and promises no measured latency improvement. Successor
+preparation precedes installation; required file and namespace obligations
+follow the existing policy and settle before durable ACK. Fixed-container
+initialization itself is completely synced before publication. Capacity changes
+do not change logical frontiers, dependency closure, or ACK requirements.
+Occupied published files retain their existing size and identity.
+
+
+A fixed-container journal can initialize one unpublished pressure successor
+behind current appends, using the same full reserve write/sync proof. The append
+owner alone adopts a ready exact-plan/identity match through existing canonical
+publication; it never uses the private diagnostic handle as its active resource.
+A miss keeps synchronous preparation without waiting for worker readiness.
+Forced resets, stale predictions and Close cancel adoption; exact cleanup and
+actual worker join remain mandatory. A cancelled worker and synchronous reserve
+may overlap, adding at most one extra 64 MiB reserve per eligible journal for
+normal plans. Uncancellable kernel I/O may delay Close indefinitely. A real
+background initialization/cleanup failure is retained and poisons the next
+observing entry before LSN assignment; earlier independent prefix proofs remain
+valid. No worker creates a token, changes a frontier, removes namespace debt or
+permits an early ACK. See the [container resource and lifecycle contract](storage-format.md#initialized-command-wal-container-v3).

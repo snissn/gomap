@@ -414,9 +414,14 @@ func TestCOWOrderedDurableGroupStableImageAtAcknowledgement(t *testing.T) {
 				if commandSyncs == 0 {
 					t.Fatal("command-WAL durable acknowledgement did not complete a command-file sync")
 				}
-				applied, err := strconv.ParseUint(db.Stats()["treedb.applied_command_lsn"], 10, 64)
-				if err != nil || applied != baselineLSN {
-					t.Fatalf("replay test unexpectedly covered the command in a root: applied=%d baseline=%d err=%v", applied, baselineLSN, err)
+				// The immutable model above is the acknowledgement boundary. A
+				// later generation-maintenance checkpoint may legally cover this
+				// command while the live physical versions are being inspected.
+				stats := db.Stats()
+				applied, err := strconv.ParseUint(stats["treedb.applied_command_lsn"], 10, 64)
+				next, nextErr := strconv.ParseUint(stats["treedb.command_wal.next_lsn"], 10, 64)
+				if err != nil || nextErr != nil || applied < baselineLSN || next == 0 || applied >= next {
+					t.Fatalf("live applied command frontier invalid: applied=%d baseline=%d next=%d errors=%v/%v", applied, baselineLSN, next, err, nextErr)
 				}
 			}
 			result, reopened, closeReopened, err := powerlossreopen.Stable(stable, opts, false)
@@ -424,6 +429,20 @@ func TestCOWOrderedDurableGroupStableImageAtAcknowledgement(t *testing.T) {
 				t.Fatalf("acknowledged stable image rejected: %+v %v", result, err)
 			}
 			defer closeReopened()
+			defer func() {
+				if !t.Failed() {
+					return
+				}
+				trace := stable.Trace()
+				if len(trace) > 20 {
+					trace = trace[len(trace)-20:]
+				}
+				t.Logf("durable ACK recovery diagnostic: applied=%d baseline=%d commit=%d command_syncs=%d meta_syncs=%d stable=%s trace_tail=%q", result.AppliedLSN, baselineLSN, result.CommitSeq, commandSyncs, metaSyncs, stable.StableFingerprint(), trace)
+				for _, version := range physical {
+					value, revision, err := reopened.GetVersioned(version.key)
+					t.Logf("durable ACK physical diagnostic: key=%x length=%d want_length=%d revision=%d want_revision=%d equal=%t err=%v", version.key, len(value), len(version.value), revision, version.revision, bytes.Equal(value, version.value), err)
+				}
+			}()
 			if value, err := reopened.Get([]byte("seed")); err != nil || string(value) != "baseline" {
 				t.Fatalf("baseline after stable reopen: %q, %v", value, err)
 			}
@@ -437,7 +456,7 @@ func TestCOWOrderedDurableGroupStableImageAtAcknowledgement(t *testing.T) {
 				}
 			}
 			if tc.profile != treedb.ProfileNoWALFast && result.AppliedLSN <= baselineLSN {
-				t.Fatalf("stable reopen did not replay accepted command: applied=%d baseline=%d", result.AppliedLSN, baselineLSN)
+				t.Fatalf("stable reopen did not recover accepted command: applied=%d baseline=%d", result.AppliedLSN, baselineLSN)
 			}
 		})
 	}

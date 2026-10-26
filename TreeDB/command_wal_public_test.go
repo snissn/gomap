@@ -55,6 +55,8 @@ func TestPublicCommandWALDirectRoutesEmitAppendAndFlushCuts(t *testing.T) {
 		want := []durabilitycut.Point{
 			durabilitycut.BeforeDependencyAppend,
 			durabilitycut.AfterDependencyAppend,
+			durabilitycut.BeforeUserspaceFlush,
+			durabilitycut.AfterUserspaceFlush,
 			durabilitycut.BeforeDependencyFileSync,
 			durabilitycut.AfterDependencyFileSync,
 		}
@@ -72,9 +74,9 @@ func TestPublicCommandWALDirectRoutesEmitAppendAndFlushCuts(t *testing.T) {
 		if events[1].Path == "" {
 			t.Fatalf("%s after-append omitted exact segment path", name)
 		}
-		if events[2].Path == "" || events[3].Path != events[2].Path {
+		if events[4].Path == "" || events[5].Path != events[4].Path {
 			t.Fatalf("%s sync paths=(%q,%q), want paired non-empty paths",
-				name, events[2].Path, events[3].Path)
+				name, events[4].Path, events[5].Path)
 		}
 	}
 
@@ -674,7 +676,7 @@ func TestPublicCommandWALRuntimeStatsExposeAppendAndSyncCounters(t *testing.T) {
 		"treedb.command_wal.append.count_total":         2,
 		"treedb.command_wal.append.point.count_total":   1,
 		"treedb.command_wal.append.payload.count_total": 1,
-		"treedb.command_wal.flush.count_total":          1,
+		"treedb.command_wal.flush.count_total":          2,
 		"treedb.command_wal.sync.count_total":           1,
 	} {
 		if got := statMapUint64(t, stats, key); got != want {
@@ -732,7 +734,7 @@ func TestPublicCommandWALBatchWriteSyncPhaseStatsDisabledByDefault(t *testing.T)
 	}
 }
 
-func TestPublicCommandWALBatchWriteSyncPhaseStatsAttributesSoloDurableSync(t *testing.T) {
+func TestPublicCommandWALBatchWriteSyncPhaseStatsAttributesCapturedSingleton(t *testing.T) {
 	opts := commandWALDurabilityProofOptions(t.TempDir())
 	opts.PublicBatchWriteSyncPhaseStats = true
 	db, err := Open(opts)
@@ -756,17 +758,17 @@ func TestPublicCommandWALBatchWriteSyncPhaseStatsAttributesSoloDurableSync(t *te
 
 	stats := db.Stats()
 	prefix := "treedb.public.batch.write_sync.phase."
-	if got := statMapUint64(t, stats, prefix+"command_sync.calls_total"); got != 1 {
-		t.Fatalf("phase command sync calls=%d, want 1 for solo durable sync (stats=%#v)", got, stats)
+	if got := statMapUint64(t, stats, prefix+"command_sync.calls_total"); got != 0 {
+		t.Fatalf("phase command sync calls=%d, want 0 because captured sync belongs to group wait (stats=%#v)", got, stats)
 	}
-	if got := statMapUint64(t, stats, prefix+"command_sync.ns_total"); got == 0 {
-		t.Fatalf("phase command sync ns=0, want measured solo durable sync (stats=%#v)", stats)
+	if got := statMapUint64(t, stats, prefix+"command_sync.ns_total"); got != 0 {
+		t.Fatalf("phase command sync ns=%d, want 0 for captured singleton (stats=%#v)", got, stats)
 	}
 	if got := statMapUint64(t, stats, prefix+"command_flush.calls_total"); got != 0 {
-		t.Fatalf("phase command flush calls=%d, want 0 because solo durable flush includes sync (stats=%#v)", got, stats)
+		t.Fatalf("phase command flush calls=%d, want 0 because captured userspace flush belongs to group wait (stats=%#v)", got, stats)
 	}
-	if got := statMapUint64(t, stats, prefix+"command_group_commit_wait.calls_total"); got != 0 {
-		t.Fatalf("phase command group wait calls=%d, want 0 for solo durable bypass (stats=%#v)", got, stats)
+	if got := statMapUint64(t, stats, prefix+"command_group_commit_wait.calls_total"); got != 1 {
+		t.Fatalf("phase command group wait calls=%d, want 1 for captured singleton (stats=%#v)", got, stats)
 	}
 	requirePublicBatchWriteSyncPhasePartitions(t, stats)
 }
@@ -975,8 +977,8 @@ func TestPublicCommandWALBatchWriteSyncExternalRefOrderingPhaseStats(t *testing.
 		t.Fatalf("phase external-ref planning calls=%d, want 1 observed no-op planning phase (stats=%#v)", got, stats)
 	}
 	requirePublicStatDelta(t, before, stats, "treedb.command_wal.sync.count_total", 1)
-	// The mutation frame and the durable-prefix barrier are distinct WAL
-	// writes, but the group still owns exactly one shared file sync.
+	// This forced coordinator route drains the participant and its terminal
+	// barrier as two writes, then shares one physical synchronization.
 	requirePublicStatDelta(t, before, stats, "treedb.command_wal.write.syscalls_total", 2)
 	requirePublicStatDelta(t, before, stats, "treedb.command_wal.file_sync.calls_total", 1)
 	requirePublicStatDelta(t, before, stats, "treedb.cache.value_log.sync.calls_total", 0)
@@ -1303,12 +1305,12 @@ func TestPublicCommandWALStateShapedDurabilityLedger(t *testing.T) {
 		"treedb.command_wal.append.count_total":            3,
 		"treedb.command_wal.append.point.count_total":      2,
 		"treedb.command_wal.append.entry_scan.count_total": 1,
-		"treedb.command_wal.flush.count_total":             1,
+		"treedb.command_wal.flush.count_total":             3,
 		"treedb.command_wal.flush.point.count_total":       1,
 		"treedb.command_wal.sync.count_total":              2,
-		"treedb.command_wal.sync.point.count_total":        1,
-		"treedb.command_wal.sync.entry_scan.count_total":   1,
-		"treedb.command_wal.sync.barrier.count_total":      0,
+		"treedb.command_wal.sync.point.count_total":        0,
+		"treedb.command_wal.sync.entry_scan.count_total":   0,
+		"treedb.command_wal.sync.barrier.count_total":      2,
 		"treedb.command_wal.write.syscalls_total":          3,
 		"treedb.command_wal.write.errors_total":            0,
 		"treedb.command_wal.file_sync.calls_total":         2,
@@ -1371,7 +1373,7 @@ func TestPublicCommandWALPointerEmptyWriteSyncSweepsPriorUnsyncedWrite(t *testin
 		// The relaxed mutation and the explicit durable-prefix barrier are
 		// distinct V2 frames.
 		"treedb.command_wal.append.count_total":       2,
-		"treedb.command_wal.flush.count_total":        1,
+		"treedb.command_wal.flush.count_total":        2,
 		"treedb.command_wal.sync.count_total":         1,
 		"treedb.command_wal.sync.barrier.count_total": 1,
 		"treedb.command_wal.write.syscalls_total":     2,
@@ -1541,7 +1543,7 @@ func TestPublicCommandWALDurableOrdinaryAndExplicitSyncBoundaryMatrixDoesNotChec
 	afterBatchWrite := db.Stats()
 	requirePublicStatDelta(t, before, afterBatchWrite, "treedb.command_wal.append.count_total", 3)
 	requirePublicStatDelta(t, before, afterBatchWrite, "treedb.command_wal.append.payload.count_total", 1)
-	requirePublicStatDelta(t, before, afterBatchWrite, "treedb.command_wal.flush.count_total", 0)
+	requirePublicStatDelta(t, before, afterBatchWrite, "treedb.command_wal.flush.count_total", 3)
 	requirePublicStatDelta(t, before, afterBatchWrite, "treedb.command_wal.sync.count_total", 3)
 	requirePublicStatDelta(t, before, afterBatchWrite, "treedb.public.batch.write.calls_total", 1)
 	requirePublicCommandWALNoCheckpointSince(t, db, before)
@@ -1561,7 +1563,7 @@ func TestPublicCommandWALDurableOrdinaryAndExplicitSyncBoundaryMatrixDoesNotChec
 	afterBatchWriteSync := db.Stats()
 	requirePublicStatDelta(t, before, afterBatchWriteSync, "treedb.command_wal.append.count_total", 4)
 	requirePublicStatDelta(t, before, afterBatchWriteSync, "treedb.command_wal.append.payload.count_total", 2)
-	requirePublicStatDelta(t, before, afterBatchWriteSync, "treedb.command_wal.flush.count_total", 0)
+	requirePublicStatDelta(t, before, afterBatchWriteSync, "treedb.command_wal.flush.count_total", 4)
 	requirePublicStatDelta(t, before, afterBatchWriteSync, "treedb.command_wal.sync.count_total", 4)
 	requirePublicStatDelta(t, before, afterBatchWriteSync, "treedb.public.batch.write_sync.calls_total", 1)
 	requirePublicCommandWALNoCheckpointSince(t, db, before)
@@ -1572,7 +1574,7 @@ func TestPublicCommandWALDurableOrdinaryAndExplicitSyncBoundaryMatrixDoesNotChec
 	afterRangeDelete := db.Stats()
 	requirePublicStatDelta(t, before, afterRangeDelete, "treedb.command_wal.append.count_total", 5)
 	requirePublicStatDelta(t, before, afterRangeDelete, "treedb.command_wal.append.entry_scan.count_total", 1)
-	requirePublicStatDelta(t, before, afterRangeDelete, "treedb.command_wal.flush.count_total", 0)
+	requirePublicStatDelta(t, before, afterRangeDelete, "treedb.command_wal.flush.count_total", 5)
 	requirePublicStatDelta(t, before, afterRangeDelete, "treedb.command_wal.sync.count_total", 5)
 	requirePublicCommandWALNoCheckpointSince(t, db, before)
 
@@ -4277,7 +4279,20 @@ func benchmarkPublicCommandWALDurableShape(b *testing.B, forcedPointers bool, sh
 	perIteration := publicCommandWALDurableShapeExpectedCounters(shape, forcedPointers, DurabilityDurable)
 	after := db.Stats()
 	for key, want := range perIteration {
-		requireBenchmarkStatDelta(b, before, after, key, want*uint64(b.N))
+		expected := want * uint64(b.N)
+		if key == "treedb.command_wal.file_sync.calls_total" {
+			// Each durable rotation also stabilizes its closed predecessor.
+			// Keep the production segment target and charge those actual syncs;
+			// this fixture disables checkpoints/cleanup, so every new segment
+			// witnesses exactly one rotation throughout the measured loop.
+			beforeSegments := statMapUint64B(b, before, "treedb.command_wal.segments.total")
+			afterSegments := statMapUint64B(b, after, "treedb.command_wal.segments.total")
+			if afterSegments < beforeSegments {
+				b.Fatal("isolated durable shape unexpectedly removed a command-WAL segment")
+			}
+			expected += afterSegments - beforeSegments
+		}
+		requireBenchmarkStatDelta(b, before, after, key, expected)
 	}
 	requireBenchmarkStatDelta(b, before, after, "treedb.public.checkpoint.calls_total", 0)
 	if got := statMapUint64B(b, after, "treedb.cache.checkpoint.runs"); got != 0 {
@@ -4360,31 +4375,31 @@ func publicCommandWALDurableShapeExpectedCounters(shape string, forcedPointers b
 	var valueLogMaterializationSyncs, valueLogExternalRefSyncs, valueLogPendingBarrierSyncs uint64
 	switch shape {
 	case "dirty_batch":
-		appendCalls, syncCalls, writeSyscalls, fileSyncCalls = 1, 1, 1, 1
+		appendCalls, flushCalls, syncCalls, writeSyscalls, fileSyncCalls, barrierSyncCalls = 1, 1, 1, 1, 1, 1
 		batchWriteSyncCalls = 1
 	case "write_then_dirty_write_sync":
-		appendCalls, flushCalls, syncCalls, writeSyscalls, fileSyncCalls = 2, 1, 1, 2, 1
+		appendCalls, flushCalls, syncCalls, writeSyscalls, fileSyncCalls, barrierSyncCalls = 2, 2, 1, 2, 1, 1
 		batchWriteCalls, batchWriteSyncCalls = 1, 1
 		// In the relaxed profile the first write remains replay-self-contained
-		// in the command WAL; the following directly synced mutation closes
-		// that prefix without forcing deferred value-log materialization.
+		// in the command WAL; the following durable-class mutation and captured
+		// physical sync close the prefix without deferred materialization.
 	case "empty_write_sync_after_write":
-		appendCalls, flushCalls, syncCalls, writeSyscalls, fileSyncCalls = 2, 1, 1, 2, 1
+		appendCalls, flushCalls, syncCalls, writeSyscalls, fileSyncCalls = 2, 2, 1, 2, 1
 		batchWriteCalls, batchWriteSyncCalls, barrierSyncCalls = 1, 1, 1
 	case "state_point_point_sync_batch_sync":
-		appendCalls, flushCalls, syncCalls, writeSyscalls, fileSyncCalls = 3, 1, 2, 3, 2
+		appendCalls, flushCalls, syncCalls, writeSyscalls, fileSyncCalls, barrierSyncCalls = 3, 3, 2, 3, 2, 2
 		batchWriteSyncCalls = 1
 	}
 	if durability == DurabilityDurable {
 		switch shape {
 		case "dirty_batch":
-			appendCalls, flushCalls, writeSyscalls, barrierSyncCalls = 1, 0, 1, 0
+			appendCalls, flushCalls, writeSyscalls, barrierSyncCalls = 1, 1, 1, 1
 		case "write_then_dirty_write_sync":
-			appendCalls, flushCalls, syncCalls, writeSyscalls, fileSyncCalls, barrierSyncCalls = 2, 0, 2, 2, 2, 0
+			appendCalls, flushCalls, syncCalls, writeSyscalls, fileSyncCalls, barrierSyncCalls = 2, 2, 2, 2, 2, 2
 		case "empty_write_sync_after_write":
-			appendCalls, flushCalls, syncCalls, writeSyscalls, fileSyncCalls = 1, 0, 2, 1, 2
+			appendCalls, flushCalls, syncCalls, writeSyscalls, fileSyncCalls, barrierSyncCalls = 1, 2, 2, 1, 2, 2
 		case "state_point_point_sync_batch_sync":
-			appendCalls, flushCalls, syncCalls, writeSyscalls, fileSyncCalls, barrierSyncCalls = 3, 0, 3, 3, 3, 0
+			appendCalls, flushCalls, syncCalls, writeSyscalls, fileSyncCalls, barrierSyncCalls = 3, 3, 3, 3, 3, 3
 		}
 	}
 	valueLogSyncs := valueLogMaterializationSyncs + valueLogExternalRefSyncs + valueLogPendingBarrierSyncs
@@ -4591,7 +4606,7 @@ func TestPublicCommandWALDurableTinyBatchWriteSyncShapes(t *testing.T) {
 			after := db.Stats()
 			requirePublicStatDelta(t, before, after, "treedb.command_wal.append.count_total", 1)
 			requirePublicStatDelta(t, before, after, "treedb.command_wal.append.payload.count_total", 1)
-			requirePublicStatDelta(t, before, after, "treedb.command_wal.flush.count_total", 0)
+			requirePublicStatDelta(t, before, after, "treedb.command_wal.flush.count_total", 1)
 			requirePublicStatDelta(t, before, after, "treedb.command_wal.sync.count_total", 1)
 			requirePublicStatDelta(t, before, after, "treedb.public.batch.write_sync.calls_total", 1)
 			requirePublicCommandWALNoCheckpointSince(t, db, before)
@@ -4704,6 +4719,33 @@ func TestPublicCommandWALAutoCheckpointOverlapAdmitsPostFrontierWrites(t *testin
 	latched := db.Stats()
 	requirePublicStatDelta(t, before, latched, "treedb.cache.auto_checkpoint.count", 0)
 	requirePublicStatDelta(t, before, latched, "treedb.cache.command_wal.cleanup.completions_total", 0)
+	// Inspect the retained journal before checkpoint cleanup can retire segments.
+	// A captured durable mutation is itself a prefix marker; only an uncovered
+	// relaxed suffix needs a separate barrier. Scheduling determines that suffix.
+	var overlapMutations, overlapDurable, overlapBarriers uint64
+	beforeLSN := statMapUint64(t, before, "treedb.command_wal.live_accepted_max_lsn")
+	for _, frame := range scanPublicCommandWALV2(t, opts.Dir) {
+		if frame.LSN <= beforeLSN {
+			continue
+		}
+		switch frame.Kind {
+		case commitlog.CommandKindRawKVBatch:
+			overlapMutations++
+			if frame.DurabilityClass == commitlog.CommandDurabilityDurable {
+				overlapDurable++
+			}
+		case commitlog.CommandKindDurablePrefixBarrier:
+			if frame.DurabilityClass != commitlog.CommandDurabilityDurable {
+				t.Fatalf("prefix barrier at LSN %d is not durable", frame.LSN)
+			}
+			overlapBarriers++
+		default:
+			t.Fatalf("unexpected post-frontier frame kind %v", frame.Kind)
+		}
+	}
+	if overlapMutations != 16 || overlapDurable > 8 || overlapDurable+overlapBarriers == 0 {
+		t.Fatalf("post-frontier mutations=%d durable=%d barriers=%d, want 16 mutations and durable coverage", overlapMutations, overlapDurable, overlapBarriers)
+	}
 
 	releaseCheckpointPublishOnce.Do(func() { close(releaseCheckpointPublish) })
 	wantAutoCheckpointCount := statMapUint64(t, before, "treedb.cache.auto_checkpoint.count") + 1
@@ -4752,11 +4794,7 @@ func TestPublicCommandWALAutoCheckpointOverlapAdmitsPostFrontierWrites(t *testin
 	if groupedCommits+soloDurable != 8 {
 		t.Fatalf("durable overlap publications: grouped commits=%d solo durable=%d, want 8 total", groupedCommits, soloDurable)
 	}
-	// Each of the sixteen writes contributes one mutation frame. The eight
-	// durable writes routed through the coordinator contribute one barrier per
-	// group. An uncontended durable caller may instead sync its mutation frame
-	// directly, so its publication contributes no barrier.
-	requirePublicStatDelta(t, before, after, "treedb.command_wal.append.count_total", 16+durableGroups)
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.append.count_total", overlapMutations+overlapBarriers)
 	// The auto-checkpoint itself contributes one direct durable-prefix sync in
 	// addition to the coordinator-owned groups. Each solo durable publication
 	// contributes one more direct sync.
@@ -5191,6 +5229,19 @@ func reportWriteSyncLatencyDistribution(b *testing.B, samples []time.Duration) {
 
 func reportCommandWALBenchmarkDeltas(b *testing.B, before, after map[string]string, operations uint64) {
 	b.Helper()
+	// These are cold witnesses from the existing post-StopTimer Stats snapshot.
+	// They do not change measured work or the required gate metrics.
+	fixed, memory := 0.0, 0.0
+	if after["treedb.command_wal.writer.container"] == "fixed" {
+		fixed = 1
+	}
+	if after["treedb.command_wal.writer.memory_filesystem"] == "true" {
+		memory = 1
+	}
+	b.ReportMetric(fixed, "command_wal.container.fixed")
+	b.ReportMetric(memory, "command_wal.filesystem.memory")
+	b.ReportMetric(float64(statMapUint64B(b, after, "treedb.command_wal.writer.filesystem_type")), "command_wal.filesystem.type")
+	b.Logf("command-WAL container=%s reason=%s filesystem_type=%s memory_filesystem=%s", after["treedb.command_wal.writer.container"], after["treedb.command_wal.writer.container_reason"], after["treedb.command_wal.writer.filesystem_type"], after["treedb.command_wal.writer.memory_filesystem"])
 	for _, key := range []string{
 		"treedb.command_wal.append.count_total",
 		"treedb.command_wal.flush.count_total",

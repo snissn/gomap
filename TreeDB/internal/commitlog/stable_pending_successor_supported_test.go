@@ -44,7 +44,7 @@ func TestCommandJournalStableRotationObserverFailureRetriesExactPendingSuccessor
 	createCalls := 0
 	var createdInfo os.FileInfo
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
-		if event.Resource != durabilitycut.ResourceCommandWAL || event.Namespace != durabilitycut.NamespaceCreate {
+		if event.Resource != durabilitycut.ResourceCommandWAL || event.Namespace != durabilitycut.NamespaceCreate || !IsCommandSegmentName(filepath.Base(event.NewPath)) {
 			return nil
 		}
 		createCalls++
@@ -163,7 +163,7 @@ func TestCommandJournalStableRotationTokenFailureRetriesExactPendingSuccessor(t 
 
 	createCalls := 0
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
-		if event.Resource == durabilitycut.ResourceCommandWAL && event.Namespace == durabilitycut.NamespaceCreate {
+		if event.Resource == durabilitycut.ResourceCommandWAL && event.Namespace == durabilitycut.NamespaceCreate && IsCommandSegmentName(filepath.Base(event.NewPath)) {
 			createCalls++
 		}
 		return nil
@@ -219,7 +219,7 @@ func TestCommandJournalPendingStableSuccessorReplacementFailsClosedWithoutUnlink
 
 	injected := errors.New("injected command-WAL observer failure before replacement")
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
-		if event.Resource == durabilitycut.ResourceCommandWAL && event.Namespace == durabilitycut.NamespaceCreate {
+		if event.Resource == durabilitycut.ResourceCommandWAL && event.Namespace == durabilitycut.NamespaceCreate && IsCommandSegmentName(filepath.Base(event.NewPath)) {
 			return injected
 		}
 		return nil
@@ -398,7 +398,7 @@ func TestCommandJournalStableRotationRetryDescriptorPlateau(t *testing.T) {
 	injected := errors.New("injected command-WAL retry cycle")
 	createCalls := 0
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
-		if event.Resource == durabilitycut.ResourceCommandWAL && event.Namespace == durabilitycut.NamespaceCreate {
+		if event.Resource == durabilitycut.ResourceCommandWAL && event.Namespace == durabilitycut.NamespaceCreate && IsCommandSegmentName(filepath.Base(event.NewPath)) {
 			createCalls++
 			return injected
 		}

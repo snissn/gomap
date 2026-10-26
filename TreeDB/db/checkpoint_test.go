@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -304,13 +305,48 @@ func TestMaintainCommandWALCoveredPrefixSnapshotsRootPublicationUnderDBMu(t *tes
 	}
 }
 
+// coveredPrefixRetryFrameTarget fits either actual point frame in a fresh
+// segment. The test exercises coverage retry after explicit maintenance rotation,
+// not first-input physical pressure that creates a newly pinned empty predecessor.
+func coveredPrefixRetryFrameTarget(t *testing.T) int64 {
+	t.Helper()
+	var minimum, target int64
+	for _, row := range [][2]string{{"covered-prefix", "value"}, {"post-cut", "retained"}} {
+		for _, revision := range []uint64{0, 1} {
+			payload, err := commitlog.EncodeRawKVBatchPayload([]commitlog.RawKVOperation{{Op: commitlog.RawKVOpSet, Key: []byte(row[0]), Value: []byte(row[1]), Revision: revision}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			format := commitlog.PayloadFormatRawKVBatchV1
+			if revision != 0 {
+				format = commitlog.PayloadFormatRawKVBatchV2
+			}
+			frame, err := commitlog.EncodeCommandFrameV2(commitlog.CommandEnvelope{Version: commitlog.CommandFrameVersionV2, LSN: 1, DurabilityClass: commitlog.CommandDurabilityRelaxed, Kind: commitlog.CommandKindRawKVBatch, Scope: commitlog.CommandScopeRawKV, PayloadFormat: format, Payload: payload})
+			if err != nil {
+				t.Fatal(err)
+			}
+			size := int64(8 + len(frame))
+			if minimum == 0 || size < minimum {
+				minimum = size
+			}
+			if size > target {
+				target = size
+			}
+		}
+	}
+	if 2*minimum <= target {
+		t.Fatal("fixture does not distinguish one frame from two")
+	}
+	return target
+}
+
 func TestMaintainCommandWALCoveredPrefixRetriesClosedSegmentsAfterCoverageAdvance(t *testing.T) {
 	dir := t.TempDir()
 	d, err := Open(Options{
 		Dir:                          dir,
 		CommandWAL:                   true,
 		Durability:                   DurabilityWALOnRelaxed,
-		CommandWALSegmentTargetBytes: 1,
+		CommandWALSegmentTargetBytes: coveredPrefixRetryFrameTarget(t),
 		DisableBackgroundPrune:       true,
 	})
 	if err != nil {
@@ -356,8 +392,12 @@ func TestMaintainCommandWALCoveredPrefixRetriesClosedSegmentsAfterCoverageAdvanc
 	if d.commandWALClosedBytes.Load() <= 0 {
 		t.Fatal("prefix preparation performed cleanup synchronously")
 	}
+	preparedActive, _ := d.commandWALActiveSegmentSnapshot()
 	if err := d.Set([]byte("post-cut"), []byte("retained")); err != nil {
 		t.Fatalf("post-cut Set: %v", err)
+	}
+	if active, _ := d.commandWALActiveSegmentSnapshot(); active != preparedActive {
+		t.Fatalf("post-cut first frame unexpectedly rotated %s into %s", preparedActive, active)
 	}
 	complete, err := d.CleanupCommandWALCoveredPrefix()
 	if err != nil {

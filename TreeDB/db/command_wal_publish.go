@@ -496,7 +496,8 @@ func validateContiguousAppliedCommandLSN(current, next uint64, covered []Command
 
 type commandWALSegmentCleanupDecision struct {
 	Path            string
-	Size            int64
+	Size            int64 // Physical file footprint, including initialized reserve.
+	LogicalSize     int64 // Command-stream debt charged to commandWALClosedBytes.
 	ScannedBytes    int64
 	Frames          uint64
 	MinLSN          uint64
@@ -520,6 +521,7 @@ type commandWALSegmentScanResult struct {
 	frames       uint64
 	typed        bool
 	terminalTail bool
+	emptyFixed   bool // Positive whole-container validation, never inferred from EOF/LSN.
 }
 
 type commandWALSegmentScanOptions struct {
@@ -611,7 +613,7 @@ func scanCommandWALSegmentFileWithOptions(file *os.File, maxSegmentBytes int64, 
 
 func scanCommandWALSegmentReader(r *commitlog.Reader, allowTerminalTail bool, opts commandWALSegmentScanOptions) (commandWALSegmentScanResult, error) {
 	var lastLSN uint64
-	var scan commandWALSegmentScanResult
+	scan := commandWALSegmentScanResult{emptyFixed: r.IsEmptyFixedContainer()}
 	for {
 		lsn, err := r.ReadValidatedCommandFrameLSN()
 		if err != nil {
@@ -735,7 +737,7 @@ func scanCommandWALSegmentsForCleanupProof(dir string, cleanupThrough uint64, du
 	var scanErr error
 	seenLSNs := make(map[uint64]struct{})
 	for _, seg := range segments {
-		if seg.valueLog || seg.size == 0 {
+		if seg.valueLog {
 			continue
 		}
 		if !isCommandWALLaneSegment(seg) {
@@ -769,6 +771,7 @@ func scanCommandWALSegmentsForCleanupProof(dir string, cleanupThrough uint64, du
 			decisions = append(decisions, commandWALSegmentCleanupDecision{
 				Path:         seg.path,
 				Size:         info.Size(),
+				LogicalSize:  seg.size,
 				ScannedBytes: scan.scannedBytes,
 				Frames:       scan.frames,
 				MinLSN:       scan.minLSN,
@@ -779,13 +782,18 @@ func scanCommandWALSegmentsForCleanupProof(dir string, cleanupThrough uint64, du
 			scanErr = errors.Join(scanErr, fmt.Errorf("scan command WAL segment %s: %w", filepath.Base(seg.path), err))
 			continue
 		}
-		if !scan.typed {
+		// A valid fixed reserve can be closed before its first accepted frame
+		// (for example, a first input exceeds the initial physical budget).
+		// Only the reader's positive exact-handle classification admits such a
+		// candidate; empty streams and legacy/unrecognized files stay retained.
+		if !scan.typed && !scan.emptyFixed {
 			_ = file.Close()
 			continue
 		}
 		decision := commandWALSegmentCleanupDecision{
 			Path:            seg.path,
 			Size:            info.Size(),
+			LogicalSize:     seg.size,
 			ScannedBytes:    scan.scannedBytes,
 			Frames:          scan.frames,
 			MinLSN:          scan.minLSN,

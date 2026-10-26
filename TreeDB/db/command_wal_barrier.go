@@ -260,39 +260,89 @@ func (db *DB) LockCommandWALPublish() func() {
 // drains registered staged-command barriers before the caller appends a frame.
 // The returned guard also pins teardown and must be released after raw publish.
 func (db *DB) LockCommandWALPublishWithBarriers() (func(), error) {
-	if db != nil && db.nativeSemanticActive.Load() {
-		return nil, ErrNativeSemanticUnsupported
-	}
 	if db == nil || !db.commandWAL {
 		return func() {}, nil
+	}
+	if err := db.acquireCommandWALPublishWithBarriersForOwner(nil); err != nil {
+		return nil, err
+	}
+	return db.unlockCommandWALRawPublishWithAdmissionAndTeardown, nil
+}
+
+func (db *DB) acquireCommandWALPublishWithBarriersForOwner(owner *transactionowner.Owner) error {
+	return db.acquireCommandWALPublishWithBarriersAfterAppend(owner, 0)
+}
+
+// assignedLSN is only a fail-stop obligation from an already completed append;
+// it grants no publication/capture authority and skips none of the hooks. Zero
+// keeps the original preassignment rejection policy. A still-pending unlocked
+// Drain can admit legitimate work; failure cannot retroactively reject it.
+func (db *DB) acquireCommandWALPublishWithBarriersAfterAppend(owner *transactionowner.Owner, assignedLSN uint64) error {
+	poisonAssigned := func() {
+		if assignedLSN != 0 && db != nil {
+			db.commandWALFlushPoisoned.Store(true)
+		}
+	}
+	held := false
+	if assignedLSN != 0 {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				// This handles both a hook panic under the acquired leases and
+				// an unlocked Drain panic. Publish poison before any owned release.
+				poisonAssigned()
+				if held {
+					db.unlockCommandWALRawPublishWithAdmissionAndTeardown()
+				}
+				panic(recovered)
+			}
+		}()
+	}
+	if db != nil && db.nativeSemanticActive.Load() && (owner == nil || owner != db.privateCOWOwner) {
+		poisonAssigned()
+		return ErrNativeSemanticUnsupported
+	}
+	if db == nil || !db.commandWAL {
+		poisonAssigned()
+		return ErrCommandWALUnsupported
 	}
 	for {
 		db.teardownMu.RLock()
 		if db.closing.Load() {
+			poisonAssigned()
 			db.teardownMu.RUnlock()
-			return nil, ErrClosed
+			return ErrClosed
 		}
 		db.commandWALRawAdmissionMu.Lock()
 		db.commandWALRawPublishMu.Lock()
-		if db.nativeSemanticActive.Load() {
+		held = true
+		if db.nativeSemanticActive.Load() && (owner == nil || owner != db.privateCOWOwner) {
+			poisonAssigned()
 			db.unlockCommandWALRawPublishWithAdmissionAndTeardown()
-			return nil, ErrNativeSemanticUnsupported
+			held = false
+			return ErrNativeSemanticUnsupported
 		}
 		if db.closing.Load() {
+			poisonAssigned()
 			db.unlockCommandWALRawPublishWithAdmissionAndTeardown()
-			return nil, ErrClosed
+			held = false
+			return ErrClosed
 		}
 		err := db.runCommandWALRawPublishBarriers()
 		if err == nil {
-			return db.unlockCommandWALRawPublishWithAdmissionAndTeardown, nil
+			return nil
 		}
-		db.unlockCommandWALRawPublishWithAdmissionAndTeardown()
 		drain := commandWALPendingDrain(err)
 		if drain == nil {
-			return nil, err
+			poisonAssigned()
+		}
+		db.unlockCommandWALRawPublishWithAdmissionAndTeardown()
+		held = false
+		if drain == nil {
+			return err
 		}
 		if err := drain.Drain(); err != nil {
-			return nil, err
+			poisonAssigned()
+			return err
 		}
 	}
 }

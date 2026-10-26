@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 )
 
 const (
@@ -71,6 +73,7 @@ type exactCertificationInputs struct {
 	contractsData []byte
 	contracts     WitnessContracts
 	ledgerData    []byte
+	walContainer  commitlog.WriterBufferStats
 }
 
 // Run executes an immutable certification plan from a clean exact repository
@@ -129,6 +132,13 @@ func Run(config RunnerConfig) (RunnerResult, error) {
 	if err := writeExclusive(filepath.Join(outputRoot, "risk_inventory.json"), inventoryData, 0o600); err != nil {
 		return RunnerResult{}, err
 	}
+	if err := writeJSONExclusive(filepath.Join(outputRoot, "inputs", "command_wal_container.json"), struct {
+		Origin    string                      `json:"origin"`
+		TMPDIR    string                      `json:"tmpdir"`
+		Selection commitlog.WriterBufferStats `json:"selection"`
+	}{"runner-linked production preflight; exact child agreement required", certificationRuntimeEnvironment(nil)["TMPDIR"], inputs.walContainer}); err != nil {
+		return RunnerResult{}, err
+	}
 	if err := writeJSONExclusive(filepath.Join(outputRoot, "run_plan.json"), plan); err != nil {
 		return RunnerResult{}, err
 	}
@@ -169,7 +179,7 @@ func Run(config RunnerConfig) (RunnerResult, error) {
 	var peakBytes uint64
 	peakAvailable := false
 	for _, runCase := range plan.Cases {
-		result, err := executeRunCase(outputRoot, plan, runCase, binaries[runCase.Package], binaryPaths[runCase.Package])
+		result, err := executeRunCase(outputRoot, plan, runCase, binaries[runCase.Package], binaryPaths[runCase.Package], inputs.walContainer.Container)
 		if err != nil {
 			return RunnerResult{}, err
 		}
@@ -334,6 +344,14 @@ func readExactCertificationInputs(sourceRoot, suppliedInventoryPath string) (exa
 	if err != nil {
 		return exactCertificationInputs{}, err
 	}
+	container, err := certificationWALContainer()
+	if err != nil {
+		return exactCertificationInputs{}, err
+	}
+	contracts, err = ResolveWitnessContracts(contracts, container.Container == "fixed")
+	if err != nil {
+		return exactCertificationInputs{}, err
+	}
 	ledgerData, err := os.ReadFile(filepath.Join(sourceRoot, "TreeDB", "testdata", "power_loss_counterexamples.json"))
 	if err != nil {
 		return exactCertificationInputs{}, fmt.Errorf("powerlosscert: read committed counterexample ledger: %w", err)
@@ -344,6 +362,7 @@ func readExactCertificationInputs(sourceRoot, suppliedInventoryPath string) (exa
 		contractsData: contractsData,
 		contracts:     contracts,
 		ledgerData:    ledgerData,
+		walContainer:  container,
 	}, nil
 }
 
@@ -702,7 +721,7 @@ func executableSuffix() string {
 	return ""
 }
 
-func executeRunCase(outputRoot string, plan RunPlan, runCase RunCase, binary Artifact, binaryPath string) (executedCase, error) {
+func executeRunCase(outputRoot string, plan RunPlan, runCase RunCase, binary Artifact, binaryPath string, walContainer ...string) (executedCase, error) {
 	evidenceDir := filepath.ToSlash(filepath.Join("evidence", runCase.ID))
 	args := []string{
 		"-test.run", "^" + runCase.TestName + "$",
@@ -729,6 +748,9 @@ func executeRunCase(outputRoot string, plan RunPlan, runCase RunCase, binary Art
 		env["TREEDB_POWERLOSS_COUNTEREXAMPLE_LEDGER"] = "inputs/power_loss_counterexamples.json"
 	}
 	command := TestCommand{BinaryPath: binary.Path, Package: runCase.Package, TestName: runCase.TestName, Args: args, Env: env}
+	if len(walContainer) != 0 {
+		env["TREEDB_POWERLOSS_WAL_CONTAINER"] = walContainer[0]
+	}
 	runtimeEnv := certificationRuntimeEnvironment(env)
 	command.Env = runtimeEnv
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(plan.CaseTimeoutSeconds)*time.Second)
@@ -836,6 +858,27 @@ func (buffer *boundedBuffer) Write(data []byte) (int, error) {
 
 func (buffer *boundedBuffer) String() string {
 	return buffer.buffer.String()
+}
+
+// certificationWALContainer selects against the same actual temporary medium
+// inherited by each fresh child fixture. Selector projection is frozen before
+// execution; affected children must agree rather than rewriting that projection.
+func certificationWALContainer() (commitlog.WriterBufferStats, error) {
+	environment := certificationRuntimeEnvironment(nil)
+	dir, err := os.MkdirTemp(environment["TMPDIR"], "treedb-cert-wal-container-*")
+	if err != nil {
+		return commitlog.WriterBufferStats{}, err
+	}
+	defer os.RemoveAll(dir)
+	journal, err := commitlog.OpenCommandJournal(dir, commitlog.CommandJournalOptions{})
+	if err != nil {
+		return commitlog.WriterBufferStats{}, err
+	}
+	selection := journal.WriterBufferStats()
+	if err = journal.Close(); err != nil {
+		return commitlog.WriterBufferStats{}, err
+	}
+	return selection, nil
 }
 
 func certificationBuildEnvironment() []string {

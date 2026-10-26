@@ -8,6 +8,8 @@ import (
 	"os"
 	"runtime"
 
+	"github.com/snissn/gomap/TreeDB/internal/stableio"
+
 	"golang.org/x/sys/unix"
 )
 
@@ -103,12 +105,7 @@ func duplicateStableFile(file *os.File) (*os.File, error) {
 	if file == nil {
 		return nil, os.ErrInvalid
 	}
-	fd, err := unix.Dup(int(file.Fd()))
-	if err != nil {
-		return nil, err
-	}
-	unix.CloseOnExec(fd)
-	return os.NewFile(uintptr(fd), stableDuplicateFileName(file.Name(), "#stable-pin")), nil
+	return stableio.DuplicateFile(file, stableDuplicateFileName(file.Name(), "#stable-pin"))
 }
 
 func duplicateStableSyncFile(file *os.File) (*os.File, error) {
