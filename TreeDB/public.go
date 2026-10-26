@@ -3043,10 +3043,14 @@ func (db *DB) writeCOWPointAdmittedWithMVCCInput(key, value []byte, put, syncWri
 	db.lifecycleMu.RUnlock()
 	var err error
 	if put {
-		if qualified, ok := b.(interface {
-			SetWithMVCCInput([]byte, []byte, mvccadmission.Input) error
+		// This one-shot batch is written and closed before the point call
+		// returns. Canonical publication owns its retained keys and values.
+		if command, ok := b.(*commandWALPublicBatch); ok {
+			_, _, err = command.setViewWithMVCCInput(key, value, false, true, input)
+		} else if qualified, ok := b.(interface {
+			SetViewWithMVCCInput([]byte, []byte, mvccadmission.Input) error
 		}); ok {
-			err = qualified.SetWithMVCCInput(key, value, input)
+			err = qualified.SetViewWithMVCCInput(key, value, input)
 		} else {
 			err = b.Set(key, value)
 		}

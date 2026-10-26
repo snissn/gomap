@@ -162,7 +162,11 @@ layout, split/rebalance/capacity and batch-height boundaries.
 allocation-free successor dispatch. `TestCOWLimitsAndRefusal`,
 `TestCOWFiniteReplacementHistoryAndResume` and `TestCOWRetainedGenerationPlateau`
 cover finite admission, cumulative replacement history, pinned residency and
-release/resumption. `BenchmarkCOWPrepareReplace`, `BenchmarkCOWCapture` and
+release/resumption. `TestCOWRawPreparationUsesRemainingCapacity` covers raw
+batches whose actual node work fits after the coarse bound refuses, genuine
+low-headroom refusal, retained old-root contents, whole-image publication,
+current-receipt rollback and full cleanup under unchanged finite limits.
+`BenchmarkCOWPrepareReplace`, `BenchmarkCOWCapture` and
 `BenchmarkCOWScan` witness internal N/2N preparation/capture/output costs; the
 [capture commands and scope](cow-memtable-ownership.md) keep these distinct from
 future integrated DB lifecycle qualification.

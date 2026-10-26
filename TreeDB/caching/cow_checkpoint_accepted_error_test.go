@@ -63,9 +63,11 @@ func TestCOWCheckpointRealAcceptedReportedErrorRetainsPrefixAndDoesNotReplay(t *
 	db.backend = backend
 	db.flushBackendMaxEntries = 1
 	for _, key := range []string{"a", "b", "c"} {
-		if err := db.Set([]byte(key), []byte("old")); err != nil {
+		inputKey, inputValue := []byte(key), []byte("old")
+		if err := db.Set(inputKey, inputValue); err != nil {
 			t.Fatal(err)
 		}
+		inputKey[0], inputValue[0] = 'X', 'X'
 	}
 	old, err := db.acquireCOWSnapshotWithError()
 	if err != nil {

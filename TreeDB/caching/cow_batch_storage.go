@@ -138,11 +138,11 @@ func (b *Batch) cowAddEntry(e batch.Entry, owned bool) error {
 			return b.cowState.err
 		}
 	}
+	n := len(e.Key) + len(e.Value)
+	if n < len(e.Key) {
+		return memtable.ErrCOWCapacity
+	}
 	if owned {
-		n := len(e.Key) + len(e.Value)
-		if n < len(e.Key) {
-			return memtable.ErrCOWCapacity
-		}
 		buf, err := b.cowCopyStorage(n)
 		if err != nil {
 			return err

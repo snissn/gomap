@@ -385,6 +385,10 @@ the cache is empty. Public copies preserve empty-value and missing-key semantics
 
 Supported mutations are point Set/Delete, explicit sync variants and point
 batches, including encoded MVCC groups and raw physical-delete replay.
+Synchronous COW point writes may borrow caller key/value buffers until the call
+returns: canonical publication, WAL/value-log framing and asynchronous trainer
+samples own any bytes they retain. Callers may reuse those buffers after return;
+ordinary public `Batch.Set` still copies its inputs before returning from Set.
 Callback mutations, native range deletion and manual
 backend/root bypass refuse before callbacks, WAL append, floor changes or
 visible point effects. Mixed unsupported batches are not partially applied.
