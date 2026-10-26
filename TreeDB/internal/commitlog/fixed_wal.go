@@ -111,17 +111,22 @@ type fixedWALSizePlan struct{ capacity, incoming int64 }
 // The plan lives only during existing exclusive writer ownership. It is a
 // physical reserve decision, never a logical frontier or durability receipt.
 func (w *Writer) fixedSuccessorSizePlan() (fixedWALSizePlan, error) {
-	plan := fixedWALSizePlan{incoming: w.fixedIncomingBytes}
-	if w.fixedBudget <= 0 {
+	return fixedSuccessorSizePlan(w.fixed, w.fixedBudget, w.fixedRotationReason, w.fixedIncomingBytes)
+}
+
+// Immutable inputs also let a journal prepare a predicted pressure reserve
+// without exposing the live Writer to its worker.
+func fixedSuccessorSizePlan(current *fixedWAL, budget int64, reason fixedWALRotationReason, incoming int64) (fixedWALSizePlan, error) {
+	plan := fixedWALSizePlan{incoming: incoming}
+	if budget <= 0 {
 		return plan, nil
 	}
-	budget := w.fixedBudget
 	base := min(int64(fixedWALDefaultCapacity), budget)
 	normal := base
-	if w.fixedRotationReason != fixedWALForcedRotation && w.fixed != nil {
-		previous := min(w.fixed.capacity, budget)
+	if reason != fixedWALForcedRotation && current != nil {
+		previous := min(current.capacity, budget)
 		normal = max(base, previous)
-		if w.fixedRotationReason == fixedWALPressureRotation {
+		if reason == fixedWALPressureRotation {
 			// Cap before addition: an oversized atomic frame grants no growth beyond B.
 			normal = budget
 			if previous < budget-previous {
@@ -203,9 +208,24 @@ func initializeFixedWAL(file **os.File, capacity int64, parent *os.File) (*fixed
 	if err != nil {
 		return nil, err
 	}
+	return publishFixedWALReplacement(file, parent, private, privateName, state)
+}
+
+// publishFixedWALReplacement is shared by synchronous initialization and the
+// journal's ahead reserve. Only the append owner calls it; private is already
+// fully initialized and must not be written again.
+func publishFixedWALReplacement(file **os.File, parent, private *os.File, privateName string, state *fixedWAL) (*fixedWAL, error) {
+	previous := *file
+	name := filepath.Base(previous.Name())
+	if err := rootpublication.ValidateStableChildLink(parent, private, privateName); err != nil {
+		return nil, err
+	}
 	initializedInfo, err := private.Stat()
 	if err != nil {
 		return nil, err
+	}
+	if !initializedInfo.Mode().IsRegular() || initializedInfo.Size() != state.capacity {
+		return nil, fmt.Errorf("%w: initialized fixed WAL reserve changed shape", rootpublication.ErrResourceConflict)
 	}
 	if err = rootpublication.ValidateStableChildLink(parent, previous, name); err != nil {
 		return nil, err
@@ -591,6 +611,10 @@ func neutralizeUnacceptedFixedSuccessor(file *os.File) error {
 // prepareFixedSuccessor never changes the current writer. Capacity and full
 // initialization sync must succeed before a successor handle/state is installed.
 func (w *Writer) prepareFixedSuccessor(file **os.File, parent *os.File, plan fixedWALSizePlan) (*fixedWAL, int64, walContainerSelection, error) {
+	return w.prepareFixedSuccessorAhead(file, parent, plan, nil)
+}
+
+func (w *Writer) prepareFixedSuccessorAhead(file **os.File, parent *os.File, plan fixedWALSizePlan, ahead *fixedWALAheadReserve) (*fixedWAL, int64, walContainerSelection, error) {
 	state, _, err := loadFixedWAL(*file)
 	if err != nil {
 		return nil, 0, walContainerSelection{}, err
@@ -605,7 +629,11 @@ func (w *Writer) prepareFixedSuccessor(file **os.File, parent *os.File, plan fix
 	}
 	needsCapacity := state != nil && state.logical == 0 && !state.fitsEmptyFrame(plan.incoming)
 	if (state == nil && selection.fixed) || needsCapacity {
-		state, err = initializeFixedWAL(file, plan.capacity, parent)
+		if ahead != nil && state == nil && info.Size() == 0 && plan.capacity == ahead.state.capacity {
+			state, err = publishFixedWALReplacement(file, parent, ahead.file, ahead.name, ahead.state)
+		} else {
+			state, err = initializeFixedWAL(file, plan.capacity, parent)
+		}
 		if err != nil {
 			return nil, 0, selection, err
 		}

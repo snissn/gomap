@@ -4532,6 +4532,36 @@ small initial reserve. Thus a large configured target does not require a large
 empty file at Open or after checkpoint, and sustained growth does not repeatedly
 initialize small segments. Only unpublished fresh successors can change size.
 
+A journal with an actual fixed container may prepare one pressure successor
+once its flushed physical occupancy reaches half capacity. It uses the same
+header, complete zero-fill and full-file synchronization under an unpublished
+`.wal-ahead-<32 lowercase hex>` name. The journal owns one worker and one extra
+reserve of at most 64 MiB; standalone Writers remain synchronous. Preparation
+neither creates a canonical segment nor reserves an LSN or certifies content.
+At rotation, only a ready exact generation, retained-parent/current-file identity,
+size-plan and frame-fit match may replace that rotation's newly created empty
+canonical successor through the existing rename, directory-sync and canonical
+reopen sequence. Existing occupied or pre-existing empty successors are not
+replaced by ahead material. New active tokens still have unsynced content.
+
+An in-flight or stale prediction never makes append wait for worker readiness:
+the ordinary synchronous path remains available. Its initialization can overlap
+a cancelled ahead reserve, so for normal plans up to 64 MiB the current,
+synchronous successor and extra reserve can total 192 MiB of file lengths.
+Only the extra 64 MiB is new; this is a per-journal bound, not a filesystem quota,
+and existing oversized atomic-frame/configured-target exceptions remain.
+Initialization buffers can overlap but append buffers are not shared with the
+worker. Forced/checkpoint resets discard predictions and retain small reserves.
+The first real preparation or exact cleanup error poisons the next observing
+entry before LSN assignment; an unused cancellation itself is not an error.
+Close cancels adoption and joins the worker and captured users while retaining
+owner/parent custody. Kernel I/O cannot be cancelled here, so a permanently
+stalled operation can permanently delay Close. Exclusive reopen removes at most
+one exact-name private orphan through retained-parent/no-follow validation before
+starting another; foreign entries, multiplicity or cleanup failures fail closed.
+This shifts reserve work and can waste or contend on it; it changes no extent
+framing, sync obligations, capacity policy or claimed performance result.
+
 Precisely, let `H=4096`, `W=96`, `A=64`, and `align` round upward to `A`.
 For a positive logical target `T`, the physical budget is
 `B=align(H+T+2*W+(A-1))`; otherwise `B=67,108,864`. The initial/reset reserve is

@@ -666,6 +666,10 @@ type writerRotationOutcome struct {
 }
 
 func (w *Writer) rotateToWithSyncObserved(path string, syncCurrent bool, root string, observe bool) (writerRotationOutcome, error) {
+	return w.rotateToWithSyncObservedAhead(path, syncCurrent, root, observe, nil)
+}
+
+func (w *Writer) rotateToWithSyncObservedAhead(path string, syncCurrent bool, root string, observe bool, ahead *fixedWALAheadReserve) (writerRotationOutcome, error) {
 	if w == nil {
 		return writerRotationOutcome{}, errors.New("commitlog: nil writer")
 	}
@@ -715,7 +719,12 @@ func (w *Writer) rotateToWithSyncObserved(path string, syncCurrent bool, root st
 			return writerRotationOutcome{}, errors.Join(err, file.Close())
 		}
 	}
-	state, size, selection, err := w.prepareFixedSuccessor(&file, preparedParent, plan)
+	// A pre-existing empty successor is not permission to replace its identity.
+	preparedAhead := ahead
+	if !created {
+		preparedAhead = nil
+	}
+	state, size, selection, err := w.prepareFixedSuccessorAhead(&file, preparedParent, plan, preparedAhead)
 	if err != nil {
 		// Keep ownership of the old descriptor; the failed candidate is never the
 		// writer's authoritative file, and is closed even after partial reserve I/O.

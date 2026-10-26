@@ -1052,3 +1052,18 @@ follow the existing policy and settle before durable ACK. Fixed-container
 initialization itself is completely synced before publication. Capacity changes
 do not change logical frontiers, dependency closure, or ACK requirements.
 Occupied published files retain their existing size and identity.
+
+
+A fixed-container journal can initialize one unpublished pressure successor
+behind current appends, using the same full reserve write/sync proof. The append
+owner alone adopts a ready exact-plan/identity match through existing canonical
+publication; it never uses the private diagnostic handle as its active resource.
+A miss keeps synchronous preparation without waiting for worker readiness.
+Forced resets, stale predictions and Close cancel adoption; exact cleanup and
+actual worker join remain mandatory. A cancelled worker and synchronous reserve
+may overlap, adding at most one extra 64 MiB reserve per eligible journal for
+normal plans. Uncancellable kernel I/O may delay Close indefinitely. A real
+background initialization/cleanup failure is retained and poisons the next
+observing entry before LSN assignment; earlier independent prefix proofs remain
+valid. No worker creates a token, changes a frontier, removes namespace debt or
+permits an early ACK. See the [container resource and lifecycle contract](storage-format.md#initialized-command-wal-container-v3).
