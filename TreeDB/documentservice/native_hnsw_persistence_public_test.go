@@ -9,8 +9,8 @@ import (
 	"github.com/snissn/gomap/TreeDB/collections"
 )
 
-// The reviewed benchmark's unchanged4096/128 corpus is also a public persistence
-// lifecycle: full Optimize, filtered reads, truthful Close, and cold reopen.
+// The reviewed benchmark's unchanged4096/128 corpus is also an explicit native
+// runtime persistence lifecycle: Optimize, filtered reads, Close, and cold reopen.
 func TestNativeHNSWServicePersistence4096(t *testing.T) {
 	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir())
 	opts.MemtableMode = "cow_btree"
@@ -50,7 +50,7 @@ func TestNativeHNSWServicePersistence4096(t *testing.T) {
 		t.Cleanup(closeOwners)
 	}
 	open()
-	info, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: name, Dimension: 2, ScalarFields: []ScalarFieldDeclaration{{Field: "meta.tenant", ValueType: ScalarFieldString}}})
+	info, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: name, Dimension: 2, VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyNativeRuntime}, ScalarFields: []ScalarFieldDeclaration{{Field: "meta.tenant", ValueType: ScalarFieldString}}})
 	if err != nil {
 		t.Fatal(err)
 	}

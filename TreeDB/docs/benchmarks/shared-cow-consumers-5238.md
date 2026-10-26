@@ -4,7 +4,11 @@
 fixture geometry (4096 ordinary JSON documents, two-dimensional embeddings,
 top10, ef100), adding sixteen declared scalar tenants. It exercises public
 collection Get and ordinary service keyword, Dense and combined Hybrid, including
-final document decode/projection. The strategy is omitted deliberately.
+final document decode/projection. The strategy is omitted deliberately. The
+current cosine omission policy remains `column_graph`; ordinary native-storage
+ColumnGraph service adoption is unmet, so the native arm currently refuses setup.
+Do not reinterpret that refusal as a passing default or make this workload
+explicit-runtime to replace a failed public-default comparison.
 
 `GOMAP_SERVICE_BENCH_BACKEND=legacy` uses
 `OpenBackendWithCachedLeafLog`; `native` uses `Open` plus
@@ -40,18 +44,19 @@ stdout/stderr, exit status, commands, source/harness/binary hashes, toolchain,
 profile and host/runtime isolation. Build outside timed collection; run fresh
 processes serially. All failed setup or query outcomes remain evidence.
 
-The intended early comparison is original first-slice legacy defaults versus
-new consumer legacy and native defaults, with one fixed alternating trio per
-diagnostic pair. Report resolved strategy and Dense route: the original default
-may be ColumnGraph/exact while the new default is native_runtime/ANN. This is a
-whole public-default comparison, not isolated attribution to COW or proof of
-identical approximate-search recall. The existing explicit native_runtime
-`BenchmarkServiceDenseNativeRuntimeVisibilityOverhead` remains the matched
-algorithm control. A few short processes are viability evidence only. Retained
-qualification requires a reviewed landed harness, frozen identities, explicit
-acceptance matrix and all original failures retained. These read rows do not
-qualify write ACK, tail SLOs, held-reader retention, or typed/quantized/partitioned
-and distributed service adoption.
+The historical early comparison used original first-slice legacy defaults
+versus a candidate new-omitted native_runtime/ANN default, with one fixed
+alternating trio per diagnostic pair. That blanket default change is retired;
+its original source/binary bindings and every failed or partial result remain
+historical evidence. Report resolved strategy and Dense route for every actual
+run. This omitted-strategy benchmark cannot currently supply a valid native
+same-default comparison. The existing explicit native_runtime
+`BenchmarkServiceDenseNativeRuntimeVisibilityOverhead` remains a matched
+algorithm control, not public-default acceptance. A few short processes are
+viability evidence only. Retained qualification requires a reviewed landed
+harness, frozen identities, explicit acceptance matrix and all original failures
+retained. These read rows do not qualify write ACK, tail SLOs, held-reader
+retention, or typed/quantized/partitioned and distributed service adoption.
 
 The original relaxed/atomic4096 setup produced nine retained attempts: three
 candidate legacy successes, three baseline Create failures, three native load

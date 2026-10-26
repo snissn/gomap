@@ -223,11 +223,11 @@ func (s *Service) createIndexLocked(ctx context.Context, req CreateIndexRequest)
 	if err != nil {
 		return IndexInfo{}, err
 	}
-	// Resolve an omitted strategy once from the stored declaration. New ordinary
-	// indexes use HNSW independently of the storage owner; existing indexes keep
-	// their strategy and still pass the normal complete-schema compatibility check.
+	// Preserve the metric's create default unless a stored declaration supplies
+	// the omitted strategy. Existing indexes still pass the normal complete-schema
+	// compatibility check; storage ownership does not select another algorithm.
 	defaultStrategy := collections.VectorIndexStrategyNativeRuntime
-	if req.TypedInput {
+	if metric == MetricCosine || req.TypedInput {
 		defaultStrategy = collections.VectorIndexStrategyColumnGraph
 	}
 	var existingMeta *collections.CollectionMeta

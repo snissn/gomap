@@ -257,14 +257,20 @@ Service-created indexes declare these stable names:
 - text field/index: `content`;
 - document type: `treedb_document_service_v1`.
 
-New ordinary indexes with omitted `vector_index_options.strategy` use
-`native_runtime` on both storage backends. Omission when opening an existing
-compatible index preserves its stored strategy; other schema and tuning checks
-still apply. Explicit `column_graph`, typed input, normalized representation and
-quantized declarations retain their existing contracts and eligibility. Cosine
-float32 ordinary HNSW supports indexed Dense ANN and Hybrid vector candidates;
-non-cosine indexes retain exact Dense scoring and do not advertise Hybrid vector
-capability.
+New ordinary indexes with omitted `vector_index_options.strategy` retain the
+metric's original policy: cosine uses `column_graph`; other supported metrics use
+`native_runtime`. Omission when opening an existing compatible index preserves
+its stored strategy; other schema and tuning checks still apply. Explicit
+`native_runtime`, typed input, normalized representation and quantized declarations
+retain their contracts and eligibility. Cosine float32 ordinary native-runtime
+HNSW supports indexed Dense ANN and Hybrid vector candidates; non-cosine indexes
+retain exact Dense scoring and do not advertise Hybrid vector capability.
+
+Ordinary native-storage ColumnGraph service adoption remains unsupported. A new
+omitted cosine request on an activated native owner refuses that capability; it
+does not substitute HNSW or fall back to a legacy owner. Retaining the original
+service default therefore does not establish general native service adoption.
+
 Metadata filters on keyword/hybrid routes require fields declared in
 `scalar_fields`; undeclared or unbounded filters fail closed.
 

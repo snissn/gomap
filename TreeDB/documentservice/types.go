@@ -128,9 +128,10 @@ type IndexInfo struct {
 }
 
 // BenchmarkVectorIndexOptions configures the service-owned collection vector
-// index for lifecycle setups. A new ordinary index defaults to native_runtime;
-// typed input, normalized representation and quantized declarations require
-// column_graph. Omitted strategy on an existing index preserves its declaration.
+// index for lifecycle setups. A new cosine index defaults to column_graph;
+// other metrics default to native_runtime. Typed input, normalized representation
+// and quantized declarations require column_graph. Omitted strategy on an
+// existing index preserves its declaration.
 type BenchmarkVectorIndexOptions struct {
 	Strategy         collections.VectorIndexStrategy       `json:"strategy,omitempty"`
 	Representation   collections.VectorIndexRepresentation `json:"representation,omitempty"`

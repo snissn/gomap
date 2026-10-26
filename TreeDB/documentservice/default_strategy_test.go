@@ -2,6 +2,7 @@ package documentservice
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"testing"
 
@@ -10,7 +11,9 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
-func TestServiceDefaultNativeRuntimePublic(t *testing.T) {
+// Explicit native_runtime preserves its public lifecycle on either owner;
+// omission after creation must keep that persisted declaration.
+func TestServiceExplicitNativeRuntimePublic(t *testing.T) {
 	for _, native := range []bool{false, true} {
 		role := "legacy"
 		if native {
@@ -70,16 +73,17 @@ func TestServiceDefaultNativeRuntimePublic(t *testing.T) {
 				}
 				open()
 				ctx := context.Background()
-				req := CreateIndexRequest{Name: "docs", Dimension: 2, ScalarFields: []ScalarFieldDeclaration{{Field: "meta.tenant", ValueType: ScalarFieldString}}}
+				req := CreateIndexRequest{Name: "docs", Dimension: 2, VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyNativeRuntime}, ScalarFields: []ScalarFieldDeclaration{{Field: "meta.tenant", ValueType: ScalarFieldString}}}
 				info, err := svc.CreateIndex(ctx, req)
 				if err != nil || info.VectorStrategy != collections.VectorIndexStrategyNativeRuntime {
-					t.Fatalf("default: %+v %v", info, err)
+					t.Fatalf("explicit runtime: %+v %v", info, err)
 				}
 				col, err := manager.OpenCollection(req.Name)
 				if err != nil {
 					t.Fatal(err)
 				}
 				before := col.Meta()
+				req.VectorIndexOptions = nil
 				again, err := svc.CreateIndex(ctx, req)
 				if err != nil || again.Generation != info.Generation || !reflect.DeepEqual(before, col.Meta()) {
 					t.Fatalf("idempotent: %+v %v", again, err)
@@ -146,11 +150,85 @@ func TestServiceDefaultNativeRuntimePublic(t *testing.T) {
 				open()
 				again, err = svc.CreateIndex(ctx, req)
 				if err != nil || again.Generation != info.Generation || again.VectorStrategy != info.VectorStrategy {
-					t.Fatalf("reopen default: %+v %v", again, err)
+					t.Fatalf("reopen stored runtime: %+v %v", again, err)
 				}
 				check()
 			})
 		}
+	}
+}
+
+func TestServiceDefaultVectorStrategyPublic(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		metric Metric
+		want   collections.VectorIndexStrategy
+	}{
+		{name: "omitted-metric", want: collections.VectorIndexStrategyColumnGraph},
+		{name: "cosine", metric: MetricCosine, want: collections.VectorIndexStrategyColumnGraph},
+		{name: "l2", metric: MetricL2, want: collections.VectorIndexStrategyNativeRuntime},
+		{name: "inner-product", metric: MetricInnerProduct, want: collections.VectorIndexStrategyNativeRuntime},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			svc, db := newTestService(t)
+			defer db.Close()
+			defer svc.Close()
+			req := CreateIndexRequest{Name: "default", Dimension: 2, Metric: test.metric}
+			info, err := svc.CreateIndex(context.Background(), req)
+			if err != nil || info.VectorStrategy != test.want {
+				t.Fatalf("omitted strategy: %+v %v", info, err)
+			}
+			again, err := svc.CreateIndex(context.Background(), req)
+			if err != nil || again.Generation != info.Generation || again.VectorStrategy != test.want {
+				t.Fatalf("idempotent omitted strategy: %+v %v", again, err)
+			}
+		})
+	}
+}
+
+// Ordinary native ColumnGraph service adoption is still unmet. An omitted
+// cosine strategy must refuse this unsupported capability without substituting
+// native_runtime or installing a partial collection.
+func TestServiceNativeDefaultColumnGraphUnsupported(t *testing.T) {
+	for _, profile := range []treedb.Profile{treedb.ProfileCommandWALDurable, treedb.ProfileCommandWALRelaxed, treedb.ProfileNoWALFast} {
+		t.Run(string(profile), func(t *testing.T) {
+			opts := treedb.OptionsFor(profile, t.TempDir())
+			opts.MemtableMode = "cow_btree"
+			opts.BackgroundCheckpointInterval = -1
+			opts.BackgroundCheckpointIdleDuration = -1
+			owner, err := treedb.Open(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if err := owner.Close(); err != nil {
+					t.Error(err)
+				}
+			}()
+			backend, err := owner.NativeSemanticBackend()
+			if err != nil {
+				t.Fatal(err)
+			}
+			manager := collections.NewCollectionManager(backend)
+			defer func() {
+				if err := manager.Close(); err != nil {
+					t.Error(err)
+				}
+			}()
+			svc := New(manager)
+			defer func() {
+				if err := svc.Close(); err != nil {
+					t.Error(err)
+				}
+			}()
+			_, err = svc.CreateIndex(context.Background(), CreateIndexRequest{Name: "default", Dimension: 2})
+			if !errors.Is(err, backenddb.ErrNativeSemanticUnsupported) {
+				t.Fatalf("unmet native ColumnGraph capability: %v", err)
+			}
+			if _, err := manager.OpenCollection("default"); !errors.Is(err, collections.ErrCollectionNotFound) {
+				t.Fatalf("refused default installed a collection: %v", err)
+			}
+		})
 	}
 }
 
@@ -200,14 +278,14 @@ func TestServiceExistingStrategyPreserved(t *testing.T) {
 			}
 		})
 	}
-	// Old default ColumnGraph declarations survive an actual owner reopen.
+	// Omitted cosine ColumnGraph declarations survive an actual owner reopen.
 	dir := t.TempDir()
 	db, err := backenddb.Open(testBackendOptions(dir))
 	if err != nil {
 		t.Fatal(err)
 	}
 	svc := New(collections.NewCollectionManager(db))
-	req := CreateIndexRequest{Name: "old-default", Dimension: 2, VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyColumnGraph}}
+	req := CreateIndexRequest{Name: "cosine-default", Dimension: 2}
 	first, err := svc.CreateIndex(context.Background(), req)
 	if err != nil {
 		t.Fatal(err)
@@ -240,7 +318,8 @@ func TestServiceDefaultStrategyEligibility(t *testing.T) {
 		want            collections.VectorIndexStrategy
 		invalid         bool
 	}{
-		{name: "ordinary", want: collections.VectorIndexStrategyNativeRuntime},
+		{name: "cosine", want: collections.VectorIndexStrategyColumnGraph},
+		{name: "stored-native", defaultStrategy: collections.VectorIndexStrategyNativeRuntime, want: collections.VectorIndexStrategyNativeRuntime},
 		{name: "typed", defaultStrategy: collections.VectorIndexStrategyColumnGraph, want: collections.VectorIndexStrategyColumnGraph},
 		{name: "normalized", opts: &BenchmarkVectorIndexOptions{Representation: collections.VectorIndexRepresentationCosineNormalizedF32V1}, want: collections.VectorIndexStrategyColumnGraph},
 		{name: "quantized", opts: &BenchmarkVectorIndexOptions{QuantizedIndexes: []QuantizedIndexInfo{{Name: "q"}}}, want: collections.VectorIndexStrategyColumnGraph},
@@ -250,7 +329,7 @@ func TestServiceDefaultStrategyEligibility(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			fallback := test.defaultStrategy
 			if fallback == "" {
-				fallback = collections.VectorIndexStrategyNativeRuntime
+				fallback = collections.VectorIndexStrategyColumnGraph
 			}
 			got, err := benchmarkVectorIndexOptionsForCreate(MetricCosine, test.opts, fallback)
 			if test.invalid {

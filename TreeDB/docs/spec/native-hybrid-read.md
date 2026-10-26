@@ -80,10 +80,12 @@ The public ordinary `idx.Search` retains its existing ownership and callback
 postvalidation; its query charge calculation is shared without changing ranking.
 
 Typed/ColumnGraph, normalized and quantized vector dispatch remain explicit and
-are not reinterpreted by this adapter. New ordinary service indexes with omitted
-strategy select maintained `native_runtime` on both storage backends. An existing
-index with omitted strategy binds its persisted algorithm; explicit advanced
-strategies retain their eligibility and capability contracts. Their broader native
+are not reinterpreted by this adapter. New ordinary service indexes retain the
+original omitted-strategy policy: cosine selects `column_graph`; other supported
+metrics select `native_runtime`. An existing index with omitted strategy binds its
+persisted algorithm. Explicit native-runtime HNSW remains supported within this
+adapter's capability; ordinary native ColumnGraph service adoption remains unmet
+and refuses without algorithm substitution or legacy fallback. Broader native
 adoption and actual server storage defaults remain separate parent obligations.
 The original eight-cell service fixture and partial failure stay in the evidence;
 these dispatch rules do not establish performance acceptance.

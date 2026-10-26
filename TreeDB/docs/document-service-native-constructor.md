@@ -33,12 +33,18 @@ This accessor adds no acknowledgement or durability boundary.
 
 ## Service vector strategy selection
 
-New ordinary service indexes use the maintained `native_runtime` HNSW strategy
-when `vector_index_options.strategy` is omitted, for both legacy and native
-storage owners. `IndexInfo.vector_strategy` reports the selected declaration.
-An explicitly selected `column_graph`, typed input, normalized representation or
-quantized declaration retains its ColumnGraph contract; these requests are never
-reinterpreted or retried as ordinary HNSW.
+New ordinary service indexes retain the original metric-based strategy when
+`vector_index_options.strategy` is omitted: cosine selects `column_graph`; other
+supported metrics select `native_runtime`. `IndexInfo.vector_strategy` reports
+the selected declaration. Explicit native-runtime HNSW remains available within
+its supported capability. Typed input, normalized representation and quantized
+declarations retain their ColumnGraph contracts.
+
+Ordinary native-storage ColumnGraph service adoption remains unmet. New omitted
+cosine requests on an activated native owner refuse unsupported capability;
+there is no algorithm substitution or legacy fallback after activation. The
+native constructor is a capability boundary, not proof of general service
+adoption or a requirement to change the existing algorithm default.
 
 An idempotent Create with omitted strategy derives only the stored strategy from
 the existing service declaration. Existing ColumnGraph indexes keep their schema
