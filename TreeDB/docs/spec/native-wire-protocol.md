@@ -553,10 +553,44 @@ index_storage_policy
 vector_indexes
 quantized_indexes
 scalar_u8_calibration
+text_indexes
 ```
 
-The current nativewire collection metadata frame version is `5`; version `5`
-includes persisted scalar_u8 calibration semantics for quantized vector indexes.
+Collection metadata emission uses version `5` for schemas without text indexes
+or a column store, preserving its scalar_u8 calibration encoding. Version `6`
+adds the maintained column-store schema payload. These non-text encodings and
+versions `1` through `6` decoding remain unchanged.
+
+Schemas declaring text indexes use version `7`: `uvarint(7)` followed directly
+by the canonical catalog-create command-WAL payload returned by
+`collections.EncodeCatalogCreateCollectionCommandWALPayload`. That payload has a
+little-endian `uint16(1)`, two little-endian `uint32` byte lengths (collection
+name, metadata), the collection name, and the current canonical persisted
+`CollectionMeta` JSON document. The envelope name must match the metadata name.
+V7 carries the full maintained logical metadata model rather than another text
+serializer: fields and weights, analyzer and stop words, text V1/V2 version,
+rollout, positions/offsets, storage policy, schema generation, all collection
+options, and scalar/vector/column declarations. Text defaults and restrictions
+use the collections normalizer; unsupported analyzers, stemming, synonyms,
+rollout modes, versions, invalid weights and contradictory options fail closed.
+
+V7 requires current canonical metadata bytes. Unknown fields, duplicate keys,
+case aliases, trailing JSON or payload bytes, unsupported inner versions and
+normalization-changing spellings are rejected. Create requests are bounded to
+1 MiB of catalog payload before JSON allocation and at most 65,536 declarations
+of each index kind. Existing column create limits (16 KiB, 1..32 columns, no
+physical authority) and deterministic name/opaque limits still apply. Metadata
+responses preserve durable schemas under the enclosing frame/section limits.
+The client normalizes before sending; the server validates before catalog or
+WAL effects. Native create retains its existing fast collection data/index-state
+policy override while preserving declared text-index policies. Deterministic
+create validation and Raft lowering use the same strict decoder.
+
+Older peers reject V7 instead of silently dropping text declarations. This
+pre-alpha wire addition adds no on-disk migration and does not change historical
+WAL replay compatibility. It adds metadata fidelity to create/list/mutation
+responses, with no new text-query transport command.
+
 Metadata mutation responses SHOULD include the resulting catalog version or
 equivalent schema guard. Later single-node mutation requests MAY use
 `expected_catalog_version` to fail fast when a client planned against stale

@@ -2749,9 +2749,38 @@ Coverage:
     vectors, request body section encoding/decoding, decode+validate, and
     deterministic-entry encoding.
 
-The native-wire server does not exist yet. R0 follow-up work must add
-broader negative conformance fixtures, drift tests, and direct collection parity
-tests before claiming native-wire v1 server support.
+Collection metadata V7 coverage:
+- `TreeDB/nativewire/text_metadata_v7_test.go`:
+  - `TestTextMetadataV7PublicCreateListReopen` checks real client/server
+    Create/List and durable reopen through the ordinary shared COW factory,
+    across JSON/BSON/template-v1 and explicit text V1/V2, with complete text
+    declaration and catalog equality.
+  - `TestTextMetadataV7CanonicalCodecAndDeterministicCreate` checks exact V7
+    catalog-payload bytes, deterministic re-encoding and deterministic-entry
+    admission. The opaque section 107 registry contract and existing ID/entry
+    goldens stay unchanged.
+  - `TestTextMetadataV7InvalidDeclarationsHaveNoEffects` and
+    `TestTextMetadataV7HostilePayloadsHaveNoEffects` cover unsupported semantic
+    declarations and malformed, unknown, duplicate, trailing, mismatched and
+    bounded payloads without catalog-version or WAL-LSN effects.
+- `TreeDB/internal/raftapply/text_metadata_v7_test.go`:
+  - `TestCreateCollectionMetaV7LowersFullTextDeclaration` checks full V7
+    declaration lowering and malformed-envelope rejection.
+- Existing `TestCollectionMetaNilColumnStoreExactV5Bytes`,
+  `TestCollectionMetaPhysicalV6RoundTripAndCreateValidation`,
+  `TestMetadataDurableColumnStoreExceedsCreateBounds` and
+  `TestMetadataOversizedColumnStoreBytesRefusesCreate` remain compatibility and
+  column-authority controls.
+
+Focused selectors are `go test ./TreeDB/nativewire -run TestTextMetadataV7`
+and `go test ./TreeDB/internal/raftapply -run TestCreateCollectionMetaV7`.
+Affected-package qualification also includes collections, internal/nativewire,
+internal/raftentry, internal/raftapply and nativewire. These controls map the
+metadata change; they do not substitute for current-head runtime evidence,
+live distributed qualification or final product performance gates.
+
+The original R0 codec entries above do not alone establish server parity;
+current server changes also require their mapped public lifecycle controls.
 
 # Vector partition M1 verification
 

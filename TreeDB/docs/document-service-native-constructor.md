@@ -25,6 +25,12 @@ APIs retain their contracts and callbacks. This plain API does not grant those
 capabilities to the native facade. The selected native canonical apply wrapper
 continues to use the original native planner and its assigned-command result.
 
+The public owner's `DeferredVectorBuildMaintenance()` capability gives the
+service the same database's existing deferred-build control. A scoped service
+keeps its own epoch identity; the capability neither opens another database nor
+extends its lifetime. Close the service before closing the original owner.
+This accessor adds no acknowledgement or durability boundary.
+
 ## Service vector strategy selection
 
 New ordinary service indexes use the maintained `native_runtime` HNSW strategy

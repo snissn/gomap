@@ -15,7 +15,7 @@ import (
 type CollectionHandle uint64
 
 const (
-	collectionMetaWireVersion          = 6
+	collectionMetaWireVersion          = 7
 	maxCollectionMetaIndexDefinitions  = 1 << 16
 	minEncodedIndexDefinitionLen       = 6
 	minEncodedVectorIndexDefinitionLen = 7
@@ -52,6 +52,13 @@ func appendCollectionHandleRefPayload(dst []byte, handle CollectionHandle) []byt
 }
 
 func encodeCollectionMeta(meta collections.CollectionMeta) ([]byte, error) {
+	if len(meta.TextIndexes) != 0 {
+		payload, err := collections.EncodeCatalogCreateCollectionCommandWALPayload(meta)
+		if err != nil {
+			return nil, invalidMetadata("%v", err)
+		}
+		return append(binary.AppendUvarint(nil, 7), payload...), nil
+	}
 	version := uint64(5)
 	var columnSchema []byte
 	if meta.Options.ColumnStore != nil {
@@ -91,12 +98,23 @@ func encodeCollectionMeta(meta collections.CollectionMeta) ([]byte, error) {
 }
 
 func decodeCollectionMeta(src []byte) (collections.CollectionMeta, error) {
+	return decodeCollectionMetaForPurpose(src, false)
+}
+
+func decodeCollectionMetaForPurpose(src []byte, create bool) (collections.CollectionMeta, error) {
 	version, off, err := readUvarint(src)
 	if err != nil {
 		return collections.CollectionMeta{}, err
 	}
 	if version < 1 || version > collectionMetaWireVersion {
 		return collections.CollectionMeta{}, protocolError(iwire.ErrUnsupportedVersion, "collection_meta version %d", version)
+	}
+	if version == 7 {
+		meta, err := collections.DecodeCatalogCreateCollectionCommandWALPayload(src[off:], create)
+		if err != nil {
+			return collections.CollectionMeta{}, invalidMetadata("%v", err)
+		}
+		return meta, nil
 	}
 	name, err := readString(src, &off)
 	if err != nil {
@@ -1323,6 +1341,16 @@ func normalizeClientCollectionMeta(meta collections.CollectionMeta) (collections
 			return collections.CollectionMeta{}, invalidMetadata("%v", err)
 		}
 		meta.Options.ColumnStore, err = collections.DecodeColumnStoreWireConfigV1(meta.Name, raw, true)
+		if err != nil {
+			return collections.CollectionMeta{}, invalidMetadata("%v", err)
+		}
+	}
+	if len(meta.TextIndexes) != 0 {
+		payload, err := collections.EncodeCatalogCreateCollectionCommandWALPayload(meta)
+		if err != nil {
+			return collections.CollectionMeta{}, invalidMetadata("%v", err)
+		}
+		meta, err = collections.DecodeCatalogCreateCollectionCommandWALPayload(payload, true)
 		if err != nil {
 			return collections.CollectionMeta{}, invalidMetadata("%v", err)
 		}

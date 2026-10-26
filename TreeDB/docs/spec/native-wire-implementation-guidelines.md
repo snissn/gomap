@@ -50,6 +50,27 @@ When the schema grows enough that manual duplication becomes risky, generate
 either constants or documentation tables from the registry. Do not introduce a
 generator until it removes real drift risk.
 
+### Collection metadata V7
+
+Text-bearing collection metadata uses the V7 payload contract in protocol
+section 9. Keep the full catalog-create codec and its strict inverse as the
+shared schema boundary for nativewire response/create decoding, deterministic
+validation, and Raft lowering; do not add another text-definition serializer.
+The existing `create_collection` command remains version 1 and section 107
+remains the required deterministic opaque `collection_meta` field. No command,
+section, feature, or error ID changes, so existing ID and legacy entry golden
+bytes remain fixed. `TestTextMetadataV7CanonicalCodecAndDeterministicCreate`
+checks exact V7 bytes against the maintained canonical catalog payload and
+re-encoding, while the public Create/List/reopen and hostile-input controls
+check semantics independently. Keep the V5 exact-byte and V6 column controls.
+
+V7 create decoding must enforce its 1 MiB bound before JSON allocation, plus
+semantic normalization, canonical bytes, index counts, deterministic name
+limits and existing column create authority/bounds. Response decoding retains
+the enclosing frame limits. Historical WAL replay must retain its own
+compatibility decoder. This is a pre-alpha metadata addition; it does not add
+text-query transport or establish live multi-node qualification.
+
 ## 3. Package Boundaries
 
 The exact package names can change, but the implementation should preserve these

@@ -45,7 +45,7 @@ const (
 	deterministicTemplateV1MaxDepth       = 64
 	minDeterministicIndexDefinitionLen    = 6
 	minDeterministicVectorDefinitionLen   = 7
-	maxDeterministicCollectionMetaVersion = 6
+	maxDeterministicCollectionMetaVersion = 7
 	maxDeterministicCollectionIndexes     = 1 << 16
 	maxDeterministicUint32                = uint64(^uint32(0))
 )
@@ -1198,6 +1198,31 @@ func validateDeterministicCollectionMeta(raw []byte, limits Limits) error {
 	}
 	if version < 1 || version > maxDeterministicCollectionMetaVersion {
 		return protocolError(ErrUnsupportedVersion, "collection_meta version %d", version)
+	}
+	if version == 7 {
+		meta, err := collections.DecodeCatalogCreateCollectionCommandWALPayload(raw[off:], true)
+		if err != nil {
+			return protocolError(ErrInvalidCommand, "collection_meta: %v", err)
+		}
+		if err := validateDeterministicNameValue("collection name", []byte(meta.Name), limits); err != nil {
+			return err
+		}
+		for _, def := range meta.Indexes {
+			if err := validateDeterministicNameValue("index name", []byte(def.Name), limits); err != nil {
+				return err
+			}
+		}
+		for _, def := range meta.VectorIndexes {
+			if err := validateDeterministicNameValue("index name", []byte(def.Name), limits); err != nil {
+				return err
+			}
+		}
+		for _, def := range meta.TextIndexes {
+			if err := validateDeterministicNameValue("index name", []byte(def.Name), limits); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 	nameOff := off
 	if err := readDeterministicNameField(raw, &off, "collection name", limits); err != nil {

@@ -25,7 +25,7 @@ func (s *Server) handleCreateCollection(sections []iwire.Section) ([]iwire.Secti
 	if err != nil {
 		return nil, err
 	}
-	meta, err := decodeCollectionMeta(raw)
+	meta, err := decodeCollectionMetaForPurpose(raw, true)
 	if err != nil {
 		return nil, err
 	}
