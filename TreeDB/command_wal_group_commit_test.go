@@ -112,7 +112,7 @@ func TestPublicCommandWALGroupCommitSharesOneSyncAcrossConcurrentWaiters(t *test
 	}
 }
 
-func TestPublicCommandWALGroupCommitSoloDurableSyncBypassesCollection(t *testing.T) {
+func TestPublicCommandWALGroupCommitSingletonUsesCapturedPrefix(t *testing.T) {
 	dir := t.TempDir()
 	opts := commandWALDurabilityProofOptions(dir)
 	db, err := Open(opts)
@@ -128,21 +128,22 @@ func TestPublicCommandWALGroupCommitSoloDurableSyncBypassesCollection(t *testing
 	after := db.Stats()
 	requirePublicStatDelta(t, before, after, "treedb.command_wal.append.count_total", 1)
 	requirePublicStatDelta(t, before, after, "treedb.command_wal.file_sync.calls_total", 1)
-	requirePublicStatDelta(t, before, after, "treedb.command_wal.sync.barrier.count_total", 0)
-	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.groups_total", 0)
-	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.syncs_total", 0)
-	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.bypasses_total", 1)
-	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.bypass.reason.solo_durable_sync_total", 1)
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.sync.barrier.count_total", 1)
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.groups_total", 1)
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.syncs_total", 1)
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.bypasses_total", 0)
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.trigger.timeout_total", 0)
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.bypass.reason.solo_durable_sync_total", 0)
+	db.commandWALGroupCommit.mu.Lock()
+	timer := db.commandWALGroupCommit.timer
+	db.commandWALGroupCommit.mu.Unlock()
+	if timer != nil {
+		t.Fatal("immediate captured singleton initialized a collection timer")
+	}
 
 	frames := scanPublicCommandWALV2(t, dir)
-	if len(frames) != 1 {
-		t.Fatalf("solo durable frames=%+v, want one directly synced mutation", frames)
-	}
-	if frames[0].Kind == commitlog.CommandKindDurablePrefixBarrier {
-		t.Fatalf("solo durable frame=%+v, want mutation rather than collection barrier", frames[0])
-	}
-	if frames[0].DurabilityClass != commitlog.CommandDurabilityDurable {
-		t.Fatalf("solo durable frame class=%v, want durable", frames[0].DurabilityClass)
+	if len(frames) != 1 || frames[0].Kind == commitlog.CommandKindDurablePrefixBarrier || frames[0].DurabilityClass != commitlog.CommandDurabilityDurable {
+		t.Fatalf("singleton frames=%+v, want one durable-class mutation with captured sync", frames)
 	}
 }
 
@@ -282,7 +283,10 @@ func TestPublicCommandWALGroupCommitSoloDurableTicketBlocksLaterRelaxedPublicati
 		releaseSoloOnce.Do(func() { close(releaseSolo) })
 	}
 	defer releaseSoloPublication()
-	db.commandWALGroupCommit.testAfterSoloRegister = func(ticket uint64) {
+	db.commandWALGroupCommit.testAfterRegister = func(ticket uint64, durable bool) {
+		if !durable {
+			return
+		}
 		if ticket != 1 {
 			t.Errorf("solo ticket=%d, want 1", ticket)
 		}
@@ -311,7 +315,7 @@ func TestPublicCommandWALGroupCommitSoloDurableTicketBlocksLaterRelaxedPublicati
 		completedTicket := db.commandWALGroupCommit.completedTicket
 		publishTicket := db.commandWALGroupCommit.publishTicket
 		db.commandWALGroupCommit.mu.Unlock()
-		if nextTicket == 2 && completedTicket == 2 && publishTicket == 1 {
+		if nextTicket == 2 && completedTicket == 0 && publishTicket == 1 {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -1630,7 +1634,7 @@ func TestPublicCommandWALGroupCommitLowTrafficTimeoutMakesProgress(t *testing.T)
 
 func TestPublicCommandWALGroupCommitDependencyFailurePoisonsAllWaiters(t *testing.T) {
 	opts := commandWALDurabilityProofOptions(t.TempDir())
-	opts.CommandWALSegmentTargetBytes = 1
+	opts.CommandWALSegmentTargetBytes = publicCommandWALSingleFrameTarget(t, []byte("failure-group/0"), []byte("value"))
 	db, err := Open(opts)
 	if err != nil {
 		t.Fatalf("Open command WAL: %v", err)
@@ -1640,19 +1644,93 @@ func TestPublicCommandWALGroupCommitDependencyFailurePoisonsAllWaiters(t *testin
 	db.commandWALGroupCommit.delay = time.Second
 	db.commandWALGroupCommit.maxCommits = 2
 	db.commandWALGroupCommit.maxBytes = 1 << 30
+	var syncingGroup atomic.Int32
+	db.commandWALGroupCommit.testBeforeSync = func(size int) { syncingGroup.Store(int32(size)) }
 	before := db.Stats()
 	cutErr := errors.New("injected grouped dependency sync failure")
 	var cutOnce sync.Once
+	var initializers atomic.Int32
+	var cutPublished atomic.Bool
+	var retainedDebtSyncs atomic.Int32
+	var appendedLSN atomic.Uint64
+	var observeMu sync.Mutex
+	var debtFramePath, lastFramePath string
+	var debtFrameIdentity, lastFrameIdentity os.FileInfo
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		observeMu.Lock()
+		defer observeMu.Unlock()
+		if event.Resource == durabilitycut.ResourceCommandWAL && event.Point == durabilitycut.AfterDependencyAppend {
+			appendedLSN.Store(event.LSN)
+			if event.LSN == 1 {
+				debtFramePath = event.Path
+				var err error
+				debtFrameIdentity, err = os.Stat(event.Path)
+				if err != nil {
+					return err
+				}
+			}
+			if event.LSN == 2 {
+				lastFramePath = event.Path
+				var err error
+				lastFrameIdentity, err = os.Stat(event.Path)
+				if err != nil {
+					return err
+				}
+			}
+		}
 		if event.Resource == durabilitycut.ResourceCommandWAL && event.Point == durabilitycut.BeforeDependencyFileSync {
-			var err error
-			cutOnce.Do(func() { err = cutErr })
-			return err
+			// Validate the exact earlier debt file, then cut the retained LSN2
+			// writer sync before the barrier append. Initializer I/O must
+			// complete without becoming the fault; no pathname-only sync qualifies.
+			initialization, err := commandWALFixtureSyncIdentity(event)
+			if err != nil {
+				return err
+			}
+			if initialization {
+				initializers.Add(1)
+				return nil
+			}
+			if syncingGroup.Load() != 2 || appendedLSN.Load() != 2 {
+				return fmt.Errorf("published frame dependency sync began with group size %d and appended LSN %d, want 2/2", syncingGroup.Load(), appendedLSN.Load())
+			}
+			held, err := event.StablePath.Stat()
+			if err != nil {
+				return err
+			}
+			if debtFrameIdentity != nil && event.Path == debtFramePath && os.SameFile(held, debtFrameIdentity) {
+				if debtFramePath == lastFramePath || lastFrameIdentity == nil || os.SameFile(debtFrameIdentity, lastFrameIdentity) {
+					return fmt.Errorf("debt and LSN2 frame did not occupy distinct physical segments")
+				}
+				retainedDebtSyncs.Add(1)
+				return nil
+			}
+			if lastFrameIdentity == nil || event.Path != lastFramePath || !os.SameFile(held, lastFrameIdentity) {
+				return fmt.Errorf("dependency cut does not retain the published LSN2 frame file: %#v", event)
+			}
+			var injected error
+			cutOnce.Do(func() {
+				cutPublished.Store(true)
+				injected = cutErr
+			})
+			return injected
 		}
 		return nil
 	})
 	errs := runPublicCommandWALGroupWaiters(db, 2)
 	restore()
+	if !cutPublished.Load() || syncingGroup.Load() != 2 {
+		t.Fatalf("cut published dependency=%t group=%d, want true/2", cutPublished.Load(), syncingGroup.Load())
+	}
+	if retainedDebtSyncs.Load() == 0 {
+		t.Fatal("did not observe preceding exact retained LSN1 rotation debt sync")
+	}
+	wantInitializers := int32(0)
+	if db.Stats()["treedb.command_wal.writer.container"] == "fixed" {
+		wantInitializers = 1
+	}
+	if initializers.Load() != wantInitializers {
+		t.Fatalf("private initializer attempts=%d want=%d, separately from frame dependency attempts", initializers.Load(), wantInitializers)
+	}
 
 	for i, err := range errs {
 		if !errors.Is(err, cutErr) {

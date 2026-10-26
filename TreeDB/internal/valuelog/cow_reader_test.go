@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -532,5 +533,74 @@ func TestCOWLeafRecordBoundedRawCompactAndCompressed(t *testing.T) {
 	f, p := cowTestLeafRecord(t, bad, BlockCodecNone)
 	if _, err := InspectCOWLeafRecord(f, p, cowTestLimits); !errors.Is(err, ErrCorrupt) {
 		t.Fatal(err)
+	}
+}
+
+// Owned output shares full validation/decode with borrowed reads but does not
+// require a second value-sized scratch. No decoder/input alias may escape.
+func TestCOWAppendRecordOwnedOutput(t *testing.T) {
+	for _, codec := range []BlockCodec{BlockCodecNone, BlockCodecSnappy, BlockCodecLZ4, BlockCodecZSTD} {
+		t.Run(fmt.Sprint(codec), func(t *testing.T) {
+			want := bytes.Repeat([]byte("owned-record-value"), 300)
+			body := want
+			var decode COWDecodeFunc
+			grouped := codec != BlockCodecNone
+			if grouped {
+				encoded, err := encodeBlockPayload(codec, want, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				body = cowTestFrame(0, codec, [][]byte{want}, encoded)
+				decoder, err := NewCOWDecoder(0, nil, 1<<20, 1<<20, 1<<20, func(COWDecoderAllocationSizes) error { return nil })
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer decoder.Close()
+				decode = decoder.Decode
+			}
+			f, ptr, record := cowTestRecord(t, body, grouped, 0)
+			shape, err := InspectCOWRecord(f, ptr, cowTestLimits)
+			if err != nil {
+				t.Fatal(err)
+			}
+			input, raw := make([]byte, shape.PayloadBytes()), make([]byte, shape.RawBytes)
+			prefix := []byte("prefix:")
+			dst := make([]byte, len(prefix), len(prefix)+len(want))
+			copy(dst, prefix)
+			out, err := AppendCOWRecord(f, ptr, shape, true, input, raw, dst, decode)
+			if err != nil || !bytes.Equal(out[:len(prefix)], prefix) || !bytes.Equal(out[len(prefix):], want) {
+				t.Fatalf("owned append: %d %v", len(out), err)
+			}
+			clear(input)
+			clear(raw)
+			if !bytes.Equal(out[len(prefix):], want) {
+				t.Fatal("returned decoder/input alias")
+			}
+			calls := 0
+			wrongDecoder := func(FrameHeader, []byte, []byte) ([]byte, error) { calls++; return nil, errors.New("decode failure") }
+			if grouped {
+				got, err := AppendCOWRecord(f, ptr, shape, true, input, raw, dst, wrongDecoder)
+				if err == nil || !bytes.Equal(got, prefix) || calls != 1 {
+					t.Fatalf("decode error changed dst: %q %v calls=%d", got, err, calls)
+				}
+			}
+			damaged := append([]byte(nil), record...)
+			damaged[len(damaged)-1] ^= 1
+			if _, err := f.WriteAt(damaged, 0); err != nil {
+				t.Fatal(err)
+			}
+			calls = 0
+			got, err := AppendCOWRecord(f, ptr, shape, true, input, raw, dst, wrongDecoder)
+			if !errors.Is(err, ErrCorrupt) || !bytes.Equal(got, prefix) || calls != 0 {
+				t.Fatalf("CRC error changed dst or decoded: %q %v calls=%d", got, err, calls)
+			}
+			if _, err := f.WriteAt(record, 0); err != nil {
+				t.Fatal(err)
+			}
+			got, err = AppendCOWRecord(f, ptr, shape, true, input[:0:0], raw, dst, decode)
+			if !errors.Is(err, ErrCOWReadCapacity) || !bytes.Equal(got, prefix) {
+				t.Fatalf("capacity error changed dst: %q %v", got, err)
+			}
+		})
 	}
 }

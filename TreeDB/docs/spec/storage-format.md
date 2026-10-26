@@ -941,8 +941,13 @@ Inline absence allocates no component page. Put components and dependency
 metadata use distinct physical bank identities with checksums and digests.
 
 Publication makes required DATA and external dependencies durable before
-installing the alternate complete capsule and fencing the actual PRIMARY
-file. This is the selected format's durable authority: DATA META pages 0 and 1
+installing the alternate complete capsule. Newly sealed PRIMARY banks and that
+capsule share one final full-dirty synchronization of the exact captured PRIMARY
+file. The currently selected capsule and every byte of its current and parent
+closures remain retained and unmodified through completion. A complete-looking
+new capsule is eligible only when its entire physical closure validates; before
+the final fence, recovery can select the previous slot or a completely persisted
+new slot. This is the selected format's durable authority: DATA META pages 0 and 1
 are not rewritten as a second selector. Ordinary `DurabilityNoWALFast` visibility
 and ACK still may precede this sealed root; explicit Sync, Checkpoint and clean
 Close require a complete eligible publication. A failure after capsule bytes
@@ -4235,12 +4240,21 @@ decodes and independently validates both eligible physical slots and each
 current/parent resource closure; no historical selector or parent promotion is
 introduced.
 
-Required DATA and external dependencies, including newly referenced PRIMARY
-component/dependency banks and their namespaces, still become durable before
-alternate capsule installation. The final PRIMARY capsule fence is additional.
-An immutable validation certificate is not a completed durability-cut authority
-and cannot remove these sync obligations. Relaxed ordinary ACK remains a visible
-publication; explicit durable operations retain the existing seal boundary.
+Required DATA and external files retain their separate durability and namespace
+obligations. V6 capsule publication stages the opposite capsule without fencing,
+then uses a fresh captured PRIMARY token to synchronize all dirty PRIMARY bank
+and capsule mappings and the retained file once. On platforms requiring mapped
+flushes, flushing only the capsule span is insufficient. The previous actual
+slot and both of its physical closures remain intact until completion; the
+existing selector rejects a partially persisted newer closure.
+
+An immutable validation certificate grants no completed durability credit. The
+fresh PRIMARY token cannot import a pre-install synced frontier. Failure after
+the first possible capsule store remains ambiguous and prevents another slot
+overwrite until reopen. Namespace completion remains required before durable
+completion. Other publication formats retain their existing ordering. Relaxed
+ordinary ACK remains a visible publication; explicit durable operations retain
+the existing seal boundary. No format, selector or default DATA routing changes.
 
 ### Nativewire collection metadata physical schema (version 6)
 
@@ -4379,3 +4393,240 @@ ordinary publications also retain captured created/current leaf-file identities
 edges or logical ValuePtrs. Exact destructive receipts remove that superset.
 Ordered multi-root publications retain their separately proven descriptor/delta
 projection; their pager-backed index layout does not imply ordinary DATA role.
+
+## Initialized command-WAL container v3
+
+Fresh production command-journal segments select their container once, using
+filesystem information from the actual opened file. Positively identified
+`tmpfs` or `ramfs` uses the existing stream container with strict V2 frames and
+full-file synchronization: preinitialized capacity provides no persistent
+file-growth advantage on those filesystems. Supported persistent filesystems,
+unknown filesystems, and classification errors retain the initialized
+fixed-capacity container. Platforms without fixed-container publication retain
+the stream fallback described below. The same policy applies to both rotation
+routes and newly created empty successors; it does not depend on the command,
+workload, benchmark, profile, concurrency, or timing.
+
+Existing file contents are inspected before creation policy is considered.
+An occupied stream or fixed file keeps its detected format and corresponding
+sync primitive, including when reopened on another filesystem. Database open may start a
+fresh active sequence; that new segment follows creation policy while historical
+segments keep their detected formats. Captured handles retain their actual
+format through rotation. Selection does not convert files or
+change strict frame validation, dependency closure, durable-prefix advancement,
+or acknowledgement semantics. Explicit low-level fixed-container creation
+remains available for physical-format controls; platform support does not mean
+that every automatically created file uses that format.
+
+The fixed-capacity container wraps unchanged length/CRC-bounded V2 frames. Its
+pre-alpha format version is separate from the inner command frame version.
+Intact stream segments remain readable; no migration is performed.
+
+The 4096-byte container header starts with `TDBWAL\x03\x00`, a random 16-byte
+segment identity, physical capacity, and a CRC32C. Reserved header bytes and
+unused capacity are initialized to zero. Creation writes every reserved byte,
+fully syncs a private `.wal-initialize-*` file, and atomically publishes the
+complete container over the still-empty canonical segment before appending
+frames. Supported Unix publication uses retained-parent rename and directory
+sync; the reopened replacement is checked against the initialized physical identity.
+Windows does not expose this retained-parent atomic publication contract, so
+fresh Windows segments retain the original stream format and full-file sync.
+Existing V3 containers remain readable on Windows; subsequent rotation creates
+a stream successor. Direct fixed-container initialization fails with typed
+`ErrNamespacePersistenceUnsupported` before changing canonical bytes or handles.
+This selection is automatic and adds no durability option. Private initialization
+names are ignored by recovery. A process stop during reserve writes therefore
+leaves either the original empty canonical segment or a complete initialized
+container, never an accepted magic prefix with a short reserve. A sparse
+truncate or unwritten preallocation is insufficient. An installed empty
+container that cannot hold the incoming frame rotates to a larger successor;
+its existing header/reserve are never grown in place. A validated empty,
+not-yet-installed successor may be replaced through the same atomic publication.
+Accepted-container corruption continues to fail closed without an initialization
+recovery exception.
+
+Each immutable extent contains one unchanged command frame, with 96-byte start
+and end witnesses. Padding places each end witness on a 64-byte boundary;
+subsequent starts follow the preceding 96-byte end witness. Witnesses bind the
+container identity, physical start/end, logical stream start/length, first/last
+LSN, data checksum, and their own checksum. Padding is zero. The end witness is
+redundant framing evidence; it does not establish a durable LSN. Appending a
+successor never overwrites a predecessor's data or positive end witness. This
+uses the existing POSIX sync model: completed sync persists preceding writes,
+and a later write can tear only its own byte range. Extents with this padding
+can share a physical sector/page; this format does not claim protection against
+sector-wide collateral damage to adjacent acknowledged bytes.
+
+Opening scans the complete reserve and validates occupied extents. Zero bytes
+at a candidate boundary do not establish EOF until all remaining capacity is
+verified unused. A damaged start, unknown occupied suffix, hole, checksum
+failure, overlap, or inconsistent identity/order fails closed. A torn redundant
+end witness may be reconstructed only from valid independent start bounds and
+complete V2 frame CRC/identity/order validation. An intact but mismatched end
+witness is corruption. Reconstruction never discards a valid frame or promotes
+framing into durability authority. Existing V2 durable class, continuity,
+external dependencies, and durable-prefix barriers remain authoritative.
+
+Validation reads sequentially through a bounded 64 KiB buffer on the exact
+retained descriptor and captured container capacity. It reuses payload scratch
+only within that scan; returned frame identities and the validated extent index
+do not borrow those bytes. Logical replay uses its own bounded read-ahead buffer
+limited to the captured occupied physical prefix. Sequential extent traversal
+is constant time per extent; arbitrary logical seeks use the validated index.
+Neither buffer changes the full reserve scan, frame validation, captured prefix,
+or the reader's ownership of its descriptor.
+
+A fully validated, frame-free fixed container may be reclaimed by covered-prefix
+cleanup through the same root, replay-lineage, active-generation, pin and exact
+file-identity guards as occupied segments. Its logical debit is zero; its actual
+physical reserve remains subject to namespace persistence accounting. An empty
+stream or an unvalidated/damaged container does not establish this eligibility.
+
+Writer/reader/recovery positions are logical stream offsets. Stable-resource
+byte frontiers are physical immutable extent ends, never physical capacity.
+Exclusive startup suffix repair copies the original header and retained complete
+extent prefix into a private file at the original capacity, fully writes zero
+reserve for the discarded suffix, and full-syncs that file before atomically
+replacing the canonical name through its retained parent and syncing the parent.
+Interrupted private writes leave the original classifiable container unchanged;
+after rename, the canonical image is a complete repair. No in-place multi-write
+erasure or repair marker changes the reserve validator. Unsupported atomic
+publication refuses fixed-container repair before mutation; native stream
+fallback retains ordinary truncation.
+
+Repair transfers its caller's owned file handle to the actual canonical
+replacement, including after an ambiguous namespace-sync error. It closes the
+old owned descriptor only after a replacement is open. A failed reopen leaves
+the old descriptor live for caller cleanup; both production callers abort on
+error. Independently retained handles, snapshots, and resource tokens keep the
+unchanged original inode and its bytes. This operation is limited to cold
+recovery before writer construction: it cannot update a live writer's buffered
+state or frontiers. A validated already-repaired logical end needs no new file.
+Ordinary journal construction persists its namespace before admitting appends,
+including when retry sees an already-published replacement.
+
+Linux syncs initialized WAL
+content with `fdatasync`; initialization, namespace persistence, all non-WAL
+resources, and portable fallback retain the full stable-file sync primitive.
+
+WAL pressure and closed-segment debt count logical command bytes. Cleanup
+footprint statistics count physical file bytes, including initialized reserve;
+removing a segment debits its logical size from debt and its physical size from
+the retained footprint. When the backend owns the external command WAL, the
+cache does not import those files as cache-owned redo segments or count them a
+second time toward checkpoint pressure.
+
+Logical rotation and physical reservation have separate budgets. The journal
+preserves the configured `CommandWALSegmentTargetBytes`; zero disables logical
+size rotation. A positive target bounds nonempty logical segments, while a legal
+atomic frame may exceed that target in an otherwise empty segment. Neither case
+disables physical-capacity checks, including conservative space for buffered
+frames. The per-frame `WALMaxSegmentBytes` limit remains independent.
+
+Fresh journals and forced/checkpoint successors start with at most the existing
+4,199,424-byte reserve. Physical-capacity pressure doubles the next fresh
+reserve, capped by the configured target's physical byte budget, or 64 MiB
+(67,108,864 bytes) when the logical target is nonpositive; a logical-only
+rotation retains the current bounded reserve. Forced boundaries reset it to the
+small initial reserve. Thus a large configured target does not require a large
+empty file at Open or after checkpoint, and sustained growth does not repeatedly
+initialize small segments. Only unpublished fresh successors can change size.
+
+A journal with an actual fixed container may prepare one pressure successor
+once its flushed physical occupancy reaches half capacity. It uses the same
+header, complete zero-fill and full-file synchronization under an unpublished
+`.wal-ahead-<32 lowercase hex>` name. The journal owns one worker and one extra
+reserve of at most 64 MiB; standalone Writers remain synchronous. Preparation
+neither creates a canonical segment nor reserves an LSN or certifies content.
+At rotation, only a ready exact generation, retained-parent/current-file identity,
+size-plan and frame-fit match may replace that rotation's newly created empty
+canonical successor through the existing rename, directory-sync and canonical
+reopen sequence. Existing occupied or pre-existing empty successors are not
+replaced by ahead material. New active tokens still have unsynced content.
+
+An in-flight or stale prediction never makes append wait for worker readiness:
+the ordinary synchronous path remains available. Its initialization can overlap
+a cancelled ahead reserve, so for normal plans up to 64 MiB the current,
+synchronous successor and extra reserve can total 192 MiB of file lengths.
+Only the extra 64 MiB is new; this is a per-journal bound, not a filesystem quota,
+and existing oversized atomic-frame/configured-target exceptions remain.
+Initialization buffers can overlap but append buffers are not shared with the
+worker. Forced/checkpoint resets discard predictions and retain small reserves.
+The first real preparation or exact cleanup error poisons the next observing
+entry before LSN assignment; an unused cancellation itself is not an error.
+Close cancels adoption and joins the worker and captured users while retaining
+owner/parent custody. Kernel I/O cannot be cancelled here, so a permanently
+stalled operation can permanently delay Close. Exclusive reopen removes at most
+one exact-name private orphan through retained-parent/no-follow validation before
+starting another; foreign entries, multiplicity or cleanup failures fail closed.
+This shifts reserve work and can waste or contend on it; it changes no extent
+framing, sync obligations, capacity policy or claimed performance result.
+
+Precisely, let `H=4096`, `W=96`, `A=64`, and `align` round upward to `A`.
+For a positive logical target `T`, the physical budget is
+`B=align(H+T+2*W+(A-1))`; otherwise `B=67,108,864`. The initial/reset reserve is
+`Cbase=min(4,199,424,B)`. Physical pressure selects
+`min(B,2*min(Cold,B))`, where `Cold` is the previous header-declared capacity;
+logical-only rotation keeps at least `Cbase`, capped by `B`. A frame of `F`
+logical bytes requires `Cframe=align(align(H+W+F)+W)`, so its fresh successor
+uses the larger of the normal reserve and `Cframe`. This exact atomic-frame
+exception grants no growth above `B` to later successors. All arithmetic is
+checked before file creation or mutation; capped doubling cannot overflow.
+
+Reopen keeps each occupied file's actual header-declared capacity and format,
+even when the configuration changes. Rotation checks that capacity before
+acceptance and initializes the complete successor before installing it. No
+occupied published file is resized or reinitialized. Initialization/rotation
+cost and reserved disk space are part of operational cost, not a measured
+steady-state append improvement. The default ceiling is a resource policy: lazy
+growth can increase initialized reserve, cold recovery scanning, and unused tail
+space up to 64 MiB per normal container. It changes neither per-frame geometry
+nor durability fences and does not establish a measured latency improvement.
+Mutable append hooks and rotation callbacks invalidate borrowed frame sizing.
+Both codecs refresh validation and sizing after those boundaries; a rotated
+frame that no longer fits the installed physical capacity is refused before
+LSN assignment. Already-created rotation resources retain their existing pending
+custody. Refusal does not loop callbacks or resize a pinned successor.
+Cleanup holds journal append exclusion through both segment listing and complete
+reader scans, releasing it before publication/durability revalidation locks.
+This keeps reserve validation on a coherent immutable prefix without flushing
+unaccepted buffered bytes as a maintenance side effect.
+
+An interrupted relaxed extent can retain an explicit incomplete-frame identity
+only when its start bounds/checksum and stable V2 identity validate and its end
+witness is still exactly initialized zero reserve. The reader continues through
+all later positive extents. The existing global V2 horizon classifier rejects
+incompleteness covered by any later durable barrier and can discard only an
+identified relaxed suffix above that horizon. An intact end witness plus bad
+data, or any nonzero torn end plus bad data, remains corruption. Full valid V2
+data with a torn end still follows the narrow reconstruction rule above. This
+qualified prefix-cut model does not promise repair for every reordered or
+full-length corrupt write; transport framing never authorizes blanket CRC
+fallback.
+
+Successor capacity and its full initialization sync complete before installing
+its writer state or issuing resource/namespace tokens. An initialization error
+before LSN reservation still poisons the writer; restoring I/O cannot permit a
+later append to acknowledge bytes under a stale container identity. A failed
+fresh successor that has never been installed or received a frame is removed
+through its validated exact parent/name and the parent is synced on Unix.
+Windows supports child-based creation persistence, without advertising durable
+rename/removal. There the validated fresh handle is truncated to a canonical
+empty legacy segment and fully synced before close; ordinary recovery can
+initialize that empty successor again. Any neutralization error remains part of
+the poisoned writer's failure and cannot authorize a later ACK. Its descriptor
+is then closed; the predecessor descriptor remains owned until journal close.
+Existing successors are never removed by this failure cleanup. If cleanup or
+its namespace sync also fails, the error is retained and prior-prefix recovery
+availability is not claimed. An empty active file resized in place has no
+accepted frame; failure there remains fail-stop without unlinking that active
+file.
+
+Deferred physical snapshots freeze each command-WAL file's validated occupied
+extent boundary while apply admission is excluded. Export reads only that
+immutable prefix through its retained exact handle, emits the captured header,
+and synthesizes zeroes for the original initialized reserve. Later source
+appends, rotations, empty-segment resizing, and pathname replacement therefore
+cannot enter the captured cut. Legacy stream files retain their captured EOF.
+Export preserves physical capacity and never mutates source bytes or relaxes the
+read-only applied-LSN check. Snapshot disk admission still counts full capacity.

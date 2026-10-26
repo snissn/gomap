@@ -449,9 +449,12 @@ The request-local post-append fault observer runs synchronously after append and
 receipt recording, before native finalization/visibility. It must be nonblocking
 and must not reenter the database or acquire locks. Its failure uses the existing
 assigned-failure custody and poisons the original publication owner; it creates
-no result or progress record. Startup replay recovers the original canonical
-frame, without fabricating a deterministic apply result. Ordinary writers have
-no observer.
+no result or progress record. This observer does not witness a completed durable
+cut: an uncompleted assigned frame may or may not survive a crash. Startup replay
+recovers the original canonical frame if retained, without fabricating a
+deterministic apply result. A frame covered by a completed durable cut must
+survive and replay even if its caller did not receive an acknowledgment. Ordinary
+writers have no observer.
 
 Public primary ID/document scans retain one complete native capture, merge its
 pending/captured/physical primary sources with the maintained successor seek,

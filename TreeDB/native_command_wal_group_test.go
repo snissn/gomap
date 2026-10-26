@@ -7,6 +7,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -183,16 +184,41 @@ func TestNativeCommandWALGroupFailurePoisonsInstalledWaiters(t *testing.T) {
 			database.commandWALGroupCommit.maxBytes = 1 << 30
 			before := database.Stats()
 			beforeNext := database.backend.CommandWALNextLSN()
+			mainRoot := filepath.Join(database.dir, "maindb")
+			// This hook runs after installation and release of the producer gates.
+			// Rendezvous before either waiter starts the shared durability barrier.
+			installedReady := make(chan struct{})
+			var installed atomic.Int32
+			var installTimeout atomic.Bool
+			database.commandWALGroupCommit.testBeforeNativeComplete = func() {
+				if installed.Add(1) == 2 {
+					close(installedReady)
+				}
+				select {
+				case <-installedReady:
+				case <-time.After(5 * time.Second):
+					installTimeout.Store(true)
+				}
+			}
 			cutErr := errors.New("native shared durable failure")
-			var appends atomic.Int32
+			var appends, dependencyCuts atomic.Int32
 			restore := durabilitycut.Install(func(event durabilitycut.Event) error {
-				if event.Resource != durabilitycut.ResourceCommandWAL {
+				if event.Resource != durabilitycut.ResourceCommandWAL || event.Root != mainRoot {
 					return nil
 				}
-				if point == "dependency" && event.Point == durabilitycut.BeforeDependencyFileSync {
-					return cutErr
+				if event.Point == durabilitycut.AfterDependencyAppend {
+					if assigned := appends.Add(1); point == "barrier-assigned" && assigned == 3 {
+						return cutErr
+					}
 				}
-				if point == "barrier-assigned" && event.Point == durabilitycut.AfterDependencyAppend && appends.Add(1) == 3 {
+				// Private reserve initialization has WAL-directory root and can
+				// precede assignment. Cut the actual retained journal dependency
+				// only after both native participants have installed.
+				if point == "dependency" && event.Point == durabilitycut.BeforeDependencyFileSync && appends.Load() == 2 && installed.Load() == 2 {
+					if event.StablePath == nil {
+						return errors.New("native group dependency has no retained physical handle")
+					}
+					dependencyCuts.Add(1)
 					return cutErr
 				}
 				return nil
@@ -212,6 +238,13 @@ func TestNativeCommandWALGroupFailurePoisonsInstalledWaiters(t *testing.T) {
 				}
 			}
 			restore()
+			database.commandWALGroupCommit.testBeforeNativeComplete = nil
+			if installTimeout.Load() || installed.Load() != 2 {
+				t.Fatalf("installed participants=%d timeout=%t", installed.Load(), installTimeout.Load())
+			}
+			if point == "dependency" && dependencyCuts.Load() != 1 {
+				t.Fatalf("installed dependency cuts=%d want1", dependencyCuts.Load())
+			}
 			if callbacks.Load() != 2 {
 				t.Fatalf("callbacks=%d want2", callbacks.Load())
 			}

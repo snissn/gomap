@@ -516,7 +516,10 @@ func TestCollectionSearchVectorIndexWithBufferRabitQQuantized2452(t *testing.T) 
 		t.Fatalf("cache after rabitq quantized_rerank=%+v afterOnly=%+v want shared prepared entry", afterRerank, afterOnly)
 	}
 
-	if !collectionsRaceEnabled {
+	// Keep both searches on the live public route. Exact allocation counters
+	// need a fresh process, while both parent and child retain the cache-lifetime
+	// checks below after the measurement.
+	if !collectionsRaceEnabled && enterIsolatedVectorAllocationGate(t, "collection-buffered-rabitq-quantized") {
 		quantizedOnlyAllocs := testing.AllocsPerRun(100, func() {
 			got, err := col.SearchVectorIndexWithBuffer(quantizedOnlyOpts, &buffer)
 			if err != nil || len(got.Results) != quantizedOnlyOpts.TopK {

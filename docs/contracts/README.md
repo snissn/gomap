@@ -10,6 +10,7 @@ Start here:
 - `docs/contracts/LOCKING.md`
 - `docs/contracts/CONCURRENCY.md`
 - `docs/contracts/DURABILITY.md`
+- [Pager file-sync custody](PAGER_SYNC.md)
 - `docs/contracts/ITERATION.md`
 
 ## Who Is This For?

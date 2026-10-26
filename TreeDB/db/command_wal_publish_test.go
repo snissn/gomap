@@ -1554,9 +1554,20 @@ func TestCommandWALCheckpointEstablishesDurableCleanupProof(t *testing.T) {
 func TestCommandWALCleanupProofRejectsPendingJournalOwnership(t *testing.T) {
 	t.Run("stable-rotation", func(t *testing.T) {
 		dir := t.TempDir()
+		frame, err := commitlog.EncodeCommandFrame(commitlog.CommandEnvelope{
+			LSN:           1,
+			Kind:          commitlog.CommandKindRawKVBatch,
+			Scope:         commitlog.CommandScopeRawKV,
+			PayloadFormat: commitlog.PayloadFormatRawKVBatchV1,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
 		journal, err := commitlog.OpenCommandJournal(WALDirPath(dir), commitlog.CommandJournalOptions{
-			Lane:                   0,
-			SegmentTargetBytes:     1,
+			Lane: 0,
+			// Create the pending token on the second append, after a real
+			// first frame, rather than rotating an empty physical reserve.
+			SegmentTargetBytes:     int64(8 + len(frame)),
 			CaptureStableResources: true,
 		})
 		if err != nil {
@@ -2128,11 +2139,22 @@ func TestCommandWALCleanupRejectsDecisionWithoutGeneration(t *testing.T) {
 func TestCommandWALCleanupRejectsPendingJournalOwnershipAfterScan(t *testing.T) {
 	dir := t.TempDir()
 	writeCommandWALFrame(t, dir, 1, 1)
+	frame, err := commitlog.EncodeCommandFrame(commitlog.CommandEnvelope{
+		LSN:           2,
+		Kind:          commitlog.CommandKindRawKVBatch,
+		Scope:         commitlog.CommandScopeRawKV,
+		PayloadFormat: commitlog.PayloadFormatRawKVBatchV1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	journal, err := commitlog.OpenCommandJournal(WALDirPath(dir), commitlog.CommandJournalOptions{
-		Lane:                   0,
-		SegmentSeq:             2,
-		InitialLSN:             1,
-		SegmentTargetBytes:     1,
+		Lane:       0,
+		SegmentSeq: 2,
+		InitialLSN: 1,
+		// Fit the first actual frame, then rotate on the second append. A
+		// target of one byte instead rotates an empty physical predecessor.
+		SegmentTargetBytes:     int64(8 + len(frame)),
 		CaptureStableResources: true,
 	})
 	if err != nil {

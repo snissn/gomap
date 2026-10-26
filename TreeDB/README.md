@@ -36,6 +36,11 @@ Writes are batched and applied using a recursive "Zipper" merge algorithm. This 
 
 ### Read Path
 Readers acquire a `Snapshot` which pins the version of the tree and the relevant value-log segments. This guarantees a consistent view of the database even while writers are committing new versions.
+Directory refresh may omit a newly discovered physical file whose deletion was
+already admitted by the shared identity registry. It acquires no read authority
+for that file. Explicit segment registration and snapshot pins still reject
+retiring resources, and retained recovery roots continue to prevent deletion.
+Other identity conflicts and failed physical cleanup remain errors.
 
 ## Usage
 

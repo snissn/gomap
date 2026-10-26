@@ -19,6 +19,10 @@ type logicalMVCCWriter interface {
 // typed operands to the existing DB producer. All key/duplicate validation
 // precedes discard-floor I/O. No physical keys or value envelopes are allocated.
 func (s *Store) commitLogicalGroups(writer logicalMVCCWriter, groups []CommitGroup, total int, mode CommitMode) error {
+	return s.commitLogicalGroupsWithCompletion(writer, groups, total, mode, nil)
+}
+
+func (s *Store) commitLogicalGroupsWithCompletion(writer logicalMVCCWriter, groups []CommitGroup, total int, mode CommitMode, completion *CommitCompletion) error {
 	mutations := make([]mvccadmission.LogicalMutation, 0, total)
 	type identity struct {
 		key       string
@@ -52,13 +56,27 @@ func (s *Store) commitLogicalGroups(writer logicalMVCCWriter, groups []CommitGro
 	if err := s.lockDiscardFloorRead(); err != nil {
 		return err
 	}
-	defer s.mu.RUnlock()
+	retained := false
+	defer func() {
+		if !retained {
+			s.mu.RUnlock()
+		}
+	}()
 	floor := s.discardFloor
 	for groupIndex := range groups {
 		group := &groups[groupIndex]
 		if len(group.Mutations) != 0 && group.Timestamp <= floor {
 			return fmt.Errorf("%w: group index %d timestamp %d is not above floor %d", ErrVersionBelowDiscardFloor, groupIndex, group.Timestamp, floor)
 		}
+	}
+	if completion != nil {
+		submitter := writer.(logicalMVCCSubmitter)
+		if err := submitter.SubmitLogicalMVCC(mutations, s.admission.LogicalInput(mutations, floor), mode == CommitDurable, &completion.engine); err != nil {
+			return storageError("submit batch", err)
+		}
+		completion.store = s
+		retained = true
+		return nil
 	}
 	if err := writer.CommitLogicalMVCC(mutations, s.admission.LogicalInput(mutations, floor), mode == CommitDurable); err != nil {
 		if total == 1 {

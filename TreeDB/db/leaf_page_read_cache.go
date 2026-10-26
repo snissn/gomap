@@ -192,6 +192,9 @@ type leafPageReadCache struct {
 	stores    atomic.Uint64
 	evictions atomic.Uint64
 	entries   atomic.Uint64
+	// Page backing belongs to fixed slots and survives eviction. Keep this
+	// distinct from the bytes occupied by valid entries.
+	backingBytes atomic.Uint64
 
 	conflictEvictions atomic.Uint64
 	capacityEvictions atomic.Uint64
@@ -226,6 +229,7 @@ type leafPageReadCacheStats struct {
 	Buckets                         uint64
 	Ways                            uint64
 	Bytes                           uint64
+	BackingBytes                    uint64
 	ReadMissAdmissionSkips          uint64
 	ReadMissAdmissionCandidateSkips uint64
 	ReadMissAdmissionLockSkips      uint64
@@ -542,6 +546,9 @@ func (s *leafPageReadCacheSlot) storeLocked(key leafPageReadCacheKey, leafPage [
 func (s *leafPageReadCacheSlot) storeLockedWithRecordChecksumState(key leafPageReadCacheKey, leafPage []byte, recordChecksumVerified bool) leafPageReadCacheStoreResult {
 	if cap(s.data) < page.PageSize {
 		s.data = make([]byte, page.PageSize)
+		if s.owner != nil {
+			s.owner.backingBytes.Add(page.PageSize)
+		}
 	}
 	return s.storeIntoBackingLocked(key, leafPage, recordChecksumVerified)
 }
@@ -955,6 +962,7 @@ func (c *leafPageReadCache) stats() leafPageReadCacheStats {
 		Buckets:                         uint64(len(c.buckets)),
 		Ways:                            uint64(c.ways),
 		Bytes:                           entries * page.PageSize,
+		BackingBytes:                    c.backingBytes.Load(),
 		ReadMissAdmissionSkips:          c.readMissAdmissionSkips.Load(),
 		ReadMissAdmissionCandidateSkips: c.readMissAdmissionCandidateSkips.Load(),
 		ReadMissAdmissionLockSkips:      c.readMissAdmissionLockSkips.Load(),

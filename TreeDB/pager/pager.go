@@ -13,6 +13,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/stableio"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -1044,7 +1045,7 @@ func (p *Pager) FlushDirtyChunksFrom(firstChunk int) error {
 // Sync makes mapped writes durable through the backing file, with explicit
 // mapped-range flushes where required by the platform.
 func (p *Pager) Sync() error {
-	return p.syncDirtyChunksWithFile(true, 0, p.file)
+	return p.syncDirtyChunks(true, 0)
 }
 
 // SyncIndexData is the production index-publication data barrier. It performs
@@ -1052,7 +1053,8 @@ func (p *Pager) Sync() error {
 // boundary used by the power-loss oracle. Meta-page syncs continue to use Sync
 // and therefore are not mislabeled as pre-publication index-data barriers.
 func (p *Pager) SyncIndexData() error {
-	return p.SyncIndexDataWithStableFile(p.file)
+	_, err := p.syncDirtyChunksWithFileWork(true, 0, nil, nil, true, 0, 0)
+	return err
 }
 
 // SyncIndexDataWithStableFile is the index-publication data barrier bound to
@@ -1075,10 +1077,10 @@ func (p *Pager) SyncIndexDataWithStableFileWithWork(file *os.File, w *iterator.O
 // Caller controls were already reserved on this same grant. They contribute to
 // fresh impossibility without charging the native snapshot a second time.
 func (p *Pager) SyncIndexDataWithStableFileWithCallerControl(file *os.File, w *iterator.OrdinalScanWork, callerRecords, callerBytes uint64) (bool, error) {
-	p.mu.RLock()
-	path := p.path
-	p.mu.RUnlock()
-	return p.syncIndexDataWithStableFileAtPath(file, path, w, callerRecords, callerBytes)
+	if file == nil {
+		return false, errors.New("pager: stable index file unavailable")
+	}
+	return p.syncDirtyChunksWithFileWork(true, 0, file, w, true, callerRecords, callerBytes)
 }
 
 // SyncIndexDataWithStableFileAtPath preserves a capture's diagnostic identity
@@ -1093,30 +1095,21 @@ func (p *Pager) syncIndexDataWithStableFileAtPath(file *os.File, path string, w 
 	if file == nil {
 		return false, errors.New("pager: stable index file unavailable")
 	}
-	done, err := p.syncDirtyChunksWithFileWork(true, 0, file, w, true, callerRecords, callerBytes, path)
-	if !done || err != nil {
-		return done, err
-	}
-	if info, e := file.Stat(); e == nil {
-		p.durableFileSize.Store(info.Size())
-	}
-	if !p.readOnly && !p.memoryOnly {
-		if e := durabilitycut.EmitPath(durabilitycut.AfterIndexDataSync, durabilitycut.ResourceIndex, filepath.Dir(path), path); e != nil {
-			return false, e
-		}
-	}
-	return true, nil
+	return p.syncDirtyChunksWithFileWork(true, 0, file, w, true, callerRecords, callerBytes, path)
 }
 
 func (p *Pager) syncDirtyChunks(syncFile bool, firstChunk int) error {
-	return p.syncDirtyChunksWithFile(syncFile, firstChunk, p.file)
+	return p.syncDirtyChunksWithFile(syncFile, firstChunk, nil)
 }
 
 func (p *Pager) syncDirtyChunksWithFile(syncFile bool, firstChunk int, syncTarget *os.File) error {
 	_, err := p.syncDirtyChunksWithFileWork(syncFile, firstChunk, syncTarget, nil, false, 0, 0)
 	return err
 }
-func (p *Pager) syncDirtyChunksWithFileWork(syncFile bool, firstChunk int, syncTarget *os.File, w *iterator.OrdinalScanWork, indexCut bool, callerRecords, callerBytes uint64, indexPath ...string) (bool, error) {
+
+// A nil internal target selects the pager-owned file under mu. Public retained-
+// handle entry points reject nil rather than borrowing the ordinary authority.
+func (p *Pager) syncDirtyChunksWithFileWork(syncFile bool, firstChunk int, syncTarget *os.File, w *iterator.OrdinalScanWork, indexCut bool, callerRecords, callerBytes uint64, indexPath ...string) (done bool, err error) {
 	if p.readOnly {
 		return false, ErrReadOnly
 	}
@@ -1140,6 +1133,19 @@ func (p *Pager) syncDirtyChunksWithFileWork(syncFile bool, firstChunk int, syncT
 	if indexCut {
 		traffic += uint64(len(path))*8 + 2048
 	}
+	if syncFile {
+		if syncTarget == nil {
+			syncTarget = p.file
+		}
+		if syncTarget == nil {
+			p.mu.Unlock()
+			return false, errors.New("pager: sync file unavailable")
+		}
+		// Dup owns one os.File/name, two identity/extent Stats and cleanup.
+		// Charge all fixed custody work before its allocation or side effects.
+		records += 8
+		traffic += 4096 + 8*uint64(len(syncTarget.Name()))
+	}
 	if err := pagerCallerMinimum(w, records, traffic, callerRecords, callerBytes); err != nil {
 		p.mu.Unlock()
 		return false, err
@@ -1148,17 +1154,76 @@ func (p *Pager) syncDirtyChunksWithFileWork(syncFile bool, firstChunk int, syncT
 		p.mu.Unlock()
 		return false, err
 	}
-	// Move the selected dirty chunks into this sync attempt. Lower chunks can be
-	// intentionally retained for a later durability-boundary Sync.
-	toSync := p.dirtyChunks.takeFrom(firstChunk)
+	var owned *os.File
+	var coveredExtent int64
+	var toSync []int
+	if syncFile {
+		owned, err = stableio.DuplicateFile(syncTarget, syncTarget.Name())
+		if err != nil {
+			p.mu.Unlock()
+			return false, err
+		}
+	}
+	// The call owns the uncancellable barrier and descriptor until it returns,
+	// even when Close concurrently disposes the pager's original ownership.
+	defer func() {
+		if owned != nil {
+			if closeErr := owned.Close(); closeErr != nil {
+				err = errors.Join(err, fmt.Errorf("pager: close sync duplicate: %w", closeErr))
+			}
+		}
+		if err != nil {
+			p.mu.Lock()
+			for _, idx := range toSync {
+				// Union with newer dirt, but never resurrect mappings retired by Close.
+				if idx < len(p.chunks) && len(p.chunks[idx]) != 0 && idx/64 < len(p.dirtyChunks.words) {
+					p.dirtyChunks.set(idx)
+				}
+			}
+			p.mu.Unlock()
+			done = false
+		}
+	}()
+	if owned != nil {
+		info, statErr := owned.Stat()
+		if statErr != nil {
+			p.mu.Unlock()
+			return false, statErr
+		}
+		if !info.Mode().IsRegular() {
+			p.mu.Unlock()
+			return false, errors.New("pager: sync target is not a regular file")
+		}
+		if p.file != nil && syncTarget != p.file {
+			liveInfo, statErr := p.file.Stat()
+			if statErr != nil {
+				p.mu.Unlock()
+				return false, statErr
+			}
+			if !os.SameFile(liveInfo, info) {
+				p.mu.Unlock()
+				return false, errors.New("pager: stable index file identity mismatch")
+			}
+		}
+		// This pre-barrier prefix is conservative under concurrent later growth.
+		// A retained handle after Close needs no surviving mapped directory.
+		coveredExtent = info.Size()
+	}
+	// Duplication/validation failure above leaves dirty membership untouched.
+	toSync = p.dirtyChunks.takeFrom(firstChunk)
 	p.mu.Unlock()
 
 	var syncErr error
 	if indexCut {
-		syncErr = durabilitycut.EmitPath(durabilitycut.BeforeIndexDataSync, durabilitycut.ResourceIndex, filepath.Dir(path), path)
+		syncErr = durabilitycut.EmitStablePath(durabilitycut.BeforeIndexDataSync, durabilitycut.ResourceIndex, filepath.Dir(path), path, owned)
 	}
-	// Hold mappings stable through mapped-range and file sync.
-	p.mu.RLock()
+	// Linux file-only sync never dereferences mappings: the duplicate carries
+	// exact file custody without excluding allocations or page writes. Flush-
+	// only and platforms with mapped-range fences retain mapping protection.
+	mappedSync := !syncFile || mappedRangeSyncRequired()
+	if mappedSync {
+		p.mu.RLock()
+	}
 
 	// The file data barrier covers Linux mapped writes. Flush-only calls still
 	// need msync, and other platforms retain their explicit mapped-write fence.
@@ -1212,31 +1277,26 @@ func (p *Pager) syncDirtyChunksWithFileWork(syncFile bool, firstChunk int, syncT
 	}
 
 	if syncErr == nil && syncFile {
-		if syncTarget == nil {
-			syncErr = errors.New("pager: sync file unavailable")
-		} else if err := syncPageFile(syncTarget); err != nil {
-			syncErr = err
-		} else {
-			p.durableFileSize.Store(int64(len(p.chunks)) * p.chunkSize)
-		}
+		syncErr = syncPageFile(owned)
 	}
-	p.mu.RUnlock()
-
-	// If error occurred, restore the dirty chunks
+	if mappedSync {
+		p.mu.RUnlock()
+	}
+	if syncErr == nil && indexCut {
+		syncErr = durabilitycut.EmitStablePath(durabilitycut.AfterIndexDataSync, durabilitycut.ResourceIndex, filepath.Dir(path), path, owned)
+	}
 	if syncErr != nil {
-		p.mu.Lock()
-		for _, idx := range toSync {
-			// Close may have consumed these mappings after dirty detachment.
-			// Preserve retry membership only for still-owned mapped storage;
-			// the retained handle keeps the failed durability fence retryable.
-			if idx < len(p.chunks) && len(p.chunks[idx]) != 0 && idx/64 < len(p.dirtyChunks.words) {
-				p.dirtyChunks.set(idx)
-			}
-		}
-		p.mu.Unlock()
 		return false, syncErr
 	}
-
+	if syncFile {
+		// Never claim a post-barrier Stat size, or let an older smaller attempt
+		// lower a prefix already covered by another completed file barrier.
+		for old := p.durableFileSize.Load(); old < coveredExtent; old = p.durableFileSize.Load() {
+			if p.durableFileSize.CompareAndSwap(old, coveredExtent) {
+				break
+			}
+		}
+	}
 	return true, nil
 }
 

@@ -427,7 +427,7 @@ func (s *Snapshot) cowSeekGEOneAdmitted(start, end []byte) (key, value []byte, f
 	var fresh cowFreshReadOwner
 	best, err := s.cowPhysicalSuccessorLocked(start, end, &inspected, &fresh)
 	if err == errCOWPhysicalDictionary {
-		// Dictionary records retain the original caller-cut definition and decoder.
+		// The exact caller cut resolves the record; shared scratch owns its definition.
 		best, err = s.cowDictionarySuccessorLocked(start, end)
 		if errors.Is(err, memtable.ErrCOWCapacity) && fresh.refund() {
 			best, err = s.cowDictionarySuccessorLocked(start, end)
@@ -443,14 +443,14 @@ func (s *Snapshot) cowSeekGEOneAdmitted(start, end []byte) (key, value []byte, f
 		return nil, nil, false, false, nil
 	}
 	if best.flags&node.FlagPointer != 0 && !best.valueOwned {
-		borrowed, readErr := s.cowSuccessorValueLocked(best, inspected)
+		owned, readErr := s.cowSuccessorValueLocked(best, inspected)
 		if errors.Is(readErr, memtable.ErrCOWCapacity) && fresh.refund() {
-			borrowed, readErr = s.cowSuccessorValueLocked(best, inspected)
+			owned, readErr = s.cowSuccessorValueLocked(best, inspected)
 		}
 		if readErr != nil {
 			return nil, nil, false, true, readErr
 		}
-		best.value = append([]byte(nil), borrowed...)
+		best.value = owned
 	}
 	return best.key, best.value, true, true, nil
 }
@@ -466,7 +466,7 @@ func (s *Snapshot) cowDictionarySuccessorLocked(start, end []byte) (pointSuccess
 	if err != nil {
 		return pointSuccessorCandidate{}, err
 	}
-	disk, found, err := s.cowCut.basis.snapshot.SeekGEEntryWithFixedScratch(start, end, point.key[:], point.leaf[:], &point.successor, w.readLeaf)
+	disk, found, err := s.cowCut.basis.snapshot.SeekGEEntryWithFixedScratch(start, end, point.key[:], point.leaf[:], &point.successor, w.readOwnedSuccessorLeaf)
 	if err != nil {
 		return pointSuccessorCandidate{}, err
 	}
@@ -478,10 +478,7 @@ func (s *Snapshot) cowSuccessorValueLocked(best pointSuccessorCandidate, inspect
 	if err != nil {
 		return nil, err
 	}
-	if inspected.file != nil {
-		return w.readWithInspection(inspected.file, best.ptr, inspected.shape, false, nil)
-	}
-	return w.read(best.ptr, false, nil)
+	return w.readOwnedSuccessor(best.ptr, false, nil, &inspected)
 }
 
 // Both physical and dictionary-fallback traversal use the same cut-local
@@ -625,10 +622,15 @@ func (s *Snapshot) cowWorkspacePhysicalSuccessorLocked(w *cowReadWorkspace, star
 	if err != nil {
 		return pointSuccessorCandidate{}, err
 	}
+	var independent *cowCacheDictionaryRead
+	if provider, ok := s.db.dictStore.(cowDictionaryReadProvider); ok {
+		definition := cowCacheDictionaryRead{provider: provider, cache: s.cowCache}
+		independent = &definition
+	}
 	readLeaf := func(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
-		// Keep the successor's original Snappy/LZ4 block-decoder policy.
-		// Borrowing traversal must not introduce a new physicalMu wait.
-		return basis.readPhysicalLeafWithWorkspace(s.cowCache, w, ptr, dst, false, true)
+		// Keep small block decoding caller-local. Dictionary leaves finish
+		// this exact traversal with independently retained shared definitions.
+		return basis.readPhysicalLeafWithDictionary(s.cowCache, w, ptr, dst, false, true, independent)
 	}
 	disk, found, err := basis.snapshot.SeekGEEntryWithFixedScratch(start, end, point.key[:], point.leaf[:], &point.successor, readLeaf)
 	if err != nil {

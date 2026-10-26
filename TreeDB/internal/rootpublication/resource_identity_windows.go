@@ -10,6 +10,8 @@ import (
 	"runtime"
 	"unsafe"
 
+	"github.com/snissn/gomap/TreeDB/internal/stableio"
+
 	"golang.org/x/sys/windows"
 )
 
@@ -224,15 +226,7 @@ func duplicateStableFile(file *os.File) (*os.File, error) {
 	if file == nil {
 		return nil, os.ErrInvalid
 	}
-	process, err := windows.GetCurrentProcess()
-	if err != nil {
-		return nil, err
-	}
-	var duplicate windows.Handle
-	if err := windows.DuplicateHandle(process, windows.Handle(file.Fd()), process, &duplicate, 0, false, windows.DUPLICATE_SAME_ACCESS); err != nil {
-		return nil, err
-	}
-	return os.NewFile(uintptr(duplicate), stableDuplicateFileName(file.Name(), "#stable-pin")), nil
+	return stableio.DuplicateFile(file, stableDuplicateFileName(file.Name(), "#stable-pin"))
 }
 
 // duplicateStableSyncFile reopens the exact file object with GENERIC_WRITE.

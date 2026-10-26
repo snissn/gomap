@@ -144,7 +144,11 @@ splits, and per-workload counters) into a "Collection Workload Metadata" table.
   - `block.pprof` / `mutex.pprof` (global run-level fallback/supplement)
   - `trace.out` (detected, but not deeply analyzed yet)
 - `benchprof_results.json` preserves selected TreeDB stats under
-  `runs[].treedb_stats` when the benchmark exposes them. Checkpoint-enabled
+  `runs[].treedb_stats` when the benchmark exposes them. The per-engine map
+  retains actual opened-instance profile, durability, read-integrity,
+  benchmark-unsafe and memtable-mode Stats fields; missing fields remain absent.
+  Requested flags and pre-open option text cannot substitute for these fields.
+  Checkpoint-enabled
   runs also expose `runs[].checkpoint_durations_seconds`, optional
   `runs[].checkpoint_settle_seconds`, and checkpoint-local selected stats under
   `runs[].checkpoint_treedb_stats`. This is the raw
@@ -940,15 +944,20 @@ scaling qualification or Dgraph throughput acceptance.
 
 `RUN_DIR=/mnt/fast4tb/<task>/vacuum-m0 scripts/treedb_vacuum_m0_capture.sh`
 collects the package benchmarks
-`BenchmarkVacuumIndexOnlineCollectionForegroundChurn/bytes_64x` and
+`BenchmarkVacuumIndexOnlineCollectionProductionForegroundChurn/bytes_64x` and
 `BenchmarkPL06ExternalVacuumCollectionForegroundChurn/bytes_64x` in ten fresh,
 interleaved sample pairs. It emits `fixture.json`, `results.json`, `summary.md`
-and `raw/{legacy,public}-*.txt`; these are standalone Go benchmark artifacts,
+and `raw/{production,public}-*.txt`; these are standalone Go benchmark artifacts,
 not benchprof profile inputs. The public PL06 rows are an admitted-paused vacuum
 status fixture: unchanged foreground mutations enter the real recorder before
 the same vacuum resumes. Their revised timings do not measure a simultaneously
 advancing rebuild and are not comparable to historical uncoordinated PL06 rows.
-Legacy timing/CV and all public classification gates remain unchanged. See
+The production stability arm retains all 4,096 fixed operations and ten samples,
+with the coordinator enabled. Schema-v3 retains the unchanged total and
+foreground-p99 CV <= 0.10 gates; every maximum writer pause and its CV/failure
+remain diagnostic and require separate outcome-owner review before merge.
+Explicit v2 decoding retains all three original gates and historical failures.
+All public classification gates remain unchanged. See
 [the M0 contract](../../TreeDB/docs/performance/index-vacuum-m0.md) for boundaries
 and the incremental #4519 scope.
 

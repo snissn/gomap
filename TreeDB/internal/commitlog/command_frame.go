@@ -3614,6 +3614,15 @@ func encodeExternalRefs(refs []ExternalRef) ([]byte, error) {
 		return nil, err
 	}
 	out := make([]byte, total)
+	putExternalRefs(out, refs)
+	return out, nil
+}
+
+// putExternalRefs emits a section whose length was checked before destination mutation.
+func putExternalRefs(out []byte, refs []ExternalRef) {
+	if len(refs) == 0 {
+		return
+	}
 	binary.LittleEndian.PutUint32(out[0:4], uint32(len(refs)))
 	off := 4
 	for i := range refs {
@@ -3629,7 +3638,6 @@ func encodeExternalRefs(refs []ExternalRef) ([]byte, error) {
 		copy(out[off:], ref.Path)
 		off += len(ref.Path)
 	}
-	return out, nil
 }
 
 func externalRefsEncodedLen(refs []ExternalRef) (int, error) {
@@ -3709,6 +3717,15 @@ func encodeCommandExtensions(exts []CommandExtension) ([]byte, error) {
 		return nil, err
 	}
 	out := make([]byte, total)
+	putCommandExtensions(out, exts)
+	return out, nil
+}
+
+// putCommandExtensions emits a section whose length was checked before destination mutation.
+func putCommandExtensions(out []byte, exts []CommandExtension) {
+	if len(exts) == 0 {
+		return
+	}
 	binary.LittleEndian.PutUint32(out[0:4], uint32(len(exts)))
 	off := 4
 	for i := range exts {
@@ -3720,7 +3737,6 @@ func encodeCommandExtensions(exts []CommandExtension) ([]byte, error) {
 		copy(out[off:], ext.Payload)
 		off += len(ext.Payload)
 	}
-	return out, nil
 }
 
 func commandExtensionsEncodedLen(exts []CommandExtension) (int, error) {
@@ -3903,12 +3919,16 @@ func scanCommandSegmentSummary(path string, opts Options, onLSN func(uint64) err
 
 	var lastLSN uint64
 	for {
-		start, seekErr := r.f.Seek(0, io.SeekCurrent)
+		start, seekErr := r.Offset()
 		if seekErr != nil {
 			return 0, typed, completeEnd, seekErr
 		}
 		env, err := r.ReadCommandFrame()
 		if err != nil {
+			var partial *CommandWALIncompleteFrame
+			if errors.As(err, &partial) {
+				return 0, typed, completeEnd, fmt.Errorf("%w: incomplete container requires global V2 recovery", ErrCorrupt)
+			}
 			if errorsIsEOFOrTail(err) {
 				return maxLSN, typed, start, nil
 			}
@@ -3930,7 +3950,7 @@ func scanCommandSegmentSummary(path string, opts Options, onLSN func(uint64) err
 		if env.LSN > maxLSN {
 			maxLSN = env.LSN
 		}
-		completeEnd, err = r.f.Seek(0, io.SeekCurrent)
+		completeEnd, err = r.Offset()
 		if err != nil {
 			return 0, typed, completeEnd, err
 		}

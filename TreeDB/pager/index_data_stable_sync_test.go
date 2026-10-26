@@ -37,9 +37,7 @@ func TestDirtyChunkSyncRetainsFlushAndRetriesStableFileBarrier(t *testing.T) {
 	wantErr := errors.New("injected index-data sync failure")
 	syncPageFileFn = func(file *os.File) error {
 		fileCalls++
-		if file != stable {
-			t.Fatal("sync did not use the exact retained file")
-		}
+		assertIndependentSyncFile(t, file, stable)
 		if failSync {
 			return wantErr
 		}
@@ -239,5 +237,22 @@ func TestSyncPagesWithStableFileUsesPinnedIdentityAfterPathReplacement(t *testin
 	}
 	if err := p.SyncPagesWithStableFile(pinned, []uint64{0}); err != nil {
 		t.Fatalf("pinned mapped-page barrier after path replacement: %v", err)
+	}
+}
+
+// A file barrier owns an independent descriptor for the same physical object;
+// Go pointer equality with the caller's borrowed handle is not custody.
+func assertIndependentSyncFile(t *testing.T, got, borrowed *os.File) {
+	t.Helper()
+	if got == nil || got == borrowed || got.Fd() == borrowed.Fd() {
+		t.Fatal("sync did not acquire independent descriptor ownership")
+	}
+	gotInfo, err := got.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	borrowedInfo, err := borrowed.Stat()
+	if err != nil || !os.SameFile(gotInfo, borrowedInfo) {
+		t.Fatalf("sync physical identity mismatch: %v", err)
 	}
 }

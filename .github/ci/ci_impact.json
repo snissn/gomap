@@ -12,7 +12,7 @@
     "M0 observation is manual diagnostic-only on a separately fixed product; no forecast starts it or replaces failed M0 acceptance.",
     "Bounded maintenance comparison is a manually granted diagnostic on fixed baseline/candidate products; no forecast starts it or establishes cost, M0 or native acceptance."
   ],
-  "discovery_source_sha256": "a9476261d5cf6095e035fcc95525a48abee5f99e0ca48c0ed71b8ec4248c36ff",
+  "discovery_source_sha256": "acc20c256d00a57ac3d90c6bcfa1bc00a7034d9d5ff24b32520de5b6de202ab9",
   "dynamic_consumers": [
     {
       "behavior": "AST/WalkDir discovery and go test subprocess producer witnesses; all TreeDB test/race members retained",
@@ -125,7 +125,7 @@
       "mode": "100644"
     },
     ".github/ci/treedb_unix_weighted_shards.tsv": {
-      "git_blob": "22f0d32237b1ab7318dfa8b8f396c325c779bca9",
+      "git_blob": "f08ab2a8036dff5b47ec4046a948507d30d05281",
       "mode": "100644"
     },
     ".github/ci/treedb_windows_caching_heavy_shard0_tests.txt": {
@@ -157,11 +157,11 @@
       "mode": "100644"
     },
     "go.mod": {
-      "git_blob": "43348c6f8caf975769a417ceb4d0eab26e8d8196",
+      "git_blob": "107227014330d94272779e0f550a68fd5741dfdb",
       "mode": "100644"
     },
     "go.sum": {
-      "git_blob": "b9f11157eeaa7b5bf8ed60cccb22e6f7bc831050",
+      "git_blob": "61980713af7f56d676f1a30a70448de33ff19bab",
       "mode": "100644"
     },
     "scripts/cow_c3_read/collect.py": {
@@ -3007,7 +3007,7 @@
         },
         "workflow_dispatch": null
       },
-      "git_blob": "b9766c12f0f24c927e18d7a48ad670406d15e4eb",
+      "git_blob": "9e222e6ebe64da0f259319d727cdf10b68fe4d8f",
       "jobs": {
         "capture": {
           "checkout": [
@@ -3032,7 +3032,7 @@
           "runs_on": "${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && vars.TREEDB_PERF_RUNNER_LABEL != '' && vars.TREEDB_PERF_RUNNER_PR != '' && vars.TREEDB_PERF_RUNNER_PR == format('{0}', github.event.pull_request.number) && format('{0}-m0', vars.TREEDB_PERF_RUNNER_LABEL) || 'ubuntu-24.04' }}"
         }
       },
-      "sha256": "90b1d628cb366990391493cfd191b03ef49c83e51ad089991ce6a355e13af69f"
+      "sha256": "688e5de2f4025d2e45a7fd0b37cfa7cf686de01399c67a3b51431daf22253c96"
     },
     "unified-bench-suites.yml": {
       "coverage": "existing execution only; triggers/path filters are unchanged",

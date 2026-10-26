@@ -12,6 +12,7 @@ import (
 type Point string
 
 const (
+	AfterLogicalMVCCStaging      Point = "after-logical-mvcc-staging"
 	BeforeCOWAdmission           Point = "before-cow-admission"
 	BeforeCOWPreparation         Point = "before-cow-preparation"
 	AfterCOWPreparation          Point = "after-cow-preparation"

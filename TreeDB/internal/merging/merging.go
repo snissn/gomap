@@ -193,15 +193,22 @@ type MergingIterator struct {
 // NewMergingIteratorWithFixedHeap. Callers round each allocation independently
 // and admit them before constructing source iterators.
 func ForwardAllocationSizes(sourceCount int) (wrapper, heap uint64) {
+	if sourceCount == 1 {
+		return uint64(unsafe.Sizeof(SingleSourceMerger{})), 0
+	}
 	if sourceCount == 2 {
 		return uint64(unsafe.Sizeof(TwoWayMerger{})), 0
 	}
 	return uint64(unsafe.Sizeof(MergingIterator{})), uint64(sourceCount) * uint64(unsafe.Sizeof(heapItem{}))
 }
 
-// NewMergingIteratorWithFixedHeap allocates exactly one source-bounded heap.
-// Seek reuses that storage; no geometric growth arrays need separate ownership.
+// NewMergingIteratorWithFixedHeap allocates a source-bounded heap only when
+// arbitration needs it. Seek reuses that storage; no geometric growth arrays
+// need separate ownership.
 func NewMergingIteratorWithFixedHeap(sources []IteratorSource, start, end []byte) Iterator {
+	if len(sources) == 1 {
+		return newSingleSourceMerger(sources, start, end)
+	}
 	if len(sources) == 2 {
 		return NewTwoWayMerger(sources[0].Iter, sources[1].Iter, start, end)
 	}
@@ -212,6 +219,9 @@ func NewMergingIteratorWithFixedHeap(sources []IteratorSource, start, end []byte
 }
 
 func NewMergingIterator(sources []IteratorSource, start, end []byte) Iterator {
+	if len(sources) == 1 {
+		return newSingleSourceMerger(sources, start, end)
+	}
 	// Optimization for the common two-source case
 	if len(sources) == 2 {
 		// Assume sources[0] has higher priority (lower number)

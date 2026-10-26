@@ -210,12 +210,43 @@ func TestCommandWALDependencyDebtOwnedTelemetryDetaches(t *testing.T) {
 	if owner.Bytes() != before {
 		t.Fatal("telemetry retained scratch")
 	}
-	first.Release()
-	second.Release()
+	debt.retainCapture()
+	debt.retainCapture()
+	debt.releaseThrough(2)
+	if owner.Bytes() != before || debt.entryCountThrough(2) != 2 {
+		t.Fatal("completed concurrent barrier released original resources retained by capture")
+	}
+	debt.releaseCapture()
+	if owner.Bytes() != before || debt.entryCountThrough(2) != 2 {
+		t.Fatal("one capture released resources still owned by a second capture")
+	}
+	debt.releaseCapture()
 	if owner.Bytes() != 0 {
 		t.Fatal("metadata leak")
 	}
 	if stats.byKind[0].PendingBytes != 8 || stats.byKind[0].Kind != rootpublication.ResourceIndex {
 		t.Fatal("detached telemetry lost kind")
+	}
+}
+
+func TestCommandWALDependencyDebtCaptureReleaseKeepsUncoveredSuccessor(t *testing.T) {
+	var debt CommandWALDependencyDebt
+	if err := debt.add(1, nil); err != nil {
+		t.Fatal(err)
+	}
+	debt.retainCapture()
+	debt.releaseThrough(1)
+	if err := debt.add(2, nil); err != nil {
+		t.Fatal(err)
+	}
+	debt.releaseThrough(2)
+	if err := debt.add(3, nil); err != nil {
+		t.Fatal(err)
+	}
+	debt.releaseCapture()
+	debt.mu.Lock()
+	defer debt.mu.Unlock()
+	if len(debt.entries) != 1 || debt.entries[0].firstLSN != 3 || debt.entries[0].lastLSN != 3 || debt.capturePins != 0 || debt.deferredReleaseLSN != 0 {
+		t.Fatalf("capture release lost uncovered successor: %+v", debt.entries)
 	}
 }

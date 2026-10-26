@@ -296,6 +296,11 @@ func writeCommandWALWriterBufferStats(stats map[string]string, db *DB) {
 		return
 	}
 	snap := db.commandJournal.WriterBufferStats()
+	stats["treedb.command_wal.writer.path"] = snap.ActivePath
+	stats["treedb.command_wal.writer.container"] = snap.Container
+	stats["treedb.command_wal.writer.container_reason"] = snap.ContainerReason
+	stats["treedb.command_wal.writer.filesystem_type"] = fmt.Sprintf("%d", snap.FilesystemType)
+	stats["treedb.command_wal.writer.memory_filesystem"] = fmt.Sprintf("%t", snap.MemoryFilesystem)
 	stats["treedb.command_wal.writer.buffer_size_bytes"] = fmt.Sprintf("%d", snap.BufferedWriterSize)
 	stats["treedb.command_wal.writer.buffered_bytes"] = fmt.Sprintf("%d", snap.BufferedWriterBufferedBytes)
 	stats["treedb.command_wal.writer.scratch_capacity_bytes"] = fmt.Sprintf("%d", snap.ScratchCapacity)

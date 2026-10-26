@@ -215,6 +215,16 @@ func (runtime *rootPublicationRuntimeV1) prepareCapsuleSealV6(member *rootPublic
 	if e != nil {
 		return e
 	}
+	// Open/rebuild cannot mint completion credit. The existing DATA receipt
+	// identifies a successful publication in this exact live pager incarnation.
+	dependenciesCovered := false
+	completed := base.primary.dataCompletion
+	if base.pending == nil && len(base.ambiguous) == 0 && completed.pager == runtime.idx.pager && completed.incarnation == token.Generation() && completed.identity == token.Identity() {
+		dependenciesCovered, e = resources.RawLeafDependenciesCoveredBy(proofResources)
+		if e != nil {
+			return e
+		}
+	}
 	if e = growPrimaryRuntimeSlice(runtime, &runtime.seals, len(runtime.seals)+1); e != nil {
 		return e
 	}
@@ -224,6 +234,7 @@ func (runtime *rootPublicationRuntimeV1) prepareCapsuleSealV6(member *rootPublic
 	}
 	seal := &rootPublicationSealV1{metadataCharge: sealMetadata, latestSequence: member.sequence, groupLength: groupLength, idx: runtime.idx, next: member.next, resources: resources, manifest: manifest, prefix: append([]*freelist.PreparedCOWCandidateV1(nil), runtime.debt...), token: token, record: actual.Record, meta: meta, target: target, base: rootPublicationSealBaseV1{slotCommit: base.slotCommit, slotResources: base.slotResources, slotMeta: base.slotMeta, slotRecord: base.slotRecord}, primary: &primaryPublicationSealV5{prepared: member.primary, projection: actual.Primary, manifestBanks: mrefs, token: primaryToken, proofResources: proofResources, promotion: promotion}}
 	seal.primary.dataParentCoverage = runtime.primaryDataParentCoverageV6(seal, base)
+	seal.dependenciesCovered = dependenciesCovered
 	seal.metadata = runtime.idx.primary.MetadataOwner()
 	seal.disposalFailure.payload = seal
 	runtime.seals = append(runtime.seals, seal)

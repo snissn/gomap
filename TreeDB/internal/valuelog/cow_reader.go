@@ -337,12 +337,43 @@ func ReadCOWLeafPage(f *os.File, ptr page.ValuePtr, shape COWRecordShape, verify
 	return out, nil
 }
 
+// AppendCOWRecord appends one fully revalidated, verified and decoded value to
+// caller-owned dst. It retains neither dst nor a decoder alias. Input/raw
+// scratch must be disjoint from dst. Scratch and the exact file must remain
+// admitted, exclusively owned and pinned
+// until this synchronous copy completes, as for ReadCOWRecord. Unlike a borrowed
+// read, no separately admitted value-output scratch is needed.
+func AppendCOWRecord(f *os.File, ptr page.ValuePtr, shape COWRecordShape, verifyCRC bool, payloadScratch, rawScratch, dst []byte, decode COWDecodeFunc) ([]byte, error) {
+	value, err := readCOWRecordValue(f, ptr, shape, verifyCRC, payloadScratch, rawScratch, decode, false)
+	if err != nil {
+		return dst, err
+	}
+	return append(dst, value...), nil
+}
+
 func readCOWRecord(f *os.File, ptr page.ValuePtr, shape COWRecordShape, verifyCRC bool, payloadScratch, rawScratch, outputScratch []byte, decode COWDecodeFunc, leaf bool) ([]byte, error) {
+	if uint64(cap(outputScratch)) < shape.ValueBytes {
+		return nil, ErrCOWReadCapacity
+	}
+	value, err := readCOWRecordValue(f, ptr, shape, verifyCRC, payloadScratch, rawScratch, decode, leaf)
+	if err != nil {
+		return nil, err
+	}
+	out := outputScratch[:int(shape.ValueBytes):int(shape.ValueBytes)]
+	copy(out, value)
+	return out, nil
+}
+
+// The selected bytes borrow only this synchronous reader's admitted input/raw
+// owner. Wrappers must finish copying before releasing that owner's mutex; this
+// private helper never publishes an alias to an API caller.
+func readCOWRecordValue(f *os.File, ptr page.ValuePtr, shape COWRecordShape, verifyCRC bool, payloadScratch, rawScratch []byte, decode COWDecodeFunc, leaf bool) ([]byte, error) {
 	if !shape.valid || shape.leaf != leaf || shape.ptr != ptr || shape.RecordBytes < HeaderSize ||
-		uint64(cap(payloadScratch)) < shape.PayloadBytes() || uint64(cap(outputScratch)) < shape.ValueBytes ||
+		uint64(cap(payloadScratch)) < shape.PayloadBytes() ||
 		(shape.Compressed && uint64(cap(rawScratch)) < shape.RawBytes) {
 		return nil, ErrCOWReadCapacity
 	}
+
 	input := payloadScratch[:int(shape.RecordBytes):int(shape.RecordBytes)]
 	header := input[:HeaderSize:HeaderSize]
 	n, err := cowReadHeader(f, ptr, header, shape.limits, leaf)
@@ -395,9 +426,7 @@ func readCOWRecord(f *os.File, ptr page.ValuePtr, shape COWRecordShape, verifyCR
 	if templ.IsEncodedPayload(value) || (!leaf && HasCompactLeafLogPayload(value)) {
 		return nil, ErrCOWReadUnsupported
 	}
-	out := outputScratch[:int(shape.ValueBytes):int(shape.ValueBytes)]
-	copy(out, value)
-	return out, nil
+	return value, nil
 }
 
 // COWDecoderAllocationSizes reports separately rounded raw retained capacities

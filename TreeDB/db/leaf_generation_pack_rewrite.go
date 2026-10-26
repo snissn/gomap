@@ -17,6 +17,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -248,6 +249,7 @@ func (a *leafRefRewritePageAppender) AppendLeafPage(leafPage []byte) (page.LeafL
 }
 
 type leafRefRewriteRunStats struct {
+	privateCOWOwner                        *transactionowner.Owner
 	maintenanceLimits                      LeafGenerationMaintenanceLimits
 	InternalPagesVisited                   int
 	SubtreesPruned                         int
@@ -1924,17 +1926,22 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: meta write failpoint: %w", err))
 	}
 
+	var equivalentOwner *transactionowner.Owner
+	if runStats != nil {
+		equivalentOwner = runStats.privateCOWOwner
+	}
 	finalizeStarted := time.Now()
 	post, finalizeErr := db.finalizeCommitLockedWithOptions(publishedRoot, publishedSysRoot, publishRetired, true, adaptive.Metrics{}, createdIDs, len(publishCollectionReplacements) > 0, nil, leafManifest, leafManifestRawFileIDs, finalizeCommitOptions{
-		skipPrePublishFlush:           true,
-		syncMetaPageOnly:              true,
-		durableIndex:                  idx,
-		expectedBaseCommitSeq:         basis.commitSeq,
-		hasExpectedBaseCommitSeq:      true,
-		releaseRootSerialization:      unlockPublish,
-		durableResources:              durableResources,
-		leafManifestAlreadyPersistent: true,
-		valueLogPublicationLocked:     true,
+		privateCOWEquivalentRewriteOwner: equivalentOwner,
+		skipPrePublishFlush:              true,
+		syncMetaPageOnly:                 true,
+		durableIndex:                     idx,
+		expectedBaseCommitSeq:            basis.commitSeq,
+		hasExpectedBaseCommitSeq:         true,
+		releaseRootSerialization:         unlockPublish,
+		durableResources:                 durableResources,
+		leafManifestAlreadyPersistent:    true,
+		valueLogPublicationLocked:        true,
 	})
 	// The finalizer consumes producer closures on every path. A prepared retry
 	// candidate, when present, now owns their exact handles independently of the

@@ -387,8 +387,8 @@ func TestCOWPublicPointReadPointerPreservesViewAdmission(t *testing.T) {
 	}
 }
 
-// Measure the original complete-cut materializer's real retained charge before
-// applying pressure. The public DB call must fit that same budget, without also
+// Measure the complete-cut owned point continuation's real retained charge
+// before applying pressure. The public DB call must fit that same budget, without also
 // retaining a fresh opportunistic basis traversal throughout the handoff.
 func cowAssertFreshPointHandoffRefundsBeforeLocalAdmission(t *testing.T, db *DB, key, want []byte, pointer bool) {
 	t.Helper()
@@ -416,7 +416,7 @@ func cowAssertFreshPointHandoffRefundsBeforeLocalAdmission(t *testing.T, db *DB,
 	var got []byte
 	if pointer {
 		s.cowReadMu.Lock()
-		got, _, err = s.cowValueFromEntryLocked(entry)
+		got, _, err = s.cowAppendPointEntryLocked(entry, nil)
 		s.cowReadMu.Unlock()
 	} else {
 		got, err = s.Get(key)
@@ -429,7 +429,10 @@ func cowAssertFreshPointHandoffRefundsBeforeLocalAdmission(t *testing.T, db *DB,
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if localCharge == 0 || budget.Stats() != before || basis.reader != nil {
+	afterMeasurement := budget.Stats()
+	// PeakBytes is cumulative; only live ownership must return to its baseline.
+	afterMeasurement.PeakBytes = before.PeakBytes
+	if localCharge == 0 || afterMeasurement != before || basis.reader != nil {
 		t.Fatalf("measurement must refund the original local owner: before=%+v after=%+v", before, budget.Stats())
 	}
 	leaseCharge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))

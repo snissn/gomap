@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -215,23 +216,15 @@ func TestSplitVectorInsertTerminalTailRecoveryV1(t *testing.T) {
 				t.Fatal("missing acknowledged source command frame")
 			}
 			if corruptPrefix {
-				file, err := os.OpenFile(path, os.O_RDWR, 0)
+				image, err := os.ReadFile(path)
 				if err != nil {
 					t.Fatal(err)
 				}
-				info, err := file.Stat()
-				if err != nil {
-					_ = file.Close()
+				start, length, _ := splitCollectionRecoveryFixedExtentV1(t, image, applied)
+				// Damage the acknowledged inner frame, rather than unused reserve.
+				image[start+96+length-1] ^= 0xff
+				if err := os.WriteFile(path, image, 0600); err != nil {
 					t.Fatal(err)
-				}
-				var last [1]byte
-				if _, err = file.ReadAt(last[:], info.Size()-1); err == nil {
-					last[0] ^= 0xff
-					_, err = file.WriteAt(last[:], info.Size()-1)
-				}
-				closeErr := file.Close()
-				if err != nil || closeErr != nil {
-					t.Fatal(err, closeErr)
 				}
 			} else {
 				next := v
@@ -256,11 +249,20 @@ func TestSplitVectorInsertTerminalTailRecoveryV1(t *testing.T) {
 				if err := writer.Close(); err != nil {
 					t.Fatal(err)
 				}
-				info, err := os.Stat(path)
+				image, err := os.ReadFile(path)
 				if err != nil {
 					t.Fatal(err)
 				}
-				if err := os.Truncate(path, info.Size()-1); err != nil {
+				start, length, end := splitCollectionRecoveryFixedExtentV1(t, image, applied+1)
+				const witnessBytes, classifiablePrefixBytes = 96, 8 + 56
+				if length <= classifiablePrefixBytes {
+					t.Fatal("suffix has no incomplete body")
+				}
+				// Preserve valid start bounds and the complete V2 identity while
+				// interrupting body/footer writes into initialized zero reserve.
+				clear(image[start+witnessBytes+classifiablePrefixBytes : start+witnessBytes+length])
+				clear(image[end-witnessBytes : end])
+				if err := os.WriteFile(path, image, 0600); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -483,4 +485,27 @@ func TestSplitInsertIdentityCapacityCountsTombstonesV1(t *testing.T) {
 	if err := c.preflightSplitInsertIdentityV1(snap, splitInsertStateKeyV1(v)); !errors.Is(err, ErrVectorPartitionSplitInsertCapacityV1) {
 		t.Fatalf("retained tombstones did not occupy identity slots: %v", err)
 	}
+}
+
+// Locate the single-frame extent written by this fixture. Format-specific fault
+// injection must preserve initialized capacity and never mistake physical EOF
+// for the end of the accepted command stream.
+func splitCollectionRecoveryFixedExtentV1(t *testing.T, image []byte, lsn uint64) (int64, int64, int64) {
+	t.Helper()
+	if len(image) < 4096 || string(image[:8]) != "TDBWAL\x03\x00" {
+		t.Fatal("fixture requires fixed WAL v3")
+	}
+	for off := int64(4096); off+96 <= int64(len(image)) && string(image[off:off+8]) == "TDBEXT\x03\x00"; {
+		length := int64(binary.LittleEndian.Uint64(image[off+40 : off+48]))
+		end := int64(binary.LittleEndian.Uint64(image[off+48 : off+56]))
+		if length <= 0 || end <= off+192 || end > int64(len(image)) || length > end-off-192 {
+			t.Fatal("invalid fixture extent bounds")
+		}
+		if binary.LittleEndian.Uint64(image[off+56:off+64]) == lsn && binary.LittleEndian.Uint64(image[off+64:off+72]) == lsn {
+			return off, length, end
+		}
+		off = end
+	}
+	t.Fatalf("missing single-frame extent LSN %d", lsn)
+	return 0, 0, 0
 }

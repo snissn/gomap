@@ -601,10 +601,11 @@ func TestPowerLossOracleCounterexampleNewMetaMissingClosure(t *testing.T) {
 		if targetMeta {
 			capturedActual := observed.Clone()
 			// Retain a regression image with the new process-visible generation
-			// overlaid on the old stable baseline. Production has already synced
-			// dependencies and index pages at this point; this independent model
-			// keeps the historical selective-writeback variants replayable so the
-			// recovery selector must continue falling back safely.
+			// overlaid on the old stable baseline. DATA and external dependencies
+			// are already synced, but V6 stages its capsule and PRIMARY banks
+			// before their combined fence. This independent model also keeps the
+			// historical selective-writeback variants of external dependencies
+			// replayable so incomplete candidates must still fall back safely.
 			captured := baseline.Clone()
 			if err := captured.Overlay(dir); err != nil {
 				return err
@@ -683,8 +684,43 @@ func TestPowerLossOracleCounterexampleNewMetaMissingClosure(t *testing.T) {
 		return metaChanged, indexChanged
 	}
 	actualMetaChanged, actualIndexChanged := splitMetaRanges(actualChanged)
-	if len(actualMetaChanged) == 0 || len(actualIndexChanged) != 0 {
-		t.Fatalf("actual ordered cut must leave only target-meta bytes dirty: meta=%v index=%v", actualMetaChanged, actualIndexChanged)
+	if len(actualMetaChanged) == 0 || len(actualIndexChanged) == 0 {
+		t.Fatalf("actual pre-fence V6 cut must retain staged capsule and bank bytes: meta=%v index=%v", actualMetaChanged, actualIndexChanged)
+	}
+	// Verify real changed bank content in the captured image, rather than
+	// accepting reserved pages or a newly grown zero tail as a bank witness.
+	volatileDir := t.TempDir()
+	if err := actualSnapshot.MaterializeVolatile(volatileDir); err != nil {
+		t.Fatal(err)
+	}
+	volatilePrimary, err := os.ReadFile(filepath.Join(volatileDir, relIndex))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bankChanged := false
+	for _, r := range actualIndexChanged {
+		lo, hi := max(r.Offset, 8*page.PageSize), r.Offset+r.Length
+		if hi > int64(len(volatilePrimary)) {
+			t.Fatal("changed range exceeds captured volatile PRIMARY bytes")
+		}
+		for i := lo; i < hi; i++ {
+			bankChanged = bankChanged || volatilePrimary[i] != 0
+		}
+	}
+	if !bankChanged {
+		t.Fatal("staged generation changed no actual noncapsule PRIMARY bank bytes")
+	}
+	// The sole PRIMARY fence has not run at AfterMetaWrite. Required DATA
+	// and external-file fences still precede capsule staging and remain real
+	// dependencies; never infer their completion from PRIMARY's staged bytes.
+	for path := range dependencyPaths {
+		dirty, err := actualSnapshot.ChangedRanges(path)
+		if err != nil || len(dirty) != 0 {
+			t.Fatalf("external dependency not stable before capsule stage: path=%s dirty=%v err=%v", path, dirty, err)
+		}
+	}
+	if dirty, err := actualSnapshot.ChangedRanges("index.db"); err != nil || len(dirty) != 0 {
+		t.Fatalf("DATA dependency not stable before capsule stage: dirty=%v err=%v", dirty, err)
 	}
 	changed, err := snapshot.ChangedRanges(relIndex)
 	if err != nil {

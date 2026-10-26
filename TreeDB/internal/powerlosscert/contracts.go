@@ -3,6 +3,7 @@ package powerlosscert
 import (
 	"fmt"
 	"reflect"
+	"slices"
 )
 
 const WitnessContractsSchemaVersion = "treedb-power-loss-witness-contracts/v4"
@@ -17,6 +18,63 @@ type WitnessContracts struct {
 	Issue                int       `json:"issue"`
 	RequiredPullRequests []int     `json:"required_pull_requests"`
 	Cases                []RunCase `json:"cases"`
+	StreamFallbackCases  []RunCase `json:"stream_fallback_cases,omitempty"`
+}
+
+// ResolveWitnessContracts projects the committed physical replay selectors for
+// plan construction and exact-SHA execution. It never rewrites a supplied plan.
+// Fallbacks may change only the cut address and its physical explanatory text;
+// provenance, risk ownership, recovery state, order, and case count stay fixed.
+// All overrides are validated even when fixed-WAL creation is supported.
+func ResolveWitnessContracts(contracts WitnessContracts, fixedWAL bool) (WitnessContracts, error) {
+	resolved := contracts
+	resolved.RequiredPullRequests = slices.Clone(contracts.RequiredPullRequests)
+	resolved.Cases = cloneContractCases(contracts.Cases)
+	resolved.StreamFallbackCases = cloneContractCases(contracts.StreamFallbackCases)
+	byID := make(map[string]int, len(contracts.Cases))
+	for index, contract := range contracts.Cases {
+		if _, exists := byID[contract.ID]; contract.ID == "" || exists {
+			return WitnessContracts{}, fmt.Errorf("powerlosscert: committed witness contract has empty or duplicate id %q", contract.ID)
+		}
+		byID[contract.ID] = index
+	}
+	seen := make(map[string]bool, len(contracts.StreamFallbackCases))
+	for _, fallback := range contracts.StreamFallbackCases {
+		index, exists := byID[fallback.ID]
+		if !exists || seen[fallback.ID] {
+			return WitnessContracts{}, fmt.Errorf("powerlosscert: stream fallback has unknown or duplicate id %q", fallback.ID)
+		}
+		seen[fallback.ID] = true
+		base := contracts.Cases[index]
+		if fallback.CutID == "" || fallback.DependencyGraph == "" || fallback.ExpectedDurableHorizon == "" || fallback.ClaimBoundary == "" {
+			return WitnessContracts{}, fmt.Errorf("powerlosscert: stream fallback %q has empty physical replay description", fallback.ID)
+		}
+		invariant := fallback
+		invariant.CutID = base.CutID
+		invariant.DependencyGraph = base.DependencyGraph
+		invariant.ExpectedDurableHorizon = base.ExpectedDurableHorizon
+		invariant.ClaimBoundary = base.ClaimBoundary
+		if !reflect.DeepEqual(invariant, base) {
+			return WitnessContracts{}, fmt.Errorf("powerlosscert: stream fallback %q changes coverage, provenance, or recovery authority", fallback.ID)
+		}
+		if !fixedWAL {
+			resolved.Cases[index] = cloneContractCases([]RunCase{fallback})[0]
+		}
+	}
+	return resolved, nil
+}
+
+func cloneContractCases(cases []RunCase) []RunCase {
+	if cases == nil {
+		return nil
+	}
+	cloned := slices.Clone(cases)
+	for index := range cloned {
+		cloned[index].ResourceShapes = slices.Clone(cases[index].ResourceShapes)
+		cloned[index].StorageBoundaries = slices.Clone(cases[index].StorageBoundaries)
+		cloned[index].FailureClasses = slices.Clone(cases[index].FailureClasses)
+	}
+	return cloned
 }
 
 func ParseWitnessContracts(data []byte) (WitnessContracts, error) {
@@ -67,6 +125,19 @@ func ValidateWitnessContracts(plan RunPlan, contracts WitnessContracts) error {
 		if !reflect.DeepEqual(plan.Cases[index], contract) {
 			return fmt.Errorf("powerlosscert: run plan case %d (%q) is not identical to the committed replay and risk-ownership contract", index, plan.Cases[index].ID)
 		}
+	}
+	return nil
+}
+
+// ValidateFrozenWALContainer rejects a child medium mismatch before comparing
+// physical selectors. Empty expectations are ordinary non-certification tests;
+// a frozen runner expectation can never be rebound after observing the child.
+func ValidateFrozenWALContainer(expected, actual string) error {
+	if expected == "" {
+		return nil
+	}
+	if (expected != "fixed" && expected != "stream") || actual != expected {
+		return fmt.Errorf("powerlosscert: actual WAL container %q differs from frozen runner-preflight container %q", actual, expected)
 	}
 	return nil
 }
