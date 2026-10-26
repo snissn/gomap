@@ -1793,6 +1793,17 @@ Coverage:
   `text_v2_position_validation_4558_test.go`:
   - block-max fallback and final-attribution posting budgets remain monotonic
     and fail closed without exceeding the explicit cap
+- `TreeDB/collections/text_v2_dense_norm_test.go`:
+  - packed field/generation width boundaries, nonminimal legal reader widths,
+    dense partial/full and multifield records, exact V1 fallback bytes, and
+    owned selected outputs
+  - full-record structural proof rejects malformed headers, generation/ordinal
+    range overflow, impossible sizes, truncated excluded fields and unused
+    bitmap bits even when the selected set is empty
+- `TreeDB/collections/text_v2_dense_norm_public_test.go`:
+  - legacy/native NoWAL and command-durable insert/update/delete, held-cut
+    visibility, storage inspection, NoWAL rewrite and checkpoint/reopen
+  - native command-WAL process replay without a graceful-close checkpoint
 - `TreeDB/documentservice/rag_parity_test.go`:
   - `TestHTTPLiteralAndBoundedFilteredLexicalSearch4766`
   - `TestHTTPBooleanOperatorConflictParity4766`

@@ -2730,6 +2730,9 @@ func decodeTextV2SearchNormBlock(raw []byte) (textV2SearchNormBlock, error) {
 // Retained descriptors and field lengths own their arrays; raw is needed only
 // for this synchronous decode. Docmap decoding below has a different lifetime.
 func decodeTextV2SearchNormBlockSelected(raw []byte, allowed *textV2SearchOrdinalAllowSet) (textV2SearchNormBlock, error) {
+	if len(raw) != 0 && raw[0] == textV2DenseNormBlockValueVersion {
+		return decodeTextV2SearchDenseNormBlockSelected(raw, allowed)
+	}
 	cur, err := textV2ValueCursor(raw, textV2NormBlockValueVersion, "norm block")
 	if err != nil {
 		return textV2SearchNormBlock{}, err

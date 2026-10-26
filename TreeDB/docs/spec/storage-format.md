@@ -1537,9 +1537,67 @@ own a separate physical file class or GC domain.
 The explicit-v1 text root payload contract is documented in
 `collection-text-search.md`. The default-v2 production contract, v1 compatibility
 boundary, and rollout rules are documented in `collection-text-v2-contract.md`;
-this section records the canonical durable key/value bytes that have landed for
+this section records the canonical durable key/value bytes for packed norms and
 the M2 posting-block family. All integer varints below are Go `binary.PutUvarint` encodings unless
 noted otherwise.
+
+### Packed norm values
+
+The ordinary `<collection>/text-v2-norm-blocks/<indexName>` root uses the
+existing ordinal-block keys and root format. Norm value version 1 remains
+readable and is the byte-identical writer fallback for sparse/invalid inputs,
+generation ranges that cannot be packed, and records without a size benefit.
+Version 2 has this layout:
+
+```text
+u8      ValueVersion = 2
+uvarint BlockStart
+uvarint BlockSize
+uvarint FieldCount
+uvarint EntryCount
+uvarint BaseGeneration
+u8      GenerationWidth // 0, 1, 2, or 4 bytes
+u8      FieldWidth      // 1, 2, or 4 bytes
+bytes   Tombstones[ceil(EntryCount/8)]
+bytes   GenerationDeltas[EntryCount * GenerationWidth]
+bytes   FieldLengths[EntryCount * FieldCount * FieldWidth]
+```
+
+Entry `i` has ordinal `BlockStart+i`, generation `BaseGeneration+delta[i]`,
+and tombstone flag `(Tombstones[i/8] >> (i%8)) & 1`. Delta and field lanes are
+unsigned little-endian fixed-width integers; fields are entry-major. Width zero
+means all deltas are zero and has no delta payload. The writer chooses the
+minimum generation and smallest widths covering the exact generations/lengths,
+without changing identities. It emits version 2 only for a nonempty contiguous
+prefix from `BlockStart`, valid fields/flags, and a strictly smaller encoding
+than version 1. It sizes both representations before allocating one output.
+
+Before allocating decoded output, readers prove `BlockStart>0`, a valid positive
+uint32 `BlockSize`, nonoverflowing `BlockStart+BlockSize`,
+`0<EntryCount<=BlockSize`, a positive uint32 `FieldCount`, legal widths,
+`BaseGeneration>0`, and
+`BaseGeneration+maxRepresentable(GenerationWidth)<=MaxUint64`. They check exact
+payload length with overflow-safe arithmetic and reject set unused high bits in
+the final tombstone byte. Every fixed-width field is a valid uint32; the base
+bound proves every possible delta yields a valid nonzero generation. Dense
+positions prove all ordinal range/order/uniqueness predicates, and the bitmap
+represents only the supported flag. These checks prove structural validity of
+the entire consumed record, including unselected entries, without reading each
+excluded integer. A wider legal width or positive base below the actual minimum
+is accepted: minimality is a writer choice, as it is for existing varints.
+
+After that complete structural proof, selected decoding addresses only retained
+ordinals and copies their fields into owned arrays. Existing key/value identity,
+snapshot status/generation and known-forward identity checks remain mandatory
+outside the codec. Record/page CRC, pinned physical identity, admission, capture
+authority and read lifetimes are unchanged. The original version-1 decoder still
+validates every variable-width entry, including excluded entries.
+
+Updates/deletes preserve their incremented per-document generations through
+fixed deltas when possible. Sparse tombstone purge, excessive generation range
+or a nonbeneficial packed size selects version 1. Both versions are accepted by
+mutation, backfill, inspection and rewrite readers and by reopen/command replay
+in the new binary; this does not promise that an older binary reads version 2.
 
 Text-v2 posting-block root name:
 
