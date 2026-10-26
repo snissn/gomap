@@ -132,6 +132,9 @@ func (c *textV2SearchCandidate) addPostingValue(term string, value textV2SearchP
 type textV2SearchBlockCache struct {
 	normBlocks   map[uint64]textV2SearchNormBlock
 	docMapBlocks map[uint64]textV2SearchDocMapBlock
+	// Immutable for this query. Nil/all retain complete blocks, including
+	// historical entries; strict filters retain only their selected ordinals.
+	allowed *textV2SearchOrdinalAllowSet
 }
 
 type textV2SearchNormBlock struct {
@@ -341,7 +344,7 @@ func executeTextV2SearchAtSnapshot(
 	textSearchExplainSetServingPath(response.Explain, TextSearchExplainPathExactPostings, false)
 
 	candidates := make(map[uint64]*textV2SearchCandidate)
-	cache := textV2SearchBlockCache{}
+	cache := textV2SearchBlockCache{allowed: allowSet}
 	scanTerms := orderTextV2SearchScanTerms(terms, operator, ctx.termStats)
 	scanStart := time.Now()
 	for i, term := range scanTerms {
@@ -645,7 +648,7 @@ func executeTextV2BlockMaxSearchAtSnapshot(
 		fallbackOpts.textV2DisableBlockMax = true
 		return executeTextV2SearchAtSnapshot(c, snap, catalog, idx, fallbackOpts, []string{term}, TextSearchOperatorOR, candidateLimit, maxPostingsScanned, resultMode, fallback)
 	}
-	cache := textV2SearchBlockCache{}
+	cache := textV2SearchBlockCache{allowed: allowSet}
 	top := textV2SearchTopK{limit: opts.TopK, candidates: make([]textV2SearchTopCandidate, 0, opts.TopK)}
 	fieldCount := len(ctx.fieldNames)
 	var scratch []uint32
@@ -916,7 +919,7 @@ func executeTextV2ANDBlockMaxSearchAtSnapshot(
 		}
 	}()
 
-	cache := textV2SearchBlockCache{}
+	cache := textV2SearchBlockCache{allowed: allowSet}
 	top := textV2SearchTopK{limit: opts.TopK, candidates: make([]textV2SearchTopCandidate, 0, opts.TopK)}
 	seenCurrent := make(map[uint64]uint64)
 	scanStart := time.Now()
@@ -1527,7 +1530,7 @@ func executeTextV2ORBlockMaxSearchAtSnapshot(
 		}
 	}()
 
-	cache := textV2SearchBlockCache{}
+	cache := textV2SearchBlockCache{allowed: allowSet}
 	top := textV2SearchTopK{limit: opts.TopK, candidates: make([]textV2SearchTopCandidate, 0, opts.TopK)}
 	activeScratch := make([]*textV2ANDBlockMaxTermState, 0, len(states))
 	scanStart := time.Now()
@@ -2586,7 +2589,50 @@ func validateTextV2PositionPostingAtSnapshot(snap *backenddb.Snapshot, catalog *
 	return validateTextV2PositionValueMatchesPosting(value, idx, posting)
 }
 
+// Entries are validated as strictly increasing before selection. Borrow the
+// immutable block-local ordinal range once, then merge it with decoded entries
+// instead of repeating a hash lookup for every source record. Selection never
+// skips parsing or validation, including records absent from the allow-set.
+type textV2SearchBlockSelection struct {
+	ordinals []uint64
+	all      bool
+}
+
+// The count is already checked for int conversion by the decoder. Bound its
+// retained arrays by selected ordinals in THIS block, not the global filter.
+func newTextV2SearchBlockSelection(allowed *textV2SearchOrdinalAllowSet, start uint64, size uint32, count uint64) (textV2SearchBlockSelection, int) {
+	if allowed == nil || allowed.all {
+		return textV2SearchBlockSelection{all: true}, int(count)
+	}
+	last := start + uint64(size) - 1
+	if last < start {
+		last = math.MaxUint64
+	}
+	first, end, _ := allowed.rangeBounds(start, last)
+	return textV2SearchBlockSelection{ordinals: allowed.sorted[first:end]}, min(int(count), end-first)
+}
+
+func (s *textV2SearchBlockSelection) keep(ordinal uint64) bool {
+	if s.all {
+		return true
+	}
+	for len(s.ordinals) > 0 && s.ordinals[0] < ordinal {
+		s.ordinals = s.ordinals[1:]
+	}
+	if len(s.ordinals) == 0 || s.ordinals[0] != ordinal {
+		return false
+	}
+	s.ordinals = s.ordinals[1:]
+	return true
+}
+
 func decodeTextV2SearchNormBlock(raw []byte) (textV2SearchNormBlock, error) {
+	return decodeTextV2SearchNormBlockSelected(raw, nil)
+}
+
+// Selection changes retained decoded storage, never structural validation.
+// The complete source record remains owned for the query's original lifetime.
+func decodeTextV2SearchNormBlockSelected(raw []byte, allowed *textV2SearchOrdinalAllowSet) (textV2SearchNormBlock, error) {
 	cur, err := textV2ValueCursor(raw, textV2NormBlockValueVersion, "norm block")
 	if err != nil {
 		return textV2SearchNormBlock{}, err
@@ -2624,12 +2670,13 @@ func decodeTextV2SearchNormBlock(raw []byte) (textV2SearchNormBlock, error) {
 	if entryCount > uint64(int(^uint(0)>>1)) || entryCount*fieldCountRaw > uint64(int(^uint(0)>>1)) {
 		return textV2SearchNormBlock{}, errMalformedTextStorage("text-v2 norm block too large")
 	}
+	selection, retained := newTextV2SearchBlockSelection(allowed, blockStart, blockSize, entryCount)
 	block := textV2SearchNormBlock{
 		BlockStart:   blockStart,
 		BlockSize:    blockSize,
 		FieldCount:   fieldCount,
-		Entries:      make([]textV2SearchNormEntry, 0, int(entryCount)),
-		FieldLengths: make([]uint32, 0, int(entryCount*fieldCountRaw)),
+		Entries:      make([]textV2SearchNormEntry, 0, retained),
+		FieldLengths: make([]uint32, 0, retained*int(fieldCountRaw)),
 	}
 	var prev uint64
 	for i := uint64(0); i < entryCount; i++ {
@@ -2650,6 +2697,7 @@ func decodeTextV2SearchNormBlock(raw []byte) (textV2SearchNormBlock, error) {
 			return textV2SearchNormBlock{}, err
 		}
 		fieldOffset := len(block.FieldLengths)
+		keep := selection.keep(ordinal)
 		for j := uint32(0); j < fieldCount; j++ {
 			length, err := cur.readUvarint()
 			if err != nil {
@@ -2658,9 +2706,13 @@ func decodeTextV2SearchNormBlock(raw []byte) (textV2SearchNormBlock, error) {
 			if uint64(checkedTextUint32(length)) != length {
 				return textV2SearchNormBlock{}, errMalformedTextStorage("text-v2 norm entry[%d] field[%d] length overflows uint32", i, j)
 			}
-			block.FieldLengths = append(block.FieldLengths, uint32(length))
+			if keep {
+				block.FieldLengths = append(block.FieldLengths, uint32(length))
+			}
 		}
-		block.Entries = append(block.Entries, textV2SearchNormEntry{Ordinal: ordinal, Generation: generation, Flags: flags, FieldLengths: block.FieldLengths[fieldOffset : fieldOffset+int(fieldCount)]})
+		if keep {
+			block.Entries = append(block.Entries, textV2SearchNormEntry{Ordinal: ordinal, Generation: generation, Flags: flags, FieldLengths: block.FieldLengths[fieldOffset : fieldOffset+int(fieldCount)]})
+		}
 		prev = ordinal
 	}
 	if cur.remaining() != 0 {
@@ -2678,6 +2730,10 @@ func (b textV2SearchNormBlock) find(ordinal uint64) (textV2SearchNormEntry, bool
 }
 
 func decodeTextV2SearchDocMapBlock(raw []byte) (textV2SearchDocMapBlock, error) {
+	return decodeTextV2SearchDocMapBlockSelected(raw, nil)
+}
+
+func decodeTextV2SearchDocMapBlockSelected(raw []byte, allowed *textV2SearchOrdinalAllowSet) (textV2SearchDocMapBlock, error) {
 	cur, err := textV2ValueCursor(raw, textV2DocMapValueVersion, "docmap block")
 	if err != nil {
 		return textV2SearchDocMapBlock{}, err
@@ -2704,7 +2760,8 @@ func decodeTextV2SearchDocMapBlock(raw []byte) (textV2SearchDocMapBlock, error) 
 	if entryCount > uint64(int(^uint(0)>>1)) {
 		return textV2SearchDocMapBlock{}, errMalformedTextStorage("text-v2 docmap block too large")
 	}
-	block := textV2SearchDocMapBlock{BlockStart: blockStart, BlockSize: blockSize, Entries: make([]textV2SearchDocMapEntry, 0, int(entryCount))}
+	selection, retained := newTextV2SearchBlockSelection(allowed, blockStart, blockSize, entryCount)
+	block := textV2SearchDocMapBlock{BlockStart: blockStart, BlockSize: blockSize, Entries: make([]textV2SearchDocMapEntry, 0, retained)}
 	var prev uint64
 	for i := uint64(0); i < entryCount; i++ {
 		ordinal, err := cur.readUvarint()
@@ -2730,7 +2787,9 @@ func decodeTextV2SearchDocMapBlock(raw []byte) (textV2SearchDocMapBlock, error) 
 		if len(documentID) == 0 {
 			return textV2SearchDocMapBlock{}, errMalformedTextStorage("text-v2 docmap entry[%d] missing document id", i)
 		}
-		block.Entries = append(block.Entries, textV2SearchDocMapEntry{Ordinal: ordinal, Generation: generation, Flags: flags, DocumentID: documentID})
+		if selection.keep(ordinal) {
+			block.Entries = append(block.Entries, textV2SearchDocMapEntry{Ordinal: ordinal, Generation: generation, Flags: flags, DocumentID: documentID})
+		}
 		prev = ordinal
 	}
 	if cur.remaining() != 0 {
@@ -2768,7 +2827,7 @@ func (cache *textV2SearchBlockCache) normBlockAtOptional(snap *backenddb.Snapsho
 	if !found {
 		return textV2SearchNormBlock{}, false, nil
 	}
-	decoded, err := decodeTextV2SearchNormBlock(raw)
+	decoded, err := decodeTextV2SearchNormBlockSelected(raw, cache.allowed)
 	if err != nil {
 		return textV2SearchNormBlock{}, false, err
 	}
@@ -2947,7 +3006,7 @@ func (cache *textV2SearchBlockCache) docMapBlockAtOptional(snap *backenddb.Snaps
 	if !found {
 		return textV2SearchDocMapBlock{}, false, nil
 	}
-	decoded, err := decodeTextV2SearchDocMapBlock(raw)
+	decoded, err := decodeTextV2SearchDocMapBlockSelected(raw, cache.allowed)
 	if err != nil {
 		return textV2SearchDocMapBlock{}, false, err
 	}

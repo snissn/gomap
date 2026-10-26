@@ -1,0 +1,387 @@
+{
+  "schema": "shared-text-selected-5245-evidence-v1",
+  "measured_source": {
+    "head": "171737eb194961c7183fec471440cb761e51dcf3",
+    "tree": "c1948973e23f3e4a2f39bb45727f6e865e9ba1b2",
+    "status": ""
+  },
+  "baseline_anchor": "a621e9a4ac0904dfe012b9c9e101954cebd503d0",
+  "baseline_build": "same measured head with exactly the two archived a621 production files restored through frozen Go overlay; remaining differences are test/docs/CI metadata",
+  "publication_scope": "new benchmark evidence directory only; measured source is not relabeled to a later documentation head",
+  "plan_sha256": "2773d5e5a54f2e87ed9c8c1081fd10f2b3ca55c49693defa897b858880752c66",
+  "archive": {
+    "path": "raw-evidence.tar.gz",
+    "sha256": "7dfe308d0d1d7fd5a1ab04b9c7d7fc2a34bcacb1351cb1122f411d79b9446c60",
+    "bytes": 174206
+  },
+  "members": [
+    {
+      "path": "harness/TreeDB/documentservice/shared_cow_consumers_bench_test.go",
+      "sha256": "cc27ffef2e22d1e9c5aa0dc34c79990e6d204d02b27d555b1b8b7ec1357822a7",
+      "bytes": 6477,
+      "original": "/mnt/fast4tb/gomap-mongo-execution-20261024/shared-text-selected-extraction1/TreeDB/documentservice/shared_cow_consumers_bench_test.go"
+    },
+    {
+      "path": "measured-source/.github/ci/ci_impact.json",
+      "sha256": "3a83ef860bfbf8c5e8a1ac0ad11edf6970315edfa7615353d8ac54c1ed023749",
+      "bytes": 123531,
+      "original": "/mnt/fast4tb/gomap-mongo-execution-20261024/shared-text-selected-extraction1/.github/ci/ci_impact.json"
+    },
+    {
+      "path": "measured-source/TreeDB/collections/text_v2_phrase.go",
+      "sha256": "e1275325ba1f343f7436283bad95c1fc241ce8332c5fbbef1ac5f439ee3d108c",
+      "bytes": 13066,
+      "original": "/mnt/fast4tb/gomap-mongo-execution-20261024/shared-text-selected-extraction1/TreeDB/collections/text_v2_phrase.go"
+    },
+    {
+      "path": "measured-source/TreeDB/collections/text_v2_search.go",
+      "sha256": "8e1eabaaa475f86fe4d68088fdc10c6d74eb78d0242c2e8c6e7907682c3277c6",
+      "bytes": 122845,
+      "original": "/mnt/fast4tb/gomap-mongo-execution-20261024/shared-text-selected-extraction1/TreeDB/collections/text_v2_search.go"
+    },
+    {
+      "path": "measured-source/TreeDB/collections/text_v2_selected_sidecar_test.go",
+      "sha256": "bf6bd2bc0593f9c38832bf7b4579ebe5bc659fa1b4533223525a51f222e761c6",
+      "bytes": 9086,
+      "original": "/mnt/fast4tb/gomap-mongo-execution-20261024/shared-text-selected-extraction1/TreeDB/collections/text_v2_selected_sidecar_test.go"
+    },
+    {
+      "path": "measured-source/TreeDB/docs/spec/collection-text-v2-contract.md",
+      "sha256": "a5df22e431f4ec34be1ea41d4fcd66e1a5a6ce7e904d7bfb9ec0eddf6b958c29",
+      "bytes": 33632,
+      "original": "/mnt/fast4tb/gomap-mongo-execution-20261024/shared-text-selected-extraction1/TreeDB/docs/spec/collection-text-v2-contract.md"
+    },
+    {
+      "path": "measured-source/source-diff.patch",
+      "sha256": "7107b70bd8a0b767906523dbc354b7b5a66a36b7a239bd834243b94682ca36a5",
+      "bytes": 21708,
+      "original": "git diff a621e9a4ac0904dfe012b9c9e101954cebd503d0 171737eb194961c7183fec471440cb761e51dcf3"
+    },
+    {
+      "path": "public/baseline-overlay.json",
+      "sha256": "14a5c9b222badb97778415638443e64f4ea0f1cdb4c0489c4daa4eed3309e34e",
+      "bytes": 476,
+      "original": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/shared-text-public-ab1/baseline-overlay.json"
+    },
+    {
+      "path": "public/baseline-text_v2_phrase.go",
+      "sha256": "18144d4ed892ee1ab49dda48e87495c6ddfccdf8b200609738a2219232fa4582",
+      "bytes": 13049,
+      "original": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/shared-text-public-ab1/baseline-text_v2_phrase.go"
+    },
+    {
+      "path": "public/baseline-text_v2_search.go",
+      "sha256": "bd3fef6d09cbb5b7a1b0b79173b2df9203dea70cce3ecad8794102e6bb8ec902",
+      "bytes": 120409,
+      "original": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/shared-text-public-ab1/baseline-text_v2_search.go"
+    },
+    {
+      "path": "public/baseline1-receipt.json",
+      "sha256": "8d5429f198031ed612ebd44df2201d159d52aac15a1474b45289595aafa4ae9a",
+      "bytes": 2828,
+      "original": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/shared-text-public-ab1/baseline1-receipt.json"
+    },
+    {
+      "path": "public/baseline1.log",
+      "sha256": "9a91d42aa274098264e46945ce54a070000e1d088bea8b077a097a57fd463e20",
+      "bytes": 1001,
+      "original": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/shared-text-public-ab1/baseline1.log"
+    },
+    {
+      "path": "public/baseline2-receipt.json",
+      "sha256": "9d9fb04f638f81891646526e0241bbef500feced31b8a157e61d149647fbc26b",
+      "bytes": 2828,
+      "original": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/shared-text-public-ab1/baseline2-receipt.json"
+    },
+    {
+      "path": "public/baseline2.log",
+      "sha256": "b0ee88fe4f6fece0ee08bd5dc332896d07376e9cb4e32e25410d50c9caff5355",
+      "bytes": 1002,
+      "original": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/shared-text-public-ab1/baseline2.log"
+    },
+    {
+      "path": "public/build-baseline-receipt.json",
+      "sha256": "2d98ccf19498a671a1ce218038512299c54758350b0b1d4bb6b5f48d83ca886f",
+      "bytes": 3372,
+      "original": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/shared-text-public-ab1/build-baseline-receipt.json"
+    },
+    {
+      "path": "public/build-baseline.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "original": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/shared-text-public-ab1/build-baseline.log"
+    },
+    {
+      "path": "public/build-candidate-receipt.json",
+      "sha256": "5ea89fa7d053d8837b04f88877264a3a26877aa1bb7c61c0cbb1bd9bdf8e7e4a",
+      "bytes": 3261,
+      "original": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/shared-text-public-ab1/build-candidate-receipt.json"
+    },
+    {
+      "path": "public/build-candidate.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "original": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/shared-text-public-ab1/build-candidate.log"
+    },
+    {
+      "path": "public/candidate1-receipt.json",
+      "sha256": "c04d3312ba187d7a86db4f57cc1bb748b6ded3eff992a109645fe08e504aea7b",
+      "bytes": 2830,
+      "original": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/shared-text-public-ab1/candidate1-receipt.json"
+    },
+    {
+      "path": "public/candidate1.log",
+      "sha256": "a8230630672db26a8d86b62a924a2b6f841e4a9fd731470acae7f45316259e55",
+      "bytes": 1001,
+      "original": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/shared-text-public-ab1/candidate1.log"
+    },
+    {
+      "path": "public/candidate2-receipt.json",
+      "sha256": "f83368ee7e6aad5fbcd9b4d75ef7cec1b0a474a231bb5186693f05af177c7552",
+      "bytes": 2831,
+      "original": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/shared-text-public-ab1/candidate2-receipt.json"
+    },
+    {
+      "path": "public/candidate2.log",
+      "sha256": "74e159685fe1b4ffe4f27518c14720d189063ffbf9f0b5887ea13befa0a90dc4",
+      "bytes": 1001,
+      "original": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/shared-text-public-ab1/candidate2.log"
+    },
+    {
+      "path": "public/outcomes.json",
+      "sha256": "5518d4273cd31e9ca3d0737b72fa3085db81cfc9fbb58cca41a9daeaf8f29d83",
+      "bytes": 5207,
+      "original": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/shared-text-public-ab1/outcomes.json"
+    },
+    {
+      "path": "public/plan.json",
+      "sha256": "2773d5e5a54f2e87ed9c8c1081fd10f2b3ca55c49693defa897b858880752c66",
+      "bytes": 3498,
+      "original": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/shared-text-public-ab1/plan.json"
+    },
+    {
+      "path": "public/run.py",
+      "sha256": "0b03670fb3684d9759cffdb56b16f6e1a7e72d7ecbf44b65c626cc5b5daf693c",
+      "bytes": 10359,
+      "original": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/shared-text-public-ab1/run.py"
+    },
+    {
+      "path": "runner-dependency/native-query-work-witness1-run.py",
+      "sha256": "1b0d99b3cb70c785fcd9faa0453ccc82b3cda2b6c5fb20ccb955dd92aa6e1132",
+      "bytes": 18798,
+      "original": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/native-query-work-witness1/run.py"
+    },
+    {
+      "path": "source-review-validation/candidate.patch",
+      "sha256": "de0b2bab0f58d118e562d39738e65fd58b365dd1df63b8e2706e67ecbee3c4a5",
+      "bytes": 20685,
+      "original": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/shared-text-selected-extraction1/candidate.patch"
+    },
+    {
+      "path": "source-review-validation/focused1-plan.json",
+      "sha256": "9d2fc3520b6bcafcfe686a353438abbd2b14dee481f0ee36264d10a8c5fa4473",
+      "bytes": 1570,
+      "original": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/shared-text-selected-extraction1/focused1-plan.json"
+    },
+    {
+      "path": "source-review-validation/focused1-receipt.json",
+      "sha256": "4b9238773d42c9a4761ef2771413fa51004282fcd4140ed80b977b44b8706ee7",
+      "bytes": 3249,
+      "original": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/shared-text-selected-extraction1/focused1-receipt.json"
+    },
+    {
+      "path": "source-review-validation/focused1.log",
+      "sha256": "cfe60dded44566085d4d5a73c351382335a010641734b9fa3c2d7e10d8bae71b",
+      "bytes": 56618,
+      "original": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/shared-text-selected-extraction1/focused1.log"
+    },
+    {
+      "path": "source-review-validation/independent-review.md",
+      "sha256": "c411ef1609b27d1b28a322589392c155c333545254024fe4a9025295db41c069",
+      "bytes": 7356,
+      "original": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/shared-text-selected-extraction1/independent-review.md"
+    },
+    {
+      "path": "source-review-validation/manifest.json",
+      "sha256": "d1062bfa00d1937b2f88d1cbf008d276ce93df3a7bff1fee82a7a1a8dfe96751",
+      "bytes": 2747,
+      "original": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/shared-text-selected-extraction1/manifest.json"
+    },
+    {
+      "path": "source-review-validation/naming1-plan.json",
+      "sha256": "19108700210902c063f26472e6c811a5c01a2dbb68be211c9cac4863f3c82707",
+      "bytes": 1135,
+      "original": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/shared-text-selected-extraction1/naming1-plan.json"
+    },
+    {
+      "path": "source-review-validation/naming1-receipt.json",
+      "sha256": "5f9a5e80ecb255d310f7371be0735318aadecefb5142c944dfe274a590133864",
+      "bytes": 2814,
+      "original": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/shared-text-selected-extraction1/naming1-receipt.json"
+    },
+    {
+      "path": "source-review-validation/naming1.log",
+      "sha256": "3421a83399e4ccfe7cef56b4fddf15f0cdba407c65bc26cc35bcf225e3178f4b",
+      "bytes": 64628,
+      "original": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/shared-text-selected-extraction1/naming1.log"
+    },
+    {
+      "path": "source-review-validation/race1-plan.json",
+      "sha256": "755c360f97f6c39731547db088f477e33775e266ae9b0569a1517e8cf88f26c1",
+      "bytes": 1583,
+      "original": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/shared-text-selected-extraction1/race1-plan.json"
+    },
+    {
+      "path": "source-review-validation/race1-receipt.json",
+      "sha256": "149aa6e7970010d4923ebcf1f4ba3688e4ad78e4934cd998dd6e7266c83d561d",
+      "bytes": 3258,
+      "original": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/shared-text-selected-extraction1/race1-receipt.json"
+    },
+    {
+      "path": "source-review-validation/race1.log",
+      "sha256": "e00a505703767b6e121c925e4b90c90f684dc7dedb322ce9f751399e6bac0f6a",
+      "bytes": 56622,
+      "original": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/shared-text-selected-extraction1/race1.log"
+    },
+    {
+      "path": "source-review-validation/raw-tests.patch",
+      "sha256": "fbdfacc54b095f2f61b45e27696e7c48687104b3af4bc4e753a8b36258d78210",
+      "bytes": 9384,
+      "original": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/shared-text-selected-extraction1/raw-tests.patch"
+    },
+    {
+      "path": "source-review-validation/raw-tests/text_v2_selected_sidecar_test.go",
+      "sha256": "bf6bd2bc0593f9c38832bf7b4579ebe5bc659fa1b4533223525a51f222e761c6",
+      "bytes": 9086,
+      "original": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/shared-text-selected-extraction1/raw-tests/text_v2_selected_sidecar_test.go"
+    },
+    {
+      "path": "source-review-validation/recommended-validation.md",
+      "sha256": "759b89546cfad9a216a9b622b55c77b6f274a800b441eb380293f3e686c54938",
+      "bytes": 2869,
+      "original": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/shared-text-selected-extraction1/recommended-validation.md"
+    },
+    {
+      "path": "source-review-validation/run-root-check.py",
+      "sha256": "fb60885063ef677ab0af6709bc2d1e116379758de00e679d7809cbae71a8f213",
+      "bytes": 2784,
+      "original": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/shared-text-selected-extraction1/run-root-check.py"
+    },
+    {
+      "path": "source-review-validation/source-audit.md",
+      "sha256": "d212127f54884cb2a0d75c8bcc4306c80e10d9ca05d163aef188bae5b77926b0",
+      "bytes": 5381,
+      "original": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/shared-text-selected-extraction1/source-audit.md"
+    },
+    {
+      "path": "source-review-validation/source/TreeDB/collections/text_v2_phrase.go",
+      "sha256": "e1275325ba1f343f7436283bad95c1fc241ce8332c5fbbef1ac5f439ee3d108c",
+      "bytes": 13066,
+      "original": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/shared-text-selected-extraction1/source/TreeDB/collections/text_v2_phrase.go"
+    },
+    {
+      "path": "source-review-validation/source/TreeDB/collections/text_v2_search.go",
+      "sha256": "8e1eabaaa475f86fe4d68088fdc10c6d74eb78d0242c2e8c6e7907682c3277c6",
+      "bytes": 122845,
+      "original": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/shared-text-selected-extraction1/source/TreeDB/collections/text_v2_search.go"
+    },
+    {
+      "path": "source-review-validation/source/TreeDB/collections/text_v2_selected_sidecar_test.go",
+      "sha256": "bf6bd2bc0593f9c38832bf7b4579ebe5bc659fa1b4533223525a51f222e761c6",
+      "bytes": 9086,
+      "original": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/shared-text-selected-extraction1/source/TreeDB/collections/text_v2_selected_sidecar_test.go"
+    },
+    {
+      "path": "source-review-validation/source/TreeDB/docs/spec/collection-text-v2-contract.md",
+      "sha256": "a5df22e431f4ec34be1ea41d4fcd66e1a5a6ce7e904d7bfb9ec0eddf6b958c29",
+      "bytes": 33632,
+      "original": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/shared-text-selected-extraction1/source/TreeDB/docs/spec/collection-text-v2-contract.md"
+    },
+    {
+      "path": "source-review-validation/test-first-manifest.json",
+      "sha256": "d048ebd22a36ed5c69a9d2140ac9ea5225d7240fda497f810a8ef948e12ba769",
+      "bytes": 799,
+      "original": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/shared-text-selected-extraction1/test-first-manifest.json"
+    },
+    {
+      "path": "source-review-validation/test-first.md",
+      "sha256": "1e6651bcc30acc03a60473c04b9426738638f9321a9419ddf0b3987a9bffa295",
+      "bytes": 1059,
+      "original": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/shared-text-selected-extraction1/test-first.md"
+    },
+    {
+      "path": "source-review-validation/text-owning1-plan.json",
+      "sha256": "acbbe03a99a1e411ac677dbb1a08b93f4b812f0c2384d5fa5390b3916363d62f",
+      "bytes": 1134,
+      "original": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/shared-text-selected-extraction1/text-owning1-plan.json"
+    },
+    {
+      "path": "source-review-validation/text-owning1-receipt.json",
+      "sha256": "606fb8cd9c76d3dc215133836ae55a9782fe011a7a9566961e8ecd6e59eaf678",
+      "bytes": 2816,
+      "original": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/shared-text-selected-extraction1/text-owning1-receipt.json"
+    },
+    {
+      "path": "source-review-validation/text-owning1.log",
+      "sha256": "647e72f728ce556af72b894a1d3af68fb73a5518a1334f3919cdcaa5568cc396",
+      "bytes": 211745,
+      "original": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/shared-text-selected-extraction1/text-owning1.log"
+    }
+  ],
+  "elf_identities": {
+    "baseline": {
+      "sha256": "360aafc25e0960ebed69ef0554fca990d1dd7ae7a830de0cb4da7e60929e2941",
+      "original_path": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/shared-text-public-ab1/baseline.test",
+      "embedded": false
+    },
+    "candidate": {
+      "sha256": "acf9e88e29fea06f46fbb74a48661504be976de8be0a8b94ed157e51393ed7ac",
+      "original_path": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/shared-text-public-ab1/candidate.test",
+      "embedded": false
+    }
+  },
+  "toolchain": {
+    "go": "1.26.0 linux/amd64",
+    "driver": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.0.linux-amd64/bin/go",
+    "driver_sha256": "61e7455a40a2fdfcdab99e881cd30ba10e216e3d0f32ab5f8e59d10cac4ecf57",
+    "selection": "absolute pinned driver; GOTOOLCHAIN=local; safe_env drops inherited GOROOT/GOFLAGS and sets GOWORK=off",
+    "extra_version_or_compile_probe": "not executed during publication"
+  },
+  "harness": {
+    "path": "TreeDB/documentservice/shared_cow_consumers_bench_test.go",
+    "sha256": "cc27ffef2e22d1e9c5aa0dc34c79990e6d204d02b27d555b1b8b7ec1357822a7"
+  },
+  "validation": [
+    {
+      "name": "focused1",
+      "package_seconds": 0.723,
+      "wall_seconds": 45.79701602552086,
+      "selector": "^(TestTextV2SelectedSidecar.*|TestTextV2ScalarPruningPostFilterParity2874|TestTextV2ScalarPruningMissingAllowedDocIDFailsClosed2874|TestTextV2ScalarPruningHybridReopenNoDocGuardrail2874|TestTextV2BlockMaxRandomizedExactnessAndFallbacks2628|TestTextV2HardeningCorruptionFailsClosedAcrossShapes2734|TestTextV2SearchSnapshotBindingAndReopen2627|TestTextV2PhrasePositionsReopenAndSnapshotBinding2733|TestTextV2PhraseAnalyzerStopwordsAndScalarAllowSet2733)$"
+    },
+    {
+      "name": "text-owning1",
+      "package_seconds": 7.912,
+      "wall_seconds": 9.17900203447789,
+      "selector": "^TestText(V1|V2)"
+    },
+    {
+      "name": "race1",
+      "package_seconds": 1.929,
+      "wall_seconds": 84.5126614831388,
+      "selector": "^(TestTextV2SelectedSidecar.*|TestTextV2ScalarPruningPostFilterParity2874|TestTextV2ScalarPruningMissingAllowedDocIDFailsClosed2874|TestTextV2ScalarPruningHybridReopenNoDocGuardrail2874|TestTextV2BlockMaxRandomizedExactnessAndFallbacks2628|TestTextV2HardeningCorruptionFailsClosedAcrossShapes2734|TestTextV2SearchSnapshotBindingAndReopen2627|TestTextV2PhrasePositionsReopenAndSnapshotBinding2733|TestTextV2PhraseAnalyzerStopwordsAndScalarAllowSet2733)$"
+    },
+    {
+      "name": "naming1",
+      "package_seconds": 12.308,
+      "wall_seconds": 13.534261741675436,
+      "selector": "^TestTypedStorage"
+    }
+  ],
+  "acceptance": {
+    "all_eight_rows_valid": true,
+    "narrow_selection_pass": true,
+    "rule": "For EACH query, median B/op decreases at least20%, median ns/op increases at most5%, median allocs/op increases at most1. Any miss needs a source/structural decision; no favorable repeat. This finite comparison selects this narrow shared text delivery, not native-default acceptance or a statistical universal no-regression claim.",
+    "native_default_qualification": null,
+    "full_owning_ci_review": "pending root gates at publication"
+  }
+}

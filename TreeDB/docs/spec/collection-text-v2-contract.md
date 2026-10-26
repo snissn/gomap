@@ -236,6 +236,17 @@ come from v2 docmap blocks. Snapshot-local norm/docmap caches are bounded by the
 number of ordinal blocks touched by the query and are discarded after the search;
 no shared cross-snapshot cache is introduced.
 
+With a strict scalar ordinal allow-set, each consumed norm/docmap block retains
+only selected decoded entries; norm field-length arrays are bounded by the
+selected entries in that block. Nil/all selection retains the complete block,
+including historical entries. Selection merges the immutable sorted allow-set
+with validated increasing ordinals, but still parses and validates every entry
+in each consumed source record, including excluded entries and trailing bytes.
+Inverse docmap lookup/consumption, generation checks, ranking tie-breaks, work
+limits, and corruption detection are unchanged. Retained docmap IDs continue to
+borrow their owned complete source record for the original cache lifetime;
+selection neither releases that backing early nor introduces a new owner/cache.
+
 The request posting-entry limit is cumulative across the selected v2 serving
 path. Work decoded before a block-max fallback is not refunded when exact scan
 continues, and final match-attribution lookup consumes only the remaining

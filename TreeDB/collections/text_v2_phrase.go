@@ -62,7 +62,7 @@ func executeTextV2PhraseSearchAtSnapshot(
 	phraseTermIndexes := textV2PhraseTermIndexes(phrase.terms, uniqueTerms)
 
 	candidates := make(map[uint64]*textV2SearchCandidate)
-	cache := textV2SearchBlockCache{}
+	cache := textV2SearchBlockCache{allowed: allowSet}
 	scanTerms := orderTextV2SearchScanTerms(uniqueTerms, TextSearchOperatorAND, ctx.termStats)
 	scanStart := time.Now()
 	for i, term := range scanTerms {
