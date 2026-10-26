@@ -3490,6 +3490,27 @@ func (m *CollectionManager) holdIndexedAsyncFlushForSync(domains []*collectionWr
 	}
 }
 
+// CheckpointStorage seals this manager's original storage authority. Callers
+// first publish their required collection buffers with Flush or FlushAll. Native
+// collections use the same cache owner's complete accepted-prefix checkpoint;
+// a checkpoint on its borrowed backend alone cannot seal native accepted state.
+// Legacy managers retain the backend's complete physical checkpoint operation.
+func (m *CollectionManager) CheckpointStorage() error {
+	if m != nil && m.initializationError != nil {
+		return m.initializationError
+	}
+	if m == nil || m.isClosing() {
+		return backenddb.ErrClosed
+	}
+	if m.nativeJSON != nil {
+		return m.nativeJSON.db.SyncNativeSemanticPrefix()
+	}
+	if m.db == nil {
+		return backenddb.ErrClosed
+	}
+	return m.db.Checkpoint()
+}
+
 // SyncForStandaloneWriteConcern closes the durable storage boundary used by a
 // standalone Mongo journal acknowledgement. Collection-local buffers are
 // published first. Command-WAL databases then persist a dependency-complete
@@ -3508,10 +3529,7 @@ func (m *CollectionManager) SyncForStandaloneWriteConcern() (physicalSync bool, 
 		return false, backenddb.ErrClosed
 	}
 	if m.nativeJSON != nil {
-		if m.isClosing() {
-			return false, backenddb.ErrClosed
-		}
-		if err := m.nativeJSON.db.SyncNativeSemanticPrefix(); err != nil {
+		if err := m.CheckpointStorage(); err != nil {
 			return false, err
 		}
 		return true, nil

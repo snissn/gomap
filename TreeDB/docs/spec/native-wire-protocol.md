@@ -1251,6 +1251,17 @@ server running a mode that cannot provide fsync for the touched state MUST fail
 with `durability_unavailable`; it must not reinterpret `synced` as a relaxed
 checkpoint.
 
+For native shared-COW collections, `flushed` publishes through the original
+accepted COW authority. A `synced` mutation or `checkpoint` then seals that same
+owner's complete captured prefix through `CollectionManager.CheckpointStorage`;
+checkpointing only its borrowed backend does not cover native accepted state.
+This also covers earlier visible writes and a repeated boundary with no new work.
+Legacy managers retain their backend physical-checkpoint operation. Callers
+publish collection buffers before this storage boundary; a mutation flushes its
+collection, while `checkpoint` flushes all collections. `flush_collection` and
+`flush_all` provide `flushed` and reject `synced`; clients needing both explicit
+barriers request a `flushed` flush followed by a `synced` checkpoint.
+
 `raft_committed` is reserved for distributed mode. It means consensus commit
 plus the cluster-defined local apply/recoverability rule. It is not local WAL
 append and is not part of deterministic command identity.
