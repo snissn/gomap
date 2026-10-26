@@ -393,7 +393,7 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/docs/spec/collections-write-domain.md", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	{path: "TreeDB/collections/native_index_ddl_replay.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 4},
 	// Native source/graph adapters consume the retained public physical schema.
-	{path: "TreeDB/collections/command_wal.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
+	{path: "TreeDB/collections/command_wal.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 4},
 	{path: "TreeDB/collections/native_vector_graph.go", classification: typedStorageLegacyCompatibility, matchingLines: 5, occurrences: 5},
 	{path: "TreeDB/collections/native_vector_graph_replay.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	{path: "TreeDB/native_vector_graph_rebuild_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 5, occurrences: 6},
@@ -443,6 +443,10 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/internal/raftapply/logical_digest.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	{path: "TreeDB/internal/raftapply/logical_digest_column_scan_v1_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 5},
 	{path: "TreeDB/internal/raftfsm/vector_prepare_storage_order_v1_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 4},
+	// Full text metadata composes the retained typed-column schema APIs and
+	// documents unchanged V5/V6 compatibility; it adds no storage owner.
+	{path: "TreeDB/nativewire/text_metadata_v7_mixed_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 5},
+	{path: "TreeDB/docs/spec/native-wire-protocol.md", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
 	{path: "TreeDB/nativewire/column_store_metadata_v6_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 21, occurrences: 28},
 	{path: "TreeDB/nativewire/fixed_peer_vector_prepare_v1_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 5, occurrences: 7},
 	{path: "TreeDB/nativewire/fixed_peer_vector_initialize_client_v1.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 5},
@@ -846,7 +850,8 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/docs/spec/vector-index-row-ref-state-1993.md", classification: typedStorageLegacyDerived, matchingLines: 1, occurrences: 1},
 	{path: "TreeDB/docs/spec/typed-storage-naming.md", classification: typedStorageLegacyCompatibility, matchingLines: 52, occurrences: 57},
 	{path: "TreeDB/docs/spec/user-command-wal.md", classification: typedStorageLegacyDeferred, matchingLines: 1, occurrences: 1},
-	{path: "TreeDB/docs/spec/verification.md", classification: typedStorageLegacyDeferred, matchingLines: 2, occurrences: 2},
+	// Verification retains historical future-owner language and named compatibility tests.
+	{path: "TreeDB/docs/spec/verification.md", classification: typedStorageLegacyDeferred, matchingLines: 5, occurrences: 5},
 	{path: "TreeDB/internal/typedcolumn/query_ready_open.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	{path: "docs/architecture/query-ready-encoded-execution.md", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	{path: "docs/architecture/query-ready-generation-open.md", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
