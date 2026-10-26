@@ -210,7 +210,7 @@ func TestNativeTextPhaseRetainedCapacityAndOverflow(t *testing.T) {
 	txn := NativeJSONTxn{}
 	for _, phase := range []nativeTextPhase{{before: ^uint64(0), admitted: 1}, {before: 16, admitted: 2}, {before: 1, admitted: 1, retained: 2}} {
 		if err = txn.completeNativeTextPhase(&g, phase); !errors.Is(err, memtable.ErrCOWCapacity) || g.stageCharge != 17 {
-			t.Fatalf("invalid floor changed ledger: %v %+v", err, g)
+			t.Fatalf("invalid floor changed ledger: err=%v stageCharge=%d", err, g.stageCharge)
 		}
 	}
 }
