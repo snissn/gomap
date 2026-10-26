@@ -287,6 +287,9 @@ func (w *cowReadWorkspace) codecWithDictionary(shape valuelog.COWRecordShape, in
 			continue
 		}
 		if c.id == shape.DictID && c.codec == shape.Codec {
+			if c.definition != nil && uint64(len(c.definition.Bytes)) > w.limits.MaxValueBytes {
+				return nil, dictdb.ErrReadDefinitionCapacity
+			}
 			if uint64(cap(c.input)) >= shape.PayloadBytes() && uint64(cap(c.raw)) >= shape.RawBytes {
 				return c, nil
 			}
@@ -664,6 +667,9 @@ func (w *cowReadWorkspace) readOwnedSuccessor(ptr page.ValuePtr, leaf bool, dst 
 }
 
 func (w *cowReadWorkspace) readOwnedSuccessorLeaf(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
+	if w.snapshot != nil {
+		return w.snapshot.cowCut.basis.readPhysicalLeafWithWorkspace(w.snapshot.cowCache, w, ptr, dst, false, true)
+	}
 	return w.readOwnedSuccessor(ptr.ValuePtr(), true, dst, nil)
 }
 
@@ -683,10 +689,18 @@ func (w *cowReadWorkspace) readLeaf(ptr page.LeafLogPtr, dst []byte) ([]byte, er
 	return w.read(ptr.ValuePtr(), true, dst)
 }
 
-// Dictionary definitions belong to the caller's complete cut, never the
-// shared physical basis. This private signal retries only the physical lookup
-// through the original cut-local workspace; no public error is substituted.
+// Captured-only dictionary providers still require the complete caller cut.
+// This private signal preserves their original Snapshot admission/fallback;
+// independently retained definitions can finish the original basis traversal.
 var errCOWPhysicalDictionary = errors.New("cow physical leaf requires cut dictionary")
+
+// Only the synchronous basis-point caller needs to hand dictionary admission
+// back to its original complete cut. Other callers retain ordinary capacity
+// matching through Unwrap and their existing local fallback/refund policy.
+type cowPhysicalDictionaryCapacity struct{ cause error }
+
+func (e *cowPhysicalDictionaryCapacity) Error() string { return e.cause.Error() }
+func (e *cowPhysicalDictionaryCapacity) Unwrap() error { return e.cause }
 
 // cowReadMu owns this caller's admitted scratch; the retained cut owns the
 // exact physical basis throughout traversal and copy-out.
@@ -708,6 +722,20 @@ func (b *cowBackendBasis) readPhysicalLeafLocked(c *cowCache, ptr page.LeafLogPt
 // decoders may belong to the caller; generic codecs retain the original shared
 // envelope and admission policy. Every path still inspects before a cache hit.
 func (b *cowBackendBasis) readPhysicalLeafWithWorkspace(c *cowCache, w *cowReadWorkspace, ptr page.LeafLogPtr, dst []byte, native, localBlock bool) ([]byte, error) {
+	var independent *cowCacheDictionaryRead
+	if w.snapshot != nil {
+		if provider, ok := w.snapshot.db.dictStore.(cowDictionaryReadProvider); ok {
+			definition := cowCacheDictionaryRead{provider: provider, cache: c}
+			independent = &definition
+		}
+	}
+	return b.readPhysicalLeafWithDictionary(c, w, ptr, dst, native, localBlock, independent)
+}
+
+// independent is borrowed only for this traversal. Neither the basis nor its
+// reusable scratch retains a caller/provider; the shared codec owns its checked
+// definition independently. Captured-only providers keep their local decoder.
+func (b *cowBackendBasis) readPhysicalLeafWithDictionary(c *cowCache, w *cowReadWorkspace, ptr page.LeafLogPtr, dst []byte, native, localBlock bool, independent *cowCacheDictionaryRead) ([]byte, error) {
 	f, identity, err := b.snapshot.PinnedValueLogFile(ptr.ValuePtr().FileID)
 	if err != nil {
 		return nil, err
@@ -716,29 +744,53 @@ func (b *cowBackendBasis) readPhysicalLeafWithWorkspace(c *cowCache, w *cowReadW
 	if err != nil {
 		return nil, err
 	}
-	if !native && shape.DictID != 0 {
-		return nil, errCOWPhysicalDictionary
-	}
 	if native && shape.Compressed && (shape.DictID != 0 || (shape.Codec != valuelog.BlockCodecSnappy && shape.Codec != valuelog.BlockCodecLZ4)) {
 		return nil, valuelog.ErrCOWReadUnsupported
 	}
-	if data, hit, err := b.snapshot.CopyVerifiedCachedLeafPage(ptr, f, identity, dst); err != nil || hit {
-		return data, err
+	if shape.DictID != 0 && independent == nil {
+		if w.snapshot == nil {
+			return nil, errCOWPhysicalDictionary
+		}
+		// Without independently retained definition capability, preserve the
+		// complete cut's dictionary policy and local admission before any hit.
+		return w.readInspected(f, ptr.ValuePtr(), shape, true, dst, nil)
+	}
+	// Ordinary COW limits are fixed for this cache. A fully CRC/producer-
+	// verified page is sufficient immutable authority without retaining a
+	// decoder or recapturing its dictionary on every hit. Private callers using
+	// different limits must pass their original decode/definition policy again.
+	if shape.DictID == 0 || w.limits == c.readLimits() {
+		if data, hit, err := b.snapshot.CopyVerifiedCachedLeafPage(ptr, f, identity, dst); err != nil || hit {
+			return data, err
+		}
 	}
 	var data []byte
-	if shape.Compressed && !(localBlock && shape.DictID == 0 && (shape.Codec == valuelog.BlockCodecSnappy || shape.Codec == valuelog.BlockCodecLZ4)) {
+	// Reuse a matching local dictionary codec first, as on the original
+	// borrowed path. Otherwise the shared generic owner supplies decode storage.
+	localDictionary := false
+	if shape.DictID != 0 && w.snapshot != nil {
+		_, shared := w.sharedDictionaryProvider(shape)
+		localDictionary = !shared
+	}
+	if shape.Compressed && !localDictionary && !(localBlock && shape.DictID == 0 && (shape.Codec == valuelog.BlockCodecSnappy || shape.Codec == valuelog.BlockCodecLZ4)) {
 		c.physicalMu.Lock()
 		shared, workspaceErr := c.physicalWorkspaceLocked(w.limits)
 		if workspaceErr != nil {
 			c.physicalMu.Unlock()
+			if shape.DictID != 0 && errors.Is(workspaceErr, memtable.ErrCOWCapacity) {
+				return nil, &cowPhysicalDictionaryCapacity{cause: workspaceErr}
+			}
 			return nil, workspaceErr
 		}
-		data, err = shared.readInspected(f, ptr.ValuePtr(), shape, true, dst, nil)
+		data, err = shared.readInspected(f, ptr.ValuePtr(), shape, true, dst, independent)
 		c.physicalMu.Unlock()
 	} else {
 		data, err = w.readInspected(f, ptr.ValuePtr(), shape, true, dst, nil)
 	}
 	if err != nil {
+		if shape.DictID != 0 && errors.Is(err, memtable.ErrCOWCapacity) {
+			return nil, &cowPhysicalDictionaryCapacity{cause: err}
+		}
 		return nil, err
 	}
 	if err = b.snapshot.AdmitVerifiedCachedLeafPage(ptr, f, identity, data); err != nil {

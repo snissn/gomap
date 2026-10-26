@@ -25,16 +25,27 @@ second cut-local output buffer. The same shape, checksum, decode and value
 selection code serves both routes; input/raw/decoder storage remains admitted.
 Exported Snapshot, iterator, callback View and leaf readers retain their original
 borrowed-output or separately admitted callback lifetimes.
-Dictionary leaves retry the physical lookup through the original complete cut,
-preserving its file and definition authority. Native root reads keep
-their existing narrower codec policy independently of raw reads.
+Capable dictionary leaves finish the original retained-basis traversal using a
+per-call independent-definition capability. The basis never retains the caller
+or provider. Captured-only providers retain the complete-cut retry and original
+Snapshot admission/refund route. Dictionary admission capacity can also hand a
+synchronous point back to that exact cut after releasing the basis lock. Native
+root reads keep their narrower codec policy independently of raw reads.
 
 The existing original budget admits workspace, traversal scratch and decoder
 backing. The last original basis edge detaches and closes the workspace before
 Snapshot cleanup; failed Snapshot cleanup keeps its existing custody. No new
 pool, owner, refcount or decoded-page cache is introduced. Shared physical reads
 serialize on one basis mutex; concurrent throughput remains a qualification
-requirement. Seek, decompression and checksum work still occur on each read.
+requirement. Every physical read still inspects the exact retained file and
+applies shape, codec and caller-limit policy before a verified leaf-cache hit.
+Capable dictionary leaves use the existing bounded decoded-page cache too: a
+miss fully validates definition identity, record CRC and the decoded leaf before
+admission. Under the cache's fixed COW limits, a verified immutable page hit
+needs neither a live decoder nor another definition capture. It avoids decode
+and full-record CRC work, while the tree still validates the copied page.
+Different private limits bypass dictionary cache hits and follow decode/refusal.
+No new cache registry or decoder allocation is needed solely for a hit.
 
 This changes transient ownership/reuse only, with no on-disk format, durability,
 GC or public API change.

@@ -622,10 +622,15 @@ func (s *Snapshot) cowWorkspacePhysicalSuccessorLocked(w *cowReadWorkspace, star
 	if err != nil {
 		return pointSuccessorCandidate{}, err
 	}
+	var independent *cowCacheDictionaryRead
+	if provider, ok := s.db.dictStore.(cowDictionaryReadProvider); ok {
+		definition := cowCacheDictionaryRead{provider: provider, cache: s.cowCache}
+		independent = &definition
+	}
 	readLeaf := func(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
-		// Keep the successor's original Snappy/LZ4 block-decoder policy.
-		// Borrowing traversal must not introduce a new physicalMu wait.
-		return basis.readPhysicalLeafWithWorkspace(s.cowCache, w, ptr, dst, false, true)
+		// Keep small block decoding caller-local. Dictionary leaves finish
+		// this exact traversal with independently retained shared definitions.
+		return basis.readPhysicalLeafWithDictionary(s.cowCache, w, ptr, dst, false, true, independent)
 	}
 	disk, found, err := basis.snapshot.SeekGEEntryWithFixedScratch(start, end, point.key[:], point.leaf[:], &point.successor, readLeaf)
 	if err != nil {

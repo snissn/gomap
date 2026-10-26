@@ -205,25 +205,24 @@ func TestCOWOrderedIteratorDictionaryLeafFallback(t *testing.T) {
 		t.Fatalf("persisted dictionary leaf shape: %+v %v; want dictionary %d", shape, err, dictID)
 	}
 
-	// This actual inspected dictionary leaf requires the original admitted
-	// Snapshot even though synchronous inline points need no view themselves.
-	cowAssertPointReadViewRefusal(t, db, []byte("a000"))
-
-	// Synchronous public points must fall back on this same cut's admitted
-	// dictionary owner, then release that private workspace before returning.
+	// Capable definitions finish inline points in the first retained basis
+	// traversal; no transient Snapshot is required even at the view frontier.
+	releaseViews := cowPinViewFrontier(t, db.cow)
 	for i := 0; i < 2; i++ {
 		if got, err := db.Get([]byte("a000")); err != nil || !bytes.Equal(got, want) {
-			t.Fatalf("public dictionary point: %q %v", got, err)
+			releaseViews()
+			t.Fatalf("public dictionary point at view frontier: %q %v", got, err)
 		}
 	}
-	// An available shared traversal workspace cannot supply this dictionary's
-	// authority. Successor fallback must use the original complete caller cut.
+	releaseViews()
+	// Successor selection retains the same complete cut even when it finishes
+	// in reusable basis traversal rather than constructing a private decoder.
 	successor, err := db.acquireCOWSnapshotWithError()
 	if err != nil {
 		t.Fatal(err)
 	}
 	key, value, found, seekErr := successor.SeekGEVersionRange([]byte("a000"), []byte("a001"))
-	if seekErr != nil || !found || string(key) != "a000" || !bytes.Equal(value, want) || successor.cowCut.basis != basis || successor.cowReader == nil || successor.cowReader.snapshot != successor {
+	if seekErr != nil || !found || string(key) != "a000" || !bytes.Equal(value, want) || successor.cowCut.basis != basis {
 		_ = successor.Close()
 		t.Fatalf("dictionary successor lost its exact caller cut: key=%q found=%t err=%v", key, found, seekErr)
 	}
@@ -453,15 +452,48 @@ func TestCOWSuccessorFreshDictionaryLaneRefundsBeforeLocalTraversal(t *testing.T
 }
 
 func TestCOWPublicPointFreshDictionaryRefundsBeforeLocalAdmission(t *testing.T) {
-	db, want, _ := cowSuccessorDictionaryLeafFixture(t)
+	db, want, pointer := cowSuccessorDictionaryLeafFixture(t)
+	cowCapturePendingLeafDictionary(t, db, pointer, want)
+	// Keep the captured-only provider handoff/refund contract explicit.
+	store := db.dictStore
+	defer func() { db.dictStore = store }()
+	db.dictStore = cowCapturedDictionaryOnlyStore{store}
 	cowAssertFreshPointHandoffRefundsBeforeLocalAdmission(t, db, []byte("a000"), want, false)
 }
 
 func TestCOWSuccessorDictionaryHandoffKeepsWarmTraversal(t *testing.T) {
 	for _, busy := range []bool{false, true} {
 		t.Run(fmt.Sprintf("busy-primary=%t", busy), func(t *testing.T) {
-			db, want, _ := cowSuccessorDictionaryLeafFixture(t)
+			db, want, pointer := cowSuccessorDictionaryLeafFixture(t)
+			cowCapturePendingLeafDictionary(t, db, pointer, want)
+			// Keep the captured-only provider handoff/refund contract explicit.
+			store := db.dictStore
+			defer func() { db.dictStore = store }()
+			db.dictStore = cowCapturedDictionaryOnlyStore{store}
 			cowAssertSuccessorHandoffKeepsWarmOwner(t, db, []byte("a000"), []byte("a001"), want, busy)
 		})
+	}
+}
+
+// Materialize a real pending dictionary resource before exercising a provider
+// that exposes only captured definitions, as legacy cuts do. No synthetic
+// dictionary owner or decoded leaf is installed by these handoff controls.
+func cowCapturePendingLeafDictionary(t *testing.T, db *DB, pointer page.LeafLogPtr, want []byte) {
+	t.Helper()
+	f, _, err := db.cow.cut.basis.snapshot.PinnedValueLogFile(pointer.ValueLogFileID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	shape, err := valuelog.InspectCOWLeafRecord(f, pointer.ValuePtr(), db.cow.readLimits())
+	if err != nil || shape.DictID == 0 {
+		t.Fatalf("pending dictionary shape: %+v %v", shape, err)
+	}
+	store := db.dictStore.(*dictdb.Store)
+	if err := store.SetCurrent(context.Background(), shape.DictID); err != nil {
+		t.Fatal(err)
+	}
+	db.SetDictStore(store)
+	if err := db.Set([]byte("z-pending-dictionary"), bytes.Repeat(want, 8)); err != nil {
+		t.Fatal(err)
 	}
 }

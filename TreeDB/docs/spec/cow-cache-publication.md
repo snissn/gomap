@@ -230,9 +230,13 @@ successor's independent block-decoder policy in that workspace; this borrowing
 does not add a generic decoder mutex wait. A busy basis takes the original
 cut-local traversal and block-decoder path. Shared capacity refusal also releases
 the basis mutex before trying the cut-local owner. Thus independent retained readers
-can still proceed while another owner holds shared scratch. Dictionary leaf
-and pointer materialization occur after the shared traversal mutex is released,
-using the complete caller cut's exact file and dictionary identity.
+can still proceed while another owner holds shared scratch. Capable dictionary
+leaves now complete that original traversal with a per-call independently owned
+definition capability; the basis retains neither the caller nor its provider.
+Captured-only providers retain the complete-cut dictionary retry. Pointer
+materialization still uses the complete caller cut after traversal unlocks.
+A dictionary capacity refusal can hand a synchronous point back to that same
+cut, preserving fresh-owner refund outside the basis mutex.
 
 Each actual capacity is reserved before allocation. Cut-local capacity is
 refunded through the existing reader Close. Shared successor scratch remains
@@ -284,7 +288,15 @@ unchanged. Exported Snapshot, iterator, leaf and callback View materializers kee
 their existing admitted output ownership; shared decoder aliases never escape.
 
 Every physical leaf read still inspects the current record metadata before
-reusing a verified decoded cache entry. Leaf inspection reads one fixed maximum
+reusing a verified decoded cache entry. Capable dictionary leaves participate in
+that same cache after the original native/capability and shape/limit policy.
+Population requires the existing independently checked definition identity, full
+record CRC and decoded-page validation. With the cache's fixed COW limits, the
+verified immutable page remains usable after a producer decoder is retired:
+a hit needs no decoder, dictionary recapture or physical decoder mutex. Private
+callers using different limits bypass dictionary hits and follow decode/refusal.
+Captured-only providers keep their original local definition policy before any
+cache reuse. Leaf inspection reads one fixed maximum
 metadata window, interprets only the checked header and frame prefix, and ignores
 extra bytes. EOF beyond complete required metadata is harmless; truncated
 metadata and corruption retain the original errors. Uncompressed value-prefix
