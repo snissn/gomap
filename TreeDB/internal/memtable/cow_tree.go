@@ -522,47 +522,19 @@ func (w *COWWriter) Prepare(entries []COWMutation, opts COWPrepareOptions) (*COW
 		b.mu.Unlock()
 		return nil, ErrCOWPending
 	}
-	if g.frozen || opts.ResourceSlots > b.limits.MaxResources-len(g.ids) {
-		b.mu.Unlock()
-		return nil, ErrCOWCapacity
-	}
 	total := c.Total()
-	incremental := false
-	// Keep the existing inline admission and single total-byte addition on
-	// ordinary writes. The colder refinement checks share a helper below.
-	if !cowFits(b.limits.MaxInFlightBytes, b.stats.ReservedBytes, total) ||
+	if g.frozen || !cowFits(b.limits.MaxInFlightBytes, b.stats.ReservedBytes, total) ||
 		!cowFits(b.limits.MaxGenerationBytes, g.generationHistoryLocked(), g.pending) ||
 		!cowFits(b.limits.MaxGenerationBytes, g.generationHistoryLocked()+g.pending, c.History()) ||
-		!b.retirementFitsLocked(total) || !b.addLocked(total) {
-		// Preserve the ordinary pre-admitted fast path. Only raw PUTs (which
-		// include stored tombstones) can use the same mutation engine's finer
-		// reserve-before-effect path when its independent-path bound will not
-		// fit. Ordered history and physical deletion retain their proven bound.
-		eligible := w.ordered == nil && len(entries) != 0
-		for _, entry := range entries {
-			eligible = eligible && !entry.Remove
-		}
-		c.Nodes = 0
-		workCharge := cowAllocation(uint64(unsafe.Sizeof(cowPreparedNodeWork{})))
-		_, extraFits := cowAdd(c.Total(), workCharge)
-		c.Temporary, _ = cowAdd(c.Temporary, workCharge)
-		if !eligible || !extraFits || !cowPreparationFitsLocked(g, c) {
-			b.mu.Unlock()
-			return nil, ErrCOWCapacity
-		}
-		total = c.Total()
-		b.addLocked(total) // the same locked refinement proved this addition
-		incremental = true
+		!b.retirementFitsLocked(total) ||
+		opts.ResourceSlots > b.limits.MaxResources-len(g.ids) || !b.addLocked(total) {
+		return w.prepareRawRefinedLocked(entries, opts, c)
 	}
 	g.pending += total
 	b.stats.ReservedBytes += total
 	b.mu.Unlock()
 	p := &COWPrepared{writer: w, private: w.private.Copy(), charge: c,
 		ids: make([]COWResourceID, 0, opts.ResourceSlots), owners: make([]cowResourceOwner, 0, opts.ResourceSlots), maxEntries: w.private.Len() + len(entries)}
-	var work *cowPreparedNodeWork
-	if incremental {
-		work = &cowPreparedNodeWork{prepared: p}
-	}
 	var logicalDelta cowLogicalDelta
 	if w.ordered != nil {
 		p.ordered = w.ordered.fork()
@@ -597,36 +569,8 @@ func (w *COWWriter) Prepare(entries []COWMutation, opts COWPrepareOptions) (*COW
 			ownedKey = string(e.Key)
 		}
 		value := cowEncodeValue(e)
-		var previous cowValue
-		if work == nil {
-			previous, _ = p.private.Set(ownedKey, value)
-		} else {
-			var ready bool
-			previous, _, ready, err = p.private.SetWithWork(ownedKey, value, work)
-			if err != nil || !ready {
-				if err == nil {
-					err = work.failure
-				}
-				if err == nil {
-					err = ErrCOWCapacity
-				}
-				work.prepared = nil
-				p.abortUnpublished()
-				return nil, err
-			}
-			// This successful mutation has ended its probe/comparison/copy work.
-			// Retain every allocated backing cohort, including discarded growth,
-			// but return unspent work credit before admitting the next row.
-			if err = p.reconcileNodes(p.private.AllocationCharge()); err != nil {
-				work.prepared = nil
-				p.abortUnpublished()
-				return nil, err
-			}
-		}
+		previous, _ := p.private.Set(ownedKey, value)
 		logicalDelta.replace(len(e.Key), value, previous)
-	}
-	if work != nil {
-		work.prepared = nil
 	}
 	p.logicalBytes, p.logicalOverflow = logicalDelta.bytes, logicalDelta.overflow
 	p.root = &COWRoot{tree: p.private.ImmutableCopy(), generation: g}
@@ -645,6 +589,79 @@ func (w *COWWriter) Prepare(entries []COWMutation, opts COWPrepareOptions) (*COW
 	if err := p.reconcileNodes(actualNodes); err != nil {
 		// No resource callback or published source edge exists yet. End every
 		// private postimage alias before returning the original reservation.
+		p.abortUnpublished()
+		return nil, err
+	}
+	w.pending = p
+	return p, nil
+}
+
+// prepareRawRefinedLocked handles only a refused coarse reservation. The caller
+// keeps the original writer lock until this returns; this helper consumes the
+// held budget lock, releasing it before mutation or on every early refusal.
+// Ordered routing and physical deletion remain on the ordinary Prepare path.
+func (w *COWWriter) prepareRawRefinedLocked(entries []COWMutation, opts COWPrepareOptions, c COWCharge) (*COWPrepared, error) {
+	g := w.generation
+	b := g.budget
+	if g.frozen || w.ordered != nil || len(entries) == 0 || opts.ResourceSlots > b.limits.MaxResources-len(g.ids) {
+		b.mu.Unlock()
+		return nil, ErrCOWCapacity
+	}
+	for _, entry := range entries {
+		if entry.Remove {
+			b.mu.Unlock()
+			return nil, ErrCOWCapacity
+		}
+	}
+	c.Nodes = 0
+	workCharge := cowAllocation(uint64(unsafe.Sizeof(cowPreparedNodeWork{})))
+	_, extraFits := cowAdd(c.Total(), workCharge)
+	c.Temporary, _ = cowAdd(c.Temporary, workCharge)
+	if !extraFits || !cowPreparationFitsLocked(g, c) {
+		b.mu.Unlock()
+		return nil, ErrCOWCapacity
+	}
+	total := c.Total()
+	b.addLocked(total) // the same locked refinement proved this addition
+	g.pending += total
+	b.stats.ReservedBytes += total
+	b.mu.Unlock()
+	p := &COWPrepared{writer: w, private: w.private.Copy(), charge: c,
+		ids: make([]COWResourceID, 0, opts.ResourceSlots), owners: make([]cowResourceOwner, 0, opts.ResourceSlots), maxEntries: w.private.Len() + len(entries)}
+	work := &cowPreparedNodeWork{prepared: p}
+	var logicalDelta cowLogicalDelta
+	for _, e := range entries {
+		ownedKey, _, exists := cowLookupGE(p.private, e.Key)
+		exists = exists && cowKeyCompare(ownedKey, e.Key) == 0
+		if !exists {
+			ownedKey = string(e.Key)
+		}
+		value := cowEncodeValue(e)
+		previous, _, ready, err := p.private.SetWithWork(ownedKey, value, work)
+		if err != nil || !ready {
+			if err == nil {
+				err = work.failure
+			}
+			if err == nil {
+				err = ErrCOWCapacity
+			}
+			work.prepared = nil
+			p.abortUnpublished()
+			return nil, err
+		}
+		// Ended probe/comparison/copy work can fund the next row, while every
+		// allocated backing cohort, including discarded growth, stays charged.
+		if err := p.reconcileNodes(p.private.AllocationCharge()); err != nil {
+			work.prepared = nil
+			p.abortUnpublished()
+			return nil, err
+		}
+		logicalDelta.replace(len(e.Key), value, previous)
+	}
+	work.prepared = nil
+	p.logicalBytes, p.logicalOverflow = logicalDelta.bytes, logicalDelta.overflow
+	p.root = &COWRoot{tree: p.private.ImmutableCopy(), generation: g}
+	if err := p.reconcileNodes(p.private.AllocationCharge()); err != nil {
 		p.abortUnpublished()
 		return nil, err
 	}
