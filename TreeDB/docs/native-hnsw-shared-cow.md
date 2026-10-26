@@ -33,7 +33,15 @@ node conversion, edge validation and distance normalization, document-map checks
 and final graph assembly with this native path. The native loader constructs final
 runtime rows directly under their original runtime receipt, without retaining a
 complete decoded snapshot beside them. No scratch credit is refunded during
-decoding. Cold conversion does no insertion traversal and retains no insertion
+decoding. After the complete graph census and record-conversion function returns
+successfully, the original scratch receipt returns only the exact graph-phase
+increments before scalar reconstruction begins. The complete post-metadata
+promise stays live, including decoded metadata strings and preparation retained
+by the loader; the scratch ledger changes only after the shrink succeeds. Error
+paths retain every increment until cleanup. Runtime rows, views, IDs, schema,
+captured reads and physical decoder receipts keep their independent ownership
+and charges. This is a successful phase boundary, not a claim about GC or RSS.
+Cold conversion does no insertion traversal and retains no insertion
 workspace; the first later mutation or live-delta fold admits that construction
 high-water term before allocating it. This bound describes those owned record/backing allocations,
 not process RSS or inaccessible standard-library type caches. A cold-load capacity,

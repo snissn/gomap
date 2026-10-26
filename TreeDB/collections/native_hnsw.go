@@ -903,63 +903,30 @@ func (c *Collection) loadNativeHNSWAtRead(opts VectorIndexOptions, read *NativeJ
 		status.ExactFallbackReason = reason
 		return nil, status, err
 	}
-	counts, reason, err := inspectNativeHNSWRecordKeys(read, "vector-index/"+def.Name, admit)
+	// Keep the ENTIRE metadata-phase promise: decoded metadata strings and
+	// preparation may be retained by the final runtime. Graph-only callbacks and
+	// decode temporaries end in the private success-return scope below.
+	phaseFloor := charge
+	index, graphDisk, reason, err := c.loadNativeHNSWGraphPhase(read, def, meta, &charge, admit)
 	if err != nil || reason != "" {
 		status.ExactFallbackReason = reason
 		return nil, status, err
 	}
-	if reason = validateVectorIndexPersistShape(meta, counts.nodes, counts.edges, counts.tombs, counts.docs); reason != "" {
-		status.ExactFallbackReason = reason
-		return nil, status, nil
-	}
-	// Exact final node descriptors are allocated before the first record. Six
-	// descriptor cohorts per row preserve the existing retained-growth contract;
-	// each row later adds the remainder of the shared nativeHNSWRowCharge.
-	rowDescriptors := uint64(6) * uint64(unsafe.Sizeof(vectorIndexNode{}))
-	runtimeCharge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(VectorIndex{}))) + 64<<10
-	if uint64(counts.nodes) > (^uint64(0)-runtimeCharge)/rowDescriptors {
-		return nil, status, memtable.ErrCOWCapacity
-	}
-	runtimeCharge += uint64(counts.nodes) * rowDescriptors
-	runtimeLease, err := read.capture.NativeAllocator().AdmitNativeBytes(runtimeCharge)
-	if err != nil {
-		return nil, status, err
-	}
+	def.Dimensions = meta.Dimensions
 	retained := false
-	var owned *VectorIndex
+	owned := index
 	defer func() {
 		if !retained {
-			if owned != nil && owned.nativeHNSWLease != nil {
-				owned.releaseNativeHNSW()
-			} else {
-				runtimeLease.Close()
-			}
+			owned.releaseNativeHNSW()
 		}
 	}()
-	index, err = newVectorIndexWithMeta(c, vectorIndexOptionsFromDefinition(def), read.meta)
-	if err != nil {
-		return nil, status, err
-	}
-	owned = index
-	index.nativeHNSWLease = runtimeLease
-	index.nativeHNSWCharge = runtimeCharge
-	// Cold conversion performs no insertion traversal and creates no insert
-	// scratch. Native mutation/fold admission grows this high-water term before
-	// insertion workers allocate anything; no reserved graph storage is refunded.
-	index.nativeHNSWConstructionPeak = 0
-	def.Dimensions = meta.Dimensions
-	graphDisk, reason, err := loadNativeHNSWRecords(index, read, def, meta, counts, admit)
-	if err != nil {
-		return nil, status, fmt.Errorf("collections: native vector direct load (%d decode bytes, %d runtime bytes): %w", charge, index.nativeHNSWCharge, err)
-	}
-	if reason != "" {
-		status.ExactFallbackReason = reason
-		return nil, status, nil
-	}
 	if graphDisk > math.MaxInt64-disk {
 		return nil, status, memtable.ErrCOWCapacity
 	}
 	disk += graphDisk
+	if err = completeNativeHNSWGraphPhase(lease, &charge, phaseFloor); err != nil {
+		return nil, status, err
+	}
 	read.collection.schema.retain()
 	index.nativeHNSWSchemaState = read.collection.schema
 	index.nativeHNSWIncarnation = read.collection.incarnation
