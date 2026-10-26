@@ -37210,6 +37210,9 @@ func (b *Batch) SetViewValidatedWithRevision(key, value []byte, revision page.En
 }
 
 func (b *Batch) SetViewWithMVCCInput(key, value []byte, input mvccadmission.Input) error {
+	if b.cowState != nil && b.cowState.err != nil {
+		return b.cowState.err
+	}
 	if b.closed {
 		return ErrBatchClosed
 	}

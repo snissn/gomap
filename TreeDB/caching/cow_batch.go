@@ -572,7 +572,8 @@ func (db *DB) cowPoint(key, value []byte, put, syncWrite bool) error {
 	b := db.NewBatchWithSize(1)
 	var err error
 	if put {
-		err = b.Set(key, value)
+		// The point call retains its caller's immutable input through Write/Close.
+		err = b.SetView(key, value)
 	} else {
 		err = b.Delete(key)
 	}
