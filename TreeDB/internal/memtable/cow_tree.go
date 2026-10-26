@@ -526,8 +526,14 @@ func (w *COWWriter) Prepare(entries []COWMutation, opts COWPrepareOptions) (*COW
 		b.mu.Unlock()
 		return nil, ErrCOWCapacity
 	}
+	total := c.Total()
 	incremental := false
-	if !cowPreparationFitsLocked(g, c) {
+	// Keep the existing inline admission and single total-byte addition on
+	// ordinary writes. The colder refinement checks share a helper below.
+	if !cowFits(b.limits.MaxInFlightBytes, b.stats.ReservedBytes, total) ||
+		!cowFits(b.limits.MaxGenerationBytes, g.generationHistoryLocked(), g.pending) ||
+		!cowFits(b.limits.MaxGenerationBytes, g.generationHistoryLocked()+g.pending, c.History()) ||
+		!b.retirementFitsLocked(total) || !b.addLocked(total) {
 		// Preserve the ordinary pre-admitted fast path. Only raw PUTs (which
 		// include stored tombstones) can use the same mutation engine's finer
 		// reserve-before-effect path when its independent-path bound will not
@@ -544,10 +550,10 @@ func (w *COWWriter) Prepare(entries []COWMutation, opts COWPrepareOptions) (*COW
 			b.mu.Unlock()
 			return nil, ErrCOWCapacity
 		}
+		total = c.Total()
+		b.addLocked(total) // the same locked refinement proved this addition
 		incremental = true
 	}
-	total := c.Total()
-	b.addLocked(total) // the same locked admission above proved this addition
 	g.pending += total
 	b.stats.ReservedBytes += total
 	b.mu.Unlock()
@@ -646,8 +652,8 @@ func (w *COWWriter) Prepare(entries []COWMutation, opts COWPrepareOptions) (*COW
 	return p, nil
 }
 
-// Caller holds the original writer and budget locks. This checks the same
-// finite limits for coarse admission and its raw reserve-before-effect path.
+// Caller holds the original writer and budget locks. The cold refinement uses
+// the same finite limits as the inline ordinary admission above.
 func cowPreparationFitsLocked(g *cowGeneration, c COWCharge) bool {
 	b := g.budget
 	total := c.Total()
