@@ -2,14 +2,13 @@ package db
 
 import (
 	"errors"
+
 	"github.com/snissn/gomap/TreeDB/internal/mvccadmission"
-	"time"
 )
 
 const (
 	commitCombineQueueCap = 4096
 	commitCombineMaxBatch = 64
-	commitCombineLinger   = 50 * time.Microsecond
 )
 
 var errCommitCombinerClosed = errors.New("treedb: commit combiner closed")
@@ -185,11 +184,14 @@ func (db *DB) applyCombinedBatch(batch []*commitCombineReq) error {
 }
 
 func (db *DB) finishCombined(batch []*commitCombineReq, err error) {
-	for _, req := range batch {
+	for i, req := range batch {
 		if req == nil {
 			continue
 		}
 		req.result <- err
+		// Application and result delivery are the final consumers. Do not retain
+		// request-owned keys/values in the loop's reusable batch storage.
+		batch[i] = nil
 	}
 }
 
@@ -207,8 +209,28 @@ func (db *DB) drainCombined(reqCh <-chan *commitCombineReq, err error) {
 	}
 }
 
+// collectCombinedBatch harvests only work already queued after the first request.
+// The existing batch cap bounds collection even with continuously ready producers.
+// It never waits for a speculative arrival.
+func collectCombinedBatch(batch []*commitCombineReq, reqCh <-chan *commitCombineReq, stopCh <-chan struct{}) ([]*commitCombineReq, bool) {
+	for len(batch) < commitCombineMaxBatch {
+		select {
+		case <-stopCh:
+			return batch, true
+		case req := <-reqCh:
+			if req != nil {
+				batch = append(batch, req)
+			}
+		default:
+			return batch, false
+		}
+	}
+	return batch, false
+}
+
 func (db *DB) commitCombinerLoop(reqCh <-chan *commitCombineReq, stopCh <-chan struct{}, doneCh chan<- struct{}) {
 	defer close(doneCh)
+	var scratch [commitCombineMaxBatch]*commitCombineReq
 	for {
 		select {
 		case <-stopCh:
@@ -218,53 +240,15 @@ func (db *DB) commitCombinerLoop(reqCh <-chan *commitCombineReq, stopCh <-chan s
 			if first == nil {
 				continue
 			}
-			batch := make([]*commitCombineReq, 0, commitCombineMaxBatch)
-			batch = append(batch, first)
-			deadline := time.Now().Add(commitCombineLinger)
-			timer := time.NewTimer(commitCombineLinger)
-			for len(batch) < commitCombineMaxBatch {
-				wait := time.Until(deadline)
-				if wait <= 0 {
-					break
-				}
-				if !timer.Stop() {
-					select {
-					case <-timer.C:
-					default:
-					}
-				}
-				timer.Reset(wait)
-				select {
-				case req := <-reqCh:
-					if req != nil {
-						batch = append(batch, req)
-					}
-				case <-timer.C:
-					// Linger elapsed.
-				case <-stopCh:
-					if !timer.Stop() {
-						select {
-						case <-timer.C:
-						default:
-						}
-					}
-					err := db.applyCombinedBatch(batch)
-					db.finishCombined(batch, err)
-					db.drainCombined(reqCh, errCommitCombinerClosed)
-					return
-				}
-				if time.Now().After(deadline) {
-					break
-				}
-			}
-			if !timer.Stop() {
-				select {
-				case <-timer.C:
-				default:
-				}
-			}
+			batch := scratch[:1]
+			batch[0] = first
+			batch, stopped := collectCombinedBatch(batch, reqCh, stopCh)
 			err := db.applyCombinedBatch(batch)
 			db.finishCombined(batch, err)
+			if stopped {
+				db.drainCombined(reqCh, errCommitCombinerClosed)
+				return
+			}
 		}
 	}
 }

@@ -352,6 +352,18 @@ The mutable-memtable installation above describes existing cached modes.
 Explicit immutable COW mode uses the prepared sequence below and preserves the
 selected profile's acknowledgement boundary.
 
+The backend point-write combiner is work-conserving. After its first blocking
+receive, it takes only requests already queued, in FIFO order, up to the existing
+64-request limit, and immediately applies the collected batch. It does not wait
+for speculative arrivals. Requests accumulated during apply remain queued for
+the next bounded collection. This scheduling policy does not change request-owned
+key/value or MVCC-input binding, direct queue-saturation fallback, publication
+poison checks, or the underlying batch durability path. Any collected sync request
+makes the entire batch use `WriteSync`; all collected callers receive its common
+result. On observed stop, collected work is applied and remaining queued requests
+receive the existing closed error. Completed request pointers are cleared from
+the reusable local batch storage after result delivery.
+
 ### 3.1 Target raw-KV revision flow
 
 Entry revisions are target native write metadata, not a separate write domain.

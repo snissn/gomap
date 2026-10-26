@@ -105,9 +105,7 @@ func TestPrimaryCapsuleStageAllDirtyStableFenceV6(t *testing.T) {
 		if e.Point != durabilitycut.BeforeIndexDataSync && e.Point != durabilitycut.AfterIndexDataSync {
 			return nil
 		}
-		if e.StablePath != stable {
-			return errors.New("dirty-file observation lost exact retained handle")
-		}
+		assertIndependentSyncFile(t, e.StablePath, stable)
 		if e.Point == durabilitycut.BeforeIndexDataSync {
 			beforeCuts++
 		} else {
@@ -121,9 +119,7 @@ func TestPrimaryCapsuleStageAllDirtyStableFenceV6(t *testing.T) {
 	injected := errors.New("final physical fence failure")
 	syncPageFileFn = func(file *os.File) error {
 		calls++
-		if file != stable {
-			return errors.New("all-dirty sync lost exact retained handle")
-		}
+		assertIndependentSyncFile(t, file, stable)
 		if calls == 1 {
 			return injected
 		}
