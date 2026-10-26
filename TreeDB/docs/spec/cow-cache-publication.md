@@ -220,6 +220,16 @@ and actual Snappy/LZ4 headers use bounded native owners without constructing
 ZSTD state. Owned callback copies remain separately admitted even for inline
 values.
 
+When the original forward source vector contains exactly one source, the merge
+iterator retains that source directly instead of allocating a heap or comparing
+competitors on each entry. It still suppresses physical tombstones, enforces the
+original domain, preserves lazy value/pointer/revision access, and owns the child
+through Close. Its actual wrapper and source-vector backing remain separately
+admitted; the heap charge is zero. Several original sources with only one
+currently valid child still use the ordinary multi-source merge, because seeking
+and cleanup retain every original child. Reverse iterators keep their existing
+implementation.
+
 Retained snapshot point reads and bound iterators reuse their own admitted
 physical traversal scratch. A snapshot successor keeps using already admitted
 cut-local point storage when present. Otherwise it tries the retained backend

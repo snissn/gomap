@@ -129,8 +129,36 @@ func TestForwardCompositeSeekMatchesFullSeek(t *testing.T) {
 }
 
 func TestForwardCompositeSeekAlignmentAndSourceCalls(t *testing.T) {
-	for _, count := range []int{2, 4} {
+	for _, count := range []int{1, 2, 4} {
 		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			if count == 1 {
+				p := newForwardProbe([]revisionEntry{{k: "005"}, {k: "020"}, {k: "100"}})
+				p.idx = 2 // Constructor position alone cannot authorize forward reuse.
+				merged := NewMergingIteratorWithFixedHeap([]IteratorSource{{Iter: p}}, nil, nil)
+				defer merged.Close()
+				forward := merged.(ForwardSeeker)
+				forward.SeekForward([]byte("010"))
+				if !merged.Valid() || string(merged.Key()) != "020" || p.seeks != 1 || p.heads != 0 {
+					t.Fatal("one-source constructor position was mistaken for alignment")
+				}
+				forward.SeekForward([]byte("050"))
+				if !merged.Valid() || string(merged.Key()) != "100" || p.seeks != 2 || p.heads != 1 || p.keeps != 0 || p.reads != 0 {
+					t.Fatal("aligned one-source seek did not use the lazy head operation")
+				}
+				before := p.seeks
+				// 060 is behind the visible 100, despite exceeding the previous
+				// requested target. It must use ordinary Seek, not retain a head.
+				forward.SeekForward([]byte("060"))
+				if !merged.Valid() || string(merged.Key()) != "100" || p.seeks != before+1 || p.heads != 1 || p.keeps != 0 || p.reads != 0 {
+					t.Fatal("one-source backward target did not use ordinary Seek")
+				}
+				before = p.seeks
+				forward.SeekForward([]byte("100"))
+				if !merged.Valid() || string(merged.Key()) != "100" || p.seeks != before+1 || p.heads != 1 || p.keeps != 0 || p.reads != 0 {
+					t.Fatal("one-source equal target did not use ordinary Seek")
+				}
+				return
+			}
 			p := []*forwardProbe{
 				newForwardProbe([]revisionEntry{{k: "005"}, {k: "050"}}),
 				newForwardProbe([]revisionEntry{{k: "020"}, {k: "100"}}),
@@ -173,14 +201,15 @@ func TestForwardCompositeSeekAlignmentAndSourceCalls(t *testing.T) {
 }
 
 func TestForwardCompositeSeekErrorRecoveryDoesNotRetryMovement(t *testing.T) {
-	for _, count := range []int{2, 4} {
+	for _, count := range []int{1, 2, 4} {
 		merged, probes := forwardFixture(count, true)
 		merged.Seek([]byte{0})
 		failure := errors.New("forward source failure")
-		probes[1].err = failure
-		before := probes[1].seeks
+		failed := probes[count-1]
+		failed.err = failure
+		before := failed.seeks
 		merged.(ForwardSeeker).SeekForward([]byte("b"))
-		if merged.Error() != nil || probes[1].seeks != before+1 {
+		if merged.Error() != nil || failed.seeks != before+1 {
 			t.Fatal("preexisting source failure did not use ordinary Seek recovery")
 		}
 		merged.Seek([]byte{0})
@@ -198,7 +227,7 @@ func TestForwardCompositeSeekFixedFootprintAndWarmAllocation(t *testing.T) {
 	if unsafe.Sizeof(uintptr(0)) == 8 && (unsafe.Sizeof(MergingIterator{}) != 168 || unsafe.Sizeof(TwoWayMerger{}) != 120) {
 		t.Fatal("alignment flags grew original admitted merger wrappers")
 	}
-	for _, count := range []int{2, 4} {
+	for _, count := range []int{1, 2, 4} {
 		merged, _ := forwardFixture(count, true)
 		low, high := []byte{0}, []byte("b")
 		operation := func() { merged.Seek(low); merged.(ForwardSeeker).SeekForward(high) }
