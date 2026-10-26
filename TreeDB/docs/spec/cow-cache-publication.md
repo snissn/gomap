@@ -247,11 +247,14 @@ hits that need no decoder or buffer growth.
 Direct DB point reads and native physical readers retain the original shared
 workspace. Generic dictionary-free ZSTD decoding and pointer-value decoding
 also retain the original cache-owned decoder envelope, since duplicating generic
-state can exceed the default producer budget. Owned version-successor reads first
-reuse an already-admitted matching cut-local dictionary decoder. Otherwise they
-decode through the original cache physical workspace, finishing leaf copy-out
-or owned value append before releasing its mutex. Borrowed snapshot and iterator
-results keep their original decoder ownership. A provider without independent
+state can exceed the default producer budget. Dictionary reads first reuse an
+already-admitted matching cut-local decoder. Otherwise they decode through the
+original cache physical workspace. Owned version-successor reads finish leaf
+copy-out or owned value append before releasing its mutex. Snapshot and iterator
+leaves decode into their original caller destination; borrowed pointer values
+are copied into the original reader's admitted output before unlocking. Generic
+decoder backing is shared while each reader's returned bytes, validity and
+movement/Close boundaries remain independent. A provider without independent
 definition admission retains the original complete-cut local route.
 Native physical value reads also decode the normal producer's trained dictionary
 records: the shared decoder

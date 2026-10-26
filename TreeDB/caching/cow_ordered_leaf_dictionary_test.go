@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"testing"
 	"unsafe"
 
@@ -246,12 +247,21 @@ func TestCOWOrderedIteratorDictionaryLeafFallback(t *testing.T) {
 		}
 		var decoder *cowReadCodec
 		for _, codec := range child.workspace.codecs {
+			if codec != nil {
+				t.Fatal("capable dictionary iterator retained a private decoder")
+			}
+		}
+		db.cow.physicalMu.Lock()
+		shared := db.cow.physicalReader
+		for _, codec := range shared.codecs {
 			if codec != nil && codec.id == dictID && codec.decoder != nil {
 				decoder = codec
 			}
 		}
-		if decoder == nil {
-			t.Fatal("real dictionary leaf did not populate the caller-local decoder")
+		independent := decoder != nil && decoder.definition != nil && shared.snapshot == nil && shared.basis == nil
+		db.cow.physicalMu.Unlock()
+		if !independent {
+			t.Fatal("real dictionary leaf did not populate an independently owned shared decoder")
 		}
 		for i := 0; i < 64; i++ {
 			key := []byte(fmt.Sprintf("a%03d", i))
@@ -260,11 +270,14 @@ func TestCOWOrderedIteratorDictionaryLeafFallback(t *testing.T) {
 				t.Fatalf("dictionary leaf seek %s: key=%q value=%q error=%v", key, it.Key(), it.Value(), it.Error())
 			}
 		}
-		if child.workspace.codecs[0] != decoder {
-			t.Fatal("warm dictionary reads replaced the caller-local decoder")
+		db.cow.physicalMu.Lock()
+		reused := shared.codecs[0] == decoder
+		db.cow.physicalMu.Unlock()
+		if !reused {
+			t.Fatal("warm dictionary reads replaced the same producer's shared decoder")
 		}
 	}
-	check() // First public construction and reads require a cold local decoder.
+	check() // First public construction and reads use the original cache owner.
 	check() // Repeated seeks reuse it, including already visited physical leaves.
 	if err := db.Set([]byte("a000"), []byte("new-current-value")); err != nil {
 		t.Fatal(err)
@@ -276,9 +289,8 @@ func TestCOWOrderedIteratorDictionaryLeafFallback(t *testing.T) {
 		t.Fatal("checkpoint did not replace the current backend basis")
 	}
 	check() // The public iterator still reads its original dictionary leaf cut.
-	// Each dictionary decoder uses its original admitted workspace. Finish
-	// that operation before admitting an independent current-cut point decoder;
-	// this fixture does not require two full decoder envelopes to fit at once.
+	// Closing this iterator releases only its own cursor/output and exact cut;
+	// the independently owned shared decoder survives until its cache retires.
 	if err := it.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -315,7 +327,11 @@ func cowSuccessorDictionaryLeafFixture(t *testing.T) (*DB, []byte, page.LeafLogP
 		_ = backend.Close()
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = db.Close() })
+	t.Cleanup(func() {
+		if !db.closing.Load() {
+			_ = db.Close()
+		}
+	})
 	want := bytes.Repeat([]byte("old-inline-dictionary-value|"), 4)
 	samples := make([][]byte, 4)
 	for sample := range samples {
@@ -388,7 +404,18 @@ func TestCOWSuccessorFreshDictionaryLaneRefundsBeforeLocalTraversal(t *testing.T
 			w, err := s.cowWorkspaceLocked()
 			var pageScratch [page.PageSize]byte
 			if err == nil {
-				_, err = w.readLeaf(pointer, pageScratch[:])
+				// This fixture specifically exercises a pre-existing local owner,
+				// including legacy captured-only readers. Warm the maintained local
+				// kernel explicitly; public capable reads now share generic scratch.
+				var f *os.File
+				f, err = w.file(pointer.ValuePtr())
+				if err == nil {
+					var shape valuelog.COWRecordShape
+					shape, err = valuelog.InspectCOWLeafRecord(f, pointer.ValuePtr(), w.limits)
+					if err == nil {
+						_, err = w.readInspected(f, pointer.ValuePtr(), shape, true, pageScratch[:], nil)
+					}
+				}
 			}
 			s.cowReadMu.Unlock()
 			if err != nil || w.point != nil || len(w.codecs) == 0 || w.codecs[0].id == 0 {

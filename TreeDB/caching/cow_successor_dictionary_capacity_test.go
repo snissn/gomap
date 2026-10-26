@@ -275,7 +275,25 @@ func TestCOWOwnedDictionarySuccessorAlternatingValues(t *testing.T) {
 // A busy physical owner cannot be reclaimed or waited on while a borrowed
 // caller holds its original read locks. Capacity remains explicit and bounded.
 func TestCOWOwnedDictionaryBusySharedPreservesBorrowedRefusal(t *testing.T) {
-	db, want, _ := cowSuccessorDictionaryLeafFixture(t)
+	db, want, pointer := cowSuccessorDictionaryLeafFixture(t)
+	// Exercise the legacy captured-only admission fallback, not the capable
+	// public route (which now serializes decoding on the shared owner).
+	f, _, err := db.cow.cut.basis.snapshot.PinnedValueLogFile(pointer.ValueLogFileID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	shape, err := valuelog.InspectCOWLeafRecord(f, pointer.ValuePtr(), db.cow.readLimits())
+	if err != nil || shape.DictID == 0 {
+		t.Fatalf("fixture dictionary: %+v %v", shape, err)
+	}
+	store := db.dictStore.(*dictdb.Store)
+	if err = store.SetCurrent(context.Background(), shape.DictID); err != nil {
+		t.Fatal(err)
+	}
+	db.SetDictStore(store)
+	if err = db.Set([]byte("z-pending-dictionary"), bytes.Repeat(want, 8)); err != nil {
+		t.Fatal(err)
+	}
 	s, err := db.AcquireMVCCReadCut()
 	if err != nil {
 		t.Fatal(err)
@@ -285,6 +303,22 @@ func TestCOWOwnedDictionaryBusySharedPreservesBorrowedRefusal(t *testing.T) {
 	if err != nil || !found {
 		t.Fatal(err)
 	}
+	// Prove the exact cut owns a real pending definition before hiding the
+	// optional independent-capture capability. No synthetic owner is installed.
+	s.cowReadMu.Lock()
+	w, err := s.cowWorkspaceLocked()
+	var captured []byte
+	var owner *dictdb.DictionaryReadDefinition
+	if err == nil {
+		captured, owner, err = w.definition(shape.DictID)
+	}
+	s.cowReadMu.Unlock()
+	if err != nil || len(captured) == 0 || owner != nil {
+		owner.Close()
+		t.Fatalf("pending definition was not captured by the real cut: %v", err)
+	}
+	db.dictStore = cowCapturedDictionaryOnlyStore{store}
+	defer func() { db.dictStore = store }()
 	db.cow.physicalMu.Lock()
 	codec := db.cow.physicalReader.codecs[0]
 	done := make(chan error, 1)
