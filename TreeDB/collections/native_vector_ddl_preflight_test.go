@@ -65,6 +65,7 @@ func TestNativeVectorDDLPreflightRejectsBeforePressureMaintenance(t *testing.T) 
 	defer restore()
 	valid := VectorIndexDefinition{Name: "newvec", Field: "embedding", Dimensions: 2, Strategy: VectorIndexStrategyColumnGraph}
 	retired := valid
+	retired.Name = "retiredvec"
 	retired.Strategy = VectorIndexStrategy("native_runtime")
 	invalid := valid
 	invalid.Dimensions = 0
