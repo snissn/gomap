@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -3279,6 +3280,11 @@ func (s *Server) createIndexesResponse(command wire.Document) (wire.Document, er
 			continue
 		}
 		scalarDefs = append(scalarDefs, s.applyDefaultIndexOptions(def.scalarDef))
+	}
+	if len(vectorDefs) != 0 {
+		if err := validateCreateIndexesRequestNamesAndPaths(scalarDefs, vectorDefs); err != nil {
+			return commandError(commandCodeBadValue, "BadValue", err.Error())
+		}
 	}
 	if err := validateCreateIndexesRequestDuplicates(scalarDefs, vectorDefs); err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
@@ -6556,9 +6562,9 @@ func parseCreateVectorIndexDefinition(doc wire.Document, field, name string, nam
 	if err != nil {
 		return createIndexDefinition{}, err
 	}
-	if metric != collections.VectorMetricCosine || encoding != collections.VectorIndexEncodingFloat32 {
-		return createIndexDefinition{}, errors.New("Mongo gateway vector indexes currently require cosine metric and float32 encoding")
-	}
+	// Recognized metrics and encodings remain declarations here. Collection
+	// admission decides capability eligibility after the entire request's
+	// syntax and index namespace have been validated.
 	if m == 0 {
 		m = mongoDefaultVectorIndexM
 	}
@@ -6841,7 +6847,7 @@ func findVectorIndexDefinition(indexes []collections.VectorIndexDefinition, name
 func dedupeIdenticalVectorIndexDefinitions(defs []collections.VectorIndexDefinition) []collections.VectorIndexDefinition {
 	out := make([]collections.VectorIndexDefinition, 0, len(defs))
 	for _, def := range defs {
-		if existing, ok := findVectorIndexDefinition(out, def.Name); ok && sameVectorIndexDefinition(existing, def) {
+		if existing, ok := findVectorIndexDefinition(out, def.Name); ok && reflect.DeepEqual(existing, def) {
 			continue
 		}
 		out = append(out, def)
@@ -6885,6 +6891,45 @@ func sameVectorIndexDefinition(left, right collections.VectorIndexDefinition) bo
 	return collections.VectorIndexDefinitionsLogicallyEqual(left, right)
 }
 
+// Vector-bearing requests must validate every declaration before collection
+// admission can refuse a capability. Keep scalar-only requests on their existing
+// path, including partial completion when a later scalar index build fails.
+func validateCreateIndexesRequestNamesAndPaths(scalarDefs []collections.IndexDefinition, vectorDefs []collections.VectorIndexDefinition) error {
+	for _, def := range scalarDefs {
+		if err := collections.ValidateIndexName(def.Name); err != nil {
+			return fmt.Errorf("invalid index name %q: %w", def.Name, err)
+		}
+		components := def.Components
+		if len(components) == 0 {
+			components = []collections.IndexComponent{{Field: def.Field}}
+		}
+		seen := make(map[string]struct{}, len(components))
+		for _, component := range components {
+			if err := collections.ValidateIndexPath(component.Field); err != nil {
+				return fmt.Errorf("invalid index %q field: %w", def.Name, err)
+			}
+			if _, duplicate := seen[component.Field]; duplicate {
+				return fmt.Errorf("invalid index %q: duplicate component field %q", def.Name, component.Field)
+			}
+			seen[component.Field] = struct{}{}
+		}
+	}
+	for _, def := range vectorDefs {
+		if err := collections.ValidateIndexName(def.Name); err != nil {
+			return fmt.Errorf("invalid vector index name %q: %w", def.Name, err)
+		}
+		if err := collections.ValidateIndexPath(def.Field); err != nil {
+			return fmt.Errorf("invalid vector index %q field: %w", def.Name, err)
+		}
+		for _, part := range strings.Split(def.Field, ".") {
+			if strings.TrimSpace(part) == "" {
+				return fmt.Errorf("invalid vector index %q field path %q", def.Name, def.Field)
+			}
+		}
+	}
+	return nil
+}
+
 func validateCreateIndexesRequestDuplicates(scalarDefs []collections.IndexDefinition, vectorDefs []collections.VectorIndexDefinition) error {
 	scalarSeen := make(map[string]collections.IndexDefinition, len(scalarDefs))
 	for _, def := range scalarDefs {
@@ -6899,7 +6944,10 @@ func validateCreateIndexesRequestDuplicates(scalarDefs []collections.IndexDefini
 	vectorSeen := make(map[string]collections.VectorIndexDefinition, len(vectorDefs))
 	for _, def := range vectorDefs {
 		if existing, ok := vectorSeen[def.Name]; ok {
-			if !sameVectorIndexDefinition(existing, def) {
+			// Parsed request definitions already have canonical defaults. Compare
+			// them without capability validation, which would make identical
+			// recognized-but-unsupported declarations appear conflicting.
+			if !reflect.DeepEqual(existing, def) {
 				return fmt.Errorf("duplicate vector index %q has conflicting definitions", def.Name)
 			}
 			continue
