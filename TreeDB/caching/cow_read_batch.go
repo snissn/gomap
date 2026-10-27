@@ -78,7 +78,7 @@ func (s *Snapshot) SeekGEVersionRanges(starts, ends [][]byte, results []mvcckey.
 	if s.cowReader != nil && s.cowReader.point != nil {
 		s.cowReadMu.Unlock()
 		lease.Close()
-		s.cowReadBatchScalar(starts, ends, results)
+		s.cowReadBatchLocal(starts, ends, results)
 		return nil
 	}
 	if basis.readMu.TryLock() {
@@ -95,7 +95,7 @@ func (s *Snapshot) SeekGEVersionRanges(starts, ends [][]byte, results []mvcckey.
 	if mu == nil {
 		s.cowReadMu.Unlock()
 		lease.Close()
-		s.cowReadBatchScalar(starts, ends, results)
+		s.cowReadBatchLocal(starts, ends, results)
 		return nil
 	}
 	fresh := *owner == nil
@@ -195,6 +195,51 @@ func (s *Snapshot) SeekGEVersionRanges(starts, ends [][]byte, results []mvcckey.
 		}
 	}
 	return nil
+}
+
+// Shared traversal contention must not discard leaf batching on the original
+// cut's independently admitted scalar fallback. No staged winners are needed:
+// each scalar result becomes owned before the next probe reuses the local page.
+func (s *Snapshot) cowReadBatchLocal(starts, ends [][]byte, results []mvcckey.VersionRangeResult) {
+	s.cowReadMu.Lock()
+	fresh := s.cowReader == nil
+	w, err := s.cowWorkspaceLocked()
+	if err == nil {
+		_, err = w.pointScratch()
+	}
+	if err != nil {
+		// Preparation only admits scratch; it has performed no probe or I/O.
+		// Refund a newly partial owner before the maintained scalar retry can
+		// borrow shared scratch. Existing caller-owned resources remain intact.
+		if fresh && s.cowReader != nil {
+			s.cowReader.close()
+			s.cowReader = nil
+		}
+		s.cowReadMu.Unlock()
+		s.cowReadBatchScalar(starts, ends, results)
+		return
+	}
+	w.point.successor.BeginLeafBatch()
+	for i := range starts {
+		r := &results[i]
+		var eligible bool
+		r.Key, r.Value, r.Found, eligible, r.Err = s.cowSeekGEOneLocked(starts[i], ends[i])
+		if !eligible && r.Err == nil {
+			// A physical tombstone needs the maintained same-cut merge. Drop
+			// page aliases before any reentrant entrypoint or concurrent reader.
+			w.point.successor.EndLeafBatch()
+			s.cowReadMu.Unlock()
+			r.Key, r.Value, r.Found, r.Err = s.cowSeekGEMergeAdmitted(starts[i], ends[i])
+			s.cowReadMu.Lock()
+			w.point.successor.BeginLeafBatch()
+		} else if r.Err != nil {
+			// Keep the real error at this input; never retry a failed probe.
+			w.point.successor.EndLeafBatch()
+			w.point.successor.BeginLeafBatch()
+		}
+	}
+	w.point.successor.EndLeafBatch()
+	s.cowReadMu.Unlock()
 }
 
 func (s *Snapshot) cowReadBatchScalar(starts, ends [][]byte, results []mvcckey.VersionRangeResult) {
