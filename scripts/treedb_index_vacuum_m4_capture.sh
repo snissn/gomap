@@ -33,7 +33,8 @@ elif [[ -e "$RUN_DIR" ]]; then
 else
   mkdir -p "$RUN_DIR"
 fi
-mkdir -p "$RUN_DIR"/{tests,benchmarks,profiles,m0,compact-storage}
+# M0 claims its own output directory exclusively; leave it absent until capture.
+mkdir -p "$RUN_DIR"/{tests,benchmarks,profiles,compact-storage}
 RUN_DIR=$(cd "$RUN_DIR" && pwd -P)
 
 for command in lscpu free findmnt; do

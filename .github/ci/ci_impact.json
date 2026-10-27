@@ -12,7 +12,7 @@
     "M0 observation is manual diagnostic-only on a separately fixed product; no forecast starts it or replaces failed M0 acceptance.",
     "Bounded maintenance comparison is a manually granted diagnostic on fixed baseline/candidate products; no forecast starts it or establishes cost, M0 or native acceptance."
   ],
-  "discovery_source_sha256": "6b9034a37b0215ea1790dbeb37afe6edc6b0237de3fe050191a7203c71e3f13f",
+  "discovery_source_sha256": "4fa6935be800595f5a9760039b99662e0abe90b99aa38b8cfd9ba8f973efeefb",
   "dynamic_consumers": [
     {
       "behavior": "AST/WalkDir discovery and go test subprocess producer witnesses; all TreeDB test/race members retained",
@@ -149,7 +149,7 @@
       "mode": "100644"
     },
     ".github/scripts/test_treedb_ci_contract.py": {
-      "git_blob": "8eacc795dfef2d9a864f045b84db19bfa1f16d68",
+      "git_blob": "7f6bc544407561277433cd513ce234d0a1e6a624",
       "mode": "100644"
     },
     ".github/scripts/test_treedb_windows_core_headroom.py": {
@@ -3002,12 +3002,14 @@
             "scripts/treedb_vacuum_m0_capture.sh",
             "scripts/treedb_vacuum_m0_summarize.py",
             "scripts/treedb_vacuum_m0_summarize_test.py",
+            "scripts/treedb_vacuum_m0_environment.py",
+            "scripts/treedb_vacuum_m0_environment_test.py",
             ".github/workflows/treedb-vacuum-m0.yml"
           ]
         },
         "workflow_dispatch": null
       },
-      "git_blob": "9e222e6ebe64da0f259319d727cdf10b68fe4d8f",
+      "git_blob": "aae71d7a56f89ccde63bd524c03c23d0c3385899",
       "jobs": {
         "capture": {
           "checkout": [
@@ -3019,20 +3021,39 @@
           ],
           "commands": [
             {
+              "command_sha256": "2bd9f215962fdf84d894a8897b9ee65b729c5adaa6f1e9517bec1753e96d5b81",
+              "entrypoint": ".github/workflows/treedb-vacuum-m0.yml:62",
+              "invocation": "python3 scripts/treedb_vacuum_m0_environment_test.py",
+              "name": "Validate environment receipt contracts"
+            },
+            {
               "command_sha256": "c670090f86b7b236bdec4c8d60b6c5305cf860be5a6eb46a511f13f342ccebc2",
-              "entrypoint": ".github/workflows/treedb-vacuum-m0.yml:50",
+              "entrypoint": ".github/workflows/treedb-vacuum-m0.yml:65",
               "invocation": "RUN_DIR=\"$RUNNER_TEMP/treedb-vacuum-m0\" scripts/treedb_vacuum_m0_capture.sh",
               "name": "Capture and enforce M0 evidence"
+            },
+            {
+              "command_sha256": "8634efd754ca2d0e34a94e90cf0e5cff28fd63e84c9303315af460130532cb02",
+              "entrypoint": ".github/workflows/treedb-vacuum-m0.yml:78",
+              "if": "always() && steps.checkout.outcome == 'success' && env.M0_CONTROLLED == '1'",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Observe controlled custody after artifact upload"
             }
           ],
-          "environment": {},
+          "environment": {
+            "CPU_SET": "${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && vars.TREEDB_PERF_RUNNER_LABEL != '' && vars.TREEDB_PERF_RUNNER_PR != '' && vars.TREEDB_PERF_RUNNER_PR == format('{0}', github.event.pull_request.number) && vars.TREEDB_M0_CPU_SET || '' }}",
+            "GOMAXPROCS": "${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && vars.TREEDB_PERF_RUNNER_LABEL != '' && vars.TREEDB_PERF_RUNNER_PR != '' && vars.TREEDB_PERF_RUNNER_PR == format('{0}', github.event.pull_request.number) && vars.TREEDB_M0_GOMAXPROCS || '' }}",
+            "M0_CONTROLLED": "${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && vars.TREEDB_PERF_RUNNER_LABEL != '' && vars.TREEDB_PERF_RUNNER_PR != '' && vars.TREEDB_PERF_RUNNER_PR == format('{0}', github.event.pull_request.number) && '1' || '0' }}",
+            "M0_LEASE_PATH": "${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && vars.TREEDB_PERF_RUNNER_LABEL != '' && vars.TREEDB_PERF_RUNNER_PR != '' && vars.TREEDB_PERF_RUNNER_PR == format('{0}', github.event.pull_request.number) && vars.TREEDB_M0_LEASE_PATH || '' }}",
+            "PYTHONDONTWRITEBYTECODE": "1"
+          },
           "matrix": null,
           "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
           "race": false,
           "runs_on": "${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && vars.TREEDB_PERF_RUNNER_LABEL != '' && vars.TREEDB_PERF_RUNNER_PR != '' && vars.TREEDB_PERF_RUNNER_PR == format('{0}', github.event.pull_request.number) && format('{0}-m0', vars.TREEDB_PERF_RUNNER_LABEL) || 'ubuntu-24.04' }}"
         }
       },
-      "sha256": "688e5de2f4025d2e45a7fd0b37cfa7cf686de01399c67a3b51431daf22253c96"
+      "sha256": "192c5767a063af84b7cc17210eff79d540fe66086a397443e5d9614fb0b7d450"
     },
     "unified-bench-suites.yml": {
       "coverage": "existing execution only; triggers/path filters are unchanged",

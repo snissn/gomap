@@ -162,3 +162,73 @@ the next foreground candidate fails with `durable-root transaction lineage is
 not consecutive`. M1 must keep the coordinator enabled, cover collection-tail
 mutation separately, and compare its production implementation against this
 fixed-work legacy ceiling without weakening either workload.
+
+## Environment receipts and controlled-runner admission (#4519)
+
+Hosted captures keep their existing first-two-allowed-logical-CPU placement,
+`GOMAXPROCS=2`, `GOMEMLIMIT=8GiB`, ten interleaved sample pairs, timing boundaries
+and v3 numerical predicates. Admission checks that the selected CPUs are allowed
+and the scheduler count is positive and no larger than the selected set. This
+adds environment diagnostics; it does not repair or reclassify an existing CV
+failure, certify a controlled topology, or complete #4519.
+
+The capture now atomically claims a new, nonexistent `RUN_DIR` before creating
+packet content; any existing directory, including an empty one, is refused
+without modifying its files. Choose a new path for each attempt.
+
+Each benchmark has before/after environment receipts outside its process. They
+retain UTC and monotonic timestamps, actual affinity, CPU package/core/SMT
+identities, runner/run identity, kernel, CPU/steal counters, load, disk counters,
+pressure and resolved cgroup-v2 controls. Unavailable optional files carry a
+reason. These snapshots add host activity and change inter-sample pacing even
+though the timed workload, fixed operation counts and numerical predicates are
+preserved. The new harness is not byte-for-byte equivalent to historical
+captures; its changed scheduling requires prospective validation, and old RED
+results keep their original interpretation. Go environment/compiler receipts
+describe the resolved SDK. The EXIT
+receipt preserves the original failing exit code, last phase and hashes of all
+raw files, including partial output and stderr; there are no retries, discarded
+samples, load-based skips or telemetry-derived acceptance overrides. A failed
+sample has a before receipt and terminal failure, rather than a success receipt.
+
+The existing administrator-selected same-repository PR route additionally uses
+`TREEDB_M0_CPU_SET`, `TREEDB_M0_GOMAXPROCS` and `TREEDB_M0_LEASE_PATH` repository
+variables. All three are required when that route is armed; hosted jobs ignore
+them. Select distinct physical cores explicitly: SMT siblings or unavailable
+core topology fail controlled admission. This is a prospective topology, and old
+captures keep their original interpretation. Forks and other PRs retain hosted
+routing. No runner is registered or reconfigured by the workflow.
+
+The infrastructure owner must provision a dedicated one-job runner under an
+exclusive whole-file **host** `flock` held by an ancestor of `Runner.Listener`,
+for example an administrator wrapper around the runner's one-job listener
+lifetime. The lock path must already exist and be an absolute regular file;
+the kernel lock table must be readable. Admission verifies the kernel WRITE
+FLOCK's device/inode, whole-file range, owner process and listener ancestry.
+Custody receipts retain only executable basename, PID and process start ticks;
+full process command lines are transient and their arguments are never emitted.
+Every boundary and the post-upload step reobserve the same custody identity;
+missing or changed custody fails closed, including after artifact upload. The
+post-upload receipt is retained in job logs because the packet has already
+uploaded. The helper never acquires a capture-only lock or releases the host
+lease. The administrator wrapper must retain it until the one-job listener exits,
+including failures, cancellation cleanup and all artifact uploads, then release
+it through normal process/descriptor cleanup. Do not share this runner with a
+second listener, and do not treat Actions concurrency or `taskset` as host
+exclusivity. All cooperating local timed work must honor the same host lock.
+
+These are observations of a required external custody contract, not proof that
+uncooperative host activity was excluded or that a wrapper never unlocked
+between observations. Receipts explicitly make no continuous-custody or
+performance-acceptance claim. The owner must independently review the wrapper,
+runner isolation and host workload before controlled qualification. Do not arm
+this route until that provisioning is verified. The unchanged failed hosted
+capture stays RED; the controlled stability and five hosted-allocation exit
+criteria remain open.
+
+Workflow artifacts are named `treedb-vacuum-m0-<source-sha>-attempt-<run-attempt>`.
+Successful uploads from authorized job attempts have distinct names and disable
+overwrite, preserving earlier uploaded artifacts. A failed upload does not
+guarantee packet retention. This naming permits retention of a separately
+authorized attempt; it does not authorize a retry or change any
+workload, threshold or prior result. Older captures retain their original names.
