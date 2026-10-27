@@ -5,9 +5,11 @@ import (
 	"errors"
 	"path/filepath"
 	"testing"
+	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
 )
 
@@ -145,6 +147,17 @@ func testCOWAutomaticCheckpointFallbackPreservesNewerSuffix(t *testing.T, engine
 				t.Fatal(err)
 			}
 			cache.testAfterCheckpointFrontierCapture = nil
+			// Automatic physical completion can return while the dispatcher is
+			// releasing this original accepted custody. In the frozen case the
+			// optional convergence safely skips before joining that cleanup.
+			// Join the SAME captured endpoint before asserting S; do not capture
+			// a newer cut or consume the post-frontier logical suffix.
+			acceptedCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			err := cache.cow.prefix.WaitAccepted(acceptedCtx, rootpublication.SealedPrefix{LogicalSequence: prefix.V, CanonicalLSN: prefix.C})
+			cancel()
+			if err != nil {
+				t.Fatalf("original accepted custody: %v", err)
+			}
 			state, live := backend.StateToken()
 			if !live || state.AppliedCommandLSN != prefix.C || backend.CommandWALNextLSN() != prefix.C+3 {
 				t.Fatalf("checkpoint consumed newer WAL suffix: %+v, prefix=%+v next=%d", state, prefix, backend.CommandWALNextLSN())

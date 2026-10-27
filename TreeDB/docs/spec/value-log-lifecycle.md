@@ -559,6 +559,31 @@ cached roots, recoverable durable roots and physical-identity pins retain their
 existing authority. Partly live generations still require a separate rewrite or
 pack operation to reclaim their internal dead space.
 
+Before copying a selected private-COW source, the original append owner closes
+it only if its canonical FileID and exact retained-handle identity still match a
+current leaf writer. All matching active identities are checked before any
+rotation; unrelated lanes and already-closed sources are unchanged. The existing
+rotation/registration path creates fresh shared-sequence successors and preserves
+installed-error ownership. The backend retains its witnessed ValueLogSet through
+copy/publication, and copies live pages into private staging generations rather
+than back into selected sources. Missing cached-owner handoff capability or a
+failed identity proof stops before copy/publication. No-source, declined-plan and
+failed target-preflight paths perform no source handoff. No idle or endpoint
+trigger is added.
+
+The automatic private-COW pack slice adopts its replacement Snapshot and then
+attempts same-endpoint fallback convergence under the original flush owner
+before its maintained GC pass. The endpoint is captured before packing, not
+from a newer visible suffix. Convergence preserves mutable suffixes and safely
+skips newer frozen suffixes; it does not create command coverage. This releases
+fallback-only retention when lawful. A packed source reachable through another
+root, or held by a reader or physical-identity pin, remains protected. Unrelated
+current append writers retain their own files. Source selection and copied/dead bytes
+therefore do not prove reclaimed space. After reader release, normal GC can mark
+retirement before its scan Snapshot releases the final file pin; a later normal
+GC pass can prune and report the actual deletion, without a logical write or
+checkpoint.
+
 After refresh and manifest reconciliation, a segment pass avoids root capture
 and reachability scans when every record is Writable or Sealed with a current
 producer file. Those cases cannot retire a segment under the existing decision

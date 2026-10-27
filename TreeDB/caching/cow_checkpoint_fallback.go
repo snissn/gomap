@@ -20,8 +20,9 @@ func (db *DB) RefreshCOWCommandWALCheckpointFallback() error {
 	}, nil)
 }
 
-// refreshCOWAutomaticCheckpointFallback runs under the original checkpoint's
-// flushMu, with post-frontier writers still admitted. Only its captured T may
+// refreshCOWAutomaticCheckpointFallback runs under the original checkpoint or
+// physical maintenance's flushMu, with post-frontier writers still admitted.
+// Only the original applied basis's captured T may
 // be republished: mutable suffixes remain outside frozen coverage and are
 // preserved by the same accepted Snapshot handoff as the first publication.
 // If a newer suffix already rolled over, leave it for the next checkpoint.

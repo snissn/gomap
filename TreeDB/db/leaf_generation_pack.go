@@ -299,12 +299,14 @@ func (db *DB) leafGenerationPackLocked(ctx context.Context, opts LeafGenerationP
 	if set == nil {
 		return stats, fmt.Errorf("leaf generation pack: value-log set unavailable")
 	}
+	// The exact handles witnessed by the append owner remain retained through
+	// the entire copy/publication attempt, including source handoff failures.
+	defer db.valueLogManager.Release(set)
 	leafStartSeq := maxRewriteLaneSeqFromSet(set, rewriteLeafLogLaneID)
 	nextRID := uint64(0)
 	if opts.ReserveRIDs == nil {
 		nextRID, err = leafGenerationPackRIDStartScanner(set)
 	}
-	_ = db.valueLogManager.Release(set)
 	if err != nil {
 		return stats, err
 	}
@@ -330,6 +332,11 @@ func (db *DB) leafGenerationPackLocked(ctx context.Context, opts LeafGenerationP
 	seqAlloc, ridAlloc, err := db.leafGenerationPackAllocators(leafStartSeq, nextRID, opts.ReserveRIDs)
 	if err != nil {
 		return stats, err
+	}
+	if opts.privateCOWOwner != nil {
+		if err := db.handoffPrivateCOWLeafPackSources(ctx, opts.privateCOWOwner, set, rawSourceIDs); err != nil {
+			return stats, err
+		}
 	}
 	const maxCopyAttempts = 2
 	for attempt := 1; attempt <= maxCopyAttempts; attempt++ {

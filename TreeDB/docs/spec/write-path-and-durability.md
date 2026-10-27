@@ -17,11 +17,37 @@ journal enabled or ExternalCommandWAL active schedule one bounded leaf-generatio
 pack slice by default. ExternalCommandWAL disables the redundant cache journal.
 Explicit loop disable, an explicitly false leaf-pack switch, restore/catch-up phases, and
 the maintenance pause file retain their meanings. A slice retains `flushMu`
-through copy and equivalent-basis adoption, without setting the full cache
-maintenance admission fence. Mutable/frozen sources, revisions, command coverage,
+through selected-source handoff, copy and equivalent-basis adoption, without
+setting the full cache maintenance admission fence. Only after an admitted
+selection, exact source resolution and successful target namespace preflight,
+the backend captures source FileIDs and stable identities from a retained
+ValueLogSet. The original bound cache leaf owner validates every selected active
+writer's exact identity under its lane lock before rotating any. Existing writer
+rotation installs fresh shared-sequence successors only for those selected active
+sources. Closed sources and unrelated lanes are unchanged; copying uses private
+fresh-generation staging writers, never the selected source. The retained set
+pins the witnessed physical sources through copy and publication. All physical
+leaf emitters share the flush fence and borrow their writer only while holding
+its lane lock; prepared payloads retain bytes, not old writer handles. Normal
+private COW/WAL writers can continue. A failed or partially installed rotation
+retains the existing writer reconciliation/error behavior and stops before packed
+root publication. Mutable/frozen sources, revisions, command coverage,
 and semantic descriptors survive through the original `installCOWBasis(..., nil)`
-protocol. The authenticated backend role authorizes only equivalent physical
-packing; it grants no new logical publication or callback authority.
+protocol. Nil-coverage physical adoption retains the original basis logical
+sequence, independently of the visible cut's newer mutable or frozen suffix.
+The authenticated backend role authorizes only equivalent physical packing;
+it grants no new logical publication or callback authority.
+
+After a successful pack and exact Snapshot adoption, the same flush owner
+attempts fallback convergence through the pre-pack basis's captured logical and
+canonical endpoint before maintained GC. It reuses complete-cut owner-bound
+publication and its accepted Snapshot handoff, appending no command and granting
+no new logical coverage. Mutable suffixes remain visible and unconsumed; a newer
+frozen suffix safely defers convergence to its checkpoint. Accepted pack errors
+still reconcile the exact physical basis before returning; publication/custody
+failures do not authorize GC. Independent readers still retain exact source
+files until released; unrelated current writers keep their own files. Convergence
+and selected-source handoff do not bypass any root, reader or resource pin.
 
 One pass selects at most two generations and 32MiB of live copying and attempts
 at most one subsequent GC. Ordinary production uses the maintained input policy,

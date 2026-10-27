@@ -13,6 +13,7 @@ import (
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )
 
 // This adapter pauses the actual named backend operation immediately after its
@@ -20,12 +21,13 @@ import (
 // own writeMu split is separately exercised by its maintained copy-hook tests.
 type privateCOWPackHeldBackend struct {
 	*backenddb.DB
-	published chan backenddb.LeafGenerationPackRunOnceStats
-	release   chan struct{}
-	failure   error
-	calls     int
-	gcCalls   int
-	last      backenddb.LeafGenerationPackRunOnceStats
+	published       chan backenddb.LeafGenerationPackRunOnceStats
+	release         chan struct{}
+	failure         error
+	fallbackFailure error
+	calls           int
+	gcCalls         int
+	last            backenddb.LeafGenerationPackRunOnceStats
 }
 
 func (b *privateCOWPackHeldBackend) LeafGenerationPackRunOnceForPrivateCOW(owner *transactionowner.Owner, ctx context.Context, opts backenddb.LeafGenerationPackFromPlanOptions) (backenddb.LeafGenerationPackRunOnceStats, error) {
@@ -41,6 +43,13 @@ func (b *privateCOWPackHeldBackend) LeafGenerationPackRunOnceForPrivateCOW(owner
 		}
 	}
 	return stats, errors.Join(err, b.failure)
+}
+
+func (b *privateCOWPackHeldBackend) CommandWALCheckpointFallbackNeedsRefresh(basis backenddb.StateToken) (bool, error) {
+	if b.fallbackFailure != nil {
+		return false, b.fallbackFailure
+	}
+	return b.DB.CommandWALCheckpointFallbackNeedsRefresh(basis)
 }
 
 func (b *privateCOWPackHeldBackend) LeafGenerationGC(ctx context.Context, opts backenddb.LeafGenerationGCOptions) (backenddb.LeafGenerationGCStats, error) {
@@ -128,6 +137,14 @@ func preparePrivateCOWPack(t *testing.T, cache *DB, disk *backenddb.DB) {
 }
 
 func TestPrivateCOWLeafPackPreservesConcurrentWALWritesAndHeldCut(t *testing.T) {
+	for _, frozen := range []bool{false, true} {
+		t.Run(fmt.Sprintf("frozen=%t", frozen), func(t *testing.T) {
+			testPrivateCOWLeafPackPreservesConcurrentWALWritesAndHeldCut(t, frozen)
+		})
+	}
+}
+
+func testPrivateCOWLeafPackPreservesConcurrentWALWritesAndHeldCut(t *testing.T, frozen bool) {
 	requireLeafGenerationPackPromotionSupport(t)
 	cache, backend := privateCOWPackFixture(t)
 	preparePrivateCOWPack(t, cache, backend.DB)
@@ -141,6 +158,8 @@ func TestPrivateCOWLeafPackPreservesConcurrentWALWritesAndHeldCut(t *testing.T) 
 		t.Fatal("missing opening cut")
 	}
 	originalBasis := before.basis
+	originalLogical := before.basis.logicalSeq
+	originalState, _ := before.basis.snapshot.StateToken()
 	if err := cache.cow.releaseCut(before); err != nil {
 		t.Fatal(err)
 	}
@@ -204,6 +223,12 @@ func TestPrivateCOWLeafPackPreservesConcurrentWALWritesAndHeldCut(t *testing.T) 
 	case <-time.After(2 * time.Second):
 		t.Fatal("ordinary COW/WAL writer blocked by private maintenance")
 	}
+	if frozen {
+		if err := cache.rolloverCOWForFlush(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	nextLSN := backend.DB.CommandWALNextLSN()
 	release()
 	select {
 	case err := <-done:
@@ -221,6 +246,12 @@ func TestPrivateCOWLeafPackPreservesConcurrentWALWritesAndHeldCut(t *testing.T) 
 	if current.basis == originalBasis {
 		t.Error("physically changed basis was not adopted")
 	}
+	if current.basis.logicalSeq != originalLogical {
+		t.Errorf("physical adoption relabeled logical basis: got %d want %d", current.basis.logicalSeq, originalLogical)
+	}
+	if frozen && len(current.frozen) == 0 {
+		t.Error("physical maintenance consumed frozen suffix")
+	}
 	if err := cache.cow.releaseCut(current); err != nil {
 		t.Fatal(err)
 	}
@@ -229,6 +260,14 @@ func TestPrivateCOWLeafPackPreservesConcurrentWALWritesAndHeldCut(t *testing.T) 
 	}
 	if got, err := held.Get([]byte("pack-00000")); err != nil || !bytes.Equal(got, bytes.Repeat([]byte{4}, 128)) {
 		t.Fatalf("old snapshot changed: %x %v", got, err)
+	}
+	state, live := backend.DB.StateToken()
+	if !live || state.AppliedCommandLSN != originalState.AppliedCommandLSN || state.MaxEntryRevision != originalState.MaxEntryRevision || backend.DB.CommandWALNextLSN() != nextLSN {
+		t.Fatalf("physical maintenance changed logical endpoint: %+v original=%+v next=%d want=%d", state, originalState, backend.DB.CommandWALNextLSN(), nextLSN)
+	}
+	needed, err := backend.DB.CommandWALCheckpointFallbackNeedsRefresh(state)
+	if err != nil || needed != frozen {
+		t.Fatalf("post-pack fallback needs refresh=%t err=%v want=%t before another checkpoint", needed, err, frozen)
 	}
 	if err := cache.Checkpoint(); err != nil {
 		t.Fatal(err)
@@ -306,7 +345,16 @@ func TestPrivateCOWLeafPackAcceptedErrorStillAdoptsBasis(t *testing.T) {
 	if !attempted || !errors.Is(err, failure) || cache.cow.refreshRequired.Load() {
 		t.Fatalf("accepted-error handoff: attempted%t err%v refresh%t", attempted, err, cache.cow.refreshRequired.Load())
 	}
-	if err := cache.Checkpoint(); err != nil {
+	cut := cache.cow.retainCut()
+	if cut == nil {
+		t.Fatal("accepted-error handoff lost current cut")
+	}
+	adopted, live := cut.basis.snapshot.StateToken()
+	actual, actualLive := backend.DB.StateToken()
+	if !live || !actualLive || adopted != actual {
+		t.Errorf("accepted-error handoff did not install exact backend Snapshot: adopted=%+v actual=%+v", adopted, actual)
+	}
+	if err := cache.cow.releaseCut(cut); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := cache.Get([]byte("pack-03000")); err != nil || !bytes.Equal(got, bytes.Repeat([]byte{1}, 128)) {
@@ -345,4 +393,225 @@ func TestPrivateCOWLeafPackLargeInputDoesNotDisableDefaultMaintenance(t *testing
 	if got, err := cache.Get([]byte("pack-03000")); err != nil || !bytes.Equal(got, bytes.Repeat([]byte{1}, 128)) {
 		t.Fatalf("large-input maintenance lost live value: %x %v", got, err)
 	}
+}
+
+// Exercise the real automatic slice rather than a public explicit Pack wrapper:
+// those wrappers checkpoint first and can hide fallback-only source retention.
+func TestPrivateCOWLeafPackConvergesBeforeGCAndUnlinksAfterReaderRelease(t *testing.T) {
+	for _, closed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("closed=%t", closed), func(t *testing.T) {
+			testPrivateCOWLeafPackSourceRetirement(t, closed)
+		})
+	}
+}
+
+func testPrivateCOWLeafPackSourceRetirement(t *testing.T, closed bool) {
+	requireLeafGenerationPackPromotionSupport(t)
+	cache, backend := privateCOWPackFixture(t)
+	preparePrivateCOWPack(t, cache, backend.DB)
+	// Keep the already-closed source control as well as the actual active
+	// source workload. Production must close only the selected active sources.
+	if closed {
+		for _, lane := range cache.leafLogAppendLanesSnapshot() {
+			lane.vlogMu.Lock()
+			err := cache.rotateValueLogMuHeld(lane)
+			lane.vlogMu.Unlock()
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	held := cache.AcquireSnapshot()
+	if held == nil {
+		t.Fatal("missing retained public reader")
+	}
+	defer func() {
+		if held != nil {
+			_ = held.Close()
+		}
+	}()
+	plan, err := backend.DB.LeafGenerationPlan(context.Background(), backenddb.LeafGenerationPlanOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache.leafLog.vlogMu.Lock()
+	leafDir := filepath.Dir(cache.leafLog.vlogPath)
+	cache.leafLog.vlogMu.Unlock()
+	currentWriterPaths := make(map[string]*lane)
+	rotations := make(map[*lane]uint64)
+	for _, lane := range cache.leafLogAppendLanesSnapshot() {
+		lane.vlogMu.Lock()
+		currentWriterPaths[lane.vlogPath] = lane
+		rotations[lane] = lane.vlogRotateTotal.Load()
+		lane.vlogMu.Unlock()
+	}
+	type sourceFile struct {
+		path string
+		info os.FileInfo
+	}
+	sources := make(map[uint64][]sourceFile)
+	for _, gen := range plan.Generations {
+		for _, id := range gen.FileIDs {
+			path := valuelog.SegmentPath(leafDir, id)
+			info, err := os.Stat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sources[gen.GenerationID] = append(sources[gen.GenerationID], sourceFile{path, info})
+		}
+	}
+	before, live := backend.DB.StateToken()
+	next, checkpoints := backend.DB.CommandWALNextLSN(), cache.checkpointRuns.Load()
+	if !live {
+		t.Fatal("missing initial backend state")
+	}
+	if attempted, err := cache.runPrivateCOWLeafPackSlice(); err != nil || !attempted || !backend.last.Ran {
+		t.Fatalf("automatic pack: attempted=%t stats=%+v err=%v", attempted, backend.last, err)
+	}
+	state, live := backend.DB.StateToken()
+	needed, err := backend.DB.CommandWALCheckpointFallbackNeedsRefresh(state)
+	if !live || err != nil || needed || state.AppliedCommandLSN != before.AppliedCommandLSN || state.MaxEntryRevision != before.MaxEntryRevision || backend.DB.CommandWALNextLSN() != next || cache.checkpointRuns.Load() != checkpoints {
+		t.Fatalf("pack did not converge original physical cut without checkpoint/append: before=%+v after=%+v needed=%t err=%v", before, state, needed, err)
+	}
+	var selected []sourceFile
+	for _, id := range backend.last.Selection.GenerationIDs {
+		files := sources[id]
+		if len(files) == 0 {
+			t.Fatalf("missing original file identity for selected generation %d", id)
+		}
+		selected = append(selected, files...)
+	}
+	if len(selected) == 0 {
+		t.Fatal("no real packed source")
+	}
+	selectedPaths := make(map[string]bool)
+	activeSelected, unselected := 0, 0
+	for _, source := range selected {
+		selectedPaths[source.path] = true
+	}
+	for path, lane := range currentWriterPaths {
+		lane.vlogMu.Lock()
+		currentPath, rotation := lane.vlogPath, lane.vlogRotateTotal.Load()
+		lane.vlogMu.Unlock()
+		if selectedPaths[path] {
+			activeSelected++
+			if currentPath == path || rotation != rotations[lane]+1 {
+				t.Fatalf("selected active source not handed off once: %s -> %s rotations=%d -> %d", path, currentPath, rotations[lane], rotation)
+			}
+		} else {
+			unselected++
+			if currentPath != path || rotation != rotations[lane] {
+				t.Fatalf("unselected lane changed: %s -> %s rotations=%d -> %d", path, currentPath, rotations[lane], rotation)
+			}
+		}
+	}
+	if !closed && (activeSelected == 0 || unselected == 0) {
+		t.Fatalf("fixture must include selected and unrelated active writers: selected=%d unrelated=%d", activeSelected, unselected)
+	}
+	for _, source := range selected {
+		info, err := os.Stat(source.path)
+		if err != nil || !os.SameFile(source.info, info) {
+			t.Fatalf("held reader lost original source inode %s: %v", source.path, err)
+		}
+	}
+	if got, err := held.Get([]byte("pack-03000")); err != nil || !bytes.Equal(got, bytes.Repeat([]byte{1}, 128)) {
+		t.Fatalf("retained source read: %x %v", got, err)
+	}
+	if err := held.Close(); err != nil {
+		t.Fatal(err)
+	}
+	held = nil
+	var gcStats backenddb.LeafGenerationGCStats
+	// This is the maintained GC/fence only, with skipCheckpoint=true. It does
+	// not advance logical coverage or invoke explicit fallback convergence.
+	if err := cache.RunBackendMaintenance(func() error {
+		var err error
+		gcStats, _, err = cache.runVlogGenerationLeafGC(context.Background())
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if backend.DB.CommandWALNextLSN() != next || cache.checkpointRuns.Load() != checkpoints {
+		t.Fatal("reader-release GC appended or checkpointed")
+	}
+	// Retirement can precede unlink: the collector's own pre-retirement
+	// Snapshot releases after the first pass. A second normal GC reports and
+	// prunes that deletion; neither pass checkpoints or republishes fallback.
+	t.Logf("first reader-release GC: %+v", gcStats)
+	if err := cache.RunBackendMaintenance(func() error {
+		var err error
+		gcStats, _, err = cache.runVlogGenerationLeafGC(context.Background())
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if backend.DB.CommandWALNextLSN() != next || cache.checkpointRuns.Load() != checkpoints {
+		t.Fatal("second reader-release GC appended or checkpointed")
+	}
+	for _, source := range selected {
+		if _, err := os.Stat(source.path); !os.IsNotExist(err) {
+			t.Fatalf("packed source inode still named after reader release and maintained GC: %s err=%v GC=%+v", source.path, err, gcStats)
+		}
+	}
+	if gcStats.FilesDeleted == 0 {
+		t.Fatalf("no actual deletion reported: %+v", gcStats)
+	}
+	t.Logf("selected closed source files=%d; post-release GC=%+v", len(selected), gcStats)
+	// Reopen only after the measured unlink assertions, so Close cannot mask
+	// failure to reclaim at the normal maintenance boundary.
+	dir := backend.DB.Dir()
+	if err := cache.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := backenddb.Open(backenddb.Options{Dir: dir, CommandWAL: true, Durability: backenddb.DurabilityWALOnRelaxed, DisableBackgroundPrune: true, IndexOuterLeavesInValueLog: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	for _, key := range []string{"pack-00000", "pack-03000"} {
+		want := byte(4)
+		if key == "pack-03000" {
+			want = 1
+		}
+		if got, err := reopened.Get([]byte(key)); err != nil || !bytes.Equal(got, bytes.Repeat([]byte{want}, 128)) {
+			t.Fatalf("reopened %s: %x %v", key, got, err)
+		}
+	}
+}
+
+func TestPrivateCOWLeafPackFallbackFailureDoesNotCollect(t *testing.T) {
+	requireLeafGenerationPackPromotionSupport(t)
+	cache, backend := privateCOWPackFixture(t)
+	preparePrivateCOWPack(t, cache, backend.DB)
+	held := cache.AcquireSnapshot()
+	if held == nil {
+		t.Fatal("missing original reader")
+	}
+	defer held.Close()
+	next := backend.DB.CommandWALNextLSN()
+	failure := errors.New("fallback custody refused after accepted pack")
+	backend.fallbackFailure = failure
+	attempted, err := cache.runPrivateCOWLeafPackSlice()
+	if !attempted || !backend.last.Ran || !errors.Is(err, failure) || backend.gcCalls != 0 || backend.DB.CommandWALNextLSN() != next {
+		t.Fatalf("fallback refusal did not stop collection: attempted=%t pack=%+v GC=%d next=%d err=%v", attempted, backend.last, backend.gcCalls, backend.DB.CommandWALNextLSN(), err)
+	}
+	cut := cache.cow.retainCut()
+	if cut == nil {
+		t.Fatal("missing reconciled pack basis")
+	}
+	adopted, live := cut.basis.snapshot.StateToken()
+	actual, actualLive := backend.DB.StateToken()
+	if !live || !actualLive || adopted != actual {
+		t.Errorf("fallback refusal lost adopted exact Snapshot: adopted=%+v actual=%+v", adopted, actual)
+	}
+	if err := cache.cow.releaseCut(cut); err != nil {
+		t.Fatal(err)
+	}
+	if needed, err := backend.DB.CommandWALCheckpointFallbackNeedsRefresh(actual); err != nil || !needed {
+		t.Fatalf("refused fallback did not retain old recovery slot: needed=%t err=%v", needed, err)
+	}
+	if got, err := held.Get([]byte("pack-03000")); err != nil || !bytes.Equal(got, bytes.Repeat([]byte{1}, 128)) {
+		t.Fatalf("reader after fallback refusal: %x %v", got, err)
+	}
+	backend.fallbackFailure = nil
 }
