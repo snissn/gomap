@@ -253,17 +253,9 @@ func (m *NativeJSONManager) mutateIndexFamiliesLocked(owner *Collection, name st
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
 	if vector != nil {
-		normalized, e := normalizeVectorIndexDefinition(*vector)
+		normalized, e := validateNativeVectorIndexCreate(read.meta, *vector)
 		if e != nil {
 			return nil, e
-		}
-		candidate := *read.meta.copy()
-		candidate.VectorIndexes = append(candidate.VectorIndexes, normalized)
-		if _, e := normalizeCollectionMeta(candidate); e != nil {
-			return nil, e
-		}
-		if read.meta.Options.ColumnStore != nil {
-			return nil, backenddb.ErrNativeSemanticUnsupported
 		}
 		*vector = normalized
 	}
@@ -831,9 +823,36 @@ func nativeVectorDomainRemoved(name string, meta CollectionMeta) bool {
 	return !found
 }
 
+// Unlike a DDL owner's idempotent declaration admission, public creation
+// rejects duplicate names. Keep this candidate identical to publication's check.
+func validateNativeVectorIndexCreate(meta CollectionMeta, requested VectorIndexDefinition) (VectorIndexDefinition, error) {
+	normalized, err := normalizeVectorIndexDefinition(requested)
+	if err != nil {
+		return VectorIndexDefinition{}, err
+	}
+	candidate := *meta.copy()
+	candidate.VectorIndexes = append(candidate.VectorIndexes, normalized)
+	if _, err := normalizeCollectionMeta(candidate); err != nil {
+		return VectorIndexDefinition{}, err
+	}
+	if meta.Options.ColumnStore != nil {
+		return VectorIndexDefinition{}, backenddb.ErrNativeSemanticUnsupported
+	}
+	if _, err := nativeJSONMeta(candidate); err != nil {
+		return VectorIndexDefinition{}, err
+	}
+	return normalized, nil
+}
+
 func (c *Collection) nativeCreateVectorIndex(def VectorIndexDefinition) (*CollectionMeta, error) {
 	if c.manager.isClosing() {
 		return nil, backenddb.ErrClosed
+	}
+	if err := c.nativeVectorIndexDDLPreflight(func(meta CollectionMeta) error {
+		_, err := validateNativeVectorIndexCreate(meta, def)
+		return err
+	}); err != nil {
+		return nil, err
 	}
 	if err := c.nativeJSON.db.PrepareNativeProducer(); err != nil {
 		return nil, err

@@ -1180,8 +1180,27 @@ func (c *Collection) SearchVectorIndex(opts VectorIndexSearchOptions) (VectorInd
 	if err := validateVectorIndexSearchRequest(opts.TopK, opts.EfSearch); err != nil {
 		return VectorIndexSearchResponse{}, err
 	}
-	if opts.DeclaredScalarFilter != nil {
-		return VectorIndexSearchResponse{}, fmt.Errorf("%w: vector index SearchVectorIndex does not support DeclaredScalarFilter; use the supported typed ColumnGraph filtering route", ErrVectorIndexSearchUnavailable)
+	// Neither the prepared reader nor the one-shot searcher implements legacy
+	// filtering or its fallback controls. Reject them before opening a reader so
+	// a filtered request cannot silently become an unfiltered ANN search. Native
+	// and admitted typed serving above retain their own filtering contracts.
+	var unsupportedFilterOption string
+	switch {
+	case opts.Filter != nil:
+		unsupportedFilterOption = "Filter"
+	case opts.IndexRangeFilter != nil:
+		unsupportedFilterOption = "IndexRangeFilter"
+	case opts.DeclaredScalarFilter != nil:
+		unsupportedFilterOption = "DeclaredScalarFilter"
+	case opts.FetchMultiplier != 0:
+		unsupportedFilterOption = "FetchMultiplier"
+	case opts.ExactFilterMaxDocs != 0:
+		unsupportedFilterOption = "ExactFilterMaxDocs"
+	case opts.DisableExactFallback:
+		unsupportedFilterOption = "DisableExactFallback"
+	}
+	if unsupportedFilterOption != "" {
+		return VectorIndexSearchResponse{}, fmt.Errorf("%w: vector index SearchVectorIndex does not support %s; use the supported typed ColumnGraph filtering route for declared scalar filters", ErrVectorIndexSearchUnavailable, unsupportedFilterOption)
 	}
 	if collectionSearchVectorIndexCanUseBufferedNoDocumentRoute(opts) {
 		response, err := c.searchVectorIndexPreparedNoDocumentOwned(opts)
@@ -1560,11 +1579,11 @@ func validateCollectionVectorIndexSearchWithBufferOptions(opts VectorIndexSearch
 	}
 	if opts.Filter != nil {
 		buffer.Reset()
-		return collectionVectorIndexWithBufferUnsupportedOptionError("Filter", "filters are outside the exact no-document hnsw_search_pack_v1 route; use SearchVectorIndex for response-owned search or build a separate measured filtered path")
+		return collectionVectorIndexWithBufferUnsupportedOptionError("Filter", "filters are outside the exact no-document hnsw_search_pack_v1 route; use an admitted typed ColumnGraph route with DeclaredScalarFilter")
 	}
 	if opts.IndexRangeFilter != nil {
 		buffer.Reset()
-		return collectionVectorIndexWithBufferUnsupportedOptionError("IndexRangeFilter", "filters are outside the exact no-document hnsw_search_pack_v1 route; use SearchVectorIndex for response-owned search or build a separate measured filtered path")
+		return collectionVectorIndexWithBufferUnsupportedOptionError("IndexRangeFilter", "filters are outside the exact no-document hnsw_search_pack_v1 route; use an admitted typed ColumnGraph route with DeclaredScalarFilter")
 	}
 	if opts.FetchMultiplier != 0 {
 		buffer.Reset()

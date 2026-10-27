@@ -40,6 +40,14 @@ func (c *Collection) WithVectorIndexDDL(definitions []VectorIndexDefinition, fn 
 	}
 	var meta CollectionMeta
 	if c.nativeJSON != nil {
+		if err := c.nativeVectorIndexDDLPreflight(func(meta CollectionMeta) error {
+			_, err := validateVectorIndexDDL(meta, definitions, true)
+			return err
+		}); err != nil {
+			return err
+		}
+		// Producer pressure may publish physical assets and requires both DDL
+		// locks to be available. Revalidate the later capture under authority.
 		if err := c.nativeJSON.db.PrepareNativeProducer(); err != nil {
 			return err
 		}
@@ -79,41 +87,11 @@ func (c *Collection) WithVectorIndexDDL(definitions []VectorIndexDefinition, fn 
 			return err
 		}
 	}
-	vectors := make(map[string]VectorIndexDefinition, len(definitions))
-	candidate := *meta.copy()
-	for _, requested := range definitions {
-		def, err := normalizeVectorIndexDefinition(requested)
-		if err != nil {
-			return err
-		}
-		if _, duplicate := vectors[def.Name]; duplicate {
-			return fmt.Errorf("collections: duplicate index %q", def.Name)
-		}
-		vectors[def.Name] = def
-		if _, found := findIndex(meta.Indexes, def.Name); found {
-			return fmt.Errorf("%w: %q", ErrIndexNameConflict, def.Name)
-		}
-		if existing, found := findVectorIndex(meta.VectorIndexes, def.Name); found {
-			if !VectorIndexDefinitionsLogicallyEqual(existing, def) {
-				return fmt.Errorf("collections: existing vector index %q has a different definition", def.Name)
-			}
-			continue
-		}
-		var errAdd error
-		candidate, _, errAdd = addVectorIndexToCollectionMeta(candidate, def)
-		if errAdd != nil {
-			return errAdd
-		}
-		// Typed native collections support their original configured vector only;
-		// adding an index is unsupported even when its declaration shape is valid.
-		if c.nativeJSON != nil && meta.Options.ColumnStore != nil {
-			return fmt.Errorf("%w: adding vector indexes to an existing ColumnStore collection is unsupported", backenddb.ErrNativeSemanticUnsupported)
-		}
-	}
-	// This check also refuses existing BSON declarations before fn can publish.
-	if _, err := normalizeCollectionMeta(candidate); err != nil {
+	vectors, err := validateVectorIndexDDL(meta, definitions, c.nativeJSON != nil)
+	if err != nil {
 		return err
 	}
+
 	token := &CollectionIndexDDL{active: true, collection: c, meta: meta, vectors: vectors}
 	defer func() {
 		token.mu.Lock()
@@ -123,6 +101,67 @@ func (c *Collection) WithVectorIndexDDL(definitions []VectorIndexDefinition, fn 
 		token.mu.Unlock()
 	}()
 	return fn(token)
+}
+
+// validateVectorIndexDDL checks the complete captured schema without preparing
+// or publishing native state. Existing declarations retain owner idempotence.
+func validateVectorIndexDDL(meta CollectionMeta, definitions []VectorIndexDefinition, native bool) (map[string]VectorIndexDefinition, error) {
+	vectors := make(map[string]VectorIndexDefinition, len(definitions))
+	candidate := *meta.copy()
+	for _, requested := range definitions {
+		def, err := normalizeVectorIndexDefinition(requested)
+		if err != nil {
+			return nil, err
+		}
+		if _, duplicate := vectors[def.Name]; duplicate {
+			return nil, fmt.Errorf("collections: duplicate index %q", def.Name)
+		}
+		vectors[def.Name] = def
+		if _, found := findIndex(meta.Indexes, def.Name); found {
+			return nil, fmt.Errorf("%w: %q", ErrIndexNameConflict, def.Name)
+		}
+		if existing, found := findVectorIndex(meta.VectorIndexes, def.Name); found {
+			if !VectorIndexDefinitionsLogicallyEqual(existing, def) {
+				return nil, fmt.Errorf("collections: existing vector index %q has a different definition", def.Name)
+			}
+			continue
+		}
+		var errAdd error
+		candidate, _, errAdd = addVectorIndexToCollectionMeta(candidate, def)
+		if errAdd != nil {
+			return nil, errAdd
+		}
+		// Typed native collections support their original configured vector only;
+		// adding an index is unsupported even when its declaration shape is valid.
+		if native && meta.Options.ColumnStore != nil {
+			return nil, fmt.Errorf("%w: adding vector indexes to an existing ColumnStore collection is unsupported", backenddb.ErrNativeSemanticUnsupported)
+		}
+	}
+	// This check also refuses existing BSON declarations before fn can publish.
+	if _, err := normalizeCollectionMeta(candidate); err != nil {
+		return nil, err
+	}
+	if native {
+		if _, err := nativeJSONMeta(candidate); err != nil {
+			return nil, err
+		}
+	}
+	return vectors, nil
+}
+
+// nativeVectorIndexDDLPreflight rejects unsupported requests before producer
+// maintenance can change physical state. Its locks and capture are released
+// before the caller prepares; publication must revalidate under fresh authority.
+func (c *Collection) nativeVectorIndexDDLPreflight(validate func(CollectionMeta) error) error {
+	unlock := c.lockVectorIndexMutation()
+	defer unlock()
+	c.nativeJSON.mu.Lock()
+	defer c.nativeJSON.mu.Unlock()
+	read, err := c.nativeJSON.Capture(c.name)
+	if err != nil {
+		return err
+	}
+	return errors.Join(validate(read.meta), read.Close())
 }
 
 // VectorIndexDefinitionsLogicallyEqual compares declaration identities without
