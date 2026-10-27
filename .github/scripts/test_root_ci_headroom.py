@@ -39,6 +39,23 @@ def matrix_entries(source: str) -> dict[str, dict[str, str]]:
 def redact_command_diagnostic(value: str) -> str:
     """Keep useful command output without URL credentials or known secret values."""
     value = re.sub(r"([A-Za-z][A-Za-z0-9+.-]*://)[^/\s]*@", r"\1[REDACTED]@", value)
+    # These common forms are useful even when the credential is not available
+    # in this process's environment. This is bounded redaction, not a claim
+    # that arbitrary subprocess output can be made universally secret-free.
+    value = re.sub(
+        r"([?&](?:token|access_token|refresh_token|id_token|api[_-]?key|password|passwd|"
+        r"secret|client_secret|credential|signature|x-amz-signature|x-amz-credential|sig)=)"
+        r"[^&#\s]*",
+        r"\1[REDACTED]",
+        value,
+        flags=re.IGNORECASE,
+    )
+    value = re.sub(
+        r"((?:proxy-)?authorization\s*:\s*)[^\r\n]*",
+        r"\1[REDACTED]",
+        value,
+        flags=re.IGNORECASE,
+    )
     credential_name = re.compile(
         r"(?:^|_)(?:TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|PRIVATE_KEY|ACCESS_KEY(?:_ID)?)(?:$|_)",
         re.IGNORECASE,
@@ -173,6 +190,34 @@ class CommandLinesTests(unittest.TestCase):
             self.assertNotIn(secret, rendered)
         for useful in ('packages.example/module', 'proxy.example/path', 'host.example/path',
                        'partial output', 'exit status 1', '[REDACTED]'):
+            self.assertIn(useful, rendered)
+        run.assert_called_once()
+
+    def test_failure_redacts_unknown_query_credentials_and_authorization_headers(self) -> None:
+        stdout = (
+            "dependency https://packages.example/module?version=v1&token=unknown-token&scope=read\n"
+            "Authorization: Bearer unknown-bearer\n"
+            "Proxy-Authorization: Basic unknown-basic\n"
+        )
+        stderr = (
+            "https://proxy.example/path?access_token=unknown-access&api_key=unknown-key"
+            "&password=unknown-password&X-Amz-Signature=unknown-signature#fragment\n"
+            "authorization: token unknown-auth-token\n"
+            "original dependency failure\n"
+        )
+        error = subprocess.CalledProcessError(1, ['go', 'list', './...'],
+                                             output=stdout, stderr=stderr)
+        with mock.patch.dict(os.environ, {}, clear=True), \
+             mock.patch('subprocess.run', side_effect=error) as run:
+            with self.assertRaises(RuntimeError) as raised:
+                command_lines('go', 'list', './...')
+        rendered = ''.join(traceback.format_exception(raised.exception))
+        for secret in ('unknown-token', 'unknown-bearer', 'unknown-basic',
+                       'unknown-access', 'unknown-key', 'unknown-password',
+                       'unknown-signature', 'unknown-auth-token'):
+            self.assertNotIn(secret, rendered)
+        for useful in ('packages.example/module', 'version=v1', 'scope=read',
+                       'proxy.example/path', '#fragment', 'original dependency failure'):
             self.assertIn(useful, rendered)
         run.assert_called_once()
 
