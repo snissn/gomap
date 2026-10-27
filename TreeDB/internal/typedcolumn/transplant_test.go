@@ -702,6 +702,10 @@ func TestTypedColumnTransplantNoProductionPublication(t *testing.T) {
 		// do not add a typed-column writer or publication authority.
 		filepath.Clean(filepath.Join(collectionsDir, "native_ordinary_columngraph_phase_capacity.go")): {},
 		filepath.Clean(filepath.Join(collectionsDir, "native_ordinary_columngraph_search.go")):         {},
+		// The native graph recipe validates pending producer Compression enums
+		// and admits the matching decoder. It adds no typed-column builder;
+		// existing native materializer/asset-manager/root ownership is retained.
+		filepath.Clean(filepath.Join(collectionsDir, "native_vector_graph.go")): {},
 	}
 	fset := token.NewFileSet()
 	err := filepath.WalkDir(collectionsDir, func(path string, d fs.DirEntry, walkErr error) error {
