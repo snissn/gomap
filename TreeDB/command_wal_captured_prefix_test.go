@@ -276,8 +276,24 @@ func TestPublicDurableDefaultBlockedSyncCollectsSuccessorEpoch(t *testing.T) {
 				time.Sleep(time.Millisecond)
 			}
 			if mode == "cow_ordered" {
+				// AfterDependencyAppend runs before the accepted COW cut is
+				// installed. Observe public visibility separately, with the
+				// predecessor's physical sync still blocked throughout.
 				for i := 0; i < successors; i++ {
-					requireRawKVValue(t, database, []byte(fmt.Sprintf("next/%d", i)), nextValue)
+					key := []byte(fmt.Sprintf("next/%d", i))
+					for {
+						got, readErr := database.Get(key)
+						if readErr != nil {
+							t.Fatal(readErr)
+						}
+						if bytes.Equal(got, nextValue) {
+							break
+						}
+						if time.Now().After(deadline) {
+							t.Fatalf("successor %q did not become visible while predecessor WAL sync blocked: got %d bytes, want %d", key, len(got), len(nextValue))
+						}
+						time.Sleep(time.Millisecond)
+					}
 				}
 			}
 			if got := syncs.Load(); got != 1 {
