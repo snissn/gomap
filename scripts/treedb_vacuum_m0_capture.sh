@@ -7,9 +7,15 @@ ROOT=$(git rev-parse --show-toplevel)
 RUN_DIR=${RUN_DIR:-"$ROOT/artifacts/treedb-vacuum-m0/$(date +%Y%m%d_%H%M%S)"}
 SHA=$(git rev-parse HEAD)
 export M0_SOURCE_SHA="$SHA"
-mkdir -p "$RUN_DIR"
+# Atomically claim a new packet directory before creating or replacing any
+# packet content. Existing directories (even empty) belong to their caller.
+mkdir -p "$(dirname "$RUN_DIR")"
+if ! mkdir "$RUN_DIR"; then
+  echo 'capture directory already exists; use a fresh RUN_DIR' >&2
+  exit 2
+fi
 RUN_DIR=$(cd "$RUN_DIR" && pwd -P)
-mkdir -p "$RUN_DIR/raw"
+mkdir "$RUN_DIR/raw"
 
 default_cpu_set() {
   local allowed range start end cpu
@@ -43,11 +49,6 @@ terminal_receipt() {
     --phase terminal --exit-code "$status" || { ((status != 0)) || status=2; }
   exit "$status"
 }
-# Refusing an occupied packet must preserve its existing receipts and raw data.
-if compgen -G "$RUN_DIR/raw/*" >/dev/null || compgen -G "$RUN_DIR/environment-*.json" >/dev/null; then
-  echo 'capture directory already contains an earlier attempt; use a fresh RUN_DIR' >&2
-  exit 2
-fi
 trap terminal_receipt EXIT
 
 # Controlled placement must be explicitly configured; defaulting here would

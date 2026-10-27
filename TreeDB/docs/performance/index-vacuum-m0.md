@@ -172,11 +172,20 @@ and the scheduler count is positive and no larger than the selected set. This
 adds environment diagnostics; it does not repair or reclassify an existing CV
 failure, certify a controlled topology, or complete #4519.
 
+The capture now atomically claims a new, nonexistent `RUN_DIR` before creating
+packet content; any existing directory, including an empty one, is refused
+without modifying its files. Choose a new path for each attempt.
+
 Each benchmark has before/after environment receipts outside its process. They
 retain UTC and monotonic timestamps, actual affinity, CPU package/core/SMT
 identities, runner/run identity, kernel, CPU/steal counters, load, disk counters,
 pressure and resolved cgroup-v2 controls. Unavailable optional files carry a
-reason. Go environment/compiler receipts describe the resolved SDK. The EXIT
+reason. These snapshots add host activity and change inter-sample pacing even
+though the timed workload, fixed operation counts and numerical predicates are
+preserved. The new harness is not byte-for-byte equivalent to historical
+captures; its changed scheduling requires prospective validation, and old RED
+results keep their original interpretation. Go environment/compiler receipts
+describe the resolved SDK. The EXIT
 receipt preserves the original failing exit code, last phase and hashes of all
 raw files, including partial output and stderr; there are no retries, discarded
 samples, load-based skips or telemetry-derived acceptance overrides. A failed
@@ -196,6 +205,8 @@ for example an administrator wrapper around the runner's one-job listener
 lifetime. The lock path must already exist and be an absolute regular file;
 the kernel lock table must be readable. Admission verifies the kernel WRITE
 FLOCK's device/inode, whole-file range, owner process and listener ancestry.
+Custody receipts retain only executable basename, PID and process start ticks;
+full process command lines are transient and their arguments are never emitted.
 Every boundary and the post-upload step reobserve the same custody identity;
 missing or changed custody fails closed, including after artifact upload. The
 post-upload receipt is retained in job logs because the packet has already

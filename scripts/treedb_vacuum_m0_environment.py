@@ -98,8 +98,14 @@ def lease(path, proc=Path('/proc'), pid=None):
             holder = next((item for item in chain[listener:] if item['pid'] == owner), None)
             if holder is None or fields[6:8] != ['0', 'EOF']:
                 raise ValueError('host lease is not held above Runner.Listener for the full job')
+            # Raw cmdlines are used transiently for ancestry identification.
+            # Wrapper/listener arguments can contain credentials; retain only
+            # identity needed to detect replacement, never their arguments.
+            def public_identity(item):
+                return {'pid': item['pid'], 'start_ticks': item['start_ticks'],
+                        'executable': Path(item['command'].split()[0]).name}
             return {'path': str(lock_path), 'device_inode': list(identity),
-                    'holder': holder, 'listener': chain[listener],
+                    'holder': public_identity(holder), 'listener': public_identity(chain[listener]),
                     'scope': 'administrator wrapper; release after Runner.Listener exits',
                     'observation_only': True}
     raise ValueError('exclusive host flock is not observable')

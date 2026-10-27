@@ -55,6 +55,16 @@ class LeaseTests(unittest.TestCase):
         with mock.patch.object(MODULE, 'process', side_effect=lambda pid, proc: self.chain[pid]):
             return MODULE.lease(str(self.lock), self.root, 40)
 
+    def test_custody_receipt_omits_wrapper_and_listener_arguments(self):
+        self.chain[10]['command'] += ' --token private-wrapper-secret'
+        self.chain[20]['command'] += ' --registration-token private-listener-secret'
+        receipt = self.observe()
+        serialized = json.dumps(receipt)
+        self.assertNotIn('private-wrapper-secret', serialized)
+        self.assertNotIn('private-listener-secret', serialized)
+        self.assertEqual(receipt['holder'], {'pid': 10, 'start_ticks': '10', 'executable': 'flock'})
+        self.assertEqual(receipt['listener'], {'pid': 20, 'start_ticks': '20', 'executable': 'Runner.Listener'})
+
     def test_kernel_flock_must_be_held_above_listener(self):
         receipt = self.observe()
         self.assertEqual(receipt['holder']['pid'], 10)
@@ -117,10 +127,14 @@ class LeaseTests(unittest.TestCase):
 
 
 class CaptureTests(unittest.TestCase):
-    def run_capture(self, failure='', overrides=None):
+    def run_capture(self, failure='', overrides=None, occupied=None):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         root = Path(self.temp.name)
+        if occupied is not None:
+            (root / 'packet').mkdir()
+            for name, content in occupied.items():
+                (root / 'packet' / name).write_bytes(content)
         (root / 'scripts').mkdir()
         for name in ['treedb_vacuum_m0_capture.sh', 'treedb_vacuum_m0_environment.py']:
             (root / 'scripts' / name).symlink_to(HERE / name)
@@ -157,6 +171,24 @@ fi
         result = subprocess.run(['bash', str(root / 'scripts' / 'treedb_vacuum_m0_capture.sh')],
                                 env=env, text=True, capture_output=True)
         return root, result
+
+    def test_each_existing_nonraw_artifact_is_preserved_before_any_packet_creation(self):
+        for name in ('commands.txt', 'fixture.json', 'go-environment.json',
+                     'results.json', 'summary.md', 'compiler-version.txt', '.hidden'):
+            with self.subTest(name=name):
+                content = b'existing evidence must remain byte-identical\n'
+                root, result = self.run_capture(occupied={name: content})
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn('fresh RUN_DIR', result.stderr)
+                self.assertFalse((root / 'go-calls').exists())
+                self.assertEqual(list((root / 'packet').iterdir()), [root / 'packet' / name])
+                self.assertEqual((root / 'packet' / name).read_bytes(), content)
+
+    def test_existing_empty_directory_is_not_claimed_by_a_second_capture(self):
+        root, result = self.run_capture(occupied={})
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertEqual(list((root / 'packet').iterdir()), [])
+        self.assertFalse((root / 'go-calls').exists())
 
     def test_occupied_packet_is_refused_without_overwriting_original_evidence(self):
         root, first = self.run_capture('public')
