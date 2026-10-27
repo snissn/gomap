@@ -126,13 +126,22 @@ class TreeDBCIContractTests(unittest.TestCase):
         # only in this exact guarded route, never another job or environment.
         self.assertEqual(self.source.count("vars.TREEDB_PERF_RUNNER_LABEL"), 2)
         self.assertEqual(self.source.count("vars.TREEDB_PERF_RUNNER_PR"), 2)
+        for line in self.source.splitlines():
+            if line.lstrip().startswith('#'):
+                continue
+            if any(variable in line for variable in
+                   ('TREEDB_PERF_RUNNER_LABEL', 'TREEDB_PERF_RUNNER_PR')):
+                self.assertEqual(line, match.group(0),
+                                 'administrator runner variable outside verified MVCC routing expression')
 
     def test_required_workflow_rejects_administrator_vars_in_unrelated_jobs(self) -> None:
         for variable in ('TREEDB_PERF_RUNNER_LABEL', 'TREEDB_PERF_RUNNER_PR'):
-            injected = "\n  unrelated-job:\n    env:\n      UNGUARDED: ${{ vars." + variable + " }}\n"
-            with self.subTest(variable=variable), mock.patch.object(self, 'source', self.source + injected):
-                with self.assertRaises(AssertionError):
-                    self.test_mvcc_runner_override_is_opt_in_and_exact_same_repository_pr_only()
+            for reference in ('vars.VARIABLE', "vars['VARIABLE']"):
+                expression = reference.replace('VARIABLE', variable)
+                injected = "\n  unrelated-job:\n    env:\n      UNGUARDED: ${{ " + expression + " }}\n"
+                with self.subTest(expression=expression), mock.patch.object(self, 'source', self.source + injected):
+                    with self.assertRaises(AssertionError):
+                        self.test_mvcc_runner_override_is_opt_in_and_exact_same_repository_pr_only()
 
     def test_m0_rejects_administrator_vars_outside_verified_routing_fields(self) -> None:
         for variable in ('TREEDB_PERF_RUNNER_LABEL', 'TREEDB_PERF_RUNNER_PR'):
