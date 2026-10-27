@@ -3,6 +3,7 @@ package collections
 import (
 	"errors"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -180,11 +181,27 @@ func assertNativeVectorDDLPressureLocksAvailable(t *testing.T, f *nativePressure
 		})
 	}()
 	joined := false
+	var available chan struct{}
+	probeJoined := false
 	defer func() {
 		releaseOnce.Do(func() { close(release) })
 		if !joined {
-			if err := <-done; err != nil {
-				t.Error(err)
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Error(err)
+				}
+			case <-time.After(15 * time.Second):
+				stacks := make([]byte, 64<<10)
+				t.Errorf("accepted DDL cleanup did not finish after pressure release\n%s", stacks[:runtime.Stack(stacks, true)])
+			}
+		}
+		if available != nil && !probeJoined {
+			select {
+			case <-available:
+			case <-time.After(5 * time.Second):
+				stacks := make([]byte, 64<<10)
+				t.Errorf("DDL authority lock probe did not finish after pressure release\n%s", stacks[:runtime.Stack(stacks, true)])
 			}
 		}
 	}()
@@ -196,7 +213,7 @@ func assertNativeVectorDDLPressureLocksAvailable(t *testing.T, f *nativePressure
 	case <-time.After(15 * time.Second):
 		t.Fatal("accepted DDL did not reach pressure preparation")
 	}
-	available := make(chan struct{})
+	available = make(chan struct{})
 	go func() {
 		unlock := f.col.lockVectorIndexMutation()
 		f.col.nativeJSON.mu.Lock()
@@ -206,6 +223,7 @@ func assertNativeVectorDDLPressureLocksAvailable(t *testing.T, f *nativePressure
 	}()
 	select {
 	case <-available:
+		probeJoined = true
 	case <-time.After(5 * time.Second):
 		t.Fatal("vector DDL held authority during pressure maintenance")
 	}
