@@ -289,7 +289,9 @@ func commandPerfRequest(p *commandPerfProcess, wire *nativewire.Client, r *comma
 				return err
 			}
 			r.LastKeywordStats = response.Stats
-			if response.Stats.FullDocumentScanFallbacks != 0 || response.Stats.FailClosed != 0 || response.Stats.Truncated || response.Stats.Unavailable {
+			// Filtered keyword includes normal final TopK trimming in Truncated.
+			// Work-limit failures remain errors/fail-closed, not partial rankings.
+			if response.Stats.FullDocumentScanFallbacks != 0 || response.Stats.FailClosed != 0 || response.Stats.Unavailable {
 				return fmt.Errorf("keyword route: %+v", response.Stats)
 			}
 			return commandPerfDocuments(r, response.Documents)

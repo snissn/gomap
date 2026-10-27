@@ -59,6 +59,12 @@ func (c *NativeSemanticCapture) NativeMaintenanceAllocator() backenddb.NativeSem
 	return c.cache.maintenance
 }
 
+// This optional operation belongs to the original live capture, never to the
+// cache-free allocator or a retained receipt. It changes no captured authority.
+func (c *NativeSemanticCapture) TryReleaseIdleNativeReadScratch() bool {
+	return c != nil && c.cut != nil && c.cache != nil && c.cache.tryReleaseIdleGenericReadScratch()
+}
+
 func (c *NativeSemanticCapture) Close() error {
 	if c == nil || c.cut == nil {
 		return nil

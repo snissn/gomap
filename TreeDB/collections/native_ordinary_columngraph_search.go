@@ -284,7 +284,15 @@ func (c *Collection) openNativeColumnGraphPreparedSearch(opts VectorIndexSearchO
 	if err = nativeTypedCheckedAdd(&packCharge, retainedCharge); err != nil {
 		return nil, response, err
 	}
-	if err = retained.Resize(packCharge); err != nil {
+	err = retained.Resize(packCharge)
+	if errors.Is(err, memtable.ErrCOWCapacity) {
+		// The original capture may release idle cache-owned generic scratch.
+		// Do not retain a cache backpointer in the allocator or retry unchanged.
+		if idle, ok := read.capture.(interface{ TryReleaseIdleNativeReadScratch() bool }); ok && idle.TryReleaseIdleNativeReadScratch() {
+			err = retained.Resize(packCharge)
+		}
+	}
+	if err != nil {
 		return nil, response, fmt.Errorf("native prepared search retained pack admission bytes=%d setup=%d: %w", packCharge, charge, err)
 	}
 	// Definition strings in a cached response must not depend on the read's
@@ -305,10 +313,76 @@ func (c *Collection) openNativeColumnGraphPreparedSearch(opts VectorIndexSearchO
 	if err != nil {
 		return nil, response, err
 	}
+	// Only the complete maintained opener establishes that validation scratch is
+	// dead. Preserve the original control/state/graph floors and refund only the
+	// difference on this same receipt; unknown shapes retain the full promise.
+	if owned, ok := nativeColumnGraphFlatPackRetainedCharge(p); ok {
+		if e := nativeTypedCheckedAdd(&owned, stateBacking); e == nil {
+			if e = nativeTypedCheckedAdd(&owned, retainedCharge); e == nil && owned < packCharge {
+				if e = retained.ShrinkNativeBytes(packCharge-owned, owned); e != nil {
+					return nil, response, errors.Join(e, p.Close())
+				}
+			}
+		}
+	}
 	p.collection = c // Never retain the operation-local catalog, DB facade or capture.
 	p.nativeIdentity = identity
 	p.nativeLease = retained
 	return p, response, nil
+}
+
+// This is a post-success retained census of the maintained flat file view,
+// never an input-size estimate or permission to allocate under a smaller peak.
+func nativeColumnGraphFlatPackRetainedCharge(p *collectionVectorIndexPreparedSearch) (uint64, bool) {
+	if p == nil || p.pack == nil {
+		return 0, false
+	}
+	v := p.pack
+	if v.handle == nil || v.manager == nil || v.ephemeralHeap || v.Header.ExternalNormalizedVectors || v.handles != nil || v.sectionBytes != nil || p.searcher != nil || p.capturedBase != nil || p.quantizedReaders != nil || p.sharedQuantizedAssets != nil {
+		return 0, false
+	}
+	n, ok := v.handle.SingleFileRetainedCharge()
+	if !ok {
+		return 0, false
+	}
+	addArray := func(count int, size uintptr) bool {
+		bytes, err := nativeTypedCheckedMul(uint64(count), uint64(size))
+		return err == nil && nativeTypedCheckedAdd(&n, memtable.COWAllocationCharge(bytes)) == nil
+	}
+	if !addArray(1, unsafe.Sizeof(*v)) || !addArray(cap(v.Sections), unsafe.Sizeof(columnHNSWSearchPackSection{})) || !addArray(cap(v.AdjacencyLayers), unsafe.Sizeof(columnHNSWSearchPackPreparedLayer{})) || !addArray(cap(v.adjacencyOffsetChunks), unsafe.Sizeof(columnHNSWSearchPackPreparedChunks[uint64]{})) || !addArray(cap(v.adjacencyNeighborChunks), unsafe.Sizeof(columnHNSWSearchPackPreparedChunks[uint32]{})) {
+		return 0, false
+	}
+	// All typed values and auxiliary-navigation spans alias the admitted file
+	// extent. Only each chunks.values descriptor and chunks.starts is allocated.
+	for _, dims := range [...][2]int{
+		{cap(v.normalizedVectorChunks.values), cap(v.normalizedVectorChunks.starts)},
+		{cap(v.levelChunks.values), cap(v.levelChunks.starts)},
+		{cap(v.rowRefGenerationChunks.values), cap(v.rowRefGenerationChunks.starts)},
+		{cap(v.rowRefPartIDChunks.values), cap(v.rowRefPartIDChunks.starts)},
+		{cap(v.rowRefRowIndexChunks.values), cap(v.rowRefRowIndexChunks.starts)},
+		{cap(v.rowRefAppliedLSNChunks.values), cap(v.rowRefAppliedLSNChunks.starts)},
+		{cap(v.documentIDOffsetChunks.values), cap(v.documentIDOffsetChunks.starts)},
+		{cap(v.documentIDByteChunks.values), cap(v.documentIDByteChunks.starts)},
+	} {
+		if !addArray(dims[0], unsafe.Sizeof([]byte{})) || !addArray(dims[1], unsafe.Sizeof(uint64(0))) {
+			return 0, false
+		}
+	}
+	for i := range v.adjacencyOffsetChunks {
+		if i >= len(v.adjacencyNeighborChunks) {
+			return 0, false
+		}
+		a, b := v.adjacencyOffsetChunks[i], v.adjacencyNeighborChunks[i]
+		if !addArray(cap(a.values), unsafe.Sizeof([]uint64{})) || !addArray(cap(a.starts), unsafe.Sizeof(uint64(0))) || !addArray(cap(b.values), unsafe.Sizeof([]uint32{})) || !addArray(cap(b.starts), unsafe.Sizeof(uint64(0))) {
+			return 0, false
+		}
+	}
+	// The cache key is assembled after the original control charge. Definition
+	// and response strings have their unchanged conservative control/state floor.
+	if nativeTypedCheckedAdd(&n, memtable.COWAllocationCharge(uint64(len(p.key)))) != nil {
+		return 0, false
+	}
+	return n, true
 }
 
 // Document-ID setup does not decode granules or row locators. Its maintained

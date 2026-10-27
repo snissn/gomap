@@ -218,6 +218,28 @@ activation evidence and separate natural versus instrumented observations.
 
 ## Immutable COW cache qualification
 
+Paired native read lifecycle controls:
+`TestCOWNativeIdleDictionaryDecoderLifetime` checks a real dictionary decoder,
+nonblocking busy refusal, detach-before-refund, reconstruction on the same capture
+and final original-budget zero. `TestNativeOrdinaryColumnGraphPackEndsConstructionPromise`
+checks successful pack construction ends its temporary promise while warm reuse,
+fetch and cache/owner Close preserve custody. Run both component controls and the
+mapped/heap handle owner controls separately from the original public lifecycle:
+
+```sh
+go test -count=1 ./TreeDB/caching ./TreeDB/collections \
+  -run '^(TestCOWNativeIdleDictionaryDecoderLifetime|TestNativeOrdinaryColumnGraphPackEndsConstructionPromise)$'
+go test -race -count=1 ./TreeDB/internal/mappedresource
+go test -race -count=1 ./TreeDB/documentservice \
+  -run '^(TestOrdinaryColumnGraphNativeService4096|TestOrdinaryColumnGraphNativeColdHybrid4096)$'
+```
+
+Keep both legacy/native roles in the original 4096-row service test and the first
+mixed request after reopen in the cold test; no warm-up or filtered-exact request
+substitutes for that read. These controls establish lifecycle assertions only.
+Public performance, original finite admission, recovery and retained-resource
+qualification remain separate gates; retain source-bound failures and nulls.
+
 `TestCOWSuccessorBasisWorkspaceReuseAndCutOwnership` covers opportunistic
 successor scratch reuse across short-lived cuts, owned output, checkpoint
 handoff and final basis/DB teardown. `TestCOWSuccessorBasisWorkspaceFiniteAdmission`

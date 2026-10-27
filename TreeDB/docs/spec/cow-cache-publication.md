@@ -283,8 +283,13 @@ switching definitions can therefore reconstruct the decoder. Its roughly 19 MiB
 conservative reservation is not a measurement of physical allocation per switch.
 On a borrowed generic decoder's capacity refusal, one nonblocking physical-mutex
 attempt may refund only idle shared generic storage and retry the same admission
-once after a refund. Busy or borrowed owners are never evicted. The original
-finite limits and legitimate capacity refusals remain in force.
+once after a refund. The original live native capture also exposes this operation
+to prepared-pack admission after its complete reservation refuses capacity. Only
+an actual release permits one retry of that same reservation. The operation
+removes decoder, definition and output references before refunding their original
+receipt; busy borrowers return immediately, and small raw Snappy/LZ4 block codecs
+remain. Allocators and retained receipts acquire no cache backpointer. The
+original finite limits and legitimate capacity refusals remain in force.
 Warm decoders survive producer Close while held captures remain; a cold read
 after Close refuses fresh admission. This does not enable dictionary-compressed
 native external leaves, whose producer still writes the existing block format.

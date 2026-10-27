@@ -81,6 +81,20 @@ still checks the prepared owner's lock and closed state. No warm-up request or
 second capture is required after reopen. Explicit source-order strategies retain
 their existing short-circuit order and finite admission checks.
 
+Cold pack opening still reserves its complete construction envelope before file
+mapping, parsing and validation. On capacity refusal it may ask the original live
+capture to [release idle generic decoder scratch](cow-cache-publication.md), then
+retry the same reservation once only after an actual release. After the complete
+opener succeeds, a supported flat single-file view may shrink that same receipt
+to its checked retained backing, preserving the original state/graph and control
+floors. The retained census includes the actual mapped extent or heap copy,
+view/chunk capacities, manager/handle/pin controls, retained strings and file
+ownership. Unknown shapes, overflow or a nonbeneficial census keep the full
+reservation. Failure and cache Close retain the original handle-before-receipt
+cleanup order. The independent process namespace-path cache is outside this
+per-pack receipt; this is not a whole-process RSS bound or zero-global-retention
+claim. No limit, graph identity, corruption check or query contract changes.
+
 A native `VectorIndexSearchBuffer` retains its separate query receipt until
 `Reset` or reuse. Reset drops all native scratch/result backing before refund,
 so returning buffers to an existing pool cannot retain uncharged arrays. Result

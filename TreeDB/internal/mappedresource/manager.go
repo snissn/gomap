@@ -9,6 +9,9 @@ import (
 	"sync"
 	"sync/atomic"
 	"unsafe"
+
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
 // Source identifies how a handle's bytes are backed.
@@ -207,6 +210,110 @@ func (h *Handle) AccountedBytes() int64 {
 		return 0
 	}
 	return h.accounted
+}
+
+// SingleFileRetainedCharge bounds the backing retained by a successful, fresh
+// single-file manager. Other manager histories keep their constructor promise.
+// Call it only for an AcquireFileRange result, not caller-borrowed AcquireBytes.
+// This is an accounting observation; it neither acquires nor releases resources.
+func (h *Handle) SingleFileRetainedCharge() (uint64, bool) {
+	if h == nil {
+		return 0, false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.done || h.mgr == nil || h.accounted <= 0 {
+		return 0, false
+	}
+	m := h.mgr
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	pin, ok := m.active[h.id]
+	if !ok || m.nextID != 1 || len(m.active) != 1 || m.stats.TotalAcquires != 1 || m.stats.TotalReleases != 0 || len(m.stats.DeniedByReason) != 0 || len(m.stats.FallbacksByReason) > 1 || len(m.stats.ValidationModeReads) > 1 {
+		return 0, false
+	}
+	if h.source != SourceMapped && h.source != SourceHeapCopy {
+		return 0, false
+	}
+	var total uint64
+	add := func(n uint64) bool {
+		q := retainedalloc.AllocationCharge(n)
+		if q > ^uint64(0)-total {
+			return false
+		}
+		total += q
+		return true
+	}
+	// The handle contract pays both pin registrations. Round each independently;
+	// the fresh private map additionally pays its header and entire first group.
+	managerEntry := uint64(unsafe.Sizeof(uint64(0)) + unsafe.Sizeof(Pin{}))
+	globalEntry := uint64(unsafe.Sizeof(globalPinKey{}) + unsafe.Sizeof(Pin{}))
+	for _, n := range [...]uint64{uint64(h.accounted), uint64(unsafe.Sizeof(Handle{})), uint64(unsafe.Sizeof(Manager{})), managerEntry, managerEntry, globalEntry, globalEntry} {
+		if !add(n) {
+			return 0, false
+		}
+	}
+	// Fresh Go maps use at most one eight-slot group. Sixteen pointer words
+	// cover their header; inline-sized entries also dominate indirect Pin slots.
+	// No map with an earlier growth/deletion history is admitted by this helper.
+	smallMap := func(key, value uint64) bool {
+		return add(16*uint64(unsafe.Sizeof(uintptr(0)))) && add(8*(key+value)+2*uint64(unsafe.Sizeof(uintptr(0))))
+	}
+	if !smallMap(uint64(unsafe.Sizeof(uint64(0))), uint64(unsafe.Sizeof(Pin{}))) {
+		return 0, false
+	}
+	if m.stats.DeniedByReason != nil && !smallMap(uint64(unsafe.Sizeof(DenyReason(""))), 8) {
+		return 0, false
+	}
+	if m.stats.FallbacksByReason != nil && !smallMap(uint64(unsafe.Sizeof(FallbackReason(""))), 8) {
+		return 0, false
+	}
+	if m.stats.ValidationModeReads != nil && !smallMap(uint64(unsafe.Sizeof(ValidationMode(""))), 8) {
+		return 0, false
+	}
+	for _, s := range [...]string{string(pin.Key.Class), pin.Key.Namespace, pin.Key.Kind, pin.Key.Encoding, pin.Key.Section.Kind, pin.Key.Section.Category, pin.Key.Section.Name, pin.Key.Section.Column, string(pin.Scope.Kind), pin.Scope.ID, pin.Scope.ParentID, pin.Scope.Collection, pin.Scope.Namespace, pin.Scope.Reason, string(pin.Source), pin.Reason, pin.Root, pin.Path} {
+		if !add(uint64(len(s))) {
+			return 0, false
+		}
+	}
+	for s := range m.stats.DeniedByReason {
+		if !add(uint64(len(s))) {
+			return 0, false
+		}
+	}
+	for s := range m.stats.FallbacksByReason {
+		if !add(uint64(len(s))) {
+			return 0, false
+		}
+	}
+	for s := range m.stats.ValidationModeReads {
+		if !add(uint64(len(s))) {
+			return 0, false
+		}
+	}
+	if h.source == SourceMapped {
+		if h.release == nil || pin.Path == "" {
+			return 0, false
+		}
+		file, err := rootpublication.StableFileMetadataCharge(uint64(len(pin.Path)))
+		if err != nil || file > ^uint64(0)-total {
+			return 0, false
+		}
+		total += file
+		// AcquireFileRange's release closure retains exactly its function word,
+		// mapped slice, file and manager. Also pay the OS mmap registration slot.
+		if !add(uint64(unsafe.Sizeof(struct {
+			entry   uintptr
+			mapped  []byte
+			file    *os.File
+			manager *Manager
+		}{}))) || !add(2*uint64(unsafe.Sizeof(uintptr(0))+unsafe.Sizeof([]byte{}))) {
+			return 0, false
+		}
+	} else if h.release != nil {
+		return 0, false
+	}
+	return total, true
 }
 
 // Released reports whether the handle has been released.

@@ -128,6 +128,27 @@ func (c *cowCache) closePhysicalReader() {
 	c.physicalMu.Unlock()
 }
 
+// Only cache-owned generic decoder scratch is disposable. TryLock excludes
+// every borrower without introducing a wait under a captured reader's locks.
+// Definitions and decoded outputs are detached before their original refund.
+func (c *cowCache) tryReleaseIdleGenericReadScratch() bool {
+	if c == nil || !c.physicalMu.TryLock() {
+		return false
+	}
+	defer c.physicalMu.Unlock()
+	released := false
+	if shared := c.physicalReader; shared != nil {
+		for i, codec := range shared.codecs {
+			if codec != nil && !(codec.id == 0 && (codec.codec == valuelog.BlockCodecSnappy || codec.codec == valuelog.BlockCodecLZ4)) {
+				shared.codecs[i] = nil
+				codec.close()
+				released = true
+			}
+		}
+	}
+	return released
+}
+
 // Point traversal needs page scratch; a winning cached pointer does not.
 func (w *cowReadWorkspace) pointScratch() (*cowPointScratch, error) {
 	if w.point == nil {
@@ -352,23 +373,11 @@ func (w *cowReadWorkspace) codecWithDictionary(shape valuelog.COWRecordShape, in
 		memtable.COWAllocationCharge(sizes.RawBacking) + memtable.COWAllocationCharge(sizes.InputBacking) +
 		memtable.COWAllocationCharge(sizes.SequenceBacking) + uint64(sizes.FixedAllocationCount)*memtable.COWAllocationCharge(sizes.FixedAllocationBytes)
 	lease, err := w.budget.AcquireExternal(bytes)
-	if errors.Is(err, memtable.ErrCOWCapacity) && !blockOnly && w.snapshot != nil && w.snapshot.cowCache.physicalMu.TryLock() {
+	if errors.Is(err, memtable.ErrCOWCapacity) && !blockOnly && w.snapshot != nil {
 		// A borrowed reader still owns its original decoder. Before refusing it,
 		// refund only idle cache scratch; physicalMu proves no decoder borrower
 		// survives, and close drops references before releasing its receipt.
-		c := w.snapshot.cowCache
-		refunded := false
-		if shared := c.physicalReader; shared != nil {
-			for i, codec := range shared.codecs {
-				if codec != nil && !(codec.id == 0 && (codec.codec == valuelog.BlockCodecSnappy || codec.codec == valuelog.BlockCodecLZ4)) {
-					shared.codecs[i] = nil
-					codec.close()
-					refunded = true
-				}
-			}
-		}
-		c.physicalMu.Unlock()
-		if refunded {
+		if w.snapshot.cowCache.tryReleaseIdleGenericReadScratch() {
 			lease, err = w.budget.AcquireExternal(bytes)
 		}
 	}
