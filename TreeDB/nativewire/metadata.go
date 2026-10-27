@@ -1345,23 +1345,6 @@ func normalizeClientCollectionMeta(meta collections.CollectionMeta) (collections
 			return collections.CollectionMeta{}, err
 		}
 	}
-	if len(meta.VectorIndexes) != 0 {
-		// Fresh requests may omit strategy and other defaults. Normalize a new
-		// slice so canonicalization never changes the caller's declarations.
-		defs := make([]collections.VectorIndexDefinition, len(meta.VectorIndexes))
-		for i, def := range meta.VectorIndexes {
-			normalized, err := collections.NormalizeVectorIndexDefinitionV1(def)
-			if err != nil {
-				code := iwire.ErrInvalidCommand
-				if errors.Is(err, backenddb.ErrNativeSemanticUnsupported) {
-					code = iwire.ErrUnsupportedFeature
-				}
-				return collections.CollectionMeta{}, fmt.Errorf("%w: %w", protocolError(code, "vector index %q", def.Name), err)
-			}
-			defs[i] = normalized
-		}
-		meta.VectorIndexes = defs
-	}
 	if meta.Options.ColumnStore != nil {
 		raw, err := collections.EncodeColumnStoreWireConfigV1(meta.Name, meta.Options.ColumnStore, true)
 		if err != nil {
@@ -1371,6 +1354,20 @@ func normalizeClientCollectionMeta(meta collections.CollectionMeta) (collections
 		if err != nil {
 			return collections.CollectionMeta{}, invalidMetadata("%v", err)
 		}
+	}
+	if len(meta.VectorIndexes) != 0 {
+		// The shared catalog normalizer validates every declaration and the
+		// collection-wide index namespace before vector capability refusal.
+		// Per-vector normalization here would hide malformed later declarations.
+		normalized, err := collections.NormalizeCollectionMetaV1(meta)
+		if err != nil {
+			code := iwire.ErrInvalidCommand
+			if errors.Is(err, backenddb.ErrNativeSemanticUnsupported) {
+				code = iwire.ErrUnsupportedFeature
+			}
+			return collections.CollectionMeta{}, fmt.Errorf("%w: %w", protocolError(code, "collection_meta"), err)
+		}
+		meta = normalized
 	}
 	if len(meta.TextIndexes) != 0 {
 		payload, err := collections.EncodeCatalogCreateCollectionCommandWALPayload(meta)

@@ -26140,6 +26140,15 @@ func decodeCollectionMeta(raw []byte) (CollectionMeta, error) {
 	return normalizeCollectionMeta(meta)
 }
 
+// NormalizeCollectionMetaV1 validates and canonicalizes a complete collection
+// declaration without opening a collection or constructing indexes. Syntax and
+// the shared index namespace are checked before vector capability eligibility,
+// using the same rules and defaults as collection creation. Wire size limits
+// and create-only physical authority checks remain the caller's responsibility.
+func NormalizeCollectionMetaV1(meta CollectionMeta) (CollectionMeta, error) {
+	return normalizeCollectionMeta(meta)
+}
+
 func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 	normalized, err := normalizeCollectionMetaSyntax(meta)
 	if err != nil {
