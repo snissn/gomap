@@ -119,15 +119,10 @@ func (db *DB) captureCommandWALPrefixLocked(owner *transactionowner.Owner, targe
 		result.AttemptedDependencyEntries = db.commandWALDebt.entryCountThrough(frontier)
 	}
 	if frontier != 0 && db.commandWALDurableLSN.Load() < frontier && db.commandWALDurableMarkerLSN.Load() < frontier {
-		// Existing V2 durable markers can reach storage before their final
-		// fsync. Preserve the format's dependency-before-marker ordering.
-		// A future format may defer this I/O behind a separate certificate.
-		if err := db.syncCommandWALDependenciesThrough(frontier, nil); err != nil {
-			return nil, result, err
-		}
-	}
-
-	if frontier != 0 && db.commandWALDurableLSN.Load() < frontier && db.commandWALDurableMarkerLSN.Load() < frontier {
+		// The barrier's beforeAppend hook drains all existing dependency debt
+		// under the journal mutex, before rotation, LSN assignment or marker
+		// bytes. Retain that V2 dependency-before-marker ordering in its owning
+		// append path; draining here too would sync the same retained cut twice.
 		result.LSN, err = db.appendCommandWALPrefixBarrierForOwner(true, owner)
 		if err != nil {
 			return nil, result, err
