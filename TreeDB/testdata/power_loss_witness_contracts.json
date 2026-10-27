@@ -1147,7 +1147,7 @@
         "forced_value_log_pointers",
         "command_wal_rotation"
       ],
-      "dependency_graph": "two auxiliary sync events -> retained published LSN1 old-WAL sync -> private fixed-WAL initializer sync and publication -> retained published LSN2 active-barrier sync -> public replay",
+      "dependency_graph": "one auxiliary dependency drain -> retained published LSN1 old-WAL sync -> private fixed-WAL initializer sync and publication -> retained published LSN2 active-barrier sync -> public replay",
       "storage_boundaries": [
         "resource_create_write_sync",
         "wal_old_segment_sync",
@@ -1158,7 +1158,7 @@
       "failure_classes": [
         "dependency_closed_reopen"
       ],
-      "expected_durable_horizon": "on fixed-WAL-capable platforms, both auxiliary sync events, old WAL sync, private initializer sync and active LSN2 barrier sync replay commit 3 through LSN 2",
+      "expected_durable_horizon": "on fixed-WAL-capable platforms, the auxiliary dependency drain, old WAL sync, private initializer sync and active LSN2 barrier sync replay commit 3 through LSN 2",
       "expected_outcome": "accepted:stable-root",
       "expected_typed_error": "none",
       "state": {
@@ -1171,7 +1171,7 @@
         "cleanup_maintenance_pins": "slot0_commit_seq=3 slot1_commit_seq=2"
       },
       "seed": 3674,
-      "cut_id": "cut/public-grouped-rotation-external-stable-image/after-dependency-file-sync/004",
+      "cut_id": "cut/public-grouped-rotation-external-stable-image/after-dependency-file-sync/003",
       "variant_id": "public-grouped-rotation-external-stable-image",
       "cut_point": "after-dependency-file-sync",
       "reopen_mode": "read-write",
@@ -1181,7 +1181,7 @@
         "commit_seq": 3,
         "applied_lsn": 2
       },
-      "claim_boundary": "fixed-WAL-capable platform: global physical sync occurrence 004 includes both auxiliary events, old WAL, private initializer and active LSN2 barrier; the pre-published-WAL-sync stable image recovers neither group member"
+      "claim_boundary": "fixed-WAL-capable platform: global physical sync occurrence 003 includes the auxiliary dependency drain, old WAL, private initializer and active LSN2 barrier; the pre-published-WAL-sync stable image recovers neither group member"
     },
     {
       "id": "grouped-low-traffic-lifecycle",
@@ -1327,7 +1327,7 @@
         "forced_value_log_pointers",
         "command_wal_rotation"
       ],
-      "dependency_graph": "two auxiliary sync events -> retained published LSN1 old-WAL sync -> stream successor namespace publication -> retained published LSN2 active-barrier sync -> public replay",
+      "dependency_graph": "one auxiliary dependency drain -> retained published LSN1 old-WAL sync -> stream successor namespace publication -> retained published LSN2 active-barrier sync -> public replay",
       "storage_boundaries": [
         "resource_create_write_sync",
         "wal_old_segment_sync",
@@ -1338,7 +1338,7 @@
       "failure_classes": [
         "dependency_closed_reopen"
       ],
-      "expected_durable_horizon": "on stream-fallback platforms, both auxiliary sync events, old WAL sync and active LSN2 barrier sync replay commit 3 through LSN 2; no private fixed-WAL initialization occurs",
+      "expected_durable_horizon": "on stream-fallback platforms, the auxiliary dependency drain, old WAL sync and active LSN2 barrier sync replay commit 3 through LSN 2; no private fixed-WAL initialization occurs",
       "expected_outcome": "accepted:stable-root",
       "expected_typed_error": "none",
       "state": {
@@ -1351,7 +1351,7 @@
         "cleanup_maintenance_pins": "slot0_commit_seq=3 slot1_commit_seq=2"
       },
       "seed": 3674,
-      "cut_id": "cut/public-grouped-rotation-external-stable-image/after-dependency-file-sync/003",
+      "cut_id": "cut/public-grouped-rotation-external-stable-image/after-dependency-file-sync/002",
       "variant_id": "public-grouped-rotation-external-stable-image",
       "cut_point": "after-dependency-file-sync",
       "reopen_mode": "read-write",
@@ -1361,7 +1361,7 @@
         "commit_seq": 3,
         "applied_lsn": 2
       },
-      "claim_boundary": "stream-fallback platform: global physical sync occurrence 003 includes both auxiliary events, old WAL and active LSN2 barrier without private initialization; the pre-published-WAL-sync stable image recovers neither group member"
+      "claim_boundary": "stream-fallback platform: global physical sync occurrence 002 includes the auxiliary dependency drain, old WAL and active LSN2 barrier without private initialization; the pre-published-WAL-sync stable image recovers neither group member"
     }
   ]
 }
