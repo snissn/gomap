@@ -68,9 +68,10 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: treedb-vacuum-m0-${{ github.event.pull_request.head.sha || github.sha }}
+          name: treedb-vacuum-m0-${{ github.event.pull_request.head.sha || github.sha }}-attempt-${{ github.run_attempt }}
           path: ${{ runner.temp }}/treedb-vacuum-m0
           if-no-files-found: error
+          overwrite: false
 
       - name: Observe controlled custody after artifact upload
         if: always() && steps.checkout.outcome == 'success' && env.M0_CONTROLLED == '1'

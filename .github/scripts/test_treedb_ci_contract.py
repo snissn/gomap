@@ -198,6 +198,16 @@ class TreeDBCIContractTests(unittest.TestCase):
         self.assertIn("      - name: Upload complete evidence packet\n        if: always()", self.m0)
         self.assertIn("          if-no-files-found: error", self.m0)
 
+    def test_m0_upload_retains_each_attempt_without_overwriting_evidence(self) -> None:
+        upload = block(self.m0, "      - name: Upload complete evidence packet\n",
+                       "\n      - name: Observe controlled custody")
+        self.assertIn(
+            "name: treedb-vacuum-m0-${{ github.event.pull_request.head.sha || github.sha }}-attempt-${{ github.run_attempt }}",
+            upload,
+        )
+        self.assertIn("          overwrite: false\n", upload)
+        self.assertNotIn("overwrite: true", upload)
+
     def test_mvcc_attribution_uses_pull_request_base_and_head(self) -> None:
         mvcc = block(self.source, "  mvcc-raw-path-gate:\n", "\n  test:\n")
         self.assertIn("EVENT_NAME: ${{ github.event_name }}", mvcc)
