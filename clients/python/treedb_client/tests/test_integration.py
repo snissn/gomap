@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import signal
@@ -17,7 +18,7 @@ from typing import Optional
 
 import _support
 from treedb_client import Document, TreeDBClient, TreeDBClientError
-from treedb_client.errors import TreeDBProtocolError
+from treedb_client.errors import IndexUnavailableError, TreeDBProtocolError
 from treedb_client._dense_work import (
     dense_quantized_response_work_matches,
     dense_score_plane_byte_counters_match,
@@ -679,6 +680,14 @@ class TreeDBClientIntegrationTests(unittest.TestCase):
                 service.stop()
 
     def test_service_round_trip_and_reopen_smoke(self) -> None:
+        def assert_stale_ann(client: TreeDBClient) -> None:
+            with self.assertRaises(IndexUnavailableError) as stale:
+                client.query_by_embedding("docs", [1, 0], 1, return_embedding=True)
+            self.assertEqual(stale.exception.code, "index_unavailable")
+            self.assertEqual(stale.exception.status_code, 503)
+            self.assertIn("ann vector search failed closed", stale.exception.message)
+            self.assertEqual(set(json.loads(stale.exception.response_body)), {"error"})
+
         with tempfile.TemporaryDirectory(prefix="treedb_client_integration_") as data_dir:
             service = TreeDBServiceProcess(_support.REPO_ROOT, data_dir)
             try:
@@ -697,10 +706,14 @@ class TreeDBClientIntegrationTests(unittest.TestCase):
                 self.assertEqual([doc.id for doc in listed.documents], ["a"])
                 self.assertIsNone(listed.documents[0].embedding)
                 searched = client.query_by_embedding("docs", [1, 0], 1, return_embedding=True)
+                self.assertEqual(searched.route, "ann")
+                self.assertFalse(searched.exact)
                 self.assertEqual(searched.documents[0].id, "a")
                 self.assertEqual(searched.documents[0].embedding, [1.0, 0.0])
                 self.assertEqual(client.delete_by_filter("docs", {"field": "meta.repo", "operator": "==", "value": "other"}).deleted, 1)
                 self.assertEqual(client.count_documents("docs").count, 1)
+                # Delete invalidates the immutable graph; reads cannot rebuild it.
+                assert_stale_ann(client)
             finally:
                 service.stop()
 
@@ -711,7 +724,14 @@ class TreeDBClientIntegrationTests(unittest.TestCase):
                 info = client.open_index("docs")
                 self.assertEqual(info.dimension, 2)
                 self.assertEqual(client.count_documents("docs").count, 1)
+                # Reopen preserves the stale boundary until explicit maintenance.
+                assert_stale_ann(client)
+                optimized = client.optimize_index("docs")
+                self.assertTrue(optimized.status.loaded)
+                self.assertFalse(optimized.status.rebuild_needed)
                 searched = client.query_by_embedding("docs", [1, 0], 1, return_embedding=True)
+                self.assertEqual(searched.route, "ann")
+                self.assertFalse(searched.exact)
                 self.assertEqual(searched.documents[0].id, "a")
                 self.assertEqual(searched.documents[0].embedding, [1.0, 0.0])
             finally:
