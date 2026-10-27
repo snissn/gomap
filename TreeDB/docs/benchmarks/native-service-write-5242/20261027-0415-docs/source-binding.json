@@ -1,0 +1,8 @@
+{
+  "base_head": "4a614bdb3f089c3b53c79b5cebdb99d920536542",
+  "source_files": {
+    "docs/TREEDB_DOCUMENT_SERVICE_API.md": "2a1417fd8e1a326d9dac879a5cc50fc18dd387d18ec93912ed1f1b1fcad11318",
+    "TreeDB/docs/spec/native-wire-implementation-guidelines.md": "b4fae572f4eb350e73597d0c75341471b4748d0e99978ddef545570a1d888932"
+  },
+  "scope": "Two product documentation corrections only; no runtime or protocol changes. FP32 library remains a separate uncommitted construction."
+}

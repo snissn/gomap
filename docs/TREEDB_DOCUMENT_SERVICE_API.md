@@ -266,10 +266,16 @@ retain their contracts and eligibility. Cosine float32 ordinary native-runtime
 HNSW supports indexed Dense ANN and Hybrid vector candidates; non-cosine indexes
 retain exact Dense scoring and do not advertise Hybrid vector capability.
 
-Ordinary native-storage ColumnGraph service adoption remains unsupported. A new
-omitted cosine request on an activated native owner refuses that capability; it
-does not substitute HNSW or fall back to a legacy owner. Retaining the original
-service default therefore does not establish general native service adoption.
+Ordinary native-storage ColumnGraph supports durable service collections,
+including the omitted cosine strategy. Without declared scalar fields, the
+native owner retains full JSON documents. ColumnGraph requires the durable
+profile in both owners; relaxed and no-WAL requests refuse before publication.
+Supported plain indexed CRUD remains available under all three profiles.
+After raw wire mutations, keyword and filtered-exact reads remain available;
+ANN and Hybrid require explicit graph maintenance. The HTTP command exposes
+Optimize; the standalone native command uses graceful shutdown, the existing
+offline maintenance API and restart. Reads do not rebuild the graph, substitute
+HNSW or switch storage owners.
 
 Metadata filters on keyword/hybrid routes require fields declared in
 `scalar_fields`; undeclared or unbounded filters fail closed.

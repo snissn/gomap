@@ -221,7 +221,7 @@ request/result section IDs. Propagate actual prepared-reader/search-pack/delta/s
 never derive them from a declared strategy. ANN returns the maintained search's
 owned projected documents; exact serializes the documents already selected by
 the maintained scan and ranking. Do not fetch them again by primary key. Exact
-scan work is explicit and must not be mislabeled a no-document ANN route.
+scan work is explicit and must not be reported as a no-document ANN route.
 Ordinary ColumnGraph ANN admits exactly one measured prepared-reader or
 search-pack route. Copy `SearchRouteHNSWSearchPack` into `SearchPackSearch`;
 the physical pack name does not imply native_runtime algorithm attribution.
