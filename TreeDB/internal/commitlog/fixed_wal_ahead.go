@@ -214,8 +214,10 @@ func (j *CommandJournal) runFixedWALAhead(slot *fixedWALAheadSlot) {
 	if err == nil {
 		r.state, err = writeInitializedFixedWAL(r.file, r.state.capacity)
 	}
-	j.mu.Lock()
 	elapsed := time.Since(slot.started)
+	// Learn private preparation work, not contention for the append owner's
+	// mutex after that work has completed.
+	j.mu.Lock()
 	if err == nil {
 		j.fixedAheadPolicy.prepared(r.state.capacity, elapsed)
 	}
