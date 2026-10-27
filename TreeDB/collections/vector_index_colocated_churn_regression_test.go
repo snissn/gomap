@@ -53,7 +53,7 @@ func TestNativePublishedSameIDChurnRestoresAllLiveCandidatesV1(t *testing.T) {
 	defer index.releaseSearchView(view)
 	index.mu.RLock()
 	if len(index.nodes) != 36 || len(index.currentNode) != 3 ||
-		!reflect.DeepEqual(snapshotVectorIndexTopology4257(index), snapshotVectorIndexTopology4257(&columnGraphPartitionLiveCarrier{columnGraphHNSWBuilder: columnGraphHNSWBuilder{nodes: view.nodes, entry: view.entry, maxLevel: view.maxLevel}})) ||
+		!reflect.DeepEqual(snapshotVectorIndexTopology4257(index), snapshotVectorIndexTopology4257(&columnGraphPartitionLiveCarrier{columnGraphHNSWBuilder: &columnGraphHNSWBuilder{nodes: view.nodes, entry: view.entry, maxLevel: view.maxLevel}})) ||
 		!reflect.DeepEqual(index.currentNode, view.currentNode) {
 		index.mu.RUnlock()
 		t.Fatal("published topology/current ordinals differ from the restored mutable graph")

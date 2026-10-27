@@ -29,7 +29,9 @@ type collectionSchemaCoordinator struct {
 	typedPublicationChanged  chan struct{}
 	typedPublicationClosed   bool
 
-	vectorDDLMutationMu                    sync.Mutex
+	// Native scalar producers share admission through durable completion. DDL
+	// and vector/carrier mutations exclude every producer for the same namespace.
+	vectorDDLMutationMu                    sync.RWMutex
 	schemaMu                               sync.RWMutex
 	nativeVectorIndexLoadMu                sync.Mutex
 	nativeVectorAdmissionMu                sync.RWMutex

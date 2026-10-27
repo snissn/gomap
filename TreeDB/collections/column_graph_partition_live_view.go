@@ -349,7 +349,7 @@ func (view *vectorIndexSearchView) searchGraphOnlyWithCanonicalScoreBudget(query
 }
 
 func searchVectorIndexViewPlane(query []float32, queryNorm float64, prepared *preparedFloat32CosineQuery, topK, efSearch int, nodes []vectorIndexNode, entry, maxLevel, liveDocs int, view *vectorIndexSearchView, canonical *CanonicalVectorPartitionCosineScorerV1, scratch *vectorIndexSearchScratch, results *[]VectorIndexSearchResult, idBytes *[]byte) ([]VectorIndexSearchResult, error) {
-	runtimeIndex := columnGraphPartitionLiveCarrier{columnGraphHNSWBuilder: columnGraphHNSWBuilder{metric: view.metric,
+	runtimeIndex := columnGraphPartitionLiveCarrier{columnGraphHNSWBuilder: &columnGraphHNSWBuilder{metric: view.metric,
 		encoding:   view.encoding,
 		dimensions: view.dimensions,
 		m:          view.m,

@@ -17,6 +17,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/cowbtree"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
@@ -33,6 +34,166 @@ type nativeVectorGraphRecipe struct {
 	ordinary            bool
 	sourceRoot          uint64
 	constructionWorkers int
+	pendingSourceCodec  nativeOrdinaryGraphPendingCodec
+}
+
+// Zero means the original conservative promise. A bound codec is the exact
+// maintained producer's ordinal and vector data codecs, each plus one. Metadata
+// codecs are absent because the graph projection does not decode those sections.
+type nativeOrdinaryGraphPendingCodec uint32
+
+func (c nativeOrdinaryGraphPendingCodec) needsZSTD() bool {
+	zstd := nativeOrdinaryGraphPendingCodec(typedcolumn.CompressionZSTD) + 1
+	return c&255 == zstd || c>>8&255 == zstd
+}
+
+func nativeOrdinaryGraphPendingSourceCodec(meta CollectionMeta) (nativeOrdinaryGraphPendingCodec, error) {
+	if !nativeOrdinaryColumnGraphMeta(meta) || meta.Options.ColumnStore.AssetManager == nil {
+		return 0, backenddb.ErrNativeSemanticUnsupported
+	}
+	cfg := *meta.Options.ColumnStore
+	fields := columnStoreTypedColumnPartFields(cfg)
+	sortKey, err := typedColumnPartPublicationSortKey(cfg, fields)
+	if err != nil {
+		return 0, err
+	}
+	opts, err := typedColumnPublicationAdapterOptionsFromConfig(cfg, typedColumnPartAssetPartID, fields, sortKey)
+	if err != nil {
+		return 0, err
+	}
+	columns, err := typedColumnAdapterColumnsForFieldsWithOptions(fields, opts)
+	if err != nil {
+		return 0, err
+	}
+	return nativeOrdinaryGraphPendingSourceCodecForOptions(opts, columns)
+}
+
+func nativeOrdinaryGraphPendingSourceCodecForOptions(opts typedColumnAdapterOptions, columns []typedColumnAdapterColumn) (nativeOrdinaryGraphPendingCodec, error) {
+	if len(columns) != 1 || columns[0].Field.ValueType != ColumnStoreValueFloat32Vector {
+		return 0, backenddb.ErrNativeSemanticUnsupported
+	}
+	// appendColumnSections copies these definitions' granule codecs to each
+	// column-data section. imageOptions.SectionCompression applies only to
+	// locator/dictionary/pruning metadata (canCompressImageSection), which the
+	// supplied graph projection skips. Keep ordinal and vector codecs distinct.
+	ordinal := typedColumnAdapterPrimaryIDDefinition(opts).Compression
+	vector := columns[0].Definition.Compression
+	for _, codec := range [...]typedcolumn.Compression{ordinal, vector} {
+		switch codec {
+		case typedcolumn.CompressionNone, typedcolumn.CompressionSnappy, typedcolumn.CompressionLZ4, typedcolumn.CompressionZSTD:
+		default:
+			return 0, backenddb.ErrNativeSemanticUnsupported
+		}
+	}
+	codec := nativeOrdinaryGraphPendingCodec(ordinal) + 1 | (nativeOrdinaryGraphPendingCodec(vector)+1)<<8
+	return codec, nil
+}
+
+// Producer-option validation has its OWN retained metadata envelope, separate
+// from the admission-only bootstrap and every original pending/source charge.
+// The existing bootstrap bounds three one-column factory units, each with 20
+// structural groups and eight old/replacement growth cohorts. Validation adds
+// at most two column arrays + their six one-entry mapper maps, one field array,
+// two sort-key maps + clone, and fixed Options/reflect/closure controls: fewer
+// than those 60 groups. Ordinary schema has exactly one non-null vector field;
+// no row-sized allocation occurs here. Names/path strings borrow the original
+// recipe/producer backing, and even full source-string backing is reserved by
+// the envelope. One callback borrows two pointers for the whole work; each row
+// producer joins before the next starts and its validation factories return
+// before its batch is built. Thus ONE envelope covers their maximum live peak,
+// independent of pending row count or graph-marker count, and remains charged
+// through graph construction/publication rather than claiming unused 1MiB slack.
+func nativeOrdinaryGraphBuildCapacityWithPendingValidation(total, metadataEnvelope uint64, codec nativeOrdinaryGraphPendingCodec) (uint64, error) {
+	if codec == 0 {
+		return total, nil
+	}
+	if metadataEnvelope == 0 {
+		return 0, backenddb.ErrNativeSemanticUnsupported
+	}
+	if err := nativeTypedCheckedAdd(&total, metadataEnvelope); err != nil {
+		return 0, err
+	}
+	return total, nil
+}
+
+// Scalar-index drop DDL may replace the catalog schema while preserving the
+// original primary typed chain. Independent scalar/text declarations do not
+// describe the physical producer. Bind its complete column schema and ordinary
+// vector definition; publication progress is already schema-free.
+func nativeOrdinaryGraphPendingSourceMetaEqual(actual, prior CollectionMeta) bool {
+	if actual.Name != prior.Name || !nativeOrdinaryColumnGraphMeta(actual) || !nativeOrdinaryColumnGraphMeta(prior) {
+		return false
+	}
+	cfg := *actual.Options.ColumnStore
+	nativeTypedCopyPhysicalMetadata(&cfg, prior.Options.ColumnStore)
+	return columnStoreConfigEqual(&cfg, prior.Options.ColumnStore) && vectorIndexDefinitionValuesEqual(actual.VectorIndexes[0], prior.VectorIndexes[0])
+}
+
+// Summarize all guarded graph markers once without another retained slice/map.
+// The returned callback borrows only this work and one original recipe until
+// the synchronous physical producer joins. Non-graph chains get no callback.
+func (w *nativeTypedMaterialization) ordinaryGraphPendingSourceValidator() (typedColumnPartOptionsValidator, error) {
+	var bound *nativeVectorGraphRecipe
+	for _, d := range w.input.deltas {
+		if d == nil || d.data == nil || d.data.graph == nil || d.data.graph.pendingSourceCodec == 0 {
+			continue
+		}
+		recipe := d.data.graph
+		if !recipe.ordinary || recipe.schema == nil || recipe.schema.meta == nil || !nativeOrdinaryGraphPendingSourceMetaEqual(w.meta, *recipe.schema.meta) {
+			return nil, backenddb.ErrNativeSemanticUnsupported
+		}
+		if bound != nil && recipe.pendingSourceCodec != bound.pendingSourceCodec {
+			return nil, backenddb.ErrNativeSemanticUnsupported
+		}
+		bound = recipe
+	}
+	if bound == nil {
+		return nil, nil
+	}
+	return func(cfg ColumnStoreConfig, opts typedColumnAdapterOptions, columns []typedColumnAdapterColumn) error {
+		return validateNativeOrdinaryGraphPendingSourceOptions(w.meta, bound, cfg, opts, columns)
+	}, nil
+}
+
+// Validate the actual producer's immutable options, not a second environment
+// lookup. Both fresh and prepared batches pass the definitions the maintained
+// builder will consume. This per-part check never walks the pending chain.
+func validateNativeOrdinaryGraphPendingSourceOptions(meta CollectionMeta, recipe *nativeVectorGraphRecipe, cfg ColumnStoreConfig, opts typedColumnAdapterOptions, columns []typedColumnAdapterColumn) error {
+	meta.Options.ColumnStore = &cfg
+	if recipe == nil || recipe.schema == nil || recipe.schema.meta == nil || !nativeOrdinaryGraphPendingSourceMetaEqual(meta, *recipe.schema.meta) || cfg.AssetManager == nil {
+		return backenddb.ErrNativeSemanticUnsupported
+	}
+	fields := columnStoreTypedColumnPartFields(cfg)
+	sortKey, err := typedColumnPartPublicationSortKey(cfg, fields)
+	if err != nil {
+		return err
+	}
+	if opts.Namespace != cfg.AssetManager.Namespace || opts.SchemaVersion != uint32(cfg.SchemaHash) || !reflect.DeepEqual(opts.Fields, fields) || !reflect.DeepEqual(opts.SortKey, sortKey) {
+		return backenddb.ErrNativeSemanticUnsupported
+	}
+	// Prepared batches carry their mapped definitions separately. Require
+	// those same definitions as well as the options before the builder uses
+	// them; stale options cannot authenticate a different prepared layout.
+	expected, err := typedColumnAdapterColumnsForFieldsWithOptions(fields, opts)
+	if err != nil {
+		return err
+	}
+	if len(columns) != len(expected) {
+		return backenddb.ErrNativeSemanticUnsupported
+	}
+	for i := range columns {
+		if !reflect.DeepEqual(columns[i].Field, expected[i].Field) || columns[i].Definition != expected[i].Definition {
+			return backenddb.ErrNativeSemanticUnsupported
+		}
+	}
+	codec, err := nativeOrdinaryGraphPendingSourceCodecForOptions(opts, columns)
+	if err != nil {
+		return err
+	}
+	if codec != recipe.pendingSourceCodec {
+		return backenddb.ErrNativeSemanticUnsupported
+	}
+	return nil
 }
 
 func (g *nativeVectorGraphRecipe) release() cowbtree.OwnedMapCompletion {
@@ -213,8 +374,9 @@ func (c *Collection) nativeRebuildVectorGraph(name string) (out VectorIndexStatu
 	var h columnSourceDirectoryHeaderV2
 	var capacity uint64
 	var constructionWorkers int
+	var pendingSourceCodec nativeOrdinaryGraphPendingCodec
 	if ordinary {
-		capacity, h.Rows, constructionWorkers, err = nativeOrdinaryVectorGraphCapacity(tx, g, primary, manifest.baseRoot, def)
+		capacity, h.Rows, constructionWorkers, pendingSourceCodec, err = nativeOrdinaryVectorGraphCapacity(tx, g, primary, manifest.baseRoot, def)
 	} else {
 		h, err = nativeVectorGraphHeader(g.probe.meta, snap, manifest.baseRoot)
 		if err == nil {
@@ -242,7 +404,7 @@ func (c *Collection) nativeRebuildVectorGraph(name string) (out VectorIndexStatu
 	}
 	schema := g.probe.collection.schema
 	schema.retain()
-	recipe := &nativeVectorGraphRecipe{schema: schema, def: def, digest: h.Digest, rows: h.Rows, ordinary: ordinary, sourceRoot: manifest.baseRoot, constructionWorkers: constructionWorkers}
+	recipe := &nativeVectorGraphRecipe{schema: schema, def: def, digest: h.Digest, rows: h.Rows, ordinary: ordinary, sourceRoot: manifest.baseRoot, constructionWorkers: constructionWorkers, pendingSourceCodec: pendingSourceCodec}
 	if identity := g.probe.meta.Options.ColumnStore.ActiveManifest; identity != nil {
 		recipe.identity = *identity
 	}
@@ -629,51 +791,60 @@ func nativeVectorGraphRowCapacity(meta CollectionMeta, def VectorIndexDefinition
 // raw-asset producers. Other shapes retain their original conservative promise.
 // Capture the execution ceiling here; the recipe binds the actual builder to it
 // even if GOMAXPROCS changes after this immutable source census.
-func nativeOrdinaryVectorGraphCapacity(tx *NativeJSONTxn, g *nativeJSONTxnBinding, primary *nativeDomainState, root uint64, def VectorIndexDefinition) (uint64, uint64, int, error) {
+func nativeOrdinaryVectorGraphCapacity(tx *NativeJSONTxn, g *nativeJSONTxnBinding, primary *nativeDomainState, root uint64, def VectorIndexDefinition) (uint64, uint64, int, nativeOrdinaryGraphPendingCodec, error) {
 	if def.M != 16 || def.EfConstruction != 128 || def.Metric != VectorMetricCosine || def.Encoding != VectorIndexEncodingFloat32 || def.Representation != "" || len(def.QuantizedIndexes) != 0 {
 		n, rows, err := nativeOrdinaryVectorGraphConservativeCapacity(tx, g, primary, root, def)
-		return n, rows, 0, err
+		return n, rows, 0, 0, err
 	}
 	workers := min(max(runtime.GOMAXPROCS(0), 1), 16)
 	construction, pending, err := nativeOrdinaryVectorGraphConstructionCensus(tx, primary, def, workers)
 	if err != nil {
-		return 0, 0, 0, err
+		return 0, 0, 0, 0, err
 	}
 	if construction.Rows == 0 {
 		n, rows, e := nativeOrdinaryVectorGraphConservativeCapacity(tx, g, primary, root, def)
-		return n, rows, 0, e
+		return n, rows, 0, 0, e
 	}
 	if root == 0 && pending == 0 {
-		return 0, 0, 0, fmt.Errorf("collections: ordinary graph requires an initial manifest or row-producing pending prefix: %w", backenddb.ErrNativeSemanticUnsupported)
+		return 0, 0, 0, 0, fmt.Errorf("collections: ordinary graph requires an initial manifest or row-producing pending prefix: %w", backenddb.ErrNativeSemanticUnsupported)
 	}
 	source := nativeOrdinaryColumnGraphSourceCensus{PendingBuildBytes: pending}
-	// An unmaterialized producer has no captured physical codec proof.
-	needsZSTD := pending != 0
+	// Physical source sections below keep their exact stored-codec proof.
+	// Pending output uses the maintained producer policy, bound into the recipe.
+	var pendingCodec nativeOrdinaryGraphPendingCodec
+	needsZSTD := false
 	// Schema/handoff and the original four-root group are already retained by
 	// nativeTypedCollectionRetainedCapacity. No second schema owner is invented.
 	rootDir := tx.db.ColumnAssetRootDir()
 	bootstrap, err := nativeOrdinaryColumnGraphMetadataPreflightCapacity(g.probe.meta, def, rootDir)
 	if err != nil {
-		return 0, 0, 0, err
+		return 0, 0, 0, 0, err
 	}
 	if err = tx.admitStage(g, bootstrap); err != nil {
-		return 0, 0, 0, err
+		return 0, 0, 0, 0, err
+	}
+	if pending != 0 {
+		pendingCodec, err = nativeOrdinaryGraphPendingSourceCodec(g.probe.meta)
+		if err != nil {
+			return 0, 0, 0, 0, err
+		}
+		needsZSTD = pendingCodec.needsZSTD()
 	}
 	snap := tx.core.Snapshot()
 	if root != 0 {
 		identity := g.probe.meta.Options.ColumnStore.ActiveManifest
 		if identity == nil {
-			return 0, 0, 0, backenddb.ErrNativeSemanticUnsupported
+			return 0, 0, 0, 0, backenddb.ErrNativeSemanticUnsupported
 		}
 		if err = validateColumnManifestIdentityAtRoot(snap, root, *identity); err != nil {
-			return 0, 0, 0, err
+			return 0, 0, 0, 0, err
 		}
 		metadata, e := nativeTypedManifestCapacity(snap, root)
 		if e != nil {
-			return 0, 0, 0, e
+			return 0, 0, 0, 0, e
 		}
 		if e = tx.admitStage(g, metadata); e != nil {
-			return 0, 0, 0, e
+			return 0, 0, 0, 0, e
 		}
 		// One parser/file scope finishes before the next. Retain the maximum scratch
 		// on this original stage lease, admitting only its incremental high-water.
@@ -690,7 +861,7 @@ func nativeOrdinaryVectorGraphCapacity(tx *NativeJSONTxn, g *nativeJSONTxnBindin
 		}
 		it, e := snap.IteratorAtRoot(root, columnManifestHeaderRecordKeyBytes, nil)
 		if e != nil {
-			return 0, 0, 0, e
+			return 0, 0, 0, 0, e
 		}
 		for it.Valid() {
 			key := it.UnsafeKey()
@@ -752,21 +923,21 @@ func nativeOrdinaryVectorGraphCapacity(tx *NativeJSONTxn, g *nativeJSONTxnBindin
 		}
 		e = errors.Join(e, it.Error(), it.Close())
 		if e != nil {
-			return 0, 0, 0, e
+			return 0, 0, 0, 0, e
 		}
 	}
 	// The supplied vector reader skips metadata decompression. Keep ALL stored
 	// and decoded source cohorts above, and reserve the original fixed decoder
-	// whenever any captured data section (or an unknown pending producer) needs it.
+	// whenever a captured data section or the bound pending producer needs it.
 	if needsZSTD {
 		source.TypedSourceDecoderBytes, err = nativeTypedDecoderFixedCapacity()
 		if err != nil {
-			return 0, 0, 0, err
+			return 0, 0, 0, 0, err
 		}
 	}
 	plan, err := nativeOrdinaryColumnGraphPhaseCapacity(g.probe.meta, def, rootDir, construction, source)
 	if err != nil {
-		return 0, 0, 0, err
+		return 0, 0, 0, 0, err
 	}
 	// Ordinary construction already owns the complete manifest and creates
 	// stableColumnManifestDurableRequirements from it. It does not construct the
@@ -774,13 +945,20 @@ func nativeOrdinaryVectorGraphCapacity(tx *NativeJSONTxn, g *nativeJSONTxnBindin
 	// TVIS slots independently of fresh-state slots, with all codec limits intact.
 	decoded, err := nativeSourceRequirementBasisDecodedLengthV2(snap, root)
 	if err != nil {
-		return 0, 0, 0, err
+		return 0, 0, 0, 0, err
 	}
 	basis := 2 * nativeSourceRequirementStateCapacityV2(decoded)
 	if err = nativeTypedCheckedAdd(&plan.TotalBytes, basis); err != nil {
-		return 0, 0, 0, err
+		return 0, 0, 0, 0, err
 	}
-	return plan.TotalBytes, construction.Rows, workers, nil
+	// The earlier bootstrap remains on the original stage owner. A SEPARATE
+	// complete envelope in this original graph promise covers the later exact
+	// producer-option validation while all source/pending promises coexist.
+	capacity, err := nativeOrdinaryGraphBuildCapacityWithPendingValidation(plan.TotalBytes, bootstrap, pendingCodec)
+	if err != nil {
+		return 0, 0, 0, 0, err
+	}
+	return capacity, construction.Rows, workers, pendingCodec, nil
 }
 
 // nativeOrdinaryVectorGraphConstructionCensus visits the captured physical IDs

@@ -346,3 +346,11 @@ func TestOrdinaryDenseVersionUsesExistingSections(t *testing.T) {
 		t.Fatal("ordinary dense request accepted typed work section")
 	}
 }
+
+func TestOrdinaryDenseRouteTagsRemainDisjoint(t *testing.T) {
+	// Tag 1 is the retired runtime route. Ordinary v5 compatibility ANN owns
+	// tag 6, retaining the four v5 counters and leaving typed v2/3/4 unchanged.
+	if DenseVectorSearchOrdinaryVersion != 5 || DenseVectorSearchOrdinaryANNRouteTag != 4 || DenseVectorSearchOrdinaryExactRouteTag != 5 || DenseVectorSearchOrdinaryCompatibilityANNRouteTag != 6 || DenseVectorSearchTypedRouteTag != 2 || DenseVectorSearchTypedQuantizedRouteTag != 3 {
+		t.Fatal("dense route tag reservation changed")
+	}
+}

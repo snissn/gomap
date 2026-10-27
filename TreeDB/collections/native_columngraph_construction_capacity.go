@@ -92,7 +92,7 @@ func nativeColumnGraphConstructionCapacityForWorkers(def VectorIndexDefinition, 
 	if rows > maxColumnVectorGraphAdjacencyOrdinal || rows > uint64(int(^uint(0)>>1)) || !vectorIndexNodeOrdinalsFitUint32(0, rows) {
 		return p, memtable.ErrCOWCapacity
 	}
-	probe := columnGraphPartitionLiveCarrier{columnGraphHNSWBuilder: columnGraphHNSWBuilder{name: def.Name, m: def.M}}
+	probe := columnGraphPartitionLiveCarrier{columnGraphHNSWBuilder: &columnGraphHNSWBuilder{name: def.Name, m: def.M}}
 	var ids, nativeRows, adjacency nativeColumnGraphCapacitySum
 	maxLevel := 0
 	err := walkIDs(func(id []byte) error {
@@ -270,6 +270,7 @@ func nativeColumnGraphConstructionCapacityForWorkers(def VectorIndexDefinition, 
 
 	var control nativeColumnGraphCapacitySum
 	control.allocation(1, uint64(unsafe.Sizeof(columnGraphPartitionLiveCarrier{})))
+	control.allocation(1, uint64(unsafe.Sizeof(columnGraphHNSWBuilder{})))
 	control.allocation(uint64(len(def.Field))+1, uint64(unsafe.Sizeof(string(""))))
 	control.allocation(1, uint64(unsafe.Sizeof(vectorIndexFrozenPrefixCommitScratch{})))
 	control.allocation(1, uint64(unsafe.Sizeof(nativeColumnGraphConstructionPlan{})))

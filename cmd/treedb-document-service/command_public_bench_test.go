@@ -554,8 +554,8 @@ func commandPerfVerify(ctx context.Context, p *commandPerfProcess, wire *nativew
 		if err := store(response); err != nil {
 			return err
 		}
-		if response.TextIndex != "content" || response.VectorIndex != "embedding" || response.Stats.TextCandidatesReturned == 0 || response.Stats.VectorCandidatesReturned == 0 || response.Stats.VectorCandidatesExamined == 0 || response.Stats.VectorEdgesVisited == 0 || response.Stats.FullDocumentScanFallbacks != 0 || response.Stats.FailClosed != 0 {
-			return fmt.Errorf("verification Hybrid source/work: %+v", response.Stats)
+		if err := commandPerfVerifyHybridSourceWork(response); err != nil {
+			return err
 		}
 		if err := commandPerfVerifyDocuments(response.Documents, false, false); err != nil {
 			return err
@@ -618,6 +618,18 @@ func commandPerfVerify(ctx context.Context, p *commandPerfProcess, wire *nativew
 		return nil
 	}
 	return errors.New("unknown verification operation")
+}
+
+// commandPerfVerifyHybridSourceWork checks the source identities, retained
+// candidate/score-work counters, and no-fallback receipt exposed by Hybrid.
+// Production ordinary ColumnGraph stats omit detailed edge counters, so a zero
+// VectorEdgesVisited is unavailable evidence, not evidence of no graph work.
+// The typed-only VectorRoute receipt is not available on this ordinary route.
+func commandPerfVerifyHybridSourceWork(response documentservice.HybridSearchResponse) error {
+	if response.TextIndex != "content" || response.VectorIndex != "embedding" || response.Stats.TextCandidatesReturned == 0 || response.Stats.VectorCandidatesReturned == 0 || response.Stats.VectorCandidatesExamined == 0 || response.Stats.FullDocumentScanFallbacks != 0 || response.Stats.FailClosed != 0 {
+		return fmt.Errorf("verification Hybrid source/work: text=%q vector=%q stats=%+v", response.TextIndex, response.VectorIndex, response.Stats)
+	}
+	return nil
 }
 
 // commandPerfVerifyNativeANN checks the two supported ordinary graph routes
@@ -946,6 +958,49 @@ func TestCommandPerfResultValidation(t *testing.T) {
 		q = commandPerfMeasureANNQuality(ordinals)
 		if q.TieAwareRecallAtK != 0 || q.MeanCosineRegret <= 0 {
 			t.Fatalf("valid but poor ANN quality not measured: %+v", q)
+		}
+	})
+	t.Run("outside-timed-hybrid-source-work", func(t *testing.T) {
+		// Ordinary production stats retain examined work while omitting edges
+		// and the typed-only route receipt. Neither is synthesized here.
+		valid := documentservice.HybridSearchResponse{
+			TextIndex: "content", VectorIndex: "embedding",
+			Stats: collections.HybridSearchStats{
+				TextCandidatesReturned: 64, VectorCandidatesReturned: 64,
+				VectorCandidatesExamined: 128,
+			},
+		}
+		if err := commandPerfVerifyHybridSourceWork(valid); err != nil {
+			t.Fatalf("rejected valid production stats with unavailable edges: %v", err)
+		}
+		withEdges := valid
+		withEdges.Stats.VectorEdgesVisited = 256
+		if err := commandPerfVerifyHybridSourceWork(withEdges); err != nil {
+			t.Fatalf("rejected valid detailed stats: %v", err)
+		}
+		for _, mutation := range []string{"wrong-text-source", "wrong-vector-source", "no-text-candidates", "no-vector-candidates", "no-examined-work", "scan-fallback", "fail-closed"} {
+			t.Run(mutation, func(t *testing.T) {
+				changed := valid
+				switch mutation {
+				case "wrong-text-source":
+					changed.TextIndex = "retired"
+				case "wrong-vector-source":
+					changed.VectorIndex = "retired"
+				case "no-text-candidates":
+					changed.Stats.TextCandidatesReturned = 0
+				case "no-vector-candidates":
+					changed.Stats.VectorCandidatesReturned = 0
+				case "no-examined-work":
+					changed.Stats.VectorCandidatesExamined = 0
+				case "scan-fallback":
+					changed.Stats.FullDocumentScanFallbacks = 1
+				case "fail-closed":
+					changed.Stats.FailClosed = 1
+				}
+				if err := commandPerfVerifyHybridSourceWork(changed); err == nil {
+					t.Fatalf("accepted corrupted Hybrid source/work receipt %s", mutation)
+				}
+			})
 		}
 	})
 	t.Run("outside-timed-hybrid-rrf", func(t *testing.T) {

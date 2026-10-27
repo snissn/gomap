@@ -159,14 +159,18 @@ type DocumentFormat uint64
 
 // Dense search versions identify disjoint service routes, not measured work.
 const (
-	DenseVectorSearchTypedVersion           = uint64(2)
-	DenseVectorSearchTypedQuantizedVersion  = uint64(3)
-	DenseVectorSearchNormalizedVersion      = uint64(4)
-	DenseVectorSearchOrdinaryVersion        = uint64(5)
-	DenseVectorSearchOrdinaryANNRouteTag    = byte(4)
-	DenseVectorSearchOrdinaryExactRouteTag  = byte(5)
-	DenseVectorSearchTypedRouteTag          = byte(2)
-	DenseVectorSearchTypedQuantizedRouteTag = byte(3)
+	DenseVectorSearchTypedVersion          = uint64(2)
+	DenseVectorSearchTypedQuantizedVersion = uint64(3)
+	DenseVectorSearchNormalizedVersion     = uint64(4)
+	DenseVectorSearchOrdinaryVersion       = uint64(5)
+	DenseVectorSearchOrdinaryANNRouteTag   = byte(4)
+	DenseVectorSearchOrdinaryExactRouteTag = byte(5)
+	// Tag 6 is ordinary ANN compatibility traversal. It preserves the v5 frame
+	// layout: prepared/pack counters are zero, and the tag proves fallback=1.
+	// Older v5 decoders reject this unknown tag; tag 1 remains retired.
+	DenseVectorSearchOrdinaryCompatibilityANNRouteTag = byte(6)
+	DenseVectorSearchTypedRouteTag                    = byte(2)
+	DenseVectorSearchTypedQuantizedRouteTag           = byte(3)
 )
 
 const (

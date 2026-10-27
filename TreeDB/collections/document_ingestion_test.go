@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -9,6 +10,9 @@ import (
 	"github.com/snissn/gomap/TreeDB/collections/chunking"
 	"github.com/snissn/gomap/TreeDB/collections/embedding"
 	"math"
+	"os"
+	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -1680,8 +1684,7 @@ func TestIngestSourcesRejectsAncestorTextVectorPaths(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, _, col := openIngestTestCollection(t, 8)
-			col.meta.VectorIndexes[0].Field = tc.vectorPath
+			_, col := openIngestPathTestCollection5275(t, tc.vectorPath)
 			cfg := ingestTestCfg(8)
 			cfg.TextField = tc.textField
 			res, err := col.IngestSources(context.Background(), []SourceDocument{{
@@ -1715,8 +1718,7 @@ func TestIngestSourcesRejectsVectorChunkMetadataOverlap(t *testing.T) {
 		chunking.MetaFieldKind + ".embedding",
 	} {
 		t.Run(field, func(t *testing.T) {
-			_, _, col := openIngestTestCollection(t, 8)
-			col.meta.VectorIndexes[0].Field = field
+			_, col := openIngestPathTestCollection5275(t, field)
 			res, err := col.IngestSources(context.Background(), []SourceDocument{{
 				ID:     []byte("reserved-vector-field"),
 				Fields: map[string]any{"body": "must not be indexed"},
@@ -1741,8 +1743,7 @@ func TestIngestSourcesRejectsVectorChunkMetadataOverlap(t *testing.T) {
 func TestIngestSourcesRejectsVectorSourceMetadataOverlap(t *testing.T) {
 	for _, field := range []string{"meta", "meta.embedding"} {
 		t.Run(field, func(t *testing.T) {
-			_, _, col := openIngestTestCollection(t, 8)
-			col.meta.VectorIndexes[0].Field = field
+			_, col := openIngestPathTestCollection5275(t, field)
 			res, err := col.IngestSources(context.Background(), []SourceDocument{{
 				ID: []byte("metadata-vector-field"),
 				Fields: map[string]any{
@@ -2030,4 +2031,177 @@ func BenchmarkIngestSources10K(b *testing.B) {
 			b.ReportMetric(float64(res.IndexNanos)/float64(stageTotal)*100, "index-%")
 		}
 	}
+}
+
+// The later invalid parent must reject the whole batch before provider work or
+// replacement of the earlier, otherwise compatible source.
+func TestIngestSourcesColumnGraphParentShapeFailsClosedEntireBatch(t *testing.T) {
+	const provider = "ingest-parent-shape-preflight-5275"
+	var factories, calls atomic.Int32
+	if err := embedding.DefaultRegistry().Register(provider, func(embedding.Config) (embedding.Embedder, error) {
+		factories.Add(1)
+		return outputFuncEmbedder{dims: 2, fn: func(texts [][]byte) [][]float32 {
+			calls.Add(1)
+			out := make([][]float32, len(texts))
+			for i := range out {
+				out[i] = []float32{1, 0}
+			}
+			return out
+		}}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir, CommandWAL: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	meta := &CollectionMeta{Name: "parent_shape", Options: CollectionOptions{ColumnStore: &ColumnStoreConfig{
+		Enabled: true, RetainedPayload: ColumnRetainedPayloadFull, RetainedPayloadEncoding: ColumnRetainedPayloadEncodingJSON,
+		Columns: []ColumnStoreColumn{{Name: "embedding", Path: "embedding", ValueType: ColumnStoreValueFloat32Vector, VectorDims: 2, Owner: TypedStorageOwnerColumnPart}},
+	}}, VectorIndexes: []VectorIndexDefinition{{Name: "embedding", Field: "embedding", Dimensions: 2, Metric: VectorMetricCosine, Strategy: VectorIndexStrategyColumnGraph}}}
+	mgr := NewCollectionManager(d)
+	if _, err = mgr.CreateCollection(meta); err != nil {
+		t.Fatal(err)
+	}
+	col, err := mgr.OpenCollection(meta.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := [][]byte{[]byte("first"), []byte("later")}
+	originals := [][]byte{[]byte(`{"body":"old first","embedding":[1,0]}`), []byte(`{"body":"old later","embedding":[0,1]}`)}
+	if _, err = col.InsertBatch(ids, originals); err != nil {
+		t.Fatal(err)
+	}
+	if err = col.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	// Deliberately stale handle state must not define the preflight schema.
+	stale := col.meta
+	stale.Options.ColumnStore = &ColumnStoreConfig{Enabled: true, Columns: []ColumnStoreColumn{{Name: "embedding", Path: "embedding", ValueType: ColumnStoreValueFloat32Vector, VectorDims: 2, Nullable: true}}}
+	stale.VectorIndexes = []VectorIndexDefinition{{Name: "embedding", Field: "stale_field", Dimensions: 2}}
+	col.meta = stale
+	before, ok := d.StateToken()
+	if !ok {
+		t.Fatal("missing initial state")
+	}
+	walBefore := ingestWALContents5275(t, dir)
+	sources := []SourceDocument{
+		{ID: ids[0], Fields: map[string]any{"body": "new first", "embedding": []float32{1, 0}}},
+		{ID: ids[1], Fields: map[string]any{"body": "new later"}},
+	}
+	cfg := ingestTestCfg(2)
+	cfg.Embedding.Provider = provider
+	res, err := col.IngestSources(context.Background(), sources, cfg)
+	var failure *IngestError
+	if !errors.As(err, &failure) || failure.Stage != IngestStageStorage || failure.SourceIndex != 1 || string(failure.SourceID) != "later" || !errors.Is(err, ErrColumnDeclaredValueUnsupported) || !strings.Contains(err.Error(), `"embedding"`) || !strings.Contains(err.Error(), "incompatible source parent shape") {
+		t.Fatalf("unexpected parent preflight result: %+v %v", failure, err)
+	}
+	if len(res.Ingested) != 0 || res.EmbedNanos != 0 || res.IndexNanos != 0 || factories.Load() != 0 || calls.Load() != 0 {
+		t.Fatalf("preflight performed work: result=%+v factories=%d embeds=%d", res, factories.Load(), calls.Load())
+	}
+	after, ok := d.StateToken()
+	if !ok || before != after {
+		t.Fatalf("publication changed: before=%+v after=%+v", before, after)
+	}
+	if got := ingestWALContents5275(t, dir); !reflect.DeepEqual(got, walBefore) {
+		t.Fatalf("WAL changed: before=%v after=%v", walBefore, got)
+	}
+	for i, id := range ids {
+		got, getErr := col.Get(id)
+		if getErr != nil || !bytes.Equal(got, originals[i]) {
+			t.Fatalf("original %q changed: %s %v", id, got, getErr)
+		}
+		children, childErr := col.ChunkChildren(id)
+		if childErr != nil || len(children) != 0 {
+			t.Fatalf("children %q: %q %v", id, children, childErr)
+		}
+	}
+	// A supplied, compatible parent vector is legitimate input; preflight must
+	// preserve this existing supported ingestion behavior.
+	res, err = col.IngestSources(context.Background(), sources[:1], cfg)
+	if err != nil || len(res.Ingested) != 1 || calls.Load() != 1 {
+		t.Fatalf("compatible parent rejected: %+v %v embeds=%d", res, err, calls.Load())
+	}
+}
+
+func ingestWALContents5275(t *testing.T, dir string) map[string][32]byte {
+	t.Helper()
+	files := map[string][32]byte{}
+	err := filepath.WalkDir(dir, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		relative, err := filepath.Rel(dir, path)
+		if err != nil {
+			return err
+		}
+		if !strings.Contains(strings.ToLower(relative), "wal") {
+			return nil
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		files[relative] = sha256.Sum256(raw)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) == 0 {
+		t.Fatal("no WAL files observed")
+	}
+	return files
+}
+
+// Persist the path in the real catalog: mutating handle metadata cannot model
+// an incompatible schema now that ingestion captures authoritative metadata.
+func openIngestPathTestCollection5275(t *testing.T, field string) (*backenddb.DB, *Collection) {
+	t.Helper()
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), CommandWAL: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+	mgr := NewCollectionManager(d)
+	meta := &CollectionMeta{Name: "ingest_path", Options: CollectionOptions{ColumnStore: &ColumnStoreConfig{
+		Enabled: true, RetainedPayload: ColumnRetainedPayloadFull, RetainedPayloadEncoding: ColumnRetainedPayloadEncodingJSON,
+		Columns: []ColumnStoreColumn{{Name: "embedding", Path: field, ValueType: ColumnStoreValueFloat32Vector, VectorDims: 8, Owner: TypedStorageOwnerColumnPart}},
+	}}, VectorIndexes: []VectorIndexDefinition{{Name: "embedding", Field: field, Dimensions: 8, Metric: VectorMetricCosine, Strategy: VectorIndexStrategyColumnGraph}}}
+	if _, err = mgr.CreateCollection(meta); err != nil {
+		t.Fatal(err)
+	}
+	col, err := mgr.OpenCollection(meta.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("missing catalog snapshot")
+	}
+	catalog, err := col.catalogForSnapshot(snap)
+	_ = snap.Close()
+	if err != nil || catalog == nil {
+		t.Fatalf("capture actual path schema: %v", err)
+	}
+	def, ok := findVectorIndex(catalog.meta.VectorIndexes, "embedding")
+	if !ok || def.Field != field {
+		t.Fatalf("catalog path=%q want %q", def.Field, field)
+	}
+	before, ok := d.StateToken()
+	if !ok {
+		t.Fatal("missing preflight state")
+	}
+	t.Cleanup(func() {
+		after, ok := d.StateToken()
+		if !ok || before != after {
+			t.Errorf("rejected path %q changed publication state: before=%+v after=%+v", field, before, after)
+		}
+	})
+	return d, col
 }

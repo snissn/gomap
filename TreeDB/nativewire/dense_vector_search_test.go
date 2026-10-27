@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -100,10 +101,16 @@ func TestDenseVectorSearchOrdinaryNativeDefaultParity(t *testing.T) {
 			if err != nil || want.Route != tc.route || want.Exact != (tc.route == documentservice.RouteExact) || len(want.Documents) != len(tc.ids) {
 				t.Fatalf("maintained ordinary service route: %+v err=%v", want, err)
 			}
-			if tc.route == documentservice.RouteAnn && (want.ColumnGraphPreparedSearch != 0 || want.SearchPackSearch != 1 || want.DocumentsScanned != 0) {
-				t.Fatalf("public ANN did not report actual search-pack work: %+v", want)
+			if tc.route == documentservice.RouteAnn {
+				wantPack, wantFallback := uint64(1), uint64(0)
+				if runtime.GOOS == "windows" {
+					wantPack, wantFallback = 0, 1
+				}
+				if want.ColumnGraphPreparedSearch != 0 || want.SearchPackSearch != wantPack || want.ColumnGraphFallbackSearch != wantFallback || want.DocumentsScanned != 0 {
+					t.Fatalf("public ANN did not report its platform's actual traversal: %+v", want)
+				}
 			}
-			if tc.route == documentservice.RouteExact && (want.DocumentsScanned != uint64(len(documents)) || want.ColumnGraphPreparedSearch != 0 || want.SearchPackSearch != 0) {
+			if tc.route == documentservice.RouteExact && (want.DocumentsScanned != uint64(len(documents)) || want.ColumnGraphPreparedSearch != 0 || want.SearchPackSearch != 0 || want.ColumnGraphFallbackSearch != 0) {
 				t.Fatalf("public exact did not report its actual scan: %+v", want)
 			}
 			for i, id := range tc.ids {
@@ -152,7 +159,7 @@ func TestDenseVectorSearchOrdinaryNativeDefaultParity(t *testing.T) {
 			if got.Route != want.Route || got.TypedColumnGraph || got.Candidates != want.Candidates || len(got.Results) != len(want.Documents) {
 				t.Fatalf("wire ordinary route/candidates: %+v service=%+v", got, want)
 			}
-			if got.Exact != want.Exact || got.ColumnGraphPreparedSearch != want.ColumnGraphPreparedSearch || got.SearchPackSearch != want.SearchPackSearch || got.ColumnGraphDeltaScored != want.ColumnGraphDeltaScored || got.DocumentsScanned != want.DocumentsScanned {
+			if got.Exact != want.Exact || got.ColumnGraphPreparedSearch != want.ColumnGraphPreparedSearch || got.SearchPackSearch != want.SearchPackSearch || got.ColumnGraphFallbackSearch != want.ColumnGraphFallbackSearch || got.ColumnGraphDeltaScored != want.ColumnGraphDeltaScored || got.DocumentsScanned != want.DocumentsScanned {
 				t.Fatalf("wire changed measured work: %+v service=%+v", got, want)
 			}
 			if got.ExactFallbacks != 0 || (tc.route == documentservice.RouteAnn && got.FullDocumentScanFallbacks != 0) {
@@ -202,6 +209,10 @@ func TestDenseVectorSearchOrdinaryVersionTruthfulness(t *testing.T) {
 			r.ColumnGraphPreparedSearch = 0
 			r.SearchPackSearch = 1
 		}},
+		{name: "compatibility_ann", change: func(r *documentservice.RawDenseVectorSearchResponse) {
+			r.ColumnGraphPreparedSearch = 0
+			r.ColumnGraphFallbackSearch = 1
+		}},
 		{name: "intentional_exact", change: func(r *documentservice.RawDenseVectorSearchResponse) {
 			r.Route = documentservice.RouteExact
 			r.Exact = true
@@ -215,7 +226,7 @@ func TestDenseVectorSearchOrdinaryVersionTruthfulness(t *testing.T) {
 			tc.change(&r)
 			meta := appendVersionedDenseVectorSearchResponse(nil, r, iwire.DenseVectorSearchOrdinaryVersion)
 			got, err := decode(iwire.DenseVectorSearchOrdinaryVersion, meta)
-			if err != nil || got.Route != r.Route || got.Exact != r.Exact || got.ColumnGraphPreparedSearch != r.ColumnGraphPreparedSearch || got.SearchPackSearch != r.SearchPackSearch || got.ColumnGraphDeltaScored != r.ColumnGraphDeltaScored || got.DocumentsScanned != r.DocumentsScanned || got.Candidates != r.Candidates {
+			if err != nil || got.Route != r.Route || got.Exact != r.Exact || got.ColumnGraphPreparedSearch != r.ColumnGraphPreparedSearch || got.SearchPackSearch != r.SearchPackSearch || got.ColumnGraphFallbackSearch != r.ColumnGraphFallbackSearch || got.ColumnGraphDeltaScored != r.ColumnGraphDeltaScored || got.DocumentsScanned != r.DocumentsScanned || got.Candidates != r.Candidates {
 				t.Fatalf("ordinary result/counters=%+v want=%+v err=%v", got, r, err)
 			}
 			for _, version := range []uint64{1, iwire.DenseVectorSearchTypedVersion, iwire.DenseVectorSearchTypedQuantizedVersion, iwire.DenseVectorSearchNormalizedVersion} {
@@ -232,6 +243,23 @@ func TestDenseVectorSearchOrdinaryVersionTruthfulness(t *testing.T) {
 		{name: "missing_prepared", change: func(r *documentservice.RawDenseVectorSearchResponse) { r.ColumnGraphPreparedSearch = 0 }},
 		{name: "multiple_prepared", change: func(r *documentservice.RawDenseVectorSearchResponse) { r.ColumnGraphPreparedSearch = 2 }},
 		{name: "two_graph_routes", change: func(r *documentservice.RawDenseVectorSearchResponse) { r.SearchPackSearch = 1 }},
+		{name: "mixed_compatibility_prepared", change: func(r *documentservice.RawDenseVectorSearchResponse) { r.ColumnGraphFallbackSearch = 1 }},
+		{name: "mixed_compatibility_pack", change: func(r *documentservice.RawDenseVectorSearchResponse) {
+			r.ColumnGraphPreparedSearch = 0
+			r.SearchPackSearch = 1
+			r.ColumnGraphFallbackSearch = 1
+		}},
+		{name: "multiple_compatibility", change: func(r *documentservice.RawDenseVectorSearchResponse) {
+			r.ColumnGraphPreparedSearch = 0
+			r.ColumnGraphFallbackSearch = 2
+		}},
+		{name: "compatibility_overflow", change: func(r *documentservice.RawDenseVectorSearchResponse) { r.ColumnGraphFallbackSearch = ^uint64(0) }},
+		{name: "compatibility_exact", change: func(r *documentservice.RawDenseVectorSearchResponse) {
+			r.Route, r.Exact = documentservice.RouteExact, true
+			r.ColumnGraphPreparedSearch = 0
+			r.ColumnGraphFallbackSearch = 1
+			r.DocumentsScanned = 1
+		}},
 		{name: "multiple_pack", change: func(r *documentservice.RawDenseVectorSearchResponse) {
 			r.ColumnGraphPreparedSearch = 0
 			r.SearchPackSearch = 2
@@ -262,6 +290,47 @@ func TestDenseVectorSearchOrdinaryVersionTruthfulness(t *testing.T) {
 			tc.change(&r)
 			if _, err := decode(iwire.DenseVectorSearchOrdinaryVersion, appendVersionedDenseVectorSearchResponse(nil, r, iwire.DenseVectorSearchOrdinaryVersion)); err == nil {
 				t.Fatal("inconsistent route/counters accepted")
+			}
+		})
+	}
+	// Tag 6 carries the distinct compatibility identity without adding a fifth
+	// positional counter. Tags 4/5 retain their byte-for-byte v5 layouts.
+	for _, tc := range []struct {
+		name     string
+		response documentservice.RawDenseVectorSearchResponse
+		header   []byte
+	}{
+		{name: "prepared", response: base, header: []byte{4, 1, 0, 0, 1, 0, 0, 0, 1}},
+		{name: "pack", response: documentservice.RawDenseVectorSearchResponse{Route: documentservice.RouteAnn, Candidates: 1, SearchPackSearch: 1, Results: base.Results}, header: []byte{4, 1, 0, 0, 0, 1, 0, 0, 1}},
+		{name: "compatibility", response: documentservice.RawDenseVectorSearchResponse{Route: documentservice.RouteAnn, Candidates: 1, ColumnGraphFallbackSearch: 1, Results: base.Results}, header: []byte{6, 1, 0, 0, 0, 0, 0, 0, 1}},
+		{name: "exact", response: documentservice.RawDenseVectorSearchResponse{Route: documentservice.RouteExact, Exact: true, Candidates: 1, DocumentsScanned: 1, Results: base.Results}, header: []byte{5, 1, 0, 0, 0, 0, 0, 1, 1}},
+	} {
+		t.Run("layout_"+tc.name, func(t *testing.T) {
+			meta := appendVersionedDenseVectorSearchResponse(nil, tc.response, iwire.DenseVectorSearchOrdinaryVersion)
+			want := binary.LittleEndian.AppendUint64(append([]byte(nil), tc.header...), math.Float64bits(1))
+			if !bytes.Equal(meta, want) {
+				t.Fatalf("v5 metadata=%v want fixed layout %v", meta, want)
+			}
+		})
+	}
+	compatibility := documentservice.RawDenseVectorSearchResponse{Route: documentservice.RouteAnn, Candidates: 1, ColumnGraphFallbackSearch: 1, Results: base.Results}
+	compatibilityMeta := appendVersionedDenseVectorSearchResponse(nil, compatibility, iwire.DenseVectorSearchOrdinaryVersion)
+	// Build hostile frames directly, so server-side encoder checks cannot hide
+	// malformed counters from decoder coverage.
+	for name, change := range map[string]func([]byte){
+		"prepared":                   func(raw []byte) { raw[4] = 1 },
+		"pack":                       func(raw []byte) { raw[5] = 1 },
+		"prepared_overflow":          func(raw []byte) { raw[4] = 255 },
+		"scanned":                    func(raw []byte) { raw[7] = 1 },
+		"exact_fallback":             func(raw []byte) { raw[2] = 1 },
+		"full_scan_fallback":         func(raw []byte) { raw[3] = 1 },
+		"ordinary_tag_without_route": func(raw []byte) { raw[0] = iwire.DenseVectorSearchOrdinaryANNRouteTag },
+	} {
+		t.Run("hostile_compatibility_"+name, func(t *testing.T) {
+			meta := append([]byte(nil), compatibilityMeta...)
+			change(meta)
+			if _, err := decode(iwire.DenseVectorSearchOrdinaryVersion, meta); err == nil {
+				t.Fatal("malformed compatibility route accepted")
 			}
 		})
 	}

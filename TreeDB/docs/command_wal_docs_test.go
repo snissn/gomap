@@ -280,7 +280,6 @@ func TestBenchmarkProfileWrappersUseCanonicalBenchUnsafe(t *testing.T) {
 		filepath.Join(repoRoot, "scripts", "mongo_gateway_compare.sh"):                {"TREEDB_PROFILE:-bench_unsafe", "Default: bench_unsafe"},
 		filepath.Join(repoRoot, "scripts", "mongo_gateway_ycsb_attribution.sh"):       {"TREEDB_PROFILE:-bench_unsafe"},
 		filepath.Join(repoRoot, "cmd", "mongo_gateway_bench", "README.md"):            {"-treedb-profile bench_unsafe"},
-		filepath.Join(repoRoot, "cmd", "treedb_vector_search_demo", "README.md"):      {"`bench_unsafe` profile", "|bench_unsafe`"},
 	}
 	for path, required := range checks {
 		content, err := os.ReadFile(path)
@@ -292,6 +291,24 @@ func TestBenchmarkProfileWrappersUseCanonicalBenchUnsafe(t *testing.T) {
 			if !strings.Contains(text, want) {
 				t.Fatalf("%s missing canonical benchmark profile token %q", path, want)
 			}
+		}
+	}
+}
+
+func TestVectorSearchDemoDocsRequireCommandWALProfiles(t *testing.T) {
+	_, repoRoot := repoRoots(t)
+	path := filepath.Join(repoRoot, "cmd", "treedb_vector_search_demo", "README.md")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"defaults to TreeDB's `command_wal_durable` profile",
+		"`-profile command_wal_durable|command_wal_relaxed`",
+		"`bench_unsafe` and `no_wal_fast`\nare refused",
+	} {
+		if !strings.Contains(string(content), want) {
+			t.Fatalf("%s missing durability contract %q", path, want)
 		}
 	}
 }

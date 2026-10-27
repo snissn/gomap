@@ -1216,7 +1216,7 @@ func TestColumnVectorGraphOfflineBuildCoalescesFrozenPrefixPruning4419And4421(t 
 		index.constructionWorkers = workers
 		index.constructionTrace = trace
 		index.layer0ConstructionPolicy = policy
-		if err := insertColumnVectorGraphRowsLocked(&index.columnGraphHNSWBuilder, rows); err != nil {
+		if err := insertColumnVectorGraphRowsLocked(index.columnGraphHNSWBuilder, rows); err != nil {
 			t.Fatal(err)
 		}
 		return index
@@ -1312,7 +1312,7 @@ func BenchmarkColumnVectorGraphOfflineFrozenPrefix4419(b *testing.B) {
 				}
 				index.parallelReciprocalLinks = true
 				if candidate {
-					err = insertColumnVectorGraphRowsLocked(&index.columnGraphHNSWBuilder, rows)
+					err = insertColumnVectorGraphRowsLocked(index.columnGraphHNSWBuilder, rows)
 				} else {
 					for i := range rows {
 						if err = index.insertVectorLocked(rows[i].ID, rows[i].Vector); err != nil {
@@ -2233,7 +2233,7 @@ func columnGraphRebuildNativeGraphLayoutV2A(tb testing.TB, def VectorIndexDefini
 		}
 		inputOrdinalByNode[nodeID] = i
 	}
-	order, err := columnVectorGraphNativeLocalityOrder(context.Background(), &index.columnGraphHNSWBuilder)
+	order, err := columnVectorGraphNativeLocalityOrder(context.Background(), index.columnGraphHNSWBuilder)
 	if err != nil {
 		tb.Fatalf("columnVectorGraphNativeLocalityOrder: %v", err)
 	}
@@ -2261,14 +2261,14 @@ func columnGraphRebuildNativeGraphLayoutV2A(tb testing.TB, def VectorIndexDefini
 }
 
 func TestColumnVectorGraphNativeLocalityOrderObservesCancellation(t *testing.T) {
-	index := &columnGraphPartitionLiveCarrier{columnGraphHNSWBuilder: columnGraphHNSWBuilder{entry: 0, nodes: make([]vectorIndexNode, 2049)}}
+	index := &columnGraphPartitionLiveCarrier{columnGraphHNSWBuilder: &columnGraphHNSWBuilder{entry: 0, nodes: make([]vectorIndexNode, 2049)}}
 	neighbors := make([]vectorIndexNeighbor, 2048)
 	for i := range neighbors {
 		neighbors[i].nodeID = uint32(i + 1)
 	}
 	index.nodes[0].neighbors = [][]vectorIndexNeighbor{neighbors}
 	ctx := &cancelAfterErrContextV1{Context: context.Background(), cancelAfter: 3}
-	order, err := columnVectorGraphNativeLocalityOrder(ctx, &index.columnGraphHNSWBuilder)
+	order, err := columnVectorGraphNativeLocalityOrder(ctx, index.columnGraphHNSWBuilder)
 	if order != nil || !errors.Is(err, context.Canceled) {
 		t.Fatalf("locality cancellation order=%v err=%v", order, err)
 	}

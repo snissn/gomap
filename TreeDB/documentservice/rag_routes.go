@@ -148,7 +148,7 @@ func sortedSetStrings(set map[string]struct{}) []string {
 	return out
 }
 
-// searchDenseVectorAnn serves the selected ColumnGraph route without fallback.
+// searchDenseVectorAnn serves the selected ColumnGraph ANN route.
 func (s *Service) searchDenseVectorAnn(ctx context.Context, col *collections.Collection, info IndexInfo, req DenseVectorSearchRequest) (DenseVectorSearchResponse, error) {
 	if info.TypedInput {
 		return s.searchDenseVectorNative(ctx, col, info, req)
@@ -184,6 +184,20 @@ func (s *Service) searchDenseVectorOrdinaryAnnRaw(ctx context.Context, col *coll
 	if err != nil {
 		return RawDenseVectorSearchResponse{}, mapVectorIndexSearchError("ann vector search", err)
 	}
+	return ordinaryDenseVectorANNResponse(info, search, dst)
+}
+
+// ordinaryDenseVectorANNResponse preserves the collection route proof, including
+// compatibility traversal on platforms without mmap. It never selects exact search.
+func ordinaryDenseVectorANNResponse(info IndexInfo, search collections.VectorIndexSearchResponse, dst []RawDenseVectorResult) (RawDenseVectorSearchResponse, error) {
+	stats := search.Stats
+	prepared, pack, fallback := stats.SearchRouteColumnGraphPrepared, stats.SearchRouteHNSWSearchPack, stats.SearchRouteColumnGraphFallback
+	oneRoute := (prepared == 1 && pack == 0 && fallback == 0) ||
+		(prepared == 0 && pack == 1 && fallback == 0) ||
+		(prepared == 0 && pack == 0 && fallback == 1)
+	if search.Strategy != collections.VectorIndexStrategyColumnGraph || search.Path != collections.VectorIndexSearchPathColumnGraphNativeReader || !oneRoute || stats.SearchRouteQuantizedOnly != 0 || stats.SearchRouteQuantizedRerank != 0 {
+		return RawDenseVectorSearchResponse{}, serviceError(CodeIndexUnavailable, "ordinary ann search did not prove one ColumnGraph traversal route")
+	}
 	dst = resizeDenseRawResults(dst, len(search.Results))
 	for i, result := range search.Results {
 		if len(result.Document) == 0 {
@@ -195,6 +209,7 @@ func (s *Service) searchDenseVectorOrdinaryAnnRaw(ctx context.Context, col *coll
 		Results: dst, Route: RouteAnn, Candidates: len(search.Results),
 		ColumnGraphPreparedSearch: search.Stats.SearchRouteColumnGraphPrepared,
 		SearchPackSearch:          search.Stats.SearchRouteHNSWSearchPack,
+		ColumnGraphFallbackSearch: search.Stats.SearchRouteColumnGraphFallback,
 		ColumnGraphDeltaScored:    search.Stats.ColumnGraphDeltaScored,
 		info:                      info, searchStats: search.Stats,
 	}, nil
@@ -242,6 +257,8 @@ type RawDenseVectorSearchResponse struct {
 	TypedColumnGraph          bool
 	ColumnGraphPreparedSearch uint64
 	SearchPackSearch          uint64
+	// ColumnGraphFallbackSearch counts compatibility graph traversal, never exact/full scan.
+	ColumnGraphFallbackSearch uint64
 	ColumnGraphDeltaScored    uint64
 	DocumentsScanned          uint64
 	Exact                     bool
@@ -284,6 +301,7 @@ func (r RawDenseVectorSearchResponse) response(docs []Document) DenseVectorSearc
 		DocumentsScanned:          r.DocumentsScanned,
 		ColumnGraphPreparedSearch: r.ColumnGraphPreparedSearch,
 		SearchPackSearch:          r.SearchPackSearch,
+		ColumnGraphFallbackSearch: r.ColumnGraphFallbackSearch,
 		ColumnGraphDeltaScored:    r.ColumnGraphDeltaScored,
 	}
 	if !r.Diagnostics {

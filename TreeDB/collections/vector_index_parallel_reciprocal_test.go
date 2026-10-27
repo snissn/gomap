@@ -165,7 +165,7 @@ func columnGraphBuilderForTest4257(graph any) *columnGraphHNSWBuilder {
 	case *columnGraphHNSWBuilder:
 		return index
 	case *columnGraphPartitionLiveCarrier:
-		return &index.columnGraphHNSWBuilder
+		return index.columnGraphHNSWBuilder
 	default:
 		panic("unsupported construction graph")
 	}

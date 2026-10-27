@@ -5041,7 +5041,7 @@ func TestSearchGraphOnlyWithBufferSteadyStateAllocations(t *testing.T) {
 }
 
 func TestVectorIndexSearchViewReusesAndClearsRetiredBuffer(t *testing.T) {
-	index := &columnGraphPartitionLiveCarrier{columnGraphHNSWBuilder: columnGraphHNSWBuilder{name: "embedding_native",
+	index := &columnGraphPartitionLiveCarrier{columnGraphHNSWBuilder: &columnGraphHNSWBuilder{name: "embedding_native",
 		field:          "embedding",
 		metric:         VectorMetricCosine,
 		dimensions:     2,

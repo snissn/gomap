@@ -862,7 +862,11 @@ func (w *nativeTypedMaterialization) materialize() (resultErr error) {
 	if err != nil {
 		return err
 	}
-	context := columnPhysicalAssetBuildContext{rootDir: rootDir, registry: registry, recovery: w.input.capture, codec: &w.codec, singleOutput: true}
+	validateOptions, err := w.ordinaryGraphPendingSourceValidator()
+	if err != nil {
+		return err
+	}
+	context := columnPhysicalAssetBuildContext{rootDir: rootDir, registry: registry, recovery: w.input.capture, codec: &w.codec, singleOutput: true, typedColumnOptionsValidator: validateOptions}
 	// Graph recipes are barriers: later mutations must not shadow the source
 	// visible to an earlier recipe. Reuse the original row selector per segment.
 	for first := 0; first < len(w.input.deltas); {

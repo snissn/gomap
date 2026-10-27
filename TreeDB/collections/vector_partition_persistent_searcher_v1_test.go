@@ -73,12 +73,14 @@ func TestVectorPartitionGenerationSearchOpenPlanV1IndexesAndOwnsInputs(t *testin
 
 func TestVectorIndexSourceRevalidationPreservesPersistenceDebt(t *testing.T) {
 	for _, record := range []func(*columnGraphPartitionLiveCarrier, uint64){
-		func(idx *columnGraphPartitionLiveCarrier, generation uint64) { idx.recordSourceDocumentGeneration(generation) },
+		func(idx *columnGraphPartitionLiveCarrier, generation uint64) {
+			idx.recordSourceDocumentGeneration(generation)
+		},
 		func(idx *columnGraphPartitionLiveCarrier, generation uint64) {
 			idx.recordSourceDocumentState(generation, idx.sourceDocumentState)
 		},
 	} {
-		idx := &columnGraphPartitionLiveCarrier{nativePersistent: true, persistedEpoch: 1, sourceDocumentGeneration: 7, sourceDocumentRootsValid: true}
+		idx := &columnGraphPartitionLiveCarrier{columnGraphHNSWBuilder: &columnGraphHNSWBuilder{}, nativePersistent: true, persistedEpoch: 1, sourceDocumentGeneration: 7, sourceDocumentRootsValid: true}
 		idx.invalidateSourceDocumentRoots()
 		record(idx, 7)
 		if !idx.hasValidSourceDocumentRoots() || idx.needsNativeAutoPersist() {

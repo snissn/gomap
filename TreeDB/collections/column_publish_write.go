@@ -1531,6 +1531,8 @@ type columnPhysicalAssetBuildContext struct {
 	recovery     StableResourceCaptureRecoveryRetainer
 	codec        *typedcolumn.BuildCodec
 	singleOutput bool
+	// Borrowed only for this synchronous preparation; never retained by assets.
+	typedColumnOptionsValidator typedColumnPartOptionsValidator
 }
 
 func (c *Collection) prepareColumnPhysicalAssetRowsAtIdentityFromSources(prepared ColumnPublishPreparedAssets, input columnWritePublishInput, hookInput ColumnPublishAssetPrepareInput, rows []columnDeclaredRow, rowSource columnDeclaredRowSource, typedSource typedColumnAdapterRowSource, generation, rowPartID, typedPartID uint64) (ColumnPublishPreparedAssets, error) {
@@ -1938,12 +1940,33 @@ func (context columnPhysicalAssetBuildContext) prepareRows(prepared ColumnPublis
 			start := time.Now()
 			var build typedColumnPartImageBuildResult
 			var err error
-			if input.preparedTypedBatch != nil {
-				build, err = buildTypedColumnPartImageFromPreparedBatchWithCodec(input.preparedTypedBatch, typedPartID, context.codec)
-			} else if typedSource == nil {
-				build, err = buildTypedColumnPartImageForDeclaredRowsWithCodec(hookInput.ColumnStore, generation, typedPartID, rows, context.codec)
+			if context.typedColumnOptionsValidator == nil {
+				if input.preparedTypedBatch != nil {
+					build, err = buildTypedColumnPartImageFromPreparedBatchWithCodec(input.preparedTypedBatch, typedPartID, context.codec)
+				} else if typedSource == nil {
+					build, err = buildTypedColumnPartImageForDeclaredRowsWithCodec(hookInput.ColumnStore, generation, typedPartID, rows, context.codec)
+				} else {
+					build, err = buildTypedColumnPartImageFromSourceWithResult(hookInput.ColumnStore, generation, typedPartID, typedSource)
+				}
 			} else {
-				build, err = buildTypedColumnPartImageFromSourceWithResult(hookInput.ColumnStore, generation, typedPartID, typedSource)
+				preparedBatch := input.preparedTypedBatch
+				codec := context.codec
+				if preparedBatch != nil {
+					err = context.typedColumnOptionsValidator(hookInput.ColumnStore, preparedBatch.Options, preparedBatch.Columns)
+				} else {
+					source := typedSource
+					if source == nil {
+						source = newTypedColumnDeclaredRowSource(hookInput.ColumnStore.Columns, rows)
+					} else {
+						// The original unprepared typed-source producer owns its
+						// codec locally; validation does not change that owner.
+						codec = nil
+					}
+					preparedBatch, err = prepareTypedColumnPartBatchFromSourceWithOptionsValidator(hookInput.ColumnStore, typedPartID, source, context.typedColumnOptionsValidator)
+				}
+				if err == nil {
+					build, err = buildTypedColumnPartImageFromPreparedBatchWithCodec(preparedBatch, typedPartID, codec)
+				}
 			}
 			done <- typedColumnPrepareResult{
 				build:    build,

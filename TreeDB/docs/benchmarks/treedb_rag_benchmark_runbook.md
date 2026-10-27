@@ -1,5 +1,24 @@
 # TreeDB retained RAG application baseline runbook (#4289)
 
+The current ColumnGraph parent/chunk ingestion shape is unavailable: source
+parents omit the non-null declared embedding. `IngestSources` refuses the full
+batch before provider work or publication, naming the parent and field. The
+application smoke and cell worker verify that refusal and return no lifecycle
+or query samples. [#5289](https://github.com/snissn/gomap/issues/5289) owns a
+supported mixed-parent/chunk representation and lifecycle restoration.
+Ordinary filtered vector Hybrid and direct filtered ANN cells are unsupported
+([#5276](https://github.com/snissn/gomap/issues/5276)); explicit service Dense
+exact filtering remains separate. `QueryModeExact` on the vector-index API
+selects FP32 scoring inside ANN, not exhaustive exact retrieval.
+
+Service overhead uses the separately identified
+`treedb_rag_service_overhead/v2_unfiltered_column_graph` fixture with
+`hybrid_unfiltered_ann_fp32` and `dense_ann_unfiltered_fp32` lanes, each through
+direct collection and HTTP APIs. IDs, ordering, scores and projected content
+are compared outside the timer; filtered vector requests must refuse explicitly.
+The historical v1 filtered measurements and frozen application evidence below
+retain their original meaning and do not qualify the current architecture.
+
 ## Minima native-path development (#4614)
 
 Minima is a separate workload from the retained application baseline below.

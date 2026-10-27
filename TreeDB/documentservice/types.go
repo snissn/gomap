@@ -319,6 +319,7 @@ type DenseVectorSearchResponse struct {
 	RouteIdentity             *DenseSearchRouteIdentity              `json:"route_identity,omitempty"`
 	ColumnGraphPreparedSearch uint64                                 `json:"column_graph_prepared_search,omitempty"`
 	SearchPackSearch          uint64                                 `json:"search_pack_search,omitempty"`
+	ColumnGraphFallbackSearch uint64                                 `json:"column_graph_fallback_search,omitempty"`
 	ColumnGraphDeltaScored    uint64                                 `json:"column_graph_delta_scored,omitempty"`
 	// DocumentsScanned counts actual documents visited by an intentional exact query.
 	DocumentsScanned                        uint64     `json:"documents_scanned,omitempty"`

@@ -465,15 +465,17 @@ func runApplicationBaseline(cfg applicationConfig) (*applicationReport, error) {
 		return nil, err
 	}
 
+	var ingestionErrors []error
 	for rep := range cfg.IngestionReps {
 		ingest, ingestErr := runApplicationIngestionRep(cfg, &fixture, filepath.Join(root, fmt.Sprintf("ingestion-%02d", rep)), rep)
 		report.IngestionRuns = append(report.IngestionRuns, ingest)
 		if ingestErr != nil {
 			report.Failures = append(report.Failures, fmt.Sprintf("ingestion rep %d: %v", rep, ingestErr))
+			ingestionErrors = append(ingestionErrors, fmt.Errorf("ingestion rep %d: %w", rep, ingestErr))
 		}
 	}
 	if len(report.Failures) > 0 {
-		return nil, fmt.Errorf("ingestion baseline failed: %s", strings.Join(report.Failures, "; "))
+		return nil, fmt.Errorf("ingestion baseline failed: %w", errors.Join(ingestionErrors...))
 	}
 	report.IngestionSummary = summarizeIngestion(report.IngestionRuns)
 
@@ -568,12 +570,21 @@ func applicationVectorRoute(cell applicationCellIdentity) string {
 	if cell.Surface == "http_service" && cell.Route == "vector_only" && cell.Filter == filterUnfiltered {
 		return "declared_column_graph_ann"
 	}
-	return "declared_column_graph_exact"
+	if cell.Surface == "http_service" && cell.Route == "vector_only" && cell.Filter != filterUnfiltered {
+		return "declared_column_graph_exact_filtered"
+	}
+	// QueryModeExact chooses FP32 scoring within graph traversal; it does not
+	// select exhaustive exact search on the collection vector-index API.
+	return "declared_column_graph_ann_fp32"
 }
 
 func unsupportedCapability(cell applicationCellIdentity) *capabilityError {
 	issues := []int{}
 	codes := []string{}
+	if cell.Filter != filterUnfiltered && (cell.Route == "vector_only" && cell.Surface == "direct_collection" || cell.Route == "hybrid") {
+		codes = append(codes, "ordinary_filtered_vector_unavailable")
+		issues = append(issues, 5276)
+	}
 	if cell.Collapse != "disabled" && applicationMaxChunksPerParent(cell) == 0 {
 		codes = append(codes, "parent_collapse_shape_unavailable")
 	}

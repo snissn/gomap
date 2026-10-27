@@ -109,7 +109,7 @@ type columnGraphPartitionLiveOptions struct {
 // columnGraphPartitionLiveCarrier owns bounded mutable domains for a declared
 // ColumnGraph manifest. It has no ordinary collection search lifecycle.
 type columnGraphPartitionLiveCarrier struct {
-	columnGraphHNSWBuilder
+	*columnGraphHNSWBuilder
 
 	collection *Collection
 
@@ -1635,7 +1635,7 @@ func newColumnGraphPartitionLiveDomain(c *Collection, opts columnGraphPartitionL
 	if ratio > 1 {
 		return nil, errors.New("collections: invalid carrier rebuild ratio")
 	}
-	index := &columnGraphPartitionLiveCarrier{columnGraphHNSWBuilder: *builder, collection: c, fieldPath: fieldPath, efSearch: ef, rebuildDeletedRatio: ratio, schemaGeneration: opts.schemaGeneration, nativePersistent: true}
+	index := &columnGraphPartitionLiveCarrier{columnGraphHNSWBuilder: builder, collection: c, fieldPath: fieldPath, efSearch: ef, rebuildDeletedRatio: ratio, schemaGeneration: opts.schemaGeneration, nativePersistent: true}
 	if c != nil {
 		index.nativeRootName = collectionVectorIndexRootName(c.collectionName(), opts.Name)
 	}

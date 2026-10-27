@@ -72,6 +72,7 @@ type DenseVectorSearchResponse struct {
 	Exact                     bool
 	ColumnGraphPreparedSearch uint64
 	SearchPackSearch          uint64
+	ColumnGraphFallbackSearch uint64
 	ColumnGraphDeltaScored    uint64
 	DocumentsScanned          uint64
 	Results                   []DenseVectorSearchResult
@@ -942,6 +943,10 @@ func (s *Server) handleVersionedDenseVectorSearch(ctx context.Context, state *co
 		return nil, protocolError(iwire.ErrUnsupportedFeature, "dense command version does not match index strategy")
 	}
 
+	if version == iwire.DenseVectorSearchOrdinaryVersion && ordinaryDenseResponseRouteTag(response) == 0 {
+		return nil, protocolError(iwire.ErrConsistencyUnavailable, "ordinary dense service response did not prove the selected route")
+	}
+
 	state.idsScratch = resizeByteSlices(state.idsScratch, len(response.Results))
 	state.docsScratch = resizeByteSlices(state.docsScratch, len(response.Results))
 	for i := range response.Results {
@@ -1562,13 +1567,34 @@ func denseDecodeError(err error, message string) error {
 	return protocolError(iwire.ErrMalformedFrame, "%s", message)
 }
 
+// ordinaryDenseANNRouteValid requires exactly one unit route counter, using
+// comparisons rather than a sum that could overflow on malformed input.
+func ordinaryDenseANNRouteValid(prepared, pack, fallback uint64) bool {
+	return (prepared == 1 && pack == 0 && fallback == 0) ||
+		(prepared == 0 && pack == 1 && fallback == 0) ||
+		(prepared == 0 && pack == 0 && fallback == 1)
+}
+
+func ordinaryDenseResponseRouteTag(response documentservice.RawDenseVectorSearchResponse) byte {
+	if response.TypedColumnGraph || response.ExactFallbacks != 0 || response.FullDocumentScanFallbacks != 0 || response.Candidates < len(response.Results) {
+		return 0
+	}
+	if response.Route == documentservice.RouteExact && response.Exact && response.ColumnGraphPreparedSearch == 0 && response.SearchPackSearch == 0 && response.ColumnGraphFallbackSearch == 0 && response.ColumnGraphDeltaScored == 0 && uint64(response.Candidates) <= response.DocumentsScanned {
+		return iwire.DenseVectorSearchOrdinaryExactRouteTag
+	}
+	if response.Route != documentservice.RouteAnn || response.Exact || response.DocumentsScanned != 0 || !ordinaryDenseANNRouteValid(response.ColumnGraphPreparedSearch, response.SearchPackSearch, response.ColumnGraphFallbackSearch) {
+		return 0
+	}
+	if response.ColumnGraphFallbackSearch == 1 {
+		return iwire.DenseVectorSearchOrdinaryCompatibilityANNRouteTag
+	}
+	return iwire.DenseVectorSearchOrdinaryANNRouteTag
+}
+
 func appendVersionedDenseVectorSearchResponse(dst []byte, response documentservice.RawDenseVectorSearchResponse, version uint64) []byte {
 	tag := byte(0)
 	if version == iwire.DenseVectorSearchOrdinaryVersion {
-		tag = iwire.DenseVectorSearchOrdinaryANNRouteTag
-		if response.Route == documentservice.RouteExact {
-			tag = iwire.DenseVectorSearchOrdinaryExactRouteTag
-		}
+		tag = ordinaryDenseResponseRouteTag(response)
 	}
 	dst = append(dst, tag)
 	dst = binary.AppendUvarint(dst, uint64(response.Candidates))
@@ -1614,7 +1640,7 @@ func decodeVersionedDenseVectorSearchResponse(version uint64, idsRaw, docsRaw, m
 	typed := version == iwire.DenseVectorSearchTypedVersion || version == iwire.DenseVectorSearchTypedQuantizedVersion
 	ordinary := version == iwire.DenseVectorSearchOrdinaryVersion
 	validTypedTag := metaTagForDenseVersion(version)
-	if topK <= 0 || len(meta) == 0 || (typed && meta[0] != validTypedTag) || (ordinary && meta[0] != iwire.DenseVectorSearchOrdinaryANNRouteTag && meta[0] != iwire.DenseVectorSearchOrdinaryExactRouteTag) {
+	if topK <= 0 || len(meta) == 0 || (typed && meta[0] != validTypedTag) || (ordinary && meta[0] != iwire.DenseVectorSearchOrdinaryANNRouteTag && meta[0] != iwire.DenseVectorSearchOrdinaryExactRouteTag && meta[0] != iwire.DenseVectorSearchOrdinaryCompatibilityANNRouteTag) {
 		return response, ids, docs, results, protocolError(iwire.ErrMalformedFrame, "dense route proof is invalid")
 	}
 	response.Route = documentservice.RouteAnn
@@ -1653,10 +1679,13 @@ func decodeVersionedDenseVectorSearchResponse(version uint64, idsRaw, docsRaw, m
 		if err != nil {
 			return response, ids, docs, results, err
 		}
-		ordinaryGraphRoute := (response.ColumnGraphPreparedSearch == 1 && response.SearchPackSearch == 0) || (response.ColumnGraphPreparedSearch == 0 && response.SearchPackSearch == 1)
-		if (response.Exact && (response.ColumnGraphPreparedSearch != 0 || response.SearchPackSearch != 0 || response.ColumnGraphDeltaScored != 0 || uint64(response.Candidates) > response.DocumentsScanned)) ||
+		if meta[0] == iwire.DenseVectorSearchOrdinaryCompatibilityANNRouteTag {
+			response.ColumnGraphFallbackSearch = 1
+		}
+		ordinaryGraphRoute := ordinaryDenseANNRouteValid(response.ColumnGraphPreparedSearch, response.SearchPackSearch, response.ColumnGraphFallbackSearch)
+		if (response.Exact && (response.ColumnGraphPreparedSearch != 0 || response.SearchPackSearch != 0 || response.ColumnGraphFallbackSearch != 0 || response.ColumnGraphDeltaScored != 0 || uint64(response.Candidates) > response.DocumentsScanned)) ||
 			(!response.Exact && response.DocumentsScanned != 0) ||
-			(meta[0] == iwire.DenseVectorSearchOrdinaryANNRouteTag && !ordinaryGraphRoute) {
+			(!response.Exact && !ordinaryGraphRoute) {
 			return response, ids, docs, results, protocolError(iwire.ErrConsistencyUnavailable, "ordinary dense counters do not match the selected route")
 		}
 	}

@@ -9,8 +9,9 @@ package collections
 //
 //  1. Batch validation runs before ANY mutation: config validation, embedder
 //     resolution against the named vector index, and the full chunk plan for
-//     every source. Any invalid source aborts the whole batch with a typed
-//     chunk-stage error naming that source; the collection is untouched.
+//     every source, including declared parent values in the current schema.
+//     Any invalid source aborts the whole batch with a typed error naming that
+//     source; the collection is untouched and no provider work has started.
 //  2. Sources execute through a bounded worker pool. Per source: embed the
 //     planned children (pure, no mutation), build the complete parent/child and
 //     index mutation set, then publish its dependency-closed roots atomically.
@@ -29,6 +30,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/collections/chunking"
 	"github.com/snissn/gomap/TreeDB/collections/embedding"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
 // SourceDocument is one parent document to ingest. Fields holds the document
@@ -221,7 +223,8 @@ type ingestPlan struct {
 //
 // # Atomicity And Durability Contract
 //
-// Parent IDs, source metadata, and every chunk plan validate before mutation.
+// Parent IDs, source metadata, declared parent values, and every chunk plan
+// validate for the full batch before provider work or mutation.
 // Each child gets a detached copy of its parent's "meta" object; generated
 // top-level chunk linkage remains authoritative. Embedding finishes before that
 // source mutates, so a chunk/embed failure preserves its prior state.
@@ -268,16 +271,30 @@ func (c *Collection) IngestSources(ctx context.Context, sources []SourceDocument
 	if cfg.VectorIndexName == "" {
 		return result, &IngestError{Stage: IngestStageEmbed, SourceIndex: 0, Err: errors.New("collections: ingest requires VectorIndexName")}
 	}
-	if _, err := c.EmbedderForIngestContext(ctx, cfg.VectorIndexName, cfg.Embedding); err != nil {
-		return result, &IngestError{Stage: IngestStageEmbed, SourceIndex: 0, Err: err}
+	// Capture the current catalog under schema authority. Handle metadata can
+	// predate DDL on another handle. Column declarations are immutable; later
+	// per-source publication retains its existing current-schema validation.
+	unlockSchema := c.lockCollectionSchemaRead()
+	defer func() { unlockSchema() }()
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return result, &IngestError{Stage: IngestStageStorage, Err: backenddb.ErrClosed}
 	}
-	def, ok := findVectorIndex(c.meta.VectorIndexes, cfg.VectorIndexName)
+	catalog, captureErr := c.catalogForSnapshot(snap)
+	_ = snap.Close()
+	if captureErr != nil {
+		return result, &IngestError{Stage: IngestStageStorage, Err: captureErr}
+	}
+	if catalog == nil {
+		return result, &IngestError{Stage: IngestStageStorage, Err: errCollectionNotFound}
+	}
+	meta := catalog.meta
+	def, ok := findVectorIndex(meta.VectorIndexes, cfg.VectorIndexName)
 	if !ok || def.Field == "" {
-		return result, &IngestError{
-			Stage:       IngestStageEmbed,
-			SourceIndex: 0,
-			Err:         fmt.Errorf("collections: ingest into vector index %q: missing target field", cfg.VectorIndexName),
-		}
+		return result, &IngestError{Stage: IngestStageEmbed, Err: fmt.Errorf("collections: ingest into vector index %q: %w", cfg.VectorIndexName, ErrIndexNotFound)}
+	}
+	if cfg.Embedding.Dimensions != def.Dimensions {
+		return result, &IngestError{Stage: IngestStageEmbed, Err: fmt.Errorf("collections: ingest vector index %q wants %d dims, config declares %d: %w", def.Name, def.Dimensions, cfg.Embedding.Dimensions, embedding.ErrDimensionMismatch)}
 	}
 	vectorField := def.Field
 	textPath, err := parseVectorFieldPath(cfg.textField())
@@ -381,6 +398,13 @@ func (c *Collection) IngestSources(ctx context.Context, sources []SourceDocument
 			return result, err
 		}
 		parent, err := buildIngestParentDocument(sd)
+		if err == nil && columnStoreWriteEnabled(meta) {
+			if _, shapeErr := extractColumnDeclaredRowsFromJSONDocuments(*meta.Options.ColumnStore, []columnWriteDocument{{ID: sd.ID, Document: parent}}); shapeErr != nil {
+				result.ChunkNanos = time.Since(chunkStart).Nanoseconds()
+				return result, &IngestError{SourceID: append([]byte(nil), sd.ID...), SourceIndex: i, Stage: IngestStageStorage,
+					Err: fmt.Errorf("collections: incompatible source parent shape: %w", shapeErr)}
+			}
+		}
 		if err == nil {
 			plan, planErr := c.buildChunkPlan(sd.ID, parent, cfg.Chunking, ChunkedIngestOptions{TextField: cfg.TextField})
 			if planErr == nil {
@@ -405,6 +429,16 @@ func (c *Collection) IngestSources(ctx context.Context, sources []SourceDocument
 	if len(plans) == 0 {
 		return result, nil
 	}
+
+	// Providers and workers never run under schema authority. Parent shape was
+	// checked for the entire batch before even resolving the provider.
+	unlockSchema()
+	unlockSchema = func() {}
+	_, unlockProvider, err := embedding.DefaultRegistry().CreateLocked(ctx, cfg.Embedding)
+	if err != nil {
+		return result, &IngestError{Stage: IngestStageEmbed, Err: fmt.Errorf("collections: ingest embed into vector index %q: %w", def.Name, err)}
+	}
+	unlockProvider()
 
 	// Phase 2: bounded worker pool over plans.
 	workers := cfg.Concurrency

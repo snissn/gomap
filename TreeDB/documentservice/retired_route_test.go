@@ -58,3 +58,61 @@ func TestRetiredRuntimeCreateOptions(t *testing.T) {
 		})
 	}
 }
+
+// This mapping test supplements actual native owner/wire parity on Windows and
+// the real collection non-mmap traversal test. It does not simulate an end-to-end
+// Windows platform on Linux.
+func TestOrdinaryDenseANNCompatibilityRouteMapping(t *testing.T) {
+	base := collections.VectorIndexSearchResponse{
+		Strategy: collections.VectorIndexStrategyColumnGraph,
+		Path:     collections.VectorIndexSearchPathColumnGraphNativeReader,
+		Stats:    collections.VectorIndexSearchStats{SearchRouteColumnGraphFallback: 1, ColumnGraphDeltaScored: 2},
+	}
+	for _, tc := range []struct {
+		name   string
+		change func(*collections.VectorIndexSearchResponse)
+		valid  bool
+	}{
+		{name: "compatibility", valid: true},
+		{name: "prepared", valid: true, change: func(r *collections.VectorIndexSearchResponse) {
+			r.Stats.SearchRouteColumnGraphFallback = 0
+			r.Stats.SearchRouteColumnGraphPrepared = 1
+		}},
+		{name: "pack", valid: true, change: func(r *collections.VectorIndexSearchResponse) {
+			r.Stats.SearchRouteColumnGraphFallback = 0
+			r.Stats.SearchRouteHNSWSearchPack = 1
+		}},
+		{name: "missing", change: func(r *collections.VectorIndexSearchResponse) { r.Stats.SearchRouteColumnGraphFallback = 0 }},
+		{name: "multiple", change: func(r *collections.VectorIndexSearchResponse) { r.Stats.SearchRouteColumnGraphFallback = 2 }},
+		{name: "mixed_prepared", change: func(r *collections.VectorIndexSearchResponse) { r.Stats.SearchRouteColumnGraphPrepared = 1 }},
+		{name: "mixed_pack", change: func(r *collections.VectorIndexSearchResponse) { r.Stats.SearchRouteHNSWSearchPack = 1 }},
+		{name: "overflow", change: func(r *collections.VectorIndexSearchResponse) {
+			r.Stats.SearchRouteColumnGraphFallback = ^uint64(0)
+			r.Stats.SearchRouteColumnGraphPrepared = 2
+		}},
+		{name: "quantized", change: func(r *collections.VectorIndexSearchResponse) { r.Stats.SearchRouteQuantizedRerank = 1 }},
+		{name: "other_strategy", change: func(r *collections.VectorIndexSearchResponse) { r.Strategy = "native_runtime" }},
+		{name: "other_path", change: func(r *collections.VectorIndexSearchResponse) { r.Path = "unknown" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			search := base
+			if tc.change != nil {
+				tc.change(&search)
+			}
+			raw, err := ordinaryDenseVectorANNResponse(IndexInfo{}, search, nil)
+			if !tc.valid {
+				if ErrorCodeOf(err) != CodeIndexUnavailable {
+					t.Fatalf("malformed route accepted: %+v err=%v", raw, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			out := raw.response(nil)
+			if raw.Route != RouteAnn || raw.Exact || raw.DocumentsScanned != 0 || raw.ExactFallbacks != 0 || raw.FullDocumentScanFallbacks != 0 || raw.ColumnGraphFallbackSearch != search.Stats.SearchRouteColumnGraphFallback || out.ColumnGraphFallbackSearch != raw.ColumnGraphFallbackSearch || out.ColumnGraphPreparedSearch != search.Stats.SearchRouteColumnGraphPrepared || out.SearchPackSearch != search.Stats.SearchRouteHNSWSearchPack || out.ColumnGraphDeltaScored != 2 {
+				t.Fatalf("collection route mapping raw=%+v public=%+v", raw, out)
+			}
+		})
+	}
+}
