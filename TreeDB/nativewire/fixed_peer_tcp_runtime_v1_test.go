@@ -1223,6 +1223,9 @@ func (p *fixedPeerTestProcessV1) stop(t testing.TB) {
 			t.Errorf("child: %v\n%s", err, raw)
 		}
 		raw, _ := os.ReadFile(p.log.Name())
+		if err == nil && t.Failed() {
+			t.Logf("child output pid=%d path=%s:\n%s", p.command.Process.Pid, p.log.Name(), raw)
+		}
 		for _, line := range strings.Split(string(raw), "\n") {
 			if strings.Contains(line, "listener ownership") {
 				t.Log(line)
