@@ -29460,13 +29460,22 @@ func (db *DB) flushLoop() {
 		select {
 		case <-db.closeCh:
 			db.flushAll(true)
-			db.drainSemanticCleanup()
-			db.wg.Done()
-			joined = true
 			for {
 				db.drainSemanticCleanup()
 				if db.semanticCleanupTerminal() {
 					return
+				}
+				if !joined {
+					// With no retained cut, join terminal physical-reader disposal
+					// and the cache refund before Close can return. A last cut may
+					// enqueue cleanup between the drain and terminal check above.
+					if db.cow.activeCuts.Load() == 0 {
+						continue
+					}
+					// User-held cuts retain their own resources after DB Close;
+					// this same worker remains their cleanup owner.
+					db.wg.Done()
+					joined = true
 				}
 				<-db.flushCh
 			}
