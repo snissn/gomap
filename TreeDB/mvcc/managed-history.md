@@ -145,3 +145,24 @@ their historical meanings. The managed-history correctness controls, benchmarks
 and `TestManagedHistoryMeasurement` use the ordinary maintained route; the later
 ordered-tail change above updates their inspected accounting. New retained
 qualification still needs its own reviewed exact-source protocol and evidence.
+
+## Uncapped exact history prefix
+
+On an admitted COW read cut, forward `ExactKey` histories with timestamp zero or
+`math.MaxUint64` use the existing owned physical successor for their first row
+and the following exhaustion check. Empty and one-version histories need no raw
+cursor. Finding a second row, calling `Seek`, or calling `NextKey` switches once
+to the ordinary iterator on the same cut and original bounds. Finite timestamp
+ceilings retain key screening before value reads. Returned versions, physical
+masks, discard-floor admission and borrowed-view lifetimes retain their existing
+contracts; the probes do not count a replayed row twice.
+
+Storage and integrity errors from either successor are terminal and never cause
+a retry through another representation. Initial successor failures close the cut
+and return an open error; failures on subsequent movement appear through
+`Error`. Raw cursor admission may occur on that later movement. If a physical
+key and its value are both corrupt, owned successor materialization may report
+the value's storage/integrity error before the key can be decoded; raw iteration
+can instead report the malformed key before reading that value. Both fail closed.
+Deep histories pay the two lookups plus one cursor construction, so allocation
+savings on shallow histories alone do not establish a workload speedup.

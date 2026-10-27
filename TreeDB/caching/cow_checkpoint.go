@@ -122,6 +122,11 @@ func (db *DB) checkpointCOWColumnCompaction(ctx context.Context, automatic bool,
 	if err = db.backendCheckpointBoundary(automatic); err != nil {
 		return err
 	}
+	if automatic && db.externalCommandWAL {
+		if err = db.refreshCOWAutomaticCheckpointFallback(ctx, through); err != nil {
+			return err
+		}
+	}
 	if !automatic && db.cow.prefix != nil {
 		// Physical WaitThrough wakes before the dispatcher finishes accepted
 		// custody retirement. Join that SAME captured endpoint, including an

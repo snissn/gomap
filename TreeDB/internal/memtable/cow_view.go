@@ -18,25 +18,34 @@ type COWView struct {
 
 func (r *COWRoot) Acquire(extraBytes uint64) (*COWView, error) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if r.refs == 0 {
+		r.mu.Unlock()
 		return nil, ErrCOWClosed
 	}
 	b := r.generation.budget
 	charge, ok := cowAdd(cowAllocation(uint64(unsafe.Sizeof(COWView{})))+cowAllocation(uint64(unsafe.Sizeof(cowViewReleaseLease{}))), extraBytes)
 	if !ok {
+		r.mu.Unlock()
 		return nil, ErrCOWCapacity
 	}
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	if b.closed {
+		b.mu.Unlock()
+		r.mu.Unlock()
 		return nil, ErrCOWClosed
 	}
 	if b.stats.Views >= b.limits.MaxViews || !b.addLocked(charge) {
+		b.mu.Unlock()
+		r.mu.Unlock()
 		return nil, ErrCOWCapacity
 	}
 	b.stats.Views++
 	r.refs++
+	// Admission and the generation pin are complete. Allocate the admitted
+	// wrappers outside both locks; this reference keeps the root alive even if
+	// its previous owners or the budget close before allocation completes.
+	b.mu.Unlock()
+	r.mu.Unlock()
 	return &COWView{root: r, lease: &cowViewReleaseLease{budget: b, charge: charge}}, nil
 }
 

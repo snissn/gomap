@@ -13,7 +13,61 @@ type successorFrame struct {
 // OwnedSuccessorScratch is caller-admitted storage, never pooled or retained by
 // the tree. Compact ancestors reload immutable parent pages at leaf boundaries.
 type OwnedSuccessorScratch struct {
-	frames [maxTraversalDepth]successorFrame
+	frames    [maxTraversalDepth]successorFrame
+	batch     bool
+	batchTree *Tree
+	batchLeaf []byte
+}
+
+// BeginLeafBatch enables reuse only until EndLeafBatch on this exclusively
+// borrowed scratch. No leaf/keys may escape their original tree/page owner.
+func (s *OwnedSuccessorScratch) BeginLeafBatch() {
+	s.batch = true
+	s.batchTree = nil
+	s.batchLeaf = nil
+}
+func (s *OwnedSuccessorScratch) EndLeafBatch() { s.batch = false; s.batchTree = nil; s.batchLeaf = nil }
+
+// batchEntry can certify a successor only inside this page's complete physical
+// key extent. Outside it, the original root traversal must decide gaps/absence.
+func (t *Tree) batchEntry(start, end, keyScratch []byte, s *OwnedSuccessorScratch) (node.LeafEntry, bool, bool, error) {
+	if !s.batch || s.batchTree != t || len(s.batchLeaf) == 0 || start == nil {
+		return node.LeafEntry{}, false, false, nil
+	}
+	n := node.NewNodeView(s.batchLeaf)
+	n.SetFixedKeyScratch(keyScratch)
+	if n.Type() != page.PageTypeLeaf || n.Count() == 0 {
+		return node.LeafEntry{}, false, false, nil
+	}
+	first, _, _, _, _, err := n.GetLeafEntryViewWithRevision(0)
+	if err != nil {
+		return node.LeafEntry{}, false, true, err
+	}
+	if compareTreeKey(start, first) < 0 {
+		return node.LeafEntry{}, false, false, nil
+	}
+	last, _, _, _, _, err := n.GetLeafEntryViewWithRevision(n.Count() - 1)
+	if err != nil {
+		return node.LeafEntry{}, false, true, err
+	}
+	if compareTreeKey(start, last) > 0 {
+		return node.LeafEntry{}, false, false, nil
+	}
+	index, _, err := n.SearchLeaf(start)
+	if err != nil {
+		return node.LeafEntry{}, false, true, err
+	}
+	if index >= n.Count() {
+		return node.LeafEntry{}, false, true, node.ErrCorruptedNode
+	}
+	k, v, p, f, r, err := n.GetLeafEntryViewWithRevision(index)
+	if err != nil {
+		return node.LeafEntry{}, false, true, err
+	}
+	if end != nil && compareTreeKey(k, end) >= 0 {
+		return node.LeafEntry{}, false, true, nil
+	}
+	return node.LeafEntry{Key: k, Value: v, ValuePtr: p, Flags: f, Revision: r}, true, true, nil
 }
 
 func (t *Tree) loadReadRefInto(n *node.Node, ref page.ChildRef, verify bool, keyScratch, leafScratch []byte, readLeaf func(page.LeafLogPtr, []byte) ([]byte, error), bounded bool) error {
@@ -50,6 +104,11 @@ func (t *Tree) SeekGEWithFixedScratch(start, end, keyScratch, leafScratch []byte
 	if start != nil && end != nil && compareTreeKey(start, end) >= 0 {
 		return node.LeafEntry{}, false, nil
 	}
+	if entry, found, eligible, err := t.batchEntry(start, end, keyScratch, scratch); eligible {
+		return entry, found, err
+	}
+	// Any new traversal can overwrite the page/key scratch, including PRIMARY.
+	scratch.batchTree, scratch.batchLeaf = nil, nil
 	var root node.Node
 	if err := t.loadReadRefInto(&root, page.PageChildRef(t.rootPageID), true, keyScratch, leafScratch, readLeaf, true); err != nil {
 		return node.LeafEntry{}, false, err
@@ -74,7 +133,7 @@ func (t *Tree) SeekGEWithFixedScratch(start, end, keyScratch, leafScratch []byte
 		}
 		rootRef = base.Ref
 	}
-	best, found, err := t.seekBaseGE(rootRef, start, end, keyScratch, leafScratch, scratch, readLeaf)
+	best, found, err := t.seekBaseGE(rootRef, start, end, keyScratch, leafScratch, scratch, readLeaf, !primary)
 	if err != nil || !primary {
 		return best, found, err
 	}
@@ -118,7 +177,7 @@ func (t *Tree) SeekGEWithFixedScratch(start, end, keyScratch, leafScratch []byte
 	return node.LeafEntry{Key: k, Value: v, ValuePtr: p, Flags: f, Revision: r}, err == nil, err
 }
 
-func (t *Tree) seekBaseGE(ref page.ChildRef, start, end, keyScratch, leafScratch []byte, scratch *OwnedSuccessorScratch, readLeaf func(page.LeafLogPtr, []byte) ([]byte, error)) (node.LeafEntry, bool, error) {
+func (t *Tree) seekBaseGE(ref page.ChildRef, start, end, keyScratch, leafScratch []byte, scratch *OwnedSuccessorScratch, readLeaf func(page.LeafLogPtr, []byte) ([]byte, error), ordinary bool) (node.LeafEntry, bool, error) {
 	depth := 0
 	leftmost := false
 	for {
@@ -144,6 +203,9 @@ func (t *Tree) seekBaseGE(ref page.ChildRef, start, end, keyScratch, leafScratch
 			ref = child
 			continue
 		case page.PageTypeLeaf:
+			if scratch.batch && ordinary && n.Count() > 0 {
+				scratch.batchTree, scratch.batchLeaf = t, n.Data()
+			}
 			var index uint16
 			if !leftmost && start != nil {
 				var err error

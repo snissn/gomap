@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -78,6 +80,23 @@ type LeafPageConcurrentAppendLog interface {
 // the live owner; successful reservations are never reused.
 type LeafPageLogSequenceReserver interface {
 	ReserveLeafPageLogSequence(floor uint32) (uint32, error)
+}
+
+// LeafPageLogPackSource identifies an exact retained physical pack source.
+// Identity is a comparison witness, not permission to publish or delete it.
+type LeafPageLogPackSource struct {
+	FileID   uint32 // Canonical value-log FileID, not the raw segment ID.
+	Identity rootpublication.StableIdentity
+}
+
+// LeafPageLogPrivateCOWPackHandoff closes selected active source writers through
+// their original owner before private COW packing. The caller must hold its
+// cache flush fence and retain the source ValueLogSet through copying. Normal
+// logical COW/WAL writes remain admitted; physical leaf emitters share the fence.
+// Failure can leave an already-rotated writer installed but must not publish a
+// packed root. Closed sources and unrelated active writers are unchanged.
+type LeafPageLogPrivateCOWPackHandoff interface {
+	HandoffPrivateCOWLeafPackSources(context.Context, *transactionowner.Owner, []LeafPageLogPackSource) error
 }
 
 type LeafPagePreparedBatchLog interface {
