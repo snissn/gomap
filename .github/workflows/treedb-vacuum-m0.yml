@@ -15,6 +15,8 @@ on:
       - "scripts/treedb_vacuum_m0_capture.sh"
       - "scripts/treedb_vacuum_m0_summarize.py"
       - "scripts/treedb_vacuum_m0_summarize_test.py"
+      - "scripts/treedb_vacuum_m0_environment.py"
+      - "scripts/treedb_vacuum_m0_environment_test.py"
       - ".github/workflows/treedb-vacuum-m0.yml"
   workflow_dispatch:
 
@@ -32,8 +34,18 @@ jobs:
     # Drain older raw/M0 runs before arming; register one job label at a time.
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && vars.TREEDB_PERF_RUNNER_LABEL != '' && vars.TREEDB_PERF_RUNNER_PR != '' && vars.TREEDB_PERF_RUNNER_PR == format('{0}', github.event.pull_request.number) && format('{0}-m0', vars.TREEDB_PERF_RUNNER_LABEL) || 'ubuntu-24.04' }}
     timeout-minutes: 20
+    # Administrator values apply only to the existing same-repository PR route.
+    # The runner must be provisioned under a host flock for its entire one-job
+    # listener lifetime, including upload. Actions concurrency is not that lease.
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      M0_CONTROLLED: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && vars.TREEDB_PERF_RUNNER_LABEL != '' && vars.TREEDB_PERF_RUNNER_PR != '' && vars.TREEDB_PERF_RUNNER_PR == format('{0}', github.event.pull_request.number) && '1' || '0' }}
+      CPU_SET: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && vars.TREEDB_PERF_RUNNER_LABEL != '' && vars.TREEDB_PERF_RUNNER_PR != '' && vars.TREEDB_PERF_RUNNER_PR == format('{0}', github.event.pull_request.number) && vars.TREEDB_M0_CPU_SET || '' }}
+      GOMAXPROCS: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && vars.TREEDB_PERF_RUNNER_LABEL != '' && vars.TREEDB_PERF_RUNNER_PR != '' && vars.TREEDB_PERF_RUNNER_PR == format('{0}', github.event.pull_request.number) && vars.TREEDB_M0_GOMAXPROCS || '' }}
+      M0_LEASE_PATH: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && vars.TREEDB_PERF_RUNNER_LABEL != '' && vars.TREEDB_PERF_RUNNER_PR != '' && vars.TREEDB_PERF_RUNNER_PR == format('{0}', github.event.pull_request.number) && vars.TREEDB_M0_LEASE_PATH || '' }}
     steps:
       - name: Checkout exact head
+        id: checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
@@ -46,6 +58,9 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Validate environment receipt contracts
+        run: python3 scripts/treedb_vacuum_m0_environment_test.py
+
       - name: Capture and enforce M0 evidence
         run: RUN_DIR="$RUNNER_TEMP/treedb-vacuum-m0" scripts/treedb_vacuum_m0_capture.sh
 
@@ -56,3 +71,12 @@ jobs:
           name: treedb-vacuum-m0-${{ github.event.pull_request.head.sha || github.sha }}
           path: ${{ runner.temp }}/treedb-vacuum-m0
           if-no-files-found: error
+
+      - name: Observe controlled custody after artifact upload
+        if: always() && steps.checkout.outcome == 'success' && env.M0_CONTROLLED == '1'
+        run: |
+          status=0
+          python3 scripts/treedb_vacuum_m0_environment.py --run-dir "$RUNNER_TEMP/treedb-vacuum-m0" --phase post-upload || status=$?
+          # Retain this observation in job logs after the packet has uploaded.
+          cat "$RUNNER_TEMP/treedb-vacuum-m0/environment-post-upload.json"
+          exit "$status"
