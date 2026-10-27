@@ -289,6 +289,9 @@ func TestPublicDurableDefaultBlockedSyncCollectsSuccessorEpoch(t *testing.T) {
 						if bytes.Equal(got, nextValue) {
 							break
 						}
+						if got != nil {
+							t.Fatalf("successor %q returned an incorrect visible value: got %q, want %q", key, got, nextValue)
+						}
 						if time.Now().After(deadline) {
 							t.Fatalf("successor %q did not become visible while predecessor WAL sync blocked: got %d bytes, want %d", key, len(got), len(nextValue))
 						}
