@@ -28,8 +28,11 @@ type nativeTextCatalog struct {
 	// Optional rewrite-only key-derived map/string/slice cohorts.
 	admitKey func(uint64) error
 	// Set only after the maintained query analyzer selects one V2 term.
-	// Reducers, inspection, rewrite and other serving shapes keep admitRecord.
+	// Other serving shapes, inspection and rewrite keep admitRecord; only the
+	// exact mutation codecs selected below replace their own record envelope.
 	singleTermFields uint64
+	// Only buildNativeTextPhase uses per-codec mutation allocation admission.
+	mutationCodecs bool
 }
 
 // The tree seam reports raw maximum storage bytes. Keep the same original
@@ -62,7 +65,14 @@ func (n *nativeTextCatalog) admitRecord(size uint64) error {
 	}
 	return n.admit(memtable.COWAllocationCharge((size + 1) * 2 * unit))
 }
-func (n *nativeTextCatalog) entry(root string, key []byte) (entry node.LeafEntry, resultErr error) {
+func (n *nativeTextCatalog) entry(root string, key []byte) (node.LeafEntry, error) {
+	return n.entryAdmitted(root, key, nil)
+}
+
+// An explicit codec caller can spend only the owned source copy here, then
+// admit its maintained decoder before each allocation. Other callers retain
+// the complete general or specialized serving envelope.
+func (n *nativeTextCatalog) entryAdmitted(root string, key []byte, sourceAdmit func(uint64) error) (entry node.LeafEntry, resultErr error) {
 	r := n.read
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -81,14 +91,23 @@ func (n *nativeTextCatalog) entry(root string, key []byte) (entry node.LeafEntry
 	if entry.Flags&node.FlagTombstone != 0 {
 		return entry, nil
 	}
-	value, err := n.value(entry, root, key)
+	var value []byte
+	if sourceAdmit != nil {
+		value, err = r.namedDomainValueAdmitted(entry, sourceAdmit)
+	} else {
+		value, err = n.value(entry, root, key)
+	}
 	if err != nil {
 		return node.LeafEntry{}, err
 	}
 	return node.LeafEntry{Key: key, Value: value, Flags: node.FlagInline, Revision: entry.Revision}, nil
 }
 func (n *nativeTextCatalog) get(root string, key, dst []byte) ([]byte, bool, error) {
-	entry, err := n.entry(root, key)
+	return n.getAdmitted(root, key, dst, nil)
+}
+
+func (n *nativeTextCatalog) getAdmitted(root string, key, dst []byte, sourceAdmit func(uint64) error) ([]byte, bool, error) {
+	entry, err := n.entryAdmitted(root, key, sourceAdmit)
 	if errors.Is(err, tree.ErrKeyNotFound) {
 		return dst[:0], false, nil
 	}

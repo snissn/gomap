@@ -72,10 +72,15 @@ type NativeSemanticState interface {
 // the original finite maintenance limits and producer source limit.
 type NativeSemanticProducerPressure struct {
 	ConstructionBytes uint64
-	MaxInFlightBytes  uint64
-	MaxTotalBytes     uint64
-	Sources           int
-	MaxSources        int
+	// FixedConstructionBytes is the once-per-build maximum already included in
+	// ConstructionBytes. It changes only advisory scheduling: every hard check
+	// and reservation still uses the full ConstructionBytes. Zero preserves the
+	// original watermark. Invalid/nonfitting fixed terms request maintenance.
+	FixedConstructionBytes uint64
+	MaxInFlightBytes       uint64
+	MaxTotalBytes          uint64
+	Sources                int
+	MaxSources             int
 }
 
 // NativeProducerObservation is a comparable, advisory identity of current

@@ -121,3 +121,72 @@ func TestOwnedProjectionWorkspacePrimaryAuthentication(t *testing.T) {
 		t.Fatalf("actual retained layouts=%d", calls)
 	}
 }
+
+// A retained workspace admits each encountered shape before allocating it.
+func TestOwnedProjectionWorkspaceShapeTransitionRefusal(t *testing.T) {
+	ordinary, _, _ := ownedProjectionShapeFixture(t, false)
+	primary, _, _ := ownedProjectionShapeFixture(t, true)
+	var workspace OwnedPointerProjectionWorkspace
+	calls := 0
+	admit := func(n uint64) error {
+		calls++
+		if n != OwnedPointerProjectionAllocationSize() {
+			t.Fatalf("raw maximum admission=%d", n)
+		}
+		return nil
+	}
+	it, err := ordinary.OwnedPointerProjectionIteratorWithWorkspace(nil, nil, nil, &workspace, admit)
+	if err != nil || !it.Valid() || string(it.UnsafeKey()) != "a" {
+		t.Fatalf("ordinary constructor: %v", err)
+	}
+	_ = it.Close()
+	workspace.Reset()
+	ordinaryBacking := workspace.ordinary
+	if ordinaryBacking == nil || workspace.primary != nil || calls != 1 {
+		t.Fatal("ordinary allocated PRIMARY backing or missed admission")
+	}
+	refused := errors.New("second shape refused")
+	it, err = primary.OwnedPointerProjectionIteratorWithWorkspace(nil, nil, nil, &workspace, func(n uint64) error {
+		if n != OwnedPointerProjectionAllocationSize() {
+			t.Fatalf("second shape raw maximum admission=%d", n)
+		}
+		return refused
+	})
+	if !errors.Is(err, refused) || it != nil || workspace.InUse() || workspace.primary != nil || workspace.ordinary != ordinaryBacking {
+		t.Fatal("refused second shape changed retained storage or lent a handle")
+	}
+	for _, tr := range []*Tree{ordinary, primary, ordinary, primary} {
+		it, err = tr.OwnedPointerProjectionIteratorWithWorkspace([]byte("b"), []byte("e"), nil, &workspace, admit)
+		if err != nil {
+			t.Fatal(err)
+		}
+		it.Seek([]byte("c"))
+		value, _, flags := it.UnsafeEntry()
+		want := "base"
+		if tr == primary {
+			want = "delta"
+		}
+		if !it.Valid() || string(it.UnsafeKey()) != "c" || string(value) != want || flags&node.FlagTombstone != 0 || it.Error() != nil {
+			t.Fatalf("shape reuse c: value=%q want=%q err=%v", value, want, it.Error())
+		}
+		it.Next()
+		if !it.Valid() || string(it.UnsafeKey()) != "d" || it.IsDeleted() != (tr == primary) {
+			t.Fatal("shape reuse lost PRIMARY absence or ordinary base")
+		}
+		it.Next()
+		if it.Valid() || it.Error() != nil {
+			t.Fatalf("exclusive bound: %v", it.Error())
+		}
+		_ = it.Close()
+		workspace.Reset()
+		if workspace.InUse() || workspace.ordinary != ordinaryBacking || workspace.ordinary.iterator.tree != nil {
+			t.Fatal("reset retained a root or replaced the ordinary cohort")
+		}
+		if workspace.primary != nil && (workspace.primary.primary.base != nil || workspace.primary.primary.readLeaf != nil || workspace.primary.iterator.tree != nil) {
+			t.Fatal("reset retained PRIMARY owner/callback")
+		}
+	}
+	if calls != 2 || workspace.primary == nil {
+		t.Fatalf("successful backing admissions=%d, want two encountered shapes", calls)
+	}
+}

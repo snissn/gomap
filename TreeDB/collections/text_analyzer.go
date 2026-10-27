@@ -6,6 +6,7 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
@@ -85,6 +86,19 @@ func AnalyzeTextToSinkWithOptions(analyzer TextAnalyzer, options *TextAnalyzerOp
 	normalized, err := normalizeTextAnalyzer(analyzer)
 	if err != nil {
 		return err
+	}
+	if admit != nil {
+		words, err := nativeTextStopWords(normalized, options, admit)
+		if err != nil {
+			return err
+		}
+		if len(words) > 0 {
+			if err = admit(memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeTextStopFilter{})))); err != nil {
+				return err
+			}
+			sink = nativeTextStopFilter{sink: sink, words: words}
+		}
+		return analyzeSimpleTextToSinkAdmitted(text, sink, admit)
 	}
 	normalizedOptions, err := normalizeTextAnalyzerOptions(normalized, options)
 	if err != nil {

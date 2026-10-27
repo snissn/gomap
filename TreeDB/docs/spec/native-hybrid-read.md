@@ -24,14 +24,22 @@ candidates. A physical-only checkpoint does not change this identity. Independen
 held public read views retain their old data. The legacy `validateOpen` fence and
 legacy physical snapshot comparison remain unchanged.
 
-Hybrid temporary arrays, copied scalar IDs, dedupe maps, candidate conversion,
-fusion and final fetch storage grow the private view's original native receipt
-before allocation. Charges remain cumulative until the complete request returns:
-serially abandoned Go backing can coexist until collection. Text analysis and
-record reads reuse that callback for this private hybrid view; ordinary standalone
-text search continues owning its original operation lease. Map allowances include
-small groups, load-factor rounding and growth cohorts. Native seek inspection
-counts tombstoned and shadowed physical sources rather than only emitted live IDs.
+Hybrid temporary arrays, copied scalar IDs, candidate conversion, fusion and
+final fetch storage grow the private view's original native receipt before
+allocation. Native scalar-ID sets, scanner deduplication and fusion/adaptive
+proof indexes use a concrete local ID index with checked power-of-two cell
+capacity and full string equality. Dynamic growth keeps live entries plus
+tombstones at most half of cell capacity after insertion, so at least half the
+cells remain empty; constructor hints retain their conservative spare slot.
+Header, replacement cells, typed value lanes
+and independent key copies are admitted before allocation or mutation; displaced
+backing remains cumulatively charged until the complete request ends. These
+indexes add no identity authority or owner. The shared carrier keeps legacy map
+lookup and distinguishes an absent filter from a present empty set. Text analysis
+and record reads reuse the private view's callback; ordinary standalone text
+search continues owning its original operation lease. This representation does
+not certify unrelated query or DDL maps. Native seek inspection counts tombstoned
+and shadowed physical sources rather than only emitted live IDs.
 Final fetch admits its result headers, ID copies and full ordinary native input before allocation. Its independent cap-limited document output transfers directly to the final response; no redundant final clone is needed. The maintained JSON projection constructor retains its existing public-output scratch contract: path maps, RawMessage map/key arrays, encoding/json decoder and encoding buffers are not claimed to be individually governed by the native receipt. Feature allocation/footprint qualification must include that inherited construction cost. Plain Get/fetch keep their existing nil-admission output contract and typed reconstruction is not expanded.
 
 The native read's existing admitted point scratch may reuse its last decoded
@@ -67,9 +75,19 @@ Ordinary `native_runtime` cosine float32 vector candidates borrow the same cut.
 The existing graph-only traversal and scalar-column matcher supply IDs and
 scores without document fetch or exact scan fallback. Cold load decodes that
 captured graph image; short installer captures validate identity only. Native
-scalar plans bypass the legacy retained cache because their ID sets belong to
-the request view. Parallel text/vector branches serialize receipt growth through
-a private mutex, while traversal remains independent.
+scalar plans may retain independent complete exact/finite ID sets in the
+registered runtime after validating the captured schema, incarnation, document
+and vector generations, mutation sequence, graph version, scalar-domain
+interpretations, clauses and lookup limits. Retention admits its independent
+cell/array/string backing on the runtime's original lease before copying; it
+retains no request callback or capture. The existing 64-slot and 8 MiB limits
+remain, with no separate 896-ID cutoff. Slot or byte exhaustion, overflow or
+optional retention refusal leaves the successful request-local plan usable.
+Slots are not replaced while readers can borrow them; the native Use gate and
+runtime lifetime protect retained storage. The original 4096-ID probe and
+4097th-entry truncation sentinel remain unchanged. Parallel text/vector branches
+serialize request receipt growth through a private mutex, while traversal remains
+independent.
 
 Ordinary unquantized `column_graph` candidates use the existing prepared-pack
 cache with the same captured native read and manifest identity. For default

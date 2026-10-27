@@ -44,6 +44,10 @@ func (s *Snapshot) cowSeekGE(start, end []byte) (key, value []byte, found bool, 
 		return nil, nil, false, err
 	}
 	defer s.endRead()
+	return s.cowSeekGEAdmitted(start, end)
+}
+
+func (s *Snapshot) cowSeekGEAdmitted(start, end []byte) (key, value []byte, found bool, err error) {
 	if s.cowCut == nil {
 		return nil, nil, false, ErrCOWUnsupported
 	}
@@ -423,6 +427,13 @@ func (s *Snapshot) cowSeekGEOneAdmitted(start, end []byte) (key, value []byte, f
 	}
 	s.cowReadMu.Lock()
 	defer s.cowReadMu.Unlock()
+	return s.cowSeekGEOneLocked(start, end)
+}
+
+// cowSeekGEOneLocked retains the scalar winner/materialization contract while
+// a bounded batch exclusively borrows the same cut-local point scratch.
+// The caller holds cowReadMu and has checked the immutable successor sources.
+func (s *Snapshot) cowSeekGEOneLocked(start, end []byte) (key, value []byte, found, eligible bool, err error) {
 	var inspected cowSuccessorInspection
 	var fresh cowFreshReadOwner
 	best, err := s.cowPhysicalSuccessorLocked(start, end, &inspected, &fresh)

@@ -349,7 +349,7 @@ func (s *Store) GetAt(logical []byte, timestamp uint64) (result Result, err erro
 		return Result{}, ErrZeroTimestamp
 	}
 	if s == nil || s.db == nil {
-		return Result{}, storageError("open iterator", treedb.ErrClosed)
+		return Result{}, &getAtError{callErr: storageError("open iterator", treedb.ErrClosed)}
 	}
 	lower, err := mvcckey.Encode(logical, timestamp)
 	if err != nil {
@@ -360,12 +360,12 @@ func (s *Store) GetAt(logical []byte, timestamp uint64) (result Result, err erro
 		return Result{}, fmt.Errorf("%w: %w", ErrInvalidKey, err)
 	}
 	if err := s.lockDiscardFloorRead(); err != nil {
-		return Result{}, err
+		return Result{}, &getAtError{callErr: err}
 	}
 	floor := s.discardFloor
 	if floor != 0 && timestamp <= floor {
 		s.mu.RUnlock()
-		return Result{}, fmt.Errorf("%w: read timestamp %d is at or below floor %d", ErrReadBeforeDiscardFloor, timestamp, floor)
+		return Result{}, &getAtError{callErr: fmt.Errorf("%w: read timestamp %d is at or below floor %d", ErrReadBeforeDiscardFloor, timestamp, floor)}
 	}
 	if s.readCuts != nil {
 		return s.getAtReadCut(logical, timestamp, lower, upper)
@@ -390,11 +390,11 @@ func (s *Store) GetAt(logical []byte, timestamp uint64) (result Result, err erro
 	it, err := s.db.Iterator(lower, upper)
 	s.mu.RUnlock()
 	if err != nil {
-		return Result{}, storageError("open iterator", err)
+		return Result{}, &getAtError{callErr: storageError("open iterator", err)}
 	}
 	defer func() {
 		if closeErr := it.Close(); closeErr != nil {
-			err = errors.Join(err, storageError("close iterator", closeErr))
+			err = &getAtError{itemErr: err, callErr: storageError("close iterator", closeErr), cleanup: true}
 		}
 	}()
 
@@ -419,12 +419,16 @@ func (s *Store) getAtReadCut(logical []byte, timestamp uint64, lower, upper []by
 	cut, captureErr := s.readCuts.AcquireMVCCReadCut()
 	s.mu.RUnlock()
 	if captureErr != nil {
-		return Result{}, storageError("acquire read cut", captureErr)
+		return Result{}, &getAtError{callErr: storageError("acquire read cut", captureErr)}
 	}
 	if cut == nil {
-		return Result{}, storageError("acquire read cut", treedb.ErrClosed)
+		return Result{}, &getAtError{callErr: storageError("acquire read cut", treedb.ErrClosed)}
 	}
-	defer func() { err = errors.Join(err, storageError("close read cut", cut.Close())) }()
+	defer func() {
+		if closeErr := cut.Close(); closeErr != nil {
+			err = &getAtError{itemErr: err, callErr: storageError("close read cut", closeErr), cleanup: true}
+		}
+	}()
 	physical, record, found, seekErr := cut.SeekGEVersionRange(lower, upper)
 	if seekErr != nil {
 		return Result{}, storageError("seek version", seekErr)
@@ -433,6 +437,38 @@ func (s *Store) getAtReadCut(logical []byte, timestamp uint64, lower, upper []by
 		return Result{State: Absent}, nil
 	}
 	return decodePointResult(logical, timestamp, physical, record, true)
+}
+
+// getAtError records call-wide failure provenance only on scalar error paths.
+// A cleanup failure retains the independent key/read error and produced Result.
+// GetAt still exposes both causes with the same text as errors.Join.
+type getAtError struct {
+	itemErr error
+	callErr error
+	cleanup bool // distinguishes produced outcomes from pre-read admission errors
+}
+
+func (e *getAtError) Error() string {
+	if e.itemErr == nil {
+		return e.callErr.Error()
+	}
+	return e.itemErr.Error() + "\n" + e.callErr.Error()
+}
+
+func (e *getAtError) Unwrap() []error {
+	if e.itemErr == nil {
+		return []error{e.callErr}
+	}
+	return []error{e.itemErr, e.callErr}
+}
+
+func splitGetAtError(err error) (itemErr, callErr error) {
+	// Only GetAt's outermost wrapper describes this operation. A backend cause
+	// may itself originate in another GetAt and remains this key's read error.
+	if e, ok := err.(*getAtError); ok {
+		return e.itemErr, e.callErr
+	}
+	return err, nil
 }
 
 // recordOwned is true only for successor results. Iterator records remain

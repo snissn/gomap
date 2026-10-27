@@ -45,6 +45,9 @@ func (t *NativeJSONTxn) buildNativeTextPhase(g *nativeJSONTxnBinding) (nativeTex
 	if err != nil {
 		return nativeTextPhase{}, err
 	}
+	// The exact mutation state/stat readers replace only their own record envelope.
+	// All other records, iterators, inspections and query catalogs are unchanged.
+	catalog.nativeText.mutationCodecs = true
 	phase.domains, err = nativeTextMutationDomains(g.probe.capture.Snapshot(), catalog, g.rows.rows, g.templates, admit)
 	if err != nil {
 		return nativeTextPhase{}, err

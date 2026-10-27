@@ -4651,3 +4651,21 @@ appends, rotations, empty-segment resizing, and pathname replacement therefore
 cannot enter the captured cut. Legacy stream files retain their captured EOF.
 Export preserves physical capacity and never mutates source bytes or relaxes the
 read-only applied-LSN check. Snapshot disk admission still counts full capacity.
+
+### Private COW leaf-pack source retirement and recovery-slot convergence
+
+Automatic private COW leaf packing can replace physical roots without changing
+`AppliedCommandLSN` or entry revisions. After selection and target preflight, its
+original cache leaf owner compares selected canonical FileIDs and exact retained
+source-handle identities to current writers before rotating selected active
+sources through the existing writer/registrar. Closed sources and unrelated
+lanes are unchanged. Source handles remain retained through copying into fresh
+private generations. This is a producer handoff, not deletion authority. After adopting the exact replacement
+Snapshot, the original cache flush owner may converge the recovery fallback on
+that already-applied logical cut through the existing complete-cut publisher.
+No command frame or on-disk encoding is added. A concurrent visible suffix is
+not part of this physical basis, and a newer frozen suffix defers convergence.
+Both recoverable roots retain authority until convergence succeeds; reader,
+prepared-publication and current-writer pins continue to govern physical source
+unlink. See [write path and durability](write-path-and-durability.md) and
+[value-log lifecycle](value-log-lifecycle.md).

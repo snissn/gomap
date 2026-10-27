@@ -2,6 +2,7 @@ package caching
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -81,5 +82,60 @@ func TestCOWBasisRefreshRefusalKeepsOriginalAndOwnsPartialCleanup(t *testing.T) 
 				t.Fatal("original opening state did not finish")
 			}
 		})
+	}
+}
+
+func TestCOWPhysicalBasisRefreshPreservesAppliedLogicalIdentity(t *testing.T) {
+	for _, engine := range []string{"cow_btree", "cow_ordered"} {
+		for _, frozen := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/frozen=%t", engine, frozen), func(t *testing.T) {
+				cache, backend := cowAutomaticFallbackFixture(t, engine)
+				writeCOWAutoFallbackRaw(t, cache, backend, "prefix")
+				if err := cache.Checkpoint(); err != nil {
+					t.Fatal(err)
+				}
+				before := cache.cow.retainCut()
+				logical := before.basis.logicalSeq
+				applied, _ := before.basis.snapshot.StateToken()
+				if err := cache.cow.releaseCut(before); err != nil {
+					t.Fatal(err)
+				}
+				writeCOWAutoFallbackRaw(t, cache, backend, "suffix")
+				if frozen {
+					if err := cache.rolloverCOWForFlush(); err != nil {
+						t.Fatal(err)
+					}
+				}
+				next := backend.CommandWALNextLSN()
+				// Exercise refreshCOWBackendBasis, the other production nil-coverage
+				// consumer, under its original writer/maintenance fence.
+				if err := cache.RunBackendMaintenance(nil); err != nil {
+					t.Fatal(err)
+				}
+				cut := cache.cow.retainCut()
+				if cut == nil {
+					t.Fatal("missing refreshed cut")
+				}
+				state, live := cut.basis.snapshot.StateToken()
+				if !live || state.AppliedCommandLSN != applied.AppliedCommandLSN || cut.basis.logicalSeq != logical || cut.logicalSeq <= logical || frozen && len(cut.frozen) == 0 {
+					t.Errorf("physical refresh consumed or relabeled suffix: applied=%+v state=%+v basis=%d want=%d visible=%d frozen=%d", applied, state, cut.basis.logicalSeq, logical, cut.logicalSeq, len(cut.frozen))
+				}
+				if err := cache.cow.releaseCut(cut); err != nil {
+					t.Fatal(err)
+				}
+				if backend.CommandWALNextLSN() != next {
+					t.Fatal("physical refresh appended a command")
+				}
+				if got, err := cache.Get([]byte("key")); err != nil || string(got) != "suffix" {
+					t.Fatalf("logical suffix=%q err=%v", got, err)
+				}
+				if err := cache.Checkpoint(); err != nil {
+					t.Fatal(err)
+				}
+				if got, err := backend.Get([]byte("key")); err != nil || string(got) != "suffix" {
+					t.Fatalf("checkpoint after refresh=%q err=%v", got, err)
+				}
+			})
+		}
 	}
 }

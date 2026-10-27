@@ -46,6 +46,14 @@ needs neither a live decoder nor another definition capture. It avoids decode
 and full-record CRC work, while the tree still validates the copied page.
 Different private limits bypass dictionary cache hits and follow decode/refusal.
 No new cache registry or decoder allocation is needed solely for a hit.
+Shared compressed-leaf misses repeat that same verified-cache lookup after
+acquiring the original physical decoder mutex. A successful decode is admitted
+before unlocking, so queued readers can copy it instead of repeating the decode.
+Cold-cache probation, capacity, inspection and different-limit policy remain
+unchanged; disabled caches and unique misses still take the original decode
+route with one additional cache lookup. Cache admission may allocate the
+existing bounded slot backing while holding the mutex. No in-flight owner,
+extra decoder, cache registry or waiting protocol is introduced.
 
 This changes transient ownership/reuse only, with no on-disk format, durability,
 GC or public API change.

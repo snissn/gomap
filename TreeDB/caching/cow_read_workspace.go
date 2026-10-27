@@ -793,7 +793,8 @@ func (b *cowBackendBasis) readPhysicalLeafWithDictionary(c *cowCache, w *cowRead
 	// verified page is sufficient immutable authority without retaining a
 	// decoder or recapturing its dictionary on every hit. Private callers using
 	// different limits must pass their original decode/definition policy again.
-	if shape.DictID == 0 || w.limits == c.readLimits() {
+	cacheEligible := shape.DictID == 0 || w.limits == c.readLimits()
+	if cacheEligible {
 		if data, hit, err := b.snapshot.CopyVerifiedCachedLeafPage(ptr, f, identity, dst); err != nil || hit {
 			if err != nil {
 				return nil, fmt.Errorf("COW physical leaf verified-cache ptr=%+v file=%q: %w", ptr.ValuePtr(), f.Name(), err)
@@ -811,6 +812,14 @@ func (b *cowBackendBasis) readPhysicalLeafWithDictionary(c *cowCache, w *cowRead
 	}
 	if shape.Compressed && !localDictionary && !(localBlock && shape.DictID == 0 && (shape.Codec == valuelog.BlockCodecSnappy || shape.Codec == valuelog.BlockCodecLZ4)) {
 		c.physicalMu.Lock()
+		// A preceding decoder may have admitted this exact inspected leaf
+		// while we waited. Preserve the original policy before copying a hit.
+		if cacheEligible {
+			if data, hit, cacheErr := b.snapshot.CopyVerifiedCachedLeafPage(ptr, f, identity, dst); cacheErr != nil || hit {
+				c.physicalMu.Unlock()
+				return data, cacheErr
+			}
+		}
 		shared, workspaceErr := c.physicalWorkspaceLocked(w.limits)
 		if workspaceErr != nil {
 			c.physicalMu.Unlock()
@@ -820,7 +829,19 @@ func (b *cowBackendBasis) readPhysicalLeafWithDictionary(c *cowCache, w *cowRead
 			return nil, workspaceErr
 		}
 		data, err = shared.readInspected(f, ptr.ValuePtr(), shape, true, dst, independent)
+		if err == nil {
+			// Publish before the next queued decoder checks. Admission keeps
+			// the existing bounded cache, probation and nonblocking slot locks.
+			err = b.snapshot.AdmitVerifiedCachedLeafPage(ptr, f, identity, data)
+		}
 		c.physicalMu.Unlock()
+		if err != nil {
+			if shape.DictID != 0 && errors.Is(err, memtable.ErrCOWCapacity) {
+				return nil, &cowPhysicalDictionaryCapacity{cause: err}
+			}
+			return nil, err
+		}
+		return data, nil
 	} else {
 		data, err = w.readInspected(f, ptr.ValuePtr(), shape, true, dst, nil)
 	}

@@ -99,12 +99,12 @@ func TestNativeScalarPlanCacheConcurrentReuseClonesMutationOwnedState(t *testing
 	}
 	immutable := &nativeScalarFilterExecution{
 		identity:     NativeScalarFilterPlanMixed,
-		finiteIDs:    hybridScalarAllowSet{"alpha": {}, "beta": {}},
+		finiteIDs:    legacyScalarIDs(hybridScalarAllowSet{"alpha": {}, "beta": {}}),
 		candidateIDs: 2, retainedCandidateIDs: 2, refinedCandidateIDs: 2,
 		sourceGeneration: 7,
 	}
 	first, _ := col.nativeScalarPlanCachePut(key, immutable, nativeScalarPlanCacheStats{misses: 1})
-	delete(first.finiteIDs, "alpha")
+	first.finiteIDs.delete("alpha")
 
 	const readers = 32
 	var wg sync.WaitGroup
@@ -114,11 +114,11 @@ func TestNativeScalarPlanCacheConcurrentReuseClonesMutationOwnedState(t *testing
 		go func() {
 			defer wg.Done()
 			plan, stats := col.nativeScalarPlanCacheGet(key)
-			if stats.hits != 1 || len(plan.finiteIDs) != 2 {
-				errs <- fmt.Errorf("hits=%d finite=%d", stats.hits, len(plan.finiteIDs))
+			if stats.hits != 1 || plan.finiteIDs.len() != 2 {
+				errs <- fmt.Errorf("hits=%d finite=%d", stats.hits, plan.finiteIDs.len())
 				return
 			}
-			delete(plan.finiteIDs, "alpha")
+			plan.finiteIDs.delete("alpha")
 		}()
 	}
 	wg.Wait()
@@ -127,8 +127,8 @@ func TestNativeScalarPlanCacheConcurrentReuseClonesMutationOwnedState(t *testing
 		t.Error(err)
 	}
 	cached, stats := col.nativeScalarPlanCacheGet(key)
-	if stats.hits != 1 || len(cached.finiteIDs) != 2 {
-		t.Fatalf("cached hits=%d finite=%d", stats.hits, len(cached.finiteIDs))
+	if stats.hits != 1 || cached.finiteIDs.len() != 2 {
+		t.Fatalf("cached hits=%d finite=%d", stats.hits, cached.finiteIDs.len())
 	}
 }
 
@@ -213,7 +213,7 @@ func TestNativeScalarPlanCacheBoundsEntriesAndRetainedBytes(t *testing.T) {
 	oversized := &Collection{}
 	hugeID := strings.Repeat("x", nativeScalarPlanCacheMaxBytes)
 	key := nativeScalarPlanCacheKey{vectorIndex: index, sourceGeneration: 1, vectorGeneration: 1, vectorSchema: "vector", scalarSchema: "scalar", filterIdentity: "oversized"}
-	plan := &nativeScalarFilterExecution{identity: NativeScalarFilterPlanCompleteFinite, finiteIDs: hybridScalarAllowSet{hugeID: {}}, sourceGeneration: 1}
+	plan := &nativeScalarFilterExecution{identity: NativeScalarFilterPlanCompleteFinite, finiteIDs: legacyScalarIDs(hybridScalarAllowSet{hugeID: {}}), sourceGeneration: 1}
 	_, stats = oversized.nativeScalarPlanCachePut(key, plan, nativeScalarPlanCacheStats{misses: 1})
 	if stats.entries != 0 || stats.retainedBytes != 0 {
 		t.Fatalf("oversized entry retained stats=%+v", stats)

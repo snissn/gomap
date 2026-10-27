@@ -452,7 +452,7 @@ func TestNativeTextV2ForwardIdentityAdmission(t *testing.T) {
 	before := budget.Stats()
 	sequence := read.capture.LogicalSequence()
 	refuse = true
-	set, err := newTextV2SearchOrdinalAllowSet(read.capture.Snapshot(), catalog, ctx, hybridScalarAllowSet{id: {}})
+	set, err := newTextV2SearchOrdinalAllowSet(read.capture.Snapshot(), catalog, ctx, legacyScalarIDs(hybridScalarAllowSet{id: {}}))
 	if !errors.Is(err, memtable.ErrCOWCapacity) || set != nil {
 		t.Fatal("unadmitted forward map", set, err)
 	}
@@ -461,7 +461,7 @@ func TestNativeTextV2ForwardIdentityAdmission(t *testing.T) {
 		t.Fatalf("refusal changed ownership before=%+v after=%+v", before, after)
 	}
 	refuse = false
-	if set, err = newTextV2SearchOrdinalAllowSet(read.capture.Snapshot(), catalog, ctx, hybridScalarAllowSet{id: {}}); err != nil || set.size() != 1 {
+	if set, err = newTextV2SearchOrdinalAllowSet(read.capture.Snapshot(), catalog, ctx, legacyScalarIDs(hybridScalarAllowSet{id: {}})); err != nil || set.size() != 1 {
 		t.Fatal("reuse after refusal", set, err)
 	}
 }

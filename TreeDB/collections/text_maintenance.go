@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
+	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
@@ -16,6 +18,7 @@ type textDocumentMutation struct {
 	deleteOld   bool
 	newDocument []byte
 	preparedNew *textDocumentStateValue
+	preparedOld *textDocumentStateValue
 	setNew      bool
 }
 
@@ -53,9 +56,9 @@ func clonePreparedTextIndexInserts(in []preparedTextIndexInsert) []preparedTextI
 
 type textStatsDelta struct {
 	Documents     int64
-	Terms         map[string]textStatsTermDelta
-	Fields        map[string]textStatsFieldDelta
-	PostingBlocks map[string]int64
+	Terms         textValues[textStatsTermDelta]
+	Fields        textValues[textStatsFieldDelta]
+	PostingBlocks textValues[int64]
 }
 
 type textStatsTermDelta struct {
@@ -120,7 +123,7 @@ func appendSingleTextIndexMutationDeltas(
 	statsRootName := collectionTextStatsRootName(catalog.meta.Name, def.Name)
 	postingsTable := opts.newTextTable(0)
 	stateTable := opts.newTextTable(len(mutations))
-	statsDelta := textStatsDelta{}
+	statsDelta := textStatsDelta{Terms: textValues[textStatsTermDelta]{admit: opts.textMaterializationAdmit}, Fields: textValues[textStatsFieldDelta]{admit: opts.textMaterializationAdmit}, PostingBlocks: textValues[int64]{admit: opts.textMaterializationAdmit}}
 	success := false
 	defer func() {
 		if success {
@@ -135,22 +138,34 @@ func appendSingleTextIndexMutationDeltas(
 			return errors.New("collections: text index maintenance document id cannot be empty")
 		}
 		if mutation.deleteOld {
-			oldState, err := loadTextDocumentStateForMutation(snap, catalog, def, mutation.documentID, mutation.oldDocument, opts)
+			oldState, err := loadTextDocumentStateForMutation(snap, catalog, def, mutation.documentID, mutation.oldDocument, opts, mutation.preparedOld)
 			if err != nil {
 				return err
 			}
-			deleteTextPostingsForDocument(postingsTable, mutation.documentID, oldState)
+			if _, err := deleteTextPostingsForDocument(postingsTable, mutation.documentID, oldState, opts.textMaterializationAdmit); err != nil {
+				return err
+			}
 			stateTable.DeleteSteal(encodeTextStateKey(mutation.documentID))
-			statsDelta.addState(oldState, -1)
+			if err := statsDelta.addState(oldState, -1); err != nil {
+				return err
+			}
 		}
 		if mutation.setNew {
 			newState, newAnalysis, err := textMutationNewStateAndAnalysis(def, mutation, opts)
 			if err != nil {
 				return err
 			}
-			addTextPostingsForDocument(postingsTable, mutation.documentID, newAnalysis)
+			if opts.textMaterializationAdmit != nil {
+				if err := addNativeTextPostingsForState(postingsTable, mutation.documentID, newState, opts.textMaterializationAdmit); err != nil {
+					return err
+				}
+			} else {
+				addTextPostingsForDocument(postingsTable, mutation.documentID, newAnalysis)
+			}
 			stateTable.SetSteal(encodeTextStateKey(mutation.documentID), encodeTextDocumentStateValue(newState))
-			statsDelta.addState(newState, 1)
+			if err := statsDelta.addState(newState, 1); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -181,7 +196,9 @@ func appendSingleTextIndexMutationDeltas(
 
 func appendTextRootDelta(rootNames *[]string, baseRootIDs map[string]uint64, policies *[]backenddb.OrderedRootStoragePolicy, deltaTables *[]memtable.Table, rootName string, baseRootID uint64, policy backenddb.OrderedRootStoragePolicy, table memtable.Table) {
 	*rootNames = append(*rootNames, rootName)
-	baseRootIDs[rootName] = baseRootID
+	if baseRootIDs != nil {
+		baseRootIDs[rootName] = baseRootID
+	}
 	*policies = append(*policies, policy)
 	*deltaTables = append(*deltaTables, table)
 }
@@ -235,10 +252,25 @@ func appendSingleTextV2IndexMutationDeltas(
 		}
 	}()
 
-	docMapBlocks := make(map[uint64]*textV2DocMapBlockValue)
-	normBlocks := make(map[uint64]*textV2NormBlockValue)
-	var postingBuilder textV2PostingBatchBuilder
-	statsDelta := textStatsDelta{}
+	var docMapBlocks map[uint64]*textV2DocMapBlockValue
+	var normBlocks map[uint64]*textV2NormBlockValue
+	var docCache *textNumberValues[*textV2DocMapBlockValue]
+	var normCache *textNumberValues[*textV2NormBlockValue]
+	if opts.textMaterializationAdmit != nil {
+		docCache, err = newTextNumberValues[*textV2DocMapBlockValue](opts.textMaterializationAdmit)
+		if err != nil {
+			return err
+		}
+		normCache, err = newTextNumberValues[*textV2NormBlockValue](opts.textMaterializationAdmit)
+		if err != nil {
+			return err
+		}
+	} else {
+		docMapBlocks = make(map[uint64]*textV2DocMapBlockValue)
+		normBlocks = make(map[uint64]*textV2NormBlockValue)
+	}
+	postingBuilder := textV2PostingBatchBuilder{admit: opts.textMaterializationAdmit}
+	statsDelta := textStatsDelta{Terms: textValues[textStatsTermDelta]{admit: opts.textMaterializationAdmit}, Fields: textValues[textStatsFieldDelta]{admit: opts.textMaterializationAdmit}, PostingBlocks: textValues[int64]{admit: opts.textMaterializationAdmit}}
 	nextOrdinal := status.NextOrdinal
 	liveDocuments := status.LiveDocuments
 	deletedDocuments := status.DeletedDocuments
@@ -294,14 +326,20 @@ func appendSingleTextV2IndexMutationDeltas(
 			if nextDoc.Generation == 0 {
 				return errMalformedTextStorage("text-v2 generation overflow for document %q", string(mutation.documentID))
 			}
-			statsDelta.addState(oldState, -1)
-			statsDelta.addState(newState, 1)
+			if err := statsDelta.addState(oldState, -1); err != nil {
+				return err
+			}
+			if err := statsDelta.addState(newState, 1); err != nil {
+				return err
+			}
 		case mutation.deleteOld:
 			nextDoc = textV2DocIDValue{Ordinal: current.Ordinal, Generation: current.Generation + 1, Flags: textV2DocFlagTombstone}
 			if nextDoc.Generation == 0 {
 				return errMalformedTextStorage("text-v2 generation overflow for document %q", string(mutation.documentID))
 			}
-			statsDelta.addState(oldState, -1)
+			if err := statsDelta.addState(oldState, -1); err != nil {
+				return err
+			}
 			if liveDocuments == 0 {
 				return errMalformedTextStorage("text-v2 live document underflow")
 			}
@@ -319,32 +357,36 @@ func appendSingleTextV2IndexMutationDeltas(
 			if nextOrdinal == 0 {
 				return errMalformedTextStorage("text-v2 next ordinal overflow")
 			}
-			statsDelta.addState(newState, 1)
+			if err := statsDelta.addState(newState, 1); err != nil {
+				return err
+			}
 			liveDocuments++
 		default:
 			continue
 		}
 
 		docIDTable.SetSteal(encodeTextV2DocIDKey(mutation.documentID), encodeTextV2DocIDValue(nextDoc))
-		if err := upsertTextV2DocMapMutation(snap, catalog, docMapRootName, docMapBlocks, nextDoc, mutation.documentID); err != nil {
+		if err := upsertTextV2DocMapMutation(snap, catalog, docMapRootName, docMapBlocks, nextDoc, mutation.documentID, docCache); err != nil {
 			return err
 		}
 		lengths := textV2FieldLengthsFromState(def, newState)
 		if nextDoc.tombstoned() {
 			lengths = textV2FieldLengthsFromState(def, oldState)
 		}
-		if err := upsertTextV2NormMutation(snap, catalog, normRootName, normBlocks, nextDoc, lengths); err != nil {
+		if err := upsertTextV2NormMutation(snap, catalog, normRootName, normBlocks, nextDoc, lengths, normCache); err != nil {
 			return err
 		}
 		if mutation.deleteOld {
-			deleteTextV2PositionEntriesForDocument(positionsTable, def, current.Ordinal, oldState)
+			if _, err := deleteTextV2PositionEntriesForDocumentAdmitted(positionsTable, def, current.Ordinal, oldState, opts.textMaterializationAdmit); err != nil {
+				return err
+			}
 		}
 		if mutation.setNew {
-			if mutation.preparedNew != nil {
+			if mutation.preparedNew != nil || opts.textMaterializationAdmit != nil {
 				if err := postingBuilder.addDocumentState(def, nextDoc.Ordinal, nextDoc.Generation, newState); err != nil {
 					return err
 				}
-				if _, _, err := addTextV2PositionEntriesForState(positionsTable, def, nextDoc.Ordinal, nextDoc.Generation, newState); err != nil {
+				if _, _, err := addTextV2PositionEntriesForState(positionsTable, def, nextDoc.Ordinal, nextDoc.Generation, newState, opts.textMaterializationAdmit); err != nil {
 					return err
 				}
 			} else {
@@ -358,6 +400,16 @@ func appendSingleTextV2IndexMutationDeltas(
 		}
 	}
 
+	if docCache != nil {
+		for _, entry := range docCache.entries {
+			docMapTable.SetSteal(encodeTextV2BlockKey(entry.key), encodeTextV2DocMapBlockValue(*entry.value))
+		}
+	}
+	if normCache != nil {
+		for _, entry := range normCache.entries {
+			normTable.SetSteal(encodeTextV2BlockKey(entry.key), encodeTextV2NormBlockValue(*entry.value))
+		}
+	}
 	for _, blockStart := range sortedTextV2BlockStarts(docMapBlocks) {
 		block := docMapBlocks[blockStart]
 		docMapTable.SetSteal(encodeTextV2BlockKey(blockStart), encodeTextV2DocMapBlockValue(*block))
@@ -374,7 +426,9 @@ func appendSingleTextV2IndexMutationDeltas(
 	if err != nil {
 		return err
 	}
-	statsDelta.addPostingBlocks(postingBlockCounts)
+	if err := statsDelta.addPostingBlocks(postingBlockCounts); err != nil {
+		return err
+	}
 	if err := buildTextV2StatsDeltaTable(snap, catalog, def, termsRootName, statsDelta, nextGeneration, termsTable); err != nil {
 		return err
 	}
@@ -455,9 +509,9 @@ func loadTextV2StoredDocumentForMutation(snap *backenddb.Snapshot, catalog *coll
 	return raw, nil
 }
 
-func upsertTextV2DocMapMutation(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string, blocks map[uint64]*textV2DocMapBlockValue, doc textV2DocIDValue, documentID []byte) error {
+func upsertTextV2DocMapMutation(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string, blocks map[uint64]*textV2DocMapBlockValue, doc textV2DocIDValue, documentID []byte, cache ...*textNumberValues[*textV2DocMapBlockValue]) error {
 	blockStart := textV2OrdinalBlockStart(doc.Ordinal, textV2DefaultDocMapBlockSize)
-	block, err := loadTextV2DocMapMutationBlock(snap, catalog, rootName, blocks, blockStart)
+	block, err := loadTextV2DocMapMutationBlock(snap, catalog, rootName, blocks, blockStart, cache...)
 	if err != nil {
 		return err
 	}
@@ -465,7 +519,12 @@ func upsertTextV2DocMapMutation(snap *backenddb.Snapshot, catalog *collectionCat
 	return nil
 }
 
-func loadTextV2DocMapMutationBlock(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string, blocks map[uint64]*textV2DocMapBlockValue, blockStart uint64) (*textV2DocMapBlockValue, error) {
+func loadTextV2DocMapMutationBlock(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string, blocks map[uint64]*textV2DocMapBlockValue, blockStart uint64, cache ...*textNumberValues[*textV2DocMapBlockValue]) (*textV2DocMapBlockValue, error) {
+	if len(cache) > 0 && cache[0] != nil {
+		if block := cache[0].get(blockStart); block != nil {
+			return block, nil
+		}
+	}
 	if block := blocks[blockStart]; block != nil {
 		return block, nil
 	}
@@ -481,13 +540,19 @@ func loadTextV2DocMapMutationBlock(snap *backenddb.Snapshot, catalog *collection
 		}
 		block = &decoded
 	}
-	blocks[blockStart] = block
+	if len(cache) > 0 && cache[0] != nil {
+		if err := cache[0].set(blockStart, block); err != nil {
+			return nil, err
+		}
+	} else {
+		blocks[blockStart] = block
+	}
 	return block, nil
 }
 
-func upsertTextV2NormMutation(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string, blocks map[uint64]*textV2NormBlockValue, doc textV2DocIDValue, fieldLengths []uint32) error {
+func upsertTextV2NormMutation(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string, blocks map[uint64]*textV2NormBlockValue, doc textV2DocIDValue, fieldLengths []uint32, cache ...*textNumberValues[*textV2NormBlockValue]) error {
 	blockStart := textV2OrdinalBlockStart(doc.Ordinal, textV2DefaultNormBlockSize)
-	block, err := loadTextV2NormMutationBlock(snap, catalog, rootName, blocks, blockStart, uint32(len(fieldLengths)))
+	block, err := loadTextV2NormMutationBlock(snap, catalog, rootName, blocks, blockStart, uint32(len(fieldLengths)), cache...)
 	if err != nil {
 		return err
 	}
@@ -495,7 +560,12 @@ func upsertTextV2NormMutation(snap *backenddb.Snapshot, catalog *collectionCatal
 	return nil
 }
 
-func loadTextV2NormMutationBlock(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string, blocks map[uint64]*textV2NormBlockValue, blockStart uint64, fieldCount uint32) (*textV2NormBlockValue, error) {
+func loadTextV2NormMutationBlock(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string, blocks map[uint64]*textV2NormBlockValue, blockStart uint64, fieldCount uint32, cache ...*textNumberValues[*textV2NormBlockValue]) (*textV2NormBlockValue, error) {
+	if len(cache) > 0 && cache[0] != nil {
+		if block := cache[0].get(blockStart); block != nil {
+			return block, nil
+		}
+	}
 	if block := blocks[blockStart]; block != nil {
 		return block, nil
 	}
@@ -511,18 +581,24 @@ func loadTextV2NormMutationBlock(snap *backenddb.Snapshot, catalog *collectionCa
 		}
 		block = &decoded
 	}
-	blocks[blockStart] = block
+	if len(cache) > 0 && cache[0] != nil {
+		if err := cache[0].set(blockStart, block); err != nil {
+			return nil, err
+		}
+	} else {
+		blocks[blockStart] = block
+	}
 	return block, nil
 }
 
 func textV2FieldLengthsFromState(def TextIndexDefinition, state textDocumentStateValue) []uint32 {
-	byField := make(map[string]uint32, len(state.Fields))
-	for _, field := range state.Fields {
-		byField[field.Field] = field.Length
-	}
-	lengths := make([]uint32, 0, len(def.Fields))
-	for _, field := range def.Fields {
-		lengths = append(lengths, byField[field.Field])
+	lengths := make([]uint32, len(def.Fields))
+	for i, wanted := range def.Fields {
+		for _, field := range state.Fields {
+			if field.Field == wanted.Field {
+				lengths[i] = field.Length
+			}
+		}
 	}
 	return lengths
 }
@@ -547,7 +623,7 @@ func buildTextV2StatsDeltaTable(snap *backenddb.Snapshot, catalog *collectionCat
 		if err != nil {
 			return err
 		}
-		fieldDelta := delta.Fields[field]
+		fieldDelta := delta.Fields.get(field)
 		docs, err := applySignedTextDelta(current.DocumentCount, fieldDelta.DocumentCount, "text-v2 field document count")
 		if err != nil {
 			return err
@@ -559,26 +635,29 @@ func buildTextV2StatsDeltaTable(snap *backenddb.Snapshot, catalog *collectionCat
 		table.SetSteal(encodeTextV2FieldStatsKey(field), encodeTextV2FieldStatsValue(textV2FieldStatsValue{StatsGeneration: generation, DocumentCount: docs, TotalTokenCount: tokens}))
 	}
 
-	termSet := make(map[string]struct{}, len(delta.Terms)+len(delta.PostingBlocks))
-	for term, termDelta := range delta.Terms {
-		if termDelta.DocumentFrequency == 0 && termDelta.TotalTermFrequency == 0 {
-			continue
+	termSet := textValues[struct{}]{admit: delta.Terms.admit}
+	for term, value := range delta.Terms.all {
+		if value.DocumentFrequency != 0 || value.TotalTermFrequency != 0 {
+			if err := termSet.set(term, struct{}{}); err != nil {
+				return err
+			}
 		}
-		termSet[term] = struct{}{}
 	}
-	for term, blockDelta := range delta.PostingBlocks {
-		if blockDelta == 0 {
-			continue
+	for term, count := range delta.PostingBlocks.all {
+		if count != 0 {
+			if err := termSet.set(term, struct{}{}); err != nil {
+				return err
+			}
 		}
-		termSet[term] = struct{}{}
 	}
-	terms := make([]string, 0, len(termSet))
-	for term := range termSet {
-		terms = append(terms, term)
+	terms, err := termSet.keys()
+	if err != nil {
+		return err
 	}
+
 	sort.Strings(terms)
 	for _, term := range terms {
-		termDelta := delta.Terms[term]
+		termDelta := delta.Terms.get(term)
 		current, err := readTextV2TermStatsAtRoot(snap, catalog, rootName, term)
 		if err != nil {
 			return err
@@ -591,7 +670,7 @@ func buildTextV2StatsDeltaTable(snap *backenddb.Snapshot, catalog *collectionCat
 		if err != nil {
 			return err
 		}
-		blocks, err := applySignedTextDelta(current.PostingBlockCount, delta.PostingBlocks[term], "text-v2 term posting block count")
+		blocks, err := applySignedTextDelta(current.PostingBlockCount, delta.PostingBlocks.get(term), "text-v2 term posting block count")
 		if err != nil {
 			return err
 		}
@@ -605,8 +684,20 @@ func buildTextV2StatsDeltaTable(snap *backenddb.Snapshot, catalog *collectionCat
 	return nil
 }
 
+// Only the native mutation phase opts into source-only record copies for the
+// exact maintained codecs below. Fixed V1/V2 stats contain no decoded backing;
+// V1 state separately admits every backing through its failable decoder.
+// General reads retain the original complete record allowance, including their
+// inspection/rewrite/query cohorts. No record or decoder credit is refunded.
+func textMutationCodecRecordAtRoot(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string, key []byte) ([]byte, bool, error) {
+	if catalog != nil && catalog.nativeText != nil && catalog.nativeText.mutationCodecs {
+		return catalog.nativeText.getAdmitted(rootName, key, nil, catalog.nativeText.admit)
+	}
+	return collectionGetAppendAtCatalogRoot(snap, catalog, rootName, key, nil)
+}
+
 func readTextV2CorpusStatsAtRoot(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string) (textV2CorpusStatsValue, error) {
-	raw, ok, err := collectionGetAppendAtCatalogRoot(snap, catalog, rootName, encodeTextV2CorpusStatsKey(), nil)
+	raw, ok, err := textMutationCodecRecordAtRoot(snap, catalog, rootName, encodeTextV2CorpusStatsKey())
 	if err != nil {
 		return textV2CorpusStatsValue{}, err
 	}
@@ -617,7 +708,7 @@ func readTextV2CorpusStatsAtRoot(snap *backenddb.Snapshot, catalog *collectionCa
 }
 
 func readTextV2TermStatsAtRoot(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName, term string) (textV2TermStatsValue, error) {
-	raw, ok, err := collectionGetAppendAtCatalogRoot(snap, catalog, rootName, encodeTextV2TermStatsKey(term), nil)
+	raw, ok, err := textMutationCodecRecordAtRoot(snap, catalog, rootName, encodeTextV2TermStatsKey(term))
 	if err != nil {
 		return textV2TermStatsValue{}, err
 	}
@@ -628,7 +719,7 @@ func readTextV2TermStatsAtRoot(snap *backenddb.Snapshot, catalog *collectionCata
 }
 
 func readTextV2FieldStatsAtRoot(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName, field string) (textV2FieldStatsValue, error) {
-	raw, ok, err := collectionGetAppendAtCatalogRoot(snap, catalog, rootName, encodeTextV2FieldStatsKey(field), nil)
+	raw, ok, err := textMutationCodecRecordAtRoot(snap, catalog, rootName, encodeTextV2FieldStatsKey(field))
 	if err != nil {
 		return textV2FieldStatsValue{}, err
 	}
@@ -648,6 +739,10 @@ func analyzeTextIndexStoredDocumentWithAnalysis(def TextIndexDefinition, documen
 	if err != nil {
 		return textDocumentStateValue{}, textAnalyzedDocument{}, err
 	}
+	if opts.textMaterializationAdmit != nil {
+		state, err := nativeTextDocumentState(def, jsonDocument, opts)
+		return state, textAnalyzedDocument{}, err
+	}
 	analysis, err := analyzeTextIndexDocument(def, jsonDocument)
 	if err != nil {
 		return textDocumentStateValue{}, textAnalyzedDocument{}, err
@@ -657,6 +752,9 @@ func analyzeTextIndexStoredDocumentWithAnalysis(def TextIndexDefinition, documen
 
 func textMutationNewStateAndAnalysis(def TextIndexDefinition, mutation textDocumentMutation, opts collectionOptions) (textDocumentStateValue, textAnalyzedDocument, error) {
 	if mutation.preparedNew != nil {
+		if opts.textMaterializationAdmit != nil {
+			return *mutation.preparedNew, textAnalyzedDocument{}, nil
+		}
 		return *mutation.preparedNew, textAnalysisFromDocumentState(*mutation.preparedNew), nil
 	}
 	if p := opts.typedProjection; p != nil && p.typedRows != nil && !p.legacyTyped {
@@ -670,14 +768,30 @@ func textMutationNewStateAndAnalysis(def TextIndexDefinition, mutation textDocum
 	return analyzeTextIndexStoredDocumentWithAnalysis(def, mutation.newDocument, opts)
 }
 
-func loadTextDocumentStateForMutation(snap *backenddb.Snapshot, catalog *collectionCatalog, def TextIndexDefinition, documentID, fallbackDocument []byte, opts collectionOptions) (textDocumentStateValue, error) {
+func loadTextDocumentStateForMutation(snap *backenddb.Snapshot, catalog *collectionCatalog, def TextIndexDefinition, documentID, fallbackDocument []byte, opts collectionOptions, preparedOld *textDocumentStateValue) (textDocumentStateValue, error) {
 	stateRootName := collectionTextStateRootName(catalog.meta.Name, def.Name)
 	stateKey := encodeTextStateKey(documentID)
-	raw, ok, err := collectionGetAppendAtCatalogRoot(snap, catalog, stateRootName, stateKey, nil)
+	raw, ok, err := textMutationCodecRecordAtRoot(snap, catalog, stateRootName, stateKey)
 	if err != nil {
 		return textDocumentStateValue{}, err
 	}
 	if ok {
+		if catalog.nativeText != nil && catalog.nativeText.mutationCodecs {
+			state, err := decodeTextDocumentStateValueAdmitted(raw, catalog.nativeText.admit)
+			if err != nil {
+				return textDocumentStateValue{}, err
+			}
+			// The opening-derived downstream promise applies only to exactly
+			// that state. Arbitrary parseable persisted state retains the
+			// original general record envelope before any reducer key/table
+			// effect. This does not reject mismatches or refund decode custody.
+			if preparedOld == nil || !textDocumentStatesEqual(state, *preparedOld) {
+				if err := catalog.nativeText.admitRecord(memtable.COWAllocationCharge(uint64(len(raw)))); err != nil {
+					return textDocumentStateValue{}, err
+				}
+			}
+			return state, nil
+		}
 		return decodeTextDocumentStateValue(raw)
 	}
 	if fallbackDocument != nil {
@@ -686,30 +800,82 @@ func loadTextDocumentStateForMutation(snap *backenddb.Snapshot, catalog *collect
 	return textDocumentStateValue{}, errMalformedTextStorage("missing text-state for collection %q index %q document %q", catalog.meta.Name, def.Name, string(documentID))
 }
 
-func deleteTextPostingsForDocument(table memtable.Table, documentID []byte, state textDocumentStateValue) int {
-	if table == nil {
-		return 0
+// Equality borrows both owned states and allocates no lookup or sorting lane.
+// Check every decoded member, including zero-term fields and zero-frequency
+// terms. A different ordering simply keeps the conservative general promise.
+func textDocumentStatesEqual(a, b textDocumentStateValue) bool {
+	if len(a.Fields) != len(b.Fields) {
+		return false
 	}
-	terms := textDocumentStateTerms(state)
+	for i, field := range a.Fields {
+		other := b.Fields[i]
+		if field.Field != other.Field || field.Length != other.Length || len(field.Terms) != len(other.Terms) {
+			return false
+		}
+		for j, term := range field.Terms {
+			compared := other.Terms[j]
+			if term.Term != compared.Term || term.Frequency != compared.Frequency || !slices.Equal(term.Positions, compared.Positions) || !slices.Equal(term.Offsets, compared.Offsets) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func deleteTextPostingsForDocument(table memtable.Table, documentID []byte, state textDocumentStateValue, admit func(uint64) error) (int, error) {
+	if table == nil {
+		return 0, nil
+	}
+	terms, err := textDocumentStateTerms(state, admit)
+	if err != nil {
+		return 0, err
+	}
 	for _, term := range terms {
 		table.DeleteSteal(encodeTextPostingKey(term, documentID))
 	}
-	return len(terms)
+	return len(terms), nil
 }
-
-func textDocumentStateTerms(state textDocumentStateValue) []string {
-	seen := make(map[string]struct{})
+func textDocumentStateTerms(state textDocumentStateValue, admit func(uint64) error) ([]string, error) {
+	seen := textValues[struct{}]{admit: admit}
 	for _, field := range state.Fields {
 		for _, term := range field.Terms {
-			seen[term.Term] = struct{}{}
+			if err := seen.set(term.Term, struct{}{}); err != nil {
+				return nil, err
+			}
 		}
 	}
-	terms := make([]string, 0, len(seen))
-	for term := range seen {
-		terms = append(terms, term)
+	terms, err := seen.keys()
+	if err != nil {
+		return nil, err
 	}
 	sort.Strings(terms)
-	return terms
+	return terms, nil
+}
+func addNativeTextPostingsForState(table memtable.Table, id []byte, state textDocumentStateValue, admit func(uint64) error) error {
+	byTerm := textValues[textPostingValue]{admit: admit}
+	for _, field := range state.Fields {
+		for _, term := range field.Terms {
+			posting := byTerm.get(term.Term)
+			posting.TermFrequency += term.Frequency
+			var err error
+			posting.Fields, err = appendTextConstructor(posting.Fields, textPostingFieldValue{Field: field.Field, Frequency: term.Frequency, Positions: term.Positions, Offsets: term.Offsets}, admit)
+			if err != nil {
+				return err
+			}
+			if err = byTerm.set(term.Term, posting); err != nil {
+				return err
+			}
+		}
+	}
+	terms, err := byTerm.keys()
+	if err != nil {
+		return err
+	}
+	sort.Strings(terms)
+	for _, term := range terms {
+		table.SetSteal(encodeTextPostingKey(term, id), encodeTextPostingValue(byTerm.get(term)))
+	}
+	return nil
 }
 
 func textAnalysisFromDocumentState(state textDocumentStateValue) textAnalyzedDocument {
@@ -729,45 +895,42 @@ func textAnalysisFromDocumentState(state textDocumentStateValue) textAnalyzedDoc
 	return analysis
 }
 
-func (d *textStatsDelta) addState(state textDocumentStateValue, sign int64) {
+func (d *textStatsDelta) addState(state textDocumentStateValue, sign int64) error {
 	if sign == 0 {
-		return
+		return nil
 	}
-	d.Documents += sign
-	if d.Terms == nil {
-		d.Terms = make(map[string]textStatsTermDelta)
-	}
-	if d.Fields == nil {
-		d.Fields = make(map[string]textStatsFieldDelta)
-	}
-	seenTerms := make(map[string]uint64)
+	seen := textValues[uint64]{admit: d.Terms.admit}
 	for _, field := range state.Fields {
-		fieldDelta := d.Fields[field.Field]
-		fieldDelta.DocumentCount += sign
-		fieldDelta.TotalTokenCount += signedTextDelta(field.Length, sign)
-		d.Fields[field.Field] = fieldDelta
+		value := d.Fields.get(field.Field)
+		value.DocumentCount += sign
+		value.TotalTokenCount += signedTextDelta(field.Length, sign)
+		if err := d.Fields.set(field.Field, value); err != nil {
+			return err
+		}
 		for _, term := range field.Terms {
-			seenTerms[term.Term] += uint64(term.Frequency)
+			if err := seen.set(term.Term, seen.get(term.Term)+uint64(term.Frequency)); err != nil {
+				return err
+			}
 		}
 	}
-	for term, freq := range seenTerms {
-		termDelta := d.Terms[term]
-		termDelta.DocumentFrequency += sign
-		termDelta.TotalTermFrequency += signedTextDeltaUint64(freq, sign)
-		d.Terms[term] = termDelta
+	for term, frequency := range seen.all {
+		value := d.Terms.get(term)
+		value.DocumentFrequency += sign
+		value.TotalTermFrequency += signedTextDeltaUint64(frequency, sign)
+		if err := d.Terms.set(term, value); err != nil {
+			return err
+		}
 	}
+	d.Documents += sign
+	return nil
 }
-
-func (d *textStatsDelta) addPostingBlocks(blockCounts map[string]uint64) {
-	if len(blockCounts) == 0 {
-		return
+func (d *textStatsDelta) addPostingBlocks(counts textValues[uint64]) error {
+	for term, count := range counts.all {
+		if err := d.PostingBlocks.set(term, d.PostingBlocks.get(term)+signedTextDeltaUint64(count, 1)); err != nil {
+			return err
+		}
 	}
-	if d.PostingBlocks == nil {
-		d.PostingBlocks = make(map[string]int64, len(blockCounts))
-	}
-	for term, count := range blockCounts {
-		d.PostingBlocks[term] += signedTextDeltaUint64(count, 1)
-	}
+	return nil
 }
 
 func signedTextDelta(value uint32, sign int64) int64 {
@@ -802,8 +965,11 @@ func buildTextStatsDeltaTable(snap *backenddb.Snapshot, catalog *collectionCatal
 		}
 		table.SetSteal(encodeTextStatsCorpusKey(), encodeTextStatsCorpusValue(textStatsCorpusValue{DocumentCount: next}))
 	}
-	terms := make([]string, 0, len(delta.Terms))
-	for term, termDelta := range delta.Terms {
+	if err := admitLocalIDArray(delta.Terms.admit, delta.Terms.len(), uint64(unsafe.Sizeof(string("")))); err != nil {
+		return err
+	}
+	terms := make([]string, 0, delta.Terms.len())
+	for term, termDelta := range delta.Terms.all {
 		if termDelta.DocumentFrequency == 0 && termDelta.TotalTermFrequency == 0 {
 			continue
 		}
@@ -811,7 +977,7 @@ func buildTextStatsDeltaTable(snap *backenddb.Snapshot, catalog *collectionCatal
 	}
 	sort.Strings(terms)
 	for _, term := range terms {
-		termDelta := delta.Terms[term]
+		termDelta := delta.Terms.get(term)
 		current, err := readTextStatsTermAtRoot(snap, catalog, rootName, term)
 		if err != nil {
 			return err
@@ -831,8 +997,11 @@ func buildTextStatsDeltaTable(snap *backenddb.Snapshot, catalog *collectionCatal
 			table.SetSteal(key, encodeTextStatsTermValue(textStatsTermValue{DocumentFrequency: df, TotalTermFrequency: tf}))
 		}
 	}
-	fields := make([]string, 0, len(delta.Fields))
-	for field, fieldDelta := range delta.Fields {
+	if err := admitLocalIDArray(delta.Fields.admit, delta.Fields.len(), uint64(unsafe.Sizeof(string("")))); err != nil {
+		return err
+	}
+	fields := make([]string, 0, delta.Fields.len())
+	for field, fieldDelta := range delta.Fields.all {
 		if fieldDelta.DocumentCount == 0 && fieldDelta.TotalTokenCount == 0 {
 			continue
 		}
@@ -840,7 +1009,7 @@ func buildTextStatsDeltaTable(snap *backenddb.Snapshot, catalog *collectionCatal
 	}
 	sort.Strings(fields)
 	for _, field := range fields {
-		fieldDelta := delta.Fields[field]
+		fieldDelta := delta.Fields.get(field)
 		current, err := readTextStatsFieldAtRoot(snap, catalog, rootName, field)
 		if err != nil {
 			return err
@@ -864,7 +1033,7 @@ func buildTextStatsDeltaTable(snap *backenddb.Snapshot, catalog *collectionCatal
 }
 
 func readTextStatsCorpusAtRoot(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string) (textStatsCorpusValue, error) {
-	raw, ok, err := collectionGetAppendAtCatalogRoot(snap, catalog, rootName, encodeTextStatsCorpusKey(), nil)
+	raw, ok, err := textMutationCodecRecordAtRoot(snap, catalog, rootName, encodeTextStatsCorpusKey())
 	if err != nil {
 		return textStatsCorpusValue{}, err
 	}
@@ -875,7 +1044,7 @@ func readTextStatsCorpusAtRoot(snap *backenddb.Snapshot, catalog *collectionCata
 }
 
 func readTextStatsTermAtRoot(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName, term string) (textStatsTermValue, error) {
-	raw, ok, err := collectionGetAppendAtCatalogRoot(snap, catalog, rootName, encodeTextStatsTermKey(term), nil)
+	raw, ok, err := textMutationCodecRecordAtRoot(snap, catalog, rootName, encodeTextStatsTermKey(term))
 	if err != nil {
 		return textStatsTermValue{}, err
 	}
@@ -886,7 +1055,7 @@ func readTextStatsTermAtRoot(snap *backenddb.Snapshot, catalog *collectionCatalo
 }
 
 func readTextStatsFieldAtRoot(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName, field string) (textStatsFieldValue, error) {
-	raw, ok, err := collectionGetAppendAtCatalogRoot(snap, catalog, rootName, encodeTextStatsFieldKey(field), nil)
+	raw, ok, err := textMutationCodecRecordAtRoot(snap, catalog, rootName, encodeTextStatsFieldKey(field))
 	if err != nil {
 		return textStatsFieldValue{}, err
 	}

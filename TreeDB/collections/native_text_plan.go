@@ -17,8 +17,9 @@ import (
 	"github.com/snissn/gomap/TreeDB/node"
 )
 
-// Analyzer option normalization constructs stopword slices/maps on every
-// analysis call. Bound those and field-name/runtime headers from the captured
+// Legacy analyzer option normalization constructs stopword slices/maps on every
+// analysis call. Preserve that original declaration promise; native options now
+// additionally admit their concrete sorted typed backing. Bound headers from the captured
 // declaration independently of document/query bytes.
 func nativeTextDefinitionCharge(def TextIndexDefinition, calls uint64) (uint64, error) {
 	size := uint64(len(def.Fields)) + 1
@@ -86,35 +87,25 @@ func nativeTextRootValueTermBound(def TextIndexDefinition, value jsonParserIndex
 	if value.valueType != jsonparser.String || def.Analyzer != TextAnalyzerSimple || bytes.IndexByte(value.raw, '\\') >= 0 {
 		return (uint64(len(value.raw)) + 1) / 2, nil
 	}
-	tokens := nativeTextRootValueTokenBound(def, value)
 	definition, err := nativeTextDefinitionCharge(def, 1)
-	if err != nil || tokens > ^uint64(0)/2 {
-		return 0, memtable.ErrCOWCapacity
+	if err != nil {
+		return 0, err
 	}
 	var charge nativeTextAdmissionSum
 	charge.add(1, definition)
 	charge.array(1, uint64(unsafe.Sizeof(textTermAccumulator{})))
-	charge.array(tokens, uint64(unsafe.Sizeof(textAnalyzedTerm{})))
-	charge.array(uint64(len(value.raw)), 1) // owned analyzer input string
-	// Lowercased UTF-8 is at most twice the source bytes. Byte-slice growth is
-	// at least1.25x; the final rounded capacity is at most4*output+16, so all
-	// old capacities sum to at most5 times that. With AllocationCharge(c)
-	// <=2*c+16 and at most output allocations,128*n+256*T covers every
-	// current/discarded Builder backing, including repeated tokens.
-	charge.add(uint64(len(value.raw)), 128)
-	charge.add(tokens, 256)
-	charge.mapEntries(2*tokens, uint64(unsafe.Sizeof(string("")))+uint64(unsafe.Sizeof(int(0))))
+	charge.array(uint64(len(value.raw)), 1)
 	if charge.bad {
 		return 0, memtable.ErrCOWCapacity
 	}
 	if err = admit(charge.total); err != nil {
-		return 0, fmt.Errorf("collections: native text term census workspace: %w", err)
+		return 0, err
 	}
-	// Preallocate the existing accumulator's term lane to the unfiltered run
-	// bound: stopword filtering/lowercasing cannot add terms. No slice growth,
-	// positions, offsets, output map or retained census state is constructed.
-	acc := textTermAccumulator{terms: make([]textAnalyzedTerm, 0, int(tokens))}
-	if err = analyzeTextToTermAccumulator(def.Analyzer, def.AnalyzerOptions, string(value.raw), &acc); err != nil {
+	// Actual index/normalizer/term backing is admitted before each allocation,
+	// rather than inferred from a Swiss-map cardinality envelope.
+	acc := &textTermAccumulator{admit: admit}
+	acc.terms = acc.inline[:0]
+	if err = analyzeTextToTermAccumulator(def.Analyzer, def.AnalyzerOptions, string(value.raw), acc); err != nil {
 		return 0, err
 	}
 	return uint64(len(acc.terms)), nil
@@ -183,15 +174,17 @@ func nativeTextFieldCharge(def TextIndexDefinition, source, tokens, terms, docum
 		charge.mapEntries(2*terms, str+integer)
 		charge.mapEntries(terms, str+uint64(unsafe.Sizeof((*textAnalyzedTerm)(nil))))
 	}
-	charge.mapEntries(terms, str+uint64(unsafe.Sizeof(textPostingValue{})))
-	charge.mapEntries(2*terms, str+integer)
-	charge.mapEntries(terms, str+uint64(unsafe.Sizeof([]textV2PostingBlockEntry{})))
-	charge.mapEntries(terms, str+uint64(unsafe.Sizeof([]textV2PositionFieldValue{})))
-	charge.mapEntries(terms, str+uint64(unsafe.Sizeof(uint64(0))))
-	charge.mapEntries(terms, str+uint64(unsafe.Sizeof(textStatsTermDelta{})))
-	charge.mapEntries(terms, str)
-	charge.mapEntries(terms, str+uint64(unsafe.Sizeof(uint64(0))))
-	charge.mapEntries(terms, str+uint64(unsafe.Sizeof(int64(0))))
+	if !prepared {
+		charge.mapEntries(terms, str+uint64(unsafe.Sizeof(textPostingValue{})))
+		charge.mapEntries(2*terms, str+integer)
+		charge.mapEntries(terms, str+uint64(unsafe.Sizeof([]textV2PostingBlockEntry{})))
+		charge.mapEntries(terms, str+uint64(unsafe.Sizeof([]textV2PositionFieldValue{})))
+		charge.mapEntries(terms, str+uint64(unsafe.Sizeof(uint64(0))))
+		charge.mapEntries(terms, str+uint64(unsafe.Sizeof(textStatsTermDelta{})))
+		charge.mapEntries(terms, str)
+		charge.mapEntries(terms, str+uint64(unsafe.Sizeof(uint64(0))))
+		charge.mapEntries(terms, str+uint64(unsafe.Sizeof(int64(0))))
+	}
 	// Positions/offsets are per occurrence, even with one repeated term.
 	// Analysis append growth and both V2 copy+encoder-clone cohorts coexist;
 	// state terms borrow these arrays. Charge flags independently.
@@ -365,8 +358,9 @@ func nativeTextPrepareCurrent(def TextIndexDefinition, values []jsonParserIndexV
 }
 
 type nativeTextPreparation struct {
-	states    []textDocumentStateValue
-	mutations []textDocumentMutation
+	openingStates []textDocumentStateValue
+	states        []textDocumentStateValue
+	mutations     []textDocumentMutation
 }
 
 func nativeTextSourceCharge(meta CollectionMeta, rows []nativeJSONRow, opts collectionOptions, admit func(uint64) error) (uint64, error) {
@@ -452,13 +446,26 @@ func nativeTextSourceChargePrepared(meta CollectionMeta, rows []nativeJSONRow, o
 				if err != nil {
 					return 0, err
 				}
-				if preparation != nil && imageIndex == 1 && handled && nativeTextCanPrepare(def, opts, values) {
-					state, err := nativeTextPrepareCurrent(def, values, admit)
+				if preparation != nil {
+					var state textDocumentStateValue
+					if handled && nativeTextCanPrepare(def, opts, values) {
+						state, err = nativeTextPrepareCurrent(def, values, admit)
+					} else if handled {
+						state, err = nativeTextPrepareSelected(def, values, admit)
+					} else {
+						state, err = nativeTextNestedDocumentState(def, doc, opts)
+					}
 					if err != nil {
 						return 0, err
 					}
-					preparation.states[rowIndex] = state
-					preparation.mutations[rowIndex].preparedNew = &preparation.states[rowIndex]
+					if imageIndex == 0 && preparation.openingStates != nil {
+						preparation.openingStates[rowIndex] = state
+						preparation.mutations[rowIndex].preparedOld = &preparation.openingStates[rowIndex]
+					}
+					if imageIndex == 1 {
+						preparation.states[rowIndex] = state
+						preparation.mutations[rowIndex].preparedNew = &preparation.states[rowIndex]
+					}
 					var distinct uint64
 					for _, field := range state.Fields {
 						var normalized, occurrences uint64
@@ -615,10 +622,14 @@ func nativeTextSourceChargePrepared(meta CollectionMeta, rows []nativeJSONRow, o
 	return total, nil
 }
 
-// One full-source fallback decode cohort. Containers, interface/map/slice/string
-// headers and growth are bounded per source byte; parser/reader and the initial
-// 512-byte decoder buffer are charged separately for even tiny documents. Path
-// splitting allocates string descriptors once per declared field per decode.
+// One maintained decoder/conversion cohort. The unchanged source envelope
+// covers RawMessage copying, Token key/interface/string objects, scanner/token
+// stacks and byte-buffer growth, plus scalar unquoting and array joins. Native
+// nested callers admit a separate cohort for EACH visited object before Token
+// or Decode; no recursive Swiss object map is constructed. The legacy sizing
+// wrapper retains its original full-object allowance. Decoder/reader and the
+// initial512-byte buffer are separate even for tiny inputs; path descriptors
+// are bounded from the complete captured declaration. No coefficient is cut.
 func nativeTextNestedDecoderCharge(def TextIndexDefinition, source uint64) (uint64, error) {
 	charge := memtable.COWAllocationCharge
 	unit := 4 * (uint64(unsafe.Sizeof(any(nil))) + uint64(unsafe.Sizeof(string(""))) + uint64(unsafe.Sizeof([]any{})))
@@ -773,18 +784,17 @@ func nativeTextMutationDomains(snap *backenddb.Snapshot, catalog *collectionCata
 	var policies []backenddb.OrderedRootStoragePolicy
 	var tables []memtable.Table
 	defer func() { resetCollectionTables(tables) }()
-	var baseRootIDs map[string]uint64
 	for _, def := range catalog.meta.TextIndexes {
 		// Prepared state is local to this definition and this captured plan.
 		// The maintained reducer receives no state prepared for another index.
 		var descriptors nativeTextAdmissionSum
 		descriptors.array(1, uint64(unsafe.Sizeof(CollectionMeta{}))+uint64(unsafe.Sizeof(TextIndexDefinition{})))
 		descriptors.array(uint64(len(rows)), uint64(unsafe.Sizeof(textDocumentMutation{})))
-		canPrepare := nativeTextCanPrepare(def, opts, nil)
-		if canPrepare {
+		descriptors.array(uint64(len(rows)), uint64(unsafe.Sizeof(textDocumentStateValue{})))
+		if def.Version == TextIndexVersionV1 {
 			descriptors.array(uint64(len(rows)), uint64(unsafe.Sizeof(textDocumentStateValue{})))
-			descriptors.array(1, uint64(unsafe.Sizeof(nativeTextPreparation{})))
 		}
+		descriptors.array(1, uint64(unsafe.Sizeof(nativeTextPreparation{})))
 		if descriptors.bad {
 			return nil, memtable.ErrCOWCapacity
 		}
@@ -795,9 +805,11 @@ func nativeTextMutationDomains(snap *backenddb.Snapshot, catalog *collectionCata
 		for i, row := range rows {
 			mutations[i] = textDocumentMutation{documentID: row.id, oldDocument: row.opening, deleteOld: row.opening != nil, newDocument: row.current, setNew: row.current != nil}
 		}
-		var preparation *nativeTextPreparation
-		if canPrepare {
-			preparation = &nativeTextPreparation{states: make([]textDocumentStateValue, len(rows)), mutations: mutations}
+		preparation := &nativeTextPreparation{states: make([]textDocumentStateValue, len(rows)), mutations: mutations}
+		// Only V1 reads persisted state. Its already-analyzed opening backing
+		// remains within this private phase; admit the descriptor lane above.
+		if def.Version == TextIndexVersionV1 {
+			preparation.openingStates = make([]textDocumentStateValue, len(rows))
 		}
 		oneMeta := catalog.meta
 		oneDefinition := [1]TextIndexDefinition{def}
@@ -822,11 +834,7 @@ func nativeTextMutationDomains(snap *backenddb.Snapshot, catalog *collectionCata
 		if active == 0 {
 			continue
 		}
-		if baseRootIDs == nil {
-			// The admitted table/control envelope includes this existing map.
-			baseRootIDs = make(map[string]uint64)
-		}
-		if err = appendSingleTextIndexMutationDeltas(snap, catalog, opts, def, mutations[:active], &names, baseRootIDs, &policies, &tables); err != nil {
+		if err = appendSingleTextIndexMutationDeltas(snap, catalog, opts, def, mutations[:active], &names, nil, &policies, &tables); err != nil {
 			return nil, err
 		}
 	}

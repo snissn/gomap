@@ -8,6 +8,7 @@ import (
 	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
 )
 
@@ -93,6 +94,7 @@ func (db *DB) runPrivateCOWLeafPackSlice() (attempted bool, retErr error) {
 		return false, backenddb.ErrClosed
 	}
 	original, live := cut.basis.snapshot.StateToken()
+	through := rootpublication.SealedPrefix{LogicalSequence: cut.basis.logicalSeq, CanonicalLSN: original.AppliedCommandLSN}
 	releaseErr := db.cow.releaseCut(cut)
 	if releaseErr != nil {
 		return false, releaseErr
@@ -184,6 +186,15 @@ func (db *DB) runPrivateCOWLeafPackSlice() (attempted bool, retErr error) {
 		db.storeVlogGenerationLeafPackLastSkipReason(stats.SkipReason)
 	} else {
 		db.storeVlogGenerationLeafPackLastSkipReason("")
+	}
+	// A previous slice may have adopted an accepted pack and then timed out or
+	// returned a finalization error before converging its recovery slot. Retry
+	// that lawful work even if this plan is a no-op, using the existing backend
+	// predicate and this slice's captured applied endpoint. No extra timeout,
+	// pending owner or logical coverage is created. Mutable suffixes survive;
+	// newer frozen suffixes defer to their own checkpoint as before.
+	if err := db.refreshCOWAutomaticCheckpointFallback(ctx, through); err != nil {
+		return true, db.privateCOWLeafMaintenanceError(err)
 	}
 	// Even a no-op pack plan reaches GC: a later checkpoint may have released
 	// the fallback/pin that prevented an earlier retirement.

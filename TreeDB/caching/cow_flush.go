@@ -140,7 +140,9 @@ func (db *DB) installPreparedCOWBasis(basis *cowBackendBasis, covered, next *cow
 	if covered != nil {
 		basis.logicalSeq = covered.frozenLogicalSeq
 	} else {
-		basis.logicalSeq = old.logicalSeq
+		// Nil coverage changes only the physical Snapshot. A visible mutable or
+		// frozen suffix still belongs to the cut, not to this applied basis.
+		basis.logicalSeq = old.basis.logicalSeq
 	}
 	next.visibleCommandLSN, next.logicalSeq, next.basis = old.visibleCommandLSN, old.logicalSeq, basis
 	next.frozenLogicalSeq = old.frozenLogicalSeq

@@ -66,12 +66,17 @@ func TestOwnedSuccessorPrimarySelectionAndErrors(t *testing.T) {
 			tr := New(p, nil, root)
 			var key, leaf [page.PageSize]byte
 			var scratch OwnedSuccessorScratch
+			scratch.BeginLeafBatch()
+			defer scratch.EndLeafBatch()
 			got, ok, e := tr.SeekGEWithFixedScratch([]byte("b"), nil, key[:], leaf[:], &scratch, nil)
 			if kind == "bad_base" || kind == "bad_component" {
 				if e == nil {
 					t.Fatal("corrupt operand accepted")
 				}
 				return
+			}
+			if scratch.batchLeaf != nil {
+				t.Fatal("PRIMARY retained a reusable leaf")
 			}
 			if e != nil || !ok || string(got.Key) != "c" {
 				t.Fatalf("entry=%+v found=%v err=%v", got, ok, e)

@@ -30,6 +30,22 @@ func TestNativeTypedConstructionPressureMatchesBuildReservation(t *testing.T) {
 	if _, _, err = col.InsertTypedBatchWithStats(nativeTypedGroupBatch("pending-pressure")); err != nil {
 		t.Fatal(err)
 	}
+	// Two public collections share one sequential operation workspace, while
+	// retaining both original member/output cohorts in the complete inventory.
+	otherMeta := CollectionMeta{Name: "second-pressure", Options: CollectionOptions{ColumnStore: &ColumnStoreConfig{
+		Enabled: true, Columns: col.Meta().Options.ColumnStore.Columns,
+		RetainedPayload: ColumnRetainedPayloadNonColumn, RetainedPayloadEncoding: ColumnRetainedPayloadEncodingJSON,
+	}}}
+	if _, err = manager.CreateCollection(&otherMeta); err != nil {
+		t.Fatal(err)
+	}
+	other, err := manager.OpenCollection(otherMeta.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = other.InsertTypedBatchWithStats(nativeTypedGroupBatch("second-pending")); err != nil {
+		t.Fatal(err)
+	}
 	// Keep an actual pending typed catalog image in the same current state, so
 	// a missing projection charge cannot pass merely because the term is zero.
 	if _, err = manager.CreateCollection(&CollectionMeta{Name: "catalog-pressure", Options: CollectionOptions{ColumnStore: &ColumnStoreConfig{
@@ -85,8 +101,27 @@ func TestNativeTypedConstructionPressureMatchesBuildReservation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var workspace, sumWorkspace uint64
+	participating := 0
+	scanNativeBuildCollections(e, 0, func(_ uint64, c *nativeCollectionState) bool {
+		primary, ok := c.domains.Get("primary")
+		if !ok || primary.typed == nil {
+			return true
+		}
+		local, capacityErr := nativeTypedOperationWorkspaceCapacity(*c.schema.meta, false, nativeTypedGraphOnly(primary.typed))
+		if capacityErr != nil {
+			t.Fatal(capacityErr)
+		}
+		workspace = max(workspace, local)
+		sumWorkspace += local
+		participating++
+		return true
+	})
+	if participating != 2 || workspace == 0 || sumWorkspace <= workspace || inventory.workspace != workspace {
+		t.Fatalf("workspace must be a maximum, not sum: participants=%d max=%d sum=%d inventory=%+v", participating, workspace, sumWorkspace, inventory)
+	}
 	limits := e.maintenance.Limits()
-	want := backenddb.NativeSemanticProducerPressure{ConstructionBytes: expected, MaxInFlightBytes: limits.MaxInFlightBytes, MaxTotalBytes: limits.MaxTotalBytes, Sources: sources, MaxSources: e.allocator.Limits().MaxSources}
+	want := backenddb.NativeSemanticProducerPressure{ConstructionBytes: expected, FixedConstructionBytes: workspace, MaxInFlightBytes: limits.MaxInFlightBytes, MaxTotalBytes: limits.MaxTotalBytes, Sources: sources, MaxSources: e.allocator.Limits().MaxSources}
 	if pressure != want {
 		t.Fatalf("pressure=%+v want=%+v", pressure, want)
 	}
@@ -100,5 +135,17 @@ func TestNativeTypedConstructionPressureMatchesBuildReservation(t *testing.T) {
 	}
 	if _, err = e.NativeProducerPressure(nil); !errors.Is(err, backenddb.ErrNativeSemanticUnsupported) {
 		t.Fatalf("pending typed state accepted an unrelated/missing basis: %v", err)
+	}
+}
+
+// A graph-only typed member never opens the row/TCIM codec. It must keep the
+// original zero workspace, so advisory scheduling retains its original policy.
+func TestNativeTypedGraphOnlyConstructionWorkspaceIsZero(t *testing.T) {
+	workspace, err := nativeTypedOperationWorkspaceCapacity(CollectionMeta{}, false, true)
+	if err != nil || workspace != 0 {
+		t.Fatalf("graph-only workspace=%d: %v", workspace, err)
+	}
+	if _, err := nativeTypedOperationWorkspaceCapacity(CollectionMeta{}, true, true); !errors.Is(err, backenddb.ErrNativeSemanticUnsupported) {
+		t.Fatalf("unsupported graph-only compaction accepted: %v", err)
 	}
 }

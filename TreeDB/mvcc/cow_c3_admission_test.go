@@ -243,7 +243,9 @@ func TestC3ReadCutFailureAndClose(t *testing.T) {
 			var err error
 			if stage == "iterator_build" || stage == "iterator_close" {
 				var it *VersionIterator
-				it, err = store.IterateVersions(VersionIteratorOptions{ExactKey: []byte("a")})
+				// A finite ceiling deliberately exercises raw construction, even when
+				// uncapped exact histories use the captured successor prefix.
+				it, err = store.IterateVersions(VersionIteratorOptions{ExactKey: []byte("a"), ReadTimestamp: 100})
 				if err == nil {
 					err = it.Close()
 				}
@@ -380,6 +382,9 @@ func TestC3ReadCutCapacityRefusalHasNoFallback(t *testing.T) {
 	}
 	if _, err := store.IterateVersions(VersionIteratorOptions{}); !errors.Is(err, memtable.ErrCOWCapacity) {
 		t.Fatalf("iterator masked admission: %v", err)
+	}
+	if _, err := store.IterateVersions(VersionIteratorOptions{ExactKey: []byte("a")}); !errors.Is(err, memtable.ErrCOWCapacity) {
+		t.Fatalf("exact iterator masked admission: %v", err)
 	}
 	for _, cut := range cuts {
 		if err := cut.Close(); err != nil {

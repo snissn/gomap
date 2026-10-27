@@ -310,6 +310,8 @@ func (idx *VectorIndex) releaseNativeHNSW() {
 	idx.scalarColumns = nil
 	idx.scalarRuntimes = nil
 	idx.scalarDefinitions = nil
+	idx.nativeScalarPlans = nil
+	idx.nativeScalarPlanCount, idx.nativeScalarPlanBytes = 0, 0
 	idx.insertScratch = vectorIndexSearchScratch{}
 	idx.insertQuantScratch = nil
 	idx.dirtyNodes = nil
@@ -1407,6 +1409,9 @@ func (idx *VectorIndex) swapNativeHNSW(other *VectorIndex) {
 	idx.nativeHNSWSchemaState, other.nativeHNSWSchemaState = other.nativeHNSWSchemaState, idx.nativeHNSWSchemaState
 	idx.nativeHNSWLease, other.nativeHNSWLease = other.nativeHNSWLease, idx.nativeHNSWLease
 	idx.nativeHNSWCharge, other.nativeHNSWCharge = other.nativeHNSWCharge, idx.nativeHNSWCharge
+	idx.nativeScalarPlans, other.nativeScalarPlans = other.nativeScalarPlans, idx.nativeScalarPlans
+	idx.nativeScalarPlanCount, other.nativeScalarPlanCount = other.nativeScalarPlanCount, idx.nativeScalarPlanCount
+	idx.nativeScalarPlanBytes, other.nativeScalarPlanBytes = other.nativeScalarPlanBytes, idx.nativeScalarPlanBytes
 	idx.nativeHNSWConstructionPeak, other.nativeHNSWConstructionPeak = other.nativeHNSWConstructionPeak, idx.nativeHNSWConstructionPeak
 	idx.nativeHNSWIDBytes, other.nativeHNSWIDBytes = other.nativeHNSWIDBytes, idx.nativeHNSWIDBytes
 	idx.nativeHNSWIncarnation, other.nativeHNSWIncarnation = other.nativeHNSWIncarnation, idx.nativeHNSWIncarnation

@@ -527,11 +527,11 @@ type nativeColumnGraphPreparedSearchAcquisition struct {
 	err      error
 }
 
-func (c *Collection) searchNativeColumnGraphAtReadView(opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer, view *CollectionReadView, allowSet hybridScalarAllowSet) (response VectorIndexSearchResponse, resultErr error) {
+func (c *Collection) searchNativeColumnGraphAtReadView(opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer, view *CollectionReadView, allowSet hybridScalarIDs) (response VectorIndexSearchResponse, resultErr error) {
 	return c.searchNativeColumnGraphAtReadViewWithPrepared(opts, buffer, view, allowSet, nil)
 }
 
-func (c *Collection) searchNativeColumnGraphAtReadViewWithPrepared(opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer, view *CollectionReadView, allowSet hybridScalarAllowSet, acquisition *nativeColumnGraphPreparedSearchAcquisition) (response VectorIndexSearchResponse, resultErr error) {
+func (c *Collection) searchNativeColumnGraphAtReadViewWithPrepared(opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer, view *CollectionReadView, allowSet hybridScalarIDs, acquisition *nativeColumnGraphPreparedSearchAcquisition) (response VectorIndexSearchResponse, resultErr error) {
 	if err := validateCollectionVectorIndexSearchWithBufferOptions(opts, buffer); err != nil {
 		return response, err
 	}
@@ -589,7 +589,7 @@ func (c *Collection) searchNativeColumnGraphAtReadViewWithPrepared(opts VectorIn
 	searchOpts := columnVectorGraphNativeSearchOptions{TopK: opts.TopK, EfSearch: opts.EfSearch, ScoreBatchMode: opts.scoreBatchMode, StatsMode: sm, QueryMode: columnVectorGraphNativeSearchQueryModeExact}
 	var results []columnVectorGraphNativeSearchResult
 	var work columnVectorGraphNativeSearchStats
-	if allowSet != nil {
+	if allowSet.present() {
 		results, work, err = prepared.pack.searchCosineAllowSet(opts.Query, searchOpts, allowSet, &buffer.searchScratch)
 	} else {
 		ctx := opts.Context
@@ -627,9 +627,9 @@ func (c *Collection) searchNativeVectorWithBufferReadView(opts VectorIndexSearch
 	if !ok {
 		err = ErrIndexNotFound
 	} else if def.Strategy == VectorIndexStrategyColumnGraph {
-		response, err = c.searchNativeColumnGraphAtReadView(opts, buffer, view, nil)
+		response, err = c.searchNativeColumnGraphAtReadView(opts, buffer, view, hybridScalarIDs{})
 	} else {
-		response, err = c.searchNativeHNSWAtReadView(opts, buffer, view, nil)
+		response, err = c.searchNativeHNSWAtReadView(opts, buffer, view, hybridScalarIDs{})
 	}
 	if err != nil {
 		buffer.Reset()

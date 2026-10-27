@@ -526,14 +526,29 @@ Value-log segments remain persistent storage: deletion uses existing
 reachability/pin/scanner authorities, never segment age or a second COW GC
 tracker. Retired owner cleanup occurs outside writer/admission/cut locks.
 
+Native COW online index vacuum borrows the original private backend's staging
+owner through `LockPrivateCOWStagingGuard(db.txnOwner)`, keeping the existing
+maintenance-writer, group and raw lock order. Native activation still rejects the
+unowned staging entrypoint. This changes neither accepted command identity nor
+WAL acknowledgement and does not authorize higher-level barrier callbacks on
+that private backend.
+
 Native producer pressure preparation joins at most one captured-prefix materialization
 and the original semantic cleanup frontier before consumer locks. It also inspects
 pending typed construction through an optional immutable-state inventory,
 borrowing the original retained cut and physical basis off the cut latch. That
 inspection cut is released before maintenance; it creates no snapshot or
-allocation authority. The same three-quarter watermark applies to both
-maintenance byte limits, alongside the existing byte/source/generation pressure.
-Exact final admission still applies to the incoming operation.
+allocation authority. Its complete construction inventory T includes the maximum
+operation workspace F once, because typed collections materialize sequentially.
+For each finite maintenance byte limit L, advisory scheduling applies the same
+three-quarter watermark to variable construction T-F against remaining capacity
+L-F: pressure is T-F >= (L-F)-(L-F)/4. Subtraction retains upward rounding without
+multiplication overflow. F=0 retains the original watermark; invalid T<F or F>=L
+requests maintenance conservatively. Raw reserved-byte, source, generation and
+typed-member pressure remain independent. The full T is still reported and used
+by exact final admission and original build reservations; this scheduling policy
+grants no credit or authority for an incoming write. Additional capacity refusal
+on a required public workload is a failed scheduling candidate.
 
 With an external canonical command WAL, the original actually-started automatic
 maintenance worker may supply a positive size trigger, a total-WAL-byte hook,

@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"math"
+	"slices"
 	"sort"
+	"strings"
 	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -468,7 +470,7 @@ func (idx *VectorIndex) insertVectorWithNativeScalarLocked(documentID []byte, ve
 type nativeScalarFilterExecution struct {
 	identity             NativeScalarFilterPlan
 	clauses              []nativeScalarClause
-	finiteIDs            hybridScalarAllowSet
+	finiteIDs            hybridScalarIDs
 	seedIDs              []string
 	probeIDs             uint64
 	probeTruncated       uint64
@@ -536,6 +538,194 @@ func (idx *VectorIndex) nativeScalarPlanCacheGeneration() (uint64, uint64, bool)
 type nativeScalarPlanCacheEntry struct {
 	plan  *nativeScalarFilterExecution
 	bytes uint64
+}
+
+// Native plans reuse the legacy generation/limits and compiled clauses, but
+// no allocating identity builders or unreceipted cache maps. The current read
+// first validates against the runtime's retained schema. Slot-owned domain
+// names let hits check scalar interpretations without allocating query keys.
+type nativeRuntimeScalarPlanKey struct {
+	plan                 nativeScalarPlanCacheKey
+	incarnation, version uint64
+}
+
+type nativeRuntimeScalarPlanDomain struct {
+	name           string
+	interpretation uint64
+}
+
+type nativeRuntimeScalarPlanEntry struct {
+	key     nativeRuntimeScalarPlanKey
+	domains []nativeRuntimeScalarPlanDomain
+	plan    nativeScalarFilterExecution
+}
+
+func nativeScalarClausesEqual(a, b []nativeScalarClause) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		x, y := &a[i], &b[i]
+		if x.indexName != y.indexName || x.valueType != y.valueType ||
+			x.lowerInclusive != y.lowerInclusive || x.upperInclusive != y.upperInclusive ||
+			(x.lower == nil) != (y.lower == nil) || (x.upper == nil) != (y.upper == nil) ||
+			!bytes.Equal(x.lower, y.lower) || !bytes.Equal(x.upper, y.upper) {
+			return false
+		}
+	}
+	return true
+}
+
+func (idx *VectorIndex) nativeRuntimeScalarPlanStats(stats nativeScalarPlanCacheStats) nativeScalarPlanCacheStats {
+	stats.entries = uint64(idx.nativeScalarPlanCount)
+	stats.retainedBytes = idx.nativeScalarPlanBytes
+	return stats
+}
+
+func nativeRuntimeScalarDomainVersion(read *NativeJSONRead, name string) uint64 {
+	if domain, ok := read.collection.domains.Get(name); ok {
+		return domain.interpretation
+	}
+	return 0 // an unmaterialized empty index has no domain yet
+}
+
+// Callers retain nativeHNSWUseMu.RLock until the borrowed immutable plan is no
+// longer used. Existing idx.mu serializes publication with runtime accounting.
+func (idx *VectorIndex) nativeRuntimeScalarPlanFind(key nativeRuntimeScalarPlanKey, read *NativeJSONRead, clauses []nativeScalarClause) *nativeScalarFilterExecution {
+	for i := 0; i < idx.nativeScalarPlanCount; i++ {
+		entry := &idx.nativeScalarPlans[i]
+		if entry.key != key || !nativeScalarClausesEqual(entry.plan.clauses, clauses) {
+			continue
+		}
+		match := true
+		for _, domain := range entry.domains {
+			if nativeRuntimeScalarDomainVersion(read, domain.name) != domain.interpretation {
+				match = false
+				break
+			}
+		}
+		if match {
+			return &entry.plan
+		}
+	}
+	return nil
+}
+
+func (idx *VectorIndex) nativeRuntimeScalarPlanGet(key nativeRuntimeScalarPlanKey, read *NativeJSONRead, clauses []nativeScalarClause) (*nativeScalarFilterExecution, nativeScalarPlanCacheStats) {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	plan := idx.nativeRuntimeScalarPlanFind(key, read, clauses)
+	stats := nativeScalarPlanCacheStats{misses: 1}
+	if plan != nil {
+		stats.hits, stats.misses = 1, 0
+	}
+	return plan, idx.nativeRuntimeScalarPlanStats(stats)
+}
+
+func (idx *VectorIndex) nativeRuntimeScalarPlanIdentity(read *NativeJSONRead, generation uint64) (nativeRuntimeScalarPlanKey, bool) {
+	var key nativeRuntimeScalarPlanKey
+	if idx == nil || read == nil || idx.validateNativeHNSWRead(read) != nil {
+		return key, false
+	}
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	key = nativeRuntimeScalarPlanKey{
+		plan: nativeScalarPlanCacheKey{sourceGeneration: generation, vectorGeneration: idx.sourceDocumentGeneration, vectorMutationSeq: idx.mutationSeq,
+			probeLimit: nativeScalarProbeLimit, exactSafetyCap: nativeScalarExactSafetyCap, annSeedProbeLimit: nativeScalarANNSeedProbeLimit, annSeedLimit: nativeScalarANNSeedLimit},
+		incarnation: idx.nativeHNSWIncarnation, version: idx.nativeHNSWVersion,
+	}
+	return key, idx.sourceDocumentRootsValid && idx.sourceDocumentGeneration == generation
+}
+
+// Charge actual independent flat-index/header/cell, string and array cohorts
+// before retained construction. Existing slot/byte limits and the runtime's
+// actual lease bound optional retention without a separate ID-count cutoff.
+func nativeRuntimeScalarPlanCharge(plan *nativeScalarFilterExecution, array bool) (uint64, bool) {
+	var total uint64
+	add := func(count int, size uint64) bool {
+		if count < 0 || size == 0 || uint64(count) > uint64(int(^uint(0)>>1))/size {
+			return false
+		}
+		n := memtable.COWAllocationCharge(uint64(count) * size)
+		if n > ^uint64(0)-total {
+			return false
+		}
+		total += n
+		return true
+	}
+	if array && !add(1, uint64(unsafe.Sizeof([nativeScalarPlanCacheMaxEntries]nativeRuntimeScalarPlanEntry{}))) {
+		return 0, false
+	}
+	if !add(len(plan.clauses), uint64(unsafe.Sizeof(nativeRuntimeScalarPlanDomain{}))) ||
+		!add(len(plan.clauses), uint64(unsafe.Sizeof(nativeScalarClause{}))) {
+		return 0, false
+	}
+	for _, clause := range plan.clauses {
+		if len(clause.indexName) > int(^uint(0)>>1)-len("index/") ||
+			!add(len("index/")+len(clause.indexName), 1) ||
+			!add(len(clause.indexName), 1) || !add(len(clause.valueType), 1) ||
+			!add(len(clause.lower), 1) || !add(len(clause.upper), 1) {
+			return 0, false
+		}
+	}
+	indexCharge, err := localIDIndexCharge(plan.finiteIDs.len())
+	if err != nil || indexCharge > ^uint64(0)-total {
+		return 0, false
+	}
+	total += indexCharge
+	for id := range plan.finiteIDs.all {
+		if !add(len(id), 1) {
+			return 0, false
+		}
+	}
+	return total, true
+}
+
+func (idx *VectorIndex) nativeRuntimeScalarPlanPut(key nativeRuntimeScalarPlanKey, read *NativeJSONRead, plan *nativeScalarFilterExecution, stats nativeScalarPlanCacheStats) nativeScalarPlanCacheStats {
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+	// No eviction or replacement: an older query may still borrow any slot.
+	if idx.nativeHNSWLease == nil || idx.nativeScalarPlanCount == nativeScalarPlanCacheMaxEntries ||
+		(plan.identity != NativeScalarFilterPlanCompleteExact && plan.identity != NativeScalarFilterPlanCompleteFinite) || len(plan.seedIDs) != 0 ||
+		idx.nativeRuntimeScalarPlanFind(key, read, plan.clauses) != nil {
+		return idx.nativeRuntimeScalarPlanStats(stats)
+	}
+	charge, ok := nativeRuntimeScalarPlanCharge(plan, idx.nativeScalarPlans == nil)
+	if !ok || charge > nativeScalarPlanCacheMaxBytes-idx.nativeScalarPlanBytes || charge > ^uint64(0)-idx.nativeHNSWCharge {
+		return idx.nativeRuntimeScalarPlanStats(stats)
+	}
+	if err := idx.nativeHNSWLease.Resize(idx.nativeHNSWCharge + charge); err != nil {
+		return idx.nativeRuntimeScalarPlanStats(stats)
+	}
+	idx.nativeHNSWCharge += charge
+	idx.nativeScalarPlanBytes += charge
+	if idx.nativeScalarPlans == nil {
+		idx.nativeScalarPlans = new([nativeScalarPlanCacheMaxEntries]nativeRuntimeScalarPlanEntry)
+	}
+	entry := &idx.nativeScalarPlans[idx.nativeScalarPlanCount]
+	entry.key = key
+	entry.domains = make([]nativeRuntimeScalarPlanDomain, len(plan.clauses))
+	entry.plan = *plan
+	entry.plan.probeIDs, entry.plan.probeTruncated = 0, 0 // hits perform no probe
+	entry.plan.seedIDs = nil
+	entry.plan.clauses = make([]nativeScalarClause, len(plan.clauses))
+	for i, clause := range plan.clauses {
+		name := "index/" + clause.indexName
+		entry.domains[i] = nativeRuntimeScalarPlanDomain{name: name, interpretation: nativeRuntimeScalarDomainVersion(read, name)}
+		clause.indexName = strings.Clone(clause.indexName)
+		clause.valueType = IndexValueType(strings.Clone(string(clause.valueType)))
+		clause.lower, clause.upper = bytes.Clone(clause.lower), bytes.Clone(clause.upper)
+		entry.plan.clauses[i] = clause
+	}
+	// Entire independent backing and ID strings were admitted above. The exact
+	// cardinality-sized table cannot grow while copying these distinct keys.
+	owned, _ := newLocalIDIndex(plan.finiteIDs.len(), nil)
+	for id := range plan.finiteIDs.all {
+		owned.insert(strings.Clone(id), 0)
+	}
+	entry.plan.finiteIDs = nativeScalarIDs(owned)
+	idx.nativeScalarPlanCount++
+	return idx.nativeRuntimeScalarPlanStats(stats)
 }
 
 type nativeScalarPlanCacheStats struct {
@@ -636,9 +826,9 @@ func cloneNativeScalarPlanForQuery(plan *nativeScalarFilterExecution) *nativeSca
 		return plan
 	}
 	clone := *plan
-	clone.finiteIDs = make(hybridScalarAllowSet, len(plan.finiteIDs))
-	for id := range plan.finiteIDs {
-		clone.finiteIDs[id] = struct{}{}
+	clone.finiteIDs = legacyScalarIDs(make(hybridScalarAllowSet, plan.finiteIDs.len()))
+	for id := range plan.finiteIDs.all {
+		clone.finiteIDs.legacy[id] = struct{}{}
 	}
 	return &clone
 }
@@ -651,7 +841,7 @@ func nativeScalarPlanCacheEntryBytes(key nativeScalarPlanCacheKey, plan *nativeS
 	for _, clause := range plan.clauses {
 		size += uint64(64 + len(clause.indexName) + len(clause.lower) + len(clause.upper))
 	}
-	for id := range plan.finiteIDs {
+	for id := range plan.finiteIDs.all {
 		size += uint64(64 + len(id))
 	}
 	for _, id := range plan.seedIDs {
@@ -767,8 +957,8 @@ func (m *nativeScalarBoundMatcher) matches(row int, id []byte) bool {
 	if m.plan == nil {
 		return true
 	}
-	if m.plan.finiteIDs != nil {
-		if _, ok := m.plan.finiteIDs[string(id)]; !ok {
+	if m.plan.finiteIDs.present() {
+		if ok := m.plan.finiteIDs.contains(string(id)); !ok {
 			return false
 		}
 	}
@@ -828,16 +1018,16 @@ func compileNativeScalarClause(def IndexDefinition, filter HybridScalarFilter) (
 }
 
 type nativeScalarLeafProbe struct {
-	set       hybridScalarAllowSet
+	set       hybridScalarIDs
 	truncated bool
 }
 
-func boundedNativeScalarSeedIDs(set hybridScalarAllowSet, limit int) []string {
-	if limit <= 0 || len(set) == 0 {
+func boundedNativeScalarSeedIDs(set hybridScalarIDs, limit int) []string {
+	if limit <= 0 || set.len() == 0 {
 		return nil
 	}
-	ids := make([]string, 0, minInt(limit, len(set)))
-	for id := range set {
+	ids := make([]string, 0, minInt(limit, set.len()))
+	for id := range set.all {
 		if len(ids) < limit {
 			ids = append(ids, id)
 			continue
@@ -872,10 +1062,10 @@ func (c *Collection) planNativeScalarFilter(filter *HybridScalarFilter, index *V
 	if err != nil {
 		return nil, nativeScalarPlanCacheStats{}, err
 	}
-	return c.planNativeScalarFilterAtLookup(filter, index, vectorDef, view, generation, nil)
+	return c.planNativeScalarFilterAtLookup(filter, index, vectorDef, view, generation, hybridScalarIDs{})
 }
 
-func (c *Collection) planNativeScalarFilterAtLookup(filter *HybridScalarFilter, index *VectorIndex, vectorDef VectorIndexDefinition, view *hybridScalarLookupView, generation uint64, completeSet hybridScalarAllowSet) (*nativeScalarFilterExecution, nativeScalarPlanCacheStats, error) {
+func (c *Collection) planNativeScalarFilterAtLookup(filter *HybridScalarFilter, index *VectorIndex, vectorDef VectorIndexDefinition, view *hybridScalarLookupView, generation uint64, completeSet hybridScalarIDs) (*nativeScalarFilterExecution, nativeScalarPlanCacheStats, error) {
 	if filter == nil {
 		return nil, nativeScalarPlanCacheStats{}, nil
 	}
@@ -889,8 +1079,15 @@ func (c *Collection) planNativeScalarFilterAtLookup(filter *HybridScalarFilter, 
 	var admit func(uint64) error
 	if view.catalog.nativeText != nil {
 		admit = view.catalog.nativeText.admit
-		structural := uint64(len(leaves)) * (uint64(unsafe.Sizeof(nativeScalarClause{})) + uint64(unsafe.Sizeof(nativeScalarLeafProbe{})) + uint64(unsafe.Sizeof(hybridScalarAllowSet{})) + uint64(nativeScalarANNSeedLimit)*uint64(unsafe.Sizeof(string(""))))
-		if err := admit(memtable.COWAllocationCharge(structural) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeScalarFilterExecution{})))); err != nil {
+		for _, width := range [3]uint64{uint64(unsafe.Sizeof(nativeScalarClause{})), uint64(unsafe.Sizeof(nativeScalarLeafProbe{})), uint64(unsafe.Sizeof(hybridScalarIDs{}))} {
+			if err := admitLocalIDArray(admit, len(leaves), width); err != nil {
+				return nil, nativeScalarPlanCacheStats{}, err
+			}
+		}
+		if err := admitLocalIDArray(admit, nativeScalarANNSeedLimit, uint64(unsafe.Sizeof(string("")))); err != nil {
+			return nil, nativeScalarPlanCacheStats{}, err
+		}
+		if err := admit(memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeScalarFilterExecution{})))); err != nil {
 			return nil, nativeScalarPlanCacheStats{}, err
 		}
 	}
@@ -902,6 +1099,16 @@ func (c *Collection) planNativeScalarFilterAtLookup(filter *HybridScalarFilter, 
 		def, ok := findIndex(view.catalog.meta.Indexes, leaf.IndexName)
 		if !ok {
 			return nil, nativeScalarPlanCacheStats{}, fmt.Errorf("%w: native scalar index %q is unavailable", ErrHybridSearchIndexUnavailable, leaf.IndexName)
+		}
+		if admit != nil {
+			// A cache hit must preserve the same captured declaration refusals
+			// as visitLeafIDs, rather than treating a compiled clause as authority.
+			if err := ValidateIndexName(leaf.IndexName); err != nil {
+				return nil, nativeScalarPlanCacheStats{}, fmt.Errorf("%w: hybrid scalar filter index %q lookup failed: %w", ErrHybridSearchIndexUnavailable, leaf.IndexName, err)
+			}
+			if orderedBSONIndexRequiresCompoundRangeAPI(def) {
+				return nil, nativeScalarPlanCacheStats{}, fmt.Errorf("%w: hybrid scalar filter index %q requires compound range lookup", ErrHybridSearchIndexUnavailable, leaf.IndexName)
+			}
 		}
 		if admit != nil {
 			values := [2]any{leaf.Value}
@@ -934,12 +1141,12 @@ func (c *Collection) planNativeScalarFilterAtLookup(filter *HybridScalarFilter, 
 		plan.clauses = append(plan.clauses, clause)
 	}
 
-	if completeSet != nil {
+	if completeSet.present() {
 		plan.finiteIDs = completeSet
-		plan.candidateIDs = uint64(len(completeSet))
+		plan.candidateIDs = uint64(completeSet.len())
 		plan.retainedCandidateIDs = plan.candidateIDs
 		plan.refinedCandidateIDs = plan.candidateIDs
-		plan.exactScoring = len(completeSet) <= nativeScalarExactSafetyCap
+		plan.exactScoring = completeSet.len() <= nativeScalarExactSafetyCap
 		plan.identity = NativeScalarFilterPlanCompleteFinite
 		if plan.exactScoring {
 			plan.identity = NativeScalarFilterPlanCompleteExact
@@ -948,8 +1155,10 @@ func (c *Collection) planNativeScalarFilterAtLookup(filter *HybridScalarFilter, 
 	}
 
 	var cacheKey nativeScalarPlanCacheKey
+	var runtimeKey nativeRuntimeScalarPlanKey
 	var cacheStats nativeScalarPlanCacheStats
 	cacheable := false
+	runtimeCacheable := false
 	if admit == nil {
 		vectorGeneration, vectorMutationSeq, vectorGenerationValid := index.nativeScalarPlanCacheGeneration()
 		cacheKey = nativeScalarPlanCacheKey{
@@ -975,8 +1184,23 @@ func (c *Collection) planNativeScalarFilterAtLookup(filter *HybridScalarFilter, 
 		} else {
 			cacheStats = c.nativeScalarPlanCacheSnapshot(nativeScalarPlanCacheStats{generationBypasses: 1})
 		}
+	} else {
+		runtimeKey, runtimeCacheable = index.nativeRuntimeScalarPlanIdentity(view.catalog.nativeText.read, generation)
+		if runtimeCacheable {
+			cached, stats := index.nativeRuntimeScalarPlanGet(runtimeKey, view.catalog.nativeText.read, plan.clauses)
+			cacheStats = stats
+			if cached != nil {
+				*plan = *cached
+				return plan, stats, nil
+			}
+		} else {
+			cacheStats.generationBypasses = 1
+		}
 	}
 	finish := func(plan *nativeScalarFilterExecution) (*nativeScalarFilterExecution, nativeScalarPlanCacheStats, error) {
+		if runtimeCacheable {
+			return plan, index.nativeRuntimeScalarPlanPut(runtimeKey, view.catalog.nativeText.read, plan, cacheStats), nil
+		}
 		if !cacheable {
 			return plan, cacheStats, nil
 		}
@@ -986,18 +1210,15 @@ func (c *Collection) planNativeScalarFilterAtLookup(filter *HybridScalarFilter, 
 
 	probes := make([]nativeScalarLeafProbe, 0, len(leaves))
 	for _, leaf := range leaves {
-		var set hybridScalarAllowSet
+		var set hybridScalarIDs
 		var inputIDs uint64
 		var truncated bool
 		var err error
 		if admit == nil {
 			set, inputIDs, truncated, err = view.leafProbe(leaf, nativeScalarProbeLimit)
 		} else {
-			// The map is created with the probe capacity on its first retained ID.
-			n := uint64(nativeScalarProbeLimit)*2*(uint64(unsafe.Sizeof(string("")))+2) + 256
-			if err = admit(memtable.COWAllocationCharge(n)); err == nil {
-				set, inputIDs, truncated, err = view.leafProbeBeforeCopy(leaf, nativeScalarProbeLimit, nativeScalarProbeLimit+1, nil, func(id []byte) error { return admit(memtable.COWAllocationCharge(uint64(len(id)))) })
-			}
+			// The leaf probe owns admission for its flat cells and each copied ID.
+			set, inputIDs, truncated, err = view.leafProbeBeforeCopy(leaf, nativeScalarProbeLimit, nativeScalarProbeLimit+1, nil, nil)
 		}
 		if err != nil {
 			return nil, cacheStats, err
@@ -1008,7 +1229,7 @@ func (c *Collection) planNativeScalarFilterAtLookup(filter *HybridScalarFilter, 
 		}
 		probes = append(probes, nativeScalarLeafProbe{set: set, truncated: truncated})
 	}
-	complete := make([]hybridScalarAllowSet, 0, len(probes))
+	complete := make([]hybridScalarIDs, 0, len(probes))
 	allComplete := true
 	for _, probe := range probes {
 		if probe.truncated {
@@ -1025,21 +1246,25 @@ func (c *Collection) planNativeScalarFilterAtLookup(filter *HybridScalarFilter, 
 		plan.refinedCandidateIDs = uint64(len(plan.seedIDs))
 		return finish(plan)
 	}
-	sort.SliceStable(complete, func(i, j int) bool { return len(complete[i]) < len(complete[j]) })
+	if admit != nil {
+		slices.SortStableFunc(complete, func(a, b hybridScalarIDs) int { return a.len() - b.len() })
+	} else {
+		sort.SliceStable(complete, func(i, j int) bool { return complete[i].len() < complete[j].len() })
+	}
 	candidates := complete[0]
 	if allComplete {
 		for _, set := range complete[1:] {
-			for id := range candidates {
-				if _, ok := set[id]; !ok {
-					delete(candidates, id)
+			for id := range candidates.all {
+				if ok := set.contains(id); !ok {
+					candidates.delete(id)
 				}
 			}
 		}
 		plan.finiteIDs = candidates
-		plan.candidateIDs = uint64(len(candidates))
-		plan.retainedCandidateIDs = uint64(len(candidates))
-		plan.refinedCandidateIDs = uint64(len(candidates))
-		plan.exactScoring = len(candidates) <= nativeScalarExactSafetyCap
+		plan.candidateIDs = uint64(candidates.len())
+		plan.retainedCandidateIDs = uint64(candidates.len())
+		plan.refinedCandidateIDs = uint64(candidates.len())
+		plan.exactScoring = candidates.len() <= nativeScalarExactSafetyCap
 		if plan.exactScoring {
 			plan.identity = NativeScalarFilterPlanCompleteExact
 		} else {
@@ -1048,11 +1273,11 @@ func (c *Collection) planNativeScalarFilterAtLookup(filter *HybridScalarFilter, 
 		return finish(plan)
 	}
 	plan.finiteIDs = candidates
-	plan.candidateIDs = uint64(len(candidates))
-	plan.retainedCandidateIDs = uint64(len(candidates))
-	plan.refinedCandidateIDs = uint64(len(candidates))
+	plan.candidateIDs = uint64(candidates.len())
+	plan.retainedCandidateIDs = uint64(candidates.len())
+	plan.refinedCandidateIDs = uint64(candidates.len())
 	plan.identity = NativeScalarFilterPlanMixed
-	plan.exactScoring = len(candidates) <= nativeScalarExactSafetyCap
+	plan.exactScoring = candidates.len() <= nativeScalarExactSafetyCap
 	return finish(plan)
 }
 
@@ -1181,7 +1406,7 @@ func (p *nativeScalarFilterExecution) refineMixed(view *vectorIndexSearchView, b
 	if p == nil || p.identity != NativeScalarFilterPlanMixed {
 		return
 	}
-	for id := range p.finiteIDs {
+	for id := range p.finiteIDs.all {
 		matched := false
 		if nodeID, ok := view.deltaCurrentNode[id]; ok && nodeID >= 0 && nodeID < len(view.deltaNodes) {
 			node := &view.deltaNodes[nodeID]
@@ -1194,12 +1419,12 @@ func (p *nativeScalarFilterExecution) refineMixed(view *vectorIndexSearchView, b
 			}
 		}
 		if !matched {
-			delete(p.finiteIDs, id)
+			p.finiteIDs.delete(id)
 		}
 	}
-	p.candidateIDs = uint64(len(p.finiteIDs))
-	p.refinedCandidateIDs = uint64(len(p.finiteIDs))
-	p.exactScoring = len(p.finiteIDs) <= nativeScalarExactSafetyCap
+	p.candidateIDs = uint64(p.finiteIDs.len())
+	p.refinedCandidateIDs = uint64(p.finiteIDs.len())
+	p.exactScoring = p.finiteIDs.len() <= nativeScalarExactSafetyCap
 }
 
 func bindNativeScalarMatcher(plan *nativeScalarFilterExecution, columns map[string]vectorIndexScalarColumn, rows int, plane string) (nativeScalarBoundMatcher, error) {
@@ -1285,8 +1510,8 @@ func searchVectorIndexViewPlaneNativeScalar(query []float32, queryNorm float64, 
 	var candidates []vectorIndexCandidate
 	work := nativeScalarSearchWork{}
 	if exact {
-		ids := make([]string, 0, len(plan.finiteIDs))
-		for id := range plan.finiteIDs {
+		ids := make([]string, 0, plan.finiteIDs.len())
+		for id := range plan.finiteIDs.all {
 			ids = append(ids, id)
 		}
 		sort.Strings(ids)

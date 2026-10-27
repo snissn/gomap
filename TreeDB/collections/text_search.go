@@ -115,6 +115,7 @@ type TextSearchOptions struct {
 	// text search cannot accidentally bind to a scalar index outside the hybrid
 	// snapshot checks.
 	textV2AllowedDocumentIDs hybridScalarAllowSet
+	textV2AllowedIDs         hybridScalarIDs
 	textV2DisableBlockMax    bool
 }
 
@@ -1206,4 +1207,11 @@ func parseTextSearchPhraseQuery(idx TextIndexDefinition, phrase TextSearchPhrase
 		return textSearchParsedPhrase{}, err
 	}
 	return parsed, nil
+}
+
+func (opts TextSearchOptions) scalarAllowedIDs() hybridScalarIDs {
+	if opts.textV2AllowedIDs.present() {
+		return opts.textV2AllowedIDs
+	}
+	return legacyScalarIDs(opts.textV2AllowedDocumentIDs)
 }

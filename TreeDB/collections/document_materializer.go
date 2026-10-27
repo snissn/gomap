@@ -320,7 +320,7 @@ func (c *Collection) OpenCollectionReadViewForVectorIndexSearch(response VectorI
 		if e != nil {
 			return closeWithError(e)
 		}
-		view.catalog, e = newNativeTextCatalog(read, scratch.admit)
+		view.catalog, e = newNativeTextCatalog(read, scratch.admitFn)
 		if e != nil {
 			return closeWithError(e)
 		}

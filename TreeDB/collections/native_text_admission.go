@@ -37,7 +37,7 @@ func (n *nativeTextCatalog) admitSingleTermServing(def TextIndexDefinition, opts
 	charge.add(pairs, memtable.COWAllocationCharge(uint64(unsafe.Sizeof(string("")))))
 	// Block-max can restart once through exact fallback. Both allow-set maps,
 	// lookup keys and independently owned candidate/detail/output IDs coexist.
-	forward, err := nativeTextForwardIdentityCharge(opts.textV2AllowedDocumentIDs, 2)
+	forward, err := nativeTextForwardIdentityCharge(opts.scalarAllowedIDs(), 2)
 	if err != nil {
 		return err
 	}
@@ -56,7 +56,7 @@ func (n *nativeTextCatalog) admitSingleTermServing(def TextIndexDefinition, opts
 // The specialized serving preflight reserves two constructions up front. Other
 // paths reserve each construction here, including an exact fallback restart,
 // before allocating any map, sorting slice, conversion or lookup key.
-func (n *nativeTextCatalog) admitForwardIdentities(ids hybridScalarAllowSet) error {
+func (n *nativeTextCatalog) admitForwardIdentities(ids hybridScalarIDs) error {
 	if n.singleTermFields != 0 {
 		return nil
 	}
@@ -67,18 +67,18 @@ func (n *nativeTextCatalog) admitForwardIdentities(ids hybridScalarAllowSet) err
 	return n.admit(charge)
 }
 
-func nativeTextForwardIdentityCharge(ids hybridScalarAllowSet, paths uint64) (uint64, error) {
-	if ids == nil {
+func nativeTextForwardIdentityCharge(ids hybridScalarIDs, paths uint64) (uint64, error) {
+	if !ids.present() {
 		return 0, nil
 	}
 	var charge nativeTextAdmissionSum
-	count := uint64(len(ids))
+	count := uint64(ids.len())
 	for path := uint64(0); path < paths; path++ {
 		charge.array(1, uint64(unsafe.Sizeof(textV2SearchOrdinalAllowSet{})))
 		charge.array(count, uint64(unsafe.Sizeof(string(""))))
 		charge.array(count, uint64(unsafe.Sizeof(uint64(0))))
 		charge.mapEntries(count, uint64(unsafe.Sizeof(uint64(0)))+uint64(unsafe.Sizeof(textV2SearchForwardIdentity{})))
-		for id := range ids {
+		for id := range ids.all {
 			length := uint64(len(id))
 			if length > ^uint64(0)-2 {
 				return 0, memtable.ErrCOWCapacity

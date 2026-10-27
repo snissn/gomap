@@ -24383,6 +24383,17 @@ const (
 	stableDocumentIDTieEntryOverhead = 32
 )
 
+// Native ID escape decoding owns a separate exact-capacity byte slice. Ordinary
+// suffixes remain iterator-borrowed; legacy callers preserve the original path.
+func indexKeyDocumentIDAdmitted(valueType IndexValueType, key []byte, admit func(uint64) error) ([]byte, error) {
+	if admit != nil && valueType == IndexValueBSONOrderedV2 && bytes.Contains(key, []byte{0, 0xff}) {
+		if err := admit(memtable.COWAllocationCharge(uint64(len(key)))); err != nil {
+			return nil, err
+		}
+	}
+	return indexKeyDocumentID(valueType, key)
+}
+
 func scanMergedCollectionIndexIDsWithOptions(bufferedIt, persistedIt iterator.UnsafeIterator, valueType IndexValueType, maxResults int, opts scanMergedCollectionIndexIDOptions, fn func([]byte) (bool, error)) (bool, error) {
 	return scanMergedCollectionIndexIDsWithOptionsAndDirection(bufferedIt, persistedIt, valueType, maxResults, false, opts, fn)
 }
@@ -24464,11 +24475,16 @@ func scanMergedCollectionIndexIDsWithOptionsAndDirectionWorkCap(bufferedIt, pers
 			if maxResults > 0 && emitted >= maxResults {
 				return true, collectionIndexIteratorError(persistedIt)
 			}
-			id, err := indexKeyDocumentID(valueType, persistedKey)
+			id, err := indexKeyDocumentIDAdmitted(valueType, persistedKey, opts.admitTemporary)
 			if err != nil {
 				return false, err
 			}
 			if opts.CloneDocumentID {
+				if opts.admitTemporary != nil {
+					if err := opts.admitTemporary(memtable.COWAllocationCharge(uint64(len(id)))); err != nil {
+						return false, err
+					}
+				}
 				id = bytes.Clone(id)
 			}
 			cont, err := fn(id)
@@ -24481,20 +24497,15 @@ func scanMergedCollectionIndexIDsWithOptionsAndDirectionWorkCap(bufferedIt, pers
 		return false, collectionIndexIteratorError(persistedIt)
 	}
 	var seen map[string]struct{}
+	var nativeSeen *localIDIndex
 	if opts.DedupeDocumentID {
 		if opts.admitTemporary != nil {
-			// The optional original-read receipt covers the initial Swiss map
-			// before make. 64 bytes per requested string slot includes controls,
-			// load-factor rounding and table metadata; the fixed part covers
-			// the header/small group. Later growth/copies are charged below.
-			if uint64(maxResults) > (^uint64(0)-256)/64 {
-				return false, memtable.ErrCOWCapacity
-			}
-			if err := opts.admitTemporary(memtable.COWAllocationCharge(256 + uint64(maxResults)*64)); err != nil {
+			var err error
+			nativeSeen, err = newLocalIDIndex(max(0, min(maxResults, 64)), opts.admitTemporary)
+			if err != nil {
 				return false, err
 			}
-		}
-		if maxResults > 0 {
+		} else if maxResults > 0 {
 			seen = make(map[string]struct{}, maxResults)
 		} else {
 			seen = make(map[string]struct{})
@@ -24502,30 +24513,35 @@ func scanMergedCollectionIndexIDsWithOptionsAndDirectionWorkCap(bufferedIt, pers
 	}
 	emitted := 0
 	emit := func(key []byte) (bool, bool, error) {
-		id, err := indexKeyDocumentID(valueType, key)
+		id, err := indexKeyDocumentIDAdmitted(valueType, key, opts.admitTemporary)
 		if err != nil {
 			return false, false, err
 		}
 		if opts.DedupeDocumentID {
-			if opts.admitTemporary != nil {
-				// Admit the string copy before conversion. Sixteen string slots
-				// plus controls cover both small-map groups and geometric growth
-				// cohorts per emitted ID, including the truncation sentinel.
-				charge := memtable.COWAllocationCharge(uint64(len(id))) + memtable.COWAllocationCharge(16*(uint64(unsafe.Sizeof(string("")))+2))
-				if err := opts.admitTemporary(charge); err != nil {
+			if nativeSeen != nil {
+				if _, ok := nativeSeen.lookup(unsafeStringFromBytes(id)); ok {
+					return true, false, nil
+				}
+				if err := nativeSeen.setCopy(id, 0); err != nil {
 					return false, false, err
 				}
+			} else {
+				idKey := string(id)
+				if _, ok := seen[idKey]; ok {
+					return true, false, nil
+				}
+				seen[idKey] = struct{}{}
 			}
-			idKey := string(id)
-			if _, ok := seen[idKey]; ok {
-				return true, false, nil
-			}
-			seen[idKey] = struct{}{}
 		}
 		if maxResults > 0 && emitted >= maxResults {
 			return false, true, nil
 		}
 		if opts.CloneDocumentID {
+			if opts.admitTemporary != nil {
+				if err := opts.admitTemporary(memtable.COWAllocationCharge(uint64(len(id)))); err != nil {
+					return false, false, err
+				}
+			}
 			id = bytes.Clone(id)
 		}
 		cont, err := fn(id)
@@ -24637,11 +24653,21 @@ func scanMergedCollectionIndexIDsStable(bufferedIt, persistedIt iterator.UnsafeI
 				if !inspect(1) {
 					return nil, false, true, collectionIndexIteratorError(persistedIt)
 				}
+				if opts.admitTemporary != nil {
+					if err := opts.admitTemporary(memtable.COWAllocationCharge(uint64(len(persistedKey)))); err != nil {
+						return nil, false, false, err
+					}
+				}
 				key, deleted = bytes.Clone(persistedKey), persistedIt.IsDeleted()
 				persistedIt.Next()
 			case !persistedOK:
 				if !inspect(1) {
 					return nil, false, true, collectionIndexIteratorError(bufferedIt)
+				}
+				if opts.admitTemporary != nil {
+					if err := opts.admitTemporary(memtable.COWAllocationCharge(uint64(len(bufferedKey)))); err != nil {
+						return nil, false, false, err
+					}
 				}
 				key, deleted = bytes.Clone(bufferedKey), bufferedIt.IsDeleted()
 				bufferedIt.Next()
@@ -24651,17 +24677,32 @@ func scanMergedCollectionIndexIDsStable(bufferedIt, persistedIt iterator.UnsafeI
 					if !inspect(1) {
 						return nil, false, true, collectionIndexIteratorError(bufferedIt)
 					}
+					if opts.admitTemporary != nil {
+						if err := opts.admitTemporary(memtable.COWAllocationCharge(uint64(len(bufferedKey)))); err != nil {
+							return nil, false, false, err
+						}
+					}
 					key, deleted = bytes.Clone(bufferedKey), bufferedIt.IsDeleted()
 					bufferedIt.Next()
 				} else if (!reverse && cmp > 0) || (reverse && cmp < 0) {
 					if !inspect(1) {
 						return nil, false, true, collectionIndexIteratorError(persistedIt)
 					}
+					if opts.admitTemporary != nil {
+						if err := opts.admitTemporary(memtable.COWAllocationCharge(uint64(len(persistedKey)))); err != nil {
+							return nil, false, false, err
+						}
+					}
 					key, deleted = bytes.Clone(persistedKey), persistedIt.IsDeleted()
 					persistedIt.Next()
 				} else {
 					if !inspect(2) {
 						return nil, false, true, nil
+					}
+					if opts.admitTemporary != nil {
+						if err := opts.admitTemporary(memtable.COWAllocationCharge(uint64(len(bufferedKey)))); err != nil {
+							return nil, false, false, err
+						}
 					}
 					key, deleted = bytes.Clone(bufferedKey), bufferedIt.IsDeleted()
 					bufferedIt.Next()
@@ -24682,14 +24723,23 @@ func scanMergedCollectionIndexIDsStable(bufferedIt, persistedIt iterator.UnsafeI
 func scanCollectionIndexIDsStable(nextLiveKey func() ([]byte, bool, bool, error), valueType IndexValueType, maxResults int, opts scanMergedCollectionIndexIDOptions, fn func([]byte) (bool, error)) (bool, error) {
 	admit := func(n uint64) error {
 		if opts.admitTemporary != nil {
-			return opts.admitTemporary(n)
+			return opts.admitTemporary(memtable.COWAllocationCharge(n))
 		}
 		return nil
 	}
 
 	var seen map[string]struct{}
+	var nativeSeen *localIDIndex
 	if opts.DedupeDocumentID {
-		seen = make(map[string]struct{})
+		if opts.admitTemporary != nil {
+			var err error
+			nativeSeen, err = newLocalIDIndex(0, opts.admitTemporary)
+			if err != nil {
+				return false, err
+			}
+		} else {
+			seen = make(map[string]struct{})
+		}
 	}
 	emitted := 0
 	var groupKey []byte
@@ -24791,7 +24841,7 @@ func scanCollectionIndexIDsStable(nextLiveKey func() ([]byte, bool, bool, error)
 			groupKey = bytes.Clone(logicalKey)
 			groupBytes += keyBytes
 		}
-		id, err := indexKeyDocumentID(valueType, key)
+		id, err := indexKeyDocumentIDAdmitted(valueType, key, opts.admitTemporary)
 		if err != nil {
 			return false, err
 		}
@@ -24803,13 +24853,21 @@ func scanCollectionIndexIDsStable(nextLiveKey func() ([]byte, bool, bool, error)
 			if entryBytes < len(id) || !canRetain(entryBytes) {
 				return true, nil
 			}
-			idKey := string(id)
-			if _, duplicate := seen[idKey]; duplicate {
-				continue
+			if nativeSeen != nil {
+				if _, duplicate := nativeSeen.lookup(unsafeStringFromBytes(id)); duplicate {
+					continue
+				}
+				if err := nativeSeen.setCopy(id, 0); err != nil {
+					return false, err
+				}
 			} else {
+				idKey := string(id)
+				if _, duplicate := seen[idKey]; duplicate {
+					continue
+				}
 				seen[idKey] = struct{}{}
-				seenBytes += entryBytes
 			}
+			seenBytes += entryBytes
 		}
 		// Never retain a partial stable group: callers would otherwise see an
 		// order that could change once the remaining equal-key IDs were sorted.

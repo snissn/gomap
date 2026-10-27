@@ -345,7 +345,7 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/collections/native_ordinary_columngraph_projection_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 11, occurrences: 18},
 	{path: "TreeDB/collections/native_ordinary_columngraph_read.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	{path: "TreeDB/collections/native_ordinary_columngraph_search.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
-	{path: "TreeDB/collections/native_typed_construction_pressure_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 4},
+	{path: "TreeDB/collections/native_typed_construction_pressure_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 7},
 	{path: "TreeDB/collections/native_vector_graph_plan_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 4},
 	{path: "TreeDB/documentservice/ordinary_columngraph_native_crash_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	// Full retention, ordinary typed UPDATE and captured physical queries reuse

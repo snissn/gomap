@@ -396,12 +396,16 @@ type VectorIndexRecall struct {
 // TreeDB-managed collection root; ad hoc indexes can still be rebuilt from
 // primary collection rows.
 type VectorIndex struct {
-	nativeHNSWSchemaState                                      *nativeSchemaState
-	nativeHNSWUseMu                                            sync.RWMutex
-	nativeHNSWLease                                            *memtable.COWExternalLease
-	nativeHNSWCharge                                           uint64
-	nativeHNSWIDBytes                                          uint64
-	nativeHNSWConstructionPeak                                 uint64
+	nativeHNSWSchemaState      *nativeSchemaState
+	nativeHNSWUseMu            sync.RWMutex
+	nativeHNSWLease            *memtable.COWExternalLease
+	nativeHNSWCharge           uint64
+	nativeHNSWIDBytes          uint64
+	nativeHNSWConstructionPeak uint64
+	// Monotone immutable plans share this payload's original receipt/use lock.
+	nativeScalarPlans                                          *[nativeScalarPlanCacheMaxEntries]nativeRuntimeScalarPlanEntry
+	nativeScalarPlanCount                                      int
+	nativeScalarPlanBytes                                      uint64
 	nativeHNSWOwned                                            bool
 	nativeHNSWIncarnation, nativeHNSWSchema, nativeHNSWVersion uint64
 

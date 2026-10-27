@@ -5,7 +5,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
+	"strconv"
 	"sync"
 	"unsafe"
 
@@ -128,7 +130,7 @@ func (c *Collection) searchHybridWithCandidateBudgetPolicy(opts HybridSearchOpti
 		if err != nil {
 			return hybridSearchFailClosed(response, HybridFailClosedReasonUnsupported, err)
 		}
-		view.catalog, err = newNativeTextCatalog(view.nativeRead, plan.nativeScratch.admit)
+		view.catalog, err = newNativeTextCatalog(view.nativeRead, plan.nativeScratch.admitFn)
 		if err != nil {
 			return hybridSearchFailClosed(response, HybridFailClosedReasonUnsupported, err)
 		}
@@ -175,7 +177,7 @@ func (c *Collection) searchHybridWithCandidateBudgetPolicy(opts HybridSearchOpti
 		return hybridSearchFailClosed(response, HybridFailClosedReasonSnapshotMismatch, fmt.Errorf("%w: hybrid search current snapshot unavailable", ErrHybridSearchIndexUnavailable))
 	}
 
-	var allowSet hybridScalarAllowSet
+	var allowSet hybridScalarIDs
 	var scalarStats HybridSearchStats
 	if plan.vector != nil && c.nativeJSON == nil {
 		plan.nativeVectorRuntime, err = c.hybridVectorQueryUsesNativeRuntime(plan.vector)
@@ -215,7 +217,7 @@ func (c *Collection) searchHybridWithCandidateBudgetPolicy(opts HybridSearchOpti
 		return hybridSearchFailClosed(response, HybridFailClosedReasonSnapshotMismatch, err)
 	}
 
-	var candidateAllowSet hybridScalarAllowSet
+	var candidateAllowSet hybridScalarIDs
 	if plan.scalarFilterStrategy == HybridScalarFilterStrategyPrefilter {
 		candidateAllowSet = allowSet
 	}
@@ -228,18 +230,10 @@ func (c *Collection) searchHybridWithCandidateBudgetPolicy(opts HybridSearchOpti
 		return hybridSearchFailClosed(response, HybridFailClosedReasonSnapshotMismatch, err)
 	}
 
-	if plan.nativeScratch != nil {
-		if err := plan.nativeScratch.admitFusion(candidates); err != nil {
-			return hybridSearchFailClosed(response, HybridFailClosedReasonUnsupported, err)
-		}
-	}
 	fusionCandidates := candidates
-	if allowSet != nil && plan.scalarFilterStrategy != HybridScalarFilterStrategyPostfilter {
+	if allowSet.present() && plan.scalarFilterStrategy != HybridScalarFilterStrategyPostfilter {
 		fusionCandidates = hybridFilterCandidatesByScalarAllowSet(candidates, allowSet, &response.Stats)
 		response.Stats.CandidatesAfterFilter = uint64(len(fusionCandidates))
-	}
-	if opts.Debug.IncludeCandidates {
-		response.Candidates = cloneHybridSearchCandidates(fusionCandidates)
 	}
 
 	results, fusionStats, err := hybridFusePlannedCandidates(fusionCandidates, plan)
@@ -247,7 +241,10 @@ func (c *Collection) searchHybridWithCandidateBudgetPolicy(opts HybridSearchOpti
 	if err != nil {
 		return hybridSearchFailClosed(response, HybridFailClosedReasonUnsupported, err)
 	}
-	if allowSet != nil && plan.scalarFilterStrategy == HybridScalarFilterStrategyPostfilter {
+	if opts.Debug.IncludeCandidates {
+		response.Candidates = cloneHybridSearchCandidates(fusionCandidates)
+	}
+	if allowSet.present() && plan.scalarFilterStrategy == HybridScalarFilterStrategyPostfilter {
 		filterTopK := plan.topK
 		if hybridParentCollapseBinding(plan.topK, plan.maxChunksPerParent) {
 			filterTopK = len(results)
@@ -256,7 +253,14 @@ func (c *Collection) searchHybridWithCandidateBudgetPolicy(opts HybridSearchOpti
 	} else if response.Stats.CandidatesAfterFilter == 0 {
 		response.Stats.CandidatesAfterFilter = uint64(len(results))
 	}
-	results = hybridCollapseResultsByParent(results, plan.topK, plan.maxChunksPerParent, &response.Stats)
+	var collapseAdmit func(uint64) error
+	if plan.nativeScratch != nil {
+		collapseAdmit = plan.nativeScratch.admitFn
+	}
+	results, err = hybridCollapseResultsByParentAdmitted(results, plan.topK, plan.maxChunksPerParent, &response.Stats, collapseAdmit)
+	if err != nil {
+		return hybridSearchFailClosed(response, HybridFailClosedReasonUnsupported, err)
+	}
 	if plan.resultMode == HybridResultModeScoreOnly {
 		hybridStripResultSources(results)
 	}
@@ -643,9 +647,9 @@ func (view *hybridScalarLookupView) close() {
 	}
 }
 
-func (c *Collection) hybridScalarAllowSet(plan hybridSearchExecutionPlan) (hybridScalarAllowSet, HybridSearchStats, error) {
+func (c *Collection) hybridScalarAllowSet(plan hybridSearchExecutionPlan) (hybridScalarIDs, HybridSearchStats, error) {
 	if plan.scalarFilter == nil {
-		return nil, HybridSearchStats{}, nil
+		return hybridScalarIDs{}, HybridSearchStats{}, nil
 	}
 	limit := plan.scalarLookupLimit
 	if limit <= 0 {
@@ -668,21 +672,21 @@ func (c *Collection) hybridScalarAllowSet(plan hybridSearchExecutionPlan) (hybri
 			stats.Truncated = 1
 		}
 		if err != nil {
-			return nil, stats, err
+			return hybridScalarIDs{}, stats, err
 		}
-		stats.ScalarFilterFinalIDs = uint64(len(set))
+		stats.ScalarFilterFinalIDs = uint64(set.len())
 		if plan.scalarFilterStrategy == HybridScalarFilterStrategyPrefilter {
-			stats.ScalarPrefilterIDs = uint64(len(set))
+			stats.ScalarPrefilterIDs = uint64(set.len())
 		}
 		return set, stats, nil
 	}
 	view, err := c.openHybridScalarLookupView()
 	if err != nil {
-		return nil, HybridSearchStats{}, fmt.Errorf("%w: hybrid scalar lookup snapshot unavailable: %v", ErrHybridSearchStaleIndex, err)
+		return hybridScalarIDs{}, HybridSearchStats{}, fmt.Errorf("%w: hybrid scalar lookup snapshot unavailable: %v", ErrHybridSearchStaleIndex, err)
 	}
 	defer view.close()
 
-	sets := make([]hybridScalarAllowSet, 0, len(filters))
+	sets := make([]hybridScalarIDs, 0, len(filters))
 	for i := range filters {
 		stats.ScalarFilterLookups++
 		set, inputIDs, truncated, err := view.leafAllowSet(filters[i], limit)
@@ -691,43 +695,43 @@ func (c *Collection) hybridScalarAllowSet(plan hybridSearchExecutionPlan) (hybri
 			stats.Truncated++
 		}
 		if err != nil {
-			return nil, stats, err
+			return hybridScalarIDs{}, stats, err
 		}
 		if stats.ScalarFilterInputIDs > uint64(aggregateLimit) {
 			stats.Truncated++
-			return nil, stats, fmt.Errorf("%w: hybrid scalar conjunction exceeded aggregate input-ID limit %d", ErrHybridSearchIndexUnavailable, aggregateLimit)
+			return hybridScalarIDs{}, stats, fmt.Errorf("%w: hybrid scalar conjunction exceeded aggregate input-ID limit %d", ErrHybridSearchIndexUnavailable, aggregateLimit)
 		}
 		sets = append(sets, set)
 	}
 
 	sort.SliceStable(sets, func(i, j int) bool {
-		return len(sets[i]) < len(sets[j])
+		return sets[i].len() < sets[j].len()
 	})
 	allowSet := sets[0]
 	for i := 1; i < len(sets); i++ {
 		stats.ScalarFilterIntersectionSteps++
-		for id := range allowSet {
-			if _, ok := sets[i][id]; !ok {
-				delete(allowSet, id)
+		for id := range allowSet.all {
+			if ok := sets[i].contains(id); !ok {
+				allowSet.delete(id)
 			}
 		}
 	}
-	stats.ScalarFilterFinalIDs = uint64(len(allowSet))
+	stats.ScalarFilterFinalIDs = uint64(allowSet.len())
 	if plan.scalarFilterStrategy == HybridScalarFilterStrategyPrefilter {
-		stats.ScalarPrefilterIDs = uint64(len(allowSet))
+		stats.ScalarPrefilterIDs = uint64(allowSet.len())
 	}
 	return allowSet, stats, nil
 }
 
-func (c *Collection) hybridScalarAllowSetAtReadView(plan hybridSearchExecutionPlan, readView *CollectionReadView) (hybridScalarAllowSet, HybridSearchStats, error) {
+func (c *Collection) hybridScalarAllowSetAtReadView(plan hybridSearchExecutionPlan, readView *CollectionReadView) (hybridScalarIDs, HybridSearchStats, error) {
 	if plan.scalarFilter == nil {
-		return nil, HybridSearchStats{}, nil
+		return hybridScalarIDs{}, HybridSearchStats{}, nil
 	}
 	if readView == nil || readView.collection != c {
-		return nil, HybridSearchStats{}, ErrVectorIndexSnapshotMismatch
+		return hybridScalarIDs{}, HybridSearchStats{}, ErrVectorIndexSnapshotMismatch
 	}
 	if err := validateHybridReadView(readView); err != nil {
-		return nil, HybridSearchStats{}, err
+		return hybridScalarIDs{}, HybridSearchStats{}, err
 	}
 	limit := plan.scalarLookupLimit
 	if limit <= 0 {
@@ -743,31 +747,26 @@ func (c *Collection) hybridScalarAllowSetAtReadView(plan hybridSearchExecutionPl
 	}
 	lookup := hybridScalarLookupView{context: plan.context, snapshot: readView.snapshot, catalog: readView.catalog}
 	if plan.nativeScratch != nil {
-		if err := plan.nativeScratch.admit(memtable.COWAllocationCharge(uint64(len(filters)) * uint64(unsafe.Sizeof(hybridScalarAllowSet{})))); err != nil {
-			return nil, HybridSearchStats{}, err
+		if err := plan.nativeScratch.admit(memtable.COWAllocationCharge(uint64(len(filters)) * uint64(unsafe.Sizeof(hybridScalarIDs{})))); err != nil {
+			return hybridScalarIDs{}, HybridSearchStats{}, err
 		}
 	}
 	endRead := readView.beginForegroundRead()
 	defer endRead()
 	stats := HybridSearchStats{}
-	sets := make([]hybridScalarAllowSet, 0, len(filters))
+	sets := make([]hybridScalarIDs, 0, len(filters))
 	for i := range filters {
 		stats.ScalarFilterLookups++
-		var set hybridScalarAllowSet
+		var set hybridScalarIDs
 		var inputIDs uint64
 		var truncated bool
 		var err error
 		if plan.nativeScratch != nil {
-			if err = plan.nativeScratch.admitMap(min(limit, hybridScalarDefaultLookupLimit), uint64(unsafe.Sizeof(string("")))); err != nil {
-				return nil, stats, err
-			}
 			inspectLimit := limit
 			if inspectLimit < maxCollectionInt {
 				inspectLimit++
 			}
-			set, inputIDs, truncated, err = lookup.leafProbeBeforeCopy(filters[i], limit, inspectLimit, nil, func(id []byte) error {
-				return plan.nativeScratch.admit(memtable.COWAllocationCharge(uint64(len(id))) + memtable.COWAllocationCharge(16*(uint64(unsafe.Sizeof(string("")))+2)))
-			})
+			set, inputIDs, truncated, err = lookup.leafProbeBeforeCopy(filters[i], limit, inspectLimit, nil, nil)
 			if truncated && err == nil {
 				err = fmt.Errorf("%w: scalar lookup limit %d", ErrHybridSearchIndexUnavailable, limit)
 			}
@@ -779,59 +778,83 @@ func (c *Collection) hybridScalarAllowSetAtReadView(plan hybridSearchExecutionPl
 			stats.Truncated++
 		}
 		if err != nil {
-			return nil, stats, err
+			return hybridScalarIDs{}, stats, err
 		}
 		if stats.ScalarFilterInputIDs > uint64(aggregateLimit) {
 			stats.Truncated++
-			return nil, stats, fmt.Errorf("%w: hybrid scalar conjunction exceeded aggregate input-ID limit %d", ErrHybridSearchIndexUnavailable, aggregateLimit)
+			return hybridScalarIDs{}, stats, fmt.Errorf("%w: hybrid scalar conjunction exceeded aggregate input-ID limit %d", ErrHybridSearchIndexUnavailable, aggregateLimit)
 		}
 		sets = append(sets, set)
 	}
-	sort.SliceStable(sets, func(i, j int) bool { return len(sets[i]) < len(sets[j]) })
+	if plan.nativeScratch != nil {
+		slices.SortStableFunc(sets, func(a, b hybridScalarIDs) int { return a.len() - b.len() })
+	} else {
+		sort.SliceStable(sets, func(i, j int) bool { return sets[i].len() < sets[j].len() })
+	}
 	allowSet := sets[0]
 	for i := 1; i < len(sets); i++ {
 		stats.ScalarFilterIntersectionSteps++
-		for id := range allowSet {
-			if _, ok := sets[i][id]; !ok {
-				delete(allowSet, id)
+		for id := range allowSet.all {
+			if ok := sets[i].contains(id); !ok {
+				allowSet.delete(id)
 			}
 		}
 	}
-	stats.ScalarFilterFinalIDs = uint64(len(allowSet))
+	stats.ScalarFilterFinalIDs = uint64(allowSet.len())
 	if plan.scalarFilterStrategy == HybridScalarFilterStrategyPrefilter {
-		stats.ScalarPrefilterIDs = uint64(len(allowSet))
+		stats.ScalarPrefilterIDs = uint64(allowSet.len())
 	}
 	return allowSet, stats, nil
 }
 
-func (view *hybridScalarLookupView) leafProbe(filter HybridScalarFilter, limit int) (hybridScalarAllowSet, uint64, bool, error) {
+func (view *hybridScalarLookupView) leafProbe(filter HybridScalarFilter, limit int) (hybridScalarIDs, uint64, bool, error) {
 	return view.leafProbeBeforeCopy(filter, limit, 0, nil, nil)
 }
 
 // beforeCopy lets bounded prepared consumers charge borrowed posting IDs before
 // the existing owning set copies them. Ordinary lookup semantics are unchanged.
-func (view *hybridScalarLookupView) leafProbeBeforeCopy(filter HybridScalarFilter, limit, maxInspected int, inspected *int, beforeCopy func([]byte) error) (hybridScalarAllowSet, uint64, bool, error) {
-	var set hybridScalarAllowSet
+func (view *hybridScalarLookupView) leafProbeBeforeCopy(filter HybridScalarFilter, limit, maxInspected int, inspected *int, beforeCopy func([]byte) error) (hybridScalarIDs, uint64, bool, error) {
+	var set hybridScalarIDs
+	var admit func(uint64) error
+	if view.catalog.nativeText != nil {
+		admit = view.catalog.nativeText.admit
+	}
 	inputIDs, truncated, err := view.visitLeafIDs(filter, limit, maxInspected, inspected, func(id []byte) error {
 		if beforeCopy != nil {
 			if err := beforeCopy(id); err != nil {
 				return err
 			}
 		}
-		if set == nil {
-			// A lookup limit bounds work, not the expected result population.
-			// Native callers retain the original full-map allowance and admit
-			// each ID/growth cohort before this callback allocates or inserts.
-			set = make(hybridScalarAllowSet, max(0, min(limit, 64)))
+		if !set.present() {
+			if admit != nil {
+				index, err := newLocalIDIndex(max(0, min(limit, 64)), admit)
+				if err != nil {
+					return err
+				}
+				set = nativeScalarIDs(index)
+			} else {
+				set = legacyScalarIDs(make(hybridScalarAllowSet, max(0, min(limit, 64))))
+			}
 		}
-		set[string(id)] = struct{}{}
+		if set.native != nil {
+			return set.native.setCopy(id, 0)
+		}
+		set.legacy[string(id)] = struct{}{}
 		return nil
 	})
 	if err != nil {
-		return nil, inputIDs, false, err
+		return hybridScalarIDs{}, inputIDs, false, err
 	}
-	if set == nil {
-		set = hybridScalarAllowSet{}
+	if !set.present() {
+		if admit != nil {
+			index, err := newLocalIDIndex(0, admit)
+			if err != nil {
+				return hybridScalarIDs{}, inputIDs, false, err
+			}
+			set = nativeScalarIDs(index)
+		} else {
+			set = legacyScalarIDs(hybridScalarAllowSet{})
+		}
 	}
 	return set, inputIDs, truncated, nil
 }
@@ -932,24 +955,24 @@ func (view *hybridScalarLookupView) visitLeafIDs(filter HybridScalarFilter, limi
 	return inputIDs, truncated, nil
 }
 
-func (view *hybridScalarLookupView) leafAllowSet(filter HybridScalarFilter, limit int) (hybridScalarAllowSet, uint64, bool, error) {
+func (view *hybridScalarLookupView) leafAllowSet(filter HybridScalarFilter, limit int) (hybridScalarIDs, uint64, bool, error) {
 	set, inputIDs, truncated, err := view.leafProbe(filter, limit)
 	if err != nil {
-		return nil, inputIDs, false, err
+		return hybridScalarIDs{}, inputIDs, false, err
 	}
 	if truncated {
-		return nil, inputIDs, true, fmt.Errorf("%w: hybrid scalar filter index %q exceeded bounded lookup limit %d", ErrHybridSearchIndexUnavailable, filter.IndexName, limit)
+		return hybridScalarIDs{}, inputIDs, true, fmt.Errorf("%w: hybrid scalar filter index %q exceeded bounded lookup limit %d", ErrHybridSearchIndexUnavailable, filter.IndexName, limit)
 	}
 	return set, inputIDs, false, nil
 }
 
-func (c *Collection) hybridScalarLeafAllowSet(filter HybridScalarFilter, limit int) (hybridScalarAllowSet, uint64, bool, error) {
+func (c *Collection) hybridScalarLeafAllowSet(filter HybridScalarFilter, limit int) (hybridScalarIDs, uint64, bool, error) {
 	exists, err := c.hybridScalarIndexExists(filter.IndexName)
 	if err != nil {
-		return nil, 0, false, fmt.Errorf("%w: hybrid scalar filter index %q lookup failed: %w", ErrHybridSearchIndexUnavailable, filter.IndexName, err)
+		return hybridScalarIDs{}, 0, false, fmt.Errorf("%w: hybrid scalar filter index %q lookup failed: %w", ErrHybridSearchIndexUnavailable, filter.IndexName, err)
 	}
 	if !exists {
-		return nil, 0, false, fmt.Errorf("%w: hybrid scalar filter index %q is unavailable", ErrHybridSearchIndexUnavailable, filter.IndexName)
+		return hybridScalarIDs{}, 0, false, fmt.Errorf("%w: hybrid scalar filter index %q is unavailable", ErrHybridSearchIndexUnavailable, filter.IndexName)
 	}
 	var ids [][]byte
 	var truncated bool
@@ -962,16 +985,16 @@ func (c *Collection) hybridScalarLeafAllowSet(filter HybridScalarFilter, limit i
 	}
 	inputIDs := uint64(len(ids))
 	if err != nil {
-		return nil, inputIDs, false, fmt.Errorf("%w: hybrid scalar filter index %q lookup failed: %w", ErrHybridSearchIndexUnavailable, filter.IndexName, err)
+		return hybridScalarIDs{}, inputIDs, false, fmt.Errorf("%w: hybrid scalar filter index %q lookup failed: %w", ErrHybridSearchIndexUnavailable, filter.IndexName, err)
 	}
 	if truncated {
-		return nil, inputIDs, true, fmt.Errorf("%w: hybrid scalar filter index %q exceeded bounded lookup limit %d", ErrHybridSearchIndexUnavailable, filter.IndexName, limit)
+		return hybridScalarIDs{}, inputIDs, true, fmt.Errorf("%w: hybrid scalar filter index %q exceeded bounded lookup limit %d", ErrHybridSearchIndexUnavailable, filter.IndexName, limit)
 	}
 	set := make(hybridScalarAllowSet, len(ids))
 	for _, id := range ids {
 		set[string(id)] = struct{}{}
 	}
-	return set, inputIDs, false, nil
+	return legacyScalarIDs(set), inputIDs, false, nil
 }
 
 func (c *Collection) hybridScalarIndexExists(indexName string) (bool, error) {
@@ -1028,7 +1051,7 @@ func (c *Collection) hybridVectorQueryUsesNativeRuntime(query *HybridVectorQuery
 	def, ok := findVectorIndex(catalog.meta.VectorIndexes, query.IndexName)
 	return ok && vectorIndexDefinitionUsesNativeRuntime(def), nil
 }
-func (c *Collection) hybridSearchCandidates(plan hybridSearchExecutionPlan, allowSet hybridScalarAllowSet) ([]HybridSearchCandidate, HybridSearchStats, error) {
+func (c *Collection) hybridSearchCandidates(plan hybridSearchExecutionPlan, allowSet hybridScalarIDs) ([]HybridSearchCandidate, HybridSearchStats, error) {
 	var out []HybridSearchCandidate
 	if capHint := hybridSearchCandidatePreallocHint(plan); capHint > 0 {
 		out = make([]HybridSearchCandidate, 0, capHint)
@@ -1043,7 +1066,7 @@ func (c *Collection) hybridSearchCandidates(plan hybridSearchExecutionPlan, allo
 			var filter *HybridScalarFilter
 			// Keep prefilter admission/order in the executor, but let the
 			// selected owner search its captured base and current mutations.
-			if plan.nativeVectorScalar || plan.ownerBoundVectorScalar || (plan.nativeVectorRuntime && plan.scalarFilterStrategy == HybridScalarFilterStrategyPrefilter) || (selectedTyped && allowSet != nil) {
+			if plan.nativeVectorScalar || plan.ownerBoundVectorScalar || (plan.nativeVectorRuntime && plan.scalarFilterStrategy == HybridScalarFilterStrategyPrefilter) || (selectedTyped && allowSet.present()) {
 				filter = plan.scalarFilter
 			}
 			if plan.readView != nil {
@@ -1051,7 +1074,7 @@ func (c *Collection) hybridSearchCandidates(plan hybridSearchExecutionPlan, allo
 				if plan.nativeColumnGraph && !hybridVectorCandidateUseExactAllowSetBudget(*plan.vector, allowSet, plan.vectorCandidateAllowSetBudget) {
 					// Preserve the ordinary pack's exact-prefilter cutoff. Larger
 					// predicates retain ANN followed by the executor's filtering.
-					vectorAllowSet = nil
+					vectorAllowSet = hybridScalarIDs{}
 				}
 				return c.searchHybridVectorCandidatesDeclaredScalarAtReadViewWithAllowSet(plan.context, *plan.vector, filter, plan.readView, plan.readOwnerAcquireNanos, plan.ownerBoundVectorScalar, vectorAllowSet, acquisition)
 			}
@@ -1186,8 +1209,8 @@ func appendHybridSearchCandidates(dst, src []HybridSearchCandidate) []HybridSear
 	return append(dst, src...)
 }
 
-func hybridFilterCandidatesByScalarAllowSet(candidates []HybridSearchCandidate, allowSet hybridScalarAllowSet, stats *HybridSearchStats) []HybridSearchCandidate {
-	if allowSet == nil {
+func hybridFilterCandidatesByScalarAllowSet(candidates []HybridSearchCandidate, allowSet hybridScalarIDs, stats *HybridSearchStats) []HybridSearchCandidate {
+	if !allowSet.present() {
 		return candidates
 	}
 	out := candidates[:0]
@@ -1195,7 +1218,7 @@ func hybridFilterCandidatesByScalarAllowSet(candidates []HybridSearchCandidate, 
 		if stats != nil {
 			stats.ScalarPostfilterChecks++
 		}
-		if _, ok := allowSet[string(candidate.ID)]; ok {
+		if ok := allowSet.contains(string(candidate.ID)); ok {
 			if stats != nil {
 				stats.ScalarFilterMatched++
 			}
@@ -1216,11 +1239,17 @@ func hybridFusePlannedCandidates(candidates []HybridSearchCandidate, plan hybrid
 	if hybridParentCollapseBinding(plan.topK, plan.maxChunksPerParent) || (plan.scalarFilter != nil && plan.scalarFilterStrategy == HybridScalarFilterStrategyPostfilter) {
 		topK = len(candidates)
 	}
+	if plan.nativeScratch != nil {
+		if err := plan.nativeScratch.admitFusion(candidates); err != nil {
+			return nil, HybridSearchStats{}, err
+		}
+		return fuseHybridSearchCandidatesAdmitted(candidates, plan.fusion, topK, plan.nativeScratch.admitFn)
+	}
 	return FuseHybridSearchCandidates(candidates, plan.fusion, topK)
 }
 
-func hybridFilterResultsByScalarAllowSet(results []HybridSearchResult, allowSet hybridScalarAllowSet, topK int, stats *HybridSearchStats) []HybridSearchResult {
-	if allowSet == nil {
+func hybridFilterResultsByScalarAllowSet(results []HybridSearchResult, allowSet hybridScalarIDs, topK int, stats *HybridSearchStats) []HybridSearchResult {
+	if !allowSet.present() {
 		return results
 	}
 	filtered := results[:0]
@@ -1228,7 +1257,7 @@ func hybridFilterResultsByScalarAllowSet(results []HybridSearchResult, allowSet 
 		if stats != nil {
 			stats.ScalarPostfilterChecks++
 		}
-		if _, ok := allowSet[string(result.ID)]; ok {
+		if ok := allowSet.contains(string(result.ID)); ok {
 			if stats != nil {
 				stats.ScalarFilterMatched++
 			}
@@ -1262,25 +1291,77 @@ func hybridFilterResultsByScalarAllowSet(results []HybridSearchResult, allowSet 
 // parse and round-trip through ChildDocumentID are independent documents and
 // never share a parent-count key.
 func hybridCollapseResultsByParent(results []HybridSearchResult, topK, maxChunksPerParent int, stats *HybridSearchStats) []HybridSearchResult {
+	out, _ := hybridCollapseResultsByParentAdmitted(results, topK, maxChunksPerParent, stats, nil)
+	return out
+}
+
+func hybridCollapseResultsByParentAdmitted(results []HybridSearchResult, topK, maxChunksPerParent int, stats *HybridSearchStats, admit func(uint64) error) ([]HybridSearchResult, error) {
 	if !hybridParentCollapseBinding(topK, maxChunksPerParent) {
-		return results
+		return results, nil
 	}
-	parentCounts := make(map[string]int, min(len(results), topK))
+	var parentCounts map[string]int
+	var parents *localIDIndex
+	var counts []int
+	if admit != nil {
+		bound := min(len(results), topK)
+		if err := admitLocalIDArray(admit, bound, uint64(unsafe.Sizeof(int(0)))); err != nil {
+			return nil, err
+		}
+		var err error
+		parents, err = newLocalIDIndex(bound, admit)
+		if err != nil {
+			return nil, err
+		}
+		counts = make([]int, bound)
+	} else {
+		parentCounts = make(map[string]int, min(len(results), topK))
+	}
 	out := results[:0]
 	for _, result := range results {
 		if len(out) == topK {
 			break
 		}
-		id := string(result.ID)
+		id := unsafeStringFromBytes(result.ID)
+		if parents == nil {
+			id = string(result.ID)
+		}
+		if admit != nil {
+			// Atoi's error header/string copy, Itoa's bounded integer bytes,
+			// canonical concatenation, and invalid-parent error are independent
+			// allocations. Reserve before invoking the unchanged validators.
+			for _, n := range [5]uint64{uint64(unsafe.Sizeof(strconv.NumError{})), uint64(len(id)), 20, uint64(len(id)), uint64(unsafe.Sizeof(chunking.ParentIDError{}))} {
+				if err := admit(memtable.COWAllocationCharge(n)); err != nil {
+					return nil, err
+				}
+			}
+		}
 		parentID, ordinal, child := chunking.ParseChildID(id)
 		if child && chunking.ChildDocumentID(parentID, ordinal) == id && chunking.ValidateParentID(parentID) == nil {
-			if parentCounts[parentID] >= maxChunksPerParent {
+			count, ordinal := 0, 0
+			if parents != nil {
+				var ok bool
+				ordinal, ok = parents.lookup(parentID)
+				if !ok {
+					ordinal = parents.count
+					if err := parents.setBorrowed(parentID, ordinal); err != nil {
+						return nil, err
+					}
+				}
+				count = counts[ordinal]
+			} else {
+				count = parentCounts[parentID]
+			}
+			if count >= maxChunksPerParent {
 				if stats != nil {
 					stats.CollapseRejections++
 				}
 				continue
 			}
-			parentCounts[parentID]++
+			if parents != nil {
+				counts[ordinal]++
+			} else {
+				parentCounts[parentID]++
+			}
 		}
 		result.Rank = len(out) + 1
 		out = append(out, result)
@@ -1291,7 +1372,7 @@ func hybridCollapseResultsByParent(results []HybridSearchResult, topK, maxChunks
 			stats.CollapseExhaustions++
 		}
 	}
-	return out
+	return out, nil
 }
 
 func (c *Collection) hybridFetchResultDocuments(response *HybridSearchResponse, opts DocumentFetchOptions, baseState hybridSearchStateToken) error {
@@ -1621,14 +1702,17 @@ type hybridNativeScratch struct {
 	mu      sync.Mutex
 	view    *CollectionReadView
 	charged uint64
+	admitFn func(uint64) error
 }
 
 func newHybridNativeScratch(view *CollectionReadView) (*hybridNativeScratch, error) {
-	n := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(CollectionReadView{}))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(hybridNativeScratch{})))
+	n := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(CollectionReadView{}))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(hybridNativeScratch{}))) + memtable.COWAllocationCharge(2*uint64(unsafe.Sizeof(uintptr(0))))
 	if err := view.nativeLease.Resize(n); err != nil {
 		return nil, err
 	}
-	return &hybridNativeScratch{view: view, charged: n}, nil
+	s := &hybridNativeScratch{view: view, charged: n}
+	s.admitFn = s.admit // one admitted method-value closure for this read
+	return s, nil
 }
 func (s *hybridNativeScratch) admit(n uint64) error {
 	s.mu.Lock()
@@ -1643,55 +1727,25 @@ func (s *hybridNativeScratch) admit(n uint64) error {
 	return nil
 }
 
-// Swiss tables use eight-slot groups. Twice the next power-of-two requested
-// slots covers load-factor/rounding; another factor of two retains all growth
-// cohorts. Each group includes controls and a pointer-sized overflow allowance.
-func (s *hybridNativeScratch) admitMap(n int, entryBytes uint64) error {
-	if n < 0 {
-		return memtable.ErrCOWCapacity
-	}
-	slots := uint64(8)
-	for slots/2 < uint64(n) {
-		if slots > ^uint64(0)/2 {
-			return memtable.ErrCOWCapacity
-		}
-		slots *= 2
-	}
-	unit := entryBytes + 2
-	if unit < entryBytes || slots > (^uint64(0)-256)/unit/2 {
-		return memtable.ErrCOWCapacity
-	}
-	return s.admit(memtable.COWAllocationCharge(256 + slots*unit*2))
-}
 func (s *hybridNativeScratch) admitFusion(candidates []HybridSearchCandidate) error {
-	if err := s.admitMap(len(candidates), uint64(unsafe.Sizeof(string("")))+uint64(unsafe.Sizeof(int(0)))); err != nil {
-		return err
-	}
-	// Accumulator/result/source arrays, debug copy and final fetch ID headers.
-	unit := uint64(unsafe.Sizeof(hybridFusionAccumulator{})) + uint64(unsafe.Sizeof(HybridSearchResult{})) + 2*uint64(unsafe.Sizeof(HybridSourceContribution{})) + uint64(unsafe.Sizeof(HybridSearchCandidate{})) + uint64(unsafe.Sizeof([]byte{}))
-	if uint64(len(candidates)) > ^uint64(0)/unit {
-		return memtable.ErrCOWCapacity
-	}
-	if err := s.admit(memtable.COWAllocationCharge(uint64(len(candidates)) * unit)); err != nil {
-		return err
-	}
-	// Parent-collapse map plus IDs copied for the fusion map, result, debug and
-	// parent parsing. Match/term arrays are cloned by fusion and optional debug.
-	if err := s.admitMap(len(candidates), uint64(unsafe.Sizeof(string("")))+uint64(unsafe.Sizeof(int(0)))); err != nil {
-		return err
+	for _, width := range []uint64{uint64(unsafe.Sizeof(HybridSearchResult{})), uint64(unsafe.Sizeof(HybridSearchCandidate{})), uint64(unsafe.Sizeof([]byte{}))} {
+		if err := admitLocalIDArray(s.admitFn, len(candidates), width); err != nil {
+			return err
+		}
 	}
 	for _, c := range candidates {
-		for i := 0; i < 4; i++ {
+		if err := admitLocalIDArray(s.admitFn, 2, uint64(unsafe.Sizeof(HybridSourceContribution{}))); err != nil {
+			return err
+		}
+		for i := 0; i < 2; i++ {
 			if err := s.admit(memtable.COWAllocationCharge(uint64(len(c.ID)))); err != nil {
 				return err
 			}
-		}
-		for i := 0; i < 2; i++ {
-			if err := s.admit(memtable.COWAllocationCharge(uint64(len(c.TextMatches)) * uint64(unsafe.Sizeof(HybridTextMatch{})))); err != nil {
+			if err := admitLocalIDArray(s.admitFn, len(c.TextMatches), uint64(unsafe.Sizeof(HybridTextMatch{}))); err != nil {
 				return err
 			}
 			for _, m := range c.TextMatches {
-				if err := s.admit(memtable.COWAllocationCharge(uint64(len(m.Terms)) * uint64(unsafe.Sizeof(string(""))))); err != nil {
+				if err := admitLocalIDArray(s.admitFn, len(m.Terms), uint64(unsafe.Sizeof(string("")))); err != nil {
 					return err
 				}
 			}

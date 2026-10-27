@@ -131,7 +131,7 @@ func TestNativeVectorBorrowedPublicReceipt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	view.catalog, err = newNativeTextCatalog(view.nativeRead, scratch.admit)
+	view.catalog, err = newNativeTextCatalog(view.nativeRead, scratch.admitFn)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -35,8 +35,9 @@ func (t *Tree) initPrimaryIterator(p *primaryIterator, base *Iterator, start, en
 	return t.initPrimaryIteratorFromRoot(&root, p, base, start, end, opts, reverse, readLeaf, leafScratch, bounded)
 }
 
-// The caller has loaded/authenticated this exact captured root through the
-// original loader. Keep directory and base validation shared with pooled users.
+// root is the checked view from this exact tree's retained root. Owned
+// construction uses the same probe to choose its storage before allocation.
+// Directory and base authentication stay shared with pooled callers.
 func (t *Tree) initPrimaryIteratorFromRoot(root *node.Node, p *primaryIterator, base *Iterator, start, end []byte, opts IteratorOptions, reverse bool, readLeaf func(page.LeafLogPtr, []byte) ([]byte, error), leafScratch []byte, bounded bool) (*primaryIterator, error) {
 	if root.Type() != page.PageTypePrimaryDirectory {
 		return nil, nil
@@ -46,7 +47,7 @@ func (t *Tree) initPrimaryIteratorFromRoot(root *node.Node, p *primaryIterator, 
 		return nil, err
 	}
 	op, _ := directory.Base()
-	if err = t.validatePrimaryBase(root.Data()); err != nil {
+	if err := t.validatePrimaryBase(root.Data()); err != nil {
 		return nil, err
 	}
 	// Ordinary roots use only the pooled base iterator. Allocate the PRIMARY

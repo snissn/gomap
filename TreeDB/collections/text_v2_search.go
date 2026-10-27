@@ -386,7 +386,7 @@ func executeTextV2SearchAtSnapshot(
 		response.Results = []TextSearchResult{}
 		return response, nil
 	}
-	allowSet, err := newTextV2SearchOrdinalAllowSet(snap, catalog, ctx, opts.textV2AllowedDocumentIDs)
+	allowSet, err := newTextV2SearchOrdinalAllowSet(snap, catalog, ctx, opts.scalarAllowedIDs())
 	if err != nil {
 		return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
 	}
@@ -640,8 +640,8 @@ func validateTextV2SearchRootFormat(snap *backenddb.Snapshot, catalog *collectio
 	return nil
 }
 
-func newTextV2SearchOrdinalAllowSet(snap *backenddb.Snapshot, catalog *collectionCatalog, ctx *textV2SearchContext, allowedIDs hybridScalarAllowSet) (*textV2SearchOrdinalAllowSet, error) {
-	if allowedIDs == nil {
+func newTextV2SearchOrdinalAllowSet(snap *backenddb.Snapshot, catalog *collectionCatalog, ctx *textV2SearchContext, allowedIDs hybridScalarIDs) (*textV2SearchOrdinalAllowSet, error) {
+	if !allowedIDs.present() {
 		return nil, nil
 	}
 	if catalog != nil && catalog.nativeText != nil {
@@ -649,8 +649,8 @@ func newTextV2SearchOrdinalAllowSet(snap *backenddb.Snapshot, catalog *collectio
 			return nil, err
 		}
 	}
-	ids := make([]string, 0, len(allowedIDs))
-	for id := range allowedIDs {
+	ids := make([]string, 0, allowedIDs.len())
+	for id := range allowedIDs.all {
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)

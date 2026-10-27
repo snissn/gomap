@@ -15,23 +15,18 @@ var ErrOwnedIteratorLeafReader = errors.New("tree: bounded external-leaf reader 
 // Root depth and reconstructed keys are checked before exceeding these arrays.
 type ownedProjectionStorage struct {
 	iterator    Iterator
-	primary     primaryIterator
-	deltaLeaf   [page.PageSize]byte
 	stack       [maxTraversalDepth]CursorItem
 	nodeKey     [page.PageSize]byte
 	combinedKey [page.PageSize]byte
 	leaf        [page.PageSize]byte
 }
 
-// Ordinary roots do not need the complete PRIMARY delta iterator or its
-// independent leaf backing. All ordinary fixed traversal/key storage remains.
-// Both selected layouts use one allocation and never enter iteratorPool.
-type ownedOrdinaryProjectionStorage struct {
-	iterator    Iterator
-	stack       [maxTraversalDepth]CursorItem
-	nodeKey     [page.PageSize]byte
-	combinedKey [page.PageSize]byte
-	leaf        [page.PageSize]byte
+// PRIMARY roots need a second traversal for their directory components. Plain
+// roots never allocate or zero this state. Either shape has one storage owner.
+type ownedPrimaryProjectionStorage struct {
+	ownedProjectionStorage
+	primary   primaryIterator
+	deltaLeaf [page.PageSize]byte
 }
 
 // OwnedPointerProjectionWorkspace belongs to one preadmitted operation. It
@@ -40,8 +35,8 @@ type ownedOrdinaryProjectionStorage struct {
 // close the previous iterator before Reset or releasing its original allowance.
 // No borrowed entry remains valid after Close/Reset.
 type OwnedPointerProjectionWorkspace struct {
-	ordinary *ownedOrdinaryProjectionStorage
-	primary  *ownedProjectionStorage
+	ordinary *ownedProjectionStorage
+	primary  *ownedPrimaryProjectionStorage
 	inUse    bool
 }
 
@@ -77,12 +72,12 @@ func (t *Tree) OwnedPointerProjectionIteratorWithWorkspace(start, end []byte, re
 	return t.ownedPointerProjectionIteratorStorage(start, end, readLeaf, false, storage, admitStorage)
 }
 
-// OwnedPointerProjectionAllocationSize reports the maximum constructor storage.
+// OwnedPointerProjectionAllocationSize reports the largest raw single-allocation size.
 // The caller must reserve it before constructing an iterator, and hold the
 // reservation and exact tree/root owner until Close. Domain bytes are borrowed.
 // Ordinary roots retain that same conservative maximum admission promise.
 func OwnedPointerProjectionAllocationSize() uint64 {
-	return uint64(unsafe.Sizeof(ownedProjectionStorage{}))
+	return uint64(unsafe.Sizeof(ownedPrimaryProjectionStorage{}))
 }
 
 // OwnedPointerProjectionIterator exposes entry metadata without value decoding,
@@ -105,61 +100,43 @@ func (t *Tree) ownedPointerProjectionIterator(start, end []byte, readLeaf func(p
 }
 
 func (t *Tree) ownedPointerProjectionIteratorStorage(start, end []byte, readLeaf func(page.LeafLogPtr, []byte) ([]byte, error), reverse bool, workspace *OwnedPointerProjectionWorkspace, admitStorage func(uint64) error) (iterator.UnsafeIterator, error) {
-	// Use the SAME root load/authentication as initPrimaryIterator, before
-	// choosing a single backing. No second root read is needed for PRIMARY.
+	// Use the same checked root probe for both constructors and reuse its view
+	// for PRIMARY initialization. Shape selection adds no root read or owner.
 	var root node.Node
 	rootErr := t.loadNodeViewWithLoadKindInto(&root, t.rootPageID, true, true)
-	if rootErr != nil || root.Type() != page.PageTypePrimaryDirectory {
-		var storage *ownedOrdinaryProjectionStorage
+	isPrimary := rootErr == nil && root.Type() == page.PageTypePrimaryDirectory
+	if workspace != nil && ((isPrimary && workspace.primary == nil) || (!isPrimary && workspace.ordinary == nil)) {
+		if admitStorage == nil {
+			return nil, ErrOwnedProjectionWorkspaceAdmission
+		}
+		if err := admitStorage(OwnedPointerProjectionAllocationSize()); err != nil {
+			return nil, err
+		}
+	}
+	var storage *ownedProjectionStorage
+	var primary *primaryIterator
+	var deltaLeaf []byte
+	if isPrimary {
+		var owner *ownedPrimaryProjectionStorage
+		if workspace != nil {
+			owner = workspace.primary
+		}
+		if owner == nil {
+			owner = new(ownedPrimaryProjectionStorage)
+			if workspace != nil {
+				workspace.primary = owner
+			}
+		}
+		storage, primary, deltaLeaf = &owner.ownedProjectionStorage, &owner.primary, owner.deltaLeaf[:]
+	} else {
 		if workspace != nil {
 			storage = workspace.ordinary
 		}
 		if storage == nil {
-			if workspace != nil {
-				if admitStorage == nil {
-					return nil, ErrOwnedProjectionWorkspaceAdmission
-				}
-				if err := admitStorage(OwnedPointerProjectionAllocationSize()); err != nil {
-					return nil, err
-				}
-			}
-			storage = new(ownedOrdinaryProjectionStorage)
+			storage = new(ownedProjectionStorage)
 			if workspace != nil {
 				workspace.ordinary = storage
 			}
-		}
-		if workspace != nil {
-			workspace.inUse = true
-		}
-		it := &storage.iterator
-		t.initOwnedProjectionIterator(it, start, end, readLeaf, reverse, storage.nodeKey[:], storage.stack[:], storage.combinedKey[:], storage.leaf[:])
-		if rootErr != nil {
-			it.err = rootErr
-			return it, nil
-		}
-		if reverse {
-			it.Seek(nil)
-		} else {
-			it.Seek(start)
-		}
-		return it, nil
-	}
-	var storage *ownedProjectionStorage
-	if workspace != nil {
-		storage = workspace.primary
-	}
-	if storage == nil {
-		if workspace != nil {
-			if admitStorage == nil {
-				return nil, ErrOwnedProjectionWorkspaceAdmission
-			}
-			if err := admitStorage(OwnedPointerProjectionAllocationSize()); err != nil {
-				return nil, err
-			}
-		}
-		storage = new(ownedProjectionStorage)
-		if workspace != nil {
-			workspace.primary = storage
 		}
 	}
 	if workspace != nil {
@@ -167,12 +144,23 @@ func (t *Tree) ownedPointerProjectionIteratorStorage(start, end []byte, readLeaf
 	}
 	it := &storage.iterator
 	t.initOwnedProjectionIterator(it, start, end, readLeaf, reverse, storage.nodeKey[:], storage.stack[:], storage.combinedKey[:], storage.leaf[:])
-	p, err := t.initPrimaryIteratorFromRoot(&root, &storage.primary, it, start, end, IteratorOptions{Mode: IteratorModePointerProjection, IncludeTombstones: true}, reverse, readLeaf, storage.deltaLeaf[:], true)
-	if err != nil {
-		it.err = err
+	if rootErr != nil {
+		it.err = rootErr
 		return it, nil
 	}
-	return p, nil
+	if p, err := t.initPrimaryIteratorFromRoot(&root, primary, it, start, end, IteratorOptions{Mode: IteratorModePointerProjection, IncludeTombstones: true}, reverse, readLeaf, deltaLeaf, true); p != nil || err != nil {
+		if err != nil {
+			it.err = err
+			return it, nil
+		}
+		return p, nil
+	}
+	if reverse {
+		it.Seek(nil)
+	} else {
+		it.Seek(start)
+	}
+	return it, nil
 }
 
 func (t *Tree) initOwnedProjectionIterator(it *Iterator, start, end []byte, readLeaf func(page.LeafLogPtr, []byte) ([]byte, error), reverse bool, nodeKey []byte, stack []CursorItem, combinedKey, leaf []byte) {

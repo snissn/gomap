@@ -40,7 +40,7 @@ func executeTextV2PhraseSearchAtSnapshot(
 		response.Results = []TextSearchResult{}
 		return response, nil
 	}
-	allowSet, err := newTextV2SearchOrdinalAllowSet(snap, catalog, ctx, opts.textV2AllowedDocumentIDs)
+	allowSet, err := newTextV2SearchOrdinalAllowSet(snap, catalog, ctx, opts.scalarAllowedIDs())
 	if err != nil {
 		return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
 	}

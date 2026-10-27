@@ -300,7 +300,7 @@ func TestCOWOrderedIteratorDictionaryLeafFallback(t *testing.T) {
 
 // Use the maintained dictionary leaf producer and training recipe, rather than
 // inventing a read hook or an unsupported cached leaf serialization.
-func cowSuccessorDictionaryLeafFixture(t *testing.T) (*DB, []byte, page.LeafLogPtr) {
+func cowSuccessorDictionaryLeafFixture(t testing.TB) (*DB, []byte, page.LeafLogPtr) {
 	t.Helper()
 	dir := t.TempDir()
 	var store *dictdb.Store

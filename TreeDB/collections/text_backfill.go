@@ -115,8 +115,8 @@ type textTermAccumulator struct {
 	inline         [textTermAccumulatorInlineTerms]textAnalyzedTerm
 	terms          []textAnalyzedTerm
 	lookup         map[string]int
+	nativeLookup   *localIDIndex
 	admit          func(uint64) error
-	lookupCapacity int
 }
 
 func newTextTermAccumulator(storePositions, storeOffsets bool) textTermAccumulator {
@@ -920,7 +920,7 @@ func addTextStatsEntries(table memtable.Table, acc textBackfillStatsAccumulator)
 	return entries, bytesWritten
 }
 
-func addTextV2StatsEntries(table memtable.Table, acc textBackfillStatsAccumulator, def TextIndexDefinition, generation uint64, postingBlockCounts map[string]uint64) (int, uint64) {
+func addTextV2StatsEntries(table memtable.Table, acc textBackfillStatsAccumulator, def TextIndexDefinition, generation uint64, postingBlockCounts textValues[uint64]) (int, uint64) {
 	if table == nil {
 		return 0, 0
 	}
@@ -946,7 +946,7 @@ func addTextV2StatsEntries(table memtable.Table, acc textBackfillStatsAccumulato
 			StatsGeneration:    generation,
 			DocumentFrequency:  stats.DocumentFrequency,
 			TotalTermFrequency: stats.TotalTermFrequency,
-			PostingBlockCount:  postingBlockCounts[term],
+			PostingBlockCount:  postingBlockCounts.get(term),
 		}))
 	}
 	seenFields := make(map[string]struct{}, len(def.Fields))

@@ -265,10 +265,11 @@ func testNativeTextBuilderTemporaryOwnership(t *testing.T, version TextIndexVers
 	}
 }
 
-// These ordinary mutations refuse at two different admission boundaries on the
-// original transaction lease. Pin every setup cut so teardown cannot offset an
-// accidental positive reservation; no test allocator or production hook.
-func TestNativeTextPublicNestedAdmissionStages(t *testing.T) {
+// These public mutations preserve rollback under intrinsic nested-decoder
+// capacity and unrelated original-parent pressure. Repeated tokens now fit the
+// compact constructor; no obsolete decoder/token stage label is asserted.
+// Pin every setup cut so teardown cannot offset a positive reservation.
+func TestNativeTextPublicNestedAdmissionRollback(t *testing.T) {
 	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir())
 	opts.MemtableMode = "cow_btree"
 	opts.BackgroundCheckpointInterval = -1
@@ -328,26 +329,74 @@ func TestNativeTextPublicNestedAdmissionStages(t *testing.T) {
 		t.Fatal(err)
 	}
 	pin()
+	// Parent pressure permits producer preparation to checkpoint pending setup
+	// work and join its cleanup. Settle that work before capturing the rollback
+	// baseline; the attempts below then have no prefix left to materialize.
+	func() {
+		settle, err := pins[len(pins)-1].NativeAllocator().AdmitNativeBytes(0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer settle.Close()
+		available := budget.Limits().MaxInFlightBytes - budget.Stats().ReservedBytes
+		if available == 0 {
+			t.Fatal("no original parent capacity for setup preparation")
+		}
+		if err := settle.Resize(available); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := backend.PrepareNativeProducerObservation(); err != nil {
+			t.Fatal(err)
+		}
+	}()
+	pin()
 	requireNativeTextIDs(t, c, "refund", "a")
 	if _, err = c.Get([]byte("a")); err != nil {
 		t.Fatal(err)
 	}
 	opening := pins[len(pins)-1]
 	beforeState, beforeSequence := opening.State(), opening.LogicalSequence()
+	if budget.Limits().MaxInFlightBytes != 64<<20 {
+		t.Fatalf("fixture requires original 64MiB parent: %+v", budget.Limits())
+	}
 	for _, test := range []struct {
-		name, label string
-		document    []byte
+		name     string
+		document []byte
+		pressure bool
 	}{
-		{"decoder", "native text JSON decode workspace", []byte(fmt.Sprintf(`{"article":{"content":"refund policy"},"payload":%q}`, strings.Repeat("x", 1<<20)))},
-		{"tokens", "native text analysis workspace", []byte(fmt.Sprintf(`{"article":{"content":%q}}`, strings.Repeat("word ", 1<<13)))},
+		{"nested_decoder_capacity", []byte(fmt.Sprintf(`{"article":{"content":"refund policy"},"payload":%q}`, strings.Repeat("x", 1<<20))), false},
+		{"repeated_tokens_parent_pressure", []byte(fmt.Sprintf(`{"article":{"content":%q}}`, strings.Repeat("word ", 1<<13))), true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			for attempt := 0; attempt < 3; attempt++ {
 				before := budget.Stats()
 				beforeLSN := backend.CommandWALNextLSN()
-				_, err := c.Insert([]byte("refused"), test.document)
-				if !errors.Is(err, memtable.ErrCOWCapacity) || !strings.Contains(err.Error(), test.label) {
-					t.Fatalf("attempt%d expected %s refusal: %v", attempt, test.label, err)
+				var insertErr error
+				func() {
+					if test.pressure {
+						// Fill only the remaining in-flight capacity on the
+						// SAME allocator that governs this public Insert.
+						// No synthetic denial, changed cap or document formula.
+						blocker, err := opening.NativeAllocator().AdmitNativeBytes(0)
+						if err != nil {
+							t.Fatal(err)
+						}
+						defer blocker.Close()
+						available := budget.Limits().MaxInFlightBytes - budget.Stats().ReservedBytes
+						if available == 0 {
+							t.Fatal("no original parent capacity for unrelated pressure")
+						}
+						if err := blocker.Resize(available); err != nil {
+							t.Fatal(err)
+						}
+						if stats := budget.Stats(); stats.ReservedBytes != budget.Limits().MaxInFlightBytes {
+							t.Fatalf("unrelated pressure did not fill original parent: %+v", stats)
+						}
+					}
+					_, insertErr = c.Insert([]byte("refused"), test.document)
+				}() // Release unrelated pressure before read/receipt oracles.
+				if !errors.Is(insertErr, memtable.ErrCOWCapacity) {
+					t.Fatalf("attempt%d expected public capacity refusal: %v", attempt, insertErr)
 				}
 				if backend.CommandWALNextLSN() != beforeLSN {
 					t.Fatal("refused mutation assigned WAL identity")

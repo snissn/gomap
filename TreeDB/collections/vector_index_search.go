@@ -3034,7 +3034,7 @@ func (c *Collection) searchNativeHNSWWithBufferReadView(opts VectorIndexSearchOp
 		buffer.Reset()
 		return response, nil, err
 	}
-	response, err = c.searchNativeHNSWAtReadView(opts, buffer, view, nil)
+	response, err = c.searchNativeHNSWAtReadView(opts, buffer, view, hybridScalarIDs{})
 	if err != nil {
 		err = errors.Join(err, view.Close())
 		return response, nil, err
@@ -3042,7 +3042,7 @@ func (c *Collection) searchNativeHNSWWithBufferReadView(opts VectorIndexSearchOp
 	return response, view, nil
 }
 
-func (c *Collection) searchNativeHNSWAtReadView(opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer, view *CollectionReadView, allowSet hybridScalarAllowSet) (response VectorIndexSearchResponse, resultErr error) {
+func (c *Collection) searchNativeHNSWAtReadView(opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer, view *CollectionReadView, allowSet hybridScalarIDs) (response VectorIndexSearchResponse, resultErr error) {
 	if err := validateCollectionVectorIndexSearchWithBufferOptions(opts, buffer); err != nil {
 		return response, err
 	}
@@ -3087,7 +3087,7 @@ func (c *Collection) searchNativeHNSWAtReadView(opts VectorIndexSearchOptions, b
 		if e != nil {
 			return response, e
 		}
-		view.catalog, e = newNativeTextCatalog(read, scratch.admit)
+		view.catalog, e = newNativeTextCatalog(read, scratch.admitFn)
 		if e != nil {
 			return response, e
 		}

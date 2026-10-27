@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"hash/maphash"
 	"slices"
 	"unsafe"
 
@@ -19,7 +20,7 @@ func (a *textTermAccumulator) takeDocumentField(field string) textDocumentFieldS
 	// All backing remains charged, including obsolete map/growth cohorts.
 	// Detach callbacks/indices: the prepared state is the only consumer now.
 	a.terms, a.lookup, a.admit = nil, nil, nil
-	a.lookupCapacity = 0
+	a.nativeLookup = nil
 	return out
 }
 
@@ -51,8 +52,8 @@ func (a *textTermAccumulator) addAdmittedToken(token TextToken) error {
 		return memtable.ErrCOWCapacity
 	}
 	idx := -1
-	if a.lookup != nil {
-		if found, ok := a.lookup[token.Term]; ok {
+	if a.nativeLookup != nil {
+		if found, ok := a.nativeLookup.lookup(token.Term); ok {
 			idx = found
 		}
 	} else {
@@ -71,7 +72,7 @@ func (a *textTermAccumulator) addAdmittedToken(token TextToken) error {
 		}
 	}
 	var charge nativeTextAdmissionSum
-	termCapacity, lookupCapacity := cap(a.terms), a.lookupCapacity
+	termCapacity := cap(a.terms)
 	if idx < 0 {
 		var err error
 		termCapacity, err = textTermGrowthCapacity(len(a.terms), cap(a.terms))
@@ -80,20 +81,6 @@ func (a *textTermAccumulator) addAdmittedToken(token TextToken) error {
 		}
 		if termCapacity != cap(a.terms) {
 			charge.array(uint64(termCapacity), uint64(unsafe.Sizeof(textAnalyzedTerm{})))
-		}
-		if len(a.terms) >= textTermAccumulatorInlineTerms && len(a.terms) >= lookupCapacity {
-			if lookupCapacity == 0 {
-				lookupCapacity = 2 * textTermAccumulatorInlineTerms
-			} else {
-				lookupCapacity, err = textTermGrowthCapacity(len(a.terms), lookupCapacity)
-				if err != nil {
-					return err
-				}
-			}
-			// Established Swiss-map bound: headers, rounded groups and all
-			// internal growth through this capacity. Each explicit rebuild is
-			// independently charged; earlier maps stay on the same receipt.
-			charge.mapEntries(uint64(lookupCapacity), uint64(unsafe.Sizeof(string("")))+uint64(unsafe.Sizeof(int(0))))
 		}
 	}
 	positionCapacity, offsetCapacity := cap(term.Positions), cap(term.Offsets)
@@ -119,29 +106,44 @@ func (a *textTermAccumulator) addAdmittedToken(token TextToken) error {
 	if charge.bad {
 		return memtable.ErrCOWCapacity
 	}
-	// With no new backing there is no allocation promise to acquire.
-	if charge.total != 0 {
+	// Every replacement lane and any index growth is admitted before effects.
+	// The small inline lookup remains linear until the ninth distinct term.
+	if idx < 0 && len(a.terms) >= textTermAccumulatorInlineTerms {
+		if a.nativeLookup == nil {
+			// Header/cells plus all prospective lanes are one refusal boundary.
+			initial, err := localIDIndexCharge(len(a.terms) + 1)
+			if err != nil || initial > ^uint64(0)-charge.total {
+				return memtable.ErrCOWCapacity
+			}
+			if err := a.admit(initial + charge.total); err != nil {
+				return err
+			}
+			// Construction uses the already admitted exact initial cell cohort. Install
+			// the actual callback before any later growth can occur.
+			capacity, _ := localIDCapacity(len(a.terms) + 1)
+			a.nativeLookup = &localIDIndex{cells: make([]localIDCell, capacity), admit: a.admit, seed: maphash.MakeSeed()}
+			for i := range a.terms {
+				a.nativeLookup.insert(a.terms[i].Term, i)
+			}
+		} else if err := a.nativeLookup.prepare(charge.total); err != nil {
+			return err
+		}
+	} else if charge.total != 0 {
 		if err := a.admit(charge.total); err != nil {
 			return err
 		}
 	}
+
 	if termCapacity != cap(a.terms) {
 		terms := make([]textAnalyzedTerm, len(a.terms), termCapacity)
 		copy(terms, a.terms)
 		a.terms = terms
 	}
-	if lookupCapacity != a.lookupCapacity {
-		lookup := make(map[string]int, lookupCapacity)
-		for i := range a.terms {
-			lookup[a.terms[i].Term] = i
-		}
-		a.lookup, a.lookupCapacity = lookup, lookupCapacity
-	}
 	if idx < 0 {
 		idx = len(a.terms)
 		a.terms = append(a.terms, textAnalyzedTerm{Term: token.Term})
-		if a.lookup != nil {
-			a.lookup[token.Term] = idx
+		if a.nativeLookup != nil {
+			a.nativeLookup.insert(token.Term, idx)
 		}
 	}
 	stored := &a.terms[idx]

@@ -21,18 +21,18 @@ const hybridTextCandidateDefaultScanCandidateLimit = 8 * 1024
 // fallback. Match attribution is opt-in through HybridTextQuery.IncludeTextMatches;
 // the default candidate path is score-only.
 func (c *Collection) SearchHybridTextCandidates(query HybridTextQuery) (HybridCandidateResponse, error) {
-	return c.searchHybridTextCandidates(query, nil)
+	return c.searchHybridTextCandidates(query, hybridScalarIDs{})
 }
 
-func (c *Collection) searchHybridTextCandidates(query HybridTextQuery, allowSet hybridScalarAllowSet) (HybridCandidateResponse, error) {
+func (c *Collection) searchHybridTextCandidates(query HybridTextQuery, allowSet hybridScalarIDs) (HybridCandidateResponse, error) {
 	return c.searchHybridTextCandidatesWithScanBudget(query, allowSet, query.CandidateLimit)
 }
 
-func (c *Collection) searchHybridTextCandidatesWithScanBudget(query HybridTextQuery, allowSet hybridScalarAllowSet, scanBudget int) (HybridCandidateResponse, error) {
+func (c *Collection) searchHybridTextCandidatesWithScanBudget(query HybridTextQuery, allowSet hybridScalarIDs, scanBudget int) (HybridCandidateResponse, error) {
 	return c.searchHybridTextCandidatesWithScanBudgetAtReadView(query, allowSet, scanBudget, nil)
 }
 
-func (c *Collection) searchHybridTextCandidatesWithScanBudgetAtReadView(query HybridTextQuery, allowSet hybridScalarAllowSet, scanBudget int, view *CollectionReadView) (HybridCandidateResponse, error) {
+func (c *Collection) searchHybridTextCandidatesWithScanBudgetAtReadView(query HybridTextQuery, allowSet hybridScalarIDs, scanBudget int, view *CollectionReadView) (HybridCandidateResponse, error) {
 	if c == nil {
 		return HybridCandidateResponse{}, errCollectionNil
 	}
@@ -55,15 +55,15 @@ func (c *Collection) searchHybridTextCandidatesWithScanBudgetAtReadView(query Hy
 		resultMode = textSearchResultTextMatchesOnly
 	}
 	textOpts := TextSearchOptions{
-		IndexName:                query.IndexName,
-		Query:                    query.Query,
-		QueryMode:                query.QueryMode,
-		Operator:                 query.Operator,
-		TopK:                     requested,
-		CandidateLimit:           hybridTextCandidateScanCandidateLimit(scanBudget),
-		MaxPostingsScanned:       query.MaxPostingsScanned,
-		IncludeDocuments:         false,
-		textV2AllowedDocumentIDs: allowSet,
+		IndexName:          query.IndexName,
+		Query:              query.Query,
+		QueryMode:          query.QueryMode,
+		Operator:           query.Operator,
+		TopK:               requested,
+		CandidateLimit:     hybridTextCandidateScanCandidateLimit(scanBudget),
+		MaxPostingsScanned: query.MaxPostingsScanned,
+		IncludeDocuments:   false,
+		textV2AllowedIDs:   allowSet,
 	}
 	var textResponse TextSearchResponse
 	var err error

@@ -1387,7 +1387,7 @@ func BenchmarkNativeScalarFilterExecutorCrossover(b *testing.B) {
 				}
 				plan := &nativeScalarFilterExecution{
 					identity:         identity,
-					finiteIDs:        allowSet,
+					finiteIDs:        legacyScalarIDs(allowSet),
 					candidateIDs:     uint64(cardinality),
 					sourceGeneration: view.sourceDocumentGeneration,
 					exactScoring:     route.exact,

@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
@@ -73,7 +74,7 @@ func TestNativeTextSharedMaterializationTransfer(t *testing.T) {
 	}
 }
 
-// Real token sink refusals must occur before ANY chosen growth allocation or
+// Real token sink admission refusals must occur before ANY chosen allocation or
 // mutation. This test checks existing backing identity/content and actual heap
 // allocation, rather than copying the growth predicate into a parallel helper.
 func TestNativeTextSharedMaterializationRefusal(t *testing.T) {
@@ -82,18 +83,39 @@ func TestNativeTextSharedMaterializationRefusal(t *testing.T) {
 		name               string
 		positions, offsets bool
 		unique, repeats    int
+		spareTermCapacity  bool
 	}{
-		{"position-first", true, false, 0, 0}, {"offset-first", false, true, 0, 0},
-		{"position-growth", true, false, 1, 1}, {"offset-growth", false, true, 1, 1},
-		{"terms-and-lookup-first", false, false, 8, 0}, {"lookup-rebuild", false, false, 16, 0},
+		{"position-first", true, false, 0, 0, false}, {"offset-first", false, true, 0, 0, false},
+		{"position-growth", true, false, 1, 1, false}, {"offset-growth", false, true, 1, 1, false},
+		{"terms-and-lookup-first", false, false, 8, 0, false}, {"lookup-admission", false, false, 15, 0, false},
+		{"lookup-growth", false, false, 16, 0, true}, {"term-growth-with-lookup", false, false, 16, 0, false},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
-			a := &textTermAccumulator{storePositions: scenario.positions, storeOffsets: scenario.offsets, admit: func(uint64) error { return nil }}
+			refuse := false
+			admit := func(uint64) error {
+				if refuse {
+					return denied
+				}
+				return nil
+			}
+			a := &textTermAccumulator{storePositions: scenario.positions, storeOffsets: scenario.offsets, admit: admit}
 			a.terms = a.inline[:0]
 			for i := 0; i < scenario.unique; i++ {
 				if err := a.AddTextToken(TextToken{Term: string(rune('a' + i)), Position: i}); err != nil {
 					t.Fatal(err)
 				}
+			}
+			if scenario.spareTermCapacity {
+				// Isolate lookup backing growth at the seventeenth distinct term.
+				// Admit the independent setup lane before allocation; retain its
+				// old cohort exactly as the production constructor does.
+				capacity := 2 * cap(a.terms)
+				if err := admit(memtable.COWAllocationCharge(uint64(capacity) * uint64(unsafe.Sizeof(textAnalyzedTerm{})))); err != nil {
+					t.Fatal(err)
+				}
+				terms := make([]textAnalyzedTerm, len(a.terms), capacity)
+				copy(terms, a.terms)
+				a.terms = terms
 			}
 			var token TextToken
 			if scenario.repeats > 0 {
@@ -107,8 +129,17 @@ func TestNativeTextSharedMaterializationRefusal(t *testing.T) {
 			if len(a.terms) > 0 {
 				backing = &a.terms[0]
 			}
-			length, capacity, lookupCapacity := a.length, cap(a.terms), a.lookupCapacity
-			a.admit = func(uint64) error { return denied }
+			length, capacity := a.length, cap(a.terms)
+			lookup := a.nativeLookup
+			var cells []localIDCell
+			var cellBacking *localIDCell
+			var count, used int
+			if lookup != nil {
+				cells = append(cells, lookup.cells...)
+				cellBacking = &lookup.cells[0]
+				count, used = lookup.count, lookup.used
+			}
+			refuse = true
 			if allocations := testing.AllocsPerRun(8, func() {
 				if err := a.AddTextToken(token); err != denied {
 					panic("refusal lost")
@@ -116,10 +147,13 @@ func TestNativeTextSharedMaterializationRefusal(t *testing.T) {
 			}); allocations != 0 {
 				t.Fatalf("refused growth allocated %g", allocations)
 			}
-			if a.length != length || cap(a.terms) != capacity || a.lookupCapacity != lookupCapacity || !reflect.DeepEqual(a.terms, before) || backing != nil && &a.terms[0] != backing {
+			if a.length != length || cap(a.terms) != capacity || a.nativeLookup != lookup || !reflect.DeepEqual(a.terms, before) || backing != nil && &a.terms[0] != backing {
 				t.Fatal("refused token mutated retained state")
 			}
-			a.admit = func(uint64) error { return nil }
+			if lookup != nil && (lookup.count != count || lookup.used != used || !reflect.DeepEqual(lookup.cells, cells) || &lookup.cells[0] != cellBacking) {
+				t.Fatal("refused token mutated lookup backing")
+			}
+			refuse = false
 			if err := a.AddTextToken(token); err != nil {
 				t.Fatal(err)
 			}

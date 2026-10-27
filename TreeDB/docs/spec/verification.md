@@ -4530,6 +4530,44 @@ apply paths require their own supported executors and caller migration. Current
 unsupported operations must retain their preaccept refusal. A passing JSON
 lifecycle does not establish full collection migration or performance acceptance.
 
+## Native local indexes and direct text construction
+
+The focused controls below distinguish concrete allocation/ownership closure
+from full query or DDL migration. Run them on the exact candidate, alongside the
+affected existing lifecycle, corruption, replay and race suites:
+
+- `TestNativeLocalIDIndexCollisionBoundaryAndPresence` covers full-key equality,
+  copied-key custody, absent versus empty sets and 896/897/4096/4097 boundaries.
+  `TestNativeLocalIDIndexOriginalReceiptGrowthRefusal` checks real finite-parent
+  refusal before growth, preservation of successful prefixes and final refund.
+  Scanner/sentinel and fusion/adaptive parity controls keep the public lookup
+  limit and truncation semantics intact.
+- `TestNativeScalarPlanReusePublicLifecycle`,
+  `TestNativeScalarPlanReuseHeldGenerationAndSchema`,
+  `TestNativeScalarPlanReuseOptionalRefusalAndBound` and
+  `TestNativeScalarPlanReuseRetainedCardinalityBoundary` exercise runtime-owned
+  clones, captured identity, optional retention and the original slot/byte limits.
+  The cardinality control includes 896, 897 and 4096 IDs; it is not a new cutoff.
+- `TestNativeTextDeterministicTermConstruction`,
+  `TestNativeTextConstructorOriginalLeaseRefusal`,
+  `TestNativeTextNestedConcreteAnalysisParity` and
+  `TestNativeTextPublicConstructorUnion897` cover term/state parity, combined
+  pre-effect cell/lane admission, nested selection and public V1/V2 mutation
+  construction. They do not certify sibling query/DDL map accounting.
+- `TestCOWNativeConstructionWorkspaceWatermarks`,
+  `TestCOWNativeConstructionWorkspaceCurrentIdentity` and
+  `TestNativeTypedProducerPressureSeparatesSharedWorkspace` distinguish advisory
+  fixed-workspace scheduling from unchanged exact admission and independent
+  pressure operands. `TestNativeCollectionVacuumShutdownLifecycle` covers the
+  original owned vacuum guard, held reads and shutdown while unowned native
+  staging remains rejected.
+
+These are correctness and resource-lifetime controls, not performance or default
+acceptance. Keep the original public 4096-document query workload, fixed request
+shape, 4096-ID lookup/4097th-entry sentinel, durability, caps and cleanup oracles
+when measuring the affected paths. Retain failed attempts and distinguish focused
+results from owning-package/race results and the parent performance gates.
+
 ## Complete COW prefix, original custody and sealed completion
 
 The lower native seam is independently testable while unmigrated collection
@@ -4555,6 +4593,7 @@ that review, recovery/race evidence or public performance gates.
 | Untouched refusal versus terminal materialization | `TestCOWNativeBuildCapacityBeforeAndAfterOriginalAssetMutation` uses an actual partial file before its terminal capacity error |
 | Real destruction, notification and concurrent Close | `TestCOWPublicSemanticDestructorAndNotificationCloseGuard` includes actual original file close and failed directory unlink; `TestCloseBorrowsAdmittedTeardownGuard` checks borrowed teardown admission |
 | Maintenance headroom and retained physical views | `TestMinimumCapacityCheckpointMakesProgress`, `TestRetainedViewMaintenanceRefreshAndClose`, `TestMaintenanceDrainUsesOriginalRetiredGeneration`, `TestCOWPublicSelectedSourceRewriteKeepsOldCuts` |
+| Automatic selected-source retirement | `TestPrivateCOWLeafAutomaticSourceRetirement` uses ordinary WAL writes, the real periodic pack entry and original GC, no held reader or setup rotation, exact source inode witnesses, no extra checkpoint/GC, and reopen. `TestPrivateCOWLeafPackConvergesBeforeGCAndUnlinksAfterReaderRelease` retains the independent old-reader and already-closed-source controls. |
 | Finite small-budget recovery and retained reuse | `TestCOWPublicSmallBudgetAcceptedPrefixDrainsAndReopens`, `TestCOWAcceptedPrefixRepeatedDrainReuse`, `TestCOWPublicRetainedHistoryFixture` use actual checkpoint/reopen or canonical appends, held pointer bytes and final original-owner accounting. The retained benchmark remains construction-only until reviewed. |
 
 Run the affected lower lifecycle suites and compile the complete TreeDB tree:

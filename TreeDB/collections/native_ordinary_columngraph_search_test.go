@@ -72,7 +72,7 @@ func TestNativeOrdinaryColumnGraphCapturedPreparedSearch(t *testing.T) {
 	// its scratch by rows, including when the allowed ID is below global top-k.
 	var filtered VectorIndexSearchBuffer
 	defer filtered.Reset()
-	filteredResponse, err := col.searchNativeColumnGraphAtReadView(opts, &filtered, view, hybridScalarAllowSet{"b": {}})
+	filteredResponse, err := col.searchNativeColumnGraphAtReadView(opts, &filtered, view, legacyScalarIDs(hybridScalarAllowSet{"b": {}}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ func TestNativeOrdinaryColumnGraphCapturedPreparedSearch(t *testing.T) {
 	}
 	fresh.Reset()
 	// The held complete cut continues to own the old graph and documents.
-	old, err := col.searchNativeColumnGraphAtReadView(opts, &buffer, view, nil)
+	old, err := col.searchNativeColumnGraphAtReadView(opts, &buffer, view, hybridScalarIDs{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +176,7 @@ func TestNativeOrdinaryColumnGraphSearchAdmissionAndCancel(t *testing.T) {
 	opts.Context = ctx
 	before := budget.Stats()
 	var buffer VectorIndexSearchBuffer
-	if _, err = col.searchNativeColumnGraphAtReadView(opts, &buffer, view, nil); !errors.Is(err, context.Canceled) {
+	if _, err = col.searchNativeColumnGraphAtReadView(opts, &buffer, view, hybridScalarIDs{}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancel: %v", err)
 	}
 	after := budget.Stats()

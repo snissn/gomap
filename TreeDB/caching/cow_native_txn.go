@@ -53,13 +53,25 @@ type cowNativePressureState struct {
 	basis      backenddb.StateToken
 }
 
+// nativeConstructionUnderPressure applies the original three-quarter policy
+// to the capacity remaining after the SAME inventory's shared build workspace.
+// Subtraction preserves upward rounding and avoids overflow near MaxUint64.
+// Invalid metadata requests maintenance; it never grants construction credit.
+func nativeConstructionUnderPressure(total, fixed, limit uint64) bool {
+	if fixed >= limit || total < fixed {
+		return true
+	}
+	remaining := limit - fixed
+	return total-fixed >= remaining-remaining/4
+}
+
 func (s cowNativePressureState) underPressure(limits memtable.COWLimits) bool {
 	p := s.semantic
 	return s.stats.ReservedBytes >= limits.MaxInFlightBytes-limits.MaxInFlightBytes/4 ||
 		s.stats.Sources >= limits.MaxSources || s.stats.Generations >= limits.MaxGenerations ||
 		(p.ConstructionBytes != 0 &&
-			(p.ConstructionBytes >= p.MaxInFlightBytes-p.MaxInFlightBytes/4 ||
-				p.ConstructionBytes >= p.MaxTotalBytes-p.MaxTotalBytes/4 ||
+			(nativeConstructionUnderPressure(p.ConstructionBytes, p.FixedConstructionBytes, p.MaxInFlightBytes) ||
+				nativeConstructionUnderPressure(p.ConstructionBytes, p.FixedConstructionBytes, p.MaxTotalBytes) ||
 				p.Sources >= p.MaxSources))
 }
 

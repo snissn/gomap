@@ -32,6 +32,22 @@ func (s *normalizerGrowthTestSink) AddTextToken(token TextToken) error {
 	return nil
 }
 
+// The admitted API also normalizes and stores stopwords. An empty input isolates
+// that setup without assuming its allocation count or mistaking it for growth
+// of a stopped or duplicate token in the actual input below.
+func normalizerOptionsSetupCharge(t *testing.T, options *TextAnalyzerOptions) (calls int, charged uint64) {
+	t.Helper()
+	sink := &normalizerGrowthTestSink{admit: func(n uint64) error {
+		calls++
+		charged += n
+		return nil
+	}}
+	if err := AnalyzeTextToSinkWithOptions(TextAnalyzerSimple, options, "", sink); err != nil || len(sink.tokens) != 0 {
+		t.Fatalf("empty-input analyzer setup: tokens=%+v err=%v", sink.tokens, err)
+	}
+	return calls, charged
+}
+
 func TestTextNormalizerGrowthBeforeEffect(t *testing.T) {
 	denied := errors.New("original normalizer admission refusal")
 	for _, later := range []bool{false, true} {
@@ -149,34 +165,39 @@ func TestTextNormalizerStoppedDuplicateAndSinkRefusal(t *testing.T) {
 		{"duplicate", "refund refund", nil, 2, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			options := &TextAnalyzerOptions{StopWords: tc.stopWords}
+			setupCalls, _ := normalizerOptionsSetupCharge(t, options)
+			refuse := setupCalls + tc.refuse
 			calls := 0
 			var admitted uint64
 			sink := &normalizerGrowthTestSink{admit: func(n uint64) error {
 				calls++
-				if calls == tc.refuse {
+				if calls == refuse {
 					return denied
 				}
 				admitted += n
 				return nil
 			}}
-			err := AnalyzeTextToSinkWithOptions(TextAnalyzerSimple, &TextAnalyzerOptions{StopWords: tc.stopWords}, tc.text, sink)
-			if err != denied || calls != tc.refuse || len(sink.tokens) != tc.wantTokens || tc.refuse > 1 && admitted == 0 {
+			err := AnalyzeTextToSinkWithOptions(TextAnalyzerSimple, options, tc.text, sink)
+			if err != denied || calls != refuse || len(sink.tokens) != tc.wantTokens || tc.refuse > 1 && admitted == 0 {
 				t.Fatalf("calls=%d admitted=%d tokens=%+v err=%v", calls, admitted, sink.tokens, err)
 			}
 		})
 	}
 	var cohorts int
 	var charged uint64
+	options := &TextAnalyzerOptions{StopWords: []string{"the"}}
+	setupCalls, setupCharge := normalizerOptionsSetupCharge(t, options)
 	sink := &normalizerGrowthTestSink{admit: func(n uint64) error { cohorts++; charged += n; return nil }}
-	if err := AnalyzeTextToSinkWithOptions(TextAnalyzerSimple, &TextAnalyzerOptions{StopWords: []string{"the"}}, "THE THE refund refund", sink); err != nil {
+	if err := AnalyzeTextToSinkWithOptions(TextAnalyzerSimple, options, "THE THE refund refund", sink); err != nil {
 		t.Fatal(err)
 	}
-	if cohorts != 4 || charged != 4*memtable.COWAllocationCharge(1) || !slices.Equal(sink.tokens, []TextToken{{Term: "refund", Position: 2, StartOffset: 8, EndOffset: 14}, {Term: "refund", Position: 3, StartOffset: 15, EndOffset: 21}}) {
+	if cohorts != setupCalls+4 || charged != setupCharge+4*memtable.COWAllocationCharge(1) || !slices.Equal(sink.tokens, []TextToken{{Term: "refund", Position: 2, StartOffset: 8, EndOffset: 14}, {Term: "refund", Position: 3, StartOffset: 15, EndOffset: 21}}) {
 		t.Fatalf("stopped/duplicate cohorts missing: %d/%d tokens=%+v", cohorts, charged, sink.tokens)
 	}
 	sink.err = errors.New("original downstream sink error")
 	before := cohorts
-	if err := AnalyzeTextToSinkWithOptions(TextAnalyzerSimple, &TextAnalyzerOptions{StopWords: []string{"the"}}, "THE refund policy", sink); err != sink.err || cohorts != before+2 {
+	if err := AnalyzeTextToSinkWithOptions(TextAnalyzerSimple, options, "THE refund policy", sink); err != sink.err || cohorts != before+setupCalls+2 {
 		t.Fatalf("sink error identity or stop position lost: cohorts=%d err=%v", cohorts-before, err)
 	}
 }
@@ -263,10 +284,12 @@ func TestNativeTextNormalizerPreparedParityAndCharge(t *testing.T) {
 }
 
 func TestNativeTextNormalizerPreparedOriginalLeaseRefusal(t *testing.T) {
-	for _, refuse := range []int{3, 4} {
-		// Headers and input are the first two callbacks. The following calls
-		// govern initial and subsequent Builder growth of a stopped token,
-		// before any term/position sink can be invoked.
+	stop := strings.Repeat("s", 80)
+	options := &TextAnalyzerOptions{StopWords: []string{stop}}
+	setupCalls, _ := normalizerOptionsSetupCharge(t, options)
+	// Retain the setup-refusal controls and also refuse actual initial/later
+	// input-token growth after the two preparation callbacks and option setup.
+	for _, refuse := range []int{3, 4, 2 + setupCalls + 1, 2 + setupCalls + 2} {
 		budget, err := memtable.NewCOWBudget(memtable.DefaultCOWLimits())
 		if err != nil {
 			t.Fatal(err)
@@ -292,9 +315,8 @@ func TestNativeTextNormalizerPreparedOriginalLeaseRefusal(t *testing.T) {
 			charged += n
 			return nil
 		}
-		stop := strings.Repeat("s", 80)
 		def := TextIndexDefinition{Version: TextIndexVersionV2, Analyzer: TextAnalyzerSimple,
-			Fields: []TextIndexField{{Field: "content"}}, AnalyzerOptions: &TextAnalyzerOptions{StopWords: []string{stop}}}
+			Fields: []TextIndexField{{Field: "content"}}, AnalyzerOptions: options}
 		// As in the native caller, options get their independent original-lease
 		// promise before preparation; it is not part of the growth callback count.
 		definition, err := nativeTextDefinitionCharge(def, 1)

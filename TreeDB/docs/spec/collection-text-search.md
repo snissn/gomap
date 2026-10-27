@@ -30,6 +30,41 @@ matrix are defined in `TreeDB/docs/spec/collection-text-v2-contract.md`.
   its current collection and domain declaration; malformed descriptors and root
   overlays refuse the complete import.
 - `TextIndexStorageStats` validates storage versions and returns root accounting.
+- Direct native text mutation construction uses the original operation/phase
+  receipt for admitted term accumulation, prepared state and reducer working
+  storage. String-keyed native constructor tables pair the concrete local ID
+  index with typed value lanes; block caches use typed sorted lanes. Checked
+  replacement cells and lane capacities are admitted together before growth,
+  and displaced backing stays charged through the existing phase boundary.
+  Shared carriers retain direct map lookup on the legacy route. This adds no
+  owner, pool, storage format or publication authority.
+- The admitted native analyzer retains the maintained tokenization, weights,
+  positions, offsets and stopword semantics. Its normalizer admits replacement
+  backing before growth; stopwords use an admitted sorted/deduplicated lane.
+  Current eligible V2 rows reuse their prepared state rather than reanalyzing it.
+  Nested JSON field extraction uses `encoding/json` RawMessage values and
+  `UseNumber`, validates the complete object and trailing input, and preserves
+  last-duplicate-ancestor selection and existing string/array/error behavior.
+  Each visited object retains the original full-source decoder allowance before
+  decoding; this does not claim exact control of standard-library global caches.
+  BSON/template conversion keeps its separate original admission and ownership.
+- This constructor boundary covers direct native mutation preparation and its
+  reducer working tables. It does not certify every query-validation registry,
+  DDL/backfill map or other consumer of the general record envelope. Existing
+  codec/retry/output allowances remain unless the corresponding allocation was
+  actually replaced. The existing successful-phase cleanup can release ended
+  private construction only after independent domain outputs and their retained
+  floor are established; an error grants no early refund or publication.
+- Direct native mutation phases read V1 document state and fixed V1/V2 scalar
+  statistics through their maintained codecs. Owned source copies and each V1
+  decoder backing are admitted before allocation; count and overflow guards
+  precede admission. V1 retains the already analyzed opening state in an admitted
+  descriptor lane. Exact structural equality lets the stored state share that
+  opening's prepaid downstream allowance. A missing preparation or parseable
+  mismatch first obtains the original general record allowance before reducer
+  key/table effects. Malformed input preserves codec errors; capacity refusal
+  preserves its original error and every successful prefix charge. Other record
+  families, DDL and inspection keep their existing admission paths.
 - Native single-term V2 serving (without `Explain`) admits source copies and
   decoder/search backing separately on the same cumulative operation receipt.
   Selection follows the maintained analyzer and includes the existing exact
@@ -39,7 +74,7 @@ matrix are defined in `TreeDB/docs/spec/collection-text-v2-contract.md`.
   `entryCount <= remaining+1` preallocation bound. Cached arrays, ID copies,
   candidates, map growth and final result cohorts remain charged through the
   complete query. V1, multi-term/phrase/explain queries, storage inspection,
-  rewrite and reducers retain the general record envelope. This changes
+  rewrite and other reducer records retain the general record envelope. This changes
   admission sizing, not query budgets, ranking, index eligibility or ownership.
 - Native text range scans reuse the existing fixed owned physical-tree cursor
   inside their original captured domain. Pending/captured COW sources keep the
