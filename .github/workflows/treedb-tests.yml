@@ -285,11 +285,14 @@ jobs:
         include:
           - name: ubuntu
             os: ubuntu-latest
+            timeout_minutes: 15
           - name: macos
             os: macos-latest
+            timeout_minutes: 30
           - name: windows
             os: windows-latest
-    timeout-minutes: 15
+            timeout_minutes: 15
+    timeout-minutes: ${{ matrix.timeout_minutes }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -316,8 +319,16 @@ jobs:
           python3 -B scripts/cow_c3_read/load_readiness_test.py
 
       - name: Vet
+        if: ${{ matrix.name != 'macos' }}
         working-directory: TreeDB
         run: go vet ./...
+
+      - name: Vet (macOS elapsed and resource diagnostics)
+        if: ${{ matrix.name == 'macos' }}
+        working-directory: TreeDB
+        run: |
+          date -u '+vet started %Y-%m-%dT%H:%M:%SZ'
+          /usr/bin/time -l go vet ./...
 
   test:
     name: ${{ matrix.name }}
