@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import re
 import unittest
+from unittest import mock
 from pathlib import Path
 
 
@@ -39,10 +40,19 @@ def require_m0_routing_contract(source: str) -> None:
         'GOMAXPROCS': RUNNER_GUARD + " && vars.TREEDB_M0_GOMAXPROCS || ''",
         'M0_LEASE_PATH': RUNNER_GUARD + " && vars.TREEDB_M0_LEASE_PATH || ''",
     }
+    verified_lines = set()
     for name, expression in expected.items():
-        matches = re.findall(r"(?m)^ +" + re.escape(name) + r": \$\{\{ (.+) \}\}$", source)
-        if matches != [expression]:
+        matches = list(re.finditer(r"(?m)^ +" + re.escape(name) + r": \$\{\{ (.+) \}\}$", source))
+        if [match.group(1) for match in matches] != [expression]:
             raise ValueError(f'M0 routing contract differs for {name}')
+        verified_lines.update(match.group(0) for match in matches)
+    for line in source.splitlines():
+        if line.lstrip().startswith('#'):
+            continue
+        if any(variable in line for variable in
+               ('TREEDB_PERF_RUNNER_LABEL', 'TREEDB_PERF_RUNNER_PR')):
+            if line not in verified_lines:
+                raise ValueError('administrator runner variable outside verified routing expressions')
 
 
 class TreeDBCIContractTests(unittest.TestCase):
@@ -112,6 +122,27 @@ class TreeDBCIContractTests(unittest.TestCase):
             "vars.TREEDB_PERF_RUNNER_PR == format('{0}', github.event.pull_request.number) && "
             "vars.TREEDB_PERF_RUNNER_LABEL || 'ubuntu-24.04'",
         )
+        # Separate required workflow: its administrator variables must occur
+        # only in this exact guarded route, never another job or environment.
+        self.assertEqual(self.source.count("vars.TREEDB_PERF_RUNNER_LABEL"), 2)
+        self.assertEqual(self.source.count("vars.TREEDB_PERF_RUNNER_PR"), 2)
+
+    def test_required_workflow_rejects_administrator_vars_in_unrelated_jobs(self) -> None:
+        for variable in ('TREEDB_PERF_RUNNER_LABEL', 'TREEDB_PERF_RUNNER_PR'):
+            injected = "\n  unrelated-job:\n    env:\n      UNGUARDED: ${{ vars." + variable + " }}\n"
+            with self.subTest(variable=variable), mock.patch.object(self, 'source', self.source + injected):
+                with self.assertRaises(AssertionError):
+                    self.test_mvcc_runner_override_is_opt_in_and_exact_same_repository_pr_only()
+
+    def test_m0_rejects_administrator_vars_outside_verified_routing_fields(self) -> None:
+        for variable in ('TREEDB_PERF_RUNNER_LABEL', 'TREEDB_PERF_RUNNER_PR'):
+            for statement in ('      UNGUARDED: ${{ vars.VARIABLE }}',
+                              "      UNGUARDED: ${{ vars['VARIABLE'] }}",
+                              '        run: echo "${{ vars.VARIABLE }}"'):
+                injected = statement.replace('VARIABLE', variable)
+                with self.subTest(variable=variable, statement=statement):
+                    with self.assertRaisesRegex(ValueError, 'outside verified routing'):
+                        require_m0_routing_contract(self.m0 + '\n' + injected + '\n')
 
     def test_m0_runner_override_is_exact_pr_only_with_a_distinct_job_label(self) -> None:
         require_m0_routing_contract(self.m0)
