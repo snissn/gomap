@@ -71,15 +71,18 @@ type VersionIteratorStats struct {
 // VersionIterator owns a TreeDB snapshot and must be closed. Entry returns a
 // caller-owned record that remains valid after Next, NextKey, Seek, or Close.
 type VersionIterator struct {
-	raw      treedb.Iterator
-	snapshot treedb.Snapshot
-	options  VersionIteratorOptions
-	keyBuf   []byte
-	seekBuf  []byte
-	current  Version
-	stats    VersionIteratorStats
-	err      error
-	closed   bool
+	raw            treedb.Iterator
+	snapshot       treedb.Snapshot
+	options        VersionIteratorOptions
+	keyBuf         []byte
+	seekBuf        []byte
+	current        Version
+	stats          VersionIteratorStats
+	err            error
+	closed         bool
+	exactSuccessor bool
+	exactValid     bool
+	exactPhysical  []byte
 }
 
 // IterateVersions opens a snapshot-bound scan of every retained version in the
@@ -139,6 +142,19 @@ func (s *Store) IterateVersions(options VersionIteratorOptions) (*VersionIterato
 		}
 		return nil, storageError("acquire version snapshot", treedb.ErrClosed)
 	}
+	if s.readCuts != nil && exactSuccessorEligible(options) {
+		if cut, ok := snapshot.(treedb.MVCCReadSnapshot); ok {
+			physical, record, found, seekErr := cut.SeekGEVersionRange(lower, upper)
+			if seekErr != nil {
+				return nil, errors.Join(storageError("open version iterator", seekErr), storageError("close version snapshot", snapshot.Close()))
+			}
+			it := &VersionIterator{snapshot: snapshot, options: options, exactSuccessor: true, seekBuf: upper}
+			if found {
+				it.selectExactSuccessor(physical, record)
+			}
+			return it, nil
+		}
+	}
 	var raw treedb.Iterator
 	if options.Reverse {
 		raw, err = snapshot.ReverseIterator(lower, upper)
@@ -174,7 +190,7 @@ func cloneBytesPreserveNil(value []byte) []byte {
 }
 
 func (it *VersionIterator) Valid() bool {
-	return it != nil && !it.closed && it.err == nil && it.raw != nil && it.raw.Valid()
+	return it != nil && !it.closed && it.err == nil && ((it.exactSuccessor && it.exactValid) || (it.raw != nil && it.raw.Valid()))
 }
 
 func (it *VersionIterator) Entry() Version {
@@ -201,6 +217,10 @@ func (it *VersionIterator) EntryView() Version {
 
 func (it *VersionIterator) Next() {
 	if !it.Valid() {
+		return
+	}
+	if it.exactSuccessor {
+		it.nextExactSuccessor()
 		return
 	}
 	it.raw.Next()
@@ -238,6 +258,9 @@ func (it *VersionIterator) NextKey() {
 	}
 	if it.options.Reverse {
 		it.err = ErrNextKeyReverse
+		return
+	}
+	if it.exactSuccessor && !it.openExactRaw() {
 		return
 	}
 	// current.Key aliases keyBuf. Materialize the independent physical bound
@@ -291,7 +314,7 @@ func (it *VersionIterator) NextKey() {
 // nonzero. Direction follows the iterator: forward seeks to the first encoded
 // record >= (logical,timestamp), reverse to the first <= it.
 func (it *VersionIterator) Seek(logical []byte, timestamp uint64) {
-	if it == nil || it.closed || it.err != nil || it.raw == nil {
+	if it == nil || it.closed || it.err != nil || (it.raw == nil && !it.exactSuccessor) {
 		return
 	}
 	physical, err := mvcckey.Append(it.seekBuf[:0], logical, timestamp)
@@ -300,6 +323,9 @@ func (it *VersionIterator) Seek(logical []byte, timestamp uint64) {
 		return
 	}
 	it.seekBuf = physical
+	if it.exactSuccessor && !it.openExactRaw() {
+		return
+	}
 	it.raw.Seek(physical)
 	it.advance()
 }
@@ -332,6 +358,8 @@ func (it *VersionIterator) Close() error {
 	it.current = Version{}
 	it.keyBuf = nil
 	it.seekBuf = nil
+	it.exactPhysical = nil
+	it.exactValid = false
 	var rawErr, snapshotErr error
 	if it.raw != nil {
 		rawErr = storageError("close version iterator", it.raw.Close())
