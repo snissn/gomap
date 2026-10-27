@@ -44,6 +44,10 @@ func (s *Snapshot) cowSeekGE(start, end []byte) (key, value []byte, found bool, 
 		return nil, nil, false, err
 	}
 	defer s.endRead()
+	return s.cowSeekGEAdmitted(start, end)
+}
+
+func (s *Snapshot) cowSeekGEAdmitted(start, end []byte) (key, value []byte, found bool, err error) {
 	if s.cowCut == nil {
 		return nil, nil, false, ErrCOWUnsupported
 	}

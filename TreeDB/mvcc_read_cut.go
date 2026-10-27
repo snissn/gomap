@@ -1,6 +1,9 @@
 package treedb
 
-import "github.com/snissn/gomap/TreeDB/caching"
+import (
+	"github.com/snissn/gomap/TreeDB/caching"
+	"github.com/snissn/gomap/TreeDB/internal/mvcckey"
+)
 
 // MVCCReadSnapshot is the existing Snapshot owner plus its owned successor.
 // Application timestamps filter records; this handle pins one physical cut.
@@ -65,4 +68,15 @@ func (db *DB) PrepareMVCCPrune() (complete func() error, err error) {
 		return nil, err
 	}
 	return db.Checkpoint, nil
+}
+
+// MVCCVersionRangeResult is one owned physical range successor outcome.
+type MVCCVersionRangeResult = mvcckey.VersionRangeResult
+
+// MVCCReadBatchSnapshot is optional; callers must first qualify and capture an
+// MVCCReadSnapshot. It never captures a newer cut, and accepts at most32 probes.
+// Results has the same length as starts/ends and receives ordered owned values.
+// Individual failures belong to Results[i].Err; admission errors affect the call.
+type MVCCReadBatchSnapshot interface {
+	SeekGEVersionRanges(starts, ends [][]byte, results []MVCCVersionRangeResult) error
 }

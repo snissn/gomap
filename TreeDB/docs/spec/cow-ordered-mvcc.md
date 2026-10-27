@@ -105,3 +105,44 @@ integration needs current-head checks and cannot inherit a full-repository pass.
 Raw 500k unified workloads do not exercise the typed history index and show
 material forced-COW regressions. Keep the adaptive default, raw-KV and managed
 MVCC comparisons separate, and retain adverse results during optimization.
+
+### Bounded scalar version-successor batches
+
+`mvcc.Store.GetManyAt(keys, timestamp)` accepts at most
+`mvcc.MaxGetManyAtKeys` (32) logical keys and returns ordered `GetManyResult`
+entries. Each successful `Result.Value` is independently owned after the call.
+Duplicate, binary and empty logical keys retain `GetAt` semantics. Inputs must
+remain unchanged until the synchronous call returns. Timestamp zero and a nil
+Store are rejected before empty/oversize handling. Invalid keys and malformed
+records are per-key errors. Qualified batches admit the discard floor once and
+capture one physical cut; floor/capture failures are call errors. A final Close
+error is also a call error and preserves already-produced results. Callers must
+check both the call error and each consumed item error and must never retry an
+error as a miss. The singleton delegates to `GetAt`; its storage/floor failure is
+a call error. Unqualified producers retain scalar `GetAt` calls and their
+per-key failure/visibility behavior rather than promising a coherent batch cut.
+
+`MVCCReadBatchSnapshot` is an optional capability alongside the existing
+qualified `MVCCReadSnapshot`; absent capability uses scalar successors on that
+same captured cut. It receives complete encoded version-range bounds, never
+physical exact `GetMany` lookups. Probes are sorted by those full physical lower
+bounds, then restored to input order. Each probe still applies overlay revision
+and priority, physical tombstone suppression, MVCC envelope/timestamp validation
+and owned value copy-out.
+
+The optimized batch borrows one existing admitted point workspace for at most32
+metadata lookups. It retains only the current validated ordinary base leaf and
+reuses it when the full physical lower bound is inside that leaf's decoded
+[first,last] key extent. Outside, empty, PRIMARY and uncertain extents use the
+original root traversal on the same cut; no walk across sparse gaps is added.
+Key reconstruction views are ephemeral. The descriptor is invalidated before
+scratch reuse and cleared before releasing its workspace. Operation-local
+candidate/inspection staging is finite and charged to the existing COW budget;
+it introduces no cache, pool, mmap, decoder or physical owner. The traversal
+slot is released before complete-cut value resolution or re-acquiring fallback,
+with the original fresh-workspace refund policy retained for value capacity.
+Only established dictionary/admission eligibility permits fallback; actual
+I/O/integrity errors are per-input errors and are never retried through a clean
+read. Contention, missing capability and staging admission refusal keep the
+maintained scalar path. No change is made to commit ACK, read timestamp,
+publication, pruning or all-version posting reconstruction.
