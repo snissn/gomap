@@ -15,6 +15,11 @@ MAX_BYTES_REGRESSION_PERCENT="${MAX_BYTES_REGRESSION_PERCENT:-1}"
 MAX_BYTES_REGRESSION_ABSOLUTE="${MAX_BYTES_REGRESSION_ABSOLUTE:-64}"
 SCRIPT_GOWORK="${SCRIPT_GOWORK:-off}"
 OUT_DIR="${OUT_DIR:-$ROOT/artifacts/mvcc_raw_path_gate}"
+RAW_SYNC_CONTEXT="${RAW_SYNC_CONTEXT:-0}"
+if [[ "$RAW_SYNC_CONTEXT" != 0 && "$RAW_SYNC_CONTEXT" != 1 ]]; then
+  echo "RAW_SYNC_CONTEXT must be 0 or 1" >&2
+  exit 2
+fi
 GET_VERSIONED_BENCH_REGEX='^BenchmarkGetVersioned$'
 BATCH_WRITE_BENCH_REGEX='^BenchmarkConditionalTxnBaselineBatchWrite$'
 SNAPSHOT_BENCH_REGEX='^BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek$'
@@ -44,6 +49,10 @@ for command in git go lscpu ps python3 realpath taskset sha256sum timeout; do
   fi
 done
 
+if [[ "$RAW_SYNC_CONTEXT" == 1 && ( -e "$OUT_DIR" || -L "$OUT_DIR" ) ]]; then
+  echo "refusing preexisting OUT_DIR with RAW_SYNC_CONTEXT=1: $OUT_DIR" >&2
+  exit 2
+fi
 OUT_DIR=$(realpath -m "$OUT_DIR")
 if [[ -z "$OUT_DIR" || "$OUT_DIR" == "/" || "$OUT_DIR" == "$ROOT" ]]; then
   echo "refusing unsafe OUT_DIR: $OUT_DIR" >&2
@@ -61,8 +70,14 @@ if [[ "$BASELINE_SHA" == "$CANDIDATE_SHA" ]]; then
   exit 2
 fi
 
-rm -rf "$OUT_DIR"
-mkdir -p "$OUT_DIR"
+if [[ "$RAW_SYNC_CONTEXT" == 1 ]]; then
+  # Exclusive mkdir also protects against a path created after the early check.
+  mkdir -p "$(dirname "$OUT_DIR")"
+  mkdir "$OUT_DIR"
+else
+  rm -rf "$OUT_DIR"
+  mkdir -p "$OUT_DIR"
+fi
 TMP_ROOT=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/mvcc-raw-path-gate.XXXXXX")
 BASELINE_WT="$TMP_ROOT/baseline"
 cleanup() {
@@ -139,7 +154,15 @@ run_sample() {
     echo "--- before revision=$revision sample=$sample group=$group at $(date -Iseconds) ---"
     ps -eo pid,ppid,etime,%cpu,cmd --sort=-%cpu | head -20 || true
   } >>"$PROCESSES"
-  taskset -c "$CPUSET" env GOMAXPROCS=1 "$binary" \
+  local context_command=()
+  if [[ "$RAW_SYNC_CONTEXT" == 1 && "$group" == durable_sync ]]; then
+    local source_sha="$BASELINE_SHA"
+    [[ "$revision" == candidate ]] && source_sha="$CANDIDATE_SHA"
+    context_command=(python3 "$ROOT/scripts/mvcc_raw_sync_context.py"
+      --output "$OUT_DIR/raw-sync-$revision-$sample.json" --binary "$binary"
+      --source-sha "$source_sha" --source-tree "$(git rev-parse "${source_sha}^{tree}")" --)
+  fi
+  "${context_command[@]}" taskset -c "$CPUSET" env GOMAXPROCS=1 "$binary" \
     -test.run '^$' \
     -test.bench "$regex" \
     -test.benchmem \
