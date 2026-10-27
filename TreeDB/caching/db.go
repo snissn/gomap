@@ -3858,6 +3858,15 @@ type backendBatchRevisionOps struct {
 }
 
 func resolveBackendBatchRevisionOps(backendBatch batch.Interface) backendBatchRevisionOps {
+	// The native batch has a fixed capability set. Static conversions avoid
+	// repeatedly discovering it through runtime interface assertion caches.
+	// Decorators retain their own methods and capability discovery below.
+	if native, ok := backendBatch.(*backenddb.Batch); ok {
+		return backendBatchRevisionOps{
+			set: native, setView: native, del: native, delView: native,
+			ptr: native, ptrView: native,
+		}
+	}
 	ops := backendBatchRevisionOps{}
 	ops.set, _ = backendBatch.(backendBatchSetRevision)
 	ops.setView, _ = backendBatch.(backendBatchSetViewRevision)
