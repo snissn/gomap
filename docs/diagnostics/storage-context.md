@@ -61,3 +61,11 @@ binding or execution. Hashing can cause substantial reads: perform it outside
 measurement, bind retained snapshots explicitly, and do not imply phase histories
 were sampled atomically. A single snapshot does not reconstruct original build or
 lifecycle dirty-page history. All statuses remain diagnostic-only.
+
+Binary and harness input ancestors must be trusted: O_NOFOLLOW protects only the
+final file component; intermediate directory symlinks are followed. The digest
+identifies bytes read through the opened descriptor. The supplied path may be
+renamed or replaced during/after hashing and may no longer name that descriptor;
+metadata checks do not prove continuing path identity. Hashing both maximum-size
+inputs reads up to1GiB in total and must remain outside the quiet acquisition and
+measured observation. No automatic phase placement or scheduling is implemented.
