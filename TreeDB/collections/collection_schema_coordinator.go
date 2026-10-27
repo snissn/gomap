@@ -44,7 +44,6 @@ type collectionSchemaCoordinator struct {
 	partitionLiveSearchPins                map[vectorPartitionLiveSearchPinKeyV1]int
 	adHocVectorAdmissionMu                 sync.RWMutex
 	adHocVectorIndexes                     atomic.Int64
-	legacyVectorSidecarMu                  sync.Mutex
 	domainsMu                              sync.Mutex
 	domains                                map[*collectionWriteDomain]struct{}
 	// No-WAL sync drains pause workers across current and newly registered domains.
@@ -192,58 +191,6 @@ var collectionSchemaMutationFlushHook struct {
 var collectionSchemaMutationBeforeLockHook struct {
 	mu sync.Mutex
 	fn func()
-}
-
-var legacyVectorSnapshotPostEpochRenameHook struct {
-	mu sync.Mutex
-	fn func()
-}
-
-var legacyVectorSidecarBeforeLockHook struct {
-	mu sync.Mutex
-	fn func()
-}
-
-func setLegacyVectorSnapshotPostEpochRenameHookForTest(fn func()) func() {
-	legacyVectorSnapshotPostEpochRenameHook.mu.Lock()
-	prev := legacyVectorSnapshotPostEpochRenameHook.fn
-	legacyVectorSnapshotPostEpochRenameHook.fn = fn
-	legacyVectorSnapshotPostEpochRenameHook.mu.Unlock()
-	return func() {
-		legacyVectorSnapshotPostEpochRenameHook.mu.Lock()
-		legacyVectorSnapshotPostEpochRenameHook.fn = prev
-		legacyVectorSnapshotPostEpochRenameHook.mu.Unlock()
-	}
-}
-
-func runLegacyVectorSnapshotPostEpochRenameHookForTest() {
-	legacyVectorSnapshotPostEpochRenameHook.mu.Lock()
-	fn := legacyVectorSnapshotPostEpochRenameHook.fn
-	legacyVectorSnapshotPostEpochRenameHook.mu.Unlock()
-	if fn != nil {
-		fn()
-	}
-}
-
-func setLegacyVectorSidecarBeforeLockHookForTest(fn func()) func() {
-	legacyVectorSidecarBeforeLockHook.mu.Lock()
-	prev := legacyVectorSidecarBeforeLockHook.fn
-	legacyVectorSidecarBeforeLockHook.fn = fn
-	legacyVectorSidecarBeforeLockHook.mu.Unlock()
-	return func() {
-		legacyVectorSidecarBeforeLockHook.mu.Lock()
-		legacyVectorSidecarBeforeLockHook.fn = prev
-		legacyVectorSidecarBeforeLockHook.mu.Unlock()
-	}
-}
-
-func runLegacyVectorSidecarBeforeLockHookForTest() {
-	legacyVectorSidecarBeforeLockHook.mu.Lock()
-	fn := legacyVectorSidecarBeforeLockHook.fn
-	legacyVectorSidecarBeforeLockHook.mu.Unlock()
-	if fn != nil {
-		fn()
-	}
 }
 
 // setCollectionSchemaMutationFlushHookForTest temporarily replaces the flush
@@ -519,16 +466,6 @@ func (c *Collection) lockNativeVectorAdmissionWrite() func() {
 		}
 		admissionMu.Unlock()
 	}
-}
-
-func (c *Collection) lockLegacyVectorSidecar() func() {
-	coord := c.collectionSchemaCoordinator()
-	if coord == nil {
-		return func() {}
-	}
-	runLegacyVectorSidecarBeforeLockHookForTest()
-	coord.legacyVectorSidecarMu.Lock()
-	return coord.legacyVectorSidecarMu.Unlock
 }
 
 func (c *Collection) flushCollectionWriteDomainsForSchemaMutation() error {
