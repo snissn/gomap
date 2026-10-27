@@ -216,7 +216,6 @@ type CommandJournal struct {
 	fixedAhead             *fixedWALAheadSlot
 	fixedAheadGeneration   uint64
 	fixedAheadErr          error
-	fixedAheadPolicy       fixedWALAheadPolicy
 	syncPins               int
 	syncCond               *sync.Cond
 	capturedFile           *capturedJournalFile
@@ -625,7 +624,7 @@ func (j *CommandJournal) maybeRotateForFrameLockedObservedWithNamespaceDebt(fram
 	physicalFits := j.writer.fixedFitsAppend(total)
 	logicalCrossing := j.segmentTargetBytes > 0 && activeBytes > 0 && (activeBytes >= j.segmentTargetBytes || total > j.segmentTargetBytes-activeBytes)
 	if !logicalCrossing && physicalFits {
-		if err := j.maybeStartFixedWALAheadLocked(total); err != nil {
+		if err := j.maybeStartFixedWALAheadLocked(); err != nil {
 			return j.writer.poisonCommandBuffer(err)
 		}
 		return nil
