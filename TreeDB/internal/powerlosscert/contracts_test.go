@@ -23,13 +23,13 @@ func TestCommittedContractsDeclareStreamFallbackRotation(t *testing.T) {
 	}
 	for _, fallback := range contracts.StreamFallbackCases {
 		if fallback.ID == "grouped-rotation-external-closure" {
-			if fallback.CutID != "cut/public-grouped-rotation-external-stable-image/after-dependency-file-sync/003" {
+			if fallback.CutID != "cut/public-grouped-rotation-external-stable-image/after-dependency-file-sync/002" {
 				t.Fatalf("stream rotation cut=%q", fallback.CutID)
 			}
 			return
 		}
 	}
-	t.Fatal("committed contracts omit the stream-fallback rotation selector /003")
+	t.Fatal("committed contracts omit the stream-fallback rotation selector /002")
 }
 
 func TestValidateWitnessContractsRejectsCoverageRelabeling(t *testing.T) {
@@ -218,7 +218,7 @@ func TestResolveWitnessContractsPhysicalPlatforms(t *testing.T) {
 		if !reflect.DeepEqual(base, stream.Cases[index]) {
 			differences++
 			if base.ID != "grouped-rotation-external-closure" ||
-				!strings.HasSuffix(base.CutID, "/004") || !strings.HasSuffix(stream.Cases[index].CutID, "/003") {
+				!strings.HasSuffix(base.CutID, "/003") || !strings.HasSuffix(stream.Cases[index].CutID, "/002") {
 				t.Fatalf("unexpected physical projection: %s -> %s", base.CutID, stream.Cases[index].CutID)
 			}
 		}
