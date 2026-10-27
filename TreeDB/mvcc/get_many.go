@@ -58,7 +58,9 @@ func (s *Store) GetManyAt(keys [][]byte, timestamp uint64) (results []GetManyRes
 		}
 		return results, nil
 	}
-	var starts, ends [MaxGetManyAtKeys][]byte
+	// These interface-bound arrays escape; size their backing to the actual
+	// input rather than making small batches allocate the full32-key plan.
+	starts, ends := make([][]byte, len(keys)), make([][]byte, len(keys))
 	var order [MaxGetManyAtKeys]int
 	n := 0
 	for i, key := range keys {
@@ -97,7 +99,7 @@ func (s *Store) GetManyAt(keys [][]byte, timestamp uint64) (results []GetManyRes
 		return nil, storageError("acquire read cut", treedb.ErrClosed)
 	}
 	defer func() { err = errors.Join(err, storageError("close read cut", cut.Close())) }()
-	var physical [MaxGetManyAtKeys]treedb.MVCCVersionRangeResult
+	physical := make([]treedb.MVCCVersionRangeResult, n)
 	if batch, ok := cut.(treedb.MVCCReadBatchSnapshot); ok && n > 1 {
 		if e = batch.SeekGEVersionRanges(starts[:n], ends[:n], physical[:n]); e != nil {
 			return results, storageError("seek versions", e)

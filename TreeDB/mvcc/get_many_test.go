@@ -320,30 +320,37 @@ func BenchmarkGetManyAt(b *testing.B) {
 		if shape == "singleton" {
 			keys = keys[:1]
 		}
-		for _, batch := range []bool{false, true} {
-			b.Run(fmt.Sprintf("%s/batch=%t", shape, batch), func(b *testing.B) {
-				b.ReportAllocs()
-				b.ResetTimer()
-				for n := 0; n < b.N; n++ {
-					if batch {
-						r, e := s.GetManyAt(keys, 15)
-						if e != nil {
-							b.Fatal(e)
-						}
-						for _, v := range r {
-							if v.Err != nil {
-								b.Fatal(v.Err)
-							}
-						}
-					} else {
-						for _, k := range keys {
-							if _, e := s.GetAt(k, 15); e != nil {
+		counts := []int{2, 4, 8, 16, 32}
+		if shape == "singleton" {
+			counts = []int{1}
+		}
+		for _, count := range counts {
+			keys := keys[:count]
+			for _, batch := range []bool{false, true} {
+				b.Run(fmt.Sprintf("%s/keys=%d/batch=%t", shape, count, batch), func(b *testing.B) {
+					b.ReportAllocs()
+					b.ResetTimer()
+					for n := 0; n < b.N; n++ {
+						if batch {
+							r, e := s.GetManyAt(keys, 15)
+							if e != nil {
 								b.Fatal(e)
+							}
+							for _, v := range r {
+								if v.Err != nil {
+									b.Fatal(v.Err)
+								}
+							}
+						} else {
+							for _, k := range keys {
+								if _, e := s.GetAt(k, 15); e != nil {
+									b.Fatal(e)
+								}
 							}
 						}
 					}
-				}
-			})
+				})
+			}
 		}
 	}
 }

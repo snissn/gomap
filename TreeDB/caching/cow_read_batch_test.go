@@ -24,6 +24,7 @@ func batchRawProbes(n int) ([][]byte, [][]byte, []mvcckey.VersionRangeResult) {
 }
 
 func TestCOWReadBatchDictionaryReopenCloseAndPressure(t *testing.T) {
+	t.Logf("bounded stack stage: item=%d array=%d charged=%d", unsafe.Sizeof(cowReadBatchStage{}), unsafe.Sizeof([mvcckey.MaxReadBatch]cowReadBatchStage{}), memtable.COWAllocationCharge(uint64(unsafe.Sizeof([mvcckey.MaxReadBatch]cowReadBatchStage{}))))
 	for _, entries := range []int{-1, 128} {
 		t.Run(fmt.Sprint(entries), func(t *testing.T) {
 			db, _, want, _ := cowLeafMissFixture(t, entries, 64)

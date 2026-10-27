@@ -128,7 +128,9 @@ same captured cut. It receives complete encoded version-range bounds, never
 physical exact `GetMany` lookups. Probes are sorted by those full physical lower
 bounds, then restored to input order. Each probe still applies overlay revision
 and priority, physical tombstone suppression, MVCC envelope/timestamp validation
-and owned value copy-out.
+and owned value copy-out. The escaped bound/result arrays are sized to the
+actual input/valid-probe count rather than allocating a32-entry backing for
+small batches; the operation and public cap remain32.
 
 The optimized batch borrows one existing admitted point workspace for at most32
 metadata lookups. It retains only the current validated ordinary base leaf and
