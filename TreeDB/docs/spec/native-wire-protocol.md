@@ -898,9 +898,41 @@ mutation or command-WAL entry. Version 1 selects the cosine float32
 `native_runtime` service route. Version 2 selects the explicitly admitted,
 persisted typed-input `column_graph` service route. Version 3 selects the same
 typed owner path with the explicitly negotiated legacy scalar-u8/v1 quantized
-rerank score plane. A mismatched strategy or capability fails closed; no
-version permits the legacy full-document scan route. Typed native filter
+rerank score plane. A mismatched strategy or capability fails closed; none
+of versions 1-4 permits the legacy full-document scan route. Typed native filter
 planning may choose bounded exact scoring internally.
+
+Version 5 selects the ordinary public service query policy and excludes typed
+input. It reuses sections 4 and 129 and their existing request encoding, with no
+new request fields. The client uses it for ordinary queries only when Hello
+advertises version 5. An omitted route selects maintained unfiltered ColumnGraph
+ANN, declared-scalar native_runtime ANN, or the existing intentional exact
+route for other valid metadata filters. No algorithm or storage owner is
+substituted. Peers without version 5 retain strict v1 admission; failure does
+not trigger a different algorithm. Explicit typed, quantized and normalized
+requests still select their independent versions 2, 3 and 4.
+
+Version-5 response sections remain exactly IDs (102), documents (103), and
+response metadata (130), with zero flags and no typed proof sections. Metadata
+is: route byte; uvarint candidates, exact-fallbacks, full-document-scan-fallbacks,
+ColumnGraph-prepared-search, search-pack-search, ColumnGraph-delta-scored, documents-scanned,
+result count; then one little-endian float64 score per result. Tag 1 means
+validated native_runtime ANN, tag 4 ordinary ColumnGraph ANN, and tag 5
+intentional ordinary exact. Tags 0, 2, 3 and unknown values fail closed. Old
+versions do not accept this version-specific payload. ANN has zero scanned
+documents; ordinary ColumnGraph reports exactly one measured physical route:
+the prepared-reader counter or the search-pack counter is one, and the other is
+zero. `search-pack-search` copies the collection's actual
+`SearchRouteHNSWSearchPack` statistic; it names physical pack execution and does
+not identify the native_runtime base-plus-live-delta algorithm. Native_runtime
+reports neither counter. Intentional exact reports no prepared/pack/delta work,
+and matching candidates cannot exceed actual scanned rows.
+All routes preserve the existing finite counts, frame/section limits and finite
+score validation. Unexpected/duplicate sections and inconsistent route/counters
+fail closed. The exact route is explicit (`exact=true`), not a fallback counter;
+its document-scan work is reported by `documents_scanned`. Response documents
+come from the actual maintained search or exact scan, without a primary relookup.
+Scores and query projections retain the public service semantics.
 
 Versions 1 and 2 require `deadline` (4) and `dense_search_request` (129).
 Version 3 additionally requires the critical `dense_search_quantized_options`

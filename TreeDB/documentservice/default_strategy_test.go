@@ -186,10 +186,9 @@ func TestServiceDefaultVectorStrategyPublic(t *testing.T) {
 	}
 }
 
-// Ordinary native ColumnGraph service adoption is still unmet. An omitted
-// cosine strategy must refuse this unsupported capability without substituting
-// native_runtime or installing a partial collection.
-func TestServiceNativeDefaultColumnGraphUnsupported(t *testing.T) {
+// Omitted cosine preserves ordinary ColumnGraph: durable native construction
+// uses full retained JSON; unsupported profiles refuse before publication.
+func TestServiceNativeDefaultColumnGraphProfiles(t *testing.T) {
 	for _, profile := range []treedb.Profile{treedb.ProfileCommandWALDurable, treedb.ProfileCommandWALRelaxed, treedb.ProfileNoWALFast} {
 		t.Run(string(profile), func(t *testing.T) {
 			opts := treedb.OptionsFor(profile, t.TempDir())
@@ -221,12 +220,58 @@ func TestServiceNativeDefaultColumnGraphUnsupported(t *testing.T) {
 					t.Error(err)
 				}
 			}()
-			_, err = svc.CreateIndex(context.Background(), CreateIndexRequest{Name: "default", Dimension: 2})
+			ctx := context.Background()
+			req := CreateIndexRequest{Name: "default", Dimension: 2}
+			before, err := backend.CaptureNativeSemanticState()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer before.Close()
+			beforeToken, ok := before.Snapshot().StateToken()
+			if !ok {
+				t.Fatal("closed initial capture")
+			}
+			nextLSN := backend.CommandWALNextLSN()
+			info, err := svc.CreateIndex(ctx, req)
+			if profile == treedb.ProfileCommandWALDurable {
+				if err != nil || info.VectorStrategy != collections.VectorIndexStrategyColumnGraph || info.TypedInput {
+					t.Fatalf("durable ordinary default: %+v %v", info, err)
+				}
+				col, err := manager.OpenCollection(req.Name)
+				if err != nil {
+					t.Fatal(err)
+				}
+				meta := col.Meta()
+				if meta.Options.ColumnStore == nil || meta.Options.ColumnStore.RetainedPayload != collections.ColumnRetainedPayloadFull {
+					t.Fatalf("native ordinary default lost full retained JSON: %+v", meta.Options.ColumnStore)
+				}
+				again, err := svc.CreateIndex(ctx, req)
+				reopened, openErr := manager.OpenCollection(req.Name)
+				if err != nil || openErr != nil {
+					t.Fatalf("repeat default create: %+v create=%v open=%v", again, err, openErr)
+				}
+				if again.Generation != info.Generation || again.VectorStrategy != collections.VectorIndexStrategyColumnGraph || !reflect.DeepEqual(meta, reopened.Meta()) {
+					t.Fatalf("repeat default changed generation/schema: first=%+v again=%+v", info, again)
+				}
+				return
+			}
 			if !errors.Is(err, backenddb.ErrNativeSemanticUnsupported) {
-				t.Fatalf("unmet native ColumnGraph capability: %v", err)
+				t.Fatalf("unsupported native ColumnGraph profile: %v", err)
+			}
+			after, err := backend.CaptureNativeSemanticState()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer after.Close()
+			afterToken, ok := after.Snapshot().StateToken()
+			if !ok || afterToken != beforeToken || after.LogicalSequence() != before.LogicalSequence() || backend.CommandWALNextLSN() != nextLSN {
+				t.Fatalf("refused default published roots/sequence/WAL: token=%+v/%+v sequence=%d/%d nextLSN=%d/%d", beforeToken, afterToken, before.LogicalSequence(), after.LogicalSequence(), nextLSN, backend.CommandWALNextLSN())
 			}
 			if _, err := manager.OpenCollection("default"); !errors.Is(err, collections.ErrCollectionNotFound) {
 				t.Fatalf("refused default installed a collection: %v", err)
+			}
+			if metas, err := manager.ListCollections(); err != nil || len(metas) != 0 {
+				t.Fatalf("refused default retained schema: %+v %v", metas, err)
 			}
 		})
 	}

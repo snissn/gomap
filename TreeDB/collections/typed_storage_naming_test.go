@@ -368,7 +368,7 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/collections/native_column_compaction_cancel_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 6, occurrences: 9},
 	{path: "TreeDB/collections/native_column_compaction.go", classification: typedStorageLegacyCompatibility, matchingLines: 17, occurrences: 20},
 	{path: "TreeDB/caching/cow_flush.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 4},
-	{path: "TreeDB/caching/cow_checkpoint.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 3},
+	{path: "TreeDB/caching/cow_checkpoint.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 4},
 	// Native typed construction, reads and replay consume the retained public
 	// schema API. Dependency and recovery fixtures use that same configuration.
 	// Multi-column accounting and reconstruction iterate that schema and reuse
@@ -424,6 +424,9 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/collections/native_typed_materialize.go", classification: typedStorageLegacyCompatibility, matchingLines: 29, occurrences: 31},
 	// Public span controls configure and inspect the retained typed schema API.
 	{path: "TreeDB/collections/native_typed_final_span_public_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 7, occurrences: 14},
+	// Public pressure and default-strategy controls use the retained exported API.
+	{path: "TreeDB/collections/native_pressure_drain_public_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 4},
+	{path: "TreeDB/documentservice/default_strategy_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 3},
 	// Native typed scalar indexes consume the retained declared-column API;
 	// their values share the maintained typed encoder, not another row owner.
 	{path: "TreeDB/collections/native_typed_index.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 3},

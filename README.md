@@ -56,6 +56,19 @@ Run the native server:
   -addr 127.0.0.1:17130
 ```
 
+The native server and `cmd/treedb-document-service` use the shared COW document
+owner by default. Ordinary ColumnGraph and explicit native_runtime declarations
+retain their service strategy policy. Ordinary ColumnGraph requires
+`command_wal_durable` under both storage owners. After deferred or raw wire vector
+mutations, keyword and filtered exact reads remain available, while ANN/mixed
+Hybrid require explicit graph maintenance. The HTTP service exposes Optimize;
+the standalone wire server requires orderly shutdown, public owner/API Optimize
+against the same directory, then restart. Flush/Checkpoint do not rebuild graphs.
+Use `-legacy-storage` for a process that serves specialized typed or
+normalized/quantized routes. This is an explicit
+storage choice; unsupported requests do not fall back automatically. See the
+[command ownership contract](TreeDB/docs/document-service-native-constructor.md#command-storage-owner).
+
 Run the Mongo-compatible gateway:
 
 ```sh

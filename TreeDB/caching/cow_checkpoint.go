@@ -33,6 +33,14 @@ func (db *DB) checkpointCOWColumnCompaction(ctx context.Context, automatic bool,
 		db.checkpointTotalNs.Add(dur)
 		updateAtomicMaxUint64(&db.checkpointMaxNs, dur)
 	}()
+	return db.materializeCOWPrefix(ctx, automatic, operation, false)
+}
+
+// materializeCOWPrefix keeps the original captured raw+semantic cut, build group
+// and handoff. Pressure-only completion joins its exact durable seal and accepted
+// retirement, leaving journal rotation and covered-file maintenance to the already
+// running size-maintenance worker. Public checkpoint/Close/Drain are unchanged.
+func (db *DB) materializeCOWPrefix(ctx context.Context, automatic bool, operation backenddb.NativeColumnStoreCompaction, pressureOnly bool) (retErr error) {
 	if db.closing.Load() {
 		return errDBClosing
 	}
@@ -74,7 +82,7 @@ func (db *DB) checkpointCOWColumnCompaction(ctx context.Context, automatic bool,
 		hook()
 	}
 	var frontier *cowReadCut
-	err := db.rotateCOWCheckpointFrontier(ctx, true, &frontier)
+	err := db.rotateCOWFrontier(ctx, true, &frontier, !pressureOnly)
 	defer func() { retErr = joinCOWCleanupError(retErr, db.cow.releaseCut(frontier)) }()
 	db.recordCheckpointCutover(time.Since(cutover))
 	db.checkpointMu.Lock()
@@ -119,6 +127,17 @@ func (db *DB) checkpointCOWColumnCompaction(ctx context.Context, automatic bool,
 	if err = ctx.Err(); err != nil {
 		return err
 	}
+	if pressureOnly {
+		// The receipt was copied before handoff teardown. A no-op cut has no new
+		// receipt; its accepted endpoint is still joined below. Never substitute a
+		// sampled backend root or maximum LSN for this publication authority.
+		if publish.seal.Valid() {
+			if err = publish.seal.Wait(ctx); err != nil {
+				return err
+			}
+		}
+		return db.cow.prefix.WaitAccepted(ctx, through)
+	}
 	if err = db.backendCheckpointBoundary(automatic); err != nil {
 		return err
 	}
@@ -144,6 +163,12 @@ func (db *DB) checkpointCOWColumnCompaction(ctx context.Context, automatic bool,
 // and returns with it unlocked. The existing checkpoint/Close admission fence
 // excludes writers through the finite retry, while flushMu remains outer D.
 func (db *DB) rotateCOWCheckpointFrontier(ctx context.Context, postFrontier bool, captured **cowReadCut) error {
+	return db.rotateCOWFrontier(ctx, postFrontier, captured, true)
+}
+
+// rotateJournal is false only for producer pressure with an existing size worker.
+// Rollover, finite source-capacity retry and original cutover capture stay shared.
+func (db *DB) rotateCOWFrontier(ctx context.Context, postFrontier bool, captured **cowReadCut, rotateJournal bool) error {
 	c := db.cow
 	for attempt := 0; ; attempt++ {
 		c.writerMu.Lock()
@@ -156,7 +181,7 @@ func (db *DB) rotateCOWCheckpointFrontier(ctx context.Context, postFrontier bool
 		// writeMu still excludes every same-owner append. Rotate the journal at
 		// this complete raw+semantic cut, independently of public raw notices.
 		// Rotation is a file fence; only the canonical WAL owner can advance W.
-		if err == nil && db.externalCommandWAL {
+		if err == nil && db.externalCommandWAL && rotateJournal {
 			wal, ok := db.backend.(interface {
 				CommandWALActiveBytes() int64
 				RotateCommandWALActiveSegment(bool) error

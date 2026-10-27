@@ -3947,6 +3947,7 @@ func appendBackendBatchPointOp(
 }
 
 type checkpointCommandWALPublish struct {
+	seal       rootpublication.PhysicalSealReceipt
 	appliedLSN uint64
 	ranges     []backenddb.CommandWALLSNRange
 	consumed   bool
@@ -10190,12 +10191,15 @@ type DB struct {
 	autoCheckpointLastWALTrimmed           atomic.Int64
 	autoCheckpointLastWALBytes             atomic.Int64
 	autoCheckpointMaxWALBytes              atomic.Int64
-	commandWALCleanupPending               atomic.Bool
-	commandWALCleanupActive                atomic.Bool
-	commandWALCleanupRequests              atomic.Uint64
-	commandWALCleanupCoalesced             atomic.Uint64
-	commandWALCleanupCompletions           atomic.Uint64
-	commandWALCleanupRetries               atomic.Uint64
+	// Immutable threshold captured by the actually started worker, not a later
+	// StartAutoCheckpoint notification reconfiguration.
+	autoCheckpointWorkerMaxWALBytes atomic.Int64
+	commandWALCleanupPending        atomic.Bool
+	commandWALCleanupActive         atomic.Bool
+	commandWALCleanupRequests       atomic.Uint64
+	commandWALCleanupCoalesced      atomic.Uint64
+	commandWALCleanupCompletions    atomic.Uint64
+	commandWALCleanupRetries        atomic.Uint64
 
 	checkpointCutoverLastNanos    atomic.Int64
 	checkpointCutoverMaxNanos     atomic.Int64
@@ -13848,9 +13852,10 @@ func (db *DB) startProcessMemorySampler() {
 // prefix; legacy or otherwise unwired modes use a full checkpoint. When
 // idleInterval > 0, the loop also runs after a period of write-idleness.
 //
-// interval > 0 enables periodic passes. maxWALBytes is a safety cap: if > 0,
-// the loop will attempt maintenance when the effective WAL bytes exceed this
-// cap. maxWALBytes <= 0 disables the size trigger.
+// interval > 0 enables periodic passes. maxWALBytes is a soft size trigger:
+// if > 0, the loop attempts maintenance after notified WAL growth exceeds the
+// threshold. It is not a hard byte limit. maxWALBytes <= 0 disables the size
+// trigger of a newly started worker; a running worker retains its first options.
 func (db *DB) StartAutoCheckpoint(interval time.Duration, maxWALBytes int64, idleInterval time.Duration) {
 	if db == nil {
 		return
@@ -13865,6 +13870,7 @@ func (db *DB) StartAutoCheckpoint(interval time.Duration, maxWALBytes int64, idl
 	if !db.autoCheckpointOn.CompareAndSwap(false, true) {
 		return
 	}
+	db.autoCheckpointWorkerMaxWALBytes.Store(maxWALBytes)
 	db.wg.Add(1)
 	go db.autoCheckpointLoop(interval, maxWALBytes, idleInterval)
 }

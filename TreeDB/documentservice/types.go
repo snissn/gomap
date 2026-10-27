@@ -319,45 +319,48 @@ type DenseVectorSearchResponse struct {
 	// ScorePlane is the separately versioned proof for an explicitly selected
 	// typed quantized score plane. It is deliberately a sibling of dense_work;
 	// dense_work-v1 remains byte/schema compatible for existing callers.
-	ScorePlane                              *collections.ColumnGraphScorePlaneWork `json:"score_plane,omitempty"`
-	RouteIdentity                           *DenseSearchRouteIdentity              `json:"route_identity,omitempty"`
-	ColumnGraphPreparedSearch               uint64                                 `json:"column_graph_prepared_search,omitempty"`
-	ColumnGraphDeltaScored                  uint64                                 `json:"column_graph_delta_scored,omitempty"`
-	Index                                   IndexInfo                              `json:"index"`
-	Documents                               []Document                             `json:"documents"`
-	Metric                                  Metric                                 `json:"metric"`
-	Route                                   Route                                  `json:"route,omitempty"`
-	Exact                                   bool                                   `json:"exact"`
-	Candidates                              int                                    `json:"candidates"`
-	NativeBasePlusLiveDelta                 bool                                   `json:"native_base_plus_live_delta,omitempty"`
-	ScalarFilterMembershipSource            string                                 `json:"scalar_filter_membership_source,omitempty"`
-	ScalarFilterPlan                        collections.NativeScalarFilterPlan     `json:"scalar_filter_plan,omitempty"`
-	ScalarFilterProbeIDs                    uint64                                 `json:"scalar_filter_probe_ids,omitempty"`
-	ScalarFilterProbeTruncated              uint64                                 `json:"scalar_filter_probe_truncated,omitempty"`
-	ScalarFilterCandidates                  uint64                                 `json:"scalar_filter_candidates,omitempty"`
-	ScalarFilterCandidateIDs                uint64                                 `json:"scalar_filter_candidate_ids,omitempty"`
-	ScalarFilterRetainedCandidateIDs        uint64                                 `json:"scalar_filter_retained_candidate_ids,omitempty"`
-	ScalarFilterRefinedCandidateIDs         uint64                                 `json:"scalar_filter_refined_candidate_ids,omitempty"`
-	ScalarFilterVisited                     uint64                                 `json:"scalar_filter_visited,omitempty"`
-	ScalarFilterScored                      uint64                                 `json:"scalar_filter_scored,omitempty"`
-	ScalarFilterAdmitted                    uint64                                 `json:"scalar_filter_admitted,omitempty"`
-	ScalarFilterExactScoring                bool                                   `json:"scalar_filter_exact_scoring,omitempty"`
-	ScalarFilterUnderfill                   bool                                   `json:"scalar_filter_underfill,omitempty"`
-	ScalarFilterPlanCacheHits               uint64                                 `json:"scalar_filter_plan_cache_hits,omitempty"`
-	ScalarFilterPlanCacheMisses             uint64                                 `json:"scalar_filter_plan_cache_misses,omitempty"`
-	ScalarFilterPlanCacheInvalidations      uint64                                 `json:"scalar_filter_plan_cache_invalidations,omitempty"`
-	ScalarFilterPlanCacheGenerationBypasses uint64                                 `json:"scalar_filter_plan_cache_generation_bypasses,omitempty"`
-	ScalarFilterPlanCacheEvictions          uint64                                 `json:"scalar_filter_plan_cache_evictions,omitempty"`
-	ScalarFilterPlanCacheEntries            uint64                                 `json:"scalar_filter_plan_cache_entries,omitempty"`
-	ScalarFilterPlanCacheRetainedBytes      uint64                                 `json:"scalar_filter_plan_cache_retained_bytes,omitempty"`
-	ScalarFilterUnbounded                   uint64                                 `json:"scalar_filter_unbounded,omitempty"`
-	ExactFallbacks                          uint64                                 `json:"exact_fallbacks,omitempty"`
-	FullDocumentScanFallbacks               uint64                                 `json:"full_document_scan_fallbacks,omitempty"`
-	AllowedIDMaterializationRows            uint64                                 `json:"allowed_id_materialization_rows,omitempty"`
-	PrimaryDocumentScans                    uint64                                 `json:"primary_document_scans,omitempty"`
-	DocumentMaterializationRows             uint64                                 `json:"document_materialization_rows,omitempty"`
-	VisibilityMismatchCount                 uint64                                 `json:"visibility_mismatch_count,omitempty"`
-	VisibilityRetryCount                    uint64                                 `json:"visibility_retry_count,omitempty"`
+	ScorePlane                *collections.ColumnGraphScorePlaneWork `json:"score_plane,omitempty"`
+	RouteIdentity             *DenseSearchRouteIdentity              `json:"route_identity,omitempty"`
+	ColumnGraphPreparedSearch uint64                                 `json:"column_graph_prepared_search,omitempty"`
+	SearchPackSearch          uint64                                 `json:"search_pack_search,omitempty"`
+	ColumnGraphDeltaScored    uint64                                 `json:"column_graph_delta_scored,omitempty"`
+	// DocumentsScanned counts actual documents visited by an intentional exact query.
+	DocumentsScanned                        uint64                             `json:"documents_scanned,omitempty"`
+	Index                                   IndexInfo                          `json:"index"`
+	Documents                               []Document                         `json:"documents"`
+	Metric                                  Metric                             `json:"metric"`
+	Route                                   Route                              `json:"route,omitempty"`
+	Exact                                   bool                               `json:"exact"`
+	Candidates                              int                                `json:"candidates"`
+	NativeBasePlusLiveDelta                 bool                               `json:"native_base_plus_live_delta,omitempty"`
+	ScalarFilterMembershipSource            string                             `json:"scalar_filter_membership_source,omitempty"`
+	ScalarFilterPlan                        collections.NativeScalarFilterPlan `json:"scalar_filter_plan,omitempty"`
+	ScalarFilterProbeIDs                    uint64                             `json:"scalar_filter_probe_ids,omitempty"`
+	ScalarFilterProbeTruncated              uint64                             `json:"scalar_filter_probe_truncated,omitempty"`
+	ScalarFilterCandidates                  uint64                             `json:"scalar_filter_candidates,omitempty"`
+	ScalarFilterCandidateIDs                uint64                             `json:"scalar_filter_candidate_ids,omitempty"`
+	ScalarFilterRetainedCandidateIDs        uint64                             `json:"scalar_filter_retained_candidate_ids,omitempty"`
+	ScalarFilterRefinedCandidateIDs         uint64                             `json:"scalar_filter_refined_candidate_ids,omitempty"`
+	ScalarFilterVisited                     uint64                             `json:"scalar_filter_visited,omitempty"`
+	ScalarFilterScored                      uint64                             `json:"scalar_filter_scored,omitempty"`
+	ScalarFilterAdmitted                    uint64                             `json:"scalar_filter_admitted,omitempty"`
+	ScalarFilterExactScoring                bool                               `json:"scalar_filter_exact_scoring,omitempty"`
+	ScalarFilterUnderfill                   bool                               `json:"scalar_filter_underfill,omitempty"`
+	ScalarFilterPlanCacheHits               uint64                             `json:"scalar_filter_plan_cache_hits,omitempty"`
+	ScalarFilterPlanCacheMisses             uint64                             `json:"scalar_filter_plan_cache_misses,omitempty"`
+	ScalarFilterPlanCacheInvalidations      uint64                             `json:"scalar_filter_plan_cache_invalidations,omitempty"`
+	ScalarFilterPlanCacheGenerationBypasses uint64                             `json:"scalar_filter_plan_cache_generation_bypasses,omitempty"`
+	ScalarFilterPlanCacheEvictions          uint64                             `json:"scalar_filter_plan_cache_evictions,omitempty"`
+	ScalarFilterPlanCacheEntries            uint64                             `json:"scalar_filter_plan_cache_entries,omitempty"`
+	ScalarFilterPlanCacheRetainedBytes      uint64                             `json:"scalar_filter_plan_cache_retained_bytes,omitempty"`
+	ScalarFilterUnbounded                   uint64                             `json:"scalar_filter_unbounded,omitempty"`
+	ExactFallbacks                          uint64                             `json:"exact_fallbacks,omitempty"`
+	FullDocumentScanFallbacks               uint64                             `json:"full_document_scan_fallbacks,omitempty"`
+	AllowedIDMaterializationRows            uint64                             `json:"allowed_id_materialization_rows,omitempty"`
+	PrimaryDocumentScans                    uint64                             `json:"primary_document_scans,omitempty"`
+	DocumentMaterializationRows             uint64                             `json:"document_materialization_rows,omitempty"`
+	VisibilityMismatchCount                 uint64                             `json:"visibility_mismatch_count,omitempty"`
+	VisibilityRetryCount                    uint64                             `json:"visibility_retry_count,omitempty"`
 }
 
 // Route selects the dense search execution path.

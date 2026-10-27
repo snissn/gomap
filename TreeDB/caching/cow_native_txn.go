@@ -1,6 +1,7 @@
 package caching
 
 import (
+	"context"
 	"github.com/snissn/gomap/TreeDB/batch"
 	"unsafe"
 
@@ -112,8 +113,9 @@ func (db *DB) ObserveNativeProducer() (backenddb.NativeProducerObservation, erro
 	return state.observation(db.cow.budget.Limits()), nil
 }
 
-// PrepareNativeProducer joins at most one existing checkpoint before any
-// consumer lock, capture or private preparation. It reserves no future capacity.
+// PrepareNativeProducer joins at most one original captured-prefix drain (or
+// full checkpoint) before consumer locks, captures or private preparation. It
+// reserves no future capacity.
 func (db *DB) PrepareNativeProducer() error {
 	_, err := db.PrepareNativeProducerObservation()
 	return err
@@ -152,7 +154,12 @@ func (db *DB) PrepareNativeProducerObservation() (backenddb.NativeProducerObserv
 		return before.observation(limits), nil
 	}
 	c.nativePressureRemembered = false
-	if err := db.Checkpoint(); err != nil {
+	if db.nativePressureDrainEnabled() {
+		err = db.materializeCOWPrefix(context.Background(), false, nil, true)
+	} else {
+		err = db.Checkpoint()
+	}
+	if err != nil {
 		return backenddb.NativeProducerObservation{}, err
 	}
 	// Join the actual refunds on the original worker, before consumer locks.
@@ -170,6 +177,20 @@ func (db *DB) PrepareNativeProducerObservation() (backenddb.NativeProducerObserv
 	}
 	return after.observation(limits), nil
 }
+
+// nativePressureDrainEnabled requires a real running size-maintenance worker.
+// Its original captured threshold, external total-byte hook and deferred cleanup
+// authority must all exist. Merely reconfiguring the notification atomic cannot
+// turn an interval-only worker into size maintenance. This is a soft asynchronous
+// cleanup capability, not a hard bound on journal bytes.
+func (db *DB) nativePressureDrainEnabled() bool {
+	return db != nil && db.externalCommandWAL && db.autoCheckpointOn.Load() &&
+		db.autoCheckpointWorkerMaxWALBytes.Load() > 0 &&
+		db.loadAutoCheckpointBytesHook() != nil &&
+		db.loadCommandWALCheckpointCutoverHook() != nil &&
+		db.defersAutomaticCommandWALCleanup()
+}
+
 func (tx *nativeConditionalTxn) State() backenddb.NativeSemanticState {
 	if tx == nil || tx.ConditionalTxn == nil || tx.closed || tx.snap == nil {
 		return nil

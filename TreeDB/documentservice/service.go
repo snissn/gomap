@@ -272,10 +272,10 @@ func (s *Service) createIndexLocked(ctx context.Context, req CreateIndexRequest)
 			if err != nil {
 				return IndexInfo{}, err
 			}
-		} else if len(scalarDeclarations) != 0 {
-			// Retained-payload reconstruction is intentionally fail-closed for
-			// collection secondary indexes until their mutation paths consume
-			// reconstructed documents.
+		} else if len(scalarDeclarations) != 0 || s.manager.UsesNativeCommandWALApply() {
+			// Native ordinary ColumnGraph requires full retained JSON even
+			// without scalar indexes. Legacy scalar indexes also require it
+			// until their mutation paths consume reconstructed documents.
 			options.ColumnStore.RetainedPayload = collections.ColumnRetainedPayloadFull
 		}
 	}
@@ -977,12 +977,18 @@ func (s *Service) SearchDenseVector(ctx context.Context, index string, req Dense
 	if route == RouteAnn {
 		return s.searchDenseVectorAnn(ctx, col, info, req)
 	}
+	return s.searchDenseVectorExact(ctx, col, info, req)
+}
+
+func (s *Service) searchDenseVectorExact(ctx context.Context, col *collections.Collection, info IndexInfo, req DenseVectorSearchRequest) (DenseVectorSearchResponse, error) {
 	if err := req.Filter.Validate(); err != nil {
 		return DenseVectorSearchResponse{}, err
 	}
 	var candidates []scoredDocument
 	candidateCount := 0
-	err = s.scanDocuments(ctx, col, &workstats.Scans.DenseExact, func(doc Document) error {
+	var documentsScanned uint64
+	err := s.scanDocuments(ctx, col, &workstats.Scans.DenseExact, func(doc Document) error {
+		documentsScanned++
 		ok, err := matchFilter(req.Filter, doc)
 		if err != nil || !ok {
 			return err
@@ -1021,7 +1027,7 @@ func (s *Service) SearchDenseVector(ctx context.Context, index string, req Dense
 	if docs == nil {
 		docs = []Document{}
 	}
-	return DenseVectorSearchResponse{Index: info, Documents: docs, Metric: info.Metric, Route: RouteExact, Exact: true, Candidates: candidateCount}, nil
+	return DenseVectorSearchResponse{Index: info, Documents: docs, Metric: info.Metric, Route: RouteExact, Exact: true, Candidates: candidateCount, DocumentsScanned: documentsScanned}, nil
 }
 
 func bindDenseVectorRepresentation(req *DenseVectorSearchRequest, info IndexInfo) error {

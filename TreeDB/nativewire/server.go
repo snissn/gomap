@@ -948,7 +948,7 @@ func (s *Server) writeHelloOK(w io.Writer, header iwire.Header, state *connState
 			caps["typed_metadata_update_versions"] = "1"
 		}
 		var versions []string
-		for _, version := range []uint64{iwire.DenseVectorSearchLegacyVersion, iwire.DenseVectorSearchTypedVersion, iwire.DenseVectorSearchTypedQuantizedVersion, iwire.DenseVectorSearchNormalizedVersion} {
+		for _, version := range []uint64{iwire.DenseVectorSearchLegacyVersion, iwire.DenseVectorSearchTypedVersion, iwire.DenseVectorSearchTypedQuantizedVersion, iwire.DenseVectorSearchNormalizedVersion, iwire.DenseVectorSearchOrdinaryVersion} {
 			if _, ok := s.registry.LookupCommand(iwire.CommandDenseVectorSearch, version); ok {
 				versions = append(versions, strconv.FormatUint(version, 10))
 			}

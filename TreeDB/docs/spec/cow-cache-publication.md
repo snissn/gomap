@@ -495,14 +495,36 @@ Value-log segments remain persistent storage: deletion uses existing
 reachability/pin/scanner authorities, never segment age or a second COW GC
 tracker. Retired owner cleanup occurs outside writer/admission/cut locks.
 
-Native producer pressure preparation joins at most one checkpoint and the
-original semantic cleanup frontier before consumer locks. It also inspects
+Native producer pressure preparation joins at most one captured-prefix materialization
+and the original semantic cleanup frontier before consumer locks. It also inspects
 pending typed construction through an optional immutable-state inventory,
 borrowing the original retained cut and physical basis off the cut latch. That
 inspection cut is released before maintenance; it creates no snapshot or
 allocation authority. The same three-quarter watermark applies to both
 maintenance byte limits, alongside the existing byte/source/generation pressure.
 Exact final admission still applies to the incoming operation.
+
+With an external canonical command WAL, the original actually-started automatic
+maintenance worker may supply a positive size trigger, a total-WAL-byte hook,
+the original cutover hook and deferred covered-prefix cleanup capability. Only
+in that configuration, pressure preparation uses the same writer fence, finite
+rollover retry, captured raw+semantic cut, value-log sync, build group and basis
+handoff without forcing active-journal rotation or covered-file maintenance.
+It joins that publication's original physical seal receipt and accepted-prefix
+retirement, then the original semantic refund frontier. The root records the
+same original captured AppliedLSN; a successful request's original durable WAL
+ACK and recovery skipping remain unchanged. The active journal remains
+appendable, and original append-size rollover still applies.
+
+The running worker retains its first captured size threshold; later
+StartAutoCheckpoint calls do not change that worker's behavior. Capability
+selection uses that captured positive threshold, not merely a later notification
+setting. If this capability is absent, pressure retains the full checkpoint
+path. Explicit Checkpoint, Close, public Drain and automatic maintenance retain
+their existing boundaries. The default 2 GiB trigger is asynchronous and soft,
+not a hard bound on journal growth or a cleanup deadline: held roots, busy
+maintenance, errors and scheduling can retain files. Pressure does not install
+another worker or change any finite producer limit.
 
 If the same finite live accounting, semantic construction debt, physical basis
 and logical sequence remain after a successful drain, later producers skip

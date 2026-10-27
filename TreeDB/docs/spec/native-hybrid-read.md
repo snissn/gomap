@@ -98,6 +98,22 @@ adapter's capability. Ordinary native ColumnGraph supports its captured graph,
 text, scalar and final-document reads without algorithm substitution or legacy
 fallback. Broader default adoption and actual server storage defaults remain
 separate parent obligations and require their public performance gates.
+The two document commands compose that public native owner and its one manager,
+service, diagnostics and maintenance lifetime. `-legacy-storage` explicitly
+selects the maintained owner for specialized typed/normalized/quantized routes;
+ordinary ColumnGraph does not require it. Ordinary ColumnGraph remains
+`command_wal_durable` only under either owner. Deferred and raw wire vector
+mutations preserve immediate document/text/scalar visibility, but mixed Hybrid
+and unfiltered ANN refuse unresolved or stale graph sources until explicit
+Optimize. Prefix materialization and Flush/Checkpoint do not rebuild the graph.
+The HTTP command exposes Optimize; the standalone wire command requires orderly
+shutdown, public owner/API Optimize against the same directory/profile, and
+restart. Plain indexed wire CRUD remains supported across all three profiles.
+Unsupported declarations never retry another owner. Partition/replication availability still requires actual endpoint
+and runtime registration; the flag does not add them. Command 64/v5 transports
+the ordinary public Dense route, including intentional filtered exact scans,
+without claiming HNSW or typed attribution for ordinary ColumnGraph. See the
+[command owner contract](../document-service-native-constructor.md#command-storage-owner).
 The original eight-cell service fixture and partial failure stay in the evidence;
 these dispatch rules do not establish performance acceptance.
 

@@ -216,6 +216,21 @@ presence/duplicate/numeric checks, zero-allocation Go proof decoding and real
 service/client lifecycle controls cover this boundary. Legacy 64/v1 bytes and
 GetMany's separate list/result contract remain unchanged.
 
+Command 64/v5 reuses the ordinary public service ANN/exact execution and existing
+request/result section IDs. Propagate actual prepared-reader/search-pack/delta/scan counters;
+never derive them from a declared strategy. ANN returns the maintained search's
+owned projected documents; exact serializes the documents already selected by
+the maintained scan and ranking. Do not fetch them again by primary key. Exact
+scan work is explicit and must not be mislabeled a no-document ANN route.
+Ordinary ColumnGraph ANN admits exactly one measured prepared-reader or
+search-pack route. Copy `SearchRouteHNSWSearchPack` into `SearchPackSearch`;
+the physical pack name does not imply native_runtime algorithm attribution.
+Intentional exact and native_runtime report neither ordinary graph counter.
+Select typed work requirements by explicit versions 2/3/4, never by a numeric
+`>= 2` test that would impose typed proofs on ordinary v5. Version-specific
+metadata validation rejects HNSW/typed relabeling, impossible counters and
+unnegotiated capability claims while retaining each independent proof version.
+
 Fuzz tests should target frame and section decoding, byte vectors, compression
 boundaries, and command normalization. Fuzzers must use memory and frame-size
 caps so malformed input cannot turn into unbounded allocation.

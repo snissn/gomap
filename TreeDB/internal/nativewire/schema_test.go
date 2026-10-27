@@ -318,3 +318,28 @@ func codeOf(err error) ErrorCode {
 	code, _ := ErrorCodeOf(err)
 	return code
 }
+
+func TestOrdinaryDenseVersionUsesExistingSections(t *testing.T) {
+	registry := MustV1Registry()
+	for _, version := range []uint64{DenseVectorSearchLegacyVersion, DenseVectorSearchTypedVersion, DenseVectorSearchTypedQuantizedVersion, DenseVectorSearchNormalizedVersion, DenseVectorSearchOrdinaryVersion} {
+		schema, ok := registry.LookupCommand(CommandDenseVectorSearch, version)
+		if !ok || !schema.LocalOnly || schema.Kind != CommandKindRead {
+			t.Fatalf("dense version %d lost its independent read capability", version)
+		}
+	}
+	sections := []Section{
+		{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandDenseVectorSearch, Version: DenseVectorSearchOrdinaryVersion})},
+		{ID: SectionDeadline, Bytes: []byte{1}},
+		{ID: SectionDenseSearchRequest, Bytes: []byte{1}},
+	}
+	if _, err := registry.ValidateRequestSections(sections); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.ValidateRequestSections(sections[:2]); err == nil {
+		t.Fatal("ordinary dense request accepted missing query")
+	}
+	sections = append(sections, Section{ID: SectionDenseSearchWork, Flags: SectionFlagCritical})
+	if _, err := registry.ValidateRequestSections(sections); err == nil {
+		t.Fatal("ordinary dense request accepted typed work section")
+	}
+}

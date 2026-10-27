@@ -14,18 +14,23 @@ import (
 	"os/signal"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB"
-	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/documentservice"
 	"github.com/snissn/gomap/TreeDB/nativewire"
+	"github.com/snissn/gomap/cmd/internal/documentserviceowner"
 )
 
 func main() {
 	exitCode := 0
+	var shutdownFailed atomic.Bool
 	defer func() {
+		if shutdownFailed.Load() {
+			exitCode = 1
+		}
 		if exitCode != 0 {
 			os.Exit(exitCode)
 		}
@@ -34,7 +39,8 @@ func main() {
 	addr := flag.String("addr", "127.0.0.1:7120", "HTTP address to listen on")
 	nativeAddr := flag.String("native-addr", "", "optional native-wire TCP address using the same document service")
 	dataDir := flag.String("dir", "/tmp/treedb-document-service", "TreeDB data directory")
-	profile := flag.String("profile", string(treedb.ProfileCommandWALDurable), "TreeDB profile: "+treedb.ProfileFlagHelp)
+	profile := flag.String("profile", string(treedb.ProfileCommandWALDurable), "TreeDB profile: "+treedb.ProfileFlagHelp+"; ColumnGraph requires command_wal_durable and explicit Optimize after deferred or raw wire vector writes")
+	legacyStorage := flag.Bool("legacy-storage", false, "use legacy storage for specialized typed and normalized/quantized routes; default is shared COW")
 	pprofAddr := flag.String("pprof", "", "optional net/http/pprof listen address, e.g. 127.0.0.1:6060")
 	blockProfileRate := flag.Int("block-profile-rate", 0, "runtime.SetBlockProfileRate value for pprof diagnostics (0=disabled, 1=all blocking events)")
 	mutexProfileFraction := flag.Int("mutex-profile-fraction", 0, "runtime.SetMutexProfileFraction value for pprof diagnostics (0=disabled, 1=all mutex contention)")
@@ -55,13 +61,13 @@ func main() {
 	if *mutexProfileFraction > 0 {
 		runtime.SetMutexProfileFraction(*mutexProfileFraction)
 	}
-	database, cleanup, databaseStats, deferredMaintenance, err := treedb.OpenBackendWithCachedLeafLogStatsAndDeferredVectorBuildMaintenance(opts)
+	owner, err := documentserviceowner.Open(opts, *legacyStorage)
 	if err != nil {
 		log.Fatalf("Failed to open TreeDB: %v", err)
 	}
-	manager := collections.NewCollectionManager(database)
+	database, manager, service := owner.Backend, owner.Manager, owner.Service
+	cleanup, databaseStats := owner.Close, owner.Stats
 	manager.SetVectorIndexConstructionDecisionObserverEnabled(*constructionDecisionObserver)
-	service := documentservice.NewWithDeferredVectorBuildMaintenance(manager, deferredMaintenance)
 	appServer := &http.Server{Addr: *addr, Handler: documentservice.NewHandler(service), ReadHeaderTimeout: 5 * time.Second}
 	var diagnosticsServer *http.Server
 	var nativeServer *nativewire.Server
@@ -69,6 +75,7 @@ func main() {
 	var shutdownState documentServiceShutdownState
 	shutdown := func() {
 		if err := shutdownState.run(nil, appServer, diagnosticsServer, service, cleanup, log.Default(), nativeServer); err != nil {
+			shutdownFailed.Store(true)
 			log.Printf("TreeDB Document Service shutdown incomplete: %v", err)
 			return
 		}
@@ -131,6 +138,7 @@ func main() {
 	fmt.Printf("TreeDB Document Service listening on http://%s\n", *addr)
 	fmt.Printf("TreeDB data directory: %s\n", *dataDir)
 	fmt.Printf("TreeDB profile: %s\n", normalizedProfile)
+	fmt.Printf("TreeDB storage: %s\n", owner.Storage)
 	if err := appServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Printf("Server error: %v", err)
 		exitCode = 1
