@@ -116,6 +116,7 @@ func (s *Snapshot) SeekGEVersionRanges(starts, ends [][]byte, results []mvcckey.
 	}
 	w.point.successor.BeginLeafBatch()
 	handoff := false
+	dictionaryHandoff := false
 	var releaseErr error
 	for i := range starts {
 		stage := &staged[i]
@@ -127,6 +128,7 @@ func (s *Snapshot) SeekGEVersionRanges(starts, ends [][]byte, results []mvcckey.
 		} else if stage.err == errCOWPhysicalDictionary || errors.Is(stage.err, memtable.ErrCOWCapacity) {
 			// Only established dictionary/admission eligibility permits fallback.
 			stage.fallback = true
+			dictionaryHandoff = dictionaryHandoff || stage.err == errCOWPhysicalDictionary
 		}
 		handoff = handoff || cowSuccessorNeedsCutLocalValue(stage.best)
 		if stage.err != nil {
@@ -140,17 +142,33 @@ func (s *Snapshot) SeekGEVersionRanges(starts, ends [][]byte, results []mvcckey.
 		}
 	}
 	w.point.successor.EndLeafBatch()
+	if releaseErr == nil && dictionaryHandoff {
+		releaseErr = errCOWPhysicalDictionary
+	}
 	freshOwner := cowReadHandoffLocked(mu, owner, fresh, handoff, releaseErr)
 	mu.Unlock()
 	// No traversal slot remains locked from here. The exact original cut owns
 	// every staged pointer/inspection; outputs were copied before page reuse.
 	for i := range starts {
 		stage, result := &staged[i], &results[i]
-		if stage.fallback || stage.best.flags&node.FlagTombstone != 0 {
+		if stage.err == errCOWPhysicalDictionary {
+			// Preserve the original fresh-owner handoff instead of re-entering a
+			// scalar lookup that would forget which shared admission can be refunded.
+			stage.best, stage.err = s.cowDictionarySuccessorLocked(starts[i], ends[i])
+			if errors.Is(stage.err, memtable.ErrCOWCapacity) && freshOwner.refund() {
+				stage.best, stage.err = s.cowDictionarySuccessorLocked(starts[i], ends[i])
+			}
+			stage.fallback = false
+			stage.inspected = cowSuccessorInspection{}
+		}
+		if stage.fallback {
 			continue
 		}
 		if stage.err != nil {
 			result.Err = stage.err
+			continue
+		}
+		if stage.best.flags&node.FlagTombstone != 0 {
 			continue
 		}
 		best := &stage.best

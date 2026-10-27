@@ -8,6 +8,7 @@ import (
 	"testing"
 	"unsafe"
 
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/mvcckey"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
@@ -143,6 +144,217 @@ func TestCOWReadBatchContendedSlotsFallback(t *testing.T) {
 	for _, v := range r {
 		if v.Err != nil || !bytes.Equal(v.Value, want) {
 			t.Fatal(v)
+		}
+	}
+}
+
+// The batch must preserve the original fresh dictionary handoff: a cold shared
+// lane cannot strand the already-admitted complete-cut decoder's point scratch.
+func TestCOWReadBatchCapturedDictionaryFreshRefund(t *testing.T) {
+	db, want, ptr := cowSuccessorDictionaryLeafFixture(t)
+	s, e := db.AcquireMVCCReadCut()
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer s.Close()
+	s.cowReadMu.Lock()
+	w, e := s.cowWorkspaceLocked()
+	var pageScratch [4096]byte
+	if e == nil {
+		f, fe := w.file(ptr.ValuePtr())
+		e = fe
+		if e == nil {
+			shape, se := valuelog.InspectCOWLeafRecord(f, ptr.ValuePtr(), w.limits)
+			e = se
+			if e == nil {
+				_, e = w.readInspected(f, ptr.ValuePtr(), shape, true, pageScratch[:], nil)
+			}
+		}
+	}
+	s.cowReadMu.Unlock()
+	if e != nil || w.point != nil || len(w.codecs) == 0 {
+		t.Fatal("warm real local decoder", e)
+	}
+	store := db.dictStore
+	db.dictStore = cowCapturedDictionaryOnlyStore{store}
+	defer func() { db.dictStore = store }()
+	budget := db.cow.budget
+	before := budget.Stats()
+	overhead := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
+	workspace := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowReadWorkspace{}))) + cowReadWorkspaceInspectionCharge() + overhead
+	point := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowPointScratch{}))) + overhead
+	stage := memtable.COWAllocationCharge(uint64(unsafe.Sizeof([32]cowReadBatchStage{}))) + overhead
+	pressure, e := budget.AcquireExternal(budget.Limits().MaxInFlightBytes - before.ReservedBytes - workspace - point - stage - overhead)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer pressure.Close()
+	a, b, r := batchRawProbes(2)
+	if e = s.SeekGEVersionRanges(a, b, r); e != nil {
+		t.Fatal(e)
+	}
+	for _, v := range r {
+		if v.Err != nil || !bytes.Equal(v.Value, want) {
+			t.Fatalf("fresh dictionary handoff stranded cut-local point: %+v", v)
+		}
+	}
+}
+
+func TestCOWReadBatchFreshCompressedValueRefund(t *testing.T) {
+	db, want := cowSuccessorCompressedPointerFixture(t)
+	warm, e := db.AcquireMVCCReadCut()
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, _, _, e = warm.SeekGEVersionRange([]byte("a"), []byte("b")); e != nil {
+		t.Fatal(e)
+	}
+	if e = warm.Close(); e != nil {
+		t.Fatal(e)
+	}
+	s, e := db.AcquireMVCCReadCut()
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer s.Close()
+	basis, budget := s.cowCut.basis, db.cow.budget
+	basis.readMu.Lock()
+	basis.reader.close()
+	basis.reader = nil
+	basis.readMu.Unlock()
+	overhead := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
+	workspace := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowReadWorkspace{}))) + cowReadWorkspaceInspectionCharge() + overhead
+	point := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowPointScratch{}))) + overhead
+	output := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowReadAllocation{}))) + overhead + memtable.COWAllocationCharge(cowReadCapacity(uint64(len(want))))
+	stage := memtable.COWAllocationCharge(uint64(unsafe.Sizeof([32]cowReadBatchStage{}))) + overhead
+	before := budget.Stats()
+	pressure, e := budget.AcquireExternal(budget.Limits().MaxInFlightBytes - before.ReservedBytes - workspace - point - output - stage - overhead)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer pressure.Close()
+	a := [][]byte{[]byte("a"), []byte("a")}
+	b := [][]byte{[]byte("b"), []byte("b")}
+	r := make([]mvcckey.VersionRangeResult, 2)
+	if e = s.SeekGEVersionRanges(a, b, r); e != nil {
+		t.Fatal(e)
+	}
+	for _, v := range r {
+		if v.Err != nil || !bytes.Equal(v.Value, want) {
+			t.Fatal(v)
+		}
+	}
+	if basis.reader != nil || s.cowReader == nil || s.cowReader.point != nil {
+		t.Fatal("fresh scratch did not refund before original value admission")
+	}
+}
+
+func TestCOWReadBatchColdCRCFailure(t *testing.T) {
+	db, _, want, ptr := cowLeafMissFixture(t, -1, 64)
+	s, e := db.AcquireMVCCReadCut()
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer s.Close()
+	f, _, e := s.cowCut.basis.snapshot.PinnedValueLogFile(ptr.ValueLogFileID())
+	if e != nil {
+		t.Fatal(e)
+	}
+	writer, e := os.OpenFile(f.Name(), os.O_RDWR, 0)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer writer.Close()
+	offset := int64(ptr.Offset - 4)
+	var crc [1]byte
+	if _, e = writer.ReadAt(crc[:], offset); e != nil {
+		t.Fatal(e)
+	}
+	if _, e = writer.WriteAt([]byte{crc[0] ^ 1}, offset); e != nil {
+		t.Fatal(e)
+	}
+	defer writer.WriteAt(crc[:], offset)
+	a, b, r := batchRawProbes(2)
+	if e = s.SeekGEVersionRanges(a, b, r); e != nil {
+		t.Fatal(e)
+	}
+	for _, v := range r {
+		if !errors.Is(v.Err, valuelog.ErrCorrupt) {
+			t.Fatalf("cold CRC bypassed: %+v", v)
+		}
+	}
+	if _, e = writer.WriteAt(crc[:], offset); e != nil {
+		t.Fatal(e)
+	}
+	if e = s.SeekGEVersionRanges(a, b, r); e != nil {
+		t.Fatal(e)
+	}
+	for _, v := range r {
+		if v.Err != nil || !bytes.Equal(v.Value, want) {
+			t.Fatal(v)
+		}
+	}
+}
+
+func TestCOWReadBatchExistingCustomValueBound(t *testing.T) {
+	db, _ := cowSuccessorCompressedPointerFixture(t)
+	s, e := db.AcquireMVCCReadCut()
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer s.Close()
+	s.cowReadMu.Lock()
+	w, e := s.cowWorkspaceLocked()
+	if e == nil {
+		_, e = w.pointScratch()
+		w.limits.MaxValueBytes = 4096
+	}
+	s.cowReadMu.Unlock()
+	if e != nil {
+		t.Fatal(e)
+	}
+	before := db.cow.budget.Stats()
+	a := [][]byte{[]byte("a"), []byte("a")}
+	b := [][]byte{[]byte("b"), []byte("b")}
+	r := make([]mvcckey.VersionRangeResult, 2)
+	if e = s.SeekGEVersionRanges(a, b, r); e != nil {
+		t.Fatal(e)
+	}
+	for _, v := range r {
+		if !errors.Is(v.Err, valuelog.ErrCOWReadCapacity) || v.Found || v.Value != nil {
+			t.Fatal(v)
+		}
+	}
+	if after := db.cow.budget.Stats(); after.ExternalBytes != before.ExternalBytes || after.ExternalLeases != before.ExternalLeases || after.ReservedBytes != before.ReservedBytes {
+		t.Fatalf("refused value leaked: before%+v after%+v", before, after)
+	}
+}
+
+func TestCOWReadBatchConcurrentSnapshotClose(t *testing.T) {
+	db, _, _, _ := cowLeafMissFixture(t, 128, 64)
+	s, e := db.AcquireMVCCReadCut()
+	if e != nil {
+		t.Fatal(e)
+	}
+	a, b, r := batchRawProbes(32)
+	readDone, closeDone := make(chan error, 1), make(chan error, 1)
+	// Original decoder ownership provides contention; no production hook or
+	// borrowed page is injected. Both operations must join before fixture Close.
+	db.cow.physicalMu.Lock()
+	go func() {
+		e := s.SeekGEVersionRanges(a, b, r)
+		if errors.Is(e, backenddb.ErrClosed) {
+			e = nil
+		}
+		readDone <- e
+	}()
+	go func() { closeDone <- s.Close() }()
+	db.cow.physicalMu.Unlock()
+	cowWait(t, readDone)
+	cowWait(t, closeDone)
+	for _, v := range r {
+		if v.Err != nil && !errors.Is(v.Err, backenddb.ErrClosed) {
+			t.Fatal(v.Err)
 		}
 	}
 }
