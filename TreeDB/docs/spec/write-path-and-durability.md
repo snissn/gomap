@@ -567,6 +567,14 @@ dependency-prefix and sealed dual-meta boundaries govern durability and cleanup.
 Explicit command-WAL checkpoint also converges the fallback DATA slot when
 needed. The two slots must bind matching complete roots and applied command
 coverage before cleanup; a matching LSN alone does not establish that proof.
+Automatic COW command-WAL checkpoints also converge that captured prefix when
+its accepted Snapshot remains the exact frozen boundary. They reuse the
+complete-cut publication and Snapshot handoff at the same applied LSN, without
+appending a command or consuming newer mutable raw or semantic writes. A newer
+frozen suffix defers convergence to the next checkpoint. Covered-segment cleanup
+remains on the existing worker after checkpoint admission is released, and still
+checks both recovery slots, active generations, resource pins and namespace
+durability before deleting a segment.
 See [COW publication and lock ordering](cow-cache-publication.md).
 
 The temporary explicit/persisted PRIMARY route retains its original capsule
